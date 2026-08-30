@@ -15,5 +15,6 @@ let package = Package(
         .executableTarget(name: "CallieAppleBridge", dependencies: ["CallieAppleCore", "CallieAppleProtocol"]),
         .testTarget(name: "CallieAppleProtocolTests", dependencies: ["CallieAppleProtocol"]),
         .testTarget(name: "CallieAppleCoreTests", dependencies: ["CallieAppleBridge", "CallieAppleCore", "CallieAppleProtocol"]),
-    ]
+    ],
+    swiftLanguageModes: [.v6]
 )
