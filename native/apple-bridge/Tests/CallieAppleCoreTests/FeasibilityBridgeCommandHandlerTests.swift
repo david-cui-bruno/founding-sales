@@ -138,20 +138,47 @@ struct FeasibilityBridgeCommandHandlerTests {
         #expect(ports.operations.count == 2)
     }
 
-    @Test func shutdownInvokesOnlyContainedStagingCleanupHook() throws {
+    @Test func successfulShutdownReturnsExactFrameAfterContainedCleanup() throws {
         let ports = FakeFeasibilityPorts()
         let cleanup = LockedCounter()
         let handler = makeHandler(ports: ports, shutdown: { cleanup.increment() })
-        let request = try BridgeRequest(id: UUID(), method: .shutdown, params: .shutdown(.init()))
+        let requestID = UUID(uuidString: "55555555-5555-4555-8555-555555555555")!
+        let request = try BridgeRequest(id: requestID, method: .shutdown, params: .shutdown(.init()))
+        let response = handler.handle(request)
 
-        #expect(handler.handle(request).ok)
+        #expect(response.v == 1)
+        #expect(response.id == requestID)
+        #expect(response.ok)
+        #expect(response.result == ["shuttingDown": .bool(true)])
+        #expect(response.error == nil)
         #expect(cleanup.value == 1)
+        #expect(ports.operations.isEmpty)
+    }
+
+    @Test func failedShutdownCleanupReturnsExactSanitizedFailureFrame() throws {
+        let ports = FakeFeasibilityPorts()
+        let handler = makeHandler(ports: ports, shutdown: {
+            throw BridgeShutdownError.cleanupVerificationFailed
+        })
+        let requestID = UUID(uuidString: "66666666-6666-4666-8666-666666666666")!
+        let request = try BridgeRequest(id: requestID, method: .shutdown, params: .shutdown(.init()))
+
+        let response = handler.handle(request)
+
+        #expect(response.v == 1)
+        #expect(response.id == requestID)
+        #expect(!response.ok)
+        #expect(response.result == nil)
+        #expect(response.error?.code == .internalError)
+        #expect(response.error?.message == "Bridge shutdown cleanup could not be verified.")
+        #expect(response.error?.retryable == false)
+        #expect(!String(describing: response.error).contains("/private/"))
         #expect(ports.operations.isEmpty)
     }
 
     private func makeHandler(
         ports: FakeFeasibilityPorts,
-        shutdown: @escaping @Sendable () -> Void = {}
+        shutdown: @escaping @Sendable () throws -> Void = {}
     ) -> FeasibilityBridgeCommandHandler {
         FeasibilityBridgeCommandHandler(
             notesScanner: ports,

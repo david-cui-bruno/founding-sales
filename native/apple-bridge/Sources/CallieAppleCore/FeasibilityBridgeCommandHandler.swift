@@ -7,7 +7,7 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
     private let messageSender: any MessageTestSending
     private let messageActivityScanner: any MessageTestActivityScanning
     private let now: @Sendable () -> Date
-    private let shutdown: @Sendable () -> Void
+    private let shutdown: @Sendable () throws -> Void
     private let attemptedCommands: AttemptedMessageCommandRegistry
     private let fallback = BoundedBridgeCommandHandler()
 
@@ -18,7 +18,7 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
         messageActivityScanner: any MessageTestActivityScanning,
         attemptedCommandCapacity: Int = 1_024,
         now: @escaping @Sendable () -> Date = Date.init,
-        shutdown: @escaping @Sendable () -> Void = {}
+        shutdown: @escaping @Sendable () throws -> Void = {}
     ) {
         self.notesScanner = notesScanner
         self.notesExporter = notesExporter
@@ -80,11 +80,17 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
                     "latestAt": activity.latestAt.map { .string(Self.timestamp($0)) } ?? .null,
                 ])
             case .shutdown:
-                shutdown()
+                try shutdown()
                 return fallback.handle(request)
             default:
                 return fallback.handle(request)
             }
+        } catch is BridgeShutdownError {
+            return errorResponse(
+                id: request.id,
+                code: .internalError,
+                message: "Bridge shutdown cleanup could not be verified."
+            )
         } catch let error as NotesPortError {
             return notesError(error, id: request.id)
         } catch let error as MessagesSendPortError {

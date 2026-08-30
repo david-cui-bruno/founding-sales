@@ -39,7 +39,13 @@ public final class MacOSDependencyContainer: @unchecked Sendable {
             notesExporter: exporter,
             messageSender: messagesClient,
             messageActivityScanner: messagesStore,
-            shutdown: { try? exporter.cleanAbandonedArtifacts() }
+            shutdown: {
+                do {
+                    try exporter.cleanAbandonedArtifacts()
+                } catch {
+                    throw BridgeShutdownError.cleanupVerificationFailed
+                }
+            }
         )
     }
 }

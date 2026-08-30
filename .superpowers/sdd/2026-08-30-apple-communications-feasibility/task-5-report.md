@@ -188,3 +188,41 @@ All Critical and Important review findings, plus the confirmed duplicate-command
 - Reviewed SQLite authority: immutable read-only URI/flags, fixed schema validation/query, 100 ms busy timeout, seven-day clamp, and 500-row limit remain intact; there is no write/migration/generic SQL route.
 - The Apple Event save API necessarily receives an absolute file URL; it cannot consume the export directory descriptor. A path swap that occurs and is restored entirely during the external event cannot be eliminated with the public API. The helper revalidates root and per-export directory provenance immediately before/after the save and fails closed on observed change, never claiming to delete an unproven outside write.
 - Notes exposes no stable sort command in its installed SDEF. The fixed since filter plus bounded sentinel page prevents an unbounded result, and saturation is explicitly incomplete (`truncated: true`), but real Notes ordering and TCC/runtime behavior remain unproven because live exercise was prohibited.
+
+---
+
+## Review round 2 remediation
+
+### Ruling and implementation
+
+The controller accepted the public Notes API boundary: a malicious concurrent same-user root/export-directory replacement during the absolute-path Apple Event save is outside the V1 threat model. Existing post-save provenance revalidation, no-proof `plaintextRetentionRisk`, opaque recovery UUID, and helper-lifetime export disable remain unchanged. The binding design spec now states that this is detected fail-closed behavior, not swap-resistant cleanup or descriptor-bound Notes write authority.
+
+The remaining shutdown finding is fixed without changing `BridgeCommandHandling`, the reviewed `BridgeCoordinator`, or the call-recording actor:
+
+- Added typed `BridgeShutdownError.cleanupVerificationFailed` in Core.
+- Changed only the injected feasibility shutdown hook to synchronous throwing.
+- `MacOSDependencyContainer` no longer suppresses `cleanAbandonedArtifacts()` failure with `try?`; it maps any adapter cleanup failure to the typed shutdown error.
+- `FeasibilityBridgeCommandHandler` returns the existing successful `{"shuttingDown":true}` result only after cleanup returns successfully. The typed failure maps to a fixed, non-retryable `internal` response: `Bridge shutdown cleanup could not be verified.`
+- The stdio server already latches its shutdown state only when the handler response is `ok`, so a cleanup-failure response does not falsely enter the clean-shutdown lifecycle branch.
+
+### RED → GREEN evidence
+
+- RED focused build: `BridgeShutdownError` was missing, and Swift rejected conversion of the desired throwing shutdown hook to the existing non-throwing hook.
+- GREEN focused run: 11 tests passed across `FeasibilityBridgeCommandHandlerTests` and `MacOSDependencyContainerTests`.
+- Success tests assert the exact request ID, `ok: true`, `result: {"shuttingDown":true}`, absent error, cleanup invocation, and contained generated-entry removal.
+- Failure tests create only a temporary synthetic unexpected sidecar, force deletion/directory-absence verification failure, and assert the exact request ID, `ok: false`, nil result, `internal` code, fixed message, `retryable: false`, retained synthetic file, and absence of staging path/error payload leakage.
+
+### Round 2 self-review and concerns
+
+- The container erases the concrete adapter error at the Core boundary; no filesystem path, POSIX error, Apple payload, or retained filename reaches the bridge response.
+- Failed cleanup does not return `shuttingDown: true`; no live Apple adapter, TCC prompt, personal database, recording, call, or message is involved in the tests.
+- A client may still close stdin after receiving a failed shutdown response, causing normal EOF process exit. The bridge does not claim cleanup succeeded; later supervisor policy owns escalation/recovery for that failed response.
+
+### Round 2 final verification
+
+- Focused Swift handler/container run: PASS, 11 tests in 2 suites.
+- Bundled-Node `npm run test:swift`: PASS, 119 tests in 13 suites.
+- Bundled-Node `npm run build:swift`: PASS, release arm64 build.
+- `git diff --check`: clean.
+- Safety scans found no shell/process execution, AppleScript source/API, Messages write/migration vocabulary, live Messages database reference, or live Apple Event executor reference in tests.
+- TypeScript sources/contracts were not changed in round 2, so no TypeScript verification was required by the round brief.

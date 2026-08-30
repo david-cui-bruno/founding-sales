@@ -113,6 +113,10 @@ public enum NotesPortError: Error, Sendable, Equatable {
     case plaintextRetentionRisk
 }
 
+public enum BridgeShutdownError: Error, Sendable, Equatable {
+    case cleanupVerificationFailed
+}
+
 public enum MessagesSendPortError: Error, Sendable, Equatable {
     case manualConfirmationRequired
     case invalidRequest
