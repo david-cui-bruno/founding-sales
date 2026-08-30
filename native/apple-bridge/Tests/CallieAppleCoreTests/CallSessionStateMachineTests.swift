@@ -58,6 +58,29 @@ struct CallSessionStateMachineTests {
         #expect(state.callState == .ended)
         #expect(state.call == ended)
     }
+
+    @Test func connectedCallRejectsStaleConnectingObservation() {
+        var state = CallSessionStateMachine(call: connectedOutgoingCall)
+        let staleConnecting = ObservedCall(id: connectedOutgoingCall.id, outgoing: true, connected: false, ended: false, onHold: false)
+
+        let accepted = state.apply(.observed(staleConnecting))
+
+        #expect(!accepted)
+        #expect(state.callState == .connected)
+        #expect(state.call == connectedOutgoingCall)
+    }
+
+    @Test func heldCallRejectsStaleConnectingObservation() {
+        let held = ObservedCall(id: connectedOutgoingCall.id, outgoing: true, connected: true, ended: false, onHold: true)
+        var state = CallSessionStateMachine(call: held)
+        let staleConnecting = ObservedCall(id: held.id, outgoing: true, connected: false, ended: false, onHold: false)
+
+        let accepted = state.apply(.observed(staleConnecting))
+
+        #expect(!accepted)
+        #expect(state.callState == .held)
+        #expect(state.call == held)
+    }
 }
 
 private let connectedOutgoingCall = ObservedCall(id: UUID(uuidString: "33333333-3333-4333-8333-333333333333")!, outgoing: true, connected: true, ended: false, onHold: false)

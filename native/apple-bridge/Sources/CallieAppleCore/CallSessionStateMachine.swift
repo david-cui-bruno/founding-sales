@@ -36,9 +36,12 @@ public struct CallSessionStateMachine: Sendable, Equatable {
     public mutating func apply(_ event: CallSessionEvent) -> Bool {
         switch event {
         case let .observed(updatedCall):
-            guard updatedCall.id == call.id, updatedCall != call, callState != .ended else { return false }
+            let updatedState = Self.callState(for: updatedCall)
+            guard updatedCall.id == call.id,
+                  updatedCall != call,
+                  Self.canAdvance(from: callState, to: updatedState) else { return false }
             call = updatedCall
-            callState = Self.callState(for: updatedCall)
+            callState = updatedState
             if updatedCall.ended, recordingState != .verified, recordingState != .failed(.callEnded) {
                 recordingState = .failed(.callEnded)
             }
@@ -62,5 +65,14 @@ public struct CallSessionStateMachine: Sendable, Equatable {
         if call.ended { return .ended }
         if call.onHold { return .held }
         return call.connected ? .connected : .connecting
+    }
+
+    private static func canAdvance(from current: CallSessionState, to updated: CallSessionState) -> Bool {
+        switch (current, updated) {
+        case (.ended, _), (.connected, .connecting), (.held, .connecting):
+            return false
+        default:
+            return true
+        }
     }
 }

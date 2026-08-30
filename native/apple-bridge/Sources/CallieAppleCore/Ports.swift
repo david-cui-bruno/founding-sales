@@ -9,6 +9,7 @@ public enum RecordingFailure: Sendable, Equatable {
     case controlNotFound
     case verificationFailed
     case callEnded
+    case eligibilityChanged
     case controllerError
 }
 
