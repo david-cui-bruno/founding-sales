@@ -24,10 +24,7 @@ lines.on('line', (line) => {
       ok: true,
       result: {
         selectedVersion: 1,
-        helperVersion: 'fake-test-only',
-        bundleIdentifier: 'com.callie.foundersales.applebridge.fake',
-        osVersion: 'test',
-        architecture: process.arch,
+        helperVersion: '1.0.0-test',
       },
     })}\n`);
     return;

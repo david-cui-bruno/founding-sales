@@ -14,7 +14,12 @@ struct FeasibilityBridgeCommandHandlerTests {
             params: .hello(try HelloRequestParameters(supportedVersions: [1]))
         )
 
-        #expect(handler.handle(request).ok)
+        let response = handler.handle(request)
+        #expect(response.ok)
+        #expect(response.result == [
+            "selectedVersion": .number(1),
+            "helperVersion": .string("1.0.0"),
+        ])
         #expect(ports.operations.isEmpty)
     }
 

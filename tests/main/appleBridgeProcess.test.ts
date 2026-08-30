@@ -1,8 +1,9 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { AppleBridgeClient } from '../../src/main/appleBridge/appleBridgeClient';
 import {
   APPLE_BRIDGE_MAX_FRAME_BYTES,
   APPLE_BRIDGE_MAX_STDERR_BYTES,
@@ -30,6 +31,35 @@ class FakeChildProcess extends EventEmitter implements AppleBridgeChildProcess {
     return true;
   }
 }
+
+const emitErrorAsync = async (emitter: EventEmitter, message: string): Promise<void> => {
+  await Promise.resolve();
+  emitter.emit('error', new Error(message));
+};
+
+const assertChildListenersRemoved = (child: FakeChildProcess): void => {
+  expect(child.listenerCount('error')).toBe(0);
+  expect(child.listenerCount('exit')).toBe(0);
+  expect(child.stdin.listenerCount('error')).toBe(0);
+  expect(child.stdout.listenerCount('error')).toBe(0);
+  expect(child.stderr.listenerCount('error')).toBe(0);
+  expect(child.stdout.listenerCount('data')).toBe(0);
+  expect(child.stderr.listenerCount('data')).toBe(0);
+  expect(child.stderr.listenerCount('end')).toBe(0);
+};
+
+const completeRealProcessHandshake = (
+  child: FakeChildProcess,
+  helloId: string,
+): void => {
+  child.stdout.write(`${JSON.stringify({
+    v: 1,
+    kind: 'response',
+    id: helloId.toUpperCase(),
+    ok: true,
+    result: { selectedVersion: 1, helperVersion: '1.0.0-test' },
+  })}\n`);
+};
 
 const collect = (process: AppleBridgeProcess): AppleBridgeProcessEvent[] => {
   const events: AppleBridgeProcessEvent[] = [];
@@ -89,6 +119,78 @@ describe('AppleBridgeProcess', () => {
     expect(child.killed).toBe(true);
   });
 
+  it('rejects invalid UTF-8 before JSON parsing and terminates the helper', () => {
+    const child = new FakeChildProcess();
+    const process = new AppleBridgeProcess(child);
+    const events = collect(process);
+
+    child.stdout.write(Buffer.from([0x7B, 0xFF, 0x7D, 0x0A]));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'failure' });
+    expect((events[0] as { error: Error }).error.message).toBe(
+      'Apple bridge emitted a malformed JSONL protocol frame.',
+    );
+    expect(child.killed).toBe(true);
+  });
+
+  it.each([
+    ['stdin', (child: FakeChildProcess): EventEmitter => child.stdin],
+    ['stdout', (child: FakeChildProcess): EventEmitter => child.stdout],
+    ['stderr', (child: FakeChildProcess): EventEmitter => child.stderr],
+    ['child process', (child: FakeChildProcess): EventEmitter => child],
+  ])('fails pending work safely on an asynchronous %s error', async (_name, selectEmitter) => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeChildProcess();
+      const process = new AppleBridgeProcess(child);
+      const helloId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      const client = new AppleBridgeClient(process, { createRequestId: () => helloId });
+      completeRealProcessHandshake(child, helloId);
+      const request = {
+        v: 1,
+        kind: 'request',
+        id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        method: 'capabilities.probe',
+        params: {},
+      } as const;
+      const pending = client.request(request, 60_000);
+      const rejection = expect(pending).rejects.toThrow(
+        'Apple bridge protocol transport failed: Apple bridge process transport failed.',
+      );
+      await Promise.resolve();
+
+      await expect(emitErrorAsync(selectEmitter(child), 'private /Users/founder leaked')).resolves.toBeUndefined();
+
+      await rejection;
+      expect(child.killed).toBe(true);
+      expect(child.writes.filter((buffer) => buffer.includes('capabilities.probe'))).toHaveLength(1);
+      expect(vi.getTimerCount()).toBe(0);
+      process.dispose();
+      assertChildListenersRemoved(child);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('handles an asynchronous stdin error after end and removes every owned listener', async () => {
+    const child = new FakeChildProcess();
+    const process = new AppleBridgeProcess(child);
+    const events = collect(process);
+    process.closeInput();
+
+    await expect(emitErrorAsync(child.stdin, 'late EPIPE /Users/founder')).resolves.toBeUndefined();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'failure',
+      error: { message: 'Apple bridge process transport failed.' },
+    });
+    expect(child.killed).toBe(true);
+    process.dispose();
+    assertChildListenersRemoved(child);
+  });
+
   it('retains at most 32 KiB of sanitized stderr diagnostics only', () => {
     const child = new FakeChildProcess();
     const process = new AppleBridgeProcess(child);
@@ -111,7 +213,7 @@ describe('AppleBridgeProcess', () => {
     expect(events).toEqual([]);
   });
 
-  it('reports process exit and process errors through the same bounded event channel', () => {
+  it('reports process exit through the bounded event channel', () => {
     const child = new FakeChildProcess();
     const process = new AppleBridgeProcess(child);
     const events = collect(process);

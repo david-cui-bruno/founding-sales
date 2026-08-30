@@ -83,10 +83,7 @@ const completeHandshake = (transport: FakeBridgeTransport): void => {
       ok: true,
       result: {
         selectedVersion: 1,
-        helperVersion: '0.1.0-test',
-        bundleIdentifier: 'com.callie.foundersales.applebridge',
-        osVersion: '26.4',
-        architecture: 'arm64',
+        helperVersion: '1.0.0-test',
       },
     },
   });
@@ -100,6 +97,70 @@ const createClient = (transport: FakeBridgeTransport): AppleBridgeClient => {
 };
 
 describe('AppleBridgeClient', () => {
+  it('exposes the typed hello metadata as the only readiness gate', async () => {
+    const transport = new FakeBridgeTransport();
+    const client = createClient(transport);
+
+    const readiness = client.ready();
+    expect(transport.writes).toHaveLength(1);
+    expect((transport.writes[0] as { method: string }).method).toBe('bridge.hello');
+    completeHandshake(transport);
+
+    await expect(readiness).resolves.toEqual({
+      helperVersion: '1.0.0-test',
+      protocolVersion: 1,
+    });
+    expect(transport.writes).toHaveLength(1);
+  });
+
+  it('rejects unsanitized or missing semantic helper versions and retains no terminal subscriber', async () => {
+    for (const result of [
+      { selectedVersion: 1, helperVersion: '../../private' },
+      { selectedVersion: 1 },
+    ]) {
+      const transport = new FakeBridgeTransport();
+      const client = createClient(transport);
+      const readiness = client.ready();
+      transport.emit({
+        type: 'frame',
+        frame: { v: 1, kind: 'response', id: HELLO_ID, ok: true, result },
+      });
+
+      await expect(readiness).rejects.toThrow('hello result');
+      expect(transport.terminateCalls).toBe(1);
+      expect(transport.listeners.size).toBe(0);
+      let calls = 0;
+      const unsubscribe = client.subscribe(() => { calls += 1; });
+      transport.emit({
+        type: 'frame',
+        frame: { v: 1, kind: 'event', seq: 1, event: 'bridge.ready', payload: {} },
+      });
+      unsubscribe();
+      expect(calls).toBe(0);
+      expect(transport.listeners.size).toBe(0);
+    }
+  });
+
+  it('rejects an earlier readiness waiter when shutdown wins the handshake race', async () => {
+    const transport = new FakeBridgeTransport();
+    const client = createClient(transport);
+    const readiness = client.ready();
+    const readinessRejection = expect(readiness).rejects.toThrow('shut down');
+    const shutdownPromise = client.shutdown();
+
+    completeHandshake(transport);
+    await readinessRejection;
+    await Promise.resolve();
+    const shutdown = transport.writes.find((frame) => (
+      frame as { method?: string }
+    ).method === 'bridge.shutdown') as { id: string };
+    transport.emit({
+      type: 'frame',
+      frame: { v: 1, kind: 'response', id: shutdown.id, ok: true, result: {} },
+    });
+    await expect(shutdownPromise).resolves.toBeUndefined();
+  });
+
   it('correlates UUIDs case-insensitively across Swift canonical encoding', async () => {
     const transport = new FakeBridgeTransport();
     const helloId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -116,7 +177,7 @@ describe('AppleBridgeClient', () => {
         kind: 'response',
         id: helloId.toUpperCase(),
         ok: true,
-        result: { selectedVersion: 1 },
+        result: { selectedVersion: 1, helperVersion: '1.0.0' },
       },
     });
     await Promise.resolve();
@@ -164,7 +225,7 @@ describe('AppleBridgeClient', () => {
         kind: 'response',
         id: HELLO_ID,
         ok: true,
-        result: { selectedVersion: 2 },
+        result: { selectedVersion: 2, helperVersion: '1.0.0' },
       },
     });
 
@@ -315,8 +376,18 @@ describe('AppleBridgeClient', () => {
 
     const first = client.shutdown();
     const second = client.shutdown();
+    const postShutdownReadiness = expect(client.ready()).rejects.toThrow('shut down');
+    let terminalSubscriberCalls = 0;
+    const unsubscribeTerminal = client.subscribe(() => { terminalSubscriberCalls += 1; });
+    transport.emit({
+      type: 'frame',
+      frame: { v: 1, kind: 'event', seq: 1, event: 'bridge.ready', payload: {} },
+    });
+    unsubscribeTerminal();
+    expect(terminalSubscriberCalls).toBe(0);
     await Promise.resolve();
     expect(second).toBe(first);
+    await postShutdownReadiness;
     const shutdown = transport.writes.find((frame) => (
       frame as { method?: string }
     ).method === 'bridge.shutdown') as { id: string };
@@ -330,6 +401,7 @@ describe('AppleBridgeClient', () => {
     expect(transport.closeInputCalls).toBe(1);
     expect(transport.listeners.size).toBe(0);
     await expect(client.request(capabilityRequest(SECOND_REQUEST_ID))).rejects.toThrow('shut down');
+    await expect(client.ready()).rejects.toThrow('shut down');
   });
 
   it('detaches process listeners even when closing stdin fails during shutdown', async () => {

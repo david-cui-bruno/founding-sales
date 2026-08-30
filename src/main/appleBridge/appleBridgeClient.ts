@@ -1,13 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
-import { z } from 'zod';
-
 import type {
   AppleBridgeProcessEvent,
   AppleBridgeTransport,
 } from './appleBridgeProcess';
 import {
   APPLE_BRIDGE_PROTOCOL_VERSION,
+  appleBridgeHelloResultSchema,
   bridgeEventSchema,
   bridgeRequestSchema,
   bridgeResponseSchema,
@@ -21,11 +20,12 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 1_000;
 const MAX_TRACKED_RESPONSE_IDS = 10_000;
 
-const helloResultSchema = z.object({
-  selectedVersion: z.literal(APPLE_BRIDGE_PROTOCOL_VERSION),
-}).catchall(z.unknown());
-
 type ClientState = 'handshaking' | 'ready' | 'failed' | 'shuttingDown' | 'closed';
+
+export type AppleBridgeReady = Readonly<{
+  helperVersion: string;
+  protocolVersion: typeof APPLE_BRIDGE_PROTOCOL_VERSION;
+}>;
 
 type PendingRequest = {
   timer: ReturnType<typeof setTimeout>;
@@ -39,6 +39,7 @@ export type AppleBridgeClientOptions = {
 };
 
 export type AppleBridgeClientApi = {
+  ready(): Promise<AppleBridgeReady>;
   request<T extends BridgeRequest>(request: T, timeoutMs?: number): Promise<BridgeResponse>;
   subscribe(listener: (event: BridgeEvent) => void): () => void;
   shutdown(): Promise<void>;
@@ -59,12 +60,13 @@ export class AppleBridgeClient implements AppleBridgeClientApi {
   readonly #seenResponseIds = new Set<string>();
   readonly #eventListeners = new Set<(event: BridgeEvent) => void>();
   readonly #helloId: string;
-  readonly #readyPromise: Promise<void>;
-  readonly #resolveReady: () => void;
+  readonly #readyPromise: Promise<AppleBridgeReady>;
+  readonly #resolveReady: (ready: AppleBridgeReady) => void;
   readonly #rejectReady: (error: Error) => void;
   #unsubscribeProcess: (() => void) | undefined;
   #handshakeTimer: ReturnType<typeof setTimeout> | undefined;
   #shutdownPromise: Promise<void> | undefined;
+  #shutdownRequested = false;
   #failureError: Error | undefined;
   #state: ClientState = 'handshaking';
   #lastEventSequence: number | undefined;
@@ -74,9 +76,9 @@ export class AppleBridgeClient implements AppleBridgeClientApi {
     this.#createRequestId = options.createRequestId ?? randomUUID;
     this.#helloId = this.#createRequestId();
 
-    let resolveReady!: () => void;
+    let resolveReady!: (ready: AppleBridgeReady) => void;
     let rejectReady!: (error: Error) => void;
-    this.#readyPromise = new Promise<void>((resolve, reject) => {
+    this.#readyPromise = new Promise<AppleBridgeReady>((resolve, reject) => {
       resolveReady = resolve;
       rejectReady = reject;
     });
@@ -107,6 +109,29 @@ export class AppleBridgeClient implements AppleBridgeClientApi {
     }
   }
 
+  ready(): Promise<AppleBridgeReady> {
+    if (this.#failureError !== undefined) {
+      return Promise.reject(this.#failureError);
+    }
+    if (
+      this.#shutdownRequested
+      || this.#state === 'shuttingDown'
+      || this.#state === 'closed'
+    ) {
+      return Promise.reject(new Error('Apple bridge client is shut down.'));
+    }
+    return this.#readyPromise.then((ready) => {
+      if (
+        this.#shutdownRequested
+        || this.#state === 'shuttingDown'
+        || this.#state === 'closed'
+      ) {
+        throw new Error('Apple bridge client is shut down.');
+      }
+      return ready;
+    });
+  }
+
   async request<T extends BridgeRequest>(
     request: T,
     timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
@@ -123,7 +148,11 @@ export class AppleBridgeClient implements AppleBridgeClientApi {
     }
 
     await this.#readyPromise;
-    if (this.#state === 'shuttingDown' || this.#state === 'closed') {
+    if (
+      this.#shutdownRequested
+      || this.#state === 'shuttingDown'
+      || this.#state === 'closed'
+    ) {
       throw new Error('Apple bridge client is shut down.');
     }
     if (this.#state !== 'ready') {
@@ -133,12 +162,21 @@ export class AppleBridgeClient implements AppleBridgeClientApi {
   }
 
   subscribe(listener: (event: BridgeEvent) => void): () => void {
+    if (
+      this.#state === 'failed'
+      || this.#shutdownRequested
+      || this.#state === 'shuttingDown'
+      || this.#state === 'closed'
+    ) {
+      return () => undefined;
+    }
     this.#eventListeners.add(listener);
     return () => this.#eventListeners.delete(listener);
   }
 
   shutdown(): Promise<void> {
     if (this.#shutdownPromise === undefined) {
+      this.#shutdownRequested = true;
       this.#shutdownPromise = this.#performShutdown();
     }
     return this.#shutdownPromise;
@@ -299,7 +337,8 @@ export class AppleBridgeClient implements AppleBridgeClientApi {
         this.#fail(new AppleBridgeProtocolError('Apple bridge selected an unsupported protocol version.'));
         return;
       }
-      if (!helloResultSchema.safeParse(response.result).success) {
+      const helloResult = appleBridgeHelloResultSchema.safeParse(response.result);
+      if (!helloResult.success) {
         this.#fail(new AppleBridgeProtocolError(
           'Apple bridge V1 hello result failed strict validation.',
         ));
@@ -307,7 +346,10 @@ export class AppleBridgeClient implements AppleBridgeClientApi {
       }
       this.#clearHandshakeTimer();
       this.#state = 'ready';
-      this.#resolveReady();
+      this.#resolveReady(Object.freeze({
+        helperVersion: helloResult.data.helperVersion,
+        protocolVersion: APPLE_BRIDGE_PROTOCOL_VERSION,
+      }));
       return;
     }
 

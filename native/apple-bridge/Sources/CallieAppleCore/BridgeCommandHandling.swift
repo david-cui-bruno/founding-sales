@@ -11,7 +11,10 @@ public struct BoundedBridgeCommandHandler: BridgeCommandHandling {
     public func handle(_ request: BridgeRequest) -> BridgeResponse {
         switch request.method {
         case .hello:
-            return BridgeResponse(id: request.id, result: ["selectedVersion": .number(1)])
+            return BridgeResponse(id: request.id, result: [
+                "selectedVersion": .number(1),
+                "helperVersion": .string(AppleBridgeBuildInfo.helperVersion),
+            ])
         case .probeCapabilities:
             return BridgeResponse(id: request.id, result: ["capabilities": .object([:])])
         case .shutdown:

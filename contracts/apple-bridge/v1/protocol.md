@@ -26,6 +26,10 @@ Each envelope is strict: unknown top-level fields and unknown parameter fields a
 
 Successful responses are `{ "v": 1, "kind": "response", "id": "UUID", "ok": true, "result": { ... } }`. Failed responses replace `result` with `{ "ok": false, "error": { "code": "…", "message": "1–300 chars", "retryable": false } }`.
 
+The successful response to `bridge.hello` has the exact result shape `{ "selectedVersion": 1, "helperVersion": "SEMVER" }`. `helperVersion` is a sanitized semantic version of at most 64 characters; it contains no path, user, host, or build-machine data. A hello response establishes transport readiness only. It does not imply that any optional capability is available, and clients must use `capabilities.probe` separately after readiness when they need capability state.
+
+`AppleBridgeBuildInfo.helperVersion` in `native/apple-bridge/Sources/CallieAppleProtocol/ProtocolVersion.swift` is the canonical pre-package helper version source. Task 9's nested bundle assembly must generate or verify `CFBundleShortVersionString` against that value so the signed helper metadata and hello payload cannot drift.
+
 The only error codes are `protocol_mismatch`, `invalid_request`, `permission_denied`, `capability_unavailable`, `identity_unresolved`, `control_not_found`, `recording_verification_failed`, `artifact_not_found`, `schema_unsupported`, `timeout`, and `internal`.
 
 ## Events

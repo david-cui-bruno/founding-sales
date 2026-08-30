@@ -9,7 +9,10 @@ import CallieAppleProtocol
         method: .hello,
         params: .hello(try HelloRequestParameters(supportedVersions: [1]))
     )
-    let success = BridgeResponse(id: id, result: ["selectedVersion": .number(1)])
+    let success = BridgeResponse(id: id, result: [
+        "selectedVersion": .number(1),
+        "helperVersion": .string(AppleBridgeBuildInfo.helperVersion),
+    ])
     let failure = BridgeResponse(
         id: id,
         error: try BridgeErrorPayload(code: .protocolMismatch, message: "Protocol V1 handshake is required.", retryable: false)

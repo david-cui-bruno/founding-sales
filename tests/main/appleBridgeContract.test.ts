@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   APPLE_BRIDGE_PROTOCOL_VERSION,
+  appleBridgeHelloResultSchema,
   bridgeEventSchema,
   bridgeRequestSchema,
   bridgeResponseSchema,
@@ -25,7 +26,14 @@ describe('Apple bridge protocol V1', () => {
     expect(bridgeRequestSchema.parse(fixture('messages-send.request.json')).method).toBe(
       'messages.sendTest',
     );
-    expect(bridgeResponseSchema.parse(fixture('hello.response.json')).ok).toBe(true);
+    const hello = bridgeResponseSchema.parse(fixture('hello.response.json'));
+    expect(hello.ok).toBe(true);
+    if (hello.ok) {
+      expect(appleBridgeHelloResultSchema.parse(hello.result)).toEqual({
+        selectedVersion: 1,
+        helperVersion: '1.0.0',
+      });
+    }
     expect(bridgeEventSchema.parse(fixture('call-connected.event.json')).event).toBe(
       'call.stateChanged',
     );
@@ -33,6 +41,25 @@ describe('Apple bridge protocol V1', () => {
       'recording.failed',
     );
     expect(bridgeResponseSchema.parse(fixture('error.response.json')).ok).toBe(false);
+  });
+
+  it('requires an exact semantic and sanitized V1 hello success payload', () => {
+    expect(appleBridgeHelloResultSchema.parse({
+      selectedVersion: 1,
+      helperVersion: '1.0.0-beta.1+arm64',
+    })).toEqual({
+      selectedVersion: 1,
+      helperVersion: '1.0.0-beta.1+arm64',
+    });
+    for (const result of [
+      { selectedVersion: 1 },
+      { selectedVersion: 1, helperVersion: '../../private' },
+      { selectedVersion: 1, helperVersion: 'version one' },
+      { selectedVersion: 2, helperVersion: '1.0.0' },
+      { selectedVersion: 1, helperVersion: '1.0.0', path: '/private/value' },
+    ]) {
+      expect(appleBridgeHelloResultSchema.safeParse(result).success).toBe(false);
+    }
   });
 
   it('accepts every fixed V1 command with its typed parameters', () => {
@@ -89,7 +116,11 @@ describe('Apple bridge protocol V1', () => {
       id: 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA',
       params: { ...base.params, commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
     }).success).toBe(false);
-    const { commandId: _omittedCommandId, ...withoutCommandId } = base.params;
+    const withoutCommandId = {
+      recipientHandle: base.params.recipientHandle,
+      body: base.params.body,
+      confirmation: base.params.confirmation,
+    };
     expect(bridgeRequestSchema.safeParse({ ...base, params: withoutCommandId }).success).toBe(false);
     expect(bridgeRequestSchema.safeParse({
       ...base,

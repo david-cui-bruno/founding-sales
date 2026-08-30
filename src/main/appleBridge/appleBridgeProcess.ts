@@ -127,16 +127,19 @@ export class AppleBridgeProcess implements AppleBridgeTransport {
     this.#terminal = true;
     this.#emit({ type: 'exit', code, signal });
   };
-  readonly #onError = (): void => {
-    this.#fail(new Error('Apple bridge process failed.'));
+  readonly #onTerminalError = (): void => {
+    this.#fail(new Error('Apple bridge process transport failed.'));
   };
 
   constructor(readonly child: AppleBridgeChildProcess) {
     child.stdout.on('data', this.#onStdoutData);
+    child.stdout.on('error', this.#onTerminalError);
     child.stderr.on('data', this.#onStderrData);
     child.stderr.on('end', this.#onStderrEnd);
+    child.stderr.on('error', this.#onTerminalError);
+    child.stdin.on('error', this.#onTerminalError);
     child.on('exit', this.#onExit);
-    child.on('error', this.#onError);
+    child.on('error', this.#onTerminalError);
   }
 
   get diagnostics(): string {
@@ -175,10 +178,13 @@ export class AppleBridgeProcess implements AppleBridgeTransport {
 
   dispose(): void {
     this.child.stdout.removeListener('data', this.#onStdoutData);
+    this.child.stdout.removeListener('error', this.#onTerminalError);
     this.child.stderr.removeListener('data', this.#onStderrData);
     this.child.stderr.removeListener('end', this.#onStderrEnd);
+    this.child.stderr.removeListener('error', this.#onTerminalError);
+    this.child.stdin.removeListener('error', this.#onTerminalError);
     this.child.removeListener('exit', this.#onExit);
-    this.child.removeListener('error', this.#onError);
+    this.child.removeListener('error', this.#onTerminalError);
     this.#listeners.clear();
   }
 

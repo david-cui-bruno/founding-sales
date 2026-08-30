@@ -18,7 +18,12 @@ struct MacOSDependencyContainerTests {
             method: .hello,
             params: .hello(try .init(supportedVersions: [1]))
         )
-        #expect(container.handler.handle(hello).ok)
+        let helloResponse = container.handler.handle(hello)
+        #expect(helloResponse.ok)
+        #expect(helloResponse.result == [
+            "selectedVersion": .number(1),
+            "helperVersion": .string("1.0.0"),
+        ])
         #expect(!FileManager.default.fileExists(atPath: nonexistentMessages.path))
         #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
     }

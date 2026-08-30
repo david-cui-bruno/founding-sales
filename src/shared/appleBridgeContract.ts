@@ -2,6 +2,13 @@ import { z } from 'zod';
 
 export const APPLE_BRIDGE_PROTOCOL_VERSION = 1 as const;
 
+const semanticHelperVersion = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+
+export const appleBridgeHelloResultSchema = z.object({
+  selectedVersion: z.literal(APPLE_BRIDGE_PROTOCOL_VERSION),
+  helperVersion: z.string().min(1).max(64).regex(semanticHelperVersion),
+}).strict();
+
 const requestId = z.string().uuid();
 const emptyParams = z.object({}).strict();
 const opaqueId = z.string().uuid();
@@ -160,3 +167,4 @@ export const bridgeEventSchema = z.object({
 export type BridgeRequest = z.infer<typeof bridgeRequestSchema>;
 export type BridgeResponse = z.infer<typeof bridgeResponseSchema>;
 export type BridgeEvent = z.infer<typeof bridgeEventSchema>;
+export type AppleBridgeHelloResult = z.infer<typeof appleBridgeHelloResultSchema>;

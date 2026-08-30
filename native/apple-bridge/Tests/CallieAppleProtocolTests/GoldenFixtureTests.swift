@@ -21,7 +21,12 @@ import Testing
     let fixtures = root.appending(path: "contracts/apple-bridge/v1/fixtures")
     let decoder = JSONDecoder()
 
-    #expect(try decoder.decode(BridgeResponse.self, from: Data(contentsOf: fixtures.appending(path: "hello.response.json"))).ok)
+    let hello = try decoder.decode(BridgeResponse.self, from: Data(contentsOf: fixtures.appending(path: "hello.response.json")))
+    #expect(hello.ok)
+    #expect(hello.result == [
+        "selectedVersion": .number(1),
+        "helperVersion": .string("1.0.0"),
+    ])
     #expect(try decoder.decode(BridgeRequest.self, from: Data(contentsOf: fixtures.appending(path: "messages-send.request.json"))).method == .sendTestMessage)
     #expect(try decoder.decode(BridgeEvent.self, from: Data(contentsOf: fixtures.appending(path: "call-connected.event.json"))).event == .callStateChanged)
     #expect(try decoder.decode(BridgeEvent.self, from: Data(contentsOf: fixtures.appending(path: "recording-failed.event.json"))).event == .recordingFailed)
