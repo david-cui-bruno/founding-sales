@@ -226,3 +226,42 @@ The remaining shutdown finding is fixed without changing `BridgeCommandHandling`
 - `git diff --check`: clean.
 - Safety scans found no shell/process execution, AppleScript source/API, Messages write/migration vocabulary, live Messages database reference, or live Apple Event executor reference in tests.
 - TypeScript sources/contracts were not changed in round 2, so no TypeScript verification was required by the round brief.
+
+---
+
+## Review round 3 remediation
+
+### Finding and implementation
+
+`cleanAbandonedArtifacts()` previously treated every valid `callie-notes-export-<UUID>` basename as a directory and silently continued when `openat(..., O_DIRECTORY | O_NOFOLLOW)` failed. A contained regular file or symlink with that generated basename could therefore survive cleanup while `bridge.shutdown` reported success.
+
+Cleanup now handles every valid generated export-directory basename:
+
+- If descriptor-relative no-follow directory open succeeds, the existing leaf deletion and export-directory removal/absence verification path is used.
+- If directory open fails, cleanup attempts descriptor-relative no-following `unlinkat` through the existing retrying deleter and verifies `ENOENT` with `fstatat(..., AT_SYMLINK_NOFOLLOW)`.
+- If that entry cannot be removed and verified absent (including an actual directory that cannot be opened/removed through this branch), cleanup returns `plaintextRetentionRisk`; round 2's typed shutdown mapping emits the fixed non-`ok` response.
+- Unrelated basenames remain untouched.
+
+The accepted absolute Notes Apple Event threat-model boundary is unchanged.
+
+### RED → GREEN evidence
+
+- RED focused run: both new tests failed because a regular file and symlink named with valid `callie-notes-export-<UUID>` basenames remained after cleanup.
+- GREEN focused Notes/container run: 22 tests passed in 2 suites.
+- The regular-file regression verifies the generated entry is removed while an unrelated file remains.
+- The symlink regression verifies the contained link itself is removed without following or changing its temporary synthetic outside target.
+- The existing container failure regression continues to assert the exact sanitized `bridge.shutdown` non-`ok` frame when a valid generated directory contains an entry that prevents verified cleanup.
+
+### Round 3 self-review and concerns
+
+- Every branch selected by either generated-name predicate now ends in verified absence or a typed retention-risk failure; there is no generated-name `continue` after an unhandled open failure.
+- Removal authority remains relative to the lifetime root descriptor, and symlinks are unlinked rather than followed.
+- No production Apple Event, TCC prompt, personal database, Notes item, message, call, or recording is exercised by these tests.
+
+### Round 3 final verification
+
+- Focused Swift Notes/container run: PASS, 22 tests in 2 suites.
+- Bundled-Node `npm run test:swift`: PASS, 121 tests in 13 suites.
+- Bundled-Node `npm run build:swift`: PASS, release arm64 build.
+- `git diff --check`: clean.
+- Safety scans found no shell/process execution, AppleScript source/API, Messages write/migration vocabulary, live Messages database reference, live Apple Event executor reference in tests, suppressed shutdown cleanup, or remaining generated-directory open-failure `continue` branch.

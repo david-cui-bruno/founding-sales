@@ -186,7 +186,14 @@ public final class NotesAttachmentExporter: NotesAttachmentExporting, @unchecked
                     do { try deleteWithRetries(named: name, in: rootFD) } catch { throw markRetentionRisk() }
                 } else if Self.isExportDirectoryName(name) {
                     let childFD = openat(rootFD, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-                    guard childFD >= 0 else { continue }
+                    guard childFD >= 0 else {
+                        do {
+                            try deleteWithRetries(named: name, in: rootFD)
+                        } catch {
+                            throw markRetentionRisk()
+                        }
+                        continue
+                    }
                     var childStatus = stat()
                     guard fstat(childFD, &childStatus) == 0 else {
                         close(childFD)

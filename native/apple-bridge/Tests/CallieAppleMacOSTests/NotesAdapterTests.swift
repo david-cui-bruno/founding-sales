@@ -184,6 +184,42 @@ struct NotesAdapterTests {
         #expect(FileManager.default.fileExists(atPath: unrelated.path))
     }
 
+    @Test func cleanupRemovesRegularFileWithGeneratedExportDirectoryName() throws {
+        let root = try notesTemporaryDirectory()
+        let generated = root.appending(path: "callie-notes-export-11111111-1111-4111-8111-111111111111")
+        let unrelated = root.appending(path: "keep.txt")
+        try Data("abandoned synthetic".utf8).write(to: generated)
+        try Data("keep".utf8).write(to: unrelated)
+        let exporter = try NotesAttachmentExporter(
+            executor: FakeAppleEventExecutor(reply: .null()),
+            registry: NotesArtifactRegistry(),
+            stagingRoot: root
+        )
+
+        try exporter.cleanAbandonedArtifacts()
+
+        #expect(!FileManager.default.fileExists(atPath: generated.path))
+        #expect(FileManager.default.fileExists(atPath: unrelated.path))
+    }
+
+    @Test func cleanupUnlinksGeneratedExportDirectorySymlinkWithoutFollowingTarget() throws {
+        let root = try notesTemporaryDirectory()
+        let outside = try notesTemporaryDirectory().appending(path: "outside-target")
+        try Data("outside synthetic".utf8).write(to: outside)
+        let generated = root.appending(path: "callie-notes-export-22222222-2222-4222-8222-222222222222")
+        try FileManager.default.createSymbolicLink(at: generated, withDestinationURL: outside)
+        let exporter = try NotesAttachmentExporter(
+            executor: FakeAppleEventExecutor(reply: .null()),
+            registry: NotesArtifactRegistry(),
+            stagingRoot: root
+        )
+
+        try exporter.cleanAbandonedArtifacts()
+
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: generated.path)) == nil)
+        #expect(try String(contentsOf: outside, encoding: .utf8) == "outside synthetic")
+    }
+
     @Test func deletionRetriesBeforeReturningSuccessProof() throws {
         let root = try notesTemporaryDirectory()
         let registry = NotesArtifactRegistry()
