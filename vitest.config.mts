@@ -8,6 +8,7 @@ export default defineConfig({
       'tests/e2e/**',
       '.worktrees/**',
       'test/appleBridgeBuild.test.mjs',
+      'test/verifyAppleBridgePackage.test.mjs',
     ],
   },
 });

@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { accessSync, constants, existsSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { verifyAppleBridgePackage } from './verifyAppleBridgePackage.mjs';
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDirectory, '..');
@@ -95,7 +96,9 @@ export const selectPackagedApp = (outDirectory) => {
   return candidates[0];
 };
 
-const defaultRunCommand = ({ command, args }) => {
+export const createPackageCommandRunner = (
+  runExecutable = execFileSync,
+) => ({ command, args, input }) => {
   const commandArgs =
     command === 'asar'
       ? [asarCli, 'list', args[0]]
@@ -106,15 +109,19 @@ const defaultRunCommand = ({ command, args }) => {
     command === 'asar' || command === 'electron-fuses' ? process.execPath : command;
 
   try {
-    return execFileSync(executable, commandArgs, {
+    return runExecutable(executable, commandArgs, {
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
+      ...(input === undefined ? {} : { input }),
+      shell: false,
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     }).trim();
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     fail(`could not run ${command}: ${detail}`);
   }
 };
+
+const defaultRunCommand = createPackageCommandRunner();
 
 const runOrFail = (runCommand, command, args, purpose) => {
   try {
@@ -387,6 +394,7 @@ export const verifyPackagedApp = (
     ['--verify', '--deep', '--strict', '--verbose=2', appPath],
     'verify final macOS code signature',
   );
+  const appleBridge = verifyAppleBridgePackage(appPath, { runCommand });
 
   return {
     appPath,
@@ -396,6 +404,7 @@ export const verifyPackagedApp = (
     nativeArchitecture,
     bundle,
     fuses,
+    appleBridge,
   };
 };
 

@@ -35,6 +35,29 @@ artifact is located recursively: current `better-sqlite3` v13 packages it as
 `prebuilds/darwin-arm64.node`, rather than requiring the older
 `better_sqlite3.node` filename.
 
+Package verification also checks the nested `Callie Apple Bridge.app`: its
+fixed bundle identifier and macOS 26.4 minimum, thin arm64 executable, strict
+code signature, and exact Apple Events automation entitlement. A stable-signed
+package must expose matching non-empty Team IDs on the parent and helper. A
+local ad-hoc package skips only Team-ID equality; both code objects must still
+have valid strict signatures and the helper must retain its entitlement. Ad-hoc
+verification does not establish permission persistence across rebuilds.
+
+The standard packaged E2E command includes an inert Apple smoke test. To run
+only that suite after packaging:
+
+```bash
+npm run test:e2e:apple
+```
+
+It launches the packaged app with an isolated temporary profile and the gated
+Apple feasibility panel, proves helper packaging, protocol handshake, exact
+status reporting, and helper/process-tree cleanup when Callie closes. It does
+not click capability, permission, call-observation, Notes, Messages, or send
+controls. Therefore it does not prompt for TCC access, read founder Apple
+databases, place a call, send a message, prove TCC grants, or prove live
+communication. Those remain separate consenting manual checks.
+
 Packaging sets every Electron 44 V1 fuse with
 `strictlyRequireAllFuses: true`, so a future Electron fuse addition stops the
 build until its policy is chosen explicitly. The browser-process-specific V8

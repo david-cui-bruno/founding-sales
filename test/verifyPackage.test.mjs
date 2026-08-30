@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  createPackageCommandRunner,
   PackageVerificationError,
   selectPackagedApp,
   verifyPackagedApp,
@@ -33,6 +34,17 @@ const createPackagedApp = async (outDirectory, appName = 'Callie.app') => {
   const appPath = join(outDirectory, 'darwin-arm64', appName);
   const contentsPath = join(appPath, 'Contents');
   const executablePath = join(contentsPath, 'MacOS', 'Callie');
+  const appleBridgeBundle = join(
+    contentsPath,
+    'Helpers',
+    'Callie Apple Bridge.app',
+  );
+  const appleBridgeExecutable = join(
+    appleBridgeBundle,
+    'Contents',
+    'MacOS',
+    'CallieAppleBridge',
+  );
   const nativePath = join(
     contentsPath,
     'Resources',
@@ -48,19 +60,42 @@ const createPackagedApp = async (outDirectory, appName = 'Callie.app') => {
   await writeFixtureFile(executablePath);
   await chmod(executablePath, 0o755);
   await writeFixtureFile(nativePath);
+  await writeFixtureFile(join(appleBridgeBundle, 'Contents', 'Info.plist'));
+  await writeFixtureFile(appleBridgeExecutable);
+  await chmod(appleBridgeExecutable, 0o755);
 
-  return { appPath, executablePath, nativePath };
+  return {
+    appPath,
+    appleBridgeBundle,
+    appleBridgeExecutable,
+    executablePath,
+    nativePath,
+  };
 };
 
 const successfulCommand = ({ command, args }) => {
-  if (command === 'file') {
+  const commandName = command.split('/').at(-1);
+  if (commandName === 'file') {
     return args.at(-1).endsWith('.node')
       ? 'Mach-O 64-bit bundle arm64'
       : 'Mach-O 64-bit executable arm64';
   }
 
-  if (command === 'plutil') {
+  if (commandName === 'plutil') {
+    if (args[0] === '-convert') {
+      return JSON.stringify({
+        'com.apple.security.automation.apple-events': true,
+      });
+    }
     const key = args[1];
+    const isAppleBridge = args.at(-1).includes('Callie Apple Bridge.app');
+    if (isAppleBridge) {
+      return {
+        CFBundleExecutable: 'CallieAppleBridge',
+        CFBundleIdentifier: 'com.callie.foundersales.applebridge',
+        LSMinimumSystemVersion: '26.4',
+      }[key];
+    }
     return {
       CFBundleExecutable: 'Callie',
       CFBundleIdentifier: 'com.example.callie',
@@ -94,7 +129,13 @@ const successfulCommand = ({ command, args }) => {
     ].join('\n');
   }
 
-  if (command === 'codesign') {
+  if (commandName === 'codesign') {
+    if (args.includes('--requirements')) {
+      return '# designated => cdhash H"1234567890abcdef1234567890abcdef12345678"';
+    }
+    if (args.includes('--entitlements')) {
+      return '<plist><dict><key>com.apple.security.automation.apple-events</key><true/></dict></plist>';
+    }
     return '';
   }
 
@@ -120,6 +161,34 @@ describe('packaged app selection', () => {
     expect(() => selectPackagedApp(outDirectory)).toThrow(
       'PACKAGE: expected exactly one packaged app containing Resources/app.asar',
     );
+  });
+});
+
+describe('package command runner', () => {
+  it('forwards verifier property-list input to the fixed executable without a shell', () => {
+    const executions = [];
+    const runCommand = createPackageCommandRunner((command, args, options) => {
+      executions.push({ command, args, options });
+      return '{"com.apple.security.automation.apple-events":true}\n';
+    });
+
+    const output = runCommand({
+      command: '/usr/bin/plutil',
+      args: ['-convert', 'json', '-o', '-', '--', '-'],
+      input: '<plist><dict/></plist>',
+    });
+
+    expect(output).toBe('{"com.apple.security.automation.apple-events":true}');
+    expect(executions).toEqual([{
+      command: '/usr/bin/plutil',
+      args: ['-convert', 'json', '-o', '-', '--', '-'],
+      options: expect.objectContaining({
+        encoding: 'utf8',
+        input: '<plist><dict/></plist>',
+        shell: false,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }),
+    }]);
   });
 });
 
@@ -152,6 +221,15 @@ describe('package verification', () => {
       LoadBrowserProcessSpecificV8Snapshot: 'Disabled',
       GrantFileProtocolExtraPrivileges: 'Disabled',
       WasmTrapHandlers: 'Enabled',
+    });
+    expect(report.appleBridge).toEqual({
+      bundlePath: fixture.appleBridgeBundle,
+      executable: fixture.appleBridgeExecutable,
+      bundleIdentifier: 'com.callie.foundersales.applebridge',
+      minimumSystemVersion: '26.4',
+      architecture: 'arm64',
+      signatureMode: 'adhoc',
+      automationEntitlement: true,
     });
   });
 

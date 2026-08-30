@@ -12,6 +12,21 @@ struct AppleBridgeLaunchArgumentsTests {
         #expect(parsed.stagingRoot == URL(fileURLWithPath: path, isDirectory: true))
     }
 
+    @Test func acceptsLegitimatePrivateVarPathDespiteFoundationVarAlias() throws {
+        let canonicalRoot = FileManager.default.temporaryDirectory
+            .appending(path: "callie-private-var-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: canonicalRoot, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: canonicalRoot) }
+        #expect(canonicalRoot.path.hasPrefix("/var/"))
+        let path = "/private\(canonicalRoot.path)"
+        #expect((path as NSString).standardizingPath != path)
+        #expect(URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path != path)
+
+        let parsed = try AppleBridgeLaunchArgumentParser.parse(["--staging-root", path])
+
+        #expect(parsed.stagingRoot.path == path)
+    }
+
     @Test func rejectsMissingDuplicateUnknownAndExtraArguments() {
         let cases: [([String], AppleBridgeLaunchArgumentError)] = [
             ([], .missingStagingRoot),
@@ -38,6 +53,7 @@ struct AppleBridgeLaunchArgumentsTests {
             "file:///private/tmp/root",
             "https://example.invalid/root",
             "/private/tmp/../root",
+            "/private/tmp/./root",
             "/private/tmp//root",
             "/private/tmp/root/",
             "/",

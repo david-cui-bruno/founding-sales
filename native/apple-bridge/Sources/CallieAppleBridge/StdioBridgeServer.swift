@@ -80,25 +80,23 @@ public actor StdioBridgeServer {
         var discardingOversizedLine = false
 
         do {
-            while let chunk = try input.read(upToCount: 4_096), !chunk.isEmpty {
-                for byte in chunk {
-                    if discardingOversizedLine {
-                        if byte == 0x0A { discardingOversizedLine = false }
-                        continue
-                    }
-                    if byte == 0x0A {
-                        guard await writeResponse(for: line) else { return }
-                        line.removeAll(keepingCapacity: true)
-                        if isShutdownRequested { return }
-                        continue
-                    }
+            for try await byte in input.bytes {
+                if discardingOversizedLine {
+                    if byte == 0x0A { discardingOversizedLine = false }
+                    continue
+                }
+                if byte == 0x0A {
+                    guard await writeResponse(for: line) else { return }
+                    line.removeAll(keepingCapacity: true)
+                    if isShutdownRequested { return }
+                    continue
+                }
 
-                    line.append(byte)
-                    if line.count + 1 > codec.maxFrameBytes {
-                        line.removeAll(keepingCapacity: true)
-                        discardingOversizedLine = true
-                        frameWriter.writeDiagnostic(.frameTooLarge)
-                    }
+                line.append(byte)
+                if line.count + 1 > codec.maxFrameBytes {
+                    line.removeAll(keepingCapacity: true)
+                    discardingOversizedLine = true
+                    frameWriter.writeDiagnostic(.frameTooLarge)
                 }
             }
         } catch {

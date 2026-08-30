@@ -46,14 +46,22 @@ enum AppleBridgeLaunchArgumentParser {
               !path.contains("\0"),
               (path as NSString).isAbsolutePath,
               path != "/",
-              (path as NSString).standardizingPath == path else {
+              isLexicallyStandardAbsolutePath(path) else {
             throw AppleBridgeLaunchArgumentError.invalidStagingRoot
         }
         let url = URL(fileURLWithPath: path, isDirectory: true)
-        guard url.isFileURL, url.path == path, url.standardizedFileURL.path == path else {
+        guard url.isFileURL, url.path == path else {
             throw AppleBridgeLaunchArgumentError.invalidStagingRoot
         }
         return AppleBridgeLaunchArguments(stagingRoot: url)
+    }
+
+    private static func isLexicallyStandardAbsolutePath(_ path: String) -> Bool {
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.first?.isEmpty == true else { return false }
+        return components.dropFirst().allSatisfy {
+            !$0.isEmpty && $0 != "." && $0 != ".."
+        }
     }
 }
 

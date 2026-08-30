@@ -128,6 +128,37 @@ struct BridgeFrameWriterTests {
         #expect(objects[3]["id"] as? String == "33333333-3333-4333-8333-333333333333")
         #expect(diagnostics.data.isEmpty)
     }
+
+    @Test func serverRunRespondsToCompleteLineBeforeInputPipeCloses() async throws {
+        let output = CapturingDataWriter()
+        let diagnostics = CapturingDataWriter()
+        let writer = SynchronizedJSONLFrameWriter(output: output, diagnostics: diagnostics)
+        let server = StdioBridgeServer(handler: BoundedBridgeCommandHandler(), frameWriter: writer)
+        let input = Pipe()
+        let run = Task { await server.run(input: input.fileHandleForReading) }
+        let hello = Data(("""
+        {"v":1,"kind":"request","id":"11111111-1111-4111-8111-111111111111","method":"bridge.hello","params":{"supportedVersions":[1]}}
+        """ + "\n").utf8)
+
+        try input.fileHandleForWriting.write(contentsOf: hello)
+        let respondedBeforeClose = await waitForOutputLine(output)
+        try input.fileHandleForWriting.close()
+        await run.value
+
+        #expect(respondedBeforeClose)
+        #expect(output.lines.count == 1)
+        #expect(diagnostics.data.isEmpty)
+    }
+}
+
+private func waitForOutputLine(_ output: CapturingDataWriter) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now + .milliseconds(500)
+    while clock.now < deadline {
+        if !output.lines.isEmpty { return true }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return !output.lines.isEmpty
 }
 
 private final class EventDuringStartHandler: BridgeCommandHandling, @unchecked Sendable {

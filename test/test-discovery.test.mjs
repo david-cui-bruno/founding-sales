@@ -21,5 +21,6 @@ describe('Vitest discovery boundary', () => {
     expect(discoveredTests).not.toContain('/tests/e2e/');
     expect(discoveredTests).not.toContain('/.worktrees/');
     expect(discoveredTests).not.toContain('test/appleBridgeBuild.test.mjs');
+    expect(discoveredTests).not.toContain('test/verifyAppleBridgePackage.test.mjs');
   });
 });
