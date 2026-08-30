@@ -1,5 +1,14 @@
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -56,22 +65,58 @@ test('packaged diagnostics use callie protocol and an isolated native SQLite dat
   }
 });
 
-test('packaged diagnostics retry the same isolated database path after a transient open failure', async () => {
+test('packaged startup leaves an isolated database collision untouched and recovers on relaunch', async () => {
   let userDataPath: string | undefined;
 
   try {
     userDataPath = await mkdtemp(join(tmpdir(), 'callie-foundation-retry-e2e-'));
     const databasePath = join(await realpath(userDataPath), 'callie.sqlite3');
+    const collisionMarker = join(databasePath, 'owned-by-foundation-e2e.txt');
     await mkdir(databasePath, { mode: 0o700 });
+    await writeFile(collisionMarker, 'isolated collision\n', { mode: 0o600 });
 
-    const health = await inspectPackagedRetry(userDataPath, databasePath);
+    const failedLaunch = await inspectFailedPackagedLaunch(userDataPath);
+
+    expect(failedLaunch).toEqual({
+      exitCode: 0,
+      signalCode: null,
+      rendererPageObserved: false,
+    });
+    expect((await stat(databasePath)).isDirectory()).toBe(true);
+    expect(await readFile(collisionMarker, 'utf8')).toBe('isolated collision\n');
+    expect(await readdir(databasePath)).toEqual(['owned-by-foundation-e2e.txt']);
+    expect(existsSync(`${databasePath}-journal`)).toBe(false);
+    expect(existsSync(`${databasePath}-shm`)).toBe(false);
+    expect(existsSync(`${databasePath}-wal`)).toBe(false);
+
+    // The current eager-startup contract exits before creating a window. A later
+    // founder-workflow task intentionally restores in-window Retry via lazy domain
+    // initialization. Until then, recovery is a clean relaunch of the same path.
+    await rm(databasePath, { recursive: true });
+    const health = await inspectPackagedApplication(userDataPath);
 
     expect(health).toEqual({
       databasePath,
       schemaVersion: 1,
       fts5Available: true,
     });
-    expect(existsSync(databasePath)).toBe(true);
+    expect((await stat(databasePath)).isFile()).toBe(true);
+
+    const database = new Database(databasePath, { readonly: true });
+    try {
+      expect(
+        database
+          .prepare('SELECT schema_version FROM app_meta WHERE singleton = 1')
+          .get(),
+      ).toEqual({ schema_version: 1 });
+      expect(
+        database
+          .prepare("SELECT sql FROM sqlite_schema WHERE name = 'foundation_fts_probe'")
+          .get(),
+      ).toEqual({ sql: 'CREATE VIRTUAL TABLE foundation_fts_probe USING fts5(content)' });
+    } finally {
+      database.close();
+    }
   } finally {
     if (userDataPath !== undefined) {
       await rm(userDataPath, { recursive: true, force: true });
@@ -134,63 +179,90 @@ const inspectPackagedApplication = async (userDataPath: string) => {
   }
 };
 
-const inspectPackagedRetry = async (
-  userDataPath: string,
-  databasePath: string,
-) => {
+const inspectFailedPackagedLaunch = async (userDataPath: string) => {
   const debuggingPort = await availablePort();
   let application: ChildProcess | undefined;
-  let browser: Browser | undefined;
-  let spawnError: Error | undefined;
 
   try {
     application = spawn(packagedApplication, [
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,
     ]);
-    application.once('error', (error) => {
-      spawnError = error;
-    });
-    browser = await connectToPackagedApplication(
-      application,
-      debuggingPort,
-      () => spawnError,
-    );
-    const page = browser.contexts()[0]?.pages()[0];
+    const [exit, rendererPageObserved] = await Promise.all([
+      waitForPackagedExit(application),
+      observeRendererPageUntilExit(application, debuggingPort),
+    ]);
 
-    if (page === undefined) {
-      throw new Error('The packaged application did not create a renderer page.');
-    }
-
-    await expect(page.getByRole('alert')).toContainText(
-      'The local database could not be opened',
-    );
-    await expect(page.getByText('LOCAL_DATABASE_UNAVAILABLE')).toBeVisible();
-    await expect(page).toHaveURL('callie://app/index.html');
-    expect(existsSync(databasePath)).toBe(true);
-
-    // This is an isolated test-created directory collision, never a database.
-    await rm(databasePath, { recursive: true });
-    await page.getByRole('button', { name: 'Retry' }).click();
-
-    await expect(page.getByText('SQLite ready')).toBeVisible();
-    await expect(page.getByText('FTS5 available')).toBeVisible();
-    await expect(page.getByText('Schema 1')).toBeVisible();
-    const health = await page.evaluate(() => window.callie.health.get());
     return {
-      databasePath: health.databasePath,
-      schemaVersion: health.schemaVersion,
-      fts5Available: health.fts5Available,
+      exitCode: exit.code,
+      signalCode: exit.signal,
+      rendererPageObserved,
     };
   } finally {
-    try {
-      await browser?.close();
-    } finally {
-      if (application?.pid !== undefined) {
-        await terminatePackagedApplication(application);
-      }
+    if (application?.pid !== undefined) {
+      await terminatePackagedApplication(application);
     }
   }
+};
+
+const waitForPackagedExit = (
+  application: ChildProcess,
+  timeoutMs = 10_000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> =>
+  new Promise((resolve, reject) => {
+    if (application.exitCode !== null || application.signalCode !== null) {
+      resolve({ code: application.exitCode, signal: application.signalCode });
+      return;
+    }
+
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      application.removeListener('error', handleError);
+      application.removeListener('exit', handleExit);
+    };
+    const handleError = (error: Error): void => {
+      cleanup();
+      reject(error);
+    };
+    const handleExit = (
+      code: number | null,
+      signal: NodeJS.Signals | null,
+    ): void => {
+      cleanup();
+      resolve({ code, signal });
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('Timed out waiting for failed packaged startup to exit.'));
+    }, timeoutMs);
+
+    application.once('error', handleError);
+    application.once('exit', handleExit);
+  });
+
+const observeRendererPageUntilExit = async (
+  application: ChildProcess,
+  debuggingPort: number,
+): Promise<boolean> => {
+  while (application.exitCode === null && application.signalCode === null) {
+    let browser: Browser | undefined;
+    try {
+      browser = await chromium.connectOverCDP(
+        `http://127.0.0.1:${debuggingPort}`,
+        { timeout: 100 },
+      );
+      if (browser.contexts().some((context) => context.pages().length > 0)) {
+        return true;
+      }
+    } catch {
+      // The debugger may not be listening yet, or startup may already be exiting.
+    } finally {
+      await browser?.close().catch((): undefined => undefined);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  return false;
 };
 
 const availablePort = (): Promise<number> =>
