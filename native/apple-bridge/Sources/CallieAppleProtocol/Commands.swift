@@ -69,28 +69,40 @@ public struct ArtifactIdentifierParameters: Codable, Sendable {
 }
 
 public struct SendTestMessageParameters: Codable, Sendable {
+    public static let requiredConfirmation = "I CONSENT TO THIS TEST MESSAGE"
+
+    public let commandId: UUID
     public let recipientHandle: String
     public let body: String
+    public let confirmation: String
 
-    public init(recipientHandle: String, body: String) throws {
+    public init(commandId: UUID, recipientHandle: String, body: String, confirmation: String) throws {
         guard !recipientHandle.isEmpty && recipientHandle.count <= 256,
-              !body.isEmpty && body.count <= 4_000 else {
+              !body.isEmpty && body.count <= 4_000,
+              confirmation == Self.requiredConfirmation else {
             throw BridgeFrameConstructionError.invalidParameters
         }
+        self.commandId = commandId
         self.recipientHandle = recipientHandle
         self.body = body
+        self.confirmation = confirmation
     }
 
     public init(from decoder: Decoder) throws {
-        try decoder.requireOnlyKeys(["recipientHandle", "body"])
+        try decoder.requireOnlyKeys(["commandId", "recipientHandle", "body", "confirmation"])
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        commandId = try container.decode(UUID.self, forKey: .commandId)
         recipientHandle = try container.decode(String.self, forKey: .recipientHandle)
         body = try container.decode(String.self, forKey: .body)
+        confirmation = try container.decode(String.self, forKey: .confirmation)
         guard !recipientHandle.isEmpty && recipientHandle.count <= 256 else {
             throw DecodingError.dataCorruptedError(forKey: .recipientHandle, in: container, debugDescription: "Invalid recipient handle")
         }
         guard !body.isEmpty && body.count <= 4_000 else {
             throw DecodingError.dataCorruptedError(forKey: .body, in: container, debugDescription: "Invalid message body")
+        }
+        guard confirmation == Self.requiredConfirmation else {
+            throw DecodingError.dataCorruptedError(forKey: .confirmation, in: container, debugDescription: "Exact manual confirmation is required")
         }
     }
 }
@@ -197,6 +209,9 @@ public struct BridgeRequest: Codable, Sendable {
         guard method == params.method else {
             throw BridgeFrameConstructionError.mismatchedRequestParameters
         }
+        if case let .sendTestMessage(parameters) = params, parameters.commandId == id {
+            throw BridgeFrameConstructionError.invalidParameters
+        }
         v = AppleBridgeProtocol.version
         self.id = id
         self.method = method
@@ -216,6 +231,9 @@ public struct BridgeRequest: Codable, Sendable {
         id = try container.decode(UUID.self, forKey: .id)
         method = try container.decode(BridgeMethod.self, forKey: .method)
         params = try BridgeRequestParameters.decode(method: method, from: container.superDecoder(forKey: .params))
+        if case let .sendTestMessage(parameters) = params, parameters.commandId == id {
+            throw DecodingError.dataCorruptedError(forKey: .params, in: container, debugDescription: "Command ID must differ from request ID")
+        }
     }
 
     public func encode(to encoder: Encoder) throws {

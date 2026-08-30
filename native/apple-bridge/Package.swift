@@ -13,8 +13,12 @@ let package = Package(
     targets: [
         .target(name: "CallieAppleProtocol"),
         .target(name: "CallieAppleCore", dependencies: ["CallieAppleProtocol"]),
-        .target(name: "CallieAppleMacOS", dependencies: ["CallieAppleCore"]),
-        .executableTarget(name: "CallieAppleBridge", dependencies: ["CallieAppleCore", "CallieAppleProtocol"]),
+        .target(
+            name: "CallieAppleMacOS",
+            dependencies: ["CallieAppleCore"],
+            linkerSettings: [.linkedLibrary("sqlite3")]
+        ),
+        .executableTarget(name: "CallieAppleBridge", dependencies: ["CallieAppleCore", "CallieAppleMacOS", "CallieAppleProtocol"]),
         .testTarget(name: "CallieAppleProtocolTests", dependencies: ["CallieAppleProtocol"]),
         .testTarget(name: "CallieAppleCoreTests", dependencies: ["CallieAppleBridge", "CallieAppleCore", "CallieAppleProtocol"]),
         .testTarget(

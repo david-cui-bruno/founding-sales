@@ -1,0 +1,11 @@
+PRAGMA user_version = 99;
+CREATE TABLE handle (
+    ROWID INTEGER PRIMARY KEY,
+    id TEXT NOT NULL
+);
+CREATE TABLE message (
+    ROWID INTEGER PRIMARY KEY,
+    handle_id INTEGER NOT NULL,
+    date INTEGER NOT NULL,
+    text TEXT
+);

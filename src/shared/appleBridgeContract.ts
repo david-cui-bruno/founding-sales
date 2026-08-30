@@ -66,8 +66,10 @@ const sendTestMessageRequest = z.object({
   v: z.literal(1), kind: z.literal('request'), id: requestId,
   method: z.literal('messages.sendTest'),
   params: z.object({
+    commandId: opaqueId,
     recipientHandle: z.string().min(1).max(256),
     body: z.string().min(1).max(4_000),
+    confirmation: z.literal('I CONSENT TO THIS TEST MESSAGE'),
   }).strict(),
 }).strict();
 
@@ -82,7 +84,7 @@ const shutdownRequest = z.object({
   method: z.literal('bridge.shutdown'), params: emptyParams,
 }).strict();
 
-export const bridgeRequestSchema = z.discriminatedUnion('method', [
+const bridgeRequestEnvelopeSchema = z.discriminatedUnion('method', [
   helloRequest,
   capabilityRequest,
   contactsPermissionRequest,
@@ -97,6 +99,16 @@ export const bridgeRequestSchema = z.discriminatedUnion('method', [
   scanTestMessageActivityRequest,
   shutdownRequest,
 ]);
+
+export const bridgeRequestSchema = bridgeRequestEnvelopeSchema.superRefine((request, context) => {
+  if (request.method === 'messages.sendTest' && request.params.commandId === request.id) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['params', 'commandId'],
+      message: 'Command ID must be distinct from the envelope request ID',
+    });
+  }
+});
 
 export const bridgeErrorCodeSchema = z.enum([
   'protocol_mismatch',

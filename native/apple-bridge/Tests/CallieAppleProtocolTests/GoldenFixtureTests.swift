@@ -22,6 +22,7 @@ import Testing
     let decoder = JSONDecoder()
 
     #expect(try decoder.decode(BridgeResponse.self, from: Data(contentsOf: fixtures.appending(path: "hello.response.json"))).ok)
+    #expect(try decoder.decode(BridgeRequest.self, from: Data(contentsOf: fixtures.appending(path: "messages-send.request.json"))).method == .sendTestMessage)
     #expect(try decoder.decode(BridgeEvent.self, from: Data(contentsOf: fixtures.appending(path: "call-connected.event.json"))).event == .callStateChanged)
     #expect(try decoder.decode(BridgeEvent.self, from: Data(contentsOf: fixtures.appending(path: "recording-failed.event.json"))).event == .recordingFailed)
     #expect(!(try decoder.decode(BridgeResponse.self, from: Data(contentsOf: fixtures.appending(path: "error.response.json"))).ok))

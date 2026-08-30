@@ -18,7 +18,7 @@ Each envelope is strict: unknown top-level fields and unknown parameter fields a
 | `recording.disarm` | `{ "callId": "UUID" }` |
 | `notes.scanCallRecordings` | `{}` |
 | `notes.exportCallRecording` | `{ "artifactId": "UUID" }` |
-| `messages.sendTest` | `{ "recipientHandle": "non-empty string up to 256 chars", "body": "non-empty string up to 4000 chars" }` |
+| `messages.sendTest` | `{ "commandId": "UUID", "recipientHandle": "non-empty string up to 256 chars", "body": "non-empty string up to 4000 chars", "confirmation": "I CONSENT TO THIS TEST MESSAGE" }` |
 | `messages.scanTestActivity` | `{ "recipientHandle": "non-empty string up to 256 chars" }` |
 | `bridge.shutdown` | `{}` |
 
@@ -33,3 +33,5 @@ The only error codes are `protocol_mismatch`, `invalid_request`, `permission_den
 Events are `{ "v": 1, "kind": "event", "seq": 0, "event": "…", "payload": { ... } }`. The fixed event vocabulary is `bridge.ready`, `capability.changed`, `call.stateChanged`, `call.identityResolved`, `call.identityUnresolved`, `recording.attempted`, `recording.verified`, `recording.failed`, `notes.artifactDiscovered`, `notes.exportCompleted`, `notes.transcriptUnavailable`, `messages.activityObserved`, and `bridge.warning`.
 
 Fixture ownership lives in `fixtures/`. Fixtures use only synthetic IDs and non-sensitive data and are decoded by both runtimes.
+
+`messages.sendTest` is a one-shot, explicitly consented test operation. Its `commandId` is distinct from the envelope correlation `id`; clients persist it before dispatch and must not automatically retry an ambiguous send. The helper accepts only the exact confirmation literal above.
