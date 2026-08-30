@@ -1,0 +1,1 @@
+{"v":1,"kind":"event","seq":1,"event":"call.stateChanged","payload":{"callId":"22222222-2222-4222-8222-222222222222","direction":"incoming","connected":true,"ended":false,"onHold":false,"observedAt":"2026-08-30T18:21:11.313Z"}}

@@ -18,6 +18,8 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test tests/e2e/foundation.spec.ts",
     "typecheck": "tsc --noEmit",
+    "test:swift": "swift test --package-path native/apple-bridge",
+    "build:swift": "swift build --package-path native/apple-bridge -c release --arch arm64",
     "verify": "npm run typecheck && npm run lint && npm run test",
     "verify:e2e": "npm run package && npm run test:e2e",
     "verify:package": "npm run package && node scripts/verifyPackage.mjs",

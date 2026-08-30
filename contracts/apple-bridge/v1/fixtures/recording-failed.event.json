@@ -1,0 +1,1 @@
+{"v":1,"kind":"event","seq":2,"event":"recording.failed","payload":{"callId":"22222222-2222-4222-8222-222222222222","code":"control_not_found","observedAt":"2026-08-30T18:21:12.313Z"}}
