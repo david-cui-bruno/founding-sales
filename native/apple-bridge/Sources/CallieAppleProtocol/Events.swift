@@ -24,6 +24,16 @@ public struct BridgeEvent: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey { case v, kind, seq, event, payload }
 
+    public init(seq: Int, event: BridgeEventName, payload: [String: JSONValue]) throws {
+        guard seq >= 0 else {
+            throw BridgeFrameConstructionError.negativeEventSequence
+        }
+        v = AppleBridgeProtocol.version
+        self.seq = seq
+        self.event = event
+        self.payload = payload
+    }
+
     public init(from decoder: Decoder) throws {
         try decoder.requireOnlyKeys(["v", "kind", "seq", "event", "payload"])
         let container = try decoder.container(keyedBy: CodingKeys.self)

@@ -19,7 +19,10 @@ public struct BridgeErrorPayload: Codable, Sendable {
     public let message: String
     public let retryable: Bool
 
-    public init(code: BridgeErrorCode, message: String, retryable: Bool) {
+    public init(code: BridgeErrorCode, message: String, retryable: Bool) throws {
+        guard !message.isEmpty && message.count <= 300 else {
+            throw BridgeFrameConstructionError.invalidParameters
+        }
         self.code = code
         self.message = message
         self.retryable = retryable
@@ -45,6 +48,22 @@ public struct BridgeResponse: Codable, Sendable {
     public let error: BridgeErrorPayload?
 
     enum CodingKeys: String, CodingKey { case v, kind, id, ok, result, error }
+
+    public init(id: UUID, result: [String: JSONValue]) {
+        v = AppleBridgeProtocol.version
+        self.id = id
+        ok = true
+        self.result = result
+        error = nil
+    }
+
+    public init(id: UUID, error: BridgeErrorPayload) {
+        v = AppleBridgeProtocol.version
+        self.id = id
+        ok = false
+        result = nil
+        self.error = error
+    }
 
     public init(from decoder: Decoder) throws {
         try decoder.requireOnlyKeys(["v", "kind", "id", "ok", "result", "error"])

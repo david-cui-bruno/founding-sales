@@ -27,7 +27,12 @@ public struct EmptyRequestParameters: Codable, Sendable {
 public struct HelloRequestParameters: Codable, Sendable {
     public let supportedVersions: [Int]
 
-    public init(supportedVersions: [Int]) { self.supportedVersions = supportedVersions }
+    public init(supportedVersions: [Int]) throws {
+        guard supportedVersions == [AppleBridgeProtocol.version] else {
+            throw BridgeFrameConstructionError.invalidParameters
+        }
+        self.supportedVersions = supportedVersions
+    }
 
     public init(from decoder: Decoder) throws {
         try decoder.requireOnlyKeys(["supportedVersions"])
@@ -67,7 +72,11 @@ public struct SendTestMessageParameters: Codable, Sendable {
     public let recipientHandle: String
     public let body: String
 
-    public init(recipientHandle: String, body: String) {
+    public init(recipientHandle: String, body: String) throws {
+        guard !recipientHandle.isEmpty && recipientHandle.count <= 256,
+              !body.isEmpty && body.count <= 4_000 else {
+            throw BridgeFrameConstructionError.invalidParameters
+        }
         self.recipientHandle = recipientHandle
         self.body = body
     }
@@ -89,7 +98,12 @@ public struct SendTestMessageParameters: Codable, Sendable {
 public struct ScanTestMessageActivityParameters: Codable, Sendable {
     public let recipientHandle: String
 
-    public init(recipientHandle: String) { self.recipientHandle = recipientHandle }
+    public init(recipientHandle: String) throws {
+        guard !recipientHandle.isEmpty && recipientHandle.count <= 256 else {
+            throw BridgeFrameConstructionError.invalidParameters
+        }
+        self.recipientHandle = recipientHandle
+    }
 
     public init(from decoder: Decoder) throws {
         try decoder.requireOnlyKeys(["recipientHandle"])
@@ -115,6 +129,24 @@ public enum BridgeRequestParameters: Codable, Sendable {
     case sendTestMessage(SendTestMessageParameters)
     case scanTestMessageActivity(ScanTestMessageActivityParameters)
     case shutdown(EmptyRequestParameters)
+
+    public var method: BridgeMethod {
+        switch self {
+        case .hello: .hello
+        case .probeCapabilities: .probeCapabilities
+        case .requestContacts: .requestContacts
+        case .promptAccessibility: .promptAccessibility
+        case .startCallObservation: .startCallObservation
+        case .stopCallObservation: .stopCallObservation
+        case .armOutgoingRecording: .armOutgoingRecording
+        case .disarmRecording: .disarmRecording
+        case .scanCallRecordings: .scanCallRecordings
+        case .exportCallRecording: .exportCallRecording
+        case .sendTestMessage: .sendTestMessage
+        case .scanTestMessageActivity: .scanTestMessageActivity
+        case .shutdown: .shutdown
+        }
+    }
 
     fileprivate static func decode(method: BridgeMethod, from decoder: Decoder) throws -> BridgeRequestParameters {
         switch method {
@@ -160,6 +192,16 @@ public struct BridgeRequest: Codable, Sendable {
     public let params: BridgeRequestParameters
 
     enum CodingKeys: String, CodingKey { case v, kind, id, method, params }
+
+    public init(id: UUID, method: BridgeMethod, params: BridgeRequestParameters) throws {
+        guard method == params.method else {
+            throw BridgeFrameConstructionError.mismatchedRequestParameters
+        }
+        v = AppleBridgeProtocol.version
+        self.id = id
+        self.method = method
+        self.params = params
+    }
 
     public init(from decoder: Decoder) throws {
         try decoder.requireOnlyKeys(["v", "kind", "id", "method", "params"])
