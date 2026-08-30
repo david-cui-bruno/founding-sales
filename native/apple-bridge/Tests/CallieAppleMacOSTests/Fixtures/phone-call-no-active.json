@@ -1,0 +1,24 @@
+{
+  "formatVersion": 1,
+  "phoneUIVersion": "macos-26.4",
+  "application": "Phone",
+  "root": {
+    "nodeID": "root",
+    "role": "AXApplication",
+    "title": "Phone",
+    "identifier": "phone.app",
+    "enabled": true,
+    "value": null,
+    "children": [
+      {
+        "nodeID": "main-window",
+        "role": "AXWindow",
+        "title": "Phone",
+        "identifier": "phone.main.window",
+        "enabled": true,
+        "value": null,
+        "children": []
+      }
+    ]
+  }
+}

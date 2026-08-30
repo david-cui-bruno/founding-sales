@@ -1,0 +1,39 @@
+{
+  "formatVersion": 1,
+  "phoneUIVersion": "macos-26.4",
+  "application": "Phone",
+  "root": {
+    "nodeID": "root",
+    "role": "AXApplication",
+    "title": "Phone",
+    "identifier": "phone.app",
+    "enabled": true,
+    "value": null,
+    "children": [
+      {
+        "nodeID": "call-window-a",
+        "role": "AXWindow",
+        "title": "Call",
+        "identifier": "phone.call.window",
+        "enabled": true,
+        "value": null,
+        "children": [
+          { "nodeID": "state-a", "role": "AXStaticText", "title": "Call State", "identifier": "phone.call.state", "enabled": true, "value": "connected", "children": [] },
+          { "nodeID": "direction-a", "role": "AXStaticText", "title": "Direction", "identifier": "phone.call.direction", "enabled": true, "value": "outgoing", "children": [] }
+        ]
+      },
+      {
+        "nodeID": "call-window-b",
+        "role": "AXWindow",
+        "title": "Call",
+        "identifier": "phone.call.window",
+        "enabled": true,
+        "value": null,
+        "children": [
+          { "nodeID": "state-b", "role": "AXStaticText", "title": "Call State", "identifier": "phone.call.state", "enabled": true, "value": "connected", "children": [] },
+          { "nodeID": "direction-b", "role": "AXStaticText", "title": "Direction", "identifier": "phone.call.direction", "enabled": true, "value": "incoming", "children": [] }
+        ]
+      }
+    ]
+  }
+}

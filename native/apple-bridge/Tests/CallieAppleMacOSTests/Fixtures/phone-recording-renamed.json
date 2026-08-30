@@ -1,0 +1,26 @@
+{
+  "formatVersion": 1,
+  "phoneUIVersion": "macos-26.4",
+  "application": "Phone",
+  "root": {
+    "nodeID": "root",
+    "role": "AXApplication",
+    "title": "Phone",
+    "identifier": "phone.app",
+    "enabled": true,
+    "value": null,
+    "children": [
+      {
+        "nodeID": "call-window",
+        "role": "AXWindow",
+        "title": "Call",
+        "identifier": "phone.call.window",
+        "enabled": true,
+        "value": null,
+        "children": [
+          { "nodeID": "record-button", "role": "AXButton", "title": "Capture Call", "identifier": "phone.call.capture", "enabled": true, "value": "inactive", "children": [] }
+        ]
+      }
+    ]
+  }
+}

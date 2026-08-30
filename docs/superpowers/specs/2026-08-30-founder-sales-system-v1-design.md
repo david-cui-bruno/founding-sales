@@ -797,14 +797,17 @@ Recording excludes:
 
 Flow:
 
-1. A native CallKit observer detects call state, but does not itself provide the remote number.
-2. The helper resolves outgoing Callie-launched context or attempts versioned Phone Accessibility inspection for incoming identity.
-3. On connection, Accessibility automation invokes Apple's Call Recording control.
-4. The helper verifies the recording state and displays a visible Callie indicator.
-5. Apple provides its audible recording notice.
-6. Notes creates the recording and, when supported, a transcript artifact.
-7. Callie imports and encrypts its managed copy.
-8. Identity matching attaches it or routes it to Review.
+1. While Callie and its helper are open, a bounded native observer parses version-recognized, detached Phone Accessibility snapshots for Mac-visible call state. It never places a remote number on the call-state object.
+2. The helper keeps outgoing Callie-launched identity context separate from call state and reports any incoming Phone identity as a distinct best-effort snapshot.
+3. Missing Phone UI, denied Accessibility, ambiguous state, an iPhone-only call, or a handoff that removes Mac-visible state degrades the adapter and cannot synthesize a recordable call.
+4. On an unambiguous connected call, Accessibility automation identifies exactly one enabled, version-recognized Apple Call Recording control.
+5. After pressing, the helper takes a new snapshot and reports recording verified only when an independent active-recording indicator is present.
+6. Apple provides its audible recording notice.
+7. Notes creates the recording and, when supported, a transcript artifact.
+8. Callie imports and encrypts its managed copy.
+9. Identity matching attaches it or routes it to Review.
+
+The macOS 26 SDK explicitly marks `CXCallObserver` and `CXCall` unavailable on macOS (`API_UNAVAILABLE(macos)`). A native macOS type-check therefore rejects the earlier CallKit design. V1 uses the app-open, fail-closed Phone Accessibility observer above; no private CallKit replacement is permitted. Manual Apple recording tap is the fallback whenever Mac-visible observation or control is unavailable.
 
 If an incoming number cannot be resolved safely, Callie does not auto-record. If a call is answered only on the iPhone, or a Mac-started recording does not survive handoff, guaranteed zero-click recording is not possible in V1. The app may notify the founder to tap Record and ingests the artifact if it later becomes visible in Notes on the Mac; otherwise it offers manual export/import. All such boundaries are visible adapter states, never silent success.
 

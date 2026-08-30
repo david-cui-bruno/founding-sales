@@ -1,0 +1,27 @@
+{
+  "formatVersion": 1,
+  "phoneUIVersion": "macos-26.4",
+  "application": "Phone",
+  "root": {
+    "nodeID": "root",
+    "role": "AXApplication",
+    "title": "Phone",
+    "identifier": "phone.app",
+    "enabled": true,
+    "value": null,
+    "children": [
+      {
+        "nodeID": "call-window",
+        "role": "AXWindow",
+        "title": "Call",
+        "identifier": "phone.call.window",
+        "enabled": true,
+        "value": null,
+        "children": [
+          { "nodeID": "record-button-a", "role": "AXButton", "title": "Record Call", "identifier": "phone.call.record", "enabled": true, "value": "inactive", "children": [] },
+          { "nodeID": "record-button-b", "role": "AXButton", "title": "Record Call", "identifier": "phone.call.record", "enabled": true, "value": "inactive", "children": [] }
+        ]
+      }
+    ]
+  }
+}

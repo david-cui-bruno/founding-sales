@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a signed, packageable, app-open Apple communications feasibility spike that proves or safely rejects CallKit observation, Contacts-gated identity classification, Phone Accessibility recording control, Notes artifact export, and Messages send/read paths without exposing native authority to the renderer or performing real communications in automated tests.
+**Goal:** Build a signed, packageable, app-open Apple communications feasibility spike that proves or safely rejects Phone Accessibility call observation and recording control, Contacts-gated identity classification, Notes artifact export, and Messages send/read paths without exposing native authority to the renderer or performing real communications in automated tests.
 
 **Architecture:** Electron main owns a fixed-version TypeScript client and supervises one bundled Swift child process over newline-delimited JSON on stdio. Swift separates a Foundation-only protocol/core from macOS adapters; the production executable is inert until it receives an explicit typed command, fails closed on unresolved identity, writes exports only beneath a launch-time staging root, and exits with Callie. A CLI-gated renderer diagnostics panel exposes only enumerated feasibility actions, while automated tests use fakes and synthetic fixtures and all real calls/messages remain a separate consenting manual procedure.
 
-**Tech Stack:** Electron 44, Electron Forge 7/Vite, Node.js 22.13+ or 24+, TypeScript 5.9, Zod 4, Vitest 2, Playwright 1.62, Swift 6/Swift Package Manager, Foundation, CallKit, Contacts, ApplicationServices Accessibility, AppKit/Apple Events, SQLite3, macOS codesign.
+**Tech Stack:** Electron 44, Electron Forge 7/Vite, Node.js 22.13+ or 24+, TypeScript 5.9, Zod 4, Vitest 2, Playwright 1.62, Swift 6/Swift Package Manager, Foundation, Contacts, ApplicationServices Accessibility, AppKit/Apple Events, SQLite3, macOS codesign.
 
 **Spec:** `docs/superpowers/specs/2026-08-30-founder-sales-system-v1-design.md`
 
@@ -14,7 +14,7 @@
 
 - Initial Apple acceptance target is macOS 26.4 or newer on Apple silicon.
 - V1 runs the helper only while Callie is open; it is a bundled child process, not a login item, launch agent, XPC service, or daemon.
-- `CXCallObserver` supplies call state but not the remote phone number; outgoing Callie context may be known, while unresolved incoming identity must fail closed and must not auto-record.
+- The macOS 26 SDK marks `CXCallObserver` and `CXCall` unavailable on macOS. The macOS package must not import or reference them; app-open, versioned Phone Accessibility snapshots provide only best-effort call state, while outgoing Callie context remains separate and unresolved incoming identity fails closed.
 - The unknown-number rule is enabled only with full Contacts access; limited, denied, restricted, and not-determined states cannot prove absence from Contacts.
 - Phone recording automation is best effort. An Accessibility press is successful only after an independent state verification; missing, renamed, ambiguous, or disabled controls produce a visible failure.
 - Apple transcript extraction is opportunistic. Audio discovery/export, Apple transcript extraction, cloud transcription, and manual transcript import have independent capability states.
@@ -47,7 +47,7 @@
 - `native/apple-bridge/Package.swift` — macOS 26.4 Swift package with protocol, core, macOS, and executable targets.
 - `native/apple-bridge/Sources/CallieAppleProtocol/*` — Codable wire types and bounded JSONL codec.
 - `native/apple-bridge/Sources/CallieAppleCore/*` — platform-neutral call/recording state, eligibility, ports, coordinator, and sanitized capabilities.
-- `native/apple-bridge/Sources/CallieAppleMacOS/*` — concrete CallKit, Contacts, AX, Notes, Messages, permission, and read-only SQLite adapters.
+- `native/apple-bridge/Sources/CallieAppleMacOS/*` — concrete app-open Phone AX observation/control, Contacts, Notes, Messages, permission, and read-only SQLite adapters.
 - `native/apple-bridge/Sources/CallieAppleBridge/*` — stdio executable and production dependency composition.
 - `native/apple-bridge/Resources/Helper-Info.plist` — nested helper bundle identity and TCC usage strings.
 - `native/apple-bridge/Resources/CallieAppleBridge.entitlements` — Apple Events hardened-runtime entitlement.
@@ -538,33 +538,40 @@ git commit -m "feat: add fail-closed recording core"
 
 ---
 
-### Task 4: Add CallKit, Contacts, Permission, and Phone AX Adapters
+### Task 4: Add Phone AX Observation, Contacts, Permission, and Recording Adapters
 
 **Files:**
-- Create: `native/apple-bridge/Sources/CallieAppleMacOS/CallKitObserver.swift`
+- Create: `native/apple-bridge/Sources/CallieAppleMacOS/PhoneAccessibilityCallObserver.swift`
 - Create: `native/apple-bridge/Sources/CallieAppleMacOS/ContactsClassifier.swift`
 - Create: `native/apple-bridge/Sources/CallieAppleMacOS/PermissionProbe.swift`
 - Create: `native/apple-bridge/Sources/CallieAppleMacOS/AXNodeSnapshot.swift`
 - Create: `native/apple-bridge/Sources/CallieAppleMacOS/PhoneAccessibilityClient.swift`
 - Create: `native/apple-bridge/Sources/CallieAppleMacOS/PhoneRecordingController.swift`
 - Create: `native/apple-bridge/Tests/CallieAppleMacOSTests/ContactsClassifierTests.swift`
+- Create: `native/apple-bridge/Tests/CallieAppleMacOSTests/PermissionProbeTests.swift`
 - Create: `native/apple-bridge/Tests/CallieAppleMacOSTests/PhoneAccessibilityClientTests.swift`
+- Create: `native/apple-bridge/Tests/CallieAppleMacOSTests/PhoneAccessibilityCallObserverTests.swift`
+- Create: `native/apple-bridge/Tests/CallieAppleMacOSTests/MacOSSourceBoundaryTests.swift`
 - Create: `native/apple-bridge/Tests/CallieAppleMacOSTests/Fixtures/phone-recording-available.json`
 - Create: `native/apple-bridge/Tests/CallieAppleMacOSTests/Fixtures/phone-recording-missing.json`
 - Create: `native/apple-bridge/Tests/CallieAppleMacOSTests/Fixtures/phone-recording-ambiguous.json`
+- Create: detached recording-active, disabled, and renamed-control fixtures.
+- Create: detached connected-known-outgoing, connected-unresolved-incoming, no-active-call, and ambiguous-call-state fixtures.
 - Modify: `native/apple-bridge/Package.swift`
+- Modify: `docs/superpowers/specs/2026-08-30-founder-sales-system-v1-design.md` section 12.4.
+- Modify: this plan's architecture, file structure, and Task 4 references.
 
 **Interfaces:**
 - Consumes: Task 3 `CallObserving`, `ObservedCall`, `ContactAccess`, `IdentityResolution`, `RecordingControlling`, and `RecordingVerification`.
-- Produces: `CallKitObserver`, `ContactsClassifier`, `PermissionProbe`, `AXSnapshotting`, `PhoneAccessibilityClient`, and `PhoneRecordingController`.
+- Produces: `PhoneAccessibilityCallObserver`, `PhoneIdentitySnapshot`, `PhoneCallObservationCapability`, `ContactsClassifier`, `PermissionProbe`, `AXSnapshotting`, `PhoneAccessibilityClient`, and `PhoneRecordingController`.
 
-- [ ] **Step 1: RED — test mapping and AX parsing with no live system access**
+- [ ] **Step 1: RED — test detached Phone state, Contacts gating, permission probing, and recording parsing**
 
 ```swift
 @Test func missingRecordingControlFailsWithoutPressingAnything() throws {
-    let snapshot = try AXNodeSnapshot.fixture(named: "phone-recording-missing")
+    let snapshot = try FixtureSupport.snapshot(named: "phone-recording-missing")
     let actuator = FakeAXActuator()
-    let client = PhoneAccessibilityClient(snapshotter: FixedSnapshotter(snapshot), actuator: actuator)
+    let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([snapshot]), actuator: actuator)
     #expect(throws: PhoneAccessibilityError.controlNotFound) {
         try client.startAndVerifyRecording()
     }
@@ -578,54 +585,37 @@ git commit -m "feat: add fail-closed recording core"
 }
 ```
 
+Add synthetic tests proving stable injected opaque session IDs, duplicate suppression, monotonic end transitions, clean scheduler cancellation, separate best-effort identity events, no call synthesis for absent/ambiguous/permission-denied Phone state, and a non-prompting capability probe. Add a macOS source-boundary test that rejects CallKit/CXCall tokens in the adapter target.
+
 - [ ] **Step 2: Verify RED**
 
 Run: `swift test --package-path native/apple-bridge --filter CallieAppleMacOSTests`
 
-Expected: FAIL because the macOS adapters and fixtures do not exist.
+Expected: FAIL because the revised macOS adapter target and fixtures do not exist.
 
-- [ ] **Step 3: GREEN — map public call state and isolate private AX parsing**
+- [ ] **Step 3: GREEN — implement fail-closed app-open Phone AX observation and recording control**
 
-```swift
-final class CallKitObserver: NSObject, CallObserving, CXCallObserverDelegate, @unchecked Sendable {
-    private let observer = CXCallObserver()
-    private var sink: (@Sendable (ObservedCall) -> Void)?
+`PhoneAccessibilityCallObserver` implements `CallObserving` using injected `AXSnapshotting`, a bounded injected scheduler, injected opaque ID generation, and separate identity/capability sinks. It emits monotonic `ObservedCall` transitions only while started. Missing Phone UI, denied Accessibility, ambiguous state, no Mac-visible active call, iPhone-only state, or handoff removal degrades capability and never creates a recordable call. No remote-number property is added to `ObservedCall`.
 
-    func start(_ sink: @escaping @Sendable (ObservedCall) -> Void) throws {
-        self.sink = sink
-        observer.setDelegate(self, queue: .main)
-    }
+The macOS 26 SDK compile probe is binding evidence: `CXCallObserver` and `CXCall` are explicitly unavailable on macOS. Do not import or reference CallKit in the macOS package and do not substitute a private API. Manual Apple recording tap is the fallback.
 
-    func callObserver(_ callObserver: CXCallObserver, callChanged call: CXCall) {
-        sink?(ObservedCall(
-            id: call.uuid,
-            outgoing: call.isOutgoing,
-            connected: call.hasConnected,
-            ended: call.hasEnded,
-            onHold: call.isOnHold
-        ))
-    }
-
-    func stop() {
-        observer.setDelegate(nil, queue: nil)
-        sink = nil
-    }
-}
-```
-
-Do not add a remote-number property to `ObservedCall`. `PhoneAccessibilityClient` receives a detached `AXNodeSnapshot`, identifies exactly one enabled recording action from versioned role/title/identifier rules, presses through `AXActuating`, re-snapshots, and returns `.verified` only when the active-recording indicator is present. `PermissionProbe.probe()` never prompts; Contacts and Accessibility prompts live behind separate explicit commands.
+`PhoneAccessibilityClient` receives a detached `AXNodeSnapshot`, identifies exactly one enabled recording action from versioned role/title/identifier rules, presses through `AXActuating`, re-snapshots, and returns `.verified` only when the active-recording indicator is present. `PermissionProbe.probe()` never prompts; Contacts and Accessibility prompts live behind separate explicit commands.
 
 - [ ] **Step 4: Verify GREEN**
 
 Run: `swift test --package-path native/apple-bridge --filter CallieAppleMacOSTests && swift build --package-path native/apple-bridge`
 
-Expected: PASS without a TCC prompt; the test target uses only fakes and committed AX snapshots.
+Expected: PASS without a TCC prompt; the test target uses only fakes and committed detached AX snapshots.
 
 - [ ] **Step 5: Refactor — prove tests contain no live selectors**
 
 Inject `ContactStoreReading`, `AXSnapshotting`, and `AXActuating`; production wrappers are the only types allowed to call `CNContactStore`, `AXUIElementCopyAttributeValue`, or `AXUIElementPerformAction`.
 
 Run: `rg -n 'CNContactStore|AXUIElement(Copy|Perform)' native/apple-bridge/Tests`
+
+Expected: no output.
+
+Run: `rg -n 'import CallKit|CXCall' native/apple-bridge/Sources/CallieAppleMacOS`
 
 Expected: no output.
 
