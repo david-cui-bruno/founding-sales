@@ -8,6 +8,7 @@ type ExitStatus = {
 export type PackagedProcessEntry = {
   pid: number;
   parentPid: number;
+  startedAt: string;
   command: string;
 };
 
@@ -67,13 +68,13 @@ const parseProcessEntry = (
   pid: number,
   output: string,
 ): PackagedProcessEntry | undefined => {
-  const match = output.trim().match(/^(\d+)\s+(.+)$/u);
+  const match = output.trim().match(/^(\d+)\s+(.{24})\s+(.+)$/u);
   if (match === null) return undefined;
   const parentPid = Number(match[1]);
   if (!Number.isSafeInteger(parentPid) || parentPid <= 0) {
     throw new Error('Packaged process-tree inspection returned an invalid parent PID.');
   }
-  return { pid, parentPid, command: match[2] };
+  return { pid, parentPid, startedAt: match[2], command: match[3] };
 };
 
 export const snapshotPackagedProcessTree = async (
@@ -101,6 +102,8 @@ export const snapshotPackagedProcessTree = async (
           String(childPid),
           '-o',
           'ppid=',
+          '-o',
+          'lstart=',
           '-o',
           'command=',
         ]),
@@ -153,16 +156,27 @@ const inspectTrackedProcess = async (
       '-o',
       'ppid=',
       '-o',
+      'lstart=',
+      '-o',
       'command=',
     ]),
   );
-  return current?.command === tracked.command ? current : undefined;
+  return current;
 };
+
+const isSameProcessInstance = (
+  tracked: PackagedProcessEntry,
+  current: PackagedProcessEntry | undefined,
+): current is PackagedProcessEntry => current !== undefined
+  && current.pid === tracked.pid
+  && current.command === tracked.command
+  && current.startedAt === tracked.startedAt;
 
 export const assertPackagedDescendantsExit = async (
   trackedDescendants: readonly PackagedProcessEntry[],
   {
     timeoutMs = 5_000,
+    forceCleanupTimeoutMs = 1_000,
     pollIntervalMs = 100,
     inspectTrackedProcess: inspect = inspectTrackedProcess,
     signalProcess = (pid: number, signal: NodeJS.Signals): void => {
@@ -170,6 +184,7 @@ export const assertPackagedDescendantsExit = async (
     },
   }: {
     timeoutMs?: number;
+    forceCleanupTimeoutMs?: number;
     pollIntervalMs?: number;
     inspectTrackedProcess?: (
       tracked: PackagedProcessEntry,
@@ -183,26 +198,57 @@ export const assertPackagedDescendantsExit = async (
   const remaining = new Map(
     trackedDescendants.map((entry) => [entry.pid, entry]),
   );
+  const inspectInstance = async (
+    tracked: PackagedProcessEntry,
+  ): Promise<PackagedProcessEntry | undefined> => {
+    const current = await inspect(tracked);
+    return isSameProcessInstance(tracked, current) ? current : undefined;
+  };
   const deadline = Date.now() + timeoutMs;
 
   do {
     for (const [pid, tracked] of remaining) {
-      if (await inspect(tracked) === undefined) remaining.delete(pid);
+      if (await inspectInstance(tracked) === undefined) remaining.delete(pid);
     }
     if (remaining.size === 0) return;
     if (Date.now() >= deadline) break;
     await wait(pollIntervalMs);
   } while (Date.now() <= deadline);
 
-  for (const tracked of remaining.values()) {
-    if (await inspect(tracked) === undefined) continue;
+  const forceCleaned: PackagedProcessEntry[] = [];
+  for (const [pid, tracked] of remaining) {
+    if (await inspectInstance(tracked) === undefined) {
+      remaining.delete(pid);
+      continue;
+    }
     try {
       signalProcess(tracked.pid, 'SIGKILL');
+      forceCleaned.push(tracked);
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) {
         throw error;
       }
+      remaining.delete(pid);
     }
+  }
+  if (remaining.size === 0) return;
+  const cleanupDeadline = Date.now() + forceCleanupTimeoutMs;
+  const forceCleanupRemaining = new Map(
+    forceCleaned.map((entry) => [entry.pid, entry]),
+  );
+  do {
+    for (const [pid, tracked] of forceCleanupRemaining) {
+      if (await inspectInstance(tracked) === undefined) {
+        forceCleanupRemaining.delete(pid);
+      }
+    }
+    if (forceCleanupRemaining.size === 0) break;
+    if (Date.now() >= cleanupDeadline) break;
+    await wait(pollIntervalMs);
+  } while (Date.now() <= cleanupDeadline);
+
+  if (forceCleanupRemaining.size > 0) {
+    throw new Error('A packaged application descendant could not be force-cleaned safely.');
   }
   throw new Error('A packaged application descendant did not exit with the packaged application.');
 };

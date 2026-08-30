@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { accessSync, constants, existsSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -19,6 +19,16 @@ const requiredFuses = {
   LoadBrowserProcessSpecificV8Snapshot: 'Disabled',
   GrantFileProtocolExtraPrivileges: 'Disabled',
   WasmTrapHandlers: 'Enabled',
+};
+
+const COMMAND_OPTIONS = {
+  encoding: 'utf8',
+  env: {
+    LANG: 'C',
+    PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+  },
+  maxBuffer: 65_536,
+  timeout: 5_000,
 };
 
 export class PackageVerificationError extends Error {
@@ -97,8 +107,8 @@ export const selectPackagedApp = (outDirectory) => {
 };
 
 export const createPackageCommandRunner = (
-  runExecutable = execFileSync,
-) => ({ command, args, input }) => {
+  runExecutable = spawnSync,
+) => ({ command, args, includeStderr = false, input }) => {
   const commandArgs =
     command === 'asar'
       ? [asarCli, 'list', args[0]]
@@ -108,17 +118,30 @@ export const createPackageCommandRunner = (
   const executable =
     command === 'asar' || command === 'electron-fuses' ? process.execPath : command;
 
-  try {
-    return runExecutable(executable, commandArgs, {
-      encoding: 'utf8',
-      ...(input === undefined ? {} : { input }),
-      shell: false,
-      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-    }).trim();
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+  const result = runExecutable(executable, commandArgs, {
+    ...COMMAND_OPTIONS,
+    ...(input === undefined ? {} : { input }),
+    shell: false,
+    stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+  });
+  if (typeof result === 'string' || Buffer.isBuffer(result)) {
+    return String(result).trim();
+  }
+  if (result.error !== undefined) {
+    const detail = result.error instanceof Error
+      ? result.error.message
+      : String(result.error);
     fail(`could not run ${command}: ${detail}`);
   }
+  if (result.status !== 0) {
+    const detail = String(result.stderr ?? '').trim();
+    fail(
+      `could not run ${command}: exited with status ${result.status ?? 'none'}${detail.length === 0 ? '' : `: ${detail}`}`,
+    );
+  }
+  const stdout = String(result.stdout ?? '');
+  const stderr = String(result.stderr ?? '');
+  return (includeStderr ? `${stdout}\n${stderr}` : stdout).trim();
 };
 
 const defaultRunCommand = createPackageCommandRunner();

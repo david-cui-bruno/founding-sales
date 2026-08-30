@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -22,6 +22,7 @@ export const expectedAppleBridge = Object.freeze({
   relativeBundle: 'Contents/Helpers/Callie Apple Bridge.app',
   executable: 'Contents/MacOS/CallieAppleBridge',
   bundleIdentifier: 'com.callie.foundersales.applebridge',
+  parentBundleIdentifier: 'com.callie.foundersales',
   minimumSystemVersion: '26.4',
   requiredEntitlement: 'com.apple.security.automation.apple-events',
 });
@@ -38,26 +39,41 @@ const fail = (message) => {
 };
 
 export const createAppleBridgeCommandRunner = (
-  runExecutable = execFileSync,
-) => ({ command, args, input }) => {
-  try {
-    return runExecutable(command, args, {
-      ...COMMAND_OPTIONS,
-      ...(input === undefined ? {} : { input }),
-      shell: false,
-      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-    }).trim();
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(detail);
+  runExecutable = spawnSync,
+) => ({ command, args, includeStderr = false, input }) => {
+  const result = runExecutable(command, args, {
+    ...COMMAND_OPTIONS,
+    ...(input === undefined ? {} : { input }),
+    shell: false,
+    stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+  });
+  if (typeof result === 'string' || Buffer.isBuffer(result)) {
+    return String(result).trim();
   }
+  if (result.error !== undefined) throw result.error;
+  if (result.status !== 0) {
+    const detail = String(result.stderr ?? '').trim();
+    throw new Error(
+      `command exited with status ${result.status ?? 'none'}${detail.length === 0 ? '' : `: ${detail}`}`,
+    );
+  }
+  const stdout = String(result.stdout ?? '');
+  const stderr = String(result.stderr ?? '');
+  return (includeStderr ? `${stdout}\n${stderr}` : stdout).trim();
 };
 
 const defaultRunCommand = createAppleBridgeCommandRunner();
 
-const runOrFail = (runCommand, command, args, purpose, input) => {
+const runOrFail = (
+  runCommand,
+  command,
+  args,
+  purpose,
+  input,
+  includeStderr = false,
+) => {
   try {
-    const output = runCommand({ command, args, input });
+    const output = runCommand({ command, args, includeStderr, input });
     if (typeof output !== 'string') {
       fail(`${purpose} returned a non-text result`);
     }
@@ -144,37 +160,70 @@ const verifyStrictSignatures = (
   );
 };
 
-const readDesignatedRequirement = (path, runCommand) => runOrFail(
-  runCommand,
-  FIXED_COMMANDS.codesign,
-  ['--display', '--requirements', '-', path],
-  'reading signing identity',
-);
+const uniqueMetadataField = (metadata, field, { required = true } = {}) => {
+  const prefix = `${field}=`;
+  const values = metadata
+    .split(/\r?\n/u)
+    .filter((line) => line.startsWith(prefix))
+    .map((line) => line.slice(prefix.length));
+  if (values.length === 0 && !required) return undefined;
+  if (values.length !== 1 || values[0].length === 0) {
+    fail(`signature metadata must contain exactly one non-empty ${field}`);
+  }
+  return values[0];
+};
 
-const parseSigningIdentity = (requirement) => {
-  if (/^# designated => cdhash H"[0-9a-f]{40}"$/iu.test(requirement)) {
+const uniqueSignatureField = (metadata) => {
+  const lines = metadata
+    .split(/\r?\n/u)
+    .filter((line) => /^Signature(?:=| size=)/u.test(line));
+  if (lines.length !== 1) {
+    fail('signature metadata must contain exactly one authoritative Signature field');
+  }
+  if (lines[0] === 'Signature=adhoc') return 'adhoc';
+  if (/^Signature size=\d+$/u.test(lines[0])) return 'stable';
+  fail(`signature metadata contains an invalid Signature field: ${lines[0]}`);
+};
+
+const readSigningIdentity = (path, expectedIdentifier, runCommand) => {
+  const metadata = runOrFail(
+    runCommand,
+    FIXED_COMMANDS.codesign,
+    ['--display', '--verbose=4', path],
+    'reading authoritative signing metadata',
+    undefined,
+    true,
+  );
+  const identifier = uniqueMetadataField(metadata, 'Identifier');
+  if (identifier !== expectedIdentifier) {
+    fail(`signature metadata identifier is invalid: ${identifier}`);
+  }
+  const teamIdentifier = uniqueMetadataField(metadata, 'TeamIdentifier');
+  const signatureMode = uniqueSignatureField(metadata);
+  const hasAdhocSignature = signatureMode === 'adhoc';
+  const hasNoTeam = teamIdentifier === 'not set';
+  if (hasAdhocSignature || hasNoTeam) {
+    if (!hasAdhocSignature || !hasNoTeam) {
+      fail('ad-hoc signature metadata is inconsistent');
+    }
     return { mode: 'adhoc' };
   }
-
-  const teamFromOrganizationalUnit = requirement.match(
-    /certificate leaf\[subject\.OU\]\s*=\s*"([A-Z0-9]+)"/u,
-  )?.[1];
-  const teamFromCommonName = requirement.match(
-    /certificate leaf\[subject\.CN\]\s*=\s*"[^"]+\(([A-Z0-9]+)\)"/u,
-  )?.[1];
-  const teamIdentifier = teamFromOrganizationalUnit ?? teamFromCommonName;
-  if (teamIdentifier === undefined || teamIdentifier.length === 0) {
-    fail('stable signing identity did not expose a non-empty Team ID');
+  if (signatureMode !== 'stable' || !/^[A-Z0-9]+$/u.test(teamIdentifier)) {
+    fail('stable signing metadata did not expose a valid non-empty Team ID');
   }
   return { mode: 'stable', teamIdentifier };
 };
 
 const verifySigningRelationship = (appPath, helperBundle, runCommand) => {
-  const helperIdentity = parseSigningIdentity(
-    readDesignatedRequirement(helperBundle, runCommand),
+  const helperIdentity = readSigningIdentity(
+    helperBundle,
+    expectedAppleBridge.bundleIdentifier,
+    runCommand,
   );
-  const parentIdentity = parseSigningIdentity(
-    readDesignatedRequirement(appPath, runCommand),
+  const parentIdentity = readSigningIdentity(
+    appPath,
+    expectedAppleBridge.parentBundleIdentifier,
+    runCommand,
   );
 
   if (helperIdentity.mode !== parentIdentity.mode) {
@@ -196,7 +245,7 @@ const verifyEntitlements = (helperBundle, runCommand) => {
   const entitlementsPlist = runOrFail(
     runCommand,
     FIXED_COMMANDS.codesign,
-    ['--display', '--entitlements', ':-', helperBundle],
+    ['--display', '--xml', '--entitlements', '-', helperBundle],
     'reading helper entitlements',
   );
   const entitlementsJson = runOrFail(

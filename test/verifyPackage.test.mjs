@@ -130,6 +130,16 @@ const successfulCommand = ({ command, args }) => {
   }
 
   if (commandName === 'codesign') {
+    if (args[0] === '--display' && args.includes('--verbose=4')) {
+      const isAppleBridge = args.at(-1).includes('Callie Apple Bridge.app');
+      return [
+        `Identifier=${isAppleBridge
+          ? 'com.callie.foundersales.applebridge'
+          : 'com.callie.foundersales'}`,
+        'Signature=adhoc',
+        'TeamIdentifier=not set',
+      ].join('\n');
+    }
     if (args.includes('--requirements')) {
       return '# designated => cdhash H"1234567890abcdef1234567890abcdef12345678"';
     }
@@ -187,6 +197,43 @@ describe('package command runner', () => {
         input: '<plist><dict/></plist>',
         shell: false,
         stdio: ['pipe', 'pipe', 'pipe'],
+      }),
+    }]);
+  });
+
+  it('preserves the verifier timeout, bounded output, clean environment, and codesign stderr', () => {
+    const executions = [];
+    const runCommand = createPackageCommandRunner((command, args, options) => {
+      executions.push({ command, args, options });
+      return {
+        error: undefined,
+        signal: null,
+        status: 0,
+        stderr: 'Identifier=com.callie.foundersales\nTeamIdentifier=TEAMAAAA\n',
+        stdout: '',
+      };
+    });
+
+    const output = runCommand({
+      command: '/usr/bin/codesign',
+      args: ['--display', '--verbose=4', '/tmp/Callie.app'],
+      includeStderr: true,
+    });
+
+    expect(output).toContain('TeamIdentifier=TEAMAAAA');
+    expect(executions).toEqual([{
+      command: '/usr/bin/codesign',
+      args: ['--display', '--verbose=4', '/tmp/Callie.app'],
+      options: expect.objectContaining({
+        encoding: 'utf8',
+        env: {
+          LANG: 'C',
+          PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+        },
+        maxBuffer: 65_536,
+        shell: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 5_000,
       }),
     }]);
   });

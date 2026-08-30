@@ -29,13 +29,26 @@ const stableRequirement = (identifier, teamIdentifier) =>
 const adhocRequirement =
   '# designated => cdhash H"1234567890abcdef1234567890abcdef12345678"';
 
+const signatureMetadata = ({ identifier, mode, teamIdentifier }) => [
+  `Identifier=${identifier}`,
+  ...(mode === 'adhoc' ? ['Signature=adhoc'] : ['Signature size=9000']),
+  `TeamIdentifier=${mode === 'adhoc' ? 'not set' : teamIdentifier}`,
+].join('\n');
+
 const packagedHelperFixture = ({
   architecture = 'Mach-O 64-bit executable arm64',
   bundleIdentifier = expectedAppleBridge.bundleIdentifier,
   minimumSystemVersion = expectedAppleBridge.minimumSystemVersion,
   parentTeam = undefined,
   helperTeam = undefined,
+  parentMetadataMode = parentTeam === undefined ? 'adhoc' : 'stable',
+  helperMetadataMode = helperTeam === undefined ? 'adhoc' : 'stable',
+  parentMetadataTeam = parentTeam,
+  helperMetadataTeam = helperTeam,
+  parentMetadataOverride = undefined,
+  helperMetadataOverride = undefined,
   automationEntitlement = true,
+  extraEntitlement = false,
   helperSignatureValid = true,
   parentSignatureValid = true,
 } = {}) => {
@@ -67,11 +80,12 @@ const packagedHelperFixture = ({
       }[key];
     }
     if (command === '/usr/bin/plutil' && args[0] === '-convert') {
-      return JSON.stringify(
-        automationEntitlement
+      return JSON.stringify({
+        ...(automationEntitlement
           ? { 'com.apple.security.automation.apple-events': true }
-          : {},
-      );
+          : {}),
+        ...(extraEntitlement ? { 'com.example.unexpected': true } : {}),
+      });
     }
     if (command === '/usr/bin/codesign' && args.includes('--verify')) {
       const target = args.at(-1);
@@ -88,9 +102,16 @@ const packagedHelperFixture = ({
       && args[0] === '--display'
       && args.includes('--entitlements')
     ) {
-      return automationEntitlement
-        ? '<plist><dict><key>com.apple.security.automation.apple-events</key><true/></dict></plist>'
-        : '<plist><dict/></plist>';
+      return [
+        '<plist><dict>',
+        automationEntitlement
+          ? '<key>com.apple.security.automation.apple-events</key><true/>'
+          : '',
+        extraEntitlement
+          ? '<key>com.example.unexpected</key><true/>'
+          : '',
+        '</dict></plist>',
+      ].join('');
     }
     if (command === '/usr/bin/codesign' && args.includes('--requirements')) {
       const target = args.at(-1);
@@ -101,6 +122,25 @@ const packagedHelperFixture = ({
       return team === undefined
         ? adhocRequirement
         : stableRequirement(identifier, team);
+    }
+    if (
+      command === '/usr/bin/codesign'
+      && args[0] === '--display'
+      && args.includes('--verbose=4')
+    ) {
+      const target = args.at(-1);
+      const isParent = target === appPath;
+      const override = isParent
+        ? parentMetadataOverride
+        : helperMetadataOverride;
+      if (override !== undefined) return override;
+      return signatureMetadata({
+        identifier: isParent
+          ? 'com.callie.foundersales'
+          : expectedAppleBridge.bundleIdentifier,
+        mode: isParent ? parentMetadataMode : helperMetadataMode,
+        teamIdentifier: isParent ? parentMetadataTeam : helperMetadataTeam,
+      });
     }
 
     throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
@@ -139,6 +179,39 @@ test('fixed Apple verifier command runner pipes property-list input without a sh
       timeout: 5_000,
     },
   }]);
+});
+
+test('fixed Apple verifier runner captures bounded codesign metadata from stderr', () => {
+  const executions = [];
+  const runCommand = createAppleBridgeCommandRunner((command, args, options) => {
+    executions.push({ command, args, options });
+    return {
+      error: undefined,
+      signal: null,
+      status: 0,
+      stderr: 'Identifier=com.callie.foundersales\nSignature=adhoc\nTeamIdentifier=not set\n',
+      stdout: '',
+    };
+  });
+
+  const output = runCommand({
+    command: '/usr/bin/codesign',
+    args: ['--display', '--verbose=4', '/tmp/Callie.app'],
+    includeStderr: true,
+  });
+
+  assert.match(output, /TeamIdentifier=not set/u);
+  assert.deepEqual(executions[0].options, {
+    encoding: 'utf8',
+    env: {
+      LANG: 'C',
+      PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+    },
+    maxBuffer: 65_536,
+    shell: false,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 5_000,
+  });
 });
 
 test('accepts an ad-hoc helper only after fixed strict signature, identity, architecture, and entitlement checks', () => {
@@ -209,6 +282,50 @@ test('accepts a stable helper only when both non-empty Team IDs match', () => {
   assert.equal(report.signatureMode, 'stable');
 });
 
+test('rejects a helper whose signer-controlled requirement names the parent Team ID but authoritative metadata names another team', () => {
+  const fixture = packagedHelperFixture({
+    parentTeam: 'TEAMAAAA',
+    helperTeam: 'TEAMAAAA',
+    helperMetadataTeam: 'TEAMBBBB',
+  });
+
+  assert.throws(
+    () => verifyAppleBridgePackage(fixture.appPath, { runCommand: fixture.runCommand }),
+    /Team ID/i,
+  );
+});
+
+test('reports ad-hoc mode from authoritative signature metadata instead of a custom stable-looking requirement', () => {
+  const fixture = packagedHelperFixture({
+    parentTeam: 'TEAMAAAA',
+    helperTeam: 'TEAMAAAA',
+    parentMetadataMode: 'adhoc',
+    helperMetadataMode: 'adhoc',
+  });
+
+  const report = verifyAppleBridgePackage(fixture.appPath, {
+    runCommand: fixture.runCommand,
+  });
+
+  assert.equal(report.signatureMode, 'adhoc');
+});
+
+test('rejects stable metadata without exactly one authoritative Signature field', () => {
+  const fixture = packagedHelperFixture({
+    parentTeam: 'TEAMAAAA',
+    helperTeam: 'TEAMAAAA',
+    helperMetadataOverride: [
+      `Identifier=${expectedAppleBridge.bundleIdentifier}`,
+      'TeamIdentifier=TEAMAAAA',
+    ].join('\n'),
+  });
+
+  assert.throws(
+    () => verifyAppleBridgePackage(fixture.appPath, { runCommand: fixture.runCommand }),
+    /Signature/i,
+  );
+});
+
 test('rejects a helper missing the Apple Events entitlement', () => {
   const fixture = packagedHelperFixture({ automationEntitlement: false });
 
@@ -216,6 +333,31 @@ test('rejects a helper missing the Apple Events entitlement', () => {
     () => verifyAppleBridgePackage(fixture.appPath, { runCommand: fixture.runCommand }),
     /automation\.apple-events/i,
   );
+});
+
+test('rejects any entitlement beyond the required Apple Events entitlement', () => {
+  const fixture = packagedHelperFixture({ extraEntitlement: true });
+
+  assert.throws(
+    () => verifyAppleBridgePackage(fixture.appPath, { runCommand: fixture.runCommand }),
+    /exactly com\.apple\.security\.automation\.apple-events=true/i,
+  );
+});
+
+test('reads helper entitlements as non-deprecated XML stdout', () => {
+  const fixture = packagedHelperFixture();
+
+  verifyAppleBridgePackage(fixture.appPath, { runCommand: fixture.runCommand });
+
+  assert.ok(fixture.calls.some(({ command, args }) =>
+    command === '/usr/bin/codesign'
+    && args.join('\0') === [
+      '--display',
+      '--xml',
+      '--entitlements',
+      '-',
+      fixture.helperBundle,
+    ].join('\0')));
 });
 
 test('rejects the wrong helper bundle identifier', () => {
@@ -253,6 +395,15 @@ test('rejects an invalid nested helper signature', () => {
   assert.throws(
     () => verifyAppleBridgePackage(fixture.appPath, { runCommand: fixture.runCommand }),
     /strict nested signature/i,
+  );
+});
+
+test('rejects an invalid parent signature', () => {
+  const fixture = packagedHelperFixture({ parentSignatureValid: false });
+
+  assert.throws(
+    () => verifyAppleBridgePackage(fixture.appPath, { runCommand: fixture.runCommand }),
+    /strict parent signature/i,
   );
 });
 

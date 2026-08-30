@@ -54,7 +54,11 @@ test('packaged Apple helper handshakes and exits without permission or communica
       (entry) => /(?:^|\/)CallieAppleBridge(?:\s|$)/u.test(entry.command),
       { timeoutMs: 10_000 },
     );
-    trackedDescendants = await snapshotPackagedProcessTree(application.pid);
+    trackedDescendants = unionProcessEntries([appleBridge]);
+    trackedDescendants = unionProcessEntries(
+      trackedDescendants,
+      await snapshotPackagedProcessTree(application.pid),
+    );
     expect(trackedDescendants).toContainEqual(appleBridge);
 
     browser = await connectToPackagedApplication(
@@ -110,6 +114,17 @@ test('packaged Apple helper handshakes and exits without permission or communica
     } finally {
       try {
         if (application?.pid !== undefined) {
+          if (application.exitCode === null && application.signalCode === null) {
+            try {
+              trackedDescendants = unionProcessEntries(
+                trackedDescendants,
+                await snapshotPackagedProcessTree(application.pid),
+              );
+            } catch {
+              // The launched root may already be exiting; retained identities
+              // still receive exact instance-safe cleanup verification below.
+            }
+          }
           await terminatePackagedApplication(application);
           await assertPackagedDescendantsExit(trackedDescendants, {
             timeoutMs: 5_000,
@@ -123,6 +138,15 @@ test('packaged Apple helper handshakes and exits without permission or communica
     }
   }
 });
+
+const unionProcessEntries = (
+  ...groups: readonly PackagedProcessEntry[][]
+): PackagedProcessEntry[] => [
+  ...new Map(groups
+    .flat()
+    .map((entry) => [`${entry.pid}\0${entry.startedAt}`, entry] as const))
+    .values(),
+];
 
 const availablePort = (): Promise<number> =>
   new Promise((resolve, reject) => {
