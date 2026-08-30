@@ -291,8 +291,8 @@ describe('registerAppleSpikeIpc', () => {
     const event = eventFor(sender);
     const subscribe = registered.get(APPLE_SPIKE_IPC_CHANNELS.observationSubscribe);
 
-    await subscribe?.(event);
-    await subscribe?.(event);
+    await expect(subscribe?.(event)).resolves.toEqual({ subscribed: true });
+    await expect(subscribe?.(event)).resolves.toEqual({ subscribed: true });
     expect(service.subscribeObservation).toHaveBeenCalledTimes(1);
     const listener = vi.mocked(service.subscribeObservation).mock.calls[0]?.[0];
     listener?.({ kind: 'identity', identity: 'ambiguous' });
@@ -313,6 +313,57 @@ describe('registerAppleSpikeIpc', () => {
     } as never);
     expect(sender.send).toHaveBeenCalledTimes(1);
     expect(unsubscribeObservation).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges only after the ready service has installed its bridge listener', async () => {
+    const service = fakeService();
+    const order: string[] = [];
+    service.getStatus = vi.fn(() => ({
+      enabled: true,
+      bridge: { state: 'ready', helperVersion: '1.0.0', protocolVersion: 1 },
+    } as const));
+    service.subscribeObservation = vi.fn<AppleSpikeServiceApi['subscribeObservation']>(() => {
+      order.push('service-bound');
+      return (): void => undefined;
+    });
+    registerAppleSpikeIpc(service);
+    const subscribe = handlers().get(APPLE_SPIKE_IPC_CHANNELS.observationSubscribe);
+
+    const result = await subscribe?.(eventFor(fakeWebContents()));
+    order.push('ack-resolved');
+
+    expect(result).toEqual({ subscribed: true });
+    expect(order).toEqual(['service-bound', 'ack-resolved']);
+  });
+
+  it('rejects subscription without an acknowledgement when helper binding is unavailable', async () => {
+    const service = fakeService();
+    service.subscribeObservation = vi.fn(() => {
+      throw new Error('/private/raw bridge binding failure');
+    });
+    registerAppleSpikeIpc(service);
+
+    await expect(
+      handlers().get(APPLE_SPIKE_IPC_CHANNELS.observationSubscribe)?.(
+        eventFor(fakeWebContents()),
+      ),
+    ).rejects.toThrow('Apple observation subscription is unavailable.');
+  });
+
+  it('rejects subscription before service binding when the CLI gate or helper is unavailable', async () => {
+    const service = fakeService();
+    service.getStatus = vi.fn(() => ({
+      enabled: false,
+      bridge: { state: 'disabled', reason: 'not_packaged_or_configured' },
+    } as const));
+    registerAppleSpikeIpc(service);
+
+    await expect(
+      handlers().get(APPLE_SPIKE_IPC_CHANNELS.observationSubscribe)?.(
+        eventFor(fakeWebContents()),
+      ),
+    ).rejects.toThrow('Apple observation subscription is unavailable.');
+    expect(service.subscribeObservation).not.toHaveBeenCalled();
   });
 
   it('rejects untrusted or argument-bearing subscriptions before the service', async () => {

@@ -15,6 +15,14 @@ type AppleSpikePanelProps = {
   api: AppleSpikePreloadApi;
 };
 
+type ObservationEvidenceByCategory = {
+  capability?: Extract<AppleSpikeObservationEvidence, { kind: 'capability' }>;
+  identity?: Extract<AppleSpikeObservationEvidence, { kind: 'identity' }>;
+  callState?: Extract<AppleSpikeObservationEvidence, { kind: 'call_state' }>;
+};
+
+type EvidenceSubscriptionState = 'idle' | 'pending' | 'ready' | 'failed';
+
 const statusValueLabel = (value: string): string => value === 'notDetermined'
   ? 'not determined'
   : value;
@@ -115,7 +123,12 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
   const [messageHandle, setMessageHandle] = useState('');
   const [messageBody, setMessageBody] = useState('');
   const [messageConsent, setMessageConsent] = useState('');
-  const [latestEvidence, setLatestEvidence] = useState<AppleSpikeObservationEvidence>();
+  const [observationEvidence, setObservationEvidence] = useState<
+    ObservationEvidenceByCategory
+  >({});
+  const [evidenceSubscriptionState, setEvidenceSubscriptionState] = useState<
+    EvidenceSubscriptionState
+  >('idle');
 
   useEffect(() => {
     let cancelled = false;
@@ -192,24 +205,44 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
   }, []);
 
   useEffect(() => {
-    if (status?.enabled !== true) {
-      setLatestEvidence(undefined);
+    setEvidenceSubscriptionState('idle');
+    if (status?.enabled !== true || status.bridge.state !== 'ready') {
+      setObservationEvidence({});
       return undefined;
     }
     let cancelled = false;
-    let unsubscribe = (): void => undefined;
-    try {
-      unsubscribe = api.onObservationEvidence((evidence) => {
-        if (!cancelled) setLatestEvidence(evidence);
+    let unsubscribe: (() => void) | undefined;
+    setEvidenceSubscriptionState('pending');
+    void api.subscribeObservationEvidence((evidence) => {
+      if (cancelled) return;
+      setObservationEvidence((current) => {
+        switch (evidence.kind) {
+          case 'capability':
+            return { ...current, capability: evidence };
+          case 'identity':
+            return { ...current, identity: evidence };
+          case 'call_state':
+            return { ...current, callState: evidence };
+        }
       });
-    } catch {
-      return undefined;
-    }
+    }).then((cleanup) => {
+      if (cancelled) {
+        cleanup();
+        return;
+      }
+      unsubscribe = cleanup;
+      setEvidenceSubscriptionState('ready');
+    }).catch(() => {
+      if (!cancelled) {
+        setObservationEvidence({});
+        setEvidenceSubscriptionState('failed');
+      }
+    });
     return () => {
       cancelled = true;
-      unsubscribe();
+      unsubscribe?.();
     };
-  }, [api, status?.enabled]);
+  }, [api, status?.bridge.state, status?.enabled]);
 
   const activityHandleValid = useMemo(
     () => scanTestMessagesInputSchema.safeParse({ normalizedHandle: activityHandle }).success,
@@ -226,7 +259,11 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
 
   if (status?.enabled !== true) return null;
 
-  const run = async (action: string, operation: () => Promise<AppleSpikeResult>): Promise<void> => {
+  const run = async (
+    action: string,
+    operation: () => Promise<AppleSpikeResult>,
+    onCompleted?: (result: AppleSpikeResult) => void,
+  ): Promise<void> => {
     if (
       operationInFlight.current
       || pendingAction !== undefined
@@ -239,6 +276,7 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
     try {
       const result = await operation();
       if (generation === operationGeneration.current) {
+        onCompleted?.(result);
         setResultMessage(safeResultMessage(result));
       }
     } catch {
@@ -257,9 +295,14 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
   const busy = pendingAction !== undefined || status.bridge.state !== 'ready';
 
   const startCallObservation = (): void => {
-    if (busy || callConsent !== APPLE_TEST_CALL_CONSENT) return;
+    if (
+      busy
+      || evidenceSubscriptionState !== 'ready'
+      || callConsent !== APPLE_TEST_CALL_CONSENT
+    ) return;
     const input = { confirmation: APPLE_TEST_CALL_CONSENT } as const;
     setCallConsent('');
+    setObservationEvidence({});
     void run(
       'start_call_observation',
       () => api.startCallObservation(input),
@@ -368,7 +411,11 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
             <div className="apple-spike__actions">
               <button
                 type="button"
-                disabled={busy || callConsent !== APPLE_TEST_CALL_CONSENT}
+                disabled={
+                  busy
+                  || evidenceSubscriptionState !== 'ready'
+                  || callConsent !== APPLE_TEST_CALL_CONSENT
+                }
                 onClick={startCallObservation}
               >
                 Start call observation
@@ -376,6 +423,14 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
               <button type="button" disabled={busy} onClick={() => void run(
                 'stop_call_observation',
                 () => api.stopCallObservation(),
+                (result) => {
+                  if (
+                    result.action === 'stop_call_observation'
+                    && result.outcome === 'completed'
+                  ) {
+                    setObservationEvidence({});
+                  }
+                },
               )}>
                 Stop call observation
               </button>
@@ -428,12 +483,22 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
         className="apple-spike__evidence"
         aria-labelledby="apple-observation-evidence"
       >
-        <h3 id="apple-observation-evidence">Latest native evidence</h3>
-        <p aria-live="polite">
-          {latestEvidence === undefined
-            ? 'Waiting for sanitized native evidence.'
-            : observationEvidenceLabel(latestEvidence)}
-        </p>
+        <h3 id="apple-observation-evidence">Native observation evidence</h3>
+        <div aria-live="polite">
+          {observationEvidence.capability === undefined
+            && observationEvidence.identity === undefined
+            && observationEvidence.callState === undefined
+            && <p>Waiting for sanitized native evidence.</p>}
+          {observationEvidence.capability !== undefined
+            && <p>{observationEvidenceLabel(observationEvidence.capability)}</p>}
+          {observationEvidence.identity !== undefined
+            && <p>{observationEvidenceLabel(observationEvidence.identity)}</p>}
+          {observationEvidence.callState !== undefined
+            && <p>{observationEvidenceLabel(observationEvidence.callState)}</p>}
+          {evidenceSubscriptionState === 'failed' && (
+            <p>Observation evidence subscription unavailable; Start remains disabled.</p>
+          )}
+        </div>
       </section>
 
       {resultMessage !== undefined && (

@@ -173,6 +173,10 @@ export const appleSpikeObservationEvidenceSchema = z.union([
   }).strict(),
 ]);
 
+export const appleSpikeObservationSubscriptionAckSchema = z.object({
+  subscribed: z.literal(true),
+}).strict();
+
 const unavailableResultSchema = z.object({
   action: z.enum([
     'probe_capabilities',

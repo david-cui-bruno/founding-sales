@@ -959,7 +959,7 @@ git commit -m "feat: supervise app-open Apple helper"
 
 **Interfaces:**
 - Consumes: Task 7 `AppleBridgeService` and sanitized status.
-- Produces: strict `appleSpikeStatusSchema`, `appleSpikeActionSchema`, and `appleSpikeResultSchema`; `AppleSpikeService.getStatus()`, `requestPermission()`, `runReadOnlyCheck()`, and `authorizeManualAction()`; fixed IPC channels; and the narrow enumerated `window.callie.appleSpike` API.
+- Produces: strict `appleSpikeStatusSchema`, `appleSpikeActionSchema`, `appleSpikeResultSchema`, `appleSpikeObservationEvidenceSchema`, and `appleSpikeObservationSubscriptionAckSchema`; `AppleSpikeService.getStatus()`, `requestPermission()`, `runReadOnlyCheck()`, `authorizeManualAction()`, and listener-gated observation binding; fixed IPC channels; and the narrow enumerated `window.callie.appleSpike` API.
 
 - [ ] **Step 1: RED — test disabled-by-default and exact confirmation**
 
@@ -1029,6 +1029,8 @@ export const appleSpikeActionSchema = z.discriminatedUnion('action', [
 The renderer never supplies bridge method names, envelope IDs, command IDs, artifact paths, AppleScript, SQL, or AX selectors. Main generates the envelope UUID and the distinct message `commandId`. Each fixed service action maps to exactly one bridge request with no retry. A native `capability_unavailable` response becomes a typed sanitized unavailable outcome, never fabricated success. Starting call observation never claims that recording is armed or verified; the panel always preserves the documented manual Apple fallback. `registerAppleSpikeIpc` validates the sender using `validateSender`, rejects extra arguments, parses both requests and responses, and registers even when disabled so callers receive a typed disabled status. The panel renders only when Electron main passes the result of `app.commandLine.hasSwitch('apple-feasibility-spike')`, separates status, read-only checks, permission requests, and manual actions, displays consent copy, and requires the founder to type the exact phrase before enabling the final call or message control.
 
 Capability success uses the native `CapabilityStatus` shape exactly: `contacts` is `full | limited | denied | restricted | notDetermined`; `accessibility` is `granted | denied | notDetermined`; and `callObservationAvailable` plus `recordingControlAvailable` are booleans. `request_contacts` returns the same complete contacts enum, including `restricted`. No arbitrary capability record crosses the public boundary.
+
+Observation start remains disabled until preload has installed its renderer listener and received a strict trusted main-process subscription acknowledgement that is returned only after the current ready bridge listener is bound. The service also rejects a direct start before constructing or sending a native request unless at least one evidence listener and its live bridge binding still exist. Preload exposes only async `subscribeObservationEvidence(listener): Promise<() => void>`, multiplexes concurrent renderer listeners over one main subscription, and validates every acknowledgement and evidence value. The panel retains at most one sanitized value in each of the capability, identity, and call-state categories; it clears that bounded evidence on a new start, successful stop, CLI disable, or helper degradation. No raw bridge event, sequence, identifier, handle, path, or payload record crosses the boundary.
 
 - [ ] **Step 4: Verify GREEN**
 

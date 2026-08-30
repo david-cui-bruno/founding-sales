@@ -70,7 +70,7 @@ describe('preload Apple feasibility bridge', () => {
       'startCallObservation',
       'stopCallObservation',
       'sendTestMessage',
-      'onObservationEvidence',
+      'subscribeObservationEvidence',
     ]);
     expect(api.appleSpike).not.toHaveProperty('invoke');
     expect(api.appleSpike).not.toHaveProperty('run');
@@ -128,11 +128,18 @@ describe('preload Apple feasibility bridge', () => {
   });
 
   it('validates observation evidence and removes the exact wrapped listener on cleanup', async () => {
-    electron.invoke.mockResolvedValue(undefined);
+    const subscriptionAck = Promise.withResolvers<unknown>();
+    electron.invoke.mockImplementation((channel: string) => {
+      if (channel === APPLE_SPIKE_IPC_CHANNELS.observationSubscribe) {
+        expect(electron.on).toHaveBeenCalledTimes(1);
+        return subscriptionAck.promise;
+      }
+      return Promise.resolve(undefined);
+    });
     const api = exposedApi();
     const listener = vi.fn();
 
-    const unsubscribe = api.appleSpike.onObservationEvidence(listener);
+    const pendingUnsubscribe = api.appleSpike.subscribeObservationEvidence(listener);
     expect(electron.on).toHaveBeenCalledTimes(1);
     const [channel, wrapped] = electron.on.mock.calls[0] as [
       string,
@@ -142,6 +149,9 @@ describe('preload Apple feasibility bridge', () => {
     expect(electron.invoke).toHaveBeenCalledWith(
       APPLE_SPIKE_IPC_CHANNELS.observationSubscribe,
     );
+
+    subscriptionAck.resolve({ subscribed: true });
+    const unsubscribe = await pendingUnsubscribe;
 
     wrapped({}, { kind: 'call_state', outgoing: true, connected: true, ended: false, onHold: false });
     wrapped({}, {
@@ -169,10 +179,16 @@ describe('preload Apple feasibility bridge', () => {
   });
 
   it('multiplexes renderer listeners over one main subscription until the final cleanup', async () => {
-    electron.invoke.mockResolvedValue(undefined);
+    electron.invoke.mockImplementation(async (channel: string) => (
+      channel === APPLE_SPIKE_IPC_CHANNELS.observationSubscribe
+        ? { subscribed: true }
+        : undefined
+    ));
     const api = exposedApi();
-    const firstCleanup = api.appleSpike.onObservationEvidence(vi.fn());
-    const secondCleanup = api.appleSpike.onObservationEvidence(vi.fn());
+    const [firstCleanup, secondCleanup] = await Promise.all([
+      api.appleSpike.subscribeObservationEvidence(vi.fn()),
+      api.appleSpike.subscribeObservationEvidence(vi.fn()),
+    ]);
 
     expect(electron.invoke.mock.calls.filter(
       ([channel]) => channel === APPLE_SPIKE_IPC_CHANNELS.observationSubscribe,
@@ -185,6 +201,22 @@ describe('preload Apple feasibility bridge', () => {
 
     secondCleanup();
     await Promise.resolve();
+    expect(electron.invoke.mock.calls.filter(
+      ([channel]) => channel === APPLE_SPIKE_IPC_CHANNELS.observationUnsubscribe,
+    )).toHaveLength(1);
+  });
+
+  it('rejects a malformed subscription acknowledgement and tears down main state safely', async () => {
+    electron.invoke.mockImplementation(async (channel: string) => (
+      channel === APPLE_SPIKE_IPC_CHANNELS.observationSubscribe
+        ? { subscribed: true, rawPath: '/private/helper' }
+        : undefined
+    ));
+    const api = exposedApi();
+
+    await expect(
+      api.appleSpike.subscribeObservationEvidence(vi.fn()),
+    ).rejects.toThrow('Apple observation subscription is unavailable.');
     expect(electron.invoke.mock.calls.filter(
       ([channel]) => channel === APPLE_SPIKE_IPC_CHANNELS.observationUnsubscribe,
     )).toHaveLength(1);

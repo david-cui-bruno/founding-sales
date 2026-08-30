@@ -4,6 +4,7 @@ import { appHealthSchema } from './shared/healthContract';
 import {
   APPLE_SPIKE_IPC_CHANNELS,
   appleSpikeObservationEvidenceSchema,
+  appleSpikeObservationSubscriptionAckSchema,
   appleSpikeResultSchema,
   appleSpikeStatusSchema,
   scanTestMessagesInputSchema,
@@ -20,7 +21,29 @@ type ObservationRegistration = {
 };
 
 const observationRegistrations = new Set<ObservationRegistration>();
-let observationSubscriptionState: 'idle' | 'subscribing' | 'subscribed' = 'idle';
+let observationSubscriptionAcknowledged = false;
+let observationSubscriptionPromise: Promise<void> | undefined;
+let observationUnsubscribePromise: Promise<void> | undefined;
+
+const invokeObservationUnsubscribe = (force = false): Promise<void> => {
+  if (!force && !observationSubscriptionAcknowledged) {
+    return observationUnsubscribePromise ?? Promise.resolve();
+  }
+  if (observationUnsubscribePromise !== undefined) {
+    return observationUnsubscribePromise;
+  }
+  observationSubscriptionAcknowledged = false;
+  const pending = ipcRenderer.invoke(APPLE_SPIKE_IPC_CHANNELS.observationUnsubscribe)
+    .then((): undefined => undefined)
+    .catch((): undefined => undefined)
+    .finally(() => {
+      if (observationUnsubscribePromise === pending) {
+        observationUnsubscribePromise = undefined;
+      }
+    });
+  observationUnsubscribePromise = pending;
+  return pending;
+};
 
 const removeObservationRegistration = (registration: ObservationRegistration): void => {
   if (!registration.active) return;
@@ -31,36 +54,43 @@ const removeObservationRegistration = (registration: ObservationRegistration): v
     registration.wrapped,
   );
   if (observationRegistrations.size !== 0) return;
-  if (observationSubscriptionState === 'subscribed') {
-    observationSubscriptionState = 'idle';
-    void ipcRenderer.invoke(APPLE_SPIKE_IPC_CHANNELS.observationUnsubscribe)
-      .catch((): undefined => undefined);
+  void invokeObservationUnsubscribe();
+};
+
+const ensureObservationSubscription = (): Promise<void> => {
+  if (observationSubscriptionAcknowledged) return Promise.resolve();
+  if (observationSubscriptionPromise !== undefined) {
+    return observationSubscriptionPromise;
   }
+
+  const pending = (async () => {
+    if (observationUnsubscribePromise !== undefined) {
+      await observationUnsubscribePromise;
+    }
+    let rawAck: unknown;
+    try {
+      rawAck = await ipcRenderer.invoke(APPLE_SPIKE_IPC_CHANNELS.observationSubscribe);
+    } catch {
+      throw new Error('Apple observation subscription is unavailable.');
+    }
+    const ack = appleSpikeObservationSubscriptionAckSchema.safeParse(rawAck);
+    if (!ack.success) {
+      await invokeObservationUnsubscribe(true);
+      throw new Error('Apple observation subscription is unavailable.');
+    }
+    observationSubscriptionAcknowledged = true;
+  })().finally(() => {
+    if (observationSubscriptionPromise === pending) {
+      observationSubscriptionPromise = undefined;
+    }
+  });
+  observationSubscriptionPromise = pending;
+  return pending;
 };
 
-const ensureObservationSubscription = (): void => {
-  if (observationSubscriptionState !== 'idle') return;
-  observationSubscriptionState = 'subscribing';
-  void ipcRenderer.invoke(APPLE_SPIKE_IPC_CHANNELS.observationSubscribe)
-    .then(() => {
-      if (observationRegistrations.size === 0) {
-        observationSubscriptionState = 'idle';
-        return ipcRenderer.invoke(APPLE_SPIKE_IPC_CHANNELS.observationUnsubscribe);
-      }
-      observationSubscriptionState = 'subscribed';
-      return undefined;
-    })
-    .catch(() => {
-      observationSubscriptionState = 'idle';
-      for (const registration of [...observationRegistrations]) {
-        removeObservationRegistration(registration);
-      }
-    });
-};
-
-const onObservationEvidence = (
+const subscribeObservationEvidence = async (
   listener: (evidence: AppleSpikeObservationEvidence) => void,
-): (() => void) => {
+): Promise<() => void> => {
   if (typeof listener !== 'function') {
     throw new Error('Apple observation listener must be a function.');
   }
@@ -82,7 +112,12 @@ const onObservationEvidence = (
     APPLE_SPIKE_IPC_CHANNELS.observationEvidence,
     registration.wrapped,
   );
-  ensureObservationSubscription();
+  try {
+    await ensureObservationSubscription();
+  } catch {
+    removeObservationRegistration(registration);
+    throw new Error('Apple observation subscription is unavailable.');
+  }
   return () => removeObservationRegistration(registration);
 };
 
@@ -153,6 +188,6 @@ contextBridge.exposeInMainWorld('callie', {
         await ipcRenderer.invoke(APPLE_SPIKE_IPC_CHANNELS.sendTestMessage, parsed),
       );
     },
-    onObservationEvidence,
+    subscribeObservationEvidence,
   },
 });

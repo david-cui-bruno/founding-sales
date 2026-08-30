@@ -69,8 +69,12 @@ export class SupervisedAppleBridgeService implements AppleBridgeService {
   subscribe(listener: (event: BridgeEvent) => void): () => void {
     const client = this.source.getClient();
     if (this.source.getStatus().state !== 'ready' || client === undefined) {
-      return () => undefined;
+      throw new Error('Apple integration helper is unavailable.');
     }
-    return client.subscribe(listener);
+    try {
+      return client.subscribe(listener);
+    } catch {
+      throw new Error('Apple integration helper is unavailable.');
+    }
   }
 }

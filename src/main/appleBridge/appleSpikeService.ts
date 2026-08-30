@@ -131,7 +131,16 @@ export class AppleSpikeService implements AppleSpikeServiceApi {
   ): () => void {
     if (this.#disposed) return () => undefined;
     this.#observationListeners.add(listener);
-    this.#reconcileObservationSubscription(this.#bridge.getStatus());
+    const bridgeStatus = this.#bridge.getStatus();
+    this.#reconcileObservationSubscription(bridgeStatus);
+    if (
+      this.#enabled
+      && bridgeStatus.state === 'ready'
+      && this.#bridgeObservationUnsubscribe === undefined
+    ) {
+      this.#observationListeners.delete(listener);
+      throw new Error('Apple observation subscription is unavailable.');
+    }
     let active = true;
     return () => {
       if (!active) return;
@@ -163,12 +172,18 @@ export class AppleSpikeService implements AppleSpikeServiceApi {
     const action = parsed.data;
 
     const bridgeStatus = this.#bridge.getStatus();
-    this.#reconcileObservationSubscription(
-      bridgeStatus,
-      action.action === 'start_call_observation',
-    );
+    this.#reconcileObservationSubscription(bridgeStatus);
     if (bridgeStatus.state !== 'ready') {
       throw new Error('Apple integration helper is unavailable.');
+    }
+    if (
+      action.action === 'start_call_observation'
+      && (
+        this.#observationListeners.size === 0
+        || this.#bridgeObservationUnsubscribe === undefined
+      )
+    ) {
+      throw new Error('Apple observation subscription is unavailable.');
     }
 
     const request = this.#requestFor(action);
@@ -363,7 +378,6 @@ export class AppleSpikeService implements AppleSpikeServiceApi {
 
   #reconcileObservationSubscription(
     status: ReturnType<AppleBridgeService['getStatus']>,
-    forceRebind = false,
   ): void {
     const shouldBind = (
       !this.#disposed
@@ -375,7 +389,6 @@ export class AppleSpikeService implements AppleSpikeServiceApi {
       this.#unbindObservationSubscription();
       return;
     }
-    if (forceRebind) this.#unbindObservationSubscription();
     if (this.#bridgeObservationUnsubscribe !== undefined) return;
 
     const generation = ++this.#bridgeBindingGeneration;

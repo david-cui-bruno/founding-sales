@@ -3,6 +3,7 @@ import { ipcMain, type WebContents } from 'electron';
 import {
   APPLE_SPIKE_IPC_CHANNELS,
   appleSpikeObservationEvidenceSchema,
+  appleSpikeObservationSubscriptionAckSchema,
   appleSpikeResultSchema,
   appleSpikeStatusSchema,
   scanTestMessagesInputSchema,
@@ -131,7 +132,10 @@ export function registerAppleSpikeIpc(
   };
 
   const registerObservationSubscription = (sender: WebContents): void => {
-    if (observationSubscriptions.has(sender) || sender.isDestroyed()) return;
+    if (observationSubscriptions.has(sender)) return;
+    if (sender.isDestroyed()) {
+      throw new Error('Apple observation subscription is unavailable.');
+    }
     const onDestroyed = (): void => removeObservationSubscription(sender);
     const onNavigation = (): void => removeObservationSubscription(sender);
     const subscription: RendererObservationSubscription = {
@@ -173,7 +177,16 @@ export function registerAppleSpikeIpc(
     ...args: unknown[]
   ) => {
     validate(event, args, 0);
-    registerObservationSubscription(event.sender);
+    try {
+      const status = appleSpikeStatusSchema.parse(service.getStatus());
+      if (!status.enabled || status.bridge.state !== 'ready') {
+        throw new Error('not ready');
+      }
+      registerObservationSubscription(event.sender);
+      return appleSpikeObservationSubscriptionAckSchema.parse({ subscribed: true });
+    } catch {
+      throw new Error('Apple observation subscription is unavailable.');
+    }
   });
 
   ipcMain.handle(APPLE_SPIKE_IPC_CHANNELS.observationUnsubscribe, async (

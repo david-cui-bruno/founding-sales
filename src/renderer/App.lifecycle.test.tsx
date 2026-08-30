@@ -53,7 +53,7 @@ const disabledAppleSpike = (): AppleSpikePreloadApi => ({
   startCallObservation: vi.fn(),
   stopCallObservation: vi.fn(),
   sendTestMessage: vi.fn(),
-  onObservationEvidence: vi.fn((): (() => void) => () => undefined),
+  subscribeObservationEvidence: vi.fn(async (): Promise<() => void> => () => undefined),
 });
 
 const renderApp = (

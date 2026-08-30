@@ -46,8 +46,8 @@ function fakeApi(overrides: Partial<AppleSpikePreloadApi> = {}): AppleSpikePrelo
     sendTestMessage: vi.fn(async () => ({
       action: 'send_test_message', outcome: 'completed', delivery: 'sent',
     })),
-    onObservationEvidence: vi.fn<AppleSpikePreloadApi['onObservationEvidence']>(
-      () => () => undefined,
+    subscribeObservationEvidence: vi.fn<AppleSpikePreloadApi['subscribeObservationEvidence']>(
+      async () => () => undefined,
     ),
     ...overrides,
   } as AppleSpikePreloadApi;
@@ -86,7 +86,7 @@ describe('AppleSpikePanel', () => {
     render(<AppleSpikePanel api={api} />);
 
     await waitFor(() => expect(api.getStatus).toHaveBeenCalledTimes(1));
-    expect(api.onObservationEvidence).not.toHaveBeenCalled();
+    expect(api.subscribeObservationEvidence).not.toHaveBeenCalled();
     expect(screen.queryByRole('region', { name: 'Apple feasibility spike' })).toBeNull();
   });
 
@@ -483,35 +483,43 @@ describe('AppleSpikePanel', () => {
     )).not.toBeNull();
   });
 
-  it('shows only the latest sanitized native evidence without identifiers or raw fields', async () => {
-    let listener: Parameters<AppleSpikePreloadApi['onObservationEvidence']>[0] | undefined;
+  it('keeps one bounded item per evidence category without exposing identifiers or raw fields', async () => {
+    let listener: Parameters<AppleSpikePreloadApi['subscribeObservationEvidence']>[0] | undefined;
     const unsubscribe = vi.fn();
-    const onObservationEvidence = vi.fn<AppleSpikePreloadApi['onObservationEvidence']>((next) => {
-      listener = next;
-      return unsubscribe;
+    const subscribeObservationEvidence = vi.fn<AppleSpikePreloadApi['subscribeObservationEvidence']>(
+      async (next) => {
+        listener = next;
+        return unsubscribe;
+      },
+    );
+    const view = render(
+      <AppleSpikePanel api={fakeApi({ subscribeObservationEvidence })} />,
+    );
+    await waitFor(() => expect(subscribeObservationEvidence).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      listener?.({
+        kind: 'capability',
+        available: false,
+        reason: 'accessibilityDenied',
+      });
+      listener?.({ kind: 'identity', identity: 'ambiguous' });
+      listener?.({
+        kind: 'call_state',
+        outgoing: true,
+        connected: false,
+        ended: true,
+        onHold: false,
+      });
     });
-    const view = render(<AppleSpikePanel api={fakeApi({ onObservationEvidence })} />);
-    await waitFor(() => expect(onObservationEvidence).toHaveBeenCalledTimes(1));
 
-    act(() => listener?.({
-      kind: 'capability',
-      available: false,
-      reason: 'accessibilityDenied',
-    }));
-    expect(screen.getByText('Call-observation capability: degraded — accessibility denied.')).not.toBeNull();
-
-    act(() => listener?.({
-      kind: 'call_state',
-      outgoing: true,
-      connected: false,
-      ended: false,
-      onHold: true,
-    }));
-    expect(screen.getByText('Call state: outgoing, not connected, active, on hold.')).not.toBeNull();
-    expect(screen.queryByText(/accessibility denied/i)).toBeNull();
-
-    act(() => listener?.({ kind: 'identity', identity: 'ambiguous' }));
+    expect(screen.getByText(
+      'Call-observation capability: degraded — accessibility denied.',
+    )).not.toBeNull();
     expect(screen.getByText('Call identity: ambiguous.')).not.toBeNull();
+    expect(screen.getByText(
+      'Call state: outgoing, not connected, ended, not on hold.',
+    )).not.toBeNull();
     expect(document.body.textContent).not.toContain('+15555550100');
     expect(document.body.textContent).not.toContain('/Users/founder');
     expect(document.body.textContent).not.toContain('callId');
@@ -520,32 +528,154 @@ describe('AppleSpikePanel', () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps one evidence listener under StrictMode and releases it on unmount', async () => {
-    let active = 0;
-    let maximumActive = 0;
-    let cleanupCount = 0;
-    const onObservationEvidence = vi.fn<AppleSpikePreloadApi['onObservationEvidence']>(() => {
-      active += 1;
-      maximumActive = Math.max(maximumActive, active);
-      let subscribed = true;
-      return () => {
-        if (!subscribed) return;
-        subscribed = false;
-        active -= 1;
-        cleanupCount += 1;
+  it('gates Start until evidence subscription acknowledgement and captures synchronous evidence', async () => {
+    const subscription = deferred<() => void>();
+    let listener: Parameters<AppleSpikePreloadApi['subscribeObservationEvidence']>[0] | undefined;
+    const subscribeObservationEvidence = vi.fn<AppleSpikePreloadApi['subscribeObservationEvidence']>(
+      (next) => {
+        listener = next;
+        return subscription.promise;
+      },
+    );
+    const startCallObservation = vi.fn<AppleSpikePreloadApi['startCallObservation']>(async () => {
+      listener?.({ kind: 'identity', identity: 'resolved' });
+      return {
+        action: 'start_call_observation',
+        outcome: 'completed',
+        observation: 'started',
       };
     });
+    render(<AppleSpikePanel api={fakeApi({
+      startCallObservation,
+      subscribeObservationEvidence,
+    })} />);
+    await screen.findByRole('region', { name: 'Apple feasibility spike' });
+    const start = screen.getByRole('button', { name: 'Start call observation' });
+    fireEvent.change(screen.getByLabelText('Type call consent phrase'), {
+      target: { value: 'I CONSENT TO THIS TEST CALL' },
+    });
+
+    fireEvent.click(start);
+    expect(start.hasAttribute('disabled')).toBe(true);
+    expect(startCallObservation).not.toHaveBeenCalled();
+
+    await act(async () => subscription.resolve(() => undefined));
+    await waitFor(() => expect(start.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(start);
+
+    expect(await screen.findByText('Call identity: resolved.')).not.toBeNull();
+    expect(startCallObservation).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears collected evidence on a new start and after a successful stop', async () => {
+    let listener: Parameters<AppleSpikePreloadApi['subscribeObservationEvidence']>[0] | undefined;
+    const subscribeObservationEvidence = vi.fn<AppleSpikePreloadApi['subscribeObservationEvidence']>(
+      async (next) => {
+        listener = next;
+        return () => undefined;
+      },
+    );
+    const start = deferred<Awaited<ReturnType<AppleSpikePreloadApi['startCallObservation']>>>();
+    const startCallObservation = vi.fn(() => start.promise);
+    render(<AppleSpikePanel api={fakeApi({
+      startCallObservation,
+      subscribeObservationEvidence,
+    })} />);
+    await waitFor(() => expect(subscribeObservationEvidence).toHaveBeenCalledTimes(1));
+    act(() => listener?.({ kind: 'identity', identity: 'resolved' }));
+    expect(screen.getByText('Call identity: resolved.')).not.toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Type call consent phrase'), {
+      target: { value: 'I CONSENT TO THIS TEST CALL' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Start call observation' }));
+    expect(screen.getByText('Waiting for sanitized native evidence.')).not.toBeNull();
+    await act(async () => start.resolve({
+      action: 'start_call_observation',
+      outcome: 'completed',
+      observation: 'started',
+    }));
+
+    act(() => listener?.({
+      kind: 'capability',
+      available: false,
+      reason: 'snapshotFailed',
+    }));
+    expect(screen.getByText(
+      'Call-observation capability: degraded — Phone UI snapshot failed.',
+    )).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop call observation' }));
+    await screen.findByText('Call observation stopped.');
+    expect(screen.getByText('Waiting for sanitized native evidence.')).not.toBeNull();
+  });
+
+  it('clears evidence and subscription readiness when the helper degrades', async () => {
+    vi.useFakeTimers();
+    const getStatus = vi
+      .fn<AppleSpikePreloadApi['getStatus']>()
+      .mockResolvedValueOnce(readyStatus)
+      .mockResolvedValueOnce({
+        enabled: true,
+        bridge: {
+          state: 'degraded',
+          code: 'helper_exited',
+          message: 'Apple integration helper exited unexpectedly.',
+        },
+      });
+    let listener: Parameters<AppleSpikePreloadApi['subscribeObservationEvidence']>[0] | undefined;
+    const unsubscribe = vi.fn();
+    const subscribeObservationEvidence = vi.fn<AppleSpikePreloadApi['subscribeObservationEvidence']>(
+      async (next) => {
+        listener = next;
+        return unsubscribe;
+      },
+    );
+    render(<AppleSpikePanel api={fakeApi({ getStatus, subscribeObservationEvidence })} />);
+    await act(async () => Promise.resolve());
+    act(() => listener?.({ kind: 'identity', identity: 'resolved' }));
+    expect(screen.getByText('Call identity: resolved.')).not.toBeNull();
+
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+
+    expect(screen.queryByText('Call identity: resolved.')).toBeNull();
+    expect(screen.getByText('Waiting for sanitized native evidence.')).not.toBeNull();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    fireEvent.change(screen.getByLabelText('Type call consent phrase'), {
+      target: { value: 'I CONSENT TO THIS TEST CALL' },
+    });
+    expect(screen.getByRole('button', { name: 'Start call observation' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('cleans up a late subscription acknowledgement under StrictMode and on unmount', async () => {
+    const subscription = deferred<() => void>();
+    const unsubscribe = vi.fn();
+    const subscribeObservationEvidence = vi.fn<AppleSpikePreloadApi['subscribeObservationEvidence']>(
+      () => subscription.promise,
+    );
     const view = render(
       <StrictMode>
-        <AppleSpikePanel api={fakeApi({ onObservationEvidence })} />
+        <AppleSpikePanel api={fakeApi({ subscribeObservationEvidence })} />
       </StrictMode>,
     );
-    await waitFor(() => expect(active).toBe(1));
-
-    expect(maximumActive).toBe(1);
+    await waitFor(() => expect(subscribeObservationEvidence).toHaveBeenCalledTimes(1));
     view.unmount();
-    expect(active).toBe(0);
-    expect(cleanupCount).toBe(onObservationEvidence.mock.calls.length);
+    await act(async () => subscription.resolve(unsubscribe));
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Start disabled with a sanitized message when evidence subscription fails', async () => {
+    const subscribeObservationEvidence = vi.fn<AppleSpikePreloadApi['subscribeObservationEvidence']>(
+      async () => {
+        throw new Error('/private/raw subscription failure');
+      },
+    );
+    render(<AppleSpikePanel api={fakeApi({ subscribeObservationEvidence })} />);
+    await screen.findByText('Observation evidence subscription unavailable; Start remains disabled.');
+    fireEvent.change(screen.getByLabelText('Type call consent phrase'), {
+      target: { value: 'I CONSENT TO THIS TEST CALL' },
+    });
+    expect(screen.getByRole('button', { name: 'Start call observation' }).hasAttribute('disabled')).toBe(true);
+    expect(document.body.textContent).not.toContain('/private/raw');
   });
 
   it('unsubscribes evidence when a later status disables the CLI-gated panel', async () => {
@@ -558,10 +688,12 @@ describe('AppleSpikePanel', () => {
         bridge: { state: 'disabled', reason: 'not_packaged_or_configured' },
       });
     const unsubscribe = vi.fn();
-    const onObservationEvidence = vi.fn<AppleSpikePreloadApi['onObservationEvidence']>(() => unsubscribe);
-    render(<AppleSpikePanel api={fakeApi({ getStatus, onObservationEvidence })} />);
+    const subscribeObservationEvidence = vi.fn<AppleSpikePreloadApi['subscribeObservationEvidence']>(
+      async () => unsubscribe,
+    );
+    render(<AppleSpikePanel api={fakeApi({ getStatus, subscribeObservationEvidence })} />);
     await act(async () => Promise.resolve());
-    expect(onObservationEvidence).toHaveBeenCalledTimes(1);
+    expect(subscribeObservationEvidence).toHaveBeenCalledTimes(1);
 
     await act(async () => vi.advanceTimersByTimeAsync(1_000));
 

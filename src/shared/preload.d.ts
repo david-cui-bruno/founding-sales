@@ -18,9 +18,9 @@ export interface AppleSpikePreloadApi {
   startCallObservation(input: StartCallObservationInput): Promise<AppleSpikeResultFor<'start_call_observation'>>;
   stopCallObservation(): Promise<AppleSpikeResultFor<'stop_call_observation'>>;
   sendTestMessage(input: SendTestMessageInput): Promise<AppleSpikeResultFor<'send_test_message'>>;
-  onObservationEvidence(
+  subscribeObservationEvidence(
     listener: (evidence: AppleSpikeObservationEvidence) => void,
-  ): () => void;
+  ): Promise<() => void>;
 }
 
 export interface CalliePreloadApi {

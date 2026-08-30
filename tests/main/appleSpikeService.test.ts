@@ -177,6 +177,7 @@ describe('AppleSpikeService', () => {
         COMMAND_ID,
       ),
     });
+    service.subscribeObservation(() => undefined);
 
     await expect(service.runReadOnlyCheck({ action: 'probe_capabilities' })).resolves.toEqual({
       action: 'probe_capabilities',
@@ -366,7 +367,7 @@ describe('AppleSpikeService', () => {
         confirmation: 'I CONSENT TO THIS TEST CALL',
       }),
     ],
-  ])('rejects malformed action-specific ok payload: %s', async (_name, result, invoke) => {
+  ])('rejects malformed action-specific ok payload: %s', async (name, result, invoke) => {
     const bridge = fakeBridge((request) => ({
       v: 1,
       kind: 'response',
@@ -379,6 +380,9 @@ describe('AppleSpikeService', () => {
       bridge,
       createUuid: fixedIds(REQUEST_ID, COMMAND_ID),
     });
+    if (name === 'call observation false-success shape') {
+      service.subscribeObservation(() => undefined);
+    }
 
     await expect(invoke(service)).rejects.toThrow('response was invalid');
     expect(bridge.request).toHaveBeenCalledTimes(1);
@@ -600,6 +604,70 @@ describe('AppleSpikeService', () => {
     disabled.subscribeObservation(() => undefined);
     disabled.getStatus();
     expect(disabledBridge.subscribe).not.toHaveBeenCalled();
+  });
+
+  it('does not acknowledge a ready observation subscription when the bridge binding fails', () => {
+    const bridge = fakeBridge();
+    bridge.subscribe.mockImplementation(() => {
+      throw new Error('/private/raw observation binding failure');
+    });
+    const service = new AppleSpikeService({ enabled: true, bridge });
+
+    expect(() => service.subscribeObservation(() => undefined)).toThrow(
+      'Apple observation subscription is unavailable.',
+    );
+    expect(bridge.subscribe).toHaveBeenCalledTimes(1);
+    expect(bridge.listenerCount()).toBe(0);
+
+    bridge.emit({
+      v: 1,
+      kind: 'event',
+      seq: 1,
+      event: 'capability.changed',
+      payload: { source: 'phone_observation', available: true },
+    });
+  });
+
+  it('rejects call observation before a bridge request when no evidence listener is active', async () => {
+    const bridge = fakeBridge();
+    const service = new AppleSpikeService({
+      enabled: true,
+      bridge,
+      createUuid: fixedIds(REQUEST_ID),
+    });
+
+    await expect(service.authorizeManualAction({
+      action: 'start_call_observation',
+      confirmation: 'I CONSENT TO THIS TEST CALL',
+    })).rejects.toThrow('Apple observation subscription is unavailable.');
+    expect(bridge.subscribe).not.toHaveBeenCalled();
+    expect(bridge.request).not.toHaveBeenCalled();
+  });
+
+  it('rejects call observation before a bridge request when the current rebind fails', async () => {
+    const bridge = fakeBridge();
+    const service = new AppleSpikeService({
+      enabled: true,
+      bridge,
+      createUuid: fixedIds(REQUEST_ID),
+    });
+    service.subscribeObservation(() => undefined);
+    bridge.setStatus({
+      state: 'degraded',
+      code: 'helper_exited',
+      message: 'Apple integration helper stopped unexpectedly.',
+    });
+    service.getStatus();
+    bridge.setStatus({ state: 'ready', helperVersion: '1.0.1', protocolVersion: 1 });
+    bridge.subscribe.mockImplementation(() => {
+      throw new Error('/private/raw current binding failure');
+    });
+
+    await expect(service.authorizeManualAction({
+      action: 'start_call_observation',
+      confirmation: 'I CONSENT TO THIS TEST CALL',
+    })).rejects.toThrow('Apple observation subscription is unavailable.');
+    expect(bridge.request).not.toHaveBeenCalled();
   });
 
   it('reconciles the current ready bridge before starting observation', async () => {
