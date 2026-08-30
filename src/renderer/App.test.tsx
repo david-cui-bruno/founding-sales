@@ -1,12 +1,55 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
-import { App } from './App';
+import { describe, expect, it, vi } from 'vitest';
+import type { AppHealth } from '../shared/healthContract';
+import { DiagnosticsScreen, type DiagnosticsState } from './App';
 
-describe('App', () => {
-  it('renders the foundation title and status', () => {
-    const markup = renderToStaticMarkup(<App />);
+const health: AppHealth = {
+  appVersion: '1.0.0',
+  schemaVersion: 1,
+  databasePath: '/tmp/callie.sqlite3',
+  fts5Available: true,
+  pendingJobs: 2,
+  interruptedJobsRecovered: 1,
+};
+
+const renderState = (state: DiagnosticsState): string =>
+  renderToStaticMarkup(
+    <DiagnosticsScreen state={state} onRetry={vi.fn()} />,
+  );
+
+describe('DiagnosticsScreen', () => {
+  it('renders the local foundation loading state', () => {
+    expect(renderState({ status: 'loading' })).toContain(
+      'Checking local foundation…',
+    );
+  });
+
+  it('renders the structured ready health values', () => {
+    const markup = renderState({ status: 'ready', health });
 
     expect(markup).toContain('Callie Founder Sales System');
-    expect(markup).toContain('Foundation initializing');
+    expect(markup).toContain('SQLite ready');
+    expect(markup).toContain('FTS5 available');
+    expect(markup).toContain('Schema 1');
+    expect(markup).toContain('1.0.0');
+    expect(markup).toContain('/tmp/callie.sqlite3');
+    expect(markup).toContain('Active job count');
+    expect(markup).toContain('Recovery count');
+    expect(markup).toContain('2');
+    expect(markup).toContain('1');
+  });
+
+  it('renders a safe failed state without raw IPC errors', () => {
+    const markup = renderState({ status: 'failed' });
+
+    expect(markup).toContain('The local database could not be opened');
+    expect(markup).toContain('LOCAL_DATABASE_UNAVAILABLE');
+    expect(markup).not.toContain('database unavailable at /private');
+  });
+
+  it('renders a Retry button for a failed health request', () => {
+    const markup = renderState({ status: 'failed' });
+
+    expect(markup).toContain('<button type="button">Retry</button>');
   });
 });
