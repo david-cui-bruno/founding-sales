@@ -754,6 +754,8 @@ A signed native Swift helper handles macOS-only capabilities:
 
 V1 runs the helper as a bundled child process over a fixed-version, typed stdio protocol only while Callie is open. It is not a persistent login/background agent. The bridge exposes no generic AppleScript, shell, arbitrary-file, or arbitrary-Accessibility command. A future always-on helper would require a separate signed `SMAppService`/XPC design and security review.
 
+Electron launches the helper with exactly `--staging-root <path>`, where `path` is an absolute standardized local filesystem path beneath Callie's app-owned storage. Native startup parses and validates that argument before dependency composition or stdio startup, has no fixed temporary-directory fallback, and emits only a constant path-free initialization diagnostic on invalid launch authority.
+
 The packaged helper uses a stable signing identity so TCC and Keychain permissions survive updates. Electron validates helper version and signature at startup; helper upgrades are atomic and roll back with the containing application bundle.
 
 The renderer never receives filesystem, database, Keychain, shell, Accessibility, or raw Electron access.

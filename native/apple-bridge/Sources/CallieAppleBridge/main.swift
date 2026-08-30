@@ -2,7 +2,10 @@ import CallieAppleMacOS
 import Foundation
 
 do {
-    let dependencies = try MacOSDependencyContainer()
+    let dependencies = try AppleBridgeBootstrap.compose(
+        arguments: Array(CommandLine.arguments.dropFirst()),
+        makeDependencies: { try MacOSDependencyContainer(stagingRoot: $0) }
+    )
     let server = StdioBridgeServer(handler: dependencies.handler)
     Task.detached {
         await server.run()
@@ -11,6 +14,6 @@ do {
     }
     dispatchMain()
 } catch {
-    FileHandle.standardError.write(Data("callie-apple-bridge: initialization failed\n".utf8))
+    FileHandle.standardError.write(AppleBridgeBootstrap.initializationFailureDiagnostic)
     exit(EXIT_FAILURE)
 }

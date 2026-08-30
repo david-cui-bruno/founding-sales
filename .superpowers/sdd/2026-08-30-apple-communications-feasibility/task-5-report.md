@@ -265,3 +265,46 @@ The accepted absolute Notes Apple Event threat-model boundary is unchanged.
 - Bundled-Node `npm run build:swift`: PASS, release arm64 build.
 - `git diff --check`: clean.
 - Safety scans found no shell/process execution, AppleScript source/API, Messages write/migration vocabulary, live Messages database reference, live Apple Event executor reference in tests, suppressed shutdown cleanup, or remaining generated-directory open-failure `continue` branch.
+
+---
+
+## Task 5/6 staging-root integration remediation
+
+### Finding and implementation
+
+Task 6 correctly spawns the helper with `--staging-root <path>`, but Task 5's native entry point ignored all launch arguments and constructed `MacOSDependencyContainer()` with a fixed temporary staging path. The helper could therefore export Notes data under storage authority different from Electron's verified app-owned root.
+
+The native boundary now has:
+
+- A pure `AppleBridgeLaunchArgumentParser` accepting exactly one ordered `--staging-root` value.
+- Typed, payload-free rejections for missing root, duplicate root flags, unknown flags, missing values, extra positionals, and invalid roots.
+- Path validation requiring a non-root, absolute, standardized local filesystem path and rejecting empty, relative, tilde-relative, URL-form, non-file URL, dot-segment, duplicate-separator, trailing-separator, and embedded-NUL inputs.
+- An injected `AppleBridgeBootstrap.compose` seam that parses before invoking dependency construction.
+- Production `main.swift` composition that constructs `MacOSDependencyContainer(stagingRoot:)` only from the parsed URL. The no-argument fixed temporary fallback was removed.
+- A single constant `callie-apple-bridge: initialization failed` stderr diagnostic for all parse/composition failures; the rejected path and parser detail are never emitted.
+
+Existing 0700 root creation, canonical descriptor containment, startup cleanup, and shutdown verification behavior are unchanged after successful parsing.
+
+### RED → GREEN evidence
+
+- RED focused build: parser, typed launch errors, bootstrap seam, and constant diagnostic did not exist, producing the expected unresolved-symbol compilation failures.
+- GREEN focused parser run: 5 tests passed.
+- The table-driven rejection coverage includes absent, duplicate, unknown, missing-value, leading/trailing positional, relative, URL-like, non-standard, root, and embedded-NUL cases.
+- The Task 6 compatibility test accepts exactly `["--staging-root", "/private/tmp/callie-synthetic-staging"]`.
+- The injected bootstrap test proves the exact parsed root is the only value passed to composition; invalid arguments keep the composition count at zero and expose only the constant diagnostic.
+
+### Integration self-review and proof
+
+- Parsing performs no filesystem access and accepts no fallback/default authority. Filesystem creation and 0700 enforcement remain in `MacOSDependencyContainer` after successful parse.
+- `main.swift` does not construct the stdio server or any concrete macOS adapter until parsing succeeds.
+- Tests import the executable module and use pure arrays/closures plus existing temporary synthetic composition fixtures. They do not launch the production helper or touch Notes, Messages, Contacts, Phone, TCC, calls, recordings, or personal data.
+
+### Integration final verification
+
+- Focused Swift launch-argument run: PASS, 5 tests.
+- Bundled-Node `npm run test:swift`: PASS, 126 tests in 14 suites.
+- Bundled-Node `npm run build:swift`: PASS, release arm64 build.
+- Bundled-Node `npm run lint`: PASS.
+- `git diff --check`: clean.
+- Safety/authority scans confirm there is no fixed `callie-apple-bridge-notes-staging` fallback or no-argument `MacOSDependencyContainer()` construction; native main reads `CommandLine.arguments`, composes only with the parsed staging URL, and tests contain no live helper launch or `SystemAppleEventExecutor` reference.
+- TypeScript was not changed by this integration fix, so no TypeScript contract/typecheck run was required.

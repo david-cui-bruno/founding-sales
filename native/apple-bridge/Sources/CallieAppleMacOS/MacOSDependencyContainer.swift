@@ -5,9 +5,7 @@ public final class MacOSDependencyContainer: @unchecked Sendable {
     public let handler: any BridgeCommandHandling
     let stagingRoot: URL
 
-    public convenience init() throws {
-        let stagingRoot = FileManager.default.temporaryDirectory
-            .appending(path: "callie-apple-bridge-notes-staging", directoryHint: .isDirectory)
+    public convenience init(stagingRoot: URL) throws {
         let messagesDatabase = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Library/Messages/chat.db")
         try self.init(stagingRoot: stagingRoot, messagesDatabase: messagesDatabase)
