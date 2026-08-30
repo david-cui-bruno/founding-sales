@@ -41,7 +41,12 @@ describe('preload Apple feasibility bridge', () => {
       return {
         action: 'probe_capabilities',
         outcome: 'completed',
-        capabilities: {},
+        capabilities: {
+          contacts: 'notDetermined',
+          accessibility: 'notDetermined',
+          callObservationAvailable: false,
+          recordingControlAvailable: false,
+        },
       };
     });
     const api = exposedApi();

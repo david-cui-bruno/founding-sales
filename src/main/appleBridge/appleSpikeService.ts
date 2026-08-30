@@ -9,6 +9,7 @@ import {
 } from '../../shared/appleBridgeContract';
 import {
   appleSpikeManualActionSchema,
+  appleCapabilityStatusSchema,
   appleSpikePermissionActionSchema,
   appleSpikeReadOnlyActionSchema,
   appleSpikeResultSchema,
@@ -171,7 +172,9 @@ export class AppleSpikeService implements AppleSpikeServiceApi {
     try {
       switch (action.action) {
         case 'probe_capabilities': {
-          const result = z.object({ capabilities: z.record(z.string(), z.boolean()) }).strict().parse(rawResult);
+          const result = z.object({
+            capabilities: appleCapabilityStatusSchema,
+          }).strict().parse(rawResult);
           return appleSpikeResultSchema.parse({
             action: action.action,
             outcome: 'completed',
@@ -180,7 +183,13 @@ export class AppleSpikeService implements AppleSpikeServiceApi {
         }
         case 'request_contacts': {
           const result = z.object({
-            access: z.enum(['full', 'limited', 'denied', 'not_determined']),
+            access: z.enum([
+              'full',
+              'limited',
+              'denied',
+              'restricted',
+              'notDetermined',
+            ]),
           }).strict().parse(rawResult);
           return appleSpikeResultSchema.parse({
             action: action.action,

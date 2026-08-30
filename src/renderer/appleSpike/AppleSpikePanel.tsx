@@ -52,8 +52,10 @@ const bridgeStatusLabel = (status: AppleSpikeStatus): string => {
 };
 
 export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
-  const mounted = useRef(true);
+  const operationInFlight = useRef(false);
+  const operationGeneration = useRef(0);
   const [status, setStatus] = useState<AppleSpikeStatus>();
+  const [statusRefreshRequest, setStatusRefreshRequest] = useState(0);
   const [pendingAction, setPendingAction] = useState<string>();
   const [resultMessage, setResultMessage] = useState<string>();
   const [callConsent, setCallConsent] = useState('');
@@ -63,26 +65,78 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
   const [messageConsent, setMessageConsent] = useState('');
 
   useEffect(() => {
-    mounted.current = true;
+    let cancelled = false;
+    let requestGeneration = 0;
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
-    const loadStatus = async (): Promise<void> => {
-      try {
-        const nextStatus = await api.getStatus();
-        if (!mounted.current) return;
-        setStatus(nextStatus);
-        if (nextStatus.enabled && nextStatus.bridge.state === 'starting') {
-          refreshTimer = setTimeout(() => void loadStatus(), 500);
-        }
-      } catch {
-        if (mounted.current) setStatus(undefined);
+
+    const clearRefreshTimer = (): void => {
+      if (refreshTimer !== undefined) {
+        clearTimeout(refreshTimer);
+        refreshTimer = undefined;
       }
     };
-    void loadStatus();
-    return () => {
-      mounted.current = false;
-      if (refreshTimer !== undefined) clearTimeout(refreshTimer);
+
+    const scheduleRefresh = (): void => {
+      clearRefreshTimer();
+      if (cancelled || document.visibilityState === 'hidden') return;
+      refreshTimer = setTimeout(() => void loadStatus(), 1_000);
     };
-  }, [api]);
+
+    const loadStatus = async (): Promise<void> => {
+      clearRefreshTimer();
+      if (cancelled || document.visibilityState === 'hidden') return;
+      const generation = ++requestGeneration;
+      let continueRefreshing = true;
+      try {
+        const nextStatus = await api.getStatus();
+        if (cancelled || generation !== requestGeneration) return;
+        setStatus(nextStatus);
+        continueRefreshing = nextStatus.enabled;
+      } catch {
+        if (cancelled || generation !== requestGeneration) return;
+      } finally {
+        if (
+          !cancelled
+          && generation === requestGeneration
+          && continueRefreshing
+        ) {
+          scheduleRefresh();
+        }
+      }
+    };
+
+    const invalidatePendingStatus = (): void => {
+      requestGeneration += 1;
+      clearRefreshTimer();
+    };
+
+    const handleVisibilityChange = (): void => {
+      invalidatePendingStatus();
+      if (document.visibilityState !== 'hidden') void loadStatus();
+    };
+
+    const handleFocus = (): void => {
+      if (document.visibilityState === 'hidden') return;
+      invalidatePendingStatus();
+      void loadStatus();
+    };
+
+    void loadStatus();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      cancelled = true;
+      invalidatePendingStatus();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [api, statusRefreshRequest]);
+
+  useEffect(() => () => {
+    operationGeneration.current += 1;
+    operationInFlight.current = false;
+  }, []);
 
   const activityHandleValid = useMemo(
     () => scanTestMessagesInputSchema.safeParse({ normalizedHandle: activityHandle }).success,
@@ -100,20 +154,57 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
   if (status?.enabled !== true) return null;
 
   const run = async (action: string, operation: () => Promise<AppleSpikeResult>): Promise<void> => {
-    if (pendingAction !== undefined || status.bridge.state !== 'ready') return;
+    if (
+      operationInFlight.current
+      || pendingAction !== undefined
+      || status.bridge.state !== 'ready'
+    ) return;
+    operationInFlight.current = true;
+    const generation = ++operationGeneration.current;
     setPendingAction(action);
     setResultMessage(undefined);
     try {
       const result = await operation();
-      if (mounted.current) setResultMessage(safeResultMessage(result));
+      if (generation === operationGeneration.current) {
+        setResultMessage(safeResultMessage(result));
+      }
     } catch {
-      if (mounted.current) setResultMessage('The Apple feasibility operation could not be completed safely.');
+      if (generation === operationGeneration.current) {
+        setResultMessage('The Apple feasibility operation could not be completed safely.');
+        setStatusRefreshRequest((request) => request + 1);
+      }
     } finally {
-      if (mounted.current) setPendingAction(undefined);
+      if (generation === operationGeneration.current) {
+        operationInFlight.current = false;
+        setPendingAction(undefined);
+      }
     }
   };
 
   const busy = pendingAction !== undefined || status.bridge.state !== 'ready';
+
+  const startCallObservation = (): void => {
+    if (busy || callConsent !== APPLE_TEST_CALL_CONSENT) return;
+    const input = { confirmation: APPLE_TEST_CALL_CONSENT } as const;
+    setCallConsent('');
+    void run(
+      'start_call_observation',
+      () => api.startCallObservation(input),
+    );
+  };
+
+  const sendTestMessage = (): void => {
+    if (busy) return;
+    const parsed = sendTestMessageInputSchema.safeParse({
+      normalizedHandle: messageHandle,
+      body: messageBody,
+      confirmation: messageConsent,
+    });
+    if (!parsed.success) return;
+    const input = parsed.data;
+    setMessageConsent('');
+    void run('send_test_message', () => api.sendTestMessage(input));
+  };
 
   return (
     <section className="apple-spike" aria-label="Apple feasibility spike">
@@ -205,10 +296,7 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
               <button
                 type="button"
                 disabled={busy || callConsent !== APPLE_TEST_CALL_CONSENT}
-                onClick={() => void run(
-                  'start_call_observation',
-                  () => api.startCallObservation({ confirmation: APPLE_TEST_CALL_CONSENT }),
-                )}
+                onClick={startCallObservation}
               >
                 Start call observation
               </button>
@@ -229,14 +317,20 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
               inputMode="tel"
               placeholder="+15555550100"
               value={messageHandle}
-              onChange={(event) => setMessageHandle(event.target.value)}
+              onChange={(event) => {
+                setMessageHandle(event.target.value);
+                setMessageConsent('');
+              }}
             />
             <label htmlFor="message-body">Test message body</label>
             <textarea
               id="message-body"
               rows={3}
               value={messageBody}
-              onChange={(event) => setMessageBody(event.target.value)}
+              onChange={(event) => {
+                setMessageBody(event.target.value);
+                setMessageConsent('');
+              }}
             />
             <p>Type <code>{APPLE_TEST_MESSAGE_CONSENT}</code> to enable the final send control.</p>
             <label htmlFor="message-consent">Type message consent phrase</label>
@@ -249,14 +343,7 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
             <button
               type="button"
               disabled={busy || !messageValid}
-              onClick={() => void run(
-                'send_test_message',
-                () => api.sendTestMessage({
-                  normalizedHandle: messageHandle,
-                  body: messageBody,
-                  confirmation: APPLE_TEST_MESSAGE_CONSENT,
-                }),
-              )}
+              onClick={sendTestMessage}
             >
               Send test message
             </button>

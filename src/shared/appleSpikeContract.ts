@@ -121,6 +121,19 @@ export const appleSpikeStatusSchema = z.object({
   bridge: appleBridgeStatusSchema,
 }).strict();
 
+export const appleCapabilityStatusSchema = z.object({
+  contacts: z.enum([
+    'full',
+    'limited',
+    'denied',
+    'restricted',
+    'notDetermined',
+  ]),
+  accessibility: z.enum(['granted', 'denied', 'notDetermined']),
+  callObservationAvailable: z.boolean(),
+  recordingControlAvailable: z.boolean(),
+}).strict();
+
 const unavailableResultSchema = z.object({
   action: z.enum([
     'probe_capabilities',
@@ -140,12 +153,18 @@ export const appleSpikeResultSchema = z.union([
   z.object({
     action: z.literal('probe_capabilities'),
     outcome: z.literal('completed'),
-    capabilities: z.record(z.string(), z.boolean()),
+    capabilities: appleCapabilityStatusSchema,
   }).strict(),
   z.object({
     action: z.literal('request_contacts'),
     outcome: z.literal('completed'),
-    contactAccess: z.enum(['full', 'limited', 'denied', 'not_determined']),
+    contactAccess: z.enum([
+      'full',
+      'limited',
+      'denied',
+      'restricted',
+      'notDetermined',
+    ]),
   }).strict(),
   z.object({
     action: z.literal('prompt_accessibility'),

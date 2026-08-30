@@ -33,7 +33,16 @@ function fakeService(): AppleSpikeServiceApi {
     })),
     runReadOnlyCheck: vi.fn(async (action) => {
       if (action.action === 'probe_capabilities') {
-        return { action: action.action, outcome: 'completed', capabilities: {} };
+        return {
+          action: action.action,
+          outcome: 'completed',
+          capabilities: {
+            contacts: 'notDetermined',
+            accessibility: 'notDetermined',
+            callObservationAvailable: false,
+            recordingControlAvailable: false,
+          },
+        };
       }
       if (action.action === 'scan_test_messages') {
         return {

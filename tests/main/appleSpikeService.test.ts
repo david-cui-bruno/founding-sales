@@ -97,8 +97,15 @@ describe('AppleSpikeService', () => {
       const resultByMethod: Record<BridgeRequest['method'], Record<string, unknown>> = {
         'bridge.hello': {},
         'bridge.shutdown': {},
-        'capabilities.probe': { capabilities: { contacts: true } },
-        'permissions.requestContacts': { access: 'full' },
+        'capabilities.probe': {
+          capabilities: {
+            contacts: 'notDetermined',
+            accessibility: 'notDetermined',
+            callObservationAvailable: false,
+            recordingControlAvailable: false,
+          },
+        },
+        'permissions.requestContacts': { access: 'restricted' },
         'permissions.promptAccessibility': { trusted: true },
         'call.observe.start': { observing: true },
         'call.observe.stop': { observing: false },
@@ -140,12 +147,17 @@ describe('AppleSpikeService', () => {
     await expect(service.runReadOnlyCheck({ action: 'probe_capabilities' })).resolves.toEqual({
       action: 'probe_capabilities',
       outcome: 'completed',
-      capabilities: { contacts: true },
+      capabilities: {
+        contacts: 'notDetermined',
+        accessibility: 'notDetermined',
+        callObservationAvailable: false,
+        recordingControlAvailable: false,
+      },
     });
     await expect(service.requestPermission({ action: 'request_contacts' })).resolves.toEqual({
       action: 'request_contacts',
       outcome: 'completed',
-      contactAccess: 'full',
+      contactAccess: 'restricted',
     });
     await expect(service.requestPermission({ action: 'prompt_accessibility' })).resolves.toEqual({
       action: 'prompt_accessibility',
@@ -249,6 +261,120 @@ describe('AppleSpikeService', () => {
     });
     expect(JSON.stringify(await service.requestPermission({ action: 'request_contacts' })))
       .not.toContain('/Users/founder');
+  });
+
+  it('rejects a response whose envelope id does not match the request', async () => {
+    const bridge = fakeBridge(() => ({
+      v: 1,
+      kind: 'response',
+      id: COMMAND_ID,
+      ok: true,
+      result: {
+        capabilities: {
+          contacts: 'full',
+          accessibility: 'granted',
+          callObservationAvailable: true,
+          recordingControlAvailable: false,
+        },
+      },
+    }));
+    const service = new AppleSpikeService({
+      enabled: true,
+      bridge,
+      createUuid: fixedIds(REQUEST_ID),
+    });
+
+    await expect(
+      service.runReadOnlyCheck({ action: 'probe_capabilities' }),
+    ).rejects.toThrow('response was invalid');
+    expect(bridge.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a message receipt carrying a different command id', async () => {
+    const bridge = fakeBridge((request) => ({
+      v: 1,
+      kind: 'response',
+      id: request.id,
+      ok: true,
+      result: { commandId: '33333333-3333-4333-8333-333333333333' },
+    }));
+    const service = new AppleSpikeService({
+      enabled: true,
+      bridge,
+      createUuid: fixedIds(REQUEST_ID, COMMAND_ID),
+    });
+
+    await expect(service.authorizeManualAction({
+      action: 'send_test_message',
+      normalizedHandle: '+15555550100',
+      body: 'Synthetic test',
+      confirmation: 'I CONSENT TO THIS TEST MESSAGE',
+    })).rejects.toThrow('response was invalid');
+    expect(bridge.request).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [
+      'legacy capability record',
+      { capabilities: { contacts: true } },
+      (service: AppleSpikeService) => service.runReadOnlyCheck({ action: 'probe_capabilities' }),
+    ],
+    [
+      'unknown contacts result',
+      { access: 'not_determined' },
+      (service: AppleSpikeService) => service.requestPermission({ action: 'request_contacts' }),
+    ],
+    [
+      'call observation false-success shape',
+      { observing: false },
+      (service: AppleSpikeService) => service.authorizeManualAction({
+        action: 'start_call_observation',
+        confirmation: 'I CONSENT TO THIS TEST CALL',
+      }),
+    ],
+  ])('rejects malformed action-specific ok payload: %s', async (_name, result, invoke) => {
+    const bridge = fakeBridge((request) => ({
+      v: 1,
+      kind: 'response',
+      id: request.id,
+      ok: true,
+      result,
+    }));
+    const service = new AppleSpikeService({
+      enabled: true,
+      bridge,
+      createUuid: fixedIds(REQUEST_ID, COMMAND_ID),
+    });
+
+    await expect(invoke(service)).rejects.toThrow('response was invalid');
+    expect(bridge.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps a non-capability native failure to only a fixed sanitized error', async () => {
+    const rawDetail = '/Users/founder/private +15555550100 raw native rejection';
+    const bridge = fakeBridge((request) => ({
+      v: 1,
+      kind: 'response',
+      id: request.id,
+      ok: false,
+      error: {
+        code: 'invalid_request',
+        message: rawDetail,
+        retryable: false,
+      },
+    }));
+    const service = new AppleSpikeService({
+      enabled: true,
+      bridge,
+      createUuid: fixedIds(REQUEST_ID),
+    });
+
+    const error = await service.requestPermission({ action: 'request_contacts' })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe('Apple feasibility request was rejected.');
+    expect((error as Error).message).not.toContain(rawDetail);
   });
 
   it('does not retry a bridge request whose outcome is ambiguous', async () => {
