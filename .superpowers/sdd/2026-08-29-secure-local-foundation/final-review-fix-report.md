@@ -4,12 +4,17 @@ Date: 2026-08-30
 
 Base: `3f1a425989db5fac29f11205a172c895403f605e`
 
-Implementation commit: `6addd282ba372931e122ca0922b071c2330a0257`
+Implementation commits:
+
+- `6addd282ba372931e122ca0922b071c2330a0257` — initial final-review fixes
+- `a63e64a99234b985f49259e85f0c0096e67ae274` — residual compatibility and
+  fuse-parser closure
 
 ## Outcome
 
-All five final-review findings are addressed. The final source verification is
-22 test files / 92 tests passing, packaged E2E is 2/2 passing from an absent
+All five final-review findings and the two residual review findings are
+addressed. The final source verification is 22 test files / 98 tests passing,
+packaged E2E is 2/2 passing from an absent
 `out/` directory, the independent packaged verifier passes, and the development
 app launches against the exact localhost development origin. No signing or
 notarization feature was added.
@@ -145,7 +150,8 @@ The untouched baseline was 18 test files / 79 tests passing. The final suite is
 
 Environment:
 
-- Node `v25.9.0`; npm `11.12.1` (declared minimum Node is 22.12.0).
+- Node `v25.9.0`; npm `11.12.1` (declared policy is Node 22.13+ on the Node 22
+  line, or Node 24+; Node 23 is excluded).
 - Direct dependencies resolve to `@electron/fuses@2.1.3`,
   `@typescript-eslint/parser@8.68.0`, and
   `@typescript-eslint/eslint-plugin@8.68.0`; the Forge fuses plugin is absent.
@@ -213,3 +219,77 @@ an explicit disabled fuse; changing to a distribution that includes a compatible
 browser snapshot should trigger a deliberate policy review. Distribution
 signing and notarization remain future work; current unsigned Apple Silicon
 artifacts receive a valid ad-hoc signature only.
+
+## Round 2 residual review evidence
+
+Implementation commit:
+`a63e64a99234b985f49259e85f0c0096e67ae274`.
+
+### Node compatibility contract
+
+- Installed `jsdom@29.1.1` and the
+  `eslint-visitor-keys@5.0.1` used by TypeScript ESLint require
+  `^20.19.0 || ^22.13.0 || >=24`; the project intentionally does not support
+  Node 20. `package.json` and its lock now declare
+  `^22.13.0 || >=24.0.0`, which also explicitly excludes Node 23.
+- `.npmrc` sets `engine-strict=true`, so npm enforces the declared policy rather
+  than treating it as advisory.
+- `README.md` documents the Node 22.13+ and Node 24+ release lines and explicitly
+  says Node 23 is unsupported.
+- `semver@7.8.5` is a direct test dependency. The documentation/toolchain test
+  evaluates the actual package range and invokes npm's project configuration.
+
+Programmatic boundary output:
+
+```text
+22.12.999 false
+22.13.0 true
+22.99.0 true
+23.0.0 false
+23.99.0 false
+24.0.0 true
+25.9.0 true
+```
+
+`npm config get engine-strict --location=project` reported `true`.
+
+### Closed fuse output parsing
+
+`scripts/verifyPackage.mjs` now recognizes every trimmed non-whitespace
+`name is state` line before applying its whitelist. CLI preamble and version
+lines remain allowed because they do not have that shape. A shaped line can no
+longer disappear merely because its state is new: unknown state tokens,
+unknown names, missing required names, and duplicates each produce an explicit
+package verification error. Independent tests cover:
+
+- `FutureElectronFuse is Enabled` as an unknown name with a known state;
+- a missing `WasmTrapHandlers` line;
+- a duplicate `RunAsNode` line; and
+- `WasmTrapHandlers is Locked` as an unknown state token.
+
+The same parser necessarily rejects `FutureElectronFuse is Locked` explicitly
+at the unknown-state check rather than silently treating it as non-fuse text.
+
+### Round 2 TDD and fresh verification
+
+- Focused RED:
+  `npm test -- --run test/releaseDocumentation.test.mjs test/verifyPackage.test.mjs`
+  exited 1 with six expected failures. The engine floor, npm enforcement, and
+  documentation tests all failed; the unknown-name, missing-name, and
+  unknown-state parser tests failed with the old generic/missing diagnostics.
+  The independent duplicate test passed because duplicate rejection already
+  existed.
+- Focused GREEN: the same command exited 0 with 2 files / 22 tests passing.
+- `npm ci` under Node `v25.9.0` and project engine-strict — exit 0; 930 packages
+  installed and `better-sqlite3` rebuilt successfully.
+- Final `npm run verify` — exit 0; typecheck and lint clean; 22 files / 98 tests
+  passing.
+- `npm run verify:package` — exit 0 after a fresh package; arm64 app/native
+  checks, ATS false, the exact all-nine fuse policy, and deep signature all
+  passed.
+- `npm run test:e2e` against that fresh package — exit 0; both packaged tests
+  passed in 18.2 seconds, including same-path database Retry recovery.
+- Final no-repackage `node scripts/verifyPackage.mjs` — exit 0 with the same
+  exact nine fuse states and ATS false.
+- Audit remains 35 findings: 3 low, 3 moderate, 26 high, and 3 critical. No
+  broad audit remediation was performed.
