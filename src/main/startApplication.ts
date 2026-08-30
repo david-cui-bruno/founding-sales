@@ -33,7 +33,8 @@ export type ApplicationStartupDependencies = {
 export type ApplicationStartupOptions = {
   appVersion: string;
   userDataPath: string;
-  createWindow(): void;
+  signal?: AbortSignal;
+  createWindow(): void | Promise<void>;
 };
 
 export type RunningApplication = {
@@ -41,6 +42,13 @@ export type RunningApplication = {
   interruptedJobsRecovered: number;
   shutdown(): void;
 };
+
+export class ApplicationStartupCancelledError extends Error {
+  constructor() {
+    super('Application startup was cancelled.');
+    this.name = 'ApplicationStartupCancelledError';
+  }
+}
 
 const defaultDependencies: ApplicationStartupDependencies = {
   openDatabase,
@@ -77,8 +85,10 @@ export async function startApplication(
   };
 
   try {
+    throwIfStartupCancelled(options.signal);
     database = dependencies.openDatabase(databasePath);
     await dependencies.migrateToLatest(database);
+    throwIfStartupCancelled(options.signal);
 
     const jobs = dependencies.createJobRepository(database);
     const interruptedJobsRecovered = jobs.recoverInterruptedJobs();
@@ -91,7 +101,8 @@ export async function startApplication(
     });
 
     unregisterHealthIpc = dependencies.registerHealthIpc(health);
-    options.createWindow();
+    await options.createWindow();
+    throwIfStartupCancelled(options.signal);
 
     return {
       databasePath,
@@ -109,5 +120,11 @@ export async function startApplication(
     }
 
     throw initializationError;
+  }
+}
+
+function throwIfStartupCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new ApplicationStartupCancelledError();
   }
 }

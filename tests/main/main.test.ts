@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { AppDatabase } from '../../src/main/db/database';
+import type { ApplicationStartupDependencies } from '../../src/main/startApplication';
+
 const mocks = vi.hoisted(() => ({
   appOn: vi.fn(),
   appQuit: vi.fn(),
@@ -10,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   registerProtocol: vi.fn(),
   startApplication: vi.fn(),
   whenReady: vi.fn(),
+  windowDestroy: vi.fn(),
+  windowIsDestroyed: vi.fn(() => false),
 }));
 
 vi.mock('electron', () => ({
@@ -49,6 +54,8 @@ describe('main process startup', () => {
       }),
     );
     mocks.createWindow.mockReturnValue({
+      destroy: mocks.windowDestroy,
+      isDestroyed: mocks.windowIsDestroyed,
       loadURL: mocks.loadUrl,
       webContents: {
         on: vi.fn(),
@@ -64,8 +71,9 @@ describe('main process startup', () => {
 
   it('starts composition only after readiness and supplies the app-owned path and version', async () => {
     const shutdown = vi.fn();
+    mocks.loadUrl.mockResolvedValue(undefined);
     mocks.startApplication.mockImplementation(async (options) => {
-      options.createWindow();
+      await options.createWindow();
       return {
         databasePath: '/Users/founder/Library/Application Support/Callie/callie.sqlite3',
         interruptedJobsRecovered: 0,
@@ -82,6 +90,7 @@ describe('main process startup', () => {
     expect(mocks.startApplication).toHaveBeenCalledWith({
       appVersion: '4.5.6',
       userDataPath: '/Users/founder/Library/Application Support/Callie',
+      signal: expect.anything(),
       createWindow: expect.any(Function),
     });
     expect(mocks.registerProtocol).toHaveBeenCalledTimes(1);
@@ -105,6 +114,132 @@ describe('main process startup', () => {
     await settleStartup();
 
     expect(mocks.createWindow).not.toHaveBeenCalled();
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+  });
+
+  it('coordinates before-quit with startup that has not settled', async () => {
+    const events: string[] = [];
+    const database = { path: '/tmp/callie.sqlite3' } as AppDatabase;
+    let settleMigration: (() => void) | undefined;
+    const dependencies: ApplicationStartupDependencies = {
+      openDatabase: () => {
+        events.push('open');
+        return database;
+      },
+      migrateToLatest: () => {
+        events.push('migrate');
+        return new Promise((resolve) => {
+          settleMigration = () =>
+            resolve({
+              fromVersion: 0,
+              toVersion: 1,
+              appliedMigrationIds: ['0001Foundation'],
+            });
+        });
+      },
+      createJobRepository: () => {
+        events.push('jobs');
+        return {
+          listActive: () => [],
+          recoverInterruptedJobs: () => 0,
+        };
+      },
+      createHealthService: () => {
+        events.push('health');
+        return { getHealth: () => ({}) };
+      },
+      registerHealthIpc: () => {
+        events.push('ipc');
+        return () => events.push('unregister');
+      },
+      closeDatabase: () => events.push('close'),
+    };
+    const actual = await vi.importActual<
+      typeof import('../../src/main/startApplication')
+    >('../../src/main/startApplication');
+    mocks.startApplication.mockImplementation((options) =>
+      actual.startApplication(options, dependencies),
+    );
+
+    await import('../../src/main');
+    await settleStartup();
+
+    const beforeQuit = mocks.appOn.mock.calls.find(
+      ([event]) => event === 'before-quit',
+    )?.[1] as
+      | ((event: { preventDefault(): void }) => void)
+      | undefined;
+    const preventDefault = vi.fn();
+    beforeQuit?.({ preventDefault });
+
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+
+    settleMigration?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(events).toEqual(['open', 'migrate', 'close']);
+    expect(mocks.createWindow).not.toHaveBeenCalled();
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+  });
+
+  it('destroys a partial window and quits when renderer loading rejects', async () => {
+    const events: string[] = [];
+    const database = { path: '/tmp/callie.sqlite3' } as AppDatabase;
+    const loadFailure = {
+      then: (_resolve: unknown, reject: (error: Error) => void) =>
+        reject(new Error('renderer load failed')),
+    };
+    mocks.loadUrl.mockReturnValue(loadFailure);
+    const dependencies: ApplicationStartupDependencies = {
+      openDatabase: () => {
+        events.push('open');
+        return database;
+      },
+      migrateToLatest: async () => {
+        events.push('migrate');
+        return {
+          fromVersion: 0,
+          toVersion: 1,
+          appliedMigrationIds: ['0001Foundation'],
+        };
+      },
+      createJobRepository: () => ({
+        listActive: () => [],
+        recoverInterruptedJobs: () => {
+          events.push('recover');
+          return 0;
+        },
+      }),
+      createHealthService: () => {
+        events.push('health');
+        return { getHealth: () => ({}) };
+      },
+      registerHealthIpc: () => {
+        events.push('ipc');
+        return () => events.push('unregister');
+      },
+      closeDatabase: () => events.push('close'),
+    };
+    const actual = await vi.importActual<
+      typeof import('../../src/main/startApplication')
+    >('../../src/main/startApplication');
+    mocks.startApplication.mockImplementation((options) =>
+      actual.startApplication(options, dependencies),
+    );
+
+    await import('../../src/main');
+    await settleStartup();
+
+    expect(mocks.windowDestroy).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([
+      'open',
+      'migrate',
+      'recover',
+      'health',
+      'ipc',
+      'unregister',
+      'close',
+    ]);
     expect(mocks.appQuit).toHaveBeenCalledTimes(1);
   });
 });

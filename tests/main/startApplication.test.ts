@@ -7,6 +7,7 @@ import type { AppHealth } from '../../src/shared/healthContract';
 import {
   startApplication,
   type ApplicationStartupDependencies,
+  type ApplicationStartupOptions,
 } from '../../src/main/startApplication';
 
 const health: AppHealth = {
@@ -60,7 +61,9 @@ describe('startApplication', () => {
       {
         appVersion: '1.0.0',
         userDataPath,
-        createWindow: () => events.push('window'),
+        createWindow: () => {
+          events.push('window');
+        },
       },
       dependencies,
     );
@@ -83,7 +86,9 @@ describe('startApplication', () => {
       {
         appVersion: '1.0.0',
         userDataPath: '/tmp/callie-user-data',
-        createWindow: () => events.push('window'),
+        createWindow: () => {
+          events.push('window');
+        },
       },
       createDependencies(events),
     );
@@ -130,7 +135,9 @@ describe('startApplication', () => {
         {
           appVersion: '1.0.0',
           userDataPath: '/tmp/callie-user-data',
-          createWindow: () => events.push('window'),
+          createWindow: () => {
+            events.push('window');
+          },
         },
         dependencies,
       ),
@@ -141,5 +148,62 @@ describe('startApplication', () => {
       'migrate',
       'close',
     ]);
+  });
+
+  it('stops after an in-flight migration when startup is cancelled', async () => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    const controller = new AbortController();
+    let settleMigration: (() => void) | undefined;
+    dependencies.migrateToLatest = () => {
+      events.push('migrate');
+      return new Promise((resolve) => {
+        settleMigration = () =>
+          resolve({
+            fromVersion: 0,
+            toVersion: 1,
+            appliedMigrationIds: ['0001Foundation'],
+          });
+      });
+    };
+    const options: ApplicationStartupOptions & { signal: AbortSignal } = {
+      appVersion: '1.0.0',
+      userDataPath: '/tmp/callie-user-data',
+      createWindow: () => {
+        events.push('window');
+      },
+      signal: controller.signal,
+    };
+
+    const startup = startApplication(options, dependencies);
+    controller.abort();
+    settleMigration?.();
+
+    await expect(startup).rejects.toThrow('cancelled');
+    expect(events).toEqual([
+      'open:/tmp/callie-user-data/callie.sqlite3',
+      'migrate',
+      'close',
+    ]);
+  });
+
+  it('awaits window loading and cleans up when it rejects', async () => {
+    const events: string[] = [];
+
+    await expect(
+      startApplication(
+        {
+          appVersion: '1.0.0',
+          userDataPath: '/tmp/callie-user-data',
+          createWindow: async () => {
+            events.push('window');
+            throw new Error('renderer load failed');
+          },
+        },
+        createDependencies(events),
+      ),
+    ).rejects.toThrow('renderer load failed');
+
+    expect(events.slice(-3)).toEqual(['window', 'unregister', 'close']);
   });
 });

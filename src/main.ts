@@ -41,7 +41,7 @@ const isTrustedDevelopmentRendererUrl = (url: string): boolean => {
 
 let rendererProtocolRegistered = false;
 
-const createAndLoadWindow = () => {
+const createAndLoadWindow = async (signal?: AbortSignal): Promise<void> => {
   if (!rendererProtocolRegistered) {
     registerCallieProtocol(
       path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}`),
@@ -59,34 +59,103 @@ const createAndLoadWindow = () => {
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
-  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    void mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
-  } else {
-    void mainWindow.loadURL('callie://app/index.html');
+  const rendererUrl = MAIN_WINDOW_VITE_DEV_SERVER_URL ?? 'callie://app/index.html';
+  let rejectForAbort: ((error: Error) => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectForAbort = reject;
+  });
+  const destroyWindow = (): void => {
+    if (!mainWindow.isDestroyed()) {
+      mainWindow.destroy();
+    }
+  };
+  const handleAbort = (): void => {
+    destroyWindow();
+    rejectForAbort?.(new Error('Renderer window loading was cancelled.'));
+  };
+
+  signal?.addEventListener('abort', handleAbort, { once: true });
+
+  try {
+    if (signal?.aborted) {
+      handleAbort();
+    }
+
+    await Promise.race([mainWindow.loadURL(rendererUrl), aborted]);
+  } catch (error) {
+    destroyWindow();
+    throw error;
+  } finally {
+    signal?.removeEventListener('abort', handleAbort);
   }
 };
 
 let runningApplication: RunningApplication | undefined;
 let applicationStarted = false;
+let startupAbortController: AbortController | undefined;
+let startupPromise: Promise<void> | undefined;
+let quitAfterStartup = false;
+let allowQuit = false;
 
 if (!started) {
   void app
     .whenReady()
-    .then(async () => {
-      runningApplication = await startApplication({
+    .then(() => {
+      startupAbortController = new AbortController();
+      const signal = startupAbortController.signal;
+
+      startupPromise = startApplication({
         appVersion: app.getVersion(),
         userDataPath: app.getPath('userData'),
-        createWindow: createAndLoadWindow,
+        signal,
+        createWindow: () => createAndLoadWindow(signal),
+      }).then((application) => {
+        if (signal.aborted) {
+          application.shutdown();
+          return;
+        }
+
+        runningApplication = application;
+        applicationStarted = true;
       });
-      applicationStarted = true;
+
+      return startupPromise;
     })
     .catch(() => {
-      app.quit();
+      if (!quitAfterStartup) {
+        allowQuit = true;
+        app.quit();
+      }
     });
 }
 
-app.on('before-quit', () => {
-  runningApplication?.shutdown();
+app.on('before-quit', (event) => {
+  if (allowQuit) {
+    return;
+  }
+
+  if (runningApplication !== undefined) {
+    runningApplication.shutdown();
+    return;
+  }
+
+  if (startupPromise === undefined) {
+    return;
+  }
+
+  event.preventDefault();
+  startupAbortController?.abort();
+
+  if (quitAfterStartup) {
+    return;
+  }
+
+  quitAfterStartup = true;
+  const finishQuit = (): void => {
+    allowQuit = true;
+    app.quit();
+  };
+  void startupPromise.then(finishQuit, finishQuit);
 });
 
 // Quit when all windows are closed, except on macOS. There, it's common
@@ -102,7 +171,9 @@ app.on('activate', () => {
   // On OS X it's common to re-create a window in the app when the
   // dock icon is clicked and there are no other windows open.
   if (applicationStarted && BrowserWindow.getAllWindows().length === 0) {
-    createAndLoadWindow();
+    void createAndLoadWindow().catch((): void => {
+      app.quit();
+    });
   }
 });
 
