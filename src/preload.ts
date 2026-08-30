@@ -1,2 +1,10 @@
-// See the Electron documentation for details on how to use preload scripts:
-// https://www.electronjs.org/docs/latest/tutorial/process-model#preload-scripts
+import { contextBridge, ipcRenderer } from 'electron';
+
+import { appHealthSchema } from './shared/healthContract';
+
+contextBridge.exposeInMainWorld('callie', {
+  health: {
+    get: async () =>
+      appHealthSchema.parse(await ipcRenderer.invoke('health:get')),
+  },
+});

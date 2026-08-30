@@ -4,6 +4,10 @@ import started from 'electron-squirrel-startup';
 import { createWindow } from './main/createWindow';
 import { isTrustedRendererUrl } from './main/navigationPolicy';
 import { registerCallieProtocol } from './main/protocol';
+import {
+  startApplication,
+  type RunningApplication,
+} from './main/startApplication';
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -35,7 +39,16 @@ const isTrustedDevelopmentRendererUrl = (url: string): boolean => {
   }
 };
 
+let rendererProtocolRegistered = false;
+
 const createAndLoadWindow = () => {
+  if (!rendererProtocolRegistered) {
+    registerCallieProtocol(
+      path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}`),
+    );
+    rendererProtocolRegistered = true;
+  }
+
   const mainWindow = createWindow(path.join(__dirname, 'preload.js'));
 
   mainWindow.webContents.on('will-navigate', (event, url) => {
@@ -53,14 +66,27 @@ const createAndLoadWindow = () => {
   }
 };
 
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
-void app.whenReady().then(() => {
-  registerCallieProtocol(
-    path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}`),
-  );
-  createAndLoadWindow();
+let runningApplication: RunningApplication | undefined;
+let applicationStarted = false;
+
+if (!started) {
+  void app
+    .whenReady()
+    .then(async () => {
+      runningApplication = await startApplication({
+        appVersion: app.getVersion(),
+        userDataPath: app.getPath('userData'),
+        createWindow: createAndLoadWindow,
+      });
+      applicationStarted = true;
+    })
+    .catch(() => {
+      app.quit();
+    });
+}
+
+app.on('before-quit', () => {
+  runningApplication?.shutdown();
 });
 
 // Quit when all windows are closed, except on macOS. There, it's common
@@ -75,7 +101,7 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   // On OS X it's common to re-create a window in the app when the
   // dock icon is clicked and there are no other windows open.
-  if (BrowserWindow.getAllWindows().length === 0) {
+  if (applicationStarted && BrowserWindow.getAllWindows().length === 0) {
     createAndLoadWindow();
   }
 });

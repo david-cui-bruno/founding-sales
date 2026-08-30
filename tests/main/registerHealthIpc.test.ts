@@ -1,0 +1,100 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const electron = vi.hoisted(() => ({
+  handle: vi.fn(),
+  removeHandler: vi.fn(),
+}));
+
+vi.mock('electron', () => ({
+  ipcMain: {
+    handle: electron.handle,
+    removeHandler: electron.removeHandler,
+  },
+}));
+
+import { registerHealthIpc } from '../../src/main/health/registerHealthIpc';
+
+const validHealth = {
+  appVersion: '1.0.0',
+  schemaVersion: 1,
+  databasePath: '/tmp/callie.sqlite3',
+  fts5Available: true,
+  pendingJobs: 0,
+  interruptedJobsRecovered: 0,
+};
+
+describe('registerHealthIpc', () => {
+  beforeEach(() => {
+    electron.handle.mockReset();
+    electron.removeHandler.mockReset();
+  });
+
+  function registeredHandler() {
+    const registration = electron.handle.mock.calls[0] as
+      | [string, (event: { senderFrame: { url: string } }, ...args: unknown[]) => unknown]
+      | undefined;
+
+    if (registration === undefined) {
+      throw new Error('health:get was not registered');
+    }
+
+    return registration[1];
+  }
+
+  it('registers only health:get and returns a validated response to a trusted sender', async () => {
+    const service = { getHealth: vi.fn(() => validHealth) };
+
+    registerHealthIpc(service);
+
+    expect(electron.handle).toHaveBeenCalledTimes(1);
+    expect(electron.handle.mock.calls[0]?.[0]).toBe('health:get');
+    await expect(
+      registeredHandler()({ senderFrame: { url: 'callie://app/index.html' } }),
+    ).resolves.toEqual(validHealth);
+    expect(service.getHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an untrusted sender before invoking the health service', async () => {
+    const service = { getHealth: vi.fn(() => validHealth) };
+    registerHealthIpc(service);
+
+    await expect(
+      registeredHandler()({ senderFrame: { url: 'https://attacker.example/' } }),
+    ).rejects.toThrow('trusted');
+    expect(service.getHealth).not.toHaveBeenCalled();
+  });
+
+  it('rejects every request argument before invoking the health service', async () => {
+    const service = { getHealth: vi.fn(() => validHealth) };
+    registerHealthIpc(service);
+
+    await expect(
+      registeredHandler()(
+        { senderFrame: { url: 'callie://app/index.html' } },
+        '/tmp/other.sqlite3',
+      ),
+    ).rejects.toThrow('arguments');
+    expect(service.getHealth).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed service response in the main process', async () => {
+    const service = {
+      getHealth: vi.fn(() => ({ ...validHealth, pendingJobs: -1 })),
+    };
+    registerHealthIpc(service);
+
+    await expect(
+      registeredHandler()({ senderFrame: { url: 'callie://app/index.html' } }),
+    ).rejects.toThrow();
+  });
+
+  it('removes only the registered health handler and does so once', () => {
+    const unregister = registerHealthIpc({ getHealth: () => validHealth });
+
+    unregister();
+    unregister();
+
+    expect(electron.removeHandler).toHaveBeenCalledTimes(1);
+    expect(electron.removeHandler).toHaveBeenCalledWith('health:get');
+  });
+});
