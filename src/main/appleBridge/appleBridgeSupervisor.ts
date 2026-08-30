@@ -142,6 +142,7 @@ export class AppleBridgeSupervisor implements AppleBridgeSupervisorApi {
   #transport: AppleBridgeTransport | undefined;
   #unsubscribeTransport: (() => void) | undefined;
   #terminalDuringStart: AppleBridgeStatus | undefined;
+  #readyPublished = false;
 
   constructor(
     readonly options: AppleBridgeSupervisorOptions,
@@ -198,6 +199,7 @@ export class AppleBridgeSupervisor implements AppleBridgeSupervisorApi {
     }
     this.#status = { state: 'starting' };
     this.#terminalDuringStart = undefined;
+    this.#readyPublished = false;
 
     try {
       await prepareStagingRoot(
@@ -292,6 +294,7 @@ export class AppleBridgeSupervisor implements AppleBridgeSupervisorApi {
         helperVersion: ready.helperVersion,
         protocolVersion: ready.protocolVersion,
       };
+      this.#readyPublished = true;
     } catch {
       if (this.#isActive(generation)) {
         this.#status = this.#terminalDuringStart ?? DEGRADED.handshake;
@@ -301,11 +304,12 @@ export class AppleBridgeSupervisor implements AppleBridgeSupervisorApi {
   }
 
   async #stopOnce(): Promise<void> {
-    const wasStarting = this.#status.state === 'starting';
+    const readyWasPublished = this.#readyPublished;
+    this.#readyPublished = false;
     const { client, transport } = this.#takeOwnedResources();
     this.#status = this.#disabledStatus();
 
-    if (wasStarting) {
+    if (!readyWasPublished) {
       if (client !== undefined) {
         beginClientShutdown(client);
       }

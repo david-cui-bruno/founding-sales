@@ -340,6 +340,9 @@ describe('AppleBridgeSupervisor', () => {
       message: 'Apple integration helper stopped unexpectedly.',
     });
     expect(JSON.stringify(supervisor.getStatus())).not.toContain('73');
+    await supervisor.stop();
+    expect(harness.client.shutdownCalls).toBe(1);
+    expect(harness.transport.terminateCalls).toBe(0);
   });
 
   it('moves a ready helper to sanitized degraded state after a transport failure', async () => {
@@ -358,6 +361,9 @@ describe('AppleBridgeSupervisor', () => {
       message: 'Apple integration helper connection failed.',
     });
     expectNoPrivateDiagnostics(supervisor.getStatus());
+    await supervisor.stop();
+    expect(harness.client.shutdownCalls).toBe(1);
+    expect(harness.transport.terminateCalls).toBe(0);
   });
 
   it.each([
@@ -401,6 +407,72 @@ describe('AppleBridgeSupervisor', () => {
 
     expect(supervisor.getStatus()).toEqual(expectedStatus);
     expect(harness.transport.terminateCalls).toBe(1);
+  });
+
+  it.each([
+    [
+      'exit',
+      { type: 'exit', code: 73, signal: null } as const,
+      {
+        state: 'degraded',
+        code: 'helper_exited',
+        message: 'Apple integration helper stopped unexpectedly.',
+      } as const,
+    ],
+    [
+      'failure',
+      {
+        type: 'failure',
+        error: new Error('/Users/founder/private raw stderr'),
+      } as const,
+      {
+        state: 'degraded',
+        code: 'helper_transport_failed',
+        message: 'Apple integration helper connection failed.',
+      } as const,
+    ],
+  ])('force-stops a terminal-degraded pending handshake after %s', async (
+    _label,
+    terminalEvent,
+    degradedStatus,
+  ) => {
+    const readiness = deferred<typeof READY>();
+    const shutdown = deferred<void>();
+    const handshakeStarted = deferred<void>();
+    const client = createClient({
+      ready: () => {
+        handshakeStarted.resolve();
+        return readiness.promise;
+      },
+      shutdown: () => shutdown.promise,
+    });
+    const harness = createHarness({ client });
+    const supervisor = new AppleBridgeSupervisor(baseOptions(), harness.dependencies);
+    const starting = supervisor.start();
+    await handshakeStarted.promise;
+    harness.transport.emit(terminalEvent);
+    expect(supervisor.getStatus()).toEqual(degradedStatus);
+
+    const firstStop = supervisor.stop();
+    const secondStop = supervisor.stop();
+    let stopSettled = false;
+    void firstStop.then(() => { stopSettled = true; });
+    await Promise.resolve();
+    await Promise.resolve();
+    const stoppedPromptly = stopSettled;
+
+    shutdown.resolve();
+    await Promise.all([firstStop, secondStop]);
+    readiness.resolve(READY);
+    await starting;
+
+    expect(stoppedPromptly).toBe(true);
+    expect(client.shutdownCalls).toBe(1);
+    expect(harness.transport.terminateCalls).toBe(1);
+    expect(supervisor.getStatus()).toEqual({
+      state: 'disabled',
+      reason: 'not_packaged_or_configured',
+    });
   });
 
   it('terminates the exact spawned transport when lifecycle subscription throws', async () => {
