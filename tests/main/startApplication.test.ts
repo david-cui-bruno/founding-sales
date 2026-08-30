@@ -64,7 +64,7 @@ describe('startApplication', () => {
     };
   }
 
-  it('loads bootstrap diagnostics before lazily opening the app-owned database', async () => {
+  it('initializes the app-owned database before registering diagnostics and opening the window', async () => {
     const events: string[] = [];
     let provider: HealthProvider | undefined;
     const userDataPath = '/Users/founder/Library/Application Support/Callie';
@@ -82,15 +82,22 @@ describe('startApplication', () => {
       }),
     );
 
-    expect(events).toEqual(['ipc', 'window']);
-    await expect(provider?.getHealth()).resolves.toEqual(health);
     expect(events).toEqual([
-      'ipc',
-      'window',
       `open:${join(userDataPath, 'callie.sqlite3')}`,
       'migrate',
       'recover',
       'health:4',
+      'ipc',
+      'window',
+    ]);
+    await expect(provider?.getHealth()).resolves.toEqual(health);
+    expect(events).toEqual([
+      `open:${join(userDataPath, 'callie.sqlite3')}`,
+      'migrate',
+      'recover',
+      'health:4',
+      'ipc',
+      'window',
     ]);
     expect(running.databasePath).toBe(join(userDataPath, 'callie.sqlite3'));
   });
@@ -118,7 +125,7 @@ describe('startApplication', () => {
     expect(events.filter((event) => event === 'close')).toHaveLength(1);
   });
 
-  it('unregisters IPC without opening SQLite when bootstrap window creation fails', async () => {
+  it('unregisters IPC and closes ready SQLite when bootstrap window creation fails', async () => {
     const events: string[] = [];
 
     await expect(
@@ -135,10 +142,19 @@ describe('startApplication', () => {
       ),
     ).rejects.toThrow('window failed');
 
-    expect(events).toEqual(['ipc', 'window', 'unregister']);
+    expect(events).toEqual([
+      'open:/tmp/callie-user-data/callie.sqlite3',
+      'migrate',
+      'recover',
+      'health:4',
+      'ipc',
+      'window',
+      'unregister',
+      'close',
+    ]);
   });
 
-  it('keeps diagnostics reachable when initialization fails and allows retry', async () => {
+  it('fails before IPC and window creation when explicit foundation initialization fails', async () => {
     const events: string[] = [];
     let provider: HealthProvider | undefined;
     let migrationAttempts = 0;
@@ -158,7 +174,7 @@ describe('startApplication', () => {
       };
     });
 
-    const running = await startApplication(
+    await expect(startApplication(
       {
         appVersion: '1.0.0',
         userDataPath: '/tmp/callie-user-data',
@@ -167,39 +183,39 @@ describe('startApplication', () => {
         },
       },
       dependencies,
-    );
+    )).rejects.toThrow('migration failed');
 
-    expect(events).toEqual(['ipc', 'window']);
-    await expect(provider?.getHealth()).rejects.toThrow('migration failed');
-    await expect(provider?.getHealth()).resolves.toEqual(health);
-    expect(events.filter((event) => event === 'close')).toHaveLength(1);
-    expect(events.filter((event) => event.startsWith('open:'))).toHaveLength(2);
-    await running.shutdown();
-    expect(events.filter((event) => event === 'close')).toHaveLength(2);
+    expect(provider).toBeUndefined();
+    expect(events).toEqual([
+      'open:/tmp/callie-user-data/callie.sqlite3',
+      'migrate:1',
+      'close',
+    ]);
   });
 
-  it('cancels startup during bootstrap loading without opening SQLite', async () => {
+  it('cancels startup after Foundation initialization without registering IPC or opening a window', async () => {
     const events: string[] = [];
     const controller = new AbortController();
-    let settleWindow: (() => void) | undefined;
     const options: ApplicationStartupOptions & { signal: AbortSignal } = {
       appVersion: '1.0.0',
       userDataPath: '/tmp/callie-user-data',
       createWindow: () => {
         events.push('window');
-        return new Promise<void>((resolve) => {
-          settleWindow = resolve;
-        });
       },
       signal: controller.signal,
     };
 
     const startup = startApplication(options, createDependencies(events));
     controller.abort();
-    settleWindow?.();
 
     await expect(startup).rejects.toThrow('cancelled');
-    expect(events).toEqual(['ipc', 'window', 'unregister']);
+    expect(events).toEqual([
+      'open:/tmp/callie-user-data/callie.sqlite3',
+      'migrate',
+      'recover',
+      'health:4',
+      'close',
+    ]);
   });
 
   it('awaits window loading and cleans up when it rejects', async () => {
@@ -219,6 +235,15 @@ describe('startApplication', () => {
       ),
     ).rejects.toThrow('renderer load failed');
 
-    expect(events).toEqual(['ipc', 'window', 'unregister']);
+    expect(events).toEqual([
+      'open:/tmp/callie-user-data/callie.sqlite3',
+      'migrate',
+      'recover',
+      'health:4',
+      'ipc',
+      'window',
+      'unregister',
+      'close',
+    ]);
   });
 });

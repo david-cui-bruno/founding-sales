@@ -8,6 +8,22 @@ import {
   type ApplicationStartupOptions,
 } from '../../src/main/startApplication';
 
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: Error): void;
+};
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 const APPLE_OPTIONS: NonNullable<ApplicationStartupOptions['appleBridge']> = {
   platform: 'darwin',
   isPackaged: true,
@@ -28,21 +44,29 @@ function dependencies(
       events.push('database:open');
       return database;
     },
-    migrateToLatest: async () => ({
-      fromVersion: 0,
-      toVersion: 1,
-      appliedMigrationIds: ['0001Foundation'],
-    }),
+    migrateToLatest: async () => {
+      events.push('database:migrate');
+      return {
+        fromVersion: 0,
+        toVersion: 1,
+        appliedMigrationIds: ['0001Foundation'],
+      };
+    },
     createJobRepository: () => ({
       listActive: () => [],
-      recoverInterruptedJobs: () => 0,
+      recoverInterruptedJobs: () => {
+        events.push('database:recover');
+        return 0;
+      },
     }),
-    createHealthService: () => ({
-      getHealth: async () => ({ state: 'ok' }),
-    }),
-    registerHealthIpc: (health) => {
+    createHealthService: () => {
+      events.push('database:health');
+      return {
+        getHealth: async () => ({ state: 'ok' }),
+      };
+    },
+    registerHealthIpc: () => {
       events.push('health-ipc:register');
-      void Promise.resolve(health.getHealth()).catch((): undefined => undefined);
       return () => events.push('health-ipc:unregister');
     },
     createAppleBridgeSupervisor: () => {
@@ -82,7 +106,7 @@ function fakeSupervisor(
 }
 
 describe('Apple bridge application lifecycle', () => {
-  it('starts the helper after FoundationRuntime construction and before renderer loading', async () => {
+  it('makes Foundation ready before starting the helper and loading the renderer', async () => {
     const events: string[] = [];
     const supervisor = fakeSupervisor(events);
     const app = await startApplication(
@@ -97,9 +121,12 @@ describe('Apple bridge application lifecycle', () => {
       dependencies(events, supervisor),
     );
 
-    expect(events.slice(0, 6)).toEqual([
-      'health-ipc:register',
+    expect(events.slice(0, 9)).toEqual([
       'database:open',
+      'database:migrate',
+      'database:recover',
+      'database:health',
+      'health-ipc:register',
       'helper:create',
       'helper:start',
       'apple-ipc:register',
@@ -108,12 +135,39 @@ describe('Apple bridge application lifecycle', () => {
     await app.shutdown();
   });
 
-  it('opens the core window when helper startup rejects with private diagnostics', async () => {
+  it('opens the core window without awaiting a pending optional helper', async () => {
     const events: string[] = [];
-    const supervisor = fakeSupervisor(events, async () => {
-      throw new Error('/Users/founder/private raw stderr');
+    const helperStart = deferred<void>();
+    const helperStarted = deferred<void>();
+    const supervisor = fakeSupervisor(events, () => {
+      helperStarted.resolve();
+      return helperStart.promise;
     });
 
+    const startup = startApplication(
+      {
+        appVersion: '1.0.0',
+        userDataPath: '/Users/founder/Library/Application Support/Callie',
+        appleBridge: APPLE_OPTIONS,
+        createWindow: () => {
+          events.push('window');
+        },
+      },
+      dependencies(events, supervisor),
+    );
+
+    await helperStarted.promise;
+    expect(events).toContain('helper:start');
+    expect(events).toContain('window');
+    const app = await startup;
+    await app.shutdown();
+    helperStart.resolve();
+  });
+
+  it('consumes a late helper-start rejection without closing the core window', async () => {
+    const events: string[] = [];
+    const helperStart = deferred<void>();
+    const supervisor = fakeSupervisor(events, () => helperStart.promise);
     const app = await startApplication(
       {
         appVersion: '1.0.0',
@@ -126,6 +180,10 @@ describe('Apple bridge application lifecycle', () => {
       dependencies(events, supervisor),
     );
 
+    helperStart.reject(
+      new Error('/Users/founder/private +15555550100 raw stderr'),
+    );
+    await Promise.resolve();
     expect(events).toContain('window');
     await app.shutdown();
   });
@@ -147,6 +205,59 @@ describe('Apple bridge application lifecycle', () => {
 
     await Promise.all([app.shutdown(), app.shutdown()]);
 
+    expect(events.slice(-4)).toEqual([
+      'health-ipc:unregister',
+      'apple-ipc:unregister',
+      'helper:stop',
+      'database:close',
+    ]);
+  });
+
+  it('aggregates every cleanup failure while preserving unregister, helper, database order', async () => {
+    const events: string[] = [];
+    const healthUnregisterError = new Error('health unregister failed');
+    const appleUnregisterError = new Error('apple unregister failed');
+    const helperStopError = new Error('helper stop failed');
+    const databaseCloseError = new Error('database close failed');
+    const supervisor = fakeSupervisor(events);
+    supervisor.stop = async () => {
+      events.push('helper:stop');
+      throw helperStopError;
+    };
+    const startupDependencies = dependencies(events, supervisor);
+    startupDependencies.registerHealthIpc = () => () => {
+      events.push('health-ipc:unregister');
+      throw healthUnregisterError;
+    };
+    startupDependencies.registerAppleBridgeIpc = () => () => {
+      events.push('apple-ipc:unregister');
+      throw appleUnregisterError;
+    };
+    startupDependencies.closeDatabase = () => {
+      events.push('database:close');
+      throw databaseCloseError;
+    };
+    const app = await startApplication(
+      {
+        appVersion: '1.0.0',
+        userDataPath: '/Users/founder/Library/Application Support/Callie',
+        appleBridge: APPLE_OPTIONS,
+        createWindow: () => {
+          events.push('window');
+        },
+      },
+      startupDependencies,
+    );
+
+    const cleanupError = await app.shutdown().catch((error: unknown) => error);
+
+    expect(cleanupError).toBeInstanceOf(AggregateError);
+    expect((cleanupError as AggregateError).errors).toEqual([
+      healthUnregisterError,
+      appleUnregisterError,
+      helperStopError,
+      databaseCloseError,
+    ]);
     expect(events.slice(-4)).toEqual([
       'health-ipc:unregister',
       'apple-ipc:unregister',

@@ -53,10 +53,18 @@ export class FoundationRuntime {
     private readonly dependencies: FoundationRuntimeDependencies,
   ) {}
 
+  async initialize(): Promise<void> {
+    this.throwIfUnavailable();
+    await this.ensureInitialized();
+    this.throwIfUnavailable();
+  }
+
   async getHealth(): Promise<unknown> {
-    this.throwIfUnavailable();
-    const foundation = await this.ensureInitialized();
-    this.throwIfUnavailable();
+    await this.initialize();
+    const foundation = this.ready;
+    if (foundation === undefined) {
+      throw new Error('Foundation runtime did not retain initialized state.');
+    }
     return foundation.health.getHealth();
   }
 
@@ -80,7 +88,7 @@ export class FoundationRuntime {
     }
 
     const id = ++this.nextAttemptId;
-    const promise = this.initialize(id).finally(() => {
+    const promise = this.initializeAttempt(id).finally(() => {
       if (this.initialization?.id === id) {
         this.initialization = undefined;
       }
@@ -89,7 +97,7 @@ export class FoundationRuntime {
     return promise;
   }
 
-  private async initialize(id: number): Promise<ReadyFoundation> {
+  private async initializeAttempt(id: number): Promise<ReadyFoundation> {
     let database: AppDatabase | undefined;
     let databaseAdopted = false;
 

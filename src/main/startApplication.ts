@@ -132,6 +132,8 @@ export async function startApplication(
 
   try {
     throwIfStartupCancelled(options.signal);
+    await runtime.initialize();
+    throwIfStartupCancelled(options.signal);
     unregisterHealthIpc = dependencies.registerHealthIpc(
       runtime,
       options.isTrustedRendererUrl,
@@ -142,7 +144,8 @@ export async function startApplication(
         options.appleBridge,
       );
       try {
-        await appleBridgeSupervisor.start();
+        const helperStartup = appleBridgeSupervisor.start();
+        void helperStartup.catch((): undefined => undefined);
       } catch {
         // Apple integration is optional; supervisor status remains the safe diagnostic.
       }

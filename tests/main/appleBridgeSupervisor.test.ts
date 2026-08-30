@@ -18,6 +18,19 @@ import type {
   BridgeResponse,
 } from '../../src/shared/appleBridgeContract';
 
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve(value: T): void;
+};
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 const READY = { helperVersion: '1.4.0-test', protocolVersion: 1 } as const;
 
 class FakeTransport implements AppleBridgeTransport {
@@ -345,6 +358,167 @@ describe('AppleBridgeSupervisor', () => {
       message: 'Apple integration helper connection failed.',
     });
     expectNoPrivateDiagnostics(supervisor.getStatus());
+  });
+
+  it.each([
+    [
+      'exit',
+      { type: 'exit', code: 73, signal: null } as const,
+      {
+        state: 'degraded',
+        code: 'helper_exited',
+        message: 'Apple integration helper stopped unexpectedly.',
+      } as const,
+    ],
+    [
+      'failure',
+      {
+        type: 'failure',
+        error: new Error('/Users/founder/private raw stderr'),
+      } as const,
+      {
+        state: 'degraded',
+        code: 'helper_transport_failed',
+        message: 'Apple integration helper connection failed.',
+      } as const,
+    ],
+  ])('does not publish ready when hello is immediately followed by %s', async (
+    _label,
+    terminalEvent,
+    expectedStatus,
+  ) => {
+    const harness = createHarness();
+    const client = createClient({
+      ready: async () => {
+        harness.transport.emit(terminalEvent);
+        return READY;
+      },
+    });
+    harness.dependencies.createClient = () => client;
+    const supervisor = new AppleBridgeSupervisor(baseOptions(), harness.dependencies);
+
+    await supervisor.start();
+
+    expect(supervisor.getStatus()).toEqual(expectedStatus);
+    expect(harness.transport.terminateCalls).toBe(1);
+  });
+
+  it('terminates the exact spawned transport when lifecycle subscription throws', async () => {
+    const harness = createHarness();
+    harness.transport.subscribe = () => {
+      throw new Error('/Users/founder/private subscribe failed');
+    };
+    const supervisor = new AppleBridgeSupervisor(baseOptions(), harness.dependencies);
+
+    await supervisor.start();
+
+    expect(supervisor.getStatus()).toEqual({
+      state: 'degraded',
+      code: 'helper_launch_failed',
+      message: 'Apple integration helper could not be launched.',
+    });
+    expect(harness.transport.terminateCalls).toBe(1);
+  });
+
+  it('stops promptly during staging and prevents the continuation from resolving the helper', async () => {
+    const staging = deferred<void>();
+    const harness = createHarness({
+      dependencies: {
+        mkdir: () => staging.promise,
+      },
+    });
+    const supervisor = new AppleBridgeSupervisor(baseOptions(), harness.dependencies);
+    const starting = supervisor.start();
+
+    await expect(supervisor.stop()).resolves.toBeUndefined();
+    expect(supervisor.getStatus()).toEqual({
+      state: 'disabled',
+      reason: 'not_packaged_or_configured',
+    });
+
+    staging.resolve();
+    await starting;
+    expect(harness.calls).toEqual([]);
+  });
+
+  it('stops promptly during signature verification and never spawns afterward', async () => {
+    const signature = deferred<{
+      signed: true;
+      identifier: string;
+      teamIdentifier: string;
+    }>();
+    const signatureStarted = deferred<void>();
+    const harness = createHarness({
+      dependencies: {
+        verifySignature: () => {
+          signatureStarted.resolve();
+          return signature.promise;
+        },
+      },
+    });
+    const supervisor = new AppleBridgeSupervisor(baseOptions(), harness.dependencies);
+    const starting = supervisor.start();
+    await signatureStarted.promise;
+
+    await expect(supervisor.stop()).resolves.toBeUndefined();
+    signature.resolve({
+      signed: true,
+      identifier: 'com.callie.foundersales.applebridge',
+      teamIdentifier: 'TEAM123456',
+    });
+    await starting;
+
+    expect(harness.calls).toEqual(['mkdir:700', 'resolve']);
+    expect(supervisor.getStatus()).toEqual({
+      state: 'disabled',
+      reason: 'not_packaged_or_configured',
+    });
+  });
+
+  it('stops promptly during handshake and shuts and terminates owned resources once', async () => {
+    const readiness = deferred<typeof READY>();
+    const handshakeStarted = deferred<void>();
+    const client = createClient({
+      ready: () => {
+        handshakeStarted.resolve();
+        return readiness.promise;
+      },
+    });
+    const harness = createHarness({ client });
+    const supervisor = new AppleBridgeSupervisor(baseOptions(), harness.dependencies);
+    const starting = supervisor.start();
+    await handshakeStarted.promise;
+
+    await Promise.all([supervisor.stop(), supervisor.stop()]);
+    expect(client.shutdownCalls).toBe(1);
+    expect(harness.transport.terminateCalls).toBe(1);
+
+    readiness.resolve(READY);
+    await starting;
+    expect(supervisor.getStatus()).toEqual({
+      state: 'disabled',
+      reason: 'not_packaged_or_configured',
+    });
+    expect(client.shutdownCalls).toBe(1);
+    expect(harness.transport.terminateCalls).toBe(1);
+  });
+
+  it('returns isolated frozen status snapshots that cannot mutate future state', async () => {
+    const harness = createHarness();
+    const supervisor = new AppleBridgeSupervisor(baseOptions(), harness.dependencies);
+    await supervisor.start();
+
+    const first = supervisor.getStatus();
+    expect(Reflect.set(first, 'state', 'degraded')).toBe(false);
+    const second = supervisor.getStatus();
+
+    expect(second).toEqual({
+      state: 'ready',
+      helperVersion: '1.4.0-test',
+      protocolVersion: 1,
+    });
+    expect(second).not.toBe(first);
+    expect(Object.isFrozen(second)).toBe(true);
   });
 
   it('forwards a request once and never retries an ambiguous failure', async () => {

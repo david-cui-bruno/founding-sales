@@ -137,9 +137,11 @@ export class AppleBridgeSupervisor implements AppleBridgeSupervisorApi {
   #startPromise: Promise<void> | undefined;
   #stopPromise: Promise<void> | undefined;
   #stopRequested = false;
+  #generation = 0;
   #client: AppleBridgeClientApi | undefined;
   #transport: AppleBridgeTransport | undefined;
   #unsubscribeTransport: (() => void) | undefined;
+  #terminalDuringStart: AppleBridgeStatus | undefined;
 
   constructor(
     readonly options: AppleBridgeSupervisorOptions,
@@ -155,13 +157,14 @@ export class AppleBridgeSupervisor implements AppleBridgeSupervisorApi {
 
   start(): Promise<void> {
     if (this.#startPromise === undefined) {
-      this.#startPromise = this.#startOnce();
+      const generation = ++this.#generation;
+      this.#startPromise = this.#startOnce(generation);
     }
     return this.#startPromise;
   }
 
   getStatus(): AppleBridgeStatus {
-    return this.#status;
+    return Object.freeze({ ...this.#status }) as AppleBridgeStatus;
   }
 
   request<T extends BridgeRequest>(
@@ -178,13 +181,14 @@ export class AppleBridgeSupervisor implements AppleBridgeSupervisorApi {
   stop(): Promise<void> {
     if (this.#stopPromise === undefined) {
       this.#stopRequested = true;
+      this.#generation += 1;
       this.#stopPromise = this.#stopOnce();
     }
     return this.#stopPromise;
   }
 
-  async #startOnce(): Promise<void> {
-    if (this.#stopRequested || this.options.platform !== 'darwin') {
+  async #startOnce(generation: number): Promise<void> {
+    if (!this.#isActive(generation) || this.options.platform !== 'darwin') {
       return;
     }
 
@@ -193,6 +197,7 @@ export class AppleBridgeSupervisor implements AppleBridgeSupervisorApi {
       return;
     }
     this.#status = { state: 'starting' };
+    this.#terminalDuringStart = undefined;
 
     try {
       await prepareStagingRoot(
@@ -200,10 +205,10 @@ export class AppleBridgeSupervisor implements AppleBridgeSupervisorApi {
         this.dependencies,
       );
     } catch {
-      this.#status = DEGRADED.staging;
+      if (this.#isActive(generation)) this.#status = DEGRADED.staging;
       return;
     }
-    if (this.#stopRequested) return;
+    if (!this.#isActive(generation)) return;
 
     let executablePath: string;
     try {
@@ -215,9 +220,10 @@ export class AppleBridgeSupervisor implements AppleBridgeSupervisorApi {
         environment: {},
       });
     } catch {
-      this.#status = DEGRADED.resolution;
+      if (this.#isActive(generation)) this.#status = DEGRADED.resolution;
       return;
     }
+    if (!this.#isActive(generation)) return;
 
     try {
       await this.dependencies.verifySignature({
@@ -228,82 +234,141 @@ export class AppleBridgeSupervisor implements AppleBridgeSupervisorApi {
         allowUnsignedDevelopment: this.options.allowUnsignedDevelopment,
       });
     } catch {
-      this.#status = DEGRADED.verification;
+      if (this.#isActive(generation)) this.#status = DEGRADED.verification;
       return;
     }
-    if (this.#stopRequested) return;
+    if (!this.#isActive(generation)) return;
 
+    let transport: AppleBridgeTransport;
     try {
-      this.#transport = this.dependencies.spawnTransport(
+      transport = this.dependencies.spawnTransport(
         executablePath,
         this.options.stagingRoot,
       );
-      this.#unsubscribeTransport = this.#transport.subscribe((event) => {
+    } catch {
+      if (this.#isActive(generation)) this.#status = DEGRADED.launch;
+      return;
+    }
+    if (!this.#isActive(generation)) {
+      terminateTransport(transport);
+      return;
+    }
+
+    this.#transport = transport;
+    try {
+      this.#unsubscribeTransport = transport.subscribe((event) => {
         this.#handleTransportEvent(event);
       });
     } catch {
-      this.#status = DEGRADED.launch;
+      this.#releaseOwnedAfterStartFailure(transport);
+      if (this.#isActive(generation)) this.#status = DEGRADED.launch;
+      return;
+    }
+    if (!this.#isActive(generation)) {
+      this.#releaseOwnedAfterStartFailure(transport);
+      return;
+    }
+
+    let client: AppleBridgeClientApi;
+    try {
+      client = this.dependencies.createClient(transport);
+      this.#client = client;
+    } catch {
+      this.#releaseOwnedAfterStartFailure(transport);
+      if (this.#isActive(generation)) this.#status = DEGRADED.handshake;
       return;
     }
 
     try {
-      this.#client = this.dependencies.createClient(this.#transport);
-      const ready = await this.#client.ready();
-      if (this.#stopRequested) return;
+      const ready = await client.ready();
+      if (!this.#isActive(generation)) return;
+      if (this.#terminalDuringStart !== undefined) {
+        this.#status = this.#terminalDuringStart;
+        this.#releaseOwnedAfterStartFailure(transport);
+        return;
+      }
       this.#status = {
         state: 'ready',
         helperVersion: ready.helperVersion,
         protocolVersion: ready.protocolVersion,
       };
     } catch {
-      if (!this.#stopRequested) this.#status = DEGRADED.handshake;
-      this.#releaseFailedLaunch();
+      if (this.#isActive(generation)) {
+        this.#status = this.#terminalDuringStart ?? DEGRADED.handshake;
+      }
+      this.#releaseOwnedAfterStartFailure(transport);
     }
   }
 
   async #stopOnce(): Promise<void> {
-    await this.#startPromise?.catch((): undefined => undefined);
-    this.#unsubscribeTransport?.();
-    this.#unsubscribeTransport = undefined;
+    const wasStarting = this.#status.state === 'starting';
+    const { client, transport } = this.#takeOwnedResources();
+    this.#status = this.#disabledStatus();
 
-    const client = this.#client;
-    const transport = this.#transport;
-    this.#client = undefined;
-    this.#transport = undefined;
+    if (wasStarting) {
+      if (client !== undefined) {
+        beginClientShutdown(client);
+      }
+      terminateTransport(transport);
+      return;
+    }
 
     try {
-      await client?.shutdown();
-      this.#status = this.#disabledStatus();
-    } catch {
-      try {
-        transport?.terminate();
-      } catch {
-        // The fixed cleanup failure remains authoritative.
+      if (client !== undefined) {
+        await client.shutdown();
       }
+    } catch {
+      terminateTransport(transport);
       this.#status = DEGRADED.shutdown;
       throw new Error('Apple integration helper cleanup failed.');
     }
   }
 
   #handleTransportEvent(event: AppleBridgeProcessEvent): void {
-    if (this.#stopRequested || this.#status.state !== 'ready') return;
-    if (event.type === 'exit') {
-      this.#status = DEGRADED.exit;
-    } else if (event.type === 'failure') {
-      this.#status = DEGRADED.transport;
+    if (this.#stopRequested) return;
+    const terminalStatus = event.type === 'exit'
+      ? DEGRADED.exit
+      : event.type === 'failure'
+        ? DEGRADED.transport
+        : undefined;
+    if (terminalStatus === undefined) return;
+    if (this.#status.state === 'starting') {
+      this.#terminalDuringStart ??= terminalStatus;
+      this.#status = this.#terminalDuringStart;
+    } else if (this.#status.state === 'ready') {
+      this.#status = terminalStatus;
     }
   }
 
-  #releaseFailedLaunch(): void {
-    this.#unsubscribeTransport?.();
+  #releaseOwnedAfterStartFailure(transport: AppleBridgeTransport): void {
+    if (this.#transport !== transport) return;
+    const { client, transport: ownedTransport } = this.#takeOwnedResources();
+    if (client !== undefined) {
+      beginClientShutdown(client);
+    }
+    terminateTransport(ownedTransport);
+  }
+
+  #takeOwnedResources(): {
+    client: AppleBridgeClientApi | undefined;
+    transport: AppleBridgeTransport | undefined;
+  } {
+    const unsubscribeTransport = this.#unsubscribeTransport;
     this.#unsubscribeTransport = undefined;
     try {
-      this.#transport?.terminate();
+      unsubscribeTransport?.();
     } catch {
-      // Startup remains degraded even when process teardown races.
+      // Resource ownership is still cleared and the transport is still cleaned.
     }
+    const client = this.#client;
+    const transport = this.#transport;
     this.#client = undefined;
     this.#transport = undefined;
+    return { client, transport };
+  }
+
+  #isActive(generation: number): boolean {
+    return !this.#stopRequested && this.#generation === generation;
   }
 
   #developmentExecutablePath(): string | undefined {
@@ -320,6 +385,22 @@ export class AppleBridgeSupervisor implements AppleBridgeSupervisorApi {
     return this.options.platform === 'darwin'
       ? { state: 'disabled', reason: 'not_packaged_or_configured' }
       : { state: 'disabled', reason: 'unsupported_platform' };
+  }
+}
+
+function terminateTransport(transport: AppleBridgeTransport | undefined): void {
+  try {
+    transport?.terminate();
+  } catch {
+    // The fixed lifecycle state remains authoritative when termination races.
+  }
+}
+
+function beginClientShutdown(client: AppleBridgeClientApi): void {
+  try {
+    void client.shutdown().catch((): undefined => undefined);
+  } catch {
+    // Forced transport termination below remains the fail-closed cleanup path.
   }
 }
 

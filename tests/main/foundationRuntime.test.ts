@@ -36,6 +36,55 @@ const health: AppHealth = {
 };
 
 describe('FoundationRuntime', () => {
+  it('explicitly initializes the durable foundation once before serving health', async () => {
+    const database = { path: health.databasePath } as AppDatabase;
+    const events: string[] = [];
+    const runtime = new FoundationRuntime(
+      { appVersion: '1.0.0', databasePath: health.databasePath },
+      {
+        openDatabase: () => {
+          events.push('open');
+          return database;
+        },
+        migrateToLatest: async () => {
+          events.push('migrate');
+          return migrationResult;
+        },
+        createJobRepository: () => ({
+          listActive: () => [],
+          recoverInterruptedJobs: () => {
+            events.push('recover');
+            return 4;
+          },
+        }),
+        createHealthService: () => {
+          events.push('health:create');
+          return {
+            getHealth: () => {
+              events.push('health:read');
+              return health;
+            },
+          };
+        },
+        closeDatabase: () => events.push('close'),
+      },
+    );
+
+    await Promise.all([runtime.initialize(), runtime.initialize()]);
+    expect(events).toEqual(['open', 'migrate', 'recover', 'health:create']);
+
+    await expect(runtime.getHealth()).resolves.toEqual(health);
+    expect(events).toEqual([
+      'open',
+      'migrate',
+      'recover',
+      'health:create',
+      'health:read',
+    ]);
+    await runtime.shutdown();
+    expect(events.at(-1)).toBe('close');
+  });
+
   it('retries a failed migration non-destructively against the same database path', async () => {
     const databasePath = health.databasePath;
     const firstDatabase = { path: databasePath } as AppDatabase;

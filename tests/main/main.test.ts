@@ -237,7 +237,7 @@ describe('main process startup', () => {
 
     await import('../../src/main');
     await settleStartup();
-    const healthRequest = healthProvider?.getHealth();
+    expect(healthProvider).toBeUndefined();
 
     const beforeQuit = mocks.appOn.mock.calls.find(
       ([event]) => event === 'before-quit',
@@ -250,17 +250,16 @@ describe('main process startup', () => {
     expect(preventDefault).toHaveBeenCalledTimes(1);
 
     settleMigration?.();
-    await expect(healthRequest).rejects.toThrow('cancelled');
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(events).toEqual([
-      'ipc',
       'open',
       'migrate',
-      'unregister',
+      'jobs',
+      'health',
       'close',
     ]);
-    expect(mocks.createWindow).toHaveBeenCalledTimes(1);
+    expect(mocks.createWindow).not.toHaveBeenCalled();
     expect(mocks.appQuit).toHaveBeenCalledTimes(1);
   });
 
@@ -314,7 +313,15 @@ describe('main process startup', () => {
     await settleStartup();
 
     expect(mocks.windowDestroy).toHaveBeenCalledTimes(1);
-    expect(events).toEqual(['ipc', 'unregister']);
+    expect(events).toEqual([
+      'open',
+      'migrate',
+      'recover',
+      'health',
+      'ipc',
+      'unregister',
+      'close',
+    ]);
     expect(mocks.appQuit).toHaveBeenCalledTimes(1);
   });
 });
