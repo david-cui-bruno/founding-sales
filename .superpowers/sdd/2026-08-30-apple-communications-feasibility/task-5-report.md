@@ -112,3 +112,79 @@ Modified:
 - This is intentionally a feasibility implementation. Fixed Notes attachment save and Messages participant/send descriptors compile and match the installed macOS 26 SDEFs, but binding constraints prohibited a live Notes/Messages/TCC exercise; runtime app behavior and permission UX remain unproven.
 - The reader deliberately supports only the committed v26 schema/columns and degrades with `schema_unsupported` otherwise. `immutable=1` may observe a stale snapshot when recent data exists only in a WAL; it is retained because immutability/read-only safety is the governing constraint.
 - Message delivery ambiguity is not retried here. The later Electron caller must persist the distinct command ID before dispatch and treat a timeout as ambiguous.
+
+---
+
+## Review round 1 remediation
+
+### Status and interface ruling
+
+All Critical and Important review findings, plus the confirmed duplicate-command gap, were remediated. `BridgeCommandHandling` remains synchronous, the reviewed `BridgeCoordinator` and call-recording actor were not modified, and `FeasibilityBridgeCommandHandler` remains the separate fixed-method composition layer.
+
+### Delivered remediation
+
+- Replaced path-based Notes export cleanup with a launch-lifetime canonical staging-root descriptor, generated 0700 per-export directories, `openat`/`fstatat`/`unlinkat`, `O_NOFOLLOW`, device/inode revalidation around the external save, descriptor-based streaming/hash counting, retrying deletion, and explicit `ENOENT` absence verification.
+- Added the distinct `plaintextRetentionRisk` typed failure. An unverifiable provenance or exhausted deletion disables later exports and stores only an opaque UUID recovery signal. No proof can be returned on this path.
+- Added root replacement, per-export-directory replacement, leaf symlink, leaf hard-link, deletion failure/retry/exhaustion, and outside generated-name tests. Outside/replacement content remains untouched.
+- Fixed launch/shutdown cleanup to reopen `.` relative to the root descriptor. This avoids `dup` sharing the directory offset and ensures repeated cleanup passes enumerate from the beginning while remaining descriptor-relative.
+- Replaced Messages display-name selection with a fixed property-test/whose object specifier on participant `handle` (`hndl`), resolves exactly one participant ID, and sends to that unique-ID (`ID  `) object specifier. Zero/multiple/malformed replies fail closed without sending.
+- Added a synchronized attempted-command registry. The handler records the command UUID before calling Messages, rejects reuse after success, failure, or ambiguity, and rejects all new sends when its fixed capacity is full rather than evicting.
+- Made UUID distinctness case-insensitive in TypeScript, matching Swift UUID value equality.
+- Made recipient/body limits normative UTF-8 byte limits (256/4000) in protocol.md, TypeScript Zod, Swift Codable, and adapter validation.
+- Pushed the Notes `since` constraint into a fixed Apple Event property test and added a bounded 501-candidate sentinel range. Because the installed Notes SDEF exposes no stable sort command, saturation is reported through `truncated`; filtering supported audio and deduplication precede the 500-artifact cap.
+- Bounded the Notes artifact registry at 5,000 entries with fail-closed saturation and no eviction. Strengthened Messages tests with 600 recent rows plus an eight-day-old row to prove the 500-row limit and seven-day clamp.
+
+### Round 1 RED → GREEN evidence
+
+1. Cross-runtime contract:
+   - RED: Vitest accepted mixed-case representations of the same request/command UUID and accepted multibyte strings exceeding the intended byte bounds.
+   - GREEN: `tests/main/appleBridgeContract.test.ts` passed 5/5; Swift send-safety tests reject the mixed-case-equivalent UUID and agree on `é`/emoji byte boundaries.
+2. Attempted command registry:
+   - RED: handler tests could not construct a bounded registry and a failed send was dispatched again.
+   - GREEN: handler suite passed 7/7; failed IDs remain attempted, and capacity saturation rejects without eviction.
+3. Exact Messages handle:
+   - RED: descriptor tests found name-form selection instead of a `hndl` property test, and zero/multiple resolution had no typed rejection.
+   - GREEN: adapter tests decode `test`/`cmpd`/`hndl`/`=   ` and unique-ID send descriptors; Messages suite passed 7/7.
+4. Notes scan completeness:
+   - RED: the scan capped the first 500 unordered raw attachments before filtering and had no `truncated` metadata. The bounded-range descriptor test then reported five failed expectations before range construction existed.
+   - GREEN: the fixed since query, 1...501 sentinel range, post-filter 500 cap, and typed truncation passed all descriptor/scan tests.
+5. Descriptor-relative deletion and containment:
+   - RED: the new adversarial tests initially failed compilation because descriptor deletion injection and `plaintextRetentionRisk` did not exist. The hard-link test subsequently returned an incorrect success proof.
+   - GREEN: Notes suite passed 17/17, including deletion retry/exhaustion, no-proof-on-risk, root/leaf/export-directory swaps, hard-link rejection, unexpected-sibling rejection, and outside-file preservation.
+6. Repeated cleanup:
+   - RED: the first full Swift run passed 115/116; `shutdownCleansOnlyGeneratedContainedEntries` failed because `dup(rootFD)` shared the end-of-directory offset left by startup cleanup.
+   - GREEN: reopening `.` with `openat` gives each cleanup an independent descriptor; the focused regression and the full 116-test Swift run passed.
+
+### Final verification after remediation
+
+- Bundled-Node focused contract test: PASS, 5 tests.
+- Bundled-Node `npm run typecheck`: PASS.
+- Focused Swift Notes/Messages/handler/protocol run: PASS, 31 tests; final Notes suite PASS, 17 tests.
+- Bundled-Node `npm run test:swift`: PASS, 117 tests in 13 suites.
+- Bundled-Node `npm run build:swift`: PASS, release arm64 build.
+- `git diff --check`: clean.
+- Safety scan for `Process(`, shells, `osascript`, AppleScript APIs/source, and SQLite `ATTACH`, `VACUUM`, and write vocabulary in native sources: no matches.
+- Test-authority scan: no test references `homeDirectoryForCurrentUser`, `Library/Messages/chat.db`, or `SystemAppleEventExecutor`.
+
+### SDK/SDEF authority evidence
+
+- Installed Messages SDEF declares `send` as `ichtsend`, participant class `pres`, participant display `name` as `pnam`, exact `handle` as read-only `hndl`, and participant ID as `ID  `.
+- Selected SDK `AEObjects.h` declares `formTest='test'`, `formUniqueID='ID  '`, `typeCompDescriptor='cmpd'`, and `obj1`/`obj2`/`relo`; `AERegistry.h` declares `kAEEquals='=   '` and `kAEGreaterThanEquals='>=  '`.
+- Installed Notes SDEF declares attachment `atts`, creation date `ascd`, and an attachment response to the imported Cocoa Standard `save`; CocoaStandard.sdef declares `coresave` and destination parameter `kfil`.
+
+### Proof no live adapters or personal data were touched in remediation
+
+- All Apple Event behavior tests used `FakeAppleEventExecutor` and synthetic `NSAppleEventDescriptor` replies. No test called `SystemAppleEventExecutor.execute`.
+- All Messages read tests generated temporary SQLite stores from committed synthetic SQL; no test opened the user's Messages database.
+- Notes export tests used generated temporary 0700 roots and synthetic bytes only. Root/symlink/hard-link adversarial targets were temporary synthetic files.
+- Production composition was only tested with a nonexistent temporary Messages path and typed hello/shutdown requests; it did not send an Apple Event or open a personal database.
+- Build and test commands compiled/linked but did not launch the production executable. Notes, Messages, Contacts, Phone, TCC prompts, recordings, calls, and messages were not accessed.
+
+### Round 1 self-review and concerns
+
+- Reviewed every exporter exit after the external save: success requires verified deletion/absence; ordinary execution/hash failures delete first; any inability to verify deletion or binding returns `plaintextRetentionRisk`, produces no proof, and disables further export.
+- Reviewed all cleanup targets: only validated generated names are handled, every leaf operation is relative to an opened contained descriptor, and no swapped absolute path is removed.
+- Reviewed Messages authority: caller handle/body remain data descriptors, participant selection uses `hndl` rather than display `pnam`, and the send layer performs one explicit send only after exact consent and a unique resolution.
+- Reviewed SQLite authority: immutable read-only URI/flags, fixed schema validation/query, 100 ms busy timeout, seven-day clamp, and 500-row limit remain intact; there is no write/migration/generic SQL route.
+- The Apple Event save API necessarily receives an absolute file URL; it cannot consume the export directory descriptor. A path swap that occurs and is restored entirely during the external event cannot be eliminated with the public API. The helper revalidates root and per-export directory provenance immediately before/after the save and fails closed on observed change, never claiming to delete an unproven outside write.
+- Notes exposes no stable sort command in its installed SDEF. The fixed since filter plus bounded sentinel page prevents an unbounded result, and saturation is explicitly incomplete (`truncated: true`), but real Notes ordering and TCC/runtime behavior remain unproven because live exercise was prohibited.

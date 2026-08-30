@@ -40,7 +40,7 @@ public final class MessagesReadStore: MessageTestActivityScanning, @unchecked Se
     }
 
     public func scanTestActivity(handle: NormalizedHandle, since: Date) throws -> MessageTestActivity {
-        guard database.isFileURL, !handle.value.isEmpty, handle.value.count <= 256 else {
+        guard database.isFileURL, !handle.value.isEmpty, handle.value.utf8.count <= 256 else {
             throw MessagesReadError.databaseUnavailable
         }
         return try lock.withLock {

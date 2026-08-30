@@ -44,6 +44,16 @@ public struct NotesRecordingArtifact: Sendable, Equatable {
     }
 }
 
+public struct NotesRecordingScanResult: Sendable, Equatable {
+    public let artifacts: [NotesRecordingArtifact]
+    public let truncated: Bool
+
+    public init(artifacts: [NotesRecordingArtifact], truncated: Bool) {
+        self.artifacts = artifacts
+        self.truncated = truncated
+    }
+}
+
 public struct ExportProof: Sendable, Equatable {
     public let artifactID: NotesArtifactID
     public let byteCount: Int64
@@ -100,11 +110,13 @@ public enum NotesPortError: Error, Sendable, Equatable {
     case invalidReply
     case exportFailed
     case cleanupFailed
+    case plaintextRetentionRisk
 }
 
 public enum MessagesSendPortError: Error, Sendable, Equatable {
     case manualConfirmationRequired
     case invalidRequest
+    case recipientAmbiguous
     case sendFailed
 }
 
@@ -115,7 +127,7 @@ public enum MessagesReadPortError: Error, Sendable, Equatable {
 }
 
 public protocol NotesRecordingScanning: Sendable {
-    func scan(since: Date) throws -> [NotesRecordingArtifact]
+    func scan(since: Date) throws -> NotesRecordingScanResult
 }
 
 public protocol NotesAttachmentExporting: Sendable {

@@ -10,15 +10,19 @@ public final class NotesArtifactRegistry: @unchecked Sendable {
     }
 
     private let lock = NSLock()
+    private let capacity: Int
     private var byScriptingID: [String: NotesArtifactID] = [:]
     private var byOpaqueID: [NotesArtifactID: Entry] = [:]
 
-    public init() {}
+    public init(capacity: Int = 5_000) {
+        self.capacity = max(1, capacity)
+    }
 
     @discardableResult
-    public func register(scriptingID: String, createdAt: Date) -> NotesArtifactID {
-        lock.withLock {
+    public func register(scriptingID: String, createdAt: Date) throws -> NotesArtifactID {
+        try lock.withLock {
             if let existing = byScriptingID[scriptingID] { return existing }
+            guard byOpaqueID.count < capacity else { throw NotesAdapterError.capabilityUnavailable }
             let id = NotesArtifactID(UUID())
             byScriptingID[scriptingID] = id
             byOpaqueID[id] = Entry(scriptingID: scriptingID, createdAt: createdAt)
@@ -33,6 +37,7 @@ public final class NotesArtifactRegistry: @unchecked Sendable {
 
 public final class NotesRecordingLocator: NotesRecordingScanning, @unchecked Sendable {
     private static let maximumArtifacts = 500
+    private static let completenessCandidateLimit = 500
     private static let audioExtensions: Set<String> = ["m4a", "mp3", "wav", "caf", "aac"]
 
     private let executor: any AppleEventExecuting
@@ -43,18 +48,18 @@ public final class NotesRecordingLocator: NotesRecordingScanning, @unchecked Sen
         self.registry = registry
     }
 
-    public func scan(since: Date) throws -> [NotesRecordingArtifact] {
+    public func scan(since: Date) throws -> NotesRecordingScanResult {
         let rawReply: NSAppleEventDescriptor
         do {
-            rawReply = try executor.execute(.notesScanAttachments)
+            rawReply = try executor.execute(.notesScanAttachments(since: since))
         } catch {
             throw NotesAdapterError.capabilityUnavailable
         }
         let reply = rawReply.paramDescriptor(forKeyword: Self.code("----")) ?? rawReply
         var seen: Set<String> = []
         var artifacts: [NotesRecordingArtifact] = []
-        let itemCount = min(reply.numberOfItems, Self.maximumArtifacts)
-        guard itemCount > 0 else { return [] }
+        let itemCount = reply.numberOfItems
+        guard itemCount > 0 else { return .init(artifacts: [], truncated: false) }
 
         for index in 1...itemCount {
             guard let record = reply.atIndex(index),
@@ -65,10 +70,15 @@ public final class NotesRecordingLocator: NotesRecordingScanning, @unchecked Sen
                   let createdAt = record.forKeyword(Self.code("ascd"))?.dateValue,
                   createdAt >= since,
                   seen.insert(scriptingID as String).inserted else { continue }
-            let id = registry.register(scriptingID: scriptingID as String, createdAt: createdAt as Date)
-            artifacts.append(.init(id: id, createdAt: createdAt as Date))
+            let id = try registry.register(scriptingID: scriptingID as String, createdAt: createdAt as Date)
+            if artifacts.count < Self.maximumArtifacts {
+                artifacts.append(.init(id: id, createdAt: createdAt as Date))
+            }
         }
-        return artifacts.sorted { $0.createdAt < $1.createdAt }
+        return .init(
+            artifacts: artifacts.sorted { $0.createdAt < $1.createdAt },
+            truncated: itemCount > Self.completenessCandidateLimit || artifacts.count == Self.maximumArtifacts
+        )
     }
 
     private static func code(_ value: String) -> UInt32 {

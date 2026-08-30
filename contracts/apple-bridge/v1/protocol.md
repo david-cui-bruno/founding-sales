@@ -18,8 +18,8 @@ Each envelope is strict: unknown top-level fields and unknown parameter fields a
 | `recording.disarm` | `{ "callId": "UUID" }` |
 | `notes.scanCallRecordings` | `{}` |
 | `notes.exportCallRecording` | `{ "artifactId": "UUID" }` |
-| `messages.sendTest` | `{ "commandId": "UUID", "recipientHandle": "non-empty string up to 256 chars", "body": "non-empty string up to 4000 chars", "confirmation": "I CONSENT TO THIS TEST MESSAGE" }` |
-| `messages.scanTestActivity` | `{ "recipientHandle": "non-empty string up to 256 chars" }` |
+| `messages.sendTest` | `{ "commandId": "UUID", "recipientHandle": "non-empty string up to 256 UTF-8 bytes", "body": "non-empty string up to 4000 UTF-8 bytes", "confirmation": "I CONSENT TO THIS TEST MESSAGE" }` |
+| `messages.scanTestActivity` | `{ "recipientHandle": "non-empty string up to 256 UTF-8 bytes" }` |
 | `bridge.shutdown` | `{}` |
 
 ## Responses and errors

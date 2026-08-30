@@ -5,6 +5,11 @@ export const APPLE_BRIDGE_PROTOCOL_VERSION = 1 as const;
 const requestId = z.string().uuid();
 const emptyParams = z.object({}).strict();
 const opaqueId = z.string().uuid();
+const utf8ByteLength = (value: string): number => new TextEncoder().encode(value).length;
+const boundedUTF8 = (maximumBytes: number) => z.string().min(1).refine(
+  (value) => utf8ByteLength(value) <= maximumBytes,
+  { message: `Must be at most ${maximumBytes} UTF-8 bytes` },
+);
 
 const helloRequest = z.object({
   v: z.literal(1),
@@ -67,8 +72,8 @@ const sendTestMessageRequest = z.object({
   method: z.literal('messages.sendTest'),
   params: z.object({
     commandId: opaqueId,
-    recipientHandle: z.string().min(1).max(256),
-    body: z.string().min(1).max(4_000),
+    recipientHandle: boundedUTF8(256),
+    body: boundedUTF8(4_000),
     confirmation: z.literal('I CONSENT TO THIS TEST MESSAGE'),
   }).strict(),
 }).strict();
@@ -76,7 +81,7 @@ const sendTestMessageRequest = z.object({
 const scanTestMessageActivityRequest = z.object({
   v: z.literal(1), kind: z.literal('request'), id: requestId,
   method: z.literal('messages.scanTestActivity'),
-  params: z.object({ recipientHandle: z.string().min(1).max(256) }).strict(),
+  params: z.object({ recipientHandle: boundedUTF8(256) }).strict(),
 }).strict();
 
 const shutdownRequest = z.object({
@@ -101,7 +106,7 @@ const bridgeRequestEnvelopeSchema = z.discriminatedUnion('method', [
 ]);
 
 export const bridgeRequestSchema = bridgeRequestEnvelopeSchema.superRefine((request, context) => {
-  if (request.method === 'messages.sendTest' && request.params.commandId === request.id) {
+  if (request.method === 'messages.sendTest' && request.params.commandId.toLowerCase() === request.id.toLowerCase()) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['params', 'commandId'],

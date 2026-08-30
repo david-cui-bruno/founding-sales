@@ -77,8 +77,8 @@ public struct SendTestMessageParameters: Codable, Sendable {
     public let confirmation: String
 
     public init(commandId: UUID, recipientHandle: String, body: String, confirmation: String) throws {
-        guard !recipientHandle.isEmpty && recipientHandle.count <= 256,
-              !body.isEmpty && body.count <= 4_000,
+        guard !recipientHandle.isEmpty && recipientHandle.utf8.count <= 256,
+              !body.isEmpty && body.utf8.count <= 4_000,
               confirmation == Self.requiredConfirmation else {
             throw BridgeFrameConstructionError.invalidParameters
         }
@@ -95,10 +95,10 @@ public struct SendTestMessageParameters: Codable, Sendable {
         recipientHandle = try container.decode(String.self, forKey: .recipientHandle)
         body = try container.decode(String.self, forKey: .body)
         confirmation = try container.decode(String.self, forKey: .confirmation)
-        guard !recipientHandle.isEmpty && recipientHandle.count <= 256 else {
+        guard !recipientHandle.isEmpty && recipientHandle.utf8.count <= 256 else {
             throw DecodingError.dataCorruptedError(forKey: .recipientHandle, in: container, debugDescription: "Invalid recipient handle")
         }
-        guard !body.isEmpty && body.count <= 4_000 else {
+        guard !body.isEmpty && body.utf8.count <= 4_000 else {
             throw DecodingError.dataCorruptedError(forKey: .body, in: container, debugDescription: "Invalid message body")
         }
         guard confirmation == Self.requiredConfirmation else {
@@ -111,7 +111,7 @@ public struct ScanTestMessageActivityParameters: Codable, Sendable {
     public let recipientHandle: String
 
     public init(recipientHandle: String) throws {
-        guard !recipientHandle.isEmpty && recipientHandle.count <= 256 else {
+        guard !recipientHandle.isEmpty && recipientHandle.utf8.count <= 256 else {
             throw BridgeFrameConstructionError.invalidParameters
         }
         self.recipientHandle = recipientHandle
@@ -121,7 +121,7 @@ public struct ScanTestMessageActivityParameters: Codable, Sendable {
         try decoder.requireOnlyKeys(["recipientHandle"])
         let container = try decoder.container(keyedBy: CodingKeys.self)
         recipientHandle = try container.decode(String.self, forKey: .recipientHandle)
-        guard !recipientHandle.isEmpty && recipientHandle.count <= 256 else {
+        guard !recipientHandle.isEmpty && recipientHandle.utf8.count <= 256 else {
             throw DecodingError.dataCorruptedError(forKey: .recipientHandle, in: container, debugDescription: "Invalid recipient handle")
         }
     }

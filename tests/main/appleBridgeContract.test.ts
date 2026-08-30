@@ -84,6 +84,11 @@ describe('Apple bridge protocol V1', () => {
       ...base,
       params: { ...base.params, commandId: base.id },
     }).success).toBe(false);
+    expect(bridgeRequestSchema.safeParse({
+      ...base,
+      id: 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA',
+      params: { ...base.params, commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+    }).success).toBe(false);
     const { commandId: _omittedCommandId, ...withoutCommandId } = base.params;
     expect(bridgeRequestSchema.safeParse({ ...base, params: withoutCommandId }).success).toBe(false);
     expect(bridgeRequestSchema.safeParse({
@@ -94,6 +99,25 @@ describe('Apple bridge protocol V1', () => {
       ...base,
       params: { ...base.params, script: 'arbitrary source' },
     }).success).toBe(false);
+  });
+
+  it('applies recipient and body limits in UTF-8 bytes', () => {
+    const frame = (recipientHandle: string, body: string) => ({
+      v: 1,
+      kind: 'request',
+      id: '11111111-1111-4111-8111-111111111111',
+      method: 'messages.sendTest',
+      params: {
+        commandId: '22222222-2222-4222-8222-222222222222',
+        recipientHandle,
+        body,
+        confirmation: 'I CONSENT TO THIS TEST MESSAGE',
+      },
+    });
+
+    expect(bridgeRequestSchema.safeParse(frame('é'.repeat(128), '😀'.repeat(1000))).success).toBe(true);
+    expect(bridgeRequestSchema.safeParse(frame('é'.repeat(129), 'ok')).success).toBe(false);
+    expect(bridgeRequestSchema.safeParse(frame('ok', '😀'.repeat(1001))).success).toBe(false);
   });
 
   it('rejects arbitrary native commands and caller-provided paths', () => {

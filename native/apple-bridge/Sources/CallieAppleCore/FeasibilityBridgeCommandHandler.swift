@@ -8,6 +8,7 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
     private let messageActivityScanner: any MessageTestActivityScanning
     private let now: @Sendable () -> Date
     private let shutdown: @Sendable () -> Void
+    private let attemptedCommands: AttemptedMessageCommandRegistry
     private let fallback = BoundedBridgeCommandHandler()
 
     public init(
@@ -15,6 +16,7 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
         notesExporter: any NotesAttachmentExporting,
         messageSender: any MessageTestSending,
         messageActivityScanner: any MessageTestActivityScanning,
+        attemptedCommandCapacity: Int = 1_024,
         now: @escaping @Sendable () -> Date = Date.init,
         shutdown: @escaping @Sendable () -> Void = {}
     ) {
@@ -22,6 +24,7 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
         self.notesExporter = notesExporter
         self.messageSender = messageSender
         self.messageActivityScanner = messageActivityScanner
+        attemptedCommands = AttemptedMessageCommandRegistry(capacity: attemptedCommandCapacity)
         self.now = now
         self.shutdown = shutdown
     }
@@ -30,14 +33,15 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
         do {
             switch request.params {
             case .scanCallRecordings:
-                let artifacts = try notesScanner.scan(since: now().addingTimeInterval(-86_400))
+                let scan = try notesScanner.scan(since: now().addingTimeInterval(-86_400))
                 return BridgeResponse(id: request.id, result: [
-                    "artifacts": .array(artifacts.map { artifact in
+                    "artifacts": .array(scan.artifacts.map { artifact in
                         .object([
                             "artifactId": .string(artifact.id.value.uuidString.lowercased()),
                             "createdAt": .string(Self.timestamp(artifact.createdAt)),
                         ])
                     }),
+                    "truncated": .bool(scan.truncated),
                 ])
             case let .exportCallRecording(parameters):
                 let proof = try notesExporter.proveExport(id: NotesArtifactID(parameters.artifactId))
@@ -48,6 +52,14 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
                     "plaintextRetained": .bool(proof.plaintextRetained),
                 ])
             case let .sendTestMessage(parameters):
+                switch attemptedCommands.markAttempted(parameters.commandId) {
+                case .accepted:
+                    break
+                case .duplicate:
+                    return errorResponse(id: request.id, code: .invalidRequest, message: "The message command ID was already attempted.")
+                case .full:
+                    return errorResponse(id: request.id, code: .capabilityUnavailable, message: "The message command registry is full until restart.")
+                }
                 let receipt = try messageSender.sendTest(.init(
                     commandID: parameters.commandId,
                     handle: NormalizedHandle(parameters.recipientHandle),
@@ -98,6 +110,8 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
             errorResponse(id: id, code: .capabilityUnavailable, message: "The fixed Notes operation is unavailable.")
         case .exportFailed, .cleanupFailed:
             errorResponse(id: id, code: .internalError, message: "The Notes export proof could not be completed.")
+        case .plaintextRetentionRisk:
+            errorResponse(id: id, code: .internalError, message: "The Notes export was disabled because plaintext deletion could not be verified.")
         }
     }
 
@@ -107,6 +121,8 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
             errorResponse(id: id, code: .invalidRequest, message: "Exact manual confirmation is required.")
         case .invalidRequest:
             errorResponse(id: id, code: .invalidRequest, message: "The fixed test message request is invalid.")
+        case .recipientAmbiguous:
+            errorResponse(id: id, code: .identityUnresolved, message: "Exactly one Messages participant must match the handle.")
         case .sendFailed:
             errorResponse(id: id, code: .capabilityUnavailable, message: "The fixed test message could not be sent.")
         }
@@ -128,5 +144,23 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
             fatalError("Invalid constant bridge error payload")
         }
         return BridgeResponse(id: id, error: error)
+    }
+}
+
+private final class AttemptedMessageCommandRegistry: @unchecked Sendable {
+    enum Result { case accepted, duplicate, full }
+    private let lock = NSLock()
+    private let capacity: Int
+    private var attempted: Set<UUID> = []
+
+    init(capacity: Int) { self.capacity = max(0, capacity) }
+
+    func markAttempted(_ id: UUID) -> Result {
+        lock.withLock {
+            if attempted.contains(id) { return .duplicate }
+            guard attempted.count < capacity else { return .full }
+            attempted.insert(id)
+            return .accepted
+        }
     }
 }

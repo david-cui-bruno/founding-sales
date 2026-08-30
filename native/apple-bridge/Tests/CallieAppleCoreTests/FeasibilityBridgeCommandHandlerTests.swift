@@ -38,6 +38,7 @@ struct FeasibilityBridgeCommandHandlerTests {
                 "artifactId": .string(ports.artifactID.value.uuidString.lowercased()),
                 "createdAt": .string("2027-01-15T08:00:00.000Z"),
             ])]),
+            "truncated": .bool(false),
         ])
         #expect(exportResponse.result == [
             "artifactId": .string(ports.artifactID.value.uuidString.lowercased()),
@@ -73,6 +74,35 @@ struct FeasibilityBridgeCommandHandlerTests {
             body: "Synthetic body",
             confirmation: ManualMessageTest.requiredConfirmation
         ))])
+    }
+
+    @Test func failedSendCommandIDIsStillAttemptedAndCannotBeDispatchedAgain() throws {
+        let ports = FakeFeasibilityPorts()
+        ports.sendError = .sendFailed
+        let handler = makeHandler(ports: ports)
+        let commandID = UUID()
+
+        #expect(handler.handle(try sendRequest(commandID: commandID)).error?.code == .capabilityUnavailable)
+        #expect(handler.handle(try sendRequest(commandID: commandID)).error?.code == .invalidRequest)
+        #expect(ports.operations.filter { if case .send = $0 { true } else { false } }.count == 1)
+    }
+
+    @Test func attemptedCommandRegistryFailsClosedAtCapacityWithoutEviction() throws {
+        let ports = FakeFeasibilityPorts()
+        let handler = FeasibilityBridgeCommandHandler(
+            notesScanner: ports,
+            notesExporter: ports,
+            messageSender: ports,
+            messageActivityScanner: ports,
+            attemptedCommandCapacity: 2,
+            now: { fixtureNow }
+        )
+        let firstID = UUID()
+        #expect(handler.handle(try sendRequest(commandID: firstID)).ok)
+        #expect(handler.handle(try sendRequest(commandID: UUID())).ok)
+        #expect(handler.handle(try sendRequest(commandID: UUID())).error?.code == .capabilityUnavailable)
+        #expect(handler.handle(try sendRequest(commandID: firstID)).error?.code == .invalidRequest)
+        #expect(ports.operations.filter { if case .send = $0 { true } else { false } }.count == 2)
     }
 
     @Test func schemaAndConsentFailuresMapToConstantNoPayloadErrors() throws {
@@ -132,6 +162,19 @@ struct FeasibilityBridgeCommandHandlerTests {
             shutdown: shutdown
         )
     }
+
+    private func sendRequest(commandID: UUID) throws -> BridgeRequest {
+        try BridgeRequest(
+            id: UUID(),
+            method: .sendTestMessage,
+            params: .sendTestMessage(try .init(
+                commandId: commandID,
+                recipientHandle: "synthetic@example.invalid",
+                body: "Synthetic body",
+                confirmation: ManualMessageTest.requiredConfirmation
+            ))
+        )
+    }
 }
 
 private let fixtureNow = Date(timeIntervalSince1970: 1_800_000_000)
@@ -151,9 +194,9 @@ private final class FakeFeasibilityPorts: NotesRecordingScanning, NotesAttachmen
     var readError: MessagesReadPortError?
     var operations: [Operation] { lock.withLock { storage } }
 
-    func scan(since: Date) throws -> [NotesRecordingArtifact] {
+    func scan(since: Date) throws -> NotesRecordingScanResult {
         lock.withLock { storage.append(.scan(since)) }
-        return [.init(id: artifactID, createdAt: fixtureNow)]
+        return .init(artifacts: [.init(id: artifactID, createdAt: fixtureNow)], truncated: false)
     }
 
     func proveExport(id: NotesArtifactID) throws -> ExportProof {
