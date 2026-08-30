@@ -1,0 +1,16 @@
+{
+  "formatVersion": 1,
+  "phoneUIFingerprint": "macos-26.4-phone-v1",
+  "captureToken": "00000000-0000-4000-8000-000000000017",
+  "provenance": { "processIdentifier": 4242, "bundleIdentifier": "com.apple.mobilephone", "applicationURL": "/System/Applications/Phone.app", "executableURL": "/System/Applications/Phone.app/Contents/MacOS/Phone" },
+  "root": {
+    "nodeID": "root", "role": "AXApplication", "title": "Phone", "identifier": "com.apple.mobilephone", "enabled": true, "value": null,
+    "children": [{
+      "nodeID": "main-window", "role": "AXWindow", "title": "Phone", "identifier": "phone.main.window", "enabled": true, "value": null,
+      "children": [
+        { "nodeID": "state", "role": "AXStaticText", "title": "Call State", "identifier": "phone.call.state", "enabled": true, "value": "connected", "children": [] },
+        { "nodeID": "direction", "role": "AXStaticText", "title": "Direction", "identifier": "phone.call.direction", "enabled": true, "value": "outgoing", "children": [] }
+      ]
+    }]
+  }
+}

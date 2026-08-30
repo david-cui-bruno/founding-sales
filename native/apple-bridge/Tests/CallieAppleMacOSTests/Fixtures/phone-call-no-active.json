@@ -1,7 +1,8 @@
 {
   "formatVersion": 1,
-  "phoneUIVersion": "macos-26.4",
-  "application": "Phone",
+  "phoneUIFingerprint": "macos-26.4-phone-v1",
+  "captureToken": "00000000-0000-4000-8000-000000000009",
+  "provenance": { "processIdentifier": 4242, "bundleIdentifier": "com.apple.mobilephone", "applicationURL": "/System/Applications/Phone.app", "executableURL": "/System/Applications/Phone.app/Contents/MacOS/Phone" },
   "root": {
     "nodeID": "root",
     "role": "AXApplication",

@@ -11,7 +11,7 @@ struct PhoneAccessibilityClientTests {
         let actuator = FakeAXActuator()
         let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([initial, active]), actuator: actuator)
 
-        #expect(try client.startAndVerifyRecording() == .verified)
+        #expect(try client.startAndVerifyRecording(authorization: fixtureAuthorization, isAuthorizationCurrent: { true }) == .verified)
         #expect(actuator.pressed == ["record-button"])
     }
 
@@ -21,7 +21,7 @@ struct PhoneAccessibilityClientTests {
         let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([snapshot]), actuator: actuator)
 
         #expect(throws: PhoneAccessibilityError.controlNotFound) {
-            try client.startAndVerifyRecording()
+            try client.startAndVerifyRecording(authorization: fixtureAuthorization, isAuthorizationCurrent: { true })
         }
         #expect(actuator.pressed.isEmpty)
     }
@@ -32,7 +32,7 @@ struct PhoneAccessibilityClientTests {
         let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([snapshot]), actuator: actuator)
 
         #expect(throws: PhoneAccessibilityError.controlAmbiguous) {
-            try client.startAndVerifyRecording()
+            try client.startAndVerifyRecording(authorization: fixtureAuthorization, isAuthorizationCurrent: { true })
         }
         #expect(actuator.pressed.isEmpty)
     }
@@ -43,7 +43,7 @@ struct PhoneAccessibilityClientTests {
         let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([snapshot]), actuator: actuator)
 
         #expect(throws: PhoneAccessibilityError.controlDisabled) {
-            try client.startAndVerifyRecording()
+            try client.startAndVerifyRecording(authorization: fixtureAuthorization, isAuthorizationCurrent: { true })
         }
         #expect(actuator.pressed.isEmpty)
     }
@@ -54,7 +54,7 @@ struct PhoneAccessibilityClientTests {
         let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([snapshot]), actuator: actuator)
 
         #expect(throws: PhoneAccessibilityError.controlNotFound) {
-            try client.startAndVerifyRecording()
+            try client.startAndVerifyRecording(authorization: fixtureAuthorization, isAuthorizationCurrent: { true })
         }
         #expect(actuator.pressed.isEmpty)
     }
@@ -64,17 +64,20 @@ struct PhoneAccessibilityClientTests {
         let actuator = FakeAXActuator()
         let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([available, available]), actuator: actuator)
 
-        #expect(try client.startAndVerifyRecording() == .failed(.verificationFailed))
+        #expect(try client.startAndVerifyRecording(authorization: fixtureAuthorization, isAuthorizationCurrent: { true }) == .failed(.verificationFailed))
         #expect(actuator.pressed == ["record-button"])
     }
 
     @Test func recordingControllerMapsMissingControlToFailClosedCoreResult() async throws {
         let missing = try FixtureSupport.snapshot(named: "phone-recording-missing")
+        let registry = LockedCurrentPhoneCallRegistry()
+        registry.replace(fixtureAuthorization)
         let controller = PhoneRecordingController(
-            client: PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([missing]), actuator: FakeAXActuator())
+            client: PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([missing]), actuator: FakeAXActuator()),
+            registry: registry
         )
 
-        #expect(try await controller.attemptStart(for: syntheticCall) == .failed(.controlNotFound))
+        #expect(try await controller.attemptStart(for: fixtureCall) == .failed(.controlNotFound))
     }
 }
 
@@ -103,10 +106,10 @@ final class FakeAXActuator: AXActuating, @unchecked Sendable {
     private var storage: [String] = []
     var pressed: [String] { lock.withLock { storage } }
 
-    func press(nodeID: String) throws {
-        lock.withLock { storage.append(nodeID) }
+    func press(_ request: AXActuationRequest, ifAuthorized: @Sendable () -> Bool) throws {
+        guard ifAuthorized() else { throw PhoneAccessibilityError.callAuthorizationChanged }
+        lock.withLock { storage.append(request.element.nodeID) }
     }
 }
 
 enum SyntheticAXError: Error { case exhausted, permissionDenied }
-private let syntheticCall = ObservedCall(id: UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!, outgoing: true, connected: true, ended: false, onHold: false)
