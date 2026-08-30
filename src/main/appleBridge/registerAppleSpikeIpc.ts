@@ -1,7 +1,8 @@
-import { ipcMain } from 'electron';
+import { ipcMain, type WebContents } from 'electron';
 
 import {
   APPLE_SPIKE_IPC_CHANNELS,
+  appleSpikeObservationEvidenceSchema,
   appleSpikeResultSchema,
   appleSpikeStatusSchema,
   scanTestMessagesInputSchema,
@@ -11,6 +12,7 @@ import {
   type AppleSpikeResult,
 } from '../../shared/appleSpikeContract';
 import { validateSender } from '../ipc/validateSender';
+import { isTrustedRendererUrl as defaultIsTrustedRendererUrl } from '../navigationPolicy';
 import type { AppleSpikeServiceApi } from './appleSpikeService';
 
 export { APPLE_SPIKE_IPC_CHANNELS } from '../../shared/appleSpikeContract';
@@ -32,8 +34,9 @@ export function registerAppleSpikeIpc(
   service: AppleSpikeServiceApi,
   isTrustedRendererUrl?: (url: string) => boolean,
 ): () => void {
+  const isTrustedUrl = isTrustedRendererUrl ?? defaultIsTrustedRendererUrl;
   const validate = (event: InvokeEvent, args: unknown[], expectedCount: number): void => {
-    validateSender(event, isTrustedRendererUrl);
+    validateSender(event, isTrustedUrl);
     if (args.length !== expectedCount) {
       throw new Error('Apple feasibility IPC received an invalid number of arguments.');
     }
@@ -111,12 +114,87 @@ export function registerAppleSpikeIpc(
     );
   });
 
+  type RendererObservationSubscription = {
+    unsubscribeObservation(): void;
+    onDestroyed(): void;
+    onNavigation(): void;
+  };
+  const observationSubscriptions = new Map<WebContents, RendererObservationSubscription>();
+
+  const removeObservationSubscription = (sender: WebContents): void => {
+    const subscription = observationSubscriptions.get(sender);
+    if (subscription === undefined) return;
+    observationSubscriptions.delete(sender);
+    sender.removeListener('destroyed', subscription.onDestroyed);
+    sender.removeListener('did-start-navigation', subscription.onNavigation);
+    subscription.unsubscribeObservation();
+  };
+
+  const registerObservationSubscription = (sender: WebContents): void => {
+    if (observationSubscriptions.has(sender) || sender.isDestroyed()) return;
+    const onDestroyed = (): void => removeObservationSubscription(sender);
+    const onNavigation = (): void => removeObservationSubscription(sender);
+    const subscription: RendererObservationSubscription = {
+      unsubscribeObservation: () => undefined,
+      onDestroyed,
+      onNavigation,
+    };
+    observationSubscriptions.set(sender, subscription);
+    sender.once('destroyed', onDestroyed);
+    sender.once('did-start-navigation', onNavigation);
+    try {
+      subscription.unsubscribeObservation = service.subscribeObservation((evidence) => {
+        const parsed = appleSpikeObservationEvidenceSchema.safeParse(evidence);
+        if (!parsed.success) return;
+        let deliveryTrusted = false;
+        try {
+          deliveryTrusted = !sender.isDestroyed() && isTrustedUrl(sender.getURL());
+        } catch {
+          deliveryTrusted = false;
+        }
+        if (!deliveryTrusted) {
+          removeObservationSubscription(sender);
+          return;
+        }
+        try {
+          sender.send(APPLE_SPIKE_IPC_CHANNELS.observationEvidence, parsed.data);
+        } catch {
+          removeObservationSubscription(sender);
+        }
+      });
+    } catch {
+      removeObservationSubscription(sender);
+      throw new Error('Apple observation subscription is unavailable.');
+    }
+  };
+
+  ipcMain.handle(APPLE_SPIKE_IPC_CHANNELS.observationSubscribe, async (
+    event,
+    ...args: unknown[]
+  ) => {
+    validate(event, args, 0);
+    registerObservationSubscription(event.sender);
+  });
+
+  ipcMain.handle(APPLE_SPIKE_IPC_CHANNELS.observationUnsubscribe, async (
+    event,
+    ...args: unknown[]
+  ) => {
+    validate(event, args, 0);
+    removeObservationSubscription(event.sender);
+  });
+
   let registered = true;
   return () => {
     if (!registered) return;
     registered = false;
     for (const channel of Object.values(APPLE_SPIKE_IPC_CHANNELS)) {
+      if (channel === APPLE_SPIKE_IPC_CHANNELS.observationEvidence) continue;
       ipcMain.removeHandler(channel);
     }
+    for (const sender of [...observationSubscriptions.keys()]) {
+      removeObservationSubscription(sender);
+    }
+    service.dispose();
   };
 }

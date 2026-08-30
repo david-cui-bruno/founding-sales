@@ -5,6 +5,7 @@ import {
   APPLE_TEST_MESSAGE_CONSENT,
   scanTestMessagesInputSchema,
   sendTestMessageInputSchema,
+  type AppleSpikeObservationEvidence,
   type AppleSpikeResult,
   type AppleSpikeStatus,
 } from '../../shared/appleSpikeContract';
@@ -14,11 +15,27 @@ type AppleSpikePanelProps = {
   api: AppleSpikePreloadApi;
 };
 
+const statusValueLabel = (value: string): string => value === 'notDetermined'
+  ? 'not determined'
+  : value;
+
+const availabilityLabel = (available: boolean): string => available
+  ? 'available'
+  : 'unavailable';
+
 const safeResultMessage = (result: AppleSpikeResult): string => {
   if (result.outcome === 'capability_unavailable') return result.message;
   switch (result.action) {
-    case 'probe_capabilities':
-      return `Capability probe returned ${Object.keys(result.capabilities).length} fixed flags.`;
+    case 'probe_capabilities': {
+      const capabilities = result.capabilities;
+      return [
+        `Contacts: ${statusValueLabel(capabilities.contacts)}.`,
+        `Accessibility: ${statusValueLabel(capabilities.accessibility)}.`,
+        `Call-observation adapter: ${availabilityLabel(capabilities.callObservationAvailable)}.`,
+        `Recording control: ${availabilityLabel(capabilities.recordingControlAvailable)}.`,
+        `Manual recording fallback: ${capabilities.recordingControlAvailable ? 'available' : 'required'}.`,
+      ].join(' ');
+    }
     case 'request_contacts':
       return `Contacts access: ${result.contactAccess.replace('_', ' ')}.`;
     case 'prompt_accessibility':
@@ -30,11 +47,46 @@ const safeResultMessage = (result: AppleSpikeResult): string => {
     case 'scan_test_messages':
       return `Test activity: ${result.sentCount} sent, ${result.receivedCount} received.`;
     case 'start_call_observation':
-      return 'Call observation started.';
+      return 'Call observation started; waiting for native evidence.';
     case 'stop_call_observation':
       return 'Call observation stopped.';
     case 'send_test_message':
       return 'Test message sent.';
+  }
+};
+
+const degradationReasonLabels = {
+  accessibilityDenied: 'accessibility denied',
+  phoneUIUnavailable: 'Phone UI unavailable',
+  unsupportedPhoneUIVersion: 'unsupported Phone UI version',
+  ambiguousPhoneState: 'ambiguous Phone state',
+  noMacVisibleCall: 'no Mac-visible call',
+  snapshotFailed: 'Phone UI snapshot failed',
+  traversalDepthExceeded: 'Phone UI traversal depth exceeded',
+  traversalNodeLimitExceeded: 'Phone UI traversal node limit exceeded',
+  traversalCycleDetected: 'Phone UI traversal cycle detected',
+  traversalDeadlineExceeded: 'Phone UI traversal deadline exceeded',
+} as const satisfies Record<
+  Extract<AppleSpikeObservationEvidence, {
+    kind: 'capability';
+    available: false;
+  }>['reason'],
+  string
+>;
+
+const observationEvidenceLabel = (evidence: AppleSpikeObservationEvidence): string => {
+  switch (evidence.kind) {
+    case 'capability':
+      if (evidence.available === true) {
+        return 'Call-observation capability: available.';
+      }
+      return `Call-observation capability: degraded — ${degradationReasonLabels[evidence.reason]}.`;
+    case 'call_state':
+      return `Call state: ${evidence.outgoing ? 'outgoing' : 'incoming'}, ${
+        evidence.connected ? 'connected' : 'not connected'
+      }, ${evidence.ended ? 'ended' : 'active'}, ${evidence.onHold ? 'on hold' : 'not on hold'}.`;
+    case 'identity':
+      return `Call identity: ${evidence.identity}.`;
   }
 };
 
@@ -63,6 +115,7 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
   const [messageHandle, setMessageHandle] = useState('');
   const [messageBody, setMessageBody] = useState('');
   const [messageConsent, setMessageConsent] = useState('');
+  const [latestEvidence, setLatestEvidence] = useState<AppleSpikeObservationEvidence>();
 
   useEffect(() => {
     let cancelled = false;
@@ -137,6 +190,26 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
     operationGeneration.current += 1;
     operationInFlight.current = false;
   }, []);
+
+  useEffect(() => {
+    if (status?.enabled !== true) {
+      setLatestEvidence(undefined);
+      return undefined;
+    }
+    let cancelled = false;
+    let unsubscribe = (): void => undefined;
+    try {
+      unsubscribe = api.onObservationEvidence((evidence) => {
+        if (!cancelled) setLatestEvidence(evidence);
+      });
+    } catch {
+      return undefined;
+    }
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [api, status?.enabled]);
 
   const activityHandleValid = useMemo(
     () => scanTestMessagesInputSchema.safeParse({ normalizedHandle: activityHandle }).success,
@@ -350,6 +423,18 @@ export const AppleSpikePanel = ({ api }: AppleSpikePanelProps) => {
           </fieldset>
         </section>
       </div>
+
+      <section
+        className="apple-spike__evidence"
+        aria-labelledby="apple-observation-evidence"
+      >
+        <h3 id="apple-observation-evidence">Latest native evidence</h3>
+        <p aria-live="polite">
+          {latestEvidence === undefined
+            ? 'Waiting for sanitized native evidence.'
+            : observationEvidenceLabel(latestEvidence)}
+        </p>
+      </section>
 
       {resultMessage !== undefined && (
         <p className="apple-spike__result" role="status" aria-live="polite">

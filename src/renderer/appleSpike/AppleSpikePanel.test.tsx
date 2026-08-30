@@ -46,6 +46,9 @@ function fakeApi(overrides: Partial<AppleSpikePreloadApi> = {}): AppleSpikePrelo
     sendTestMessage: vi.fn(async () => ({
       action: 'send_test_message', outcome: 'completed', delivery: 'sent',
     })),
+    onObservationEvidence: vi.fn<AppleSpikePreloadApi['onObservationEvidence']>(
+      () => () => undefined,
+    ),
     ...overrides,
   } as AppleSpikePreloadApi;
 }
@@ -83,6 +86,7 @@ describe('AppleSpikePanel', () => {
     render(<AppleSpikePanel api={api} />);
 
     await waitFor(() => expect(api.getStatus).toHaveBeenCalledTimes(1));
+    expect(api.onObservationEvidence).not.toHaveBeenCalled();
     expect(screen.queryByRole('region', { name: 'Apple feasibility spike' })).toBeNull();
   });
 
@@ -252,7 +256,7 @@ describe('AppleSpikePanel', () => {
       confirmation: 'I CONSENT TO THIS TEST CALL',
     });
     resolve({ action: 'start_call_observation', outcome: 'completed', observation: 'started' });
-    await screen.findByText('Call observation started.');
+    await screen.findByText('Call observation started; waiting for native evidence.');
     expect((screen.getByLabelText('Type call consent phrase') as HTMLInputElement).value).toBe('');
     expect(button.hasAttribute('disabled')).toBe(true);
     fireEvent.click(button);
@@ -456,5 +460,112 @@ describe('AppleSpikePanel', () => {
 
     expect((await screen.findByRole('status')).textContent).toContain('unavailable on this Mac');
     expect(screen.getByRole('status').textContent?.toLowerCase()).not.toContain('complete');
+  });
+
+  it('renders every capability value explicitly, including the manual recording fallback', async () => {
+    const probeCapabilities = vi.fn<AppleSpikePreloadApi['probeCapabilities']>(async () => ({
+      action: 'probe_capabilities',
+      outcome: 'completed',
+      capabilities: {
+        contacts: 'restricted',
+        accessibility: 'denied',
+        callObservationAvailable: true,
+        recordingControlAvailable: false,
+      },
+    }));
+    render(<AppleSpikePanel api={fakeApi({ probeCapabilities })} />);
+    await screen.findByRole('region', { name: 'Apple feasibility spike' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Probe capabilities' }));
+
+    expect(await screen.findByText(
+      'Contacts: restricted. Accessibility: denied. Call-observation adapter: available. Recording control: unavailable. Manual recording fallback: required.',
+    )).not.toBeNull();
+  });
+
+  it('shows only the latest sanitized native evidence without identifiers or raw fields', async () => {
+    let listener: Parameters<AppleSpikePreloadApi['onObservationEvidence']>[0] | undefined;
+    const unsubscribe = vi.fn();
+    const onObservationEvidence = vi.fn<AppleSpikePreloadApi['onObservationEvidence']>((next) => {
+      listener = next;
+      return unsubscribe;
+    });
+    const view = render(<AppleSpikePanel api={fakeApi({ onObservationEvidence })} />);
+    await waitFor(() => expect(onObservationEvidence).toHaveBeenCalledTimes(1));
+
+    act(() => listener?.({
+      kind: 'capability',
+      available: false,
+      reason: 'accessibilityDenied',
+    }));
+    expect(screen.getByText('Call-observation capability: degraded — accessibility denied.')).not.toBeNull();
+
+    act(() => listener?.({
+      kind: 'call_state',
+      outgoing: true,
+      connected: false,
+      ended: false,
+      onHold: true,
+    }));
+    expect(screen.getByText('Call state: outgoing, not connected, active, on hold.')).not.toBeNull();
+    expect(screen.queryByText(/accessibility denied/i)).toBeNull();
+
+    act(() => listener?.({ kind: 'identity', identity: 'ambiguous' }));
+    expect(screen.getByText('Call identity: ambiguous.')).not.toBeNull();
+    expect(document.body.textContent).not.toContain('+15555550100');
+    expect(document.body.textContent).not.toContain('/Users/founder');
+    expect(document.body.textContent).not.toContain('callId');
+
+    view.unmount();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps one evidence listener under StrictMode and releases it on unmount', async () => {
+    let active = 0;
+    let maximumActive = 0;
+    let cleanupCount = 0;
+    const onObservationEvidence = vi.fn<AppleSpikePreloadApi['onObservationEvidence']>(() => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      let subscribed = true;
+      return () => {
+        if (!subscribed) return;
+        subscribed = false;
+        active -= 1;
+        cleanupCount += 1;
+      };
+    });
+    const view = render(
+      <StrictMode>
+        <AppleSpikePanel api={fakeApi({ onObservationEvidence })} />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(active).toBe(1));
+
+    expect(maximumActive).toBe(1);
+    view.unmount();
+    expect(active).toBe(0);
+    expect(cleanupCount).toBe(onObservationEvidence.mock.calls.length);
+  });
+
+  it('unsubscribes evidence when a later status disables the CLI-gated panel', async () => {
+    vi.useFakeTimers();
+    const getStatus = vi
+      .fn<AppleSpikePreloadApi['getStatus']>()
+      .mockResolvedValueOnce(readyStatus)
+      .mockResolvedValueOnce({
+        enabled: false,
+        bridge: { state: 'disabled', reason: 'not_packaged_or_configured' },
+      });
+    const unsubscribe = vi.fn();
+    const onObservationEvidence = vi.fn<AppleSpikePreloadApi['onObservationEvidence']>(() => unsubscribe);
+    render(<AppleSpikePanel api={fakeApi({ getStatus, onObservationEvidence })} />);
+    await act(async () => Promise.resolve());
+    expect(onObservationEvidence).toHaveBeenCalledTimes(1);
+
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+
+    expect(screen.queryByRole('region', { name: 'Apple feasibility spike' })).toBeNull();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 });

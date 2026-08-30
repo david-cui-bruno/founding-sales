@@ -221,3 +221,21 @@ button:focus-visible {
   background: #15202a;
   color: #fff;
 }
+
+.apple-spike__evidence {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid rgb(112 122 138 / 18%);
+  border-radius: 0.75rem;
+  background: rgb(255 255 255 / 65%);
+}
+
+.apple-spike__evidence h3,
+.apple-spike__evidence p {
+  margin: 0;
+}
+
+.apple-spike__evidence p {
+  margin-top: 0.45rem;
+  color: #4d5966;
+}

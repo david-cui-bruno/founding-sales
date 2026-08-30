@@ -5,17 +5,21 @@ import {
   bridgeErrorCodeSchema,
   bridgeRequestSchema,
   bridgeResponseSchema,
+  type BridgeEvent,
   type BridgeRequest,
 } from '../../shared/appleBridgeContract';
 import {
   appleSpikeManualActionSchema,
   appleCapabilityStatusSchema,
+  appleSpikeObservationDegradationReasonSchema,
+  appleSpikeObservationEvidenceSchema,
   appleSpikePermissionActionSchema,
   appleSpikeReadOnlyActionSchema,
   appleSpikeResultSchema,
   appleSpikeStatusSchema,
   type AppleSpikeAction,
   type AppleSpikeManualAction,
+  type AppleSpikeObservationEvidence,
   type AppleSpikePermissionAction,
   type AppleSpikeReadOnlyAction,
   type AppleSpikeResult,
@@ -30,11 +34,52 @@ const unavailableOutcome = (action: AppleSpikeAction['action']): AppleSpikeResul
     message: 'This Apple feasibility operation is unavailable on this Mac.',
   });
 
+const task4ObservationEventSchema = z.union([
+  z.object({
+    event: z.literal('capability.changed'),
+    payload: z.object({
+      source: z.literal('phone_observation'),
+      available: z.literal(true),
+    }).strict(),
+  }).strict(),
+  z.object({
+    event: z.literal('capability.changed'),
+    payload: z.object({
+      source: z.literal('phone_observation'),
+      available: z.literal(false),
+      reason: appleSpikeObservationDegradationReasonSchema,
+    }).strict(),
+  }).strict(),
+  z.object({
+    event: z.literal('call.stateChanged'),
+    payload: z.object({
+      outgoing: z.boolean(),
+      connected: z.boolean(),
+      ended: z.boolean(),
+      onHold: z.boolean(),
+    }).strict(),
+  }).strict(),
+  z.object({
+    event: z.literal('call.identityResolved'),
+    payload: z.object({ identity: z.literal('resolved') }).strict(),
+  }).strict(),
+  z.object({
+    event: z.literal('call.identityUnresolved'),
+    payload: z.object({
+      identity: z.enum(['unresolved', 'ambiguous']),
+    }).strict(),
+  }).strict(),
+]);
+
 export interface AppleSpikeServiceApi {
   getStatus(): AppleSpikeStatus;
   runReadOnlyCheck(action: AppleSpikeReadOnlyAction): Promise<AppleSpikeResult>;
   requestPermission(action: AppleSpikePermissionAction): Promise<AppleSpikeResult>;
   authorizeManualAction(action: AppleSpikeManualAction): Promise<AppleSpikeResult>;
+  subscribeObservation(
+    listener: (evidence: AppleSpikeObservationEvidence) => void,
+  ): () => void;
+  dispose(): void;
 }
 
 export type AppleSpikeServiceOptions = {
@@ -47,6 +92,12 @@ export class AppleSpikeService implements AppleSpikeServiceApi {
   readonly #enabled: boolean;
   readonly #bridge: AppleBridgeService;
   readonly #createUuid: () => string;
+  readonly #observationListeners = new Set<
+    (evidence: AppleSpikeObservationEvidence) => void
+  >();
+  #bridgeObservationUnsubscribe: (() => void) | undefined;
+  #bridgeBindingGeneration = 0;
+  #disposed = false;
 
   constructor(options: AppleSpikeServiceOptions) {
     this.#enabled = options.enabled;
@@ -55,10 +106,12 @@ export class AppleSpikeService implements AppleSpikeServiceApi {
   }
 
   getStatus(): AppleSpikeStatus {
-    return appleSpikeStatusSchema.parse({
+    const status = appleSpikeStatusSchema.parse({
       enabled: this.#enabled,
       bridge: this.#bridge.getStatus(),
     });
+    this.#reconcileObservationSubscription(status.bridge);
+    return status;
   }
 
   runReadOnlyCheck(action: AppleSpikeReadOnlyAction): Promise<AppleSpikeResult> {
@@ -71,6 +124,28 @@ export class AppleSpikeService implements AppleSpikeServiceApi {
 
   authorizeManualAction(action: AppleSpikeManualAction): Promise<AppleSpikeResult> {
     return this.#run(action, appleSpikeManualActionSchema);
+  }
+
+  subscribeObservation(
+    listener: (evidence: AppleSpikeObservationEvidence) => void,
+  ): () => void {
+    if (this.#disposed) return () => undefined;
+    this.#observationListeners.add(listener);
+    this.#reconcileObservationSubscription(this.#bridge.getStatus());
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      this.#observationListeners.delete(listener);
+      this.#reconcileObservationSubscription(this.#bridge.getStatus());
+    };
+  }
+
+  dispose(): void {
+    if (this.#disposed) return;
+    this.#disposed = true;
+    this.#observationListeners.clear();
+    this.#unbindObservationSubscription();
   }
 
   async #run<T extends AppleSpikeAction>(
@@ -87,7 +162,12 @@ export class AppleSpikeService implements AppleSpikeServiceApi {
     }
     const action = parsed.data;
 
-    if (this.#bridge.getStatus().state !== 'ready') {
+    const bridgeStatus = this.#bridge.getStatus();
+    this.#reconcileObservationSubscription(
+      bridgeStatus,
+      action.action === 'start_call_observation',
+    );
+    if (bridgeStatus.state !== 'ready') {
       throw new Error('Apple integration helper is unavailable.');
     }
 
@@ -278,6 +358,88 @@ export class AppleSpikeService implements AppleSpikeServiceApi {
         return 'The local Apple data format is unsupported.';
       default:
         return 'Apple feasibility operation failed safely.';
+    }
+  }
+
+  #reconcileObservationSubscription(
+    status: ReturnType<AppleBridgeService['getStatus']>,
+    forceRebind = false,
+  ): void {
+    const shouldBind = (
+      !this.#disposed
+      && this.#enabled
+      && status.state === 'ready'
+      && this.#observationListeners.size > 0
+    );
+    if (!shouldBind) {
+      this.#unbindObservationSubscription();
+      return;
+    }
+    if (forceRebind) this.#unbindObservationSubscription();
+    if (this.#bridgeObservationUnsubscribe !== undefined) return;
+
+    const generation = ++this.#bridgeBindingGeneration;
+    try {
+      this.#bridgeObservationUnsubscribe = this.#bridge.subscribe((event) => {
+        if (this.#disposed || generation !== this.#bridgeBindingGeneration) return;
+        const evidence = this.#observationEvidence(event);
+        if (evidence === undefined) return;
+        for (const listener of [...this.#observationListeners]) {
+          try {
+            listener(evidence);
+          } catch {
+            // One renderer listener cannot interrupt the sanitized evidence boundary.
+          }
+        }
+      });
+    } catch {
+      this.#bridgeObservationUnsubscribe = undefined;
+    }
+  }
+
+  #unbindObservationSubscription(): void {
+    if (this.#bridgeObservationUnsubscribe === undefined) return;
+    const unsubscribe = this.#bridgeObservationUnsubscribe;
+    this.#bridgeObservationUnsubscribe = undefined;
+    this.#bridgeBindingGeneration += 1;
+    try {
+      unsubscribe();
+    } catch {
+      // The optional Apple boundary remains disposable even if a stale client misbehaves.
+    }
+  }
+
+  #observationEvidence(event: BridgeEvent): AppleSpikeObservationEvidence | undefined {
+    const parsed = task4ObservationEventSchema.safeParse({
+      event: event.event,
+      payload: event.payload,
+    });
+    if (!parsed.success) return undefined;
+
+    switch (parsed.data.event) {
+      case 'capability.changed':
+        if (parsed.data.payload.available === true) {
+          return appleSpikeObservationEvidenceSchema.parse({
+            kind: 'capability',
+            available: true,
+          });
+        }
+        return appleSpikeObservationEvidenceSchema.parse({
+          kind: 'capability',
+          available: false,
+          reason: parsed.data.payload.reason,
+        });
+      case 'call.stateChanged':
+        return appleSpikeObservationEvidenceSchema.parse({
+          kind: 'call_state',
+          ...parsed.data.payload,
+        });
+      case 'call.identityResolved':
+      case 'call.identityUnresolved':
+        return appleSpikeObservationEvidenceSchema.parse({
+          kind: 'identity',
+          identity: parsed.data.payload.identity,
+        });
     }
   }
 }

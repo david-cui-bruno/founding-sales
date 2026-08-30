@@ -13,6 +13,9 @@ export const APPLE_SPIKE_IPC_CHANNELS = {
   startCallObservation: 'apple-spike:start-call-observation',
   stopCallObservation: 'apple-spike:stop-call-observation',
   sendTestMessage: 'apple-spike:send-test-message',
+  observationSubscribe: 'apple-spike:observation-subscribe',
+  observationUnsubscribe: 'apple-spike:observation-unsubscribe',
+  observationEvidence: 'apple-spike:observation-evidence',
 } as const;
 
 const utf8ByteLength = (value: string): number =>
@@ -134,6 +137,42 @@ export const appleCapabilityStatusSchema = z.object({
   recordingControlAvailable: z.boolean(),
 }).strict();
 
+export const appleSpikeObservationDegradationReasonSchema = z.enum([
+  'accessibilityDenied',
+  'phoneUIUnavailable',
+  'unsupportedPhoneUIVersion',
+  'ambiguousPhoneState',
+  'noMacVisibleCall',
+  'snapshotFailed',
+  'traversalDepthExceeded',
+  'traversalNodeLimitExceeded',
+  'traversalCycleDetected',
+  'traversalDeadlineExceeded',
+]);
+
+export const appleSpikeObservationEvidenceSchema = z.union([
+  z.object({
+    kind: z.literal('capability'),
+    available: z.literal(true),
+  }).strict(),
+  z.object({
+    kind: z.literal('capability'),
+    available: z.literal(false),
+    reason: appleSpikeObservationDegradationReasonSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('call_state'),
+    outgoing: z.boolean(),
+    connected: z.boolean(),
+    ended: z.boolean(),
+    onHold: z.boolean(),
+  }).strict(),
+  z.object({
+    kind: z.literal('identity'),
+    identity: z.enum(['resolved', 'unresolved', 'ambiguous']),
+  }).strict(),
+]);
+
 const unavailableResultSchema = z.object({
   action: z.enum([
     'probe_capabilities',
@@ -212,6 +251,9 @@ export type AppleSpikePermissionAction = z.infer<typeof appleSpikePermissionActi
 export type AppleSpikeManualAction = z.infer<typeof appleSpikeManualActionSchema>;
 export type AppleSpikeStatus = z.infer<typeof appleSpikeStatusSchema>;
 export type AppleSpikeResult = z.infer<typeof appleSpikeResultSchema>;
+export type AppleSpikeObservationEvidence = z.infer<
+  typeof appleSpikeObservationEvidenceSchema
+>;
 export type AppleSpikeUnavailableResult<Action extends AppleSpikeAction['action']> = {
   action: Action;
   outcome: 'capability_unavailable';

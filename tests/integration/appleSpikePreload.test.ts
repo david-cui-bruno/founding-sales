@@ -3,11 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const electron = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn(),
   invoke: vi.fn(),
+  on: vi.fn(),
+  removeListener: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
   contextBridge: { exposeInMainWorld: electron.exposeInMainWorld },
-  ipcRenderer: { invoke: electron.invoke },
+  ipcRenderer: {
+    invoke: electron.invoke,
+    on: electron.on,
+    removeListener: electron.removeListener,
+  },
 }));
 
 import { APPLE_SPIKE_IPC_CHANNELS } from '../../src/main/appleBridge/registerAppleSpikeIpc';
@@ -17,6 +23,8 @@ describe('preload Apple feasibility bridge', () => {
   beforeEach(async () => {
     electron.exposeInMainWorld.mockReset();
     electron.invoke.mockReset();
+    electron.on.mockReset();
+    electron.removeListener.mockReset();
     vi.resetModules();
     await import('../../src/preload');
   });
@@ -62,6 +70,7 @@ describe('preload Apple feasibility bridge', () => {
       'startCallObservation',
       'stopCallObservation',
       'sendTestMessage',
+      'onObservationEvidence',
     ]);
     expect(api.appleSpike).not.toHaveProperty('invoke');
     expect(api.appleSpike).not.toHaveProperty('run');
@@ -116,5 +125,68 @@ describe('preload Apple feasibility bridge', () => {
     });
 
     await expect(api.appleSpike.probeCapabilities()).rejects.toThrow();
+  });
+
+  it('validates observation evidence and removes the exact wrapped listener on cleanup', async () => {
+    electron.invoke.mockResolvedValue(undefined);
+    const api = exposedApi();
+    const listener = vi.fn();
+
+    const unsubscribe = api.appleSpike.onObservationEvidence(listener);
+    expect(electron.on).toHaveBeenCalledTimes(1);
+    const [channel, wrapped] = electron.on.mock.calls[0] as [
+      string,
+      (event: unknown, payload: unknown) => void,
+    ];
+    expect(channel).toBe(APPLE_SPIKE_IPC_CHANNELS.observationEvidence);
+    expect(electron.invoke).toHaveBeenCalledWith(
+      APPLE_SPIKE_IPC_CHANNELS.observationSubscribe,
+    );
+
+    wrapped({}, { kind: 'call_state', outgoing: true, connected: true, ended: false, onHold: false });
+    wrapped({}, {
+      kind: 'call_state',
+      outgoing: true,
+      connected: true,
+      ended: false,
+      onHold: false,
+      handle: '+15555550100',
+    });
+    wrapped({}, { kind: 'identity', identity: 'resolved', callId: 'private-call-id' });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith({
+      kind: 'call_state', outgoing: true, connected: true, ended: false, onHold: false,
+    });
+
+    unsubscribe();
+    unsubscribe();
+    await Promise.resolve();
+    expect(electron.removeListener).toHaveBeenCalledTimes(1);
+    expect(electron.removeListener).toHaveBeenCalledWith(channel, wrapped);
+    expect(electron.invoke).toHaveBeenCalledWith(
+      APPLE_SPIKE_IPC_CHANNELS.observationUnsubscribe,
+    );
+  });
+
+  it('multiplexes renderer listeners over one main subscription until the final cleanup', async () => {
+    electron.invoke.mockResolvedValue(undefined);
+    const api = exposedApi();
+    const firstCleanup = api.appleSpike.onObservationEvidence(vi.fn());
+    const secondCleanup = api.appleSpike.onObservationEvidence(vi.fn());
+
+    expect(electron.invoke.mock.calls.filter(
+      ([channel]) => channel === APPLE_SPIKE_IPC_CHANNELS.observationSubscribe,
+    )).toHaveLength(1);
+    firstCleanup();
+    await Promise.resolve();
+    expect(electron.invoke.mock.calls.filter(
+      ([channel]) => channel === APPLE_SPIKE_IPC_CHANNELS.observationUnsubscribe,
+    )).toHaveLength(0);
+
+    secondCleanup();
+    await Promise.resolve();
+    expect(electron.invoke.mock.calls.filter(
+      ([channel]) => channel === APPLE_SPIKE_IPC_CHANNELS.observationUnsubscribe,
+    )).toHaveLength(1);
   });
 });

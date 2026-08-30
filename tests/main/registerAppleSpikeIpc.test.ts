@@ -67,8 +67,60 @@ function fakeService(): AppleSpikeServiceApi {
       }
       return { action: action.action, outcome: 'completed', observation: 'stopped' };
     }),
+    subscribeObservation: vi.fn<AppleSpikeServiceApi['subscribeObservation']>(
+      () => () => undefined,
+    ),
+    dispose: vi.fn(),
   } as AppleSpikeServiceApi;
 }
+
+type TestWebContents = {
+  emit(event: string): void;
+  getURL: ReturnType<typeof vi.fn>;
+  isDestroyed: ReturnType<typeof vi.fn>;
+  on: ReturnType<typeof vi.fn>;
+  once: ReturnType<typeof vi.fn>;
+  removeListener: ReturnType<typeof vi.fn>;
+  send: ReturnType<typeof vi.fn>;
+  setDestroyed(value: boolean): void;
+  setUrl(value: string): void;
+};
+
+type TestInvokeEvent = {
+  sender: TestWebContents;
+  senderFrame: { url: string };
+};
+
+function fakeWebContents(initialUrl = 'callie://app/index.html'): TestWebContents {
+  let currentUrl = initialUrl;
+  let destroyed = false;
+  const listeners = new Map<string, Set<() => void>>();
+  const add = (event: string, listener: () => void) => {
+    const registered = listeners.get(event) ?? new Set();
+    registered.add(listener);
+    listeners.set(event, registered);
+  };
+  return {
+    getURL: vi.fn(() => currentUrl),
+    isDestroyed: vi.fn(() => destroyed),
+    send: vi.fn(),
+    on: vi.fn(add),
+    once: vi.fn(add),
+    removeListener: vi.fn((event: string, listener: () => void) => {
+      listeners.get(event)?.delete(listener);
+    }),
+    emit: (event) => {
+      for (const listener of [...(listeners.get(event) ?? [])]) listener();
+    },
+    setDestroyed: (value) => { destroyed = value; },
+    setUrl: (value) => { currentUrl = value; },
+  };
+}
+
+const eventFor = (sender: TestWebContents, frameUrl = sender.getURL()): TestInvokeEvent => ({
+  sender,
+  senderFrame: { url: frameUrl },
+});
 
 describe('registerAppleSpikeIpc', () => {
   beforeEach(() => {
@@ -77,8 +129,8 @@ describe('registerAppleSpikeIpc', () => {
   });
 
   function handlers() {
-    return new Map<string, (event: { senderFrame: { url: string } }, ...args: unknown[]) => unknown>(
-      electron.handle.mock.calls as [string, (event: { senderFrame: { url: string } }, ...args: unknown[]) => unknown][],
+    return new Map<string, (event: TestInvokeEvent, ...args: unknown[]) => unknown>(
+      electron.handle.mock.calls as [string, (event: TestInvokeEvent, ...args: unknown[]) => unknown][],
     );
   }
 
@@ -92,10 +144,13 @@ describe('registerAppleSpikeIpc', () => {
     registerAppleSpikeIpc(service);
 
     expect(electron.handle.mock.calls.map(([channel]) => channel)).toEqual(
-      Object.values(APPLE_SPIKE_IPC_CHANNELS),
+      Object.values(APPLE_SPIKE_IPC_CHANNELS).filter(
+        (channel) => channel !== APPLE_SPIKE_IPC_CHANNELS.observationEvidence,
+      ),
     );
     await expect(
       handlers().get(APPLE_SPIKE_IPC_CHANNELS.status)?.({
+        sender: fakeWebContents(),
         senderFrame: { url: 'callie://app/index.html' },
       }),
     ).resolves.toEqual({
@@ -109,9 +164,11 @@ describe('registerAppleSpikeIpc', () => {
     registerAppleSpikeIpc(service);
     const status = handlers().get(APPLE_SPIKE_IPC_CHANNELS.status);
 
-    await expect(status?.({ senderFrame: { url: 'https://attacker.invalid/' } })).rejects.toThrow('trusted');
     await expect(status?.(
-      { senderFrame: { url: 'callie://app/index.html' } },
+      eventFor(fakeWebContents('https://attacker.invalid/')),
+    )).rejects.toThrow('trusted');
+    await expect(status?.(
+      eventFor(fakeWebContents()),
       { path: '/private/escape' },
     )).rejects.toThrow('arguments');
     expect(service.getStatus).not.toHaveBeenCalled();
@@ -121,7 +178,7 @@ describe('registerAppleSpikeIpc', () => {
     const service = fakeService();
     registerAppleSpikeIpc(service);
     const registered = handlers();
-    const event = { senderFrame: { url: 'callie://app/index.html' } };
+    const event = eventFor(fakeWebContents());
 
     await expect(registered.get(APPLE_SPIKE_IPC_CHANNELS.scanTestMessages)?.(
       event,
@@ -147,7 +204,7 @@ describe('registerAppleSpikeIpc', () => {
     const service = fakeService();
     registerAppleSpikeIpc(service);
     const registered = handlers();
-    const event = { senderFrame: { url: 'callie://app/index.html' } };
+    const event = eventFor(fakeWebContents());
 
     await registered.get(APPLE_SPIKE_IPC_CHANNELS.probeCapabilities)?.(event);
     await registered.get(APPLE_SPIKE_IPC_CHANNELS.requestContacts)?.(event);
@@ -203,19 +260,120 @@ describe('registerAppleSpikeIpc', () => {
 
     await expect(
       handlers().get(APPLE_SPIKE_IPC_CHANNELS.scanRecentNotes)?.({
+        sender: fakeWebContents(),
         senderFrame: { url: 'callie://app/index.html' },
       }),
     ).rejects.toThrow();
   });
 
   it('unregisters every fixed handler once', () => {
-    const unregister = registerAppleSpikeIpc(fakeService());
+    const service = fakeService();
+    const unregister = registerAppleSpikeIpc(service);
 
     unregister();
     unregister();
 
     expect(electron.removeHandler.mock.calls.map(([channel]) => channel)).toEqual(
-      Object.values(APPLE_SPIKE_IPC_CHANNELS),
+      Object.values(APPLE_SPIKE_IPC_CHANNELS).filter(
+        (channel) => channel !== APPLE_SPIKE_IPC_CHANNELS.observationEvidence,
+      ),
     );
+    expect(service.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers one trusted renderer subscription and delivers only strict evidence once', async () => {
+    const service = fakeService();
+    const unsubscribeObservation = vi.fn();
+    service.subscribeObservation = vi.fn(() => unsubscribeObservation);
+    registerAppleSpikeIpc(service);
+    const registered = handlers();
+    const sender = fakeWebContents();
+    const event = eventFor(sender);
+    const subscribe = registered.get(APPLE_SPIKE_IPC_CHANNELS.observationSubscribe);
+
+    await subscribe?.(event);
+    await subscribe?.(event);
+    expect(service.subscribeObservation).toHaveBeenCalledTimes(1);
+    const listener = vi.mocked(service.subscribeObservation).mock.calls[0]?.[0];
+    listener?.({ kind: 'identity', identity: 'ambiguous' });
+
+    expect(sender.send).toHaveBeenCalledTimes(1);
+    expect(sender.send).toHaveBeenCalledWith(
+      APPLE_SPIKE_IPC_CHANNELS.observationEvidence,
+      { kind: 'identity', identity: 'ambiguous' },
+    );
+
+    listener?.({
+      kind: 'call_state',
+      outgoing: true,
+      connected: true,
+      ended: false,
+      onHold: false,
+      handle: '+15555550100',
+    } as never);
+    expect(sender.send).toHaveBeenCalledTimes(1);
+    expect(unsubscribeObservation).not.toHaveBeenCalled();
+  });
+
+  it('rejects untrusted or argument-bearing subscriptions before the service', async () => {
+    const service = fakeService();
+    registerAppleSpikeIpc(service);
+    const subscribe = handlers().get(APPLE_SPIKE_IPC_CHANNELS.observationSubscribe);
+
+    await expect(subscribe?.(
+      eventFor(fakeWebContents('https://attacker.invalid/')),
+    )).rejects.toThrow('trusted');
+    await expect(subscribe?.(
+      eventFor(fakeWebContents()),
+      { event: 'call.stateChanged' },
+    )).rejects.toThrow('arguments');
+    expect(service.subscribeObservation).not.toHaveBeenCalled();
+  });
+
+  it('removes subscriptions on explicit unsubscribe, navigation, and destruction', async () => {
+    const service = fakeService();
+    const unsubscribeCallbacks = [vi.fn(), vi.fn(), vi.fn()];
+    service.subscribeObservation = vi.fn(() => (
+      unsubscribeCallbacks.shift() ?? vi.fn()
+    ));
+    registerAppleSpikeIpc(service);
+    const registered = handlers();
+    const subscribe = registered.get(APPLE_SPIKE_IPC_CHANNELS.observationSubscribe);
+    const unsubscribe = registered.get(APPLE_SPIKE_IPC_CHANNELS.observationUnsubscribe);
+    const explicitSender = fakeWebContents();
+    const navigationSender = fakeWebContents();
+    const destroyedSender = fakeWebContents();
+
+    await subscribe?.(eventFor(explicitSender));
+    await subscribe?.(eventFor(navigationSender));
+    await subscribe?.(eventFor(destroyedSender));
+    expect(service.subscribeObservation).toHaveBeenCalledTimes(3);
+    const activeUnsubscribes = vi.mocked(service.subscribeObservation).mock.results.map(
+      (result) => result.value,
+    );
+
+    await unsubscribe?.(eventFor(explicitSender));
+    await unsubscribe?.(eventFor(explicitSender));
+    navigationSender.emit('did-start-navigation');
+    destroyedSender.setDestroyed(true);
+    destroyedSender.emit('destroyed');
+
+    for (const cleanup of activeUnsubscribes) expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it('revalidates the renderer URL at delivery and tears down an invalid destination', async () => {
+    const service = fakeService();
+    const unsubscribeObservation = vi.fn();
+    service.subscribeObservation = vi.fn(() => unsubscribeObservation);
+    registerAppleSpikeIpc(service);
+    const sender = fakeWebContents();
+    await handlers().get(APPLE_SPIKE_IPC_CHANNELS.observationSubscribe)?.(eventFor(sender));
+    const listener = vi.mocked(service.subscribeObservation).mock.calls[0]?.[0];
+    sender.setUrl('https://attacker.invalid/');
+
+    listener?.({ kind: 'capability', available: true });
+
+    expect(sender.send).not.toHaveBeenCalled();
+    expect(unsubscribeObservation).toHaveBeenCalledTimes(1);
   });
 });

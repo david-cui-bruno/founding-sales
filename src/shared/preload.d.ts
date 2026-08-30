@@ -1,6 +1,7 @@
 import type { AppHealth } from './healthContract';
 import type {
   AppleSpikeResultFor,
+  AppleSpikeObservationEvidence,
   AppleSpikeStatus,
   ScanTestMessagesInput,
   SendTestMessageInput,
@@ -17,6 +18,9 @@ export interface AppleSpikePreloadApi {
   startCallObservation(input: StartCallObservationInput): Promise<AppleSpikeResultFor<'start_call_observation'>>;
   stopCallObservation(): Promise<AppleSpikeResultFor<'stop_call_observation'>>;
   sendTestMessage(input: SendTestMessageInput): Promise<AppleSpikeResultFor<'send_test_message'>>;
+  onObservationEvidence(
+    listener: (evidence: AppleSpikeObservationEvidence) => void,
+  ): () => void;
 }
 
 export interface CalliePreloadApi {
