@@ -34,9 +34,14 @@ describe('Apple bridge protocol V1', () => {
         helperVersion: '1.0.0',
       });
     }
-    expect(bridgeEventSchema.parse(fixture('call-connected.event.json')).event).toBe(
-      'call.stateChanged',
-    );
+    const callEvent = bridgeEventSchema.parse(fixture('call-connected.event.json'));
+    expect(callEvent.event).toBe('call.stateChanged');
+    expect(callEvent.payload).toEqual({
+      outgoing: false,
+      connected: true,
+      ended: false,
+      onHold: false,
+    });
     expect(bridgeEventSchema.parse(fixture('recording-failed.event.json')).event).toBe(
       'recording.failed',
     );

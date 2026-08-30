@@ -5,6 +5,7 @@ import Foundation
 public actor StdioBridgeServer {
     private let codec: JSONLinesCodec
     private let handler: any BridgeCommandHandling
+    private let frameWriter: any BridgeServerFrameWriting
     private var receivedRequestIDs: Set<UUID> = []
     private var hasReceivedHello = false
     private var isShutdownRequested = false
@@ -17,6 +18,17 @@ public actor StdioBridgeServer {
     ) {
         self.handler = handler
         self.codec = codec
+        frameWriter = SynchronizedJSONLFrameWriter(codec: codec)
+    }
+
+    init(
+        handler: any BridgeCommandHandling,
+        codec: JSONLinesCodec = JSONLinesCodec(),
+        frameWriter: any BridgeServerFrameWriting
+    ) {
+        self.handler = handler
+        self.codec = codec
+        self.frameWriter = frameWriter
     }
 
     public func processLine(_ data: Data) async throws -> BridgeResponse {
@@ -52,17 +64,17 @@ public actor StdioBridgeServer {
         let response = await handler.handle(request)
         if request.method == .hello, response.ok {
             hasReceivedHello = true
+            frameWriter.enableEvents()
         }
         if request.method == .shutdown, response.ok {
             isShutdownRequested = true
+            frameWriter.disableEvents()
         }
         return response
     }
 
     public func run(
-        input: FileHandle = .standardInput,
-        output: FileHandle = .standardOutput,
-        errorOutput: FileHandle = .standardError
+        input: FileHandle = .standardInput
     ) async {
         var line = Data()
         var discardingOversizedLine = false
@@ -75,7 +87,7 @@ public actor StdioBridgeServer {
                         continue
                     }
                     if byte == 0x0A {
-                        await writeResponse(for: line, to: output, errorOutput: errorOutput)
+                        guard await writeResponse(for: line) else { return }
                         line.removeAll(keepingCapacity: true)
                         if isShutdownRequested { return }
                         continue
@@ -85,34 +97,31 @@ public actor StdioBridgeServer {
                     if line.count + 1 > codec.maxFrameBytes {
                         line.removeAll(keepingCapacity: true)
                         discardingOversizedLine = true
-                        writeDiagnostic("callie-apple-bridge: frame too large\n", to: errorOutput)
+                        frameWriter.writeDiagnostic(.frameTooLarge)
                     }
                 }
             }
         } catch {
-            writeDiagnostic("callie-apple-bridge: input failure\n", to: errorOutput)
+            frameWriter.writeDiagnostic(.inputFailure)
         }
 
         if !line.isEmpty && !discardingOversizedLine {
-            writeDiagnostic("callie-apple-bridge: invalid frame\n", to: errorOutput)
+            frameWriter.writeDiagnostic(.invalidFrame)
         }
     }
 
-    private func writeResponse(for line: Data, to output: FileHandle, errorOutput: FileHandle) async {
+    private func writeResponse(for line: Data) async -> Bool {
         do {
             let response = try await processLine(line)
-            output.write(try codec.encodeLine(response))
+            return frameWriter.writeResponse(response) != .terminalFailure
         } catch JSONLinesCodecError.frameTooLarge {
-            writeDiagnostic("callie-apple-bridge: frame too large\n", to: errorOutput)
+            frameWriter.writeDiagnostic(.frameTooLarge)
         } catch JSONLinesCodecError.invalidUTF8 {
-            writeDiagnostic("callie-apple-bridge: invalid frame\n", to: errorOutput)
+            frameWriter.writeDiagnostic(.invalidFrame)
         } catch {
-            writeDiagnostic("callie-apple-bridge: invalid frame\n", to: errorOutput)
+            frameWriter.writeDiagnostic(.invalidFrame)
         }
-    }
-
-    private func writeDiagnostic(_ message: String, to errorOutput: FileHandle) {
-        errorOutput.write(Data(message.utf8))
+        return true
     }
 
     private func invalidRequestResponse(id: UUID) -> BridgeResponse {

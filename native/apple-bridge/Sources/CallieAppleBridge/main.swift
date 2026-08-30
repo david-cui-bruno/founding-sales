@@ -2,11 +2,14 @@ import CallieAppleMacOS
 import Foundation
 
 do {
+    let frameWriter = SynchronizedJSONLFrameWriter()
     let dependencies = try AppleBridgeBootstrap.compose(
         arguments: Array(CommandLine.arguments.dropFirst()),
-        makeDependencies: { try MacOSDependencyContainer(stagingRoot: $0) }
+        makeDependencies: {
+            try MacOSDependencyContainer(stagingRoot: $0, eventEmitter: frameWriter)
+        }
     )
-    let server = StdioBridgeServer(handler: dependencies.handler)
+    let server = StdioBridgeServer(handler: dependencies.handler, frameWriter: frameWriter)
     Task.detached {
         await server.run()
         _ = dependencies

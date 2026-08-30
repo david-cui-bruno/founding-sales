@@ -1,6 +1,7 @@
 import CallieAppleProtocol
 import Foundation
 import Testing
+@testable import CallieAppleCore
 @testable import CallieAppleMacOS
 
 @Suite("MacOSDependencyContainerTests")
@@ -69,4 +70,91 @@ struct MacOSDependencyContainerTests {
         #expect(!String(describing: response.error).contains(root.path))
         #expect(FileManager.default.fileExists(atPath: retainedSyntheticPath.path))
     }
+
+    @Test func productionObservationFactoryInjectsOneRelayIntoAllThreeObserverSinks() async throws {
+        let emitter = ContainerEventEmitter()
+        let observerFactory = CapturingObserverFactory()
+        let permissions = ContainerPermissionSource()
+        let controller = MacOSDependencyContainer.makeFeasibilityController(
+            contacts: permissions,
+            accessibility: permissions,
+            eventEmitter: emitter,
+            callObservationAvailable: true,
+            makeObserver: observerFactory.make
+        )
+
+        #expect(emitter.events.isEmpty)
+        _ = await controller.probeCapabilities()
+        #expect(emitter.events.isEmpty)
+        #expect(try await controller.startCallObservation())
+        observerFactory.emitSyntheticEvidence()
+
+        #expect(emitter.events.map(\.seq) == [0, 1, 2])
+        #expect(emitter.events.map(\.event) == [
+            .callStateChanged,
+            .callIdentityResolved,
+            .capabilityChanged,
+        ])
+        #expect(!String(describing: emitter.events).contains("private@example.invalid"))
+        #expect(emitter.events[2].payload == [
+            "source": .string("phone_observation"),
+            "available": .bool(false),
+            "reason": .string("snapshotFailed"),
+        ])
+
+        #expect(await controller.stopCallObservation() == false)
+        observerFactory.emitSyntheticEvidence()
+        #expect(emitter.events.count == 3)
+    }
+}
+
+private final class ContainerEventEmitter: BridgeEventEmitting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [BridgeEvent] = []
+    var events: [BridgeEvent] { lock.withLock { storage } }
+    func emit(_ event: BridgeEvent) -> Bool {
+        lock.withLock { storage.append(event) }
+        return true
+    }
+}
+
+private struct ContainerPermissionSource: ContactAuthorizationReading, ContactAccessRequesting, AccessibilityAuthorizationReading, AccessibilityAccessPrompting {
+    func currentContactAccess() -> ContactAccess { .notDetermined }
+    func requestContactAccess() async throws -> Bool { false }
+    func currentAccessibilityAccess() -> AccessibilityAccess { .notDetermined }
+    func promptForAccessibility() -> Bool { false }
+}
+
+private final class CapturingObserverFactory: @unchecked Sendable {
+    private let observer = ContainerCallObserver()
+    private var identitySink: (@Sendable (PhoneIdentityEvent) -> Void)?
+    private var capabilitySink: (@Sendable (PhoneCallObservationCapability) -> Void)?
+
+    func make(
+        identitySink: @escaping @Sendable (PhoneIdentityEvent) -> Void,
+        capabilitySink: @escaping @Sendable (PhoneCallObservationCapability) -> Void
+    ) -> any CallObserving {
+        self.identitySink = identitySink
+        self.capabilitySink = capabilitySink
+        return observer
+    }
+
+    func emitSyntheticEvidence() {
+        observer.emit(ObservedCall(id: UUID(), outgoing: true, connected: true, ended: false, onHold: false))
+        identitySink?(PhoneIdentityEvent(
+            callID: UUID(),
+            identity: .resolved(NormalizedHandle("private@example.invalid"))
+        ))
+        capabilitySink?(.degraded(.snapshotFailed))
+    }
+}
+
+private final class ContainerCallObserver: CallObserving, @unchecked Sendable {
+    private let lock = NSLock()
+    private var sink: (@Sendable (ObservedCall) -> Void)?
+    func start(_ sink: @escaping @Sendable (ObservedCall) -> Void) throws {
+        lock.withLock { self.sink = sink }
+    }
+    func stop() { lock.withLock { sink = nil } }
+    func emit(_ call: ObservedCall) { lock.withLock { sink }?(call) }
 }

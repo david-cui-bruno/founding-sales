@@ -7,6 +7,7 @@ public actor MacOSFeasibilityController: AppleFeasibilityControlling {
     private let contacts: any ContactAuthorizationReading & ContactAccessRequesting
     private let accessibility: any AccessibilityAuthorizationReading & AccessibilityAccessPrompting
     private let observer: any CallObserving
+    private let eventRelay: any PhoneObservationEventRelaying
     private let observationAvailable: Bool
     private var observing = false
 
@@ -14,7 +15,10 @@ public actor MacOSFeasibilityController: AppleFeasibilityControlling {
         contacts: Contacts,
         accessibility: Accessibility,
         observer: any CallObserving,
-        callObservationAvailable: Bool
+        callObservationAvailable: Bool,
+        eventRelay: any PhoneObservationEventRelaying = PhoneObservationEventRelay(
+            emitter: DiscardingBridgeEventEmitter()
+        )
     ) where
         Contacts: ContactAuthorizationReading & ContactAccessRequesting,
         Accessibility: AccessibilityAuthorizationReading & AccessibilityAccessPrompting
@@ -22,6 +26,7 @@ public actor MacOSFeasibilityController: AppleFeasibilityControlling {
         self.contacts = contacts
         self.accessibility = accessibility
         self.observer = observer
+        self.eventRelay = eventRelay
         observationAvailable = callObservationAvailable
     }
 
@@ -52,17 +57,25 @@ public actor MacOSFeasibilityController: AppleFeasibilityControlling {
             throw AppleFeasibilityControlError.callObservationUnavailable
         }
         guard !observing else { return true }
+        eventRelay.beginObservationStart()
         do {
-            try observer.start { _ in }
+            try observer.start(eventRelay.receive)
+            guard eventRelay.commitObservationStart() else {
+                eventRelay.deactivate()
+                observer.stop()
+                throw AppleFeasibilityControlError.callObservationUnavailable
+            }
             observing = true
             return true
         } catch {
+            eventRelay.cancelObservationStart()
             throw AppleFeasibilityControlError.callObservationUnavailable
         }
     }
 
     public func stopCallObservation() -> Bool {
         guard observing else { return false }
+        eventRelay.deactivate()
         observer.stop()
         observing = false
         return false

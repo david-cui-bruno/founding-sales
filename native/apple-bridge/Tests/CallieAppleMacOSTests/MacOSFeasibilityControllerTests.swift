@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import CallieAppleCore
 @testable import CallieAppleMacOS
+import CallieAppleProtocol
 
 @Suite("MacOSFeasibilityControllerTests")
 struct MacOSFeasibilityControllerTests {
@@ -141,6 +142,83 @@ struct MacOSFeasibilityControllerTests {
         }
         #expect(observer.startCount == 0)
     }
+
+    @Test func successfulStartTransactionFlushesSynchronousCallEvidenceAfterObserverReturns() async throws {
+        let emitter = ControllerEventEmitter()
+        let relay = PhoneObservationEventRelay(emitter: emitter)
+        let observer = FakeCallObserver()
+        observer.onStart = { sink in
+            sink(ObservedCall(id: UUID(), outgoing: true, connected: true, ended: false, onHold: false))
+            #expect(emitter.events.isEmpty)
+        }
+        let permissions = FakeSystemPermissions(contacts: .full, accessibility: .granted)
+        let controller = MacOSFeasibilityController(
+            contacts: permissions,
+            accessibility: permissions,
+            observer: observer,
+            callObservationAvailable: true,
+            eventRelay: relay
+        )
+
+        #expect(try await controller.startCallObservation())
+
+        #expect(emitter.events.count == 1)
+        #expect(emitter.events[0].seq == 0)
+        #expect(emitter.events[0].event == .callStateChanged)
+        #expect(emitter.events[0].payload == [
+            "outgoing": .bool(true),
+            "connected": .bool(true),
+            "ended": .bool(false),
+            "onHold": .bool(false),
+        ])
+    }
+
+    @Test func failedStartTransactionDiscardsSynchronousEvidenceAndLateCallbacks() async {
+        let emitter = ControllerEventEmitter()
+        let relay = PhoneObservationEventRelay(emitter: emitter)
+        let observer = FakeCallObserver()
+        observer.onStart = { sink in
+            sink(ObservedCall(id: UUID(), outgoing: false, connected: true, ended: false, onHold: false))
+        }
+        observer.startError = .alreadyStarted
+        let permissions = FakeSystemPermissions(contacts: .full, accessibility: .granted)
+        let controller = MacOSFeasibilityController(
+            contacts: permissions,
+            accessibility: permissions,
+            observer: observer,
+            callObservationAvailable: true,
+            eventRelay: relay
+        )
+
+        await #expect(throws: AppleFeasibilityControlError.callObservationUnavailable) {
+            try await controller.startCallObservation()
+        }
+        observer.emitLateCall()
+
+        #expect(emitter.events.isEmpty)
+        #expect(await controller.stopCallObservation() == false)
+    }
+
+    @Test func stopDeactivatesRelayBeforeSyntheticLateObserverCallback() async throws {
+        let emitter = ControllerEventEmitter()
+        let relay = PhoneObservationEventRelay(emitter: emitter)
+        let observer = FakeCallObserver()
+        let permissions = FakeSystemPermissions(contacts: .full, accessibility: .granted)
+        let controller = MacOSFeasibilityController(
+            contacts: permissions,
+            accessibility: permissions,
+            observer: observer,
+            callObservationAvailable: true,
+            eventRelay: relay
+        )
+        #expect(try await controller.startCallObservation())
+
+        #expect(await controller.stopCallObservation() == false)
+        observer.emitLateCall()
+
+        #expect(emitter.events.isEmpty)
+        #expect(observer.stopCount == 1)
+    }
 }
 
 private final class FakeSystemPermissions: ContactAuthorizationReading, ContactAccessRequesting, AccessibilityAuthorizationReading, AccessibilityAccessPrompting, @unchecked Sendable {
@@ -194,15 +272,35 @@ private final class FakeCallObserver: CallObserving, @unchecked Sendable {
     private(set) var startCount = 0
     private(set) var stopCount = 0
     var startError: PhoneCallObservationError?
+    var onStart: (@Sendable (@escaping @Sendable (ObservedCall) -> Void) -> Void)?
+    private var capturedSink: (@Sendable (ObservedCall) -> Void)?
 
     func start(_ sink: @escaping @Sendable (ObservedCall) -> Void) throws {
         try lock.withLock {
             startCount += 1
+            capturedSink = sink
+            onStart?(sink)
             if let startError { throw startError }
         }
     }
 
     func stop() {
         lock.withLock { stopCount += 1 }
+    }
+
+    func emitLateCall() {
+        let sink = lock.withLock { capturedSink }
+        sink?(ObservedCall(id: UUID(), outgoing: true, connected: false, ended: true, onHold: false))
+    }
+}
+
+private final class ControllerEventEmitter: BridgeEventEmitting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [BridgeEvent] = []
+    var events: [BridgeEvent] { lock.withLock { storage } }
+
+    func emit(_ event: BridgeEvent) -> Bool {
+        lock.withLock { storage.append(event) }
+        return true
     }
 }

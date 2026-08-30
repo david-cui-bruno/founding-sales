@@ -36,6 +36,17 @@ The only error codes are `protocol_mismatch`, `invalid_request`, `permission_den
 
 Events are `{ "v": 1, "kind": "event", "seq": 0, "event": "…", "payload": { ... } }`. The fixed event vocabulary is `bridge.ready`, `capability.changed`, `call.stateChanged`, `call.identityResolved`, `call.identityUnresolved`, `recording.attempted`, `recording.verified`, `recording.failed`, `notes.artifactDiscovered`, `notes.exportCompleted`, `notes.transcriptUnavailable`, `messages.activityObserved`, and `bridge.warning`.
 
+The Phone observation relay starts its helper-lifetime sequence at `0` and advances it monotonically across all of its event sources. It emits nothing before a successful hello or before explicit observation start. Its payloads are restricted to these exact sanitized shapes:
+
+| Event | Exact Phone observation payload |
+| --- | --- |
+| `capability.changed` | `{ "source": "phone_observation", "available": true }` or `{ "source": "phone_observation", "available": false, "reason": "REASON" }`, where `REASON` is exactly one of `accessibilityDenied`, `phoneUIUnavailable`, `unsupportedPhoneUIVersion`, `ambiguousPhoneState`, `noMacVisibleCall`, `snapshotFailed`, `traversalDepthExceeded`, `traversalNodeLimitExceeded`, `traversalCycleDetected`, or `traversalDeadlineExceeded` |
+| `call.stateChanged` | `{ "outgoing": BOOLEAN, "connected": BOOLEAN, "ended": BOOLEAN, "onHold": BOOLEAN }` |
+| `call.identityResolved` | `{ "identity": "resolved" }` |
+| `call.identityUnresolved` | `{ "identity": "IDENTITY" }`, where `IDENTITY` is exactly `unresolved` or `ambiguous` |
+
+`BOOLEAN` above means a JSON boolean. These Phone observation events contain no handle, display name, call identifier, path, raw Accessibility data, or recording status. A transactional observation start buffers sanitized evidence until the adapter successfully starts; a failed start discards that evidence. Stop and shutdown deactivate the relay before observer cancellation, so stale callbacks cannot emit later events.
+
 Fixture ownership lives in `fixtures/`. Fixtures use only synthetic IDs and non-sensitive data and are decoded by both runtimes.
 
 `messages.sendTest` is a one-shot, explicitly consented test operation. Its `commandId` is distinct from the envelope correlation `id`; clients persist it before dispatch and must not automatically retry an ambiguous send. The helper accepts only the exact confirmation literal above.

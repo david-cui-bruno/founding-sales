@@ -6,13 +6,16 @@ public final class MacOSDependencyContainer: @unchecked Sendable {
     let stagingRoot: URL
     let feasibilityController: any AppleFeasibilityControlling
 
-    public convenience init(stagingRoot: URL) throws {
+    public convenience init(
+        stagingRoot: URL,
+        eventEmitter: any BridgeEventEmitting
+    ) throws {
         let messagesDatabase = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Library/Messages/chat.db")
         try self.init(
             stagingRoot: stagingRoot,
             messagesDatabase: messagesDatabase,
-            feasibilityController: Self.makeProductionFeasibilityController()
+            feasibilityController: Self.makeProductionFeasibilityController(eventEmitter: eventEmitter)
         )
     }
 
@@ -20,7 +23,9 @@ public final class MacOSDependencyContainer: @unchecked Sendable {
         try self.init(
             stagingRoot: stagingRoot,
             messagesDatabase: messagesDatabase,
-            feasibilityController: Self.makeProductionFeasibilityController()
+            feasibilityController: Self.makeProductionFeasibilityController(
+                eventEmitter: DiscardingBridgeEventEmitter()
+            )
         )
     }
 
@@ -66,20 +71,48 @@ public final class MacOSDependencyContainer: @unchecked Sendable {
         )
     }
 
-    private static func makeProductionFeasibilityController() -> any AppleFeasibilityControlling {
-        let callObserver = PhoneAccessibilityCallObserver(
-            snapshotter: SystemPhoneAXAdapter(),
-            scheduler: DispatchBoundedCallObservationScheduler(),
-            idGenerator: UUIDCallIDGenerator(),
-            registry: LockedCurrentPhoneCallRegistry(),
-            identitySink: { _ in },
-            capabilitySink: { _ in }
-        )
-        return MacOSFeasibilityController(
+    private static func makeProductionFeasibilityController(
+        eventEmitter: any BridgeEventEmitting
+    ) -> any AppleFeasibilityControlling {
+        makeFeasibilityController(
             contacts: SystemContactStore(),
             accessibility: SystemAccessibilityAuthorization(),
-            observer: callObserver,
-            callObservationAvailable: true
+            eventEmitter: eventEmitter,
+            callObservationAvailable: true,
+            makeObserver: { identitySink, capabilitySink in
+                PhoneAccessibilityCallObserver(
+                    snapshotter: SystemPhoneAXAdapter(),
+                    scheduler: DispatchBoundedCallObservationScheduler(),
+                    idGenerator: UUIDCallIDGenerator(),
+                    registry: LockedCurrentPhoneCallRegistry(),
+                    identitySink: identitySink,
+                    capabilitySink: capabilitySink
+                )
+            }
+        )
+    }
+
+    static func makeFeasibilityController<Contacts, Accessibility>(
+        contacts: Contacts,
+        accessibility: Accessibility,
+        eventEmitter: any BridgeEventEmitting,
+        callObservationAvailable: Bool,
+        makeObserver: (
+            @escaping @Sendable (PhoneIdentityEvent) -> Void,
+            @escaping @Sendable (PhoneCallObservationCapability) -> Void
+        ) -> any CallObserving
+    ) -> MacOSFeasibilityController where
+        Contacts: ContactAuthorizationReading & ContactAccessRequesting,
+        Accessibility: AccessibilityAuthorizationReading & AccessibilityAccessPrompting
+    {
+        let relay = PhoneObservationEventRelay(emitter: eventEmitter)
+        let observer = makeObserver(relay.receive, relay.receive)
+        return MacOSFeasibilityController(
+            contacts: contacts,
+            accessibility: accessibility,
+            observer: observer,
+            callObservationAvailable: callObservationAvailable,
+            eventRelay: relay
         )
     }
 }
