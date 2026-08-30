@@ -16,15 +16,28 @@ const CHILD_ENV = {
   PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
 } as const;
 const MAX_PENDING_STDERR_LINE_BYTES = 4_096;
+const LATE_ERROR_GUARD_TIMEOUT_MS = 5_000;
+
+type ErrorEmitter = {
+  on(event: 'error', listener: (error: Error) => void): unknown;
+  removeListener(event: 'error', listener: (error: Error) => void): unknown;
+};
+
+const ignoreLateTransportError = (): void => undefined;
 
 export type AppleBridgeChildProcess = {
   stdin: Writable;
   stdout: Readable;
   stderr: Readable;
   on(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
+  on(event: 'close', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
   on(event: 'error', listener: (error: Error) => void): unknown;
   removeListener(
     event: 'exit',
+    listener: (code: number | null, signal: NodeJS.Signals | null) => void,
+  ): unknown;
+  removeListener(
+    event: 'close',
     listener: (code: number | null, signal: NodeJS.Signals | null) => void,
   ): unknown;
   removeListener(event: 'error', listener: (error: Error) => void): unknown;
@@ -106,6 +119,7 @@ export class AppleBridgeProcess implements AppleBridgeTransport {
   #stderr = '';
   #stderrLine = '';
   #terminal = false;
+  #released = false;
   #inputClosed = false;
 
   readonly #onStdoutData = (chunk: Buffer | string): void => {
@@ -123,9 +137,7 @@ export class AppleBridgeProcess implements AppleBridgeTransport {
     code: number | null,
     signal: NodeJS.Signals | null,
   ): void => {
-    if (this.#terminal) return;
-    this.#terminal = true;
-    this.#emit({ type: 'exit', code, signal });
+    this.#finishTerminal({ type: 'exit', code, signal }, false);
   };
   readonly #onTerminalError = (): void => {
     this.#fail(new Error('Apple bridge process transport failed.'));
@@ -150,6 +162,7 @@ export class AppleBridgeProcess implements AppleBridgeTransport {
   }
 
   subscribe(listener: (event: AppleBridgeProcessEvent) => void): () => void {
+    if (this.#terminal) return () => undefined;
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
@@ -172,11 +185,21 @@ export class AppleBridgeProcess implements AppleBridgeTransport {
   }
 
   terminate(): void {
-    if (this.#terminal) return;
-    this.child.kill('SIGTERM');
+    this.#finishTerminal({
+      type: 'failure',
+      error: new Error('Apple bridge process was terminated.'),
+    }, true);
   }
 
   dispose(): void {
+    this.#terminal = true;
+    this.#releaseActiveListeners();
+  }
+
+  #releaseActiveListeners(): void {
+    if (this.#released) return;
+    this.#released = true;
+    installBoundedLateErrorGuards(this.child);
     this.child.stdout.removeListener('data', this.#onStdoutData);
     this.child.stdout.removeListener('error', this.#onTerminalError);
     this.child.stderr.removeListener('data', this.#onStderrData);
@@ -259,20 +282,52 @@ export class AppleBridgeProcess implements AppleBridgeTransport {
   }
 
   #fail(error: Error): void {
+    this.#finishTerminal({ type: 'failure', error }, true);
+  }
+
+  #finishTerminal(event: AppleBridgeProcessEvent, terminate: boolean): void {
     if (this.#terminal) return;
     this.#terminal = true;
-    this.child.stdout.removeListener('data', this.#onStdoutData);
-    try {
-      this.child.kill('SIGTERM');
-    } catch {
-      // The protocol failure remains authoritative even if termination races exit.
+    const listeners = [...this.#listeners];
+    this.#releaseActiveListeners();
+    if (terminate) {
+      try {
+        this.child.kill('SIGTERM');
+      } catch {
+        // The protocol failure remains authoritative even if termination races exit.
+      }
     }
-    this.#emit({ type: 'failure', error });
+    for (const listener of listeners) listener(event);
   }
 
   #emit(event: AppleBridgeProcessEvent): void {
     for (const listener of [...this.#listeners]) listener(event);
   }
+}
+
+function installBoundedLateErrorGuards(child: AppleBridgeChildProcess): void {
+  const emitters: readonly ErrorEmitter[] = [
+    child.stdin,
+    child.stdout,
+    child.stderr,
+    child,
+  ];
+  for (const emitter of emitters) emitter.on('error', ignoreLateTransportError);
+
+  let cleaned = false;
+  const cleanup = (): void => {
+    if (cleaned) return;
+    cleaned = true;
+    clearTimeout(cleanupTimer);
+    child.removeListener('close', cleanup);
+    for (const emitter of emitters) {
+      emitter.removeListener('error', ignoreLateTransportError);
+    }
+  };
+
+  const cleanupTimer = setTimeout(cleanup, LATE_ERROR_GUARD_TIMEOUT_MS);
+  cleanupTimer.unref();
+  child.on('close', cleanup);
 }
 
 function sanitizeDiagnostic(value: string): string {

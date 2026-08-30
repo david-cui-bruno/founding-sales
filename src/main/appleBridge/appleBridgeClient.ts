@@ -408,12 +408,12 @@ export class AppleBridgeClient implements AppleBridgeClientApi {
     this.#clearHandshakeTimer();
     this.#rejectReady(error);
     this.#rejectPending(error);
+    this.#dispose();
     try {
       this.#transport.terminate();
     } catch {
       // The original protocol/process failure remains authoritative.
     }
-    this.#dispose();
   }
 
   #rejectPending(error: Error): void {

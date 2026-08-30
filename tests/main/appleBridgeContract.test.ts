@@ -44,17 +44,25 @@ describe('Apple bridge protocol V1', () => {
   });
 
   it('requires an exact semantic and sanitized V1 hello success payload', () => {
-    expect(appleBridgeHelloResultSchema.parse({
-      selectedVersion: 1,
-      helperVersion: '1.0.0-beta.1+arm64',
-    })).toEqual({
-      selectedVersion: 1,
-      helperVersion: '1.0.0-beta.1+arm64',
-    });
+    for (const helperVersion of [
+      '1.0.0-0',
+      '1.0.0-beta.1+arm64',
+      '1.0.0-beta-01',
+      '1.0.0+001',
+    ]) {
+      expect(appleBridgeHelloResultSchema.parse({
+        selectedVersion: 1,
+        helperVersion,
+      })).toEqual({ selectedVersion: 1, helperVersion });
+    }
     for (const result of [
       { selectedVersion: 1 },
       { selectedVersion: 1, helperVersion: '../../private' },
       { selectedVersion: 1, helperVersion: 'version one' },
+      { selectedVersion: 1, helperVersion: '1.0.0-01' },
+      { selectedVersion: 1, helperVersion: '1.0.0-alpha.01' },
+      { selectedVersion: 1, helperVersion: '1.0.0-beta.01' },
+      { selectedVersion: 1, helperVersion: '1.0.0-00' },
       { selectedVersion: 2, helperVersion: '1.0.0' },
       { selectedVersion: 1, helperVersion: '1.0.0', path: '/private/value' },
     ]) {

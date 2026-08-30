@@ -116,6 +116,7 @@ describe('AppleBridgeClient', () => {
   it('rejects unsanitized or missing semantic helper versions and retains no terminal subscriber', async () => {
     for (const result of [
       { selectedVersion: 1, helperVersion: '../../private' },
+      { selectedVersion: 1, helperVersion: '1.0.0-01' },
       { selectedVersion: 1 },
     ]) {
       const transport = new FakeBridgeTransport();

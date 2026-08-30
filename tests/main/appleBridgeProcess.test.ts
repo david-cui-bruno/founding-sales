@@ -39,6 +39,7 @@ const emitErrorAsync = async (emitter: EventEmitter, message: string): Promise<v
 
 const assertChildListenersRemoved = (child: FakeChildProcess): void => {
   expect(child.listenerCount('error')).toBe(0);
+  expect(child.listenerCount('close')).toBe(0);
   expect(child.listenerCount('exit')).toBe(0);
   expect(child.stdin.listenerCount('error')).toBe(0);
   expect(child.stdout.listenerCount('error')).toBe(0);
@@ -46,6 +47,25 @@ const assertChildListenersRemoved = (child: FakeChildProcess): void => {
   expect(child.stdout.listenerCount('data')).toBe(0);
   expect(child.stderr.listenerCount('data')).toBe(0);
   expect(child.stderr.listenerCount('end')).toBe(0);
+};
+
+const assertOnlyBoundedLateErrorGuardsRemain = (child: FakeChildProcess): void => {
+  expect(child.listenerCount('error')).toBe(1);
+  expect(child.listenerCount('close')).toBe(1);
+  expect(child.listenerCount('exit')).toBe(0);
+  expect(child.stdin.listenerCount('error')).toBe(1);
+  expect(child.stdout.listenerCount('error')).toBe(1);
+  expect(child.stderr.listenerCount('error')).toBe(1);
+  expect(child.stdout.listenerCount('data')).toBe(0);
+  expect(child.stderr.listenerCount('data')).toBe(0);
+  expect(child.stderr.listenerCount('end')).toBe(0);
+};
+
+const emitLateTransportErrors = async (child: FakeChildProcess): Promise<void> => {
+  await emitErrorAsync(child.stdin, 'late stdin EPIPE /Users/founder');
+  await emitErrorAsync(child.stdout, 'late stdout error founder@example.com');
+  await emitErrorAsync(child.stderr, 'late stderr error +1 555 555 0100');
+  await emitErrorAsync(child, 'late child error /private/value');
 };
 
 const completeRealProcessHandshake = (
@@ -124,7 +144,11 @@ describe('AppleBridgeProcess', () => {
     const process = new AppleBridgeProcess(child);
     const events = collect(process);
 
-    child.stdout.write(Buffer.from([0x7B, 0xFF, 0x7D, 0x0A]));
+    child.stdout.write(Buffer.concat([
+      Buffer.from('{"value":"'),
+      Buffer.from([0xFF]),
+      Buffer.from('"}\n'),
+    ]));
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ type: 'failure' });
@@ -132,6 +156,9 @@ describe('AppleBridgeProcess', () => {
       'Apple bridge emitted a malformed JSONL protocol frame.',
     );
     expect(child.killed).toBe(true);
+    assertOnlyBoundedLateErrorGuardsRemain(child);
+    child.emit('close', null, null);
+    assertChildListenersRemoved(child);
   });
 
   it.each([
@@ -146,7 +173,9 @@ describe('AppleBridgeProcess', () => {
       const process = new AppleBridgeProcess(child);
       const helloId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
       const client = new AppleBridgeClient(process, { createRequestId: () => helloId });
+      const processEvents = collect(process);
       completeRealProcessHandshake(child, helloId);
+      processEvents.length = 0;
       const request = {
         v: 1,
         kind: 'request',
@@ -165,9 +194,17 @@ describe('AppleBridgeProcess', () => {
       await rejection;
       expect(child.killed).toBe(true);
       expect(child.writes.filter((buffer) => buffer.includes('capabilities.probe'))).toHaveLength(1);
-      expect(vi.getTimerCount()).toBe(0);
-      process.dispose();
+      expect(processEvents).toHaveLength(1);
+      expect(processEvents[0]).toMatchObject({ type: 'failure' });
+      assertOnlyBoundedLateErrorGuardsRemain(child);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await expect(emitLateTransportErrors(child)).resolves.toBeUndefined();
+      expect(processEvents).toHaveLength(1);
+
+      child.emit('close', null, null);
       assertChildListenersRemoved(child);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -187,8 +224,32 @@ describe('AppleBridgeProcess', () => {
       error: { message: 'Apple bridge process transport failed.' },
     });
     expect(child.killed).toBe(true);
-    process.dispose();
+    assertOnlyBoundedLateErrorGuardsRemain(child);
+    await expect(emitLateTransportErrors(child)).resolves.toBeUndefined();
+    expect(events).toHaveLength(1);
+    child.emit('close', null, null);
     assertChildListenersRemoved(child);
+  });
+
+  it('keeps explicit disposal idempotent and bounds late-error guards without process close', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeChildProcess();
+      const process = new AppleBridgeProcess(child);
+
+      process.dispose();
+      process.dispose();
+
+      assertOnlyBoundedLateErrorGuardsRemain(child);
+      expect(vi.getTimerCount()).toBe(1);
+      await expect(emitLateTransportErrors(child)).resolves.toBeUndefined();
+
+      await vi.runAllTimersAsync();
+      assertChildListenersRemoved(child);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('retains at most 32 KiB of sanitized stderr diagnostics only', () => {
@@ -213,7 +274,7 @@ describe('AppleBridgeProcess', () => {
     expect(events).toEqual([]);
   });
 
-  it('reports process exit through the bounded event channel', () => {
+  it('reports process exit and owns terminal listener cleanup', async () => {
     const child = new FakeChildProcess();
     const process = new AppleBridgeProcess(child);
     const events = collect(process);
@@ -221,6 +282,11 @@ describe('AppleBridgeProcess', () => {
     child.emit('exit', 9, null);
 
     expect(events).toEqual([{ type: 'exit', code: 9, signal: null }]);
+    assertOnlyBoundedLateErrorGuardsRemain(child);
+    await expect(emitLateTransportErrors(child)).resolves.toBeUndefined();
+    expect(events).toEqual([{ type: 'exit', code: 9, signal: null }]);
+    child.emit('close', 9, null);
+    assertChildListenersRemoved(child);
   });
 
   it('spawns with no shell, a fixed staging argument, and an allowlisted environment', () => {

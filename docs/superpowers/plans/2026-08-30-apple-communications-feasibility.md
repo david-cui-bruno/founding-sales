@@ -288,7 +288,7 @@ Commit these exact non-sensitive fixture bodies, using the same fixed request ID
 ```
 
 ```json
-{"v":1,"kind":"response","id":"11111111-1111-4111-8111-111111111111","ok":true,"result":{"selectedVersion":1,"helperVersion":"0.1.0-test","bundleIdentifier":"com.callie.foundersales.applebridge","osVersion":"26.4","architecture":"arm64"}}
+{"v":1,"kind":"response","id":"11111111-1111-4111-8111-111111111111","ok":true,"result":{"selectedVersion":1,"helperVersion":"0.1.0-test"}}
 ```
 
 ```json
@@ -751,7 +751,7 @@ git commit -m "feat: add safe Notes and Messages spike adapters"
 
 **Interfaces:**
 - Consumes: Task 1 Zod contracts.
-- Produces: `resolveAppleBridgeExecutable(options)`, `verifyHelperSignature(options)`, `AppleBridgeProcess`, `AppleBridgeClient.request(request, timeoutMs)`, `AppleBridgeClient.subscribe(listener)`, and `AppleBridgeClient.shutdown()`.
+- Produces: `resolveAppleBridgeExecutable(options)`, `verifyHelperSignature(options)`, `AppleBridgeProcess`, `AppleBridgeClient.ready()`, `AppleBridgeClient.request(request, timeoutMs)`, `AppleBridgeClient.subscribe(listener)`, and `AppleBridgeClient.shutdown()`.
 
 - [ ] **Step 1: RED — test framing, timeout, packaged path, and non-retry behavior**
 
@@ -799,6 +799,7 @@ Expected: FAIL because the bridge process/client modules do not exist.
 
 ```ts
 export type AppleBridgeClientApi = {
+  ready(): Promise<{ helperVersion: string; protocolVersion: 1 }>;
   request<T extends BridgeRequest>(request: T, timeoutMs?: number): Promise<BridgeResponse>;
   subscribe(listener: (event: BridgeEvent) => void): () => void;
   shutdown(): Promise<void>;
@@ -820,7 +821,7 @@ export const spawnAppleBridge = (
   });
 ```
 
-`AppleBridgeProcess` must reject stdout lines over 262,144 bytes before JSON parsing, cap retained stderr at 32 KiB, redact phone/email/path-shaped values, and treat stderr as diagnostics only. `AppleBridgeClient` validates every frame with Zod, requires hello within three seconds, rejects duplicate/unknown response IDs, never retries side-effecting requests, and removes timers/listeners when requests settle.
+`AppleBridgeProcess` must reject stdout lines over 262,144 bytes before JSON parsing, cap retained stderr at 32 KiB, redact phone/email/path-shaped values, and treat stderr as diagnostics only. `AppleBridgeClient` validates every frame with Zod, requires the exact `{ selectedVersion, helperVersion }` hello result within three seconds, exposes `ready()` as the only typed handshake-readiness gate, rejects duplicate/unknown response IDs, never retries side-effecting requests, and removes timers/listeners when requests settle.
 
 `verifyHelperSignature` uses `execFile`, never a shell, with fixed `/usr/bin/codesign` arguments. It runs strict verification, extracts identifier and Team ID, compares both with compiled expectations in packaged mode, and permits an explicit unsigned development result only when `isPackaged === false`. The supervisor must call it before spawning the packaged helper.
 
