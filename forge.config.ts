@@ -11,6 +11,17 @@ import { FuseV1Options, FuseVersion } from '@electron/fuses';
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
+    ignore: (filePath: string) => {
+      if (filePath.length === 0) {
+        return false;
+      }
+
+      return !(
+        filePath.startsWith('/.vite') ||
+        filePath === '/node_modules' ||
+        filePath.startsWith('/node_modules/better-sqlite3')
+      );
+    },
   },
   rebuildConfig: {},
   makers: [
