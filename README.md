@@ -8,8 +8,10 @@ This foundation targets Apple Silicon macOS. Build and package it on an arm64
 Mac; the package verifier intentionally rejects an x64 executable or a native
 SQLite module that is not a Darwin arm64 Mach-O binary.
 
-Use Node.js 22.12.0 or newer. The direct Electron fuse tooling is exports-only
-ESM and declares that Node floor; `package.json` enforces the same requirement.
+Use Node.js 22.13 or newer on the Node 22 release line, or Node.js 24 or newer.
+Node 23 is not supported. Installed test and lint tooling sets the 22.13 floor;
+`package.json` declares the exact policy and npm enforces it through the project
+`.npmrc`.
 
 Run the clean verification sequence from the project root:
 

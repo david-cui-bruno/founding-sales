@@ -286,29 +286,32 @@ const verifySecurityFuses = (appPath, runCommand, fusesCommand) => {
   }
 
   const fuseStates = {};
+  const knownStates = new Set(['Enabled', 'Disabled', 'Inherited', 'Removed']);
   for (const line of fuseOutput.split(/\r?\n/)) {
-    const match = line
-      .trim()
-      .match(/^(.+?) is (Enabled|Disabled|Inherited|Removed)$/);
+    const match = line.trim().match(/^(\S+) is (.+)$/);
     if (match === null) {
       continue;
     }
 
     const [, name, state] = match;
+    if (!knownStates.has(state)) {
+      fail(
+        `Electron fuse enumeration contains unknown state for ${name}: ${state}`,
+      );
+    }
+    if (!(name in requiredFuses)) {
+      fail(`Electron fuse enumeration contains unknown fuse name: ${name}`);
+    }
     if (name in fuseStates) {
       fail(`Electron fuse enumeration contains duplicate state for ${name}`);
     }
     fuseStates[name] = state;
   }
 
-  const expectedNames = Object.keys(requiredFuses).sort();
-  const observedNames = Object.keys(fuseStates).sort();
-  if (JSON.stringify(observedNames) !== JSON.stringify(expectedNames)) {
-    const missing = expectedNames.filter((name) => !(name in fuseStates));
-    const unknown = observedNames.filter((name) => !(name in requiredFuses));
-    fail(
-      `Electron fuse enumeration is not the exact Electron 44 V1 set (missing=${missing.join(', ') || 'none'}; unknown=${unknown.join(', ') || 'none'})`,
-    );
+  for (const name of Object.keys(requiredFuses)) {
+    if (!(name in fuseStates)) {
+      fail(`Electron fuse enumeration is missing required fuse: ${name}`);
+    }
   }
 
   for (const [name, requiredState] of Object.entries(requiredFuses)) {

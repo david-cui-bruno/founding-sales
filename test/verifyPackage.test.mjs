@@ -344,7 +344,30 @@ describe('package verification', () => {
     ).toThrow('PACKAGE: required security fuse is not configured: RunAsNode is Disabled');
   });
 
-  it('rejects incomplete or unknown fuse enumeration', async () => {
+  it('rejects an unknown fuse name even when its state is known', async () => {
+    const outDirectory = await makeTemporaryDirectory();
+    const fixture = await createPackagedApp(outDirectory);
+    const unknownOutput = successfulCommand({
+      command: 'electron-fuses',
+      args: [fixture.appPath],
+    })
+      .concat('\nFutureElectronFuse is Enabled');
+
+    expect(() =>
+      verifyPackagedApp(fixture.appPath, {
+        runCommand: ({ command, args }) =>
+          command === 'electron-fuses'
+            ? unknownOutput
+            : successfulCommand({ command, args }),
+        asarCommand: 'asar',
+        fusesCommand: 'electron-fuses',
+      }),
+    ).toThrow(
+      'PACKAGE: Electron fuse enumeration contains unknown fuse name: FutureElectronFuse',
+    );
+  });
+
+  it('rejects a missing fuse name explicitly', async () => {
     const outDirectory = await makeTemporaryDirectory();
     const fixture = await createPackagedApp(outDirectory);
     const incompleteOutput = successfulCommand({
@@ -353,7 +376,6 @@ describe('package verification', () => {
     })
       .split('\n')
       .filter((line) => !line.startsWith('WasmTrapHandlers'))
-      .concat('FutureElectronFuse is Enabled')
       .join('\n');
 
     expect(() =>
@@ -366,7 +388,51 @@ describe('package verification', () => {
         fusesCommand: 'electron-fuses',
       }),
     ).toThrow(
-      'PACKAGE: Electron fuse enumeration is not the exact Electron 44 V1 set',
+      'PACKAGE: Electron fuse enumeration is missing required fuse: WasmTrapHandlers',
+    );
+  });
+
+  it('rejects duplicate fuse names explicitly', async () => {
+    const outDirectory = await makeTemporaryDirectory();
+    const fixture = await createPackagedApp(outDirectory);
+    const duplicateOutput = successfulCommand({
+      command: 'electron-fuses',
+      args: [fixture.appPath],
+    }).concat('\nRunAsNode is Disabled');
+
+    expect(() =>
+      verifyPackagedApp(fixture.appPath, {
+        runCommand: ({ command, args }) =>
+          command === 'electron-fuses'
+            ? duplicateOutput
+            : successfulCommand({ command, args }),
+        asarCommand: 'asar',
+        fusesCommand: 'electron-fuses',
+      }),
+    ).toThrow(
+      'PACKAGE: Electron fuse enumeration contains duplicate state for RunAsNode',
+    );
+  });
+
+  it('rejects an unknown state token instead of silently skipping its fuse line', async () => {
+    const outDirectory = await makeTemporaryDirectory();
+    const fixture = await createPackagedApp(outDirectory);
+    const unknownStateOutput = successfulCommand({
+      command: 'electron-fuses',
+      args: [fixture.appPath],
+    }).replace('WasmTrapHandlers is Enabled', 'WasmTrapHandlers is Locked');
+
+    expect(() =>
+      verifyPackagedApp(fixture.appPath, {
+        runCommand: ({ command, args }) =>
+          command === 'electron-fuses'
+            ? unknownStateOutput
+            : successfulCommand({ command, args }),
+        asarCommand: 'asar',
+        fusesCommand: 'electron-fuses',
+      }),
+    ).toThrow(
+      'PACKAGE: Electron fuse enumeration contains unknown state for WasmTrapHandlers: Locked',
     );
   });
 

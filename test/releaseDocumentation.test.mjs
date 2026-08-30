@@ -1,7 +1,9 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import semver from 'semver';
 import { describe, expect, it } from 'vitest';
 
 const projectRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -24,6 +26,43 @@ describe('release verification documentation', () => {
     expect(readme).toContain(documentedSequence);
     expect(packageJson.scripts['verify:e2e']).toBe(
       'npm run package && npm run test:e2e',
+    );
+  });
+
+  it('declares only Node release lines supported by the installed toolchain', () => {
+    const packageJson = JSON.parse(
+      readFileSync(join(projectRoot, 'package.json'), 'utf8'),
+    );
+    const nodeRange = packageJson.engines.node;
+    const boundaries = [
+      ['22.12.999', false],
+      ['22.13.0', true],
+      ['22.99.0', true],
+      ['23.0.0', false],
+      ['23.99.0', false],
+      ['24.0.0', true],
+      ['25.9.0', true],
+    ];
+
+    for (const [version, expected] of boundaries) {
+      expect(semver.satisfies(version, nodeRange), version).toBe(expected);
+    }
+  });
+
+  it('makes npm enforce the project engine policy', () => {
+    expect(
+      execFileSync('npm', ['config', 'get', 'engine-strict', '--location=project'], {
+        cwd: projectRoot,
+        encoding: 'utf8',
+      }).trim(),
+    ).toBe('true');
+  });
+
+  it('documents supported Node release lines without claiming Node 23', () => {
+    const readme = readFileSync(join(projectRoot, 'README.md'), 'utf8');
+
+    expect(readme).toMatch(
+      /Use Node\.js 22\.13.*Node\.js 24.*Node 23 is not supported/s,
     );
   });
 });
