@@ -17,8 +17,9 @@
     "typecheck": "tsc --noEmit",
     "verify": "npm run typecheck && npm run lint && npm run test",
     "verify:e2e": "npm run package && npm run test:e2e",
+    "verify:package": "npm run package && node scripts/verifyPackage.mjs",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
-    "postinstall": "electron-forge install-app-deps && npm run rebuild"
+    "postinstall": "install-electron --no && npm run rebuild"
   },
   "keywords": [],
   "author": {
