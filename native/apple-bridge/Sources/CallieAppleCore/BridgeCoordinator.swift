@@ -33,8 +33,8 @@ public actor BridgeCoordinator: BridgeCommandHandling {
 
     /// Keeps Task 2's bounded request behavior intact. Observation and recording
     /// arrive through typed ports, never through an expandable bridge command.
-    public nonisolated func handle(_ request: BridgeRequest) -> BridgeResponse {
-        BoundedBridgeCommandHandler().handle(request)
+    public nonisolated func handle(_ request: BridgeRequest) async -> BridgeResponse {
+        await BoundedBridgeCommandHandler().handle(request)
     }
 
     public func recordingState(for callID: UUID) -> RecordingState? {

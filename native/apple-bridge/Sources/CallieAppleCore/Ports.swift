@@ -26,6 +26,46 @@ public protocol CapabilityProbing: Sendable {
     func probe() -> CapabilityStatus
 }
 
+public enum AppleFeasibilityControlError: Error, Sendable, Equatable {
+    case callObservationUnavailable
+    case permissionRequestFailed
+}
+
+/// The fixed permission and Phone-observation authority exposed by the V1
+/// feasibility bridge. It intentionally has no recording-control operation.
+public protocol AppleFeasibilityControlling: Sendable {
+    func probeCapabilities() async -> CapabilityStatus
+    func requestContactAccess() async throws -> ContactAccess
+    func promptForAccessibility() async -> Bool
+    func startCallObservation() async throws -> Bool
+    func stopCallObservation() async -> Bool
+}
+
+public struct UnavailableAppleFeasibilityController: AppleFeasibilityControlling, Sendable {
+    public init() {}
+
+    public func probeCapabilities() async -> CapabilityStatus {
+        CapabilityStatus(
+            contacts: .notDetermined,
+            accessibility: .notDetermined,
+            callObservationAvailable: false,
+            recordingControlAvailable: false
+        )
+    }
+
+    public func requestContactAccess() async throws -> ContactAccess {
+        throw AppleFeasibilityControlError.permissionRequestFailed
+    }
+
+    public func promptForAccessibility() async -> Bool { false }
+
+    public func startCallObservation() async throws -> Bool {
+        throw AppleFeasibilityControlError.callObservationUnavailable
+    }
+
+    public func stopCallObservation() async -> Bool { false }
+}
+
 public struct NotesArtifactID: Sendable, Equatable, Hashable {
     public let value: UUID
 

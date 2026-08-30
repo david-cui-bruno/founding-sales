@@ -2,13 +2,13 @@ import CallieAppleProtocol
 import Foundation
 
 public protocol BridgeCommandHandling: Sendable {
-    func handle(_ request: BridgeRequest) -> BridgeResponse
+    func handle(_ request: BridgeRequest) async -> BridgeResponse
 }
 
 public struct BoundedBridgeCommandHandler: BridgeCommandHandling {
     public init() {}
 
-    public func handle(_ request: BridgeRequest) -> BridgeResponse {
+    public func handle(_ request: BridgeRequest) async -> BridgeResponse {
         switch request.method {
         case .hello:
             return BridgeResponse(id: request.id, result: [

@@ -5,7 +5,7 @@ import Testing
 
 @Suite("FeasibilityBridgeCommandHandlerTests")
 struct FeasibilityBridgeCommandHandlerTests {
-    @Test func initializationAndHandshakeDoNotInvokeFeasibilityPorts() throws {
+    @Test func initializationAndHandshakeDoNotInvokeFeasibilityPorts() async throws {
         let ports = FakeFeasibilityPorts()
         let handler = makeHandler(ports: ports)
         let request = try BridgeRequest(
@@ -14,7 +14,7 @@ struct FeasibilityBridgeCommandHandlerTests {
             params: .hello(try HelloRequestParameters(supportedVersions: [1]))
         )
 
-        let response = handler.handle(request)
+        let response = await handler.handle(request)
         #expect(response.ok)
         #expect(response.result == [
             "selectedVersion": .number(1),
@@ -23,7 +23,7 @@ struct FeasibilityBridgeCommandHandlerTests {
         #expect(ports.operations.isEmpty)
     }
 
-    @Test func onlyFixedNotesMethodsDispatchAndReturnNoPath() throws {
+    @Test func onlyFixedNotesMethodsDispatchAndReturnNoPath() async throws {
         let ports = FakeFeasibilityPorts()
         let handler = makeHandler(ports: ports)
         let scanID = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
@@ -35,8 +35,8 @@ struct FeasibilityBridgeCommandHandlerTests {
             params: .exportCallRecording(.init(artifactId: ports.artifactID.value))
         )
 
-        let scanResponse = handler.handle(scan)
-        let exportResponse = handler.handle(export)
+        let scanResponse = await handler.handle(scan)
+        let exportResponse = await handler.handle(export)
 
         #expect(scanResponse.result == [
             "artifacts": .array([.object([
@@ -55,7 +55,7 @@ struct FeasibilityBridgeCommandHandlerTests {
         #expect(ports.operations == [.scan(fixtureNow.addingTimeInterval(-86_400)), .export(ports.artifactID)])
     }
 
-    @Test func sendUsesExplicitCommandIDAndExactConfirmationWithoutRetry() throws {
+    @Test func sendUsesExplicitCommandIDAndExactConfirmationWithoutRetry() async throws {
         let ports = FakeFeasibilityPorts()
         let handler = makeHandler(ports: ports)
         let commandID = UUID(uuidString: "33333333-3333-4333-8333-333333333333")!
@@ -70,7 +70,7 @@ struct FeasibilityBridgeCommandHandlerTests {
             ))
         )
 
-        let response = handler.handle(request)
+        let response = await handler.handle(request)
 
         #expect(response.result == ["commandId": .string(commandID.uuidString.lowercased())])
         #expect(ports.operations == [.send(.init(
@@ -81,18 +81,18 @@ struct FeasibilityBridgeCommandHandlerTests {
         ))])
     }
 
-    @Test func failedSendCommandIDIsStillAttemptedAndCannotBeDispatchedAgain() throws {
+    @Test func failedSendCommandIDIsStillAttemptedAndCannotBeDispatchedAgain() async throws {
         let ports = FakeFeasibilityPorts()
         ports.sendError = .sendFailed
         let handler = makeHandler(ports: ports)
         let commandID = UUID()
 
-        #expect(handler.handle(try sendRequest(commandID: commandID)).error?.code == .capabilityUnavailable)
-        #expect(handler.handle(try sendRequest(commandID: commandID)).error?.code == .invalidRequest)
+        #expect(await handler.handle(try sendRequest(commandID: commandID)).error?.code == .capabilityUnavailable)
+        #expect(await handler.handle(try sendRequest(commandID: commandID)).error?.code == .invalidRequest)
         #expect(ports.operations.filter { if case .send = $0 { true } else { false } }.count == 1)
     }
 
-    @Test func attemptedCommandRegistryFailsClosedAtCapacityWithoutEviction() throws {
+    @Test func attemptedCommandRegistryFailsClosedAtCapacityWithoutEviction() async throws {
         let ports = FakeFeasibilityPorts()
         let handler = FeasibilityBridgeCommandHandler(
             notesScanner: ports,
@@ -103,14 +103,14 @@ struct FeasibilityBridgeCommandHandlerTests {
             now: { fixtureNow }
         )
         let firstID = UUID()
-        #expect(handler.handle(try sendRequest(commandID: firstID)).ok)
-        #expect(handler.handle(try sendRequest(commandID: UUID())).ok)
-        #expect(handler.handle(try sendRequest(commandID: UUID())).error?.code == .capabilityUnavailable)
-        #expect(handler.handle(try sendRequest(commandID: firstID)).error?.code == .invalidRequest)
+        #expect(await handler.handle(try sendRequest(commandID: firstID)).ok)
+        #expect(await handler.handle(try sendRequest(commandID: UUID())).ok)
+        #expect(await handler.handle(try sendRequest(commandID: UUID())).error?.code == .capabilityUnavailable)
+        #expect(await handler.handle(try sendRequest(commandID: firstID)).error?.code == .invalidRequest)
         #expect(ports.operations.filter { if case .send = $0 { true } else { false } }.count == 2)
     }
 
-    @Test func schemaAndConsentFailuresMapToConstantNoPayloadErrors() throws {
+    @Test func schemaAndConsentFailuresMapToConstantNoPayloadErrors() async throws {
         let ports = FakeFeasibilityPorts()
         ports.sendError = .manualConfirmationRequired
         ports.readError = .schemaUnsupported
@@ -131,8 +131,8 @@ struct FeasibilityBridgeCommandHandlerTests {
             params: .scanTestMessageActivity(try .init(recipientHandle: "private-payload@example.invalid"))
         )
 
-        let sendResponse = handler.handle(send)
-        let scanResponse = handler.handle(scan)
+        let sendResponse = await handler.handle(send)
+        let scanResponse = await handler.handle(scan)
 
         #expect(sendResponse.error?.code == .invalidRequest)
         #expect(sendResponse.error?.message == "Exact manual confirmation is required.")
@@ -143,13 +143,13 @@ struct FeasibilityBridgeCommandHandlerTests {
         #expect(ports.operations.count == 2)
     }
 
-    @Test func successfulShutdownReturnsExactFrameAfterContainedCleanup() throws {
+    @Test func successfulShutdownReturnsExactFrameAfterContainedCleanup() async throws {
         let ports = FakeFeasibilityPorts()
         let cleanup = LockedCounter()
         let handler = makeHandler(ports: ports, shutdown: { cleanup.increment() })
         let requestID = UUID(uuidString: "55555555-5555-4555-8555-555555555555")!
         let request = try BridgeRequest(id: requestID, method: .shutdown, params: .shutdown(.init()))
-        let response = handler.handle(request)
+        let response = await handler.handle(request)
 
         #expect(response.v == 1)
         #expect(response.id == requestID)
@@ -160,7 +160,7 @@ struct FeasibilityBridgeCommandHandlerTests {
         #expect(ports.operations.isEmpty)
     }
 
-    @Test func failedShutdownCleanupReturnsExactSanitizedFailureFrame() throws {
+    @Test func failedShutdownCleanupReturnsExactSanitizedFailureFrame() async throws {
         let ports = FakeFeasibilityPorts()
         let handler = makeHandler(ports: ports, shutdown: {
             throw BridgeShutdownError.cleanupVerificationFailed
@@ -168,7 +168,7 @@ struct FeasibilityBridgeCommandHandlerTests {
         let requestID = UUID(uuidString: "66666666-6666-4666-8666-666666666666")!
         let request = try BridgeRequest(id: requestID, method: .shutdown, params: .shutdown(.init()))
 
-        let response = handler.handle(request)
+        let response = await handler.handle(request)
 
         #expect(response.v == 1)
         #expect(response.id == requestID)

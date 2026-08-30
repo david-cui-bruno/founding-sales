@@ -5,7 +5,7 @@ import Testing
 
 @Suite("MacOSDependencyContainerTests")
 struct MacOSDependencyContainerTests {
-    @Test func productionCompositionIsInertUntilTypedCommandAndUses0700Root() throws {
+    @Test func productionCompositionIsInertUntilTypedCommandAndUses0700Root() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "callie-container-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
         let nonexistentMessages = root.appending(path: "never-opened-chat.db")
         let container = try MacOSDependencyContainer(stagingRoot: root, messagesDatabase: nonexistentMessages)
@@ -13,12 +13,13 @@ struct MacOSDependencyContainerTests {
         let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
 
         #expect(permissions == 0o700)
+        #expect(container.feasibilityController is MacOSFeasibilityController)
         let hello = try BridgeRequest(
             id: UUID(),
             method: .hello,
             params: .hello(try .init(supportedVersions: [1]))
         )
-        let helloResponse = container.handler.handle(hello)
+        let helloResponse = await container.handler.handle(hello)
         #expect(helloResponse.ok)
         #expect(helloResponse.result == [
             "selectedVersion": .number(1),
@@ -28,7 +29,7 @@ struct MacOSDependencyContainerTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
     }
 
-    @Test func shutdownCleansOnlyGeneratedContainedEntries() throws {
+    @Test func shutdownCleansOnlyGeneratedContainedEntries() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "callie-container-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
         let container = try MacOSDependencyContainer(stagingRoot: root, messagesDatabase: root.appending(path: "never-opened-chat.db"))
         let generated = root.appending(path: "callie-notes-11111111-1111-4111-8111-111111111111.export")
@@ -37,7 +38,7 @@ struct MacOSDependencyContainerTests {
         try Data("keep".utf8).write(to: unrelated)
         let shutdown = try BridgeRequest(id: UUID(), method: .shutdown, params: .shutdown(.init()))
 
-        let response = container.handler.handle(shutdown)
+        let response = await container.handler.handle(shutdown)
         #expect(response.v == 1)
         #expect(response.ok)
         #expect(response.result == ["shuttingDown": .bool(true)])
@@ -46,7 +47,7 @@ struct MacOSDependencyContainerTests {
         #expect(FileManager.default.fileExists(atPath: unrelated.path))
     }
 
-    @Test func shutdownCleanupFailureReturnsSanitizedErrorAndNeverClaimsSuccess() throws {
+    @Test func shutdownCleanupFailureReturnsSanitizedErrorAndNeverClaimsSuccess() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "callie-container-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
         let container = try MacOSDependencyContainer(stagingRoot: root, messagesDatabase: root.appending(path: "never-opened-chat.db"))
         let generatedDirectory = root.appending(path: "callie-notes-export-11111111-1111-4111-8111-111111111111", directoryHint: .isDirectory)
@@ -56,7 +57,7 @@ struct MacOSDependencyContainerTests {
         let requestID = UUID(uuidString: "77777777-7777-4777-8777-777777777777")!
         let shutdown = try BridgeRequest(id: requestID, method: .shutdown, params: .shutdown(.init()))
 
-        let response = container.handler.handle(shutdown)
+        let response = await container.handler.handle(shutdown)
 
         #expect(response.v == 1)
         #expect(response.id == requestID)

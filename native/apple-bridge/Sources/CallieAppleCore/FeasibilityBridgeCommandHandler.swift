@@ -6,8 +6,9 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
     private let notesExporter: any NotesAttachmentExporting
     private let messageSender: any MessageTestSending
     private let messageActivityScanner: any MessageTestActivityScanning
+    private let feasibilityController: any AppleFeasibilityControlling
     private let now: @Sendable () -> Date
-    private let shutdown: @Sendable () throws -> Void
+    private let shutdown: @Sendable () async throws -> Void
     private let attemptedCommands: AttemptedMessageCommandRegistry
     private let fallback = BoundedBridgeCommandHandler()
 
@@ -16,22 +17,48 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
         notesExporter: any NotesAttachmentExporting,
         messageSender: any MessageTestSending,
         messageActivityScanner: any MessageTestActivityScanning,
+        feasibilityController: any AppleFeasibilityControlling = UnavailableAppleFeasibilityController(),
         attemptedCommandCapacity: Int = 1_024,
         now: @escaping @Sendable () -> Date = Date.init,
-        shutdown: @escaping @Sendable () throws -> Void = {}
+        shutdown: @escaping @Sendable () async throws -> Void = {}
     ) {
         self.notesScanner = notesScanner
         self.notesExporter = notesExporter
         self.messageSender = messageSender
         self.messageActivityScanner = messageActivityScanner
+        self.feasibilityController = feasibilityController
         attemptedCommands = AttemptedMessageCommandRegistry(capacity: attemptedCommandCapacity)
         self.now = now
         self.shutdown = shutdown
     }
 
-    public func handle(_ request: BridgeRequest) -> BridgeResponse {
+    public func handle(_ request: BridgeRequest) async -> BridgeResponse {
         do {
             switch request.params {
+            case .probeCapabilities:
+                let capabilities = await feasibilityController.probeCapabilities()
+                return BridgeResponse(id: request.id, result: [
+                    "capabilities": .object([
+                        "contacts": .string(Self.contactAccessWireValue(capabilities.contacts)),
+                        "accessibility": .string(Self.accessibilityAccessWireValue(capabilities.accessibility)),
+                        "callObservationAvailable": .bool(capabilities.callObservationAvailable),
+                        "recordingControlAvailable": .bool(capabilities.recordingControlAvailable),
+                    ]),
+                ])
+            case .requestContacts:
+                let access = try await feasibilityController.requestContactAccess()
+                return BridgeResponse(id: request.id, result: [
+                    "access": .string(Self.contactAccessWireValue(access)),
+                ])
+            case .promptAccessibility:
+                let trusted = await feasibilityController.promptForAccessibility()
+                return BridgeResponse(id: request.id, result: ["trusted": .bool(trusted)])
+            case .startCallObservation:
+                let observing = try await feasibilityController.startCallObservation()
+                return BridgeResponse(id: request.id, result: ["observing": .bool(observing)])
+            case .stopCallObservation:
+                let observing = await feasibilityController.stopCallObservation()
+                return BridgeResponse(id: request.id, result: ["observing": .bool(observing)])
             case .scanCallRecordings:
                 let scan = try notesScanner.scan(since: now().addingTimeInterval(-86_400))
                 return BridgeResponse(id: request.id, result: [
@@ -80,10 +107,11 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
                     "latestAt": activity.latestAt.map { .string(Self.timestamp($0)) } ?? .null,
                 ])
             case .shutdown:
-                try shutdown()
-                return fallback.handle(request)
+                _ = await feasibilityController.stopCallObservation()
+                try await shutdown()
+                return await fallback.handle(request)
             default:
-                return fallback.handle(request)
+                return await fallback.handle(request)
             }
         } catch is BridgeShutdownError {
             return errorResponse(
@@ -97,6 +125,8 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
             return messagesSendError(error, id: request.id)
         } catch let error as MessagesReadPortError {
             return messagesReadError(error, id: request.id)
+        } catch let error as AppleFeasibilityControlError {
+            return feasibilityControlError(error, id: request.id)
         } catch {
             return errorResponse(id: request.id, code: .internalError, message: "The fixed feasibility operation failed.")
         }
@@ -106,6 +136,24 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
+    }
+
+    private static func contactAccessWireValue(_ access: ContactAccess) -> String {
+        switch access {
+        case .full: "full"
+        case .limited: "limited"
+        case .denied: "denied"
+        case .restricted: "restricted"
+        case .notDetermined: "notDetermined"
+        }
+    }
+
+    private static func accessibilityAccessWireValue(_ access: AccessibilityAccess) -> String {
+        switch access {
+        case .granted: "granted"
+        case .denied: "denied"
+        case .notDetermined: "notDetermined"
+        }
     }
 
     private func notesError(_ error: NotesPortError, id: UUID) -> BridgeResponse {
@@ -142,6 +190,15 @@ public struct FeasibilityBridgeCommandHandler: BridgeCommandHandling {
             errorResponse(id: id, code: .capabilityUnavailable, message: "The Messages read store is unavailable.")
         case .queryFailed:
             errorResponse(id: id, code: .internalError, message: "The bounded Messages activity query failed.")
+        }
+    }
+
+    private func feasibilityControlError(_ error: AppleFeasibilityControlError, id: UUID) -> BridgeResponse {
+        switch error {
+        case .callObservationUnavailable:
+            errorResponse(id: id, code: .capabilityUnavailable, message: "Call observation is unavailable.")
+        case .permissionRequestFailed:
+            errorResponse(id: id, code: .capabilityUnavailable, message: "The permission request could not be completed.")
         }
     }
 

@@ -8,6 +8,8 @@ public actor StdioBridgeServer {
     private var receivedRequestIDs: Set<UUID> = []
     private var hasReceivedHello = false
     private var isShutdownRequested = false
+    private var pendingRequests: [(BridgeRequest, CheckedContinuation<BridgeResponse, Never>)] = []
+    private var isProcessingRequest = false
 
     public init(
         handler: any BridgeCommandHandling = BoundedBridgeCommandHandler(),
@@ -17,9 +19,26 @@ public actor StdioBridgeServer {
         self.codec = codec
     }
 
-    public func processLine(_ data: Data) throws -> BridgeResponse {
+    public func processLine(_ data: Data) async throws -> BridgeResponse {
         let request = try codec.decodeLine(data)
 
+        return await withCheckedContinuation { continuation in
+            pendingRequests.append((request, continuation))
+            guard !isProcessingRequest else { return }
+            isProcessingRequest = true
+            Task { await self.drainPendingRequests() }
+        }
+    }
+
+    private func drainPendingRequests() async {
+        while !pendingRequests.isEmpty {
+            let (request, continuation) = pendingRequests.removeFirst()
+            continuation.resume(returning: await processRequest(request))
+        }
+        isProcessingRequest = false
+    }
+
+    private func processRequest(_ request: BridgeRequest) async -> BridgeResponse {
         guard receivedRequestIDs.insert(request.id).inserted else {
             return invalidRequestResponse(id: request.id)
         }
@@ -30,7 +49,7 @@ public actor StdioBridgeServer {
             return handshakeRequiredResponse(id: request.id)
         }
 
-        let response = handler.handle(request)
+        let response = await handler.handle(request)
         if request.method == .hello, response.ok {
             hasReceivedHello = true
         }
@@ -44,7 +63,7 @@ public actor StdioBridgeServer {
         input: FileHandle = .standardInput,
         output: FileHandle = .standardOutput,
         errorOutput: FileHandle = .standardError
-    ) {
+    ) async {
         var line = Data()
         var discardingOversizedLine = false
 
@@ -56,7 +75,7 @@ public actor StdioBridgeServer {
                         continue
                     }
                     if byte == 0x0A {
-                        writeResponse(for: line, to: output, errorOutput: errorOutput)
+                        await writeResponse(for: line, to: output, errorOutput: errorOutput)
                         line.removeAll(keepingCapacity: true)
                         if isShutdownRequested { return }
                         continue
@@ -79,9 +98,9 @@ public actor StdioBridgeServer {
         }
     }
 
-    private func writeResponse(for line: Data, to output: FileHandle, errorOutput: FileHandle) {
+    private func writeResponse(for line: Data, to output: FileHandle, errorOutput: FileHandle) async {
         do {
-            let response = try processLine(line)
+            let response = try await processLine(line)
             output.write(try codec.encodeLine(response))
         } catch JSONLinesCodecError.frameTooLarge {
             writeDiagnostic("callie-apple-bridge: frame too large\n", to: errorOutput)
