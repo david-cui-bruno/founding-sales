@@ -4,7 +4,7 @@ import { appHealthSchema } from '../../shared/healthContract';
 import { validateSender } from '../ipc/validateSender';
 
 export type HealthProvider = {
-  getHealth(): unknown;
+  getHealth(): unknown | Promise<unknown>;
 };
 
 export function registerHealthIpc(
@@ -18,7 +18,7 @@ export function registerHealthIpc(
       throw new Error('health:get does not accept request arguments.');
     }
 
-    return appHealthSchema.parse(health.getHealth());
+    return appHealthSchema.parse(await health.getHealth());
   });
 
   let registered = true;

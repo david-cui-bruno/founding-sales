@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AppDatabase } from '../../src/main/db/database';
+import type { HealthProvider } from '../../src/main/health/registerHealthIpc';
 import type { ApplicationStartupDependencies } from '../../src/main/startApplication';
 
 const mocks = vi.hoisted(() => ({
@@ -70,13 +71,12 @@ describe('main process startup', () => {
   }
 
   it('starts composition only after readiness and supplies the app-owned path and version', async () => {
-    const shutdown = vi.fn();
+    const shutdown = vi.fn(async () => undefined);
     mocks.loadUrl.mockResolvedValue(undefined);
     mocks.startApplication.mockImplementation(async (options) => {
       await options.createWindow();
       return {
         databasePath: '/Users/founder/Library/Application Support/Callie/callie.sqlite3',
-        interruptedJobsRecovered: 0,
         shutdown,
       };
     });
@@ -111,10 +111,16 @@ describe('main process startup', () => {
 
     const beforeQuit = mocks.appOn.mock.calls.find(
       ([event]) => event === 'before-quit',
-    )?.[1] as (() => void) | undefined;
+    )?.[1] as
+      | ((event: { preventDefault(): void }) => void)
+      | undefined;
     expect(beforeQuit).toBeTypeOf('function');
-    beforeQuit?.();
+    const preventDefault = vi.fn();
+    beforeQuit?.({ preventDefault });
+    expect(preventDefault).toHaveBeenCalledTimes(1);
     expect(shutdown).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
   });
 
   it('composes the exact Vite development URL into navigation and IPC trust', async () => {
@@ -151,9 +157,10 @@ describe('main process startup', () => {
     expect(mocks.appQuit).toHaveBeenCalledTimes(1);
   });
 
-  it('coordinates before-quit with startup that has not settled', async () => {
+  it('coordinates before-quit with foundation initialization that has not settled', async () => {
     const events: string[] = [];
     const database = { path: '/tmp/callie.sqlite3' } as AppDatabase;
+    let healthProvider: HealthProvider | undefined;
     let settleMigration: (() => void) | undefined;
     const dependencies: ApplicationStartupDependencies = {
       openDatabase: () => {
@@ -182,8 +189,9 @@ describe('main process startup', () => {
         events.push('health');
         return { getHealth: () => ({}) };
       },
-      registerHealthIpc: () => {
+      registerHealthIpc: (provider) => {
         events.push('ipc');
+        healthProvider = provider;
         return () => events.push('unregister');
       },
       closeDatabase: () => events.push('close'),
@@ -197,6 +205,7 @@ describe('main process startup', () => {
 
     await import('../../src/main');
     await settleStartup();
+    const healthRequest = healthProvider?.getHealth();
 
     const beforeQuit = mocks.appOn.mock.calls.find(
       ([event]) => event === 'before-quit',
@@ -209,10 +218,17 @@ describe('main process startup', () => {
     expect(preventDefault).toHaveBeenCalledTimes(1);
 
     settleMigration?.();
+    await expect(healthRequest).rejects.toThrow('cancelled');
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(events).toEqual(['open', 'migrate', 'close']);
-    expect(mocks.createWindow).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      'ipc',
+      'open',
+      'migrate',
+      'unregister',
+      'close',
+    ]);
+    expect(mocks.createWindow).toHaveBeenCalledTimes(1);
     expect(mocks.appQuit).toHaveBeenCalledTimes(1);
   });
 
@@ -265,15 +281,7 @@ describe('main process startup', () => {
     await settleStartup();
 
     expect(mocks.windowDestroy).toHaveBeenCalledTimes(1);
-    expect(events).toEqual([
-      'open',
-      'migrate',
-      'recover',
-      'health',
-      'ipc',
-      'unregister',
-      'close',
-    ]);
+    expect(events).toEqual(['ipc', 'unregister']);
     expect(mocks.appQuit).toHaveBeenCalledTimes(1);
   });
 });

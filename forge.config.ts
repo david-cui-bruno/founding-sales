@@ -5,12 +5,25 @@ import { MakerDeb } from '@electron-forge/maker-deb';
 import { MakerRpm } from '@electron-forge/maker-rpm';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-natives';
-import { FusesPlugin } from '@electron-forge/plugin-fuses';
-import { FuseV1Options, FuseVersion } from '@electron/fuses';
+import {
+  applyElectronFuses,
+  resetPackagedAdHocSignature,
+} from './build/electronFuses';
+
+const hasConfiguredMacSigning = (value: unknown): boolean =>
+  (typeof value === 'object' &&
+    value !== null &&
+    Object.keys(value).length > 0) ||
+  Boolean(value);
 
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
+    extendInfo: {
+      NSAppTransportSecurity: {
+        NSAllowsArbitraryLoads: false,
+      },
+    },
     ignore: (filePath: string) => {
       if (filePath.length === 0) {
         return false;
@@ -30,6 +43,30 @@ const config: ForgeConfig = {
     new MakerRpm({}),
     new MakerDeb({}),
   ],
+  hooks: {
+    packageAfterCopy: async (
+      resolvedConfig,
+      buildPath,
+      _electronVersion,
+      platform,
+      arch,
+    ) => {
+      await applyElectronFuses(
+        buildPath,
+        platform,
+        arch,
+        hasConfiguredMacSigning(resolvedConfig.packagerConfig.osxSign),
+      );
+    },
+    postPackage: async (resolvedConfig, packageResult) => {
+      await resetPackagedAdHocSignature(
+        packageResult.outputPaths,
+        packageResult.platform,
+        packageResult.arch,
+        hasConfiguredMacSigning(resolvedConfig.packagerConfig.osxSign),
+      );
+    },
+  },
   plugins: [
     new AutoUnpackNativesPlugin({}),
     new VitePlugin({
@@ -54,17 +91,6 @@ const config: ForgeConfig = {
           config: 'vite.renderer.config.ts',
         },
       ],
-    }),
-    // Fuses are used to enable/disable various Electron functionality
-    // at package time, before code signing the application
-    new FusesPlugin({
-      version: FuseVersion.V1,
-      [FuseV1Options.RunAsNode]: false,
-      [FuseV1Options.EnableCookieEncryption]: true,
-      [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
-      [FuseV1Options.EnableNodeCliInspectArguments]: false,
-      [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
-      [FuseV1Options.OnlyLoadAppFromAsar]: true,
     }),
   ],
 };

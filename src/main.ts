@@ -101,9 +101,9 @@ if (!started) {
         isTrustedRendererUrl: rendererTrust.isTrustedRendererUrl,
         signal,
         createWindow: () => createAndLoadWindow(signal),
-      }).then((application) => {
+      }).then(async (application) => {
         if (signal.aborted) {
-          application.shutdown();
+          await application.shutdown();
           return;
         }
 
@@ -127,7 +127,20 @@ app.on('before-quit', (event) => {
   }
 
   if (runningApplication !== undefined) {
-    runningApplication.shutdown();
+    event.preventDefault();
+    if (quitAfterStartup) {
+      return;
+    }
+
+    quitAfterStartup = true;
+    applicationStarted = false;
+    const application = runningApplication;
+    runningApplication = undefined;
+    const finishQuit = (): void => {
+      allowQuit = true;
+      app.quit();
+    };
+    void application.shutdown().then(finishQuit, finishQuit);
     return;
   }
 
@@ -162,7 +175,11 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   // On OS X it's common to re-create a window in the app when the
   // dock icon is clicked and there are no other windows open.
-  if (applicationStarted && BrowserWindow.getAllWindows().length === 0) {
+  if (
+    applicationStarted &&
+    !quitAfterStartup &&
+    BrowserWindow.getAllWindows().length === 0
+  ) {
     void createAndLoadWindow().catch((): void => {
       app.quit();
     });

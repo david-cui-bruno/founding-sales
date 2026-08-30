@@ -66,6 +66,7 @@ const successfulCommand = ({ command, args }) => {
       CFBundleIdentifier: 'com.example.callie',
       CFBundleDisplayName: 'Callie',
       CFBundleShortVersionString: '1.2.3',
+      'NSAppTransportSecurity.NSAllowsArbitraryLoads': 'false',
     }[key];
   }
 
@@ -79,13 +80,22 @@ const successfulCommand = ({ command, args }) => {
 
   if (command === 'electron-fuses') {
     return [
+      'Analyzing app: Callie.app',
+      'Fuse Version: v1',
       'RunAsNode is Disabled',
       'EnableCookieEncryption is Enabled',
       'EnableNodeOptionsEnvironmentVariable is Disabled',
       'EnableNodeCliInspectArguments is Disabled',
       'EnableEmbeddedAsarIntegrityValidation is Enabled',
       'OnlyLoadAppFromAsar is Enabled',
+      'LoadBrowserProcessSpecificV8Snapshot is Disabled',
+      'GrantFileProtocolExtraPrivileges is Disabled',
+      'WasmTrapHandlers is Enabled',
     ].join('\n');
+  }
+
+  if (command === 'codesign') {
+    return '';
   }
 
   throw new Error(`Unexpected command: ${command}`);
@@ -130,6 +140,18 @@ describe('package verification', () => {
       identifier: 'com.example.callie',
       displayName: 'Callie',
       version: '1.2.3',
+      atsAllowsArbitraryLoads: false,
+    });
+    expect(report.fuses).toEqual({
+      RunAsNode: 'Disabled',
+      EnableCookieEncryption: 'Enabled',
+      EnableNodeOptionsEnvironmentVariable: 'Disabled',
+      EnableNodeCliInspectArguments: 'Disabled',
+      EnableEmbeddedAsarIntegrityValidation: 'Enabled',
+      OnlyLoadAppFromAsar: 'Enabled',
+      LoadBrowserProcessSpecificV8Snapshot: 'Disabled',
+      GrantFileProtocolExtraPrivileges: 'Disabled',
+      WasmTrapHandlers: 'Enabled',
     });
   });
 
@@ -298,7 +320,10 @@ describe('package verification', () => {
       verifyPackagedApp(fixture.appPath, {
         runCommand: ({ command, args }) =>
           command === 'electron-fuses'
-            ? 'RunAsNode is Enabled'
+            ? successfulCommand({ command, args }).replace(
+                'RunAsNode is Disabled',
+                'RunAsNode is Enabled',
+              )
             : successfulCommand({ command, args }),
         asarCommand: 'asar',
         fusesCommand: 'electron-fuses',
@@ -308,11 +333,96 @@ describe('package verification', () => {
       verifyPackagedApp(fixture.appPath, {
         runCommand: ({ command, args }) =>
           command === 'electron-fuses'
-            ? 'RunAsNode is Enabled'
+            ? successfulCommand({ command, args }).replace(
+                'RunAsNode is Disabled',
+                'RunAsNode is Enabled',
+              )
             : successfulCommand({ command, args }),
         asarCommand: 'asar',
         fusesCommand: 'electron-fuses',
       }),
     ).toThrow('PACKAGE: required security fuse is not configured: RunAsNode is Disabled');
+  });
+
+  it('rejects incomplete or unknown fuse enumeration', async () => {
+    const outDirectory = await makeTemporaryDirectory();
+    const fixture = await createPackagedApp(outDirectory);
+    const incompleteOutput = successfulCommand({
+      command: 'electron-fuses',
+      args: [fixture.appPath],
+    })
+      .split('\n')
+      .filter((line) => !line.startsWith('WasmTrapHandlers'))
+      .concat('FutureElectronFuse is Enabled')
+      .join('\n');
+
+    expect(() =>
+      verifyPackagedApp(fixture.appPath, {
+        runCommand: ({ command, args }) =>
+          command === 'electron-fuses'
+            ? incompleteOutput
+            : successfulCommand({ command, args }),
+        asarCommand: 'asar',
+        fusesCommand: 'electron-fuses',
+      }),
+    ).toThrow(
+      'PACKAGE: Electron fuse enumeration is not the exact Electron 44 V1 set',
+    );
+  });
+
+  it('rejects an unsupported or unreadable fuse version', async () => {
+    const outDirectory = await makeTemporaryDirectory();
+    const fixture = await createPackagedApp(outDirectory);
+
+    expect(() =>
+      verifyPackagedApp(fixture.appPath, {
+        runCommand: ({ command, args }) =>
+          command === 'electron-fuses'
+            ? successfulCommand({ command, args }).replace(
+                'Fuse Version: v1',
+                'Fuse Version: unknown',
+              )
+            : successfulCommand({ command, args }),
+        asarCommand: 'asar',
+        fusesCommand: 'electron-fuses',
+      }),
+    ).toThrow('PACKAGE: expected Electron Fuse Version v1');
+  });
+
+  it('rejects ATS arbitrary network loads', async () => {
+    const outDirectory = await makeTemporaryDirectory();
+    const fixture = await createPackagedApp(outDirectory);
+
+    expect(() =>
+      verifyPackagedApp(fixture.appPath, {
+        runCommand: ({ command, args }) =>
+          command === 'plutil' &&
+          args[1] === 'NSAppTransportSecurity.NSAllowsArbitraryLoads'
+            ? 'true'
+            : successfulCommand({ command, args }),
+        asarCommand: 'asar',
+        fusesCommand: 'electron-fuses',
+      }),
+    ).toThrow(
+      'PACKAGE: Info.plist must set NSAppTransportSecurity.NSAllowsArbitraryLoads to false',
+    );
+  });
+
+  it('rejects a packaged app whose final ad-hoc signature is invalid', async () => {
+    const outDirectory = await makeTemporaryDirectory();
+    const fixture = await createPackagedApp(outDirectory);
+
+    expect(() =>
+      verifyPackagedApp(fixture.appPath, {
+        runCommand: ({ command, args }) => {
+          if (command === 'codesign') {
+            throw new Error('invalid Info.plist');
+          }
+          return successfulCommand({ command, args });
+        },
+        asarCommand: 'asar',
+        fusesCommand: 'electron-fuses',
+      }),
+    ).toThrow('PACKAGE: could not verify final macOS code signature');
   });
 });

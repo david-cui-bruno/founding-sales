@@ -1,0 +1,56 @@
+import { mkdirSync, rmSync, statSync } from 'node:fs';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import {
+  closeDatabase,
+  openDatabase,
+} from '../../src/main/db/database';
+import { migrateToLatest } from '../../src/main/db/migrate';
+import { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
+import { HealthService } from '../../src/main/health/healthService';
+import { JobRepository } from '../../src/main/jobs/jobRepository';
+import {
+  createTempDatabase,
+  type TempDatabase,
+} from '../fixtures/tempDatabase';
+
+describe('foundation initialization recovery', () => {
+  let tempDatabase: TempDatabase | undefined;
+  let runtime: FoundationRuntime | undefined;
+
+  afterEach(async () => {
+    await runtime?.shutdown();
+    tempDatabase?.cleanup();
+  });
+
+  it('recovers from an isolated filesystem collision without replacing the path', async () => {
+    tempDatabase = createTempDatabase();
+    mkdirSync(tempDatabase.path, { recursive: true, mode: 0o700 });
+    runtime = new FoundationRuntime(
+      { appVersion: '1.0.0', databasePath: tempDatabase.path },
+      {
+        openDatabase,
+        migrateToLatest,
+        createJobRepository: (database) => new JobRepository(database),
+        createHealthService: (options) => new HealthService(options),
+        closeDatabase,
+      },
+    );
+
+    await expect(runtime.getHealth()).rejects.toThrow();
+    expect(statSync(tempDatabase.path).isDirectory()).toBe(true);
+
+    rmSync(tempDatabase.path, { recursive: true });
+    const recoveredHealth = await runtime.getHealth();
+
+    expect(recoveredHealth).toEqual({
+      appVersion: '1.0.0',
+      schemaVersion: 1,
+      databasePath: tempDatabase.path,
+      fts5Available: true,
+      pendingJobs: 0,
+      interruptedJobsRecovered: 0,
+    });
+    expect(statSync(tempDatabase.path).isFile()).toBe(true);
+  });
+});

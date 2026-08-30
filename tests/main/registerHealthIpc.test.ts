@@ -42,7 +42,7 @@ describe('registerHealthIpc', () => {
   }
 
   it('registers only health:get and returns a validated response to a trusted sender', async () => {
-    const service = { getHealth: vi.fn(() => validHealth) };
+    const service = { getHealth: vi.fn(async () => validHealth) };
 
     registerHealthIpc(service);
 

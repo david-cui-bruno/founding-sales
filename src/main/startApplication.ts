@@ -1,36 +1,23 @@
 import { join } from 'node:path';
 
+import { closeDatabase, openDatabase } from './db/database';
+import { migrateToLatest } from './db/migrate';
 import {
-  closeDatabase,
-  openDatabase,
-  type AppDatabase,
-} from './db/database';
-import { migrateToLatest, type MigrationResult } from './db/migrate';
-import {
-  HealthService,
-  type HealthServiceOptions,
-} from './health/healthService';
+  FoundationRuntime,
+  type FoundationRuntimeDependencies,
+} from './foundation/foundationRuntime';
+import { HealthService } from './health/healthService';
 import {
   registerHealthIpc,
   type HealthProvider,
 } from './health/registerHealthIpc';
 import { JobRepository } from './jobs/jobRepository';
 
-type StartupJobRepository = Pick<
-  JobRepository,
-  'listActive' | 'recoverInterruptedJobs'
->;
-
-export type ApplicationStartupDependencies = {
-  openDatabase(path: string): AppDatabase;
-  migrateToLatest(database: AppDatabase): Promise<MigrationResult>;
-  createJobRepository(database: AppDatabase): StartupJobRepository;
-  createHealthService(options: HealthServiceOptions): HealthProvider;
+export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   registerHealthIpc(
     health: HealthProvider,
     isTrustedRendererUrl?: (url: string) => boolean,
   ): () => void;
-  closeDatabase(database: AppDatabase): void;
 };
 
 export type ApplicationStartupOptions = {
@@ -43,8 +30,7 @@ export type ApplicationStartupOptions = {
 
 export type RunningApplication = {
   databasePath: string;
-  interruptedJobsRecovered: number;
-  shutdown(): void;
+  shutdown(): Promise<void>;
 };
 
 export class ApplicationStartupCancelledError extends Error {
@@ -68,65 +54,75 @@ export async function startApplication(
   dependencies: ApplicationStartupDependencies = defaultDependencies,
 ): Promise<RunningApplication> {
   const databasePath = join(options.userDataPath, 'callie.sqlite3');
-  let database: AppDatabase | undefined;
+  const runtime = new FoundationRuntime(
+    { appVersion: options.appVersion, databasePath },
+    dependencies,
+  );
   let unregisterHealthIpc: (() => void) | undefined;
-  let shutdownComplete = false;
+  let shutdownPromise: Promise<void> | undefined;
 
-  const shutdown = (): void => {
-    if (shutdownComplete) {
-      return;
+  const shutdown = (): Promise<void> => {
+    if (shutdownPromise !== undefined) {
+      return shutdownPromise;
     }
 
-    shutdownComplete = true;
+    shutdownPromise = (async () => {
+      let unregisterError: unknown;
+      let runtimeError: unknown;
 
-    try {
-      unregisterHealthIpc?.();
-    } finally {
-      if (database !== undefined) {
-        dependencies.closeDatabase(database);
+      try {
+        unregisterHealthIpc?.();
+      } catch (error) {
+        unregisterError = error;
+      } finally {
+        unregisterHealthIpc = undefined;
       }
-    }
+
+      try {
+        await runtime.shutdown();
+      } catch (error) {
+        runtimeError = error;
+      }
+
+      if (unregisterError !== undefined && runtimeError !== undefined) {
+        throw new AggregateError(
+          [unregisterError, runtimeError],
+          'Application shutdown failed while releasing IPC and SQLite.',
+        );
+      }
+      if (unregisterError !== undefined) {
+        throw unregisterError;
+      }
+      if (runtimeError !== undefined) {
+        throw runtimeError;
+      }
+    })();
+
+    return shutdownPromise;
   };
 
   try {
     throwIfStartupCancelled(options.signal);
-    database = dependencies.openDatabase(databasePath);
-    await dependencies.migrateToLatest(database);
-    throwIfStartupCancelled(options.signal);
-
-    const jobs = dependencies.createJobRepository(database);
-    const interruptedJobsRecovered = jobs.recoverInterruptedJobs();
-    const health = dependencies.createHealthService({
-      appVersion: options.appVersion,
-      databasePath,
-      database,
-      jobs,
-      interruptedJobsRecovered,
-    });
-
     unregisterHealthIpc = dependencies.registerHealthIpc(
-      health,
+      runtime,
       options.isTrustedRendererUrl,
     );
+    throwIfStartupCancelled(options.signal);
     await options.createWindow();
     throwIfStartupCancelled(options.signal);
 
-    return {
-      databasePath,
-      interruptedJobsRecovered,
-      shutdown,
-    };
-  } catch (initializationError) {
+    return { databasePath, shutdown };
+  } catch (startupError) {
     try {
-      shutdown();
+      await shutdown();
     } catch (cleanupError) {
       throw new AggregateError(
-        [initializationError, cleanupError],
-        'Application initialization and cleanup both failed.',
+        [startupError, cleanupError],
+        'Application startup and cleanup both failed.',
       );
     }
 
-    throw initializationError;
+    throw startupError;
   }
 }
 

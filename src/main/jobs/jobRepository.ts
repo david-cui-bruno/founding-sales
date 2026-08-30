@@ -149,18 +149,6 @@ export class InvalidJobTransitionError extends Error {
   }
 }
 
-export interface JobRepository {
-  enqueue(input: EnqueueJobInput): JobRecord;
-  start(id: string): JobRecord;
-  reportProgress(id: string, current: number, total?: number | null): JobRecord;
-  succeed(id: string, result: unknown): JobRecord;
-  fail(id: string, error: { code: string; message: string }): JobRecord;
-  cancel(id: string): JobRecord;
-  get(id: string): JobRecord | null;
-  listActive(): JobRecord[];
-  recoverInterruptedJobs(): number;
-}
-
 export class JobRepository {
   constructor(private readonly database: AppDatabase) {}
 

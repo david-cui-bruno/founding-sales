@@ -8,14 +8,17 @@ const projectRoot = resolve(scriptDirectory, '..');
 const asarCli = join(projectRoot, 'node_modules', '@electron', 'asar', 'bin', 'asar.js');
 const fusesCli = join(projectRoot, 'node_modules', '@electron', 'fuses', 'dist', 'bin.js');
 
-const requiredFuses = [
-  'RunAsNode is Disabled',
-  'EnableCookieEncryption is Enabled',
-  'EnableNodeOptionsEnvironmentVariable is Disabled',
-  'EnableNodeCliInspectArguments is Disabled',
-  'EnableEmbeddedAsarIntegrityValidation is Enabled',
-  'OnlyLoadAppFromAsar is Enabled',
-];
+const requiredFuses = {
+  RunAsNode: 'Disabled',
+  EnableCookieEncryption: 'Enabled',
+  EnableNodeOptionsEnvironmentVariable: 'Disabled',
+  EnableNodeCliInspectArguments: 'Disabled',
+  EnableEmbeddedAsarIntegrityValidation: 'Enabled',
+  OnlyLoadAppFromAsar: 'Enabled',
+  LoadBrowserProcessSpecificV8Snapshot: 'Disabled',
+  GrantFileProtocolExtraPrivileges: 'Disabled',
+  WasmTrapHandlers: 'Enabled',
+};
 
 export class PackageVerificationError extends Error {
   constructor(message) {
@@ -278,11 +281,43 @@ const verifySecurityFuses = (appPath, runCommand, fusesCommand) => {
     'read packaged Electron security fuses',
   );
 
-  for (const requiredFuse of requiredFuses) {
-    if (!fuseOutput.includes(requiredFuse)) {
-      fail(`required security fuse is not configured: ${requiredFuse}`);
+  if (!fuseOutput.split(/\r?\n/).some((line) => line.trim() === 'Fuse Version: v1')) {
+    fail('expected Electron Fuse Version v1');
+  }
+
+  const fuseStates = {};
+  for (const line of fuseOutput.split(/\r?\n/)) {
+    const match = line
+      .trim()
+      .match(/^(.+?) is (Enabled|Disabled|Inherited|Removed)$/);
+    if (match === null) {
+      continue;
+    }
+
+    const [, name, state] = match;
+    if (name in fuseStates) {
+      fail(`Electron fuse enumeration contains duplicate state for ${name}`);
+    }
+    fuseStates[name] = state;
+  }
+
+  const expectedNames = Object.keys(requiredFuses).sort();
+  const observedNames = Object.keys(fuseStates).sort();
+  if (JSON.stringify(observedNames) !== JSON.stringify(expectedNames)) {
+    const missing = expectedNames.filter((name) => !(name in fuseStates));
+    const unknown = observedNames.filter((name) => !(name in requiredFuses));
+    fail(
+      `Electron fuse enumeration is not the exact Electron 44 V1 set (missing=${missing.join(', ') || 'none'}; unknown=${unknown.join(', ') || 'none'})`,
+    );
+  }
+
+  for (const [name, requiredState] of Object.entries(requiredFuses)) {
+    if (fuseStates[name] !== requiredState) {
+      fail(`required security fuse is not configured: ${name} is ${requiredState}`);
     }
   }
+
+  return fuseStates;
 };
 
 export const verifyPackagedApp = (
@@ -323,14 +358,32 @@ export const verifyPackagedApp = (
     runCommand,
   );
 
+  const atsAllowsArbitraryLoads = readPlistField(
+    plistPath,
+    'NSAppTransportSecurity.NSAllowsArbitraryLoads',
+    runCommand,
+  );
+  if (atsAllowsArbitraryLoads !== 'false') {
+    fail(
+      `Info.plist must set NSAppTransportSecurity.NSAllowsArbitraryLoads to false; found ${atsAllowsArbitraryLoads}`,
+    );
+  }
+
   const bundle = {
     identifier: readPlistField(plistPath, 'CFBundleIdentifier', runCommand),
     displayName: readPlistField(plistPath, 'CFBundleDisplayName', runCommand),
     version: readPlistField(plistPath, 'CFBundleShortVersionString', runCommand),
+    atsAllowsArbitraryLoads: false,
   };
 
   verifyRendererResources(asarPath, runCommand, asarCommand);
-  verifySecurityFuses(appPath, runCommand, fusesCommand);
+  const fuses = verifySecurityFuses(appPath, runCommand, fusesCommand);
+  runOrFail(
+    runCommand,
+    'codesign',
+    ['--verify', '--deep', '--strict', '--verbose=2', appPath],
+    'verify final macOS code signature',
+  );
 
   return {
     appPath,
@@ -339,6 +392,7 @@ export const verifyPackagedApp = (
     nativeBinary,
     nativeArchitecture,
     bundle,
+    fuses,
   };
 };
 
