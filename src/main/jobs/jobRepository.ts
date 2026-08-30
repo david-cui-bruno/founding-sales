@@ -8,10 +8,37 @@ import type { EnqueueJobInput, JobRecord } from './jobTypes';
 export type { EnqueueJobInput, JobRecord, JobState } from './jobTypes';
 
 const jobStateSchema = z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled']);
+const jobIdSchema = z.string().min(1);
 const nonnegativeIntegerSchema = z.number().int().nonnegative();
 const errorSchema = z.object({
   code: z.string().min(1),
   message: z.string().min(1),
+});
+const enqueueJobInputSchema = z.object({
+  id: jobIdSchema.optional(),
+  type: z.string().min(1),
+  payload: z.unknown(),
+  progressTotal: nonnegativeIntegerSchema.nullable().optional(),
+});
+const utcIsoTimestampSchema = z
+  .string()
+  .datetime({ offset: true })
+  .refine((value) => {
+    const timestamp = new Date(value);
+    return !Number.isNaN(timestamp.getTime()) && timestamp.toISOString() === value;
+  }, {
+    message: 'Timestamp must use canonical UTC ISO format.',
+  });
+const storedJsonSchema = z.string().transform((value, context) => {
+  try {
+    return { value: JSON.parse(value) as unknown };
+  } catch {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Stored JSON is malformed.',
+    });
+    return z.NEVER;
+  }
 });
 
 const storedJobRowSchema = z
@@ -22,14 +49,14 @@ const storedJobRowSchema = z
     progress_current: nonnegativeIntegerSchema,
     progress_total: nonnegativeIntegerSchema.nullable(),
     retry_count: nonnegativeIntegerSchema,
-    payload_json: z.string(),
-    result_json: z.string().nullable(),
+    payload_json: storedJsonSchema,
+    result_json: storedJsonSchema.nullable(),
     error_code: z.string().min(1).nullable(),
     error_message: z.string().min(1).nullable(),
-    created_at: z.string().datetime({ offset: true }),
-    started_at: z.string().datetime({ offset: true }).nullable(),
-    finished_at: z.string().datetime({ offset: true }).nullable(),
-    updated_at: z.string().datetime({ offset: true }),
+    created_at: utcIsoTimestampSchema,
+    started_at: utcIsoTimestampSchema.nullable(),
+    finished_at: utcIsoTimestampSchema.nullable(),
+    updated_at: utcIsoTimestampSchema,
   })
   .superRefine((row, context) => {
     if (row.progress_total !== null && row.progress_current > row.progress_total) {
@@ -47,6 +74,50 @@ const storedJobRowSchema = z
         path: ['error_code'],
       });
     }
+
+    switch (row.state) {
+      case 'queued':
+        addLifecycleIssues(context, row, {
+          resultMustBeNull: true,
+          errorMustBeNull: true,
+          startedAtMustBeNull: true,
+          finishedAtMustBeNull: true,
+        });
+        break;
+      case 'running':
+        addLifecycleIssues(context, row, {
+          resultMustBeNull: true,
+          errorMustBeNull: true,
+          startedAtMustBePresent: true,
+          finishedAtMustBeNull: true,
+        });
+        break;
+      case 'succeeded':
+        addLifecycleIssues(context, row, {
+          resultMustBePresent: true,
+          errorMustBeNull: true,
+          startedAtMustBePresent: true,
+          finishedAtMustBePresent: true,
+        });
+        break;
+      case 'failed':
+        addLifecycleIssues(context, row, {
+          resultMustBeNull: true,
+          errorMustBePresent: true,
+          startedAtMustBePresent: true,
+          finishedAtMustBePresent: true,
+        });
+        break;
+      case 'cancelled':
+        addLifecycleIssues(context, row, {
+          resultMustBeNull: true,
+          errorMustBeNull: true,
+          startedAtMustBeNull: true,
+          finishedAtMustBePresent: true,
+        });
+        break;
+    }
+
   });
 
 type StoredJobRow = z.infer<typeof storedJobRowSchema>;
@@ -94,11 +165,11 @@ export class JobRepository {
   constructor(private readonly database: AppDatabase) {}
 
   enqueue(input: EnqueueJobInput): JobRecord {
-    const id = input.id ?? randomUUID();
-    const type = z.string().min(1).parse(input.type);
-    const progressTotal = parseProgressTotal(input.progressTotal ?? null);
+    const parsedInput = enqueueJobInputSchema.parse(input);
+    const id = jobIdSchema.parse(parsedInput.id ?? randomUUID());
+    const progressTotal = parseProgressTotal(parsedInput.progressTotal ?? null);
     const timestamp = new Date().toISOString();
-    const payloadJson = serializeJson(input.payload, 'payload');
+    const payloadJson = serializeJson(parsedInput.payload, 'payload');
 
     const row = this.database.raw
       .prepare(
@@ -108,7 +179,7 @@ export class JobRepository {
         ) VALUES (?, ?, 'queued', 0, ?, 0, ?, NULL, NULL, NULL, ?, NULL, NULL, ?)
         RETURNING ${returnedJobColumns}`,
       )
-      .get(id, type, progressTotal, payloadJson, timestamp, timestamp);
+      .get(id, parsedInput.type, progressTotal, payloadJson, timestamp, timestamp);
 
     return parseStoredJobRow(row);
   }
@@ -284,8 +355,8 @@ function parseStoredJobRow(value: unknown): JobRecord {
     progressCurrent: row.progress_current,
     progressTotal: row.progress_total,
     retryCount: row.retry_count,
-    payload: JSON.parse(row.payload_json),
-    result: row.result_json === null ? null : JSON.parse(row.result_json),
+    payload: row.payload_json.value,
+    result: row.result_json === null ? null : row.result_json.value,
     error:
       row.error_code === null
         ? null
@@ -296,4 +367,44 @@ function parseStoredJobRow(value: unknown): JobRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+type LifecycleRequirements = {
+  resultMustBeNull?: boolean;
+  resultMustBePresent?: boolean;
+  errorMustBeNull?: boolean;
+  errorMustBePresent?: boolean;
+  startedAtMustBeNull?: boolean;
+  startedAtMustBePresent?: boolean;
+  finishedAtMustBeNull?: boolean;
+  finishedAtMustBePresent?: boolean;
+};
+
+function addLifecycleIssues(
+  context: z.RefinementCtx,
+  row: StoredJobRow,
+  requirements: LifecycleRequirements,
+): void {
+  const hasError = row.error_code !== null;
+
+  addPresenceIssue(context, row.result_json, 'result_json', requirements.resultMustBeNull, requirements.resultMustBePresent);
+  addPresenceIssue(context, hasError ? row.error_code : null, 'error_code', requirements.errorMustBeNull, requirements.errorMustBePresent);
+  addPresenceIssue(context, row.started_at, 'started_at', requirements.startedAtMustBeNull, requirements.startedAtMustBePresent);
+  addPresenceIssue(context, row.finished_at, 'finished_at', requirements.finishedAtMustBeNull, requirements.finishedAtMustBePresent);
+}
+
+function addPresenceIssue(
+  context: z.RefinementCtx,
+  value: unknown | null,
+  field: string,
+  mustBeNull: boolean | undefined,
+  mustBePresent: boolean | undefined,
+): void {
+  if ((mustBeNull && value !== null) || (mustBePresent && value === null)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Invalid lifecycle value for ${field}.`,
+      path: [field],
+    });
+  }
 }

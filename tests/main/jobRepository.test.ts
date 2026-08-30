@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
@@ -24,6 +25,51 @@ describe('JobRepository', () => {
     database = openDatabase(tempDatabase.path);
     await migrateToLatest(database);
     return new JobRepository(database);
+  }
+
+  function insertStoredJob(overrides: {
+    id: string;
+    state?: string;
+    progressCurrent?: number;
+    progressTotal?: number | null;
+    payloadJson?: string;
+    resultJson?: string | null;
+    errorCode?: string | null;
+    errorMessage?: string | null;
+    createdAt?: string;
+    startedAt?: string | null;
+    finishedAt?: string | null;
+    updatedAt?: string;
+  }): void {
+    const rawDatabase = database?.raw;
+    if (rawDatabase === undefined) {
+      throw new Error('Test database is not initialized.');
+    }
+
+    const timestamp = '2026-08-29T00:00:00.000Z';
+    rawDatabase
+      .prepare(
+        `INSERT INTO jobs (
+          id, type, state, progress_current, progress_total, retry_count, payload_json,
+          result_json, error_code, error_message, created_at, started_at, finished_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        overrides.id,
+        'sync',
+        overrides.state ?? 'queued',
+        overrides.progressCurrent ?? 0,
+        overrides.progressTotal ?? null,
+        0,
+        overrides.payloadJson ?? '{}',
+        overrides.resultJson ?? null,
+        overrides.errorCode ?? null,
+        overrides.errorMessage ?? null,
+        overrides.createdAt ?? timestamp,
+        overrides.startedAt ?? null,
+        overrides.finishedAt ?? null,
+        overrides.updatedAt ?? timestamp,
+      );
   }
 
   it('moves a queued job through running to succeeded', async () => {
@@ -123,6 +169,21 @@ describe('JobRepository', () => {
     expect(repository.get('job-payload')?.payload).toEqual(payload);
   });
 
+  it('rejects an empty supplied id before it can be persisted', async () => {
+    const repository = await createRepository();
+    const rawDatabase = database?.raw;
+    if (rawDatabase === undefined) {
+      throw new Error('Test database is not initialized.');
+    }
+
+    expect(() => repository.enqueue({ id: '', type: 'sync', payload: {} })).toThrow(z.ZodError);
+    expect(
+      rawDatabase
+        .prepare<[string], { count: number }>('SELECT COUNT(*) AS count FROM jobs WHERE id = ?')
+        .get(''),
+    ).toEqual({ count: 0 });
+  });
+
   it('recovers running jobs as interrupted failures after a restart', async () => {
     const repository = await createRepository();
     const running = repository.enqueue({ id: 'job-recover', type: 'sync', payload: {} });
@@ -140,33 +201,57 @@ describe('JobRepository', () => {
     expect(repository.get(queued.id)?.state).toBe('queued');
   });
 
-  it('does not expose malformed stored rows as records', async () => {
-    const repository = await createRepository();
-    const timestamp = '2026-08-29T00:00:00.000Z';
-    database?.raw
-      .prepare(
-        `INSERT INTO jobs (
-          id, type, state, progress_current, progress_total, retry_count, payload_json,
-          result_json, error_code, error_message, created_at, started_at, finished_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        'job-malformed',
-        'sync',
-        'queued',
-        -1,
-        null,
-        0,
-        '{}',
-        null,
-        null,
-        null,
-        timestamp,
-        null,
-        null,
-        timestamp,
-      );
+  const malformedRows = [
+    ['negative progress', { id: 'job-negative-progress', progressCurrent: -1 }],
+    ['invalid payload JSON', { id: 'job-invalid-json', payloadJson: '{not-json' }],
+    [
+      'invalid result JSON',
+      {
+        id: 'job-invalid-result-json',
+        state: 'succeeded',
+        resultJson: '{not-json',
+        startedAt: '2026-08-29T00:00:00.000Z',
+        finishedAt: '2026-08-29T00:01:00.000Z',
+      },
+    ],
+    ['non-UTC timestamp', { id: 'job-offset-timestamp', createdAt: '2026-08-29T00:00:00.000+00:00' }],
+    ['active job result', { id: 'job-queued-result', resultJson: '{"unexpected":true}' }],
+    [
+      'succeeded job without result',
+      {
+        id: 'job-succeeded-without-result',
+        state: 'succeeded',
+        startedAt: '2026-08-29T00:00:00.000Z',
+        finishedAt: '2026-08-29T00:01:00.000Z',
+      },
+    ],
+    [
+      'failed job without error',
+      {
+        id: 'job-failed-without-error',
+        state: 'failed',
+        startedAt: '2026-08-29T00:00:00.000Z',
+        finishedAt: '2026-08-29T00:01:00.000Z',
+      },
+    ],
+    ['running job without start timestamp', { id: 'job-running-without-start', state: 'running' }],
+    [
+      'cancelled job with start timestamp',
+      {
+        id: 'job-cancelled-with-start',
+        state: 'cancelled',
+        startedAt: '2026-08-29T00:00:00.000Z',
+        finishedAt: '2026-08-29T00:01:00.000Z',
+      },
+    ],
+  ] as const;
 
-    expect(() => repository.get('job-malformed')).toThrow();
-  });
+  for (const [description, row] of malformedRows) {
+    it(`rejects a persisted record with ${description} through Zod validation`, async () => {
+      const repository = await createRepository();
+      insertStoredJob(row);
+
+      expect(() => repository.get(row.id)).toThrow(z.ZodError);
+    });
+  }
 });
