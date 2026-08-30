@@ -197,7 +197,8 @@ public final class PhoneAccessibilityCallObserver<
         case .cycleDetected: .traversalCycleDetected
         case .deadlineExceeded: .traversalDeadlineExceeded
         case .inspectionFailed, .elementUnavailable, .staleCapture, .liveElementMismatch,
-             .containmentMismatch, .actuationFailed: .snapshotFailed
+             .containmentMismatch, .liveCallStateUnavailable, .liveCallSessionMismatch,
+             .liveCallStateMismatch, .actuationFailed: .snapshotFailed
         }
     }
 

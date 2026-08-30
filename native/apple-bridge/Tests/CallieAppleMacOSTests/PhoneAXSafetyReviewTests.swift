@@ -5,6 +5,19 @@ import Testing
 
 @Suite("PhoneAXSafetyReviewTests")
 struct PhoneAXSafetyReviewTests {
+    @Test func unchangedLiveSessionPressesOnceAndStillRequiresIndependentVerification() throws {
+        let available = try FixtureSupport.snapshot(named: "phone-recording-available")
+        let active = try FixtureSupport.snapshot(named: "phone-recording-active")
+        let actuator = CaptureCheckingActuator(
+            currentToken: available.captureToken,
+            liveCallProof: unchangedLiveCallProof
+        )
+        let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([available, active]), actuator: actuator)
+
+        #expect(try client.startAndVerifyRecording(authorization: fixtureAuthorization, isAuthorizationCurrent: { true }) == .verified)
+        #expect(actuator.performedNodeIDs == ["record-button"])
+    }
+
     @Test func staleCaptureTokenFailsWithoutPerformingLiveActuation() throws {
         let available = try FixtureSupport.snapshot(named: "phone-recording-available")
         let active = try FixtureSupport.snapshot(named: "phone-recording-active")
@@ -29,15 +42,144 @@ struct PhoneAXSafetyReviewTests {
         #expect(actuator.performedNodeIDs.isEmpty)
     }
 
-    @Test func authorizationRevokedAtActuationFailsWithoutPressing() throws {
+    @Test func registryRevocationBetweenLiveReadAndActionFailsWithoutPressing() throws {
         let available = try FixtureSupport.snapshot(named: "phone-recording-available")
-        let active = try FixtureSupport.snapshot(named: "phone-recording-active")
         let authorization = RevocableAuthorization()
-        let actuator = CaptureCheckingActuator(currentToken: available.captureToken, beforeAuthorizationCheck: authorization.revoke)
-        let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([available, active]), actuator: actuator)
+        let actuator = CaptureCheckingActuator(
+            currentToken: available.captureToken,
+            liveCallProof: unchangedLiveCallProof,
+            afterLiveCallRead: authorization.revoke
+        )
+        let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([available]), actuator: actuator)
 
         #expect(throws: PhoneAccessibilityError.callAuthorizationChanged) {
             try client.startAndVerifyRecording(authorization: fixtureAuthorization, isAuthorizationCurrent: authorization.isCurrent)
+        }
+        #expect(actuator.performedNodeIDs.isEmpty)
+    }
+
+    @Test func sameWindowSameDirectionSessionReplacementAfterCaptureFailsWithoutPressing() throws {
+        let available = try FixtureSupport.snapshot(named: "phone-recording-available")
+        let actuator = CaptureCheckingActuator(
+            currentToken: available.captureToken,
+            liveCallProof: AXLiveCallProof(
+                phoneUIFingerprint: "macos-26.4-phone-v1",
+                recognizedCallWindowCount: 1,
+                sessionFingerprint: "session-b-0001",
+                outgoing: true,
+                connected: true,
+                onHold: false
+            )
+        )
+        let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([available]), actuator: actuator)
+
+        #expect(throws: AXSnapshotError.liveCallSessionMismatch) {
+            try client.startAndVerifyRecording(authorization: fixtureAuthorization, isAuthorizationCurrent: { true })
+        }
+        #expect(actuator.performedNodeIDs.isEmpty)
+    }
+
+    @Test func liveHeldTransitionAfterCaptureFailsWithoutPressing() throws {
+        let available = try FixtureSupport.snapshot(named: "phone-recording-available")
+        let actuator = CaptureCheckingActuator(
+            currentToken: available.captureToken,
+            liveCallProof: AXLiveCallProof(
+                phoneUIFingerprint: "macos-26.4-phone-v1",
+                recognizedCallWindowCount: 1,
+                sessionFingerprint: "session-a-0001",
+                outgoing: true,
+                connected: true,
+                onHold: true
+            )
+        )
+        let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([available]), actuator: actuator)
+
+        #expect(throws: AXSnapshotError.liveCallStateMismatch) {
+            try client.startAndVerifyRecording(authorization: fixtureAuthorization, isAuthorizationCurrent: { true })
+        }
+        #expect(actuator.performedNodeIDs.isEmpty)
+    }
+
+    @Test func liveDisconnectedTransitionAfterCaptureFailsWithoutPressing() throws {
+        let available = try FixtureSupport.snapshot(named: "phone-recording-available")
+        let actuator = CaptureCheckingActuator(
+            currentToken: available.captureToken,
+            liveCallProof: AXLiveCallProof(
+                phoneUIFingerprint: "macos-26.4-phone-v1",
+                recognizedCallWindowCount: 1,
+                sessionFingerprint: "session-a-0001",
+                outgoing: true,
+                connected: false,
+                onHold: false
+            )
+        )
+        let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([available]), actuator: actuator)
+
+        #expect(throws: AXSnapshotError.liveCallStateMismatch) {
+            try client.startAndVerifyRecording(authorization: fixtureAuthorization, isAuthorizationCurrent: { true })
+        }
+        #expect(actuator.performedNodeIDs.isEmpty)
+    }
+
+    @Test func liveDirectionChangeAfterCaptureFailsWithoutPressing() throws {
+        let available = try FixtureSupport.snapshot(named: "phone-recording-available")
+        let actuator = CaptureCheckingActuator(
+            currentToken: available.captureToken,
+            liveCallProof: AXLiveCallProof(
+                phoneUIFingerprint: "macos-26.4-phone-v1",
+                recognizedCallWindowCount: 1,
+                sessionFingerprint: "session-a-0001",
+                outgoing: false,
+                connected: true,
+                onHold: false
+            )
+        )
+        let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([available]), actuator: actuator)
+
+        #expect(throws: AXSnapshotError.liveCallStateMismatch) {
+            try client.startAndVerifyRecording(authorization: fixtureAuthorization, isAuthorizationCurrent: { true })
+        }
+        #expect(actuator.performedNodeIDs.isEmpty)
+    }
+
+    @Test func missingLiveSessionFingerprintFailsWithoutPressing() throws {
+        let available = try FixtureSupport.snapshot(named: "phone-recording-available")
+        let actuator = CaptureCheckingActuator(
+            currentToken: available.captureToken,
+            liveCallProof: AXLiveCallProof(
+                phoneUIFingerprint: "macos-26.4-phone-v1",
+                recognizedCallWindowCount: 1,
+                sessionFingerprint: nil,
+                outgoing: true,
+                connected: true,
+                onHold: false
+            )
+        )
+        let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([available]), actuator: actuator)
+
+        #expect(throws: AXSnapshotError.liveCallStateUnavailable) {
+            try client.startAndVerifyRecording(authorization: fixtureAuthorization, isAuthorizationCurrent: { true })
+        }
+        #expect(actuator.performedNodeIDs.isEmpty)
+    }
+
+    @Test func ambiguousLiveCallWindowFingerprintFailsWithoutPressing() throws {
+        let available = try FixtureSupport.snapshot(named: "phone-recording-available")
+        let actuator = CaptureCheckingActuator(
+            currentToken: available.captureToken,
+            liveCallProof: AXLiveCallProof(
+                phoneUIFingerprint: "macos-26.4-phone-v1",
+                recognizedCallWindowCount: 2,
+                sessionFingerprint: "session-a-0001",
+                outgoing: true,
+                connected: true,
+                onHold: false
+            )
+        )
+        let client = PhoneAccessibilityClient(snapshotter: SequenceSnapshotter([available]), actuator: actuator)
+
+        #expect(throws: AXSnapshotError.liveCallStateUnavailable) {
+            try client.startAndVerifyRecording(authorization: fixtureAuthorization, isAuthorizationCurrent: { true })
         }
         #expect(actuator.performedNodeIDs.isEmpty)
     }
@@ -134,13 +276,20 @@ private final class CaptureCheckingActuator: AXActuating, @unchecked Sendable {
     private let lock = NSLock()
     private let currentToken: UUID
     private let liveElementMatches: Bool
-    private let beforeAuthorizationCheck: @Sendable () -> Void
+    private let liveCallProof: AXLiveCallProof
+    private let afterLiveCallRead: @Sendable () -> Void
     private var performed: [String] = []
 
-    init(currentToken: UUID, liveElementMatches: Bool = true, beforeAuthorizationCheck: @escaping @Sendable () -> Void = {}) {
+    init(
+        currentToken: UUID,
+        liveElementMatches: Bool = true,
+        liveCallProof: AXLiveCallProof = unchangedLiveCallProof,
+        afterLiveCallRead: @escaping @Sendable () -> Void = {}
+    ) {
         self.currentToken = currentToken
         self.liveElementMatches = liveElementMatches
-        self.beforeAuthorizationCheck = beforeAuthorizationCheck
+        self.liveCallProof = liveCallProof
+        self.afterLiveCallRead = afterLiveCallRead
     }
 
     var performedNodeIDs: [String] { lock.withLock { performed } }
@@ -148,7 +297,8 @@ private final class CaptureCheckingActuator: AXActuating, @unchecked Sendable {
     func press(_ request: AXActuationRequest, ifAuthorized: @Sendable () -> Bool) throws {
         guard request.captureToken == currentToken else { throw AXSnapshotError.staleCapture }
         guard liveElementMatches else { throw AXSnapshotError.liveElementMismatch }
-        beforeAuthorizationCheck()
+        try request.liveCall.validate(liveCallProof)
+        afterLiveCallRead()
         guard ifAuthorized() else { throw PhoneAccessibilityError.callAuthorizationChanged }
         lock.withLock { performed.append(request.element.nodeID) }
     }
@@ -199,3 +349,11 @@ private extension AXNodeSnapshot {
 
 let fixtureCall = ObservedCall(id: UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!, outgoing: true, connected: true, ended: false, onHold: false)
 let fixtureAuthorization = PhoneCallAuthorization(call: fixtureCall, observationGeneration: 7, sessionFingerprint: "session-a-0001")
+private let unchangedLiveCallProof = AXLiveCallProof(
+    phoneUIFingerprint: "macos-26.4-phone-v1",
+    recognizedCallWindowCount: 1,
+    sessionFingerprint: "session-a-0001",
+    outgoing: true,
+    connected: true,
+    onHold: false
+)

@@ -57,8 +57,14 @@ public struct PhoneAccessibilityClient<Snapshotter: AXSnapshotting, Actuator: AX
         try actuator.press(AXActuationRequest(
             captureToken: before.captureToken,
             provenance: before.provenance,
-            phoneUIFingerprint: before.phoneUIFingerprint,
-            callWindow: AXElementExpectation(node: callWindow.window),
+            liveCall: AXLiveCallExpectation(
+                phoneUIFingerprint: before.phoneUIFingerprint,
+                callWindow: AXElementExpectation(node: callWindow.window),
+                sessionFingerprint: callWindow.sessionFingerprint,
+                outgoing: callWindow.outgoing,
+                connected: callWindow.connected,
+                onHold: callWindow.onHold
+            ),
             element: AXElementExpectation(node: controls[0])
         ), ifAuthorized: isAuthorizationCurrent)
 
@@ -91,7 +97,11 @@ enum PhoneAXRules {
         let matchingWindows = snapshot.root.children.filter(isRecognizedCallWindow)
         guard !matchingWindows.isEmpty else { return nil }
         guard matchingWindows.count == 1 else { throw PhoneAccessibilityError.callWindowAmbiguous }
-        let window = matchingWindows[0]
+        return try inspectRecognizedCallWindow(matchingWindows[0])
+    }
+
+    static func inspectRecognizedCallWindow(_ window: AXNode) throws -> PhoneCallWindowInspection {
+        guard isRecognizedCallWindow(window) else { throw PhoneAccessibilityError.callWindowNotFound }
         guard window.enabled else { throw PhoneAccessibilityError.callWindowDisabled }
         guard let sessionFingerprint = window.value, isValidSessionFingerprint(sessionFingerprint) else {
             throw PhoneAccessibilityError.sessionFingerprintUnavailable

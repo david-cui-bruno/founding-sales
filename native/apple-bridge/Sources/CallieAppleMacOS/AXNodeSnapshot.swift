@@ -250,18 +250,91 @@ public struct AXElementExpectation: Equatable, Sendable {
     }
 }
 
+public struct AXLiveCallProof: Equatable, Sendable {
+    public let phoneUIFingerprint: String
+    public let recognizedCallWindowCount: Int
+    public let sessionFingerprint: String?
+    public let outgoing: Bool?
+    public let connected: Bool?
+    public let onHold: Bool?
+
+    public init(
+        phoneUIFingerprint: String,
+        recognizedCallWindowCount: Int,
+        sessionFingerprint: String?,
+        outgoing: Bool?,
+        connected: Bool?,
+        onHold: Bool?
+    ) {
+        self.phoneUIFingerprint = phoneUIFingerprint
+        self.recognizedCallWindowCount = recognizedCallWindowCount
+        self.sessionFingerprint = sessionFingerprint
+        self.outgoing = outgoing
+        self.connected = connected
+        self.onHold = onHold
+    }
+}
+
+public struct AXLiveCallExpectation: Equatable, Sendable {
+    public let phoneUIFingerprint: String
+    public let callWindow: AXElementExpectation
+    public let sessionFingerprint: String
+    public let outgoing: Bool
+    public let connected: Bool
+    public let onHold: Bool
+
+    public init(
+        phoneUIFingerprint: String,
+        callWindow: AXElementExpectation,
+        sessionFingerprint: String,
+        outgoing: Bool,
+        connected: Bool,
+        onHold: Bool
+    ) {
+        self.phoneUIFingerprint = phoneUIFingerprint
+        self.callWindow = callWindow
+        self.sessionFingerprint = sessionFingerprint
+        self.outgoing = outgoing
+        self.connected = connected
+        self.onHold = onHold
+    }
+
+    func validate(_ proof: AXLiveCallProof) throws {
+        guard proof.phoneUIFingerprint == phoneUIFingerprint else {
+            throw AXSnapshotError.liveCallStateUnavailable
+        }
+        guard proof.recognizedCallWindowCount == 1 else {
+            throw AXSnapshotError.liveCallStateUnavailable
+        }
+        guard let sessionFingerprint = proof.sessionFingerprint else {
+            throw AXSnapshotError.liveCallStateUnavailable
+        }
+        guard sessionFingerprint == self.sessionFingerprint else {
+            throw AXSnapshotError.liveCallSessionMismatch
+        }
+        guard
+            let outgoing = proof.outgoing,
+            let connected = proof.connected,
+            let onHold = proof.onHold
+        else { throw AXSnapshotError.liveCallStateUnavailable }
+        guard
+            outgoing == self.outgoing,
+            connected == self.connected,
+            onHold == self.onHold
+        else { throw AXSnapshotError.liveCallStateMismatch }
+    }
+}
+
 public struct AXActuationRequest: Equatable, Sendable {
     public let captureToken: UUID
     public let provenance: PhoneProcessIdentity
-    public let phoneUIFingerprint: String
-    public let callWindow: AXElementExpectation
+    public let liveCall: AXLiveCallExpectation
     public let element: AXElementExpectation
 
-    public init(captureToken: UUID, provenance: PhoneProcessIdentity, phoneUIFingerprint: String, callWindow: AXElementExpectation, element: AXElementExpectation) {
+    public init(captureToken: UUID, provenance: PhoneProcessIdentity, liveCall: AXLiveCallExpectation, element: AXElementExpectation) {
         self.captureToken = captureToken
         self.provenance = provenance
-        self.phoneUIFingerprint = phoneUIFingerprint
-        self.callWindow = callWindow
+        self.liveCall = liveCall
         self.element = element
     }
 }
@@ -279,6 +352,9 @@ public enum AXSnapshotError: Error, Equatable, Sendable {
     case staleCapture
     case liveElementMismatch
     case containmentMismatch
+    case liveCallStateUnavailable
+    case liveCallSessionMismatch
+    case liveCallStateMismatch
     case actuationFailed
     case maximumDepthExceeded
     case maximumNodeCountExceeded
@@ -339,24 +415,86 @@ public final class SystemPhoneAXAdapter: AXSnapshotting, AXActuating, @unchecked
                 capture.token == request.captureToken,
                 capture.process.identity == request.provenance
             else { throw AXSnapshotError.staleCapture }
-            guard request.phoneUIFingerprint == capture.process.phoneUIFingerprint else { throw AXSnapshotError.liveElementMismatch }
+            guard request.liveCall.phoneUIFingerprint == capture.process.phoneUIFingerprint else { throw AXSnapshotError.liveCallStateUnavailable }
             guard try locator.locatePhoneProcess() == capture.process else { throw AXSnapshotError.phoneApplicationUnavailable }
             guard
                 let element = capture.elementsByID[request.element.nodeID],
-                let callWindow = capture.elementsByID[request.callWindow.nodeID],
-                request.element.nodeID.hasPrefix(request.callWindow.nodeID + ".")
+                let callWindow = capture.elementsByID[request.liveCall.callWindow.nodeID],
+                request.element.nodeID.hasPrefix(request.liveCall.callWindow.nodeID + ".")
             else { throw AXSnapshotError.containmentMismatch }
             try validateLive(element, expectation: request.element, processIdentifier: capture.process.identity.processIdentifier)
-            try validateLive(callWindow, expectation: request.callWindow, processIdentifier: capture.process.identity.processIdentifier)
+            try validateLive(callWindow, expectation: request.liveCall.callWindow, processIdentifier: capture.process.identity.processIdentifier)
             guard
                 let liveWindow = copyAttribute(element, kAXWindowAttribute),
                 CFEqual(liveWindow, callWindow),
                 let applicationWindows = copyAttribute(capture.application, kAXWindowsAttribute) as? [AXUIElement],
                 applicationWindows.contains(where: { CFEqual($0, callWindow) })
             else { throw AXSnapshotError.containmentMismatch }
+            try request.liveCall.validate(captureLiveCallProof(
+                capture: capture,
+                callWindow: callWindow
+            ))
             guard ifAuthorized() else { throw PhoneAccessibilityError.callAuthorizationChanged }
             guard AXUIElementPerformAction(element, kAXPressAction as CFString) == .success else { throw AXSnapshotError.actuationFailed }
         }
+    }
+
+    private func captureLiveCallProof(capture: CaptureRecord, callWindow: AXUIElement) throws -> AXLiveCallProof {
+        guard let applicationWindows = try? requiredElementArrayAttribute(capture.application, kAXWindowsAttribute) else {
+            throw AXSnapshotError.liveCallStateUnavailable
+        }
+        let windowReader = SystemAXTraversalReader()
+        let recognized: [AXUIElement]
+        do {
+            recognized = try applicationWindows.enumerated().compactMap { index, window in
+                let fields = try windowReader.fields(of: window, path: "live-window.\(index)")
+                let node = AXNode(
+                    nodeID: fields.nodeID,
+                    role: fields.role,
+                    title: fields.title,
+                    identifier: fields.identifier,
+                    enabled: fields.enabled,
+                    value: fields.value,
+                    children: []
+                )
+                return PhoneAXRules.isRecognizedCallWindow(node) && node.enabled ? window : nil
+            }
+        } catch {
+            throw AXSnapshotError.liveCallStateUnavailable
+        }
+        guard recognized.contains(where: { CFEqual($0, callWindow) }) else {
+            throw AXSnapshotError.containmentMismatch
+        }
+
+        let liveWindow: AXNode
+        do {
+            liveWindow = try BoundedAXTraversal(
+                reader: SystemAXTraversalReader(),
+                clock: AnyMonotonicClock(clock),
+                limits: limits
+            ).capture(callWindow)
+        } catch let error as AXSnapshotError {
+            switch error {
+            case .maximumDepthExceeded, .maximumNodeCountExceeded, .cycleDetected, .deadlineExceeded:
+                throw error
+            default:
+                throw AXSnapshotError.liveCallStateUnavailable
+            }
+        } catch {
+            throw AXSnapshotError.liveCallStateUnavailable
+        }
+
+        guard let inspection = try? PhoneAXRules.inspectRecognizedCallWindow(liveWindow) else {
+            throw AXSnapshotError.liveCallStateUnavailable
+        }
+        return AXLiveCallProof(
+            phoneUIFingerprint: capture.process.phoneUIFingerprint,
+            recognizedCallWindowCount: recognized.count,
+            sessionFingerprint: inspection.sessionFingerprint,
+            outgoing: inspection.outgoing,
+            connected: inspection.connected,
+            onHold: inspection.onHold
+        )
     }
 
     private func validateLive(_ element: AXUIElement, expectation: AXElementExpectation, processIdentifier: pid_t) throws {
@@ -387,17 +525,45 @@ private final class SystemAXTraversalReader: AXTraversalNodeReading {
         elementsByID[path] = element
         return AXNodeFields(
             nodeID: path,
-            role: stringAttribute(element, kAXRoleAttribute) ?? "",
-            title: stringAttribute(element, kAXTitleAttribute),
-            identifier: stringAttribute(element, kAXIdentifierAttribute),
-            enabled: boolAttribute(element, kAXEnabledAttribute) ?? false,
-            value: stringAttribute(element, kAXValueAttribute)
+            role: try optionalStringAttribute(element, kAXRoleAttribute) ?? "",
+            title: try optionalStringAttribute(element, kAXTitleAttribute),
+            identifier: try optionalStringAttribute(element, kAXIdentifierAttribute),
+            enabled: try optionalBoolAttribute(element, kAXEnabledAttribute) ?? false,
+            value: try optionalStringAttribute(element, kAXValueAttribute)
         )
     }
 
     func children(of element: AXUIElement) throws -> [AXUIElement] {
-        (copyAttribute(element, kAXChildrenAttribute) as? [AXUIElement]) ?? []
+        (try optionalAttribute(element, kAXChildrenAttribute) as? [AXUIElement]) ?? []
     }
+}
+
+private func requiredElementArrayAttribute(_ element: AXUIElement, _ attribute: String) throws -> [AXUIElement] {
+    guard let elements = try optionalAttribute(element, attribute) as? [AXUIElement] else {
+        throw AXSnapshotError.inspectionFailed
+    }
+    return elements
+}
+
+private func optionalAttribute(_ element: AXUIElement, _ attribute: String) throws -> CFTypeRef? {
+    var value: CFTypeRef?
+    let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+    switch result {
+    case .success:
+        return value
+    case .noValue, .attributeUnsupported:
+        return nil
+    default:
+        throw AXSnapshotError.inspectionFailed
+    }
+}
+
+private func optionalStringAttribute(_ element: AXUIElement, _ attribute: String) throws -> String? {
+    try optionalAttribute(element, attribute) as? String
+}
+
+private func optionalBoolAttribute(_ element: AXUIElement, _ attribute: String) throws -> Bool? {
+    (try optionalAttribute(element, attribute) as? NSNumber)?.boolValue
 }
 
 private func copyAttribute(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
