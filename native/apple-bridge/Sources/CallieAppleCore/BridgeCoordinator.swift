@@ -70,20 +70,21 @@ public actor BridgeCoordinator: BridgeCommandHandling {
     ) async {
         if var session = sessions[call.id] {
             let wasAttempting = session.stateMachine.recordingState == .attempted
-            let callChanged = session.stateMachine.apply(.observed(call))
+            let observation = session.stateMachine.applyObservation(call)
+            guard observation != .rejectedStale else { return }
             let updatedSafety = SafetySnapshot(
-                call: callChanged ? call : session.stateMachine.call,
+                call: session.stateMachine.call,
                 identity: identity,
                 contactAccess: contactAccess,
                 policy: policy
             )
             let safetyChanged = session.safety != updatedSafety
-            guard callChanged || safetyChanged else { return }
+            guard observation == .accepted || safetyChanged else { return }
 
             session.safety = updatedSafety
             if safetyChanged { session.generation += 1 }
             sessions[call.id] = session
-            if callChanged { emit(.callStateChanged, safety: updatedSafety) }
+            if observation == .accepted { emit(.callStateChanged, safety: updatedSafety) }
             if safetyChanged, wasAttempting {
                 emitIdentityChange(for: updatedSafety)
                 invalidateAttempt(for: call.id, denial: decision(for: updatedSafety).denial)
@@ -146,11 +147,17 @@ public actor BridgeCoordinator: BridgeCommandHandling {
 
     private func invalidateAttempt(for callID: UUID, denial: RecordingDenial?) {
         guard var session = sessions[callID] else { return }
+        let failure: RecordingFailure
         if session.stateMachine.recordingState == .attempted {
             _ = session.stateMachine.apply(.recordingVerificationFailed(.eligibilityChanged))
             sessions[callID] = session
+            failure = .eligibilityChanged
+        } else if session.stateMachine.recordingState == .failed(.callEnded) {
+            failure = .callEnded
+        } else {
+            failure = .eligibilityChanged
         }
-        emitRecordingFailed(safety: session.safety, denial: denial)
+        emitRecordingFailed(safety: session.safety, denial: denial, failure: failure)
     }
 
     private func decision(for safety: SafetySnapshot) -> RecordingDecision {
@@ -171,9 +178,14 @@ public actor BridgeCoordinator: BridgeCommandHandling {
         }
     }
 
-    private func emitRecordingFailed(safety: SafetySnapshot, denial: RecordingDenial?) {
+    private func emitRecordingFailed(
+        safety: SafetySnapshot,
+        denial: RecordingDenial?,
+        failure: RecordingFailure? = nil
+    ) {
         var extra: [String: JSONValue] = [:]
         if let denial { extra["denial"] = .string(denial.wireValue) }
+        if let failure { extra["failure"] = .string(failure.wireValue) }
         emit(.recordingFailed, safety: safety, extra: extra)
     }
 
@@ -186,7 +198,10 @@ public actor BridgeCoordinator: BridgeCommandHandling {
             "ended": .bool(safety.call.ended),
             "onHold": .bool(safety.call.onHold),
             "identity": .string(safety.identity.wireValue),
+            "contactMembership": safety.identity.membershipWireValue,
             "contactAccess": .string(safety.contactAccess.wireValue),
+            "policyAllowsKnownContacts": .bool(safety.policy.allowsKnownContacts),
+            "policyAllowsUnknownContacts": .bool(safety.policy.allowsUnknownContacts),
         ]
         for (key, value) in extra { payload[key] = value }
         guard let event = try? BridgeEvent(seq: nextSequence, event: name, payload: payload) else { return }
@@ -257,6 +272,18 @@ private extension IdentityResolution {
         case .resolved: "resolved"
         case .ambiguous: "ambiguous"
         case .unresolved: "unresolved"
+        }
+    }
+
+    var membershipWireValue: JSONValue {
+        switch self {
+        case let .resolved(_, contactMembership):
+            switch contactMembership {
+            case .found: .string("found")
+            case .notFound: .string("notFound")
+            }
+        case .ambiguous, .unresolved:
+            .null
         }
     }
 }

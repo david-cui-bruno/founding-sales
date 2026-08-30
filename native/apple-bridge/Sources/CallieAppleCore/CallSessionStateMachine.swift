@@ -21,6 +21,12 @@ public enum CallSessionEvent: Sendable, Equatable {
     case recordingVerificationFailed(RecordingFailure)
 }
 
+public enum CallObservationDisposition: Sendable, Equatable {
+    case accepted
+    case duplicate
+    case rejectedStale
+}
+
 public struct CallSessionStateMachine: Sendable, Equatable {
     public private(set) var call: ObservedCall
     public private(set) var callState: CallSessionState
@@ -36,16 +42,7 @@ public struct CallSessionStateMachine: Sendable, Equatable {
     public mutating func apply(_ event: CallSessionEvent) -> Bool {
         switch event {
         case let .observed(updatedCall):
-            let updatedState = Self.callState(for: updatedCall)
-            guard updatedCall.id == call.id,
-                  updatedCall != call,
-                  Self.canAdvance(from: callState, to: updatedState) else { return false }
-            call = updatedCall
-            callState = updatedState
-            if updatedCall.ended, recordingState != .verified, recordingState != .failed(.callEnded) {
-                recordingState = .failed(.callEnded)
-            }
-            return true
+            return applyObservation(updatedCall) == .accepted
         case .recordingAttempted:
             guard callState == .connected, recordingState == .idle else { return false }
             recordingState = .attempted
@@ -59,6 +56,20 @@ public struct CallSessionStateMachine: Sendable, Equatable {
             recordingState = .failed(failure)
             return true
         }
+    }
+
+    @discardableResult
+    public mutating func applyObservation(_ updatedCall: ObservedCall) -> CallObservationDisposition {
+        guard updatedCall.id == call.id else { return .rejectedStale }
+        guard updatedCall != call else { return .duplicate }
+        let updatedState = Self.callState(for: updatedCall)
+        guard Self.canAdvance(from: callState, to: updatedState) else { return .rejectedStale }
+        call = updatedCall
+        callState = updatedState
+        if updatedCall.ended, recordingState != .verified, recordingState != .failed(.callEnded) {
+            recordingState = .failed(.callEnded)
+        }
+        return .accepted
     }
 
     private static func callState(for call: ObservedCall) -> CallSessionState {

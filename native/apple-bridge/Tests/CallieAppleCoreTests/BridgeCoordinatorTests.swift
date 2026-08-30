@@ -17,7 +17,12 @@ struct BridgeCoordinatorTests {
         await coordinator.observe(verifiedCall, identity: .resolved(verifiedHandle, contactMembership: .found), contactAccess: .full)
 
         #expect(controller.attempts == [verifiedCall.id])
-        #expect(events.names == [.callStateChanged, .callIdentityResolved, .recordingAttempted, .recordingVerified])
+        assertEvents(events.events, [
+            (.callStateChanged, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full")),
+            (.callIdentityResolved, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full")),
+            (.recordingAttempted, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full", extra: ["reason": .string("knownContact")])),
+            (.recordingVerified, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full", extra: ["verification": .string("verified")])),
+        ])
     }
 
     @Test func attemptedOrFailedVerificationNeverEmitsVerified() async {
@@ -31,8 +36,12 @@ struct BridgeCoordinatorTests {
 
         await coordinator.observe(verifiedCall, identity: .resolved(verifiedHandle, contactMembership: .found), contactAccess: .full)
 
-        #expect(events.names == [.callStateChanged, .callIdentityResolved, .recordingAttempted, .recordingFailed])
-        #expect(!events.names.contains(.recordingVerified))
+        assertEvents(events.events, [
+            (.callStateChanged, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full")),
+            (.callIdentityResolved, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full")),
+            (.recordingAttempted, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full", extra: ["reason": .string("knownContact")])),
+            (.recordingFailed, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full", extra: ["failure": .string("controlNotFound")])),
+        ])
     }
 
     @Test func deniedCallDoesNotAttemptRecordingAndDuplicateCallDoesNotRepeatEvents() async {
@@ -48,7 +57,11 @@ struct BridgeCoordinatorTests {
         await coordinator.observe(deniedCall, identity: .unresolved, contactAccess: .full)
 
         #expect(controller.attempts.isEmpty)
-        #expect(events.names == [.callStateChanged, .callIdentityUnresolved, .recordingFailed])
+        assertEvents(events.events, [
+            (.callStateChanged, safetyPayload(for: deniedCall, identity: "unresolved", membership: .null, contactAccess: "full")),
+            (.callIdentityUnresolved, safetyPayload(for: deniedCall, identity: "unresolved", membership: .null, contactAccess: "full")),
+            (.recordingFailed, safetyPayload(for: deniedCall, identity: "unresolved", membership: .null, contactAccess: "full", extra: ["denial": .string("identityUnresolved")])),
+        ])
     }
 
     @Test func connectingCallWaitsForConnectedObservationBeforeAttempting() async {
@@ -65,7 +78,13 @@ struct BridgeCoordinatorTests {
         await coordinator.observe(verifiedCall, identity: .resolved(verifiedHandle, contactMembership: .found), contactAccess: .full)
 
         #expect(controller.attempts == [verifiedCall.id])
-        #expect(events.names == [.callStateChanged, .callStateChanged, .callIdentityResolved, .recordingAttempted, .recordingVerified])
+        assertEvents(events.events, [
+            (.callStateChanged, safetyPayload(for: connecting, identity: "resolved", membership: .string("found"), contactAccess: "full")),
+            (.callStateChanged, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full")),
+            (.callIdentityResolved, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full")),
+            (.recordingAttempted, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full", extra: ["reason": .string("knownContact")])),
+            (.recordingVerified, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full", extra: ["verification": .string("verified")])),
+        ])
     }
 
     @Test func unresolvedIdentityDuringInFlightAttemptCannotVerifyRecording() async {
@@ -176,6 +195,45 @@ struct BridgeCoordinatorTests {
         assertContiguousEventFrames(events.events)
     }
 
+    @Test func staleConnectingUnsafeObservationDuringInFlightAttemptIsIgnoredAtomically() async {
+        let controller = SuspendedRecordingController()
+        let events = EventLog()
+        let coordinator = BridgeCoordinator(policy: allowPolicy, recordingController: controller, eventSink: { events.append($0) })
+        let staleConnecting = ObservedCall(id: verifiedCall.id, outgoing: true, connected: false, ended: false, onHold: false)
+
+        let attempt = Task {
+            await coordinator.observe(verifiedCall, identity: .resolved(verifiedHandle, contactMembership: .found), contactAccess: .full)
+        }
+        await controller.waitUntilAttempted()
+        await coordinator.observe(staleConnecting, identity: .unresolved, contactAccess: .denied)
+        await controller.finish(with: .verified)
+        await attempt.value
+
+        #expect(events.events.last?.event == .recordingVerified)
+        #expect(events.events.last?.payload == safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full", extra: ["verification": .string("verified")]))
+        #expect(await coordinator.recordingState(for: verifiedCall.id) == .verified)
+        assertContiguousEventFrames(events.events)
+    }
+
+    @Test func exactDuplicateWithUnsafeIdentityAndContactsInvalidatesInFlightAttempt() async {
+        let controller = SuspendedRecordingController()
+        let events = EventLog()
+        let coordinator = BridgeCoordinator(policy: allowPolicy, recordingController: controller, eventSink: { events.append($0) })
+
+        let attempt = Task {
+            await coordinator.observe(verifiedCall, identity: .resolved(verifiedHandle, contactMembership: .found), contactAccess: .full)
+        }
+        await controller.waitUntilAttempted()
+        await coordinator.observe(verifiedCall, identity: .unresolved, contactAccess: .denied)
+        await controller.finish(with: .verified)
+        await attempt.value
+
+        #expect(!events.names.contains(.recordingVerified))
+        #expect(events.events.last?.payload == safetyPayload(for: verifiedCall, identity: "unresolved", membership: .null, contactAccess: "denied", extra: ["denial": .string("identityUnresolved"), "failure": .string("eligibilityChanged")]))
+        #expect(await coordinator.recordingState(for: verifiedCall.id) == .failed(.eligibilityChanged))
+        assertContiguousEventFrames(events.events)
+    }
+
     @Test func policyChangeDuringInFlightAttemptCannotVerifyRecording() async {
         let controller = SuspendedRecordingController()
         let events = EventLog()
@@ -258,4 +316,36 @@ private func assertContiguousEventFrames(_ events: [BridgeEvent]) {
         #expect(event.payload["identity"] != nil)
         #expect(event.payload["contactAccess"] != nil)
     }
+}
+
+private func assertEvents(_ events: [BridgeEvent], _ expected: [(BridgeEventName, [String: JSONValue])]) {
+    #expect(events.count == expected.count)
+    for (index, pair) in expected.enumerated() where index < events.count {
+        #expect(events[index].seq == index)
+        #expect(events[index].event == pair.0)
+        #expect(events[index].payload == pair.1)
+    }
+}
+
+private func safetyPayload(
+    for call: ObservedCall,
+    identity: String,
+    membership: JSONValue,
+    contactAccess: String,
+    extra: [String: JSONValue] = [:]
+) -> [String: JSONValue] {
+    var payload: [String: JSONValue] = [
+        "callId": .string(call.id.uuidString.lowercased()),
+        "outgoing": .bool(call.outgoing),
+        "connected": .bool(call.connected),
+        "ended": .bool(call.ended),
+        "onHold": .bool(call.onHold),
+        "identity": .string(identity),
+        "contactMembership": membership,
+        "contactAccess": .string(contactAccess),
+        "policyAllowsKnownContacts": .bool(allowPolicy.allowsKnownContacts),
+        "policyAllowsUnknownContacts": .bool(allowPolicy.allowsUnknownContacts),
+    ]
+    for (key, value) in extra { payload[key] = value }
+    return payload
 }
