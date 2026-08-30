@@ -17,12 +17,7 @@ struct BridgeCoordinatorTests {
         await coordinator.observe(verifiedCall, identity: .resolved(verifiedHandle, contactMembership: .found), contactAccess: .full)
 
         #expect(controller.attempts == [verifiedCall.id])
-        assertEvents(events.events, [
-            (.callStateChanged, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full")),
-            (.callIdentityResolved, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full")),
-            (.recordingAttempted, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full", extra: ["reason": .string("knownContact")])),
-            (.recordingVerified, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full", extra: ["verification": .string("verified")])),
-        ])
+        assertEvents(events.events, knownVerifiedFrames)
     }
 
     @Test func attemptedOrFailedVerificationNeverEmitsVerified() async {
@@ -36,12 +31,7 @@ struct BridgeCoordinatorTests {
 
         await coordinator.observe(verifiedCall, identity: .resolved(verifiedHandle, contactMembership: .found), contactAccess: .full)
 
-        assertEvents(events.events, [
-            (.callStateChanged, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full")),
-            (.callIdentityResolved, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full")),
-            (.recordingAttempted, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full", extra: ["reason": .string("knownContact")])),
-            (.recordingFailed, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full", extra: ["failure": .string("controlNotFound")])),
-        ])
+        assertEvents(events.events, knownControlFailureFrames)
     }
 
     @Test func deniedCallDoesNotAttemptRecordingAndDuplicateCallDoesNotRepeatEvents() async {
@@ -57,11 +47,7 @@ struct BridgeCoordinatorTests {
         await coordinator.observe(deniedCall, identity: .unresolved, contactAccess: .full)
 
         #expect(controller.attempts.isEmpty)
-        assertEvents(events.events, [
-            (.callStateChanged, safetyPayload(for: deniedCall, identity: "unresolved", membership: .null, contactAccess: "full")),
-            (.callIdentityUnresolved, safetyPayload(for: deniedCall, identity: "unresolved", membership: .null, contactAccess: "full")),
-            (.recordingFailed, safetyPayload(for: deniedCall, identity: "unresolved", membership: .null, contactAccess: "full", extra: ["denial": .string("identityUnresolved")])),
-        ])
+        assertEvents(events.events, deniedInitialFrames)
     }
 
     @Test func connectingCallWaitsForConnectedObservationBeforeAttempting() async {
@@ -78,13 +64,7 @@ struct BridgeCoordinatorTests {
         await coordinator.observe(verifiedCall, identity: .resolved(verifiedHandle, contactMembership: .found), contactAccess: .full)
 
         #expect(controller.attempts == [verifiedCall.id])
-        assertEvents(events.events, [
-            (.callStateChanged, safetyPayload(for: connecting, identity: "resolved", membership: .string("found"), contactAccess: "full")),
-            (.callStateChanged, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full")),
-            (.callIdentityResolved, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full")),
-            (.recordingAttempted, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full", extra: ["reason": .string("knownContact")])),
-            (.recordingVerified, safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full", extra: ["verification": .string("verified")])),
-        ])
+        assertEvents(events.events, connectingThenKnownVerifiedFrames)
     }
 
     @Test func unresolvedIdentityDuringInFlightAttemptCannotVerifyRecording() async {
@@ -100,13 +80,8 @@ struct BridgeCoordinatorTests {
         await controller.finish(with: .verified)
         await attempt.value
 
-        #expect(!events.names.contains(.recordingVerified))
-        #expect(events.events.last?.event == .recordingFailed)
-        #expect(events.events.last?.payload["denial"] == .string("identityUnresolved"))
-        #expect(events.events.last?.payload["identity"] == .string("unresolved"))
-        #expect(events.events.last?.payload["contactAccess"] == .string("full"))
+        assertEvents(events.events, identityInvalidationFrames)
         #expect(await coordinator.recordingState(for: verifiedCall.id) == .failed(.eligibilityChanged))
-        assertContiguousEventFrames(events.events)
     }
 
     @Test func reducedContactsAccessDuringInFlightUnknownAttemptCannotVerifyRecording() async {
@@ -123,13 +98,8 @@ struct BridgeCoordinatorTests {
         await controller.finish(with: .verified)
         await attempt.value
 
-        #expect(!events.names.contains(.recordingVerified))
-        #expect(events.events.last?.event == .recordingFailed)
-        #expect(events.events.last?.payload["denial"] == .string("fullContactsRequired"))
-        #expect(events.events.last?.payload["identity"] == .string("resolved"))
-        #expect(events.events.last?.payload["contactAccess"] == .string("limited"))
+        assertEvents(events.events, limitedContactsInvalidationFrames)
         #expect(await coordinator.recordingState(for: verifiedCall.id) == .failed(.eligibilityChanged))
-        assertContiguousEventFrames(events.events)
     }
 
     @Test func deniedContactsAccessDuringInFlightUnknownAttemptCannotVerifyRecording() async {
@@ -146,12 +116,8 @@ struct BridgeCoordinatorTests {
         await controller.finish(with: .verified)
         await attempt.value
 
-        #expect(!events.names.contains(.recordingVerified))
-        #expect(events.events.last?.event == .recordingFailed)
-        #expect(events.events.last?.payload["denial"] == .string("fullContactsRequired"))
-        #expect(events.events.last?.payload["contactAccess"] == .string("denied"))
+        assertEvents(events.events, deniedContactsInvalidationFrames)
         #expect(await coordinator.recordingState(for: verifiedCall.id) == .failed(.eligibilityChanged))
-        assertContiguousEventFrames(events.events)
     }
 
     @Test func endedCallDuringInFlightAttemptCannotVerifyRecording() async {
@@ -168,12 +134,8 @@ struct BridgeCoordinatorTests {
         await controller.finish(with: .verified)
         await attempt.value
 
-        #expect(!events.names.contains(.recordingVerified))
-        #expect(events.events.last?.event == .recordingFailed)
-        #expect(events.events.last?.payload["denial"] == .string("callNotRecordable"))
-        #expect(events.events.last?.payload["ended"] == .bool(true))
+        assertEvents(events.events, endedInvalidationFrames)
         #expect(await coordinator.recordingState(for: verifiedCall.id) == .failed(.callEnded))
-        assertContiguousEventFrames(events.events)
     }
 
     @Test func staleConnectingObservationDuringInFlightAttemptCannotInvalidateCurrentCall() async {
@@ -190,9 +152,8 @@ struct BridgeCoordinatorTests {
         await controller.finish(with: .verified)
         await attempt.value
 
-        #expect(events.events.last?.event == .recordingVerified)
+        assertEvents(events.events, knownVerifiedFrames)
         #expect(await coordinator.recordingState(for: verifiedCall.id) == .verified)
-        assertContiguousEventFrames(events.events)
     }
 
     @Test func staleConnectingUnsafeObservationDuringInFlightAttemptIsIgnoredAtomically() async {
@@ -209,10 +170,8 @@ struct BridgeCoordinatorTests {
         await controller.finish(with: .verified)
         await attempt.value
 
-        #expect(events.events.last?.event == .recordingVerified)
-        #expect(events.events.last?.payload == safetyPayload(for: verifiedCall, identity: "resolved", membership: .string("found"), contactAccess: "full", extra: ["verification": .string("verified")]))
+        assertEvents(events.events, knownVerifiedFrames)
         #expect(await coordinator.recordingState(for: verifiedCall.id) == .verified)
-        assertContiguousEventFrames(events.events)
     }
 
     @Test func exactDuplicateWithUnsafeIdentityAndContactsInvalidatesInFlightAttempt() async {
@@ -228,10 +187,8 @@ struct BridgeCoordinatorTests {
         await controller.finish(with: .verified)
         await attempt.value
 
-        #expect(!events.names.contains(.recordingVerified))
-        #expect(events.events.last?.payload == safetyPayload(for: verifiedCall, identity: "unresolved", membership: .null, contactAccess: "denied", extra: ["denial": .string("identityUnresolved"), "failure": .string("eligibilityChanged")]))
+        assertEvents(events.events, exactUnsafeInvalidationFrames)
         #expect(await coordinator.recordingState(for: verifiedCall.id) == .failed(.eligibilityChanged))
-        assertContiguousEventFrames(events.events)
     }
 
     @Test func policyChangeDuringInFlightAttemptCannotVerifyRecording() async {
@@ -247,11 +204,8 @@ struct BridgeCoordinatorTests {
         await controller.finish(with: .verified)
         await attempt.value
 
-        #expect(!events.names.contains(.recordingVerified))
-        #expect(events.events.last?.event == .recordingFailed)
-        #expect(events.events.last?.payload["denial"] == .string("knownContactDisallowed"))
+        assertEvents(events.events, policyInvalidationFrames)
         #expect(await coordinator.recordingState(for: verifiedCall.id) == .failed(.eligibilityChanged))
-        assertContiguousEventFrames(events.events)
     }
 }
 
@@ -260,6 +214,39 @@ private let unknownHandle = NormalizedHandle("unknown-synthetic")
 private let verifiedCall = ObservedCall(id: UUID(uuidString: "44444444-4444-4444-8444-444444444444")!, outgoing: true, connected: true, ended: false, onHold: false)
 private let deniedCall = ObservedCall(id: UUID(uuidString: "55555555-5555-4555-8555-555555555555")!, outgoing: false, connected: true, ended: false, onHold: false)
 private let allowPolicy = RecordingPolicySnapshot(allowsKnownContacts: true, allowsUnknownContacts: true)
+
+private let knownBase: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("resolved"), "contactMembership": .string("found"), "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true)]
+private let knownAttempt: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("resolved"), "contactMembership": .string("found"), "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true), "reason": .string("knownContact")]
+private let knownVerified: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("resolved"), "contactMembership": .string("found"), "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true), "verification": .string("verified")]
+private let knownControlFailure: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("resolved"), "contactMembership": .string("found"), "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true), "failure": .string("controlNotFound")]
+private let unresolvedBase: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("unresolved"), "contactMembership": .null, "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true)]
+private let unresolvedFull: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("unresolved"), "contactMembership": .null, "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true), "denial": .string("identityUnresolved"), "failure": .string("eligibilityChanged")]
+private let unknownFull: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("resolved"), "contactMembership": .string("notFound"), "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true)]
+private let unknownAttempt: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("resolved"), "contactMembership": .string("notFound"), "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true), "reason": .string("unknownContact")]
+private let unknownLimitedBase: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("resolved"), "contactMembership": .string("notFound"), "contactAccess": .string("limited"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true)]
+private let unknownLimitedFailure: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("resolved"), "contactMembership": .string("notFound"), "contactAccess": .string("limited"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true), "denial": .string("fullContactsRequired"), "failure": .string("eligibilityChanged")]
+private let unknownDeniedBase: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("resolved"), "contactMembership": .string("notFound"), "contactAccess": .string("denied"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true)]
+private let unknownDeniedFailure: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("resolved"), "contactMembership": .string("notFound"), "contactAccess": .string("denied"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true), "denial": .string("fullContactsRequired"), "failure": .string("eligibilityChanged")]
+private let endedBase: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(true), "onHold": .bool(false), "identity": .string("resolved"), "contactMembership": .string("found"), "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true)]
+private let endedFailure: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(true), "onHold": .bool(false), "identity": .string("resolved"), "contactMembership": .string("found"), "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true), "denial": .string("callNotRecordable"), "failure": .string("callEnded")]
+private let unsafeDeniedBase: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("unresolved"), "contactMembership": .null, "contactAccess": .string("denied"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true)]
+private let unsafeDenied: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("unresolved"), "contactMembership": .null, "contactAccess": .string("denied"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true), "denial": .string("identityUnresolved"), "failure": .string("eligibilityChanged")]
+private let policyFailure: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("resolved"), "contactMembership": .string("found"), "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(false), "policyAllowsUnknownContacts": .bool(true), "denial": .string("knownContactDisallowed"), "failure": .string("eligibilityChanged")]
+private let connectingBase: [String: JSONValue] = ["callId": .string("44444444-4444-4444-8444-444444444444"), "outgoing": .bool(true), "connected": .bool(false), "ended": .bool(false), "onHold": .bool(false), "identity": .string("resolved"), "contactMembership": .string("found"), "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true)]
+private let deniedCallBase: [String: JSONValue] = ["callId": .string("55555555-5555-4555-8555-555555555555"), "outgoing": .bool(false), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("unresolved"), "contactMembership": .null, "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true)]
+private let deniedCallFailure: [String: JSONValue] = ["callId": .string("55555555-5555-4555-8555-555555555555"), "outgoing": .bool(false), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("unresolved"), "contactMembership": .null, "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true), "denial": .string("identityUnresolved")]
+
+private let knownAttemptFrames: [(BridgeEventName, [String: JSONValue])] = [(.callStateChanged, knownBase), (.callIdentityResolved, knownBase), (.recordingAttempted, knownAttempt)]
+private let knownVerifiedFrames = knownAttemptFrames + [(.recordingVerified, knownVerified)]
+private let knownControlFailureFrames = knownAttemptFrames + [(.recordingFailed, knownControlFailure)]
+private let identityInvalidationFrames = knownAttemptFrames + [(.callIdentityUnresolved, unresolvedBase), (.recordingFailed, unresolvedFull)]
+private let limitedContactsInvalidationFrames = [(BridgeEventName.callStateChanged, unknownFull), (.callIdentityResolved, unknownFull), (.recordingAttempted, unknownAttempt), (.callIdentityResolved, unknownLimitedBase), (.recordingFailed, unknownLimitedFailure)]
+private let deniedContactsInvalidationFrames = [(BridgeEventName.callStateChanged, unknownFull), (.callIdentityResolved, unknownFull), (.recordingAttempted, unknownAttempt), (.callIdentityResolved, unknownDeniedBase), (.recordingFailed, unknownDeniedFailure)]
+private let endedInvalidationFrames = knownAttemptFrames + [(.callStateChanged, endedBase), (.callIdentityResolved, endedBase), (.recordingFailed, endedFailure)]
+private let exactUnsafeInvalidationFrames = knownAttemptFrames + [(.callIdentityUnresolved, unsafeDeniedBase), (.recordingFailed, unsafeDenied)]
+private let policyInvalidationFrames = knownAttemptFrames + [(.recordingFailed, policyFailure)]
+private let deniedInitialFrames: [(BridgeEventName, [String: JSONValue])] = [(.callStateChanged, deniedCallBase), (.callIdentityUnresolved, deniedCallBase), (.recordingFailed, deniedCallFailure)]
+private let connectingThenKnownVerifiedFrames = [(.callStateChanged, connectingBase)] + knownVerifiedFrames
 
 private final class RecordingControllerFake: RecordingControlling, @unchecked Sendable {
     let result: RecordingVerification
@@ -305,19 +292,6 @@ private actor SuspendedRecordingController: RecordingControlling {
     }
 }
 
-private func assertContiguousEventFrames(_ events: [BridgeEvent]) {
-    #expect(events.map(\.seq) == Array(events.indices))
-    for event in events {
-        #expect(event.payload["callId"] == .string(verifiedCall.id.uuidString.lowercased()))
-        #expect(event.payload["outgoing"] == .bool(true))
-        #expect(event.payload["connected"] != nil)
-        #expect(event.payload["ended"] != nil)
-        #expect(event.payload["onHold"] != nil)
-        #expect(event.payload["identity"] != nil)
-        #expect(event.payload["contactAccess"] != nil)
-    }
-}
-
 private func assertEvents(_ events: [BridgeEvent], _ expected: [(BridgeEventName, [String: JSONValue])]) {
     #expect(events.count == expected.count)
     for (index, pair) in expected.enumerated() where index < events.count {
@@ -325,27 +299,4 @@ private func assertEvents(_ events: [BridgeEvent], _ expected: [(BridgeEventName
         #expect(events[index].event == pair.0)
         #expect(events[index].payload == pair.1)
     }
-}
-
-private func safetyPayload(
-    for call: ObservedCall,
-    identity: String,
-    membership: JSONValue,
-    contactAccess: String,
-    extra: [String: JSONValue] = [:]
-) -> [String: JSONValue] {
-    var payload: [String: JSONValue] = [
-        "callId": .string(call.id.uuidString.lowercased()),
-        "outgoing": .bool(call.outgoing),
-        "connected": .bool(call.connected),
-        "ended": .bool(call.ended),
-        "onHold": .bool(call.onHold),
-        "identity": .string(identity),
-        "contactMembership": membership,
-        "contactAccess": .string(contactAccess),
-        "policyAllowsKnownContacts": .bool(allowPolicy.allowsKnownContacts),
-        "policyAllowsUnknownContacts": .bool(allowPolicy.allowsUnknownContacts),
-    ]
-    for (key, value) in extra { payload[key] = value }
-    return payload
 }
