@@ -26,7 +26,10 @@ export type ApplicationStartupDependencies = {
   migrateToLatest(database: AppDatabase): Promise<MigrationResult>;
   createJobRepository(database: AppDatabase): StartupJobRepository;
   createHealthService(options: HealthServiceOptions): HealthProvider;
-  registerHealthIpc(health: HealthProvider): () => void;
+  registerHealthIpc(
+    health: HealthProvider,
+    isTrustedRendererUrl?: (url: string) => boolean,
+  ): () => void;
   closeDatabase(database: AppDatabase): void;
 };
 
@@ -34,6 +37,7 @@ export type ApplicationStartupOptions = {
   appVersion: string;
   userDataPath: string;
   signal?: AbortSignal;
+  isTrustedRendererUrl?: (url: string) => boolean;
   createWindow(): void | Promise<void>;
 };
 
@@ -100,7 +104,10 @@ export async function startApplication(
       interruptedJobsRecovered,
     });
 
-    unregisterHealthIpc = dependencies.registerHealthIpc(health);
+    unregisterHealthIpc = dependencies.registerHealthIpc(
+      health,
+      options.isTrustedRendererUrl,
+    );
     await options.createWindow();
     throwIfStartupCancelled(options.signal);
 

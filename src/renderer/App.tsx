@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppHealth } from '../shared/healthContract';
 
 export type DiagnosticsState =
@@ -28,7 +28,12 @@ export const DiagnosticsScreen = ({
     {state.status === 'ready' && <HealthDetails health={state.health} />}
 
     {state.status === 'failed' && (
-      <section className="diagnostics__failure" aria-labelledby="database-error">
+      <section
+        className="diagnostics__failure"
+        aria-labelledby="database-error"
+        aria-live="assertive"
+        role="alert"
+      >
         <h2 id="database-error">The local database could not be opened</h2>
         <p>
           Error code: <code>LOCAL_DATABASE_UNAVAILABLE</code>
@@ -78,20 +83,35 @@ const HealthDetails = ({ health }: { health: AppHealth }) => (
 
 export const App = () => {
   const [state, setState] = useState<DiagnosticsState>({ status: 'loading' });
+  const mounted = useRef(true);
+  const latestRequest = useRef(0);
 
   const loadHealth = useCallback(async () => {
-    setState({ status: 'loading' });
+    const request = ++latestRequest.current;
+    if (mounted.current) {
+      setState({ status: 'loading' });
+    }
 
     try {
       const health = await window.callie.health.get();
-      setState({ status: 'ready', health });
+      if (mounted.current && request === latestRequest.current) {
+        setState({ status: 'ready', health });
+      }
     } catch {
-      setState({ status: 'failed' });
+      if (mounted.current && request === latestRequest.current) {
+        setState({ status: 'failed' });
+      }
     }
   }, []);
 
   useEffect(() => {
+    mounted.current = true;
     void loadHealth();
+
+    return () => {
+      mounted.current = false;
+      latestRequest.current += 1;
+    };
   }, [loadHealth]);
 
   return <DiagnosticsScreen state={state} onRetry={() => void loadHealth()} />;

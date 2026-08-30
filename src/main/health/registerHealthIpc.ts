@@ -7,9 +7,12 @@ export type HealthProvider = {
   getHealth(): unknown;
 };
 
-export function registerHealthIpc(health: HealthProvider): () => void {
+export function registerHealthIpc(
+  health: HealthProvider,
+  isTrustedRendererUrl?: (url: string) => boolean,
+): () => void {
   ipcMain.handle('health:get', async (event, ...args: unknown[]) => {
-    validateSender(event);
+    validateSender(event, isTrustedRendererUrl);
 
     if (args.length !== 0) {
       throw new Error('health:get does not accept request arguments.');

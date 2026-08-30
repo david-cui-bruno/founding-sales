@@ -2,7 +2,7 @@ import { app, BrowserWindow, protocol } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { createWindow } from './main/createWindow';
-import { isTrustedRendererUrl } from './main/navigationPolicy';
+import { createRendererTrust } from './main/navigationPolicy';
 import { registerCallieProtocol } from './main/protocol';
 import {
   startApplication,
@@ -25,19 +25,10 @@ if (started) {
   app.quit();
 }
 
-const isTrustedDevelopmentRendererUrl = (url: string): boolean => {
-  if (!MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    return false;
-  }
-
-  try {
-    return (
-      new URL(url).origin === new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL).origin
-    );
-  } catch {
-    return false;
-  }
-};
+const rendererTrust = createRendererTrust({
+  isPackaged: app.isPackaged,
+  developmentRendererUrl: MAIN_WINDOW_VITE_DEV_SERVER_URL,
+});
 
 let rendererProtocolRegistered = false;
 
@@ -52,14 +43,14 @@ const createAndLoadWindow = async (signal?: AbortSignal): Promise<void> => {
   const mainWindow = createWindow(path.join(__dirname, 'preload.js'));
 
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (!isTrustedRendererUrl(url) && !isTrustedDevelopmentRendererUrl(url)) {
+    if (!rendererTrust.isTrustedRendererUrl(url)) {
       event.preventDefault();
     }
   });
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
-  const rendererUrl = MAIN_WINDOW_VITE_DEV_SERVER_URL ?? 'callie://app/index.html';
+  const rendererUrl = rendererTrust.rendererUrl;
   let rejectForAbort: ((error: Error) => void) | undefined;
   const aborted = new Promise<never>((_resolve, reject) => {
     rejectForAbort = reject;
@@ -107,6 +98,7 @@ if (!started) {
       startupPromise = startApplication({
         appVersion: app.getVersion(),
         userDataPath: app.getPath('userData'),
+        isTrustedRendererUrl: rendererTrust.isTrustedRendererUrl,
         signal,
         createWindow: () => createAndLoadWindow(signal),
       }).then((application) => {

@@ -6,6 +6,10 @@ import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import Database from 'better-sqlite3';
 import { chromium, expect, test, type Browser } from 'playwright/test';
+import {
+  describeProcessExit,
+  terminatePackagedApplication,
+} from '../support/packagedApplication';
 
 const packagedApplication = join(
   process.cwd(),
@@ -18,13 +22,15 @@ const packagedApplication = join(
 );
 
 test('packaged diagnostics use callie protocol and an isolated native SQLite database', async () => {
-  const userDataPath = await mkdtemp(join(tmpdir(), 'callie-foundation-e2e-'));
   const debuggingPort = await availablePort();
+  let userDataPath: string | undefined;
   let application: ChildProcess | undefined;
   let browser: Browser | undefined;
+  let spawnError: Error | undefined;
 
   try {
     expect(existsSync(packagedApplication)).toBe(true);
+    userDataPath = await mkdtemp(join(tmpdir(), 'callie-foundation-e2e-'));
 
     // The packaged binary intentionally disables RunAsNode. Playwright's
     // Electron launcher requires that mode, so CDP inspects the real packaged
@@ -33,7 +39,14 @@ test('packaged diagnostics use callie protocol and an isolated native SQLite dat
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,
     ]);
-    browser = await connectToPackagedApplication(application, debuggingPort);
+    application.once('error', (error) => {
+      spawnError = error;
+    });
+    browser = await connectToPackagedApplication(
+      application,
+      debuggingPort,
+      () => spawnError,
+    );
     const page = browser.contexts()[0]?.pages()[0];
 
     if (page === undefined) {
@@ -68,9 +81,17 @@ test('packaged diagnostics use callie protocol and an isolated native SQLite dat
       database.close();
     }
   } finally {
-    await browser?.close();
-    application?.kill('SIGTERM');
-    await rm(userDataPath, { recursive: true, force: true });
+    try {
+      await browser?.close();
+    } finally {
+      if (application?.pid !== undefined) {
+        await terminatePackagedApplication(application);
+      }
+
+      if (userDataPath !== undefined) {
+        await rm(userDataPath, { recursive: true, force: true });
+      }
+    }
   }
 });
 
@@ -101,10 +122,18 @@ const availablePort = (): Promise<number> =>
 const connectToPackagedApplication = async (
   application: ChildProcess,
   debuggingPort: number,
+  getSpawnError: () => Error | undefined,
 ): Promise<Browser> => {
   for (let attempt = 0; attempt < 80; attempt += 1) {
-    if (application.exitCode !== null) {
-      throw new Error(`The packaged application exited with code ${application.exitCode}.`);
+    const spawnError = getSpawnError();
+    if (spawnError !== undefined) {
+      throw new Error(`The packaged application failed to spawn: ${spawnError.message}`);
+    }
+
+    if (application.exitCode !== null || application.signalCode !== null) {
+      throw new Error(
+        `The packaged application exited before inspection (${describeProcessExit(application)}).`,
+      );
     }
 
     try {

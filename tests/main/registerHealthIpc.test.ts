@@ -64,6 +64,21 @@ describe('registerHealthIpc', () => {
     expect(service.getHealth).not.toHaveBeenCalled();
   });
 
+  it('accepts only the explicitly composed development sender validator', async () => {
+    const service = { getHealth: vi.fn(() => validHealth) };
+    registerHealthIpc(
+      service,
+      (url) => url === 'http://localhost:5173/',
+    );
+
+    await expect(
+      registeredHandler()({ senderFrame: { url: 'http://localhost:5173/' } }),
+    ).resolves.toEqual(validHealth);
+    await expect(
+      registeredHandler()({ senderFrame: { url: 'http://localhost:5173/other' } }),
+    ).rejects.toThrow('trusted');
+  });
+
   it('rejects every request argument before invoking the health service', async () => {
     const service = { getHealth: vi.fn(() => validHealth) };
     registerHealthIpc(service);

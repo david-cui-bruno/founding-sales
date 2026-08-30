@@ -91,8 +91,18 @@ describe('main process startup', () => {
       appVersion: '4.5.6',
       userDataPath: '/Users/founder/Library/Application Support/Callie',
       signal: expect.anything(),
+      isTrustedRendererUrl: expect.any(Function),
       createWindow: expect.any(Function),
     });
+    const startupOptions = mocks.startApplication.mock.calls[0]?.[0] as
+      | { isTrustedRendererUrl(url: string): boolean }
+      | undefined;
+    expect(
+      startupOptions?.isTrustedRendererUrl('callie://app/index.html'),
+    ).toBe(true);
+    expect(
+      startupOptions?.isTrustedRendererUrl('http://localhost:5173/'),
+    ).toBe(false);
     expect(mocks.registerProtocol).toHaveBeenCalledTimes(1);
     expect(mocks.createWindow).toHaveBeenCalledTimes(1);
     expect(
@@ -105,6 +115,30 @@ describe('main process startup', () => {
     expect(beforeQuit).toBeTypeOf('function');
     beforeQuit?.();
     expect(shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it('composes the exact Vite development URL into navigation and IPC trust', async () => {
+    vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', 'http://localhost:5173');
+    mocks.loadUrl.mockResolvedValue(undefined);
+
+    await import('../../src/main');
+    await settleStartup();
+
+    const startupOptions = mocks.startApplication.mock.calls[0]?.[0] as
+      | {
+          createWindow(): Promise<void>;
+          isTrustedRendererUrl(url: string): boolean;
+        }
+      | undefined;
+    await startupOptions?.createWindow();
+
+    expect(startupOptions?.isTrustedRendererUrl('http://localhost:5173/')).toBe(
+      true,
+    );
+    expect(
+      startupOptions?.isTrustedRendererUrl('http://localhost:5173/other'),
+    ).toBe(false);
+    expect(mocks.loadUrl).toHaveBeenCalledWith('http://localhost:5173/');
   });
 
   it('quits without creating an unmanaged window when initialization fails', async () => {
