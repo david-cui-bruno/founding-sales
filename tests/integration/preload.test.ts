@@ -18,9 +18,15 @@ describe('preload health bridge', () => {
     await import('../../src/preload');
   });
 
-  function exposedApi(): { health: { get: () => Promise<unknown> } } {
+  function exposedApi(): {
+    health: { get: () => Promise<unknown> };
+    appleSpike: Record<string, unknown>;
+  } {
     const exposure = electron.exposeInMainWorld.mock.calls[0] as
-      | [string, { health: { get: () => Promise<unknown> } }]
+      | [string, {
+        health: { get: () => Promise<unknown> };
+        appleSpike: Record<string, unknown>;
+      }]
       | undefined;
 
     if (exposure === undefined) {
@@ -31,7 +37,7 @@ describe('preload health bridge', () => {
     return exposure[1];
   }
 
-  it('exposes only window.callie.health.get and invokes only health:get without arguments', async () => {
+  it('keeps window.callie.health narrow and invokes only health:get without arguments', async () => {
     const health = {
       appVersion: '1.0.0',
       schemaVersion: 1,
@@ -44,7 +50,7 @@ describe('preload health bridge', () => {
 
     const api = exposedApi();
 
-    expect(Object.keys(api)).toEqual(['health']);
+    expect(Object.keys(api)).toEqual(['health', 'appleSpike']);
     expect(Object.keys(api.health)).toEqual(['get']);
     await expect(api.health.get()).resolves.toEqual(health);
     expect(electron.invoke).toHaveBeenCalledTimes(1);

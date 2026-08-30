@@ -73,8 +73,8 @@ function dependencies(
       events.push('helper:create');
       return supervisor;
     },
-    registerAppleBridgeIpc: () => {
-      events.push('apple-ipc:register');
+    registerAppleSpikeIpc: (service) => {
+      events.push(`apple-ipc:register:${service.getStatus().enabled}`);
       return () => events.push('apple-ipc:unregister');
     },
     closeDatabase: () => events.push('database:close'),
@@ -114,6 +114,7 @@ describe('Apple bridge application lifecycle', () => {
         appVersion: '1.0.0',
         userDataPath: '/Users/founder/Library/Application Support/Callie',
         appleBridge: APPLE_OPTIONS,
+        appleSpikeEnabled: false,
         createWindow: () => {
           events.push('window');
         },
@@ -129,7 +130,7 @@ describe('Apple bridge application lifecycle', () => {
       'health-ipc:register',
       'helper:create',
       'helper:start',
-      'apple-ipc:register',
+      'apple-ipc:register:false',
       'window',
     ]);
     await app.shutdown();
@@ -149,6 +150,7 @@ describe('Apple bridge application lifecycle', () => {
         appVersion: '1.0.0',
         userDataPath: '/Users/founder/Library/Application Support/Callie',
         appleBridge: APPLE_OPTIONS,
+        appleSpikeEnabled: false,
         createWindow: () => {
           events.push('window');
         },
@@ -173,6 +175,7 @@ describe('Apple bridge application lifecycle', () => {
         appVersion: '1.0.0',
         userDataPath: '/Users/founder/Library/Application Support/Callie',
         appleBridge: APPLE_OPTIONS,
+        appleSpikeEnabled: false,
         createWindow: () => {
           events.push('window');
         },
@@ -196,6 +199,7 @@ describe('Apple bridge application lifecycle', () => {
         appVersion: '1.0.0',
         userDataPath: '/Users/founder/Library/Application Support/Callie',
         appleBridge: APPLE_OPTIONS,
+        appleSpikeEnabled: false,
         createWindow: () => {
           events.push('window');
         },
@@ -229,7 +233,7 @@ describe('Apple bridge application lifecycle', () => {
       events.push('health-ipc:unregister');
       throw healthUnregisterError;
     };
-    startupDependencies.registerAppleBridgeIpc = () => () => {
+    startupDependencies.registerAppleSpikeIpc = () => () => {
       events.push('apple-ipc:unregister');
       throw appleUnregisterError;
     };
@@ -242,6 +246,7 @@ describe('Apple bridge application lifecycle', () => {
         appVersion: '1.0.0',
         userDataPath: '/Users/founder/Library/Application Support/Callie',
         appleBridge: APPLE_OPTIONS,
+        appleSpikeEnabled: false,
         createWindow: () => {
           events.push('window');
         },

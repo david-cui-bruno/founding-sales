@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { AppHealth } from '../shared/healthContract';
+import { AppleSpikePanel } from './appleSpike/AppleSpikePanel';
 
 export type DiagnosticsState =
   | { status: 'loading' }
@@ -9,11 +11,13 @@ export type DiagnosticsState =
 type DiagnosticsScreenProps = {
   state: DiagnosticsState;
   onRetry: () => void;
+  children?: ReactNode;
 };
 
 export const DiagnosticsScreen = ({
   state,
   onRetry,
+  children,
 }: DiagnosticsScreenProps) => (
   <main className="diagnostics" aria-labelledby="app-title">
     <header className="diagnostics__header">
@@ -43,6 +47,7 @@ export const DiagnosticsScreen = ({
         </button>
       </section>
     )}
+    {children}
   </main>
 );
 
@@ -114,5 +119,9 @@ export const App = () => {
     };
   }, [loadHealth]);
 
-  return <DiagnosticsScreen state={state} onRetry={() => void loadHealth()} />;
+  return (
+    <DiagnosticsScreen state={state} onRetry={() => void loadHealth()}>
+      <AppleSpikePanel api={window.callie.appleSpike} />
+    </DiagnosticsScreen>
+  );
 };

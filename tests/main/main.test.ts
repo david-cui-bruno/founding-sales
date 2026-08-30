@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   appOn: vi.fn(),
   appQuit: vi.fn(),
   browserWindows: vi.fn(() => []),
+  commandLineHasSwitch: vi.fn((name: string) => name.length < 0),
   createWindow: vi.fn(),
   loadUrl: vi.fn(),
   protocolSchemes: vi.fn(),
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({
   app: {
+    commandLine: { hasSwitch: mocks.commandLineHasSwitch },
     getPath: vi.fn(() => '/Users/founder/Library/Application Support/Callie'),
     getVersion: vi.fn(() => '4.5.6'),
     isPackaged: false,
@@ -65,6 +67,7 @@ describe('main process startup', () => {
         setWindowOpenHandler: vi.fn(),
       },
     });
+    mocks.commandLineHasSwitch.mockReturnValue(false);
   });
 
   async function settleStartup(): Promise<void> {
@@ -121,6 +124,7 @@ describe('main process startup', () => {
         expectedIdentifier: 'com.callie.foundersales.applebridge',
         expectedTeamIdentifier: 'UNCONFIGURED',
       },
+      appleSpikeEnabled: false,
       signal: expect.anything(),
       isTrustedRendererUrl: expect.any(Function),
       createWindow: expect.any(Function),
@@ -152,6 +156,21 @@ describe('main process startup', () => {
     expect(shutdown).toHaveBeenCalledTimes(1);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+  });
+
+  it('enables the spike only from the exact Electron command-line switch', async () => {
+    mocks.commandLineHasSwitch.mockImplementation(
+      (name: string) => name === 'apple-feasibility-spike',
+    );
+    mocks.loadUrl.mockResolvedValue(undefined);
+
+    await import('../../src/main');
+    await settleStartup();
+
+    expect(mocks.commandLineHasSwitch).toHaveBeenCalledWith('apple-feasibility-spike');
+    expect(mocks.startApplication.mock.calls[0]?.[0]).toMatchObject({
+      appleSpikeEnabled: true,
+    });
   });
 
   it('composes the exact Vite development URL into navigation and IPC trust', async () => {

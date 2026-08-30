@@ -103,3 +103,121 @@ button:focus-visible {
   outline: 3px solid #4c90c3;
   outline-offset: 3px;
 }
+
+.apple-spike {
+  margin-top: 3rem;
+  padding: 1.5rem;
+  border: 1px solid rgb(112 122 138 / 25%);
+  border-radius: 1rem;
+  background:
+    radial-gradient(circle at 12% 0%, rgb(121 132 255 / 12%), transparent 38%),
+    linear-gradient(145deg, rgb(255 255 255 / 92%), rgb(240 243 248 / 88%));
+  box-shadow: 0 1.25rem 3rem rgb(22 31 45 / 10%);
+}
+
+.apple-spike__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.apple-spike__eyebrow {
+  margin: 0 0 0.35rem;
+  color: #626a78;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.apple-spike__bridge-state {
+  margin: 0;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid rgb(29 93 69 / 18%);
+  border-radius: 999px;
+  background: rgb(232 246 239 / 72%);
+  color: #1d5d45;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.apple-spike__notice {
+  max-width: 48rem;
+  color: #4d5966;
+  line-height: 1.55;
+}
+
+.apple-spike__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 1rem;
+}
+
+.apple-spike__grid > section {
+  padding: 1rem;
+  border: 1px solid rgb(112 122 138 / 18%);
+  border-radius: 0.75rem;
+  background: rgb(255 255 255 / 65%);
+}
+
+.apple-spike__grid h3 {
+  margin-top: 0;
+  font-size: 1rem;
+}
+
+.apple-spike__manual {
+  grid-column: 1 / -1;
+}
+
+.apple-spike__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0.75rem 0;
+}
+
+.apple-spike label {
+  display: block;
+  margin: 0.75rem 0 0.35rem;
+  color: #4d5966;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.apple-spike input,
+.apple-spike textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid #cbd1d8;
+  border-radius: 0.45rem;
+  background: rgb(255 255 255 / 90%);
+  color: #15202a;
+  font: inherit;
+}
+
+.apple-spike fieldset {
+  margin: 1rem 0 0;
+  padding: 1rem;
+  border: 1px solid rgb(112 122 138 / 22%);
+  border-radius: 0.65rem;
+}
+
+.apple-spike legend {
+  padding: 0 0.35rem;
+  font-weight: 700;
+}
+
+.apple-spike button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.apple-spike__result {
+  margin: 1rem 0 0;
+  padding: 0.8rem 1rem;
+  border-radius: 0.6rem;
+  background: #15202a;
+  color: #fff;
+}

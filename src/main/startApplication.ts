@@ -5,7 +5,11 @@ import {
   type AppleBridgeSupervisorApi,
   type AppleBridgeSupervisorOptions,
 } from './appleBridge/appleBridgeSupervisor';
-import type { AppleBridgeService } from './appleBridge/appleBridgeService';
+import {
+  AppleSpikeService,
+  type AppleSpikeServiceApi,
+} from './appleBridge/appleSpikeService';
+import { registerAppleSpikeIpc } from './appleBridge/registerAppleSpikeIpc';
 import { closeDatabase, openDatabase } from './db/database';
 import { migrateToLatest } from './db/migrate';
 import {
@@ -27,8 +31,8 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   createAppleBridgeSupervisor(
     options: AppleBridgeSupervisorOptions,
   ): AppleBridgeSupervisorApi;
-  registerAppleBridgeIpc?(
-    bridge: AppleBridgeService,
+  registerAppleSpikeIpc?(
+    service: AppleSpikeServiceApi,
     isTrustedRendererUrl?: (url: string) => boolean,
   ): () => void;
 };
@@ -39,6 +43,7 @@ export type ApplicationStartupOptions = {
   signal?: AbortSignal;
   isTrustedRendererUrl?: (url: string) => boolean;
   appleBridge?: AppleBridgeSupervisorOptions;
+  appleSpikeEnabled?: boolean;
   createWindow(): void | Promise<void>;
 };
 
@@ -61,6 +66,7 @@ const defaultDependencies: ApplicationStartupDependencies = {
   createHealthService: (options) => new HealthService(options),
   registerHealthIpc,
   createAppleBridgeSupervisor: (options) => new AppleBridgeSupervisor(options),
+  registerAppleSpikeIpc,
   closeDatabase,
 };
 
@@ -74,7 +80,7 @@ export async function startApplication(
     dependencies,
   );
   let unregisterHealthIpc: (() => void) | undefined;
-  let unregisterAppleBridgeIpc: (() => void) | undefined;
+  let unregisterAppleSpikeIpc: (() => void) | undefined;
   let appleBridgeSupervisor: AppleBridgeSupervisorApi | undefined;
   let shutdownPromise: Promise<void> | undefined;
 
@@ -95,11 +101,11 @@ export async function startApplication(
       }
 
       try {
-        unregisterAppleBridgeIpc?.();
+        unregisterAppleSpikeIpc?.();
       } catch (error) {
         cleanupErrors.push(error);
       } finally {
-        unregisterAppleBridgeIpc = undefined;
+        unregisterAppleSpikeIpc = undefined;
       }
 
       try {
@@ -149,8 +155,11 @@ export async function startApplication(
       } catch {
         // Apple integration is optional; supervisor status remains the safe diagnostic.
       }
-      unregisterAppleBridgeIpc = dependencies.registerAppleBridgeIpc?.(
-        appleBridgeSupervisor,
+      unregisterAppleSpikeIpc = dependencies.registerAppleSpikeIpc?.(
+        new AppleSpikeService({
+          enabled: options.appleSpikeEnabled === true,
+          bridge: appleBridgeSupervisor,
+        }),
         options.isTrustedRendererUrl,
       );
       throwIfStartupCancelled(options.signal);

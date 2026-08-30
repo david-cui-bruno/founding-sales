@@ -959,7 +959,7 @@ git commit -m "feat: supervise app-open Apple helper"
 
 **Interfaces:**
 - Consumes: Task 7 `AppleBridgeService` and sanitized status.
-- Produces: `appleSpikeStatusSchema`, `appleSpikeActionSchema`, `AppleSpikeService.getStatus()`, `requestPermission()`, `runReadOnlyCheck()`, `authorizeManualAction()`, IPC channels, and `window.callie.appleSpike`.
+- Produces: strict `appleSpikeStatusSchema`, `appleSpikeActionSchema`, and `appleSpikeResultSchema`; `AppleSpikeService.getStatus()`, `requestPermission()`, `runReadOnlyCheck()`, and `authorizeManualAction()`; fixed IPC channels; and the narrow enumerated `window.callie.appleSpike` API.
 
 - [ ] **Step 1: RED — test disabled-by-default and exact confirmation**
 
@@ -969,6 +969,8 @@ it('does not expose side-effecting actions when the CLI gate is off', async () =
   await expect(
     service.authorizeManualAction({
       action: 'send_test_message',
+      normalizedHandle: '+15555550100',
+      body: 'Synthetic test',
       confirmation: 'I CONSENT TO THIS TEST MESSAGE',
     }),
   ).rejects.toThrow('disabled');
@@ -978,7 +980,12 @@ it('requires the exact action-specific confirmation', async () => {
   const bridge = fakeBridge();
   const service = new AppleSpikeService({ enabled: true, bridge });
   await expect(
-    service.authorizeManualAction({ action: 'send_test_message', confirmation: 'yes' }),
+    service.authorizeManualAction({
+      action: 'send_test_message',
+      normalizedHandle: '+15555550100',
+      body: 'Synthetic test',
+      confirmation: 'yes',
+    }),
   ).rejects.toThrow('confirmation');
   expect(bridge.request).not.toHaveBeenCalled();
 });
@@ -997,23 +1004,29 @@ export const appleSpikeActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('probe_capabilities') }).strict(),
   z.object({ action: z.literal('request_contacts') }).strict(),
   z.object({ action: z.literal('prompt_accessibility') }).strict(),
-  z.object({ action: z.literal('scan_notes_since'), since: z.string().datetime() }).strict(),
-  z.object({ action: z.literal('scan_test_messages'), since: z.string().datetime() }).strict(),
+  z.object({ action: z.literal('scan_recent_notes') }).strict(),
   z.object({
-    action: z.literal('arm_test_call'),
+    action: z.literal('scan_test_messages'),
     normalizedHandle: z.string().regex(/^\+[1-9]\d{7,14}$/),
+  }).strict(),
+  z.object({
+    action: z.literal('start_call_observation'),
     confirmation: z.literal('I CONSENT TO THIS TEST CALL'),
   }).strict(),
+  z.object({ action: z.literal('stop_call_observation') }).strict(),
   z.object({
     action: z.literal('send_test_message'),
     normalizedHandle: z.string().regex(/^\+[1-9]\d{7,14}$/),
-    body: z.string().min(1).max(500),
+    body: z.string().min(1).refine(
+      (value) => new TextEncoder().encode(value).length <= 500,
+      { message: 'Test message must be at most 500 UTF-8 bytes' },
+    ),
     confirmation: z.literal('I CONSENT TO THIS TEST MESSAGE'),
   }).strict(),
 ]);
 ```
 
-The renderer never supplies bridge method names, artifact paths, AppleScript, SQL, or AX selectors. `registerAppleSpikeIpc` validates the sender using `validateSender`, rejects extra arguments, parses both requests and responses, and registers even when disabled so callers receive a typed disabled status. The panel renders only when `app.commandLine.hasSwitch('apple-feasibility-spike')` is true, separates read-only checks from manual actions, displays consent copy, and requires the founder to type the exact phrase before enabling the final button.
+The renderer never supplies bridge method names, envelope IDs, command IDs, artifact paths, AppleScript, SQL, or AX selectors. Main generates the envelope UUID and the distinct message `commandId`. Each fixed service action maps to exactly one bridge request with no retry. A native `capability_unavailable` response becomes a typed sanitized unavailable outcome, never fabricated success. Starting call observation never claims that recording is armed or verified; the panel always preserves the documented manual Apple fallback. `registerAppleSpikeIpc` validates the sender using `validateSender`, rejects extra arguments, parses both requests and responses, and registers even when disabled so callers receive a typed disabled status. The panel renders only when Electron main passes the result of `app.commandLine.hasSwitch('apple-feasibility-spike')`, separates status, read-only checks, permission requests, and manual actions, displays consent copy, and requires the founder to type the exact phrase before enabling the final call or message control.
 
 - [ ] **Step 4: Verify GREEN**
 

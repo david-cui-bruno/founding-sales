@@ -119,6 +119,9 @@ if (!started) {
           expectedIdentifier: CALLIE_APPLE_BRIDGE_IDENTIFIER,
           expectedTeamIdentifier: CALLIE_APPLE_BRIDGE_UNCONFIGURED_TEAM,
         },
+        appleSpikeEnabled: app.commandLine.hasSwitch(
+          'apple-feasibility-spike',
+        ),
         isTrustedRendererUrl: rendererTrust.isTrustedRendererUrl,
         signal,
         createWindow: () => createAndLoadWindow(signal),

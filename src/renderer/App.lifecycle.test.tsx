@@ -11,6 +11,7 @@ import {
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppHealth } from '../shared/healthContract';
+import type { AppleSpikePreloadApi } from '../shared/preload';
 import { App } from './App';
 
 const health: AppHealth = {
@@ -39,8 +40,26 @@ const deferred = <T,>(): Deferred<T> => {
   return { promise, reject, resolve };
 };
 
-const renderApp = (getHealth: () => Promise<AppHealth>) => {
-  window.callie = { health: { get: getHealth } };
+const disabledAppleSpike = (): AppleSpikePreloadApi => ({
+  getStatus: vi.fn(async () => ({
+    enabled: false,
+    bridge: { state: 'disabled', reason: 'not_packaged_or_configured' },
+  } as const)),
+  probeCapabilities: vi.fn(),
+  requestContacts: vi.fn(),
+  promptAccessibility: vi.fn(),
+  scanRecentNotes: vi.fn(),
+  scanTestMessages: vi.fn(),
+  startCallObservation: vi.fn(),
+  stopCallObservation: vi.fn(),
+  sendTestMessage: vi.fn(),
+});
+
+const renderApp = (
+  getHealth: () => Promise<AppHealth>,
+  appleSpike: AppleSpikePreloadApi = disabledAppleSpike(),
+) => {
+  window.callie = { health: { get: getHealth }, appleSpike };
   return render(
     <StrictMode>
       <App />
@@ -54,6 +73,19 @@ afterEach(() => {
 });
 
 describe('App async lifecycle', () => {
+  it('renders the CLI-enabled Apple spike alongside foundation health', async () => {
+    const appleSpike = disabledAppleSpike();
+    appleSpike.getStatus = vi.fn(async () => ({
+      enabled: true,
+      bridge: { state: 'ready', helperVersion: '1.0.0', protocolVersion: 1 },
+    } as const));
+
+    renderApp(vi.fn(async () => health), appleSpike);
+
+    await screen.findByText('SQLite ready');
+    expect(await screen.findByRole('region', { name: 'Apple feasibility spike' })).not.toBeNull();
+  });
+
   it('ignores a stale failed request after the latest request is ready', async () => {
     const first = deferred<AppHealth>();
     const second = deferred<AppHealth>();
