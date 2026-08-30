@@ -3,6 +3,11 @@ import { configDefaults, defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    exclude: [...configDefaults.exclude, 'tests/e2e/**', '.worktrees/**'],
+    exclude: [
+      ...configDefaults.exclude,
+      'tests/e2e/**',
+      '.worktrees/**',
+      'test/appleBridgeBuild.test.mjs',
+    ],
   },
 });

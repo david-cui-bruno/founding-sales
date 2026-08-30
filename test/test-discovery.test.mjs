@@ -11,7 +11,7 @@ describe('Vitest discovery boundary', () => {
   it('does not collect Playwright specs or nested Git worktrees', () => {
     const discoveredTests = execFileSync(
       process.execPath,
-      [vitestEntry, 'list'],
+      [vitestEntry, 'list', '--filesOnly'],
       {
         cwd: fileURLToPath(new URL('..', import.meta.url)),
         encoding: 'utf8',
@@ -20,5 +20,6 @@ describe('Vitest discovery boundary', () => {
 
     expect(discoveredTests).not.toContain('/tests/e2e/');
     expect(discoveredTests).not.toContain('/.worktrees/');
+    expect(discoveredTests).not.toContain('test/appleBridgeBuild.test.mjs');
   });
 });

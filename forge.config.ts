@@ -6,19 +6,17 @@ import { MakerRpm } from '@electron-forge/maker-rpm';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-natives';
 import {
-  applyElectronFuses,
-  resetPackagedAdHocSignature,
-} from './build/electronFuses';
+  createAppleBridgeForgeHooks,
+  createAppleBridgeSigningOptions,
+} from './build/appleBridge';
 
-const hasConfiguredMacSigning = (value: unknown): boolean =>
-  (typeof value === 'object' &&
-    value !== null &&
-    Object.keys(value).length > 0) ||
-  Boolean(value);
+const signingIdentity = process.env.CALLIE_MAC_SIGN_IDENTITY;
 
 const config: ForgeConfig = {
   packagerConfig: {
+    appBundleId: 'com.callie.foundersales',
     asar: true,
+    osxSign: createAppleBridgeSigningOptions(signingIdentity),
     extendInfo: {
       NSAppTransportSecurity: {
         NSAllowsArbitraryLoads: false,
@@ -43,30 +41,7 @@ const config: ForgeConfig = {
     new MakerRpm({}),
     new MakerDeb({}),
   ],
-  hooks: {
-    packageAfterCopy: async (
-      resolvedConfig,
-      buildPath,
-      _electronVersion,
-      platform,
-      arch,
-    ) => {
-      await applyElectronFuses(
-        buildPath,
-        platform,
-        arch,
-        hasConfiguredMacSigning(resolvedConfig.packagerConfig.osxSign),
-      );
-    },
-    postPackage: async (resolvedConfig, packageResult) => {
-      await resetPackagedAdHocSignature(
-        packageResult.outputPaths,
-        packageResult.platform,
-        packageResult.arch,
-        hasConfiguredMacSigning(resolvedConfig.packagerConfig.osxSign),
-      );
-    },
-  },
+  hooks: createAppleBridgeForgeHooks({ projectRoot: __dirname }),
   plugins: [
     new AutoUnpackNativesPlugin({}),
     new VitePlugin({
