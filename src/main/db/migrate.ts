@@ -59,10 +59,24 @@ export async function migrateToLatest(db: AppDatabase): Promise<MigrationResult>
     db: db.kysely,
     provider: migrationProvider,
   });
-  const resultSet = (await migrator.migrateToLatest()) as KyselyMigrationResultSet;
+  let resultSet: KyselyMigrationResultSet;
 
-  if (resultSet.error !== undefined) {
-    throw resultSet.error;
+  db.raw.exec('BEGIN IMMEDIATE');
+
+  try {
+    resultSet = (await migrator.migrateToLatest()) as KyselyMigrationResultSet;
+
+    if (resultSet.error !== undefined) {
+      throw resultSet.error;
+    }
+
+    db.raw.exec('COMMIT');
+  } catch (error) {
+    if (db.raw.inTransaction) {
+      db.raw.exec('ROLLBACK');
+    }
+
+    throw error;
   }
 
   return {

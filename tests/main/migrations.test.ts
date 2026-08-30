@@ -74,4 +74,39 @@ describe('database migrations', () => {
         .get(),
     ).toEqual({ count: 1 });
   });
+
+  it('rolls back a late migration failure so the same database can retry', async () => {
+    tempDatabase = createTempDatabase();
+    database = openDatabase(tempDatabase.path);
+    database.raw.exec('CREATE TABLE foundation_fts_probe (content TEXT)');
+
+    await expect(migrateToLatest(database)).rejects.toThrow();
+
+    expect(database.raw.inTransaction).toBe(false);
+    expect(
+      database.raw
+        .prepare<[], { name: string }>(
+          `SELECT name
+           FROM sqlite_master
+           WHERE name IN (
+             'app_meta',
+             'jobs',
+             'jobs_state_created_idx',
+             'kysely_migration',
+             'kysely_migration_lock',
+             'foundation_fts_probe'
+           )
+           ORDER BY name`,
+        )
+        .all(),
+    ).toEqual([{ name: 'foundation_fts_probe' }]);
+
+    database.raw.exec('DROP TABLE foundation_fts_probe');
+
+    await expect(migrateToLatest(database)).resolves.toEqual({
+      fromVersion: 0,
+      toVersion: 1,
+      appliedMigrationIds: ['0001Foundation'],
+    });
+  });
 });
