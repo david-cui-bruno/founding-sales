@@ -1,5 +1,11 @@
 import { join } from 'node:path';
 
+import {
+  AppleBridgeSupervisor,
+  type AppleBridgeSupervisorApi,
+  type AppleBridgeSupervisorOptions,
+} from './appleBridge/appleBridgeSupervisor';
+import type { AppleBridgeService } from './appleBridge/appleBridgeService';
 import { closeDatabase, openDatabase } from './db/database';
 import { migrateToLatest } from './db/migrate';
 import {
@@ -18,6 +24,13 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
     health: HealthProvider,
     isTrustedRendererUrl?: (url: string) => boolean,
   ): () => void;
+  createAppleBridgeSupervisor(
+    options: AppleBridgeSupervisorOptions,
+  ): AppleBridgeSupervisorApi;
+  registerAppleBridgeIpc?(
+    bridge: AppleBridgeService,
+    isTrustedRendererUrl?: (url: string) => boolean,
+  ): () => void;
 };
 
 export type ApplicationStartupOptions = {
@@ -25,6 +38,7 @@ export type ApplicationStartupOptions = {
   userDataPath: string;
   signal?: AbortSignal;
   isTrustedRendererUrl?: (url: string) => boolean;
+  appleBridge?: AppleBridgeSupervisorOptions;
   createWindow(): void | Promise<void>;
 };
 
@@ -46,6 +60,7 @@ const defaultDependencies: ApplicationStartupDependencies = {
   createJobRepository: (database) => new JobRepository(database),
   createHealthService: (options) => new HealthService(options),
   registerHealthIpc,
+  createAppleBridgeSupervisor: (options) => new AppleBridgeSupervisor(options),
   closeDatabase,
 };
 
@@ -59,6 +74,8 @@ export async function startApplication(
     dependencies,
   );
   let unregisterHealthIpc: (() => void) | undefined;
+  let unregisterAppleBridgeIpc: (() => void) | undefined;
+  let appleBridgeSupervisor: AppleBridgeSupervisorApi | undefined;
   let shutdownPromise: Promise<void> | undefined;
 
   const shutdown = (): Promise<void> => {
@@ -67,34 +84,46 @@ export async function startApplication(
     }
 
     shutdownPromise = (async () => {
-      let unregisterError: unknown;
-      let runtimeError: unknown;
+      const cleanupErrors: unknown[] = [];
 
       try {
         unregisterHealthIpc?.();
       } catch (error) {
-        unregisterError = error;
+        cleanupErrors.push(error);
       } finally {
         unregisterHealthIpc = undefined;
       }
 
       try {
-        await runtime.shutdown();
+        unregisterAppleBridgeIpc?.();
       } catch (error) {
-        runtimeError = error;
+        cleanupErrors.push(error);
+      } finally {
+        unregisterAppleBridgeIpc = undefined;
       }
 
-      if (unregisterError !== undefined && runtimeError !== undefined) {
+      try {
+        await appleBridgeSupervisor?.stop();
+      } catch (error) {
+        cleanupErrors.push(error);
+      } finally {
+        appleBridgeSupervisor = undefined;
+      }
+
+      try {
+        await runtime.shutdown();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+
+      if (cleanupErrors.length > 1) {
         throw new AggregateError(
-          [unregisterError, runtimeError],
+          cleanupErrors,
           'Application shutdown failed while releasing IPC and SQLite.',
         );
       }
-      if (unregisterError !== undefined) {
-        throw unregisterError;
-      }
-      if (runtimeError !== undefined) {
-        throw runtimeError;
+      if (cleanupErrors.length === 1) {
+        throw cleanupErrors[0];
       }
     })();
 
@@ -108,6 +137,21 @@ export async function startApplication(
       options.isTrustedRendererUrl,
     );
     throwIfStartupCancelled(options.signal);
+    if (options.appleBridge !== undefined) {
+      appleBridgeSupervisor = dependencies.createAppleBridgeSupervisor(
+        options.appleBridge,
+      );
+      try {
+        await appleBridgeSupervisor.start();
+      } catch {
+        // Apple integration is optional; supervisor status remains the safe diagnostic.
+      }
+      unregisterAppleBridgeIpc = dependencies.registerAppleBridgeIpc?.(
+        appleBridgeSupervisor,
+        options.isTrustedRendererUrl,
+      );
+      throwIfStartupCancelled(options.signal);
+    }
     await options.createWindow();
     throwIfStartupCancelled(options.signal);
 

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AppDatabase } from '../../src/main/db/database';
+import type { AppleBridgeSupervisorApi } from '../../src/main/appleBridge/appleBridgeSupervisor';
 import type { HealthProvider } from '../../src/main/health/registerHealthIpc';
 import type { ApplicationStartupDependencies } from '../../src/main/startApplication';
 
@@ -22,6 +23,7 @@ vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => '/Users/founder/Library/Application Support/Callie'),
     getVersion: vi.fn(() => '4.5.6'),
+    isPackaged: false,
     on: mocks.appOn,
     quit: mocks.appQuit,
     whenReady: mocks.whenReady,
@@ -70,6 +72,21 @@ describe('main process startup', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
+  function disabledAppleBridgeSupervisor(): AppleBridgeSupervisorApi {
+    return {
+      start: async () => undefined,
+      getStatus: () => ({
+        state: 'disabled',
+        reason: 'not_packaged_or_configured',
+      }),
+      request: async () => {
+        throw new Error('Apple integration helper is unavailable.');
+      },
+      subscribe: () => () => undefined,
+      stop: async () => undefined,
+    };
+  }
+
   it('starts composition only after readiness and supplies the app-owned path and version', async () => {
     const shutdown = vi.fn(async () => undefined);
     mocks.loadUrl.mockResolvedValue(undefined);
@@ -90,6 +107,20 @@ describe('main process startup', () => {
     expect(mocks.startApplication).toHaveBeenCalledWith({
       appVersion: '4.5.6',
       userDataPath: '/Users/founder/Library/Application Support/Callie',
+      appleBridge: {
+        platform: process.platform,
+        isPackaged: false,
+        resourcesPath: process.resourcesPath,
+        environment: {
+          CALLIE_APPLE_BRIDGE_PATH:
+            process.env.CALLIE_APPLE_BRIDGE_PATH,
+        },
+        allowDevelopmentOverride: true,
+        allowUnsignedDevelopment: true,
+        stagingRoot: '/Users/founder/Library/Application Support/Callie/apple-bridge-staging',
+        expectedIdentifier: 'com.callie.foundersales.applebridge',
+        expectedTeamIdentifier: 'UNCONFIGURED',
+      },
       signal: expect.anything(),
       isTrustedRendererUrl: expect.any(Function),
       createWindow: expect.any(Function),
@@ -194,6 +225,7 @@ describe('main process startup', () => {
         healthProvider = provider;
         return () => events.push('unregister');
       },
+      createAppleBridgeSupervisor: disabledAppleBridgeSupervisor,
       closeDatabase: () => events.push('close'),
     };
     const actual = await vi.importActual<
@@ -268,6 +300,7 @@ describe('main process startup', () => {
         events.push('ipc');
         return () => events.push('unregister');
       },
+      createAppleBridgeSupervisor: disabledAppleBridgeSupervisor,
       closeDatabase: () => events.push('close'),
     };
     const actual = await vi.importActual<

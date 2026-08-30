@@ -2,6 +2,10 @@ import { app, BrowserWindow, protocol } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { createWindow } from './main/createWindow';
+import {
+  CALLIE_APPLE_BRIDGE_IDENTIFIER,
+  CALLIE_APPLE_BRIDGE_UNCONFIGURED_TEAM,
+} from './main/appleBridge/appleBridgeSupervisor';
 import { createRendererTrust } from './main/navigationPolicy';
 import { registerCallieProtocol } from './main/protocol';
 import {
@@ -98,6 +102,23 @@ if (!started) {
       startupPromise = startApplication({
         appVersion: app.getVersion(),
         userDataPath: app.getPath('userData'),
+        appleBridge: {
+          platform: process.platform,
+          isPackaged: app.isPackaged,
+          resourcesPath: process.resourcesPath,
+          environment: {
+            CALLIE_APPLE_BRIDGE_PATH:
+              process.env.CALLIE_APPLE_BRIDGE_PATH,
+          },
+          allowDevelopmentOverride: true,
+          allowUnsignedDevelopment: true,
+          stagingRoot: path.join(
+            app.getPath('userData'),
+            'apple-bridge-staging',
+          ),
+          expectedIdentifier: CALLIE_APPLE_BRIDGE_IDENTIFIER,
+          expectedTeamIdentifier: CALLIE_APPLE_BRIDGE_UNCONFIGURED_TEAM,
+        },
         isTrustedRendererUrl: rendererTrust.isTrustedRendererUrl,
         signal,
         createWindow: () => createAndLoadWindow(signal),
