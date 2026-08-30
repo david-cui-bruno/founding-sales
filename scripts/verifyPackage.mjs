@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDirectory, '..');
@@ -167,6 +167,93 @@ const listBetterSqliteNativeCandidates = (unpackedDirectory) =>
     .filter((path) => isBetterSqliteArtifact(unpackedDirectory, path))
     .sort();
 
+const findBetterSqlitePackageRoot = (unpackedDirectory) => {
+  const packageRoots = walkDirectories(unpackedDirectory)
+    .filter((path) => basename(path) === 'better-sqlite3')
+    .sort();
+
+  if (packageRoots.length !== 1) {
+    const nativeCandidates = listBetterSqliteNativeCandidates(unpackedDirectory);
+    fail(
+      `expected exactly one better-sqlite3 package root in Resources/app.asar.unpacked; found ${packageRoots.length}${
+        packageRoots.length === 0
+          ? ` (native candidates: ${nativeCandidates.join(', ') || 'none'})`
+          : `: ${packageRoots.join(', ')}`
+      }`,
+    );
+  }
+
+  return packageRoots[0];
+};
+
+const selectBetterSqliteLoaderTarget = (unpackedDirectory) => {
+  const packageRoot = findBetterSqlitePackageRoot(unpackedDirectory);
+  const prebuildTarget = join(packageRoot, 'prebuilds', 'darwin-arm64.node');
+  const debugFallback = join(packageRoot, 'build', 'Debug', 'better_sqlite3.node');
+  const releaseFallback = join(packageRoot, 'build', 'Release', 'better_sqlite3.node');
+
+  if (existsSync(prebuildTarget)) {
+    return prebuildTarget;
+  }
+
+  if (existsSync(debugFallback)) {
+    return debugFallback;
+  }
+
+  if (existsSync(releaseFallback)) {
+    return releaseFallback;
+  }
+
+  const nativeCandidates = listBetterSqliteNativeCandidates(unpackedDirectory);
+  fail(
+    `better-sqlite3 native binary is missing from Resources/app.asar.unpacked; selected Darwin arm64 loader target is absent: ${prebuildTarget}. Loader fallbacks checked: ${debugFallback}, ${releaseFallback}. Native candidates: ${nativeCandidates.join(', ') || 'none'}`,
+  );
+};
+
+const resolvePackagedExecutable = (contentsPath, executableName) => {
+  const macosPath = join(contentsPath, 'MacOS');
+  const unsafeExecutableName =
+    executableName === '.' ||
+    executableName === '..' ||
+    executableName.includes('/') ||
+    executableName.includes('\\') ||
+    isAbsolute(executableName) ||
+    basename(executableName) !== executableName;
+  if (unsafeExecutableName) {
+    fail(
+      `Info.plist field CFBundleExecutable must be a single executable filename: ${executableName}`,
+    );
+  }
+
+  const executablePath = resolve(macosPath, executableName);
+  const pathWithinMacOs = relative(macosPath, executablePath);
+  if (
+    pathWithinMacOs === '' ||
+    pathWithinMacOs === '..' ||
+    pathWithinMacOs.startsWith(`..${sep}`) ||
+    isAbsolute(pathWithinMacOs)
+  ) {
+    fail(
+      `Info.plist field CFBundleExecutable escapes Contents/MacOS: ${executableName}`,
+    );
+  }
+
+  return executablePath;
+};
+
+const assertExecutable = (executablePath) => {
+  const executableMode = statSync(executablePath).mode;
+  if ((executableMode & 0o100) === 0) {
+    fail(`packaged executable is not executable: ${executablePath}`);
+  }
+
+  try {
+    accessSync(executablePath, constants.X_OK);
+  } catch {
+    fail(`packaged executable is not executable: ${executablePath}`);
+  }
+};
+
 const verifyRendererResources = (asarPath, runCommand, asarCommand) => {
   const entries = runOrFail(
     runCommand,
@@ -225,11 +312,9 @@ export const verifyPackagedApp = (
   assertFile(asarPath, 'app.asar');
 
   const executableName = readPlistField(plistPath, 'CFBundleExecutable', runCommand);
-  const executablePath = join(contentsPath, 'MacOS', executableName);
+  const executablePath = resolvePackagedExecutable(contentsPath, executableName);
   assertFile(executablePath, 'packaged executable');
-  if ((statSync(executablePath).mode & 0o111) === 0) {
-    fail(`packaged executable is not executable: ${executablePath}`);
-  }
+  assertExecutable(executablePath);
   const executableArchitecture = requireArm64MachO(
     'packaged executable',
     executablePath,
@@ -238,33 +323,12 @@ export const verifyPackagedApp = (
 
   const unpackedDirectory = join(resourcesPath, 'app.asar.unpacked');
   assertDirectory(unpackedDirectory, 'ASAR unpacked resources directory');
-  const nativeCandidates = listBetterSqliteNativeCandidates(unpackedDirectory);
-  if (nativeCandidates.length === 0) {
-    fail(
-      `better-sqlite3 native binary is missing from Resources/app.asar.unpacked: ${unpackedDirectory}`,
-    );
-  }
-
-  const nativeArtifacts = nativeCandidates.map((path) => ({
-    path,
-    architecture: runOrFail(
-      runCommand,
-      'file',
-      ['-b', path],
-      'inspect better-sqlite3 native binary architecture',
-    ),
-  }));
-  const nativeArtifact = nativeArtifacts.find(
-    ({ architecture }) =>
-      /Mach-O/.test(architecture) &&
-      /(^|[^a-z0-9])arm64([^a-z0-9]|$)/i.test(architecture),
+  const nativeBinary = selectBetterSqliteLoaderTarget(unpackedDirectory);
+  const nativeArchitecture = requireArm64MachO(
+    'better-sqlite3 native binary',
+    nativeBinary,
+    runCommand,
   );
-  if (nativeArtifact === undefined) {
-    const details = nativeArtifacts
-      .map(({ path, architecture }) => `${path} (${architecture})`)
-      .join('; ');
-    fail(`better-sqlite3 native binary is not Darwin arm64: ${nativeCandidates[0]} (${details})`);
-  }
 
   const bundle = {
     identifier: readPlistField(plistPath, 'CFBundleIdentifier', runCommand),
@@ -279,8 +343,8 @@ export const verifyPackagedApp = (
     appPath,
     executable: executablePath,
     executableArchitecture,
-    nativeBinary: nativeArtifact.path,
-    nativeArchitecture: nativeArtifact.architecture,
+    nativeBinary,
+    nativeArchitecture,
     bundle,
   };
 };

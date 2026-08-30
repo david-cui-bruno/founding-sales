@@ -167,6 +167,94 @@ describe('package verification', () => {
     );
   });
 
+  it('rejects a wrong selected prebuild even when an arm64 decoy exists elsewhere in better-sqlite3', async () => {
+    const outDirectory = await makeTemporaryDirectory();
+    const fixture = await createPackagedApp(outDirectory);
+    const decoyPath = join(
+      fixture.appPath,
+      'Contents',
+      'Resources',
+      'app.asar.unpacked',
+      'node_modules',
+      'better-sqlite3',
+      'build',
+      'Release',
+      'better_sqlite3.node',
+    );
+    await writeFixtureFile(decoyPath);
+
+    expect(() =>
+      verifyPackagedApp(fixture.appPath, {
+        runCommand: ({ command, args }) =>
+          command === 'file' && args.at(-1) === fixture.nativePath
+            ? 'Mach-O 64-bit bundle x86_64'
+            : successfulCommand({ command, args }),
+        asarCommand: 'asar',
+        fusesCommand: 'electron-fuses',
+      }),
+    ).toThrow(
+      `PACKAGE: better-sqlite3 native binary is not Darwin arm64: ${fixture.nativePath}`,
+    );
+  });
+
+  it('uses the loader debug fallback when the selected prebuild is absent', async () => {
+    const outDirectory = await makeTemporaryDirectory();
+    const fixture = await createPackagedApp(outDirectory);
+    const debugFallbackPath = join(
+      fixture.appPath,
+      'Contents',
+      'Resources',
+      'app.asar.unpacked',
+      'node_modules',
+      'better-sqlite3',
+      'build',
+      'Debug',
+      'better_sqlite3.node',
+    );
+    await rm(fixture.nativePath);
+    await writeFixtureFile(debugFallbackPath);
+
+    const report = verifyPackagedApp(fixture.appPath, {
+      runCommand: successfulCommand,
+      asarCommand: 'asar',
+      fusesCommand: 'electron-fuses',
+    });
+
+    expect(report.nativeBinary).toBe(debugFallbackPath);
+  });
+
+  it('rejects a plist executable value that escapes Contents/MacOS', async () => {
+    const outDirectory = await makeTemporaryDirectory();
+    const fixture = await createPackagedApp(outDirectory);
+
+    expect(() =>
+      verifyPackagedApp(fixture.appPath, {
+        runCommand: ({ command, args }) =>
+          command === 'plutil' && args[1] === 'CFBundleExecutable'
+            ? '../../outside'
+            : successfulCommand({ command, args }),
+        asarCommand: 'asar',
+        fusesCommand: 'electron-fuses',
+      }),
+    ).toThrow(
+      'PACKAGE: Info.plist field CFBundleExecutable must be a single executable filename: ../../outside',
+    );
+  });
+
+  it('rejects an executable without owner execute permission even if the test user can bypass access checks', async () => {
+    const outDirectory = await makeTemporaryDirectory();
+    const fixture = await createPackagedApp(outDirectory);
+    await chmod(fixture.executablePath, 0o055);
+
+    expect(() =>
+      verifyPackagedApp(fixture.appPath, {
+        runCommand: successfulCommand,
+        asarCommand: 'asar',
+        fusesCommand: 'electron-fuses',
+      }),
+    ).toThrow(`PACKAGE: packaged executable is not executable: ${fixture.executablePath}`);
+  });
+
   it('reports missing required fuses as package security failures', async () => {
     const outDirectory = await makeTemporaryDirectory();
     const fixture = await createPackagedApp(outDirectory);
