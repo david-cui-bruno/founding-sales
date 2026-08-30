@@ -4,7 +4,6 @@ import started from 'electron-squirrel-startup';
 import { createWindow } from './main/createWindow';
 import {
   CALLIE_APPLE_BRIDGE_IDENTIFIER,
-  CALLIE_APPLE_BRIDGE_UNCONFIGURED_TEAM,
 } from './main/appleBridge/appleBridgeSupervisor';
 import { createRendererTrust } from './main/navigationPolicy';
 import { registerCallieProtocol } from './main/protocol';
@@ -117,7 +116,7 @@ if (!started) {
             'apple-bridge-staging',
           ),
           expectedIdentifier: CALLIE_APPLE_BRIDGE_IDENTIFIER,
-          expectedTeamIdentifier: CALLIE_APPLE_BRIDGE_UNCONFIGURED_TEAM,
+          parentExecutablePath: process.execPath,
         },
         appleSpikeEnabled: app.commandLine.hasSwitch(
           'apple-feasibility-spike',

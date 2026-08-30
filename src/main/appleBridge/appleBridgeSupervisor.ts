@@ -34,7 +34,6 @@ export type { AppleBridgeStatus } from './appleBridgeService';
 
 export const CALLIE_APPLE_BRIDGE_IDENTIFIER =
   'com.callie.foundersales.applebridge';
-export const CALLIE_APPLE_BRIDGE_UNCONFIGURED_TEAM = 'UNCONFIGURED';
 
 type StagingStat = {
   isDirectory(): boolean;
@@ -53,7 +52,7 @@ export type AppleBridgeSupervisorOptions = {
   environment: Readonly<Record<string, string | undefined>>;
   stagingRoot: string;
   expectedIdentifier: string;
-  expectedTeamIdentifier: string;
+  parentExecutablePath: string;
 };
 
 export type AppleBridgeSupervisorDependencies = {
@@ -230,9 +229,9 @@ export class AppleBridgeSupervisor implements AppleBridgeSupervisorApi {
     try {
       await this.dependencies.verifySignature({
         executablePath,
+        parentExecutablePath: this.options.parentExecutablePath,
         isPackaged: this.options.isPackaged,
         expectedIdentifier: this.options.expectedIdentifier,
-        expectedTeamIdentifier: this.options.expectedTeamIdentifier,
         allowUnsignedDevelopment: this.options.allowUnsignedDevelopment,
       });
     } catch {

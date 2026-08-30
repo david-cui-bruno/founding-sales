@@ -99,9 +99,9 @@ export async function launchAppleBridgeProcess(
   const verify = options.verify ?? verifyHelperSignature;
   await verify({
     executablePath: options.executablePath,
+    parentExecutablePath: options.parentExecutablePath,
     isPackaged: options.isPackaged,
     expectedIdentifier: options.expectedIdentifier,
-    expectedTeamIdentifier: options.expectedTeamIdentifier,
     allowUnsignedDevelopment: options.allowUnsignedDevelopment,
   });
   return new AppleBridgeProcess(spawnAppleBridge(

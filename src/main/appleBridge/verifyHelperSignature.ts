@@ -33,9 +33,9 @@ export type HelperSignatureRunner = (
 
 export type VerifyHelperSignatureOptions = {
   executablePath: string;
+  parentExecutablePath: string;
   isPackaged: boolean;
   expectedIdentifier: string;
-  expectedTeamIdentifier: string;
   allowUnsignedDevelopment?: boolean;
   run?: HelperSignatureRunner;
   execFile?: CodesignExecFile;
@@ -127,11 +127,18 @@ export async function verifyHelperSignature(
     throw new Error('Apple bridge is unsigned; unsigned helpers are development-only.');
   }
 
-  if (options.isPackaged && signature.identifier !== options.expectedIdentifier) {
-    throw new Error('Apple bridge signing identifier does not match the packaged expectation.');
-  }
-  if (options.isPackaged && signature.teamIdentifier !== options.expectedTeamIdentifier) {
-    throw new Error('Apple bridge signing Team ID does not match the packaged expectation.');
+  if (options.isPackaged) {
+    if (signature.identifier !== options.expectedIdentifier) {
+      throw new Error('Apple bridge signing identifier does not match the packaged expectation.');
+    }
+
+    const parentSignature = await run(options.parentExecutablePath);
+    if (!parentSignature.signed) {
+      throw new Error('Packaged parent application is unsigned.');
+    }
+    if (signature.teamIdentifier !== parentSignature.teamIdentifier) {
+      throw new Error('Apple bridge signing Team ID does not match the packaged parent.');
+    }
   }
 
   return signature;

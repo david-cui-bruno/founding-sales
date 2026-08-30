@@ -122,7 +122,7 @@ describe('main process startup', () => {
         allowUnsignedDevelopment: true,
         stagingRoot: '/Users/founder/Library/Application Support/Callie/apple-bridge-staging',
         expectedIdentifier: 'com.callie.foundersales.applebridge',
-        expectedTeamIdentifier: 'UNCONFIGURED',
+        parentExecutablePath: process.execPath,
       },
       appleSpikeEnabled: false,
       signal: expect.anything(),

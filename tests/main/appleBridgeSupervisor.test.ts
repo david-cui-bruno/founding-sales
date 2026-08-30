@@ -102,7 +102,7 @@ const baseOptions = (
   environment: {},
   stagingRoot: '/Users/founder/Library/Application Support/Callie/apple-bridge-staging',
   expectedIdentifier: 'com.callie.foundersales.applebridge',
-  expectedTeamIdentifier: 'TEAM123456',
+  parentExecutablePath: '/Applications/Callie.app/Contents/MacOS/Callie',
   ...overrides,
 });
 
@@ -238,9 +238,9 @@ describe('AppleBridgeSupervisor', () => {
       },
       signatureOptions: {
         executablePath: '/Applications/Callie.app/Contents/Helpers/Callie Apple Bridge.app/Contents/MacOS/CallieAppleBridge',
+        parentExecutablePath: '/Applications/Callie.app/Contents/MacOS/Callie',
         isPackaged: true,
         expectedIdentifier: 'com.callie.foundersales.applebridge',
-        expectedTeamIdentifier: 'TEAM123456',
         allowUnsignedDevelopment: undefined,
       },
       spawn: [

@@ -3,18 +3,43 @@ import { describe, expect, it } from 'vitest';
 import {
   verifyHelperSignature,
   type CodesignExecFile,
+  type VerifyHelperSignatureOptions,
 } from '../../src/main/appleBridge/verifyHelperSignature';
 
 const packagedHelperPath =
   '/Applications/Callie.app/Contents/Helpers/Callie Apple Bridge.app/Contents/MacOS/CallieAppleBridge';
+const packagedParentPath =
+  '/Applications/Callie.app/Contents/MacOS/Callie';
 
 describe('verifyHelperSignature', () => {
+  it('anchors packaged Team identity to the parent and permits a matching ad-hoc package', async () => {
+    const options = {
+      executablePath: packagedHelperPath,
+      parentExecutablePath: packagedParentPath,
+      isPackaged: true,
+      expectedIdentifier: 'com.callie.foundersales.applebridge',
+      run: async (executablePath: string) => ({
+        signed: true as const,
+        identifier: executablePath === packagedHelperPath
+          ? 'com.callie.foundersales.applebridge'
+          : 'com.callie.foundersales',
+        teamIdentifier: 'not set',
+      }),
+    } satisfies VerifyHelperSignatureOptions;
+
+    await expect(verifyHelperSignature(options)).resolves.toMatchObject({
+      signed: true,
+      identifier: 'com.callie.foundersales.applebridge',
+      teamIdentifier: 'not set',
+    });
+  });
+
   it('rejects a packaged helper with the wrong identifier', async () => {
     await expect(verifyHelperSignature({
       executablePath: packagedHelperPath,
+      parentExecutablePath: packagedParentPath,
       isPackaged: true,
       expectedIdentifier: 'com.callie.foundersales.applebridge',
-      expectedTeamIdentifier: 'TEAM123456',
       run: async () => ({
         signed: true,
         identifier: 'com.attacker.helper',
@@ -26,13 +51,17 @@ describe('verifyHelperSignature', () => {
   it('rejects a packaged helper with the wrong Team ID', async () => {
     await expect(verifyHelperSignature({
       executablePath: packagedHelperPath,
+      parentExecutablePath: packagedParentPath,
       isPackaged: true,
       expectedIdentifier: 'com.callie.foundersales.applebridge',
-      expectedTeamIdentifier: 'TEAM123456',
-      run: async () => ({
+      run: async (executablePath) => ({
         signed: true,
-        identifier: 'com.callie.foundersales.applebridge',
-        teamIdentifier: 'ATTACKER00',
+        identifier: executablePath === packagedHelperPath
+          ? 'com.callie.foundersales.applebridge'
+          : 'com.callie.foundersales',
+        teamIdentifier: executablePath === packagedHelperPath
+          ? 'ATTACKER00'
+          : 'TEAM123456',
       }),
     })).rejects.toThrow('Team ID');
   });
@@ -41,9 +70,9 @@ describe('verifyHelperSignature', () => {
     const unsigned = async () => ({ signed: false as const });
     const base = {
       executablePath: '/workspace/CallieAppleBridge',
+      parentExecutablePath: '/workspace/Callie',
       isPackaged: false,
       expectedIdentifier: 'com.callie.foundersales.applebridge',
-      expectedTeamIdentifier: 'TEAM123456',
       run: unsigned,
     };
 
@@ -80,9 +109,9 @@ describe('verifyHelperSignature', () => {
 
     await expect(verifyHelperSignature({
       executablePath: packagedHelperPath,
+      parentExecutablePath: packagedParentPath,
       isPackaged: true,
       expectedIdentifier: 'com.callie.foundersales.applebridge',
-      expectedTeamIdentifier: 'TEAM123456',
       execFile,
     })).resolves.toMatchObject({
       signed: true,
@@ -104,6 +133,26 @@ describe('verifyHelperSignature', () => {
       {
         executable: '/usr/bin/codesign',
         args: ['--display', '--verbose=4', packagedHelperPath],
+        options: {
+          encoding: 'utf8',
+          env: { LANG: 'C', PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+          maxBuffer: 65_536,
+          timeout: 5_000,
+        },
+      },
+      {
+        executable: '/usr/bin/codesign',
+        args: ['--verify', '--strict', '--verbose=4', packagedParentPath],
+        options: {
+          encoding: 'utf8',
+          env: { LANG: 'C', PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+          maxBuffer: 65_536,
+          timeout: 5_000,
+        },
+      },
+      {
+        executable: '/usr/bin/codesign',
+        args: ['--display', '--verbose=4', packagedParentPath],
         options: {
           encoding: 'utf8',
           env: { LANG: 'C', PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },

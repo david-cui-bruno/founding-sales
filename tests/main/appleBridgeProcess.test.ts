@@ -319,7 +319,7 @@ describe('AppleBridgeProcess', () => {
       stagingRoot: '/fixed/staging',
       isPackaged: true,
       expectedIdentifier: 'com.callie.foundersales.applebridge',
-      expectedTeamIdentifier: 'TEAM123456',
+      parentExecutablePath: '/fixed/Callie',
       verify: async () => {
         order.push('verify');
         return {
@@ -344,7 +344,7 @@ describe('AppleBridgeProcess', () => {
       stagingRoot: '/fixed/staging',
       isPackaged: true,
       expectedIdentifier: 'com.callie.foundersales.applebridge',
-      expectedTeamIdentifier: 'TEAM123456',
+      parentExecutablePath: '/fixed/Callie',
       verify: async () => {
         throw new Error('helper identifier mismatch');
       },

@@ -31,7 +31,7 @@ const APPLE_OPTIONS: NonNullable<ApplicationStartupOptions['appleBridge']> = {
   environment: {},
   stagingRoot: '/Users/founder/Library/Application Support/Callie/apple-bridge-staging',
   expectedIdentifier: 'com.callie.foundersales.applebridge',
-  expectedTeamIdentifier: 'TEAM123456',
+  parentExecutablePath: '/Applications/Callie.app/Contents/MacOS/Callie',
 };
 
 function dependencies(
