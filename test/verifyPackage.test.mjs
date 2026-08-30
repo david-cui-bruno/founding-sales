@@ -223,6 +223,41 @@ describe('package verification', () => {
     expect(report.nativeBinary).toBe(debugFallbackPath);
   });
 
+  it('rejects an unrelated better-sqlite3 directory when the packaged module root is absent', async () => {
+    const outDirectory = await makeTemporaryDirectory();
+    const fixture = await createPackagedApp(outDirectory);
+    const unpackedDirectory = join(
+      fixture.appPath,
+      'Contents',
+      'Resources',
+      'app.asar.unpacked',
+    );
+    const expectedModuleRoot = join(
+      unpackedDirectory,
+      'node_modules',
+      'better-sqlite3',
+    );
+    const unrelatedNativePath = join(
+      unpackedDirectory,
+      'assets',
+      'better-sqlite3',
+      'prebuilds',
+      'darwin-arm64.node',
+    );
+    await rm(expectedModuleRoot, { recursive: true, force: true });
+    await writeFixtureFile(unrelatedNativePath);
+
+    expect(() =>
+      verifyPackagedApp(fixture.appPath, {
+        runCommand: successfulCommand,
+        asarCommand: 'asar',
+        fusesCommand: 'electron-fuses',
+      }),
+    ).toThrow(
+      `PACKAGE: packaged better-sqlite3 module root is missing: ${expectedModuleRoot}`,
+    );
+  });
+
   it('rejects a plist executable value that escapes Contents/MacOS', async () => {
     const outDirectory = await makeTemporaryDirectory();
     const fixture = await createPackagedApp(outDirectory);

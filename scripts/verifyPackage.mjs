@@ -167,27 +167,20 @@ const listBetterSqliteNativeCandidates = (unpackedDirectory) =>
     .filter((path) => isBetterSqliteArtifact(unpackedDirectory, path))
     .sort();
 
-const findBetterSqlitePackageRoot = (unpackedDirectory) => {
-  const packageRoots = walkDirectories(unpackedDirectory)
-    .filter((path) => basename(path) === 'better-sqlite3')
-    .sort();
-
-  if (packageRoots.length !== 1) {
+const expectedBetterSqlitePackageRoot = (unpackedDirectory) => {
+  const packageRoot = join(unpackedDirectory, 'node_modules', 'better-sqlite3');
+  if (!existsSync(packageRoot) || !statSync(packageRoot).isDirectory()) {
     const nativeCandidates = listBetterSqliteNativeCandidates(unpackedDirectory);
     fail(
-      `expected exactly one better-sqlite3 package root in Resources/app.asar.unpacked; found ${packageRoots.length}${
-        packageRoots.length === 0
-          ? ` (native candidates: ${nativeCandidates.join(', ') || 'none'})`
-          : `: ${packageRoots.join(', ')}`
-      }`,
+      `packaged better-sqlite3 module root is missing: ${packageRoot}. Native candidates: ${nativeCandidates.join(', ') || 'none'}`,
     );
   }
 
-  return packageRoots[0];
+  return packageRoot;
 };
 
 const selectBetterSqliteLoaderTarget = (unpackedDirectory) => {
-  const packageRoot = findBetterSqlitePackageRoot(unpackedDirectory);
+  const packageRoot = expectedBetterSqlitePackageRoot(unpackedDirectory);
   const prebuildTarget = join(packageRoot, 'prebuilds', 'darwin-arm64.node');
   const debugFallback = join(packageRoot, 'build', 'Debug', 'better_sqlite3.node');
   const releaseFallback = join(packageRoot, 'build', 'Release', 'better_sqlite3.node');
