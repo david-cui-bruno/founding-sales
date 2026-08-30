@@ -236,17 +236,78 @@ private let connectingBase: [String: JSONValue] = ["callId": .string("44444444-4
 private let deniedCallBase: [String: JSONValue] = ["callId": .string("55555555-5555-4555-8555-555555555555"), "outgoing": .bool(false), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("unresolved"), "contactMembership": .null, "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true)]
 private let deniedCallFailure: [String: JSONValue] = ["callId": .string("55555555-5555-4555-8555-555555555555"), "outgoing": .bool(false), "connected": .bool(true), "ended": .bool(false), "onHold": .bool(false), "identity": .string("unresolved"), "contactMembership": .null, "contactAccess": .string("full"), "policyAllowsKnownContacts": .bool(true), "policyAllowsUnknownContacts": .bool(true), "denial": .string("identityUnresolved")]
 
-private let knownAttemptFrames: [(BridgeEventName, [String: JSONValue])] = [(.callStateChanged, knownBase), (.callIdentityResolved, knownBase), (.recordingAttempted, knownAttempt)]
-private let knownVerifiedFrames = knownAttemptFrames + [(.recordingVerified, knownVerified)]
-private let knownControlFailureFrames = knownAttemptFrames + [(.recordingFailed, knownControlFailure)]
-private let identityInvalidationFrames = knownAttemptFrames + [(.callIdentityUnresolved, unresolvedBase), (.recordingFailed, unresolvedFull)]
-private let limitedContactsInvalidationFrames = [(BridgeEventName.callStateChanged, unknownFull), (.callIdentityResolved, unknownFull), (.recordingAttempted, unknownAttempt), (.callIdentityResolved, unknownLimitedBase), (.recordingFailed, unknownLimitedFailure)]
-private let deniedContactsInvalidationFrames = [(BridgeEventName.callStateChanged, unknownFull), (.callIdentityResolved, unknownFull), (.recordingAttempted, unknownAttempt), (.callIdentityResolved, unknownDeniedBase), (.recordingFailed, unknownDeniedFailure)]
-private let endedInvalidationFrames = knownAttemptFrames + [(.callStateChanged, endedBase), (.callIdentityResolved, endedBase), (.recordingFailed, endedFailure)]
-private let exactUnsafeInvalidationFrames = knownAttemptFrames + [(.callIdentityUnresolved, unsafeDeniedBase), (.recordingFailed, unsafeDenied)]
-private let policyInvalidationFrames = knownAttemptFrames + [(.recordingFailed, policyFailure)]
-private let deniedInitialFrames: [(BridgeEventName, [String: JSONValue])] = [(.callStateChanged, deniedCallBase), (.callIdentityUnresolved, deniedCallBase), (.recordingFailed, deniedCallFailure)]
-private let connectingThenKnownVerifiedFrames = [(.callStateChanged, connectingBase)] + knownVerifiedFrames
+private struct ExpectedEventFrame {
+    let seq: Int
+    let event: BridgeEventName
+    let payload: [String: JSONValue]
+}
+
+private let knownVerifiedFrames: [ExpectedEventFrame] = [
+    .init(seq: 0, event: .callStateChanged, payload: knownBase),
+    .init(seq: 1, event: .callIdentityResolved, payload: knownBase),
+    .init(seq: 2, event: .recordingAttempted, payload: knownAttempt),
+    .init(seq: 3, event: .recordingVerified, payload: knownVerified),
+]
+private let knownControlFailureFrames: [ExpectedEventFrame] = [
+    .init(seq: 0, event: .callStateChanged, payload: knownBase),
+    .init(seq: 1, event: .callIdentityResolved, payload: knownBase),
+    .init(seq: 2, event: .recordingAttempted, payload: knownAttempt),
+    .init(seq: 3, event: .recordingFailed, payload: knownControlFailure),
+]
+private let identityInvalidationFrames: [ExpectedEventFrame] = [
+    .init(seq: 0, event: .callStateChanged, payload: knownBase),
+    .init(seq: 1, event: .callIdentityResolved, payload: knownBase),
+    .init(seq: 2, event: .recordingAttempted, payload: knownAttempt),
+    .init(seq: 3, event: .callIdentityUnresolved, payload: unresolvedBase),
+    .init(seq: 4, event: .recordingFailed, payload: unresolvedFull),
+]
+private let limitedContactsInvalidationFrames: [ExpectedEventFrame] = [
+    .init(seq: 0, event: .callStateChanged, payload: unknownFull),
+    .init(seq: 1, event: .callIdentityResolved, payload: unknownFull),
+    .init(seq: 2, event: .recordingAttempted, payload: unknownAttempt),
+    .init(seq: 3, event: .callIdentityResolved, payload: unknownLimitedBase),
+    .init(seq: 4, event: .recordingFailed, payload: unknownLimitedFailure),
+]
+private let deniedContactsInvalidationFrames: [ExpectedEventFrame] = [
+    .init(seq: 0, event: .callStateChanged, payload: unknownFull),
+    .init(seq: 1, event: .callIdentityResolved, payload: unknownFull),
+    .init(seq: 2, event: .recordingAttempted, payload: unknownAttempt),
+    .init(seq: 3, event: .callIdentityResolved, payload: unknownDeniedBase),
+    .init(seq: 4, event: .recordingFailed, payload: unknownDeniedFailure),
+]
+private let endedInvalidationFrames: [ExpectedEventFrame] = [
+    .init(seq: 0, event: .callStateChanged, payload: knownBase),
+    .init(seq: 1, event: .callIdentityResolved, payload: knownBase),
+    .init(seq: 2, event: .recordingAttempted, payload: knownAttempt),
+    .init(seq: 3, event: .callStateChanged, payload: endedBase),
+    .init(seq: 4, event: .callIdentityResolved, payload: endedBase),
+    .init(seq: 5, event: .recordingFailed, payload: endedFailure),
+]
+private let exactUnsafeInvalidationFrames: [ExpectedEventFrame] = [
+    .init(seq: 0, event: .callStateChanged, payload: knownBase),
+    .init(seq: 1, event: .callIdentityResolved, payload: knownBase),
+    .init(seq: 2, event: .recordingAttempted, payload: knownAttempt),
+    .init(seq: 3, event: .callIdentityUnresolved, payload: unsafeDeniedBase),
+    .init(seq: 4, event: .recordingFailed, payload: unsafeDenied),
+]
+private let policyInvalidationFrames: [ExpectedEventFrame] = [
+    .init(seq: 0, event: .callStateChanged, payload: knownBase),
+    .init(seq: 1, event: .callIdentityResolved, payload: knownBase),
+    .init(seq: 2, event: .recordingAttempted, payload: knownAttempt),
+    .init(seq: 3, event: .recordingFailed, payload: policyFailure),
+]
+private let deniedInitialFrames: [ExpectedEventFrame] = [
+    .init(seq: 0, event: .callStateChanged, payload: deniedCallBase),
+    .init(seq: 1, event: .callIdentityUnresolved, payload: deniedCallBase),
+    .init(seq: 2, event: .recordingFailed, payload: deniedCallFailure),
+]
+private let connectingThenKnownVerifiedFrames: [ExpectedEventFrame] = [
+    .init(seq: 0, event: .callStateChanged, payload: connectingBase),
+    .init(seq: 1, event: .callStateChanged, payload: knownBase),
+    .init(seq: 2, event: .callIdentityResolved, payload: knownBase),
+    .init(seq: 3, event: .recordingAttempted, payload: knownAttempt),
+    .init(seq: 4, event: .recordingVerified, payload: knownVerified),
+]
 
 private final class RecordingControllerFake: RecordingControlling, @unchecked Sendable {
     let result: RecordingVerification
@@ -292,11 +353,11 @@ private actor SuspendedRecordingController: RecordingControlling {
     }
 }
 
-private func assertEvents(_ events: [BridgeEvent], _ expected: [(BridgeEventName, [String: JSONValue])]) {
+private func assertEvents(_ events: [BridgeEvent], _ expected: [ExpectedEventFrame]) {
     #expect(events.count == expected.count)
-    for (index, pair) in expected.enumerated() where index < events.count {
-        #expect(events[index].seq == index)
-        #expect(events[index].event == pair.0)
-        #expect(events[index].payload == pair.1)
+    for (event, expectedFrame) in zip(events, expected) {
+        #expect(event.seq == expectedFrame.seq)
+        #expect(event.event == expectedFrame.event)
+        #expect(event.payload == expectedFrame.payload)
     }
 }
