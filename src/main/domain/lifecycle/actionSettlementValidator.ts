@@ -1,7 +1,9 @@
 import { z } from 'zod';
 
 import type { AppDatabase } from '../../db/database';
-import { readInstalledCadenceAggregate } from '../cadence/cadenceRepository';
+import {
+  resolveInstalledCadenceActionBinding,
+} from './cadenceActionBindingValidator';
 import type { NextAction } from './lifecycleTypes';
 import { validateEffectiveCadencePlan } from './cadenceEffectivePlan';
 import { qualifiesFounderInterviewed, qualifiesFounderOffered } from './founderConfirmationEvidence';
@@ -80,12 +82,21 @@ function collectCadenceViolations(
 ): void {
   const settlement = action.settlement!;
   const cadence = action.cadence;
+  let installedBinding;
+  try {
+    installedBinding = resolveInstalledCadenceActionBinding(database, {
+      salesCycleId: action.salesCycleId, actionType: action.actionType,
+      channel: action.channel, cadence,
+    });
+  } catch {
+    violations.push('Action does not match its installed cadence component binding.');
+    return;
+  }
   if (cadence.cadenceEnrollmentId === null) {
     if (settlement.plannerTransition.attempt !== null) {
       violations.push('Non-cadence settlement cannot carry a scheduled-step attempt.');
     }
-    if (action.actionType === 'resolve_contact_method'
-      || settlement.outcome === 'resolved' || settlement.outcome === 'marked_impossible') {
+    if (settlement.outcome === 'resolved' || settlement.outcome === 'marked_impossible') {
       violations.push('Resolver settlements require one installed cadence component branch.');
     }
     return;
@@ -111,7 +122,6 @@ function collectCadenceViolations(
     violations.push('Cadence enrollment is missing or not owned by the action cycle/definition.');
     return;
   }
-  let definition;
   let allowedStepIds: readonly string[] | null = null;
   if (enrollment.allowed_step_ids_json !== null) {
     try {
@@ -126,10 +136,9 @@ function collectCadenceViolations(
   }
   let effectiveSteps: readonly string[];
   try {
-    definition = readInstalledCadenceAggregate(database.raw, cadence.cadenceDefinitionId);
-    if (definition === null) throw new Error('Definition is absent.');
+    if (installedBinding === null) throw new Error('Installed cadence binding is absent.');
     effectiveSteps = validateEffectiveCadencePlan({
-      definition, mode: enrollment.mode, allowedStepIds,
+      definition: installedBinding.definition, mode: enrollment.mode, allowedStepIds,
       currentStepId: enrollment.current_step_id,
       scheduledStepCount: enrollment.scheduled_step_count,
     });
@@ -143,22 +152,12 @@ function collectCadenceViolations(
     || enrollment.scheduled_step_count < expectedAttempt) {
     violations.push('Settlement attempt does not match the effective cadence plan.');
   }
-  const step = definition.steps.find(({ id }) => id === cadence.cadenceStepId);
-  const component = step?.components.find(({ id }) => id === cadence.cadenceComponentId);
-  if (component === undefined
-    || (action.actionType === 'resolve_contact_method'
-      ? action.channel !== null
-      : component.channel !== action.channel || component.actionType !== action.actionType)) {
-    violations.push('Settlement component does not match the action owner graph/channel.');
-    return;
-  }
-  if (action.actionType === 'resolve_contact_method') {
-    const unavailable = component.outcomes.channel_unavailable;
+  const component = installedBinding!.component;
+  if (installedBinding!.kind === 'resolver') {
     const operationalOutcomeIsLegal = settlement.outcome === 'resolved'
       || settlement.outcome === 'marked_impossible'
       || CADENCE_LIFECYCLE_CONTROL_OUTCOMES.has(settlement.outcome);
-    if (!operationalOutcomeIsLegal || unavailable?.kind !== 'resolve_contact_method'
-      || unavailable.componentId !== component.id) {
+    if (!operationalOutcomeIsLegal) {
       violations.push('Resolver settlement does not match the component resolver branch.');
     }
     return;

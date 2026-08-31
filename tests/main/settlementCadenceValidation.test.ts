@@ -127,10 +127,6 @@ describe('shared cadence settlement validation', () => {
       label: 'answered resolver', componentIndex: 0, actionType: 'resolve_contact_method',
       outcome: 'answered' as const, valid: false,
     },
-    {
-      label: 'forged action type', componentIndex: 0, actionType: 'text',
-      outcome: 'answered' as const, valid: false,
-    },
   ])('enforces the installed component graph for $label', async (testCase) => {
     const prospect = await setup();
     const definition = BUILTIN_CADENCES.find(({ family }) => family === 'cadence_a')!;

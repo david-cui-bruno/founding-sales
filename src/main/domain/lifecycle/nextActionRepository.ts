@@ -8,6 +8,7 @@ import {
   StaleDomainWriteError,
 } from '../support/domainErrors';
 import { collectActionSettlementViolations } from './actionSettlementValidator';
+import { resolveInstalledCadenceActionBinding } from './cadenceActionBindingValidator';
 import {
   deepFreezeLifecycle,
   type ActionSettlement,
@@ -112,12 +113,10 @@ export class NextActionRepository {
     if (parsed.actionType === 'resolve_contact_method' && parsed.channel !== null) {
       throw new LifecycleEvidenceError('Contact-method resolution is internal channel-null work.');
     }
-    this.assertCadenceBinding(
-      parsed.salesCycleId,
-      parsed.channel,
-      parsed.cadence,
-      parsed.actionType === 'resolve_contact_method',
-    );
+    resolveInstalledCadenceActionBinding(this.database, {
+      salesCycleId: parsed.salesCycleId, actionType: parsed.actionType,
+      channel: parsed.channel, cadence: parsed.cadence,
+    });
     this.assertInboundSlaOwnership(parsed.salesCycleId, parsed.workIntent, parsed.inboundSla);
     const inbound = encodeInboundSla(parsed.inboundSla);
     const row = this.database.raw.prepare(`
@@ -154,7 +153,15 @@ export class NextActionRepository {
     if (serializeCanonical(parsed.cadence) !== serializeCanonical(parsed.expectedCadence)) {
       throw new LifecycleEvidenceError('Reschedule cannot move cadence ownership.');
     }
-    this.assertCadenceBinding(parsed.salesCycleId, null, parsed.cadence, true);
+    const current = this.getById(parsed.actionId);
+    if (current === null || current.salesCycleId !== parsed.salesCycleId
+      || current.status !== parsed.expectedStatus || current.version !== parsed.expectedVersion
+      || current.dueAt !== parsed.expectedDueAt
+      || current.workIntent !== parsed.expectedWorkIntent
+      || serializeCanonical(current.inboundSla) !== serializeCanonical(parsed.expectedInboundSla)
+      || serializeCanonical(current.cadence) !== serializeCanonical(parsed.expectedCadence)) {
+      throw new StaleDomainWriteError();
+    }
     const expectedInbound = encodeInboundSla(parsed.expectedInboundSla);
     const row = this.database.raw.prepare(`
       UPDATE next_actions
@@ -266,37 +273,6 @@ export class NextActionRepository {
     return parseAction(value, this.database);
   }
 
-  private assertCadenceBinding(
-    salesCycleId: string,
-    channel: string | null,
-    cadence: CadenceActionBinding,
-    ignoreChannel = false,
-  ): void {
-    if (cadence.cadenceEnrollmentId === null) return;
-    const row = this.database.raw.prepare<
-      [string, string, string, string],
-      { cadence_definition_id: string; channel: string | null }
-    >(`
-      SELECT enrollment.cadence_definition_id, component.channel
-      FROM cadence_enrollments AS enrollment
-      JOIN cadence_steps AS step
-        ON step.id = ? AND step.cadence_definition_id = enrollment.cadence_definition_id
-      JOIN cadence_action_components AS component
-        ON component.id = ? AND component.cadence_step_id = step.id
-      WHERE enrollment.id = ? AND enrollment.sales_cycle_id = ?
-    `).get(
-      cadence.cadenceStepId, cadence.cadenceComponentId,
-      cadence.cadenceEnrollmentId, salesCycleId,
-    );
-    if (
-      row === undefined
-      || row.cadence_definition_id !== cadence.cadenceDefinitionId
-      || (!ignoreChannel && row.channel !== channel)
-    ) {
-      throw new LifecycleEvidenceError('The cadence action binding is not one installed owner graph.');
-    }
-  }
-
   private assertInboundSlaOwnership(
     salesCycleId: string,
     workIntent: NextActionWorkIntent,
@@ -376,6 +352,10 @@ function parseAction(value: unknown, database: AppDatabase): NextAction {
     settlement, version: row.version, createdAt: row.created_at,
     completedAt: row.completed_at, updatedAt: row.updated_at,
   } as NextAction;
+  resolveInstalledCadenceActionBinding(database, {
+    salesCycleId: parsed.salesCycleId, actionType: parsed.actionType,
+    channel: parsed.channel, cadence: parsed.cadence,
+  });
   const stateValid = row.status === 'pending'
     ? row.completed_at === null && settlement === null && row.completion_activity_id === null
     : row.completed_at !== null && settlement !== null;

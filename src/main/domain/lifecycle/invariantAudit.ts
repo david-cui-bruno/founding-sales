@@ -23,6 +23,9 @@ import {
   collectActionSettlementViolations,
   type SettlementValidationAction,
 } from './actionSettlementValidator';
+import {
+  collectInstalledCadenceActionBindingViolations,
+} from './cadenceActionBindingValidator';
 import { validateEffectiveCadencePlan } from './cadenceEffectivePlan';
 import {
   actionSettlementSchema, inboundSlaSchema, utcTimestampSchema,
@@ -233,18 +236,23 @@ export function auditDomainInvariants(input: {
   for (const action of actionRows) {
     const binding = action.cadence_enrollment_id === null
       ? null : enrollments.get(String(action.cadence_enrollment_id));
-    const step = action.cadence_step_id === null ? null : steps.get(String(action.cadence_step_id));
-    const component = action.cadence_component_id === null
-      ? null : components.get(String(action.cadence_component_id));
-    if (action.cadence_enrollment_id !== null && (
-      binding === undefined || step === undefined || component === undefined
-      || binding.sales_cycle_id !== action.sales_cycle_id
-      || step.cadence_definition_id !== binding.cadence_definition_id
-      || component.cadence_step_id !== step.id
-      || (action.action_type === 'resolve_contact_method'
-        ? action.channel !== null
-        : component.channel !== action.channel)
-    )) {
+    const cadence = action.cadence_enrollment_id === null
+      ? action.cadence_step_id === null && action.cadence_component_id === null
+        ? {
+            cadenceEnrollmentId: null, cadenceDefinitionId: null,
+            cadenceStepId: null, cadenceComponentId: null,
+          } as const
+        : null
+      : binding === undefined ? null : {
+          cadenceEnrollmentId: String(action.cadence_enrollment_id),
+          cadenceDefinitionId: String(binding.cadence_definition_id),
+          cadenceStepId: String(action.cadence_step_id),
+          cadenceComponentId: String(action.cadence_component_id),
+        } as const;
+    if (cadence === null || collectInstalledCadenceActionBindingViolations(input.database, {
+      salesCycleId: String(action.sales_cycle_id), actionType: String(action.action_type),
+      channel: action.channel === null ? null : String(action.channel), cadence,
+    }).length > 0) {
       add('action_cadence_binding_invalid', action.id, 'Action cadence owner graph/channel is invalid.');
     }
     const settlement = parseCanonicalWithSchema(action.settlement_json, actionSettlementSchema);
