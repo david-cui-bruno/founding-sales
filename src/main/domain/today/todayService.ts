@@ -1,0 +1,189 @@
+import { z } from 'zod';
+
+import type { AppDatabase } from '../../db/database';
+import type { Clock } from '../support/clock';
+import { PrioritizationInputCorruptionError } from '../support/domainErrors';
+import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
+import type { OutboundPermissionService } from '../optOut/outboundPermissionService';
+import type { PrioritizationService } from '../prioritization/prioritizationService';
+import type { ChannelPolicySnapshots } from '../cadence/cadenceScheduler';
+import type {
+  EffectivePrioritySnapshot,
+} from '../prioritization/prioritizationTypes';
+import { planTodayQueue, resolveLocalDayInterval } from './todayOrdering';
+import type { TodayRepository } from './todayRepository';
+import type {
+  ParsedTodayCandidate,
+  TodayCapacity,
+  TodayDiagnostic,
+  TodayQueue,
+} from './todayTypes';
+
+const utcTimestampSchema = z.string().regex(
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+);
+
+/**
+ * Read-only Today service. Reads its Clock once, executes one synchronous
+ * deferred read transaction, and passes plain parsed data to planTodayQueue.
+ * It never writes, consumes IDs, changes pragmas, or opens a nested/immediate
+ * transaction.
+ */
+export class TodayService {
+  private readonly database: AppDatabase;
+  private readonly unitOfWork: DomainUnitOfWork;
+  private readonly clock: Clock;
+  private readonly repository: TodayRepository;
+  private readonly priorities: PrioritizationService;
+  private readonly outboundPermission: OutboundPermissionService;
+
+  constructor(input: {
+    database: AppDatabase;
+    unitOfWork: DomainUnitOfWork;
+    clock: Clock;
+    repository: TodayRepository;
+    priorities: PrioritizationService;
+    outboundPermission: OutboundPermissionService;
+  }) {
+    input.repository.assertBoundTo(input.database, input.unitOfWork);
+    input.outboundPermission.assertBoundTo(input.database, input.unitOfWork);
+    this.database = input.database;
+    this.unitOfWork = input.unitOfWork;
+    this.clock = input.clock;
+    this.repository = input.repository;
+    this.priorities = input.priorities;
+    this.outboundPermission = input.outboundPermission;
+  }
+
+  build(input: {
+    timezone: string;
+    capacity: TodayCapacity;
+    channelPolicies: ChannelPolicySnapshots;
+  }): TodayQueue {
+    validateChannelPolicies(input.channelPolicies);
+    if (this.database.raw.inTransaction) {
+      throw new PrioritizationInputCorruptionError(
+        'Today rejects an already-active raw transaction.',
+      );
+    }
+    const generatedAt = utcTimestampSchema.parse(this.clock.now());
+    const interval = resolveLocalDayInterval({
+      generatedAt, timezone: input.timezone,
+    });
+    this.database.raw.exec('BEGIN');
+    try {
+      const loadResults = this.repository.listOperationalCandidates();
+      const usage = this.repository.loadCompletedDiscretionaryDialUsage({
+        dayStartAt: interval.localDayStartAt,
+        dayEndAt: interval.localDayEndAt,
+        timezone: input.timezone,
+        localDate: interval.localDate,
+      });
+      const diagnostics: TodayDiagnostic[] = usage.diagnostics.map((entry): TodayDiagnostic => ({
+        cycleId: entry.cycleId,
+        personId: null,
+        kind: entry.kind,
+        relatedIds: [entry.activityId],
+      }));
+      const candidates: ParsedTodayCandidate[] = [];
+      for (const result of loadResults) {
+        if (result.kind === 'diagnostic') {
+          diagnostics.push(result.diagnostic);
+          continue;
+        }
+        const enriched = this.enrichCandidate(result.candidate, generatedAt, interval);
+        if (enriched.kind === 'diagnostic') {
+          diagnostics.push(enriched.diagnostic);
+          continue;
+        }
+        candidates.push(enriched.candidate);
+      }
+      return planTodayQueue({
+        candidates,
+        generatedAt,
+        timezone: input.timezone,
+        capacity: input.capacity,
+        completedDiscretionaryDialCount: usage.count,
+        extraDiagnostics: diagnostics,
+      });
+    } finally {
+      this.database.raw.exec('ROLLBACK');
+    }
+  }
+
+  private enrichCandidate(
+    candidate: ParsedTodayCandidate,
+    generatedAt: string,
+    interval: { localDate: string; localDayStartAt: string; localDayEndAt: string },
+  ):
+    | { kind: 'candidate'; candidate: ParsedTodayCandidate }
+    | { kind: 'diagnostic'; diagnostic: TodayDiagnostic } {
+    // Task 10 permission first; a blocked person yields only a sanitized diagnostic.
+    const permission = this.outboundPermission.inspectPerson(candidate.personId);
+    if (permission.kind === 'blocked') {
+      return {
+        kind: 'diagnostic',
+        diagnostic: {
+          cycleId: candidate.cycleId,
+          personId: candidate.personId,
+          kind: 'outbound_permission_blocked',
+          relatedIds: [...permission.tombstoneIds],
+        },
+      };
+    }
+    let snapshot: EffectivePrioritySnapshot | null = null;
+    let priorityState: ParsedTodayCandidate['priorityState'] = 'missing';
+    const inlineDiagnostics: ParsedTodayCandidate['inlineDiagnostics'][number][] = [];
+    try {
+      snapshot = this.priorities.getEffectivePrioritySnapshot({
+        prospectId: candidate.prospectId,
+        asOf: generatedAt,
+      });
+      if (snapshot.prospectId !== candidate.prospectId
+        || (snapshot.lastContactActivityId === null) !== (snapshot.lastContactAt === null)) {
+        snapshot = null;
+        priorityState = 'corrupt';
+      } else {
+        // A discretionary projection must be evaluated in the same founder-local day.
+        const evaluatedInDay = snapshot.evaluatedAt >= interval.localDayStartAt
+          && snapshot.evaluatedAt < interval.localDayEndAt;
+        priorityState = evaluatedInDay ? 'current' : 'stale';
+        if (!evaluatedInDay) inlineDiagnostics.push('stale_priority_projection');
+      }
+    } catch {
+      snapshot = null;
+      priorityState = 'missing';
+      inlineDiagnostics.push('missing_priority_projection');
+    }
+    const selectedTriggerReasons = snapshot === null
+      ? []
+      : snapshot.explanation.filter(
+        (reason) => reason.kind === 'trigger' && reason.selected,
+      );
+    return {
+      kind: 'candidate',
+      candidate: {
+        ...candidate,
+        priority: snapshot,
+        priorityState: priorityState === 'stale' && snapshot !== null
+          ? 'stale'
+          : snapshot === null ? priorityState : 'current',
+        selectedTriggerReasons,
+        verifyFirst: snapshot?.verifyFirst ?? null,
+        inlineDiagnostics,
+      },
+    };
+  }
+}
+
+function validateChannelPolicies(policies: ChannelPolicySnapshots): void {
+  for (const channel of ['call', 'text', 'email'] as const) {
+    const policy = policies[channel];
+    if (typeof policy?.id !== 'string' || policy.id.trim().length === 0
+      || !Array.isArray(policy.windows) || policy.windows.length === 0) {
+      throw new PrioritizationInputCorruptionError(
+        `Channel policy snapshot for ${channel} is malformed.`,
+      );
+    }
+  }
+}
