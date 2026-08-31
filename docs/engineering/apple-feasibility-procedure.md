@@ -101,7 +101,8 @@ stable-signed package must show the same non-empty Team ID for parent and helper
 The helper entitlement output must contain only the Apple Events automation
 entitlement required by the package verifier. Save only the identifiers,
 versions, Team ID, and pass/fail result; do not save raw command output if it
-contains a local path or account name.
+contains a local path or account name. Keep this signing attribution as a
+separate preflight record; it is not one of the per-row evidence records.
 
 Before launch, inspect System Settings > Privacy & Security under the dedicated
 test user and note the existing Contacts, Accessibility, Automation, and Full
@@ -130,8 +131,11 @@ construct bridge requests by hand to bypass a missing panel control.
 
 Perform permission work in this order. After every prompt, return to System
 Settings and identify the exact signed bundle whose permission row changed.
-Record only its bundle ID, permission state, and the permitted evidence fields
-listed below.
+Keep bundle ID, signing identity/Team ID, permission category, and observed TCC
+attribution in a separate preflight/TCC attribution record. That attribution
+record is not a matrix-row result. Never add bundle or signing metadata to a
+row: every per-row result remains limited to exactly the seven fields under
+**Minimized evidence record** below.
 
 1. Launch with `--apple-feasibility-spike` and verify no prompt on startup.
 2. Press **Probe capabilities**. It must report state without prompting.
@@ -223,11 +227,11 @@ minimized result, and stop observation.
 |---|---|---|
 | App closed | With Callie fully quit, place one agreed test call between the two test endpoints and end it before voicemail. | No helper remains and Callie observes, records, or writes nothing. The staging directory stays empty. |
 | outgoing Callie test call | Open Callie, start observation with the exact call phrase, then place one agreed outgoing call using the supported Callie/Phone surface if exposed. | A Mac-visible call may produce outgoing call-state evidence. Observation is not recording. If recording control is unavailable, use the manual Apple recording tap and record `unavailable` for automatic control. |
-| known consenting incoming caller | Put the prepared endpoint in the dedicated user's Contacts, start observation, then accept one agreed incoming call. | The caller is handled only as the prepared known fixture. A missing or ambiguous Mac-visible identity fails closed and must not auto-record. |
-| safely classified unknown consenting caller | Remove the prepared endpoint from the dedicated user's Contacts, confirm full Contacts access, start observation, then accept one agreed incoming call. | Unknown classification is allowed only when full Contacts access can prove absence. Any weaker or ambiguous result becomes unresolved and cannot auto-record. |
-| Limited Contacts | Select limited access that does not include the prepared endpoint, probe again, and perform only the agreed incoming observation. | Contacts reports `limited`; absence from the visible subset is not proof of “unknown,” and auto-record eligibility fails closed. |
+| known consenting incoming caller | Put the prepared endpoint in the dedicated user's Contacts, start observation, then accept one agreed incoming call. | The current signed spike may show sanitized call identity evidence but does not expose Contacts-membership or recording-eligibility decisions. Record that decision as `not exposed`, never infer membership from a resolved identity, and use the manual Apple recording tap only after consent. |
+| safely classified unknown consenting caller | Remove the prepared endpoint from the dedicated user's Contacts, confirm full Contacts access, start observation, then accept one agreed incoming call. | The current signed spike does not expose the Contacts absence-classification or recording-eligibility result. Record `not exposed`; do not infer “unknown” from observation evidence and do not auto-record. |
+| Limited Contacts | Select limited access that does not include the prepared endpoint, probe again, and perform only the agreed incoming observation. | Contacts may report `limited`, but the current signed spike does not expose the downstream eligibility decision. Record eligibility as `not exposed`; absence from the visible subset is not proof of “unknown,” so no auto-record action is allowed. |
 | hidden/unresolved identity | The consenting endpoint hides caller ID for one agreed incoming test, where the carrier and endpoint support it. | Identity reports unresolved/ambiguous or the adapter degrades. No auto-record action is eligible; use manual handling only. |
-| Never Record synthetic person | Use the committed synthetic Never Record fixture only; do not place a live call. | Eligibility is blocked before recording control. Record only `pass` as the capability result; never record fixture content or an endpoint. |
+| Never Record synthetic person | Keep this as a no-call control row; do not place a live call or treat committed unit fixtures as signed-package evidence. | The current signed spike does not expose Person-level Never Record policy or its eligibility result. Record `not exposed` and use the no-record fallback; never record fixture content or an endpoint. |
 | declined call | Start observation, have the consenting endpoint place one agreed call, and decline it without answering. | Call state ends without connected/verified recording evidence. No artifact is expected. |
 | unanswered call | Start observation and allow one agreed call to stop ringing without answering or reaching voicemail. End the test before voicemail. | No connected or verified-recording state is reported and no artifact is expected. |
 | answer on Mac | Start observation and answer the agreed call in the Mac Phone/Continuity surface. | If the Phone UI is recognized, Callie reports a connected Mac-visible state. Recording remains manual unless a separate control is exposed and independently verifies active recording. |
