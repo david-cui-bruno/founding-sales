@@ -813,12 +813,21 @@ const domainStatements = [
       SELECT RAISE(ABORT, 'cadence enrollment step must belong to its definition');
     END`,
   `CREATE TRIGGER protect_cadence_enrollment_identity
-    BEFORE UPDATE OF sales_cycle_id, cadence_definition_id, anchor_at ON cadence_enrollments
+    BEFORE UPDATE OF sales_cycle_id, cadence_definition_id, anchor_at, mode,
+      allowed_step_ids_json ON cadence_enrollments
     WHEN NEW.sales_cycle_id IS NOT OLD.sales_cycle_id
       OR NEW.cadence_definition_id IS NOT OLD.cadence_definition_id
       OR NEW.anchor_at IS NOT OLD.anchor_at
+      OR NEW.mode IS NOT OLD.mode
+      OR NEW.allowed_step_ids_json IS NOT OLD.allowed_step_ids_json
     BEGIN
-      SELECT RAISE(ABORT, 'cadence enrollment ownership and anchor are immutable');
+      SELECT RAISE(ABORT, 'cadence enrollment ownership and effective plan are immutable');
+    END`,
+  `CREATE TRIGGER protect_cadence_enrollment_status
+    BEFORE UPDATE OF status ON cadence_enrollments
+    WHEN OLD.status <> 'active' AND NEW.status IS NOT OLD.status
+    BEGIN
+      SELECT RAISE(ABORT, 'cadence enrollment status is one-way');
     END`,
   `CREATE TRIGGER protect_cadence_enrollment_delete
     BEFORE DELETE ON cadence_enrollments
@@ -919,6 +928,11 @@ const domainStatements = [
       OR NEW.settlement_json IS NULL
     BEGIN
       SELECT RAISE(ABORT, 'next action settlement is one-way and immutable');
+    END`,
+  `CREATE TRIGGER protect_next_action_delete
+    BEFORE DELETE ON next_actions
+    BEGIN
+      SELECT RAISE(ABORT, 'next actions are retained permanently');
     END`,
   `CREATE TRIGGER protect_activity_cadence_insert
     BEFORE INSERT ON activities
@@ -1225,6 +1239,7 @@ const domainStatements = [
   ...immutableTriggers('stage_events'),
   ...immutableTriggers('consent_policy_records'),
   ...immutableTriggers('cycle_reactivation_receipts'),
+  ...immutableTriggers('won_terms'),
   ...immutableTriggers('trigger_events'),
   ...immutableTriggers('prioritization_evaluations'),
   ...immutableTriggers('cadence_definitions'),
@@ -1234,15 +1249,26 @@ const domainStatements = [
   `CREATE TRIGGER protect_opt_out_tombstone_active_cadence
     BEFORE INSERT ON opt_out_tombstones
     WHEN EXISTS (
+      SELECT 1 FROM sales_cycles AS cycle
+      WHERE cycle.person_id = NEW.person_id
+        AND cycle.workflow_status IN ('active','onboarding')
+    ) OR EXISTS (
       SELECT 1
       FROM sales_cycles AS cycle
       JOIN cadence_enrollments AS enrollment
         ON enrollment.sales_cycle_id = cycle.id
       WHERE cycle.person_id = NEW.person_id
         AND enrollment.status = 'active'
+    ) OR EXISTS (
+      SELECT 1
+      FROM sales_cycles AS cycle
+      JOIN next_actions AS action ON action.sales_cycle_id = cycle.id
+      WHERE cycle.person_id = NEW.person_id
+        AND action.status = 'pending'
+        AND action.channel IS NOT NULL
     )
     BEGIN
-      SELECT RAISE(ABORT, 'active cadences must stop before permanent opt-out');
+      SELECT RAISE(ABORT, 'open lifecycle work must close before permanent opt-out');
     END`,
   `CREATE TRIGGER synchronize_person_opt_out
     AFTER INSERT ON opt_out_tombstones

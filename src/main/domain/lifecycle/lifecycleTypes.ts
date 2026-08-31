@@ -154,16 +154,31 @@ export type CadenceEnrollment = Readonly<{
   updatedAt: UtcTimestamp;
 }>;
 
-export type ReactivationRule = Readonly<{
+type ReactivationRuleBase = Readonly<{
   id: string;
   salesCycleId: string;
-  ruleType: ReactivationRuleType;
-  dueAt: UtcTimestamp | null;
-  matcher: unknown | null;
   version: number;
   consumedAt: UtcTimestamp | null;
   createdAt: UtcTimestamp;
 }>;
+
+export type ReactivationRule = ReactivationRuleBase & (
+  | Readonly<{
+      ruleType: Extract<ReactivationRuleType, 'seasonal:heating-oct1' | 'manual'>;
+      dueAt: UtcTimestamp;
+      matcher: null;
+    }>
+  | Readonly<{
+      ruleType: 'new-frbo-listing';
+      dueAt: null;
+      matcher: Readonly<{ version: 1; eventType: 'new-frbo-listing'; personWide: true }>;
+    }>
+  | Readonly<{
+      ruleType: 'lead-cert-expiry-window';
+      dueAt: null;
+      matcher: Readonly<{ version: 1; eventType: 'lead-cert-expiry-window'; personWide: true }>;
+    }>
+);
 
 export type CycleReactivationReceipt = Readonly<{
   activationKey: string;

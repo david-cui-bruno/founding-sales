@@ -67,6 +67,7 @@ export type ReschedulePendingActionInput = ExpectedActionIntentAndSla & Readonly
   expectedDueAt: string;
   expectedCadence: CadenceActionBinding;
   dueAt: string;
+  updatedAt: string;
   timezone: string;
   allowedWindow: string;
   slaDueAt: string | null;
@@ -107,7 +108,15 @@ export class NextActionRepository {
     this.unitOfWork.assertWriteScope();
     const parsed = insertActionSchema.parse(input) as InsertNextActionInput;
     assertIntentAndSla(parsed.workIntent, parsed.inboundSla);
-    this.assertCadenceBinding(parsed.salesCycleId, parsed.channel, parsed.cadence);
+    if (parsed.actionType === 'resolve_contact_method' && parsed.channel !== null) {
+      throw new LifecycleEvidenceError('Contact-method resolution is internal channel-null work.');
+    }
+    this.assertCadenceBinding(
+      parsed.salesCycleId,
+      parsed.channel,
+      parsed.cadence,
+      parsed.actionType === 'resolve_contact_method',
+    );
     this.assertInboundSlaOwnership(parsed.salesCycleId, parsed.workIntent, parsed.inboundSla);
     const inbound = encodeInboundSla(parsed.inboundSla);
     const row = this.database.raw.prepare(`
@@ -136,6 +145,7 @@ export class NextActionRepository {
       expectedVersion: z.number().int().safe().positive(), expectedDueAt: utcTimestampSchema,
       expectedWorkIntent: workIntentSchema, expectedInboundSla: inboundSlaSchema,
       expectedCadence: cadenceActionBindingSchema, dueAt: utcTimestampSchema,
+      updatedAt: utcTimestampSchema,
       timezone: nonblankSchema, allowedWindow: nonblankSchema,
       slaDueAt: utcTimestampSchema.nullable(), cadence: cadenceActionBindingSchema,
     }).strict().parse(input) as ReschedulePendingActionInput;
@@ -156,7 +166,7 @@ export class NextActionRepository {
         AND cadence_enrollment_id IS ? AND cadence_step_id IS ? AND cadence_component_id IS ?
       RETURNING ${actionColumns}
     `).get(
-      parsed.dueAt, parsed.timezone, parsed.allowedWindow, parsed.slaDueAt, parsed.dueAt,
+      parsed.dueAt, parsed.timezone, parsed.allowedWindow, parsed.slaDueAt, parsed.updatedAt,
       parsed.actionId, parsed.salesCycleId, parsed.expectedStatus, parsed.expectedVersion,
       parsed.expectedDueAt, parsed.expectedWorkIntent, expectedInbound.kind,
       expectedInbound.dueAt, expectedInbound.sourceEventId, expectedInbound.provenanceJson,
@@ -220,6 +230,17 @@ export class NextActionRepository {
     return Object.freeze(this.database.raw.prepare(`
       SELECT ${actionColumns} FROM next_actions WHERE sales_cycle_id = ?
       ORDER BY created_at ASC, id ASC
+    `).all(id).map((row) => this.parseAction(row)));
+  }
+
+  listPendingOutboundForPerson(personId: string): readonly NextAction[] {
+    const id = idSchema.parse(personId);
+    return Object.freeze(this.database.raw.prepare(`
+      SELECT ${actionColumns.split(',').map((column) => `action.${column.trim()}`).join(', ')}
+      FROM next_actions AS action
+      JOIN sales_cycles AS cycle ON cycle.id = action.sales_cycle_id
+      WHERE cycle.person_id = ? AND action.status = 'pending' AND action.channel IS NOT NULL
+      ORDER BY action.id ASC
     `).all(id).map((row) => this.parseAction(row)));
   }
 

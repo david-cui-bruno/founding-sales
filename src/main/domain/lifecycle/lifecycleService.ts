@@ -12,6 +12,7 @@ import {
   type ConfirmWonInput,
   type CreateUnreviewedCycleInput,
   type LifecycleCommands,
+  type LifecycleTransactionCommands,
   type LifecycleWriterDependencies,
   type RecordContactInput,
   type ReactivateFromInboundInput,
@@ -43,7 +44,7 @@ export class LifecycleService implements LifecycleCommands {
     }
   }
 
-  scopedWriter(): LifecycleTransactionWriter {
+  scopedWriter(): LifecycleTransactionCommands {
     this.unitOfWork.assertWriteScope();
     return this.writer;
   }

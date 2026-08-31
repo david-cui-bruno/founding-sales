@@ -83,19 +83,21 @@ describe('authoritative next-action persistence', () => {
       actionId: 'action', salesCycleId: 'cycle', expectedStatus: 'pending',
       expectedVersion: 1, expectedDueAt: DUE, expectedWorkIntent: 'inbound_response',
       expectedInboundSla: inboundSla, expectedCadence: NO_CADENCE,
-      dueAt: RESCHEDULED, timezone: 'America/New_York', allowedWindow: '[13:00,17:00)',
+      dueAt: RESCHEDULED, updatedAt: DOMAIN_TIMESTAMP,
+      timezone: 'America/New_York', allowedWindow: '[13:00,17:00)',
       slaDueAt: DUE, cadence: NO_CADENCE,
     }));
     expect(rescheduled).toMatchObject({
       id: 'action', status: 'pending', dueAt: RESCHEDULED,
-      workIntent: 'inbound_response', inboundSla, version: 2,
+      workIntent: 'inbound_response', inboundSla, version: 2, updatedAt: DOMAIN_TIMESTAMP,
     });
 
     expect(() => unitOfWork.immediate(() => actions.reschedulePendingAction({
       actionId: 'action', salesCycleId: 'cycle', expectedStatus: 'pending',
       expectedVersion: 1, expectedDueAt: DUE, expectedWorkIntent: 'inbound_response',
       expectedInboundSla: inboundSla, expectedCadence: NO_CADENCE,
-      dueAt: RESCHEDULED, timezone: 'America/New_York', allowedWindow: '[13:00,17:00)',
+      dueAt: RESCHEDULED, updatedAt: DOMAIN_TIMESTAMP,
+      timezone: 'America/New_York', allowedWindow: '[13:00,17:00)',
       slaDueAt: DUE, cadence: NO_CADENCE,
     }))).toThrow(StaleDomainWriteError);
     expect(() => database!.raw.prepare(`

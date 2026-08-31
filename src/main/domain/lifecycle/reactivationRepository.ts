@@ -22,12 +22,92 @@ import {
 const ruleTypeSchema = z.enum([
   'seasonal:heating-oct1', 'new-frbo-listing', 'lead-cert-expiry-window', 'manual',
 ]);
-const versionedPayloadSchema = z.object({ version: z.literal(1) }).passthrough();
+const newFrboMatcherSchema = z.object({
+  version: z.literal(1), eventType: z.literal('new-frbo-listing'), personWide: z.literal(true),
+}).strict();
+const leadCertMatcherSchema = z.object({
+  version: z.literal(1), eventType: z.literal('lead-cert-expiry-window'), personWide: z.literal(true),
+}).strict();
+const ruleValueSchema = z.discriminatedUnion('ruleType', [
+  z.object({
+    ruleType: z.literal('seasonal:heating-oct1'), dueAt: utcTimestampSchema,
+    matcher: z.null(),
+  }).strict(),
+  z.object({
+    ruleType: z.literal('manual'), dueAt: utcTimestampSchema, matcher: z.null(),
+  }).strict(),
+  z.object({
+    ruleType: z.literal('new-frbo-listing'), dueAt: z.null(), matcher: newFrboMatcherSchema,
+  }).strict(),
+  z.object({
+    ruleType: z.literal('lead-cert-expiry-window'), dueAt: z.null(), matcher: leadCertMatcherSchema,
+  }).strict(),
+]);
+const commandCommon = {
+  personId: idSchema, prospectId: idSchema, sourceCycleId: idSchema,
+  newCycleId: idSchema, activatedAt: utcTimestampSchema,
+};
+const ruleCommandCommon = {
+  ...commandCommon, ruleId: idSchema, expectedRuleVersion: z.number().int().positive(),
+  entrySourceEventId: idSchema,
+};
+const ruleCommandSchema = z.discriminatedUnion('ruleType', [
+  z.object({
+    ...ruleCommandCommon, ruleType: z.literal('seasonal:heating-oct1'),
+    trigger: z.object({ kind: z.literal('due'), dueAt: utcTimestampSchema }).strict(),
+  }).strict(),
+  z.object({
+    ...ruleCommandCommon, ruleType: z.literal('manual'),
+    trigger: z.object({ kind: z.literal('due'), dueAt: utcTimestampSchema }).strict(),
+  }).strict(),
+  z.object({
+    ...ruleCommandCommon, ruleType: z.literal('new-frbo-listing'),
+    trigger: z.object({
+      kind: z.literal('source_event'), eventType: z.literal('new-frbo-listing'),
+      sourceEventId: idSchema,
+    }).strict(),
+  }).strict(),
+  z.object({
+    ...ruleCommandCommon, ruleType: z.literal('lead-cert-expiry-window'),
+    trigger: z.object({
+      kind: z.literal('source_event'), eventType: z.literal('lead-cert-expiry-window'),
+      sourceEventId: idSchema,
+    }).strict(),
+  }).strict(),
+]);
+const inboundCommandSchema = z.object({
+  ...commandCommon, sourceEventId: idSchema,
+}).strict();
 const commandEnvelopeSchema = z.object({
-  version: z.literal(1), command: z.record(z.string(), z.unknown()),
+  version: z.literal(1), command: z.union([ruleCommandSchema, inboundCommandSchema]),
+}).strict();
+const salesCycleSnapshotSchema = z.object({
+  id: idSchema, personId: idSchema, prospectId: idSchema, entrySourceEventId: idSchema,
+  stage: z.enum(['unreviewed', 'ready', 'contacted', 'interviewed', 'offered', 'won', 'lost_nurture']),
+  workflowStatus: z.enum(['active', 'onboarding', 'closed']),
+  currentNextActionId: idSchema.nullable(), stageEnteredAt: utcTimestampSchema,
+  designPartnerFitness: z.number().int().min(0).max(5).nullable(),
+  closeReason: z.enum([
+    'no_response', 'not_interested', 'bad_timing', 'not_decision_maker',
+    'not_qualified', 'price', 'trust', 'chose_alternative', 'product_gap',
+    'cadence_exhausted', 'disqualified', 'opt_out', 'other',
+  ]).nullable(),
+  closeNotes: z.string().nullable(), onboardingStopReason: z.string().nullable(),
+  closedAt: utcTimestampSchema.nullable(), version: z.number().int().positive(),
+  createdAt: utcTimestampSchema, updatedAt: utcTimestampSchema,
 }).strict();
 const resultEnvelopeSchema = z.object({
-  version: z.literal(1), result: z.record(z.string(), z.unknown()),
+  version: z.literal(1),
+  result: z.discriminatedUnion('activationKind', [
+    z.object({
+      kind: z.literal('reactivated'), activationKind: z.literal('rule'),
+      cycle: salesCycleSnapshotSchema,
+    }).strict(),
+    z.object({
+      kind: z.literal('reactivated'), activationKind: z.literal('inbound_response'),
+      cycle: salesCycleSnapshotSchema,
+    }).strict(),
+  ]),
 }).strict();
 const storedRuleSchema = z.object({
   id: idSchema, sales_cycle_id: idSchema, rule_type: ruleTypeSchema,
@@ -52,7 +132,13 @@ const receiptInputSchema = z.object({
   command: commandEnvelopeSchema,
   result: resultEnvelopeSchema,
   createdAt: utcTimestampSchema,
-}).strict();
+}).strict().superRefine((value, context) => {
+  const commandIsRule = 'ruleType' in value.command.command;
+  if ((value.activationKind === 'rule') !== commandIsRule
+    || value.result.result.activationKind !== value.activationKind) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Receipt command/result kind mismatch.' });
+  }
+});
 const ruleColumns = `
   id, sales_cycle_id, rule_type, due_at, matcher_json, version, consumed_at, created_at
 `;
@@ -65,12 +151,19 @@ const receiptColumns = `
 export type InsertReactivationRuleInput = Readonly<{
   id: string;
   salesCycleId: string;
-  ruleType: ReactivationRule['ruleType'];
-  dueAt: string | null;
-  matcher: unknown | null;
   version: number;
   createdAt: string;
-}>;
+}> & (
+  | Readonly<{ ruleType: 'seasonal:heating-oct1' | 'manual'; dueAt: string; matcher: null }>
+  | Readonly<{
+      ruleType: 'new-frbo-listing'; dueAt: null;
+      matcher: Readonly<{ version: 1; eventType: 'new-frbo-listing'; personWide: true }>;
+    }>
+  | Readonly<{
+      ruleType: 'lead-cert-expiry-window'; dueAt: null;
+      matcher: Readonly<{ version: 1; eventType: 'lead-cert-expiry-window'; personWide: true }>;
+    }>
+);
 
 export type ConsumeReactivationRuleInput = Readonly<{
   ruleId: string;
@@ -112,18 +205,20 @@ export class ReactivationRepository {
 
   insertRule(input: InsertReactivationRuleInput): ReactivationRule {
     this.unitOfWork.assertWriteScope();
-    const parsed = z.object({
-      id: idSchema, salesCycleId: idSchema, ruleType: ruleTypeSchema,
-      dueAt: utcTimestampSchema.nullable(), matcher: z.unknown().nullable(),
+    const common = z.object({
+      id: idSchema, salesCycleId: idSchema,
       version: z.number().int().safe().positive(), createdAt: utcTimestampSchema,
-    }).strict().superRefine((value, context) => {
-      if (value.ruleType === 'manual' && value.dueAt === null) {
-        context.addIssue({ code: z.ZodIssueCode.custom, message: 'Manual reactivation requires a due time.' });
-      }
-    }).parse(input);
+    }).strict().parse({
+      id: input.id, salesCycleId: input.salesCycleId,
+      version: input.version, createdAt: input.createdAt,
+    });
+    const value = ruleValueSchema.parse({
+      ruleType: input.ruleType, dueAt: input.dueAt, matcher: input.matcher,
+    });
+    const parsed = { ...common, ...value } as InsertReactivationRuleInput;
     const matcherJson = parsed.matcher === null
       ? null
-      : serializeCanonical(versionedPayloadSchema.parse(parsed.matcher));
+      : serializeCanonical(parsed.matcher);
     const existing = this.getRule(parsed.id);
     if (existing !== null) {
       if (
@@ -132,6 +227,7 @@ export class ReactivationRepository {
         && existing.dueAt === parsed.dueAt
         && serializeCanonical(existing.matcher) === serializeCanonical(parsed.matcher)
         && existing.version === parsed.version
+        && existing.createdAt === parsed.createdAt
       ) return existing;
       throw new LifecycleIdempotencyConflictError();
     }
@@ -214,12 +310,15 @@ export class ReactivationRepository {
 
 function parseRule(value: unknown): ReactivationRule {
   const row = storedRuleSchema.parse(value);
-  return deepFreezeLifecycle({
-    id: row.id, salesCycleId: row.sales_cycle_id, ruleType: row.rule_type,
+  const parsedValue = ruleValueSchema.parse({
+    ruleType: row.rule_type,
     dueAt: row.due_at,
     matcher: row.matcher_json === null
       ? null
-      : parseCanonicalJson(row.matcher_json, versionedPayloadSchema),
+      : parseCanonicalJson(row.matcher_json, z.union([newFrboMatcherSchema, leadCertMatcherSchema])),
+  });
+  return deepFreezeLifecycle({
+    id: row.id, salesCycleId: row.sales_cycle_id, ...parsedValue,
     version: row.version, consumedAt: row.consumed_at, createdAt: row.created_at,
   }) as ReactivationRule;
 }
@@ -250,5 +349,6 @@ function assertReceiptEquals(
     || existing.newCycleId !== input.newCycleId
     || serializeCanonical(existing.command) !== serializeCanonical(input.command)
     || serializeCanonical(existing.result) !== serializeCanonical(input.result)
+    || existing.createdAt !== input.createdAt
   ) throw new LifecycleIdempotencyConflictError();
 }

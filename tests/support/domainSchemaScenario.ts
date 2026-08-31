@@ -74,6 +74,8 @@ const requiredTriggers = [
   'immutable_consent_policy_records_delete',
   'immutable_cycle_reactivation_receipts',
   'immutable_cycle_reactivation_receipts_delete',
+  'immutable_won_terms',
+  'immutable_won_terms_delete',
   'immutable_prioritization_evaluations',
   'immutable_prioritization_evaluations_delete',
   'immutable_prioritization_rule_versions',
@@ -94,6 +96,7 @@ const requiredTriggers = [
   'protect_cadence_enrollment_step_insert',
   'protect_cadence_enrollment_step_update',
   'protect_cadence_enrollment_identity',
+  'protect_cadence_enrollment_status',
   'protect_cadence_enrollment_delete',
   'protect_activity_cadence_insert',
   'protect_activity_cadence_update',
@@ -109,6 +112,7 @@ const requiredTriggers = [
   'protect_next_action_inbound_sla_insert',
   'protect_next_action_inbound_sla_update',
   'protect_next_action_settlement',
+  'protect_next_action_delete',
   'protect_opt_out_handle',
   'protect_opt_out_handle_update',
   'protect_opt_out_tombstone_active_cadence',
@@ -469,6 +473,77 @@ function runDatabaseScenario(
       });
       return;
     }
+    case 'lifecycle-retention-immutability': {
+      const prospect = seedProspect(raw, 'lifecycle-retention');
+      const closedCycleId = insertClosedCycle({
+        database: raw, prefix: 'lifecycle-retention', prospect,
+      });
+      insertRawAction(raw, 'retained-action', closedCycleId);
+      assert.throws(() => raw.prepare(`
+        DELETE FROM next_actions WHERE id = 'retained-action'
+      `).run());
+      assert.throws(() => raw.prepare(`
+        INSERT OR REPLACE INTO next_actions (
+          id, sales_cycle_id, action_type, channel, status, due_at,
+          timezone, created_at
+        ) VALUES ('retained-action', ?, 'call', 'phone', 'pending', ?,
+          'America/New_York', ?)
+      `).run(closedCycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP));
+
+      raw.prepare(`
+        INSERT INTO won_terms (
+          sales_cycle_id, doors_committed, billing_model, unit_rate_cents,
+          projected_mrr_cents, projection_formula_version, manual_projection_reason,
+          founding_customer, effective_at, created_at
+        ) VALUES (?, 12, 'per_door_monthly', 2500, 30000, 'v1', NULL, 1, ?, ?)
+      `).run(closedCycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+      assert.throws(() => raw.prepare(`
+        UPDATE won_terms SET doors_committed = 13 WHERE sales_cycle_id = ?
+      `).run(closedCycleId));
+      assert.throws(() => raw.prepare(`
+        DELETE FROM won_terms WHERE sales_cycle_id = ?
+      `).run(closedCycleId));
+      assert.throws(() => raw.prepare(`
+        INSERT OR REPLACE INTO won_terms (
+          sales_cycle_id, doors_committed, billing_model, unit_rate_cents,
+          projected_mrr_cents, projection_formula_version, manual_projection_reason,
+          founding_customer, effective_at, created_at
+        ) VALUES (?, 12, 'per_door_monthly', 2500, 30000, 'v1', NULL, 1, ?, ?)
+      `).run(closedCycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP));
+
+      const open = insertOpenCycleWithAction({
+        database: raw, prefix: 'immutable-enrollment-plan',
+        prospect: seedProspect(raw, 'immutable-enrollment-plan'),
+      });
+      insertCadenceDefinition(raw, 'immutable-enrollment-definition');
+      insertCadenceEnrollment(
+        raw, 'immutable-enrollment', open.cycleId, 'immutable-enrollment-definition',
+      );
+      assert.throws(() => raw.prepare(`
+        UPDATE cadence_enrollments SET mode = 'inbound_over_cap_response'
+        WHERE id = 'immutable-enrollment'
+      `).run());
+      assert.throws(() => raw.prepare(`
+        UPDATE cadence_enrollments SET allowed_step_ids_json = '["forged-step"]'
+        WHERE id = 'immutable-enrollment'
+      `).run());
+      raw.prepare(`
+        UPDATE cadence_enrollments
+        SET status = 'stopped', stop_reason = 'test'
+        WHERE id = 'immutable-enrollment'
+      `).run();
+      assert.throws(() => raw.prepare(`
+        UPDATE cadence_enrollments
+        SET status = 'active', stop_reason = NULL
+        WHERE id = 'immutable-enrollment'
+      `).run());
+      assert.throws(() => raw.prepare(`
+        UPDATE cadence_enrollments
+        SET status = 'completed'
+        WHERE id = 'immutable-enrollment'
+      `).run());
+      return;
+    }
     case 'p0-without-direct-reachability': {
       const prospect = seedProspect(raw, 'p0-indirect');
       insertPrioritizationRule(raw, 'p0-rule');
@@ -736,9 +811,30 @@ function runDatabaseScenario(
       ));
       return;
     }
+    case 'opt-out-rejects-open-workflow-or-pending-outbound': {
+      const openProspect = seedProspect(raw, 'opt-out-open-workflow');
+      insertOpenCycleWithAction({ database: raw, prefix: 'opt-out-open-workflow', prospect: openProspect });
+      assert.throws(() => insertOptOutTombstone(
+        raw,
+        'opt-out-open-workflow-tombstone',
+        openProspect.personId,
+      ));
+
+      const pendingProspect = seedProspect(raw, 'opt-out-pending-outbound');
+      const closedCycleId = insertClosedCycle({
+        database: raw, prefix: 'opt-out-pending-outbound', prospect: pendingProspect,
+      });
+      insertRawAction(raw, 'opt-out-stale-outbound', closedCycleId);
+      assert.throws(() => insertOptOutTombstone(
+        raw,
+        'opt-out-pending-outbound-tombstone',
+        pendingProspect.personId,
+      ));
+      return;
+    }
     case 'opt-out-tombstone-cadence-guard': {
       const prospect = seedProspect(raw, 'opt-out-tombstone-guard');
-      const cycle = insertOpenCycleWithAction({
+      const cycleId = insertClosedCycle({
         database: raw,
         prefix: 'opt-out-tombstone-guard',
         prospect,
@@ -752,7 +848,7 @@ function runDatabaseScenario(
       assert.throws(() => insertCadenceEnrollment(
         raw,
         'opt-out-tombstone-enrollment',
-        cycle.cycleId,
+        cycleId,
         'opt-out-tombstone-cadence',
       ));
       return;

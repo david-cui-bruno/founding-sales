@@ -108,7 +108,7 @@ describe('cadence relational ownership constraints', () => {
     `).run()).toThrow();
   });
 
-  it('makes enrollment cycle, definition, and anchor identity immutable while allowing lifecycle progress', async () => {
+  it('makes enrollment identity immutable and terminal status one-way', async () => {
     await setup();
     for (const assignment of [
       `sales_cycle_id = '${secondCycle}'`,
@@ -119,12 +119,12 @@ describe('cadence relational ownership constraints', () => {
         UPDATE cadence_enrollments SET ${assignment} WHERE id = 'enrollment-a'
       `).run()).toThrow();
     }
-    expect(database!.raw.prepare(`
-      UPDATE cadence_enrollments
-      SET status = 'completed', scheduled_step_count = 2,
-          stop_reason = 'phase_completed', updated_at = '2026-09-01T12:00:00.000Z'
-      WHERE id = 'enrollment-a'
-    `).run().changes).toBe(1);
+    expect(() => database!.raw.prepare(`
+        UPDATE cadence_enrollments
+        SET status = 'completed', scheduled_step_count = 2,
+            stop_reason = 'phase_completed', updated_at = '2026-09-01T12:00:00.000Z'
+        WHERE id = 'enrollment-a'
+      `).run()).toThrow();
   });
 
   it('rejects simultaneous enrollment owner moves even when the replacement graph is internally valid', async () => {

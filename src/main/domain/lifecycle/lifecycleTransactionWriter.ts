@@ -6,6 +6,7 @@ import {
   planCadenceUpgrade,
   planReactivationDefaults,
   type ImpossibleDisposition,
+  type ReactivationRuleDraft,
   type TransitionRecipe,
 } from '../cadence/cadencePlanner';
 import type { CadenceRepository } from '../cadence/cadenceRepository';
@@ -22,6 +23,7 @@ import {
   LifecycleEligibilityError,
   LifecycleEvidenceError,
   LifecycleIdempotencyConflictError,
+  StaleDomainWriteError,
 } from '../support/domainErrors';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 import type { IdGenerator } from '../support/idGenerator';
@@ -36,13 +38,17 @@ import type {
   LostNurtureReason,
   NextAction,
   NextActionIntentAndSla,
+  ReactivationRule,
   SalesCycle,
   WonTerms,
 } from './lifecycleTypes';
 import { serializeCanonical, utcTimestampSchema } from './lifecycleValidation';
 import { LifecycleReviewRepository } from './lifecycleReviewRepository';
 import { NextActionRepository } from './nextActionRepository';
-import { ReactivationRepository } from './reactivationRepository';
+import {
+  ReactivationRepository,
+  type InsertReactivationRuleInput,
+} from './reactivationRepository';
 import { SalesCycleRepository } from './salesCycleRepository';
 
 const NO_CADENCE: CadenceActionBinding = {
@@ -111,12 +117,36 @@ const readinessDimensionInputSchema = z.object({
   evidenceActivityIds: z.array(z.string().trim().min(1)),
 }).strict();
 
-const reactivationRuleInputSchema = z.object({
+const reactivationRuleCommonSchema = {
   ruleId: z.string().trim().min(1), expectedRuleVersion: z.number().int().positive(),
   personId: z.string().trim().min(1), prospectId: z.string().trim().min(1),
   sourceCycleId: z.string().trim().min(1), entrySourceEventId: z.string().trim().min(1),
   newCycleId: z.string().trim().min(1), activatedAt: utcTimestampSchema,
-}).strict();
+};
+const reactivationRuleInputSchema = z.discriminatedUnion('ruleType', [
+  z.object({
+    ...reactivationRuleCommonSchema, ruleType: z.literal('seasonal:heating-oct1'),
+    trigger: z.object({ kind: z.literal('due'), dueAt: utcTimestampSchema }).strict(),
+  }).strict(),
+  z.object({
+    ...reactivationRuleCommonSchema, ruleType: z.literal('manual'),
+    trigger: z.object({ kind: z.literal('due'), dueAt: utcTimestampSchema }).strict(),
+  }).strict(),
+  z.object({
+    ...reactivationRuleCommonSchema, ruleType: z.literal('new-frbo-listing'),
+    trigger: z.object({
+      kind: z.literal('source_event'), eventType: z.literal('new-frbo-listing'),
+      sourceEventId: z.string().trim().min(1),
+    }).strict(),
+  }).strict(),
+  z.object({
+    ...reactivationRuleCommonSchema, ruleType: z.literal('lead-cert-expiry-window'),
+    trigger: z.object({
+      kind: z.literal('source_event'), eventType: z.literal('lead-cert-expiry-window'),
+      sourceEventId: z.string().trim().min(1),
+    }).strict(),
+  }).strict(),
+]);
 
 const reactivationInboundInputSchema = z.object({
   sourceEventId: z.string().trim().min(1), personId: z.string().trim().min(1),
@@ -124,9 +154,34 @@ const reactivationInboundInputSchema = z.object({
   newCycleId: z.string().trim().min(1), activatedAt: utcTimestampSchema,
 }).strict();
 
+const salesCycleReceiptSnapshotSchema = z.object({
+  id: lifecycleIdSchema, personId: lifecycleIdSchema, prospectId: lifecycleIdSchema,
+  entrySourceEventId: lifecycleIdSchema,
+  stage: z.enum(['unreviewed', 'ready', 'contacted', 'interviewed', 'offered', 'won', 'lost_nurture']),
+  workflowStatus: z.enum(['active', 'onboarding', 'closed']),
+  currentNextActionId: lifecycleIdSchema.nullable(), stageEnteredAt: utcTimestampSchema,
+  designPartnerFitness: z.number().int().min(0).max(5).nullable(),
+  closeReason: z.enum([
+    'no_response', 'not_interested', 'bad_timing', 'not_decision_maker',
+    'not_qualified', 'price', 'trust', 'chose_alternative', 'product_gap',
+    'cadence_exhausted', 'disqualified', 'opt_out', 'other',
+  ]).nullable(),
+  closeNotes: z.string().nullable(), onboardingStopReason: z.string().nullable(),
+  closedAt: utcTimestampSchema.nullable(), version: z.number().int().positive(),
+  createdAt: utcTimestampSchema, updatedAt: utcTimestampSchema,
+}).strict();
 const reactivationReceiptResultSchema = z.object({
   version: z.literal(1),
-  result: z.object({ kind: z.literal('reactivated'), cycleId: z.string().trim().min(1) }).strict(),
+  result: z.discriminatedUnion('activationKind', [
+    z.object({
+      kind: z.literal('reactivated'), activationKind: z.literal('rule'),
+      cycle: salesCycleReceiptSnapshotSchema,
+    }).strict(),
+    z.object({
+      kind: z.literal('reactivated'), activationKind: z.literal('inbound_response'),
+      cycle: salesCycleReceiptSnapshotSchema,
+    }).strict(),
+  ]),
 }).strict();
 
 export type CreateUnreviewedCycleInput = Readonly<{
@@ -244,7 +299,7 @@ export type SetCloseReadinessInput = Readonly<{
   assessedAt: string;
 }>;
 
-export type ReactivateFromRuleInput = Readonly<{
+type ReactivateFromRuleCommon = Readonly<{
   ruleId: string;
   expectedRuleVersion: number;
   personId: string;
@@ -254,6 +309,25 @@ export type ReactivateFromRuleInput = Readonly<{
   newCycleId: string;
   activatedAt: string;
 }>;
+
+export type ReactivateFromRuleInput = ReactivateFromRuleCommon & (
+  | Readonly<{
+      ruleType: 'seasonal:heating-oct1' | 'manual';
+      trigger: Readonly<{ kind: 'due'; dueAt: string }>;
+    }>
+  | Readonly<{
+      ruleType: 'new-frbo-listing';
+      trigger: Readonly<{
+        kind: 'source_event'; eventType: 'new-frbo-listing'; sourceEventId: string;
+      }>;
+    }>
+  | Readonly<{
+      ruleType: 'lead-cert-expiry-window';
+      trigger: Readonly<{
+        kind: 'source_event'; eventType: 'lead-cert-expiry-window'; sourceEventId: string;
+      }>;
+    }>
+);
 
 export type ReactivateFromInboundInput = Readonly<{
   sourceEventId: string;
@@ -338,11 +412,11 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
   private readonly ids: IdGenerator;
   private readonly timezone: string;
   private readonly policies: ChannelPolicySnapshots;
-  readonly cycles: SalesCycleRepository;
-  readonly actions: NextActionRepository;
-  readonly enrollments: CadenceEnrollmentRepository;
-  readonly reactivations: ReactivationRepository;
-  readonly reviews: LifecycleReviewRepository;
+  private readonly cycles: SalesCycleRepository;
+  private readonly actions: NextActionRepository;
+  private readonly enrollments: CadenceEnrollmentRepository;
+  private readonly reactivations: ReactivationRepository;
+  private readonly reviews: LifecycleReviewRepository;
 
   constructor(input: LifecycleWriterDependencies) {
     if (input.database.raw !== input.unitOfWork.database.raw) {
@@ -539,7 +613,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     ) throw new LifecycleConflictError('Interview confirmation projection is stale or illegal.');
     const activity = this.requireOwnedActivity(cycle, parsed.suggestionActivityId);
     if (activity.kind !== 'interview'
-      && !(activity.kind === 'call' && (activity.durationSeconds ?? 0) >= 300)) {
+      && !(activity.kind === 'call' && activity.observedOutcome === 'answered')) {
       throw new LifecycleEvidenceError('Interviewed requires founder-confirmed conversation evidence.');
     }
     this.assertTransitionEvidenceTimes(cycle, effectiveAt, confirmedAt, activity);
@@ -702,17 +776,33 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     this.unitOfWork.assertWriteScope();
     const parsed = closeForOptOutSchema.parse(input);
     const effectiveAt = parsed.effectiveAt;
+    const evidence = this.events.getActivity(parsed.evidenceActivityId);
+    if (evidence === null || evidence.personId !== parsed.personId
+      || evidence.observedOutcome !== 'opted_out') {
+      throw new LifecycleEvidenceError('Opt-out closure requires Person-owned immutable Activity evidence.');
+    }
     const cycle = this.cycles.getOperationalCycleForPerson(parsed.personId);
     if (cycle === null) {
-      return Object.freeze({ cycle: null, stoppedEnrollmentIds: Object.freeze([]), cancelledActionIds: Object.freeze([]) });
+      if (parsed.terminalStageEventId !== null) {
+        throw new LifecycleEvidenceError('No-cycle opt-out closure cannot create a terminal StageEvent.');
+      }
+      const cancelledActionIds = this.cancelPendingOutboundForPerson(
+        parsed.personId, evidence, effectiveAt,
+      );
+      return Object.freeze({
+        cycle: null,
+        stoppedEnrollmentIds: Object.freeze([]),
+        cancelledActionIds,
+      });
     }
-    if (parsed.terminalStageEventId === null) {
-      throw new LifecycleEvidenceError('Opt-out closure requires a stable terminal StageEvent ID.');
-    }
-    const evidence = this.events.getActivity(parsed.evidenceActivityId);
-    if (evidence === null || evidence.personId !== cycle.personId
-      || evidence.salesCycleId !== cycle.id || evidence.observedOutcome !== 'opted_out') {
-      throw new LifecycleEvidenceError('Opt-out closure requires owned immutable Activity evidence.');
+    const preserveWon = cycle.stage === 'won' && cycle.workflowStatus === 'onboarding';
+    if ((!preserveWon && parsed.terminalStageEventId === null)
+      || (preserveWon && parsed.terminalStageEventId !== null)) {
+      throw new LifecycleEvidenceError(
+        preserveWon
+          ? 'Won opt-out closure must not create another terminal StageEvent.'
+          : 'Opt-out closure requires a stable terminal StageEvent ID.',
+      );
     }
     const enrollment = this.enrollments.getActiveForCycle(cycle.id);
     const stoppedEnrollmentIds: string[] = [];
@@ -735,9 +825,10 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     const closed = this.cycles.closeProjection({
       cycleId: cycle.id, expectedVersion: cycle.version, expectedStage: cycle.stage,
       expectedWorkflowStatus: cycle.workflowStatus as 'active' | 'onboarding',
-      expectedCurrentActionId: cycle.currentNextActionId!, finalStage: 'lost_nurture',
-      closedAt: effectiveAt, closeReason: 'opt_out', closeNotes: null,
-      onboardingStopReason: cycle.workflowStatus === 'onboarding' ? 'opt_out' : null,
+      expectedCurrentActionId: cycle.currentNextActionId!,
+      finalStage: preserveWon ? 'won' : 'lost_nurture',
+      closedAt: effectiveAt, closeReason: preserveWon ? null : 'opt_out', closeNotes: null,
+      onboardingStopReason: preserveWon ? 'opt_out' : null,
     });
     const action = this.actions.getById(cycle.currentNextActionId!);
     if (action === null) throw new LifecycleConflictError('Current action is missing.');
@@ -746,10 +837,10 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       expectedVersion: action.version, ...expectedIntentAndSla(action),
       expectedCadence: action.cadence,
       status: 'cancelled', completedAt: effectiveAt,
-      completionActivityId: parsed.evidenceActivityId,
+      completionActivityId: evidence.salesCycleId === action.salesCycleId ? evidence.id : null,
       settlement: {
         version: 1, outcome: 'opted_out', reason: 'person_wide_opt_out',
-        evidenceActivityId: parsed.evidenceActivityId,
+        evidenceActivityId: evidence.id,
         plannerTransition: {
           definitionId: action.cadence.cadenceDefinitionId,
           stepId: action.cadence.cadenceStepId,
@@ -758,7 +849,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
         }, cadence: action.cadence, workIntent: action.workIntent, inboundSla: action.inboundSla,
       },
     });
-    if (parsed.terminalStageEventId !== null) {
+    if (!preserveWon && parsed.terminalStageEventId !== null) {
       const sequence = this.events.listCycleStageEvents(cycle.id).length + 1;
       this.events.appendStageEvent({
         id: parsed.terminalStageEventId, salesCycleId: cycle.id,
@@ -766,11 +857,15 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
         confirmedAt: effectiveAt, confirmationKind: 'mechanical', transitionSequence: sequence,
       });
     }
+    const cancelledActionIds = [
+      action.id,
+      ...this.cancelPendingOutboundForPerson(parsed.personId, evidence, effectiveAt),
+    ].sort();
     this.cycles.assertCurrentActionPostcondition(cycle.id);
     return Object.freeze({
       cycle: closed,
       stoppedEnrollmentIds: Object.freeze(stoppedEnrollmentIds.sort()),
-      cancelledActionIds: Object.freeze([action.id]),
+      cancelledActionIds: Object.freeze(cancelledActionIds),
     });
   }
 
@@ -782,7 +877,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       cycle === null || cycle.version !== parsed.expectedCycleVersion
       || cycle.currentNextActionId !== parsed.expectedCurrentActionId
       || (cycle.workflowStatus !== 'active' && cycle.workflowStatus !== 'onboarding')
-    ) throw new LifecycleConflictError('Current-action projection is stale.');
+    ) throw new StaleDomainWriteError();
     const action = this.requireCurrentAction(cycle);
     const enrollment = this.requireActiveEnrollment(cycle);
     if (action.version !== parsed.expectedActionVersion
@@ -791,7 +886,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       || action.cadence.cadenceDefinitionId !== enrollment.cadenceDefinitionId
       || action.cadence.cadenceStepId !== enrollment.currentStepId
       || action.cadence.cadenceComponentId === null) {
-      throw new LifecycleConflictError('Current cadence evidence is stale or incomplete.');
+      throw new StaleDomainWriteError();
     }
     const definition = this.cadences.getById(enrollment.cadenceDefinitionId);
     if (definition === null) throw new LifecycleEvidenceError('Cadence definition is missing.');
@@ -812,6 +907,13 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       highestProspectingAttemptCap: this.highestProspectingCap(cycle.id),
     });
     const activity = this.validateOutcomeEvidence(cycle, action, recipe, parsed.activityId);
+    const lifecycleCycle = cycle.stage === 'ready' && activity !== null && isQualifyingContact(activity)
+      ? this.recordQualifyingContact({
+          cycleId: cycle.id, expectedCycleVersion: cycle.version,
+          expectedCurrentActionId: action.id, activityId: activity.id,
+          effectiveAt: parsed.evaluationAt,
+        })
+      : cycle;
     const mutatedEnrollment = this.enrollments.applyCadenceEnrollmentMutation({
       enrollmentId: enrollment.id, salesCycleId: cycle.id,
       expectedVersion: enrollment.version, expectedDefinitionId: enrollment.cadenceDefinitionId,
@@ -828,6 +930,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
           expectedVersion: action.version, expectedDueAt: action.dueAt,
           ...expectedIntentAndSla(action),
           expectedCadence: action.cadence, dueAt: recipe.nextAction.dueAt,
+          updatedAt: parsed.evaluationAt,
           timezone: recipe.nextAction.timezone, allowedWindow: recipe.nextAction.allowedWindow,
           slaDueAt: recipe.nextAction.slaDueAt, cadence: action.cadence,
         });
@@ -837,7 +940,9 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       const draft = recipe.nextAction.draft;
       const nextActionId = this.ids.next();
       const binding = cadenceBinding(enrollment.id, draft);
-      const retainIntent = draft.actionType === 'resolve_contact_method'
+      const retainIntent = recipe.enrollment.kind === 'advance_component'
+        || recipe.enrollment.kind === 'resolve'
+        || recipe.enrollment.kind === 'retry'
         || enrollment.mode === 'inbound_over_cap_response';
       const intentAndSla = retainIntent
         ? nextIntentAndSla(action.workIntent, action.inboundSla)
@@ -851,8 +956,9 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
         cadence: binding, createdAt: parsed.evaluationAt,
       });
       const transitioned = this.cycles.replaceCurrentAction({
-        cycleId: cycle.id, expectedVersion: cycle.version, expectedStage: cycle.stage,
-        expectedWorkflowStatus: cycle.workflowStatus as 'active' | 'onboarding',
+        cycleId: lifecycleCycle.id, expectedVersion: lifecycleCycle.version,
+        expectedStage: lifecycleCycle.stage,
+        expectedWorkflowStatus: lifecycleCycle.workflowStatus as 'active' | 'onboarding',
         expectedCurrentActionId: action.id, nextActionId, updatedAt: parsed.evaluationAt,
       });
       this.settlePlannerAction(action, recipe, activity, parsed.evaluationAt);
@@ -860,7 +966,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       return transitioned;
     }
     return this.applyCadenceTerminal({
-      cycle, action, enrollment: mutatedEnrollment, definitionFamily: definition.family,
+      cycle: lifecycleCycle, action, enrollment: mutatedEnrollment,
+      definitionFamily: definition.family,
       recipe, activity, evaluationAt: parsed.evaluationAt,
       manualReactivationDueAt: parsed.manualReactivationDueAt,
     });
@@ -887,7 +994,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     if (
       cycle === null || cycle.version !== parsed.expectedCycleVersion
       || cycle.currentNextActionId !== parsed.expectedCurrentActionId
-      || (cycle.workflowStatus !== 'active' && cycle.workflowStatus !== 'onboarding')
+      || cycle.workflowStatus !== 'active'
     ) throw new LifecycleConflictError('Lost-Nurture projection is stale.');
     const action = this.requireCurrentAction(cycle);
     const enrollment = this.enrollments.getActiveForCycle(cycle.id);
@@ -909,12 +1016,9 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     }
     if (enrollment !== null) this.stopEnrollment(enrollment, 'phase_completed', parsed.effectiveAt);
     for (const draft of drafts) {
-      this.reactivations.insertRule({
-        id: this.ids.next(), salesCycleId: cycle.id, ruleType: draft.ruleType,
-        dueAt: draft.dueAt,
-        matcher: draft.matcher === null ? null : { version: 1, ...draft.matcher },
-        version: draft.ruleVersion, createdAt: parsed.effectiveAt,
-      });
+      this.reactivations.insertRule(toRuleInsert(
+        this.ids.next(), cycle.id, draft, parsed.effectiveAt,
+      ));
     }
     if (shouldDisqualify) {
       const prospect = this.identities.getCanonicalProspect(cycle.personId);
@@ -931,8 +1035,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       expectedWorkflowStatus: cycle.workflowStatus as 'active' | 'onboarding',
       expectedCurrentActionId: action.id, finalStage: 'lost_nurture',
       closedAt: parsed.effectiveAt, closeReason: parsed.reason,
-      closeNotes: parsed.notes, onboardingStopReason: cycle.workflowStatus === 'onboarding'
-        ? `lost_nurture:${parsed.reason}` : null,
+      closeNotes: parsed.notes, onboardingStopReason: null,
     });
     this.events.appendStageEvent({
       id: eventId, salesCycleId: cycle.id, fromStage: cycle.stage,
@@ -966,6 +1069,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     const replay = this.readReactivationReplay(activationKey, command);
     if (replay !== null) return replay;
     const rule = this.reactivations.getRule(parsed.ruleId);
+    this.assertRuleActivationProof(parsed, rule);
     const blocker = this.reactivationBlocker({
       personId: parsed.personId, prospectId: parsed.prospectId,
       sourceCycleId: parsed.sourceCycleId, entrySourceEventId: parsed.entrySourceEventId,
@@ -1000,7 +1104,10 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       activationKey, activationKind: 'rule', personId: parsed.personId,
       sourceCycleId: parsed.sourceCycleId, reactivationRuleId: parsed.ruleId,
       sourceEventId: null, newCycleId: parsed.newCycleId, command,
-      result: { version: 1, result: { kind: 'reactivated', cycleId: cycle.id } },
+      result: {
+        version: 1,
+        result: { kind: 'reactivated', activationKind: 'rule', cycle },
+      },
       createdAt: parsed.activatedAt,
     });
     this.cycles.assertCurrentActionPostcondition(cycle.id);
@@ -1036,7 +1143,10 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       activationKey, activationKind: 'inbound_response', personId: parsed.personId,
       sourceCycleId: parsed.sourceCycleId, reactivationRuleId: null,
       sourceEventId: parsed.sourceEventId, newCycleId: parsed.newCycleId, command,
-      result: { version: 1, result: { kind: 'reactivated', cycleId: cycle.id } },
+      result: {
+        version: 1,
+        result: { kind: 'reactivated', activationKind: 'inbound_response', cycle },
+      },
       createdAt: parsed.activatedAt,
     });
     this.cycles.assertCurrentActionPostcondition(cycle.id);
@@ -1211,11 +1321,40 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       throw new LifecycleIdempotencyConflictError();
     }
     const result = reactivationReceiptResultSchema.parse(receipt.result);
-    const cycle = this.cycles.getById(result.result.cycleId);
-    if (cycle === null || cycle.id !== receipt.newCycleId) {
+    const cycle = result.result.cycle as SalesCycle;
+    if (cycle.id !== receipt.newCycleId) {
       throw new LifecycleEvidenceError('Reactivation receipt result is missing its cycle.');
     }
     return Object.freeze({ kind: 'reactivated', cycle });
+  }
+
+  private assertRuleActivationProof(
+    input: ReactivateFromRuleInput,
+    rule: ReactivationRule | null,
+  ): void {
+    if (rule === null || rule.ruleType !== input.ruleType) {
+      throw new LifecycleEligibilityError('Reactivation rule type does not match the command.');
+    }
+    if (input.trigger.kind === 'due') {
+      if (rule.matcher !== null || rule.dueAt !== input.trigger.dueAt
+        || input.activatedAt < input.trigger.dueAt) {
+        throw new LifecycleEligibilityError('Due-rule activation proof is missing or stale.');
+      }
+      return;
+    }
+    const expectedChannel = input.ruleType === 'new-frbo-listing' ? 'frbo' : 'registry';
+    const expectedMatcher = {
+      version: 1 as const, eventType: input.trigger.eventType, personWide: true as const,
+    };
+    const source = this.sources.getById(input.trigger.sourceEventId);
+    if (rule.dueAt !== null
+      || serializeCanonical(rule.matcher) !== serializeCanonical(expectedMatcher)
+      || input.trigger.sourceEventId !== input.entrySourceEventId
+      || source === null || source.personId !== input.personId
+      || (source.prospectId !== null && source.prospectId !== input.prospectId)
+      || source.channel !== expectedChannel || source.observedAt > input.activatedAt) {
+      throw new LifecycleEligibilityError('Event-rule activation requires matching owned trigger proof.');
+    }
   }
 
   private reactivationBlocker(input: {
@@ -1480,6 +1619,37 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     });
   }
 
+  private cancelPendingOutboundForPerson(
+    personId: string,
+    evidence: Activity,
+    completedAt: string,
+  ): readonly string[] {
+    const cancelledActionIds = this.actions.listPendingOutboundForPerson(personId)
+      .map((action) => {
+        this.actions.settleAction({
+          actionId: action.id, salesCycleId: action.salesCycleId,
+          expectedStatus: 'pending', expectedVersion: action.version,
+          ...expectedIntentAndSla(action), expectedCadence: action.cadence,
+          status: 'cancelled', completedAt,
+          completionActivityId: evidence.salesCycleId === action.salesCycleId ? evidence.id : null,
+          settlement: {
+            version: 1, outcome: 'opted_out', reason: 'person_wide_opt_out',
+            evidenceActivityId: evidence.id,
+            plannerTransition: {
+              definitionId: action.cadence.cadenceDefinitionId,
+              stepId: action.cadence.cadenceStepId,
+              componentId: action.cadence.cadenceComponentId,
+              outcome: 'opted_out',
+            },
+            cadence: action.cadence, workIntent: action.workIntent,
+            inboundSla: action.inboundSla,
+          },
+        });
+        return action.id;
+      });
+    return Object.freeze(cancelledActionIds);
+  }
+
   private validateOutcomeEvidence(
     cycle: SalesCycle,
     action: NextAction,
@@ -1669,12 +1839,9 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       throw new LifecycleEligibilityError('Cadence exhaustion requires at least one reactivation rule.');
     }
     for (const draft of drafts) {
-      this.reactivations.insertRule({
-        id: this.ids.next(), salesCycleId: input.cycle.id, ruleType: draft.ruleType,
-        dueAt: draft.dueAt,
-        matcher: draft.matcher === null ? null : { version: 1, ...draft.matcher },
-        version: draft.ruleVersion, createdAt: input.evaluationAt,
-      });
+      this.reactivations.insertRule(toRuleInsert(
+        this.ids.next(), input.cycle.id, draft, input.evaluationAt,
+      ));
     }
     const eventId = this.ids.next();
     const closed = this.cycles.closeProjection({
@@ -1921,10 +2088,38 @@ function isQualifyingContact(activity: Activity): boolean {
   if (activity.kind === 'voicemail') return activity.observedOutcome === 'voicemail_left';
   if (activity.kind === 'text' || activity.kind === 'email') {
     return activity.observedOutcome === 'accepted'
-      || activity.observedOutcome === 'delivered'
-      || activity.observedOutcome === 'sent';
+      || activity.observedOutcome === 'delivered';
   }
   return false;
+}
+
+function toRuleInsert(
+  id: string,
+  salesCycleId: string,
+  draft: ReactivationRuleDraft,
+  createdAt: string,
+): InsertReactivationRuleInput {
+  const common = { id, salesCycleId, version: draft.ruleVersion, createdAt };
+  if (draft.ruleType === 'seasonal:heating-oct1' || draft.ruleType === 'manual') {
+    if (draft.dueAt === null || draft.matcher !== null) {
+      throw new LifecycleEvidenceError('Due reactivation draft is malformed.');
+    }
+    return { ...common, ruleType: draft.ruleType, dueAt: draft.dueAt, matcher: null };
+  }
+  if (draft.dueAt !== null || draft.matcher === null
+    || draft.matcher.eventType !== draft.ruleType) {
+    throw new LifecycleEvidenceError('Event reactivation draft is malformed.');
+  }
+  if (draft.ruleType === 'new-frbo-listing') {
+    return {
+      ...common, ruleType: draft.ruleType, dueAt: null,
+      matcher: { version: 1, eventType: draft.ruleType, personWide: true },
+    };
+  }
+  return {
+    ...common, ruleType: draft.ruleType, dueAt: null,
+    matcher: { version: 1, eventType: draft.ruleType, personWide: true },
+  };
 }
 
 function parseConfirmWonInput(input: ConfirmWonInput): ConfirmWonInput {
