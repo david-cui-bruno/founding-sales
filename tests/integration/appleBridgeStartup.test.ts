@@ -65,7 +65,7 @@ function dependencies(
         getHealth: async () => ({ state: 'ok' }),
       };
     },
-    registerHealthIpc: () => {
+    registerApplicationIpc: () => {
       events.push('health-ipc:register');
       return () => events.push('health-ipc:unregister');
     },
@@ -229,7 +229,7 @@ describe('Apple bridge application lifecycle', () => {
       throw helperStopError;
     };
     const startupDependencies = dependencies(events, supervisor);
-    startupDependencies.registerHealthIpc = () => () => {
+    startupDependencies.registerApplicationIpc = () => () => {
       events.push('health-ipc:unregister');
       throw healthUnregisterError;
     };

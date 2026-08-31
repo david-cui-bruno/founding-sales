@@ -260,7 +260,7 @@ describe('main process startup', () => {
         events.push('health');
         return { getHealth: () => ({}) };
       },
-      registerHealthIpc: (provider) => {
+      registerApplicationIpc: (provider: HealthProvider) => {
         events.push('ipc');
         healthProvider = provider;
         return () => events.push('unregister');
@@ -333,7 +333,7 @@ describe('main process startup', () => {
         events.push('health');
         return { getHealth: () => ({}) };
       },
-      registerHealthIpc: () => {
+      registerApplicationIpc: () => {
         events.push('ipc');
         return () => events.push('unregister');
       },

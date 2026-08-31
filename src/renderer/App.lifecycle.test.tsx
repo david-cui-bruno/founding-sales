@@ -11,7 +11,10 @@ import {
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppHealth } from '../shared/healthContract';
-import type { AppleSpikePreloadApi } from '../shared/preload';
+import type {
+  AppleSpikePreloadApi,
+  CalliePreloadApi,
+} from '../shared/preload';
 import { App } from './App';
 
 const health: AppHealth = {
@@ -65,11 +68,51 @@ const disabledAppleSpike = (): AppleSpikePreloadApi => ({
   subscribeObservationEvidence: vi.fn(async (): Promise<() => void> => () => undefined),
 });
 
+/** Workflow APIs stay pending: bootstrap behavior must not depend on them. */
+const pendingWorkflowApis = () => {
+  const pending = vi.fn(() => new Promise<never>(() => undefined));
+  return {
+    leads: { list: pending, updateField: pending, bulkUpdate: pending },
+    leadDetail: {
+      get: pending,
+      beginOutbound: pending,
+      confirmTransition: pending,
+    },
+    today: {
+      get: pending,
+      complete: pending,
+      snooze: pending,
+      pin: pending,
+      logPastActivity: pending,
+    },
+    pipeline: { get: pending },
+    review: { list: pending, resolve: pending },
+    friday: {
+      getCurrent: pending,
+      getDrilldown: pending,
+      createJob: pending,
+      fillJob: pending,
+      cancelJob: pending,
+    },
+    imports: {
+      preview: pending,
+      remap: pending,
+      commit: pending,
+      status: pending,
+    },
+  };
+};
+
 const renderApp = (
   getHealth: () => Promise<AppHealth>,
   appleSpike: AppleSpikePreloadApi = disabledAppleSpike(),
 ) => {
-  window.callie = { health: { get: getHealth }, appleSpike };
+  window.callie = {
+    health: { get: getHealth },
+    ...pendingWorkflowApis(),
+    appleSpike,
+  } as unknown as CalliePreloadApi;
+  window.location.hash = '';
   return render(
     <StrictMode>
       <App />
@@ -83,7 +126,17 @@ afterEach(() => {
 });
 
 describe('App async lifecycle', () => {
-  it('renders the CLI-enabled Apple spike alongside foundation health', async () => {
+  it('renders the workflow shell with the Today route once health is ready', async () => {
+    renderApp(vi.fn(async () => health));
+
+    expect(await screen.findByRole('navigation', { name: 'Primary' })).not.toBeNull();
+    expect(
+      screen.getByRole('link', { name: 'Today' }).getAttribute('aria-current'),
+    ).toBe('page');
+    expect(screen.queryByText('Checking local foundation…')).toBeNull();
+  });
+
+  it('keeps foundation diagnostics and the Apple spike behind the Settings route', async () => {
     const appleSpike = disabledAppleSpike();
     appleSpike.getStatus = vi.fn(async () => ({
       enabled: true,
@@ -92,8 +145,13 @@ describe('App async lifecycle', () => {
 
     renderApp(vi.fn(async () => health), appleSpike);
 
+    await screen.findByRole('navigation', { name: 'Primary' });
+    fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+
     await screen.findByText('Encrypted SQLite ready');
-    expect(await screen.findByRole('region', { name: 'Apple feasibility spike' })).not.toBeNull();
+    expect(
+      await screen.findByRole('region', { name: 'Apple feasibility spike' }),
+    ).not.toBeNull();
   });
 
   it('ignores a stale failed request after the latest request is ready', async () => {
@@ -108,10 +166,10 @@ describe('App async lifecycle', () => {
     await waitFor(() => expect(getHealth).toHaveBeenCalledTimes(2));
 
     await act(async () => second.resolve(health));
-    await screen.findByText('Encrypted SQLite ready');
+    await screen.findByRole('navigation', { name: 'Primary' });
     await act(async () => first.reject(new Error('stale failure')));
 
-    expect(screen.getByText('Encrypted SQLite ready')).not.toBeNull();
+    expect(screen.getByRole('navigation', { name: 'Primary' })).not.toBeNull();
     expect(screen.queryByText('The local database could not be opened')).toBeNull();
   });
 
@@ -133,7 +191,7 @@ describe('App async lifecycle', () => {
     expect(screen.getByRole('alert').textContent).toContain(
       'The local database could not be opened',
     );
-    expect(screen.queryByText('Encrypted SQLite ready')).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
   });
 
   it('announces failure and ignores a retry that resolves after unmount', async () => {

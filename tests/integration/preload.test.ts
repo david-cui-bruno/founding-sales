@@ -10,7 +10,19 @@ vi.mock('electron', () => ({
   ipcRenderer: { invoke: electron.invoke },
 }));
 
-describe('preload health bridge', () => {
+type ExposedCallieApi = {
+  health: { get: () => Promise<unknown> };
+  leads: { list: (input: unknown) => Promise<unknown> };
+  leadDetail: Record<string, unknown>;
+  today: { get: () => Promise<unknown> };
+  pipeline: { get: () => Promise<unknown> };
+  review: Record<string, unknown>;
+  friday: Record<string, unknown>;
+  imports: Record<string, unknown>;
+  appleSpike: Record<string, unknown>;
+};
+
+describe('preload workflow bridge', () => {
   beforeEach(async () => {
     electron.exposeInMainWorld.mockReset();
     electron.invoke.mockReset();
@@ -18,15 +30,9 @@ describe('preload health bridge', () => {
     await import('../../src/preload');
   });
 
-  function exposedApi(): {
-    health: { get: () => Promise<unknown> };
-    appleSpike: Record<string, unknown>;
-  } {
+  function exposedApi(): ExposedCallieApi {
     const exposure = electron.exposeInMainWorld.mock.calls[0] as
-      | [string, {
-        health: { get: () => Promise<unknown> };
-        appleSpike: Record<string, unknown>;
-      }]
+      | [string, ExposedCallieApi]
       | undefined;
 
     if (exposure === undefined) {
@@ -37,33 +43,99 @@ describe('preload health bridge', () => {
     return exposure[1];
   }
 
-  it('keeps window.callie.health narrow and invokes only health:get without arguments', async () => {
-    const health = {
-      appVersion: '1.0.0',
-      schemaVersion: 2,
-      databasePath: '/tmp/callie.sqlite3',
-      databaseEncrypted: true,
-      cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
-      fts5Available: true,
-      pendingJobs: 0,
-      interruptedJobsRecovered: 0,
-      domainStatus: 'ready',
-      domainReady: true,
-      domainBlockingViolationCount: 0,
-      domainRepairableIssueCount: 0,
-      domainProjectionRefreshCandidateCount: 0,
-      pendingProjectionRebuilds: 0,
-      domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
-    };
+  const health = {
+    appVersion: '1.0.0',
+    schemaVersion: 2,
+    databasePath: '/tmp/callie.sqlite3',
+    databaseEncrypted: true,
+    cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
+    fts5Available: true,
+    pendingJobs: 0,
+    interruptedJobsRecovered: 0,
+    domainStatus: 'ready',
+    domainReady: true,
+    domainBlockingViolationCount: 0,
+    domainRepairableIssueCount: 0,
+    domainProjectionRefreshCandidateCount: 0,
+    pendingProjectionRebuilds: 0,
+    domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
+  };
+
+  it('exposes exactly the composed workflow APIs plus the Apple spike surface', () => {
+    const api = exposedApi();
+
+    expect(Object.keys(api).sort()).toEqual([
+      'appleSpike',
+      'friday',
+      'health',
+      'imports',
+      'leadDetail',
+      'leads',
+      'pipeline',
+      'review',
+      'today',
+    ]);
+    expect(Object.keys(api.health)).toEqual(['get']);
+    expect(Object.keys(api.leads).sort()).toEqual([
+      'bulkUpdate', 'list', 'updateField',
+    ]);
+    expect(Object.keys(api.leadDetail).sort()).toEqual([
+      'beginOutbound', 'confirmTransition', 'get',
+    ]);
+    expect(Object.keys(api.today).sort()).toEqual([
+      'complete', 'get', 'logPastActivity', 'pin', 'snooze',
+    ]);
+    expect(Object.keys(api.pipeline)).toEqual(['get']);
+    expect(Object.keys(api.review).sort()).toEqual(['list', 'resolve']);
+    expect(Object.keys(api.friday).sort()).toEqual([
+      'cancelJob', 'createJob', 'fillJob', 'getCurrent', 'getDrilldown',
+    ]);
+    expect(Object.keys(api.imports).sort()).toEqual([
+      'commit', 'preview', 'remap', 'status',
+    ]);
+  });
+
+  it('invokes only health:get without arguments for the health probe', async () => {
     electron.invoke.mockResolvedValue(health);
 
     const api = exposedApi();
-
-    expect(Object.keys(api)).toEqual(['health', 'appleSpike']);
-    expect(Object.keys(api.health)).toEqual(['get']);
     await expect(api.health.get()).resolves.toEqual(health);
     expect(electron.invoke).toHaveBeenCalledTimes(1);
     expect(electron.invoke).toHaveBeenCalledWith('health:get');
+  });
+
+  it('validates feature requests before invoking and uses the exact channel names', async () => {
+    electron.invoke.mockResolvedValue({
+      rows: [], nextCursor: null, total: 0, revision: 0,
+    });
+
+    const api = exposedApi();
+    const request = {
+      query: '',
+      stages: [] as string[],
+      priorities: [] as string[],
+      sort: 'priority',
+      cursor: null as string | null,
+      limit: 50,
+    };
+    await expect(api.leads.list(request)).resolves.toEqual({
+      rows: [], nextCursor: null, total: 0, revision: 0,
+    });
+    expect(electron.invoke).toHaveBeenCalledWith('leads:list', request);
+
+    await expect(
+      api.leads.list({ ...request, blended_score: true }),
+    ).rejects.toThrow();
+    expect(electron.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('invokes today:get and pipeline:get without arguments', async () => {
+    electron.invoke.mockResolvedValue({ stages: [], revision: 0 });
+    const api = exposedApi();
+    await expect(api.pipeline.get()).resolves.toEqual({
+      stages: [], revision: 0,
+    });
+    expect(electron.invoke).toHaveBeenCalledWith('pipeline:get');
   });
 
   it('rejects a malformed main-process response before exposing it to the renderer', async () => {
@@ -79,5 +151,16 @@ describe('preload health bridge', () => {
     });
 
     await expect(exposedApi().health.get()).rejects.toThrow();
+  });
+
+  it('rejects a malformed feature response before renderer exposure', async () => {
+    electron.invoke.mockResolvedValue({
+      rows: 'not-an-array', nextCursor: null, total: 0, revision: 0,
+    });
+    const api = exposedApi();
+    await expect(api.leads.list({
+      query: '', stages: [], priorities: [],
+      sort: 'priority', cursor: null, limit: 50,
+    })).rejects.toThrow();
   });
 });

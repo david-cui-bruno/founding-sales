@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
-import { appHealthSchema } from './shared/healthContract';
+import { createCallieApi } from './preload/createCallieApi';
 import {
   APPLE_SPIKE_IPC_CHANNELS,
   appleSpikeObservationEvidenceSchema,
@@ -133,10 +133,7 @@ const parseResult = <Action extends AppleSpikeAction['action']>(
 };
 
 contextBridge.exposeInMainWorld('callie', {
-  health: {
-    get: async () =>
-      appHealthSchema.parse(await ipcRenderer.invoke('health:get')),
-  },
+  ...createCallieApi(ipcRenderer),
   appleSpike: {
     getStatus: async () =>
       appleSpikeStatusSchema.parse(

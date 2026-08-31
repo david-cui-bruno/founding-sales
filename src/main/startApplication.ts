@@ -24,17 +24,14 @@ import {
   type FoundationRuntimeDependencies,
 } from './foundation/foundationRuntime';
 import { HealthService } from './health/healthService';
-import {
-  registerHealthIpc,
-  type HealthProvider,
-} from './health/registerHealthIpc';
+import { registerApplicationIpc } from './ipc/registerApplicationIpc';
 import { safeStorage } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
 
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
-  registerHealthIpc(
-    health: HealthProvider,
+  registerApplicationIpc(
+    runtime: FoundationRuntime,
     isTrustedRendererUrl?: (url: string) => boolean,
   ): () => void;
   createAppleBridgeSupervisor(
@@ -88,7 +85,7 @@ const defaultDependencies: ApplicationStartupDependencies = {
     ids: domainIds,
   }),
   createHealthService: (options) => new HealthService(options),
-  registerHealthIpc,
+  registerApplicationIpc,
   createAppleBridgeSupervisor: (options) => new AppleBridgeSupervisor(options),
   registerAppleSpikeIpc,
   closeDatabase,
@@ -110,7 +107,7 @@ export async function startApplication(
     },
     dependencies,
   );
-  let unregisterHealthIpc: (() => void) | undefined;
+  let unregisterApplicationIpc: (() => void) | undefined;
   let unregisterAppleSpikeIpc: (() => void) | undefined;
   let appleBridgeSupervisor: AppleBridgeSupervisorApi | undefined;
   let shutdownPromise: Promise<void> | undefined;
@@ -124,11 +121,11 @@ export async function startApplication(
       const cleanupErrors: unknown[] = [];
 
       try {
-        unregisterHealthIpc?.();
+        unregisterApplicationIpc?.();
       } catch (error) {
         cleanupErrors.push(error);
       } finally {
-        unregisterHealthIpc = undefined;
+        unregisterApplicationIpc = undefined;
       }
 
       try {
@@ -171,7 +168,7 @@ export async function startApplication(
     throwIfStartupCancelled(options.signal);
     await runtime.initialize();
     throwIfStartupCancelled(options.signal);
-    unregisterHealthIpc = dependencies.registerHealthIpc(
+    unregisterApplicationIpc = dependencies.registerApplicationIpc(
       runtime,
       options.isTrustedRendererUrl,
     );

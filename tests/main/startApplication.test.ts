@@ -69,7 +69,7 @@ describe('startApplication', () => {
         events.push(`health:${options.domainStartupReport.interruptedJobsRecovered}`);
         return { getHealth: () => health };
       },
-      registerHealthIpc: (provider) => {
+      registerApplicationIpc: (provider: HealthProvider) => {
         events.push('ipc');
         captureHealth?.(provider);
         return () => events.push('unregister');

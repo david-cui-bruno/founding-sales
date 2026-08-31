@@ -10,9 +10,16 @@ export const secureWebPreferences = (
   webSecurity: true,
 });
 
+export const founderWindowOptions = (preloadPath: string) => ({
+  width: 1440,
+  height: 900,
+  minWidth: 1050,
+  minHeight: 700,
+  titleBarStyle:
+    process.platform === 'darwin' ? ('hiddenInset' as const) : undefined,
+  backgroundColor: '#16191d',
+  webPreferences: secureWebPreferences(preloadPath),
+});
+
 export const createWindow = (preloadPath: string): BrowserWindow =>
-  new BrowserWindow({
-    width: 1200,
-    height: 800,
-    webPreferences: secureWebPreferences(preloadPath),
-  });
+  new BrowserWindow(founderWindowOptions(preloadPath));

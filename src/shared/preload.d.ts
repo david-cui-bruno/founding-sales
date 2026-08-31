@@ -1,4 +1,4 @@
-import type { AppHealth } from './healthContract';
+import type { CallieApi } from '../preload/createCallieApi';
 import type {
   AppleSpikeResultFor,
   AppleSpikeObservationEvidence,
@@ -23,12 +23,13 @@ export interface AppleSpikePreloadApi {
   ): Promise<() => void>;
 }
 
-export interface CalliePreloadApi {
-  health: {
-    get(): Promise<AppHealth>;
-  };
+/**
+ * The complete window bridge: the strict workflow API composed by
+ * `createCallieApi` plus the Apple feasibility spike surface.
+ */
+export type CalliePreloadApi = CallieApi & {
   appleSpike: AppleSpikePreloadApi;
-}
+};
 
 declare global {
   interface Window {

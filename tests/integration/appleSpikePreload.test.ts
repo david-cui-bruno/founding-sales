@@ -59,7 +59,10 @@ describe('preload Apple feasibility bridge', () => {
     });
     const api = exposedApi();
 
-    expect(Object.keys(api).sort()).toEqual(['appleSpike', 'health']);
+    expect(Object.keys(api).sort()).toEqual([
+      'appleSpike', 'friday', 'health', 'imports', 'leadDetail',
+      'leads', 'pipeline', 'review', 'today',
+    ]);
     expect(Object.keys(api.appleSpike)).toEqual([
       'getStatus',
       'probeCapabilities',
