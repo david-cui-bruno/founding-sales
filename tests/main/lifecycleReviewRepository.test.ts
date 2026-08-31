@@ -8,7 +8,7 @@ import {
   LifecycleReviewRepository,
   type InsertLifecycleReviewInput,
 } from '../../src/main/domain/lifecycle/lifecycleReviewRepository';
-import { LifecycleIdempotencyConflictError, StaleDomainWriteError } from '../../src/main/domain/support/domainErrors';
+import { LifecycleIdempotencyConflictError } from '../../src/main/domain/support/domainErrors';
 import { auditDomainInvariants } from '../../src/main/domain/lifecycle/invariantAudit';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
 import { DOMAIN_TIMESTAMP, insertClosedCycle, seedProspect } from '../fixtures/domainRows';
@@ -32,7 +32,7 @@ describe('LifecycleReviewRepository', () => {
     workspace?.cleanup();
   });
 
-  it('durably reuses identical blocked activation work and CAS-resolves it', async () => {
+  it('durably reuses identical blocked activation work and refuses resolution without a receipt', async () => {
     workspace = createTempDatabase();
     const key = createTestWorkspaceKey();
     database = openDatabase({ path: workspace.path, key });
@@ -110,15 +110,6 @@ describe('LifecycleReviewRepository', () => {
       } as never,
     }))).toThrow();
 
-    const resolved = unitOfWork.immediate(() => repository.resolve({
-      id: first.id, activationKey: first.activationKey, expectedVersion: 1,
-      resolution: {
-        version: 1, kind: 'reactivated', activationKind: 'inbound_response',
-        newCycleId, cadence: WARM_IDENTITY,
-      },
-      resolvedAt: RESOLVED,
-    }));
-    expect(resolved).toMatchObject({ status: 'resolved', version: 2, resolvedAt: RESOLVED });
     expect(() => unitOfWork.immediate(() => repository.resolve({
       id: first.id, activationKey: first.activationKey, expectedVersion: 1,
       resolution: {
@@ -126,14 +117,20 @@ describe('LifecycleReviewRepository', () => {
         newCycleId, cadence: WARM_IDENTITY,
       },
       resolvedAt: RESOLVED,
-    }))).toThrow(StaleDomainWriteError);
-    expect(() => database!.raw.prepare(`
+    }))).toThrow();
+    expect(repository.getByActivationKey(first.activationKey)).toMatchObject({
+      status: 'open', version: 1, resolution: null,
+    });
+    expect(auditDomainInvariants({ database: database!, asOf: DOMAIN_TIMESTAMP })).not.toContainEqual(
+      expect.objectContaining({ kind: 'lifecycle_review_invalid', recordId: first.id }),
+    );
+    database!.raw.prepare(`
       UPDATE lifecycle_review_items
-      SET status = 'open', resolution_json = NULL, resolved_at = NULL, version = 3
+      SET status = 'resolved', resolution_json = '{}', resolved_at = ?, version = 2
       WHERE id = 'review-item'
-    `).run()).toThrow();
-
-    expect(auditDomainInvariants({ database: database! })).not.toContainEqual(
+    `).run(RESOLVED);
+    expect(() => repository.getByActivationKey(first.activationKey)).toThrow();
+    expect(auditDomainInvariants({ database: database!, asOf: DOMAIN_TIMESTAMP })).toContainEqual(
       expect.objectContaining({ kind: 'lifecycle_review_invalid', recordId: first.id }),
     );
     database.raw.exec('DROP TRIGGER protect_lifecycle_review_item_identity');
@@ -141,7 +138,7 @@ describe('LifecycleReviewRepository', () => {
       UPDATE lifecycle_review_items SET payload_json = ? WHERE id = 'review-item'
     `).run(JSON.stringify({ ...input.payload, extra: true }));
     expect(() => repository.getByActivationKey(first.activationKey)).toThrow();
-    expect(auditDomainInvariants({ database: database! })).toContainEqual(
+    expect(auditDomainInvariants({ database: database!, asOf: DOMAIN_TIMESTAMP })).toContainEqual(
       expect.objectContaining({ kind: 'lifecycle_review_invalid', recordId: first.id }),
     );
   });

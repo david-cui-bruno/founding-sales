@@ -120,6 +120,17 @@ describe('authoritative next-action persistence', () => {
         expectedWorkflowStatus: 'active', expectedCurrentActionId: 'action',
         nextActionId: 'replacement', updatedAt: RESCHEDULED,
       });
+      expect(() => database!.raw.prepare(`
+        UPDATE next_actions
+        SET status = 'completed', completed_at = ?, settlement_json = ?,
+          due_at = '2026-09-01T12:00:00.000Z'
+        WHERE id = 'action'
+      `).run(RESCHEDULED, JSON.stringify({
+        version: 1, outcome: 'completed', reason: null, evidenceActivityId: null,
+        plannerTransition: {
+          definitionId: null, stepId: null, componentId: null, outcome: 'completed',
+        }, cadence: NO_CADENCE, workIntent: 'inbound_response', inboundSla,
+      }))).toThrow();
       actions.settleAction({
         actionId: 'action', salesCycleId: 'cycle', expectedStatus: 'pending',
         expectedVersion: 2, expectedWorkIntent: 'inbound_response',

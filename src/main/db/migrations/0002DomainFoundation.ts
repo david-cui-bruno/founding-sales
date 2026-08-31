@@ -937,7 +937,7 @@ const domainStatements = [
   `CREATE TRIGGER protect_settled_next_action_schedule
     BEFORE UPDATE OF due_at, timezone, allowed_window, sla_due_at, created_at
       ON next_actions
-    WHEN OLD.status <> 'pending'
+    WHEN (OLD.status <> 'pending' OR NEW.status <> 'pending')
       AND (
         NEW.due_at IS NOT OLD.due_at
         OR NEW.timezone IS NOT OLD.timezone

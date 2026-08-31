@@ -56,15 +56,44 @@ describe('ReactivationRepository', () => {
     unitOfWork.immediate(() => cadences.installBuiltins());
     const prospect = seedProspect(database.raw, 'reactivation');
     const sourceCycleId = insertClosedCycle({ database: database.raw, prefix: 'source', prospect });
-    const newCycleId = insertClosedCycle({ database: database.raw, prefix: 'new', prospect });
-    database.raw.prepare(`
-      INSERT INTO cadence_enrollments (
-        id, sales_cycle_id, cadence_definition_id, status, anchor_at,
-        current_step_id, scheduled_step_count, mode, allowed_step_ids_json,
-        version, stop_reason, created_at, updated_at
-      ) VALUES ('receipt-enrollment', ?, ?, 'completed', ?, NULL, 0,
-        'standard', NULL, 1, 'fixture', ?, ?)
-    `).run(newCycleId, COLD_CADENCE.id, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    const newCycleId = 'new-cycle';
+    database.raw.exec('BEGIN IMMEDIATE');
+    try {
+      database.raw.prepare(`
+        INSERT INTO sales_cycles (
+          id, person_id, prospect_id, entry_source_event_id, stage, workflow_status,
+          current_next_action_id, stage_entered_at, version, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'ready', 'active', 'receipt-action', ?, 1, ?, ?)
+      `).run(newCycleId, prospect.personId, prospect.prospectId, prospect.sourceEventId,
+        OCTOBER, OCTOBER, OCTOBER);
+      database.raw.prepare(`
+        INSERT INTO cadence_enrollments (
+          id, sales_cycle_id, cadence_definition_id, status, anchor_at,
+          current_step_id, scheduled_step_count, mode, allowed_step_ids_json,
+          version, stop_reason, created_at, updated_at
+        ) VALUES ('receipt-enrollment', ?, ?, 'active', ?,
+          'cadence-b-v1-day-0', 1, 'standard', NULL, 1, NULL, ?, ?)
+      `).run(newCycleId, COLD_CADENCE.id, OCTOBER, OCTOBER, OCTOBER);
+      database.raw.prepare(`
+        INSERT INTO next_actions (
+          id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+          work_intent, cadence_enrollment_id, cadence_step_id, cadence_component_id,
+          created_at, updated_at
+        ) VALUES ('receipt-action', ?, 'call', 'call', 'pending', ?,
+          'America/New_York', 'discretionary_prospecting', 'receipt-enrollment',
+          'cadence-b-v1-day-0', 'cadence-b-v1-day-0-call', ?, ?)
+      `).run(newCycleId, OCTOBER, OCTOBER, OCTOBER);
+      database.raw.prepare(`
+        INSERT INTO stage_events (
+          id, sales_cycle_id, from_stage, to_stage, effective_at, confirmed_at,
+          confirmation_kind, transition_sequence, created_at
+        ) VALUES ('receipt-stage', ?, NULL, 'ready', ?, ?, 'mechanical', 1, ?)
+      `).run(newCycleId, OCTOBER, OCTOBER, DOMAIN_TIMESTAMP);
+      database.raw.exec('COMMIT');
+    } catch (error) {
+      if (database.raw.inTransaction) database.raw.exec('ROLLBACK');
+      throw error;
+    }
     const cycles = new SalesCycleRepository({ database, unitOfWork });
     return {
       personId: prospect.personId, prospectId: prospect.prospectId,
@@ -127,6 +156,10 @@ describe('ReactivationRepository', () => {
     unitOfWork.immediate(() => repository.insertRule({
       id: 'rule', salesCycleId: sourceCycleId, ruleType: 'manual',
       dueAt: OCTOBER, matcher: null, version: 1, createdAt: DOMAIN_TIMESTAMP,
+    }));
+    unitOfWork.immediate(() => repository.consumeRule({
+      ruleId: 'rule', salesCycleId: sourceCycleId,
+      expectedVersion: 1, consumedAt: OCTOBER,
     }));
     const input: InsertReactivationReceiptInput = {
       activationKey: 'rule:rule', activationKind: 'rule' as const,
@@ -199,6 +232,10 @@ describe('ReactivationRepository', () => {
       id: 'strict-rule', salesCycleId: sourceCycleId, ruleType: 'manual',
       dueAt: OCTOBER, matcher: null, version: 1, createdAt: DOMAIN_TIMESTAMP,
     }));
+    unitOfWork.immediate(() => repository.consumeRule({
+      ruleId: 'strict-rule', salesCycleId: sourceCycleId,
+      expectedVersion: 1, consumedAt: OCTOBER,
+    }));
     const valid: InsertReactivationReceiptInput = {
       activationKey: 'rule:strict-rule', activationKind: 'rule', personId,
       sourceCycleId, reactivationRuleId: 'strict-rule', sourceEventId: null,
@@ -229,7 +266,7 @@ describe('ReactivationRepository', () => {
     }))).toThrow();
 
     unitOfWork.immediate(() => repository.insertOrGetReceipt(valid));
-    expect(auditDomainInvariants({ database: database! })).not.toContainEqual(
+    expect(auditDomainInvariants({ database: database!, asOf: OCTOBER })).not.toContainEqual(
       expect.objectContaining({ kind: 'reactivation_receipt_invalid', recordId: valid.activationKey }),
     );
     database!.raw.exec(`DROP TRIGGER immutable_cycle_reactivation_receipts`);
@@ -239,7 +276,7 @@ describe('ReactivationRepository', () => {
       version: 1, command: { ...valid.command.command, extra: true },
     }), valid.activationKey);
     expect(() => repository.getReceipt(valid.activationKey)).toThrow();
-    expect(auditDomainInvariants({ database: database! })).toContainEqual(
+    expect(auditDomainInvariants({ database: database!, asOf: OCTOBER })).toContainEqual(
       expect.objectContaining({ kind: 'reactivation_receipt_invalid', recordId: valid.activationKey }),
     );
   });

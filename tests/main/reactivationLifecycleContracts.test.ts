@@ -8,6 +8,7 @@ import { FOUNDER_CHANNEL_POLICIES_V1 } from '../../src/main/domain/cadence/caden
 import { EventRepository } from '../../src/main/domain/events/eventRepository';
 import { IdentityRepository } from '../../src/main/domain/identity/identityRepository';
 import { LifecycleService } from '../../src/main/domain/lifecycle/lifecycleService';
+import { auditDomainInvariants } from '../../src/main/domain/lifecycle/invariantAudit';
 import { ReactivationRepository } from '../../src/main/domain/lifecycle/reactivationRepository';
 import { SourceRepository } from '../../src/main/domain/source/sourceRepository';
 import { LifecycleIdempotencyConflictError } from '../../src/main/domain/support/domainErrors';
@@ -17,6 +18,7 @@ import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '.
 
 const BEFORE_DOMAIN = '2026-08-30T11:59:59.000Z';
 const OCTOBER = '2026-10-01T13:00:00.000Z';
+const AFTER_DOMAIN = '2026-08-30T12:00:01.000Z';
 const REACTIVATION_FAULTS = [
   'cycle_insert', 'enrollment_insert', 'action_insert',
   'stage_event_insert', 'rule_consume', 'receipt_insert',
@@ -122,6 +124,13 @@ describe('reactivation lifecycle contracts', () => {
       UPDATE prospects SET segment = 'hot_frbo', version = version + 1 WHERE id = ?
     `).run(prospect.prospectId);
     expect(harness.service.reactivateFromRule(command as never)).toEqual(result);
+    harness.database.raw.prepare(`
+      UPDATE sales_cycles SET version = version + 1, updated_at = ? WHERE id = ?
+    `).run(AFTER_DOMAIN, 'typed-event-cycle');
+    expect(harness.reactivations.getReceipt('rule:event-rule')).toMatchObject({
+      newCycleId: 'typed-event-cycle',
+      result: { result: { cycle: { version: 1, stage: 'ready' } } },
+    });
     const wrongCadence = BUILTIN_CADENCES.find(({ family }) => family === 'cadence_a')!;
     expect(() => harness.service.reactivateFromRule({
       ...command,
@@ -130,6 +139,16 @@ describe('reactivation lifecycle contracts', () => {
         version: wrongCadence.version, contentHash: wrongCadence.contentHash,
       },
     } as never)).toThrow(LifecycleIdempotencyConflictError);
+    harness.database.raw.exec('DROP TRIGGER immutable_source_events');
+    harness.database.raw.prepare(`
+      UPDATE source_events SET observed_at = ? WHERE id = 'typed-frbo'
+    `).run(BEFORE_DOMAIN);
+    expect(() => harness.reactivations.getReceipt('rule:event-rule')).toThrow();
+    expect(auditDomainInvariants({ database: harness.database, asOf: OCTOBER })).toContainEqual(
+      expect.objectContaining({
+        kind: 'reactivation_receipt_invalid', recordId: 'rule:event-rule',
+      }),
+    );
   });
 
   it('discriminates exact owned inbound evidence from an unknown normalized handle Review', async () => {
@@ -187,6 +206,215 @@ describe('reactivation lifecycle contracts', () => {
     expect(harness.service.reactivateFromInboundResponse(ownedCommand as never)).toMatchObject({
       kind: 'reactivated', cycle: { id: 'owned-inbound-cycle', stage: 'contacted' },
     });
+  });
+
+  it('rejects noncanonical and already-known handles before creating an unknown-handle Review', async () => {
+    const harness = await setup(['must-not-allocate']);
+    const prospect = seedProspect(harness.database.raw, 'canonical-unknown');
+    const sourceCycleId = insertClosedCycle({
+      database: harness.database.raw, prefix: 'canonical-unknown-source', prospect,
+    });
+    const cadence = BUILTIN_CADENCES.find(({ family }) => family === 'cadence_c')!;
+    const common = {
+      personId: prospect.personId, prospectId: prospect.prospectId,
+      sourceCycleId, newCycleId: 'canonical-unknown-cycle',
+      activatedAt: DOMAIN_TIMESTAMP,
+      cadence: {
+        definitionId: cadence.id, family: 'cadence_c',
+        version: cadence.version, contentHash: cadence.contentHash,
+      },
+    } as const;
+
+    expect(() => harness.service.reactivateFromInboundResponse({
+      ...common,
+      evidence: {
+        kind: 'unknown_handle', handleKind: 'phone', normalizedValue: '(401) 555-0100',
+      },
+    } as never)).toThrow();
+    expect(() => harness.service.reactivateFromInboundResponse({
+      ...common,
+      evidence: {
+        kind: 'unknown_handle', handleKind: 'email', normalizedValue: ' KEVIN@EXAMPLE.COM ',
+      },
+    } as never)).toThrow();
+
+    harness.database.raw.prepare(`
+      INSERT INTO person_contact_methods (
+        id, person_id, kind, normalized_value, raw_value, validation_state,
+        reachability, is_primary, in_contacts, created_at, updated_at
+      ) VALUES ('known-handle', ?, 'phone', '+14015550100', NULL, 'valid',
+        'direct', 1, 0, ?, ?)
+    `).run(prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    expect(() => harness.service.reactivateFromInboundResponse({
+      ...common,
+      evidence: {
+        kind: 'unknown_handle', handleKind: 'phone', normalizedValue: '+14015550100',
+      },
+    } as never)).toThrow();
+    expect(harness.database.raw.prepare(`SELECT id FROM lifecycle_review_items`).all()).toEqual([]);
+  });
+
+  it('requires inbound SourceEvent observation no later than activation', async () => {
+    const harness = await setup(['must-not-enroll']);
+    const prospect = seedProspect(harness.database.raw, 'future-inbound');
+    const sourceCycleId = insertClosedCycle({
+      database: harness.database.raw, prefix: 'future-inbound-source', prospect,
+    });
+    harness.unitOfWork.immediate(() => harness.sources.append({
+      id: 'future-inbound-event', personId: prospect.personId,
+      prospectId: prospect.prospectId, channel: 'inbound_demo',
+      observedAt: AFTER_DOMAIN, sourceRecord: { message: 'DEMO' },
+    }));
+    const cadence = BUILTIN_CADENCES.find(({ family }) => family === 'cadence_c')!;
+
+    expect(() => harness.service.reactivateFromInboundResponse({
+      evidence: {
+        kind: 'source_event', sourceEventId: 'future-inbound-event', channel: 'inbound_demo',
+      },
+      personId: prospect.personId, prospectId: prospect.prospectId,
+      sourceCycleId, newCycleId: 'future-inbound-cycle', activatedAt: DOMAIN_TIMESTAMP,
+      cadence: {
+        definitionId: cadence.id, family: 'cadence_c',
+        version: cadence.version, contentHash: cadence.contentHash,
+      },
+    })).toThrow();
+    expect(harness.database.raw.prepare(`
+      SELECT id FROM sales_cycles WHERE id = 'future-inbound-cycle'
+    `).get()).toBeUndefined();
+  });
+
+  it('atomically resolves a cleared blocked Review against its committed receipt', async () => {
+    const harness = await setup([
+      'blocked-review', 'unblocked-enrollment', 'unblocked-action', 'unblocked-stage',
+    ]);
+    const prospect = seedProspect(harness.database.raw, 'unblocked-rule');
+    const sourceCycleId = insertClosedCycle({
+      database: harness.database.raw, prefix: 'unblocked-rule-source', prospect,
+    });
+    harness.database.raw.prepare(`
+      UPDATE prospects SET qualification_state = 'disqualified',
+        qualification_reason = 'fixture', version = 2 WHERE id = ?
+    `).run(prospect.prospectId);
+    harness.unitOfWork.immediate(() => harness.reactivations.insertRule({
+      id: 'unblocked-rule', salesCycleId: sourceCycleId, ruleType: 'manual',
+      dueAt: DOMAIN_TIMESTAMP, matcher: null, version: 1, createdAt: BEFORE_DOMAIN,
+    }));
+    const cadence = BUILTIN_CADENCES.find(({ family }) => family === 'cadence_c')!;
+    const command = {
+      ruleId: 'unblocked-rule', expectedRuleVersion: 1,
+      personId: prospect.personId, prospectId: prospect.prospectId,
+      sourceCycleId, entrySourceEventId: prospect.sourceEventId,
+      newCycleId: 'unblocked-cycle', activatedAt: DOMAIN_TIMESTAMP,
+      ruleType: 'manual', trigger: { kind: 'due', dueAt: DOMAIN_TIMESTAMP },
+      cadence: {
+        definitionId: cadence.id, family: 'cadence_c',
+        version: cadence.version, contentHash: cadence.contentHash,
+      },
+    } as const;
+    expect(harness.service.reactivateFromRule(command)).toMatchObject({
+      kind: 'review_required', reviewItem: { id: 'blocked-review', status: 'open' },
+    });
+    harness.database.raw.prepare(`
+      UPDATE prospects SET qualification_state = 'eligible',
+        qualification_reason = NULL, version = 3 WHERE id = ?
+    `).run(prospect.prospectId);
+
+    expect(harness.service.reactivateFromRule(command)).toMatchObject({
+      kind: 'reactivated', cycle: { id: 'unblocked-cycle', stage: 'ready' },
+    });
+    expect(harness.database.raw.prepare(`
+      SELECT status, version FROM lifecycle_review_items WHERE id = 'blocked-review'
+    `).get()).toEqual({ status: 'resolved', version: 2 });
+    expect(harness.database.raw.prepare(`
+      SELECT activation_key FROM cycle_reactivation_receipts WHERE activation_key = 'rule:unblocked-rule'
+    `).get()).toEqual({ activation_key: 'rule:unblocked-rule' });
+  });
+
+  it('CAS-promotes an unknown-handle Review through durable SourceEvent evidence and exactly replays', async () => {
+    const harness = await setup([
+      'unknown-review', 'promoted-enrollment', 'promoted-action', 'promoted-stage-event',
+    ]);
+    const prospect = seedProspect(harness.database.raw, 'promote-inbound');
+    const sourceCycleId = insertClosedCycle({
+      database: harness.database.raw, prefix: 'promote-inbound-source', prospect,
+    });
+    const cadence = BUILTIN_CADENCES.find(({ family }) => family === 'cadence_c')!;
+    const cadenceIdentity = {
+      definitionId: cadence.id, family: 'cadence_c' as const,
+      version: cadence.version, contentHash: cadence.contentHash,
+    } as const;
+    const unknownCommand = {
+      evidence: {
+        kind: 'unknown_handle', handleKind: 'phone', normalizedValue: '+14015550100',
+      },
+      personId: prospect.personId, prospectId: prospect.prospectId,
+      sourceCycleId, newCycleId: 'promoted-cycle',
+      activatedAt: DOMAIN_TIMESTAMP, cadence: cadenceIdentity,
+    } as const;
+    const review = harness.service.reactivateFromInboundResponse(unknownCommand);
+    expect(review).toMatchObject({
+      kind: 'review_required', reviewItem: { id: 'unknown-review', version: 1, status: 'open' },
+    });
+    harness.unitOfWork.immediate(() => harness.sources.append({
+      id: 'promoted-source-event', personId: prospect.personId,
+      prospectId: prospect.prospectId, channel: 'inbound_demo',
+      observedAt: DOMAIN_TIMESTAMP, sourceRecord: { message: 'DEMO from +14015550100' },
+    }));
+    const promotion = {
+      reviewId: 'unknown-review',
+      activationKey: 'inbound-handle:phone:+14015550100',
+      expectedReviewVersion: 1,
+      sourceEventId: 'promoted-source-event', channel: 'inbound_demo',
+      activatedAt: AFTER_DOMAIN, cadence: cadenceIdentity,
+    } as const;
+
+    const result = harness.service.promoteUnknownInboundReview(promotion);
+    expect(result).toMatchObject({
+      kind: 'reactivated', cycle: { id: 'promoted-cycle', stage: 'contacted' },
+    });
+    expect(harness.database.raw.prepare(`
+      SELECT activation_key, source_event_id, new_cycle_id
+      FROM cycle_reactivation_receipts WHERE activation_key = 'inbound:promoted-source-event'
+    `).get()).toEqual({
+      activation_key: 'inbound:promoted-source-event',
+      source_event_id: 'promoted-source-event',
+      new_cycle_id: 'promoted-cycle',
+    });
+    expect(harness.database.raw.prepare(`
+      SELECT status, version, source_event_id, resolution_json
+      FROM lifecycle_review_items WHERE id = 'unknown-review'
+    `).get()).toMatchObject({
+      status: 'resolved', version: 2, source_event_id: null,
+      resolution_json: expect.stringContaining('promoted-source-event'),
+    });
+    expect(harness.service.promoteUnknownInboundReview(promotion)).toEqual(result);
+    expect(harness.service.reactivateFromInboundResponse({
+      evidence: {
+        kind: 'source_event', sourceEventId: 'promoted-source-event', channel: 'inbound_demo',
+      },
+      personId: prospect.personId, prospectId: prospect.prospectId,
+      sourceCycleId, newCycleId: 'promoted-cycle',
+      activatedAt: AFTER_DOMAIN, cadence: cadenceIdentity,
+    })).toEqual(result);
+    expect(() => harness.service.promoteUnknownInboundReview({
+      ...promotion, expectedReviewVersion: 2, activatedAt: OCTOBER,
+    })).toThrow(LifecycleIdempotencyConflictError);
+
+    harness.database.raw.prepare(`
+      UPDATE sales_cycles SET version = version + 1, updated_at = ? WHERE id = 'promoted-cycle'
+    `).run(OCTOBER);
+    expect(harness.service.promoteUnknownInboundReview(promotion)).toEqual(result);
+    harness.database.raw.exec('DROP TRIGGER immutable_stage_events_delete');
+    harness.database.raw.prepare(`
+      DELETE FROM stage_events WHERE sales_cycle_id = 'promoted-cycle' AND transition_sequence = 1
+    `).run();
+    expect(() => harness.service.promoteUnknownInboundReview(promotion)).toThrow();
+    expect(auditDomainInvariants({ database: harness.database, asOf: OCTOBER })).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'reactivation_receipt_invalid', recordId: 'inbound:promoted-source-event',
+      }),
+      expect.objectContaining({ kind: 'lifecycle_review_invalid', recordId: 'unknown-review' }),
+    ]));
   });
 
   it.each(REACTIVATION_FAULTS)(

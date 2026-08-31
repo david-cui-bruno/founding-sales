@@ -20,6 +20,10 @@ import {
   type ReactivationResultEnvelope,
 } from './reactivationContracts';
 import {
+  collectReceiptEvidenceViolations,
+  type ReactivationReceiptEvidence,
+} from './reactivationEvidenceValidator';
+import {
   idSchema,
   parseCanonicalJson,
   serializeCanonical,
@@ -317,6 +321,14 @@ function assertReceiptRelations(
   database: AppDatabase,
   receipt: z.infer<typeof receiptInputSchema>,
 ): void {
+  const evidenceViolations = collectReceiptEvidenceViolations(
+    database, receipt as ReactivationReceiptEvidence,
+  );
+  if (evidenceViolations.length > 0) {
+    throw new LifecycleEvidenceError(
+      `Reactivation receipt relational evidence is invalid: ${evidenceViolations.join('; ')}`,
+    );
+  }
   const command = receipt.command.command;
   const result = receipt.result.result;
   const sourceCycle = database.raw.prepare(`

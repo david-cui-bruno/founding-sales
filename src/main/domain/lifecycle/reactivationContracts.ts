@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { cadenceFamilySchema } from '../cadence/cadenceTypes';
+import { normalizeEmail, normalizePhone } from '../source/sourceService';
 import { idSchema, utcTimestampSchema } from './lifecycleValidation';
 
 export const reactivationCadenceIdentitySchema = z.object({
@@ -63,13 +64,40 @@ export const inboundEvidenceSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('unknown_handle'), handleKind: z.enum(['phone', 'email']),
     normalizedValue: z.string().trim().min(1),
-  }).strict(),
+  }).strict().superRefine((value, context) => {
+    try {
+      const canonical = value.handleKind === 'phone'
+        ? normalizePhone(value.normalizedValue)
+        : normalizeEmail(value.normalizedValue);
+      if (canonical !== value.normalizedValue) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Unknown inbound handles must already use canonical normalization.',
+        });
+      }
+    } catch {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Unknown inbound handle is not valid canonical contact evidence.',
+      });
+    }
+  }),
 ]);
 
 export const reactivationInboundCommandSchema = z.object({
   ...commonCommand,
   cadence: reactivationCadenceIdentitySchema.extend({ family: z.literal('cadence_c') }).strict(),
   evidence: inboundEvidenceSchema,
+}).strict();
+
+export const promoteUnknownInboundReviewCommandSchema = z.object({
+  reviewId: idSchema,
+  activationKey: z.string().trim().min(1),
+  expectedReviewVersion: z.number().int().safe().positive(),
+  sourceEventId: idSchema,
+  channel: z.enum(['inbound_demo', 'referral', 'rireig', 'community']),
+  activatedAt: utcTimestampSchema,
+  cadence: reactivationCadenceIdentitySchema.extend({ family: z.literal('cadence_c') }).strict(),
 }).strict();
 
 export const reactivationCommandSchema = z.union([
@@ -132,17 +160,30 @@ export const reactivationReviewPayloadSchema = z.object({
   }
 });
 
-export const reactivationReviewResolutionSchema = z.object({
-  version: z.literal(1),
-  kind: z.literal('reactivated'),
-  activationKind: z.enum(['rule', 'inbound_response']),
-  newCycleId: idSchema,
-  cadence: reactivationCadenceIdentitySchema,
-}).strict();
+export const reactivationReviewResolutionSchema = z.discriminatedUnion('kind', [
+  z.object({
+    version: z.literal(1),
+    kind: z.literal('reactivated'),
+    activationKind: z.enum(['rule', 'inbound_response']),
+    newCycleId: idSchema,
+    cadence: reactivationCadenceIdentitySchema,
+  }).strict(),
+  z.object({
+    version: z.literal(1),
+    kind: z.literal('promoted_unknown_inbound'),
+    activationKind: z.literal('inbound_response'),
+    sourceEventId: idSchema,
+    newCycleId: idSchema,
+    cadence: reactivationCadenceIdentitySchema.extend({ family: z.literal('cadence_c') }).strict(),
+  }).strict(),
+]);
 
 export type ReactivationCadenceIdentity = z.infer<typeof reactivationCadenceIdentitySchema>;
 export type ReactivateFromRuleCommand = z.infer<typeof reactivationRuleCommandSchema>;
 export type ReactivateFromInboundCommand = z.infer<typeof reactivationInboundCommandSchema>;
+export type PromoteUnknownInboundReviewCommand = z.infer<
+  typeof promoteUnknownInboundReviewCommandSchema
+>;
 export type ReactivationCommandEnvelope = z.infer<typeof reactivationCommandEnvelopeSchema>;
 export type ReactivationResultEnvelope = z.infer<typeof reactivationResultEnvelopeSchema>;
 export type ReactivationReviewPayload = z.infer<typeof reactivationReviewPayloadSchema>;

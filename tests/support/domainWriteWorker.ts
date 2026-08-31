@@ -54,6 +54,22 @@ export function spawnSqlTransactionWorker(input: SqlTransactionWorkerInput): Chi
   });
 }
 
+export type LifecycleCommandWorkerInput = Readonly<{
+  databasePath: string;
+  keyHex: string;
+  readyPath: string;
+  ids: readonly string[];
+  timestamp: string;
+  command: Readonly<Record<string, unknown>>;
+}>;
+
+export function spawnLifecycleCommandWorker(input: LifecycleCommandWorkerInput): ChildProcess {
+  return spawn(process.execPath, [
+    'node_modules/vite-node/vite-node.mjs', '--script',
+    'tests/support/lifecycleCommandContender.ts', JSON.stringify(input),
+  ], { stdio: ['ignore', 'ignore', 'pipe'] });
+}
+
 const contenderSource = String.raw`
 const { writeFileSync } = require('node:fs');
 const Database = require('better-sqlite3-multiple-ciphers');

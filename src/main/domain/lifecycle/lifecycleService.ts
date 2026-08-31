@@ -14,6 +14,7 @@ import {
   type LifecycleCommands,
   type LifecycleTransactionCommands,
   type LifecycleWriterDependencies,
+  type PromoteUnknownInboundReviewInput,
   type RecordContactInput,
   type ReactivateFromInboundInput,
   type ReactivateFromRuleInput,
@@ -83,6 +84,9 @@ export class LifecycleService implements LifecycleCommands {
   }
   reactivateFromInboundResponse(input: ReactivateFromInboundInput): ReactivationResult {
     return this.unitOfWork.immediate(() => this.writer.reactivateFromInboundResponse(input));
+  }
+  promoteUnknownInboundReview(input: PromoteUnknownInboundReviewInput): ReactivationResult {
+    return this.unitOfWork.immediate(() => this.writer.promoteUnknownInboundReview(input));
   }
   setDesignPartnerFitness(input: SetDesignPartnerFitnessInput): SalesCycle {
     return this.unitOfWork.immediate(() => this.writer.setDesignPartnerFitness(input));

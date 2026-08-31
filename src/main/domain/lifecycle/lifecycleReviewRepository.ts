@@ -15,6 +15,7 @@ import {
   type ReactivationReviewPayload,
   type ReactivationReviewResolution,
 } from './reactivationContracts';
+import { collectReviewEvidenceViolations } from './reactivationEvidenceValidator';
 import {
   idSchema,
   nonblankSchema,
@@ -76,7 +77,10 @@ export class LifecycleReviewRepository {
       sourceEventId: idSchema.nullable(), reason: nonblankSchema,
       payload: reactivationReviewPayloadSchema, createdAt: utcTimestampSchema,
     }).strict().parse(input) as InsertLifecycleReviewInput;
-    assertReviewRelations(this.database, { ...parsed, resolution: null });
+    assertReviewRelations(this.database, {
+      ...parsed, status: 'open', resolution: null, resolvedAt: null,
+      version: 1, updatedAt: parsed.createdAt,
+    });
     const existing = this.getByActivationKey(parsed.activationKey);
     if (existing !== null) {
       if (
@@ -121,15 +125,6 @@ export class LifecycleReviewRepository {
     }).strict().parse(input);
     const existing = this.getByActivationKey(parsed.activationKey);
     if (existing === null || existing.id !== parsed.id) throw new StaleDomainWriteError();
-    assertReviewRelations(this.database, {
-      id: existing.id, activationKey: existing.activationKey,
-      personId: existing.personId, prospectId: existing.prospectId,
-      sourceCycleId: existing.sourceCycleId,
-      reactivationRuleId: existing.reactivationRuleId,
-      sourceEventId: existing.sourceEventId, reason: existing.reason,
-      payload: existing.payload, createdAt: existing.createdAt,
-      resolution: parsed.resolution,
-    });
     const row = this.database.raw.prepare(`
       UPDATE lifecycle_review_items
       SET status = 'resolved', resolution_json = ?, resolved_at = ?,
@@ -174,12 +169,20 @@ function parseReview(value: unknown, database: AppDatabase): LifecycleReviewItem
 function assertReviewRelations(
   database: AppDatabase,
   review: Readonly<{
-    id: string; activationKey: string; personId: string; prospectId: string;
+    id: string; activationKey: string; status: 'open' | 'resolved';
+    personId: string; prospectId: string;
     sourceCycleId: string; reactivationRuleId: string | null; sourceEventId: string | null;
     reason: string; payload: ReactivationReviewPayload;
-    resolution: ReactivationReviewResolution | null; createdAt: string;
+    resolution: ReactivationReviewResolution | null; resolvedAt: string | null;
+    version: number; createdAt: string; updatedAt: string;
   }>,
 ): void {
+  const evidenceViolations = collectReviewEvidenceViolations(database, review);
+  if (evidenceViolations.length > 0) {
+    throw new LifecycleEvidenceError(
+      `Lifecycle Review relational evidence is invalid: ${evidenceViolations.join('; ')}`,
+    );
+  }
   const command = review.payload.command;
   const sourceCycle = database.raw.prepare(`
     SELECT person_id, prospect_id, workflow_status FROM sales_cycles WHERE id = ?
@@ -235,11 +238,33 @@ function assertReviewRelations(
       WHERE sales_cycle_id = ? AND cadence_definition_id = ?
     `).get(review.resolution.newCycleId, command.cadence.definitionId);
     const expectedKind = 'ruleType' in command ? 'rule' : 'inbound_response';
+    const unknownCommand = 'evidence' in command && command.evidence.kind === 'unknown_handle';
+    const promotedSourceId = review.resolution.kind === 'promoted_unknown_inbound'
+      ? review.resolution.sourceEventId : null;
+    const promotedSource = promotedSourceId === null ? undefined : database.raw.prepare(`
+      SELECT person_id, prospect_id FROM source_events WHERE id = ?
+    `).get(promotedSourceId) as { person_id: string; prospect_id: string | null } | undefined;
+    const receipt = promotedSourceId === null ? undefined : database.raw.prepare(`
+      SELECT person_id, source_cycle_id, new_cycle_id, source_event_id
+      FROM cycle_reactivation_receipts WHERE activation_key = ?
+    `).get(`inbound:${promotedSourceId}`) as {
+      person_id: string; source_cycle_id: string; new_cycle_id: string; source_event_id: string;
+    } | undefined;
     resolutionValid = review.resolution.newCycleId === command.newCycleId
       && review.resolution.activationKind === expectedKind
       && serializeCanonical(review.resolution.cadence) === serializeCanonical(command.cadence)
       && target?.person_id === review.personId && target.prospect_id === review.prospectId
-      && enrollment !== undefined;
+      && enrollment !== undefined
+      && (unknownCommand
+        ? review.resolution.kind === 'promoted_unknown_inbound'
+          && target.entry_source_event_id === promotedSourceId
+          && promotedSource?.person_id === review.personId
+          && (promotedSource.prospect_id === null || promotedSource.prospect_id === review.prospectId)
+          && receipt?.person_id === review.personId
+          && receipt.source_cycle_id === review.sourceCycleId
+          && receipt.new_cycle_id === review.resolution.newCycleId
+          && receipt.source_event_id === promotedSourceId
+        : review.resolution.kind === 'reactivated');
   }
   if (command.personId !== review.personId || command.prospectId !== review.prospectId
     || command.sourceCycleId !== review.sourceCycleId

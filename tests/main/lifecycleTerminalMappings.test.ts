@@ -9,6 +9,7 @@ import { FOUNDER_CHANNEL_POLICIES_V1 } from '../../src/main/domain/cadence/caden
 import { EventRepository } from '../../src/main/domain/events/eventRepository';
 import { IdentityRepository } from '../../src/main/domain/identity/identityRepository';
 import { LifecycleService } from '../../src/main/domain/lifecycle/lifecycleService';
+import { auditDomainInvariants } from '../../src/main/domain/lifecycle/invariantAudit';
 import type { CompleteCurrentActionInput } from '../../src/main/domain/lifecycle/lifecycleTransactionWriter';
 import { SourceRepository } from '../../src/main/domain/source/sourceRepository';
 import { StaleDomainWriteError } from '../../src/main/domain/support/domainErrors';
@@ -21,6 +22,113 @@ const WON_FAULT_PHASES = [
   'old_enrollment_stop', 'onboarding_enrollment_insert', 'onboarding_action_insert',
   'won_terms_insert', 'cycle_projection', 'stage_event_insert', 'old_action_settlement',
 ] as const;
+
+type TerminalFaultPhase =
+  | 'enrollment_mutation'
+  | 'replacement_action_insert'
+  | 'reactivation_rule_1_insert'
+  | 'reactivation_rule_2_insert'
+  | 'cycle_projection'
+  | 'stage_event_insert'
+  | 'old_action_settlement';
+
+type TerminalFaultCase = Readonly<{
+  name: string;
+  prefix: string;
+  seed: Readonly<{
+    family: CadenceFamily;
+    stage: 'contacted' | 'interviewed' | 'offered' | 'won';
+    workflowStatus?: 'active' | 'onboarding';
+    stepIndex: number;
+    componentIndex?: number;
+    mode?: 'standard' | 'inbound_over_cap_response';
+    actionType?: string;
+    actionChannel?: string | null;
+    workIntent?: 'discretionary_prospecting' | 'promised_follow_up' | 'inbound_response';
+  }>;
+  ids: readonly string[];
+  outcome: CompleteCurrentActionInput['outcome'];
+  impossibleDisposition: CompleteCurrentActionInput['impossibleDisposition'];
+  manualReactivationDueAt: string | null;
+  phases: readonly TerminalFaultPhase[];
+}>;
+
+const TERMINAL_FAULT_CASES: readonly TerminalFaultCase[] = [
+  {
+    name: 'post-interview phase completion', prefix: 'phase-fault-post-interview',
+    seed: { family: 'post_interview', stage: 'interviewed', stepIndex: 1 },
+    ids: ['phase-post-review'], outcome: 'answered', impossibleDisposition: null,
+    manualReactivationDueAt: null,
+    phases: [
+      'enrollment_mutation', 'replacement_action_insert',
+      'cycle_projection', 'old_action_settlement',
+    ],
+  },
+  {
+    name: 'onboarding phase completion', prefix: 'phase-fault-onboarding',
+    seed: {
+      family: 'onboarding', stage: 'won', workflowStatus: 'onboarding',
+      stepIndex: 0, componentIndex: 2,
+    },
+    ids: [], outcome: 'accepted', impossibleDisposition: null,
+    manualReactivationDueAt: null,
+    phases: ['enrollment_mutation', 'cycle_projection', 'old_action_settlement'],
+  },
+  {
+    name: 'inbound over-cap handled', prefix: 'phase-fault-inbound-handled',
+    seed: {
+      family: 'cadence_c', stage: 'contacted', stepIndex: 0,
+      mode: 'inbound_over_cap_response', workIntent: 'inbound_response',
+    },
+    ids: ['phase-inbound-booking'], outcome: 'accepted', impossibleDisposition: null,
+    manualReactivationDueAt: null,
+    phases: [
+      'enrollment_mutation', 'replacement_action_insert',
+      'cycle_projection', 'old_action_settlement',
+    ],
+  },
+  {
+    name: 'inbound over-cap impossible', prefix: 'phase-fault-inbound-impossible',
+    seed: {
+      family: 'cadence_c', stage: 'contacted', stepIndex: 0,
+      mode: 'inbound_over_cap_response', actionType: 'resolve_contact_method',
+      actionChannel: null, workIntent: 'inbound_response',
+    },
+    ids: ['phase-inbound-review'], outcome: 'marked_impossible',
+    impossibleDisposition: { reason: 'missing_phone', notes: null },
+    manualReactivationDueAt: null,
+    phases: [
+      'enrollment_mutation', 'replacement_action_insert',
+      'cycle_projection', 'old_action_settlement',
+    ],
+  },
+  {
+    name: 'prospecting breakup exhaustion', prefix: 'phase-fault-cadence-a',
+    seed: { family: 'cadence_a', stage: 'contacted', stepIndex: 7 },
+    ids: ['phase-a-seasonal', 'phase-a-frbo', 'phase-a-event'],
+    outcome: 'accepted', impossibleDisposition: null, manualReactivationDueAt: null,
+    phases: [
+      'enrollment_mutation', 'reactivation_rule_1_insert',
+      'reactivation_rule_2_insert', 'cycle_projection',
+      'stage_event_insert', 'old_action_settlement',
+    ],
+  },
+  {
+    name: 'post-offer breakup exhaustion', prefix: 'phase-fault-post-offer',
+    seed: { family: 'post_offer', stage: 'offered', stepIndex: 4 },
+    ids: ['phase-offer-manual', 'phase-offer-event'],
+    outcome: 'accepted', impossibleDisposition: null,
+    manualReactivationDueAt: '2026-10-15T13:00:00.000Z',
+    phases: [
+      'enrollment_mutation', 'reactivation_rule_1_insert',
+      'cycle_projection', 'stage_event_insert', 'old_action_settlement',
+    ],
+  },
+] as const;
+
+const TERMINAL_PHASE_FAULT_MATRIX = TERMINAL_FAULT_CASES.flatMap((terminalCase) =>
+  terminalCase.phases.map((phase) => ({ terminalCase, phase })),
+);
 
 type Harness = Readonly<{
   database: AppDatabase;
@@ -106,9 +214,10 @@ describe('LifecycleService cadence terminal mappings', () => {
       ?? (definition.category === 'prospecting' ? 'discretionary_prospecting' : 'promised_follow_up');
     const isInbound = workIntent === 'inbound_response';
     const inboundDueAt = isInbound ? '2026-09-01T12:00:00.000Z' : null;
+    const inboundSourceEventId = isInbound ? `${input.prefix}-inbound-source` : null;
     const provenance = isInbound ? canonicalJson({
       version: 1,
-      sourceEventId: prospect.sourceEventId,
+      sourceEventId: inboundSourceEventId,
       sourceObservedAt: DOMAIN_TIMESTAMP,
       calculation: 'elapsed_hours',
       hours: 48,
@@ -133,6 +242,21 @@ describe('LifecycleService cadence terminal mappings', () => {
         input.stage, workflowStatus, actionId, DOMAIN_TIMESTAMP,
         DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
       );
+      if (isInbound) {
+        database.raw.prepare(`
+          INSERT INTO source_events (
+            id, person_id, prospect_id, channel, observed_at, source_record_json,
+            referrer_unknown_reason, created_at
+          ) VALUES (?, ?, ?, 'referral', ?, ?, 'not_provided', ?)
+        `).run(
+          inboundSourceEventId, prospect.personId, prospect.prospectId,
+          DOMAIN_TIMESTAMP,
+          canonicalJson({
+            formatVersion: 1, sourceRecord: { fixture: true }, customSourceReason: null,
+          }),
+          DOMAIN_TIMESTAMP,
+        );
+      }
       database.raw.prepare(`
         INSERT INTO cadence_enrollments (
           id, sales_cycle_id, cadence_definition_id, status, anchor_at,
@@ -175,7 +299,7 @@ describe('LifecycleService cadence terminal mappings', () => {
         workIntent,
         isInbound ? 'direct_referral_elapsed' : null,
         inboundDueAt,
-        isInbound ? prospect.sourceEventId : null,
+        inboundSourceEventId,
         provenance,
         enrollmentId, step.id, component.id, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
       );
@@ -185,8 +309,26 @@ describe('LifecycleService cadence terminal mappings', () => {
             sales_cycle_id, doors_committed, billing_model, unit_rate_cents,
             projected_mrr_cents, projection_formula_version,
             manual_projection_reason, founding_customer, effective_at, created_at
-          ) VALUES (?, 10, 'per_door_monthly', 2500, 25000, 'v1', NULL, 1, ?, ?)
+          ) VALUES (?, 10, 'per_door_monthly', 2500, 25000,
+            'founder_terms_v1', NULL, 1, ?, ?)
         `).run(cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+      }
+      const stageChain = input.stage === 'ready' ? ['ready']
+        : input.stage === 'contacted' ? ['contacted']
+          : input.stage === 'interviewed' ? ['contacted', 'interviewed']
+            : input.stage === 'offered' ? ['contacted', 'interviewed', 'offered']
+              : ['contacted', 'interviewed', 'offered', 'won'];
+      for (const [index, toStage] of stageChain.entries()) {
+        database.raw.prepare(`
+          INSERT INTO stage_events (
+            id, sales_cycle_id, from_stage, to_stage, effective_at, confirmed_at,
+            confirmation_kind, transition_sequence, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 'mechanical', ?, ?)
+        `).run(
+          `${cycleId}-seed-stage-${index + 1}`, cycleId,
+          index === 0 ? null : stageChain[index - 1], toStage,
+          DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, index + 1, DOMAIN_TIMESTAMP,
+        );
       }
       database.raw.exec('COMMIT');
     } catch (error) {
@@ -238,7 +380,9 @@ describe('LifecycleService cadence terminal mappings', () => {
     expect(harness.database.raw.prepare(`
       SELECT action_type, work_intent, status FROM next_actions WHERE id = 'confirm-offer-action'
     `).get()).toEqual({ action_type: 'confirm_offer', work_intent: 'internal_review', status: 'pending' });
-    expect(harness.events.listCycleStageEvents(postInterview.cycleId)).toEqual([]);
+    expect(harness.events.listCycleStageEvents(postInterview.cycleId).map(({ toStage }) => toStage))
+      .toEqual(['contacted', 'interviewed']);
+    expectTerminalAuditClean(harness.database, postInterview.cycleId);
     expect(() => harness.service.completeCurrentAction(postInterviewCommand))
       .toThrow(StaleDomainWriteError);
 
@@ -258,12 +402,14 @@ describe('LifecycleService cadence terminal mappings', () => {
     expect(closed).toMatchObject({
       stage: 'won', workflowStatus: 'closed', currentNextActionId: null, version: 2,
     });
-    expect(harness.events.listCycleStageEvents(onboarding.cycleId)).toEqual([]);
+    expect(harness.events.listCycleStageEvents(onboarding.cycleId).map(({ toStage }) => toStage))
+      .toEqual(['contacted', 'interviewed', 'offered', 'won']);
     expect(() => harness.service.completeCurrentAction(onboardingCommand))
       .toThrow(StaleDomainWriteError);
     expect(harness.database.raw.prepare(`
       SELECT status, stop_reason FROM cadence_enrollments WHERE id = ?
     `).get(onboarding.enrollmentId)).toEqual({ status: 'completed', stop_reason: 'phase_completed' });
+    expectTerminalAuditClean(harness.database, onboarding.cycleId);
   });
 
   it('turns handled and impossible inbound over-cap responses into concrete internal work', async () => {
@@ -289,6 +435,7 @@ describe('LifecycleService cadence terminal mappings', () => {
     });
     expect(() => harness.service.completeCurrentAction(handledCommand))
       .toThrow(StaleDomainWriteError);
+    expectTerminalAuditClean(harness.database, handled.cycleId);
 
     const impossible = seedTerminal({
       prefix: 'inbound-impossible', family: 'cadence_c', stage: 'contacted', stepIndex: 0,
@@ -313,6 +460,7 @@ describe('LifecycleService cadence terminal mappings', () => {
     });
     expect(() => harness.service.completeCurrentAction(impossibleCommand))
       .toThrow(StaleDomainWriteError);
+    expectTerminalAuditClean(harness.database, impossible.cycleId);
   });
 
   it('closes prospecting and post-offer breakups with exact reactivation work', async () => {
@@ -343,6 +491,7 @@ describe('LifecycleService cadence terminal mappings', () => {
     ]);
     expect(() => harness.service.completeCurrentAction(cadenceACommand))
       .toThrow(StaleDomainWriteError);
+    expectTerminalAuditClean(harness.database, cadenceA.cycleId);
 
     const postOffer = seedTerminal({
       prefix: 'post-offer-terminal', family: 'post_offer', stage: 'offered', stepIndex: 4,
@@ -367,6 +516,7 @@ describe('LifecycleService cadence terminal mappings', () => {
     ]);
     expect(() => harness.service.completeCurrentAction(postOfferCommand))
       .toThrow(StaleDomainWriteError);
+    expectTerminalAuditClean(harness.database, postOffer.cycleId);
   });
 
   it('rolls an exhausted terminal back when a later rule insert faults', async () => {
@@ -399,6 +549,59 @@ describe('LifecycleService cadence terminal mappings', () => {
       SELECT COUNT(*) AS count FROM reactivation_rules WHERE sales_cycle_id = ?
     `).get(cadenceA.cycleId)).toEqual({ count: 0 });
   });
+
+  it.each(TERMINAL_PHASE_FAULT_MATRIX)(
+    'rolls $terminalCase.name back after $phase',
+    async ({ terminalCase, phase }) => {
+      const harness = await setup([...terminalCase.ids]);
+      const seeded = seedTerminal({ prefix: terminalCase.prefix, ...terminalCase.seed });
+      const activityId = appendOutcome(
+        harness, seeded, terminalCase.outcome, `${seeded.actionId}-${phase}-activity`,
+      );
+      const before = cycleSnapshot(harness.database, seeded.cycleId);
+      const targetId = phase === 'enrollment_mutation'
+        ? seeded.enrollmentId
+        : phase === 'replacement_action_insert' || phase === 'reactivation_rule_1_insert'
+          ? terminalCase.ids[0]!
+          : phase === 'reactivation_rule_2_insert'
+            ? terminalCase.ids[1]!
+            : phase === 'cycle_projection'
+              ? seeded.cycleId
+              : phase === 'stage_event_insert'
+                ? terminalCase.ids.at(-1)!
+                : seeded.actionId;
+      const triggerEvent = phase === 'enrollment_mutation'
+        ? `AFTER UPDATE ON cadence_enrollments WHEN NEW.id = '${targetId}'`
+        : phase === 'replacement_action_insert'
+          ? `AFTER INSERT ON next_actions WHEN NEW.id = '${targetId}'`
+          : phase === 'reactivation_rule_1_insert' || phase === 'reactivation_rule_2_insert'
+            ? `AFTER INSERT ON reactivation_rules WHEN NEW.id = '${targetId}'`
+            : phase === 'cycle_projection'
+              ? `AFTER UPDATE ON sales_cycles WHEN NEW.id = '${targetId}'`
+              : phase === 'stage_event_insert'
+                ? `AFTER INSERT ON stage_events WHEN NEW.id = '${targetId}'`
+                : `AFTER UPDATE OF status ON next_actions WHEN NEW.id = '${targetId}'`;
+      const triggerName = `terminal_phase_${terminalCase.prefix.replaceAll('-', '_')}_${phase}`;
+      harness.database.raw.exec(`
+        CREATE TRIGGER ${triggerName} ${triggerEvent}
+        BEGIN SELECT RAISE(ABORT, 'fault:${phase}'); END
+      `);
+      try {
+        expect(() => harness.service.completeCurrentAction({
+          cycleId: seeded.cycleId, expectedCycleVersion: 1,
+          expectedCurrentActionId: seeded.actionId,
+          expectedActionVersion: 1, expectedEnrollmentVersion: 1,
+          outcome: terminalCase.outcome, activityId,
+          impossibleDisposition: terminalCase.impossibleDisposition,
+          evaluationAt: DOMAIN_TIMESTAMP,
+          manualReactivationDueAt: terminalCase.manualReactivationDueAt,
+        })).toThrow(`fault:${phase}`);
+      } finally {
+        harness.database.raw.exec(`DROP TRIGGER ${triggerName}`);
+      }
+      expect(cycleSnapshot(harness.database, seeded.cycleId)).toEqual(before);
+    },
+  );
 
   it('rolls every terminal mapping back when final action settlement faults', async () => {
     const harness = await setup([
@@ -545,6 +748,17 @@ describe('LifecycleService cadence terminal mappings', () => {
     },
   );
 });
+
+function expectTerminalAuditClean(database: AppDatabase, cycleId: string): void {
+  const ids = new Set([cycleId]);
+  for (const { id } of database.raw.prepare(`
+    SELECT id FROM next_actions WHERE sales_cycle_id = ?
+    UNION ALL SELECT id FROM cadence_enrollments WHERE sales_cycle_id = ?
+    UNION ALL SELECT id FROM reactivation_rules WHERE sales_cycle_id = ?
+  `).all(cycleId, cycleId, cycleId) as Array<{ id: string }>) ids.add(id);
+  expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })
+    .filter(({ recordId }) => ids.has(recordId))).toEqual([]);
+}
 
 function cycleSnapshot(database: AppDatabase, cycleId: string): unknown {
   return {

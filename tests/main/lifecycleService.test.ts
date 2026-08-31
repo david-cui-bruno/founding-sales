@@ -8,6 +8,7 @@ import { FOUNDER_CHANNEL_POLICIES_V1 } from '../../src/main/domain/cadence/caden
 import { EventRepository } from '../../src/main/domain/events/eventRepository';
 import { IdentityRepository } from '../../src/main/domain/identity/identityRepository';
 import { LifecycleService } from '../../src/main/domain/lifecycle/lifecycleService';
+import { auditDomainInvariants } from '../../src/main/domain/lifecycle/invariantAudit';
 import { ReactivationRepository } from '../../src/main/domain/lifecycle/reactivationRepository';
 import { SourceRepository } from '../../src/main/domain/source/sourceRepository';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
@@ -90,6 +91,7 @@ describe('LifecycleService', () => {
     expect(events.listCycleStageEvents('cycle')).toMatchObject([
       { fromStage: null, toStage: 'unreviewed', transitionSequence: 1 },
     ]);
+    expectOwnedLifecycleAuditClean(database, 'cycle');
 
     const ready = service.reviewToReady({
       cycleId: 'cycle', expectedCycleVersion: 1,
@@ -120,6 +122,7 @@ describe('LifecycleService', () => {
       qualificationState: 'eligible', version: 2,
       originalSourceEventId: prospect.sourceEventId,
     });
+    expectOwnedLifecycleAuditClean(database, 'cycle');
   });
 
   it('mechanically records Contacted, requires founder confirmations, and counts Won once through onboarding', async () => {
@@ -184,6 +187,7 @@ describe('LifecycleService', () => {
       activityId: 'contact-activity', effectiveAt: DOMAIN_TIMESTAMP,
     });
     expect(contacted).toMatchObject({ stage: 'contacted', currentNextActionId: 'ready-action', version: 3 });
+    expectOwnedLifecycleAuditClean(database, 'cycle');
 
     unitOfWork.immediate(() => events.appendActivity({
       id: 'interview-suggestion', personId: prospect.personId, prospectId: prospect.prospectId,
@@ -214,6 +218,7 @@ describe('LifecycleService', () => {
     expect(interviewed).toMatchObject({
       stage: 'interviewed', currentNextActionId: 'interview-action', version: 4,
     });
+    expectOwnedLifecycleAuditClean(database, 'cycle');
     const fitted = service.setDesignPartnerFitness({
       cycleId: 'cycle', expectedCycleVersion: 4, fitness: 5,
       updatedAt: DOMAIN_TIMESTAMP,
@@ -244,6 +249,7 @@ describe('LifecycleService', () => {
       confirmedAt: DOMAIN_TIMESTAMP,
     });
     expect(offered).toMatchObject({ stage: 'offered', currentNextActionId: 'offer-action', version: 6 });
+    expectOwnedLifecycleAuditClean(database, 'cycle');
 
     const wonCommand = {
       cycleId: 'cycle', expectedCycleVersion: 6, expectedCurrentActionId: 'offer-action',
@@ -258,6 +264,7 @@ describe('LifecycleService', () => {
       stage: 'won', workflowStatus: 'onboarding',
       currentNextActionId: 'onboarding-action', version: 7,
     });
+    expectOwnedLifecycleAuditClean(database, 'cycle');
     expect(database.raw.prepare(`
       SELECT projected_mrr_cents FROM won_terms WHERE sales_cycle_id = 'cycle'
     `).get()).toEqual({ projected_mrr_cents: 30000 });
@@ -278,6 +285,7 @@ describe('LifecycleService', () => {
     });
     expect(closed).toMatchObject({ stage: 'won', workflowStatus: 'closed', currentNextActionId: null, version: 8 });
     expect(events.listCycleStageEvents('cycle').filter(({ toStage }) => toStage === 'won')).toHaveLength(1);
+    expectOwnedLifecycleAuditClean(database, 'cycle');
   });
 
   it('persists Task 8 component advancement and failed reschedule without double-counting a step', async () => {
@@ -1024,3 +1032,14 @@ describe('LifecycleService', () => {
     ]);
   });
 });
+
+function expectOwnedLifecycleAuditClean(database: AppDatabase, cycleId: string): void {
+  const ownedIds = new Set<string>([cycleId]);
+  for (const { id } of database.raw.prepare(`
+    SELECT id FROM next_actions WHERE sales_cycle_id = ?
+    UNION ALL SELECT id FROM cadence_enrollments WHERE sales_cycle_id = ?
+    UNION ALL SELECT id FROM lifecycle_review_items WHERE source_cycle_id = ?
+  `).all(cycleId, cycleId, cycleId) as Array<{ id: string }>) ownedIds.add(id);
+  expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })
+    .filter(({ recordId }) => ownedIds.has(recordId))).toEqual([]);
+}

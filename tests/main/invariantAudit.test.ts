@@ -146,8 +146,8 @@ describe('auditDomainInvariants', () => {
     `).run(prospect.prospectId);
 
     const before = database.raw.prepare(`SELECT * FROM sales_cycles WHERE id = ?`).get(seeded.cycleId);
-    const first = auditDomainInvariants({ database });
-    const second = auditDomainInvariants({ database });
+    const first = auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP });
+    const second = auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP });
 
     expect(first).toEqual(second);
     expect(first).toEqual([...first].sort((left, right) => (
@@ -205,7 +205,7 @@ describe('auditDomainInvariants', () => {
       );
     }
 
-    expect(auditDomainInvariants({ database })).toContainEqual(expect.objectContaining({
+    expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).toContainEqual(expect.objectContaining({
       kind: 'stage_event_chain_invalid', recordId: cycleId,
     }));
   });
@@ -235,7 +235,7 @@ describe('auditDomainInvariants', () => {
         DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, index + 1, DOMAIN_TIMESTAMP,
       );
     }
-    expect(auditDomainInvariants({ database })).toContainEqual(expect.objectContaining({
+    expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).toContainEqual(expect.objectContaining({
       kind: 'stage_event_chain_invalid', recordId: seeded.cycleId,
     }));
   });
@@ -266,11 +266,32 @@ describe('auditDomainInvariants', () => {
       decisionAuthority: emptyDimension, willingnessToTryOrPay: emptyDimension,
       concreteNextStep: emptyDimension,
     }), DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
-    expect(auditDomainInvariants({ database })).not.toContainEqual(
+    expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).not.toContainEqual(
       expect.objectContaining({ kind: 'close_readiness_invalid', recordId: seeded.cycleId }),
     );
 
     database.raw.exec('DROP TRIGGER protect_next_action_immutable_evidence');
+    database.raw.prepare(`
+      UPDATE next_actions SET
+        work_intent = 'inbound_response', sla_due_at = ?,
+        inbound_sla_kind = 'inbound_demo_permitted_minutes',
+        inbound_sla_due_at = ?, inbound_sla_source_event_id = ?,
+        inbound_sla_provenance_json = ?
+      WHERE id = ?
+    `).run(
+      '2026-08-30T17:16:00.000Z', '2026-08-30T17:16:00.000Z', 'audit-demo-source',
+      serializeCanonical({
+        version: 1, sourceEventId: 'audit-demo-source',
+        sourceObservedAt: DOMAIN_TIMESTAMP,
+        calculation: 'permitted_minutes', minutes: 15,
+        policyId: 'founder_text_v1', computedDueAt: '2026-08-30T17:16:00.000Z',
+      }),
+      seeded.actionId,
+    );
+    expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).toContainEqual(
+      expect.objectContaining({ kind: 'action_inbound_sla_invalid', recordId: seeded.actionId }),
+    );
+
     database.raw.prepare(`
       UPDATE next_actions SET
         work_intent = 'inbound_response', sla_due_at = ?,
@@ -288,7 +309,7 @@ describe('auditDomainInvariants', () => {
       }),
       seeded.actionId,
     );
-    expect(auditDomainInvariants({ database })).toContainEqual(
+    expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).toContainEqual(
       expect.objectContaining({ kind: 'action_inbound_sla_invalid', recordId: seeded.actionId }),
     );
   });
@@ -359,11 +380,18 @@ describe('auditDomainInvariants', () => {
       UPDATE prospect_priority_projection SET reachability = 'indirect' WHERE prospect_id = ?
     `).run(prospect.prospectId);
 
-    const violations = auditDomainInvariants({ database });
-    expect(violations).toContainEqual(expect.objectContaining({
+    const effective = auditDomainInvariants({
+      database, asOf: '2026-08-31T12:00:00.000Z',
+    } as never);
+    expect(effective).toContainEqual(expect.objectContaining({
       kind: 'won_terms_invalid', recordId: 'won-metadata-cycle',
     }));
-    expect(violations).toContainEqual(expect.objectContaining({
+    expect(effective).toContainEqual(expect.objectContaining({
+      kind: 'p0_override_reachability_invalid', recordId: 'p0-audit-override',
+    }));
+    expect(auditDomainInvariants({
+      database, asOf: '2028-08-31T12:00:00.000Z',
+    } as never)).not.toContainEqual(expect.objectContaining({
       kind: 'p0_override_reachability_invalid', recordId: 'p0-audit-override',
     }));
   });
@@ -389,7 +417,7 @@ describe('auditDomainInvariants', () => {
         confirmation_kind, transition_sequence, created_at
       ) VALUES ('canonical-stage', ?, NULL, 'unreviewed', ?, ?, 'mechanical', 1, ?)
     `).run(workflow.cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
-    expect(auditDomainInvariants({ database })).toEqual([]);
+    expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).toEqual([]);
 
     const unitOfWork = new DomainUnitOfWork(database);
     const cadences = new CadenceRepository({
@@ -414,8 +442,113 @@ describe('auditDomainInvariants', () => {
       ) VALUES ('partial-a-defaults', ?, 'seasonal:heating-oct1',
         '2026-10-01T13:00:00.000Z', NULL, 1, NULL, ?)
     `).run(cycleId, DOMAIN_TIMESTAMP);
-    expect(auditDomainInvariants({ database })).toContainEqual(expect.objectContaining({
+    expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).toContainEqual(expect.objectContaining({
       kind: 'lost_nurture_reactivation_invalid', recordId: cycleId,
     }));
+  });
+
+  it('rejects nonfuture manual and noncanonical seasonal rules plus Won terms on a non-Won cycle', async () => {
+    workspace = createTempDatabase();
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: workspace.path, key });
+    await migrateToLatest(database, {
+      backupDirectory: `${workspace.path}.backups`, workspaceKey: key,
+    });
+    const unitOfWork = new DomainUnitOfWork(database);
+    const cadences = new CadenceRepository({
+      database, unitOfWork, clock: { now: () => DOMAIN_TIMESTAMP },
+    });
+    unitOfWork.immediate(() => cadences.installBuiltins());
+    const manual = seedProspect(database.raw, 'invalid-manual-rule');
+    const manualCycle = insertClosedCycle({
+      database: database.raw, prefix: 'invalid-manual-rule', prospect: manual,
+    });
+    database.raw.prepare(`
+      INSERT INTO cadence_enrollments (
+        id, sales_cycle_id, cadence_definition_id, status, anchor_at,
+        current_step_id, scheduled_step_count, mode, allowed_step_ids_json,
+        version, stop_reason, created_at, updated_at
+      ) VALUES ('invalid-manual-enrollment', ?, 'cadence-c-v1', 'stopped', ?,
+        'cadence-c-v1-day-0', 1, 'standard', NULL, 1, 'exhausted', ?, ?)
+    `).run(manualCycle, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    database.raw.prepare(`
+      INSERT INTO reactivation_rules (
+        id, sales_cycle_id, rule_type, due_at, matcher_json, version, consumed_at, created_at
+      ) VALUES ('invalid-manual-due', ?, 'manual', ?, NULL, 1, NULL, ?)
+    `).run(manualCycle, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    database.raw.prepare(`
+      INSERT INTO won_terms (
+        sales_cycle_id, doors_committed, billing_model, unit_rate_cents,
+        projected_mrr_cents, projection_formula_version, manual_projection_reason,
+        founding_customer, effective_at, created_at
+      ) VALUES (?, 2, 'per_door_monthly', 5000, 10000,
+        'founder_terms_v1', NULL, 1, ?, ?)
+    `).run(manualCycle, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+
+    const seasonal = seedProspect(database.raw, 'invalid-seasonal-rule');
+    const seasonalCycle = insertClosedCycle({
+      database: database.raw, prefix: 'invalid-seasonal-rule', prospect: seasonal,
+    });
+    database.raw.prepare(`
+      INSERT INTO cadence_enrollments (
+        id, sales_cycle_id, cadence_definition_id, status, anchor_at,
+        current_step_id, scheduled_step_count, mode, allowed_step_ids_json,
+        version, stop_reason, created_at, updated_at
+      ) VALUES ('invalid-seasonal-enrollment', ?, 'cadence-a-v1', 'stopped', ?,
+        'cadence-a-v1-day-0', 1, 'standard', NULL, 1, 'exhausted', ?, ?)
+    `).run(seasonalCycle, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    database.raw.prepare(`
+      INSERT INTO reactivation_rules (
+        id, sales_cycle_id, rule_type, due_at, matcher_json, version, consumed_at, created_at
+      ) VALUES ('invalid-seasonal-due', ?, 'seasonal:heating-oct1',
+        '2026-09-30T13:00:00.000Z', NULL, 1, NULL, ?),
+        ('valid-seasonal-event', ?, 'new-frbo-listing', NULL,
+        '{"eventType":"new-frbo-listing","personWide":true,"version":1}', 1, NULL, ?)
+    `).run(seasonalCycle, DOMAIN_TIMESTAMP, seasonalCycle, DOMAIN_TIMESTAMP);
+
+    const violations = auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP });
+    expect(violations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'reactivation_rule_invalid', recordId: 'invalid-manual-due' }),
+      expect.objectContaining({ kind: 'reactivation_rule_invalid', recordId: 'invalid-seasonal-due' }),
+      expect.objectContaining({ kind: 'won_terms_invalid', recordId: manualCycle }),
+    ]));
+  });
+
+  it('rejects settlement status/outcome combinations that bypass lifecycle semantics', async () => {
+    workspace = createTempDatabase();
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: workspace.path, key });
+    await migrateToLatest(database, {
+      backupDirectory: `${workspace.path}.backups`, workspaceKey: key,
+    });
+    const prospect = seedProspect(database.raw, 'invalid-settlement');
+    const seeded = insertOpenCycleWithAction({
+      database: database.raw, prefix: 'invalid-settlement', prospect,
+    });
+    database.raw.prepare(`
+      INSERT INTO next_actions (
+        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        work_intent, settlement_json, completed_at, created_at, updated_at
+      ) VALUES ('invalid-impossible-settlement', ?, 'follow_up', NULL, 'completed', ?,
+        'America/New_York', 'promised_follow_up', ?, ?, ?, ?)
+    `).run(seeded.cycleId, DOMAIN_TIMESTAMP, serializeCanonical({
+      version: 1, outcome: 'marked_impossible', reason: 'missing_phone',
+      evidenceActivityId: null,
+      plannerTransition: {
+        definitionId: null, stepId: null, componentId: null, outcome: 'marked_impossible',
+      },
+      cadence: {
+        cadenceEnrollmentId: null, cadenceDefinitionId: null,
+        cadenceStepId: null, cadenceComponentId: null,
+      },
+      workIntent: 'promised_follow_up',
+      inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
+    }), DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+
+    expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).toContainEqual(
+      expect.objectContaining({
+        kind: 'action_settlement_invalid', recordId: 'invalid-impossible-settlement',
+      }),
+    );
   });
 });

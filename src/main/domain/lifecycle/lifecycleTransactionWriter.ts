@@ -15,7 +15,6 @@ import type { ChannelPolicySnapshots } from '../cadence/cadenceScheduler';
 import type { Activity, EventRepository } from '../events/eventRepository';
 import type { IdentityRepository } from '../identity/identityRepository';
 import type { SourceRepository } from '../source/sourceRepository';
-import type { SourceEvent } from '../source/sourceTypes';
 import type { Clock } from '../support/clock';
 import {
   DomainRepositoryDatabaseMismatchError,
@@ -28,13 +27,16 @@ import {
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 import type { IdGenerator } from '../support/idGenerator';
 import { CadenceEnrollmentRepository } from './cadenceEnrollmentRepository';
+import { deriveInboundSla } from './inboundSla';
 import {
+  promoteUnknownInboundReviewCommandSchema,
   reactivationInboundCommandSchema,
   reactivationReviewBlockerSchema,
   reactivationResultEnvelopeSchema,
   reactivationRuleCommandSchema,
   type ReactivateFromInboundCommand,
   type ReactivateFromRuleCommand,
+  type PromoteUnknownInboundReviewCommand,
   type ReactivationCadenceIdentity,
   type ReactivationCommandEnvelope,
 } from './reactivationContracts';
@@ -248,6 +250,7 @@ export type SetCloseReadinessInput = Readonly<{
 
 export type ReactivateFromRuleInput = ReactivateFromRuleCommand;
 export type ReactivateFromInboundInput = ReactivateFromInboundCommand;
+export type PromoteUnknownInboundReviewInput = PromoteUnknownInboundReviewCommand;
 
 export type ReactivationResult = Readonly<
   | { kind: 'reactivated'; cycle: SalesCycle }
@@ -290,6 +293,7 @@ export interface LifecycleCommands {
   completeOnboarding(input: CompleteOnboardingInput): SalesCycle;
   reactivateFromRule(input: ReactivateFromRuleInput): ReactivationResult;
   reactivateFromInboundResponse(input: ReactivateFromInboundInput): ReactivationResult;
+  promoteUnknownInboundReview(input: PromoteUnknownInboundReviewInput): ReactivationResult;
   setDesignPartnerFitness(input: SetDesignPartnerFitnessInput): SalesCycle;
   setCloseReadiness(input: SetCloseReadinessInput): CloseReadiness;
   applyProspectingTrigger(input: ApplyProspectingTriggerInput): SalesCycle;
@@ -1015,9 +1019,6 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       ruleId: parsed.ruleId, salesCycleId: parsed.sourceCycleId,
       expectedVersion: parsed.expectedRuleVersion, consumedAt: parsed.activatedAt,
     });
-    this.resolveExistingActivationReview(
-      activationKey, parsed.activatedAt, cycle.id, 'rule', parsed.cadence,
-    );
     this.reactivations.insertOrGetReceipt({
       activationKey, activationKind: 'rule', personId: parsed.personId,
       sourceCycleId: parsed.sourceCycleId, reactivationRuleId: parsed.ruleId,
@@ -1030,6 +1031,9 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       },
       createdAt: parsed.activatedAt,
     });
+    this.resolveExistingActivationReview(
+      activationKey, parsed.activatedAt, cycle.id, 'rule', parsed.cadence,
+    );
     this.cycles.assertCurrentActionPostcondition(cycle.id);
     return Object.freeze({ kind: 'reactivated', cycle });
   }
@@ -1048,8 +1052,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       const matches = this.identities.findContactMatchesByNormalizedHandle(
         parsed.evidence.handleKind, parsed.evidence.normalizedValue,
       );
-      if (matches.some(({ person }) => person.id === parsed.personId)) {
-        throw new LifecycleEvidenceError('A known owned handle cannot use unknown-handle Review.');
+      if (matches.length > 0) {
+        throw new LifecycleEvidenceError('A known handle cannot use unknown-handle Review.');
       }
       const blocker = this.unknownHandleBlocker(parsed);
       return this.prepareBlockedReactivation({
@@ -1061,7 +1065,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     }
     const sourceEventId = parsed.evidence.sourceEventId;
     const source = this.sources.getById(sourceEventId);
-    if (source === null || source.channel !== parsed.evidence.channel) {
+    if (source === null || source.channel !== parsed.evidence.channel
+      || source.observedAt > parsed.activatedAt) {
       throw new LifecycleEvidenceError('Inbound SourceEvent channel evidence is missing or changed.');
     }
     const blocker = this.reactivationBlocker({
@@ -1084,9 +1089,6 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       entrySourceEventId: sourceEventId, newCycleId: parsed.newCycleId,
       activatedAt: parsed.activatedAt, kind: 'inbound_response', definition,
     });
-    this.resolveExistingActivationReview(
-      activationKey, parsed.activatedAt, cycle.id, 'inbound_response', parsed.cadence,
-    );
     this.reactivations.insertOrGetReceipt({
       activationKey, activationKind: 'inbound_response', personId: parsed.personId,
       sourceCycleId: parsed.sourceCycleId, reactivationRuleId: null,
@@ -1100,8 +1102,79 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       },
       createdAt: parsed.activatedAt,
     });
+    this.resolveExistingActivationReview(
+      activationKey, parsed.activatedAt, cycle.id, 'inbound_response', parsed.cadence,
+    );
     this.cycles.assertCurrentActionPostcondition(cycle.id);
     return Object.freeze({ kind: 'reactivated', cycle });
+  }
+
+  promoteUnknownInboundReview(input: PromoteUnknownInboundReviewInput): ReactivationResult {
+    this.unitOfWork.assertWriteScope();
+    const parsed = promoteUnknownInboundReviewCommandSchema.parse(input);
+    const review = this.reviews.getByActivationKey(parsed.activationKey);
+    if (review === null || review.id !== parsed.reviewId
+      || review.payload.blocker !== 'unknown_inbound_handle'
+      || !('evidence' in review.payload.command)
+      || review.payload.command.evidence.kind !== 'unknown_handle') {
+      throw new StaleDomainWriteError();
+    }
+    const original = review.payload.command;
+    if (serializeCanonical(original.cadence) !== serializeCanonical(parsed.cadence)) {
+      throw new LifecycleIdempotencyConflictError();
+    }
+    const source = this.sources.getById(parsed.sourceEventId);
+    if (source === null || source.channel !== parsed.channel
+      || source.personId !== review.personId
+      || (source.prospectId !== null && source.prospectId !== review.prospectId)
+      || source.observedAt > parsed.activatedAt) {
+      throw new LifecycleEvidenceError('Promoted inbound SourceEvent evidence is missing, future, or unowned.');
+    }
+    const promotedCommand = {
+      evidence: {
+        kind: 'source_event' as const,
+        sourceEventId: parsed.sourceEventId,
+        channel: parsed.channel,
+      },
+      personId: review.personId,
+      prospectId: review.prospectId,
+      sourceCycleId: review.sourceCycleId,
+      newCycleId: original.newCycleId,
+      activatedAt: parsed.activatedAt,
+      cadence: parsed.cadence,
+    };
+    if (review.status === 'resolved') {
+      const resolution = review.resolution;
+      if (review.version !== parsed.expectedReviewVersion + 1
+        || review.resolvedAt !== parsed.activatedAt
+        || resolution?.kind !== 'promoted_unknown_inbound'
+        || resolution.sourceEventId !== parsed.sourceEventId
+        || resolution.newCycleId !== original.newCycleId
+        || serializeCanonical(resolution.cadence) !== serializeCanonical(parsed.cadence)) {
+        throw new LifecycleIdempotencyConflictError();
+      }
+      const replay = this.readReactivationReplay(
+        `inbound:${parsed.sourceEventId}`, { version: 1, command: promotedCommand },
+      );
+      if (replay === null) {
+        throw new LifecycleEvidenceError('Resolved unknown-handle Review is missing its receipt.');
+      }
+      return replay;
+    }
+    if (review.version !== parsed.expectedReviewVersion) throw new StaleDomainWriteError();
+    const result = this.reactivateFromInboundResponse(promotedCommand);
+    if (result.kind !== 'reactivated') return result;
+    this.reviews.resolve({
+      id: review.id, activationKey: review.activationKey,
+      expectedVersion: parsed.expectedReviewVersion,
+      resolution: {
+        version: 1, kind: 'promoted_unknown_inbound',
+        activationKind: 'inbound_response', sourceEventId: parsed.sourceEventId,
+        newCycleId: original.newCycleId, cadence: parsed.cadence,
+      },
+      resolvedAt: parsed.activatedAt,
+    });
+    return result;
   }
 
   applyProspectingTrigger(input: ApplyProspectingTriggerInput): SalesCycle {
@@ -1185,7 +1258,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     const intentAndSla = inbound
       ? nextIntentAndSla(
         'inbound_response',
-        inboundSlaForSource(source, this.timezone, this.policies),
+        deriveInboundSla(source, this.timezone, this.policies),
       )
       : nextIntentAndSla('discretionary_prospecting', noneInboundSla());
     this.actions.insertNextAction({
@@ -1450,7 +1523,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     const draft = recipe.nextAction.draft;
     const source = this.sources.getById(input.entrySourceEventId);
     const inboundSla = input.kind === 'inbound_response' && source !== null
-      ? inboundSlaForSource(source, this.timezone, this.policies)
+      ? deriveInboundSla(source, this.timezone, this.policies)
       : noneInboundSla();
     const intentAndSla = input.kind === 'inbound_response'
       ? nextIntentAndSla('inbound_response', inboundSla)
@@ -2027,72 +2100,6 @@ function planManualReactivation(
   return planReactivationDefaults({
     salesCycleId, family: 'cadence_c', evaluationAt, timezone, manualDueAt,
   });
-}
-
-function inboundSlaForSource(
-  source: SourceEvent,
-  timezone: string,
-  policies: ChannelPolicySnapshots,
-): InboundSla {
-  if (source.channel === 'inbound_demo') {
-    const dueAt = addPermittedMinutes(source.observedAt, 15, timezone, policies.text);
-    return {
-      kind: 'inbound_demo_permitted_minutes', dueAt, sourceEventId: source.id,
-      provenance: {
-        version: 1, sourceEventId: source.id, sourceObservedAt: source.observedAt,
-        calculation: 'permitted_minutes', minutes: 15,
-        policyId: policies.text.id, computedDueAt: dueAt,
-      },
-    };
-  }
-  if (source.channel === 'referral') {
-    const dueAt = new Date(Date.parse(source.observedAt) + 48 * 60 * 60 * 1000).toISOString();
-    return {
-      kind: 'direct_referral_elapsed', dueAt, sourceEventId: source.id,
-      provenance: {
-        version: 1, sourceEventId: source.id, sourceObservedAt: source.observedAt,
-        calculation: 'elapsed_hours', hours: 48, policyId: null, computedDueAt: dueAt,
-      },
-    };
-  }
-  return noneInboundSla();
-}
-
-function addPermittedMinutes(
-  observedAt: string,
-  minutes: number,
-  timezone: string,
-  policy: ChannelPolicySnapshots['text'],
-): string {
-  let cursor = Date.parse(observedAt);
-  if (!Number.isFinite(cursor)) throw new LifecycleEvidenceError('Inbound source timestamp is invalid.');
-  let remaining = minutes;
-  for (let inspected = 0; inspected < 21 * 24 * 60 && remaining > 0; inspected += 1) {
-    if (isPolicyPermitted(cursor, timezone, policy)) remaining -= 1;
-    cursor += 60_000;
-  }
-  if (remaining > 0) throw new LifecycleEvidenceError('Inbound SLA policy has no usable window.');
-  return new Date(cursor).toISOString();
-}
-
-function isPolicyPermitted(
-  epoch: number,
-  timezone: string,
-  policy: ChannelPolicySnapshots['text'],
-): boolean {
-  const parts = new Intl.DateTimeFormat('en-US-u-hc-h23', {
-    timeZone: timezone, weekday: 'short', hour: '2-digit', minute: '2-digit',
-  }).formatToParts(epoch);
-  const weekdayName = parts.find(({ type }) => type === 'weekday')?.value;
-  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(weekdayName ?? '');
-  const hour = Number(parts.find(({ type }) => type === 'hour')?.value);
-  const minute = Number(parts.find(({ type }) => type === 'minute')?.value);
-  if (weekday < 0 || !Number.isInteger(hour) || !Number.isInteger(minute)) {
-    throw new LifecycleEvidenceError('Inbound SLA timezone conversion failed.');
-  }
-  const minuteOfDay = hour * 60 + minute;
-  return policy.windows.some((window) => window.days.includes(weekday as 0 | 1 | 2 | 3 | 4 | 5 | 6)
-    && minuteOfDay >= window.startMinute && minuteOfDay < window.endMinute);
 }
 
 function isQualifyingContact(activity: Activity): boolean {
