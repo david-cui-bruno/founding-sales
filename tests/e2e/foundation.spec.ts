@@ -111,9 +111,13 @@ test('packaged startup leaves an isolated database collision untouched and recov
       ).toEqual({ schema_version: 1 });
       expect(
         database
-          .prepare("SELECT sql FROM sqlite_schema WHERE name = 'foundation_fts_probe'")
-          .get(),
-      ).toEqual({ sql: 'CREATE VIRTUAL TABLE foundation_fts_probe USING fts5(content)' });
+          .prepare(`
+            SELECT count(*) AS matches
+            FROM foundation_fts_probe
+            WHERE foundation_fts_probe MATCH ?
+          `)
+          .get('packagedrecoveryprobe'),
+      ).toEqual({ matches: 0 });
     } finally {
       database.close();
     }
