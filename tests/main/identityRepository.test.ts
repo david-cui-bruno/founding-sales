@@ -107,6 +107,29 @@ describe('IdentityRepository', () => {
     });
   });
 
+  it('lists every Person contact method in stable kind/value/id order', async () => {
+    const identities = await createRepository(['person-list', 'phone-z', 'email-a', 'phone-a']);
+    const person = unitOfWork.immediate(() => {
+      const created = identities.createPerson({ displayName: 'Contact List' });
+      identities.addContactMethod({
+        personId: created.id, kind: 'phone', normalizedValue: '+14015550199',
+        validationState: 'invalid', reachability: 'none',
+      });
+      identities.addContactMethod({
+        personId: created.id, kind: 'email', normalizedValue: 'a@example.com',
+        validationState: 'unverified', reachability: 'indirect',
+      });
+      identities.addContactMethod({
+        personId: created.id, kind: 'phone', normalizedValue: '+14015550100',
+        validationState: 'valid', reachability: 'direct',
+      });
+      return created;
+    });
+
+    expect(identities.listContactMethodsForPerson(person.id).map(({ id }) => id))
+      .toEqual(['email-a', 'phone-a', 'phone-z']);
+  });
+
   it('links two LLCs and properties to one canonical Prospect', async () => {
     const identities = await createRepository([
       'person',

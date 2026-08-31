@@ -193,7 +193,8 @@ function collectActivityViolations(
     [string], { person_id: string; prospect_id: string }
   >('SELECT person_id, prospect_id FROM sales_cycles WHERE id = ?').get(action.salesCycleId);
   if (activity === undefined || owner === undefined
-    || activity.person_id !== owner.person_id || activity.prospect_id !== owner.prospect_id) {
+    || activity.person_id !== owner.person_id
+    || (settlement.outcome !== 'opted_out' && activity.prospect_id !== owner.prospect_id)) {
     violations.push('Settlement Activity is missing or not owned by the action Person/Prospect.');
     return;
   }

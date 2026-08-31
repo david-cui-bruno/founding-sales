@@ -712,12 +712,20 @@ const domainStatements = [
   `CREATE TABLE opt_out_tombstones (
     id TEXT PRIMARY KEY,
     person_id TEXT NOT NULL UNIQUE REFERENCES persons(id),
-    requested_at TEXT NOT NULL,
-    observed_channel TEXT NOT NULL,
-    source_activity_id TEXT,
+    requested_at TEXT NOT NULL CHECK (
+      requested_at GLOB '????-??-??T??:??:??.???Z'
+      AND strftime('%Y-%m-%dT%H:%M:%fZ', requested_at) = requested_at
+    ),
+    observed_channel TEXT NOT NULL CHECK (
+      observed_channel IN ('manual','imessage','gmail','call','identity_propagation')
+    ),
+    source_activity_id TEXT NOT NULL,
     evidence_ref TEXT,
-    policy_version TEXT NOT NULL,
-    created_at TEXT NOT NULL,
+    policy_version TEXT NOT NULL CHECK (length(trim(policy_version)) > 0),
+    created_at TEXT NOT NULL CHECK (
+      created_at GLOB '????-??-??T??:??:??.???Z'
+      AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at) = created_at
+    ),
     FOREIGN KEY (source_activity_id, person_id) REFERENCES activities(id, person_id)
   )`,
   `CREATE TABLE opt_out_handles (
@@ -1274,6 +1282,11 @@ const domainStatements = [
     ) OR EXISTS (
       SELECT 1
       FROM sales_cycles AS cycle
+      WHERE cycle.person_id = NEW.person_id
+        AND cycle.current_next_action_id IS NOT NULL
+    ) OR EXISTS (
+      SELECT 1
+      FROM sales_cycles AS cycle
       JOIN cadence_enrollments AS enrollment
         ON enrollment.sales_cycle_id = cycle.id
       WHERE cycle.person_id = NEW.person_id
@@ -1288,6 +1301,110 @@ const domainStatements = [
     )
     BEGIN
       SELECT RAISE(ABORT, 'open lifecycle work must close before permanent opt-out');
+    END`,
+  `CREATE TRIGGER protect_opted_out_operational_cycle_insert
+    BEFORE INSERT ON sales_cycles
+    WHEN NEW.workflow_status IN ('active','onboarding')
+      AND EXISTS (
+        SELECT 1 FROM persons AS person
+        WHERE person.id = NEW.person_id
+          AND (
+            person.opted_out = 1
+            OR EXISTS (
+              SELECT 1 FROM opt_out_tombstones AS tombstone
+              WHERE tombstone.person_id = NEW.person_id
+            )
+          )
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'opted-out person cannot own operational lifecycle work');
+    END`,
+  `CREATE TRIGGER protect_opted_out_operational_cycle_update
+    BEFORE UPDATE OF person_id, workflow_status ON sales_cycles
+    WHEN NEW.workflow_status IN ('active','onboarding')
+      AND EXISTS (
+        SELECT 1 FROM persons AS person
+        WHERE person.id = NEW.person_id
+          AND (
+            person.opted_out = 1
+            OR EXISTS (
+              SELECT 1 FROM opt_out_tombstones AS tombstone
+              WHERE tombstone.person_id = NEW.person_id
+            )
+          )
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'opted-out person cannot own operational lifecycle work');
+    END`,
+  `CREATE TRIGGER protect_opted_out_next_action_insert
+    BEFORE INSERT ON next_actions
+    WHEN NEW.status = 'pending' AND NEW.channel IS NOT NULL
+      AND EXISTS (
+        SELECT 1
+        FROM sales_cycles AS cycle
+        JOIN persons AS person ON person.id = cycle.person_id
+        WHERE cycle.id = NEW.sales_cycle_id
+          AND (
+            person.opted_out = 1
+            OR EXISTS (
+              SELECT 1 FROM opt_out_tombstones AS tombstone
+              WHERE tombstone.person_id = cycle.person_id
+            )
+          )
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'opted-out person cannot receive pending outbound work');
+    END`,
+  `CREATE TRIGGER protect_opted_out_next_action_update
+    BEFORE UPDATE OF sales_cycle_id, status, channel ON next_actions
+    WHEN NEW.status = 'pending' AND NEW.channel IS NOT NULL
+      AND EXISTS (
+        SELECT 1
+        FROM sales_cycles AS cycle
+        JOIN persons AS person ON person.id = cycle.person_id
+        WHERE cycle.id = NEW.sales_cycle_id
+          AND (
+            person.opted_out = 1
+            OR EXISTS (
+              SELECT 1 FROM opt_out_tombstones AS tombstone
+              WHERE tombstone.person_id = cycle.person_id
+            )
+          )
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'opted-out person cannot receive pending outbound work');
+    END`,
+  `CREATE TRIGGER protect_opted_out_contact_method_insert
+    BEFORE INSERT ON person_contact_methods
+    WHEN EXISTS (
+      SELECT 1 FROM opt_out_tombstones AS tombstone
+      WHERE tombstone.person_id = NEW.person_id
+    ) AND NOT EXISTS (
+      SELECT 1
+      FROM opt_out_tombstones AS tombstone
+      JOIN opt_out_handles AS handle ON handle.tombstone_id = tombstone.id
+      WHERE tombstone.person_id = NEW.person_id
+        AND handle.kind = NEW.kind
+        AND handle.normalized_value = NEW.normalized_value
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'opted-out person contact method must already be retained');
+    END`,
+  `CREATE TRIGGER protect_opted_out_contact_method_update
+    BEFORE UPDATE OF person_id, kind, normalized_value ON person_contact_methods
+    WHEN EXISTS (
+      SELECT 1 FROM opt_out_tombstones AS tombstone
+      WHERE tombstone.person_id = NEW.person_id
+    ) AND NOT EXISTS (
+      SELECT 1
+      FROM opt_out_tombstones AS tombstone
+      JOIN opt_out_handles AS handle ON handle.tombstone_id = tombstone.id
+      WHERE tombstone.person_id = NEW.person_id
+        AND handle.kind = NEW.kind
+        AND handle.normalized_value = NEW.normalized_value
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'opted-out person contact method must already be retained');
     END`,
   `CREATE TRIGGER synchronize_person_opt_out
     AFTER INSERT ON opt_out_tombstones

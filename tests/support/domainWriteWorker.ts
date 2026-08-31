@@ -70,6 +70,22 @@ export function spawnLifecycleCommandWorker(input: LifecycleCommandWorkerInput):
   ], { stdio: ['ignore', 'ignore', 'pipe'] });
 }
 
+export type OptOutCommandWorkerInput = Readonly<{
+  databasePath: string;
+  keyHex: string;
+  readyPath: string;
+  ids: readonly string[];
+  timestamp: string;
+  command: Readonly<Record<string, unknown>>;
+}>;
+
+export function spawnOptOutCommandWorker(input: OptOutCommandWorkerInput): ChildProcess {
+  return spawn(process.execPath, [
+    'node_modules/vite-node/vite-node.mjs', '--script',
+    'tests/support/optOutCommandContender.ts', JSON.stringify(input),
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
 const contenderSource = String.raw`
 const { writeFileSync } = require('node:fs');
 const Database = require('better-sqlite3-multiple-ciphers');

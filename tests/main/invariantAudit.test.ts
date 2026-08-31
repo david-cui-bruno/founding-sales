@@ -113,10 +113,18 @@ describe('auditDomainInvariants', () => {
     database.raw.prepare('UPDATE sales_cycles SET design_partner_fitness = 5 WHERE id = ?')
       .run(seeded.cycleId);
     database.raw.prepare(`
+      INSERT INTO activities (
+        id, person_id, kind, direction, channel, occurred_at, observed_outcome,
+        metadata_json, created_at
+      ) VALUES ('audit-opt-out-activity', ?, 'text', 'inbound', 'imessage', ?,
+                'opted_out', '{}', ?)
+    `).run(prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    database.raw.prepare(`
       INSERT INTO opt_out_tombstones (
         id, person_id, requested_at, observed_channel, source_activity_id,
         evidence_ref, policy_version, created_at
-      ) VALUES ('audit-tombstone', ?, ?, 'text', NULL, 'fixture', 'v1', ?)
+      ) VALUES ('audit-tombstone', ?, ?, 'imessage', 'audit-opt-out-activity',
+                'fixture', 'founder_opt_out_v1', ?)
     `).run(prospect.personId, '2026-08-30T12:00:00.000Z', '2026-08-30T12:00:00.000Z');
     database.raw.prepare(`
       INSERT INTO prioritization_rule_versions (
@@ -208,6 +216,59 @@ describe('auditDomainInvariants', () => {
     expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).toContainEqual(expect.objectContaining({
       kind: 'stage_event_chain_invalid', recordId: cycleId,
     }));
+  });
+
+  it('reports permanent opt-out projection, evidence, and handle-retention corruption', async () => {
+    workspace = createTempDatabase();
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: workspace.path, key });
+    await migrateToLatest(database, {
+      backupDirectory: `${workspace.path}.backups`, workspaceKey: key,
+    });
+    const prospect = seedProspect(database.raw, 'opt-out-audit');
+    database.raw.prepare(`
+      INSERT INTO person_contact_methods (
+        id, person_id, kind, normalized_value, validation_state, reachability,
+        is_primary, created_at, updated_at
+      ) VALUES ('unretained-audit-phone', ?, 'phone', '+14015550100', 'valid',
+                'direct', 1, ?, ?)
+    `).run(prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    database.raw.prepare(`
+      INSERT INTO activities (
+        id, person_id, kind, direction, channel, occurred_at, observed_outcome,
+        metadata_json, created_at
+      ) VALUES ('opt-out-audit-activity', ?, 'text', 'inbound', 'imessage', ?,
+                'opted_out', '{}', ?)
+    `).run(prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    database.raw.prepare(`
+      INSERT INTO opt_out_tombstones (
+        id, person_id, requested_at, observed_channel, source_activity_id,
+        policy_version, created_at
+      ) VALUES ('opt-out-audit-tombstone', ?, ?, 'imessage',
+                'opt-out-audit-activity', 'founder_opt_out_v1', ?)
+    `).run(prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    database.raw.exec('DROP TRIGGER protect_person_opt_out_reset');
+    database.raw.exec('DROP TRIGGER immutable_activities');
+    database.raw.prepare(`
+      UPDATE persons SET opted_out = 0, opted_out_at = NULL WHERE id = ?
+    `).run(prospect.personId);
+    database.raw.prepare(`
+      UPDATE activities SET observed_outcome = 'received'
+      WHERE id = 'opt-out-audit-activity'
+    `).run();
+
+    const violations = auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP });
+    expect(violations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'opt_out_projection_invalid', recordId: prospect.personId,
+      }),
+      expect.objectContaining({
+        kind: 'opt_out_tombstone_invalid', recordId: 'opt-out-audit-tombstone',
+      }),
+      expect.objectContaining({
+        kind: 'opt_out_handle_retention_invalid', recordId: 'unretained-audit-phone',
+      }),
+    ]));
   });
 
   it('reports a direct Ready to Interviewed StageEvent edge as corruption', async () => {

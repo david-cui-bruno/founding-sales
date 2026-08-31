@@ -513,6 +513,17 @@ export class IdentityRepository {
     return row === undefined ? null : parsePerson(row);
   }
 
+  listContactMethodsForPerson(personId: string): ContactMethod[] {
+    const id = idSchema.parse(personId);
+    return this.database.raw.prepare(`
+      SELECT id, person_id, kind, normalized_value, raw_value, validation_state,
+        reachability, is_primary, in_contacts, created_at, updated_at
+      FROM person_contact_methods
+      WHERE person_id = ?
+      ORDER BY kind ASC, normalized_value ASC, id ASC
+    `).all(id).map(parseContactMethod);
+  }
+
   findOrganizationsByNormalizedAlias(alias: string): Organization[] {
     const parsedAlias = nonemptyTextSchema.parse(alias);
     const rows = this.database.raw.prepare(`

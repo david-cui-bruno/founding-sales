@@ -262,6 +262,7 @@ export type PromoteUnknownInboundReviewInput = PromoteUnknownInboundReviewComman
 export type ReactivationResult = Readonly<
   | { kind: 'reactivated'; cycle: SalesCycle }
   | { kind: 'review_required'; reviewItem: LifecycleReviewItem }
+  | { kind: 'permanently_blocked'; tombstoneId: string }
 >;
 
 export type ApplyProspectingTriggerInput = Readonly<{
@@ -754,6 +755,14 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       closedAt: effectiveAt, closeReason: preserveWon ? null : 'opt_out', closeNotes: null,
       onboardingStopReason: preserveWon ? 'opt_out' : null,
     });
+    if (!preserveWon && parsed.terminalStageEventId !== null) {
+      const sequence = this.events.listCycleStageEvents(cycle.id).length + 1;
+      this.events.appendStageEvent({
+        id: parsed.terminalStageEventId, salesCycleId: cycle.id,
+        fromStage: cycle.stage, toStage: 'lost_nurture', effectiveAt,
+        confirmedAt: effectiveAt, confirmationKind: 'mechanical', transitionSequence: sequence,
+      });
+    }
     const action = this.actions.getById(cycle.currentNextActionId!);
     if (action === null) throw new LifecycleConflictError('Current action is missing.');
     this.actions.settleAction({
@@ -774,14 +783,6 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
         }, cadence: action.cadence, workIntent: action.workIntent, inboundSla: action.inboundSla,
       },
     });
-    if (!preserveWon && parsed.terminalStageEventId !== null) {
-      const sequence = this.events.listCycleStageEvents(cycle.id).length + 1;
-      this.events.appendStageEvent({
-        id: parsed.terminalStageEventId, salesCycleId: cycle.id,
-        fromStage: cycle.stage, toStage: 'lost_nurture', effectiveAt,
-        confirmedAt: effectiveAt, confirmationKind: 'mechanical', transitionSequence: sequence,
-      });
-    }
     const cancelledActionIds = [
       action.id,
       ...this.cancelPendingOutboundForPerson(parsed.personId, evidence, effectiveAt),
@@ -990,6 +991,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
   reactivateFromRule(input: ReactivateFromRuleInput): ReactivationResult {
     this.unitOfWork.assertWriteScope();
     const parsed = reactivationRuleInputSchema.parse(input) as ReactivateFromRuleInput;
+    const permanentBlock = this.permanentReactivationBlock(parsed.personId);
+    if (permanentBlock !== null) return permanentBlock;
     const activationKey = `rule:${parsed.ruleId}`;
     const command = { version: 1 as const, command: { ...parsed } };
     const replay = this.readReactivationReplay(activationKey, command);
@@ -1052,6 +1055,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
   reactivateFromInboundResponse(input: ReactivateFromInboundInput): ReactivationResult {
     this.unitOfWork.assertWriteScope();
     const parsed = reactivationInboundInputSchema.parse(input) as ReactivateFromInboundInput;
+    const permanentBlock = this.permanentReactivationBlock(parsed.personId);
+    if (permanentBlock !== null) return permanentBlock;
     const activationKey = parsed.evidence.kind === 'source_event'
       ? `inbound:${parsed.evidence.sourceEventId}`
       : `inbound-handle:${parsed.evidence.handleKind}:${parsed.evidence.normalizedValue}`;
@@ -1130,6 +1135,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       || review.payload.command.evidence.kind !== 'unknown_handle') {
       throw new StaleDomainWriteError();
     }
+    const permanentBlock = this.permanentReactivationBlock(review.personId);
+    if (permanentBlock !== null) return permanentBlock;
     const original = review.payload.command;
     if (serializeCanonical(original.cadence) !== serializeCanonical(parsed.cadence)) {
       throw new LifecycleIdempotencyConflictError();
@@ -1432,6 +1439,19 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       || prospect.qualificationState !== 'eligible') return 'prospect_ineligible';
     if (this.cycles.getOperationalCycleForPerson(input.personId) !== null) return 'operational_cycle_exists';
     return null;
+  }
+
+  private permanentReactivationBlock(personId: string): Extract<
+    ReactivationResult, { kind: 'permanently_blocked' }
+  > | null {
+    const row = this.database.raw.prepare<
+      [string], { id: string }
+    >(`
+      SELECT id FROM opt_out_tombstones WHERE person_id = ?
+    `).get(personId);
+    return row === undefined
+      ? null
+      : Object.freeze({ kind: 'permanently_blocked', tombstoneId: row.id });
   }
 
   private prepareBlockedReactivation(input: {

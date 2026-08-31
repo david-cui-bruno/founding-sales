@@ -114,3 +114,26 @@ export class LifecycleInvariantError extends Error {
     this.name = 'LifecycleInvariantError';
   }
 }
+
+export class OptOutPersistenceConflictError extends Error {
+  readonly recordKind: 'tombstone' | 'handle';
+  readonly recordId: string;
+
+  constructor(recordKind: 'tombstone' | 'handle', recordId: string) {
+    super('The permanent opt-out record already exists with different immutable content.');
+    this.name = 'OptOutPersistenceConflictError';
+    this.recordKind = recordKind;
+    this.recordId = recordId;
+  }
+}
+
+export class OutboundContactBlockedError extends Error {
+  readonly reasonCode = 'person_or_handle_opted_out' as const;
+  readonly tombstoneIds: readonly string[];
+
+  constructor(tombstoneIds: readonly string[]) {
+    super('Outbound contact is blocked by permanent opt-out evidence.');
+    this.name = 'OutboundContactBlockedError';
+    this.tombstoneIds = Object.freeze([...tombstoneIds]);
+  }
+}

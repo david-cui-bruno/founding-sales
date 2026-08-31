@@ -116,6 +116,12 @@ const requiredTriggers = [
   'protect_next_action_delete',
   'protect_opt_out_handle',
   'protect_opt_out_handle_update',
+  'protect_opted_out_contact_method_insert',
+  'protect_opted_out_contact_method_update',
+  'protect_opted_out_next_action_insert',
+  'protect_opted_out_next_action_update',
+  'protect_opted_out_operational_cycle_insert',
+  'protect_opted_out_operational_cycle_update',
   'protect_opt_out_tombstone_active_cadence',
   'protect_opt_out_tombstone',
   'protect_opt_out_tombstone_update',
@@ -919,6 +925,120 @@ function runDatabaseScenario(
       assert.throws(() => raw.prepare(`
         UPDATE persons SET opted_out = 1, opted_out_at = NULL WHERE id = ?
       `).run(prospect.personId));
+      return;
+    }
+    case 'opt-out-rejects-invalid-row': {
+      const prospect = seedProspect(raw, 'opt-out-invalid');
+      insertRawActivity(raw, 'opt-out-invalid-evidence', prospect.personId, null, null);
+      const insert = raw.prepare(`
+        INSERT INTO opt_out_tombstones (
+          id, person_id, requested_at, observed_channel, source_activity_id,
+          policy_version, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      assert.throws(() => insert.run(
+        'missing-activity', prospect.personId, DOMAIN_TIMESTAMP, 'manual',
+        null, 'founder_opt_out_v1', DOMAIN_TIMESTAMP,
+      ));
+      assert.throws(() => insert.run(
+        'bad-channel', prospect.personId, DOMAIN_TIMESTAMP, 'text',
+        'opt-out-invalid-evidence', 'founder_opt_out_v1', DOMAIN_TIMESTAMP,
+      ));
+      assert.throws(() => insert.run(
+        'bad-time', prospect.personId, '2026-08-30 12:00:00', 'manual',
+        'opt-out-invalid-evidence', 'founder_opt_out_v1', DOMAIN_TIMESTAMP,
+      ));
+      assert.throws(() => insert.run(
+        'blank-policy', prospect.personId, DOMAIN_TIMESTAMP, 'manual',
+        'opt-out-invalid-evidence', '   ', DOMAIN_TIMESTAMP,
+      ));
+      const other = seedProspect(raw, 'opt-out-invalid-other');
+      assert.throws(() => insert.run(
+        'wrong-owner', other.personId, DOMAIN_TIMESTAMP, 'manual',
+        'opt-out-invalid-evidence', 'founder_opt_out_v1', DOMAIN_TIMESTAMP,
+      ));
+      return;
+    }
+    case 'opt-out-guards-cycle-action-contact': {
+      const blocked = seedProspect(raw, 'opt-out-guard-blocked');
+      insertOptOutTombstone(raw, 'opt-out-guard-tombstone', blocked.personId);
+      const clean = seedProspect(raw, 'opt-out-guard-clean');
+      const closedCycleId = insertClosedCycle({
+        database: raw, prefix: 'opt-out-guard-clean', prospect: clean,
+      });
+      assert.throws(() => raw.prepare(`
+        UPDATE sales_cycles SET person_id = ? WHERE id = ?
+      `).run(blocked.personId, closedCycleId));
+      assert.throws(() => raw.prepare(`
+        INSERT INTO next_actions (
+          id, sales_cycle_id, action_type, channel, status, due_at, timezone, created_at
+        ) VALUES ('blocked-action', ?, 'call', 'phone', 'pending', ?,
+                  'America/New_York', ?)
+      `).run(
+        insertClosedCycle({ database: raw, prefix: 'opt-out-guard-blocked', prospect: blocked }),
+        DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+      ));
+      raw.prepare(`
+        INSERT INTO next_actions (
+          id, sales_cycle_id, action_type, channel, status, due_at, timezone, created_at
+        ) VALUES ('blocked-internal', ?, 'internal_review', NULL, 'pending', ?,
+                  'America/New_York', ?)
+      `).run(
+        insertClosedCycle({ database: raw, prefix: 'opt-out-guard-internal', prospect: blocked }),
+        DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+      );
+      assert.throws(() => raw.prepare(`
+        INSERT INTO person_contact_methods (
+          id, person_id, kind, normalized_value, validation_state, reachability,
+          is_primary, created_at, updated_at
+        ) VALUES ('unretained-contact', ?, 'phone', '+14015550999', 'valid',
+                  'direct', 0, ?, ?)
+      `).run(blocked.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP));
+      raw.prepare(`
+        INSERT INTO opt_out_handles (id, tombstone_id, kind, normalized_value, created_at)
+        VALUES ('retained-handle', 'opt-out-guard-tombstone', 'phone', '+14015550999', ?)
+      `).run(DOMAIN_TIMESTAMP);
+      raw.prepare(`
+        INSERT INTO person_contact_methods (
+          id, person_id, kind, normalized_value, validation_state, reachability,
+          is_primary, created_at, updated_at
+        ) VALUES ('retained-contact', ?, 'phone', '+14015550999', 'valid',
+                  'direct', 0, ?, ?)
+      `).run(blocked.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+      return;
+    }
+    case 'replace-opt-out-retention': {
+      const first = seedProspect(raw, 'opt-out-replace-first');
+      const second = seedProspect(raw, 'opt-out-replace-second');
+      insertOptOutTombstone(raw, 'opt-out-replace-tombstone', first.personId);
+      raw.prepare(`
+        INSERT INTO opt_out_handles (id, tombstone_id, kind, normalized_value, created_at)
+        VALUES ('opt-out-replace-handle', 'opt-out-replace-tombstone', 'phone',
+                '+14015550100', ?)
+      `).run(DOMAIN_TIMESTAMP);
+      assert.throws(() => raw.prepare(`
+        INSERT OR REPLACE INTO opt_out_tombstones (
+          id, person_id, requested_at, observed_channel, source_activity_id,
+          policy_version, created_at
+        ) SELECT id, person_id, requested_at, observed_channel, source_activity_id,
+                 policy_version, created_at
+          FROM opt_out_tombstones WHERE id = 'opt-out-replace-tombstone'
+      `).run());
+      const secondEvidence = 'opt-out-replace-second-opt-out-evidence';
+      insertRawActivity(raw, secondEvidence, second.personId, null, null);
+      insertOptOutTombstone(raw, 'opt-out-replace-second-tombstone', second.personId);
+      assert.throws(() => raw.prepare(`
+        INSERT OR REPLACE INTO opt_out_tombstones (
+          id, person_id, requested_at, observed_channel, source_activity_id,
+          policy_version, created_at
+        ) VALUES ('replacement-id', ?, ?, 'manual', ?, 'founder_opt_out_v1', ?)
+      `).run(second.personId, DOMAIN_TIMESTAMP, secondEvidence, DOMAIN_TIMESTAMP));
+      assert.throws(() => raw.prepare(`
+        INSERT OR REPLACE INTO opt_out_handles (
+          id, tombstone_id, kind, normalized_value, created_at
+        ) VALUES ('replacement-handle-id', 'opt-out-replace-tombstone', 'phone',
+                  '+14015550100', ?)
+      `).run(DOMAIN_TIMESTAMP));
       return;
     }
     case 'duplicate-provider-activity': {
@@ -1796,11 +1916,14 @@ function insertOptOutTombstone(
   id: string,
   personId: string,
 ): void {
+  const activityId = `${id}-activity`;
+  insertRawActivity(database, activityId, personId, null, null);
   database.prepare(`
     INSERT INTO opt_out_tombstones (
-      id, person_id, requested_at, observed_channel, policy_version, created_at
-    ) VALUES (?, ?, ?, 'text', 'v1', ?)
-  `).run(id, personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+      id, person_id, requested_at, observed_channel, source_activity_id,
+      policy_version, created_at
+    ) VALUES (?, ?, ?, 'manual', ?, 'founder_opt_out_v1', ?)
+  `).run(id, personId, DOMAIN_TIMESTAMP, activityId, DOMAIN_TIMESTAMP);
 }
 
 function insertSourceIntakeReceipt(

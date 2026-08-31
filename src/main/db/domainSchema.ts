@@ -421,8 +421,8 @@ export type OptOutTombstonesTable = {
   id: string;
   person_id: string;
   requested_at: string;
-  observed_channel: string;
-  source_activity_id: string | null;
+  observed_channel: 'manual' | 'imessage' | 'gmail' | 'call' | 'identity_propagation';
+  source_activity_id: string;
   evidence_ref: string | null;
   policy_version: string;
   created_at: string;

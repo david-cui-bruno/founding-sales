@@ -6,6 +6,7 @@ import {
   FOUNDER_CHANNEL_POLICIES_V1, nextStrictFutureOctoberOne,
 } from '../cadence/cadenceScheduler';
 import type { SourceEvent } from '../source/sourceTypes';
+import { normalizeEmail, normalizePhone } from '../source/sourceService';
 import { deriveInboundSla } from './inboundSla';
 import {
   reactivationCommandEnvelopeSchema,
@@ -419,6 +420,67 @@ export function auditDomainInvariants(input: {
     'Opted-out Person retains an active cadence.',
   );
 
+  for (const row of rows(`
+    SELECT person.id, person.opted_out, person.opted_out_at,
+      tombstone.id AS tombstone_id, tombstone.requested_at,
+      tombstone.observed_channel, tombstone.source_activity_id,
+      tombstone.policy_version, tombstone.created_at,
+      activity.person_id AS activity_person_id, activity.kind AS activity_kind,
+      activity.direction AS activity_direction, activity.channel AS activity_channel,
+      activity.observed_outcome AS activity_outcome
+    FROM persons AS person
+    LEFT JOIN opt_out_tombstones AS tombstone ON tombstone.person_id = person.id
+    LEFT JOIN activities AS activity ON activity.id = tombstone.source_activity_id
+    WHERE person.opted_out = 1 OR tombstone.id IS NOT NULL
+    ORDER BY person.id
+  `)) {
+    const hasTombstone = typeof row.tombstone_id === 'string';
+    const projectionValid = hasTombstone && row.opted_out === 1
+      && row.opted_out_at === row.requested_at;
+    if (!projectionValid) {
+      add('opt_out_projection_invalid', row.id, 'Person opt-out projection does not match its tombstone.');
+    }
+    if (!hasTombstone) continue;
+    const evidenceValid = row.activity_person_id === row.id
+      && row.activity_outcome === 'opted_out'
+      && optOutChannelEvidenceValid(row);
+    if (!isCanonicalUtc(row.requested_at) || !isCanonicalUtc(row.created_at)
+      || typeof row.policy_version !== 'string' || row.policy_version.trim().length === 0
+      || !evidenceValid) {
+      add('opt_out_tombstone_invalid', row.tombstone_id, 'Opt-out tombstone evidence is malformed.');
+    }
+  }
+  for (const row of rows(`
+    SELECT handle.id, handle.kind, handle.normalized_value
+    FROM opt_out_handles AS handle ORDER BY handle.id
+  `)) {
+    let canonical = false;
+    try {
+      const normalized = row.kind === 'phone'
+        ? normalizePhone(String(row.normalized_value))
+        : row.kind === 'email' ? normalizeEmail(String(row.normalized_value)) : '';
+      canonical = normalized === row.normalized_value;
+    } catch {
+      canonical = false;
+    }
+    if (!canonical) add('opt_out_handle_invalid', row.id, 'Blocked handle is not canonical.');
+  }
+  for (const row of rows(`
+    SELECT contact.id
+    FROM person_contact_methods AS contact
+    JOIN opt_out_tombstones AS tombstone ON tombstone.person_id = contact.person_id
+    WHERE NOT EXISTS (
+      SELECT 1 FROM opt_out_handles AS handle
+      WHERE handle.tombstone_id = tombstone.id
+        AND handle.kind = contact.kind
+        AND handle.normalized_value = contact.normalized_value
+    )
+    ORDER BY contact.id
+  `)) add(
+    'opt_out_handle_retention_invalid', row.id,
+    'An opted-out Person contact method is missing from permanent handle retention.',
+  );
+
   const receipts = rows(`
     SELECT activation_key, activation_kind, person_id, source_cycle_id,
       reactivation_rule_id, source_event_id, new_cycle_id, command_json, result_json,
@@ -689,6 +751,28 @@ function isCanonicalUtc(value: unknown): boolean {
     || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
   const epoch = Date.parse(value);
   return Number.isFinite(epoch) && new Date(epoch).toISOString() === value;
+}
+
+function optOutChannelEvidenceValid(row: Row): boolean {
+  if (row.observed_channel === 'imessage') {
+    return row.activity_kind === 'text' && row.activity_direction === 'inbound'
+      && row.activity_channel === 'imessage';
+  }
+  if (row.observed_channel === 'gmail') {
+    return row.activity_kind === 'email' && row.activity_direction === 'inbound'
+      && row.activity_channel === 'gmail';
+  }
+  if (row.observed_channel === 'manual') {
+    return (row.activity_kind === 'note' || row.activity_kind === 'system')
+      && row.activity_direction === 'internal' && row.activity_channel === 'manual';
+  }
+  if (row.observed_channel === 'call') {
+    return row.activity_kind === 'call'
+      && (row.activity_channel === 'phone' || row.activity_channel === 'call');
+  }
+  return row.observed_channel === 'identity_propagation'
+    && row.activity_kind === 'system' && row.activity_direction === 'internal'
+    && row.activity_channel === 'identity_propagation';
 }
 
 function isStrictVersionedJson(value: unknown): boolean {
