@@ -827,6 +827,60 @@ function runDatabaseScenario(
       }));
       return;
     }
+    case 'deferred-media-consent-cycle': {
+      const prospect = seedProspect(raw, 'deferred-media');
+      raw.exec('BEGIN IMMEDIATE');
+      raw.prepare(`
+        INSERT INTO consent_policy_records (
+          id, person_id, activity_id, policy_kind, policy_version, effective_at,
+          decision, evidence_json, created_at
+        ) VALUES (
+          'deferred-media-consent', ?, 'deferred-media-activity', 'recording',
+          'v1', ?, 'granted', '{}', ?
+        )
+      `).run(prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+      raw.prepare(`
+        INSERT INTO activities (
+          id, person_id, prospect_id, kind, direction, channel, occurred_at,
+          consent_policy_record_id, recording_storage_ref, metadata_json, created_at
+        ) VALUES (
+          'deferred-media-activity', ?, ?, 'call', 'outbound', 'phone', ?,
+          'deferred-media-consent', 'media/recording.enc', '{}', ?
+        )
+      `).run(prospect.personId, prospect.prospectId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+      raw.exec('COMMIT');
+      assert.deepEqual(raw.prepare(`
+        SELECT activity_id FROM consent_policy_records
+        WHERE id = 'deferred-media-consent'
+      `).get(), { activity_id: 'deferred-media-activity' });
+
+      const other = seedProspect(raw, 'deferred-media-other');
+      raw.exec('BEGIN IMMEDIATE');
+      try {
+        raw.prepare(`
+          INSERT INTO consent_policy_records (
+            id, person_id, activity_id, policy_kind, policy_version, effective_at,
+            decision, evidence_json, created_at
+          ) VALUES (
+            'deferred-mismatch-consent', ?, 'deferred-mismatch-activity',
+            'recording', 'v1', ?, 'granted', '{}', ?
+          )
+        `).run(prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+        raw.prepare(`
+          INSERT INTO activities (
+            id, person_id, prospect_id, kind, direction, channel, occurred_at,
+            consent_policy_record_id, recording_storage_ref, metadata_json, created_at
+          ) VALUES (
+            'deferred-mismatch-activity', ?, ?, 'call', 'outbound', 'phone', ?,
+            'deferred-mismatch-consent', 'media/mismatch.enc', '{}', ?
+          )
+        `).run(other.personId, other.prospectId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+        assert.throws(() => raw.exec('COMMIT'));
+      } finally {
+        if (raw.inTransaction) raw.exec('ROLLBACK');
+      }
+      return;
+    }
     case 'trigger-source-ownership': {
       const first = seedProspect(raw, 'trigger-owner-first');
       const second = seedProspect(raw, 'trigger-owner-second');

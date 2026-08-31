@@ -258,6 +258,143 @@ describe('EventRepository', () => {
     expect(activity.transcriptStorageRef).toBe('media/transcript.enc');
   });
 
+  it('requires per-activity consent scope to match the media Activity ID', async () => {
+    await setup();
+    unitOfWork.immediate(() => {
+      const scopedActivity = events.appendActivity(activityInput({
+        id: 'scoped-activity-a',
+        providerIdempotencyKey: 'scoped-activity-a',
+      }));
+      events.appendConsentPolicyRecord({
+        id: 'scoped-consent-a',
+        personId: first.personId,
+        activityId: scopedActivity.id,
+        policyKind: 'recording',
+        policyVersion: 'v1',
+        effectiveAt: TIMESTAMP,
+        decision: 'granted',
+        evidence: {},
+      });
+    });
+
+    expect(() => unitOfWork.immediate(() => events.appendActivity(activityInput({
+      id: 'scoped-activity-b',
+      providerIdempotencyKey: 'scoped-activity-b',
+      consentPolicyRecordId: 'scoped-consent-a',
+      recordingStorageRef: 'media/scoped-b.enc',
+    })))).toThrowError(expect.objectContaining({ name: 'ActivityMediaConsentError' }));
+  });
+
+  it('rejects future consent while accepting equal-time and past consent', async () => {
+    await setup();
+    unitOfWork.immediate(() => {
+      events.appendConsentPolicyRecord({
+        id: 'past-consent', personId: first.personId, policyKind: 'recording',
+        policyVersion: 'v1', effectiveAt: '2026-08-30T11:00:00.000Z',
+        decision: 'granted', evidence: {},
+      });
+      events.appendConsentPolicyRecord({
+        id: 'future-consent', personId: first.personId, policyKind: 'recording',
+        policyVersion: 'v1', effectiveAt: LATER, decision: 'granted', evidence: {},
+      });
+      const past = events.appendActivity(activityInput({
+        id: 'past-consent-media', providerIdempotencyKey: 'past-consent-media',
+        consentPolicyRecordId: 'past-consent', recordingStorageRef: 'media/past.enc',
+      }));
+      expect(past.recordingStorageRef).toBe('media/past.enc');
+    });
+
+    expect(() => unitOfWork.immediate(() => events.appendActivity(activityInput({
+      id: 'future-consent-media', providerIdempotencyKey: 'future-consent-media',
+      consentPolicyRecordId: 'future-consent', recordingStorageRef: 'media/future.enc',
+    })))).toThrowError(expect.objectContaining({ name: 'ActivityMediaConsentError' }));
+  });
+
+  it('commits matching per-activity consent and media atomically with preassigned IDs', async () => {
+    await setup();
+
+    const activity = unitOfWork.immediate(() => {
+      const consent = events.appendConsentPolicyRecord({
+        id: 'atomic-media-consent',
+        personId: first.personId,
+        activityId: 'atomic-media-activity',
+        policyKind: 'recording',
+        policyVersion: 'v1',
+        effectiveAt: TIMESTAMP,
+        decision: 'granted',
+        evidence: {},
+      });
+      return events.appendActivity(activityInput({
+        id: 'atomic-media-activity',
+        providerIdempotencyKey: 'atomic-media-activity',
+        consentPolicyRecordId: consent.id,
+        recordingStorageRef: 'media/atomic.enc',
+      }));
+    });
+
+    expect(activity).toMatchObject({
+      id: 'atomic-media-activity',
+      consentPolicyRecordId: 'atomic-media-consent',
+      recordingStorageRef: 'media/atomic.enc',
+    });
+    expect(events.getActivity(activity.id)).toEqual(activity);
+  });
+
+  it('fails closed when stored media consent is future or scoped to another Activity', async () => {
+    await setup();
+    database!.raw.prepare(`
+      INSERT INTO consent_policy_records (
+        id, person_id, policy_kind, policy_version, effective_at,
+        decision, evidence_json, created_at
+      ) VALUES ('raw-future-consent', ?, 'recording', 'v1', ?, 'granted', '{}', ?)
+    `).run(first.personId, LATER, TIMESTAMP);
+    database!.raw.prepare(`
+      INSERT INTO activities (
+        id, person_id, prospect_id, kind, direction, channel, occurred_at,
+        adapter, provider_idempotency_key, consent_policy_record_id,
+        recording_storage_ref, metadata_json, created_at
+      ) VALUES (
+        'raw-future-media', ?, ?, 'call', 'outbound', 'phone', ?, 'phone',
+        'raw-future-provider', 'raw-future-consent', 'media/future.enc', '{}', ?
+      )
+    `).run(first.personId, first.prospectId, TIMESTAMP, TIMESTAMP);
+
+    expect(() => events.getActivity('raw-future-media'))
+      .toThrowError(expect.objectContaining({ name: 'ActivityMediaConsentError' }));
+    expect(() => unitOfWork.immediate(() => events.appendActivity({
+      personId: first.personId,
+      prospectId: first.prospectId,
+      kind: 'call',
+      direction: 'outbound',
+      channel: 'phone',
+      adapter: 'phone',
+      providerIdempotencyKey: 'raw-future-provider',
+      metadata: {},
+    }))).toThrowError(expect.objectContaining({ name: 'ActivityMediaConsentError' }));
+
+    unitOfWork.immediate(() => {
+      const scopedActivity = events.appendActivity(activityInput({
+        id: 'raw-scope-owner', providerIdempotencyKey: 'raw-scope-owner',
+      }));
+      events.appendConsentPolicyRecord({
+        id: 'raw-scoped-consent', personId: first.personId, activityId: scopedActivity.id,
+        policyKind: 'recording', policyVersion: 'v1', effectiveAt: TIMESTAMP,
+        decision: 'granted', evidence: {},
+      });
+    });
+    database!.raw.prepare(`
+      INSERT INTO activities (
+        id, person_id, prospect_id, kind, direction, channel, occurred_at,
+        consent_policy_record_id, transcript_storage_ref, metadata_json, created_at
+      ) VALUES (
+        'raw-wrong-scope-media', ?, ?, 'call', 'outbound', 'phone', ?,
+        'raw-scoped-consent', 'media/wrong-scope.enc', '{}', ?
+      )
+    `).run(first.personId, first.prospectId, TIMESTAMP, TIMESTAMP);
+    expect(() => events.getActivity('raw-wrong-scope-media'))
+      .toThrowError(expect.objectContaining({ name: 'ActivityMediaConsentError' }));
+  });
+
   it('rejects a provider-key collision owned by another Person/Prospect/Cycle', async () => {
     await setup();
     unitOfWork.immediate(() => events.appendActivity(activityInput()));

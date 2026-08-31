@@ -32,6 +32,7 @@ const scenarios = [
   'duplicate-provider-activity',
   'activity-evidence-ownership',
   'consent-activity-ownership',
+  'deferred-media-consent-cycle',
   'trigger-source-ownership',
   'completion-activity-ownership',
   'immutable-source',

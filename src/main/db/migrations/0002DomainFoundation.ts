@@ -307,7 +307,8 @@ const domainStatements = [
     evidence_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
     UNIQUE (id, person_id),
-    FOREIGN KEY (activity_id, person_id) REFERENCES activities(id, person_id)
+    FOREIGN KEY (activity_id, person_id)
+      REFERENCES activities(id, person_id) DEFERRABLE INITIALLY DEFERRED
   )`,
   `CREATE TABLE activities (
     id TEXT PRIMARY KEY,
@@ -334,7 +335,7 @@ const domainStatements = [
     FOREIGN KEY (prospect_id, person_id) REFERENCES prospects(id, person_id),
     FOREIGN KEY (sales_cycle_id, person_id) REFERENCES sales_cycles(id, person_id),
     FOREIGN KEY (consent_policy_record_id, person_id)
-      REFERENCES consent_policy_records(id, person_id),
+      REFERENCES consent_policy_records(id, person_id) DEFERRABLE INITIALLY DEFERRED,
     CHECK (provider_idempotency_key IS NULL OR adapter IS NOT NULL),
     CHECK (
       (recording_storage_ref IS NULL AND transcript_storage_ref IS NULL)

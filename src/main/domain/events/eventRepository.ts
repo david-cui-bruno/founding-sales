@@ -183,7 +183,9 @@ const storedConsentPolicyRecordRowSchema = z.object({
 const storedMediaConsentRowSchema = z.object({
   id: idSchema,
   person_id: idSchema,
+  activity_id: idSchema.nullable(),
   policy_kind: z.enum(['recording', 'cloud_processing', 'outbound']),
+  effective_at: utcTimestampSchema,
   decision: z.enum(['granted', 'denied', 'not_required', 'unknown']),
 }).strict();
 
@@ -234,12 +236,7 @@ export class EventRepository {
     const providerKey = parsed.providerIdempotencyKey ?? null;
     const recordingStorageRef = parsed.recordingStorageRef ?? null;
     const transcriptStorageRef = parsed.transcriptStorageRef ?? null;
-    if (recordingStorageRef !== null || transcriptStorageRef !== null) {
-      this.assertApplicableRecordingConsent(
-        parsed.personId,
-        parsed.consentPolicyRecordId ?? null,
-      );
-    }
+    const hasSuppliedMedia = recordingStorageRef !== null || transcriptStorageRef !== null;
 
     if (adapter !== null && providerKey !== null) {
       const existing = this.database.raw.prepare(`
@@ -248,7 +245,7 @@ export class EventRepository {
         WHERE adapter = ? AND provider_idempotency_key = ?
       `).get(adapter, providerKey);
       if (existing !== undefined) {
-        const canonical = parseActivity(existing);
+        const canonical = this.parseAndValidateActivity(existing);
         if (
           canonical.personId !== parsed.personId
           || canonical.prospectId !== (parsed.prospectId ?? null)
@@ -261,6 +258,14 @@ export class EventRepository {
             throw new Error('The Activity ID and provider idempotency key identify different rows.');
           }
         }
+        if (hasSuppliedMedia) {
+          this.assertApplicableRecordingConsent({
+            personId: parsed.personId,
+            consentPolicyRecordId: parsed.consentPolicyRecordId ?? null,
+            activityId: canonical.id,
+            occurredAt: canonical.occurredAt,
+          });
+        }
         return canonical;
       }
     }
@@ -268,6 +273,14 @@ export class EventRepository {
     const id = idSchema.parse(parsed.id ?? this.ids.next());
     const occurredAt = utcTimestampSchema.parse(parsed.occurredAt ?? this.clock.now());
     const createdAt = utcTimestampSchema.parse(this.clock.now());
+    if (hasSuppliedMedia) {
+      this.assertApplicableRecordingConsent({
+        personId: parsed.personId,
+        consentPolicyRecordId: parsed.consentPolicyRecordId ?? null,
+        activityId: id,
+        occurredAt,
+      });
+    }
     const row = this.database.raw.prepare(`
       INSERT INTO activities (
         id, person_id, prospect_id, sales_cycle_id, cadence_step_id, kind,
@@ -298,7 +311,7 @@ export class EventRepository {
       metadataJson,
       createdAt,
     );
-    return parseActivity(row);
+    return this.parseAndValidateActivity(row);
   }
 
   appendActivityAmendment(input: AppendActivityAmendmentInput): ActivityAmendment {
@@ -378,7 +391,7 @@ export class EventRepository {
       FROM activities
       WHERE id = ?
     `).get(parsedId);
-    return row === undefined ? null : parseActivity(row);
+    return row === undefined ? null : this.parseAndValidateActivity(row);
   }
 
   listCycleStageEvents(salesCycleId: string): StageEvent[] {
@@ -392,22 +405,39 @@ export class EventRepository {
     return rows.map(parseStageEvent);
   }
 
-  private assertApplicableRecordingConsent(
-    personId: string,
-    consentPolicyRecordId: string | null,
-  ): void {
-    if (consentPolicyRecordId === null) throw new ActivityMediaConsentError();
+  private parseAndValidateActivity(value: unknown): Activity {
+    const activity = parseActivity(value);
+    if (activity.recordingStorageRef !== null || activity.transcriptStorageRef !== null) {
+      this.assertApplicableRecordingConsent({
+        personId: activity.personId,
+        consentPolicyRecordId: activity.consentPolicyRecordId,
+        activityId: activity.id,
+        occurredAt: activity.occurredAt,
+      });
+    }
+    return activity;
+  }
+
+  private assertApplicableRecordingConsent(input: {
+    personId: string;
+    consentPolicyRecordId: string | null;
+    activityId: string;
+    occurredAt: string;
+  }): void {
+    if (input.consentPolicyRecordId === null) throw new ActivityMediaConsentError();
     const value = this.database.raw.prepare(`
-      SELECT id, person_id, policy_kind, decision
+      SELECT id, person_id, activity_id, policy_kind, effective_at, decision
       FROM consent_policy_records
       WHERE id = ?
-    `).get(consentPolicyRecordId);
+    `).get(input.consentPolicyRecordId);
     if (value === undefined) throw new ActivityMediaConsentError();
     const consent = storedMediaConsentRowSchema.parse(value);
     if (
-      consent.person_id !== personId
+      consent.person_id !== input.personId
       || consent.policy_kind !== 'recording'
       || (consent.decision !== 'granted' && consent.decision !== 'not_required')
+      || consent.effective_at > input.occurredAt
+      || (consent.activity_id !== null && consent.activity_id !== input.activityId)
     ) {
       throw new ActivityMediaConsentError();
     }
