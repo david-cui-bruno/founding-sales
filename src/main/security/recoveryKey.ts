@@ -31,8 +31,13 @@ export class UnsupportedRecoveryKeyVersionError extends Error {
 export function createRecoveryKeyMaterial(key: WorkspaceKey): string {
   assertWorkspaceKey(key);
   const encodedKey = key.bytes.toString('base64url');
-  const checksum = calculateChecksum(key.bytes).toString('hex');
-  return `${RECOVERY_PREFIX}${RECOVERY_VERSION}-${encodedKey}-${checksum}`;
+  const checksumBytes = calculateChecksum(key.bytes);
+  try {
+    const checksum = checksumBytes.toString('hex');
+    return `${RECOVERY_PREFIX}${RECOVERY_VERSION}-${encodedKey}-${checksum}`;
+  } finally {
+    checksumBytes.fill(0);
+  }
 }
 
 export function parseRecoveryKeyMaterial(material: string): WorkspaceKey {
@@ -71,7 +76,12 @@ export function parseRecoveryKeyMaterial(material: string): WorkspaceKey {
 }
 
 function calculateChecksum(value: Buffer): Buffer {
-  return createHash('sha256').update(value).digest().subarray(0, CHECKSUM_HEX_LENGTH / 2);
+  const digest = createHash('sha256').update(value).digest();
+  try {
+    return Buffer.from(digest.subarray(0, CHECKSUM_HEX_LENGTH / 2));
+  } finally {
+    digest.fill(0);
+  }
 }
 
 function assertWorkspaceKey(key: WorkspaceKey): void {

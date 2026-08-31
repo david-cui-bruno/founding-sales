@@ -19,3 +19,17 @@ export class InvalidProtectedWorkspaceKeyError extends Error {
     this.name = 'InvalidProtectedWorkspaceKeyError';
   }
 }
+
+export class WorkspaceKeyEnvelopeCorruptedError extends Error {
+  constructor() {
+    super('Workspace key envelope cannot be decrypted.');
+    this.name = 'WorkspaceKeyEnvelopeCorruptedError';
+  }
+}
+
+export class InvalidKeyProtectorResultError extends Error {
+  constructor() {
+    super('Workspace key protector returned an invalid result.');
+    this.name = 'InvalidKeyProtectorResultError';
+  }
+}

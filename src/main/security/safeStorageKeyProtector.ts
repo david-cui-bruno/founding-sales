@@ -1,6 +1,8 @@
 import type { KeyProtector } from './keyProtector';
 import {
+  InvalidKeyProtectorResultError,
   InvalidProtectedWorkspaceKeyError,
+  WorkspaceKeyEnvelopeCorruptedError,
   WorkspaceKeyTemporarilyUnavailableError,
 } from './keyProtector';
 
@@ -23,14 +25,22 @@ export class SafeStorageKeyProtector implements KeyProtector {
     await this.assertAvailable();
 
     const base64Value = value.toString('base64');
-    let protectedValue: Buffer | undefined;
+    let protectedValue: unknown;
     try {
       protectedValue = await this.safeStorage.encryptStringAsync(base64Value);
+      if (!Buffer.isBuffer(protectedValue) || protectedValue.byteLength === 0) {
+        throw new InvalidKeyProtectorResultError();
+      }
       return Buffer.from(protectedValue);
-    } catch {
+    } catch (error) {
+      if (error instanceof InvalidKeyProtectorResultError) {
+        throw error;
+      }
       throw new WorkspaceKeyTemporarilyUnavailableError();
     } finally {
-      protectedValue?.fill(0);
+      if (Buffer.isBuffer(protectedValue)) {
+        protectedValue.fill(0);
+      }
     }
   }
 
@@ -41,19 +51,20 @@ export class SafeStorageKeyProtector implements KeyProtector {
     await this.assertAvailable();
 
     const protectedInput = Buffer.from(value);
-    let decrypted: { result: string; shouldReEncrypt: boolean };
+    let decrypted: unknown;
     try {
       decrypted = await this.safeStorage.decryptStringAsync(protectedInput);
     } catch {
-      throw new WorkspaceKeyTemporarilyUnavailableError();
+      throw new WorkspaceKeyEnvelopeCorruptedError();
     } finally {
       protectedInput.fill(0);
     }
 
-    const workspaceKey = decodeCanonicalBase64Key(decrypted.result);
+    const parsedResult = parseDecryptResult(decrypted);
+    const workspaceKey = decodeCanonicalBase64Key(parsedResult.result);
     return {
       value: workspaceKey,
-      shouldReprotect: decrypted.shouldReEncrypt,
+      shouldReprotect: parsedResult.shouldReEncrypt,
     };
   }
 
@@ -69,6 +80,35 @@ export class SafeStorageKeyProtector implements KeyProtector {
       throw new WorkspaceKeyTemporarilyUnavailableError();
     }
   }
+}
+
+function parseDecryptResult(value: unknown): {
+  result: string;
+  shouldReEncrypt: boolean;
+} {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new InvalidKeyProtectorResultError();
+  }
+
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  if (
+    keys.length !== 2
+    || keys[0] !== 'result'
+    || keys[1] !== 'shouldReEncrypt'
+    || typeof record.result !== 'string'
+    || typeof record.shouldReEncrypt !== 'boolean'
+  ) {
+    if (Buffer.isBuffer(record.result)) {
+      record.result.fill(0);
+    }
+    throw new InvalidKeyProtectorResultError();
+  }
+
+  return {
+    result: record.result,
+    shouldReEncrypt: record.shouldReEncrypt,
+  };
 }
 
 function assertWorkspaceKeyBytes(value: Buffer): void {

@@ -5,9 +5,13 @@ import {
   type AsyncSafeStorage,
 } from '../../src/main/security/safeStorageKeyProtector';
 import {
+  InvalidKeyProtectorResultError,
   InvalidProtectedWorkspaceKeyError,
+  WorkspaceKeyEnvelopeCorruptedError,
   WorkspaceKeyTemporarilyUnavailableError,
 } from '../../src/main/security/keyProtector';
+
+const NO_DECRYPT_OVERRIDE = Symbol('no-decrypt-override');
 
 class FakeSafeStorage implements AsyncSafeStorage {
   available = true;
@@ -16,9 +20,10 @@ class FakeSafeStorage implements AsyncSafeStorage {
   decryptError: Error | undefined;
   encryptInputs: string[] = [];
   decryptInputs: Buffer[] = [];
-  encryptedResult = Buffer.from('protected-value');
+  encryptedResult: unknown = Buffer.from('protected-value');
   decryptedResult = '';
   shouldReEncrypt = false;
+  decryptedPayload: unknown = NO_DECRYPT_OVERRIDE;
 
   async isAsyncEncryptionAvailable(): Promise<boolean> {
     if (this.availabilityError !== undefined) {
@@ -32,7 +37,7 @@ class FakeSafeStorage implements AsyncSafeStorage {
     if (this.encryptError !== undefined) {
       throw this.encryptError;
     }
-    return this.encryptedResult;
+    return this.encryptedResult as Buffer;
   }
 
   async decryptStringAsync(
@@ -42,10 +47,10 @@ class FakeSafeStorage implements AsyncSafeStorage {
     if (this.decryptError !== undefined) {
       throw this.decryptError;
     }
-    return {
+    return (this.decryptedPayload === NO_DECRYPT_OVERRIDE ? {
       result: this.decryptedResult,
       shouldReEncrypt: this.shouldReEncrypt,
-    };
+    } : this.decryptedPayload) as { result: string; shouldReEncrypt: boolean };
   }
 }
 
@@ -122,8 +127,8 @@ describe('SafeStorageKeyProtector', () => {
     await expect(operation).rejects.toThrow('Workspace key protection is temporarily unavailable.');
   });
 
-  it.each(['availability', 'encrypt', 'decrypt'] as const)(
-    'does not leak provider details when %s fails',
+  it.each(['availability', 'encrypt'] as const)(
+    'does not leak provider details when temporary %s fails',
     async (failurePoint) => {
       const safeStorage = new FakeSafeStorage();
       safeStorage.decryptedResult = Buffer.alloc(32, 0x2a).toString('base64');
@@ -132,14 +137,10 @@ describe('SafeStorageKeyProtector', () => {
         safeStorage.availabilityError = new Error(providerMessage);
       } else if (failurePoint === 'encrypt') {
         safeStorage.encryptError = new Error(providerMessage);
-      } else {
-        safeStorage.decryptError = new Error(providerMessage);
       }
       const protector = new SafeStorageKeyProtector(safeStorage);
 
-      const operation = failurePoint === 'decrypt'
-        ? protector.unprotect(Buffer.from('ciphertext'))
-        : protector.protect(Buffer.alloc(32, 0x2a));
+      const operation = protector.protect(Buffer.alloc(32, 0x2a));
 
       await expect(operation).rejects.toBeInstanceOf(
         WorkspaceKeyTemporarilyUnavailableError,
@@ -147,4 +148,67 @@ describe('SafeStorageKeyProtector', () => {
       await expect(operation).rejects.not.toThrow(providerMessage);
     },
   );
+
+  it('maps a decrypt rejection to permanent envelope corruption without leaking details', async () => {
+    const safeStorage = new FakeSafeStorage();
+    const providerMessage = 'ciphertext SECRET-CONTENT failed authentication';
+    safeStorage.decryptError = new Error(providerMessage);
+    const protector = new SafeStorageKeyProtector(safeStorage);
+
+    const operation = protector.unprotect(Buffer.from('ciphertext'));
+
+    await expect(operation).rejects.toBeInstanceOf(WorkspaceKeyEnvelopeCorruptedError);
+    await expect(operation).rejects.toThrow('Workspace key envelope cannot be decrypted.');
+    await expect(operation).rejects.not.toThrow(providerMessage);
+  });
+
+  it('rejects and clears a malformed non-Buffer encryption result', async () => {
+    const safeStorage = new FakeSafeStorage();
+    safeStorage.encryptedResult = 'not-a-buffer';
+    const protector = new SafeStorageKeyProtector(safeStorage);
+
+    await expect(protector.protect(Buffer.alloc(32, 0x2a))).rejects.toBeInstanceOf(
+      InvalidKeyProtectorResultError,
+    );
+  });
+
+  it('rejects and clears an empty Buffer encryption result', async () => {
+    const safeStorage = new FakeSafeStorage();
+    safeStorage.encryptedResult = Buffer.alloc(0);
+    const protector = new SafeStorageKeyProtector(safeStorage);
+
+    await expect(protector.protect(Buffer.alloc(32, 0x2a))).rejects.toBeInstanceOf(
+      InvalidKeyProtectorResultError,
+    );
+    expect(safeStorage.encryptedResult).toEqual(Buffer.alloc(0));
+  });
+
+  it.each([
+    ['null result', null],
+    ['non-string plaintext', { result: 42, shouldReEncrypt: false }],
+    [
+      'non-boolean reprotection flag',
+      { result: Buffer.alloc(32, 0x2a).toString('base64'), shouldReEncrypt: 'yes' },
+    ],
+  ])('rejects a malformed decrypt response: %s', async (_name, payload) => {
+    const safeStorage = new FakeSafeStorage();
+    safeStorage.decryptedPayload = payload;
+    const protector = new SafeStorageKeyProtector(safeStorage);
+
+    await expect(protector.unprotect(Buffer.from('ciphertext'))).rejects.toBeInstanceOf(
+      InvalidKeyProtectorResultError,
+    );
+  });
+
+  it('clears a Buffer found in a malformed decrypt response', async () => {
+    const malformedResult = Buffer.alloc(32, 0x2a);
+    const safeStorage = new FakeSafeStorage();
+    safeStorage.decryptedPayload = { result: malformedResult, shouldReEncrypt: false };
+    const protector = new SafeStorageKeyProtector(safeStorage);
+
+    await expect(protector.unprotect(Buffer.from('ciphertext'))).rejects.toBeInstanceOf(
+      InvalidKeyProtectorResultError,
+    );
+    expect(malformedResult).toEqual(Buffer.alloc(32));
+  });
 });

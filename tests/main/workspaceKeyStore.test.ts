@@ -5,13 +5,95 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { KeyProtector } from '../../src/main/security/keyProtector';
+import { InvalidKeyProtectorResultError } from '../../src/main/security/keyProtector';
 import { createRecoveryKeyMaterial } from '../../src/main/security/recoveryKey';
 import {
   InvalidWorkspaceKeyEnvelopeError,
+  type WorkspaceKeyFileHandle,
+  type WorkspaceKeyFileOperations,
+  type WorkspaceKeyPathMetadata,
   WorkspaceKeyProtectionError,
   WorkspaceKeyStore,
   WorkspaceKeyUnavailableError,
 } from '../../src/main/security/workspaceKeyStore';
+
+class RecordingFileOperations implements WorkspaceKeyFileOperations {
+  readonly directory = '/private/callie-test';
+  readonly envelopePath = `${this.directory}/callie.key-envelope.json`;
+  readonly events: string[] = [];
+  failAt: 'write' | 'file_sync' | 'rename' | undefined;
+  destination = 'old-envelope';
+  temporaryExists = false;
+  temporaryPath: string | undefined;
+  writtenData: string | undefined;
+
+  async lstat(path: string): Promise<WorkspaceKeyPathMetadata> {
+    this.events.push(`lstat:${path === this.directory ? 'parent' : 'other'}`);
+    return {
+      isDirectory: () => path === this.directory,
+      isFile: () => false,
+      isSymbolicLink: () => false,
+      mode: 0o700,
+      size: 0,
+    };
+  }
+
+  async readFile(): Promise<string> {
+    throw new Error('readFile is not expected in atomic writer tests');
+  }
+
+  async open(path: string, flags: 'r' | 'wx', mode?: number): Promise<WorkspaceKeyFileHandle> {
+    if (flags === 'wx') {
+      this.temporaryPath = path;
+      this.temporaryExists = true;
+      this.events.push(`open:temp:wx:${mode?.toString(8)}`);
+      return this.createHandle('file');
+    }
+    this.events.push('open:parent:r');
+    return this.createHandle('parent');
+  }
+
+  async rename(source: string, destination: string): Promise<void> {
+    this.events.push('rename:temp->envelope');
+    expect(source).toBe(this.temporaryPath);
+    expect(destination).toBe(this.envelopePath);
+    if (this.failAt === 'rename') {
+      throw new Error('synthetic rename failure');
+    }
+    this.temporaryExists = false;
+    this.destination = 'new-envelope';
+  }
+
+  async rm(path: string): Promise<void> {
+    this.events.push('rm:temp');
+    expect(path).toBe(this.temporaryPath);
+    this.temporaryExists = false;
+  }
+
+  private createHandle(kind: 'file' | 'parent'): WorkspaceKeyFileHandle {
+    return {
+      chmod: async (mode) => {
+        this.events.push(`chmod:file:${mode.toString(8)}`);
+      },
+      writeFile: async (data) => {
+        this.events.push('write:file');
+        this.writtenData = data;
+        if (this.failAt === 'write') {
+          throw new Error('synthetic write failure');
+        }
+      },
+      sync: async () => {
+        this.events.push(`sync:${kind}`);
+        if (kind === 'file' && this.failAt === 'file_sync') {
+          throw new Error('synthetic sync failure');
+        }
+      },
+      close: async () => {
+        this.events.push(`close:${kind}`);
+      },
+    };
+  }
+}
 
 class FakeKeyProtector implements KeyProtector {
   protectCalls: Buffer[] = [];
@@ -197,7 +279,11 @@ describe('WorkspaceKeyStore', () => {
 
   it('refuses to persist a protector result that is the raw workspace key', async () => {
     const harness = await createHarness();
-    harness.protector.protect = async (value) => value;
+    let rawProtectorResult: Buffer | undefined;
+    harness.protector.protect = async (value) => {
+      rawProtectorResult = Buffer.from(value);
+      return rawProtectorResult;
+    };
 
     const operation = harness.store.loadOrCreate({
       envelopePath: harness.envelopePath,
@@ -206,6 +292,7 @@ describe('WorkspaceKeyStore', () => {
 
     await expect(operation).rejects.toBeInstanceOf(WorkspaceKeyProtectionError);
     expect(await readdir(harness.directory)).toEqual([]);
+    expect(rawProtectorResult).toEqual(Buffer.alloc(32));
     expect(harness.randomBuffers[0]).toEqual(Buffer.alloc(32));
   });
 
@@ -312,4 +399,107 @@ describe('WorkspaceKeyStore', () => {
       databaseExists: true,
     })).rejects.toThrow('Workspace key envelope is invalid.');
   });
+
+  it('rejects and clears a KeyProtector result with a non-boolean reprotection flag', async () => {
+    const harness = await createHarness();
+    await harness.store.loadOrCreate({
+      envelopePath: harness.envelopePath,
+      databaseExists: false,
+    });
+    const malformedValue = Buffer.alloc(32, 0x2a);
+    harness.protector.unprotect = async () => ({
+      value: malformedValue,
+      shouldReprotect: 'yes',
+    } as unknown as { value: Buffer; shouldReprotect: boolean });
+
+    await expect(harness.store.loadOrCreate({
+      envelopePath: harness.envelopePath,
+      databaseExists: true,
+    })).rejects.toBeInstanceOf(InvalidKeyProtectorResultError);
+    expect(malformedValue).toEqual(Buffer.alloc(32));
+  });
+
+  it('maps a throwing restore clock to a constant error and clears recovered bytes', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'callie-workspace-key-'));
+    directories.push(directory);
+    const recoveredBytes = Buffer.alloc(32, 0x6c);
+    const store = new WorkspaceKeyStore({
+      keyProtector: new FakeKeyProtector(),
+      now: () => {
+        throw new Error('clock SECRET-DIAGNOSTIC failed');
+      },
+      parseRecoveryMaterial: () => ({ bytes: recoveredBytes, version: 1 }),
+    });
+
+    const operation = store.restore({
+      envelopePath: join(directory, 'callie.key-envelope.json'),
+      recoveryMaterial: 'synthetic-material',
+    });
+
+    await expect(operation).rejects.toThrow('Workspace key storage operation failed.');
+    await expect(operation).rejects.not.toThrow('clock SECRET-DIAGNOSTIC failed');
+    expect(recoveredBytes).toEqual(Buffer.alloc(32));
+  });
+
+  it('writes a 0600 sibling temp, fsyncs it, renames, then fsyncs its parent', async () => {
+    const fileOperations = new RecordingFileOperations();
+    const store = new WorkspaceKeyStore({
+      fileOperations,
+      keyProtector: new FakeKeyProtector(),
+      now: () => '2026-08-30T12:00:00.000Z',
+    });
+
+    await store.restore({
+      envelopePath: fileOperations.envelopePath,
+      recoveryMaterial: createRecoveryKeyMaterial({
+        bytes: Buffer.alloc(32, 0x6c),
+        version: 1,
+      }),
+    });
+
+    expect(fileOperations.temporaryPath).toMatch(
+      /^\/private\/callie-test\/\.callie\.key-envelope\.json\..+\.tmp$/,
+    );
+    expect(fileOperations.events).toEqual([
+      'lstat:parent',
+      'open:temp:wx:600',
+      'chmod:file:600',
+      'write:file',
+      'sync:file',
+      'close:file',
+      'rename:temp->envelope',
+      'open:parent:r',
+      'sync:parent',
+      'close:parent',
+    ]);
+    expect(fileOperations.destination).toBe('new-envelope');
+    expect(fileOperations.temporaryExists).toBe(false);
+  });
+
+  it.each(['write', 'file_sync', 'rename'] as const)(
+    'cleans its sibling temp and preserves the old envelope after %s failure',
+    async (failAt) => {
+      const fileOperations = new RecordingFileOperations();
+      fileOperations.failAt = failAt;
+      const store = new WorkspaceKeyStore({
+        fileOperations,
+        keyProtector: new FakeKeyProtector(),
+        now: () => '2026-08-30T12:00:00.000Z',
+      });
+
+      const operation = store.restore({
+        envelopePath: fileOperations.envelopePath,
+        recoveryMaterial: createRecoveryKeyMaterial({
+          bytes: Buffer.alloc(32, 0x6c),
+          version: 1,
+        }),
+      });
+
+      await expect(operation).rejects.toThrow('Workspace key storage operation failed.');
+      expect(fileOperations.destination).toBe('old-envelope');
+      expect(fileOperations.temporaryExists).toBe(false);
+      expect(fileOperations.events.at(-1)).toBe('rm:temp');
+      expect(fileOperations.events).not.toContain('open:parent:r');
+    },
+  );
 });
