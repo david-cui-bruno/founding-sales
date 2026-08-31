@@ -1029,11 +1029,135 @@ describe('SourceService', () => {
     expect(forward.contacts).toEqual([
       {
         id: 'contact-email', kind: 'email', normalized_value: 'kevin@example.com',
-        raw_value: 'KEVIN@example.com',
+        raw_value: 'kevin@example.com',
       },
       {
         id: 'contact-phone', kind: 'phone', normalized_value: '+14015550100',
-        raw_value: '(401) 555-0100',
+        raw_value: '+14015550100',
+      },
+    ]);
+  });
+
+  it('persists canonical contact handles for singleton and duplicate spellings', async () => {
+    const contactVariants = [
+      [
+        {
+          kind: 'phone' as const, value: '(401) 555-0100',
+          reachability: 'direct' as const, isPrimary: true,
+        },
+        {
+          kind: 'email' as const, value: ' kevin@example.com ',
+          reachability: 'direct' as const, isPrimary: true,
+        },
+      ],
+      [
+        {
+          kind: 'phone' as const, value: '+1 (401) 555-0100',
+          reachability: 'direct' as const, isPrimary: true,
+        },
+        {
+          kind: 'email' as const, value: ' ＫＥＶＩＮ＠ＥＸＡＭＰＬＥ．ＣＯＭ ',
+          reachability: 'direct' as const, isPrimary: true,
+        },
+      ],
+      [
+        {
+          kind: 'email' as const, value: ' ＫＥＶＩＮ＠ＥＸＡＭＰＬＥ．ＣＯＭ ',
+          reachability: 'direct' as const, isPrimary: true,
+        },
+        {
+          kind: 'phone' as const, value: '+1 (401) 555-0100',
+          reachability: 'direct' as const, isPrimary: true,
+        },
+        {
+          kind: 'email' as const, value: ' kevin@example.com ',
+          reachability: 'direct' as const, isPrimary: true,
+        },
+        {
+          kind: 'phone' as const, value: '(401) 555-0100',
+          reachability: 'direct' as const, isPrimary: true,
+        },
+      ],
+    ];
+
+    async function persist(contacts: CreatePersonProspectCommand['contacts']) {
+      const isolatedTemp = createTempDatabase();
+      const key = createTestWorkspaceKey();
+      const isolatedDatabase = openDatabase({ path: isolatedTemp.path, key });
+      try {
+        await migrateToLatest(isolatedDatabase, {
+          backupDirectory: `${isolatedTemp.path}.backups`, workspaceKey: key,
+        });
+        const isolatedUnitOfWork = new DomainUnitOfWork(isolatedDatabase);
+        const isolatedIds = ['person', 'contact-email', 'contact-phone', 'prospect'];
+        const isolatedIdentities = new IdentityRepository({
+          database: isolatedDatabase,
+          unitOfWork: isolatedUnitOfWork,
+          clock: { now: () => NOW },
+          ids: {
+            next: () => {
+              const id = isolatedIds.shift();
+              if (id === undefined) throw new Error('Isolated test ID sequence exhausted.');
+              return id;
+            },
+          },
+        });
+        const isolatedSources = new SourceRepository({
+          database: isolatedDatabase,
+          unitOfWork: isolatedUnitOfWork,
+          clock: { now: () => NOW },
+        });
+        const isolatedReceipts = new IntakeReceiptRepository({
+          database: isolatedDatabase,
+          unitOfWork: isolatedUnitOfWork,
+          clock: { now: () => NOW },
+        });
+        const isolatedService = new SourceService({
+          database: isolatedDatabase,
+          unitOfWork: isolatedUnitOfWork,
+          identities: isolatedIdentities,
+          sources: isolatedSources,
+          receipts: isolatedReceipts,
+        });
+        const result = isolatedService.createPersonProspect(baseCommand(
+          'canonical-contact-spellings',
+          { contacts },
+        ));
+        const receipt = isolatedReceipts.getBySourceEventId(result.sourceEventId);
+        return {
+          result,
+          commandJson: receipt?.commandJson,
+          contacts: isolatedDatabase.raw.prepare(`
+            SELECT id, kind, normalized_value, raw_value
+            FROM person_contact_methods ORDER BY id
+          `).all(),
+          rows: {
+            persons: isolatedDatabase.raw.prepare('SELECT * FROM persons').all(),
+            sourceEvents: isolatedDatabase.raw.prepare('SELECT * FROM source_events').all(),
+            prospects: isolatedDatabase.raw.prepare('SELECT * FROM prospects').all(),
+            receipts: isolatedDatabase.raw.prepare('SELECT * FROM source_intake_receipts').all(),
+          },
+        };
+      } finally {
+        closeDatabase(isolatedDatabase);
+        isolatedTemp.cleanup();
+      }
+    }
+
+    const [nationalOnly, internationalOnly, bothForms] = await Promise.all(
+      contactVariants.map((contacts) => persist(contacts)),
+    );
+
+    expect(internationalOnly).toEqual(nationalOnly);
+    expect(bothForms).toEqual(nationalOnly);
+    expect(nationalOnly?.contacts).toEqual([
+      {
+        id: 'contact-email', kind: 'email', normalized_value: 'kevin@example.com',
+        raw_value: 'kevin@example.com',
+      },
+      {
+        id: 'contact-phone', kind: 'phone', normalized_value: '+14015550100',
+        raw_value: '+14015550100',
       },
     ]);
   });

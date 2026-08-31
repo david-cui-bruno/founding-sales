@@ -786,7 +786,9 @@ function normalizeContacts(contacts: z.infer<typeof contactInputSchema>[]): Norm
     const canonical = {
       kind: contact.kind,
       normalizedValue,
-      rawValue: contact.value.normalize('NFKC').trim(),
+      // Intake identity is the canonical handle. Importers that need the
+      // original spelling retain it in immutable sourceRecord/provenance.
+      rawValue: normalizedValue,
       reachability: contact.reachability,
       isPrimary: contact.isPrimary,
       inContacts: contact.inContacts ?? null,
@@ -799,9 +801,6 @@ function normalizeContacts(contacts: z.infer<typeof contactInputSchema>[]): Norm
         || existing.inContacts !== canonical.inContacts
       ) {
         throw new ContactNormalizationConflictError(contact.kind, normalizedValue);
-      }
-      if (compareStrings(canonical.rawValue, existing.rawValue) < 0) {
-        existing.rawValue = canonical.rawValue;
       }
       continue;
     }
