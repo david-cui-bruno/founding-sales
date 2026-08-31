@@ -4,6 +4,8 @@ import type { PipelineSnapshot } from '../../../shared/contracts/pipelineContrac
 import { PipelineBoard } from './PipelineBoard';
 import { PipelineTable } from './PipelineTable';
 
+import './pipeline.css';
+
 export type PipelineView = 'board' | 'table';
 
 export type PipelinePageProps = {

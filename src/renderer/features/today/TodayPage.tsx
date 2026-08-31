@@ -6,6 +6,8 @@ import type {
 import { CapacitySummary } from './CapacitySummary';
 import { TODAY_LANE_ORDER, TodayLane } from './TodayLane';
 
+import './today.css';
+
 export type TodayPageProps = {
   snapshot: TodaySnapshot;
   busy?: boolean;

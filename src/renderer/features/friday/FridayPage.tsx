@@ -13,6 +13,8 @@ import { MetricDrilldownPanel } from './MetricDrilldown';
 import { ScoreboardHeader } from './ScoreboardHeader';
 import { SourceFunnelTable } from './SourceFunnelTable';
 
+import './friday.css';
+
 export type FridayPageProps = {
   report: FridayReport;
   onOpenMetric(metricId: MetricId): void;

@@ -4,235 +4,96 @@
 @import "./design/motion.css";
 @import "./app/shell.css";
 
+/* Foundation diagnostics (bootstrap + Settings). Tokenized to match themes. */
 .diagnostics {
   box-sizing: border-box;
   max-width: 52rem;
-  min-height: 100vh;
   margin: 0 auto;
-  padding: 4rem 2rem;
+  padding: var(--space-6);
 }
 
 .diagnostics__header {
-  margin-bottom: 2.5rem;
-  border-bottom: 1px solid #d8dde1;
+  margin-bottom: var(--space-6);
 }
 
 .diagnostics__eyebrow {
-  margin: 0 0 0.5rem;
-  color: #53616c;
-  font-size: 0.82rem;
-  font-weight: 600;
+  margin: 0 0 var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-h1,
-h2 {
-  color: #15202a;
-}
-
-h1 {
-  margin: 0 0 1.25rem;
-  font-size: 2rem;
-}
-
-h2 {
-  margin-top: 0;
-  font-size: 1.2rem;
+.diagnostics h1 {
+  margin: 0;
+  font-size: var(--text-xl);
 }
 
 .diagnostics__status {
-  margin: 0 0 0.65rem;
-  color: #1d5d45;
-  font-weight: 600;
+  margin: 0 0 var(--space-2);
+  color: var(--positive);
+  font-weight: var(--weight-medium);
 }
 
 .diagnostics__details {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
-  gap: 1px;
-  margin: 1.5rem 0 0;
-  border: 1px solid #d8dde1;
-  background: #d8dde1;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-3) var(--space-4);
+  margin: var(--space-4) 0 0;
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
 }
 
-.diagnostics__details > div {
-  min-width: 0;
-  padding: 1rem;
-  background: #fff;
+.diagnostics__details div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-dt {
-  margin-bottom: 0.4rem;
-  color: #53616c;
-  font-size: 0.82rem;
+.diagnostics__details dt {
+  color: var(--muted);
+  font-size: var(--text-sm);
 }
 
-dd {
+.diagnostics__details dd {
   margin: 0;
-  overflow-wrap: anywhere;
-  font-weight: 600;
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
 }
 
-code {
-  font-size: 0.88em;
-  font-weight: 500;
+.diagnostics code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
 }
 
 .diagnostics__failure {
   max-width: 35rem;
-  padding: 1.5rem;
-  border-left: 4px solid #a4483f;
-  background: #fff;
+  padding: var(--space-4);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-md);
+  background: var(--danger-soft);
 }
 
-/* Legacy diagnostics-only controls; the design system owns all other buttons. */
+.diagnostics__failure h2 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-lg);
+}
+
 .diagnostics button {
-  padding: 0.5rem 0.8rem;
-  border: 1px solid #1d242b;
-  border-radius: 0.2rem;
-  background: #1d242b;
-  color: #fff;
+  height: var(--control-height);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text);
   font: inherit;
+  font-weight: var(--weight-medium);
+  cursor: pointer;
 }
 
-.diagnostics button:focus-visible {
-  outline: 3px solid #4c90c3;
-  outline-offset: 3px;
-}
-
-.apple-spike {
-  margin-top: 3rem;
-  padding: 1.5rem;
-  border: 1px solid rgb(112 122 138 / 25%);
-  border-radius: 1rem;
-  background:
-    radial-gradient(circle at 12% 0%, rgb(121 132 255 / 12%), transparent 38%),
-    linear-gradient(145deg, rgb(255 255 255 / 92%), rgb(240 243 248 / 88%));
-  box-shadow: 0 1.25rem 3rem rgb(22 31 45 / 10%);
-}
-
-.apple-spike__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.apple-spike__eyebrow {
-  margin: 0 0 0.35rem;
-  color: #626a78;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.apple-spike__bridge-state {
-  margin: 0;
-  padding: 0.4rem 0.65rem;
-  border: 1px solid rgb(29 93 69 / 18%);
-  border-radius: 999px;
-  background: rgb(232 246 239 / 72%);
-  color: #1d5d45;
-  font-size: 0.78rem;
-  font-weight: 700;
-}
-
-.apple-spike__notice {
-  max-width: 48rem;
-  color: #4d5966;
-  line-height: 1.55;
-}
-
-.apple-spike__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
-  gap: 1rem;
-}
-
-.apple-spike__grid > section {
-  padding: 1rem;
-  border: 1px solid rgb(112 122 138 / 18%);
-  border-radius: 0.75rem;
-  background: rgb(255 255 255 / 65%);
-}
-
-.apple-spike__grid h3 {
-  margin-top: 0;
-  font-size: 1rem;
-}
-
-.apple-spike__manual {
-  grid-column: 1 / -1;
-}
-
-.apple-spike__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-  margin: 0.75rem 0;
-}
-
-.apple-spike label {
-  display: block;
-  margin: 0.75rem 0 0.35rem;
-  color: #4d5966;
-  font-size: 0.82rem;
-  font-weight: 650;
-}
-
-.apple-spike input,
-.apple-spike textarea {
-  box-sizing: border-box;
-  width: 100%;
-  padding: 0.6rem 0.7rem;
-  border: 1px solid #cbd1d8;
-  border-radius: 0.45rem;
-  background: rgb(255 255 255 / 90%);
-  color: #15202a;
-  font: inherit;
-}
-
-.apple-spike fieldset {
-  margin: 1rem 0 0;
-  padding: 1rem;
-  border: 1px solid rgb(112 122 138 / 22%);
-  border-radius: 0.65rem;
-}
-
-.apple-spike legend {
-  padding: 0 0.35rem;
-  font-weight: 700;
-}
-
-.apple-spike button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-
-.apple-spike__result {
-  margin: 1rem 0 0;
-  padding: 0.8rem 1rem;
-  border-radius: 0.6rem;
-  background: #15202a;
-  color: #fff;
-}
-
-.apple-spike__evidence {
-  margin-top: 1rem;
-  padding: 1rem;
-  border: 1px solid rgb(112 122 138 / 18%);
-  border-radius: 0.75rem;
-  background: rgb(255 255 255 / 65%);
-}
-
-.apple-spike__evidence h3,
-.apple-spike__evidence p {
-  margin: 0;
-}
-
-.apple-spike__evidence p {
-  margin-top: 0.45rem;
-  color: #4d5966;
+.diagnostics button:hover {
+  background: var(--surface-sunken);
 }

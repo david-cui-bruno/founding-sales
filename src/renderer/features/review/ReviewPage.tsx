@@ -10,6 +10,8 @@ import { ReviewDetailPanel } from './ReviewDetailPanel';
 import { ReviewQueue } from './ReviewQueue';
 import { ReviewTabs } from './ReviewTabs';
 
+import './review.css';
+
 export type ReviewPageProps = {
   snapshot: ReviewSnapshot;
   selectedKind: ReviewKind;

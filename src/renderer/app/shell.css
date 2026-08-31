@@ -33,10 +33,10 @@
 .app-shell__main {
   flex: 1;
   min-width: 0;
-  padding: var(--space-6);
+  padding: var(--space-4) var(--space-6) var(--space-6);
 }
 
-/* Fixed navigation rail: aurora is allowed here (navigation is a sanctioned accent surface). */
+/* Fixed navigation rail. */
 .nav-rail {
   position: fixed;
   top: 0;
@@ -47,27 +47,33 @@
   flex-direction: column;
   box-sizing: border-box;
   width: var(--nav-rail-width);
-  padding: var(--space-4) var(--space-3);
+  padding: var(--space-4) var(--space-2);
   border-right: 1px solid var(--line);
-  background: var(--surface);
+  background: var(--surface-sunken);
+  /* Traffic lights live in the hiddenInset title bar above the brand. */
+  padding-top: 44px;
+  -webkit-app-region: drag;
+}
+
+.nav-rail__list,
+.nav-rail__item,
+.nav-rail__brand {
+  -webkit-app-region: no-drag;
 }
 
 .nav-rail__brand {
-  margin: 0 0 var(--space-6);
+  margin: 0 0 var(--space-4);
   padding: 0 var(--space-3);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  background: linear-gradient(120deg, var(--aurora-cyan), var(--aurora-violet));
-  background-clip: text;
-  -webkit-background-clip: text;
-  color: transparent;
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-heading);
+  letter-spacing: -0.01em;
 }
 
 .nav-rail__list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 1px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -76,10 +82,13 @@
 .nav-rail__item {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
+  gap: var(--space-2);
+  height: 28px;
+  padding: 0 var(--space-3);
   border-radius: var(--radius-sm);
   color: var(--muted);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
   text-decoration: none;
   transition: background var(--motion-fast) var(--motion-ease),
     color var(--motion-fast) var(--motion-ease);
@@ -87,22 +96,23 @@
 
 .nav-rail__item:hover {
   color: var(--text);
-  background: color-mix(in srgb, var(--line) 40%, transparent);
+  background: color-mix(in srgb, var(--line) 55%, transparent);
 }
 
 .nav-rail__item--current {
   color: var(--text);
-  background: color-mix(in srgb, var(--aurora-cyan) 14%, transparent);
-  box-shadow: inset 3px 0 0 var(--aurora-cyan);
+  background: color-mix(in srgb, var(--line) 75%, transparent);
 }
 
 .nav-rail__item[aria-disabled="true"] {
-  color: color-mix(in srgb, var(--muted) 55%, transparent);
+  color: var(--faint);
   cursor: not-allowed;
 }
 
 .nav-rail__icon {
   flex: none;
+  width: 15px;
+  height: 15px;
 }
 
 .nav-rail__label {
@@ -114,12 +124,12 @@
 }
 
 .nav-rail__badge {
-  min-width: 18px;
-  padding: 1px var(--space-2);
+  min-width: 16px;
+  padding: 1px 5px;
   border-radius: 999px;
-  background: var(--aurora-violet);
-  color: var(--surface-raised);
-  font-size: 11px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 10px;
   font-weight: 700;
   text-align: center;
 }
@@ -127,30 +137,36 @@
 /* Workspace header preference toggles stay neutral until pressed. */
 .workspace-header {
   display: flex;
-  gap: var(--space-4);
+  gap: var(--space-3);
   justify-content: flex-end;
-  padding: var(--space-3) var(--space-6);
+  height: 44px;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 0 var(--space-6);
   border-bottom: 1px solid var(--line);
-  background: var(--surface);
+  background: var(--canvas);
+  -webkit-app-region: drag;
 }
 
 .workspace-header__group {
   display: flex;
-  gap: var(--space-1);
+  gap: 1px;
   padding: 2px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  -webkit-app-region: no-drag;
 }
 
 .workspace-header__toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--control-height);
-  height: var(--control-height);
+  width: 24px;
+  height: 22px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: 4px;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -162,5 +178,6 @@
 
 .workspace-header__toggle[aria-pressed="true"] {
   color: var(--text);
-  background: color-mix(in srgb, var(--aurora-cyan) 16%, transparent);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
 }

@@ -5,19 +5,28 @@
   --space-3: 12px;
   --space-4: 16px;
   --space-6: 24px;
-  --radius-sm: 8px;
-  --radius-md: 14px;
-  --radius-lg: 20px;
-  --font-ui: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
-  --grid-row-compact: 36px;
-  --grid-row-comfortable: 46px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --font-ui: -apple-system, system-ui, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+  --text-xl: 20px;
+  --weight-body: 400;
+  --weight-medium: 500;
+  --weight-heading: 590;
+  --grid-row-compact: 32px;
+  --grid-row-comfortable: 40px;
   --grid-row: var(--grid-row-comfortable);
-  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--aurora-cyan) 38%, transparent);
+  --focus-ring: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
   --nav-rail-width: 216px;
-  --control-height: 32px;
+  --control-height: 28px;
 }
 
 [data-density="compact"] {
   --grid-row: var(--grid-row-compact);
-  --control-height: 28px;
+  --control-height: 26px;
 }
