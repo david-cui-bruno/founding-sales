@@ -136,6 +136,19 @@ describe('authoritative next-action persistence', () => {
     expect(() => database!.raw.prepare(`
       UPDATE next_actions SET status = 'impossible' WHERE id = 'action'
     `).run()).toThrow();
+    for (const mutation of [
+      `UPDATE next_actions SET due_at = '2026-09-01T12:00:00.000Z' WHERE id = 'action'`,
+      `UPDATE next_actions SET timezone = 'UTC' WHERE id = 'action'`,
+      `UPDATE next_actions SET allowed_window = '[17:00,20:00)' WHERE id = 'action'`,
+      `UPDATE next_actions SET sla_due_at = '2026-09-01T12:00:00.000Z' WHERE id = 'action'`,
+      `UPDATE next_actions SET created_at = '2026-08-29T12:00:00.000Z' WHERE id = 'action'`,
+    ]) {
+      expect(() => database!.raw.exec(mutation)).toThrow();
+    }
+    expect(() => database!.raw.exec(`
+      INSERT OR REPLACE INTO next_actions
+      SELECT * FROM next_actions WHERE id = 'action'
+    `)).toThrow();
   });
 
   it('rejects partial and cross-Person inbound SLA evidence before durable action creation', async () => {

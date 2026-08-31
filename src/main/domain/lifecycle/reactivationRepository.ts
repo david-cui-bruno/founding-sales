@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AppDatabase } from '../../db/database';
 import {
   DomainRepositoryDatabaseMismatchError,
+  LifecycleEvidenceError,
   LifecycleIdempotencyConflictError,
   StaleDomainWriteError,
 } from '../support/domainErrors';
@@ -12,6 +13,12 @@ import {
   type CycleReactivationReceipt,
   type ReactivationRule,
 } from './lifecycleTypes';
+import {
+  reactivationCommandEnvelopeSchema,
+  reactivationResultEnvelopeSchema,
+  type ReactivationCommandEnvelope,
+  type ReactivationResultEnvelope,
+} from './reactivationContracts';
 import {
   idSchema,
   parseCanonicalJson,
@@ -43,72 +50,6 @@ const ruleValueSchema = z.discriminatedUnion('ruleType', [
     ruleType: z.literal('lead-cert-expiry-window'), dueAt: z.null(), matcher: leadCertMatcherSchema,
   }).strict(),
 ]);
-const commandCommon = {
-  personId: idSchema, prospectId: idSchema, sourceCycleId: idSchema,
-  newCycleId: idSchema, activatedAt: utcTimestampSchema,
-};
-const ruleCommandCommon = {
-  ...commandCommon, ruleId: idSchema, expectedRuleVersion: z.number().int().positive(),
-  entrySourceEventId: idSchema,
-};
-const ruleCommandSchema = z.discriminatedUnion('ruleType', [
-  z.object({
-    ...ruleCommandCommon, ruleType: z.literal('seasonal:heating-oct1'),
-    trigger: z.object({ kind: z.literal('due'), dueAt: utcTimestampSchema }).strict(),
-  }).strict(),
-  z.object({
-    ...ruleCommandCommon, ruleType: z.literal('manual'),
-    trigger: z.object({ kind: z.literal('due'), dueAt: utcTimestampSchema }).strict(),
-  }).strict(),
-  z.object({
-    ...ruleCommandCommon, ruleType: z.literal('new-frbo-listing'),
-    trigger: z.object({
-      kind: z.literal('source_event'), eventType: z.literal('new-frbo-listing'),
-      sourceEventId: idSchema,
-    }).strict(),
-  }).strict(),
-  z.object({
-    ...ruleCommandCommon, ruleType: z.literal('lead-cert-expiry-window'),
-    trigger: z.object({
-      kind: z.literal('source_event'), eventType: z.literal('lead-cert-expiry-window'),
-      sourceEventId: idSchema,
-    }).strict(),
-  }).strict(),
-]);
-const inboundCommandSchema = z.object({
-  ...commandCommon, sourceEventId: idSchema,
-}).strict();
-const commandEnvelopeSchema = z.object({
-  version: z.literal(1), command: z.union([ruleCommandSchema, inboundCommandSchema]),
-}).strict();
-const salesCycleSnapshotSchema = z.object({
-  id: idSchema, personId: idSchema, prospectId: idSchema, entrySourceEventId: idSchema,
-  stage: z.enum(['unreviewed', 'ready', 'contacted', 'interviewed', 'offered', 'won', 'lost_nurture']),
-  workflowStatus: z.enum(['active', 'onboarding', 'closed']),
-  currentNextActionId: idSchema.nullable(), stageEnteredAt: utcTimestampSchema,
-  designPartnerFitness: z.number().int().min(0).max(5).nullable(),
-  closeReason: z.enum([
-    'no_response', 'not_interested', 'bad_timing', 'not_decision_maker',
-    'not_qualified', 'price', 'trust', 'chose_alternative', 'product_gap',
-    'cadence_exhausted', 'disqualified', 'opt_out', 'other',
-  ]).nullable(),
-  closeNotes: z.string().nullable(), onboardingStopReason: z.string().nullable(),
-  closedAt: utcTimestampSchema.nullable(), version: z.number().int().positive(),
-  createdAt: utcTimestampSchema, updatedAt: utcTimestampSchema,
-}).strict();
-const resultEnvelopeSchema = z.object({
-  version: z.literal(1),
-  result: z.discriminatedUnion('activationKind', [
-    z.object({
-      kind: z.literal('reactivated'), activationKind: z.literal('rule'),
-      cycle: salesCycleSnapshotSchema,
-    }).strict(),
-    z.object({
-      kind: z.literal('reactivated'), activationKind: z.literal('inbound_response'),
-      cycle: salesCycleSnapshotSchema,
-    }).strict(),
-  ]),
-}).strict();
 const storedRuleSchema = z.object({
   id: idSchema, sales_cycle_id: idSchema, rule_type: ruleTypeSchema,
   due_at: utcTimestampSchema.nullable(), matcher_json: z.string().nullable(),
@@ -129,14 +70,40 @@ const receiptInputSchema = z.object({
   reactivationRuleId: idSchema.nullable(),
   sourceEventId: idSchema.nullable(),
   newCycleId: idSchema,
-  command: commandEnvelopeSchema,
-  result: resultEnvelopeSchema,
+  command: reactivationCommandEnvelopeSchema,
+  result: reactivationResultEnvelopeSchema,
   createdAt: utcTimestampSchema,
 }).strict().superRefine((value, context) => {
-  const commandIsRule = 'ruleType' in value.command.command;
+  const command = value.command.command;
+  const result = value.result.result;
+  const commandIsRule = 'ruleType' in command;
   if ((value.activationKind === 'rule') !== commandIsRule
-    || value.result.result.activationKind !== value.activationKind) {
+    || result.activationKind !== value.activationKind) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'Receipt command/result kind mismatch.' });
+  }
+  const sourceEventId = commandIsRule ? null
+    : command.evidence.kind === 'source_event' ? command.evidence.sourceEventId : null;
+  const ruleId = commandIsRule ? command.ruleId : null;
+  const expectedKey = commandIsRule ? `rule:${command.ruleId}`
+    : sourceEventId === null ? null : `inbound:${sourceEventId}`;
+  if (expectedKey === null
+    || value.activationKey !== expectedKey
+    || value.personId !== command.personId
+    || value.sourceCycleId !== command.sourceCycleId
+    || value.reactivationRuleId !== ruleId
+    || value.sourceEventId !== sourceEventId
+    || value.newCycleId !== command.newCycleId
+    || value.createdAt !== command.activatedAt
+    || result.cycle.id !== command.newCycleId
+    || result.cycle.personId !== command.personId
+    || result.cycle.prospectId !== command.prospectId
+    || result.cycle.entrySourceEventId !== (commandIsRule
+      ? command.entrySourceEventId : sourceEventId)
+    || serializeCanonical(result.cadence) !== serializeCanonical(command.cadence)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Receipt ownership, evidence, cadence, or activation snapshot mismatch.',
+    });
   }
 });
 const ruleColumns = `
@@ -180,8 +147,8 @@ export type InsertReactivationReceiptInput = Readonly<{
   reactivationRuleId: string | null;
   sourceEventId: string | null;
   newCycleId: string;
-  command: unknown;
-  result: unknown;
+  command: ReactivationCommandEnvelope;
+  result: ReactivationResultEnvelope;
   createdAt: string;
 }>;
 
@@ -260,8 +227,16 @@ export class ReactivationRepository {
 
   insertOrGetReceipt(input: InsertReactivationReceiptInput): CycleReactivationReceipt {
     this.unitOfWork.assertWriteScope();
-    const parsed = receiptInputSchema.parse(input);
-    const existing = this.getReceipt(parsed.activationKey);
+    const activationKey = z.string().trim().min(1).parse(input.activationKey);
+    const existing = this.getReceipt(activationKey);
+    let parsed: z.infer<typeof receiptInputSchema>;
+    try {
+      parsed = receiptInputSchema.parse(input);
+      assertReceiptRelations(this.database, parsed);
+    } catch (error) {
+      if (existing !== null) throw new LifecycleIdempotencyConflictError();
+      throw error;
+    }
     if (existing !== null) {
       assertReceiptEquals(existing, parsed);
       return existing;
@@ -280,7 +255,7 @@ export class ReactivationRepository {
       parsed.sourceCycleId, parsed.reactivationRuleId, parsed.sourceEventId,
       parsed.newCycleId, commandJson, resultJson, parsed.createdAt,
     );
-    return parseReceipt(row);
+    return parseReceipt(row, this.database);
   }
 
   getRule(ruleId: string): ReactivationRule | null {
@@ -304,7 +279,7 @@ export class ReactivationRepository {
     const row = this.database.raw.prepare(`
       SELECT ${receiptColumns} FROM cycle_reactivation_receipts WHERE activation_key = ?
     `).get(key);
-    return row === undefined ? null : parseReceipt(row);
+    return row === undefined ? null : parseReceipt(row, this.database);
   }
 }
 
@@ -323,17 +298,82 @@ function parseRule(value: unknown): ReactivationRule {
   }) as ReactivationRule;
 }
 
-function parseReceipt(value: unknown): CycleReactivationReceipt {
+function parseReceipt(value: unknown, database: AppDatabase): CycleReactivationReceipt {
   const row = storedReceiptSchema.parse(value);
-  return deepFreezeLifecycle({
+  const parsed = receiptInputSchema.parse({
     activationKey: row.activation_key, activationKind: row.activation_kind,
     personId: row.person_id, sourceCycleId: row.source_cycle_id,
     reactivationRuleId: row.reactivation_rule_id, sourceEventId: row.source_event_id,
     newCycleId: row.new_cycle_id,
-    command: parseCanonicalJson(row.command_json, commandEnvelopeSchema),
-    result: parseCanonicalJson(row.result_json, resultEnvelopeSchema),
+    command: parseCanonicalJson(row.command_json, reactivationCommandEnvelopeSchema),
+    result: parseCanonicalJson(row.result_json, reactivationResultEnvelopeSchema),
     createdAt: row.created_at,
-  }) as CycleReactivationReceipt;
+  });
+  assertReceiptRelations(database, parsed);
+  return deepFreezeLifecycle(parsed) as CycleReactivationReceipt;
+}
+
+function assertReceiptRelations(
+  database: AppDatabase,
+  receipt: z.infer<typeof receiptInputSchema>,
+): void {
+  const command = receipt.command.command;
+  const result = receipt.result.result;
+  const sourceCycle = database.raw.prepare(`
+    SELECT person_id, prospect_id, workflow_status FROM sales_cycles WHERE id = ?
+  `).get(receipt.sourceCycleId) as {
+    person_id: string; prospect_id: string; workflow_status: string;
+  } | undefined;
+  const newCycle = database.raw.prepare(`
+    SELECT person_id, prospect_id, entry_source_event_id FROM sales_cycles WHERE id = ?
+  `).get(receipt.newCycleId) as {
+    person_id: string; prospect_id: string; entry_source_event_id: string;
+  } | undefined;
+  const enrollment = database.raw.prepare(`
+    SELECT id FROM cadence_enrollments
+    WHERE sales_cycle_id = ? AND cadence_definition_id = ?
+  `).get(receipt.newCycleId, command.cadence.definitionId);
+  const sourceEventId = 'ruleType' in command
+    ? command.entrySourceEventId
+    : command.evidence.kind === 'source_event' ? command.evidence.sourceEventId : null;
+  const source = sourceEventId === null ? undefined : database.raw.prepare(`
+    SELECT person_id, prospect_id, channel FROM source_events WHERE id = ?
+  `).get(sourceEventId) as {
+    person_id: string; prospect_id: string | null; channel: string;
+  } | undefined;
+  const definition = database.raw.prepare(`
+    SELECT family, version, content_hash FROM cadence_definitions WHERE id = ?
+  `).get(command.cadence.definitionId) as {
+    family: string; version: number; content_hash: string;
+  } | undefined;
+  const rule = 'ruleType' in command ? database.raw.prepare(`
+    SELECT sales_cycle_id, rule_type FROM reactivation_rules WHERE id = ?
+  `).get(command.ruleId) as { sales_cycle_id: string; rule_type: string } | undefined : undefined;
+  const invalid = sourceCycle === undefined
+    || sourceCycle.person_id !== receipt.personId
+    || sourceCycle.prospect_id !== command.prospectId
+    || sourceCycle.workflow_status !== 'closed'
+    || newCycle === undefined
+    || newCycle.person_id !== receipt.personId
+    || newCycle.prospect_id !== command.prospectId
+    || newCycle.entry_source_event_id !== result.cycle.entrySourceEventId
+    || enrollment === undefined
+    || source === undefined
+    || source.person_id !== receipt.personId
+    || (source.prospect_id !== null && source.prospect_id !== command.prospectId)
+    || definition === undefined
+    || definition.family !== command.cadence.family
+    || definition.version !== command.cadence.version
+    || definition.content_hash !== command.cadence.contentHash
+    || ('ruleType' in command
+      ? rule === undefined
+        || rule.sales_cycle_id !== receipt.sourceCycleId
+        || rule.rule_type !== command.ruleType
+      : command.evidence.kind !== 'source_event'
+        || source.channel !== command.evidence.channel);
+  if (invalid) {
+    throw new LifecycleEvidenceError('Reactivation receipt relational evidence is invalid.');
+  }
 }
 
 function assertReceiptEquals(

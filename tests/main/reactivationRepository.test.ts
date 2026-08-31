@@ -2,11 +2,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
+import { BUILTIN_CADENCES } from '../../src/main/domain/cadence/builtinCadences';
+import { CadenceRepository } from '../../src/main/domain/cadence/cadenceRepository';
 import {
   ReactivationRepository,
   type InsertReactivationReceiptInput,
 } from '../../src/main/domain/lifecycle/reactivationRepository';
 import { SalesCycleRepository } from '../../src/main/domain/lifecycle/salesCycleRepository';
+import { auditDomainInvariants } from '../../src/main/domain/lifecycle/invariantAudit';
 import type { SalesCycle } from '../../src/main/domain/lifecycle/lifecycleTypes';
 import { LifecycleIdempotencyConflictError, StaleDomainWriteError } from '../../src/main/domain/support/domainErrors';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
@@ -14,6 +17,11 @@ import { DOMAIN_TIMESTAMP, insertClosedCycle, seedProspect } from '../fixtures/d
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
 const OCTOBER = '2026-10-01T13:00:00.000Z';
+const COLD_CADENCE = BUILTIN_CADENCES.find(({ family }) => family === 'cadence_b')!;
+const COLD_IDENTITY = {
+  definitionId: COLD_CADENCE.id, family: 'cadence_b' as const,
+  version: COLD_CADENCE.version, contentHash: COLD_CADENCE.contentHash,
+} as const;
 
 describe('ReactivationRepository', () => {
   let database: AppDatabase | undefined;
@@ -42,9 +50,21 @@ describe('ReactivationRepository', () => {
     });
     unitOfWork = new DomainUnitOfWork(database);
     repository = new ReactivationRepository({ database, unitOfWork });
+    const cadences = new CadenceRepository({
+      database, unitOfWork, clock: { now: () => DOMAIN_TIMESTAMP },
+    });
+    unitOfWork.immediate(() => cadences.installBuiltins());
     const prospect = seedProspect(database.raw, 'reactivation');
     const sourceCycleId = insertClosedCycle({ database: database.raw, prefix: 'source', prospect });
     const newCycleId = insertClosedCycle({ database: database.raw, prefix: 'new', prospect });
+    database.raw.prepare(`
+      INSERT INTO cadence_enrollments (
+        id, sales_cycle_id, cadence_definition_id, status, anchor_at,
+        current_step_id, scheduled_step_count, mode, allowed_step_ids_json,
+        version, stop_reason, created_at, updated_at
+      ) VALUES ('receipt-enrollment', ?, ?, 'completed', ?, NULL, 0,
+        'standard', NULL, 1, 'fixture', ?, ?)
+    `).run(newCycleId, COLD_CADENCE.id, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
     const cycles = new SalesCycleRepository({ database, unitOfWork });
     return {
       personId: prospect.personId, prospectId: prospect.prospectId,
@@ -89,7 +109,7 @@ describe('ReactivationRepository', () => {
     expect(() => unitOfWork.immediate(() => repository.insertRule({
       ...input, id: 'wrong-event-matcher', matcher: {
         version: 1, eventType: 'lead-cert-expiry-window', personWide: true,
-      },
+      } as never,
     } as never))).toThrow();
     expect(() => unitOfWork.immediate(() => repository.insertRule({
       ...input, id: 'event-with-due', dueAt: OCTOBER,
@@ -119,13 +139,17 @@ describe('ReactivationRepository', () => {
           sourceCycleId, entrySourceEventId: sourceEventId, newCycleId,
           activatedAt: OCTOBER, ruleType: 'manual',
           trigger: { kind: 'due', dueAt: OCTOBER },
+          cadence: COLD_IDENTITY,
         },
       },
       result: {
         version: 1 as const,
-        result: { kind: 'reactivated', activationKind: 'rule', cycle: newCycle },
+        result: {
+          kind: 'reactivated', activationKind: 'rule', cycle: newCycle,
+          cadence: COLD_IDENTITY,
+        },
       },
-      createdAt: DOMAIN_TIMESTAMP,
+      createdAt: OCTOBER,
     };
     const first = unitOfWork.immediate(() => repository.insertOrGetReceipt(input));
     const replay = unitOfWork.immediate(() => repository.insertOrGetReceipt(input));
@@ -137,10 +161,10 @@ describe('ReactivationRepository', () => {
           ...(input.command as { version: 1; command: Record<string, unknown> }).command,
           newCycleId: 'changed-cycle',
         },
-      },
+      } as never,
     }))).toThrow(LifecycleIdempotencyConflictError);
     expect(() => unitOfWork.immediate(() => repository.insertOrGetReceipt({
-      ...input, createdAt: '2026-08-30T12:00:01.000Z',
+      ...input, createdAt: '2026-10-01T13:00:01.000Z',
     }))).toThrow(LifecycleIdempotencyConflictError);
     unitOfWork.immediate(() => repository.insertRule({
       id: 'invalid-result', salesCycleId: sourceCycleId, ruleType: 'manual',
@@ -155,7 +179,9 @@ describe('ReactivationRepository', () => {
       activationKey: 'rule:invalid-result',
       reactivationRuleId: 'invalid-result',
       newCycleId: invalidResultCycleId,
-      result: { version: 1, result: { kind: 'reactivated', cycleId: invalidResultCycleId } },
+      result: {
+        version: 1, result: { kind: 'reactivated', cycleId: invalidResultCycleId },
+      } as never,
     }))).toThrow();
     expect(() => database!.raw.prepare(`
       UPDATE cycle_reactivation_receipts SET result_json = '{}' WHERE activation_key = 'rule:rule'
@@ -163,5 +189,58 @@ describe('ReactivationRepository', () => {
     expect(() => database!.raw.prepare(`
       DELETE FROM cycle_reactivation_receipts WHERE activation_key = 'rule:rule'
     `).run()).toThrow();
+  });
+
+  it('rejects strict or relationally mismatched receipt envelopes on append and read', async () => {
+    const {
+      personId, prospectId, sourceEventId, sourceCycleId, newCycleId, newCycle,
+    } = await setup();
+    unitOfWork.immediate(() => repository.insertRule({
+      id: 'strict-rule', salesCycleId: sourceCycleId, ruleType: 'manual',
+      dueAt: OCTOBER, matcher: null, version: 1, createdAt: DOMAIN_TIMESTAMP,
+    }));
+    const valid: InsertReactivationReceiptInput = {
+      activationKey: 'rule:strict-rule', activationKind: 'rule', personId,
+      sourceCycleId, reactivationRuleId: 'strict-rule', sourceEventId: null,
+      newCycleId, createdAt: OCTOBER,
+      command: { version: 1, command: {
+        ruleId: 'strict-rule', expectedRuleVersion: 1, personId, prospectId,
+        sourceCycleId, entrySourceEventId: sourceEventId, newCycleId,
+        activatedAt: OCTOBER, ruleType: 'manual',
+        trigger: { kind: 'due', dueAt: OCTOBER }, cadence: COLD_IDENTITY,
+      } },
+      result: { version: 1, result: {
+        kind: 'reactivated', activationKind: 'rule', cycle: newCycle,
+        cadence: COLD_IDENTITY,
+      } },
+    };
+    expect(() => unitOfWork.immediate(() => repository.insertOrGetReceipt({
+      ...valid, command: { ...valid.command, extra: true } as never,
+    }))).toThrow();
+    expect(() => unitOfWork.immediate(() => repository.insertOrGetReceipt({
+      ...valid,
+      command: { version: 1, command: { ...valid.command.command, personId: 'other-person' } },
+    }))).toThrow();
+    expect(() => unitOfWork.immediate(() => repository.insertOrGetReceipt({
+      ...valid,
+      result: { version: 1, result: {
+        ...valid.result.result, cycle: { ...valid.result.result.cycle, personId: 'other-person' },
+      } },
+    }))).toThrow();
+
+    unitOfWork.immediate(() => repository.insertOrGetReceipt(valid));
+    expect(auditDomainInvariants({ database: database! })).not.toContainEqual(
+      expect.objectContaining({ kind: 'reactivation_receipt_invalid', recordId: valid.activationKey }),
+    );
+    database!.raw.exec(`DROP TRIGGER immutable_cycle_reactivation_receipts`);
+    database!.raw.prepare(`
+      UPDATE cycle_reactivation_receipts SET command_json = ? WHERE activation_key = ?
+    `).run(JSON.stringify({
+      version: 1, command: { ...valid.command.command, extra: true },
+    }), valid.activationKey);
+    expect(() => repository.getReceipt(valid.activationKey)).toThrow();
+    expect(auditDomainInvariants({ database: database! })).toContainEqual(
+      expect.objectContaining({ kind: 'reactivation_receipt_invalid', recordId: valid.activationKey }),
+    );
   });
 });

@@ -17,6 +17,10 @@ import { DOMAIN_TIMESTAMP, seedProspect, type SeededProspect } from '../fixtures
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
 const TIMEZONE = 'America/New_York';
+const WON_FAULT_PHASES = [
+  'old_enrollment_stop', 'onboarding_enrollment_insert', 'onboarding_action_insert',
+  'won_terms_insert', 'cycle_projection', 'stage_event_insert', 'old_action_settlement',
+] as const;
 
 type Harness = Readonly<{
   database: AppDatabase;
@@ -494,6 +498,52 @@ describe('LifecycleService cadence terminal mappings', () => {
       expect(cycleSnapshot(harness.database, terminalCase.seeded.cycleId)).toEqual(before);
     }
   });
+
+  it.each(WON_FAULT_PHASES)(
+    'rolls the full Offered-to-Won transaction back after %s failure',
+    async (faultPoint) => {
+      const harness = await setup([
+        'fault-onboarding-enrollment', 'fault-onboarding-action', 'fault-won-event',
+      ]);
+      const offered = seedTerminal({
+        prefix: `won-fault-${faultPoint}`, family: 'post_offer',
+        stage: 'offered', stepIndex: 0,
+      });
+      const before = cycleSnapshot(harness.database, offered.cycleId);
+      const when = faultPoint === 'old_enrollment_stop'
+        ? `AFTER UPDATE OF status ON cadence_enrollments WHEN NEW.id = '${offered.enrollmentId}'`
+        : faultPoint === 'onboarding_enrollment_insert'
+          ? `AFTER INSERT ON cadence_enrollments WHEN NEW.id = 'fault-onboarding-enrollment'`
+          : faultPoint === 'onboarding_action_insert'
+            ? `AFTER INSERT ON next_actions WHEN NEW.id = 'fault-onboarding-action'`
+            : faultPoint === 'won_terms_insert'
+              ? `AFTER INSERT ON won_terms WHEN NEW.sales_cycle_id = '${offered.cycleId}'`
+              : faultPoint === 'cycle_projection'
+                ? `AFTER UPDATE ON sales_cycles WHEN NEW.id = '${offered.cycleId}'`
+                : faultPoint === 'stage_event_insert'
+                  ? `AFTER INSERT ON stage_events WHEN NEW.id = 'fault-won-event'`
+                  : `AFTER UPDATE OF status ON next_actions WHEN NEW.id = '${offered.actionId}'`;
+      harness.database.raw.exec(`
+        CREATE TRIGGER fault_won_${faultPoint} ${when}
+        BEGIN SELECT RAISE(ABORT, 'fault:${faultPoint}'); END
+      `);
+      try {
+        expect(() => harness.service.confirmWon({
+          cycleId: offered.cycleId, expectedCycleVersion: 1,
+          expectedCurrentActionId: offered.actionId,
+          effectiveAt: DOMAIN_TIMESTAMP, confirmedAt: DOMAIN_TIMESTAMP,
+          terms: {
+            billingModel: 'per_door_monthly', doorsCommitted: 4,
+            unitRateCents: 2500, foundingCustomer: true,
+            effectiveAt: DOMAIN_TIMESTAMP,
+          },
+        })).toThrow(`fault:${faultPoint}`);
+      } finally {
+        harness.database.raw.exec(`DROP TRIGGER fault_won_${faultPoint}`);
+      }
+      expect(cycleSnapshot(harness.database, offered.cycleId)).toEqual(before);
+    },
+  );
 });
 
 function cycleSnapshot(database: AppDatabase, cycleId: string): unknown {

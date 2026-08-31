@@ -112,6 +112,7 @@ const requiredTriggers = [
   'protect_next_action_inbound_sla_insert',
   'protect_next_action_inbound_sla_update',
   'protect_next_action_settlement',
+  'protect_settled_next_action_schedule',
   'protect_next_action_delete',
   'protect_opt_out_handle',
   'protect_opt_out_handle_update',

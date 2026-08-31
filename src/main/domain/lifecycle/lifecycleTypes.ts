@@ -1,4 +1,10 @@
 import type { LifecycleStage, ReactivationRuleType, WorkflowStatus } from '../../db/domainSchema';
+import type {
+  ReactivationCommandEnvelope,
+  ReactivationResultEnvelope,
+  ReactivationReviewPayload,
+  ReactivationReviewResolution,
+} from './reactivationContracts';
 
 export type UtcTimestamp = string;
 
@@ -188,8 +194,8 @@ export type CycleReactivationReceipt = Readonly<{
   reactivationRuleId: string | null;
   sourceEventId: string | null;
   newCycleId: string;
-  command: unknown;
-  result: unknown;
+  command: ReactivationCommandEnvelope;
+  result: ReactivationResultEnvelope;
   createdAt: UtcTimestamp;
 }>;
 
@@ -203,8 +209,8 @@ export type LifecycleReviewItem = Readonly<{
   reactivationRuleId: string | null;
   sourceEventId: string | null;
   reason: string;
-  payload: unknown;
-  resolution: unknown | null;
+  payload: ReactivationReviewPayload;
+  resolution: ReactivationReviewResolution | null;
   resolvedAt: UtcTimestamp | null;
   version: number;
   createdAt: UtcTimestamp;

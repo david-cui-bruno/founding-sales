@@ -10,8 +10,10 @@ import {
   insertClosedCycle,
   insertOpenCycleWithAction,
   insertPerson,
+  insertSourceEvent,
   seedProspect,
 } from '../fixtures/domainRows';
+import { serializeCanonical } from '../../src/main/domain/lifecycle/lifecycleValidation';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
 describe('auditDomainInvariants', () => {
@@ -138,6 +140,7 @@ describe('auditDomainInvariants', () => {
         'direct', 8, 'p0', NULL, 0, 1, ?, ?)
     `).run(prospect.prospectId, '2026-08-30T12:00:00.000Z', '2026-08-30T12:00:00.000Z');
     database.raw.exec('DROP TRIGGER protect_priority_projection_fidelity_update');
+    database.raw.exec('DROP TRIGGER protect_projection_p0_override_update');
     database.raw.prepare(`
       UPDATE prospect_priority_projection SET reachability = 'indirect' WHERE prospect_id = ?
     `).run(prospect.prospectId);
@@ -234,6 +237,185 @@ describe('auditDomainInvariants', () => {
     }
     expect(auditDomainInvariants({ database })).toContainEqual(expect.objectContaining({
       kind: 'stage_event_chain_invalid', recordId: seeded.cycleId,
+    }));
+  });
+
+  it('accepts positive close-readiness projection versions and rejects deep SLA corruption', async () => {
+    workspace = createTempDatabase();
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: workspace.path, key });
+    await migrateToLatest(database, {
+      backupDirectory: `${workspace.path}.backups`, workspaceKey: key,
+    });
+    const prospect = seedProspect(database.raw, 'deep-action-audit');
+    const seeded = insertOpenCycleWithAction({
+      database: database.raw, prefix: 'deep-action-audit', prospect, stage: 'interviewed',
+    });
+    insertSourceEvent({
+      database: database.raw, id: 'audit-demo-source', personId: prospect.personId,
+      channel: 'inbound_demo',
+    });
+    const emptyDimension = { value: 'unknown', evidenceActivityIds: [] } as const;
+    database.raw.prepare(`
+      INSERT INTO sales_cycle_close_readiness (
+        sales_cycle_id, pain_confirmed, decision_authority_confirmed,
+        concrete_trial_identified, readiness_json, version, assessed_at, updated_at
+      ) VALUES (?, 0, 0, 0, ?, 2, ?, ?)
+    `).run(seeded.cycleId, serializeCanonical({
+      version: 1, demonstratedPain: emptyDimension, activeTimeline: emptyDimension,
+      decisionAuthority: emptyDimension, willingnessToTryOrPay: emptyDimension,
+      concreteNextStep: emptyDimension,
+    }), DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    expect(auditDomainInvariants({ database })).not.toContainEqual(
+      expect.objectContaining({ kind: 'close_readiness_invalid', recordId: seeded.cycleId }),
+    );
+
+    database.raw.exec('DROP TRIGGER protect_next_action_immutable_evidence');
+    database.raw.prepare(`
+      UPDATE next_actions SET
+        work_intent = 'inbound_response', sla_due_at = ?,
+        inbound_sla_kind = 'inbound_demo_permitted_minutes',
+        inbound_sla_due_at = ?, inbound_sla_source_event_id = ?,
+        inbound_sla_provenance_json = ?
+      WHERE id = ?
+    `).run(
+      DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, 'audit-demo-source',
+      serializeCanonical({
+        version: 1, sourceEventId: 'audit-demo-source',
+        sourceObservedAt: '2026-08-29T12:00:00.000Z',
+        calculation: 'permitted_minutes', minutes: 99,
+        policyId: 'wrong-policy', computedDueAt: DOMAIN_TIMESTAMP,
+      }),
+      seeded.actionId,
+    );
+    expect(auditDomainInvariants({ database })).toContainEqual(
+      expect.objectContaining({ kind: 'action_inbound_sla_invalid', recordId: seeded.actionId }),
+    );
+  });
+
+  it('audits Won term metadata and an effective P0 override against Direct reachability', async () => {
+    workspace = createTempDatabase();
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: workspace.path, key });
+    await migrateToLatest(database, {
+      backupDirectory: `${workspace.path}.backups`, workspaceKey: key,
+    });
+    const prospect = seedProspect(database.raw, 'won-metadata-audit');
+    database.raw.prepare(`
+      INSERT INTO sales_cycles (
+        id, person_id, prospect_id, entry_source_event_id, stage, workflow_status,
+        current_next_action_id, stage_entered_at, closed_at, version, created_at, updated_at
+      ) VALUES ('won-metadata-cycle', ?, ?, ?, 'won', 'closed', NULL, ?, ?, 1, ?, ?)
+    `).run(
+      prospect.personId, prospect.prospectId, prospect.sourceEventId,
+      DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+    );
+    database.raw.prepare(`
+      INSERT INTO won_terms (
+        sales_cycle_id, doors_committed, billing_model, unit_rate_cents,
+        projected_mrr_cents, projection_formula_version, manual_projection_reason,
+        founding_customer, effective_at, created_at
+      ) VALUES ('won-metadata-cycle', 2, 'per_door_monthly', 5000,
+        10000, 'founder_terms_v1', NULL, 1, ?, ?)
+    `).run(DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    database.raw.exec('DROP TRIGGER immutable_won_terms');
+    database.raw.pragma('ignore_check_constraints = ON');
+    database.raw.prepare(`
+      UPDATE won_terms SET projection_formula_version = 'wrong', founding_customer = 3,
+        effective_at = 'not-a-time', created_at = 'not-a-time'
+      WHERE sales_cycle_id = 'won-metadata-cycle'
+    `).run();
+
+    database.raw.prepare(`
+      INSERT INTO prioritization_rule_versions (
+        id, version, content_hash, rules_json, created_at
+      ) VALUES ('p0-audit-rule', 1, 'hash', '{}', ?)
+    `).run(DOMAIN_TIMESTAMP);
+    database.raw.prepare(`
+      INSERT INTO prioritization_evaluations (
+        id, prospect_id, rule_version_id, evaluated_at, fit_points, fit_band,
+        timing_millipoints, timing_band, reachability, data_confidence,
+        priority, earliest_trigger_expires_at, verify_first, explanation_json, created_at
+      ) VALUES ('p0-audit-eval', ?, 'p0-audit-rule', ?, 10, 'low', 0, 'cold',
+        'direct', 1, 'p3', NULL, 0, '[]', ?)
+    `).run(prospect.prospectId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    database.raw.prepare(`
+      INSERT INTO prospect_priority_projection (
+        prospect_id, rule_version_id, evaluation_id, fit_points, fit_band,
+        timing_millipoints, timing_band, reachability, data_confidence, priority,
+        earliest_trigger_expires_at, verify_first, version, evaluated_at, updated_at
+      ) VALUES (?, 'p0-audit-rule', 'p0-audit-eval', 10, 'low', 0, 'cold',
+        'direct', 1, 'p3', NULL, 0, 1, ?, ?)
+    `).run(prospect.prospectId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    database.raw.prepare(`
+      INSERT INTO priority_overrides (
+        id, prospect_id, override_kind, priority, reason, expires_at, created_at
+      ) VALUES ('p0-audit-override', ?, 'priority', 'p0', 'fixture',
+        '2027-08-30T12:00:00.000Z', ?)
+    `).run(prospect.prospectId, DOMAIN_TIMESTAMP);
+    database.raw.exec('DROP TRIGGER protect_priority_projection_fidelity_update');
+    database.raw.exec('DROP TRIGGER protect_projection_p0_override_update');
+    database.raw.prepare(`
+      UPDATE prospect_priority_projection SET reachability = 'indirect' WHERE prospect_id = ?
+    `).run(prospect.prospectId);
+
+    const violations = auditDomainInvariants({ database });
+    expect(violations).toContainEqual(expect.objectContaining({
+      kind: 'won_terms_invalid', recordId: 'won-metadata-cycle',
+    }));
+    expect(violations).toContainEqual(expect.objectContaining({
+      kind: 'p0_override_reachability_invalid', recordId: 'p0-audit-override',
+    }));
+  });
+
+  it('has no false positive for a canonical Unreviewed workflow and enforces exact nurture defaults', async () => {
+    workspace = createTempDatabase();
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: workspace.path, key });
+    await migrateToLatest(database, {
+      backupDirectory: `${workspace.path}.backups`, workspaceKey: key,
+    });
+    const canonical = seedProspect(database.raw, 'canonical-audit');
+    const workflow = insertOpenCycleWithAction({
+      database: database.raw, prefix: 'canonical-audit', prospect: canonical,
+    });
+    database.raw.exec('DROP TRIGGER protect_next_action_immutable_evidence');
+    database.raw.prepare(`
+      UPDATE next_actions SET work_intent = 'internal_review' WHERE id = ?
+    `).run(workflow.actionId);
+    database.raw.prepare(`
+      INSERT INTO stage_events (
+        id, sales_cycle_id, from_stage, to_stage, effective_at, confirmed_at,
+        confirmation_kind, transition_sequence, created_at
+      ) VALUES ('canonical-stage', ?, NULL, 'unreviewed', ?, ?, 'mechanical', 1, ?)
+    `).run(workflow.cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    expect(auditDomainInvariants({ database })).toEqual([]);
+
+    const unitOfWork = new DomainUnitOfWork(database);
+    const cadences = new CadenceRepository({
+      database, unitOfWork, clock: { now: () => DOMAIN_TIMESTAMP },
+    });
+    unitOfWork.immediate(() => cadences.installBuiltins());
+    const nurture = seedProspect(database.raw, 'nurture-cardinality');
+    const cycleId = insertClosedCycle({
+      database: database.raw, prefix: 'nurture-cardinality', prospect: nurture,
+    });
+    database.raw.prepare(`
+      INSERT INTO cadence_enrollments (
+        id, sales_cycle_id, cadence_definition_id, status, anchor_at,
+        current_step_id, scheduled_step_count, mode, allowed_step_ids_json,
+        version, stop_reason, created_at, updated_at
+      ) VALUES ('nurture-a-enrollment', ?, 'cadence-a-v1', 'stopped', ?,
+        'cadence-a-v1-day-0', 1, 'standard', NULL, 1, 'exhausted', ?, ?)
+    `).run(cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    database.raw.prepare(`
+      INSERT INTO reactivation_rules (
+        id, sales_cycle_id, rule_type, due_at, matcher_json, version, consumed_at, created_at
+      ) VALUES ('partial-a-defaults', ?, 'seasonal:heating-oct1',
+        '2026-10-01T13:00:00.000Z', NULL, 1, NULL, ?)
+    `).run(cycleId, DOMAIN_TIMESTAMP);
+    expect(auditDomainInvariants({ database })).toContainEqual(expect.objectContaining({
+      kind: 'lost_nurture_reactivation_invalid', recordId: cycleId,
     }));
   });
 });

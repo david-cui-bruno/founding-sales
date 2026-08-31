@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
+import { BUILTIN_CADENCES } from '../../src/main/domain/cadence/builtinCadences';
 import { CadenceRepository } from '../../src/main/domain/cadence/cadenceRepository';
 import { FOUNDER_CHANNEL_POLICIES_V1 } from '../../src/main/domain/cadence/cadenceScheduler';
 import { EventRepository } from '../../src/main/domain/events/eventRepository';
@@ -17,6 +18,12 @@ import {
   seedProspect,
 } from '../fixtures/domainRows';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
+
+const WARM_CADENCE = BUILTIN_CADENCES.find(({ family }) => family === 'cadence_c')!;
+const WARM_CADENCE_IDENTITY = {
+  definitionId: WARM_CADENCE.id, family: 'cadence_c' as const,
+  version: WARM_CADENCE.version, contentHash: WARM_CADENCE.contentHash,
+} as const;
 
 describe('LifecycleService', () => {
   let database: AppDatabase | undefined;
@@ -522,6 +529,7 @@ describe('LifecycleService', () => {
       newCycleId: 'reactivated-cycle', activatedAt: '2026-10-01T13:00:00.000Z',
       ruleType: 'manual',
       trigger: { kind: 'due', dueAt: '2026-10-01T13:00:00.000Z' },
+      cadence: WARM_CADENCE_IDENTITY,
     } as const;
     expect(() => service.reactivateFromRule({
       ...activation, trigger: { kind: 'due', dueAt: '2026-10-01T13:00:01.000Z' },
@@ -619,9 +627,13 @@ describe('LifecycleService', () => {
       timezone: 'America/New_York', policies: FOUNDER_CHANNEL_POLICIES_V1,
     });
     const command = {
-      sourceEventId: 'inbound-demo', personId: prospect.personId,
+      evidence: {
+        kind: 'source_event', sourceEventId: 'inbound-demo', channel: 'inbound_demo',
+      },
+      personId: prospect.personId,
       prospectId: prospect.prospectId, sourceCycleId,
       newCycleId: 'inbound-cycle', activatedAt: DOMAIN_TIMESTAMP,
+      cadence: WARM_CADENCE_IDENTITY,
     } as const;
     const result = service.reactivateFromInboundResponse(command);
     expect(result).toMatchObject({
@@ -731,7 +743,9 @@ describe('LifecycleService', () => {
       sources.append({
         id: 'owned-frbo-trigger', personId: prospect.personId,
         prospectId: prospect.prospectId, channel: 'frbo', observedAt: DOMAIN_TIMESTAMP,
-        sourceRecord: { event: 'new-frbo-listing' },
+        sourceRecord: {
+          reactivationTrigger: { version: 1, eventType: 'new-frbo-listing' },
+        },
       });
     });
     const service = new LifecycleService({
@@ -743,6 +757,7 @@ describe('LifecycleService', () => {
       personId: prospect.personId, prospectId: prospect.prospectId, sourceCycleId,
       newCycleId: 'event-reactivated-cycle', activatedAt: DOMAIN_TIMESTAMP,
       ruleType: 'new-frbo-listing' as const,
+      cadence: WARM_CADENCE_IDENTITY,
     };
     expect(() => service.reactivateFromRule({
       ...common, entrySourceEventId: 'wrong-registry-trigger',

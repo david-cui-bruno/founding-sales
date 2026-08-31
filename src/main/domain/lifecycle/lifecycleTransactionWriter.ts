@@ -28,6 +28,16 @@ import {
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 import type { IdGenerator } from '../support/idGenerator';
 import { CadenceEnrollmentRepository } from './cadenceEnrollmentRepository';
+import {
+  reactivationInboundCommandSchema,
+  reactivationReviewBlockerSchema,
+  reactivationResultEnvelopeSchema,
+  reactivationRuleCommandSchema,
+  type ReactivateFromInboundCommand,
+  type ReactivateFromRuleCommand,
+  type ReactivationCadenceIdentity,
+  type ReactivationCommandEnvelope,
+} from './reactivationContracts';
 import type {
   CadenceActionBinding,
   CadenceEnrollment,
@@ -117,72 +127,9 @@ const readinessDimensionInputSchema = z.object({
   evidenceActivityIds: z.array(z.string().trim().min(1)),
 }).strict();
 
-const reactivationRuleCommonSchema = {
-  ruleId: z.string().trim().min(1), expectedRuleVersion: z.number().int().positive(),
-  personId: z.string().trim().min(1), prospectId: z.string().trim().min(1),
-  sourceCycleId: z.string().trim().min(1), entrySourceEventId: z.string().trim().min(1),
-  newCycleId: z.string().trim().min(1), activatedAt: utcTimestampSchema,
-};
-const reactivationRuleInputSchema = z.discriminatedUnion('ruleType', [
-  z.object({
-    ...reactivationRuleCommonSchema, ruleType: z.literal('seasonal:heating-oct1'),
-    trigger: z.object({ kind: z.literal('due'), dueAt: utcTimestampSchema }).strict(),
-  }).strict(),
-  z.object({
-    ...reactivationRuleCommonSchema, ruleType: z.literal('manual'),
-    trigger: z.object({ kind: z.literal('due'), dueAt: utcTimestampSchema }).strict(),
-  }).strict(),
-  z.object({
-    ...reactivationRuleCommonSchema, ruleType: z.literal('new-frbo-listing'),
-    trigger: z.object({
-      kind: z.literal('source_event'), eventType: z.literal('new-frbo-listing'),
-      sourceEventId: z.string().trim().min(1),
-    }).strict(),
-  }).strict(),
-  z.object({
-    ...reactivationRuleCommonSchema, ruleType: z.literal('lead-cert-expiry-window'),
-    trigger: z.object({
-      kind: z.literal('source_event'), eventType: z.literal('lead-cert-expiry-window'),
-      sourceEventId: z.string().trim().min(1),
-    }).strict(),
-  }).strict(),
-]);
-
-const reactivationInboundInputSchema = z.object({
-  sourceEventId: z.string().trim().min(1), personId: z.string().trim().min(1),
-  prospectId: z.string().trim().min(1), sourceCycleId: z.string().trim().min(1),
-  newCycleId: z.string().trim().min(1), activatedAt: utcTimestampSchema,
-}).strict();
-
-const salesCycleReceiptSnapshotSchema = z.object({
-  id: lifecycleIdSchema, personId: lifecycleIdSchema, prospectId: lifecycleIdSchema,
-  entrySourceEventId: lifecycleIdSchema,
-  stage: z.enum(['unreviewed', 'ready', 'contacted', 'interviewed', 'offered', 'won', 'lost_nurture']),
-  workflowStatus: z.enum(['active', 'onboarding', 'closed']),
-  currentNextActionId: lifecycleIdSchema.nullable(), stageEnteredAt: utcTimestampSchema,
-  designPartnerFitness: z.number().int().min(0).max(5).nullable(),
-  closeReason: z.enum([
-    'no_response', 'not_interested', 'bad_timing', 'not_decision_maker',
-    'not_qualified', 'price', 'trust', 'chose_alternative', 'product_gap',
-    'cadence_exhausted', 'disqualified', 'opt_out', 'other',
-  ]).nullable(),
-  closeNotes: z.string().nullable(), onboardingStopReason: z.string().nullable(),
-  closedAt: utcTimestampSchema.nullable(), version: z.number().int().positive(),
-  createdAt: utcTimestampSchema, updatedAt: utcTimestampSchema,
-}).strict();
-const reactivationReceiptResultSchema = z.object({
-  version: z.literal(1),
-  result: z.discriminatedUnion('activationKind', [
-    z.object({
-      kind: z.literal('reactivated'), activationKind: z.literal('rule'),
-      cycle: salesCycleReceiptSnapshotSchema,
-    }).strict(),
-    z.object({
-      kind: z.literal('reactivated'), activationKind: z.literal('inbound_response'),
-      cycle: salesCycleReceiptSnapshotSchema,
-    }).strict(),
-  ]),
-}).strict();
+const reactivationRuleInputSchema = reactivationRuleCommandSchema;
+const reactivationInboundInputSchema = reactivationInboundCommandSchema;
+const reactivationReceiptResultSchema = reactivationResultEnvelopeSchema;
 
 export type CreateUnreviewedCycleInput = Readonly<{
   personId: string;
@@ -299,44 +246,8 @@ export type SetCloseReadinessInput = Readonly<{
   assessedAt: string;
 }>;
 
-type ReactivateFromRuleCommon = Readonly<{
-  ruleId: string;
-  expectedRuleVersion: number;
-  personId: string;
-  prospectId: string;
-  sourceCycleId: string;
-  entrySourceEventId: string;
-  newCycleId: string;
-  activatedAt: string;
-}>;
-
-export type ReactivateFromRuleInput = ReactivateFromRuleCommon & (
-  | Readonly<{
-      ruleType: 'seasonal:heating-oct1' | 'manual';
-      trigger: Readonly<{ kind: 'due'; dueAt: string }>;
-    }>
-  | Readonly<{
-      ruleType: 'new-frbo-listing';
-      trigger: Readonly<{
-        kind: 'source_event'; eventType: 'new-frbo-listing'; sourceEventId: string;
-      }>;
-    }>
-  | Readonly<{
-      ruleType: 'lead-cert-expiry-window';
-      trigger: Readonly<{
-        kind: 'source_event'; eventType: 'lead-cert-expiry-window'; sourceEventId: string;
-      }>;
-    }>
-);
-
-export type ReactivateFromInboundInput = Readonly<{
-  sourceEventId: string;
-  personId: string;
-  prospectId: string;
-  sourceCycleId: string;
-  newCycleId: string;
-  activatedAt: string;
-}>;
+export type ReactivateFromRuleInput = ReactivateFromRuleCommand;
+export type ReactivateFromInboundInput = ReactivateFromInboundCommand;
 
 export type ReactivationResult = Readonly<
   | { kind: 'reactivated'; cycle: SalesCycle }
@@ -1068,6 +979,11 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     const command = { version: 1 as const, command: { ...parsed } };
     const replay = this.readReactivationReplay(activationKey, command);
     if (replay !== null) return replay;
+    const existingReview = this.reviews.getByActivationKey(activationKey);
+    const definition = this.requirePinnedCadence(
+      parsed.cadence,
+      existingReview === null ? this.prospectingFamilyForPerson(parsed.personId) : null,
+    );
     const rule = this.reactivations.getRule(parsed.ruleId);
     this.assertRuleActivationProof(parsed, rule);
     const blocker = this.reactivationBlocker({
@@ -1093,20 +1009,24 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     const cycle = this.createReactivatedCycle({
       personId: parsed.personId, prospectId: parsed.prospectId,
       entrySourceEventId: parsed.entrySourceEventId, newCycleId: parsed.newCycleId,
-      activatedAt: parsed.activatedAt, kind: 'rule',
+      activatedAt: parsed.activatedAt, kind: 'rule', definition,
     });
     this.reactivations.consumeRule({
       ruleId: parsed.ruleId, salesCycleId: parsed.sourceCycleId,
       expectedVersion: parsed.expectedRuleVersion, consumedAt: parsed.activatedAt,
     });
-    this.resolveExistingActivationReview(activationKey, parsed.activatedAt, cycle.id);
+    this.resolveExistingActivationReview(
+      activationKey, parsed.activatedAt, cycle.id, 'rule', parsed.cadence,
+    );
     this.reactivations.insertOrGetReceipt({
       activationKey, activationKind: 'rule', personId: parsed.personId,
       sourceCycleId: parsed.sourceCycleId, reactivationRuleId: parsed.ruleId,
       sourceEventId: null, newCycleId: parsed.newCycleId, command,
       result: {
         version: 1,
-        result: { kind: 'reactivated', activationKind: 'rule', cycle },
+        result: {
+          kind: 'reactivated', activationKind: 'rule', cycle, cadence: parsed.cadence,
+        },
       },
       createdAt: parsed.activatedAt,
     });
@@ -1117,35 +1037,66 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
   reactivateFromInboundResponse(input: ReactivateFromInboundInput): ReactivationResult {
     this.unitOfWork.assertWriteScope();
     const parsed = reactivationInboundInputSchema.parse(input) as ReactivateFromInboundInput;
-    const activationKey = `inbound:${parsed.sourceEventId}`;
+    const activationKey = parsed.evidence.kind === 'source_event'
+      ? `inbound:${parsed.evidence.sourceEventId}`
+      : `inbound-handle:${parsed.evidence.handleKind}:${parsed.evidence.normalizedValue}`;
     const command = { version: 1 as const, command: { ...parsed } };
     const replay = this.readReactivationReplay(activationKey, command);
     if (replay !== null) return replay;
+    const definition = this.requirePinnedCadence(parsed.cadence, 'cadence_c');
+    if (parsed.evidence.kind === 'unknown_handle') {
+      const matches = this.identities.findContactMatchesByNormalizedHandle(
+        parsed.evidence.handleKind, parsed.evidence.normalizedValue,
+      );
+      if (matches.some(({ person }) => person.id === parsed.personId)) {
+        throw new LifecycleEvidenceError('A known owned handle cannot use unknown-handle Review.');
+      }
+      const blocker = this.unknownHandleBlocker(parsed);
+      return this.prepareBlockedReactivation({
+        activationKey, command, blocker, personId: parsed.personId,
+        prospectId: parsed.prospectId, sourceCycleId: parsed.sourceCycleId,
+        reactivationRuleId: null, sourceEventId: null,
+        activatedAt: parsed.activatedAt,
+      })!;
+    }
+    const sourceEventId = parsed.evidence.sourceEventId;
+    const source = this.sources.getById(sourceEventId);
+    if (source === null || source.channel !== parsed.evidence.channel) {
+      throw new LifecycleEvidenceError('Inbound SourceEvent channel evidence is missing or changed.');
+    }
     const blocker = this.reactivationBlocker({
       personId: parsed.personId, prospectId: parsed.prospectId,
-      sourceCycleId: parsed.sourceCycleId, entrySourceEventId: parsed.sourceEventId,
+      sourceCycleId: parsed.sourceCycleId, entrySourceEventId: sourceEventId,
       activatedAt: parsed.activatedAt, rule: undefined, expectedRuleVersion: undefined,
     });
+    if (blocker === 'invalid_or_not_due_rule') {
+      throw new LifecycleEvidenceError('Inbound activation cannot use rule-only eligibility.');
+    }
     const review = this.prepareBlockedReactivation({
       activationKey, command, blocker, personId: parsed.personId,
       prospectId: parsed.prospectId, sourceCycleId: parsed.sourceCycleId,
-      reactivationRuleId: null, sourceEventId: parsed.sourceEventId,
+      reactivationRuleId: null, sourceEventId,
       activatedAt: parsed.activatedAt,
     });
     if (review !== null) return review;
     const cycle = this.createReactivatedCycle({
       personId: parsed.personId, prospectId: parsed.prospectId,
-      entrySourceEventId: parsed.sourceEventId, newCycleId: parsed.newCycleId,
-      activatedAt: parsed.activatedAt, kind: 'inbound_response',
+      entrySourceEventId: sourceEventId, newCycleId: parsed.newCycleId,
+      activatedAt: parsed.activatedAt, kind: 'inbound_response', definition,
     });
-    this.resolveExistingActivationReview(activationKey, parsed.activatedAt, cycle.id);
+    this.resolveExistingActivationReview(
+      activationKey, parsed.activatedAt, cycle.id, 'inbound_response', parsed.cadence,
+    );
     this.reactivations.insertOrGetReceipt({
       activationKey, activationKind: 'inbound_response', personId: parsed.personId,
       sourceCycleId: parsed.sourceCycleId, reactivationRuleId: null,
-      sourceEventId: parsed.sourceEventId, newCycleId: parsed.newCycleId, command,
+      sourceEventId, newCycleId: parsed.newCycleId, command,
       result: {
         version: 1,
-        result: { kind: 'reactivated', activationKind: 'inbound_response', cycle },
+        result: {
+          kind: 'reactivated', activationKind: 'inbound_response', cycle,
+          cadence: parsed.cadence,
+        },
       },
       createdAt: parsed.activatedAt,
     });
@@ -1352,7 +1303,9 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       || input.trigger.sourceEventId !== input.entrySourceEventId
       || source === null || source.personId !== input.personId
       || (source.prospectId !== null && source.prospectId !== input.prospectId)
-      || source.channel !== expectedChannel || source.observedAt > input.activatedAt) {
+      || source.channel !== expectedChannel || source.observedAt > input.activatedAt
+      || source.observedAt < rule.createdAt
+      || !isNamedReactivationSource(source.sourceRecord, input.trigger.eventType)) {
       throw new LifecycleEligibilityError('Event-rule activation requires matching owned trigger proof.');
     }
   }
@@ -1371,7 +1324,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       dueAt: string | null;
     } | null | undefined;
     expectedRuleVersion: number | undefined;
-  }): string | null {
+  }): z.infer<typeof reactivationReviewBlockerSchema> | 'invalid_or_not_due_rule' | null {
     const person = this.identities.getPerson(input.personId);
     const prospect = this.identities.getCanonicalProspect(input.personId);
     const sourceCycle = this.cycles.getById(input.sourceCycleId);
@@ -1398,8 +1351,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
 
   private prepareBlockedReactivation(input: {
     activationKey: string;
-    command: { version: 1; command: Record<string, unknown> };
-    blocker: string | null;
+    command: ReactivationCommandEnvelope;
+    blocker: z.infer<typeof reactivationReviewBlockerSchema> | null;
     personId: string;
     prospectId: string;
     sourceCycleId: string;
@@ -1408,10 +1361,13 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     activatedAt: string;
   }): ReactivationResult | null {
     const existing = this.reviews.getByActivationKey(input.activationKey);
-    const payload = { version: 1 as const, command: input.command.command };
-    if (existing !== null
-      && serializeCanonical(existing.payload) !== serializeCanonical(payload)) {
-      throw new LifecycleIdempotencyConflictError();
+    if (existing !== null) {
+      const storedCommand = typeof existing.payload === 'object' && existing.payload !== null
+        ? (existing.payload as { command?: unknown }).command
+        : undefined;
+      if (serializeCanonical(storedCommand) !== serializeCanonical(input.command.command)) {
+        throw new LifecycleIdempotencyConflictError();
+      }
     }
     if (input.blocker === null) return null;
     if (existing !== null) {
@@ -1420,6 +1376,10 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       }
       return Object.freeze({ kind: 'review_required', reviewItem: existing });
     }
+    const payload = {
+      version: 1 as const, kind: 'reactivation_blocked' as const,
+      blocker: input.blocker, command: input.command.command,
+    };
     const reviewItem = this.reviews.insertOrGetOpen({
       id: this.ids.next(), activationKey: input.activationKey,
       personId: input.personId, prospectId: input.prospectId,
@@ -1434,12 +1394,17 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     activationKey: string,
     resolvedAt: string,
     newCycleId: string,
+    activationKind: 'rule' | 'inbound_response',
+    cadence: ReactivationCadenceIdentity,
   ): void {
     const review = this.reviews.getByActivationKey(activationKey);
     if (review?.status === 'open') {
       this.reviews.resolve({
         id: review.id, activationKey, expectedVersion: review.version,
-        resolution: { version: 1, kind: 'reactivated', newCycleId }, resolvedAt,
+        resolution: {
+          version: 1, kind: 'reactivated', activationKind, newCycleId, cadence,
+        },
+        resolvedAt,
       });
     }
   }
@@ -1451,14 +1416,11 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     newCycleId: string;
     activatedAt: string;
     kind: 'rule' | 'inbound_response';
+    definition: NonNullable<ReturnType<CadenceRepository['getById']>>;
   }): SalesCycle {
     const prospect = this.identities.getCanonicalProspect(input.personId);
     if (prospect === null || prospect.id !== input.prospectId) throw new LifecycleEligibilityError();
-    const family: CadenceFamily = input.kind === 'inbound_response'
-      ? 'cadence_c'
-      : prospect.segment === 'warm' ? 'cadence_c'
-        : prospect.segment === 'hot_frbo' ? 'cadence_a' : 'cadence_b';
-    const definition = this.requireCadence(family);
+    const definition = input.definition;
     const recipe = planCadenceStart({
       definition, anchorAt: input.activatedAt, evaluationAt: input.activatedAt,
       timezone: this.timezone, policies: this.policies, priorCallWindow: null,
@@ -1506,6 +1468,46 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       confirmationKind: 'mechanical', transitionSequence: 1,
     });
     return this.cycles.getById(input.newCycleId)!;
+  }
+
+  private requirePinnedCadence(
+    identity: ReactivationCadenceIdentity,
+    expectedFamily: 'cadence_a' | 'cadence_b' | 'cadence_c' | null,
+  ): NonNullable<ReturnType<CadenceRepository['getById']>> {
+    const definition = this.cadences.getById(identity.definitionId);
+    if (definition === null
+      || definition.family !== identity.family
+      || definition.version !== identity.version
+      || definition.contentHash !== identity.contentHash
+      || (expectedFamily !== null && definition.family !== expectedFamily)
+      || definition.category !== 'prospecting') {
+      throw new LifecycleEvidenceError('Pinned reactivation cadence identity is not installed or eligible.');
+    }
+    return definition;
+  }
+
+  private prospectingFamilyForPerson(
+    personId: string,
+  ): 'cadence_a' | 'cadence_b' | 'cadence_c' {
+    const prospect = this.identities.getCanonicalProspect(personId);
+    if (prospect === null) throw new LifecycleEligibilityError();
+    return prospect.segment === 'warm' ? 'cadence_c'
+      : prospect.segment === 'hot_frbo' ? 'cadence_a' : 'cadence_b';
+  }
+
+  private unknownHandleBlocker(
+    input: ReactivateFromInboundInput,
+  ): z.infer<typeof reactivationReviewBlockerSchema> {
+    const person = this.identities.getPerson(input.personId);
+    const prospect = this.identities.getCanonicalProspect(input.personId);
+    const sourceCycle = this.cycles.getById(input.sourceCycleId);
+    if (sourceCycle === null || sourceCycle.personId !== input.personId
+      || sourceCycle.prospectId !== input.prospectId || sourceCycle.workflowStatus !== 'closed'
+      || person === null || person.deletedAt !== null || person.optedOut
+      || prospect === null || prospect.id !== input.prospectId) {
+      throw new LifecycleEvidenceError('Unknown inbound handle Review ownership is invalid.');
+    }
+    return 'unknown_inbound_handle';
   }
 
   private swapStageCadence(input: {
@@ -2003,6 +2005,17 @@ function cadenceChannelOrNull(
 ): 'phone' | 'voicemail' | 'text' | 'email' | null {
   return value === 'phone' || value === 'voicemail' || value === 'text' || value === 'email'
     ? value : null;
+}
+
+function isNamedReactivationSource(
+  value: Record<string, unknown>,
+  eventType: 'new-frbo-listing' | 'lead-cert-expiry-window',
+): boolean {
+  const evidence = value.reactivationTrigger;
+  return typeof evidence === 'object' && evidence !== null && !Array.isArray(evidence)
+    && Object.keys(evidence).sort().join('|') === 'eventType|version'
+    && (evidence as Record<string, unknown>).version === 1
+    && (evidence as Record<string, unknown>).eventType === eventType;
 }
 
 function planManualReactivation(

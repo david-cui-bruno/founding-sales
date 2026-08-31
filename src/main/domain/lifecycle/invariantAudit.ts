@@ -1,5 +1,13 @@
 import type { AppDatabase } from '../../db/database';
+import type { ZodType } from 'zod';
 import { BUILTIN_CADENCES } from '../cadence/builtinCadences';
+import {
+  reactivationCommandEnvelopeSchema,
+  reactivationResultEnvelopeSchema,
+  reactivationReviewPayloadSchema,
+  reactivationReviewResolutionSchema,
+} from './reactivationContracts';
+import { actionSettlementSchema, inboundSlaSchema } from './lifecycleValidation';
 
 export type DomainInvariantViolation = Readonly<{
   kind: string;
@@ -43,9 +51,22 @@ export function auditDomainInvariants(input: {
     WHERE priority = 'p0' AND reachability <> 'direct'
     ORDER BY prospect_id
   `)) add('p0_reachability_invalid', row.prospect_id, 'P0 projection requires Direct reachability.');
+  for (const row of rows(`
+    SELECT override.id
+    FROM priority_overrides AS override
+    LEFT JOIN prospect_priority_projection AS projection
+      ON projection.prospect_id = override.prospect_id
+    WHERE override.override_kind = 'priority' AND override.priority = 'p0'
+      AND override.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      AND (projection.prospect_id IS NULL OR projection.reachability <> 'direct')
+    ORDER BY override.id
+  `)) add(
+    'p0_override_reachability_invalid', row.id,
+    'Effective P0 override requires a Direct current projection.',
+  );
 
   const cycles = rows(`
-    SELECT id, person_id, prospect_id, stage, workflow_status, current_next_action_id,
+    SELECT id, person_id, prospect_id, entry_source_event_id, stage, workflow_status, current_next_action_id,
       stage_entered_at, close_reason, close_notes, closed_at, design_partner_fitness
     FROM sales_cycles ORDER BY id
   `);
@@ -88,11 +109,11 @@ export function auditDomainInvariants(input: {
       || (String(action.work_intent) !== 'inbound_response' && slaPresent !== 0)) {
       add('action_inbound_sla_invalid', action.id, 'Inbound SLA union does not match work intent.');
     }
-    if (slaPresent === 4 && !isStrictVersionedJson(action.inbound_sla_provenance_json)) {
+    if (!inboundSlaEvidenceValid(action, cycles, rows)) {
       add('action_inbound_sla_invalid', action.id, 'Inbound SLA provenance is malformed.');
     }
     const isPending = action.status === 'pending';
-    const settlement = parseCanonicalVersionedObject(action.settlement_json);
+    const settlement = parseCanonicalWithSchema(action.settlement_json, actionSettlementSchema);
     if ((isPending && (action.completion_activity_id !== null
         || action.completed_at !== null || action.settlement_json !== null))
       || (!isPending && (!isCanonicalUtc(action.completed_at) || settlement === null))
@@ -133,7 +154,7 @@ export function auditDomainInvariants(input: {
       enrollment.status, enrollment.current_step_id, enrollment.scheduled_step_count,
       enrollment.mode, enrollment.allowed_step_ids_json, definition.family,
       definition.version AS definition_version,
-      definition.attempt_cap, definition.content_hash
+      definition.attempt_cap, definition.content_hash, enrollment.created_at
     FROM cadence_enrollments AS enrollment
     LEFT JOIN cadence_definitions AS definition ON definition.id = enrollment.cadence_definition_id
     ORDER BY enrollment.id
@@ -217,6 +238,15 @@ export function auditDomainInvariants(input: {
     )) {
       add('action_cadence_binding_invalid', action.id, 'Action cadence owner graph/channel is invalid.');
     }
+    const settlement = parseCanonicalWithSchema(action.settlement_json, actionSettlementSchema);
+    if (settlement !== null && !settlementEvidenceValid(
+      settlement, action, binding ?? null, rows,
+    )) {
+      add(
+        'action_settlement_invalid', action.id,
+        'Settlement definition, outcome, or Activity evidence provenance is invalid.',
+      );
+    }
   }
 
   for (const activity of rows(`
@@ -274,8 +304,12 @@ export function auditDomainInvariants(input: {
           && (typeof cycle.close_notes !== 'string' || cycle.close_notes.trim().length === 0))) {
         add('lost_nurture_reason_invalid', id, 'Lost-Nurture reason is incomplete.');
       }
-      const rules = rows(`SELECT id FROM reactivation_rules WHERE sales_cycle_id = ${sqlLiteral(id)}`);
-      if (cycle.close_reason !== 'opt_out' && rules.length === 0) {
+      const rules = rows(`
+        SELECT id, rule_type, due_at, matcher_json
+        FROM reactivation_rules WHERE sales_cycle_id = ${sqlLiteral(id)} ORDER BY rule_type, id
+      `);
+      if (cycle.close_reason !== 'opt_out'
+        && !reactivationCardinalityValid(id, enrollmentRows, rules)) {
         add('lost_nurture_reactivation_invalid', id, 'Non-opt-out Lost-Nurture has no reactivation rule.');
       }
       if (cycle.close_reason === 'opt_out' && rules.length !== 0) {
@@ -385,9 +419,15 @@ export function auditDomainInvariants(input: {
     const expectedKey = isRule
       ? `rule:${String(receipt.reactivation_rule_id)}`
       : `inbound:${String(receipt.source_event_id)}`;
-    const command = parseCanonicalVersionedObject(receipt.command_json);
-    const result = parseCanonicalVersionedObject(receipt.result_json);
+    const command = parseCanonicalWithSchema(
+      receipt.command_json, reactivationCommandEnvelopeSchema,
+    );
+    const result = parseCanonicalWithSchema(
+      receipt.result_json, reactivationResultEnvelopeSchema,
+    );
     const sourceCycle = cycles.find(({ id }) => id === receipt.source_cycle_id);
+    const commandValue = command?.command;
+    const resultValue = result?.result;
     const rule = receipt.reactivation_rule_id === null
       ? undefined : rulesById.get(String(receipt.reactivation_rule_id));
     const sourceOwned = isRule
@@ -399,13 +439,32 @@ export function auditDomainInvariants(input: {
           WHERE id = ${sqlLiteral(String(receipt.source_event_id))}
             AND person_id = ${sqlLiteral(String(receipt.person_id))}
         `).length === 1;
+    const target = cycles.find(({ id }) => id === receipt.new_cycle_id);
+    const pinnedDefinition = commandValue === undefined ? undefined
+      : definitionRows.find(({ id }) => id === commandValue.cadence.definitionId);
+    const pinnedEnrollment = commandValue === undefined ? undefined
+      : enrollmentRows.find(({ sales_cycle_id, cadence_definition_id }) => (
+        sales_cycle_id === receipt.new_cycle_id
+        && cadence_definition_id === commandValue.cadence.definitionId
+      ));
+    const aggregateOwned = commandValue !== undefined && resultValue !== undefined
+      && resultValue.cycle.prospectId === commandValue.prospectId
+      && target?.prospect_id === commandValue.prospectId
+      && target.entry_source_event_id === resultValue.cycle.entrySourceEventId
+      && pinnedDefinition?.family === commandValue.cadence.family
+      && pinnedDefinition?.version === commandValue.cadence.version
+      && pinnedDefinition?.content_hash === commandValue.cadence.contentHash
+      && pinnedEnrollment !== undefined;
     if (receipt.activation_key !== expectedKey || command === null || result === null
       || !sourceOwned || sourceCycle === undefined
       || sourceCycle.person_id !== receipt.person_id || sourceCycle.workflow_status !== 'closed'
-      || !reactivationReceiptEnvelopeMatches(receipt, command, result)) {
+      || !aggregateOwned
+      || !reactivationReceiptEnvelopeMatches(
+        receipt, command as unknown as Record<string, unknown>,
+        result as unknown as Record<string, unknown>,
+      )) {
       add('reactivation_receipt_invalid', receipt.activation_key, 'Reactivation receipt is malformed.');
     }
-    const target = cycles.find(({ id }) => id === receipt.new_cycle_id);
     if (target === undefined || target.person_id !== receipt.person_id) {
       add('reactivation_receipt_invalid', receipt.activation_key, 'Receipt target ownership is invalid.');
     }
@@ -422,13 +481,22 @@ export function auditDomainInvariants(input: {
   }
   for (const review of rows(`
     SELECT id, activation_key, status, person_id, prospect_id, source_cycle_id,
-      payload_json, resolution_json, resolved_at, reactivation_rule_id, source_event_id
+      reason, payload_json, resolution_json, resolved_at, reactivation_rule_id, source_event_id
     FROM lifecycle_review_items ORDER BY id
   `)) {
     const resolved = review.status === 'resolved';
-    if (!isCanonicalVersionedJson(review.payload_json)
+    const payload = parseCanonicalWithSchema(review.payload_json, reactivationReviewPayloadSchema);
+    const resolution = review.resolution_json === null ? null
+      : parseCanonicalWithSchema(review.resolution_json, reactivationReviewResolutionSchema);
+    if (payload === null
       || resolved !== (review.resolution_json !== null && review.resolved_at !== null)
-      || (review.resolution_json !== null && !isCanonicalVersionedJson(review.resolution_json))) {
+      || (review.resolution_json !== null && resolution === null)
+      || (payload !== null && (
+        payload.command.personId !== review.person_id
+        || payload.command.prospectId !== review.prospect_id
+        || payload.command.sourceCycleId !== review.source_cycle_id
+        || payload.blocker !== review.reason
+      ))) {
       add('lifecycle_review_invalid', review.id, 'Lifecycle Review envelope/state is malformed.');
     }
     if (review.status === 'open'
@@ -438,14 +506,33 @@ export function auditDomainInvariants(input: {
     const isRule = review.reactivation_rule_id !== null;
     const expectedKey = isRule
       ? `rule:${String(review.reactivation_rule_id)}`
-      : `inbound:${String(review.source_event_id)}`;
+      : review.source_event_id === null && payload !== null
+        && 'evidence' in payload.command && payload.command.evidence.kind === 'unknown_handle'
+        ? `inbound-handle:${payload.command.evidence.handleKind}:${payload.command.evidence.normalizedValue}`
+        : `inbound:${String(review.source_event_id)}`;
     const sourceCycle = cycles.find(({ id }) => id === review.source_cycle_id);
+    const unknownHandle = payload !== null && 'evidence' in payload.command
+      && payload.command.evidence.kind === 'unknown_handle';
     const sourceValid = sourceCycle !== undefined && sourceCycle.person_id === review.person_id
+      && sourceCycle.prospect_id === review.prospect_id
       && (isRule
         ? review.source_event_id === null
           && rulesById.get(String(review.reactivation_rule_id))?.sales_cycle_id === review.source_cycle_id
-        : review.reactivation_rule_id === null && review.source_event_id !== null);
-    if (review.activation_key !== expectedKey || !sourceValid
+        : review.reactivation_rule_id === null
+          && (unknownHandle ? review.source_event_id === null : review.source_event_id !== null));
+    const resolutionValid = resolution === null || payload === null
+      ? resolution === null
+      : resolution.newCycleId === payload.command.newCycleId
+        && canonicalJson(resolution.cadence) === canonicalJson(payload.command.cadence)
+        && cycles.some(({ id: cycleId, person_id, prospect_id }) => (
+          cycleId === resolution.newCycleId
+          && person_id === review.person_id && prospect_id === review.prospect_id
+        ))
+        && enrollmentRows.some(({ sales_cycle_id, cadence_definition_id }) => (
+          sales_cycle_id === resolution.newCycleId
+          && cadence_definition_id === resolution.cadence.definitionId
+        ));
+    if (review.activation_key !== expectedKey || !sourceValid || !resolutionValid
       || (review.status === 'open' && isRule
         && rulesById.get(String(review.reactivation_rule_id))?.consumed_at !== null)) {
       add('lifecycle_review_invalid', review.id, 'Lifecycle Review ownership/cardinality is invalid.');
@@ -454,13 +541,20 @@ export function auditDomainInvariants(input: {
 
   for (const row of rows(`
     SELECT terms.sales_cycle_id, terms.doors_committed, terms.billing_model,
-      terms.unit_rate_cents, terms.projected_mrr_cents, terms.manual_projection_reason
+      terms.unit_rate_cents, terms.projected_mrr_cents, terms.projection_formula_version,
+      terms.manual_projection_reason, terms.founding_customer, terms.effective_at, terms.created_at
     FROM won_terms AS terms ORDER BY terms.sales_cycle_id
   `)) {
     const expected = row.billing_model === 'per_door_monthly'
       ? Number(row.doors_committed) * Number(row.unit_rate_cents)
       : row.billing_model === 'flat_monthly' ? Number(row.unit_rate_cents) : Number(row.projected_mrr_cents);
-    if (Number(row.projected_mrr_cents) !== expected
+    if (!isNonnegativeSafeInteger(row.doors_committed)
+      || !isNonnegativeSafeInteger(row.unit_rate_cents)
+      || !isNonnegativeSafeInteger(row.projected_mrr_cents)
+      || Number(row.projected_mrr_cents) !== expected
+      || row.projection_formula_version !== 'founder_terms_v1'
+      || (row.founding_customer !== 0 && row.founding_customer !== 1)
+      || !isCanonicalUtc(row.effective_at) || !isCanonicalUtc(row.created_at)
       || (row.billing_model === 'manual_projected_monthly'
         && (typeof row.manual_projection_reason !== 'string'
           || row.manual_projection_reason.trim().length === 0))) {
@@ -482,7 +576,8 @@ export function auditDomainInvariants(input: {
       `).length === 1)
     ));
     if (readiness === null || !evidenceOwned
-      || row.version !== 1 || !isCanonicalUtc(row.assessed_at) || !isCanonicalUtc(row.updated_at)
+      || !Number.isSafeInteger(row.version) || Number(row.version) <= 0
+      || !isCanonicalUtc(row.assessed_at) || !isCanonicalUtc(row.updated_at)
       || row.pain_confirmed !== Number(readiness.demonstratedPain)
       || row.decision_authority_confirmed !== Number(readiness.decisionAuthority)
       || row.concrete_trial_identified !== Number(readiness.concreteNextStep)) {
@@ -655,17 +750,137 @@ function reactivationReceiptEnvelopeMatches(
   const result = resultEnvelope.result;
   if (!isRecord(command) || !isRecord(result) || result.kind !== 'reactivated'
     || result.activationKind !== receipt.activation_kind || !isRecord(result.cycle)
+    || !isRecord(result.cadence) || !isRecord(command.cadence)
     || result.cycle.id !== receipt.new_cycle_id || result.cycle.personId !== receipt.person_id
     || command.personId !== receipt.person_id || command.sourceCycleId !== receipt.source_cycle_id
-    || command.newCycleId !== receipt.new_cycle_id || !isCanonicalUtc(command.activatedAt)) return false;
+    || command.newCycleId !== receipt.new_cycle_id || !isCanonicalUtc(command.activatedAt)
+    || canonicalJson(result.cadence) !== canonicalJson(command.cadence)) return false;
   if (receipt.activation_kind === 'rule') {
     return command.ruleId === receipt.reactivation_rule_id
       && typeof command.ruleType === 'string'
+      && command.entrySourceEventId === result.cycle.entrySourceEventId
       && isRecord(command.trigger)
       && (command.trigger.kind === 'due' || command.trigger.kind === 'source_event');
   }
-  return command.sourceEventId === receipt.source_event_id
+  return isRecord(command.evidence) && command.evidence.kind === 'source_event'
+    && command.evidence.sourceEventId === receipt.source_event_id
+    && result.cycle.entrySourceEventId === receipt.source_event_id
     && !('ruleId' in command) && !('ruleType' in command);
+}
+
+function parseCanonicalWithSchema<T>(value: unknown, schema: ZodType<T>): T | null {
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = schema.safeParse(JSON.parse(value) as unknown);
+    return parsed.success && canonicalJson(parsed.data) === value ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function inboundSlaEvidenceValid(
+  action: Row,
+  cycles: readonly Row[],
+  rows: (sql: string) => Row[],
+): boolean {
+  const rawParts = [
+    action.inbound_sla_kind, action.inbound_sla_due_at,
+    action.inbound_sla_source_event_id, action.inbound_sla_provenance_json,
+  ];
+  const present = rawParts.filter((value) => value !== null).length;
+  if (present === 0) return true;
+  if (present !== 4 || action.work_intent !== 'inbound_response') return false;
+  if (typeof action.inbound_sla_provenance_json !== 'string') return false;
+  let provenance: unknown;
+  try {
+    provenance = JSON.parse(action.inbound_sla_provenance_json);
+  } catch {
+    return false;
+  }
+  const inbound = inboundSlaSchema.safeParse({
+    kind: action.inbound_sla_kind, dueAt: action.inbound_sla_due_at,
+    sourceEventId: action.inbound_sla_source_event_id, provenance,
+  });
+  if (!inbound.success || canonicalJson(inbound.data.provenance)
+      !== action.inbound_sla_provenance_json) return false;
+  const cycle = cycles.find(({ id }) => id === action.sales_cycle_id);
+  if (cycle === undefined) return false;
+  const source = rows(`
+    SELECT person_id, channel, observed_at FROM source_events
+    WHERE id = ${sqlLiteral(String(action.inbound_sla_source_event_id))}
+  `)[0];
+  const expectedChannel = inbound.data.kind === 'inbound_demo_permitted_minutes'
+    ? 'inbound_demo' : 'referral';
+  return source !== undefined && source.person_id === cycle.person_id
+    && source.channel === expectedChannel
+    && source.observed_at === inbound.data.provenance.sourceObservedAt;
+}
+
+function settlementEvidenceValid(
+  settlement: ReturnType<typeof actionSettlementSchema.parse>,
+  action: Row,
+  enrollment: Row | null,
+  rows: (sql: string) => Row[],
+): boolean {
+  if (settlement.plannerTransition.outcome !== settlement.outcome
+    || settlement.plannerTransition.definitionId
+      !== (enrollment?.cadence_definition_id ?? null)) return false;
+  if (settlement.evidenceActivityId === null) return true;
+  const evidence = rows(`
+    SELECT id, person_id, sales_cycle_id, cadence_enrollment_id, cadence_step_id,
+      cadence_component_id, channel, observed_outcome
+    FROM activities WHERE id = ${sqlLiteral(settlement.evidenceActivityId)}
+  `)[0];
+  if (evidence === undefined) return false;
+  if (settlement.outcome === 'opted_out') {
+    const owner = rows(`
+      SELECT person_id FROM sales_cycles WHERE id = ${sqlLiteral(String(action.sales_cycle_id))}
+    `)[0];
+    return evidence.person_id === owner?.person_id && evidence.observed_outcome === 'opted_out'
+      && (evidence.sales_cycle_id === action.sales_cycle_id
+        ? action.completion_activity_id === settlement.evidenceActivityId
+        : action.completion_activity_id === null);
+  }
+  if (settlement.evidenceActivityId !== action.completion_activity_id) return false;
+  return evidence !== undefined
+    && evidence.sales_cycle_id === action.sales_cycle_id
+    && evidence.cadence_enrollment_id === action.cadence_enrollment_id
+    && evidence.cadence_step_id === action.cadence_step_id
+    && evidence.cadence_component_id === action.cadence_component_id
+    && (action.channel === null || evidence.channel === action.channel)
+    && evidence.observed_outcome === settlement.outcome;
+}
+
+function reactivationCardinalityValid(
+  cycleId: string,
+  enrollments: readonly Row[],
+  rules: readonly Row[],
+): boolean {
+  const history = enrollments.filter(({ sales_cycle_id }) => sales_cycle_id === cycleId);
+  const last = [...history].sort((left, right) => (
+    String(left.created_at).localeCompare(String(right.created_at))
+      || String(left.id).localeCompare(String(right.id))
+  )).at(-1);
+  const family = String(last?.family ?? 'none');
+  const types = rules.map(({ rule_type }) => String(rule_type)).sort();
+  const exact = (...expected: string[]): boolean => (
+    canonicalJson(types) === canonicalJson([...expected].sort())
+  );
+  if (family === 'cadence_a') {
+    return exact('seasonal:heating-oct1', 'new-frbo-listing')
+      || exact('manual')
+      || exact('seasonal:heating-oct1', 'new-frbo-listing', 'manual');
+  }
+  if (family === 'cadence_b') {
+    return exact('seasonal:heating-oct1', 'lead-cert-expiry-window')
+      || exact('manual')
+      || exact('seasonal:heating-oct1', 'lead-cert-expiry-window', 'manual');
+  }
+  return exact('manual');
+}
+
+function isNonnegativeSafeInteger(value: unknown): boolean {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

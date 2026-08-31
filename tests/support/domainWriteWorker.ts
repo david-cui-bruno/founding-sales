@@ -40,6 +40,20 @@ export function spawnActionCompletionWorker(input: ActionCompletionWorkerInput):
   });
 }
 
+export type SqlTransactionWorkerInput = Readonly<{
+  databasePath: string;
+  nativeBinding: string;
+  keyHex: string;
+  readyPath: string;
+  statements: readonly Readonly<{ sql: string; params: readonly unknown[] }>[];
+}>;
+
+export function spawnSqlTransactionWorker(input: SqlTransactionWorkerInput): ChildProcess {
+  return spawn(process.execPath, ['-e', sqlTransactionSource, JSON.stringify(input)], {
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+}
+
 const contenderSource = String.raw`
 const { writeFileSync } = require('node:fs');
 const Database = require('better-sqlite3-multiple-ciphers');
@@ -125,6 +139,36 @@ try {
     input.actionId,input.cycleId
   );
   if (action.changes !== 1) throw new Error('stale action');
+  database.exec('COMMIT');
+} catch (error) {
+  if (database.inTransaction) database.exec('ROLLBACK');
+  console.error(error instanceof Error ? error.stack : String(error));
+  process.exitCode = 1;
+} finally {
+  database.close();
+}
+`;
+
+const sqlTransactionSource = String.raw`
+const { writeFileSync } = require('node:fs');
+const Database = require('better-sqlite3-multiple-ciphers');
+const input = JSON.parse(process.argv[1]);
+const database = new Database(input.databasePath, { nativeBinding: input.nativeBinding });
+try {
+  database.pragma("cipher='sqlcipher'");
+  database.pragma('legacy=4');
+  database.pragma("key=\"x'" + input.keyHex + "'\"");
+  database.prepare('SELECT count(*) FROM sqlite_master').get();
+  database.pragma('recursive_triggers = ON');
+  database.pragma('foreign_keys = ON');
+  database.pragma('journal_mode = WAL');
+  database.pragma('busy_timeout = 5000');
+  database.exec('BEGIN IMMEDIATE');
+  writeFileSync(input.readyPath, 'locked', { mode: 0o600 });
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350);
+  for (const statement of input.statements) {
+    database.prepare(statement.sql).run(...statement.params);
+  }
   database.exec('COMMIT');
 } catch (error) {
   if (database.inTransaction) database.exec('ROLLBACK');

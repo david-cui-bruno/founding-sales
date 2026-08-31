@@ -561,6 +561,11 @@ const domainStatements = [
         AND reactivation_rule_id IS NULL
         AND source_event_id IS NOT NULL
       )
+      OR (
+        activation_key LIKE 'inbound-handle:%'
+        AND reactivation_rule_id IS NULL
+        AND source_event_id IS NULL
+      )
     )
   )`,
   `CREATE TABLE won_terms (
@@ -928,6 +933,20 @@ const domainStatements = [
       OR NEW.settlement_json IS NULL
     BEGIN
       SELECT RAISE(ABORT, 'next action settlement is one-way and immutable');
+    END`,
+  `CREATE TRIGGER protect_settled_next_action_schedule
+    BEFORE UPDATE OF due_at, timezone, allowed_window, sla_due_at, created_at
+      ON next_actions
+    WHEN OLD.status <> 'pending'
+      AND (
+        NEW.due_at IS NOT OLD.due_at
+        OR NEW.timezone IS NOT OLD.timezone
+        OR NEW.allowed_window IS NOT OLD.allowed_window
+        OR NEW.sla_due_at IS NOT OLD.sla_due_at
+        OR NEW.created_at IS NOT OLD.created_at
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'settled next action scheduling evidence is immutable');
     END`,
   `CREATE TRIGGER protect_next_action_delete
     BEFORE DELETE ON next_actions
