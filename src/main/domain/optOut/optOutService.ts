@@ -8,10 +8,12 @@ import type { Activity, AppendActivityInput } from '../events/eventTypes';
 import type { IdentityRepository } from '../identity/identityRepository';
 import type { LifecycleService } from '../lifecycle/lifecycleService';
 import type { SalesCycle } from '../lifecycle/lifecycleTypes';
+import { serializeCanonical } from '../lifecycle/lifecycleValidation';
 import {
   DomainRepositoryDatabaseMismatchError,
   LifecycleEvidenceError,
   LifecycleInvariantError,
+  OptOutPersistenceConflictError,
 } from '../support/domainErrors';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 import type { Clock } from '../support/clock';
@@ -32,86 +34,13 @@ import {
   type PropagateOptOutInput,
   type RecordPastOffAppTouchInput,
 } from './optOutTypes';
-
-const activityKindSchema = z.enum([
-  'call', 'voicemail', 'text', 'email', 'interview', 'offer', 'note', 'job', 'system',
-]);
-const appendActivitySchema = z.object({
-  id: optOutIdSchema,
-  personId: optOutIdSchema,
-  prospectId: optOutIdSchema.nullable().optional(),
-  salesCycleId: optOutIdSchema.nullable().optional(),
-  cadenceEnrollmentId: optOutIdSchema.nullable().optional(),
-  cadenceStepId: optOutIdSchema.nullable().optional(),
-  cadenceComponentId: optOutIdSchema.nullable().optional(),
-  kind: activityKindSchema,
-  direction: z.enum(['inbound', 'outbound', 'internal']),
-  channel: z.string().trim().min(1),
-  occurredAt: optOutUtcTimestampSchema,
-  durationSeconds: z.number().int().safe().nonnegative().nullable().optional(),
-  observedOutcome: z.string().nullable().optional(),
-  adapter: z.string().trim().min(1).nullable().optional(),
-  providerIdempotencyKey: z.string().trim().min(1).nullable().optional(),
-  providerReference: z.string().nullable().optional(),
-  consentPolicyRecordId: optOutIdSchema.nullable().optional(),
-  recordingStorageRef: z.string().trim().min(1).nullable().optional(),
-  transcriptStorageRef: z.string().trim().min(1).nullable().optional(),
-  metadata: z.unknown().optional(),
-}).strict().superRefine((value, context) => {
-  if (value.providerIdempotencyKey != null && value.adapter == null) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom, path: ['providerIdempotencyKey'],
-      message: 'Provider idempotency requires an adapter.',
-    });
-  }
-  const cadence = [value.cadenceEnrollmentId, value.cadenceStepId, value.cadenceComponentId];
-  const present = cadence.filter((candidate) => candidate != null).length;
-  if (present !== 0 && (present !== 3 || value.salesCycleId == null)) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom, path: ['cadenceEnrollmentId'],
-      message: 'Cadence evidence must be complete.',
-    });
-  }
-});
-const evidenceSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('existing_activity'), activityId: optOutIdSchema }).strict(),
-  z.object({ kind: z.literal('append_activity'), activity: appendActivitySchema }).strict(),
-]);
-const applySchema = z.object({
-  personId: optOutIdSchema,
-  tombstoneId: optOutIdSchema,
-  requestedAt: optOutUtcTimestampSchema,
-  policyVersion: z.literal('founder_opt_out_v1'),
-  decision: z.discriminatedUnion('kind', [
-    z.object({
-      kind: z.literal('structured_written'), channel: z.enum(['imessage', 'gmail']),
-    }).strict(),
-    z.object({
-      kind: z.literal('founder_confirmed'), channel: z.enum(['manual', 'call']),
-    }).strict(),
-  ]),
-  evidence: evidenceSchema,
-  terminalStageEventId: optOutIdSchema.nullable(),
-}).strict();
-const propagateSchema = z.object({
-  sourceTombstoneId: optOutIdSchema,
-  targetPersonId: optOutIdSchema,
-  targetTombstoneId: optOutIdSchema,
-  evidenceActivity: appendActivitySchema,
-  terminalStageEventId: optOutIdSchema.nullable(),
-}).strict();
-const retrospectiveSchema = z.object({
-  personId: optOutIdSchema,
-  reportedAt: optOutUtcTimestampSchema,
-  activity: appendActivitySchema,
-}).strict().superRefine((value, context) => {
-  if (value.activity.direction !== 'outbound') {
-    context.addIssue({
-      code: z.ZodIssueCode.custom, path: ['activity', 'direction'],
-      message: 'Retrospective touch evidence must be outbound.',
-    });
-  }
-});
+import {
+  applyOptOutInputSchema,
+  optOutClosureCommandSchema,
+  propagateOptOutInputSchema,
+  retrospectiveOptOutInputSchema,
+  type OptOutClosureCommand,
+} from './optOutValidation';
 
 export class OptOutService {
   private readonly database: AppDatabase;
@@ -154,12 +83,12 @@ export class OptOutService {
   }
 
   apply(input: ApplyOptOutInput): ApplyOptOutResult {
-    const parsed = applySchema.parse(input) as ApplyOptOutInput;
+    const parsed = applyOptOutInputSchema.parse(input) as ApplyOptOutInput;
     return this.unitOfWork.immediate(() => this.applyInScope(parsed));
   }
 
   propagateMostRestrictiveOptOut(input: PropagateOptOutInput): ApplyOptOutResult {
-    const parsed = propagateSchema.parse(input) as PropagateOptOutInput;
+    const parsed = propagateOptOutInputSchema.parse(input) as PropagateOptOutInput;
     if (parsed.sourceTombstoneId === parsed.targetTombstoneId) {
       throw new LifecycleEvidenceError('Source and target tombstones must be distinct.');
     }
@@ -192,6 +121,11 @@ export class OptOutService {
         activity,
         sourceTombstone: source,
       });
+      const command = optOutClosureCommandSchema.parse({
+        version: 1, kind: 'propagate', input: parsed,
+      }) as OptOutClosureCommand;
+      const replay = this.loadExactClosureReceipt(activity.id, command);
+      if (replay !== null) return replay;
       this.faultInjector?.('after_activity');
       const snapshots = this.captureProtectedSnapshots(person.id);
       const existing = this.optOuts.getForPerson(person.id);
@@ -229,14 +163,21 @@ export class OptOutService {
         snapshots, requiredHandles: candidates,
       });
       this.faultInjector?.('after_postcondition');
-      return freezeResult({
+      const result = freezeResult({
         tombstone, handles, cycle: close.cycle, alreadyApplied: existing !== null,
       });
+      return this.optOuts.insertClosureReceipt({
+        sourceActivityId: activity.id, operationKind: 'propagate', personId: person.id,
+        tombstoneId: tombstone.id, sourceTombstoneId: source.id,
+        closedCycleId: close.cycle?.id ?? null,
+        terminalStageEventId: parsed.terminalStageEventId,
+        command, result, createdAt: optOutUtcTimestampSchema.parse(this.clock.now()),
+      }).result;
     });
   }
 
   recordPastOffAppTouch(input: RecordPastOffAppTouchInput): Activity {
-    const parsed = retrospectiveSchema.parse(input) as RecordPastOffAppTouchInput;
+    const parsed = retrospectiveOptOutInputSchema.parse(input) as RecordPastOffAppTouchInput;
     if (parsed.activity.occurredAt > parsed.reportedAt) {
       throw new LifecycleEvidenceError('Retrospective evidence cannot occur after it is reported.');
     }
@@ -277,6 +218,11 @@ export class OptOutService {
       : this.appendOrLoadExactActivity(input.evidence.activity);
     if (activity === null) throw new LifecycleEvidenceError('Opt-out Activity does not exist.');
     this.assertDecisionEvidence(input, activity);
+    const command = optOutClosureCommandSchema.parse({
+      version: 1, kind: 'apply', input,
+    }) as OptOutClosureCommand;
+    const replay = this.loadExactClosureReceipt(activity.id, command);
+    if (replay !== null) return replay;
     this.faultInjector?.('after_activity');
     const person = this.identities.getPerson(input.personId);
     if (person === null) throw new LifecycleEvidenceError('Opt-out Person does not exist.');
@@ -312,9 +258,28 @@ export class OptOutService {
       snapshots, requiredHandles: candidates,
     });
     this.faultInjector?.('after_postcondition');
-    return freezeResult({
+    const result = freezeResult({
       tombstone, handles, cycle: close.cycle, alreadyApplied: existing !== null,
     });
+    return this.optOuts.insertClosureReceipt({
+      sourceActivityId: activity.id, operationKind: 'apply', personId: person.id,
+      tombstoneId: tombstone.id, sourceTombstoneId: null,
+      closedCycleId: close.cycle?.id ?? null,
+      terminalStageEventId: input.terminalStageEventId,
+      command, result, createdAt: optOutUtcTimestampSchema.parse(this.clock.now()),
+    }).result;
+  }
+
+  private loadExactClosureReceipt(
+    sourceActivityId: string,
+    command: OptOutClosureCommand,
+  ): ApplyOptOutResult | null {
+    const receipt = this.optOuts.getClosureReceiptForActivity(sourceActivityId);
+    if (receipt === null) return null;
+    if (serializeCanonical(receipt.command) !== serializeCanonical(command)) {
+      throw new OptOutPersistenceConflictError('closure_receipt', sourceActivityId);
+    }
+    return receipt.result;
   }
 
   private appendOrLoadExactActivity(input: AppendActivityInput & { id: string; occurredAt: string }): Activity {

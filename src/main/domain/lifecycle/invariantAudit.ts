@@ -8,8 +8,10 @@ import {
 import type { SourceEvent } from '../source/sourceTypes';
 import { normalizeEmail, normalizePhone } from '../source/sourceService';
 import {
-  optOutEvidenceViolations,
+  optOutProvenanceViolations,
+  parseOptOutActivityMetadataJson,
   type OptOutEvidenceActivityFacts,
+  type OptOutEvidenceNode,
 } from '../optOut/optOutEvidenceValidator';
 import type { OptOutTombstone } from '../optOut/optOutTypes';
 import { deriveInboundSla } from './inboundSla';
@@ -444,10 +446,13 @@ export function auditDomainInvariants(input: {
     WHERE person.opted_out = 1 OR tombstone.id IS NOT NULL
     ORDER BY person.id
   `);
-  const tombstonesById = new Map<string, OptOutTombstone>();
+  const evidenceByTombstoneId = new Map<string, OptOutEvidenceNode>();
   for (const row of optOutRows) {
     if (typeof row.tombstone_id === 'string') {
-      tombstonesById.set(row.tombstone_id, tombstoneFromAuditRow(row));
+      evidenceByTombstoneId.set(row.tombstone_id, Object.freeze({
+        tombstone: tombstoneFromAuditRow(row),
+        activity: activityFromAuditRow(row),
+      }));
     }
   }
   for (const row of optOutRows) {
@@ -458,14 +463,10 @@ export function auditDomainInvariants(input: {
       add('opt_out_projection_invalid', row.id, 'Person opt-out projection does not match its tombstone.');
     }
     if (!hasTombstone) continue;
-    const tombstone = tombstoneFromAuditRow(row);
-    const sourceId = tombstone.observedChannel === 'identity_propagation'
-      && tombstone.evidenceRef?.startsWith('tombstone:')
-      ? tombstone.evidenceRef.slice('tombstone:'.length) : null;
-    if (optOutEvidenceViolations({
-      tombstone,
-      activity: activityFromAuditRow(row),
-      sourceTombstone: sourceId === null ? null : (tombstonesById.get(sourceId) ?? null),
+    const root = evidenceByTombstoneId.get(String(row.tombstone_id))!;
+    if (optOutProvenanceViolations({
+      root,
+      loadSource: (tombstoneId) => evidenceByTombstoneId.get(tombstoneId) ?? null,
     }).length !== 0) {
       add('opt_out_tombstone_invalid', row.tombstone_id, 'Opt-out tombstone evidence is malformed.');
     }
@@ -790,12 +791,7 @@ function activityFromAuditRow(row: Row): OptOutEvidenceActivityFacts | null {
   if (typeof row.source_activity_id !== 'string' || typeof row.activity_person_id !== 'string') {
     return null;
   }
-  let metadata: unknown = null;
-  try {
-    metadata = JSON.parse(String(row.activity_metadata_json)) as unknown;
-  } catch {
-    metadata = null;
-  }
+  const metadata = parseOptOutActivityMetadataJson(row.activity_metadata_json);
   return {
     id: row.source_activity_id,
     personId: row.activity_person_id,
@@ -809,7 +805,8 @@ function activityFromAuditRow(row: Row): OptOutEvidenceActivityFacts | null {
       ? row.activity_provider_key : null,
     providerReference: typeof row.activity_provider_reference === 'string'
       ? row.activity_provider_reference : null,
-    metadata,
+    metadata: metadata.metadata,
+    metadataValid: metadata.success,
   };
 }
 

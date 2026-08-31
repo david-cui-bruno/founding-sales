@@ -90,6 +90,45 @@ export function spawnOptOutCommandWorker(input: OptOutCommandWorkerInput): Child
   ], { stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
+export type BarrierSqlWorkerInput = Readonly<{
+  databasePath: string;
+  nativeBinding: string;
+  keyHex: string;
+  readyPath: string;
+  startPath: string;
+  attemptPath: string;
+  lockedPath: string;
+  releasePath: string;
+  statements: readonly Readonly<{ sql: string; params: readonly unknown[] }>[];
+}>;
+
+export function spawnBarrierSqlWorker(input: BarrierSqlWorkerInput): ChildProcess {
+  return spawn(process.execPath, ['-e', barrierSqlSource, JSON.stringify(input)], {
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+}
+
+export type ReactivationCommandWorkerInput = Readonly<{
+  databasePath: string;
+  keyHex: string;
+  readyPath: string;
+  startPath: string;
+  attemptPath: string;
+  lockedPath: string;
+  releasePath: string;
+  holdLockBeforeCommand: boolean;
+  ids: readonly string[];
+  timestamp: string;
+  command: Readonly<Record<string, unknown>>;
+}>;
+
+export function spawnReactivationCommandWorker(input: ReactivationCommandWorkerInput): ChildProcess {
+  return spawn(process.execPath, [
+    'node_modules/vite-node/vite-node.mjs', '--script',
+    'tests/support/reactivationCommandContender.ts', JSON.stringify(input),
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
 const contenderSource = String.raw`
 const { writeFileSync } = require('node:fs');
 const Database = require('better-sqlite3-multiple-ciphers');
@@ -202,6 +241,43 @@ try {
   database.exec('BEGIN IMMEDIATE');
   writeFileSync(input.readyPath, 'locked', { mode: 0o600 });
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350);
+  for (const statement of input.statements) {
+    database.prepare(statement.sql).run(...statement.params);
+  }
+  database.exec('COMMIT');
+} catch (error) {
+  if (database.inTransaction) database.exec('ROLLBACK');
+  console.error(error instanceof Error ? error.stack : String(error));
+  process.exitCode = 1;
+} finally {
+  database.close();
+}
+`;
+
+const barrierSqlSource = String.raw`
+const { existsSync, writeFileSync } = require('node:fs');
+const Database = require('better-sqlite3-multiple-ciphers');
+const input = JSON.parse(process.argv[1]);
+const database = new Database(input.databasePath, { nativeBinding: input.nativeBinding });
+const signal = new Int32Array(new SharedArrayBuffer(4));
+const waitForPath = (path) => {
+  while (!existsSync(path)) Atomics.wait(signal, 0, 0, 10);
+};
+try {
+  database.pragma("cipher='sqlcipher'");
+  database.pragma('legacy=4');
+  database.pragma("key=\"x'" + input.keyHex + "'\"");
+  database.prepare('SELECT count(*) FROM sqlite_master').get();
+  database.pragma('recursive_triggers = ON');
+  database.pragma('foreign_keys = ON');
+  database.pragma('journal_mode = WAL');
+  database.pragma('busy_timeout = 5000');
+  writeFileSync(input.readyPath, 'ready', { mode: 0o600 });
+  waitForPath(input.startPath);
+  writeFileSync(input.attemptPath, 'attempt', { mode: 0o600 });
+  database.exec('BEGIN IMMEDIATE');
+  writeFileSync(input.lockedPath, 'locked', { mode: 0o600 });
+  waitForPath(input.releasePath);
   for (const statement of input.statements) {
     database.prepare(statement.sql).run(...statement.params);
   }

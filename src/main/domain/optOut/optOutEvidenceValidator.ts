@@ -22,6 +22,7 @@ export type OptOutEvidenceActivityFacts = Readonly<{
   providerIdempotencyKey: string | null;
   providerReference: string | null;
   metadata: unknown;
+  metadataValid?: boolean;
 }>;
 
 export type OptOutEvidenceValidationInput = Readonly<{
@@ -29,6 +30,13 @@ export type OptOutEvidenceValidationInput = Readonly<{
   activity: OptOutEvidenceActivityFacts | null;
   sourceTombstone: OptOutTombstone | null;
 }>;
+
+export type OptOutEvidenceNode = Readonly<{
+  tombstone: OptOutTombstone;
+  activity: OptOutEvidenceActivityFacts | null;
+}>;
+
+export const OPT_OUT_PROVENANCE_MAX_DEPTH = 64;
 
 export function optOutEvidenceViolations(
   input: OptOutEvidenceValidationInput,
@@ -38,6 +46,8 @@ export function optOutEvidenceViolations(
   const requestedAt = parseTimestamp(tombstone.requestedAt);
   const createdAt = parseTimestamp(tombstone.createdAt);
   const occurredAt = parseTimestamp(activity?.occurredAt);
+
+  if (activity?.metadataValid === false) violations.push('activity_metadata_json');
 
   if (requestedAt === null) violations.push('requested_at');
   if (createdAt === null) violations.push('created_at');
@@ -91,6 +101,59 @@ export function optOutEvidenceViolations(
   return Object.freeze(violations);
 }
 
+export function optOutProvenanceViolations(input: Readonly<{
+  root: OptOutEvidenceNode;
+  loadSource: (tombstoneId: string) => OptOutEvidenceNode | null;
+  maxDepth?: number;
+}>): readonly string[] {
+  const violations: string[] = [];
+  const maxDepth = input.maxDepth ?? OPT_OUT_PROVENANCE_MAX_DEPTH;
+  const visit = (node: OptOutEvidenceNode, depth: number, path: ReadonlySet<string>): void => {
+    if (path.has(node.tombstone.id)) {
+      violations.push('provenance_cycle');
+      return;
+    }
+    if (depth >= maxDepth) {
+      violations.push('provenance_depth');
+      return;
+    }
+    const sourceId = sourceTombstoneId(node.tombstone);
+    const source = sourceId === null ? null : input.loadSource(sourceId);
+    violations.push(...optOutEvidenceViolations({
+      tombstone: node.tombstone,
+      activity: node.activity,
+      sourceTombstone: source?.tombstone ?? null,
+    }));
+    if (node.tombstone.observedChannel === 'identity_propagation' && source !== null) {
+      visit(source, depth + 1, new Set([...path, node.tombstone.id]));
+    }
+  };
+  visit(input.root, 0, new Set());
+  return Object.freeze([...new Set(violations)]);
+}
+
+export function assertCanonicalOptOutProvenance(input: Readonly<{
+  root: OptOutEvidenceNode;
+  loadSource: (tombstoneId: string) => OptOutEvidenceNode | null;
+}>): void {
+  const violations = optOutProvenanceViolations(input);
+  if (violations.length !== 0) {
+    throw new LifecycleEvidenceError(`Opt-out provenance is invalid: ${violations.join(', ')}.`);
+  }
+}
+
+export function parseOptOutActivityMetadataJson(value: unknown): Readonly<
+  | { success: true; metadata: unknown }
+  | { success: false; metadata: null }
+> {
+  if (typeof value !== 'string') return Object.freeze({ success: false, metadata: null });
+  try {
+    return Object.freeze({ success: true, metadata: JSON.parse(value) as unknown });
+  } catch {
+    return Object.freeze({ success: false, metadata: null });
+  }
+}
+
 export function assertCanonicalOptOutEvidence(input: OptOutEvidenceValidationInput): void {
   const violations = optOutEvidenceViolations(input);
   if (violations.length !== 0) {
@@ -133,4 +196,10 @@ function channelEvidenceMatches(
 function parseTimestamp(value: unknown): number | null {
   const parsed = optOutUtcTimestampSchema.safeParse(value);
   return parsed.success ? Date.parse(parsed.data) : null;
+}
+
+function sourceTombstoneId(tombstone: OptOutTombstone): string | null {
+  return tombstone.observedChannel === 'identity_propagation'
+    && tombstone.evidenceRef?.startsWith('tombstone:')
+    ? tombstone.evidenceRef.slice('tombstone:'.length) : null;
 }

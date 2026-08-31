@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
+import { resolveNativeBinding } from '../../src/main/db/sqliteDriver';
 import { BUILTIN_CADENCES } from '../../src/main/domain/cadence/builtinCadences';
 import { CadenceRepository } from '../../src/main/domain/cadence/cadenceRepository';
 import { FOUNDER_CHANNEL_POLICIES_V1 } from '../../src/main/domain/cadence/cadenceScheduler';
@@ -14,6 +15,7 @@ import { LifecycleService } from '../../src/main/domain/lifecycle/lifecycleServi
 import { OptOutRepository } from '../../src/main/domain/optOut/optOutRepository';
 import { OptOutService } from '../../src/main/domain/optOut/optOutService';
 import type { ApplyOptOutInput } from '../../src/main/domain/optOut/optOutTypes';
+import { OutboundPermissionService } from '../../src/main/domain/optOut/outboundPermissionService';
 import { SourceRepository } from '../../src/main/domain/source/sourceRepository';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
 import {
@@ -27,7 +29,11 @@ import {
   createTestWorkspaceKey,
   type TempDatabase,
 } from '../fixtures/tempDatabase';
-import { spawnOptOutCommandWorker } from '../support/domainWriteWorker';
+import {
+  spawnBarrierSqlWorker,
+  spawnOptOutCommandWorker,
+  spawnReactivationCommandWorker,
+} from '../support/domainWriteWorker';
 
 describe('independent encrypted opt-out races', () => {
   let database: AppDatabase | undefined;
@@ -58,12 +64,16 @@ describe('independent encrypted opt-out races', () => {
       database, unitOfWork, identities, events, sources, cadences, clock, ids,
       timezone: 'America/New_York', policies: FOUNDER_CHANNEL_POLICIES_V1,
     });
+    const optOuts = new OptOutRepository({ database, unitOfWork });
     const service = new OptOutService({
       database, unitOfWork, identities, events,
-      optOuts: new OptOutRepository({ database, unitOfWork }),
+      optOuts,
       lifecycle, clock, ids,
     });
-    return { key, service, lifecycle, sources, unitOfWork, getMainIds: () => mainIds };
+    const permissions = new OutboundPermissionService({
+      database, unitOfWork, identities, optOuts,
+    });
+    return { key, service, lifecycle, sources, unitOfWork, permissions, getMainIds: () => mainIds };
   }
 
   function command(
@@ -164,12 +174,55 @@ describe('independent encrypted opt-out races', () => {
     await waitUntil(() => existsSync(readyPath), 5_000);
     writeFileSync(startPath, 'start');
     await waitUntil(() => existsSync(lockedPath), 5_000);
+    const contenderReady = `${readyPath}.cycle-ready`;
+    const contenderStart = `${contenderReady}.start`;
+    const contenderAttempt = `${contenderReady}.attempt`;
+    const contenderLocked = `${contenderReady}.locked`;
+    const contenderRelease = `${contenderReady}.release`;
+    const contender = spawnBarrierSqlWorker({
+      databasePath: temp!.path, nativeBinding: resolveNativeBinding(),
+      keyHex: key.bytes.toString('hex'), readyPath: contenderReady,
+      startPath: contenderStart, attemptPath: contenderAttempt,
+      lockedPath: contenderLocked, releasePath: contenderRelease,
+      statements: [
+        {
+          sql: `INSERT INTO sales_cycles (
+            id, person_id, prospect_id, entry_source_event_id, stage, workflow_status,
+            current_next_action_id, stage_entered_at, version, created_at, updated_at
+          ) VALUES ('stale-cycle', ?, ?, ?, 'unreviewed', 'active',
+            'stale-cycle-action', ?, 1, ?, ?)`,
+          params: [
+            prospect.personId, prospect.prospectId, prospect.sourceEventId,
+            DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+          ],
+        },
+        {
+          sql: `INSERT INTO next_actions (
+            id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+            work_intent, version, created_at, updated_at
+          ) VALUES ('stale-cycle-action', 'stale-cycle', 'review_lead', NULL,
+            'pending', ?, 'America/New_York', 'internal_review', 1, ?, ?)`,
+          params: [DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP],
+        },
+        {
+          sql: `INSERT INTO stage_events (
+            id, sales_cycle_id, from_stage, to_stage, effective_at, confirmed_at,
+            confirmation_kind, transition_sequence, created_at
+          ) VALUES ('stale-cycle-event', 'stale-cycle', NULL, 'unreviewed', ?, ?,
+            'mechanical', 1, ?)`,
+          params: [DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP],
+        },
+      ],
+    });
+    const contenderExit = captureExit(contender);
+    await waitUntil(() => existsSync(contenderReady), 5_000);
+    writeFileSync(contenderStart, 'start');
+    await waitUntil(() => existsSync(contenderAttempt), 5_000);
     writeFileSync(releasePath, 'release');
     expect(await exit).toMatchObject({ code: 0, stderr: '' });
-
-    expect(() => insertOpenCycleWithAction({
-      database: database!.raw, prefix: 'stale-cycle', prospect,
-    })).toThrow();
+    await waitUntil(() => existsSync(contenderLocked), 5_000);
+    writeFileSync(contenderRelease, 'release');
+    expect(await contenderExit).toMatchObject({ code: 1 });
     expect(database!.raw.prepare(`
       SELECT COUNT(*) AS count FROM sales_cycles
       WHERE person_id = ? AND workflow_status IN ('active','onboarding')
@@ -304,7 +357,7 @@ describe('independent encrypted opt-out races', () => {
   }, 10_000);
 
   it('makes a concurrent reactivation observe the permanent tombstone', async () => {
-    const { key, lifecycle } = await setup();
+    const { key } = await setup();
     const prospect = seedProspect(database!.raw, 'opt-out-reactivation-race');
     const readyPath = `${temp!.path}.opt-out-reactivation-ready`;
     const startPath = `${readyPath}.start`;
@@ -321,11 +374,19 @@ describe('independent encrypted opt-out races', () => {
     await waitUntil(() => existsSync(readyPath), 5_000);
     writeFileSync(startPath, 'start');
     await waitUntil(() => existsSync(lockedPath), 5_000);
-    writeFileSync(releasePath, 'release');
-    expect(await exit).toMatchObject({ code: 0, stderr: '' });
     const warm = BUILTIN_CADENCES.find(({ family }) => family === 'cadence_c')!;
-
-    expect(lifecycle.reactivateFromInboundResponse({
+    const reactivationReady = `${readyPath}.reactivation-ready`;
+    const reactivationStart = `${reactivationReady}.start`;
+    const reactivationAttempt = `${reactivationReady}.attempt`;
+    const reactivationLocked = `${reactivationReady}.locked`;
+    const reactivationRelease = `${reactivationReady}.release`;
+    const reactivation = spawnReactivationCommandWorker({
+      databasePath: temp!.path, keyHex: key.bytes.toString('hex'),
+      readyPath: reactivationReady, startPath: reactivationStart,
+      attemptPath: reactivationAttempt, lockedPath: reactivationLocked,
+      releasePath: reactivationRelease, holdLockBeforeCommand: false,
+      ids: [], timestamp: DOMAIN_TIMESTAMP,
+      command: {
       personId: prospect.personId, prospectId: prospect.prospectId,
       sourceCycleId: 'historical-cycle', newCycleId: 'forbidden-cycle',
       activatedAt: DOMAIN_TIMESTAMP,
@@ -336,7 +397,17 @@ describe('independent encrypted opt-out races', () => {
       evidence: {
         kind: 'unknown_handle', handleKind: 'phone', normalizedValue: '+14015550999',
       },
-    })).toEqual({
+      },
+    });
+    const reactivationExit = captureExit(reactivation);
+    await waitUntil(() => existsSync(reactivationReady), 5_000);
+    writeFileSync(reactivationStart, 'start');
+    await waitUntil(() => existsSync(reactivationAttempt), 5_000);
+    writeFileSync(releasePath, 'release');
+    expect(await exit).toMatchObject({ code: 0, stderr: '' });
+    const reactivationResult = await reactivationExit;
+    expect(reactivationResult).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(reactivationResult.stdout)).toEqual({
       kind: 'permanently_blocked', tombstoneId: 'reactivation-winner-tombstone',
     });
     expect(database!.raw.prepare(`SELECT COUNT(*) AS count FROM lifecycle_review_items`).get())
@@ -346,7 +417,7 @@ describe('independent encrypted opt-out races', () => {
   }, 10_000);
 
   it('closes a reactivation that commits before opt-out starts', async () => {
-    const { key, lifecycle, sources, unitOfWork } = await setup();
+    const { key, sources, unitOfWork } = await setup();
     const prospect = seedProspect(database!.raw, 'reactivation-first-race');
     const sourceCycleId = insertClosedCycle({
       database: database!.raw, prefix: 'reactivation-first-source', prospect,
@@ -371,20 +442,39 @@ describe('independent encrypted opt-out races', () => {
     const exit = captureExit(worker);
     await waitUntil(() => existsSync(readyPath), 5_000);
     const warm = BUILTIN_CADENCES.find(({ family }) => family === 'cadence_c')!;
-    const activation = lifecycle.reactivateFromInboundResponse({
-      personId: prospect.personId, prospectId: prospect.prospectId,
-      sourceCycleId, newCycleId: 'reactivation-first-cycle', activatedAt: DOMAIN_TIMESTAMP,
-      cadence: {
-        definitionId: warm.id, family: 'cadence_c', version: warm.version,
-        contentHash: warm.contentHash,
-      },
-      evidence: {
-        kind: 'source_event', sourceEventId: 'reactivation-first-inbound',
-        channel: 'inbound_demo',
+    const reactivationReady = `${readyPath}.reactivation-ready`;
+    const reactivationStart = `${reactivationReady}.start`;
+    const reactivationAttempt = `${reactivationReady}.attempt`;
+    const reactivationLocked = `${reactivationReady}.locked`;
+    const reactivationRelease = `${reactivationReady}.release`;
+    const reactivation = spawnReactivationCommandWorker({
+      databasePath: temp!.path, keyHex: key.bytes.toString('hex'),
+      readyPath: reactivationReady, startPath: reactivationStart,
+      attemptPath: reactivationAttempt, lockedPath: reactivationLocked,
+      releasePath: reactivationRelease, holdLockBeforeCommand: true,
+      ids: ['reactivation-first-enrollment', 'reactivation-first-action', 'reactivation-first-event'],
+      timestamp: DOMAIN_TIMESTAMP,
+      command: {
+        personId: prospect.personId, prospectId: prospect.prospectId,
+        sourceCycleId, newCycleId: 'reactivation-first-cycle', activatedAt: DOMAIN_TIMESTAMP,
+        cadence: {
+          definitionId: warm.id, family: 'cadence_c', version: warm.version,
+          contentHash: warm.contentHash,
+        },
+        evidence: {
+          kind: 'source_event', sourceEventId: 'reactivation-first-inbound',
+          channel: 'inbound_demo',
+        },
       },
     });
-    expect(activation.kind).toBe('reactivated');
+    const reactivationExit = captureExit(reactivation);
+    await waitUntil(() => existsSync(reactivationReady), 5_000);
+    writeFileSync(reactivationStart, 'start');
+    await waitUntil(() => existsSync(reactivationLocked), 5_000);
     writeFileSync(startPath, 'start');
+    await waitUntil(() => existsSync(attemptPath), 5_000);
+    writeFileSync(reactivationRelease, 'release');
+    expect(await reactivationExit).toMatchObject({ code: 0, stderr: '' });
     await waitUntil(() => existsSync(lockedPath), 5_000);
     writeFileSync(releasePath, 'release');
 
@@ -446,15 +536,38 @@ describe('independent encrypted opt-out races', () => {
     await waitUntil(() => existsSync(secondReady), 5_000);
     writeFileSync(secondStart, 'start');
     await waitUntil(() => existsSync(secondLocked), 5_000);
+    const contactReady = `${secondReady}.contact-ready`;
+    const contactStart = `${contactReady}.start`;
+    const contactAttempt = `${contactReady}.attempt`;
+    const contactLocked = `${contactReady}.locked`;
+    const contactRelease = `${contactReady}.release`;
+    const contact = spawnBarrierSqlWorker({
+      databasePath: temp!.path, nativeBinding: resolveNativeBinding(),
+      keyHex: key.bytes.toString('hex'), readyPath: contactReady,
+      startPath: contactStart, attemptPath: contactAttempt,
+      lockedPath: contactLocked, releasePath: contactRelease,
+      statements: [{
+        sql: `INSERT INTO person_contact_methods (
+          id, person_id, kind, normalized_value, validation_state, reachability,
+          is_primary, created_at, updated_at
+        ) VALUES ('opt-out-first-late-phone', ?, 'phone', '+14015550111',
+          'valid', 'direct', 1, ?, ?)`,
+        params: [optOutFirst.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP],
+      }],
+    });
+    const contactExit = captureExit(contact);
+    await waitUntil(() => existsSync(contactReady), 5_000);
+    writeFileSync(contactStart, 'start');
+    await waitUntil(() => existsSync(contactAttempt), 5_000);
     writeFileSync(secondRelease, 'release');
     expect(await secondExit).toMatchObject({ code: 0, stderr: '' });
-    expect(() => insertPhoneContact(
-      database!, 'opt-out-first-late-phone', optOutFirst.personId, '+14015550111',
-    )).toThrow();
+    await waitUntil(() => existsSync(contactLocked), 5_000);
+    writeFileSync(contactRelease, 'release');
+    expect(await contactExit).toMatchObject({ code: 1 });
   }, 10_000);
 
   it('retains the same normalized handle under two independently opted-out Persons', async () => {
-    const { key, service } = await setup();
+    const { key } = await setup();
     const first = seedProspect(database!.raw, 'shared-handle-first');
     const second = seedProspect(database!.raw, 'shared-handle-second');
     for (const [id, personId] of [
@@ -483,10 +596,29 @@ describe('independent encrypted opt-out races', () => {
     await waitUntil(() => existsSync(readyPath), 5_000);
     writeFileSync(startPath, 'start');
     await waitUntil(() => existsSync(lockedPath), 5_000);
+    const secondReady = `${temp!.path}.shared-handle-second-ready`;
+    const secondStart = `${secondReady}.start`;
+    const secondAttempt = `${secondReady}.attempt`;
+    const secondLocked = `${secondReady}.locked`;
+    const secondRelease = `${secondReady}.release`;
+    const secondWorker = spawnOptOutCommandWorker({
+      databasePath: temp!.path, keyHex: key.bytes.toString('hex'), readyPath: secondReady,
+      startPath: secondStart, attemptPath: secondAttempt,
+      lockedPath: secondLocked, releasePath: secondRelease,
+      ids: ['shared-second-handle'], timestamp: DOMAIN_TIMESTAMP,
+      command: command(second.personId, 'shared-main') as unknown as Readonly<Record<string, unknown>>,
+    });
+    const secondExit = captureExit(secondWorker);
+    await waitUntil(() => existsSync(secondReady), 5_000);
+    writeFileSync(secondStart, 'start');
+    await waitUntil(() => existsSync(secondAttempt), 5_000);
     writeFileSync(releasePath, 'release');
     expect(await exit).toMatchObject({ code: 0, stderr: '' });
-
-    expect(service.apply(command(second.personId, 'shared-main'))).toMatchObject({
+    await waitUntil(() => existsSync(secondLocked), 5_000);
+    writeFileSync(secondRelease, 'release');
+    const secondResult = await secondExit;
+    expect(secondResult).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(secondResult.stdout)).toMatchObject({
       alreadyApplied: false, tombstone: { id: 'shared-main-tombstone' },
     });
     expect(database!.raw.prepare(`
@@ -499,6 +631,96 @@ describe('independent encrypted opt-out races', () => {
       { id: 'shared-main-tombstone' }, { id: 'shared-worker-tombstone' },
     ]);
   }, 10_000);
+
+  it('serializes fresh-Person same-handle re-import on both sides of opt-out', async () => {
+    const { key, permissions } = await setup();
+    const firstOwner = seedProspect(database!.raw, 'reimport-first-owner');
+    const firstFresh = seedProspect(database!.raw, 'reimport-first-fresh');
+    insertPhoneContact(database!, 'reimport-first-owner-phone', firstOwner.personId, '+14015550120');
+    const firstReady = `${temp!.path}.reimport-first-ready`;
+    const firstStart = `${firstReady}.start`;
+    const firstAttempt = `${firstReady}.attempt`;
+    const firstLocked = `${firstReady}.locked`;
+    const firstRelease = `${firstReady}.release`;
+    const firstOptOut = spawnOptOutCommandWorker({
+      databasePath: temp!.path, keyHex: key.bytes.toString('hex'), readyPath: firstReady,
+      startPath: firstStart, attemptPath: firstAttempt,
+      lockedPath: firstLocked, releasePath: firstRelease,
+      ids: ['reimport-first-handle'], timestamp: DOMAIN_TIMESTAMP,
+      command: command(firstOwner.personId, 'reimport-first-opt-out') as unknown as Readonly<Record<string, unknown>>,
+    });
+    const firstExit = captureExit(firstOptOut);
+    await waitUntil(() => existsSync(firstReady), 5_000);
+    database!.raw.exec('BEGIN IMMEDIATE');
+    insertPhoneContact(database!, 'reimport-first-fresh-phone', firstFresh.personId, '+14015550120');
+    writeFileSync(firstStart, 'start');
+    await waitUntil(() => existsSync(firstAttempt), 5_000);
+    database!.raw.exec('COMMIT');
+    await waitUntil(() => existsSync(firstLocked), 5_000);
+    writeFileSync(firstRelease, 'release');
+    expect(await firstExit).toMatchObject({ code: 0, stderr: '' });
+    expect(database!.raw.prepare(`
+      SELECT COUNT(*) AS count FROM person_contact_methods
+      WHERE person_id = ? AND normalized_value = '+14015550120'
+    `).get(firstFresh.personId)).toEqual({ count: 1 });
+    expect(database!.raw.prepare(`
+      SELECT COUNT(*) AS count FROM opt_out_handles
+      WHERE normalized_value = '+14015550120'
+    `).get()).toEqual({ count: 1 });
+    expect(permissions.inspectPerson(firstFresh.personId)).toMatchObject({ kind: 'blocked' });
+
+    const secondOwner = seedProspect(database!.raw, 'opt-out-first-reimport-owner');
+    const secondFresh = seedProspect(database!.raw, 'opt-out-first-reimport-fresh');
+    insertPhoneContact(database!, 'opt-out-first-owner-phone', secondOwner.personId, '+14015550121');
+    const secondReady = `${temp!.path}.opt-out-first-reimport-ready`;
+    const secondStart = `${secondReady}.start`;
+    const secondAttempt = `${secondReady}.attempt`;
+    const secondLocked = `${secondReady}.locked`;
+    const secondRelease = `${secondReady}.release`;
+    const secondOptOut = spawnOptOutCommandWorker({
+      databasePath: temp!.path, keyHex: key.bytes.toString('hex'), readyPath: secondReady,
+      startPath: secondStart, attemptPath: secondAttempt,
+      lockedPath: secondLocked, releasePath: secondRelease,
+      ids: ['opt-out-first-reimport-handle'], timestamp: DOMAIN_TIMESTAMP,
+      command: command(secondOwner.personId, 'opt-out-first-reimport') as unknown as Readonly<Record<string, unknown>>,
+    });
+    const secondExit = captureExit(secondOptOut);
+    await waitUntil(() => existsSync(secondReady), 5_000);
+    writeFileSync(secondStart, 'start');
+    await waitUntil(() => existsSync(secondLocked), 5_000);
+    const reimportReady = `${secondReady}.reimport-ready`;
+    const reimportStart = `${reimportReady}.start`;
+    const reimportAttempt = `${reimportReady}.attempt`;
+    const reimportLocked = `${reimportReady}.locked`;
+    const reimportRelease = `${reimportReady}.release`;
+    const reimport = spawnBarrierSqlWorker({
+      databasePath: temp!.path, nativeBinding: resolveNativeBinding(),
+      keyHex: key.bytes.toString('hex'), readyPath: reimportReady,
+      startPath: reimportStart, attemptPath: reimportAttempt,
+      lockedPath: reimportLocked, releasePath: reimportRelease,
+      statements: [{
+        sql: `INSERT INTO person_contact_methods (
+          id, person_id, kind, normalized_value, validation_state, reachability,
+          is_primary, created_at, updated_at
+        ) VALUES ('opt-out-first-fresh-phone', ?, 'phone', '+14015550121',
+          'valid', 'direct', 1, ?, ?)`,
+        params: [secondFresh.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP],
+      }],
+    });
+    const reimportExit = captureExit(reimport);
+    await waitUntil(() => existsSync(reimportReady), 5_000);
+    writeFileSync(reimportStart, 'start');
+    await waitUntil(() => existsSync(reimportAttempt), 5_000);
+    writeFileSync(secondRelease, 'release');
+    expect(await secondExit).toMatchObject({ code: 0, stderr: '' });
+    await waitUntil(() => existsSync(reimportLocked), 5_000);
+    writeFileSync(reimportRelease, 'release');
+    expect(await reimportExit).toMatchObject({ code: 0, stderr: '' });
+    expect(database!.raw.prepare(`
+      SELECT COUNT(*) AS count FROM person_contact_methods WHERE person_id = ?
+    `).get(secondFresh.personId)).toEqual({ count: 1 });
+    expect(permissions.inspectPerson(secondFresh.personId)).toMatchObject({ kind: 'blocked' });
+  }, 15_000);
 });
 
 function captureExit(worker: ChildProcess): Promise<{ code: number | null; stdout: string; stderr: string }> {

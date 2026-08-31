@@ -36,6 +36,7 @@ const scenarios = [
   'opt-out-rejects-invalid-row',
   'opt-out-guards-cycle-action-contact',
   'replace-opt-out-retention',
+  'opt-out-closure-receipt-retention',
   'duplicate-provider-activity',
   'activity-evidence-ownership',
   'consent-activity-ownership',

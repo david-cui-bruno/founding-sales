@@ -3,6 +3,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { OptOutRepository } from '../../src/main/domain/optOut/optOutRepository';
+import type {
+  OptOutClosureCommand,
+  OptOutClosureReceipt,
+} from '../../src/main/domain/optOut/optOutValidation';
 import {
   DomainRepositoryDatabaseMismatchError,
   DomainTransactionRequiredError,
@@ -170,5 +174,51 @@ describe('OptOutRepository', () => {
     `).run();
     expect(() => repository.getForPerson(proof.personId)).toThrow();
     expect(() => repository.listBlocksForHandle('phone', '+14015550100')).toThrow();
+  });
+
+  it('persists an immutable relational closure receipt and rejects corrupted replay state', () => {
+    const proof = seedEvidence('closure-receipt');
+    const canonical = tombstone(
+      'closure-receipt-tombstone', proof.personId, proof.activityId,
+    );
+    const command: OptOutClosureCommand = {
+      version: 1 as const,
+      kind: 'apply' as const,
+      input: {
+        personId: proof.personId, tombstoneId: canonical.id,
+        requestedAt: DOMAIN_TIMESTAMP, policyVersion: 'founder_opt_out_v1' as const,
+        decision: { kind: 'structured_written' as const, channel: 'imessage' as const },
+        evidence: { kind: 'existing_activity' as const, activityId: proof.activityId },
+        terminalStageEventId: null,
+      },
+    };
+    const receipt: OptOutClosureReceipt = {
+      sourceActivityId: proof.activityId, operationKind: 'apply' as const,
+      personId: proof.personId, tombstoneId: canonical.id,
+      sourceTombstoneId: null, closedCycleId: null, terminalStageEventId: null,
+      command,
+      result: { tombstone: canonical, handles: [], cycle: null, alreadyApplied: false },
+      createdAt: DOMAIN_TIMESTAMP,
+    };
+    unitOfWork.immediate(() => {
+      repository.insertTombstone(canonical);
+      const stored = repository.insertClosureReceipt(receipt);
+      expect(stored).toEqual(receipt);
+      expect(repository.insertClosureReceipt(receipt)).toEqual(stored);
+      expect(Object.isFrozen(stored)).toBe(true);
+      expect(Object.isFrozen(stored.command)).toBe(true);
+      expect(Object.isFrozen(stored.result)).toBe(true);
+      expect(() => repository.insertClosureReceipt({
+        ...receipt, createdAt: LATER,
+      })).toThrow(OptOutPersistenceConflictError);
+    });
+    expect(repository.getClosureReceiptForActivity(proof.activityId)).toEqual(receipt);
+
+    database.raw.exec('DROP TRIGGER immutable_opt_out_closure_receipts');
+    database.raw.prepare(`
+      UPDATE opt_out_closure_receipts SET result_json = '{}'
+      WHERE source_activity_id = ?
+    `).run(proof.activityId);
+    expect(() => repository.getClosureReceiptForActivity(proof.activityId)).toThrow();
   });
 });

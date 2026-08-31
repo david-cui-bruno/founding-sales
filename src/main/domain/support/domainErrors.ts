@@ -116,10 +116,10 @@ export class LifecycleInvariantError extends Error {
 }
 
 export class OptOutPersistenceConflictError extends Error {
-  readonly recordKind: 'tombstone' | 'handle';
+  readonly recordKind: 'tombstone' | 'handle' | 'closure_receipt';
   readonly recordId: string;
 
-  constructor(recordKind: 'tombstone' | 'handle', recordId: string) {
+  constructor(recordKind: 'tombstone' | 'handle' | 'closure_receipt', recordId: string) {
     super('The permanent opt-out record already exists with different immutable content.');
     this.name = 'OptOutPersistenceConflictError';
     this.recordKind = recordKind;

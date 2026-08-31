@@ -138,7 +138,7 @@ describe('OptOutService', () => {
       .filter(({ kind }) => kind.startsWith('opt_out'))).toEqual([]);
     const activityCount = database.raw.prepare(`SELECT COUNT(*) AS count FROM activities`).get();
     const second = apply.apply(input);
-    expect(second).toEqual({ ...first, alreadyApplied: true });
+    expect(second).toEqual(first);
     expect(database.raw.prepare(`SELECT COUNT(*) AS count FROM activities`).get())
       .toEqual(activityCount);
     expect(database.raw.prepare(`SELECT COUNT(*) AS count FROM opt_out_tombstones`).get())
@@ -224,6 +224,21 @@ describe('OptOutService', () => {
     expect(database.raw.prepare(`
       SELECT COUNT(*) AS count FROM reactivation_rules WHERE sales_cycle_id = ?
     `).get(cycle.cycleId)).toEqual({ count: 0 });
+
+    database.raw.exec(`
+      CREATE TRIGGER reject_duplicate_opt_out_close
+      BEFORE UPDATE ON sales_cycles
+      WHEN OLD.id = '${cycle.cycleId}'
+      BEGIN SELECT RAISE(ABORT, 'lifecycle closure replayed'); END
+    `);
+    expect(service().apply(input)).toEqual(result);
+    expect(() => service().apply({
+      ...input, terminalStageEventId: 'changed-terminal-event',
+    })).toThrow();
+    expect(() => service().apply({ ...input, terminalStageEventId: null })).toThrow();
+    expect(database.raw.prepare(`
+      SELECT COUNT(*) AS count FROM stage_events WHERE sales_cycle_id = ?
+    `).get(cycle.cycleId)).toEqual({ count: 1 });
   });
 
   it.each([
@@ -409,6 +424,9 @@ describe('OptOutService', () => {
   it('propagates the most restrictive tombstone and records retrospective truth only', () => {
     const source = seedProspect(database.raw, 'propagate-source');
     const target = seedProspect(database.raw, 'propagate-target');
+    const targetCycle = insertOpenCycleWithAction({
+      database: database.raw, prefix: 'propagate-target-cycle', prospect: target,
+    });
     addPhone(source.personId, 'source-phone', '+14015550100');
     addPhone(target.personId, 'target-phone', '+14015550101');
     const apply = service();
@@ -441,22 +459,33 @@ describe('OptOutService', () => {
     })).toThrow();
     expect(optOuts.getForPerson(earlyTarget.personId)).toBeNull();
 
-    const propagated = apply.propagateMostRestrictiveOptOut({
+    const propagationInput = {
       sourceTombstoneId: 'source-tombstone', targetPersonId: target.personId,
-      targetTombstoneId: 'target-tombstone', terminalStageEventId: null,
+      targetTombstoneId: 'target-tombstone', terminalStageEventId: 'propagation-terminal',
       evidenceActivity: {
         id: 'propagation-activity', personId: target.personId, kind: 'system',
         direction: 'internal', channel: 'identity_propagation', occurredAt: LATER,
         observedOutcome: 'opted_out', metadata: { sourceTombstoneId: 'source-tombstone' },
       },
-    });
+    } as const;
+    const propagated = apply.propagateMostRestrictiveOptOut(propagationInput);
     expect(propagated.tombstone).toMatchObject({
       id: 'target-tombstone', personId: target.personId,
       requestedAt: DOMAIN_TIMESTAMP, observedChannel: 'identity_propagation',
     });
+    expect(propagated.cycle).toMatchObject({
+      id: targetCycle.cycleId, workflowStatus: 'closed', closeReason: 'opt_out',
+    });
     expect(propagated.handles.map(({ normalizedValue }) => normalizedValue))
       .toEqual(['+14015550100', '+14015550101']);
     expect(optOuts.getById('source-tombstone')).not.toBeNull();
+    expect(service().propagateMostRestrictiveOptOut(propagationInput)).toEqual(propagated);
+    expect(() => service().propagateMostRestrictiveOptOut({
+      ...propagationInput, terminalStageEventId: null,
+    })).toThrow();
+    expect(() => service().propagateMostRestrictiveOptOut({
+      ...propagationInput, terminalStageEventId: 'changed-propagation-terminal',
+    })).toThrow();
     expect(auditDomainInvariants({ database, asOf: LATER })
       .filter(({ kind }) => kind.startsWith('opt_out'))).toEqual([]);
     expect(() => apply.propagateMostRestrictiveOptOut({

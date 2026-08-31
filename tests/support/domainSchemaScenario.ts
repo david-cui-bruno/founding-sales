@@ -28,6 +28,7 @@ const domainTables = [
   'lifecycle_review_items',
   'next_actions',
   'opt_out_handles',
+  'opt_out_closure_receipts',
   'opt_out_tombstones',
   'organization_aliases',
   'organizations',
@@ -74,6 +75,8 @@ const requiredTriggers = [
   'immutable_consent_policy_records_delete',
   'immutable_cycle_reactivation_receipts',
   'immutable_cycle_reactivation_receipts_delete',
+  'immutable_opt_out_closure_receipts',
+  'immutable_opt_out_closure_receipts_delete',
   'immutable_won_terms',
   'immutable_won_terms_delete',
   'immutable_prioritization_evaluations',
@@ -1072,6 +1075,38 @@ function runDatabaseScenario(
         ) VALUES ('replacement-handle-id', 'opt-out-replace-tombstone', 'phone',
                   '+14015550100', ?)
       `).run(DOMAIN_TIMESTAMP));
+      return;
+    }
+    case 'opt-out-closure-receipt-retention': {
+      const prospect = seedProspect(raw, 'closure-receipt');
+      insertOptOutTombstone(raw, 'closure-receipt-tombstone', prospect.personId);
+      raw.prepare(`
+        INSERT INTO opt_out_closure_receipts (
+          source_activity_id, operation_kind, person_id, tombstone_id,
+          source_tombstone_id, closed_cycle_id, terminal_stage_event_id,
+          command_json, result_json, created_at
+        ) VALUES ('closure-receipt-tombstone-activity', 'apply', ?,
+                  'closure-receipt-tombstone', NULL, NULL, NULL, '{}', '{}', ?)
+      `).run(prospect.personId, DOMAIN_TIMESTAMP);
+      assertImmutable(raw, 'opt_out_closure_receipts', 'closure-receipt-tombstone-activity',
+        "command_json = '{\"changed\":true}'", 'source_activity_id');
+      assert.throws(() => raw.prepare(`
+        INSERT OR REPLACE INTO opt_out_closure_receipts (
+          source_activity_id, operation_kind, person_id, tombstone_id,
+          source_tombstone_id, closed_cycle_id, terminal_stage_event_id,
+          command_json, result_json, created_at
+        ) VALUES ('closure-receipt-tombstone-activity', 'apply', ?,
+                  'closure-receipt-tombstone', NULL, NULL, NULL, '{}', '{}', ?)
+      `).run(prospect.personId, DOMAIN_TIMESTAMP));
+      const other = seedProspect(raw, 'closure-receipt-other');
+      assert.throws(() => raw.prepare(`
+        INSERT INTO opt_out_closure_receipts (
+          source_activity_id, operation_kind, person_id, tombstone_id,
+          source_tombstone_id, closed_cycle_id, terminal_stage_event_id,
+          command_json, result_json, created_at
+        ) VALUES ('closure-receipt-tombstone-activity', 'apply', ?,
+                  'closure-receipt-tombstone', NULL, NULL, NULL, '{}', '{}', ?)
+      `).run(other.personId, DOMAIN_TIMESTAMP));
       return;
     }
     case 'duplicate-provider-activity': {
@@ -2087,12 +2122,13 @@ function assertImmutable(
   table: string,
   id: string,
   update: string,
+  idColumn = 'id',
 ): void {
   assert.throws(() => database.prepare(
-    `UPDATE ${table} SET ${update} WHERE id = ?`,
+    `UPDATE ${table} SET ${update} WHERE ${idColumn} = ?`,
   ).run(id));
   assert.throws(() => database.prepare(
-    `DELETE FROM ${table} WHERE id = ?`,
+    `DELETE FROM ${table} WHERE ${idColumn} = ?`,
   ).run(id));
 }
 

@@ -4,6 +4,7 @@ import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { CadenceRepository } from '../../src/main/domain/cadence/cadenceRepository';
 import { auditDomainInvariants } from '../../src/main/domain/lifecycle/invariantAudit';
+import { OptOutRepository } from '../../src/main/domain/optOut/optOutRepository';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
 import {
   DOMAIN_TIMESTAMP,
@@ -329,6 +330,84 @@ describe('auditDomainInvariants', () => {
       kind: 'opt_out_tombstone_invalid',
       recordId: 'audit-propagation-target-tombstone',
     }));
+  });
+
+  it('rejects malformed metadata, cyclic propagation, and over-deep provenance without throwing', async () => {
+    workspace = createTempDatabase();
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: workspace.path, key });
+    await migrateToLatest(database, {
+      backupDirectory: `${workspace.path}.backups`, workspaceKey: key,
+    });
+    const addDirectTombstone = (prefix: string): { personId: string; tombstoneId: string } => {
+      const prospect = seedProspect(database!.raw, prefix);
+      const activityId = `${prefix}-activity`;
+      const tombstoneId = `${prefix}-tombstone`;
+      database!.raw.prepare(`
+        INSERT INTO activities (
+          id, person_id, kind, direction, channel, occurred_at, observed_outcome,
+          metadata_json, created_at
+        ) VALUES (?, ?, 'note', 'internal', 'manual', ?, 'opted_out', '{}', ?)
+      `).run(activityId, prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+      database!.raw.prepare(`
+        INSERT INTO opt_out_tombstones (
+          id, person_id, requested_at, observed_channel, source_activity_id,
+          evidence_ref, policy_version, created_at
+        ) VALUES (?, ?, ?, 'manual', ?, NULL, 'founder_opt_out_v1', ?)
+      `).run(tombstoneId, prospect.personId, DOMAIN_TIMESTAMP, activityId, DOMAIN_TIMESTAMP);
+      return { personId: prospect.personId, tombstoneId };
+    };
+
+    const malformed = addDirectTombstone('malformed-opt-out-metadata');
+    const cycleA = addDirectTombstone('propagation-cycle-a');
+    const cycleB = addDirectTombstone('propagation-cycle-b');
+    const deep = Array.from({ length: 66 }, (_, index) => addDirectTombstone(`deep-${index}`));
+    database.raw.exec(`
+      DROP TRIGGER immutable_activities;
+      DROP TRIGGER protect_opt_out_tombstone_update;
+    `);
+    database.raw.prepare(`UPDATE activities SET metadata_json = '{' WHERE id = ?`)
+      .run('malformed-opt-out-metadata-activity');
+    const convertToPropagation = (
+      target: { personId: string; tombstoneId: string },
+      source: { personId: string; tombstoneId: string },
+    ): void => {
+      database!.raw.prepare(`
+        UPDATE activities SET kind = 'system', direction = 'internal',
+          channel = 'identity_propagation', metadata_json = ?
+        WHERE id = ?
+      `).run(
+        JSON.stringify({ sourceTombstoneId: source.tombstoneId }),
+        `${target.tombstoneId.slice(0, -'-tombstone'.length)}-activity`,
+      );
+      database!.raw.prepare(`
+        UPDATE opt_out_tombstones SET observed_channel = 'identity_propagation',
+          evidence_ref = ? WHERE id = ?
+      `).run(`tombstone:${source.tombstoneId}`, target.tombstoneId);
+    };
+    convertToPropagation(cycleA, cycleB);
+    convertToPropagation(cycleB, cycleA);
+    for (let index = 1; index < deep.length; index += 1) {
+      convertToPropagation(deep[index]!, deep[index - 1]!);
+    }
+
+    const violations = auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP });
+    expect(violations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'opt_out_tombstone_invalid', recordId: malformed.tombstoneId,
+      }),
+      expect.objectContaining({
+        kind: 'opt_out_tombstone_invalid', recordId: cycleA.tombstoneId,
+      }),
+      expect.objectContaining({
+        kind: 'opt_out_tombstone_invalid', recordId: deep.at(-1)!.tombstoneId,
+      }),
+    ]));
+    const repository = new OptOutRepository({
+      database, unitOfWork: new DomainUnitOfWork(database),
+    });
+    expect(() => repository.getById(cycleA.tombstoneId)).toThrow(/cycle/i);
+    expect(() => repository.getById(deep.at(-1)!.tombstoneId)).toThrow(/depth/i);
   });
 
   it('reports a direct Ready to Interviewed StageEvent edge as corruption', async () => {

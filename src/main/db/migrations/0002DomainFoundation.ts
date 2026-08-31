@@ -465,6 +465,7 @@ const domainStatements = [
     backfill_provenance_json TEXT,
     created_at TEXT NOT NULL,
     UNIQUE (sales_cycle_id, transition_sequence),
+    UNIQUE (id, sales_cycle_id),
     CHECK (
       (confirmation_kind = 'backfill' AND backfill_provenance_json IS NOT NULL)
       OR (confirmation_kind <> 'backfill' AND backfill_provenance_json IS NULL)
@@ -726,6 +727,7 @@ const domainStatements = [
       created_at GLOB '????-??-??T??:??:??.???Z'
       AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at) = created_at
     ),
+    UNIQUE (id, person_id),
     FOREIGN KEY (source_activity_id, person_id) REFERENCES activities(id, person_id)
   )`,
   `CREATE TABLE opt_out_handles (
@@ -741,6 +743,35 @@ const domainStatements = [
   )`,
   `CREATE INDEX opt_out_handles_lookup_idx
     ON opt_out_handles(kind, normalized_value)`,
+  `CREATE TABLE opt_out_closure_receipts (
+    source_activity_id TEXT PRIMARY KEY,
+    operation_kind TEXT NOT NULL CHECK (operation_kind IN ('apply','propagate')),
+    person_id TEXT NOT NULL REFERENCES persons(id),
+    tombstone_id TEXT NOT NULL,
+    source_tombstone_id TEXT REFERENCES opt_out_tombstones(id),
+    closed_cycle_id TEXT,
+    terminal_stage_event_id TEXT,
+    command_json TEXT NOT NULL CHECK (length(trim(command_json)) > 0),
+    result_json TEXT NOT NULL CHECK (length(trim(result_json)) > 0),
+    created_at TEXT NOT NULL CHECK (
+      created_at GLOB '????-??-??T??:??:??.???Z'
+      AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at) = created_at
+    ),
+    FOREIGN KEY (source_activity_id, person_id) REFERENCES activities(id, person_id),
+    FOREIGN KEY (tombstone_id, person_id) REFERENCES opt_out_tombstones(id, person_id),
+    FOREIGN KEY (closed_cycle_id, person_id) REFERENCES sales_cycles(id, person_id),
+    FOREIGN KEY (terminal_stage_event_id, closed_cycle_id)
+      REFERENCES stage_events(id, sales_cycle_id),
+    CHECK (
+      (operation_kind = 'apply' AND source_tombstone_id IS NULL)
+      OR (
+        operation_kind = 'propagate'
+        AND source_tombstone_id IS NOT NULL
+        AND source_tombstone_id <> tombstone_id
+      )
+    ),
+    CHECK (terminal_stage_event_id IS NULL OR closed_cycle_id IS NOT NULL)
+  )`,
   `CREATE TABLE workspace_settings (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     timezone TEXT NOT NULL,
@@ -1269,6 +1300,7 @@ const domainStatements = [
   ...immutableTriggers('stage_events'),
   ...immutableTriggers('consent_policy_records'),
   ...immutableTriggers('cycle_reactivation_receipts'),
+  ...immutableTriggers('opt_out_closure_receipts'),
   ...immutableTriggers('won_terms'),
   ...immutableTriggers('trigger_events'),
   ...immutableTriggers('prioritization_evaluations'),
