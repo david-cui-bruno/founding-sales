@@ -4,10 +4,14 @@ import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -22,6 +26,7 @@ import {
 } from '../../src/main/db/database';
 import {
   createVerifiedMigrationBackup,
+  createMigrationBackupService,
   type MigrationBackup,
 } from '../../src/main/db/migrationBackup';
 import {
@@ -394,6 +399,98 @@ async function runScenario(): Promise<void> {
       }
       await assertWatcherSucceeded(watcher);
       assert.equal(statSync(fixedBackupPath).size, 0);
+    } else if (scenario === 'creation-fchmod-failure') {
+      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      const failureDirectory = join(dirname(workspace.path), 'fchmod-failure');
+      let directorySyncs = 0;
+      const createBackup = createMigrationBackupService({
+        fchmod() {
+          throw new Error('raw chmod failure detail');
+        },
+        fstat: fstatSync,
+        fsyncDirectory(descriptor) {
+          directorySyncs += 1;
+          fsyncSync(descriptor);
+        },
+      });
+      assertConstantCreatedFileFailure(() => createBackup({
+        database,
+        backupDirectory: failureDirectory,
+        key,
+        sourceSchemaVersion: 1,
+      }));
+      assert.deepEqual(listBackups(failureDirectory), []);
+      assert.equal(directorySyncs > 0, true);
+    } else if (scenario === 'creation-fstat-failure') {
+      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      const failureDirectory = join(dirname(workspace.path), 'fstat-failure');
+      let shouldFail = true;
+      let directorySyncs = 0;
+      const createBackup = createMigrationBackupService({
+        fchmod: fchmodSync,
+        fstat(descriptor) {
+          if (shouldFail) {
+            shouldFail = false;
+            throw new Error('raw fstat failure detail');
+          }
+          return fstatSync(descriptor);
+        },
+        fsyncDirectory(descriptor) {
+          directorySyncs += 1;
+          fsyncSync(descriptor);
+        },
+      });
+      assertConstantCreatedFileFailure(() => createBackup({
+        database,
+        backupDirectory: failureDirectory,
+        key,
+        sourceSchemaVersion: 1,
+      }));
+      assert.equal(shouldFail, false);
+      assert.deepEqual(listBackups(failureDirectory), []);
+      assert.equal(directorySyncs > 0, true);
+    } else if (scenario === 'creation-fstat-unrecoverable') {
+      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      const failureDirectory = join(dirname(workspace.path), 'fstat-unrecoverable');
+      mkdirSync(failureDirectory, { mode: 0o700 });
+      const fixedBackupPath = join(
+        failureDirectory,
+        'pre-migration-schema-1-20260830T123456789Z.sqlite3',
+      );
+      const displacedPath = `${fixedBackupPath}.displaced`;
+      const unrelated = Buffer.from('unrelated replacement after fstat failure');
+      let fstatCalls = 0;
+      let directorySyncs = 0;
+      const createBackup = createMigrationBackupService({
+        fchmod: fchmodSync,
+        fstat() {
+          fstatCalls += 1;
+          if (fstatCalls === 1) {
+            renameSync(fixedBackupPath, displacedPath);
+            writeFileSync(fixedBackupPath, unrelated, { mode: 0o600 });
+          }
+          throw new Error('raw unrecoverable fstat detail');
+        },
+        fsyncDirectory(descriptor) {
+          directorySyncs += 1;
+          fsyncSync(descriptor);
+        },
+      });
+      const originalDate = installFixedDate();
+      try {
+        assertConstantCreatedFileFailure(() => createBackup({
+          database,
+          backupDirectory: failureDirectory,
+          key,
+          sourceSchemaVersion: 1,
+        }));
+      } finally {
+        globalThis.Date = originalDate;
+      }
+      assert.equal(fstatCalls >= 2, true);
+      assert.equal(directorySyncs > 0, true);
+      assert.deepEqual(readFileSync(fixedBackupPath), unrelated);
+      assert.equal(statSync(displacedPath).size, 0);
     } else {
       assert.fail(`Unknown migration-backup scenario: ${scenario}`);
     }
@@ -404,6 +501,18 @@ async function runScenario(): Promise<void> {
     key.bytes.fill(0);
     workspace.cleanup();
   }
+}
+
+function assertConstantCreatedFileFailure(operation: () => unknown): void {
+  assert.throws(operation, (error: unknown) => {
+    assert.equal(error instanceof Error, true);
+    assert.equal(
+      (error as Error).message,
+      'Migration backup verification failed.',
+    );
+    assert.doesNotMatch((error as Error).message, /raw|chmod|fstat/i);
+    return true;
+  });
 }
 
 function installFixedDate(): DateConstructor {
@@ -444,18 +553,37 @@ function spawnWatcher(
   action: string,
   extraPath: string,
 ): ChildProcess {
+  const readyPath = `${watchedPath}.watcher-ready-${process.pid}`;
   const script = `
     const fs = require('node:fs');
-    const [watched, extra] = process.argv.slice(1);
+    const [watched, extra, ready] = process.argv.slice(1);
+    fs.writeFileSync(ready, 'ready', { flag: 'wx' });
     const deadline = Date.now() + 10000;
     while (!fs.existsSync(watched)) {
       if (Date.now() > deadline) process.exit(2);
     }
     ${action}
   `;
-  return spawn(process.execPath, ['-e', script, watchedPath, extraPath], {
+  const child = spawn(process.execPath, [
+    '-e',
+    script,
+    watchedPath,
+    extraPath,
+    readyPath,
+  ], {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + 10_000;
+  while (!existsSync(readyPath)) {
+    if (Date.now() > deadline) {
+      child.kill();
+      throw new Error('Watcher did not become ready.');
+    }
+    Atomics.wait(waitBuffer, 0, 0, 10);
+  }
+  rmSync(readyPath);
+  return child;
 }
 
 async function assertWatcherSucceeded(child: ChildProcess): Promise<void> {

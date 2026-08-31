@@ -28,6 +28,19 @@ export type MigrationBackup = {
   verifiedAt: string;
 };
 
+export type MigrationBackupInput = {
+  database: AppDatabase;
+  backupDirectory: string;
+  key: WorkspaceKey;
+  sourceSchemaVersion: number;
+};
+
+export type MigrationBackupCreationOperations = {
+  fchmod(descriptor: number, mode: number): void;
+  fstat(descriptor: number): Stats;
+  fsyncDirectory(descriptor: number): void;
+};
+
 const SQLITE_PLAINTEXT_HEADER = Buffer.from('SQLite format 3\0', 'utf8');
 const COPY_BUFFER_SIZE = 1024 * 1024;
 
@@ -36,12 +49,28 @@ type RetainedDirectory = {
   identity: Stats;
 };
 
-export function createVerifiedMigrationBackup(input: {
-  database: AppDatabase;
-  backupDirectory: string;
-  key: WorkspaceKey;
-  sourceSchemaVersion: number;
-}): MigrationBackup {
+const defaultCreationOperations: MigrationBackupCreationOperations = {
+  fchmod: fchmodSync,
+  fstat: fstatSync,
+  fsyncDirectory: fsyncSync,
+};
+
+export function createVerifiedMigrationBackup(
+  input: MigrationBackupInput,
+): MigrationBackup {
+  return createMigrationBackup(input, defaultCreationOperations);
+}
+
+export function createMigrationBackupService(
+  creationOperations: MigrationBackupCreationOperations,
+): (input: MigrationBackupInput) => MigrationBackup {
+  return (input) => createMigrationBackup(input, creationOperations);
+}
+
+function createMigrationBackup(
+  input: MigrationBackupInput,
+  creationOperations: MigrationBackupCreationOperations,
+): MigrationBackup {
   assertSourceSchemaVersion(input.sourceSchemaVersion);
   const backupDirectory = validateBackupDirectory(input.backupDirectory);
   const directory = openDirectory(backupDirectory);
@@ -49,6 +78,7 @@ export function createVerifiedMigrationBackup(input: {
   let backupDescriptor: number | undefined;
   let backupIdentity: Stats | undefined;
   let backupPath: string | undefined;
+  let backupWasCreated = false;
   let sourceRequiresWalRestore = false;
 
   try {
@@ -73,19 +103,20 @@ export function createVerifiedMigrationBackup(input: {
         | noFollowFlag(),
       0o600,
     );
-    fchmodSync(backupDescriptor, 0o600);
-    backupIdentity = fstatSync(backupDescriptor);
+    backupWasCreated = true;
+    creationOperations.fchmod(backupDescriptor, 0o600);
+    backupIdentity = creationOperations.fstat(backupDescriptor);
     assertDirectoryIdentity(backupDirectory, directory);
     assertPathIdentity(backupPath, backupIdentity);
     copyRetainedFile(sourceDescriptor, sourceIdentity, backupDescriptor);
-    backupIdentity = fstatSync(backupDescriptor);
+    backupIdentity = creationOperations.fstat(backupDescriptor);
     assertPathIdentity(input.database.path, sourceIdentity);
     restoreSourceJournal(input.database);
     sourceRequiresWalRestore = false;
     assertDirectoryIdentity(backupDirectory, directory);
     assertPathIdentity(backupPath, backupIdentity);
     fsyncSync(backupDescriptor);
-    fsyncSync(directory.descriptor);
+    creationOperations.fsyncDirectory(directory.descriptor);
 
     assertEncryptedHeader(backupDescriptor);
     assertSidecarPathsAbsent(backupPath);
@@ -95,13 +126,13 @@ export function createVerifiedMigrationBackup(input: {
       input.key,
       input.sourceSchemaVersion,
     );
-    backupIdentity = fstatSync(backupDescriptor);
+    backupIdentity = creationOperations.fstat(backupDescriptor);
     assertDirectoryIdentity(backupDirectory, directory);
     assertPathIdentity(backupPath, backupIdentity);
     assertSidecarPathsAbsent(backupPath);
     const sha256 = hashDescriptor(backupDescriptor, backupIdentity.size);
     fsyncSync(backupDescriptor);
-    fsyncSync(directory.descriptor);
+    creationOperations.fsyncDirectory(directory.descriptor);
     assertDirectoryIdentity(backupDirectory, directory);
     assertPathIdentity(backupPath, backupIdentity);
     assertSidecarPathsAbsent(backupPath);
@@ -142,6 +173,14 @@ export function createVerifiedMigrationBackup(input: {
       }
     }
     if (backupDescriptor !== undefined) {
+      if (backupIdentity === undefined) {
+        try {
+          backupIdentity = creationOperations.fstat(backupDescriptor);
+        } catch {
+          // The retained descriptor is still neutralized below. Without a proven
+          // pathname identity, cleanup must preserve the path instead of guessing.
+        }
+      }
       try {
         ftruncateSync(backupDescriptor, 0);
         fsyncSync(backupDescriptor);
@@ -179,7 +218,7 @@ export function createVerifiedMigrationBackup(input: {
       );
     } finally {
       try {
-        fsyncSync(directory.descriptor);
+        creationOperations.fsyncDirectory(directory.descriptor);
       } catch (cleanupError) {
         failure = combineErrors(
           failure,
@@ -188,7 +227,7 @@ export function createVerifiedMigrationBackup(input: {
         );
       }
     }
-    if (backupIdentity !== undefined) {
+    if (backupWasCreated) {
       throw new Error('Migration backup verification failed.');
     }
     throw failure;

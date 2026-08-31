@@ -17,6 +17,9 @@ const scenarios = [
   'path-replaced',
   'sidecar-race',
   'unlink-failure',
+  'creation-fchmod-failure',
+  'creation-fstat-failure',
+  'creation-fstat-unrecoverable',
 ] as const;
 
 let bundleDirectory: string;
