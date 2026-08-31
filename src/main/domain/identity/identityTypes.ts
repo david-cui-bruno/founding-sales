@@ -26,6 +26,11 @@ export type ContactMethod = {
   updatedAt: string;
 };
 
+export type ContactMethodMatch = {
+  person: Person;
+  contactMethod: ContactMethod;
+};
+
 export type Prospect = {
   id: string;
   personId: string;
@@ -133,4 +138,13 @@ export type LinkPropertyInput = {
   prospectId: string;
   propertyId: string;
   relationship?: string | null;
+};
+
+export type CanonicalPropertyAddress = {
+  addressLine1: string;
+  addressLine2?: string | null;
+  locality: string;
+  region: string;
+  postalCode?: string | null;
+  countryCode: string;
 };

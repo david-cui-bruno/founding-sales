@@ -273,6 +273,92 @@ describe('IdentityRepository', () => {
       .toEqual(['a-person', 'z-person']);
   });
 
+  it('returns every ContactMethod and Person match including reachability and deletion state', async () => {
+    const identities = await createRepository([
+      'z-person', 'z-contact', 'a-person', 'a-contact',
+    ]);
+
+    unitOfWork.immediate(() => {
+      const zPerson = identities.createPerson({ displayName: 'Z Person' });
+      identities.addContactMethod({
+        personId: zPerson.id,
+        kind: 'email',
+        normalizedValue: 'shared@example.com',
+        validationState: 'valid',
+        reachability: 'indirect',
+      });
+      const aPerson = identities.createPerson({ displayName: 'A Person' });
+      identities.addContactMethod({
+        personId: aPerson.id,
+        kind: 'email',
+        normalizedValue: 'shared@example.com',
+        validationState: 'valid',
+        reachability: 'direct',
+      });
+    });
+    database!.raw.prepare(`
+      UPDATE persons SET deleted_at = ? WHERE id = 'z-person'
+    `).run(TIMESTAMP);
+
+    expect(identities.findContactMatchesByNormalizedHandle(
+      'email', 'shared@example.com',
+    )).toEqual([
+      expect.objectContaining({
+        person: expect.objectContaining({ id: 'a-person', deletedAt: null }),
+        contactMethod: expect.objectContaining({ id: 'a-contact', reachability: 'direct' }),
+      }),
+      expect.objectContaining({
+        person: expect.objectContaining({ id: 'z-person', deletedAt: TIMESTAMP }),
+        contactMethod: expect.objectContaining({ id: 'z-contact', reachability: 'indirect' }),
+      }),
+    ]);
+  });
+
+  it('finds all normalized organization aliases and canonical property addresses stably', async () => {
+    const identities = await createRepository([
+      'z-organization', 'z-alias', 'a-organization', 'a-alias',
+      'z-property', 'a-property',
+    ]);
+
+    unitOfWork.immediate(() => {
+      const zOrganization = identities.createOrganization({ canonicalName: 'Zeta LLC' });
+      identities.addOrganizationAlias({
+        organizationId: zOrganization.id,
+        alias: 'shin holdings llc',
+      });
+      const aOrganization = identities.createOrganization({ canonicalName: 'Alpha LLC' });
+      identities.addOrganizationAlias({
+        organizationId: aOrganization.id,
+        alias: 'shin holdings llc',
+      });
+      identities.createProperty({
+        addressLine1: '10 hope st',
+        locality: 'providence',
+        region: 'ri',
+        postalCode: '02906',
+        countryCode: 'US',
+      });
+      identities.createProperty({
+        addressLine1: '10 hope st',
+        locality: 'providence',
+        region: 'ri',
+        postalCode: '02906',
+        countryCode: 'US',
+      });
+    });
+
+    expect(identities.findOrganizationsByNormalizedAlias('shin holdings llc')
+      .map(({ id }) => id)).toEqual(['a-organization', 'z-organization']);
+    expect(identities.findPropertiesByCanonicalAddress({
+      addressLine1: '10 hope st',
+      addressLine2: null,
+      locality: 'providence',
+      region: 'ri',
+      postalCode: '02906',
+      countryCode: 'US',
+    }).map(({ id }) => id)).toEqual(['a-property', 'z-property']);
+  });
+
   it('uses plain INSERT for entity creation rather than suppressing collisions', async () => {
     const identities = await createRepository(['same-id', 'same-id']);
 

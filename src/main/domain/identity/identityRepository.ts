@@ -11,7 +11,9 @@ import type { IdGenerator } from '../support/idGenerator';
 import type {
   AddContactMethodInput,
   AddOrganizationAliasInput,
+  CanonicalPropertyAddress,
   ContactMethod,
+  ContactMethodMatch,
   CreateOrganizationInput,
   CreatePersonInput,
   CreatePropertyInput,
@@ -28,7 +30,9 @@ import type {
 export type {
   AddContactMethodInput,
   AddOrganizationAliasInput,
+  CanonicalPropertyAddress,
   ContactMethod,
+  ContactMethodMatch,
   CreateOrganizationInput,
   CreatePersonInput,
   CreatePropertyInput,
@@ -116,6 +120,15 @@ const linkPropertyInputSchema = z.object({
   prospectId: idSchema,
   propertyId: idSchema,
   relationship: z.string().nullable().optional(),
+}).strict();
+
+const canonicalPropertyAddressSchema = z.object({
+  addressLine1: nonemptyTextSchema,
+  addressLine2: z.string().nullable().optional(),
+  locality: nonemptyTextSchema,
+  region: nonemptyTextSchema,
+  postalCode: z.string().nullable().optional(),
+  countryCode: z.string().trim().length(2),
 }).strict();
 
 const storedPersonRowSchema = z.object({
@@ -207,6 +220,12 @@ const handleLookupRowSchema = storedPersonRowSchema.extend({
   contact_in_contacts: storedBooleanSchema.nullable(),
   contact_created_at: utcTimestampSchema,
   contact_updated_at: utcTimestampSchema,
+}).strict();
+const organizationAliasLookupRowSchema = storedOrganizationRowSchema.extend({
+  alias_id: idSchema,
+  alias_organization_id: idSchema,
+  alias_value: nonemptyTextSchema,
+  alias_created_at: utcTimestampSchema,
 }).strict();
 
 const personColumns = `
@@ -426,6 +445,14 @@ export class IdentityRepository {
   }
 
   findPeopleByNormalizedHandle(kind: 'phone' | 'email', value: string): Person[] {
+    return this.findContactMatchesByNormalizedHandle(kind, value)
+      .map(({ person }) => person);
+  }
+
+  findContactMatchesByNormalizedHandle(
+    kind: 'phone' | 'email',
+    value: string,
+  ): ContactMethodMatch[] {
     const parsedKind = z.enum(['phone', 'email']).parse(kind);
     const parsedValue = nonemptyTextSchema.parse(value);
     const rows = this.database.raw.prepare(`
@@ -447,7 +474,7 @@ export class IdentityRepository {
 
     return rows.map((value) => {
       const row = handleLookupRowSchema.parse(value);
-      parseContactMethod({
+      const contactMethod = parseContactMethod({
         id: row.contact_id,
         person_id: row.contact_person_id,
         kind: row.contact_kind,
@@ -460,8 +487,97 @@ export class IdentityRepository {
         created_at: row.contact_created_at,
         updated_at: row.contact_updated_at,
       });
-      return personFromStoredRow(row);
+      return {
+        person: personFromStoredRow(row),
+        contactMethod,
+      };
     });
+  }
+
+  getPerson(personId: string): Person | null {
+    const id = idSchema.parse(personId);
+    const row = this.database.raw.prepare(`
+      SELECT ${personColumns}
+      FROM persons
+      WHERE id = ?
+    `).get(id);
+    return row === undefined ? null : parsePerson(row);
+  }
+
+  findOrganizationsByNormalizedAlias(alias: string): Organization[] {
+    const parsedAlias = nonemptyTextSchema.parse(alias);
+    const rows = this.database.raw.prepare(`
+      SELECT
+        o.id, o.canonical_name, o.source_record_json, o.created_at, o.updated_at,
+        a.id AS alias_id, a.organization_id AS alias_organization_id,
+        a.alias AS alias_value, a.created_at AS alias_created_at
+      FROM organization_aliases AS a
+      JOIN organizations AS o ON o.id = a.organization_id
+      WHERE a.alias = ?
+      ORDER BY o.id ASC
+    `).all(parsedAlias);
+    return rows.map((value) => {
+      const row = organizationAliasLookupRowSchema.parse(value);
+      parseOrganizationAlias({
+        id: row.alias_id,
+        organization_id: row.alias_organization_id,
+        alias: row.alias_value,
+        created_at: row.alias_created_at,
+      });
+      return organizationFromStoredRow(row);
+    });
+  }
+
+  findPropertiesByCanonicalAddress(address: CanonicalPropertyAddress): Property[] {
+    const parsed = canonicalPropertyAddressSchema.parse(address);
+    const rows = this.database.raw.prepare(`
+      SELECT id, organization_id, address_line_1, address_line_2, locality, region,
+        postal_code, country_code, door_count, property_type,
+        maintenance_profile_json, source_record_json, verified_at, created_at, updated_at
+      FROM properties
+      WHERE address_line_1 = ?
+        AND address_line_2 IS ?
+        AND locality = ?
+        AND region = ?
+        AND postal_code IS ?
+        AND country_code = ?
+      ORDER BY id ASC
+    `).all(
+      parsed.addressLine1,
+      parsed.addressLine2 ?? null,
+      parsed.locality,
+      parsed.region,
+      parsed.postalCode ?? null,
+      parsed.countryCode,
+    );
+    return rows.map(parseProperty);
+  }
+
+  listOrganizationsForProspect(prospectId: string): Organization[] {
+    const id = idSchema.parse(prospectId);
+    const rows = this.database.raw.prepare(`
+      SELECT o.id, o.canonical_name, o.source_record_json, o.created_at, o.updated_at
+      FROM prospect_organizations AS link
+      JOIN organizations AS o ON o.id = link.organization_id
+      WHERE link.prospect_id = ?
+      ORDER BY o.id ASC
+    `).all(id);
+    return rows.map(parseOrganization);
+  }
+
+  listPropertiesForProspect(prospectId: string): Property[] {
+    const id = idSchema.parse(prospectId);
+    const rows = this.database.raw.prepare(`
+      SELECT p.id, p.organization_id, p.address_line_1, p.address_line_2,
+        p.locality, p.region, p.postal_code, p.country_code, p.door_count,
+        p.property_type, p.maintenance_profile_json, p.source_record_json,
+        p.verified_at, p.created_at, p.updated_at
+      FROM prospect_properties AS link
+      JOIN properties AS p ON p.id = link.property_id
+      WHERE link.prospect_id = ?
+      ORDER BY p.id ASC
+    `).all(id);
+    return rows.map(parseProperty);
   }
 
   getCanonicalProspect(personId: string): Prospect | null {
@@ -529,7 +645,12 @@ function parseProspect(value: unknown): Prospect {
 }
 
 function parseOrganization(value: unknown): Organization {
-  const row = storedOrganizationRowSchema.parse(value);
+  return organizationFromStoredRow(storedOrganizationRowSchema.parse(value));
+}
+
+function organizationFromStoredRow(
+  row: z.infer<typeof storedOrganizationRowSchema>,
+): Organization {
   return {
     id: row.id,
     canonicalName: row.canonical_name,
