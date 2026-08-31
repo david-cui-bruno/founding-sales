@@ -129,6 +129,7 @@ const requiredTriggers = [
   'protect_opted_out_active_cadence_update',
   'protect_p0_priority_override',
   'protect_p0_priority_override_update',
+  'protect_person_opt_out_insert',
   'protect_person_opt_out_reset',
   'protect_priority_projection_fidelity',
   'protect_priority_projection_fidelity_update',
@@ -862,7 +863,7 @@ function runDatabaseScenario(
     }
     case 'opt-out-cadence-status-reactivation': {
       const prospect = seedProspect(raw, 'cadence-status-reactivation');
-      const cycle = insertOpenCycleWithAction({
+      const cycleId = insertClosedCycle({
         database: raw,
         prefix: 'cadence-status-reactivation',
         prospect,
@@ -875,10 +876,8 @@ function runDatabaseScenario(
         ) VALUES ('cadence-status-reactivation-enrollment', ?,
                   'cadence-status-reactivation-definition', 'stopped', ?, 0,
                   'paused', ?, ?)
-      `).run(cycle.cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
-      raw.prepare(`
-        UPDATE persons SET opted_out = 1, opted_out_at = ? WHERE id = ?
-      `).run(DOMAIN_TIMESTAMP, prospect.personId);
+      `).run(cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+      insertOptOutTombstone(raw, 'cadence-status-reactivation-tombstone', prospect.personId);
       assert.throws(() => raw.prepare(`
         UPDATE cadence_enrollments SET status = 'active', stop_reason = NULL
         WHERE id = 'cadence-status-reactivation-enrollment'
@@ -893,15 +892,13 @@ function runDatabaseScenario(
         prefix: 'cadence-move-eligible',
         prospect: eligible,
       });
-      const blockedCycle = insertOpenCycleWithAction({
+      const blockedCycleId = insertClosedCycle({
         database: raw,
         prefix: 'cadence-move-blocked',
         prospect: blocked,
       });
       insertCadenceDefinition(raw, 'cadence-move-definition');
-      raw.prepare(`
-        UPDATE persons SET opted_out = 1, opted_out_at = ? WHERE id = ?
-      `).run(DOMAIN_TIMESTAMP, blocked.personId);
+      insertOptOutTombstone(raw, 'cadence-move-blocked-tombstone', blocked.personId);
       insertCadenceEnrollment(
         raw,
         'cadence-move-enrollment',
@@ -910,7 +907,36 @@ function runDatabaseScenario(
       );
       assert.throws(() => raw.prepare(`
         UPDATE cadence_enrollments SET sales_cycle_id = ? WHERE id = 'cadence-move-enrollment'
-      `).run(blockedCycle.cycleId));
+      `).run(blockedCycleId));
+      return;
+    }
+    case 'opt-out-person-projection-requires-tombstone': {
+      assert.throws(() => raw.prepare(`
+        INSERT INTO persons (
+          id, display_name, aliases_json, opted_out, opted_out_at, never_record,
+          version, created_at, updated_at
+        ) VALUES ('projection-only-insert', 'Projection only insert', '[]', 1, ?,
+                  0, 1, ?, ?)
+      `).run(DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP));
+      const prospect = seedProspect(raw, 'projection-only-update');
+      assert.throws(() => raw.prepare(`
+        UPDATE persons SET opted_out = 1, opted_out_at = ? WHERE id = ?
+      `).run(DOMAIN_TIMESTAMP, prospect.personId));
+      return;
+    }
+    case 'opt-out-contact-guard-projection-only': {
+      const prospect = seedProspect(raw, 'projection-only-contact');
+      raw.exec('DROP TRIGGER protect_person_opt_out_reset');
+      raw.prepare(`
+        UPDATE persons SET opted_out = 1, opted_out_at = ? WHERE id = ?
+      `).run(DOMAIN_TIMESTAMP, prospect.personId);
+      assert.throws(() => raw.prepare(`
+        INSERT INTO person_contact_methods (
+          id, person_id, kind, normalized_value, validation_state, reachability,
+          is_primary, created_at, updated_at
+        ) VALUES ('projection-only-contact-method', ?, 'phone', '+14015550999',
+                  'valid', 'direct', 0, ?, ?)
+      `).run(prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP));
       return;
     }
     case 'opt-out-person-reset': {
@@ -957,6 +983,13 @@ function runDatabaseScenario(
         'wrong-owner', other.personId, DOMAIN_TIMESTAMP, 'manual',
         'opt-out-invalid-evidence', 'founder_opt_out_v1', DOMAIN_TIMESTAMP,
       ));
+      insertOptOutTombstone(raw, 'invalid-handle-tombstone', other.personId);
+      assert.throws(() => raw.prepare(`
+        INSERT INTO opt_out_handles (
+          id, tombstone_id, kind, normalized_value, created_at
+        ) VALUES ('invalid-handle-time', 'invalid-handle-tombstone', 'phone',
+                  '+14015550100', 'not-a-time')
+      `).run());
       return;
     }
     case 'opt-out-guards-cycle-action-contact': {

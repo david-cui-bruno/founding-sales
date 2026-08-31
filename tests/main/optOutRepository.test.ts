@@ -61,7 +61,7 @@ describe('OptOutRepository', () => {
     return {
       id, personId, requestedAt,
       observedChannel: 'imessage' as const,
-      sourceActivityId, evidenceRef: 'provider:message-1',
+      sourceActivityId, evidenceRef: null as string | null,
       policyVersion: 'founder_opt_out_v1', createdAt: requestedAt,
     };
   }
@@ -141,5 +141,34 @@ describe('OptOutRepository', () => {
       WHERE id = 'conflict-tombstone'
     `).run();
     expect(() => repository.getById('conflict-tombstone')).toThrow();
+  });
+
+  it('validates the exact retained Activity semantics on insert and every read', () => {
+    const proof = seedEvidence('evidence-contract');
+    const canonical = tombstone(
+      'evidence-contract-tombstone', proof.personId, proof.activityId,
+    );
+    unitOfWork.immediate(() => {
+      for (const changed of [
+        { ...canonical, observedChannel: 'gmail' as const },
+        { ...canonical, policyVersion: 'legacy_policy' },
+        { ...canonical, evidenceRef: 'forged-evidence' },
+        { ...canonical, requestedAt: '2026-08-30T11:59:59.999Z' },
+        { ...canonical, requestedAt: LATER, createdAt: DOMAIN_TIMESTAMP },
+      ]) expect(() => repository.insertTombstone(changed)).toThrow();
+      repository.insertTombstone(canonical);
+      repository.insertBlockedHandle({
+        id: 'evidence-contract-phone', tombstoneId: canonical.id, kind: 'phone',
+        normalizedValue: '+14015550100', createdAt: DOMAIN_TIMESTAMP,
+      });
+    });
+
+    database.raw.exec('DROP TRIGGER immutable_activities');
+    database.raw.prepare(`
+      UPDATE activities SET direction = 'outbound'
+      WHERE id = 'evidence-contract-activity'
+    `).run();
+    expect(() => repository.getForPerson(proof.personId)).toThrow();
+    expect(() => repository.listBlocksForHandle('phone', '+14015550100')).toThrow();
   });
 });

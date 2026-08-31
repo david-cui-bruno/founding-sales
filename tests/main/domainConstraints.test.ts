@@ -30,6 +30,8 @@ const scenarios = [
   'opt-out-tombstone-cadence-guard',
   'opt-out-cadence-status-reactivation',
   'opt-out-cadence-cycle-move',
+  'opt-out-person-projection-requires-tombstone',
+  'opt-out-contact-guard-projection-only',
   'opt-out-person-reset',
   'opt-out-rejects-invalid-row',
   'opt-out-guards-cycle-action-contact',

@@ -39,6 +39,7 @@ describe('OptOutService', () => {
   let optOuts: OptOutRepository;
   let lifecycle: LifecycleService;
   let generated = 0;
+  let clockNow: string;
 
   beforeEach(async () => {
     temp = createTempDatabase();
@@ -48,7 +49,8 @@ describe('OptOutService', () => {
       backupDirectory: `${temp.path}.backups`, workspaceKey: key,
     });
     unitOfWork = new DomainUnitOfWork(database);
-    const clock = { now: () => DOMAIN_TIMESTAMP };
+    clockNow = DOMAIN_TIMESTAMP;
+    const clock = { now: () => clockNow };
     const ids = { next: () => `generated-${++generated}` };
     identities = new IdentityRepository({ database, unitOfWork, clock, ids });
     events = new EventRepository({ database, unitOfWork, clock, ids });
@@ -70,7 +72,7 @@ describe('OptOutService', () => {
   function service(faultInjector?: (point: OptOutFaultPoint) => void): OptOutService {
     return new OptOutService({
       database, unitOfWork, identities, events, optOuts, lifecycle,
-      clock: { now: () => DOMAIN_TIMESTAMP }, ids: { next: () => `opt-${++generated}` },
+      clock: { now: () => clockNow }, ids: { next: () => `opt-${++generated}` },
       faultInjector,
     });
   }
@@ -147,6 +149,14 @@ describe('OptOutService', () => {
         kind: 'append_activity',
         activity: { ...inputActivity, metadata: { structuredOptOut: false } },
       },
+    })).toThrow();
+    expect(() => apply.apply({
+      ...input,
+      tombstoneId: 'changed-wrapper-tombstone',
+    })).toThrow();
+    expect(() => apply.apply({
+      ...input,
+      requestedAt: LATER,
     })).toThrow();
     const laterInput = command(prospect.personId, 'later-observation');
     if (laterInput.evidence.kind !== 'append_activity') throw new Error('Expected append evidence.');
@@ -295,6 +305,107 @@ describe('OptOutService', () => {
     expect(snapshotPerson(internal.personId)).toEqual(beforeInternal);
   });
 
+  it('rolls back every lifecycle phase, each handle, and deferred commit failure', () => {
+    const createReadyFixture = (prefix: string, withEmail = false) => {
+      const prospect = seedProspect(database.raw, prefix);
+      database.raw.prepare(`
+        UPDATE prospects SET qualification_state = 'unreviewed' WHERE id = ?
+      `).run(prospect.prospectId);
+      const unreviewed = lifecycle.createUnreviewedCycle({
+        personId: prospect.personId, prospectId: prospect.prospectId,
+        entrySourceEventId: prospect.sourceEventId, effectiveAt: DOMAIN_TIMESTAMP,
+      });
+      const ready = lifecycle.reviewToReady({
+        cycleId: unreviewed.id, expectedCycleVersion: unreviewed.version,
+        expectedCurrentActionId: unreviewed.currentNextActionId!,
+        expectedProspectVersion: 1, effectiveAt: DOMAIN_TIMESTAMP,
+      });
+      addPhone(prospect.personId, `${prefix}-phone`);
+      if (withEmail) {
+        database.raw.prepare(`
+          INSERT INTO person_contact_methods (
+            id, person_id, kind, normalized_value, validation_state, reachability,
+            is_primary, created_at, updated_at
+          ) VALUES (?, ?, 'email', ?, 'valid', 'direct', 1, ?, ?)
+        `).run(
+          `${prefix}-email`, prospect.personId, `${prefix}@example.com`,
+          DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+        );
+      }
+      return { prospect, ready };
+    };
+
+    const phaseFailures = [
+      {
+        label: 'enrollment-stop',
+        trigger: `AFTER UPDATE ON cadence_enrollments WHEN NEW.status = 'stopped'`,
+      },
+      {
+        label: 'pointer-cas',
+        trigger: `AFTER UPDATE ON sales_cycles WHEN NEW.workflow_status = 'closed'`,
+      },
+      {
+        label: 'terminal-event',
+        trigger: `AFTER INSERT ON stage_events WHEN NEW.to_stage = 'lost_nurture'`,
+      },
+      {
+        label: 'action-settlement',
+        trigger: `AFTER UPDATE ON next_actions WHEN NEW.status = 'cancelled'`,
+      },
+    ] as const;
+    for (const [index, phase] of phaseFailures.entries()) {
+      const { prospect } = createReadyFixture(`phase-${phase.label}`);
+      const before = snapshotPerson(prospect.personId);
+      const triggerName = `fail_opt_out_phase_${index}`;
+      database.raw.exec(`
+        CREATE TRIGGER ${triggerName} ${phase.trigger}
+        BEGIN SELECT RAISE(ABORT, 'injected opt-out phase failure'); END
+      `);
+      expect(() => service().apply({
+        ...command(prospect.personId, `phase-${phase.label}`),
+        terminalStageEventId: `phase-${phase.label}-terminal`,
+      })).toThrow();
+      database.raw.exec(`DROP TRIGGER ${triggerName}`);
+      expect(snapshotPerson(prospect.personId)).toEqual(before);
+    }
+
+    for (const failAt of [1, 2]) {
+      const { prospect } = createReadyFixture(`handle-${failAt}`, true);
+      const before = snapshotPerson(prospect.personId);
+      let handleCount = 0;
+      expect(() => service((point) => {
+        if (point === 'after_handle' && ++handleCount === failAt) {
+          throw new Error(`fault:handle-${failAt}`);
+        }
+      }).apply({
+        ...command(prospect.personId, `handle-${failAt}`),
+        terminalStageEventId: `handle-${failAt}-terminal`,
+      })).toThrow(`fault:handle-${failAt}`);
+      expect(snapshotPerson(prospect.personId)).toEqual(before);
+    }
+
+    const { prospect: deferred } = createReadyFixture('deferred-commit');
+    const beforeDeferred = snapshotPerson(deferred.personId);
+    expect(() => service((point) => {
+      if (point !== 'after_postcondition') return;
+      database.raw.pragma('defer_foreign_keys = ON');
+      database.raw.prepare(`
+        INSERT INTO activities (
+          id, person_id, kind, direction, channel, occurred_at,
+          metadata_json, created_at
+        ) VALUES ('deferred-invalid-evidence', 'missing-person', 'system',
+                  'internal', 'system', ?, '{}', ?)
+      `).run(DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    }).apply({
+      ...command(deferred.personId, 'deferred-commit'),
+      terminalStageEventId: 'deferred-commit-terminal',
+    })).toThrow();
+    expect(snapshotPerson(deferred.personId)).toEqual(beforeDeferred);
+    expect(database.raw.prepare(`
+      SELECT id FROM activities WHERE id = 'deferred-invalid-evidence'
+    `).get()).toBeUndefined();
+  });
+
   it('propagates the most restrictive tombstone and records retrospective truth only', () => {
     const source = seedProspect(database.raw, 'propagate-source');
     const target = seedProspect(database.raw, 'propagate-target');
@@ -302,6 +413,33 @@ describe('OptOutService', () => {
     addPhone(target.personId, 'target-phone', '+14015550101');
     const apply = service();
     apply.apply(command(source.personId, 'source'));
+    clockNow = LATER;
+
+    const malformedTarget = seedProspect(database.raw, 'propagate-malformed-target');
+    expect(() => apply.propagateMostRestrictiveOptOut({
+      sourceTombstoneId: 'source-tombstone', targetPersonId: malformedTarget.personId,
+      targetTombstoneId: 'malformed-target-tombstone', terminalStageEventId: null,
+      evidenceActivity: {
+        id: 'malformed-propagation-activity', personId: malformedTarget.personId,
+        kind: 'system', direction: 'internal', channel: 'identity_propagation',
+        occurredAt: LATER, observedOutcome: 'opted_out',
+        metadata: { sourceTombstoneId: 'source-tombstone', untrusted: true },
+      },
+    })).toThrow();
+    expect(optOuts.getForPerson(malformedTarget.personId)).toBeNull();
+
+    const earlyTarget = seedProspect(database.raw, 'propagate-early-target');
+    expect(() => apply.propagateMostRestrictiveOptOut({
+      sourceTombstoneId: 'source-tombstone', targetPersonId: earlyTarget.personId,
+      targetTombstoneId: 'early-target-tombstone', terminalStageEventId: null,
+      evidenceActivity: {
+        id: 'early-propagation-activity', personId: earlyTarget.personId,
+        kind: 'system', direction: 'internal', channel: 'identity_propagation',
+        occurredAt: '2026-08-30T11:59:59.999Z', observedOutcome: 'opted_out',
+        metadata: { sourceTombstoneId: 'source-tombstone' },
+      },
+    })).toThrow();
+    expect(optOuts.getForPerson(earlyTarget.personId)).toBeNull();
 
     const propagated = apply.propagateMostRestrictiveOptOut({
       sourceTombstoneId: 'source-tombstone', targetPersonId: target.personId,
@@ -319,6 +457,29 @@ describe('OptOutService', () => {
     expect(propagated.handles.map(({ normalizedValue }) => normalizedValue))
       .toEqual(['+14015550100', '+14015550101']);
     expect(optOuts.getById('source-tombstone')).not.toBeNull();
+    expect(auditDomainInvariants({ database, asOf: LATER })
+      .filter(({ kind }) => kind.startsWith('opt_out'))).toEqual([]);
+    expect(() => apply.propagateMostRestrictiveOptOut({
+      sourceTombstoneId: 'source-tombstone', targetPersonId: target.personId,
+      targetTombstoneId: 'changed-same-observation-target', terminalStageEventId: null,
+      evidenceActivity: {
+        id: 'propagation-activity', personId: target.personId, kind: 'system',
+        direction: 'internal', channel: 'identity_propagation', occurredAt: LATER,
+        observedOutcome: 'opted_out', metadata: { sourceTombstoneId: 'source-tombstone' },
+      },
+    })).toThrow();
+    expect(() => apply.propagateMostRestrictiveOptOut({
+      sourceTombstoneId: 'source-tombstone', targetPersonId: target.personId,
+      targetTombstoneId: 'ignored-malformed-later-target', terminalStageEventId: null,
+      evidenceActivity: {
+        id: 'malformed-later-propagation', personId: target.personId, kind: 'system',
+        direction: 'internal', channel: 'identity_propagation', occurredAt: LATER,
+        observedOutcome: 'opted_out', metadata: {
+          sourceTombstoneId: 'source-tombstone', inferred: true,
+        },
+      },
+    })).toThrow();
+    expect(events.getActivity('malformed-later-propagation')).toBeNull();
     const bothOptedReplay = apply.propagateMostRestrictiveOptOut({
       sourceTombstoneId: 'source-tombstone', targetPersonId: target.personId,
       targetTombstoneId: 'ignored-new-target-tombstone', terminalStageEventId: null,
@@ -350,6 +511,14 @@ describe('OptOutService', () => {
       personId: target.personId, reportedAt: DOMAIN_TIMESTAMP,
       activity: { ...past, direction: 'outbound', occurredAt: LATER },
     } as never)).toThrow();
+    expect(() => apply.recordPastOffAppTouch({
+      personId: target.personId, reportedAt: LATER,
+      activity: {
+        id: 'pre-opt-out-audit-touch', personId: target.personId, kind: 'call',
+        direction: 'outbound', channel: 'phone',
+        occurredAt: '2026-08-30T11:59:59.999Z', observedOutcome: 'answered',
+      },
+    })).toThrow();
   });
 
   function snapshotPerson(personId: string): unknown {

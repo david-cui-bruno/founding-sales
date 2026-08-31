@@ -8,6 +8,10 @@ import {
 } from '../support/domainErrors';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 import {
+  assertCanonicalOptOutEvidence,
+  type OptOutEvidenceActivityFacts,
+} from './optOutEvidenceValidator';
+import {
   optOutHandleKindSchema,
   optOutIdSchema,
   optOutObservedChannelSchema,
@@ -71,6 +75,19 @@ const storedHandleSchema = z.object({
   normalized_value: nonblankSchema,
   created_at: optOutUtcTimestampSchema,
 }).strict();
+const storedEvidenceActivitySchema = z.object({
+  id: optOutIdSchema,
+  person_id: optOutIdSchema,
+  kind: nonblankSchema,
+  direction: nonblankSchema,
+  channel: nonblankSchema,
+  occurred_at: optOutUtcTimestampSchema,
+  observed_outcome: z.string().nullable(),
+  adapter: nonblankSchema.nullable(),
+  provider_idempotency_key: nonblankSchema.nullable(),
+  provider_reference: z.string().nullable(),
+  metadata_json: z.string(),
+}).strict();
 
 const tombstoneColumns = `
   id, person_id, requested_at, observed_channel, source_activity_id,
@@ -103,6 +120,7 @@ export class OptOutRepository {
     if (byId !== null) return exactTombstone(byId, parsed);
     const byPerson = this.getForPerson(parsed.personId);
     if (byPerson !== null) throw new OptOutPersistenceConflictError('tombstone', byPerson.id);
+    validateTombstoneEvidence(this.database, parsed);
     const row = this.database.raw.prepare(`
       INSERT INTO opt_out_tombstones (
         id, person_id, requested_at, observed_channel, source_activity_id,
@@ -113,7 +131,7 @@ export class OptOutRepository {
       parsed.id, parsed.personId, parsed.requestedAt, parsed.observedChannel,
       parsed.sourceActivityId, parsed.evidenceRef, parsed.policyVersion, parsed.createdAt,
     );
-    return parseTombstone(row);
+    return parseTombstone(this.database, row);
   }
 
   insertBlockedHandle(input: InsertOptOutHandleInput): OptOutHandle {
@@ -143,7 +161,7 @@ export class OptOutRepository {
     const row = this.database.raw.prepare(`
       SELECT ${tombstoneColumns} FROM opt_out_tombstones WHERE person_id = ?
     `).get(id);
-    return row === undefined ? null : parseTombstone(row);
+    return row === undefined ? null : parseTombstone(this.database, row);
   }
 
   getById(tombstoneId: string): OptOutTombstone | null {
@@ -151,7 +169,7 @@ export class OptOutRepository {
     const row = this.database.raw.prepare(`
       SELECT ${tombstoneColumns} FROM opt_out_tombstones WHERE id = ?
     `).get(id);
-    return row === undefined ? null : parseTombstone(row);
+    return row === undefined ? null : parseTombstone(this.database, row);
   }
 
   listBlocksForHandle(kind: OptOutHandleKind, normalizedValue: string): OptOutTombstone[] {
@@ -163,7 +181,7 @@ export class OptOutRepository {
       JOIN opt_out_tombstones AS tombstone ON tombstone.id = handle.tombstone_id
       WHERE handle.kind = ? AND handle.normalized_value = ?
       ORDER BY tombstone.requested_at ASC, tombstone.id ASC
-    `).all(parsedKind, parsedValue).map(parseTombstone);
+    `).all(parsedKind, parsedValue).map((row) => parseTombstone(this.database, row));
   }
 
   listHandles(tombstoneId: string): OptOutHandle[] {
@@ -188,13 +206,20 @@ function normalize(kind: OptOutHandleKind, value: string): string {
   return kind === 'phone' ? normalizePhone(value) : normalizeEmail(value);
 }
 
-function parseTombstone(value: unknown): OptOutTombstone {
+function parseTombstone(
+  database: AppDatabase,
+  value: unknown,
+  seen: ReadonlySet<string> = new Set(),
+): OptOutTombstone {
   const row = storedTombstoneSchema.parse(value);
-  return Object.freeze({
+  if (seen.has(row.id)) throw new Error('Opt-out propagation evidence is cyclic.');
+  const tombstone = Object.freeze({
     id: row.id, personId: row.person_id, requestedAt: row.requested_at,
     observedChannel: row.observed_channel, sourceActivityId: row.source_activity_id,
     evidenceRef: row.evidence_ref, policyVersion: row.policy_version, createdAt: row.created_at,
   });
+  validateTombstoneEvidence(database, tombstone, new Set([...seen, row.id]));
+  return tombstone;
 }
 
 function parseHandle(value: unknown): OptOutHandle {
@@ -222,4 +247,50 @@ function exactHandle(existing: OptOutHandle, input: InsertOptOutHandleInput): Op
     throw new OptOutPersistenceConflictError('handle', existing.id);
   }
   return existing;
+}
+
+function validateTombstoneEvidence(
+  database: AppDatabase,
+  tombstone: OptOutTombstone,
+  seen: ReadonlySet<string> = new Set(),
+): void {
+  const activityRow = database.raw.prepare(`
+    SELECT id, person_id, kind, direction, channel, occurred_at, observed_outcome,
+      adapter, provider_idempotency_key, provider_reference, metadata_json
+    FROM activities WHERE id = ?
+  `).get(tombstone.sourceActivityId);
+  const activity = activityRow === undefined ? null : parseEvidenceActivity(activityRow);
+  let sourceTombstone: OptOutTombstone | null = null;
+  if (tombstone.observedChannel === 'identity_propagation'
+    && tombstone.evidenceRef?.startsWith('tombstone:')) {
+    const sourceId = tombstone.evidenceRef.slice('tombstone:'.length);
+    const sourceRow = database.raw.prepare(`
+      SELECT ${tombstoneColumns} FROM opt_out_tombstones WHERE id = ?
+    `).get(sourceId);
+    if (sourceRow !== undefined) sourceTombstone = parseTombstone(database, sourceRow, seen);
+  }
+  assertCanonicalOptOutEvidence({ tombstone, activity, sourceTombstone });
+}
+
+function parseEvidenceActivity(value: unknown): OptOutEvidenceActivityFacts {
+  const row = storedEvidenceActivitySchema.parse(value);
+  let metadata: unknown;
+  try {
+    metadata = JSON.parse(row.metadata_json) as unknown;
+  } catch {
+    throw new Error('Stored opt-out Activity metadata is invalid JSON.');
+  }
+  return Object.freeze({
+    id: row.id,
+    personId: row.person_id,
+    kind: row.kind,
+    direction: row.direction,
+    channel: row.channel,
+    occurredAt: row.occurred_at,
+    observedOutcome: row.observed_outcome,
+    adapter: row.adapter,
+    providerIdempotencyKey: row.provider_idempotency_key,
+    providerReference: row.provider_reference,
+    metadata,
+  });
 }

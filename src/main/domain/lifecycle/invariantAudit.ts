@@ -7,6 +7,11 @@ import {
 } from '../cadence/cadenceScheduler';
 import type { SourceEvent } from '../source/sourceTypes';
 import { normalizeEmail, normalizePhone } from '../source/sourceService';
+import {
+  optOutEvidenceViolations,
+  type OptOutEvidenceActivityFacts,
+} from '../optOut/optOutEvidenceValidator';
+import type { OptOutTombstone } from '../optOut/optOutTypes';
 import { deriveInboundSla } from './inboundSla';
 import {
   reactivationCommandEnvelopeSchema,
@@ -420,20 +425,32 @@ export function auditDomainInvariants(input: {
     'Opted-out Person retains an active cadence.',
   );
 
-  for (const row of rows(`
+  const optOutRows = rows(`
     SELECT person.id, person.opted_out, person.opted_out_at,
       tombstone.id AS tombstone_id, tombstone.requested_at,
       tombstone.observed_channel, tombstone.source_activity_id,
-      tombstone.policy_version, tombstone.created_at,
+      tombstone.evidence_ref, tombstone.policy_version, tombstone.created_at,
       activity.person_id AS activity_person_id, activity.kind AS activity_kind,
       activity.direction AS activity_direction, activity.channel AS activity_channel,
-      activity.observed_outcome AS activity_outcome
+      activity.occurred_at AS activity_occurred_at,
+      activity.observed_outcome AS activity_outcome,
+      activity.adapter AS activity_adapter,
+      activity.provider_idempotency_key AS activity_provider_key,
+      activity.provider_reference AS activity_provider_reference,
+      activity.metadata_json AS activity_metadata_json
     FROM persons AS person
     LEFT JOIN opt_out_tombstones AS tombstone ON tombstone.person_id = person.id
     LEFT JOIN activities AS activity ON activity.id = tombstone.source_activity_id
     WHERE person.opted_out = 1 OR tombstone.id IS NOT NULL
     ORDER BY person.id
-  `)) {
+  `);
+  const tombstonesById = new Map<string, OptOutTombstone>();
+  for (const row of optOutRows) {
+    if (typeof row.tombstone_id === 'string') {
+      tombstonesById.set(row.tombstone_id, tombstoneFromAuditRow(row));
+    }
+  }
+  for (const row of optOutRows) {
     const hasTombstone = typeof row.tombstone_id === 'string';
     const projectionValid = hasTombstone && row.opted_out === 1
       && row.opted_out_at === row.requested_at;
@@ -441,17 +458,20 @@ export function auditDomainInvariants(input: {
       add('opt_out_projection_invalid', row.id, 'Person opt-out projection does not match its tombstone.');
     }
     if (!hasTombstone) continue;
-    const evidenceValid = row.activity_person_id === row.id
-      && row.activity_outcome === 'opted_out'
-      && optOutChannelEvidenceValid(row);
-    if (!isCanonicalUtc(row.requested_at) || !isCanonicalUtc(row.created_at)
-      || typeof row.policy_version !== 'string' || row.policy_version.trim().length === 0
-      || !evidenceValid) {
+    const tombstone = tombstoneFromAuditRow(row);
+    const sourceId = tombstone.observedChannel === 'identity_propagation'
+      && tombstone.evidenceRef?.startsWith('tombstone:')
+      ? tombstone.evidenceRef.slice('tombstone:'.length) : null;
+    if (optOutEvidenceViolations({
+      tombstone,
+      activity: activityFromAuditRow(row),
+      sourceTombstone: sourceId === null ? null : (tombstonesById.get(sourceId) ?? null),
+    }).length !== 0) {
       add('opt_out_tombstone_invalid', row.tombstone_id, 'Opt-out tombstone evidence is malformed.');
     }
   }
   for (const row of rows(`
-    SELECT handle.id, handle.kind, handle.normalized_value
+    SELECT handle.id, handle.kind, handle.normalized_value, handle.created_at
     FROM opt_out_handles AS handle ORDER BY handle.id
   `)) {
     let canonical = false;
@@ -463,7 +483,9 @@ export function auditDomainInvariants(input: {
     } catch {
       canonical = false;
     }
-    if (!canonical) add('opt_out_handle_invalid', row.id, 'Blocked handle is not canonical.');
+    if (!canonical || !isCanonicalUtc(row.created_at)) {
+      add('opt_out_handle_invalid', row.id, 'Blocked handle is not canonical.');
+    }
   }
   for (const row of rows(`
     SELECT contact.id
@@ -753,26 +775,42 @@ function isCanonicalUtc(value: unknown): boolean {
   return Number.isFinite(epoch) && new Date(epoch).toISOString() === value;
 }
 
-function optOutChannelEvidenceValid(row: Row): boolean {
-  if (row.observed_channel === 'imessage') {
-    return row.activity_kind === 'text' && row.activity_direction === 'inbound'
-      && row.activity_channel === 'imessage';
+function tombstoneFromAuditRow(row: Row): OptOutTombstone {
+  return {
+    id: String(row.tombstone_id), personId: String(row.id),
+    requestedAt: String(row.requested_at),
+    observedChannel: row.observed_channel as OptOutTombstone['observedChannel'],
+    sourceActivityId: String(row.source_activity_id),
+    evidenceRef: typeof row.evidence_ref === 'string' ? row.evidence_ref : null,
+    policyVersion: String(row.policy_version), createdAt: String(row.created_at),
+  };
+}
+
+function activityFromAuditRow(row: Row): OptOutEvidenceActivityFacts | null {
+  if (typeof row.source_activity_id !== 'string' || typeof row.activity_person_id !== 'string') {
+    return null;
   }
-  if (row.observed_channel === 'gmail') {
-    return row.activity_kind === 'email' && row.activity_direction === 'inbound'
-      && row.activity_channel === 'gmail';
+  let metadata: unknown = null;
+  try {
+    metadata = JSON.parse(String(row.activity_metadata_json)) as unknown;
+  } catch {
+    metadata = null;
   }
-  if (row.observed_channel === 'manual') {
-    return (row.activity_kind === 'note' || row.activity_kind === 'system')
-      && row.activity_direction === 'internal' && row.activity_channel === 'manual';
-  }
-  if (row.observed_channel === 'call') {
-    return row.activity_kind === 'call'
-      && (row.activity_channel === 'phone' || row.activity_channel === 'call');
-  }
-  return row.observed_channel === 'identity_propagation'
-    && row.activity_kind === 'system' && row.activity_direction === 'internal'
-    && row.activity_channel === 'identity_propagation';
+  return {
+    id: row.source_activity_id,
+    personId: row.activity_person_id,
+    kind: String(row.activity_kind),
+    direction: String(row.activity_direction),
+    channel: String(row.activity_channel),
+    occurredAt: String(row.activity_occurred_at),
+    observedOutcome: typeof row.activity_outcome === 'string' ? row.activity_outcome : null,
+    adapter: typeof row.activity_adapter === 'string' ? row.activity_adapter : null,
+    providerIdempotencyKey: typeof row.activity_provider_key === 'string'
+      ? row.activity_provider_key : null,
+    providerReference: typeof row.activity_provider_reference === 'string'
+      ? row.activity_provider_reference : null,
+    metadata,
+  };
 }
 
 function isStrictVersionedJson(value: unknown): boolean {

@@ -18,6 +18,10 @@ import type { Clock } from '../support/clock';
 import type { IdGenerator } from '../support/idGenerator';
 import type { OptOutRepository } from './optOutRepository';
 import {
+  assertCanonicalOptOutEvidence,
+  expectedEvidenceRef,
+} from './optOutEvidenceValidator';
+import {
   optOutIdSchema,
   optOutUtcTimestampSchema,
   type ApplyOptOutInput,
@@ -174,9 +178,26 @@ export class OptOutService {
         || !metadataHasSourceTombstone(activity.metadata, source.id)) {
         throw new LifecycleEvidenceError('Identity propagation requires exact internal evidence.');
       }
+      assertCanonicalOptOutEvidence({
+        tombstone: {
+          id: parsed.targetTombstoneId,
+          personId: person.id,
+          requestedAt: source.requestedAt,
+          observedChannel: 'identity_propagation',
+          sourceActivityId: activity.id,
+          evidenceRef: `tombstone:${source.id}`,
+          policyVersion: source.policyVersion,
+          createdAt: activity.occurredAt,
+        },
+        activity,
+        sourceTombstone: source,
+      });
       this.faultInjector?.('after_activity');
       const snapshots = this.captureProtectedSnapshots(person.id);
       const existing = this.optOuts.getForPerson(person.id);
+      if (existing?.sourceActivityId === activity.id) {
+        this.assertExactPropagationReplay(parsed, source, existing, activity);
+      }
       const close = this.lifecycle.scopedWriter().closeForOptOut({
         personId: person.id, evidenceActivityId: activity.id,
         effectiveAt: activity.occurredAt,
@@ -227,8 +248,12 @@ export class OptOutService {
         || parsed.activity.personId !== parsed.personId) {
         throw new LifecycleEvidenceError('Retrospective evidence must belong to the exact Person.');
       }
-      if (this.optOuts.getForPerson(parsed.personId) === null) {
+      const tombstone = this.optOuts.getForPerson(parsed.personId);
+      if (tombstone === null) {
         throw new LifecycleEvidenceError('Retrospective prohibited-touch logging requires opt-out.');
+      }
+      if (parsed.activity.occurredAt < tombstone.requestedAt) {
+        throw new LifecycleEvidenceError('Retrospective prohibited-touch evidence predates opt-out.');
       }
       const metadata = isRecord(parsed.activity.metadata) ? parsed.activity.metadata : {};
       const activity = this.appendOrLoadExactActivity({
@@ -256,6 +281,9 @@ export class OptOutService {
     const person = this.identities.getPerson(input.personId);
     if (person === null) throw new LifecycleEvidenceError('Opt-out Person does not exist.');
     const existing = this.optOuts.getForPerson(person.id);
+    if (existing?.sourceActivityId === activity.id) {
+      this.assertExactObservationReplay(input, existing, activity);
+    }
     const snapshots = this.captureProtectedSnapshots(person.id);
     const close = this.lifecycle.scopedWriter().closeForOptOut({
       personId: person.id, evidenceActivityId: activity.id,
@@ -330,6 +358,38 @@ export class OptOutService {
     }
     if (activity.kind !== 'call' || (activity.channel !== 'phone' && activity.channel !== 'call')) {
       throw new LifecycleEvidenceError('Call opt-out requires founder-confirmed call evidence.');
+    }
+  }
+
+  private assertExactObservationReplay(
+    input: ApplyOptOutInput,
+    tombstone: OptOutTombstone,
+    activity: Activity,
+  ): void {
+    if (tombstone.id !== input.tombstoneId
+      || tombstone.personId !== input.personId
+      || tombstone.requestedAt !== input.requestedAt
+      || tombstone.observedChannel !== input.decision.channel
+      || tombstone.policyVersion !== input.policyVersion
+      || tombstone.evidenceRef !== expectedEvidenceRef(activity)) {
+      throw new LifecycleEvidenceError('Same opt-out observation replay changed its command wrapper.');
+    }
+  }
+
+  private assertExactPropagationReplay(
+    input: PropagateOptOutInput,
+    source: OptOutTombstone,
+    target: OptOutTombstone,
+    activity: Activity,
+  ): void {
+    if (target.id !== input.targetTombstoneId
+      || target.personId !== input.targetPersonId
+      || target.requestedAt !== source.requestedAt
+      || target.observedChannel !== 'identity_propagation'
+      || target.policyVersion !== source.policyVersion
+      || target.evidenceRef !== `tombstone:${source.id}`
+      || !metadataHasSourceTombstone(activity.metadata, source.id)) {
+      throw new LifecycleEvidenceError('Same propagation observation replay changed its command wrapper.');
     }
   }
 

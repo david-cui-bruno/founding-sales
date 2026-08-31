@@ -74,6 +74,10 @@ export type OptOutCommandWorkerInput = Readonly<{
   databasePath: string;
   keyHex: string;
   readyPath: string;
+  startPath: string;
+  attemptPath: string;
+  lockedPath: string;
+  releasePath: string;
   ids: readonly string[];
   timestamp: string;
   command: Readonly<Record<string, unknown>>;

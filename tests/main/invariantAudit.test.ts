@@ -271,6 +271,66 @@ describe('auditDomainInvariants', () => {
     ]));
   });
 
+  it('shares exact identity-propagation evidence validation with persistence', async () => {
+    workspace = createTempDatabase();
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: workspace.path, key });
+    await migrateToLatest(database, {
+      backupDirectory: `${workspace.path}.backups`, workspaceKey: key,
+    });
+    const source = seedProspect(database.raw, 'audit-propagation-source');
+    const target = seedProspect(database.raw, 'audit-propagation-target');
+    database.raw.prepare(`
+      INSERT INTO activities (
+        id, person_id, kind, direction, channel, occurred_at, observed_outcome,
+        metadata_json, created_at
+      ) VALUES ('audit-propagation-source-activity', ?, 'note', 'internal', 'manual', ?,
+                'opted_out', '{}', ?)
+    `).run(source.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    database.raw.prepare(`
+      INSERT INTO opt_out_tombstones (
+        id, person_id, requested_at, observed_channel, source_activity_id,
+        evidence_ref, policy_version, created_at
+      ) VALUES ('audit-propagation-source-tombstone', ?, ?, 'manual',
+                'audit-propagation-source-activity', NULL, 'founder_opt_out_v1', ?)
+    `).run(source.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    database.raw.prepare(`
+      INSERT INTO activities (
+        id, person_id, kind, direction, channel, occurred_at, observed_outcome,
+        metadata_json, created_at
+      ) VALUES ('audit-propagation-target-activity', ?, 'system', 'internal',
+                'identity_propagation', ?, 'opted_out', ?, ?)
+    `).run(
+      target.personId, '2026-08-30T13:00:00.000Z',
+      JSON.stringify({ sourceTombstoneId: 'audit-propagation-source-tombstone' }),
+      '2026-08-30T13:00:00.000Z',
+    );
+    database.raw.prepare(`
+      INSERT INTO opt_out_tombstones (
+        id, person_id, requested_at, observed_channel, source_activity_id,
+        evidence_ref, policy_version, created_at
+      ) VALUES ('audit-propagation-target-tombstone', ?, ?, 'identity_propagation',
+                'audit-propagation-target-activity',
+                'tombstone:audit-propagation-source-tombstone',
+                'founder_opt_out_v1', '2026-08-30T13:00:00.000Z')
+    `).run(target.personId, DOMAIN_TIMESTAMP);
+    expect(auditDomainInvariants({
+      database, asOf: '2026-08-30T13:00:00.000Z',
+    }).filter(({ kind }) => kind.startsWith('opt_out'))).toEqual([]);
+
+    database.raw.exec('DROP TRIGGER immutable_activities');
+    database.raw.prepare(`
+      UPDATE activities SET metadata_json = '{}'
+      WHERE id = 'audit-propagation-target-activity'
+    `).run();
+    expect(auditDomainInvariants({
+      database, asOf: '2026-08-30T13:00:00.000Z',
+    })).toContainEqual(expect.objectContaining({
+      kind: 'opt_out_tombstone_invalid',
+      recordId: 'audit-propagation-target-tombstone',
+    }));
+  });
+
   it('reports a direct Ready to Interviewed StageEvent edge as corruption', async () => {
     workspace = createTempDatabase();
     const key = createTestWorkspaceKey();

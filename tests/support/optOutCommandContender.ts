@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 
 import { closeDatabase, openDatabase } from '../../src/main/db/database';
 import { CadenceRepository } from '../../src/main/domain/cadence/cadenceRepository';
@@ -19,6 +19,8 @@ const database = openDatabase({
   key: { bytes: Buffer.from(input.keyHex, 'hex'), version: 1 },
 });
 try {
+  writeFileSync(input.readyPath, 'ready', { mode: 0o600 });
+  waitForPath(input.startPath);
   const unitOfWork = new DomainUnitOfWork(database);
   const clock = { now: () => input.timestamp };
   const remaining = [...input.ids];
@@ -41,14 +43,20 @@ try {
     lifecycle, clock, ids,
     faultInjector: (point) => {
       if (point !== 'after_activity') return;
-      writeFileSync(input.readyPath, 'locked', { mode: 0o600 });
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350);
+      writeFileSync(input.lockedPath, 'locked', { mode: 0o600 });
+      waitForPath(input.releasePath);
     },
   });
+  writeFileSync(input.attemptPath, 'attempt', { mode: 0o600 });
   process.stdout.write(`${JSON.stringify(service.apply(input.command as ApplyOptOutInput))}\n`);
 } catch (error) {
   console.error(error instanceof Error ? error.stack : String(error));
   process.exitCode = 1;
 } finally {
   closeDatabase(database);
+}
+
+function waitForPath(path: string): void {
+  const signal = new Int32Array(new SharedArrayBuffer(4));
+  while (!existsSync(path)) Atomics.wait(signal, 0, 0, 10);
 }

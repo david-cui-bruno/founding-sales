@@ -733,7 +733,10 @@ const domainStatements = [
     tombstone_id TEXT NOT NULL REFERENCES opt_out_tombstones(id),
     kind TEXT NOT NULL CHECK (kind IN ('phone','email')),
     normalized_value TEXT NOT NULL CHECK (length(normalized_value) > 0),
-    created_at TEXT NOT NULL,
+    created_at TEXT NOT NULL CHECK (
+      created_at GLOB '????-??-??T??:??:??.???Z'
+      AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at) = created_at
+    ),
     UNIQUE (tombstone_id, kind, normalized_value)
   )`,
   `CREATE INDEX opt_out_handles_lookup_idx
@@ -1376,9 +1379,14 @@ const domainStatements = [
     END`,
   `CREATE TRIGGER protect_opted_out_contact_method_insert
     BEFORE INSERT ON person_contact_methods
-    WHEN EXISTS (
-      SELECT 1 FROM opt_out_tombstones AS tombstone
-      WHERE tombstone.person_id = NEW.person_id
+    WHEN (
+      EXISTS (
+        SELECT 1 FROM persons AS person
+        WHERE person.id = NEW.person_id AND person.opted_out = 1
+      ) OR EXISTS (
+        SELECT 1 FROM opt_out_tombstones AS tombstone
+        WHERE tombstone.person_id = NEW.person_id
+      )
     ) AND NOT EXISTS (
       SELECT 1
       FROM opt_out_tombstones AS tombstone
@@ -1392,9 +1400,14 @@ const domainStatements = [
     END`,
   `CREATE TRIGGER protect_opted_out_contact_method_update
     BEFORE UPDATE OF person_id, kind, normalized_value ON person_contact_methods
-    WHEN EXISTS (
-      SELECT 1 FROM opt_out_tombstones AS tombstone
-      WHERE tombstone.person_id = NEW.person_id
+    WHEN (
+      EXISTS (
+        SELECT 1 FROM persons AS person
+        WHERE person.id = NEW.person_id AND person.opted_out = 1
+      ) OR EXISTS (
+        SELECT 1 FROM opt_out_tombstones AS tombstone
+        WHERE tombstone.person_id = NEW.person_id
+      )
     ) AND NOT EXISTS (
       SELECT 1
       FROM opt_out_tombstones AS tombstone
@@ -1416,20 +1429,33 @@ const domainStatements = [
           updated_at = NEW.requested_at
       WHERE id = NEW.person_id;
     END`,
+  `CREATE TRIGGER protect_person_opt_out_insert
+    BEFORE INSERT ON persons
+    WHEN NEW.opted_out <> 0 OR NEW.opted_out_at IS NOT NULL
+    BEGIN
+      SELECT RAISE(ABORT, 'person opt-out projection requires a retained tombstone');
+    END`,
   `CREATE TRIGGER protect_person_opt_out_reset
     BEFORE UPDATE OF opted_out, opted_out_at ON persons
-    WHEN EXISTS (
-      SELECT 1 FROM opt_out_tombstones AS tombstone
-      WHERE tombstone.person_id = OLD.id
-    )
-      AND NOT EXISTS (
+    WHEN NOT (
+      (
+        NEW.opted_out = 0
+        AND NEW.opted_out_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM opt_out_tombstones AS tombstone
+          WHERE tombstone.person_id = OLD.id
+        )
+      ) OR (
+        NEW.opted_out = 1
+        AND EXISTS (
         SELECT 1 FROM opt_out_tombstones AS tombstone
         WHERE tombstone.person_id = OLD.id
-          AND NEW.opted_out = 1
           AND NEW.opted_out_at = tombstone.requested_at
+        )
       )
+    )
     BEGIN
-      SELECT RAISE(ABORT, 'permanent opt-out cannot be reset or changed');
+      SELECT RAISE(ABORT, 'person opt-out projection must match retained tombstone');
     END`,
   `CREATE TRIGGER protect_opt_out_tombstone
     BEFORE DELETE ON opt_out_tombstones
