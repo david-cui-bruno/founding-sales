@@ -29,6 +29,7 @@ const domainTables = [
   'next_actions',
   'opt_out_handles',
   'opt_out_closure_receipts',
+  'opt_out_closure_receipt_handles',
   'opt_out_tombstones',
   'organization_aliases',
   'organizations',
@@ -77,6 +78,9 @@ const requiredTriggers = [
   'immutable_cycle_reactivation_receipts_delete',
   'immutable_opt_out_closure_receipts',
   'immutable_opt_out_closure_receipts_delete',
+  'immutable_opt_out_closure_receipt_handles',
+  'immutable_opt_out_closure_receipt_handles_delete',
+  'protect_opt_out_closure_receipt_handle_insert',
   'immutable_won_terms',
   'immutable_won_terms_delete',
   'immutable_prioritization_evaluations',
@@ -1086,10 +1090,43 @@ function runDatabaseScenario(
           source_tombstone_id, closed_cycle_id, terminal_stage_event_id,
           command_json, result_json, created_at
         ) VALUES ('closure-receipt-tombstone-activity', 'apply', ?,
-                  'closure-receipt-tombstone', NULL, NULL, NULL, '{}', '{}', ?)
+                  'closure-receipt-tombstone', NULL, NULL, NULL, '{}',
+                  '{"handles":[{"id":"closure-receipt-member-handle"}]}', ?)
       `).run(prospect.personId, DOMAIN_TIMESTAMP);
+      raw.prepare(`
+        INSERT INTO opt_out_handles (
+          id, tombstone_id, kind, normalized_value, created_at
+        ) VALUES ('closure-receipt-member-handle', 'closure-receipt-tombstone',
+                  'phone', '+14015550100', ?)
+      `).run(DOMAIN_TIMESTAMP);
+      raw.prepare(`
+        INSERT INTO opt_out_closure_receipt_handles (
+          source_activity_id, tombstone_id, handle_id, sequence
+        ) VALUES ('closure-receipt-tombstone-activity', 'closure-receipt-tombstone',
+                  'closure-receipt-member-handle', 0)
+      `).run();
+      raw.prepare(`
+        INSERT INTO opt_out_handles (
+          id, tombstone_id, kind, normalized_value, created_at
+        ) VALUES ('closure-receipt-late-handle', 'closure-receipt-tombstone',
+                  'email', 'later@example.com', ?)
+      `).run(DOMAIN_TIMESTAMP);
+      assert.throws(() => raw.prepare(`
+        INSERT INTO opt_out_closure_receipt_handles (
+          source_activity_id, tombstone_id, handle_id, sequence
+        ) VALUES ('closure-receipt-tombstone-activity', 'closure-receipt-tombstone',
+                  'closure-receipt-late-handle', 1)
+      `).run());
       assertImmutable(raw, 'opt_out_closure_receipts', 'closure-receipt-tombstone-activity',
         "command_json = '{\"changed\":true}'", 'source_activity_id');
+      assertImmutable(raw, 'opt_out_closure_receipt_handles',
+        'closure-receipt-tombstone-activity', 'sequence = 1', 'source_activity_id');
+      assert.throws(() => raw.prepare(`
+        INSERT OR REPLACE INTO opt_out_closure_receipt_handles (
+          source_activity_id, tombstone_id, handle_id, sequence
+        ) VALUES ('closure-receipt-tombstone-activity', 'closure-receipt-tombstone',
+                  'closure-receipt-member-handle', 0)
+      `).run());
       assert.throws(() => raw.prepare(`
         INSERT OR REPLACE INTO opt_out_closure_receipts (
           source_activity_id, operation_kind, person_id, tombstone_id,

@@ -169,6 +169,12 @@ export function expectedEvidenceRef(activity: OptOutEvidenceActivityFacts): stri
   return null;
 }
 
+export function optOutCallEvidenceMatches(activity: OptOutEvidenceActivityFacts): boolean {
+  return activity.kind === 'call'
+    && (activity.direction === 'inbound' || activity.direction === 'outbound')
+    && (activity.channel === 'phone' || activity.channel === 'call');
+}
+
 function channelEvidenceMatches(
   channel: OptOutTombstone['observedChannel'],
   activity: OptOutEvidenceActivityFacts,
@@ -186,9 +192,7 @@ function channelEvidenceMatches(
       && activity.direction === 'internal' && activity.channel === 'manual';
   }
   if (channel === 'call') {
-    return activity.kind === 'call'
-      && (activity.direction === 'inbound' || activity.direction === 'outbound')
-      && (activity.channel === 'phone' || activity.channel === 'call');
+    return optOutCallEvidenceMatches(activity);
   }
   return false;
 }

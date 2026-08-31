@@ -9,6 +9,7 @@ import { normalizeEmail, normalizePhone } from '../source/sourceService';
 import { LifecycleEvidenceError } from '../support/domainErrors';
 import {
   optOutProvenanceViolations,
+  optOutCallEvidenceMatches,
   parseOptOutActivityMetadataJson,
   type OptOutEvidenceActivityFacts,
   type OptOutEvidenceNode,
@@ -50,6 +51,15 @@ const tombstoneRowSchema = z.object({
 const handleRowSchema = z.object({
   id: optOutIdSchema, tombstone_id: optOutIdSchema, kind: optOutHandleKindSchema,
   normalized_value: nonblankSchema, created_at: optOutUtcTimestampSchema,
+}).strict();
+const receiptHandleRowSchema = z.object({
+  source_activity_id: optOutIdSchema,
+  membership_tombstone_id: optOutIdSchema,
+  handle_id: optOutIdSchema,
+  sequence: z.number().int().safe().nonnegative(),
+  id: optOutIdSchema.nullable(), tombstone_id: optOutIdSchema.nullable(),
+  kind: optOutHandleKindSchema.nullable(), normalized_value: z.string().nullable(),
+  created_at: optOutUtcTimestampSchema.nullable(),
 }).strict();
 const activityRowSchema = z.object({
   id: optOutIdSchema, person_id: optOutIdSchema, prospect_id: optOutIdSchema.nullable(),
@@ -153,6 +163,9 @@ export function parseStoredOptOutClosureReceipt(value: unknown): OptOutClosureRe
 export function collectOptOutClosureReceiptViolations(
   database: AppDatabase,
   receipt: OptOutClosureReceipt,
+  options: Readonly<{
+    handleSnapshot?: 'receipt_membership' | 'current_tombstone';
+  }> = {},
 ): readonly string[] {
   const violations: string[] = [];
   const add = (reason: string): void => {
@@ -184,6 +197,10 @@ export function collectOptOutClosureReceiptViolations(
     if (tombstone.createdAt > receipt.createdAt || tombstone.requestedAt > receipt.createdAt) {
       add('tombstone_chronology');
     }
+    const expectedAlreadyApplied = tombstone.sourceActivityId !== receipt.sourceActivityId;
+    if (receipt.result.alreadyApplied !== expectedAlreadyApplied) {
+      add('already_applied_semantics');
+    }
   }
   if (!receipt.result.alreadyApplied && tombstone !== null) {
     if (tombstone.id !== requestedTombstoneId(receipt)
@@ -208,9 +225,24 @@ export function collectOptOutClosureReceiptViolations(
       ? null : loadTombstone(database, receipt.sourceTombstoneId);
     if (source === null || source.personId === receipt.personId
       || source.id === receipt.tombstoneId) add('propagation_source');
+    if (source !== null) {
+      const sourceActivity = loadActivity(database, source.sourceActivityId);
+      if (optOutProvenanceViolations({
+        root: Object.freeze({ tombstone: source, activity: sourceActivity }),
+        loadSource: (id) => loadEvidenceNode(database, id),
+      }).length !== 0) add('propagation_source_provenance');
+      if (activity === null || source.requestedAt > activity.occurredAt
+        || source.createdAt > activity.occurredAt
+        || source.requestedAt > receipt.createdAt
+        || source.createdAt > receipt.createdAt) {
+        add('propagation_source_chronology');
+      }
+    }
   }
 
-  const storedHandles = loadHandles(database, receipt.tombstoneId);
+  const storedHandles = options.handleSnapshot === 'current_tombstone'
+    ? loadHandles(database, receipt.tombstoneId)
+    : loadReceiptHandles(database, receipt);
   if (storedHandles === null
     || serializeCanonical(storedHandles) !== serializeCanonical(receipt.result.handles)) {
     add('handle_snapshot');
@@ -257,8 +289,11 @@ export function collectOptOutClosureReceiptViolations(
 export function assertCanonicalOptOutClosureReceipt(
   database: AppDatabase,
   receipt: OptOutClosureReceipt,
+  options?: Readonly<{
+    handleSnapshot?: 'receipt_membership' | 'current_tombstone';
+  }>,
 ): void {
-  const violations = collectOptOutClosureReceiptViolations(database, receipt);
+  const violations = collectOptOutClosureReceiptViolations(database, receipt, options);
   if (violations.length !== 0) {
     throw new LifecycleEvidenceError(
       `Opt-out closure receipt is invalid: ${violations.join(', ')}.`,
@@ -378,8 +413,7 @@ function commandActivityMatches(
     return (activity.kind === 'note' || activity.kind === 'system')
       && activity.direction === 'internal' && activity.channel === 'manual';
   }
-  return activity.kind === 'call'
-    && (activity.channel === 'phone' || activity.channel === 'call');
+  return optOutCallEvidenceMatches(activity);
 }
 
 function appendedActivityMatches(
@@ -467,6 +501,57 @@ function loadHandles(database: AppDatabase, tombstoneId: string): readonly OptOu
     }));
   }
   return Object.freeze(handles);
+}
+
+function loadReceiptHandles(
+  database: AppDatabase,
+  receipt: OptOutClosureReceipt,
+): readonly OptOutHandle[] | null {
+  const rows = database.raw.prepare(`
+    SELECT membership.source_activity_id,
+      membership.tombstone_id AS membership_tombstone_id,
+      membership.handle_id, membership.sequence,
+      handle.id, handle.tombstone_id, handle.kind, handle.normalized_value, handle.created_at
+    FROM opt_out_closure_receipt_handles AS membership
+    LEFT JOIN opt_out_handles AS handle
+      ON handle.id = membership.handle_id
+      AND handle.tombstone_id = membership.tombstone_id
+    WHERE membership.source_activity_id = ?
+    ORDER BY membership.sequence ASC
+  `).all(receipt.sourceActivityId);
+  const handles: OptOutHandle[] = [];
+  for (const [index, row] of rows.entries()) {
+    const parsed = receiptHandleRowSchema.safeParse(row);
+    if (!parsed.success || parsed.data.sequence !== index
+      || parsed.data.source_activity_id !== receipt.sourceActivityId
+      || parsed.data.membership_tombstone_id !== receipt.tombstoneId
+      || parsed.data.id !== parsed.data.handle_id || parsed.data.tombstone_id !== receipt.tombstoneId
+      || parsed.data.kind === null || parsed.data.normalized_value === null
+      || parsed.data.created_at === null) return null;
+    let normalized: string;
+    try {
+      normalized = parsed.data.kind === 'phone'
+        ? normalizePhone(parsed.data.normalized_value)
+        : normalizeEmail(parsed.data.normalized_value);
+    } catch {
+      return null;
+    }
+    if (normalized !== parsed.data.normalized_value) return null;
+    handles.push(Object.freeze({
+      id: parsed.data.id, tombstoneId: parsed.data.tombstone_id,
+      kind: parsed.data.kind, normalizedValue: parsed.data.normalized_value,
+      createdAt: parsed.data.created_at,
+    }));
+  }
+  const stable = [...handles].sort(compareHandleFacts);
+  return serializeCanonical(stable) === serializeCanonical(handles)
+    ? Object.freeze(handles) : null;
+}
+
+function compareHandleFacts(left: OptOutHandle, right: OptOutHandle): number {
+  return left.kind.localeCompare(right.kind)
+    || left.normalizedValue.localeCompare(right.normalizedValue)
+    || left.id.localeCompare(right.id);
 }
 
 function loadCycle(database: AppDatabase, id: string): SalesCycle | null {

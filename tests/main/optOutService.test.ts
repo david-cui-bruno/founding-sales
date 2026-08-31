@@ -137,9 +137,42 @@ describe('OptOutService', () => {
     });
     expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })
       .filter(({ kind }) => kind.startsWith('opt_out'))).toEqual([]);
+    const retainedMembership = database.raw.prepare(`
+      SELECT source_activity_id, tombstone_id, handle_id, sequence
+      FROM opt_out_closure_receipt_handles
+      WHERE source_activity_id = 'apply-activity'
+      ORDER BY sequence LIMIT 1
+    `).get() as {
+      source_activity_id: string; tombstone_id: string; handle_id: string; sequence: number;
+    };
+    database.raw.exec('DROP TRIGGER immutable_opt_out_closure_receipt_handles_delete');
+    database.raw.prepare(`
+      DELETE FROM opt_out_closure_receipt_handles
+      WHERE source_activity_id = ? AND handle_id = ?
+    `).run(retainedMembership.source_activity_id, retainedMembership.handle_id);
+    expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).toContainEqual(
+      expect.objectContaining({
+        kind: 'opt_out_closure_receipt_invalid', recordId: 'apply-activity',
+      }),
+    );
+    expect(() => apply.apply(input)).toThrow();
+    database.raw.prepare(`
+      INSERT INTO opt_out_closure_receipt_handles (
+        source_activity_id, tombstone_id, handle_id, sequence
+      ) VALUES (?, ?, ?, ?)
+    `).run(
+      retainedMembership.source_activity_id, retainedMembership.tombstone_id,
+      retainedMembership.handle_id, retainedMembership.sequence,
+    );
+    unitOfWork.immediate(() => optOuts.insertBlockedHandle({
+      id: 'apply-later-retained-handle', tombstoneId: first.tombstone.id,
+      kind: 'email', normalizedValue: 'later-owner@example.com', createdAt: DOMAIN_TIMESTAMP,
+    }));
     const activityCount = database.raw.prepare(`SELECT COUNT(*) AS count FROM activities`).get();
     const second = apply.apply(input);
     expect(second).toEqual(first);
+    expect(optOuts.listHandles(first.tombstone.id).map(({ normalizedValue }) => normalizedValue))
+      .toEqual(['later-owner@example.com', 'owner@example.com', '+14015550100']);
     expect(database.raw.prepare(`SELECT COUNT(*) AS count FROM activities`).get())
       .toEqual(activityCount);
     expect(database.raw.prepare(`SELECT COUNT(*) AS count FROM opt_out_tombstones`).get())
@@ -175,6 +208,21 @@ describe('OptOutService', () => {
     });
     expect(database.raw.prepare(`SELECT COUNT(*) AS count FROM activities WHERE person_id = ?`)
       .get(prospect.personId)).toEqual({ count: 2 });
+    expect(() => apply.apply({
+      personId: prospect.personId, tombstoneId: 'internal-call-later-tombstone',
+      requestedAt: LATER, policyVersion: 'founder_opt_out_v1',
+      decision: { kind: 'founder_confirmed', channel: 'call' },
+      evidence: {
+        kind: 'append_activity',
+        activity: {
+          id: 'internal-call-later-activity', personId: prospect.personId,
+          kind: 'call', direction: 'internal', channel: 'phone', occurredAt: LATER,
+          observedOutcome: 'opted_out', metadata: {},
+        },
+      },
+      terminalStageEventId: null,
+    })).toThrow();
+    expect(events.getActivity('internal-call-later-activity')).toBeNull();
     const warm = BUILTIN_CADENCES.find(({ family }) => family === 'cadence_c')!;
     const beforeReactivation = {
       cycles: database.raw.prepare(`SELECT COUNT(*) AS count FROM sales_cycles`).get(),
@@ -200,9 +248,23 @@ describe('OptOutService', () => {
     const receiptRow = database.raw.prepare(`
       SELECT result_json FROM opt_out_closure_receipts WHERE source_activity_id = 'apply-activity'
     `).get() as { result_json: string };
+    const falseInitialResult = JSON.parse(receiptRow.result_json) as Record<string, unknown>;
+    falseInitialResult.alreadyApplied = true;
+    database.raw.exec('DROP TRIGGER immutable_opt_out_closure_receipts');
+    database.raw.prepare(`
+      UPDATE opt_out_closure_receipts SET result_json = ? WHERE source_activity_id = 'apply-activity'
+    `).run(serializeCanonical(falseInitialResult));
+    expect(auditDomainInvariants({ database, asOf: LATER })).toContainEqual(
+      expect.objectContaining({
+        kind: 'opt_out_closure_receipt_invalid', recordId: 'apply-activity',
+      }),
+    );
+    expect(() => apply.apply(input)).toThrow();
+    database.raw.prepare(`
+      UPDATE opt_out_closure_receipts SET result_json = ? WHERE source_activity_id = 'apply-activity'
+    `).run(receiptRow.result_json);
     const forgedResult = JSON.parse(receiptRow.result_json) as { handles: unknown[] };
     forgedResult.handles.reverse();
-    database.raw.exec('DROP TRIGGER immutable_opt_out_closure_receipts');
     database.raw.prepare(`
       UPDATE opt_out_closure_receipts SET result_json = ? WHERE source_activity_id = 'apply-activity'
     `).run(serializeCanonical(forgedResult));
@@ -257,6 +319,27 @@ describe('OptOutService', () => {
         kind: 'opt_out_closure_receipt_invalid', recordId: 'lifecycle-activity',
       }),
     );
+    const lifecycleReceipt = database.raw.prepare(`
+      SELECT result_json FROM opt_out_closure_receipts
+      WHERE source_activity_id = 'lifecycle-activity'
+    `).get() as { result_json: string };
+    const forgedLifecycleResult = JSON.parse(lifecycleReceipt.result_json) as Record<string, unknown>;
+    forgedLifecycleResult.alreadyApplied = true;
+    database.raw.exec('DROP TRIGGER immutable_opt_out_closure_receipts');
+    database.raw.prepare(`
+      UPDATE opt_out_closure_receipts SET result_json = ?
+      WHERE source_activity_id = 'lifecycle-activity'
+    `).run(serializeCanonical(forgedLifecycleResult));
+    expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).toContainEqual(
+      expect.objectContaining({
+        kind: 'opt_out_closure_receipt_invalid', recordId: 'lifecycle-activity',
+      }),
+    );
+    expect(() => service().apply(input)).toThrow();
+    database.raw.prepare(`
+      UPDATE opt_out_closure_receipts SET result_json = ?
+      WHERE source_activity_id = 'lifecycle-activity'
+    `).run(lifecycleReceipt.result_json);
 
     database.raw.exec(`
       CREATE TRIGGER reject_duplicate_opt_out_close

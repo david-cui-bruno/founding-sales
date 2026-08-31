@@ -179,7 +179,9 @@ export class OptOutRepository {
       if (serializeCanonical(existing) === serializeCanonical(parsed)) return existing;
       throw new OptOutPersistenceConflictError('closure_receipt', parsed.sourceActivityId);
     }
-    assertCanonicalOptOutClosureReceipt(this.database, parsed);
+    assertCanonicalOptOutClosureReceipt(this.database, parsed, {
+      handleSnapshot: 'current_tombstone',
+    });
     const row = this.database.raw.prepare(`
       INSERT INTO opt_out_closure_receipts (
         source_activity_id, operation_kind, person_id, tombstone_id, source_tombstone_id,
@@ -191,6 +193,14 @@ export class OptOutRepository {
       parsed.sourceTombstoneId, parsed.closedCycleId, parsed.terminalStageEventId,
       serializeCanonical(parsed.command), serializeCanonical(parsed.result), parsed.createdAt,
     );
+    const insertMembership = this.database.raw.prepare(`
+      INSERT INTO opt_out_closure_receipt_handles (
+        source_activity_id, tombstone_id, handle_id, sequence
+      ) VALUES (?, ?, ?, ?)
+    `);
+    parsed.result.handles.forEach((handle, sequence) => {
+      insertMembership.run(parsed.sourceActivityId, parsed.tombstoneId, handle.id, sequence);
+    });
     return this.parseClosureReceipt(row);
   }
 

@@ -739,7 +739,8 @@ const domainStatements = [
       created_at GLOB '????-??-??T??:??:??.???Z'
       AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at) = created_at
     ),
-    UNIQUE (tombstone_id, kind, normalized_value)
+    UNIQUE (tombstone_id, kind, normalized_value),
+    UNIQUE (id, tombstone_id)
   )`,
   `CREATE INDEX opt_out_handles_lookup_idx
     ON opt_out_handles(kind, normalized_value)`,
@@ -770,7 +771,20 @@ const domainStatements = [
         AND source_tombstone_id <> tombstone_id
       )
     ),
-    CHECK (terminal_stage_event_id IS NULL OR closed_cycle_id IS NOT NULL)
+    CHECK (terminal_stage_event_id IS NULL OR closed_cycle_id IS NOT NULL),
+    UNIQUE (source_activity_id, tombstone_id)
+  )`,
+  `CREATE TABLE opt_out_closure_receipt_handles (
+    source_activity_id TEXT NOT NULL,
+    tombstone_id TEXT NOT NULL,
+    handle_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL CHECK (sequence >= 0),
+    PRIMARY KEY (source_activity_id, handle_id),
+    UNIQUE (source_activity_id, sequence),
+    FOREIGN KEY (source_activity_id, tombstone_id)
+      REFERENCES opt_out_closure_receipts(source_activity_id, tombstone_id),
+    FOREIGN KEY (handle_id, tombstone_id)
+      REFERENCES opt_out_handles(id, tombstone_id)
   )`,
   `CREATE TABLE workspace_settings (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -1301,6 +1315,21 @@ const domainStatements = [
   ...immutableTriggers('consent_policy_records'),
   ...immutableTriggers('cycle_reactivation_receipts'),
   ...immutableTriggers('opt_out_closure_receipts'),
+  ...immutableTriggers('opt_out_closure_receipt_handles'),
+  `CREATE TRIGGER protect_opt_out_closure_receipt_handle_insert
+    BEFORE INSERT ON opt_out_closure_receipt_handles
+    WHEN NOT EXISTS (
+      SELECT 1
+      FROM opt_out_closure_receipts AS receipt,
+        json_each(receipt.result_json, '$.handles') AS snapshot
+      WHERE receipt.source_activity_id = NEW.source_activity_id
+        AND receipt.tombstone_id = NEW.tombstone_id
+        AND CAST(snapshot.key AS INTEGER) = NEW.sequence
+        AND json_extract(snapshot.value, '$.id') = NEW.handle_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'receipt membership must match its immutable handle snapshot');
+    END`,
   ...immutableTriggers('won_terms'),
   ...immutableTriggers('trigger_events'),
   ...immutableTriggers('prioritization_evaluations'),

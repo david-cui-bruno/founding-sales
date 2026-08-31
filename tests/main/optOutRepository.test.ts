@@ -214,6 +214,11 @@ describe('OptOutRepository', () => {
       })).toThrow(OptOutPersistenceConflictError);
     });
     expect(repository.getClosureReceiptForActivity(proof.activityId)).toEqual(receipt);
+    unitOfWork.immediate(() => repository.insertBlockedHandle({
+      id: 'closure-receipt-later-handle', tombstoneId: canonical.id,
+      kind: 'phone', normalizedValue: '+14015550100', createdAt: LATER,
+    }));
+    expect(repository.getClosureReceiptForActivity(proof.activityId)).toEqual(receipt);
 
     database.raw.exec('DROP TRIGGER immutable_opt_out_closure_receipts');
     database.raw.prepare(`
@@ -255,6 +260,94 @@ describe('OptOutRepository', () => {
         },
         result: { tombstone: canonical, handles: [], cycle, alreadyApplied: false },
         createdAt: DOMAIN_TIMESTAMP,
+      })).toThrow();
+    });
+  });
+
+  it('rejects propagation whose retained source tombstone postdates its evidence', () => {
+    const source = seedProspect(database.raw, 'late-propagation-source');
+    const target = seedEvidence('early-propagation-target');
+    const sourceActivityId = 'late-propagation-source-activity';
+    database.raw.prepare(`
+      INSERT INTO activities (
+        id, person_id, kind, direction, channel, occurred_at, observed_outcome,
+        metadata_json, created_at
+      ) VALUES (?, ?, 'text', 'inbound', 'imessage', ?, 'opted_out', '{}', ?)
+    `).run(sourceActivityId, source.personId, LATER, LATER);
+    const propagationActivityId = 'early-propagation-receipt-activity';
+    database.raw.prepare(`
+      INSERT INTO activities (
+        id, person_id, kind, direction, channel, occurred_at, observed_outcome,
+        metadata_json, created_at
+      ) VALUES (?, ?, 'system', 'internal', 'identity_propagation', ?, 'opted_out', ?, ?)
+    `).run(
+      propagationActivityId, target.personId, DOMAIN_TIMESTAMP,
+      JSON.stringify({ sourceTombstoneId: 'late-propagation-source-tombstone' }),
+      DOMAIN_TIMESTAMP,
+    );
+    const sourceTombstone = tombstone(
+      'late-propagation-source-tombstone', source.personId, sourceActivityId, LATER,
+    );
+    const targetTombstone = tombstone(
+      'early-propagation-target-tombstone', target.personId, target.activityId,
+    );
+    unitOfWork.immediate(() => {
+      repository.insertTombstone(sourceTombstone);
+      repository.insertTombstone(targetTombstone);
+      expect(() => repository.insertClosureReceipt({
+        sourceActivityId: propagationActivityId, operationKind: 'propagate',
+        personId: target.personId, tombstoneId: targetTombstone.id,
+        sourceTombstoneId: sourceTombstone.id, closedCycleId: null,
+        terminalStageEventId: null,
+        command: {
+          version: 1, kind: 'propagate', input: {
+            sourceTombstoneId: sourceTombstone.id, targetPersonId: target.personId,
+            targetTombstoneId: 'unused-propagation-target', terminalStageEventId: null,
+            evidenceActivity: {
+              id: propagationActivityId, personId: target.personId, kind: 'system',
+              direction: 'internal', channel: 'identity_propagation',
+              occurredAt: DOMAIN_TIMESTAMP, observedOutcome: 'opted_out',
+              metadata: { sourceTombstoneId: sourceTombstone.id },
+            },
+          },
+        },
+        result: {
+          tombstone: targetTombstone, handles: [], cycle: null, alreadyApplied: true,
+        },
+        createdAt: LATER,
+      })).toThrow();
+    });
+  });
+
+  it('rejects an internal call receipt even after the Person was already opted out', () => {
+    const proof = seedEvidence('internal-call-receipt');
+    const canonical = tombstone(
+      'internal-call-receipt-tombstone', proof.personId, proof.activityId,
+    );
+    const internalCallId = 'internal-call-later-receipt-activity';
+    database.raw.prepare(`
+      INSERT INTO activities (
+        id, person_id, kind, direction, channel, occurred_at, observed_outcome,
+        metadata_json, created_at
+      ) VALUES (?, ?, 'call', 'internal', 'phone', ?, 'opted_out', '{}', ?)
+    `).run(internalCallId, proof.personId, LATER, LATER);
+    unitOfWork.immediate(() => {
+      repository.insertTombstone(canonical);
+      expect(() => repository.insertClosureReceipt({
+        sourceActivityId: internalCallId, operationKind: 'apply', personId: proof.personId,
+        tombstoneId: canonical.id, sourceTombstoneId: null, closedCycleId: null,
+        terminalStageEventId: null,
+        command: {
+          version: 1, kind: 'apply', input: {
+            personId: proof.personId, tombstoneId: 'unused-internal-call-tombstone',
+            requestedAt: LATER, policyVersion: 'founder_opt_out_v1',
+            decision: { kind: 'founder_confirmed', channel: 'call' },
+            evidence: { kind: 'existing_activity', activityId: internalCallId },
+            terminalStageEventId: null,
+          },
+        },
+        result: { tombstone: canonical, handles: [], cycle: null, alreadyApplied: true },
+        createdAt: LATER,
       })).toThrow();
     });
   });

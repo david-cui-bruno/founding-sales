@@ -22,6 +22,7 @@ import type { OptOutRepository } from './optOutRepository';
 import {
   assertCanonicalOptOutEvidence,
   expectedEvidenceRef,
+  optOutCallEvidenceMatches,
 } from './optOutEvidenceValidator';
 import {
   optOutIdSchema,
@@ -322,7 +323,7 @@ export class OptOutService {
       }
       return;
     }
-    if (activity.kind !== 'call' || (activity.channel !== 'phone' && activity.channel !== 'call')) {
+    if (!optOutCallEvidenceMatches(activity)) {
       throw new LifecycleEvidenceError('Call opt-out requires founder-confirmed call evidence.');
     }
   }

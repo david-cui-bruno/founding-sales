@@ -449,6 +449,13 @@ export type OptOutClosureReceiptsTable = {
   created_at: string;
 };
 
+export type OptOutClosureReceiptHandlesTable = {
+  source_activity_id: string;
+  tombstone_id: string;
+  handle_id: string;
+  sequence: number;
+};
+
 export type WorkspaceSettingsTable = {
   singleton: number;
   timezone: string;
@@ -472,6 +479,7 @@ export type DomainTables = {
   cycle_reactivation_receipts: CycleReactivationReceiptsTable;
   lifecycle_review_items: LifecycleReviewItemsTable;
   next_actions: NextActionsTable;
+  opt_out_closure_receipt_handles: OptOutClosureReceiptHandlesTable;
   opt_out_closure_receipts: OptOutClosureReceiptsTable;
   opt_out_handles: OptOutHandlesTable;
   opt_out_tombstones: OptOutTombstonesTable;
