@@ -86,7 +86,8 @@ code {
   background: #fff;
 }
 
-button {
+/* Legacy diagnostics-only controls; the design system owns all other buttons. */
+.diagnostics button {
   padding: 0.5rem 0.8rem;
   border: 1px solid #1d242b;
   border-radius: 0.2rem;
@@ -95,7 +96,7 @@ button {
   font: inherit;
 }
 
-button:focus-visible {
+.diagnostics button:focus-visible {
   outline: 3px solid #4c90c3;
   outline-offset: 3px;
 }

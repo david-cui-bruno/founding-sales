@@ -76,6 +76,8 @@ test('packaged Apple helper handshakes and exits without permission or communica
       void dialog.dismiss();
     });
 
+    // The Apple feasibility panel now lives behind the Settings route.
+    await page.getByRole('link', { name: 'Settings' }).click();
     await expect(
       page.getByRole('region', { name: 'Apple feasibility spike' }),
     ).toBeVisible();

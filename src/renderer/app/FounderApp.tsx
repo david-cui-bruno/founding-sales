@@ -52,14 +52,16 @@ function FounderWorkspace({ api, health, initialRoute }: FounderAppProps) {
           })}
         </div>
       </AppShell>
-      <ImportDialog
-        api={api.imports}
-        open={importOpen}
-        onClose={() => setImportOpen(false)}
-        onCommitted={() => {
-          setRefreshKey((key) => key + 1);
-        }}
-      />
+      {importOpen && (
+        <ImportDialog
+          api={api.imports}
+          open
+          onClose={() => setImportOpen(false)}
+          onCommitted={() => {
+            setRefreshKey((key) => key + 1);
+          }}
+        />
+      )}
     </>
   );
 }

@@ -191,7 +191,7 @@ describe('FounderApp', () => {
     render(<FounderApp api={fakeCallieApi()} health={readyHealth} />);
 
     fireEvent.click(
-      await screen.findByRole('button', { name: /import/i }),
+      await screen.findByRole('button', { name: 'Import' }),
     );
     expect(await screen.findByRole('dialog')).not.toBeNull();
   });

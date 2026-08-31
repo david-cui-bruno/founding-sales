@@ -135,15 +135,21 @@ const inspectPackagedApplication = async (userDataPath: string) => {
       throw new Error('The packaged application did not create a renderer page.');
     }
 
+    // A healthy foundation now boots the workflow shell on the Today route.
     await expect(
-      page.getByRole('heading', { name: 'Callie Founder Sales System' }),
+      page.getByRole('navigation', { name: 'Primary' }),
     ).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Today' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    await expect(page).toHaveURL(/callie:\/\/app\/index\.html/);
+
+    // Foundation diagnostics stay reachable behind the Settings route.
+    await page.getByRole('link', { name: 'Settings' }).click();
     await expect(page.getByText('Encrypted SQLite ready')).toBeVisible();
     await expect(page.getByText('FTS5 available')).toBeVisible();
     await expect(page.getByText('Schema 2')).toBeVisible();
-    await expect(page.getByText('Active job count')).toBeVisible();
-    await expect(page.getByText('Recovery count')).toBeVisible();
-    await expect(page).toHaveURL('callie://app/index.html');
 
     const health = await page.evaluate(() => window.callie.health.get());
     return {

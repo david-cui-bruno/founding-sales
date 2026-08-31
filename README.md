@@ -51,6 +51,22 @@ local ad-hoc package skips only Team-ID equality; both code objects must still
 have valid strict signatures and the helper must retain its entitlement. Ad-hoc
 verification does not establish permission persistence across rebuilds.
 
+`npm run test:e2e` covers the packaged founder workflow: foundation health,
+the composed workflow shell booting to Today, the CSV import flow (preview is
+read-only, commit is atomic and exactly-once, rows persist across relaunch),
+the single global lead inspector opened from Leads and Pipeline, the Friday
+scoreboard job lifecycle with the domain-computed 3 / 4 and 75% fill-rate
+evidence, theme/density persistence across renderer reload, and an axe
+accessibility gate that fails on any serious or critical violation across the
+Today, Leads, Pipeline, Review, and Friday routes. Every packaged test uses a
+fresh `mkdtemp` `--user-data-dir`; production founder data is never read or
+written by tests. Workspace seeding always goes through the real UI import
+flow, never by copying a database or writing SQLite directly.
+
+Conversations and Learnings remain disabled navigation entries with their own
+approved implementation plans; zero-click Apple recording is not exercised by
+fixture E2E.
+
 The standard packaged E2E command includes an inert Apple smoke test. To run
 only that suite after packaging:
 
