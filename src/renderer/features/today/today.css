@@ -1,0 +1,194 @@
+/* Promise-first Today queue. Neutral surfaces; urgency comes from copy. */
+
+.today {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.today-route {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.today-route__toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.today-route__command-error {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+/* Capacity is a label, never a filter. */
+.capacity-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.capacity-summary__errors {
+  color: var(--text);
+}
+
+.today__lanes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.today-lane {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.today-lane__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.today-lane__heading {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.today-lane__count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.today-lane__empty {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  color: var(--muted);
+}
+
+.today-lane__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.today-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+
+.today-row + .today-row {
+  border-top: 1px solid var(--line);
+}
+
+.today-row__lead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.today-row__person {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.today-row__person:focus-visible {
+  border-radius: var(--radius-sm);
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.today-row__context,
+.today-row__stage {
+  color: var(--muted);
+}
+
+/* Matrix cell as separate bands; no blended score anywhere. */
+.today-row__bands {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin: 0;
+}
+
+.today-row__band dt {
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.today-row__band dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.today-row__action {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.today-row__action-label {
+  font-weight: 600;
+}
+
+.today-row__action-channel,
+.today-row__action-due {
+  color: var(--muted);
+}
+
+.today-reason__text {
+  margin: 0;
+  color: var(--muted);
+}
+
+.today-reason__triggers {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+  color: var(--muted);
+}
+
+.today-reason__flags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.today-reason__flags:empty {
+  display: none;
+}
+
+.today-reason__consent {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.today-row__commands {
+  display: flex;
+  gap: var(--space-2);
+}
