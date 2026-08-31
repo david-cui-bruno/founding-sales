@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
+import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
 
 import type { AppDatabase } from '../../src/main/db/database';
 import type { MigrationOptions } from '../../src/main/db/migrate';
@@ -23,6 +24,13 @@ const health: AppHealth = {
   fts5Available: true,
   pendingJobs: 0,
   interruptedJobsRecovered: 4,
+  domainStatus: 'ready',
+  domainReady: true,
+  domainBlockingViolationCount: 0,
+  domainRepairableIssueCount: 0,
+  domainProjectionRefreshCandidateCount: 0,
+  pendingProjectionRebuilds: 0,
+  domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
 };
 
 const keyDependencies = () => ({
@@ -37,13 +45,6 @@ describe('startApplication', () => {
     captureMigration?: (options: MigrationOptions) => void,
   ): ApplicationStartupDependencies {
     const database = { path: '/ignored-until-open' } as AppDatabase;
-    const jobs = {
-      recoverInterruptedJobs: () => {
-        events.push('recover');
-        return 4;
-      },
-      listActive: (): [] => [],
-    };
 
     return {
       ...keyDependencies(),
@@ -60,9 +61,12 @@ describe('startApplication', () => {
           appliedMigrationIds: ['0001Foundation', '0002DomainFoundation'],
         };
       },
-      createJobRepository: () => jobs,
+      createDomainRuntime: () => fakeDomainRuntime({
+        onInitialize: () => events.push('recover'),
+        interruptedJobsRecovered: 4,
+      }),
       createHealthService: (options) => {
-        events.push(`health:${options.interruptedJobsRecovered}`);
+        events.push(`health:${options.domainStartupReport.interruptedJobsRecovered}`);
         return { getHealth: () => health };
       },
       registerHealthIpc: (provider) => {

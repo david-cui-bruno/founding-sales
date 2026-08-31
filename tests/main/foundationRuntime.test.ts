@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
 
 import type { AppDatabase } from '../../src/main/db/database';
 import {
@@ -35,6 +36,13 @@ const health: AppHealth = {
   fts5Available: true,
   pendingJobs: 0,
   interruptedJobsRecovered: 4,
+  domainStatus: 'ready',
+  domainReady: true,
+  domainBlockingViolationCount: 0,
+  domainRepairableIssueCount: 0,
+  domainProjectionRefreshCandidateCount: 0,
+  pendingProjectionRebuilds: 0,
+  domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
 };
 
 const runtimeOptions = {
@@ -77,10 +85,7 @@ describe('FoundationRuntime', () => {
         events.push('migrate');
         return migrationResult;
       },
-      createJobRepository: () => ({
-        listActive: () => [],
-        recoverInterruptedJobs: () => 0,
-      }),
+      createDomainRuntime: () => fakeDomainRuntime(),
       createHealthService: () => ({ getHealth: () => health }),
       closeDatabase: () => undefined,
     });
@@ -108,9 +113,7 @@ describe('FoundationRuntime', () => {
         throw new Error('must not open');
       },
       migrateToLatest: async () => migrationResult,
-      createJobRepository: () => ({
-        listActive: () => [], recoverInterruptedJobs: () => 0,
-      }),
+      createDomainRuntime: () => fakeDomainRuntime(),
       createHealthService: () => ({ getHealth: () => health }),
       closeDatabase: () => undefined,
     });
@@ -130,9 +133,7 @@ describe('FoundationRuntime', () => {
         throw new Error('must not open');
       },
       migrateToLatest: async () => migrationResult,
-      createJobRepository: () => ({
-        listActive: () => [], recoverInterruptedJobs: () => 0,
-      }),
+      createDomainRuntime: () => fakeDomainRuntime(),
       createHealthService: () => ({ getHealth: () => health }),
       closeDatabase: () => undefined,
     });
@@ -161,12 +162,9 @@ describe('FoundationRuntime', () => {
           events.push('migrate');
           return migrationResult;
         },
-        createJobRepository: () => ({
-          listActive: () => [],
-          recoverInterruptedJobs: () => {
-            events.push('recover');
-            return 4;
-          },
+        createDomainRuntime: () => fakeDomainRuntime({
+          onInitialize: () => events.push('recover'),
+          interruptedJobsRecovered: 4,
         }),
         createHealthService: () => {
           events.push('health:create');
@@ -216,15 +214,12 @@ describe('FoundationRuntime', () => {
         }
         return migrationResult;
       },
-      createJobRepository: () => ({
-        listActive: () => [],
-        recoverInterruptedJobs: () => {
-          events.push('recover');
-          return 4;
-        },
+      createDomainRuntime: () => fakeDomainRuntime({
+        onInitialize: () => events.push('recover'),
+        interruptedJobsRecovered: 4,
       }),
       createHealthService: (options) => {
-        events.push(`health:${options.interruptedJobsRecovered}`);
+        events.push(`health:${options.domainStartupReport.interruptedJobsRecovered}`);
         return { getHealth: () => health };
       },
       closeDatabase: (database) => {
@@ -270,12 +265,11 @@ describe('FoundationRuntime', () => {
           return database;
         },
         migrateToLatest: () => migration.promise,
-        createJobRepository: () => ({
-          listActive: () => [],
-          recoverInterruptedJobs: () => {
+        createDomainRuntime: () => fakeDomainRuntime({
+          onInitialize: () => {
             recoveries += 1;
-            return 4;
           },
+          interruptedJobsRecovered: 4,
         }),
         createHealthService: () => ({ getHealth: () => health }),
         closeDatabase: () => undefined,
@@ -313,9 +307,9 @@ describe('FoundationRuntime', () => {
           events.push('migrate');
           return migration.promise;
         },
-        createJobRepository: () => {
+        createDomainRuntime: () => {
           events.push('jobs');
-          return { listActive: () => [], recoverInterruptedJobs: () => 0 };
+          return fakeDomainRuntime();
         },
         createHealthService: () => {
           events.push('health');

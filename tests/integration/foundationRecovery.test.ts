@@ -1,5 +1,7 @@
 import { mkdirSync, rmSync, statSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { DomainRuntime } from '../../src/main/domain/domainRuntime';
 
 import {
   closeDatabase,
@@ -9,7 +11,6 @@ import { migrateToLatest } from '../../src/main/db/migrate';
 import { prepareEncryptedDatabase } from '../../src/main/db/plaintextDatabaseUpgrade';
 import { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
 import { HealthService } from '../../src/main/health/healthService';
-import { JobRepository } from '../../src/main/jobs/jobRepository';
 import {
   createTempDatabase,
   createTestWorkspaceKey,
@@ -41,7 +42,11 @@ describe('foundation initialization recovery', () => {
         prepareEncryptedDatabase,
         openDatabase,
         migrateToLatest,
-        createJobRepository: (database) => new JobRepository(database),
+        createDomainRuntime: (database) => new DomainRuntime({
+          database,
+          clock: { now: () => new Date().toISOString() },
+          ids: { next: () => randomUUID() },
+        }),
         createHealthService: (options) => new HealthService(options),
         closeDatabase,
       },
@@ -62,6 +67,13 @@ describe('foundation initialization recovery', () => {
       fts5Available: true,
       pendingJobs: 0,
       interruptedJobsRecovered: 0,
+      domainStatus: 'ready',
+      domainReady: true,
+      domainBlockingViolationCount: 0,
+      domainRepairableIssueCount: 0,
+      domainProjectionRefreshCandidateCount: 0,
+      pendingProjectionRebuilds: 0,
+      domainStartupEvaluatedAt: expect.stringMatching(/Z$/),
     });
     expect(statSync(tempDatabase.path).isFile()).toBe(true);
   });

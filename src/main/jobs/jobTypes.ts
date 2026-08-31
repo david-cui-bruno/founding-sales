@@ -21,4 +21,6 @@ export type EnqueueJobInput = {
   idempotencyKey?: string;
   payload: unknown;
   progressTotal?: number | null;
+  /** Explicit canonical timestamp; startup paths must supply it. */
+  at?: string;
 };

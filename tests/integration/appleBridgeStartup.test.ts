@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
+
 import type { AppDatabase } from '../../src/main/db/database';
 import type { AppleBridgeSupervisorApi } from '../../src/main/appleBridge/appleBridgeSupervisor';
 import {
@@ -54,12 +56,8 @@ function dependencies(
         appliedMigrationIds: ['0001Foundation', '0002DomainFoundation'],
       };
     },
-    createJobRepository: () => ({
-      listActive: () => [],
-      recoverInterruptedJobs: () => {
-        events.push('database:recover');
-        return 0;
-      },
+    createDomainRuntime: () => fakeDomainRuntime({
+      onInitialize: () => events.push('database:recover'),
     }),
     createHealthService: () => {
       events.push('database:health');

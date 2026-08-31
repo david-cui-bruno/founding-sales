@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AppDatabase } from '../../src/main/db/database';
+import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
 import type { AppleBridgeSupervisorApi } from '../../src/main/appleBridge/appleBridgeSupervisor';
 import type { HealthProvider } from '../../src/main/health/registerHealthIpc';
 import type { ApplicationStartupDependencies } from '../../src/main/startApplication';
@@ -251,12 +252,9 @@ describe('main process startup', () => {
             });
         });
       },
-      createJobRepository: () => {
+      createDomainRuntime: () => {
         events.push('jobs');
-        return {
-          listActive: () => [],
-          recoverInterruptedJobs: () => 0,
-        };
+        return fakeDomainRuntime();
       },
       createHealthService: () => {
         events.push('health');
@@ -328,12 +326,8 @@ describe('main process startup', () => {
           appliedMigrationIds: ['0001Foundation', '0002DomainFoundation'],
         };
       },
-      createJobRepository: () => ({
-        listActive: () => [],
-        recoverInterruptedJobs: () => {
-          events.push('recover');
-          return 0;
-        },
+      createDomainRuntime: () => fakeDomainRuntime({
+        onInitialize: () => events.push('recover'),
       }),
       createHealthService: () => {
         events.push('health');

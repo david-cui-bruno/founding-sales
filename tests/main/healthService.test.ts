@@ -4,6 +4,7 @@ import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { HealthService } from '../../src/main/health/healthService';
 import { JobRepository } from '../../src/main/jobs/jobRepository';
+import { fakeStartupReport } from '../fixtures/fakeDomainRuntime';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
 describe('HealthService', () => {
@@ -35,7 +36,7 @@ describe('HealthService', () => {
       database,
       databasePath: tempDatabase.path,
       jobs,
-      interruptedJobsRecovered: 3,
+      domainStartupReport: fakeStartupReport({ interruptedJobsRecovered: 3 }),
     });
 
     expect(service.getHealth()).toEqual({
@@ -47,6 +48,13 @@ describe('HealthService', () => {
       fts5Available: true,
       pendingJobs: 2,
       interruptedJobsRecovered: 3,
+      domainStatus: 'ready',
+      domainReady: true,
+      domainBlockingViolationCount: 0,
+      domainRepairableIssueCount: 0,
+      domainProjectionRefreshCandidateCount: 0,
+      pendingProjectionRebuilds: 0,
+      domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
     });
   });
 });

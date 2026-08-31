@@ -3,17 +3,17 @@ import type {
   DatabaseOpenOptions,
 } from '../db/database';
 import type { MigrationOptions, MigrationResult } from '../db/migrate';
+import type { DomainRuntime } from '../domain/domainRuntime';
 import type { HealthServiceOptions } from '../health/healthService';
 import type { HealthProvider } from '../health/registerHealthIpc';
-import type { JobRepository } from '../jobs/jobRepository';
 import type {
   WorkspaceKey,
   WorkspaceKeyStoreInput,
 } from '../security/workspaceKeyTypes';
 
-type FoundationJobRepository = Pick<
-  JobRepository,
-  'listActive' | 'recoverInterruptedJobs'
+type FoundationDomainRuntime = Pick<
+  DomainRuntime,
+  'initialize' | 'getDiagnostics' | 'getServices' | 'shutdown'
 >;
 
 export type FoundationRuntimeDependencies = {
@@ -24,7 +24,7 @@ export type FoundationRuntimeDependencies = {
     database: AppDatabase,
     options: MigrationOptions,
   ): Promise<MigrationResult>;
-  createJobRepository(database: AppDatabase): FoundationJobRepository;
+  createDomainRuntime(database: AppDatabase): FoundationDomainRuntime;
   createHealthService(options: HealthServiceOptions): HealthProvider;
   closeDatabase(database: AppDatabase): void;
 };
@@ -39,6 +39,7 @@ export type FoundationRuntimeOptions = {
 
 type ReadyFoundation = {
   database: AppDatabase;
+  domainRuntime: FoundationDomainRuntime;
   health: HealthProvider;
 };
 
@@ -144,21 +145,28 @@ export class FoundationRuntime {
       }
       this.throwIfAttemptIsStale(id);
 
-      const jobs = this.dependencies.createJobRepository(database);
-      const interruptedJobsRecovered = jobs.recoverInterruptedJobs();
-      const health = this.dependencies.createHealthService({
-        appVersion: this.options.appVersion,
-        databasePath: this.options.databasePath,
-        database,
-        jobs,
-        interruptedJobsRecovered,
-      });
-      this.throwIfAttemptIsStale(id);
+      let domainRuntime: FoundationDomainRuntime | undefined;
+      try {
+        domainRuntime = this.dependencies.createDomainRuntime(database);
+        const report = domainRuntime.initialize();
+        const services = report.status === 'ready' ? domainRuntime.getServices() : undefined;
+        const health = this.dependencies.createHealthService({
+          appVersion: this.options.appVersion,
+          databasePath: this.options.databasePath,
+          database,
+          jobs: services?.jobs ?? { listActive: () => [] },
+          domainStartupReport: report,
+        });
+        this.throwIfAttemptIsStale(id);
 
-      const ready = { database, health };
-      this.ready = ready;
-      databaseAdopted = true;
-      return ready;
+        const ready = { database, domainRuntime, health };
+        this.ready = ready;
+        databaseAdopted = true;
+        return ready;
+      } catch (domainError) {
+        domainRuntime?.shutdown();
+        throw domainError;
+      }
     } catch (initializationError) {
       if (database !== undefined && !databaseAdopted) {
         try {
@@ -181,6 +189,7 @@ export class FoundationRuntime {
       const ready = this.ready;
       this.ready = undefined;
       if (ready !== undefined) {
+        ready.domainRuntime.shutdown();
         this.dependencies.closeDatabase(ready.database);
       }
     } finally {

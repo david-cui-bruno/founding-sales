@@ -12,6 +12,9 @@ import {
 import { registerAppleSpikeIpc } from './appleBridge/registerAppleSpikeIpc';
 import { closeDatabase, openDatabase } from './db/database';
 import { migrateToLatest } from './db/migrate';
+import { DomainRuntime } from './domain/domainRuntime';
+import { SystemClock } from './domain/support/clock';
+import { UuidGenerator } from './domain/support/idGenerator';
 import {
   encryptedWorkspaceExists,
   prepareEncryptedDatabase,
@@ -25,7 +28,6 @@ import {
   registerHealthIpc,
   type HealthProvider,
 } from './health/registerHealthIpc';
-import { JobRepository } from './jobs/jobRepository';
 import { safeStorage } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
@@ -70,12 +72,21 @@ const workspaceKeyStore = new WorkspaceKeyStore({
   keyProtector: new SafeStorageKeyProtector(safeStorage),
 });
 
+// Exactly one Clock and one ID generator for the application; the production
+// factory closes over these same objects.
+const domainClock = new SystemClock();
+const domainIds = new UuidGenerator();
+
 const defaultDependencies: ApplicationStartupDependencies = {
   loadWorkspaceKey: (input) => workspaceKeyStore.loadOrCreate(input),
   prepareEncryptedDatabase,
   openDatabase,
   migrateToLatest,
-  createJobRepository: (database) => new JobRepository(database),
+  createDomainRuntime: (database) => new DomainRuntime({
+    database,
+    clock: domainClock,
+    ids: domainIds,
+  }),
   createHealthService: (options) => new HealthService(options),
   registerHealthIpc,
   createAppleBridgeSupervisor: (options) => new AppleBridgeSupervisor(options),

@@ -734,6 +734,13 @@ export class PrioritizationRepository {
     return { commandJson: row.command_json, resultJson: row.result_json };
   }
 
+  getEvaluationInputSnapshot(id: string): string | null {
+    const row = this.database.raw.prepare(`
+      SELECT input_snapshot_json FROM prioritization_evaluations WHERE id = ?
+    `).get(idSchema.parse(id)) as { input_snapshot_json: string } | undefined;
+    return row === undefined ? null : row.input_snapshot_json;
+  }
+
   appendEvaluation(input: {
     evaluation: PrioritizationEvaluation;
     commandJson: string;

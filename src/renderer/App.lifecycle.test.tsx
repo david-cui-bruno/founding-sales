@@ -23,6 +23,13 @@ const health: AppHealth = {
   fts5Available: true,
   pendingJobs: 0,
   interruptedJobsRecovered: 0,
+  domainStatus: 'ready',
+  domainReady: true,
+  domainBlockingViolationCount: 0,
+  domainRepairableIssueCount: 0,
+  domainProjectionRefreshCandidateCount: 0,
+  pendingProjectionRebuilds: 0,
+  domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
 };
 
 type Deferred<T> = {

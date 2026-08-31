@@ -1,6 +1,7 @@
 import { appHealthSchema, type AppHealth } from '../../shared/healthContract';
 import { checkFts5, type AppDatabase } from '../db/database';
 import { inspectDatabaseEncryption } from '../db/databaseEncryption';
+import type { DomainStartupReport } from '../domain/startup/domainStartupTypes';
 import type { JobRepository } from '../jobs/jobRepository';
 
 export type HealthServiceOptions = {
@@ -8,9 +9,13 @@ export type HealthServiceOptions = {
   databasePath: string;
   database: AppDatabase;
   jobs: Pick<JobRepository, 'listActive'>;
-  interruptedJobsRecovered: number;
+  domainStartupReport: DomainStartupReport;
 };
 
+/**
+ * Health retains the immutable startup report; it never re-runs an audit or
+ * scanner per request. Only safe status/count fields cross the boundary.
+ */
 export class HealthService {
   constructor(private readonly options: HealthServiceOptions) {}
 
@@ -25,6 +30,7 @@ export class HealthService {
       throw new Error('The app_meta singleton row is missing.');
     }
     const encryption = inspectDatabaseEncryption(this.options.database);
+    const report = this.options.domainStartupReport;
 
     return appHealthSchema.parse({
       appVersion: this.options.appVersion,
@@ -34,7 +40,14 @@ export class HealthService {
       cipherVersion: encryption.cipherVersion,
       fts5Available: checkFts5(this.options.database),
       pendingJobs: this.options.jobs.listActive().length,
-      interruptedJobsRecovered: this.options.interruptedJobsRecovered,
+      interruptedJobsRecovered: report.interruptedJobsRecovered,
+      domainStatus: report.status,
+      domainReady: report.status === 'ready',
+      domainBlockingViolationCount: report.blockingViolationCount,
+      domainRepairableIssueCount: report.repairableIssueCount,
+      domainProjectionRefreshCandidateCount: report.projectionRefreshCandidateCount,
+      pendingProjectionRebuilds: report.pendingProjectionRebuilds,
+      domainStartupEvaluatedAt: report.evaluatedAt,
     });
   }
 }

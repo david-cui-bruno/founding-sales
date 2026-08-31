@@ -20,6 +20,7 @@ const enqueueJobInputSchema = z.object({
   idempotencyKey: z.string().trim().min(1).optional(),
   payload: z.unknown(),
   progressTotal: nonnegativeIntegerSchema.nullable().optional(),
+  at: z.string().optional(),
 });
 const utcIsoTimestampSchema = z
   .string()
@@ -159,7 +160,7 @@ export class JobRepository {
     const parsedInput = enqueueJobInputSchema.parse(input);
     const id = jobIdSchema.parse(parsedInput.id ?? randomUUID());
     const progressTotal = parseProgressTotal(parsedInput.progressTotal ?? null);
-    const timestamp = new Date().toISOString();
+    const timestamp = parsedInput.at ?? new Date().toISOString();
     const payloadJson = serializeJson(parsedInput.payload, 'payload');
     const idempotencyKey = parsedInput.idempotencyKey ?? null;
 
@@ -317,8 +318,8 @@ export class JobRepository {
     return rows.map(parseStoredJobRow);
   }
 
-  recoverInterruptedJobs(): number {
-    const timestamp = new Date().toISOString();
+  recoverInterruptedJobs(at?: string): number {
+    const timestamp = at ?? new Date().toISOString();
     const result = this.database.raw
       .prepare(
         `UPDATE jobs
