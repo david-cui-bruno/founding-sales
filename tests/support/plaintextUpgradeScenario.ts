@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -111,11 +112,116 @@ async function runScenario(): Promise<void> {
       assertSidecarOnlyWorkspaceExists(workspace.path);
     } else if (scenario === 'writer-after-copy') {
       await assertWriterAfterCopyCannotBeLost(workspace.path);
+    } else if (scenario === 'pathname-replaced-after-copy') {
+      await assertPathnameReplacementCannotBeLost(workspace.path);
+    } else if (scenario === 'pathname-created-during-promotion') {
+      await assertPromotionPathOccupantCannotBeLost(workspace.path);
     } else {
       assert.fail(`Unknown conversion scenario: ${scenario}`);
     }
   } finally {
     workspace.cleanup();
+  }
+}
+
+async function assertPromotionPathOccupantCannotBeLost(
+  databasePath: string,
+): Promise<void> {
+  await createPlaintextSchemaOne(databasePath);
+  const replacementPath = `${databasePath}.replacement`;
+  await createPlaintextSchemaOne(replacementPath);
+  setRetainedPayload(replacementPath, '{"promotion":"new"}');
+
+  let hookRan = false;
+  await assert.rejects(prepareEncryptedDatabase(
+    databasePath,
+    createTestWorkspaceKey(),
+    {
+      afterPlaintextDisplaced: () => {
+        renameSync(replacementPath, databasePath);
+        hookRan = true;
+      },
+    },
+  ), /canonical path is occupied/);
+  assert.equal(hookRan, true);
+  assertPlaintextPayload(databasePath, '{"promotion":"new"}');
+
+  await prepareEncryptedDatabase(databasePath, createTestWorkspaceKey());
+  assertEncryptedPayload(databasePath, '{"promotion":"new"}');
+  assertArtifactsAbsent(databasePath);
+}
+
+async function assertPathnameReplacementCannotBeLost(
+  databasePath: string,
+): Promise<void> {
+  await createPlaintextSchemaOne(databasePath);
+  const replacementPath = `${databasePath}.replacement`;
+  await createPlaintextSchemaOne(replacementPath);
+  setRetainedPayload(replacementPath, '{"pathname":"new"}');
+
+  let hookRan = false;
+  await assert.rejects(prepareEncryptedDatabase(
+    databasePath,
+    createTestWorkspaceKey(),
+    {
+      afterPlaintextCopy: () => {
+        renameSync(replacementPath, databasePath);
+        hookRan = true;
+      },
+    },
+  ), /source identity changed/);
+  assert.equal(hookRan, true);
+  assertPlaintextPayload(databasePath, '{"pathname":"new"}');
+
+  await prepareEncryptedDatabase(databasePath, createTestWorkspaceKey());
+  assertEncryptedPayload(databasePath, '{"pathname":"new"}');
+  assertArtifactsAbsent(databasePath);
+}
+
+function setRetainedPayload(databasePath: string, payload: string): void {
+  const raw = createRawDatabase(databasePath, { fileMustExist: true });
+  try {
+    raw.prepare('UPDATE jobs SET payload_json = ? WHERE id = ?')
+      .run(payload, 'kept');
+    raw.pragma('wal_checkpoint(TRUNCATE)');
+    const journalMode = raw.pragma('journal_mode = DELETE', { simple: true });
+    assert.equal(journalMode, 'delete');
+  } finally {
+    raw.close();
+  }
+}
+
+function assertPlaintextPayload(databasePath: string, payload: string): void {
+  assert.equal(
+    readFileSync(databasePath).subarray(0, 16).toString('utf8'),
+    'SQLite format 3\u0000',
+  );
+  const raw = createRawDatabase(databasePath, {
+    readonly: true,
+    fileMustExist: true,
+  });
+  try {
+    assert.deepEqual(
+      raw.prepare('SELECT payload_json FROM jobs WHERE id = ?').get('kept'),
+      { payload_json: payload },
+    );
+  } finally {
+    raw.close();
+  }
+}
+
+function assertEncryptedPayload(databasePath: string, payload: string): void {
+  const encrypted = openDatabase({
+    path: databasePath,
+    key: createTestWorkspaceKey(),
+  });
+  try {
+    assert.deepEqual(
+      encrypted.raw.prepare('SELECT payload_json FROM jobs WHERE id = ?').get('kept'),
+      { payload_json: payload },
+    );
+  } finally {
+    closeDatabase(encrypted);
   }
 }
 

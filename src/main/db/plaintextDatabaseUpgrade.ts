@@ -2,6 +2,7 @@ import { createHash, randomUUID, type Hash } from 'node:crypto';
 import { lstatSync, type Stats } from 'node:fs';
 import {
   chmod,
+  link,
   lstat,
   mkdir,
   open,
@@ -28,7 +29,14 @@ export type PlaintextUpgradePaths = {
 
 export type PlaintextUpgradeHooks = {
   afterPlaintextCopy?(): Promise<void> | void;
+  afterPlaintextDisplaced?(): Promise<void> | void;
 };
+
+class SourcePathIdentityChangedError extends Error {
+  constructor() {
+    super('Plaintext database source identity changed.');
+  }
+}
 
 export type DatabaseFingerprint = {
   schemaVersion: 1;
@@ -95,6 +103,17 @@ export async function prepareEncryptedDatabase(
   const marker = await readMarker(paths.marker, databasePath);
   const candidates = await inspectCandidates(databasePath, paths, key.bytes);
 
+  if (
+    marker !== undefined
+    && candidates.canonical.kind === 'plaintext'
+    && !fingerprintsEqual(candidates.canonical, marker)
+  ) {
+    await removeDatabaseArtifacts(paths.encrypting);
+    await removeDatabaseArtifacts(paths.recovery);
+    await removeIfPresent(paths.marker);
+    return prepareEncryptedDatabase(databasePath, key, hooks);
+  }
+
   if (candidates.canonical.kind === 'encrypted') {
     const stabilized = await stabilizeEncryptedCandidate(
       databasePath,
@@ -148,6 +167,13 @@ export async function prepareEncryptedDatabase(
     throw new Error('No valid database copy is available for encryption upgrade.');
   }
 
+  if (
+    validPlaintext.path === databasePath
+    && candidates.recovery.kind !== 'absent'
+  ) {
+    throw new Error('Plaintext recovery candidates are ambiguous.');
+  }
+
   if (validPlaintext.path !== databasePath) {
     if (candidates.canonical.kind !== 'absent') {
       throw new Error('The canonical database cannot be restored safely.');
@@ -177,6 +203,8 @@ async function convertCanonicalPlaintext(
   let copySource: FileHandle | undefined;
   try {
     const plaintext = lockAndFingerprintPlaintext(source);
+    // POSIX closes release process-wide fcntl locks, so this source fd must
+    // remain open until the locked SQLite connection has finished cleanup.
     copySource = await openRetainedSourceHandle(databasePath);
     await removeDatabaseSidecars(databasePath);
     assertNoDatabaseSidecars(databasePath);
@@ -185,6 +213,7 @@ async function convertCanonicalPlaintext(
     await fsyncFile(paths.encrypting);
     await fsyncDirectory(dirname(databasePath));
     await hooks.afterPlaintextCopy?.();
+    await assertRetainedSourcePath(copySource, databasePath);
 
     rekeyPlaintextCopy(paths.encrypting, key);
     await fsyncFile(paths.encrypting);
@@ -197,11 +226,11 @@ async function convertCanonicalPlaintext(
     if (!fingerprintsEqual(plaintext, finalPlaintext)) {
       throw new Error('Plaintext database changed during encryption conversion.');
     }
+    await assertRetainedSourcePath(copySource, databasePath);
     await writeMarker(paths.marker, databasePath, encrypted);
-    await rename(databasePath, paths.recovery);
-    await fsyncDirectory(dirname(databasePath));
-    await rename(paths.encrypting, databasePath);
-    await fsyncDirectory(dirname(databasePath));
+    await displaceRetainedSource(copySource, databasePath, paths.recovery);
+    await hooks.afterPlaintextDisplaced?.();
+    await linkEncryptedCandidate(paths.encrypting, databasePath);
 
     const promoted = inspectEncryptedCandidate(databasePath, key);
     if (
@@ -211,7 +240,7 @@ async function convertCanonicalPlaintext(
       throw new Error('Promoted encrypted database verification failed.');
     }
 
-    await cleanAfterVerifiedPromotion(paths);
+    await cleanAfterLinkedPromotion(databasePath, paths);
   } finally {
     try {
       await copySource?.close();
@@ -233,8 +262,10 @@ async function promoteValidatedEncrypting(
       throw new Error('Plaintext recovery candidates are ambiguous.');
     }
     const source = createRawDatabase(databasePath, { fileMustExist: true });
+    let retainedSource: FileHandle | undefined;
     try {
       const stabilizedPlaintext = lockAndFingerprintPlaintext(source);
+      retainedSource = await openRetainedSourceHandle(databasePath);
       await removeDatabaseSidecars(databasePath);
       assertNoDatabaseSidecars(databasePath);
       if (!fingerprintsEqual(stabilizedPlaintext, expected)) {
@@ -244,10 +275,13 @@ async function promoteValidatedEncrypting(
       if (!fingerprintsEqual(finalPlaintext, expected)) {
         throw new Error('Plaintext database changed before encryption promotion.');
       }
-      await rename(databasePath, paths.recovery);
-      await fsyncDirectory(dirname(databasePath));
-      await rename(paths.encrypting, databasePath);
-      await fsyncDirectory(dirname(databasePath));
+      await assertRetainedSourcePath(retainedSource, databasePath);
+      await displaceRetainedSource(
+        retainedSource,
+        databasePath,
+        paths.recovery,
+      );
+      await linkEncryptedCandidate(paths.encrypting, databasePath);
       const promoted = inspectEncryptedCandidate(databasePath, key);
       if (
         promoted.kind !== 'encrypted'
@@ -255,17 +289,20 @@ async function promoteValidatedEncrypting(
       ) {
         throw new Error('Promoted encrypted database verification failed.');
       }
-      await cleanAfterVerifiedPromotion(paths);
+      await cleanAfterLinkedPromotion(databasePath, paths);
     } finally {
-      source.close();
+      try {
+        await retainedSource?.close();
+      } finally {
+        source.close();
+      }
     }
     return;
   } else if (candidates.canonical.kind !== 'absent') {
     throw new Error('The canonical database cannot be replaced safely.');
   }
 
-  await rename(paths.encrypting, databasePath);
-  await fsyncDirectory(dirname(databasePath));
+  await linkEncryptedCandidate(paths.encrypting, databasePath);
   const promoted = inspectEncryptedCandidate(databasePath, key);
   if (
     promoted.kind !== 'encrypted'
@@ -274,7 +311,7 @@ async function promoteValidatedEncrypting(
     throw new Error('Promoted encrypted database verification failed.');
   }
 
-  await cleanAfterVerifiedPromotion(paths);
+  await cleanAfterLinkedPromotion(databasePath, paths);
 }
 
 async function checkpointAndInspectPlaintext(
@@ -322,23 +359,99 @@ function lockAndFingerprintPlaintext(
 async function openRetainedSourceHandle(path: string): Promise<FileHandle> {
   const source = await open(path, 'r');
   try {
-    const [handleMetadata, pathMetadata] = await Promise.all([
-      source.stat(),
-      lstat(path),
-    ]);
-    if (
-      !handleMetadata.isFile()
-      || !pathMetadata.isFile()
-      || pathMetadata.isSymbolicLink()
-      || handleMetadata.dev !== pathMetadata.dev
-      || handleMetadata.ino !== pathMetadata.ino
-    ) {
-      throw new Error('Plaintext database source identity changed.');
-    }
+    await assertRetainedSourcePath(source, path);
     return source;
   } catch (error) {
     await source.close().catch((): undefined => undefined);
     throw error;
+  }
+}
+
+async function assertRetainedSourcePath(
+  source: FileHandle,
+  path: string,
+): Promise<void> {
+  let pathMetadata: Stats;
+  try {
+    pathMetadata = await lstat(path);
+  } catch (error) {
+    if (isNodeError(error, 'ENOENT')) {
+      throw new SourcePathIdentityChangedError();
+    }
+    throw error;
+  }
+  const handleMetadata = await source.stat();
+  if (
+    !handleMetadata.isFile()
+    || !pathMetadata.isFile()
+    || pathMetadata.isSymbolicLink()
+    || handleMetadata.dev !== pathMetadata.dev
+    || handleMetadata.ino !== pathMetadata.ino
+  ) {
+    throw new SourcePathIdentityChangedError();
+  }
+}
+
+async function displaceRetainedSource(
+  source: FileHandle,
+  canonicalPath: string,
+  recoveryPath: string,
+): Promise<void> {
+  if (pathExistsWithoutFollowingLinks(recoveryPath)) {
+    throw new Error('Plaintext recovery path is already occupied.');
+  }
+  await rename(canonicalPath, recoveryPath);
+  await fsyncDirectory(dirname(canonicalPath));
+  try {
+    await assertRetainedSourcePath(source, recoveryPath);
+  } catch (error) {
+    try {
+      await link(recoveryPath, canonicalPath);
+      await fsyncDirectory(dirname(canonicalPath));
+    } catch (restoreError) {
+      if (!isNodeError(restoreError, 'EEXIST')) {
+        throw restoreError;
+      }
+    }
+    throw error;
+  }
+}
+
+async function linkEncryptedCandidate(
+  encryptingPath: string,
+  canonicalPath: string,
+): Promise<void> {
+  try {
+    // A hard link is an atomic no-clobber promotion. rename() would silently
+    // replace a canonical path created while the source was being displaced.
+    await link(encryptingPath, canonicalPath);
+  } catch (error) {
+    if (isNodeError(error, 'EEXIST')) {
+      throw new Error('The canonical path is occupied during encryption promotion.');
+    }
+    throw error;
+  }
+  await fsyncDirectory(dirname(canonicalPath));
+  await assertPathsShareIdentity(encryptingPath, canonicalPath);
+}
+
+async function assertPathsShareIdentity(
+  expectedPath: string,
+  actualPath: string,
+): Promise<void> {
+  const [expected, actual] = await Promise.all([
+    lstat(expectedPath),
+    lstat(actualPath),
+  ]);
+  if (
+    !expected.isFile()
+    || !actual.isFile()
+    || expected.isSymbolicLink()
+    || actual.isSymbolicLink()
+    || expected.dev !== actual.dev
+    || expected.ino !== actual.ino
+  ) {
+    throw new Error('Promoted encrypted database identity verification failed.');
   }
 }
 
@@ -832,6 +945,18 @@ async function cleanAfterVerifiedPromotion(
 ): Promise<void> {
   await removeIfPresent(paths.marker);
   await removeDatabaseArtifacts(paths.recovery);
+  await removeDatabaseArtifacts(paths.encrypting);
+}
+
+async function cleanAfterLinkedPromotion(
+  databasePath: string,
+  paths: PlaintextUpgradePaths,
+): Promise<void> {
+  await assertPathsShareIdentity(paths.encrypting, databasePath);
+  await removeIfPresent(paths.marker);
+  await assertPathsShareIdentity(paths.encrypting, databasePath);
+  await removeDatabaseArtifacts(paths.recovery);
+  await assertPathsShareIdentity(paths.encrypting, databasePath);
   await removeDatabaseArtifacts(paths.encrypting);
 }
 

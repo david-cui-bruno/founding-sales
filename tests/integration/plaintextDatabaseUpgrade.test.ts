@@ -24,6 +24,8 @@ const scenarios = [
   'kill-after-rekey',
   'sidecar-only-exists',
   'writer-after-copy',
+  'pathname-replaced-after-copy',
+  'pathname-created-during-promotion',
 ] as const;
 
 let bundleDirectory: string;
@@ -80,14 +82,18 @@ describe('plaintext schema-1 encryption upgrade', () => {
     });
   }, 35_000);
 
-  it('blocks the exact post-copy writer under Electron ABI 149', () => {
+  it.each([
+    'writer-after-copy',
+    'pathname-replaced-after-copy',
+    'pathname-created-during-promotion',
+  ])('protects %s under Electron ABI 149', (scenario) => {
     const electron = join(
       process.cwd(),
       'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron',
     );
     const result = spawnSync(electron, [
       scenarioBundle,
-      'writer-after-copy',
+      scenario,
     ], {
       cwd: process.cwd(),
       encoding: 'utf8',
