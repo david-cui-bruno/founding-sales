@@ -30,6 +30,10 @@ export type PlaintextUpgradePaths = {
   marker: string;
 };
 
+export type PlaintextUpgradeHooks = {
+  afterPlaintextCopy?(): Promise<void> | void;
+};
+
 export type DatabaseFingerprint = {
   schemaVersion: 1;
   rowCounts: Record<string, number>;
@@ -85,6 +89,7 @@ function pathExistsWithoutFollowingLinks(path: string): boolean {
 export async function prepareEncryptedDatabase(
   databasePath: string,
   key: WorkspaceKey,
+  hooks: PlaintextUpgradeHooks = {},
 ): Promise<void> {
   assertUpgradeInput(databasePath, key);
   await mkdir(dirname(databasePath), { recursive: true, mode: 0o700 });
@@ -163,42 +168,55 @@ export async function prepareEncryptedDatabase(
 
   await removeDatabaseArtifacts(paths.encrypting);
   await removeIfPresent(paths.marker);
-  await convertCanonicalPlaintext(databasePath, paths, key.bytes);
+  await convertCanonicalPlaintext(databasePath, paths, key.bytes, hooks);
 }
 
 async function convertCanonicalPlaintext(
   databasePath: string,
   paths: PlaintextUpgradePaths,
   key: Buffer,
+  hooks: PlaintextUpgradeHooks,
 ): Promise<void> {
-  const plaintext = await checkpointAndInspectPlaintext(databasePath);
+  const source = createRawDatabase(databasePath, { fileMustExist: true });
+  try {
+    const plaintext = lockAndFingerprintPlaintext(source);
+    await removeDatabaseSidecars(databasePath);
+    assertNoDatabaseSidecars(databasePath);
 
-  await copyFile(databasePath, paths.encrypting, constants.COPYFILE_EXCL);
-  await fsyncFile(paths.encrypting);
-  await fsyncDirectory(dirname(databasePath));
+    await copyFile(databasePath, paths.encrypting, constants.COPYFILE_EXCL);
+    await fsyncFile(paths.encrypting);
+    await fsyncDirectory(dirname(databasePath));
+    await hooks.afterPlaintextCopy?.();
 
-  rekeyPlaintextCopy(paths.encrypting, key);
-  await fsyncFile(paths.encrypting);
-  const encrypted = await stabilizeEncryptedCandidate(paths.encrypting, key);
-  if (!fingerprintsEqual(plaintext, encrypted)) {
-    throw new Error('Encrypted database copy verification failed.');
+    rekeyPlaintextCopy(paths.encrypting, key);
+    await fsyncFile(paths.encrypting);
+    const encrypted = await stabilizeEncryptedCandidate(paths.encrypting, key);
+    if (!fingerprintsEqual(plaintext, encrypted)) {
+      throw new Error('Encrypted database copy verification failed.');
+    }
+
+    const finalPlaintext = readAndVerifyDatabaseFingerprint(source);
+    if (!fingerprintsEqual(plaintext, finalPlaintext)) {
+      throw new Error('Plaintext database changed during encryption conversion.');
+    }
+    await writeMarker(paths.marker, databasePath, encrypted);
+    await rename(databasePath, paths.recovery);
+    await fsyncDirectory(dirname(databasePath));
+    await rename(paths.encrypting, databasePath);
+    await fsyncDirectory(dirname(databasePath));
+
+    const promoted = inspectEncryptedCandidate(databasePath, key);
+    if (
+      promoted.kind !== 'encrypted'
+      || !fingerprintsEqual(encrypted, promoted)
+    ) {
+      throw new Error('Promoted encrypted database verification failed.');
+    }
+
+    await cleanAfterVerifiedPromotion(paths);
+  } finally {
+    source.close();
   }
-
-  await writeMarker(paths.marker, databasePath, encrypted);
-  await rename(databasePath, paths.recovery);
-  await fsyncDirectory(dirname(databasePath));
-  await rename(paths.encrypting, databasePath);
-  await fsyncDirectory(dirname(databasePath));
-
-  const promoted = inspectEncryptedCandidate(databasePath, key);
-  if (
-    promoted.kind !== 'encrypted'
-    || !fingerprintsEqual(encrypted, promoted)
-  ) {
-    throw new Error('Promoted encrypted database verification failed.');
-  }
-
-  await cleanAfterVerifiedPromotion(paths);
 }
 
 async function promoteValidatedEncrypting(
@@ -212,12 +230,34 @@ async function promoteValidatedEncrypting(
     if (candidates.recovery.kind !== 'absent') {
       throw new Error('Plaintext recovery candidates are ambiguous.');
     }
-    const stabilizedPlaintext = await checkpointAndInspectPlaintext(databasePath);
-    if (!fingerprintsEqual(stabilizedPlaintext, expected)) {
-      throw new Error('Plaintext database changed before encryption promotion.');
+    const source = createRawDatabase(databasePath, { fileMustExist: true });
+    try {
+      const stabilizedPlaintext = lockAndFingerprintPlaintext(source);
+      await removeDatabaseSidecars(databasePath);
+      assertNoDatabaseSidecars(databasePath);
+      if (!fingerprintsEqual(stabilizedPlaintext, expected)) {
+        throw new Error('Plaintext database changed before encryption promotion.');
+      }
+      const finalPlaintext = readAndVerifyDatabaseFingerprint(source);
+      if (!fingerprintsEqual(finalPlaintext, expected)) {
+        throw new Error('Plaintext database changed before encryption promotion.');
+      }
+      await rename(databasePath, paths.recovery);
+      await fsyncDirectory(dirname(databasePath));
+      await rename(paths.encrypting, databasePath);
+      await fsyncDirectory(dirname(databasePath));
+      const promoted = inspectEncryptedCandidate(databasePath, key);
+      if (
+        promoted.kind !== 'encrypted'
+        || !fingerprintsEqual(promoted, expected)
+      ) {
+        throw new Error('Promoted encrypted database verification failed.');
+      }
+      await cleanAfterVerifiedPromotion(paths);
+    } finally {
+      source.close();
     }
-    await rename(databasePath, paths.recovery);
-    await fsyncDirectory(dirname(databasePath));
+    return;
   } else if (candidates.canonical.kind !== 'absent') {
     throw new Error('The canonical database cannot be replaced safely.');
   }
@@ -241,25 +281,40 @@ async function checkpointAndInspectPlaintext(
   const raw = createRawDatabase(databasePath, { fileMustExist: true });
   let fingerprint: DatabaseFingerprint;
   try {
-    raw.pragma('busy_timeout = 0');
-    const lockingMode = raw.pragma('locking_mode = EXCLUSIVE', { simple: true });
-    if (lockingMode !== 'exclusive') {
-      throw new Error('Plaintext database exclusive locking failed.');
-    }
-    try {
-      raw.exec('BEGIN EXCLUSIVE');
-      raw.exec('ROLLBACK');
-    } catch {
-      throw new Error('Plaintext database checkpoint is busy.');
-    }
-    assertTruncatedCheckpoint(raw.pragma('wal_checkpoint(TRUNCATE)'));
-    fingerprint = readAndVerifyDatabaseFingerprint(raw);
+    fingerprint = lockAndFingerprintPlaintext(raw);
   } finally {
     raw.close();
   }
   await removeDatabaseSidecars(databasePath);
   assertNoDatabaseSidecars(databasePath);
   return fingerprint;
+}
+
+function lockAndFingerprintPlaintext(
+  raw: ReturnType<typeof createRawDatabase>,
+): DatabaseFingerprint {
+  raw.pragma('busy_timeout = 0');
+  const lockingMode = raw.pragma('locking_mode = EXCLUSIVE', { simple: true });
+  if (lockingMode !== 'exclusive') {
+    throw new Error('Plaintext database exclusive locking failed.');
+  }
+  try {
+    raw.exec('BEGIN EXCLUSIVE');
+    raw.exec('ROLLBACK');
+  } catch {
+    throw new Error('Plaintext database checkpoint is busy.');
+  }
+  const currentJournalMode = raw.pragma('journal_mode', { simple: true });
+  if (currentJournalMode === 'wal') {
+    assertTruncatedCheckpoint(raw.pragma('wal_checkpoint(TRUNCATE)'));
+  } else if (currentJournalMode !== 'delete') {
+    throw new Error('Plaintext database journal mode is unsupported.');
+  }
+  const journalMode = raw.pragma('journal_mode = DELETE', { simple: true });
+  if (journalMode !== 'delete') {
+    throw new Error('Plaintext database journal stabilization failed.');
+  }
+  return readAndVerifyDatabaseFingerprint(raw);
 }
 
 function rekeyPlaintextCopy(path: string, key: Buffer): void {

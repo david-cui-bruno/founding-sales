@@ -23,6 +23,7 @@ const scenarios = [
   'semantic-schema-mismatch',
   'kill-after-rekey',
   'sidecar-only-exists',
+  'writer-after-copy',
 ] as const;
 
 let bundleDirectory: string;
