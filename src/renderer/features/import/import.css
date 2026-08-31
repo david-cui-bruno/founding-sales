@@ -1,0 +1,118 @@
+/* Lead import workflow surfaces. */
+
+.import-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 44rem;
+  padding: var(--space-6);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  color: var(--text);
+}
+
+.import-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.import-dialog__header h2 {
+  margin: 0;
+}
+
+.import-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.import-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.import-field label {
+  font-weight: 600;
+}
+
+.import-field input,
+.import-field select,
+.import-field textarea {
+  padding: var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.import-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+.import-note {
+  margin: 0;
+  color: var(--muted);
+}
+
+.import-summary {
+  margin: 0;
+  font-weight: 600;
+}
+
+.import-mapping,
+.import-duplicates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.import-duplicate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.import-duplicate__reason {
+  margin: 0;
+}
+
+.import-blocking-message {
+  margin: 0;
+  color: var(--danger);
+}
+
+.import-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.import-table caption {
+  margin-bottom: var(--space-2);
+  text-align: left;
+  color: var(--muted);
+}
+
+.import-table th,
+.import-table td {
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.manual-quick-add {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
