@@ -18,6 +18,11 @@ const scenarios = [
   'all-invalid',
   'wrong-key',
   'path-mismatched-marker',
+  'busy-wal',
+  'semantic-content-mismatch',
+  'semantic-schema-mismatch',
+  'kill-after-rekey',
+  'sidecar-only-exists',
 ] as const;
 
 let bundleDirectory: string;

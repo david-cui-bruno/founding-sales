@@ -24,6 +24,10 @@ try {
   if (typeof version?.version !== 'string' || version.version.length === 0) {
     throw new Error('Encrypted SQLite native probe returned no cipher version.');
   }
+  process.stdout.write(JSON.stringify({
+    modules: process.versions.modules,
+    cipherVersion: version.version,
+  }));
 } finally {
   database?.close();
   rmSync(directory, { recursive: true, force: true });

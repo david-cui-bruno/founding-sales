@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID, type Hash } from 'node:crypto';
 import {
   constants,
   lstatSync,
@@ -22,6 +22,7 @@ import { applyWorkspaceKey, createRawDatabase } from './sqliteDriver';
 const PLAINTEXT_HEADER = Buffer.from('SQLite format 3\u0000', 'utf8');
 const STATE_MARKER_FORMAT = 'callie-plaintext-encryption-upgrade';
 const MAX_MARKER_BYTES = 64 * 1024;
+const DATABASE_SIDECAR_SUFFIXES = ['-wal', '-shm', '-journal'] as const;
 
 export type PlaintextUpgradePaths = {
   encrypting: string;
@@ -29,9 +30,10 @@ export type PlaintextUpgradePaths = {
   marker: string;
 };
 
-type DatabaseFingerprint = {
+export type DatabaseFingerprint = {
   schemaVersion: 1;
   rowCounts: Record<string, number>;
+  contentDigest: string;
 };
 
 type UpgradeMarker = DatabaseFingerprint & {
@@ -56,9 +58,19 @@ export const plaintextUpgradePaths = (
 
 export const encryptedWorkspaceExists = (databasePath: string): boolean => {
   const paths = plaintextUpgradePaths(databasePath);
-  return [databasePath, paths.encrypting, paths.recovery, paths.marker]
+  return [
+    ...databaseArtifactPaths(databasePath),
+    ...databaseArtifactPaths(paths.encrypting),
+    ...databaseArtifactPaths(paths.recovery),
+    paths.marker,
+  ]
     .some(pathExistsWithoutFollowingLinks);
 };
+
+const databaseArtifactPaths = (databasePath: string): string[] => [
+  databasePath,
+  ...DATABASE_SIDECAR_SUFFIXES.map((suffix) => `${databasePath}${suffix}`),
+];
 
 function pathExistsWithoutFollowingLinks(path: string): boolean {
   try {
@@ -83,16 +95,30 @@ export async function prepareEncryptedDatabase(
   const candidates = await inspectCandidates(databasePath, paths, key.bytes);
 
   if (candidates.canonical.kind === 'encrypted') {
+    const stabilized = await stabilizeEncryptedCandidate(
+      databasePath,
+      key.bytes,
+    );
+    if (!fingerprintsEqual(candidates.canonical, stabilized)) {
+      throw new Error('Encrypted canonical stabilization failed.');
+    }
     await cleanAfterVerifiedPromotion(paths);
     return;
   }
 
-  const validEncrypting = candidates.encrypting.kind === 'encrypted'
+  const inspectedEncrypting = candidates.encrypting.kind === 'encrypted'
     ? candidates.encrypting
     : undefined;
   const validPlaintext = selectPlaintextCandidate(candidates);
 
-  if (validEncrypting !== undefined) {
+  if (inspectedEncrypting !== undefined) {
+    const validEncrypting = await stabilizeEncryptedCandidate(
+      paths.encrypting,
+      key.bytes,
+    );
+    if (!fingerprintsEqual(inspectedEncrypting, validEncrypting)) {
+      throw new Error('Encrypted database temp stabilization failed.');
+    }
     const expected = marker ?? validPlaintext;
     if (
       expected === undefined
@@ -125,11 +151,17 @@ export async function prepareEncryptedDatabase(
     if (candidates.canonical.kind !== 'absent') {
       throw new Error('The canonical database cannot be restored safely.');
     }
+    const stabilizedPlaintext = await checkpointAndInspectPlaintext(
+      validPlaintext.path,
+    );
+    if (!fingerprintsEqual(validPlaintext, stabilizedPlaintext)) {
+      throw new Error('Plaintext recovery stabilization failed.');
+    }
     await rename(validPlaintext.path, databasePath);
     await fsyncDirectory(dirname(databasePath));
   }
 
-  await removeIfPresent(paths.encrypting);
+  await removeDatabaseArtifacts(paths.encrypting);
   await removeIfPresent(paths.marker);
   await convertCanonicalPlaintext(databasePath, paths, key.bytes);
 }
@@ -139,7 +171,7 @@ async function convertCanonicalPlaintext(
   paths: PlaintextUpgradePaths,
   key: Buffer,
 ): Promise<void> {
-  const plaintext = checkpointAndInspectPlaintext(databasePath);
+  const plaintext = await checkpointAndInspectPlaintext(databasePath);
 
   await copyFile(databasePath, paths.encrypting, constants.COPYFILE_EXCL);
   await fsyncFile(paths.encrypting);
@@ -147,11 +179,8 @@ async function convertCanonicalPlaintext(
 
   rekeyPlaintextCopy(paths.encrypting, key);
   await fsyncFile(paths.encrypting);
-  const encrypted = inspectEncryptedCandidate(paths.encrypting, key);
-  if (
-    encrypted.kind !== 'encrypted'
-    || !fingerprintsEqual(plaintext, encrypted)
-  ) {
+  const encrypted = await stabilizeEncryptedCandidate(paths.encrypting, key);
+  if (!fingerprintsEqual(plaintext, encrypted)) {
     throw new Error('Encrypted database copy verification failed.');
   }
 
@@ -183,6 +212,10 @@ async function promoteValidatedEncrypting(
     if (candidates.recovery.kind !== 'absent') {
       throw new Error('Plaintext recovery candidates are ambiguous.');
     }
+    const stabilizedPlaintext = await checkpointAndInspectPlaintext(databasePath);
+    if (!fingerprintsEqual(stabilizedPlaintext, expected)) {
+      throw new Error('Plaintext database changed before encryption promotion.');
+    }
     await rename(databasePath, paths.recovery);
     await fsyncDirectory(dirname(databasePath));
   } else if (candidates.canonical.kind !== 'absent') {
@@ -202,26 +235,114 @@ async function promoteValidatedEncrypting(
   await cleanAfterVerifiedPromotion(paths);
 }
 
-function checkpointAndInspectPlaintext(
+async function checkpointAndInspectPlaintext(
   databasePath: string,
-): DatabaseFingerprint {
+): Promise<DatabaseFingerprint> {
   const raw = createRawDatabase(databasePath, { fileMustExist: true });
+  let fingerprint: DatabaseFingerprint;
   try {
-    raw.pragma('wal_checkpoint(TRUNCATE)');
-    return readAndVerifyFingerprint(raw);
+    raw.pragma('busy_timeout = 0');
+    const lockingMode = raw.pragma('locking_mode = EXCLUSIVE', { simple: true });
+    if (lockingMode !== 'exclusive') {
+      throw new Error('Plaintext database exclusive locking failed.');
+    }
+    try {
+      raw.exec('BEGIN EXCLUSIVE');
+      raw.exec('ROLLBACK');
+    } catch {
+      throw new Error('Plaintext database checkpoint is busy.');
+    }
+    assertTruncatedCheckpoint(raw.pragma('wal_checkpoint(TRUNCATE)'));
+    fingerprint = readAndVerifyDatabaseFingerprint(raw);
   } finally {
     raw.close();
   }
+  await removeDatabaseSidecars(databasePath);
+  assertNoDatabaseSidecars(databasePath);
+  return fingerprint;
 }
 
 function rekeyPlaintextCopy(path: string, key: Buffer): void {
   const raw = createRawDatabase(path, { fileMustExist: true });
   try {
+    const journalMode = raw.pragma('journal_mode = DELETE', { simple: true });
+    if (journalMode !== 'delete') {
+      throw new Error('Encrypted database temp journal stabilization failed.');
+    }
     raw.pragma("cipher='sqlcipher'");
     raw.pragma('legacy=4');
     raw.pragma(`rekey="x'${key.toString('hex')}'"`);
   } finally {
     raw.close();
+  }
+}
+
+async function stabilizeEncryptedCandidate(
+  path: string,
+  key: Buffer,
+): Promise<DatabaseFingerprint> {
+  const raw = createRawDatabase(path, { fileMustExist: true });
+  let fingerprint: DatabaseFingerprint;
+  try {
+    applyWorkspaceKey(raw, key);
+    raw.pragma('busy_timeout = 0');
+    const currentJournalMode = raw.pragma('journal_mode', { simple: true });
+    if (currentJournalMode === 'wal') {
+      assertTruncatedCheckpoint(raw.pragma('wal_checkpoint(TRUNCATE)'));
+    }
+    const journalMode = raw.pragma('journal_mode = DELETE', { simple: true });
+    if (journalMode !== 'delete') {
+      throw new Error('Encrypted database journal stabilization failed.');
+    }
+    fingerprint = readAndVerifyDatabaseFingerprint(raw);
+  } finally {
+    raw.close();
+  }
+
+  await removeDatabaseSidecars(path);
+  await fsyncFile(path);
+  await fsyncDirectory(dirname(path));
+  const reopened = inspectEncryptedCandidate(path, key);
+  if (
+    reopened.kind !== 'encrypted'
+    || !fingerprintsEqual(fingerprint, reopened)
+  ) {
+    throw new Error('Encrypted database sidecar stabilization failed.');
+  }
+  return fingerprint;
+}
+
+function assertTruncatedCheckpoint(value: unknown): void {
+  if (!Array.isArray(value) || value.length !== 1) {
+    throw new Error('Database checkpoint result is invalid.');
+  }
+  const result = value[0] as unknown;
+  if (
+    result === null
+    || typeof result !== 'object'
+    || Array.isArray(result)
+    || JSON.stringify(Object.keys(result).sort())
+      !== JSON.stringify(['busy', 'checkpointed', 'log'])
+  ) {
+    throw new Error('Database checkpoint result is invalid.');
+  }
+  const checkpoint = result as Record<string, unknown>;
+  if (
+    checkpoint.busy !== 0
+    || checkpoint.log !== 0
+    || checkpoint.checkpointed !== 0
+  ) {
+    throw new Error('Database checkpoint did not reach a non-busy truncated state.');
+  }
+}
+
+function assertNoDatabaseSidecars(path: string): void {
+  const persistentSuffixes = DATABASE_SIDECAR_SUFFIXES.filter((suffix) =>
+    pathExistsWithoutFollowingLinks(`${path}${suffix}`));
+  if (persistentSuffixes.length > 0) {
+    throw new Error(
+      `Database checkpoint left persistent sidecars: ${persistentSuffixes.join(', ')}.`,
+    );
   }
 }
 
@@ -239,11 +360,21 @@ async function inspectCandidates(
 }
 
 async function inspectCandidate(path: string, key: Buffer): Promise<Candidate> {
-  const metadata = await lstatIfPresent(path);
+  const [metadata, ...sidecars] = await Promise.all(
+    databaseArtifactPaths(path).map(lstatIfPresent),
+  );
   if (metadata === undefined) {
-    return { kind: 'absent', path };
+    return sidecars.every((sidecar) => sidecar === undefined)
+      ? { kind: 'absent', path }
+      : { kind: 'invalid', path };
   }
-  if (!metadata.isFile() || metadata.isSymbolicLink()) {
+  if (
+    !metadata.isFile()
+    || metadata.isSymbolicLink()
+    || sidecars.some((sidecar) =>
+      sidecar !== undefined
+      && (!sidecar.isFile() || sidecar.isSymbolicLink()))
+  ) {
     return { kind: 'invalid', path };
   }
 
@@ -274,7 +405,11 @@ function inspectPlaintextCandidate(path: string): Candidate {
   let raw;
   try {
     raw = createRawDatabase(path, { readonly: true, fileMustExist: true });
-    return { kind: 'plaintext', path, ...readAndVerifyFingerprint(raw) };
+    return {
+      kind: 'plaintext',
+      path,
+      ...readAndVerifyDatabaseFingerprint(raw),
+    };
   } catch {
     return { kind: 'invalid', path };
   } finally {
@@ -287,7 +422,11 @@ function inspectEncryptedCandidate(path: string, key: Buffer): Candidate {
   try {
     raw = createRawDatabase(path, { readonly: true, fileMustExist: true });
     applyWorkspaceKey(raw, key);
-    return { kind: 'encrypted', path, ...readAndVerifyFingerprint(raw) };
+    return {
+      kind: 'encrypted',
+      path,
+      ...readAndVerifyDatabaseFingerprint(raw),
+    };
   } catch {
     return { kind: 'invalid', path };
   } finally {
@@ -295,7 +434,7 @@ function inspectEncryptedCandidate(path: string, key: Buffer): Candidate {
   }
 }
 
-function readAndVerifyFingerprint(
+export function readAndVerifyDatabaseFingerprint(
   raw: ReturnType<typeof createRawDatabase>,
 ): DatabaseFingerprint {
   const integrity = raw.pragma('integrity_check', { simple: true });
@@ -306,40 +445,111 @@ function readAndVerifyFingerprint(
   const metadata = raw.prepare<[], { schema_version: unknown }>(
     'SELECT schema_version FROM app_meta WHERE singleton = 1',
   ).get();
-  if (metadata?.schema_version !== 1) {
+  if (metadata?.schema_version !== 1 && metadata?.schema_version !== 1n) {
     throw new Error('Only plaintext schema 1 can be encrypted in place.');
   }
 
-  const tables = raw.prepare<[], { name: string }>(`
-    SELECT name
-    FROM sqlite_master
-    WHERE type = 'table'
-    ORDER BY name
+  raw.defaultSafeIntegers(true);
+  const schemaRows = raw.prepare<[], {
+    type: unknown;
+    name: unknown;
+    tbl_name: unknown;
+    sql: unknown;
+  }>(`
+    SELECT type, name, tbl_name, sql
+    FROM sqlite_schema
+    ORDER BY type, name, tbl_name, COALESCE(sql, '')
   `).all();
-  if (tables.length === 0) {
-    throw new Error('Database row-count verification failed.');
-  }
-  const countQuery = tables.map(({ name }) => {
-    const escapedName = name.replaceAll('"', '""');
-    return `SELECT ? AS name, COUNT(*) AS count FROM "${escapedName}"`;
-  }).join(' UNION ALL ');
-  const counts = raw.prepare<string[], { name: unknown; count: unknown }>(
-    countQuery,
-  ).all(...tables.map(({ name }) => name));
-  const rowCounts: Record<string, number> = {};
-  for (const { name, count } of counts) {
-    if (
-      typeof name !== 'string'
-      || typeof count !== 'number'
-      || !Number.isSafeInteger(count)
-      || count < 0
-    ) {
-      throw new Error('Database row-count verification failed.');
-    }
-    rowCounts[name] = count;
+  if (schemaRows.length === 0) {
+    throw new Error('Database semantic verification failed.');
   }
 
-  return { schemaVersion: 1, rowCounts };
+  const digest = createHash('sha256');
+  updateDigestValue(digest, 1n);
+  updateDigestValue(digest, raw.pragma('user_version', { simple: true }));
+  updateDigestValue(digest, raw.pragma('application_id', { simple: true }));
+  for (const row of schemaRows) {
+    if (
+      typeof row.type !== 'string'
+      || typeof row.name !== 'string'
+      || typeof row.tbl_name !== 'string'
+      || (row.sql !== null && typeof row.sql !== 'string')
+    ) {
+      throw new Error('Database semantic verification failed.');
+    }
+    updateDigestValue(digest, row.type);
+    updateDigestValue(digest, row.name);
+    updateDigestValue(digest, row.tbl_name);
+    updateDigestValue(digest, row.sql);
+  }
+
+  const tables = schemaRows.filter((row): row is typeof row & { name: string } =>
+    row.type === 'table' && typeof row.name === 'string');
+  const rowCounts: Record<string, number> = {};
+  for (const { name } of tables) {
+    const escapedName = name.replaceAll('"', '""');
+    const statement = raw.prepare<[], Record<string, unknown>>(
+      `SELECT * FROM "${escapedName}"`,
+    );
+    const columns = statement.columns().map(({ name: columnName }) => columnName);
+    updateDigestValue(digest, name);
+    for (const column of columns) {
+      updateDigestValue(digest, column);
+    }
+
+    const rowDigests: string[] = [];
+    for (const row of statement.iterate()) {
+      const rowDigest = createHash('sha256');
+      for (const column of columns) {
+        updateDigestValue(rowDigest, row[column]);
+      }
+      rowDigests.push(rowDigest.digest('hex'));
+    }
+    rowDigests.sort();
+    rowCounts[name] = rowDigests.length;
+    for (const rowDigest of rowDigests) {
+      updateDigestValue(digest, rowDigest);
+    }
+  }
+
+  return {
+    schemaVersion: 1,
+    rowCounts,
+    contentDigest: digest.digest('hex'),
+  };
+}
+
+function updateDigestValue(hash: Hash, value: unknown): void {
+  if (value === null) {
+    hash.update('null:;');
+    return;
+  }
+  if (Buffer.isBuffer(value)) {
+    hash.update(`blob:${value.byteLength}:`);
+    hash.update(value);
+    hash.update(';');
+    return;
+  }
+  if (typeof value === 'string') {
+    const bytes = Buffer.from(value, 'utf8');
+    hash.update(`text:${bytes.byteLength}:`);
+    hash.update(bytes);
+    hash.update(';');
+    return;
+  }
+  if (typeof value === 'bigint') {
+    hash.update(`integer:${value.toString(10)};`);
+    return;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const bytes = Buffer.allocUnsafe(8);
+    bytes.writeDoubleBE(value);
+    hash.update('real:8:');
+    hash.update(bytes);
+    hash.update(';');
+    return;
+  }
+  throw new Error('Database semantic verification failed.');
 }
 
 function selectPlaintextCandidate(
@@ -366,7 +576,10 @@ function fingerprintsEqual(
   left: DatabaseFingerprint,
   right: DatabaseFingerprint,
 ): boolean {
-  if (left.schemaVersion !== right.schemaVersion) {
+  if (
+    left.schemaVersion !== right.schemaVersion
+    || left.contentDigest !== right.contentDigest
+  ) {
     return false;
   }
   const leftEntries = Object.entries(left.rowCounts).sort(([a], [b]) =>
@@ -416,6 +629,7 @@ function isUpgradeMarker(
   const keys = Object.keys(marker).sort();
   if (JSON.stringify(keys) !== JSON.stringify([
     'canonicalPath',
+    'contentDigest',
     'format',
     'rowCounts',
     'schemaVersion',
@@ -428,6 +642,8 @@ function isUpgradeMarker(
     || marker.version !== 1
     || marker.canonicalPath !== databasePath
     || marker.schemaVersion !== 1
+    || typeof marker.contentDigest !== 'string'
+    || !/^[0-9a-f]{64}$/.test(marker.contentDigest)
     || marker.rowCounts === null
     || typeof marker.rowCounts !== 'object'
     || Array.isArray(marker.rowCounts)
@@ -454,6 +670,7 @@ async function writeMarker(
     canonicalPath: databasePath,
     schemaVersion: 1,
     rowCounts: fingerprint.rowCounts,
+    contentDigest: fingerprint.contentDigest,
   };
   const temporaryPath = join(
     dirname(markerPath),
@@ -481,8 +698,20 @@ async function cleanAfterVerifiedPromotion(
   paths: PlaintextUpgradePaths,
 ): Promise<void> {
   await removeIfPresent(paths.marker);
-  await removeIfPresent(paths.recovery);
-  await removeIfPresent(paths.encrypting);
+  await removeDatabaseArtifacts(paths.recovery);
+  await removeDatabaseArtifacts(paths.encrypting);
+}
+
+async function removeDatabaseArtifacts(path: string): Promise<void> {
+  for (const artifact of databaseArtifactPaths(path)) {
+    await removeIfPresent(artifact);
+  }
+}
+
+async function removeDatabaseSidecars(path: string): Promise<void> {
+  for (const sidecar of databaseArtifactPaths(path).slice(1)) {
+    await removeIfPresent(sidecar);
+  }
 }
 
 async function removeIfPresent(path: string): Promise<void> {

@@ -8,6 +8,14 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDirectory, '..');
 const asarCli = join(projectRoot, 'node_modules', '@electron', 'asar', 'bin', 'asar.js');
 const fusesCli = join(projectRoot, 'node_modules', '@electron', 'fuses', 'dist', 'bin.js');
+const electronExecutable = join(
+  projectRoot,
+  'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron',
+);
+const encryptedSqliteProbe = join(
+  scriptDirectory,
+  'probeEncryptedSqliteNative.cjs',
+);
 
 const requiredFuses = {
   RunAsNode: 'Disabled',
@@ -109,17 +117,34 @@ export const selectPackagedApp = (outDirectory) => {
 export const createPackageCommandRunner = (
   runExecutable = spawnSync,
 ) => ({ command, args, includeStderr = false, input }) => {
+  const isEncryptedSqliteProbe =
+    command === 'encrypted-sqlite-electron-probe';
   const commandArgs =
     command === 'asar'
       ? [asarCli, 'list', args[0]]
       : command === 'electron-fuses'
         ? [fusesCli, 'read', '--app', args[0]]
+        : isEncryptedSqliteProbe
+          ? [encryptedSqliteProbe, args[0]]
         : args;
   const executable =
-    command === 'asar' || command === 'electron-fuses' ? process.execPath : command;
+    command === 'asar' || command === 'electron-fuses'
+      ? process.execPath
+      : isEncryptedSqliteProbe
+        ? electronExecutable
+        : command;
 
   const result = runExecutable(executable, commandArgs, {
     ...COMMAND_OPTIONS,
+    ...(isEncryptedSqliteProbe
+      ? {
+          env: {
+            ...COMMAND_OPTIONS.env,
+            ELECTRON_RUN_AS_NODE: '1',
+          },
+          timeout: 30_000,
+        }
+      : {}),
     ...(input === undefined ? {} : { input }),
     shell: false,
     stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
@@ -228,6 +253,36 @@ const selectEncryptedDriverLoaderTarget = (unpackedDirectory) => {
     );
   }
   return runtimeTarget;
+};
+
+const verifyEncryptedDriverRuntime = (nativeBinary, runCommand) => {
+  const output = runOrFail(
+    runCommand,
+    'encrypted-sqlite-electron-probe',
+    [nativeBinary],
+    'load encrypted SQLite native binary under Electron',
+  );
+  let report;
+  try {
+    report = JSON.parse(output);
+  } catch {
+    fail('encrypted SQLite native probe returned an invalid report');
+  }
+  if (
+    report === null
+    || typeof report !== 'object'
+    || Array.isArray(report)
+    || JSON.stringify(Object.keys(report).sort())
+      !== JSON.stringify(['cipherVersion', 'modules'])
+    || typeof report.cipherVersion !== 'string'
+    || report.cipherVersion.length === 0
+  ) {
+    fail('encrypted SQLite native probe returned an invalid report');
+  }
+  if (report.modules !== '149') {
+    fail('encrypted SQLite native probe did not use Electron ABI 149');
+  }
+  return report;
 };
 
 const resolvePackagedExecutable = (contentsPath, executableName) => {
@@ -384,6 +439,7 @@ export const verifyPackagedApp = (
     nativeBinary,
     runCommand,
   );
+  const nativeRuntime = verifyEncryptedDriverRuntime(nativeBinary, runCommand);
 
   const atsAllowsArbitraryLoads = readPlistField(
     plistPath,
@@ -419,6 +475,7 @@ export const verifyPackagedApp = (
     executableArchitecture,
     nativeBinary,
     nativeArchitecture,
+    nativeRuntime,
     bundle,
     fuses,
     appleBridge,

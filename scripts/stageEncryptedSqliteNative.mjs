@@ -1,73 +1,85 @@
-import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, lstatSync, mkdirSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { runEncryptedSqliteNativeProbe } from './runEncryptedSqliteNativeProbe.mjs';
+
+const scriptPath = fileURLToPath(import.meta.url);
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(scriptDirectory, '..');
-const packageRoot = dirname(
-  fileURLToPath(import.meta.resolve(
-    'better-sqlite3-multiple-ciphers/package.json',
-  )),
+const require = createRequire(import.meta.url);
+const defaultPackageRoot = dirname(
+  require.resolve('better-sqlite3-multiple-ciphers/package.json'),
 );
 const binaryName = 'better-sqlite3-multiple-ciphers.node';
-const mode = process.argv[2];
 
-if (process.platform !== 'darwin' || process.arch !== 'arm64') {
-  throw new Error('Encrypted SQLite native staging supports Darwin arm64 only.');
-}
-
-const runtimes = {
-  node: {
-    abi: '137',
-    executable: process.execPath,
-    environment: process.env,
-  },
-  electron: {
-    abi: '149',
-    executable: join(projectRoot, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron'),
-    environment: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-  },
-};
-const runtime = runtimes[mode];
-if (runtime === undefined) {
-  throw new Error('Native staging mode must be node or electron.');
-}
-if (mode === 'node' && process.versions.modules !== runtime.abi) {
-  throw new Error(
-    `Node native staging requires ABI ${runtime.abi}; found ${process.versions.modules}.`,
-  );
-}
-
-const destination = join(
-  packageRoot,
-  'bin',
-  `darwin-arm64-${runtime.abi}`,
-  binaryName,
-);
-if (mode === 'node') {
-  const scratch = join(packageRoot, 'build/Release/better_sqlite3.node');
-  if (!existsSync(scratch)) {
-    throw new Error('Node ABI scratch native binary is missing.');
+export function stageEncryptedSqliteNative({
+  mode,
+  packageRoot = defaultPackageRoot,
+  platform = process.platform,
+  arch = process.arch,
+  nodeModules = process.versions.modules,
+  nodeExecutable = process.execPath,
+  electronExecutable = join(
+    projectRoot,
+    'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron',
+  ),
+  probeNative = runEncryptedSqliteNativeProbe,
+}) {
+  if (platform !== 'darwin' || arch !== 'arm64') {
+    throw new Error('Encrypted SQLite native staging supports Darwin arm64 only.');
   }
+  const runtimes = {
+    node: {
+      abi: '137',
+      executable: nodeExecutable,
+      environment: {},
+    },
+    electron: {
+      abi: '149',
+      executable: electronExecutable,
+      environment: { ELECTRON_RUN_AS_NODE: '1' },
+    },
+  };
+  const runtime = runtimes[mode];
+  if (runtime === undefined) {
+    throw new Error('Native staging mode must be node or electron.');
+  }
+  if (mode === 'node' && nodeModules !== runtime.abi) {
+    throw new Error(
+      `Node native staging requires ABI ${runtime.abi}; found ${nodeModules}.`,
+    );
+  }
+
+  const scratch = join(packageRoot, 'build/Release/better_sqlite3.node');
+  let scratchMetadata;
+  try {
+    scratchMetadata = lstatSync(scratch);
+  } catch {
+    throw new Error(`${mode} ABI scratch native binary is missing.`);
+  }
+  if (!scratchMetadata.isFile() || scratchMetadata.isSymbolicLink()) {
+    throw new Error(`${mode} ABI scratch native binary is invalid.`);
+  }
+  const destination = join(
+    packageRoot,
+    'bin',
+    `darwin-arm64-${runtime.abi}`,
+    binaryName,
+  );
   mkdirSync(dirname(destination), { recursive: true });
   copyFileSync(scratch, destination);
-}
-if (!existsSync(destination)) {
-  throw new Error(`Staged encrypted SQLite ABI ${runtime.abi} binary is missing.`);
+
+  return probeNative({
+    executable: runtime.executable,
+    nativeBinary: destination,
+    expectedAbi: runtime.abi,
+    environment: runtime.environment,
+    probeScript: join(scriptDirectory, 'probeEncryptedSqliteNative.cjs'),
+  });
 }
 
-const probe = spawnSync(runtime.executable, [
-  join(scriptDirectory, 'probeEncryptedSqliteNative.cjs'),
-  destination,
-], {
-  cwd: projectRoot,
-  encoding: 'utf8',
-  env: runtime.environment,
-  timeout: 30_000,
-});
-if (probe.status !== 0 || probe.signal !== null) {
-  throw new Error(
-    `Encrypted SQLite ABI ${runtime.abi} probe failed: ${probe.stderr || probe.signal || probe.status}`,
-  );
+if (process.argv[1] === scriptPath) {
+  stageEncryptedSqliteNative({ mode: process.argv[2] });
 }

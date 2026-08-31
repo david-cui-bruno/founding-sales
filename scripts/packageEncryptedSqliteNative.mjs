@@ -1,14 +1,23 @@
 import { lstat, readdir, rm } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { runEncryptedSqliteNativeProbe } from './runEncryptedSqliteNativeProbe.mjs';
 
 const packageName = 'better-sqlite3-multiple-ciphers';
 const runtimeDirectoryName = 'darwin-arm64-149';
 const binaryName = 'better-sqlite3-multiple-ciphers.node';
+const scriptDirectory = dirname(fileURLToPath(import.meta.url));
+const electronExecutable = join(
+  scriptDirectory,
+  '../node_modules/electron/dist/Electron.app/Contents/MacOS/Electron',
+);
 
 export async function retainOnlyPackagedEncryptedSqliteRuntime({
   buildPath,
   platform,
   arch,
+  probeNative = runEncryptedSqliteNativeProbe,
 }) {
   if (platform !== 'darwin' || arch !== 'arm64') return;
   if (!isAbsolute(buildPath)) {
@@ -22,6 +31,14 @@ export async function retainOnlyPackagedEncryptedSqliteRuntime({
   if (!metadata.isFile() || metadata.isSymbolicLink()) {
     throw new Error('Exact packaged encrypted SQLite native binary is invalid.');
   }
+
+  await probeNative({
+    executable: electronExecutable,
+    nativeBinary: runtimeBinary,
+    expectedAbi: '149',
+    environment: { ELECTRON_RUN_AS_NODE: '1' },
+    probeScript: join(scriptDirectory, 'probeEncryptedSqliteNative.cjs'),
+  });
 
   const binDirectory = join(packageRoot, 'bin');
   for (const entry of await readdir(binDirectory, { withFileTypes: true })) {

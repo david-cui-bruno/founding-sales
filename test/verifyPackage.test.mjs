@@ -130,6 +130,13 @@ const successfulCommand = ({ command, args }) => {
     ].join('\n');
   }
 
+  if (command === 'encrypted-sqlite-electron-probe') {
+    return JSON.stringify({
+      modules: '149',
+      cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
+    });
+  }
+
   if (commandName === 'codesign') {
     if (args[0] === '--display' && args.includes('--verbose=4')) {
       const isAppleBridge = args.at(-1).includes('Callie Apple Bridge.app');
@@ -176,6 +183,30 @@ describe('packaged app selection', () => {
 });
 
 describe('package command runner', () => {
+  it('runs the encrypted SQLite probe under Electron with run-as-node isolated to the child', () => {
+    const executions = [];
+    const runCommand = createPackageCommandRunner((command, args, options) => {
+      executions.push({ command, args, options });
+      return JSON.stringify({ modules: '149', cipherVersion: 'synthetic' });
+    });
+
+    runCommand({
+      command: 'encrypted-sqlite-electron-probe',
+      args: ['/tmp/selected.node'],
+    });
+
+    expect(executions).toEqual([expect.objectContaining({
+      command: expect.stringMatching(/Electron\.app\/Contents\/MacOS\/Electron$/),
+      args: [
+        expect.stringMatching(/probeEncryptedSqliteNative\.cjs$/),
+        '/tmp/selected.node',
+      ],
+      options: expect.objectContaining({
+        env: expect.objectContaining({ ELECTRON_RUN_AS_NODE: '1' }),
+      }),
+    })]);
+  });
+
   it('forwards verifier property-list input to the fixed executable without a shell', () => {
     const executions = [];
     const runCommand = createPackageCommandRunner((command, args, options) => {
@@ -252,6 +283,10 @@ describe('package verification', () => {
     });
 
     expect(report.nativeBinary).toBe(fixture.nativePath);
+    expect(report.nativeRuntime).toEqual({
+      modules: '149',
+      cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
+    });
     expect(report.executable).toBe(fixture.executablePath);
     expect(report.bundle).toEqual({
       identifier: 'com.example.callie',
@@ -279,6 +314,20 @@ describe('package verification', () => {
       signatureMode: 'adhoc',
       automationEntitlement: true,
     });
+  });
+
+  it('rejects an arm64 native binary that reports the Node ABI from the Electron probe', async () => {
+    const outDirectory = await makeTemporaryDirectory();
+    const fixture = await createPackagedApp(outDirectory);
+
+    expect(() => verifyPackagedApp(fixture.appPath, {
+      runCommand: ({ command, args }) =>
+        command === 'encrypted-sqlite-electron-probe'
+          ? JSON.stringify({ modules: '137', cipherVersion: 'synthetic' })
+          : successfulCommand({ command, args }),
+      asarCommand: 'asar',
+      fusesCommand: 'electron-fuses',
+    })).toThrow('PACKAGE: encrypted SQLite native probe did not use Electron ABI 149');
   });
 
   it('explains when the encrypted SQLite binary was not unpacked from ASAR', async () => {

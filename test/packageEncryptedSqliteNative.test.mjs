@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -44,6 +44,7 @@ describe('packaged encrypted SQLite artifacts', () => {
       buildPath: files.buildPath,
       platform: 'darwin',
       arch: 'arm64',
+      probeNative: () => ({ modules: '149', cipherVersion: 'synthetic' }),
     });
     expect(existsSync(files.selected)).toBe(true);
     expect(existsSync(files.nodeAbi)).toBe(false);
@@ -57,7 +58,25 @@ describe('packaged encrypted SQLite artifacts', () => {
       buildPath: files.buildPath,
       platform: 'darwin',
       arch: 'arm64',
+      probeNative: () => ({ modules: '149', cipherVersion: 'synthetic' }),
     })).rejects.toThrow();
+    expect(existsSync(files.nodeAbi)).toBe(true);
+    expect(existsSync(files.scratch)).toBe(true);
+  });
+
+  it('rejects a Node ABI binary renamed as ABI 149 before stripping any copy', async () => {
+    const files = await fixture();
+    const nodeAbiBinary = join(
+      process.cwd(),
+      'node_modules/better-sqlite3-multiple-ciphers/bin/darwin-arm64-137/better-sqlite3-multiple-ciphers.node',
+    );
+    await copyFile(nodeAbiBinary, files.selected);
+
+    await expect(retainOnlyPackagedEncryptedSqliteRuntime({
+      buildPath: files.buildPath,
+      platform: 'darwin',
+      arch: 'arm64',
+    })).rejects.toThrow(/ABI 149|native probe/i);
     expect(existsSync(files.nodeAbi)).toBe(true);
     expect(existsSync(files.scratch)).toBe(true);
   });
