@@ -58,6 +58,11 @@ controls. Therefore it does not prompt for TCC access, read founder Apple
 databases, place a call, send a message, prove TCC grants, or prove live
 communication. Those remain separate consenting manual checks.
 
+The [Apple communications manual feasibility procedure](docs/engineering/apple-feasibility-procedure.md)
+is the only approved live-capability check. It is manual-only and is never run
+by `npm test`, `npm run test:swift`, `npm run verify`, `npm run verify:e2e`,
+`npm run verify:package`, or CI.
+
 Packaging sets every Electron 44 V1 fuse with
 `strictlyRequireAllFuses: true`, so a future Electron fuse addition stops the
 build until its policy is chosen explicitly. The browser-process-specific V8
