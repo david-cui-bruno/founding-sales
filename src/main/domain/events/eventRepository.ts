@@ -55,6 +55,7 @@ const appendActivityInputSchema = z.object({
   prospectId: idSchema.nullable().optional(),
   salesCycleId: idSchema.nullable().optional(),
   cadenceStepId: idSchema.nullable().optional(),
+  cadenceComponentId: idSchema.nullable().optional(),
   kind: activityKindSchema,
   direction: z.enum(['inbound', 'outbound', 'internal']),
   channel: textSchema,
@@ -74,6 +75,13 @@ const appendActivityInputSchema = z.object({
       code: z.ZodIssueCode.custom,
       message: 'A provider idempotency key requires an adapter.',
       path: ['providerIdempotencyKey'],
+    });
+  }
+  if ((value.cadenceStepId == null) !== (value.cadenceComponentId == null)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Cadence Activity evidence requires both step and component IDs.',
+      path: ['cadenceComponentId'],
     });
   }
 });
@@ -123,6 +131,7 @@ const storedActivityRowSchema = z.object({
   prospect_id: idSchema.nullable(),
   sales_cycle_id: idSchema.nullable(),
   cadence_step_id: idSchema.nullable(),
+  cadence_component_id: idSchema.nullable(),
   kind: activityKindSchema,
   direction: z.enum(['inbound', 'outbound', 'internal']),
   channel: textSchema,
@@ -137,7 +146,15 @@ const storedActivityRowSchema = z.object({
   transcript_storage_ref: textSchema.nullable(),
   metadata_json: jsonTextSchema,
   created_at: utcTimestampSchema,
-}).strict();
+}).strict().superRefine((value, context) => {
+  if ((value.cadence_step_id === null) !== (value.cadence_component_id === null)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Stored cadence evidence must pair step and component IDs.',
+      path: ['cadence_component_id'],
+    });
+  }
+});
 
 const storedActivityAmendmentRowSchema = z.object({
   id: idSchema,
@@ -190,7 +207,8 @@ const storedMediaConsentRowSchema = z.object({
 }).strict();
 
 const activityColumns = `
-  id, person_id, prospect_id, sales_cycle_id, cadence_step_id, kind, direction,
+  id, person_id, prospect_id, sales_cycle_id, cadence_step_id, cadence_component_id,
+  kind, direction,
   channel, occurred_at, duration_seconds, observed_outcome, adapter,
   provider_idempotency_key, provider_reference, consent_policy_record_id,
   recording_storage_ref, transcript_storage_ref, metadata_json, created_at
@@ -250,6 +268,8 @@ export class EventRepository {
           canonical.personId !== parsed.personId
           || canonical.prospectId !== (parsed.prospectId ?? null)
           || canonical.salesCycleId !== (parsed.salesCycleId ?? null)
+          || canonical.cadenceStepId !== (parsed.cadenceStepId ?? null)
+          || canonical.cadenceComponentId !== (parsed.cadenceComponentId ?? null)
         ) {
           throw new IdempotencyOwnershipConflictError(adapter, providerKey);
         }
@@ -283,12 +303,13 @@ export class EventRepository {
     }
     const row = this.database.raw.prepare(`
       INSERT INTO activities (
-        id, person_id, prospect_id, sales_cycle_id, cadence_step_id, kind,
+        id, person_id, prospect_id, sales_cycle_id, cadence_step_id,
+        cadence_component_id, kind,
         direction, channel, occurred_at, duration_seconds, observed_outcome,
         adapter, provider_idempotency_key, provider_reference,
         consent_policy_record_id, recording_storage_ref, transcript_storage_ref,
         metadata_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING ${activityColumns}
     `).get(
       id,
@@ -296,6 +317,7 @@ export class EventRepository {
       parsed.prospectId ?? null,
       parsed.salesCycleId ?? null,
       parsed.cadenceStepId ?? null,
+      parsed.cadenceComponentId ?? null,
       parsed.kind,
       parsed.direction,
       parsed.channel,
@@ -452,6 +474,7 @@ function parseActivity(value: unknown): Activity {
     prospectId: row.prospect_id,
     salesCycleId: row.sales_cycle_id,
     cadenceStepId: row.cadence_step_id,
+    cadenceComponentId: row.cadence_component_id,
     kind: row.kind,
     direction: row.direction,
     channel: row.channel,

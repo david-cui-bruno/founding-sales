@@ -95,6 +95,7 @@ describe('EventRepository', () => {
       prospectId: first.prospectId,
       salesCycleId: firstCycleId,
       cadenceStepId: null,
+      cadenceComponentId: null,
       kind: 'call',
       direction: 'outbound',
       channel: 'phone',
@@ -111,6 +112,70 @@ describe('EventRepository', () => {
       createdAt: TIMESTAMP,
     });
     expect(events.getActivity(activity.id)).toEqual(activity);
+  });
+
+  it('roundtrips exact cadence step/component evidence and rejects a cross-step component', async () => {
+    await setup();
+    database!.raw.prepare(`
+      INSERT INTO cadence_definitions (
+        id, family, version, name, content_hash, attempt_cap,
+        definition_json, created_at
+      ) VALUES ('activity-cadence', 'cadence_a', 1, 'Activity cadence',
+                'activity-cadence-hash', 1, '{}', ?)
+    `).run(TIMESTAMP);
+    for (const suffix of ['one', 'two']) {
+      database!.raw.prepare(`
+        INSERT INTO cadence_steps (
+          id, cadence_definition_id, sequence, day_offset, label,
+          breakup, step_json, created_at
+        ) VALUES (?, 'activity-cadence', ?, ?, ?, 0, '{}', ?)
+      `).run(`activity-step-${suffix}`, suffix === 'one' ? 0 : 1, suffix === 'one' ? 0 : 1, suffix, TIMESTAMP);
+      database!.raw.prepare(`
+        INSERT INTO cadence_action_components (
+          id, cadence_step_id, sequence, action_type, channel,
+          outcome_graph_json, created_at
+        ) VALUES (?, ?, 0, 'call', 'phone', '{}', ?)
+      `).run(`activity-component-${suffix}`, `activity-step-${suffix}`, TIMESTAMP);
+    }
+
+    const activity = unitOfWork.immediate(() => events.appendActivity(activityInput({
+      id: 'cadence-activity',
+      providerIdempotencyKey: 'cadence-activity',
+      cadenceStepId: 'activity-step-one',
+      cadenceComponentId: 'activity-component-one',
+    })));
+    expect(activity).toMatchObject({
+      cadenceStepId: 'activity-step-one',
+      cadenceComponentId: 'activity-component-one',
+    });
+    expect(events.getActivity(activity.id)).toEqual(activity);
+
+    expect(unitOfWork.immediate(() => events.appendActivity(activityInput({
+      id: 'cadence-activity-exact-replay-id',
+      providerIdempotencyKey: 'cadence-activity',
+      cadenceStepId: 'activity-step-one',
+      cadenceComponentId: 'activity-component-one',
+    })))).toEqual(activity);
+
+    expect(() => unitOfWork.immediate(() => events.appendActivity(activityInput({
+      id: 'cadence-activity-replay-id',
+      providerIdempotencyKey: 'cadence-activity',
+      cadenceStepId: 'activity-step-two',
+      cadenceComponentId: 'activity-component-two',
+    })))).toThrow(IdempotencyOwnershipConflictError);
+
+    expect(() => unitOfWork.immediate(() => events.appendActivity(activityInput({
+      id: 'cross-step-cadence-activity',
+      providerIdempotencyKey: 'cross-step-cadence-activity',
+      cadenceStepId: 'activity-step-one',
+      cadenceComponentId: 'activity-component-two',
+    })))).toThrow();
+    expect(() => unitOfWork.immediate(() => events.appendActivity(activityInput({
+      id: 'partial-cadence-activity',
+      providerIdempotencyKey: 'partial-cadence-activity',
+      cadenceStepId: 'activity-step-one',
+      cadenceComponentId: null,
+    })))).toThrow();
   });
 
   it('returns the canonical Activity for a same-owner provider retry', async () => {

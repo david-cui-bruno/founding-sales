@@ -220,6 +220,7 @@ export type ActivitiesTable = {
   prospect_id: string | null;
   sales_cycle_id: string | null;
   cadence_step_id: string | null;
+  cadence_component_id: string | null;
   kind: string;
   direction: 'inbound' | 'outbound' | 'internal';
   channel: string;

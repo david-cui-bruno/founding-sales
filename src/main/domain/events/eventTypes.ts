@@ -17,6 +17,7 @@ export type Activity = {
   prospectId: string | null;
   salesCycleId: string | null;
   cadenceStepId: string | null;
+  cadenceComponentId: string | null;
   kind: ActivityKind;
   direction: 'inbound' | 'outbound' | 'internal';
   channel: string;
@@ -72,6 +73,7 @@ export type AppendActivityInput = {
   prospectId?: string | null;
   salesCycleId?: string | null;
   cadenceStepId?: string | null;
+  cadenceComponentId?: string | null;
   kind: ActivityKind;
   direction: 'inbound' | 'outbound' | 'internal';
   channel: string;

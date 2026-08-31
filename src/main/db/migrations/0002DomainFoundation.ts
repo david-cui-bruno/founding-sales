@@ -186,7 +186,8 @@ const domainStatements = [
     breakup INTEGER NOT NULL DEFAULT 0 CHECK (breakup IN (0, 1)),
     step_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    UNIQUE (cadence_definition_id, sequence)
+    UNIQUE (cadence_definition_id, sequence),
+    UNIQUE (id, cadence_definition_id)
   )`,
   `CREATE TABLE cadence_action_components (
     id TEXT PRIMARY KEY,
@@ -198,7 +199,8 @@ const domainStatements = [
     outcome_graph_json TEXT NOT NULL,
     template_json TEXT,
     created_at TEXT NOT NULL,
-    UNIQUE (cadence_step_id, sequence)
+    UNIQUE (cadence_step_id, sequence),
+    UNIQUE (id, cadence_step_id)
   )`,
   `CREATE TABLE sales_cycles (
     id TEXT PRIMARY KEY,
@@ -279,9 +281,25 @@ const domainStatements = [
       REFERENCES sales_cycles(id) DEFERRABLE INITIALLY DEFERRED,
     FOREIGN KEY (completion_activity_id, sales_cycle_id)
       REFERENCES activities(id, sales_cycle_id),
+    FOREIGN KEY (cadence_enrollment_id, sales_cycle_id)
+      REFERENCES cadence_enrollments(id, sales_cycle_id),
+    FOREIGN KEY (cadence_component_id, cadence_step_id)
+      REFERENCES cadence_action_components(id, cadence_step_id),
     CHECK (
       (status = 'pending' AND completed_at IS NULL AND completion_activity_id IS NULL)
       OR (status <> 'pending' AND completed_at IS NOT NULL)
+    ),
+    CHECK (
+      (
+        cadence_enrollment_id IS NULL
+        AND cadence_step_id IS NULL
+        AND cadence_component_id IS NULL
+      )
+      OR (
+        cadence_enrollment_id IS NOT NULL
+        AND cadence_step_id IS NOT NULL
+        AND cadence_component_id IS NOT NULL
+      )
     )
   )`,
   `CREATE INDEX next_actions_due_idx ON next_actions(status, due_at)`,
@@ -296,6 +314,9 @@ const domainStatements = [
     stop_reason TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    UNIQUE (id, sales_cycle_id),
+    FOREIGN KEY (current_step_id, cadence_definition_id)
+      REFERENCES cadence_steps(id, cadence_definition_id),
     CHECK (
       (status = 'active' AND stop_reason IS NULL)
       OR status <> 'active'
@@ -328,6 +349,7 @@ const domainStatements = [
     prospect_id TEXT,
     sales_cycle_id TEXT,
     cadence_step_id TEXT REFERENCES cadence_steps(id),
+    cadence_component_id TEXT,
     kind TEXT NOT NULL,
     direction TEXT NOT NULL CHECK (direction IN ('inbound','outbound','internal')),
     channel TEXT NOT NULL,
@@ -348,10 +370,16 @@ const domainStatements = [
     FOREIGN KEY (sales_cycle_id, person_id) REFERENCES sales_cycles(id, person_id),
     FOREIGN KEY (consent_policy_record_id, person_id)
       REFERENCES consent_policy_records(id, person_id) DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY (cadence_component_id, cadence_step_id)
+      REFERENCES cadence_action_components(id, cadence_step_id),
     CHECK (provider_idempotency_key IS NULL OR adapter IS NOT NULL),
     CHECK (
       (recording_storage_ref IS NULL AND transcript_storage_ref IS NULL)
       OR consent_policy_record_id IS NOT NULL
+    ),
+    CHECK (
+      (cadence_step_id IS NULL AND cadence_component_id IS NULL)
+      OR (cadence_step_id IS NOT NULL AND cadence_component_id IS NOT NULL)
     )
   )`,
   `CREATE UNIQUE INDEX activities_provider_idempotency_idx
@@ -629,6 +657,65 @@ const domainStatements = [
       )
     BEGIN
       SELECT RAISE(ABORT, 'current next action must be inserted pending');
+    END`,
+  `CREATE TRIGGER protect_cadence_enrollment_step_insert
+    BEFORE INSERT ON cadence_enrollments
+    WHEN NEW.current_step_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM cadence_steps AS step
+        WHERE step.id = NEW.current_step_id
+          AND step.cadence_definition_id = NEW.cadence_definition_id
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'cadence enrollment step must belong to its definition');
+    END`,
+  `CREATE TRIGGER protect_cadence_enrollment_step_update
+    BEFORE UPDATE OF current_step_id, cadence_definition_id ON cadence_enrollments
+    WHEN NEW.current_step_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM cadence_steps AS step
+        WHERE step.id = NEW.current_step_id
+          AND step.cadence_definition_id = NEW.cadence_definition_id
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'cadence enrollment step must belong to its definition');
+    END`,
+  `CREATE TRIGGER protect_next_action_cadence_insert
+    BEFORE INSERT ON next_actions
+    WHEN NEW.cadence_enrollment_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM cadence_enrollments AS enrollment
+        JOIN cadence_steps AS step
+          ON step.id = NEW.cadence_step_id
+         AND step.cadence_definition_id = enrollment.cadence_definition_id
+        JOIN cadence_action_components AS component
+          ON component.id = NEW.cadence_component_id
+         AND component.cadence_step_id = step.id
+        WHERE enrollment.id = NEW.cadence_enrollment_id
+          AND enrollment.sales_cycle_id = NEW.sales_cycle_id
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'next action cadence references must share one owner graph');
+    END`,
+  `CREATE TRIGGER protect_next_action_cadence_update
+    BEFORE UPDATE OF sales_cycle_id, cadence_enrollment_id, cadence_step_id,
+      cadence_component_id ON next_actions
+    WHEN NEW.cadence_enrollment_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM cadence_enrollments AS enrollment
+        JOIN cadence_steps AS step
+          ON step.id = NEW.cadence_step_id
+         AND step.cadence_definition_id = enrollment.cadence_definition_id
+        JOIN cadence_action_components AS component
+          ON component.id = NEW.cadence_component_id
+         AND component.cadence_step_id = step.id
+        WHERE enrollment.id = NEW.cadence_enrollment_id
+          AND enrollment.sales_cycle_id = NEW.sales_cycle_id
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'next action cadence references must share one owner graph');
     END`,
   `CREATE TRIGGER protect_prospect_original_source
     BEFORE UPDATE OF original_source_event_id ON prospects
