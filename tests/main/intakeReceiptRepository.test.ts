@@ -287,6 +287,21 @@ describe('IntakeReceiptRepository', () => {
     }));
   });
 
+  it.each([
+    ['created merge-review without a reason', {
+      ...result(), disposition: 'created_merge_review', identityReviewReason: null,
+    }],
+    ['created with a review reason', {
+      ...result(), disposition: 'created', identityReviewReason: 'shared_handle',
+    }],
+  ] as const)('fails closed reading %s despite canonical envelope bytes', (_label, invalid) => {
+    insertRawReceipt({ result: invalid });
+
+    expect(() => repository.getBySourceEventId('source')).toThrow(expect.objectContaining({
+      name: 'IntakeReceiptIntegrityError', reason: 'identity_review_mismatch',
+    }));
+  });
+
   it('keeps historical receipt context readable after a supported link correction', () => {
     database.raw.exec(`
       INSERT INTO organizations (id, canonical_name, created_at, updated_at)

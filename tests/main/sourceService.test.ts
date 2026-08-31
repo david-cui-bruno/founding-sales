@@ -890,6 +890,154 @@ describe('SourceService', () => {
     expect(counts()).toMatchObject({ properties: 2, prospect_properties: 2 });
   });
 
+  it('makes canonical command equality imply identical persistence ordering', async () => {
+    const alpha = {
+      canonicalName: 'Alpha Holdings', aliases: ['Shared Holdings', 'ALPHA HOLDINGS'],
+      relationship: 'owner', sourceRecord: { b: 2, a: 1 },
+    };
+    const alphaEquivalent = {
+      canonicalName: 'Alpha Holdings', aliases: ['alpha holdings', 'shared holdings'],
+      relationship: 'owner', sourceRecord: { a: 1, b: 2 },
+    };
+    const beta = { canonicalName: 'Beta Holdings' };
+    const ten = {
+      addressLine1: '10 Hope St', locality: 'Providence', region: 'RI',
+      doorCount: 2, relationship: 'owner', sourceRecord: { b: 2, a: 1 },
+    };
+    const tenEquivalent = {
+      addressLine1: '10 HOPE ST', locality: 'PROVIDENCE', region: 'ri',
+      doorCount: 2, relationship: 'owner', sourceRecord: { a: 1, b: 2 },
+    };
+    const twenty = {
+      addressLine1: '20 Hope St', locality: 'Providence', region: 'RI',
+    };
+    const contacts = [
+      {
+        kind: 'phone' as const, value: '+1 (401) 555-0100',
+        reachability: 'direct' as const, isPrimary: true,
+      },
+      {
+        kind: 'email' as const, value: 'kevin@example.com',
+        reachability: 'direct' as const, isPrimary: true, inContacts: false,
+      },
+      {
+        kind: 'phone' as const, value: ' (401) 555-0100 ',
+        reachability: 'direct' as const, isPrimary: true,
+      },
+      {
+        kind: 'email' as const, value: ' ＫＥＶＩＮ@example.com ',
+        reachability: 'direct' as const, isPrimary: true, inContacts: false,
+      },
+    ];
+    const base = baseCommand('total-canonical-order', {
+      person: {
+        displayName: 'Kevin Shin', aliases: [' Zed ', 'Alice', 'Ａｌｉｃｅ'],
+      },
+      contacts,
+      organizations: [beta, alpha, alphaEquivalent],
+      properties: [twenty, ten, tenEquivalent],
+    });
+    const reordered = {
+      ...base,
+      person: {
+        ...base.person,
+        aliases: [...(base.person.aliases ?? [])].reverse(),
+      },
+      contacts: [...contacts].reverse(),
+      organizations: [alphaEquivalent, beta, alpha],
+      properties: [tenEquivalent, twenty, ten],
+    } as CreatePersonProspectCommand;
+
+    async function persist(command: CreatePersonProspectCommand) {
+      const isolatedTemp = createTempDatabase();
+      const key = createTestWorkspaceKey();
+      const isolatedDatabase = openDatabase({ path: isolatedTemp.path, key });
+      try {
+        await migrateToLatest(isolatedDatabase, {
+          backupDirectory: `${isolatedTemp.path}.backups`, workspaceKey: key,
+        });
+        const isolatedUnitOfWork = new DomainUnitOfWork(isolatedDatabase);
+        const isolatedIds = [
+          'person', 'contact-email', 'contact-phone', 'prospect',
+          'org-alpha', 'alias-alpha', 'alias-shared',
+          'org-beta', 'alias-beta', 'property-10', 'property-20',
+        ];
+        const isolatedIdentities = new IdentityRepository({
+          database: isolatedDatabase,
+          unitOfWork: isolatedUnitOfWork,
+          clock: { now: () => NOW },
+          ids: {
+            next: () => {
+              const id = isolatedIds.shift();
+              if (id === undefined) throw new Error('Isolated test ID sequence exhausted.');
+              return id;
+            },
+          },
+        });
+        const isolatedSources = new SourceRepository({
+          database: isolatedDatabase,
+          unitOfWork: isolatedUnitOfWork,
+          clock: { now: () => NOW },
+        });
+        const isolatedReceipts = new IntakeReceiptRepository({
+          database: isolatedDatabase,
+          unitOfWork: isolatedUnitOfWork,
+          clock: { now: () => NOW },
+        });
+        const isolatedService = new SourceService({
+          database: isolatedDatabase,
+          unitOfWork: isolatedUnitOfWork,
+          identities: isolatedIdentities,
+          sources: isolatedSources,
+          receipts: isolatedReceipts,
+        });
+        const result = isolatedService.createPersonProspect(command);
+        const receipt = isolatedReceipts.getBySourceEventId(result.sourceEventId);
+        const tableNames = [
+          'persons', 'person_contact_methods', 'source_events', 'prospects',
+          'source_intake_receipts', 'organizations', 'organization_aliases',
+          'properties', 'prospect_organizations', 'prospect_properties', 'sales_cycles',
+        ];
+        const writes = Object.fromEntries(tableNames.map((table) => [
+          table,
+          (isolatedDatabase.raw.prepare(`SELECT * FROM ${table}`).all() as object[])
+            .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+        ]));
+        return {
+          result,
+          commandJson: receipt?.commandJson,
+          contacts: isolatedDatabase.raw.prepare(`
+            SELECT id, kind, normalized_value, raw_value
+            FROM person_contact_methods ORDER BY id
+          `).all(),
+          aliasesJson: isolatedDatabase.raw.prepare(`
+            SELECT aliases_json FROM persons WHERE id = 'person'
+          `).get(),
+          writes,
+        };
+      } finally {
+        closeDatabase(isolatedDatabase);
+        isolatedTemp.cleanup();
+      }
+    }
+
+    const forward = await persist(base);
+    const reverse = await persist(reordered);
+
+    expect(reverse).toEqual(forward);
+    expect(forward.aliasesJson).toEqual({ aliases_json: '["Alice","Zed"]' });
+    expect(forward.contacts).toEqual([
+      {
+        id: 'contact-email', kind: 'email', normalized_value: 'kevin@example.com',
+        raw_value: 'KEVIN@example.com',
+      },
+      {
+        id: 'contact-phone', kind: 'phone', normalized_value: '+14015550100',
+        raw_value: '(401) 555-0100',
+      },
+    ]);
+  });
+
   it('never merges identity from names, organization, property, or shared office context', () => {
     ids.push(
       'person-one', 'prospect-one',

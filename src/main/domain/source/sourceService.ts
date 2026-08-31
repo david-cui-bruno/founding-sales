@@ -707,7 +707,9 @@ function normalizeCommand(command: CreatePersonProspectCommand): NormalizedComma
       ...organization,
       aliases: normalizedAliases,
       relationship: organization.relationship ?? null,
-      sourceRecord: organization.sourceRecord ?? null,
+      sourceRecord: organization.sourceRecord == null
+        ? null
+        : canonicalizeContextValue(organization.sourceRecord),
       normalizedAliases,
     };
   });
@@ -739,8 +741,12 @@ function normalizeCommand(command: CreatePersonProspectCommand): NormalizedComma
       countryCode: property.countryCode.toUpperCase(),
       doorCount: property.doorCount ?? null,
       propertyType: property.propertyType ?? null,
-      maintenanceProfile: property.maintenanceProfile ?? null,
-      sourceRecord: property.sourceRecord ?? null,
+      maintenanceProfile: property.maintenanceProfile == null
+        ? null
+        : canonicalizeContextValue(property.maintenanceProfile),
+      sourceRecord: property.sourceRecord == null
+        ? null
+        : canonicalizeContextValue(property.sourceRecord),
       verifiedAt: property.verifiedAt ?? null,
       organizationAlias: property.organizationAlias == null
         ? null
@@ -754,9 +760,11 @@ function normalizeCommand(command: CreatePersonProspectCommand): NormalizedComma
   return {
     person: {
       displayName: nonblankSchema.parse(parsed.person.displayName),
-      aliases: parsed.person.aliases,
+      aliases: [...new Set(parsed.person.aliases)].sort(compareStrings),
       neverRecord: parsed.person.neverRecord,
-      provenance: parsed.person.provenance,
+      provenance: parsed.person.provenance == null
+        ? parsed.person.provenance
+        : canonicalizeContextValue(parsed.person.provenance),
     },
     contacts,
     organizations,
@@ -778,7 +786,7 @@ function normalizeContacts(contacts: z.infer<typeof contactInputSchema>[]): Norm
     const canonical = {
       kind: contact.kind,
       normalizedValue,
-      rawValue: contact.value,
+      rawValue: contact.value.normalize('NFKC').trim(),
       reachability: contact.reachability,
       isPrimary: contact.isPrimary,
       inContacts: contact.inContacts ?? null,
@@ -792,11 +800,27 @@ function normalizeContacts(contacts: z.infer<typeof contactInputSchema>[]): Norm
       ) {
         throw new ContactNormalizationConflictError(contact.kind, normalizedValue);
       }
+      if (compareStrings(canonical.rawValue, existing.rawValue) < 0) {
+        existing.rawValue = canonical.rawValue;
+      }
       continue;
     }
     deduplicated.set(key, canonical);
   }
-  return [...deduplicated.values()];
+  return [...deduplicated.values()].sort((left, right) => compareStrings(
+    contactFactKey(left),
+    contactFactKey(right),
+  ));
+}
+
+function contactFactKey(contact: NormalizedContact): string {
+  return canonicalContextJson({
+    kind: contact.kind,
+    normalizedValue: contact.normalizedValue,
+    reachability: contact.reachability,
+    isPrimary: contact.isPrimary,
+    inContacts: contact.inContacts,
+  });
 }
 
 function normalizeOrganizations(

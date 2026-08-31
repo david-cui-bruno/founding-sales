@@ -321,6 +321,7 @@ export class IntakeReceiptRepository {
         'result_ownership_mismatch',
       );
     }
+    validateImmutableResultShape(input.sourceEventId, input.result);
     assertStableUniqueContextIds(
       input.sourceEventId,
       input.result.organizationIds,
@@ -524,7 +525,17 @@ function validateIdentityReview(
   if (
     !persistedReason.success
     || result.identityReviewReason !== persistedReason.data
-    || (result.disposition === 'created_merge_review' && result.identityReviewReason === null)
+  ) {
+    throw new IntakeReceiptIntegrityError(sourceEventId, 'identity_review_mismatch');
+  }
+}
+
+function validateImmutableResultShape(
+  sourceEventId: string,
+  result: StoredIntakeResult,
+): void {
+  if (
+    (result.disposition === 'created_merge_review' && result.identityReviewReason === null)
     || (result.disposition === 'created' && result.identityReviewReason !== null)
   ) {
     throw new IntakeReceiptIntegrityError(sourceEventId, 'identity_review_mismatch');
