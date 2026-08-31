@@ -173,6 +173,89 @@ describe('JobRepository', () => {
     expect(repository.get('job-payload')?.payload).toEqual(payload);
   });
 
+  it('returns the canonical job for the same type and idempotency key', async () => {
+    const repository = await createRepository();
+    const first = repository.enqueue({
+      id: 'job-canonical',
+      type: 'rebuild-projection',
+      idempotencyKey: 'prospect-123:v1',
+      payload: { prospectId: 'prospect-123', attempt: 1 },
+    });
+    const duplicate = repository.enqueue({
+      id: 'job-duplicate',
+      type: 'rebuild-projection',
+      idempotencyKey: 'prospect-123:v1',
+      payload: { prospectId: 'prospect-123', attempt: 2 },
+    });
+    const exactRetry = repository.enqueue({
+      id: 'job-canonical',
+      type: 'rebuild-projection',
+      idempotencyKey: 'prospect-123:v1',
+      payload: { prospectId: 'prospect-123', attempt: 3 },
+    });
+
+    expect(duplicate).toEqual(first);
+    expect(exactRetry).toEqual(first);
+    expect(first).toMatchObject({
+      id: 'job-canonical',
+      idempotencyKey: 'prospect-123:v1',
+      payload: { prospectId: 'prospect-123', attempt: 1 },
+    });
+    expect(database?.raw.prepare<[], { count: number }>(`
+      SELECT COUNT(*) AS count FROM jobs WHERE type = 'rebuild-projection'
+    `).get()).toEqual({ count: 1 });
+  });
+
+  it('scopes idempotency keys to job type and leaves unkeyed jobs independent', async () => {
+    const repository = await createRepository();
+    const first = repository.enqueue({
+      id: 'job-type-one',
+      type: 'type-one',
+      idempotencyKey: 'same-key',
+      payload: {},
+    });
+    const second = repository.enqueue({
+      id: 'job-type-two',
+      type: 'type-two',
+      idempotencyKey: 'same-key',
+      payload: {},
+    });
+    const unkeyedOne = repository.enqueue({ id: 'job-unkeyed-one', type: 'type-one', payload: {} });
+    const unkeyedTwo = repository.enqueue({ id: 'job-unkeyed-two', type: 'type-one', payload: {} });
+
+    expect([first.id, second.id, unkeyedOne.id, unkeyedTwo.id]).toEqual([
+      'job-type-one',
+      'job-type-two',
+      'job-unkeyed-one',
+      'job-unkeyed-two',
+    ]);
+  });
+
+  it('does not hide an unrelated primary-key collision behind idempotency lookup', async () => {
+    const repository = await createRepository();
+    repository.enqueue({ id: 'job-collision', type: 'first-type', payload: {} });
+
+    expect(() => repository.enqueue({
+      id: 'job-collision',
+      type: 'second-type',
+      idempotencyKey: 'new-key',
+      payload: {},
+    })).toThrow();
+    expect(repository.get('job-collision')).toMatchObject({ type: 'first-type' });
+  });
+
+  it('rejects an empty idempotency key before persistence', async () => {
+    const repository = await createRepository();
+
+    expect(() => repository.enqueue({
+      id: 'job-empty-idempotency',
+      type: 'sync',
+      idempotencyKey: '',
+      payload: {},
+    })).toThrow(z.ZodError);
+    expect(repository.get('job-empty-idempotency')).toBeNull();
+  });
+
   it('rejects an empty supplied id before it can be persisted', async () => {
     const repository = await createRepository();
     const rawDatabase = database?.raw;

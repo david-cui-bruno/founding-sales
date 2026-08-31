@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
-import { migrateToLatest } from '../../src/main/db/migrate';
+import { createMigrationRunner, migrateToLatest } from '../../src/main/db/migrate';
+import { migration0001Foundation } from '../../src/main/db/migrations/0001Foundation';
+import { sql } from 'kysely';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
 describe('database migrations', () => {
@@ -15,7 +17,7 @@ describe('database migrations', () => {
     tempDatabase?.cleanup();
   });
 
-  it('creates the complete foundation schema at version 1', async () => {
+  it('creates the complete foundation and domain schema at version 2', async () => {
     tempDatabase = createTempDatabase();
     const key = createTestWorkspaceKey();
     database = openDatabase({ path: tempDatabase.path, key });
@@ -27,15 +29,15 @@ describe('database migrations', () => {
 
     expect(result).toEqual({
       fromVersion: 0,
-      toVersion: 1,
-      appliedMigrationIds: ['0001Foundation'],
+      toVersion: 2,
+      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation'],
     });
     expect(
       await database.kysely
         .selectFrom('app_meta')
         .select('schema_version')
         .executeTakeFirstOrThrow(),
-    ).toEqual({ schema_version: 1 });
+    ).toEqual({ schema_version: 2 });
 
     const objects = database.raw
       .prepare<[], { name: string; type: string }>(
@@ -67,8 +69,8 @@ describe('database migrations', () => {
     const secondResult = await migrateToLatest(database, options);
 
     expect(secondResult).toEqual({
-      fromVersion: 1,
-      toVersion: 1,
+      fromVersion: 2,
+      toVersion: 2,
       appliedMigrationIds: [],
     });
     expect(
@@ -76,7 +78,7 @@ describe('database migrations', () => {
         .selectFrom('app_meta')
         .select('schema_version')
         .executeTakeFirstOrThrow(),
-    ).toEqual({ schema_version: 1 });
+    ).toEqual({ schema_version: 2 });
     expect(
       database.raw
         .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM app_meta')
@@ -119,8 +121,72 @@ describe('database migrations', () => {
 
     await expect(migrateToLatest(database, options)).resolves.toEqual({
       fromVersion: 0,
-      toVersion: 1,
-      appliedMigrationIds: ['0001Foundation'],
+      toVersion: 2,
+      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation'],
+    });
+  });
+
+  it('rolls a late schema-2 failure back to exact schema 1 before a clean retry', async () => {
+    tempDatabase = createTempDatabase();
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: tempDatabase.path, key });
+    const options = {
+      backupDirectory: `${tempDatabase.path}.backups`,
+      workspaceKey: key,
+    };
+    const migrateToSchemaOne = createMigrationRunner([
+      {
+        id: '0001Foundation',
+        schemaVersion: 1,
+        migration: migration0001Foundation,
+      },
+    ]);
+    await migrateToSchemaOne(database, options);
+    database.raw.prepare(`
+      INSERT INTO jobs (id, type, state, payload_json, created_at, updated_at)
+      VALUES ('schema-one-sentinel', 'test', 'queued', '{}', ?, ?)
+    `).run('2026-08-30T00:00:00.000Z', '2026-08-30T00:00:00.000Z');
+
+    const migrateWithLateFailure = createMigrationRunner([
+      {
+        id: '0001Foundation',
+        schemaVersion: 1,
+        migration: migration0001Foundation,
+      },
+      {
+        id: '0002SyntheticLateFailure',
+        schemaVersion: 2,
+        migration: {
+          async up(kysely) {
+            await sql`CREATE TABLE synthetic_persons (id TEXT PRIMARY KEY)`.execute(kysely);
+            await sql`CREATE TABLE synthetic_sources (id TEXT PRIMARY KEY)`.execute(kysely);
+            await sql`CREATE TABLE synthetic_cycles (id TEXT PRIMARY KEY)`.execute(kysely);
+            await sql`UPDATE app_meta SET schema_version = 2 WHERE singleton = 1`.execute(kysely);
+            throw new Error('Synthetic late schema-2 failure.');
+          },
+        },
+      },
+    ]);
+
+    await expect(migrateWithLateFailure(database, options)).rejects.toThrow(
+      'Synthetic late schema-2 failure.',
+    );
+    expect(database.raw.inTransaction).toBe(false);
+    expect(database.raw.prepare<[], { schema_version: number }>(
+      'SELECT schema_version FROM app_meta WHERE singleton = 1',
+    ).get()).toEqual({ schema_version: 1 });
+    expect(database.raw.prepare<[], { name: string }>(`
+      SELECT name FROM sqlite_master
+      WHERE name IN ('synthetic_persons', 'synthetic_sources', 'synthetic_cycles')
+    `).all()).toEqual([]);
+    expect(database.raw.prepare<[], { id: string }>(
+      "SELECT id FROM jobs WHERE id = 'schema-one-sentinel'",
+    ).get()).toEqual({ id: 'schema-one-sentinel' });
+
+    await expect(migrateToLatest(database, options)).resolves.toEqual({
+      fromVersion: 1,
+      toVersion: 2,
+      appliedMigrationIds: ['0002DomainFoundation'],
     });
   });
 });

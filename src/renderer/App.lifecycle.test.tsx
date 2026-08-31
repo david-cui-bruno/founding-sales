@@ -16,7 +16,7 @@ import { App } from './App';
 
 const health: AppHealth = {
   appVersion: '1.0.0',
-  schemaVersion: 1,
+  schemaVersion: 2,
   databasePath: '/tmp/callie.sqlite3',
   databaseEncrypted: true,
   cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',

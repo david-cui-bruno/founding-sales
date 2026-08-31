@@ -17,6 +17,7 @@ const scenarios = [
   'invalid-temp-with-recovery',
   'all-invalid',
   'wrong-key',
+  'encrypted-schema-two-reopen',
   'path-mismatched-marker',
   'busy-wal',
   'semantic-content-mismatch',

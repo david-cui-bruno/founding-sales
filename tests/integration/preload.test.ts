@@ -40,7 +40,7 @@ describe('preload health bridge', () => {
   it('keeps window.callie.health narrow and invokes only health:get without arguments', async () => {
     const health = {
       appVersion: '1.0.0',
-      schemaVersion: 1,
+      schemaVersion: 2,
       databasePath: '/tmp/callie.sqlite3',
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
@@ -62,7 +62,7 @@ describe('preload health bridge', () => {
   it('rejects a malformed main-process response before exposing it to the renderer', async () => {
     electron.invoke.mockResolvedValue({
       appVersion: '1.0.0',
-      schemaVersion: 1,
+      schemaVersion: 2,
       databasePath: '/tmp/callie.sqlite3',
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',

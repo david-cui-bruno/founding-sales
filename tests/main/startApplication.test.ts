@@ -16,7 +16,7 @@ import type { AppHealth } from '../../src/shared/healthContract';
 
 const health: AppHealth = {
   appVersion: '1.0.0',
-  schemaVersion: 1,
+  schemaVersion: 2,
   databasePath: '/tmp/callie.sqlite3',
   databaseEncrypted: true,
   cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
@@ -56,8 +56,8 @@ describe('startApplication', () => {
         captureMigration?.(options);
         return {
           fromVersion: 0,
-          toVersion: 1,
-          appliedMigrationIds: ['0001Foundation'],
+          toVersion: 2,
+          appliedMigrationIds: ['0001Foundation', '0002DomainFoundation'],
         };
       },
       createJobRepository: () => jobs,
@@ -234,8 +234,8 @@ describe('startApplication', () => {
       }
       return {
         fromVersion: 0,
-        toVersion: 1,
-        appliedMigrationIds: ['0001Foundation'],
+        toVersion: 2,
+        appliedMigrationIds: ['0001Foundation', '0002DomainFoundation'],
       };
     });
 

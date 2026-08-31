@@ -39,7 +39,7 @@ class SourcePathIdentityChangedError extends Error {
 }
 
 export type DatabaseFingerprint = {
-  schemaVersion: 1;
+  schemaVersion: number;
   rowCounts: Record<string, number>;
   contentDigest: string;
 };
@@ -540,7 +540,7 @@ async function stabilizeEncryptedCandidate(
     if (journalMode !== 'delete') {
       throw new Error('Encrypted database journal stabilization failed.');
     }
-    fingerprint = readAndVerifyDatabaseFingerprint(raw);
+    fingerprint = readAndVerifyDatabaseFingerprint(raw, [1, 2]);
   } finally {
     raw.close();
   }
@@ -671,7 +671,7 @@ function inspectEncryptedCandidate(path: string, key: Buffer): Candidate {
     return {
       kind: 'encrypted',
       path,
-      ...readAndVerifyDatabaseFingerprint(raw),
+      ...readAndVerifyDatabaseFingerprint(raw, [1, 2]),
     };
   } catch {
     return { kind: 'invalid', path };
@@ -682,6 +682,7 @@ function inspectEncryptedCandidate(path: string, key: Buffer): Candidate {
 
 export function readAndVerifyDatabaseFingerprint(
   raw: ReturnType<typeof createRawDatabase>,
+  supportedSchemaVersions: readonly number[] = [1],
 ): DatabaseFingerprint {
   const integrity = raw.pragma('integrity_check', { simple: true });
   if (integrity !== 'ok') {
@@ -691,8 +692,19 @@ export function readAndVerifyDatabaseFingerprint(
   const metadata = raw.prepare<[], { schema_version: unknown }>(
     'SELECT schema_version FROM app_meta WHERE singleton = 1',
   ).get();
-  if (metadata?.schema_version !== 1 && metadata?.schema_version !== 1n) {
-    throw new Error('Only plaintext schema 1 can be encrypted in place.');
+  const schemaVersion = typeof metadata?.schema_version === 'bigint'
+    ? Number(metadata.schema_version)
+    : metadata?.schema_version;
+  if (
+    typeof schemaVersion !== 'number'
+    || !Number.isSafeInteger(schemaVersion)
+    || !supportedSchemaVersions.includes(schemaVersion)
+  ) {
+    throw new Error(
+      supportedSchemaVersions.length === 1 && supportedSchemaVersions[0] === 1
+        ? 'Only plaintext schema 1 can be encrypted in place.'
+        : 'Encrypted database schema version is unsupported.',
+    );
   }
 
   raw.defaultSafeIntegers(true);
@@ -711,7 +723,7 @@ export function readAndVerifyDatabaseFingerprint(
   }
 
   const digest = createHash('sha256');
-  updateDigestValue(digest, 1n);
+  updateDigestValue(digest, BigInt(schemaVersion));
   updateDigestValue(digest, raw.pragma('user_version', { simple: true }));
   updateDigestValue(digest, raw.pragma('application_id', { simple: true }));
   for (const row of schemaRows) {
@@ -759,7 +771,7 @@ export function readAndVerifyDatabaseFingerprint(
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion,
     rowCounts,
     contentDigest: digest.digest('hex'),
   };
@@ -910,6 +922,9 @@ async function writeMarker(
   databasePath: string,
   fingerprint: DatabaseFingerprint,
 ): Promise<void> {
+  if (fingerprint.schemaVersion !== 1) {
+    throw new Error('Only schema 1 can create an encryption upgrade marker.');
+  }
   const marker: UpgradeMarker = {
     format: STATE_MARKER_FORMAT,
     version: 1,

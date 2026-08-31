@@ -6,6 +6,7 @@ import { Migrator } from 'kysely/migration'; // eslint-disable-line import/no-un
 import type { AppDatabase } from './database';
 import { createVerifiedMigrationBackup } from './migrationBackup';
 import { migration0001Foundation } from './migrations/0001Foundation';
+import { migration0002DomainFoundation } from './migrations/0002DomainFoundation';
 import type { WorkspaceKey } from '../security/workspaceKeyTypes';
 
 export type MigrationResult = {
@@ -41,6 +42,11 @@ const productionMigrations = [
     id: '0001Foundation',
     schemaVersion: 1,
     migration: migration0001Foundation,
+  },
+  {
+    id: '0002DomainFoundation',
+    schemaVersion: 2,
+    migration: migration0002DomainFoundation,
   },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);

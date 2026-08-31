@@ -1,3 +1,5 @@
+import type { DomainTables } from './domainSchema';
+
 export type AppMetaTable = {
   singleton: number;
   schema_version: number;
@@ -10,6 +12,7 @@ export type JobState = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelle
 export type JobsTable = {
   id: string;
   type: string;
+  idempotency_key: string | null;
   state: JobState;
   progress_current: number;
   progress_total: number | null;
@@ -24,7 +27,9 @@ export type JobsTable = {
   updated_at: string;
 };
 
-export type FoundationDatabase = {
+export type FoundationTables = {
   app_meta: AppMetaTable;
   jobs: JobsTable;
 };
+
+export type FoundationDatabase = FoundationTables & DomainTables;

@@ -3,6 +3,7 @@ export type JobState = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelle
 export type JobRecord = {
   id: string;
   type: string;
+  idempotencyKey: string | null;
   state: JobState;
   progressCurrent: number;
   progressTotal: number | null;
@@ -17,6 +18,7 @@ export type JobRecord = {
 export type EnqueueJobInput = {
   id?: string;
   type: string;
+  idempotencyKey?: string;
   payload: unknown;
   progressTotal?: number | null;
 };

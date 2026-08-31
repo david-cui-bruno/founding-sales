@@ -22,13 +22,13 @@ const deferred = <T,>(): Deferred<T> => {
 
 const migrationResult = {
   fromVersion: 0,
-  toVersion: 1,
-  appliedMigrationIds: ['0001Foundation'],
+  toVersion: 2,
+  appliedMigrationIds: ['0001Foundation', '0002DomainFoundation'],
 };
 
 const health: AppHealth = {
   appVersion: '1.0.0',
-  schemaVersion: 1,
+  schemaVersion: 2,
   databasePath: '/tmp/callie-user-data/callie.sqlite3',
   databaseEncrypted: true,
   cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',

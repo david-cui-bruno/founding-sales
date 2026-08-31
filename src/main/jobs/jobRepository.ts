@@ -17,6 +17,7 @@ const errorSchema = z.object({
 const enqueueJobInputSchema = z.object({
   id: jobIdSchema.optional(),
   type: z.string().min(1),
+  idempotencyKey: z.string().trim().min(1).optional(),
   payload: z.unknown(),
   progressTotal: nonnegativeIntegerSchema.nullable().optional(),
 });
@@ -45,6 +46,7 @@ const storedJobRowSchema = z
   .object({
     id: z.string().min(1),
     type: z.string().min(1),
+    idempotency_key: z.string().min(1).nullable(),
     state: jobStateSchema,
     progress_current: nonnegativeIntegerSchema,
     progress_total: nonnegativeIntegerSchema.nullable(),
@@ -125,6 +127,7 @@ type StoredJobRow = z.infer<typeof storedJobRowSchema>;
 const returnedJobColumns = `
   id,
   type,
+  idempotency_key,
   state,
   progress_current,
   progress_total,
@@ -158,16 +161,41 @@ export class JobRepository {
     const progressTotal = parseProgressTotal(parsedInput.progressTotal ?? null);
     const timestamp = new Date().toISOString();
     const payloadJson = serializeJson(parsedInput.payload, 'payload');
+    const idempotencyKey = parsedInput.idempotencyKey ?? null;
 
     const row = this.database.raw
       .prepare(
         `INSERT INTO jobs (
-          id, type, state, progress_current, progress_total, retry_count, payload_json,
+          id, type, idempotency_key, state, progress_current, progress_total, retry_count, payload_json,
           result_json, error_code, error_message, created_at, started_at, finished_at, updated_at
-        ) VALUES (?, ?, 'queued', 0, ?, 0, ?, NULL, NULL, NULL, ?, NULL, NULL, ?)
+        ) VALUES (?, ?, ?, 'queued', 0, ?, 0, ?, NULL, NULL, NULL, ?, NULL, NULL, ?)
+        ON CONFLICT(type, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
         RETURNING ${returnedJobColumns}`,
       )
-      .get(id, parsedInput.type, progressTotal, payloadJson, timestamp, timestamp);
+      .get(
+        id,
+        parsedInput.type,
+        idempotencyKey,
+        progressTotal,
+        payloadJson,
+        timestamp,
+        timestamp,
+      );
+
+    if (row === undefined) {
+      if (idempotencyKey === null) {
+        throw new Error('Unkeyed job insertion did not return a row.');
+      }
+      const canonical = this.database.raw.prepare(
+        `SELECT ${returnedJobColumns}
+         FROM jobs
+         WHERE type = ? AND idempotency_key = ?`,
+      ).get(parsedInput.type, idempotencyKey);
+      if (canonical === undefined) {
+        throw new Error('Canonical idempotent job is missing.');
+      }
+      return parseStoredJobRow(canonical);
+    }
 
     return parseStoredJobRow(row);
   }
@@ -339,6 +367,7 @@ function parseStoredJobRow(value: unknown): JobRecord {
   return {
     id: row.id,
     type: row.type,
+    idempotencyKey: row.idempotency_key,
     state: row.state,
     progressCurrent: row.progress_current,
     progressTotal: row.progress_total,

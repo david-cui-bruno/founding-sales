@@ -29,10 +29,7 @@ import {
   createMigrationBackupService,
   type MigrationBackup,
 } from '../../src/main/db/migrationBackup';
-import {
-  createMigrationRunner,
-  migrateToLatest,
-} from '../../src/main/db/migrate';
+import { createMigrationRunner } from '../../src/main/db/migrate';
 import { migration0001Foundation } from '../../src/main/db/migrations/0001Foundation';
 import {
   applyWorkspaceKey,
@@ -46,6 +43,14 @@ import {
 const scenario = process.argv[2];
 assert.ok(scenario, 'A migration-backup scenario is required.');
 
+const migrateToSchemaOne = createMigrationRunner([
+  {
+    id: '0001Foundation',
+    schemaVersion: 1,
+    migration: migration0001Foundation,
+  },
+]);
+
 void runScenario();
 
 async function runScenario(): Promise<void> {
@@ -58,7 +63,7 @@ async function runScenario(): Promise<void> {
     database = openDatabase({ path: workspace.path, key });
 
     if (scenario === 'verified-schema-one') {
-      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      await migrateToSchemaOne(database, { backupDirectory, workspaceKey: key });
       const directBackupDirectory = join(dirname(workspace.path), 'direct-backups');
       const backup = createVerifiedMigrationBackup({
         database,
@@ -68,7 +73,7 @@ async function runScenario(): Promise<void> {
       });
       assertVerifiedBackup(backup, directBackupDirectory, key.bytes, 1);
     } else if (scenario === 'pending-only') {
-      const first = await migrateToLatest(database, {
+      const first = await migrateToSchemaOne(database, {
         backupDirectory,
         workspaceKey: key,
       });
@@ -81,7 +86,7 @@ async function runScenario(): Promise<void> {
       assert.equal(afterFirst.length, 1);
       assertBackupFile(afterFirst[0], key.bytes, 0);
 
-      const second = await migrateToLatest(database, {
+      const second = await migrateToSchemaOne(database, {
         backupDirectory,
         workspaceKey: key,
       });
@@ -94,7 +99,7 @@ async function runScenario(): Promise<void> {
     } else if (scenario === 'migration-failure') {
       database.raw.exec('CREATE TABLE foundation_fts_probe (content TEXT)');
       await assert.rejects(
-        migrateToLatest(database, { backupDirectory, workspaceKey: key }),
+        migrateToSchemaOne(database, { backupDirectory, workspaceKey: key }),
       );
       assert.equal(readSchemaVersion(database), 0);
       assert.deepEqual(
@@ -109,7 +114,7 @@ async function runScenario(): Promise<void> {
       assert.equal(backups.length, 1);
       assertBackupFile(backups[0], key.bytes, 0);
     } else if (scenario === 'schema-one-migration-failure') {
-      await migrateToLatest(database, {
+      await migrateToSchemaOne(database, {
         backupDirectory,
         workspaceKey: key,
       });
@@ -187,7 +192,7 @@ async function runScenario(): Promise<void> {
         reopened.close();
       }
     } else if (scenario === 'verification-failure') {
-      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      await migrateToSchemaOne(database, { backupDirectory, workspaceKey: key });
       const rejectedDirectory = join(dirname(workspace.path), 'rejected-backups');
       await assert.rejects(async () => createVerifiedMigrationBackup({
         database,
@@ -199,7 +204,7 @@ async function runScenario(): Promise<void> {
       assert.equal(readSchemaVersion(database), 1);
     } else if (scenario === 'verification-blocks-migration') {
       const rejectedDirectory = join(dirname(workspace.path), 'rejected-migration');
-      await assert.rejects(migrateToLatest(database, {
+      await assert.rejects(migrateToSchemaOne(database, {
         backupDirectory: rejectedDirectory,
         workspaceKey: createTestWorkspaceKey(0x7b),
       }));
@@ -214,7 +219,7 @@ async function runScenario(): Promise<void> {
         [],
       );
     } else if (scenario === 'busy-checkpoint') {
-      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      await migrateToSchemaOne(database, { backupDirectory, workspaceKey: key });
       database.raw.exec("INSERT INTO foundation_fts_probe (content) VALUES ('old')");
       const reader = createRawDatabase(workspace.path, { fileMustExist: true });
       try {
@@ -252,7 +257,7 @@ async function runScenario(): Promise<void> {
         [{ content: 'new' }],
       );
     } else if (scenario === 'directory-replaced') {
-      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      await migrateToSchemaOne(database, { backupDirectory, workspaceKey: key });
       const raceDirectory = join(dirname(workspace.path), 'race-backups');
       const displacedDirectory = `${raceDirectory}.displaced`;
       const originalPragma = database.raw.pragma.bind(database.raw);
@@ -280,7 +285,7 @@ async function runScenario(): Promise<void> {
       assert.deepEqual(listBackups(raceDirectory), []);
       assert.deepEqual(listBackups(displacedDirectory), []);
     } else if (scenario === 'unrelated-sidecar') {
-      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      await migrateToSchemaOne(database, { backupDirectory, workspaceKey: key });
       const sidecarDirectory = join(dirname(workspace.path), 'sidecar-backups');
       mkdirSync(sidecarDirectory, { mode: 0o700 });
       const originalDate = Date;
@@ -310,7 +315,7 @@ async function runScenario(): Promise<void> {
       assert.equal(existsSync(fixedBackupPath), false);
       assert.deepEqual(readFileSync(sidecarPath), unrelated);
     } else if (scenario === 'path-replaced') {
-      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      await migrateToSchemaOne(database, { backupDirectory, workspaceKey: key });
       seedLargePayload(database);
       const raceDirectory = join(dirname(workspace.path), 'path-race-backups');
       mkdirSync(raceDirectory, { mode: 0o700 });
@@ -340,7 +345,7 @@ async function runScenario(): Promise<void> {
       assert.deepEqual(readFileSync(fixedBackupPath), unrelated);
       assert.equal(statSync(displacedPath).size, 0);
     } else if (scenario === 'sidecar-race') {
-      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      await migrateToSchemaOne(database, { backupDirectory, workspaceKey: key });
       seedLargePayload(database);
       const raceDirectory = join(dirname(workspace.path), 'sidecar-race-backups');
       mkdirSync(raceDirectory, { mode: 0o700 });
@@ -372,7 +377,7 @@ async function runScenario(): Promise<void> {
         Buffer.from('unrelated raced sidecar'),
       );
     } else if (scenario === 'unlink-failure') {
-      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      await migrateToSchemaOne(database, { backupDirectory, workspaceKey: key });
       seedLargePayload(database);
       const raceDirectory = join(dirname(workspace.path), 'unlink-failure-backups');
       mkdirSync(raceDirectory, { mode: 0o700 });
@@ -400,7 +405,7 @@ async function runScenario(): Promise<void> {
       await assertWatcherSucceeded(watcher);
       assert.equal(statSync(fixedBackupPath).size, 0);
     } else if (scenario === 'creation-fchmod-failure') {
-      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      await migrateToSchemaOne(database, { backupDirectory, workspaceKey: key });
       const failureDirectory = join(dirname(workspace.path), 'fchmod-failure');
       let directorySyncs = 0;
       const createBackup = createMigrationBackupService({
@@ -422,7 +427,7 @@ async function runScenario(): Promise<void> {
       assert.deepEqual(listBackups(failureDirectory), []);
       assert.equal(directorySyncs > 0, true);
     } else if (scenario === 'creation-fstat-failure') {
-      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      await migrateToSchemaOne(database, { backupDirectory, workspaceKey: key });
       const failureDirectory = join(dirname(workspace.path), 'fstat-failure');
       let shouldFail = true;
       let directorySyncs = 0;
@@ -450,7 +455,7 @@ async function runScenario(): Promise<void> {
       assert.deepEqual(listBackups(failureDirectory), []);
       assert.equal(directorySyncs > 0, true);
     } else if (scenario === 'creation-fstat-unrecoverable') {
-      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      await migrateToSchemaOne(database, { backupDirectory, workspaceKey: key });
       const failureDirectory = join(dirname(workspace.path), 'fstat-unrecoverable');
       mkdirSync(failureDirectory, { mode: 0o700 });
       const fixedBackupPath = join(

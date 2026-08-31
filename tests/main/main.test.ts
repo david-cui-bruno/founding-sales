@@ -246,8 +246,8 @@ describe('main process startup', () => {
           settleMigration = () =>
             resolve({
               fromVersion: 0,
-              toVersion: 1,
-              appliedMigrationIds: ['0001Foundation'],
+              toVersion: 2,
+              appliedMigrationIds: ['0001Foundation', '0002DomainFoundation'],
             });
         });
       },
@@ -324,8 +324,8 @@ describe('main process startup', () => {
         events.push('migrate');
         return {
           fromVersion: 0,
-          toVersion: 1,
-          appliedMigrationIds: ['0001Foundation'],
+          toVersion: 2,
+          appliedMigrationIds: ['0001Foundation', '0002DomainFoundation'],
         };
       },
       createJobRepository: () => ({

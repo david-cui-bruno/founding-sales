@@ -102,6 +102,11 @@ async function runScenario(): Promise<void> {
       await assertAllInvalidCopiesArePreserved(workspace.path);
     } else if (scenario === 'wrong-key') {
       await assertWrongKeyIsImmutable(workspace.path);
+    } else if (scenario === 'encrypted-schema-two-reopen') {
+      await createEncryptedLatestSchema(workspace.path);
+      await prepareEncryptedDatabase(workspace.path, createTestWorkspaceKey());
+      assertEncryptedRetainedRow(workspace.path);
+      assertArtifactsAbsent(workspace.path);
     } else if (scenario === 'path-mismatched-marker') {
       await assertMismatchedMarkerIsImmutable(workspace.path);
     } else if (scenario === 'busy-wal') {
@@ -524,7 +529,7 @@ async function createPlaintextSchemaOne(databasePath: string): Promise<void> {
   }
 }
 
-async function createEncryptedSchemaOne(databasePath: string): Promise<void> {
+async function createEncryptedLatestSchema(databasePath: string): Promise<void> {
   const key = createTestWorkspaceKey();
   const encrypted = openDatabase({
     path: databasePath,
@@ -667,7 +672,7 @@ async function assertAllInvalidCopiesArePreserved(
 }
 
 async function assertWrongKeyIsImmutable(databasePath: string): Promise<void> {
-  await createEncryptedSchemaOne(databasePath);
+  await createEncryptedLatestSchema(databasePath);
   const before = readFileSync(databasePath);
   await assert.rejects(prepareEncryptedDatabase(
     databasePath,

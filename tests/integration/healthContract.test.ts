@@ -4,7 +4,7 @@ import { appHealthSchema } from '../../src/shared/healthContract';
 
 const validHealth = {
   appVersion: '1.0.0',
-  schemaVersion: 1,
+  schemaVersion: 2,
   databasePath: '/Users/founder/Library/Application Support/Callie/callie.sqlite3',
   databaseEncrypted: true,
   cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',

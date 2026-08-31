@@ -5,7 +5,7 @@ import { DiagnosticsScreen, type DiagnosticsState } from './App';
 
 const health: AppHealth = {
   appVersion: '1.0.0',
-  schemaVersion: 1,
+  schemaVersion: 2,
   databasePath: '/tmp/callie.sqlite3',
   databaseEncrypted: true,
   cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
@@ -32,7 +32,7 @@ describe('DiagnosticsScreen', () => {
     expect(markup).toContain('Callie Founder Sales System');
     expect(markup).toContain('Encrypted SQLite ready');
     expect(markup).toContain('FTS5 available');
-    expect(markup).toContain('Schema 1');
+    expect(markup).toContain('Schema 2');
     expect(markup).toContain('1.0.0');
     expect(markup).toContain('/tmp/callie.sqlite3');
     expect(markup).toContain('Active job count');

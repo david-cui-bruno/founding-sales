@@ -41,7 +41,7 @@ test('packaged diagnostics use callie protocol and an isolated native SQLite dat
 
     expect(firstLaunch).toEqual({
       databasePath: expectedDatabasePath,
-      schemaVersion: 1,
+      schemaVersion: 2,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,
@@ -90,7 +90,7 @@ test('packaged startup leaves an isolated database collision untouched and recov
 
     expect(health).toEqual({
       databasePath,
-      schemaVersion: 1,
+      schemaVersion: 2,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,
@@ -140,7 +140,7 @@ const inspectPackagedApplication = async (userDataPath: string) => {
     ).toBeVisible();
     await expect(page.getByText('Encrypted SQLite ready')).toBeVisible();
     await expect(page.getByText('FTS5 available')).toBeVisible();
-    await expect(page.getByText('Schema 1')).toBeVisible();
+    await expect(page.getByText('Schema 2')).toBeVisible();
     await expect(page.getByText('Active job count')).toBeVisible();
     await expect(page.getByText('Recovery count')).toBeVisible();
     await expect(page).toHaveURL('callie://app/index.html');
