@@ -69,14 +69,17 @@ export class SafeStorageKeyProtector implements KeyProtector {
   }
 
   private async assertAvailable(): Promise<void> {
+    let available: unknown;
     try {
-      if (!(await this.safeStorage.isAsyncEncryptionAvailable())) {
-        throw new WorkspaceKeyTemporarilyUnavailableError();
-      }
-    } catch (error) {
-      if (error instanceof WorkspaceKeyTemporarilyUnavailableError) {
-        throw error;
-      }
+      available = await this.safeStorage.isAsyncEncryptionAvailable();
+    } catch {
+      throw new WorkspaceKeyTemporarilyUnavailableError();
+    }
+
+    if (typeof available !== 'boolean') {
+      throw new InvalidKeyProtectorResultError();
+    }
+    if (!available) {
       throw new WorkspaceKeyTemporarilyUnavailableError();
     }
   }

@@ -14,7 +14,7 @@ import {
 const NO_DECRYPT_OVERRIDE = Symbol('no-decrypt-override');
 
 class FakeSafeStorage implements AsyncSafeStorage {
-  available = true;
+  available: unknown = true;
   availabilityError: Error | undefined;
   encryptError: Error | undefined;
   decryptError: Error | undefined;
@@ -29,7 +29,7 @@ class FakeSafeStorage implements AsyncSafeStorage {
     if (this.availabilityError !== undefined) {
       throw this.availabilityError;
     }
-    return this.available;
+    return this.available as boolean;
   }
 
   async encryptStringAsync(plainText: string): Promise<Buffer> {
@@ -126,6 +126,20 @@ describe('SafeStorageKeyProtector', () => {
     );
     await expect(operation).rejects.toThrow('Workspace key protection is temporarily unavailable.');
   });
+
+  it.each(['false', {}, 1, null, undefined])(
+    'rejects a malformed async-availability result: %p',
+    async (available) => {
+      const safeStorage = new FakeSafeStorage();
+      safeStorage.available = available;
+      const protector = new SafeStorageKeyProtector(safeStorage);
+
+      await expect(protector.protect(Buffer.alloc(32, 0x2a))).rejects.toBeInstanceOf(
+        InvalidKeyProtectorResultError,
+      );
+      expect(safeStorage.encryptInputs).toEqual([]);
+    },
+  );
 
   it.each(['availability', 'encrypt'] as const)(
     'does not leak provider details when temporary %s fails',
