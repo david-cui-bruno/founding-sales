@@ -14,6 +14,10 @@ import {
   type OptOutEvidenceNode,
 } from '../optOut/optOutEvidenceValidator';
 import type { OptOutTombstone } from '../optOut/optOutTypes';
+import {
+  collectOptOutClosureReceiptViolations,
+  parseStoredOptOutClosureReceipt,
+} from '../optOut/optOutClosureReceiptValidator';
 import { deriveInboundSla } from './inboundSla';
 import {
   reactivationCommandEnvelopeSchema,
@@ -503,6 +507,30 @@ export function auditDomainInvariants(input: {
     'opt_out_handle_retention_invalid', row.id,
     'An opted-out Person contact method is missing from permanent handle retention.',
   );
+
+  for (const row of rows(`
+    SELECT source_activity_id, operation_kind, person_id, tombstone_id,
+      source_tombstone_id, closed_cycle_id, terminal_stage_event_id,
+      command_json, result_json, created_at
+    FROM opt_out_closure_receipts ORDER BY source_activity_id
+  `)) {
+    try {
+      const receipt = parseStoredOptOutClosureReceipt(row);
+      if (collectOptOutClosureReceiptViolations(input.database, receipt).length !== 0) {
+        add(
+          'opt_out_closure_receipt_invalid',
+          receipt.sourceActivityId,
+          'Opt-out closure receipt is not a canonical lifecycle closure result.',
+        );
+      }
+    } catch {
+      add(
+        'opt_out_closure_receipt_invalid',
+        row.source_activity_id,
+        'Opt-out closure receipt is malformed.',
+      );
+    }
+  }
 
   const receipts = rows(`
     SELECT activation_key, activation_kind, person_id, source_cycle_id,

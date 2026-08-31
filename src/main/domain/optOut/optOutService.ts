@@ -276,6 +276,7 @@ export class OptOutService {
   ): ApplyOptOutResult | null {
     const receipt = this.optOuts.getClosureReceiptForActivity(sourceActivityId);
     if (receipt === null) return null;
+    this.optOuts.assertCanonicalClosureReceipt(receipt);
     if (serializeCanonical(receipt.command) !== serializeCanonical(command)) {
       throw new OptOutPersistenceConflictError('closure_receipt', sourceActivityId);
     }

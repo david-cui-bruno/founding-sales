@@ -9,6 +9,7 @@ import { EventRepository } from '../../src/main/domain/events/eventRepository';
 import { IdentityRepository } from '../../src/main/domain/identity/identityRepository';
 import { LifecycleService } from '../../src/main/domain/lifecycle/lifecycleService';
 import { auditDomainInvariants } from '../../src/main/domain/lifecycle/invariantAudit';
+import { serializeCanonical } from '../../src/main/domain/lifecycle/lifecycleValidation';
 import { OptOutRepository } from '../../src/main/domain/optOut/optOutRepository';
 import { OptOutService } from '../../src/main/domain/optOut/optOutService';
 import type {
@@ -160,6 +161,7 @@ describe('OptOutService', () => {
     })).toThrow();
     const laterInput = command(prospect.personId, 'later-observation');
     if (laterInput.evidence.kind !== 'append_activity') throw new Error('Expected append evidence.');
+    clockNow = LATER;
     const later = apply.apply({
       ...laterInput, requestedAt: LATER,
       evidence: {
@@ -194,6 +196,32 @@ describe('OptOutService', () => {
       cycles: database.raw.prepare(`SELECT COUNT(*) AS count FROM sales_cycles`).get(),
       reviews: database.raw.prepare(`SELECT COUNT(*) AS count FROM lifecycle_review_items`).get(),
     }).toEqual(beforeReactivation);
+
+    const receiptRow = database.raw.prepare(`
+      SELECT result_json FROM opt_out_closure_receipts WHERE source_activity_id = 'apply-activity'
+    `).get() as { result_json: string };
+    const forgedResult = JSON.parse(receiptRow.result_json) as { handles: unknown[] };
+    forgedResult.handles.reverse();
+    database.raw.exec('DROP TRIGGER immutable_opt_out_closure_receipts');
+    database.raw.prepare(`
+      UPDATE opt_out_closure_receipts SET result_json = ? WHERE source_activity_id = 'apply-activity'
+    `).run(serializeCanonical(forgedResult));
+    expect(auditDomainInvariants({ database, asOf: LATER })).toContainEqual(
+      expect.objectContaining({
+        kind: 'opt_out_closure_receipt_invalid', recordId: 'apply-activity',
+      }),
+    );
+    expect(() => apply.apply(input)).toThrow();
+    database.raw.prepare(`
+      UPDATE opt_out_closure_receipts SET result_json = '{'
+      WHERE source_activity_id = 'apply-activity'
+    `).run();
+    expect(auditDomainInvariants({ database, asOf: LATER })).toContainEqual(
+      expect.objectContaining({
+        kind: 'opt_out_closure_receipt_invalid', recordId: 'apply-activity',
+      }),
+    );
+    expect(() => apply.apply(input)).toThrow();
   });
 
   it('closes lifecycle before tombstone insertion and preserves immutable history', () => {
@@ -224,6 +252,11 @@ describe('OptOutService', () => {
     expect(database.raw.prepare(`
       SELECT COUNT(*) AS count FROM reactivation_rules WHERE sales_cycle_id = ?
     `).get(cycle.cycleId)).toEqual({ count: 0 });
+    expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).not.toContainEqual(
+      expect.objectContaining({
+        kind: 'opt_out_closure_receipt_invalid', recordId: 'lifecycle-activity',
+      }),
+    );
 
     database.raw.exec(`
       CREATE TRIGGER reject_duplicate_opt_out_close
@@ -239,6 +272,70 @@ describe('OptOutService', () => {
     expect(database.raw.prepare(`
       SELECT COUNT(*) AS count FROM stage_events WHERE sales_cycle_id = ?
     `).get(cycle.cycleId)).toEqual({ count: 1 });
+    database.raw.exec('DROP TRIGGER immutable_stage_events');
+    database.raw.prepare(`
+      UPDATE stage_events SET to_stage = 'offered', effective_at = ? WHERE id = ?
+    `).run(LATER, 'lifecycle-terminal-event');
+    expect(auditDomainInvariants({ database, asOf: LATER })).toContainEqual(
+      expect.objectContaining({
+        kind: 'opt_out_closure_receipt_invalid', recordId: 'lifecycle-activity',
+      }),
+    );
+    expect(() => service().apply(input)).toThrow();
+  });
+
+  it('preserves Won and its terms in a canonical receipt without another terminal event', () => {
+    const prospect = seedProspect(database.raw, 'won-receipt');
+    database.raw.exec('BEGIN IMMEDIATE');
+    try {
+      database.raw.prepare(`
+        INSERT INTO sales_cycles (
+          id, person_id, prospect_id, entry_source_event_id, stage, workflow_status,
+          current_next_action_id, stage_entered_at, version, created_at, updated_at
+        ) VALUES ('won-receipt-cycle', ?, ?, ?, 'won', 'onboarding',
+          'won-receipt-action', ?, 1, ?, ?)
+      `).run(
+        prospect.personId, prospect.prospectId, prospect.sourceEventId,
+        DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+      );
+      database.raw.prepare(`
+        INSERT INTO next_actions (
+          id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+          work_intent, created_at, updated_at
+        ) VALUES ('won-receipt-action', 'won-receipt-cycle', 'onboard_customer',
+          'text', 'pending', ?, 'America/New_York', 'promised_follow_up', ?, ?)
+      `).run(DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+      database.raw.prepare(`
+        INSERT INTO won_terms (
+          sales_cycle_id, doors_committed, billing_model, unit_rate_cents,
+          projected_mrr_cents, projection_formula_version, manual_projection_reason,
+          founding_customer, effective_at, created_at
+        ) VALUES ('won-receipt-cycle', 12, 'per_door_monthly', 2500, 30000,
+          'founder_terms_v1', NULL, 1, ?, ?)
+      `).run(DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+      database.raw.exec('COMMIT');
+    } catch (error) {
+      if (database.raw.inTransaction) database.raw.exec('ROLLBACK');
+      throw error;
+    }
+    const input = command(prospect.personId, 'won-receipt');
+    const result = service().apply(input);
+    expect(result.cycle).toMatchObject({
+      id: 'won-receipt-cycle', stage: 'won', workflowStatus: 'closed',
+      closeReason: null, onboardingStopReason: 'opt_out', currentNextActionId: null,
+    });
+    expect(database.raw.prepare(`
+      SELECT projected_mrr_cents FROM won_terms WHERE sales_cycle_id = 'won-receipt-cycle'
+    `).get()).toEqual({ projected_mrr_cents: 30000 });
+    expect(database.raw.prepare(`
+      SELECT COUNT(*) AS count FROM stage_events WHERE sales_cycle_id = 'won-receipt-cycle'
+    `).get()).toEqual({ count: 0 });
+    expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).not.toContainEqual(
+      expect.objectContaining({
+        kind: 'opt_out_closure_receipt_invalid', recordId: 'won-receipt-activity',
+      }),
+    );
+    expect(service().apply(input)).toEqual(result);
   });
 
   it.each([

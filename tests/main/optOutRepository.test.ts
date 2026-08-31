@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { OptOutRepository } from '../../src/main/domain/optOut/optOutRepository';
+import { SalesCycleRepository } from '../../src/main/domain/lifecycle/salesCycleRepository';
 import type {
   OptOutClosureCommand,
   OptOutClosureReceipt,
@@ -13,7 +14,7 @@ import {
   OptOutPersistenceConflictError,
 } from '../../src/main/domain/support/domainErrors';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
-import { DOMAIN_TIMESTAMP, seedProspect } from '../fixtures/domainRows';
+import { DOMAIN_TIMESTAMP, insertClosedCycle, seedProspect } from '../fixtures/domainRows';
 import {
   createTempDatabase,
   createTestWorkspaceKey,
@@ -220,5 +221,41 @@ describe('OptOutRepository', () => {
       WHERE source_activity_id = ?
     `).run(proof.activityId);
     expect(() => repository.getClosureReceiptForActivity(proof.activityId)).toThrow();
+  });
+
+  it('rejects a forged receipt that presents an unrelated no-response closure as opt-out work', () => {
+    const prospect = seedProspect(database.raw, 'forged-closure-cycle');
+    const activityId = 'forged-closure-cycle-activity';
+    database.raw.prepare(`
+      INSERT INTO activities (
+        id, person_id, kind, direction, channel, occurred_at, observed_outcome,
+        metadata_json, created_at
+      ) VALUES (?, ?, 'text', 'inbound', 'imessage', ?, 'opted_out', '{}', ?)
+    `).run(activityId, prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    const cycleId = insertClosedCycle({
+      database: database.raw, prefix: 'forged-no-response', prospect,
+    });
+    const cycle = new SalesCycleRepository({ database, unitOfWork }).getById(cycleId)!;
+    const canonical = tombstone(
+      'forged-closure-cycle-tombstone', prospect.personId, activityId,
+    );
+    unitOfWork.immediate(() => {
+      repository.insertTombstone(canonical);
+      expect(() => repository.insertClosureReceipt({
+        sourceActivityId: activityId, operationKind: 'apply', personId: prospect.personId,
+        tombstoneId: canonical.id, sourceTombstoneId: null,
+        closedCycleId: cycle.id, terminalStageEventId: null,
+        command: {
+          version: 1, kind: 'apply', input: {
+            personId: prospect.personId, tombstoneId: canonical.id,
+            requestedAt: DOMAIN_TIMESTAMP, policyVersion: 'founder_opt_out_v1',
+            decision: { kind: 'structured_written', channel: 'imessage' },
+            evidence: { kind: 'existing_activity', activityId }, terminalStageEventId: null,
+          },
+        },
+        result: { tombstone: canonical, handles: [], cycle, alreadyApplied: false },
+        createdAt: DOMAIN_TIMESTAMP,
+      })).toThrow();
+    });
   });
 });
