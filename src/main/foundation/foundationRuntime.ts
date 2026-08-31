@@ -17,6 +17,8 @@ import type {
   WorkspaceKeyStoreInput,
 } from '../security/workspaceKeyTypes';
 
+export type { FounderSalesDomain } from '../domain/founderSalesDomain';
+
 type FoundationDomainRuntime = Pick<
   DomainRuntime,
   'initialize' | 'getDiagnostics' | 'getServices' | 'shutdown'

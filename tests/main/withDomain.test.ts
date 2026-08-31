@@ -12,6 +12,9 @@ import { FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
+import {
+  DomainRuntimeBlockedError,
+} from '../../src/main/domain/startup/domainStartupTypes';
 import { SystemClock } from '../../src/main/domain/support/clock';
 import { UuidGenerator } from '../../src/main/domain/support/idGenerator';
 import { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
@@ -117,5 +120,49 @@ describe('FoundationRuntime.withDomain', () => {
     await runtime.withDomain((domain) => domain);
     await runtime.shutdown();
     await expect(runtime.withDomain((domain) => domain)).rejects.toThrow();
+  });
+
+  it('propagates the typed blocked error without constructing a facade', async () => {
+    const blockedTemp = createTempDatabase();
+    const key = createTestWorkspaceKey();
+    let blockedDatabase: AppDatabase | undefined;
+    const blockedRuntime = new FoundationRuntime(
+      {
+        appVersion: '1.0.0',
+        backupDirectory: `${blockedTemp.path}.backups`,
+        databasePath: blockedTemp.path,
+        databaseExists: false,
+        keyEnvelopePath: `${blockedTemp.path}.key-envelope.json`,
+      },
+      {
+        loadWorkspaceKey: async () => ({ bytes: Buffer.from(key.bytes), version: 1 }),
+        prepareEncryptedDatabase: async () => undefined,
+        openDatabase: (options) => {
+          blockedDatabase = openDatabase(options);
+          return blockedDatabase;
+        },
+        migrateToLatest: (database, options) => migrateToLatest(database, options),
+        createDomainRuntime: () => {
+          const report = fakeStartupReport({ status: 'blocked' });
+          return {
+            initialize: () => report,
+            getDiagnostics: () => report,
+            getServices: () => {
+              throw new DomainRuntimeBlockedError();
+            },
+            shutdown: () => undefined,
+          };
+        },
+        createHealthService: () => ({ getHealth: () => health }),
+        closeDatabase: (database) => closeDatabase(database),
+      },
+    );
+    try {
+      await expect(blockedRuntime.withDomain((domain) => domain))
+        .rejects.toBeInstanceOf(DomainRuntimeBlockedError);
+    } finally {
+      await blockedRuntime.shutdown();
+      blockedTemp.cleanup();
+    }
   });
 });

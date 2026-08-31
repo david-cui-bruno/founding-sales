@@ -1,133 +1,286 @@
 import { createHash } from 'node:crypto';
 
 import Papa from 'papaparse';
-import { z } from 'zod';
 
 import type { AppDatabase } from '../db/database';
-import type {
-  BeginOutboundRequest,
-  ConfirmTransitionRequest,
-  LeadDetail,
-  LeadDetailRequest,
-} from '../../shared/contracts/leadDetailContract';
+import type { JobRecord } from '../jobs/jobTypes';
 import {
-  leadDetailSchema,
-} from '../../shared/contracts/leadDetailContract';
-import type {
-  LeadBulkUpdateRequest,
-  LeadFieldUpdateRequest,
-  LeadRow,
-  LeadsListRequest,
-  LeadsListResponse,
-} from '../../shared/contracts/leadsContract';
+  mutationReceiptSchema,
+  type MutationReceipt,
+  type LeadPriorityContext,
+  type PrimaryAction,
+} from '../../shared/contracts/commonContract';
 import {
+  leadBulkUpdateRequestSchema,
+  leadFieldUpdateRequestSchema,
+  leadsListRequestSchema,
   leadsListResponseSchema,
+  type LeadBulkUpdateRequest,
+  type LeadFieldUpdateRequest,
+  type LeadRow,
+  type LeadsListRequest,
+  type LeadsListResponse,
 } from '../../shared/contracts/leadsContract';
-import type { MutationReceipt } from '../../shared/contracts/commonContract';
-import { mutationReceiptSchema } from '../../shared/contracts/commonContract';
-import type {
-  CompleteActionRequest,
-  LogPastActivityRequest,
-  PinActionRequest,
-  SnoozeActionRequest,
-  TodayItem,
-  TodaySnapshot,
-} from '../../shared/contracts/todayContract';
-import { todaySnapshotSchema } from '../../shared/contracts/todayContract';
-import type { PipelineSnapshot } from '../../shared/contracts/pipelineContract';
-import { pipelineSnapshotSchema } from '../../shared/contracts/pipelineContract';
-import type {
-  ResolveReviewRequest,
-  ReviewItem,
-  ReviewListRequest,
-  ReviewSnapshot,
-} from '../../shared/contracts/reviewContract';
-import { reviewSnapshotSchema } from '../../shared/contracts/reviewContract';
-import type {
-  CancelJobRequest,
-  CreateJobRequest,
-  FillJobRequest,
-  FridayReport,
-  MetricDrilldown,
-  MetricDrilldownRequest,
-  MetricId,
-} from '../../shared/contracts/fridayContract';
 import {
+  beginOutboundRequestSchema,
+  confirmTransitionRequestSchema,
+  leadDetailRequestSchema,
+  leadDetailSchema,
+  type BeginOutboundRequest,
+  type ConfirmTransitionRequest,
+  type LeadDetail,
+  type LeadDetailRequest,
+} from '../../shared/contracts/leadDetailContract';
+import {
+  completeActionRequestSchema,
+  logPastActivityRequestSchema,
+  pinActionRequestSchema,
+  snoozeActionRequestSchema,
+  todaySnapshotSchema,
+  type CompleteActionRequest,
+  type LogPastActivityRequest,
+  type PinActionRequest,
+  type SnoozeActionRequest,
+  type TodayItem as TodayItemDto,
+  type TodayLaneId,
+  type TodaySnapshot,
+} from '../../shared/contracts/todayContract';
+import {
+  pipelineSnapshotSchema,
+  type PipelineSnapshot,
+} from '../../shared/contracts/pipelineContract';
+import {
+  resolveReviewRequestSchema,
+  reviewListRequestSchema,
+  reviewSnapshotSchema,
+  type ResolveReviewRequest,
+  type ReviewItem,
+  type ReviewListRequest,
+  type ReviewSnapshot,
+} from '../../shared/contracts/reviewContract';
+import {
+  cancelJobRequestSchema,
+  createJobRequestSchema,
+  fillJobRequestSchema,
   fridayReportSchema,
+  metricDrilldownRequestSchema,
   metricDrilldownSchema,
+  type CancelJobRequest,
+  type CreateJobRequest,
+  type FillJobRequest,
+  type FridayReport,
+  type Metric,
+  type MetricDrilldown,
+  type MetricDrilldownRequest,
+  type MetricId,
 } from '../../shared/contracts/fridayContract';
-import type {
-  ImportCommitReceipt,
-  ImportCommitRequest,
-  ImportMapping,
-  ImportPreview,
-  ImportRemapRequest,
-  ImportSource,
-  ImportStatus,
-  ImportStatusRequest,
-} from '../../shared/contracts/importContract';
 import {
   importCommitReceiptSchema,
+  importCommitRequestSchema,
   importPreviewSchema,
+  importRemapRequestSchema,
   importSourceSchema,
+  importStatusRequestSchema,
   importStatusSchema,
+  type ImportCommitReceipt,
+  type ImportCommitRequest,
+  type ImportField,
+  type ImportMapping,
+  type ImportPreview,
+  type ImportRemapRequest,
+  type ImportSource,
+  type ImportStatus,
+  type ImportStatusRequest,
 } from '../../shared/contracts/importContract';
 import { FOUNDER_CHANNEL_POLICIES_V1 } from './cadence/cadenceScheduler';
 import type { DomainServices } from './createDomainServices';
+import type {
+  CreatePersonProspectCommand,
+  IntakeContactInput,
+} from './source/sourceService';
+import { normalizeEmail, normalizePhone } from './source/sourceService';
 import type { Clock } from './support/clock';
 import type { IdGenerator } from './support/idGenerator';
-import { DEFAULT_TODAY_CAPACITY } from './today/todayTypes';
-import type { TodayQueue } from './today/todayTypes';
-import type { CreatePersonProspectCommand, IntakeSourceInput } from './source/sourceService';
+import type { TodayItem, TodayLane } from './today/todayTypes';
 
-const FOUNDER_JOB_REQUEST_TYPE = 'founder_job_request_v1';
-const IMPORT_JOB_TYPE = 'lead_import_v1';
+export const FOUNDER_JOB_REQUEST_TYPE = 'founder_job_request_v1' as const;
+export const LEAD_IMPORT_JOB_TYPE = 'lead_import_v1' as const;
+const IMPORT_PREVIEW_TTL_MS = 30 * 60 * 1000;
 
-type Row = Record<string, unknown>;
+export type FounderSalesDomainErrorCode =
+  | 'LEAD_NOT_FOUND'
+  | 'CYCLE_NOT_FOUND'
+  | 'CONTACT_METHOD_NOT_FOUND'
+  | 'ACTION_NOT_SUPPORTED'
+  | 'PRIORITY_PROJECTION_MISSING'
+  | 'REVIEW_NOT_FOUND'
+  | 'REVIEW_RESOLUTION_UNSUPPORTED'
+  | 'JOB_NOT_FOUND'
+  | 'IMPORT_PREVIEW_INVALID'
+  | 'IMPORT_VALIDATION_FAILED';
+
+/** Safe, renderer-presentable domain error: no SQL, paths, or key material. */
+export class FounderSalesDomainError extends Error {
+  readonly code: FounderSalesDomainErrorCode;
+
+  constructor(code: FounderSalesDomainErrorCode, message: string) {
+    super(message);
+    this.name = 'FounderSalesDomainError';
+    this.code = code;
+  }
+}
+
+type CycleRow = {
+  id: string;
+  person_id: string;
+  prospect_id: string;
+  stage: LeadRow['stage'];
+  workflow_status: 'active' | 'onboarding' | 'closed';
+  current_next_action_id: string | null;
+  stage_entered_at: string;
+  close_reason: string | null;
+  version: number;
+};
+
+type ActionRow = {
+  id: string;
+  sales_cycle_id: string;
+  action_type: string;
+  channel: string | null;
+  status: string;
+  due_at: string;
+  version: number;
+  work_intent: string;
+  cadence_enrollment_id: string | null;
+  cadence_step_id: string | null;
+  cadence_component_id: string | null;
+};
+
+type ProjectionRow = {
+  prospect_id: string;
+  fit_points: number;
+  fit_band: 'low' | 'medium' | 'high';
+  timing_millipoints: number;
+  timing_band: 'cold' | 'warm' | 'hot';
+  reachability: 'direct' | 'indirect' | 'none';
+  data_confidence: number;
+  priority: 'p0' | 'p1' | 'p2' | 'p3';
+  version: number;
+  evaluation_id: string;
+};
+
+type StoredImportPreview = {
+  preview: ImportPreview;
+  columns: string[];
+  rows: { rowNumber: number; values: Record<string, string> }[];
+  sourceName: string;
+};
+
+const LANE_MAP: Readonly<Record<TodayLane, TodayLaneId>> = Object.freeze({
+  won_onboarding: 'onboarding',
+  inbound_interrupt: 'fresh_inbound',
+  overdue: 'overdue',
+  post_interview_offer: 'post_interview_offer',
+  due_primary: 'due_cadence',
+  new_p0: 'new_p0',
+  p1: 'p1',
+  exploration: 'exploration',
+  later: 'later',
+});
+
+const PIPELINE_STAGE_ORDER = [
+  'unreviewed', 'ready', 'contacted', 'interviewed', 'offered', 'won', 'lost_nurture',
+] as const;
+
+const FALLBACK_PRIORITY_CONTEXT: LeadPriorityContext = Object.freeze({
+  priority: 'P3',
+  fitPoints: 0,
+  fitBand: 'low',
+  timingValue: 0,
+  timingBand: 'cold',
+  reachability: 'none',
+  dataConfidence: 0,
+});
+
+function toPriorityContext(row: ProjectionRow | undefined): LeadPriorityContext {
+  if (row === undefined) return FALLBACK_PRIORITY_CONTEXT;
+  return {
+    priority: row.priority.toUpperCase() as LeadPriorityContext['priority'],
+    fitPoints: row.fit_points,
+    fitBand: row.fit_band,
+    timingValue: row.timing_millipoints / 1000,
+    timingBand: row.timing_band,
+    reachability: row.reachability,
+    dataConfidence: row.data_confidence,
+  };
+}
 
 function initialsOf(name: string): string {
-  const parts = name.trim().split(/\s+/).filter((part) => part.length > 0);
-  const initials = parts.slice(0, 2).map((part) => part[0]!.toUpperCase()).join('');
-  return initials.length > 0 ? initials : name.slice(0, 1).toUpperCase();
+  const initials = name
+    .split(/\s+/)
+    .filter((word) => word.length > 0)
+    .slice(0, 4)
+    .map((word) => word[0]!.toUpperCase())
+    .join('');
+  return initials.length > 0 ? initials.slice(0, 4) : '?';
 }
 
-function priorityUp(priority: string): 'P0' | 'P1' | 'P2' | 'P3' {
-  return priority.toUpperCase() as 'P0' | 'P1' | 'P2' | 'P3';
+function actionChannel(input: {
+  actionType: string;
+  channel: string | null;
+  workIntent: string | null;
+  onboarding: boolean;
+}): PrimaryAction['channel'] {
+  if (input.onboarding) return 'onboarding';
+  if (input.actionType === 'review_lead' || input.workIntent === 'internal_review') return 'review';
+  switch (input.channel) {
+    case 'phone':
+    case 'voicemail':
+      return 'call';
+    case 'text':
+      return 'text';
+    case 'email':
+      return 'email';
+    default:
+      return 'call';
+  }
 }
 
-function actionChannel(actionType: string, channel: string | null): 'call' | 'text' | 'email' | 'review' | 'onboarding' {
-  if (channel === 'phone' || actionType === 'call') return 'call';
-  if (channel === 'text' || actionType === 'text') return 'text';
-  if (channel === 'email' || actionType === 'email') return 'email';
-  if (actionType.includes('onboard')) return 'onboarding';
-  return 'review';
+function actionLabel(actionType: string): string {
+  const label = actionType.replace(/_/g, ' ');
+  return label.length > 0 ? label[0]!.toUpperCase() + label.slice(1) : 'Action';
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`);
+}
+
+function jsonSummary(metadataJson: string): string | null {
+  try {
+    const parsed = JSON.parse(metadataJson) as unknown;
+    if (parsed !== null && typeof parsed === 'object'
+      && typeof (parsed as { summary?: unknown }).summary === 'string') {
+      return (parsed as { summary: string }).summary;
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 /**
- * The UI-facing transactional/query facade over the encrypted domain graph.
- * Reads are strict SQL projections into renderer DTOs; commands delegate to
- * the transactional services and return a MutationReceipt.
+ * The renderer-facing founder-sales facade. Reads are direct SQL projections
+ * parsed into strict DTOs; every command composes the transactional domain
+ * services and returns a MutationReceipt whose revision is a monotonically
+ * increasing per-connection change counter.
  */
-function summaryOfActivity(row: Row): string {
-  if (typeof row.metadata_json === 'string' && row.metadata_json.length > 0) {
-    try {
-      const metadata = JSON.parse(row.metadata_json) as Record<string, unknown>;
-      if (typeof metadata.summary === 'string' && metadata.summary.length > 0) {
-        return metadata.summary;
-      }
-    } catch {
-      // Fall through to the synthesized summary.
-    }
-  }
-  return `${String(row.direction)} ${String(row.kind)} via ${String(row.channel)}`;
-}
-
 export class FounderSalesDomain {
   private readonly services: DomainServices;
   private readonly database: AppDatabase;
   private readonly clock: Clock;
   private readonly ids: IdGenerator;
-  private readonly timezone: string;
+  private readonly configuredTimezone: string | undefined;
+  private readonly importPreviews = new Map<string, StoredImportPreview>();
 
   constructor(input: {
     services: DomainServices;
@@ -140,721 +293,1023 @@ export class FounderSalesDomain {
     this.database = input.database;
     this.clock = input.clock;
     this.ids = input.ids;
-    this.timezone = input.timezone ?? this.services.workspaceSettings.read().timezone;
+    this.configuredTimezone = input.timezone;
   }
 
-  private revision(): number {
-    const row = this.database.raw.pragma('data_version', { simple: true });
-    return typeof row === 'number' && row >= 0 ? row : 0;
-  }
-
-  private receipt(personIds: string[], cycleIds: string[]): MutationReceipt {
-    return mutationReceiptSchema.parse({
-      revision: this.revision(),
-      affectedPersonIds: [...new Set(personIds)].sort(),
-      affectedSalesCycleIds: [...new Set(cycleIds)].sort(),
-    });
-  }
-
-  private priorityContextFor(prospectId: string): LeadRow['priorityContext'] {
-    const row = this.database.raw.prepare(`
-      SELECT priority, fit_points, fit_band, timing_millipoints, timing_band,
-             reachability, data_confidence
-      FROM prospect_priority_projection WHERE prospect_id = ?
-    `).get(prospectId) as Row | undefined;
-    if (row === undefined) return null;
-    return {
-      priority: priorityUp(String(row.priority)),
-      fitPoints: Number(row.fit_points),
-      fitBand: String(row.fit_band) as 'low' | 'medium' | 'high',
-      timingValue: Number(row.timing_millipoints) / 1_000,
-      timingBand: String(row.timing_band) as 'cold' | 'warm' | 'hot',
-      reachability: String(row.reachability) as 'direct' | 'indirect' | 'none',
-      dataConfidence: Number(row.data_confidence),
-    };
-  }
-
-  private nextActionFor(cycleId: string | null, currentActionId: string | null, asOf: string) {
-    if (cycleId === null || currentActionId === null) return null;
-    const row = this.database.raw.prepare(`
-      SELECT id, action_type, channel, due_at, timezone FROM next_actions
-      WHERE id = ? AND sales_cycle_id = ? AND status = 'pending'
-    `).get(currentActionId, cycleId) as Row | undefined;
-    if (row === undefined) return null;
-    return {
-      id: String(row.id),
-      type: String(row.action_type),
-      channel: actionChannel(String(row.action_type), row.channel === null ? null : String(row.channel)),
-      dueAt: String(row.due_at),
-      label: String(row.action_type).replace(/_/g, ' '),
-      overdue: String(row.due_at) < asOf,
-    };
-  }
+  // ---------------------------------------------------------------- leads
 
   listLeadRows(input: LeadsListRequest): LeadsListResponse {
-    const asOf = this.clock.now();
+    const request = leadsListRequestSchema.parse(input);
+    const now = this.clock.now();
+    const filters: string[] = [];
+    const parameters: unknown[] = [];
+    if (request.query.length > 0) {
+      filters.push(`person.display_name LIKE ? ESCAPE '\\'`);
+      parameters.push(`%${escapeLike(request.query)}%`);
+    }
+    if (request.stages.length > 0) {
+      filters.push(`cycle.stage IN (${request.stages.map(() => '?').join(', ')})`);
+      parameters.push(...request.stages);
+    }
+    if (request.priorities.length > 0) {
+      filters.push(`projection.priority IN (${request.priorities.map(() => '?').join(', ')})`);
+      parameters.push(...request.priorities.map((priority) => priority.toLowerCase()));
+    }
+    const where = [
+      `cycle.current_next_action_id IS NOT NULL`,
+      `action.status = 'pending'`,
+      ...filters,
+    ].join(' AND ');
+    const orderBy = {
+      priority: `CASE WHEN projection.priority IS NULL THEN 1 ELSE 0 END,
+        projection.priority ASC, cycle.id ASC`,
+      due_at: 'action.due_at ASC, cycle.id ASC',
+      person_name: 'person.display_name ASC, cycle.id ASC',
+      last_contact: `CASE WHEN prospect.last_contact_at IS NULL THEN 1 ELSE 0 END,
+        prospect.last_contact_at DESC, cycle.id ASC`,
+    }[request.sort];
+    const baseSql = `
+      FROM sales_cycles AS cycle
+      JOIN persons AS person ON person.id = cycle.person_id
+      JOIN prospects AS prospect ON prospect.id = cycle.prospect_id
+      JOIN next_actions AS action ON action.id = cycle.current_next_action_id
+      LEFT JOIN prospect_priority_projection AS projection
+        ON projection.prospect_id = cycle.prospect_id
+      LEFT JOIN source_events AS source ON source.id = prospect.original_source_event_id
+      WHERE ${where}
+    `;
+    const total = (this.database.raw.prepare(
+      `SELECT COUNT(*) AS count ${baseSql}`,
+    ).get(...parameters) as { count: number }).count;
+    const offset = request.cursor === null ? 0 : Number.parseInt(request.cursor, 10);
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new FounderSalesDomainError('IMPORT_PREVIEW_INVALID', 'The list cursor is invalid.');
+    }
     const rows = this.database.raw.prepare(`
       SELECT
-        person.id AS person_id,
-        person.display_name AS display_name,
-        person.opted_out AS opted_out,
-        prospect.id AS prospect_id,
-        prospect.segment AS segment,
-        source.channel AS channel,
-        cycle.id AS cycle_id,
-        cycle.stage AS stage,
-        cycle.current_next_action_id AS current_action_id,
+        cycle.id AS cycle_id, cycle.person_id, cycle.prospect_id, cycle.stage,
+        person.display_name, person.opted_out,
+        prospect.segment,
+        source.channel AS source_channel,
+        action.id AS action_id, action.action_type, action.channel AS action_channel,
+        action.due_at, action.work_intent,
+        projection.fit_points, projection.fit_band, projection.timing_millipoints,
+        projection.timing_band, projection.reachability, projection.data_confidence,
+        projection.priority,
         (
-          SELECT organization.canonical_name FROM prospect_organizations AS link
-          JOIN organizations AS organization ON organization.id = link.organization_id
-          WHERE link.prospect_id = prospect.id ORDER BY organization.canonical_name LIMIT 1
-        ) AS organization,
+          SELECT canonical_name FROM prospect_organizations AS link
+          JOIN organizations AS org ON org.id = link.organization_id
+          WHERE link.prospect_id = cycle.prospect_id
+          ORDER BY org.id ASC LIMIT 1
+        ) AS organization_name,
         (
-          SELECT property.address_line_1 FROM prospect_properties AS link
+          SELECT property.address_line_1 || ', ' || property.locality
+          FROM prospect_properties AS link
           JOIN properties AS property ON property.id = link.property_id
-          WHERE link.prospect_id = prospect.id ORDER BY property.id LIMIT 1
+          WHERE link.prospect_id = cycle.prospect_id
+          ORDER BY property.id ASC LIMIT 1
         ) AS property_summary,
         (
-          SELECT MAX(activity.occurred_at) FROM activities AS activity
-          WHERE activity.person_id = person.id
+          SELECT MAX(occurred_at) FROM activities
+          WHERE activities.person_id = cycle.person_id
         ) AS last_activity_at
-      FROM prospects AS prospect
-      JOIN persons AS person ON person.id = prospect.person_id
-      JOIN source_events AS source ON source.id = prospect.original_source_event_id
-      LEFT JOIN sales_cycles AS cycle
-        ON cycle.person_id = person.id
-        AND cycle.workflow_status IN ('active', 'onboarding')
-      WHERE person.deleted_at IS NULL
-      ORDER BY person.display_name COLLATE NOCASE, prospect.id COLLATE BINARY
-    `).all() as Row[];
-
-    const mapped: LeadRow[] = [];
-    for (const row of rows) {
-      const personName = String(row.display_name);
-      if (input.query.length > 0
-        && !personName.toLowerCase().includes(input.query.toLowerCase())) {
-        continue;
-      }
-      const stage = row.stage === null ? 'unreviewed' : String(row.stage);
-      if (input.stages.length > 0 && !input.stages.includes(stage as LeadRow['stage'])) continue;
-      const priorityContext = this.priorityContextFor(String(row.prospect_id));
-      if (input.priorities.length > 0
-        && (priorityContext === null || !input.priorities.includes(priorityContext.priority))) {
-        continue;
-      }
-      mapped.push({
-        personId: String(row.person_id),
-        salesCycleId: row.cycle_id === null ? String(row.prospect_id) : String(row.cycle_id),
-        personName,
-        initials: initialsOf(personName),
-        organization: row.organization === null ? null : String(row.organization),
-        propertySummary: row.property_summary === null ? null : String(row.property_summary),
-        stage: stage as LeadRow['stage'],
-        source: String(row.channel) as LeadRow['source'],
-        segment: String(row.segment) as LeadRow['segment'],
-        priorityContext,
-        nextAction: this.nextActionFor(
-          row.cycle_id === null ? null : String(row.cycle_id),
-          row.current_action_id === null ? null : String(row.current_action_id),
-          asOf,
-        ),
-        optedOut: Number(row.opted_out) === 1,
-        lastActivityAt: row.last_activity_at === null ? null : String(row.last_activity_at),
-      });
-    }
-
-    const offset = input.cursor === null ? 0 : Number.parseInt(input.cursor, 10) || 0;
-    const page = mapped.slice(offset, offset + input.limit);
-    const nextOffset = offset + input.limit;
+      ${baseSql}
+      ORDER BY ${orderBy}
+      LIMIT ? OFFSET ?
+    `).all(...parameters, request.limit, offset) as Array<{
+      cycle_id: string; person_id: string; prospect_id: string; stage: LeadRow['stage'];
+      display_name: string; opted_out: 0 | 1; segment: LeadRow['segment'];
+      source_channel: LeadRow['source'] | null;
+      action_id: string; action_type: string; action_channel: string | null;
+      due_at: string; work_intent: string;
+      fit_points: number | null; fit_band: ProjectionRow['fit_band'] | null;
+      timing_millipoints: number | null; timing_band: ProjectionRow['timing_band'] | null;
+      reachability: ProjectionRow['reachability'] | null; data_confidence: number | null;
+      priority: ProjectionRow['priority'] | null;
+      organization_name: string | null; property_summary: string | null;
+      last_activity_at: string | null;
+    }>;
+    const leadRows: LeadRow[] = rows.map((row) => ({
+      personId: row.person_id,
+      salesCycleId: row.cycle_id,
+      personName: row.display_name,
+      initials: initialsOf(row.display_name),
+      organization: row.organization_name,
+      propertySummary: row.property_summary,
+      stage: row.stage,
+      source: row.source_channel ?? 'custom',
+      segment: row.segment,
+      priorityContext: row.priority === null
+        ? FALLBACK_PRIORITY_CONTEXT
+        : toPriorityContext({
+          prospect_id: row.prospect_id,
+          fit_points: row.fit_points!,
+          fit_band: row.fit_band!,
+          timing_millipoints: row.timing_millipoints!,
+          timing_band: row.timing_band!,
+          reachability: row.reachability!,
+          data_confidence: row.data_confidence!,
+          priority: row.priority,
+          version: 1,
+          evaluation_id: '',
+        }),
+      nextAction: {
+        id: row.action_id,
+        type: row.action_type,
+        channel: actionChannel({
+          actionType: row.action_type,
+          channel: row.action_channel,
+          workIntent: row.work_intent,
+          onboarding: false,
+        }),
+        dueAt: row.due_at,
+        label: actionLabel(row.action_type),
+        overdue: row.due_at < now,
+      },
+      optedOut: row.opted_out === 1,
+      lastActivityAt: row.last_activity_at,
+    }));
+    const nextOffset = offset + leadRows.length;
     return leadsListResponseSchema.parse({
-      rows: page,
-      nextCursor: nextOffset < mapped.length ? String(nextOffset) : null,
-      total: mapped.length,
-      revision: this.revision(),
+      rows: leadRows,
+      nextCursor: nextOffset < total ? String(nextOffset) : null,
+      total,
+      revision: this.currentRevision(),
     });
   }
 
   updateLeadField(input: LeadFieldUpdateRequest): MutationReceipt {
-    if (input.field === 'person_name') {
-      this.services.unitOfWork.immediate(() => {
-        const person = this.services.identities.getPerson(input.personId);
-        if (person === null) throw new Error('The lead does not exist.');
-        const result = this.database.raw.prepare(`
-          UPDATE persons SET display_name = ?, version = version + 1, updated_at = ?
-          WHERE id = ? AND version = ?
-        `).run(input.value, this.clock.now(), input.personId, person.version);
-        if (result.changes === 0) throw new Error('The lead changed before this update.');
-      });
-      return this.receipt([input.personId], []);
-    }
-    // organization_label: create-or-link is a Task 11+ concern; store as alias label.
-    this.services.unitOfWork.immediate(() => {
-      const prospect = this.services.identities.getCanonicalProspect(input.personId);
-      if (prospect === null) throw new Error('The lead does not exist.');
-      if (input.value === null) return;
-      const organization = this.services.identities.createOrganization({
-        canonicalName: input.value,
-      });
-      this.services.identities.linkOrganization({
-        prospectId: prospect.id,
-        organizationId: organization.id,
-        relationship: 'label',
-      });
-    });
-    return this.receipt([input.personId], []);
+    const request = leadFieldUpdateRequestSchema.parse(input);
+    return this.services.unitOfWork.immediate(() => this.applyLeadField(request));
   }
 
   bulkUpdateLeads(input: LeadBulkUpdateRequest): MutationReceipt {
-    for (const personId of input.personIds) {
-      if (input.field === 'person_name') {
-        this.updateLeadField({ personId, field: 'person_name', value: input.value });
+    const request = leadBulkUpdateRequestSchema.parse(input);
+    return this.services.unitOfWork.immediate(() => {
+      const persons = new Set<string>();
+      const cycles = new Set<string>();
+      for (const personId of request.personIds) {
+        const receipt = this.applyLeadField({
+          personId,
+          field: request.field,
+          value: request.value,
+        } as LeadFieldUpdateRequest);
+        receipt.affectedPersonIds.forEach((id) => persons.add(id));
+        receipt.affectedSalesCycleIds.forEach((id) => cycles.add(id));
+      }
+      return this.receipt([...persons].sort(), [...cycles].sort());
+    });
+  }
+
+  private applyLeadField(request: LeadFieldUpdateRequest): MutationReceipt {
+    const now = this.clock.now();
+    const person = this.database.raw.prepare(
+      'SELECT id, version FROM persons WHERE id = ?',
+    ).get(request.personId) as { id: string; version: number } | undefined;
+    if (person === undefined) {
+      throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The person does not exist.');
+    }
+    if (request.field === 'person_name') {
+      const changed = this.database.raw.prepare(`
+        UPDATE persons SET display_name = ?, version = version + 1, updated_at = ?
+        WHERE id = ? AND version = ?
+      `).run(request.value, now, person.id, person.version);
+      if (changed.changes !== 1) {
+        throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The person changed concurrently.');
+      }
+    } else {
+      const prospect = this.database.raw.prepare(
+        'SELECT id FROM prospects WHERE person_id = ?',
+      ).get(person.id) as { id: string } | undefined;
+      if (prospect === undefined) {
+        throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The person has no prospect.');
+      }
+      const linked = this.database.raw.prepare(`
+        SELECT org.id AS id FROM prospect_organizations AS link
+        JOIN organizations AS org ON org.id = link.organization_id
+        WHERE link.prospect_id = ? ORDER BY org.id ASC LIMIT 1
+      `).get(prospect.id) as { id: string } | undefined;
+      if (request.value === null) {
+        if (linked !== undefined) {
+          this.database.raw.prepare(
+            'DELETE FROM prospect_organizations WHERE prospect_id = ? AND organization_id = ?',
+          ).run(prospect.id, linked.id);
+        }
+      } else if (linked !== undefined) {
+        this.database.raw.prepare(
+          'UPDATE organizations SET canonical_name = ?, updated_at = ? WHERE id = ?',
+        ).run(request.value, now, linked.id);
       } else {
-        this.updateLeadField({ personId, field: 'organization_label', value: input.value ?? null });
+        const organization = this.services.identities.createOrganization({
+          canonicalName: request.value,
+        });
+        this.services.identities.linkOrganization({
+          prospectId: prospect.id, organizationId: organization.id,
+        });
       }
     }
-    return this.receipt([...input.personIds], []);
+    const cycles = this.database.raw.prepare(
+      'SELECT id FROM sales_cycles WHERE person_id = ? ORDER BY id ASC',
+    ).all(person.id) as { id: string }[];
+    return this.receipt([person.id], cycles.map(({ id }) => id));
   }
 
   getLeadDetail(input: LeadDetailRequest): LeadDetail {
-    const asOf = this.clock.now();
-    const person = this.services.identities.getPerson(input.personId);
-    if (person === null) throw new Error('The lead does not exist.');
-    const prospect = this.services.identities.getCanonicalProspect(input.personId);
-    if (prospect === null) throw new Error('The lead has no canonical prospect.');
-    const contacts = this.services.identities.listContactMethodsForPerson(input.personId);
-    const cycleRow = this.database.raw.prepare(`
-      SELECT id, stage, workflow_status, current_next_action_id
-      FROM sales_cycles
-      WHERE person_id = ? AND workflow_status IN ('active', 'onboarding')
-    `).get(input.personId) as Row | undefined;
-    const sourceRow = this.database.raw.prepare(`
-      SELECT channel FROM source_events WHERE id = ?
-    `).get(prospect.originalSourceEventId) as Row | undefined;
-    const organizations = this.services.identities.listOrganizationsForProspect(prospect.id);
-    const properties = this.services.identities.listPropertiesForProspect(prospect.id);
-    const activityRows = this.database.raw.prepare(`
-      SELECT id, kind, occurred_at, observed_outcome, channel, direction, metadata_json
-      FROM activities WHERE person_id = ?
-      ORDER BY occurred_at DESC, id DESC LIMIT 50
-    `).all(input.personId) as Row[];
-    const stageEvents = cycleRow === undefined ? [] : this.database.raw.prepare(`
-      SELECT id, from_stage, to_stage, effective_at FROM stage_events
-      WHERE sales_cycle_id = ? ORDER BY transition_sequence
-    `).all(String(cycleRow.id)) as Row[];
-    const priorityReasons: string[] = [];
-    const priorityContext = this.priorityContextFor(prospect.id);
-    if (priorityContext !== null) {
-      priorityReasons.push(
-        `Fit ${priorityContext.fitBand} (${priorityContext.fitPoints}/30)`,
-        `Timing ${priorityContext.timingBand} (${priorityContext.timingValue}/40)`,
-        `Reachability ${priorityContext.reachability}`,
-      );
+    const request = leadDetailRequestSchema.parse(input);
+    const now = this.clock.now();
+    const person = this.database.raw.prepare(
+      'SELECT id, display_name, opted_out FROM persons WHERE id = ?',
+    ).get(request.personId) as {
+      id: string; display_name: string; opted_out: 0 | 1;
+    } | undefined;
+    if (person === undefined) {
+      throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The person does not exist.');
     }
+    const cycle = this.database.raw.prepare(`
+      SELECT id, person_id, prospect_id, stage, workflow_status,
+        current_next_action_id, stage_entered_at, close_reason, version
+      FROM sales_cycles WHERE person_id = ?
+      ORDER BY CASE workflow_status WHEN 'closed' THEN 1 ELSE 0 END, created_at DESC, id DESC
+      LIMIT 1
+    `).get(person.id) as CycleRow | undefined;
+    if (cycle === undefined) {
+      throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The person has no sales cycle.');
+    }
+    const prospect = this.database.raw.prepare(
+      'SELECT id, segment, original_source_event_id FROM prospects WHERE id = ?',
+    ).get(cycle.prospect_id) as {
+      id: string; segment: LeadRow['segment']; original_source_event_id: string;
+    } | undefined;
+    if (prospect === undefined) {
+      throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The prospect does not exist.');
+    }
+    const sourceChannel = (this.database.raw.prepare(
+      'SELECT channel FROM source_events WHERE id = ?',
+    ).get(prospect.original_source_event_id) as { channel: string } | undefined)?.channel ?? 'custom';
+    const contacts = this.database.raw.prepare(`
+      SELECT id, kind, normalized_value, validation_state
+      FROM person_contact_methods WHERE person_id = ?
+      ORDER BY kind ASC, normalized_value ASC, id ASC
+    `).all(person.id) as {
+      id: string; kind: 'phone' | 'email'; normalized_value: string; validation_state: string;
+    }[];
+    const contactDto = (row: typeof contacts[number]) => ({
+      id: row.id, kind: row.kind, value: row.normalized_value,
+      label: null as string | null, valid: row.validation_state === 'valid',
+    });
+    const organization = this.database.raw.prepare(`
+      SELECT org.canonical_name AS name FROM prospect_organizations AS link
+      JOIN organizations AS org ON org.id = link.organization_id
+      WHERE link.prospect_id = ? ORDER BY org.id ASC LIMIT 1
+    `).get(prospect.id) as { name: string } | undefined;
+    const properties = this.database.raw.prepare(`
+      SELECT property.id, property.address_line_1, property.locality, property.door_count
+      FROM prospect_properties AS link
+      JOIN properties AS property ON property.id = link.property_id
+      WHERE link.prospect_id = ? ORDER BY property.id ASC
+    `).all(prospect.id) as {
+      id: string; address_line_1: string; locality: string; door_count: number | null;
+    }[];
+    const projection = this.readProjection(prospect.id);
+    const action = cycle.current_next_action_id === null
+      ? undefined
+      : this.readAction(cycle.current_next_action_id);
+    const cadence = action?.cadence_enrollment_id == null
+      ? null
+      : (this.database.raw.prepare(`
+        SELECT definition.name, definition.attempt_cap, step.label, step.sequence
+        FROM cadence_enrollments AS enrollment
+        JOIN cadence_definitions AS definition ON definition.id = enrollment.cadence_definition_id
+        JOIN cadence_steps AS step ON step.id = ?
+        WHERE enrollment.id = ?
+      `).get(action.cadence_step_id, action.cadence_enrollment_id) as {
+        name: string; attempt_cap: number; label: string; sequence: number;
+      } | undefined) ?? null;
+    const activities = this.database.raw.prepare(`
+      SELECT id, kind, occurred_at, observed_outcome, duration_seconds,
+        recording_storage_ref, transcript_storage_ref, metadata_json
+      FROM activities WHERE person_id = ?
+      ORDER BY occurred_at DESC, id DESC LIMIT 200
+    `).all(person.id) as {
+      id: string; kind: string; occurred_at: string; observed_outcome: string | null;
+      duration_seconds: number | null; recording_storage_ref: string | null;
+      transcript_storage_ref: string | null; metadata_json: string;
+    }[];
+    const history = this.database.raw.prepare(`
+      SELECT id, to_stage, effective_at, confirmation_kind
+      FROM stage_events WHERE sales_cycle_id = ?
+      ORDER BY transition_sequence ASC
+    `).all(cycle.id) as {
+      id: string; to_stage: string; effective_at: string; confirmation_kind: string;
+    }[];
+    const priorityContext = toPriorityContext(projection);
     return leadDetailSchema.parse({
       personId: person.id,
-      salesCycleId: cycleRow === undefined ? null : String(cycleRow.id),
-      personName: person.displayName,
-      phones: contacts.filter((contact) => contact.kind === 'phone').map((contact) => ({
-        id: contact.id,
-        kind: 'phone' as const,
-        value: contact.normalizedValue,
-        label: contact.reachability === 'direct' ? 'Direct' : null,
-        valid: contact.validationState === 'valid',
-      })),
-      emails: contacts.filter((contact) => contact.kind === 'email').map((contact) => ({
-        id: contact.id,
-        kind: 'email' as const,
-        value: contact.normalizedValue,
-        label: null as string | null,
-        valid: contact.validationState === 'valid',
-      })),
-      organizationLabel: organizations[0]?.canonicalName ?? null,
-      propertySummaries: properties.map((property) => property.addressLine1),
-      stage: cycleRow === undefined ? null : String(cycleRow.stage) as LeadDetail['stage'],
-      workflowStatus: cycleRow === undefined
-        ? null
-        : String(cycleRow.workflow_status) as LeadDetail['workflowStatus'],
-      sourceLabel: sourceRow === undefined ? 'unknown' : String(sourceRow.channel),
+      salesCycleId: cycle.id,
+      personName: person.display_name,
+      phones: contacts.filter((row) => row.kind === 'phone').map(contactDto),
+      emails: contacts.filter((row) => row.kind === 'email').map(contactDto),
+      organizationLabel: organization?.name ?? null,
+      propertySummaries: properties.map(
+        (property) => `${property.address_line_1}, ${property.locality}`,
+      ),
+      stage: cycle.stage,
+      workflowStatus: cycle.workflow_status,
+      sourceLabel: sourceChannel,
       segment: prospect.segment,
       priorityContext,
-      priorityReasons,
-      nextAction: this.nextActionFor(
-        cycleRow === undefined ? null : String(cycleRow.id),
-        cycleRow === undefined || cycleRow.current_next_action_id === null
-          ? null
-          : String(cycleRow.current_next_action_id),
-        asOf,
-      ),
-      optedOut: person.optedOut,
-      cadence: null,
-      activities: activityRows.map((row) => ({
-        id: String(row.id),
-        kind: String(row.kind) as 'call',
-        occurredAt: String(row.occurred_at),
-        summary: summaryOfActivity(row),
-        outcome: row.observed_outcome === null ? null : String(row.observed_outcome),
+      priorityReasons: projection === undefined ? [] : [
+        `Fit ${priorityContext.fitBand} ${priorityContext.fitPoints}/30`,
+        `Timing ${priorityContext.timingBand} ${priorityContext.timingValue}/40`,
+        `Reachability ${priorityContext.reachability}`,
+      ],
+      nextAction: action === undefined || action.status !== 'pending' ? null : {
+        id: action.id,
+        type: action.action_type,
+        channel: actionChannel({
+          actionType: action.action_type,
+          channel: action.channel,
+          workIntent: action.work_intent,
+          onboarding: cycle.workflow_status === 'onboarding',
+        }),
+        dueAt: action.due_at,
+        label: actionLabel(action.action_type),
+        overdue: action.due_at < now,
+      },
+      optedOut: person.opted_out === 1,
+      cadence: cadence === null || action?.cadence_step_id == null ? null : {
+        name: cadence.name,
+        stepLabel: cadence.label,
+        touchIndex: cadence.sequence + 1,
+        touchLimit: cadence.attempt_cap,
+      },
+      activities: activities.map((activity) => ({
+        id: activity.id,
+        kind: activity.kind,
+        occurredAt: activity.occurred_at,
+        summary: jsonSummary(activity.metadata_json)
+          ?? `${actionLabel(activity.kind)}${activity.observed_outcome === null ? '' : ` · ${activity.observed_outcome}`}`,
+        outcome: activity.observed_outcome,
       })),
-      conversations: [],
+      conversations: activities
+        .filter((activity) => activity.kind === 'call' && activity.duration_seconds !== null)
+        .map((activity) => ({
+          id: activity.id,
+          occurredAt: activity.occurred_at,
+          durationSeconds: activity.duration_seconds!,
+          recordingAvailable: activity.recording_storage_ref !== null,
+          transcriptAvailable: activity.transcript_storage_ref !== null,
+          reviewCount: 0,
+        })),
       properties: properties.map((property) => ({
         id: property.id,
-        address: property.addressLine1,
-        doors: property.doorCount,
+        address: `${property.address_line_1}, ${property.locality}`,
+        doors: property.door_count,
         ownershipEvidence: null as string | null,
         liveVacancy: false,
       })),
-      history: stageEvents.map((row) => ({
-        id: String(row.id),
-        occurredAt: String(row.effective_at),
-        label: row.from_stage === null
-          ? `Entered ${String(row.to_stage)}`
-          : `${String(row.from_stage)} → ${String(row.to_stage)}`,
-        detail: null as string | null,
+      history: history.map((event) => ({
+        id: event.id,
+        occurredAt: event.effective_at,
+        label: actionLabel(event.to_stage),
+        detail: event.confirmation_kind,
       })),
-      revision: this.revision(),
+      revision: this.currentRevision(),
     });
   }
 
   beginOutbound(input: BeginOutboundRequest): MutationReceipt {
-    this.services.unitOfWork.immediate(() => {
-      const contact = this.services.identities
-        .listContactMethodsForPerson(input.personId)
-        .find((method) => method.id === input.contactMethodId);
+    const request = beginOutboundRequestSchema.parse(input);
+    const now = this.clock.now();
+    return this.services.unitOfWork.immediate(() => {
+      const cycle = this.requireCycle(request.salesCycleId);
+      if (cycle.person_id !== request.personId) {
+        throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The cycle belongs to another person.');
+      }
+      const contact = this.database.raw.prepare(`
+        SELECT id, kind, normalized_value FROM person_contact_methods
+        WHERE id = ? AND person_id = ?
+      `).get(request.contactMethodId, request.personId) as {
+        id: string; kind: 'phone' | 'email'; normalized_value: string;
+      } | undefined;
       if (contact === undefined) {
-        throw new Error('The outbound contact method does not exist for this person.');
+        throw new FounderSalesDomainError(
+          'CONTACT_METHOD_NOT_FOUND', 'The contact method does not belong to this person.',
+        );
       }
       this.services.outboundPermission.assertMayExecuteOutbound({
-        personId: input.personId,
-        target: { kind: contact.kind, normalizedValue: contact.normalizedValue },
+        personId: request.personId,
+        target: { kind: contact.kind, normalizedValue: contact.normalized_value },
       });
+      this.services.events.appendActivity({
+        id: this.ids.next(),
+        personId: request.personId,
+        prospectId: cycle.prospect_id,
+        salesCycleId: cycle.id,
+        kind: request.channel === 'call' ? 'call' : request.channel,
+        direction: 'outbound',
+        channel: request.channel === 'call' ? 'phone' : request.channel,
+        occurredAt: now,
+        observedOutcome: null,
+        metadata: { formatVersion: 1, beganVia: 'founder_workflow_ui' },
+      });
+      return this.receipt([request.personId], [cycle.id]);
     });
-    return this.receipt([input.personId], [input.salesCycleId]);
-  }
-
-  private cycleState(cycleId: string): {
-    version: number;
-    currentActionId: string;
-    prospectVersion: number;
-    personId: string;
-  } {
-    const row = this.database.raw.prepare(`
-      SELECT cycle.version AS version, cycle.current_next_action_id AS action_id,
-             cycle.person_id AS person_id, prospect.version AS prospect_version
-      FROM sales_cycles AS cycle
-      JOIN prospects AS prospect ON prospect.id = cycle.prospect_id
-      WHERE cycle.id = ?
-    `).get(cycleId) as Row | undefined;
-    if (row === undefined || row.action_id === null) {
-      throw new Error('The sales cycle has no current action.');
-    }
-    return {
-      version: Number(row.version),
-      currentActionId: String(row.action_id),
-      prospectVersion: Number(row.prospect_version),
-      personId: String(row.person_id),
-    };
   }
 
   confirmTransition(input: ConfirmTransitionRequest): MutationReceipt {
-    const effectiveAt = this.clock.now();
-    if (this.revision() < input.expectedRevision) {
-      throw new Error('The workspace changed before this transition.');
-    }
-    const state = this.cycleState(input.salesCycleId);
-    let cycle;
-    if (input.transition === 'review_to_ready') {
-      cycle = this.services.lifecycle.reviewToReady({
-        cycleId: input.salesCycleId,
-        expectedCycleVersion: state.version,
-        expectedCurrentActionId: state.currentActionId,
-        expectedProspectVersion: state.prospectVersion,
-        effectiveAt,
-      });
-    } else if (input.transition === 'confirm_interviewed') {
-      cycle = this.services.lifecycle.confirmInterviewed({
-        cycleId: input.salesCycleId,
-        expectedCycleVersion: state.version,
-        expectedCurrentActionId: state.currentActionId,
-        suggestionActivityId: input.suggestionActivityId,
-        effectiveAt,
-        confirmedAt: effectiveAt,
-      });
-    } else {
-      cycle = this.services.lifecycle.confirmOffered({
-        cycleId: input.salesCycleId,
-        expectedCycleVersion: state.version,
-        expectedCurrentActionId: state.currentActionId,
-        suggestionActivityId: input.suggestionActivityId,
-        effectiveAt,
-        confirmedAt: effectiveAt,
-      });
-    }
-    return this.receipt([cycle.personId], [cycle.id]);
+    const request = confirmTransitionRequestSchema.parse(input);
+    const now = this.clock.now();
+    return this.services.unitOfWork.immediate(() => {
+      const writer = this.services.lifecycle.scopedWriter();
+      const cycle = this.requireCycle(request.salesCycleId);
+      if (cycle.current_next_action_id === null) {
+        throw new FounderSalesDomainError('ACTION_NOT_SUPPORTED', 'The cycle has no current action.');
+      }
+      if (request.transition === 'review_to_ready') {
+        const prospect = this.database.raw.prepare(
+          'SELECT version FROM prospects WHERE id = ?',
+        ).get(cycle.prospect_id) as { version: number } | undefined;
+        if (prospect === undefined) {
+          throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The prospect does not exist.');
+        }
+        writer.reviewToReady({
+          cycleId: cycle.id,
+          expectedCycleVersion: cycle.version,
+          expectedCurrentActionId: cycle.current_next_action_id,
+          expectedProspectVersion: prospect.version,
+          effectiveAt: now,
+        });
+      } else {
+        const command = {
+          cycleId: cycle.id,
+          expectedCycleVersion: cycle.version,
+          expectedCurrentActionId: cycle.current_next_action_id,
+          suggestionActivityId: request.suggestionActivityId,
+          effectiveAt: now,
+          confirmedAt: now,
+        };
+        if (request.transition === 'confirm_interviewed') writer.confirmInterviewed(command);
+        else writer.confirmOffered(command);
+      }
+      return this.receipt([cycle.person_id], [cycle.id]);
+    });
   }
+
+  // ---------------------------------------------------------------- today
 
   getToday(): TodaySnapshot {
     const settings = this.services.workspaceSettings.read();
-    const queue: TodayQueue = this.services.today.build({
-      timezone: settings.timezone,
-      capacity: {
-        ...DEFAULT_TODAY_CAPACITY,
-        dialBudget: settings.dailyDialCapacity,
-        conversationTarget: settings.dailyConversationTarget,
-        explorationSlots: settings.explorationSlots,
-        resurfacingWindowSeconds: settings.resurfaceSuppressionDays * 86_400,
-      },
+    const timezone = this.configuredTimezone ?? settings.timezone;
+    const capacity = {
+      dialBudget: settings.dailyDialCapacity,
+      conversationTarget: settings.dailyConversationTarget,
+      explorationSlots: settings.explorationSlots,
+      resurfacingWindowSeconds: settings.resurfaceSuppressionDays * 86_400,
+    };
+    const queue = this.services.today.build({
+      timezone,
+      capacity,
       channelPolicies: FOUNDER_CHANNEL_POLICIES_V1,
     });
-    const laneMap: Record<string, TodayItem['lane']> = {
-      won_onboarding: 'onboarding',
-      inbound_interrupt: 'fresh_inbound',
-      overdue: 'overdue',
-      post_interview_offer: 'post_interview_offer',
-      due_primary: 'due_cadence',
-      new_p0: 'new_p0',
-      p1: 'p1',
-      exploration: 'exploration',
-      later: 'later',
-    };
-    const personNames = new Map<string, string>();
-    const nameOf = (personId: string): string => {
-      const cached = personNames.get(personId);
-      if (cached !== undefined) return cached;
-      const person = this.services.identities.getPerson(personId);
-      const name = person?.displayName ?? personId;
-      personNames.set(personId, name);
-      return name;
-    };
-    const lanes = queue.lanes.map((lane) => ({
-      id: laneMap[lane.lane]!,
-      items: lane.items.map((item) => ({
-        id: `${item.cycleId}:${item.action.id}`,
-        lane: laneMap[item.lane]!,
-        personId: item.personId,
-        salesCycleId: item.cycleId,
-        personName: nameOf(item.personId),
-        contextLabel: null as string | null,
-        stage: 'ready' as const,
-        priorityContext: item.priority === null ? null : {
-          priority: priorityUp(item.priority.effectivePriority),
+    const cycleIds = queue.lanes.flatMap(({ items }) => items.map((item) => item.cycleId));
+    const context = new Map<string, {
+      display_name: string; stage: LeadRow['stage']; organization_name: string | null;
+    }>();
+    for (const cycleId of cycleIds) {
+      const row = this.database.raw.prepare(`
+        SELECT person.display_name, cycle.stage,
+          (
+            SELECT canonical_name FROM prospect_organizations AS link
+            JOIN organizations AS org ON org.id = link.organization_id
+            WHERE link.prospect_id = cycle.prospect_id
+            ORDER BY org.id ASC LIMIT 1
+          ) AS organization_name
+        FROM sales_cycles AS cycle
+        JOIN persons AS person ON person.id = cycle.person_id
+        WHERE cycle.id = ?
+      `).get(cycleId) as {
+        display_name: string; stage: LeadRow['stage']; organization_name: string | null;
+      } | undefined;
+      if (row !== undefined) context.set(cycleId, row);
+    }
+    const seen = new Set<string>();
+    const toDto = (item: TodayItem, lane: TodayLaneId): TodayItemDto | null => {
+      if (seen.has(item.cycleId)) return null;
+      seen.add(item.cycleId);
+      const row = context.get(item.cycleId);
+      if (row === undefined) return null;
+      const priorityContext = item.priority === null
+        ? toPriorityContext(this.readProjection(item.prospectId))
+        : {
+          priority: item.priority.effectivePriority.toUpperCase() as LeadPriorityContext['priority'],
           fitPoints: item.priority.fitPoints,
           fitBand: item.priority.fitBand,
-          timingValue: item.priority.timingMilliPoints / 1_000,
+          timingValue: item.priority.timingMilliPoints / 1000,
           timingBand: item.priority.timingBand,
           reachability: item.priority.reachability,
           dataConfidence: item.priority.dataConfidence,
-        },
+        };
+      return {
+        id: item.cycleId,
+        lane,
+        personId: item.personId,
+        salesCycleId: item.cycleId,
+        personName: row.display_name,
+        contextLabel: row.organization_name,
+        stage: row.stage,
+        priorityContext,
         action: {
           id: item.action.id,
           type: item.action.actionType,
-          channel: actionChannel(item.action.actionType, item.action.channel),
+          channel: actionChannel({
+            actionType: item.action.actionType,
+            channel: item.action.channel,
+            workIntent: item.action.workIntent,
+            onboarding: lane === 'onboarding',
+          }),
           dueAt: item.action.dueAt,
-          label: item.action.actionType.replace(/_/g, ' '),
-          overdue: item.lane === 'overdue',
+          label: actionLabel(item.action.actionType),
+          overdue: item.action.dueAt < queue.generatedAt,
         },
-        reason: item.laneReason.replace(/_/g, ' '),
+        reason: item.laneReason,
         activeTriggers: item.selectedTriggerReasons
           .filter((reason) => reason.kind === 'trigger')
           .map((reason) => ({
-            label: (reason as { triggerKey: string }).triggerKey.replace(/_/g, ' '),
-            expiresAt: (reason as { recomputedExpiresAt: string | null }).recomputedExpiresAt,
+            label: reason.kind === 'trigger' ? reason.triggerKey : 'trigger',
+            expiresAt: reason.kind === 'trigger' ? reason.recomputedExpiresAt : null,
           })),
-        verifyFirst: item.verifyFirst === true,
+        verifyFirst: item.verifyFirst ?? false,
         pinned: item.pinned,
-        consentRequirement: null as string | null,
-      })),
+        consentRequirement: null,
+      };
+    };
+    const lanes = queue.lanes.map(({ lane, items }) => ({
+      id: LANE_MAP[lane],
+      items: items
+        .map((item) => toDto(item, LANE_MAP[lane]))
+        .filter((item): item is TodayItemDto => item !== null),
     }));
     return todaySnapshotSchema.parse({
       lanes,
-      dialBudget: queue.capacity.dialBudget,
-      scheduledDials: queue.queuedDiscretionaryDialCount,
-      conversationTarget: queue.capacity.conversationTarget,
+      dialBudget: capacity.dialBudget,
+      scheduledDials: queue.dialCount,
+      conversationTarget: capacity.conversationTarget,
       reviewErrorCount: queue.diagnostics.length,
-      revision: this.revision(),
+      revision: this.currentRevision(),
     });
   }
 
   completePrimaryAction(input: CompleteActionRequest): MutationReceipt {
-    const state = this.cycleState(input.salesCycleId);
-    if (state.currentActionId !== input.actionId) {
-      throw new Error('The current action changed before this completion.');
-    }
-    const actionRow = this.database.raw.prepare(`
-      SELECT version FROM next_actions WHERE id = ? AND sales_cycle_id = ?
-    `).get(input.actionId, input.salesCycleId) as Row | undefined;
-    const enrollmentRow = this.database.raw.prepare(`
-      SELECT version FROM cadence_enrollments
-      WHERE sales_cycle_id = ? AND status = 'active'
-    `).get(input.salesCycleId) as Row | undefined;
-    if (actionRow === undefined) throw new Error('The current action does not exist.');
-    const cycle = this.services.lifecycle.completeCurrentAction({
-      cycleId: input.salesCycleId,
-      expectedCycleVersion: state.version,
-      expectedCurrentActionId: input.actionId,
-      expectedActionVersion: Number(actionRow.version),
-      expectedEnrollmentVersion: enrollmentRow === undefined ? 1 : Number(enrollmentRow.version),
-      outcome: input.outcome as never,
-      activityId: input.activityId,
-      impossibleDisposition: null,
-      evaluationAt: this.clock.now(),
-      manualReactivationDueAt: null,
+    const request = completeActionRequestSchema.parse(input);
+    const now = this.clock.now();
+    return this.services.unitOfWork.immediate(() => {
+      const writer = this.services.lifecycle.scopedWriter();
+      const cycle = this.requireCycle(request.salesCycleId);
+      if (cycle.current_next_action_id !== request.actionId) {
+        throw new FounderSalesDomainError('ACTION_NOT_SUPPORTED', 'The action is no longer current.');
+      }
+      const action = this.readAction(request.actionId);
+      if (action === undefined || action.cadence_enrollment_id === null
+        || action.cadence_step_id === null || action.cadence_component_id === null) {
+        throw new FounderSalesDomainError(
+          'ACTION_NOT_SUPPORTED',
+          'Only cadence-bound primary actions complete through this command.',
+        );
+      }
+      const enrollment = this.database.raw.prepare(
+        'SELECT version FROM cadence_enrollments WHERE id = ?',
+      ).get(action.cadence_enrollment_id) as { version: number } | undefined;
+      if (enrollment === undefined) {
+        throw new FounderSalesDomainError('ACTION_NOT_SUPPORTED', 'The cadence enrollment is missing.');
+      }
+      let activityId = request.activityId;
+      let impossibleDisposition: { reason: 'other'; notes: string | null } | null = null;
+      if (request.outcome === 'marked_impossible') {
+        activityId = null;
+        impossibleDisposition = { reason: 'other', notes: null };
+      } else if (activityId === null) {
+        const kind = action.action_type === 'voicemail' ? 'voicemail'
+          : action.action_type === 'text' ? 'text'
+            : action.action_type === 'email' ? 'email' : 'call';
+        const appended = this.services.events.appendActivity({
+          id: this.ids.next(),
+          personId: cycle.person_id,
+          prospectId: cycle.prospect_id,
+          salesCycleId: cycle.id,
+          cadenceEnrollmentId: action.cadence_enrollment_id,
+          cadenceStepId: action.cadence_step_id,
+          cadenceComponentId: action.cadence_component_id,
+          kind,
+          direction: 'outbound',
+          channel: action.channel ?? kind,
+          occurredAt: now,
+          observedOutcome: request.outcome,
+          metadata: { formatVersion: 1, completedVia: 'founder_workflow_ui' },
+        });
+        activityId = appended.id;
+      }
+      writer.completeCurrentAction({
+        cycleId: cycle.id,
+        expectedCycleVersion: cycle.version,
+        expectedCurrentActionId: action.id,
+        expectedActionVersion: action.version,
+        expectedEnrollmentVersion: enrollment.version,
+        outcome: request.outcome,
+        activityId,
+        impossibleDisposition,
+        evaluationAt: now,
+        manualReactivationDueAt: null,
+      });
+      return this.receipt([cycle.person_id], [cycle.id]);
     });
-    return this.receipt([cycle.personId], [cycle.id]);
-  }
-
-  private projectionOfCycle(salesCycleId: string): {
-    prospectId: string;
-    evaluationId: string;
-    version: number;
-  } {
-    const row = this.database.raw.prepare(`
-      SELECT projection.prospect_id AS prospect_id,
-             projection.evaluation_id AS evaluation_id,
-             projection.version AS version
-      FROM sales_cycles AS cycle
-      JOIN prospect_priority_projection AS projection
-        ON projection.prospect_id = cycle.prospect_id
-      WHERE cycle.id = ?
-    `).get(salesCycleId) as Row | undefined;
-    if (row === undefined) {
-      throw new Error('The cycle has no current priority projection.');
-    }
-    return {
-      prospectId: String(row.prospect_id),
-      evaluationId: String(row.evaluation_id),
-      version: Number(row.version),
-    };
   }
 
   snoozePrimaryAction(input: SnoozeActionRequest): MutationReceipt {
-    const asOf = this.clock.now();
-    const controlled = this.projectionOfCycle(input.salesCycleId);
-    const compared = this.projectionOfCycle(input.comparedSalesCycleId);
-    this.services.prioritization.snoozeProspect({
-      controlId: this.ids.next(),
-      preferenceEventId: this.ids.next(),
-      controlledProspectId: controlled.prospectId,
-      comparison: {
-        winner: {
-          prospectId: compared.prospectId,
-          evaluationId: compared.evaluationId,
-          projectionVersion: compared.version,
-        },
-        loser: {
-          prospectId: controlled.prospectId,
-          evaluationId: controlled.evaluationId,
-          projectionVersion: controlled.version,
-        },
-      },
-      reason: input.reason,
-      asOf,
-      expiresAt: input.expiresAt,
+    const request = snoozeActionRequestSchema.parse(input);
+    return this.manualPriorityControl({
+      salesCycleId: request.salesCycleId,
+      comparedSalesCycleId: request.comparedSalesCycleId,
+      reason: request.reason,
+      expiresAt: request.expiresAt,
+      kind: 'snooze',
     });
-    return this.receipt([], [input.salesCycleId]);
   }
 
   pinWithinLane(input: PinActionRequest): MutationReceipt {
-    const asOf = this.clock.now();
-    const controlled = this.projectionOfCycle(input.salesCycleId);
-    const compared = this.projectionOfCycle(input.comparedSalesCycleId);
-    this.services.prioritization.pinProspect({
+    const request = pinActionRequestSchema.parse(input);
+    return this.manualPriorityControl({
+      salesCycleId: request.salesCycleId,
+      comparedSalesCycleId: request.comparedSalesCycleId,
+      reason: request.reason,
+      expiresAt: request.expiresAt,
+      kind: 'pin',
+    });
+  }
+
+  private manualPriorityControl(input: {
+    salesCycleId: string;
+    comparedSalesCycleId: string;
+    reason: string;
+    expiresAt: string;
+    kind: 'pin' | 'snooze';
+  }): MutationReceipt {
+    const now = this.clock.now();
+    const cycle = this.requireCycle(input.salesCycleId);
+    const compared = this.requireCycle(input.comparedSalesCycleId);
+    const controlled = this.readProjection(cycle.prospect_id);
+    const other = this.readProjection(compared.prospect_id);
+    if (controlled === undefined || other === undefined) {
+      throw new FounderSalesDomainError(
+        'PRIORITY_PROJECTION_MISSING',
+        'Both compared prospects need a current priority projection.',
+      );
+    }
+    const controlledSide = {
+      prospectId: cycle.prospect_id,
+      evaluationId: controlled.evaluation_id,
+      projectionVersion: controlled.version,
+    };
+    const otherSide = {
+      prospectId: compared.prospect_id,
+      evaluationId: other.evaluation_id,
+      projectionVersion: other.version,
+    };
+    const command = {
       controlId: this.ids.next(),
       preferenceEventId: this.ids.next(),
-      controlledProspectId: controlled.prospectId,
-      comparison: {
-        winner: {
-          prospectId: controlled.prospectId,
-          evaluationId: controlled.evaluationId,
-          projectionVersion: controlled.version,
-        },
-        loser: {
-          prospectId: compared.prospectId,
-          evaluationId: compared.evaluationId,
-          projectionVersion: compared.version,
-        },
-      },
+      controlledProspectId: cycle.prospect_id,
+      comparison: input.kind === 'pin'
+        ? { winner: controlledSide, loser: otherSide }
+        : { winner: otherSide, loser: controlledSide },
       reason: input.reason,
-      asOf,
+      asOf: now,
       expiresAt: input.expiresAt,
-    });
-    return this.receipt([], [input.salesCycleId]);
+    };
+    if (input.kind === 'pin') this.services.prioritization.pinProspect(command);
+    else this.services.prioritization.snoozeProspect(command);
+    return this.receipt([cycle.person_id], [cycle.id]);
   }
 
   logPastActivity(input: LogPastActivityRequest): MutationReceipt {
-    const channelByKind: Record<string, string> = {
-      call: 'phone', voicemail: 'phone', text: 'text', email: 'email', note: 'manual',
-    };
-    const optedOut = this.database.raw.prepare(`
-      SELECT 1 FROM opt_out_tombstones WHERE person_id = ?
-    `).get(input.personId) !== undefined;
-    if (optedOut && input.direction === 'outbound' && input.kind !== 'note') {
-      this.services.optOut.recordPastOffAppTouch({
-        personId: input.personId,
-        reportedAt: this.clock.now(),
-        activity: {
-          id: this.ids.next(),
-          personId: input.personId,
-          kind: input.kind,
-          direction: 'outbound',
-          channel: channelByKind[input.kind]!,
-          occurredAt: input.occurredAt,
-          observedOutcome: input.outcome,
-          metadata: { summary: input.summary },
-        },
+    const request = logPastActivityRequestSchema.parse(input);
+    return this.services.unitOfWork.immediate(() => {
+      const person = this.database.raw.prepare(
+        'SELECT id FROM persons WHERE id = ?',
+      ).get(request.personId) as { id: string } | undefined;
+      if (person === undefined) {
+        throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The person does not exist.');
+      }
+      let cycleIds: string[] = [];
+      if (request.salesCycleId !== null) {
+        const cycle = this.requireCycle(request.salesCycleId);
+        if (cycle.person_id !== request.personId) {
+          throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The cycle belongs to another person.');
+        }
+        cycleIds = [cycle.id];
+      }
+      const prospect = this.database.raw.prepare(
+        'SELECT id FROM prospects WHERE person_id = ?',
+      ).get(request.personId) as { id: string } | undefined;
+      this.services.events.appendActivity({
+        id: this.ids.next(),
+        personId: request.personId,
+        prospectId: prospect?.id ?? null,
+        salesCycleId: request.salesCycleId,
+        kind: request.kind,
+        direction: request.direction,
+        channel: request.kind === 'call' || request.kind === 'voicemail' ? 'phone' : request.kind,
+        occurredAt: request.occurredAt,
+        observedOutcome: request.outcome,
+        metadata: { formatVersion: 1, summary: request.summary, loggedVia: 'founder_workflow_ui' },
       });
-    } else {
-      this.services.unitOfWork.immediate(() => {
-        this.services.events.appendActivity({
-          id: this.ids.next(),
-          personId: input.personId,
-          salesCycleId: input.salesCycleId,
-          kind: input.kind,
-          direction: input.direction,
-          channel: channelByKind[input.kind]!,
-          occurredAt: input.occurredAt,
-          observedOutcome: input.outcome,
-          metadata: { summary: input.summary },
-        });
-      });
-    }
-    return this.receipt([input.personId], input.salesCycleId === null ? [] : [input.salesCycleId]);
-  }
-
-  getPipelineProjection(): PipelineSnapshot {
-    const asOf = this.clock.now();
-    const stages = [
-      'unreviewed', 'ready', 'contacted', 'interviewed', 'offered', 'won', 'lost_nurture',
-    ] as const;
-    const rows = this.database.raw.prepare(`
-      SELECT
-        cycle.id AS cycle_id,
-        cycle.person_id AS person_id,
-        cycle.prospect_id AS prospect_id,
-        cycle.stage AS stage,
-        cycle.stage_entered_at AS stage_entered_at,
-        cycle.current_next_action_id AS current_action_id,
-        cycle.close_reason AS close_reason,
-        person.display_name AS display_name
-      FROM sales_cycles AS cycle
-      JOIN persons AS person ON person.id = cycle.person_id
-      WHERE person.deleted_at IS NULL
-      ORDER BY cycle.stage_entered_at, cycle.id COLLATE BINARY
-    `).all() as Row[];
-    const cards = rows.map((row) => ({
-      personId: String(row.person_id),
-      salesCycleId: String(row.cycle_id),
-      personName: String(row.display_name),
-      contextLabel: null as string | null,
-      stage: String(row.stage) as PipelineSnapshot['stages'][number]['stage'],
-      stageEnteredAt: String(row.stage_entered_at),
-      priorityContext: this.priorityContextFor(String(row.prospect_id)),
-      nextAction: this.nextActionFor(
-        String(row.cycle_id),
-        row.current_action_id === null ? null : String(row.current_action_id),
-        asOf,
-      ),
-      lostReasonCode: row.close_reason === null ? null : String(row.close_reason),
-    }));
-    return pipelineSnapshotSchema.parse({
-      stages: stages.map((stage) => ({
-        stage,
-        cards: cards.filter((card) => card.stage === stage),
-      })),
-      revision: this.revision(),
+      return this.receipt([request.personId], cycleIds);
     });
   }
 
-  listReviewItems(input: ReviewListRequest): ReviewSnapshot {
+  // ------------------------------------------------------------- pipeline
+
+  getPipelineProjection(): PipelineSnapshot {
+    const now = this.clock.now();
     const rows = this.database.raw.prepare(`
-      SELECT id, activation_key, status, payload_json, version
-      FROM lifecycle_review_items
-      WHERE status = 'open'
-      ORDER BY id COLLATE BINARY
-      LIMIT ?
-    `).all(input.limit) as Row[];
+      SELECT
+        cycle.id AS cycle_id, cycle.person_id, cycle.prospect_id, cycle.stage,
+        cycle.workflow_status, cycle.stage_entered_at, cycle.close_reason,
+        person.display_name,
+        action.id AS action_id, action.action_type, action.channel AS action_channel,
+        action.due_at, action.status AS action_status, action.work_intent,
+        projection.fit_points, projection.fit_band, projection.timing_millipoints,
+        projection.timing_band, projection.reachability, projection.data_confidence,
+        projection.priority,
+        (
+          SELECT canonical_name FROM prospect_organizations AS link
+          JOIN organizations AS org ON org.id = link.organization_id
+          WHERE link.prospect_id = cycle.prospect_id
+          ORDER BY org.id ASC LIMIT 1
+        ) AS organization_name
+      FROM sales_cycles AS cycle
+      JOIN persons AS person ON person.id = cycle.person_id
+      LEFT JOIN next_actions AS action ON action.id = cycle.current_next_action_id
+      LEFT JOIN prospect_priority_projection AS projection
+        ON projection.prospect_id = cycle.prospect_id
+      ORDER BY cycle.stage_entered_at ASC, cycle.id ASC
+    `).all() as Array<{
+      cycle_id: string; person_id: string; prospect_id: string; stage: LeadRow['stage'];
+      workflow_status: 'active' | 'onboarding' | 'closed'; stage_entered_at: string;
+      close_reason: string | null; display_name: string;
+      action_id: string | null; action_type: string | null; action_channel: string | null;
+      due_at: string | null; action_status: string | null; work_intent: string | null;
+      fit_points: number | null; fit_band: ProjectionRow['fit_band'] | null;
+      timing_millipoints: number | null; timing_band: ProjectionRow['timing_band'] | null;
+      reachability: ProjectionRow['reachability'] | null; data_confidence: number | null;
+      priority: ProjectionRow['priority'] | null;
+      organization_name: string | null;
+    }>;
+    const byStage = new Map<string, typeof rows>(
+      PIPELINE_STAGE_ORDER.map((stage) => [stage, [] as typeof rows]),
+    );
+    for (const row of rows) byStage.get(row.stage)?.push(row);
+    return pipelineSnapshotSchema.parse({
+      stages: PIPELINE_STAGE_ORDER.map((stage) => ({
+        stage,
+        cards: byStage.get(stage)!.map((row) => ({
+          personId: row.person_id,
+          salesCycleId: row.cycle_id,
+          personName: row.display_name,
+          contextLabel: row.organization_name,
+          stage: row.stage,
+          stageEnteredAt: row.stage_entered_at,
+          priorityContext: row.priority === null
+            ? FALLBACK_PRIORITY_CONTEXT
+            : toPriorityContext({
+              prospect_id: row.prospect_id,
+              fit_points: row.fit_points!,
+              fit_band: row.fit_band!,
+              timing_millipoints: row.timing_millipoints!,
+              timing_band: row.timing_band!,
+              reachability: row.reachability!,
+              data_confidence: row.data_confidence!,
+              priority: row.priority,
+              version: 1,
+              evaluation_id: '',
+            }),
+          nextAction: row.action_id === null || row.action_status !== 'pending' ? null : {
+            id: row.action_id,
+            type: row.action_type!,
+            channel: actionChannel({
+              actionType: row.action_type!,
+              channel: row.action_channel,
+              workIntent: row.work_intent,
+              onboarding: row.workflow_status === 'onboarding',
+            }),
+            dueAt: row.due_at!,
+            label: actionLabel(row.action_type!),
+            overdue: row.due_at! < now,
+          },
+          lostReasonCode: row.stage === 'lost_nurture' ? row.close_reason : null,
+        })),
+      })),
+      revision: this.currentRevision(),
+    });
+  }
+
+  // --------------------------------------------------------------- review
+
+  listReviewItems(input: ReviewListRequest): ReviewSnapshot {
+    const request = reviewListRequestSchema.parse(input);
+    const rows = this.database.raw.prepare(`
+      SELECT id, person_id, reason, payload_json, created_at
+      FROM lifecycle_review_items WHERE status = 'open'
+      ORDER BY created_at ASC, id ASC LIMIT ?
+    `).all(request.limit) as {
+      id: string; person_id: string; reason: string; payload_json: string; created_at: string;
+    }[];
     const items: ReviewItem[] = [];
     for (const row of rows) {
-      let personId: string | null = null;
-      try {
-        const payload = JSON.parse(String(row.payload_json)) as { command?: { personId?: string } };
-        personId = payload.command?.personId ?? null;
-      } catch {
-        personId = null;
-      }
-      const item: ReviewItem = {
-        kind: 'system_error',
-        reviewId: String(row.id),
-        invariant: String(row.activation_key),
-        summary: 'A blocked reactivation requires founder review.',
-        personId,
+      let payload: {
+        blocker?: string;
+        command?: { evidence?: { kind?: string; handleKind?: string; normalizedValue?: string } };
       };
-      items.push(item);
+      try {
+        payload = JSON.parse(row.payload_json) as typeof payload;
+      } catch {
+        payload = {};
+      }
+      if (payload.blocker === 'unknown_inbound_handle'
+        && payload.command?.evidence?.kind === 'unknown_handle') {
+        items.push({
+          kind: 'unmatched_communication',
+          reviewId: row.id,
+          channel: payload.command.evidence.handleKind === 'email' ? 'email' : 'text',
+          handle: payload.command.evidence.normalizedValue ?? '',
+          occurredAt: row.created_at,
+          summary: row.reason,
+        });
+      } else {
+        items.push({
+          kind: 'system_error',
+          reviewId: row.id,
+          invariant: payload.blocker ?? 'reactivation_blocked',
+          summary: row.reason,
+          personId: row.person_id,
+        });
+      }
     }
-    const filtered = input.kinds.length === 0
+    const filtered = request.kinds.length === 0
       ? items
-      : items.filter((item) => input.kinds.includes(item.kind));
-    const openCount = (this.database.raw.prepare(`
-      SELECT COUNT(*) AS count FROM lifecycle_review_items WHERE status = 'open'
-    `).get() as { count: number }).count;
+      : items.filter((item) => (request.kinds as string[]).includes(item.kind));
+    const totalOpenCount = (this.database.raw.prepare(
+      `SELECT COUNT(*) AS count FROM lifecycle_review_items WHERE status = 'open'`,
+    ).get() as { count: number }).count;
     return reviewSnapshotSchema.parse({
       items: filtered,
-      totalOpenCount: openCount,
-      revision: this.revision(),
+      totalOpenCount,
+      revision: this.currentRevision(),
     });
   }
 
   resolveReviewItem(input: ResolveReviewRequest): MutationReceipt {
-    this.services.unitOfWork.immediate(() => {
-      const row = this.database.raw.prepare(`
-        SELECT id, version FROM lifecycle_review_items WHERE id = ?
-      `).get(input.reviewId) as Row | undefined;
-      if (row === undefined) throw new Error('The review item does not exist.');
-      const resolution = input.kind === 'ambiguous_identity'
-        ? { kind: 'resolved_identity', personId: input.personId }
-        : { kind: 'resolved', action: input.action };
-      const result = this.database.raw.prepare(`
-        UPDATE lifecycle_review_items
-        SET status = 'resolved', resolution_json = ?, resolved_at = ?, version = version + 1
-        WHERE id = ? AND status = 'open' AND version = ?
-      `).run(
-        JSON.stringify(resolution),
-        this.clock.now(),
-        input.reviewId,
-        input.expectedVersion,
+    const request = resolveReviewRequestSchema.parse(input);
+    if (request.kind !== 'unmatched_communication' || request.action !== 'promote') {
+      throw new FounderSalesDomainError(
+        'REVIEW_RESOLUTION_UNSUPPORTED',
+        'This review kind has no V1 resolution command yet.',
       );
-      if (result.changes === 0) throw new Error('The review item changed before this resolution.');
+    }
+    if (request.sourceEventId === null) {
+      throw new FounderSalesDomainError(
+        'REVIEW_RESOLUTION_UNSUPPORTED', 'Promotion requires the matched source event.',
+      );
+    }
+    const now = this.clock.now();
+    const review = this.database.raw.prepare(`
+      SELECT id, activation_key, version, person_id, payload_json
+      FROM lifecycle_review_items WHERE id = ? AND status = 'open'
+    `).get(request.reviewId) as {
+      id: string; activation_key: string; version: number; person_id: string; payload_json: string;
+    } | undefined;
+    if (review === undefined) {
+      throw new FounderSalesDomainError('REVIEW_NOT_FOUND', 'The review item is not open.');
+    }
+    const source = this.database.raw.prepare(
+      'SELECT channel FROM source_events WHERE id = ?',
+    ).get(request.sourceEventId) as { channel: string } | undefined;
+    const allowed = ['inbound_demo', 'referral', 'rireig', 'community'] as const;
+    if (source === undefined || !(allowed as readonly string[]).includes(source.channel)) {
+      throw new FounderSalesDomainError(
+        'REVIEW_RESOLUTION_UNSUPPORTED', 'The source event cannot promote this review.',
+      );
+    }
+    const payload = JSON.parse(review.payload_json) as {
+      command: { cadence: unknown };
+    };
+    const result = this.services.lifecycle.promoteUnknownInboundReview({
+      reviewId: review.id,
+      activationKey: review.activation_key,
+      expectedReviewVersion: request.expectedVersion,
+      sourceEventId: request.sourceEventId,
+      channel: source.channel as typeof allowed[number],
+      activatedAt: now,
+      cadence: payload.command.cadence as never,
     });
-    return this.receipt([], []);
+    const cycleIds = result.kind === 'reactivated' ? [result.cycle.id] : [];
+    return this.receipt([review.person_id], cycleIds);
   }
 
-  private fridayWindow(asOf: string): { startsAt: string; endsAt: string } {
-    const formatter = new Intl.DateTimeFormat('en-CA', {
-      timeZone: this.timezone, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short',
-    });
-    const asOfDate = new Date(asOf);
-    // Find the founder-local Monday 00:00 of the current week.
-    const parts = formatter.formatToParts(asOfDate);
-    const weekday = parts.find((part) => part.type === 'weekday')?.value ?? 'Mon';
-    const dayIndex = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(weekday);
-    const startDate = new Date(asOfDate.getTime() - Math.max(0, dayIndex) * 86_400_000);
-    const dateOnly = new Intl.DateTimeFormat('en-CA', {
-      timeZone: this.timezone, year: 'numeric', month: '2-digit', day: '2-digit',
-    }).format(startDate);
-    const startsAt = `${dateOnly}T00:00:00.000Z`;
-    const endsAt = new Date(Date.parse(startsAt) + 5 * 86_400_000).toISOString();
-    return { startsAt, endsAt };
-  }
+  // --------------------------------------------------------------- friday
 
   getFridayReport(): FridayReport {
     const asOf = this.clock.now();
-    const window = this.fridayWindow(asOf);
-    const countStage = (stage: string): number => (this.database.raw.prepare(`
+    const settings = this.services.workspaceSettings.read();
+    const timezone = this.configuredTimezone ?? settings.timezone;
+    const { periodStartsAt, periodEndsAt } = this.fridayWindow(asOf, timezone);
+
+    const stageCount = (stage: string): number => (this.database.raw.prepare(`
       SELECT COUNT(*) AS count FROM stage_events
       WHERE to_stage = ? AND effective_at >= ? AND effective_at < ?
-    `).get(stage, window.startsAt, window.endsAt) as { count: number }).count;
-    const jobs = this.listFounderJobs();
-    const fillDenominator = jobs.filter((job) => job.status !== 'cancelled').length;
-    const filled = jobs.filter((job) => job.status === 'filled').length;
-    const sourceRows = (this.database.raw.prepare(`
+    `).get(stage, periodStartsAt, periodEndsAt) as { count: number }).count;
+    const interviews = stageCount('interviewed');
+    const offers = stageCount('offered');
+    const wins = stageCount('won');
+
+    const founderJobs = this.listFounderJobs();
+    const inWindow = (timestamp: string | null): boolean => (
+      timestamp !== null && timestamp >= periodStartsAt && timestamp < periodEndsAt
+    );
+    const requestedJobs = founderJobs.filter(
+      (job) => job.status !== 'cancelled' && inWindow(job.requestedAt),
+    );
+    const filledJobs = founderJobs.filter(
+      (job) => job.status === 'filled' && inWindow(job.contractorAcceptedAt),
+    );
+
+    const mrrCents = (this.database.raw.prepare(`
+      SELECT COALESCE(SUM(projected_mrr_cents), 0) AS total FROM won_terms
+      WHERE effective_at >= ? AND effective_at < ?
+    `).get(periodStartsAt, periodEndsAt) as { total: number }).total;
+    const foundingCustomers = (this.database.raw.prepare(`
+      SELECT COUNT(*) AS count FROM won_terms
+      WHERE founding_customer = 1 AND effective_at >= ? AND effective_at < ?
+    `).get(periodStartsAt, periodEndsAt) as { count: number }).count;
+    const fitness = this.database.raw.prepare(`
+      SELECT AVG(design_partner_fitness) AS average FROM sales_cycles
+      WHERE design_partner_fitness IS NOT NULL
+    `).get() as { average: number | null };
+    const overdueActions = (this.database.raw.prepare(`
+      SELECT COUNT(*) AS count FROM next_actions
+      WHERE status = 'pending' AND due_at < ?
+    `).get(asOf) as { count: number }).count;
+    const invalidActionCycles = (this.database.raw.prepare(`
+      SELECT COUNT(*) AS count FROM sales_cycles AS cycle
+      WHERE cycle.workflow_status IN ('active', 'onboarding') AND (
+        cycle.current_next_action_id IS NULL OR NOT EXISTS (
+          SELECT 1 FROM next_actions AS action
+          WHERE action.id = cycle.current_next_action_id AND action.status = 'pending'
+        )
+      )
+    `).get() as { count: number }).count;
+
+    const count = (id: MetricId, label: string, value: number, drilldownCount = 0): Metric => ({
+      id, label, displayValue: String(value), numericValue: value,
+      target: null, priorDelta: null, numerator: null, denominator: null, drilldownCount,
+    });
+    const rate = (id: MetricId, label: string, numerator: number, denominator: number): Metric => ({
+      id,
+      label,
+      displayValue: denominator === 0 ? '—' : `${Math.round((numerator / denominator) * 100)}%`,
+      numericValue: denominator === 0 ? null : numerator / denominator,
+      target: null,
+      priorDelta: null,
+      numerator,
+      denominator,
+      drilldownCount: 0,
+    });
+    const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+    const metrics: Metric[] = [
+      count('interviews', 'Interviews', interviews, interviews),
+      count('offers', 'Offers', offers, offers),
+      count('wins', 'Wins', wins, wins),
+      rate('offer_rate', 'Offer rate', offers, interviews),
+      rate('win_rate', 'Win rate', wins, offers),
+      count('jobs_requested', 'Jobs requested', requestedJobs.length),
+      count('jobs_filled', 'Jobs filled', filledJobs.length),
+      rate('fill_rate', 'Fill rate', filledJobs.length, requestedJobs.length),
+      {
+        id: 'new_mrr', label: 'New MRR', displayValue: usd.format(mrrCents / 100),
+        numericValue: mrrCents / 100, target: null, priorDelta: null,
+        numerator: null, denominator: null, drilldownCount: 0,
+      },
+      count('founding_customers', 'Founding customers', foundingCustomers),
+      {
+        id: 'design_partner_fitness', label: 'Design partner fitness',
+        displayValue: fitness.average === null ? '—' : fitness.average.toFixed(1),
+        numericValue: fitness.average, target: null, priorDelta: null,
+        numerator: null, denominator: null, drilldownCount: 0,
+      },
+      count('overdue_actions', 'Overdue actions', overdueActions),
+      count('invalid_action_cycles', 'Invalid action cycles', invalidActionCycles),
+    ];
+    const sourceRows = this.database.raw.prepare(`
       SELECT source.channel AS source,
         SUM(CASE WHEN event.to_stage = 'interviewed' THEN 1 ELSE 0 END) AS interviews,
         SUM(CASE WHEN event.to_stage = 'offered' THEN 1 ELSE 0 END) AS offers,
@@ -865,463 +1320,610 @@ export class FounderSalesDomain {
       JOIN source_events AS source ON source.id = prospect.original_source_event_id
       WHERE event.effective_at >= ? AND event.effective_at < ?
         AND event.to_stage IN ('interviewed', 'offered', 'won')
-      GROUP BY source.channel ORDER BY source.channel
-    `).all(window.startsAt, window.endsAt) as Row[]).map((row) => ({
-      source: String(row.source),
-      interviews: Number(row.interviews),
-      offers: Number(row.offers),
-      wins: Number(row.wins),
-    }));
+      GROUP BY source.channel ORDER BY source.channel ASC
+    `).all(periodStartsAt, periodEndsAt) as {
+      source: string; interviews: number; offers: number; wins: number;
+    }[];
     return fridayReportSchema.parse({
-      periodStartsAt: window.startsAt,
-      periodEndsAt: window.endsAt,
+      periodStartsAt,
+      periodEndsAt,
       asOf,
-      metrics: this.buildFridayMetrics({
-        interviews: countStage('interviewed'),
-        offers: countStage('offered'),
-        wins: countStage('won'),
-        jobsRequested: jobs.length,
-        jobsFilled: filled,
-        fillDenominator,
-      }),
+      metrics,
       sourceRows,
-      jobs,
-      revision: this.revision(),
+      jobs: founderJobs,
+      revision: this.currentRevision(),
     });
-  }
-
-  private buildFridayMetrics(input: {
-    interviews: number;
-    offers: number;
-    wins: number;
-    jobsRequested: number;
-    jobsFilled: number;
-    fillDenominator: number;
-  }): FridayReport['metrics'] {
-    const count = (id: MetricId, label: string, value: number, target: number | null = null) => ({
-      id, label, displayValue: String(value), numericValue: value, target,
-      priorDelta: null as number | null, numerator: null as number | null,
-      denominator: null as number | null, drilldownCount: value,
-    });
-    const rate = (
-      id: MetricId,
-      label: string,
-      numerator: number,
-      denominator: number,
-    ) => {
-      const value = denominator === 0 ? null : numerator / denominator;
-      return {
-        id, label,
-        displayValue: value === null ? '—' : `${Math.round(value * 100)}%`,
-        numericValue: value, target: null as number | null,
-        priorDelta: null as number | null, numerator, denominator, drilldownCount: 0,
-      };
-    };
-    const overdue = (this.database.raw.prepare(`
-      SELECT COUNT(*) AS count FROM next_actions
-      WHERE status = 'pending' AND due_at < ?
-    `).get(this.clock.now()) as { count: number }).count;
-    const invalidActionCycles = (this.database.raw.prepare(`
-      SELECT COUNT(*) AS count FROM sales_cycles
-      WHERE workflow_status IN ('active', 'onboarding') AND current_next_action_id IS NULL
-    `).get() as { count: number }).count;
-    const foundingCustomers = (this.database.raw.prepare(`
-      SELECT COUNT(*) AS count FROM sales_cycles WHERE stage = 'won'
-    `).get() as { count: number }).count;
-    return [
-      count('interviews', 'Interviews', input.interviews),
-      count('offers', 'Offers', input.offers),
-      count('wins', 'Wins', input.wins),
-      rate('offer_rate', 'Offer rate', input.offers, input.interviews),
-      rate('win_rate', 'Win rate', input.wins, input.offers),
-      count('jobs_requested', 'Jobs requested', input.jobsRequested),
-      count('jobs_filled', 'Jobs filled', input.jobsFilled),
-      rate('fill_rate', 'Fill rate', input.jobsFilled, input.fillDenominator),
-      count('new_mrr', 'New MRR', 0),
-      count('founding_customers', 'Founding customers', foundingCustomers, 10),
-      rate('design_partner_fitness', 'Design partner fitness', foundingCustomers, 10),
-      count('overdue_actions', 'Overdue actions', overdue),
-      count('invalid_action_cycles', 'Invalid action cycles', invalidActionCycles),
-    ];
   }
 
   getMetricDrilldown(input: MetricDrilldownRequest): MetricDrilldown {
-    const asOf = this.clock.now();
-    const window = this.fridayWindow(asOf);
-    const stageByMetric: Record<string, string> = {
+    const request = metricDrilldownRequestSchema.parse(input);
+    const stageFor: Partial<Record<MetricId, string>> = {
       interviews: 'interviewed', offers: 'offered', wins: 'won',
     };
-    const stage = stageByMetric[input.metricId];
-    const rows = stage === undefined
-      ? this.database.raw.prepare(`
-          SELECT activity.id AS id, person.display_name AS label,
-                 activity.occurred_at AS occurred_at, activity.observed_outcome AS detail
-          FROM activities AS activity
-          JOIN persons AS person ON person.id = activity.person_id
-          WHERE activity.kind = 'call' AND activity.direction = 'outbound'
-            AND activity.occurred_at >= ? AND activity.occurred_at < ?
-          ORDER BY activity.occurred_at DESC LIMIT 100
-        `).all(window.startsAt, window.endsAt) as Row[]
-      : this.database.raw.prepare(`
-          SELECT event.id AS id, person.display_name AS label,
-                 event.effective_at AS occurred_at, event.to_stage AS detail
-          FROM stage_events AS event
-          JOIN sales_cycles AS cycle ON cycle.id = event.sales_cycle_id
-          JOIN persons AS person ON person.id = cycle.person_id
-          WHERE event.to_stage = ? AND event.effective_at >= ? AND event.effective_at < ?
-          ORDER BY event.effective_at DESC LIMIT 100
-        `).all(stage, window.startsAt, window.endsAt) as Row[];
+    const stage = stageFor[request.metricId];
+    const rows = stage === undefined ? [] : (this.database.raw.prepare(`
+      SELECT event.id, event.effective_at, cycle.id AS cycle_id,
+        cycle.person_id, person.display_name
+      FROM stage_events AS event
+      JOIN sales_cycles AS cycle ON cycle.id = event.sales_cycle_id
+      JOIN persons AS person ON person.id = cycle.person_id
+      WHERE event.to_stage = ?
+      ORDER BY event.effective_at DESC, event.id DESC LIMIT 100
+    `).all(stage) as {
+      id: string; effective_at: string; cycle_id: string;
+      person_id: string; display_name: string;
+    }[]).map((row) => ({
+      id: row.id,
+      personId: row.person_id,
+      salesCycleId: row.cycle_id,
+      label: row.display_name,
+      occurredAt: row.effective_at,
+      detail: null as string | null,
+    }));
     return metricDrilldownSchema.parse({
-      metricId: input.metricId,
-      label: input.metricId,
-      rows: rows.map((row) => ({
-        id: String(row.id),
-        label: String(row.label),
-        occurredAt: row.occurred_at === null ? null : String(row.occurred_at),
-        detail: row.detail === null ? null : String(row.detail),
-      })),
+      metricId: request.metricId,
+      label: actionLabel(request.metricId),
+      rows,
     });
   }
 
-  private listFounderJobs(): FridayReport['jobs'] {
-    const rows = this.database.raw.prepare(`
-      SELECT id, payload_json, state FROM jobs WHERE type = ?
-      ORDER BY created_at, id
-    `).all(FOUNDER_JOB_REQUEST_TYPE) as Row[];
-    const jobs: FridayReport['jobs'] = [];
-    for (const row of rows) {
-      try {
-        const payload = JSON.parse(String(row.payload_json)) as {
-          salesCycleId: string | null;
-          requestedAt: string;
-          status: 'requested' | 'filled' | 'cancelled';
-          contractorAcceptedAt: string | null;
-        };
-        jobs.push({
-          id: String(row.id),
-          salesCycleId: payload.salesCycleId,
-          requestedAt: payload.requestedAt,
-          status: payload.status,
-          contractorAcceptedAt: payload.contractorAcceptedAt,
-        });
-      } catch {
-        // Malformed founder-job payloads are skipped, never fatal to the report.
-      }
-    }
-    return jobs;
-  }
-
+  /**
+   * V1 stores founder job requests as jobs rows with the dedicated
+   * `founder_job_request_v1` type: requested = queued, filled = succeeded
+   * with the acceptance timestamp in the result payload, cancelled =
+   * cancelled. The idempotency key is derived from the caller job ID so
+   * repeated creates cannot duplicate rows.
+   */
   createJobRequest(input: CreateJobRequest): MutationReceipt {
+    const request = createJobRequestSchema.parse(input);
+    if (request.salesCycleId !== null) this.requireCycle(request.salesCycleId);
     this.services.jobs.enqueue({
-      id: input.jobId,
+      id: request.jobId,
       type: FOUNDER_JOB_REQUEST_TYPE,
-      idempotencyKey: `${FOUNDER_JOB_REQUEST_TYPE}:${input.jobId}`,
+      idempotencyKey: `founder-job:${request.jobId}`,
       payload: {
-        salesCycleId: input.salesCycleId,
-        requestedAt: input.requestedAt,
-        status: 'requested',
-        contractorAcceptedAt: null,
+        formatVersion: 1,
+        jobId: request.jobId,
+        salesCycleId: request.salesCycleId,
+        requestedAt: request.requestedAt,
       },
       at: this.clock.now(),
     });
-    return this.receipt([], input.salesCycleId === null ? [] : [input.salesCycleId]);
-  }
-
-  private updateFounderJob(
-    jobId: string,
-    update: (payload: Record<string, unknown>) => Record<string, unknown>,
-  ): void {
-    this.services.unitOfWork.immediate(() => {
-      const row = this.database.raw.prepare(`
-        SELECT payload_json FROM jobs WHERE id = ? AND type = ?
-      `).get(jobId, FOUNDER_JOB_REQUEST_TYPE) as Row | undefined;
-      if (row === undefined) throw new Error('The job request does not exist.');
-      const payload = JSON.parse(String(row.payload_json)) as Record<string, unknown>;
-      const next = update(payload);
-      this.database.raw.prepare(`
-        UPDATE jobs SET payload_json = ?, updated_at = ? WHERE id = ? AND type = ?
-      `).run(JSON.stringify(next), this.clock.now(), jobId, FOUNDER_JOB_REQUEST_TYPE);
-    });
+    return this.receipt([], request.salesCycleId === null ? [] : [request.salesCycleId]);
   }
 
   markJobFilled(input: FillJobRequest): MutationReceipt {
-    this.updateFounderJob(input.jobId, (payload) => {
-      if (payload.status === 'cancelled') {
-        throw new Error('A cancelled job request cannot be filled.');
-      }
-      return {
-        ...payload,
-        status: 'filled',
-        contractorAcceptedAt: input.contractorAcceptedAt,
-      };
-    });
+    const request = fillJobRequestSchema.parse(input);
+    const job = this.requireFounderJob(request.jobId);
+    if (job.state === 'queued') {
+      this.services.jobs.start(job.id);
+      this.services.jobs.succeed(job.id, {
+        formatVersion: 1,
+        contractorAcceptedAt: request.contractorAcceptedAt,
+      });
+    } else if (job.state !== 'succeeded') {
+      throw new FounderSalesDomainError('JOB_NOT_FOUND', 'The job request cannot be filled.');
+    }
     return this.receipt([], []);
   }
 
   cancelJobRequest(input: CancelJobRequest): MutationReceipt {
-    this.updateFounderJob(input.jobId, (payload) => ({
-      ...payload,
-      status: 'cancelled',
-    }));
+    const request = cancelJobRequestSchema.parse(input);
+    const job = this.requireFounderJob(request.jobId);
+    if (job.state === 'queued') {
+      this.services.jobs.cancel(job.id);
+    } else if (job.state !== 'cancelled') {
+      throw new FounderSalesDomainError('JOB_NOT_FOUND', 'Only requested jobs can be cancelled.');
+    }
     return this.receipt([], []);
   }
 
-  private readonly importPreviews = new Map<string, {
-    contentHash: string;
-    columns: string[];
-    rows: { rowNumber: number; values: string[] }[];
-    mapping: ImportMapping;
-    expiresAt: string;
-  }>();
+  private requireFounderJob(jobId: string): JobRecord {
+    const job = this.services.jobs.get(jobId);
+    if (job === null || job.type !== FOUNDER_JOB_REQUEST_TYPE) {
+      throw new FounderSalesDomainError('JOB_NOT_FOUND', 'The founder job request does not exist.');
+    }
+    return job;
+  }
+
+  private listFounderJobs(): {
+    id: string;
+    salesCycleId: string | null;
+    requestedAt: string;
+    status: 'requested' | 'filled' | 'cancelled';
+    contractorAcceptedAt: string | null;
+  }[] {
+    const rows = this.database.raw.prepare(`
+      SELECT id, state, payload_json, result_json FROM jobs
+      WHERE type = ? ORDER BY created_at ASC, id ASC
+    `).all(FOUNDER_JOB_REQUEST_TYPE) as {
+      id: string; state: string; payload_json: string; result_json: string | null;
+    }[];
+    return rows.map((row) => {
+      const payload = JSON.parse(row.payload_json) as {
+        salesCycleId: string | null; requestedAt: string;
+      };
+      const result = row.result_json === null
+        ? null
+        : JSON.parse(row.result_json) as { contractorAcceptedAt?: string };
+      return {
+        id: row.id,
+        salesCycleId: payload.salesCycleId,
+        requestedAt: payload.requestedAt,
+        status: row.state === 'succeeded' ? 'filled' as const
+          : row.state === 'cancelled' ? 'cancelled' as const : 'requested' as const,
+        contractorAcceptedAt: result?.contractorAcceptedAt ?? null,
+      };
+    });
+  }
+
+  private fridayWindow(asOf: string, timezone: string): {
+    periodStartsAt: string;
+    periodEndsAt: string;
+  } {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
+    });
+    const localDate = formatter.format(new Date(asOf));
+    const weekday = new Date(`${localDate}T00:00:00Z`).getUTCDay();
+    const daysSinceMonday = (weekday + 6) % 7;
+    const shift = (date: string, days: number): string => {
+      const [year, month, day] = date.split('-').map(Number);
+      return new Date(Date.UTC(year!, month! - 1, day! + days)).toISOString().slice(0, 10);
+    };
+    const monday = shift(localDate, -daysSinceMonday);
+    const saturday = shift(monday, 5);
+    return {
+      periodStartsAt: this.localMidnightUtc(monday, timezone),
+      periodEndsAt: this.localMidnightUtc(saturday, timezone),
+    };
+  }
+
+  private localMidnightUtc(localDate: string, timezone: string): string {
+    const [year, month, day] = localDate.split('-').map(Number);
+    let guess = Date.UTC(year!, month! - 1, day!);
+    for (let iteration = 0; iteration < 4; iteration += 1) {
+      const offset = this.timezoneOffsetMillis(guess, timezone);
+      const corrected = Date.UTC(year!, month! - 1, day!) - offset;
+      if (corrected === guess) break;
+      guess = corrected;
+    }
+    return new Date(guess).toISOString();
+  }
+
+  private timezoneOffsetMillis(utcMillis: number, timezone: string): number {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone, hourCycle: 'h23',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).formatToParts(new Date(utcMillis));
+    const part = (type: Intl.DateTimeFormatPartTypes): number => (
+      Number(parts.find((candidate) => candidate.type === type)?.value ?? '0')
+    );
+    const asUtc = Date.UTC(
+      part('year'), part('month') - 1, part('day'),
+      part('hour'), part('minute'), part('second'),
+    );
+    return asUtc - utcMillis;
+  }
+
+  // --------------------------------------------------------------- import
 
   previewLeadImport(input: ImportSource): ImportPreview {
-    const parsed = importSourceSchema.parse(input);
-    const result = Papa.parse<string[]>(parsed.content.trim(), { skipEmptyLines: true });
-    const [header, ...dataRows] = result.data;
-    if (header === undefined || header.length === 0) {
-      throw new Error('The import source has no header row.');
-    }
-    const columns = header.map((column) => column.trim());
-    const rows = dataRows.map((values, index) => ({
-      rowNumber: index + 2,
-      values: values.map((value) => String(value ?? '')),
-    }));
-    const suggestion: Record<string, z.infer<typeof z.ZodString>> = {};
-    const mapping: ImportMapping = {};
-    for (const column of columns) {
-      const lower = column.toLowerCase();
-      if (lower.includes('name')) mapping[column] = 'person_name';
-      else if (lower.includes('phone')) mapping[column] = 'phone';
-      else if (lower.includes('email')) mapping[column] = 'email';
-      else if (lower.includes('org')) mapping[column] = 'organization';
-      else if (lower.includes('door')) mapping[column] = 'doors';
-      else if (lower.includes('source')) mapping[column] = 'source';
-      else if (lower.includes('address')) mapping[column] = 'property_address';
-      else mapping[column] = 'ignore';
-    }
-    if (!Object.values(mapping).includes('person_name') && columns.length > 0) {
-      mapping[columns[0]!] = 'person_name';
-    }
-    void suggestion;
-    const contentHash = createHash('sha256').update(parsed.content).digest('hex');
-    const previewId = this.ids.next();
-    const asOfMillis = Date.parse(this.clock.now());
-    const expiresAt = new Date(asOfMillis + 30 * 60_000).toISOString();
-    const nameColumn = columns.findIndex((column) => mapping[column] === 'person_name');
-    const phoneColumn = columns.findIndex((column) => mapping[column] === 'phone');
-    const emailColumn = columns.findIndex((column) => mapping[column] === 'email');
-    const errors: ImportPreview['errors'] = [];
-    const duplicateCandidates: ImportPreview['duplicateCandidates'] = [];
-    let validCount = 0;
-    for (const row of rows) {
-      const name = nameColumn >= 0 ? row.values[nameColumn]?.trim() ?? '' : '';
-      if (name.length === 0) {
-        errors.push({
-          rowNumber: row.rowNumber,
-          field: 'person_name',
-          code: 'missing_name',
-          message: 'The person name is required.',
-        });
-        continue;
-      }
-      validCount += 1;
-      for (const [columnIndex, kind] of [
-        [phoneColumn, 'phone' as const],
-        [emailColumn, 'email' as const],
-      ] as const) {
-        if (columnIndex < 0) continue;
-        const value = row.values[columnIndex]?.trim() ?? '';
-        if (value.length === 0) continue;
-        try {
-          const matches = this.services.identities
-            .findPeopleByNormalizedHandle(kind, value)
-            .map((person) => person.id);
-          if (matches.length > 0) {
-            duplicateCandidates.push({
-              rowNumber: row.rowNumber,
-              personIds: matches,
-              reason: `Existing ${kind} match`,
-            });
-          }
-        } catch {
-          errors.push({
-            rowNumber: row.rowNumber,
-            field: kind,
-            code: `invalid_${kind}`,
-            message: `The ${kind} value could not be normalized.`,
-          });
-        }
-      }
-    }
-    this.importPreviews.set(previewId, { contentHash, columns, rows, mapping, expiresAt });
-    return importPreviewSchema.parse({
-      previewId,
-      contentHash,
-      columns,
-      sampleRows: rows.slice(0, 20).map((row) => ({
+    const request = importSourceSchema.parse(input);
+    const parsed = this.parseTabular(request);
+    const suggestedMapping = this.suggestMapping(parsed.columns);
+    const validation = this.validateImportRows(parsed.rows, suggestedMapping);
+    const preview = importPreviewSchema.parse({
+      previewId: this.ids.next(),
+      contentHash: createHash('sha256').update(request.content, 'utf8').digest('hex'),
+      columns: parsed.columns,
+      sampleRows: parsed.rows.slice(0, 20).map((row) => ({
         rowNumber: row.rowNumber,
-        cells: row.values,
+        cells: parsed.columns.map((column) => row.values[column] ?? ''),
       })),
-      suggestedMapping: mapping,
-      rowCount: rows.length,
-      validCount,
-      errors,
-      duplicateCandidates,
-      expiresAt,
+      suggestedMapping,
+      rowCount: parsed.rows.length,
+      validCount: validation.validCount,
+      errors: [...parsed.errors, ...validation.errors],
+      duplicateCandidates: validation.duplicateCandidates,
+      expiresAt: new Date(Date.parse(this.clock.now()) + IMPORT_PREVIEW_TTL_MS).toISOString(),
     });
+    this.importPreviews.set(preview.previewId, {
+      preview,
+      columns: parsed.columns,
+      rows: parsed.rows,
+      sourceName: request.sourceName,
+    });
+    return preview;
   }
 
   remapLeadImport(input: ImportRemapRequest): ImportPreview {
-    const preview = this.importPreviews.get(input.previewId);
-    if (preview === undefined || preview.contentHash !== input.contentHash) {
-      throw new Error('The import preview has expired or changed.');
-    }
-    preview.mapping = input.mapping;
-    const columns = preview.columns;
-    const nameColumn = columns.findIndex((column) => input.mapping[column] === 'person_name');
-    let validCount = 0;
-    const errors: ImportPreview['errors'] = [];
-    for (const row of preview.rows) {
-      const name = nameColumn >= 0 ? row.values[nameColumn]?.trim() ?? '' : '';
-      if (name.length === 0) {
-        errors.push({
-          rowNumber: row.rowNumber,
-          field: 'person_name',
-          code: 'missing_name',
-          message: 'The person name is required.',
-        });
-      } else {
-        validCount += 1;
-      }
-    }
-    return importPreviewSchema.parse({
-      previewId: input.previewId,
-      contentHash: preview.contentHash,
-      columns,
-      sampleRows: preview.rows.slice(0, 20).map((row) => ({
-        rowNumber: row.rowNumber,
-        cells: row.values,
-      })),
-      suggestedMapping: input.mapping,
-      rowCount: preview.rows.length,
-      validCount,
-      errors,
-      duplicateCandidates: [],
-      expiresAt: preview.expiresAt,
+    const request = importRemapRequestSchema.parse(input);
+    const stored = this.requirePreview(request.previewId, request.contentHash);
+    const validation = this.validateImportRows(stored.rows, request.mapping);
+    const preview = importPreviewSchema.parse({
+      ...stored.preview,
+      suggestedMapping: request.mapping,
+      validCount: validation.validCount,
+      errors: validation.errors,
+      duplicateCandidates: validation.duplicateCandidates,
     });
-  }
-
-  private intakeSource(
-    jobId: string,
-    rowNumber: number,
-    source: ImportCommitRequest['source'],
-  ): IntakeSourceInput {
-    const base = {
-      id: `${jobId}-row-${rowNumber}`,
-      observedAt: this.clock.now(),
-      sourceRecord: { importRow: rowNumber },
-    };
-    if (source.channel === 'custom') {
-      return { ...base, channel: 'custom', customSourceReason: 'csv_import' };
-    }
-    if (source.channel === 'referral') {
-      return {
-        ...base,
-        channel: 'referral',
-        referral: source.referredByPersonId === null
-          ? { kind: 'unknown', reason: 'not_provided' }
-          : { kind: 'known', referredByPersonId: source.referredByPersonId },
-      };
-    }
-    return { ...base, channel: source.channel };
+    this.importPreviews.set(request.previewId, { ...stored, preview });
+    return preview;
   }
 
   commitLeadImport(input: ImportCommitRequest): ImportCommitReceipt {
-    const preview = this.importPreviews.get(input.previewId);
-    if (preview === undefined || preview.contentHash !== input.contentHash) {
-      throw new Error('The import preview has expired or changed.');
+    const request = importCommitRequestSchema.parse(input);
+    const stored = this.requirePreview(request.previewId, request.contentHash);
+    const validation = this.validateImportRows(stored.rows, request.mapping);
+    if (validation.errors.length > 0) {
+      throw new FounderSalesDomainError(
+        'IMPORT_VALIDATION_FAILED',
+        'The import has blocking row errors; nothing was written.',
+      );
     }
-    const columns = preview.columns;
-    const columnFor = (field: string): number => columns.findIndex(
-      (column) => input.mapping[column] === field,
+    const skipRows = new Set(
+      request.duplicateDecisions
+        .filter((decision) => decision.decision === 'skip')
+        .map((decision) => decision.rowNumber),
     );
-    const nameColumn = columnFor('person_name');
-    const phoneColumn = columnFor('phone');
-    const emailColumn = columnFor('email');
-    const organizationColumn = columnFor('organization');
-    const doorsColumn = columnFor('doors');
-    const addressColumn = columnFor('property_address');
-    const jobId = this.ids.next();
+    const now = this.clock.now();
     const commands: CreatePersonProspectCommand[] = [];
-    for (const row of preview.rows) {
-      const name = nameColumn >= 0 ? row.values[nameColumn]?.trim() ?? '' : '';
-      if (name.length === 0) continue;
-      const contacts: CreatePersonProspectCommand['contacts'] = [];
-      const phone = phoneColumn >= 0 ? row.values[phoneColumn]?.trim() ?? '' : '';
-      if (phone.length > 0) {
-        contacts.push({ kind: 'phone', value: phone, reachability: 'direct', isPrimary: true });
-      }
-      const email = emailColumn >= 0 ? row.values[emailColumn]?.trim() ?? '' : '';
-      if (email.length > 0) {
-        contacts.push({ kind: 'email', value: email, reachability: 'indirect' });
-      }
-      const organization = organizationColumn >= 0
-        ? row.values[organizationColumn]?.trim() ?? ''
-        : '';
-      const address = addressColumn >= 0 ? row.values[addressColumn]?.trim() ?? '' : '';
-      const doorsRaw = doorsColumn >= 0 ? row.values[doorsColumn]?.trim() ?? '' : '';
-      const doors = /^\d+$/.test(doorsRaw) ? Number.parseInt(doorsRaw, 10) : null;
-      const common = {
-        person: { displayName: name },
-        contacts,
-        organizations: organization.length === 0
-          ? undefined
-          : [{ canonicalName: organization }],
-        properties: address.length === 0
-          ? undefined
-          : [{
-            addressLine1: address,
-            locality: 'Providence',
-            region: 'RI',
-            doorCount: doors,
-          }],
-      };
-      const source = this.intakeSource(jobId, row.rowNumber, input.source);
-      commands.push(source.channel === 'custom'
-        ? { ...common, source, segment: 'warm' }
-        : { ...common, source });
+    for (const row of stored.rows) {
+      if (skipRows.has(row.rowNumber)) continue;
+      commands.push(this.toIntakeCommand({
+        row: row.values,
+        mapping: request.mapping,
+        channel: request.source.channel,
+        referredByPersonId: request.source.referredByPersonId,
+        observedAt: now,
+        sourceName: stored.sourceName,
+        contentHash: request.contentHash,
+        rowNumber: row.rowNumber,
+      }));
     }
     const results = this.services.sources.commitBatch(commands);
+    // Fresh unreviewed prospects enter the fixed lifecycle immediately so the
+    // Leads grid and Today review lane can see them.
+    for (const result of results) {
+      if (result.disposition !== 'created') continue;
+      this.services.lifecycle.createUnreviewedCycle({
+        personId: result.personId,
+        prospectId: result.prospectId,
+        entrySourceEventId: result.sourceEventId,
+        effectiveAt: now,
+      });
+    }
     const importedPersonIds = [...new Set(results.map((result) => result.personId))];
-    const at = this.clock.now();
     const job = this.services.jobs.enqueue({
-      id: jobId,
-      type: IMPORT_JOB_TYPE,
-      idempotencyKey: `${IMPORT_JOB_TYPE}:${input.contentHash}`,
-      payload: { previewId: input.previewId, importedRowCount: results.length },
-      at,
+      id: this.ids.next(),
+      type: LEAD_IMPORT_JOB_TYPE,
+      idempotencyKey: `import:${request.contentHash}`,
+      payload: {
+        formatVersion: 1,
+        sourceName: stored.sourceName,
+        contentHash: request.contentHash,
+        rowCount: commands.length,
+      },
+      progressTotal: commands.length,
+      at: now,
     });
-    this.services.jobs.start(job.id);
-    this.services.jobs.succeed(job.id, { importedRowCount: results.length });
-    this.importPreviews.delete(input.previewId);
+    if (job.state === 'queued') {
+      this.services.jobs.start(job.id);
+      this.services.jobs.reportProgress(job.id, commands.length, commands.length);
+      this.services.jobs.succeed(job.id, {
+        formatVersion: 1,
+        importedPersonIds,
+        importedRowCount: commands.length,
+      });
+    }
+    this.importPreviews.delete(request.previewId);
     return importCommitReceiptSchema.parse({
       jobId: job.id,
       importedPersonIds,
-      importedRowCount: results.length,
-      revision: this.revision(),
+      importedRowCount: commands.length,
+      revision: this.currentRevision(),
     });
   }
 
   getImportJob(input: ImportStatusRequest): ImportStatus {
-    const row = this.services.jobs.get(input.jobId);
-    if (row === null) throw new Error('The import job does not exist.');
-    const state = row.state === 'cancelled' ? 'failed' : row.state;
+    const request = importStatusRequestSchema.parse(input);
+    const job = this.services.jobs.get(request.jobId);
+    if (job === null || job.type !== LEAD_IMPORT_JOB_TYPE) {
+      throw new FounderSalesDomainError('JOB_NOT_FOUND', 'The import job does not exist.');
+    }
     return importStatusSchema.parse({
-      jobId: row.id,
-      state: state as ImportStatus['state'],
-      progressCurrent: row.progressCurrent,
-      progressTotal: row.progressTotal,
-      safeErrorCode: row.error?.code ?? null,
+      jobId: job.id,
+      state: job.state === 'cancelled' ? 'failed' : job.state,
+      progressCurrent: job.progressCurrent,
+      progressTotal: job.progressTotal,
+      safeErrorCode: job.error?.code ?? null,
+    });
+  }
+
+  private requirePreview(previewId: string, contentHash: string): StoredImportPreview {
+    const stored = this.importPreviews.get(previewId);
+    if (stored === undefined
+      || stored.preview.contentHash !== contentHash
+      || stored.preview.expiresAt < this.clock.now()) {
+      this.importPreviews.delete(previewId);
+      throw new FounderSalesDomainError(
+        'IMPORT_PREVIEW_INVALID',
+        'The import preview is expired or changed; restart the import.',
+      );
+    }
+    return stored;
+  }
+
+  private parseTabular(request: ImportSource): {
+    columns: string[];
+    rows: { rowNumber: number; values: Record<string, string> }[];
+    errors: { rowNumber: number; field: string | null; code: string; message: string }[];
+  } {
+    const content = request.kind === 'spreadsheet_paste'
+      ? request.content
+      : request.content;
+    const parsed = Papa.parse<Record<string, string>>(content.replace(/^\uFEFF/, ''), {
+      header: true,
+      skipEmptyLines: 'greedy',
+      delimiter: request.kind === 'spreadsheet_paste' ? '\t' : undefined,
+    });
+    const columns = (parsed.meta.fields ?? []).map((field) => field.trim());
+    const errors: { rowNumber: number; field: string | null; code: string; message: string }[] = [];
+    if (columns.length === 0 || columns.some((column) => column.length === 0)) {
+      errors.push({
+        rowNumber: 1, field: null, code: 'INVALID_HEADER',
+        message: 'Headers must be present and non-blank.',
+      });
+    }
+    if (new Set(columns).size !== columns.length) {
+      errors.push({
+        rowNumber: 1, field: null, code: 'DUPLICATE_HEADER',
+        message: 'Headers must be unique.',
+      });
+    }
+    for (const parseError of parsed.errors.slice(0, 20)) {
+      errors.push({
+        rowNumber: (parseError.row ?? 0) + 2,
+        field: null,
+        code: 'PARSE_ERROR',
+        message: parseError.message.slice(0, 200),
+      });
+    }
+    const rows = parsed.data.map((values, index) => ({
+      rowNumber: index + 2,
+      values: Object.fromEntries(
+        Object.entries(values).map(([key, value]) => [key.trim(), (value ?? '').trim()]),
+      ),
+    }));
+    return { columns, rows, errors };
+  }
+
+  private suggestMapping(columns: string[]): ImportMapping {
+    const byHeader: Record<string, ImportField> = {
+      name: 'person_name', person: 'person_name', owner: 'person_name',
+      phone: 'phone', mobile: 'phone', email: 'email',
+      company: 'organization', organization: 'organization', org: 'organization',
+      address: 'property_address', property: 'property_address',
+      doors: 'doors', units: 'doors', source: 'source', segment: 'segment', notes: 'notes',
+    };
+    const mapping: Record<string, ImportField> = {};
+    let hasName = false;
+    for (const column of columns) {
+      const suggested = byHeader[column.toLowerCase()] ?? 'ignore';
+      if (suggested === 'person_name') {
+        mapping[column] = hasName ? 'ignore' : 'person_name';
+        hasName = true;
+      } else {
+        mapping[column] = suggested;
+      }
+    }
+    if (!hasName && columns.length > 0) mapping[columns[0]!] = 'person_name';
+    return mapping;
+  }
+
+  private validateImportRows(
+    rows: { rowNumber: number; values: Record<string, string> }[],
+    mapping: ImportMapping,
+  ): {
+    validCount: number;
+    errors: { rowNumber: number; field: string | null; code: string; message: string }[];
+    duplicateCandidates: { rowNumber: number; personIds: string[]; reason: string }[];
+  } {
+    const errors: { rowNumber: number; field: string | null; code: string; message: string }[] = [];
+    const duplicateCandidates: { rowNumber: number; personIds: string[]; reason: string }[] = [];
+    let validCount = 0;
+    const fieldColumns = (field: ImportField): string[] => (
+      Object.entries(mapping)
+        .filter(([, mapped]) => mapped === field)
+        .map(([column]) => column)
+    );
+    for (const row of rows) {
+      let rowValid = true;
+      const name = fieldColumns('person_name')
+        .map((column) => row.values[column] ?? '')
+        .find((value) => value.length > 0);
+      if (name === undefined) {
+        errors.push({
+          rowNumber: row.rowNumber, field: 'person_name', code: 'MISSING_NAME',
+          message: 'Every row needs a person name.',
+        });
+        rowValid = false;
+      }
+      for (const column of fieldColumns('phone')) {
+        const value = row.values[column] ?? '';
+        if (value.length === 0) continue;
+        try {
+          const normalized = normalizePhone(value);
+          const matches = this.services.identities.findPeopleByNormalizedHandle('phone', normalized);
+          if (matches.length > 0) {
+            duplicateCandidates.push({
+              rowNumber: row.rowNumber,
+              personIds: matches.map((person) => person.id),
+              reason: 'An existing person already uses this phone number.',
+            });
+          }
+        } catch {
+          errors.push({
+            rowNumber: row.rowNumber, field: 'phone', code: 'INVALID_PHONE',
+            message: 'The phone number is not a valid US or E.164 number.',
+          });
+          rowValid = false;
+        }
+      }
+      for (const column of fieldColumns('email')) {
+        const value = row.values[column] ?? '';
+        if (value.length === 0) continue;
+        try {
+          const normalized = normalizeEmail(value);
+          const matches = this.services.identities.findPeopleByNormalizedHandle('email', normalized);
+          if (matches.length > 0) {
+            duplicateCandidates.push({
+              rowNumber: row.rowNumber,
+              personIds: matches.map((person) => person.id),
+              reason: 'An existing person already uses this email.',
+            });
+          }
+        } catch {
+          errors.push({
+            rowNumber: row.rowNumber, field: 'email', code: 'INVALID_EMAIL',
+            message: 'The email address is invalid.',
+          });
+          rowValid = false;
+        }
+      }
+      for (const column of fieldColumns('segment')) {
+        const value = row.values[column] ?? '';
+        if (value.length > 0 && !['hot_frbo', 'cold_registry', 'warm'].includes(value)) {
+          errors.push({
+            rowNumber: row.rowNumber, field: 'segment', code: 'INVALID_SEGMENT',
+            message: 'Segment must be hot_frbo, cold_registry, or warm.',
+          });
+          rowValid = false;
+        }
+      }
+      if (rowValid) validCount += 1;
+    }
+    return { validCount, errors, duplicateCandidates };
+  }
+
+  private toIntakeCommand(input: {
+    row: Record<string, string>;
+    mapping: ImportMapping;
+    channel: ImportCommitRequest['source']['channel'];
+    referredByPersonId: string | null;
+    observedAt: string;
+    sourceName: string;
+    contentHash: string;
+    rowNumber: number;
+  }): CreatePersonProspectCommand {
+    const values = (field: ImportField): string[] => (
+      Object.entries(input.mapping)
+        .filter(([, mapped]) => mapped === field)
+        .map(([column]) => input.row[column] ?? '')
+        .filter((value) => value.length > 0)
+    );
+    const displayName = values('person_name')[0]!;
+    const contacts: IntakeContactInput[] = [
+      ...values('phone').map((value, index): IntakeContactInput => ({
+        kind: 'phone', value, reachability: 'direct', isPrimary: index === 0,
+      })),
+      ...values('email').map((value, index): IntakeContactInput => ({
+        kind: 'email', value, reachability: 'direct', isPrimary: index === 0,
+      })),
+    ];
+    const organizations = values('organization').map((canonicalName) => ({ canonicalName }));
+    const segmentValue = values('segment')[0];
+    const segment = segmentValue === 'hot_frbo' || segmentValue === 'cold_registry' || segmentValue === 'warm'
+      ? segmentValue
+      : 'warm';
+    const base = {
+      person: { displayName },
+      contacts,
+      organizations,
+      properties: [] as never[],
+    };
+    const sourceCommon = {
+      id: this.ids.next(),
+      observedAt: input.observedAt,
+      sourceRecord: {
+        formatVersion: 1,
+        importSourceName: input.sourceName,
+        contentHash: input.contentHash,
+        rowNumber: input.rowNumber,
+      },
+    };
+    if (input.channel === 'custom') {
+      return {
+        ...base,
+        source: { ...sourceCommon, channel: 'custom', customSourceReason: 'csv_import' },
+        segment,
+      };
+    }
+    if (input.channel === 'referral') {
+      return {
+        ...base,
+        source: {
+          ...sourceCommon,
+          channel: 'referral',
+          referral: input.referredByPersonId === null
+            ? { kind: 'unknown' as const, reason: 'legacy_import' as const }
+            : { kind: 'known' as const, referredByPersonId: input.referredByPersonId },
+        },
+      };
+    }
+    return {
+      ...base,
+      source: { ...sourceCommon, channel: input.channel },
+    };
+  }
+
+  // -------------------------------------------------------------- support
+
+  private requireCycle(salesCycleId: string): CycleRow {
+    const cycle = this.database.raw.prepare(`
+      SELECT id, person_id, prospect_id, stage, workflow_status,
+        current_next_action_id, stage_entered_at, close_reason, version
+      FROM sales_cycles WHERE id = ?
+    `).get(salesCycleId) as CycleRow | undefined;
+    if (cycle === undefined) {
+      throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The sales cycle does not exist.');
+    }
+    return cycle;
+  }
+
+  private readAction(actionId: string): ActionRow | undefined {
+    return this.database.raw.prepare(`
+      SELECT id, sales_cycle_id, action_type, channel, status, due_at, version,
+        work_intent, cadence_enrollment_id, cadence_step_id, cadence_component_id
+      FROM next_actions WHERE id = ?
+    `).get(actionId) as ActionRow | undefined;
+  }
+
+  private readProjection(prospectId: string): ProjectionRow | undefined {
+    return this.database.raw.prepare(`
+      SELECT prospect_id, fit_points, fit_band, timing_millipoints, timing_band,
+        reachability, data_confidence, priority, version, evaluation_id
+      FROM prospect_priority_projection WHERE prospect_id = ?
+    `).get(prospectId) as ProjectionRow | undefined;
+  }
+
+  /**
+   * Monotonically increasing per-connection revision derived from SQLite's
+   * total change counter. Every committed mutation advances it.
+   */
+  private currentRevision(): number {
+    return (this.database.raw.prepare(
+      'SELECT total_changes() AS count',
+    ).get() as { count: number }).count;
+  }
+
+  private receipt(personIds: string[], cycleIds: string[]): MutationReceipt {
+    return mutationReceiptSchema.parse({
+      revision: this.currentRevision(),
+      affectedPersonIds: personIds,
+      affectedSalesCycleIds: cycleIds,
     });
   }
 }
@@ -1335,4 +1937,3 @@ export function createFounderSalesDomain(input: {
 }): FounderSalesDomain {
   return new FounderSalesDomain(input);
 }
-
