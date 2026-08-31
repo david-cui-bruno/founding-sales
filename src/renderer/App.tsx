@@ -54,7 +54,7 @@ export const DiagnosticsScreen = ({
 const HealthDetails = ({ health }: { health: AppHealth }) => (
   <section aria-label="Foundation health">
     <p className="diagnostics__status" role="status">
-      SQLite ready
+      Encrypted SQLite ready
     </p>
     <p className="diagnostics__status">
       {health.fts5Available ? 'FTS5 available' : 'FTS5 unavailable'}

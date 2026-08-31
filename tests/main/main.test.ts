@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   createWindow: vi.fn(),
   loadUrl: vi.fn(),
   protocolSchemes: vi.fn(),
+  requestSingleInstanceLock: vi.fn(() => true),
   registerProtocol: vi.fn(),
   startApplication: vi.fn(),
   whenReady: vi.fn(),
@@ -28,10 +29,19 @@ vi.mock('electron', () => ({
     isPackaged: false,
     on: mocks.appOn,
     quit: mocks.appQuit,
+    requestSingleInstanceLock: mocks.requestSingleInstanceLock,
     whenReady: mocks.whenReady,
   },
   BrowserWindow: { getAllWindows: mocks.browserWindows },
   protocol: { registerSchemesAsPrivileged: mocks.protocolSchemes },
+  safeStorage: {
+    isAsyncEncryptionAvailable: vi.fn(async () => true),
+    encryptStringAsync: vi.fn(async () => Buffer.from('protected')),
+    decryptStringAsync: vi.fn(async () => ({
+      result: Buffer.alloc(32, 0x2a).toString('base64'),
+      shouldReEncrypt: false,
+    })),
+  },
 }));
 
 vi.mock('electron-squirrel-startup', () => ({ default: false }));
@@ -89,6 +99,17 @@ describe('main process startup', () => {
       stop: async () => undefined,
     };
   }
+
+  it('quits a second instance before readiness or database startup', async () => {
+    mocks.requestSingleInstanceLock.mockReturnValueOnce(false);
+
+    await import('../../src/main');
+
+    expect(mocks.requestSingleInstanceLock).toHaveBeenCalledTimes(1);
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+    expect(mocks.whenReady).not.toHaveBeenCalled();
+    expect(mocks.startApplication).not.toHaveBeenCalled();
+  });
 
   it('starts composition only after readiness and supplies the app-owned path and version', async () => {
     const shutdown = vi.fn(async () => undefined);
@@ -213,6 +234,8 @@ describe('main process startup', () => {
     let healthProvider: HealthProvider | undefined;
     let settleMigration: (() => void) | undefined;
     const dependencies: ApplicationStartupDependencies = {
+      loadWorkspaceKey: async () => ({ bytes: Buffer.alloc(32, 0x2a), version: 1 }),
+      prepareEncryptedDatabase: async () => undefined,
       openDatabase: () => {
         events.push('open');
         return database;
@@ -291,6 +314,8 @@ describe('main process startup', () => {
     };
     mocks.loadUrl.mockReturnValue(loadFailure);
     const dependencies: ApplicationStartupDependencies = {
+      loadWorkspaceKey: async () => ({ bytes: Buffer.alloc(32, 0x2a), version: 1 }),
+      prepareEncryptedDatabase: async () => undefined,
       openDatabase: () => {
         events.push('open');
         return database;

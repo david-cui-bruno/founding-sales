@@ -189,51 +189,45 @@ const readPlistField = (plistPath, key, runCommand) => {
   return value;
 };
 
-const isBetterSqliteArtifact = (unpackedDirectory, path) =>
-  relative(unpackedDirectory, path)
-    .split(sep)
-    .includes('better-sqlite3');
+const ENCRYPTED_DRIVER_PACKAGE = 'better-sqlite3-multiple-ciphers';
+const ENCRYPTED_DRIVER_NATIVE = 'better-sqlite3-multiple-ciphers.node';
 
-const listBetterSqliteNativeCandidates = (unpackedDirectory) =>
-  walkFiles(unpackedDirectory)
-    .filter((path) => path.endsWith('.node'))
-    .filter((path) => isBetterSqliteArtifact(unpackedDirectory, path))
-    .sort();
-
-const expectedBetterSqlitePackageRoot = (unpackedDirectory) => {
-  const packageRoot = join(unpackedDirectory, 'node_modules', 'better-sqlite3');
+const expectedEncryptedDriverPackageRoot = (unpackedDirectory) => {
+  const packageRoot = join(
+    unpackedDirectory,
+    'node_modules',
+    ENCRYPTED_DRIVER_PACKAGE,
+  );
   if (!existsSync(packageRoot) || !statSync(packageRoot).isDirectory()) {
-    const nativeCandidates = listBetterSqliteNativeCandidates(unpackedDirectory);
     fail(
-      `packaged better-sqlite3 module root is missing: ${packageRoot}. Native candidates: ${nativeCandidates.join(', ') || 'none'}`,
+      `packaged encrypted SQLite module root is missing: ${packageRoot}`,
     );
   }
 
   return packageRoot;
 };
 
-const selectBetterSqliteLoaderTarget = (unpackedDirectory) => {
-  const packageRoot = expectedBetterSqlitePackageRoot(unpackedDirectory);
-  const prebuildTarget = join(packageRoot, 'prebuilds', 'darwin-arm64.node');
-  const debugFallback = join(packageRoot, 'build', 'Debug', 'better_sqlite3.node');
-  const releaseFallback = join(packageRoot, 'build', 'Release', 'better_sqlite3.node');
-
-  if (existsSync(prebuildTarget)) {
-    return prebuildTarget;
-  }
-
-  if (existsSync(debugFallback)) {
-    return debugFallback;
-  }
-
-  if (existsSync(releaseFallback)) {
-    return releaseFallback;
-  }
-
-  const nativeCandidates = listBetterSqliteNativeCandidates(unpackedDirectory);
-  fail(
-    `better-sqlite3 native binary is missing from Resources/app.asar.unpacked; selected Darwin arm64 loader target is absent: ${prebuildTarget}. Loader fallbacks checked: ${debugFallback}, ${releaseFallback}. Native candidates: ${nativeCandidates.join(', ') || 'none'}`,
+const selectEncryptedDriverLoaderTarget = (unpackedDirectory) => {
+  const packageRoot = expectedEncryptedDriverPackageRoot(unpackedDirectory);
+  const runtimeTarget = join(
+    packageRoot,
+    'bin',
+    'darwin-arm64-149',
+    ENCRYPTED_DRIVER_NATIVE,
   );
+  const nativeCandidates = walkFiles(packageRoot)
+    .filter((path) => path.endsWith('.node'))
+    .sort();
+  if (
+    !existsSync(runtimeTarget)
+    || nativeCandidates.length !== 1
+    || nativeCandidates[0] !== runtimeTarget
+  ) {
+    fail(
+      `expected exactly one encrypted SQLite native binary at ${runtimeTarget}; found ${nativeCandidates.join(', ') || 'none'}`,
+    );
+  }
+  return runtimeTarget;
 };
 
 const resolvePackagedExecutable = (contentsPath, executableName) => {
@@ -384,9 +378,9 @@ export const verifyPackagedApp = (
 
   const unpackedDirectory = join(resourcesPath, 'app.asar.unpacked');
   assertDirectory(unpackedDirectory, 'ASAR unpacked resources directory');
-  const nativeBinary = selectBetterSqliteLoaderTarget(unpackedDirectory);
+  const nativeBinary = selectEncryptedDriverLoaderTarget(unpackedDirectory);
   const nativeArchitecture = requireArm64MachO(
-    'better-sqlite3 native binary',
+    'encrypted SQLite native binary',
     nativeBinary,
     runCommand,
   );

@@ -40,6 +40,7 @@ test('packaged Apple helper handshakes and exits without permission or communica
     application = spawn(packagedApplication, [
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,
+      '--use-mock-keychain',
       '--apple-feasibility-spike',
     ]);
     application.once('error', (error) => {
@@ -52,7 +53,7 @@ test('packaged Apple helper handshakes and exits without permission or communica
     const appleBridge = await waitForPackagedChildProcess(
       application.pid,
       (entry) => /(?:^|\/)CallieAppleBridge(?:\s|$)/u.test(entry.command),
-      { timeoutMs: 10_000 },
+      { timeoutMs: 20_000 },
     );
     trackedDescendants = unionProcessEntries([appleBridge]);
     trackedDescendants = unionProcessEntries(
@@ -184,13 +185,29 @@ const connectToPackagedApplication = async (
         `The packaged application exited before inspection (${describeProcessExit(application)}).`,
       );
     }
+    let browser: Browser;
     try {
-      return await chromium.connectOverCDP(
+      browser = await chromium.connectOverCDP(
         `http://127.0.0.1:${debuggingPort}`,
       );
     } catch {
       await new Promise((resolve) => setTimeout(resolve, 250));
+      continue;
     }
+    for (let pageAttempt = 0; pageAttempt < 80; pageAttempt += 1) {
+      if (browser.contexts().some((context) => context.pages().length > 0)) {
+        return browser;
+      }
+      if (application.exitCode !== null || application.signalCode !== null) {
+        await browser.close();
+        throw new Error(
+          `The packaged application exited before creating a page (${describeProcessExit(application)}).`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    await browser.close();
+    throw new Error('Timed out waiting for the packaged application page.');
   }
   throw new Error('Timed out waiting for the packaged application debugger.');
 };

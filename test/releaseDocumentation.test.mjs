@@ -36,12 +36,13 @@ describe('release verification documentation', () => {
     const nodeRange = packageJson.engines.node;
     const boundaries = [
       ['22.12.999', false],
-      ['22.13.0', true],
-      ['22.99.0', true],
+      ['22.13.0', false],
+      ['22.99.0', false],
       ['23.0.0', false],
       ['23.99.0', false],
       ['24.0.0', true],
-      ['25.9.0', true],
+      ['24.99.0', true],
+      ['25.9.0', false],
     ];
 
     for (const [version, expected] of boundaries) {
@@ -58,11 +59,11 @@ describe('release verification documentation', () => {
     ).toBe('true');
   });
 
-  it('documents supported Node release lines without claiming Node 23', () => {
+  it('documents only the Gate 0 Node 24 release line', () => {
     const readme = readFileSync(join(projectRoot, 'README.md'), 'utf8');
 
     expect(readme).toMatch(
-      /Use Node\.js 22\.13.*Node\.js 24.*Node 23 is not supported/s,
+      /Use Node\.js 24\..*other Node majors fail closed/s,
     );
   });
 });

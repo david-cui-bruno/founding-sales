@@ -6,11 +6,13 @@ import {
   openDatabase,
 } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
+import { prepareEncryptedDatabase } from '../../src/main/db/plaintextDatabaseUpgrade';
 import { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
 import { HealthService } from '../../src/main/health/healthService';
 import { JobRepository } from '../../src/main/jobs/jobRepository';
 import {
   createTempDatabase,
+  createTestWorkspaceKey,
   type TempDatabase,
 } from '../fixtures/tempDatabase';
 
@@ -27,8 +29,15 @@ describe('foundation initialization recovery', () => {
     tempDatabase = createTempDatabase();
     mkdirSync(tempDatabase.path, { recursive: true, mode: 0o700 });
     runtime = new FoundationRuntime(
-      { appVersion: '1.0.0', databasePath: tempDatabase.path },
       {
+        appVersion: '1.0.0',
+        databasePath: tempDatabase.path,
+        databaseExists: true,
+        keyEnvelopePath: `${tempDatabase.path}.key-envelope.json`,
+      },
+      {
+        loadWorkspaceKey: async () => createTestWorkspaceKey(),
+        prepareEncryptedDatabase,
         openDatabase,
         migrateToLatest,
         createJobRepository: (database) => new JobRepository(database),
@@ -47,6 +56,8 @@ describe('foundation initialization recovery', () => {
       appVersion: '1.0.0',
       schemaVersion: 1,
       databasePath: tempDatabase.path,
+      databaseEncrypted: true,
+      cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,
       pendingJobs: 0,
       interruptedJobsRecovered: 0,

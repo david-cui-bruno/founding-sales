@@ -13,7 +13,6 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import Database from 'better-sqlite3';
 import { chromium, expect, test, type Browser } from 'playwright/test';
 import {
   describeProcessExit,
@@ -43,21 +42,15 @@ test('packaged diagnostics use callie protocol and an isolated native SQLite dat
     expect(firstLaunch).toEqual({
       databasePath: expectedDatabasePath,
       schemaVersion: 1,
+      databaseEncrypted: true,
+      cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,
     });
     expect(secondLaunch).toEqual(firstLaunch);
     expect(existsSync(expectedDatabasePath)).toBe(true);
 
-    const database = new Database(expectedDatabasePath, { readonly: true });
-    try {
-      expect(
-        database
-          .prepare('SELECT schema_version FROM app_meta WHERE singleton = 1')
-          .get(),
-      ).toEqual({ schema_version: 1 });
-    } finally {
-      database.close();
-    }
+    expect((await readFile(expectedDatabasePath)).subarray(0, 16).toString('utf8'))
+      .not.toBe('SQLite format 3\u0000');
   } finally {
     if (userDataPath !== undefined) {
       await rm(userDataPath, { recursive: true, force: true });
@@ -98,29 +91,14 @@ test('packaged startup leaves an isolated database collision untouched and recov
     expect(health).toEqual({
       databasePath,
       schemaVersion: 1,
+      databaseEncrypted: true,
+      cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,
     });
     expect((await stat(databasePath)).isFile()).toBe(true);
 
-    const database = new Database(databasePath, { readonly: true });
-    try {
-      expect(
-        database
-          .prepare('SELECT schema_version FROM app_meta WHERE singleton = 1')
-          .get(),
-      ).toEqual({ schema_version: 1 });
-      expect(
-        database
-          .prepare(`
-            SELECT count(*) AS matches
-            FROM foundation_fts_probe
-            WHERE foundation_fts_probe MATCH ?
-          `)
-          .get('packagedrecoveryprobe'),
-      ).toEqual({ matches: 0 });
-    } finally {
-      database.close();
-    }
+    expect((await readFile(databasePath)).subarray(0, 16).toString('utf8'))
+      .not.toBe('SQLite format 3\u0000');
   } finally {
     if (userDataPath !== undefined) {
       await rm(userDataPath, { recursive: true, force: true });
@@ -141,6 +119,7 @@ const inspectPackagedApplication = async (userDataPath: string) => {
     application = spawn(packagedApplication, [
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,
+      '--use-mock-keychain',
     ]);
     application.once('error', (error) => {
       spawnError = error;
@@ -159,7 +138,7 @@ const inspectPackagedApplication = async (userDataPath: string) => {
     await expect(
       page.getByRole('heading', { name: 'Callie Founder Sales System' }),
     ).toBeVisible();
-    await expect(page.getByText('SQLite ready')).toBeVisible();
+    await expect(page.getByText('Encrypted SQLite ready')).toBeVisible();
     await expect(page.getByText('FTS5 available')).toBeVisible();
     await expect(page.getByText('Schema 1')).toBeVisible();
     await expect(page.getByText('Active job count')).toBeVisible();
@@ -170,6 +149,8 @@ const inspectPackagedApplication = async (userDataPath: string) => {
     return {
       databasePath: health.databasePath,
       schemaVersion: health.schemaVersion,
+      databaseEncrypted: health.databaseEncrypted,
+      cipherVersion: health.cipherVersion,
       fts5Available: health.fts5Available,
     };
   } finally {
@@ -191,6 +172,7 @@ const inspectFailedPackagedLaunch = async (userDataPath: string) => {
     application = spawn(packagedApplication, [
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,
+      '--use-mock-keychain',
     ]);
     const [exit, rendererPageObserved] = await Promise.all([
       waitForPackagedExit(application),
@@ -310,13 +292,29 @@ const connectToPackagedApplication = async (
       );
     }
 
+    let browser: Browser;
     try {
-      return await chromium.connectOverCDP(
+      browser = await chromium.connectOverCDP(
         `http://127.0.0.1:${debuggingPort}`,
       );
     } catch {
       await new Promise((resolve) => setTimeout(resolve, 250));
+      continue;
     }
+    for (let pageAttempt = 0; pageAttempt < 80; pageAttempt += 1) {
+      if (browser.contexts().some((context) => context.pages().length > 0)) {
+        return browser;
+      }
+      if (application.exitCode !== null || application.signalCode !== null) {
+        await browser.close();
+        throw new Error(
+          `The packaged application exited before creating a page (${describeProcessExit(application)}).`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    await browser.close();
+    throw new Error('Timed out waiting for the packaged application page.');
   }
 
   throw new Error('Timed out waiting for the packaged application debugger.');

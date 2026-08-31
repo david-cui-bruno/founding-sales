@@ -7,7 +7,7 @@ import {
   InvalidJobTransitionError,
   JobRepository,
 } from '../../src/main/jobs/jobRepository';
-import { createTempDatabase, type TempDatabase } from '../fixtures/tempDatabase';
+import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
 describe('JobRepository', () => {
   let database: AppDatabase | undefined;
@@ -22,7 +22,7 @@ describe('JobRepository', () => {
 
   async function createRepository(): Promise<JobRepository> {
     tempDatabase = createTempDatabase();
-    database = openDatabase(tempDatabase.path);
+    database = openDatabase({ path: tempDatabase.path, key: createTestWorkspaceKey() });
     await migrateToLatest(database);
     return new JobRepository(database);
   }

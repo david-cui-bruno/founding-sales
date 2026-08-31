@@ -1,3 +1,5 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -15,10 +17,17 @@ const health: AppHealth = {
   appVersion: '1.0.0',
   schemaVersion: 1,
   databasePath: '/tmp/callie.sqlite3',
+  databaseEncrypted: true,
+  cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
   fts5Available: true,
   pendingJobs: 0,
   interruptedJobsRecovered: 4,
 };
+
+const keyDependencies = () => ({
+  loadWorkspaceKey: async () => ({ bytes: Buffer.alloc(32, 0x2a), version: 1 as const }),
+  prepareEncryptedDatabase: async (): Promise<void> => undefined,
+});
 
 describe('startApplication', () => {
   function createDependencies(
@@ -35,8 +44,9 @@ describe('startApplication', () => {
     };
 
     return {
-      openDatabase: (databasePath) => {
-        events.push(`open:${databasePath}`);
+      ...keyDependencies(),
+      openDatabase: ({ path }) => {
+        events.push(`open:${path}`);
         return database;
       },
       migrateToLatest: async () => {
@@ -63,6 +73,35 @@ describe('startApplication', () => {
       closeDatabase: () => events.push('close'),
     };
   }
+
+  it('requests the existing-workspace key and never replaces it when the envelope is unavailable', async () => {
+    const events: string[] = [];
+    const userDataPath = mkdtempSync(join(tmpdir(), 'callie-existing-key-'));
+    const databasePath = join(userDataPath, 'callie.sqlite3');
+    const original = Buffer.from('synthetic existing encrypted file');
+    writeFileSync(databasePath, original);
+    const dependencies = createDependencies(events);
+    const loadWorkspaceKey = vi.fn(async () => {
+      throw new Error('Workspace key is unavailable for an existing database');
+    });
+    dependencies.loadWorkspaceKey = loadWorkspaceKey;
+    try {
+      await expect(startApplication({
+        appVersion: '1.0.0',
+        userDataPath,
+        createWindow: () => undefined,
+      }, dependencies)).rejects.toThrow('Workspace key is unavailable');
+
+      expect(loadWorkspaceKey).toHaveBeenCalledWith({
+        envelopePath: join(userDataPath, 'callie.key-envelope.json'),
+        databaseExists: true,
+      });
+      expect(readFileSync(databasePath)).toEqual(original);
+      expect(events).toEqual([]);
+    } finally {
+      rmSync(userDataPath, { recursive: true, force: true });
+    }
+  });
 
   it('initializes the app-owned database before registering diagnostics and opening the window', async () => {
     const events: string[] = [];

@@ -1,8 +1,15 @@
-import type { AppDatabase } from '../db/database';
+import type {
+  AppDatabase,
+  DatabaseOpenOptions,
+} from '../db/database';
 import type { MigrationResult } from '../db/migrate';
 import type { HealthServiceOptions } from '../health/healthService';
 import type { HealthProvider } from '../health/registerHealthIpc';
 import type { JobRepository } from '../jobs/jobRepository';
+import type {
+  WorkspaceKey,
+  WorkspaceKeyStoreInput,
+} from '../security/workspaceKeyTypes';
 
 type FoundationJobRepository = Pick<
   JobRepository,
@@ -10,7 +17,9 @@ type FoundationJobRepository = Pick<
 >;
 
 export type FoundationRuntimeDependencies = {
-  openDatabase(path: string): AppDatabase;
+  loadWorkspaceKey(input: WorkspaceKeyStoreInput): Promise<WorkspaceKey>;
+  prepareEncryptedDatabase(path: string, key: WorkspaceKey): Promise<void>;
+  openDatabase(options: DatabaseOpenOptions): AppDatabase;
   migrateToLatest(database: AppDatabase): Promise<MigrationResult>;
   createJobRepository(database: AppDatabase): FoundationJobRepository;
   createHealthService(options: HealthServiceOptions): HealthProvider;
@@ -20,6 +29,8 @@ export type FoundationRuntimeDependencies = {
 export type FoundationRuntimeOptions = {
   appVersion: string;
   databasePath: string;
+  databaseExists: boolean;
+  keyEnvelopePath: string;
 };
 
 type ReadyFoundation = {
@@ -100,12 +111,30 @@ export class FoundationRuntime {
   private async initializeAttempt(id: number): Promise<ReadyFoundation> {
     let database: AppDatabase | undefined;
     let databaseAdopted = false;
+    let workspaceKey: WorkspaceKey | undefined;
 
     try {
-      this.throwIfUnavailable();
-      database = this.dependencies.openDatabase(this.options.databasePath);
-      this.throwIfUnavailable();
-      await this.dependencies.migrateToLatest(database);
+      try {
+        this.throwIfUnavailable();
+        workspaceKey = await this.dependencies.loadWorkspaceKey({
+          envelopePath: this.options.keyEnvelopePath,
+          databaseExists: this.options.databaseExists,
+        });
+        this.throwIfAttemptIsStale(id);
+        await this.dependencies.prepareEncryptedDatabase(
+          this.options.databasePath,
+          workspaceKey,
+        );
+        this.throwIfAttemptIsStale(id);
+        database = this.dependencies.openDatabase({
+          path: this.options.databasePath,
+          key: workspaceKey,
+        });
+        this.throwIfAttemptIsStale(id);
+        await this.dependencies.migrateToLatest(database);
+      } finally {
+        workspaceKey?.bytes.fill(0);
+      }
       this.throwIfAttemptIsStale(id);
 
       const jobs = this.dependencies.createJobRepository(database);

@@ -1,5 +1,6 @@
 import { appHealthSchema, type AppHealth } from '../../shared/healthContract';
 import { checkFts5, type AppDatabase } from '../db/database';
+import { inspectDatabaseEncryption } from '../db/databaseEncryption';
 import type { JobRepository } from '../jobs/jobRepository';
 
 export type HealthServiceOptions = {
@@ -23,11 +24,14 @@ export class HealthService {
     if (metadata === undefined) {
       throw new Error('The app_meta singleton row is missing.');
     }
+    const encryption = inspectDatabaseEncryption(this.options.database);
 
     return appHealthSchema.parse({
       appVersion: this.options.appVersion,
       schemaVersion: metadata.schema_version,
       databasePath: this.options.databasePath,
+      databaseEncrypted: encryption.encrypted,
+      cipherVersion: encryption.cipherVersion,
       fts5Available: checkFts5(this.options.database),
       pendingJobs: this.options.jobs.listActive().length,
       interruptedJobsRecovered: this.options.interruptedJobsRecovered,

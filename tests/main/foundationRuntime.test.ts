@@ -30,18 +30,125 @@ const health: AppHealth = {
   appVersion: '1.0.0',
   schemaVersion: 1,
   databasePath: '/tmp/callie-user-data/callie.sqlite3',
+  databaseEncrypted: true,
+  cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
   fts5Available: true,
   pendingJobs: 0,
   interruptedJobsRecovered: 4,
 };
 
+const runtimeOptions = {
+  appVersion: '1.0.0',
+  databasePath: health.databasePath,
+  databaseExists: false,
+  keyEnvelopePath: '/tmp/callie-user-data/callie.key-envelope.json',
+};
+
+const keyDependencies = () => ({
+  loadWorkspaceKey: async () => ({ bytes: Buffer.alloc(32, 0x2a), version: 1 as const }),
+  prepareEncryptedDatabase: async (): Promise<void> => undefined,
+});
+
 describe('FoundationRuntime', () => {
+  it('resolves, converts, opens, and migrates in order before zeroing the key', async () => {
+    const keyBytes = Buffer.alloc(32, 0x5a);
+    const database = { path: health.databasePath } as AppDatabase;
+    const events: string[] = [];
+    const runtime = new FoundationRuntime(runtimeOptions, {
+      loadWorkspaceKey: async (input) => {
+        events.push(`key:${input.envelopePath}:${input.databaseExists}`);
+        return { bytes: keyBytes, version: 1 };
+      },
+      prepareEncryptedDatabase: async (_path, key) => {
+        expect(key.bytes.equals(Buffer.alloc(32, 0x5a))).toBe(true);
+        events.push('prepare');
+      },
+      openDatabase: ({ key }) => {
+        expect(key.bytes.equals(Buffer.alloc(32, 0x5a))).toBe(true);
+        events.push('open');
+        return database;
+      },
+      migrateToLatest: async () => {
+        expect(keyBytes.equals(Buffer.alloc(32, 0x5a))).toBe(true);
+        events.push('migrate');
+        return migrationResult;
+      },
+      createJobRepository: () => ({
+        listActive: () => [],
+        recoverInterruptedJobs: () => 0,
+      }),
+      createHealthService: () => ({ getHealth: () => health }),
+      closeDatabase: () => undefined,
+    });
+
+    await runtime.initialize();
+
+    expect(events).toEqual([
+      `key:${runtimeOptions.keyEnvelopePath}:false`,
+      'prepare',
+      'open',
+      'migrate',
+    ]);
+    expect(keyBytes.equals(Buffer.alloc(32))).toBe(true);
+    await runtime.shutdown();
+  });
+
+  it('zeroes the key when conversion fails before a database is opened', async () => {
+    const keyBytes = Buffer.alloc(32, 0x5a);
+    const runtime = new FoundationRuntime(runtimeOptions, {
+      loadWorkspaceKey: async () => ({ bytes: keyBytes, version: 1 }),
+      prepareEncryptedDatabase: async () => {
+        throw new Error('conversion failed');
+      },
+      openDatabase: () => {
+        throw new Error('must not open');
+      },
+      migrateToLatest: async () => migrationResult,
+      createJobRepository: () => ({
+        listActive: () => [], recoverInterruptedJobs: () => 0,
+      }),
+      createHealthService: () => ({ getHealth: () => health }),
+      closeDatabase: () => undefined,
+    });
+
+    await expect(runtime.initialize()).rejects.toThrow('conversion failed');
+    expect(keyBytes.equals(Buffer.alloc(32))).toBe(true);
+    await runtime.shutdown();
+  });
+
+  it('zeroes a resolved key when shutdown cancels initialization', async () => {
+    const keyResolution = deferred<{ bytes: Buffer; version: 1 }>();
+    const keyBytes = Buffer.alloc(32, 0x5a);
+    const runtime = new FoundationRuntime(runtimeOptions, {
+      loadWorkspaceKey: () => keyResolution.promise,
+      prepareEncryptedDatabase: async () => undefined,
+      openDatabase: () => {
+        throw new Error('must not open');
+      },
+      migrateToLatest: async () => migrationResult,
+      createJobRepository: () => ({
+        listActive: () => [], recoverInterruptedJobs: () => 0,
+      }),
+      createHealthService: () => ({ getHealth: () => health }),
+      closeDatabase: () => undefined,
+    });
+
+    const initialization = runtime.initialize();
+    const shutdown = runtime.shutdown();
+    keyResolution.resolve({ bytes: keyBytes, version: 1 });
+
+    await expect(initialization).rejects.toThrow('cancelled');
+    await shutdown;
+    expect(keyBytes.equals(Buffer.alloc(32))).toBe(true);
+  });
+
   it('explicitly initializes the durable foundation once before serving health', async () => {
     const database = { path: health.databasePath } as AppDatabase;
     const events: string[] = [];
     const runtime = new FoundationRuntime(
-      { appVersion: '1.0.0', databasePath: health.databasePath },
+      runtimeOptions,
       {
+        ...keyDependencies(),
         openDatabase: () => {
           events.push('open');
           return database;
@@ -92,7 +199,8 @@ describe('FoundationRuntime', () => {
     const events: string[] = [];
     let openCount = 0;
     const dependencies: FoundationRuntimeDependencies = {
-      openDatabase: (path) => {
+      ...keyDependencies(),
+      openDatabase: ({ path }) => {
         openCount += 1;
         events.push(`open:${path}:${openCount}`);
         return openCount === 1 ? firstDatabase : secondDatabase;
@@ -120,7 +228,7 @@ describe('FoundationRuntime', () => {
       },
     };
     const runtime = new FoundationRuntime(
-      { appVersion: '1.0.0', databasePath },
+      { ...runtimeOptions, databasePath },
       dependencies,
     );
 
@@ -150,8 +258,9 @@ describe('FoundationRuntime', () => {
     let opens = 0;
     let recoveries = 0;
     const runtime = new FoundationRuntime(
-      { appVersion: '1.0.0', databasePath: health.databasePath },
+      runtimeOptions,
       {
+        ...keyDependencies(),
         openDatabase: () => {
           opens += 1;
           return database;
@@ -171,6 +280,7 @@ describe('FoundationRuntime', () => {
 
     const first = runtime.getHealth();
     const second = runtime.getHealth();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(opens).toBe(1);
 
     migration.resolve(migrationResult);
@@ -188,8 +298,9 @@ describe('FoundationRuntime', () => {
     const database = { path: health.databasePath } as AppDatabase;
     const events: string[] = [];
     const runtime = new FoundationRuntime(
-      { appVersion: '1.0.0', databasePath: health.databasePath },
+      runtimeOptions,
       {
+        ...keyDependencies(),
         openDatabase: () => {
           events.push('open');
           return database;
@@ -211,6 +322,7 @@ describe('FoundationRuntime', () => {
     );
 
     const initialization = runtime.getHealth();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     let shutdownComplete = false;
     const shutdown = runtime.shutdown().then(() => {
       shutdownComplete = true;

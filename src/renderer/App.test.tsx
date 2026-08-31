@@ -7,6 +7,8 @@ const health: AppHealth = {
   appVersion: '1.0.0',
   schemaVersion: 1,
   databasePath: '/tmp/callie.sqlite3',
+  databaseEncrypted: true,
+  cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
   fts5Available: true,
   pendingJobs: 2,
   interruptedJobsRecovered: 1,
@@ -28,7 +30,7 @@ describe('DiagnosticsScreen', () => {
     const markup = renderState({ status: 'ready', health });
 
     expect(markup).toContain('Callie Founder Sales System');
-    expect(markup).toContain('SQLite ready');
+    expect(markup).toContain('Encrypted SQLite ready');
     expect(markup).toContain('FTS5 available');
     expect(markup).toContain('Schema 1');
     expect(markup).toContain('1.0.0');

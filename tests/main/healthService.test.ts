@@ -4,7 +4,7 @@ import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { HealthService } from '../../src/main/health/healthService';
 import { JobRepository } from '../../src/main/jobs/jobRepository';
-import { createTempDatabase, type TempDatabase } from '../fixtures/tempDatabase';
+import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
 describe('HealthService', () => {
   let database: AppDatabase | undefined;
@@ -19,7 +19,7 @@ describe('HealthService', () => {
 
   it('reports migrated SQLite, FTS5, active jobs, and retained recovery values', async () => {
     tempDatabase = createTempDatabase();
-    database = openDatabase(tempDatabase.path);
+    database = openDatabase({ path: tempDatabase.path, key: createTestWorkspaceKey() });
     await migrateToLatest(database);
     const jobs = new JobRepository(database);
     jobs.enqueue({ id: 'queued', type: 'sync', payload: {} });
@@ -38,6 +38,8 @@ describe('HealthService', () => {
       appVersion: '2.3.4',
       schemaVersion: 1,
       databasePath: tempDatabase.path,
+      databaseEncrypted: true,
+      cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,
       pendingJobs: 2,
       interruptedJobsRecovered: 3,

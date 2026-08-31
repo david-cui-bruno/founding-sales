@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
-import { createTempDatabase, type TempDatabase } from '../fixtures/tempDatabase';
+import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
 describe('database migrations', () => {
   let database: AppDatabase | undefined;
@@ -17,7 +17,7 @@ describe('database migrations', () => {
 
   it('creates the complete foundation schema at version 1', async () => {
     tempDatabase = createTempDatabase();
-    database = openDatabase(tempDatabase.path);
+    database = openDatabase({ path: tempDatabase.path, key: createTestWorkspaceKey() });
 
     const result = await migrateToLatest(database);
 
@@ -52,7 +52,7 @@ describe('database migrations', () => {
 
   it('is idempotent when run twice against the same database', async () => {
     tempDatabase = createTempDatabase();
-    database = openDatabase(tempDatabase.path);
+    database = openDatabase({ path: tempDatabase.path, key: createTestWorkspaceKey() });
 
     await migrateToLatest(database);
     const secondResult = await migrateToLatest(database);
@@ -77,7 +77,7 @@ describe('database migrations', () => {
 
   it('rolls back a late migration failure so the same database can retry', async () => {
     tempDatabase = createTempDatabase();
-    database = openDatabase(tempDatabase.path);
+    database = openDatabase({ path: tempDatabase.path, key: createTestWorkspaceKey() });
     database.raw.exec('CREATE TABLE foundation_fts_probe (content TEXT)');
 
     await expect(migrateToLatest(database)).rejects.toThrow();

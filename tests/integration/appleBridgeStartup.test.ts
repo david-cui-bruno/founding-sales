@@ -40,6 +40,8 @@ function dependencies(
 ): ApplicationStartupDependencies {
   const database = { path: '/tmp/callie.sqlite3' } as AppDatabase;
   return {
+    loadWorkspaceKey: async () => ({ bytes: Buffer.alloc(32, 0x2a), version: 1 }),
+    prepareEncryptedDatabase: async () => undefined,
     openDatabase: () => {
       events.push('database:open');
       return database;

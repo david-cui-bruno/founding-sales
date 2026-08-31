@@ -8,7 +8,7 @@ import {
   openDatabase,
   type AppDatabase,
 } from '../../src/main/db/database';
-import { createTempDatabase, type TempDatabase } from '../fixtures/tempDatabase';
+import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
 describe('database manager', () => {
   let database: AppDatabase | undefined;
@@ -23,7 +23,7 @@ describe('database manager', () => {
 
   it('opens SQLite with secure connection settings and FTS5 support', () => {
     tempDatabase = createTempDatabase();
-    database = openDatabase(tempDatabase.path);
+    database = openDatabase({ path: tempDatabase.path, key: createTestWorkspaceKey() });
 
     expect(database.path).toBe(tempDatabase.path);
     expect(database.raw.pragma('foreign_keys', { simple: true })).toBe(1);

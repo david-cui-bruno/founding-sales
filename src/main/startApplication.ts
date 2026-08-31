@@ -13,6 +13,10 @@ import { registerAppleSpikeIpc } from './appleBridge/registerAppleSpikeIpc';
 import { closeDatabase, openDatabase } from './db/database';
 import { migrateToLatest } from './db/migrate';
 import {
+  encryptedWorkspaceExists,
+  prepareEncryptedDatabase,
+} from './db/plaintextDatabaseUpgrade';
+import {
   FoundationRuntime,
   type FoundationRuntimeDependencies,
 } from './foundation/foundationRuntime';
@@ -22,6 +26,9 @@ import {
   type HealthProvider,
 } from './health/registerHealthIpc';
 import { JobRepository } from './jobs/jobRepository';
+import { safeStorage } from 'electron';
+import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
+import { WorkspaceKeyStore } from './security/workspaceKeyStore';
 
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   registerHealthIpc(
@@ -59,7 +66,13 @@ export class ApplicationStartupCancelledError extends Error {
   }
 }
 
+const workspaceKeyStore = new WorkspaceKeyStore({
+  keyProtector: new SafeStorageKeyProtector(safeStorage),
+});
+
 const defaultDependencies: ApplicationStartupDependencies = {
+  loadWorkspaceKey: (input) => workspaceKeyStore.loadOrCreate(input),
+  prepareEncryptedDatabase,
   openDatabase,
   migrateToLatest,
   createJobRepository: (database) => new JobRepository(database),
@@ -75,8 +88,14 @@ export async function startApplication(
   dependencies: ApplicationStartupDependencies = defaultDependencies,
 ): Promise<RunningApplication> {
   const databasePath = join(options.userDataPath, 'callie.sqlite3');
+  const keyEnvelopePath = join(options.userDataPath, 'callie.key-envelope.json');
   const runtime = new FoundationRuntime(
-    { appVersion: options.appVersion, databasePath },
+    {
+      appVersion: options.appVersion,
+      databasePath,
+      databaseExists: encryptedWorkspaceExists(databasePath),
+      keyEnvelopePath,
+    },
     dependencies,
   );
   let unregisterHealthIpc: (() => void) | undefined;

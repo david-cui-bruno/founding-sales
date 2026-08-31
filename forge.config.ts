@@ -9,6 +9,7 @@ import {
   createAppleBridgeForgeHooks,
   createAppleBridgeSigningOptions,
 } from './build/appleBridge';
+import { retainOnlyPackagedEncryptedSqliteRuntime } from './scripts/packageEncryptedSqliteNative.mjs';
 
 const signingIdentity = process.env.CALLIE_MAC_SIGN_IDENTITY;
 
@@ -30,9 +31,19 @@ const config: ForgeConfig = {
       return !(
         filePath.startsWith('/.vite') ||
         filePath === '/node_modules' ||
-        filePath.startsWith('/node_modules/better-sqlite3')
+        filePath.startsWith('/node_modules/better-sqlite3-multiple-ciphers')
       );
     },
+    afterCopy: [(
+      buildPath,
+      _electronVersion,
+      platform,
+      arch,
+      callback,
+    ) => {
+      retainOnlyPackagedEncryptedSqliteRuntime({ buildPath, platform, arch })
+        .then(() => callback(), callback);
+    }],
   },
   rebuildConfig: {},
   makers: [

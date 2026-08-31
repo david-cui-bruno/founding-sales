@@ -33,6 +33,11 @@ const rendererTrust = createRendererTrust({
   developmentRendererUrl: MAIN_WINDOW_VITE_DEV_SERVER_URL,
 });
 
+const ownsSingleInstanceLock = !started && app.requestSingleInstanceLock();
+if (!started && !ownsSingleInstanceLock) {
+  app.quit();
+}
+
 let rendererProtocolRegistered = false;
 
 const createAndLoadWindow = async (signal?: AbortSignal): Promise<void> => {
@@ -91,7 +96,7 @@ let startupPromise: Promise<void> | undefined;
 let quitAfterStartup = false;
 let allowQuit = false;
 
-if (!started) {
+if (!started && ownsSingleInstanceLock) {
   void app
     .whenReady()
     .then(() => {

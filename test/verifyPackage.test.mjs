@@ -50,9 +50,10 @@ const createPackagedApp = async (outDirectory, appName = 'Callie.app') => {
     'Resources',
     'app.asar.unpacked',
     'node_modules',
-    'better-sqlite3',
-    'prebuilds',
-    'darwin-arm64.node',
+    'better-sqlite3-multiple-ciphers',
+    'bin',
+    'darwin-arm64-149',
+    'better-sqlite3-multiple-ciphers.node',
   );
 
   await writeFixtureFile(join(contentsPath, 'Resources', 'app.asar'));
@@ -240,7 +241,7 @@ describe('package command runner', () => {
 });
 
 describe('package verification', () => {
-  it('accepts better-sqlite3 v13 prebuilds/darwin-arm64.node and records it', async () => {
+  it('accepts exactly the encrypted-driver Electron ABI artifact and records it', async () => {
     const outDirectory = await makeTemporaryDirectory();
     const fixture = await createPackagedApp(outDirectory);
 
@@ -280,7 +281,7 @@ describe('package verification', () => {
     });
   });
 
-  it('explains when the better-sqlite3 native binary was not unpacked from ASAR', async () => {
+  it('explains when the encrypted SQLite binary was not unpacked from ASAR', async () => {
     const outDirectory = await makeTemporaryDirectory();
     const fixture = await createPackagedApp(outDirectory);
     await rm(fixture.nativePath);
@@ -292,7 +293,7 @@ describe('package verification', () => {
         fusesCommand: 'electron-fuses',
       }),
     ).toThrow(
-      'PACKAGE: better-sqlite3 native binary is missing from Resources/app.asar.unpacked',
+      'PACKAGE: expected exactly one encrypted SQLite native binary',
     );
   });
 
@@ -310,11 +311,11 @@ describe('package verification', () => {
         fusesCommand: 'electron-fuses',
       }),
     ).toThrow(
-      `PACKAGE: better-sqlite3 native binary is not Darwin arm64: ${fixture.nativePath}`,
+      `PACKAGE: encrypted SQLite native binary is not Darwin arm64: ${fixture.nativePath}`,
     );
   });
 
-  it('rejects a wrong selected prebuild even when an arm64 decoy exists elsewhere in better-sqlite3', async () => {
+  it('rejects a decoy native artifact beside the exact encrypted-driver target', async () => {
     const outDirectory = await makeTemporaryDirectory();
     const fixture = await createPackagedApp(outDirectory);
     const decoyPath = join(
@@ -323,7 +324,7 @@ describe('package verification', () => {
       'Resources',
       'app.asar.unpacked',
       'node_modules',
-      'better-sqlite3',
+      'better-sqlite3-multiple-ciphers',
       'build',
       'Release',
       'better_sqlite3.node',
@@ -340,11 +341,11 @@ describe('package verification', () => {
         fusesCommand: 'electron-fuses',
       }),
     ).toThrow(
-      `PACKAGE: better-sqlite3 native binary is not Darwin arm64: ${fixture.nativePath}`,
+      'PACKAGE: expected exactly one encrypted SQLite native binary',
     );
   });
 
-  it('uses the loader debug fallback when the selected prebuild is absent', async () => {
+  it('rejects a debug fallback when the exact ABI target is absent', async () => {
     const outDirectory = await makeTemporaryDirectory();
     const fixture = await createPackagedApp(outDirectory);
     const debugFallbackPath = join(
@@ -353,7 +354,7 @@ describe('package verification', () => {
       'Resources',
       'app.asar.unpacked',
       'node_modules',
-      'better-sqlite3',
+      'better-sqlite3-multiple-ciphers',
       'build',
       'Debug',
       'better_sqlite3.node',
@@ -361,16 +362,14 @@ describe('package verification', () => {
     await rm(fixture.nativePath);
     await writeFixtureFile(debugFallbackPath);
 
-    const report = verifyPackagedApp(fixture.appPath, {
+    expect(() => verifyPackagedApp(fixture.appPath, {
       runCommand: successfulCommand,
       asarCommand: 'asar',
       fusesCommand: 'electron-fuses',
-    });
-
-    expect(report.nativeBinary).toBe(debugFallbackPath);
+    })).toThrow('PACKAGE: expected exactly one encrypted SQLite native binary');
   });
 
-  it('rejects an unrelated better-sqlite3 directory when the packaged module root is absent', async () => {
+  it('rejects an unrelated encrypted-driver directory when the packaged module root is absent', async () => {
     const outDirectory = await makeTemporaryDirectory();
     const fixture = await createPackagedApp(outDirectory);
     const unpackedDirectory = join(
@@ -382,12 +381,12 @@ describe('package verification', () => {
     const expectedModuleRoot = join(
       unpackedDirectory,
       'node_modules',
-      'better-sqlite3',
+      'better-sqlite3-multiple-ciphers',
     );
     const unrelatedNativePath = join(
       unpackedDirectory,
       'assets',
-      'better-sqlite3',
+      'better-sqlite3-multiple-ciphers',
       'prebuilds',
       'darwin-arm64.node',
     );
@@ -401,7 +400,7 @@ describe('package verification', () => {
         fusesCommand: 'electron-fuses',
       }),
     ).toThrow(
-      `PACKAGE: packaged better-sqlite3 module root is missing: ${expectedModuleRoot}`,
+      `PACKAGE: packaged encrypted SQLite module root is missing: ${expectedModuleRoot}`,
     );
   });
 

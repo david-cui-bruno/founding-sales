@@ -18,6 +18,8 @@ const health: AppHealth = {
   appVersion: '1.0.0',
   schemaVersion: 1,
   databasePath: '/tmp/callie.sqlite3',
+  databaseEncrypted: true,
+  cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
   fts5Available: true,
   pendingJobs: 0,
   interruptedJobsRecovered: 0,
@@ -83,7 +85,7 @@ describe('App async lifecycle', () => {
 
     renderApp(vi.fn(async () => health), appleSpike);
 
-    await screen.findByText('SQLite ready');
+    await screen.findByText('Encrypted SQLite ready');
     expect(await screen.findByRole('region', { name: 'Apple feasibility spike' })).not.toBeNull();
   });
 
@@ -99,10 +101,10 @@ describe('App async lifecycle', () => {
     await waitFor(() => expect(getHealth).toHaveBeenCalledTimes(2));
 
     await act(async () => second.resolve(health));
-    await screen.findByText('SQLite ready');
+    await screen.findByText('Encrypted SQLite ready');
     await act(async () => first.reject(new Error('stale failure')));
 
-    expect(screen.getByText('SQLite ready')).not.toBeNull();
+    expect(screen.getByText('Encrypted SQLite ready')).not.toBeNull();
     expect(screen.queryByText('The local database could not be opened')).toBeNull();
   });
 
@@ -124,7 +126,7 @@ describe('App async lifecycle', () => {
     expect(screen.getByRole('alert').textContent).toContain(
       'The local database could not be opened',
     );
-    expect(screen.queryByText('SQLite ready')).toBeNull();
+    expect(screen.queryByText('Encrypted SQLite ready')).toBeNull();
   });
 
   it('announces failure and ignores a retry that resolves after unmount', async () => {
