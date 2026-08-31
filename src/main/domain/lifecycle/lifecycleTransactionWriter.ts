@@ -27,6 +27,10 @@ import {
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 import type { IdGenerator } from '../support/idGenerator';
 import { CadenceEnrollmentRepository } from './cadenceEnrollmentRepository';
+import {
+  qualifiesFounderInterviewed,
+  qualifiesFounderOffered,
+} from './founderConfirmationEvidence';
 import { deriveInboundSla } from './inboundSla';
 import {
   promoteUnknownInboundReviewCommandSchema,
@@ -533,8 +537,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       || (cycle.stage !== 'ready' && cycle.stage !== 'contacted')
     ) throw new LifecycleConflictError('Interview confirmation projection is stale or illegal.');
     const activity = this.requireOwnedActivity(cycle, parsed.suggestionActivityId);
-    if (activity.kind !== 'interview'
-      && !(activity.kind === 'call' && activity.observedOutcome === 'answered')) {
+    if (!qualifiesFounderInterviewed(activity)) {
       throw new LifecycleEvidenceError('Interviewed requires founder-confirmed conversation evidence.');
     }
     this.assertTransitionEvidenceTimes(cycle, effectiveAt, confirmedAt, activity);
@@ -564,7 +567,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       parsed.cycleId, parsed.expectedCycleVersion, 'interviewed', parsed.expectedCurrentActionId,
     );
     const activity = this.requireOwnedActivity(cycle, parsed.suggestionActivityId);
-    if (activity.kind !== 'offer' && activity.observedOutcome !== 'price_said') {
+    if (!qualifiesFounderOffered(activity)) {
       throw new LifecycleEvidenceError('Offered requires founder-confirmed price-said evidence.');
     }
     this.assertTransitionEvidenceTimes(cycle, effectiveAt, confirmedAt, activity);
@@ -1797,7 +1800,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     const settlementOutcome = actionSettlementOutcomeSchema.parse(recipe.currentAction.outcome);
     const status = recipe.currentAction.kind === 'impossible' ? 'impossible' : 'completed';
     const reason = recipe.currentAction.kind === 'impossible'
-      ? `${recipe.currentAction.reason}${recipe.currentAction.notes === null ? '' : `: ${recipe.currentAction.notes}`}`
+      ? { code: recipe.currentAction.reason, notes: recipe.currentAction.notes }
       : null;
     return this.actions.settleAction({
       actionId: action.id, salesCycleId: action.salesCycleId,

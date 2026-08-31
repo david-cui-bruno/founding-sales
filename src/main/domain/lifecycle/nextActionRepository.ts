@@ -7,6 +7,7 @@ import {
   LifecycleEvidenceError,
   StaleDomainWriteError,
 } from '../support/domainErrors';
+import { collectActionSettlementViolations } from './actionSettlementValidator';
 import {
   deepFreezeLifecycle,
   type ActionSettlement,
@@ -196,6 +197,23 @@ export class NextActionRepository {
     ) {
       throw new LifecycleEvidenceError('Settlement must retain immutable action evidence.');
     }
+    const current = this.getById(parsed.actionId);
+    if (current === null || current.salesCycleId !== parsed.salesCycleId
+      || current.status !== parsed.expectedStatus || current.version !== parsed.expectedVersion
+      || current.workIntent !== parsed.expectedWorkIntent
+      || serializeCanonical(current.inboundSla) !== serializeCanonical(parsed.expectedInboundSla)
+      || serializeCanonical(current.cadence) !== serializeCanonical(parsed.expectedCadence)) {
+      throw new StaleDomainWriteError();
+    }
+    const settlementViolations = collectActionSettlementViolations(this.database, {
+      ...current,
+      status: parsed.status,
+      completionActivityId: parsed.completionActivityId,
+      settlement: parsed.settlement,
+    });
+    if (settlementViolations.length > 0) {
+      throw new LifecycleEvidenceError(settlementViolations.join(' '));
+    }
     const expectedInbound = encodeInboundSla(parsed.expectedInboundSla);
     const settlementJson = serializeCanonical(parsed.settlement);
     const row = this.database.raw.prepare(`
@@ -245,7 +263,7 @@ export class NextActionRepository {
   }
 
   private parseAction(value: unknown): NextAction {
-    return parseAction(value, this.database.raw);
+    return parseAction(value, this.database);
   }
 
   private assertCadenceBinding(
@@ -326,14 +344,14 @@ function encodeInboundSla(value: InboundSla): {
       };
 }
 
-function parseAction(value: unknown, database: AppDatabase['raw']): NextAction {
+function parseAction(value: unknown, database: AppDatabase): NextAction {
   const row = storedActionRowSchema.parse(value);
   const inboundSla = decodeInboundSla(row);
   const cadence = cadenceActionBindingSchema.parse({
     cadenceEnrollmentId: row.cadence_enrollment_id,
     cadenceDefinitionId: row.cadence_enrollment_id === null
       ? null
-      : requireCadenceDefinitionId(database, row.cadence_enrollment_id),
+      : requireCadenceDefinitionId(database.raw, row.cadence_enrollment_id),
     cadenceStepId: row.cadence_step_id,
     cadenceComponentId: row.cadence_component_id,
   });
@@ -350,14 +368,25 @@ function parseAction(value: unknown, database: AppDatabase['raw']): NextAction {
   )) {
     throw new z.ZodError([{ code: 'custom', path: [], message: 'Stored settlement evidence conflicts.' }]);
   }
-  return deepFreezeLifecycle({
+  const parsed = {
     id: row.id, salesCycleId: row.sales_cycle_id, actionType: row.action_type,
     channel: row.channel, status: row.status, dueAt: row.due_at, timezone: row.timezone,
     allowedWindow: row.allowed_window, workIntent: row.work_intent, slaDueAt: row.sla_due_at,
     inboundSla, cadence, completionActivityId: row.completion_activity_id,
     settlement, version: row.version, createdAt: row.created_at,
     completedAt: row.completed_at, updatedAt: row.updated_at,
-  }) as NextAction;
+  } as NextAction;
+  const stateValid = row.status === 'pending'
+    ? row.completed_at === null && settlement === null && row.completion_activity_id === null
+    : row.completed_at !== null && settlement !== null;
+  const settlementViolations = collectActionSettlementViolations(database, parsed);
+  if (!stateValid || settlementViolations.length > 0) {
+    throw new LifecycleEvidenceError([
+      ...(stateValid ? [] : ['Stored action status/completion columns conflict.']),
+      ...settlementViolations,
+    ].join(' '));
+  }
+  return deepFreezeLifecycle(parsed) as NextAction;
 }
 
 function requireCadenceDefinitionId(

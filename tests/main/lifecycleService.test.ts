@@ -195,6 +195,12 @@ describe('LifecycleService', () => {
       occurredAt: DOMAIN_TIMESTAMP, durationSeconds: 240, observedOutcome: 'answered', metadata: {},
     }));
     unitOfWork.immediate(() => events.appendActivity({
+      id: 'explicit-interview', personId: prospect.personId, prospectId: prospect.prospectId,
+      salesCycleId: 'cycle', kind: 'interview', direction: 'outbound', channel: 'phone',
+      occurredAt: DOMAIN_TIMESTAMP, durationSeconds: 240,
+      observedOutcome: 'substantive', metadata: {},
+    }));
+    unitOfWork.immediate(() => events.appendActivity({
       id: 'phone-tag-not-interview', personId: prospect.personId, prospectId: prospect.prospectId,
       salesCycleId: 'cycle', kind: 'call', direction: 'outbound', channel: 'phone',
       occurredAt: DOMAIN_TIMESTAMP, durationSeconds: 420, observedOutcome: 'no_answer', metadata: {},
@@ -212,7 +218,7 @@ describe('LifecycleService', () => {
     })).toThrow();
     const interviewed = service.confirmInterviewed({
       cycleId: 'cycle', expectedCycleVersion: 3, expectedCurrentActionId: 'ready-action',
-      suggestionActivityId: 'interview-suggestion', effectiveAt: DOMAIN_TIMESTAMP,
+      suggestionActivityId: 'explicit-interview', effectiveAt: DOMAIN_TIMESTAMP,
       confirmedAt: DOMAIN_TIMESTAMP,
     });
     expect(interviewed).toMatchObject({
@@ -224,7 +230,7 @@ describe('LifecycleService', () => {
       updatedAt: DOMAIN_TIMESTAMP,
     });
     expect(fitted).toMatchObject({ designPartnerFitness: 5, version: 5 });
-    const dimension = { value: 'moderate' as const, evidenceActivityIds: ['interview-suggestion'] };
+    const dimension = { value: 'moderate' as const, evidenceActivityIds: ['explicit-interview'] };
     const readiness = service.setCloseReadiness({
       cycleId: 'cycle', expectedReadinessVersion: 0, assessedAt: DOMAIN_TIMESTAMP,
       readiness: {
@@ -238,6 +244,16 @@ describe('LifecycleService', () => {
       concreteTrialIdentified: true, version: 1,
     });
 
+    unitOfWork.immediate(() => events.appendActivity({
+      id: 'offer-without-price', personId: prospect.personId, prospectId: prospect.prospectId,
+      salesCycleId: 'cycle', kind: 'offer', direction: 'outbound', channel: 'phone',
+      occurredAt: DOMAIN_TIMESTAMP, observedOutcome: 'sent', metadata: {},
+    }));
+    expect(() => service.confirmOffered({
+      cycleId: 'cycle', expectedCycleVersion: 5, expectedCurrentActionId: 'interview-action',
+      suggestionActivityId: 'offer-without-price', effectiveAt: DOMAIN_TIMESTAMP,
+      confirmedAt: DOMAIN_TIMESTAMP,
+    })).toThrow();
     unitOfWork.immediate(() => events.appendActivity({
       id: 'offer-suggestion', personId: prospect.personId, prospectId: prospect.prospectId,
       salesCycleId: 'cycle', kind: 'offer', direction: 'outbound', channel: 'phone',

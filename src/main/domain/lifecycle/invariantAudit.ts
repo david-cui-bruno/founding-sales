@@ -19,6 +19,10 @@ import {
   type ReactivationReviewEvidence,
 } from './reactivationEvidenceValidator';
 import {
+  collectActionSettlementViolations,
+  type SettlementValidationAction,
+} from './actionSettlementValidator';
+import {
   actionSettlementSchema, inboundSlaSchema, utcTimestampSchema,
 } from './lifecycleValidation';
 
@@ -132,8 +136,7 @@ export function auditDomainInvariants(input: {
     if ((isPending && (action.completion_activity_id !== null
         || action.completed_at !== null || action.settlement_json !== null))
       || (!isPending && (!isCanonicalUtc(action.completed_at) || settlement === null))
-      || (action.settlement_json !== null && settlement === null)
-      || (settlement !== null && !settlementMatchesAction(settlement, action))) {
+      || (action.settlement_json !== null && settlement === null)) {
       add('action_settlement_invalid', action.id, 'Action status and immutable settlement conflict.');
     }
   }
@@ -254,9 +257,10 @@ export function auditDomainInvariants(input: {
       add('action_cadence_binding_invalid', action.id, 'Action cadence owner graph/channel is invalid.');
     }
     const settlement = parseCanonicalWithSchema(action.settlement_json, actionSettlementSchema);
-    if (settlement !== null && !settlementEvidenceValid(
-      settlement, action, binding ?? null, rows,
-    )) {
+    const settlementAction = settlement === null ? null
+      : toSettlementValidationAction(action, binding ?? null, settlement);
+    if (settlement !== null && (settlementAction === null
+      || collectActionSettlementViolations(input.database, settlementAction).length > 0)) {
       add(
         'action_settlement_invalid', action.id,
         'Settlement definition, outcome, or Activity evidence provenance is invalid.',
@@ -719,28 +723,6 @@ function parseCanonicalVersionedObject(value: unknown): Record<string, unknown> 
   }
 }
 
-function settlementMatchesAction(
-  settlement: ReturnType<typeof actionSettlementSchema.parse>,
-  action: Row,
-): boolean {
-  if (settlement.workIntent !== action.work_intent) return false;
-  const expectedStatus = settlement.outcome === 'marked_impossible' ? 'impossible'
-    : settlement.outcome === 'opted_out' || settlement.outcome === 'lost_nurture'
-      || settlement.outcome === 'upgraded' ? 'cancelled' : 'completed';
-  if (action.status !== expectedStatus) return false;
-  const cadence = settlement.cadence;
-  const planner = settlement.plannerTransition;
-  if (cadence.cadenceEnrollmentId !== action.cadence_enrollment_id
-    || cadence.cadenceStepId !== action.cadence_step_id
-    || cadence.cadenceComponentId !== action.cadence_component_id
-    || planner.stepId !== action.cadence_step_id
-    || planner.componentId !== action.cadence_component_id
-    || planner.outcome !== settlement.outcome) return false;
-  const actionInboundSla = parseActionInboundSla(action);
-  return actionInboundSla !== null
-    && canonicalJson(settlement.inboundSla) === canonicalJson(actionInboundSla);
-}
-
 function parseActionInboundSla(action: Row): ReturnType<typeof inboundSlaSchema.parse> | null {
   if (action.inbound_sla_kind === null) {
     return action.inbound_sla_due_at === null
@@ -920,104 +902,41 @@ function inboundSlaEvidenceValid(
   }
 }
 
-function settlementEvidenceValid(
-  settlement: ReturnType<typeof actionSettlementSchema.parse>,
+function toSettlementValidationAction(
   action: Row,
   enrollment: Row | null,
-  rows: (sql: string) => Row[],
-): boolean {
-  const cadence = settlement.cadence;
-  const planner = settlement.plannerTransition;
-  if (planner.definitionId !== cadence.cadenceDefinitionId
-    || planner.stepId !== cadence.cadenceStepId
-    || planner.componentId !== cadence.cadenceComponentId
-    || planner.outcome !== settlement.outcome
-    || !settlementAttemptValid(settlement, action, enrollment, rows)) return false;
-  if (settlement.evidenceActivityId === null) {
-    return action.completion_activity_id === null;
-  }
-  const evidence = rows(`
-    SELECT id, person_id, prospect_id, sales_cycle_id, cadence_enrollment_id,
-      cadence_step_id, cadence_component_id, kind, direction, channel, observed_outcome
-    FROM activities WHERE id = ${sqlLiteral(settlement.evidenceActivityId)}
-  `)[0];
-  if (evidence === undefined) return false;
-  const owner = rows(`
-    SELECT person_id, prospect_id FROM sales_cycles
-    WHERE id = ${sqlLiteral(String(action.sales_cycle_id))}
-  `)[0];
-  if (owner === undefined || evidence.person_id !== owner.person_id
-    || evidence.prospect_id !== owner.prospect_id) return false;
-  if (settlement.outcome === 'opted_out') {
-    return evidence.person_id === owner?.person_id && evidence.observed_outcome === 'opted_out'
-      && (evidence.sales_cycle_id === action.sales_cycle_id
-        ? action.completion_activity_id === settlement.evidenceActivityId
-        : action.completion_activity_id === null);
-  }
-  if (settlement.outcome === 'interviewed_confirmed'
-    || settlement.outcome === 'offered_confirmed') {
-    const expectedOutcome = settlement.outcome === 'interviewed_confirmed'
-      ? 'answered' : 'price_said';
-    return evidence.sales_cycle_id === action.sales_cycle_id
-      && action.completion_activity_id === settlement.evidenceActivityId
-      && evidence.observed_outcome === expectedOutcome;
-  }
-  if (settlement.evidenceActivityId !== action.completion_activity_id) return false;
-  return evidence !== undefined
-    && evidence.sales_cycle_id === action.sales_cycle_id
-    && evidence.cadence_enrollment_id === action.cadence_enrollment_id
-    && evidence.cadence_step_id === action.cadence_step_id
-    && evidence.cadence_component_id === action.cadence_component_id
-    && (action.channel === null || evidence.channel === action.channel)
-    && evidence.observed_outcome === settlement.outcome;
-}
-
-function settlementAttemptValid(
   settlement: ReturnType<typeof actionSettlementSchema.parse>,
-  action: Row,
-  enrollment: Row | null,
-  rows: (sql: string) => Row[],
-): boolean {
-  const cadence = settlement.cadence;
-  const planner = settlement.plannerTransition;
-  if (cadence.cadenceEnrollmentId === null) {
-    return enrollment === null && cadence.cadenceDefinitionId === null
-      && cadence.cadenceStepId === null && cadence.cadenceComponentId === null
-      && planner.attempt === null;
-  }
-  if (enrollment === null
-    || enrollment.id !== cadence.cadenceEnrollmentId
-    || enrollment.sales_cycle_id !== action.sales_cycle_id
-    || enrollment.cadence_definition_id !== cadence.cadenceDefinitionId
-    || cadence.cadenceStepId === null || cadence.cadenceComponentId === null) return false;
-  const storedSteps = rows(`
-    SELECT id FROM cadence_steps
-    WHERE cadence_definition_id = ${sqlLiteral(cadence.cadenceDefinitionId)}
-    ORDER BY sequence, id
-  `).map(({ id }) => String(id));
-  let effectiveSteps = storedSteps;
-  if (enrollment.allowed_step_ids_json !== null) {
-    try {
-      const parsed = JSON.parse(String(enrollment.allowed_step_ids_json)) as unknown;
-      if (!Array.isArray(parsed) || parsed.some((id) => typeof id !== 'string')) return false;
-      effectiveSteps = parsed;
-    } catch {
-      return false;
-    }
-  }
-  const expectedAttempt = effectiveSteps.indexOf(cadence.cadenceStepId) + 1;
-  const component = rows(`
-    SELECT step.cadence_definition_id, component.cadence_step_id, component.channel
-    FROM cadence_action_components AS component
-    JOIN cadence_steps AS step ON step.id = component.cadence_step_id
-    WHERE component.id = ${sqlLiteral(cadence.cadenceComponentId)}
-  `)[0];
-  return expectedAttempt > 0 && planner.attempt === expectedAttempt
-    && Number(enrollment.scheduled_step_count) >= expectedAttempt
-    && component?.cadence_definition_id === cadence.cadenceDefinitionId
-    && component.cadence_step_id === cadence.cadenceStepId
-    && (action.action_type === 'resolve_contact_method'
-      ? action.channel === null : component.channel === action.channel);
+): SettlementValidationAction | null {
+  const status = action.status;
+  const workIntent = action.work_intent;
+  if (!['pending', 'completed', 'cancelled', 'impossible'].includes(String(status))
+    || !['internal_review', 'inbound_response', 'promised_follow_up', 'discretionary_prospecting']
+      .includes(String(workIntent))) return null;
+  const inboundSla = parseActionInboundSla(action);
+  if (inboundSla === null) return null;
+  const cadence = action.cadence_enrollment_id === null
+    ? {
+        cadenceEnrollmentId: null, cadenceDefinitionId: null,
+        cadenceStepId: null, cadenceComponentId: null,
+      } as const
+    : enrollment === null ? null : {
+        cadenceEnrollmentId: String(action.cadence_enrollment_id),
+        cadenceDefinitionId: String(enrollment.cadence_definition_id),
+        cadenceStepId: String(action.cadence_step_id),
+        cadenceComponentId: String(action.cadence_component_id),
+      } as const;
+  if (cadence === null) return null;
+  return {
+    id: String(action.id), salesCycleId: String(action.sales_cycle_id),
+    actionType: String(action.action_type),
+    channel: action.channel === null ? null : String(action.channel),
+    status: status as SettlementValidationAction['status'],
+    workIntent: workIntent as SettlementValidationAction['workIntent'],
+    inboundSla, cadence,
+    completionActivityId: action.completion_activity_id === null
+      ? null : String(action.completion_activity_id),
+    settlement: settlement as SettlementValidationAction['settlement'],
+  };
 }
 
 function reactivationCardinalityValid(

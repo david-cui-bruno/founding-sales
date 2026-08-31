@@ -599,6 +599,56 @@ describe('auditDomainInvariants', () => {
     }
   });
 
+  it('rejects an Offered confirmation whose Activity never recorded price said', async () => {
+    workspace = createTempDatabase();
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: workspace.path, key });
+    await migrateToLatest(database, {
+      backupDirectory: `${workspace.path}.backups`, workspaceKey: key,
+    });
+    const prospect = seedProspect(database.raw, 'offer-confirmation-audit');
+    const seeded = insertOpenCycleWithAction({
+      database: database.raw, prefix: 'offer-confirmation-audit', prospect,
+    });
+    database.raw.prepare(`
+      INSERT INTO activities (
+        id, person_id, prospect_id, sales_cycle_id, kind, direction, channel,
+        occurred_at, observed_outcome, metadata_json, created_at
+      ) VALUES ('offer-without-price', ?, ?, ?, 'offer', 'outbound', 'phone',
+        ?, 'sent', '{}', ?)
+    `).run(
+      prospect.personId, prospect.prospectId, seeded.cycleId,
+      DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+    );
+    database.raw.prepare(`
+      INSERT INTO next_actions (
+        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        work_intent, completion_activity_id, settlement_json, completed_at,
+        created_at, updated_at
+      ) VALUES ('invalid-offer-confirmation', ?, 'review', NULL, 'completed', ?,
+        'America/New_York', 'internal_review', 'offer-without-price', ?, ?, ?, ?)
+    `).run(seeded.cycleId, DOMAIN_TIMESTAMP, serializeCanonical({
+      version: 1, outcome: 'offered_confirmed', reason: null,
+      evidenceActivityId: 'offer-without-price',
+      plannerTransition: {
+        definitionId: null, stepId: null, componentId: null,
+        attempt: null, outcome: 'offered_confirmed',
+      },
+      cadence: {
+        cadenceEnrollmentId: null, cadenceDefinitionId: null,
+        cadenceStepId: null, cadenceComponentId: null,
+      },
+      workIntent: 'internal_review',
+      inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
+    }), DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+
+    expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).toContainEqual(
+      expect.objectContaining({
+        kind: 'action_settlement_invalid', recordId: 'invalid-offer-confirmation',
+      }),
+    );
+  });
+
   it('binds settlement cadence attempts and complete inbound-SLA provenance while allowing exact internal terminals', async () => {
     workspace = createTempDatabase();
     const key = createTestWorkspaceKey();

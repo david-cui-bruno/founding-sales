@@ -113,10 +113,22 @@ export type ActionSettlementOutcome =
   | 'reviewed_ready' | 'lost_nurture' | 'upgraded' | 'interviewed_confirmed'
   | 'offered_confirmed' | 'won_confirmed' | 'onboarding_waived' | 'phase_completed';
 
+export type ImpossibleReasonCode =
+  | 'missing_phone'
+  | 'missing_email'
+  | 'invalid_contact_method'
+  | 'channel_disabled'
+  | 'other';
+
+export type ImpossibleSettlementReason = Readonly<{
+  code: ImpossibleReasonCode;
+  notes: string | null;
+}>;
+
 export type ActionSettlement = Readonly<{
   version: 1;
   outcome: ActionSettlementOutcome;
-  reason: string | null;
+  reason: string | ImpossibleSettlementReason | null;
   evidenceActivityId: string | null;
   plannerTransition: Readonly<{
     definitionId: string | null;

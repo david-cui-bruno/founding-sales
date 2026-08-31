@@ -73,6 +73,21 @@ export const actionSettlementOutcomeSchema = z.enum([
   'offered_confirmed', 'won_confirmed', 'onboarding_waived', 'phase_completed',
 ]);
 
+export const impossibleReasonCodeSchema = z.enum([
+  'missing_phone', 'missing_email', 'invalid_contact_method', 'channel_disabled', 'other',
+]);
+export const impossibleSettlementReasonSchema = z.object({
+  code: impossibleReasonCodeSchema,
+  notes: z.string().trim().min(1).nullable(),
+}).strict().superRefine((value, context) => {
+  if (value.code === 'other' && value.notes === null) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'The other impossible reason requires explanatory notes.',
+    });
+  }
+});
+
 const settlementEvidenceRequired = new Set<z.infer<typeof actionSettlementOutcomeSchema>>([
   'answered', 'no_answer', 'voicemail_left', 'accepted', 'replied',
   'opted_out', 'channel_unavailable', 'marked_impossible',
@@ -82,7 +97,7 @@ const settlementEvidenceRequired = new Set<z.infer<typeof actionSettlementOutcom
 export const actionSettlementSchema = z.object({
   version: z.literal(1),
   outcome: actionSettlementOutcomeSchema,
-  reason: z.string().nullable(),
+  reason: z.union([z.string(), impossibleSettlementReasonSchema]).nullable(),
   evidenceActivityId: idSchema.nullable(),
   plannerTransition: z.object({
     definitionId: idSchema.nullable(), stepId: idSchema.nullable(),
@@ -103,16 +118,19 @@ export const actionSettlementSchema = z.object({
     });
   }
   const exactReason = value.outcome === 'opted_out' ? value.reason === 'person_wide_opt_out'
-    : value.outcome === 'marked_impossible' || value.outcome === 'onboarding_waived'
-      ? (value.reason?.trim().length ?? 0) > 0
+    : value.outcome === 'marked_impossible'
+      ? impossibleSettlementReasonSchema.safeParse(value.reason).success
+      : value.outcome === 'onboarding_waived'
+        ? typeof value.reason === 'string' && value.reason.trim().length > 0
       : value.outcome === 'lost_nurture'
         ? [
             'no_response', 'not_interested', 'bad_timing', 'not_decision_maker',
             'not_qualified', 'price', 'trust', 'chose_alternative', 'product_gap',
             'cadence_exhausted', 'disqualified', 'other',
-          ].includes(value.reason ?? '')
+          ].includes(typeof value.reason === 'string' ? value.reason : '')
         : value.outcome === 'upgraded'
-          ? ['live_vacancy', 'inbound_demo', 'direct_referral'].includes(value.reason ?? '')
+          ? ['live_vacancy', 'inbound_demo', 'direct_referral']
+            .includes(typeof value.reason === 'string' ? value.reason : '')
           : value.reason === null;
   if (!exactReason) {
     context.addIssue({
