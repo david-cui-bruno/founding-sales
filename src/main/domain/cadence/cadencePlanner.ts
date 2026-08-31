@@ -201,6 +201,7 @@ export function planActionOutcome(input: CadenceOutcomeInput): TransitionRecipe 
     mode: input.enrollment.mode,
     allowedStepIds: input.enrollment.allowedStepIds,
     currentStepId: input.enrollment.currentStepId,
+    scheduledStepCount: input.enrollment.scheduledStepCount,
   }, 'outcome');
   const step = requireStep(input.definition, input.enrollment.currentStepId);
   const componentId = input.action.kind === 'component'
@@ -561,6 +562,7 @@ function validateAllowedPlan(
     mode: CadenceEnrollmentState['mode'];
     allowedStepIds: readonly string[] | null;
     currentStepId?: string;
+    scheduledStepCount?: number;
   },
   phase: 'start' | 'outcome',
 ): CadenceStep[] {
@@ -575,6 +577,23 @@ function validateAllowedPlan(
   if (new Set(positions).size !== positions.length
     || positions.some((position, index) => index > 0 && position <= positions[index - 1]!)) {
     throw new CadencePlanningError('Allowed cadence steps must be an ordered definition subsequence.');
+  }
+
+  let resolvedCurrentIndex: number | null = null;
+  if (phase === 'outcome') {
+    resolvedCurrentIndex = allowed.findIndex(({ id }) => id === input.currentStepId);
+    if (resolvedCurrentIndex < 0) {
+      throw new CadencePlanningError('The current step is absent from the allowed plan.');
+    }
+    const expectedScheduledStepCount = input.mode === 'inbound_over_cap_response'
+      ? 1
+      : resolvedCurrentIndex + 1;
+    if (!Number.isInteger(input.scheduledStepCount)
+      || input.scheduledStepCount !== expectedScheduledStepCount) {
+      throw new CadencePlanningError(
+        'The enrollment scheduled-step count does not match its current plan position.',
+      );
+    }
   }
 
   if (input.mode === 'inbound_over_cap_response') {
@@ -621,11 +640,7 @@ function validateAllowedPlan(
       throw new CadencePlanningError('The allowed cadence plan exceeds the remaining cap.');
     }
     if (phase === 'outcome') {
-      const currentIndex = allowed.findIndex(({ id }) => id === input.currentStepId);
-      if (currentIndex < 0) {
-        throw new CadencePlanningError('The current step is absent from the allowed plan.');
-      }
-      if (allowed.length - currentIndex - 1 > remaining) {
+      if (allowed.length - resolvedCurrentIndex! - 1 > remaining) {
         throw new CadencePlanningError('The persisted cadence plan exceeds the remaining cap.');
       }
     }

@@ -344,6 +344,88 @@ describe('pure cadence planning', () => {
     expect(() => forgedOutcome([first.id, breakup.id])).toThrow();
   });
 
+  it('rejects a forged Post-Offer last step with count one for null and full plans', () => {
+    const lastStep = postOffer.steps.at(-1)!;
+    for (const allowedStepIds of [null, postOffer.steps.map(({ id }) => id)]) {
+      expect(() => outcome({
+        definition: postOffer,
+        enrollment: {
+          definitionId: postOffer.id,
+          anchorAt: evaluationAt,
+          currentStepId: lastStep.id,
+          scheduledStepCount: 1,
+          status: 'active',
+          mode: 'standard',
+          allowedStepIds,
+        },
+        action: { kind: 'component', componentId: lastStep.components[0]!.id },
+        outcome: 'accepted',
+        totalProspectingScheduledSteps: 0,
+        highestProspectingAttemptCap: 0,
+      })).toThrow();
+    }
+  });
+
+  it('requires a positive integer scheduled-step count at the resolved plan index', () => {
+    const intermediate = postOffer.steps[2]!;
+    for (const scheduledStepCount of [0, 1.5, 2, 4]) {
+      expect(() => outcome({
+        definition: postOffer,
+        enrollment: {
+          definitionId: postOffer.id,
+          anchorAt: evaluationAt,
+          currentStepId: intermediate.id,
+          scheduledStepCount,
+          status: 'active',
+          mode: 'standard',
+          allowedStepIds: null,
+        },
+        action: { kind: 'component', componentId: intermediate.components[0]!.id },
+        outcome: 'accepted',
+        totalProspectingScheduledSteps: 0,
+        highestProspectingAttemptCap: 0,
+      })).toThrow();
+    }
+
+    const breakup = cadenceA.steps.at(-1)!;
+    expect(outcome({
+      definition: cadenceA,
+      enrollment: {
+        definitionId: cadenceA.id,
+        anchorAt: evaluationAt,
+        currentStepId: breakup.id,
+        scheduledStepCount: 2,
+        status: 'active',
+        mode: 'standard',
+        allowedStepIds: [cadenceA.steps[2]!.id, breakup.id],
+      },
+      action: { kind: 'component', componentId: breakup.components[0]!.id },
+      outcome: 'accepted',
+      totalProspectingScheduledSteps: 8,
+      highestProspectingAttemptCap: 8,
+    })).toMatchObject({ terminal: { kind: 'exhausted' } });
+  });
+
+  it('requires an over-cap response enrollment count of exactly one', () => {
+    const firstStep = cadenceC.steps[0]!;
+    expect(() => outcome({
+      definition: cadenceC,
+      enrollment: {
+        definitionId: cadenceC.id,
+        anchorAt: evaluationAt,
+        currentStepId: firstStep.id,
+        scheduledStepCount: 2,
+        status: 'active',
+        mode: 'inbound_over_cap_response',
+        allowedStepIds: [firstStep.id],
+      },
+      action: { kind: 'component', componentId: firstStep.components[0]!.id },
+      outcome: 'accepted',
+      totalProspectingScheduledSteps: 5,
+      highestProspectingAttemptCap: 4,
+    })).toThrow();
+  });
+
   it('permits exactly the first trigger-response step for an exhausted over-cap plan', () => {
     expect(() => start(cadenceC, {
       mode: 'inbound_over_cap_response',
