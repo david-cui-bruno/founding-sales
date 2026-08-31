@@ -747,9 +747,16 @@ const domainStatements = [
     BEGIN
       SELECT RAISE(ABORT, 'priority projection must faithfully copy its evaluation');
     END`,
+  `CREATE TRIGGER protect_priority_projection_owner
+    BEFORE UPDATE OF prospect_id ON prospect_priority_projection
+    WHEN NEW.prospect_id IS NOT OLD.prospect_id
+    BEGIN
+      SELECT RAISE(ABORT, 'priority projection owner is immutable');
+    END`,
   `CREATE TRIGGER protect_p0_priority_override
     BEFORE INSERT ON priority_overrides
     WHEN NEW.override_kind = 'priority' AND NEW.priority = 'p0'
+      AND NEW.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       AND NOT EXISTS (
         SELECT 1 FROM prospect_priority_projection AS projection
         WHERE projection.prospect_id = NEW.prospect_id
@@ -759,8 +766,9 @@ const domainStatements = [
       SELECT RAISE(ABORT, 'P0 override requires a Direct current projection');
     END`,
   `CREATE TRIGGER protect_p0_priority_override_update
-    BEFORE UPDATE OF prospect_id, override_kind, priority ON priority_overrides
+    BEFORE UPDATE OF prospect_id, override_kind, priority, expires_at ON priority_overrides
     WHEN NEW.override_kind = 'priority' AND NEW.priority = 'p0'
+      AND NEW.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       AND NOT EXISTS (
         SELECT 1 FROM prospect_priority_projection AS projection
         WHERE projection.prospect_id = NEW.prospect_id
@@ -777,6 +785,8 @@ const domainStatements = [
         WHERE priority_override.prospect_id = OLD.prospect_id
           AND priority_override.override_kind = 'priority'
           AND priority_override.priority = 'p0'
+          AND priority_override.expires_at
+            > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       )
     BEGIN
       SELECT RAISE(ABORT, 'P0 override requires a Direct current projection');
@@ -788,6 +798,8 @@ const domainStatements = [
       WHERE priority_override.prospect_id = OLD.prospect_id
         AND priority_override.override_kind = 'priority'
         AND priority_override.priority = 'p0'
+        AND priority_override.expires_at
+          > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     )
     BEGIN
       SELECT RAISE(ABORT, 'P0 override requires a current projection');

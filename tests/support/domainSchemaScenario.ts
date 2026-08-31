@@ -98,6 +98,7 @@ const requiredTriggers = [
   'protect_person_opt_out_reset',
   'protect_priority_projection_fidelity',
   'protect_priority_projection_fidelity_update',
+  'protect_priority_projection_owner',
   'protect_projection_p0_override_delete',
   'protect_projection_p0_override_update',
   'protect_prospect_original_source',
@@ -477,6 +478,18 @@ function runDatabaseScenario(
         SET fit_points = 24
         WHERE prospect_id = ?
       `).run(first.prospectId));
+      insertPrioritizationEvaluation(raw, {
+        id: 'projection-second-evaluation',
+        prospectId: second.prospectId,
+        ruleId: 'projection-rule',
+        reachability: 'direct',
+        priority: 'p1',
+      });
+      assert.throws(() => raw.prepare(`
+        UPDATE prospect_priority_projection
+        SET prospect_id = ?, evaluation_id = 'projection-second-evaluation'
+        WHERE prospect_id = ?
+      `).run(second.prospectId, first.prospectId));
       return;
     }
     case 'priority-override-p0-gate': {
@@ -538,6 +551,70 @@ function runDatabaseScenario(
       assert.throws(() => raw.prepare(`
         DELETE FROM prospect_priority_projection WHERE prospect_id = ?
       `).run(direct.prospectId));
+
+      insertPriorityOverride(
+        raw,
+        'override-missing-expired-p0',
+        missing.prospectId,
+        'p0',
+        '2000-01-01T00:00:00.000Z',
+      );
+      assert.throws(() => raw.prepare(`
+        UPDATE priority_overrides
+        SET expires_at = '9999-12-31T23:59:59.999Z'
+        WHERE id = 'override-missing-expired-p0'
+      `).run());
+      insertPriorityOverride(
+        raw,
+        'override-indirect-expired-p0',
+        indirect.prospectId,
+        'p0',
+        '2000-01-01T00:00:00.000Z',
+      );
+      assert.throws(() => raw.prepare(`
+        UPDATE priority_overrides
+        SET expires_at = '9999-12-31T23:59:59.999Z'
+        WHERE id = 'override-indirect-expired-p0'
+      `).run());
+
+      const expired = seedProspect(raw, 'override-expired');
+      insertPrioritizationEvaluation(raw, {
+        id: 'override-expired-direct-evaluation',
+        prospectId: expired.prospectId,
+        ruleId: 'override-rule',
+        reachability: 'direct',
+        priority: 'p1',
+      });
+      insertPriorityProjection(raw, {
+        prospectId: expired.prospectId,
+        evaluationId: 'override-expired-direct-evaluation',
+        ruleId: 'override-rule',
+        reachability: 'direct',
+        priority: 'p1',
+      });
+      insertPriorityOverride(
+        raw,
+        'override-expired-p0',
+        expired.prospectId,
+        'p0',
+        '2000-01-01T00:00:00.000Z',
+      );
+      insertPrioritizationEvaluation(raw, {
+        id: 'override-expired-indirect-evaluation',
+        prospectId: expired.prospectId,
+        ruleId: 'override-rule',
+        reachability: 'indirect',
+        priority: 'p1',
+      });
+      raw.prepare(`
+        UPDATE prospect_priority_projection
+        SET evaluation_id = 'override-expired-indirect-evaluation',
+            reachability = 'indirect'
+        WHERE prospect_id = ?
+      `).run(expired.prospectId);
+      raw.prepare(`
+        DELETE FROM prospect_priority_projection WHERE prospect_id = ?
+      `).run(expired.prospectId);
       return;
     }
     case 'duplicate-active-cadence': {
@@ -1269,12 +1346,13 @@ function insertPriorityOverride(
   id: string,
   prospectId: string,
   priority: 'p0' | 'p1',
+  expiresAt = '9999-12-31T23:59:59.999Z',
 ): void {
   database.prepare(`
     INSERT INTO priority_overrides (
       id, prospect_id, override_kind, priority, reason, expires_at, created_at
-    ) VALUES (?, ?, 'priority', ?, 'Founder decision', '2026-09-30T12:00:00.000Z', ?)
-  `).run(id, prospectId, priority, DOMAIN_TIMESTAMP);
+    ) VALUES (?, ?, 'priority', ?, 'Founder decision', ?, ?)
+  `).run(id, prospectId, priority, expiresAt, DOMAIN_TIMESTAMP);
 }
 
 function insertCadenceEnrollment(
