@@ -67,7 +67,7 @@
 .lead-inspector__meta {
   margin: 2px 0 0;
   font-size: 0.82rem;
-  color: var(--text-muted, #53616c);
+  color: var(--muted);
 }
 
 .lead-inspector__header-actions {
@@ -97,7 +97,7 @@
   background: none;
   font: inherit;
   font-size: 0.85rem;
-  color: var(--text-muted, #53616c);
+  color: var(--muted);
   cursor: pointer;
 }
 
@@ -146,7 +146,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-muted, #53616c);
+  color: var(--muted);
 }
 
 .lead-inspector__facts {
@@ -157,7 +157,7 @@
 
 .lead-inspector__facts dt {
   font-size: 0.75rem;
-  color: var(--text-muted, #53616c);
+  color: var(--muted);
 }
 
 .lead-inspector__facts dd {
@@ -173,7 +173,7 @@
 .lead-inspector__cadence {
   margin: 0;
   font-size: 0.85rem;
-  color: var(--text-muted, #53616c);
+  color: var(--muted);
 }
 
 .lead-inspector__next-action p {
@@ -224,7 +224,7 @@
 .lead-inspector__timeline-meta {
   margin: 2px 0 0;
   font-size: 0.78rem;
-  color: var(--text-muted, #53616c);
+  color: var(--muted);
 }
 
 .lead-full-page {
