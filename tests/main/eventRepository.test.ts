@@ -105,6 +105,8 @@ describe('EventRepository', () => {
       providerIdempotencyKey: 'provider-one',
       providerReference: 'call-1',
       consentPolicyRecordId: null,
+      recordingStorageRef: null,
+      transcriptStorageRef: null,
       metadata: { initiatedBy: 'founder' },
       createdAt: TIMESTAMP,
     });
@@ -122,6 +124,138 @@ describe('EventRepository', () => {
 
     expect(retry).toEqual(firstActivity);
     expect(database!.raw.prepare('SELECT count(*) AS count FROM activities').get()).toEqual({ count: 1 });
+  });
+
+  it('validates a provider replay before canonical return without consuming defaults', async () => {
+    await setup();
+    unitOfWork.immediate(() => events.appendActivity(activityInput()));
+    let generatedIds = 0;
+    let clockReads = 0;
+    const replayRepository = new EventRepository({
+      database: database!,
+      unitOfWork,
+      clock: {
+        now: () => {
+          clockReads += 1;
+          return TIMESTAMP;
+        },
+      },
+      ids: {
+        next: () => {
+          generatedIds += 1;
+          return `generated-${generatedIds}`;
+        },
+      },
+    });
+
+    const canonical = unitOfWork.immediate(() => replayRepository.appendActivity({
+      personId: first.personId,
+      prospectId: first.prospectId,
+      salesCycleId: firstCycleId,
+      kind: 'call',
+      direction: 'outbound',
+      channel: 'phone',
+      adapter: 'phone',
+      providerIdempotencyKey: 'provider-one',
+      metadata: { valid: true },
+    }));
+    expect(canonical.id).toBe('activity-one');
+    expect({ generatedIds, clockReads }).toEqual({ generatedIds: 0, clockReads: 0 });
+
+    expect(() => unitOfWork.immediate(() => replayRepository.appendActivity({
+      personId: first.personId,
+      prospectId: first.prospectId,
+      salesCycleId: firstCycleId,
+      kind: 'call',
+      direction: 'outbound',
+      channel: 'phone',
+      adapter: 'phone',
+      providerIdempotencyKey: 'provider-one',
+      metadata: { invalid: 1n },
+    }))).toThrow(TypeError);
+    expect({ generatedIds, clockReads }).toEqual({ generatedIds: 0, clockReads: 0 });
+  });
+
+  it('roundtrips recording/transcript refs only with same-Person allowing recording consent', async () => {
+    await setup();
+
+    const mediaActivity = unitOfWork.immediate(() => {
+      const consent = events.appendConsentPolicyRecord({
+        id: 'recording-consent',
+        personId: first.personId,
+        policyKind: 'recording',
+        policyVersion: 'v1',
+        effectiveAt: TIMESTAMP,
+        decision: 'granted',
+        evidence: { appleNotice: true },
+      });
+      return events.appendActivity(activityInput({
+        id: 'media-activity',
+        providerIdempotencyKey: 'media-key',
+        consentPolicyRecordId: consent.id,
+        recordingStorageRef: 'media/recording.enc',
+        transcriptStorageRef: 'media/transcript.enc',
+      }));
+    });
+
+    expect(mediaActivity).toMatchObject({
+      recordingStorageRef: 'media/recording.enc',
+      transcriptStorageRef: 'media/transcript.enc',
+      consentPolicyRecordId: 'recording-consent',
+    });
+    expect(events.getActivity('media-activity')).toEqual(mediaActivity);
+  });
+
+  it.each([
+    { label: 'missing consent', consentId: null, owner: 'first', kind: null, decision: null },
+    { label: 'wrong Person', consentId: 'wrong-person-consent', owner: 'second', kind: 'recording', decision: 'granted' },
+    { label: 'wrong policy kind', consentId: 'wrong-kind-consent', owner: 'first', kind: 'outbound', decision: 'granted' },
+    { label: 'denied recording', consentId: 'denied-consent', owner: 'first', kind: 'recording', decision: 'denied' },
+    { label: 'unknown recording decision', consentId: 'unknown-consent', owner: 'first', kind: 'recording', decision: 'unknown' },
+  ] as const)('rejects media with $label', async ({ consentId, owner, kind, decision }) => {
+    await setup();
+    if (consentId !== null && kind !== null && decision !== null) {
+      unitOfWork.immediate(() => events.appendConsentPolicyRecord({
+        id: consentId,
+        personId: owner === 'first' ? first.personId : second.personId,
+        policyKind: kind,
+        policyVersion: 'v1',
+        effectiveAt: TIMESTAMP,
+        decision,
+        evidence: {},
+      }));
+    }
+
+    expect(() => unitOfWork.immediate(() => events.appendActivity(activityInput({
+      id: `invalid-media-${consentId ?? 'none'}`,
+      providerIdempotencyKey: `invalid-media-${consentId ?? 'none'}`,
+      consentPolicyRecordId: consentId,
+      recordingStorageRef: 'media/recording.enc',
+    })))).toThrowError(expect.objectContaining({ name: 'ActivityMediaConsentError' }));
+  });
+
+  it('accepts not-required recording consent for media', async () => {
+    await setup();
+
+    const activity = unitOfWork.immediate(() => {
+      const consent = events.appendConsentPolicyRecord({
+        id: 'not-required-consent',
+        personId: first.personId,
+        policyKind: 'recording',
+        policyVersion: 'v1',
+        effectiveAt: TIMESTAMP,
+        decision: 'not_required',
+        evidence: {},
+      });
+      return events.appendActivity(activityInput({
+        id: 'not-required-media',
+        providerIdempotencyKey: 'not-required-media',
+        consentPolicyRecordId: consent.id,
+        transcriptStorageRef: 'media/transcript.enc',
+      }));
+    });
+
+    expect(activity.transcriptStorageRef).toBe('media/transcript.enc');
   });
 
   it('rejects a provider-key collision owned by another Person/Prospect/Cycle', async () => {

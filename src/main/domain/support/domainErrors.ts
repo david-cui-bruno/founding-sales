@@ -19,6 +19,13 @@ export class DomainTransactionRequiredError extends Error {
   }
 }
 
+export class DomainRepositoryDatabaseMismatchError extends Error {
+  constructor() {
+    super('Domain repository database must match its DomainUnitOfWork database.');
+    this.name = 'DomainRepositoryDatabaseMismatchError';
+  }
+}
+
 export class IdempotencyOwnershipConflictError extends Error {
   readonly adapter: string;
   readonly providerIdempotencyKey: string;
@@ -28,5 +35,30 @@ export class IdempotencyOwnershipConflictError extends Error {
     this.name = 'IdempotencyOwnershipConflictError';
     this.adapter = adapter;
     this.providerIdempotencyKey = providerIdempotencyKey;
+  }
+}
+
+export class ContextLinkConflictError extends Error {
+  readonly contextKind: 'organization' | 'property';
+  readonly prospectId: string;
+  readonly contextId: string;
+
+  constructor(
+    contextKind: 'organization' | 'property',
+    prospectId: string,
+    contextId: string,
+  ) {
+    super('The prospect context link already exists with different relationship data.');
+    this.name = 'ContextLinkConflictError';
+    this.contextKind = contextKind;
+    this.prospectId = prospectId;
+    this.contextId = contextId;
+  }
+}
+
+export class ActivityMediaConsentError extends Error {
+  constructor() {
+    super('Managed activity media requires applicable recording consent.');
+    this.name = 'ActivityMediaConsentError';
   }
 }

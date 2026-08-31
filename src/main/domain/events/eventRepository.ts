@@ -2,7 +2,11 @@ import { z } from 'zod';
 
 import type { AppDatabase } from '../../db/database';
 import type { Clock } from '../support/clock';
-import { IdempotencyOwnershipConflictError } from '../support/domainErrors';
+import {
+  ActivityMediaConsentError,
+  DomainRepositoryDatabaseMismatchError,
+  IdempotencyOwnershipConflictError,
+} from '../support/domainErrors';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 import type { IdGenerator } from '../support/idGenerator';
 import type {
@@ -61,6 +65,8 @@ const appendActivityInputSchema = z.object({
   providerIdempotencyKey: textSchema.nullable().optional(),
   providerReference: z.string().nullable().optional(),
   consentPolicyRecordId: idSchema.nullable().optional(),
+  recordingStorageRef: textSchema.nullable().optional(),
+  transcriptStorageRef: textSchema.nullable().optional(),
   metadata: z.unknown().optional(),
 }).strict().superRefine((value, context) => {
   if (value.providerIdempotencyKey != null && value.adapter == null) {
@@ -127,8 +133,8 @@ const storedActivityRowSchema = z.object({
   provider_idempotency_key: textSchema.nullable(),
   provider_reference: z.string().nullable(),
   consent_policy_record_id: idSchema.nullable(),
-  recording_storage_ref: z.null(),
-  transcript_storage_ref: z.null(),
+  recording_storage_ref: textSchema.nullable(),
+  transcript_storage_ref: textSchema.nullable(),
   metadata_json: jsonTextSchema,
   created_at: utcTimestampSchema,
 }).strict();
@@ -174,6 +180,12 @@ const storedConsentPolicyRecordRowSchema = z.object({
   evidence_json: jsonTextSchema,
   created_at: utcTimestampSchema,
 }).strict();
+const storedMediaConsentRowSchema = z.object({
+  id: idSchema,
+  person_id: idSchema,
+  policy_kind: z.enum(['recording', 'cloud_processing', 'outbound']),
+  decision: z.enum(['granted', 'denied', 'not_required', 'unknown']),
+}).strict();
 
 const activityColumns = `
   id, person_id, prospect_id, sales_cycle_id, cadence_step_id, kind, direction,
@@ -205,6 +217,9 @@ export class EventRepository {
     clock: Clock;
     ids: IdGenerator;
   }) {
+    if (input.database.raw !== input.unitOfWork.database.raw) {
+      throw new DomainRepositoryDatabaseMismatchError();
+    }
     this.database = input.database;
     this.unitOfWork = input.unitOfWork;
     this.clock = input.clock;
@@ -214,11 +229,17 @@ export class EventRepository {
   appendActivity(input: AppendActivityInput): Activity {
     this.unitOfWork.assertWriteScope();
     const parsed = appendActivityInputSchema.parse(input);
-    const id = idSchema.parse(parsed.id ?? this.ids.next());
-    const occurredAt = utcTimestampSchema.parse(parsed.occurredAt ?? this.clock.now());
-    const createdAt = utcTimestampSchema.parse(this.clock.now());
+    const metadataJson = serializeJson(parsed.metadata ?? {}, 'activity metadata');
     const adapter = parsed.adapter ?? null;
     const providerKey = parsed.providerIdempotencyKey ?? null;
+    const recordingStorageRef = parsed.recordingStorageRef ?? null;
+    const transcriptStorageRef = parsed.transcriptStorageRef ?? null;
+    if (recordingStorageRef !== null || transcriptStorageRef !== null) {
+      this.assertApplicableRecordingConsent(
+        parsed.personId,
+        parsed.consentPolicyRecordId ?? null,
+      );
+    }
 
     if (adapter !== null && providerKey !== null) {
       const existing = this.database.raw.prepare(`
@@ -235,8 +256,8 @@ export class EventRepository {
         ) {
           throw new IdempotencyOwnershipConflictError(adapter, providerKey);
         }
-        if (canonical.id !== id) {
-          if (this.getActivity(id) !== null) {
+        if (parsed.id !== undefined && canonical.id !== parsed.id) {
+          if (this.getActivity(parsed.id) !== null) {
             throw new Error('The Activity ID and provider idempotency key identify different rows.');
           }
         }
@@ -244,7 +265,9 @@ export class EventRepository {
       }
     }
 
-    const metadataJson = serializeJson(parsed.metadata ?? {}, 'activity metadata');
+    const id = idSchema.parse(parsed.id ?? this.ids.next());
+    const occurredAt = utcTimestampSchema.parse(parsed.occurredAt ?? this.clock.now());
+    const createdAt = utcTimestampSchema.parse(this.clock.now());
     const row = this.database.raw.prepare(`
       INSERT INTO activities (
         id, person_id, prospect_id, sales_cycle_id, cadence_step_id, kind,
@@ -252,7 +275,7 @@ export class EventRepository {
         adapter, provider_idempotency_key, provider_reference,
         consent_policy_record_id, recording_storage_ref, transcript_storage_ref,
         metadata_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING ${activityColumns}
     `).get(
       id,
@@ -270,6 +293,8 @@ export class EventRepository {
       providerKey,
       parsed.providerReference ?? null,
       parsed.consentPolicyRecordId ?? null,
+      recordingStorageRef,
+      transcriptStorageRef,
       metadataJson,
       createdAt,
     );
@@ -366,6 +391,27 @@ export class EventRepository {
     `).all(id);
     return rows.map(parseStageEvent);
   }
+
+  private assertApplicableRecordingConsent(
+    personId: string,
+    consentPolicyRecordId: string | null,
+  ): void {
+    if (consentPolicyRecordId === null) throw new ActivityMediaConsentError();
+    const value = this.database.raw.prepare(`
+      SELECT id, person_id, policy_kind, decision
+      FROM consent_policy_records
+      WHERE id = ?
+    `).get(consentPolicyRecordId);
+    if (value === undefined) throw new ActivityMediaConsentError();
+    const consent = storedMediaConsentRowSchema.parse(value);
+    if (
+      consent.person_id !== personId
+      || consent.policy_kind !== 'recording'
+      || (consent.decision !== 'granted' && consent.decision !== 'not_required')
+    ) {
+      throw new ActivityMediaConsentError();
+    }
+  }
 }
 
 function parseActivity(value: unknown): Activity {
@@ -386,6 +432,8 @@ function parseActivity(value: unknown): Activity {
     providerIdempotencyKey: row.provider_idempotency_key,
     providerReference: row.provider_reference,
     consentPolicyRecordId: row.consent_policy_record_id,
+    recordingStorageRef: row.recording_storage_ref,
+    transcriptStorageRef: row.transcript_storage_ref,
     metadata: row.metadata_json,
     createdAt: row.created_at,
   };

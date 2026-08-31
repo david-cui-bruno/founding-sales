@@ -2,6 +2,10 @@ import { z } from 'zod';
 
 import type { AppDatabase } from '../../db/database';
 import type { Clock } from '../support/clock';
+import {
+  ContextLinkConflictError,
+  DomainRepositoryDatabaseMismatchError,
+} from '../support/domainErrors';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 import type { IdGenerator } from '../support/idGenerator';
 import type {
@@ -187,6 +191,9 @@ const storedPropertyRowSchema = z.object({
   created_at: utcTimestampSchema,
   updated_at: utcTimestampSchema,
 }).strict();
+const storedRelationshipRowSchema = z.object({
+  relationship: z.string().nullable(),
+}).strict();
 
 const handleLookupRowSchema = storedPersonRowSchema.extend({
   contact_id: idSchema,
@@ -223,6 +230,9 @@ export class IdentityRepository {
     clock: Clock;
     ids: IdGenerator;
   }) {
+    if (input.database.raw !== input.unitOfWork.database.raw) {
+      throw new DomainRepositoryDatabaseMismatchError();
+    }
     this.database = input.database;
     this.unitOfWork = input.unitOfWork;
     this.clock = input.clock;
@@ -373,24 +383,46 @@ export class IdentityRepository {
     this.unitOfWork.assertWriteScope();
     const parsed = linkOrganizationInputSchema.parse(input);
     const now = utcTimestampSchema.parse(this.clock.now());
+    const relationship = parsed.relationship ?? null;
+    const existing = this.database.raw.prepare(`
+      SELECT relationship
+      FROM prospect_organizations
+      WHERE prospect_id = ? AND organization_id = ?
+    `).get(parsed.prospectId, parsed.organizationId);
+    if (existing !== undefined) {
+      const canonical = storedRelationshipRowSchema.parse(existing);
+      if (canonical.relationship === relationship) return;
+      throw new ContextLinkConflictError(
+        'organization', parsed.prospectId, parsed.organizationId,
+      );
+    }
     this.database.raw.prepare(`
       INSERT INTO prospect_organizations (
         prospect_id, organization_id, relationship, created_at
       ) VALUES (?, ?, ?, ?)
-      ON CONFLICT(prospect_id, organization_id) DO NOTHING
-    `).run(parsed.prospectId, parsed.organizationId, parsed.relationship ?? null, now);
+    `).run(parsed.prospectId, parsed.organizationId, relationship, now);
   }
 
   linkProperty(input: LinkPropertyInput): void {
     this.unitOfWork.assertWriteScope();
     const parsed = linkPropertyInputSchema.parse(input);
     const now = utcTimestampSchema.parse(this.clock.now());
+    const relationship = parsed.relationship ?? null;
+    const existing = this.database.raw.prepare(`
+      SELECT relationship
+      FROM prospect_properties
+      WHERE prospect_id = ? AND property_id = ?
+    `).get(parsed.prospectId, parsed.propertyId);
+    if (existing !== undefined) {
+      const canonical = storedRelationshipRowSchema.parse(existing);
+      if (canonical.relationship === relationship) return;
+      throw new ContextLinkConflictError('property', parsed.prospectId, parsed.propertyId);
+    }
     this.database.raw.prepare(`
       INSERT INTO prospect_properties (
         prospect_id, property_id, relationship, created_at
       ) VALUES (?, ?, ?, ?)
-      ON CONFLICT(prospect_id, property_id) DO NOTHING
-    `).run(parsed.prospectId, parsed.propertyId, parsed.relationship ?? null, now);
+    `).run(parsed.prospectId, parsed.propertyId, relationship, now);
   }
 
   findPeopleByNormalizedHandle(kind: 'phone' | 'email', value: string): Person[] {

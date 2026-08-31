@@ -186,7 +186,9 @@ describe('IdentityRepository', () => {
   });
 
   it('makes only an exact join retry idempotent and propagates unrelated constraints', async () => {
-    const identities = await createRepository(['person', 'prospect', 'organization']);
+    const identities = await createRepository([
+      'person', 'prospect', 'organization', 'property',
+    ]);
 
     const context = unitOfWork.immediate(() => {
       const person = identities.createPerson({ displayName: 'Kevin' });
@@ -198,13 +200,42 @@ describe('IdentityRepository', () => {
         qualificationState: 'eligible',
       });
       const organization = identities.createOrganization({ canonicalName: 'One LLC' });
-      identities.linkOrganization({ prospectId: prospect.id, organizationId: organization.id });
-      identities.linkOrganization({ prospectId: prospect.id, organizationId: organization.id });
-      return { prospect, organization };
+      const property = identities.createProperty({
+        addressLine1: '10 Hope St', locality: 'Providence', region: 'RI',
+      });
+      identities.linkOrganization({
+        prospectId: prospect.id, organizationId: organization.id, relationship: 'owner',
+      });
+      identities.linkOrganization({
+        prospectId: prospect.id, organizationId: organization.id, relationship: 'owner',
+      });
+      identities.linkProperty({ prospectId: prospect.id, propertyId: property.id });
+      identities.linkProperty({ prospectId: prospect.id, propertyId: property.id, relationship: null });
+      return { prospect, organization, property };
     });
 
     expect(database!.raw.prepare('SELECT count(*) AS count FROM prospect_organizations').get())
       .toEqual({ count: 1 });
+    expect(database!.raw.prepare('SELECT count(*) AS count FROM prospect_properties').get())
+      .toEqual({ count: 1 });
+    expect(() => unitOfWork.immediate(() => identities.linkOrganization({
+      prospectId: context.prospect.id,
+      organizationId: context.organization.id,
+      relationship: 'manager',
+    }))).toThrowError(expect.objectContaining({ name: 'ContextLinkConflictError' }));
+    expect(() => unitOfWork.immediate(() => identities.linkProperty({
+      prospectId: context.prospect.id,
+      propertyId: context.property.id,
+      relationship: 'owner',
+    }))).toThrowError(expect.objectContaining({ name: 'ContextLinkConflictError' }));
+    expect(database!.raw.prepare(`
+      SELECT relationship FROM prospect_organizations
+      WHERE prospect_id = ? AND organization_id = ?
+    `).get(context.prospect.id, context.organization.id)).toEqual({ relationship: 'owner' });
+    expect(database!.raw.prepare(`
+      SELECT relationship FROM prospect_properties
+      WHERE prospect_id = ? AND property_id = ?
+    `).get(context.prospect.id, context.property.id)).toEqual({ relationship: null });
     expect(() => unitOfWork.immediate(() => identities.linkOrganization({
       prospectId: context.prospect.id,
       organizationId: 'missing-organization',

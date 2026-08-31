@@ -162,6 +162,51 @@ describe('DomainUnitOfWork', () => {
     );
   });
 
+  it('rejects a repository wired to a different database before it can autocommit', async () => {
+    const unitOfWork = await createUnitOfWork();
+    const secondTempDatabase = createTempDatabase();
+    const secondKey = createTestWorkspaceKey(0x3b);
+    const secondDatabase = openDatabase({ path: secondTempDatabase.path, key: secondKey });
+    try {
+      await migrateToLatest(secondDatabase, {
+        backupDirectory: `${secondTempDatabase.path}.backups`,
+        workspaceKey: secondKey,
+      });
+      let mismatchedRepository: IdentityRepository | undefined;
+      let constructionError: unknown;
+      try {
+        mismatchedRepository = new IdentityRepository({
+          database: secondDatabase,
+          unitOfWork,
+          clock: { now: () => TIMESTAMP },
+          ids: { next: () => 'wrong-database-person' },
+        });
+      } catch (error) {
+        constructionError = error;
+      }
+
+      if (mismatchedRepository !== undefined) {
+        try {
+          unitOfWork.immediate(() => {
+            mismatchedRepository!.createPerson({ displayName: 'Must Roll Back' });
+            throw new Error('rollback');
+          });
+        } catch {
+          // The assertions below prove this path cannot leak an autocommitted row.
+        }
+      }
+
+      expect(constructionError).toMatchObject({
+        name: 'DomainRepositoryDatabaseMismatchError',
+      });
+      expect(secondDatabase.raw.prepare('SELECT count(*) AS count FROM persons').get())
+        .toEqual({ count: 0 });
+    } finally {
+      closeDatabase(secondDatabase);
+      secondTempDatabase.cleanup();
+    }
+  });
+
   it('rejects Promise-returning callbacks at compile time', async () => {
     const unitOfWork = await createUnitOfWork();
 

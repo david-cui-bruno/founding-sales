@@ -27,6 +27,8 @@ export type Activity = {
   providerIdempotencyKey: string | null;
   providerReference: string | null;
   consentPolicyRecordId: string | null;
+  recordingStorageRef: string | null;
+  transcriptStorageRef: string | null;
   metadata: unknown;
   createdAt: string;
 };
@@ -80,6 +82,8 @@ export type AppendActivityInput = {
   providerIdempotencyKey?: string | null;
   providerReference?: string | null;
   consentPolicyRecordId?: string | null;
+  recordingStorageRef?: string | null;
+  transcriptStorageRef?: string | null;
   metadata?: unknown;
 };
 
