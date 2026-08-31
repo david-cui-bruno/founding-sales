@@ -1083,22 +1083,155 @@ git commit -m "feat: add fixed founder sales cadences"
 ### Task 9: Implement Lifecycle, Cadence Persistence, and the Current-Action Invariant
 
 **Files:**
+- Modify: `src/main/db/migrations/0002DomainFoundation.ts`
+- Modify: `src/main/db/domainSchema.ts`
+- Modify: `src/main/domain/support/domainErrors.ts`
+- Modify: `src/main/domain/events/eventTypes.ts`
+- Modify: `src/main/domain/events/eventRepository.ts`
+- Modify: `src/main/domain/identity/identityTypes.ts`
+- Modify: `src/main/domain/identity/identityRepository.ts`
 - Create: `src/main/domain/lifecycle/lifecycleTypes.ts`
 - Create: `src/main/domain/lifecycle/salesCycleRepository.ts`
 - Create: `src/main/domain/lifecycle/nextActionRepository.ts`
+- Create: `src/main/domain/lifecycle/cadenceEnrollmentRepository.ts`
+- Create: `src/main/domain/lifecycle/reactivationRepository.ts`
+- Create: `src/main/domain/lifecycle/lifecycleReviewRepository.ts`
+- Create: `src/main/domain/lifecycle/lifecycleTransactionWriter.ts`
 - Create: `src/main/domain/lifecycle/lifecycleService.ts`
 - Create: `src/main/domain/lifecycle/invariantAudit.ts`
+- Modify: `tests/main/domainConstraints.test.ts`
+- Modify: `tests/main/eventRepository.test.ts`
+- Modify: `tests/main/identityRepository.test.ts`
+- Modify: `tests/support/domainSchemaScenario.ts`
 - Create: `tests/main/salesCycleRepository.test.ts`
+- Create: `tests/main/cadenceEnrollmentRepository.test.ts`
+- Create: `tests/main/reactivationRepository.test.ts`
+- Create: `tests/main/lifecycleReviewRepository.test.ts`
 - Create: `tests/main/lifecycleService.test.ts`
 - Create: `tests/main/nextActionInvariant.test.ts`
+- Create: `tests/main/invariantAudit.test.ts`
 - Create: `tests/integration/concurrentCycleInvariant.test.ts`
 - Create: `tests/support/domainWriteWorker.ts`
 
 **Interfaces:**
-- Consumes: Unit of Work, Identity/Event/Source repositories, cadence repository/planner, fixed transition table.
-- Produces: all legal lifecycle commands and atomic pointer replacement. Task 10 uses `closeForOptOut`; Task 12 reads the resulting cycle/action projection.
+- Consumes: the exact `AppDatabase` and `DomainUnitOfWork`, Identity/Event/Source repositories, Task 8's final `CadenceRepository`, `TransitionRecipe`, `planCadenceStart`, `planActionOutcome`, `planCadenceUpgrade`, and `planReactivationDefaults` exports, injected `Clock`/`IdGenerator`, and the fixed transition table. Task 9 must not copy, narrow, or reinterpret Task 8's planner result into the obsolete `CadencePlan` union.
+- Produces: strict lifecycle types; persistence-only cycle/action/enrollment/reactivation repositories; a transaction-scoped `LifecycleTransactionWriter`; transaction-owning `LifecycleService` wrappers; legal lifecycle commands; atomic pointer replacement; idempotent rule/inbound resurrection; and a read-only invariant audit. Task 10 uses the scoped writer's `closeForOptOut` inside its own exact-UoW transaction; Task 12 reads the resulting projection.
+- Boundary: repository mutations require the active exact-UoW scope; reads may run outside it. Constructors reject mixed databases or different UoW instances by identity. Event and Task 8 cadence repositories expose `assertBoundTo(database, unitOfWork)` just like Identity/Source. Lifecycle SQL never reads `now`; all timestamps, IDs, policy snapshots, and planner `evaluationAt` values are injected and strictly parsed.
+- Product lock: at most one operationally open SalesCycle exists per Person; stages are fixed; Contacted requires delivered/answered evidence; Interviewed and Offered are founder-confirmed suggestions; every active/onboarding cycle points to exactly one own pending current action with a due date; every closed cycle points to none; Lost-Nurture has a reason and exact resurrection semantics; and no lifecycle type, column, query, or sort introduces a blended 0-100 score.
 
-- [ ] **Step 1: Write RED tests for every valid and invalid transition**
+Task 8 binding is exact:
+
+```ts
+new CadenceRepository({ database, unitOfWork, clock });
+cadences.assertBoundTo(database, unitOfWork);
+cadences.installBuiltins(): CadenceAggregate[];
+cadences.getById(id: string): CadenceAggregate | null;
+cadences.getByFamilyVersion(
+  family: CadenceFamily,
+  version: number,
+): CadenceAggregate | null;
+planCadenceStart(input: CadenceStartInput): TransitionRecipe;
+planActionOutcome(input: CadenceOutcomeInput): TransitionRecipe;
+planCadenceUpgrade(input: CadenceUpgradeInput): CadenceUpgradePlan;
+planReactivationDefaults(input: {
+  salesCycleId: string;
+  family: CadenceFamily;
+  evaluationAt: string;
+  timezone: string;
+  manualDueAt: string | null;
+}): ReactivationRuleDraft[];
+```
+
+`TransitionRecipe` is Task 8's exclusive `{ nextAction: NextActionInstruction; terminal: null } | { nextAction: null; terminal: CadenceTerminal }` intersection with `currentAction`, `enrollment`, and `reactivationDrafts`. `NextActionInstruction` includes both `create` and `reschedule_current`; lifecycle persistence must handle both.
+
+- [ ] **Step 1: Write RED schema and strict persistence-contract tests**
+
+Extend migration/schema tests before repository code. Require:
+
+- `stage_events.transition_sequence INTEGER NOT NULL CHECK (transition_sequence > 0)` with `UNIQUE (sales_cycle_id, transition_sequence)`; immutable-event triggers also block `UPDATE`, `DELETE`, and raw `INSERT OR REPLACE`;
+- `reactivation_rules` exposes `UNIQUE (id, sales_cycle_id)` for an exact composite receipt FK and retains only `seasonal:heating-oct1`, `new-frbo-listing`, `lead-cert-expiry-window`, and `manual`;
+- a new immutable `cycle_reactivation_receipts` table stores deterministic `activation_key`, `activation_kind: rule | inbound_response`, Person, source closed cycle, exactly one rule/source-event key, new cycle, strict version-1 canonical command/result JSON, and `created_at`;
+- a durable `lifecycle_review_items` table stores one open/resolved Review item per blocked activation key, exact Person/Prospect/source ownership, a versioned reason/payload envelope, timestamps, and an optimistic version; blocked work must survive restart rather than exist only as an in-memory union;
+- composite FKs prove receipt source-cycle/new-cycle Person ownership, rule ownership by the source cycle, and inbound SourceEvent ownership; rule, source-event, and new-cycle keys are individually unique where present;
+- receipt checks reject wrong source cardinality; raw ghost, cross-Person, cross-cycle, duplicate-result, `UPDATE`, `DELETE`, same-PK `OR REPLACE`, and non-PK-unique `OR REPLACE` paths fail closed;
+- `cadence_enrollments` persists Task 8's `mode`, canonical `allowed_step_ids_json`, and a positive projection `version`; `sales_cycle_close_readiness` also gains a positive projection `version`;
+- `next_actions` persists Task 8's nullable canonical `sla_due_at`, plus `version`/`updated_at`, so `reschedule_current` can CAS the same pending action without falsely settling or replacing it;
+- settled `next_actions` persist a strict versioned settlement envelope containing outcome, reason/evidence references, and planner-transition identity; pending actions have no settlement and settled evidence cannot be silently rewritten;
+- Task 8's composite cadence owner-graph constraints remain intact; and
+- migration manifest, schema-version-last behavior, rollback, and packaged schema scenario include the new table/columns without weakening Task 4's pre-migration backup gate.
+
+Use this relational receipt shape:
+
+```text
+activation_key PK = "rule:" + rule_id | "inbound:" + source_event_id
+activation_kind = rule | inbound_response
+person_id
+source_cycle_id              -- a closed cycle for the same Person
+reactivation_rule_id NULL/UNIQUE
+source_event_id NULL/UNIQUE
+new_cycle_id NOT NULL/UNIQUE -- stable command input; never generated on replay
+command_json/result_json     -- canonical strict { version: 1, ... } envelopes
+created_at
+```
+
+- [ ] **Step 2: Write RED repository CAS, parsing, and event-order tests**
+
+Test every mutator outside a transaction, under another UoW, and with a repository bound to another database. Test reads outside a transaction. Corrupt each stored enum, canonical UTC timestamp, 0/1 boolean, integer, and JSON envelope through raw SQL and assert strict Zod parsing fails on every read path.
+
+Define and test these persistence-only operations:
+
+```ts
+insertCycleWithDeferredAction(input: InsertCycleInput): SalesCycle;
+transitionOpenProjection(input: {
+  cycleId: string;
+  expectedVersion: number;
+  expectedStage: LifecycleStage;
+  expectedWorkflowStatus: 'active' | 'onboarding';
+  expectedCurrentActionId: string;
+  nextStage: LifecycleStage;
+  nextWorkflowStatus: 'active' | 'onboarding';
+  nextActionId: string;
+  stageEnteredAt: UtcTimestamp;
+}): SalesCycle;
+closeProjection(input: {
+  cycleId: string;
+  expectedVersion: number;
+  expectedStage: LifecycleStage;
+  expectedWorkflowStatus: 'active' | 'onboarding';
+  expectedCurrentActionId: string;
+  finalStage: 'won' | 'lost_nurture';
+  closedAt: UtcTimestamp;
+  closeReason: LostNurtureReason | null;
+  closeNotes: string | null;
+  onboardingStopReason: string | null;
+}): SalesCycle;
+insertNextAction(input: InsertNextActionInput): NextAction;
+reschedulePendingAction(input: {
+  actionId: string;
+  salesCycleId: string;
+  expectedVersion: number;
+  expectedDueAt: UtcTimestamp;
+  dueAt: UtcTimestamp;
+  timezone: string;
+  allowedWindow: string;
+  slaDueAt: UtcTimestamp | null;
+  cadenceDefinitionId: string;
+  cadenceStepId: string;
+  cadenceComponentId: string;
+}): NextAction;
+settleAction(input: SettleActionInput & {
+  expectedStatus: 'pending';
+  settlement: ActionSettlement;
+}): NextAction;
+getOperationalCycleForPerson(personId: string): SalesCycle | null;
+assertCurrentActionPostcondition(cycleId: string): void;
+```
+
+Every projection update includes the shown expected predicates, increments `version`, and throws `StaleDomainWriteError` when zero rows change. Never broadly suppress constraints or parse SQLite error messages. Exact successful retry may return an already-persisted canonical result only after comparing every supplied field; changed evidence or expected state is a typed conflict.
+
+`EventRepository.appendStageEvent` requires an explicit positive `transitionSequence`; `listCycleStageEvents` orders by it and validates a contiguous chain. Initial creation emits sequence 1 as `null -> unreviewed`. A backfilled Contacted immediately followed by founder Interviewed gets consecutive sequences even with identical effective/confirmation timestamps. Add `EventRepository.assertBoundTo`.
+
+- [ ] **Step 3: Write RED tests for every valid and invalid transition**
 
 Cover:
 
@@ -1111,9 +1244,87 @@ Offered -> Won/onboarding | Lost-Nurture
 Won/onboarding -> Won/closed
 ```
 
-Assert every unlisted transition fails without writes. Include inbound `Unreviewed → Ready → Contacted`, founder-confirmed Interviewed/Offered, backfilled mechanical stages, effective versus confirmation time, design-partner fitness rejected before Interviewed, and Won terms in integer USD cents.
+Assert every unlisted transition fails without writes. Include:
 
-- [ ] **Step 2: Write RED atomicity and concurrent-connection tests**
+- initial `null -> Unreviewed` StageEvent and review action in one commit;
+- `reviewToReady` atomically moving the Prospect from `unreviewed` to `eligible`, rejecting `merge_review`, disqualified, deleted, or opted-out Persons/Prospects;
+- Unreviewed rejection and Lost-Nurture reasons `not_qualified`/`disqualified` atomically CAS-updating Prospect qualification to `disqualified`; other closure never silently changes qualification;
+- inbound `Unreviewed -> Ready -> Contacted` and `Ready -> Interviewed` with the mechanical Contacted StageEvent immediately before the founder event;
+- Contacted only from an existing immutable Activity with exact Person/Prospect/Cycle ownership or the explicitly allowed pre-cycle inbound evidence path; accepted outbound text/Gmail email, answered call, confirmed voicemail, and associated inbound qualify, while no-answer, failed, opened, copied, and unconfirmed outcomes do not;
+- five-minute call/transcript and price-said evidence only creating suggestions; neither Interviewed nor Offered changes until founder confirmation;
+- `effectiveAt <= confirmedAt`, nondecreasing ordinary effective times, the documented inbound-approval exception, `stage_entered_at = effectiveAt`, and separate confirmation time;
+- Interviewed only from Ready/Contacted, Offered only from Interviewed, Won only from Offered, and founder/backfill events carrying evidence/provenance;
+- design-partner fitness 0-5 accepted only after immutable Interviewed history; and
+- Won/onboarding to Won/closed completing or explicitly waiving the final component without appending a second Won StageEvent, so Friday wins count the first Offered -> Won event once.
+
+- [ ] **Step 4: Write RED cadence-recipe and current-action invariant tests**
+
+Import Task 8's final `TransitionRecipe` type and test every recipe variant without reconstructing planner logic in Task 9. Require exactly one `nextAction` or one `terminal` result, never neither/both. Cover:
+
+- Ready cadence precedence Warm/C over Hot-FRBO/A over Cold-Registry/B;
+- Post-Interview, Post-Offer, and Onboarding swaps;
+- compound-component advancement, resolver actions, retry branches, failed delivery, impossible dispositions, required breakup, and exhaustion;
+- Task 8 `reschedule_current` keeping the same authoritative pointer and pending status while CAS-updating due/window/SLA/action version;
+- scheduled-step count incrementing once on entry to a scheduled step and zero for another component, resolver, or retry in that step;
+- B -> A and A/B -> C upgrades stopping the old enrollment with `upgraded`, preserving completed Activities and total prospecting count, using the highest cap rather than a sum, skipping a just-completed duplicate communication, and never automatically downgrading;
+- no prospecting upgrade after Interviewed; and
+- `replied`/inbound interrupts installing an actionable response/book-conversation action rather than leaving an open cycle without one.
+
+Every Activity/action/enrollment definition, step, and component ID must form one Task 8 owner graph. Unknown or uninstalled catalog versions and structurally impossible recipes fail before writes.
+
+- [ ] **Step 5: Write RED reactivation, readiness, and Won-terms tests**
+
+Add command tests for:
+
+```ts
+type ReactivationResult =
+  | { kind: 'reactivated'; cycle: SalesCycle }
+  | { kind: 'review_required'; reviewItem: LifecycleReviewItem };
+
+reactivateFromRule(input: ReactivateFromRuleInput): ReactivationResult;
+reactivateFromInboundResponse(input: ReactivateFromInboundInput): ReactivationResult;
+setDesignPartnerFitness(input: SetDesignPartnerFitnessInput): SalesCycle;
+setCloseReadiness(input: SetCloseReadinessInput): CloseReadiness;
+```
+
+Reactivation requires no operationally open cycle, an eligible non-deleted Prospect/Person, no opt-out/tombstone, a valid entry SourceEvent, and a planner result with a valid pending action. Otherwise it atomically persists/reuses typed `ReviewRequired` work and does not consume the rule. Test:
+
+- `UPDATE reactivation_rules SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL` and receipt/new-cycle creation in one transaction;
+- exact retry reading and comparing the immutable receipt before consuming a generated ID or default clock value;
+- changed Person, source cycle, rule/source event, entry source, cadence choice, or new-cycle ID returning a typed idempotency conflict;
+- two rules for one Person racing so one commits and the loser's consumption/receipt/new cycle all roll back;
+- explicit inbound response using `activation_key = inbound:<sourceEventId>` for an eligible non-opted-out closed Person, without inserting a fifth rule type;
+- unknown inbound handle returning unmatched communication Review rather than creating outreach;
+- blocked activation retry returning the same durable Review item without consuming IDs/default clock values, while a changed blocked command conflicts; and
+- SourceEvents already existing and matching the Person/Prospect; Task 9 never updates immutable `source_events.sales_cycle_id` to manufacture a reciprocal link.
+
+Apply the exact stored default ruling:
+
+```text
+Cadence A: seasonal:heating-oct1 + new-frbo-listing
+Cadence B: seasonal:heating-oct1 + lead-cert-expiry-window
+Cadence C/Post-Offer: no automatic row; optional exact-future manual rule only
+inbound_response: lifecycle entry reason, never a stored rule_type
+never: zero stored rules, never a row
+```
+
+Validate next-future October 1 in workspace timezone, exact future manual `due_at`, strict versioned matcher JSON, and no consumption on Review. Non-opt-out Lost-Nurture requires at least one stored rule after founder override/default resolution; opt-out requires zero. Cadence C/Post-Offer exhaustion therefore requires the caller's exact-future manual rule in the terminal command; missing it fails without settling the breakup/current action or creating a zombie workflow.
+
+When the blocker later clears, an exact activation command CAS-resolves its open Review item and proceeds to the receipt/new-cycle transaction. While unchanged, it returns the canonical open item; a changed command never hijacks that item.
+
+Close readiness is a strict founder-confirmed versioned envelope for demonstrated pain, active timeline, decision authority, willingness to try/pay, and concrete next-step commitment. Each value is `unknown | weak | moderate | strong` with evidence references. Derive scalar columns; pain-confirmed means demonstrated pain is moderate/strong. CAS its projection version.
+
+Won input is a strict discriminated union. For integer USD cents, compute rather than trust the projection:
+
+```text
+per_door_monthly: doors_committed * unit_rate_cents
+flat_monthly: unit_rate_cents
+manual_projected_monthly: caller amount + nonblank reason
+```
+
+Persist formula version, founding flag, and effective date in the Offered -> Won transaction. Exact retry compares terms; changed terms conflict.
+
+- [ ] **Step 6: Write RED atomicity, stale-writer, fault-injection, and concurrent-connection tests**
 
 Use `tests/support/domainWriteWorker.ts` with `worker_threads` so both independent encrypted connections attempt `BEGIN IMMEDIATE` writes against the same temporary database. Assert:
 
@@ -1122,99 +1333,212 @@ Use `tests/support/domainWriteWorker.ts` with `worker_threads` so both independe
 - replacement insert → pointer move → old completion succeeds;
 - failed StageEvent append rolls back pointer/action changes;
 - two connections racing to create open cycles for one Person leave exactly one committed cycle;
-- reactivation is idempotent and does not create a cycle when one is already open.
+- two completions of one expected current-action ID yield one success and one `StaleDomainWriteError`, with no orphan replacement;
+- replacement versus close, Won versus Lost-Nurture, reactivation versus manual/open-cycle creation, and two different reactivation rules preserve one open cycle and one authoritative pointer;
+- same-rule and same-inbound exact retries return the canonical receipt result, while different-command retries conflict;
+- an opt-out transaction racing action replacement cannot commit an opted-out active cadence/action;
+- configured busy timeout prevents raw `SQLITE_BUSY` from leaking as a domain outcome; and
+- no path depends on SQLite message parsing.
 
-- [ ] **Step 3: Run RED lifecycle tests**
+Each worker opens and keys its own production `openDatabase` connection. Use a barrier so attempts overlap. If native teardown makes `worker_threads` unreliable, use the existing compiled child-process contender pattern, while retaining truly independent connections.
+
+Inject a deterministic failure after each phase and compare stable ordered snapshots of every affected table before/after: cycle insert/CAS, enrollment insert/update/stop, replacement action insert, terms/rules/receipt insert, StageEvent append, old-action settlement, and final postcondition. Every failure leaves byte-for-byte equivalent rows and no consumed rule, orphan receipt, pending replacement, partial qualification change, or source mutation.
+
+- [ ] **Step 7: Run the complete RED lifecycle slice**
 
 Run:
 
 ```bash
-npx vitest run tests/main/salesCycleRepository.test.ts tests/main/lifecycleService.test.ts tests/main/nextActionInvariant.test.ts tests/integration/concurrentCycleInvariant.test.ts
+npx vitest run \
+  tests/main/domainConstraints.test.ts \
+  tests/main/eventRepository.test.ts \
+  tests/main/identityRepository.test.ts \
+  tests/main/salesCycleRepository.test.ts \
+  tests/main/cadenceEnrollmentRepository.test.ts \
+  tests/main/reactivationRepository.test.ts \
+  tests/main/lifecycleReviewRepository.test.ts \
+  tests/main/lifecycleService.test.ts \
+  tests/main/nextActionInvariant.test.ts \
+  tests/main/invariantAudit.test.ts \
+  tests/integration/concurrentCycleInvariant.test.ts
 ```
 
 Expected: FAIL because lifecycle modules are absent.
 
-- [ ] **Step 4: Implement persistence-only cycle/action repositories**
+- [ ] **Step 8: Harden schema/types and implement persistence-only repositories**
 
-Use exact repository operations:
+Add the schema changes proven in Steps 1-2, including rollback statements in exact reverse dependency order and the new table in the typed schema/manifest. Because no later migration has shipped, amend `0002DomainFoundation`; do not add `0003` or weaken Task 4's backup gate. Add `StaleDomainWriteError` and typed lifecycle/idempotency/eligibility/evidence conflicts to `domainErrors.ts`.
 
-```ts
-insertCycleWithDeferredAction(input: InsertCycleInput): SalesCycle;
-insertNextAction(input: InsertNextActionInput): NextAction;
-moveCurrentAction(input: { cycleId: string; expectedVersion: number; nextActionId: string }): SalesCycle;
-closeWorkflow(input: { cycleId: string; expectedVersion: number }): SalesCycle;
-completeAction(input: CompleteActionInput): NextAction;
-getOperationalCycleForPerson(personId: string): SalesCycle | null;
-assertCurrentActionPostcondition(cycleId: string): void;
-```
+Implement the exact Step 2 repository methods and durable Review persistence using plain `INSERT`, targeted CAS `UPDATE`, strict Zod parsing of inputs and every stored row/JSON value, injected clock/IDs, stable read ordering, and targeted conflict handling. Reads may run outside a transaction; every mutator starts with `unitOfWork.assertWriteScope()`.
 
-Optimistic updates include `WHERE id = ? AND version = ?` and increment `version`; zero updated rows throw `StaleDomainWriteError`.
+Add IdentityRepository's optimistic Prospect qualification mutation. It requires expected Person/Prospect/version/state and never rewrites original attribution. Add EventRepository and Task 8 CadenceRepository binding assertions; lifecycle construction fails before writes for every database/UoW permutation that does not use the same objects.
 
-- [ ] **Step 5: Implement the lifecycle command surface**
+Before plain cycle insertion, read the canonical Prospect and operational cycle under the same `BEGIN IMMEDIATE` lock. A second contender therefore observes the first commit and returns a typed already-open conflict; the partial unique index remains defense in depth and is never translated by message parsing.
+
+- [ ] **Step 9: Implement transaction-scoped and transaction-owning lifecycle surfaces**
+
+Define one synchronous `LifecycleTransactionWriter` whose methods require the caller's already-active exact-UoW scope. Define `LifecycleService` as thin wrappers that each call `unitOfWork.immediate(() => writer.command(input))` exactly once. Runtime and TypeScript reject PromiseLike callbacks through the existing UoW contract.
 
 ```ts
-createUnreviewedCycle(input: CreateUnreviewedCycleInput): SalesCycle;
-reviewToReady(input: ReviewToReadyInput): SalesCycle;
-recordQualifyingContact(input: RecordContactInput): SalesCycle;
-confirmInterviewed(input: ConfirmInterviewedInput): SalesCycle;
-confirmOffered(input: ConfirmOfferedInput): SalesCycle;
-confirmWon(input: ConfirmWonInput): SalesCycle;
-completeCurrentAction(input: CompleteCurrentActionInput): SalesCycle;
-closeLostNurture(input: CloseLostNurtureInput): SalesCycle;
-completeOnboarding(input: CompleteOnboardingInput): SalesCycle;
-closeForOptOut(input: CloseForOptOutInput): SalesCycle | null;
+export interface LifecycleCommands {
+  createUnreviewedCycle(input: CreateUnreviewedCycleInput): SalesCycle;
+  reviewToReady(input: ReviewToReadyInput): SalesCycle;
+  recordQualifyingContact(input: RecordContactInput): SalesCycle;
+  confirmInterviewed(input: ConfirmInterviewedInput): SalesCycle;
+  confirmOffered(input: ConfirmOfferedInput): SalesCycle;
+  confirmWon(input: ConfirmWonInput): SalesCycle;
+  completeCurrentAction(input: CompleteCurrentActionInput): SalesCycle;
+  closeLostNurture(input: CloseLostNurtureInput): SalesCycle;
+  completeOnboarding(input: CompleteOnboardingInput): SalesCycle;
+  reactivateFromRule(input: ReactivateFromRuleInput): ReactivationResult;
+  reactivateFromInboundResponse(input: ReactivateFromInboundInput): ReactivationResult;
+  setDesignPartnerFitness(input: SetDesignPartnerFitnessInput): SalesCycle;
+  setCloseReadiness(input: SetCloseReadinessInput): CloseReadiness;
+}
+
+export interface LifecycleTransactionCommands extends LifecycleCommands {
+  closeForOptOut(input: CloseForOptOutInput): SalesCycle | null;
+}
+
+export class LifecycleService implements LifecycleCommands {
+  scopedWriter(): LifecycleTransactionCommands; // asserts active exact-UoW scope
+}
 ```
 
-Every method performs one `DomainUnitOfWork.immediate` transaction and calls `assertCurrentActionPostcondition` immediately before returning.
+The public service does not expose a transaction-owning `closeForOptOut` that Task 10 could accidentally nest. Task 10 owns one immediate transaction, obtains `scopedWriter()`, stops/closes/cancels first, and only then inserts the permanent tombstone. Every scoped command asserts the active UoW again and calls the full postcondition before returning.
 
-- [ ] **Step 6: Implement pointer-safe action replacement**
+- [ ] **Step 10: Implement legal transitions and deterministic event projection**
 
-Use this exact order inside the open transaction:
+Encode the fixed transition table as data and reject every unlisted edge before allocating IDs or reading the clock. `createUnreviewedCycle` accepts only the canonical unreviewed Prospect and a pre-existing Person-owned entry SourceEvent, then creates a review action and initial StageEvent atomically. `reviewToReady` qualifies the Prospect, resolves the Task 8 catalog version, starts A/B/C, and installs the first cadence action.
 
-```ts
-const replacement = nextActions.insertNextAction(draft);
-cycles.moveCurrentAction({
-  cycleId,
-  expectedVersion,
-  nextActionId: replacement.id,
-});
-nextActions.completeAction({
-  actionId: current.id,
-  completionActivityId,
-  completedAt,
-});
-cycles.assertCurrentActionPostcondition(cycleId);
+`recordQualifyingContact` validates the immutable Activity and outcome before mechanically emitting Contacted. Already-Contacted cycles advance the cadence without duplicating Contacted. Founder-confirmed Interviewed/Offered commands validate suggestions/evidence but never accept an automatic transition. When Contacted was skipped, append its backfill event at sequence N followed by the founder target at N+1 with the same business timestamp and explicit provenance.
+
+Won persists calculated terms, stops Post-Offer, starts Onboarding, installs its first action, emits one Offered -> Won event, and changes workflow to onboarding. Completing or explicitly waiving the final onboarding component with a nonblank reason stops onboarding, clears the pointer, and closes Won without emitting Won -> Won.
+
+- [ ] **Step 11: Implement exact cyclic creation, action replacement, and closure order**
+
+For a new cycle without a cadence, use:
+
+```text
+allocate stable cycle/action/event IDs
+insert sales_cycle pointing to the future pending action
+insert pending next_action
+append initial StageEvent sequence 1
+assert full postcondition
+commit deferred cycle/action FKs
 ```
 
-Closing clears the pointer and changes workflow status before completing/cancelling the old action. This ordering satisfies the schema trigger and prevents a committed gap.
+For a new Ready/onboarding cycle with a cadence, insert the cycle first, then enrollment, then referenced action. The source event pre-exists. Never insert a SourceEvent/cycle pair that depends on the immediate reciprocal `source_events.sales_cycle_id` FK; `entry_source_event_id` is the activation authority.
 
-- [ ] **Step 7: Integrate cadence start/advance/exhaustion**
+For a Task 8 `reschedule_current` result, CAS-update the same pending current action using its expected version/status/due date, keep the pointer unchanged, record the required failure Activity, apply the zero-count enrollment retry mutation, and assert the postcondition. Do not create or settle an action.
 
-`reviewToReady` selects Warm over Hot-FRBO over Cold-Registry and starts the catalog version. Interviewed stops prospecting and starts Post-Interview; Offered starts Post-Offer; Won starts ordered onboarding. `completeCurrentAction` asks the pure planner for the next component/step. Exhaustion closes Lost-Nurture with versioned default reactivation rules.
+For replacement inside an existing cycle, use:
 
-- [ ] **Step 8: Implement startup invariant audit**
+```text
+validate input/evidence and pure TransitionRecipe
+insert or CAS the required enrollment state
+insert the replacement pending action
+CAS cycle stage/workflow/current pointer using expected version/stage/action
+append consecutive StageEvent rows when the stage changes
+complete/cancel/mark-impossible the old action only after pointer movement
+assert full postcondition
+```
 
-`auditDomainInvariants()` returns typed violations without modifying data. It checks canonical Prospect count, open-cycle count, pointer ownership/status, cadence multiplicity, P0 reachability, and opted-out open cadence. Later composition exposes the count to health/Review.
+`CompleteCurrentActionInput` always includes `expectedCycleVersion`, `expectedCurrentActionId`, exact Task 8 outcome, and immutable Activity/evidence when applicable. It never completes "whatever is current." Failed delivery follows Task 8's retry recipe; unavailable channel creates `resolve_contact_method` tied to the same definition/step/component; impossible requires reason/evidence; breakup is never skipped except by explicit impossible disposition.
 
-- [ ] **Step 9: Run GREEN lifecycle verification**
+For closure, use:
+
+```text
+stop the active enrollment
+insert Won terms or exact reactivation rules/receipt as applicable
+CAS final stage/workflow/current pointer to closed/null
+append the terminal StageEvent or onboarding system evidence
+settle the old action only after pointer clearance
+assert full postcondition
+```
+
+All generated rows roll back if any later write, event append, settlement, postcondition, or deferred-FK commit fails.
+
+- [ ] **Step 12: Apply Task 8 TransitionRecipe and reactivation semantics**
+
+Task 9 passes strict stored catalog/enrollment/action data, injected evaluation time/timezone/policy snapshot, total prospecting scheduled-step count, highest cap, and last completed communication into Task 8. It validates the returned `TransitionRecipe` but never recalculates its schedule or outcome branch. The recipe atomically controls old-action disposition, enrollment current step/count/status, stop/upgrade reason, exactly one next-action draft or terminal result, resolver/retry state, and reactivation drafts.
+
+Cadence exhaustion may close Lost-Nurture only after the required breakup is delivered or explicitly impossible and the attempt cap is exhausted. Persist Task 8's exact A/B defaults or a valid founder replacement. A `stop: replied` recipe is not terminal lifecycle closure: it enters the inbound response/booking lane with a replacement action. Opt-out delegates to Task 10's scoped transaction path.
+
+Rule reactivation and inbound-response activation use their deterministic receipt key and caller-supplied stable new-cycle ID. Read, parse, and compare a pre-existing receipt or blocked-activation Review item before calling `ids.next()` or the default clock. On first execution, create Ready/Contacted as required, start the appropriate cadence/inbound interrupt, create a valid current action, CAS rule consumption when applicable, and insert the receipt atomically. If eligibility/open-cycle/opt-out conditions fail, persist/reuse typed Review work and leave the rule unconsumed.
+
+- [ ] **Step 13: Implement the full read-only invariant audit**
+
+`auditDomainInvariants()` must not mutate, stop at the first malformed row, or throw because one row is corrupt. It returns every typed violation in stable kind/record-ID order and checks:
+
+- exactly one canonical Prospect per Person and at most one active/onboarding cycle per Person;
+- open/closed stage-workflow compatibility, closed timestamp/reason/notes, and current-pointer nullability;
+- a non-null pointer owns the cycle, references a pending due-dated action, and has parseable timezone/window data;
+- initial/contiguous StageEvent sequence, exact from/to chain, legal edges, and projection stage/`stage_entered_at` matching the final event;
+- Unreviewed has no active cadence and a review action; Ready/Contacted has one active A/B/C; Interviewed has Post-Interview; Offered has Post-Offer; Won/onboarding has Onboarding; closed has none;
+- enrollment definition/current-step/count/status and current action definition/step/component share one Task 8 graph and obey attempt caps;
+- Lost-Nurture reason/`other` notes and exact reactivation cardinality; one-way consumption and receipt ownership/canonical envelopes;
+- blocked reactivation has one durable, ownership-valid, canonical Review item and no consumed rule/new cycle;
+- Won terms/formula projection, close-readiness strict envelope/version, and design-fitness history;
+- opted-out/tombstoned Persons have no open outbound workflow, active cadence, or current outbound action; and
+- P0 projections/overrides still require Direct reachability.
+
+Only the authoritative pointer drives Today. Unreferenced pending supplemental tasks may coexist and are not silently promoted. The audit and lifecycle queries preserve separate Fit/Timing/priority fields and never compute or sort by a blended score.
+
+- [ ] **Step 14: Run GREEN lifecycle verification and scope regression checks**
 
 Run:
 
 ```bash
-npx vitest run tests/main/salesCycleRepository.test.ts tests/main/lifecycleService.test.ts tests/main/nextActionInvariant.test.ts tests/integration/concurrentCycleInvariant.test.ts tests/main/cadencePlanner.test.ts tests/main/domainConstraints.test.ts
+npx vitest run \
+  tests/main/domainConstraints.test.ts \
+  tests/main/eventRepository.test.ts \
+  tests/main/identityRepository.test.ts \
+  tests/main/salesCycleRepository.test.ts \
+  tests/main/cadenceEnrollmentRepository.test.ts \
+  tests/main/reactivationRepository.test.ts \
+  tests/main/lifecycleReviewRepository.test.ts \
+  tests/main/lifecycleService.test.ts \
+  tests/main/nextActionInvariant.test.ts \
+  tests/main/invariantAudit.test.ts \
+  tests/integration/concurrentCycleInvariant.test.ts \
+  tests/main/builtinCadences.test.ts \
+  tests/main/cadenceRepository.test.ts \
+  tests/main/cadenceScheduler.test.ts \
+  tests/main/cadencePlanner.test.ts
 npm run typecheck
 npm run lint
 npm run test
+npm run package
 ```
 
-Expected: all lifecycle and invariant tests PASS; failed commands leave byte-for-byte equivalent domain rows.
+Expected: schema, event, identity, cadence, lifecycle, invariant, concurrency, full-suite, and packaged verification PASS. Failed/stale commands leave byte-for-byte equivalent domain rows. Re-scan the Task 9 implementation diff for newly introduced `score`, `0-100`, raw `Date.now`, SQL `now`, nested `immediate`, broad `ON CONFLICT`, or error-message parsing and find none.
 
-- [ ] **Step 10: Commit lifecycle foundation**
+- [ ] **Step 15: Commit lifecycle foundation**
 
 Run:
 
 ```bash
-git add src/main/domain/lifecycle tests/main/salesCycleRepository.test.ts tests/main/lifecycleService.test.ts tests/main/nextActionInvariant.test.ts tests/integration/concurrentCycleInvariant.test.ts
+git add \
+  src/main/db/migrations/0002DomainFoundation.ts \
+  src/main/db/domainSchema.ts \
+  src/main/domain/support/domainErrors.ts \
+  src/main/domain/events \
+  src/main/domain/identity \
+  src/main/domain/lifecycle \
+  tests/main/domainConstraints.test.ts \
+  tests/main/eventRepository.test.ts \
+  tests/main/identityRepository.test.ts \
+  tests/main/salesCycleRepository.test.ts \
+  tests/main/cadenceEnrollmentRepository.test.ts \
+  tests/main/reactivationRepository.test.ts \
+  tests/main/lifecycleReviewRepository.test.ts \
+  tests/main/lifecycleService.test.ts \
+  tests/main/nextActionInvariant.test.ts \
+  tests/main/invariantAudit.test.ts \
+  tests/integration/concurrentCycleInvariant.test.ts \
+  tests/support/domainSchemaScenario.ts \
+  tests/support/domainWriteWorker.ts
 git commit -m "feat: enforce lifecycle next actions"
 ```
 
