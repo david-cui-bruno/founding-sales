@@ -137,21 +137,74 @@ const resultEnvelopeSchema = z.object({
 }).strict();
 const storedRowSchema = z.object({
   source_event_id: idSchema,
+  person_id: idSchema,
+  prospect_id: idSchema,
   command_json: z.string(),
   result_json: z.string(),
   created_at: utcTimestampSchema,
+}).strict();
+const storedSourceEnvelopeSchema = z.object({
+  formatVersion: z.literal(1),
+  sourceRecord: nonemptyJsonObjectSchema,
+  customSourceReason: customSourceReasonSchema.nullable(),
+}).strict();
+const storedSourceRowSchema = z.object({
+  id: idSchema,
+  person_id: idSchema,
+  prospect_id: idSchema.nullable(),
+  channel: z.enum([
+    'frbo', 'registry', 'rireig', 'referral', 'inbound_demo', 'community', 'custom',
+  ]),
+  observed_at: utcTimestampSchema,
+  source_record_json: z.string(),
+  evidence_ref: nullableNonblankSchema,
+  referred_by_person_id: idSchema.nullable(),
+  referrer_unknown_reason: z.enum([
+    'not_provided', 'unresolvable', 'legacy_import', 'other',
+  ]).nullable(),
+}).strict();
+const storedProspectRowSchema = z.object({
+  id: idSchema,
+  person_id: idSchema,
+  qualification_state: z.enum(['unreviewed', 'eligible', 'disqualified', 'merge_review']),
+  qualification_reason: z.string().nullable(),
 }).strict();
 
 export type CanonicalIntakeCommand = z.infer<typeof canonicalCommandSchema>;
 
 export type SourceIntakeReceipt = {
   sourceEventId: string;
+  personId: string;
+  prospectId: string;
   command: CanonicalIntakeCommand;
   /** Exact canonical bytes used as the intake idempotency key. */
   commandJson: string;
   result: StoredIntakeResult;
   createdAt: string;
 };
+
+export type IntakeReceiptIntegrityReason =
+  | 'noncanonical_command_json'
+  | 'noncanonical_result_json'
+  | 'result_ownership_mismatch'
+  | 'source_mismatch'
+  | 'prospect_ownership_mismatch'
+  | 'organization_context_mismatch'
+  | 'property_context_mismatch'
+  | 'identity_review_mismatch'
+  | 'unstable_context_ids';
+
+export class IntakeReceiptIntegrityError extends Error {
+  readonly sourceEventId: string;
+  readonly reason: IntakeReceiptIntegrityReason;
+
+  constructor(sourceEventId: string, reason: IntakeReceiptIntegrityReason) {
+    super('The intake receipt is inconsistent with canonical relational state.');
+    this.name = 'IntakeReceiptIntegrityError';
+    this.sourceEventId = sourceEventId;
+    this.reason = reason;
+  }
+}
 
 export class IntakeReceiptRepository {
   private readonly database: AppDatabase;
@@ -171,6 +224,12 @@ export class IntakeReceiptRepository {
     this.clock = input.clock;
   }
 
+  assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork): void {
+    if (this.database.raw !== database.raw || this.unitOfWork !== unitOfWork) {
+      throw new DomainRepositoryDatabaseMismatchError();
+    }
+  }
+
   append(input: {
     sourceEventId: string;
     command: CanonicalIntakeCommand;
@@ -181,28 +240,158 @@ export class IntakeReceiptRepository {
     const command = canonicalCommandSchema.parse(input.command);
     const result = intakeResultSchema.parse(input.result) as StoredIntakeResult;
     if (command.source.id !== sourceEventId || result.sourceEventId !== sourceEventId) {
-      throw new z.ZodError([]);
+      throw new IntakeReceiptIntegrityError(sourceEventId, 'result_ownership_mismatch');
     }
+    const personId = idSchema.parse(result.personId);
+    const prospectId = idSchema.parse(result.prospectId);
+    this.validateIntegrity({
+      sourceEventId, personId, prospectId, command, result,
+    });
     const commandJson = serializeCanonicalIntakeCommand(command);
-    const resultJson = serializeCanonicalJson({ formatVersion: 1, result });
+    const resultJson = serializeCanonicalIntakeResult(result);
     const createdAt = utcTimestampSchema.parse(this.clock.now());
     const row = this.database.raw.prepare(`
       INSERT INTO source_intake_receipts (
-        source_event_id, command_json, result_json, created_at
-      ) VALUES (?, ?, ?, ?)
-      RETURNING source_event_id, command_json, result_json, created_at
-    `).get(sourceEventId, commandJson, resultJson, createdAt);
-    return parseReceipt(row);
+        source_event_id, person_id, prospect_id, command_json, result_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      RETURNING
+        source_event_id, person_id, prospect_id, command_json, result_json, created_at
+    `).get(sourceEventId, personId, prospectId, commandJson, resultJson, createdAt);
+    return this.parseReceipt(row);
   }
 
   getBySourceEventId(sourceEventId: string): SourceIntakeReceipt | null {
     const parsedId = idSchema.parse(sourceEventId);
     const row = this.database.raw.prepare(`
-      SELECT source_event_id, command_json, result_json, created_at
+      SELECT
+        source_event_id, person_id, prospect_id, command_json, result_json, created_at
       FROM source_intake_receipts
       WHERE source_event_id = ?
     `).get(parsedId);
-    return row === undefined ? null : parseReceipt(row);
+    return row === undefined ? null : this.parseReceipt(row);
+  }
+
+  private parseReceipt(value: unknown): SourceIntakeReceipt {
+    const row = storedRowSchema.parse(value);
+    const commandEnvelope = parseStoredJson(row.command_json, commandEnvelopeSchema);
+    const resultEnvelope = parseStoredJson(row.result_json, resultEnvelopeSchema);
+    const result = resultEnvelope.result as StoredIntakeResult;
+    if (serializeCanonicalIntakeCommand(commandEnvelope.command) !== row.command_json) {
+      throw new IntakeReceiptIntegrityError(
+        row.source_event_id,
+        'noncanonical_command_json',
+      );
+    }
+    if (serializeCanonicalIntakeResult(result) !== row.result_json) {
+      throw new IntakeReceiptIntegrityError(row.source_event_id, 'noncanonical_result_json');
+    }
+    this.validateIntegrity({
+      sourceEventId: row.source_event_id,
+      personId: row.person_id,
+      prospectId: row.prospect_id,
+      command: commandEnvelope.command,
+      result,
+    });
+    return {
+      sourceEventId: row.source_event_id,
+      personId: row.person_id,
+      prospectId: row.prospect_id,
+      command: commandEnvelope.command,
+      commandJson: row.command_json,
+      result,
+      createdAt: row.created_at,
+    };
+  }
+
+  private validateIntegrity(input: {
+    sourceEventId: string;
+    personId: string;
+    prospectId: string;
+    command: CanonicalIntakeCommand;
+    result: StoredIntakeResult;
+  }): void {
+    if (
+      input.command.source.id !== input.sourceEventId
+      || input.result.sourceEventId !== input.sourceEventId
+      || input.result.personId !== input.personId
+      || input.result.prospectId !== input.prospectId
+    ) {
+      throw new IntakeReceiptIntegrityError(
+        input.sourceEventId,
+        'result_ownership_mismatch',
+      );
+    }
+    assertStableUniqueContextIds(
+      input.sourceEventId,
+      input.result.organizationIds,
+      input.result.propertyIds,
+    );
+    const sourceRow = this.database.raw.prepare(`
+      SELECT
+        id, person_id, prospect_id, channel, observed_at, source_record_json,
+        evidence_ref, referred_by_person_id, referrer_unknown_reason
+      FROM source_events
+      WHERE id = ?
+    `).get(input.sourceEventId);
+    if (sourceRow === undefined) {
+      throw new IntakeReceiptIntegrityError(input.sourceEventId, 'source_mismatch');
+    }
+    const source = parseStoredSource(sourceRow);
+    if (
+      source.personId !== input.personId
+      || (source.prospectId !== null && source.prospectId !== input.prospectId)
+      || serializeCanonicalJson(source.payload)
+        !== serializeCanonicalJson(input.command.source)
+    ) {
+      throw new IntakeReceiptIntegrityError(input.sourceEventId, 'source_mismatch');
+    }
+    const prospectRow = this.database.raw.prepare(`
+      SELECT id, person_id, qualification_state, qualification_reason
+      FROM prospects
+      WHERE id = ?
+    `).get(input.prospectId);
+    if (prospectRow === undefined) {
+      throw new IntakeReceiptIntegrityError(
+        input.sourceEventId,
+        'prospect_ownership_mismatch',
+      );
+    }
+    const prospect = storedProspectRowSchema.parse(prospectRow);
+    if (prospect.person_id !== input.personId) {
+      throw new IntakeReceiptIntegrityError(
+        input.sourceEventId,
+        'prospect_ownership_mismatch',
+      );
+    }
+    validateIdentityReview(input.sourceEventId, input.result, prospect);
+    for (const organizationId of input.result.organizationIds) {
+      const linked = this.database.raw.prepare(`
+        SELECT 1
+        FROM prospect_organizations AS link
+        INNER JOIN organizations AS organization ON organization.id = link.organization_id
+        WHERE link.prospect_id = ? AND link.organization_id = ?
+      `).get(input.prospectId, organizationId);
+      if (linked === undefined) {
+        throw new IntakeReceiptIntegrityError(
+          input.sourceEventId,
+          'organization_context_mismatch',
+        );
+      }
+    }
+    for (const propertyId of input.result.propertyIds) {
+      const linked = this.database.raw.prepare(`
+        SELECT 1
+        FROM prospect_properties AS link
+        INNER JOIN properties AS property ON property.id = link.property_id
+        WHERE link.prospect_id = ? AND link.property_id = ?
+      `).get(input.prospectId, propertyId);
+      if (linked === undefined) {
+        throw new IntakeReceiptIntegrityError(
+          input.sourceEventId,
+          'property_context_mismatch',
+        );
+      }
+    }
   }
 }
 
@@ -221,24 +410,9 @@ export function serializeCanonicalIntakeCommand(command: CanonicalIntakeCommand)
   return serializeCanonicalJson({ formatVersion: 1, command: canonical });
 }
 
-function parseReceipt(value: unknown): SourceIntakeReceipt {
-  const row = storedRowSchema.parse(value);
-  const commandEnvelope = parseStoredJson(row.command_json, commandEnvelopeSchema);
-  const resultEnvelope = parseStoredJson(row.result_json, resultEnvelopeSchema);
-  const result = resultEnvelope.result as StoredIntakeResult;
-  if (
-    commandEnvelope.command.source.id !== row.source_event_id
-    || result.sourceEventId !== row.source_event_id
-  ) {
-    throw new z.ZodError([]);
-  }
-  return {
-    sourceEventId: row.source_event_id,
-    command: commandEnvelope.command,
-    commandJson: row.command_json,
-    result,
-    createdAt: row.created_at,
-  };
+export function serializeCanonicalIntakeResult(result: StoredIntakeResult): string {
+  const parsed = intakeResultSchema.parse(result) as StoredIntakeResult;
+  return serializeCanonicalJson({ formatVersion: 1, result: parsed });
 }
 
 function parseStoredJson<T>(value: string, schema: z.ZodType<T>): T {
@@ -283,4 +457,62 @@ function compareStrings(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
   return 0;
+}
+
+function assertStableUniqueContextIds(
+  sourceEventId: string,
+  organizationIds: string[],
+  propertyIds: string[],
+): void {
+  for (const ids of [organizationIds, propertyIds]) {
+    const stable = [...new Set(ids)].sort(compareStrings);
+    if (stable.length !== ids.length || stable.some((id, index) => id !== ids[index])) {
+      throw new IntakeReceiptIntegrityError(sourceEventId, 'unstable_context_ids');
+    }
+  }
+}
+
+function parseStoredSource(value: unknown): {
+  personId: string;
+  prospectId: string | null;
+  payload: CanonicalIntakeCommand['source'];
+} {
+  const row = storedSourceRowSchema.parse(value);
+  const envelope = parseStoredJson(row.source_record_json, storedSourceEnvelopeSchema);
+  let referral: CanonicalIntakeCommand['source']['referral'] = null;
+  if (row.referred_by_person_id !== null && row.referrer_unknown_reason === null) {
+    referral = { kind: 'known', referredByPersonId: row.referred_by_person_id };
+  } else if (row.referred_by_person_id === null && row.referrer_unknown_reason !== null) {
+    referral = { kind: 'unknown', reason: row.referrer_unknown_reason };
+  } else if (row.channel === 'referral') {
+    throw new z.ZodError([]);
+  }
+  const payload = canonicalSourceSchema.parse({
+    id: row.id,
+    channel: row.channel,
+    observedAt: row.observed_at,
+    sourceRecord: envelope.sourceRecord,
+    evidenceRef: row.evidence_ref,
+    referral,
+    customSourceReason: envelope.customSourceReason,
+  });
+  return { personId: row.person_id, prospectId: row.prospect_id, payload };
+}
+
+function validateIdentityReview(
+  sourceEventId: string,
+  result: StoredIntakeResult,
+  prospect: z.infer<typeof storedProspectRowSchema>,
+): void {
+  const persistedReason = prospect.qualification_state === 'merge_review'
+    ? identityReviewReasonSchema.safeParse(prospect.qualification_reason)
+    : { success: true as const, data: null };
+  if (
+    !persistedReason.success
+    || result.identityReviewReason !== persistedReason.data
+    || (result.disposition === 'created_merge_review' && result.identityReviewReason === null)
+    || (result.disposition === 'created' && result.identityReviewReason !== null)
+  ) {
+    throw new IntakeReceiptIntegrityError(sourceEventId, 'identity_review_mismatch');
+  }
 }

@@ -130,6 +130,12 @@ export class SourceRepository {
     this.clock = input.clock;
   }
 
+  assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork): void {
+    if (this.database.raw !== database.raw || this.unitOfWork !== unitOfWork) {
+      throw new DomainRepositoryDatabaseMismatchError();
+    }
+  }
+
   append(input: AppendSourceEventInput): SourceEvent {
     this.unitOfWork.assertWriteScope();
     const parsed = appendSourceEventInputSchema.parse(input);

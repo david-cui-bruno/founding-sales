@@ -97,6 +97,8 @@ export type SourceEventsTable = {
 
 export type SourceIntakeReceiptsTable = {
   source_event_id: string;
+  person_id: string;
+  prospect_id: string;
   command_json: string;
   result_json: string;
   created_at: string;

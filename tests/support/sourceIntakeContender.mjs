@@ -96,8 +96,10 @@ try {
   });
   database.prepare(`
     INSERT INTO source_intake_receipts (
-      source_event_id, command_json, result_json, created_at
-    ) VALUES ('contended-source-one', ?, ?, ?)
+      source_event_id, person_id, prospect_id, command_json, result_json, created_at
+    ) VALUES (
+      'contended-source-one', 'contended-person', 'contended-prospect', ?, ?, ?
+    )
   `).run(commandJson, resultJson, timestamp);
   database.exec('COMMIT');
 } catch (error) {

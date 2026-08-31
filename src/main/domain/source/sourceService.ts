@@ -380,6 +380,9 @@ export class SourceService {
     if (input.database.raw !== input.unitOfWork.database.raw) {
       throw new DomainRepositoryDatabaseMismatchError();
     }
+    input.identities.assertBoundTo(input.database, input.unitOfWork);
+    input.sources.assertBoundTo(input.database, input.unitOfWork);
+    input.receipts.assertBoundTo(input.database, input.unitOfWork);
     this.unitOfWork = input.unitOfWork;
     this.identities = input.identities;
     this.sources = input.sources;
@@ -463,6 +466,9 @@ export class SourceService {
     this.inject('after_prospect');
 
     const contextResult = this.attachContexts(prospect.id, command);
+    const persistedIdentityReviewReason = existingProspect?.qualificationState === 'merge_review'
+      ? parsePersistedIdentityReviewReason(existingProspect.qualificationReason)
+      : identityResolution.reviewReason;
     const disposition: IntakeDisposition = identityResolution.reviewReason !== null
       ? 'created_merge_review'
       : identityResolution.personId === null
@@ -473,7 +479,7 @@ export class SourceService {
       personId: person.id,
       prospectId: prospect.id,
       sourceEventId: sourceEvent.id,
-      identityReviewReason: identityResolution.reviewReason,
+      identityReviewReason: persistedIdentityReviewReason,
       ...contextResult,
     };
     this.receipts.append({
@@ -864,6 +870,15 @@ function uniqueById<T extends { id: string }>(values: T[]): T[] {
 
 function addUnique<T>(values: T[], value: T): void {
   if (!values.includes(value)) values.push(value);
+}
+
+function parsePersistedIdentityReviewReason(reason: string | null): IdentityReviewReason {
+  return z.enum([
+    'shared_handle',
+    'conflicting_handle_matches',
+    'indirect_handle_match',
+    'deleted_person_match',
+  ]).parse(reason);
 }
 
 function assertJsonValue(value: unknown, field: string, seen = new Set<object>()): void {

@@ -64,7 +64,41 @@ describe('IntakeReceiptRepository', () => {
         '{"customSourceReason":null,"formatVersion":1,"sourceRecord":{"listingId":"one"}}',
         '${NOW}'
       );
+      INSERT INTO prospects (
+        id, person_id, original_source_event_id, segment, qualification_state,
+        version, created_at, updated_at
+      ) VALUES (
+        'prospect', 'person', '${id}', 'hot_frbo', 'unreviewed',
+        1, '${NOW}', '${NOW}'
+      );
+      INSERT INTO properties (
+        id, address_line_1, locality, region, country_code, created_at, updated_at
+      ) VALUES (
+        'property', '10 hope st', 'providence', 'ri', 'US', '${NOW}', '${NOW}'
+      );
+      INSERT INTO prospect_properties (prospect_id, property_id, created_at)
+      VALUES ('prospect', 'property', '${NOW}');
     `);
+  }
+
+  function insertRawReceipt(input: {
+    command?: CanonicalIntakeCommand;
+    result?: StoredIntakeResult;
+    commandJson?: string;
+    resultJson?: string;
+  } = {}): void {
+    const receiptCommand = input.command ?? command();
+    const receiptResult = input.result ?? result();
+    database.raw.prepare(`
+      INSERT INTO source_intake_receipts (
+        source_event_id, person_id, prospect_id,
+        command_json, result_json, created_at
+      ) VALUES ('source', 'person', 'prospect', ?, ?, ?)
+    `).run(
+      input.commandJson ?? canonicalJson({ formatVersion: 1, command: receiptCommand }),
+      input.resultJson ?? canonicalJson({ formatVersion: 1, result: receiptResult }),
+      NOW,
+    );
   }
 
   function command(): CanonicalIntakeCommand {
@@ -107,6 +141,8 @@ describe('IntakeReceiptRepository', () => {
 
     expect(receipt).toEqual({
       sourceEventId: 'source',
+      personId: 'person',
+      prospectId: 'prospect',
       command: command(),
       commandJson: serializeCanonicalIntakeCommand(command()),
       result: result(),
@@ -115,8 +151,15 @@ describe('IntakeReceiptRepository', () => {
     expect(repository.getBySourceEventId('source')).toEqual(receipt);
     expect(JSON.parse(receipt.commandJson)).toMatchObject({ formatVersion: 1 });
     const stored = database.raw.prepare(`
-      SELECT command_json, result_json FROM source_intake_receipts
-    `).get() as { command_json: string; result_json: string };
+      SELECT person_id, prospect_id, command_json, result_json
+      FROM source_intake_receipts
+    `).get() as {
+      person_id: string;
+      prospect_id: string;
+      command_json: string;
+      result_json: string;
+    };
+    expect(stored).toMatchObject({ person_id: 'person', prospect_id: 'prospect' });
     expect(JSON.parse(stored.command_json)).toMatchObject({ formatVersion: 1 });
     expect(JSON.parse(stored.result_json)).toEqual({ formatVersion: 1, result: result() });
   });
@@ -180,19 +223,127 @@ describe('IntakeReceiptRepository', () => {
     }))).toThrow();
   });
 
+  type ReceiptChange = {
+    command?: CanonicalIntakeCommand;
+    result?: StoredIntakeResult;
+    before?: () => unknown;
+  };
+  const appendIntegrityCases: Array<[string, ReceiptChange]> = [
+    ['result person', { result: { ...result(), personId: 'ghost-person' } }],
+    ['result prospect', { result: { ...result(), prospectId: 'ghost-prospect' } }],
+    ['source payload', {
+      command: { ...command(), source: { ...command().source, channel: 'registry' as const } },
+    }],
+    ['ghost context', { result: { ...result(), organizationIds: ['ghost-organization'] } }],
+    ['duplicate context IDs', { result: { ...result(), propertyIds: ['property', 'property'] } }],
+    ['unstable context order', { result: { ...result(), organizationIds: ['z', 'a'] } }],
+  ];
+  it.each(appendIntegrityCases)(
+    'rejects inconsistent %s before appending a receipt',
+    (_label, changed) => {
+    expect(() => unitOfWork.immediate(() => repository.append({
+      sourceEventId: 'source',
+      command: changed.command ?? command(),
+      result: changed.result ?? result(),
+    }))).toThrow(expect.objectContaining({ name: 'IntakeReceiptIntegrityError' }));
+    expect(database.raw.prepare(`
+      SELECT count(*) AS count FROM source_intake_receipts
+    `).get()).toEqual({ count: 0 });
+    },
+  );
+
+  const readIntegrityCases: Array<[string, ReceiptChange]> = [
+    ['JSON person ownership', { result: { ...result(), personId: 'ghost-person' } }],
+    ['JSON prospect ownership', { result: { ...result(), prospectId: 'ghost-prospect' } }],
+    ['source payload', {
+      command: { ...command(), source: { ...command().source, observedAt: NOW } },
+    }],
+    ['ghost organization context', {
+      result: { ...result(), organizationIds: ['ghost-organization'] },
+    }],
+    ['unlinked organization context', {
+      result: { ...result(), organizationIds: ['unlinked-organization'] },
+      before: () => database.raw.prepare(`
+        INSERT INTO organizations (id, canonical_name, created_at, updated_at)
+        VALUES ('unlinked-organization', 'Unlinked', ?, ?)
+      `).run(NOW, NOW),
+    }],
+    ['ghost property context', {
+      result: { ...result(), propertyIds: ['ghost-property'] },
+    }],
+    ['unlinked property context', {
+      result: { ...result(), propertyIds: ['unlinked-property'] },
+      before: () => database.raw.prepare(`
+        INSERT INTO properties (
+          id, address_line_1, locality, region, country_code, created_at, updated_at
+        ) VALUES ('unlinked-property', '20 hope st', 'providence', 'ri', 'US', ?, ?)
+      `).run(NOW, NOW),
+    }],
+    ['duplicate context IDs', {
+      result: { ...result(), propertyIds: ['property', 'property'] },
+    }],
+  ];
+  it.each(readIntegrityCases)('fails closed reading inconsistent %s', (_label, changed) => {
+    changed.before?.();
+    insertRawReceipt({
+      command: changed.command ?? command(),
+      result: changed.result ?? result(),
+    });
+
+    expect(() => repository.getBySourceEventId('source')).toThrow(expect.objectContaining({
+      name: 'IntakeReceiptIntegrityError',
+    }));
+  });
+
+  it('fails closed when receipt identity review disagrees with the Prospect', () => {
+    database.raw.prepare(`
+      UPDATE prospects
+      SET qualification_state = 'merge_review', qualification_reason = 'shared_handle'
+      WHERE id = 'prospect'
+    `).run();
+    insertRawReceipt();
+
+    expect(() => repository.getBySourceEventId('source')).toThrow(expect.objectContaining({
+      name: 'IntakeReceiptIntegrityError', reason: 'identity_review_mismatch',
+    }));
+  });
+
+  it.each(['command', 'result'] as const)(
+    'rejects semantically valid but noncanonical %s envelope bytes',
+    (envelope) => {
+      const commandEnvelope = { formatVersion: 1, command: command() };
+      const resultEnvelope = { formatVersion: 1, result: result() };
+      insertRawReceipt({
+        commandJson: envelope === 'command'
+          ? JSON.stringify(commandEnvelope, null, 2)
+          : canonicalJson(commandEnvelope),
+        resultJson: envelope === 'result'
+          ? JSON.stringify({ result: result(), formatVersion: 1 })
+          : canonicalJson(resultEnvelope),
+      });
+
+      expect(() => repository.getBySourceEventId('source')).toThrow(expect.objectContaining({
+        name: 'IntakeReceiptIntegrityError',
+        reason: envelope === 'command'
+          ? 'noncanonical_command_json'
+          : 'noncanonical_result_json',
+      }));
+    },
+  );
+
   it.each([
     ['command_json', '{"formatVersion":2,"command":{}}'],
     ['command_json', '{not json'],
     ['result_json', '{"formatVersion":2,"result":{}}'],
     ['result_json', '{not json'],
   ] as const)('fails closed on malformed or unknown-version stored %s', (column, value) => {
-    const validCommand = serializeCanonicalIntakeCommand(command()).replaceAll("'", "''");
-    const validResult = JSON.stringify({ formatVersion: 1, result: result() }).replaceAll("'", "''");
+    const validCommand = canonicalJson({ formatVersion: 1, command: command() }).replaceAll("'", "''");
+    const validResult = canonicalJson({ formatVersion: 1, result: result() }).replaceAll("'", "''");
     database.raw.exec(`
       INSERT INTO source_intake_receipts (
-        source_event_id, command_json, result_json, created_at
+        source_event_id, person_id, prospect_id, command_json, result_json, created_at
       ) VALUES (
-        'source',
+        'source', 'person', 'prospect',
         '${column === 'command_json' ? value : validCommand}',
         '${column === 'result_json' ? value : validResult}',
         '${NOW}'
@@ -202,3 +353,18 @@ describe('IntakeReceiptRepository', () => {
     expect(() => repository.getBySourceEventId('source')).toThrow(z.ZodError);
   });
 });
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return JSON.stringify(value.map(canonicalObject));
+  return JSON.stringify(canonicalObject(value));
+}
+
+function canonicalObject(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalObject);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .map(([key, child]) => [key, canonicalObject(child)]));
+  }
+  return value;
+}

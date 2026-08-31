@@ -224,6 +224,15 @@ describe('database migrations', () => {
             if (receipt.rows[0]?.name !== 'source_intake_receipts') {
               throw new Error('Receipt table missing before late failure.');
             }
+            const receiptColumns = await sql<{ name: string }>`
+              PRAGMA table_info(source_intake_receipts)
+            `.execute(kysely);
+            if (
+              !receiptColumns.rows.some(({ name }) => name === 'person_id')
+              || !receiptColumns.rows.some(({ name }) => name === 'prospect_id')
+            ) {
+              throw new Error('Receipt ownership missing before late failure.');
+            }
             throw new Error('Synthetic failure after receipt creation.');
           },
         },

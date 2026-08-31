@@ -10,6 +10,7 @@ import {
   insertClosedCycle,
   insertOpenCycleWithAction,
   insertPerson,
+  insertProspect,
   insertSourceEvent,
   seedProspect,
 } from '../fixtures/domainRows';
@@ -107,6 +108,7 @@ const requiredTriggers = [
   'protect_prospect_original_source',
   'protect_reactivation_rule_delete',
   'protect_reactivation_rule_update',
+  'protect_source_intake_receipt_prospect',
   'protect_trigger_event_ownership',
   'synchronize_person_opt_out',
 ] as const;
@@ -177,6 +179,13 @@ function runDatabaseScenario(
         'PRAGMA table_info(workspace_settings)',
       ).all().map(({ name }) => name);
       assert.equal(workspaceColumns.includes('active_prioritization_rule_version_id'), true);
+      const receiptColumns = raw.prepare<[], { name: string }>(
+        'PRAGMA table_info(source_intake_receipts)',
+      ).all().map(({ name }) => name);
+      assert.deepEqual(receiptColumns, [
+        'source_event_id', 'person_id', 'prospect_id',
+        'command_json', 'result_json', 'created_at',
+      ]);
       const actualTriggers = raw.prepare<[], { name: string }>(`
         SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name
       `).all().map(({ name }) => name);
@@ -968,7 +977,7 @@ function runDatabaseScenario(
     }
     case 'immutable-source-intake-receipt': {
       const prospect = seedProspect(raw, 'immutable-intake-receipt');
-      insertSourceIntakeReceipt(raw, prospect.sourceEventId, 'original-command');
+      insertSourceIntakeReceipt(raw, prospect, 'original-command');
       assert.throws(() => raw.prepare(`
         UPDATE source_intake_receipts SET command_json = '{"changed":true}'
         WHERE source_event_id = ?
@@ -980,12 +989,15 @@ function runDatabaseScenario(
     }
     case 'replace-immutable-source-intake-receipt': {
       const prospect = seedProspect(raw, 'replace-intake-receipt');
-      insertSourceIntakeReceipt(raw, prospect.sourceEventId, 'original-command');
+      insertSourceIntakeReceipt(raw, prospect, 'original-command');
       assert.throws(() => raw.prepare(`
         INSERT OR REPLACE INTO source_intake_receipts (
-          source_event_id, command_json, result_json, created_at
-        ) VALUES (?, '{"replacement":true}', '{"replacement":true}', ?)
-      `).run(prospect.sourceEventId, DOMAIN_TIMESTAMP));
+          source_event_id, person_id, prospect_id,
+          command_json, result_json, created_at
+        ) VALUES (?, ?, ?, '{"replacement":true}', '{"replacement":true}', ?)
+      `).run(
+        prospect.sourceEventId, prospect.personId, prospect.prospectId, DOMAIN_TIMESTAMP,
+      ));
       assert.deepEqual(raw.prepare(`
         SELECT command_json FROM source_intake_receipts WHERE source_event_id = ?
       `).get(prospect.sourceEventId), {
@@ -993,6 +1005,81 @@ function runDatabaseScenario(
           formatVersion: 1,
           command: { marker: 'original-command' },
         }),
+      });
+      return;
+    }
+    case 'source-intake-receipt-ownership': {
+      const prospect = seedProspect(raw, 'intake-receipt-owner');
+      assertDeferredConstraint(raw, () => {
+        raw.prepare(`
+          INSERT INTO source_intake_receipts (
+            source_event_id, person_id, prospect_id,
+            command_json, result_json, created_at
+          ) VALUES (?, 'ghost-person', ?, '{}', '{}', ?)
+        `).run(prospect.sourceEventId, prospect.prospectId, DOMAIN_TIMESTAMP);
+      });
+      assertDeferredConstraint(raw, () => {
+        raw.prepare(`
+          INSERT INTO source_intake_receipts (
+            source_event_id, person_id, prospect_id,
+            command_json, result_json, created_at
+          ) VALUES (?, ?, 'ghost-prospect', '{}', '{}', ?)
+        `).run(prospect.sourceEventId, prospect.personId, DOMAIN_TIMESTAMP);
+      });
+      return;
+    }
+    case 'source-intake-receipt-source-prospect': {
+      const prospect = seedProspect(raw, 'intake-source-prospect');
+      raw.prepare(`
+        INSERT INTO source_events (
+          id, person_id, prospect_id, channel, observed_at, source_record_json, created_at
+        ) VALUES ('attached-source', ?, ?, 'custom', ?, '{}', ?)
+      `).run(
+        prospect.personId, prospect.prospectId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+      );
+      assert.throws(() => raw.prepare(`
+        INSERT INTO source_intake_receipts (
+          source_event_id, person_id, prospect_id,
+          command_json, result_json, created_at
+        ) VALUES ('attached-source', ?, 'ghost-prospect', '{}', '{}', ?)
+      `).run(prospect.personId, DOMAIN_TIMESTAMP));
+      return;
+    }
+    case 'deferred-source-intake-receipt': {
+      insertPerson(raw, 'deferred-intake-person');
+      insertSourceEvent({
+        database: raw,
+        id: 'deferred-intake-source',
+        personId: 'deferred-intake-person',
+      });
+      raw.exec('BEGIN IMMEDIATE');
+      try {
+        raw.prepare(`
+          INSERT INTO source_intake_receipts (
+            source_event_id, person_id, prospect_id,
+            command_json, result_json, created_at
+          ) VALUES (
+            'deferred-intake-source', 'deferred-intake-person',
+            'deferred-intake-prospect', '{}', '{}', ?
+          )
+        `).run(DOMAIN_TIMESTAMP);
+        insertProspect({
+          database: raw,
+          id: 'deferred-intake-prospect',
+          personId: 'deferred-intake-person',
+          sourceEventId: 'deferred-intake-source',
+        });
+        raw.exec('COMMIT');
+      } catch (error) {
+        if (raw.inTransaction) raw.exec('ROLLBACK');
+        throw error;
+      }
+      assert.deepEqual(raw.prepare(`
+        SELECT person_id, prospect_id FROM source_intake_receipts
+        WHERE source_event_id = 'deferred-intake-source'
+      `).get(), {
+        person_id: 'deferred-intake-person',
+        prospect_id: 'deferred-intake-prospect',
       });
       return;
     }
@@ -1573,15 +1660,17 @@ function insertOptOutTombstone(
 
 function insertSourceIntakeReceipt(
   database: AppDatabase['raw'],
-  sourceEventId: string,
+  prospect: { sourceEventId: string; personId: string; prospectId: string },
   marker: string,
 ): void {
   database.prepare(`
     INSERT INTO source_intake_receipts (
-      source_event_id, command_json, result_json, created_at
-    ) VALUES (?, ?, ?, ?)
+      source_event_id, person_id, prospect_id, command_json, result_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?)
   `).run(
-    sourceEventId,
+    prospect.sourceEventId,
+    prospect.personId,
+    prospect.prospectId,
     JSON.stringify({ formatVersion: 1, command: { marker } }),
     JSON.stringify({ formatVersion: 1, result: { marker } }),
     DOMAIN_TIMESTAMP,

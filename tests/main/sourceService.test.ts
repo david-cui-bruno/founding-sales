@@ -12,6 +12,7 @@ import { IdentityRepository } from '../../src/main/domain/identity/identityRepos
 import {
   IntakeReceiptRepository,
   serializeCanonicalIntakeCommand,
+  serializeCanonicalIntakeResult,
   type CanonicalIntakeCommand,
   type StoredIntakeResult,
 } from '../../src/main/domain/source/intakeReceiptRepository';
@@ -28,6 +29,9 @@ import {
   type IntakeFaultPoint,
 } from '../../src/main/domain/source/sourceService';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
+import {
+  DomainRepositoryDatabaseMismatchError,
+} from '../../src/main/domain/support/domainErrors';
 import {
   createTempDatabase,
   createTestWorkspaceKey,
@@ -210,7 +214,7 @@ describe('SourceService', () => {
   } {
     const readyPath = `${tempDatabase.path}.${sourceId}.receipt-ready`;
     const commandJson = serializeCanonicalIntakeCommand(canonicalRaceCommand(sourceId));
-    const resultJson = JSON.stringify({ formatVersion: 1, result: raceResult(sourceId) });
+    const resultJson = serializeCanonicalIntakeResult(raceResult(sourceId));
     const sourceRecordJson = JSON.stringify({
       formatVersion: 1,
       sourceRecord: { listingId: sourceId },
@@ -229,6 +233,87 @@ describe('SourceService', () => {
     ], { stdio: ['ignore', 'ignore', 'pipe'] });
     return { readyPath, exit: captureChildExit(contender) };
   }
+
+  it('rejects every cross-database repository permutation before ghost replay reads', async () => {
+    const otherTemp = createTempDatabase();
+    const otherKey = createTestWorkspaceKey();
+    const otherDatabase = openDatabase({ path: otherTemp.path, key: otherKey });
+    try {
+      await migrateToLatest(otherDatabase, {
+        backupDirectory: `${otherTemp.path}.backups`, workspaceKey: otherKey,
+      });
+      const otherUnitOfWork = new DomainUnitOfWork(otherDatabase);
+      const otherIds = ['ghost-person', 'ghost-contact', 'ghost-prospect'];
+      const otherIdentities = new IdentityRepository({
+        database: otherDatabase,
+        unitOfWork: otherUnitOfWork,
+        clock: { now: () => NOW },
+        ids: { next: () => otherIds.shift() ?? 'unexpected-id' },
+      });
+      const otherSources = new SourceRepository({
+        database: otherDatabase,
+        unitOfWork: otherUnitOfWork,
+        clock: { now: () => NOW },
+      });
+      const otherReceipts = new IntakeReceiptRepository({
+        database: otherDatabase,
+        unitOfWork: otherUnitOfWork,
+        clock: { now: () => NOW },
+      });
+      const otherService = new SourceService({
+        database: otherDatabase,
+        unitOfWork: otherUnitOfWork,
+        identities: otherIdentities,
+        sources: otherSources,
+        receipts: otherReceipts,
+      });
+      otherService.createPersonProspect(baseCommand('ghost-source'));
+
+      for (const dependencies of [
+        { identities: otherIdentities, sources, receipts },
+        { identities, sources: otherSources, receipts },
+        { identities, sources, receipts: otherReceipts },
+      ]) {
+        expect(() => new SourceService({
+          database,
+          unitOfWork,
+          ...dependencies,
+        })).toThrow(DomainRepositoryDatabaseMismatchError);
+      }
+      expect(counts()).toMatchObject({ persons: 0, source_intake_receipts: 0 });
+    } finally {
+      closeDatabase(otherDatabase);
+      otherTemp.cleanup();
+    }
+  });
+
+  it('rejects repositories bound to a different UnitOfWork on the same database', () => {
+    const otherUnitOfWork = new DomainUnitOfWork(database);
+    const otherIdentities = new IdentityRepository({
+      database,
+      unitOfWork: otherUnitOfWork,
+      clock: { now: () => NOW },
+      ids: { next: () => 'unused' },
+    });
+    const otherSources = new SourceRepository({
+      database, unitOfWork: otherUnitOfWork, clock: { now: () => NOW },
+    });
+    const otherReceipts = new IntakeReceiptRepository({
+      database, unitOfWork: otherUnitOfWork, clock: { now: () => NOW },
+    });
+
+    for (const dependencies of [
+      { identities: otherIdentities, sources, receipts },
+      { identities, sources: otherSources, receipts },
+      { identities, sources, receipts: otherReceipts },
+    ]) {
+      expect(() => new SourceService({
+        database,
+        unitOfWork,
+        ...dependencies,
+      })).toThrow(DomainRepositoryDatabaseMismatchError);
+    }
+  });
 
   it('documents the V1 US phone default and conservative full-lowercase email policy', () => {
     expect(normalizePhone('(401) 555-0100')).toBe('+14015550100');
@@ -575,6 +660,62 @@ describe('SourceService', () => {
       disposition: 'created_merge_review',
       personId: 'review-person',
       identityReviewReason: 'shared_handle',
+    });
+  });
+
+  it('preserves an existing merge-review reason when a later distinct Direct handle matches', () => {
+    insertPersonContact({
+      personId: 'office-person', contactId: 'office-contact', kind: 'phone',
+      value: '+14015550100', reachability: 'indirect',
+    });
+    ids.push('review-person', 'review-phone', 'review-prospect');
+    const first = service.createPersonProspect(baseCommand('review-source'));
+    expect(first).toMatchObject({
+      disposition: 'created_merge_review',
+      personId: 'review-person',
+      prospectId: 'review-prospect',
+      identityReviewReason: 'indirect_handle_match',
+    });
+
+    ids.push('distinct-email');
+    unitOfWork.immediate(() => identities.addContactMethod({
+      personId: first.personId,
+      kind: 'email',
+      normalizedValue: 'kevin.distinct@example.com',
+      rawValue: 'kevin.distinct@example.com',
+      validationState: 'valid',
+      reachability: 'direct',
+      isPrimary: true,
+    }));
+    const second = service.createPersonProspect(baseCommand('matched-review-source', {
+      person: { displayName: 'Kevin via distinct handle' },
+      contacts: [{
+        kind: 'email', value: 'kevin.distinct@example.com', reachability: 'direct',
+        isPrimary: true,
+      }],
+      source: {
+        id: 'matched-review-source', channel: 'community', observedAt: OBSERVED_AT,
+        sourceRecord: { introduction: 'distinct-email' },
+      },
+    }));
+
+    expect(second).toEqual({
+      disposition: 'matched_existing',
+      personId: first.personId,
+      prospectId: first.prospectId,
+      sourceEventId: 'matched-review-source',
+      identityReviewReason: 'indirect_handle_match',
+      contextReviewReasons: [],
+      organizationIds: [],
+      propertyIds: [],
+    });
+    expect(receipts.getBySourceEventId('matched-review-source')?.result).toEqual(second);
+    expect(counts()).toMatchObject({
+      persons: 2,
+      prospects: 1,
+      source_events: 2,
+      source_intake_receipts: 2,
+      sales_cycles: 0,
     });
   });
 
@@ -997,12 +1138,25 @@ describe('SourceService', () => {
       sourceRecord: { listingId: sourceId },
       customSourceReason: null,
     }), NOW);
+    database.raw.prepare(`
+      INSERT INTO prospects (
+        id, person_id, original_source_event_id, segment, qualification_state,
+        version, created_at, updated_at
+      ) VALUES (
+        'corrupt-prospect', 'corrupt-person', ?, 'hot_frbo', 'unreviewed',
+        1, ?, ?
+      )
+    `).run(sourceId, NOW, NOW);
     const validCommand = serializeCanonicalIntakeCommand(canonicalRaceCommand(sourceId));
-    const validResult = JSON.stringify({ formatVersion: 1, result: raceResult(sourceId) });
+    const validResult = serializeCanonicalIntakeResult({
+      ...raceResult(sourceId),
+      personId: 'corrupt-person',
+      prospectId: 'corrupt-prospect',
+    });
     database.raw.prepare(`
       INSERT INTO source_intake_receipts (
-        source_event_id, command_json, result_json, created_at
-      ) VALUES (?, ?, ?, ?)
+        source_event_id, person_id, prospect_id, command_json, result_json, created_at
+      ) VALUES (?, 'corrupt-person', 'corrupt-prospect', ?, ?, ?)
     `).run(
       sourceId,
       column === 'command_json' ? corrupt : validCommand,

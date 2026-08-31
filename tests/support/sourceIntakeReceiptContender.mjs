@@ -60,8 +60,8 @@ try {
   `).run(sourceId, timestamp, timestamp);
   database.prepare(`
     INSERT INTO source_intake_receipts (
-      source_event_id, command_json, result_json, created_at
-    ) VALUES (?, ?, ?, ?)
+      source_event_id, person_id, prospect_id, command_json, result_json, created_at
+    ) VALUES (?, 'contended-person', 'contended-prospect', ?, ?, ?)
   `).run(sourceId, commandJson, resultJson, timestamp);
   database.exec('COMMIT');
 } catch (error) {

@@ -258,6 +258,12 @@ export class IdentityRepository {
     this.ids = input.ids;
   }
 
+  assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork): void {
+    if (this.database.raw !== database.raw || this.unitOfWork !== unitOfWork) {
+      throw new DomainRepositoryDatabaseMismatchError();
+    }
+  }
+
   createPerson(input: CreatePersonInput): Person {
     this.unitOfWork.assertWriteScope();
     const parsed = createPersonInputSchema.parse(input);

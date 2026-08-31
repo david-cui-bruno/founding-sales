@@ -123,9 +123,15 @@ const domainStatements = [
     ON source_events(person_id, observed_at)`,
   `CREATE TABLE source_intake_receipts (
     source_event_id TEXT PRIMARY KEY REFERENCES source_events(id),
+    person_id TEXT NOT NULL,
+    prospect_id TEXT NOT NULL,
     command_json TEXT NOT NULL,
     result_json TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (source_event_id, person_id)
+      REFERENCES source_events(id, person_id) DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY (prospect_id, person_id)
+      REFERENCES prospects(id, person_id) DEFERRABLE INITIALLY DEFERRED
   )`,
   `CREATE TABLE prospects (
     id TEXT PRIMARY KEY,
@@ -833,6 +839,19 @@ const domainStatements = [
     BEFORE DELETE ON reactivation_rules
     BEGIN
       SELECT RAISE(ABORT, 'reactivation rules cannot be deleted');
+    END`,
+  `CREATE TRIGGER protect_source_intake_receipt_prospect
+    BEFORE INSERT ON source_intake_receipts
+    FOR EACH ROW
+    WHEN EXISTS (
+      SELECT 1
+      FROM source_events
+      WHERE id = NEW.source_event_id
+        AND prospect_id IS NOT NULL
+        AND prospect_id <> NEW.prospect_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'source intake receipt prospect must match source event');
     END`,
   ...immutableTriggers('source_events'),
   ...immutableTriggers('source_intake_receipts'),
