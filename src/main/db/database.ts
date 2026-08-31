@@ -31,6 +31,10 @@ export function openDatabase(options: DatabaseOpenOptions): AppDatabase {
   const raw = createRawDatabase(path);
   try {
     applyWorkspaceKey(raw, key.bytes);
+    raw.pragma('recursive_triggers = ON');
+    if (raw.pragma('recursive_triggers', { simple: true }) !== 1) {
+      throw new Error('Failed to enable recursive SQLite triggers.');
+    }
     raw.pragma('foreign_keys = ON');
     raw.pragma('journal_mode = WAL');
     raw.pragma('busy_timeout = 5000');

@@ -27,6 +27,7 @@ describe('database manager', () => {
 
     expect(database.path).toBe(tempDatabase.path);
     expect(database.raw.pragma('foreign_keys', { simple: true })).toBe(1);
+    expect(database.raw.pragma('recursive_triggers', { simple: true })).toBe(1);
     expect(database.raw.pragma('journal_mode', { simple: true })).toBe('wal');
     expect(database.raw.pragma('busy_timeout', { simple: true })).toBe(5000);
     expect(checkFts5(database)).toBe(true);

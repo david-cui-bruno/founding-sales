@@ -528,6 +528,20 @@ function runDatabaseScenario(
       assert.throws(() => insertPriorityOverride(raw, 'override-missing-p0', missing.prospectId, 'p0'));
       assert.throws(() => insertPriorityOverride(raw, 'override-indirect-p0', indirect.prospectId, 'p0'));
       insertPriorityOverride(raw, 'override-direct-p0', direct.prospectId, 'p0');
+      insertPrioritizationEvaluation(raw, {
+        id: 'override-direct-replace-indirect-evaluation',
+        prospectId: direct.prospectId,
+        ruleId: 'override-rule',
+        reachability: 'indirect',
+        priority: 'p1',
+      });
+      assert.throws(() => replacePriorityProjection(raw, {
+        prospectId: direct.prospectId,
+        evaluationId: 'override-direct-replace-indirect-evaluation',
+        ruleId: 'override-rule',
+        reachability: 'indirect',
+        priority: 'p1',
+      }));
       assert.throws(() => raw.prepare(`
         UPDATE priority_overrides SET prospect_id = ? WHERE id = 'override-direct-p0'
       `).run(indirect.prospectId));
@@ -606,10 +620,17 @@ function runDatabaseScenario(
         reachability: 'indirect',
         priority: 'p1',
       });
+      replacePriorityProjection(raw, {
+        prospectId: expired.prospectId,
+        evaluationId: 'override-expired-indirect-evaluation',
+        ruleId: 'override-rule',
+        reachability: 'indirect',
+        priority: 'p1',
+      });
       raw.prepare(`
         UPDATE prospect_priority_projection
-        SET evaluation_id = 'override-expired-indirect-evaluation',
-            reachability = 'indirect'
+        SET evaluation_id = 'override-expired-direct-evaluation',
+            reachability = 'direct'
         WHERE prospect_id = ?
       `).run(expired.prospectId);
       raw.prepare(`
@@ -869,6 +890,25 @@ function runDatabaseScenario(
       );
       return;
     }
+    case 'replace-immutable-source': {
+      const prospect = seedProspect(raw, 'replace-immutable-source');
+      assert.throws(() => raw.prepare(`
+        INSERT OR REPLACE INTO source_events (
+          id, person_id, channel, observed_at, source_record_json, created_at
+        ) VALUES (?, ?, 'frbo', '2026-09-01T12:00:00.000Z', '{}', ?)
+      `).run(
+        prospect.sourceEventId,
+        prospect.personId,
+        DOMAIN_TIMESTAMP,
+      ));
+      assert.deepEqual(
+        raw.prepare<[string], { channel: string; observed_at: string }>(`
+          SELECT channel, observed_at FROM source_events WHERE id = ?
+        `).get(prospect.sourceEventId),
+        { channel: 'custom', observed_at: DOMAIN_TIMESTAMP },
+      );
+      return;
+    }
     case 'immutable-activity': {
       const prospect = seedProspect(raw, 'immutable-activity');
       insertRawActivity(raw, 'immutable-activity-row', prospect.personId, null, null);
@@ -896,6 +936,34 @@ function runDatabaseScenario(
         'trigger_events',
         'immutable-trigger-row',
         "trigger_type = 'live_vacancy'",
+      );
+      return;
+    }
+    case 'replace-immutable-unique-trigger': {
+      const prospect = seedProspect(raw, 'replace-immutable-unique-trigger');
+      insertTriggerEvent(raw, {
+        id: 'replace-trigger-original',
+        prospectId: prospect.prospectId,
+        sourceEventId: prospect.sourceEventId,
+      });
+      assert.throws(() => raw.prepare(`
+        INSERT OR REPLACE INTO trigger_events (
+          id, prospect_id, source_event_id, trigger_type, effective_at,
+          strength_multiplier, verification_state, evidence_json, created_at
+        ) VALUES ('replace-trigger-new-id', ?, ?, 'live_vacancy', ?, 1.0,
+                  'verified', '{}', ?)
+      `).run(
+        prospect.prospectId,
+        prospect.sourceEventId,
+        DOMAIN_TIMESTAMP,
+        DOMAIN_TIMESTAMP,
+      ));
+      assert.deepEqual(
+        raw.prepare<[], { id: string; trigger_type: string }>(`
+          SELECT id, trigger_type FROM trigger_events
+          WHERE source_event_id = '${prospect.sourceEventId}'
+        `).get(),
+        { id: 'replace-trigger-original', trigger_type: 'direct_referral' },
       );
       return;
     }
@@ -1325,6 +1393,34 @@ function insertPriorityProjection(
 ): void {
   database.prepare(`
     INSERT INTO prospect_priority_projection (
+      prospect_id, rule_version_id, evaluation_id, fit_points, fit_band,
+      timing_millipoints, timing_band, reachability, data_confidence,
+      priority, earliest_trigger_expires_at, verify_first, version,
+      evaluated_at, updated_at
+    ) VALUES (?, ?, ?, 25, 'high', 30000, 'hot', ?, 8, ?, NULL, 0, 1, ?, ?)
+  `).run(
+    input.prospectId,
+    input.ruleId,
+    input.evaluationId,
+    input.reachability,
+    input.priority,
+    DOMAIN_TIMESTAMP,
+    DOMAIN_TIMESTAMP,
+  );
+}
+
+function replacePriorityProjection(
+  database: AppDatabase['raw'],
+  input: {
+    prospectId: string;
+    evaluationId: string;
+    ruleId: string;
+    reachability: 'direct' | 'indirect';
+    priority: 'p0' | 'p1' | 'p2';
+  },
+): void {
+  database.prepare(`
+    INSERT OR REPLACE INTO prospect_priority_projection (
       prospect_id, rule_version_id, evaluation_id, fit_points, fit_band,
       timing_millipoints, timing_band, reachability, data_confidence,
       priority, earliest_trigger_expires_at, verify_first, version,
