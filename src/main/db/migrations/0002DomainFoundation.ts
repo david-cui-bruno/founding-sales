@@ -232,7 +232,10 @@ const domainStatements = [
       (stage = 'lost_nurture' AND close_reason IS NOT NULL)
       OR (stage <> 'lost_nurture' AND close_reason IS NULL AND close_notes IS NULL)
     ),
-    CHECK (close_reason <> 'other' OR length(trim(close_notes)) > 0),
+    CHECK (
+      close_reason <> 'other'
+      OR (close_notes IS NOT NULL AND length(trim(close_notes)) > 0)
+    ),
     UNIQUE (id, person_id),
     FOREIGN KEY (prospect_id, person_id) REFERENCES prospects(id, person_id),
     FOREIGN KEY (entry_source_event_id, person_id) REFERENCES source_events(id, person_id),
@@ -256,12 +259,14 @@ const domainStatements = [
     cadence_enrollment_id TEXT REFERENCES cadence_enrollments(id),
     cadence_step_id TEXT REFERENCES cadence_steps(id),
     cadence_component_id TEXT REFERENCES cadence_action_components(id),
-    completion_activity_id TEXT REFERENCES activities(id),
+    completion_activity_id TEXT,
     created_at TEXT NOT NULL,
     completed_at TEXT,
     UNIQUE (id, sales_cycle_id),
     FOREIGN KEY (sales_cycle_id)
       REFERENCES sales_cycles(id) DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY (completion_activity_id, sales_cycle_id)
+      REFERENCES activities(id, sales_cycle_id),
     CHECK (
       (status = 'pending' AND completed_at IS NULL AND completion_activity_id IS NULL)
       OR (status <> 'pending' AND completed_at IS NOT NULL)
@@ -290,7 +295,7 @@ const domainStatements = [
   `CREATE TABLE consent_policy_records (
     id TEXT PRIMARY KEY,
     person_id TEXT NOT NULL REFERENCES persons(id),
-    activity_id TEXT REFERENCES activities(id),
+    activity_id TEXT,
     policy_kind TEXT NOT NULL CHECK (
       policy_kind IN ('recording','cloud_processing','outbound')
     ),
@@ -300,13 +305,15 @@ const domainStatements = [
       decision IN ('granted','denied','not_required','unknown')
     ),
     evidence_json TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    UNIQUE (id, person_id),
+    FOREIGN KEY (activity_id, person_id) REFERENCES activities(id, person_id)
   )`,
   `CREATE TABLE activities (
     id TEXT PRIMARY KEY,
     person_id TEXT NOT NULL REFERENCES persons(id),
-    prospect_id TEXT REFERENCES prospects(id),
-    sales_cycle_id TEXT REFERENCES sales_cycles(id),
+    prospect_id TEXT,
+    sales_cycle_id TEXT,
     cadence_step_id TEXT REFERENCES cadence_steps(id),
     kind TEXT NOT NULL,
     direction TEXT NOT NULL CHECK (direction IN ('inbound','outbound','internal')),
@@ -317,11 +324,17 @@ const domainStatements = [
     adapter TEXT,
     provider_idempotency_key TEXT,
     provider_reference TEXT,
-    consent_policy_record_id TEXT REFERENCES consent_policy_records(id),
+    consent_policy_record_id TEXT,
     recording_storage_ref TEXT,
     transcript_storage_ref TEXT,
     metadata_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    UNIQUE (id, person_id),
+    UNIQUE (id, sales_cycle_id),
+    FOREIGN KEY (prospect_id, person_id) REFERENCES prospects(id, person_id),
+    FOREIGN KEY (sales_cycle_id, person_id) REFERENCES sales_cycles(id, person_id),
+    FOREIGN KEY (consent_policy_record_id, person_id)
+      REFERENCES consent_policy_records(id, person_id),
     CHECK (provider_idempotency_key IS NULL OR adapter IS NOT NULL),
     CHECK (
       (recording_storage_ref IS NULL AND transcript_storage_ref IS NULL)
@@ -368,16 +381,15 @@ const domainStatements = [
     id TEXT PRIMARY KEY,
     sales_cycle_id TEXT NOT NULL REFERENCES sales_cycles(id),
     rule_type TEXT NOT NULL CHECK (rule_type IN (
-      'seasonal_heating_oct1','new_frbo_listing','lead_cert_expiry_window',
-      'manual','inbound_response','never','custom'
+      'seasonal:heating-oct1','new-frbo-listing',
+      'lead-cert-expiry-window','manual'
     )),
     due_at TEXT,
     matcher_json TEXT,
     version INTEGER NOT NULL CHECK (version > 0),
     consumed_at TEXT,
     created_at TEXT NOT NULL,
-    CHECK (rule_type <> 'manual' OR due_at IS NOT NULL),
-    CHECK (rule_type <> 'never' OR (due_at IS NULL AND matcher_json IS NULL))
+    CHECK (rule_type <> 'manual' OR due_at IS NOT NULL)
   )`,
   `CREATE TABLE won_terms (
     sales_cycle_id TEXT PRIMARY KEY REFERENCES sales_cycles(id),
@@ -441,12 +453,8 @@ const domainStatements = [
     version INTEGER NOT NULL CHECK (version > 0),
     content_hash TEXT NOT NULL UNIQUE,
     rules_json TEXT NOT NULL,
-    active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
     created_at TEXT NOT NULL
   )`,
-  `CREATE UNIQUE INDEX one_active_prioritization_rule
-    ON prioritization_rule_versions(active)
-    WHERE active = 1`,
   `CREATE TABLE prioritization_evaluations (
     id TEXT PRIMARY KEY,
     prospect_id TEXT NOT NULL REFERENCES prospects(id),
@@ -528,10 +536,11 @@ const domainStatements = [
     person_id TEXT NOT NULL UNIQUE REFERENCES persons(id),
     requested_at TEXT NOT NULL,
     observed_channel TEXT NOT NULL,
-    source_activity_id TEXT REFERENCES activities(id),
+    source_activity_id TEXT,
     evidence_ref TEXT,
     policy_version TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (source_activity_id, person_id) REFERENCES activities(id, person_id)
   )`,
   `CREATE TABLE opt_out_handles (
     id TEXT PRIMARY KEY,
@@ -550,6 +559,8 @@ const domainStatements = [
     daily_conversation_target INTEGER NOT NULL CHECK (daily_conversation_target >= 0),
     exploration_slots INTEGER NOT NULL CHECK (exploration_slots >= 0),
     resurface_suppression_days INTEGER NOT NULL CHECK (resurface_suppression_days >= 0),
+    active_prioritization_rule_version_id TEXT
+      REFERENCES prioritization_rule_versions(id),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
@@ -606,6 +617,18 @@ const domainStatements = [
     BEGIN
       SELECT RAISE(ABORT, 'current next action must be inserted pending');
     END`,
+  `CREATE TRIGGER protect_prospect_original_source
+    BEFORE UPDATE OF original_source_event_id ON prospects
+    WHEN NEW.original_source_event_id IS NOT OLD.original_source_event_id
+    BEGIN
+      SELECT RAISE(ABORT, 'original acquisition source is immutable');
+    END`,
+  `CREATE TRIGGER protect_cycle_entry_source
+    BEFORE UPDATE OF entry_source_event_id ON sales_cycles
+    WHEN NEW.entry_source_event_id IS NOT OLD.entry_source_event_id
+    BEGIN
+      SELECT RAISE(ABORT, 'sales-cycle entry source is immutable');
+    END`,
   `CREATE TRIGGER protect_design_partner_fitness
     BEFORE INSERT ON sales_cycles
     WHEN NEW.design_partner_fitness IS NOT NULL
@@ -637,22 +660,160 @@ const domainStatements = [
         SELECT 1
         FROM sales_cycles AS cycle
         JOIN persons AS person ON person.id = cycle.person_id
-        WHERE cycle.id = NEW.sales_cycle_id AND person.opted_out = 1
+        WHERE cycle.id = NEW.sales_cycle_id
+          AND (
+            person.opted_out = 1
+            OR EXISTS (
+              SELECT 1 FROM opt_out_tombstones AS tombstone
+              WHERE tombstone.person_id = cycle.person_id
+            )
+          )
       )
     BEGIN
       SELECT RAISE(ABORT, 'opted-out person cannot enter an active cadence');
     END`,
   `CREATE TRIGGER protect_opted_out_active_cadence_update
-    BEFORE UPDATE OF status ON cadence_enrollments
+    BEFORE UPDATE OF status, sales_cycle_id ON cadence_enrollments
     WHEN NEW.status = 'active'
       AND EXISTS (
         SELECT 1
         FROM sales_cycles AS cycle
         JOIN persons AS person ON person.id = cycle.person_id
-        WHERE cycle.id = NEW.sales_cycle_id AND person.opted_out = 1
+        WHERE cycle.id = NEW.sales_cycle_id
+          AND (
+            person.opted_out = 1
+            OR EXISTS (
+              SELECT 1 FROM opt_out_tombstones AS tombstone
+              WHERE tombstone.person_id = cycle.person_id
+            )
+          )
       )
     BEGIN
       SELECT RAISE(ABORT, 'opted-out person cannot enter an active cadence');
+    END`,
+  `CREATE TRIGGER protect_trigger_event_ownership
+    BEFORE INSERT ON trigger_events
+    WHEN NOT EXISTS (
+      SELECT 1
+      FROM prospects AS prospect
+      JOIN source_events AS source ON source.id = NEW.source_event_id
+      WHERE prospect.id = NEW.prospect_id
+        AND prospect.person_id = source.person_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'trigger evidence must belong to the prospect person');
+    END`,
+  `CREATE TRIGGER protect_priority_projection_fidelity
+    BEFORE INSERT ON prospect_priority_projection
+    WHEN NOT EXISTS (
+      SELECT 1
+      FROM prioritization_evaluations AS evaluation
+      WHERE evaluation.id = NEW.evaluation_id
+        AND evaluation.prospect_id = NEW.prospect_id
+        AND evaluation.rule_version_id = NEW.rule_version_id
+        AND evaluation.fit_points = NEW.fit_points
+        AND evaluation.fit_band = NEW.fit_band
+        AND evaluation.timing_millipoints = NEW.timing_millipoints
+        AND evaluation.timing_band = NEW.timing_band
+        AND evaluation.reachability = NEW.reachability
+        AND evaluation.data_confidence = NEW.data_confidence
+        AND evaluation.priority = NEW.priority
+        AND evaluation.earliest_trigger_expires_at IS NEW.earliest_trigger_expires_at
+        AND evaluation.verify_first = NEW.verify_first
+        AND evaluation.evaluated_at = NEW.evaluated_at
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'priority projection must faithfully copy its evaluation');
+    END`,
+  `CREATE TRIGGER protect_priority_projection_fidelity_update
+    BEFORE UPDATE ON prospect_priority_projection
+    WHEN NOT EXISTS (
+      SELECT 1
+      FROM prioritization_evaluations AS evaluation
+      WHERE evaluation.id = NEW.evaluation_id
+        AND evaluation.prospect_id = NEW.prospect_id
+        AND evaluation.rule_version_id = NEW.rule_version_id
+        AND evaluation.fit_points = NEW.fit_points
+        AND evaluation.fit_band = NEW.fit_band
+        AND evaluation.timing_millipoints = NEW.timing_millipoints
+        AND evaluation.timing_band = NEW.timing_band
+        AND evaluation.reachability = NEW.reachability
+        AND evaluation.data_confidence = NEW.data_confidence
+        AND evaluation.priority = NEW.priority
+        AND evaluation.earliest_trigger_expires_at IS NEW.earliest_trigger_expires_at
+        AND evaluation.verify_first = NEW.verify_first
+        AND evaluation.evaluated_at = NEW.evaluated_at
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'priority projection must faithfully copy its evaluation');
+    END`,
+  `CREATE TRIGGER protect_p0_priority_override
+    BEFORE INSERT ON priority_overrides
+    WHEN NEW.override_kind = 'priority' AND NEW.priority = 'p0'
+      AND NOT EXISTS (
+        SELECT 1 FROM prospect_priority_projection AS projection
+        WHERE projection.prospect_id = NEW.prospect_id
+          AND projection.reachability = 'direct'
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'P0 override requires a Direct current projection');
+    END`,
+  `CREATE TRIGGER protect_p0_priority_override_update
+    BEFORE UPDATE OF prospect_id, override_kind, priority ON priority_overrides
+    WHEN NEW.override_kind = 'priority' AND NEW.priority = 'p0'
+      AND NOT EXISTS (
+        SELECT 1 FROM prospect_priority_projection AS projection
+        WHERE projection.prospect_id = NEW.prospect_id
+          AND projection.reachability = 'direct'
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'P0 override requires a Direct current projection');
+    END`,
+  `CREATE TRIGGER protect_projection_p0_override_update
+    BEFORE UPDATE ON prospect_priority_projection
+    WHEN NEW.reachability <> 'direct'
+      AND EXISTS (
+        SELECT 1 FROM priority_overrides AS priority_override
+        WHERE priority_override.prospect_id = OLD.prospect_id
+          AND priority_override.override_kind = 'priority'
+          AND priority_override.priority = 'p0'
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'P0 override requires a Direct current projection');
+    END`,
+  `CREATE TRIGGER protect_projection_p0_override_delete
+    BEFORE DELETE ON prospect_priority_projection
+    WHEN EXISTS (
+      SELECT 1 FROM priority_overrides AS priority_override
+      WHERE priority_override.prospect_id = OLD.prospect_id
+        AND priority_override.override_kind = 'priority'
+        AND priority_override.priority = 'p0'
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'P0 override requires a current projection');
+    END`,
+  `CREATE TRIGGER protect_reactivation_rule_update
+    BEFORE UPDATE ON reactivation_rules
+    WHEN NOT (
+      NEW.id IS OLD.id
+      AND NEW.sales_cycle_id IS OLD.sales_cycle_id
+      AND NEW.rule_type IS OLD.rule_type
+      AND NEW.due_at IS OLD.due_at
+      AND NEW.matcher_json IS OLD.matcher_json
+      AND NEW.version IS OLD.version
+      AND NEW.created_at IS OLD.created_at
+      AND (
+        (OLD.consumed_at IS NULL AND NEW.consumed_at IS NOT NULL)
+        OR NEW.consumed_at IS OLD.consumed_at
+      )
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'reactivation definition and consumption are immutable');
+    END`,
+  `CREATE TRIGGER protect_reactivation_rule_delete
+    BEFORE DELETE ON reactivation_rules
+    BEGIN
+      SELECT RAISE(ABORT, 'reactivation rules cannot be deleted');
     END`,
   ...immutableTriggers('source_events'),
   ...immutableTriggers('activities'),
@@ -665,6 +826,44 @@ const domainStatements = [
   ...immutableTriggers('cadence_steps'),
   ...immutableTriggers('cadence_action_components'),
   ...immutableTriggers('prioritization_rule_versions'),
+  `CREATE TRIGGER protect_opt_out_tombstone_active_cadence
+    BEFORE INSERT ON opt_out_tombstones
+    WHEN EXISTS (
+      SELECT 1
+      FROM sales_cycles AS cycle
+      JOIN cadence_enrollments AS enrollment
+        ON enrollment.sales_cycle_id = cycle.id
+      WHERE cycle.person_id = NEW.person_id
+        AND enrollment.status = 'active'
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'active cadences must stop before permanent opt-out');
+    END`,
+  `CREATE TRIGGER synchronize_person_opt_out
+    AFTER INSERT ON opt_out_tombstones
+    BEGIN
+      UPDATE persons
+      SET opted_out = 1,
+          opted_out_at = NEW.requested_at,
+          version = version + 1,
+          updated_at = NEW.requested_at
+      WHERE id = NEW.person_id;
+    END`,
+  `CREATE TRIGGER protect_person_opt_out_reset
+    BEFORE UPDATE OF opted_out, opted_out_at ON persons
+    WHEN EXISTS (
+      SELECT 1 FROM opt_out_tombstones AS tombstone
+      WHERE tombstone.person_id = OLD.id
+    )
+      AND NOT EXISTS (
+        SELECT 1 FROM opt_out_tombstones AS tombstone
+        WHERE tombstone.person_id = OLD.id
+          AND NEW.opted_out = 1
+          AND NEW.opted_out_at = tombstone.requested_at
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'permanent opt-out cannot be reset or changed');
+    END`,
   `CREATE TRIGGER protect_opt_out_tombstone
     BEFORE DELETE ON opt_out_tombstones
     BEGIN

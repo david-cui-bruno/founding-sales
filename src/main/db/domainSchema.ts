@@ -14,6 +14,11 @@ export type FitBand = 'low' | 'medium' | 'high';
 export type TimingBand = 'cold' | 'warm' | 'hot';
 export type Priority = 'p0' | 'p1' | 'p2' | 'p3';
 export type Reachability = 'direct' | 'indirect' | 'none';
+export type ReactivationRuleType =
+  | 'seasonal:heating-oct1'
+  | 'new-frbo-listing'
+  | 'lead-cert-expiry-window'
+  | 'manual';
 
 export type PersonsTable = {
   id: string;
@@ -258,7 +263,7 @@ export type ConsentPolicyRecordsTable = {
 export type ReactivationRulesTable = {
   id: string;
   sales_cycle_id: string;
-  rule_type: string;
+  rule_type: ReactivationRuleType;
   due_at: string | null;
   matcher_json: string | null;
   version: number;
@@ -307,7 +312,6 @@ export type PrioritizationRuleVersionsTable = {
   version: number;
   content_hash: string;
   rules_json: string;
-  active: StoredBoolean;
   created_at: string;
 };
 
@@ -383,6 +387,7 @@ export type WorkspaceSettingsTable = {
   daily_conversation_target: number;
   exploration_slots: number;
   resurface_suppression_days: number;
+  active_prioritization_rule_version_id: string | null;
   created_at: string;
   updated_at: string;
 };
