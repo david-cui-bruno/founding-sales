@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
 import type { AppDatabase } from '../../db/database';
-import { BUILTIN_CADENCES } from '../cadence/builtinCadences';
 import type { EnrollmentMutation } from '../cadence/cadencePlanner';
 import type { CadenceAggregate } from '../cadence/cadenceTypes';
 import type { CadenceRepository } from '../cadence/cadenceRepository';
@@ -11,6 +10,7 @@ import {
   StaleDomainWriteError,
 } from '../support/domainErrors';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
+import { validateEffectiveCadencePlan } from './cadenceEffectivePlan';
 import { deepFreezeLifecycle, type CadenceEnrollment } from './lifecycleTypes';
 import {
   idSchema,
@@ -19,7 +19,6 @@ import {
   utcTimestampSchema,
 } from './lifecycleValidation';
 
-const warmBuiltin = BUILTIN_CADENCES[2]!;
 const modeSchema = z.enum(['standard', 'inbound_over_cap_response']);
 const statusSchema = z.enum(['active', 'completed', 'stopped']);
 const allowedStepsSchema = z.array(idSchema).min(1);
@@ -99,10 +98,10 @@ export class CadenceEnrollmentRepository {
       createdAt: utcTimestampSchema,
     }).strict().parse(input) as InsertCadenceEnrollmentInput;
     const definition = this.requireDefinition(parsed.definitionId);
-    validateEffectivePlan(
-      definition, parsed.mode, parsed.allowedStepIds,
-      parsed.currentStepId, parsed.scheduledStepCount,
-    );
+    validateEffectiveCadencePlan({
+      definition, mode: parsed.mode, allowedStepIds: parsed.allowedStepIds,
+      currentStepId: parsed.currentStepId, scheduledStepCount: parsed.scheduledStepCount,
+    });
     const allowedJson = parsed.allowedStepIds === null
       ? null
       : serializeCanonical([...parsed.allowedStepIds]);
@@ -144,15 +143,16 @@ export class CadenceEnrollmentRepository {
       throw new LifecycleEvidenceError('A cadence mutation cannot change definition ownership.');
     }
     const definition = this.requireDefinition(parsed.expectedDefinitionId);
-    validateEffectivePlan(
-      definition, parsed.expectedMode, parsed.expectedAllowedStepIds,
-      parsed.expectedCurrentStepId, parsed.expectedScheduledStepCount,
-    );
+    validateEffectiveCadencePlan({
+      definition, mode: parsed.expectedMode, allowedStepIds: parsed.expectedAllowedStepIds,
+      currentStepId: parsed.expectedCurrentStepId,
+      scheduledStepCount: parsed.expectedScheduledStepCount,
+    });
     const nextCount = parsed.expectedScheduledStepCount + parsed.mutation.scheduledStepCountDelta;
-    validateEffectivePlan(
-      definition, parsed.expectedMode, parsed.expectedAllowedStepIds,
-      parsed.mutation.currentStepId, nextCount,
-    );
+    validateEffectiveCadencePlan({
+      definition, mode: parsed.expectedMode, allowedStepIds: parsed.expectedAllowedStepIds,
+      currentStepId: parsed.mutation.currentStepId, scheduledStepCount: nextCount,
+    });
     if (
       (parsed.mutation.status === 'active') !== (parsed.mutation.stopReason === null)
     ) {
@@ -220,10 +220,10 @@ export class CadenceEnrollmentRepository {
       : parseCanonicalJson(row.allowed_step_ids_json, allowedStepsSchema);
     const definition = this.requireDefinition(row.cadence_definition_id);
     if (row.current_step_id !== null) {
-      validateEffectivePlan(
-        definition, row.mode, allowedStepIds,
-        row.current_step_id, row.scheduled_step_count,
-      );
+      validateEffectiveCadencePlan({
+        definition, mode: row.mode, allowedStepIds,
+        currentStepId: row.current_step_id, scheduledStepCount: row.scheduled_step_count,
+      });
     }
     return deepFreezeLifecycle({
       id: row.id, salesCycleId: row.sales_cycle_id,
@@ -233,42 +233,5 @@ export class CadenceEnrollmentRepository {
       allowedStepIds, stopReason: row.stop_reason, version: row.version,
       createdAt: row.created_at, updatedAt: row.updated_at,
     }) as CadenceEnrollment;
-  }
-}
-
-function validateEffectivePlan(
-  definition: CadenceAggregate,
-  mode: 'standard' | 'inbound_over_cap_response',
-  allowedStepIds: readonly string[] | null,
-  currentStepId: string,
-  scheduledStepCount: number,
-): void {
-  const definitionStepIds = definition.steps.map(({ id }) => id);
-  let effective = definitionStepIds;
-  if (allowedStepIds !== null) {
-    if (new Set(allowedStepIds).size !== allowedStepIds.length) {
-      throw new LifecycleEvidenceError('Allowed cadence steps must be unique.');
-    }
-    const positions = allowedStepIds.map((id) => definitionStepIds.indexOf(id));
-    if (positions.some((position) => position < 0)
-      || positions.some((position, index) => index > 0 && position <= positions[index - 1]!)) {
-      throw new LifecycleEvidenceError('Allowed cadence steps must be an ordered definition subsequence.');
-    }
-    effective = [...allowedStepIds];
-  }
-  if (mode === 'inbound_over_cap_response') {
-    if (
-      definition.id !== warmBuiltin.id
-      || definition.contentHash !== warmBuiltin.contentHash
-      || allowedStepIds?.length !== 1
-      || allowedStepIds[0] !== warmBuiltin.steps[0]?.id
-      || scheduledStepCount !== 1
-    ) {
-      throw new LifecycleEvidenceError('Over-cap response mode is restricted to Warm C v1 first step.');
-    }
-  }
-  const position = effective.indexOf(currentStepId);
-  if (position < 0 || scheduledStepCount !== position + 1) {
-    throw new LifecycleEvidenceError('Cadence step count must equal the effective-plan position plus one.');
   }
 }

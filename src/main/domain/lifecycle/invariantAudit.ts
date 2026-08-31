@@ -1,6 +1,7 @@
 import type { AppDatabase } from '../../db/database';
 import type { ZodType } from 'zod';
 import { BUILTIN_CADENCES } from '../cadence/builtinCadences';
+import { readInstalledCadenceAggregate } from '../cadence/cadenceRepository';
 import {
   FOUNDER_CHANNEL_POLICIES_V1, nextStrictFutureOctoberOne,
 } from '../cadence/cadenceScheduler';
@@ -22,6 +23,7 @@ import {
   collectActionSettlementViolations,
   type SettlementValidationAction,
 } from './actionSettlementValidator';
+import { validateEffectiveCadencePlan } from './cadenceEffectivePlan';
 import {
   actionSettlementSchema, inboundSlaSchema, utcTimestampSchema,
 } from './lifecycleValidation';
@@ -184,58 +186,47 @@ export function auditDomainInvariants(input: {
       const key = String(enrollment.sales_cycle_id);
       activeByCycle.set(key, [...(activeByCycle.get(key) ?? []), enrollment]);
     }
-    const definitionSteps = stepRows
-      .filter(({ cadence_definition_id }) => cadence_definition_id === enrollment.cadence_definition_id)
-      .map(({ id }) => String(id));
-    let effective = definitionSteps;
-    let allowedPlanValid = true;
+    let allowedStepIds: readonly string[] | null = null;
+    let allowedPlanParseValid = true;
     if (enrollment.allowed_step_ids_json !== null) {
       try {
         const parsed = JSON.parse(String(enrollment.allowed_step_ids_json));
         if (!Array.isArray(parsed) || parsed.length === 0
           || parsed.some((id) => typeof id !== 'string')
-          || new Set(parsed).size !== parsed.length
           || canonicalJson(parsed) !== enrollment.allowed_step_ids_json) throw new Error();
-        effective = parsed;
-        let previous = -1;
-        for (const stepId of effective) {
-          const position = definitionSteps.indexOf(stepId);
-          if (position <= previous) throw new Error();
-          previous = position;
-        }
+        allowedStepIds = parsed;
       } catch {
         add('enrollment_allowed_plan_invalid', enrollment.id, 'Allowed plan JSON is malformed.');
-        effective = [];
-        allowedPlanValid = false;
+        allowedPlanParseValid = false;
       }
     }
-    const position = effective.indexOf(String(enrollment.current_step_id));
-    if (position < 0 || enrollment.scheduled_step_count !== position + 1
-      || (enrollment.mode === 'inbound_over_cap_response'
-        && (effective.length !== 1 || enrollment.scheduled_step_count !== 1))) {
-      add('enrollment_step_count_invalid', enrollment.id, 'Enrollment count does not match effective-plan position.');
+    if (allowedPlanParseValid) {
+      try {
+        const definition = readInstalledCadenceAggregate(
+          input.database.raw, String(enrollment.cadence_definition_id),
+        );
+        if (definition === null) throw new Error('Cadence definition is missing.');
+        validateEffectiveCadencePlan({
+          definition,
+          mode: enrollment.mode as 'standard' | 'inbound_over_cap_response',
+          allowedStepIds,
+          currentStepId: String(enrollment.current_step_id),
+          scheduledStepCount: Number(enrollment.scheduled_step_count),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Effective cadence plan is invalid.';
+        const kind = enrollment.mode === 'inbound_over_cap_response'
+          ? 'enrollment_over_cap_identity_invalid'
+          : message.includes('step count')
+            ? 'enrollment_step_count_invalid'
+            : 'enrollment_allowed_plan_invalid';
+        add(kind, enrollment.id, message);
+      }
     }
     if (['cadence_a', 'cadence_b', 'cadence_c'].includes(String(enrollment.family))
       && (typeof enrollment.attempt_cap !== 'number'
         || Number(enrollment.scheduled_step_count) > Number(enrollment.attempt_cap))) {
       add('enrollment_attempt_cap_invalid', enrollment.id, 'Enrollment exceeds its prospecting cap.');
-    }
-    if (enrollment.mode === 'inbound_over_cap_response') {
-      const warm = BUILTIN_CADENCES.find(({ id }) => id === 'cadence-c-v1')!;
-      const exactPlan = [warm.steps[0]!.id];
-      if (!allowedPlanValid
-        || enrollment.cadence_definition_id !== warm.id
-        || enrollment.family !== warm.family
-        || enrollment.definition_version !== warm.version
-        || enrollment.content_hash !== warm.contentHash
-        || canonicalJson(effective) !== canonicalJson(exactPlan)
-        || enrollment.current_step_id !== exactPlan[0]
-        || enrollment.scheduled_step_count !== 1) {
-        add(
-          'enrollment_over_cap_identity_invalid', enrollment.id,
-          'Over-cap response must be the exact built-in Warm C v1 first step.',
-        );
-      }
     }
   }
 

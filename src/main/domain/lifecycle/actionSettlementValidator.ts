@@ -1,8 +1,11 @@
+import { z } from 'zod';
+
 import type { AppDatabase } from '../../db/database';
+import { readInstalledCadenceAggregate } from '../cadence/cadenceRepository';
 import type { NextAction } from './lifecycleTypes';
+import { validateEffectiveCadencePlan } from './cadenceEffectivePlan';
 import { qualifiesFounderInterviewed, qualifiesFounderOffered } from './founderConfirmationEvidence';
 import { parseCanonicalJson, serializeCanonical } from './lifecycleValidation';
-import { z } from 'zod';
 
 export type SettlementValidationAction = Pick<NextAction,
   | 'id' | 'salesCycleId' | 'actionType' | 'channel' | 'status'
@@ -13,6 +16,10 @@ const allowedStepIdsSchema = z.array(z.string().trim().min(1)).min(1);
 const NULL_EVIDENCE_OUTCOMES = new Set([
   'resolved', 'reviewed_ready', 'lost_nurture', 'upgraded', 'won_confirmed',
   'onboarding_waived', 'phase_completed',
+]);
+const CADENCE_LIFECYCLE_CONTROL_OUTCOMES = new Set([
+  'opted_out', 'lost_nurture', 'upgraded', 'interviewed_confirmed',
+  'offered_confirmed', 'won_confirmed', 'onboarding_waived', 'phase_completed',
 ]);
 
 type ActivityEvidenceRow = {
@@ -77,6 +84,10 @@ function collectCadenceViolations(
     if (settlement.plannerTransition.attempt !== null) {
       violations.push('Non-cadence settlement cannot carry a scheduled-step attempt.');
     }
+    if (action.actionType === 'resolve_contact_method'
+      || settlement.outcome === 'resolved' || settlement.outcome === 'marked_impossible') {
+      violations.push('Resolver settlements require one installed cadence component branch.');
+    }
     return;
   }
   const enrollment = database.raw.prepare<
@@ -84,11 +95,14 @@ function collectCadenceViolations(
     {
       sales_cycle_id: string;
       cadence_definition_id: string;
+      current_step_id: string;
       scheduled_step_count: number;
+      mode: 'standard' | 'inbound_over_cap_response';
       allowed_step_ids_json: string | null;
     }
   >(`
-    SELECT sales_cycle_id, cadence_definition_id, scheduled_step_count, allowed_step_ids_json
+    SELECT sales_cycle_id, cadence_definition_id, current_step_id,
+      scheduled_step_count, mode, allowed_step_ids_json
     FROM cadence_enrollments WHERE id = ?
   `).get(cadence.cadenceEnrollmentId);
   if (enrollment === undefined
@@ -97,19 +111,31 @@ function collectCadenceViolations(
     violations.push('Cadence enrollment is missing or not owned by the action cycle/definition.');
     return;
   }
-  const definitionSteps = database.raw.prepare<
-    [string], { id: string }
-  >(`
-    SELECT id FROM cadence_steps WHERE cadence_definition_id = ? ORDER BY sequence, id
-  `).all(cadence.cadenceDefinitionId).map(({ id }) => id);
-  let effectiveSteps = definitionSteps;
+  let definition;
+  let allowedStepIds: readonly string[] | null = null;
   if (enrollment.allowed_step_ids_json !== null) {
     try {
-      effectiveSteps = parseCanonicalJson(enrollment.allowed_step_ids_json, allowedStepIdsSchema);
+      allowedStepIds = parseCanonicalJson(
+        enrollment.allowed_step_ids_json,
+        allowedStepIdsSchema,
+      );
     } catch {
       violations.push('Cadence enrollment effective plan is not canonical.');
       return;
     }
+  }
+  let effectiveSteps: readonly string[];
+  try {
+    definition = readInstalledCadenceAggregate(database.raw, cadence.cadenceDefinitionId);
+    if (definition === null) throw new Error('Definition is absent.');
+    effectiveSteps = validateEffectiveCadencePlan({
+      definition, mode: enrollment.mode, allowedStepIds,
+      currentStepId: enrollment.current_step_id,
+      scheduledStepCount: enrollment.scheduled_step_count,
+    });
+  } catch {
+    violations.push('Cadence enrollment effective plan or installed definition is invalid.');
+    return;
   }
   const expectedAttempt = effectiveSteps.indexOf(cadence.cadenceStepId) + 1;
   if (expectedAttempt <= 0
@@ -117,20 +143,32 @@ function collectCadenceViolations(
     || enrollment.scheduled_step_count < expectedAttempt) {
     violations.push('Settlement attempt does not match the effective cadence plan.');
   }
-  const component = database.raw.prepare<
-    [string], { cadence_step_id: string; cadence_definition_id: string; channel: string }
-  >(`
-    SELECT component.cadence_step_id, step.cadence_definition_id, component.channel
-    FROM cadence_action_components AS component
-    JOIN cadence_steps AS step ON step.id = component.cadence_step_id
-    WHERE component.id = ?
-  `).get(cadence.cadenceComponentId);
+  const step = definition.steps.find(({ id }) => id === cadence.cadenceStepId);
+  const component = step?.components.find(({ id }) => id === cadence.cadenceComponentId);
   if (component === undefined
-    || component.cadence_step_id !== cadence.cadenceStepId
-    || component.cadence_definition_id !== cadence.cadenceDefinitionId
     || (action.actionType === 'resolve_contact_method'
-      ? action.channel !== null : component.channel !== action.channel)) {
+      ? action.channel !== null
+      : component.channel !== action.channel || component.actionType !== action.actionType)) {
     violations.push('Settlement component does not match the action owner graph/channel.');
+    return;
+  }
+  if (action.actionType === 'resolve_contact_method') {
+    const unavailable = component.outcomes.channel_unavailable;
+    const operationalOutcomeIsLegal = settlement.outcome === 'resolved'
+      || settlement.outcome === 'marked_impossible'
+      || CADENCE_LIFECYCLE_CONTROL_OUTCOMES.has(settlement.outcome);
+    if (!operationalOutcomeIsLegal || unavailable?.kind !== 'resolve_contact_method'
+      || unavailable.componentId !== component.id) {
+      violations.push('Resolver settlement does not match the component resolver branch.');
+    }
+    return;
+  }
+  const componentOutcomeAllowed = component.allowedOutcomes.some(
+    (outcome) => outcome === settlement.outcome,
+  ) && Object.prototype.hasOwnProperty.call(component.outcomes, settlement.outcome);
+  if (!componentOutcomeAllowed
+    && !CADENCE_LIFECYCLE_CONTROL_OUTCOMES.has(settlement.outcome)) {
+    violations.push('Settlement outcome is not legal for the installed action component.');
   }
 }
 

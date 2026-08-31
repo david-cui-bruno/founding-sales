@@ -198,11 +198,7 @@ export class CadenceRepository {
   }
 
   getById(id: string): CadenceAggregate | null {
-    const parsedId = idSchema.parse(id);
-    const row = this.database.raw.prepare(`
-      SELECT ${definitionColumns} FROM cadence_definitions WHERE id = ?
-    `).get(parsedId);
-    return row === undefined ? null : this.parseAggregate(row);
+    return readInstalledCadenceAggregate(this.database.raw, id);
   }
 
   getByFamilyVersion(family: CadenceAggregate['family'], version: number): CadenceAggregate | null {
@@ -228,66 +224,84 @@ export class CadenceRepository {
   }
 
   private parseAggregate(value: unknown): CadenceAggregate {
-    let id = 'unknown';
-    try {
-      const definitionRow = definitionRowSchema.parse(value);
-      id = definitionRow.id;
-      const definition = parseCanonicalEnvelope(
-        definitionRow.definition_json,
-        definitionEnvelopeSchema,
-      );
-      const stepRows = this.database.raw.prepare(`
-        SELECT ${stepColumns} FROM cadence_steps
-        WHERE cadence_definition_id = ? ORDER BY sequence ASC, id ASC
-      `).all(definitionRow.id).map((row) => stepRowSchema.parse(row));
-      if (stepRows.length === 0) throw new Error('Cadence definition has no steps.');
-      const steps = stepRows.map((stepRow) => {
-        const stepEnvelope = parseCanonicalEnvelope(stepRow.step_json, stepEnvelopeSchema);
-        const componentRows = this.database.raw.prepare(`
-          SELECT ${componentColumns} FROM cadence_action_components
-          WHERE cadence_step_id = ? ORDER BY sequence ASC, id ASC
-        `).all(stepRow.id).map((row) => componentRowSchema.parse(row));
-        if (componentRows.length === 0) throw new Error('Cadence step has no components.');
-        return {
-          id: stepRow.id,
-          sequence: stepRow.sequence,
-          dayOffset: stepRow.day_offset,
-          label: stepRow.label,
-          breakup: stepRow.breakup === 1,
-          timing: stepEnvelope.timing,
-          components: componentRows.map((componentRow) => {
-            const condition = componentRow.condition_json === null
-              ? null
-              : parseCanonicalEnvelope(componentRow.condition_json, conditionEnvelopeSchema).condition;
-            const graph = parseCanonicalEnvelope(componentRow.outcome_graph_json, outcomeEnvelopeSchema);
-            const template = parseCanonicalEnvelope(componentRow.template_json, templateEnvelopeSchema).template;
-            return {
-              id: componentRow.id,
-              sequence: componentRow.sequence,
-              actionType: componentRow.action_type,
-              channel: componentRow.channel,
-              condition,
-              allowedOutcomes: graph.allowedOutcomes,
-              outcomes: graph.outcomes,
-              template,
-            };
-          }),
-        };
-      });
-      return parseCadenceAggregate({
-        id: definitionRow.id,
-        family: definitionRow.family,
-        version: definitionRow.version,
-        name: definitionRow.name,
-        category: definition.category,
-        attemptCap: definitionRow.attempt_cap,
-        policyIds: definition.policyIds,
-        steps,
-        contentHash: definitionRow.content_hash,
-      });
-    } catch (error) {
-      throw new CadenceCatalogCorruptionError(id, error);
-    }
+    return parseStoredCadenceAggregate(this.database.raw, value);
+  }
+}
+
+export function readInstalledCadenceAggregate(
+  database: AppDatabase['raw'],
+  id: string,
+): CadenceAggregate | null {
+  const parsedId = idSchema.parse(id);
+  const row = database.prepare(`
+    SELECT ${definitionColumns} FROM cadence_definitions WHERE id = ?
+  `).get(parsedId);
+  return row === undefined ? null : parseStoredCadenceAggregate(database, row);
+}
+
+function parseStoredCadenceAggregate(
+  database: AppDatabase['raw'],
+  value: unknown,
+): CadenceAggregate {
+  let id = 'unknown';
+  try {
+    const definitionRow = definitionRowSchema.parse(value);
+    id = definitionRow.id;
+    const definition = parseCanonicalEnvelope(
+      definitionRow.definition_json,
+      definitionEnvelopeSchema,
+    );
+    const stepRows = database.prepare(`
+      SELECT ${stepColumns} FROM cadence_steps
+      WHERE cadence_definition_id = ? ORDER BY sequence ASC, id ASC
+    `).all(definitionRow.id).map((row) => stepRowSchema.parse(row));
+    if (stepRows.length === 0) throw new Error('Cadence definition has no steps.');
+    const steps = stepRows.map((stepRow) => {
+      const stepEnvelope = parseCanonicalEnvelope(stepRow.step_json, stepEnvelopeSchema);
+      const componentRows = database.prepare(`
+        SELECT ${componentColumns} FROM cadence_action_components
+        WHERE cadence_step_id = ? ORDER BY sequence ASC, id ASC
+      `).all(stepRow.id).map((row) => componentRowSchema.parse(row));
+      if (componentRows.length === 0) throw new Error('Cadence step has no components.');
+      return {
+        id: stepRow.id,
+        sequence: stepRow.sequence,
+        dayOffset: stepRow.day_offset,
+        label: stepRow.label,
+        breakup: stepRow.breakup === 1,
+        timing: stepEnvelope.timing,
+        components: componentRows.map((componentRow) => {
+          const condition = componentRow.condition_json === null
+            ? null
+            : parseCanonicalEnvelope(componentRow.condition_json, conditionEnvelopeSchema).condition;
+          const graph = parseCanonicalEnvelope(componentRow.outcome_graph_json, outcomeEnvelopeSchema);
+          const template = parseCanonicalEnvelope(componentRow.template_json, templateEnvelopeSchema).template;
+          return {
+            id: componentRow.id,
+            sequence: componentRow.sequence,
+            actionType: componentRow.action_type,
+            channel: componentRow.channel,
+            condition,
+            allowedOutcomes: graph.allowedOutcomes,
+            outcomes: graph.outcomes,
+            template,
+          };
+        }),
+      };
+    });
+    return parseCadenceAggregate({
+      id: definitionRow.id,
+      family: definitionRow.family,
+      version: definitionRow.version,
+      name: definitionRow.name,
+      category: definition.category,
+      attemptCap: definitionRow.attempt_cap,
+      policyIds: definition.policyIds,
+      steps,
+      contentHash: definitionRow.content_hash,
+    });
+  } catch (error) {
+    throw new CadenceCatalogCorruptionError(id, error);
   }
 }
 
