@@ -1545,99 +1545,615 @@ git commit -m "feat: enforce lifecycle next actions"
 ### Task 10: Enforce Person-Wide Opt-Out and Source-Preserving Closure
 
 **Files:**
+- Modify: `src/main/db/migrations/0002DomainFoundation.ts`
+- Modify: `src/main/db/domainSchema.ts`
+- Modify: `src/main/domain/support/domainErrors.ts`
+- Modify: `src/main/domain/identity/identityRepository.ts`
+- Modify: `src/main/domain/lifecycle/lifecycleTypes.ts`
+- Modify: `src/main/domain/lifecycle/lifecycleTransactionWriter.ts`
+- Modify: `src/main/domain/lifecycle/lifecycleService.ts`
 - Create: `src/main/domain/optOut/optOutTypes.ts`
 - Create: `src/main/domain/optOut/optOutRepository.ts`
 - Create: `src/main/domain/optOut/optOutService.ts`
 - Create: `src/main/domain/optOut/outboundPermissionService.ts`
+- Modify: `tests/main/domainConstraints.test.ts`
+- Modify: `tests/main/domainSchema.test.ts`
+- Modify: `tests/main/identityRepository.test.ts`
+- Modify: `tests/main/lifecycleService.test.ts`
+- Modify: `tests/support/domainSchemaScenario.ts`
+- Modify: `tests/support/domainWriteWorker.ts`
 - Create: `tests/main/optOutRepository.test.ts`
 - Create: `tests/main/optOutService.test.ts`
 - Create: `tests/integration/optOutPersistence.test.ts`
-- Modify: `src/main/domain/lifecycle/lifecycleService.ts`
-- Modify: `tests/main/lifecycleService.test.ts`
+- Create: `tests/integration/concurrentOptOutInvariant.test.ts`
 
 **Interfaces:**
-- Consumes: contact handles, immutable evidence, lifecycle closure, cadence/action repositories.
-- Produces: an indefinite tombstone and the only database-level outbound permission API.
+- Consumes: the exact Task 9 `LifecycleService`, its transaction-scoped
+  `LifecycleTransactionCommands`, Identity/Event repositories bound to the same
+  `AppDatabase` and `DomainUnitOfWork`, canonical Task 7 phone/email
+  normalization, injected `Clock`/`IdGenerator`, and immutable Activity
+  evidence.
+- Produces: an indefinite Person tombstone, immutable blocked handles, one
+  atomic application/propagation service, and the only database-level outbound
+  permission API. Task 12 uses the read-only inspection result while every
+  future typed outbound execution command uses the transaction-required check.
+- Boundary: Task 10 owns exactly one synchronous `unitOfWork.immediate` per
+  public mutation. It never calls a transaction-owning lifecycle method;
+  instead it obtains `lifecycle.scopedWriter()` inside its active transaction.
+  All constructors reject mixed database/UoW instances before reads or ID/clock
+  consumption. SQL never reads current time and no method parses SQLite error
+  text or broadly suppresses a constraint.
+- Product lock: opt-out is Person-wide, permanent, and most restrictive. It
+  blocks the Person and every retained/current phone/email handle. It never
+  rewrites or deletes Activity, SourceEvent, Prospect attribution, historical
+  cycles, Won terms, or other evidence.
+- Reactivation lock: `never` is a semantic terminal policy, not a database row.
+  The four stored rule types remain exactly `seasonal:heating-oct1`,
+  `new-frbo-listing`, `lead-cert-expiry-window`, and `manual`. An opt-out closure
+  creates zero reactivation rows; historical immutable rules remain evidence
+  but can never reactivate a tombstoned Person.
+- Communication boundary: Task 10 supplies the authoritative transaction-time
+  database gate but does not claim to serialize an asynchronous Messages,
+  Phone, or Gmail handoff. The communication integration plan must implement
+  the shared outbound-readiness barrier and define the provider-handoff
+  linearization point. It must recheck this gate under that barrier. Holding the
+  synchronous domain UoW open across an async adapter call is forbidden.
 
-- [ ] **Step 1: Write RED opt-out tests**
+- [ ] **Step 1: Write RED schema hardening tests**
 
-Cover explicit application, repeated idempotent application, all known handles, attempted tombstone deletion, deletion/re-import, Person merge, restore, manual past-touch logging, pre-Won closure, and Won/onboarding behavior. The critical Won assertion is:
+Extend schema/migration tests before repository or service code. Require:
+
+- `opt_out_tombstones.source_activity_id` is required and references an exact
+  same-Person immutable Activity; `requested_at`/`created_at` are canonical UTC;
+  observed channel is exactly `manual | imessage | gmail | call |
+  identity_propagation`; policy version is nonblank;
+- blocked phone/email values are nonblank canonical values at the repository
+  boundary and stable lookup remains non-unique globally because one handle may
+  conservatively appear under more than one immutable tombstone;
+- inserting a tombstone fails while the Person has any active/onboarding cycle,
+  active cadence enrollment, current action, or other pending outbound action;
+- inserting or owner-moving a SalesCycle into `active`/`onboarding` fails when
+  either the Person projection or tombstone is opted out;
+- inserting or owner-moving a pending NextAction whose `channel IS NOT NULL`
+  fails for an opted-out/tombstoned cycle owner; internal channel-null Review or
+  audit work remains representable;
+- inserting or owner-moving a contact method onto an opted-out/tombstoned
+  Person requires the exact `(kind, normalized_value)` to be retained under
+  that Person's tombstone first, so future relinking cannot introduce an
+  unretained handle;
+- active-cadence insert/update guards from Task 5 and the Task 8 owner graph
+  remain intact; and
+- tombstones and handles reject `UPDATE`, `DELETE`, same-primary-key
+  `INSERT OR REPLACE`, unique-Person `INSERT OR REPLACE`, and unique-handle
+  `INSERT OR REPLACE` with `recursive_triggers=ON`.
+
+Add exact trigger names to the manifest and mutation matrix. Prove a late
+schema-2 failure rolls back to the prior exact schema and a clean retry creates
+all guards.
+
+- [ ] **Step 2: Write RED strict repository and binding tests**
+
+Define these persistence contracts in the tests:
+
+```ts
+export type OptOutObservedChannel =
+  | 'manual' | 'imessage' | 'gmail' | 'call' | 'identity_propagation';
+
+export type OptOutTombstone = {
+  id: string;
+  personId: string;
+  requestedAt: string;
+  observedChannel: OptOutObservedChannel;
+  sourceActivityId: string;
+  evidenceRef: string | null;
+  policyVersion: string;
+  createdAt: string;
+};
+
+export type OptOutHandle = {
+  id: string;
+  tombstoneId: string;
+  kind: 'phone' | 'email';
+  normalizedValue: string;
+  createdAt: string;
+};
+
+export type InsertOptOutTombstoneInput = OptOutTombstone;
+export type InsertOptOutHandleInput = OptOutHandle;
+
+export class OptOutRepository {
+  constructor(input: {
+    database: AppDatabase;
+    unitOfWork: DomainUnitOfWork;
+  });
+  assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork): void;
+  insertTombstone(input: InsertOptOutTombstoneInput): OptOutTombstone;
+  insertBlockedHandle(input: InsertOptOutHandleInput): OptOutHandle;
+  getForPerson(personId: string): OptOutTombstone | null;
+  getById(tombstoneId: string): OptOutTombstone | null;
+  listBlocksForHandle(
+    kind: 'phone' | 'email',
+    normalizedValue: string,
+  ): OptOutTombstone[];
+  listHandles(tombstoneId: string): OptOutHandle[];
+}
+```
+
+Mutations require the repository's active exact-UoW scope; reads are allowed
+outside it. Constructor and `assertBoundTo` reject every database/UoW
+permutation by identity. Parse every stored ID, enum, canonical UTC
+timestamp, policy string, and phone/email normalized value on every read.
+`listBlocksForHandle` returns every match in stable `requested_at, id` order;
+permission treats any match as blocked rather than choosing an arbitrary row.
+
+Exact same-ID/same-content insert retries may return the canonical stored row.
+Same-ID changed content, same-Person changed tombstone content, and same
+tombstone/kind/value with a changed row ID throw typed persistence conflicts.
+Do not use `INSERT OR IGNORE`, broad `ON CONFLICT`, or SQLite-message matching.
+Add `IdentityRepository.listContactMethodsForPerson(personId)` as a strict,
+stable kind/value/ID-ordered read so the service never trusts a caller-supplied
+subset of handles.
+
+- [ ] **Step 3: Write RED lifecycle-before-tombstone service tests**
+
+Use strict discriminated evidence and result types:
+
+```ts
+export type OptOutEvidence =
+  | { kind: 'existing_activity'; activityId: string }
+  | {
+    kind: 'append_activity';
+    activity: AppendActivityInput & { id: string; occurredAt: string };
+  };
+
+export type ApplyOptOutInput = {
+  personId: string;
+  tombstoneId: string;
+  requestedAt: string;
+  policyVersion: 'founder_opt_out_v1';
+  decision:
+    | { kind: 'structured_written'; channel: 'imessage' | 'gmail' }
+    | { kind: 'founder_confirmed'; channel: 'manual' | 'call' };
+  evidence: OptOutEvidence;
+  terminalStageEventId: string | null;
+};
+
+export type ApplyOptOutResult = {
+  tombstone: OptOutTombstone;
+  handles: OptOutHandle[];
+  cycle: SalesCycle | null;
+  alreadyApplied: boolean;
+};
+
+export type OptOutFaultPoint =
+  | 'after_activity'
+  | 'after_lifecycle_close'
+  | 'after_tombstone'
+  | 'after_handle'
+  | 'after_postcondition';
+
+export class OptOutService {
+  constructor(input: {
+    database: AppDatabase;
+    unitOfWork: DomainUnitOfWork;
+    identities: IdentityRepository;
+    events: EventRepository;
+    optOuts: OptOutRepository;
+    lifecycle: LifecycleService;
+    clock: Clock;
+    ids: IdGenerator;
+    faultInjector?: (point: OptOutFaultPoint) => void;
+  });
+  apply(input: ApplyOptOutInput): ApplyOptOutResult;
+  propagateMostRestrictiveOptOut(
+    input: PropagateOptOutInput,
+  ): ApplyOptOutResult;
+  recordPastOffAppTouch(input: RecordPastOffAppTouchInput): Activity;
+}
+```
+
+An existing/appended Activity must belong to the exact Person, represent a
+received or founder-recorded opt-out, and retain its original
+Prospect/SalesCycle ownership. Exact structured iMessage/Gmail opt-out applies
+without model interpretation. Transcript/LLM inference alone is rejected;
+`call` requires the founder-confirmed branch. The separate temporary quarantine
+and Review flow for ambiguous language remains in the communication/analysis
+plan.
+
+Task 10 consumes this exact transaction-scoped lifecycle seam:
+
+```ts
+export type CloseForOptOutInput = {
+  personId: string;
+  evidenceActivityId: string;
+  effectiveAt: string;
+  terminalStageEventId: string | null;
+};
+
+export type CloseForOptOutResult = {
+  cycle: SalesCycle | null;
+  stoppedEnrollmentIds: string[];
+  cancelledActionIds: string[];
+};
+
+interface LifecycleTransactionCommands {
+  closeForOptOut(input: CloseForOptOutInput): CloseForOptOutResult;
+}
+```
+
+`LifecycleService.assertBoundTo(database, unitOfWork)` is required so
+`OptOutService` rejects mixed composition before appending evidence.
+`closeForOptOut` asserts the already-active scope and, for the one operational
+cycle, performs this exact order:
+
+```text
+stop active enrollment
+CAS stage/workflow/current pointer to the terminal projection
+append a terminal StageEvent only for pre-Won -> Lost-Nurture
+settle/cancel the former current action after pointer clearance
+cancel every other pending channel-nonnull outbound action for the Person
+assert lifecycle/action/enrollment postconditions
+```
+
+Pre-Won means Unreviewed through Offered and closes as
+Lost-Nurture/`opt_out`, with zero reactivation rows. Won/onboarding remains Won,
+closes with `onboarding_stop_reason=opt_out`, preserves Won terms/metrics, and
+does not append a second Won StageEvent. Closed historical cycles and their
+sources/events remain unchanged.
+
+Test no-cycle application, every pre-Won stage, Won/onboarding, a compound
+cadence action, an unreferenced supplemental outbound action, no active cadence
+on Unreviewed, and already-closed history. Assert the lifecycle writer completes
+before the tombstone insert and the schema would reject the reverse order.
+
+`terminalStageEventId` is required exactly when an operational pre-Won cycle
+will transition to Lost-Nurture. It must be null for no-cycle, already-closed,
+and Won/onboarding closure. Reject the opposite cardinality before writes.
+
+The critical Won assertion remains:
 
 ```ts
 expect(result.cycle).toMatchObject({ stage: 'won', workflowStatus: 'closed' });
 expect(result.cycle).not.toMatchObject({ stage: 'lost_nurture' });
 ```
 
-Also assert every outbound permission check throws after opt-out while append-only audit logging remains available.
+- [ ] **Step 4: Write RED atomic application, replay, and handle-capture tests**
 
-- [ ] **Step 2: Run RED opt-out tests**
+`OptOutService.apply` owns exactly one immediate transaction and performs:
 
-Run:
-
-```bash
-npx vitest run tests/main/optOutRepository.test.ts tests/main/optOutService.test.ts tests/integration/optOutPersistence.test.ts
+```text
+1. strictly parse/normalize the complete command before writes
+2. append or load immutable source Activity evidence
+3. re-read Person, canonical tombstone, all current handles, and operational
+   lifecycle state under BEGIN IMMEDIATE
+4. call lifecycle.scopedWriter().closeForOptOut(...)
+5. insert or load the canonical tombstone
+6. let the tombstone trigger set persons.opted_out/opted_out_at/version
+7. insert/compare every missing handle in stable kind/value order
+8. assert the full opt-out/lifecycle/source/Won postcondition
 ```
 
-Expected: FAIL because opt-out modules are absent.
+There is no direct `markPersonProjectionOptedOut` repository API. The tombstone
+trigger is the only projection mutation, preventing an opted-out projection
+from temporarily coexisting with an active workflow and preventing a double
+version increment.
 
-- [ ] **Step 3: Implement tombstone persistence**
+Repeated exact provider evidence returns canonical Activity/tombstone/handle
+rows without consuming default IDs or clock values. A later legitimate opt-out
+observation appends its own immutable Activity, retains the earliest canonical
+tombstone, captures any newly known handles, and reasserts terminal
+postconditions. All known normalized phone/email handles are retained regardless
+of current validation, reachability, primary, or Contacts metadata.
 
-Repository operations are:
+Test failure on every ownership mismatch, malformed timestamp, unsupported
+policy version, missing Activity, model-only verbal inference, and changed
+same-ID evidence. Compare SourceEvents, original Prospect attribution,
+historical Activities, StageEvents, and Won terms before/after to prove
+source-preserving closure.
 
-```ts
-insertTombstone(input: InsertOptOutTombstoneInput): OptOutTombstone;
-insertBlockedHandle(input: InsertOptOutHandleInput): OptOutHandle;
-findByHandle(kind: 'phone' | 'email', normalizedValue: string): OptOutTombstone | null;
-findForPerson(personId: string): OptOutTombstone | null;
-markPersonProjectionOptedOut(personId: string, at: string): void;
-```
+- [ ] **Step 5: Write RED permission, render, and audit-logging tests**
 
-Blocked handles are normalized values inside the encrypted database so exact re-import matching remains deterministic.
-
-- [ ] **Step 4: Implement one atomic opt-out command**
-
-`OptOutService.apply` performs:
-
-1. Append/retain source Activity evidence.
-2. Insert or load canonical tombstone.
-3. Add every known normalized phone/email handle.
-4. Mark Person projection opted out.
-5. Stop active cadence enrollment.
-6. Clear current action, then cancel future outbound actions.
-7. Close pre-Won cycle as Lost-Nurture with reason `opt_out` and sole reactivation `never`.
-8. Preserve Won and close onboarding with `onboarding_stop_reason=opt_out`.
-9. Run lifecycle/action postconditions.
-
-- [ ] **Step 5: Implement outbound permission service**
+Use separate inspection and authoritative execution APIs:
 
 ```ts
+export type OutboundPermission =
+  | { kind: 'allowed' }
+  | {
+    kind: 'blocked';
+    tombstoneIds: string[];
+    matchedHandles: Array<{
+      kind: 'phone' | 'email';
+      normalizedValue: string;
+    }>;
+  };
+
 export class OutboundPermissionService {
+  constructor(input: {
+    database: AppDatabase;
+    unitOfWork: DomainUnitOfWork;
+    identities: IdentityRepository;
+    optOuts: OptOutRepository;
+  });
+  inspectPerson(personId: string): OutboundPermission;
   assertMayContactPerson(personId: string): void;
-  assertMayContactHandle(kind: 'phone' | 'email', normalizedValue: string): void;
+  assertMayContactHandle(
+    kind: 'phone' | 'email',
+    normalizedValue: string,
+  ): void;
+  assertMayExecuteOutbound(input: {
+    personId: string;
+    target: { kind: 'phone' | 'email'; normalizedValue: string };
+  }): void;
 }
 ```
 
-It queries tombstones at command time and never trusts a cached Today result. Adapter freshness gating remains in the later communication integration plan.
+`inspectPerson` and the two read assertions query the Person tombstone and every
+current handle on each call; they never trust `persons.opted_out`, a cached Today
+row, or only the requested Person ID. They normalize and fail closed on invalid
+targets. `assertMayExecuteOutbound` additionally requires the service's active
+exact-UoW scope and checks both Person and exact target handle immediately before
+the future typed outbound command creates/hands off work. A block throws typed
+`OutboundContactBlockedError` containing only stable IDs/reason codes, never
+contact values.
 
-- [ ] **Step 6: Run GREEN opt-out verification**
+Task 12 must call `inspectPerson` while building Today and omit a blocked row;
+SQL projection filtering is only the first safeguard. A stale Today click or
+other call/text/email entry point must call `assertMayExecuteOutbound` again.
+
+Distinguish execution from evidence: scheduling, sending, or a combined
+log-and-execute command hard-blocks. A deliberately named retrospective
+`recordPastOffAppTouch` path may append an immutable outbound Activity after
+opt-out, because suppressing a prohibited touch would destroy audit truth; it
+must mark strict metadata such as `{ reportedAfterOptOut: true,
+prohibitedTouchReported: true }` and never invoke an adapter or create a pending
+outbound action. Its exact contract is:
+
+```ts
+export type RecordPastOffAppTouchInput = {
+  personId: string;
+  reportedAt: string;
+  activity: AppendActivityInput & {
+    id: string;
+    occurredAt: string;
+    direction: 'outbound';
+  };
+};
+```
+
+The service requires `occurredAt <= reportedAt`, overwrites rather than trusts
+the two audit metadata flags, and owns one immediate transaction that only
+appends/loads the immutable Activity. Future-dated records are rejected.
+
+- [ ] **Step 6: Write RED permanence and propagation-boundary tests**
+
+Opt-out data is retained indefinitely. Physical Person deletion remains
+foreign-key blocked while a tombstone exists; V1 deletion is soft/minimizing
+and retains the minimal Person stub, tombstone, handles, source Activity, request
+time, observed channel, evidence reference, and policy version. Startup audit
+must report rather than silently repair any tombstone/Person projection
+mismatch. Database reopen with the same key must retain the block.
+
+Add the narrow future-identity hook now, without inventing a merge engine:
+
+```ts
+export type PropagateOptOutInput = {
+  sourceTombstoneId: string;
+  targetPersonId: string;
+  targetTombstoneId: string;
+  evidenceActivity: AppendActivityInput & { id: string; occurredAt: string };
+  terminalStageEventId: string | null;
+};
+
+OptOutService.propagateMostRestrictiveOptOut(
+  input: PropagateOptOutInput,
+): ApplyOptOutResult;
+```
+
+The hook runs in one transaction, requires an internal same-target-Person
+`identity_propagation` Activity, preserves the source tombstone, copies the
+source's earliest request/policy semantics, unions source and target known
+handles under the target tombstone, and closes target workflow through the same
+scoped writer before target tombstone insertion. If the target already has any
+tombstone, retain that canonical target row regardless of chronology; the
+immutable source row still preserves any earlier request, and the command only
+adds missing handles/evidence.
+
+Test the hook directly for both source-opted/target-clean and both-opted cases.
+Full Person merge, identity-relink orchestration, and portable encrypted restore
+remain outside this foundation because those commands do not exist yet; their
+future transactions must call this hook before finalizing identity projection
+changes. Task 10 acceptance instead proves close/reopen persistence and
+delete/re-import safety: a fresh Person with a handle retained by any old
+tombstone is blocked by `inspectPerson`/execution permission even before a
+propagation command materializes its Person projection.
+
+Extend Task 9's result union in Task 10 with:
+
+```ts
+type ReactivationResult =
+  | { kind: 'reactivated'; cycle: SalesCycle }
+  | { kind: 'review_required'; reviewItem: LifecycleReviewItem }
+  | { kind: 'permanently_blocked'; tombstoneId: string };
+```
+
+An attempted reactivation of a tombstoned Person returns
+`permanently_blocked`, never consumes a historical rule, and never creates a
+Review item, cycle, or action. It does not insert a fifth rule type or a `never`
+row.
+
+- [ ] **Step 7: Write RED independent-connection and fault-injection tests**
+
+Use Task 9's compiled worker/child contender with two separately keyed
+production database connections and an exact barrier. Cover both serializations
+of:
+
+- two exact opt-out applications for one Person: one canonical tombstone,
+  unioned handles, canonical results, no raw uniqueness error;
+- opt-out versus current-action replacement: if opt-out wins, replacement sees
+  the tombstone and fails; if replacement wins, opt-out re-reads and cancels the
+  replacement; both end closed with no pending outbound action;
+- opt-out versus Ready/open-cycle creation or rule/inbound reactivation: no
+  operational cycle or consumed rule survives the opt-out linearization;
+- opt-out versus a new contact/re-import on the same normalized handle: either
+  the handle is captured before the identity write or the permission lookup
+  blocks the new Person by the prior tombstone; and
+- two Persons independently retaining the same handle: both tombstones remain
+  immutable and every permission path blocks deterministically.
+
+The configured busy timeout must serialize contenders; raw `SQLITE_BUSY`,
+constraint-message parsing, a zombie cycle, and an orphan pending action are not
+domain outcomes.
+
+Inject deterministic failures at:
+
+```text
+after source Activity
+after lifecycle scoped-writer return
+after tombstone insert/Person projection trigger
+after each blocked-handle insert
+after final postcondition
+```
+
+For each point compare stable ordered snapshots of Persons, contact methods,
+Activities, SourceEvents, Prospects, SalesCycles, StageEvents,
+CadenceEnrollments, NextActions, ReactivationRules, Won terms, tombstones, and
+handles. Failure, including deferred-FK commit failure, leaves byte-equivalent
+state with no partial block, consumed rule, changed source attribution, lost Won
+metric, or orphan workflow. Task 9 already proves the writer's internal
+stop/pointer/event/settlement fault points; Task 10 must invoke those configured
+faults through `closeForOptOut` to prove the outer transaction also rolls back
+its evidence.
+
+Do not mislabel this database race as the external provider send race. The
+communication integration plan owns a shared outbound-readiness barrier that
+serializes fresh inbound delta sync, this transaction-time permission gate, and
+the synchronous provider handoff boundary. It must cover an opt-out received
+while Callie was closed and an opt-out concurrent with handoff. If handoff was
+already linearized externally, later evidence records the truth rather than
+rewriting history.
+
+- [ ] **Step 8: Run the complete RED opt-out slice**
 
 Run:
 
 ```bash
-npx vitest run tests/main/optOutRepository.test.ts tests/main/optOutService.test.ts tests/integration/optOutPersistence.test.ts tests/main/lifecycleService.test.ts tests/main/domainConstraints.test.ts
+npx vitest run \
+  tests/main/domainConstraints.test.ts \
+  tests/main/domainSchema.test.ts \
+  tests/main/identityRepository.test.ts \
+  tests/main/lifecycleService.test.ts \
+  tests/main/optOutRepository.test.ts \
+  tests/main/optOutService.test.ts \
+  tests/integration/optOutPersistence.test.ts \
+  tests/integration/concurrentOptOutInvariant.test.ts
+```
+
+Expected: focused failures for absent opt-out modules, insufficient schema
+guards, missing lifecycle binding/closure result, and missing permission and
+propagation contracts. Record the exact RED evidence before production changes.
+
+- [ ] **Step 9: Implement schema and lifecycle guardrails**
+
+Add the tested schema checks/triggers and exact Kysely types. Keep tombstone and
+handle immutability append-only. The tombstone insert trigger must require
+lifecycle closure before the AFTER INSERT Person synchronization trigger runs.
+The Person projection remains derived from the canonical tombstone.
+
+Finish the Task 9 scoped seam exactly as tested: add
+`LifecycleService.assertBoundTo`; return `CloseForOptOutResult`; use repository
+CAS methods and the pointer-before-settlement order; cancel all remaining
+pending channel-nonnull actions for the Person; run the full lifecycle
+postcondition. Do not add a public transaction-owning `closeForOptOut` wrapper.
+
+- [ ] **Step 10: Implement strict tombstone persistence**
+
+Implement `optOutTypes.ts` and `OptOutRepository` exactly to the Step 2
+contracts. Reuse Task 7's exported `normalizePhone`/`normalizeEmail` and require
+stored normalized bytes to equal their normalized form. Return new arrays/plain
+objects so callers cannot mutate repository state. Exact retry comparison covers
+every supplied field.
+
+- [ ] **Step 11: Implement atomic application and propagation**
+
+Implement `OptOutService.apply` in the exact Step 4 order and
+`propagateMostRestrictiveOptOut` in the exact Step 6 order. Constructor binding
+checks run before any replay read. All mutations use the service's one immediate
+transaction. A fault callback receives only the enumerated Step 7 points.
+
+The final postcondition independently queries the authoritative database. It
+requires the canonical Person/tombstone timestamp pair, every current handle,
+zero operational cycles, zero active enrollments, zero pending channel-nonnull
+actions, zero newly created opt-out reactivation rules, retained evidence and
+sources, and unchanged Won terms. Any malformed stored row fails closed.
+
+- [ ] **Step 12: Implement the permission boundary**
+
+Implement `OutboundPermissionService` exactly to Step 5. Stable block results
+sort/deduplicate tombstone IDs and matched handle facts. Errors expose only
+stable IDs/reason codes. `assertMayExecuteOutbound` calls
+`unitOfWork.assertWriteScope()` before reads. Add the explicit retrospective
+audit helper or service command; do not weaken `EventRepository.appendActivity`
+globally because append-only truth must remain recordable.
+
+- [ ] **Step 13: Run GREEN opt-out verification and scope scans**
+
+Run:
+
+```bash
+npx vitest run \
+  tests/main/domainConstraints.test.ts \
+  tests/main/domainSchema.test.ts \
+  tests/main/identityRepository.test.ts \
+  tests/main/lifecycleService.test.ts \
+  tests/main/nextActionInvariant.test.ts \
+  tests/main/invariantAudit.test.ts \
+  tests/main/optOutRepository.test.ts \
+  tests/main/optOutService.test.ts \
+  tests/integration/optOutPersistence.test.ts \
+  tests/integration/concurrentOptOutInvariant.test.ts
 npm run typecheck
 npm run lint
 npm run test
 ```
 
-Expected: all tests PASS; opted-out Person has no active cadence or outbound next action, while a Won outcome remains Won.
+Expected: schema, repository, lifecycle, permission, retention, reopen,
+concurrency, fault, full-suite, typecheck, and lint PASS. Opted-out Persons have
+no operational workflow or pending outbound action; Won remains Won; zero
+`never` rows exist.
 
-- [ ] **Step 7: Commit opt-out enforcement**
+Run `git diff --check`. Scan the Task 10 diff for blended score/0-100 ranking,
+raw `Date.now`, SQL current-time functions, nested `immediate`, broad
+`ON CONFLICT`/`OR IGNORE`, SQLite error-message parsing, adapter/UI imports, and
+production deletion/update of tombstones or handles; find none. Packaged
+verification may remain omitted because Task 10 is uncomposed until Task 13 and
+does not implement the deferred communication barrier or a native boundary.
+
+- [ ] **Step 14: Commit opt-out enforcement**
 
 Run:
 
 ```bash
-git add src/main/domain/optOut src/main/domain/lifecycle/lifecycleService.ts tests/main/optOutRepository.test.ts tests/main/optOutService.test.ts tests/integration/optOutPersistence.test.ts tests/main/lifecycleService.test.ts
+git add \
+  src/main/db/migrations/0002DomainFoundation.ts \
+  src/main/db/domainSchema.ts \
+  src/main/domain/support/domainErrors.ts \
+  src/main/domain/identity/identityRepository.ts \
+  src/main/domain/lifecycle/lifecycleTypes.ts \
+  src/main/domain/lifecycle/lifecycleTransactionWriter.ts \
+  src/main/domain/lifecycle/lifecycleService.ts \
+  src/main/domain/optOut \
+  tests/main/domainConstraints.test.ts \
+  tests/main/domainSchema.test.ts \
+  tests/main/identityRepository.test.ts \
+  tests/main/lifecycleService.test.ts \
+  tests/main/nextActionInvariant.test.ts \
+  tests/main/invariantAudit.test.ts \
+  tests/main/optOutRepository.test.ts \
+  tests/main/optOutService.test.ts \
+  tests/integration/optOutPersistence.test.ts \
+  tests/integration/concurrentOptOutInvariant.test.ts \
+  tests/support/domainSchemaScenario.ts \
+  tests/support/domainWriteWorker.ts
 git commit -m "feat: enforce permanent person opt-out"
 ```
 
