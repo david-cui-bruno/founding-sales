@@ -1,0 +1,23 @@
+/* Spacing, radius, typography, and sizing tokens. Colors live in themes.css. */
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --font-ui: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+  --grid-row-compact: 36px;
+  --grid-row-comfortable: 46px;
+  --grid-row: var(--grid-row-comfortable);
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--aurora-cyan) 38%, transparent);
+  --nav-rail-width: 216px;
+  --control-height: 32px;
+}
+
+[data-density="compact"] {
+  --grid-row: var(--grid-row-compact);
+  --control-height: 28px;
+}

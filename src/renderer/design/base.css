@@ -1,0 +1,222 @@
+/* Base element styles and consolidated focus rules for all controls. */
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+:is(a, button, input, select, textarea, [role="separator"][tabindex]):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--aurora-cyan) 30%, transparent);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Shared control primitives. Ordinary surfaces stay neutral by design. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-height);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--motion-ease);
+}
+
+.button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.button--primary {
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--surface-raised);
+}
+
+.button--quiet {
+  border-color: transparent;
+  background: transparent;
+}
+
+.button--quiet:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--line) 40%, transparent);
+}
+
+.button--danger {
+  border-color: var(--danger);
+  background: transparent;
+  color: var(--danger);
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-height);
+  height: var(--control-height);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.icon-button:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--line) 40%, transparent);
+}
+
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 18%, var(--surface));
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-pill--neutral {
+  color: var(--muted);
+  background: transparent;
+}
+
+/* Aurora urgency is reserved for P0 and equally meaningful states. */
+.status-pill--urgent {
+  border-color: color-mix(in srgb, var(--aurora-violet) 55%, var(--line));
+  color: var(--text);
+  background: color-mix(in srgb, var(--aurora-violet) 16%, transparent);
+}
+
+.status-pill--positive {
+  border-color: color-mix(in srgb, var(--aurora-cyan) 45%, var(--line));
+  color: var(--text);
+  background: color-mix(in srgb, var(--aurora-cyan) 12%, transparent);
+}
+
+.status-pill--danger {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: transparent;
+}
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.panel__header {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-4) 0;
+}
+
+.panel__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.panel__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.panel__body {
+  padding: var(--space-4);
+}
+
+.empty-state,
+.loading-state,
+.error-state {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-6);
+  color: var(--muted);
+  text-align: center;
+}
+
+.loading-state {
+  flex-direction: row;
+  justify-content: center;
+}
+
+.empty-state__title,
+.error-state__title {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.empty-state__description,
+.error-state__description {
+  margin: 0;
+  max-width: 34rem;
+}
+
+.error-state__icon {
+  color: var(--danger);
+}
+
+.loading-state__spinner {
+  animation: loading-spin 1s linear infinite;
+}
+
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

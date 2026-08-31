@@ -1,0 +1,42 @@
+import type { ReactNode } from 'react';
+
+import { NavigationRail } from './NavigationRail';
+import { WorkspaceHeader } from './WorkspaceHeader';
+import type { AppRoute } from './routes';
+
+export type AppShellProps = {
+  route: AppRoute;
+  onNavigate(route: AppRoute): void;
+  reviewCount: number;
+  children: ReactNode;
+};
+
+/**
+ * Route-independent application frame: skip link, fixed navigation rail,
+ * workspace header, and the single labelled main content region.
+ */
+export function AppShell({
+  route,
+  onNavigate,
+  reviewCount,
+  children,
+}: AppShellProps) {
+  return (
+    <div className="app-shell">
+      <a className="app-shell__skip-link" href="#main-content">
+        Skip to content
+      </a>
+      <NavigationRail
+        route={route}
+        onNavigate={onNavigate}
+        reviewCount={reviewCount}
+      />
+      <div className="app-shell__workspace">
+        <WorkspaceHeader />
+        <main id="main-content" className="app-shell__main">
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}

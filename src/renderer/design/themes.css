@@ -1,0 +1,29 @@
+/* The only files allowed to declare literal colors. Everything else uses vars. */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --canvas: #f5f2eb;
+  --surface: #fffdf8;
+  --surface-raised: #ffffff;
+  --text: #17191f;
+  --muted: #6b6f78;
+  --line: #ddd9d0;
+  --aurora-cyan: #3fd4d0;
+  --aurora-violet: #7657ff;
+  --danger: #b74552;
+  --shadow: 10px 10px 28px #d8d4cb, -8px -8px 24px #ffffff;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #090b10;
+  --surface: #10131a;
+  --surface-raised: #151923;
+  --text: #f5f3ef;
+  --muted: #9da4b2;
+  --line: #262c38;
+  --aurora-cyan: #57e3d9;
+  --aurora-violet: #8b72ff;
+  --danger: #ff7180;
+  --shadow: 12px 12px 30px #05070a, -8px -8px 24px #171c26;
+}

@@ -1,0 +1,166 @@
+/* Route-independent application frame. */
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+  background: var(--canvas);
+}
+
+.app-shell__skip-link {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 10;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text);
+  text-decoration: none;
+  transform: translateY(-300%);
+}
+
+.app-shell__skip-link:focus-visible {
+  transform: none;
+}
+
+.app-shell__workspace {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  margin-left: var(--nav-rail-width);
+}
+
+.app-shell__main {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-6);
+}
+
+/* Fixed navigation rail: aurora is allowed here (navigation is a sanctioned accent surface). */
+.nav-rail {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: var(--nav-rail-width);
+  padding: var(--space-4) var(--space-3);
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.nav-rail__brand {
+  margin: 0 0 var(--space-6);
+  padding: 0 var(--space-3);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  background: linear-gradient(120deg, var(--aurora-cyan), var(--aurora-violet));
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}
+
+.nav-rail__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav-rail__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  text-decoration: none;
+  transition: background var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease);
+}
+
+.nav-rail__item:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--line) 40%, transparent);
+}
+
+.nav-rail__item--current {
+  color: var(--text);
+  background: color-mix(in srgb, var(--aurora-cyan) 14%, transparent);
+  box-shadow: inset 3px 0 0 var(--aurora-cyan);
+}
+
+.nav-rail__item[aria-disabled="true"] {
+  color: color-mix(in srgb, var(--muted) 55%, transparent);
+  cursor: not-allowed;
+}
+
+.nav-rail__icon {
+  flex: none;
+}
+
+.nav-rail__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.nav-rail__badge {
+  min-width: 18px;
+  padding: 1px var(--space-2);
+  border-radius: 999px;
+  background: var(--aurora-violet);
+  color: var(--surface-raised);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* Workspace header preference toggles stay neutral until pressed. */
+.workspace-header {
+  display: flex;
+  gap: var(--space-4);
+  justify-content: flex-end;
+  padding: var(--space-3) var(--space-6);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.workspace-header__group {
+  display: flex;
+  gap: var(--space-1);
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.workspace-header__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-height);
+  height: var(--control-height);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.workspace-header__toggle:hover {
+  color: var(--text);
+}
+
+.workspace-header__toggle[aria-pressed="true"] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--aurora-cyan) 16%, transparent);
+}
