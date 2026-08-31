@@ -22,8 +22,12 @@ describe('JobRepository', () => {
 
   async function createRepository(): Promise<JobRepository> {
     tempDatabase = createTempDatabase();
-    database = openDatabase({ path: tempDatabase.path, key: createTestWorkspaceKey() });
-    await migrateToLatest(database);
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: tempDatabase.path, key });
+    await migrateToLatest(database, {
+      backupDirectory: `${tempDatabase.path}.backups`,
+      workspaceKey: key,
+    });
     return new JobRepository(database);
   }
 

@@ -17,9 +17,13 @@ describe('database migrations', () => {
 
   it('creates the complete foundation schema at version 1', async () => {
     tempDatabase = createTempDatabase();
-    database = openDatabase({ path: tempDatabase.path, key: createTestWorkspaceKey() });
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: tempDatabase.path, key });
 
-    const result = await migrateToLatest(database);
+    const result = await migrateToLatest(database, {
+      backupDirectory: `${tempDatabase.path}.backups`,
+      workspaceKey: key,
+    });
 
     expect(result).toEqual({
       fromVersion: 0,
@@ -52,10 +56,15 @@ describe('database migrations', () => {
 
   it('is idempotent when run twice against the same database', async () => {
     tempDatabase = createTempDatabase();
-    database = openDatabase({ path: tempDatabase.path, key: createTestWorkspaceKey() });
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: tempDatabase.path, key });
 
-    await migrateToLatest(database);
-    const secondResult = await migrateToLatest(database);
+    const options = {
+      backupDirectory: `${tempDatabase.path}.backups`,
+      workspaceKey: key,
+    };
+    await migrateToLatest(database, options);
+    const secondResult = await migrateToLatest(database, options);
 
     expect(secondResult).toEqual({
       fromVersion: 1,
@@ -77,10 +86,15 @@ describe('database migrations', () => {
 
   it('rolls back a late migration failure so the same database can retry', async () => {
     tempDatabase = createTempDatabase();
-    database = openDatabase({ path: tempDatabase.path, key: createTestWorkspaceKey() });
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: tempDatabase.path, key });
     database.raw.exec('CREATE TABLE foundation_fts_probe (content TEXT)');
+    const options = {
+      backupDirectory: `${tempDatabase.path}.backups`,
+      workspaceKey: key,
+    };
 
-    await expect(migrateToLatest(database)).rejects.toThrow();
+    await expect(migrateToLatest(database, options)).rejects.toThrow();
 
     expect(database.raw.inTransaction).toBe(false);
     expect(
@@ -103,7 +117,7 @@ describe('database migrations', () => {
 
     database.raw.exec('DROP TABLE foundation_fts_probe');
 
-    await expect(migrateToLatest(database)).resolves.toEqual({
+    await expect(migrateToLatest(database, options)).resolves.toEqual({
       fromVersion: 0,
       toVersion: 1,
       appliedMigrationIds: ['0001Foundation'],

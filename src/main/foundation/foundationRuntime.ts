@@ -2,7 +2,7 @@ import type {
   AppDatabase,
   DatabaseOpenOptions,
 } from '../db/database';
-import type { MigrationResult } from '../db/migrate';
+import type { MigrationOptions, MigrationResult } from '../db/migrate';
 import type { HealthServiceOptions } from '../health/healthService';
 import type { HealthProvider } from '../health/registerHealthIpc';
 import type { JobRepository } from '../jobs/jobRepository';
@@ -20,7 +20,10 @@ export type FoundationRuntimeDependencies = {
   loadWorkspaceKey(input: WorkspaceKeyStoreInput): Promise<WorkspaceKey>;
   prepareEncryptedDatabase(path: string, key: WorkspaceKey): Promise<void>;
   openDatabase(options: DatabaseOpenOptions): AppDatabase;
-  migrateToLatest(database: AppDatabase): Promise<MigrationResult>;
+  migrateToLatest(
+    database: AppDatabase,
+    options: MigrationOptions,
+  ): Promise<MigrationResult>;
   createJobRepository(database: AppDatabase): FoundationJobRepository;
   createHealthService(options: HealthServiceOptions): HealthProvider;
   closeDatabase(database: AppDatabase): void;
@@ -28,6 +31,7 @@ export type FoundationRuntimeDependencies = {
 
 export type FoundationRuntimeOptions = {
   appVersion: string;
+  backupDirectory: string;
   databasePath: string;
   databaseExists: boolean;
   keyEnvelopePath: string;
@@ -131,7 +135,10 @@ export class FoundationRuntime {
           key: workspaceKey,
         });
         this.throwIfAttemptIsStale(id);
-        await this.dependencies.migrateToLatest(database);
+        await this.dependencies.migrateToLatest(database, {
+          backupDirectory: this.options.backupDirectory,
+          workspaceKey,
+        });
       } finally {
         workspaceKey?.bytes.fill(0);
       }

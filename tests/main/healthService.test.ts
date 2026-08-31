@@ -19,8 +19,12 @@ describe('HealthService', () => {
 
   it('reports migrated SQLite, FTS5, active jobs, and retained recovery values', async () => {
     tempDatabase = createTempDatabase();
-    database = openDatabase({ path: tempDatabase.path, key: createTestWorkspaceKey() });
-    await migrateToLatest(database);
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: tempDatabase.path, key });
+    await migrateToLatest(database, {
+      backupDirectory: `${tempDatabase.path}.backups`,
+      workspaceKey: key,
+    });
     const jobs = new JobRepository(database);
     jobs.enqueue({ id: 'queued', type: 'sync', payload: {} });
     jobs.start(jobs.enqueue({ id: 'running', type: 'sync', payload: {} }).id);

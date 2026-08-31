@@ -92,6 +92,7 @@ export async function startApplication(
   const runtime = new FoundationRuntime(
     {
       appVersion: options.appVersion,
+      backupDirectory: join(options.userDataPath, 'backups'),
       databasePath,
       databaseExists: encryptedWorkspaceExists(databasePath),
       keyEnvelopePath,

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AppDatabase } from '../../src/main/db/database';
+import type { MigrationOptions } from '../../src/main/db/migrate';
 import type { HealthProvider } from '../../src/main/health/registerHealthIpc';
 import {
   startApplication,
@@ -33,6 +34,7 @@ describe('startApplication', () => {
   function createDependencies(
     events: string[],
     captureHealth?: (provider: HealthProvider) => void,
+    captureMigration?: (options: MigrationOptions) => void,
   ): ApplicationStartupDependencies {
     const database = { path: '/ignored-until-open' } as AppDatabase;
     const jobs = {
@@ -49,8 +51,9 @@ describe('startApplication', () => {
         events.push(`open:${path}`);
         return database;
       },
-      migrateToLatest: async () => {
+      migrateToLatest: async (_database, options) => {
         events.push('migrate');
+        captureMigration?.(options);
         return {
           fromVersion: 0,
           toVersion: 1,
@@ -139,6 +142,29 @@ describe('startApplication', () => {
       'window',
     ]);
     expect(running.databasePath).toBe(join(userDataPath, 'callie.sqlite3'));
+  });
+
+  it('passes the app-owned backup directory and live workspace key into migration', async () => {
+    const events: string[] = [];
+    const userDataPath = '/tmp/callie-migration-wiring';
+    let backupDirectory: string | undefined;
+    let keyWasLive = false;
+
+    const running = await startApplication(
+      {
+        appVersion: '1.0.0',
+        userDataPath,
+        createWindow: () => undefined,
+      },
+      createDependencies(events, undefined, (options) => {
+        backupDirectory = options.backupDirectory;
+        keyWasLive = options.workspaceKey.bytes.equals(Buffer.alloc(32, 0x2a));
+      }),
+    );
+
+    expect(backupDirectory).toBe(join(userDataPath, 'backups'));
+    expect(keyWasLive).toBe(true);
+    await running.shutdown();
   });
 
   it('unregisters IPC and closes initialized SQLite exactly once on repeated shutdown requests', async () => {

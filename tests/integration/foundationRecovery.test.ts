@@ -31,6 +31,7 @@ describe('foundation initialization recovery', () => {
     runtime = new FoundationRuntime(
       {
         appVersion: '1.0.0',
+        backupDirectory: `${tempDatabase.path}.backups`,
         databasePath: tempDatabase.path,
         databaseExists: true,
         keyEnvelopePath: `${tempDatabase.path}.key-envelope.json`,

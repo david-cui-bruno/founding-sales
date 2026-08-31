@@ -13,13 +13,17 @@ import { dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { Kysely, SqliteDialect } from 'kysely';
+// The project intentionally uses TypeScript's legacy Node resolver, which cannot
+// type-resolve Kysely's package-exported migration entrypoint.
+// @ts-expect-error -- The runtime subpath is exported by Kysely and exercised here.
+import { Migrator } from 'kysely/migration'; // eslint-disable-line import/no-unresolved -- Kysely exports this runtime subpath.
 
 import {
   closeDatabase,
   openDatabase,
-  type AppDatabase,
 } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
+import { migration0001Foundation } from '../../src/main/db/migrations/0001Foundation';
 import {
   encryptedWorkspaceExists,
   prepareEncryptedDatabase,
@@ -502,10 +506,18 @@ async function createPlaintextSchemaOne(databasePath: string): Promise<void> {
   const kysely = new Kysely<FoundationDatabase>({
     dialect: new SqliteDialect({ database: raw }),
   });
-  const plaintext: AppDatabase = { raw, kysely, path: databasePath };
   try {
     raw.pragma('journal_mode = WAL');
-    await migrateToLatest(plaintext);
+    const migrator = new Migrator({
+      db: kysely,
+      provider: {
+        async getMigrations() {
+          return { '0001Foundation': migration0001Foundation };
+        },
+      },
+    });
+    const result = await migrator.migrateToLatest();
+    assert.equal(result.error, undefined);
     insertRetainedRow(raw);
   } finally {
     raw.close();
@@ -513,12 +525,16 @@ async function createPlaintextSchemaOne(databasePath: string): Promise<void> {
 }
 
 async function createEncryptedSchemaOne(databasePath: string): Promise<void> {
+  const key = createTestWorkspaceKey();
   const encrypted = openDatabase({
     path: databasePath,
-    key: createTestWorkspaceKey(),
+    key,
   });
   try {
-    await migrateToLatest(encrypted);
+    await migrateToLatest(encrypted, {
+      backupDirectory: `${databasePath}.backups`,
+      workspaceKey: key,
+    });
     insertRetainedRow(encrypted.raw);
   } finally {
     closeDatabase(encrypted);

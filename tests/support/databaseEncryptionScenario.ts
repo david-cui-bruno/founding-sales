@@ -12,11 +12,15 @@ void run();
 async function run(): Promise<void> {
  const workspace = createTempDatabase();
  try {
+  const key = createTestWorkspaceKey();
   const database = openDatabase({
     path: workspace.path,
-    key: createTestWorkspaceKey(),
+    key,
   });
-  await migrateToLatest(database);
+  await migrateToLatest(database, {
+    backupDirectory: `${workspace.path}.backups`,
+    workspaceKey: key,
+  });
   if (scenario === 'create-and-health') {
     assert.notEqual(
       readFileSync(workspace.path).subarray(0, 16).toString('utf8'),

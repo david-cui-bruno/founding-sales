@@ -39,6 +39,7 @@ const health: AppHealth = {
 
 const runtimeOptions = {
   appVersion: '1.0.0',
+  backupDirectory: '/tmp/callie-user-data/backups',
   databasePath: health.databasePath,
   databaseExists: false,
   keyEnvelopePath: '/tmp/callie-user-data/callie.key-envelope.json',
@@ -68,7 +69,10 @@ describe('FoundationRuntime', () => {
         events.push('open');
         return database;
       },
-      migrateToLatest: async () => {
+      migrateToLatest: async (migratedDatabase, options) => {
+        expect(migratedDatabase).toBe(database);
+        expect(options.backupDirectory).toBe(runtimeOptions.backupDirectory);
+        expect(options.workspaceKey.bytes.equals(Buffer.alloc(32, 0x5a))).toBe(true);
         expect(keyBytes.equals(Buffer.alloc(32, 0x5a))).toBe(true);
         events.push('migrate');
         return migrationResult;

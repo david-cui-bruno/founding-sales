@@ -4,12 +4,19 @@
 import { Migrator } from 'kysely/migration'; // eslint-disable-line import/no-unresolved -- Kysely exports this runtime subpath.
 
 import type { AppDatabase } from './database';
+import { createVerifiedMigrationBackup } from './migrationBackup';
 import { migration0001Foundation } from './migrations/0001Foundation';
+import type { WorkspaceKey } from '../security/workspaceKeyTypes';
 
 export type MigrationResult = {
   fromVersion: number;
   toVersion: number;
   appliedMigrationIds: string[];
+};
+
+export type MigrationOptions = {
+  backupDirectory: string;
+  workspaceKey: WorkspaceKey;
 };
 
 type KyselyMigrationResultSet = {
@@ -21,11 +28,19 @@ type KyselyMigrationResultSet = {
   }>;
 };
 
+const registeredMigrations = [
+  {
+    id: '0001Foundation',
+    schemaVersion: 1,
+    migration: migration0001Foundation,
+  },
+] as const;
+
 const migrationProvider = {
   async getMigrations() {
-    return {
-      '0001Foundation': migration0001Foundation,
-    };
+    return Object.fromEntries(
+      registeredMigrations.map(({ id, migration }) => [id, migration]),
+    );
   },
 };
 
@@ -53,8 +68,20 @@ function readSchemaVersion(db: AppDatabase): number {
   return metadata.schema_version;
 }
 
-export async function migrateToLatest(db: AppDatabase): Promise<MigrationResult> {
+export async function migrateToLatest(
+  db: AppDatabase,
+  options: MigrationOptions,
+): Promise<MigrationResult> {
   const fromVersion = readSchemaVersion(db);
+  const latestVersion = registeredMigrations.at(-1)?.schemaVersion ?? 0;
+  if (fromVersion < latestVersion) {
+    createVerifiedMigrationBackup({
+      database: db,
+      backupDirectory: options.backupDirectory,
+      key: options.workspaceKey,
+      sourceSchemaVersion: fromVersion,
+    });
+  }
   const migrator = new Migrator({
     db: db.kysely,
     provider: migrationProvider,
