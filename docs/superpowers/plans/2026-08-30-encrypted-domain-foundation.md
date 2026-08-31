@@ -3382,48 +3382,292 @@ git commit -m "feat: add promise-first Today queue"
 **Files:**
 - Create: `src/main/domain/createDomainServices.ts`
 - Create: `src/main/domain/domainRuntime.ts`
+- Create: `src/main/domain/startup/domainStartupTypes.ts`
+- Create: `src/main/domain/startup/storageReadiness.ts`
+- Create: `src/main/domain/startup/priorityProjectionRefresh.ts`
+- Create: `src/main/domain/workspace/workspaceSettingsRepository.ts`
 - Create: `tests/main/createDomainServices.test.ts`
+- Create: `tests/main/domainStartupAudit.test.ts`
+- Create: `tests/main/priorityProjectionRefresh.test.ts`
 - Create: `tests/integration/domainRuntime.test.ts`
+- Create: `tests/integration/domainRuntimeFaults.test.ts`
+- Modify: `src/main/jobs/jobTypes.ts`
+- Modify: `src/main/jobs/jobRepository.ts`
+- Modify: `src/main/domain/lifecycle/invariantAudit.ts`
 - Modify: `src/main/foundation/foundationRuntime.ts`
+- Modify: `src/main/startApplication.ts`
 - Modify: `src/main/health/healthService.ts`
 - Modify: `src/shared/healthContract.ts`
 - Modify: `src/renderer/App.tsx`
-- Modify: corresponding runtime/health/renderer tests
+- Modify: `tests/main/jobRepository.test.ts`
+- Modify: `tests/main/foundationRuntime.test.ts`
+- Modify: `tests/main/healthService.test.ts`
+- Modify: `tests/main/registerHealthIpc.test.ts`
+- Modify: `tests/main/startApplication.test.ts`
+- Modify: `tests/integration/healthContract.test.ts`
+- Modify: `tests/main/packagedProcess.test.ts`
+- Modify: `src/renderer/App.test.tsx`
 - Modify: `README.md`
 
 **Interfaces:**
-- Consumes: encrypted schema 2 and all Tasks 6–12.
-- Produces one main-process-only service graph, deterministic startup installation/audits, and health diagnostics. No domain object crosses preload in this plan.
+- Consumes: the encrypted schema-2 database from Tasks 1–5; the exact
+  repository/UoW contracts from Tasks 6–8; and the final committed exports from
+  Tasks 9–12. Task 13 implementation must not begin until the Task 9 lifecycle
+  repositories/writer/auditor, Task 10 permission services, Task 11
+  prioritization repository/service/rule document, and Task 12 Today
+  repository/service APIs have been copied into a compile-time contract test and
+  verified against their final commits. Provisional plan text is not an API.
+- Produces: one main-process-only, same-instance service graph; a fail-closed
+  storage-readiness gate; one atomic bootstrap transaction; an immutable startup
+  report; diagnostics-only blocked startup; deterministic priority-refresh jobs;
+  and safe health fields. No domain entity, repository, service, violation
+  record, projection explanation, key, SQL text, or evidence payload crosses
+  preload in this plan.
+- Product lock: Task 13 installs and composes existing behavior. It does not add
+  customizable lifecycle stages, automatic outreach, a second current action,
+  a capacity mutation path, or any blended/weighted 0–100 lead score.
 
-- [ ] **Step 1: Write RED composition and restart tests**
+- [ ] **Step 1: Freeze the final Task 9–12 composition contract before coding**
 
-Assert one initialized database creates one shared Unit of Work/repository graph, installs built-in cadence/rule versions once, recovers background jobs, audits invariants, reuses the graph for concurrent health requests, closes once, and repeats deterministically after restart.
+Add a compile-only fixture in `tests/main/createDomainServices.test.ts` that
+imports the final implementations and proves their exact constructors,
+`assertBoundTo` methods, scoped writers, and public methods. The graph must
+contain one instance of each of the following and no substitute wrapper with a
+second database or Unit of Work:
 
-- [ ] **Step 2: Run RED composition tests**
+```text
+DomainUnitOfWork
+JobRepository
+IdentityRepository
+EventRepository
+SourceRepository
+IntakeReceiptRepository
+SourceService
+CadenceRepository
+SalesCycleRepository
+NextActionRepository
+CadenceEnrollmentRepository
+ReactivationRepository
+LifecycleReviewRepository
+LifecycleTransactionWriter and LifecycleService
+OptOutRepository, OptOutService, and OutboundPermissionService
+PrioritizationRepository and PrioritizationService
+TodayRepository and TodayService
+WorkspaceSettingsRepository
+the final Task 9–12 invariant-audit entry point
+```
+
+Copy the actual final Task 9–12 signatures into the fixture. If any named
+constructor, scoped mutation API, binding assertion, or audit input differs,
+amend this Task 13 text to the committed API and review that amendment before
+production work. This gate is a deliberate stop condition, not permission to
+guess a missing interface.
+
+- [ ] **Step 2: Write RED readiness and startup-state tests**
+
+Test the state machine before composition code. `DomainRuntime.initialize()` is
+synchronous and idempotent. It returns `ready` or `blocked`; infrastructure
+failure throws a typed fatal error and produces no usable runtime/report.
+
+Before any repository factory, Clock read, ID allocation, or domain write,
+assert that startup rejects:
+
+- a wrong key, missing SQLCipher support, failed cipher integrity, or a plaintext
+  database under the encrypted profile;
+- an open raw transaction, schema version other than exactly 2, disabled
+  `foreign_keys`, disabled `recursive_triggers`, non-WAL journal mode, a busy
+  timeout other than the production policy, or unavailable FTS5;
+- any row from `PRAGMA foreign_key_check`; and
+- any missing, renamed, or extra load-bearing schema-2 table, index, or trigger
+  relative to the final canonical manifest/fingerprint.
+
+For each failure, assert zero repository factory calls, zero writes, zero Clock
+and ID calls, no close attempt when database open never returned a handle, and
+exactly one database close by `FoundationRuntime` after a handle was returned.
+No failure adopts health or an operational service graph. A typed
+domain-invariant violation is different: it
+commits the immutable startup report, returns `blocked`, permits health and
+diagnostics, and hard-blocks lifecycle, permission, prioritization, and Today
+access.
+
+- [ ] **Step 3: Write RED graph, bootstrap, restart, and binding tests**
+
+Assert `createDomainServices` is construction-only: it performs no query,
+mutation, transaction, Clock read, or ID allocation. Exercise every
+database/UoW permutation and prove construction rejects a repository or service
+bound to any other object before reads, time, or IDs. Verify all public services
+may continue to own their documented one-transaction command, while bootstrap
+uses only repository/scoped-writer methods inside its already-active outer UoW
+and never nests a transaction.
+
+On an empty database, first startup must install exactly the six Task 8 cadence
+definitions and exact `founder-priority-v1`, activate V1 only because the
+workspace pointer is null, recover interrupted jobs, audit, scan projections,
+and commit once. Restart must add no definitions, rule versions, evaluations,
+or duplicate jobs. If the workspace already points to a strict valid later or
+custom prioritization rule, install V1 idempotently but preserve that pointer.
+A dangling, malformed, conflicting, or noncanonical active pointer is fatal; it
+is never replaced by V1 as a repair.
+
+- [ ] **Step 4: Write RED audit, projection scanner, and exact-job tests**
+
+Test the invariant audit at one caller-supplied canonical `asOf`, active rule,
+workspace timezone, and coherent transaction snapshot. Individual malformed
+rows become typed violations and do not prevent later rows from being checked;
+results are recursively frozen and stably sorted by `(kind, recordId)`. A SQL,
+schema, or query-execution failure throws and rolls back bootstrap—it can never
+be translated into zero violations.
+
+Test the projection scanner in stable Prospect-ID order. For each otherwise
+prioritizable canonical Prospect, classify these as repairable refresh reasons:
+
+```text
+missing_projection
+wrong_active_rule
+prior_founder_local_day
+projection_expired
+relevant_input_changed
+```
+
+The same-founder-local-day check uses strict workspace timezone/settings, never
+the host timezone. `relevant_input_changed` compares a canonical fingerprint of
+the complete current Task 11 qualified input to the immutable evaluation input
+snapshot; it is not a mutable timestamp guess. A structurally malformed or
+relationally divergent projection/evaluation is a blocking invariant violation
+and is excluded from refresh jobs rather than overwritten.
+
+Harden job tests around one strict `priority_projection_rebuild_v1` command.
+Exact `(type, idempotencyKey)` replay returns the stored job without reading the
+Clock or generating an ID; the same key with any changed canonical field is a
+typed idempotency conflict. A failed exact job retries through expected-state
+CAS while retaining its job ID, evaluation ID, payload, and idempotency key.
+Only exact queued/running jobs of this type count as pending. Task 13 enqueues
+rebuild work but does not execute it.
+
+- [ ] **Step 5: Run the complete RED startup slice**
 
 Run:
 
 ```bash
-npx vitest run tests/main/createDomainServices.test.ts tests/integration/domainRuntime.test.ts tests/main/foundationRuntime.test.ts tests/main/healthService.test.ts
+npx vitest run \
+  tests/main/createDomainServices.test.ts \
+  tests/main/domainStartupAudit.test.ts \
+  tests/main/priorityProjectionRefresh.test.ts \
+  tests/main/jobRepository.test.ts \
+  tests/integration/domainRuntime.test.ts \
+  tests/integration/domainRuntimeFaults.test.ts \
+  tests/main/foundationRuntime.test.ts \
+  tests/main/healthService.test.ts \
+  tests/integration/healthContract.test.ts
 ```
 
-Expected: FAIL because composition modules and health fields are absent.
+Expected: FAIL because the startup gate, same-instance graph, blocked state,
+strict scanner/job command, and domain health contract are absent. Preserve the
+RED output.
 
-- [ ] **Step 3: Create one explicit service graph**
+- [ ] **Step 6: Define exact startup types and the fatal/blocked boundary**
+
+In `domainStartupTypes.ts`, define strict Zod schemas plus recursively readonly
+public types:
 
 ```ts
-export type DomainServices = {
+export type DomainStartupReport = DeepReadonly<{
+  status: 'ready' | 'blocked';
+  evaluatedAt: string;
+  activePrioritizationRuleVersionId: string;
+  violations: readonly DomainInvariantViolation[];
+  blockingViolationCount: number;
+  repairableIssueCount: number;
+  projectionRefreshCandidateCount: number;
+  projectionRebuildsQueued: number;
+  pendingProjectionRebuilds: number;
+  interruptedJobsRecovered: number;
+}>;
+
+export class DomainStartupFatalError extends Error {
+  readonly code: DomainStartupFatalCode;
+}
+
+export class DomainRuntimeBlockedError extends Error {}
+
+export class DomainRuntime {
+  constructor(input: {
+    database: AppDatabase;
+    clock: Clock;
+    ids: IdGenerator;
+  });
+  initialize(): DomainStartupReport;
+  getDiagnostics(): DomainStartupReport;
+  getServices(): DomainServices;
+  shutdown(): void;
+}
+```
+
+`DomainStartupFatalCode` is the closed safe union
+`storage_not_encrypted | schema_not_ready | pragma_not_ready |
+foreign_key_violation | fts_unavailable | manifest_mismatch |
+catalog_conflict | active_rule_invalid | audit_execution_failed |
+bootstrap_failed`. Define `DeepReadonly` in the same module and use it only for
+plain report data, never class instances.
+
+`initialize` memoizes and returns the identical frozen report after a successful
+ready or blocked bootstrap. `getServices` succeeds only for `ready`; blocked,
+uninitialized, and stopped states throw typed errors. `getDiagnostics` is the
+only blocked-domain surface. `shutdown` is idempotent, invalidates later calls,
+and never closes SQLite—`FoundationRuntime` remains the sole database owner.
+Fatal errors carry only a safe code at the health boundary; SQL, paths, keys,
+row values, and nested causes remain main-process diagnostics.
+
+Classify outcomes exactly:
+
+- storage, schema, catalog, active-rule, audit-execution, and bootstrap execution
+  failure: fatal throw, rollback, close, no report;
+- typed domain corruption/invariant violation: commit report, `blocked`, no
+  operational services;
+- valid missing/stale priority projection: repairable queued work, not a domain
+  invariant violation and not by itself a blocked state; and
+- corrupt/divergent projection: blocking violation, no overwrite/rebuild job.
+
+- [ ] **Step 7: Implement the pre-repository storage-readiness gate**
+
+Expose a pure-read gate:
+
+```ts
+export function assertDomainStorageReady(input: {
+  database: AppDatabase;
+  expectedBusyTimeoutMs: 5000;
+  expectedSchemaVersion: 2;
+  expectedManifest: DomainSchemaManifest;
+}): DomainStorageReadiness;
+```
+
+Call `inspectDatabaseEncryption`, strict-parse `app_metadata`, verify raw
+transaction state and every required PRAGMA, execute `PRAGMA foreign_key_check`,
+probe FTS5, and compare the final schema-2 manifest/fingerprint including every
+load-bearing table, index, and trigger introduced through Tasks 5 and 8–11.
+Read the live catalog from `sqlite_master` using stable binary-name ordering and
+canonical SQL normalization already defined by schema tests. Do not accept a
+subset manifest or use health's later best-effort checks as this gate. It runs
+after migration and before `createDomainServices`; every failure is fatal.
+
+- [ ] **Step 8: Build and validate one same-instance domain graph**
+
+Expose:
+
+```ts
+export type DomainServices = Readonly<{
   unitOfWork: DomainUnitOfWork;
+  jobs: JobRepository;
   identities: IdentityRepository;
   events: EventRepository;
   sources: SourceService;
+  cadences: CadenceRepository;
   lifecycle: LifecycleService;
   optOut: OptOutService;
   outboundPermission: OutboundPermissionService;
   prioritization: PrioritizationService;
   today: TodayService;
-  auditInvariants(): DomainInvariantViolation[];
-};
+}>;
 
 export function createDomainServices(input: {
   database: AppDatabase;
@@ -3432,76 +3676,289 @@ export function createDomainServices(input: {
 }): DomainServices;
 ```
 
-Construct each repository once around the same `AppDatabase`. Services share the one Unit of Work; no service starts a nested transaction.
+Construct the complete Step 1 repository graph exactly once. Pass the one new
+`DomainUnitOfWork`, exact input database, Clock, and ID generator to every
+dependency. Construct `SourceService`, lifecycle writer/service, opt-out and
+permission services, prioritization service, and Today service only from those
+same repository objects. Call every final `assertBoundTo(database, unitOfWork)`
+during composition, including repository-to-service assertions, before any
+read/time/ID access. Freeze the graph container; do not deep-freeze stateful
+class instances. Constructors and assertions do no I/O and start no transaction.
 
-- [ ] **Step 4: Add deterministic domain startup**
+`WorkspaceSettingsRepository` is strict, bound to the same database/UoW, and
+provides stable reads plus scoped CAS only for the singleton settings row. It
+must return a canonical founder timezone and the nullable active priority-rule
+pointer; missing/duplicate/malformed settings are fatal startup corruption.
 
-After migration and before health becomes ready:
+- [ ] **Step 9: Harden exact startup jobs and implement the refresh scanner**
 
-1. Install built-in cadence definitions and initial prioritization rule version idempotently.
-2. Recover interrupted jobs using existing behavior.
-3. Audit schema/domain invariants.
-4. Enqueue idempotent recalculation jobs for missing/stale priority projections.
-5. Retain violations for health/Review without silently repairing evidence.
+Bind `JobRepository` to `{ database, unitOfWork, clock, ids }`, add
+`assertBoundTo`, allow reads outside the transaction, and require the active
+exact-UoW token for every mutator. Preserve existing generic job behavior where
+still used, but route startup through strict scoped APIs accepting explicit
+`at`, job ID, evaluation ID, version, and expected state—no `Date`,
+`randomUUID`, SQL `CURRENT_TIMESTAMP`, broad conflict suppression, or SQLite
+message parsing.
 
-- [ ] **Step 5: Extend health with safe domain diagnostics**
-
-Add:
+The strict command is canonical JSON with this relationally cross-checked shape:
 
 ```ts
-domainReady: z.boolean(),
-domainInvariantViolationCount: z.number().int().nonnegative(),
-pendingProjectionRebuilds: z.number().int().nonnegative(),
+export type PriorityProjectionRebuildCommandV1 = {
+  formatVersion: 1;
+  jobId: string;
+  evaluationId: string;
+  prospectId: string;
+  ruleVersionId: string;
+  founderTimezone: string;
+  founderLocalDate: string;
+  evaluatedAt: string;
+  expectedProjectionVersion: number | null;
+  qualifiedInputFingerprint: string;
+  refreshFingerprint: string;
+  reasons: readonly PriorityProjectionRefreshReason[];
+};
 ```
 
-Render only counts/status. Do not expose contacts, sources, activities, keys, SQL, or evidence through health IPC.
+Derive the idempotency key from the fixed type, Prospect ID, active-rule ID,
+founder-local date, and `refreshFingerprint`. That fingerprint covers the
+qualified-input fingerprint, current projection/evaluation identity and
+version, and sorted reason set. Before allocating job/evaluation IDs, the
+scanner looks up an existing key and strictly validates/reuses its stored
+command; its original `evaluatedAt` remains authoritative. Only when no row
+exists may it allocate caller-stable IDs and use bootstrap `asOf`. A same-key
+different command fails; it never becomes a second canonical result. Failed
+exact jobs retry with an explicit `(id, expectedState='failed', retryCount)` CAS
+and injected retry time. Return candidates and jobs in stable Prospect-ID order.
 
-- [ ] **Step 6: Run full GREEN verification**
+- [ ] **Step 10: Harden the explicit-asOf invariant audit**
 
-Run:
+Amend the final Task 9 auditor rather than creating a competing partial audit:
+
+```ts
+export function auditDomainInvariants(input: {
+  database: AppDatabase;
+  unitOfWork: DomainUnitOfWork;
+  asOf: string;
+  activePrioritizationRule: PrioritizationRuleVersion;
+  workspaceTimezone: string;
+}): readonly DomainInvariantViolation[];
+```
+
+It asserts the supplied exact UoW has the active scope on the supplied database,
+performs no writes and reads no Clock, and covers the final Task 9–12
+ownership/current-action/cadence,
+opt-out/permission, P0 Direct, control, evaluation/projection, and Today receipt
+invariants. Parse candidate rows independently so one malformed row produces a
+typed violation and scanning continues. Include stable kind and record IDs,
+never contact/evidence contents, in the internal frozen report. Sort by
+`(kind COLLATE BINARY, recordId COLLATE BINARY)` after collecting all
+violations. Statement preparation/execution, schema, or transaction-snapshot
+failure throws a fatal error; a catch-all empty array is forbidden.
+
+- [ ] **Step 11: Implement one atomic, exactly ordered bootstrap**
+
+After Step 7 readiness and graph construction, read the Clock exactly once
+inside one `unitOfWork.immediate` and use that canonical timestamp as `asOf` for
+the whole transaction. Invoke only scoped repository/writer APIs in this order:
+
+```text
+1. Strict-read workspace settings and founder timezone.
+2. Install all six Task 8 built-ins idempotently and assert exact catalog/hash.
+3. Install founder-priority-v1 idempotently and assert its canonical hash.
+4. If the active-rule pointer is null, activate V1 with expected-null CAS.
+   Otherwise resolve and validate the existing active immutable rule unchanged.
+5. Recover running jobs with injected asOf and exact state CAS.
+6. Run the full explicit-asOf invariant audit in the same snapshot.
+7. Scan valid prospects for repairable projection refresh work in stable order.
+8. Exclude any prospect implicated in projection corruption, enqueue/retry exact
+   refresh jobs, and count strict queued/running jobs of that type.
+9. Re-read catalog, active pointer, job commands, and invariant postconditions.
+10. Build and recursively freeze one DomainStartupReport, then commit.
+```
+
+Any thrown error, idempotency conflict, failed postcondition, deferred FK error,
+or injected fault rolls back catalog/rule activation, job recovery, retry, and
+enqueue changes together. Typed collected invariant violations do not throw:
+bootstrap may commit immutable installation/recovery evidence and the frozen
+`blocked` report, but the runtime exposes diagnostics only. Never invoke a
+transaction-owning lifecycle, opt-out, prioritization, or Today method from this
+outer transaction.
+
+- [ ] **Step 12: Integrate Foundation ownership and immutable health**
+
+Change `FoundationRuntime.initializeAttempt` to perform, in order: key load,
+encrypted preparation/open, migration, Step 7 readiness, construction of one
+DomainRuntime, atomic domain initialization, health construction, and adoption.
+A ready or blocked domain report is adoptable. A fatal error before adoption
+calls `domainRuntime.shutdown()` if constructed and closes the database exactly
+once. A fault after bootstrap commit but before adoption closes once; the next
+process restart converges through exact install/recovery/job idempotency.
+
+Replace Foundation's pre-domain `createJobRepository` dependency with
+`createDomainRuntime(database): DomainRuntime`; health consumes the retained
+`DomainStartupReport`, not a second JobRepository. In `startApplication.ts`,
+construct exactly one `SystemClock` and one `UuidGenerator` for the application
+and close over those same objects in the production factory:
+
+```ts
+createDomainRuntime: (database) => new DomainRuntime({
+  database,
+  clock: domainClock,
+  ids: domainIds,
+}),
+```
+
+Tests inject the same factory seam for phase faults and object-identity probes.
+No Foundation dependency may construct another domain Clock, ID generator, UoW,
+repository, or database wrapper.
+
+Foundation's concurrent `initialize`/`getHealth` calls continue to share one
+attempt, one database, one graph, and one startup-report object. During shutdown,
+stop DomainRuntime first and close its database once in Foundation. Repeated
+shutdown is idempotent; post-close health/service calls fail instead of touching
+SQLite.
+
+Extend the safe health schema with:
+
+```ts
+domainStatus: z.enum(['ready', 'blocked']),
+domainReady: z.boolean(),
+domainBlockingViolationCount: z.number().int().nonnegative(),
+domainRepairableIssueCount: z.number().int().nonnegative(),
+domainProjectionRefreshCandidateCount: z.number().int().nonnegative(),
+pendingProjectionRebuilds: z.number().int().nonnegative(),
+domainStartupEvaluatedAt: canonicalUtcTimestampSchema,
+```
+
+`domainReady` is exactly `domainStatus === 'ready'`, and
+`domainRepairableIssueCount` is the number of distinct projection refresh
+candidates in V1. Health retains the immutable
+startup report and never re-runs an audit or scanner per request. The pending
+count comes only from strict queued/running `priority_projection_rebuild_v1`
+rows observed at bootstrap; cancelled, failed, succeeded, malformed, or other
+job types do not count. Concurrent health calls return the same startup values.
+The renderer shows only status and counts. It never exposes violation IDs,
+Prospect data, rule documents, payloads, evidence, SQL, paths, or keys.
+
+- [ ] **Step 13: Add fault, concurrency, blocked-mode, and packaged acceptance tests**
+
+Inject a deterministic failure before/after every bootstrap phase and compare
+stable ordered snapshots of catalog, workspace pointer, jobs, and domain rows.
+Pre-commit failures are byte-equivalent; deferred-commit failure rolls back;
+after-commit/before-adoption restart reuses exact rows. Add two independently
+keyed production connections where applicable and prove the `BEGIN IMMEDIATE`
+writer serializes installation/activation/job recovery without duplicate
+catalogs, pointer loss, changed-command acceptance, or raw `SQLITE_BUSY`.
+
+Cover at least:
+
+- empty first launch and a second restart with exactly six cadence definitions,
+  one V1 rule, one valid active pointer, and no duplicate refresh job;
+- an existing valid custom/later active rule that remains active;
+- each wrong-key/schema/PRAGMA/manifest/FK/FTS failure before composition;
+- multiple independently malformed domain rows returned as stable violations,
+  plus an audit query failure that is fatal rather than an empty result;
+- blocked health with `domainReady=false` and hard-rejected operational/Today
+  access while diagnostics remain available;
+- same-local-day refresh restart reuse, a changed canonical payload conflict,
+  changed-input new fingerprint, and failed-job retry CAS;
+- concurrent initialize/health requests reusing one graph/report/attempt;
+- shutdown racing initialization, close exactly once, and all post-close methods
+  rejecting without database access; and
+- two packaged launches proving SQLCipher readiness, schema 2, full manifest,
+  exact catalogs/rule activation, stable health, and encrypted persistence.
+
+The packaged/preload test also proves no domain graph, entity, report details,
+repository, service, or mutation method crosses IPC. Only the safe health shape
+is renderer-visible.
+
+- [ ] **Step 14: Run full GREEN verification and hard-boundary scans**
+
+Run fresh:
 
 ```bash
-npx vitest run tests/main/createDomainServices.test.ts tests/integration/domainRuntime.test.ts tests/main/foundationRuntime.test.ts tests/main/healthService.test.ts
+npx vitest run \
+  tests/main/createDomainServices.test.ts \
+  tests/main/domainStartupAudit.test.ts \
+  tests/main/priorityProjectionRefresh.test.ts \
+  tests/main/jobRepository.test.ts \
+  tests/integration/domainRuntime.test.ts \
+  tests/integration/domainRuntimeFaults.test.ts \
+  tests/main/foundationRuntime.test.ts \
+  tests/main/healthService.test.ts \
+  tests/main/registerHealthIpc.test.ts \
+  tests/main/startApplication.test.ts \
+  tests/integration/healthContract.test.ts \
+  tests/main/packagedProcess.test.ts \
+  src/renderer/App.test.tsx \
+  tests/main/invariantAudit.test.ts \
+  tests/main/prioritizationRepository.test.ts \
+  tests/main/todayService.test.ts
 npm run typecheck
 npm run lint
 npm run test
 npm run verify:e2e
 npm run verify:package
+git diff --check
 ```
 
-Expected: every test PASS; packaged diagnostics show encrypted schema 2, domain ready, zero invariant violations, FTS5, and stable restart persistence.
+Expected: focused startup/storage/audit/job/fault/health tests, upstream domain
+regressions, full suite, typecheck, lint, E2E, and packaged verification PASS.
 
-- [ ] **Step 7: Run the plan-level self-review checks**
-
-Run:
+Run hard-boundary scans over the final production diff:
 
 ```bash
 rg -n -i "lead_score|overall_score|combined_score|blended_score|weighted_score|fit_weight|timing_weight|order by score" src/main src/shared
+rg -n "Date\.now\(\)|new Date\(\)|randomUUID\(|CURRENT_TIMESTAMP|INSERT OR REPLACE|INSERT OR IGNORE" src/main/domain src/main/jobs
 rg -n "better-sqlite3(?!-multiple-ciphers)" --pcre2 package.json package-lock.json src tests test scripts forge.config.ts vite.main.config.ts README.md
-git status --short
 ```
 
-Expected: first search returns no production matches; second returns only intentional type-package or historical research references; git status shows only intended Task 13 changes before commit.
+Expected: no blended-score production match; no ambient time/randomness or broad
+conflict suppression in the Task 13 bootstrap/job paths; and only intentional
+type-package or historical-research references to the non-SQLCipher package.
 
-- [ ] **Step 8: Commit composition and documentation**
+- [ ] **Step 15: Commit composition and record verification evidence**
 
-Run:
+Stage only the exact Task 13 production, test, renderer, health, and README
+files, then inspect the staged list before committing:
 
 ```bash
-git add src/main/domain/createDomainServices.ts src/main/domain/domainRuntime.ts src/main/foundation/foundationRuntime.ts src/main/health/healthService.ts src/shared/healthContract.ts src/renderer/App.tsx tests README.md
+git add \
+  src/main/domain/createDomainServices.ts \
+  src/main/domain/domainRuntime.ts \
+  src/main/domain/startup \
+  src/main/domain/workspace/workspaceSettingsRepository.ts \
+  src/main/domain/lifecycle/invariantAudit.ts \
+  src/main/jobs/jobTypes.ts \
+  src/main/jobs/jobRepository.ts \
+  src/main/foundation/foundationRuntime.ts \
+  src/main/startApplication.ts \
+  src/main/health/healthService.ts \
+  src/shared/healthContract.ts \
+  src/renderer/App.tsx \
+  tests/main/createDomainServices.test.ts \
+  tests/main/domainStartupAudit.test.ts \
+  tests/main/priorityProjectionRefresh.test.ts \
+  tests/main/jobRepository.test.ts \
+  tests/main/foundationRuntime.test.ts \
+  tests/main/healthService.test.ts \
+  tests/main/registerHealthIpc.test.ts \
+  tests/main/startApplication.test.ts \
+  tests/integration/domainRuntime.test.ts \
+  tests/integration/domainRuntimeFaults.test.ts \
+  tests/integration/healthContract.test.ts \
+  tests/main/packagedProcess.test.ts \
+  src/renderer/App.test.tsx \
+  README.md
+git diff --cached --name-only
+git diff --cached --check
 git commit -m "feat: initialize encrypted domain foundation"
-```
-
-- [ ] **Step 9: Record final verification evidence**
-
-Run:
-
-```bash
 git log --oneline -13
 git status --short
 ```
 
-Expected: the dependency-ordered task commits are visible, Gate 0 decision is PASS, and the worktree is clean.
+Expected: the staged list contains only Task 13 files; the dependency-ordered
+commits and fresh verification evidence are recorded; and the worktree is clean.
 
 ## Plan Self-Review
 
