@@ -473,6 +473,7 @@ export class SourceService {
       qualificationState: identityResolution.reviewReason === null
         ? 'unreviewed'
         : 'merge_review',
+      qualificationGateReason: null,
       qualificationReason: identityResolution.reviewReason,
     });
     this.inject('after_prospect');

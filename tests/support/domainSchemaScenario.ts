@@ -36,6 +36,7 @@ const domainTables = [
   'persons',
   'person_contact_methods',
   'prioritization_evaluations',
+  'prioritization_preference_events',
   'prioritization_rule_versions',
   'priority_overrides',
   'properties',
@@ -87,6 +88,9 @@ const requiredTriggers = [
   'immutable_prioritization_evaluations_delete',
   'immutable_prioritization_rule_versions',
   'immutable_prioritization_rule_versions_delete',
+  'immutable_prioritization_preference_events',
+  'immutable_prioritization_preference_events_delete',
+  'protect_trigger_event_receipt_proof',
   'immutable_source_events',
   'immutable_source_events_delete',
   'immutable_source_intake_receipts',
@@ -135,7 +139,8 @@ const requiredTriggers = [
   'protect_opted_out_active_cadence',
   'protect_opted_out_active_cadence_update',
   'protect_p0_priority_override',
-  'protect_p0_priority_override_update',
+  'protect_priority_override_mutation',
+  'protect_priority_override_delete',
   'protect_person_opt_out_insert',
   'protect_person_opt_out_reset',
   'protect_priority_projection_fidelity',
@@ -564,19 +569,21 @@ function runDatabaseScenario(
       insertPrioritizationRule(raw, 'p0-rule');
       assert.throws(() => raw.prepare(`
         INSERT INTO prioritization_evaluations (
-          id, prospect_id, rule_version_id, evaluated_at, fit_points, fit_band,
-          timing_millipoints, timing_band, reachability, data_confidence,
-          priority, verify_first, explanation_json, created_at
-        ) VALUES ('invalid-p0-evaluation', ?, 'p0-rule', ?, 25, 'high',
-                  30000, 'hot', 'indirect', 8, 'p0', 0, '[]', ?)
+          id, prospect_id, rule_version_id, decision_kind, evaluated_at,
+          fit_points, fit_band, timing_millipoints, timing_band, reachability,
+          data_confidence, priority, verify_first, command_json,
+          input_snapshot_json, result_json, explanation_json, created_at
+        ) VALUES ('invalid-p0-evaluation', ?, 'p0-rule', 'evaluated', ?, 25, 'high',
+                  30000, 'hot', 'indirect', 8, 'p0', 0, '{}', '{}', '{}', '[]', ?)
       `).run(prospect.prospectId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP));
       raw.prepare(`
         INSERT INTO prioritization_evaluations (
-          id, prospect_id, rule_version_id, evaluated_at, fit_points, fit_band,
-          timing_millipoints, timing_band, reachability, data_confidence,
-          priority, verify_first, explanation_json, created_at
-        ) VALUES ('valid-p1-evaluation', ?, 'p0-rule', ?, 25, 'high',
-                  30000, 'hot', 'indirect', 8, 'p1', 0, '[]', ?)
+          id, prospect_id, rule_version_id, decision_kind, evaluated_at,
+          fit_points, fit_band, timing_millipoints, timing_band, reachability,
+          data_confidence, priority, verify_first, command_json,
+          input_snapshot_json, result_json, explanation_json, created_at
+        ) VALUES ('valid-p1-evaluation', ?, 'p0-rule', 'evaluated', ?, 25, 'high',
+                  30000, 'hot', 'indirect', 8, 'p1', 0, '{}', '{}', '{}', '[]', ?)
       `).run(prospect.prospectId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
       assert.throws(() => raw.prepare(`
         INSERT INTO prospect_priority_projection (
@@ -585,6 +592,33 @@ function runDatabaseScenario(
           priority, verify_first, version, evaluated_at, updated_at
         ) VALUES (?, 'p0-rule', 'valid-p1-evaluation', 25, 'high', 30000, 'hot',
                   'indirect', 8, 'p0', 0, 1, ?, ?)
+      `).run(prospect.prospectId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP));
+      assert.throws(() => raw.prepare(`
+        INSERT INTO prioritization_evaluations (
+          id, prospect_id, rule_version_id, decision_kind, evaluated_at,
+          fit_points, fit_band, timing_millipoints, timing_band, reachability,
+          data_confidence, priority, verify_first, command_json,
+          input_snapshot_json, result_json, qualification_json, explanation_json,
+          created_at
+        ) VALUES ('invalid-gated-with-axes', ?, 'p0-rule', 'not_prioritizable', ?,
+                  25, 'high', 30000, 'hot', 'indirect', 8, 'p1', 0, '{}', '{}',
+                  '{}', '{}', '[]', ?)
+      `).run(prospect.prospectId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP));
+      raw.prepare(`
+        INSERT INTO prioritization_evaluations (
+          id, prospect_id, rule_version_id, decision_kind, evaluated_at,
+          command_json, input_snapshot_json, result_json, qualification_json,
+          explanation_json, created_at
+        ) VALUES ('valid-gated-evaluation', ?, 'p0-rule', 'not_prioritizable', ?,
+                  '{}', '{}', '{}', '{}', '[]', ?)
+      `).run(prospect.prospectId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+      assert.throws(() => raw.prepare(`
+        INSERT INTO prospect_priority_projection (
+          prospect_id, rule_version_id, evaluation_id, fit_points, fit_band,
+          timing_millipoints, timing_band, reachability, data_confidence,
+          priority, verify_first, version, evaluated_at, updated_at
+        ) VALUES (?, 'p0-rule', 'valid-gated-evaluation', 25, 'high', 30000, 'hot',
+                  'indirect', 8, 'p1', 0, 1, ?, ?)
       `).run(prospect.prospectId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP));
       return;
     }
@@ -719,7 +753,15 @@ function runDatabaseScenario(
         missing.prospectId,
         'p0',
         '2000-01-01T00:00:00.000Z',
+        'expired',
       );
+      assert.throws(() => insertPriorityOverride(
+        raw,
+        'override-missing-active-p0',
+        missing.prospectId,
+        'p0',
+        '2000-01-01T00:00:00.000Z',
+      ));
       assert.throws(() => raw.prepare(`
         UPDATE priority_overrides
         SET expires_at = '9999-12-31T23:59:59.999Z'
@@ -731,6 +773,7 @@ function runDatabaseScenario(
         indirect.prospectId,
         'p0',
         '2000-01-01T00:00:00.000Z',
+        'expired',
       );
       assert.throws(() => raw.prepare(`
         UPDATE priority_overrides
@@ -759,6 +802,7 @@ function runDatabaseScenario(
         expired.prospectId,
         'p0',
         '2000-01-01T00:00:00.000Z',
+        'expired',
       );
       insertPrioritizationEvaluation(raw, {
         id: 'override-expired-indirect-evaluation',
@@ -1263,19 +1307,38 @@ function runDatabaseScenario(
     case 'trigger-source-ownership': {
       const first = seedProspect(raw, 'trigger-owner-first');
       const second = seedProspect(raw, 'trigger-owner-second');
+      insertSourceEvent({
+        database: raw,
+        id: 'trigger-owner-first-referral',
+        personId: first.personId,
+        channel: 'referral',
+        referrerUnknownReason: 'fixture',
+      });
+      insertSourceEvent({
+        database: raw,
+        id: 'trigger-owner-second-referral',
+        personId: second.personId,
+        channel: 'referral',
+        referrerUnknownReason: 'fixture',
+      });
       assert.throws(() => insertTriggerEvent(raw, {
         id: 'trigger-wrong-source',
         prospectId: first.prospectId,
-        sourceEventId: second.sourceEventId,
+        sourceEventId: 'trigger-owner-second-referral',
+      }));
+      assert.throws(() => insertTriggerEvent(raw, {
+        id: 'trigger-wrong-channel',
+        prospectId: first.prospectId,
+        sourceEventId: first.sourceEventId,
       }));
       insertTriggerEvent(raw, {
         id: 'trigger-valid-source',
         prospectId: first.prospectId,
-        sourceEventId: first.sourceEventId,
+        sourceEventId: 'trigger-owner-first-referral',
       });
       assert.throws(() => raw.prepare(`
         UPDATE trigger_events SET source_event_id = ? WHERE id = 'trigger-valid-source'
-      `).run(second.sourceEventId));
+      `).run('trigger-owner-second-referral'));
       return;
     }
     case 'completion-activity-ownership': {
@@ -1465,13 +1528,20 @@ function runDatabaseScenario(
     }
     case 'immutable-trigger': {
       const prospect = seedProspect(raw, 'immutable-trigger');
+      insertSourceEvent({
+        database: raw,
+        id: 'immutable-trigger-referral',
+        personId: prospect.personId,
+        channel: 'referral',
+        referrerUnknownReason: 'fixture',
+      });
       raw.prepare(`
         INSERT INTO trigger_events (
           id, prospect_id, source_event_id, trigger_type, effective_at,
           strength_multiplier, verification_state, evidence_json, created_at
-        ) VALUES ('immutable-trigger-row', ?, ?, 'direct_referral', ?, 1.0,
-                  'verified', '{}', ?)
-      `).run(prospect.prospectId, prospect.sourceEventId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+        ) VALUES ('immutable-trigger-row', ?, 'immutable-trigger-referral',
+                  'direct_referral', ?, 1.0, 'verified', '{}', ?)
+      `).run(prospect.prospectId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
       assertImmutable(
         raw,
         'trigger_events',
@@ -1482,27 +1552,33 @@ function runDatabaseScenario(
     }
     case 'replace-immutable-unique-trigger': {
       const prospect = seedProspect(raw, 'replace-immutable-unique-trigger');
+      insertSourceEvent({
+        database: raw,
+        id: 'replace-trigger-referral',
+        personId: prospect.personId,
+        channel: 'referral',
+        referrerUnknownReason: 'fixture',
+      });
       insertTriggerEvent(raw, {
         id: 'replace-trigger-original',
         prospectId: prospect.prospectId,
-        sourceEventId: prospect.sourceEventId,
+        sourceEventId: 'replace-trigger-referral',
       });
       assert.throws(() => raw.prepare(`
         INSERT OR REPLACE INTO trigger_events (
           id, prospect_id, source_event_id, trigger_type, effective_at,
           strength_multiplier, verification_state, evidence_json, created_at
-        ) VALUES ('replace-trigger-new-id', ?, ?, 'live_vacancy', ?, 1.0,
-                  'verified', '{}', ?)
+        ) VALUES ('replace-trigger-new-id', ?, 'replace-trigger-referral',
+                  'direct_referral', ?, 1.0, 'verified', '{}', ?)
       `).run(
         prospect.prospectId,
-        prospect.sourceEventId,
         DOMAIN_TIMESTAMP,
         DOMAIN_TIMESTAMP,
       ));
       assert.deepEqual(
         raw.prepare<[], { id: string; trigger_type: string }>(`
           SELECT id, trigger_type FROM trigger_events
-          WHERE source_event_id = '${prospect.sourceEventId}'
+          WHERE source_event_id = 'replace-trigger-referral'
         `).get(),
         { id: 'replace-trigger-original', trigger_type: 'direct_referral' },
       );
@@ -1735,7 +1811,7 @@ function runDatabaseScenario(
     }
     case 'mutable-rule-activation-pointer': {
       insertPrioritizationRule(raw, 'activation-rule-one');
-      insertPrioritizationRule(raw, 'activation-rule-two');
+      insertPrioritizationRule(raw, 'activation-rule-two', 2);
       raw.prepare(`
         UPDATE workspace_settings
         SET active_prioritization_rule_version_id = 'activation-rule-one'
@@ -1889,12 +1965,13 @@ function insertStageEvent(
 function insertPrioritizationRule(
   database: AppDatabase['raw'],
   id: string,
+  version = 1,
 ): void {
   database.prepare(`
     INSERT INTO prioritization_rule_versions (
       id, version, content_hash, rules_json, created_at
-    ) VALUES (?, 1, ?, '{}', ?)
-  `).run(id, `hash-${id}`, DOMAIN_TIMESTAMP);
+    ) VALUES (?, ?, ?, '{}', ?)
+  `).run(id, version, `hash-${id}`, DOMAIN_TIMESTAMP);
 }
 
 function insertPrioritizationEvaluation(
@@ -1909,11 +1986,14 @@ function insertPrioritizationEvaluation(
 ): void {
   database.prepare(`
     INSERT INTO prioritization_evaluations (
-      id, prospect_id, rule_version_id, evaluated_at, fit_points, fit_band,
-      timing_millipoints, timing_band, reachability, data_confidence,
-      priority, earliest_trigger_expires_at, verify_first, explanation_json,
+      id, prospect_id, rule_version_id, decision_kind, evaluated_at, fit_points,
+      fit_band, timing_millipoints, timing_band, reachability, data_confidence,
+      priority, earliest_trigger_expires_at, verify_first,
+      last_contact_activity_id, last_contact_at, qualification_json,
+      command_json, input_snapshot_json, result_json, explanation_json,
       created_at
-    ) VALUES (?, ?, ?, ?, 25, 'high', 30000, 'hot', ?, 8, ?, NULL, 0, '[]', ?)
+    ) VALUES (?, ?, ?, 'evaluated', ?, 25, 'high', 30000, 'hot', ?, 8, ?, NULL,
+              0, NULL, NULL, NULL, '{}', '{}', '{}', '[]', ?)
   `).run(
     input.id,
     input.prospectId,
@@ -1937,11 +2017,12 @@ function insertPriorityProjection(
 ): void {
   database.prepare(`
     INSERT INTO prospect_priority_projection (
-      prospect_id, rule_version_id, evaluation_id, fit_points, fit_band,
-      timing_millipoints, timing_band, reachability, data_confidence,
-      priority, earliest_trigger_expires_at, verify_first, version,
-      evaluated_at, updated_at
-    ) VALUES (?, ?, ?, 25, 'high', 30000, 'hot', ?, 8, ?, NULL, 0, 1, ?, ?)
+      prospect_id, rule_version_id, evaluation_id, decision_kind, fit_points,
+      fit_band, timing_millipoints, timing_band, reachability, data_confidence,
+      priority, earliest_trigger_expires_at, verify_first,
+      last_contact_activity_id, last_contact_at, version, evaluated_at, updated_at
+    ) VALUES (?, ?, ?, 'evaluated', 25, 'high', 30000, 'hot', ?, 8, ?, NULL, 0,
+              NULL, NULL, 1, ?, ?)
   `).run(
     input.prospectId,
     input.ruleId,
@@ -1965,11 +2046,12 @@ function replacePriorityProjection(
 ): void {
   database.prepare(`
     INSERT OR REPLACE INTO prospect_priority_projection (
-      prospect_id, rule_version_id, evaluation_id, fit_points, fit_band,
-      timing_millipoints, timing_band, reachability, data_confidence,
-      priority, earliest_trigger_expires_at, verify_first, version,
-      evaluated_at, updated_at
-    ) VALUES (?, ?, ?, 25, 'high', 30000, 'hot', ?, 8, ?, NULL, 0, 1, ?, ?)
+      prospect_id, rule_version_id, evaluation_id, decision_kind, fit_points,
+      fit_band, timing_millipoints, timing_band, reachability, data_confidence,
+      priority, earliest_trigger_expires_at, verify_first,
+      last_contact_activity_id, last_contact_at, version, evaluated_at, updated_at
+    ) VALUES (?, ?, ?, 'evaluated', 25, 'high', 30000, 'hot', ?, 8, ?, NULL, 0,
+              NULL, NULL, 1, ?, ?)
   `).run(
     input.prospectId,
     input.ruleId,
@@ -1987,12 +2069,17 @@ function insertPriorityOverride(
   prospectId: string,
   priority: 'p0' | 'p1',
   expiresAt = '9999-12-31T23:59:59.999Z',
+  status: 'active' | 'expired' = 'active',
 ): void {
   database.prepare(`
     INSERT INTO priority_overrides (
-      id, prospect_id, override_kind, priority, reason, expires_at, created_at
-    ) VALUES (?, ?, 'priority', ?, 'Founder decision', ?, ?)
-  `).run(id, prospectId, priority, expiresAt, DOMAIN_TIMESTAMP);
+      id, prospect_id, override_kind, priority, reason, expires_at, created_at,
+      status, expired_at
+    ) VALUES (?, ?, 'priority', ?, 'Founder decision', ?, ?, ?, ?)
+  `).run(
+    id, prospectId, priority, expiresAt, DOMAIN_TIMESTAMP, status,
+    status === 'expired' ? expiresAt : null,
+  );
 }
 
 function insertCadenceEnrollment(

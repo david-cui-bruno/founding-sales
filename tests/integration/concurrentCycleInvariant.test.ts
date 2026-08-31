@@ -482,7 +482,7 @@ describe('concurrent SalesCycle invariant', () => {
     await waitUntil(() => existsSync(readyPath), 5_000);
     expect(() => harness.service.closeLostNurture({
       cycleId: seeded.cycleId, expectedCycleVersion: 1,
-      expectedCurrentActionId: seeded.actionId, reason: 'bad_timing', notes: null,
+      expectedCurrentActionId: seeded.actionId, reason: 'bad_timing', qualificationGateReason: null, notes: null,
       effectiveAt: DOMAIN_TIMESTAMP, manualReactivationDueAt: OCTOBER,
       expectedProspectVersion: null,
     })).toThrow();

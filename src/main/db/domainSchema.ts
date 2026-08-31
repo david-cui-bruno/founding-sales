@@ -14,6 +14,13 @@ export type FitBand = 'low' | 'medium' | 'high';
 export type TimingBand = 'cold' | 'warm' | 'hot';
 export type Priority = 'p0' | 'p1' | 'p2' | 'p3';
 export type Reachability = 'direct' | 'indirect' | 'none';
+export type QualificationGateReasonCode =
+  | 'out_of_area'
+  | 'no_relevant_decision_relationship'
+  | 'institutional_outside_icp'
+  | 'harmful_operator'
+  | 'non_paying_operator'
+  | 'unresolved_duplicate';
 export type ReactivationRuleType =
   | 'seasonal:heating-oct1'
   | 'new-frbo-listing'
@@ -110,6 +117,7 @@ export type ProspectsTable = {
   original_source_event_id: string;
   segment: 'hot_frbo' | 'cold_registry' | 'warm';
   qualification_state: 'unreviewed' | 'eligible' | 'disqualified' | 'merge_review';
+  qualification_gate_reason: QualificationGateReasonCode | null;
   qualification_reason: string | null;
   last_contact_at: string | null;
   version: Generated<number>;
@@ -353,7 +361,9 @@ export type SalesCycleCloseReadinessTable = {
 export type TriggerEventsTable = {
   id: string;
   prospect_id: string;
-  source_event_id: string;
+  source_event_id: string | null;
+  reactivation_receipt_activation_key: string | null;
+  reactivation_rule_id: string | null;
   trigger_type: string;
   effective_at: string;
   expires_at: string | null;
@@ -375,16 +385,23 @@ export type PrioritizationEvaluationsTable = {
   id: string;
   prospect_id: string;
   rule_version_id: string;
+  decision_kind: 'evaluated' | 'not_prioritizable';
   evaluated_at: string;
-  fit_points: number;
-  fit_band: FitBand;
-  timing_millipoints: number;
-  timing_band: TimingBand;
-  reachability: Reachability;
-  data_confidence: number;
-  priority: Priority;
+  fit_points: number | null;
+  fit_band: FitBand | null;
+  timing_millipoints: number | null;
+  timing_band: TimingBand | null;
+  reachability: Reachability | null;
+  data_confidence: number | null;
+  priority: Priority | null;
   earliest_trigger_expires_at: string | null;
-  verify_first: StoredBoolean;
+  verify_first: StoredBoolean | null;
+  last_contact_activity_id: string | null;
+  last_contact_at: string | null;
+  qualification_json: string | null;
+  command_json: string;
+  input_snapshot_json: string;
+  result_json: string;
   explanation_json: string;
   created_at: string;
 };
@@ -393,6 +410,7 @@ export type ProspectPriorityProjectionTable = {
   prospect_id: string;
   rule_version_id: string;
   evaluation_id: string;
+  decision_kind: Generated<'evaluated'>;
   fit_points: number;
   fit_band: FitBand;
   timing_millipoints: number;
@@ -402,6 +420,8 @@ export type ProspectPriorityProjectionTable = {
   priority: Priority;
   earliest_trigger_expires_at: string | null;
   verify_first: StoredBoolean;
+  last_contact_activity_id: string | null;
+  last_contact_at: string | null;
   version: Generated<number>;
   evaluated_at: string;
   updated_at: string;
@@ -414,6 +434,30 @@ export type PriorityOverridesTable = {
   priority: Priority | null;
   reason: string;
   expires_at: string;
+  created_at: string;
+  status: Generated<'active' | 'expired'>;
+  expired_at: string | null;
+};
+
+export type PrioritizationPreferenceEventsTable = {
+  id: string;
+  control_id: string | null;
+  controlled_prospect_id: string | null;
+  action_kind:
+    | 'acted_out_of_order'
+    | 'snoozed'
+    | 'dismissed'
+    | 'reordered'
+    | 'priority_overridden'
+    | 'pinned';
+  winner_prospect_id: string;
+  winner_evaluation_id: string;
+  winner_decision_kind: Generated<'evaluated'>;
+  loser_prospect_id: string;
+  loser_evaluation_id: string;
+  loser_decision_kind: Generated<'evaluated'>;
+  observed_at: string;
+  context_json: string;
   created_at: string;
 };
 
@@ -488,6 +532,7 @@ export type DomainTables = {
   persons: PersonsTable;
   person_contact_methods: PersonContactMethodsTable;
   prioritization_evaluations: PrioritizationEvaluationsTable;
+  prioritization_preference_events: PrioritizationPreferenceEventsTable;
   prioritization_rule_versions: PrioritizationRuleVersionsTable;
   priority_overrides: PriorityOverridesTable;
   properties: PropertiesTable;

@@ -80,13 +80,36 @@ const addContactMethodInputSchema = z.object({
   inContacts: z.boolean().nullable().optional(),
 }).strict();
 
+const qualificationGateReasonSchema = z.enum([
+  'out_of_area', 'no_relevant_decision_relationship', 'institutional_outside_icp',
+  'harmful_operator', 'non_paying_operator', 'unresolved_duplicate',
+]);
+
+function requireExactQualificationGate(
+  value: { qualificationGateReason?: string | null | undefined },
+  state: string,
+  context: z.RefinementCtx,
+): void {
+  const requiresGate = state === 'disqualified';
+  const hasGate = value.qualificationGateReason !== null
+    && value.qualificationGateReason !== undefined;
+  if (requiresGate === hasGate) return;
+  context.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: 'Disqualified requires an exact qualification gate reason; other states require null.',
+  });
+}
+
 const createProspectInputSchema = z.object({
   personId: idSchema,
   originalSourceEventId: idSchema,
   segment: z.enum(['hot_frbo', 'cold_registry', 'warm']),
   qualificationState: z.enum(['unreviewed', 'eligible', 'disqualified', 'merge_review']),
+  qualificationGateReason: qualificationGateReasonSchema.nullable(),
   qualificationReason: z.string().nullable().optional(),
-}).strict();
+}).strict().superRefine((value, context) => {
+  requireExactQualificationGate(value, value.qualificationState, context);
+});
 
 const createOrganizationInputSchema = z.object({
   canonicalName: nonemptyTextSchema,
@@ -168,12 +191,20 @@ const storedProspectRowSchema = z.object({
   original_source_event_id: idSchema,
   segment: z.enum(['hot_frbo', 'cold_registry', 'warm']),
   qualification_state: z.enum(['unreviewed', 'eligible', 'disqualified', 'merge_review']),
+  qualification_gate_reason: qualificationGateReasonSchema.nullable(),
   qualification_reason: z.string().nullable(),
   last_contact_at: utcTimestampSchema.nullable(),
   version: z.number().int().safe().positive(),
   created_at: utcTimestampSchema,
   updated_at: utcTimestampSchema,
-}).strict();
+}).strict().superRefine((row, context) => {
+  const requiresGate = row.qualification_state === 'disqualified';
+  if (requiresGate === (row.qualification_gate_reason !== null)) return;
+  context.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: 'Stored Prospect qualification gate reason contradicts its state.',
+  });
+});
 
 const storedOrganizationRowSchema = z.object({
   id: idSchema,
@@ -237,7 +268,8 @@ const personColumns = `
 `;
 const prospectColumns = `
   id, person_id, original_source_event_id, segment, qualification_state,
-  qualification_reason, last_contact_at, version, created_at, updated_at
+  qualification_gate_reason, qualification_reason, last_contact_at, version,
+  created_at, updated_at
 `;
 
 export class IdentityRepository {
@@ -322,8 +354,9 @@ export class IdentityRepository {
     const row = this.database.raw.prepare(`
       INSERT INTO prospects (
         id, person_id, original_source_event_id, segment, qualification_state,
-        qualification_reason, last_contact_at, version, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
+        qualification_gate_reason, qualification_reason, last_contact_at, version,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
       RETURNING ${prospectColumns}
     `).get(
       id,
@@ -331,6 +364,7 @@ export class IdentityRepository {
       parsed.originalSourceEventId,
       parsed.segment,
       parsed.qualificationState,
+      parsed.qualificationGateReason,
       parsed.qualificationReason ?? null,
       now,
       now,
@@ -618,18 +652,21 @@ export class IdentityRepository {
       expectedVersion: z.number().int().safe().positive(),
       expectedState: z.enum(['unreviewed', 'eligible', 'disqualified', 'merge_review']),
       nextState: z.enum(['unreviewed', 'eligible', 'disqualified', 'merge_review']),
+      qualificationGateReason: qualificationGateReasonSchema.nullable(),
       reason: z.string().nullable(),
       updatedAt: utcTimestampSchema,
-    }).strict().parse(input);
+    }).strict().superRefine((value, context) => {
+      requireExactQualificationGate(value, value.nextState, context);
+    }).parse(input);
     const row = this.database.raw.prepare(`
       UPDATE prospects
-      SET qualification_state = ?, qualification_reason = ?,
+      SET qualification_state = ?, qualification_gate_reason = ?, qualification_reason = ?,
           version = version + 1, updated_at = ?
       WHERE id = ? AND person_id = ? AND version = ? AND qualification_state = ?
       RETURNING ${prospectColumns}
     `).get(
-      parsed.nextState, parsed.reason, parsed.updatedAt, parsed.prospectId,
-      parsed.personId, parsed.expectedVersion, parsed.expectedState,
+      parsed.nextState, parsed.qualificationGateReason, parsed.reason, parsed.updatedAt,
+      parsed.prospectId, parsed.personId, parsed.expectedVersion, parsed.expectedState,
     );
     if (row === undefined) throw new StaleDomainWriteError();
     return parseProspect(row);
@@ -675,17 +712,28 @@ function parseContactMethod(value: unknown): ContactMethod {
 
 function parseProspect(value: unknown): Prospect {
   const row = storedProspectRowSchema.parse(value);
-  return {
+  const base = {
     id: row.id,
     personId: row.person_id,
     originalSourceEventId: row.original_source_event_id,
     segment: row.segment,
-    qualificationState: row.qualification_state,
     qualificationReason: row.qualification_reason,
     lastContactAt: row.last_contact_at,
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+  if (row.qualification_state === 'disqualified') {
+    return {
+      ...base,
+      qualificationState: 'disqualified',
+      qualificationGateReason: row.qualification_gate_reason!,
+    };
+  }
+  return {
+    ...base,
+    qualificationState: row.qualification_state,
+    qualificationGateReason: null,
   };
 }
 

@@ -141,6 +141,12 @@ const domainStatements = [
     qualification_state TEXT NOT NULL CHECK (
       qualification_state IN ('unreviewed', 'eligible', 'disqualified', 'merge_review')
     ),
+    qualification_gate_reason TEXT CHECK (
+      qualification_gate_reason IN (
+        'out_of_area', 'no_relevant_decision_relationship', 'institutional_outside_icp',
+        'harmful_operator', 'non_paying_operator', 'unresolved_duplicate'
+      )
+    ),
     qualification_reason TEXT,
     last_contact_at TEXT,
     version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
@@ -148,6 +154,10 @@ const domainStatements = [
     updated_at TEXT NOT NULL,
     UNIQUE (person_id),
     UNIQUE (id, person_id),
+    CHECK (
+      (qualification_state = 'disqualified' AND qualification_gate_reason IS NOT NULL)
+      OR (qualification_state <> 'disqualified' AND qualification_gate_reason IS NULL)
+    ),
     FOREIGN KEY (original_source_event_id, person_id)
       REFERENCES source_events(id, person_id)
   )`,
@@ -407,6 +417,7 @@ const domainStatements = [
     created_at TEXT NOT NULL,
     UNIQUE (id, person_id),
     UNIQUE (id, sales_cycle_id),
+    UNIQUE (id, prospect_id),
     FOREIGN KEY (prospect_id, person_id) REFERENCES prospects(id, person_id),
     FOREIGN KEY (sales_cycle_id, person_id) REFERENCES sales_cycles(id, person_id),
     FOREIGN KEY (cadence_enrollment_id, sales_cycle_id)
@@ -611,7 +622,10 @@ const domainStatements = [
   `CREATE TABLE trigger_events (
     id TEXT PRIMARY KEY,
     prospect_id TEXT NOT NULL REFERENCES prospects(id),
-    source_event_id TEXT NOT NULL REFERENCES source_events(id),
+    source_event_id TEXT REFERENCES source_events(id),
+    reactivation_receipt_activation_key TEXT
+      REFERENCES cycle_reactivation_receipts(activation_key),
+    reactivation_rule_id TEXT REFERENCES reactivation_rules(id),
     trigger_type TEXT NOT NULL,
     effective_at TEXT NOT NULL,
     expires_at TEXT,
@@ -623,13 +637,30 @@ const domainStatements = [
     ),
     evidence_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    UNIQUE (source_event_id)
+    UNIQUE (reactivation_receipt_activation_key),
+    CHECK (
+      (
+        trigger_type <> 'nurture_resurrection'
+        AND source_event_id IS NOT NULL
+        AND reactivation_receipt_activation_key IS NULL
+        AND reactivation_rule_id IS NULL
+      )
+      OR (
+        trigger_type = 'nurture_resurrection'
+        AND source_event_id IS NULL
+        AND reactivation_receipt_activation_key IS NOT NULL
+        AND reactivation_rule_id IS NOT NULL
+      )
+    )
   )`,
+  `CREATE UNIQUE INDEX trigger_events_source_event_unique
+    ON trigger_events(source_event_id)
+    WHERE source_event_id IS NOT NULL`,
   `CREATE INDEX trigger_events_prospect_effective_idx
     ON trigger_events(prospect_id, effective_at)`,
   `CREATE TABLE prioritization_rule_versions (
     id TEXT PRIMARY KEY,
-    version INTEGER NOT NULL CHECK (version > 0),
+    version INTEGER NOT NULL UNIQUE CHECK (version > 0),
     content_hash TEXT NOT NULL UNIQUE,
     rules_json TEXT NOT NULL,
     created_at TEXT NOT NULL
@@ -638,34 +669,82 @@ const domainStatements = [
     id TEXT PRIMARY KEY,
     prospect_id TEXT NOT NULL REFERENCES prospects(id),
     rule_version_id TEXT NOT NULL REFERENCES prioritization_rule_versions(id),
+    decision_kind TEXT NOT NULL CHECK (decision_kind IN ('evaluated','not_prioritizable')),
     evaluated_at TEXT NOT NULL,
-    fit_points INTEGER NOT NULL CHECK (fit_points BETWEEN 0 AND 30),
-    fit_band TEXT NOT NULL CHECK (fit_band IN ('low','medium','high')),
-    timing_millipoints INTEGER NOT NULL CHECK (timing_millipoints BETWEEN 0 AND 40000),
-    timing_band TEXT NOT NULL CHECK (timing_band IN ('cold','warm','hot')),
-    reachability TEXT NOT NULL CHECK (reachability IN ('direct','indirect','none')),
-    data_confidence INTEGER NOT NULL CHECK (data_confidence BETWEEN 0 AND 10),
-    priority TEXT NOT NULL CHECK (priority IN ('p0','p1','p2','p3')),
+    fit_points INTEGER CHECK (fit_points BETWEEN 0 AND 30),
+    fit_band TEXT CHECK (fit_band IN ('low','medium','high')),
+    timing_millipoints INTEGER CHECK (timing_millipoints BETWEEN 0 AND 40000),
+    timing_band TEXT CHECK (timing_band IN ('cold','warm','hot')),
+    reachability TEXT CHECK (reachability IN ('direct','indirect','none')),
+    data_confidence INTEGER CHECK (data_confidence BETWEEN 0 AND 10),
+    priority TEXT CHECK (priority IN ('p0','p1','p2','p3')),
     earliest_trigger_expires_at TEXT,
-    verify_first INTEGER NOT NULL CHECK (verify_first IN (0, 1)),
+    verify_first INTEGER CHECK (verify_first IN (0, 1)),
+    last_contact_activity_id TEXT,
+    last_contact_at TEXT,
+    qualification_json TEXT,
+    command_json TEXT NOT NULL CHECK (length(trim(command_json)) > 0),
+    input_snapshot_json TEXT NOT NULL CHECK (length(trim(input_snapshot_json)) > 0),
+    result_json TEXT NOT NULL CHECK (length(trim(result_json)) > 0),
     explanation_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    UNIQUE (id, prospect_id),
+    UNIQUE (id, prospect_id, decision_kind),
+    FOREIGN KEY (last_contact_activity_id, prospect_id)
+      REFERENCES activities(id, prospect_id),
     CHECK (
-      (fit_points BETWEEN 0 AND 9 AND fit_band = 'low')
+      (
+        decision_kind = 'evaluated'
+        AND fit_points IS NOT NULL
+        AND fit_band IS NOT NULL
+        AND timing_millipoints IS NOT NULL
+        AND timing_band IS NOT NULL
+        AND reachability IS NOT NULL
+        AND data_confidence IS NOT NULL
+        AND priority IS NOT NULL
+        AND verify_first IS NOT NULL
+        AND qualification_json IS NULL
+      )
+      OR (
+        decision_kind = 'not_prioritizable'
+        AND fit_points IS NULL
+        AND fit_band IS NULL
+        AND timing_millipoints IS NULL
+        AND timing_band IS NULL
+        AND reachability IS NULL
+        AND data_confidence IS NULL
+        AND priority IS NULL
+        AND earliest_trigger_expires_at IS NULL
+        AND verify_first IS NULL
+        AND last_contact_activity_id IS NULL
+        AND last_contact_at IS NULL
+        AND qualification_json IS NOT NULL
+        AND length(trim(qualification_json)) > 0
+      )
+    ),
+    CHECK (
+      (last_contact_activity_id IS NULL AND last_contact_at IS NULL)
+      OR (last_contact_activity_id IS NOT NULL AND last_contact_at IS NOT NULL)
+    ),
+    CHECK (
+      fit_points IS NULL
+      OR (fit_points BETWEEN 0 AND 9 AND fit_band = 'low')
       OR (fit_points BETWEEN 10 AND 19 AND fit_band = 'medium')
       OR (fit_points BETWEEN 20 AND 30 AND fit_band = 'high')
     ),
     CHECK (
-      (timing_millipoints BETWEEN 0 AND 7999 AND timing_band = 'cold')
+      timing_millipoints IS NULL
+      OR (timing_millipoints BETWEEN 0 AND 7999 AND timing_band = 'cold')
       OR (timing_millipoints BETWEEN 8000 AND 19999 AND timing_band = 'warm')
       OR (timing_millipoints BETWEEN 20000 AND 40000 AND timing_band = 'hot')
     ),
-    CHECK (priority <> 'p0' OR reachability = 'direct')
+    CHECK (priority IS NULL OR priority <> 'p0' OR reachability = 'direct')
   )`,
   `CREATE TABLE prospect_priority_projection (
     prospect_id TEXT PRIMARY KEY REFERENCES prospects(id),
     rule_version_id TEXT NOT NULL REFERENCES prioritization_rule_versions(id),
     evaluation_id TEXT NOT NULL REFERENCES prioritization_evaluations(id),
+    decision_kind TEXT NOT NULL DEFAULT 'evaluated' CHECK (decision_kind = 'evaluated'),
     fit_points INTEGER NOT NULL CHECK (fit_points BETWEEN 0 AND 30),
     fit_band TEXT NOT NULL CHECK (fit_band IN ('low','medium','high')),
     timing_millipoints INTEGER NOT NULL CHECK (timing_millipoints BETWEEN 0 AND 40000),
@@ -675,9 +754,17 @@ const domainStatements = [
     priority TEXT NOT NULL CHECK (priority IN ('p0','p1','p2','p3')),
     earliest_trigger_expires_at TEXT,
     verify_first INTEGER NOT NULL CHECK (verify_first IN (0, 1)),
+    last_contact_activity_id TEXT,
+    last_contact_at TEXT,
     version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
     evaluated_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    FOREIGN KEY (evaluation_id, prospect_id, decision_kind)
+      REFERENCES prioritization_evaluations(id, prospect_id, decision_kind),
+    CHECK (
+      (last_contact_activity_id IS NULL AND last_contact_at IS NULL)
+      OR (last_contact_activity_id IS NOT NULL AND last_contact_at IS NOT NULL)
+    ),
     CHECK (
       (fit_points BETWEEN 0 AND 9 AND fit_band = 'low')
       OR (fit_points BETWEEN 10 AND 19 AND fit_band = 'medium')
@@ -705,9 +792,61 @@ const domainStatements = [
     reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
     expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','expired')),
+    expired_at TEXT,
+    UNIQUE (id, prospect_id),
     CHECK (
       (override_kind = 'priority' AND priority IS NOT NULL)
       OR (override_kind <> 'priority' AND priority IS NULL)
+    ),
+    CHECK (
+      (status = 'active' AND expired_at IS NULL)
+      OR (status = 'expired' AND expired_at IS NOT NULL AND expired_at >= expires_at)
+    )
+  )`,
+  `CREATE TABLE prioritization_preference_events (
+    id TEXT PRIMARY KEY,
+    control_id TEXT,
+    controlled_prospect_id TEXT,
+    action_kind TEXT NOT NULL CHECK (action_kind IN (
+      'acted_out_of_order','snoozed','dismissed','reordered',
+      'priority_overridden','pinned'
+    )),
+    winner_prospect_id TEXT NOT NULL REFERENCES prospects(id),
+    winner_evaluation_id TEXT NOT NULL,
+    winner_decision_kind TEXT NOT NULL DEFAULT 'evaluated' CHECK (winner_decision_kind = 'evaluated'),
+    loser_prospect_id TEXT NOT NULL REFERENCES prospects(id),
+    loser_evaluation_id TEXT NOT NULL,
+    loser_decision_kind TEXT NOT NULL DEFAULT 'evaluated' CHECK (loser_decision_kind = 'evaluated'),
+    observed_at TEXT NOT NULL,
+    context_json TEXT NOT NULL CHECK (length(trim(context_json)) > 0),
+    created_at TEXT NOT NULL,
+    UNIQUE (control_id),
+    FOREIGN KEY (control_id, controlled_prospect_id)
+      REFERENCES priority_overrides(id, prospect_id),
+    FOREIGN KEY (winner_evaluation_id, winner_prospect_id, winner_decision_kind)
+      REFERENCES prioritization_evaluations(id, prospect_id, decision_kind),
+    FOREIGN KEY (loser_evaluation_id, loser_prospect_id, loser_decision_kind)
+      REFERENCES prioritization_evaluations(id, prospect_id, decision_kind),
+    CHECK (winner_prospect_id <> loser_prospect_id),
+    CHECK (
+      (
+        action_kind IN ('acted_out_of_order','reordered')
+        AND control_id IS NULL
+        AND controlled_prospect_id IS NULL
+      )
+      OR (
+        action_kind IN ('priority_overridden','pinned')
+        AND control_id IS NOT NULL
+        AND controlled_prospect_id IS NOT NULL
+        AND controlled_prospect_id = winner_prospect_id
+      )
+      OR (
+        action_kind IN ('snoozed','dismissed')
+        AND control_id IS NOT NULL
+        AND controlled_prospect_id IS NOT NULL
+        AND controlled_prospect_id = loser_prospect_id
+      )
     )
   )`,
   `CREATE TABLE opt_out_tombstones (
@@ -1124,15 +1263,54 @@ const domainStatements = [
     END`,
   `CREATE TRIGGER protect_trigger_event_ownership
     BEFORE INSERT ON trigger_events
-    WHEN NOT EXISTS (
-      SELECT 1
-      FROM prospects AS prospect
-      JOIN source_events AS source ON source.id = NEW.source_event_id
-      WHERE prospect.id = NEW.prospect_id
-        AND prospect.person_id = source.person_id
-    )
+    WHEN NEW.source_event_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM prospects AS prospect
+        JOIN source_events AS source ON source.id = NEW.source_event_id
+        WHERE prospect.id = NEW.prospect_id
+          AND prospect.person_id = source.person_id
+          AND NEW.effective_at = source.observed_at
+          AND (
+            (NEW.trigger_type = 'live_vacancy' AND source.channel = 'frbo')
+            OR (NEW.trigger_type = 'inbound_demo' AND source.channel = 'inbound_demo')
+            OR (NEW.trigger_type = 'direct_referral' AND source.channel = 'referral')
+            OR (NEW.trigger_type = 'rireig_connection' AND source.channel = 'rireig')
+            OR (
+              NEW.trigger_type NOT IN (
+                'live_vacancy','inbound_demo','direct_referral','rireig_connection'
+              )
+              AND json_extract(source.source_record_json, '$.prioritizationTrigger.version') = 1
+              AND json_extract(source.source_record_json, '$.prioritizationTrigger.signal')
+                = NEW.trigger_type
+            )
+          )
+      )
     BEGIN
       SELECT RAISE(ABORT, 'trigger evidence must belong to the prospect person');
+    END`,
+  `CREATE TRIGGER protect_trigger_event_receipt_proof
+    BEFORE INSERT ON trigger_events
+    WHEN NEW.reactivation_receipt_activation_key IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM cycle_reactivation_receipts AS receipt
+        JOIN prospects AS prospect ON prospect.id = NEW.prospect_id
+        JOIN sales_cycles AS source_cycle ON source_cycle.id = receipt.source_cycle_id
+        WHERE receipt.activation_key = NEW.reactivation_receipt_activation_key
+          AND receipt.activation_kind = 'rule'
+          AND receipt.reactivation_rule_id = NEW.reactivation_rule_id
+          AND receipt.person_id = prospect.person_id
+          AND source_cycle.prospect_id = NEW.prospect_id
+          AND NEW.effective_at = receipt.created_at
+          AND EXISTS (
+            SELECT 1 FROM reactivation_rules AS rule
+            WHERE rule.id = receipt.reactivation_rule_id
+              AND rule.consumed_at IS NOT NULL
+          )
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'nurture resurrection requires an owned consumed rule receipt');
     END`,
   `CREATE TRIGGER protect_priority_projection_fidelity
     BEFORE INSERT ON prospect_priority_projection
@@ -1141,6 +1319,7 @@ const domainStatements = [
       FROM prioritization_evaluations AS evaluation
       WHERE evaluation.id = NEW.evaluation_id
         AND evaluation.prospect_id = NEW.prospect_id
+        AND evaluation.decision_kind = 'evaluated'
         AND evaluation.rule_version_id = NEW.rule_version_id
         AND evaluation.fit_points = NEW.fit_points
         AND evaluation.fit_band = NEW.fit_band
@@ -1151,6 +1330,8 @@ const domainStatements = [
         AND evaluation.priority = NEW.priority
         AND evaluation.earliest_trigger_expires_at IS NEW.earliest_trigger_expires_at
         AND evaluation.verify_first = NEW.verify_first
+        AND evaluation.last_contact_activity_id IS NEW.last_contact_activity_id
+        AND evaluation.last_contact_at IS NEW.last_contact_at
         AND evaluation.evaluated_at = NEW.evaluated_at
     )
     BEGIN
@@ -1163,6 +1344,7 @@ const domainStatements = [
       FROM prioritization_evaluations AS evaluation
       WHERE evaluation.id = NEW.evaluation_id
         AND evaluation.prospect_id = NEW.prospect_id
+        AND evaluation.decision_kind = 'evaluated'
         AND evaluation.rule_version_id = NEW.rule_version_id
         AND evaluation.fit_points = NEW.fit_points
         AND evaluation.fit_band = NEW.fit_band
@@ -1173,6 +1355,8 @@ const domainStatements = [
         AND evaluation.priority = NEW.priority
         AND evaluation.earliest_trigger_expires_at IS NEW.earliest_trigger_expires_at
         AND evaluation.verify_first = NEW.verify_first
+        AND evaluation.last_contact_activity_id IS NEW.last_contact_activity_id
+        AND evaluation.last_contact_at IS NEW.last_contact_at
         AND evaluation.evaluated_at = NEW.evaluated_at
     )
     BEGIN
@@ -1187,7 +1371,7 @@ const domainStatements = [
   `CREATE TRIGGER protect_p0_priority_override
     BEFORE INSERT ON priority_overrides
     WHEN NEW.override_kind = 'priority' AND NEW.priority = 'p0'
-      AND NEW.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      AND NEW.status = 'active'
       AND NOT EXISTS (
         SELECT 1 FROM prospect_priority_projection AS projection
         WHERE projection.prospect_id = NEW.prospect_id
@@ -1196,17 +1380,32 @@ const domainStatements = [
     BEGIN
       SELECT RAISE(ABORT, 'P0 override requires a Direct current projection');
     END`,
-  `CREATE TRIGGER protect_p0_priority_override_update
-    BEFORE UPDATE OF prospect_id, override_kind, priority, expires_at ON priority_overrides
-    WHEN NEW.override_kind = 'priority' AND NEW.priority = 'p0'
-      AND NEW.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      AND NOT EXISTS (
-        SELECT 1 FROM prospect_priority_projection AS projection
-        WHERE projection.prospect_id = NEW.prospect_id
-          AND projection.reachability = 'direct'
+  `CREATE TRIGGER protect_priority_override_mutation
+    BEFORE UPDATE ON priority_overrides
+    WHEN NOT (
+      NEW.id IS OLD.id
+      AND NEW.prospect_id IS OLD.prospect_id
+      AND NEW.override_kind IS OLD.override_kind
+      AND NEW.priority IS OLD.priority
+      AND NEW.reason IS OLD.reason
+      AND NEW.created_at IS OLD.created_at
+      AND NEW.expires_at <= OLD.expires_at
+      AND (
+        (OLD.status = 'active' AND NEW.status = 'active' AND NEW.expired_at IS NULL
+          AND NEW.expires_at = OLD.expires_at)
+        OR (OLD.status = 'active' AND NEW.status = 'expired' AND NEW.expired_at IS NOT NULL)
+        OR (OLD.status = 'expired' AND NEW.status = 'expired'
+          AND NEW.expired_at IS OLD.expired_at
+          AND NEW.expires_at = OLD.expires_at)
       )
+    )
     BEGIN
-      SELECT RAISE(ABORT, 'P0 override requires a Direct current projection');
+      SELECT RAISE(ABORT, 'priority controls only shorten expiration and expire one-way');
+    END`,
+  `CREATE TRIGGER protect_priority_override_delete
+    BEFORE DELETE ON priority_overrides
+    BEGIN
+      SELECT RAISE(ABORT, 'priority controls are retained forever');
     END`,
   `CREATE TRIGGER protect_projection_p0_override_update
     BEFORE UPDATE ON prospect_priority_projection
@@ -1216,8 +1415,7 @@ const domainStatements = [
         WHERE priority_override.prospect_id = OLD.prospect_id
           AND priority_override.override_kind = 'priority'
           AND priority_override.priority = 'p0'
-          AND priority_override.expires_at
-            > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          AND priority_override.status = 'active'
       )
     BEGIN
       SELECT RAISE(ABORT, 'P0 override requires a Direct current projection');
@@ -1229,8 +1427,7 @@ const domainStatements = [
       WHERE priority_override.prospect_id = OLD.prospect_id
         AND priority_override.override_kind = 'priority'
         AND priority_override.priority = 'p0'
-        AND priority_override.expires_at
-          > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        AND priority_override.status = 'active'
     )
     BEGIN
       SELECT RAISE(ABORT, 'P0 override requires a current projection');
@@ -1337,6 +1534,7 @@ const domainStatements = [
   ...immutableTriggers('cadence_steps'),
   ...immutableTriggers('cadence_action_components'),
   ...immutableTriggers('prioritization_rule_versions'),
+  ...immutableTriggers('prioritization_preference_events'),
   `CREATE TRIGGER protect_opt_out_tombstone_active_cadence
     BEFORE INSERT ON opt_out_tombstones
     WHEN EXISTS (

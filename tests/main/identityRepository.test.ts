@@ -149,6 +149,7 @@ describe('IdentityRepository', () => {
         originalSourceEventId: 'source-one',
         segment: 'hot_frbo',
         qualificationState: 'eligible',
+        qualificationGateReason: null,
       });
       const firstOrganization = identities.createOrganization({
         canonicalName: 'Shin Holdings LLC',
@@ -222,6 +223,7 @@ describe('IdentityRepository', () => {
         originalSourceEventId: 'source',
         segment: 'warm',
         qualificationState: 'eligible',
+        qualificationGateReason: null,
       });
       const organization = identities.createOrganization({ canonicalName: 'One LLC' });
       const property = identities.createProperty({
@@ -463,6 +465,7 @@ describe('IdentityRepository', () => {
         originalSourceEventId: 'source',
         segment: 'warm',
         qualificationState: 'eligible',
+        qualificationGateReason: null,
       });
     });
     database!.raw.prepare("UPDATE prospects SET updated_at = 'not-utc' WHERE id = 'prospect'").run();
@@ -477,13 +480,13 @@ describe('IdentityRepository', () => {
       insertSourceEvent('source', person.id);
       return identities.createCanonicalProspect({
         personId: person.id, originalSourceEventId: 'source', segment: 'warm',
-        qualificationState: 'unreviewed',
+        qualificationState: 'unreviewed', qualificationGateReason: null,
       });
     });
     const updated = unitOfWork.immediate(() => identities.updateProspectQualification({
       prospectId: prospect.id, personId: prospect.personId, expectedVersion: 1,
-      expectedState: 'unreviewed', nextState: 'eligible', reason: 'Founder reviewed',
-      updatedAt: TIMESTAMP,
+      expectedState: 'unreviewed', nextState: 'eligible', qualificationGateReason: null,
+      reason: 'Founder reviewed', updatedAt: TIMESTAMP,
     }));
     expect(updated).toMatchObject({
       qualificationState: 'eligible', qualificationReason: 'Founder reviewed',
@@ -491,8 +494,53 @@ describe('IdentityRepository', () => {
     });
     expect(() => unitOfWork.immediate(() => identities.updateProspectQualification({
       prospectId: prospect.id, personId: prospect.personId, expectedVersion: 1,
-      expectedState: 'unreviewed', nextState: 'eligible', reason: null,
-      updatedAt: TIMESTAMP,
+      expectedState: 'unreviewed', nextState: 'eligible', qualificationGateReason: null,
+      reason: null, updatedAt: TIMESTAMP,
     }))).toThrow(StaleDomainWriteError);
+  });
+
+  it('requires an exact qualification gate only for disqualified Prospects', async () => {
+    const identities = await createRepository(['person-gate', 'prospect-gate']);
+    const prospect = unitOfWork.immediate(() => {
+      const person = identities.createPerson({ displayName: 'Gate Test' });
+      insertSourceEvent('source-gate', person.id);
+      return identities.createCanonicalProspect({
+        personId: person.id,
+        originalSourceEventId: 'source-gate',
+        segment: 'cold_registry',
+        qualificationState: 'eligible',
+        qualificationGateReason: null,
+      });
+    });
+
+    expect(prospect).toMatchObject({
+      qualificationState: 'eligible',
+      qualificationGateReason: null,
+    });
+    expect(() => unitOfWork.immediate(() => identities.updateProspectQualification({
+      prospectId: prospect.id,
+      personId: prospect.personId,
+      expectedVersion: prospect.version,
+      expectedState: 'eligible',
+      nextState: 'disqualified',
+      qualificationGateReason: null,
+      reason: 'not qualified',
+      updatedAt: TIMESTAMP,
+    }))).toThrow();
+
+    const disqualified = unitOfWork.immediate(() => identities.updateProspectQualification({
+      prospectId: prospect.id,
+      personId: prospect.personId,
+      expectedVersion: prospect.version,
+      expectedState: 'eligible',
+      nextState: 'disqualified',
+      qualificationGateReason: 'out_of_area',
+      reason: 'not qualified',
+      updatedAt: TIMESTAMP,
+    }));
+    expect(disqualified).toMatchObject({
+      qualificationState: 'disqualified',
+      qualificationGateReason: 'out_of_area',
+    });
   });
 });

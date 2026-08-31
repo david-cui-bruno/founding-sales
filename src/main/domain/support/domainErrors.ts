@@ -137,3 +137,60 @@ export class OutboundContactBlockedError extends Error {
     this.tombstoneIds = Object.freeze([...tombstoneIds]);
   }
 }
+
+export class PrioritizationInputCorruptionError extends Error {
+  constructor(message = 'Prioritization input evidence is malformed or corrupt.') {
+    super(message);
+    this.name = 'PrioritizationInputCorruptionError';
+  }
+}
+
+export class PrioritizationRuleConflictError extends Error {
+  constructor(message = 'The immutable prioritization rule version conflicts with stored content.') {
+    super(message);
+    this.name = 'PrioritizationRuleConflictError';
+  }
+}
+
+export class PrioritizationIdempotencyConflictError extends Error {
+  constructor(message = 'The prioritization idempotency key already exists for a different command.') {
+    super(message);
+    this.name = 'PrioritizationIdempotencyConflictError';
+  }
+}
+
+export class PrioritizationStaleWriteError extends Error {
+  constructor(message = 'The prioritization projection, control, or rule pointer changed before this command could commit.') {
+    super(message);
+    this.name = 'PrioritizationStaleWriteError';
+  }
+}
+
+export class PriorityControlOverlapError extends Error {
+  readonly overrideKind: 'priority' | 'pin_to_top' | 'snooze' | 'dismiss';
+
+  constructor(overrideKind: 'priority' | 'pin_to_top' | 'snooze' | 'dismiss') {
+    super('An effective manual control of this kind already exists for the Prospect.');
+    this.name = 'PriorityControlOverlapError';
+    this.overrideKind = overrideKind;
+  }
+}
+
+export class PriorityP0ReachabilityError extends Error {
+  constructor() {
+    super('A P0 priority override requires a current Direct projection.');
+    this.name = 'PriorityP0ReachabilityError';
+  }
+}
+
+export class PrioritizationOperationalBlockError extends Error {
+  readonly reason: 'person_deleted' | 'person_opted_out';
+  readonly evidenceIds: readonly string[];
+
+  constructor(reason: 'person_deleted' | 'person_opted_out', evidenceIds: readonly string[]) {
+    super('The prioritization command is operationally blocked for this Person.');
+    this.name = 'PrioritizationOperationalBlockError';
+    this.reason = reason;
+    this.evidenceIds = Object.freeze([...evidenceIds]);
+  }
+}

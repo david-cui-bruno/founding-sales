@@ -62,6 +62,8 @@ import type {
 import {
   actionSettlementOutcomeSchema, serializeCanonical, utcTimestampSchema,
 } from './lifecycleValidation';
+import { qualifiesContactEvidence } from '../events/qualifyingContactEvidence';
+import type { QualificationGateReason } from '../identity/identityTypes';
 import { LifecycleReviewRepository } from './lifecycleReviewRepository';
 import { NextActionRepository } from './nextActionRepository';
 import {
@@ -230,11 +232,20 @@ export type CompleteCurrentActionInput = Readonly<{
   manualReactivationDueAt: string | null;
 }>;
 
-export type CloseLostNurtureInput = Readonly<{
+export type CloseLostNurtureQualification =
+  | {
+      reason: 'not_qualified' | 'disqualified';
+      qualificationGateReason: QualificationGateReason;
+    }
+  | {
+      reason: Exclude<LostNurtureReason, 'not_qualified' | 'disqualified' | 'opt_out'>;
+      qualificationGateReason: null;
+    };
+
+export type CloseLostNurtureInput = Readonly<CloseLostNurtureQualification & {
   cycleId: string;
   expectedCycleVersion: number;
   expectedCurrentActionId: string;
-  reason: Exclude<LostNurtureReason, 'opt_out'>;
   notes: string | null;
   effectiveAt: string;
   manualReactivationDueAt: string | null;
@@ -461,6 +472,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     this.identities.updateProspectQualification({
       prospectId: prospect.id, personId: prospect.personId,
       expectedVersion: prospect.version, expectedState: 'unreviewed', nextState: 'eligible',
+      qualificationGateReason: null,
       reason: 'Founder reviewed', updatedAt: effectiveAt,
     });
     const transitioned = this.cycles.transitionOpenProjection({
@@ -506,7 +518,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     if (
       activity === null || activity.personId !== cycle.personId
       || activity.prospectId !== cycle.prospectId || activity.salesCycleId !== cycle.id
-      || !isQualifyingContact(activity)
+      || !qualifiesContactEvidence(activity, cycle.prospectId)
     ) throw new LifecycleEvidenceError('Activity does not mechanically qualify as Contacted.');
     this.assertTransitionEvidenceTimes(cycle, effectiveAt, effectiveAt, activity);
     const transitioned = this.cycles.transitionOpenProjection({
@@ -833,7 +845,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       highestProspectingAttemptCap: this.highestProspectingCap(cycle.id),
     });
     const activity = this.validateOutcomeEvidence(cycle, action, recipe, parsed.activityId);
-    const lifecycleCycle = cycle.stage === 'ready' && activity !== null && isQualifyingContact(activity)
+    const lifecycleCycle = cycle.stage === 'ready' && activity !== null
+      && qualifiesContactEvidence(activity, cycle.prospectId)
       ? this.recordQualifyingContact({
           cycleId: cycle.id, expectedCycleVersion: cycle.version,
           expectedCurrentActionId: action.id, activityId: activity.id,
@@ -908,12 +921,23 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
         'not_qualified', 'price', 'trust', 'chose_alternative', 'product_gap',
         'cadence_exhausted', 'disqualified', 'other',
       ]),
+      qualificationGateReason: z.enum([
+        'out_of_area', 'no_relevant_decision_relationship', 'institutional_outside_icp',
+        'harmful_operator', 'non_paying_operator', 'unresolved_duplicate',
+      ]).nullable(),
       notes: z.string().nullable(), effectiveAt: utcTimestampSchema,
       manualReactivationDueAt: utcTimestampSchema.nullable(),
       expectedProspectVersion: z.number().int().positive().nullable(),
     }).strict().superRefine((value, context) => {
       if (value.reason === 'other' && (value.notes?.trim().length ?? 0) === 0) {
         context.addIssue({ code: z.ZodIssueCode.custom, message: 'Other requires notes.' });
+      }
+      const requiresGate = value.reason === 'not_qualified' || value.reason === 'disqualified';
+      if (requiresGate !== (value.qualificationGateReason !== null)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Disqualifying Lost-Nurture reasons require an exact qualification gate reason; other reasons require null.',
+        });
       }
     }).parse(input) as CloseLostNurtureInput;
     const cycle = this.cycles.getById(parsed.cycleId);
@@ -952,7 +976,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       this.identities.updateProspectQualification({
         prospectId: prospect.id, personId: prospect.personId,
         expectedVersion: parsed.expectedProspectVersion!, expectedState: prospect.qualificationState,
-        nextState: 'disqualified', reason: parsed.reason, updatedAt: parsed.effectiveAt,
+        nextState: 'disqualified', qualificationGateReason: parsed.qualificationGateReason!,
+        reason: parsed.reason, updatedAt: parsed.effectiveAt,
       });
     }
     const eventId = this.ids.next();
@@ -2154,17 +2179,6 @@ function planManualReactivation(
   return planReactivationDefaults({
     salesCycleId, family: 'cadence_c', evaluationAt, timezone, manualDueAt,
   });
-}
-
-function isQualifyingContact(activity: Activity): boolean {
-  if (activity.direction === 'inbound') return true;
-  if (activity.kind === 'call') return activity.observedOutcome === 'answered';
-  if (activity.kind === 'voicemail') return activity.observedOutcome === 'voicemail_left';
-  if (activity.kind === 'text' || activity.kind === 'email') {
-    return activity.observedOutcome === 'accepted'
-      || activity.observedOutcome === 'delivered';
-  }
-  return false;
 }
 
 function toRuleInsert(

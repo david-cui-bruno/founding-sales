@@ -134,11 +134,12 @@ describe('auditDomainInvariants', () => {
     `).run('2026-08-30T12:00:00.000Z');
     database.raw.prepare(`
       INSERT INTO prioritization_evaluations (
-        id, prospect_id, rule_version_id, evaluated_at, fit_points, fit_band,
+        id, prospect_id, rule_version_id, decision_kind, evaluated_at, fit_points, fit_band,
         timing_millipoints, timing_band, reachability, data_confidence,
-        priority, earliest_trigger_expires_at, verify_first, explanation_json, created_at
-      ) VALUES ('audit-evaluation', ?, 'audit-rule', ?, 25, 'high', 30000, 'hot',
-        'direct', 8, 'p0', NULL, 0, '[]', ?)
+        priority, earliest_trigger_expires_at, verify_first,
+        command_json, input_snapshot_json, result_json, explanation_json, created_at
+      ) VALUES ('audit-evaluation', ?, 'audit-rule', 'evaluated', ?, 25, 'high', 30000, 'hot',
+        'direct', 8, 'p0', NULL, 0, '{}', '{}', '{}', '[]', ?)
     `).run(prospect.prospectId, '2026-08-30T12:00:00.000Z', '2026-08-30T12:00:00.000Z');
     database.raw.prepare(`
       INSERT INTO prospect_priority_projection (
@@ -554,11 +555,12 @@ describe('auditDomainInvariants', () => {
     `).run(DOMAIN_TIMESTAMP);
     database.raw.prepare(`
       INSERT INTO prioritization_evaluations (
-        id, prospect_id, rule_version_id, evaluated_at, fit_points, fit_band,
+        id, prospect_id, rule_version_id, decision_kind, evaluated_at, fit_points, fit_band,
         timing_millipoints, timing_band, reachability, data_confidence,
-        priority, earliest_trigger_expires_at, verify_first, explanation_json, created_at
-      ) VALUES ('p0-audit-eval', ?, 'p0-audit-rule', ?, 10, 'low', 0, 'cold',
-        'direct', 1, 'p3', NULL, 0, '[]', ?)
+        priority, earliest_trigger_expires_at, verify_first,
+        command_json, input_snapshot_json, result_json, explanation_json, created_at
+      ) VALUES ('p0-audit-eval', ?, 'p0-audit-rule', 'evaluated', ?, 10, 'low', 0, 'cold',
+        'direct', 1, 'p3', NULL, 0, '{}', '{}', '{}', '[]', ?)
     `).run(prospect.prospectId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
     database.raw.prepare(`
       INSERT INTO prospect_priority_projection (

@@ -411,6 +411,7 @@ describe('reactivation lifecycle contracts', () => {
     });
     harness.database.raw.prepare(`
       UPDATE prospects SET qualification_state = 'disqualified',
+        qualification_gate_reason = 'out_of_area',
         qualification_reason = 'fixture', version = 2 WHERE id = ?
     `).run(prospect.prospectId);
     harness.unitOfWork.immediate(() => harness.reactivations.insertRule({
@@ -434,6 +435,7 @@ describe('reactivation lifecycle contracts', () => {
     });
     harness.database.raw.prepare(`
       UPDATE prospects SET qualification_state = 'eligible',
+        qualification_gate_reason = NULL,
         qualification_reason = NULL, version = 3 WHERE id = ?
     `).run(prospect.prospectId);
 

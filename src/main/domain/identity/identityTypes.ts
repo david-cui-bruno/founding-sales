@@ -1,3 +1,5 @@
+import type { QualificationGateReasonCode } from '../../db/domainSchema';
+
 export type Person = {
   id: string;
   displayName: string;
@@ -31,12 +33,33 @@ export type ContactMethodMatch = {
   contactMethod: ContactMethod;
 };
 
-export type Prospect = {
+export type QualificationGateReason = QualificationGateReasonCode;
+
+export type QualificationSelection =
+  | {
+      qualificationState: 'disqualified';
+      qualificationGateReason: QualificationGateReason;
+    }
+  | {
+      qualificationState: 'unreviewed' | 'eligible' | 'merge_review';
+      qualificationGateReason: null;
+    };
+
+export type QualificationMutation =
+  | {
+      nextState: 'disqualified';
+      qualificationGateReason: QualificationGateReason;
+    }
+  | {
+      nextState: 'unreviewed' | 'eligible' | 'merge_review';
+      qualificationGateReason: null;
+    };
+
+export type Prospect = QualificationSelection & {
   id: string;
   personId: string;
   originalSourceEventId: string;
   segment: 'hot_frbo' | 'cold_registry' | 'warm';
-  qualificationState: 'unreviewed' | 'eligible' | 'disqualified' | 'merge_review';
   qualificationReason: string | null;
   lastContactAt: string | null;
   version: number;
@@ -95,20 +118,18 @@ export type AddContactMethodInput = {
   inContacts?: boolean | null;
 };
 
-export type CreateProspectInput = {
+export type CreateProspectInput = QualificationSelection & {
   personId: string;
   originalSourceEventId: string;
   segment: 'hot_frbo' | 'cold_registry' | 'warm';
-  qualificationState: 'unreviewed' | 'eligible' | 'disqualified' | 'merge_review';
   qualificationReason?: string | null;
 };
 
-export type UpdateProspectQualificationInput = {
+export type UpdateProspectQualificationInput = QualificationMutation & {
   prospectId: string;
   personId: string;
   expectedVersion: number;
   expectedState: Prospect['qualificationState'];
-  nextState: Prospect['qualificationState'];
   reason: string | null;
   updatedAt: string;
 };

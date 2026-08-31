@@ -180,7 +180,7 @@ describe('LifecycleService', () => {
     unitOfWork.immediate(() => events.appendActivity({
       id: 'contact-activity', personId: prospect.personId, prospectId: prospect.prospectId,
       salesCycleId: 'cycle', kind: 'text', direction: 'inbound', channel: 'text',
-      occurredAt: DOMAIN_TIMESTAMP, observedOutcome: 'received', metadata: {},
+      occurredAt: DOMAIN_TIMESTAMP, observedOutcome: 'replied', metadata: {},
     }));
     const contacted = service.recordQualifyingContact({
       cycleId: 'cycle', expectedCycleVersion: 2, expectedCurrentActionId: 'ready-action',
@@ -525,7 +525,7 @@ describe('LifecycleService', () => {
     });
     const closed = service.closeLostNurture({
       cycleId: 'cycle', expectedCycleVersion: 2,
-      expectedCurrentActionId: 'ready-action', reason: 'bad_timing', notes: null,
+      expectedCurrentActionId: 'ready-action', reason: 'bad_timing', qualificationGateReason: null, notes: null,
       effectiveAt: DOMAIN_TIMESTAMP,
       manualReactivationDueAt: '2026-10-01T13:00:00.000Z',
       expectedProspectVersion: null,
@@ -571,7 +571,7 @@ describe('LifecycleService', () => {
     unitOfWork.immediate(() => events.appendActivity({
       id: 'reactivated-contact', personId: prospect.personId, prospectId: prospect.prospectId,
       salesCycleId: 'reactivated-cycle', kind: 'text', direction: 'inbound', channel: 'text',
-      occurredAt: '2026-10-01T13:00:00.000Z', observedOutcome: 'received', metadata: {},
+      occurredAt: '2026-10-01T13:00:00.000Z', observedOutcome: 'replied', metadata: {},
     }));
     service.recordQualifyingContact({
       cycleId: 'reactivated-cycle', expectedCycleVersion: 1,
@@ -949,7 +949,7 @@ describe('LifecycleService', () => {
 
     expect(() => service.closeLostNurture({
       cycleId: 'won-manual-cycle', expectedCycleVersion: 1,
-      expectedCurrentActionId: 'won-manual-action', reason: 'bad_timing', notes: null,
+      expectedCurrentActionId: 'won-manual-action', reason: 'bad_timing', qualificationGateReason: null, notes: null,
       effectiveAt: DOMAIN_TIMESTAMP, manualReactivationDueAt: '2026-10-01T13:00:00.000Z',
       expectedProspectVersion: null,
     })).toThrow();
