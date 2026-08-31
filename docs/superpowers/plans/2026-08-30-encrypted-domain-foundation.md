@@ -1114,7 +1114,7 @@ git commit -m "feat: add fixed founder sales cadences"
 - Create: `tests/support/domainWriteWorker.ts`
 
 **Interfaces:**
-- Consumes: the exact `AppDatabase` and `DomainUnitOfWork`, Identity/Event/Source repositories, Task 8's final `CadenceRepository`, `TransitionRecipe`, `planCadenceStart`, `planActionOutcome`, `planCadenceUpgrade`, and `planReactivationDefaults` exports, injected `Clock`/`IdGenerator`, and the fixed transition table. Task 9 must not copy, narrow, or reinterpret Task 8's planner result into the obsolete `CadencePlan` union.
+- Consumes: the exact `AppDatabase` and `DomainUnitOfWork`, Identity/Event/Source repositories, Task 8's final `CadenceRepository`, `TransitionRecipe`, `planCadenceStart`, `planActionOutcome`, `planCadenceUpgrade`, and `planReactivationDefaults` exports, injected `Clock`/`IdGenerator`, and the fixed transition table. Task 9 must preserve Task 8's recursively readonly/frozen catalog and must not copy, narrow, mutate, or reinterpret planner results into the obsolete `CadencePlan` union.
 - Produces: strict lifecycle types; persistence-only cycle/action/enrollment/reactivation repositories; a transaction-scoped `LifecycleTransactionWriter`; transaction-owning `LifecycleService` wrappers; legal lifecycle commands; atomic pointer replacement; idempotent rule/inbound resurrection; and a read-only invariant audit. Task 10 uses the scoped writer's `closeForOptOut` inside its own exact-UoW transaction; Task 12 reads the resulting projection.
 - Boundary: repository mutations require the active exact-UoW scope; reads may run outside it. Constructors reject mixed databases or different UoW instances by identity. Event and Task 8 cadence repositories expose `assertBoundTo(database, unitOfWork)` just like Identity/Source. Lifecycle SQL never reads `now`; all timestamps, IDs, policy snapshots, and planner `evaluationAt` values are injected and strictly parsed.
 - Product lock: at most one operationally open SalesCycle exists per Person; stages are fixed; Contacted requires delivered/answered evidence; Interviewed and Offered are founder-confirmed suggestions; every active/onboarding cycle points to exactly one own pending current action with a due date; every closed cycle points to none; Lost-Nurture has a reason and exact resurrection semantics; and no lifecycle type, column, query, or sort introduces a blended 0-100 score.
@@ -1124,7 +1124,7 @@ Task 8 binding is exact:
 ```ts
 new CadenceRepository({ database, unitOfWork, clock });
 cadences.assertBoundTo(database, unitOfWork);
-cadences.installBuiltins(): CadenceAggregate[];
+cadences.installBuiltins(): readonly CadenceAggregate[];
 cadences.getById(id: string): CadenceAggregate | null;
 cadences.getByFamilyVersion(
   family: CadenceFamily,
@@ -1144,6 +1144,8 @@ planReactivationDefaults(input: {
 
 `TransitionRecipe` is Task 8's exclusive `{ nextAction: NextActionInstruction; terminal: null } | { nextAction: null; terminal: CadenceTerminal }` intersection with `currentAction`, `enrollment`, and `reactivationDrafts`. `NextActionInstruction` includes both `create` and `reschedule_current`; lifecycle persistence must handle both.
 
+Task 9 also treats Task 8's allowed plan as load-bearing persisted state. For every enrollment with a current step—including stopped/completed history—`scheduledStepCount` equals the one-based position of `currentStepId` in the effective allowed plan: the definition's full ordered steps when `allowedStepIds === null`, otherwise the validated ordered subset in `allowedStepIds`. `inbound_over_cap_response` is only Task 8's exact built-in Warm C v1 identity/hash, has the first Warm step as its complete effective allowed plan, and therefore always persists count `1`. Task 9 validates this invariant before and after every outcome, start, upgrade, replay, and audit; it never treats definition sequence as the effective index for an upgraded subsequence.
+
 - [ ] **Step 1: Write RED schema and strict persistence-contract tests**
 
 Extend migration/schema tests before repository code. Require:
@@ -1154,11 +1156,12 @@ Extend migration/schema tests before repository code. Require:
 - a durable `lifecycle_review_items` table stores one open/resolved Review item per blocked activation key, exact Person/Prospect/source ownership, a versioned reason/payload envelope, timestamps, and an optimistic version; blocked work must survive restart rather than exist only as an in-memory union;
 - composite FKs prove receipt source-cycle/new-cycle Person ownership, rule ownership by the source cycle, and inbound SourceEvent ownership; rule, source-event, and new-cycle keys are individually unique where present;
 - receipt checks reject wrong source cardinality; raw ghost, cross-Person, cross-cycle, duplicate-result, `UPDATE`, `DELETE`, same-PK `OR REPLACE`, and non-PK-unique `OR REPLACE` paths fail closed;
-- `cadence_enrollments` persists Task 8's `mode`, canonical `allowed_step_ids_json`, and a positive projection `version`; `sales_cycle_close_readiness` also gains a positive projection `version`;
+- `cadence_enrollments` persists Task 8's `mode`, canonical `allowed_step_ids_json`, and a positive projection `version`; its current step/count obey the effective-allowed-plan invariant above, including count `1` for the exact built-in Warm C v1 over-cap plan; `sales_cycle_close_readiness` also gains a positive projection `version`;
 - `next_actions` persists immutable `work_intent` (`internal_review`, `inbound_response`, `promised_follow_up`, or `discretionary_prospecting`), Task 8's nullable canonical cadence `sla_due_at`, a separate strict nullable inbound-SLA kind/due/provenance union, plus `version`/`updated_at`, so `reschedule_current` can CAS the same pending action without falsely settling or replacing it;
+- cadence action evidence is all-or-none: `cadence_enrollment_id`, `cadence_step_id`, and `cadence_component_id` are either all null or all non-null; the enrollment owns the action cycle, its definition equals the recipe's `cadenceDefinitionId`, and the step/component form that definition's exact installed graph. `cadenceDefinitionId` is a repository validation field, not a duplicate `next_actions` column;
 - inbound-SLA storage is an all-or-none union separate from Task 8's cadence SLA: ordinary actions have `inbound_sla_kind`, `inbound_sla_due_at`, `inbound_sla_source_event_id`, and `inbound_sla_provenance_json` all null; inbound demo uses `inbound_sla_kind='inbound_demo_permitted_minutes'`, a same-Person SourceEvent, and strict V1 provenance `{ version: 1, sourceEventId, sourceObservedAt, calculation: 'permitted_minutes', minutes: 15, policyId, computedDueAt }`; direct referral uses `inbound_sla_kind='direct_referral_elapsed'` and `{ version: 1, sourceEventId, sourceObservedAt, calculation: 'elapsed_hours', hours: 48, policyId: null, computedDueAt }`; relational columns and JSON must agree exactly;
 - raw INSERT/UPDATE/OR REPLACE tests prove `work_intent` and inbound-SLA kind/source/provenance cannot be changed after insert, the SLA SourceEvent belongs to the cycle Person, and partial or cross-Person SLA unions fail closed;
-- settled `next_actions` persist a strict versioned settlement envelope containing outcome, reason/evidence references, and planner-transition identity; pending actions have no settlement and settled evidence cannot be silently rewritten;
+- settled `next_actions` persist a strict versioned settlement envelope containing outcome, reason/evidence references, exact cadence enrollment/definition/step/component binding, immutable work intent/inbound SLA, and planner-transition identity; pending actions have no settlement and settled evidence cannot be silently rewritten;
 - Task 8's composite cadence owner-graph constraints remain intact; and
 - migration manifest, schema-version-last behavior, rollback, and packaged schema scenario include the new table/columns without weakening Task 4's pre-migration backup gate.
 
@@ -1207,31 +1210,52 @@ closeProjection(input: {
   closeNotes: string | null;
   onboardingStopReason: string | null;
 }): SalesCycle;
-insertNextAction(input: InsertNextActionInput): NextAction;
-reschedulePendingAction(input: {
-  actionId: string;
+insertCadenceEnrollment(input: {
+  id: string;
+  salesCycleId: string;
+  definitionId: string;
+  anchorAt: UtcTimestamp;
+  currentStepId: string;
+  scheduledStepCount: number;
+  status: 'active';
+  mode: 'standard' | 'inbound_over_cap_response';
+  allowedStepIds: readonly string[] | null;
+  createdAt: UtcTimestamp;
+}): CadenceEnrollment;
+applyCadenceEnrollmentMutation(input: {
+  enrollmentId: string;
   salesCycleId: string;
   expectedVersion: number;
-  expectedDueAt: UtcTimestamp;
-  dueAt: UtcTimestamp;
-  timezone: string;
-  allowedWindow: string;
-  slaDueAt: UtcTimestamp | null;
-  cadenceDefinitionId: string;
-  cadenceStepId: string;
-  cadenceComponentId: string;
-}): NextAction;
-settleAction(input: SettleActionInput & {
+  expectedDefinitionId: string;
+  expectedCurrentStepId: string;
+  expectedScheduledStepCount: number;
+  expectedStatus: 'active';
+  expectedMode: 'standard' | 'inbound_over_cap_response';
+  expectedAllowedStepIds: readonly string[] | null;
+  mutation: EnrollmentMutation;
+  updatedAt: UtcTimestamp;
+}): CadenceEnrollment;
+insertNextAction(input: InsertNextActionInput): NextAction;
+reschedulePendingAction(input: ReschedulePendingActionInput): NextAction;
+settleAction(input: SettleActionInput & ExpectedActionIntentAndSla & {
   expectedStatus: 'pending';
+  expectedVersion: number;
+  expectedCadence: CadenceActionBinding;
   settlement: ActionSettlement;
 }): NextAction;
 getOperationalCycleForPerson(personId: string): SalesCycle | null;
 assertCurrentActionPostcondition(cycleId: string): void;
 ```
 
-`InsertNextActionInput` includes the immutable fields below. The repository
-strictly cross-checks JSON provenance against relational columns and never
-derives work intent from stage, due date, or cadence after persistence:
+Both enrollment operations resolve the immutable installed definition inside
+the exact UoW scope, validate mode/allowed-plan identity, and prove the resulting
+current step/count against that effective plan. The mutation CAS compares every
+shown expected value plus version and changes zero rows on stale input; upgrade
+stops the old enrollment through that CAS and inserts a separately allocated new
+enrollment rather than moving evidence or ownership.
+
+`InsertNextActionInput` and both CAS inputs use these exact discriminated
+contracts:
 
 ```ts
 export type NextActionWorkIntent =
@@ -1270,7 +1294,79 @@ export type InboundSla =
         computedDueAt: string;
       };
     };
+
+export type NextActionIntentAndSla =
+  | { workIntent: 'inbound_response'; inboundSla: InboundSla }
+  | {
+      workIntent: Exclude<NextActionWorkIntent, 'inbound_response'>;
+      inboundSla: Extract<InboundSla, { kind: 'none' }>;
+    };
+
+export type ExpectedActionIntentAndSla =
+  | { expectedWorkIntent: 'inbound_response'; expectedInboundSla: InboundSla }
+  | {
+      expectedWorkIntent: Exclude<NextActionWorkIntent, 'inbound_response'>;
+      expectedInboundSla: Extract<InboundSla, { kind: 'none' }>;
+    };
+
+export type CadenceActionBinding =
+  | {
+      cadenceEnrollmentId: null;
+      cadenceDefinitionId: null;
+      cadenceStepId: null;
+      cadenceComponentId: null;
+    }
+  | {
+      cadenceEnrollmentId: string;
+      cadenceDefinitionId: string;
+      cadenceStepId: string;
+      cadenceComponentId: string;
+    };
+
+export type ReschedulePendingActionInput = ExpectedActionIntentAndSla & {
+  actionId: string;
+  salesCycleId: string;
+  expectedStatus: 'pending';
+  expectedVersion: number;
+  expectedDueAt: UtcTimestamp;
+  expectedCadence: CadenceActionBinding;
+  dueAt: UtcTimestamp;
+  timezone: string;
+  allowedWindow: string;
+  slaDueAt: UtcTimestamp | null;
+  cadence: CadenceActionBinding;
+};
+
+export type InsertNextActionInput = NextActionIntentAndSla & {
+  id: string;
+  salesCycleId: string;
+  actionType: string;
+  channel: string | null;
+  status: 'pending';
+  dueAt: UtcTimestamp;
+  timezone: string;
+  allowedWindow: string | null;
+  slaDueAt: UtcTimestamp | null;
+  cadence: CadenceActionBinding;
+  createdAt: UtcTimestamp;
+};
 ```
+
+`InsertNextActionInput` is a discriminated immutable write contract, not a bag
+of nullable columns. A cadence action must carry the exact allocated enrollment
+ID plus Task 8's definition/step/component IDs; a non-cadence action carries
+four nulls. Before insert, the repository proves the enrollment owns the cycle,
+the enrollment definition equals `cadenceDefinitionId`, and the installed
+step/component/channel graph matches. The same binding is included byte-for-byte
+in action settlement receipts and exact replay comparisons.
+
+Only inbound demo and direct-referral response actions may—and must—use the two
+non-`none` `InboundSla` variants. A generic inbound reply, RIREIG/community
+interaction, or other inbound response uses `workIntent: 'inbound_response'`
+with `InboundSla.kind: 'none'`. Every non-inbound work intent also requires
+`InboundSla.kind: 'none'`. Fifteen accumulated permitted minutes and forty-eight
+elapsed hours are computed once from the owned SourceEvent and explicit policy
+snapshot, then stored; no read or reschedule recomputes them.
 
 Every projection update includes the shown expected predicates, increments `version`, and throws `StaleDomainWriteError` when zero rows change. Never broadly suppress constraints or parse SQLite error messages. Exact successful retry may return an already-persisted canonical result only after comparing every supplied field; changed evidence or expected state is a typed conflict.
 
@@ -1310,12 +1406,15 @@ Import Task 8's final `TransitionRecipe` type and test every recipe variant with
 - Post-Interview, Post-Offer, and Onboarding swaps;
 - compound-component advancement, resolver actions, retry branches, failed delivery, impossible dispositions, required breakup, and exhaustion;
 - Task 8 `reschedule_current` keeping the same authoritative pointer and pending status while CAS-updating due/window/SLA/action version;
-- scheduled-step count incrementing once on entry to a scheduled step and zero for another component, resolver, or retry in that step;
+- scheduled-step count incrementing once on entry to a scheduled step and zero for another component, resolver, or retry in that step; after every outcome it equals the current effective allowed-plan index plus one, using full definition order only when `allowedStepIds` is null, the persisted subsequence otherwise, and exactly `1` for the Warm C v1 over-cap response;
 - B -> A and A/B -> C upgrades stopping the old enrollment with `upgraded`, preserving completed Activities and total prospecting count, using the highest cap rather than a sum, skipping a just-completed duplicate communication, and never automatically downgrading;
 - no prospecting upgrade after Interviewed; and
 - `replied`/inbound interrupts installing an actionable response/book-conversation action rather than leaving an open cycle without one.
+- action creation allocating/resolving the exact enrollment ID before insert, propagating it with Task 8's definition/step/component IDs, and rejecting a wrong-definition, wrong-step, wrong-component, wrong-channel, cross-cycle, old-enrollment-after-upgrade, or missing-part binding; an ordinary non-cadence Activity/action has all four binding values null;
+- cadence Activities carrying the action's exact enrollment/step/component IDs and matching the component channel, while an upgrade preserves completed Activities on the stopped old enrollment and binds every new action/Activity to the new enrollment; and
+- every terminal mapping: Post-Interview `phase_completed`, Onboarding `phase_completed`, Warm C over-cap handled/impossible, standard A/B/C exhaustion, and Post-Offer exhaustion, including concurrent/stale retries and fault rollback for each replacement-or-close branch.
 - exact work-intent assignment and inheritance: the Unreviewed review action is `internal_review`; the first untouched Ready A/B/C or rule-reactivation action is `discretionary_prospecting`; inbound activation/reply is `inbound_response`; onboarding, Post-Interview, Post-Offer, and every later A/B/C step are `promised_follow_up`; resolver/retry/reschedule retains the blocked action's intent; and no command may relabel an existing action to evade Today capacity;
-- inbound demo SLA uses exactly fifteen accumulated permitted minutes under the injected text-policy snapshot from SourceEvent `observed_at`, direct referral uses exactly forty-eight elapsed hours, and exact-deadline/replay/policy-boundary/DST tests preserve stored kind/due/provenance.
+- inbound demo SLA uses exactly fifteen accumulated permitted minutes under the injected text-policy snapshot from SourceEvent `observed_at`, direct referral uses exactly forty-eight elapsed hours, generic inbound response uses `none`, every non-inbound intent uses `none`, and exact-deadline/replay/policy-boundary/DST tests preserve stored kind/due/provenance.
 
 Every Activity/action/enrollment definition, step, and component ID must form one Task 8 owner graph. Unknown or uninstalled catalog versions and structurally impossible recipes fail before writes.
 
@@ -1382,6 +1481,7 @@ Use `tests/support/domainWriteWorker.ts` with `worker_threads` so both independe
 - two connections racing to create open cycles for one Person leave exactly one committed cycle;
 - two completions of one expected current-action ID yield one success and one `StaleDomainWriteError`, with no orphan replacement;
 - replacement versus close, Won versus Lost-Nurture, reactivation versus manual/open-cycle creation, and two different reactivation rules preserve one open cycle and one authoritative pointer;
+- each Task 8 terminal branch raced against itself and a stale alternate outcome yields one exact CAS winner: Post-Interview confirm-Offered review, Onboarding closure, over-cap booking, over-cap Review, standard exhaustion, and Post-Offer exhaustion never duplicate replacement actions, terminal events, or Won counts;
 - same-rule and same-inbound exact retries return the canonical receipt result, while different-command retries conflict;
 - an opt-out transaction racing action replacement cannot commit an opted-out active cadence/action;
 - configured busy timeout prevents raw `SQLITE_BUSY` from leaking as a domain outcome; and
@@ -1389,7 +1489,7 @@ Use `tests/support/domainWriteWorker.ts` with `worker_threads` so both independe
 
 Each worker opens and keys its own production `openDatabase` connection. Use a barrier so attempts overlap. If native teardown makes `worker_threads` unreliable, use the existing compiled child-process contender pattern, while retaining truly independent connections.
 
-Inject a deterministic failure after each phase and compare stable ordered snapshots of every affected table before/after: cycle insert/CAS, enrollment insert/update/stop, replacement action insert, terms/rules/receipt insert, StageEvent append, old-action settlement, and final postcondition. Every failure leaves byte-for-byte equivalent rows and no consumed rule, orphan receipt, pending replacement, partial qualification change, or source mutation.
+Inject a deterministic failure after each phase and compare stable ordered snapshots of every affected table before/after: cycle insert/CAS, enrollment insert/update/stop, replacement action insert, cadence Activity append, terms/rules/receipt insert, StageEvent append, old-action settlement, and final postcondition. Repeat around every terminal mapping. Every failure leaves byte-for-byte equivalent rows and no consumed rule, orphan receipt, pending replacement, partial qualification change, mismatched old/new enrollment evidence, or source mutation.
 
 - [ ] **Step 7: Run the complete RED lifecycle slice**
 
@@ -1443,16 +1543,38 @@ export interface LifecycleCommands {
   setCloseReadiness(input: SetCloseReadinessInput): CloseReadiness;
 }
 
+export type CloseForOptOutInput = {
+  personId: string;
+  evidenceActivityId: string;
+  effectiveAt: string;
+  terminalStageEventId: string | null;
+};
+
+export type CloseForOptOutResult = {
+  cycle: SalesCycle | null;
+  stoppedEnrollmentIds: string[];
+  cancelledActionIds: string[];
+};
+
 export interface LifecycleTransactionCommands extends LifecycleCommands {
-  closeForOptOut(input: CloseForOptOutInput): SalesCycle | null;
+  closeForOptOut(input: CloseForOptOutInput): CloseForOptOutResult;
 }
 
 export class LifecycleService implements LifecycleCommands {
+  assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork): void;
   scopedWriter(): LifecycleTransactionCommands; // asserts active exact-UoW scope
 }
 ```
 
 The public service does not expose a transaction-owning `closeForOptOut` that Task 10 could accidentally nest. Task 10 owns one immediate transaction, obtains `scopedWriter()`, stops/closes/cancels first, and only then inserts the permanent tombstone. Every scoped command asserts the active UoW again and calls the full postcondition before returning.
+
+`assertBoundTo` checks object identity only and performs no reads, time access, or
+ID allocation. `scopedWriter()` fails unless the exact bound UoW scope is active.
+`closeForOptOut` returns the exact closed/null cycle plus stable ID-sorted stopped
+enrollment and cancelled-action arrays; repository results are cloned,
+recursively readonly/frozen at the implementation boundary, and exact retry
+returns the same values. Construction and scoped-access tests cover every
+same/different database and UoW permutation before any mutation occurs.
 
 - [ ] **Step 10: Implement legal transitions and deterministic event projection**
 
@@ -1461,16 +1583,27 @@ Encode the fixed transition table as data and reject every unlisted edge before 
 Every new action receives its immutable work intent at creation. The initial
 Unreviewed action is `internal_review`; the initial untouched Ready A/B/C action
 and rule-reactivation entry are `discretionary_prospecting`; inbound demo,
-direct-referral, and reply interrupts are `inbound_response`; onboarding,
-Post-Interview, Post-Offer, and later prospecting steps are
+direct-referral, generic reply, and RIREIG/community interactions are
+`inbound_response`; onboarding, Post-Interview, Post-Offer, and later prospecting steps are
 `promised_follow_up`. A replacement, resolver, retry, or reschedule cannot infer
-or rewrite intent after the fact. Inbound creation computes and persists its
-strict SLA union once from the owned SourceEvent and injected policy snapshot;
+or rewrite intent after the fact. Demo and direct-referral inbound creation
+computes and persists its strict non-none SLA union once from the owned SourceEvent
+and injected policy snapshot; every generic inbound response persists the `none`
+variant, as does every non-inbound action.
 Task 12 reads that evidence and never recomputes the deadline.
 
 `recordQualifyingContact` validates the immutable Activity and outcome before mechanically emitting Contacted. Already-Contacted cycles advance the cadence without duplicating Contacted. Founder-confirmed Interviewed/Offered commands validate suggestions/evidence but never accept an automatic transition. When Contacted was skipped, append its backfill event at sequence N followed by the founder target at N+1 with the same business timestamp and explicit provenance.
 
 Won persists calculated terms, stops Post-Offer, starts Onboarding, installs its first action, emits one Offered -> Won event, and changes workflow to onboarding. Completing or explicitly waiving the final onboarding component with a nonblank reason stops onboarding, clears the pointer, and closes Won without emitting Won -> Won.
+
+Whenever a cadence starts, Task 9 allocates the enrollment ID before adapting
+the pure recipe's action draft. It verifies `cadenceDefinitionId` against that
+enrollment, writes the enrollment/step/component tuple on the pending action,
+and uses the same tuple plus matching component channel on every resulting
+cadence Activity. Resolver/retry/reschedule preserves that exact tuple. An
+upgrade stops the old enrollment without rewriting its Activities, allocates a
+new enrollment, and binds the replacement action and all future evidence only
+to the new enrollment.
 
 - [ ] **Step 11: Implement exact cyclic creation, action replacement, and closure order**
 
@@ -1485,23 +1618,27 @@ assert full postcondition
 commit deferred cycle/action FKs
 ```
 
-For a new Ready/onboarding cycle with a cadence, insert the cycle first, then enrollment, then referenced action. The source event pre-exists. Never insert a SourceEvent/cycle pair that depends on the immediate reciprocal `source_events.sales_cycle_id` FK; `entry_source_event_id` is the activation authority.
+For a new Ready/onboarding cycle with a cadence, allocate the enrollment ID, insert the cycle first, then that enrollment, then the referenced action carrying the enrollment/step/component tuple after checking the recipe definition and installed graph. The source event pre-exists. Never insert a SourceEvent/cycle pair that depends on the immediate reciprocal `source_events.sales_cycle_id` FK; `entry_source_event_id` is the activation authority.
 
 For a Task 8 `reschedule_current` result, CAS-update the same pending current action using its expected version/status/due date, keep the pointer unchanged, record the required failure Activity, apply the zero-count enrollment retry mutation, and assert the postcondition. Do not create or settle an action.
 
-The reschedule CAS includes expected immutable `work_intent`, inbound-SLA kind,
-due, source, and canonical provenance predicates and leaves them byte-identical;
-Task 8's independent cadence `sla_due_at` remains governed by its recipe.
+The reschedule CAS includes expected pending status/version/due date, immutable
+`work_intent`, the complete inbound-SLA discriminant/due/source/canonical
+provenance, and the exact cadence enrollment/definition/step/component binding.
+It leaves immutable values byte-identical; Task 8's independent cadence
+`sla_due_at` remains governed by its recipe. A generic inbound action therefore
+CAS-compares the explicit `none` SLA union rather than treating missing values as
+wildcards.
 
 For replacement inside an existing cycle, use:
 
 ```text
 validate input/evidence and pure TransitionRecipe
-insert or CAS the required enrollment state
-insert the replacement pending action
+insert or CAS the required enrollment state and prove the effective allowed-plan count
+insert the replacement pending action with the exact allocated enrollment binding
 CAS cycle stage/workflow/current pointer using expected version/stage/action
 append consecutive StageEvent rows when the stage changes
-complete/cancel/mark-impossible the old action only after pointer movement
+complete/cancel/mark-impossible the old action only after pointer movement, recording the exact binding/intent/SLA in its settlement
 assert full postcondition
 ```
 
@@ -1522,9 +1659,49 @@ All generated rows roll back if any later write, event append, settlement, postc
 
 - [ ] **Step 12: Apply Task 8 TransitionRecipe and reactivation semantics**
 
-Task 9 passes strict stored catalog/enrollment/action data, injected evaluation time/timezone/policy snapshot, total prospecting scheduled-step count, highest cap, and last completed communication into Task 8. It validates the returned `TransitionRecipe` but never recalculates its schedule or outcome branch. The recipe atomically controls old-action disposition, enrollment current step/count/status, stop/upgrade reason, exactly one next-action draft or terminal result, resolver/retry state, and reactivation drafts.
+Task 9 passes strict stored catalog/enrollment/action data, injected evaluation time/timezone/policy snapshot, total prospecting scheduled-step count, highest cap, and last completed communication into Task 8. It validates the returned `TransitionRecipe` but never recalculates its schedule or outcome branch. Before any write and again as a postcondition, it proves that stored `scheduledStepCount` equals the current effective allowed-plan index plus one: full definition steps only for a null plan, the explicit persisted subsequence otherwise, and exactly one for the built-in Warm C v1 over-cap response. The recipe atomically controls old-action disposition, enrollment current step/count/status, stop/upgrade reason, exactly one next-action draft or terminal result, resolver/retry state, and reactivation drafts.
 
-Cadence exhaustion may close Lost-Nurture only after the required breakup is delivered or explicitly impossible and the attempt cap is exhausted. Persist Task 8's exact A/B defaults or a valid founder replacement. A `stop: replied` recipe is not terminal lifecycle closure: it enters the inbound response/booking lane with a replacement action. Opt-out delegates to Task 10's scoped transaction path.
+Map every Task 8 terminal explicitly and atomically:
+
+```text
+Post-Interview completed:phase_completed
+  settle current action + complete enrollment
+  keep stage Interviewed/workflow active
+  install immediate non-cadence internal_review action to confirm Offered
+
+Onboarding completed:phase_completed
+  settle current action + complete enrollment
+  close the existing Won workflow and clear the pointer
+  do not append a second Won StageEvent
+
+Warm C over-cap completed:inbound_response_handled
+  settle current action + complete enrollment
+  keep the cycle open and install immediate non-cadence promised_follow_up booking action
+
+Warm C over-cap completed:inbound_response_impossible
+  mark current action impossible + complete enrollment
+  keep the cycle open and install immediate non-cadence internal_review Review action
+
+Post-Offer exhausted
+  complete enrollment and close Lost-Nurture only with the caller's exact-future manual rule
+
+Standard A/B/C exhausted
+  complete enrollment and close Lost-Nurture with Task 8 defaults or an exact valid founder replacement
+
+stop:replied
+  stop enrollment, keep the cycle open, and install an inbound_response/book-conversation action
+
+stop:opted_out
+  delegate to Task 10's exact scoped close path
+```
+
+Each open-branch replacement is inserted, pointed to, and only then is the old
+action settled; each close branch clears the pointer before settlement. Every
+generated non-cadence action carries a null cadence binding and the stated work
+intent. No branch leaves an open cycle without exactly one pending current
+action, creates a zombie enrollment/action, or emits a second Won event.
+
+Cadence exhaustion may close Lost-Nurture only after the required breakup is delivered or explicitly impossible and the attempt cap is exhausted. Persist Task 8's exact A/B defaults or a valid founder replacement. Opt-out delegates to Task 10's scoped transaction path.
 
 Rule reactivation and inbound-response activation use their deterministic receipt key and caller-supplied stable new-cycle ID. Read, parse, and compare a pre-existing receipt or blocked-activation Review item before calling `ids.next()` or the default clock. On first execution, create Ready/Contacted as required, start the appropriate cadence/inbound interrupt, create a valid current action, CAS rule consumption when applicable, and insert the receipt atomically. If eligibility/open-cycle/opt-out conditions fail, persist/reuse typed Review work and leave the rule unconsumed.
 
@@ -1535,10 +1712,10 @@ Rule reactivation and inbound-response activation use their deterministic receip
 - exactly one canonical Prospect per Person and at most one active/onboarding cycle per Person;
 - open/closed stage-workflow compatibility, closed timestamp/reason/notes, and current-pointer nullability;
 - a non-null pointer owns the cycle, references a pending due-dated action, and has parseable timezone/window data;
-- every current action has a supported immutable work intent; inbound-response actions have one ownership-valid strict SLA union; non-inbound actions have no inbound SLA; and resolver/retry/reschedule actions retain their originating intent and SLA evidence;
+- every current action has a supported immutable work intent; only inbound-demo and direct-referral response actions have a non-none ownership-valid strict SLA union, generic inbound-response actions have the explicit `none` union, every non-inbound action has `none`, and resolver/retry/reschedule actions retain their originating intent and SLA evidence;
 - initial/contiguous StageEvent sequence, exact from/to chain, legal edges, and projection stage/`stage_entered_at` matching the final event;
 - Unreviewed has no active cadence and a review action; Ready/Contacted has one active A/B/C; Interviewed has Post-Interview; Offered has Post-Offer; Won/onboarding has Onboarding; closed has none;
-- enrollment definition/current-step/count/status and current action definition/step/component share one Task 8 graph and obey attempt caps;
+- enrollment definition/current-step/count/status and current action enrollment/definition/step/component share one Task 8 graph and obey attempt caps; `scheduledStepCount` equals current effective allowed-plan index plus one for the full/null plan, an upgrade subsequence, and exact count-one built-in Warm C v1 over-cap plan;
 - Lost-Nurture reason/`other` notes and exact reactivation cardinality; one-way consumption and receipt ownership/canonical envelopes;
 - blocked reactivation has one durable, ownership-valid, canonical Review item and no consumed rule/new cycle;
 - Won terms/formula projection, close-readiness strict envelope/version, and design-fitness history;
