@@ -4,6 +4,12 @@ import type {
 } from '../db/database';
 import type { MigrationOptions, MigrationResult } from '../db/migrate';
 import type { DomainRuntime } from '../domain/domainRuntime';
+import {
+  createFounderSalesDomain,
+  type FounderSalesDomain,
+} from '../domain/founderSalesDomain';
+import { SystemClock } from '../domain/support/clock';
+import { UuidGenerator } from '../domain/support/idGenerator';
 import type { HealthServiceOptions } from '../health/healthService';
 import type { HealthProvider } from '../health/registerHealthIpc';
 import type {
@@ -41,6 +47,7 @@ type ReadyFoundation = {
   database: AppDatabase;
   domainRuntime: FoundationDomainRuntime;
   health: HealthProvider;
+  founderDomain: FounderSalesDomain | undefined;
 };
 
 type InitializationAttempt = {
@@ -92,6 +99,29 @@ export class FoundationRuntime {
     this.state = 'stopping';
     this.shutdownPromise = this.finishShutdown();
     return this.shutdownPromise;
+  }
+
+  /**
+   * The UI execution gate: awaits initialization, requires a ready domain,
+   * lazily constructs and memoizes one FounderSalesDomain over the operational
+   * service graph, and runs the operation against it.
+   */
+  async withDomain<TResult>(
+    operation: (domain: FounderSalesDomain) => TResult | Promise<TResult>,
+  ): Promise<TResult> {
+    this.throwIfUnavailable();
+    const foundation = await this.ensureInitialized();
+    this.throwIfUnavailable();
+    if (foundation.founderDomain === undefined) {
+      const services = foundation.domainRuntime.getServices();
+      foundation.founderDomain = createFounderSalesDomain({
+        services,
+        database: foundation.database,
+        clock: new SystemClock(),
+        ids: new UuidGenerator(),
+      });
+    }
+    return operation(foundation.founderDomain);
   }
 
   private ensureInitialized(): Promise<ReadyFoundation> {
@@ -159,7 +189,7 @@ export class FoundationRuntime {
         });
         this.throwIfAttemptIsStale(id);
 
-        const ready = { database, domainRuntime, health };
+        const ready = { database, domainRuntime, health, founderDomain: undefined as FounderSalesDomain | undefined };
         this.ready = ready;
         databaseAdopted = true;
         return ready;
