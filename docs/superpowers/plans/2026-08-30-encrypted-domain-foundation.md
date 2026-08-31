@@ -1117,7 +1117,7 @@ git commit -m "feat: add fixed founder sales cadences"
 - Consumes: the exact `AppDatabase` and `DomainUnitOfWork`, Identity/Event/Source repositories, Task 8's final `CadenceRepository`, `TransitionRecipe`, `planCadenceStart`, `planActionOutcome`, `planCadenceUpgrade`, and `planReactivationDefaults` exports, injected `Clock`/`IdGenerator`, and the fixed transition table. Task 9 must preserve Task 8's recursively readonly/frozen catalog and must not copy, narrow, mutate, or reinterpret planner results into the obsolete `CadencePlan` union.
 - Produces: strict lifecycle types; persistence-only cycle/action/enrollment/reactivation repositories; a transaction-scoped `LifecycleTransactionWriter`; transaction-owning `LifecycleService` wrappers; legal lifecycle commands; atomic pointer replacement; idempotent rule/inbound resurrection; and a read-only invariant audit. Task 10 uses the scoped writer's `closeForOptOut` inside its own exact-UoW transaction; Task 12 reads the resulting projection.
 - Boundary: repository mutations require the active exact-UoW scope; reads may run outside it. Constructors reject mixed databases or different UoW instances by identity. Event and Task 8 cadence repositories expose `assertBoundTo(database, unitOfWork)` just like Identity/Source. Lifecycle SQL never reads `now`; all timestamps, IDs, policy snapshots, and planner `evaluationAt` values are injected and strictly parsed.
-- Product lock: at most one operationally open SalesCycle exists per Person; stages are fixed; Contacted requires delivered/answered evidence; Interviewed and Offered are founder-confirmed suggestions; every active/onboarding cycle points to exactly one own pending current action with a due date; every closed cycle points to none; Lost-Nurture has a reason and exact resurrection semantics; and no lifecycle type, column, query, or sort introduces a blended 0-100 score.
+- Product lock: at most one operationally open SalesCycle exists per Person; stages are fixed; Contacted uses the shared exact qualifying-contact predicate defined below; Interviewed and Offered are founder-confirmed suggestions; every active/onboarding cycle points to exactly one own pending current action with a due date; every closed cycle points to none; Lost-Nurture has a lifecycle reason and, when it disqualifies the Prospect, a separate exact qualification gate reason; and no lifecycle type, column, query, or sort introduces a blended 0-100 score.
 
 Task 8 binding is exact:
 
@@ -1389,9 +1389,9 @@ Assert every unlisted transition fails without writes. Include:
 
 - initial `null -> Unreviewed` StageEvent and review action in one commit;
 - `reviewToReady` atomically moving the Prospect from `unreviewed` to `eligible`, rejecting `merge_review`, disqualified, deleted, or opted-out Persons/Prospects;
-- Unreviewed rejection and Lost-Nurture reasons `not_qualified`/`disqualified` atomically CAS-updating Prospect qualification to `disqualified`; other closure never silently changes qualification;
+- Unreviewed rejection and Lost-Nurture reasons `not_qualified`/`disqualified` atomically CAS-updating Prospect qualification to `disqualified`; these commands require a separate `qualificationGateReason` using exactly `out_of_area | no_relevant_decision_relationship | institutional_outside_icp | harmful_operator | non_paying_operator | unresolved_duplicate`, store that value in `prospects.qualification_gate_reason`, and retain the original Task 9 lifecycle reason in `sales_cycles.close_reason`/`prospects.qualification_reason`; every other closure requires `qualificationGateReason=null` and never silently changes qualification;
 - inbound `Unreviewed -> Ready -> Contacted` and `Ready -> Interviewed` with the mechanical Contacted StageEvent immediately before the founder event;
-- Contacted only from an existing immutable Activity with exact Person/Prospect/Cycle ownership or the explicitly allowed pre-cycle inbound evidence path; accepted outbound text/Gmail email, answered call, confirmed voicemail, and associated inbound qualify, while no-answer, failed, opened, copied, and unconfirmed outcomes do not;
+- Contacted only from an existing immutable Activity with exact Person/Prospect/Cycle ownership or the explicitly allowed pre-cycle inbound evidence path; the shared `qualifiesContactEvidence` predicate accepts only outbound call/`answered`, outbound voicemail/`voicemail_left`, outbound text or Gmail email/`accepted`, or an exact-Prospect associated inbound call/text/email response with `answered | replied | accepted`; delivered-only, no-answer, failed, opened, copied, internal, unassociated, and unconfirmed outcomes do not qualify;
 - five-minute call/transcript and price-said evidence only creating suggestions; neither Interviewed nor Offered changes until founder confirmation;
 - `effectiveAt <= confirmedAt`, nondecreasing ordinary effective times, the documented inbound-approval exception, `stage_entered_at = effectiveAt`, and separate confirmation time;
 - Interviewed only from Ready/Contacted, Offered only from Interviewed, Won only from Offered, and founder/backfill events carrying evidence/provenance;
@@ -1592,7 +1592,7 @@ and injected policy snapshot; every generic inbound response persists the `none`
 variant, as does every non-inbound action.
 Task 12 reads that evidence and never recomputes the deadline.
 
-`recordQualifyingContact` validates the immutable Activity and outcome before mechanically emitting Contacted. Already-Contacted cycles advance the cadence without duplicating Contacted. Founder-confirmed Interviewed/Offered commands validate suggestions/evidence but never accept an automatic transition. When Contacted was skipped, append its backfill event at sequence N followed by the founder target at N+1 with the same business timestamp and explicit provenance.
+`recordQualifyingContact` imports the shared pure `qualifiesContactEvidence` helper, validates immutable Activity ownership and that exact predicate, then mechanically emits Contacted. The helper lives in `src/main/domain/events/qualifyingContactEvidence.ts` so Task 11 can derive last contact without importing lifecycle services. Already-Contacted cycles advance the cadence without duplicating Contacted. Founder-confirmed Interviewed/Offered commands validate suggestions/evidence but never accept an automatic transition. When Contacted was skipped, append its backfill event at sequence N followed by the founder target at N+1 with the same business timestamp and explicit provenance.
 
 Won persists calculated terms, stops Post-Offer, starts Onboarding, installs its first action, emits one Offered -> Won event, and changes workflow to onboarding. Completing or explicitly waiving the final onboarding component with a nonblank reason stops onboarding, clears the pointer, and closes Won without emitting Won -> Won.
 
@@ -2437,6 +2437,11 @@ git commit -m "feat: enforce permanent person opt-out"
 - Modify: `src/main/db/migrations/0002DomainFoundation.ts`
 - Modify: `src/main/db/domainSchema.ts`
 - Modify: `src/main/domain/support/domainErrors.ts`
+- Modify: `src/main/domain/identity/identityTypes.ts`
+- Modify: `src/main/domain/identity/identityRepository.ts`
+- Create: `src/main/domain/events/qualifyingContactEvidence.ts`
+- Modify: `src/main/domain/lifecycle/lifecycleTransactionWriter.ts`
+- Modify: `src/main/domain/lifecycle/invariantAudit.ts`
 - Create: `src/main/domain/prioritization/prioritizationTypes.ts`
 - Create: `src/main/domain/prioritization/builtinPrioritizationRules.ts`
 - Create: `src/main/domain/prioritization/qualificationEngine.ts`
@@ -2448,6 +2453,9 @@ git commit -m "feat: enforce permanent person opt-out"
 - Modify: `tests/main/domainConstraints.test.ts`
 - Modify: `tests/main/domainSchema.test.ts`
 - Modify: `tests/main/migrations.test.ts`
+- Modify: `tests/main/identityRepository.test.ts`
+- Modify: `tests/main/lifecycleService.test.ts`
+- Modify: `tests/main/invariantAudit.test.ts`
 - Modify: `tests/support/domainSchemaScenario.ts`
 - Create: `tests/main/qualificationEngine.test.ts`
 - Create: `tests/main/builtinPrioritizationRules.test.ts`
@@ -2461,22 +2469,95 @@ git commit -m "feat: enforce permanent person opt-out"
 - Create: `tests/main/noBlendedScore.test.ts`
 
 **Interfaces:**
-- Consumes: the canonical eligible Prospect, Person-owned source/property/contact facts, immutable TriggerEvents, one immutable rule version, and an explicit UTC evaluation time.
+- Consumes: the canonical eligible Prospect, Task 10's exact-bound `OutboundPermissionService`, Person-owned source/property/contact facts, immutable qualifying-contact Activities, immutable TriggerEvents, retained Task 9 reactivation rule/receipt proof, one immutable rule version, and an explicit UTC evaluation time.
 - Produces: either an immutable gated decision with no numeric axes and no current projection, or an immutable two-axis evaluation plus one optimistic current projection. Preview never mutates either projection or manual controls.
-- Provides Task 12 with an `EffectivePrioritySnapshot` and one canonical JS/SQLite lexicographic ordering contract. Task 11 does not create SalesCycles, NextActions, Today lanes, or capacity rules.
+- Provides Task 12 with the exact deeply readonly `EffectivePrioritySnapshot`, `OrderablePriorityRow`, public comparator/tuple builder, and fixed-alias SQLite ordering fragment defined below. Task 11 does not create SalesCycles, NextActions, Today lanes, or capacity rules.
 
-- [ ] **Step 1: Freeze the public unions and hard bans in RED tests**
+Task 11 begins with one narrowly owned Task 9 compatibility prelude. Add the
+shared `QualificationGateReason` union and nullable
+`prospects.qualification_gate_reason`; add that field to strict Identity
+types/rows/create/update commands; add `qualificationGateReason` to
+`CloseLostNurtureInput`; and extract the exact shared
+`qualifiesContactEvidence` predicate from the lifecycle writer. This prelude is
+part of Task 11's RED/GREEN slice and does not otherwise reopen Task 9. It must
+land in the same Task 11 commit so no intermediate schema can produce a
+disqualified Prospect that prioritization cannot parse.
 
-Define the public contract before implementation:
+The compatibility seam is a discriminated contract, not two unrelated nullable
+fields:
 
 ```ts
-export type GateReason =
+export type QualificationGateReason =
   | 'out_of_area'
   | 'no_relevant_decision_relationship'
   | 'institutional_outside_icp'
   | 'harmful_operator'
   | 'non_paying_operator'
   | 'unresolved_duplicate';
+
+export type QualificationSelection =
+  | {
+      qualificationState: 'disqualified';
+      qualificationGateReason: QualificationGateReason;
+    }
+  | {
+      qualificationState: 'unreviewed' | 'eligible' | 'merge_review';
+      qualificationGateReason: null;
+    };
+
+export type QualificationMutation =
+  | {
+      nextState: 'disqualified';
+      qualificationGateReason: QualificationGateReason;
+    }
+  | {
+      nextState: 'unreviewed' | 'eligible' | 'merge_review';
+      qualificationGateReason: null;
+    };
+
+export type CloseLostNurtureQualification =
+  | {
+      reason: 'not_qualified' | 'disqualified';
+      qualificationGateReason: QualificationGateReason;
+    }
+  | {
+      reason: Exclude<LostNurtureReason, 'not_qualified' | 'disqualified' | 'opt_out'>;
+      qualificationGateReason: null;
+    };
+```
+
+`CreateProspectInput` and stored `Prospect` compose `QualificationSelection`;
+`UpdateProspectQualificationInput` composes `QualificationMutation`; and
+`CloseLostNurtureInput` composes `CloseLostNurtureQualification`. The lifecycle writer
+passes the gate only to the Prospect CAS; the cycle retains its original close
+reason. Identity repository replay/stale comparisons include the gate field.
+
+The shared evidence helper has no database, clock, or lifecycle dependency:
+
+```ts
+export type ContactEvidenceFact = Readonly<{
+  prospectId: string | null;
+  kind: ActivityKind;
+  direction: 'inbound' | 'outbound' | 'internal';
+  observedOutcome: string | null;
+}>;
+
+export function qualifiesContactEvidence(
+  activity: ContactEvidenceFact,
+  expectedProspectId: string,
+): boolean;
+```
+
+It returns true only for the exact product predicate below; Person/Cycle and
+timestamp ownership remain caller checks.
+
+- [ ] **Step 1: Freeze the public unions and hard bans in RED tests**
+
+Define the public contract before implementation:
+
+```ts
+import type { QualificationGateReason } from '../identity/identityTypes';
+export type GateReason = QualificationGateReason;
 
 export type QualificationResult =
   | {
@@ -2556,7 +2637,27 @@ export type NotPrioritizableEvaluation = {
 };
 ```
 
-`qualification_state='eligible'` on the one canonical Prospect is the only state that can enter Fit/Timing evaluation, and its Person must be undeleted and consistently not opted out in both Person/tombstone state. `merge_review` maps only to `unresolved_duplicate`; `disqualified` requires an exact `GateReason` in `qualification_reason`; `unreviewed` returns `pending_review`; and deletion/opt-out returns the exact operational block. Blank, unknown, or contradictory stored qualification/opt-out values are corruption, not silently qualified records. Gate evidence is the stable Prospect/original SourceEvent/tombstone evidence used by the decision. Hard gates and operational blocks execute before contact, property, trigger, matrix, or confidence calculation.
+`qualification_state='eligible'` on the one canonical Prospect is the only state that can enter Fit/Timing evaluation, and its Person must be undeleted and permitted by Task 10. `merge_review` maps only to `unresolved_duplicate`; `disqualified` requires an exact `QualificationGateReason` in the separate `qualification_gate_reason` column; `qualification_reason` remains Task 9's lifecycle prose/code and never substitutes for the gate; `unreviewed` returns `pending_review`; and deletion/opt-out returns the exact operational block. Schema and strict Identity parsers require `qualification_gate_reason` non-null exactly for `disqualified` and null for every other state. Blank, unknown, or contradictory stored qualification/opt-out values are corruption, not silently qualified records.
+
+On a first preview/recalculation attempt, load only the canonical
+Prospect/Person identity needed to name the Person, then call
+`OutboundPermissionService.inspectPerson(personId)` inside the same coherent
+read/write transaction before source, property, prioritization-contact,
+Activity, trigger, rule, projection, or control reads. A handle-wide block on a
+fresh/reimported Person is `operationally_blocked/person_opted_out` even when
+`persons.opted_out=0` and that Person owns no tombstone; its stable sorted
+tombstone IDs are the evidence IDs and no numeric-axis evaluation or current
+projection is created or retained. It skips every Fit/Timing fact read; a transaction-owning
+recalculation may then load only the installed rule plus current
+projection/control rows required to persist the immutable
+`not_prioritizable` decision and atomically retire/delete stale priority state.
+Independently, direct Person projection and own-tombstone state must
+agree exactly or the row is corruption. Deleted Persons short-circuit before
+permission inspection. Exact immutable evaluation replay preselection remains
+the only read allowed ahead of this first-execution gate. Gate evidence is the
+stable Prospect/original SourceEvent/qualification gate fact or Task 10
+tombstone IDs used by the decision. Hard gates and operational blocks execute
+before Fit, Timing, reachability, confidence, matrix, or controls.
 
 `noBlendedScore.test.ts` scans Task 11 production files, typed schema, migration SQL, and the Task 12 ordering glob (which may be empty until Task 12 lands). It rejects case-insensitive generic aliases (`lead_score`, `overall_score`, `combined_score`, `blended_score`, `weighted_score`, `fit_weight`, `timing_weight`, `order by score`), a public property named `score`, a 0-100 priority range, any helper that arithmetically combines Fit and Timing, and any SQL expression that orders by such a combination. It asserts the qualified result has `fitPoints`, `fitBand`, `timingMilliPoints`, `timingBand`, `priority`, and no generic numeric ranking field. Test names and explanatory comments may name the forbidden concept; production identifiers may not.
 
@@ -2604,36 +2705,135 @@ V1 data confidence is an integer 0-10 and uses only these independent components
 
 Sum and cap at 10. Each absent/unknown component is zero. Future `observed_at`/`verified_at`, invalid canonical timestamps, malformed original source evidence, or inconsistent ownership fail closed. Confidence never changes Fit or Timing. `verifyFirst` is true only when final priority is P0/P1 and confidence is 0-6; it is false at 7-10 and for P2/P3.
 
+The authoritative last-contact fact is derived from immutable Activities, never
+from `prospects.last_contact_at`. Import the same pure
+`qualifiesContactEvidence` helper used by Task 9 and select the greatest
+canonical `(occurred_at, id COLLATE BINARY)` pair among exact-Prospect Activities
+at or before `evaluatedAt` that satisfy it. A qualifying Activity after
+`evaluatedAt`, or a blank/noncanonical Activity timestamp, makes the evaluation
+input corrupt rather than being silently ignored. Qualifying evidence is exactly outbound call/`answered`,
+outbound voicemail/`voicemail_left`, outbound text or Gmail email/`accepted`, or
+an exact-Prospect associated inbound call/text/email response with
+`answered | replied | accepted`. An inbound row for another/no Prospect,
+delivered-only, opened, no-answer, failed, internal, resolver, or unconfirmed
+Activity contributes nothing. No qualifying row yields both
+`lastContactActivityId=null` and `lastContactAt=null`; otherwise both are
+non-null and must name that exact maximum row. Equal timestamps use the binary
+Activity ID tie-break. Provider/idempotency replay returns the same immutable
+Activity and cannot advance or duplicate the fact.
+
+Every qualified evaluation stores the exact derived Activity ID/timestamp in
+its canonical input/result envelopes and relational columns, and projection CAS
+copies both fields faithfully. A fresh recalculation is the only projector:
+failed/no-answer/opened evidence leaves the pair unchanged; a later qualifying
+Activity advances it; an older late-import does not; exact replay creates no new
+evaluation or projection version. Task 12 consumes this Task 11 snapshot pair,
+not the dormant Prospect column.
+
 - [ ] **Step 3: Specify exact trigger rules, evidence, and boundaries**
 
-Define a strict `TriggerEvidenceV1` discriminated union. Every envelope is `{ formatVersion: 1, evidenceRefs: string[], ... }` plus exactly one function shape:
+Define a strict signal-specific `TriggerEvidenceV1` discriminated union. Every
+envelope names the exact stored trigger key, authoring rule, sorted nonblank
+evidence refs, one function shape, and exactly one relational proof shape:
 
 ```ts
-type TriggerEvidenceV1 =
+type TriggerFunctionEvidenceV1 =
   | {
-      formatVersion: 1;
-      authoredUnderRuleVersionId: string;
       function: 'decaying';
-      evidenceRefs: string[];
     }
   | {
-      formatVersion: 1;
-      authoredUnderRuleVersionId: string;
       function: 'approaching';
       deadlineAt: string;
-      evidenceRefs: string[];
     }
   | {
-      formatVersion: 1;
-      authoredUnderRuleVersionId: string;
       function: 'windowed';
       startsAt: string;
       endsAt: string;
-      evidenceRefs: string[];
     };
+
+type BuiltinStoredTriggerKey =
+  | 'live_vacancy'
+  | 'recent_acquisition'
+  | 'compliance_deadline'
+  | 'recent_permit_maintenance'
+  | 'heating_season'
+  | 'student_turnover'
+  | 'post_storm'
+  | 'tax_season'
+  | 'inbound_demo'
+  | 'direct_referral'
+  | 'rireig_connection'
+  | 'recent_lead_engagement'
+  | 'nurture_resurrection';
+type StoredTriggerKey = BuiltinStoredTriggerKey | `custom:${string}`;
+type SourceBackedTriggerKey = Exclude<StoredTriggerKey, 'nurture_resurrection'>;
+
+type TriggerEvidenceV1 = TriggerFunctionEvidenceV1 & (
+  | {
+      formatVersion: 1;
+      triggerType: SourceBackedTriggerKey;
+      authoredUnderRuleVersionId: string;
+      evidenceRefs: readonly [string, ...string[]];
+      proof: {
+        kind: 'source_event';
+        sourceEventId: string;
+        sourceObservedAt: string;
+      };
+    }
+  | {
+      formatVersion: 1;
+      triggerType: 'nurture_resurrection';
+      authoredUnderRuleVersionId: string;
+      evidenceRefs: readonly [string, ...string[]];
+      function: 'windowed';
+      startsAt: string;
+      endsAt: string;
+      proof: {
+        kind: 'reactivation_rule_receipt';
+        activationKey: string;
+        ruleId: string;
+        ruleType: ReactivationRuleType;
+        sourceCycleId: string;
+        newCycleId: string;
+        activatedAt: string;
+      };
+    }
+);
 ```
 
-`TriggerEvent.effective_at` is the observation/activation instant. Calendar-window authoring resolves founder-configured workspace-local boundaries to canonical UTC `startsAt`/`endsAt` before persistence; the pure evaluator receives no timezone clock. Evidence function must match the active rule entry. Require canonical UTC millisecond timestamps, `startsAt < endsAt`, at least one nonblank unique sorted evidence ref, Person/Prospect/Source ownership, and `effective_at < endsAt` for a window. A window is active only on `[max(effective_at, startsAt), endsAt)`, so evidence observed mid-window never backdates priority. `source_event_id` remains unique, so one external source event cannot create multiple trigger types.
+`TriggerEvent.effective_at` is the proven observation/activation instant.
+Source-backed rows require `source_event_id`, require both reactivation columns
+null, require evidence `proof.sourceEventId` and `sourceObservedAt` to equal the
+owned SourceEvent, and set `effective_at = source_events.observed_at`. The native
+channel-backed mappings are exact: `live_vacancy -> frbo`,
+`inbound_demo -> inbound_demo`, `direct_referral -> referral`, and
+`rireig_connection -> rireig`. Every other source-backed built-in and every
+`custom:<slug>` requires the SourceEvent's canonical `source_record_json` to
+contain the exact nested marker
+`{ prioritizationTrigger: { version: 1, signal: <full stored key> } }`; a
+different/missing marker cannot author that signal. `source_event_id` has a
+partial unique index when non-null, so one external event cannot claim two
+signals.
+
+`nurture_resurrection` is not source-asserted prose. It requires
+`reactivation_receipt_activation_key` plus `reactivation_rule_id`, requires
+`source_event_id=null`, and uses a committed Task 9 rule receipt whose rule ID,
+rule type, source cycle, new cycle, Person/Prospect ownership, and activation
+timestamp match the proof exactly. The referenced rule must be consumed by that
+receipt; `effective_at`, `startsAt`, and `proof.activatedAt` equal the receipt
+`created_at`; `endsAt` is exactly fourteen elapsed days later; and the receipt
+activation key is unique in TriggerEvents. Inbound-response receipts do not
+author this signal. This gives seasonal/manual/new-event resurrection durable
+proof without reusing or fabricating a SourceEvent.
+
+Calendar-window authoring resolves founder-configured workspace-local
+boundaries to canonical UTC `startsAt`/`endsAt` before persistence; the pure
+evaluator receives no timezone clock. Evidence trigger key/function must match
+the active rule entry. Require canonical UTC millisecond timestamps,
+`startsAt < endsAt`, at least one nonblank unique sorted evidence ref, exact
+Person/Prospect/proof ownership, and `effective_at < endsAt` for a window. A
+window is active only on `[max(effective_at, startsAt), endsAt)`, so evidence
+observed mid-window never backdates priority.
 
 Treat stored `expires_at` only as an immutable source-evidence hard stop, never as the calculated rule expiration: it must be canonical and later than `effective_at`; a window/approaching event must store the same terminal instant as its strict evidence envelope, while a decay event may leave it null or provide an earlier source-specific stop such as a removed listing. A hard stop is exclusive. Recompute the rule threshold under the selected immutable rule version on every evaluation and take the earlier of that threshold and any source hard stop. This preserves reproducibility when a later rule version changes a half-life without rewriting TriggerEvent history.
 
@@ -2681,19 +2881,35 @@ The pure matrix is exactly:
 
 High/Hot without Direct is P1 `find_direct_line`, never P0. If `nurture_resurrection` is the only selected positive trigger key, computed priority cannot exceed P1 and explanation contains `nurture_only_p0_block`; any other selected positive key restores the ordinary matrix. This exception applies only to computed priority. A founder priority override may still select P0 when current reachability is Direct.
 
-Define `EffectivePrioritySnapshot` with both computed and effective priority, current projection version/evaluation ID, active priority/pin/snooze/dismiss control IDs, explicit `asOf`, and all tuple fields. New manual controls use `[created_at, expires_at)`, require canonical times, `expires_at > created_at`, a nonblank reason, and one active control per kind. A retired row may end at `expires_at = created_at`; the repository never inserts that zero-length form. Overlap is a typed conflict under `BEGIN IMMEDIATE`, never newest-row-wins. Semantics are:
+Define the exact `EffectivePrioritySnapshot` in Step 9 with both computed and effective priority, current projection version/evaluation ID, active priority/pin/snooze/dismiss controls, explicit `asOf`, last-contact evidence, and all tuple fields. New manual controls use `[created_at, expires_at)`, require canonical times, `expires_at > created_at`, a nonblank reason, and one effective control per kind. Persist control `status: active | expired` plus nullable `expired_at`: insert only `active/NULL`; permit only the one-way `active -> expired` transition; and never reactivate, delete, replace, or widen a row. Overlap is a typed conflict under `BEGIN IMMEDIATE`, never newest-row-wins.
+
+No priority-control trigger reads SQL wall time. `sweepExpiredControls({ asOf })`
+uses an explicit canonical caller/injected time and CAS-transitions every
+`status='active' AND expires_at <= asOf` row to `expired` with
+`expired_at=asOf`, in stable `(prospect_id, override_kind, created_at, id)`
+order. Every first-write recalculation/control command sweeps the affected
+Prospect(s) before overlap/P0/projection work. Manual/gate retirement shortens
+`expires_at` to its explicit effective time and transitions status to expired in
+the same guarded update. Read-time effectiveness still requires all three:
+`status='active'`, `created_at <= asOf`, and `asOf < expires_at`. Load-bearing
+P0 Direct projection UPDATE/DELETE guards inspect persisted
+`status='active'` only; an expired-but-unswept P0 therefore safely overblocks a
+raw mutation until the deterministic sweep, never underblocks due to ambient
+time. The exact active-to-expired CAS itself is always allowed without a Direct
+projection so a stale guard can be retired; it cannot change owner/kind/value
+or return to active. Semantics are:
 
 - priority override changes only effective priority; computed fields remain visible; P0 requires the current projection to be Direct at write and render time;
 - pin is a boolean Task 12 may use only inside the already-assigned lane and is not part of the prospect-priority tuple;
 - snooze and dismiss are explicit suppression hints for Task 12 and cannot suppress onboarding, inbound-SLA, overdue, or promised/due work;
-- retiring a control only shortens `expires_at` with an exact expected-old-expiration CAS; the row and reason remain retained;
+- retiring a control only shortens `expires_at` with an exact expected-old-expiration/status CAS, sets `status='expired'`/`expired_at` once, and retains the row/reason forever;
 - gate/removal first retires every effective P0 override at `evaluatedAt`, then all other effective controls, before projection deletion, preserving the existing raw P0 deletion defense.
 
 V1 preference learning is append-only, not model fitting. Add immutable `prioritization_preference_events` with caller-stable ID, optional unique `control_id` plus `controlled_prospect_id`, action kind (`acted_out_of_order`, `snoozed`, `dismissed`, `reordered`, `priority_overridden`, `pinned`), distinct winner/loser Prospect IDs, the exact immutable qualified evaluation ID for each side, `observed_at`, strict canonical V1 context JSON, and `created_at`. Add `UNIQUE(id, prospect_id, decision_kind)` support on evaluations and constant `decision_kind='evaluated'` columns/composite foreign keys so each comparison uses an evaluated row belonging to its named Prospect. Control action kinds require their matching `(control_id, controlled_prospect_id)`; favoring controls require the controlled Prospect be the winner, snooze/dismiss require it be the loser, and reorder/out-of-order kinds require both control columns null. Creating a priority/pin/snooze/dismiss control atomically appends its required comparison. A UI action without both current comparison snapshots is rejected rather than stored as fake pairwise evidence. Reordering/acting out of order may append a preference event without a control. V1 never fits Bradley-Terry, changes rules, or activates a proposal.
 
 - [ ] **Step 5: Write RED pure, metamorphic, and boundary tests**
 
-Cover every gate/state mapping; malformed/conflicting profile facts; all door, Fit-band, Timing-band, confidence, Verify First, and timestamp boundaries; equivalent input permutations; all nine matrix cells; Direct fallback; nurture-only downgrade and nurture-plus-other restoration; built-in rule constants/hash; every trigger function; multipliers; `<1.0` expiration; strongest-per-key ties; cap behavior; window edges; custom bounds; and stable full explanations.
+Cover every gate/state mapping; exact Task 9 lifecycle reason versus separate qualification gate reason; direct and retained-handle Task 10 blocks; malformed/conflicting profile facts; all door, Fit-band, Timing-band, confidence, Verify First, and timestamp boundaries; exact qualifying-contact Activity predicates/max/tie/replay behavior; equivalent input permutations; all nine matrix cells; Direct fallback; nurture-only downgrade and nurture-plus-other restoration; built-in rule constants/hash; every trigger function; channel/marker/receipt/rule proof mapping; multipliers; `<1.0` expiration; strongest-per-key ties; cap behavior; window edges; custom bounds; control status/sweep boundaries; and stable full explanations.
 
 Add metamorphic/property tests proving:
 
@@ -2701,6 +2917,7 @@ Add metamorphic/property tests proving:
 - changing only trigger evidence/evaluation time cannot alter Fit;
 - contact changes affect only reachability/confidence/P0 eligibility, never Fit/Timing;
 - confidence changes only its tie-break/Verify First value;
+- nonqualifying/replayed Activity evidence cannot advance last contact, while a later qualifying Activity changes only the last-contact tuple fields;
 - input order and duplicate exact facts cannot affect serialized output;
 - unknown data contributes zero and cannot improve a band;
 - two axis pairs in different matrix cells cannot be made equivalent through a hidden arithmetic combination; and
@@ -2712,19 +2929,22 @@ Because no later migration has shipped, amend `0002DomainFoundation`; do not cre
 
 Make the existing structures enforce:
 
+- `prospects.qualification_gate_reason` is nullable but restricted to the six `QualificationGateReason` codes, required exactly when `qualification_state='disqualified'`, and null for every other qualification state; Task 9's generic/lifecycle `qualification_reason` remains separate. Identity create/update CAS inputs and stored parsers enforce the same discriminated relation;
+- `activities` exposes the composite uniqueness needed for `(id, prospect_id)` last-contact evidence; Task 11 never mutates Activity history or the dormant Prospect last-contact field;
+- `trigger_events.source_event_id` becomes nullable and partial-unique when present; add nullable `reactivation_receipt_activation_key` and `reactivation_rule_id`, a unique receipt key, exact composite parents/FKs, and all-or-none proof checks. Source-backed keys require only the SourceEvent proof columns; `nurture_resurrection` requires only the exact Task 9 rule-receipt proof columns. Insert triggers enforce the Step 3 native-channel/named-source mapping, receipt/rule/source-cycle/new-cycle/Prospect ownership, consumed-rule/receipt identity, and exact effective timestamp. UPDATE/DELETE/all `OR REPLACE` paths remain immutable;
 - `prioritization_rule_versions.version` is unique; ID/version/content hash/canonical `rules_json` are immutable; same ID or version with different canonical content conflicts;
-- evaluations add immutable `decision_kind` (`evaluated` or `not_prioritizable`), canonical `command_json`, canonical `input_snapshot_json`, canonical `result_json`, and `qualification_json`; the input snapshot is the strict gate-only snapshot for an excluded record or the complete normalized property/contact/source/trigger fact snapshot for an evaluated record, making every historical result reproducible after mutable facts change;
-- evaluated rows require all existing Fit/Timing/reachability/confidence/priority columns and null exclusion reasons; `not_prioritizable` rows require every numeric/band/priority/expiration/Verify First column to be null and a nonempty typed qualification result;
-- evaluations expose composite uniqueness needed to prove Prospect/result ownership; projection has a constant evaluated decision discriminator plus a composite FK and trigger so it can reference only a same-Prospect `evaluated` row and still faithfully copy every computed field;
-- `priority_overrides` permits only expiration-shortening updates (`created_at <= new expires_at <= old expires_at`), blocks owner/kind/value/reason/creation mutation and deletion, and retains raw P0 insert/update/projection-update/delete defenses including `INSERT OR REPLACE` with `recursive_triggers=ON`;
+- evaluations add immutable `decision_kind` (`evaluated` or `not_prioritizable`), canonical `command_json`, canonical `input_snapshot_json`, canonical `result_json`, and `qualification_json`; the input snapshot is the strict gate/permission-only snapshot for an excluded record or the complete normalized property/contact/source/Activity/trigger fact snapshot for an evaluated record, making every historical result reproducible after mutable facts change;
+- evaluated rows require all existing Fit/Timing/reachability/confidence/priority columns and null exclusion reasons; their nullable `last_contact_activity_id`/`last_contact_at` are all-or-none and, when present, own the exact same-Prospect qualifying Activity selected by Step 2. `not_prioritizable` rows require every numeric/band/priority/expiration/Verify First/last-contact column to be null and a nonempty typed qualification result;
+- evaluations expose composite uniqueness needed to prove Prospect/result ownership; projection has a constant evaluated decision discriminator plus a composite FK and trigger so it can reference only a same-Prospect `evaluated` row and faithfully copy every computed and last-contact field;
+- `priority_overrides` adds `status IN ('active','expired')` and nullable canonical `expired_at`; `active` requires null `expired_at`, `expired` requires non-null `expired_at >= expires_at`. It permits only expiration-shortening plus the one-way active-to-expired transition described in Step 4, blocks owner/kind/value/reason/creation/reactivation mutation and deletion, and retains raw P0 insert/update/projection-update/delete defenses including `INSERT OR REPLACE` with `recursive_triggers=ON`; every P0 defense uses persisted status and contains no SQLite `now`/wall-clock function;
 - `priority_overrides` exposes `UNIQUE(id, prospect_id)` for ownership; preference events are immutable under UPDATE, DELETE, same-primary-key replace, and non-primary UNIQUE replace, own both Prospects/qualified evaluations through composite FKs, own an optional exact control through `(control_id, controlled_prospect_id)`, require winner != loser, and use strict supported action/control combinations; and
 - workspace active-rule replacement is guarded by an existing immutable rule row; only the repository CAS activation path may change the pointer.
 
-Add exact typed errors for malformed/corrupt evidence, repository composition, immutable rule-version conflict, idempotency conflict, stale projection/control/rule CAS, overlapping manual controls, and invalid P0 reachability. No caller branches on SQLite text.
+Add exact typed errors for malformed/corrupt signal or last-contact evidence, repository/permission composition, immutable rule-version conflict, idempotency conflict, stale projection/control/rule CAS, overlapping manual controls, invalid P0 reachability, and invalid qualification-gate relation. No caller branches on SQLite text.
 
 On every read, strict schemas cross-check evaluation command/input/result/qualification envelopes against relational ID, owner, rule, decision, timestamp, and every nullable/non-null computed column; preference context against its action/control/comparison columns; and projection against its immutable evaluation. A well-shaped JSON envelope that names a different Prospect, rule, evaluation, trigger, comparison, or computed value is corruption.
 
-Raw SQL tests attempt NULL/case/type loopholes, forged cross-Person evaluation/control/preference ownership, gated projections, projection/evaluation divergence, owner moves, exact/non-primary `OR REPLACE`, rule mutation, priority-control widening, control deletion, P0 creation without Direct, reachability loss/deletion under effective P0, and malformed canonical JSON through repository reads. Migration rollback removes new triggers/indexes/table before referenced structures and restores an empty schema.
+Raw SQL tests attempt NULL/case/type loopholes, generic Task 9 reason without an exact qualification gate, forged cross-Person evaluation/control/preference/Activity/trigger proof ownership, wrong native trigger channel or named marker, forged/unconsumed/cross-cycle nurture receipt, gated projections, projection/evaluation/last-contact divergence, owner moves, exact/non-primary `OR REPLACE`, rule mutation, priority-control widening/reactivation/status reversal, control deletion, P0 creation without Direct, reachability loss/deletion while any persisted P0 is active, every attempted ambient-SQL-time loophole, and malformed canonical JSON through repository reads. Migration rollback removes new triggers/indexes/table before referenced structures and restores an empty schema.
 
 - [ ] **Step 7: Define the exact immutable V1 rule document and installation contract**
 
@@ -2749,6 +2969,7 @@ listTriggerEvents(prospectId: string): TriggerEvent[];
 appendTriggerEvent(input: TriggerEvent): TriggerEvent;
 loadQualificationInputs(prospectId: string): QualificationInputSnapshot;
 loadQualifiedEvaluationInputs(prospectId: string): QualifiedInputSnapshot;
+loadQualifyingLastContact(prospectId: string): LastContactEvidence | null;
 getEvaluationById(id: string): PrioritizationEvaluation | null;
 appendEvaluation(input: PrioritizationEvaluation): PrioritizationEvaluation;
 insertProjection(input: ProspectPriorityProjection): ProspectPriorityProjection;
@@ -2756,13 +2977,23 @@ updateProjectionCas(input: ProjectionCasUpdate): ProspectPriorityProjection;
 deleteProjectionCas(input: ProjectionCasDelete): void;
 createOverride(input: PriorityOverride): PriorityOverride;
 listActiveOverrides(prospectId: string, asOf: string): PriorityOverride[];
+sweepExpiredControls(input: {
+  prospectId: string;
+  asOf: string;
+}): readonly PriorityOverride[];
 expireOverrideCas(input: OverrideExpirationCas): PriorityOverride;
 appendPreferenceEvent(input: PrioritizationPreferenceEvent): PrioritizationPreferenceEvent;
 ```
 
-Reads may run outside a transaction. Every mutator requires the active token of the exact supplied UoW and database. Installation/activation/service wrappers own one `BEGIN IMMEDIATE`; scoped variants reuse that exact active scope and never nest. Use plain INSERT for immutable rows, targeted CAS/declared-key handling only, no broad conflict suppression or SQLite error-message parsing. Stable reads order Properties/contacts/TriggerEvents by ID, controls by `(override_kind, created_at, id)`, preference events by `(observed_at, id)`, evidence refs lexically, and computed reasons by the Step 3 key before parsing/return.
+`OverrideExpirationCas` is exactly `{ controlId, prospectId, expectedStatus:
+'active', expectedExpiresAt, newExpiresAt, expiredAt }`; it requires
+`newExpiresAt=expiredAt` for explicit retirement and changes both status fields
+in one guarded statement. Natural sweep uses its own batch CAS and leaves
+`expires_at` unchanged.
 
-`PrioritizationService` receives the same `{ database, unitOfWork, clock, repository }`, calls `repository.assertBoundTo(database, unitOfWork)` at construction, and rejects every mixed-database/different-UoW permutation before reads, writes, or clock access.
+Reads may run outside a transaction. Every mutator requires the active token of the exact supplied UoW and database. Installation/activation/service wrappers own one `BEGIN IMMEDIATE`; scoped variants reuse that exact active scope and never nest. Use plain INSERT for immutable rows, targeted CAS/declared-key handling only, no broad conflict suppression or SQLite error-message parsing. Stable reads order Properties/contacts/TriggerEvents by ID, qualifying Activities by `(occurred_at DESC, id COLLATE BINARY DESC)`, controls by `(override_kind, created_at, id)`, preference events by `(observed_at, id)`, evidence refs lexically, and computed reasons by the Step 3 key before parsing/return. `listActiveOverrides` is a historical name only: it returns rows effective at explicit `asOf` by both persisted status and half-open interval; it never consults wall time. `sweepExpiredControls` is a write-scope CAS operation and is idempotent at the same `asOf`.
+
+`PrioritizationService` receives `{ database, unitOfWork, clock, repository, outboundPermission }`, calls both `repository.assertBoundTo(database, unitOfWork)` and `outboundPermission.assertBoundTo(database, unitOfWork)` at construction, and rejects every mixed-database/different-UoW permutation before reads, writes, permission inspection, or clock access.
 
 - [ ] **Step 8: Implement the pure engines without SQL, time, IDs, or mutation**
 
@@ -2772,7 +3003,124 @@ The trigger evaluator uses integer milliseconds and integer thousandths at all c
 
 - [ ] **Step 9: Define one canonical JS and SQLite prospect-priority tuple**
 
-Export `buildProspectPriorityTuple`, `compareProspectPriority`, and one fixed-column SQLite order helper/fragment consumed unchanged by Task 12. The tuple is never reduced to a scalar:
+Export these exact recursively readonly public types and functions. Task 12
+must consume them rather than copy fields or ordering logic:
+
+```ts
+export type DeepReadonly<T> =
+  T extends (...args: never[]) => unknown ? T
+    : T extends readonly (infer U)[] ? readonly DeepReadonly<U>[]
+      : T extends object ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+        : T;
+
+export type LastContactEvidence = Readonly<{
+  activityId: string;
+  occurredAt: string;
+}>;
+
+export type PriorityOverride = Readonly<{
+  id: string;
+  prospectId: string;
+  kind: 'priority' | 'pin_to_top' | 'snooze' | 'dismiss';
+  priority: 'p0' | 'p1' | 'p2' | 'p3' | null;
+  reason: string;
+  createdAt: string;
+  expiresAt: string;
+  status: 'active' | 'expired';
+  expiredAt: string | null;
+}>;
+
+export type EffectivePriorityControl = Readonly<{
+  id: string;
+  kind: 'priority' | 'pin_to_top' | 'snooze' | 'dismiss';
+  priority: 'p0' | 'p1' | 'p2' | 'p3' | null;
+  reason: string;
+  createdAt: string;
+  expiresAt: string;
+  status: 'active';
+}>;
+
+export type OrderablePriorityRow = Readonly<{
+  prospectId: string;
+  effectivePriority: 'p0' | 'p1' | 'p2' | 'p3';
+  earliestTriggerExpiresAt: string | null;
+  timingMilliPoints: number;
+  fitPoints: number;
+  reachability: 'direct' | 'indirect' | 'none';
+  dataConfidence: number;
+  lastContactAt: string | null;
+}>;
+
+export type EffectivePrioritySnapshot = DeepReadonly<{
+  prospectId: string;
+  ruleVersionId: string;
+  evaluationId: string;
+  projectionVersion: number;
+  evaluatedAt: string;
+  asOf: string;
+  computedPriority: 'p0' | 'p1' | 'p2' | 'p3';
+  effectivePriority: 'p0' | 'p1' | 'p2' | 'p3';
+  computedPlay: PriorityPlay;
+  fitPoints: number;
+  fitBand: 'low' | 'medium' | 'high';
+  timingMilliPoints: number;
+  timingBand: 'cold' | 'warm' | 'hot';
+  reachability: 'direct' | 'indirect' | 'none';
+  dataConfidence: number;
+  earliestTriggerExpiresAt: string | null;
+  verifyFirst: boolean;
+  lastContactActivityId: string | null;
+  lastContactAt: string | null;
+  controls: {
+    priority: EffectivePriorityControl | null;
+    pin: EffectivePriorityControl | null;
+    snooze: EffectivePriorityControl | null;
+    dismiss: EffectivePriorityControl | null;
+  };
+  explanation: readonly PrioritizationReason[];
+}>;
+
+export function toOrderablePriorityRow(
+  snapshot: EffectivePrioritySnapshot,
+): OrderablePriorityRow;
+export function buildProspectPriorityTuple(
+  row: OrderablePriorityRow,
+): readonly [number, number, number, number, number, number, number, number, number, string];
+export function compareProspectPriority(
+  left: OrderablePriorityRow,
+  right: OrderablePriorityRow,
+): number;
+
+export const PRIORITY_ORDERABLE_SQL_ALIAS = 'priority_orderable' as const;
+export const PROSPECT_PRIORITY_ORDER_BY_SQL = `
+  CASE priority_orderable.effective_priority
+    WHEN 'p0' THEN 0 WHEN 'p1' THEN 1 WHEN 'p2' THEN 2 WHEN 'p3' THEN 3
+    ELSE 4
+  END ASC,
+  CASE WHEN priority_orderable.earliest_trigger_expires_at IS NULL
+    THEN 1 ELSE 0 END ASC,
+  priority_orderable.earliest_trigger_expires_at ASC,
+  priority_orderable.timing_millipoints DESC,
+  priority_orderable.fit_points DESC,
+  CASE priority_orderable.reachability
+    WHEN 'direct' THEN 0 WHEN 'indirect' THEN 1 WHEN 'none' THEN 2
+    ELSE 3
+  END ASC,
+  priority_orderable.data_confidence DESC,
+  CASE WHEN priority_orderable.last_contact_at IS NULL THEN 0 ELSE 1 END ASC,
+  priority_orderable.last_contact_at ASC,
+  priority_orderable.prospect_id COLLATE BINARY ASC
+` as const;
+```
+
+The fixed SQL fragment refers only to alias `priority_orderable` with exact
+columns `prospect_id`, `effective_priority`,
+`earliest_trigger_expires_at`, `timing_millipoints`, `fit_points`,
+`reachability`, `data_confidence`, and `last_contact_at`. Callers must expose
+that subquery/CTE alias and may only prepend lane/pin keys or append non-priority
+cycle/action ties documented by Task 12. The helper accepts no caller alias,
+direction, expression, or weights, so arbitrary SQL cannot alter its semantics.
+The tuple is never reduced to a scalar:
 
 ```ts
 [
@@ -2789,7 +3137,15 @@ Export `buildProspectPriorityTuple`, `compareProspectPriority`, and one fixed-co
 ]
 ```
 
-Canonical timestamps are parsed before comparison; invalid values throw. Fixed-width canonical UTC text has the same temporal ordering as the JS epoch value. The SQL expression uses explicit `CASE` ranks/null flags, `COLLATE BINARY` for stable IDs, and the same ascending/descending directions, including the actual expiration and last-contact timestamps. It never relies on enum text ordering, SQLite default NULL ordering, collation-dependent booleans, or an omitted stable-ID tie-break.
+Canonical timestamps are parsed before comparison; invalid values throw.
+`lastContactActivityId` and `lastContactAt` remain all-or-none in the snapshot,
+although only the timestamp participates in the tuple. Fixed-width canonical
+UTC text has the same temporal ordering as the JS epoch value. The SQL
+expression uses explicit `CASE` ranks/null flags, `COLLATE BINARY` for stable
+IDs, and the same ascending/descending directions, including actual expiration
+and last-contact timestamps. It never relies on enum text ordering, SQLite
+default NULL ordering, collation-dependent booleans, an omitted stable-ID tie,
+or an effective-priority value reconstructed inside the ordering expression.
 
 Generate boundary-heavy and randomized fixtures, compute their order in JS, insert the same rows into a temporary encrypted database, order with the shared SQL contract, and require identical Prospect-ID sequences. Include effective priority overrides, equal bands/different raw axes, null/equal expirations, every reachability/confidence value, null/equal last contact, and stable-ID ties. Pin is intentionally absent; Task 12 applies it only after lane assignment.
 
@@ -2798,6 +3154,17 @@ Generate boundary-heavy and randomized fixtures, compute their order in JS, inse
 Expose:
 
 ```ts
+export type RecordTriggerEventInput = Readonly<{
+  id: string;
+  prospectId: string;
+  triggerType: StoredTriggerKey;
+  effectiveAt: string;
+  sourceExpiresAt: string | null;
+  strengthMultiplier: number;
+  verificationState: 'verified' | 'unverified';
+  evidence: TriggerEvidenceV1;
+}>;
+
 recordTriggerEvent(input: RecordTriggerEventInput): TriggerEvent;
 
 evaluatePreview(input: {
@@ -2815,9 +3182,9 @@ recalculateProspect(input: {
 }): RecalculationResult;
 ```
 
-`evaluatePreview` may use any installed rule version. It rejects an already-active raw transaction, opens one synchronous deferred read transaction on the exact database, loads and parses one coherent snapshot, computes, and closes without invoking the write UoW. It writes no evaluation, projection, override, preference, rule pointer, ID, timestamp, temp table, or pragma. Repeated preview calls over identical explicit inputs are byte-identical. Trace/total-change tests prove the preview issues only reads and sees either the before-commit or after-commit snapshot during an independent writer, never a torn mixture.
+`evaluatePreview` may use any installed rule version. It rejects an already-active raw transaction, opens one synchronous deferred read transaction on the exact database, preloads only the canonical Prospect/Person identity, checks deletion, calls exact-bound `outboundPermission.inspectPerson` before every other prioritization read, then loads and parses one coherent permitted snapshot. It computes and closes without invoking the write UoW. It writes no evaluation, projection, control-status sweep, override, preference, rule pointer, ID, timestamp, temp table, or pragma. Repeated preview calls over identical explicit inputs are byte-identical. Trace/total-change tests prove the preview issues only reads and sees either the before-commit or after-commit snapshot during an independent writer, never a torn mixture. Handle-retention opt-out versus preview races return one coherent permitted or blocked result.
 
-`recordTriggerEvent` is a separate transaction-owning command with caller-stable TriggerEvent ID, Prospect/SourceEvent IDs, stored key, explicit effective/source-expiration times, multiplier, verification state, and canonical evidence. It verifies the authoring rule exists, function/evidence compatibility, and exact Person ownership before INSERT. It preselects both ID and unique SourceEvent ID: an exact logical replay returns the stored row before reading the clock, while same ID/different source, same source/different ID, or any changed field is a typed idempotency conflict. Independent same-source contenders serialize to the same canonical result or a typed conflict; no broad suppression or error-text parsing is allowed.
+`recordTriggerEvent` is a separate transaction-owning command with caller-stable TriggerEvent ID, Prospect ID, exact Step 3 proof union, stored key, explicit effective/source-expiration times, multiplier, verification state, and canonical evidence. It verifies the authoring rule exists, stored key/function/evidence compatibility, native channel or named-source proof, and exact Person/Prospect or reactivation receipt/rule ownership before INSERT. It preselects ID plus the applicable unique proof key (`sourceEventId` or `activationKey`): an exact logical replay returns the stored row before reading the clock, while same ID/different proof, same proof/different ID, or any changed field is a typed idempotency conflict. Independent same-proof contenders serialize to the same canonical result or a typed conflict; no broad suppression or error-text parsing is allowed.
 
 `recalculateProspect` owns exactly one `unitOfWork.immediate`. Before loading mutable facts, allocating defaults, or reading the injected clock, preselect `evaluationId`. An existing row must match the canonical V1 command envelope byte-for-byte (`evaluationId`, Prospect, rule, explicit evaluation time, expected projection version, and mode); exact replay returns the stored strict canonical result. Any changed field is a typed idempotency conflict. The caller supplies the evaluation ID/time, so replay consumes neither generated IDs nor default clocks. On first execution only, reject `evaluatedAt` later than the injected clock, earlier than the current projection evaluation, or earlier than any effective control's creation time; preview may intentionally evaluate a future explicit time because it cannot mutate state.
 
@@ -2825,24 +3192,28 @@ On first execution, use this order:
 
 ```text
 assert repository/database/exact-UoW composition
+load only canonical Prospect/Person identity; short-circuit deleted Person
+inspect exact-bound Task 10 permission; handle-wide block skips all Fit/Timing fact reads
+validate Prospect qualification state and separate qualification_gate_reason
 load and require the workspace active rule pointer equals ruleVersionId
-load canonical Prospect/Person/source/tombstone gate facts and run qualification
-only when qualified, load one stable ownership-checked property/contact/trigger snapshot
+only when qualified and permitted, load one stable ownership-checked property/contact/Activity/trigger snapshot
+derive exact max qualifying last-contact Activity and include its ID/timestamp
 build canonical command/result envelopes
 insert one immutable evaluated-or-gated evaluation
+sweep affected Prospect controls through evaluatedAt using persisted status CAS
 if evaluated:
   if the new reachability is not Direct, CAS-retire every effective P0 override at evaluatedAt
   expectedProjectionVersion=null -> plain INSERT requiring absence and no effective controls
   expectedProjectionVersion=N -> CAS UPDATE WHERE prospect_id/version=N
   require current evaluated_at <= requested evaluatedAt; increment version once
 if gated/pending review:
-  require expected projection state/version exactly
+  require expected projection state/version exactly; sweep then retire controls
   CAS-shorten every active P0 control, then other active controls, to evaluatedAt
   CAS-delete the projection when present; leave all historical rows intact
 read strict postcondition and commit
 ```
 
-Projection writes copy exactly from the qualified evaluation. There is no upsert/replace. A missing row with expected N, existing row with expected null, stale/future projection, changed active rule, or failed override retirement rolls back the evaluation and every mutation. Gated exact retry returns the original immutable gated result after projection removal without reapplying CAS mutations. A later fresh evaluation uses a new ID and current expected projection version.
+Projection writes copy exactly from the qualified evaluation, including last-contact Activity ID/timestamp. There is no upsert/replace. A missing row with expected N, existing row with expected null, stale/future projection, changed active rule, stale control status, unswept active P0, or failed override retirement rolls back the evaluation and every mutation. Gated exact retry returns the original immutable gated result after projection removal without reapplying sweep/CAS mutations. A later fresh evaluation uses a new ID and current expected projection version.
 
 Inject a deterministic failure after evaluation insert, each control retirement, projection insert/update/delete, and postcondition. Compare ordered snapshots before/after: every failed path is byte-equivalent and leaves no consumed ID, orphan evaluation, stale projection, widened control, or partial preference record.
 
@@ -2883,46 +3254,57 @@ recordOutOfOrderChoice(input: PairwisePreferenceCommand): PrioritizationPreferen
 recordReorder(input: PairwisePreferenceCommand): PrioritizationPreferenceEvent;
 expireControl(input: {
   controlId: string;
+  expectedStatus: 'active';
   expectedExpiresAt: string;
   newExpiresAt: string;
+  asOf: string;
 }): PriorityOverride;
+sweepExpiredControls(input: {
+  prospectId: string;
+  asOf: string;
+}): readonly PriorityOverride[];
 getEffectivePrioritySnapshot(input: {
   prospectId: string;
   asOf: string;
 }): EffectivePrioritySnapshot;
 ```
 
-These are transaction-owning commands with caller-stable override/preference IDs and explicit `asOf`/expiration. Validate and canonicalize the complete command, then preselect either stable ID before reading defaults or the injected clock. On first execution require `asOf <= clock.now()`, set control `created_at` and preference `observed_at` to `asOf`, and require expiration after `asOf`. Priority/pin require the controlled Prospect be the comparison winner; snooze/dismiss require it be the loser. Each command inserts the control and immutable preference event atomically. `recordOutOfOrderChoice`/`recordReorder` append only the pairwise event. Stale comparison snapshots fail before writes. Exact event/override replay returns the original canonical result without consuming clock/IDs; same ID with any changed command conflicts.
+These are transaction-owning commands with caller-stable override/preference IDs and explicit `asOf`/expiration. Validate and canonicalize the complete command, then preselect either stable ID before reading defaults or the injected clock. On first execution load only each compared Prospect/Person owner, call exact-bound Task 10 permission before projection/control reads, require `asOf <= clock.now()`, sweep expired controls for both compared Prospects, set control `created_at` and preference `observed_at` to `asOf`, and require expiration after `asOf`. A handle-wide blocked comparison fails with the typed operational-block error and no writes. Priority/pin require the controlled Prospect be the comparison winner; snooze/dismiss require it be the loser. Each command inserts the `active/NULL expired_at` control and immutable preference event atomically. `recordOutOfOrderChoice`/`recordReorder` append only the pairwise event. Stale comparison snapshots or control status fail before writes. Exact event/override replay returns the original canonical result without consuming clock/IDs; same ID with any changed command conflicts.
 
-`expireControl` uses `(id, expectedExpiresAt)` and only permits `newExpiresAt <= expectedExpiresAt`; rows never delete. `getEffectivePrioritySnapshot({ prospectId, asOf })` strictly parses current projection and all controls, rejects overlaps/corruption, enforces the render-time P0 Direct gate, and returns computed and effective values separately. No control rewrites immutable evaluation/result JSON or activates a new rule. Preference ordering/model fitting is explicitly deferred to V1.1.
+`expireControl` uses `(id, expectedStatus='active', expectedExpiresAt)`, requires `newExpiresAt=asOf <= expectedExpiresAt`, and atomically sets `status='expired'`, `expired_at=asOf`; rows never delete. `sweepExpiredControls` performs the Step 4 natural-expiration transition without shortening the historical `expires_at`. `getEffectivePrioritySnapshot({ prospectId, asOf })` is read-only: after owner lookup it calls exact-bound Task 10 permission before projection/control reads and throws the typed operational-block error when blocked; otherwise it strictly parses current projection and all controls, rejects overlaps/corruption, treats only `active` rows whose interval contains `asOf` as effective, enforces the render-time P0 Direct gate, and returns the exact Step 9 snapshot. It does not sweep; an expired-but-unswept row is ineffective for the read but remains a conservative raw P0 guard until the next owning write. No control rewrites immutable evaluation/result JSON or activates a new rule. Preference ordering/model fitting is explicitly deferred to V1.1.
 
 - [ ] **Step 12: Write repository, raw-bypass, replay, fault, and independent-connection tests**
 
-Test every repository DB/UoW mismatch permutation, reads outside/write inside scope, strict input/stored-row/JSON/0-1/timestamp parsing, stable ordering, canonical rule hash/install/activation CAS, and inactive-rule preview versus active-rule projection. Test exact replay and every changed-command field for trigger recording, qualified/gated recalculation, controls, and preference events; verify no generated ID/default-clock consumption on replay.
+Test every repository and `OutboundPermissionService` DB/UoW mismatch permutation before clock/reads, reads outside/write inside scope, strict input/stored-row/JSON/0-1/timestamp parsing, stable ordering, canonical rule hash/install/activation CAS, and inactive-rule preview versus active-rule projection. Test direct tombstone, retained-handle-only reimport block, contradictory Person/direct-tombstone projection, qualifying/nonqualifying/tied/replayed last-contact evidence, exact native/named/nurture trigger proof, deterministic status sweep, and inactive-but-unswept controls. Test exact replay and every changed-command field for trigger recording, qualified/gated recalculation, controls, and preference events; verify no generated ID/default-clock consumption on replay.
 
 Using two independently keyed production `openDatabase` connections and a barrier, race:
 
 - same SourceEvent/same trigger command and same SourceEvent/different trigger commands;
+- same reactivation receipt/same nurture command and same receipt/different nurture commands;
+- retained-handle opt-out against preview/recalculation permission inspection;
+- qualifying Activity append against recalculation, proving one complete before/after last-contact pair;
 - first projection insert against first projection insert;
 - two updates with one expected projection version;
 - evaluated update against gated deletion;
 - rule activation against recalculation;
 - two overlapping controls of the same kind;
+- expiration sweep against control creation/retirement and projection replacement;
 - P0 override against loss of Direct reachability/projection replacement; and
 - same-ID same-command and same-ID different-command evaluation/control/preference writes.
 
 Each race yields one canonical success/replay or one typed stale/idempotency conflict, never raw `SQLITE_BUSY`, duplicate active controls, cross-Person evidence, partial rows, or message-parsed outcomes. Verify Task 4 busy timeout and `recursive_triggers=ON` remain active.
 
-Inject failures after TriggerEvent insert, evaluation insert, each control retirement, projection insert/update/delete, manual-control insert, preference-event insert, rule install, pointer activation, and every final postcondition. Each failed command rolls back to byte-equivalent ordered rows and consumes no logical idempotency result.
+Inject failures after TriggerEvent insert, qualification-gate CAS, evaluation insert, natural status sweep, each explicit control retirement, projection insert/update/delete, manual-control insert, preference-event insert, rule install, pointer activation, and every final postcondition. Each failed command rolls back to byte-equivalent ordered rows and consumes no logical idempotency result.
 
 - [ ] **Step 13: Prove the Task 11 -> Task 12 boundary**
 
-Contract-test that Task 11 exports only qualification/evaluation, `EffectivePrioritySnapshot`, controls, explanations, and the canonical comparator/SQL ordering helper. It must not query or mutate SalesCycles, NextActions, cadence enrollment/stage, queue lanes, daily capacity, or exploration slots.
+Contract-test that Task 11 exports only qualification/evaluation, exact `EffectivePrioritySnapshot`/`OrderablePriorityRow`, controls, explanations, and the canonical comparator/fixed-alias SQL ordering fragment. It may read immutable qualifying-contact Activities, retained Task 9 reactivation rule/receipt proof, and only the referenced cycle Person/Prospect IDs needed to validate that proof. It must not read lifecycle stage/workflow/current-action state or mutate SalesCycles, NextActions, cadence enrollment/stage, queue lanes, daily capacity, or exploration slots.
 
 Document for Task 12 tests:
 
 - lanes 1-5 remain promise-first and ignore snooze/dismiss suppression;
 - lanes 6-8 use effective priority plus the exact Task 11 tuple;
+- resurfacing and the tuple use `EffectivePrioritySnapshot.lastContactAt`, never `prospects.last_contact_at` or a locally rederived Activity value;
 - pin applies only within the lane Task 12 already assigned and cannot cross onboarding/inbound/overdue/promised boundaries;
 - snooze/dismiss may suppress only discretionary prospecting/exploration when no due promise exists;
 - capacity truncates discretionary call work only; and
@@ -2939,6 +3321,10 @@ npx vitest run \
   tests/main/domainConstraints.test.ts \
   tests/main/domainSchema.test.ts \
   tests/main/migrations.test.ts \
+  tests/main/identityRepository.test.ts \
+  tests/main/lifecycleService.test.ts \
+  tests/main/invariantAudit.test.ts \
+  tests/main/outboundPermissionService.test.ts \
   tests/main/noBlendedScore.test.ts \
   tests/main/builtinPrioritizationRules.test.ts \
   tests/main/qualificationEngine.test.ts \
@@ -2951,7 +3337,7 @@ npx vitest run \
   tests/integration/concurrentPrioritization.test.ts
 ```
 
-Expected: FAIL because Task 11 schema/modules are absent. Preserve the RED output.
+Expected: FAIL because the Task 11 compatibility seam/schema/modules are absent. Preserve the RED output, including canonical Task 9 disqualification and Task 10 retained-handle probes.
 
 - [ ] **Step 15: Implement the schema, pure engine, repository, service, and controls in that order**
 
@@ -2979,7 +3365,9 @@ npx vitest run \
   tests/main/identityRepository.test.ts \
   tests/main/sourceService.test.ts \
   tests/main/lifecycleService.test.ts \
-  tests/main/invariantAudit.test.ts
+  tests/main/invariantAudit.test.ts \
+  tests/main/outboundPermissionService.test.ts \
+  tests/main/optOutService.test.ts
 npm run typecheck
 npm run lint
 npm run test
@@ -2998,10 +3386,18 @@ git add \
   src/main/db/migrations/0002DomainFoundation.ts \
   src/main/db/domainSchema.ts \
   src/main/domain/support/domainErrors.ts \
+  src/main/domain/identity/identityTypes.ts \
+  src/main/domain/identity/identityRepository.ts \
+  src/main/domain/events/qualifyingContactEvidence.ts \
+  src/main/domain/lifecycle/lifecycleTransactionWriter.ts \
+  src/main/domain/lifecycle/invariantAudit.ts \
   src/main/domain/prioritization \
   tests/main/domainConstraints.test.ts \
   tests/main/domainSchema.test.ts \
   tests/main/migrations.test.ts \
+  tests/main/identityRepository.test.ts \
+  tests/main/lifecycleService.test.ts \
+  tests/main/invariantAudit.test.ts \
   tests/main/noBlendedScore.test.ts \
   tests/main/builtinPrioritizationRules.test.ts \
   tests/main/qualificationEngine.test.ts \
@@ -3031,7 +3427,7 @@ git commit -m "feat: add two-axis lead prioritization"
 - Create: `tests/integration/todaySnapshot.test.ts`
 
 **Interfaces:**
-- Consumes: one coherent read snapshot of operational SalesCycles and only their authoritative current NextActions; Task 9 immutable action work intent and inbound-SLA evidence; active cadence/stage state; Task 11 `EffectivePrioritySnapshot`, comparator, and fixed SQL tuple; Task 10 render-time permission inspection; immutable selected-call Activity receipts; and injected Clock, workspace timezone, frozen channel policies, and capacity.
+- Consumes: one coherent read snapshot of operational SalesCycles and only their authoritative current NextActions; Task 9 immutable action work intent and inbound-SLA evidence; active cadence/stage state; Task 11's exact `EffectivePrioritySnapshot`, `OrderablePriorityRow`, `toOrderablePriorityRow`, public comparator, and fixed `priority_orderable` SQL fragment; Task 10 render-time permission inspection; immutable selected-call Activity receipts; and injected Clock, workspace timezone, frozen channel policies, and capacity. Task 11's snapshot is the sole last-contact authority.
 - Produces: one recursively frozen, byte-deterministic `TodayQueue` whose lanes, Later items, suppressed candidates, and diagnostics account for every base operational cycle exactly once without exposing bare Prospects or computing a blended ranking value.
 - Boundary: Task 12 is read-only. It neither recalculates prioritization, mutates controls, completes actions, appends Activities, nor performs provider handoff. Task 13/the background refresh path must supply same-local-day Task 11 projections; communication execution owns the selected-call receipt and the final Task 10 send barrier.
 
@@ -3195,22 +3591,11 @@ export type TodayQueue = {
   diagnostics: readonly TodayDiagnostic[];
 };
 
-type ActiveTodayControl = {
-  createdAt: string;
-  expiresAt: string;
-};
-
 export type ParsedTodayCandidate =
   Omit<TodayItem, 'lane' | 'deferredFrom' | 'laneReason' | 'pinned'> & {
     stage: SalesStage;
     workflowStatus: 'active' | 'onboarding';
     priorityState: 'current' | 'missing' | 'stale' | 'corrupt';
-    controls: {
-      pin: ActiveTodayControl | null;
-      snooze: ActiveTodayControl | null;
-      dismiss: ActiveTodayControl | null;
-    };
-    lastContactAt: string | null;
   };
 
 export type TodayEvaluationContext = {
@@ -3278,11 +3663,13 @@ overdue action, fresh inbound outranks overdue action time until its SLA
 deadline, and the exact SLA deadline enters Overdue.
 
 An active snooze/dismiss and the re-surface interval
-`[lastContactAt, lastContactAt + resurfacingWindowSeconds)` suppress only rows
+`[candidate.priority.lastContactAt, candidate.priority.lastContactAt + resurfacingWindowSeconds)` suppress only rows
 that would enter lanes 6-8. They never suppress lanes 1-5. At the exact end of
-the interval the row may reappear; a future or malformed last contact is a
-diagnostic. Suppressed rows use the separate `suppressed` disposition and are
-not relabeled Later.
+the interval the row may reappear; a future/malformed Task 11 snapshot last
+contact or a non-null timestamp with null `lastContactActivityId` is a
+diagnostic. Today never reads `prospects.last_contact_at` or re-derives this
+value from `lastActivity`. Suppressed rows use the separate `suppressed`
+disposition and are not relabeled Later.
 
 - [ ] **Step 4: Write RED local-calendar and inbound-SLA boundary tests**
 
@@ -3329,14 +3716,18 @@ then the remainder of the exact Task 11 tuple. A pinned P3 therefore cannot
 jump any P2. Later orders by deferred-from lane rank, original within-lane
 ordinal, then stable cycle ID.
 
-Task 12 never copies, reduces, or adds arithmetic to Task 11's tuple. The V1
+Task 12 never copies, reduces, or adds arithmetic to Task 11's tuple. It calls
+`toOrderablePriorityRow` and `compareProspectPriority` directly. The V1
 repository uses stable-cycle SQL ordering only and lets pure JS own semantic
 lane order/capacity. `todayOrderingSqlParity.test.ts` inserts randomized and
-boundary-heavy snapshots in shuffled orders, uses Task 11's shared fixed SQL
-fragment for the discretionary suborder, and requires the same Prospect-ID
-sequence as the Task 11 JS comparator before Today adds lane/pin. Add a static
-ban on blended/generic score fields, SQL priority arithmetic, enum text ordering,
-omitted stable IDs, and any capacity `LIMIT` before classification.
+boundary-heavy `OrderablePriorityRow` snapshots in shuffled order into a
+subquery/CTE exposed under the exact alias `priority_orderable`, uses
+`PROSPECT_PRIORITY_ORDER_BY_SQL` unchanged for the discretionary suborder, and
+requires the same Prospect-ID sequence as the Task 11 comparator before Today
+adds lane/pin. Add a static ban on locally copied tuple fields/ranks,
+blended/generic score fields, SQL priority arithmetic, caller-selected aliases,
+enum text ordering, omitted stable IDs, and any capacity `LIMIT` before
+classification.
 
 - [ ] **Step 6: Write RED durable capacity and exploration tests**
 
@@ -3471,11 +3862,15 @@ export class TodayRepository {
 
 The base query LEFT JOINs only the authoritative action, optional active
 enrollment/catalog graph, Prospect/Person, current projection/evaluation, and a
-correlated last Activity ordered by `(occurred_at DESC, id DESC)`. Load active
-controls and immutable evaluation explanations without row multiplication.
-Strict row/JSON parsers return valid parsed candidates or typed diagnostics in
-stable cycle-ID order. Missing/corrupt data never makes the entire queue throw
-and never causes priority recomputation.
+correlated last general Activity ordered by `(occurred_at DESC, id DESC)` for
+display. Do not separately interpret control rows or evaluation explanations;
+both come from the exact `EffectivePrioritySnapshot` returned at `generatedAt`,
+without row multiplication. Take prioritization last contact only from that
+same snapshot; the display
+`lastActivity` is not a substitute. Strict row/JSON parsers return valid parsed
+candidates or typed diagnostics in stable cycle-ID order. Missing/corrupt data
+never makes the entire queue throw and never causes priority or last-contact
+recomputation.
 
 - [ ] **Step 11: Implement the read-only Today service and snapshot guard**
 
@@ -3500,11 +3895,16 @@ export class TodayService {
 ```
 
 Validate exact composition before reading the Clock. Read it once, enter one
-deferred transaction, load the repository snapshot, obtain each strict Task 11
-effective snapshot at the same `generatedAt`, inspect permission, count durable
+deferred transaction, load the repository snapshot, inspect permission, obtain
+permitted Task 11 effective snapshots at the same `generatedAt`, count durable
 selected-call receipts in the local day, and pass plain parsed data to
-`planTodayQueue`. A discretionary projection whose `evaluatedAt` is not in the
-same founder-local day is `stale_priority_projection`; Task 12 does not mutate
+`planTodayQueue`. For each candidate, call Task 10 `inspectPerson` first; only
+permitted candidates call Task 11 `getEffectivePrioritySnapshot`, which repeats
+the same load-bearing permission gate inside the same read snapshot. Require
+the returned Task 11 snapshot to match the candidate
+Prospect/evaluation/projection identity and pass its all-or-none last-contact
+relation before classification. A discretionary projection whose `evaluatedAt`
+is not in the same founder-local day is `stale_priority_projection`; Task 12 does not mutate
 it. A promise item remains visible with the diagnostic because a prioritization
 refresh failure cannot erase owed work.
 
