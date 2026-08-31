@@ -237,6 +237,13 @@ describe('IntakeReceiptRepository', () => {
     ['ghost context', { result: { ...result(), organizationIds: ['ghost-organization'] } }],
     ['duplicate context IDs', { result: { ...result(), propertyIds: ['property', 'property'] } }],
     ['unstable context order', { result: { ...result(), organizationIds: ['z', 'a'] } }],
+    ['forged merge-review projection', {
+      result: {
+        ...result(),
+        disposition: 'created_merge_review',
+        identityReviewReason: 'shared_handle',
+      },
+    }],
   ];
   it.each(appendIntegrityCases)(
     'rejects inconsistent %s before appending a receipt',
@@ -261,23 +268,8 @@ describe('IntakeReceiptRepository', () => {
     ['ghost organization context', {
       result: { ...result(), organizationIds: ['ghost-organization'] },
     }],
-    ['unlinked organization context', {
-      result: { ...result(), organizationIds: ['unlinked-organization'] },
-      before: () => database.raw.prepare(`
-        INSERT INTO organizations (id, canonical_name, created_at, updated_at)
-        VALUES ('unlinked-organization', 'Unlinked', ?, ?)
-      `).run(NOW, NOW),
-    }],
     ['ghost property context', {
       result: { ...result(), propertyIds: ['ghost-property'] },
-    }],
-    ['unlinked property context', {
-      result: { ...result(), propertyIds: ['unlinked-property'] },
-      before: () => database.raw.prepare(`
-        INSERT INTO properties (
-          id, address_line_1, locality, region, country_code, created_at, updated_at
-        ) VALUES ('unlinked-property', '20 hope st', 'providence', 'ri', 'US', ?, ?)
-      `).run(NOW, NOW),
     }],
     ['duplicate context IDs', {
       result: { ...result(), propertyIds: ['property', 'property'] },
@@ -295,17 +287,25 @@ describe('IntakeReceiptRepository', () => {
     }));
   });
 
-  it('fails closed when receipt identity review disagrees with the Prospect', () => {
-    database.raw.prepare(`
-      UPDATE prospects
-      SET qualification_state = 'merge_review', qualification_reason = 'shared_handle'
-      WHERE id = 'prospect'
-    `).run();
-    insertRawReceipt();
-
-    expect(() => repository.getBySourceEventId('source')).toThrow(expect.objectContaining({
-      name: 'IntakeReceiptIntegrityError', reason: 'identity_review_mismatch',
+  it('keeps historical receipt context readable after a supported link correction', () => {
+    database.raw.exec(`
+      INSERT INTO organizations (id, canonical_name, created_at, updated_at)
+      VALUES ('organization', 'Historical LLC', '${NOW}', '${NOW}');
+      INSERT INTO prospect_organizations (prospect_id, organization_id, created_at)
+      VALUES ('prospect', 'organization', '${NOW}');
+    `);
+    const historicalResult = { ...result(), organizationIds: ['organization'] };
+    const receipt = unitOfWork.immediate(() => repository.append({
+      sourceEventId: 'source', command: command(), result: historicalResult,
     }));
+    database.raw.exec(`
+      DELETE FROM prospect_properties
+      WHERE prospect_id = 'prospect' AND property_id = 'property';
+      DELETE FROM prospect_organizations
+      WHERE prospect_id = 'prospect' AND organization_id = 'organization';
+    `);
+
+    expect(repository.getBySourceEventId('source')).toEqual(receipt);
   });
 
   it.each(['command', 'result'] as const)(

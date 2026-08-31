@@ -246,7 +246,7 @@ export class IntakeReceiptRepository {
     const prospectId = idSchema.parse(result.prospectId);
     this.validateIntegrity({
       sourceEventId, personId, prospectId, command, result,
-    });
+    }, 'append');
     const commandJson = serializeCanonicalIntakeCommand(command);
     const resultJson = serializeCanonicalIntakeResult(result);
     const createdAt = utcTimestampSchema.parse(this.clock.now());
@@ -291,7 +291,7 @@ export class IntakeReceiptRepository {
       prospectId: row.prospect_id,
       command: commandEnvelope.command,
       result,
-    });
+    }, 'read');
     return {
       sourceEventId: row.source_event_id,
       personId: row.person_id,
@@ -309,7 +309,7 @@ export class IntakeReceiptRepository {
     prospectId: string;
     command: CanonicalIntakeCommand;
     result: StoredIntakeResult;
-  }): void {
+  }, mode: 'append' | 'read'): void {
     if (
       input.command.source.id !== input.sourceEventId
       || input.result.sourceEventId !== input.sourceEventId
@@ -363,14 +363,24 @@ export class IntakeReceiptRepository {
         'prospect_ownership_mismatch',
       );
     }
-    validateIdentityReview(input.sourceEventId, input.result, prospect);
+    // Qualification and context links are mutable projections. They prove a
+    // receipt truthful when appended, but later supported corrections must not
+    // make immutable historical evidence unreadable. Referenced context entity
+    // IDs must still be real on reads; only the mutable joins are historical.
+    if (mode === 'append') {
+      validateIdentityReview(input.sourceEventId, input.result, prospect);
+    }
     for (const organizationId of input.result.organizationIds) {
-      const linked = this.database.raw.prepare(`
-        SELECT 1
-        FROM prospect_organizations AS link
-        INNER JOIN organizations AS organization ON organization.id = link.organization_id
-        WHERE link.prospect_id = ? AND link.organization_id = ?
-      `).get(input.prospectId, organizationId);
+      const linked = mode === 'append'
+        ? this.database.raw.prepare(`
+          SELECT 1
+          FROM prospect_organizations AS link
+          INNER JOIN organizations AS organization ON organization.id = link.organization_id
+          WHERE link.prospect_id = ? AND link.organization_id = ?
+        `).get(input.prospectId, organizationId)
+        : this.database.raw.prepare(`
+          SELECT 1 FROM organizations WHERE id = ?
+        `).get(organizationId);
       if (linked === undefined) {
         throw new IntakeReceiptIntegrityError(
           input.sourceEventId,
@@ -379,12 +389,16 @@ export class IntakeReceiptRepository {
       }
     }
     for (const propertyId of input.result.propertyIds) {
-      const linked = this.database.raw.prepare(`
-        SELECT 1
-        FROM prospect_properties AS link
-        INNER JOIN properties AS property ON property.id = link.property_id
-        WHERE link.prospect_id = ? AND link.property_id = ?
-      `).get(input.prospectId, propertyId);
+      const linked = mode === 'append'
+        ? this.database.raw.prepare(`
+          SELECT 1
+          FROM prospect_properties AS link
+          INNER JOIN properties AS property ON property.id = link.property_id
+          WHERE link.prospect_id = ? AND link.property_id = ?
+        `).get(input.prospectId, propertyId)
+        : this.database.raw.prepare(`
+          SELECT 1 FROM properties WHERE id = ?
+        `).get(propertyId);
       if (linked === undefined) {
         throw new IntakeReceiptIntegrityError(
           input.sourceEventId,

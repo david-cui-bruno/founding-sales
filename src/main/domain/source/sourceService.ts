@@ -152,6 +152,18 @@ export class ContactNormalizationConflictError extends Error {
   }
 }
 
+export class ContextNormalizationConflictError extends Error {
+  readonly contextKind: 'organization' | 'property';
+  readonly normalizedIdentity: string;
+
+  constructor(contextKind: 'organization' | 'property', normalizedIdentity: string) {
+    super('Equivalent context identity inputs disagree on canonical facts.');
+    this.name = 'ContextNormalizationConflictError';
+    this.contextKind = contextKind;
+    this.normalizedIdentity = normalizedIdentity;
+  }
+}
+
 export class IntakeIdempotencyConflictError extends Error {
   readonly sourceEventId: string;
   readonly reason: 'command_mismatch' | 'source_event_without_receipt';
@@ -683,19 +695,23 @@ function normalizeCommand(command: CreatePersonProspectCommand): NormalizedComma
     }
     primaryKinds.add(contact.kind);
   }
-  const organizations = parsed.organizations.map((organization) => {
+  const organizationCandidates = parsed.organizations.map((organization) => {
     if (organization.sourceRecord !== undefined) {
       assertJsonValue(organization.sourceRecord, 'organization source record');
     }
+    const normalizedAliases = [...new Set([
+      organization.canonicalName,
+      ...organization.aliases,
+    ].map(normalizeContextText))].sort(compareStrings);
     return {
       ...organization,
-      normalizedAliases: [...new Set([
-        organization.canonicalName,
-        ...organization.aliases,
-      ].map(normalizeContextText))],
+      aliases: normalizedAliases,
+      relationship: organization.relationship ?? null,
+      sourceRecord: organization.sourceRecord ?? null,
+      normalizedAliases,
     };
   });
-  const properties = parsed.properties.map((property) => {
+  const propertyCandidates = parsed.properties.map((property) => {
     if (property.maintenanceProfile !== undefined) {
       assertJsonValue(property.maintenanceProfile, 'maintenance profile');
     }
@@ -715,14 +731,26 @@ function normalizeCommand(command: CreatePersonProspectCommand): NormalizedComma
       countryCode: property.countryCode.toUpperCase(),
     };
     return {
-      ...property,
+      addressLine1: canonicalAddress.addressLine1,
+      addressLine2: canonicalAddress.addressLine2,
+      locality: canonicalAddress.locality,
+      region: canonicalAddress.region,
+      postalCode: canonicalAddress.postalCode,
       countryCode: property.countryCode.toUpperCase(),
+      doorCount: property.doorCount ?? null,
+      propertyType: property.propertyType ?? null,
+      maintenanceProfile: property.maintenanceProfile ?? null,
+      sourceRecord: property.sourceRecord ?? null,
+      verifiedAt: property.verifiedAt ?? null,
       organizationAlias: property.organizationAlias == null
         ? null
         : normalizeContextText(property.organizationAlias),
+      relationship: property.relationship ?? null,
       canonicalAddress,
     };
   });
+  const organizations = normalizeOrganizations(organizationCandidates);
+  const properties = normalizeProperties(propertyCandidates);
   return {
     person: {
       displayName: nonblankSchema.parse(parsed.person.displayName),
@@ -769,6 +797,110 @@ function normalizeContacts(contacts: z.infer<typeof contactInputSchema>[]): Norm
     deduplicated.set(key, canonical);
   }
   return [...deduplicated.values()];
+}
+
+function normalizeOrganizations(
+  organizations: NormalizedOrganization[],
+): NormalizedOrganization[] {
+  const factKeys = organizations.map(organizationFactKey);
+  const conflicts: string[] = [];
+  for (let leftIndex = 0; leftIndex < organizations.length; leftIndex += 1) {
+    const left = organizations[leftIndex];
+    if (left === undefined) continue;
+    const leftAliases = new Set(left.normalizedAliases);
+    for (let rightIndex = leftIndex + 1; rightIndex < organizations.length; rightIndex += 1) {
+      const right = organizations[rightIndex];
+      if (right === undefined || factKeys[leftIndex] === factKeys[rightIndex]) continue;
+      for (const alias of right.normalizedAliases) {
+        if (leftAliases.has(alias)) conflicts.push(alias);
+      }
+    }
+  }
+  const [conflict] = [...new Set(conflicts)].sort(compareStrings);
+  if (conflict !== undefined) {
+    throw new ContextNormalizationConflictError('organization', conflict);
+  }
+  const unique = new Map<string, NormalizedOrganization>();
+  organizations.forEach((organization, index) => {
+    const key = factKeys[index];
+    if (key !== undefined && !unique.has(key)) unique.set(key, organization);
+  });
+  return [...unique.entries()]
+    .sort(([left], [right]) => compareStrings(left, right))
+    .map(([, organization]) => organization);
+}
+
+function normalizeProperties(properties: NormalizedProperty[]): NormalizedProperty[] {
+  const factKeys = properties.map(propertyFactKey);
+  const addressKeys = properties.map(({ canonicalAddress }) => (
+    canonicalContextJson(canonicalAddress)
+  ));
+  const conflicts: string[] = [];
+  for (let leftIndex = 0; leftIndex < properties.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < properties.length; rightIndex += 1) {
+      if (
+        addressKeys[leftIndex] === addressKeys[rightIndex]
+        && factKeys[leftIndex] !== factKeys[rightIndex]
+      ) {
+        const identity = addressKeys[leftIndex];
+        if (identity !== undefined) conflicts.push(identity);
+      }
+    }
+  }
+  const [conflict] = [...new Set(conflicts)].sort(compareStrings);
+  if (conflict !== undefined) {
+    throw new ContextNormalizationConflictError('property', conflict);
+  }
+  const unique = new Map<string, NormalizedProperty>();
+  properties.forEach((property, index) => {
+    const key = factKeys[index];
+    if (key !== undefined && !unique.has(key)) unique.set(key, property);
+  });
+  return [...unique.entries()]
+    .sort(([left], [right]) => compareStrings(left, right))
+    .map(([, property]) => property);
+}
+
+function organizationFactKey(organization: NormalizedOrganization): string {
+  return canonicalContextJson({
+    canonicalName: organization.canonicalName,
+    normalizedAliases: organization.normalizedAliases,
+    relationship: organization.relationship ?? null,
+    sourceRecord: organization.sourceRecord ?? null,
+  });
+}
+
+function propertyFactKey(property: NormalizedProperty): string {
+  return canonicalContextJson({
+    canonicalAddress: property.canonicalAddress,
+    doorCount: property.doorCount ?? null,
+    propertyType: property.propertyType ?? null,
+    maintenanceProfile: property.maintenanceProfile ?? null,
+    sourceRecord: property.sourceRecord ?? null,
+    verifiedAt: property.verifiedAt ?? null,
+    organizationAlias: property.organizationAlias ?? null,
+    relationship: property.relationship ?? null,
+  });
+}
+
+function canonicalContextJson(value: unknown): string {
+  return JSON.stringify(canonicalizeContextValue(value));
+}
+
+function canonicalizeContextValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeContextValue);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value)
+      .sort(([left], [right]) => compareStrings(left, right))
+      .map(([key, child]) => [key, canonicalizeContextValue(child)]));
+  }
+  return value;
+}
+
+function compareStrings(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 function toCanonicalIntakeCommand(command: NormalizedCommand): CanonicalIntakeCommand {

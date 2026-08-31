@@ -719,6 +719,177 @@ describe('SourceService', () => {
     });
   });
 
+  it('replays immutable merge-review history after the Prospect becomes eligible', () => {
+    insertPersonContact({
+      personId: 'office-person', contactId: 'office-contact', kind: 'phone',
+      value: '+14015550100', reachability: 'indirect',
+    });
+    ids.push('review-person', 'review-phone', 'review-prospect');
+    const command = baseCommand('historical-review-source');
+    const first = service.createPersonProspect(command);
+    expect(first).toMatchObject({
+      disposition: 'created_merge_review',
+      identityReviewReason: 'indirect_handle_match',
+    });
+    database.raw.prepare(`
+      UPDATE prospects
+      SET qualification_state = 'eligible', qualification_reason = NULL,
+          version = version + 1, updated_at = ?
+      WHERE id = ?
+    `).run('2026-08-30T13:00:00.000Z', first.prospectId);
+
+    const replay = service.createPersonProspect(command);
+
+    expect(replay).toEqual(first);
+    expect(receipts.getBySourceEventId(first.sourceEventId)?.result).toEqual(first);
+    expect(counts()).toMatchObject({
+      source_events: 1, source_intake_receipts: 1, prospects: 1, sales_cycles: 0,
+    });
+  });
+
+  it('rejects overlapping organization identities deterministically before writes', () => {
+    const contexts = [
+      {
+        canonicalName: 'Alpha Holdings', aliases: ['Shared Holdings'],
+        relationship: 'owner', sourceRecord: { registry: 'alpha' },
+      },
+      {
+        canonicalName: 'Beta Holdings', aliases: ['Shared Holdings'],
+        relationship: 'manager', sourceRecord: { registry: 'beta' },
+      },
+    ];
+    const failures = [contexts, [...contexts].reverse()].map((organizations, index) => {
+      try {
+        service.createPersonProspect(baseCommand(`org-conflict-${index}`, {
+          contacts: [], organizations,
+        }));
+        throw new Error('Expected organization normalization to reject.');
+      } catch (error) {
+        return error;
+      }
+    });
+
+    for (const error of failures) {
+      expect(error).toMatchObject({
+        name: 'ContextNormalizationConflictError',
+        contextKind: 'organization',
+        normalizedIdentity: 'shared holdings',
+      });
+    }
+    expect(Object.values(counts()).every((count) => count === 0)).toBe(true);
+  });
+
+  it('rejects conflicting duplicate property addresses independent of order', () => {
+    const contexts = [
+      {
+        addressLine1: '10 Hope St', locality: 'Providence', region: 'RI',
+        doorCount: 2, relationship: 'owner', sourceRecord: { listing: 'alpha' },
+      },
+      {
+        addressLine1: '10 HOPE ST', locality: 'PROVIDENCE', region: 'ri',
+        doorCount: 3, relationship: 'manager', sourceRecord: { listing: 'beta' },
+      },
+    ];
+    const failures = [contexts, [...contexts].reverse()].map((properties, index) => {
+      try {
+        service.createPersonProspect(baseCommand(`property-conflict-${index}`, {
+          contacts: [], properties,
+        }));
+        throw new Error('Expected property normalization to reject.');
+      } catch (error) {
+        return error;
+      }
+    });
+
+    expect(failures[0]).toMatchObject({
+      name: 'ContextNormalizationConflictError', contextKind: 'property',
+    });
+    expect(failures[1]).toMatchObject({
+      name: 'ContextNormalizationConflictError',
+      contextKind: 'property',
+      normalizedIdentity: (failures[0] as { normalizedIdentity: string }).normalizedIdentity,
+    });
+    expect(Object.values(counts()).every((count) => count === 0)).toBe(true);
+  });
+
+  it('deduplicates and canonically orders equivalent organization facts before writes', () => {
+    const alpha = {
+      canonicalName: 'Alpha Holdings',
+      aliases: ['Shared Holdings', 'ALPHA HOLDINGS'],
+      relationship: 'owner',
+      sourceRecord: { b: 2, a: 1 },
+    };
+    const alphaEquivalent = {
+      canonicalName: 'Alpha Holdings',
+      aliases: ['alpha holdings', 'shared holdings'],
+      relationship: 'owner',
+      sourceRecord: { a: 1, b: 2 },
+    };
+    const beta = { canonicalName: 'Beta Holdings' };
+    ids.push(
+      'person', 'prospect',
+      'org-alpha', 'alias-alpha', 'alias-shared',
+      'org-beta', 'alias-beta',
+    );
+    const command = baseCommand('dedupe-organizations', {
+      contacts: [], organizations: [beta, alpha, alphaEquivalent],
+    });
+    const first = service.createPersonProspect(command);
+    const replay = service.createPersonProspect({
+      ...command,
+      organizations: [alphaEquivalent, beta, alpha],
+    } as CreatePersonProspectCommand);
+
+    expect(replay).toEqual(first);
+    expect(first.organizationIds).toEqual(['org-alpha', 'org-beta']);
+    expect(database.raw.prepare(`
+      SELECT id, canonical_name FROM organizations ORDER BY id
+    `).all()).toEqual([
+      { id: 'org-alpha', canonical_name: 'Alpha Holdings' },
+      { id: 'org-beta', canonical_name: 'Beta Holdings' },
+    ]);
+    expect(counts()).toMatchObject({
+      organizations: 2, organization_aliases: 3, prospect_organizations: 2,
+    });
+  });
+
+  it('deduplicates and canonically orders equivalent property facts before writes', () => {
+    const ten = {
+      addressLine1: '10 Hope St', locality: 'Providence', region: 'RI',
+      doorCount: 2, relationship: 'owner',
+      maintenanceProfile: { plumbing: true, heating: false },
+      sourceRecord: { b: 2, a: 1 },
+    };
+    const tenEquivalent = {
+      addressLine1: '10 HOPE ST', locality: 'PROVIDENCE', region: 'ri',
+      doorCount: 2, relationship: 'owner',
+      maintenanceProfile: { heating: false, plumbing: true },
+      sourceRecord: { a: 1, b: 2 },
+    };
+    const twenty = {
+      addressLine1: '20 Hope St', locality: 'Providence', region: 'RI',
+    };
+    ids.push('person', 'prospect', 'property-10', 'property-20');
+    const command = baseCommand('dedupe-properties', {
+      contacts: [], properties: [twenty, ten, tenEquivalent],
+    });
+    const first = service.createPersonProspect(command);
+    const replay = service.createPersonProspect({
+      ...command,
+      properties: [tenEquivalent, twenty, ten],
+    } as CreatePersonProspectCommand);
+
+    expect(replay).toEqual(first);
+    expect(first.propertyIds).toEqual(['property-10', 'property-20']);
+    expect(database.raw.prepare(`
+      SELECT id, address_line_1 FROM properties ORDER BY id
+    `).all()).toEqual([
+      { id: 'property-10', address_line_1: '10 hope st' },
+      { id: 'property-20', address_line_1: '20 hope st' },
+    ]);
+    expect(counts()).toMatchObject({ properties: 2, prospect_properties: 2 });
+  });
+
   it('never merges identity from names, organization, property, or shared office context', () => {
     ids.push(
       'person-one', 'prospect-one',
