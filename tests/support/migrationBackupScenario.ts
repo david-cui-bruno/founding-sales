@@ -1,12 +1,19 @@
 import assert from 'node:assert/strict';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   existsSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+
+import { sql } from 'kysely';
 
 import {
   closeDatabase,
@@ -17,7 +24,11 @@ import {
   createVerifiedMigrationBackup,
   type MigrationBackup,
 } from '../../src/main/db/migrationBackup';
-import { migrateToLatest } from '../../src/main/db/migrate';
+import {
+  createMigrationRunner,
+  migrateToLatest,
+} from '../../src/main/db/migrate';
+import { migration0001Foundation } from '../../src/main/db/migrations/0001Foundation';
 import {
   applyWorkspaceKey,
   createRawDatabase,
@@ -92,6 +103,84 @@ async function runScenario(): Promise<void> {
       const backups = listBackups(backupDirectory);
       assert.equal(backups.length, 1);
       assertBackupFile(backups[0], key.bytes, 0);
+    } else if (scenario === 'schema-one-migration-failure') {
+      await migrateToLatest(database, {
+        backupDirectory,
+        workspaceKey: key,
+      });
+      database.raw.prepare(`
+        INSERT INTO jobs (
+          id, type, state, payload_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        'schema-one-sentinel',
+        'test',
+        'queued',
+        '{}',
+        '2026-08-30T00:00:00.000Z',
+        '2026-08-30T00:00:00.000Z',
+      );
+      const schemaOneBackupDirectory = join(
+        dirname(workspace.path),
+        'schema-one-failure-backups',
+      );
+      const migrateWithSyntheticFailure = createMigrationRunner([
+        {
+          id: '0001Foundation',
+          schemaVersion: 1,
+          migration: migration0001Foundation,
+        },
+        {
+          id: '0002SyntheticFailure',
+          schemaVersion: 2,
+          migration: {
+            async up(kysely) {
+              await sql`CREATE TABLE synthetic_partial_write (id TEXT PRIMARY KEY)`.execute(kysely);
+              await sql`UPDATE app_meta SET schema_version = 2 WHERE singleton = 1`.execute(kysely);
+              throw new Error('Synthetic late migration failure.');
+            },
+          },
+        },
+      ]);
+
+      await assert.rejects(
+        migrateWithSyntheticFailure(database, {
+          backupDirectory: schemaOneBackupDirectory,
+          workspaceKey: key,
+        }),
+        /Synthetic late migration failure/,
+      );
+      assert.equal(readSchemaVersion(database), 1);
+      assert.deepEqual(
+        database.raw.prepare<[], { id: string }>(
+          "SELECT id FROM jobs WHERE id = 'schema-one-sentinel'",
+        ).get(),
+        { id: 'schema-one-sentinel' },
+      );
+      assert.equal(
+        database.raw.prepare<[], { found: number }>(
+          "SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'synthetic_partial_write'",
+        ).get(),
+        undefined,
+      );
+      const backups = listBackups(schemaOneBackupDirectory);
+      assert.equal(backups.length, 1);
+      assertBackupFile(backups[0], key.bytes, 1);
+      const reopened = createRawDatabase(backups[0], {
+        readonly: true,
+        fileMustExist: true,
+      });
+      try {
+        applyWorkspaceKey(reopened, key.bytes);
+        assert.deepEqual(
+          reopened.prepare<[], { id: string }>(
+            "SELECT id FROM jobs WHERE id = 'schema-one-sentinel'",
+          ).get(),
+          { id: 'schema-one-sentinel' },
+        );
+      } finally {
+        reopened.close();
+      }
     } else if (scenario === 'verification-failure') {
       await migrateToLatest(database, { backupDirectory, workspaceKey: key });
       const rejectedDirectory = join(dirname(workspace.path), 'rejected-backups');
@@ -157,6 +246,154 @@ async function runScenario(): Promise<void> {
         ).all(),
         [{ content: 'new' }],
       );
+    } else if (scenario === 'directory-replaced') {
+      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      const raceDirectory = join(dirname(workspace.path), 'race-backups');
+      const displacedDirectory = `${raceDirectory}.displaced`;
+      const originalPragma = database.raw.pragma.bind(database.raw);
+      let directoryReplaced = false;
+      database.raw.pragma = ((source: string, options?: unknown) => {
+        const result = originalPragma(source, options as never);
+        if (source === 'wal_checkpoint(TRUNCATE)') {
+          renameSync(raceDirectory, displacedDirectory);
+          mkdirSync(raceDirectory, { mode: 0o700 });
+          directoryReplaced = true;
+        }
+        return result;
+      }) as typeof database.raw.pragma;
+      try {
+        assert.throws(() => createVerifiedMigrationBackup({
+          database,
+          backupDirectory: raceDirectory,
+          key,
+          sourceSchemaVersion: 1,
+        }), /filesystem identity changed/);
+      } finally {
+        database.raw.pragma = originalPragma;
+      }
+      assert.equal(directoryReplaced, true);
+      assert.deepEqual(listBackups(raceDirectory), []);
+      assert.deepEqual(listBackups(displacedDirectory), []);
+    } else if (scenario === 'unrelated-sidecar') {
+      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      const sidecarDirectory = join(dirname(workspace.path), 'sidecar-backups');
+      mkdirSync(sidecarDirectory, { mode: 0o700 });
+      const originalDate = Date;
+      const fixedTimestamp = '2026-08-30T12:34:56.789Z';
+      const fixedBackupPath = join(
+        sidecarDirectory,
+        'pre-migration-schema-1-20260830T123456789Z.sqlite3',
+      );
+      const sidecarPath = `${fixedBackupPath}-wal`;
+      const unrelated = Buffer.from('unrelated sidecar');
+      writeFileSync(sidecarPath, unrelated, { mode: 0o600 });
+      globalThis.Date = class FixedDate extends originalDate {
+        constructor(value?: string | number) {
+          super(value ?? fixedTimestamp);
+        }
+      } as DateConstructor;
+      try {
+        assert.throws(() => createVerifiedMigrationBackup({
+          database,
+          backupDirectory: sidecarDirectory,
+          key: createTestWorkspaceKey(0x7b),
+          sourceSchemaVersion: 1,
+        }));
+      } finally {
+        globalThis.Date = originalDate;
+      }
+      assert.equal(existsSync(fixedBackupPath), false);
+      assert.deepEqual(readFileSync(sidecarPath), unrelated);
+    } else if (scenario === 'path-replaced') {
+      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      seedLargePayload(database);
+      const raceDirectory = join(dirname(workspace.path), 'path-race-backups');
+      mkdirSync(raceDirectory, { mode: 0o700 });
+      const fixedBackupPath = join(
+        raceDirectory,
+        'pre-migration-schema-1-20260830T123456789Z.sqlite3',
+      );
+      const displacedPath = `${fixedBackupPath}.displaced`;
+      const unrelated = Buffer.from('unrelated replacement');
+      const watcher = spawnWatcher(
+        fixedBackupPath,
+        `fs.renameSync(watched, extra); fs.writeFileSync(watched, Buffer.from('unrelated replacement'), { mode: 0o600 });`,
+        displacedPath,
+      );
+      const originalDate = installFixedDate();
+      try {
+        assert.throws(() => createVerifiedMigrationBackup({
+          database,
+          backupDirectory: raceDirectory,
+          key,
+          sourceSchemaVersion: 1,
+        }), /Migration backup verification failed/);
+      } finally {
+        globalThis.Date = originalDate;
+      }
+      await assertWatcherSucceeded(watcher);
+      assert.deepEqual(readFileSync(fixedBackupPath), unrelated);
+      assert.equal(statSync(displacedPath).size, 0);
+    } else if (scenario === 'sidecar-race') {
+      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      seedLargePayload(database);
+      const raceDirectory = join(dirname(workspace.path), 'sidecar-race-backups');
+      mkdirSync(raceDirectory, { mode: 0o700 });
+      const fixedBackupPath = join(
+        raceDirectory,
+        'pre-migration-schema-1-20260830T123456789Z.sqlite3',
+      );
+      const sidecarPath = `${fixedBackupPath}-wal`;
+      const watcher = spawnWatcher(
+        fixedBackupPath,
+        `fs.writeFileSync(extra, Buffer.from('unrelated raced sidecar'), { flag: 'wx', mode: 0o600 });`,
+        sidecarPath,
+      );
+      const originalDate = installFixedDate();
+      try {
+        assert.throws(() => createVerifiedMigrationBackup({
+          database,
+          backupDirectory: raceDirectory,
+          key,
+          sourceSchemaVersion: 1,
+        }), /Migration backup verification failed/);
+      } finally {
+        globalThis.Date = originalDate;
+      }
+      await assertWatcherSucceeded(watcher);
+      assert.equal(existsSync(fixedBackupPath), false);
+      assert.deepEqual(
+        readFileSync(sidecarPath),
+        Buffer.from('unrelated raced sidecar'),
+      );
+    } else if (scenario === 'unlink-failure') {
+      await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      seedLargePayload(database);
+      const raceDirectory = join(dirname(workspace.path), 'unlink-failure-backups');
+      mkdirSync(raceDirectory, { mode: 0o700 });
+      const fixedBackupPath = join(
+        raceDirectory,
+        'pre-migration-schema-1-20260830T123456789Z.sqlite3',
+      );
+      const watcher = spawnWatcher(
+        fixedBackupPath,
+        'fs.chmodSync(extra, 0o500);',
+        raceDirectory,
+      );
+      const originalDate = installFixedDate();
+      try {
+        assert.throws(() => createVerifiedMigrationBackup({
+          database,
+          backupDirectory: raceDirectory,
+          key: createTestWorkspaceKey(0x7b),
+          sourceSchemaVersion: 1,
+        }), /Migration backup verification failed/);
+      } finally {
+        globalThis.Date = originalDate;
+        chmodSync(raceDirectory, 0o700);
+      }
+      await assertWatcherSucceeded(watcher);
+      assert.equal(statSync(fixedBackupPath).size, 0);
     } else {
       assert.fail(`Unknown migration-backup scenario: ${scenario}`);
     }
@@ -167,6 +404,72 @@ async function runScenario(): Promise<void> {
     key.bytes.fill(0);
     workspace.cleanup();
   }
+}
+
+function installFixedDate(): DateConstructor {
+  const originalDate = Date;
+  const fixedTimestamp = '2026-08-30T12:34:56.789Z';
+  globalThis.Date = class FixedDate extends originalDate {
+    constructor(value?: string | number) {
+      super(value ?? fixedTimestamp);
+    }
+  } as DateConstructor;
+  return originalDate;
+}
+
+function seedLargePayload(database: AppDatabase): void {
+  database.raw.prepare(
+    'UPDATE jobs SET payload_json = zeroblob(?) WHERE id = ?',
+  ).run(64 * 1024 * 1024, 'schema-one-sentinel');
+  if (database.raw.prepare<[], { count: number }>(
+    'SELECT COUNT(*) AS count FROM jobs',
+  ).get()?.count === 0) {
+    database.raw.prepare(`
+      INSERT INTO jobs (
+        id, type, state, payload_json, created_at, updated_at
+      ) VALUES (?, ?, ?, zeroblob(?), ?, ?)
+    `).run(
+      'large-backup-row',
+      'test',
+      'queued',
+      64 * 1024 * 1024,
+      '2026-08-30T00:00:00.000Z',
+      '2026-08-30T00:00:00.000Z',
+    );
+  }
+}
+
+function spawnWatcher(
+  watchedPath: string,
+  action: string,
+  extraPath: string,
+): ChildProcess {
+  const script = `
+    const fs = require('node:fs');
+    const [watched, extra] = process.argv.slice(1);
+    const deadline = Date.now() + 10000;
+    while (!fs.existsSync(watched)) {
+      if (Date.now() > deadline) process.exit(2);
+    }
+    ${action}
+  `;
+  return spawn(process.execPath, ['-e', script, watchedPath, extraPath], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+async function assertWatcherSucceeded(child: ChildProcess): Promise<void> {
+  let stderr = '';
+  child.stderr?.setEncoding('utf8');
+  child.stderr?.on('data', (chunk: string) => {
+    stderr += chunk;
+  });
+  const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve) => {
+      child.once('exit', (code, signal) => resolve({ code, signal }));
+    },
+  );
+  assert.deepEqual({ ...result, stderr }, { code: 0, signal: null, stderr: '' });
 }
 
 function assertVerifiedBackup(

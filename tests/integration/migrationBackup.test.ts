@@ -8,9 +8,15 @@ const scenarios = [
   'verified-schema-one',
   'pending-only',
   'migration-failure',
+  'schema-one-migration-failure',
   'verification-failure',
   'verification-blocks-migration',
   'busy-checkpoint',
+  'directory-replaced',
+  'unrelated-sidecar',
+  'path-replaced',
+  'sidecar-race',
+  'unlink-failure',
 ] as const;
 
 let bundleDirectory: string;

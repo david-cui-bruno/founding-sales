@@ -5,6 +5,7 @@ import {
   constants,
   fchmodSync,
   fstatSync,
+  ftruncateSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -30,6 +31,11 @@ export type MigrationBackup = {
 const SQLITE_PLAINTEXT_HEADER = Buffer.from('SQLite format 3\0', 'utf8');
 const COPY_BUFFER_SIZE = 1024 * 1024;
 
+type RetainedDirectory = {
+  descriptor: number;
+  identity: Stats;
+};
+
 export function createVerifiedMigrationBackup(input: {
   database: AppDatabase;
   backupDirectory: string;
@@ -38,22 +44,27 @@ export function createVerifiedMigrationBackup(input: {
 }): MigrationBackup {
   assertSourceSchemaVersion(input.sourceSchemaVersion);
   const backupDirectory = validateBackupDirectory(input.backupDirectory);
-  const directoryDescriptor = openDirectory(backupDirectory);
+  const directory = openDirectory(backupDirectory);
   let sourceDescriptor: number | undefined;
   let backupDescriptor: number | undefined;
   let backupIdentity: Stats | undefined;
   let backupPath: string | undefined;
+  let sourceRequiresWalRestore = false;
 
   try {
-    checkpointDatabase(input.database);
+    stabilizeSourceDatabase(input.database);
+    sourceRequiresWalRestore = true;
+    assertDirectoryIdentity(backupDirectory, directory);
     sourceDescriptor = openRegularFile(input.database.path, constants.O_RDONLY);
     const sourceIdentity = fstatSync(sourceDescriptor);
     assertPathIdentity(input.database.path, sourceIdentity);
 
+    assertDirectoryIdentity(backupDirectory, directory);
     backupPath = join(
       backupDirectory,
       `pre-migration-schema-${input.sourceSchemaVersion}-${compactUtcTimestamp()}.sqlite3`,
     );
+    assertSidecarPathsAbsent(backupPath);
     backupDescriptor = openSync(
       backupPath,
       constants.O_CREAT
@@ -64,49 +75,123 @@ export function createVerifiedMigrationBackup(input: {
     );
     fchmodSync(backupDescriptor, 0o600);
     backupIdentity = fstatSync(backupDescriptor);
+    assertDirectoryIdentity(backupDirectory, directory);
+    assertPathIdentity(backupPath, backupIdentity);
     copyRetainedFile(sourceDescriptor, sourceIdentity, backupDescriptor);
     backupIdentity = fstatSync(backupDescriptor);
     assertPathIdentity(input.database.path, sourceIdentity);
+    restoreSourceJournal(input.database);
+    sourceRequiresWalRestore = false;
+    assertDirectoryIdentity(backupDirectory, directory);
     assertPathIdentity(backupPath, backupIdentity);
     fsyncSync(backupDescriptor);
-    fsyncSync(directoryDescriptor);
+    fsyncSync(directory.descriptor);
 
     assertEncryptedHeader(backupDescriptor);
+    assertSidecarPathsAbsent(backupPath);
+    assertDirectoryIdentity(backupDirectory, directory);
     verifyBackupDatabase(
       backupPath,
       input.key,
       input.sourceSchemaVersion,
     );
     backupIdentity = fstatSync(backupDescriptor);
+    assertDirectoryIdentity(backupDirectory, directory);
     assertPathIdentity(backupPath, backupIdentity);
+    assertSidecarPathsAbsent(backupPath);
     const sha256 = hashDescriptor(backupDescriptor, backupIdentity.size);
+    fsyncSync(backupDescriptor);
+    fsyncSync(directory.descriptor);
+    assertDirectoryIdentity(backupDirectory, directory);
+    assertPathIdentity(backupPath, backupIdentity);
+    assertSidecarPathsAbsent(backupPath);
+    verifyBackupDatabase(
+      backupPath,
+      input.key,
+      input.sourceSchemaVersion,
+    );
+    assertDirectoryIdentity(backupDirectory, directory);
+    assertPathIdentity(backupPath, backupIdentity);
+    assertSidecarPathsAbsent(backupPath);
     if (hashDescriptor(backupDescriptor, backupIdentity.size) !== sha256) {
       throw new Error('Migration backup checksum verification failed.');
     }
-    fsyncSync(backupDescriptor);
-    fsyncSync(directoryDescriptor);
+    const verifiedAt = new Date().toISOString();
+    assertDirectoryIdentity(backupDirectory, directory);
+    assertPathIdentity(backupPath, backupIdentity);
+    assertSidecarPathsAbsent(backupPath);
 
     return {
       path: backupPath,
       sourceSchemaVersion: input.sourceSchemaVersion,
       sha256,
-      verifiedAt: new Date().toISOString(),
+      verifiedAt,
     };
   } catch (error) {
+    let failure = sanitizeVerificationError(error);
+    if (sourceRequiresWalRestore) {
+      try {
+        restoreSourceJournal(input.database);
+        sourceRequiresWalRestore = false;
+      } catch (restoreError) {
+        failure = combineErrors(
+          failure,
+          restoreError,
+          'Migration backup failed and source journal restoration failed.',
+        );
+      }
+    }
     if (backupDescriptor !== undefined) {
-      closeSync(backupDescriptor);
+      try {
+        ftruncateSync(backupDescriptor, 0);
+        fsyncSync(backupDescriptor);
+      } catch (cleanupError) {
+        failure = combineErrors(
+          failure,
+          cleanupError,
+          'Migration backup failed and untrusted file neutralization failed.',
+        );
+      }
+      try {
+        closeSync(backupDescriptor);
+      } catch (cleanupError) {
+        failure = combineErrors(
+          failure,
+          cleanupError,
+          'Migration backup failed and file closure failed.',
+        );
+      }
       backupDescriptor = undefined;
     }
-    if (
-      backupPath !== undefined
-      && backupIdentity !== undefined
-      && pathHasIdentity(backupPath, backupIdentity)
-    ) {
-      rmSync(backupPath);
-      removeOwnedSidecars(backupPath);
-      fsyncSync(directoryDescriptor);
+    try {
+      if (
+        backupPath !== undefined
+        && backupIdentity !== undefined
+        && pathHasIdentity(backupPath, backupIdentity)
+      ) {
+        rmSync(backupPath);
+      }
+    } catch (cleanupError) {
+      failure = combineErrors(
+        failure,
+        cleanupError,
+        'Migration backup failed and untrusted file removal failed.',
+      );
+    } finally {
+      try {
+        fsyncSync(directory.descriptor);
+      } catch (cleanupError) {
+        failure = combineErrors(
+          failure,
+          cleanupError,
+          'Migration backup failed and cleanup durability failed.',
+        );
+      }
     }
-    throw sanitizeVerificationError(error);
+    if (backupIdentity !== undefined) {
+      throw new Error('Migration backup verification failed.');
+    }
+    throw failure;
   } finally {
     if (backupDescriptor !== undefined) {
       closeSync(backupDescriptor);
@@ -114,7 +199,15 @@ export function createVerifiedMigrationBackup(input: {
     if (sourceDescriptor !== undefined) {
       closeSync(sourceDescriptor);
     }
-    closeSync(directoryDescriptor);
+    if (sourceRequiresWalRestore) {
+      try {
+        restoreSourceJournal(input.database);
+      } catch {
+        // The caught path already reports restoration failure. A second attempt
+        // only preserves the normal WAL mode when the first failure was transient.
+      }
+    }
+    closeSync(directory.descriptor);
   }
 }
 
@@ -131,7 +224,7 @@ function validateBackupDirectory(path: string): string {
   return path;
 }
 
-function openDirectory(path: string): number {
+function openDirectory(path: string): RetainedDirectory {
   const descriptor = openSync(
     path,
     constants.O_RDONLY | directoryFlag() | noFollowFlag(),
@@ -143,14 +236,14 @@ function openDirectory(path: string): number {
     }
     assertPathIdentity(path, identity);
     fchmodSync(descriptor, 0o700);
-    return descriptor;
+    return { descriptor, identity };
   } catch (error) {
     closeSync(descriptor);
     throw error;
   }
 }
 
-function checkpointDatabase(database: AppDatabase): void {
+function stabilizeSourceDatabase(database: AppDatabase): void {
   if (database.raw.inTransaction) {
     throw new Error('Migration backup cannot run inside a transaction.');
   }
@@ -159,6 +252,15 @@ function checkpointDatabase(database: AppDatabase): void {
     throw new Error('Migration backup requires WAL journal mode.');
   }
   assertTruncatedCheckpoint(database.raw.pragma('wal_checkpoint(TRUNCATE)'));
+  if (database.raw.pragma('journal_mode = DELETE', { simple: true }) !== 'delete') {
+    throw new Error('Migration backup source journal stabilization failed.');
+  }
+}
+
+function restoreSourceJournal(database: AppDatabase): void {
+  if (database.raw.pragma('journal_mode = WAL', { simple: true }) !== 'wal') {
+    throw new Error('Migration backup source journal restoration failed.');
+  }
 }
 
 function assertTruncatedCheckpoint(value: unknown): void {
@@ -282,11 +384,8 @@ function verifyBackupDatabase(
 ): void {
   let backup;
   try {
-    backup = createRawDatabase(path, { fileMustExist: true });
+    backup = createRawDatabase(path, { readonly: true, fileMustExist: true });
     applyWorkspaceKey(backup, key.bytes);
-    if (backup.pragma('journal_mode = DELETE', { simple: true }) !== 'delete') {
-      throw new Error('Migration backup journal verification failed.');
-    }
     if (backup.pragma('integrity_check', { simple: true }) !== 'ok') {
       throw new Error('Migration backup integrity verification failed.');
     }
@@ -322,20 +421,35 @@ function verifyBackupDatabase(
   }
 }
 
-function removeOwnedSidecars(path: string): void {
+function assertSidecarPathsAbsent(path: string): void {
+  // The source is copied in DELETE mode and verification is read-only, so this
+  // attempt owns no sidecars. Any sidecar is therefore unrelated or raced in:
+  // fail closed and preserve it instead of guessing ownership.
   for (const suffix of ['-wal', '-shm', '-journal']) {
     const sidecarPath = `${path}${suffix}`;
     try {
-      const metadata = lstatSync(sidecarPath);
-      if (metadata.isFile() && !metadata.isSymbolicLink()) {
-        rmSync(sidecarPath);
-      }
+      lstatSync(sidecarPath);
+      throw new Error('Migration backup sidecar path is occupied.');
     } catch (error) {
       if (!isMissingPathError(error)) {
         throw error;
       }
     }
   }
+}
+
+function assertDirectoryIdentity(
+  path: string,
+  directory: RetainedDirectory,
+): void {
+  const retainedIdentity = fstatSync(directory.descriptor);
+  if (
+    !retainedIdentity.isDirectory()
+    || !sameIdentity(retainedIdentity, directory.identity)
+  ) {
+    throw new Error('Migration backup filesystem identity changed.');
+  }
+  assertPathIdentity(path, directory.identity);
 }
 
 function assertSourceSchemaVersion(value: number): void {
@@ -375,6 +489,14 @@ function sanitizeVerificationError(error: unknown): unknown {
     return new Error('Migration backup verification failed.');
   }
   return error;
+}
+
+function combineErrors(
+  primary: unknown,
+  secondary: unknown,
+  message: string,
+): AggregateError {
+  return new AggregateError([primary, secondary], message);
 }
 
 function noFollowFlag(): number {

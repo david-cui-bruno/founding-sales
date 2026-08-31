@@ -28,21 +28,22 @@ type KyselyMigrationResultSet = {
   }>;
 };
 
-const registeredMigrations = [
+export type RegisteredMigration = Readonly<{
+  id: string;
+  schemaVersion: number;
+  migration: {
+    up(database: AppDatabase['kysely']): Promise<void>;
+  };
+}>;
+
+const productionMigrations = [
   {
     id: '0001Foundation',
     schemaVersion: 1,
     migration: migration0001Foundation,
   },
 ] as const;
-
-const migrationProvider = {
-  async getMigrations() {
-    return Object.fromEntries(
-      registeredMigrations.map(({ id, migration }) => [id, migration]),
-    );
-  },
-};
+const productionMigrationRunner = createMigrationRunner(productionMigrations);
 
 function readSchemaVersion(db: AppDatabase): number {
   const table = db.raw
@@ -72,6 +73,28 @@ export async function migrateToLatest(
   db: AppDatabase,
   options: MigrationOptions,
 ): Promise<MigrationResult> {
+  return productionMigrationRunner(db, options);
+}
+
+export function createMigrationRunner(
+  migrations: readonly RegisteredMigration[],
+): (
+  db: AppDatabase,
+  options: MigrationOptions,
+) => Promise<MigrationResult> {
+  const registeredMigrations = validateRegisteredMigrations(migrations);
+  return (db, options) => migrateWithRegisteredMigrations(
+    db,
+    options,
+    registeredMigrations,
+  );
+}
+
+async function migrateWithRegisteredMigrations(
+  db: AppDatabase,
+  options: MigrationOptions,
+  registeredMigrations: readonly RegisteredMigration[],
+): Promise<MigrationResult> {
   const fromVersion = readSchemaVersion(db);
   const latestVersion = registeredMigrations.at(-1)?.schemaVersion ?? 0;
   if (fromVersion < latestVersion) {
@@ -84,7 +107,13 @@ export async function migrateToLatest(
   }
   const migrator = new Migrator({
     db: db.kysely,
-    provider: migrationProvider,
+    provider: {
+      async getMigrations() {
+        return Object.fromEntries(
+          registeredMigrations.map(({ id, migration }) => [id, migration]),
+        );
+      },
+    },
   });
   let resultSet: KyselyMigrationResultSet;
 
@@ -113,4 +142,26 @@ export async function migrateToLatest(
       .filter((result) => result.direction === 'Up' && result.status === 'Success')
       .map((result) => result.migrationName),
   };
+}
+
+function validateRegisteredMigrations(
+  migrations: readonly RegisteredMigration[],
+): readonly RegisteredMigration[] {
+  const registeredMigrations = migrations.map((migration) => ({ ...migration }));
+  for (const [index, migration] of registeredMigrations.entries()) {
+    const previous = registeredMigrations[index - 1];
+    if (
+      migration.id.length === 0
+      || !Number.isSafeInteger(migration.schemaVersion)
+      || migration.schemaVersion < 1
+      || (previous !== undefined && migration.id.localeCompare(previous.id) <= 0)
+      || (
+        previous !== undefined
+        && migration.schemaVersion <= previous.schemaVersion
+      )
+    ) {
+      throw new Error('Registered migrations are invalid.');
+    }
+  }
+  return registeredMigrations;
 }
