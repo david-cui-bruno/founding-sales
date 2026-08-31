@@ -1155,7 +1155,9 @@ Extend migration/schema tests before repository code. Require:
 - composite FKs prove receipt source-cycle/new-cycle Person ownership, rule ownership by the source cycle, and inbound SourceEvent ownership; rule, source-event, and new-cycle keys are individually unique where present;
 - receipt checks reject wrong source cardinality; raw ghost, cross-Person, cross-cycle, duplicate-result, `UPDATE`, `DELETE`, same-PK `OR REPLACE`, and non-PK-unique `OR REPLACE` paths fail closed;
 - `cadence_enrollments` persists Task 8's `mode`, canonical `allowed_step_ids_json`, and a positive projection `version`; `sales_cycle_close_readiness` also gains a positive projection `version`;
-- `next_actions` persists Task 8's nullable canonical `sla_due_at`, plus `version`/`updated_at`, so `reschedule_current` can CAS the same pending action without falsely settling or replacing it;
+- `next_actions` persists immutable `work_intent` (`internal_review`, `inbound_response`, `promised_follow_up`, or `discretionary_prospecting`), Task 8's nullable canonical cadence `sla_due_at`, a separate strict nullable inbound-SLA kind/due/provenance union, plus `version`/`updated_at`, so `reschedule_current` can CAS the same pending action without falsely settling or replacing it;
+- inbound-SLA storage is an all-or-none union separate from Task 8's cadence SLA: ordinary actions have `inbound_sla_kind`, `inbound_sla_due_at`, `inbound_sla_source_event_id`, and `inbound_sla_provenance_json` all null; inbound demo uses `inbound_sla_kind='inbound_demo_permitted_minutes'`, a same-Person SourceEvent, and strict V1 provenance `{ version: 1, sourceEventId, sourceObservedAt, calculation: 'permitted_minutes', minutes: 15, policyId, computedDueAt }`; direct referral uses `inbound_sla_kind='direct_referral_elapsed'` and `{ version: 1, sourceEventId, sourceObservedAt, calculation: 'elapsed_hours', hours: 48, policyId: null, computedDueAt }`; relational columns and JSON must agree exactly;
+- raw INSERT/UPDATE/OR REPLACE tests prove `work_intent` and inbound-SLA kind/source/provenance cannot be changed after insert, the SLA SourceEvent belongs to the cycle Person, and partial or cross-Person SLA unions fail closed;
 - settled `next_actions` persist a strict versioned settlement envelope containing outcome, reason/evidence references, and planner-transition identity; pending actions have no settlement and settled evidence cannot be silently rewritten;
 - Task 8's composite cadence owner-graph constraints remain intact; and
 - migration manifest, schema-version-last behavior, rollback, and packaged schema scenario include the new table/columns without weakening Task 4's pre-migration backup gate.
@@ -1227,6 +1229,49 @@ getOperationalCycleForPerson(personId: string): SalesCycle | null;
 assertCurrentActionPostcondition(cycleId: string): void;
 ```
 
+`InsertNextActionInput` includes the immutable fields below. The repository
+strictly cross-checks JSON provenance against relational columns and never
+derives work intent from stage, due date, or cadence after persistence:
+
+```ts
+export type NextActionWorkIntent =
+  | 'internal_review'
+  | 'inbound_response'
+  | 'promised_follow_up'
+  | 'discretionary_prospecting';
+
+export type InboundSla =
+  | { kind: 'none'; dueAt: null; sourceEventId: null; provenance: null }
+  | {
+      kind: 'inbound_demo_permitted_minutes';
+      dueAt: string;
+      sourceEventId: string;
+      provenance: {
+        version: 1;
+        sourceEventId: string;
+        sourceObservedAt: string;
+        calculation: 'permitted_minutes';
+        minutes: 15;
+        policyId: string;
+        computedDueAt: string;
+      };
+    }
+  | {
+      kind: 'direct_referral_elapsed';
+      dueAt: string;
+      sourceEventId: string;
+      provenance: {
+        version: 1;
+        sourceEventId: string;
+        sourceObservedAt: string;
+        calculation: 'elapsed_hours';
+        hours: 48;
+        policyId: null;
+        computedDueAt: string;
+      };
+    };
+```
+
 Every projection update includes the shown expected predicates, increments `version`, and throws `StaleDomainWriteError` when zero rows change. Never broadly suppress constraints or parse SQLite error messages. Exact successful retry may return an already-persisted canonical result only after comparing every supplied field; changed evidence or expected state is a typed conflict.
 
 `EventRepository.appendStageEvent` requires an explicit positive `transitionSequence`; `listCycleStageEvents` orders by it and validates a contiguous chain. Initial creation emits sequence 1 as `null -> unreviewed`. A backfilled Contacted immediately followed by founder Interviewed gets consecutive sequences even with identical effective/confirmation timestamps. Add `EventRepository.assertBoundTo`.
@@ -1269,6 +1314,8 @@ Import Task 8's final `TransitionRecipe` type and test every recipe variant with
 - B -> A and A/B -> C upgrades stopping the old enrollment with `upgraded`, preserving completed Activities and total prospecting count, using the highest cap rather than a sum, skipping a just-completed duplicate communication, and never automatically downgrading;
 - no prospecting upgrade after Interviewed; and
 - `replied`/inbound interrupts installing an actionable response/book-conversation action rather than leaving an open cycle without one.
+- exact work-intent assignment and inheritance: the Unreviewed review action is `internal_review`; the first untouched Ready A/B/C or rule-reactivation action is `discretionary_prospecting`; inbound activation/reply is `inbound_response`; onboarding, Post-Interview, Post-Offer, and every later A/B/C step are `promised_follow_up`; resolver/retry/reschedule retains the blocked action's intent; and no command may relabel an existing action to evade Today capacity;
+- inbound demo SLA uses exactly fifteen accumulated permitted minutes under the injected text-policy snapshot from SourceEvent `observed_at`, direct referral uses exactly forty-eight elapsed hours, and exact-deadline/replay/policy-boundary/DST tests preserve stored kind/due/provenance.
 
 Every Activity/action/enrollment definition, step, and component ID must form one Task 8 owner graph. Unknown or uninstalled catalog versions and structurally impossible recipes fail before writes.
 
@@ -1411,6 +1458,16 @@ The public service does not expose a transaction-owning `closeForOptOut` that Ta
 
 Encode the fixed transition table as data and reject every unlisted edge before allocating IDs or reading the clock. `createUnreviewedCycle` accepts only the canonical unreviewed Prospect and a pre-existing Person-owned entry SourceEvent, then creates a review action and initial StageEvent atomically. `reviewToReady` qualifies the Prospect, resolves the Task 8 catalog version, starts A/B/C, and installs the first cadence action.
 
+Every new action receives its immutable work intent at creation. The initial
+Unreviewed action is `internal_review`; the initial untouched Ready A/B/C action
+and rule-reactivation entry are `discretionary_prospecting`; inbound demo,
+direct-referral, and reply interrupts are `inbound_response`; onboarding,
+Post-Interview, Post-Offer, and later prospecting steps are
+`promised_follow_up`. A replacement, resolver, retry, or reschedule cannot infer
+or rewrite intent after the fact. Inbound creation computes and persists its
+strict SLA union once from the owned SourceEvent and injected policy snapshot;
+Task 12 reads that evidence and never recomputes the deadline.
+
 `recordQualifyingContact` validates the immutable Activity and outcome before mechanically emitting Contacted. Already-Contacted cycles advance the cadence without duplicating Contacted. Founder-confirmed Interviewed/Offered commands validate suggestions/evidence but never accept an automatic transition. When Contacted was skipped, append its backfill event at sequence N followed by the founder target at N+1 with the same business timestamp and explicit provenance.
 
 Won persists calculated terms, stops Post-Offer, starts Onboarding, installs its first action, emits one Offered -> Won event, and changes workflow to onboarding. Completing or explicitly waiving the final onboarding component with a nonblank reason stops onboarding, clears the pointer, and closes Won without emitting Won -> Won.
@@ -1431,6 +1488,10 @@ commit deferred cycle/action FKs
 For a new Ready/onboarding cycle with a cadence, insert the cycle first, then enrollment, then referenced action. The source event pre-exists. Never insert a SourceEvent/cycle pair that depends on the immediate reciprocal `source_events.sales_cycle_id` FK; `entry_source_event_id` is the activation authority.
 
 For a Task 8 `reschedule_current` result, CAS-update the same pending current action using its expected version/status/due date, keep the pointer unchanged, record the required failure Activity, apply the zero-count enrollment retry mutation, and assert the postcondition. Do not create or settle an action.
+
+The reschedule CAS includes expected immutable `work_intent`, inbound-SLA kind,
+due, source, and canonical provenance predicates and leaves them byte-identical;
+Task 8's independent cadence `sla_due_at` remains governed by its recipe.
 
 For replacement inside an existing cycle, use:
 
@@ -1474,6 +1535,7 @@ Rule reactivation and inbound-response activation use their deterministic receip
 - exactly one canonical Prospect per Person and at most one active/onboarding cycle per Person;
 - open/closed stage-workflow compatibility, closed timestamp/reason/notes, and current-pointer nullability;
 - a non-null pointer owns the cycle, references a pending due-dated action, and has parseable timezone/window data;
+- every current action has a supported immutable work intent; inbound-response actions have one ownership-valid strict SLA union; non-inbound actions have no inbound SLA; and resolver/retry/reschedule actions retain their originating intent and SLA evidence;
 - initial/contiguous StageEvent sequence, exact from/to chain, legal edges, and projection stage/`stage_entered_at` matching the final event;
 - Unreviewed has no active cadence and a review action; Ready/Contacted has one active A/B/C; Interviewed has Post-Interview; Offered has Post-Offer; Won/onboarding has Onboarding; closed has none;
 - enrollment definition/current-step/count/status and current action definition/step/component share one Task 8 graph and obey attempt caps;
@@ -1874,6 +1936,7 @@ export class OutboundPermissionService {
     identities: IdentityRepository;
     optOuts: OptOutRepository;
   });
+  assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork): void;
   inspectPerson(personId: string): OutboundPermission;
   assertMayContactPerson(personId: string): void;
   assertMayContactHandle(
@@ -1887,6 +1950,9 @@ export class OutboundPermissionService {
 }
 ```
 
+Construction and `assertBoundTo` require the service, both repositories, and
+the active transaction scope to share the exact `AppDatabase` and
+`DomainUnitOfWork`; mixed composition fails before any permission read.
 `inspectPerson` and the two read assertions query the Person tombstone and every
 current handle on each call; they never trust `persons.opted_out`, a cached Today
 row, or only the requested Person ID. They normalize and fail closed on invalid
@@ -1899,6 +1965,29 @@ contact values.
 Task 12 must call `inspectPerson` while building Today and omit a blocked row;
 SQL projection filtering is only the first safeguard. A stale Today click or
 other call/text/email entry point must call `assertMayExecuteOutbound` again.
+
+A call selected from Task 12's discretionary lanes carries this strict receipt
+through the authoritative execution boundary and into the resulting immutable
+Activity metadata:
+
+```ts
+export type TodaySelectedCallReceiptV1 = {
+  version: 1;
+  kind: 'discretionary_call';
+  currentActionId: string;
+  queueGeneratedAt: string;
+  queueTimezone: string;
+  queueLocalDate: string; // YYYY-MM-DD in queueTimezone
+};
+```
+
+The receipt is forbidden for promise/onboarding/inbound rows and for non-call
+actions. Its action must still be the Person-owned pending authoritative
+current action at execution time. Provider/idempotency replay returns the same
+Activity and receipt; changed action, queue instant/timezone/date, or receipt
+kind conflicts. This Activity is Task 12's durable evidence that one daily
+discretionary dial slot was consumed. Retrospective evidence after opt-out may
+record what happened but never fabricates this selection receipt.
 
 Distinguish execution from evidence: scheduling, sending, or a combined
 log-and-execute command hard-blocks. A deliberately named retrospective
@@ -2031,6 +2120,14 @@ the synchronous provider handoff boundary. It must cover an opt-out received
 while Callie was closed and an opt-out concurrent with handoff. If handoff was
 already linearized externally, later evidence records the truth rather than
 rewriting history.
+
+For a Today-selected discretionary call, that same barrier validates the strict
+`TodaySelectedCallReceiptV1` against the still-current action immediately before
+handoff. Once the provider accepts the handoff, the communication path appends
+or idempotently recovers the immutable call Activity with the exact receipt and
+provider key. A failed permission/current-action check consumes no receipt; a
+crash after external acceptance is recovered by the same caller-stable Activity
+ID/provider key, so refresh/restart cannot reset or double-count daily capacity.
 
 - [ ] **Step 8: Run the complete RED opt-out slice**
 
@@ -2753,86 +2850,530 @@ git commit -m "feat: add two-axis lead prioritization"
 - Create: `tests/main/todayRepository.test.ts`
 - Create: `tests/main/todayOrdering.test.ts`
 - Create: `tests/main/todayService.test.ts`
+- Create: `tests/integration/todayOrderingSqlParity.test.ts`
+- Create: `tests/integration/todaySnapshot.test.ts`
 
 **Interfaces:**
-- Consumes: operational cycles/current actions, cadence/stage state, current priority projection, opt-out service, injected clock/capacity.
-- Produces one explained, deterministic TodayQueue without exposing bare Prospects.
+- Consumes: one coherent read snapshot of operational SalesCycles and only their authoritative current NextActions; Task 9 immutable action work intent and inbound-SLA evidence; active cadence/stage state; Task 11 `EffectivePrioritySnapshot`, comparator, and fixed SQL tuple; Task 10 render-time permission inspection; immutable selected-call Activity receipts; and injected Clock, workspace timezone, frozen channel policies, and capacity.
+- Produces: one recursively frozen, byte-deterministic `TodayQueue` whose lanes, Later items, suppressed candidates, and diagnostics account for every base operational cycle exactly once without exposing bare Prospects or computing a blended ranking value.
+- Boundary: Task 12 is read-only. It neither recalculates prioritization, mutates controls, completes actions, appends Activities, nor performs provider handoff. Task 13/the background refresh path must supply same-local-day Task 11 projections; communication execution owns the selected-call receipt and the final Task 10 send barrier.
 
-- [ ] **Step 1: Write RED one-lane and ordering tests**
+The persisted `work_intent` is load-bearing. Never infer promise versus
+discretionary work from `due_at`: the first Ready A/B/C action is due promptly
+but remains capacity-bounded discretionary prospecting, while a later cadence
+step is an owed promise even when both rows otherwise look identical.
 
-Create fixtures that simultaneously qualify for several lanes and assert first-match assignment exactly once:
+- [ ] **Step 1: Write RED authoritative-pointer, strict-read, and once-only tests**
 
-1. Won onboarding.
-2. Fresh inbound demo/direct referral inside SLA.
-3. Overdue primary action.
-4. Due Post-Interview/Post-Offer.
-5. Other due cadence action.
-6. New P0 Ready cycle.
-7. P1 Ready cycle.
-8. Exploration.
-9. Later beyond capacity.
+Drive the repository from every `sales_cycles.workflow_status IN
+('active','onboarding')` row and LEFT JOIN the exact
+`sales_cycles.current_next_action_id` on both action ID and cycle ID. Never scan
+all pending actions: unreferenced supplemental pending rows may coexist and do
+not enter Today. Add RED tests for:
 
-Assert lanes 1–5 use promise/due/stage ordering, lanes 6–8 use the Task 11 lexicographic tuple, and stable ID is final tie-breaker.
+- an operational cycle with one authoritative and several older/newer
+  supplemental pending actions returning only the authoritative action;
+- missing, settled, cross-cycle, or malformed pointer/action rows producing one
+  typed diagnostic instead of disappearing through an inner join;
+- a valid Unreviewed cycle with `work_intent='internal_review'`, no cadence, and
+  no priority projection remaining actionable rather than being dropped;
+- active cadence, enrollment, definition, step, and component ownership being
+  loaded when present, with zero or more absent optional joins represented
+  explicitly rather than row multiplication;
+- missing/corrupt/stale priority projections leaving lanes 1-5 visible with an
+  inline diagnostic, while discretionary rows become Review diagnostics and
+  are never silently rescored;
+- malformed work intent, inbound-SLA union, UTC timestamp, timezone, policy
+  window, stored JSON, 0/1 boolean, control interval, Activity receipt, and
+  last-Activity row producing strict typed diagnostics; and
+- the set of cycle IDs across lane items, Later, suppressed, and diagnostics
+  being disjoint and exactly equal to the base operational-cycle set, except
+  that a Person already excluded by the SQL opted-out projection is outside the
+  candidate universe. Only cycle-keyed diagnostics participate in this set;
+  receipt diagnostics that cannot identify a cycle use `cycleId=null` and are
+  additional queue-level evidence.
 
-- [ ] **Step 2: Write RED capacity, opt-out, and explanation tests**
+The repository query orders raw base rows only by
+`sales_cycles.id COLLATE BINARY`. It must not use priority arithmetic, semantic
+lane ordering, capacity `LIMIT`, or a join shape that duplicates a cycle.
 
-Assert onboarding/inbound/overdue/promised work is never suppressed, only call rows consume the 40-dial budget, conversation target does not truncate, two exploration slots remain, Pin to Top stays within its lane, expired pin is ignored, opted-out rows are excluded, inbound-demo SLA breaches after fifteen permitted minutes, direct-referral SLA breaches after forty-eight elapsed hours, three-day re-surface suppression never hides due work, and every row explains lane/triggers/cadence/action/last activity/Verify First.
+- [ ] **Step 2: Define strict immutable Today types and diagnostics in RED**
 
-- [ ] **Step 3: Run RED Today tests**
+Define the public types before implementation:
+
+```ts
+export type TodayLane =
+  | 'won_onboarding'
+  | 'inbound_interrupt'
+  | 'overdue'
+  | 'post_interview_offer'
+  | 'due_primary'
+  | 'new_p0'
+  | 'p1'
+  | 'exploration'
+  | 'later';
+
+export type TodayCapacity = {
+  dialBudget: number;             // default 40
+  conversationTarget: number;    // default 5; metric only
+  explorationSlots: number;      // default 2
+  resurfacingWindowSeconds: number; // default 259200
+};
+
+export type TodayLaneReason =
+  | 'won_onboarding'
+  | 'inbound_inside_sla'
+  | 'non_discretionary_overdue'
+  | 'inbound_sla_breached'
+  | 'post_stage_due_today'
+  | 'other_non_discretionary_due_today'
+  | 'ready_p0'
+  | 'ready_p1'
+  | 'ready_p2'
+  | 'ready_p3'
+  | 'future_promise'
+  | 'capacity_overflow'
+  | 'exploration_quota_overflow';
+
+export type TodayDiagnosticKind =
+  | 'missing_current_action'
+  | 'invalid_current_action'
+  | 'current_action_owner_mismatch'
+  | 'cadence_owner_graph_mismatch'
+  | 'invalid_work_intent'
+  | 'invalid_inbound_sla'
+  | 'missing_priority_projection'
+  | 'stale_priority_projection'
+  | 'corrupt_priority_projection'
+  | 'outbound_permission_blocked'
+  | 'duplicate_candidate'
+  | 'invalid_last_activity'
+  | 'invalid_last_contact'
+  | 'invalid_timestamp'
+  | 'invalid_timezone'
+  | 'invalid_channel_policy'
+  | 'invalid_control'
+  | 'invalid_selected_call_receipt';
+
+export type TodayDiagnostic = {
+  cycleId: string | null;
+  personId: string | null;
+  kind: TodayDiagnosticKind;
+  relatedIds: readonly string[];
+};
+
+export type TodayItem = {
+  cycleId: string;
+  personId: string;
+  prospectId: string;
+  lane: TodayLane;
+  deferredFrom: Exclude<TodayLane, 'later'> | null;
+  laneReason: TodayLaneReason;
+  action: {
+    id: string;
+    workIntent: NextActionWorkIntent;
+    actionType: string;
+    channel: string | null;
+    dueAt: string;
+    timezone: string;
+    allowedWindow: string | null;
+    inboundSla: InboundSla;
+  };
+  cadence: {
+    enrollmentId: string;
+    definitionId: string;
+    family: CadenceFamily;
+    stepId: string;
+    stepSequence: number;
+    componentId: string;
+  } | null;
+  priority: EffectivePrioritySnapshot | null;
+  selectedTriggerReasons: readonly PrioritizationReason[];
+  verifyFirst: boolean | null;
+  pinned: boolean;
+  lastActivity: {
+    id: string;
+    kind: ActivityKind;
+    occurredAt: string;
+    observedOutcome: string | null;
+  } | null;
+  stageEnteredAt: string;
+  inlineDiagnostics: readonly TodayDiagnosticKind[];
+};
+
+export type TodayQueue = {
+  generatedAt: string;
+  timezone: string;
+  localDate: string;
+  capacity: TodayCapacity;
+  completedDiscretionaryDialCount: number;
+  queuedDiscretionaryDialCount: number;
+  dialCount: number;
+  remainingDiscretionaryDialCount: number;
+  lanes: ReadonlyArray<{ lane: TodayLane; items: readonly TodayItem[] }>;
+  suppressed: readonly {
+    cycleId: string;
+    reason: 'snoozed' | 'dismissed' | 'recently_contacted';
+  }[];
+  diagnostics: readonly TodayDiagnostic[];
+};
+
+type ActiveTodayControl = {
+  createdAt: string;
+  expiresAt: string;
+};
+
+export type ParsedTodayCandidate =
+  Omit<TodayItem, 'lane' | 'deferredFrom' | 'laneReason' | 'pinned'> & {
+    stage: SalesStage;
+    workflowStatus: 'active' | 'onboarding';
+    priorityState: 'current' | 'missing' | 'stale' | 'corrupt';
+    controls: {
+      pin: ActiveTodayControl | null;
+      snooze: ActiveTodayControl | null;
+      dismiss: ActiveTodayControl | null;
+    };
+    lastContactAt: string | null;
+  };
+
+export type TodayEvaluationContext = {
+  generatedAt: string;
+  timezone: string;
+  localDayStartAt: string;
+  localDayEndAt: string;
+  capacity: TodayCapacity;
+};
+
+export type TodayPreCapacityDisposition =
+  | {
+      kind: 'lane';
+      lane: Exclude<TodayLane, 'later'>;
+      item: TodayItem;
+    }
+  | { kind: 'later'; item: TodayItem }
+  | {
+      kind: 'suppressed';
+      cycleId: string;
+      reason: 'snoozed' | 'dismissed' | 'recently_contacted';
+    }
+  | { kind: 'diagnostic'; diagnostic: TodayDiagnostic };
+
+export type TodayCandidateLoadResult =
+  | { kind: 'candidate'; candidate: ParsedTodayCandidate }
+  | { kind: 'diagnostic'; diagnostic: TodayDiagnostic };
+```
+
+All public inputs and outputs are strict, recursively readonly, and recursively
+frozen. Diagnostics contain stable IDs/reason codes only, never phone/email
+values, arbitrary SQL text, or malformed raw JSON. Serialization of two calls
+over identical explicit candidates/configuration is byte-identical and neither
+call mutates its inputs.
+
+- [ ] **Step 3: Write RED first-match lane and promise/discretionary tests**
+
+`classifyTodayCandidate(candidate, context)` is pure and assigns one first match
+in this exact order:
+
+1. `won_onboarding`: workflow is `onboarding`; due time, suppression, priority,
+   and capacity cannot displace it.
+2. `inbound_interrupt`: `work_intent='inbound_response'` and
+   `asOf < inboundSla.dueAt`.
+3. `overdue`: a non-discretionary action has `dueAt < asOf`, or an inbound SLA
+   is breached at `asOf >= inboundSla.dueAt`.
+4. `post_interview_offer`: a `promised_follow_up` at Interviewed/Offered is due
+   in founder-local Today but is not yet overdue.
+5. `due_primary`: any other non-discretionary/internal authoritative action is
+   due in founder-local Today; this includes Unreviewed review and
+   resolve-contact work and does not require an active cadence.
+6. `new_p0`: a `discretionary_prospecting` Ready action with effective P0.
+7. `p1`: a `discretionary_prospecting` Ready action with effective P1.
+8. `exploration`: a `discretionary_prospecting` Ready action with effective
+   P2/P3.
+9. `later`: a future promise, capacity overflow, or exploration-quota overflow,
+   retaining its original lane/reason.
+
+Build fixtures that qualify for several conditions simultaneously and prove the
+first match. In particular, prove a Day-0 Ready call marked
+`discretionary_prospecting` remains in P0/P1/exploration even though its due time
+is now or earlier; due time never lets that action evade capacity. Prove
+resolver/retry/reschedule inherits its stored intent, onboarding outranks an
+overdue action, fresh inbound outranks overdue action time until its SLA
+deadline, and the exact SLA deadline enters Overdue.
+
+An active snooze/dismiss and the re-surface interval
+`[lastContactAt, lastContactAt + resurfacingWindowSeconds)` suppress only rows
+that would enter lanes 6-8. They never suppress lanes 1-5. At the exact end of
+the interval the row may reappear; a future or malformed last contact is a
+diagnostic. Suppressed rows use the separate `suppressed` disposition and are
+not relabeled Later.
+
+- [ ] **Step 4: Write RED local-calendar and inbound-SLA boundary tests**
+
+`TodayService.build` reads its injected Clock exactly once into canonical
+`generatedAt`. It accepts one strict IANA founder/workspace timezone and frozen
+policy/capacity snapshots. Compute local Today as the DST-safe half-open
+wall-clock interval `[localMidnight, nextLocalMidnight)`, independent of
+`process.env.TZ`. The founder workspace timezone decides Today membership;
+stored action timezone is still strictly validated and displayed but does not
+silently move a row between founder-local dates.
+
+Overdue is strict `dueAt < generatedAt`; equality is due now. A non-overdue row
+is due today when `dueAt` lies in the local-day interval. Test exact now, both
+midnights, spring-forward/fall-back days, Sunday policy boundaries, invalid
+zones/timestamps, and identical output under at least two process timezones.
+
+Task 12 validates rather than recomputes persisted inbound SLA. Use direct
+Task 9 tests plus Today render tests for inbound demo at 14:59.999 versus
+15:00.000 accumulated permitted minutes and direct referral at 47:59:59.999
+versus 48 elapsed hours. Validate SourceEvent owner, observed time, policy ID,
+calculation constants, JSON/column due equality, and half-open boundary.
+
+- [ ] **Step 5: Write RED exact ordering, pin, and SQL-parity tests**
+
+Apply pin only after lane assignment. It never crosses onboarding, inbound,
+overdue, promised, or discretionary lane boundaries. An active interval is
+`createdAt <= generatedAt < expiresAt`; equality at expiration is inactive.
+
+For lanes 1, 3, 4, and 5, order by:
+
+```text
+pin first within lane
+due_at ascending
+stage_entered_at ascending (oldest stage first)
+cadence step sequence ascending, NULL last
+current action ID COLLATE BINARY
+cycle ID COLLATE BINARY
+```
+
+Inbound orders by pin, SLA due, action due, stage age, action ID, cycle ID. In
+fixed-priority P0/P1 lanes, order by pin then Task 11's exact exported tuple. In
+Exploration, P2 always precedes P3; within each effective priority, pin precedes
+then the remainder of the exact Task 11 tuple. A pinned P3 therefore cannot
+jump any P2. Later orders by deferred-from lane rank, original within-lane
+ordinal, then stable cycle ID.
+
+Task 12 never copies, reduces, or adds arithmetic to Task 11's tuple. The V1
+repository uses stable-cycle SQL ordering only and lets pure JS own semantic
+lane order/capacity. `todayOrderingSqlParity.test.ts` inserts randomized and
+boundary-heavy snapshots in shuffled orders, uses Task 11's shared fixed SQL
+fragment for the discretionary suborder, and requires the same Prospect-ID
+sequence as the Task 11 JS comparator before Today adds lane/pin. Add a static
+ban on blended/generic score fields, SQL priority arithmetic, enum text ordering,
+omitted stable IDs, and any capacity `LIMIT` before classification.
+
+- [ ] **Step 6: Write RED durable capacity and exploration tests**
+
+Validate all capacity fields as safe nonnegative integers. Conversation target
+is reported only and never truncates any lane. Determine the founder-local day
+start/end and count immutable outbound call Activities in that interval whose
+strict `TodaySelectedCallReceiptV1` names a discretionary call. Reject or
+diagnose malformed receipts, wrong action/cycle ownership, non-call Activities,
+promise/inbound/onboarding actions carrying the receipt, and receipt
+timezone/local-date disagreement. Provider/idempotency replay counts once.
+
+Apply capacity exactly:
+
+```text
+remaining = max(0, dialBudget - completedDiscretionaryDialCount)
+select up to explorationSlots from ordered P2 then P3 candidates
+retain as many selected exploration calls as remaining permits
+retain every selected exploration non-call without consuming remaining
+subtract retained exploration calls from remaining
+retain every P0/P1 discretionary non-call without consuming remaining
+retain P0 discretionary calls, then P1 discretionary calls, up to remaining
+move only overflow discretionary calls and exploration-quota overflow to Later
+```
+
+This reserves learning capacity without allowing exploration to exceed the
+remaining daily dial budget. Promise/onboarding/inbound call rows are always
+visible and do not increment the discretionary dial counters. The queue reports
+completed, queued, sum, and remaining separately. Test budgets 0, 1, and 40;
+completed counts below/at/above budget; more than forty promise calls; unlimited
+discretionary text/email/resolve work; fewer/more than two exploration
+candidates; mixed call/non-call exploration; P2 before P3; refresh/restart after
+Activity persistence; exact provider replay; and capacity overflow retaining
+the original relative order in Later.
+
+- [ ] **Step 7: Write RED opt-out, coherent-snapshot, and binding tests**
+
+Construct `TodayRepository` and `TodayService` around the exact same
+`AppDatabase`/`DomainUnitOfWork`; require repository, Task 11 priority reader,
+and Task 10 permission service binding assertions before clock access or reads.
+Reads reject an already-active raw write transaction, then execute one
+synchronous deferred read transaction. Candidate/action/cadence/projection,
+controls, last Activity, selected-call counts, and `inspectPerson` must see one
+coherent before-or-after snapshot.
+
+SQL `persons.opted_out=0` is only the cheap first filter. Call
+`OutboundPermissionService.inspectPerson` for every candidate inside the read
+snapshot. A blocked result produces no actionable item and only a sanitized
+`outbound_permission_blocked` diagnostic. Test independent connections where
+opt-out commits before Today begins (row omitted) and after Today's snapshot
+linearizes (the returned snapshot may be stale, but Task 10's mandatory
+`assertMayExecuteOutbound` blocks a later click/handoff). Never claim the read
+model can close that unavoidable post-render race.
+
+Race a priority/control/Activity writer against build and prove the queue sees
+the complete before or after state, never torn fields, duplicate cycles, a
+partially consumed dial receipt, or raw `SQLITE_BUSY`. Trace and
+`total_changes()` assertions prove Task 12 performs zero writes, consumes no
+IDs, changes no pragma, and starts no immediate/nested transaction.
+
+- [ ] **Step 8: Run the complete RED Today slice**
 
 Run:
 
 ```bash
-npx vitest run tests/main/todayRepository.test.ts tests/main/todayOrdering.test.ts tests/main/todayService.test.ts
+npx vitest run \
+  tests/main/todayRepository.test.ts \
+  tests/main/todayOrdering.test.ts \
+  tests/main/todayService.test.ts \
+  tests/integration/todayOrderingSqlParity.test.ts \
+  tests/integration/todaySnapshot.test.ts \
+  tests/main/noBlendedScore.test.ts \
+  tests/main/optOutService.test.ts \
+  tests/main/nextActionInvariant.test.ts
 ```
 
 Expected: FAIL because Today modules are absent.
 
-- [ ] **Step 4: Define Today types and lane assignment**
+- [ ] **Step 9: Implement the pure Today planner and ordering first**
 
 ```ts
-export type TodayLane =
-  | 'won_onboarding' | 'inbound_interrupt' | 'overdue'
-  | 'post_interview_offer' | 'due_cadence' | 'new_p0'
-  | 'p1' | 'exploration' | 'later';
+export function classifyTodayCandidate(
+  candidate: ParsedTodayCandidate,
+  context: TodayEvaluationContext,
+): TodayPreCapacityDisposition;
 
-export type TodayQueue = {
+export function compareTodayItems(left: TodayItem, right: TodayItem): number;
+
+export function planTodayQueue(input: {
+  candidates: readonly ParsedTodayCandidate[];
   generatedAt: string;
-  dialCapacity: number;
-  dialCount: number;
-  lanes: ReadonlyArray<{ lane: TodayLane; items: TodayItem[] }>;
-};
+  timezone: string;
+  capacity: TodayCapacity;
+  completedDiscretionaryDialCount: number;
+}): TodayQueue;
 ```
 
-`assignLane(candidate, asOf)` is a pure first-match function. A candidate is always an operationally open SalesCycle with a valid current action.
+These functions import no database, repository, Clock, ID generator, lifecycle
+service, permission service, or ambient time/randomness. They strictly parse
+inputs, use Task 11's exported comparator, return recursively frozen outputs,
+and do not mutate caller arrays/objects. Static scans reject `Date.now()`,
+zero-argument `new Date`, `Math.random`, SQL imports, generic score fields, or a
+locally reimplemented Fit/Timing combination.
 
-- [ ] **Step 5: Implement repository prefilter and service guards**
+- [ ] **Step 10: Implement strict read-only repository APIs**
 
-Repository joins SalesCycle, current NextAction, active cadence, Person, Prospect, and current priority projection. SQL excludes closed workflows and Person opt-out projection. `TodayService.build` rechecks `OutboundPermissionService` before including outbound rows; invariant failures become typed diagnostics instead of queue items.
+Expose:
 
-- [ ] **Step 6: Implement stable sorting and capacity**
+```ts
+export class TodayRepository {
+  constructor(input: {
+    database: AppDatabase;
+    unitOfWork: DomainUnitOfWork;
+  });
+  assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork): void;
+  listOperationalCandidates(): readonly TodayCandidateLoadResult[];
+  loadCompletedDiscretionaryDialUsage(input: {
+    dayStartAt: string;
+    dayEndAt: string;
+    timezone: string;
+    localDate: string;
+  }): {
+    activityIds: readonly string[];
+    count: number;
+    diagnostics: readonly {
+      activityId: string;
+      cycleId: string | null;
+      kind: 'invalid_selected_call_receipt';
+    }[];
+  };
+}
+```
 
-Apply lane assignment first, then lane-specific comparator, then stable ID. Pin only precedes peers inside the same lane. Walk sorted discretionary call rows against dial capacity; move overflow to Later without suppressing texts/emails or promised work.
+The base query LEFT JOINs only the authoritative action, optional active
+enrollment/catalog graph, Prospect/Person, current projection/evaluation, and a
+correlated last Activity ordered by `(occurred_at DESC, id DESC)`. Load active
+controls and immutable evaluation explanations without row multiplication.
+Strict row/JSON parsers return valid parsed candidates or typed diagnostics in
+stable cycle-ID order. Missing/corrupt data never makes the entire queue throw
+and never causes priority recomputation.
 
-- [ ] **Step 7: Run GREEN Today verification**
+- [ ] **Step 11: Implement the read-only Today service and snapshot guard**
+
+Expose:
+
+```ts
+export class TodayService {
+  constructor(input: {
+    database: AppDatabase;
+    unitOfWork: DomainUnitOfWork;
+    clock: Clock;
+    repository: TodayRepository;
+    priorities: PrioritizationService;
+    outboundPermission: OutboundPermissionService;
+  });
+  build(input: {
+    timezone: string;
+    capacity: TodayCapacity;
+    channelPolicies: ChannelPolicySnapshots;
+  }): TodayQueue;
+}
+```
+
+Validate exact composition before reading the Clock. Read it once, enter one
+deferred transaction, load the repository snapshot, obtain each strict Task 11
+effective snapshot at the same `generatedAt`, inspect permission, count durable
+selected-call receipts in the local day, and pass plain parsed data to
+`planTodayQueue`. A discretionary projection whose `evaluatedAt` is not in the
+same founder-local day is `stale_priority_projection`; Task 12 does not mutate
+it. A promise item remains visible with the diagnostic because a prioritization
+refresh failure cannot erase owed work.
+
+- [ ] **Step 12: Run focused GREEN and upstream regression verification**
 
 Run:
 
 ```bash
-npx vitest run tests/main/todayRepository.test.ts tests/main/todayOrdering.test.ts tests/main/todayService.test.ts tests/main/noBlendedScore.test.ts tests/main/optOutService.test.ts tests/main/nextActionInvariant.test.ts
+npx vitest run \
+  tests/main/todayRepository.test.ts \
+  tests/main/todayOrdering.test.ts \
+  tests/main/todayService.test.ts \
+  tests/integration/todayOrderingSqlParity.test.ts \
+  tests/integration/todaySnapshot.test.ts \
+  tests/main/noBlendedScore.test.ts \
+  tests/main/optOutService.test.ts \
+  tests/main/prioritizationRepository.test.ts \
+  tests/main/prioritizationService.test.ts \
+  tests/main/lifecycleService.test.ts \
+  tests/main/nextActionInvariant.test.ts \
+  tests/main/invariantAudit.test.ts
 npm run typecheck
 npm run lint
 npm run test
+git diff --check
 ```
 
-Expected: all tests PASS; every candidate appears once or is represented by an invariant diagnostic.
+Expected: focused and full suites PASS; Task 12 performs zero writes; every
+operational candidate has one disposition; promise work survives capacity and
+suppression; daily discretionary usage survives refresh/restart; Task 11 order
+parity and Task 10 execution barriers remain intact; and no blended score,
+ambient time, early SQL limit, or bare-Prospect queue path appears.
 
-- [ ] **Step 8: Commit Today domain model**
+- [ ] **Step 13: Commit the Today read model**
 
 Run:
 
 ```bash
-git add src/main/domain/today tests/main/todayRepository.test.ts tests/main/todayOrdering.test.ts tests/main/todayService.test.ts
+git add \
+  src/main/domain/today \
+  tests/main/todayRepository.test.ts \
+  tests/main/todayOrdering.test.ts \
+  tests/main/todayService.test.ts \
+  tests/integration/todayOrderingSqlParity.test.ts \
+  tests/integration/todaySnapshot.test.ts
+git diff --cached --name-only
 git commit -m "feat: add promise-first Today queue"
 ```
 
