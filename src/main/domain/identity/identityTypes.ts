@@ -103,6 +103,16 @@ export type CreateProspectInput = {
   qualificationReason?: string | null;
 };
 
+export type UpdateProspectQualificationInput = {
+  prospectId: string;
+  personId: string;
+  expectedVersion: number;
+  expectedState: Prospect['qualificationState'];
+  nextState: Prospect['qualificationState'];
+  reason: string | null;
+  updatedAt: string;
+};
+
 export type CreateOrganizationInput = {
   canonicalName: string;
   sourceRecord?: unknown | null;

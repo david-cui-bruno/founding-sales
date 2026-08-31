@@ -609,6 +609,7 @@ describe('EventRepository', () => {
         effectiveAt: TIMESTAMP,
         confirmedAt: LATER,
         confirmationKind: 'mechanical',
+        transitionSequence: 1,
       });
       const consent = events.appendConsentPolicyRecord({
         id: 'consent-one',
@@ -637,6 +638,7 @@ describe('EventRepository', () => {
       effectiveAt: TIMESTAMP,
       confirmedAt: LATER,
       confirmationKind: 'mechanical',
+      transitionSequence: 1,
       backfillProvenance: null,
       createdAt: TIMESTAMP,
     });
@@ -649,20 +651,20 @@ describe('EventRepository', () => {
     });
   });
 
-  it('orders stage history by effective time, confirmation time, then ID', async () => {
+  it('orders stage history by its contiguous transition sequence', async () => {
     await setup();
     unitOfWork.immediate(() => {
       events.appendStageEvent({
         id: 'stage-c', salesCycleId: firstCycleId, fromStage: 'contacted', toStage: 'interviewed',
-        effectiveAt: LATER, confirmedAt: LATER, confirmationKind: 'founder',
+        effectiveAt: TIMESTAMP, confirmedAt: LATER, confirmationKind: 'founder', transitionSequence: 3,
       });
       events.appendStageEvent({
         id: 'stage-b', salesCycleId: firstCycleId, fromStage: 'ready', toStage: 'contacted',
-        effectiveAt: TIMESTAMP, confirmedAt: LATER, confirmationKind: 'mechanical',
+        effectiveAt: LATER, confirmedAt: LATER, confirmationKind: 'mechanical', transitionSequence: 2,
       });
       events.appendStageEvent({
         id: 'stage-a', salesCycleId: firstCycleId, fromStage: null, toStage: 'ready',
-        effectiveAt: TIMESTAMP, confirmedAt: LATER, confirmationKind: 'founder',
+        effectiveAt: LATER, confirmedAt: LATER, confirmationKind: 'founder', transitionSequence: 1,
       });
     });
 
@@ -703,8 +705,8 @@ describe('EventRepository', () => {
     database!.raw.prepare(`
       INSERT INTO stage_events (
         id, sales_cycle_id, from_stage, to_stage, effective_at, confirmed_at,
-        confirmation_kind, created_at
-      ) VALUES ('malformed-stage', ?, 'ready', 'contacted', 'not-utc', ?, 'mechanical', ?)
+        confirmation_kind, transition_sequence, created_at
+      ) VALUES ('malformed-stage', ?, 'ready', 'contacted', 'not-utc', ?, 'mechanical', 1, ?)
     `).run(firstCycleId, TIMESTAMP, TIMESTAMP);
 
     expect(() => events.listCycleStageEvents(firstCycleId)).toThrow(z.ZodError);

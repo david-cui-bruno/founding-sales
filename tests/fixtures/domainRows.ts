@@ -25,16 +25,23 @@ export function insertSourceEvent(input: {
   referredByPersonId?: string | null;
   referrerUnknownReason?: string | null;
 }): void {
+  const channel = input.channel ?? 'custom';
+  const sourceRecord = JSON.stringify({
+    formatVersion: 1,
+    sourceRecord: { fixture: true },
+    customSourceReason: channel === 'custom' ? 'manual_quick_add' : null,
+  });
   input.database.prepare(`
     INSERT INTO source_events (
       id, person_id, channel, observed_at, source_record_json,
       referred_by_person_id, referrer_unknown_reason, created_at
-    ) VALUES (?, ?, ?, ?, '{}', ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.id,
     input.personId,
-    input.channel ?? 'custom',
+    channel,
     DOMAIN_TIMESTAMP,
+    sourceRecord,
     input.referredByPersonId ?? null,
     input.referrerUnknownReason ?? null,
     DOMAIN_TIMESTAMP,

@@ -109,6 +109,7 @@ const appendStageEventInputSchema = z.object({
   effectiveAt: utcTimestampSchema,
   confirmedAt: utcTimestampSchema.optional(),
   confirmationKind: z.enum(['mechanical', 'founder', 'backfill']),
+  transitionSequence: z.number().int().safe().positive(),
   backfillProvenance: z.unknown().nullable().optional(),
 }).strict().superRefine((value, context) => {
   const hasBackfill = value.backfillProvenance != null;
@@ -187,6 +188,7 @@ const storedStageEventRowSchema = z.object({
   effective_at: utcTimestampSchema,
   confirmed_at: utcTimestampSchema,
   confirmation_kind: z.enum(['mechanical', 'founder', 'backfill']),
+  transition_sequence: z.number().int().safe().positive(),
   backfill_provenance_json: jsonTextSchema.nullable(),
   created_at: utcTimestampSchema,
 }).strict().superRefine((value, context) => {
@@ -233,7 +235,7 @@ const amendmentColumns = `
 `;
 const stageEventColumns = `
   id, sales_cycle_id, from_stage, to_stage, effective_at, confirmed_at,
-  confirmation_kind, backfill_provenance_json, created_at
+  confirmation_kind, transition_sequence, backfill_provenance_json, created_at
 `;
 const consentColumns = `
   id, person_id, activity_id, policy_kind, policy_version, effective_at,
@@ -259,6 +261,12 @@ export class EventRepository {
     this.unitOfWork = input.unitOfWork;
     this.clock = input.clock;
     this.ids = input.ids;
+  }
+
+  assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork): void {
+    if (this.database.raw !== database.raw || this.unitOfWork !== unitOfWork) {
+      throw new DomainRepositoryDatabaseMismatchError();
+    }
   }
 
   appendActivity(input: AppendActivityInput): Activity {
@@ -381,8 +389,8 @@ export class EventRepository {
     const row = this.database.raw.prepare(`
       INSERT INTO stage_events (
         id, sales_cycle_id, from_stage, to_stage, effective_at, confirmed_at,
-        confirmation_kind, backfill_provenance_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        confirmation_kind, transition_sequence, backfill_provenance_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING ${stageEventColumns}
     `).get(
       id,
@@ -392,6 +400,7 @@ export class EventRepository {
       parsed.effectiveAt,
       confirmedAt,
       parsed.confirmationKind,
+      parsed.transitionSequence,
       backfillJson,
       createdAt,
     );
@@ -440,9 +449,15 @@ export class EventRepository {
       SELECT ${stageEventColumns}
       FROM stage_events
       WHERE sales_cycle_id = ?
-      ORDER BY effective_at ASC, confirmed_at ASC, id ASC
+      ORDER BY transition_sequence ASC, id ASC
     `).all(id);
-    return rows.map(parseStageEvent);
+    const events = rows.map(parseStageEvent);
+    events.forEach((event, index) => {
+      if (event.transitionSequence !== index + 1) {
+        throw new Error('Stage-event transition sequence must be contiguous from one.');
+      }
+    });
+    return events;
   }
 
   private parseAndValidateActivity(value: unknown): Activity {
@@ -533,6 +548,7 @@ function parseStageEvent(value: unknown): StageEvent {
     effectiveAt: row.effective_at,
     confirmedAt: row.confirmed_at,
     confirmationKind: row.confirmation_kind,
+    transitionSequence: row.transition_sequence,
     backfillProvenance: row.backfill_provenance_json,
     createdAt: row.created_at,
   };

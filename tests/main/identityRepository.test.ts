@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { IdentityRepository } from '../../src/main/domain/identity/identityRepository';
+import { StaleDomainWriteError } from '../../src/main/domain/support/domainErrors';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
 import {
   createTempDatabase,
@@ -444,5 +445,31 @@ describe('IdentityRepository', () => {
     database!.raw.prepare("UPDATE prospects SET updated_at = 'not-utc' WHERE id = 'prospect'").run();
 
     expect(() => identities.getCanonicalProspect('person')).toThrow(z.ZodError);
+  });
+
+  it('CAS-updates only qualification state while preserving acquisition attribution', async () => {
+    const identities = await createRepository(['person', 'prospect']);
+    const prospect = unitOfWork.immediate(() => {
+      const person = identities.createPerson({ displayName: 'Kevin' });
+      insertSourceEvent('source', person.id);
+      return identities.createCanonicalProspect({
+        personId: person.id, originalSourceEventId: 'source', segment: 'warm',
+        qualificationState: 'unreviewed',
+      });
+    });
+    const updated = unitOfWork.immediate(() => identities.updateProspectQualification({
+      prospectId: prospect.id, personId: prospect.personId, expectedVersion: 1,
+      expectedState: 'unreviewed', nextState: 'eligible', reason: 'Founder reviewed',
+      updatedAt: TIMESTAMP,
+    }));
+    expect(updated).toMatchObject({
+      qualificationState: 'eligible', qualificationReason: 'Founder reviewed',
+      originalSourceEventId: 'source', version: 2,
+    });
+    expect(() => unitOfWork.immediate(() => identities.updateProspectQualification({
+      prospectId: prospect.id, personId: prospect.personId, expectedVersion: 1,
+      expectedState: 'unreviewed', nextState: 'eligible', reason: null,
+      updatedAt: TIMESTAMP,
+    }))).toThrow(StaleDomainWriteError);
   });
 });

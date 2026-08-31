@@ -193,12 +193,21 @@ export type NextActionsTable = {
   due_at: string;
   timezone: string;
   allowed_window: string | null;
+  work_intent: 'internal_review' | 'inbound_response' | 'promised_follow_up' | 'discretionary_prospecting';
+  sla_due_at: string | null;
+  inbound_sla_kind: 'inbound_demo_permitted_minutes' | 'direct_referral_elapsed' | null;
+  inbound_sla_due_at: string | null;
+  inbound_sla_source_event_id: string | null;
+  inbound_sla_provenance_json: string | null;
   cadence_enrollment_id: string | null;
   cadence_step_id: string | null;
   cadence_component_id: string | null;
   completion_activity_id: string | null;
+  settlement_json: string | null;
+  version: Generated<number>;
   created_at: string;
   completed_at: string | null;
+  updated_at: string;
 };
 
 export type CadenceEnrollmentsTable = {
@@ -209,6 +218,9 @@ export type CadenceEnrollmentsTable = {
   anchor_at: string;
   current_step_id: string | null;
   scheduled_step_count: number;
+  mode: 'standard' | 'inbound_over_cap_response';
+  allowed_step_ids_json: string | null;
+  version: Generated<number>;
   stop_reason: string | null;
   created_at: string;
   updated_at: string;
@@ -255,6 +267,7 @@ export type StageEventsTable = {
   effective_at: string;
   confirmed_at: string;
   confirmation_kind: 'mechanical' | 'founder' | 'backfill';
+  transition_sequence: number;
   backfill_provenance_json: string | null;
   created_at: string;
 };
@@ -282,6 +295,37 @@ export type ReactivationRulesTable = {
   created_at: string;
 };
 
+export type CycleReactivationReceiptsTable = {
+  activation_key: string;
+  activation_kind: 'rule' | 'inbound_response';
+  person_id: string;
+  source_cycle_id: string;
+  reactivation_rule_id: string | null;
+  source_event_id: string | null;
+  new_cycle_id: string;
+  command_json: string;
+  result_json: string;
+  created_at: string;
+};
+
+export type LifecycleReviewItemsTable = {
+  id: string;
+  activation_key: string;
+  status: 'open' | 'resolved';
+  person_id: string;
+  prospect_id: string;
+  source_cycle_id: string;
+  reactivation_rule_id: string | null;
+  source_event_id: string | null;
+  reason: string;
+  payload_json: string;
+  resolution_json: string | null;
+  resolved_at: string | null;
+  version: Generated<number>;
+  created_at: string;
+  updated_at: string;
+};
+
 export type WonTermsTable = {
   sales_cycle_id: string;
   doors_committed: number;
@@ -301,6 +345,7 @@ export type SalesCycleCloseReadinessTable = {
   decision_authority_confirmed: StoredBoolean;
   concrete_trial_identified: StoredBoolean;
   readiness_json: string;
+  version: Generated<number>;
   assessed_at: string;
   updated_at: string;
 };
@@ -411,6 +456,8 @@ export type DomainTables = {
   cadence_enrollments: CadenceEnrollmentsTable;
   cadence_steps: CadenceStepsTable;
   consent_policy_records: ConsentPolicyRecordsTable;
+  cycle_reactivation_receipts: CycleReactivationReceiptsTable;
+  lifecycle_review_items: LifecycleReviewItemsTable;
   next_actions: NextActionsTable;
   opt_out_handles: OptOutHandlesTable;
   opt_out_tombstones: OptOutTombstonesTable;

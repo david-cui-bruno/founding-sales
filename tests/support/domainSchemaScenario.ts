@@ -24,6 +24,8 @@ const domainTables = [
   'cadence_enrollments',
   'cadence_steps',
   'consent_policy_records',
+  'cycle_reactivation_receipts',
+  'lifecycle_review_items',
   'next_actions',
   'opt_out_handles',
   'opt_out_tombstones',
@@ -70,6 +72,8 @@ const requiredTriggers = [
   'immutable_cadence_steps_delete',
   'immutable_consent_policy_records',
   'immutable_consent_policy_records_delete',
+  'immutable_cycle_reactivation_receipts',
+  'immutable_cycle_reactivation_receipts_delete',
   'immutable_prioritization_evaluations',
   'immutable_prioritization_evaluations_delete',
   'immutable_prioritization_rule_versions',
@@ -96,8 +100,15 @@ const requiredTriggers = [
   'protect_design_partner_fitness',
   'protect_design_partner_fitness_update',
   'protect_initial_action_status',
+  'protect_lifecycle_review_item_delete',
+  'protect_lifecycle_review_item_identity',
+  'protect_lifecycle_review_item_resolution',
   'protect_next_action_cadence_insert',
   'protect_next_action_cadence_update',
+  'protect_next_action_immutable_evidence',
+  'protect_next_action_inbound_sla_insert',
+  'protect_next_action_inbound_sla_update',
+  'protect_next_action_settlement',
   'protect_opt_out_handle',
   'protect_opt_out_handle_update',
   'protect_opt_out_tombstone_active_cadence',
@@ -194,6 +205,30 @@ function runDatabaseScenario(
         'source_event_id', 'person_id', 'prospect_id',
         'command_json', 'result_json', 'created_at',
       ]);
+      const stageEventColumns = raw.prepare<[], { name: string }>(
+        'PRAGMA table_info(stage_events)',
+      ).all().map(({ name }) => name);
+      assert.equal(stageEventColumns.includes('transition_sequence'), true);
+      const nextActionColumns = raw.prepare<[], { name: string }>(
+        'PRAGMA table_info(next_actions)',
+      ).all().map(({ name }) => name);
+      for (const column of [
+        'work_intent', 'sla_due_at', 'inbound_sla_kind', 'inbound_sla_due_at',
+        'inbound_sla_source_event_id', 'inbound_sla_provenance_json',
+        'settlement_json', 'version', 'updated_at',
+      ]) {
+        assert.equal(nextActionColumns.includes(column), true, `missing next_actions.${column}`);
+      }
+      const enrollmentColumns = raw.prepare<[], { name: string }>(
+        'PRAGMA table_info(cadence_enrollments)',
+      ).all().map(({ name }) => name);
+      for (const column of ['mode', 'allowed_step_ids_json', 'version']) {
+        assert.equal(enrollmentColumns.includes(column), true, `missing cadence_enrollments.${column}`);
+      }
+      const readinessColumns = raw.prepare<[], { name: string }>(
+        'PRAGMA table_info(sales_cycle_close_readiness)',
+      ).all().map(({ name }) => name);
+      assert.equal(readinessColumns.includes('version'), true);
       const actualTriggers = raw.prepare<[], { name: string }>(`
         SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name
       `).all().map(({ name }) => name);
@@ -378,7 +413,9 @@ function runDatabaseScenario(
         raw.prepare('UPDATE sales_cycles SET current_next_action_id = ? WHERE id = ?')
           .run('replacement-action', current.cycleId);
         raw.prepare(`
-          UPDATE next_actions SET status = 'completed', completed_at = ? WHERE id = ?
+          UPDATE next_actions
+          SET status = 'completed', completed_at = ?, settlement_json = '{}'
+          WHERE id = ?
         `).run(DOMAIN_TIMESTAMP, current.actionId);
         raw.exec('COMMIT');
       } catch (error) {
@@ -1511,8 +1548,10 @@ function insertStageEvent(
   database.prepare(`
     INSERT INTO stage_events (
       id, sales_cycle_id, from_stage, to_stage, effective_at, confirmed_at,
-      confirmation_kind, backfill_provenance_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 'founder', NULL, ?)
+      confirmation_kind, backfill_provenance_json, transition_sequence, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'founder', NULL,
+              (SELECT COALESCE(MAX(transition_sequence), 0) + 1
+               FROM stage_events WHERE sales_cycle_id = ?), ?)
   `).run(
     id,
     cycleId,
@@ -1520,6 +1559,7 @@ function insertStageEvent(
     toStage,
     DOMAIN_TIMESTAMP,
     DOMAIN_TIMESTAMP,
+    cycleId,
     DOMAIN_TIMESTAMP,
   );
 }

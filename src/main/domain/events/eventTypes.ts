@@ -62,6 +62,7 @@ export type StageEvent = {
   effectiveAt: string;
   confirmedAt: string;
   confirmationKind: 'mechanical' | 'founder' | 'backfill';
+  transitionSequence: number;
   backfillProvenance: unknown | null;
   createdAt: string;
 };
@@ -127,6 +128,7 @@ export type AppendStageEventInput = {
   effectiveAt: string;
   confirmedAt?: string;
   confirmationKind: 'mechanical' | 'founder' | 'backfill';
+  transitionSequence: number;
   backfillProvenance?: unknown | null;
 };
 

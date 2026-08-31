@@ -270,12 +270,28 @@ const domainStatements = [
     due_at TEXT NOT NULL,
     timezone TEXT NOT NULL,
     allowed_window TEXT,
+    work_intent TEXT NOT NULL DEFAULT 'promised_follow_up' CHECK (
+      work_intent IN (
+        'internal_review','inbound_response','promised_follow_up',
+        'discretionary_prospecting'
+      )
+    ),
+    sla_due_at TEXT,
+    inbound_sla_kind TEXT CHECK (inbound_sla_kind IN (
+      'inbound_demo_permitted_minutes','direct_referral_elapsed'
+    )),
+    inbound_sla_due_at TEXT,
+    inbound_sla_source_event_id TEXT,
+    inbound_sla_provenance_json TEXT,
     cadence_enrollment_id TEXT REFERENCES cadence_enrollments(id),
     cadence_step_id TEXT REFERENCES cadence_steps(id),
     cadence_component_id TEXT REFERENCES cadence_action_components(id),
     completion_activity_id TEXT,
+    settlement_json TEXT,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
     created_at TEXT NOT NULL,
     completed_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
     UNIQUE (id, sales_cycle_id),
     FOREIGN KEY (sales_cycle_id)
       REFERENCES sales_cycles(id) DEFERRABLE INITIALLY DEFERRED,
@@ -285,9 +301,13 @@ const domainStatements = [
       REFERENCES cadence_enrollments(id, sales_cycle_id),
     FOREIGN KEY (cadence_component_id, cadence_step_id)
       REFERENCES cadence_action_components(id, cadence_step_id),
+    FOREIGN KEY (inbound_sla_source_event_id)
+      REFERENCES source_events(id),
     CHECK (
-      (status = 'pending' AND completed_at IS NULL AND completion_activity_id IS NULL)
-      OR (status <> 'pending' AND completed_at IS NOT NULL)
+      (status = 'pending' AND completed_at IS NULL
+        AND completion_activity_id IS NULL AND settlement_json IS NULL)
+      OR (status <> 'pending' AND completed_at IS NOT NULL
+        AND settlement_json IS NOT NULL)
     ),
     CHECK (
       (
@@ -300,6 +320,21 @@ const domainStatements = [
         AND cadence_step_id IS NOT NULL
         AND cadence_component_id IS NOT NULL
       )
+    ),
+    CHECK (
+      (
+        inbound_sla_kind IS NULL
+        AND inbound_sla_due_at IS NULL
+        AND inbound_sla_source_event_id IS NULL
+        AND inbound_sla_provenance_json IS NULL
+      )
+      OR (
+        work_intent = 'inbound_response'
+        AND inbound_sla_kind IS NOT NULL
+        AND inbound_sla_due_at IS NOT NULL
+        AND inbound_sla_source_event_id IS NOT NULL
+        AND inbound_sla_provenance_json IS NOT NULL
+      )
     )
   )`,
   `CREATE INDEX next_actions_due_idx ON next_actions(status, due_at)`,
@@ -311,6 +346,11 @@ const domainStatements = [
     anchor_at TEXT NOT NULL,
     current_step_id TEXT REFERENCES cadence_steps(id),
     scheduled_step_count INTEGER NOT NULL DEFAULT 0 CHECK (scheduled_step_count >= 0),
+    mode TEXT NOT NULL DEFAULT 'standard' CHECK (
+      mode IN ('standard','inbound_over_cap_response')
+    ),
+    allowed_step_ids_json TEXT,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
     stop_reason TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -421,8 +461,10 @@ const domainStatements = [
     confirmation_kind TEXT NOT NULL CHECK (
       confirmation_kind IN ('mechanical','founder','backfill')
     ),
+    transition_sequence INTEGER NOT NULL CHECK (transition_sequence > 0),
     backfill_provenance_json TEXT,
     created_at TEXT NOT NULL,
+    UNIQUE (sales_cycle_id, transition_sequence),
     CHECK (
       (confirmation_kind = 'backfill' AND backfill_provenance_json IS NOT NULL)
       OR (confirmation_kind <> 'backfill' AND backfill_provenance_json IS NULL)
@@ -442,7 +484,84 @@ const domainStatements = [
     version INTEGER NOT NULL CHECK (version > 0),
     consumed_at TEXT,
     created_at TEXT NOT NULL,
+    UNIQUE (id, sales_cycle_id),
     CHECK (rule_type <> 'manual' OR due_at IS NOT NULL)
+  )`,
+  `CREATE TABLE cycle_reactivation_receipts (
+    activation_key TEXT PRIMARY KEY CHECK (
+      activation_key LIKE 'rule:%' OR activation_key LIKE 'inbound:%'
+    ),
+    activation_kind TEXT NOT NULL CHECK (
+      activation_kind IN ('rule','inbound_response')
+    ),
+    person_id TEXT NOT NULL REFERENCES persons(id),
+    source_cycle_id TEXT NOT NULL,
+    reactivation_rule_id TEXT UNIQUE,
+    source_event_id TEXT UNIQUE,
+    new_cycle_id TEXT NOT NULL UNIQUE,
+    command_json TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (source_cycle_id, person_id)
+      REFERENCES sales_cycles(id, person_id),
+    FOREIGN KEY (reactivation_rule_id, source_cycle_id)
+      REFERENCES reactivation_rules(id, sales_cycle_id),
+    FOREIGN KEY (source_event_id, person_id)
+      REFERENCES source_events(id, person_id),
+    FOREIGN KEY (new_cycle_id, person_id)
+      REFERENCES sales_cycles(id, person_id) DEFERRABLE INITIALLY DEFERRED,
+    CHECK (
+      (
+        activation_kind = 'rule'
+        AND activation_key = 'rule:' || reactivation_rule_id
+        AND reactivation_rule_id IS NOT NULL
+        AND source_event_id IS NULL
+      )
+      OR (
+        activation_kind = 'inbound_response'
+        AND activation_key = 'inbound:' || source_event_id
+        AND reactivation_rule_id IS NULL
+        AND source_event_id IS NOT NULL
+      )
+    )
+  )`,
+  `CREATE TABLE lifecycle_review_items (
+    id TEXT PRIMARY KEY,
+    activation_key TEXT NOT NULL UNIQUE CHECK (length(trim(activation_key)) > 0),
+    status TEXT NOT NULL CHECK (status IN ('open','resolved')),
+    person_id TEXT NOT NULL REFERENCES persons(id),
+    prospect_id TEXT NOT NULL,
+    source_cycle_id TEXT NOT NULL,
+    reactivation_rule_id TEXT,
+    source_event_id TEXT,
+    reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+    payload_json TEXT NOT NULL,
+    resolution_json TEXT,
+    resolved_at TEXT,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (prospect_id, person_id) REFERENCES prospects(id, person_id),
+    FOREIGN KEY (source_cycle_id, person_id) REFERENCES sales_cycles(id, person_id),
+    FOREIGN KEY (reactivation_rule_id, source_cycle_id)
+      REFERENCES reactivation_rules(id, sales_cycle_id),
+    FOREIGN KEY (source_event_id, person_id) REFERENCES source_events(id, person_id),
+    CHECK (
+      (status = 'open' AND resolution_json IS NULL AND resolved_at IS NULL)
+      OR (status = 'resolved' AND resolution_json IS NOT NULL AND resolved_at IS NOT NULL)
+    ),
+    CHECK (
+      (
+        activation_key = 'rule:' || reactivation_rule_id
+        AND reactivation_rule_id IS NOT NULL
+        AND source_event_id IS NULL
+      )
+      OR (
+        activation_key = 'inbound:' || source_event_id
+        AND reactivation_rule_id IS NULL
+        AND source_event_id IS NOT NULL
+      )
+    )
   )`,
   `CREATE TABLE won_terms (
     sales_cycle_id TEXT PRIMARY KEY REFERENCES sales_cycles(id),
@@ -479,6 +598,7 @@ const domainStatements = [
       concrete_trial_identified IN (0, 1)
     ),
     readiness_json TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
     assessed_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
@@ -742,6 +862,64 @@ const domainStatements = [
     BEGIN
       SELECT RAISE(ABORT, 'next action cadence references must share one owner graph');
     END`,
+  `CREATE TRIGGER protect_next_action_inbound_sla_insert
+    BEFORE INSERT ON next_actions
+    WHEN NEW.inbound_sla_source_event_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM sales_cycles AS cycle
+        JOIN source_events AS source
+          ON source.id = NEW.inbound_sla_source_event_id
+         AND source.person_id = cycle.person_id
+        WHERE cycle.id = NEW.sales_cycle_id
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'inbound SLA evidence must belong to the cycle person');
+    END`,
+  `CREATE TRIGGER protect_next_action_inbound_sla_update
+    BEFORE UPDATE OF sales_cycle_id, inbound_sla_source_event_id ON next_actions
+    WHEN NEW.inbound_sla_source_event_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM sales_cycles AS cycle
+        JOIN source_events AS source
+          ON source.id = NEW.inbound_sla_source_event_id
+         AND source.person_id = cycle.person_id
+        WHERE cycle.id = NEW.sales_cycle_id
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'inbound SLA evidence must belong to the cycle person');
+    END`,
+  `CREATE TRIGGER protect_next_action_immutable_evidence
+    BEFORE UPDATE OF sales_cycle_id, action_type, channel, work_intent, inbound_sla_kind,
+      inbound_sla_due_at, inbound_sla_source_event_id,
+      inbound_sla_provenance_json, cadence_enrollment_id, cadence_step_id,
+      cadence_component_id, settlement_json ON next_actions
+    WHEN NEW.sales_cycle_id IS NOT OLD.sales_cycle_id
+      OR NEW.action_type IS NOT OLD.action_type
+      OR NEW.channel IS NOT OLD.channel
+      OR NEW.work_intent IS NOT OLD.work_intent
+      OR NEW.inbound_sla_kind IS NOT OLD.inbound_sla_kind
+      OR NEW.inbound_sla_due_at IS NOT OLD.inbound_sla_due_at
+      OR NEW.inbound_sla_source_event_id IS NOT OLD.inbound_sla_source_event_id
+      OR NEW.inbound_sla_provenance_json IS NOT OLD.inbound_sla_provenance_json
+      OR NEW.cadence_enrollment_id IS NOT OLD.cadence_enrollment_id
+      OR NEW.cadence_step_id IS NOT OLD.cadence_step_id
+      OR NEW.cadence_component_id IS NOT OLD.cadence_component_id
+      OR (OLD.settlement_json IS NOT NULL AND NEW.settlement_json IS NOT OLD.settlement_json)
+    BEGIN
+      SELECT RAISE(ABORT, 'next action ownership and evidence are immutable');
+    END`,
+  `CREATE TRIGGER protect_next_action_settlement
+    BEFORE UPDATE OF status, completion_activity_id, settlement_json, completed_at
+      ON next_actions
+    WHEN OLD.status <> 'pending'
+      OR NEW.status = 'pending'
+      OR NEW.completed_at IS NULL
+      OR NEW.settlement_json IS NULL
+    BEGIN
+      SELECT RAISE(ABORT, 'next action settlement is one-way and immutable');
+    END`,
   `CREATE TRIGGER protect_activity_cadence_insert
     BEFORE INSERT ON activities
     WHEN NEW.cadence_enrollment_id IS NOT NULL
@@ -991,6 +1169,42 @@ const domainStatements = [
     BEGIN
       SELECT RAISE(ABORT, 'reactivation rules cannot be deleted');
     END`,
+  `CREATE TRIGGER protect_lifecycle_review_item_identity
+    BEFORE UPDATE OF activation_key, person_id, prospect_id, source_cycle_id,
+      reactivation_rule_id, source_event_id, reason, payload_json,
+      created_at ON lifecycle_review_items
+    WHEN NEW.activation_key IS NOT OLD.activation_key
+      OR NEW.person_id IS NOT OLD.person_id
+      OR NEW.prospect_id IS NOT OLD.prospect_id
+      OR NEW.source_cycle_id IS NOT OLD.source_cycle_id
+      OR NEW.reactivation_rule_id IS NOT OLD.reactivation_rule_id
+      OR NEW.source_event_id IS NOT OLD.source_event_id
+      OR NEW.reason IS NOT OLD.reason
+      OR NEW.payload_json IS NOT OLD.payload_json
+      OR NEW.created_at IS NOT OLD.created_at
+    BEGIN
+      SELECT RAISE(ABORT, 'lifecycle review ownership and command are immutable');
+    END`,
+  `CREATE TRIGGER protect_lifecycle_review_item_delete
+    BEFORE DELETE ON lifecycle_review_items
+    BEGIN
+      SELECT RAISE(ABORT, 'lifecycle review items are retained permanently');
+    END`,
+  `CREATE TRIGGER protect_lifecycle_review_item_resolution
+    BEFORE UPDATE OF status, resolution_json, resolved_at, version, updated_at
+      ON lifecycle_review_items
+    WHEN NOT (
+      OLD.status = 'open'
+      AND NEW.status = 'resolved'
+      AND OLD.resolution_json IS NULL
+      AND NEW.resolution_json IS NOT NULL
+      AND OLD.resolved_at IS NULL
+      AND NEW.resolved_at IS NOT NULL
+      AND NEW.version = OLD.version + 1
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'lifecycle review resolution is one-way and CAS-versioned');
+    END`,
   `CREATE TRIGGER protect_source_intake_receipt_prospect
     BEFORE INSERT ON source_intake_receipts
     FOR EACH ROW
@@ -1010,6 +1224,7 @@ const domainStatements = [
   ...immutableTriggers('activity_amendments'),
   ...immutableTriggers('stage_events'),
   ...immutableTriggers('consent_policy_records'),
+  ...immutableTriggers('cycle_reactivation_receipts'),
   ...immutableTriggers('trigger_events'),
   ...immutableTriggers('prioritization_evaluations'),
   ...immutableTriggers('cadence_definitions'),

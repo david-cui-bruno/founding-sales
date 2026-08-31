@@ -74,6 +74,7 @@ describe('immutable event persistence', () => {
         effectiveAt: TIMESTAMP,
         confirmedAt: TIMESTAMP,
         confirmationKind: 'mechanical',
+        transitionSequence: 1,
       });
       events.appendConsentPolicyRecord({
         id: 'immutable-consent',
@@ -134,6 +135,7 @@ describe('immutable event persistence', () => {
     expect(() => events.appendStageEvent({
       id: 'outside-stage', salesCycleId: cycleId, fromStage: 'ready', toStage: 'contacted',
       effectiveAt: TIMESTAMP, confirmedAt: TIMESTAMP, confirmationKind: 'mechanical',
+      transitionSequence: 1,
     })).toThrow(DomainTransactionRequiredError);
     expect(() => events.appendConsentPolicyRecord({
       id: 'outside-consent', personId, policyKind: 'outbound', policyVersion: 'v1',

@@ -5,6 +5,7 @@ import type { Clock } from '../support/clock';
 import {
   ContextLinkConflictError,
   DomainRepositoryDatabaseMismatchError,
+  StaleDomainWriteError,
 } from '../support/domainErrors';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 import type { IdGenerator } from '../support/idGenerator';
@@ -25,6 +26,7 @@ import type {
   Person,
   Property,
   Prospect,
+  UpdateProspectQualificationInput,
 } from './identityTypes';
 
 export type {
@@ -44,6 +46,7 @@ export type {
   Person,
   Property,
   Prospect,
+  UpdateProspectQualificationInput,
 } from './identityTypes';
 
 const idSchema = z.string().trim().min(1);
@@ -594,6 +597,31 @@ export class IdentityRepository {
       WHERE person_id = ?
     `).get(id);
     return row === undefined ? null : parseProspect(row);
+  }
+
+  updateProspectQualification(input: UpdateProspectQualificationInput): Prospect {
+    this.unitOfWork.assertWriteScope();
+    const parsed = z.object({
+      prospectId: idSchema,
+      personId: idSchema,
+      expectedVersion: z.number().int().safe().positive(),
+      expectedState: z.enum(['unreviewed', 'eligible', 'disqualified', 'merge_review']),
+      nextState: z.enum(['unreviewed', 'eligible', 'disqualified', 'merge_review']),
+      reason: z.string().nullable(),
+      updatedAt: utcTimestampSchema,
+    }).strict().parse(input);
+    const row = this.database.raw.prepare(`
+      UPDATE prospects
+      SET qualification_state = ?, qualification_reason = ?,
+          version = version + 1, updated_at = ?
+      WHERE id = ? AND person_id = ? AND version = ? AND qualification_state = ?
+      RETURNING ${prospectColumns}
+    `).get(
+      parsed.nextState, parsed.reason, parsed.updatedAt, parsed.prospectId,
+      parsed.personId, parsed.expectedVersion, parsed.expectedState,
+    );
+    if (row === undefined) throw new StaleDomainWriteError();
+    return parseProspect(row);
   }
 }
 

@@ -62,3 +62,55 @@ export class ActivityMediaConsentError extends Error {
     this.name = 'ActivityMediaConsentError';
   }
 }
+
+export class StaleDomainWriteError extends Error {
+  constructor() {
+    super('The domain projection changed before this command could commit.');
+    this.name = 'StaleDomainWriteError';
+  }
+}
+
+export class LifecycleConflictError extends Error {
+  constructor(message = 'The lifecycle command conflicts with durable state.') {
+    super(message);
+    this.name = 'LifecycleConflictError';
+  }
+}
+
+export class LifecycleEligibilityError extends Error {
+  constructor(message = 'The lifecycle command is not eligible for this Person or Prospect.') {
+    super(message);
+    this.name = 'LifecycleEligibilityError';
+  }
+}
+
+export class LifecycleEvidenceError extends Error {
+  constructor(message = 'The lifecycle command lacks qualifying immutable evidence.') {
+    super(message);
+    this.name = 'LifecycleEvidenceError';
+  }
+}
+
+export class LifecycleIdempotencyConflictError extends Error {
+  constructor() {
+    super('The lifecycle idempotency key already exists for a different command.');
+    this.name = 'LifecycleIdempotencyConflictError';
+  }
+}
+
+export class OperationalCycleExistsError extends Error {
+  readonly personId: string;
+
+  constructor(personId: string) {
+    super('The Person already has an active or onboarding SalesCycle.');
+    this.name = 'OperationalCycleExistsError';
+    this.personId = personId;
+  }
+}
+
+export class LifecycleInvariantError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LifecycleInvariantError';
+  }
+}
