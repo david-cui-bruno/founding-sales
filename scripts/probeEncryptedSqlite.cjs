@@ -1,8 +1,5 @@
-const { app } = require('electron');
 const { readFileSync, rmSync } = require('node:fs');
 const { join } = require('node:path');
-const Database = require('better-sqlite3-multiple-ciphers');
-const { Kysely, SqliteDialect, sql } = require('kysely');
 
 const applyProfile = (database, keyHex) => {
   database.pragma("cipher='sqlcipher'");
@@ -16,10 +13,32 @@ const removeProbeFiles = (path) => {
   rmSync(`${path}-wal`, { force: true });
 };
 
-app
-  .whenReady()
-  .then(async () => {
-    const path = join(
+const probePassed = (report) =>
+  report !== null &&
+  typeof report === 'object' &&
+  report.packageVersion === '12.11.1' &&
+  report.electronVersion === '44.0.0' &&
+  report.platform === 'darwin' &&
+  report.architecture === 'arm64' &&
+  report.cipher === 'sqlcipher' &&
+  report.legacy === '4' &&
+  report.synchronousRow?.value === 'encrypted' &&
+  report.reopenedRow?.value === 'encrypted' &&
+  report.journalMode === 'wal' &&
+  report.ftsRow?.content === 'searchable encrypted content' &&
+  report.integrity === 'ok' &&
+  report.encryptedHeader === true &&
+  report.wrongKeyRejected === true;
+
+const runProbe = () => {
+  const { app } = require('electron');
+  const Database = require('better-sqlite3-multiple-ciphers');
+  const { version: packageVersion } = require('better-sqlite3-multiple-ciphers/package.json');
+  const { Kysely, SqliteDialect, sql } = require('kysely');
+
+  let path;
+  app.whenReady().then(async () => {
+    path = join(
       app.getPath('temp'),
       `callie-cipher-probe-${process.pid}.sqlite3`,
     );
@@ -29,6 +48,8 @@ app
 
     const database = new Database(path);
     applyProfile(database, key);
+    const cipher = database.pragma('cipher', { simple: true });
+    const legacy = database.pragma('legacy', { simple: true });
     const journalMode = database.pragma('journal_mode=WAL', { simple: true });
     database.exec('CREATE TABLE probe (id TEXT PRIMARY KEY, value TEXT NOT NULL)');
     database.exec('CREATE VIRTUAL TABLE probe_fts USING fts5(content)');
@@ -75,6 +96,12 @@ app
     }
 
     const report = {
+      packageVersion,
+      electronVersion: process.versions.electron,
+      platform: process.platform,
+      architecture: process.arch,
+      cipher,
+      legacy,
       synchronousRow: synchronousResult.rows[0],
       reopenedRow: reopenedResult.rows[0],
       journalMode,
@@ -83,20 +110,21 @@ app
       encryptedHeader: header !== 'SQLite format 3\u0000',
       wrongKeyRejected,
     };
-    const passed =
-      report.synchronousRow?.value === 'encrypted' &&
-      report.reopenedRow?.value === 'encrypted' &&
-      report.journalMode === 'wal' &&
-      report.ftsRow?.content === 'searchable encrypted content' &&
-      report.integrity === 'ok' &&
-      report.encryptedHeader &&
-      report.wrongKeyRejected;
 
     process.stdout.write(`${JSON.stringify(report)}\n`);
     removeProbeFiles(path);
-    app.exit(passed ? 0 : 1);
-  })
-  .catch((error) => {
+    app.exit(probePassed(report) ? 0 : 1);
+  }).catch((error) => {
+    if (path !== undefined) {
+      removeProbeFiles(path);
+    }
     process.stderr.write(`${error.stack ?? error.message}\n`);
     app.exit(1);
   });
+};
+
+module.exports = { probePassed };
+
+if (process.versions.electron !== undefined) {
+  runProbe();
+}
