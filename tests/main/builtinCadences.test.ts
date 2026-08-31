@@ -143,13 +143,15 @@ describe('built-in founder-sales cadence catalog', () => {
 
   it('rejects a self-consistent hash when channel or failure mechanics violate the graph contract', () => {
     const wrongFailure = structuredClone(BUILTIN_CADENCES[0]!);
-    wrongFailure.steps[0]!.components[0]!.outcomes.failed = { kind: 'complete_step' };
-    wrongFailure.contentHash = computeCadenceContentHash(wrongFailure);
+    (wrongFailure.steps[0]!.components[0]!.outcomes as Record<string, unknown>).failed = {
+      kind: 'complete_step',
+    };
+    (wrongFailure as { contentHash: string }).contentHash = computeCadenceContentHash(wrongFailure);
     expect(() => parseCadenceAggregate(wrongFailure)).toThrow();
 
     const wrongChannel = structuredClone(BUILTIN_CADENCES[0]!);
-    wrongChannel.steps[0]!.components[0]!.channel = 'email';
-    wrongChannel.contentHash = computeCadenceContentHash(wrongChannel);
+    (wrongChannel.steps[0]!.components[0] as { channel: string }).channel = 'email';
+    (wrongChannel as { contentHash: string }).contentHash = computeCadenceContentHash(wrongChannel);
     expect(() => parseCadenceAggregate(wrongChannel)).toThrow();
   });
 });

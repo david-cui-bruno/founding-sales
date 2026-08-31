@@ -11,13 +11,24 @@ export type ActivityKind =
   | 'job'
   | 'system';
 
-export type Activity = {
+type ActivityCadenceEvidence =
+  | {
+    salesCycleId: string | null;
+    cadenceEnrollmentId: null;
+    cadenceStepId: null;
+    cadenceComponentId: null;
+  }
+  | {
+    salesCycleId: string;
+    cadenceEnrollmentId: string;
+    cadenceStepId: string;
+    cadenceComponentId: string;
+  };
+
+export type Activity = ActivityCadenceEvidence & {
   id: string;
   personId: string;
   prospectId: string | null;
-  salesCycleId: string | null;
-  cadenceStepId: string | null;
-  cadenceComponentId: string | null;
   kind: ActivityKind;
   direction: 'inbound' | 'outbound' | 'internal';
   channel: string;
@@ -67,13 +78,24 @@ export type ConsentPolicyRecord = {
   createdAt: string;
 };
 
-export type AppendActivityInput = {
+type AppendActivityCadenceEvidence =
+  | {
+    salesCycleId?: string | null;
+    cadenceEnrollmentId?: null;
+    cadenceStepId?: null;
+    cadenceComponentId?: null;
+  }
+  | {
+    salesCycleId: string;
+    cadenceEnrollmentId: string;
+    cadenceStepId: string;
+    cadenceComponentId: string;
+  };
+
+export type AppendActivityInput = AppendActivityCadenceEvidence & {
   id?: string;
   personId: string;
   prospectId?: string | null;
-  salesCycleId?: string | null;
-  cadenceStepId?: string | null;
-  cadenceComponentId?: string | null;
   kind: ActivityKind;
   direction: 'inbound' | 'outbound' | 'internal';
   channel: string;

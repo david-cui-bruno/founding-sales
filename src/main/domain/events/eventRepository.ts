@@ -54,6 +54,7 @@ const appendActivityInputSchema = z.object({
   personId: idSchema,
   prospectId: idSchema.nullable().optional(),
   salesCycleId: idSchema.nullable().optional(),
+  cadenceEnrollmentId: idSchema.nullable().optional(),
   cadenceStepId: idSchema.nullable().optional(),
   cadenceComponentId: idSchema.nullable().optional(),
   kind: activityKindSchema,
@@ -77,11 +78,17 @@ const appendActivityInputSchema = z.object({
       path: ['providerIdempotencyKey'],
     });
   }
-  if ((value.cadenceStepId == null) !== (value.cadenceComponentId == null)) {
+  const cadenceEvidence = [
+    value.cadenceEnrollmentId,
+    value.cadenceStepId,
+    value.cadenceComponentId,
+  ];
+  const presentEvidence = cadenceEvidence.filter((item) => item != null).length;
+  if (presentEvidence !== 0 && (presentEvidence !== cadenceEvidence.length || value.salesCycleId == null)) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'Cadence Activity evidence requires both step and component IDs.',
-      path: ['cadenceComponentId'],
+      message: 'Cadence Activity evidence requires cycle, enrollment, step, and component IDs.',
+      path: ['cadenceEnrollmentId'],
     });
   }
 });
@@ -130,6 +137,7 @@ const storedActivityRowSchema = z.object({
   person_id: idSchema,
   prospect_id: idSchema.nullable(),
   sales_cycle_id: idSchema.nullable(),
+  cadence_enrollment_id: idSchema.nullable(),
   cadence_step_id: idSchema.nullable(),
   cadence_component_id: idSchema.nullable(),
   kind: activityKindSchema,
@@ -147,11 +155,17 @@ const storedActivityRowSchema = z.object({
   metadata_json: jsonTextSchema,
   created_at: utcTimestampSchema,
 }).strict().superRefine((value, context) => {
-  if ((value.cadence_step_id === null) !== (value.cadence_component_id === null)) {
+  const cadenceEvidence = [
+    value.cadence_enrollment_id,
+    value.cadence_step_id,
+    value.cadence_component_id,
+  ];
+  const presentEvidence = cadenceEvidence.filter((item) => item !== null).length;
+  if (presentEvidence !== 0 && (presentEvidence !== cadenceEvidence.length || value.sales_cycle_id === null)) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'Stored cadence evidence must pair step and component IDs.',
-      path: ['cadence_component_id'],
+      message: 'Stored cadence evidence must include cycle, enrollment, step, and component IDs.',
+      path: ['cadence_enrollment_id'],
     });
   }
 });
@@ -207,7 +221,8 @@ const storedMediaConsentRowSchema = z.object({
 }).strict();
 
 const activityColumns = `
-  id, person_id, prospect_id, sales_cycle_id, cadence_step_id, cadence_component_id,
+  id, person_id, prospect_id, sales_cycle_id, cadence_enrollment_id,
+  cadence_step_id, cadence_component_id,
   kind, direction,
   channel, occurred_at, duration_seconds, observed_outcome, adapter,
   provider_idempotency_key, provider_reference, consent_policy_record_id,
@@ -268,8 +283,10 @@ export class EventRepository {
           canonical.personId !== parsed.personId
           || canonical.prospectId !== (parsed.prospectId ?? null)
           || canonical.salesCycleId !== (parsed.salesCycleId ?? null)
+          || canonical.cadenceEnrollmentId !== (parsed.cadenceEnrollmentId ?? null)
           || canonical.cadenceStepId !== (parsed.cadenceStepId ?? null)
           || canonical.cadenceComponentId !== (parsed.cadenceComponentId ?? null)
+          || (parsed.cadenceEnrollmentId != null && canonical.channel !== parsed.channel)
         ) {
           throw new IdempotencyOwnershipConflictError(adapter, providerKey);
         }
@@ -303,19 +320,20 @@ export class EventRepository {
     }
     const row = this.database.raw.prepare(`
       INSERT INTO activities (
-        id, person_id, prospect_id, sales_cycle_id, cadence_step_id,
-        cadence_component_id, kind,
+        id, person_id, prospect_id, sales_cycle_id, cadence_enrollment_id,
+        cadence_step_id, cadence_component_id, kind,
         direction, channel, occurred_at, duration_seconds, observed_outcome,
         adapter, provider_idempotency_key, provider_reference,
         consent_policy_record_id, recording_storage_ref, transcript_storage_ref,
         metadata_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING ${activityColumns}
     `).get(
       id,
       parsed.personId,
       parsed.prospectId ?? null,
       parsed.salesCycleId ?? null,
+      parsed.cadenceEnrollmentId ?? null,
       parsed.cadenceStepId ?? null,
       parsed.cadenceComponentId ?? null,
       parsed.kind,
@@ -473,6 +491,7 @@ function parseActivity(value: unknown): Activity {
     personId: row.person_id,
     prospectId: row.prospect_id,
     salesCycleId: row.sales_cycle_id,
+    cadenceEnrollmentId: row.cadence_enrollment_id,
     cadenceStepId: row.cadence_step_id,
     cadenceComponentId: row.cadence_component_id,
     kind: row.kind,
@@ -489,7 +508,7 @@ function parseActivity(value: unknown): Activity {
     transcriptStorageRef: row.transcript_storage_ref,
     metadata: row.metadata_json,
     createdAt: row.created_at,
-  };
+  } as Activity;
 }
 
 function parseActivityAmendment(value: unknown): ActivityAmendment {

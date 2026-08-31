@@ -7,21 +7,21 @@ import type {
 type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 export type ChannelPolicyWindow = {
-  days: readonly Weekday[];
-  startMinute: number;
-  endMinute: number;
-  label: string;
+  readonly days: readonly Weekday[];
+  readonly startMinute: number;
+  readonly endMinute: number;
+  readonly label: string;
 };
 
 export type ChannelPolicySnapshot = {
-  id: string;
-  windows: readonly ChannelPolicyWindow[];
+  readonly id: string;
+  readonly windows: readonly ChannelPolicyWindow[];
 };
 
 export type ChannelPolicySnapshots = {
-  call: ChannelPolicySnapshot;
-  text: ChannelPolicySnapshot;
-  email: ChannelPolicySnapshot;
+  readonly call: ChannelPolicySnapshot;
+  readonly text: ChannelPolicySnapshot;
+  readonly email: ChannelPolicySnapshot;
 };
 
 export type ScheduleComponentInput = {
@@ -43,7 +43,7 @@ export type ScheduledComponent = {
 
 const mondayToSaturday = [1, 2, 3, 4, 5, 6] as const;
 
-export const FOUNDER_CHANNEL_POLICIES_V1: ChannelPolicySnapshots = Object.freeze({
+export const FOUNDER_CHANNEL_POLICIES_V1: ChannelPolicySnapshots = deepFreeze({
   call: {
     id: 'founder_call_v1',
     windows: [
@@ -68,6 +68,14 @@ export const FOUNDER_CHANNEL_POLICIES_V1: ChannelPolicySnapshots = Object.freeze
     ],
   },
 });
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
 
 type LocalDate = { year: number; month: number; day: number };
 type LocalDateTime = LocalDate & { hour: number; minute: number; second: number; millisecond: number };

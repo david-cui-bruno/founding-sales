@@ -219,6 +219,7 @@ export type ActivitiesTable = {
   person_id: string;
   prospect_id: string | null;
   sales_cycle_id: string | null;
+  cadence_enrollment_id: string | null;
   cadence_step_id: string | null;
   cadence_component_id: string | null;
   kind: string;

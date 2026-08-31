@@ -348,6 +348,7 @@ const domainStatements = [
     person_id TEXT NOT NULL REFERENCES persons(id),
     prospect_id TEXT,
     sales_cycle_id TEXT,
+    cadence_enrollment_id TEXT,
     cadence_step_id TEXT REFERENCES cadence_steps(id),
     cadence_component_id TEXT,
     kind TEXT NOT NULL,
@@ -368,6 +369,8 @@ const domainStatements = [
     UNIQUE (id, sales_cycle_id),
     FOREIGN KEY (prospect_id, person_id) REFERENCES prospects(id, person_id),
     FOREIGN KEY (sales_cycle_id, person_id) REFERENCES sales_cycles(id, person_id),
+    FOREIGN KEY (cadence_enrollment_id, sales_cycle_id)
+      REFERENCES cadence_enrollments(id, sales_cycle_id),
     FOREIGN KEY (consent_policy_record_id, person_id)
       REFERENCES consent_policy_records(id, person_id) DEFERRABLE INITIALLY DEFERRED,
     FOREIGN KEY (cadence_component_id, cadence_step_id)
@@ -378,8 +381,17 @@ const domainStatements = [
       OR consent_policy_record_id IS NOT NULL
     ),
     CHECK (
-      (cadence_step_id IS NULL AND cadence_component_id IS NULL)
-      OR (cadence_step_id IS NOT NULL AND cadence_component_id IS NOT NULL)
+      (
+        cadence_enrollment_id IS NULL
+        AND cadence_step_id IS NULL
+        AND cadence_component_id IS NULL
+      )
+      OR (
+        sales_cycle_id IS NOT NULL
+        AND cadence_enrollment_id IS NOT NULL
+        AND cadence_step_id IS NOT NULL
+        AND cadence_component_id IS NOT NULL
+      )
     )
   )`,
   `CREATE UNIQUE INDEX activities_provider_idempotency_idx
@@ -680,6 +692,19 @@ const domainStatements = [
     BEGIN
       SELECT RAISE(ABORT, 'cadence enrollment step must belong to its definition');
     END`,
+  `CREATE TRIGGER protect_cadence_enrollment_identity
+    BEFORE UPDATE OF sales_cycle_id, cadence_definition_id, anchor_at ON cadence_enrollments
+    WHEN NEW.sales_cycle_id IS NOT OLD.sales_cycle_id
+      OR NEW.cadence_definition_id IS NOT OLD.cadence_definition_id
+      OR NEW.anchor_at IS NOT OLD.anchor_at
+    BEGIN
+      SELECT RAISE(ABORT, 'cadence enrollment ownership and anchor are immutable');
+    END`,
+  `CREATE TRIGGER protect_cadence_enrollment_delete
+    BEFORE DELETE ON cadence_enrollments
+    BEGIN
+      SELECT RAISE(ABORT, 'cadence enrollments are retained permanently');
+    END`,
   `CREATE TRIGGER protect_next_action_cadence_insert
     BEFORE INSERT ON next_actions
     WHEN NEW.cadence_enrollment_id IS NOT NULL
@@ -716,6 +741,45 @@ const domainStatements = [
       )
     BEGIN
       SELECT RAISE(ABORT, 'next action cadence references must share one owner graph');
+    END`,
+  `CREATE TRIGGER protect_activity_cadence_insert
+    BEFORE INSERT ON activities
+    WHEN NEW.cadence_enrollment_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM cadence_enrollments AS enrollment
+        JOIN cadence_steps AS step
+          ON step.id = NEW.cadence_step_id
+         AND step.cadence_definition_id = enrollment.cadence_definition_id
+        JOIN cadence_action_components AS component
+          ON component.id = NEW.cadence_component_id
+         AND component.cadence_step_id = step.id
+         AND component.channel = NEW.channel
+        WHERE enrollment.id = NEW.cadence_enrollment_id
+          AND enrollment.sales_cycle_id = NEW.sales_cycle_id
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'Activity cadence evidence must share one owner graph and channel');
+    END`,
+  `CREATE TRIGGER protect_activity_cadence_update
+    BEFORE UPDATE OF sales_cycle_id, cadence_enrollment_id, cadence_step_id,
+      cadence_component_id, channel ON activities
+    WHEN NEW.cadence_enrollment_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM cadence_enrollments AS enrollment
+        JOIN cadence_steps AS step
+          ON step.id = NEW.cadence_step_id
+         AND step.cadence_definition_id = enrollment.cadence_definition_id
+        JOIN cadence_action_components AS component
+          ON component.id = NEW.cadence_component_id
+         AND component.cadence_step_id = step.id
+         AND component.channel = NEW.channel
+        WHERE enrollment.id = NEW.cadence_enrollment_id
+          AND enrollment.sales_cycle_id = NEW.sales_cycle_id
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'Activity cadence evidence must share one owner graph and channel');
     END`,
   `CREATE TRIGGER protect_prospect_original_source
     BEFORE UPDATE OF original_source_event_id ON prospects

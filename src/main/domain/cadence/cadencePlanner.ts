@@ -4,6 +4,7 @@ import {
   scheduleComponent,
   type ChannelPolicySnapshots,
 } from './cadenceScheduler';
+import { parseCadenceAggregate } from './cadenceTypes';
 import type {
   CadenceActionComponent,
   CadenceAggregate,
@@ -170,9 +171,10 @@ export type CadenceUpgradePlan =
   };
 
 export function planCadenceStart(input: CadenceStartInput): TransitionRecipe {
+  input = { ...input, definition: parseCadenceAggregate(input.definition) };
   validatePlanningContext(input);
   assertCanonicalInstant(input.anchorAt, 'anchorAt');
-  const eligibleSteps = eligibleStepsForStart(input);
+  const eligibleSteps = validateAllowedPlan(input, 'start');
   const firstStep = eligibleSteps[0];
   if (firstStep === undefined) throw new CadencePlanningError('No cadence step is eligible to start.');
   const firstComponent = firstStep.components[0]!;
@@ -185,11 +187,18 @@ export function planCadenceStart(input: CadenceStartInput): TransitionRecipe {
 }
 
 export function planActionOutcome(input: CadenceOutcomeInput): TransitionRecipe {
+  input = { ...input, definition: parseCadenceAggregate(input.definition) };
   validatePlanningContext(input);
   if (input.salesCycleId.trim().length === 0) throw new CadencePlanningError('SalesCycle ID is required.');
   if (input.enrollment.definitionId !== input.definition.id || input.enrollment.status !== 'active') {
     throw new CadencePlanningError('The active enrollment does not match the cadence definition.');
   }
+  validateAllowedPlan({
+    ...input,
+    mode: input.enrollment.mode,
+    allowedStepIds: input.enrollment.allowedStepIds,
+    currentStepId: input.enrollment.currentStepId,
+  }, 'outcome');
   const step = requireStep(input.definition, input.enrollment.currentStepId);
   const componentId = input.action.kind === 'component'
     ? input.action.componentId
@@ -251,6 +260,11 @@ export function planActionOutcome(input: CadenceOutcomeInput): TransitionRecipe 
 }
 
 export function planCadenceUpgrade(input: CadenceUpgradeInput): CadenceUpgradePlan {
+  input = {
+    ...input,
+    oldDefinition: parseCadenceAggregate(input.oldDefinition),
+    newDefinition: parseCadenceAggregate(input.newDefinition),
+  };
   validatePlanningContext(input);
   assertCanonicalInstant(input.anchorAt, 'anchorAt');
   const preservedActivityIds = validateEvidenceIds(input.completedActivityIds);
@@ -538,25 +552,75 @@ function nextStepAfter(input: CadenceOutcomeInput, currentStep: CadenceStep): Ca
   return allowed[currentIndex + 1] ?? null;
 }
 
-function eligibleStepsForStart(input: CadenceStartInput): CadenceStep[] {
-  if (input.allowedStepIds !== null) {
-    const unique = new Set(input.allowedStepIds);
-    if (unique.size !== input.allowedStepIds.length) {
-      throw new CadencePlanningError('Allowed cadence steps must be unique.');
+function validateAllowedPlan(
+  input: PlanningContext & {
+    definition: CadenceAggregate;
+    mode: CadenceEnrollmentState['mode'];
+    allowedStepIds: readonly string[] | null;
+    currentStepId?: string;
+  },
+  phase: 'start' | 'outcome',
+): CadenceStep[] {
+  const explicit = input.allowedStepIds;
+  const allowed = explicit === null
+    ? [...input.definition.steps]
+    : explicit.map((id) => requireStep(input.definition, id));
+  if (allowed.length === 0) throw new CadencePlanningError('The allowed cadence plan cannot be empty.');
+
+  const definitionPositions = new Map(input.definition.steps.map((step, index) => [step.id, index]));
+  const positions = allowed.map((step) => definitionPositions.get(step.id)!);
+  if (new Set(positions).size !== positions.length
+    || positions.some((position, index) => index > 0 && position <= positions[index - 1]!)) {
+    throw new CadencePlanningError('Allowed cadence steps must be an ordered definition subsequence.');
+  }
+
+  if (input.mode === 'inbound_over_cap_response') {
+    const firstStep = input.definition.steps[0];
+    const expectedTotal = phase === 'start'
+      ? input.highestProspectingAttemptCap
+      : input.highestProspectingAttemptCap + 1;
+    if (input.definition.category !== 'prospecting'
+      || explicit === null
+      || allowed.length !== 1
+      || firstStep === undefined
+      || allowed[0]?.id !== firstStep.id
+      || input.totalProspectingScheduledSteps !== expectedTotal
+      || (phase === 'outcome' && input.currentStepId !== firstStep.id)) {
+      throw new CadencePlanningError(
+        'An over-cap inbound response permits exactly its first trigger-response step.',
+      );
     }
-    return input.allowedStepIds.map((id) => requireStep(input.definition, id));
+    return allowed;
   }
-  if (input.definition.category !== 'prospecting' || input.mode === 'inbound_over_cap_response') {
-    return [...input.definition.steps];
-  }
+
+  if (input.definition.category !== 'prospecting') return allowed;
   const remaining = input.highestProspectingAttemptCap - input.totalProspectingScheduledSteps;
-  if (remaining <= 0) throw new CadencePlanningError('The prospecting step cap is exhausted.');
-  if (remaining === 1) {
-    const breakup = input.definition.steps.find(({ breakup: isBreakup }) => isBreakup);
+  if (remaining < 0 || (phase === 'start' && remaining === 0)) {
+    throw new CadencePlanningError('The prospecting step cap is exhausted.');
+  }
+  if (explicit !== null) {
+    if (allowed.at(-1)?.breakup !== true) {
+      throw new CadencePlanningError('A standard prospecting plan must end with breakup.');
+    }
+    if (phase === 'start' && allowed.length > remaining) {
+      throw new CadencePlanningError('The allowed cadence plan exceeds the remaining cap.');
+    }
+    if (phase === 'outcome') {
+      const currentIndex = allowed.findIndex(({ id }) => id === input.currentStepId);
+      if (currentIndex < 0) {
+        throw new CadencePlanningError('The current step is absent from the allowed plan.');
+      }
+      if (allowed.length - currentIndex - 1 > remaining) {
+        throw new CadencePlanningError('The persisted cadence plan exceeds the remaining cap.');
+      }
+    }
+  }
+  if (phase === 'start' && explicit === null && remaining === 1) {
+    const breakup = allowed.find(({ breakup: isBreakup }) => isBreakup);
     if (breakup === undefined) throw new CadencePlanningError('The last prospecting slot requires breakup.');
     return [breakup];
   }
-  return [...input.definition.steps];
+  return allowed;
 }
 
 function createInstruction(

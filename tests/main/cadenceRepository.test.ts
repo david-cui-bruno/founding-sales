@@ -87,6 +87,33 @@ describe('CadenceRepository', () => {
       .toEqual({ count: 34 });
   });
 
+  it('returns recursively frozen catalog aggregates from every read path', async () => {
+    const { repository, unitOfWork } = await setup();
+    const installed = unitOfWork.immediate(() => repository.installBuiltins());
+    const listed = repository.list();
+    expect(Object.isFrozen(installed)).toBe(true);
+    expect(Object.isFrozen(listed)).toBe(true);
+    expect(() => (listed as unknown[]).push(BUILTIN_CADENCES[0]!)).toThrow();
+    const reads = [
+      ...installed,
+      ...listed,
+      repository.getById('cadence-a-v1')!,
+      repository.getByFamilyVersion('cadence_a', 1)!,
+    ];
+    for (const definition of reads) {
+      expect(Object.isFrozen(definition)).toBe(true);
+      expect(Object.isFrozen(definition.policyIds)).toBe(true);
+      expect(Object.isFrozen(definition.steps)).toBe(true);
+      expect(Object.isFrozen(definition.steps[0])).toBe(true);
+      expect(Object.isFrozen(definition.steps[0]!.components)).toBe(true);
+      expect(Object.isFrozen(definition.steps[0]!.components[0]!.outcomes)).toBe(true);
+      expect(Object.isFrozen(definition.steps[0]!.components[0]!.template)).toBe(true);
+      expect(() => {
+        (definition.steps[0]!.components[0]!.template as { body: string }).body = 'mutated';
+      }).toThrow();
+    }
+  });
+
   it('returns the parsed existing aggregate on exact reinstall without reading the clock', async () => {
     const { repository, unitOfWork, clockReads } = await setup();
     const original = unitOfWork.immediate(() => repository.install(BUILTIN_CADENCES[0]!));
@@ -102,8 +129,9 @@ describe('CadenceRepository', () => {
     const { repository, unitOfWork } = await setup();
     unitOfWork.immediate(() => repository.install(BUILTIN_CADENCES[0]!));
     const edited = structuredClone(BUILTIN_CADENCES[0]!);
-    edited.steps[2]!.components[0]!.template.body = 'Edited without a new version.';
-    edited.contentHash = computeCadenceContentHash(edited);
+    (edited.steps[2]!.components[0]!.template as { body: string }).body =
+      'Edited without a new version.';
+    (edited as { contentHash: string }).contentHash = computeCadenceContentHash(edited);
     expect(parseCadenceAggregate(edited).contentHash).toBe(edited.contentHash);
     expect(() => unitOfWork.immediate(() => repository.install(edited)))
       .toThrow(CadenceVersionConflictError);
@@ -114,8 +142,8 @@ describe('CadenceRepository', () => {
     const { repository, unitOfWork } = await setup();
     unitOfWork.immediate(() => repository.install(BUILTIN_CADENCES[0]!));
     const idCollision = structuredClone(BUILTIN_CADENCES[1]!);
-    idCollision.id = BUILTIN_CADENCES[0]!.id;
-    idCollision.contentHash = computeCadenceContentHash(idCollision);
+    (idCollision as { id: string }).id = BUILTIN_CADENCES[0]!.id;
+    (idCollision as { contentHash: string }).contentHash = computeCadenceContentHash(idCollision);
     expect(() => unitOfWork.immediate(() => repository.install(idCollision))).toThrow();
   });
 

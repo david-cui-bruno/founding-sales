@@ -81,7 +81,7 @@ describe('EventRepository', () => {
       providerReference: 'call-1',
       metadata: { initiatedBy: 'founder' },
       ...overrides,
-    };
+    } as unknown as AppendActivityInput & Record<string, unknown>;
   }
 
   it('appends and parses an immutable Activity', async () => {
@@ -94,6 +94,7 @@ describe('EventRepository', () => {
       personId: first.personId,
       prospectId: first.prospectId,
       salesCycleId: firstCycleId,
+      cadenceEnrollmentId: null,
       cadenceStepId: null,
       cadenceComponentId: null,
       kind: 'call',
@@ -137,14 +138,30 @@ describe('EventRepository', () => {
         ) VALUES (?, ?, 0, 'call', 'phone', '{}', ?)
       `).run(`activity-component-${suffix}`, `activity-step-${suffix}`, TIMESTAMP);
     }
+    database!.raw.prepare(`
+      INSERT INTO cadence_enrollments (
+        id, sales_cycle_id, cadence_definition_id, status, anchor_at,
+        current_step_id, scheduled_step_count, stop_reason, created_at, updated_at
+      ) VALUES ('activity-enrollment-one', ?, 'activity-cadence', 'stopped', ?,
+                'activity-step-one', 1, 'test', ?, ?)
+    `).run(firstCycleId, TIMESTAMP, TIMESTAMP, TIMESTAMP);
+    database!.raw.prepare(`
+      INSERT INTO cadence_enrollments (
+        id, sales_cycle_id, cadence_definition_id, status, anchor_at,
+        current_step_id, scheduled_step_count, stop_reason, created_at, updated_at
+      ) VALUES ('activity-enrollment-two', ?, 'activity-cadence', 'stopped', ?,
+                'activity-step-two', 1, 'test', ?, ?)
+    `).run(secondCycleId, TIMESTAMP, TIMESTAMP, TIMESTAMP);
 
     const activity = unitOfWork.immediate(() => events.appendActivity(activityInput({
       id: 'cadence-activity',
       providerIdempotencyKey: 'cadence-activity',
+      cadenceEnrollmentId: 'activity-enrollment-one',
       cadenceStepId: 'activity-step-one',
       cadenceComponentId: 'activity-component-one',
     })));
     expect(activity).toMatchObject({
+      cadenceEnrollmentId: 'activity-enrollment-one',
       cadenceStepId: 'activity-step-one',
       cadenceComponentId: 'activity-component-one',
     });
@@ -153,6 +170,7 @@ describe('EventRepository', () => {
     expect(unitOfWork.immediate(() => events.appendActivity(activityInput({
       id: 'cadence-activity-exact-replay-id',
       providerIdempotencyKey: 'cadence-activity',
+      cadenceEnrollmentId: 'activity-enrollment-one',
       cadenceStepId: 'activity-step-one',
       cadenceComponentId: 'activity-component-one',
     })))).toEqual(activity);
@@ -160,6 +178,7 @@ describe('EventRepository', () => {
     expect(() => unitOfWork.immediate(() => events.appendActivity(activityInput({
       id: 'cadence-activity-replay-id',
       providerIdempotencyKey: 'cadence-activity',
+      cadenceEnrollmentId: 'activity-enrollment-two',
       cadenceStepId: 'activity-step-two',
       cadenceComponentId: 'activity-component-two',
     })))).toThrow(IdempotencyOwnershipConflictError);
@@ -167,14 +186,47 @@ describe('EventRepository', () => {
     expect(() => unitOfWork.immediate(() => events.appendActivity(activityInput({
       id: 'cross-step-cadence-activity',
       providerIdempotencyKey: 'cross-step-cadence-activity',
+      cadenceEnrollmentId: 'activity-enrollment-one',
       cadenceStepId: 'activity-step-one',
       cadenceComponentId: 'activity-component-two',
     })))).toThrow();
     expect(() => unitOfWork.immediate(() => events.appendActivity(activityInput({
       id: 'partial-cadence-activity',
       providerIdempotencyKey: 'partial-cadence-activity',
+      cadenceEnrollmentId: null,
       cadenceStepId: 'activity-step-one',
       cadenceComponentId: null,
+    })))).toThrow();
+    expect(() => unitOfWork.immediate(() => events.appendActivity(activityInput({
+      id: 'missing-enrollment-activity',
+      providerIdempotencyKey: 'missing-enrollment-activity',
+      cadenceEnrollmentId: null,
+      cadenceStepId: 'activity-step-one',
+      cadenceComponentId: 'activity-component-one',
+    })))).toThrow();
+    expect(() => unitOfWork.immediate(() => events.appendActivity(activityInput({
+      id: 'wrong-channel-activity',
+      providerIdempotencyKey: 'wrong-channel-activity',
+      cadenceEnrollmentId: 'activity-enrollment-one',
+      cadenceStepId: 'activity-step-one',
+      cadenceComponentId: 'activity-component-one',
+      channel: 'email',
+    })))).toThrow();
+    expect(() => unitOfWork.immediate(() => events.appendActivity(activityInput({
+      id: 'wrong-channel-replay',
+      providerIdempotencyKey: 'cadence-activity',
+      cadenceEnrollmentId: 'activity-enrollment-one',
+      cadenceStepId: 'activity-step-one',
+      cadenceComponentId: 'activity-component-one',
+      channel: 'email',
+    })))).toThrow(IdempotencyOwnershipConflictError);
+    expect(() => unitOfWork.immediate(() => events.appendActivity(activityInput({
+      id: 'missing-cycle-cadence-activity',
+      providerIdempotencyKey: 'missing-cycle-cadence-activity',
+      salesCycleId: null,
+      cadenceEnrollmentId: 'activity-enrollment-one',
+      cadenceStepId: 'activity-step-one',
+      cadenceComponentId: 'activity-component-one',
     })))).toThrow();
   });
 

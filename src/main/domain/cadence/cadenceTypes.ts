@@ -2,6 +2,12 @@ import { createHash } from 'node:crypto';
 
 import { z } from 'zod';
 
+export type DeepReadonly<T> = T extends readonly (infer Item)[]
+  ? readonly DeepReadonly<Item>[]
+  : T extends object
+    ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+    : T;
+
 export const cadenceFamilySchema = z.enum([
   'cadence_a', 'cadence_b', 'cadence_c', 'post_interview', 'post_offer', 'onboarding',
 ]);
@@ -30,21 +36,21 @@ const transitionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('resolve_contact_method'), componentId: idSchema }).strict(),
   z.object({ kind: z.literal('stop'), reason: z.enum(['replied', 'opted_out']) }).strict(),
 ]);
-export type CadenceOutcomeTransition = z.infer<typeof transitionSchema>;
+export type CadenceOutcomeTransition = DeepReadonly<z.infer<typeof transitionSchema>>;
 
 const templateSchema = z.object({
   id: idSchema,
   version: z.number().int().positive(),
   body: textSchema,
 }).strict();
-export type CadenceTemplate = z.infer<typeof templateSchema>;
+export type CadenceTemplate = DeepReadonly<z.infer<typeof templateSchema>>;
 
 const timingSchema = z.object({
   kind: z.enum(['immediate', 'policy_window']),
   differentCallWindow: z.boolean(),
   finalSlaDayOffset: z.number().int().nonnegative().nullable(),
 }).strict();
-export type CadenceTimingRule = z.infer<typeof timingSchema>;
+export type CadenceTimingRule = DeepReadonly<z.infer<typeof timingSchema>>;
 
 const componentSchema = z.object({
   id: idSchema,
@@ -56,7 +62,7 @@ const componentSchema = z.object({
   outcomes: z.partialRecord(cadenceOutcomeSchema, transitionSchema),
   template: templateSchema,
 }).strict();
-export type CadenceActionComponent = z.infer<typeof componentSchema>;
+export type CadenceActionComponent = DeepReadonly<z.infer<typeof componentSchema>>;
 
 const stepSchema = z.object({
   id: idSchema,
@@ -67,7 +73,7 @@ const stepSchema = z.object({
   timing: timingSchema,
   components: z.array(componentSchema).min(1),
 }).strict();
-export type CadenceStep = z.infer<typeof stepSchema>;
+export type CadenceStep = DeepReadonly<z.infer<typeof stepSchema>>;
 
 const aggregateSchema = z.object({
   id: idSchema,
@@ -84,8 +90,9 @@ const aggregateSchema = z.object({
   steps: z.array(stepSchema).min(1),
   contentHash: contentHashSchema,
 }).strict();
-export type CadenceAggregate = z.infer<typeof aggregateSchema>;
-export type CadenceAggregateDraft = Omit<CadenceAggregate, 'contentHash'>;
+type CadenceAggregateShape = z.infer<typeof aggregateSchema>;
+export type CadenceAggregate = DeepReadonly<CadenceAggregateShape>;
+export type CadenceAggregateDraft = DeepReadonly<Omit<CadenceAggregateShape, 'contentHash'>>;
 
 export const ACTION_OUTCOMES = {
   call: ['answered', 'no_answer', 'failed', 'opted_out', 'channel_unavailable'],
@@ -113,7 +120,7 @@ export function parseCadenceAggregate(input: unknown): CadenceAggregate {
   if (computeCadenceContentHash(parsed) !== parsed.contentHash) {
     throw new Error('Cadence content hash does not match the canonical aggregate.');
   }
-  return parsed;
+  return deepFreeze(parsed);
 }
 
 export function computeCadenceContentHash(
@@ -128,7 +135,7 @@ export function canonicalJson(input: unknown): string {
   return JSON.stringify(canonicalize(input));
 }
 
-function parseCadenceStructure(input: unknown): CadenceAggregate {
+function parseCadenceStructure(input: unknown): CadenceAggregateShape {
   const parsed = aggregateSchema.parse(input);
   const stepIds = new Set<string>();
   const componentPositions = new Map<string, readonly [number, number]>();
@@ -202,6 +209,14 @@ function parseCadenceStructure(input: unknown): CadenceAggregate {
     throw new Error('This cadence does not permit a breakup step.');
   }
   return parsed;
+}
+
+function deepFreeze<T>(value: T): DeepReadonly<T> {
+  if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value as DeepReadonly<T>;
 }
 
 function comparePosition(left: readonly [number, number], right: readonly [number, number]): number {

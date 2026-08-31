@@ -255,6 +255,93 @@ describe('pure cadence planning', () => {
     });
   });
 
+  it('rejects reordered, truncated, and over-cap standard prospecting plans at start', () => {
+    const breakupId = cadenceA.steps.at(-1)!.id;
+    expect(() => start(cadenceA, {
+      allowedStepIds: [cadenceA.steps[2]!.id, cadenceA.steps[1]!.id, breakupId],
+    })).toThrow();
+    expect(() => start(cadenceA, {
+      allowedStepIds: [cadenceA.steps[2]!.id],
+    })).toThrow();
+    expect(() => start(cadenceA, {
+      allowedStepIds: [cadenceA.steps[2]!.id, breakupId],
+      totalProspectingScheduledSteps: 7,
+      highestProspectingAttemptCap: 8,
+    })).toThrow();
+  });
+
+  it('rejects forged persisted prospecting plans before applying an outcome', () => {
+    const first = cadenceA.steps[0]!;
+    const acceptedLastComponent = first.components.at(-1)!;
+    const common = {
+      action: { kind: 'component' as const, componentId: acceptedLastComponent.id },
+      outcome: 'accepted' as const,
+    };
+    expect(() => outcome({
+      ...common,
+      enrollment: {
+        definitionId: cadenceA.id, anchorAt: evaluationAt,
+        currentStepId: first.id, scheduledStepCount: 1,
+        status: 'active', mode: 'standard', allowedStepIds: [first.id],
+      },
+    })).toThrow();
+    expect(() => outcome({
+      ...common,
+      enrollment: {
+        definitionId: cadenceA.id, anchorAt: evaluationAt,
+        currentStepId: first.id, scheduledStepCount: 1,
+        status: 'active', mode: 'standard',
+        allowedStepIds: [cadenceA.steps[1]!.id, first.id, cadenceA.steps.at(-1)!.id],
+      },
+    })).toThrow();
+    expect(() => outcome({
+      ...common,
+      totalProspectingScheduledSteps: 7,
+      enrollment: {
+        definitionId: cadenceA.id, anchorAt: evaluationAt,
+        currentStepId: first.id, scheduledStepCount: 1,
+        status: 'active', mode: 'standard',
+        allowedStepIds: [first.id, cadenceA.steps[1]!.id, cadenceA.steps.at(-1)!.id],
+      },
+    })).toThrow();
+  });
+
+  it('permits exactly the first trigger-response step for an exhausted over-cap plan', () => {
+    expect(() => start(cadenceC, {
+      mode: 'inbound_over_cap_response',
+      allowedStepIds: [cadenceC.steps[1]!.id],
+      totalProspectingScheduledSteps: 4,
+      highestProspectingAttemptCap: 4,
+    })).toThrow();
+    expect(() => start(cadenceC, {
+      mode: 'inbound_over_cap_response',
+      allowedStepIds: [cadenceC.steps[0]!.id, cadenceC.steps[1]!.id],
+      totalProspectingScheduledSteps: 4,
+      highestProspectingAttemptCap: 4,
+    })).toThrow();
+    expect(() => start(cadenceC, {
+      mode: 'inbound_over_cap_response',
+      allowedStepIds: [cadenceC.steps[0]!.id],
+      totalProspectingScheduledSteps: 3,
+      highestProspectingAttemptCap: 4,
+    })).toThrow();
+    expect(() => planActionOutcome({
+      salesCycleId: 'cycle-forged-over-cap',
+      definition: cadenceC,
+      enrollment: {
+        definitionId: cadenceC.id, anchorAt: evaluationAt,
+        currentStepId: cadenceC.steps[1]!.id, scheduledStepCount: 1,
+        status: 'active', mode: 'inbound_over_cap_response',
+        allowedStepIds: [cadenceC.steps[1]!.id],
+      },
+      action: { kind: 'component', componentId: cadenceC.steps[1]!.components[0]!.id },
+      outcome: 'answered', evaluationAt, timezone: 'America/New_York',
+      policies: FOUNDER_CHANNEL_POLICIES_V1, priorCallWindow: null,
+      totalProspectingScheduledSteps: 5, highestProspectingAttemptCap: 4,
+      impossibleDisposition: null,
+    })).toThrow();
+  });
+
   it('plans B→A and A/B→C upgrades without downgrades or duplicate first channels', () => {
     const common = {
       oldEnrollmentId: 'old-enrollment',
@@ -487,5 +574,37 @@ describe('pure cadence planning', () => {
     const second = JSON.stringify(planCadenceStart(input));
     expect(JSON.stringify(input)).toBe(before);
     expect(second).toBe(first);
+  });
+
+  it('revalidates cloned and cast cadence aggregates at every public planning boundary', () => {
+    const corruptedA = structuredClone(cadenceA);
+    (corruptedA.steps[0]!.components[0]!.template as { body: string }).body =
+      'hash-breaking clone mutation';
+    expect(() => start(corruptedA)).toThrow();
+    expect(() => outcome({ definition: corruptedA })).toThrow();
+
+    const corruptedB = structuredClone(cadenceB);
+    (corruptedB.steps[0]!.components[0]!.template as { body: string }).body =
+      'hash-breaking old definition';
+    expect(() => planCadenceUpgrade({
+      oldEnrollmentId: 'old', oldDefinition: corruptedB, newDefinition: cadenceA,
+      trigger: 'live_vacancy', anchorAt: evaluationAt, evaluationAt,
+      timezone: 'America/New_York', policies: FOUNDER_CHANNEL_POLICIES_V1,
+      priorCallWindow: null, totalProspectingScheduledSteps: 1,
+      highestProspectingAttemptCap: 6, lastCompletedChannel: 'phone',
+      completedActivityIds: [],
+    })).toThrow();
+
+    const corruptedC = structuredClone(cadenceC);
+    (corruptedC.steps[0]!.components[0]!.template as { body: string }).body =
+      'hash-breaking new definition';
+    expect(() => planCadenceUpgrade({
+      oldEnrollmentId: 'old', oldDefinition: cadenceA, newDefinition: corruptedC,
+      trigger: 'inbound_demo', anchorAt: evaluationAt, evaluationAt,
+      timezone: 'America/New_York', policies: FOUNDER_CHANNEL_POLICIES_V1,
+      priorCallWindow: null, totalProspectingScheduledSteps: 1,
+      highestProspectingAttemptCap: 8, lastCompletedChannel: 'phone',
+      completedActivityIds: [],
+    })).toThrow();
   });
 });

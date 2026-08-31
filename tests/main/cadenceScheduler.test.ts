@@ -42,6 +42,24 @@ describe('cadence component scheduling', () => {
 
   afterAll(() => rmSync(bundleDirectory, { recursive: true, force: true }));
 
+  it('recursively freezes the shipped channel policy snapshots', () => {
+    expect(Object.isFrozen(FOUNDER_CHANNEL_POLICIES_V1)).toBe(true);
+    for (const policy of Object.values(FOUNDER_CHANNEL_POLICIES_V1)) {
+      expect(Object.isFrozen(policy)).toBe(true);
+      expect(Object.isFrozen(policy.windows)).toBe(true);
+      for (const window of policy.windows) {
+        expect(Object.isFrozen(window)).toBe(true);
+        expect(Object.isFrozen(window.days)).toBe(true);
+      }
+    }
+    expect(() => {
+      (FOUNDER_CHANNEL_POLICIES_V1.text.windows[0]!.days as number[]).push(0);
+    }).toThrow();
+    expect(() => {
+      (FOUNDER_CHANNEL_POLICIES_V1.email.windows[0] as { startMinute: number }).startMinute = 0;
+    }).toThrow();
+  });
+
   it('uses the fixed anchor local date instead of cumulatively sliding late steps', () => {
     const dayThree = cadenceA.steps[2]!;
     expect(schedule({

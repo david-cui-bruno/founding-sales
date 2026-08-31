@@ -130,9 +130,9 @@ export class CadenceRepository {
     }
   }
 
-  installBuiltins(): CadenceAggregate[] {
+  installBuiltins(): readonly CadenceAggregate[] {
     this.unitOfWork.assertWriteScope();
-    return BUILTIN_CADENCES.map((definition) => this.install(definition));
+    return Object.freeze(BUILTIN_CADENCES.map((definition) => this.install(definition)));
   }
 
   install(input: CadenceAggregate): CadenceAggregate {
@@ -215,7 +215,7 @@ export class CadenceRepository {
     return row === undefined ? null : this.parseAggregate(row);
   }
 
-  list(): CadenceAggregate[] {
+  list(): readonly CadenceAggregate[] {
     const rows = this.database.raw.prepare(`
       SELECT ${definitionColumns}
       FROM cadence_definitions
@@ -224,7 +224,7 @@ export class CadenceRepository {
         WHEN 'post_interview' THEN 4 WHEN 'post_offer' THEN 5 WHEN 'onboarding' THEN 6
         ELSE 99 END, version ASC, id ASC
     `).all();
-    return rows.map((row) => this.parseAggregate(row));
+    return Object.freeze(rows.map((row) => this.parseAggregate(row)));
   }
 
   private parseAggregate(value: unknown): CadenceAggregate {
