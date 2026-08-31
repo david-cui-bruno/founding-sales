@@ -1,3 +1,4 @@
+import { BUILTIN_CADENCES } from './builtinCadences';
 import {
   assertCanonicalInstant,
   nextStrictFutureOctoberOne,
@@ -16,6 +17,8 @@ import type {
   CallWindow,
   ResolverOutcome,
 } from './cadenceTypes';
+
+const BUILTIN_WARM_CADENCE_V1 = BUILTIN_CADENCES[2]!;
 
 export type ImpossibleReason =
   | 'missing_phone'
@@ -580,6 +583,10 @@ function validateAllowedPlan(
       ? input.highestProspectingAttemptCap
       : input.highestProspectingAttemptCap + 1;
     if (input.definition.category !== 'prospecting'
+      || input.definition.id !== BUILTIN_WARM_CADENCE_V1.id
+      || input.definition.family !== BUILTIN_WARM_CADENCE_V1.family
+      || input.definition.version !== BUILTIN_WARM_CADENCE_V1.version
+      || input.definition.contentHash !== BUILTIN_WARM_CADENCE_V1.contentHash
       || explicit === null
       || allowed.length !== 1
       || firstStep === undefined
@@ -593,7 +600,15 @@ function validateAllowedPlan(
     return allowed;
   }
 
-  if (input.definition.category !== 'prospecting') return allowed;
+  if (input.definition.category !== 'prospecting') {
+    if (explicit !== null && (allowed.length !== input.definition.steps.length
+      || allowed.some((step, index) => step.id !== input.definition.steps[index]?.id))) {
+      throw new CadencePlanningError(
+        'A fixed non-prospecting cadence requires its exact complete definition plan.',
+      );
+    }
+    return allowed;
+  }
   const remaining = input.highestProspectingAttemptCap - input.totalProspectingScheduledSteps;
   if (remaining < 0 || (phase === 'start' && remaining === 0)) {
     throw new CadencePlanningError('The prospecting step cap is exhausted.');

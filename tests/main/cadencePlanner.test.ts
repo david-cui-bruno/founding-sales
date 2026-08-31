@@ -14,6 +14,7 @@ import {
   type CadenceStartInput,
 } from '../../src/main/domain/cadence/cadencePlanner';
 import { FOUNDER_CHANNEL_POLICIES_V1 } from '../../src/main/domain/cadence/cadenceScheduler';
+import { defineCadence } from '../../src/main/domain/cadence/cadenceTypes';
 
 const [cadenceA, cadenceB, cadenceC, postInterview, postOffer, onboarding] = BUILTIN_CADENCES;
 const evaluationAt = '2026-08-31T14:30:00.000Z';
@@ -306,6 +307,43 @@ describe('pure cadence planning', () => {
     })).toThrow();
   });
 
+  it('rejects truncated or skipped explicit plans for fixed post-stage cadences', () => {
+    const first = postOffer.steps[0]!;
+    const breakup = postOffer.steps.at(-1)!;
+
+    expect(() => start(postOffer, {
+      allowedStepIds: postOffer.steps.slice(0, -1).map(({ id }) => id),
+    })).toThrow();
+    expect(() => start(postOffer, {
+      allowedStepIds: [first.id, breakup.id],
+    })).toThrow();
+
+    const forgedOutcome = (allowedStepIds: readonly string[]) => planActionOutcome({
+      salesCycleId: 'cycle-forged-post-offer',
+      definition: postOffer,
+      enrollment: {
+        definitionId: postOffer.id,
+        anchorAt: evaluationAt,
+        currentStepId: first.id,
+        scheduledStepCount: 1,
+        status: 'active',
+        mode: 'standard',
+        allowedStepIds,
+      },
+      action: { kind: 'component', componentId: first.components[0]!.id },
+      outcome: 'accepted',
+      evaluationAt,
+      timezone: 'America/New_York',
+      policies: FOUNDER_CHANNEL_POLICIES_V1,
+      priorCallWindow: null,
+      totalProspectingScheduledSteps: 0,
+      highestProspectingAttemptCap: 0,
+      impossibleDisposition: null,
+    });
+    expect(() => forgedOutcome(postOffer.steps.slice(0, -1).map(({ id }) => id))).toThrow();
+    expect(() => forgedOutcome([first.id, breakup.id])).toThrow();
+  });
+
   it('permits exactly the first trigger-response step for an exhausted over-cap plan', () => {
     expect(() => start(cadenceC, {
       mode: 'inbound_over_cap_response',
@@ -339,6 +377,49 @@ describe('pure cadence planning', () => {
       policies: FOUNDER_CHANNEL_POLICIES_V1, priorCallWindow: null,
       totalProspectingScheduledSteps: 5, highestProspectingAttemptCap: 4,
       impossibleDisposition: null,
+    })).toThrow();
+  });
+
+  it('rejects inbound over-cap response mode outside builtin Warm Cadence C', () => {
+    for (const definition of [cadenceA, cadenceB]) {
+      expect(() => start(definition, {
+        mode: 'inbound_over_cap_response',
+        allowedStepIds: [definition.steps[0]!.id],
+        totalProspectingScheduledSteps: definition.attemptCap,
+        highestProspectingAttemptCap: definition.attemptCap,
+      })).toThrow();
+    }
+    expect(() => start(postOffer, {
+      mode: 'inbound_over_cap_response',
+      allowedStepIds: [postOffer.steps[0]!.id],
+      totalProspectingScheduledSteps: 0,
+      highestProspectingAttemptCap: 0,
+    })).toThrow();
+
+    const warmDraft = structuredClone(cadenceC);
+    Reflect.deleteProperty(warmDraft, 'contentHash');
+    const customWarmCadence = defineCadence({
+      ...warmDraft,
+      id: 'custom-warm-cadence-v2',
+      version: 2,
+      name: 'Custom Warm Cadence',
+    });
+    expect(() => start(customWarmCadence, {
+      mode: 'inbound_over_cap_response',
+      allowedStepIds: [customWarmCadence.steps[0]!.id],
+      totalProspectingScheduledSteps: customWarmCadence.attemptCap,
+      highestProspectingAttemptCap: customWarmCadence.attemptCap,
+    })).toThrow();
+
+    const forgedBuiltinIdentity = defineCadence({
+      ...warmDraft,
+      name: 'Forged Warm Cadence',
+    });
+    expect(() => start(forgedBuiltinIdentity, {
+      mode: 'inbound_over_cap_response',
+      allowedStepIds: [forgedBuiltinIdentity.steps[0]!.id],
+      totalProspectingScheduledSteps: forgedBuiltinIdentity.attemptCap,
+      highestProspectingAttemptCap: forgedBuiltinIdentity.attemptCap,
     })).toThrow();
   });
 
