@@ -90,7 +90,7 @@ const storedRowSchema = z.object({
   ]),
   observed_at: utcTimestampSchema,
   source_record_json: z.string().transform(parseStoredEnvelope),
-  evidence_ref: z.string().nullable(),
+  evidence_ref: nonblankTextSchema.nullable(),
   referred_by_person_id: idSchema.nullable(),
   referrer_unknown_reason: referralUnknownReasonSchema.nullable(),
   created_at: utcTimestampSchema,

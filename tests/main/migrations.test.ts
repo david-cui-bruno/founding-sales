@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { createMigrationRunner, migrateToLatest } from '../../src/main/db/migrate';
 import { migration0001Foundation } from '../../src/main/db/migrations/0001Foundation';
+import { migration0002DomainFoundation } from '../../src/main/db/migrations/0002DomainFoundation';
 import { sql } from 'kysely';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
@@ -188,5 +189,55 @@ describe('database migrations', () => {
       toVersion: 2,
       appliedMigrationIds: ['0002DomainFoundation'],
     });
+  });
+
+  it('creates the intake receipt before a late real-schema failure and rolls it back', async () => {
+    tempDatabase = createTempDatabase();
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: tempDatabase.path, key });
+    const options = {
+      backupDirectory: `${tempDatabase.path}.backups`,
+      workspaceKey: key,
+    };
+    const migrateToSchemaOne = createMigrationRunner([{
+      id: '0001Foundation',
+      schemaVersion: 1,
+      migration: migration0001Foundation,
+    }]);
+    await migrateToSchemaOne(database, options);
+    const migrateWithReceiptFailure = createMigrationRunner([
+      {
+        id: '0001Foundation',
+        schemaVersion: 1,
+        migration: migration0001Foundation,
+      },
+      {
+        id: '0002ReceiptLateFailure',
+        schemaVersion: 2,
+        migration: {
+          async up(kysely) {
+            await migration0002DomainFoundation.up(kysely);
+            const receipt = await sql<{ name: string }>`
+              SELECT name FROM sqlite_master
+              WHERE type = 'table' AND name = 'source_intake_receipts'
+            `.execute(kysely);
+            if (receipt.rows[0]?.name !== 'source_intake_receipts') {
+              throw new Error('Receipt table missing before late failure.');
+            }
+            throw new Error('Synthetic failure after receipt creation.');
+          },
+        },
+      },
+    ]);
+
+    await expect(migrateWithReceiptFailure(database, options)).rejects.toThrow(
+      'Synthetic failure after receipt creation.',
+    );
+    expect(database.raw.prepare<[], { schema_version: number }>(
+      'SELECT schema_version FROM app_meta WHERE singleton = 1',
+    ).get()).toEqual({ schema_version: 1 });
+    expect(database.raw.prepare<[], { name: string }>(`
+      SELECT name FROM sqlite_master WHERE name = 'source_intake_receipts'
+    `).get()).toBeUndefined();
   });
 });

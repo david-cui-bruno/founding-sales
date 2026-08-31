@@ -10,6 +10,12 @@ import type {
 } from '../identity/identityRepository';
 import { DomainRepositoryDatabaseMismatchError } from '../support/domainErrors';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
+import {
+  serializeCanonicalIntakeCommand,
+  type CanonicalIntakeCommand,
+  type IntakeReceiptRepository,
+  type JsonObject,
+} from './intakeReceiptRepository';
 import type {
   AppendSourceEventInput,
   CustomSourceReason,
@@ -28,7 +34,11 @@ export type IdentityReviewReason =
   | 'indirect_handle_match'
   | 'deleted_person_match';
 
-export type ContextReviewReason = 'ambiguous_organization' | 'ambiguous_property';
+export type ContextReviewReason =
+  | 'ambiguous_organization'
+  | 'ambiguous_property'
+  | 'organization_not_found'
+  | 'property_organization_conflict';
 export type IntakeDisposition = 'created' | 'matched_existing' | 'created_merge_review';
 export type IntakeFaultPoint =
   | 'after_person'
@@ -37,7 +47,8 @@ export type IntakeFaultPoint =
   | 'after_organization'
   | 'after_organization_link'
   | 'after_property'
-  | 'after_property_link';
+  | 'after_property_link'
+  | 'after_receipt';
 
 export type IntakeContactInput = {
   kind: 'phone' | 'email';
@@ -128,6 +139,35 @@ export type IntakeResult = {
   organizationIds: string[];
   propertyIds: string[];
 };
+
+export class ContactNormalizationConflictError extends Error {
+  readonly kind: 'phone' | 'email';
+  readonly normalizedValue: string;
+
+  constructor(kind: 'phone' | 'email', normalizedValue: string) {
+    super('Equivalent contact inputs disagree on normalized contact facts.');
+    this.name = 'ContactNormalizationConflictError';
+    this.kind = kind;
+    this.normalizedValue = normalizedValue;
+  }
+}
+
+export class IntakeIdempotencyConflictError extends Error {
+  readonly sourceEventId: string;
+  readonly reason: 'command_mismatch' | 'source_event_without_receipt';
+
+  constructor(
+    sourceEventId: string,
+    reason: 'command_mismatch' | 'source_event_without_receipt',
+  ) {
+    super(reason === 'command_mismatch'
+      ? 'The source ID already owns a different canonical intake command.'
+      : 'The source ID belongs to a non-intake source event.');
+    this.name = 'IntakeIdempotencyConflictError';
+    this.sourceEventId = sourceEventId;
+    this.reason = reason;
+  }
+}
 
 const idSchema = z.string().trim().min(1);
 const nonblankSchema = z.string().transform(normalizeDisplayText).pipe(z.string().min(1));
@@ -236,7 +276,10 @@ const createCommandSchema = z.union([
 const phoneInputSchema = z.string().transform((value, context) => {
   const normalized = value.normalize('NFKC').trim();
   if (normalized.startsWith('+')) {
-    if (/^\+[1-9]\d{7,14}$/.test(normalized)) return normalized;
+    if (/^\+[\d\s().-]+$/.test(normalized)) {
+      const digits = normalized.slice(1).replace(/\D/g, '');
+      if (/^[1-9]\d{7,14}$/.test(digits)) return `+${digits}`;
+    }
     context.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'Explicit international phones must be canonical E.164.',
@@ -323,6 +366,7 @@ export class SourceService {
   private readonly unitOfWork: DomainUnitOfWork;
   private readonly identities: IdentityRepository;
   private readonly sources: SourceRepository;
+  private readonly receipts: IntakeReceiptRepository;
   private readonly faultInjector: ((point: IntakeFaultPoint) => void) | undefined;
 
   constructor(input: {
@@ -330,6 +374,7 @@ export class SourceService {
     unitOfWork: DomainUnitOfWork;
     identities: IdentityRepository;
     sources: SourceRepository;
+    receipts: IntakeReceiptRepository;
     faultInjector?: (point: IntakeFaultPoint) => void;
   }) {
     if (input.database.raw !== input.unitOfWork.database.raw) {
@@ -338,6 +383,7 @@ export class SourceService {
     this.unitOfWork = input.unitOfWork;
     this.identities = input.identities;
     this.sources = input.sources;
+    this.receipts = input.receipts;
     this.faultInjector = input.faultInjector;
   }
 
@@ -358,30 +404,20 @@ export class SourceService {
   }
 
   private intake(command: NormalizedCommand): IntakeResult {
-    const replay = this.sources.getById(command.source.id);
-    if (replay !== null) {
-      this.sources.append(toSourceAppendInput(command.source, {
-        personId: replay.personId,
-        prospectId: replay.prospectId,
-      }));
-      const prospect = this.identities.getCanonicalProspect(replay.personId);
-      if (prospect === null) {
-        throw new Error('The replayed source event has no canonical Prospect.');
+    const canonicalCommand = toCanonicalIntakeCommand(command);
+    const commandJson = serializeCanonicalIntakeCommand(canonicalCommand);
+    const receipt = this.receipts.getBySourceEventId(command.source.id);
+    if (receipt !== null) {
+      if (receipt.commandJson !== commandJson) {
+        throw new IntakeIdempotencyConflictError(command.source.id, 'command_mismatch');
       }
-      return {
-        disposition: 'matched_existing',
-        personId: replay.personId,
-        prospectId: prospect.id,
-        sourceEventId: replay.id,
-        identityReviewReason: prospect.qualificationState === 'merge_review'
-          ? parseIdentityReviewReason(prospect.qualificationReason)
-          : null,
-        contextReviewReasons: [],
-        organizationIds: this.identities.listOrganizationsForProspect(prospect.id)
-          .map(({ id }) => id),
-        propertyIds: this.identities.listPropertiesForProspect(prospect.id)
-          .map(({ id }) => id),
-      };
+      return receipt.result;
+    }
+    if (this.sources.getById(command.source.id) !== null) {
+      throw new IntakeIdempotencyConflictError(
+        command.source.id,
+        'source_event_without_receipt',
+      );
     }
 
     const identityResolution = this.resolveIdentity(command.contacts);
@@ -432,7 +468,7 @@ export class SourceService {
       : identityResolution.personId === null
         ? 'created'
         : 'matched_existing';
-    return {
+    const result: IntakeResult = {
       disposition,
       personId: person.id,
       prospectId: prospect.id,
@@ -440,6 +476,13 @@ export class SourceService {
       identityReviewReason: identityResolution.reviewReason,
       ...contextResult,
     };
+    this.receipts.append({
+      sourceEventId: sourceEvent.id,
+      command: canonicalCommand,
+      result,
+    });
+    this.inject('after_receipt');
+    return result;
   }
 
   private resolveIdentity(contacts: NormalizedContact[]): {
@@ -453,6 +496,14 @@ export class SourceService {
       ),
     }));
     const allMatches = matchesByContact.flatMap(({ matches }) => matches);
+    if (matchesByContact.some(({ matches }) => (
+      new Set(matches.map(({ person }) => person.id)).size > 1
+    ))) {
+      return { personId: null, reviewReason: 'shared_handle' };
+    }
+    if (new Set(allMatches.map(({ person }) => person.id)).size > 1) {
+      return { personId: null, reviewReason: 'conflicting_handle_matches' };
+    }
     if (allMatches.some(({ person }) => person.deletedAt !== null)) {
       return { personId: null, reviewReason: 'deleted_person_match' };
     }
@@ -461,13 +512,7 @@ export class SourceService {
       if (contact.reachability !== 'direct') return new Set<string>();
       return new Set(matches.filter(isDirectValidatedMatch).map(({ person }) => person.id));
     });
-    if (directIdsByContact.some((ids) => ids.size > 1)) {
-      return { personId: null, reviewReason: 'shared_handle' };
-    }
     const allDirectIds = new Set(directIdsByContact.flatMap((ids) => [...ids]));
-    if (allDirectIds.size > 1) {
-      return { personId: null, reviewReason: 'conflicting_handle_matches' };
-    }
     const hasIndirectOnlyMatch = matchesByContact.some(({ contact, matches }, index) => (
       matches.length > 0
       && (contact.reachability !== 'direct' || directIdsByContact[index]?.size === 0)
@@ -537,6 +582,10 @@ export class SourceService {
     }
 
     for (const context of command.properties) {
+      const organizationResolution = this.resolveRequestedOrganization(
+        context.organizationAlias,
+        reviewReasons,
+      );
       const matches = this.identities.findPropertiesByCanonicalAddress(context.canonicalAddress);
       if (matches.length > 1) {
         addUnique(reviewReasons, 'ambiguous_property');
@@ -544,11 +593,10 @@ export class SourceService {
       }
       let property: Property;
       if (matches[0] === undefined) {
-        const organizationId = context.organizationAlias == null
-          ? null
-          : this.findUniqueOrganizationId(context.organizationAlias, reviewReasons);
         property = this.identities.createProperty({
-          organizationId,
+          organizationId: organizationResolution.kind === 'resolved'
+            ? organizationResolution.organizationId
+            : null,
           ...context.canonicalAddress,
           doorCount: context.doorCount,
           propertyType: context.propertyType,
@@ -559,6 +607,18 @@ export class SourceService {
         this.inject('after_property');
       } else {
         property = matches[0];
+        if (
+          organizationResolution.kind !== 'not_requested'
+          && (
+            organizationResolution.kind !== 'resolved'
+            || property.organizationId !== organizationResolution.organizationId
+          )
+        ) {
+          if (organizationResolution.kind === 'resolved') {
+            addUnique(reviewReasons, 'property_organization_conflict');
+          }
+          continue;
+        }
       }
       this.identities.linkProperty({
         prospectId,
@@ -575,18 +635,26 @@ export class SourceService {
     };
   }
 
-  private findUniqueOrganizationId(
-    alias: string,
+  private resolveRequestedOrganization(
+    alias: string | null,
     reviewReasons: ContextReviewReason[],
-  ): string | null {
+  ):
+    | { kind: 'not_requested' }
+    | { kind: 'unresolved' }
+    | { kind: 'resolved'; organizationId: string } {
+    if (alias === null) return { kind: 'not_requested' };
     const matches = this.identities.findOrganizationsByNormalizedAlias(
       normalizeContextText(alias),
     );
     if (matches.length > 1) {
       addUnique(reviewReasons, 'ambiguous_organization');
-      return null;
+      return { kind: 'unresolved' };
     }
-    return matches[0]?.id ?? null;
+    if (matches[0] === undefined) {
+      addUnique(reviewReasons, 'organization_not_found');
+      return { kind: 'unresolved' };
+    }
+    return { kind: 'resolved', organizationId: matches[0].id };
   }
 
   private inject(point: IntakeFaultPoint): void {
@@ -673,17 +741,74 @@ function normalizeContacts(contacts: z.infer<typeof contactInputSchema>[]): Norm
       ? normalizePhone(contact.value)
       : normalizeEmail(contact.value);
     const key = `${contact.kind}:${normalizedValue}`;
-    if (deduplicated.has(key)) continue;
-    deduplicated.set(key, {
+    const canonical = {
       kind: contact.kind,
       normalizedValue,
       rawValue: contact.value,
       reachability: contact.reachability,
       isPrimary: contact.isPrimary,
       inContacts: contact.inContacts ?? null,
-    });
+    };
+    const existing = deduplicated.get(key);
+    if (existing !== undefined) {
+      if (
+        existing.reachability !== canonical.reachability
+        || existing.isPrimary !== canonical.isPrimary
+        || existing.inContacts !== canonical.inContacts
+      ) {
+        throw new ContactNormalizationConflictError(contact.kind, normalizedValue);
+      }
+      continue;
+    }
+    deduplicated.set(key, canonical);
   }
   return [...deduplicated.values()];
+}
+
+function toCanonicalIntakeCommand(command: NormalizedCommand): CanonicalIntakeCommand {
+  return {
+    person: {
+      displayName: command.person.displayName,
+      aliases: command.person.aliases,
+      neverRecord: command.person.neverRecord,
+      provenance: (command.person.provenance ?? null) as CanonicalIntakeCommand['person']['provenance'],
+    },
+    contacts: command.contacts.map((contact) => ({
+      kind: contact.kind,
+      normalizedValue: contact.normalizedValue,
+      reachability: contact.reachability,
+      isPrimary: contact.isPrimary,
+      inContacts: contact.inContacts,
+    })),
+    organizations: command.organizations.map((organization) => ({
+      canonicalName: organization.canonicalName,
+      normalizedAliases: organization.normalizedAliases,
+      relationship: organization.relationship ?? null,
+      sourceRecord: (organization.sourceRecord ?? null) as CanonicalIntakeCommand['organizations'][number]['sourceRecord'],
+    })),
+    properties: command.properties.map((property) => ({
+      canonicalAddress: property.canonicalAddress,
+      doorCount: property.doorCount ?? null,
+      propertyType: property.propertyType ?? null,
+      maintenanceProfile: (property.maintenanceProfile ?? null) as CanonicalIntakeCommand['properties'][number]['maintenanceProfile'],
+      sourceRecord: (property.sourceRecord ?? null) as CanonicalIntakeCommand['properties'][number]['sourceRecord'],
+      verifiedAt: property.verifiedAt ?? null,
+      organizationAlias: property.organizationAlias ?? null,
+      relationship: property.relationship ?? null,
+    })),
+    source: {
+      id: command.source.id,
+      channel: command.source.channel,
+      observedAt: command.source.observedAt,
+      sourceRecord: command.source.sourceRecord as JsonObject,
+      evidenceRef: command.source.evidenceRef ?? null,
+      referral: command.source.channel === 'referral' ? command.source.referral : null,
+      customSourceReason: command.source.channel === 'custom'
+        ? command.source.customSourceReason
+        : null,
+    },
+    segment: command.segment,
+  };
 }
 
 function segmentForChannel(channel: Exclude<SourceChannel, 'custom'>): Prospect['segment'] {
@@ -739,15 +864,6 @@ function uniqueById<T extends { id: string }>(values: T[]): T[] {
 
 function addUnique<T>(values: T[], value: T): void {
   if (!values.includes(value)) values.push(value);
-}
-
-function parseIdentityReviewReason(reason: string | null): IdentityReviewReason | null {
-  return z.enum([
-    'shared_handle',
-    'conflicting_handle_matches',
-    'indirect_handle_match',
-    'deleted_person_match',
-  ]).nullable().parse(reason);
 }
 
 function assertJsonValue(value: unknown, field: string, seen = new Set<object>()): void {

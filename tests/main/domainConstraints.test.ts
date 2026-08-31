@@ -37,6 +37,8 @@ const scenarios = [
   'completion-activity-ownership',
   'immutable-source',
   'replace-immutable-source',
+  'immutable-source-intake-receipt',
+  'replace-immutable-source-intake-receipt',
   'immutable-activity',
   'immutable-stage',
   'immutable-trigger',

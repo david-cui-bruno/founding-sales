@@ -121,6 +121,12 @@ const domainStatements = [
   )`,
   `CREATE INDEX source_events_person_observed_idx
     ON source_events(person_id, observed_at)`,
+  `CREATE TABLE source_intake_receipts (
+    source_event_id TEXT PRIMARY KEY REFERENCES source_events(id),
+    command_json TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
   `CREATE TABLE prospects (
     id TEXT PRIMARY KEY,
     person_id TEXT NOT NULL REFERENCES persons(id),
@@ -829,6 +835,7 @@ const domainStatements = [
       SELECT RAISE(ABORT, 'reactivation rules cannot be deleted');
     END`,
   ...immutableTriggers('source_events'),
+  ...immutableTriggers('source_intake_receipts'),
   ...immutableTriggers('activities'),
   ...immutableTriggers('activity_amendments'),
   ...immutableTriggers('stage_events'),

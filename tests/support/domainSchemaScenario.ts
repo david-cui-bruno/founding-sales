@@ -42,6 +42,7 @@ const domainTables = [
   'sales_cycles',
   'sales_cycle_close_readiness',
   'source_events',
+  'source_intake_receipts',
   'stage_events',
   'trigger_events',
   'workspace_settings',
@@ -74,6 +75,8 @@ const requiredTriggers = [
   'immutable_prioritization_rule_versions_delete',
   'immutable_source_events',
   'immutable_source_events_delete',
+  'immutable_source_intake_receipts',
+  'immutable_source_intake_receipts_delete',
   'immutable_stage_events',
   'immutable_stage_events_delete',
   'immutable_trigger_events',
@@ -963,6 +966,36 @@ function runDatabaseScenario(
       );
       return;
     }
+    case 'immutable-source-intake-receipt': {
+      const prospect = seedProspect(raw, 'immutable-intake-receipt');
+      insertSourceIntakeReceipt(raw, prospect.sourceEventId, 'original-command');
+      assert.throws(() => raw.prepare(`
+        UPDATE source_intake_receipts SET command_json = '{"changed":true}'
+        WHERE source_event_id = ?
+      `).run(prospect.sourceEventId));
+      assert.throws(() => raw.prepare(`
+        DELETE FROM source_intake_receipts WHERE source_event_id = ?
+      `).run(prospect.sourceEventId));
+      return;
+    }
+    case 'replace-immutable-source-intake-receipt': {
+      const prospect = seedProspect(raw, 'replace-intake-receipt');
+      insertSourceIntakeReceipt(raw, prospect.sourceEventId, 'original-command');
+      assert.throws(() => raw.prepare(`
+        INSERT OR REPLACE INTO source_intake_receipts (
+          source_event_id, command_json, result_json, created_at
+        ) VALUES (?, '{"replacement":true}', '{"replacement":true}', ?)
+      `).run(prospect.sourceEventId, DOMAIN_TIMESTAMP));
+      assert.deepEqual(raw.prepare(`
+        SELECT command_json FROM source_intake_receipts WHERE source_event_id = ?
+      `).get(prospect.sourceEventId), {
+        command_json: JSON.stringify({
+          formatVersion: 1,
+          command: { marker: 'original-command' },
+        }),
+      });
+      return;
+    }
     case 'immutable-activity': {
       const prospect = seedProspect(raw, 'immutable-activity');
       insertRawActivity(raw, 'immutable-activity-row', prospect.personId, null, null);
@@ -1536,6 +1569,23 @@ function insertOptOutTombstone(
       id, person_id, requested_at, observed_channel, policy_version, created_at
     ) VALUES (?, ?, ?, 'text', 'v1', ?)
   `).run(id, personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+}
+
+function insertSourceIntakeReceipt(
+  database: AppDatabase['raw'],
+  sourceEventId: string,
+  marker: string,
+): void {
+  database.prepare(`
+    INSERT INTO source_intake_receipts (
+      source_event_id, command_json, result_json, created_at
+    ) VALUES (?, ?, ?, ?)
+  `).run(
+    sourceEventId,
+    JSON.stringify({ formatVersion: 1, command: { marker } }),
+    JSON.stringify({ formatVersion: 1, result: { marker } }),
+    DOMAIN_TIMESTAMP,
+  );
 }
 
 function insertOwnedActivity(

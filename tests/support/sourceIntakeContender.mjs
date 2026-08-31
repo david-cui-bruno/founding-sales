@@ -60,6 +60,45 @@ try {
       'hot_frbo', 'unreviewed', 1, ?, ?
     )
   `).run(timestamp, timestamp);
+  const commandJson = canonicalJson({
+    formatVersion: 1,
+    command: {
+      person: {
+        displayName: 'Contended Person', aliases: [], neverRecord: false, provenance: null,
+      },
+      contacts: [{
+        kind: 'phone', normalizedValue: '+14015550100', reachability: 'direct',
+        isPrimary: true, inContacts: null,
+      }],
+      organizations: [],
+      properties: [],
+      source: {
+        id: 'contended-source-one', channel: 'frbo',
+        observedAt: '2026-08-29T15:00:00.000Z',
+        sourceRecord: { listingId: 'contended-one' }, evidenceRef: null,
+        referral: null, customSourceReason: null,
+      },
+      segment: 'hot_frbo',
+    },
+  });
+  const resultJson = canonicalJson({
+    formatVersion: 1,
+    result: {
+      disposition: 'created',
+      personId: 'contended-person',
+      prospectId: 'contended-prospect',
+      sourceEventId: 'contended-source-one',
+      identityReviewReason: null,
+      contextReviewReasons: [],
+      organizationIds: [],
+      propertyIds: [],
+    },
+  });
+  database.prepare(`
+    INSERT INTO source_intake_receipts (
+      source_event_id, command_json, result_json, created_at
+    ) VALUES ('contended-source-one', ?, ?, ?)
+  `).run(commandJson, resultJson, timestamp);
   database.exec('COMMIT');
 } catch (error) {
   if (database.inTransaction) database.exec('ROLLBACK');
@@ -67,4 +106,19 @@ try {
   process.exitCode = 1;
 } finally {
   database.close();
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return JSON.stringify(value.map(canonicalObject));
+  return JSON.stringify(canonicalObject(value));
+}
+
+function canonicalObject(value) {
+  if (Array.isArray(value)) return value.map(canonicalObject);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, canonicalObject(child)]));
+  }
+  return value;
 }

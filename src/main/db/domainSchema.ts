@@ -95,6 +95,13 @@ export type SourceEventsTable = {
   created_at: string;
 };
 
+export type SourceIntakeReceiptsTable = {
+  source_event_id: string;
+  command_json: string;
+  result_json: string;
+  created_at: string;
+};
+
 export type ProspectsTable = {
   id: string;
   person_id: string;
@@ -419,6 +426,7 @@ export type DomainTables = {
   sales_cycles: SalesCyclesTable;
   sales_cycle_close_readiness: SalesCycleCloseReadinessTable;
   source_events: SourceEventsTable;
+  source_intake_receipts: SourceIntakeReceiptsTable;
   stage_events: StageEventsTable;
   trigger_events: TriggerEventsTable;
   workspace_settings: WorkspaceSettingsTable;

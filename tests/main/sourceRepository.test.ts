@@ -319,6 +319,25 @@ describe('SourceRepository', () => {
     expect(() => repository.listByPerson('subject')).toThrow(z.ZodError);
   });
 
+  it('fails closed when stored evidence is blank', () => {
+    database.raw.prepare(`
+      INSERT INTO source_events (
+        id, person_id, channel, observed_at, source_record_json,
+        evidence_ref, created_at
+      ) VALUES ('blank-evidence', 'subject', 'community', ?, ?, '   ', ?)
+    `).run(
+      OBSERVED_AT,
+      JSON.stringify({
+        formatVersion: 1,
+        sourceRecord: { event: 'blank-evidence' },
+        customSourceReason: null,
+      }),
+      CREATED_AT,
+    );
+
+    expect(() => repository.getById('blank-evidence')).toThrow(z.ZodError);
+  });
+
   it('fails closed for an unknown stored source-envelope format version', () => {
     database.raw.prepare(`
       INSERT INTO source_events (

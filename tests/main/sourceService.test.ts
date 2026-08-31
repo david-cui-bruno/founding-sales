@@ -10,12 +10,18 @@ import { migrateToLatest } from '../../src/main/db/migrate';
 import { resolveNativeBinding } from '../../src/main/db/sqliteDriver';
 import { IdentityRepository } from '../../src/main/domain/identity/identityRepository';
 import {
-  SourceEventIdempotencyConflictError,
+  IntakeReceiptRepository,
+  serializeCanonicalIntakeCommand,
+  type CanonicalIntakeCommand,
+  type StoredIntakeResult,
+} from '../../src/main/domain/source/intakeReceiptRepository';
+import {
   SourceRepository,
 } from '../../src/main/domain/source/sourceRepository';
 import {
   normalizeEmail,
   normalizePhone,
+  IntakeIdempotencyConflictError,
   SourceService,
   type CreatePersonProspectCommand,
   type IntakeSourceInput,
@@ -37,6 +43,7 @@ describe('SourceService', () => {
   let unitOfWork: DomainUnitOfWork;
   let identities: IdentityRepository;
   let sources: SourceRepository;
+  let receipts: IntakeReceiptRepository;
   let ids: string[];
   let service: SourceService;
 
@@ -76,11 +83,17 @@ describe('SourceService', () => {
       unitOfWork,
       clock: { now: () => NOW },
     });
+    receipts = new IntakeReceiptRepository({
+      database,
+      unitOfWork,
+      clock: { now: () => NOW },
+    });
     service = new SourceService({
       database,
       unitOfWork,
       identities,
       sources,
+      receipts,
       faultInjector,
     });
   }
@@ -110,6 +123,7 @@ describe('SourceService', () => {
   function counts(): Record<string, number> {
     const tables = [
       'persons', 'person_contact_methods', 'source_events', 'prospects',
+      'source_intake_receipts',
       'organizations', 'organization_aliases', 'properties',
       'prospect_organizations', 'prospect_properties', 'sales_cycles',
     ];
@@ -157,13 +171,74 @@ describe('SourceService', () => {
     );
   }
 
+  function canonicalRaceCommand(sourceId: string): CanonicalIntakeCommand {
+    return {
+      person: {
+        displayName: 'Kevin Shin', aliases: [], neverRecord: false, provenance: null,
+      },
+      contacts: [{
+        kind: 'phone', normalizedValue: '+14015550100', reachability: 'direct',
+        isPrimary: true, inContacts: null,
+      }],
+      organizations: [],
+      properties: [],
+      source: {
+        id: sourceId, channel: 'frbo', observedAt: OBSERVED_AT,
+        sourceRecord: { listingId: sourceId }, evidenceRef: null,
+        referral: null, customSourceReason: null,
+      },
+      segment: 'hot_frbo',
+    };
+  }
+
+  function raceResult(sourceId: string): StoredIntakeResult {
+    return {
+      disposition: 'created',
+      personId: 'contended-person',
+      prospectId: 'contended-prospect',
+      sourceEventId: sourceId,
+      identityReviewReason: null,
+      contextReviewReasons: [],
+      organizationIds: [],
+      propertyIds: [],
+    };
+  }
+
+  function spawnSameSourceContender(sourceId: string): {
+    readyPath: string;
+    exit: Promise<{ code: number | null; stderr: string }>;
+  } {
+    const readyPath = `${tempDatabase.path}.${sourceId}.receipt-ready`;
+    const commandJson = serializeCanonicalIntakeCommand(canonicalRaceCommand(sourceId));
+    const resultJson = JSON.stringify({ formatVersion: 1, result: raceResult(sourceId) });
+    const sourceRecordJson = JSON.stringify({
+      formatVersion: 1,
+      sourceRecord: { listingId: sourceId },
+      customSourceReason: null,
+    });
+    const contender = spawn(process.execPath, [
+      resolve(process.cwd(), 'tests/support/sourceIntakeReceiptContender.mjs'),
+      tempDatabase.path,
+      resolveNativeBinding(),
+      readyPath,
+      createTestWorkspaceKey().bytes.toString('hex'),
+      sourceId,
+      sourceRecordJson,
+      commandJson,
+      resultJson,
+    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    return { readyPath, exit: captureChildExit(contender) };
+  }
+
   it('documents the V1 US phone default and conservative full-lowercase email policy', () => {
     expect(normalizePhone('(401) 555-0100')).toBe('+14015550100');
     expect(normalizePhone('1 401 555 0100')).toBe('+14015550100');
+    expect(normalizePhone('+1 (401) 555-0100')).toBe('+14015550100');
     expect(normalizePhone('+442071838750')).toBe('+442071838750');
     expect(() => normalizePhone('555-0100')).toThrow(z.ZodError);
     expect(() => normalizePhone('+01234567890')).toThrow(z.ZodError);
-    expect(() => normalizePhone('+44 20 7183 8750')).toThrow(z.ZodError);
+    expect(normalizePhone('+44 20 7183 8750')).toBe('+442071838750');
+    expect(() => normalizePhone('+1 (401) CALL-ME')).toThrow(z.ZodError);
 
     expect(normalizeEmail('  KEVIN\uFF20EXAMPLE.COM ')).toBe('kevin@example.com');
     expect(() => normalizeEmail('kevin @example.com')).toThrow(z.ZodError);
@@ -199,6 +274,48 @@ describe('SourceService', () => {
     expect(counts().sales_cycles).toBe(0);
   });
 
+  type DuplicateContactFacts = {
+    reachability: 'direct' | 'indirect' | 'none';
+    isPrimary: boolean;
+    inContacts: boolean | null;
+  };
+  const duplicateContactConflictCases: Array<[
+    DuplicateContactFacts,
+    DuplicateContactFacts,
+  ]> = [
+    [
+      { reachability: 'direct' as const, isPrimary: false, inContacts: null },
+      { reachability: 'indirect' as const, isPrimary: false, inContacts: null },
+    ],
+    [
+      { reachability: 'direct' as const, isPrimary: false, inContacts: null },
+      { reachability: 'direct' as const, isPrimary: true, inContacts: null },
+    ],
+    [
+      { reachability: 'direct' as const, isPrimary: false, inContacts: false },
+      { reachability: 'direct' as const, isPrimary: false, inContacts: true },
+    ],
+  ];
+
+  it.each(duplicateContactConflictCases)(
+    'rejects conflicting duplicate contact facts independent of input order',
+    (first, second) => {
+    const makeCommand = (contacts: [DuplicateContactFacts, DuplicateContactFacts]) => baseCommand('duplicate-source', {
+      contacts: contacts.map((contact, index) => ({
+        kind: 'phone' as const,
+        value: index === 0 ? '(401) 555-0100' : '1-401-555-0100',
+        ...contact,
+      })),
+    });
+
+    expect(() => service.createPersonProspect(makeCommand([first, second])))
+      .toThrow(expect.objectContaining({ name: 'ContactNormalizationConflictError' }));
+    expect(() => service.createPersonProspect(makeCommand([second, first])))
+      .toThrow(expect.objectContaining({ name: 'ContactNormalizationConflictError' }));
+    expect(Object.values(counts()).every((count) => count === 0)).toBe(true);
+    },
+  );
+
   it('validates the entire command before writes', () => {
     ids.push('must-not-be-consumed');
     expect(() => service.createPersonProspect(baseCommand('invalid-source', {
@@ -208,6 +325,7 @@ describe('SourceService', () => {
       persons: 0,
       person_contact_methods: 0,
       source_events: 0,
+      source_intake_receipts: 0,
       prospects: 0,
       organizations: 0,
       organization_aliases: 0,
@@ -336,10 +454,45 @@ describe('SourceService', () => {
       personId: 'contended-person',
       prospectId: 'contended-prospect',
     });
-    expect(counts()).toMatchObject({ persons: 1, prospects: 1, source_events: 2 });
+    expect(counts()).toMatchObject({
+      persons: 1, prospects: 1, source_events: 2, source_intake_receipts: 2,
+    });
     expect(sources.listByPerson('contended-person').map(({ id }) => id)).toEqual([
       'contended-source-one', 'contended-source-two',
     ]);
+  }, 10_000);
+
+  it('serializes the same source ID race and returns the committed durable result', async () => {
+    const sourceId = 'same-source';
+    const contender = spawnSameSourceContender(sourceId);
+    await waitUntil(() => existsSync(contender.readyPath), 5_000);
+
+    const result = service.createPersonProspect(baseCommand(sourceId));
+    const childResult = await contender.exit;
+
+    expect(childResult).toEqual({ code: 0, stderr: '' });
+    expect(result).toEqual(raceResult(sourceId));
+    expect(counts()).toMatchObject({
+      persons: 1, prospects: 1, source_events: 1, source_intake_receipts: 1,
+    });
+  }, 10_000);
+
+  it('serializes a changed same-source race and rejects it without writes', async () => {
+    const sourceId = 'same-source-different';
+    const contender = spawnSameSourceContender(sourceId);
+    await waitUntil(() => existsSync(contender.readyPath), 5_000);
+
+    expect(() => service.createPersonProspect(baseCommand(sourceId, {
+      person: { displayName: 'Different Person' },
+    }))).toThrow(expect.objectContaining({
+      name: 'IntakeIdempotencyConflictError', reason: 'command_mismatch',
+    }));
+    const childResult = await contender.exit;
+
+    expect(childResult).toEqual({ code: 0, stderr: '' });
+    expect(counts()).toMatchObject({
+      persons: 1, prospects: 1, source_events: 1, source_intake_receipts: 1,
+    });
   }, 10_000);
 
   it.each([
@@ -403,6 +556,26 @@ describe('SourceService', () => {
       qualification_reason: reason,
     });
     expect(counts().sales_cycles).toBe(0);
+  });
+
+  it('treats one handle attached to Direct and indirect people as shared identity evidence', () => {
+    insertPersonContact({
+      personId: 'direct-person', contactId: 'direct-contact', kind: 'phone',
+      value: '+14015550100', reachability: 'direct',
+    });
+    insertPersonContact({
+      personId: 'indirect-person', contactId: 'indirect-contact', kind: 'phone',
+      value: '+14015550100', reachability: 'indirect',
+    });
+    ids.push('review-person', 'review-contact', 'review-prospect');
+
+    const result = service.createPersonProspect(baseCommand('shared-metadata-source'));
+
+    expect(result).toMatchObject({
+      disposition: 'created_merge_review',
+      personId: 'review-person',
+      identityReviewReason: 'shared_handle',
+    });
   });
 
   it('never merges identity from names, organization, property, or shared office context', () => {
@@ -545,6 +718,142 @@ describe('SourceService', () => {
     });
   });
 
+  it('refuses to link a matched property owned by a different requested organization', () => {
+    database.raw.exec(`
+      INSERT INTO organizations (id, canonical_name, created_at, updated_at)
+      VALUES
+        ('requested-org', 'Requested LLC', '${NOW}', '${NOW}'),
+        ('owner-org', 'Owner LLC', '${NOW}', '${NOW}');
+      INSERT INTO organization_aliases (id, organization_id, alias, created_at)
+      VALUES
+        ('requested-alias', 'requested-org', 'requested llc', '${NOW}'),
+        ('owner-alias', 'owner-org', 'owner llc', '${NOW}');
+      INSERT INTO properties (
+        id, organization_id, address_line_1, locality, region, country_code,
+        created_at, updated_at
+      ) VALUES (
+        'owned-property', 'owner-org', '10 hope st', 'providence', 'ri', 'US',
+        '${NOW}', '${NOW}'
+      );
+    `);
+    ids.push('person', 'prospect');
+
+    const result = service.createPersonProspect(baseCommand('property-owner-conflict', {
+      contacts: [],
+      properties: [{
+        addressLine1: '10 Hope St', locality: 'Providence', region: 'RI',
+        organizationAlias: 'Requested LLC',
+      }],
+    }));
+
+    expect(result.contextReviewReasons).toEqual(['property_organization_conflict']);
+    expect(result.propertyIds).toEqual([]);
+    expect(counts().prospect_properties).toBe(0);
+  });
+
+  it('links a matched property only when its requested organization uniquely matches', () => {
+    database.raw.exec(`
+      INSERT INTO organizations (id, canonical_name, created_at, updated_at)
+      VALUES ('owner-org', 'Owner LLC', '${NOW}', '${NOW}');
+      INSERT INTO organization_aliases (id, organization_id, alias, created_at)
+      VALUES ('owner-alias', 'owner-org', 'owner llc', '${NOW}');
+      INSERT INTO properties (
+        id, organization_id, address_line_1, locality, region, country_code,
+        created_at, updated_at
+      ) VALUES (
+        'owned-property', 'owner-org', '10 hope st', 'providence', 'ri', 'US',
+        '${NOW}', '${NOW}'
+      );
+    `);
+    ids.push('person', 'prospect');
+
+    const result = service.createPersonProspect(baseCommand('property-owner-match', {
+      contacts: [],
+      properties: [{
+        addressLine1: '10 Hope St', locality: 'Providence', region: 'RI',
+        organizationAlias: 'Owner LLC',
+      }],
+    }));
+
+    expect(result.contextReviewReasons).toEqual([]);
+    expect(result.propertyIds).toEqual(['owned-property']);
+    expect(counts().prospect_properties).toBe(1);
+  });
+
+  it('preserves a new property unowned and returns durable review for an ambiguous org alias', () => {
+    database.raw.exec(`
+      INSERT INTO organizations (id, canonical_name, created_at, updated_at)
+      VALUES ('org-a', 'A LLC', '${NOW}', '${NOW}'), ('org-z', 'Z LLC', '${NOW}', '${NOW}');
+      INSERT INTO organization_aliases (id, organization_id, alias, created_at)
+      VALUES
+        ('alias-a', 'org-a', 'shared llc', '${NOW}'),
+        ('alias-z', 'org-z', 'shared llc', '${NOW}');
+    `);
+    ids.push('person', 'prospect', 'property');
+    const command = baseCommand('ambiguous-property-org', {
+      contacts: [],
+      properties: [{
+        addressLine1: '50 Hope St', locality: 'Providence', region: 'RI',
+        organizationAlias: 'Shared LLC',
+      }],
+    });
+
+    const first = service.createPersonProspect(command);
+    const replay = service.createPersonProspect(command);
+
+    expect(first.contextReviewReasons).toEqual(['ambiguous_organization']);
+    expect(first.propertyIds).toEqual(['property']);
+    expect(database.raw.prepare(`
+      SELECT organization_id FROM properties WHERE id = 'property'
+    `).get()).toEqual({ organization_id: null });
+    expect(replay).toEqual(first);
+  });
+
+  it('preserves a new property unowned while recording a missing organization review', () => {
+    ids.push('person', 'prospect', 'property');
+
+    const result = service.createPersonProspect(baseCommand('missing-property-organization', {
+      contacts: [],
+      properties: [{
+        addressLine1: '30 Hope St', locality: 'Providence', region: 'RI',
+        organizationAlias: 'Missing LLC',
+      }],
+    }));
+
+    expect(result.contextReviewReasons).toEqual(['organization_not_found']);
+    expect(result.propertyIds).toEqual(['property']);
+    expect(database.raw.prepare(`
+      SELECT organization_id FROM properties WHERE id = 'property'
+    `).get()).toEqual({ organization_id: null });
+  });
+
+  it('refuses a specifically organized match to an existing unowned property', () => {
+    database.raw.exec(`
+      INSERT INTO organizations (id, canonical_name, created_at, updated_at)
+      VALUES ('requested-org', 'Requested LLC', '${NOW}', '${NOW}');
+      INSERT INTO organization_aliases (id, organization_id, alias, created_at)
+      VALUES ('requested-alias', 'requested-org', 'requested llc', '${NOW}');
+      INSERT INTO properties (
+        id, address_line_1, locality, region, country_code, created_at, updated_at
+      ) VALUES (
+        'unowned-property', '40 hope st', 'providence', 'ri', 'US', '${NOW}', '${NOW}'
+      );
+    `);
+    ids.push('person', 'prospect');
+
+    const result = service.createPersonProspect(baseCommand('unowned-property-conflict', {
+      contacts: [],
+      properties: [{
+        addressLine1: '40 Hope St', locality: 'Providence', region: 'RI',
+        organizationAlias: 'Requested LLC',
+      }],
+    }));
+
+    expect(result.contextReviewReasons).toEqual(['property_organization_conflict']);
+    expect(result.propertyIds).toEqual([]);
+    expect(counts().prospect_properties).toBe(0);
+  });
+
   it('preserves immutable original attribution while appending later interaction evidence', () => {
     ids.push('person', 'contact', 'prospect');
     const intake = service.createPersonProspect(baseCommand('original-source'));
@@ -587,31 +896,122 @@ describe('SourceService', () => {
       },
     } as CreatePersonProspectCommand);
 
-    expect(replay).toMatchObject({
-      disposition: 'matched_existing',
-      personId: first.personId,
-      prospectId: first.prospectId,
-      sourceEventId: first.sourceEventId,
-      organizationIds: first.organizationIds,
-      propertyIds: first.propertyIds,
-    });
+    expect(replay).toEqual(first);
     expect(counts()).toEqual(before);
   });
 
-  it('rejects a changed source payload on retry and rolls back all attempted writes', () => {
+  it('returns durable context review reasons on exact replay', () => {
+    ids.push('person', 'prospect', 'property');
+    const command = baseCommand('review-replay', {
+      contacts: [],
+      properties: [{
+        addressLine1: '10 Hope St', locality: 'Providence', region: 'RI',
+        organizationAlias: 'Missing LLC',
+      }],
+    });
+    const first = service.createPersonProspect(command);
+    const replay = service.createPersonProspect(command);
+
+    expect(first.contextReviewReasons).toEqual(['organization_not_found']);
+    expect(replay).toEqual(first);
+    expect(counts()).toMatchObject({ source_events: 1, source_intake_receipts: 1 });
+  });
+
+  it('treats equivalent normalized command formatting as the same intake', () => {
     ids.push('person', 'contact', 'prospect');
-    service.createPersonProspect(baseCommand('stable-source'));
+    const first = service.createPersonProspect(baseCommand('normalized-replay'));
+    const replay = service.createPersonProspect(baseCommand('normalized-replay', {
+      contacts: [{
+        kind: 'phone', value: '+1 (401) 555-0100', reachability: 'direct', isPrimary: true,
+      }],
+      source: {
+        id: 'normalized-replay', channel: 'frbo', observedAt: OBSERVED_AT,
+        sourceRecord: { listingId: 'normalized-replay' },
+      },
+    }));
+
+    expect(replay).toEqual(first);
+  });
+
+  it.each([
+    ['source payload', (command: CreatePersonProspectCommand) => ({
+      ...command,
+      source: { ...command.source, sourceRecord: { listingId: 'different' } },
+    })],
+    ['person data', (command: CreatePersonProspectCommand) => ({
+      ...command, person: { displayName: 'Different Person' },
+    })],
+    ['contact facts', (command: CreatePersonProspectCommand) => ({
+      ...command,
+      contacts: [{ kind: 'phone' as const, value: '(401) 555-0100', reachability: 'indirect' as const }],
+    })],
+  ] as const)('rejects changed %s on retry before writes', (_label, mutate) => {
+    ids.push('person', 'contact', 'prospect');
+    const command = baseCommand('stable-source');
+    service.createPersonProspect(command);
     const before = counts();
 
-    expect(() => service.createPersonProspect(baseCommand('stable-source', {
-      source: {
-        id: 'stable-source',
-        channel: 'frbo',
-        observedAt: OBSERVED_AT,
-        sourceRecord: { listingId: 'different' },
-      },
-    }))).toThrow(SourceEventIdempotencyConflictError);
+    expect(() => service.createPersonProspect(mutate(command) as CreatePersonProspectCommand))
+      .toThrow(IntakeIdempotencyConflictError);
     expect(counts()).toEqual(before);
+  });
+
+  it('refuses to hijack an interaction SourceEvent that has no intake receipt', () => {
+    ids.push('person', 'contact', 'prospect');
+    const intake = service.createPersonProspect(baseCommand('original'));
+    service.appendSourceInteraction({
+      id: 'interaction-only', personId: intake.personId, prospectId: intake.prospectId,
+      channel: 'community', observedAt: OBSERVED_AT,
+      sourceRecord: { event: 'interaction' },
+    });
+    const before = counts();
+
+    expect(() => service.createPersonProspect(baseCommand('interaction-only', {
+      source: {
+        id: 'interaction-only', channel: 'community', observedAt: OBSERVED_AT,
+        sourceRecord: { event: 'interaction' },
+      },
+    }))).toThrow(expect.objectContaining({
+      name: 'IntakeIdempotencyConflictError', reason: 'source_event_without_receipt',
+    }));
+    expect(counts()).toEqual(before);
+  });
+
+  it.each([
+    ['command_json', '{"formatVersion":99,"command":{}}'],
+    ['result_json', '{bad'],
+  ] as const)('fails closed when a stored intake receipt has corrupt %s', (column, corrupt) => {
+    const sourceId = `corrupt-${column}`;
+    database.raw.exec(`
+      INSERT INTO persons (
+        id, display_name, aliases_json, opted_out, never_record,
+        version, created_at, updated_at
+      ) VALUES ('corrupt-person', 'Corrupt', '[]', 0, 0, 1, '${NOW}', '${NOW}');
+    `);
+    database.raw.prepare(`
+      INSERT INTO source_events (
+        id, person_id, channel, observed_at, source_record_json, created_at
+      ) VALUES (?, 'corrupt-person', 'frbo', ?, ?, ?)
+    `).run(sourceId, OBSERVED_AT, JSON.stringify({
+      formatVersion: 1,
+      sourceRecord: { listingId: sourceId },
+      customSourceReason: null,
+    }), NOW);
+    const validCommand = serializeCanonicalIntakeCommand(canonicalRaceCommand(sourceId));
+    const validResult = JSON.stringify({ formatVersion: 1, result: raceResult(sourceId) });
+    database.raw.prepare(`
+      INSERT INTO source_intake_receipts (
+        source_event_id, command_json, result_json, created_at
+      ) VALUES (?, ?, ?, ?)
+    `).run(
+      sourceId,
+      column === 'command_json' ? corrupt : validCommand,
+      column === 'result_json' ? corrupt : validResult,
+      NOW,
+    );
+
+    expect(() => service.createPersonProspect(baseCommand(sourceId))).toThrow(z.ZodError);
+    expect(counts()).toMatchObject({ persons: 1, source_events: 1, source_intake_receipts: 1 });
   });
 
   it.each([
@@ -622,6 +1022,7 @@ describe('SourceService', () => {
     'after_organization_link',
     'after_property',
     'after_property_link',
+    'after_receipt',
   ] as const)('rolls back every artifact after an injected %s failure', (faultPoint) => {
     ids.push(
       'person', 'contact', 'prospect',
