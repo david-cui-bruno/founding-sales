@@ -535,7 +535,8 @@ describe('auditDomainInvariants', () => {
       version: 1, outcome: 'marked_impossible', reason: 'missing_phone',
       evidenceActivityId: null,
       plannerTransition: {
-        definitionId: null, stepId: null, componentId: null, outcome: 'marked_impossible',
+        definitionId: null, stepId: null, componentId: null,
+        attempt: null, outcome: 'marked_impossible',
       },
       cadence: {
         cadenceEnrollmentId: null, cadenceDefinitionId: null,
@@ -544,11 +545,261 @@ describe('auditDomainInvariants', () => {
       workIntent: 'promised_follow_up',
       inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
     }), DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
-
     expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).toContainEqual(
       expect.objectContaining({
         kind: 'action_settlement_invalid', recordId: 'invalid-impossible-settlement',
       }),
     );
+  });
+
+  it('rejects unknown and communication outcomes that omit required Activity evidence', async () => {
+    workspace = createTempDatabase();
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: workspace.path, key });
+    await migrateToLatest(database, {
+      backupDirectory: `${workspace.path}.backups`, workspaceKey: key,
+    });
+    const prospect = seedProspect(database.raw, 'settlement-union');
+    const seeded = insertOpenCycleWithAction({
+      database: database.raw, prefix: 'settlement-union', prospect,
+    });
+    const cases = [
+      ['arbitrary-settlement', 'invented_outcome'],
+      ['answered-without-evidence', 'answered'],
+      ['accepted-without-evidence', 'accepted'],
+      ['failed-must-remain-pending', 'failed'],
+    ] as const;
+    for (const [id, outcome] of cases) {
+      database.raw.prepare(`
+        INSERT INTO next_actions (
+          id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+          work_intent, settlement_json, completed_at, created_at, updated_at
+        ) VALUES (?, ?, 'follow_up', NULL, 'completed', ?, 'America/New_York',
+          'promised_follow_up', ?, ?, ?, ?)
+      `).run(id, seeded.cycleId, DOMAIN_TIMESTAMP, serializeCanonical({
+        version: 1, outcome, reason: null, evidenceActivityId: null,
+        plannerTransition: {
+          definitionId: null, stepId: null, componentId: null,
+          attempt: null, outcome,
+        },
+        cadence: {
+          cadenceEnrollmentId: null, cadenceDefinitionId: null,
+          cadenceStepId: null, cadenceComponentId: null,
+        },
+        workIntent: 'promised_follow_up',
+        inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
+      }), DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    }
+
+    const violations = auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP });
+    for (const [id] of cases) {
+      expect(violations).toContainEqual(expect.objectContaining({
+        kind: 'action_settlement_invalid', recordId: id,
+      }));
+    }
+  });
+
+  it('binds settlement cadence attempts and complete inbound-SLA provenance while allowing exact internal terminals', async () => {
+    workspace = createTempDatabase();
+    const key = createTestWorkspaceKey();
+    database = openDatabase({ path: workspace.path, key });
+    await migrateToLatest(database, {
+      backupDirectory: `${workspace.path}.backups`, workspaceKey: key,
+    });
+    const unitOfWork = new DomainUnitOfWork(database);
+    const cadences = new CadenceRepository({
+      database, unitOfWork, clock: { now: () => DOMAIN_TIMESTAMP },
+    });
+    unitOfWork.immediate(() => cadences.installBuiltins());
+    const prospect = seedProspect(database.raw, 'settlement-snapshots');
+    const seeded = insertOpenCycleWithAction({
+      database: database.raw, prefix: 'settlement-snapshots', prospect,
+    });
+    database.raw.prepare(`
+      INSERT INTO cadence_enrollments (
+        id, sales_cycle_id, cadence_definition_id, status, anchor_at,
+        current_step_id, scheduled_step_count, mode, allowed_step_ids_json,
+        stop_reason, version, created_at, updated_at
+      ) VALUES ('snapshot-enrollment', ?, 'cadence-a-v1', 'stopped', ?,
+        'cadence-a-v1-day-0', 1, 'standard', NULL, 'phase_completed', 1, ?, ?)
+    `).run(seeded.cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    database.raw.prepare(`
+      INSERT INTO activities (
+        id, person_id, prospect_id, sales_cycle_id, cadence_enrollment_id,
+        cadence_step_id, cadence_component_id, kind, direction, channel,
+        occurred_at, observed_outcome, metadata_json, created_at
+      ) VALUES ('snapshot-activity', ?, ?, ?, 'snapshot-enrollment',
+        'cadence-a-v1-day-0', 'cadence-a-v1-day-0-call', 'call', 'outbound',
+        'phone', ?, 'answered', '{}', ?)
+    `).run(
+      prospect.personId, prospect.prospectId, seeded.cycleId,
+      DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+    );
+    database.raw.prepare(`
+      INSERT INTO activities (
+        id, person_id, prospect_id, sales_cycle_id, cadence_enrollment_id,
+        cadence_step_id, cadence_component_id, kind, direction, channel,
+        occurred_at, observed_outcome, metadata_json, created_at
+      ) VALUES ('snapshot-activity-copy', ?, ?, ?, 'snapshot-enrollment',
+        'cadence-a-v1-day-0', 'cadence-a-v1-day-0-call', 'call', 'outbound',
+        'phone', ?, 'answered', '{}', ?)
+    `).run(
+      prospect.personId, prospect.prospectId, seeded.cycleId,
+      DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+    );
+    database.raw.prepare(`
+      INSERT INTO next_actions (
+        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        work_intent, cadence_enrollment_id, cadence_step_id, cadence_component_id,
+        completion_activity_id, settlement_json, completed_at, created_at, updated_at
+      ) VALUES ('cadence-definition-mismatch', ?, 'call', 'phone', 'completed', ?,
+        'America/New_York', 'promised_follow_up', 'snapshot-enrollment',
+        'cadence-a-v1-day-0', 'cadence-a-v1-day-0-call', 'snapshot-activity', ?, ?, ?, ?)
+    `).run(seeded.cycleId, DOMAIN_TIMESTAMP, serializeCanonical({
+      version: 1, outcome: 'answered', reason: null,
+      evidenceActivityId: 'snapshot-activity',
+      plannerTransition: {
+        definitionId: 'cadence-a-v1', stepId: 'cadence-a-v1-day-0',
+        componentId: 'cadence-a-v1-day-0-call', attempt: 1, outcome: 'answered',
+      },
+      cadence: {
+        cadenceEnrollmentId: 'snapshot-enrollment', cadenceDefinitionId: 'cadence-b-v1',
+        cadenceStepId: 'cadence-a-v1-day-0',
+        cadenceComponentId: 'cadence-a-v1-day-0-call',
+      },
+      workIntent: 'promised_follow_up',
+      inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
+    }), DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    for (const [id, outcome, completionActivityId, evidenceActivityId] of [
+      ['completion-activity-mismatch', 'answered', 'snapshot-activity', 'snapshot-activity-copy'],
+      ['activity-outcome-mismatch', 'accepted', 'snapshot-activity', 'snapshot-activity'],
+    ] as const) {
+      database.raw.prepare(`
+        INSERT INTO next_actions (
+          id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+          work_intent, cadence_enrollment_id, cadence_step_id, cadence_component_id,
+          completion_activity_id, settlement_json, completed_at, created_at, updated_at
+        ) VALUES (?, ?, 'call', 'phone', 'completed', ?, 'America/New_York',
+          'promised_follow_up', 'snapshot-enrollment', 'cadence-a-v1-day-0',
+          'cadence-a-v1-day-0-call', ?, ?, ?, ?, ?)
+      `).run(id, seeded.cycleId, DOMAIN_TIMESTAMP, completionActivityId, serializeCanonical({
+        version: 1, outcome, reason: null, evidenceActivityId,
+        plannerTransition: {
+          definitionId: 'cadence-a-v1', stepId: 'cadence-a-v1-day-0',
+          componentId: 'cadence-a-v1-day-0-call', attempt: 1, outcome,
+        },
+        cadence: {
+          cadenceEnrollmentId: 'snapshot-enrollment', cadenceDefinitionId: 'cadence-a-v1',
+          cadenceStepId: 'cadence-a-v1-day-0',
+          cadenceComponentId: 'cadence-a-v1-day-0-call',
+        },
+        workIntent: 'promised_follow_up',
+        inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
+      }), DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    }
+
+    insertSourceEvent({
+      database: database.raw, id: 'snapshot-referral', personId: prospect.personId,
+      channel: 'referral', referrerUnknownReason: 'not_provided',
+    });
+    const referralDueAt = '2026-09-01T12:00:00.000Z';
+    const rawProvenance = {
+      version: 1, sourceEventId: 'snapshot-referral', sourceObservedAt: DOMAIN_TIMESTAMP,
+      calculation: 'elapsed_hours', hours: 48, policyId: null as null,
+      computedDueAt: referralDueAt,
+    } as const;
+    database.raw.prepare(`
+      INSERT INTO next_actions (
+        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        work_intent, inbound_sla_kind, inbound_sla_due_at,
+        inbound_sla_source_event_id, inbound_sla_provenance_json,
+        settlement_json, completed_at, created_at, updated_at
+      ) VALUES ('sla-snapshot-mismatch', ?, 'review_inbound', NULL, 'completed', ?,
+        'America/New_York', 'inbound_response', 'direct_referral_elapsed', ?,
+        'snapshot-referral', ?, ?, ?, ?, ?)
+    `).run(
+      seeded.cycleId, DOMAIN_TIMESTAMP, referralDueAt, serializeCanonical(rawProvenance),
+      serializeCanonical({
+        version: 1, outcome: 'reviewed_ready', reason: null, evidenceActivityId: null,
+        plannerTransition: {
+          definitionId: null, stepId: null, componentId: null,
+          attempt: null, outcome: 'reviewed_ready',
+        },
+        cadence: {
+          cadenceEnrollmentId: null, cadenceDefinitionId: null,
+          cadenceStepId: null, cadenceComponentId: null,
+        },
+        workIntent: 'inbound_response',
+        inboundSla: {
+          kind: 'direct_referral_elapsed', dueAt: referralDueAt,
+          sourceEventId: 'snapshot-referral', provenance: {
+            ...rawProvenance, sourceObservedAt: '2026-08-30T11:59:59.000Z',
+          },
+        },
+      }), DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+    );
+
+    const exactInternal = serializeCanonical({
+      version: 1, outcome: 'reviewed_ready', reason: null, evidenceActivityId: null,
+      plannerTransition: {
+        definitionId: null, stepId: null, componentId: null,
+        attempt: null, outcome: 'reviewed_ready',
+      },
+      cadence: {
+        cadenceEnrollmentId: null, cadenceDefinitionId: null,
+        cadenceStepId: null, cadenceComponentId: null,
+      },
+      workIntent: 'internal_review',
+      inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
+    });
+    const exactTerminal = serializeCanonical({
+      version: 1, outcome: 'lost_nurture', reason: 'bad_timing', evidenceActivityId: null,
+      plannerTransition: {
+        definitionId: null, stepId: null, componentId: null,
+        attempt: null, outcome: 'lost_nurture',
+      },
+      cadence: {
+        cadenceEnrollmentId: null, cadenceDefinitionId: null,
+        cadenceStepId: null, cadenceComponentId: null,
+      },
+      workIntent: 'internal_review',
+      inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
+    });
+    database.raw.prepare(`
+      INSERT INTO next_actions (
+        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        work_intent, settlement_json, completed_at, created_at, updated_at
+      ) VALUES ('valid-internal-settlement', ?, 'review', NULL, 'completed', ?,
+          'America/New_York', 'internal_review', ?, ?, ?, ?),
+        ('valid-terminal-settlement', ?, 'review', NULL, 'cancelled', ?,
+          'America/New_York', 'internal_review', ?, ?, ?, ?)
+    `).run(
+      seeded.cycleId, DOMAIN_TIMESTAMP, exactInternal,
+      DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+      seeded.cycleId, DOMAIN_TIMESTAMP, exactTerminal,
+      DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+    );
+
+    const violations = auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP });
+    expect(violations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'action_settlement_invalid', recordId: 'cadence-definition-mismatch',
+      }),
+      expect.objectContaining({
+        kind: 'action_settlement_invalid', recordId: 'sla-snapshot-mismatch',
+      }),
+      expect.objectContaining({
+        kind: 'action_settlement_invalid', recordId: 'completion-activity-mismatch',
+      }),
+      expect.objectContaining({
+        kind: 'action_settlement_invalid', recordId: 'activity-outcome-mismatch',
+      }),
+    ]));
+    expect(violations).not.toContainEqual(expect.objectContaining({
+      kind: 'action_settlement_invalid', recordId: 'valid-internal-settlement',
+    }));
+    expect(violations).not.toContainEqual(expect.objectContaining({
+      kind: 'action_settlement_invalid', recordId: 'valid-terminal-settlement',
+    }));
   });
 });

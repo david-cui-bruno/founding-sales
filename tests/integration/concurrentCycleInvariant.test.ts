@@ -253,7 +253,7 @@ describe('concurrent SalesCycle invariant', () => {
         evidenceActivityId: 'action-race-activity',
         plannerTransition: {
           definitionId: definition.id, stepId: step.id,
-          componentId: component.id, outcome: 'answered',
+          componentId: component.id, attempt: 2, outcome: 'answered',
         },
         cadence: {
           cadenceEnrollmentId: enrollmentId, cadenceDefinitionId: definition.id,
@@ -459,7 +459,8 @@ describe('concurrent SalesCycle invariant', () => {
       evidenceActivityId: 'replacement-close-activity',
       plannerTransition: {
         definitionId: seeded.definition.id, stepId: seeded.step.id,
-        componentId: seeded.component.id, outcome: 'answered',
+        componentId: seeded.component.id, attempt: seeded.step.sequence + 1,
+        outcome: 'answered',
       },
       cadence: {
         cadenceEnrollmentId: seeded.enrollmentId,
@@ -511,7 +512,8 @@ describe('concurrent SalesCycle invariant', () => {
       version: 1, outcome: 'lost_nurture', reason: 'bad_timing', evidenceActivityId: null,
       plannerTransition: {
         definitionId: seeded.definition.id, stepId: seeded.step.id,
-        componentId: seeded.component.id, outcome: 'lost_nurture',
+        componentId: seeded.component.id, attempt: seeded.step.sequence + 1,
+        outcome: 'lost_nurture',
       },
       cadence: {
         cadenceEnrollmentId: seeded.enrollmentId,
@@ -606,7 +608,8 @@ describe('concurrent SalesCycle invariant', () => {
       evidenceActivityId: 'optout-replacement-completion',
       plannerTransition: {
         definitionId: seeded.definition.id, stepId: seeded.step.id,
-        componentId: seeded.component.id, outcome: 'answered',
+        componentId: seeded.component.id, attempt: seeded.step.sequence + 1,
+        outcome: 'answered',
       }, cadence: {
         cadenceEnrollmentId: seeded.enrollmentId,
         cadenceDefinitionId: seeded.definition.id,

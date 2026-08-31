@@ -23,6 +23,15 @@ const REACTIVATION_FAULTS = [
   'cycle_insert', 'enrollment_insert', 'action_insert',
   'stage_event_insert', 'rule_consume', 'receipt_insert',
 ] as const;
+const RAW_TIMESTAMP_CORRUPTIONS = [
+  { target: 'source', column: 'observed_at', value: '' },
+  { target: 'rule', column: 'created_at', value: '2026-08-30T12:00:00Z' },
+  { target: 'stage', column: 'confirmed_at', value: '' },
+  { target: 'action', column: 'created_at', value: '2026-08-30T12:00:00Z' },
+  { target: 'enrollment', column: 'anchor_at', value: '' },
+  { target: 'cycle', column: 'stage_entered_at', value: '2026-08-30T12:00:00Z' },
+  { target: 'receipt', column: 'created_at', value: '' },
+] as const;
 
 describe('reactivation lifecycle contracts', () => {
   let database: AppDatabase | undefined;
@@ -33,7 +42,7 @@ describe('reactivation lifecycle contracts', () => {
     workspace?.cleanup();
   });
 
-  async function setup(allocatedIds: string[]) {
+  async function setup(allocatedIds: string[], clockNow = DOMAIN_TIMESTAMP) {
     workspace = createTempDatabase();
     const key = createTestWorkspaceKey();
     database = openDatabase({ path: workspace.path, key });
@@ -41,7 +50,7 @@ describe('reactivation lifecycle contracts', () => {
       backupDirectory: `${workspace.path}.backups`, workspaceKey: key,
     });
     const unitOfWork = new DomainUnitOfWork(database);
-    const clock = { now: () => DOMAIN_TIMESTAMP };
+    const clock = { now: () => clockNow };
     const remaining = [...allocatedIds];
     const ids = { next: () => {
       const id = remaining.shift();
@@ -150,6 +159,115 @@ describe('reactivation lifecycle contracts', () => {
       }),
     );
   });
+
+  it('commits and exactly replays activation when the repository clock advances past activatedAt', async () => {
+    const harness = await setup([
+      'advancing-clock-enrollment', 'advancing-clock-action', 'advancing-clock-event',
+    ], AFTER_DOMAIN);
+    const prospect = seedProspect(harness.database.raw, 'advancing-clock');
+    const sourceCycleId = insertClosedCycle({
+      database: harness.database.raw, prefix: 'advancing-clock-source', prospect,
+    });
+    harness.unitOfWork.immediate(() => harness.reactivations.insertRule({
+      id: 'advancing-clock-rule', salesCycleId: sourceCycleId,
+      ruleType: 'manual', dueAt: DOMAIN_TIMESTAMP, matcher: null,
+      version: 1, createdAt: BEFORE_DOMAIN,
+    }));
+    const definition = BUILTIN_CADENCES.find(({ family }) => family === 'cadence_c')!;
+    const command = {
+      ruleId: 'advancing-clock-rule', expectedRuleVersion: 1,
+      personId: prospect.personId, prospectId: prospect.prospectId,
+      sourceCycleId, entrySourceEventId: prospect.sourceEventId,
+      newCycleId: 'advancing-clock-cycle', activatedAt: DOMAIN_TIMESTAMP,
+      ruleType: 'manual' as const,
+      trigger: { kind: 'due' as const, dueAt: DOMAIN_TIMESTAMP },
+      cadence: {
+        definitionId: definition.id, family: 'cadence_c' as const,
+        version: definition.version, contentHash: definition.contentHash,
+      },
+    };
+
+    const committed = harness.service.reactivateFromRule(command);
+    expect(committed).toMatchObject({
+      kind: 'reactivated', cycle: { id: 'advancing-clock-cycle', createdAt: DOMAIN_TIMESTAMP },
+    });
+    expect(harness.database.raw.prepare(`
+      SELECT created_at FROM stage_events
+      WHERE sales_cycle_id = 'advancing-clock-cycle' AND transition_sequence = 1
+    `).get()).toEqual({ created_at: AFTER_DOMAIN });
+    expect(harness.service.reactivateFromRule(command)).toEqual(committed);
+    expect(harness.reactivations.getReceipt('rule:advancing-clock-rule')).not.toBeNull();
+    expect(auditDomainInvariants({ database: harness.database, asOf: OCTOBER })).not.toContainEqual(
+      expect.objectContaining({
+        kind: 'reactivation_receipt_invalid', recordId: 'rule:advancing-clock-rule',
+      }),
+    );
+  });
+
+  it('rejects blank and noncanonical timestamps at repository append boundaries', async () => {
+    const harness = await setup([]);
+    const prospect = seedProspect(harness.database.raw, 'timestamp-append');
+    const sourceCycleId = insertClosedCycle({
+      database: harness.database.raw, prefix: 'timestamp-append-source', prospect,
+    });
+
+    expect(() => harness.unitOfWork.immediate(() => harness.reactivations.insertRule({
+      id: 'blank-rule', salesCycleId: sourceCycleId,
+      ruleType: 'manual', dueAt: DOMAIN_TIMESTAMP, matcher: null,
+      version: 1, createdAt: '',
+    } as never))).toThrow();
+    expect(() => harness.unitOfWork.immediate(() => harness.sources.append({
+      id: 'noncanonical-source', personId: prospect.personId,
+      prospectId: prospect.prospectId, channel: 'inbound_demo',
+      observedAt: '2026-08-30T12:00:00Z', sourceRecord: { message: 'DEMO' },
+    } as never))).toThrow();
+  });
+
+  it.each(RAW_TIMESTAMP_CORRUPTIONS)(
+    'rejects raw $target timestamp field $column corruption on receipt read and audit',
+    async ({ target, column, value }) => {
+      const harness = await setup([
+        'timestamp-enrollment', 'timestamp-action', 'timestamp-stage',
+      ]);
+      const prospect = seedProspect(harness.database.raw, `timestamp-${target}`);
+      const sourceCycleId = insertClosedCycle({
+        database: harness.database.raw, prefix: `timestamp-${target}-source`, prospect,
+      });
+      harness.unitOfWork.immediate(() => harness.reactivations.insertRule({
+        id: 'timestamp-rule', salesCycleId: sourceCycleId,
+        ruleType: 'manual', dueAt: DOMAIN_TIMESTAMP, matcher: null,
+        version: 1, createdAt: BEFORE_DOMAIN,
+      }));
+      const definition = BUILTIN_CADENCES.find(({ family }) => family === 'cadence_c')!;
+      harness.service.reactivateFromRule({
+        ruleId: 'timestamp-rule', expectedRuleVersion: 1,
+        personId: prospect.personId, prospectId: prospect.prospectId,
+        sourceCycleId, entrySourceEventId: prospect.sourceEventId,
+        newCycleId: 'timestamp-cycle', activatedAt: DOMAIN_TIMESTAMP,
+        ruleType: 'manual', trigger: { kind: 'due', dueAt: DOMAIN_TIMESTAMP },
+        cadence: {
+          definitionId: definition.id, family: 'cadence_c',
+          version: definition.version, contentHash: definition.contentHash,
+        },
+      });
+      expect(harness.reactivations.getReceipt('rule:timestamp-rule')).not.toBeNull();
+
+      const mutation = timestampCorruptionMutation({
+        target, column, value, sourceEventId: prospect.sourceEventId,
+      });
+      for (const trigger of mutation.dropTriggers) {
+        harness.database.raw.exec(`DROP TRIGGER ${trigger}`);
+      }
+      harness.database.raw.prepare(mutation.sql).run(value);
+
+      expect(() => harness.reactivations.getReceipt('rule:timestamp-rule')).toThrow();
+      expect(auditDomainInvariants({ database: harness.database, asOf: OCTOBER })).toContainEqual(
+        expect.objectContaining({
+          kind: 'reactivation_receipt_invalid', recordId: 'rule:timestamp-rule',
+        }),
+      );
+    },
+  );
 
   it('discriminates exact owned inbound evidence from an unknown normalized handle Review', async () => {
     const harness = await setup([
@@ -495,5 +613,42 @@ function reactivationSnapshot(database: AppDatabase, personId: string): unknown 
     receipts: database.raw.prepare(`
       SELECT * FROM cycle_reactivation_receipts WHERE person_id = ? ORDER BY activation_key
     `).all(personId),
+  };
+}
+
+function timestampCorruptionMutation(input: {
+  target: typeof RAW_TIMESTAMP_CORRUPTIONS[number]['target'];
+  column: string;
+  value: string;
+  sourceEventId: string;
+}): Readonly<{ dropTriggers: readonly string[]; sql: string }> {
+  if (input.target === 'source') return {
+    dropTriggers: ['immutable_source_events'],
+    sql: `UPDATE source_events SET observed_at = ? WHERE id = '${input.sourceEventId}'`,
+  };
+  if (input.target === 'rule') return {
+    dropTriggers: ['protect_reactivation_rule_update'],
+    sql: 'UPDATE reactivation_rules SET created_at = ? WHERE id = \'timestamp-rule\'',
+  };
+  if (input.target === 'stage') return {
+    dropTriggers: ['immutable_stage_events'],
+    sql: `UPDATE stage_events SET ${input.column} = ? WHERE id = 'timestamp-stage'`,
+  };
+  if (input.target === 'action') return {
+    dropTriggers: [],
+    sql: `UPDATE next_actions SET ${input.column} = ? WHERE id = 'timestamp-action'`,
+  };
+  if (input.target === 'enrollment') return {
+    dropTriggers: ['protect_cadence_enrollment_identity'],
+    sql: `UPDATE cadence_enrollments SET ${input.column} = ? WHERE id = 'timestamp-enrollment'`,
+  };
+  if (input.target === 'cycle') return {
+    dropTriggers: [],
+    sql: `UPDATE sales_cycles SET ${input.column} = ? WHERE id = 'timestamp-cycle'`,
+  };
+  return {
+    dropTriggers: ['immutable_cycle_reactivation_receipts'],
+    sql: `UPDATE cycle_reactivation_receipts SET ${input.column} = ?
+      WHERE activation_key = 'rule:timestamp-rule'`,
   };
 }

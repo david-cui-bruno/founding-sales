@@ -66,19 +66,68 @@ export const inboundSlaSchema = z.discriminatedUnion('kind', [
   }
 });
 
+export const actionSettlementOutcomeSchema = z.enum([
+  'answered', 'no_answer', 'voicemail_left', 'accepted', 'replied',
+  'opted_out', 'channel_unavailable', 'marked_impossible', 'resolved',
+  'reviewed_ready', 'lost_nurture', 'upgraded', 'interviewed_confirmed',
+  'offered_confirmed', 'won_confirmed', 'onboarding_waived', 'phase_completed',
+]);
+
+const settlementEvidenceRequired = new Set<z.infer<typeof actionSettlementOutcomeSchema>>([
+  'answered', 'no_answer', 'voicemail_left', 'accepted', 'replied',
+  'opted_out', 'channel_unavailable', 'marked_impossible',
+  'interviewed_confirmed', 'offered_confirmed',
+]);
+
 export const actionSettlementSchema = z.object({
   version: z.literal(1),
-  outcome: nonblankSchema,
+  outcome: actionSettlementOutcomeSchema,
   reason: z.string().nullable(),
   evidenceActivityId: idSchema.nullable(),
   plannerTransition: z.object({
     definitionId: idSchema.nullable(), stepId: idSchema.nullable(),
-    componentId: idSchema.nullable(), outcome: nonblankSchema,
+    componentId: idSchema.nullable(), attempt: z.number().int().safe().positive().nullable(),
+    outcome: actionSettlementOutcomeSchema,
   }).strict(),
   cadence: cadenceActionBindingSchema,
   workIntent: workIntentSchema,
   inboundSla: inboundSlaSchema,
-}).strict();
+}).strict().superRefine((value, context) => {
+  const evidenceRequired = settlementEvidenceRequired.has(value.outcome);
+  if (evidenceRequired !== (value.evidenceActivityId !== null)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: evidenceRequired
+        ? 'This settlement outcome requires immutable Activity evidence.'
+        : 'This internal or terminal outcome does not accept Activity evidence.',
+    });
+  }
+  const exactReason = value.outcome === 'opted_out' ? value.reason === 'person_wide_opt_out'
+    : value.outcome === 'marked_impossible' || value.outcome === 'onboarding_waived'
+      ? (value.reason?.trim().length ?? 0) > 0
+      : value.outcome === 'lost_nurture'
+        ? [
+            'no_response', 'not_interested', 'bad_timing', 'not_decision_maker',
+            'not_qualified', 'price', 'trust', 'chose_alternative', 'product_gap',
+            'cadence_exhausted', 'disqualified', 'other',
+          ].includes(value.reason ?? '')
+        : value.outcome === 'upgraded'
+          ? ['live_vacancy', 'inbound_demo', 'direct_referral'].includes(value.reason ?? '')
+          : value.reason === null;
+  if (!exactReason) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Settlement reason does not match its exact outcome discriminant.',
+    });
+  }
+  const cadenceAttemptPresent = value.cadence.cadenceEnrollmentId !== null;
+  if (cadenceAttemptPresent !== (value.plannerTransition.attempt !== null)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Cadence settlements require an exact positive scheduled-step attempt.',
+    });
+  }
+});
 
 export function serializeCanonical(value: unknown): string {
   return canonicalJson(value);

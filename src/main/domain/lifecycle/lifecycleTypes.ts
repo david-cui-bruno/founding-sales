@@ -107,16 +107,23 @@ export type ExpectedActionIntentAndSla =
       expectedInboundSla: Extract<InboundSla, { kind: 'none' }>;
     }>;
 
+export type ActionSettlementOutcome =
+  | 'answered' | 'no_answer' | 'voicemail_left' | 'accepted' | 'replied'
+  | 'opted_out' | 'channel_unavailable' | 'marked_impossible' | 'resolved'
+  | 'reviewed_ready' | 'lost_nurture' | 'upgraded' | 'interviewed_confirmed'
+  | 'offered_confirmed' | 'won_confirmed' | 'onboarding_waived' | 'phase_completed';
+
 export type ActionSettlement = Readonly<{
   version: 1;
-  outcome: string;
+  outcome: ActionSettlementOutcome;
   reason: string | null;
   evidenceActivityId: string | null;
   plannerTransition: Readonly<{
     definitionId: string | null;
     stepId: string | null;
     componentId: string | null;
-    outcome: string;
+    attempt: number | null;
+    outcome: ActionSettlementOutcome;
   }>;
   cadence: CadenceActionBinding;
   workIntent: NextActionWorkIntent;

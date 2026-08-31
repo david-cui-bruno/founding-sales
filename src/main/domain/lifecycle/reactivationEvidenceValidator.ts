@@ -1,5 +1,7 @@
 import type { AppDatabase } from '../../db/database';
-import { parseCanonicalJson, serializeCanonical } from './lifecycleValidation';
+import {
+  parseCanonicalJson, serializeCanonical, utcTimestampSchema,
+} from './lifecycleValidation';
 import {
   reactivationCommandEnvelopeSchema,
   reactivationResultEnvelopeSchema,
@@ -52,6 +54,8 @@ export function collectReceiptEvidenceViolations(
   const isRule = 'ruleType' in command;
   const expectedStage = isRule ? 'ready' : 'contacted';
   const activatedAt = command.activatedAt;
+  requireCanonicalTimestamp(activatedAt, 'command activatedAt', violations);
+  requireCanonicalTimestamp(receipt.createdAt, 'receipt createdAt', violations);
   const entrySourceEventId = isRule
     ? command.entrySourceEventId
     : command.evidence.kind === 'source_event' ? command.evidence.sourceEventId : null;
@@ -61,8 +65,12 @@ export function collectReceiptEvidenceViolations(
   }
 
   const sourceCycle = one(database, `
-    SELECT person_id, prospect_id, workflow_status FROM sales_cycles WHERE id = ?
+    SELECT person_id, prospect_id, workflow_status, stage_entered_at,
+      closed_at, created_at, updated_at FROM sales_cycles WHERE id = ?
   `, receipt.sourceCycleId);
+  requireCanonicalRowTimestamps(sourceCycle, [
+    'stage_entered_at', 'closed_at', 'created_at', 'updated_at',
+  ], 'source SalesCycle', violations);
   if (sourceCycle?.person_id !== receipt.personId
     || sourceCycle.prospect_id !== command.prospectId
     || sourceCycle.workflow_status !== 'closed') {
@@ -77,19 +85,30 @@ export function collectReceiptEvidenceViolations(
     violations.push('pinned cadence aggregate identity is invalid');
   }
   const source = one(database, `
-    SELECT person_id, prospect_id, channel, observed_at, source_record_json
+    SELECT person_id, prospect_id, channel, observed_at, source_record_json, created_at
     FROM source_events WHERE id = ?
   `, entrySourceEventId);
+  const sourceObservedAt = requireCanonicalTimestamp(
+    source?.observed_at, 'entry SourceEvent observedAt', violations,
+  );
+  requireCanonicalTimestamp(source?.created_at, 'entry SourceEvent createdAt', violations);
   if (source?.person_id !== receipt.personId
     || (source.prospect_id !== null && source.prospect_id !== command.prospectId)
-    || typeof source.observed_at !== 'string' || source.observed_at > activatedAt) {
+    || sourceObservedAt === null || sourceObservedAt > activatedAt) {
     violations.push('entry SourceEvent ownership or temporal evidence is invalid');
   }
 
   const target = one(database, `
-    SELECT person_id, prospect_id, entry_source_event_id, created_at
+    SELECT person_id, prospect_id, entry_source_event_id, stage_entered_at,
+      closed_at, created_at, updated_at
     FROM sales_cycles WHERE id = ?
   `, receipt.newCycleId);
+  requireCanonicalRowTimestamps(target, [
+    'stage_entered_at', 'created_at', 'updated_at',
+  ], 'target SalesCycle', violations);
+  if (target?.closed_at !== null && target?.closed_at !== undefined) {
+    requireCanonicalTimestamp(target.closed_at, 'target SalesCycle closedAt', violations);
+  }
   if (target?.person_id !== receipt.personId
     || target.prospect_id !== command.prospectId
     || target.entry_source_event_id !== entrySourceEventId
@@ -113,24 +132,37 @@ export function collectReceiptEvidenceViolations(
       transition_sequence, created_at
     FROM stage_events WHERE sales_cycle_id = ? AND transition_sequence = 1
   `, receipt.newCycleId);
+  requireCanonicalRowTimestamps(initialEvent, [
+    'effective_at', 'confirmed_at', 'created_at',
+  ], 'initial StageEvent', violations);
   if (initialEvent?.from_stage !== null || initialEvent.to_stage !== expectedStage
     || initialEvent.effective_at !== activatedAt || initialEvent.confirmed_at !== activatedAt
     || initialEvent.confirmation_kind !== 'mechanical'
-    || initialEvent.transition_sequence !== 1
-    || typeof initialEvent.created_at !== 'string' || initialEvent.created_at > activatedAt) {
+    || initialEvent.transition_sequence !== 1) {
     violations.push('initial StageEvent evidence is missing or invalid');
   }
   const action = snapshot.currentNextActionId === null ? undefined : one(database, `
     SELECT sales_cycle_id, status, cadence_enrollment_id, cadence_step_id,
-      cadence_component_id, created_at
+      cadence_component_id, due_at, sla_due_at, created_at, completed_at, updated_at
     FROM next_actions WHERE id = ?
   `, snapshot.currentNextActionId);
+  requireCanonicalRowTimestamps(action, [
+    'due_at', 'created_at', 'updated_at',
+  ], 'initial NextAction', violations);
+  for (const field of ['sla_due_at', 'completed_at'] as const) {
+    if (action?.[field] !== null && action?.[field] !== undefined) {
+      requireCanonicalTimestamp(action[field], `initial NextAction ${field}`, violations);
+    }
+  }
   const enrollment = action?.cadence_enrollment_id === null || action === undefined
     ? undefined : one(database, `
       SELECT sales_cycle_id, cadence_definition_id, anchor_at, scheduled_step_count,
-        mode, allowed_step_ids_json, created_at
+        mode, allowed_step_ids_json, created_at, updated_at
       FROM cadence_enrollments WHERE id = ?
     `, action.cadence_enrollment_id);
+  requireCanonicalRowTimestamps(enrollment, [
+    'anchor_at', 'created_at', 'updated_at',
+  ], 'initial CadenceEnrollment', violations);
   const firstStep = one(database, `
     SELECT id FROM cadence_steps WHERE cadence_definition_id = ?
     ORDER BY sequence ASC, id ASC LIMIT 1
@@ -163,6 +195,11 @@ export function collectReceiptEvidenceViolations(
       SELECT sales_cycle_id, rule_type, due_at, matcher_json, version,
         consumed_at, created_at FROM reactivation_rules WHERE id = ?
     `, command.ruleId);
+    requireCanonicalTimestamp(rule?.created_at, 'reactivation rule createdAt', violations);
+    requireCanonicalTimestamp(rule?.consumed_at, 'reactivation rule consumedAt', violations);
+    if (rule?.due_at !== null && rule?.due_at !== undefined) {
+      requireCanonicalTimestamp(rule.due_at, 'reactivation rule dueAt', violations);
+    }
     const expectedMatcher = command.trigger.kind === 'source_event'
       ? serializeCanonical({
         version: 1, eventType: command.trigger.eventType, personWide: true,
@@ -177,14 +214,14 @@ export function collectReceiptEvidenceViolations(
       || rule.rule_type !== command.ruleType
       || rule.version !== command.expectedRuleVersion
       || rule.consumed_at !== activatedAt
-      || typeof rule.created_at !== 'string' || rule.created_at > activatedAt
+      || !isCanonicalTimestamp(rule.created_at) || rule.created_at > activatedAt
       || (command.trigger.kind === 'due'
         ? rule.due_at !== command.trigger.dueAt || rule.matcher_json !== null
           || activatedAt < command.trigger.dueAt
         : rule.due_at !== null || rule.matcher_json !== expectedMatcher
           || command.trigger.sourceEventId !== entrySourceEventId
           || source?.channel !== expectedChannel
-          || typeof source?.observed_at !== 'string' || source.observed_at < rule.created_at
+          || sourceObservedAt === null || sourceObservedAt < rule.created_at
           || !namedTrigger)) {
       violations.push('reactivation rule type/version/matcher/temporal proof is invalid');
     }
@@ -205,6 +242,12 @@ export function collectReviewEvidenceViolations(
   const violations: string[] = [];
   const command = review.payload.command;
   const unknown = 'evidence' in command && command.evidence.kind === 'unknown_handle';
+  requireCanonicalTimestamp(command.activatedAt, 'Review command activatedAt', violations);
+  requireCanonicalTimestamp(review.createdAt, 'Review createdAt', violations);
+  requireCanonicalTimestamp(review.updatedAt, 'Review updatedAt', violations);
+  if (review.resolvedAt !== null) {
+    requireCanonicalTimestamp(review.resolvedAt, 'Review resolvedAt', violations);
+  }
   const expectedKey = 'ruleType' in command ? `rule:${command.ruleId}`
     : command.evidence.kind === 'source_event'
       ? `inbound:${command.evidence.sourceEventId}`
@@ -219,8 +262,12 @@ export function collectReviewEvidenceViolations(
     violations.push('Review envelope, CAS version, or timestamp state is invalid');
   }
   const sourceCycle = one(database, `
-    SELECT person_id, prospect_id, workflow_status FROM sales_cycles WHERE id = ?
+    SELECT person_id, prospect_id, workflow_status, stage_entered_at,
+      closed_at, created_at, updated_at FROM sales_cycles WHERE id = ?
   `, review.sourceCycleId);
+  requireCanonicalRowTimestamps(sourceCycle, [
+    'stage_entered_at', 'closed_at', 'created_at', 'updated_at',
+  ], 'Review source SalesCycle', violations);
   if (sourceCycle?.person_id !== review.personId
     || sourceCycle.prospect_id !== review.prospectId
     || sourceCycle.workflow_status !== 'closed') {
@@ -241,8 +288,16 @@ export function collectReviewEvidenceViolations(
     }
   } else if ('ruleType' in command) {
     const rule = one(database, `
-      SELECT sales_cycle_id, rule_type, version FROM reactivation_rules WHERE id = ?
+      SELECT sales_cycle_id, rule_type, due_at, version, consumed_at, created_at
+      FROM reactivation_rules WHERE id = ?
     `, command.ruleId);
+    requireCanonicalTimestamp(rule?.created_at, 'Review rule createdAt', violations);
+    if (rule?.due_at !== null && rule?.due_at !== undefined) {
+      requireCanonicalTimestamp(rule.due_at, 'Review rule dueAt', violations);
+    }
+    if (rule?.consumed_at !== null && rule?.consumed_at !== undefined) {
+      requireCanonicalTimestamp(rule.consumed_at, 'Review rule consumedAt', violations);
+    }
     if (review.reactivationRuleId !== command.ruleId || review.sourceEventId !== null
       || rule?.sales_cycle_id !== review.sourceCycleId
       || rule.rule_type !== command.ruleType || rule.version !== command.expectedRuleVersion) {
@@ -250,14 +305,19 @@ export function collectReviewEvidenceViolations(
     }
   } else if ('evidence' in command && command.evidence.kind === 'source_event') {
     const source = one(database, `
-      SELECT person_id, prospect_id, channel, observed_at FROM source_events WHERE id = ?
+      SELECT person_id, prospect_id, channel, observed_at, created_at
+      FROM source_events WHERE id = ?
     `, command.evidence.sourceEventId);
+    const sourceObservedAt = requireCanonicalTimestamp(
+      source?.observed_at, 'Review SourceEvent observedAt', violations,
+    );
+    requireCanonicalTimestamp(source?.created_at, 'Review SourceEvent createdAt', violations);
     if (review.reactivationRuleId !== null
       || review.sourceEventId !== command.evidence.sourceEventId
       || source?.person_id !== review.personId
       || (source.prospect_id !== null && source.prospect_id !== review.prospectId)
       || source.channel !== command.evidence.channel
-      || typeof source.observed_at !== 'string' || source.observed_at > command.activatedAt) {
+      || sourceObservedAt === null || sourceObservedAt > command.activatedAt) {
       violations.push('inbound Review SourceEvent evidence is invalid');
     }
   }
@@ -323,6 +383,33 @@ function namedSourceTrigger(value: unknown, eventType: string): boolean {
       && Object.keys(trigger).sort().join('|') === 'eventType|version';
   } catch {
     return false;
+  }
+}
+
+function isCanonicalTimestamp(value: unknown): value is string {
+  return utcTimestampSchema.safeParse(value).success;
+}
+
+function requireCanonicalTimestamp(
+  value: unknown,
+  label: string,
+  violations: string[],
+): string | null {
+  const parsed = utcTimestampSchema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  violations.push(`${label} is blank or noncanonical`);
+  return null;
+}
+
+function requireCanonicalRowTimestamps(
+  row: Row | undefined,
+  fields: readonly string[],
+  label: string,
+  violations: string[],
+): void {
+  if (row === undefined) return;
+  for (const field of fields) {
+    requireCanonicalTimestamp(row[field], `${label} ${field}`, violations);
   }
 }
 

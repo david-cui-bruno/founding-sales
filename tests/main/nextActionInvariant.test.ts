@@ -126,9 +126,10 @@ describe('authoritative next-action persistence', () => {
           due_at = '2026-09-01T12:00:00.000Z'
         WHERE id = 'action'
       `).run(RESCHEDULED, JSON.stringify({
-        version: 1, outcome: 'completed', reason: null, evidenceActivityId: null,
+        version: 1, outcome: 'reviewed_ready', reason: null, evidenceActivityId: null,
         plannerTransition: {
-          definitionId: null, stepId: null, componentId: null, outcome: 'completed',
+          definitionId: null, stepId: null, componentId: null,
+          attempt: null, outcome: 'reviewed_ready',
         }, cadence: NO_CADENCE, workIntent: 'inbound_response', inboundSla,
       }))).toThrow();
       actions.settleAction({
@@ -137,9 +138,10 @@ describe('authoritative next-action persistence', () => {
         expectedInboundSla: inboundSla, expectedCadence: NO_CADENCE,
         status: 'completed', completedAt: RESCHEDULED, completionActivityId: null,
         settlement: {
-          version: 1, outcome: 'completed', reason: null, evidenceActivityId: null,
+          version: 1, outcome: 'reviewed_ready', reason: null, evidenceActivityId: null,
           plannerTransition: {
-            definitionId: null, stepId: null, componentId: null, outcome: 'completed',
+            definitionId: null, stepId: null, componentId: null,
+            attempt: null, outcome: 'reviewed_ready',
           }, cadence: NO_CADENCE, workIntent: 'inbound_response', inboundSla,
         },
       });

@@ -41,6 +41,7 @@ import {
   type ReactivationCommandEnvelope,
 } from './reactivationContracts';
 import type {
+  ActionSettlementOutcome,
   CadenceActionBinding,
   CadenceEnrollment,
   CloseReadiness,
@@ -54,7 +55,9 @@ import type {
   SalesCycle,
   WonTerms,
 } from './lifecycleTypes';
-import { serializeCanonical, utcTimestampSchema } from './lifecycleValidation';
+import {
+  actionSettlementOutcomeSchema, serializeCanonical, utcTimestampSchema,
+} from './lifecycleValidation';
 import { LifecycleReviewRepository } from './lifecycleReviewRepository';
 import { NextActionRepository } from './nextActionRepository';
 import {
@@ -475,7 +478,10 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       completionActivityId: null,
       settlement: {
         version: 1, outcome: 'reviewed_ready', reason: null, evidenceActivityId: null,
-        plannerTransition: { definitionId: null, stepId: null, componentId: null, outcome: 'reviewed_ready' },
+        plannerTransition: {
+          definitionId: null, stepId: null, componentId: null,
+          attempt: null, outcome: 'reviewed_ready',
+        },
         cadence: NO_CADENCE, workIntent: 'internal_review',
         inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
       },
@@ -760,6 +766,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
           definitionId: action.cadence.cadenceDefinitionId,
           stepId: action.cadence.cadenceStepId,
           componentId: action.cadence.cadenceComponentId,
+          attempt: this.settlementAttempt(action),
           outcome: 'opted_out',
         }, cadence: action.cadence, workIntent: action.workIntent, inboundSla: action.inboundSla,
       },
@@ -969,7 +976,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
         plannerTransition: {
           definitionId: action.cadence.cadenceDefinitionId,
           stepId: action.cadence.cadenceStepId,
-          componentId: action.cadence.cadenceComponentId, outcome: 'lost_nurture',
+          componentId: action.cadence.cadenceComponentId,
+          attempt: this.settlementAttempt(action), outcome: 'lost_nurture',
         }, cadence: action.cadence, workIntent: action.workIntent, inboundSla: action.inboundSla,
       },
     });
@@ -1284,7 +1292,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
         plannerTransition: {
           definitionId: action.cadence.cadenceDefinitionId,
           stepId: action.cadence.cadenceStepId,
-          componentId: action.cadence.cadenceComponentId, outcome: 'upgraded',
+          componentId: action.cadence.cadenceComponentId,
+          attempt: this.settlementAttempt(action), outcome: 'upgraded',
         }, cadence: action.cadence, workIntent: action.workIntent, inboundSla: action.inboundSla,
       },
     });
@@ -1671,7 +1680,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
 
   private settleReplacedAction(
     action: NextAction,
-    outcome: string,
+    outcome: ActionSettlementOutcome,
     evidenceActivityId: string | null,
     completedAt: string,
     reason: string | null = null,
@@ -1687,11 +1696,30 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
         plannerTransition: {
           definitionId: action.cadence.cadenceDefinitionId,
           stepId: action.cadence.cadenceStepId,
-          componentId: action.cadence.cadenceComponentId, outcome,
+          componentId: action.cadence.cadenceComponentId,
+          attempt: this.settlementAttempt(action), outcome,
         }, cadence: action.cadence, workIntent: action.workIntent,
         inboundSla: action.inboundSla,
       },
     });
+  }
+
+  private settlementAttempt(action: NextAction): number | null {
+    if (action.cadence.cadenceEnrollmentId === null) return null;
+    const enrollment = this.enrollments.getById(action.cadence.cadenceEnrollmentId);
+    const definition = enrollment === null
+      ? null : this.cadences.getById(enrollment.cadenceDefinitionId);
+    if (enrollment === null || definition === null
+      || action.cadence.cadenceDefinitionId !== enrollment.cadenceDefinitionId) {
+      throw new LifecycleEvidenceError('Settlement cadence enrollment evidence is missing.');
+    }
+    const effectiveStepIds = enrollment.allowedStepIds
+      ?? definition.steps.map(({ id }) => id);
+    const attempt = effectiveStepIds.indexOf(action.cadence.cadenceStepId) + 1;
+    if (attempt <= 0 || attempt > enrollment.scheduledStepCount) {
+      throw new LifecycleEvidenceError('Settlement cadence attempt evidence is inconsistent.');
+    }
+    return attempt;
   }
 
   private cancelPendingOutboundForPerson(
@@ -1714,6 +1742,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
               definitionId: action.cadence.cadenceDefinitionId,
               stepId: action.cadence.cadenceStepId,
               componentId: action.cadence.cadenceComponentId,
+              attempt: this.settlementAttempt(action),
               outcome: 'opted_out',
             },
             cadence: action.cadence, workIntent: action.workIntent,
@@ -1765,6 +1794,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     if (recipe.currentAction.kind === 'none' || recipe.currentAction.kind === 'remain_pending') {
       throw new LifecycleConflictError('The planner did not settle the current action.');
     }
+    const settlementOutcome = actionSettlementOutcomeSchema.parse(recipe.currentAction.outcome);
     const status = recipe.currentAction.kind === 'impossible' ? 'impossible' : 'completed';
     const reason = recipe.currentAction.kind === 'impossible'
       ? `${recipe.currentAction.reason}${recipe.currentAction.notes === null ? '' : `: ${recipe.currentAction.notes}`}`
@@ -1776,13 +1806,14 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       expectedCadence: action.cadence, status, completedAt,
       completionActivityId: activity?.id ?? null,
       settlement: {
-        version: 1, outcome: recipe.currentAction.outcome, reason,
+        version: 1, outcome: settlementOutcome, reason,
         evidenceActivityId: activity?.id ?? null,
         plannerTransition: {
           definitionId: action.cadence.cadenceDefinitionId,
           stepId: action.cadence.cadenceStepId,
           componentId: action.cadence.cadenceComponentId,
-          outcome: recipe.currentAction.outcome,
+          attempt: this.settlementAttempt(action),
+          outcome: settlementOutcome,
         }, cadence: action.cadence, workIntent: action.workIntent,
         inboundSla: action.inboundSla,
       },
