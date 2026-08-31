@@ -79,4 +79,32 @@ describe('plaintext schema-1 encryption upgrade', () => {
       stderr: '',
     });
   }, 35_000);
+
+  it('blocks the exact post-copy writer under Electron ABI 149', () => {
+    const electron = join(
+      process.cwd(),
+      'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron',
+    );
+    const result = spawnSync(electron, [
+      scenarioBundle,
+      'writer-after-copy',
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      timeout: 30_000,
+    });
+
+    expect({
+      status: result.status,
+      signal: result.signal,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    }).toEqual({
+      status: 0,
+      signal: null,
+      stdout: '',
+      stderr: '',
+    });
+  }, 35_000);
 });

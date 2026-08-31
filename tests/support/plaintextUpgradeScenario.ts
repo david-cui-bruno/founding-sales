@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 
 import { Kysely, SqliteDialect } from 'kysely';
 
@@ -75,7 +75,7 @@ assert.ok(scenario, 'A conversion scenario is required.');
 if (scenario === 'crash-rekey-child') {
   crashDuringRekey(process.argv[3]);
 } else if (scenario === 'writer-after-copy-child') {
-  writeAfterCopy(process.argv[3], process.argv[4]);
+  writeAfterCopy(process.argv[3]);
 } else {
   void runScenario();
 }
@@ -133,67 +133,55 @@ async function assertWriterAfterCopyCannotBeLost(
     seed.close();
   }
   const paths = plaintextUpgradePaths(databasePath);
-  const writer = spawn(process.execPath, [
-    process.argv[1],
-    'writer-after-copy-child',
+  let writerResult: ReturnType<typeof spawnSync> | undefined;
+  await prepareEncryptedDatabase(
     databasePath,
-    paths.encrypting,
-  ], { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
-  try {
-    const output = await waitForChildOutput(writer, 'READY\n');
-    let writerResult: Awaited<ReturnType<typeof waitForChildExit>> | undefined;
-    await prepareEncryptedDatabase(
-      databasePath,
-      createTestWorkspaceKey(),
-      {
-        afterPlaintextCopy: async () => {
-          writerResult = await waitForChildExit(writer, output);
-        },
+    createTestWorkspaceKey(),
+    {
+      afterPlaintextCopy: () => {
+        writerResult = spawnSync(process.execPath, [
+          process.argv[1],
+          'writer-after-copy-child',
+          databasePath,
+        ], {
+          cwd: process.cwd(),
+          encoding: 'utf8',
+          timeout: 10_000,
+        });
       },
-    );
-    assert.ok(writerResult, 'The plaintext-copy fault hook did not run.');
-    assert.equal(writerResult.code, 0);
-    assert.equal(writerResult.signal, null);
-    assert.equal(writerResult.stdout, 'READY\nBLOCKED\n');
-    assert.equal(writerResult.stderr, '');
+    },
+  );
+  assert.ok(writerResult, 'The plaintext-copy fault hook did not run.');
+  assert.equal(writerResult.status, 0);
+  assert.equal(writerResult.signal, null);
+  assert.equal(writerResult.stdout, 'BLOCKED\n');
+  assert.equal(writerResult.stderr, '');
 
-    assert.notEqual(
-      readFileSync(databasePath).subarray(0, 16).toString('utf8'),
-      'SQLite format 3\u0000',
+  assert.notEqual(
+    readFileSync(databasePath).subarray(0, 16).toString('utf8'),
+    'SQLite format 3\u0000',
+  );
+  const encrypted = openDatabase({
+    path: databasePath,
+    key: createTestWorkspaceKey(),
+  });
+  try {
+    assert.deepEqual(
+      encrypted.raw.prepare('SELECT payload_json FROM jobs WHERE id = ?').get('kept'),
+      { payload_json: '{}' },
     );
-    const encrypted = openDatabase({
-      path: databasePath,
-      key: createTestWorkspaceKey(),
-    });
-    try {
-      assert.deepEqual(
-        encrypted.raw.prepare('SELECT payload_json FROM jobs WHERE id = ?').get('kept'),
-        { payload_json: '{}' },
-      );
-    } finally {
-      closeDatabase(encrypted);
-    }
-    assert.equal(existsSync(paths.encrypting), false);
-    assert.equal(existsSync(paths.marker), false);
-    assert.equal(existsSync(paths.recovery), false);
   } finally {
-    if (writer.exitCode === null && writer.signalCode === null) {
-      writer.kill('SIGKILL');
-    }
+    closeDatabase(encrypted);
   }
+  assert.equal(existsSync(paths.encrypting), false);
+  assert.equal(existsSync(paths.marker), false);
+  assert.equal(existsSync(paths.recovery), false);
 }
 
 function writeAfterCopy(
   databasePath: string | undefined,
-  encryptingPath: string | undefined,
 ): never {
   assert.ok(databasePath, 'Writer database path is required.');
-  assert.ok(encryptingPath, 'Writer encrypting path is required.');
-  process.stdout.write('READY\n');
-  const lock = new Int32Array(new SharedArrayBuffer(4));
-  while (!existsSync(encryptingPath)) {
-    Atomics.wait(lock, 0, 0, 1);
-  }
   const raw = createRawDatabase(databasePath, { fileMustExist: true });
   try {
     raw.pragma('busy_timeout = 0');
@@ -216,65 +204,6 @@ function writeAfterCopy(
   }
   process.stdout.write('COMMITTED\n');
   process.exit(0);
-}
-
-async function waitForChildOutput(
-  child: ChildProcess,
-  expected: string,
-): Promise<{ stdout(): string; stderr(): string }> {
-  let stdout = '';
-  let stderr = '';
-  child.stderr?.on('data', (chunk: Buffer) => {
-    stderr += chunk.toString('utf8');
-  });
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error('Timed out waiting for writer readiness.')),
-      10_000,
-    );
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8');
-      if (stdout.includes(expected)) {
-        clearTimeout(timeout);
-        resolve();
-      }
-    });
-    child.once('error', (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.once('exit', () => {
-      if (!stdout.includes(expected)) {
-        clearTimeout(timeout);
-        reject(new Error('Writer exited before readiness.'));
-      }
-    });
-  });
-  return { stdout: () => stdout, stderr: () => stderr };
-}
-
-async function waitForChildExit(
-  child: ChildProcess,
-  output: { stdout(): string; stderr(): string },
-): Promise<{
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  stdout: string;
-  stderr: string;
-}> {
-  const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>(
-    (resolve, reject) => {
-      child.once('error', reject);
-      child.once('exit', (exitCode, exitSignal) =>
-        resolve([exitCode, exitSignal]));
-    },
-  );
-  return {
-    code,
-    signal,
-    stdout: output.stdout(),
-    stderr: output.stderr(),
-  };
 }
 
 async function assertBusyWalAbortsWithoutPromotion(

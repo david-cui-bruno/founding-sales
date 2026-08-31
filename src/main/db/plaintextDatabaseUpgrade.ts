@@ -1,18 +1,14 @@
 import { createHash, randomUUID, type Hash } from 'node:crypto';
-import {
-  constants,
-  lstatSync,
-  type Stats,
-} from 'node:fs';
+import { lstatSync, type Stats } from 'node:fs';
 import {
   chmod,
-  copyFile,
   lstat,
   mkdir,
   open,
   readFile,
   rename,
   rm,
+  type FileHandle,
 } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 
@@ -178,12 +174,14 @@ async function convertCanonicalPlaintext(
   hooks: PlaintextUpgradeHooks,
 ): Promise<void> {
   const source = createRawDatabase(databasePath, { fileMustExist: true });
+  let copySource: FileHandle | undefined;
   try {
     const plaintext = lockAndFingerprintPlaintext(source);
+    copySource = await openRetainedSourceHandle(databasePath);
     await removeDatabaseSidecars(databasePath);
     assertNoDatabaseSidecars(databasePath);
 
-    await copyFile(databasePath, paths.encrypting, constants.COPYFILE_EXCL);
+    await copyRetainedSourceFile(copySource, paths.encrypting);
     await fsyncFile(paths.encrypting);
     await fsyncDirectory(dirname(databasePath));
     await hooks.afterPlaintextCopy?.();
@@ -215,7 +213,11 @@ async function convertCanonicalPlaintext(
 
     await cleanAfterVerifiedPromotion(paths);
   } finally {
-    source.close();
+    try {
+      await copySource?.close();
+    } finally {
+      source.close();
+    }
   }
 }
 
@@ -315,6 +317,82 @@ function lockAndFingerprintPlaintext(
     throw new Error('Plaintext database journal stabilization failed.');
   }
   return readAndVerifyDatabaseFingerprint(raw);
+}
+
+async function openRetainedSourceHandle(path: string): Promise<FileHandle> {
+  const source = await open(path, 'r');
+  try {
+    const [handleMetadata, pathMetadata] = await Promise.all([
+      source.stat(),
+      lstat(path),
+    ]);
+    if (
+      !handleMetadata.isFile()
+      || !pathMetadata.isFile()
+      || pathMetadata.isSymbolicLink()
+      || handleMetadata.dev !== pathMetadata.dev
+      || handleMetadata.ino !== pathMetadata.ino
+    ) {
+      throw new Error('Plaintext database source identity changed.');
+    }
+    return source;
+  } catch (error) {
+    await source.close().catch((): undefined => undefined);
+    throw error;
+  }
+}
+
+async function copyRetainedSourceFile(
+  source: FileHandle,
+  destinationPath: string,
+): Promise<void> {
+  const sourceMetadata = await source.stat();
+  if (!sourceMetadata.isFile()) {
+    throw new Error('Plaintext database source is not a regular file.');
+  }
+
+  const destination = await open(destinationPath, 'wx', 0o600);
+  try {
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let position = 0;
+    while (position < sourceMetadata.size) {
+      const bytesToRead = Math.min(buffer.byteLength, sourceMetadata.size - position);
+      const { bytesRead } = await source.read(
+        buffer,
+        0,
+        bytesToRead,
+        position,
+      );
+      if (bytesRead === 0) {
+        throw new Error('Plaintext database source ended during copy.');
+      }
+      let bytesWritten = 0;
+      while (bytesWritten < bytesRead) {
+        const write = await destination.write(
+          buffer,
+          bytesWritten,
+          bytesRead - bytesWritten,
+          position + bytesWritten,
+        );
+        if (write.bytesWritten === 0) {
+          throw new Error('Encrypted database temporary copy made no progress.');
+        }
+        bytesWritten += write.bytesWritten;
+      }
+      position += bytesRead;
+    }
+    const finalMetadata = await source.stat();
+    if (
+      finalMetadata.dev !== sourceMetadata.dev
+      || finalMetadata.ino !== sourceMetadata.ino
+      || finalMetadata.size !== sourceMetadata.size
+    ) {
+      throw new Error('Plaintext database source changed during copy.');
+    }
+    await destination.sync();
+  } finally {
+    await destination.close();
+  }
 }
 
 function rekeyPlaintextCopy(path: string, key: Buffer): void {
