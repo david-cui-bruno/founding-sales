@@ -9,6 +9,8 @@ const routes = [
   { route: 'Today', link: 'Today' },
   { route: 'Leads', link: 'Leads' },
   { route: 'Pipeline', link: 'Pipeline' },
+  { route: 'Conversations', link: 'Conversations' },
+  { route: 'Learnings', link: 'Learnings' },
   { route: 'Review', link: 'Review' },
   { route: 'Friday', link: 'Friday' },
 ] as const;
