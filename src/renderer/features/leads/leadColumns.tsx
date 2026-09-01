@@ -81,11 +81,17 @@ function Absent() {
 
 /**
  * Cloud score chip: the two cloud axes side by side ("Fit 62 · Timing 41"),
- * indigo accent, never merged into one number.
+ * indigo accent, never merged into one number. A zero-signal chip
+ * (fit 0 AND timing 0) renders in the muted variant: it is real scorer
+ * output, but the indigo accent would overstate it.
  */
 export function CloudScoreChipBadge({ scores }: { scores: CloudScoreChip }) {
+  const zeroSignal = scores.fit === 0 && scores.timing === 0;
+  const className = zeroSignal
+    ? 'leads-grid__cloud-chip leads-grid__cloud-chip--zero'
+    : 'leads-grid__cloud-chip';
   return (
-    <span className="leads-grid__cloud-chip" aria-label="Cloud scores">
+    <span className={className} aria-label="Cloud scores">
       {formatCloudChip(scores)}
     </span>
   );

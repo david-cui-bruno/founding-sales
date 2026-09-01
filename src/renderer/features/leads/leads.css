@@ -266,3 +266,11 @@
   line-height: 1.6;
   white-space: nowrap;
 }
+
+/* Zero-signal chip ("Fit 0 · Timing 0"): real scorer output, but the indigo
+   accent would overstate it, so it drops to the muted neutrals. */
+.leads-grid__cloud-chip--zero {
+  border-color: var(--line);
+  background: var(--surface-sunken);
+  color: var(--muted);
+}

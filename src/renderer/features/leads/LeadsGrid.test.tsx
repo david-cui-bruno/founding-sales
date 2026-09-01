@@ -134,6 +134,31 @@ describe('LeadsGrid', () => {
     expect(within(unscored).queryByText(/Fit \d+ · Timing \d+/)).toBeNull();
   });
 
+  it('renders a zero-signal cloud chip in the muted variant, scored chips in the accent', () => {
+    const zeroSignalRow: LeadRow = {
+      ...leadRow,
+      personId: 'person-3',
+      salesCycleId: 'cycle-3',
+      personName: 'Casey Quiet',
+      initials: 'CQ',
+      cloudScores: { fit: 0, timing: 0 },
+    };
+    render(
+      <LeadsGrid
+        rows={[leadRow, zeroSignalRow]}
+        selectedPersonId={null}
+        onSelect={vi.fn()}
+        onUpdateField={vi.fn()}
+      />,
+    );
+
+    const zeroChip = screen.getByText('Fit 0 · Timing 0');
+    expect(zeroChip.className).toContain('leads-grid__cloud-chip--zero');
+    const scoredChip = screen.getByText('Fit 62 · Timing 41');
+    expect(scoredChip.className).toContain('leads-grid__cloud-chip');
+    expect(scoredChip.className).not.toContain('leads-grid__cloud-chip--zero');
+  });
+
   it('renders muted placeholders for physically absent prioritization data', () => {
     render(
       <LeadsGrid
