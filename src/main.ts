@@ -10,6 +10,7 @@ import {
   menuNavigationScripts,
   openImportScript,
 } from './main/applicationMenu';
+import { createDockBadgeUpdater } from './main/dockBadge';
 import { createRendererTrust } from './main/navigationPolicy';
 import { registerCallieProtocol } from './main/protocol';
 import {
@@ -131,6 +132,36 @@ const installApplicationMenu = (): void => {
   }
 };
 
+let dockBadgeInstalled = false;
+const installDockBadge = (): void => {
+  if (dockBadgeInstalled) {
+    return;
+  }
+
+  const dock = app.dock;
+  if (process.platform !== 'darwin' || dock === undefined) {
+    return;
+  }
+
+  dockBadgeInstalled = true;
+  const dockBadgeUpdater = createDockBadgeUpdater({
+    platform: process.platform,
+    // TODO: RunningApplication currently exposes only databasePath and
+    // shutdown, so main has no public surface to count due next actions.
+    // Replace this injected 0 with a real due-count query once
+    // startApplication exposes one.
+    getDueCount: () => 0,
+    setBadge: (text) => dock.setBadge(text),
+  });
+  dockBadgeUpdater.refresh();
+  const dockBadgeTimer = setInterval(
+    () => dockBadgeUpdater.refresh(),
+    60_000,
+  );
+  dockBadgeTimer.unref();
+  app.on('browser-window-focus', () => dockBadgeUpdater.refresh());
+};
+
 if (!started && ownsSingleInstanceLock) {
   void app
     .whenReady()
@@ -173,6 +204,7 @@ if (!started && ownsSingleInstanceLock) {
 
         runningApplication = application;
         applicationStarted = true;
+        installDockBadge();
       });
 
       return startupPromise;
