@@ -22,6 +22,15 @@ export const fridayReportSchema = z.object({
   jobs: z.array(jobRequestSchema), revision: z.number().int().nonnegative(),
 }).strict();
 
+/**
+ * Week selector for the scoreboard: 0 is the current week, negative values
+ * walk back one Monday-anchored week per step. Future weeks are meaningless
+ * (no events can exist yet), so positive offsets are rejected.
+ */
+export const fridayReportRequestSchema = z.object({
+  weekOffset: z.number().int().min(-520).max(0),
+}).strict();
+
 export const metricDrilldownRequestSchema = z.object({
   metricId: metricIdSchema,
 }).strict();
@@ -58,6 +67,7 @@ export type MetricId = z.infer<typeof metricIdSchema>;
 export type Metric = z.infer<typeof metricSchema>;
 export type JobRequest = z.infer<typeof jobRequestSchema>;
 export type FridayReport = z.infer<typeof fridayReportSchema>;
+export type FridayReportRequest = z.infer<typeof fridayReportRequestSchema>;
 export type MetricDrilldownRequest = z.infer<typeof metricDrilldownRequestSchema>;
 export type MetricDrilldown = z.infer<typeof metricDrilldownSchema>;
 export type CreateJobRequest = z.infer<typeof createJobRequestSchema>;
