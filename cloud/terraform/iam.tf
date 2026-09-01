@@ -174,6 +174,15 @@ data "aws_iam_policy_document" "app_inbox" {
     actions   = ["s3:GetObject"]
     resources = ["${aws_s3_bucket.inbox.arn}/*"]
   }
+
+  # Privacy-preserving upstream sync: the app may write ONLY under upstream/
+  # (membership sets and outcome labels; no names or free text by schema).
+  statement {
+    sid       = "WriteUpstream"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.inbox.arn}/upstream/*"]
+  }
 }
 
 resource "aws_iam_user_policy" "app_inbox" {
