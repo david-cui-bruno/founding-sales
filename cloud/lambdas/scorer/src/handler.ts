@@ -15,7 +15,7 @@
  *
  * Logging: structured JSON, never person fields or free text.
  */
-import { DynamoDBClient, GetItemCommand, PutItemCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
 import {
   GetObjectCommand,
   ListObjectsV2Command,
@@ -24,6 +24,9 @@ import {
 } from "@aws-sdk/client-s3";
 import {
   cloudSourceEventSchema,
+  mailingAddressCompareKey,
+  normalizeOwnerName,
+  normalizeZip5,
   ulid,
   validateSourceEvent,
   type CloudSourceEvent,
@@ -39,6 +42,7 @@ export interface HandlerDeps {
   env: {
     INBOX_BUCKET: string;
     SNAPSHOTS_TABLE: string;
+    ENTITIES_TABLE: string;
   };
   now?: () => Date;
 }
@@ -56,6 +60,7 @@ function defaultDeps(): HandlerDeps {
     env: {
       INBOX_BUCKET: envOrThrow("INBOX_BUCKET"),
       SNAPSHOTS_TABLE: envOrThrow("SNAPSHOTS_TABLE"),
+      ENTITIES_TABLE: envOrThrow("ENTITIES_TABLE"),
     },
   };
 }
@@ -169,6 +174,79 @@ function triggerInstance(event: CloudSourceEvent): TriggerInstance | null {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Entities-table lookup (resolver output): entity context for scoring
+// ---------------------------------------------------------------------------
+
+interface EntityRow {
+  ownerKind: "individual" | "llc" | "trust" | "other" | null;
+  portfolioDoors: number | null;
+  mailingCompareKey: string | null;
+  zip5: string;
+}
+
+const OWNER_KINDS: ReadonlySet<string> = new Set(["individual", "llc", "trust", "other"]);
+
+/**
+ * Query the resolver's entities table by the event owner's normalized name
+ * (the SAME normalizeOwnerName the resolver writes — both live in shared).
+ * Among rows sharing the name, prefer an exact mailing-address match, then a
+ * same-zip match (mirrors the resolver's merge rules); a lone row wins by
+ * default. Results are cached per run — tax-roll batches repeat owners.
+ */
+async function lookupEntityContext(
+  deps: HandlerDeps,
+  event: CloudSourceEvent,
+  cache: Map<string, EntityRow[]>,
+): Promise<EntityRow | null> {
+  const person = event.entity.person;
+  if (!person) return null;
+  const rawName = person.full_name ?? person.org_names[0] ?? "";
+  const normalizedName = normalizeOwnerName(rawName);
+  if (!normalizedName) return null;
+
+  let rows = cache.get(normalizedName);
+  if (rows === undefined) {
+    const result = await deps.dynamo.send(
+      new QueryCommand({
+        TableName: deps.env.ENTITIES_TABLE,
+        IndexName: "normalized_name-index",
+        KeyConditionExpression: "normalized_name = :name",
+        ExpressionAttributeValues: { ":name": { S: normalizedName } },
+      }),
+    );
+    rows = (result.Items ?? []).map((item) => {
+      const ownerKindRaw = item.owner_kind?.S ?? "";
+      const doors = item.doors_estimate?.N;
+      let mailing: { line1: string; locality: string | null; region: string | null; postal_code: string | null } | null = null;
+      try {
+        mailing = item.mailing_address_json?.S
+          ? JSON.parse(item.mailing_address_json.S)
+          : null;
+      } catch {
+        mailing = null;
+      }
+      return {
+        ownerKind: OWNER_KINDS.has(ownerKindRaw)
+          ? (ownerKindRaw as EntityRow["ownerKind"])
+          : null,
+        portfolioDoors: doors !== undefined ? Number(doors) : null,
+        mailingCompareKey: mailingAddressCompareKey(mailing),
+        zip5: normalizeZip5(mailing?.postal_code),
+      };
+    });
+    cache.set(normalizedName, rows);
+  }
+
+  const eventKey = mailingAddressCompareKey(person.mailing_address);
+  const eventZip = normalizeZip5(person.mailing_address?.postal_code);
+  return (
+    rows.find((r) => r.mailingCompareKey !== null && r.mailingCompareKey === eventKey) ??
+    rows.find((r) => r.zip5 !== "" && r.zip5 === eventZip) ??
+    (rows.length === 1 ? rows[0]! : null)
+  );
+}
+
 export interface RunResult {
   filesRead: number;
   eventsSeen: number;
@@ -176,6 +254,8 @@ export interface RunResult {
   skippedAlreadyScored: number;
   scored: number;
   parseFailures: number;
+  /** Unscored person events enriched from the entities table. */
+  entityContextHits: number;
   outputKey: string | null;
 }
 
@@ -196,6 +276,7 @@ export async function runScorer(deps: HandlerDeps): Promise<RunResult> {
     skippedAlreadyScored: 0,
     scored: 0,
     parseFailures: 0,
+    entityContextHits: 0,
     outputKey: null,
   };
 
@@ -226,6 +307,7 @@ export async function runScorer(deps: HandlerDeps): Promise<RunResult> {
   result.unscored = unscored.length;
 
   const scoredEvents: CloudSourceEvent[] = [];
+  const entityCache = new Map<string, EntityRow[]>();
   for (const event of unscored) {
     if (await alreadyScored(deps, event.idempotency_key, SCORES_VERSION)) {
       result.skippedAlreadyScored += 1;
@@ -239,7 +321,19 @@ export async function runScorer(deps: HandlerDeps): Promise<RunResult> {
         ? [ownTrigger]
         : [];
 
-    const context: EntityContext = { recentTriggers: entityTriggers };
+    // Resolved-entity context (owner kind + portfolio doors) for events that
+    // carry a person; misses are free (null context = same as before).
+    const entityRow = event.entity.person
+      ? await lookupEntityContext(deps, event, entityCache)
+      : null;
+    if (entityRow) result.entityContextHits += 1;
+
+    const context: EntityContext = {
+      recentTriggers: entityTriggers,
+      ...(entityRow
+        ? { ownerKind: entityRow.ownerKind, portfolioDoors: entityRow.portfolioDoors }
+        : {}),
+    };
     const scores = scoreEvent(event, context, now);
 
     const scored: CloudSourceEvent = {

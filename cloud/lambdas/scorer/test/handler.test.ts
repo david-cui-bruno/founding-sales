@@ -18,6 +18,9 @@ interface FakeState {
   objects: Map<string, string>; // key -> ndjson body
   puts: Array<{ key: string; body: string }>;
   snapshots: Map<string, Record<string, unknown>>; // pk|sk -> item
+  /** entities-table items served by the normalized_name GSI query. */
+  entities: Array<Record<string, any>>;
+  entityQueries: string[];
 }
 
 function fakeDeps(state: FakeState): HandlerDeps {
@@ -64,11 +67,18 @@ function fakeDeps(state: FakeState): HandlerDeps {
           state.snapshots.set(`${pk}|${sk}`, command.input.Item);
           return {};
         }
+        if (name === "QueryCommand") {
+          const queried: string = command.input.ExpressionAttributeValues[":name"].S;
+          state.entityQueries.push(queried);
+          return {
+            Items: state.entities.filter((item) => item.normalized_name.S === queried),
+          };
+        }
         throw new Error(`unexpected dynamo command ${name}`);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       }) as any,
     },
-    env: { INBOX_BUCKET: "inbox", SNAPSHOTS_TABLE: "snapshots" },
+    env: { INBOX_BUCKET: "inbox", SNAPSHOTS_TABLE: "snapshots", ENTITIES_TABLE: "entities" },
     now: () => NOW,
   };
 }
@@ -120,6 +130,8 @@ function stateWith(files: Record<string, string>): FakeState {
     objects: new Map(Object.entries(files)),
     puts: [],
     snapshots: new Map(),
+    entities: [],
+    entityQueries: [],
   };
 }
 
@@ -288,5 +300,220 @@ describe("runScorer", () => {
     };
     await runScorer(deps);
     expect(order).toEqual(["s3put", "markscored"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Entity context (resolver entities table -> EntityContext)
+// ---------------------------------------------------------------------------
+
+function personEvent(overrides: Partial<CloudSourceEvent> = {}): CloudSourceEvent {
+  const key = Math.random().toString(36).slice(2);
+  return makeEvent({
+    channel: "parcel",
+    idempotency_key: computeIdempotencyKey("parcel", key, "fp"),
+    entity: {
+      cloud_entity_id: newCloudEntityId(),
+      person: {
+        full_name: "SMITH, JOHN",
+        mailing_address: {
+          line1: "12 Main St",
+          locality: "Providence",
+          region: "RI",
+          postal_code: "02906",
+          country_code: "US",
+        },
+        phones: [],
+        emails: [],
+        org_names: [],
+      },
+      property: null,
+      known_person: false,
+    },
+    payload: {
+      assessor_class: "2",
+      assessed_value_usd: 500000,
+      tax_usd: 5000,
+      absentee: true,
+      owner_kind: null,
+      tax_year: 2025,
+    },
+    trigger: null,
+    ...overrides,
+  });
+}
+
+/** Entities-table item the way the resolver writes it. */
+function entityItem(overrides: Record<string, any> = {}): Record<string, any> {
+  return {
+    entity_id: { S: "ce_00000000000000000000000001" },
+    normalized_name: { S: "JOHN SMITH" },
+    canonical_name: { S: "SMITH, JOHN" },
+    owner_kind: { S: "llc" },
+    mailing_address_json: {
+      S: JSON.stringify({
+        line1: "12 Main Street",
+        locality: "Providence",
+        region: "RI",
+        postal_code: "02906",
+        country_code: "US",
+      }),
+    },
+    member_cloud_entity_ids: { SS: ["ce_00000000000000000000000001"] },
+    doors_by_parcel_json: { S: JSON.stringify({ "P-1": 6, "P-2": 6 }) },
+    parcel_count: { N: "2" },
+    doors_estimate: { N: "12" },
+    situs_localities_json: { S: JSON.stringify(["Providence"]) },
+    resolution_confidence: { N: "0.95" },
+    updated_at: { S: NOW.toISOString() },
+    ...overrides,
+  };
+}
+
+describe("runScorer entity context", () => {
+  it("queries the GSI by normalized owner name and counts a hit", async () => {
+    const event = personEvent();
+    const state = stateWith({
+      "events/2026-09-01/pvd-taxroll-01JJJJJJJJJJJJJJJJJJJJJJJJ.ndjson": ndjson(event),
+    });
+    state.entities.push(entityItem());
+
+    const result = await runScorer(fakeDeps(state));
+    expect(state.entityQueries).toEqual(["JOHN SMITH"]); // normalizeOwnerName("SMITH, JOHN")
+    expect(result.entityContextHits).toBe(1);
+    expect(result.scored).toBe(1);
+  });
+
+  it("passes ownerKind and portfolioDoors into scoring (fit reflects both)", async () => {
+    const event = personEvent();
+    const withContext = stateWith({
+      "events/2026-09-01/pvd-taxroll-01KKKKKKKKKKKKKKKKKKKKKKKK.ndjson": ndjson(event),
+    });
+    withContext.entities.push(entityItem()); // llc, 12 doors (in band)
+    const bare = stateWith({
+      "events/2026-09-01/pvd-taxroll-01KKKKKKKKKKKKKKKKKKKKKKKK.ndjson": ndjson(event),
+    });
+
+    const hit = await runScorer(fakeDeps(withContext));
+    const miss = await runScorer(fakeDeps(bare));
+    expect(hit.entityContextHits).toBe(1);
+    expect(miss.entityContextHits).toBe(0);
+
+    const hitScored = JSON.parse(
+      withContext.puts[0]!.body.trim(),
+    ) as CloudSourceEvent;
+    const missScored = JSON.parse(bare.puts[0]!.body.trim()) as CloudSourceEvent;
+    // 12 doors in band + llc owner add fit signals a bare event lacks.
+    expect(hitScored.scores!.fit).toBeGreaterThan(missScored.scores!.fit);
+    const signals = hitScored.scores!.reasons.map((r) => r.signal);
+    expect(signals).toContain("portfolio_in_band");
+  });
+
+  it("prefers the exact-address row, falls back to same zip", async () => {
+    const event = personEvent();
+    const state = stateWith({
+      "events/2026-09-01/pvd-taxroll-01LLLLLLLLLLLLLLLLLLLLLLLL.ndjson": ndjson(event),
+    });
+    // Two rows share the name: a different-zip decoy and the zip match.
+    state.entities.push(
+      entityItem({
+        entity_id: { S: "ce_00000000000000000000000002" },
+        owner_kind: { S: "individual" },
+        doors_estimate: { N: "1" },
+        mailing_address_json: {
+          S: JSON.stringify({
+            line1: "99 Other Rd",
+            locality: "Boston",
+            region: "MA",
+            postal_code: "02118",
+            country_code: "US",
+          }),
+        },
+      }),
+      entityItem({
+        entity_id: { S: "ce_00000000000000000000000003" },
+        doors_estimate: { N: "12" },
+        mailing_address_json: {
+          S: JSON.stringify({
+            line1: "45 Different St", // same zip, different address
+            locality: "Providence",
+            region: "RI",
+            postal_code: "02906",
+            country_code: "US",
+          }),
+        },
+      }),
+    );
+    const result = await runScorer(fakeDeps(state));
+    expect(result.entityContextHits).toBe(1);
+    const scored = JSON.parse(state.puts[0]!.body.trim()) as CloudSourceEvent;
+    expect(scored.scores!.reasons.map((r) => r.signal)).toContain("portfolio_in_band");
+  });
+
+  it("no table row -> no hit, event still scores", async () => {
+    const event = personEvent();
+    const state = stateWith({
+      "events/2026-09-01/pvd-taxroll-01MMMMMMMMMMMMMMMMMMMMMMMM.ndjson": ndjson(event),
+    });
+    const result = await runScorer(fakeDeps(state));
+    expect(result.entityContextHits).toBe(0);
+    expect(result.scored).toBe(1);
+  });
+
+  it("ambiguous multi-row name with no address/zip match -> no hit", async () => {
+    const event = personEvent();
+    const state = stateWith({
+      "events/2026-09-01/pvd-taxroll-01NNNNNNNNNNNNNNNNNNNNNNNN.ndjson": ndjson(event),
+    });
+    state.entities.push(
+      entityItem({
+        entity_id: { S: "ce_00000000000000000000000004" },
+        mailing_address_json: {
+          S: JSON.stringify({
+            line1: "1 A St",
+            locality: "Boston",
+            region: "MA",
+            postal_code: "02118",
+            country_code: "US",
+          }),
+        },
+      }),
+      entityItem({
+        entity_id: { S: "ce_00000000000000000000000005" },
+        mailing_address_json: {
+          S: JSON.stringify({
+            line1: "2 B St",
+            locality: "Warwick",
+            region: "RI",
+            postal_code: "02886",
+            country_code: "US",
+          }),
+        },
+      }),
+    );
+    const result = await runScorer(fakeDeps(state));
+    expect(result.entityContextHits).toBe(0);
+  });
+
+  it("caches GSI queries per normalized name within a run", async () => {
+    const a = personEvent();
+    const b = personEvent();
+    const state = stateWith({
+      "events/2026-09-01/pvd-taxroll-01PPPPPPPPPPPPPPPPPPPPPPPP.ndjson": ndjson(a, b),
+    });
+    state.entities.push(entityItem());
+    const result = await runScorer(fakeDeps(state));
+    expect(result.entityContextHits).toBe(2);
+    expect(state.entityQueries).toEqual(["JOHN SMITH"]); // one query, two hits
+  });
+
+  it("person-less events never query the entities table", async () => {
+    const state = stateWith({
+      "events/2026-09-01/mail-parse-01QQQQQQQQQQQQQQQQQQQQQQQQ.ndjson": ndjson(makeEvent()),
+    });
+    const result = await runScorer(fakeDeps(state));
+    expect(state.entityQueries).toEqual([]);
+    expect(result.entityContextHits).toBe(0);
+    expect(result.scored).toBe(1);
   });
 });
