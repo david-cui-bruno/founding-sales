@@ -1,10 +1,15 @@
-import { app, BrowserWindow, protocol } from 'electron';
+import { app, BrowserWindow, Menu, protocol } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { createWindow } from './main/createWindow';
 import {
   CALLIE_APPLE_BRIDGE_IDENTIFIER,
 } from './main/appleBridge/appleBridgeSupervisor';
+import {
+  createApplicationMenuTemplate,
+  menuNavigationScripts,
+  openImportScript,
+} from './main/applicationMenu';
 import { createRendererTrust } from './main/navigationPolicy';
 import { registerCallieProtocol } from './main/protocol';
 import {
@@ -96,10 +101,41 @@ let startupPromise: Promise<void> | undefined;
 let quitAfterStartup = false;
 let allowQuit = false;
 
+/**
+ * Runs a constant script in the focused window. Every payload comes from the
+ * fixed constants in applicationMenu.ts, never from user input.
+ */
+const runInFocusedWindow = (script: string): void => {
+  const focusedWindow = BrowserWindow.getFocusedWindow();
+  if (focusedWindow === null || focusedWindow.isDestroyed()) {
+    return;
+  }
+
+  void focusedWindow.webContents
+    .executeJavaScript(script, true)
+    .catch((): undefined => undefined);
+};
+
+const installApplicationMenu = (): void => {
+  try {
+    const template = createApplicationMenuTemplate({
+      appName: app.getName?.() ?? 'Callie Founder Sales System',
+      platform: process.platform,
+      isPackaged: app.isPackaged,
+      navigate: (route) => runInFocusedWindow(menuNavigationScripts[route]),
+      openImport: () => runInFocusedWindow(openImportScript),
+    });
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  } catch {
+    // The native menu is polish; never block startup on menu wiring.
+  }
+};
+
 if (!started && ownsSingleInstanceLock) {
   void app
     .whenReady()
     .then(() => {
+      installApplicationMenu();
       startupAbortController = new AbortController();
       const signal = startupAbortController.signal;
 
