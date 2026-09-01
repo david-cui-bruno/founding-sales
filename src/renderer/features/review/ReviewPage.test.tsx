@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import axe from 'axe-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -124,6 +125,19 @@ describe('ReviewPage tabs', () => {
     ]);
   });
 
+  it('styles the queue switcher as a segmented control with aria-selected', () => {
+    renderPage({ selectedKind: 'import_problem' });
+
+    const tablist = screen.getByRole('tablist', { name: 'Review queues' });
+    expect(tablist.className).toContain('segmented-control');
+    const selected = screen.getByRole('tab', { name: /Import problems/ });
+    expect(selected.getAttribute('aria-selected')).toBe('true');
+    expect(selected.className).toContain('segmented-control__option');
+    expect(
+      screen.getByRole('tab', { name: /Adapter failures/ }).getAttribute('aria-selected'),
+    ).toBe('false');
+  });
+
   it('keeps the system-error alert visible while another queue is selected', () => {
     renderPage({ selectedKind: 'transcript_suggestion' });
 
@@ -144,6 +158,53 @@ describe('ReviewPage tabs', () => {
     const queue = screen.getByRole('list', { name: /Adapter failures/ });
     expect(within(queue).getAllByRole('listitem')).toHaveLength(1);
     expect(queue.textContent).toContain('The Apple bridge stopped syncing messages.');
+  });
+
+  it('shows a humanized kind label, relative time, and a resolve affordance on rows', () => {
+    renderPage();
+
+    const queue = screen.getByRole('list', { name: /Unmatched communications/ });
+    const row = within(queue).getByRole('button', { name: /\+14015550100/ });
+    expect(within(row).getByText('Unmatched communication')).toBeTruthy();
+    const when = row.querySelector('.review-item__when');
+    expect(when?.textContent).toMatch(/ago$|^now$|Aug|Sep/);
+    expect(within(row).getByText('Resolve').className).toContain('review-item__resolve');
+  });
+
+  it('renders the queue-clear empty state as a success dot with neutral text', () => {
+    const singleKind = reviewSnapshotSchema.parse({
+      items: [unmatchedItem],
+      totalOpenCount: 1,
+      revision: 6,
+    });
+    renderPage({ snapshot: singleKind, selectedKind: 'transcript_suggestion' });
+
+    const badge = screen.getByText('Queue clear');
+    expect(badge.closest('.status-badge')?.className).toContain('status-badge--success');
+    expect(
+      screen.getByText('No transcript facts are waiting for review.'),
+    ).toBeTruthy();
+  });
+
+  it('is axe-clean', async () => {
+    render(
+      <ReviewPage
+        snapshot={reviewSnapshot}
+        selectedKind="unmatched_communication"
+        onSelectKind={vi.fn()}
+        onResolve={vi.fn()}
+        onOpenLead={vi.fn()}
+      />,
+    );
+
+    const results = await axe.run(document.body, {
+      rules: {
+        'color-contrast': { enabled: false },
+        region: { enabled: false },
+      },
+    });
+
+    expect(results.violations).toEqual([]);
   });
 });
 

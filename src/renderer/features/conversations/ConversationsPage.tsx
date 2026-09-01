@@ -52,13 +52,17 @@ const FILTER_LABELS: ReadonlyArray<{ id: ConversationsFilter; label: string }> =
 /**
  * Master-detail conversations workspace: searchable, filterable list of
  * call/voicemail activities on the left, the selected conversation with its
- * transcript on the right.
+ * transcript on the right. A workspace with no conversations carries ONE
+ * full empty state in the detail pane and a compact one-liner in the list.
  */
 export function ConversationsPage(props: ConversationsPageProps) {
   const {
     listState, query, filter, selectedActivityId, detailState,
     attachOpen, attachFailed, attachSubmitting,
   } = props;
+
+  const workspaceEmpty =
+    listState.kind === 'ready' && listState.rows.length === 0;
 
   return (
     <div className="conversations-page">
@@ -120,6 +124,7 @@ export function ConversationsPage(props: ConversationsPageProps) {
       <section className="conversations__detail-pane" aria-label="Conversation detail">
         <ConversationDetailPanel
           state={detailState}
+          workspaceEmpty={workspaceEmpty}
           onRetry={props.onRetryDetail}
           onOpenLead={props.onOpenLead}
           onOpenAttach={props.onOpenAttach}

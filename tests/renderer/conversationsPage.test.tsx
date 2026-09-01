@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import axe from 'axe-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { MutationReceipt } from '../../src/shared/contracts/commonContract';
@@ -259,12 +260,43 @@ describe('ConversationsRoute', () => {
     await screen.findByText('Kevin Landlord');
   });
 
-  it('shows an empty state when no conversations exist', async () => {
+  it('splits the empty state: compact list one-liner, full detail explanation', async () => {
     const api = createApi({
       list: vi.fn().mockResolvedValue({ rows: [], total: 0, nextCursor: null, revision: 0 }),
     });
     render(<ConversationsRoute api={api} onOpenLead={vi.fn()} />);
 
-    await screen.findByText('No conversations yet');
+    await screen.findByText('No calls yet');
+    const detail = screen.getByRole('region', { name: 'Conversation detail' });
+    expect(within(detail).getByText('No conversations yet')).toBeDefined();
+    expect(
+      within(detail).getByText(/logged from the lead inspector appear here/),
+    ).toBeDefined();
+    expect(screen.queryByText('Select a conversation')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Attach transcript/ })).toBeNull();
+  });
+
+  it('asks for a selection in the detail pane when rows exist but none is open', async () => {
+    const api = createApi();
+    await renderRoute(api);
+
+    const detail = screen.getByRole('region', { name: 'Conversation detail' });
+    expect(within(detail).getByText('Select a conversation')).toBeDefined();
+    expect(screen.queryByText('No calls yet')).toBeNull();
+  });
+
+  it('is axe-clean', async () => {
+    const api = createApi();
+    await renderRoute(api);
+    await openCallDetail();
+
+    const results = await axe.run(document.body, {
+      rules: {
+        'color-contrast': { enabled: false },
+        region: { enabled: false },
+      },
+    });
+
+    expect(results.violations).toEqual([]);
   });
 });

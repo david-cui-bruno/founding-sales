@@ -5,7 +5,7 @@ import type {
   PipelineSnapshot,
 } from '../../../shared/contracts/pipelineContract';
 import { titleCaseDisplayName } from '../../../shared/displayText';
-import { StatusPill } from '../../components/StatusPill';
+import { Avatar } from '../../components/Avatar';
 import {
   lostReasonLabel,
   PIPELINE_STAGE_META,
@@ -20,12 +20,38 @@ type PipelineCardButtonProps = {
 };
 
 /**
- * A card is a plain button that opens the person. There is no drag
- * handle and no stage mutation command anywhere in the pipeline.
+ * The single muted status line under the chip: won outcome, lost reason,
+ * or the real next action. The auto-generated "Review lead" filler carries
+ * no information on an unreviewed card, so it stays off the board.
+ */
+function cardStatusLine(card: PipelineCard): {
+  text: string;
+  overdue: boolean;
+} | null {
+  const wonBadge = wonOutcomeLabel(card);
+  if (wonBadge !== null) {
+    return { text: wonBadge, overdue: false };
+  }
+  const lostLabel = lostReasonLabel(card);
+  if (lostLabel !== null) {
+    return { text: lostLabel, overdue: false };
+  }
+  if (card.nextAction !== null && card.nextAction.channel !== 'review') {
+    return { text: card.nextAction.label, overdue: card.nextAction.overdue };
+  }
+  return null;
+}
+
+/**
+ * A compact card: avatar + Title-Case name, at most one score chip, and a
+ * single muted status line. It is a plain button that opens the person;
+ * there is no drag handle and no stage mutation command anywhere.
  */
 function PipelineCardButton({ card, onOpenLead }: PipelineCardButtonProps) {
-  const wonBadge = wonOutcomeLabel(card);
-  const lostLabel = lostReasonLabel(card);
+  const status = cardStatusLine(card);
+  const scores = card.priorityContext;
+  const zeroSignal =
+    scores !== null && scores.fitPoints === 0 && scores.timingValue === 0;
 
   return (
     <button
@@ -33,42 +59,32 @@ function PipelineCardButton({ card, onOpenLead }: PipelineCardButtonProps) {
       className="pipeline-card"
       onClick={() => onOpenLead(card.personId)}
     >
-      <span className="pipeline-card__name">
-        {titleCaseDisplayName(card.personName)}
+      <span className="pipeline-card__identity">
+        <span aria-hidden="true">
+          <Avatar name={titleCaseDisplayName(card.personName)} />
+        </span>
+        <span className="pipeline-card__name">
+          {titleCaseDisplayName(card.personName)}
+        </span>
       </span>
-      {card.contextLabel !== null && (
-        <span className="pipeline-card__context">{card.contextLabel}</span>
-      )}
-      {card.priorityContext === null ? (
-        <span className="pipeline-card__muted">No priority data</span>
-      ) : (
-        <span className="pipeline-card__bands">
-          <StatusPill
-            tone={card.priorityContext.priority === 'P0' ? 'urgent' : 'neutral'}
-          >
-            {card.priorityContext.priority}
-          </StatusPill>
-          <span className="pipeline-card__band">
-            {`Fit ${card.priorityContext.fitBand} · ${card.priorityContext.fitPoints}/30`}
-          </span>
-          <span className="pipeline-card__band">
-            {`Timing ${card.priorityContext.timingBand} · ${card.priorityContext.timingValue}/40`}
-          </span>
+      {scores !== null && (
+        <span
+          className={
+            zeroSignal
+              ? 'pipeline-card__chip pipeline-card__chip--zero'
+              : 'pipeline-card__chip'
+          }
+        >
+          {`Fit ${scores.fitPoints} · Timing ${scores.timingValue}`}
         </span>
       )}
-      {card.nextAction !== null && (
-        <span className="pipeline-card__action">
-          <span className="pipeline-card__action-label">
-            {card.nextAction.label}
-          </span>
-          {card.nextAction.overdue && (
-            <StatusPill tone="urgent">Overdue</StatusPill>
+      {status !== null && (
+        <span className="pipeline-card__status">
+          {status.text}
+          {status.overdue && (
+            <span className="pipeline-card__overdue">Overdue</span>
           )}
         </span>
-      )}
-      {wonBadge !== null && <StatusPill tone="positive">{wonBadge}</StatusPill>}
-      {lostLabel !== null && (
-        <span className="pipeline-card__muted">{lostLabel}</span>
       )}
     </button>
   );
@@ -79,16 +95,25 @@ export type PipelineStageColumnProps = {
   onOpenLead(personId: string): void;
 };
 
-/** One fixed lifecycle column. Empty stages stay visible. */
+/**
+ * One fixed lifecycle column. Empty stages stay visible but collapse to a
+ * slim rail: just the header with a faint zero, no tall placeholder box.
+ */
 export function PipelineStageColumn({
   lane,
   onOpenLead,
 }: PipelineStageColumnProps) {
   const headingId = useId();
   const meta = PIPELINE_STAGE_META[lane.stage];
+  const empty = lane.cards.length === 0;
 
   return (
-    <section className="pipeline-column" aria-labelledby={headingId}>
+    <section
+      className={
+        empty ? 'pipeline-column pipeline-column--empty' : 'pipeline-column'
+      }
+      aria-labelledby={headingId}
+    >
       <header className="pipeline-column__header">
         <h2 className="pipeline-column__title" id={headingId}>
           {meta.label}
@@ -97,9 +122,7 @@ export function PipelineStageColumn({
           {lane.cards.length}
         </span>
       </header>
-      {lane.cards.length === 0 ? (
-        <p className="pipeline-column__empty">No leads</p>
-      ) : (
+      {!empty && (
         <ul className="pipeline-column__cards">
           {lane.cards.map((card) => (
             <li key={card.salesCycleId} className="pipeline-column__card-item">

@@ -1,9 +1,10 @@
 import { PhoneIncoming, PhoneOutgoing, Voicemail } from 'lucide-react';
 
 import type { ConversationRow } from '../../../shared/contracts/conversationsContract';
+import { titleCaseDisplayName } from '../../../shared/displayText';
 import { Button } from '../../components/Button';
-import { EmptyState } from '../../components/EmptyState';
 import { StatusPill } from '../../components/StatusPill';
+import { formatRelativeTime } from './relativeTime';
 
 export type ConversationListProps = {
   rows: readonly ConversationRow[];
@@ -13,19 +14,16 @@ export type ConversationListProps = {
   onLoadMore(): void;
 };
 
-function formatWhen(occurredAt: string): string {
-  const date = new Date(occurredAt);
-  if (Number.isNaN(date.getTime())) return occurredAt;
-  return date.toLocaleString(undefined, {
-    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-  });
-}
-
 function formatDuration(durationSeconds: number | null): string | null {
   if (durationSeconds === null) return null;
   const minutes = Math.floor(durationSeconds / 60);
   const seconds = durationSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function channelLabel(row: ConversationRow): string {
+  if (row.kind === 'voicemail') return 'Voicemail';
+  return row.direction === 'inbound' ? 'Inbound call' : 'Outbound call';
 }
 
 function directionGlyph(row: ConversationRow) {
@@ -39,7 +37,9 @@ function directionGlyph(row: ConversationRow) {
 
 /**
  * The master list: every recorded call/voicemail activity as a focusable
- * row button (Enter opens it), with recording/transcript availability pills.
+ * two-line row button (Enter opens it). When the workspace has no
+ * conversations at all, this pane shows only a compact one-liner; the
+ * detail pane carries the single full empty state.
  */
 export function ConversationList({
   rows,
@@ -49,12 +49,7 @@ export function ConversationList({
   onLoadMore,
 }: ConversationListProps) {
   if (rows.length === 0) {
-    return (
-      <EmptyState
-        title="No conversations yet"
-        description="Calls and voicemails logged from the lead inspector appear here."
-      />
-    );
+    return <p className="conversation-list__none">No calls yet</p>;
   }
 
   return (
@@ -62,6 +57,7 @@ export function ConversationList({
       <ul className="conversation-list">
         {rows.map((row) => {
           const duration = formatDuration(row.durationSeconds);
+          const snippet = row.summary ?? channelLabel(row);
           return (
             <li key={row.activityId} className="conversation-list__item">
               <button
@@ -72,9 +68,16 @@ export function ConversationList({
               >
                 <span className="conversation-list__glyph">{directionGlyph(row)}</span>
                 <span className="conversation-list__main">
-                  <span className="conversation-list__name">{row.personName}</span>
+                  <span className="conversation-list__top">
+                    <span className="conversation-list__name">
+                      {titleCaseDisplayName(row.personName)}
+                    </span>
+                    <span className="conversation-list__when numeric">
+                      {formatRelativeTime(row.occurredAt)}
+                    </span>
+                  </span>
                   <span className="conversation-list__meta">
-                    {formatWhen(row.occurredAt)}
+                    {snippet}
                     {duration !== null && ` · ${duration}`}
                   </span>
                 </span>

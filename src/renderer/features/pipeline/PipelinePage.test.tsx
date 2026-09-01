@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import axe from 'axe-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -101,9 +102,28 @@ const lostCard: PipelineCard = {
   lostReasonCode: 'no_response',
 };
 
+const unreviewedCard: PipelineCard = {
+  personId: 'person-fox',
+  salesCycleId: 'cycle-fox',
+  personName: 'FOX WILLIAM P ETAL',
+  contextLabel: '12 Benefit St',
+  stage: 'unreviewed' as const,
+  stageEnteredAt: '2026-08-30T12:00:00.000Z',
+  priorityContext: null,
+  nextAction: {
+    id: 'action-fox',
+    type: 'review_lead',
+    channel: 'review' as const,
+    dueAt: '2026-09-02T15:00:00.000Z',
+    label: 'Review lead',
+    overdue: false,
+  },
+  lostReasonCode: null,
+};
+
 const pipelineSnapshot: PipelineSnapshot = pipelineSnapshotSchema.parse({
   stages: [
-    { stage: 'unreviewed', cards: [] },
+    { stage: 'unreviewed', cards: [unreviewedCard] },
     { stage: 'ready', cards: [] },
     { stage: 'contacted', cards: [kevinCard] },
     { stage: 'interviewed', cards: [] },
@@ -144,27 +164,52 @@ describe('PipelinePage', () => {
     expect(within(ada).getByText('Closed won')).toBeTruthy();
   });
 
-  it('renders a missing priority context as muted copy instead of a fallback score', () => {
+  it('renders compact cards: one score chip, no org line, no band rows', () => {
+    render(<PipelinePage snapshot={pipelineSnapshot} onOpenLead={vi.fn()} />);
+    const kevin = screen.getByRole('button', { name: /Kevin Shin/ });
+
+    expect(within(kevin).getByText('Fit 22 · Timing 31.5')).toBeTruthy();
+    expect(within(kevin).queryByText('Shin Properties')).toBeNull();
+    expect(within(kevin).queryByText(/Fit high/)).toBeNull();
+    expect(within(kevin).queryByText(/Timing hot/)).toBeNull();
+    expect(within(kevin).queryByText('P1')).toBeNull();
+  });
+
+  it('title-cases shouting names and hides the Review lead filler', () => {
+    render(<PipelinePage snapshot={pipelineSnapshot} onOpenLead={vi.fn()} />);
+    const fox = screen.getByRole('button', { name: /Fox William/ });
+
+    expect(within(fox).getByText('Fox William P Etal')).toBeTruthy();
+    expect(within(fox).queryByText('Review lead')).toBeNull();
+  });
+
+  it('renders a lost card as one muted status line instead of a fallback score', () => {
     render(<PipelinePage snapshot={pipelineSnapshot} onOpenLead={vi.fn()} />);
     const noah = screen.getByRole('button', { name: /Noah Reyes/ });
-    const muted = within(noah).getByText('No priority data');
-    expect(muted.className).toContain('pipeline-card__muted');
-    expect(within(noah).getByText(/no response/)).toBeTruthy();
+    const muted = within(noah).getByText(/no response/);
+    expect(muted.closest('.pipeline-card__status')).not.toBeNull();
+    expect(within(noah).queryByText(/Fit \d/)).toBeNull();
   });
 
   it('switches to a table sharing the same DTO through the segmented control', () => {
     const onOpenLead = vi.fn();
     render(<PipelinePage snapshot={pipelineSnapshot} onOpenLead={onOpenLead} />);
 
-    const tableToggle = screen.getByRole('button', { name: 'Table', pressed: false });
+    const toggle = screen.getByRole('radiogroup', { name: 'Pipeline view' });
+    const tableToggle = within(toggle).getByRole('radio', { name: 'Table' });
+    expect(tableToggle.getAttribute('aria-checked')).toBe('false');
     fireEvent.click(tableToggle);
 
     const table = screen.getByRole('table');
     const rowNames = within(table)
       .getAllByRole('button')
       .map((node) => node.textContent);
-    expect(rowNames).toEqual(['Kevin Shin', 'Maya Ortiz', 'Ada Lin', 'Noah Reyes']);
-    expect(screen.getByRole('button', { name: 'Table', pressed: true })).toBeTruthy();
+    expect(rowNames).toEqual([
+      'Fox William P Etal', 'Kevin Shin', 'Maya Ortiz', 'Ada Lin', 'Noah Reyes',
+    ]);
+    expect(
+      within(toggle).getByRole('radio', { name: 'Table' }).getAttribute('aria-checked'),
+    ).toBe('true');
 
     fireEvent.click(within(table).getByRole('button', { name: 'Kevin Shin' }));
     expect(onOpenLead).toHaveBeenCalledWith('person-kevin');
@@ -179,10 +224,27 @@ describe('PipelineBoard', () => {
     expect(onOpenLead).toHaveBeenCalledWith('person-kevin');
   });
 
-  it('keeps empty stages visible as empty columns', () => {
+  it('collapses empty stages to a slim rail with a faint zero', () => {
     render(<PipelineBoard snapshot={pipelineSnapshot} onOpenLead={vi.fn()} />);
     const ready = screen.getByRole('region', { name: 'Ready' });
-    expect(within(ready).getByText('No leads')).toBeTruthy();
+    expect(ready.className).toContain('pipeline-column--empty');
+    expect(within(ready).queryByText('No leads')).toBeNull();
+    expect(within(ready).getByText('0')).toBeTruthy();
     expect(within(ready).queryAllByRole('button')).toHaveLength(0);
+  });
+
+  it('is axe-clean', async () => {
+    const { container } = render(
+      <PipelinePage snapshot={pipelineSnapshot} onOpenLead={vi.fn()} />,
+    );
+
+    const results = await axe.run(container, {
+      rules: {
+        'color-contrast': { enabled: false },
+        region: { enabled: false },
+      },
+    });
+
+    expect(results.violations).toEqual([]);
   });
 });

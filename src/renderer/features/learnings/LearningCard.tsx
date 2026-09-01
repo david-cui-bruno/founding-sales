@@ -135,13 +135,6 @@ export function LearningCard({
         <p className="learning-card__statement">{row.statement}</p>
       )}
 
-      <p className="learning-card__observations">
-        <span className="learning-card__sample">{`n = ${row.sampleSize}`}</span>
-        <span className="learning-card__dates">
-          {`${observed.format(new Date(row.firstObservedAt))} – ${observed.format(new Date(row.latestObservedAt))}`}
-        </span>
-      </p>
-
       <ul className="learning-card__evidence" aria-label="Evidence quotes">
         {visibleEvidence.map((evidence) => (
           <li key={evidence.id} className="learning-card__quote">
@@ -169,6 +162,13 @@ export function LearningCard({
           {`Show all ${row.evidence.length}`}
         </button>
       )}
+
+      <p className="learning-card__observations">
+        <span className="learning-card__sample">{`n = ${row.sampleSize}`}</span>
+        <span className="learning-card__dates">
+          {`${observed.format(new Date(row.firstObservedAt))} – ${observed.format(new Date(row.latestObservedAt))}`}
+        </span>
+      </p>
 
       {addingEvidence ? (
         <div className="learning-card__evidence-form">
@@ -206,7 +206,7 @@ export function LearningCard({
               </Button>
               {!contradicting && (
                 <Button variant="quiet" onClick={() => setContradicting(true)}>
-                  Mark contradicted
+                  Contradict
                 </Button>
               )}
             </>

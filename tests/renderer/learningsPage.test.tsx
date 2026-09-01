@@ -183,11 +183,41 @@ describe('LearningsRoute list and filters', () => {
     });
   });
 
-  it('explains capture in the empty state', async () => {
+  it('explains capture in the empty state without a duplicate CTA', async () => {
     renderRoute({ api: makeApi([]) });
 
-    expect(await screen.findByText('No learnings captured yet')).toBeTruthy();
-    expect(screen.getByText(/records an insight with its evidence/)).toBeTruthy();
+    expect(await screen.findByText('No learnings yet')).toBeTruthy();
+    expect(
+      screen.getByText('Capture what you learn on calls so patterns surface.'),
+    ).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Capture learning' })).toHaveLength(1);
+  });
+
+  it('marks selected category chips with the accent selected state', async () => {
+    renderRoute();
+    await screen.findByText('Owners lose weekends to showings.');
+
+    const chip = screen.getByRole('button', { name: 'Pain', pressed: false });
+    fireEvent.click(chip);
+
+    await waitFor(() => {
+      expect(chip.getAttribute('aria-pressed')).toBe('true');
+    });
+    expect(chip.className).toContain('learnings__chip');
+  });
+
+  it('is axe-clean at the page level', async () => {
+    renderRoute();
+    await screen.findByText('Owners lose weekends to showings.');
+
+    const results = await axe.run(document.body, {
+      rules: {
+        'color-contrast': { enabled: false },
+        region: { enabled: false },
+      },
+    });
+
+    expect(results.violations).toEqual([]);
   });
 });
 
@@ -264,7 +294,7 @@ describe('LearningCard status controls', () => {
     const card = (await screen.findByText('Owners lose weekends to showings.'))
       .closest('article')!;
 
-    fireEvent.click(within(card).getByRole('button', { name: 'Mark contradicted' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'Contradict' }));
     const confirm = within(card).getByRole('button', { name: 'Confirm contradiction' });
     expect((confirm as HTMLButtonElement).disabled).toBe(true);
 

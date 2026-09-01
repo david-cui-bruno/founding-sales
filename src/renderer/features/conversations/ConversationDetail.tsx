@@ -7,6 +7,8 @@ import type { DetailState } from './ConversationsPage';
 
 export type ConversationDetailPanelProps = {
   state: DetailState;
+  /** True when the whole workspace has zero conversations. */
+  workspaceEmpty: boolean;
   onRetry(): void;
   onOpenLead(personId: string): void;
   onOpenAttach(): void;
@@ -33,11 +35,20 @@ function formatWhen(occurredAt: string): string {
  */
 export function ConversationDetailPanel({
   state,
+  workspaceEmpty,
   onRetry,
   onOpenLead,
   onOpenAttach,
 }: ConversationDetailPanelProps) {
   if (state.kind === 'idle') {
+    if (workspaceEmpty) {
+      return (
+        <EmptyState
+          title="No conversations yet"
+          description="Calls and voicemails logged from the lead inspector appear here."
+        />
+      );
+    }
     return (
       <EmptyState
         title="Select a conversation"

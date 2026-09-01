@@ -2,7 +2,7 @@ import type {
   ReviewItem as ReviewItemDto,
   ReviewKind,
 } from '../../../shared/contracts/reviewContract';
-import { EmptyState } from '../../components/EmptyState';
+import { StatusBadge } from '../../components/StatusBadge';
 import { ReviewItem } from './ReviewItem';
 import { reviewKindMeta } from './reviewKindMeta';
 
@@ -23,7 +23,12 @@ export function ReviewQueue({
   const meta = reviewKindMeta(kind);
 
   if (items.length === 0) {
-    return <EmptyState title="Queue clear" description={meta.emptyCopy} />;
+    return (
+      <div className="review-queue__clear">
+        <StatusBadge tone="success" label="Queue clear" />
+        <p className="review-queue__clear-copy">{meta.emptyCopy}</p>
+      </div>
+    );
   }
 
   return (

@@ -74,7 +74,7 @@ export function PipelineTable({ snapshot, onOpenLead }: PipelineTableProps) {
                   )}
                 </td>
                 {card.priorityContext === null ? (
-                  <td className="pipeline-card__muted" colSpan={3}>
+                  <td className="pipeline-table__muted" colSpan={3}>
                     No priority data
                   </td>
                 ) : (

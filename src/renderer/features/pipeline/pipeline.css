@@ -7,29 +7,33 @@
   min-width: 0;
 }
 
-.pipeline__view-toggle {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
+/* Board: fixed columns with horizontal scrolling, no drop targets. The
+   frame owns a right-edge gradient scrim shown while columns overflow. */
+.pipeline-board-frame {
+  position: relative;
+  min-width: 0;
 }
 
-.pipeline__view-button {
-  height: var(--control-height);
-  padding: 0 var(--space-4);
-  border: 0;
-  background: var(--surface);
-  color: var(--muted);
-  font: inherit;
-  font-weight: 600;
+.pipeline-board__scrim {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: var(--space-2);
+  width: 48px;
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--canvas) 0%, transparent),
+    var(--canvas)
+  );
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-fast) var(--motion-ease);
 }
 
-.pipeline__view-button[aria-pressed='true'] {
-  background: var(--surface-raised);
-  color: var(--text);
+.pipeline-board-frame--more .pipeline-board__scrim {
+  opacity: 1;
 }
 
-/* Board: fixed columns with horizontal scrolling, no drop targets. */
 .pipeline-board {
   display: flex;
   gap: var(--space-4);
@@ -49,6 +53,16 @@
   background: var(--surface-sunken);
 }
 
+/* Empty stages collapse to a slim rail: header plus a faint zero. */
+.pipeline-column--empty {
+  flex-basis: 120px;
+  gap: 0;
+}
+
+.pipeline-column--empty .pipeline-column__count {
+  color: var(--text-faint);
+}
+
 .pipeline-column__header {
   display: flex;
   align-items: baseline;
@@ -64,17 +78,18 @@
 }
 
 .pipeline-column__count {
+  display: inline-flex;
+  align-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--space-1);
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--surface);
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.pipeline-column__empty {
-  margin: 0;
-  padding: var(--space-3) 0;
-  color: var(--muted);
-  font-size: 13px;
-  text-align: center;
+  font-size: var(--text-micro);
+  font-weight: var(--weight-heading);
+  font-variant-numeric: tabular-nums;
 }
 
 .pipeline-column__cards {
@@ -96,16 +111,13 @@
   align-items: flex-start;
   gap: var(--space-2);
   width: 100%;
-  padding: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
   color: var(--text);
   font: inherit;
   text-align: left;
-}
-
-.pipeline-card {
   transition: border-color var(--motion-fast) var(--motion-ease);
 }
 
@@ -113,42 +125,52 @@
   border-color: var(--line-strong);
 }
 
+.pipeline-card__identity {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+}
+
 .pipeline-card__name {
   font-weight: var(--weight-heading);
   font-size: var(--text-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.pipeline-card__context {
+/* One chip per card: the two cloud axes, never a blended number. */
+.pipeline-card__chip {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.pipeline-card__chip--zero {
+  border-color: var(--line);
+  background: var(--surface-sunken);
   color: var(--muted);
-  font-size: 12px;
 }
 
-.pipeline-card__bands {
+.pipeline-card__status {
   display: flex;
-  flex-wrap: wrap;
   gap: var(--space-2);
   align-items: center;
-}
-
-.pipeline-card__band {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-caption);
 }
 
-.pipeline-card__action {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-  font-size: 12px;
-}
-
-.pipeline-card__action-label {
-  font-weight: 600;
-}
-
-.pipeline-card__muted {
-  color: var(--muted);
-  font-size: 12px;
+.pipeline-card__overdue {
+  color: var(--danger);
+  font-weight: var(--weight-medium);
 }
 
 /* Table: shares the DTO with the board, never adds a blended score. */
@@ -194,6 +216,11 @@
 /* Decorative placeholder for empty grid cells; faint per the audit. */
 .pipeline-table__absent {
   color: var(--text-faint);
+}
+
+.pipeline-table__muted {
+  color: var(--muted);
+  font-size: var(--text-caption);
 }
 
 .pipeline-table__empty {

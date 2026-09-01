@@ -1,3 +1,6 @@
+import type { KeyboardEvent } from 'react';
+import { useRef } from 'react';
+
 import type {
   ReviewItem,
   ReviewKind,
@@ -10,23 +13,56 @@ export type ReviewTabsProps = {
   onSelectKind(kind: ReviewKind): void;
 };
 
-/** One counted tab per review kind, in fixed order. Counts never hide. */
+/**
+ * One counted tab per review kind, in fixed order, styled as the shared
+ * segmented control (accent-soft selected fill). Counts never hide. Tab
+ * semantics stay: the queue below is the tab panel this control drives.
+ */
 export function ReviewTabs({ items, selectedKind, onSelectKind }: ReviewTabsProps) {
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  const moveSelection = (delta: number) => {
+    const index = REVIEW_KIND_ORDER.indexOf(selectedKind);
+    const nextIndex =
+      (index + delta + REVIEW_KIND_ORDER.length) % REVIEW_KIND_ORDER.length;
+    onSelectKind(REVIEW_KIND_ORDER[nextIndex]!);
+    const tabs = rootRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    tabs?.[nextIndex]?.focus();
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      moveSelection(1);
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      moveSelection(-1);
+    }
+  };
+
   return (
-    <div className="review__tabs" role="tablist" aria-label="Review queues">
+    <div
+      ref={rootRef}
+      className="segmented-control review-tabs"
+      role="tablist"
+      aria-label="Review queues"
+    >
       {REVIEW_KIND_ORDER.map((kind) => {
         const count = items.filter((item) => item.kind === kind).length;
+        const selected = kind === selectedKind;
         return (
           <button
             key={kind}
             type="button"
             role="tab"
-            className="review__tab"
-            aria-selected={kind === selectedKind}
+            className="segmented-control__option review-tabs__tab"
+            aria-selected={selected}
+            tabIndex={selected ? 0 : -1}
             onClick={() => onSelectKind(kind)}
+            onKeyDown={onKeyDown}
           >
             {reviewKindMeta(kind).tabLabel}{' '}
-            <span className="review__tab-count">{count}</span>
+            <span className="review-tabs__count numeric">{count}</span>
           </button>
         );
       })}

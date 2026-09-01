@@ -131,11 +131,8 @@ export function LearningsPage({
 
       {response.rows.length === 0 ? (
         <EmptyState
-          title="No learnings captured yet"
-          description="Capture learning records an insight with its evidence quotes, so decisions cite what owners actually said."
-          action={
-            <Button onClick={() => setCapturing(true)}>Capture learning</Button>
-          }
+          title="No learnings yet"
+          description="Capture what you learn on calls so patterns surface."
         />
       ) : (
         <div className="learnings__grid">

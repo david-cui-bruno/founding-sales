@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import type { PipelineSnapshot } from '../../../shared/contracts/pipelineContract';
 import { PageHeader } from '../../components/PageHeader';
+import { SegmentedControl } from '../../components/SegmentedControl';
 import { PipelineBoard } from './PipelineBoard';
 import { PipelineTable } from './PipelineTable';
 
@@ -14,15 +15,15 @@ export type PipelinePageProps = {
   onOpenLead(personId: string): void;
 };
 
-const VIEWS: ReadonlyArray<{ id: PipelineView; label: string }> = [
-  { id: 'board', label: 'Board' },
-  { id: 'table', label: 'Table' },
+const VIEW_OPTIONS: ReadonlyArray<{ value: PipelineView; label: string }> = [
+  { value: 'board', label: 'Board' },
+  { value: 'table', label: 'Table' },
 ];
 
 /**
- * Board and table render the exact same snapshot DTO; a local segmented
- * control in the page header switches between them. The page exposes no
- * stage commands.
+ * Board and table render the exact same snapshot DTO; the shared
+ * SegmentedControl in the page header switches between them. The page
+ * exposes no stage commands.
  */
 export function PipelinePage({ snapshot, onOpenLead }: PipelinePageProps) {
   const [view, setView] = useState<PipelineView>('board');
@@ -32,23 +33,12 @@ export function PipelinePage({ snapshot, onOpenLead }: PipelinePageProps) {
       <PageHeader
         title="Pipeline"
         trailing={
-          <div
-            className="pipeline__view-toggle"
-            role="group"
-            aria-label="Pipeline view"
-          >
-            {VIEWS.map((candidate) => (
-              <button
-                key={candidate.id}
-                type="button"
-                className="pipeline__view-button"
-                aria-pressed={view === candidate.id}
-                onClick={() => setView(candidate.id)}
-              >
-                {candidate.label}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl<PipelineView>
+            label="Pipeline view"
+            options={VIEW_OPTIONS}
+            value={view}
+            onChange={setView}
+          />
         }
       />
       {view === 'board' ? (
