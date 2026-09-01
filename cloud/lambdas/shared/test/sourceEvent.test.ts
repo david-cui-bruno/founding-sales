@@ -209,6 +209,27 @@ describe("cloudSourceEventSchema", () => {
   });
 });
 
+describe("scores_version (additive, scorer-emitted)", () => {
+  it("is optional: events without it still validate", () => {
+    const event = validFrboEvent();
+    expect("scores_version" in event).toBe(false);
+    expect(cloudSourceEventSchema.safeParse(event).success).toBe(true);
+  });
+
+  it("accepts a positive integer", () => {
+    const event = { ...validFrboEvent(), scores_version: 1 };
+    expect(cloudSourceEventSchema.safeParse(event).success).toBe(true);
+    expect(validateSourceEvent(event).success).toBe(true);
+  });
+
+  it("rejects zero, negatives, and non-integers", () => {
+    for (const bad of [0, -1, 1.5, "1"]) {
+      const event = { ...validFrboEvent(), scores_version: bad };
+      expect(cloudSourceEventSchema.safeParse(event).success, String(bad)).toBe(false);
+    }
+  });
+});
+
 describe("computeIdempotencyKey", () => {
   it("is stable for identical inputs", () => {
     const a = computeIdempotencyKey("frbo", "key", "fp");

@@ -239,6 +239,11 @@ export const cloudSourceEventSchema = z
     // null for pure identity events (registry row, parcel row).
     trigger: triggerSchema.nullable(),
     scores: scoresSchema.nullable(),
+    // Set by the scoring engine when it re-emits an enriched event with the
+    // SAME idempotency_key. The app treats (idempotency_key, scores_version)
+    // as an idempotent score update, never a new person. Absent on adapter
+    // events (additive: pre-scorer events still validate).
+    scores_version: z.number().int().min(1).optional(),
     provenance: provenanceSchema,
   })
   .strict();
