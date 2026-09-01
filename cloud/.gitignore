@@ -10,3 +10,4 @@ terraform.tfvars
 # Lambda builds
 lambdas/**/node_modules/
 lambdas/**/dist/
+terraform/tf.plan
