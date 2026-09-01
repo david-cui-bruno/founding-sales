@@ -27,6 +27,7 @@ import { classifyMail, TEST_CLASSIFY_HEADER, type Classification } from "./class
 import { buildCommunityEvent, buildFrboEvent, type MailMeta } from "./events";
 import { extractF5BotHits, extractFrboListings, stripTags } from "./extract";
 import { log } from "./log";
+import { pushHotEvents } from "./notify";
 
 const RAW_MAIL_PREFIX = "raw-mail/";
 const IDEMPOTENCY_TTL_DAYS = 90;
@@ -38,7 +39,11 @@ export interface HandlerDeps {
     RAW_MAIL_BUCKET: string;
     INBOX_BUCKET: string;
     IDEMPOTENCY_TABLE: string;
+    /** ntfy topic for hot-lead pushes. Empty/absent disables pushes. */
+    NTFY_TOPIC?: string;
   };
+  /** Injected fetch for push notifications (tests). Defaults to global fetch. */
+  fetchImpl?: typeof fetch;
   now?: () => Date;
 }
 
@@ -56,6 +61,7 @@ function defaultDeps(): HandlerDeps {
       RAW_MAIL_BUCKET: envOrThrow("RAW_MAIL_BUCKET"),
       INBOX_BUCKET: envOrThrow("INBOX_BUCKET"),
       IDEMPOTENCY_TABLE: envOrThrow("IDEMPOTENCY_TABLE"),
+      NTFY_TOPIC: process.env.NTFY_TOPIC,
     },
   };
 }
@@ -254,6 +260,23 @@ async function processMessage(
     idempotencySkips: result.idempotencySkips,
     invalid: result.invalid,
   });
+
+  // Hot-lead phone push. Fire-and-forget: a push failure must never fail
+  // mail processing (the event is already durably in the inbox).
+  if (deps.env.NTFY_TOPIC) {
+    try {
+      const pushed = await pushHotEvents(
+        { fetchImpl: deps.fetchImpl ?? fetch, topic: deps.env.NTFY_TOPIC },
+        events,
+      );
+      if (pushed > 0) log("info", "sent hot-lead pushes", { messageId, pushed });
+    } catch (error) {
+      log("warn", "hot-lead push failed (event already in inbox)", {
+        messageId,
+        error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      });
+    }
+  }
 
   return result;
 }

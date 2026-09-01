@@ -51,3 +51,10 @@ variable "monthly_budget_limit_usd" {
   type        = string
   default     = "50"
 }
+
+variable "ntfy_topic" {
+  description = "ntfy.sh topic for hot-lead pushes (value lives in SSM /callie-sourcing/ntfy-topic). Empty disables pushes."
+  type        = string
+  default     = ""
+  sensitive   = true
+}

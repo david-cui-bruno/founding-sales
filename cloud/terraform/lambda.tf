@@ -36,6 +36,10 @@ resource "aws_lambda_function" "mail_parse" {
       RAW_MAIL_BUCKET   = aws_s3_bucket.raw_mail.bucket
       INBOX_BUCKET      = aws_s3_bucket.inbox.bucket
       IDEMPOTENCY_TABLE = aws_dynamodb_table.idempotency.name
+      # Hot-lead push topic. Long random value provisioned in SSM
+      # (/callie-sourcing/ntfy-topic); injected from tfvars to avoid a
+      # data-source read of a SecureString into state on every plan.
+      NTFY_TOPIC = var.ntfy_topic
     }
   }
 }
