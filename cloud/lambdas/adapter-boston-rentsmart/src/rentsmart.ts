@@ -36,6 +36,7 @@
 import { createHash } from "node:crypto";
 import {
   computeIdempotencyKey,
+  deterministicCloudEntityId,
   newCloudEntityId,
   newSourceEventId,
   TRIGGER_TYPES,
@@ -44,7 +45,12 @@ import {
 } from "@callie-sourcing/shared";
 
 export const ADAPTER_NAME = "boston-rentsmart";
-export const ADAPTER_VERSION = "1.0.0";
+/**
+ * Included in the content fingerprint: bumping it re-emits every row once
+ * with corrected payloads (snapshot diff sees 'changed'). Bump on any logic
+ * change that alters emitted events (1.1.0: deterministic cloud entity ids).
+ */
+export const ADAPTER_VERSION = "1.1.0";
 export const RESOURCE_ID = "dc615ff7-2ff3-416a-922b-f0f334f085d0";
 /** Pre-joined city dataset, occasional address/owner staleness. */
 const CONFIDENCE = 0.9;
@@ -158,7 +164,10 @@ export function contentFingerprint(row: RentSmartRow): string {
     property_type: normalize(row.property_type),
   };
   return createHash("sha256")
-    .update(JSON.stringify(projection), "utf8")
+    // ADAPTER_VERSION is part of the fingerprint so adapter LOGIC fixes
+    // re-emit corrected events; the source row alone would say 'unchanged'
+    // forever.
+    .update(`${JSON.stringify(projection)}|${ADAPTER_VERSION}`, "utf8")
     .digest("hex");
 }
 
@@ -203,7 +212,13 @@ export function buildViolationEvent(row: RentSmartRow, meta: RunMeta): CloudSour
     fetched_at: meta.fetchedAt.toISOString(),
     observed_at: observedAt,
     entity: {
-      cloud_entity_id: newCloudEntityId(meta.fetchedAt.getTime()),
+      // Deterministic when an owner is present: same owner name + zip5 ->
+      // same ce_ id across rows and runs (RentSmart has no owner mailing
+      // address, so situs zip is the blocking zip). Random id only for
+      // person-less rows, where it is never used for person identity.
+      cloud_entity_id: owner
+        ? deterministicCloudEntityId(owner, row.zip_code?.trim() || null)
+        : newCloudEntityId(meta.fetchedAt.getTime()),
       person: owner
         ? {
             full_name: owner,

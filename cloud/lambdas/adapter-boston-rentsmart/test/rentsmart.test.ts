@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { validateSourceEvent } from "@callie-sourcing/shared";
 import {
+  ADAPTER_VERSION,
   buildViolationEvent,
   contentFingerprint,
   isoDateOf,
@@ -99,6 +100,14 @@ describe("natural key + fingerprint", () => {
       contentFingerprint({ ...ROW_LLC_VIOLATION, latitude: "42.0", longitude: "-71.0" }),
     ).toBe(contentFingerprint(ROW_LLC_VIOLATION));
   });
+
+  it("fingerprint is bound to ADAPTER_VERSION so logic fixes re-emit", () => {
+    // sha256 over `${projection}|${ADAPTER_VERSION}`: any version bump flips
+    // every fingerprint, so snapshotDiff reports 'changed' once and
+    // corrected payloads reach the inbox.
+    expect(ADAPTER_VERSION).toBe("1.1.0");
+    expect(contentFingerprint(ROW_LLC_VIOLATION)).toMatch(/^[0-9a-f]{64}$/);
+  });
 });
 
 describe("buildViolationEvent", () => {
@@ -128,7 +137,7 @@ describe("buildViolationEvent", () => {
     expect(event.entity.property?.use_code).toBe("Residential 3-family");
     expect(event.provenance).toEqual({
       adapter: "boston-rentsmart",
-      adapter_version: "1.0.0",
+      adapter_version: "1.1.0",
       confidence: 0.9,
     });
   });
@@ -172,5 +181,40 @@ describe("buildViolationEvent", () => {
     const c = buildViolationEvent(ROW_ENFORCEMENT_VIOLATION, META);
     expect(a.idempotency_key).toBe(b.idempotency_key);
     expect(a.idempotency_key).not.toBe(c.idempotency_key);
+  });
+
+  it("mints the SAME cloud_entity_id for the same owner+zip across rows and runs", () => {
+    const a = buildViolationEvent(ROW_LLC_VIOLATION, META);
+    const b = buildViolationEvent(
+      { ...ROW_LLC_VIOLATION, _id: 9999777, description: "Different case" },
+      { ...META, fetchedAt: new Date("2026-09-02T03:00:00.000Z") },
+    );
+    expect(a.entity.cloud_entity_id).toMatch(/^ce_[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(b.entity.cloud_entity_id).toBe(a.entity.cloud_entity_id);
+    // Owner-name formatting converges ("...LLC" vs "..., L.L.C.").
+    const reformatted = buildViolationEvent(
+      { ...ROW_LLC_VIOLATION, owner: "292 Bennington Street, L.L.C." },
+      META,
+    );
+    expect(reformatted.entity.cloud_entity_id).toBe(a.entity.cloud_entity_id);
+  });
+
+  it("different owners or zips get different cloud_entity_ids", () => {
+    const a = buildViolationEvent(ROW_LLC_VIOLATION, META);
+    const otherOwner = buildViolationEvent(
+      { ...ROW_LLC_VIOLATION, owner: "SOMEONE ELSE ENTIRELY" },
+      META,
+    );
+    const otherZip = buildViolationEvent(
+      { ...ROW_LLC_VIOLATION, zip_code: "02999" },
+      META,
+    );
+    expect(otherOwner.entity.cloud_entity_id).not.toBe(a.entity.cloud_entity_id);
+    expect(otherZip.entity.cloud_entity_id).not.toBe(a.entity.cloud_entity_id);
+  });
+
+  it("person-less rows still get a valid (random) cloud_entity_id", () => {
+    const event = buildViolationEvent(ROW_NO_OWNER, META);
+    expect(event.entity.cloud_entity_id).toMatch(/^ce_[0-9A-HJKMNP-TV-Z]{26}$/);
   });
 });

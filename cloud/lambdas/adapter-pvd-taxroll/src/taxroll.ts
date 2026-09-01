@@ -7,6 +7,7 @@
 import { createHash } from "node:crypto";
 import {
   computeIdempotencyKey,
+  deterministicCloudEntityId,
   newCloudEntityId,
   newSourceEventId,
   type CloudSourceEvent,
@@ -15,7 +16,13 @@ import {
 } from "@callie-sourcing/shared";
 
 export const ADAPTER_NAME = "pvd-taxroll";
-export const ADAPTER_VERSION = "1.0.0";
+/**
+ * Included in the content fingerprint: bumping it re-emits every row once
+ * with corrected payloads (snapshot diff sees 'changed'). Bump on any logic
+ * change that alters emitted events (1.1.0: combined-name ownerKind +
+ * deterministic cloud entity ids).
+ */
+export const ADAPTER_VERSION = "1.1.0";
 /** This Socrata dataset is the 2025 Property Tax Roll. */
 export const TAX_YEAR = 2025;
 /** Identity events from a public tax roll: high-confidence typed fields. */
@@ -104,13 +111,15 @@ export function isOrgName(name: string): boolean {
 }
 
 export function ownerKind(row: TaxRollRow): ParcelPayload["owner_kind"] {
-  const company = row.company?.trim();
-  if (!company) {
-    return row.first_name || row.last_name ? "individual" : null;
-  }
-  if (/\bLLC\b|\bL\.L\.C\.\b/i.test(company)) return "llc";
-  if (/\bTRUST\b|\bTRUSTEE\b|\bTRS?\b/i.test(company)) return "trust";
-  return "other";
+  // The tax roll is inconsistent: org names appear in `company` OR split
+  // across first_name/last_name ("160 Waterman" + "LLC"). Classify on the
+  // combined owner name so "212 LLC" is never an individual.
+  const name = ownerFullName(row);
+  if (name === null) return null;
+  if (/\bLLC\b|\bL\.L\.C\.\b/i.test(name)) return "llc";
+  if (/\bTRUST\b|\bTRUSTEE\b|\bTRS?\b/i.test(name)) return "trust";
+  if (isOrgName(name)) return "other";
+  return "individual";
 }
 
 export function ownerFullName(row: TaxRollRow): string | null {
@@ -193,8 +202,14 @@ export function normalizedRowForFingerprint(row: TaxRollRow): Record<string, str
 }
 
 export function contentFingerprint(row: TaxRollRow): string {
+  // ADAPTER_VERSION is part of the fingerprint so adapter LOGIC fixes
+  // re-emit corrected events; the source row alone would say 'unchanged'
+  // forever.
   return createHash("sha256")
-    .update(JSON.stringify(normalizedRowForFingerprint(row)), "utf8")
+    .update(
+      `${JSON.stringify(normalizedRowForFingerprint(row))}|${ADAPTER_VERSION}`,
+      "utf8",
+    )
     .digest("hex");
 }
 
@@ -258,7 +273,12 @@ export function buildParcelEvent(row: TaxRollRow, meta: RunMeta): CloudSourceEve
     fetched_at: meta.fetchedAt.toISOString(),
     observed_at: `${meta.snapshotDate}T00:00:00.000Z`,
     entity: {
-      cloud_entity_id: newCloudEntityId(meta.fetchedAt.getTime()),
+      // Deterministic: same owner name + mailing zip5 -> same ce_ id across
+      // parcels and runs, so the app converges duplicate persons. Random
+      // fallback only when the roll has no owner name at all.
+      cloud_entity_id: fullName
+        ? deterministicCloudEntityId(fullName, row.zip_postal_1?.trim() || null)
+        : newCloudEntityId(meta.fetchedAt.getTime()),
       person: {
         full_name: fullName,
         mailing_address: mailingAddress(row),

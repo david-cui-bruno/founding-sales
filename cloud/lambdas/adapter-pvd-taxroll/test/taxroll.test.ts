@@ -1,11 +1,14 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { validateSourceEvent } from "@callie-sourcing/shared";
 import {
+  ADAPTER_VERSION,
   buildParcelEvent,
   contentFingerprint,
   isAbsentee,
   isOrgName,
   naturalKey,
+  normalizedRowForFingerprint,
   ownerFullName,
   ownerKind,
   RESIDENTIAL_RENTAL_CLASSES,
@@ -103,6 +106,12 @@ describe("org detection + owner kind", () => {
     expect(ownerKind({ p_id: "x", company: "SMITH FAMILY TRUST" })).toBe("trust");
     expect(ownerKind(ROW_TWO_FAMILY_OWNER_OCC)).toBe("individual");
     expect(ownerKind({ p_id: "x" })).toBe(null);
+    // Regression: the tax roll splits org names across first/last name
+    // fields ("160 Waterman" + "LLC"); these must never be individuals.
+    expect(ownerKind({ p_id: "x", first_name: "160 Waterman", last_name: "LLC" })).toBe("llc");
+    expect(ownerKind({ p_id: "x", first_name: "212", last_name: "LLC" })).toBe("llc");
+    expect(ownerKind({ p_id: "x", first_name: "Smith Family", last_name: "Trust" })).toBe("trust");
+    expect(ownerKind({ p_id: "x", first_name: "Edgemont", last_name: "Realty Partners" })).toBe("other");
   });
 
   it("builds full name from first/last or company", () => {
@@ -142,6 +151,28 @@ describe("fingerprint + natural key", () => {
   it("natural key is pvd-taxroll:<p_id>", () => {
     expect(naturalKey(ROW_TWO_FAMILY_OWNER_OCC)).toBe("pvd-taxroll:30");
   });
+
+  it("is bound to ADAPTER_VERSION so logic fixes re-emit corrected events", () => {
+    // sha256 over `${normalizedRow}|${ADAPTER_VERSION}`: any version bump
+    // flips every fingerprint, so snapshotDiff reports 'changed' once and
+    // corrected payloads reach the inbox.
+    expect(ADAPTER_VERSION).toBe("1.1.0");
+    const expected = createHash("sha256")
+      .update(
+        `${JSON.stringify(normalizedRowForFingerprint(ROW_TWO_FAMILY_OWNER_OCC))}|${ADAPTER_VERSION}`,
+        "utf8",
+      )
+      .digest("hex");
+    expect(contentFingerprint(ROW_TWO_FAMILY_OWNER_OCC)).toBe(expected);
+    // And it differs from the un-versioned hash (the 1.0.0-era input).
+    const unversioned = createHash("sha256")
+      .update(
+        JSON.stringify(normalizedRowForFingerprint(ROW_TWO_FAMILY_OWNER_OCC)),
+        "utf8",
+      )
+      .digest("hex");
+    expect(contentFingerprint(ROW_TWO_FAMILY_OWNER_OCC)).not.toBe(unversioned);
+  });
 });
 
 describe("buildParcelEvent", () => {
@@ -170,7 +201,7 @@ describe("buildParcelEvent", () => {
     });
     expect(event.provenance).toEqual({
       adapter: "pvd-taxroll",
-      adapter_version: "1.0.0",
+      adapter_version: "1.1.0",
       confidence: 0.95,
     });
   });
@@ -198,5 +229,39 @@ describe("buildParcelEvent", () => {
       META,
     );
     expect(sold.idempotency_key).not.toBe(a.idempotency_key);
+  });
+
+  it("mints the SAME cloud_entity_id for the same owner+zip across parcels and runs", () => {
+    const a = buildParcelEvent(ROW_TWO_FAMILY_OWNER_OCC, META);
+    const b = buildParcelEvent(
+      { ...ROW_TWO_FAMILY_OWNER_OCC, p_id: "9999902", formated_address: "99 Elsewhere St" },
+      { ...META, fetchedAt: new Date("2026-09-02T03:00:00.000Z") },
+    );
+    expect(a.entity.cloud_entity_id).toMatch(/^ce_[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(b.entity.cloud_entity_id).toBe(a.entity.cloud_entity_id);
+    // Name formatting converges too ("212 LLC" vs "212, L.L.C.").
+    const llcA = buildParcelEvent(
+      { ...ROW_TWO_FAMILY_OWNER_OCC, first_name: "", last_name: "", company: "212 LLC" },
+      META,
+    );
+    const llcB = buildParcelEvent(
+      { ...ROW_TWO_FAMILY_OWNER_OCC, p_id: "31", first_name: "", last_name: "", company: "212, L.L.C." },
+      META,
+    );
+    expect(llcB.entity.cloud_entity_id).toBe(llcA.entity.cloud_entity_id);
+  });
+
+  it("different owners or zips get different cloud_entity_ids", () => {
+    const a = buildParcelEvent(ROW_TWO_FAMILY_OWNER_OCC, META);
+    const otherOwner = buildParcelEvent(
+      { ...ROW_TWO_FAMILY_OWNER_OCC, first_name: "New", last_name: "Owner" },
+      META,
+    );
+    const otherZip = buildParcelEvent(
+      { ...ROW_TWO_FAMILY_OWNER_OCC, zip_postal_1: "02999" },
+      META,
+    );
+    expect(otherOwner.entity.cloud_entity_id).not.toBe(a.entity.cloud_entity_id);
+    expect(otherZip.entity.cloud_entity_id).not.toBe(a.entity.cloud_entity_id);
   });
 });

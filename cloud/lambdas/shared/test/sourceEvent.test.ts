@@ -3,6 +3,7 @@ import {
   cloudSourceEventSchema,
   communityPostPayloadSchema,
   computeIdempotencyKey,
+  deterministicCloudEntityId,
   frboListingPayloadSchema,
   parcelPayloadSchema,
   newCloudEntityId,
@@ -376,5 +377,52 @@ describe("ulid + ID helpers", () => {
   it("rejects out-of-range timestamps", () => {
     expect(() => ulid(-1)).toThrow(RangeError);
     expect(() => ulid(2 ** 48)).toThrow(RangeError);
+  });
+});
+
+describe("deterministicCloudEntityId", () => {
+  it("is stable: same inputs -> same id, across calls", () => {
+    const a = deterministicCloudEntityId("212 LLC", "02906");
+    const b = deterministicCloudEntityId("212 LLC", "02906");
+    expect(a).toBe(b);
+  });
+
+  it("matches the ce_ regex used by the entity schema", () => {
+    expect(deterministicCloudEntityId("212 LLC", "02906")).toMatch(
+      /^ce_[0-9A-HJKMNP-TV-Z]{26}$/,
+    );
+    expect(deterministicCloudEntityId("Ricardo Baez", null)).toMatch(
+      /^ce_[0-9A-HJKMNP-TV-Z]{26}$/,
+    );
+  });
+
+  it("is insensitive to owner-name formatting (normalizeOwnerName)", () => {
+    const canonical = deterministicCloudEntityId("212 LLC", "02906");
+    expect(deterministicCloudEntityId("212, L.L.C.", "02906")).toBe(canonical);
+    expect(deterministicCloudEntityId("  212   llc ", "02906")).toBe(canonical);
+    expect(deterministicCloudEntityId("SMITH, JOHN", "02906")).toBe(
+      deterministicCloudEntityId("John Smith", "02906"),
+    );
+  });
+
+  it("normalizes the zip to zip5 (zip+4 converges)", () => {
+    expect(deterministicCloudEntityId("212 LLC", "02906-1234")).toBe(
+      deterministicCloudEntityId("212 LLC", "02906"),
+    );
+  });
+
+  it("is zip-sensitive: same name in different zips stays distinct", () => {
+    expect(deterministicCloudEntityId("212 LLC", "02906")).not.toBe(
+      deterministicCloudEntityId("212 LLC", "02907"),
+    );
+    expect(deterministicCloudEntityId("212 LLC", "02906")).not.toBe(
+      deterministicCloudEntityId("212 LLC", null),
+    );
+  });
+
+  it("is name-sensitive: different owners never converge", () => {
+    expect(deterministicCloudEntityId("212 LLC", "02906")).not.toBe(
+      deterministicCloudEntityId("213 LLC", "02906"),
+    );
   });
 });

@@ -8,6 +8,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
+import { normalizeOwnerName, normalizeZip5 } from "./normalize";
 
 // ---------------------------------------------------------------------------
 // Channels (CONTRACT.md "Channels" table, aligned with CRM migration 0005)
@@ -374,4 +375,40 @@ export function newSourceEventId(timestamp?: number): string {
 
 export function newCloudEntityId(timestamp?: number): string {
   return `ce_${ulid(timestamp)}`;
+}
+
+/**
+ * Deterministic cloud entity id for an owner: the SAME owner name (per
+ * normalizeOwnerName, so "212 LLC" === "212, L.L.C." === "LLC 212") in the
+ * SAME zip5 always mints the SAME ce_ id, across parcels, channels, and
+ * adapter runs. This is what lets the app converge duplicate persons —
+ * random ids (newCloudEntityId) never converge.
+ *
+ * Encoding: sha256 over `${normalizedName}|${zip5}` (zip run through
+ * normalizeZip5, so "02906-1234" === "02906"; null/absent -> ""), first 130
+ * bits as 26 Crockford base32 chars — matches the ce_<ULID> regex
+ * `^ce_[0-9A-HJKMNP-TV-Z]{26}$` exactly.
+ *
+ * Callers should fall back to newCloudEntityId when there is no usable owner
+ * name: hashing "" would collide every unnamed owner onto one id.
+ */
+export function deterministicCloudEntityId(
+  ownerName: string,
+  zip5: string | null,
+): string {
+  const normalizedName = normalizeOwnerName(ownerName);
+  const normalizedZip = normalizeZip5(zip5);
+  const digest = createHash("sha256")
+    .update(`${normalizedName}|${normalizedZip}`, "utf8")
+    .digest();
+  let encoded = "";
+  for (let i = 0; i < 26; i++) {
+    const bitOffset = i * 5;
+    const byteIndex = bitOffset >> 3;
+    const bitIndex = bitOffset & 7;
+    // 16-bit window so a 5-bit group crossing a byte boundary reads cleanly.
+    const window = (digest[byteIndex]! << 8) | (digest[byteIndex + 1] ?? 0);
+    encoded += ULID_ALPHABET[(window >> (11 - bitIndex)) & 31];
+  }
+  return `ce_${encoded}`;
 }
