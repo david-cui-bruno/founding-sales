@@ -1,4 +1,4 @@
-import type { CellContext, ColumnDef } from '@tanstack/react-table';
+import type { CellContext, ColumnDef, ColumnMeta } from '@tanstack/react-table';
 import { useState } from 'react';
 
 import type {
@@ -10,6 +10,7 @@ import type {
   CloudScoreChip,
   LeadFieldUpdateRequest,
   LeadRow,
+  LeadsListRequest,
 } from '../../../shared/contracts/leadsContract';
 import { titleCaseDisplayName } from '../../../shared/displayText';
 import { Avatar } from '../../components/Avatar';
@@ -23,6 +24,24 @@ export type EditingCell = {
   personId: string;
   field: 'person_name' | 'organization_label';
 };
+
+/**
+ * Per-column presentation metadata. `sort` appears only on columns whose
+ * ordering the leads:list contract actually supports (person_name, due_at,
+ * last_contact); every other header stays a plain label. The composite
+ * priority sort lives in the toolbar Select. `direction` mirrors the fixed
+ * server ORDER BY direction for aria-sort.
+ */
+export type LeadColumnMeta = {
+  sort?: {
+    value: LeadsListRequest['sort'];
+    direction: 'ascending' | 'descending';
+  };
+  numeric?: boolean;
+};
+
+const columnMeta = (meta: LeadColumnMeta): ColumnMeta<LeadRow, unknown> =>
+  meta as ColumnMeta<LeadRow, unknown>;
 
 /** Live callbacks the grid passes to cells through the table meta option. */
 export type LeadsGridMeta = {
@@ -205,9 +224,9 @@ function ContextCell(context: CellContext<LeadRow, unknown>) {
     meta.editing.personId === lead.personId &&
     meta.editing.field === 'organization_label';
 
-  return (
-    <div className="leads-grid__context">
-      {editing ? (
+  if (editing) {
+    return (
+      <div className="leads-grid__context">
         <InlineTextEdit
           label={`Edit organization for ${lead.personName}`}
           initialValue={lead.organization ?? ''}
@@ -225,26 +244,48 @@ function ContextCell(context: CellContext<LeadRow, unknown>) {
           }}
           onCancel={meta.stopEdit}
         />
-      ) : (
+      </div>
+    );
+  }
+
+  const startOrganizationEdit = () =>
+    meta.startEdit({ personId: lead.personId, field: 'organization_label' });
+
+  // Audit rule: organization leads only when it is real, distinct context.
+  // An org that merely repeats the person's name collapses to the address,
+  // and a missing org renders a single line — never a leading em-dash.
+  const organization = lead.organization?.trim() ?? '';
+  const showOrganization =
+    organization !== '' &&
+    organization.toLowerCase() !== lead.personName.trim().toLowerCase();
+  const address = lead.propertySummary;
+
+  if (showOrganization) {
+    const title =
+      address === null ? organization : `${organization} · ${address}`;
+    return (
+      <div className="leads-grid__context" title={title}>
         <span
-          className={
-            lead.organization === null
-              ? 'leads-grid__organization leads-grid__absent'
-              : 'leads-grid__organization'
-          }
-          aria-hidden={lead.organization === null ? true : undefined}
-          onDoubleClick={() =>
-            meta.startEdit({
-              personId: lead.personId,
-              field: 'organization_label',
-            })
-          }
+          className="leads-grid__organization"
+          onDoubleClick={startOrganizationEdit}
         >
-          {lead.organization ?? ABSENT_PLACEHOLDER}
+          {lead.organization}
         </span>
-      )}
-      {lead.propertySummary !== null && (
-        <span className="leads-grid__property">{lead.propertySummary}</span>
+        {address !== null && (
+          <span className="leads-grid__property">{address}</span>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="leads-grid__context leads-grid__context--single"
+      title={address ?? undefined}
+      onDoubleClick={startOrganizationEdit}
+    >
+      {address !== null && (
+        <span className="leads-grid__property">{address}</span>
       )}
     </div>
   );
@@ -256,7 +297,14 @@ function ContextCell(context: CellContext<LeadRow, unknown>) {
  */
 export function createLeadColumns(): ColumnDef<LeadRow>[] {
   return [
-    { id: 'person', header: 'Person', cell: PersonCell },
+    {
+      id: 'person',
+      header: 'Person',
+      cell: PersonCell,
+      meta: columnMeta({
+        sort: { value: 'person_name', direction: 'ascending' },
+      }),
+    },
     { id: 'context', header: 'Context', cell: ContextCell },
     {
       id: 'lifecycle',
@@ -268,6 +316,7 @@ export function createLeadColumns(): ColumnDef<LeadRow>[] {
     {
       id: 'fit',
       header: 'Fit',
+      meta: columnMeta({ numeric: true }),
       cell: (context) =>
         context.row.original.priorityContext === null ? (
           <Absent />
@@ -278,6 +327,7 @@ export function createLeadColumns(): ColumnDef<LeadRow>[] {
     {
       id: 'timing',
       header: 'Timing',
+      meta: columnMeta({ numeric: true }),
       cell: (context) =>
         context.row.original.priorityContext === null ? (
           <Absent />
@@ -298,6 +348,9 @@ export function createLeadColumns(): ColumnDef<LeadRow>[] {
     {
       id: 'nextAction',
       header: 'Next action',
+      meta: columnMeta({
+        sort: { value: 'due_at', direction: 'ascending' },
+      }),
       cell: (context) =>
         context.row.original.nextAction === null ? (
           <Absent />
@@ -308,6 +361,10 @@ export function createLeadColumns(): ColumnDef<LeadRow>[] {
     {
       id: 'lastActivity',
       header: 'Last activity',
+      meta: columnMeta({
+        sort: { value: 'last_contact', direction: 'descending' },
+        numeric: true,
+      }),
       cell: (context) =>
         context.row.original.lastActivityAt === null ? (
           <Absent />

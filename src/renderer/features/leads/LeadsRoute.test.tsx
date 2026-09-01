@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -252,5 +253,82 @@ describe('LeadsRoute', () => {
         value: 'Shared Holdings',
       }),
     );
+  });
+
+  it('drives the stages[] request param through the filter chips', async () => {
+    const api = fakeApi();
+    render(
+      <LeadsRoute api={api} onOpenLead={vi.fn()} onOpenImport={vi.fn()} />,
+    );
+
+    await screen.findByText('Avery Landlord');
+    fireEvent.click(screen.getByRole('button', { name: /^Ready/ }));
+    await waitFor(() =>
+      expect(api.list).toHaveBeenLastCalledWith(
+        expect.objectContaining({ stages: ['ready'] }),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Contacted/ }));
+    await waitFor(() =>
+      expect(api.list).toHaveBeenLastCalledWith(
+        expect.objectContaining({ stages: ['ready', 'contacted'] }),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^All/ }));
+    await waitFor(() =>
+      expect(api.list).toHaveBeenLastCalledWith(
+        expect.objectContaining({ stages: [] }),
+      ),
+    );
+  });
+
+  it('changes the sort request param through a sortable column header', async () => {
+    const api = fakeApi();
+    render(
+      <LeadsRoute api={api} onOpenLead={vi.fn()} onOpenImport={vi.fn()} />,
+    );
+
+    const personHeader = await screen.findByRole('columnheader', {
+      name: 'Person',
+    });
+    fireEvent.click(within(personHeader).getByRole('button'));
+    await waitFor(() =>
+      expect(api.list).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sort: 'person_name' }),
+      ),
+    );
+    expect(
+      screen
+        .getByRole('columnheader', { name: /Person/ })
+        .getAttribute('aria-sort'),
+    ).toBe('ascending');
+  });
+
+  it('shows the floating bulk bar only while rows are checked and clears on Escape', async () => {
+    const api = fakeApi();
+    render(
+      <LeadsRoute api={api} onOpenLead={vi.fn()} onOpenImport={vi.fn()} />,
+    );
+
+    await screen.findByText('Avery Landlord');
+    expect(screen.queryByRole('toolbar', { name: 'Bulk actions' })).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Avery Landlord' }),
+    );
+    const bar = screen.getByRole('toolbar', { name: 'Bulk actions' });
+    expect(bar.textContent).toContain('1 selected');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() =>
+      expect(screen.queryByRole('toolbar', { name: 'Bulk actions' })).toBeNull(),
+    );
+    expect(
+      (screen.getByRole('checkbox', {
+        name: 'Select Avery Landlord',
+      }) as HTMLInputElement).checked,
+    ).toBe(false);
   });
 });

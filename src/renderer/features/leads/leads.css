@@ -5,7 +5,10 @@
   flex-direction: column;
   gap: var(--space-4);
   min-width: 0;
-  height: 100%;
+  /* Cap to the viewport minus the shell main padding so the grid scrolls
+     internally and its sticky header row stays pinned under the PageHeader,
+     instead of the whole document scrolling. */
+  height: calc(100vh - var(--space-4) - var(--space-6));
 }
 
 /* Toolbar */
@@ -15,6 +18,91 @@
   gap: var(--space-3);
   align-items: center;
   flex-wrap: wrap;
+}
+
+/* Stage filter chips under the page header. Selected chips fill with the
+   soft accent and accent text; counts stay tabular. */
+
+.leads-chips {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.leads-chip {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  box-sizing: border-box;
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-caption);
+}
+
+.leads-chip:hover {
+  border-color: var(--line-interactive);
+  color: var(--text);
+}
+
+.leads-chip--on,
+.leads-chip--on:hover {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.leads-chip__count {
+  color: var(--muted);
+  font-size: var(--text-micro);
+}
+
+.leads-chip--on .leads-chip__count {
+  color: var(--accent-strong);
+}
+
+/* Floating bulk action bar: bottom-center overlay while rows are checked. */
+
+.leads-bulk-bar {
+  position: fixed;
+  bottom: var(--space-6);
+  left: 50%;
+  z-index: 20;
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-overlay);
+  transform: translateX(-50%);
+}
+
+.leads-bulk-bar__count {
+  color: var(--muted);
+  font-size: var(--text-dense);
+}
+
+.leads-bulk-bar__input {
+  box-sizing: border-box;
+  height: var(--control-height);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.leads-bulk-bar__input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .leads-toolbar__search {
@@ -42,33 +130,9 @@
   font-size: var(--text-dense);
 }
 
-.leads-toolbar__bulk {
-  display: inline-flex;
-  gap: var(--space-2);
-  align-items: center;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface-raised);
-}
-
-.leads-toolbar__bulk-count {
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.leads-toolbar__bulk-input {
-  box-sizing: border-box;
-  height: var(--control-height);
-  padding: 0 var(--space-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-}
-
-/* Grid frame */
+/* Grid frame. The head row lives inside the scroll container and pins with
+   position: sticky, so it stays visible under the PageHeader while rows
+   scroll. */
 
 .leads-grid {
   display: flex;
@@ -82,18 +146,50 @@
 }
 
 .leads-grid__head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   border-bottom: 1px solid var(--line);
   background: var(--surface-sunken);
 }
 
 .leads-grid__header {
-  padding: var(--space-2) var(--space-3);
+  display: flex;
+  align-items: center;
+  padding: var(--space-2);
   color: var(--muted);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/* Click-to-sort header button: inherits the micro-label look, adds the
+   active ▲/▼ arrow. Only contract-supported sorts render as buttons. */
+.leads-grid__sort {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
+.leads-grid__sort:hover {
+  color: var(--text);
+}
+
+.leads-grid__sort--active {
+  color: var(--text);
+}
+
+.leads-grid__sort-arrow {
+  font-size: 9px;
 }
 
 .leads-grid__scroll {
@@ -121,7 +217,7 @@
 }
 
 .leads-grid__row:hover {
-  background: color-mix(in srgb, var(--line) 35%, transparent);
+  background: var(--surface-sunken);
 }
 
 .leads-grid__row--selected,
@@ -137,7 +233,7 @@
 
 .leads-grid__cell {
   overflow: hidden;
-  padding: 0 var(--space-3);
+  padding: 0 var(--space-2);
   font-size: var(--text-md);
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
@@ -150,7 +246,7 @@
   position: sticky;
   left: 0;
   z-index: 1;
-  flex: 0 0 240px;
+  flex: 0 0 216px;
   background: inherit;
 }
 
@@ -158,33 +254,39 @@
   background: var(--surface-sunken);
 }
 
+/* The audit's context fix: the widest, most shrink-resistant flexible
+   column, so addresses stop truncating after a few characters. */
 .leads-grid__col--context {
-  flex: 1 1 220px;
+  flex: 2 1 240px;
 }
 
 .leads-grid__col--lifecycle {
-  flex: 0 0 120px;
+  flex: 0 0 108px;
 }
 
 .leads-grid__col--fit,
 .leads-grid__col--timing {
-  flex: 0 0 110px;
-  font-variant-numeric: tabular-nums;
+  flex: 0 0 96px;
+  text-align: right;
 }
 
 /* Wide enough for "Fit 100 · Timing 100" without truncation. */
 .leads-grid__col--cloudScores {
-  flex: 0 0 160px;
-  font-variant-numeric: tabular-nums;
+  flex: 0 0 140px;
 }
 
 .leads-grid__col--nextAction {
-  flex: 1 1 160px;
+  flex: 1 1 116px;
 }
 
 .leads-grid__col--lastActivity {
-  flex: 0 0 110px;
-  font-variant-numeric: tabular-nums;
+  flex: 0 0 92px;
+}
+
+/* Numeric column headers right-align with their cells. */
+.leads-grid__head .leads-grid__col--fit,
+.leads-grid__head .leads-grid__col--timing {
+  justify-content: flex-end;
 }
 
 /* Cells */
@@ -203,7 +305,9 @@
   white-space: nowrap;
 }
 
-/* Organization and property share one muted Context column. */
+/* Organization and property share one muted Context column: org over a
+   fainter address when both are real, or a single centered address line.
+   A leading em-dash line never renders here. */
 .leads-grid__context {
   display: flex;
   min-width: 0;
@@ -211,12 +315,28 @@
   color: var(--muted);
 }
 
+.leads-grid__context--single {
+  justify-content: center;
+}
+
 .leads-grid__organization,
 .leads-grid__property {
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--text-dense);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.leads-grid__organization {
+  color: var(--text);
+}
+
+.leads-grid__property {
+  font-size: var(--text-caption);
+}
+
+.leads-grid__context--single .leads-grid__property {
+  font-size: var(--text-dense);
 }
 
 .leads-grid__absent {

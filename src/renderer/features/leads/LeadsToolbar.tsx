@@ -1,6 +1,3 @@
-import { useState } from 'react';
-
-import { Button } from '../../components/Button';
 import { Select } from '../../components/Select';
 import type { LeadsSort } from './useLeadGridState';
 
@@ -9,9 +6,6 @@ export type LeadsToolbarProps = {
   onQueryChange(value: string): void;
   sort: LeadsSort;
   onSortChange(value: LeadsSort): void;
-  checkedCount: number;
-  onBulkSetOrganization(value: string | null): void;
-  onClearChecked(): void;
 };
 
 const SORT_OPTIONS: readonly { value: LeadsSort; label: string }[] = [
@@ -22,21 +16,17 @@ const SORT_OPTIONS: readonly { value: LeadsSort; label: string }[] = [
 ];
 
 /**
- * Search, sort, and the bulk action bar; rendered inside the Leads page
- * header. Bulk edits stay limited to the same allowed fields as inline edits.
+ * Search plus the composite sort Select, rendered inside the Leads page
+ * header. Single-column sorts are also reachable from the grid headers; this
+ * Select stays for the composite Priority default. Bulk actions live in the
+ * floating LeadsBulkBar.
  */
 export function LeadsToolbar({
   query,
   onQueryChange,
   sort,
   onSortChange,
-  checkedCount,
-  onBulkSetOrganization,
-  onClearChecked,
 }: LeadsToolbarProps) {
-  const [bulkEditOpen, setBulkEditOpen] = useState(false);
-  const [bulkValue, setBulkValue] = useState('');
-
   return (
     <div className="leads-toolbar" role="toolbar" aria-label="Lead actions">
       <input
@@ -57,41 +47,6 @@ export function LeadsToolbar({
           onChange={onSortChange}
         />
       </div>
-      {checkedCount > 0 && (
-        <div className="leads-toolbar__bulk">
-          <span className="leads-toolbar__bulk-count numeric">
-            {checkedCount} selected
-          </span>
-          {bulkEditOpen ? (
-            <input
-              className="leads-toolbar__bulk-input"
-              type="text"
-              aria-label={`Organization for ${checkedCount} selected`}
-              value={bulkValue}
-              autoFocus
-              onChange={(event) => setBulkValue(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  const trimmed = bulkValue.trim();
-                  onBulkSetOrganization(trimmed === '' ? null : trimmed);
-                  setBulkEditOpen(false);
-                  setBulkValue('');
-                } else if (event.key === 'Escape') {
-                  setBulkEditOpen(false);
-                  setBulkValue('');
-                }
-              }}
-            />
-          ) : (
-            <Button variant="quiet" onClick={() => setBulkEditOpen(true)}>
-              Set organization
-            </Button>
-          )}
-          <Button variant="quiet" onClick={onClearChecked}>
-            Clear selection
-          </Button>
-        </div>
-      )}
     </div>
   );
 }

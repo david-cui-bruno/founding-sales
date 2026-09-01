@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { LeadRow } from '../../../shared/contracts/leadsContract';
@@ -285,6 +286,207 @@ describe('LeadsGrid', () => {
 
     expect(onUpdateField).not.toHaveBeenCalled();
     expect(screen.getByText('Avery Landlord')).toBeTruthy();
+  });
+
+  it('shows organization over address when the organization differs from the person', () => {
+    render(
+      <LeadsGrid
+        rows={[leadRow]}
+        selectedPersonId={null}
+        onSelect={noop}
+        onUpdateField={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByRole('row', { name: /Avery Landlord/ });
+    const cell = row.querySelector('.leads-grid__context');
+    expect(cell?.querySelector('.leads-grid__organization')?.textContent).toBe(
+      'Landlord LLC',
+    );
+    expect(cell?.querySelector('.leads-grid__property')?.textContent).toBe(
+      '12 Benefit St, Providence',
+    );
+    expect(cell?.getAttribute('title')).toBe(
+      'Landlord LLC · 12 Benefit St, Providence',
+    );
+  });
+
+  it('renders a single address line, never a leading em-dash, for personless orgs', () => {
+    const orgless: LeadRow = {
+      ...secondRow,
+      propertySummary: '30 Evergreen Ter, Springfield',
+    };
+    render(
+      <LeadsGrid
+        rows={[orgless]}
+        selectedPersonId={null}
+        onSelect={noop}
+        onUpdateField={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByRole('row', { name: /Blake Owner/ });
+    const cell = row.querySelector('.leads-grid__context');
+    expect(cell?.textContent).toBe('30 Evergreen Ter, Springfield');
+    expect(cell?.textContent).not.toContain('—');
+    expect(cell?.className).toContain('leads-grid__context--single');
+    expect(cell?.getAttribute('title')).toBe('30 Evergreen Ter, Springfield');
+  });
+
+  it('collapses to the address when the organization merely repeats the person name', () => {
+    const selfNamed: LeadRow = {
+      ...leadRow,
+      organization: 'avery landlord',
+    };
+    render(
+      <LeadsGrid
+        rows={[selfNamed]}
+        selectedPersonId={null}
+        onSelect={noop}
+        onUpdateField={vi.fn()}
+      />,
+    );
+
+    const cell = screen
+      .getByRole('row', { name: /Avery Landlord/ })
+      .querySelector('.leads-grid__context');
+    expect(cell?.querySelector('.leads-grid__organization')).toBeNull();
+    expect(cell?.textContent).toBe('12 Benefit St, Providence');
+  });
+
+  it('renders an empty context cell without placeholder text when nothing is known', () => {
+    render(
+      <LeadsGrid
+        rows={[secondRow]}
+        selectedPersonId={null}
+        onSelect={noop}
+        onUpdateField={vi.fn()}
+      />,
+    );
+
+    const cell = screen
+      .getByRole('row', { name: /Blake Owner/ })
+      .querySelector('.leads-grid__context');
+    expect(cell?.textContent).toBe('');
+    expect(cell?.getAttribute('title')).toBeNull();
+  });
+
+  it('exposes clickable Person and Last activity sort headers with aria-sort', () => {
+    const onSortChange = vi.fn();
+    render(
+      <LeadsGrid
+        rows={[leadRow]}
+        selectedPersonId={null}
+        onSelect={noop}
+        onUpdateField={vi.fn()}
+        sort="priority"
+        onSortChange={onSortChange}
+      />,
+    );
+
+    const personHeader = screen.getByRole('columnheader', { name: 'Person' });
+    expect(personHeader.getAttribute('aria-sort')).toBe('none');
+    fireEvent.click(within(personHeader).getByRole('button'));
+    expect(onSortChange).toHaveBeenCalledWith('person_name');
+
+    const lastActivity = screen.getByRole('columnheader', {
+      name: 'Last activity',
+    });
+    fireEvent.click(within(lastActivity).getByRole('button'));
+    expect(onSortChange).toHaveBeenCalledWith('last_contact');
+
+    // Unsupported server sorts stay plain headers.
+    for (const name of ['Lifecycle', 'Fit', 'Timing', 'Cloud']) {
+      const header = screen.getByRole('columnheader', { name });
+      expect(within(header).queryByRole('button')).toBeNull();
+      expect(header.getAttribute('aria-sort')).toBeNull();
+    }
+  });
+
+  it('marks the active sort column with the matching aria-sort direction', () => {
+    const { rerender } = render(
+      <LeadsGrid
+        rows={[leadRow]}
+        selectedPersonId={null}
+        onSelect={noop}
+        onUpdateField={vi.fn()}
+        sort="person_name"
+        onSortChange={vi.fn()}
+      />,
+    );
+    expect(
+      screen
+        .getByRole('columnheader', { name: /Person/ })
+        .getAttribute('aria-sort'),
+    ).toBe('ascending');
+
+    rerender(
+      <LeadsGrid
+        rows={[leadRow]}
+        selectedPersonId={null}
+        onSelect={noop}
+        onUpdateField={vi.fn()}
+        sort="last_contact"
+        onSortChange={vi.fn()}
+      />,
+    );
+    expect(
+      screen
+        .getByRole('columnheader', { name: /Last activity/ })
+        .getAttribute('aria-sort'),
+    ).toBe('descending');
+    expect(
+      screen
+        .getByRole('columnheader', { name: 'Person' })
+        .getAttribute('aria-sort'),
+    ).toBe('none');
+  });
+
+  it('moves selection and roving focus with J/K', () => {
+    function Harness() {
+      const [selected, setSelected] = useState<string | null>('person-1');
+      return (
+        <LeadsGrid
+          rows={[leadRow, secondRow]}
+          selectedPersonId={selected}
+          onSelect={setSelected}
+          onUpdateField={vi.fn()}
+        />
+      );
+    }
+    render(<Harness />);
+
+    const first = screen.getByRole('row', { name: /Avery Landlord/ });
+    first.focus();
+    fireEvent.keyDown(first, { key: 'j' });
+    const second = screen.getByRole('row', { name: /Blake Owner/ });
+    expect(second.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(second);
+
+    fireEvent.keyDown(second, { key: 'k' });
+    expect(
+      screen
+        .getByRole('row', { name: /Avery Landlord/ })
+        .getAttribute('aria-selected'),
+    ).toBe('true');
+    expect(document.activeElement?.textContent).toContain('Avery Landlord');
+  });
+
+  it('applies the tabular-nums utility to numeric columns', () => {
+    render(
+      <LeadsGrid
+        rows={[leadRow]}
+        selectedPersonId={null}
+        onSelect={noop}
+        onUpdateField={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByRole('row', { name: /Avery Landlord/ });
+    for (const column of ['fit', 'timing', 'lastActivity']) {
+      const cell = row.querySelector(`.leads-grid__col--${column}`);
+      expect(cell?.className).toContain('numeric');
+    }
   });
 
   it('edits the organization label inline and commits an emptied value as null', () => {
