@@ -1,0 +1,24 @@
+{
+  "name": "@callie-sourcing/shared",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Canonical CloudSourceEvent schema (CONTRACT.md v1) shared by sourcing adapters",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
