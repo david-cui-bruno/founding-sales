@@ -10,8 +10,12 @@ import {
   createAppleBridgeSigningOptions,
 } from './build/appleBridge';
 import { retainOnlyPackagedEncryptedSqliteRuntime } from './scripts/packageEncryptedSqliteNative.mjs';
+import { resolveMacSigningIdentity } from './build/signingIdentity';
 
-const signingIdentity = process.env.CALLIE_MAC_SIGN_IDENTITY;
+const signingIdentity = resolveMacSigningIdentity({
+  env: process.env,
+  platform: process.platform,
+});
 
 const config: ForgeConfig = {
   packagerConfig: {

@@ -98,8 +98,22 @@ browser snapshot artifact. Wasm trap handlers remain enabled for the supported
 Apple Silicon guard-page runtime path; legacy `file://` extra privileges are
 disabled because the production renderer uses `callie://`. Unsigned Apple
 Silicon packages reset Electron's ad-hoc signature during fuse mutation and
-again after Packager finishes changing bundle metadata. Signing identities and
-notarization remain outside this foundation scope.
+again after Packager finishes changing bundle metadata. Notarization remains
+outside this foundation scope.
+
+## Local code signing
+
+On macOS, `npm run package` signs with a stable local identity by default so
+the app's code identity survives rebuilds and macOS Keychain "Always Allow"
+grants for safeStorage keep working without new password prompts. Resolution
+order:
+
+1. A non-blank `CALLIE_MAC_SIGN_IDENTITY` environment variable wins.
+2. Otherwise the first `Developer ID Application:` identity in the login
+   keychain is used, then the first `Apple Development:` identity.
+3. With no usable identity (or off macOS), packaging falls back to the
+   previous ad-hoc signature. Ad-hoc identities change every rebuild, so
+   Keychain re-prompts after each package are expected in that mode.
 
 For development, run:
 
