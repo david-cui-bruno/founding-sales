@@ -193,6 +193,9 @@ if (!started && ownsSingleInstanceLock) {
         appleSpikeEnabled: app.commandLine.hasSwitch(
           'apple-feasibility-spike',
         ),
+        // Packaged E2E launches with --use-mock-keychain; never auto-poll the
+        // real inbox from a test workspace. Manual pollNow stays available.
+        sourcingPollingEnabled: !app.commandLine.hasSwitch('use-mock-keychain'),
         isTrustedRendererUrl: rendererTrust.isTrustedRendererUrl,
         signal,
         createWindow: () => createAndLoadWindow(signal),

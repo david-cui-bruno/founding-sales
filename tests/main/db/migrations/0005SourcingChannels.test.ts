@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../../../src/main/db/database';
-import { createMigrationRunner, migrateToLatest } from '../../../../src/main/db/migrate';
+import { createMigrationRunner } from '../../../../src/main/db/migrate';
 import { migration0001Foundation } from '../../../../src/main/db/migrations/0001Foundation';
 import { migration0002DomainFoundation } from '../../../../src/main/db/migrations/0002DomainFoundation';
 import { migration0003Transcripts } from '../../../../src/main/db/migrations/0003Transcripts';
 import { migration0004Learnings } from '../../../../src/main/db/migrations/0004Learnings';
+import { migration0005SourcingChannels } from '../../../../src/main/db/migrations/0005SourcingChannels';
 import {
   DOMAIN_TIMESTAMP,
   insertOpenCycleWithAction,
@@ -23,6 +24,14 @@ import {
 const migrateThroughDomainFoundation = createMigrationRunner([
   { id: '0001Foundation', schemaVersion: 1, migration: migration0001Foundation },
   { id: '0002DomainFoundation', schemaVersion: 2, migration: migration0002DomainFoundation },
+]);
+
+const migrateThroughSourcingChannels = createMigrationRunner([
+  { id: '0001Foundation', schemaVersion: 1, migration: migration0001Foundation },
+  { id: '0002DomainFoundation', schemaVersion: 2, migration: migration0002DomainFoundation },
+  { id: '0003Transcripts', schemaVersion: 3, migration: migration0003Transcripts },
+  { id: '0004Learnings', schemaVersion: 4, migration: migration0004Learnings },
+  { id: '0005SourcingChannels', schemaVersion: 5, migration: migration0005SourcingChannels },
 ]);
 
 const migrateThroughLearnings = createMigrationRunner([
@@ -99,13 +108,13 @@ describe('0005 sourcing channels migration', () => {
   describe('fresh database at schema 5', () => {
     let database: AppDatabase;
     let temp: TempDatabase;
-    let migrationResult: Awaited<ReturnType<typeof migrateToLatest>>;
+    let migrationResult: Awaited<ReturnType<typeof migrateThroughSourcingChannels>>;
 
     beforeEach(async () => {
       temp = createTempDatabase();
       const key = createTestWorkspaceKey();
       database = openDatabase({ path: temp.path, key });
-      migrationResult = await migrateToLatest(database, {
+      migrationResult = await migrateThroughSourcingChannels(database, {
         backupDirectory: `${temp.path}.backups`, workspaceKey: key,
       });
     });
@@ -330,7 +339,7 @@ describe('0005 sourcing channels migration', () => {
     it('remaps stored segments to hot/cold/warm', async () => {
       seedLegacySegments();
 
-      const result = await migrateToLatest(database, {
+      const result = await migrateThroughSourcingChannels(database, {
         backupDirectory: `${temp.path}.backups`, workspaceKey: key,
       });
 
@@ -364,7 +373,7 @@ describe('0005 sourcing channels migration', () => {
         commandJson: '{"segment":"warm"}',
       });
 
-      await migrateToLatest(database, {
+      await migrateThroughSourcingChannels(database, {
         backupDirectory: `${temp.path}.backups`, workspaceKey: key,
       });
 
@@ -432,7 +441,7 @@ describe('0005 sourcing channels migration', () => {
         commandJson: '{"segment":"hot_frbo"}',
       });
 
-      const result = await migrateToLatest(database, {
+      const result = await migrateThroughSourcingChannels(database, {
         backupDirectory: `${temp.path}.backups`, workspaceKey: key,
       });
 

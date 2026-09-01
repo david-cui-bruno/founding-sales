@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import Papa from 'papaparse';
+import { z } from 'zod';
 
 import type { AppDatabase } from '../db/database';
 import type { JobRecord } from '../jobs/jobTypes';
@@ -122,6 +123,7 @@ import type { DomainServices } from './createDomainServices';
 import type {
   CreatePersonProspectCommand,
   IntakeContactInput,
+  IntakeResult,
 } from './source/sourceService';
 import { normalizeEmail, normalizePhone } from './source/sourceService';
 import type { Clock } from './support/clock';
@@ -1940,6 +1942,71 @@ export class FounderSalesDomain {
       ...base,
       source: { ...sourceCommon, channel: input.channel },
     };
+  }
+
+  // ------------------------------------------------------------- sourcing
+
+  /** Durable poller cursor; null until the first completed poll. */
+  getSourcingCursor(): { lastKey: string | null; polledAt: string | null } {
+    const row = this.database.raw.prepare(
+      'SELECT last_key, polled_at FROM sourcing_cursor WHERE id = 1',
+    ).get() as { last_key: string | null; polled_at: string } | undefined;
+    return row === undefined
+      ? { lastKey: null, polledAt: null }
+      : { lastKey: row.last_key, polledAt: row.polled_at };
+  }
+
+  /** Advance the cursor after one inbox object has fully processed. */
+  recordSourcingPoll(input: { lastKey: string | null }): void {
+    const lastKey = z.string().min(1).nullable().parse(input.lastKey);
+    const now = this.clock.now();
+    this.services.unitOfWork.immediate(() => {
+      this.database.raw.prepare(`
+        INSERT INTO sourcing_cursor (id, last_key, polled_at)
+        VALUES (1, ?, ?)
+        ON CONFLICT (id) DO UPDATE SET
+          last_key = excluded.last_key,
+          polled_at = excluded.polled_at
+      `).run(lastKey, now);
+    });
+  }
+
+  /**
+   * One person-bearing cloud event through the standard intake pipeline.
+   * `source_intake_receipts` (keyed `cloud:<idempotency_key>`) makes replays
+   * no-ops; the cloud-entity link and the unreviewed cycle are created only
+   * on first import.
+   */
+  importCloudSourceEvent(input: {
+    command: CreatePersonProspectCommand;
+    cloudEntityId: string | null;
+  }): IntakeResult {
+    const result = this.services.sources.createPersonProspect(input.command);
+    if (result.disposition === 'created') {
+      // A replayed cloud event returns the stored receipt with its original
+      // 'created' disposition; the cycle from the first import already exists.
+      const cycleExists = this.database.raw.prepare(
+        'SELECT 1 FROM sales_cycles WHERE entry_source_event_id = ?',
+      ).get(result.sourceEventId) !== undefined;
+      if (!cycleExists) {
+        this.services.lifecycle.createUnreviewedCycle({
+          personId: result.personId,
+          prospectId: result.prospectId,
+          entrySourceEventId: result.sourceEventId,
+          effectiveAt: this.clock.now(),
+        });
+      }
+    }
+    if (input.cloudEntityId !== null) {
+      this.services.unitOfWork.immediate(() => {
+        this.database.raw.prepare(`
+          INSERT INTO cloud_entity_links (cloud_entity_id, person_id, linked_at)
+          VALUES (?, ?, ?)
+          ON CONFLICT (cloud_entity_id) DO NOTHING
+        `).run(input.cloudEntityId, result.personId, this.clock.now());
+      });
+    }
+    return result;
   }
 
   // -------------------------------------------------------------- support

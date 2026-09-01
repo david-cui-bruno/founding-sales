@@ -5,7 +5,7 @@ import { inspectDatabaseEncryption } from '../../db/databaseEncryption';
 import { DomainStartupFatalError } from './domainStartupTypes';
 
 export type DomainStorageReadiness = Readonly<{
-  schemaVersion: 5;
+  schemaVersion: 6;
   encrypted: true;
   cipherVersion: string;
   ftsAvailable: true;
@@ -21,7 +21,7 @@ export type DomainSchemaManifest = Readonly<{
 }>;
 
 /**
- * The canonical load-bearing schema-5 manifest. Reads the live catalog from
+ * The canonical load-bearing schema-6 manifest. Reads the live catalog from
  * sqlite_master with binary-name ordering; a missing, renamed, or extra
  * load-bearing object is fatal before composition.
  */
@@ -33,6 +33,7 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'cadence_definitions',
     'cadence_enrollments',
     'cadence_steps',
+    'cloud_entity_links',
     'consent_policy_records',
     'cycle_reactivation_receipts',
     'learning_evidence',
@@ -61,6 +62,7 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'sales_cycles',
     'source_events',
     'source_intake_receipts',
+    'sourcing_cursor',
     'stage_events',
     'transcript_utterances',
     'transcripts',
@@ -116,7 +118,7 @@ const appMetaSchema = z.object({
 export function assertDomainStorageReady(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
-  expectedSchemaVersion: 5;
+  expectedSchemaVersion: 6;
   expectedManifest: DomainSchemaManifest;
 }): DomainStorageReadiness {
   const { database } = input;
@@ -139,7 +141,7 @@ export function assertDomainStorageReady(input: {
   const metadata = appMetaSchema.safeParse(metadataRow);
   if (!metadata.success || metadata.data.schema_version !== input.expectedSchemaVersion) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace schema version is not exactly 5.',
+      'schema_not_ready', 'The workspace schema version is not exactly 6.',
     );
   }
 
@@ -213,7 +215,7 @@ export function assertDomainStorageReady(input: {
   }
 
   return Object.freeze({
-    schemaVersion: 5 as const,
+    schemaVersion: 6 as const,
     encrypted: true as const,
     cipherVersion: encryption.cipherVersion ?? 'unknown',
     ftsAvailable: true as const,

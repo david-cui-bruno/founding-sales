@@ -147,6 +147,7 @@ describe('main process startup', () => {
         parentExecutablePath: process.execPath,
       },
       appleSpikeEnabled: false,
+      sourcingPollingEnabled: true,
       signal: expect.anything(),
       isTrustedRendererUrl: expect.any(Function),
       createWindow: expect.any(Function),
@@ -192,6 +193,21 @@ describe('main process startup', () => {
     expect(mocks.commandLineHasSwitch).toHaveBeenCalledWith('apple-feasibility-spike');
     expect(mocks.startApplication.mock.calls[0]?.[0]).toMatchObject({
       appleSpikeEnabled: true,
+    });
+  });
+
+  it('disables sourcing auto-polling under the mock-keychain test switch', async () => {
+    mocks.commandLineHasSwitch.mockImplementation(
+      (name: string) => name === 'use-mock-keychain',
+    );
+    mocks.loadUrl.mockResolvedValue(undefined);
+
+    await import('../../src/main');
+    await settleStartup();
+
+    expect(mocks.commandLineHasSwitch).toHaveBeenCalledWith('use-mock-keychain');
+    expect(mocks.startApplication.mock.calls[0]?.[0]).toMatchObject({
+      sourcingPollingEnabled: false,
     });
   });
 

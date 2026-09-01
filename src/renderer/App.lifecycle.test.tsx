@@ -100,6 +100,7 @@ const pendingWorkflowApis = () => {
       commit: pending,
       status: pending,
     },
+    sourcing: { pollNow: pending, status: pending },
   };
 };
 

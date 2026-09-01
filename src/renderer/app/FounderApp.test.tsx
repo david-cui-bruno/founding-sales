@@ -153,6 +153,7 @@ function fakeCallieApi(): CalliePreloadApi {
       addEvidence: pending,
       updateStatus: pending,
     },
+    sourcing: { pollNow: pending, status: pending },
     appleSpike: {} as never,
   } as unknown as CalliePreloadApi;
 }

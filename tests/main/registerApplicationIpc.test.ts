@@ -45,19 +45,20 @@ describe('registerApplicationIpc', () => {
       registerImportIpc: track('imports', unregisters[7]!),
       registerConversationsIpc: track('conversations', unregisters[8]!),
       registerLearningsIpc: track('learnings', unregisters[9]!),
+      registerSourcingIpc: track('sourcing', unregisters[10]!),
     } as unknown as FeatureRegistrars;
     return { registrars, calls };
   }
 
-  it('registers all ten feature slices and unregisters each exactly once', () => {
-    const unregisters = Array.from({ length: 10 }, () => vi.fn());
+  it('registers all eleven feature slices and unregisters each exactly once', () => {
+    const unregisters = Array.from({ length: 11 }, () => vi.fn());
     const { registrars, calls } = fakeRegistrars(unregisters);
 
     const unregister = registerApplicationIpc(fakeGate(), undefined, registrars);
     expect(calls).toEqual([
       'health', 'leads', 'leadDetail', 'today',
       'pipeline', 'review', 'friday', 'imports',
-      'conversations', 'learnings',
+      'conversations', 'learnings', 'sourcing',
     ]);
 
     unregister();
@@ -70,20 +71,20 @@ describe('registerApplicationIpc', () => {
     const unregisters = [
       'health', 'leads', 'leadDetail', 'today',
       'pipeline', 'review', 'friday', 'imports',
-      'conversations', 'learnings',
+      'conversations', 'learnings', 'sourcing',
     ].map((name) => vi.fn(() => order.push(name)));
     const { registrars } = fakeRegistrars(unregisters);
 
     registerApplicationIpc(fakeGate(), undefined, registrars)();
     expect(order).toEqual([
-      'learnings', 'conversations',
+      'sourcing', 'learnings', 'conversations',
       'imports', 'friday', 'review', 'pipeline',
       'today', 'leadDetail', 'leads', 'health',
     ]);
   });
 
   it('passes the trusted-URL predicate to every slice registrar', () => {
-    const unregisters = Array.from({ length: 10 }, () => vi.fn());
+    const unregisters = Array.from({ length: 11 }, () => vi.fn());
     const { registrars } = fakeRegistrars(unregisters);
     const trust = (url: string) => url.startsWith('app://');
 

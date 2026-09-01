@@ -9,6 +9,7 @@ import { registerLeadsIpc } from '../leads/registerLeadsIpc';
 import { registerLearningsIpc } from '../learnings/registerLearningsIpc';
 import { registerPipelineIpc } from '../pipeline/registerPipelineIpc';
 import { registerReviewIpc } from '../review/registerReviewIpc';
+import { registerSourcingIpc } from '../sourcing/registerSourcingIpc';
 import { registerTodayIpc } from '../today/registerTodayIpc';
 import type { ConversationsProvider } from '../conversations/conversationsService';
 import type { FridayProvider } from '../friday/fridayService';
@@ -19,6 +20,8 @@ import type { LeadsProvider } from '../leads/leadsService';
 import type { LearningsProvider } from '../learnings/learningsService';
 import type { PipelineProvider } from '../pipeline/pipelineService';
 import type { ReviewProvider } from '../review/reviewService';
+import type { SourcingProvider } from '../sourcing/registerSourcingIpc';
+import type { SourcingStatus } from '../../shared/contracts/sourcingContract';
 import type { TodayProvider } from '../today/todayService';
 
 /**
@@ -39,6 +42,7 @@ export type FeatureRegistrars = {
   registerImportIpc: typeof registerImportIpc;
   registerConversationsIpc: typeof registerConversationsIpc;
   registerLearningsIpc: typeof registerLearningsIpc;
+  registerSourcingIpc: typeof registerSourcingIpc;
 };
 
 const defaultRegistrars: FeatureRegistrars = {
@@ -52,6 +56,7 @@ const defaultRegistrars: FeatureRegistrars = {
   registerImportIpc,
   registerConversationsIpc,
   registerLearningsIpc,
+  registerSourcingIpc,
 };
 
 export function createLeadsProvider(runtime: DomainGate): LeadsProvider {
@@ -166,6 +171,7 @@ export function registerApplicationIpc(
   runtime: DomainGate,
   isTrustedRendererUrl?: (url: string) => boolean,
   registrars: FeatureRegistrars = defaultRegistrars,
+  sourcingProvider?: SourcingProvider,
 ): () => void {
   const unregisters = [
     registrars.registerHealthIpc(runtime, isTrustedRendererUrl),
@@ -190,6 +196,10 @@ export function registerApplicationIpc(
       createLearningsProvider(runtime),
       isTrustedRendererUrl,
     ),
+    registrars.registerSourcingIpc(
+      sourcingProvider ?? createIdleSourcingProvider(),
+      isTrustedRendererUrl,
+    ),
   ];
 
   let active = true;
@@ -205,3 +215,21 @@ export function registerApplicationIpc(
 }
 
 export type { FounderSalesDomain };
+
+/**
+ * Fallback provider when no poller is wired (bare registrations in tests):
+ * reports a permanently idle, unprovisioned sourcing surface.
+ */
+function createIdleSourcingProvider(): SourcingProvider {
+  const idleStatus: SourcingStatus = {
+    lastPolledAt: null,
+    lastKey: null,
+    backlogCount: null,
+    counters: { imported: 0, needsIdentity: 0, scoreUpdates: 0, quarantined: 0 },
+    credentialState: 'none',
+  };
+  return {
+    pollNow: async () => idleStatus,
+    status: async () => idleStatus,
+  };
+}

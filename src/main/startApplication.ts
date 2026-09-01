@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 
 import {
   AppleBridgeSupervisor,
@@ -25,6 +26,13 @@ import {
 } from './foundation/foundationRuntime';
 import { HealthService } from './health/healthService';
 import { registerApplicationIpc } from './ipc/registerApplicationIpc';
+import type { SourcingProvider } from './sourcing/registerSourcingIpc';
+import {
+  createS3InboxObjectStore,
+  InboxClient,
+} from './sourcing/inboxClient';
+import { SourcingCredentialStore } from './sourcing/sourcingCredentialStore';
+import { SourcingPoller, type PollTimer } from './sourcing/sourcingPoller';
 import { safeStorage } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
@@ -33,7 +41,10 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   registerApplicationIpc(
     runtime: FoundationRuntime,
     isTrustedRendererUrl?: (url: string) => boolean,
+    registrars?: undefined,
+    sourcingProvider?: SourcingProvider,
   ): () => void;
+  createSourcingPoller?(runtime: FoundationRuntime, userDataPath: string): SourcingPoller;
   createAppleBridgeSupervisor(
     options: AppleBridgeSupervisorOptions,
   ): AppleBridgeSupervisorApi;
@@ -50,6 +61,12 @@ export type ApplicationStartupOptions = {
   isTrustedRendererUrl?: (url: string) => boolean;
   appleBridge?: AppleBridgeSupervisorOptions;
   appleSpikeEnabled?: boolean;
+  /**
+   * Auto-polls the sourcing inbox on startup plus every 15 minutes. Off by
+   * default so tests and packaged E2E runs never touch the network; main.ts
+   * enables it for real launches.
+   */
+  sourcingPollingEnabled?: boolean;
   createWindow(): void | Promise<void>;
 };
 
@@ -74,6 +91,33 @@ const workspaceKeyStore = new WorkspaceKeyStore({
 const domainClock = new SystemClock();
 const domainIds = new UuidGenerator();
 
+const SOURCING_POLL_INTERVAL_MS = 15 * 60 * 1000;
+
+function createProductionSourcingPoller(
+  runtime: FoundationRuntime,
+  userDataPath: string,
+): SourcingPoller {
+  const credentialStore = new SourcingCredentialStore({
+    safeStorage,
+    envelopePath: join(userDataPath, 'callie.sourcing-inbox-credentials.json'),
+    fallbackKeyFilePath: join(homedir(), '.callie-sourcing-app-inbox-key.json'),
+    clock: domainClock,
+    log: (message) => console.info(`[sourcing] ${message}`),
+  });
+  return new SourcingPoller({
+    domainGate: runtime,
+    loadCredentials: () => credentialStore.load(),
+    createInboxClient: async (loaded) => {
+      const store = await createS3InboxObjectStore({
+        credentialProvider: async () => loaded.credentials,
+      });
+      return new InboxClient({ store, clock: domainClock });
+    },
+    clock: domainClock,
+    log: (message) => console.info(`[sourcing] ${message}`),
+  });
+}
+
 const defaultDependencies: ApplicationStartupDependencies = {
   loadWorkspaceKey: (input) => workspaceKeyStore.loadOrCreate(input),
   prepareEncryptedDatabase,
@@ -86,6 +130,7 @@ const defaultDependencies: ApplicationStartupDependencies = {
   }),
   createHealthService: (options) => new HealthService(options),
   registerApplicationIpc,
+  createSourcingPoller: createProductionSourcingPoller,
   createAppleBridgeSupervisor: (options) => new AppleBridgeSupervisor(options),
   registerAppleSpikeIpc,
   closeDatabase,
@@ -110,6 +155,7 @@ export async function startApplication(
   let unregisterApplicationIpc: (() => void) | undefined;
   let unregisterAppleSpikeIpc: (() => void) | undefined;
   let appleBridgeSupervisor: AppleBridgeSupervisorApi | undefined;
+  let sourcingPoller: SourcingPoller | undefined;
   let shutdownPromise: Promise<void> | undefined;
 
   const shutdown = (): Promise<void> => {
@@ -119,6 +165,15 @@ export async function startApplication(
 
     shutdownPromise = (async () => {
       const cleanupErrors: unknown[] = [];
+
+      try {
+        sourcingPoller?.stop();
+        await sourcingPoller?.idle();
+      } catch (error) {
+        cleanupErrors.push(error);
+      } finally {
+        sourcingPoller = undefined;
+      }
 
       try {
         unregisterApplicationIpc?.();
@@ -168,10 +223,35 @@ export async function startApplication(
     throwIfStartupCancelled(options.signal);
     await runtime.initialize();
     throwIfStartupCancelled(options.signal);
+    sourcingPoller = dependencies.createSourcingPoller?.(
+      runtime,
+      options.userDataPath,
+    );
+    const startedPoller = sourcingPoller;
     unregisterApplicationIpc = dependencies.registerApplicationIpc(
       runtime,
       options.isTrustedRendererUrl,
+      undefined,
+      startedPoller === undefined ? undefined : {
+        pollNow: async () => {
+          await startedPoller.pollNow();
+          return startedPoller.getStatus();
+        },
+        status: () => startedPoller.getStatus(),
+      },
     );
+    throwIfStartupCancelled(options.signal);
+    if (options.sourcingPollingEnabled === true && sourcingPoller !== undefined) {
+      const timer: PollTimer = {
+        schedule: (callback) => {
+          const interval = setInterval(callback, SOURCING_POLL_INTERVAL_MS);
+          interval.unref();
+          return () => clearInterval(interval);
+        },
+      };
+      // Startup never blocks on the network: the initial poll runs detached.
+      void sourcingPoller.start(timer);
+    }
     throwIfStartupCancelled(options.signal);
     if (options.appleBridge !== undefined) {
       appleBridgeSupervisor = dependencies.createAppleBridgeSupervisor(

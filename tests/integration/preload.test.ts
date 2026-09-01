@@ -21,6 +21,7 @@ type ExposedCallieApi = {
   imports: Record<string, unknown>;
   conversations: Record<string, unknown>;
   learnings: Record<string, unknown>;
+  sourcing: { pollNow: () => Promise<unknown>; status: () => Promise<unknown> };
   appleSpike: Record<string, unknown>;
 };
 
@@ -77,6 +78,7 @@ describe('preload workflow bridge', () => {
       'learnings',
       'pipeline',
       'review',
+      'sourcing',
       'today',
     ]);
     expect(Object.keys(api.health)).toEqual(['get']);
@@ -103,6 +105,7 @@ describe('preload workflow bridge', () => {
     expect(Object.keys(api.learnings).sort()).toEqual([
       'addEvidence', 'capture', 'list', 'updateStatus',
     ]);
+    expect(Object.keys(api.sourcing).sort()).toEqual(['pollNow', 'status']);
   });
 
   it('invokes only health:get without arguments for the health probe', async () => {
@@ -146,6 +149,28 @@ describe('preload workflow bridge', () => {
       stages: [], revision: 0,
     });
     expect(electron.invoke).toHaveBeenCalledWith('pipeline:get');
+  });
+
+  it('invokes the sourcing channels without arguments and validates the status', async () => {
+    const sourcingStatus = {
+      lastPolledAt: null as string | null,
+      lastKey: null as string | null,
+      backlogCount: null as number | null,
+      counters: { imported: 0, needsIdentity: 0, scoreUpdates: 0, quarantined: 0 },
+      credentialState: 'none',
+    };
+    electron.invoke.mockResolvedValue(sourcingStatus);
+    const api = exposedApi();
+
+    await expect(api.sourcing.status()).resolves.toEqual(sourcingStatus);
+    expect(electron.invoke).toHaveBeenCalledWith('sourcing:status');
+    await expect(api.sourcing.pollNow()).resolves.toEqual(sourcingStatus);
+    expect(electron.invoke).toHaveBeenCalledWith('sourcing:poll-now');
+
+    electron.invoke.mockResolvedValue({
+      ...sourcingStatus, credentialState: 'plaintext',
+    });
+    await expect(api.sourcing.status()).rejects.toThrow();
   });
 
   it('rejects a malformed main-process response before exposing it to the renderer', async () => {

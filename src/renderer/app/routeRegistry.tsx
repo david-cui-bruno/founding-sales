@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import type { CalliePreloadApi } from '../../shared/preload';
 import { AppleSpikePanel } from '../appleSpike/AppleSpikePanel';
 import { DiagnosticsScreen } from '../foundation/DiagnosticsScreen';
+import { SourcingStatusRow } from '../foundation/SourcingStatusRow';
 import type { FoundationHealth } from '../foundation/useFoundationHealth';
 import { ConversationsRoute } from '../features/conversations/ConversationsRoute';
 import { FridayRoute } from '../features/friday/FridayRoute';
@@ -73,6 +74,7 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
           }
           onRetry={context.health.retry}
         >
+          <SourcingStatusRow api={context.api.sourcing} />
           <AppleSpikePanel api={context.api.appleSpike} />
         </DiagnosticsScreen>
       );

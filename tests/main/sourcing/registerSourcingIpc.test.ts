@@ -1,0 +1,95 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const electron = vi.hoisted(() => ({
+  handle: vi.fn(),
+  removeHandler: vi.fn(),
+}));
+
+vi.mock('electron', () => ({
+  ipcMain: {
+    handle: electron.handle,
+    removeHandler: electron.removeHandler,
+  },
+}));
+
+import { registerSourcingIpc } from '../../../src/main/sourcing/registerSourcingIpc';
+import type { SourcingProvider } from '../../../src/main/sourcing/registerSourcingIpc';
+import type { SourcingStatus } from '../../../src/shared/contracts/sourcingContract';
+import {
+  registeredIpcHandler,
+  type IpcInvokeEvent,
+} from '../../fixtures/registeredIpcHandler';
+
+const trustedEvent: IpcInvokeEvent = {
+  senderFrame: { url: 'callie://app/index.html' },
+};
+const untrustedEvent: IpcInvokeEvent = {
+  senderFrame: { url: 'https://attacker.test/' },
+};
+
+const status: SourcingStatus = {
+  lastPolledAt: '2026-09-01T12:00:00.000Z',
+  lastKey: 'events/2026-09-01/a.ndjson',
+  backlogCount: 0,
+  counters: { imported: 2, needsIdentity: 1, scoreUpdates: 0, quarantined: 0 },
+  credentialState: 'keychain',
+};
+
+describe('registerSourcingIpc', () => {
+  let provider: SourcingProvider;
+
+  beforeEach(() => {
+    electron.handle.mockReset();
+    electron.removeHandler.mockReset();
+    provider = {
+      pollNow: vi.fn(async () => status),
+      status: vi.fn(async () => status),
+    };
+    registerSourcingIpc(provider);
+  });
+
+  it('registers exactly the two sourcing channels', () => {
+    expect(electron.handle.mock.calls.map((call) => call[0]).sort()).toEqual([
+      'sourcing:poll-now',
+      'sourcing:status',
+    ]);
+  });
+
+  it('serves status and pollNow with schema-validated responses', async () => {
+    const statusHandler = registeredIpcHandler(electron.handle, 'sourcing:status');
+    const pollHandler = registeredIpcHandler(electron.handle, 'sourcing:poll-now');
+
+    await expect(statusHandler(trustedEvent)).resolves.toEqual(status);
+    await expect(pollHandler(trustedEvent)).resolves.toEqual(status);
+    expect(provider.status).toHaveBeenCalledTimes(1);
+    expect(provider.pollNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects untrusted senders and unexpected arguments', async () => {
+    const statusHandler = registeredIpcHandler(electron.handle, 'sourcing:status');
+
+    await expect(statusHandler(untrustedEvent)).rejects.toThrow();
+    await expect(statusHandler(trustedEvent, { extra: true })).rejects.toThrow();
+  });
+
+  it('rejects a malformed provider response', async () => {
+    provider.status = vi.fn(async () => ({
+      ...status,
+      credentialState: 'plaintext',
+    }) as never);
+    const statusHandler = registeredIpcHandler(electron.handle, 'sourcing:status');
+
+    await expect(statusHandler(trustedEvent)).rejects.toThrow();
+  });
+
+  it('unregisters both channels exactly once', () => {
+    electron.handle.mockReset();
+    const unregister = registerSourcingIpc(provider);
+    unregister();
+    unregister();
+
+    expect(
+      electron.removeHandler.mock.calls.map((call) => call[0]).sort(),
+    ).toEqual(['sourcing:poll-now', 'sourcing:status']);
+  });
+});
