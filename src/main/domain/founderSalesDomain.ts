@@ -1858,10 +1858,10 @@ export class FounderSalesDomain {
       }
       for (const column of fieldColumns('segment')) {
         const value = row.values[column] ?? '';
-        if (value.length > 0 && !['hot_frbo', 'cold_registry', 'warm'].includes(value)) {
+        if (value.length > 0 && !['hot', 'cold', 'warm'].includes(value)) {
           errors.push({
             rowNumber: row.rowNumber, field: 'segment', code: 'INVALID_SEGMENT',
-            message: 'Segment must be hot_frbo, cold_registry, or warm.',
+            message: 'Segment must be hot, cold, or warm.',
           });
           rowValid = false;
         }
@@ -1898,7 +1898,7 @@ export class FounderSalesDomain {
     ];
     const organizations = values('organization').map((canonicalName) => ({ canonicalName }));
     const segmentValue = values('segment')[0];
-    const segment = segmentValue === 'hot_frbo' || segmentValue === 'cold_registry' || segmentValue === 'warm'
+    const segment = segmentValue === 'hot' || segmentValue === 'cold' || segmentValue === 'warm'
       ? segmentValue
       : 'warm';
     const base = {

@@ -227,6 +227,10 @@ const sourceInputSchema = z.discriminatedUnion('channel', [
   }).strict(),
   z.object({ ...commonSourceShape, channel: z.literal('inbound_demo') }).strict(),
   z.object({ ...commonSourceShape, channel: z.literal('community') }).strict(),
+  z.object({ ...commonSourceShape, channel: z.literal('parcel') }).strict(),
+  z.object({ ...commonSourceShape, channel: z.literal('deed') }).strict(),
+  z.object({ ...commonSourceShape, channel: z.literal('permit') }).strict(),
+  z.object({ ...commonSourceShape, channel: z.literal('violation') }).strict(),
   z.object({
     ...commonSourceShape,
     channel: z.literal('custom'),
@@ -281,7 +285,7 @@ const createCommandSchema = z.union([
   z.object({
     ...commonCommandShape,
     source: sourceInputSchema.refine((value) => value.channel === 'custom'),
-    segment: z.enum(['hot_frbo', 'cold_registry', 'warm']),
+    segment: z.enum(['hot', 'cold', 'warm']),
   }).strict(),
 ]);
 
@@ -974,8 +978,11 @@ function toCanonicalIntakeCommand(command: NormalizedCommand): CanonicalIntakeCo
 }
 
 function segmentForChannel(channel: Exclude<SourceChannel, 'custom'>): Prospect['segment'] {
-  if (channel === 'frbo') return 'hot_frbo';
-  if (channel === 'registry') return 'cold_registry';
+  if (channel === 'frbo' || channel === 'community') return 'hot';
+  if (
+    channel === 'registry' || channel === 'parcel' || channel === 'deed'
+    || channel === 'permit' || channel === 'violation'
+  ) return 'cold';
   return 'warm';
 }
 

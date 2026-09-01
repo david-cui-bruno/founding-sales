@@ -147,7 +147,7 @@ describe('IdentityRepository', () => {
       const prospect = identities.createCanonicalProspect({
         personId: person.id,
         originalSourceEventId: 'source-one',
-        segment: 'hot_frbo',
+        segment: 'hot',
         qualificationState: 'eligible',
         qualificationGateReason: null,
       });
@@ -507,7 +507,7 @@ describe('IdentityRepository', () => {
       return identities.createCanonicalProspect({
         personId: person.id,
         originalSourceEventId: 'source-gate',
-        segment: 'cold_registry',
+        segment: 'cold',
         qualificationState: 'eligible',
         qualificationGateReason: null,
       });

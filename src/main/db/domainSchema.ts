@@ -93,7 +93,8 @@ export type SourceEventsTable = {
   person_id: string;
   prospect_id: string | null;
   sales_cycle_id: string | null;
-  channel: 'frbo' | 'registry' | 'rireig' | 'referral' | 'inbound_demo' | 'community' | 'custom';
+  channel: 'frbo' | 'registry' | 'rireig' | 'referral' | 'inbound_demo' | 'community' | 'custom'
+    | 'parcel' | 'deed' | 'permit' | 'violation';
   observed_at: string;
   source_record_json: string;
   evidence_ref: string | null;
@@ -115,7 +116,7 @@ export type ProspectsTable = {
   id: string;
   person_id: string;
   original_source_event_id: string;
-  segment: 'hot_frbo' | 'cold_registry' | 'warm';
+  segment: 'hot' | 'cold' | 'warm';
   qualification_state: 'unreviewed' | 'eligible' | 'disqualified' | 'merge_review';
   qualification_gate_reason: QualificationGateReasonCode | null;
   qualification_reason: string | null;

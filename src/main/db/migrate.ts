@@ -9,6 +9,7 @@ import { migration0001Foundation } from './migrations/0001Foundation';
 import { migration0002DomainFoundation } from './migrations/0002DomainFoundation';
 import { migration0003Transcripts } from './migrations/0003Transcripts';
 import { migration0004Learnings } from './migrations/0004Learnings';
+import { migration0005SourcingChannels } from './migrations/0005SourcingChannels';
 import type { WorkspaceKey } from '../security/workspaceKeyTypes';
 
 export type MigrationResult = {
@@ -59,6 +60,11 @@ const productionMigrations = [
     id: '0004Learnings',
     schemaVersion: 4,
     migration: migration0004Learnings,
+  },
+  {
+    id: '0005SourcingChannels',
+    schemaVersion: 5,
+    migration: migration0005SourcingChannels,
   },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);

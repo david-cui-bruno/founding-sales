@@ -68,6 +68,10 @@ const appendSourceEventInputSchema = z.discriminatedUnion('channel', [
   }).strict(),
   z.object({ ...commonInputShape, channel: z.literal('inbound_demo') }).strict(),
   z.object({ ...commonInputShape, channel: z.literal('community') }).strict(),
+  z.object({ ...commonInputShape, channel: z.literal('parcel') }).strict(),
+  z.object({ ...commonInputShape, channel: z.literal('deed') }).strict(),
+  z.object({ ...commonInputShape, channel: z.literal('permit') }).strict(),
+  z.object({ ...commonInputShape, channel: z.literal('violation') }).strict(),
   z.object({
     ...commonInputShape,
     channel: z.literal('custom'),
@@ -87,6 +91,7 @@ const storedRowSchema = z.object({
   sales_cycle_id: idSchema.nullable(),
   channel: z.enum([
     'frbo', 'registry', 'rireig', 'referral', 'inbound_demo', 'community', 'custom',
+    'parcel', 'deed', 'permit', 'violation',
   ]),
   observed_at: utcTimestampSchema,
   source_record_json: z.string().transform(parseStoredEnvelope),

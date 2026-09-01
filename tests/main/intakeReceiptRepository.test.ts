@@ -68,7 +68,7 @@ describe('IntakeReceiptRepository', () => {
         id, person_id, original_source_event_id, segment, qualification_state,
         version, created_at, updated_at
       ) VALUES (
-        'prospect', 'person', '${id}', 'hot_frbo', 'unreviewed',
+        'prospect', 'person', '${id}', 'hot', 'unreviewed',
         1, '${NOW}', '${NOW}'
       );
       INSERT INTO properties (
@@ -117,7 +117,7 @@ describe('IntakeReceiptRepository', () => {
         sourceRecord: { listingId: 'one' }, evidenceRef: null,
         referral: null, customSourceReason: null,
       },
-      segment: 'hot_frbo',
+      segment: 'hot',
     };
   }
 

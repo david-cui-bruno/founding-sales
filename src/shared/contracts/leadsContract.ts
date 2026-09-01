@@ -11,8 +11,9 @@ import {
 
 export const leadSourceSchema = z.enum([
   'frbo', 'registry', 'rireig', 'referral', 'inbound_demo', 'community', 'custom',
+  'parcel', 'deed', 'permit', 'violation',
 ]);
-export const leadSegmentSchema = z.enum(['hot_frbo', 'cold_registry', 'warm']);
+export const leadSegmentSchema = z.enum(['hot', 'cold', 'warm']);
 
 export const leadRowSchema = z.object({
   personId: personIdSchema, salesCycleId: salesCycleIdSchema, personName: z.string().min(1), initials: z.string().min(1).max(4),

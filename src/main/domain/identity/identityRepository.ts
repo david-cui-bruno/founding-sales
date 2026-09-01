@@ -103,7 +103,7 @@ function requireExactQualificationGate(
 const createProspectInputSchema = z.object({
   personId: idSchema,
   originalSourceEventId: idSchema,
-  segment: z.enum(['hot_frbo', 'cold_registry', 'warm']),
+  segment: z.enum(['hot', 'cold', 'warm']),
   qualificationState: z.enum(['unreviewed', 'eligible', 'disqualified', 'merge_review']),
   qualificationGateReason: qualificationGateReasonSchema.nullable(),
   qualificationReason: z.string().nullable().optional(),
@@ -189,7 +189,7 @@ const storedProspectRowSchema = z.object({
   id: idSchema,
   person_id: idSchema,
   original_source_event_id: idSchema,
-  segment: z.enum(['hot_frbo', 'cold_registry', 'warm']),
+  segment: z.enum(['hot', 'cold', 'warm']),
   qualification_state: z.enum(['unreviewed', 'eligible', 'disqualified', 'merge_review']),
   qualification_gate_reason: qualificationGateReasonSchema.nullable(),
   qualification_reason: z.string().nullable(),

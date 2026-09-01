@@ -34,7 +34,7 @@ const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
     stage: 'unreviewed',
     workflowStatus: 'active',
     sourceLabel: 'craigslist',
-    segment: 'hot_frbo',
+    segment: 'hot',
     priorityContext: {
       priority: 'P1',
       fitPoints: 22,

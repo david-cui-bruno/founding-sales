@@ -314,7 +314,7 @@ describe('LifecycleService', () => {
     unitOfWork = new DomainUnitOfWork(database);
     const prospect = seedProspect(database.raw, 'outcome');
     database.raw.prepare(`
-      UPDATE prospects SET qualification_state = 'unreviewed', segment = 'hot_frbo' WHERE id = ?
+      UPDATE prospects SET qualification_state = 'unreviewed', segment = 'hot' WHERE id = ?
     `)
       .run(prospect.prospectId);
     const clock = { now: () => DOMAIN_TIMESTAMP };
@@ -419,7 +419,7 @@ describe('LifecycleService', () => {
     unitOfWork = new DomainUnitOfWork(database);
     const prospect = seedProspect(database.raw, 'cadence-contacted');
     database.raw.prepare(`
-      UPDATE prospects SET qualification_state = 'unreviewed', segment = 'hot_frbo' WHERE id = ?
+      UPDATE prospects SET qualification_state = 'unreviewed', segment = 'hot' WHERE id = ?
     `).run(prospect.prospectId);
     const clock = { now: () => DOMAIN_TIMESTAMP };
     const allocated = [
@@ -813,7 +813,7 @@ describe('LifecycleService', () => {
     unitOfWork = new DomainUnitOfWork(database);
     const prospect = seedProspect(database.raw, 'upgrade');
     database.raw.prepare(`
-      UPDATE prospects SET qualification_state = 'unreviewed', segment = 'cold_registry'
+      UPDATE prospects SET qualification_state = 'unreviewed', segment = 'cold'
       WHERE id = ?
     `).run(prospect.prospectId);
     const clock = { now: () => DOMAIN_TIMESTAMP };

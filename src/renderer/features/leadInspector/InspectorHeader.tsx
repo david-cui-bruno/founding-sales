@@ -7,8 +7,8 @@ import { IconButton } from '../../components/IconButton';
 import { StatusPill } from '../../components/StatusPill';
 
 const SEGMENT_LABELS: Record<LeadDetail['segment'], string> = {
-  hot_frbo: 'Hot FRBO',
-  cold_registry: 'Cold registry',
+  hot: 'Hot',
+  cold: 'Cold',
   warm: 'Warm',
 };
 

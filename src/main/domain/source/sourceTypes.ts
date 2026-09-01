@@ -5,7 +5,11 @@ export type SourceChannel =
   | 'referral'
   | 'inbound_demo'
   | 'community'
-  | 'custom';
+  | 'custom'
+  | 'parcel'
+  | 'deed'
+  | 'permit'
+  | 'violation';
 
 export type ReferralUnknownReason =
   | 'not_provided'

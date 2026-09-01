@@ -57,7 +57,7 @@ try {
       version, created_at, updated_at
     ) VALUES (
       'contended-prospect', 'contended-person', 'contended-source-one',
-      'hot_frbo', 'unreviewed', 1, ?, ?
+      'hot', 'unreviewed', 1, ?, ?
     )
   `).run(timestamp, timestamp);
   const commandJson = canonicalJson({
@@ -78,7 +78,7 @@ try {
         sourceRecord: { listingId: 'contended-one' }, evidenceRef: null,
         referral: null, customSourceReason: null,
       },
-      segment: 'hot_frbo',
+      segment: 'hot',
     },
   });
   const resultJson = canonicalJson({

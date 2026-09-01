@@ -55,7 +55,7 @@ try {
       version, created_at, updated_at
     ) VALUES (
       'contended-prospect', 'contended-person', ?,
-      'hot_frbo', 'unreviewed', 1, ?, ?
+      'hot', 'unreviewed', 1, ?, ?
     )
   `).run(sourceId, timestamp, timestamp);
   database.prepare(`

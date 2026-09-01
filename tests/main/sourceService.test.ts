@@ -191,7 +191,7 @@ describe('SourceService', () => {
         sourceRecord: { listingId: sourceId }, evidenceRef: null,
         referral: null, customSourceReason: null,
       },
-      segment: 'hot_frbo',
+      segment: 'hot',
     };
   }
 
@@ -422,12 +422,16 @@ describe('SourceService', () => {
   });
 
   it.each([
-    ['frbo', 'hot_frbo'],
-    ['registry', 'cold_registry'],
+    ['frbo', 'hot'],
+    ['community', 'hot'],
+    ['registry', 'cold'],
+    ['parcel', 'cold'],
+    ['deed', 'cold'],
+    ['permit', 'cold'],
+    ['violation', 'cold'],
     ['rireig', 'warm'],
     ['referral', 'warm'],
     ['inbound_demo', 'warm'],
-    ['community', 'warm'],
   ] as const)('maps %s to its fixed %s segment', (channel, segment) => {
     ids.push(`person-${channel}`, `prospect-${channel}`);
     const source: IntakeSourceInput = channel === 'referral'
@@ -1586,7 +1590,7 @@ describe('SourceService', () => {
         id, person_id, original_source_event_id, segment, qualification_state,
         version, created_at, updated_at
       ) VALUES (
-        'corrupt-prospect', 'corrupt-person', ?, 'hot_frbo', 'unreviewed',
+        'corrupt-prospect', 'corrupt-person', ?, 'hot', 'unreviewed',
         1, ?, ?
       )
     `).run(sourceId, NOW, NOW);

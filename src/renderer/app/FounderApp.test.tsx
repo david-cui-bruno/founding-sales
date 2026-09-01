@@ -21,7 +21,7 @@ const detail: LeadDetail = {
   stage: 'ready',
   workflowStatus: 'active',
   sourceLabel: 'frbo',
-  segment: 'hot_frbo',
+  segment: 'hot',
   priorityContext: null,
   priorityReasons: ['Direct phone on file'],
   nextAction: null,

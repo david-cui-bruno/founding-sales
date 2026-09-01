@@ -434,7 +434,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     ) throw new LifecycleEligibilityError('Only a canonical Unreviewed Prospect may enter Ready.');
     const family = prospect.segment === 'warm'
       ? 'cadence_c'
-      : prospect.segment === 'hot_frbo' ? 'cadence_a' : 'cadence_b';
+      : prospect.segment === 'hot' ? 'cadence_a' : 'cadence_b';
     const definition = this.cadences.getByFamilyVersion(family, 1);
     if (definition === null) throw new LifecycleConflictError('Required cadence is not installed.');
     const recipe = planCadenceStart({
@@ -1622,7 +1622,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     const prospect = this.identities.getCanonicalProspect(personId);
     if (prospect === null) throw new LifecycleEligibilityError();
     return prospect.segment === 'warm' ? 'cadence_c'
-      : prospect.segment === 'hot_frbo' ? 'cadence_a' : 'cadence_b';
+      : prospect.segment === 'hot' ? 'cadence_a' : 'cadence_b';
   }
 
   private unknownHandleBlocker(

@@ -41,7 +41,7 @@ const leadRow: LeadRow = {
   propertySummary: '12 Benefit St, Providence',
   stage: 'ready',
   source: 'frbo',
-  segment: 'hot_frbo',
+  segment: 'hot',
   priorityContext: {
     priority: 'P1',
     fitPoints: 24,

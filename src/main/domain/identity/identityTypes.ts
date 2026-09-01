@@ -59,7 +59,7 @@ export type Prospect = QualificationSelection & {
   id: string;
   personId: string;
   originalSourceEventId: string;
-  segment: 'hot_frbo' | 'cold_registry' | 'warm';
+  segment: 'hot' | 'cold' | 'warm';
   qualificationReason: string | null;
   lastContactAt: string | null;
   version: number;
@@ -121,7 +121,7 @@ export type AddContactMethodInput = {
 export type CreateProspectInput = QualificationSelection & {
   personId: string;
   originalSourceEventId: string;
-  segment: 'hot_frbo' | 'cold_registry' | 'warm';
+  segment: 'hot' | 'cold' | 'warm';
   qualificationReason?: string | null;
 };
 

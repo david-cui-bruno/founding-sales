@@ -72,6 +72,7 @@ const canonicalSourceSchema = z.object({
   id: idSchema,
   channel: z.enum([
     'frbo', 'registry', 'rireig', 'referral', 'inbound_demo', 'community', 'custom',
+    'parcel', 'deed', 'permit', 'violation',
   ]),
   observedAt: utcTimestampSchema,
   sourceRecord: nonemptyJsonObjectSchema,
@@ -97,7 +98,7 @@ const canonicalCommandSchema = z.object({
   organizations: z.array(canonicalOrganizationSchema),
   properties: z.array(canonicalPropertySchema),
   source: canonicalSourceSchema,
-  segment: z.enum(['hot_frbo', 'cold_registry', 'warm']),
+  segment: z.enum(['hot', 'cold', 'warm']),
 }).strict();
 const identityReviewReasonSchema = z.enum([
   'shared_handle', 'conflicting_handle_matches',
@@ -154,6 +155,7 @@ const storedSourceRowSchema = z.object({
   prospect_id: idSchema.nullable(),
   channel: z.enum([
     'frbo', 'registry', 'rireig', 'referral', 'inbound_demo', 'community', 'custom',
+    'parcel', 'deed', 'permit', 'violation',
   ]),
   observed_at: utcTimestampSchema,
   source_record_json: z.string(),

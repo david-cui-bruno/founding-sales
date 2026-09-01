@@ -21,7 +21,7 @@ export const leadDetailSchema = z.object({
   personId: personIdSchema, salesCycleId: salesCycleIdSchema, personName: z.string().min(1), phones: z.array(contactMethodSchema),
   emails: z.array(contactMethodSchema), organizationLabel: z.string().nullable(), propertySummaries: z.array(z.string()),
   stage: lifecycleStageSchema, workflowStatus: z.enum(['active', 'onboarding', 'closed']), sourceLabel: z.string().min(1),
-  segment: z.enum(['hot_frbo', 'cold_registry', 'warm']), priorityContext: leadPriorityContextSchema.nullable(),
+  segment: z.enum(['hot', 'cold', 'warm']), priorityContext: leadPriorityContextSchema.nullable(),
   priorityReasons: z.array(z.string().min(1)), nextAction: primaryActionSchema.nullable(), optedOut: z.boolean(),
   cadence: cadenceSummarySchema.nullable(), activities: z.array(activitySummarySchema), conversations: z.array(conversationSummarySchema),
   properties: z.array(propertySummarySchema), history: z.array(historyEventSchema), revision: z.number().int().nonnegative(),

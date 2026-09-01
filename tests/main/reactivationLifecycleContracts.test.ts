@@ -130,7 +130,7 @@ describe('reactivation lifecycle contracts', () => {
       kind: 'reactivated', cycle: { id: 'typed-event-cycle', stage: 'ready' },
     });
     harness.database.raw.prepare(`
-      UPDATE prospects SET segment = 'hot_frbo', version = version + 1 WHERE id = ?
+      UPDATE prospects SET segment = 'hot', version = version + 1 WHERE id = ?
     `).run(prospect.prospectId);
     expect(harness.service.reactivateFromRule(command as never)).toEqual(result);
     harness.database.raw.prepare(`
