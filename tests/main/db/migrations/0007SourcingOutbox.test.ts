@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../../../src/main/db/database';
-import { migrateToLatest } from '../../../../src/main/db/migrate';
+import { createMigrationRunner } from '../../../../src/main/db/migrate';
+import { migration0001Foundation } from '../../../../src/main/db/migrations/0001Foundation';
+import { migration0002DomainFoundation } from '../../../../src/main/db/migrations/0002DomainFoundation';
+import { migration0003Transcripts } from '../../../../src/main/db/migrations/0003Transcripts';
+import { migration0004Learnings } from '../../../../src/main/db/migrations/0004Learnings';
+import { migration0005SourcingChannels } from '../../../../src/main/db/migrations/0005SourcingChannels';
+import { migration0006SourcingState } from '../../../../src/main/db/migrations/0006SourcingState';
+import { migration0007SourcingOutbox } from '../../../../src/main/db/migrations/0007SourcingOutbox';
 import { DOMAIN_TIMESTAMP, insertPerson } from '../../../fixtures/domainRows';
 import {
   createTempDatabase,
@@ -11,16 +18,26 @@ import {
 
 const CE_ID = 'ce_01JC0000000000000000000000';
 
+const migrateThroughSourcingOutbox = createMigrationRunner([
+  { id: '0001Foundation', schemaVersion: 1, migration: migration0001Foundation },
+  { id: '0002DomainFoundation', schemaVersion: 2, migration: migration0002DomainFoundation },
+  { id: '0003Transcripts', schemaVersion: 3, migration: migration0003Transcripts },
+  { id: '0004Learnings', schemaVersion: 4, migration: migration0004Learnings },
+  { id: '0005SourcingChannels', schemaVersion: 5, migration: migration0005SourcingChannels },
+  { id: '0006SourcingState', schemaVersion: 6, migration: migration0006SourcingState },
+  { id: '0007SourcingOutbox', schemaVersion: 7, migration: migration0007SourcingOutbox },
+]);
+
 describe('0007 sourcing outbox migration', () => {
   let database: AppDatabase;
   let temp: TempDatabase;
-  let migrationResult: Awaited<ReturnType<typeof migrateToLatest>>;
+  let migrationResult: Awaited<ReturnType<typeof migrateThroughSourcingOutbox>>;
 
   beforeEach(async () => {
     temp = createTempDatabase();
     const key = createTestWorkspaceKey();
     database = openDatabase({ path: temp.path, key });
-    migrationResult = await migrateToLatest(database, {
+    migrationResult = await migrateThroughSourcingOutbox(database, {
       backupDirectory: `${temp.path}.backups`, workspaceKey: key,
     });
   });

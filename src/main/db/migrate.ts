@@ -12,6 +12,7 @@ import { migration0004Learnings } from './migrations/0004Learnings';
 import { migration0005SourcingChannels } from './migrations/0005SourcingChannels';
 import { migration0006SourcingState } from './migrations/0006SourcingState';
 import { migration0007SourcingOutbox } from './migrations/0007SourcingOutbox';
+import { migration0008DedupeCloudPersons } from './migrations/0008DedupeCloudPersons';
 import type { WorkspaceKey } from '../security/workspaceKeyTypes';
 
 export type MigrationResult = {
@@ -77,6 +78,11 @@ const productionMigrations = [
     id: '0007SourcingOutbox',
     schemaVersion: 7,
     migration: migration0007SourcingOutbox,
+  },
+  {
+    id: '0008DedupeCloudPersons',
+    schemaVersion: 8,
+    migration: migration0008DedupeCloudPersons,
   },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);
