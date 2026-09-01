@@ -180,6 +180,11 @@
   flex: 0 0 110px;
 }
 
+/* Wide enough for "Fit 100 · Timing 100" without truncation. */
+.leads-grid__col--cloudScores {
+  flex: 0 0 160px;
+}
+
 .leads-grid__col--nextAction {
   flex: 1 1 160px;
 }
