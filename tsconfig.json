@@ -10,10 +10,15 @@
     "sourceMap": true,
     "baseUrl": ".",
     "paths": {
-      "@electron/fuses": ["node_modules/@electron/fuses/dist/index.d.ts"]
+      "@electron/fuses": [
+        "node_modules/@electron/fuses/dist/index.d.ts"
+      ]
     },
     "outDir": "dist",
     "moduleResolution": "node",
     "resolveJsonModule": true
-  }
+  },
+  "exclude": [
+    "cloud"
+  ]
 }
