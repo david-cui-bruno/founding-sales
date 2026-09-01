@@ -411,6 +411,23 @@ export class SourceService {
     return this.unitOfWork.immediate(() => this.intake(normalized));
   }
 
+  /**
+   * Standard intake forced onto a known person (cloud identity matching:
+   * the caller already resolved the person through a cloud entity link or
+   * the cloud display-name fallback). Identical receipt/idempotency
+   * machinery: replays return the stored receipt, changed payloads under a
+   * reused source ID still throw IntakeIdempotencyConflictError, and the
+   * receipt row keeps applyCloudScoreUpdate working for the appended event.
+   */
+  createPersonProspectForPerson(
+    command: CreatePersonProspectCommand,
+    personId: string,
+  ): IntakeResult {
+    const normalized = normalizeCommand(command);
+    const parsedPersonId = idSchema.parse(personId);
+    return this.unitOfWork.immediate(() => this.intake(normalized, parsedPersonId));
+  }
+
   commitBatch(commands: CreatePersonProspectCommand[]): IntakeResult[] {
     const normalized = z.array(z.unknown()).parse(commands).map((command) => (
       normalizeCommand(command as CreatePersonProspectCommand)
@@ -422,7 +439,7 @@ export class SourceService {
     return this.unitOfWork.immediate(() => this.sources.append(command));
   }
 
-  private intake(command: NormalizedCommand): IntakeResult {
+  private intake(command: NormalizedCommand, forcedPersonId?: string): IntakeResult {
     const canonicalCommand = toCanonicalIntakeCommand(command);
     const commandJson = serializeCanonicalIntakeCommand(canonicalCommand);
     const receipt = this.receipts.getBySourceEventId(command.source.id);
@@ -439,7 +456,9 @@ export class SourceService {
       );
     }
 
-    const identityResolution = this.resolveIdentity(command.contacts);
+    const identityResolution = forcedPersonId === undefined
+      ? this.resolveIdentity(command.contacts)
+      : { personId: forcedPersonId, reviewReason: null };
     const person = identityResolution.personId === null
       ? this.identities.createPerson(command.person)
       : this.identities.getPerson(identityResolution.personId);

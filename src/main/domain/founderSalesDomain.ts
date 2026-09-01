@@ -120,6 +120,10 @@ import {
 } from '../../shared/contracts/importContract';
 import { FOUNDER_CHANNEL_POLICIES_V1 } from './cadence/cadenceScheduler';
 import type { DomainServices } from './createDomainServices';
+import {
+  isCloudPublicRecordChannel,
+  normalizeCloudDisplayName,
+} from './source/cloudNameMatching';
 import type {
   CreatePersonProspectCommand,
   IntakeContactInput,
@@ -2016,12 +2020,30 @@ export class FounderSalesDomain {
    * `source_intake_receipts` (keyed `cloud:<idempotency_key>`) makes replays
    * no-ops; the cloud-entity link and the unreviewed cycle are created only
    * on first import.
+   *
+   * Identity convergence (duplicate-person fix): BEFORE minting a person,
+   * the import resolves the incoming event against existing persons:
+   * 1. `cloud_entity_links` hit on the event's cloudEntityId -> the person
+   *    exists; append the source event to them (standard intake forced onto
+   *    that person, receipt included) instead of creating a duplicate.
+   * 2. Public-record channels only (parcel/deed/permit/violation): a UNIQUE
+   *    normalized display-name match against persons that already have a
+   *    cloud entity link -> same append path, plus a new link row for this
+   *    cloudEntityId (many cloud entity ids may point at one person).
+   *    Manually-created persons (no link) are never name-matched.
+   * 3. Ambiguous name matches (2+ persons) fall through to create: dupes
+   *    are recoverable, wrong merges are not.
    */
   importCloudSourceEvent(input: {
     command: CreatePersonProspectCommand;
     cloudEntityId: string | null;
   }): IntakeResult {
-    const result = this.services.sources.createPersonProspect(input.command);
+    const matchedPersonId = this.resolveCloudPerson(input);
+    const result = matchedPersonId === null
+      ? this.services.sources.createPersonProspect(input.command)
+      : this.services.sources.createPersonProspectForPerson(
+        input.command, matchedPersonId,
+      );
     if (result.disposition === 'created') {
       // A replayed cloud event returns the stored receipt with its original
       // 'created' disposition; the cycle from the first import already exists.
@@ -2047,6 +2069,61 @@ export class FounderSalesDomain {
       });
     }
     return result;
+  }
+
+  /**
+   * Cloud-entity-link-first person resolution for one incoming cloud event.
+   * Returns the existing person to append to, or null to create.
+   */
+  private resolveCloudPerson(input: {
+    command: CreatePersonProspectCommand;
+    cloudEntityId: string | null;
+  }): string | null {
+    if (input.cloudEntityId !== null) {
+      const link = this.database.raw.prepare(
+        'SELECT person_id FROM cloud_entity_links WHERE cloud_entity_id = ?',
+      ).get(input.cloudEntityId) as { person_id: string } | undefined;
+      if (link !== undefined) return link.person_id;
+    }
+    if (
+      input.cloudEntityId === null
+      || !isCloudPublicRecordChannel(input.command.source.channel)
+    ) {
+      return null;
+    }
+    const normalizedName = normalizeCloudDisplayName(input.command.person.displayName);
+    if (normalizedName.length === 0) return null;
+    // Only persons that already carry a cloud entity link are candidates:
+    // name-matching manually-created persons is too risky.
+    const candidates = this.findCloudLinkedPersonsByNormalizedName(normalizedName);
+    if (candidates.length === 1) return candidates[0]!.id;
+    if (candidates.length > 1) {
+      // Ambiguous: creating a recoverable duplicate beats a wrong merge.
+      console.info(
+        `[sourcing] ambiguous cloud name match "${normalizedName}" `
+        + `(${candidates.length} cloud-linked persons); creating a new person`,
+      );
+    }
+    return null;
+  }
+
+  /**
+   * SQL cannot express the full punctuation-stripping normalization, so scan
+   * the (small) set of cloud-linked persons and normalize in process.
+   */
+  private findCloudLinkedPersonsByNormalizedName(
+    normalizedName: string,
+  ): { id: string }[] {
+    const rows = this.database.raw.prepare(`
+      SELECT DISTINCT person.id, person.display_name
+      FROM persons AS person
+      JOIN cloud_entity_links AS link ON link.person_id = person.id
+      WHERE person.deleted_at IS NULL
+      ORDER BY person.id ASC
+    `).all() as { id: string; display_name: string }[];
+    return rows
+      .filter((row) => normalizeCloudDisplayName(row.display_name) === normalizedName)
+      .map((row) => ({ id: row.id }));
   }
 
   /**
