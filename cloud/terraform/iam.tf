@@ -94,10 +94,36 @@ data "aws_iam_policy_document" "lambda_adapters" {
     ]
   }
 
+  # Adapters claim idempotency keys before emitting events (adapterRuntime).
+  statement {
+    sid    = "IdempotencyTable"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+    ]
+    resources = [aws_dynamodb_table.idempotency.arn]
+  }
+
   statement {
     sid       = "WriteInbox"
     effect    = "Allow"
     actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.inbox.arn}/*"]
+  }
+
+  # The scorer re-reads inbox events to score them.
+  statement {
+    sid       = "ListInbox"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.inbox.arn]
+  }
+
+  statement {
+    sid       = "ReadInbox"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
     resources = ["${aws_s3_bucket.inbox.arn}/*"]
   }
 
@@ -109,7 +135,10 @@ data "aws_iam_policy_document" "lambda_adapters" {
       "logs:CreateLogStream",
       "logs:PutLogEvents",
     ]
-    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-adapter-*"]
+    resources = [
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-adapter-*",
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-scorer*",
+    ]
   }
 }
 
