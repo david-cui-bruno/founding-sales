@@ -182,12 +182,21 @@ function observeFitSignals(
       }
     : { observable: false, earned: 0 };
 
-  const llc: SignalObservation =
+  // Owner kind: prefer the entities-table context, fall back to the event's
+  // own payload (parcel events carry owner_kind directly).
+  const payloadOwnerKind = payload["owner_kind"];
+  const effectiveOwnerKind =
     context.ownerKind !== undefined && context.ownerKind !== null
+      ? context.ownerKind
+      : typeof payloadOwnerKind === "string"
+        ? payloadOwnerKind
+        : null;
+  const llc: SignalObservation =
+    effectiveOwnerKind !== null
       ? {
           observable: true,
           earned:
-            context.ownerKind === "llc" || context.ownerKind === "trust"
+            effectiveOwnerKind === "llc" || effectiveOwnerKind === "trust"
               ? FIT_WEIGHTS.llc_owner_no_pm
               : 0,
         }

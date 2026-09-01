@@ -495,6 +495,30 @@ describe("fitScore — observability normalization", () => {
     expect(fitScore(baseEvent(), { ownerKind: null, now: NOW }).fit).toBe(100);
   });
 
+  it("owner_kind falls back to the event payload when context has no entity data", () => {
+    // Regression: live parcel events scored fit 0 because the handler passes
+    // no ownerKind and the payload was ignored.
+    const parcelish = baseEvent({
+      channel: "community",
+      payload: {
+        platform: "reddit",
+        topic_keywords: ["k"],
+        post_url: "https://reddit.com/x",
+        // fitScore reads owner_kind straight off the payload record.
+        owner_kind: "llc",
+      } as never,
+    });
+    const result = fitScore(parcelish, { now: NOW });
+    // observable: llc 7/7 -> earns; live_vacancy not observable (community, vacancy null)
+    expect(result.reasons).toContainEqual({
+      signal: "llc_owner_no_pm",
+      contribution: FIT_WEIGHTS.llc_owner_no_pm,
+    });
+    // context wins over payload when both present
+    const both = fitScore(parcelish, { ownerKind: "individual", now: NOW });
+    expect(both.reasons.map((r) => r.signal)).not.toContain("llc_owner_no_pm");
+  });
+
   it("prior_tool_adoption never enters the denominator", () => {
     // If it did, a full-signal event could not reach 100.
     const result = fitScore(baseEvent(), {
