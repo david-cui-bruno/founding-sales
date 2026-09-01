@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../../../src/main/db/database';
-import { createMigrationRunner, migrateToLatest } from '../../../../src/main/db/migrate';
+import { createMigrationRunner } from '../../../../src/main/db/migrate';
 import { migration0001Foundation } from '../../../../src/main/db/migrations/0001Foundation';
 import { migration0002DomainFoundation } from '../../../../src/main/db/migrations/0002DomainFoundation';
 import { migration0003Transcripts } from '../../../../src/main/db/migrations/0003Transcripts';
@@ -9,6 +9,7 @@ import { migration0004Learnings } from '../../../../src/main/db/migrations/0004L
 import { migration0005SourcingChannels } from '../../../../src/main/db/migrations/0005SourcingChannels';
 import { migration0006SourcingState } from '../../../../src/main/db/migrations/0006SourcingState';
 import { migration0007SourcingOutbox } from '../../../../src/main/db/migrations/0007SourcingOutbox';
+import { migration0008DedupeCloudPersons } from '../../../../src/main/db/migrations/0008DedupeCloudPersons';
 import {
   serializeCanonicalIntakeResult,
   type StoredIntakeResult,
@@ -18,6 +19,19 @@ import {
   createTestWorkspaceKey,
   type TempDatabase,
 } from '../../../fixtures/tempDatabase';
+
+// Pin the runner at schema 8: this file tests the 0008 repair in isolation,
+// and 0009SourcingFileLedger would otherwise run too via migrateToLatest.
+const migrateOnlySchema8 = createMigrationRunner([
+  { id: '0001Foundation', schemaVersion: 1, migration: migration0001Foundation },
+  { id: '0002DomainFoundation', schemaVersion: 2, migration: migration0002DomainFoundation },
+  { id: '0003Transcripts', schemaVersion: 3, migration: migration0003Transcripts },
+  { id: '0004Learnings', schemaVersion: 4, migration: migration0004Learnings },
+  { id: '0005SourcingChannels', schemaVersion: 5, migration: migration0005SourcingChannels },
+  { id: '0006SourcingState', schemaVersion: 6, migration: migration0006SourcingState },
+  { id: '0007SourcingOutbox', schemaVersion: 7, migration: migration0007SourcingOutbox },
+  { id: '0008DedupeCloudPersons', schemaVersion: 8, migration: migration0008DedupeCloudPersons },
+]);
 
 const migrateThroughSchema7 = createMigrationRunner([
   { id: '0001Foundation', schemaVersion: 1, migration: migration0001Foundation },
@@ -232,8 +246,8 @@ describe('0008 dedupe cloud persons migration', () => {
     };
   }
 
-  async function migrateToSchema8(): Promise<Awaited<ReturnType<typeof migrateToLatest>>> {
-    return migrateToLatest(database, options);
+  async function migrateToSchema8(): Promise<Awaited<ReturnType<typeof migrateOnlySchema8>>> {
+    return migrateOnlySchema8(database, options);
   }
 
   function count(table: string): number {

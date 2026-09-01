@@ -60,7 +60,7 @@ describe('foundation initialization recovery', () => {
 
     expect(recoveredHealth).toEqual({
       appVersion: '1.0.0',
-      schemaVersion: 8,
+      schemaVersion: 9,
       databasePath: tempDatabase.path,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',

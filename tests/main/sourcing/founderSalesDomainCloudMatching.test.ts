@@ -247,7 +247,8 @@ describe('FounderSalesDomain cloud identity matching', () => {
       fullName: '212 LLC',
     }));
 
-    expect(replay).toEqual(appended);
+    expect(appended.replayed).toBe(false);
+    expect(replay).toEqual({ ...appended, replayed: true });
     expect(count('source_events')).toBe(2);
     expect(count('source_intake_receipts')).toBe(2);
     expect(count('sales_cycles')).toBe(1);

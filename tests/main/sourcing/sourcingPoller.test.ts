@@ -34,15 +34,21 @@ function fakeDomainGate(initialCursor: string | null = null): {
   imported: string[];
   scoreUpdates: string[];
   cursorWrites: Array<string | null>;
+  ledgered: string[];
+  ledger: Set<string>;
   cursor: () => string | null;
   failNextImport: (error: Error) => void;
+  replayNextImport: () => void;
 } {
   let cursor = initialCursor;
   let polledAt: string | null = null;
   const imported: string[] = [];
   const scoreUpdates: string[] = [];
   const cursorWrites: Array<string | null> = [];
+  const ledgered: string[] = [];
+  const ledger = new Set<string>();
   let nextImportError: Error | undefined;
+  let nextImportReplays = false;
 
   const gate: SourcingPollerDomainGate = {
     withDomain: async (operation) => operation({
@@ -51,6 +57,11 @@ function fakeDomainGate(initialCursor: string | null = null): {
         cursor = lastKey;
         polledAt = NOW;
         cursorWrites.push(lastKey);
+      },
+      getProcessedFileKeys: () => new Set(ledger),
+      recordProcessedFile: ({ key }: { key: string }) => {
+        ledger.add(key);
+        ledgered.push(key);
       },
       applyCloudScoreUpdate: ({ receiptKey }: { receiptKey: string }) => {
         scoreUpdates.push(receiptKey);
@@ -64,7 +75,11 @@ function fakeDomainGate(initialCursor: string | null = null): {
           nextImportError = undefined;
           throw error;
         }
-        imported.push(command.source.id);
+        const replayed = nextImportReplays;
+        nextImportReplays = false;
+        if (!replayed) {
+          imported.push(command.source.id);
+        }
         return {
           disposition: 'created',
           personId: 'person-1',
@@ -74,6 +89,7 @@ function fakeDomainGate(initialCursor: string | null = null): {
           contextReviewReasons: [] as string[],
           organizationIds: [] as string[],
           propertyIds: [] as string[],
+          replayed,
         };
       },
     } as never),
@@ -84,9 +100,14 @@ function fakeDomainGate(initialCursor: string | null = null): {
     imported,
     scoreUpdates,
     cursorWrites,
+    ledgered,
+    ledger,
     cursor: () => cursor,
     failNextImport: (error) => {
       nextImportError = error;
+    },
+    replayNextImport: () => {
+      nextImportReplays = true;
     },
   };
 }
@@ -133,7 +154,9 @@ describe('SourcingPoller', () => {
       lastPolledAt: null,
       lastKey: null,
       backlogCount: null,
-      counters: { imported: 0, needsIdentity: 0, scoreUpdates: 0, quarantined: 0 },
+      counters: {
+        imported: 0, replayed: 0, needsIdentity: 0, scoreUpdates: 0, quarantined: 0,
+      },
       credentialState: 'none',
       hmacSaltState: 'none',
     });
@@ -169,7 +192,9 @@ describe('SourcingPoller', () => {
     await poller.pollNow();
     const status = await poller.getStatus();
 
-    expect(inbox.listNewObjects).toHaveBeenCalledWith('events/2026-08-31/z.ndjson');
+    // The ledger, not the cursor, defines progress: every poll lists the
+    // whole inbox and skips ledgered keys.
+    expect(inbox.listNewObjects).toHaveBeenCalledWith(null);
     // The parcel event imports a real person; the person-null frbo event
     // imports an "Unknown owner" placeholder (Task 5); the scored
     // re-emission persists through applyCloudScoreUpdate.
@@ -182,14 +207,121 @@ describe('SourcingPoller', () => {
       'events/2026-09-01/a.ndjson',
       'events/2026-09-01/b.ndjson',
     ]);
+    expect(domain.ledgered).toEqual([
+      'events/2026-09-01/a.ndjson',
+      'events/2026-09-01/b.ndjson',
+    ]);
     expect(status).toEqual({
       lastPolledAt: NOW,
       lastKey: 'events/2026-09-01/b.ndjson',
       backlogCount: 0,
-      counters: { imported: 1, needsIdentity: 1, scoreUpdates: 1, quarantined: 1 },
+      counters: {
+        imported: 1, replayed: 0, needsIdentity: 1, scoreUpdates: 1, quarantined: 1,
+      },
       credentialState: 'keychain',
       hmacSaltState: 'none',
     });
+  });
+
+  it('picks up a key that sorts before an already-processed key on the next poll', async () => {
+    // The live incident: a repair copy (zz-repair-*) was consumed, then a
+    // normal same-day file (mail-parse-*) arrived that sorts BEFORE it. A
+    // lexicographic cursor loses that file forever; the ledger must not.
+    const domain = fakeDomainGate();
+    const repair = validParcelEvent();
+    const late: CloudSourceEvent = {
+      ...validParcelEvent(),
+      idempotency_key: 'e'.repeat(64),
+    };
+    const repairKey = 'events/2026-09-01/zz-repair-c-scorer.ndjson';
+    const lateKey = 'events/2026-09-01/mail-parse-late.ndjson';
+    let inboxKeys = [repairKey];
+    const inbox: FakeInbox = {
+      listNewObjects: vi.fn(async () => [...inboxKeys].sort()),
+      fetchNdjson: vi.fn(async (key: string) => (
+        key === repairKey ? batch(key, [repair]) : batch(key, [late])
+      )),
+    };
+    const { poller } = buildPoller({ gate: domain.gate, inbox });
+
+    await poller.pollNow();
+    expect(domain.ledgered).toEqual([repairKey]);
+
+    inboxKeys = [repairKey, lateKey];
+    await poller.pollNow();
+    const status = await poller.getStatus();
+
+    expect(domain.imported).toEqual([
+      `cloud:${repair.idempotency_key}`,
+      `cloud:${late.idempotency_key}`,
+    ]);
+    expect(domain.ledgered).toEqual([repairKey, lateKey]);
+    // The already-ledgered repair file is never fetched again.
+    expect(inbox.fetchNdjson).toHaveBeenCalledTimes(2);
+    // The cursor keeps tracking the MAX processed key for the status row.
+    expect(status.lastKey).toBe(repairKey);
+    expect(status.counters.imported).toBe(2);
+  });
+
+  it('counts a replayed receipt as replayed, not imported', async () => {
+    const domain = fakeDomainGate();
+    const event = validParcelEvent();
+    domain.replayNextImport();
+    const inbox: FakeInbox = {
+      listNewObjects: vi.fn(async () => ['events/2026-09-01/a.ndjson']),
+      fetchNdjson: vi.fn(async (key: string) => batch(key, [event])),
+    };
+    const { poller } = buildPoller({ gate: domain.gate, inbox });
+
+    await poller.pollNow();
+    const status = await poller.getStatus();
+
+    expect(status.counters.imported).toBe(0);
+    expect(status.counters.replayed).toBe(1);
+    // The replayed file still completes and lands in the ledger.
+    expect(domain.ledgered).toEqual(['events/2026-09-01/a.ndjson']);
+  });
+
+  it('leaves a failed file unledgered while later files still process, then retries it', async () => {
+    const domain = fakeDomainGate();
+    const first = validParcelEvent();
+    const second: CloudSourceEvent = {
+      ...validParcelEvent(),
+      idempotency_key: 'f'.repeat(64),
+    };
+    domain.failNextImport(new Error('transient intake failure'));
+    const inbox: FakeInbox = {
+      listNewObjects: vi.fn(async () => [
+        'events/2026-09-01/a.ndjson',
+        'events/2026-09-01/b.ndjson',
+      ]),
+      fetchNdjson: vi.fn(async (key: string) => (
+        key === 'events/2026-09-01/a.ndjson'
+          ? batch(key, [first])
+          : batch(key, [second])
+      )),
+    };
+    const { poller } = buildPoller({ gate: domain.gate, inbox });
+
+    await poller.pollNow();
+
+    // The failed file is NOT ledgered; the later file processed anyway.
+    expect(domain.ledgered).toEqual(['events/2026-09-01/b.ndjson']);
+    expect(domain.imported).toEqual([`cloud:${second.idempotency_key}`]);
+    expect(poller.getHealth().consecutiveFailures).toBe(1);
+
+    await poller.pollNow();
+
+    // Next tick retries only the failed file.
+    expect(domain.ledgered).toEqual([
+      'events/2026-09-01/b.ndjson',
+      'events/2026-09-01/a.ndjson',
+    ]);
+    expect(domain.imported).toEqual([
+      `cloud:${second.idempotency_key}`,
+      `cloud:${first.idempotency_key}`,
+    ]);
+    expect(poller.getHealth().consecutiveFailures).toBe(0);
   });
 
   it('keeps the cursor unchanged when a file fails mid-processing', async () => {

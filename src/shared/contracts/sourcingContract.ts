@@ -7,6 +7,9 @@ import { z } from 'zod';
  */
 export const sourcingCountersSchema = z.object({
   imported: z.number().int().nonnegative(),
+  // Re-reads after the schema-9 cursor reset replay receipts; those are
+  // counted here, never as fresh imports.
+  replayed: z.number().int().nonnegative(),
   needsIdentity: z.number().int().nonnegative(),
   scoreUpdates: z.number().int().nonnegative(),
   quarantined: z.number().int().nonnegative(),

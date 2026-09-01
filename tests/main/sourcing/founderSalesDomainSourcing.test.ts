@@ -109,7 +109,10 @@ describe('FounderSalesDomain sourcing facade', () => {
       cloudEntityId: mapped.cloudEntityId,
     });
 
-    expect(replay).toEqual(result);
+    // The replay returns the stored receipt, flagged so counters can tell
+    // a re-read from a fresh import.
+    expect(result.replayed).toBe(false);
+    expect(replay).toEqual({ ...result, replayed: true });
     expect(database.raw.prepare<[], { count: number }>(
       'SELECT COUNT(*) AS count FROM sales_cycles',
     ).get()).toEqual({ count: 1 });

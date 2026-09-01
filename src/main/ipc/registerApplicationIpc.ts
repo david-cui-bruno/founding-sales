@@ -227,7 +227,9 @@ function createIdleSourcingProvider(): SourcingProvider {
     lastPolledAt: null,
     lastKey: null,
     backlogCount: null,
-    counters: { imported: 0, needsIdentity: 0, scoreUpdates: 0, quarantined: 0 },
+    counters: {
+      imported: 0, replayed: 0, needsIdentity: 0, scoreUpdates: 0, quarantined: 0,
+    },
     credentialState: 'none',
     hmacSaltState: 'none',
   };

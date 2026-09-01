@@ -31,7 +31,7 @@ const status: SourcingStatus = {
   lastPolledAt: '2026-09-01T12:00:00.000Z',
   lastKey: 'events/2026-09-01/a.ndjson',
   backlogCount: 0,
-  counters: { imported: 2, needsIdentity: 1, scoreUpdates: 0, quarantined: 0 },
+  counters: { imported: 2, replayed: 0, needsIdentity: 1, scoreUpdates: 0, quarantined: 0 },
   credentialState: 'keychain',
   hmacSaltState: 'none',
 };

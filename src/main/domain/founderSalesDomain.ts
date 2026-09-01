@@ -2016,6 +2016,31 @@ export class FounderSalesDomain {
   }
 
   /**
+   * Every inbox key that has fully processed (schema 9). The ledger, not the
+   * cursor, defines poller progress: a key missing from this set is fetched
+   * regardless of how it sorts against previously processed keys.
+   */
+  getProcessedFileKeys(): Set<string> {
+    const rows = this.database.raw.prepare(
+      'SELECT key FROM sourcing_processed_files',
+    ).all() as { key: string }[];
+    return new Set(rows.map((row) => row.key));
+  }
+
+  /** Ledger one inbox object after the WHOLE file has processed. */
+  recordProcessedFile(input: { key: string }): void {
+    const key = z.string().min(1).parse(input.key);
+    const now = this.clock.now();
+    this.services.unitOfWork.immediate(() => {
+      this.database.raw.prepare(`
+        INSERT INTO sourcing_processed_files (key, processed_at)
+        VALUES (?, ?)
+        ON CONFLICT (key) DO NOTHING
+      `).run(key, now);
+    });
+  }
+
+  /**
    * One person-bearing cloud event through the standard intake pipeline.
    * `source_intake_receipts` (keyed `cloud:<idempotency_key>`) makes replays
    * no-ops; the cloud-entity link and the unreviewed cycle are created only
@@ -2037,7 +2062,15 @@ export class FounderSalesDomain {
   importCloudSourceEvent(input: {
     command: CreatePersonProspectCommand;
     cloudEntityId: string | null;
-  }): IntakeResult {
+  }): IntakeResult & { replayed: boolean } {
+    // A replayed event returns its stored receipt with the ORIGINAL
+    // disposition, so callers cannot tell a fresh import from a replay by
+    // disposition alone. Full inbox re-reads after the schema-9 cursor reset
+    // made that distinction matter for counters: report whether the receipt
+    // pre-existed.
+    const replayed = this.database.raw.prepare(
+      'SELECT 1 FROM source_intake_receipts WHERE source_event_id = ?',
+    ).get(input.command.source.id) !== undefined;
     const matchedPersonId = this.resolveCloudPerson(input);
     const result = matchedPersonId === null
       ? this.services.sources.createPersonProspect(input.command)
@@ -2068,7 +2101,7 @@ export class FounderSalesDomain {
         `).run(input.cloudEntityId, result.personId, this.clock.now());
       });
     }
-    return result;
+    return { ...result, replayed };
   }
 
   /**

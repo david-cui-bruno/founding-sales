@@ -156,7 +156,7 @@ describe('preload workflow bridge', () => {
       lastPolledAt: null as string | null,
       lastKey: null as string | null,
       backlogCount: null as number | null,
-      counters: { imported: 0, needsIdentity: 0, scoreUpdates: 0, quarantined: 0 },
+      counters: { imported: 0, replayed: 0, needsIdentity: 0, scoreUpdates: 0, quarantined: 0 },
       credentialState: 'none',
       hmacSaltState: 'none',
     };

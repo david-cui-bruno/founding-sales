@@ -1,6 +1,6 @@
 /**
  * Sourcing poller (plan Task 3): orchestrates inboxClient -> intakeMapper ->
- * domain intake, with a durable per-file cursor.
+ * domain intake, with a durable processed-file ledger.
  *
  * Dispatch per validated event:
  * - `intake`: person-bearing -> `importCloudSourceEvent` on the domain facade
@@ -10,10 +10,19 @@
  *   items is Task 5. No new table.
  * - `score-update`: counted; cloud-score persistence lands in Task 5.
  *
- * The cursor advances only after a WHOLE file has processed, so a mid-file
- * failure leaves the cursor unchanged and the next tick retries the same file
- * (every dispatch is idempotent). The poller never throws: every failure is
- * caught, logged, and reflected in a health counter.
+ * Progress is defined by the `sourcing_processed_files` ledger (schema 9),
+ * NOT a lexicographic cursor: every poll lists the whole inbox and skips
+ * ledgered keys, so a key that sorts before an already-processed key (clock
+ * skew between lambdas, manual repair copies) is still picked up. A file is
+ * ledgered only after it has WHOLLY processed, so a mid-file failure retries
+ * the same file next tick (every dispatch is idempotent) while later files
+ * still process. `sourcing_cursor.last_key` is kept as the max processed key
+ * purely so the status row shows freshness. The poller never throws: every
+ * failure is caught, logged, and reflected in a health counter.
+ *
+ * Listing cost: inbox files accumulate at ~10/day, so a full ListObjectsV2
+ * walk stays a handful of pages for years. No pruning or partitioning until
+ * that changes.
  */
 import type { FoundationRuntime } from '../foundation/foundationRuntime';
 import type { Clock } from '../domain/support/clock';
@@ -69,6 +78,7 @@ export class SourcingPoller {
 
   private readonly counters: SourcingCounters = {
     imported: 0,
+    replayed: 0,
     needsIdentity: 0,
     scoreUpdates: 0,
     quarantined: 0,
@@ -205,18 +215,45 @@ export class SourcingPoller {
     }
 
     const inbox = await this.createInboxClient(loaded);
-    const cursor = await this.domainGate.withDomain(
-      (domain) => domain.getSourcingCursor(),
+    const { cursor, processedKeys } = await this.domainGate.withDomain(
+      (domain) => ({
+        cursor: domain.getSourcingCursor(),
+        processedKeys: domain.getProcessedFileKeys(),
+      }),
     );
-    const keys = await inbox.listNewObjects(cursor.lastKey);
+    // List EVERYTHING and let the ledger decide: a startAfter cursor would
+    // permanently skip keys that sort before it (the live zz-repair incident).
+    const allKeys = await inbox.listNewObjects(null);
+    const keys = allKeys.filter((key) => !processedKeys.has(key));
     this.backlogCount = keys.length;
 
+    let firstFailure: unknown;
+    let maxProcessedKey = cursor.lastKey;
     for (const key of keys) {
       if (this.stopped) return;
-      const batch = await inbox.fetchNdjson(key);
-      await this.processBatchOrThrow(batch);
+      try {
+        const batch = await inbox.fetchNdjson(key);
+        await this.processBatchOrThrow(batch);
+      } catch (error) {
+        // A failed file is NOT ledgered and retries next tick. Later files
+        // may still process safely: the ledger, not a cursor, defines
+        // progress, so skipping ahead cannot lose the failed key.
+        firstFailure ??= error;
+        this.log(
+          `sourcing file failed (not ledgered, retries next tick) ${key}: `
+          + `${error instanceof Error ? error.message : String(error)}`,
+        );
+        continue;
+      }
+      if (maxProcessedKey === null || key > maxProcessedKey) {
+        maxProcessedKey = key;
+      }
+      const lastKey = maxProcessedKey;
       await this.domainGate.withDomain((domain) => {
-        domain.recordSourcingPoll({ lastKey: key });
+        domain.recordProcessedFile({ key });
+        // Keep the cursor as the max processed key so the status row still
+        // shows freshness; it no longer gates which files are read.
+        domain.recordSourcingPoll({ lastKey });
       });
       this.backlogCount = Math.max(0, this.backlogCount - 1);
     }
@@ -227,6 +264,10 @@ export class SourcingPoller {
       await this.domainGate.withDomain((domain) => {
         domain.recordSourcingPoll({ lastKey: cursor.lastKey });
       });
+    }
+
+    if (firstFailure !== undefined) {
+      throw firstFailure;
     }
 
     // Task 4 upstream leg: membership + outcome flush after the inbox is
@@ -247,8 +288,8 @@ export class SourcingPoller {
 
   /**
    * Processes one file. Throws on the first dispatch failure so the caller
-   * leaves the cursor untouched and the next tick retries the whole file
-   * (dispatches are idempotent, so partial progress is safe to repeat).
+   * leaves the file out of the ledger and the next tick retries the whole
+   * file (dispatches are idempotent, so partial progress is safe to repeat).
    */
   private async processBatchOrThrow(batch: InboxBatch): Promise<void> {
     this.counters.quarantined += batch.quarantined.length;
@@ -285,13 +326,19 @@ export class SourcingPoller {
     mapped: ReturnType<typeof mapCloudSourceEvent>,
   ): Promise<void> {
     if (mapped.kind === 'intake') {
-      await this.domainGate.withDomain((domain) => {
+      const result = await this.domainGate.withDomain((domain) => (
         domain.importCloudSourceEvent({
           command: mapped.command,
           cloudEntityId: mapped.cloudEntityId,
-        });
-      });
-      this.counters.imported += 1;
+        })
+      ));
+      // Full re-reads after the schema-9 cursor reset replay stored receipts;
+      // counting those as imports would lie in the status row.
+      if (result.replayed === false) {
+        this.counters.imported += 1;
+      } else {
+        this.counters.replayed += 1;
+      }
     } else if (mapped.kind === 'needs-identity') {
       // Task 5: person-null events become "Unknown owner · <situs>"
       // placeholders in the standard Unreviewed review lane; the founder
@@ -338,6 +385,6 @@ export class SourcingPoller {
     this.consecutiveFailures += 1;
     this.lastFailureAt = this.clock.now();
     const message = error instanceof Error ? error.message : String(error);
-    this.log(`sourcing poll failed (attempt kept cursor): ${message}`);
+    this.log(`sourcing poll failed (failed files stay unledgered): ${message}`);
   }
 }
