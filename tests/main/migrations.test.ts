@@ -30,15 +30,15 @@ describe('database migrations', () => {
 
     expect(result).toEqual({
       fromVersion: 0,
-      toVersion: 2,
-      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation'],
+      toVersion: 4,
+      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation', '0003Transcripts', '0004Learnings'],
     });
     expect(
       await database.kysely
         .selectFrom('app_meta')
         .select('schema_version')
         .executeTakeFirstOrThrow(),
-    ).toEqual({ schema_version: 2 });
+    ).toEqual({ schema_version: 4 });
 
     const objects = database.raw
       .prepare<[], { name: string; type: string }>(
@@ -70,8 +70,8 @@ describe('database migrations', () => {
     const secondResult = await migrateToLatest(database, options);
 
     expect(secondResult).toEqual({
-      fromVersion: 2,
-      toVersion: 2,
+      fromVersion: 4,
+      toVersion: 4,
       appliedMigrationIds: [],
     });
     expect(
@@ -79,7 +79,7 @@ describe('database migrations', () => {
         .selectFrom('app_meta')
         .select('schema_version')
         .executeTakeFirstOrThrow(),
-    ).toEqual({ schema_version: 2 });
+    ).toEqual({ schema_version: 4 });
     expect(
       database.raw
         .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM app_meta')
@@ -122,8 +122,8 @@ describe('database migrations', () => {
 
     await expect(migrateToLatest(database, options)).resolves.toEqual({
       fromVersion: 0,
-      toVersion: 2,
-      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation'],
+      toVersion: 4,
+      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation', '0003Transcripts', '0004Learnings'],
     });
   });
 
@@ -186,8 +186,8 @@ describe('database migrations', () => {
 
     await expect(migrateToLatest(database, options)).resolves.toEqual({
       fromVersion: 1,
-      toVersion: 2,
-      appliedMigrationIds: ['0002DomainFoundation'],
+      toVersion: 4,
+      appliedMigrationIds: ['0002DomainFoundation', '0003Transcripts', '0004Learnings'],
     });
   });
 

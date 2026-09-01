@@ -17,6 +17,11 @@ import type { WorkspaceKey } from '../security/workspaceKeyTypes';
 import { applyWorkspaceKey, createRawDatabase } from './sqliteDriver';
 
 const PLAINTEXT_HEADER = Buffer.from('SQLite format 3\u0000', 'utf8');
+/**
+ * Every schema version a healthy encrypted workspace may legitimately hold
+ * before migration runs. Extend this list with each registered migration.
+ */
+const KNOWN_SCHEMA_VERSIONS: readonly number[] = [1, 2, 3, 4];
 const STATE_MARKER_FORMAT = 'callie-plaintext-encryption-upgrade';
 const MAX_MARKER_BYTES = 64 * 1024;
 const DATABASE_SIDECAR_SUFFIXES = ['-wal', '-shm', '-journal'] as const;
@@ -540,7 +545,7 @@ async function stabilizeEncryptedCandidate(
     if (journalMode !== 'delete') {
       throw new Error('Encrypted database journal stabilization failed.');
     }
-    fingerprint = readAndVerifyDatabaseFingerprint(raw, [1, 2]);
+    fingerprint = readAndVerifyDatabaseFingerprint(raw, KNOWN_SCHEMA_VERSIONS);
   } finally {
     raw.close();
   }
@@ -671,7 +676,7 @@ function inspectEncryptedCandidate(path: string, key: Buffer): Candidate {
     return {
       kind: 'encrypted',
       path,
-      ...readAndVerifyDatabaseFingerprint(raw, [1, 2]),
+      ...readAndVerifyDatabaseFingerprint(raw, KNOWN_SCHEMA_VERSIONS),
     };
   } catch {
     return { kind: 'invalid', path };

@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
-import { migration0004Learnings } from '../../src/main/db/migrations/0004Learnings';
 import { insertPerson, seedProspect, DOMAIN_TIMESTAMP } from '../fixtures/domainRows';
 import {
   createTempDatabase,
@@ -21,7 +20,6 @@ describe('0004Learnings migration', () => {
     await migrateToLatest(database, {
       backupDirectory: `${temp.path}.backups`, workspaceKey: key,
     });
-    await migration0004Learnings.up(database.kysely);
   });
 
   afterEach(() => {

@@ -25,6 +25,8 @@ const domainTables = [
   'cadence_steps',
   'consent_policy_records',
   'cycle_reactivation_receipts',
+  'learning_evidence',
+  'learnings',
   'lifecycle_review_items',
   'next_actions',
   'opt_out_handles',
@@ -50,6 +52,8 @@ const domainTables = [
   'source_events',
   'source_intake_receipts',
   'stage_events',
+  'transcript_utterances',
+  'transcripts',
   'trigger_events',
   'workspace_settings',
   'won_terms',
@@ -58,6 +62,7 @@ const domainTables = [
 const requiredIndexes = [
   'activities_provider_idempotency_idx',
   'jobs_type_idempotency_idx',
+  'learning_evidence_learning_idx',
   'one_active_cadence_per_cycle',
   'one_open_cycle_per_person',
 ] as const;
@@ -77,6 +82,15 @@ const requiredTriggers = [
   'immutable_consent_policy_records_delete',
   'immutable_cycle_reactivation_receipts',
   'immutable_cycle_reactivation_receipts_delete',
+  'immutable_learning_evidence',
+  'immutable_learning_evidence_delete',
+  'immutable_transcript_utterances',
+  'immutable_transcript_utterances_delete',
+  'immutable_transcripts',
+  'immutable_transcripts_delete',
+  'protect_activity_transcript_attach',
+  'protect_learning_delete',
+  'protect_learning_identity',
   'immutable_opt_out_closure_receipts',
   'immutable_opt_out_closure_receipts_delete',
   'immutable_opt_out_closure_receipt_handles',
@@ -197,7 +211,7 @@ function runDatabaseScenario(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
         ).get(),
-        { schema_version: 2 },
+        { schema_version: 4 },
       );
       const actualTables = raw.prepare<string[], { name: string }>(`
         SELECT name FROM sqlite_master

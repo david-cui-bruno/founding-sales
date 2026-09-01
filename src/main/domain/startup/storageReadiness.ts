@@ -5,7 +5,7 @@ import { inspectDatabaseEncryption } from '../../db/databaseEncryption';
 import { DomainStartupFatalError } from './domainStartupTypes';
 
 export type DomainStorageReadiness = Readonly<{
-  schemaVersion: 2;
+  schemaVersion: 4;
   encrypted: true;
   cipherVersion: string;
   ftsAvailable: true;
@@ -21,7 +21,7 @@ export type DomainSchemaManifest = Readonly<{
 }>;
 
 /**
- * The canonical load-bearing schema-2 manifest. Reads the live catalog from
+ * The canonical load-bearing schema-4 manifest. Reads the live catalog from
  * sqlite_master with binary-name ordering; a missing, renamed, or extra
  * load-bearing object is fatal before composition.
  */
@@ -35,6 +35,8 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'cadence_steps',
     'consent_policy_records',
     'cycle_reactivation_receipts',
+    'learning_evidence',
+    'learnings',
     'lifecycle_review_items',
     'next_actions',
     'opt_out_closure_receipt_handles',
@@ -60,6 +62,8 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'source_events',
     'source_intake_receipts',
     'stage_events',
+    'transcript_utterances',
+    'transcripts',
     'trigger_events',
     'won_terms',
     'workspace_settings',
@@ -67,18 +71,28 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
   indexes: Object.freeze([
     'activities_provider_idempotency_idx',
     'jobs_type_idempotency_idx',
+    'learning_evidence_learning_idx',
     'one_active_cadence_per_cycle',
     'one_open_cycle_per_person',
     'trigger_events_source_event_unique',
   ]),
   triggers: Object.freeze([
     'immutable_activities',
+    'immutable_learning_evidence',
+    'immutable_learning_evidence_delete',
     'immutable_prioritization_evaluations',
     'immutable_prioritization_preference_events',
     'immutable_prioritization_rule_versions',
+    'immutable_transcript_utterances',
+    'immutable_transcript_utterances_delete',
+    'immutable_transcripts',
+    'immutable_transcripts_delete',
     'immutable_trigger_events',
+    'protect_activity_transcript_attach',
     'protect_cycle_pointer_insert',
     'protect_cycle_pointer_update',
+    'protect_learning_delete',
+    'protect_learning_identity',
     'protect_p0_priority_override',
     'protect_priority_override_delete',
     'protect_priority_override_mutation',
@@ -102,7 +116,7 @@ const appMetaSchema = z.object({
 export function assertDomainStorageReady(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
-  expectedSchemaVersion: 2;
+  expectedSchemaVersion: 4;
   expectedManifest: DomainSchemaManifest;
 }): DomainStorageReadiness {
   const { database } = input;
@@ -125,7 +139,7 @@ export function assertDomainStorageReady(input: {
   const metadata = appMetaSchema.safeParse(metadataRow);
   if (!metadata.success || metadata.data.schema_version !== input.expectedSchemaVersion) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace schema version is not exactly 2.',
+      'schema_not_ready', 'The workspace schema version is not exactly 4.',
     );
   }
 
@@ -199,7 +213,7 @@ export function assertDomainStorageReady(input: {
   }
 
   return Object.freeze({
-    schemaVersion: 2 as const,
+    schemaVersion: 4 as const,
     encrypted: true as const,
     cipherVersion: encryption.cipherVersion ?? 'unknown',
     ftsAvailable: true as const,

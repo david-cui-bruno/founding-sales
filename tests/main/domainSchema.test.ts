@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 let bundleDirectory: string;
 let scenarioBundle: string;
 
-describe('domain schema 0002 manifest', () => {
+describe('domain schema manifest', () => {
   beforeAll(() => {
     bundleDirectory = mkdtempSync(join(process.cwd(), '.native-test-'));
     scenarioBundle = join(bundleDirectory, 'domain-schema.cjs');
@@ -25,7 +25,7 @@ describe('domain schema 0002 manifest', () => {
 
   afterAll(() => rmSync(bundleDirectory, { recursive: true, force: true }));
 
-  it('creates schema version 2 with every domain table, critical index, and trigger', () => {
+  it('creates the latest schema with every domain table, critical index, and trigger', () => {
     const result = spawnSync(process.execPath, [scenarioBundle, 'manifest'], {
       cwd: process.cwd(),
       encoding: 'utf8',
