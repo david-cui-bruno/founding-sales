@@ -4,11 +4,13 @@ import {
   communityPostPayloadSchema,
   computeIdempotencyKey,
   frboListingPayloadSchema,
+  parcelPayloadSchema,
   newCloudEntityId,
   newSourceEventId,
   TRIGGER_TYPES,
   ulid,
   validateSourceEvent,
+  violationPayloadSchema,
   type CloudSourceEvent,
 } from "../src/sourceEvent.js";
 
@@ -227,6 +229,101 @@ describe("scores_version (additive, scorer-emitted)", () => {
       const event = { ...validFrboEvent(), scores_version: bad };
       expect(cloudSourceEventSchema.safeParse(event).success, String(bad)).toBe(false);
     }
+  });
+});
+
+describe("parcel + violation payload schemas", () => {
+  const parcelPayload = {
+    assessor_class: "2",
+    assessed_value_usd: 471400,
+    tax_usd: 6599.6,
+    absentee: true,
+    owner_kind: "llc",
+    tax_year: 2025,
+  };
+
+  const violationPayload = {
+    violation_kind: "Housing Violations",
+    status: "open",
+    opened_at: "2026-08-28",
+    case_ref: "269",
+  };
+
+  it("accepts a valid parcel payload and channel event", () => {
+    expect(parcelPayloadSchema.safeParse(parcelPayload).success).toBe(true);
+    const event = {
+      ...validFrboEvent(),
+      channel: "parcel",
+      trigger: null,
+      payload: parcelPayload,
+    };
+    expect(validateSourceEvent(event).success).toBe(true);
+  });
+
+  it("accepts a valid violation payload and channel event", () => {
+    expect(violationPayloadSchema.safeParse(violationPayload).success).toBe(true);
+    const event = {
+      ...validFrboEvent(),
+      channel: "violation",
+      trigger: {
+        type: "violation_opened",
+        weight: 1.0,
+        half_life_days: TRIGGER_TYPES.violation_opened.half_life_days,
+        window: null,
+      },
+      payload: violationPayload,
+    };
+    expect(validateSourceEvent(event).success).toBe(true);
+  });
+
+  it("parcel: rejects unknown fields and bad owner_kind (strict)", () => {
+    expect(
+      parcelPayloadSchema.safeParse({ ...parcelPayload, extra: "nope" }).success,
+    ).toBe(false);
+    expect(
+      parcelPayloadSchema.safeParse({ ...parcelPayload, owner_kind: "corp" }).success,
+    ).toBe(false);
+  });
+
+  it("parcel: all fields nullable", () => {
+    expect(
+      parcelPayloadSchema.safeParse({
+        assessor_class: null,
+        assessed_value_usd: null,
+        tax_usd: null,
+        absentee: null,
+        owner_kind: null,
+        tax_year: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("violation: rejects datetime in opened_at (calendar date only)", () => {
+    expect(
+      violationPayloadSchema.safeParse({
+        ...violationPayload,
+        opened_at: "2026-08-28T00:00:00Z",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("violation: rejects unknown status and unknown fields (strict)", () => {
+    expect(
+      violationPayloadSchema.safeParse({ ...violationPayload, status: "pending" }).success,
+    ).toBe(false);
+    expect(
+      violationPayloadSchema.safeParse({ ...violationPayload, prose: "text" }).success,
+    ).toBe(false);
+  });
+
+  it("violation event without trigger (complaint identity row) validates", () => {
+    const event = {
+      ...validFrboEvent(),
+      channel: "violation",
+      trigger: null,
+      payload: { ...violationPayload, violation_kind: "Housing Complaints" },
+    };
+    expect(validateSourceEvent(event).success).toBe(true);
   });
 });
 

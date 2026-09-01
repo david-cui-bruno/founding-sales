@@ -1,0 +1,2 @@
+# Lambda deploy artifacts (built by build.mjs + zip; never committed)
+**/function.zip

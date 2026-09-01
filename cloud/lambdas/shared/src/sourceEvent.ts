@@ -210,6 +210,45 @@ export const communityPostPayloadSchema = z
 export type CommunityPostPayload = z.infer<typeof communityPostPayloadSchema>;
 
 /**
+ * Channel `parcel` — tax roll / parcel identity rows (e.g. Providence tax
+ * roll). Pure identity events: trigger is null, the value is the owner +
+ * absentee/portfolio signal.
+ */
+export const parcelPayloadSchema = z
+  .object({
+    /** Assessor class code as published (e.g. "2" = 2-5 Family in PVD). */
+    assessor_class: z.string().min(1).nullable(),
+    assessed_value_usd: z.number().nullable(),
+    tax_usd: z.number().nullable(),
+    /** mailing address != situs address (normalized compare); null = unknown. */
+    absentee: z.boolean().nullable(),
+    owner_kind: z.enum(["individual", "llc", "trust", "other"]).nullable(),
+    tax_year: z.number().int().nullable(),
+  })
+  .strict();
+export type ParcelPayload = z.infer<typeof parcelPayloadSchema>;
+
+/**
+ * Channel `violation` — code/housing violations and related enforcement rows
+ * (e.g. Boston RentSmart). Non-violation row kinds (complaints, service
+ * requests) ride the same channel as identity events with trigger null and
+ * `violation_kind` carrying the row type.
+ */
+export const violationPayloadSchema = z
+  .object({
+    violation_kind: z.string().min(1).nullable(),
+    status: z.enum(["open", "closed", "unknown"]),
+    /** ISO calendar date (YYYY-MM-DD) the case/violation was opened. */
+    opened_at: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "ISO date (YYYY-MM-DD)")
+      .nullable(),
+    case_ref: z.string().min(1).nullable(),
+  })
+  .strict();
+export type ViolationPayload = z.infer<typeof violationPayloadSchema>;
+
+/**
  * Channel -> payload schema registry. Channels without an entry do not have a
  * v1 payload schema yet; validateSourceEvent rejects events for them so an
  * adapter cannot ship an unchecked payload.
@@ -217,6 +256,8 @@ export type CommunityPostPayload = z.infer<typeof communityPostPayloadSchema>;
 export const PAYLOAD_SCHEMAS: Partial<Record<Channel, z.ZodTypeAny>> = {
   frbo: frboListingPayloadSchema,
   community: communityPostPayloadSchema,
+  parcel: parcelPayloadSchema,
+  violation: violationPayloadSchema,
 };
 
 // ---------------------------------------------------------------------------
