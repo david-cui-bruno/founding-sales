@@ -44,8 +44,19 @@ locals {
       environment = {
         INBOX_BUCKET    = aws_s3_bucket.inbox.bucket
         SNAPSHOTS_TABLE = aws_dynamodb_table.snapshots.name
+        ENTITIES_TABLE  = aws_dynamodb_table.entities.name
       }
       schedule = "rate(15 minutes)"
+    }
+    "resolver" = {
+      source_dir  = "${path.module}/../lambdas/resolver/dist"
+      memory_size = 512
+      timeout     = 300
+      environment = {
+        INBOX_BUCKET   = aws_s3_bucket.inbox.bucket
+        ENTITIES_TABLE = aws_dynamodb_table.entities.name
+      }
+      schedule = "rate(1 hour)"
     }
   }
 }
