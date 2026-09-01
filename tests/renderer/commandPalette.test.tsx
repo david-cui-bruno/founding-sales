@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { navigationItems } from '../../src/renderer/app/navigationItems';
 import { CommandPalette } from '../../src/renderer/app/commandPalette/CommandPalette';
 
 afterEach(() => {
@@ -78,6 +79,8 @@ describe('CommandPalette', () => {
       'Go to Today',
       'Go to Leads',
       'Go to Pipeline',
+      'Go to Conversations',
+      'Go to Learnings',
       'Go to Friday',
       'Go to Review',
       'Go to Settings',
@@ -85,13 +88,17 @@ describe('CommandPalette', () => {
     ]);
   });
 
-  it('never offers disabled destinations like Conversations or Learnings', () => {
+  it('only offers destinations whose navigation entry is enabled', () => {
     renderPalette();
 
     pressShortcut();
 
-    expect(screen.queryByRole('option', { name: /Conversations/ })).toBeNull();
-    expect(screen.queryByRole('option', { name: /Learnings/ })).toBeNull();
+    const offered = screen
+      .getAllByRole('option')
+      .map((option) => option.textContent);
+    for (const item of navigationItems) {
+      expect(offered.includes(`Go to ${item.label}`)).toBe(item.enabled);
+    }
   });
 
   it('filters by case-insensitive substring', () => {

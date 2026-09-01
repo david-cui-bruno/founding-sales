@@ -1,8 +1,10 @@
 import { appHealthSchema, type AppHealth } from '../shared/healthContract';
+import { createConversationsApi } from './apis/conversationsApi';
 import { createFridayApi } from './apis/fridayApi';
 import { createImportApi } from './apis/importApi';
 import { createLeadDetailApi } from './apis/leadDetailApi';
 import { createLeadsApi } from './apis/leadsApi';
+import { createLearningsApi } from './apis/learningsApi';
 import { createPipelineApi } from './apis/pipelineApi';
 import { createReviewApi } from './apis/reviewApi';
 import { createTodayApi } from './apis/todayApi';
@@ -27,6 +29,8 @@ export const createCallieApi = (invoker: IpcInvoker) => {
     review: createReviewApi(client),
     friday: createFridayApi(client),
     imports: createImportApi(client),
+    conversations: createConversationsApi(client),
+    learnings: createLearningsApi(client),
   } as const;
 };
 

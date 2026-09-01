@@ -98,8 +98,10 @@ describe('createApplicationMenuTemplate', () => {
       ['Today', 'CmdOrCtrl+1', 'today'],
       ['Leads', 'CmdOrCtrl+2', 'leads'],
       ['Pipeline', 'CmdOrCtrl+3', 'pipeline'],
-      ['Friday', 'CmdOrCtrl+4', 'friday'],
-      ['Review', 'CmdOrCtrl+5', 'review'],
+      ['Conversations', 'CmdOrCtrl+4', 'conversations'],
+      ['Learnings', 'CmdOrCtrl+5', 'learnings'],
+      ['Friday', 'CmdOrCtrl+6', 'friday'],
+      ['Review', 'CmdOrCtrl+7', 'review'],
       ['Settings', 'CmdOrCtrl+,', 'settings'],
     ];
 
@@ -149,6 +151,8 @@ describe('menu navigation scripts', () => {
       'today',
       'leads',
       'pipeline',
+      'conversations',
+      'learnings',
       'friday',
       'review',
       'settings',

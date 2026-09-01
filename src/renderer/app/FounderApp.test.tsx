@@ -138,6 +138,21 @@ function fakeCallieApi(): CalliePreloadApi {
       commit: pending,
       status: pending,
     },
+    conversations: {
+      list: vi.fn(async () => ({
+        rows: [], total: 0, nextCursor: null, revision: 0,
+      })),
+      get: pending,
+      attachTranscript: pending,
+    },
+    learnings: {
+      list: vi.fn(async () => ({
+        rows: [], totalActiveCount: 0, revision: 0,
+      })),
+      capture: pending,
+      addEvidence: pending,
+      updateStatus: pending,
+    },
     appleSpike: {} as never,
   } as unknown as CalliePreloadApi;
 }
@@ -196,14 +211,22 @@ describe('FounderApp', () => {
     expect(await screen.findByRole('dialog')).not.toBeNull();
   });
 
-  it('keeps Conversations and Learnings visibly disabled', () => {
+  it('routes Conversations and Learnings to their live workspaces', async () => {
     window.location.hash = '';
     render(<FounderApp api={fakeCallieApi()} health={readyHealth} />);
 
     for (const name of ['Conversations', 'Learnings']) {
       expect(
         screen.getByRole('link', { name }).getAttribute('aria-disabled'),
-      ).toBe('true');
+      ).toBeNull();
     }
+
+    fireEvent.click(screen.getByRole('link', { name: 'Conversations' }));
+    expect(await screen.findByText('No conversations yet')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Learnings' }));
+    expect(
+      (await screen.findAllByRole('button', { name: 'Capture learning' })).length,
+    ).toBeGreaterThan(0);
   });
 });

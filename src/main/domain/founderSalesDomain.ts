@@ -58,6 +58,31 @@ import {
   type ReviewListRequest,
   type ReviewSnapshot,
 } from '../../shared/contracts/reviewContract';
+import type {
+  AttachTranscriptRequest,
+  ConversationDetail,
+  ConversationDetailRequest,
+  ConversationsListRequest,
+  ConversationsListResponse,
+} from '../../shared/contracts/conversationsContract';
+import type {
+  AddEvidenceRequest,
+  CaptureLearningRequest,
+  LearningsListRequest,
+  LearningsListResponse,
+  UpdateLearningStatusRequest,
+} from '../../shared/contracts/learningsContract';
+import {
+  attachTranscript,
+  getConversationDetail,
+  listConversations,
+} from './conversations/conversationsDomain';
+import {
+  addLearningEvidence,
+  captureLearning,
+  listLearnings,
+  updateLearningStatus,
+} from './learnings/learningsDomain';
 import {
   cancelJobRequestSchema,
   createJobRequestSchema,
@@ -1216,7 +1241,45 @@ export class FounderSalesDomain {
     return this.receipt([review.person_id], cycleIds);
   }
 
-  // --------------------------------------------------------------- friday
+  // ------------------------------------------------------- conversations
+
+  listConversations(input: ConversationsListRequest): ConversationsListResponse {
+    return listConversations(this.featureDeps(), input);
+  }
+
+  getConversationDetail(input: ConversationDetailRequest): ConversationDetail {
+    return getConversationDetail(this.featureDeps(), input);
+  }
+
+  attachTranscript(input: AttachTranscriptRequest): MutationReceipt {
+    // attachTranscript opens its own immediate transaction; wrapping it in
+    // unitOfWork.immediate would nest BEGIN IMMEDIATE and fail.
+    return attachTranscript(this.featureDeps(), input);
+  }
+
+  // ----------------------------------------------------------- learnings
+
+  listLearnings(input: LearningsListRequest): LearningsListResponse {
+    return listLearnings(this.featureDeps(), input);
+  }
+
+  captureLearning(input: CaptureLearningRequest): MutationReceipt {
+    return captureLearning(this.featureDeps(), input);
+  }
+
+  addLearningEvidence(input: AddEvidenceRequest): MutationReceipt {
+    return addLearningEvidence(this.featureDeps(), input);
+  }
+
+  updateLearningStatus(input: UpdateLearningStatusRequest): MutationReceipt {
+    return updateLearningStatus(this.featureDeps(), input);
+  }
+
+  private featureDeps(): { database: AppDatabase; clock: Clock; ids: IdGenerator } {
+    return { database: this.database, clock: this.clock, ids: this.ids };
+  }
+
+  // -------------------------------------------------------------- friday
 
   getFridayReport(): FridayReport {
     const asOf = this.clock.now();

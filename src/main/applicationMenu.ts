@@ -9,6 +9,8 @@ export const menuNavigationRoutes = [
   'today',
   'leads',
   'pipeline',
+  'conversations',
+  'learnings',
   'friday',
   'review',
   'settings',
@@ -57,8 +59,10 @@ const navigationEntries: readonly NavigationEntry[] = [
   { label: 'Today', accelerator: 'CmdOrCtrl+1', route: 'today' },
   { label: 'Leads', accelerator: 'CmdOrCtrl+2', route: 'leads' },
   { label: 'Pipeline', accelerator: 'CmdOrCtrl+3', route: 'pipeline' },
-  { label: 'Friday', accelerator: 'CmdOrCtrl+4', route: 'friday' },
-  { label: 'Review', accelerator: 'CmdOrCtrl+5', route: 'review' },
+  { label: 'Conversations', accelerator: 'CmdOrCtrl+4', route: 'conversations' },
+  { label: 'Learnings', accelerator: 'CmdOrCtrl+5', route: 'learnings' },
+  { label: 'Friday', accelerator: 'CmdOrCtrl+6', route: 'friday' },
+  { label: 'Review', accelerator: 'CmdOrCtrl+7', route: 'review' },
   { label: 'Settings', accelerator: 'CmdOrCtrl+,', route: 'settings' },
 ];
 

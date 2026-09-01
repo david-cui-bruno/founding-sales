@@ -4,9 +4,11 @@ import type { CalliePreloadApi } from '../../shared/preload';
 import { AppleSpikePanel } from '../appleSpike/AppleSpikePanel';
 import { DiagnosticsScreen } from '../foundation/DiagnosticsScreen';
 import type { FoundationHealth } from '../foundation/useFoundationHealth';
+import { ConversationsRoute } from '../features/conversations/ConversationsRoute';
 import { FridayRoute } from '../features/friday/FridayRoute';
 import { LeadFullPage } from '../features/leadInspector/LeadFullPage';
 import { LeadsRoute } from '../features/leads/LeadsRoute';
+import { LearningsRoute } from '../features/learnings/LearningsRoute';
 import { PipelineRoute } from '../features/pipeline/PipelineRoute';
 import { ReviewRoute } from '../features/review/ReviewRoute';
 import { TodayRoute } from '../features/today/TodayRoute';
@@ -20,10 +22,7 @@ export type RouteContext = {
   onReviewCountChange(count: number): void;
 };
 
-/**
- * Central route table. Conversations and Learnings stay disabled navigation
- * entries with their own approved plans; they never render blank screens.
- */
+/** Central route table. Every navigation entry renders a real workspace. */
 export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
   switch (route) {
     case 'today':
@@ -39,6 +38,20 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
     case 'pipeline':
       return (
         <PipelineRoute api={context.api.pipeline} onOpenLead={context.openLead} />
+      );
+    case 'conversations':
+      return (
+        <ConversationsRoute
+          api={context.api.conversations}
+          onOpenLead={context.openLead}
+        />
+      );
+    case 'learnings':
+      return (
+        <LearningsRoute
+          api={context.api.learnings}
+          onOpenLead={context.openLead}
+        />
       );
     case 'review':
       return (
@@ -62,16 +75,6 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
         >
           <AppleSpikePanel api={context.api.appleSpike} />
         </DiagnosticsScreen>
-      );
-    case 'conversations':
-    case 'learnings':
-      // Disabled navigation entries cannot be reached through the rail; a
-      // direct hash still lands on truthful copy instead of a blank screen.
-      return (
-        <section aria-labelledby="unavailable-route-title">
-          <h1 id="unavailable-route-title">Coming soon</h1>
-          <p>This workspace ships with its own implementation plan.</p>
-        </section>
       );
   }
 }

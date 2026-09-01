@@ -1,18 +1,22 @@
 import type { FounderSalesDomain } from '../domain/founderSalesDomain';
 import type { FoundationRuntime } from '../foundation/foundationRuntime';
+import { registerConversationsIpc } from '../conversations/registerConversationsIpc';
 import { registerFridayIpc } from '../friday/registerFridayIpc';
 import { registerHealthIpc } from '../health/registerHealthIpc';
 import { registerImportIpc } from '../imports/registerImportIpc';
 import { registerLeadDetailIpc } from '../leads/registerLeadDetailIpc';
 import { registerLeadsIpc } from '../leads/registerLeadsIpc';
+import { registerLearningsIpc } from '../learnings/registerLearningsIpc';
 import { registerPipelineIpc } from '../pipeline/registerPipelineIpc';
 import { registerReviewIpc } from '../review/registerReviewIpc';
 import { registerTodayIpc } from '../today/registerTodayIpc';
+import type { ConversationsProvider } from '../conversations/conversationsService';
 import type { FridayProvider } from '../friday/fridayService';
 import type { HealthProvider } from '../health/registerHealthIpc';
 import type { ImportProvider } from '../imports/importService';
 import type { LeadDetailProvider } from '../leads/leadDetailService';
 import type { LeadsProvider } from '../leads/leadsService';
+import type { LearningsProvider } from '../learnings/learningsService';
 import type { PipelineProvider } from '../pipeline/pipelineService';
 import type { ReviewProvider } from '../review/reviewService';
 import type { TodayProvider } from '../today/todayService';
@@ -33,6 +37,8 @@ export type FeatureRegistrars = {
   registerReviewIpc: typeof registerReviewIpc;
   registerFridayIpc: typeof registerFridayIpc;
   registerImportIpc: typeof registerImportIpc;
+  registerConversationsIpc: typeof registerConversationsIpc;
+  registerLearningsIpc: typeof registerLearningsIpc;
 };
 
 const defaultRegistrars: FeatureRegistrars = {
@@ -44,6 +50,8 @@ const defaultRegistrars: FeatureRegistrars = {
   registerReviewIpc,
   registerFridayIpc,
   registerImportIpc,
+  registerConversationsIpc,
+  registerLearningsIpc,
 };
 
 export function createLeadsProvider(runtime: DomainGate): LeadsProvider {
@@ -123,6 +131,32 @@ export function createImportProvider(runtime: DomainGate): ImportProvider {
   };
 }
 
+export function createConversationsProvider(
+  runtime: DomainGate,
+): ConversationsProvider {
+  return {
+    list: (input) =>
+      runtime.withDomain((domain) => domain.listConversations(input)),
+    get: (input) =>
+      runtime.withDomain((domain) => domain.getConversationDetail(input)),
+    attachTranscript: (input) =>
+      runtime.withDomain((domain) => domain.attachTranscript(input)),
+  };
+}
+
+export function createLearningsProvider(runtime: DomainGate): LearningsProvider {
+  return {
+    list: (input) =>
+      runtime.withDomain((domain) => domain.listLearnings(input)),
+    capture: (input) =>
+      runtime.withDomain((domain) => domain.captureLearning(input)),
+    addEvidence: (input) =>
+      runtime.withDomain((domain) => domain.addLearningEvidence(input)),
+    updateStatus: (input) =>
+      runtime.withDomain((domain) => domain.updateLearningStatus(input)),
+  };
+}
+
 /**
  * Registers every workflow feature slice against one runtime and returns one
  * idempotent unregister function that removes each slice exactly once, in
@@ -148,6 +182,14 @@ export function registerApplicationIpc(
     registrars.registerReviewIpc(createReviewProvider(runtime), isTrustedRendererUrl),
     registrars.registerFridayIpc(createFridayProvider(runtime), isTrustedRendererUrl),
     registrars.registerImportIpc(createImportProvider(runtime), isTrustedRendererUrl),
+    registrars.registerConversationsIpc(
+      createConversationsProvider(runtime),
+      isTrustedRendererUrl,
+    ),
+    registrars.registerLearningsIpc(
+      createLearningsProvider(runtime),
+      isTrustedRendererUrl,
+    ),
   ];
 
   let active = true;

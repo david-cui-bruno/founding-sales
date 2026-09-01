@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import {
+  createConversationsProvider,
   createFridayProvider,
   createImportProvider,
   createLeadDetailProvider,
   createLeadsProvider,
+  createLearningsProvider,
   createPipelineProvider,
   createReviewProvider,
   createTodayProvider,
@@ -41,18 +43,21 @@ describe('registerApplicationIpc', () => {
       registerReviewIpc: track('review', unregisters[5]!),
       registerFridayIpc: track('friday', unregisters[6]!),
       registerImportIpc: track('imports', unregisters[7]!),
+      registerConversationsIpc: track('conversations', unregisters[8]!),
+      registerLearningsIpc: track('learnings', unregisters[9]!),
     } as unknown as FeatureRegistrars;
     return { registrars, calls };
   }
 
-  it('registers all eight feature slices and unregisters each exactly once', () => {
-    const unregisters = Array.from({ length: 8 }, () => vi.fn());
+  it('registers all ten feature slices and unregisters each exactly once', () => {
+    const unregisters = Array.from({ length: 10 }, () => vi.fn());
     const { registrars, calls } = fakeRegistrars(unregisters);
 
     const unregister = registerApplicationIpc(fakeGate(), undefined, registrars);
     expect(calls).toEqual([
       'health', 'leads', 'leadDetail', 'today',
       'pipeline', 'review', 'friday', 'imports',
+      'conversations', 'learnings',
     ]);
 
     unregister();
@@ -65,18 +70,20 @@ describe('registerApplicationIpc', () => {
     const unregisters = [
       'health', 'leads', 'leadDetail', 'today',
       'pipeline', 'review', 'friday', 'imports',
+      'conversations', 'learnings',
     ].map((name) => vi.fn(() => order.push(name)));
     const { registrars } = fakeRegistrars(unregisters);
 
     registerApplicationIpc(fakeGate(), undefined, registrars)();
     expect(order).toEqual([
+      'learnings', 'conversations',
       'imports', 'friday', 'review', 'pipeline',
       'today', 'leadDetail', 'leads', 'health',
     ]);
   });
 
   it('passes the trusted-URL predicate to every slice registrar', () => {
-    const unregisters = Array.from({ length: 8 }, () => vi.fn());
+    const unregisters = Array.from({ length: 10 }, () => vi.fn());
     const { registrars } = fakeRegistrars(unregisters);
     const trust = (url: string) => url.startsWith('app://');
 
@@ -111,6 +118,13 @@ describe('registerApplicationIpc', () => {
       remapLeadImport: vi.fn(() => 'remap'),
       commitLeadImport: vi.fn(() => 'commit'),
       getImportJob: vi.fn(() => 'status'),
+      listConversations: vi.fn(() => 'conversations'),
+      getConversationDetail: vi.fn(() => 'conversation-detail'),
+      attachTranscript: vi.fn(() => 'transcript-attached'),
+      listLearnings: vi.fn(() => 'learnings'),
+      captureLearning: vi.fn(() => 'learning-captured'),
+      addLearningEvidence: vi.fn(() => 'evidence-added'),
+      updateLearningStatus: vi.fn(() => 'status-updated'),
     } as unknown as FounderSalesDomain;
     const gate = fakeGate(domain);
 
@@ -150,6 +164,19 @@ describe('registerApplicationIpc', () => {
     await expect(imports.commit({} as never)).resolves.toBe('commit');
     await expect(imports.status({} as never)).resolves.toBe('status');
 
-    expect(gate.withDomain).toHaveBeenCalledTimes(23);
+    const conversations = createConversationsProvider(gate);
+    await expect(conversations.list({} as never)).resolves.toBe('conversations');
+    await expect(conversations.get({} as never)).resolves.toBe('conversation-detail');
+    await expect(conversations.attachTranscript({} as never)).resolves.toBe(
+      'transcript-attached',
+    );
+
+    const learnings = createLearningsProvider(gate);
+    await expect(learnings.list({} as never)).resolves.toBe('learnings');
+    await expect(learnings.capture({} as never)).resolves.toBe('learning-captured');
+    await expect(learnings.addEvidence({} as never)).resolves.toBe('evidence-added');
+    await expect(learnings.updateStatus({} as never)).resolves.toBe('status-updated');
+
+    expect(gate.withDomain).toHaveBeenCalledTimes(30);
   });
 });

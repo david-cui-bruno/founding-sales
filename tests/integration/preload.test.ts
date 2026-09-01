@@ -19,6 +19,8 @@ type ExposedCallieApi = {
   review: Record<string, unknown>;
   friday: Record<string, unknown>;
   imports: Record<string, unknown>;
+  conversations: Record<string, unknown>;
+  learnings: Record<string, unknown>;
   appleSpike: Record<string, unknown>;
 };
 
@@ -66,11 +68,13 @@ describe('preload workflow bridge', () => {
 
     expect(Object.keys(api).sort()).toEqual([
       'appleSpike',
+      'conversations',
       'friday',
       'health',
       'imports',
       'leadDetail',
       'leads',
+      'learnings',
       'pipeline',
       'review',
       'today',
@@ -92,6 +96,12 @@ describe('preload workflow bridge', () => {
     ]);
     expect(Object.keys(api.imports).sort()).toEqual([
       'commit', 'preview', 'remap', 'status',
+    ]);
+    expect(Object.keys(api.conversations).sort()).toEqual([
+      'attachTranscript', 'get', 'list',
+    ]);
+    expect(Object.keys(api.learnings).sort()).toEqual([
+      'addEvidence', 'capture', 'list', 'updateStatus',
     ]);
   });
 

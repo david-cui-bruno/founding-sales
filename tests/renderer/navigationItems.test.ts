@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { navigationItems } from '../../src/renderer/app/navigationItems';
 
 describe('navigationItems', () => {
-  it('keeps the exact entries and order the NavigationRail shipped with', () => {
+  it('keeps the exact entries and order with every workspace enabled', () => {
     expect(
       navigationItems.map(({ route, label, enabled }) => ({
         route,
@@ -14,8 +14,8 @@ describe('navigationItems', () => {
       { route: 'today', label: 'Today', enabled: true },
       { route: 'leads', label: 'Leads', enabled: true },
       { route: 'pipeline', label: 'Pipeline', enabled: true },
-      { route: 'conversations', label: 'Conversations', enabled: false },
-      { route: 'learnings', label: 'Learnings', enabled: false },
+      { route: 'conversations', label: 'Conversations', enabled: true },
+      { route: 'learnings', label: 'Learnings', enabled: true },
       { route: 'friday', label: 'Friday', enabled: true },
       { route: 'review', label: 'Review', enabled: true },
       { route: 'settings', label: 'Settings', enabled: true },

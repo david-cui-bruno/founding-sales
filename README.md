@@ -63,8 +63,11 @@ fresh `mkdtemp` `--user-data-dir`; production founder data is never read or
 written by tests. Workspace seeding always goes through the real UI import
 flow, never by copying a database or writing SQLite directly.
 
-Conversations and Learnings remain disabled navigation entries with their own
-approved implementation plans; zero-click Apple recording is not exercised by
+Conversations and Learnings are live workspaces. Conversations lists every
+call and voicemail activity and supports manual transcript paste/attach; each
+attach writes an explicit founder consent record, and transcripts stay
+append-only. Learnings stores founder-curated, evidence-backed insights with
+contradiction tracking. Zero-click Apple recording is still not exercised by
 fixture E2E.
 
 The standard packaged E2E command includes an inert Apple smoke test. To run

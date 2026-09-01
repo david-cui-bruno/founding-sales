@@ -73,7 +73,7 @@ describe('AppShell', () => {
     ).toBe('#main-content');
   });
 
-  it('keeps unbuilt destinations visible but disabled', () => {
+  it('navigates to Conversations and Learnings now that they are live', () => {
     const onNavigate = vi.fn();
     render(
       <AppShell route="today" onNavigate={onNavigate} reviewCount={0}>
@@ -83,11 +83,13 @@ describe('AppShell', () => {
 
     for (const name of ['Conversations', 'Learnings']) {
       const link = screen.getByRole('link', { name });
-      expect(link.getAttribute('aria-disabled')).toBe('true');
+      expect(link.getAttribute('aria-disabled')).toBeNull();
       fireEvent.click(link);
     }
 
-    expect(onNavigate).not.toHaveBeenCalled();
+    expect(onNavigate).toHaveBeenCalledTimes(2);
+    expect(onNavigate).toHaveBeenNthCalledWith(1, 'conversations');
+    expect(onNavigate).toHaveBeenNthCalledWith(2, 'learnings');
   });
 
   it('omits the review badge when nothing awaits review', () => {
