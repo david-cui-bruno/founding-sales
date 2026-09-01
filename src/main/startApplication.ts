@@ -28,11 +28,18 @@ import { HealthService } from './health/healthService';
 import { registerApplicationIpc } from './ipc/registerApplicationIpc';
 import type { SourcingProvider } from './sourcing/registerSourcingIpc';
 import {
+  createFileSystemInboxObjectStore,
   createS3InboxObjectStore,
   InboxClient,
 } from './sourcing/inboxClient';
 import { SourcingCredentialStore } from './sourcing/sourcingCredentialStore';
+import { SourcingHmacSaltStore } from './sourcing/sourcingHmacSaltStore';
 import { SourcingPoller, type PollTimer } from './sourcing/sourcingPoller';
+import {
+  createS3UpstreamObjectStore,
+  UpstreamSync,
+  type UpstreamObjectStore,
+} from './sourcing/upstreamSync';
 import { safeStorage } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
@@ -104,14 +111,50 @@ function createProductionSourcingPoller(
     clock: domainClock,
     log: (message) => console.info(`[sourcing] ${message}`),
   });
+  const hmacSaltStore = new SourcingHmacSaltStore({
+    safeStorage,
+    envelopePath: join(userDataPath, 'callie.sourcing-hmac-salt.json'),
+    clock: domainClock,
+  });
+  const upstreamSync = new UpstreamSync({
+    domainGate: runtime,
+    loadHmacSalt: () => hmacSaltStore.load(),
+    clock: domainClock,
+  });
+  // TEST-ONLY escape hatch for the packaged E2E: when
+  // CALLIE_SOURCING_FIXTURE_DIR points at a local directory, the poller
+  // reads `events/**.ndjson` fixture files from that directory instead of
+  // S3 and discards upstream uploads. Real launches never set this variable;
+  // it exists so the fixture-driven spec can exercise the full poll ->
+  // intake -> score pipeline without credentials or network.
+  const fixtureDirectory = process.env.CALLIE_SOURCING_FIXTURE_DIR ?? null;
   return new SourcingPoller({
     domainGate: runtime,
-    loadCredentials: () => credentialStore.load(),
+    loadCredentials: fixtureDirectory === null
+      ? () => credentialStore.load()
+      : async () => ({
+        credentials: { accessKeyId: 'fixture', secretAccessKey: 'fixture' },
+        source: 'file',
+      }),
     createInboxClient: async (loaded) => {
-      const store = await createS3InboxObjectStore({
-        credentialProvider: async () => loaded.credentials,
-      });
+      const store = fixtureDirectory !== null
+        ? createFileSystemInboxObjectStore(fixtureDirectory)
+        : await createS3InboxObjectStore({
+          credentialProvider: async () => loaded.credentials,
+        });
       return new InboxClient({ store, clock: domainClock });
+    },
+    upstream: {
+      sync: upstreamSync,
+      createStore: async (loaded): Promise<UpstreamObjectStore> => (
+        fixtureDirectory !== null
+          ? { putObjectText: async () => undefined }
+          : createS3UpstreamObjectStore({
+            credentialProvider: async () => loaded.credentials,
+          })
+      ),
+      saltState: () => hmacSaltStore.state(),
+      setSalt: (salt) => hmacSaltStore.set(salt),
     },
     clock: domainClock,
     log: (message) => console.info(`[sourcing] ${message}`),
@@ -238,6 +281,10 @@ export async function startApplication(
           return startedPoller.getStatus();
         },
         status: () => startedPoller.getStatus(),
+        setHmacSalt: async ({ salt }) => {
+          await startedPoller.setHmacSalt(salt);
+          return startedPoller.getStatus();
+        },
       },
     );
     throwIfStartupCancelled(options.signal);

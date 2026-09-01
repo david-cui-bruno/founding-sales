@@ -195,6 +195,11 @@ if (!started && ownsSingleInstanceLock) {
         ),
         // Packaged E2E launches with --use-mock-keychain; never auto-poll the
         // real inbox from a test workspace. Manual pollNow stays available.
+        // TEST-ONLY: the packaged sourcing E2E also sets
+        // CALLIE_SOURCING_FIXTURE_DIR so sourcing.pollNow reads ndjson
+        // fixtures from that local directory instead of S3 (see
+        // startApplication.createProductionSourcingPoller). Real launches
+        // never set that variable.
         sourcingPollingEnabled: !app.commandLine.hasSwitch('use-mock-keychain'),
         isTrustedRendererUrl: rendererTrust.isTrustedRendererUrl,
         signal,

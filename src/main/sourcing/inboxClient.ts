@@ -199,6 +199,48 @@ export function createFileInboxCredentialProvider(
 // ---------------------------------------------------------------------------
 
 /**
+ * TEST-ONLY filesystem `InboxObjectStore` for the packaged E2E fixture path
+ * (main.ts: CALLIE_SOURCING_FIXTURE_DIR). Object keys map to files under the
+ * root directory (`events/2026-09-01/a.ndjson` -> `<root>/events/...`), and
+ * listing walks the `events/` tree recursively in lexicographic order with
+ * the same strictly-after cursor semantics as S3 ListObjectsV2.
+ */
+export function createFileSystemInboxObjectStore(
+  rootDirectory: string,
+): InboxObjectStore {
+  return {
+    async listKeys({ prefix, startAfter }) {
+      const { readdir } = await import('node:fs/promises');
+      const { join, relative, sep } = await import('node:path');
+      const base = join(rootDirectory, prefix);
+      let keys: string[] = [];
+      try {
+        const entries = await readdir(base, {
+          recursive: true,
+          withFileTypes: true,
+        });
+        keys = entries
+          .filter((entry) => entry.isFile() && entry.name.endsWith('.ndjson'))
+          .map((entry) => {
+            const absolute = join(entry.parentPath, entry.name);
+            return prefix + relative(base, absolute).split(sep).join('/');
+          });
+      } catch {
+        return [];
+      }
+      keys.sort();
+      return startAfter === null
+        ? keys
+        : keys.filter((key) => key > startAfter);
+    },
+    async getObjectText(key) {
+      const { join } = await import('node:path');
+      return readFile(join(rootDirectory, key), 'utf8');
+    },
+  };
+}
+
+/**
  * Production `InboxObjectStore` over `@aws-sdk/client-s3`. Constructed lazily
  * per call site (main process only); throws
  * `InboxCredentialsUnavailableError` when the provider has no key yet.

@@ -105,7 +105,7 @@ describe('preload workflow bridge', () => {
     expect(Object.keys(api.learnings).sort()).toEqual([
       'addEvidence', 'capture', 'list', 'updateStatus',
     ]);
-    expect(Object.keys(api.sourcing).sort()).toEqual(['pollNow', 'status']);
+    expect(Object.keys(api.sourcing).sort()).toEqual(['pollNow', 'setHmacSalt', 'status']);
   });
 
   it('invokes only health:get without arguments for the health probe', async () => {
@@ -158,6 +158,7 @@ describe('preload workflow bridge', () => {
       backlogCount: null as number | null,
       counters: { imported: 0, needsIdentity: 0, scoreUpdates: 0, quarantined: 0 },
       credentialState: 'none',
+      hmacSaltState: 'none',
     };
     electron.invoke.mockResolvedValue(sourcingStatus);
     const api = exposedApi();

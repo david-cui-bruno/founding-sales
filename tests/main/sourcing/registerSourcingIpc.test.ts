@@ -33,6 +33,7 @@ const status: SourcingStatus = {
   backlogCount: 0,
   counters: { imported: 2, needsIdentity: 1, scoreUpdates: 0, quarantined: 0 },
   credentialState: 'keychain',
+  hmacSaltState: 'none',
 };
 
 describe('registerSourcingIpc', () => {
@@ -44,13 +45,15 @@ describe('registerSourcingIpc', () => {
     provider = {
       pollNow: vi.fn(async () => status),
       status: vi.fn(async () => status),
+      setHmacSalt: vi.fn(async () => ({ ...status, hmacSaltState: 'set' as const })),
     };
     registerSourcingIpc(provider);
   });
 
-  it('registers exactly the two sourcing channels', () => {
+  it('registers exactly the three sourcing channels', () => {
     expect(electron.handle.mock.calls.map((call) => call[0]).sort()).toEqual([
       'sourcing:poll-now',
+      'sourcing:set-hmac-salt',
       'sourcing:status',
     ]);
   });
@@ -72,6 +75,18 @@ describe('registerSourcingIpc', () => {
     await expect(statusHandler(trustedEvent, { extra: true })).rejects.toThrow();
   });
 
+  it('stores the pasted HMAC salt and returns the refreshed status', async () => {
+    const saltHandler = registeredIpcHandler(electron.handle, 'sourcing:set-hmac-salt');
+
+    await expect(saltHandler(trustedEvent, { salt: 'shared-salt' })).resolves.toEqual({
+      ...status,
+      hmacSaltState: 'set',
+    });
+    expect(provider.setHmacSalt).toHaveBeenCalledWith({ salt: 'shared-salt' });
+    // Blank or padded-to-blank salts never reach the provider.
+    await expect(saltHandler(trustedEvent, { salt: '   ' })).rejects.toThrow();
+  });
+
   it('rejects a malformed provider response', async () => {
     provider.status = vi.fn(async () => ({
       ...status,
@@ -82,7 +97,7 @@ describe('registerSourcingIpc', () => {
     await expect(statusHandler(trustedEvent)).rejects.toThrow();
   });
 
-  it('unregisters both channels exactly once', () => {
+  it('unregisters all channels exactly once', () => {
     electron.handle.mockReset();
     const unregister = registerSourcingIpc(provider);
     unregister();
@@ -90,6 +105,6 @@ describe('registerSourcingIpc', () => {
 
     expect(
       electron.removeHandler.mock.calls.map((call) => call[0]).sort(),
-    ).toEqual(['sourcing:poll-now', 'sourcing:status']);
+    ).toEqual(['sourcing:poll-now', 'sourcing:set-hmac-salt', 'sourcing:status']);
   });
 });

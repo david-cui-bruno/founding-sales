@@ -1,5 +1,7 @@
 import {
+  setHmacSaltRequestSchema,
   sourcingStatusSchema,
+  type SetHmacSaltRequest,
   type SourcingStatus,
 } from '../../shared/contracts/sourcingContract';
 import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
@@ -7,11 +9,12 @@ import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
 export type SourcingProvider = {
   pollNow(): Promise<SourcingStatus>;
   status(): Promise<SourcingStatus>;
+  setHmacSalt(input: SetHmacSaltRequest): Promise<SourcingStatus>;
 };
 
 /**
- * Registers exactly the two strict sourcing channels and returns one
- * idempotent unregister function that removes both.
+ * Registers exactly the three strict sourcing channels and returns one
+ * idempotent unregister function that removes all of them.
  */
 export function registerSourcingIpc(
   provider: SourcingProvider,
@@ -30,6 +33,13 @@ export function registerSourcingIpc(
       requestSchema: null,
       responseSchema: sourcingStatusSchema,
       handler: () => provider.status(),
+      isTrustedRendererUrl,
+    }),
+    registerValidatedIpc({
+      channel: 'sourcing:set-hmac-salt',
+      requestSchema: setHmacSaltRequestSchema,
+      responseSchema: sourcingStatusSchema,
+      handler: (request) => provider.setHmacSalt(request),
       isTrustedRendererUrl,
     }),
   ];

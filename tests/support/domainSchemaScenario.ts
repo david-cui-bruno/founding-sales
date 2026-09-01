@@ -211,7 +211,7 @@ function runDatabaseScenario(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
         ).get(),
-        { schema_version: 6 },
+        { schema_version: 7 },
       );
       const actualTables = raw.prepare<string[], { name: string }>(`
         SELECT name FROM sqlite_master

@@ -203,6 +203,19 @@ type StoredImportPreview = {
   sourceName: string;
 };
 
+/**
+ * One unflushed outcome-outbox row (plan Task 4). Enums, ids, and
+ * timestamps only: this shape feeds the strict upstream upload schema.
+ */
+export type CloudOutcomeRow = {
+  id: string;
+  cloudEntityId: string;
+  label: 'interviewed' | 'offered' | 'won' | 'lost' | 'override';
+  lossReasonCode: string | null;
+  overrideDirection: 'up' | 'down' | null;
+  observedAt: string;
+};
+
 const LANE_MAP: Readonly<Record<TodayLane, TodayLaneId>> = Object.freeze({
   won_onboarding: 'onboarding',
   inbound_interrupt: 'fresh_inbound',
@@ -2007,6 +2020,180 @@ export class FounderSalesDomain {
       });
     }
     return result;
+  }
+
+  /**
+   * Applies a scorer re-emission to the prospect that the original intake
+   * created, located through the `cloud:<idempotency_key>` receipt. Unknown
+   * receipts return false so the poller can count-and-skip; stale
+   * scores_version replays are no-ops (idempotent by design).
+   */
+  applyCloudScoreUpdate(input: {
+    receiptKey: string;
+    scoresVersion: number;
+    fit: number;
+    timing: number;
+    reasons: readonly { signal: string; contribution: number }[];
+  }): boolean {
+    const parsed = z.object({
+      receiptKey: z.string().min(1),
+      scoresVersion: z.number().int().min(1),
+      fit: z.number().min(0).max(100),
+      timing: z.number().min(0).max(100),
+      reasons: z.array(z.object({
+        signal: z.string().min(1),
+        contribution: z.number(),
+      }).strict()).min(1).max(3),
+    }).strict().parse(input);
+    const receipt = this.database.raw.prepare(
+      'SELECT prospect_id FROM source_intake_receipts WHERE source_event_id = ?',
+    ).get(parsed.receiptKey) as { prospect_id: string } | undefined;
+    if (receipt === undefined) return false;
+    const now = this.clock.now();
+    this.services.unitOfWork.immediate(() => {
+      this.database.raw.prepare(`
+        UPDATE prospects SET
+          cloud_fit = ?,
+          cloud_timing = ?,
+          cloud_score_reasons_json = ?,
+          cloud_scores_version = ?,
+          cloud_scored_at = ?,
+          updated_at = ?
+        WHERE id = ?
+          AND (cloud_scores_version IS NULL OR cloud_scores_version < ?)
+      `).run(
+        Math.round(parsed.fit),
+        Math.round(parsed.timing),
+        JSON.stringify(parsed.reasons),
+        parsed.scoresVersion,
+        now,
+        now,
+        receipt.prospect_id,
+        parsed.scoresVersion,
+      );
+    });
+    return true;
+  }
+
+  /**
+   * Sweeps immutable stage events for linked persons into the outcome
+   * outbox and returns the unflushed rows. The deterministic row id
+   * `stage:<stage_event_id>` makes the sweep idempotent, and because stage
+   * events are append-only this is exactly "enqueue on transition" for
+   * every code path that can reach Interviewed/Offered/Won/Lost.
+   */
+  listUnflushedCloudOutcomes(): CloudOutcomeRow[] {
+    this.services.unitOfWork.immediate(() => {
+      this.database.raw.prepare(`
+        INSERT OR IGNORE INTO sourcing_outcome_outbox (
+          id, cloud_entity_id, label, loss_reason_code, override_direction,
+          observed_at, flushed_at
+        )
+        SELECT
+          'stage:' || event.id,
+          link.cloud_entity_id,
+          CASE event.to_stage WHEN 'lost_nurture' THEN 'lost' ELSE event.to_stage END,
+          CASE WHEN event.to_stage = 'lost_nurture' THEN cycle.close_reason ELSE NULL END,
+          NULL,
+          event.effective_at,
+          NULL
+        FROM stage_events AS event
+        JOIN sales_cycles AS cycle ON cycle.id = event.sales_cycle_id
+        JOIN cloud_entity_links AS link ON link.person_id = cycle.person_id
+        WHERE event.to_stage IN ('interviewed', 'offered', 'won', 'lost_nurture')
+      `).run();
+    });
+    const rows = this.database.raw.prepare(`
+      SELECT id, cloud_entity_id, label, loss_reason_code, override_direction,
+        observed_at
+      FROM sourcing_outcome_outbox
+      WHERE flushed_at IS NULL
+      ORDER BY observed_at ASC, id ASC
+    `).all() as Array<{
+      id: string; cloud_entity_id: string; label: string;
+      loss_reason_code: string | null; override_direction: string | null;
+      observed_at: string;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      cloudEntityId: row.cloud_entity_id,
+      label: row.label as CloudOutcomeRow['label'],
+      lossReasonCode: row.loss_reason_code,
+      overrideDirection: row.override_direction as CloudOutcomeRow['overrideDirection'],
+      observedAt: row.observed_at,
+    }));
+  }
+
+  /** Marks uploaded outbox rows flushed with the injected clock. */
+  markCloudOutcomesFlushed(input: { ids: readonly string[] }): void {
+    const ids = z.array(z.string().min(1)).parse(input.ids);
+    if (ids.length === 0) return;
+    const now = this.clock.now();
+    this.services.unitOfWork.immediate(() => {
+      const update = this.database.raw.prepare(
+        'UPDATE sourcing_outcome_outbox SET flushed_at = ? WHERE id = ? AND flushed_at IS NULL',
+      );
+      for (const id of ids) update.run(now, id);
+    });
+  }
+
+  /**
+   * Membership snapshot for the upstream upload: every linked cloud entity
+   * ID plus the normalized contact handles of manually-added persons (those
+   * WITHOUT a cloud entity link). Handles leave this process only as salted
+   * HMACs; the caller (upstreamSync) hashes them.
+   */
+  listCloudMembership(): {
+    cloudEntityIds: string[];
+    manualContacts: { kind: 'phone' | 'email'; normalizedValue: string }[];
+  } {
+    const cloudEntityIds = (this.database.raw.prepare(
+      'SELECT cloud_entity_id FROM cloud_entity_links ORDER BY cloud_entity_id ASC',
+    ).all() as { cloud_entity_id: string }[]).map((row) => row.cloud_entity_id);
+    const manualContacts = (this.database.raw.prepare(`
+      SELECT DISTINCT contact.kind, contact.normalized_value
+      FROM person_contact_methods AS contact
+      WHERE NOT EXISTS (
+        SELECT 1 FROM cloud_entity_links AS link
+        WHERE link.person_id = contact.person_id
+      )
+      ORDER BY contact.kind ASC, contact.normalized_value ASC
+    `).all() as { kind: 'phone' | 'email'; normalized_value: string }[])
+      .map((row) => ({ kind: row.kind, normalizedValue: row.normalized_value }));
+    return { cloudEntityIds, manualContacts };
+  }
+
+  /**
+   * Founder "wrong signal" control: log-only override row in the outcome
+   * outbox. Never changes any local score.
+   */
+  enqueueCloudScoreOverride(input: {
+    personId: string;
+    direction: 'up' | 'down';
+  }): MutationReceipt {
+    const parsed = z.object({
+      personId: z.string().min(1),
+      direction: z.enum(['up', 'down']),
+    }).strict().parse(input);
+    const link = this.database.raw.prepare(
+      'SELECT cloud_entity_id FROM cloud_entity_links WHERE person_id = ?',
+    ).get(parsed.personId) as { cloud_entity_id: string } | undefined;
+    if (link === undefined) {
+      throw new FounderSalesDomainError(
+        'LEAD_NOT_FOUND',
+        'The person has no cloud entity link, so there is no score to override.',
+      );
+    }
+    const now = this.clock.now();
+    return this.services.unitOfWork.immediate(() => {
+      this.database.raw.prepare(`
+        INSERT INTO sourcing_outcome_outbox (
+          id, cloud_entity_id, label, loss_reason_code, override_direction,
+          observed_at, flushed_at
+        ) VALUES (?, ?, 'override', NULL, ?, ?, NULL)
+      `).run(this.ids.next(), link.cloud_entity_id, parsed.direction, now);
+      return this.receipt([parsed.personId], []);
+    });
   }
 
   // -------------------------------------------------------------- support

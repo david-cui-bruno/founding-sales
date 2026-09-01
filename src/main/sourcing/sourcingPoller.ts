@@ -20,10 +20,12 @@ import type { Clock } from '../domain/support/clock';
 import type {
   SourcingCounters,
   SourcingCredentialState,
+  SourcingHmacSaltState,
   SourcingStatus,
 } from '../../shared/contracts/sourcingContract';
 import type { InboxBatch } from './inboxClient';
 import type { LoadedSourcingCredentials } from './sourcingCredentialStore';
+import type { UpstreamObjectStore, UpstreamSync } from './upstreamSync';
 import { mapCloudSourceEvent } from './intakeMapper';
 
 /** The subset of the inbox client the poller drives; injected for tests. */
@@ -54,6 +56,14 @@ export class SourcingPoller {
   private readonly createInboxClient: (
     credentials: LoadedSourcingCredentials,
   ) => Promise<PollableInbox>;
+  private readonly upstream: {
+    sync: UpstreamSync;
+    createStore: (
+      credentials: LoadedSourcingCredentials,
+    ) => Promise<UpstreamObjectStore>;
+    saltState: () => Promise<SourcingHmacSaltState>;
+    setSalt: (salt: string) => Promise<void>;
+  } | undefined;
   private readonly clock: Clock;
   private readonly log: (message: string) => void;
 
@@ -77,12 +87,26 @@ export class SourcingPoller {
     createInboxClient: (
       credentials: LoadedSourcingCredentials,
     ) => Promise<PollableInbox>;
+    /**
+     * Optional Task 4 upstream leg. When present, every successful poll ends
+     * with a membership upload plus an outcome-outbox flush over a store
+     * built from the same credentials.
+     */
+    upstream?: {
+      sync: UpstreamSync;
+      createStore: (
+        credentials: LoadedSourcingCredentials,
+      ) => Promise<UpstreamObjectStore>;
+      saltState: () => Promise<SourcingHmacSaltState>;
+      setSalt: (salt: string) => Promise<void>;
+    };
     clock: Clock;
     log?: (message: string) => void;
   }) {
     this.domainGate = input.domainGate;
     this.loadCredentials = input.loadCredentials;
     this.createInboxClient = input.createInboxClient;
+    this.upstream = input.upstream;
     this.clock = input.clock;
     this.log = input.log ?? (() => undefined);
   }
@@ -134,6 +158,14 @@ export class SourcingPoller {
         this.credentialState = 'none';
       }
     }
+    let hmacSaltState: SourcingHmacSaltState = 'none';
+    if (this.upstream !== undefined) {
+      try {
+        hmacSaltState = await this.upstream.saltState();
+      } catch {
+        hmacSaltState = 'none';
+      }
+    }
     const cursor = await this.domainGate.withDomain(
       (domain) => domain.getSourcingCursor(),
     );
@@ -143,6 +175,7 @@ export class SourcingPoller {
       backlogCount: this.backlogCount,
       counters: { ...this.counters },
       credentialState: this.credentialState,
+      hmacSaltState,
     };
   }
 
@@ -151,6 +184,14 @@ export class SourcingPoller {
       consecutiveFailures: this.consecutiveFailures,
       lastFailureAt: this.lastFailureAt,
     };
+  }
+
+  /** Stores the founder-pasted membership HMAC salt (Task 4). */
+  async setHmacSalt(salt: string): Promise<void> {
+    if (this.upstream === undefined) {
+      throw new Error('Upstream sync is not configured; the salt has nowhere to live.');
+    }
+    await this.upstream.setSalt(salt);
   }
 
   private async runPoll(): Promise<void> {
@@ -186,6 +227,20 @@ export class SourcingPoller {
       await this.domainGate.withDomain((domain) => {
         domain.recordSourcingPoll({ lastKey: cursor.lastKey });
       });
+    }
+
+    // Task 4 upstream leg: membership + outcome flush after the inbox is
+    // drained. An AccessDenied (IAM PutObject on upstream/* may lag the app)
+    // is logged and retried next poll; nothing was marked flushed.
+    if (this.upstream !== undefined) {
+      try {
+        const store = await this.upstream.createStore(loaded);
+        await this.upstream.sync.run(store);
+      } catch (error) {
+        this.log(
+          `sourcing upstream sync failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
     this.consecutiveFailures = 0;
   }

@@ -128,6 +128,7 @@ describe('SourcingPoller', () => {
       backlogCount: null,
       counters: { imported: 0, needsIdentity: 0, scoreUpdates: 0, quarantined: 0 },
       credentialState: 'none',
+      hmacSaltState: 'none',
     });
     expect(inbox.listNewObjects).not.toHaveBeenCalled();
   });
@@ -173,6 +174,7 @@ describe('SourcingPoller', () => {
       backlogCount: 0,
       counters: { imported: 1, needsIdentity: 1, scoreUpdates: 1, quarantined: 1 },
       credentialState: 'keychain',
+      hmacSaltState: 'none',
     });
   });
 
@@ -280,5 +282,69 @@ describe('SourcingPoller', () => {
 
     poller.stop();
     expect(tick).toBeUndefined();
+  });
+
+  it('runs the upstream sync after draining the inbox and surfaces the salt state', async () => {
+    const domain = fakeDomainGate();
+    const run = vi.fn(async () => ({ membershipUploaded: true, outcomesFlushed: 1 }));
+    const store = { putObjectText: vi.fn(async () => undefined) };
+    const poller = new SourcingPoller({
+      domainGate: domain.gate,
+      loadCredentials: async () => ({
+        credentials: { accessKeyId: 'AKIA', secretAccessKey: 'secret' },
+        source: 'keychain',
+      }),
+      createInboxClient: async () => ({
+        listNewObjects: async () => [],
+        fetchNdjson: async () => batch('unused', []),
+      }),
+      upstream: {
+        sync: { run } as never,
+        createStore: async () => store,
+        saltState: async () => 'set',
+        setSalt: async () => undefined,
+      },
+      clock: { now: () => NOW },
+    });
+
+    await poller.pollNow();
+    const status = await poller.getStatus();
+
+    expect(run).toHaveBeenCalledWith(store);
+    expect(status.hmacSaltState).toBe('set');
+    expect(poller.getHealth().consecutiveFailures).toBe(0);
+  });
+
+  it('keeps the poll healthy when the upstream upload is denied', async () => {
+    const domain = fakeDomainGate();
+    const logged: string[] = [];
+    const poller = new SourcingPoller({
+      domainGate: domain.gate,
+      loadCredentials: async () => ({
+        credentials: { accessKeyId: 'AKIA', secretAccessKey: 'secret' },
+        source: 'keychain',
+      }),
+      createInboxClient: async () => ({
+        listNewObjects: async () => [],
+        fetchNdjson: async () => batch('unused', []),
+      }),
+      upstream: {
+        sync: {
+          run: async () => {
+            throw new Error('AccessDenied');
+          },
+        } as never,
+        createStore: async () => ({ putObjectText: async () => undefined }),
+        saltState: async () => 'none',
+        setSalt: async () => undefined,
+      },
+      clock: { now: () => NOW },
+      log: (message) => logged.push(message),
+    });
+
+    await poller.pollNow();
+
+    expect(poller.getHealth().consecutiveFailures).toBe(0);
+    expect(logged.join('\n')).toContain('AccessDenied');
   });
 });

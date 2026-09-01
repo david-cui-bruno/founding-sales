@@ -227,9 +227,11 @@ function createIdleSourcingProvider(): SourcingProvider {
     backlogCount: null,
     counters: { imported: 0, needsIdentity: 0, scoreUpdates: 0, quarantined: 0 },
     credentialState: 'none',
+    hmacSaltState: 'none',
   };
   return {
     pollNow: async () => idleStatus,
     status: async () => idleStatus,
+    setHmacSalt: async () => idleStatus,
   };
 }
