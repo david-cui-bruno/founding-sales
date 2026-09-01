@@ -6,6 +6,7 @@ import { ImportDialog } from '../features/import/ImportDialog';
 import { LeadInspectorProvider } from '../features/leadInspector/LeadInspectorProvider';
 import { useLeadInspector } from '../features/leadInspector/useLeadInspector';
 import { AppShell } from './AppShell';
+import { CommandPalette } from './commandPalette/CommandPalette';
 import { renderRoute } from './routeRegistry';
 import type { AppRoute } from './routes';
 import { useHashRoute } from './useHashRoute';
@@ -52,6 +53,10 @@ function FounderWorkspace({ api, health, initialRoute }: FounderAppProps) {
           })}
         </div>
       </AppShell>
+      <CommandPalette
+        navigate={routing.navigate}
+        openImport={() => setImportOpen(true)}
+      />
       {importOpen && (
         <ImportDialog
           api={api.imports}
