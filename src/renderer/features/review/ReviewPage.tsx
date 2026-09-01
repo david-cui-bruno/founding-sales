@@ -6,6 +6,7 @@ import type {
   ReviewSnapshot,
 } from '../../../shared/contracts/reviewContract';
 import { Button } from '../../components/Button';
+import { PageHeader } from '../../components/PageHeader';
 import { ReviewDetailPanel } from './ReviewDetailPanel';
 import { ReviewQueue } from './ReviewQueue';
 import { ReviewTabs } from './ReviewTabs';
@@ -66,6 +67,10 @@ export function ReviewPage({
 
   return (
     <div className="review">
+      <PageHeader
+        title="Review"
+        count={`${snapshot.totalOpenCount} open`}
+      />
       {systemErrors.length > 0 && (
         <div className="review__system-alert" role="alert">
           <strong>System errors need attention.</strong>

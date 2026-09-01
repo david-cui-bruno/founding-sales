@@ -39,16 +39,7 @@
   gap: var(--space-2);
   align-items: center;
   color: var(--muted);
-  font-size: 13px;
-}
-
-.leads-toolbar__sort select {
-  height: var(--control-height);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
+  font-size: var(--text-dense);
 }
 
 .leads-toolbar__bulk {
@@ -178,11 +169,13 @@
 .leads-grid__col--fit,
 .leads-grid__col--timing {
   flex: 0 0 110px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Wide enough for "Fit 100 · Timing 100" without truncation. */
 .leads-grid__col--cloudScores {
   flex: 0 0 160px;
+  font-variant-numeric: tabular-nums;
 }
 
 .leads-grid__col--nextAction {
@@ -191,6 +184,7 @@
 
 .leads-grid__col--lastActivity {
   flex: 0 0 110px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Cells */
@@ -226,8 +220,7 @@
 }
 
 .leads-grid__absent {
-  color: var(--muted);
-  opacity: 0.7;
+  color: var(--text-faint);
 }
 
 .leads-grid__check {
@@ -263,6 +256,7 @@
   background: var(--accent-soft);
   color: var(--accent-strong);
   font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
   line-height: 1.6;
   white-space: nowrap;
 }

@@ -3,6 +3,7 @@ import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorState } from '../../components/ErrorState';
 import { LoadingState } from '../../components/LoadingState';
+import { PageHeader } from '../../components/PageHeader';
 import { LeadsGrid } from './LeadsGrid';
 import { LeadsToolbar } from './LeadsToolbar';
 import type { LeadGridState } from './useLeadGridState';
@@ -23,7 +24,10 @@ export type LeadsPageProps = {
   onBulkSetOrganization(value: string | null): void;
 };
 
-/** Presentational Leads workspace: toolbar plus grid plus async states. */
+const formatCount = (total: number): string =>
+  `${total} ${total === 1 ? 'person' : 'people'}`;
+
+/** Presentational Leads workspace: page header plus grid plus async states. */
 export function LeadsPage({
   view,
   state,
@@ -40,16 +44,21 @@ export function LeadsPage({
 
   return (
     <section className="leads-page" aria-label="Leads">
-      <LeadsToolbar
-        query={state.query}
-        onQueryChange={state.setQuery}
-        sort={state.sort}
-        onSortChange={state.setSort}
-        checkedCount={state.checkedPersonIds.size}
-        onBulkSetOrganization={onBulkSetOrganization}
-        onClearChecked={state.clearChecked}
-        onOpenImport={onOpenImport}
-      />
+      <PageHeader
+        title="Leads"
+        count={view.status === 'ready' ? formatCount(view.total) : undefined}
+        primaryAction={<Button onClick={onOpenImport}>Import</Button>}
+      >
+        <LeadsToolbar
+          query={state.query}
+          onQueryChange={state.setQuery}
+          sort={state.sort}
+          onSortChange={state.setSort}
+          checkedCount={state.checkedPersonIds.size}
+          onBulkSetOrganization={onBulkSetOrganization}
+          onClearChecked={state.clearChecked}
+        />
+      </PageHeader>
       {view.status === 'loading' && <LoadingState label="Loading leads" />}
       {view.status === 'failed' && (
         <ErrorState

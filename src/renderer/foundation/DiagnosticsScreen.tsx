@@ -54,7 +54,7 @@ export const DiagnosticsScreen = ({
   </main>
 );
 
-const HealthDetails = ({ health }: { health: AppHealth }) => (
+export const HealthDetails = ({ health }: { health: AppHealth }) => (
   <section aria-label="Foundation health">
     <p className="diagnostics__status" role="status">
       Encrypted SQLite ready

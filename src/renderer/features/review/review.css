@@ -36,7 +36,6 @@
   color: var(--muted);
   font: inherit;
   font-weight: 600;
-  cursor: pointer;
 }
 
 .review__tab[aria-selected='true'] {
@@ -87,7 +86,6 @@
   color: var(--text);
   font: inherit;
   text-align: left;
-  cursor: pointer;
 }
 
 .review-item__button[aria-pressed='true'] {

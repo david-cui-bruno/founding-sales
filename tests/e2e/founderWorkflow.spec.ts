@@ -78,14 +78,23 @@ test('light/dark and density preferences survive renderer reload', async () => {
     const { page } = workspace;
     await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 
-    const before = await page.evaluate(() => {
-      localStorage.setItem('callie.theme', 'dark');
-      localStorage.setItem('callie.density', 'compact');
-      return {
-        theme: localStorage.getItem('callie.theme'),
-        density: localStorage.getItem('callie.density'),
-      };
-    });
+    // Theme and density controls now live in Settings → Appearance.
+    await page.getByRole('link', { name: 'Settings' }).click();
+    const appearance = page.getByRole('region', { name: 'Appearance' });
+    await appearance.getByRole('button', { name: 'Dark appearance' }).click();
+    await appearance.getByRole('button', { name: 'Compact density' }).click();
+
+    await expect(
+      appearance.getByRole('button', { name: 'Dark appearance' }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    await expect(
+      appearance.getByRole('button', { name: 'Compact density' }),
+    ).toHaveAttribute('aria-pressed', 'true');
+
+    const before = await page.evaluate(() => ({
+      theme: localStorage.getItem('callie.theme'),
+      density: localStorage.getItem('callie.density'),
+    }));
     expect(before).toEqual({ theme: 'dark', density: 'compact' });
 
     await page.reload();
@@ -94,8 +103,15 @@ test('light/dark and density preferences survive renderer reload', async () => {
     const after = await page.evaluate(() => ({
       theme: localStorage.getItem('callie.theme'),
       density: localStorage.getItem('callie.density'),
+      resolvedTheme: document.documentElement.dataset.theme,
+      resolvedDensity: document.documentElement.dataset.density,
     }));
-    expect(after).toEqual({ theme: 'dark', density: 'compact' });
+    expect(after).toEqual({
+      theme: 'dark',
+      density: 'compact',
+      resolvedTheme: 'dark',
+      resolvedDensity: 'compact',
+    });
   } finally {
     await workspace.close();
   }

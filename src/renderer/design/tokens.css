@@ -5,25 +5,58 @@
   --space-3: 12px;
   --space-4: 16px;
   --space-6: 24px;
+
+  /* Radius scale: 6 controls/inputs/chips, 8 cards, 12 dialogs. */
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
-  --font-ui: -apple-system, system-ui, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+  --radius-full: 999px;
+
+  --font-ui: "InterVariable", -apple-system, system-ui, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
-  --text-xs: 11px;
-  --text-sm: 12px;
-  --text-md: 13px;
-  --text-lg: 15px;
-  --text-xl: 20px;
+
+  /* Type scale per the design audit (size / line-height / weight):
+     11/16 500 micro-labels · 12/18 captions · 13/20 dense tables ·
+     14/20 body · 16/24 comfortable · 18/25 600 subheads ·
+     20/26 600 section titles · 24/30 700 page titles. */
+  --text-micro: 11px;
+  --leading-micro: 16px;
+  --text-caption: 12px;
+  --leading-caption: 18px;
+  --text-dense: 13px;
+  --leading-dense: 20px;
+  --text-base: 14px;
+  --leading-base: 20px;
+  --text-comfortable: 16px;
+  --leading-comfortable: 24px;
+  --text-subhead: 18px;
+  --leading-subhead: 25px;
+  --text-section: 20px;
+  --leading-section: 26px;
+  --text-title: 24px;
+  --leading-title: 30px;
+
+  /* Legacy size aliases so existing feature CSS keeps resolving. */
+  --text-xs: var(--text-micro);
+  --text-sm: var(--text-caption);
+  --text-md: var(--text-dense);
+  --text-lg: var(--text-comfortable);
+  --text-xl: var(--text-section);
+
   --weight-body: 400;
   --weight-medium: 500;
-  --weight-heading: 590;
+  --weight-heading: 600;
+  --weight-title: 700;
+
   --grid-row-compact: 32px;
   --grid-row-comfortable: 40px;
   --grid-row: var(--grid-row-comfortable);
   --focus-ring: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
   --nav-rail-width: 216px;
   --control-height: 28px;
+  /* Sidebar header: the macOS drag strip that hosts the traffic lights. */
+  --chrome-header-height: 52px;
 }
 
 [data-density="compact"] {

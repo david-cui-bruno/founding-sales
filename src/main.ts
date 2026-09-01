@@ -54,7 +54,11 @@ const createAndLoadWindow = async (signal?: AbortSignal): Promise<void> => {
     rendererProtocolRegistered = true;
   }
 
-  const mainWindow = createWindow(path.join(__dirname, 'preload.js'));
+  const mainWindow = createWindow(
+    path.join(__dirname, 'preload.js'),
+    process.platform,
+    app.getPath('userData'),
+  );
 
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (!rendererTrust.isTrustedRendererUrl(url)) {

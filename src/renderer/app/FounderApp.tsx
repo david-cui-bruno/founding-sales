@@ -9,7 +9,9 @@ import { AppShell } from './AppShell';
 import { CommandPalette } from './commandPalette/CommandPalette';
 import { renderRoute } from './routeRegistry';
 import type { AppRoute } from './routes';
+import { useDensity } from './useDensity';
 import { useHashRoute } from './useHashRoute';
+import { useTheme } from './useTheme';
 
 export type FounderAppProps = {
   api: CalliePreloadApi;
@@ -32,6 +34,10 @@ export function FounderApp({ api, health, initialRoute }: FounderAppProps) {
 function FounderWorkspace({ api, health, initialRoute }: FounderAppProps) {
   const routing = useHashRoute(initialRoute ?? 'today');
   const inspector = useLeadInspector();
+  // Owned here so <html data-theme/data-density> stays applied on every
+  // route; Settings → Appearance edits this same state through the context.
+  const theme = useTheme();
+  const density = useDensity();
   const [importOpen, setImportOpen] = useState(false);
   const [reviewCount, setReviewCount] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -47,6 +53,8 @@ function FounderWorkspace({ api, health, initialRoute }: FounderAppProps) {
           {renderRoute(routing.route, {
             api,
             health,
+            theme,
+            density,
             openLead: inspector.openLead,
             openImport: () => setImportOpen(true),
             onReviewCountChange: setReviewCount,

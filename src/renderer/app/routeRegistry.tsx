@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 
 import type { CalliePreloadApi } from '../../shared/preload';
 import { AppleSpikePanel } from '../appleSpike/AppleSpikePanel';
-import { DiagnosticsScreen } from '../foundation/DiagnosticsScreen';
+import { SettingsScreen } from '../foundation/SettingsScreen';
 import { SourcingStatusRow } from '../foundation/SourcingStatusRow';
 import type { FoundationHealth } from '../foundation/useFoundationHealth';
 import { ConversationsRoute } from '../features/conversations/ConversationsRoute';
@@ -14,10 +14,14 @@ import { PipelineRoute } from '../features/pipeline/PipelineRoute';
 import { ReviewRoute } from '../features/review/ReviewRoute';
 import { TodayRoute } from '../features/today/TodayRoute';
 import type { AppRoute } from './routes';
+import type { DensityState } from './useDensity';
+import type { ThemeState } from './useTheme';
 
 export type RouteContext = {
   api: CalliePreloadApi;
   health: FoundationHealth;
+  theme: ThemeState;
+  density: DensityState;
   openLead(personId: string): void;
   openImport(): void;
   onReviewCountChange(count: number): void;
@@ -66,17 +70,19 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
       return <FridayRoute api={context.api.friday} onOpenLead={context.openLead} />;
     case 'settings':
       return (
-        <DiagnosticsScreen
+        <SettingsScreen
           state={
             context.health.status === 'ready'
               ? { status: 'ready', health: context.health.health }
               : { status: context.health.status }
           }
           onRetry={context.health.retry}
+          theme={context.theme}
+          density={context.density}
         >
           <SourcingStatusRow api={context.api.sourcing} />
           <AppleSpikePanel api={context.api.appleSpike} />
-        </DiagnosticsScreen>
+        </SettingsScreen>
       );
   }
 }

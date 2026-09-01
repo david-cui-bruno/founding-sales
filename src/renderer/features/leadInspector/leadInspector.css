@@ -98,7 +98,6 @@
   font: inherit;
   font-size: 0.85rem;
   color: var(--muted);
-  cursor: pointer;
 }
 
 .lead-inspector__tab[aria-selected='true'] {
@@ -142,10 +141,8 @@
 
 .lead-inspector__band-title {
   margin: 0 0 var(--space-2, 8px);
-  font-size: 0.78rem;
+  font-size: var(--text-sm);
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--muted);
 }
 

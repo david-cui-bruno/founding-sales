@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react';
 
 import { NavigationRail } from './NavigationRail';
-import { WorkspaceHeader } from './WorkspaceHeader';
 import type { AppRoute } from './routes';
 
 export type AppShellProps = {
@@ -13,7 +12,8 @@ export type AppShellProps = {
 
 /**
  * Route-independent application frame: skip link, fixed navigation rail,
- * workspace header, and the single labelled main content region.
+ * and the single labelled main content region. Route toolbars live in each
+ * route's PageHeader; there is no shared top bar.
  */
 export function AppShell({
   route,
@@ -32,7 +32,6 @@ export function AppShell({
         reviewCount={reviewCount}
       />
       <div className="app-shell__workspace">
-        <WorkspaceHeader />
         <main id="main-content" className="app-shell__main">
           {children}
         </main>

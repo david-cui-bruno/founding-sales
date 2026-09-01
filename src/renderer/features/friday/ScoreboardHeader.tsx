@@ -1,4 +1,5 @@
 import type { FridayReport } from '../../../shared/contracts/fridayContract';
+import { PageHeader } from '../../components/PageHeader';
 
 const day = new Intl.DateTimeFormat('en-US', {
   month: 'short', day: 'numeric', timeZone: 'UTC',
@@ -23,15 +24,17 @@ export type ScoreboardHeaderProps = {
   report: FridayReport;
 };
 
-/** Scoreboard heading with the domain-provided week bounds and as-of time. */
+/** Scoreboard page header with the domain-provided week bounds and as-of time. */
 export function ScoreboardHeader({ report }: ScoreboardHeaderProps) {
   return (
-    <header className="friday__header">
-      <h1 className="friday__title">Friday scoreboard</h1>
-      <p className="friday__period">
-        <span>{formatPeriod(report)}</span>
-        <span className="friday__as-of">{formatAsOf(report)}</span>
-      </p>
-    </header>
+    <PageHeader
+      title="Friday scoreboard"
+      trailing={
+        <p className="friday__period numeric">
+          <span>{formatPeriod(report)}</span>
+          <span className="friday__as-of">{formatAsOf(report)}</span>
+        </p>
+      }
+    />
   );
 }

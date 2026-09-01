@@ -7,25 +7,12 @@
   min-width: 0;
 }
 
-.friday__header {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.friday__title {
-  margin: 0;
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--text);
-}
-
 .friday__period {
   display: flex;
   gap: var(--space-3);
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-dense);
 }
 
 /* Metric tiles stay neutral; only focus uses the sanctioned accent ring. */
@@ -49,7 +36,6 @@
 
 .metric-card--interactive {
   font: inherit;
-  cursor: pointer;
   transition: background var(--motion-fast) var(--motion-ease);
 }
 
@@ -64,15 +50,15 @@
 
 .metric-card__label {
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
 }
 
 .metric-card__value {
-  font-size: 24px;
-  font-weight: 700;
+  font-size: var(--text-title);
+  line-height: var(--leading-title);
+  font-weight: var(--weight-title);
+  font-variant-numeric: tabular-nums;
 }
 
 .metric-card__evidence,
@@ -131,7 +117,6 @@
   font: inherit;
   font-weight: 600;
   text-decoration: underline;
-  cursor: pointer;
 }
 
 .friday-drilldown__open:focus-visible {

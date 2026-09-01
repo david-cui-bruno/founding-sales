@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import type { PipelineSnapshot } from '../../../shared/contracts/pipelineContract';
+import { PageHeader } from '../../components/PageHeader';
 import { PipelineBoard } from './PipelineBoard';
 import { PipelineTable } from './PipelineTable';
 
@@ -20,32 +21,36 @@ const VIEWS: ReadonlyArray<{ id: PipelineView; label: string }> = [
 
 /**
  * Board and table render the exact same snapshot DTO; a local segmented
- * control switches between them. The page exposes no stage commands.
+ * control in the page header switches between them. The page exposes no
+ * stage commands.
  */
 export function PipelinePage({ snapshot, onOpenLead }: PipelinePageProps) {
   const [view, setView] = useState<PipelineView>('board');
 
   return (
     <div className="pipeline">
-      <div className="pipeline__toolbar">
-        <div
-          className="pipeline__view-toggle"
-          role="group"
-          aria-label="Pipeline view"
-        >
-          {VIEWS.map((candidate) => (
-            <button
-              key={candidate.id}
-              type="button"
-              className="pipeline__view-button"
-              aria-pressed={view === candidate.id}
-              onClick={() => setView(candidate.id)}
-            >
-              {candidate.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <PageHeader
+        title="Pipeline"
+        trailing={
+          <div
+            className="pipeline__view-toggle"
+            role="group"
+            aria-label="Pipeline view"
+          >
+            {VIEWS.map((candidate) => (
+              <button
+                key={candidate.id}
+                type="button"
+                className="pipeline__view-button"
+                aria-pressed={view === candidate.id}
+                onClick={() => setView(candidate.id)}
+              >
+                {candidate.label}
+              </button>
+            ))}
+          </div>
+        }
+      />
       {view === 'board' ? (
         <PipelineBoard snapshot={snapshot} onOpenLead={onOpenLead} />
       ) : (

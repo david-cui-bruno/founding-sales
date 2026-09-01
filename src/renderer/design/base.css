@@ -1,19 +1,60 @@
 /* Base element styles and consolidated focus rules for all controls. */
+
+/* Vendored InterVariable: self-hosted, loads offline through the callie
+   protocol; no network fetches. */
+@font-face {
+  font-family: "InterVariable";
+  src: url("./fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 body {
   margin: 0;
   background: var(--canvas);
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: var(--text-md);
+  font-size: var(--text-base);
   font-weight: var(--weight-body);
-  line-height: 1.45;
+  line-height: calc(var(--leading-base) / var(--text-base));
+  font-feature-settings: "liga" 1, "calt" 1, "cv11" 1;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
+  /* Desktop chrome behaves like an app, not a document. */
+  cursor: default;
+}
+
+/* Chrome (buttons, nav, pills) is never text-selectable; content and inputs
+   stay selectable. */
+button,
+.status-pill,
+.status-badge,
+.segmented-control,
+.nav-rail {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 h1, h2, h3 {
   font-weight: var(--weight-heading);
   letter-spacing: -0.01em;
+}
+
+/* Tabular figures wherever numbers align vertically. */
+.numeric {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Micro-label utility: the ONLY sanctioned uppercase treatment, reserved for
+   true table column headers, at step-11 contrast. */
+.micro-label {
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-micro);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 :is(a, button, input, select, textarea, [role="separator"][tabindex]):focus-visible {
@@ -38,21 +79,23 @@ h1, h2, h3 {
   white-space: nowrap;
 }
 
-/* Shared control primitives. Ordinary surfaces stay neutral by design. */
+/* Shared control primitives. Ordinary surfaces stay neutral by design.
+   Buttons keep the default arrow cursor per macOS HIG; pointer is reserved
+   for true external links only. */
 .button {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   height: var(--control-height);
   padding: 0 var(--space-3);
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-interactive);
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
   color: var(--text);
   font: inherit;
-  font-size: var(--text-md);
+  font-size: var(--text-dense);
   font-weight: var(--weight-medium);
-  cursor: pointer;
+  cursor: default;
   transition: background var(--motion-fast) var(--motion-ease),
     border-color var(--motion-fast) var(--motion-ease);
 }
@@ -62,7 +105,7 @@ h1, h2, h3 {
 }
 
 .button:disabled {
-  color: var(--muted);
+  color: var(--text-muted);
   cursor: not-allowed;
   opacity: 0.55;
 }
@@ -88,13 +131,13 @@ h1, h2, h3 {
 }
 
 .button--danger {
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--line-strong));
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line-interactive));
   background: transparent;
   color: var(--danger);
 }
 
 .button--danger:hover:not(:disabled) {
-  background: var(--danger-soft);
+  background: var(--status-danger-bg);
 }
 
 .icon-button {
@@ -107,8 +150,8 @@ h1, h2, h3 {
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted);
-  cursor: pointer;
+  color: var(--text-muted);
+  cursor: default;
 }
 
 .icon-button:hover:not(:disabled) {
@@ -130,12 +173,12 @@ select {
   box-sizing: border-box;
   height: var(--control-height);
   padding: 0 var(--space-2);
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-interactive);
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
   color: var(--text);
   font: inherit;
-  font-size: var(--text-md);
+  font-size: var(--text-dense);
 }
 
 textarea {
@@ -146,7 +189,7 @@ textarea {
 
 input::placeholder,
 textarea::placeholder {
-  color: var(--faint);
+  color: var(--text-faint);
 }
 
 .avatar {
@@ -155,12 +198,14 @@ textarea::placeholder {
   justify-content: center;
   width: 24px;
   height: 24px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--accent-soft);
   color: var(--accent-strong);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: var(--weight-title);
   letter-spacing: 0.02em;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .status-pill {
@@ -171,39 +216,176 @@ textarea::placeholder {
   border: none;
   border-radius: 4px;
   background: var(--surface-sunken);
-  color: var(--muted);
-  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
   font-weight: var(--weight-medium);
   letter-spacing: 0.01em;
   white-space: nowrap;
 }
 
 .status-pill--neutral {
-  color: var(--muted);
+  color: var(--text-muted);
   background: var(--surface-sunken);
 }
 
 /* Accent urgency is reserved for P0 and equally meaningful states. */
 .status-pill--urgent {
   color: var(--danger);
-  background: var(--danger-soft);
+  background: var(--status-danger-bg);
 }
 
 .status-pill--positive {
   color: var(--positive);
-  background: var(--positive-soft);
+  background: var(--status-success-bg);
 }
 
 .status-pill--danger {
   color: var(--danger);
-  background: var(--danger-soft);
+  background: var(--status-danger-bg);
+}
+
+/* Status badge: filled 8px dot plus a neutral label. Dots carry the color;
+   the text stays neutral so status never competes with CTAs. */
+.status-badge {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--text);
+  font-size: var(--text-dense);
+  line-height: var(--leading-dense);
+}
+
+.status-badge__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--text-faint);
+}
+
+.status-badge--success .status-badge__dot {
+  background: var(--status-success-dot);
+}
+
+.status-badge--warning .status-badge__dot {
+  background: var(--status-warning-dot);
+}
+
+.status-badge--danger .status-badge__dot {
+  background: var(--status-danger-dot);
+}
+
+/* Segmented control: radiogroup with an accent-soft selected fill. */
+.segmented-control {
+  display: inline-flex;
+  gap: 1px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+
+.segmented-control__option {
+  display: inline-flex;
+  align-items: center;
+  height: calc(var(--control-height) - 6px);
+  padding: 0 var(--space-3);
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-dense);
+  font-weight: var(--weight-medium);
+  cursor: default;
+}
+
+.segmented-control__option:hover {
+  color: var(--text);
+}
+
+.segmented-control__option[aria-checked="true"] {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+/* Styled select: button trigger plus popover listbox. */
+.select {
+  position: relative;
+  display: inline-flex;
+}
+
+.select__trigger {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  min-width: 120px;
+  height: var(--control-height);
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border: 1px solid var(--line-interactive);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-dense);
+  font-weight: var(--weight-medium);
+  cursor: default;
+}
+
+.select__trigger:hover:not(:disabled) {
+  background: var(--surface-sunken);
+}
+
+.select__chevron {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.select__listbox {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 100%;
+  max-height: 320px;
+  margin: 0;
+  padding: var(--space-1);
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-overlay), var(--inset-highlight);
+}
+
+.select__option {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-1) var(--space-2);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: var(--text-dense);
+  line-height: var(--leading-dense);
+  white-space: nowrap;
+}
+
+.select__option[data-active="true"] {
+  background: color-mix(in srgb, var(--line) 55%, transparent);
+}
+
+.select__option[aria-selected="true"] {
+  color: var(--accent-strong);
+  font-weight: var(--weight-medium);
 }
 
 .panel {
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow), var(--inset-highlight);
 }
 
 .panel__header {
@@ -216,7 +398,7 @@ textarea::placeholder {
 
 .panel__title {
   margin: 0;
-  font-size: var(--text-lg);
+  font-size: var(--text-comfortable);
   font-weight: var(--weight-heading);
 }
 
@@ -237,7 +419,7 @@ textarea::placeholder {
   gap: var(--space-2);
   align-items: center;
   padding: var(--space-6);
-  color: var(--muted);
+  color: var(--text-muted);
   text-align: center;
 }
 
@@ -250,7 +432,7 @@ textarea::placeholder {
 .error-state__title {
   margin: 0;
   color: var(--text);
-  font-size: var(--text-lg);
+  font-size: var(--text-comfortable);
   font-weight: var(--weight-heading);
 }
 

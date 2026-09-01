@@ -5,6 +5,7 @@ import type {
 } from '../../../shared/contracts/conversationsContract';
 import { ErrorState } from '../../components/ErrorState';
 import { LoadingState } from '../../components/LoadingState';
+import { PageHeader } from '../../components/PageHeader';
 import { AttachTranscriptDialog } from './AttachTranscriptDialog';
 import { ConversationDetailPanel } from './ConversationDetail';
 import { ConversationList } from './ConversationList';
@@ -60,7 +61,16 @@ export function ConversationsPage(props: ConversationsPageProps) {
   } = props;
 
   return (
-    <div className="conversations">
+    <div className="conversations-page">
+      <PageHeader
+        title="Conversations"
+        count={
+          listState.kind === 'ready'
+            ? `${listState.total} ${listState.total === 1 ? 'call' : 'calls'}`
+            : undefined
+        }
+      />
+      <div className="conversations">
       <section className="conversations__list-pane" aria-label="Conversations">
         <div className="conversations__controls">
           <input
@@ -124,6 +134,7 @@ export function ConversationsPage(props: ConversationsPageProps) {
           onSubmit={props.onSubmitAttach}
         />
       )}
+      </div>
     </div>
   );
 }

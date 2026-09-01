@@ -29,9 +29,11 @@ export function NavigationRail({
 
   return (
     <nav className="nav-rail" aria-label="Primary">
-      <p className="nav-rail__brand" aria-hidden="true">
-        Callie
-      </p>
+      <div className="nav-rail__header">
+        <p className="nav-rail__brand" aria-hidden="true">
+          Callie
+        </p>
+      </div>
       <ul className="nav-rail__list">
         {navigationItems.map((item) => {
           const Icon = item.icon;

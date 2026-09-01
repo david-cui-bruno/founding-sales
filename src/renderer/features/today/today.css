@@ -14,11 +14,6 @@
   min-width: 0;
 }
 
-.today-route__toolbar {
-  display: flex;
-  justify-content: flex-end;
-}
-
 .today-route__command-error {
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--line);
@@ -96,7 +91,7 @@
 .today-lane__empty {
   margin: 0;
   padding: 0 var(--space-4) var(--space-2);
-  color: var(--faint);
+  color: var(--muted);
   font-size: var(--text-sm);
 }
 
@@ -131,7 +126,6 @@
   color: var(--text);
   font: inherit;
   font-weight: 600;
-  cursor: pointer;
 }
 
 .today-row__person:focus-visible {
@@ -154,11 +148,9 @@
 }
 
 .today-row__band dt {
-  color: var(--faint);
-  font-size: var(--text-xs);
+  color: var(--muted);
+  font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
 }
 
 .today-row__band dd {

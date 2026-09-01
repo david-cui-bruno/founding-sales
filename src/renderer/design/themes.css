@@ -1,59 +1,127 @@
-/* The only files allowed to declare literal colors. Everything else uses vars.
-   Linear-style palette: near-white/near-black neutrals with a faint cool tint,
-   one indigo accent, hairline borders instead of shadows. */
+/* The only file allowed to declare literal colors. Everything else uses vars.
+   Neutrals are a Radix-style 12-step ramp tuned in OKLCH with a faint cool
+   tint (hue 270): step 1 = app canvas, 2 = surface, 3 = sunken surface,
+   6 = non-interactive borders, 7 = interactive borders, 9 = faint text,
+   11 = muted text, 12 = high-contrast text. One indigo accent; muted status
+   colors exist only as backgrounds and dots, never CTAs. */
 :root,
 [data-theme="light"] {
   color-scheme: light;
-  --canvas: #fafafa;
-  --surface: #ffffff;
+
+  /* Neutral ramp (light): oklch L 0.993 -> 0.242, C ~0.002-0.004, H 270. */
+  --neutral-1: oklch(0.993 0.0014 270);
+  --neutral-2: oklch(0.983 0.0016 270);
+  --neutral-3: oklch(0.963 0.002 270);
+  --neutral-4: oklch(0.943 0.0024 270);
+  --neutral-5: oklch(0.921 0.0028 270);
+  --neutral-6: oklch(0.893 0.0032 270);
+  --neutral-7: oklch(0.853 0.0036 270);
+  --neutral-8: oklch(0.79 0.004 270);
+  --neutral-9: oklch(0.64 0.004 270);
+  --neutral-10: oklch(0.607 0.004 270);
+  --neutral-11: oklch(0.503 0.004 270);
+  --neutral-12: oklch(0.242 0.004 270);
+
+  --canvas: var(--neutral-1);
+  --surface: var(--neutral-2);
   --surface-raised: #ffffff;
-  --surface-sunken: #f4f5f8;
-  --text: #1c1d1f;
-  --muted: #62666f;
-  --faint: #696e77;
-  --line: #e8e9ec;
-  --line-strong: #d9dbe0;
+  --surface-sunken: var(--neutral-3);
+  --text: var(--neutral-12);
+  --text-muted: var(--neutral-11);
+  --text-faint: var(--neutral-9);
+  --muted: var(--text-muted);
+  --faint: var(--text-faint);
+  --line: var(--neutral-6);
+  --line-interactive: var(--neutral-7);
+  --line-strong: var(--line-interactive);
+
+  /* Indigo: the single interactive accent. */
   --accent: #5e6ad2;
   --accent-text: #ffffff;
   --accent-soft: rgba(94, 106, 210, 0.09);
   --accent-strong: #4a55b8;
   --accent-line: rgba(94, 106, 210, 0.35);
+
+  /* Muted status set: backgrounds and dots only, never CTAs. */
+  --status-success-bg: rgba(47, 158, 100, 0.1);
+  --status-success-dot: #2f9e64;
+  --status-warning-bg: rgba(183, 121, 31, 0.1);
+  --status-warning-dot: #b7791f;
+  --status-danger-bg: rgba(197, 54, 74, 0.08);
+  --status-danger-dot: #c5364a;
+
   --positive: #2f9e64;
-  --positive-soft: rgba(47, 158, 100, 0.1);
+  --positive-soft: var(--status-success-bg);
   --warning: #b7791f;
-  --warning-soft: rgba(183, 121, 31, 0.1);
-  --danger: #c5364a;
-  --danger-soft: rgba(197, 54, 74, 0.08);
+  --warning-soft: var(--status-warning-bg);
+  /* Darker than the dot so 11px pill text clears 4.5:1 on step-2 surfaces. */
+  --danger: #b53146;
+  --danger-soft: var(--status-danger-bg);
   --aurora-cyan: #5e6ad2;
   --aurora-violet: #5e6ad2;
+
+  /* Elevation: hairline shadows; the overlay token is for true overlays only. */
   --shadow: 0 1px 2px rgba(28, 29, 31, 0.04);
   --shadow-overlay: 0 8px 32px rgba(28, 29, 31, 0.16), 0 1px 2px rgba(28, 29, 31, 0.08);
+  /* Valid-but-invisible so multi-shadow lists stay parseable in light mode. */
+  --inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0);
 }
 
 [data-theme="dark"] {
   color-scheme: dark;
-  --canvas: #08090a;
-  --surface: #0f1011;
-  --surface-raised: #16171a;
-  --surface-sunken: #0b0c0d;
-  --text: #f7f8f8;
-  --muted: #969ba4;
-  --faint: #8a8f98;
-  --line: #23252a;
-  --line-strong: #2e3138;
+
+  /* Neutral ramp (dark): near-black hue-neutral canvas, oklch L 0.145 -> 0.945. */
+  --neutral-1: oklch(0.145 0.002 270);
+  --neutral-2: oklch(0.183 0.0022 270);
+  --neutral-3: oklch(0.21 0.0026 270);
+  --neutral-4: oklch(0.232 0.003 270);
+  --neutral-5: oklch(0.255 0.0034 270);
+  --neutral-6: oklch(0.29 0.004 270);
+  --neutral-7: oklch(0.34 0.0048 270);
+  --neutral-8: oklch(0.42 0.0052 270);
+  --neutral-9: oklch(0.54 0.005 270);
+  --neutral-10: oklch(0.59 0.0048 270);
+  --neutral-11: oklch(0.75 0.004 270);
+  --neutral-12: oklch(0.945 0.002 270);
+
+  --canvas: var(--neutral-1);
+  --surface: var(--neutral-2);
+  --surface-raised: var(--neutral-3);
+  --surface-sunken: var(--neutral-3);
+  --text: var(--neutral-12);
+  --text-muted: var(--neutral-11);
+  --text-faint: var(--neutral-9);
+  --muted: var(--text-muted);
+  --faint: var(--text-faint);
+  --line: var(--neutral-6);
+  --line-interactive: var(--neutral-7);
+  --line-strong: var(--line-interactive);
+
   --accent: #7c85e0;
   --accent-text: #0f1011;
   --accent-soft: rgba(124, 133, 224, 0.13);
   --accent-strong: #98a0ea;
   --accent-line: rgba(124, 133, 224, 0.4);
+
+  --status-success-bg: rgba(76, 183, 130, 0.13);
+  --status-success-dot: #4cb782;
+  --status-warning-bg: rgba(217, 161, 60, 0.13);
+  --status-warning-dot: #d9a13c;
+  --status-danger-bg: rgba(235, 87, 104, 0.12);
+  --status-danger-dot: #eb5768;
+
   --positive: #4cb782;
-  --positive-soft: rgba(76, 183, 130, 0.13);
+  --positive-soft: var(--status-success-bg);
   --warning: #d9a13c;
-  --warning-soft: rgba(217, 161, 60, 0.13);
+  --warning-soft: var(--status-warning-bg);
   --danger: #eb5768;
-  --danger-soft: rgba(235, 87, 104, 0.12);
+  --danger-soft: var(--status-danger-bg);
   --aurora-cyan: #7c85e0;
   --aurora-violet: #7c85e0;
+
+  /* Dark elevation: lifted panels get a 1px top inset highlight instead of
+     bigger drop shadows; the overlay token stays reserved for true overlays. */
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-overlay: 0 8px 32px rgba(0, 0, 0, 0.55), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }

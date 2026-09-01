@@ -12,6 +12,7 @@ import type {
 import { Button } from '../../components/Button';
 import { ErrorState } from '../../components/ErrorState';
 import { LoadingState } from '../../components/LoadingState';
+import { PageHeader } from '../../components/PageHeader';
 import { TodayPage } from './TodayPage';
 
 export type TodayRouteApi = {
@@ -132,11 +133,14 @@ export function TodayRoute({ api, onOpenLead }: TodayRouteProps) {
 
   return (
     <div className="today-route">
-      <div className="today-route__toolbar">
-        <Button variant="quiet" disabled={busy} onClick={load}>
-          Refresh
-        </Button>
-      </div>
+      <PageHeader
+        title="Today"
+        trailing={
+          <Button variant="quiet" disabled={busy} onClick={load}>
+            Refresh
+          </Button>
+        }
+      />
       {commandFailed && (
         <div className="today-route__command-error" role="alert">
           The command could not be applied. Refresh and try again.

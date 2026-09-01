@@ -68,27 +68,38 @@ body[data-platform="darwin"] .nav-rail {
   flex-direction: column;
   box-sizing: border-box;
   width: var(--nav-rail-width);
-  padding: var(--space-4) var(--space-2);
+  padding: 0 var(--space-2) var(--space-4);
   border-right: 1px solid var(--line);
   background: var(--surface-sunken);
-  /* Traffic lights live in the hiddenInset title bar above the brand. */
-  padding-top: 44px;
+}
+
+/* The sidebar header is the window drag strip; on darwin the traffic lights
+   occupy its leading edge, so the wordmark shifts right of that zone. */
+.nav-rail__header {
+  display: flex;
+  align-items: center;
+  height: var(--chrome-header-height);
+  margin: 0 calc(-1 * var(--space-2)) var(--space-2);
+  padding: 0 var(--space-4);
   -webkit-app-region: drag;
 }
 
-.nav-rail__list,
-.nav-rail__item,
-.nav-rail__brand {
+body[data-platform="darwin"] .nav-rail__header {
+  padding-left: 72px;
+}
+
+.nav-rail__header :is(a, button) {
   -webkit-app-region: no-drag;
 }
 
 .nav-rail__brand {
-  margin: 0 0 var(--space-4);
-  padding: 0 var(--space-3);
+  margin: 0;
   color: var(--text);
-  font-size: var(--text-md);
+  font-size: var(--text-dense);
   font-weight: var(--weight-heading);
   letter-spacing: -0.01em;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .nav-rail__list {
@@ -107,10 +118,12 @@ body[data-platform="darwin"] .nav-rail {
   height: 28px;
   padding: 0 var(--space-3);
   border-radius: var(--radius-sm);
-  color: var(--muted);
-  font-size: var(--text-md);
+  color: var(--text-muted);
+  font-size: var(--text-dense);
   font-weight: var(--weight-medium);
   text-decoration: none;
+  user-select: none;
+  -webkit-user-select: none;
   transition: background var(--motion-fast) var(--motion-ease),
     color var(--motion-fast) var(--motion-ease);
 }
@@ -126,7 +139,7 @@ body[data-platform="darwin"] .nav-rail {
 }
 
 .nav-rail__item[aria-disabled="true"] {
-  color: var(--faint);
+  color: var(--text-faint);
   cursor: not-allowed;
 }
 
@@ -147,58 +160,61 @@ body[data-platform="darwin"] .nav-rail {
 .nav-rail__badge {
   min-width: 16px;
   padding: 1px 5px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--accent);
   color: var(--accent-text);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: var(--weight-title);
+  font-variant-numeric: tabular-nums;
   text-align: center;
 }
 
-/* Workspace header preference toggles stay neutral until pressed. */
-.workspace-header {
+/* Per-route page header: one title, optional muted count, controls, and the
+   single accent primary action. */
+.page-header {
   display: flex;
   gap: var(--space-3);
-  justify-content: flex-end;
-  height: 44px;
   align-items: center;
-  box-sizing: border-box;
-  padding: 0 var(--space-6);
-  border-bottom: 1px solid var(--line);
-  background: var(--canvas);
-  -webkit-app-region: drag;
+  min-height: 36px;
+  margin: 0 0 var(--space-4);
 }
 
-.workspace-header__group {
+.page-header__title {
+  margin: 0;
+  font-size: var(--text-section);
+  line-height: var(--leading-section);
+  font-weight: var(--weight-heading);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.page-header__count {
+  color: var(--text-muted);
+  font-weight: var(--weight-body);
+}
+
+.page-header__controls {
   display: flex;
-  gap: 1px;
-  padding: 2px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-  -webkit-app-region: no-drag;
-}
-
-.workspace-header__toggle {
-  display: inline-flex;
+  flex: 1;
+  gap: var(--space-2);
   align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
+  min-width: 0;
 }
 
-.workspace-header__toggle:hover {
-  color: var(--text);
+.page-header__trailing {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
 }
 
-.workspace-header__toggle[aria-pressed="true"] {
-  color: var(--text);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow);
+.page-header__action {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  margin-left: auto;
+}
+
+.page-header__controls + .page-header__action,
+.page-header__trailing + .page-header__action {
+  margin-left: 0;
 }
