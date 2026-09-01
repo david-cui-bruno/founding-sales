@@ -17,6 +17,7 @@ const config: ForgeConfig = {
   packagerConfig: {
     appBundleId: 'com.callie.foundersales',
     asar: true,
+    icon: './assets/icon',
     osxSign: createAppleBridgeSigningOptions(signingIdentity),
     extendInfo: {
       NSAppTransportSecurity: {
