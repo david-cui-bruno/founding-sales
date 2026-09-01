@@ -18,7 +18,7 @@ only with a version bump and a migration note.
    `trigger` is what happened. A Google review never mints a person: it resolves via
    address → parcel → owner, so its event carries `channel: "parcel"` with
    `trigger.type: "review_pain"`.
-3. **Idempotency before identity.** `idempotency_key = sha256(channel | source_natural_key | content_fingerprint)`
+3. **Idempotency before identity.** `idempotency_key = sha256(channel + "|" + source_natural_key + "|" + content_fingerprint)` (UTF-8 bytes, literal `|` joiner, lowercase hex output)
    computed cloud-side. The app must treat a duplicate key as already-imported.
 4. **Cloud entity IDs are stable** (`ce_` prefix, ULID). The app maps them to local
    persons; the mapping never leaves the Mac. Outcome labels flow back keyed by
@@ -97,7 +97,7 @@ only with a version bump and a migration note.
   "scores": {                              // cloud-computed, app layers local adjustments
     "fit": 62,                             // 0-100, per-state normalized
     "timing": 41,                          // 0-100, decayed trigger mass
-    "reasons": [                           // exactly the top 3, ordered
+    "reasons": [                           // 1 to 3 entries, highest contribution first
       { "signal": "portfolio_in_band", "contribution": 15 },
       { "signal": "permit_filed_recent", "contribution": 12 },
       { "signal": "pre_1940_stock", "contribution": 8 }
@@ -128,7 +128,17 @@ No names, no notes, no free text ever flows upstream.
 ## Compliance invariants
 
 - An event whose entity matches the suppression table (contact_hmac hit) is dropped
-  cloud-side and logged, never written to the inbox.
+  cloud-side and logged, never written to the inbox. Enforcement point: any adapter or
+  stage that emits an event carrying person contact data must check suppression first.
+  Stages whose events carry `person: null` (mail-parse FRBO/community) are exempt and
+  intentionally have no suppression-table IAM access; the entity-resolution stage
+  re-checks when it attaches a person.
+- `observed_at` semantics per stage: alert emails use the message `Date` header
+  (fallback: SES receipt time); batch snapshots use the source's own record date
+  (fallback: snapshot date).
+- Channels without a payload schema in `sourceEvent.ts` are rejected by
+  `validateSourceEvent` by design. Adding a channel's adapter REQUIRES landing its
+  payload schema in the shared package in the same change.
 - Events carry no protected-characteristic data; the extraction prompt forbids it and
   the schema has nowhere to put it.
 - `payload` schemas are closed (`.strict()`); adapters cannot smuggle prose.

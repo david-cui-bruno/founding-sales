@@ -162,7 +162,7 @@ export const scoresSchema = z
     fit: z.number().min(0).max(100),
     timing: z.number().min(0).max(100),
     // CONTRACT.md: "exactly the top 3, ordered".
-    reasons: z.array(scoreReasonSchema).length(3),
+    reasons: z.array(scoreReasonSchema).min(1).max(3),
   })
   .strict();
 

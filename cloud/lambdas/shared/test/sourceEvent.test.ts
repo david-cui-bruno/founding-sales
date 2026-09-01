@@ -178,7 +178,7 @@ describe("cloudSourceEventSchema", () => {
     expect(cloudSourceEventSchema.safeParse(dirty).success).toBe(false);
   });
 
-  it("accepts scores null and a full scores block with exactly 3 reasons", () => {
+  it("accepts scores null and 1 to 3 reasons, rejects 0 and 4", () => {
     const event = validFrboEvent();
     expect(cloudSourceEventSchema.safeParse(event).success).toBe(true);
     const scored = {
@@ -194,8 +194,18 @@ describe("cloudSourceEventSchema", () => {
       },
     };
     expect(cloudSourceEventSchema.safeParse(scored).success).toBe(true);
-    const badScores = { ...scored, scores: { ...scored.scores, reasons: scored.scores.reasons.slice(0, 2) } };
-    expect(cloudSourceEventSchema.safeParse(badScores).success).toBe(false);
+    const twoReasons = { ...scored, scores: { ...scored.scores, reasons: scored.scores.reasons.slice(0, 2) } };
+    expect(cloudSourceEventSchema.safeParse(twoReasons).success).toBe(true);
+    const zeroReasons = { ...scored, scores: { ...scored.scores, reasons: [] } };
+    expect(cloudSourceEventSchema.safeParse(zeroReasons).success).toBe(false);
+    const fourReasons = {
+      ...scored,
+      scores: {
+        ...scored.scores,
+        reasons: [...scored.scores.reasons, { signal: "d", contribution: 1 }],
+      },
+    };
+    expect(cloudSourceEventSchema.safeParse(fourReasons).success).toBe(false);
   });
 });
 
