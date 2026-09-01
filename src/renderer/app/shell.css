@@ -5,6 +5,25 @@
   background: var(--canvas);
 }
 
+/* macOS: the window backing is transparent and carries native `sidebar`
+   vibrancy. Only the rail column may reveal it: the shell stops painting,
+   the workspace column repaints the opaque canvas, and the rail becomes a
+   translucent wash over the material. `data-platform` is stamped by the
+   main process on dom-ready; the `:has(.app-shell)` guard keeps standalone
+   screens (diagnostics) on their opaque body canvas. */
+body[data-platform="darwin"]:has(.app-shell) {
+  background: transparent;
+}
+
+body[data-platform="darwin"] .app-shell {
+  background: transparent;
+}
+
+body[data-platform="darwin"] .nav-rail {
+  background: color-mix(in srgb, var(--surface-sunken) 70%, transparent);
+  -webkit-backdrop-filter: saturate(1.2);
+}
+
 .app-shell__skip-link {
   position: absolute;
   top: var(--space-2);
@@ -28,6 +47,8 @@
   flex-direction: column;
   min-width: 0;
   margin-left: var(--nav-rail-width);
+  /* Content stays fully opaque even when the window backing is transparent. */
+  background: var(--canvas);
 }
 
 .app-shell__main {

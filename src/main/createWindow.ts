@@ -10,16 +10,44 @@ export const secureWebPreferences = (
   webSecurity: true,
 });
 
-export const founderWindowOptions = (preloadPath: string) => ({
+/**
+ * On darwin the window carries a native `sidebar` vibrancy material. A solid
+ * backgroundColor would paint over the effect, so the backing is fully
+ * transparent there; the renderer keeps the content area opaque via CSS and
+ * only the nav rail column lets the material read through.
+ */
+export const founderWindowOptions = (
+  preloadPath: string,
+  platform: NodeJS.Platform = process.platform,
+) => ({
   width: 1440,
   height: 900,
   minWidth: 1050,
   minHeight: 700,
-  titleBarStyle:
-    process.platform === 'darwin' ? ('hiddenInset' as const) : undefined,
-  backgroundColor: '#16191d',
+  titleBarStyle: platform === 'darwin' ? ('hiddenInset' as const) : undefined,
+  backgroundColor: platform === 'darwin' ? '#00000000' : '#16191d',
+  ...(platform === 'darwin'
+    ? {
+        vibrancy: 'sidebar' as const,
+        visualEffectState: 'followWindow' as const,
+      }
+    : {}),
   webPreferences: secureWebPreferences(preloadPath),
 });
 
-export const createWindow = (preloadPath: string): BrowserWindow =>
-  new BrowserWindow(founderWindowOptions(preloadPath));
+/** CSS in the sandboxed renderer gates translucency on this body attribute. */
+const PLATFORM_MARKER_SCRIPT =
+  "document.body.dataset.platform = 'darwin';" as const;
+
+export const createWindow = (
+  preloadPath: string,
+  platform: NodeJS.Platform = process.platform,
+): BrowserWindow => {
+  const window = new BrowserWindow(founderWindowOptions(preloadPath, platform));
+  if (platform === 'darwin') {
+    window.webContents.on('dom-ready', () => {
+      void window.webContents.executeJavaScript(PLATFORM_MARKER_SCRIPT, true);
+    });
+  }
+  return window;
+};
