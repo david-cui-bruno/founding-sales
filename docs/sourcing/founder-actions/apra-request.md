@@ -63,3 +63,23 @@ Sincerely,
 [FOUNDER NAME]
 [EMAIL]
 [MAILING ADDRESS]
+
+---
+
+## Second request: Providence building permits (city, not RIDOH)
+
+The city's permit portal (ViewPoint/OpenGov) blocks automated access (Cloudflare
+Turnstile), and the open-data portal's permit dataset ends in 2018. A public-records
+request to the City of Providence is the clean path.
+
+**Where:** City of Providence public records portal (city clerk / APRA request —
+providenceri.gov, "Public Records Request", also NextRequest-based) directed to the
+Department of Inspection and Standards (DIS).
+
+**Ask for:** all building/mechanical/electrical/plumbing permit records from
+[DATE − 12 months] to present, and ideally a recurring monthly export: permit number,
+type, status, application and issue dates, property address, parcel/plat-lot, owner
+name, declared value. CSV preferred. Same fee-estimate-first language as above.
+
+**Note:** RI APRA applies to municipalities the same as state agencies — same
+10-business-day clock.

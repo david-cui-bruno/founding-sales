@@ -21,11 +21,18 @@ Re-verify before building; portals move.
 - Also on the portal: `ufmm-rbej` Department of Inspections and Standards Permits
   2009-2018 (stale; NOT a live permit source).
 
-### Permits (live) — ViewPoint/OpenGov
-- `https://providenceri.viewpointcloud.com/api/v2/public/records?limit=N` returns 200
-  anonymously (the `workflow.opengov.com` variant 403s).
-- Response shape needs mapping work (OpenGov record objects). Adapter must page and
-  filter by record type. Rate-limit conservatively; this is a public but undocumented API.
+### Permits — ViewPoint/OpenGov: NOT automatable (probed in depth 2026-09-01)
+- The earlier "200 anonymously" was the SPA HTML fallback, not JSON.
+- Real API is `api-east.viewpointcloud.com/v2/providenceri/...`: `record_types` and
+  `categories` are anonymously readable, but `records` returns 403 (`forbidden`)
+  anonymously; GraphQL search requires Authorization; responses expose
+  `X-Turnstile-Clearance` headers — records access is gated behind Cloudflare
+  Turnstile (deliberate bot gate).
+- **Policy decision: respect the gate.** No token minting, no headless clearance.
+- Path forward: (a) public-records request to Providence DIS for a recurring permit
+  export (founder action, drafted in docs/sourcing/founder-actions/), (b) rely on
+  PVD tax roll + Boston permits/violations until then, (c) revisit if OpenGov opens
+  a public API key program.
 
 ## Boston (CKAN, open license, documented)
 
