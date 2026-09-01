@@ -260,54 +260,77 @@ export class SourcingPoller {
 
     for (const event of batch.events) {
       const mapped = mapCloudSourceEvent(event);
-      if (mapped.kind === 'intake') {
+      try {
+        await this.dispatchMappedEvent(mapped);
+      } catch (error) {
+        // Permanent per-event failures must not wedge the cursor: a replayed
+        // idempotency key with CHANGED content can never succeed on retry
+        // (the receipt comparison is deterministic), so it is quarantined
+        // and the rest of the file proceeds. Everything else (network, DB
+        // lock, transient) still throws so the whole file retries.
+        if ((error as { name?: string }).name === 'IntakeIdempotencyConflictError') {
+          this.counters.quarantined += 1;
+          this.log(
+            `sourcing quarantine ${mapped.receiptKey}: `
+            + `idempotency conflict (${(error as Error).message})`,
+          );
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  private async dispatchMappedEvent(
+    mapped: ReturnType<typeof mapCloudSourceEvent>,
+  ): Promise<void> {
+    if (mapped.kind === 'intake') {
+      await this.domainGate.withDomain((domain) => {
+        domain.importCloudSourceEvent({
+          command: mapped.command,
+          cloudEntityId: mapped.cloudEntityId,
+        });
+      });
+      this.counters.imported += 1;
+    } else if (mapped.kind === 'needs-identity') {
+      // Task 5: person-null events become "Unknown owner · <situs>"
+      // placeholders in the standard Unreviewed review lane; the founder
+      // resolves identity by renaming (the cloud entity link is already
+      // written at import). Events without a usable address stay
+      // counted-and-skipped.
+      const command = buildNeedsIdentityIntakeCommand(mapped);
+      if (command !== null) {
         await this.domainGate.withDomain((domain) => {
           domain.importCloudSourceEvent({
-            command: mapped.command,
+            command,
             cloudEntityId: mapped.cloudEntityId,
           });
         });
-        this.counters.imported += 1;
-      } else if (mapped.kind === 'needs-identity') {
-        // Task 5: person-null events become "Unknown owner · <situs>"
-        // placeholders in the standard Unreviewed review lane; the founder
-        // resolves identity by renaming (the cloud entity link is already
-        // written at import). Events without a usable address stay
-        // counted-and-skipped.
-        const command = buildNeedsIdentityIntakeCommand(mapped);
-        if (command !== null) {
-          await this.domainGate.withDomain((domain) => {
-            domain.importCloudSourceEvent({
-              command,
-              cloudEntityId: mapped.cloudEntityId,
-            });
-          });
-        } else {
-          this.log(
-            `sourcing needs-identity skipped ${mapped.receiptKey} `
-            + `(${mapped.channel}, no usable situs address)`,
-          );
-        }
-        this.counters.needsIdentity += 1;
       } else {
-        // Task 5: scorer re-emission -> persist onto the original prospect
-        // through the intake receipt; unknown keys stay counted-and-skipped.
-        const applied = await this.domainGate.withDomain((domain) => (
-          domain.applyCloudScoreUpdate({
-            receiptKey: mapped.receiptKey,
-            scoresVersion: mapped.scoresVersion,
-            fit: mapped.fit,
-            timing: mapped.timing,
-            reasons: mapped.reasons,
-          })
-        ));
-        if (!applied) {
-          this.log(
-            `sourcing score-update skipped ${mapped.receiptKey} (no intake receipt)`,
-          );
-        }
-        this.counters.scoreUpdates += 1;
+        this.log(
+          `sourcing needs-identity skipped ${mapped.receiptKey} `
+          + `(${mapped.channel}, no usable situs address)`,
+        );
       }
+      this.counters.needsIdentity += 1;
+    } else {
+      // Task 5: scorer re-emission -> persist onto the original prospect
+      // through the intake receipt; unknown keys stay counted-and-skipped.
+      const applied = await this.domainGate.withDomain((domain) => (
+        domain.applyCloudScoreUpdate({
+          receiptKey: mapped.receiptKey,
+          scoresVersion: mapped.scoresVersion,
+          fit: mapped.fit,
+          timing: mapped.timing,
+          reasons: mapped.reasons,
+        })
+      ));
+      if (!applied) {
+        this.log(
+          `sourcing score-update skipped ${mapped.receiptKey} (no intake receipt)`,
+        );
+      }
+    this.counters.scoreUpdates += 1;
     }
   }
 

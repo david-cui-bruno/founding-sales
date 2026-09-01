@@ -250,17 +250,19 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
       cloud_fit: 62, cloud_timing: 41, cloud_scores_version: 1, cloud_scored_at: NOW,
     });
 
-    // A stale replay (same version) never regresses the stored values.
+    // A same-version re-emission is a correction: files process in key
+    // (chronological) order, so the latest emission wins. True replays
+    // carry identical values and are no-ops by content.
     domain.applyCloudScoreUpdate({
       receiptKey,
       scoresVersion: 1,
-      fit: 1,
-      timing: 1,
-      reasons: [{ signal: 'no_signals', contribution: 0 }],
+      fit: 47,
+      timing: 41,
+      reasons: [{ signal: 'llc_owner_no_pm', contribution: 7 }],
     });
     expect((database.raw.prepare(
       'SELECT cloud_fit FROM prospects WHERE person_id = ?',
-    ).get(personId) as { cloud_fit: number }).cloud_fit).toBe(62);
+    ).get(personId) as { cloud_fit: number }).cloud_fit).toBe(47);
 
     // A newer version updates in place.
     domain.applyCloudScoreUpdate({

@@ -2087,7 +2087,7 @@ export class FounderSalesDomain {
           cloud_scored_at = ?,
           updated_at = ?
         WHERE id = ?
-          AND (cloud_scores_version IS NULL OR cloud_scores_version < ?)
+          AND (cloud_scores_version IS NULL OR cloud_scores_version <= ?)
       `).run(
         Math.round(parsed.fit),
         Math.round(parsed.timing),
