@@ -1,0 +1,18 @@
+{
+  "name": "callie-sourcing-mail-parse",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Placeholder SES inbound mail parser for the Callie sourcing pipeline",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "esbuild src/handler.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/handler.js",
+    "prebuild": "npm run typecheck"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}

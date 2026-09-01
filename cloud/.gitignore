@@ -1,0 +1,12 @@
+# Terraform
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/.build/
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars
+
+# Lambda builds
+lambdas/**/node_modules/
+lambdas/**/dist/
