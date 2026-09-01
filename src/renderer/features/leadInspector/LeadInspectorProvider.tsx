@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 
 import type {
   BeginOutboundRequest,
+  CloudScoreOverrideRequest,
   ConfirmTransitionRequest,
 } from '../../../shared/contracts/leadDetailContract';
 import { LeadFullPage } from './LeadFullPage';
@@ -142,6 +143,15 @@ export function LeadInspectorProvider({
     [api, fetchDetail],
   );
 
+  const overrideCloudScore = useCallback(
+    async (request: CloudScoreOverrideRequest) => {
+      // Log-only: the outbox row is the entire effect, so the detail DTO
+      // needs no refresh (no local score ever changes).
+      await api.overrideCloudScore(request);
+    },
+    [api],
+  );
+
   const handle = useMemo<LeadInspectorHandle>(
     () => ({
       openLead,
@@ -163,6 +173,7 @@ export function LeadInspectorProvider({
           onOpenFullPage={openFullPage}
           onBeginOutbound={beginOutbound}
           onConfirmTransition={confirmTransition}
+          onOverrideCloudScore={overrideCloudScore}
         />
       )}
       {selection !== null && selection.view === 'page' && (
@@ -171,6 +182,7 @@ export function LeadInspectorProvider({
           onRetry={retry}
           onBeginOutbound={beginOutbound}
           onConfirmTransition={confirmTransition}
+          onOverrideCloudScore={overrideCloudScore}
         />
       )}
     </LeadInspectorContext.Provider>

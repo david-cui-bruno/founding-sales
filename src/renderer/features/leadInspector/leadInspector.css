@@ -235,3 +235,26 @@
   margin: 0 auto;
   padding: var(--space-6, 24px);
 }
+
+/* Cloud scores section: chip + top-3 reasons + log-only override controls. */
+
+.lead-inspector__cloud-chip {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  white-space: nowrap;
+}
+
+.lead-inspector__cloud-contribution {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.lead-inspector__cloud-override {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}

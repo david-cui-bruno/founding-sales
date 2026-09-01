@@ -56,6 +56,7 @@ const leadRow: LeadRow = {
     reachability: 'direct',
     dataConfidence: 8,
   },
+  cloudScores: { fit: 62, timing: 41 },
   nextAction: {
     id: 'action-1',
     type: 'call_lead',
@@ -77,6 +78,7 @@ const secondRow: LeadRow = {
   organization: null,
   propertySummary: null,
   priorityContext: null,
+  cloudScores: null,
   nextAction: null,
   lastActivityAt: null,
 };
@@ -115,6 +117,21 @@ describe('LeadsGrid', () => {
 
     expect(screen.getByText('High · 24/30')).toBeTruthy();
     expect(screen.getByText('Hot · 31/40')).toBeTruthy();
+  });
+
+  it('renders the cloud chip as two separate axes and a muted placeholder when unscored', () => {
+    render(
+      <LeadsGrid
+        rows={[leadRow, secondRow]}
+        selectedPersonId={null}
+        onSelect={vi.fn()}
+        onUpdateField={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Fit 62 · Timing 41')).toBeTruthy();
+    const unscored = screen.getByRole('row', { name: /Blake Owner/ });
+    expect(within(unscored).queryByText(/Fit \d+ · Timing \d+/)).toBeNull();
   });
 
   it('renders muted placeholders for physically absent prioritization data', () => {

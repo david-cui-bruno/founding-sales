@@ -1,6 +1,7 @@
 import { mutationReceiptSchema } from '../../shared/contracts/commonContract';
 import {
   beginOutboundRequestSchema,
+  cloudScoreOverrideRequestSchema,
   confirmTransitionRequestSchema,
   leadDetailRequestSchema,
   leadDetailSchema,
@@ -9,7 +10,7 @@ import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
 import type { LeadDetailProvider } from './leadDetailService';
 
 /**
- * Registers exactly the three strict lead-detail channels and returns one
+ * Registers exactly the four strict lead-detail channels and returns one
  * idempotent unregister function that removes all of them.
  */
 export function registerLeadDetailIpc(
@@ -36,6 +37,13 @@ export function registerLeadDetailIpc(
       requestSchema: confirmTransitionRequestSchema,
       responseSchema: mutationReceiptSchema,
       handler: (request) => provider.confirmTransition(request),
+      isTrustedRendererUrl,
+    }),
+    registerValidatedIpc({
+      channel: 'lead-detail:cloud-score-override',
+      requestSchema: cloudScoreOverrideRequestSchema,
+      responseSchema: mutationReceiptSchema,
+      handler: (request) => provider.overrideCloudScore(request),
       isTrustedRendererUrl,
     }),
   ];

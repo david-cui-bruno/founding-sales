@@ -287,6 +287,13 @@ export type OrderablePriorityRow = Readonly<{
   reachability: Reachability;
   dataConfidence: number;
   lastContactAt: string | null;
+  /**
+   * Cloud-computed axes (Task 5): pure tiebreakers AFTER every local key.
+   * Null when the prospect has no scored cloud event; nulls order last.
+   * The two axes stay separate keys, never combined into one number.
+   */
+  cloudTiming: number | null;
+  cloudFit: number | null;
 }>;
 
 export type EffectivePrioritySnapshot = DeepReadonly<{
@@ -309,6 +316,9 @@ export type EffectivePrioritySnapshot = DeepReadonly<{
   verifyFirst: boolean;
   lastContactActivityId: string | null;
   lastContactAt: string | null;
+  /** Cloud-computed axes from the prospect row; null until scored. */
+  cloudTiming: number | null;
+  cloudFit: number | null;
   controls: {
     priority: EffectivePriorityControl | null;
     pin: EffectivePriorityControl | null;

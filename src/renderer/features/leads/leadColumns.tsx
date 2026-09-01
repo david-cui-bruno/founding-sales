@@ -7,11 +7,13 @@ import type {
   PrimaryAction,
 } from '../../../shared/contracts/commonContract';
 import type {
+  CloudScoreChip,
   LeadFieldUpdateRequest,
   LeadRow,
 } from '../../../shared/contracts/leadsContract';
 import { Avatar } from '../../components/Avatar';
 import { StatusPill } from '../../components/StatusPill';
+import { formatCloudChip } from './cloudSignalLabels';
 
 /** Muted placeholder for data that is physically absent pre-prioritization. */
 export const ABSENT_PLACEHOLDER = '—';
@@ -75,6 +77,18 @@ export const formatLastActivity = (isoTimestamp: string | null): string => {
 
 function Absent() {
   return <span className="leads-grid__absent">{ABSENT_PLACEHOLDER}</span>;
+}
+
+/**
+ * Cloud score chip: the two cloud axes side by side ("Fit 62 · Timing 41"),
+ * indigo accent, never merged into one number.
+ */
+export function CloudScoreChipBadge({ scores }: { scores: CloudScoreChip }) {
+  return (
+    <span className="leads-grid__cloud-chip" aria-label="Cloud scores">
+      {formatCloudChip(scores)}
+    </span>
+  );
 }
 
 type InlineTextEditProps = {
@@ -255,6 +269,16 @@ export function createLeadColumns(): ColumnDef<LeadRow>[] {
           <Absent />
         ) : (
           formatTiming(context.row.original.priorityContext)
+        ),
+    },
+    {
+      id: 'cloudScores',
+      header: 'Cloud',
+      cell: (context) =>
+        context.row.original.cloudScores === null ? (
+          <Absent />
+        ) : (
+          <CloudScoreChipBadge scores={context.row.original.cloudScores} />
         ),
     },
     {

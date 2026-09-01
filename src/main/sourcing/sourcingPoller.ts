@@ -26,7 +26,7 @@ import type {
 import type { InboxBatch } from './inboxClient';
 import type { LoadedSourcingCredentials } from './sourcingCredentialStore';
 import type { UpstreamObjectStore, UpstreamSync } from './upstreamSync';
-import { mapCloudSourceEvent } from './intakeMapper';
+import { buildNeedsIdentityIntakeCommand, mapCloudSourceEvent } from './intakeMapper';
 
 /** The subset of the inbox client the poller drives; injected for tests. */
 export type PollableInbox = {
@@ -269,12 +269,43 @@ export class SourcingPoller {
         });
         this.counters.imported += 1;
       } else if (mapped.kind === 'needs-identity') {
+        // Task 5: person-null events become "Unknown owner · <situs>"
+        // placeholders in the standard Unreviewed review lane; the founder
+        // resolves identity by renaming (the cloud entity link is already
+        // written at import). Events without a usable address stay
+        // counted-and-skipped.
+        const command = buildNeedsIdentityIntakeCommand(mapped);
+        if (command !== null) {
+          await this.domainGate.withDomain((domain) => {
+            domain.importCloudSourceEvent({
+              command,
+              cloudEntityId: mapped.cloudEntityId,
+            });
+          });
+        } else {
+          this.log(
+            `sourcing needs-identity skipped ${mapped.receiptKey} `
+            + `(${mapped.channel}, no usable situs address)`,
+          );
+        }
         this.counters.needsIdentity += 1;
-        this.log(
-          `sourcing needs-identity ${mapped.receiptKey} `
-          + `(${mapped.channel}, ${mapped.situsAddress?.line1 ?? 'no situs address'})`,
-        );
       } else {
+        // Task 5: scorer re-emission -> persist onto the original prospect
+        // through the intake receipt; unknown keys stay counted-and-skipped.
+        const applied = await this.domainGate.withDomain((domain) => (
+          domain.applyCloudScoreUpdate({
+            receiptKey: mapped.receiptKey,
+            scoresVersion: mapped.scoresVersion,
+            fit: mapped.fit,
+            timing: mapped.timing,
+            reasons: mapped.reasons,
+          })
+        ));
+        if (!applied) {
+          this.log(
+            `sourcing score-update skipped ${mapped.receiptKey} (no intake receipt)`,
+          );
+        }
         this.counters.scoreUpdates += 1;
       }
     }

@@ -159,6 +159,54 @@ function mapScoreUpdate(event: CloudSourceEvent): MappedScoreUpdate {
 }
 
 /**
+ * Placeholder intake command for a person-null event (plan Task 5): the
+ * event cannot mint a real person, so the founder gets an
+ * "Unknown owner · <situs address>" placeholder that enters the standard
+ * Unreviewed lifecycle. Resolving identity is a rename (or merge) on the
+ * existing review surface; the receipt key keeps replays no-ops and the
+ * cloud entity link is written by importCloudSourceEvent as usual.
+ *
+ * Returns null when the situs address is unusable (no locality/region), in
+ * which case the caller counts-and-skips exactly like before.
+ */
+export function buildNeedsIdentityIntakeCommand(
+  mapped: MappedNeedsIdentity,
+): CreatePersonProspectCommand | null {
+  const address = mapped.situsAddress;
+  if (address === null || address.locality === null || address.region === null) {
+    return null;
+  }
+  const property = mapped.event.entity.property;
+  return {
+    person: {
+      displayName: `Unknown owner · ${address.line1}, ${address.locality}`,
+      provenance: {
+        cloudEntityId: mapped.cloudEntityId,
+        sourceUri: mapped.event.source_uri,
+        needsIdentity: true,
+      },
+    },
+    contacts: [],
+    organizations: [],
+    properties: [{
+      addressLine1: address.line1,
+      locality: address.locality,
+      region: address.region,
+      postalCode: address.postal_code,
+      countryCode: address.country_code,
+      doorCount: property?.unit_count ?? null,
+      propertyType: property?.use_code ?? null,
+      sourceRecord: {
+        parcelId: property?.parcel_id ?? null,
+        yearBuilt: property?.year_built ?? null,
+        useCode: property?.use_code ?? null,
+      },
+    }],
+    source: mapSource(mapped.event, mapped.channel),
+  };
+}
+
+/**
  * Public records name people directly (owner rows) or through their entity
  * (LLC-owned parcels). Neither -> the event cannot mint a person.
  */

@@ -52,6 +52,7 @@ const detail: LeadDetail = {
     dataConfidence: 8,
   },
   priorityReasons: ['Fit high 24/30'],
+  cloudScores: null,
   nextAction: null,
   optedOut: false,
   cadence: null,
@@ -86,6 +87,7 @@ function fakeProvider(): LeadDetailProvider {
     get: vi.fn(async () => detail),
     beginOutbound: vi.fn(async () => receipt),
     confirmTransition: vi.fn(async () => receipt),
+    overrideCloudScore: vi.fn(async () => receipt),
   };
 }
 
@@ -95,7 +97,7 @@ describe('registerLeadDetailIpc', () => {
     electron.removeHandler.mockReset();
   });
 
-  it('registers exactly the three lead-detail channels', () => {
+  it('registers exactly the four lead-detail channels', () => {
     registerLeadDetailIpc(fakeProvider());
 
     const channels = electron.handle.mock.calls.map((call) => call[0]);
@@ -103,6 +105,7 @@ describe('registerLeadDetailIpc', () => {
       'lead-detail:get',
       'lead-detail:begin-outbound',
       'lead-detail:confirm-transition',
+      'lead-detail:cloud-score-override',
     ]);
   });
 
@@ -199,7 +202,7 @@ describe('registerLeadDetailIpc', () => {
     expect(provider.confirmTransition).toHaveBeenCalledTimes(1);
   });
 
-  it('unregisters all three channels exactly once', () => {
+  it('unregisters all four channels exactly once', () => {
     const unregister = registerLeadDetailIpc(fakeProvider());
 
     unregister();
@@ -208,9 +211,10 @@ describe('registerLeadDetailIpc', () => {
     const removed = electron.removeHandler.mock.calls.map((call) => call[0]);
     expect(removed.sort()).toEqual([
       'lead-detail:begin-outbound',
+      'lead-detail:cloud-score-override',
       'lead-detail:confirm-transition',
       'lead-detail:get',
     ]);
-    expect(electron.removeHandler).toHaveBeenCalledTimes(3);
+    expect(electron.removeHandler).toHaveBeenCalledTimes(4);
   });
 });

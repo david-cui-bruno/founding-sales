@@ -7,6 +7,7 @@ import {
   primaryActionSchema,
   salesCycleIdSchema,
 } from './commonContract';
+import { cloudScoreChipSchema } from './leadsContract';
 
 export const contactMethodSchema = z.object({
   id: z.string().min(1), kind: z.enum(['phone', 'email']), value: z.string().min(1), label: z.string().nullable(), valid: z.boolean(),
@@ -17,11 +18,26 @@ export const conversationSummarySchema = z.object({ id: z.string(), occurredAt: 
 export const propertySummarySchema = z.object({ id: z.string(), address: z.string(), doors: z.number().int().nonnegative().nullable(), ownershipEvidence: z.string().nullable(), liveVacancy: z.boolean() }).strict();
 export const historyEventSchema = z.object({ id: z.string(), occurredAt: z.string().datetime({ offset: true }), label: z.string(), detail: z.string().nullable() }).strict();
 
+/**
+ * Cloud score detail (Task 5): the two separate axes plus the scorer's
+ * top-3 reasons. `signal` is the scorer's stable signal id (mapped to a
+ * short label renderer-side), never free prose.
+ */
+export const cloudScoreDetailSchema = z.object({
+  scores: cloudScoreChipSchema,
+  reasons: z.array(z.object({
+    signal: z.string().min(1),
+    contribution: z.number(),
+  }).strict()).max(3),
+  scoredAt: z.string().datetime({ offset: true }).nullable(),
+}).strict();
+
 export const leadDetailSchema = z.object({
   personId: personIdSchema, salesCycleId: salesCycleIdSchema, personName: z.string().min(1), phones: z.array(contactMethodSchema),
   emails: z.array(contactMethodSchema), organizationLabel: z.string().nullable(), propertySummaries: z.array(z.string()),
   stage: lifecycleStageSchema, workflowStatus: z.enum(['active', 'onboarding', 'closed']), sourceLabel: z.string().min(1),
   segment: z.enum(['hot', 'cold', 'warm']), priorityContext: leadPriorityContextSchema.nullable(),
+  cloudScores: cloudScoreDetailSchema.nullable(),
   priorityReasons: z.array(z.string().min(1)), nextAction: primaryActionSchema.nullable(), optedOut: z.boolean(),
   cadence: cadenceSummarySchema.nullable(), activities: z.array(activitySummarySchema), conversations: z.array(conversationSummarySchema),
   properties: z.array(propertySummarySchema), history: z.array(historyEventSchema), revision: z.number().int().nonnegative(),
@@ -74,6 +90,12 @@ export const confirmTransitionRequestSchema = z.discriminatedUnion('transition',
   }).strict(),
 ]);
 
+/** Founder "wrong signal" control: log-only, no local score change. */
+export const cloudScoreOverrideRequestSchema = z.object({
+  personId: personIdSchema,
+  direction: z.enum(['up', 'down']),
+}).strict();
+
 export type ContactMethod = z.infer<typeof contactMethodSchema>;
 export type CadenceSummary = z.infer<typeof cadenceSummarySchema>;
 export type ActivitySummary = z.infer<typeof activitySummarySchema>;
@@ -84,3 +106,5 @@ export type LeadDetail = z.infer<typeof leadDetailSchema>;
 export type LeadDetailRequest = z.infer<typeof leadDetailRequestSchema>;
 export type BeginOutboundRequest = z.infer<typeof beginOutboundRequestSchema>;
 export type ConfirmTransitionRequest = z.infer<typeof confirmTransitionRequestSchema>;
+export type CloudScoreDetail = z.infer<typeof cloudScoreDetailSchema>;
+export type CloudScoreOverrideRequest = z.infer<typeof cloudScoreOverrideRequestSchema>;

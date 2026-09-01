@@ -22,6 +22,8 @@ const BASE_ROW: OrderablePriorityRow = Object.freeze({
   reachability: 'direct',
   dataConfidence: 7,
   lastContactAt: '2026-08-01T00:00:00.000Z',
+  cloudTiming: null,
+  cloudFit: null,
 });
 
 function row(overrides: Partial<OrderablePriorityRow>): OrderablePriorityRow {
@@ -29,7 +31,7 @@ function row(overrides: Partial<OrderablePriorityRow>): OrderablePriorityRow {
 }
 
 describe('buildProspectPriorityTuple', () => {
-  it('builds the exact ten-element tuple, never a scalar', () => {
+  it('builds the exact fourteen-element tuple, never a scalar', () => {
     const tuple = buildProspectPriorityTuple(BASE_ROW);
     expect(tuple).toEqual([
       1,
@@ -41,9 +43,13 @@ describe('buildProspectPriorityTuple', () => {
       -7,
       1,
       Date.parse('2026-08-01T00:00:00.000Z'),
+      1,
+      0,
+      1,
+      0,
       'prospect-a',
     ]);
-    expect(tuple).toHaveLength(10);
+    expect(tuple).toHaveLength(14);
   });
 
   it('orders null expiration after non-null and null last contact first', () => {
@@ -94,6 +100,24 @@ describe('compareProspectPriority', () => {
     const newer = row({ prospectId: 'newer', lastContactAt: '2026-08-01T00:00:00.000Z' });
     expect(compareProspectPriority(older, newer)).toBeLessThan(0);
   });
+
+  it('uses cloud timing then cloud fit only as a tiebreaker, nulls last', () => {
+    // Different local keys always win over cloud values.
+    const localWinner = row({ prospectId: 'local', fitPoints: 20, cloudTiming: 1, cloudFit: 1 });
+    const cloudRich = row({ prospectId: 'cloud', fitPoints: 10, cloudTiming: 99, cloudFit: 99 });
+    expect(compareProspectPriority(localWinner, cloudRich)).toBeLessThan(0);
+
+    // Complete local tie: higher cloud timing first, then higher cloud fit,
+    // then unscored (null) rows, then the binary prospect id.
+    const hotTiming = row({ prospectId: 'z-hot', cloudTiming: 60, cloudFit: 10 });
+    const coolTiming = row({ prospectId: 'a-cool', cloudTiming: 40, cloudFit: 90 });
+    const highFit = row({ prospectId: 'b-fit', cloudTiming: 40, cloudFit: 95 });
+    const unscored = row({ prospectId: 'a-unscored' });
+    const sorted = [unscored, coolTiming, hotTiming, highFit]
+      .sort(compareProspectPriority)
+      .map((entry) => entry.prospectId);
+    expect(sorted).toEqual(['z-hot', 'b-fit', 'a-cool', 'a-unscored']);
+  });
 });
 
 describe('toOrderablePriorityRow', () => {
@@ -117,6 +141,8 @@ describe('toOrderablePriorityRow', () => {
     verifyFirst: false,
     lastContactActivityId: 'activity-1',
     lastContactAt: '2026-08-01T00:00:00.000Z',
+    cloudTiming: null,
+    cloudFit: null,
     controls: { priority: null, pin: null, snooze: null, dismiss: null },
     explanation: [],
   }) as EffectivePrioritySnapshot;
@@ -131,6 +157,8 @@ describe('toOrderablePriorityRow', () => {
       reachability: 'direct',
       dataConfidence: 7,
       lastContactAt: '2026-08-01T00:00:00.000Z',
+      cloudTiming: null,
+      cloudFit: null,
     });
   });
 
@@ -155,6 +183,8 @@ describe('fixed SQL ordering contract', () => {
       'priority_orderable.reachability',
       'priority_orderable.data_confidence',
       'priority_orderable.last_contact_at',
+      'priority_orderable.cloud_timing',
+      'priority_orderable.cloud_fit',
     ]);
     expect(aliasReferences.length).toBeGreaterThan(0);
     for (const reference of aliasReferences) {

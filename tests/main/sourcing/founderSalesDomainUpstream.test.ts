@@ -222,4 +222,98 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
       personId: CE_ID.replace('ce_', 'person-'), direction: 'up',
     })).toThrow(/cloud entity link/i);
   });
+
+  it('persists a scorer re-emission onto the original prospect idempotently', () => {
+    const { personId } = importLinkedLead();
+    const receiptKey = `cloud:${validParcelEvent().idempotency_key}`;
+
+    const applied = domain.applyCloudScoreUpdate({
+      receiptKey,
+      scoresVersion: 1,
+      fit: 62,
+      timing: 41,
+      reasons: [
+        { signal: 'portfolio_in_band', contribution: 15 },
+        { signal: 'permit_filed_recent', contribution: 12 },
+      ],
+    });
+
+    expect(applied).toBe(true);
+    const prospect = database.raw.prepare(`
+      SELECT cloud_fit, cloud_timing, cloud_scores_version, cloud_scored_at
+      FROM prospects WHERE person_id = ?
+    `).get(personId) as {
+      cloud_fit: number; cloud_timing: number;
+      cloud_scores_version: number; cloud_scored_at: string;
+    };
+    expect(prospect).toEqual({
+      cloud_fit: 62, cloud_timing: 41, cloud_scores_version: 1, cloud_scored_at: NOW,
+    });
+
+    // A stale replay (same version) never regresses the stored values.
+    domain.applyCloudScoreUpdate({
+      receiptKey,
+      scoresVersion: 1,
+      fit: 1,
+      timing: 1,
+      reasons: [{ signal: 'no_signals', contribution: 0 }],
+    });
+    expect((database.raw.prepare(
+      'SELECT cloud_fit FROM prospects WHERE person_id = ?',
+    ).get(personId) as { cloud_fit: number }).cloud_fit).toBe(62);
+
+    // A newer version updates in place.
+    domain.applyCloudScoreUpdate({
+      receiptKey,
+      scoresVersion: 2,
+      fit: 70,
+      timing: 55,
+      reasons: [{ signal: 'live_vacancy', contribution: 15 }],
+    });
+    expect((database.raw.prepare(
+      'SELECT cloud_fit, cloud_timing FROM prospects WHERE person_id = ?',
+    ).get(personId) as { cloud_fit: number; cloud_timing: number })).toEqual({
+      cloud_fit: 70, cloud_timing: 55,
+    });
+  });
+
+  it('returns false for a score update whose receipt is unknown', () => {
+    expect(domain.applyCloudScoreUpdate({
+      receiptKey: `cloud:${'f'.repeat(64)}`,
+      scoresVersion: 1,
+      fit: 10,
+      timing: 10,
+      reasons: [{ signal: 'no_signals', contribution: 0 }],
+    })).toBe(false);
+  });
+
+  it('serves cloud scores through the leads grid rows and the lead detail', () => {
+    const { personId } = importLinkedLead();
+    domain.applyCloudScoreUpdate({
+      receiptKey: `cloud:${validParcelEvent().idempotency_key}`,
+      scoresVersion: 1,
+      fit: 62,
+      timing: 41,
+      reasons: [
+        { signal: 'portfolio_in_band', contribution: 15 },
+        { signal: 'pre_1940_stock', contribution: 8 },
+      ],
+    });
+
+    const page = domain.listLeadRows({
+      query: '', stages: [], priorities: [], sort: 'priority', cursor: null, limit: 10,
+    });
+    const row = page.rows.find((candidate) => candidate.personId === personId);
+    expect(row?.cloudScores).toEqual({ fit: 62, timing: 41 });
+
+    const detail = domain.getLeadDetail({ personId });
+    expect(detail.cloudScores).toEqual({
+      scores: { fit: 62, timing: 41 },
+      reasons: [
+        { signal: 'portfolio_in_band', contribution: 15 },
+        { signal: 'pre_1940_stock', contribution: 8 },
+      ],
+      scoredAt: NOW,
+    });
+  });
 });

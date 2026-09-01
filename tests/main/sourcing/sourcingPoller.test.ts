@@ -32,6 +32,7 @@ function batch(key: string, events: CloudSourceEvent[], quarantined = 0): InboxB
 function fakeDomainGate(initialCursor: string | null = null): {
   gate: SourcingPollerDomainGate;
   imported: string[];
+  scoreUpdates: string[];
   cursorWrites: Array<string | null>;
   cursor: () => string | null;
   failNextImport: (error: Error) => void;
@@ -39,6 +40,7 @@ function fakeDomainGate(initialCursor: string | null = null): {
   let cursor = initialCursor;
   let polledAt: string | null = null;
   const imported: string[] = [];
+  const scoreUpdates: string[] = [];
   const cursorWrites: Array<string | null> = [];
   let nextImportError: Error | undefined;
 
@@ -49,6 +51,10 @@ function fakeDomainGate(initialCursor: string | null = null): {
         cursor = lastKey;
         polledAt = NOW;
         cursorWrites.push(lastKey);
+      },
+      applyCloudScoreUpdate: ({ receiptKey }: { receiptKey: string }) => {
+        scoreUpdates.push(receiptKey);
+        return true;
       },
       importCloudSourceEvent: ({ command }: {
         command: { source: { id: string } };
@@ -76,6 +82,7 @@ function fakeDomainGate(initialCursor: string | null = null): {
   return {
     gate,
     imported,
+    scoreUpdates,
     cursorWrites,
     cursor: () => cursor,
     failNextImport: (error) => {
@@ -163,7 +170,14 @@ describe('SourcingPoller', () => {
     const status = await poller.getStatus();
 
     expect(inbox.listNewObjects).toHaveBeenCalledWith('events/2026-08-31/z.ndjson');
-    expect(domain.imported).toEqual([`cloud:${parcel.idempotency_key}`]);
+    // The parcel event imports a real person; the person-null frbo event
+    // imports an "Unknown owner" placeholder (Task 5); the scored
+    // re-emission persists through applyCloudScoreUpdate.
+    expect(domain.imported).toEqual([
+      `cloud:${parcel.idempotency_key}`,
+      `cloud:${frbo.idempotency_key}`,
+    ]);
+    expect(domain.scoreUpdates).toEqual([`cloud:${scored.idempotency_key}`]);
     expect(domain.cursorWrites).toEqual([
       'events/2026-09-01/a.ndjson',
       'events/2026-09-01/b.ndjson',

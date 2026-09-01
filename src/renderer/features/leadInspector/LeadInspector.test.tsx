@@ -45,6 +45,7 @@ const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
       dataConfidence: 7,
     },
     priorityReasons: ['Owner of 3+ doors', 'Live vacancy posted this week'],
+    cloudScores: null,
     nextAction: {
       id: 'action-1',
       type: 'review_lead',
@@ -100,6 +101,7 @@ function createApi(detail: LeadDetail) {
     get: vi.fn(async () => detail),
     beginOutbound: vi.fn(async () => receipt),
     confirmTransition: vi.fn(async () => receipt),
+    overrideCloudScore: vi.fn(async () => receipt),
   };
 }
 
@@ -300,5 +302,49 @@ describe('LeadInspector', () => {
       salesCycleId: 'cycle-kevin',
       expectedRevision: 4,
     });
+  });
+
+  it('shows the cloud chip with labelled top reasons and logs overrides', async () => {
+    const api = createApi(detailFor({
+      cloudScores: {
+        scores: { fit: 62, timing: 41 },
+        reasons: [
+          { signal: 'portfolio_in_band', contribution: 15 },
+          { signal: 'permit_filed_recent', contribution: 12 },
+          { signal: 'pre_1940_stock', contribution: 8 },
+        ],
+        scoredAt: '2026-08-31T15:00:00.000Z',
+      },
+    }));
+    const inspector = await renderInspector(api);
+
+    // The chip keeps the two axes separate; never one blended number.
+    expect(within(inspector).getByText('Fit 62 · Timing 41')).toBeTruthy();
+    const reasons = within(inspector).getByRole('list', { name: 'Top cloud signals' });
+    expect(within(reasons).getAllByRole('listitem').map((item) => item.textContent))
+      .toEqual([
+        'Portfolio in target band +15',
+        'Permit filed recently +12',
+        'Pre-1940 housing stock +8',
+      ]);
+
+    fireEvent.click(within(inspector).getByRole('button', { name: 'Wrong signal' }));
+    expect(api.overrideCloudScore).toHaveBeenCalledWith({
+      personId: 'person-kevin',
+      direction: 'down',
+    });
+
+    fireEvent.click(within(inspector).getByRole('button', { name: 'Signal too low' }));
+    expect(api.overrideCloudScore).toHaveBeenCalledWith({
+      personId: 'person-kevin',
+      direction: 'up',
+    });
+  });
+
+  it('renders no cloud section for an unscored lead', async () => {
+    const inspector = await renderInspector(createApi(detailFor()));
+
+    expect(within(inspector).queryByText(/Fit \d+ · Timing \d+/)).toBeNull();
+    expect(within(inspector).queryByRole('button', { name: 'Wrong signal' })).toBeNull();
   });
 });

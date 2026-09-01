@@ -3,6 +3,7 @@ import { createContext, useContext } from 'react';
 import type { MutationReceipt } from '../../../shared/contracts/commonContract';
 import type {
   BeginOutboundRequest,
+  CloudScoreOverrideRequest,
   ConfirmTransitionRequest,
   LeadDetail,
   LeadDetailRequest,
@@ -13,6 +14,7 @@ export type LeadDetailApi = {
   get(input: LeadDetailRequest): Promise<LeadDetail>;
   beginOutbound(input: BeginOutboundRequest): Promise<MutationReceipt>;
   confirmTransition(input: ConfirmTransitionRequest): Promise<MutationReceipt>;
+  overrideCloudScore(input: CloudScoreOverrideRequest): Promise<MutationReceipt>;
 };
 
 export type LeadDetailState =

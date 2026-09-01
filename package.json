@@ -16,7 +16,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test --workers=1 tests/e2e/foundation.spec.ts tests/e2e/founderWorkflow.spec.ts tests/e2e/importWorkflow.spec.ts tests/e2e/fridayScoreboard.spec.ts tests/e2e/conversationsLearnings.spec.ts tests/e2e/accessibility.spec.ts tests/e2e/appleBridgeSmoke.spec.ts",
+    "test:e2e": "playwright test --workers=1 tests/e2e/foundation.spec.ts tests/e2e/founderWorkflow.spec.ts tests/e2e/importWorkflow.spec.ts tests/e2e/fridayScoreboard.spec.ts tests/e2e/conversationsLearnings.spec.ts tests/e2e/sourcingInbox.spec.ts tests/e2e/accessibility.spec.ts tests/e2e/appleBridgeSmoke.spec.ts",
     "test:e2e:apple": "playwright test --workers=1 tests/e2e/appleBridgeSmoke.spec.ts",
     "typecheck": "tsc --noEmit",
     "test:swift": "swift test --package-path native/apple-bridge",

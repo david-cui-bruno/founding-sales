@@ -8,6 +8,7 @@ import { SourceRepository } from '../../../src/main/domain/source/sourceReposito
 import { segmentForChannel, SourceService } from '../../../src/main/domain/source/sourceService';
 import { DomainUnitOfWork } from '../../../src/main/domain/support/domainUnitOfWork';
 import {
+  buildNeedsIdentityIntakeCommand,
   cloudReceiptKey,
   CloudEventUnmappableError,
   mapCloudSourceEvent,
@@ -226,6 +227,44 @@ describe('mapCloudSourceEvent', () => {
       const mapped = mapCloudSourceEvent(event);
 
       expect(mapped.kind).toBe('needs-identity');
+    });
+
+    it('builds a placeholder intake command anchored to the situs address', () => {
+      const event = validFrboEvent();
+      const mapped = mapCloudSourceEvent(event);
+      if (mapped.kind !== 'needs-identity') throw new Error('expected needs-identity');
+
+      const command = buildNeedsIdentityIntakeCommand(mapped);
+
+      expect(command).not.toBeNull();
+      expect(command!.person.displayName).toBe('Unknown owner · 123 Hope St, Providence');
+      expect(command!.contacts).toEqual([]);
+      expect(command!.organizations).toEqual([]);
+      expect(command!.properties).toEqual([{
+        addressLine1: '123 Hope St',
+        locality: 'Providence',
+        region: 'RI',
+        postalCode: '02906',
+        countryCode: 'US',
+        doorCount: null,
+        propertyType: null,
+        sourceRecord: { parcelId: null, yearBuilt: null, useCode: null },
+      }]);
+      expect(command!.source).toEqual({
+        id: `cloud:${event.idempotency_key}`,
+        channel: 'frbo',
+        observedAt: '2026-09-01T02:59:00.000Z',
+        sourceRecord: { cloudSourceEvent: event },
+      });
+    });
+
+    it('returns null when the event has no usable situs address', () => {
+      const event = validFrboEvent();
+      (event.entity.property as { situs_address: unknown }).situs_address = null;
+      const mapped = mapCloudSourceEvent(event);
+      if (mapped.kind !== 'needs-identity') throw new Error('expected needs-identity');
+
+      expect(buildNeedsIdentityIntakeCommand(mapped)).toBeNull();
     });
   });
 

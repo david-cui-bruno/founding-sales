@@ -15,11 +15,22 @@ export const leadSourceSchema = z.enum([
 ]);
 export const leadSegmentSchema = z.enum(['hot', 'cold', 'warm']);
 
+/**
+ * Cloud-computed axes chip (Task 5). Two separate 0-100 integers, NEVER
+ * combined into one number; null until the scorer has emitted for this
+ * prospect.
+ */
+export const cloudScoreChipSchema = z.object({
+  fit: z.number().int().min(0).max(100),
+  timing: z.number().int().min(0).max(100),
+}).strict();
+
 export const leadRowSchema = z.object({
   personId: personIdSchema, salesCycleId: salesCycleIdSchema, personName: z.string().min(1), initials: z.string().min(1).max(4),
   organization: z.string().nullable(), propertySummary: z.string().nullable(), stage: lifecycleStageSchema,
   source: leadSourceSchema,
   segment: leadSegmentSchema, priorityContext: leadPriorityContextSchema.nullable(),
+  cloudScores: cloudScoreChipSchema.nullable(),
   nextAction: primaryActionSchema.nullable(), optedOut: z.boolean(), lastActivityAt: z.string().datetime({ offset: true }).nullable(),
 }).strict();
 
@@ -57,6 +68,7 @@ export const leadBulkUpdateRequestSchema = z.discriminatedUnion('field', [
 
 export type LeadSource = z.infer<typeof leadSourceSchema>;
 export type LeadSegment = z.infer<typeof leadSegmentSchema>;
+export type CloudScoreChip = z.infer<typeof cloudScoreChipSchema>;
 export type LeadRow = z.infer<typeof leadRowSchema>;
 export type LeadsListRequest = z.infer<typeof leadsListRequestSchema>;
 export type LeadsListResponse = z.infer<typeof leadsListResponseSchema>;

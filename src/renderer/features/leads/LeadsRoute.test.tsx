@@ -53,6 +53,7 @@ const leadRow: LeadRow = {
   stage: 'ready',
   source: 'frbo',
   segment: 'hot',
+  cloudScores: { fit: 62, timing: 41 },
   priorityContext: {
     priority: 'P1',
     fitPoints: 24,

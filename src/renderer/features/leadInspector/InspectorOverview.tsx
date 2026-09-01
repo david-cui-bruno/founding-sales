@@ -1,11 +1,16 @@
 import type {
   BeginOutboundRequest,
+  CloudScoreOverrideRequest,
   ConfirmTransitionRequest,
   ContactMethod,
   LeadDetail,
 } from '../../../shared/contracts/leadDetailContract';
 import { Button } from '../../components/Button';
 import { StatusPill } from '../../components/StatusPill';
+import {
+  cloudSignalLabel,
+  formatCloudChip,
+} from '../leads/cloudSignalLabels';
 
 const OPT_OUT_REASON =
   'This person opted out. Outreach is permanently disabled.';
@@ -14,6 +19,7 @@ export type InspectorOverviewProps = {
   detail: LeadDetail;
   onBeginOutbound(request: BeginOutboundRequest): void;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
+  onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
 };
 
 const fitTone = (band: string) => (band === 'high' ? 'urgent' : 'neutral');
@@ -58,6 +64,7 @@ export function InspectorOverview({
   detail,
   onBeginOutbound,
   onConfirmTransition,
+  onOverrideCloudScore,
 }: InspectorOverviewProps) {
   const context = detail.priorityContext;
 
@@ -123,6 +130,53 @@ export function InspectorOverview({
               <li key={reason}>{reason}</li>
             ))}
           </ul>
+        </section>
+      )}
+
+      {detail.cloudScores !== null && (
+        <section aria-label="Cloud scores" className="lead-inspector__cloud">
+          <h3 className="lead-inspector__band-title">Cloud scores</h3>
+          <p>
+            <span className="lead-inspector__cloud-chip">
+              {formatCloudChip(detail.cloudScores.scores)}
+            </span>
+          </p>
+          {detail.cloudScores.reasons.length > 0 && (
+            <ul
+              className="lead-inspector__reasons"
+              aria-label="Top cloud signals"
+            >
+              {detail.cloudScores.reasons.map((reason) => (
+                <li key={reason.signal}>
+                  {cloudSignalLabel(reason.signal)}
+                  {' '}
+                  <span className="lead-inspector__cloud-contribution">
+                    +{Math.round(reason.contribution)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="lead-inspector__cloud-override">
+            <Button
+              variant="quiet"
+              onClick={() => onOverrideCloudScore({
+                personId: detail.personId,
+                direction: 'up',
+              })}
+            >
+              Signal too low
+            </Button>
+            <Button
+              variant="quiet"
+              onClick={() => onOverrideCloudScore({
+                personId: detail.personId,
+                direction: 'down',
+              })}
+            >
+              Wrong signal
+            </Button>
+          </div>
         </section>
       )}
 

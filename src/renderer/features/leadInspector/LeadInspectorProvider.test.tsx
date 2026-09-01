@@ -43,6 +43,7 @@ const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
       dataConfidence: 7,
     },
     priorityReasons: ['Fit high 22/30', 'Timing hot 31/40', 'Reachability direct'],
+    cloudScores: null,
     nextAction: {
       id: 'action-1',
       type: 'review_lead',
@@ -88,6 +89,7 @@ function createApi(details: LeadDetail[]) {
     }),
     beginOutbound: vi.fn(async () => receipt),
     confirmTransition: vi.fn(async () => receipt),
+    overrideCloudScore: vi.fn(async () => receipt),
   };
 }
 
@@ -174,6 +176,7 @@ describe('LeadInspectorProvider', () => {
       ),
       beginOutbound: vi.fn(async () => receipt),
       confirmTransition: vi.fn(async () => receipt),
+      overrideCloudScore: vi.fn(async () => receipt),
     };
     render(
       <LeadInspectorProvider api={api}>

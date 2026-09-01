@@ -396,6 +396,7 @@ export class FounderSalesDomain {
         projection.fit_points, projection.fit_band, projection.timing_millipoints,
         projection.timing_band, projection.reachability, projection.data_confidence,
         projection.priority,
+        prospect.cloud_fit, prospect.cloud_timing,
         (
           SELECT canonical_name FROM prospect_organizations AS link
           JOIN organizations AS org ON org.id = link.organization_id
@@ -426,6 +427,7 @@ export class FounderSalesDomain {
       timing_millipoints: number | null; timing_band: ProjectionRow['timing_band'] | null;
       reachability: ProjectionRow['reachability'] | null; data_confidence: number | null;
       priority: ProjectionRow['priority'] | null;
+      cloud_fit: number | null; cloud_timing: number | null;
       organization_name: string | null; property_summary: string | null;
       last_activity_at: string | null;
     }>;
@@ -453,6 +455,9 @@ export class FounderSalesDomain {
           version: 1,
           evaluation_id: '',
         }),
+      cloudScores: row.cloud_fit === null || row.cloud_timing === null
+        ? null
+        : { fit: row.cloud_fit, timing: row.cloud_timing },
       nextAction: {
         id: row.action_id,
         type: row.action_type,
@@ -575,10 +580,14 @@ export class FounderSalesDomain {
     if (cycle === undefined) {
       throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The person has no sales cycle.');
     }
-    const prospect = this.database.raw.prepare(
-      'SELECT id, segment, original_source_event_id FROM prospects WHERE id = ?',
-    ).get(cycle.prospect_id) as {
+    const prospect = this.database.raw.prepare(`
+      SELECT id, segment, original_source_event_id,
+        cloud_fit, cloud_timing, cloud_score_reasons_json, cloud_scored_at
+      FROM prospects WHERE id = ?
+    `).get(cycle.prospect_id) as {
       id: string; segment: LeadRow['segment']; original_source_event_id: string;
+      cloud_fit: number | null; cloud_timing: number | null;
+      cloud_score_reasons_json: string | null; cloud_scored_at: string | null;
     } | undefined;
     if (prospect === undefined) {
       throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The prospect does not exist.');
@@ -643,6 +652,17 @@ export class FounderSalesDomain {
       id: string; to_stage: string; effective_at: string; confirmation_kind: string;
     }[];
     const priorityContext = toPriorityContext(projection);
+    const cloudReasons = ((): { signal: string; contribution: number }[] => {
+      if (prospect.cloud_score_reasons_json === null) return [];
+      try {
+        const parsed = JSON.parse(prospect.cloud_score_reasons_json) as unknown;
+        return Array.isArray(parsed)
+          ? (parsed as { signal: string; contribution: number }[]).slice(0, 3)
+          : [];
+      } catch {
+        return [];
+      }
+    })();
     return leadDetailSchema.parse({
       personId: person.id,
       salesCycleId: cycle.id,
@@ -658,6 +678,13 @@ export class FounderSalesDomain {
       sourceLabel: sourceChannel,
       segment: prospect.segment,
       priorityContext,
+      cloudScores: prospect.cloud_fit === null || prospect.cloud_timing === null
+        ? null
+        : {
+          scores: { fit: prospect.cloud_fit, timing: prospect.cloud_timing },
+          reasons: cloudReasons,
+          scoredAt: prospect.cloud_scored_at,
+        },
       priorityReasons: projection === undefined ? [] : [
         `Fit ${priorityContext.fitBand} ${priorityContext.fitPoints}/30`,
         `Timing ${priorityContext.timingBand} ${priorityContext.timingValue}/40`,

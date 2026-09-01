@@ -1,10 +1,12 @@
 import { mutationReceiptSchema } from '../../shared/contracts/commonContract';
 import {
   beginOutboundRequestSchema,
+  cloudScoreOverrideRequestSchema,
   confirmTransitionRequestSchema,
   leadDetailRequestSchema,
   leadDetailSchema,
   type BeginOutboundRequest,
+  type CloudScoreOverrideRequest,
   type ConfirmTransitionRequest,
   type LeadDetailRequest,
 } from '../../shared/contracts/leadDetailContract';
@@ -33,6 +35,13 @@ export const createLeadDetailApi = (client: IpcClient) => ({
     client.request(
       'lead-detail:confirm-transition',
       confirmTransitionRequestSchema,
+      mutationReceiptSchema,
+      input,
+    ),
+  overrideCloudScore: (input: CloudScoreOverrideRequest) =>
+    client.request(
+      'lead-detail:cloud-score-override',
+      cloudScoreOverrideRequestSchema,
       mutationReceiptSchema,
       input,
     ),

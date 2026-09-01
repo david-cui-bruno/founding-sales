@@ -981,6 +981,9 @@ export class PrioritizationService {
       }
       effectivePriority = priorityControl.priority;
     }
+    // Cloud axes (Task 5): read straight from the prospect row; tiebreaker
+    // display data only, never blended into local fit/timing points.
+    const cloudAxes = this.repository.loadCloudScoreAxes(prospectId);
     return Object.freeze({
       prospectId,
       ruleVersionId: projection.ruleVersionId,
@@ -1001,6 +1004,8 @@ export class PrioritizationService {
       verifyFirst: projection.verifyFirst,
       lastContactActivityId: projection.lastContactActivityId,
       lastContactAt: projection.lastContactAt,
+      cloudTiming: cloudAxes.cloudTiming,
+      cloudFit: cloudAxes.cloudFit,
       controls: Object.freeze({
         priority: priorityControl,
         pin: effective.pin_to_top ?? null,

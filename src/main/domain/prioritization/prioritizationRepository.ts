@@ -549,6 +549,25 @@ export class PrioritizationRepository {
     return parseTriggerEventRow(row);
   }
 
+  /**
+   * Cloud-computed axes on the prospect row (Task 5). Both null until a
+   * scorer re-emission lands; tiebreaker/display data only.
+   */
+  loadCloudScoreAxes(prospectId: string): {
+    cloudFit: number | null;
+    cloudTiming: number | null;
+  } {
+    const row = this.database.raw.prepare(
+      'SELECT cloud_fit, cloud_timing FROM prospects WHERE id = ?',
+    ).get(idSchema.parse(prospectId)) as {
+      cloud_fit: number | null; cloud_timing: number | null;
+    } | undefined;
+    return {
+      cloudFit: row?.cloud_fit ?? null,
+      cloudTiming: row?.cloud_timing ?? null,
+    };
+  }
+
   loadQualificationInputs(prospectId: string): QualificationInputSnapshot {
     const row = this.database.raw.prepare(`
       SELECT

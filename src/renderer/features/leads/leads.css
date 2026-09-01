@@ -245,3 +245,19 @@
   outline: none;
   box-shadow: var(--focus-ring);
 }
+
+/* Cloud score chip: the two cloud axes side by side, indigo accent. Fit and
+   Timing stay separate numbers by rule; this chip never shows one blended
+   value. */
+
+.leads-grid__cloud-chip {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 0.85em;
+  line-height: 1.6;
+  white-space: nowrap;
+}

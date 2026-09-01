@@ -17,6 +17,7 @@ import {
 const PRIORITIES = ['p0', 'p1', 'p2', 'p3'] as const;
 const REACHABILITIES = ['direct', 'indirect', 'none'] as const;
 const EXPIRATIONS: readonly (string | null)[] = [null, '2026-09-01T00:00:00.000Z', '2026-09-15T00:00:00.000Z'];
+const CLOUD_AXES: readonly (number | null)[] = [null, 0, 41, 62, 100];
 const LAST_CONTACTS: readonly (string | null)[] = [null, '2026-08-01T00:00:00.000Z', '2026-08-15T00:00:00.000Z'];
 
 function mulberry32(seed: number): () => number {
@@ -54,7 +55,9 @@ describe('priority ordering SQL parity', () => {
         fit_points INTEGER NOT NULL,
         reachability TEXT NOT NULL,
         data_confidence INTEGER NOT NULL,
-        last_contact_at TEXT
+        last_contact_at TEXT,
+        cloud_timing INTEGER,
+        cloud_fit INTEGER
       )
     `);
   });
@@ -67,7 +70,7 @@ describe('priority ordering SQL parity', () => {
   function sqlOrder(rows: readonly OrderablePriorityRow[]): string[] {
     database.raw.exec('DELETE FROM priority_orderable_rows');
     const insert = database.raw.prepare(`
-      INSERT INTO priority_orderable_rows VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO priority_orderable_rows VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     for (const row of rows) {
       insert.run(
@@ -79,6 +82,8 @@ describe('priority ordering SQL parity', () => {
         row.reachability,
         row.dataConfidence,
         row.lastContactAt,
+        row.cloudTiming,
+        row.cloudFit,
       );
     }
     const ordered = database.raw.prepare(`
@@ -110,6 +115,8 @@ describe('priority ordering SQL parity', () => {
               reachability,
               dataConfidence: index % 11,
               lastContactAt,
+              cloudTiming: CLOUD_AXES[index % CLOUD_AXES.length]!,
+              cloudFit: CLOUD_AXES[(index + 2) % CLOUD_AXES.length]!,
             });
           }
         }
@@ -126,6 +133,8 @@ describe('priority ordering SQL parity', () => {
         reachability: 'direct',
         dataConfidence: 5,
         lastContactAt: null,
+        cloudTiming: null,
+        cloudFit: null,
       },
       {
         prospectId: 'tie-b',
@@ -136,6 +145,8 @@ describe('priority ordering SQL parity', () => {
         reachability: 'direct',
         dataConfidence: 5,
         lastContactAt: null,
+        cloudTiming: null,
+        cloudFit: null,
       },
     );
     expect(sqlOrder(rows)).toEqual(jsOrder(rows));
@@ -155,6 +166,8 @@ describe('priority ordering SQL parity', () => {
           reachability: pick(random, REACHABILITIES),
           dataConfidence: Math.floor(random() * 11),
           lastContactAt: pick(random, LAST_CONTACTS),
+          cloudTiming: pick(random, CLOUD_AXES),
+          cloudFit: pick(random, CLOUD_AXES),
         });
       }
       expect(sqlOrder(rows)).toEqual(jsOrder(rows));

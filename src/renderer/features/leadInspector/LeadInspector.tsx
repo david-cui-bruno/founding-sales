@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 
 import type {
   BeginOutboundRequest,
+  CloudScoreOverrideRequest,
   ConfirmTransitionRequest,
   LeadDetail,
 } from '../../../shared/contracts/leadDetailContract';
@@ -30,6 +31,7 @@ export type InspectorTabsProps = {
   detail: LeadDetail;
   onBeginOutbound(request: BeginOutboundRequest): void;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
+  onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
 };
 
 /**
@@ -40,6 +42,7 @@ export function InspectorTabs({
   detail,
   onBeginOutbound,
   onConfirmTransition,
+  onOverrideCloudScore,
 }: InspectorTabsProps) {
   const [selected, setSelected] = useState<TabId>('overview');
   const idPrefix = useId();
@@ -113,6 +116,7 @@ export function InspectorTabs({
             detail={detail}
             onBeginOutbound={onBeginOutbound}
             onConfirmTransition={onConfirmTransition}
+            onOverrideCloudScore={onOverrideCloudScore}
           />
         )}
         {selected === 'activity' && (
@@ -137,6 +141,7 @@ export type LeadInspectorProps = {
   onOpenFullPage(personId: string): void;
   onBeginOutbound(request: BeginOutboundRequest): void;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
+  onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
 };
 
 /**
@@ -150,6 +155,7 @@ export function LeadInspector({
   onOpenFullPage,
   onBeginOutbound,
   onConfirmTransition,
+  onOverrideCloudScore,
 }: LeadInspectorProps) {
   const resize = useResizableInspector();
 
@@ -210,6 +216,7 @@ export function LeadInspector({
               detail={state.detail}
               onBeginOutbound={onBeginOutbound}
               onConfirmTransition={onConfirmTransition}
+              onOverrideCloudScore={onOverrideCloudScore}
             />
           </>
         )}

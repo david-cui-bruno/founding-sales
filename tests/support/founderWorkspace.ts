@@ -89,6 +89,8 @@ const connectToPackagedApplication = async (
  */
 export async function launchFounderWorkspace(options: {
   userDataPath?: string;
+  /** Extra environment variables for the packaged process (test seams). */
+  env?: Record<string, string>;
 } = {}): Promise<FounderWorkspace> {
   if (!existsSync(packagedApplicationBinary)) {
     throw new Error(
@@ -107,7 +109,9 @@ export async function launchFounderWorkspace(options: {
     `--user-data-dir=${userDataPath}`,
     `--remote-debugging-port=${debuggingPort}`,
     '--use-mock-keychain',
-  ]);
+  ], {
+    env: { ...process.env, ...options.env },
+  });
   application.once('error', (error) => {
     spawnError = error;
   });
