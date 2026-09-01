@@ -2,6 +2,7 @@ import type {
   PipelineCard,
   PipelineSnapshot,
 } from '../../../shared/contracts/pipelineContract';
+import { humanizeEnumLabel, titleCaseDisplayName } from '../../../shared/displayText';
 import {
   lostReasonLabel,
   stageLabel,
@@ -56,7 +57,7 @@ export function PipelineTable({ snapshot, onOpenLead }: PipelineTableProps) {
                     className="pipeline-table__person"
                     onClick={() => onOpenLead(card.personId)}
                   >
-                    {card.personName}
+                    {titleCaseDisplayName(card.personName)}
                   </button>
                 </td>
                 <td>
@@ -65,7 +66,13 @@ export function PipelineTable({ snapshot, onOpenLead }: PipelineTableProps) {
                     <span className="pipeline-table__status">{status}</span>
                   )}
                 </td>
-                <td>{card.contextLabel ?? '—'}</td>
+                <td>
+                  {card.contextLabel ?? (
+                    <span className="pipeline-table__absent" aria-hidden="true">
+                      —
+                    </span>
+                  )}
+                </td>
                 {card.priorityContext === null ? (
                   <td className="pipeline-card__muted" colSpan={3}>
                     No priority data
@@ -74,10 +81,10 @@ export function PipelineTable({ snapshot, onOpenLead }: PipelineTableProps) {
                   <>
                     <td>{card.priorityContext.priority}</td>
                     <td>
-                      {`${card.priorityContext.fitBand} · ${card.priorityContext.fitPoints}/30`}
+                      {`${humanizeEnumLabel(card.priorityContext.fitBand)} · ${card.priorityContext.fitPoints}/30`}
                     </td>
                     <td>
-                      {`${card.priorityContext.timingBand} · ${card.priorityContext.timingValue}/40`}
+                      {`${humanizeEnumLabel(card.priorityContext.timingBand)} · ${card.priorityContext.timingValue}/40`}
                     </td>
                   </>
                 )}

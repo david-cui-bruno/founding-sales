@@ -10,6 +10,8 @@ import type {
 } from '../../../shared/contracts/learningsContract';
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
+import { PageHeader } from '../../components/PageHeader';
+import { Select } from '../../components/Select';
 import { CaptureLearningDialog } from './CaptureLearningDialog';
 import { LearningCard } from './LearningCard';
 import { CATEGORY_LABELS } from './learningMeta';
@@ -75,6 +77,12 @@ export function LearningsPage({
 
   return (
     <div className="learnings">
+      <PageHeader
+        title="Learnings"
+        primaryAction={
+          <Button onClick={() => setCapturing(true)}>Capture learning</Button>
+        }
+      />
       <div className="learnings__toolbar">
         <div
           className="learnings__chips"
@@ -94,23 +102,19 @@ export function LearningsPage({
           ))}
         </div>
         <div className="learnings__toolbar-controls">
-          <label className="learnings__field">
-            <span className="learnings__field-label">Status</span>
-            <select
-              className="learnings__select"
+          <div className="learnings__field">
+            <span className="learnings__field-label" aria-hidden="true">
+              Status
+            </span>
+            <Select
+              label="Status"
+              options={STATUS_OPTIONS}
               value={statuses[0] ?? ''}
-              onChange={(event) => {
-                const value = event.target.value as '' | LearningStatus;
+              onChange={(value) => {
                 onStatusesChange(value === '' ? [] : [value]);
               }}
-            >
-              {STATUS_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+            />
+          </div>
           <label className="learnings__field">
             <span className="learnings__field-label">Search learnings</span>
             <input
@@ -122,7 +126,6 @@ export function LearningsPage({
               onChange={(event) => onQueryChange(event.target.value)}
             />
           </label>
-          <Button onClick={() => setCapturing(true)}>Capture learning</Button>
         </div>
       </div>
 

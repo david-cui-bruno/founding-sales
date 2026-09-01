@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { Button } from '../../components/Button';
+import { Select } from '../../components/Select';
 import type { LeadsSort } from './useLeadGridState';
 
 export type LeadsToolbarProps = {
@@ -11,19 +12,18 @@ export type LeadsToolbarProps = {
   checkedCount: number;
   onBulkSetOrganization(value: string | null): void;
   onClearChecked(): void;
-  onOpenImport(): void;
 };
 
-const SORT_LABELS: Readonly<Record<LeadsSort, string>> = Object.freeze({
-  priority: 'Priority',
-  due_at: 'Due',
-  person_name: 'Name',
-  last_contact: 'Last contact',
-});
+const SORT_OPTIONS: readonly { value: LeadsSort; label: string }[] = [
+  { value: 'priority', label: 'Priority' },
+  { value: 'due_at', label: 'Due' },
+  { value: 'person_name', label: 'Name' },
+  { value: 'last_contact', label: 'Last contact' },
+];
 
 /**
- * Search, sort, import, and the bulk action bar. Bulk edits stay limited to
- * the same allowed fields as inline edits.
+ * Search, sort, and the bulk action bar; rendered inside the Leads page
+ * header. Bulk edits stay limited to the same allowed fields as inline edits.
  */
 export function LeadsToolbar({
   query,
@@ -33,7 +33,6 @@ export function LeadsToolbar({
   checkedCount,
   onBulkSetOrganization,
   onClearChecked,
-  onOpenImport,
 }: LeadsToolbarProps) {
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
   const [bulkValue, setBulkValue] = useState('');
@@ -49,26 +48,18 @@ export function LeadsToolbar({
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
       />
-      <label className="leads-toolbar__sort">
-        Sort
-        <select
-          aria-label="Sort leads"
+      <div className="leads-toolbar__sort">
+        <span aria-hidden="true">Sort</span>
+        <Select
+          label="Sort leads"
+          options={SORT_OPTIONS}
           value={sort}
-          onChange={(event) => onSortChange(event.target.value as LeadsSort)}
-        >
-          {(Object.keys(SORT_LABELS) as LeadsSort[]).map((value) => (
-            <option key={value} value={value}>
-              {SORT_LABELS[value]}
-            </option>
-          ))}
-        </select>
-      </label>
-      <Button variant="quiet" onClick={onOpenImport}>
-        Import
-      </Button>
+          onChange={onSortChange}
+        />
+      </div>
       {checkedCount > 0 && (
         <div className="leads-toolbar__bulk">
-          <span className="leads-toolbar__bulk-count">
+          <span className="leads-toolbar__bulk-count numeric">
             {checkedCount} selected
           </span>
           {bulkEditOpen ? (

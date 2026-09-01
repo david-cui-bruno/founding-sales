@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 
 import type { LeadDetail } from '../../../shared/contracts/leadDetailContract';
+import { humanizeEnumLabel, titleCaseDisplayName } from '../../../shared/displayText';
 import { Avatar } from '../../components/Avatar';
 import { Button } from '../../components/Button';
 import { IconButton } from '../../components/IconButton';
@@ -29,7 +30,9 @@ export function InspectorHeader({
       <div className="lead-inspector__identity">
         <Avatar name={detail.personName} />
         <div>
-          <h2 className="lead-inspector__name">{detail.personName}</h2>
+          <h2 className="lead-inspector__name">
+            {titleCaseDisplayName(detail.personName)}
+          </h2>
           <p className="lead-inspector__meta">
             {detail.organizationLabel !== null && (
               <span>{detail.organizationLabel} · </span>
@@ -41,7 +44,7 @@ export function InspectorHeader({
       </div>
       <div className="lead-inspector__header-actions">
         <StatusPill tone={detail.optedOut ? 'danger' : 'neutral'}>
-          {detail.optedOut ? 'opted out' : detail.stage}
+          {detail.optedOut ? 'Opted out' : humanizeEnumLabel(detail.stage)}
         </StatusPill>
         {onOpenFullPage !== undefined && (
           <Button variant="quiet" onClick={onOpenFullPage}>

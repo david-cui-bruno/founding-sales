@@ -5,6 +5,7 @@ import type {
   ContactMethod,
   LeadDetail,
 } from '../../../shared/contracts/leadDetailContract';
+import { humanizeEnumLabel } from '../../../shared/displayText';
 import { Button } from '../../components/Button';
 import { StatusPill } from '../../components/StatusPill';
 import {
@@ -81,7 +82,7 @@ export function InspectorOverview({
           ) : (
             <p>
               <StatusPill tone={fitTone(context.fitBand)}>
-                {context.fitBand}
+                {humanizeEnumLabel(context.fitBand)}
               </StatusPill>{' '}
               {context.fitPoints}/30 fit points
             </p>
@@ -97,7 +98,7 @@ export function InspectorOverview({
           ) : (
             <p>
               <StatusPill tone={timingTone(context.timingBand)}>
-                {context.timingBand}
+                {humanizeEnumLabel(context.timingBand)}
               </StatusPill>{' '}
               {context.timingValue}/40 timing value
             </p>
@@ -109,7 +110,7 @@ export function InspectorOverview({
         <dl className="lead-inspector__facts">
           <div>
             <dt>Reachability</dt>
-            <dd>{context.reachability}</dd>
+            <dd>{humanizeEnumLabel(context.reachability)}</dd>
           </div>
           <div>
             <dt>Data confidence</dt>

@@ -1,4 +1,5 @@
 import type { TodayItem } from '../../../shared/contracts/todayContract';
+import { humanizeEnumLabel, titleCaseDisplayName } from '../../../shared/displayText';
 import { Button } from '../../components/Button';
 import { StatusPill } from '../../components/StatusPill';
 import { TodayReason } from './TodayReason';
@@ -44,12 +45,12 @@ export function TodayQueueRow({
           className="today-row__person"
           onClick={() => onOpenLead(item.personId)}
         >
-          {item.personName}
+          {titleCaseDisplayName(item.personName)}
         </button>
         {item.contextLabel !== null && (
           <span className="today-row__context">{item.contextLabel}</span>
         )}
-        <span className="today-row__stage">{item.stage}</span>
+        <span className="today-row__stage">{humanizeEnumLabel(item.stage)}</span>
         {item.pinned && <StatusPill>Pinned</StatusPill>}
       </div>
       {priority !== null && (
@@ -60,15 +61,15 @@ export function TodayQueueRow({
           </div>
           <div className="today-row__band">
             <dt>Fit</dt>
-            <dd>{`${priority.fitBand} · ${priority.fitPoints}`}</dd>
+            <dd className="numeric">{`${humanizeEnumLabel(priority.fitBand)} · ${priority.fitPoints}`}</dd>
           </div>
           <div className="today-row__band">
             <dt>Timing</dt>
-            <dd>{`${priority.timingBand} · ${priority.timingValue}`}</dd>
+            <dd className="numeric">{`${humanizeEnumLabel(priority.timingBand)} · ${priority.timingValue}`}</dd>
           </div>
           <div className="today-row__band">
             <dt>Reach</dt>
-            <dd>{priority.reachability}</dd>
+            <dd>{humanizeEnumLabel(priority.reachability)}</dd>
           </div>
           <div className="today-row__band">
             <dt>Confidence</dt>
@@ -78,7 +79,7 @@ export function TodayQueueRow({
       )}
       <div className="today-row__action">
         <span className="today-row__action-label">{item.action.label}</span>
-        <span className="today-row__action-channel">{item.action.channel}</span>
+        <span className="today-row__action-channel">{humanizeEnumLabel(item.action.channel)}</span>
         <span className="today-row__action-due">Due {dueTime(item.action.dueAt)}</span>
         {item.action.overdue && <StatusPill tone="danger">Overdue</StatusPill>}
       </div>

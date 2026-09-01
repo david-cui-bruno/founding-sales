@@ -184,15 +184,15 @@ describe('LeadInspector', () => {
     const fit = within(inspector).getByRole('region', { name: 'Fit' });
     const timing = within(inspector).getByRole('region', { name: 'Timing' });
     expect(fit.textContent).toContain('22/30');
-    expect(fit.textContent).toContain('high');
+    expect(fit.textContent).toContain('High');
     expect(timing.textContent).toContain('31/40');
-    expect(timing.textContent).toContain('hot');
+    expect(timing.textContent).toContain('Hot');
     expect(fit.textContent).not.toContain('31/40');
     expect(timing.textContent).not.toContain('22/30');
     expect(inspector.textContent).not.toMatch(/combined|overall score|lead score/i);
 
     expect(within(inspector).getByText('Reachability')).toBeTruthy();
-    expect(within(inspector).getByText('direct')).toBeTruthy();
+    expect(within(inspector).getByText('Direct')).toBeTruthy();
     expect(within(inspector).getByText('Owner of 3+ doors')).toBeTruthy();
     expect(within(inspector).getByText(/FRBO warm/)).toBeTruthy();
     expect(within(inspector).getByText('Review lead')).toBeTruthy();

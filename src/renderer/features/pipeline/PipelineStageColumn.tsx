@@ -4,6 +4,7 @@ import type {
   PipelineCard,
   PipelineSnapshot,
 } from '../../../shared/contracts/pipelineContract';
+import { titleCaseDisplayName } from '../../../shared/displayText';
 import { StatusPill } from '../../components/StatusPill';
 import {
   lostReasonLabel,
@@ -32,7 +33,9 @@ function PipelineCardButton({ card, onOpenLead }: PipelineCardButtonProps) {
       className="pipeline-card"
       onClick={() => onOpenLead(card.personId)}
     >
-      <span className="pipeline-card__name">{card.personName}</span>
+      <span className="pipeline-card__name">
+        {titleCaseDisplayName(card.personName)}
+      </span>
       {card.contextLabel !== null && (
         <span className="pipeline-card__context">{card.contextLabel}</span>
       )}

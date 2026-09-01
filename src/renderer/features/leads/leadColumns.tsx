@@ -11,6 +11,7 @@ import type {
   LeadFieldUpdateRequest,
   LeadRow,
 } from '../../../shared/contracts/leadsContract';
+import { titleCaseDisplayName } from '../../../shared/displayText';
 import { Avatar } from '../../components/Avatar';
 import { StatusPill } from '../../components/StatusPill';
 import { formatCloudChip } from './cloudSignalLabels';
@@ -76,7 +77,13 @@ export const formatLastActivity = (isoTimestamp: string | null): string => {
 };
 
 function Absent() {
-  return <span className="leads-grid__absent">{ABSENT_PLACEHOLDER}</span>;
+  // Decorative placeholder: faint per the audit, hidden from screen readers
+  // (an empty cell reads better than "em dash").
+  return (
+    <span className="leads-grid__absent" aria-hidden="true">
+      {ABSENT_PLACEHOLDER}
+    </span>
+  );
 }
 
 /**
@@ -183,7 +190,7 @@ function PersonCell(context: CellContext<LeadRow, unknown>) {
             meta.startEdit({ personId: lead.personId, field: 'person_name' })
           }
         >
-          {lead.personName}
+          {titleCaseDisplayName(lead.personName)}
         </span>
       )}
     </div>
@@ -225,6 +232,7 @@ function ContextCell(context: CellContext<LeadRow, unknown>) {
               ? 'leads-grid__organization leads-grid__absent'
               : 'leads-grid__organization'
           }
+          aria-hidden={lead.organization === null ? true : undefined}
           onDoubleClick={() =>
             meta.startEdit({
               personId: lead.personId,

@@ -165,9 +165,8 @@ describe('LearningsRoute list and filters', () => {
     const { api } = renderRoute();
     await screen.findByText('Owners lose weekends to showings.');
 
-    fireEvent.change(screen.getByLabelText('Status'), {
-      target: { value: 'retired' },
-    });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Status' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Retired' }));
     await waitFor(() => {
       expect(api.list).toHaveBeenLastCalledWith({
         categories: [], statuses: ['retired'], query: '', limit: 200,
