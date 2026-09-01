@@ -927,6 +927,7 @@ export class FounderSalesDomain {
       scheduledDials: queue.dialCount,
       conversationTarget: capacity.conversationTarget,
       reviewErrorCount: queue.diagnostics.length,
+      unreviewedBacklogCount: queue.unreviewedBacklogCount,
       revision: this.currentRevision(),
     });
   }

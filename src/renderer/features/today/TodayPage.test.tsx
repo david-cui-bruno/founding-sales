@@ -48,7 +48,7 @@ const queueItem = (
     label: 'Call lead',
     overdue: false,
   },
-  reason: `Reason ${lane} ${seq}`,
+  reason: 'other_non_discretionary_due_today',
   activeTriggers: [],
   verifyFirst: false,
   pinned: false,
@@ -56,19 +56,30 @@ const queueItem = (
   ...overrides,
 });
 
-const snapshotWithAllLanes: TodaySnapshot = {
+const emptySnapshot = (overrides: Partial<TodaySnapshot> = {}): TodaySnapshot => ({
+  lanes: LANE_IDS.map((lane) => ({ id: lane, items: [] as TodayItem[] })),
+  dialBudget: 40,
+  scheduledDials: 0,
+  conversationTarget: 5,
+  reviewErrorCount: 0,
+  unreviewedBacklogCount: 0,
+  revision: 1,
+  ...overrides,
+});
+
+/** Overdue holds two rows and P1 two rows; every other lane is empty. */
+const denseSnapshot: TodaySnapshot = emptySnapshot({
   lanes: LANE_IDS.map((lane) => ({
     id: lane,
-    items: lane === 'p1'
-      ? [queueItem(lane, 1), queueItem(lane, 2)]
-      : [queueItem(lane, 1)],
+    items:
+      lane === 'overdue'
+        ? [queueItem(lane, 1), queueItem(lane, 2)]
+        : lane === 'p1'
+          ? [queueItem(lane, 1), queueItem(lane, 2)]
+          : [],
   })),
-  dialBudget: 40,
   scheduledDials: 12,
-  conversationTarget: 5,
-  reviewErrorCount: 2,
-  revision: 7,
-};
+});
 
 const renderPage = (
   snapshot: TodaySnapshot,
@@ -81,73 +92,175 @@ const renderPage = (
       onComplete={vi.fn()}
       onSnooze={vi.fn()}
       onPin={vi.fn()}
+      onReviewBacklog={vi.fn()}
       {...overrides}
     />,
   );
 
+const rowByCycleId = (cycleId: string): HTMLElement => {
+  const row = document.querySelector(`[data-cycle-id="${cycleId}"]`);
+  expect(row).not.toBeNull();
+  return row as HTMLElement;
+};
+
 describe('TodayPage', () => {
-  it('renders the promise-first lanes in fixed order', () => {
-    render(
-      <TodayPage
-        snapshot={snapshotWithAllLanes}
-        onOpenLead={vi.fn()}
-        onComplete={vi.fn()}
-        onSnooze={vi.fn()}
-        onPin={vi.fn()}
-      />,
-    );
-    expect(
-      screen.getAllByRole('heading', { level: 2 }).map((node) => node.textContent),
-    ).toEqual([
-      'Onboard now', 'Fresh inbound', 'Overdue', 'Post-interview & offers',
-      'Due cadence', 'New P0', 'P1', 'Exploration', 'Later',
+  it('renders lanes in fixed order with empty lanes collapsed to one quiet line', () => {
+    renderPage(denseSnapshot);
+
+    const headings = screen
+      .getAllByRole('heading', { level: 2 })
+      .map((node) => node.textContent);
+    expect(headings).toEqual([
+      'Onboard now — 0', 'Fresh inbound — 0', 'Overdue', 'Post-interview & offers — 0',
+      'Due cadence — 0', 'New P0 — 0', 'P1', 'Exploration — 0', 'Later — 0',
     ]);
   });
 
   it('keeps the fixed lane order even when the snapshot shuffles lanes', () => {
     const shuffled: TodaySnapshot = {
-      ...snapshotWithAllLanes,
-      lanes: [...snapshotWithAllLanes.lanes].reverse(),
+      ...denseSnapshot,
+      lanes: [...denseSnapshot.lanes].reverse(),
     };
     renderPage(shuffled);
-    expect(
-      screen.getAllByRole('heading', { level: 2 }).map((node) => node.textContent),
-    ).toEqual([
-      'Onboard now', 'Fresh inbound', 'Overdue', 'Post-interview & offers',
-      'Due cadence', 'New P0', 'P1', 'Exploration', 'Later',
-    ]);
-  });
-
-  it('renders every row exactly once, inside its own lane, in snapshot order', () => {
-    renderPage(snapshotWithAllLanes);
-
-    const p1Lane = screen.getByRole('region', { name: 'P1' });
-    const names = within(p1Lane)
-      .getAllByRole('button', { name: /^Person p1/ })
+    const headings = screen
+      .getAllByRole('heading', { level: 2 })
       .map((node) => node.textContent);
-    expect(names).toEqual(['Person p1 1', 'Person p1 2']);
-    expect(screen.getAllByText('Person p1 1')).toHaveLength(1);
-    expect(screen.getAllByText('Person overdue 1')).toHaveLength(1);
-    expect(
-      within(screen.getByRole('region', { name: 'Overdue' }))
-        .queryByText('Person p1 1'),
-    ).toBeNull();
+    expect(headings[2]).toBe('Overdue');
+    expect(headings[6]).toBe('P1');
   });
 
-  it('shows the capacity labels from the snapshot', () => {
-    renderPage(snapshotWithAllLanes);
+  it('promotes the first item of the first non-empty lane into the Next up hero', () => {
+    renderPage(denseSnapshot);
 
-    expect(screen.getByText('12 of 40 dials scheduled')).toBeTruthy();
-    expect(screen.getByText('Conversation target 5')).toBeTruthy();
-    expect(screen.getByText('2 review errors')).toBeTruthy();
+    const hero = screen.getByRole('group', { name: 'Next up: Person overdue 1' });
+    expect(within(hero).getByRole('button', { name: 'Person overdue 1' })).toBeTruthy();
+    expect(within(hero).getByRole('button', { name: 'Done' })).toBeTruthy();
+    // The hero row does not render again inside the Overdue lane.
+    const overdueLane = screen.getByRole('region', { name: 'Overdue' });
+    expect(within(overdueLane).queryByText('Person overdue 1')).toBeNull();
+    expect(within(overdueLane).getByText('Person overdue 2')).toBeTruthy();
+    // The lane count still reports the full snapshot size.
+    expect(within(overdueLane).getByText('2')).toBeTruthy();
+  });
+
+  it('renders two-line rows: Title Case name, stage chip, humanized reason with relative time', () => {
+    const shouting = emptySnapshot({
+      lanes: LANE_IDS.map((lane) => ({
+        id: lane,
+        items: lane === 'overdue'
+          ? [
+            queueItem('overdue', 1),
+            queueItem('overdue', 2, {
+              personName: 'FOX WILLIAM P ETAL',
+              reason: 'non_discretionary_overdue',
+              action: {
+                id: 'action-shout',
+                type: 'call_lead',
+                channel: 'call',
+                dueAt: '2026-08-30T15:00:00.000Z',
+                label: 'Call lead',
+                overdue: true,
+              },
+            }),
+          ]
+          : [],
+      })),
+    });
+    renderPage(shouting);
+
+    // Title Case, never shouting.
+    expect(screen.getByText('Fox William P Etal')).toBeTruthy();
+    // The raw machine enum never renders.
+    expect(screen.queryByText(/non_discretionary_overdue/)).toBeNull();
+    expect(screen.queryByText(/_/)).toBeNull();
+    // The reason line reads humanized with a relative due time.
+    const row = rowByCycleId('cycle-overdue-2');
+    expect(within(row).getByText(/Overdue · Call lead · due .+ago/)).toBeTruthy();
+    // The stage chip is humanized.
+    expect(within(row).getByText('Ready')).toBeTruthy();
+  });
+
+  it('reveals Done/Snooze/Pin on focus-within only', () => {
+    renderPage(denseSnapshot);
+
+    const row = rowByCycleId('cycle-p1-1');
+    expect(row.getAttribute('data-focus-within')).toBeNull();
+    fireEvent.focus(row);
+    expect(row.getAttribute('data-focus-within')).toBe('true');
+    expect(within(row).getByRole('button', { name: 'Complete · E' })).toBeTruthy();
+    expect(within(row).getByRole('button', { name: 'Snooze · H' })).toBeTruthy();
+    expect(within(row).getByRole('button', { name: 'Pin · P' })).toBeTruthy();
+    fireEvent.blur(row);
+    expect(row.getAttribute('data-focus-within')).toBeNull();
+  });
+
+  it('moves focus with J/K and the arrow keys across hero and rows', () => {
+    renderPage(denseSnapshot);
+
+    const hero = rowByCycleId('cycle-overdue-1');
+    const second = rowByCycleId('cycle-overdue-2');
+    const third = rowByCycleId('cycle-p1-1');
+
+    hero.focus();
+    fireEvent.keyDown(hero, { key: 'j' });
+    expect(document.activeElement).toBe(second);
+    fireEvent.keyDown(second, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(third);
+    fireEvent.keyDown(third, { key: 'k' });
+    expect(document.activeElement).toBe(second);
+    fireEvent.keyDown(second, { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(hero);
+    // K at the top stays put.
+    fireEvent.keyDown(hero, { key: 'k' });
+    expect(document.activeElement).toBe(hero);
+  });
+
+  it('opens the inspector with Enter on the focused row', () => {
+    const onOpenLead = vi.fn();
+    renderPage(denseSnapshot, { onOpenLead });
+
+    const row = rowByCycleId('cycle-overdue-2');
+    row.focus();
+    fireEvent.keyDown(row, { key: 'Enter' });
+    expect(onOpenLead).toHaveBeenCalledWith('person-overdue-2');
+  });
+
+  it('runs E=complete, H=snooze, P=pin on the focused row with lane-local comparisons', () => {
+    const onComplete = vi.fn();
+    const onSnooze = vi.fn();
+    const onPin = vi.fn();
+    renderPage(denseSnapshot, { onComplete, onSnooze, onPin });
+
+    const secondP1 = rowByCycleId('cycle-p1-2');
+    secondP1.focus();
+    fireEvent.keyDown(secondP1, { key: 'e' });
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ salesCycleId: 'cycle-p1-2' }),
+    );
+    fireEvent.keyDown(secondP1, { key: 'p' });
+    expect(onPin).toHaveBeenCalledWith(
+      expect.objectContaining({ salesCycleId: 'cycle-p1-2' }),
+      'cycle-p1-1',
+    );
+    // The last row of the lane has no row below: H is a no-op.
+    fireEvent.keyDown(secondP1, { key: 'h' });
+    expect(onSnooze).not.toHaveBeenCalled();
+
+    const firstP1 = rowByCycleId('cycle-p1-1');
+    firstP1.focus();
+    fireEvent.keyDown(firstP1, { key: 'h' });
+    expect(onSnooze).toHaveBeenCalledWith(
+      expect.objectContaining({ salesCycleId: 'cycle-p1-1' }),
+      'cycle-p1-2',
+    );
   });
 
   it('pins only against a lane-local neighbor and never across lanes', () => {
     const onPin = vi.fn();
-    renderPage(snapshotWithAllLanes, { onPin });
+    renderPage(denseSnapshot, { onPin });
 
     const p1Lane = screen.getByRole('region', { name: 'P1' });
-    const pins = within(p1Lane).getAllByRole('button', { name: 'Pin' });
+    const pins = within(p1Lane).getAllByRole('button', { name: 'Pin · P' });
     expect((pins[0] as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.click(pins[1]!);
@@ -158,90 +271,49 @@ describe('TodayPage', () => {
     );
   });
 
-  it('snoozes against the next lane-local row and disables the last row', () => {
-    const onSnooze = vi.fn();
-    renderPage(snapshotWithAllLanes, { onSnooze });
+  it('renders the dial budget as a real progress bar', () => {
+    renderPage(denseSnapshot);
 
-    const p1Lane = screen.getByRole('region', { name: 'P1' });
-    const snoozes = within(p1Lane).getAllByRole('button', { name: 'Snooze' });
-    expect((snoozes[1] as HTMLButtonElement).disabled).toBe(true);
-
-    fireEvent.click(snoozes[0]!);
-    expect(onSnooze).toHaveBeenCalledWith(
-      expect.objectContaining({ salesCycleId: 'cycle-p1-1' }),
-      'cycle-p1-2',
-    );
+    const bar = screen.getByRole('progressbar', { name: 'Dial budget' });
+    expect(bar.getAttribute('aria-valuenow')).toBe('12');
+    expect(bar.getAttribute('aria-valuemax')).toBe('40');
+    expect(screen.getByText('12 of 40 dials today')).toBeTruthy();
   });
 
-  it('completes the row primary action', () => {
-    const onComplete = vi.fn();
-    renderPage(snapshotWithAllLanes, { onComplete });
+  it('summarizes the unreviewed backlog as one band with a Leads link and no rows', () => {
+    const onReviewBacklog = vi.fn();
+    renderPage(emptySnapshot({ unreviewedBacklogCount: 354 }), { onReviewBacklog });
 
-    const overdueLane = screen.getByRole('region', { name: 'Overdue' });
-    fireEvent.click(within(overdueLane).getByRole('button', { name: 'Done' }));
-    expect(onComplete).toHaveBeenCalledWith(
-      expect.objectContaining({ salesCycleId: 'cycle-overdue-1' }),
-    );
+    expect(screen.getByText('Unreviewed backlog · 354')).toBeTruthy();
+    expect(document.querySelectorAll('.today-row')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Review in Leads' }));
+    expect(onReviewBacklog).toHaveBeenCalledTimes(1);
   });
 
-  it('explains reason, triggers, Verify First, consent, pinned, and overdue state', () => {
-    const explained: TodaySnapshot = {
-      ...snapshotWithAllLanes,
-      lanes: snapshotWithAllLanes.lanes.map((lane) =>
-        lane.id === 'due_cadence'
-          ? {
-            id: lane.id,
-            items: [
-              queueItem('due_cadence', 1, {
-                reason: 'Inbound SLA breached',
-                activeTriggers: [
-                  { label: 'inbound_reply', expiresAt: '2026-09-01T15:00:00.000Z' },
-                ],
-                verifyFirst: true,
-                pinned: true,
-                consentRequirement: 'Verbal consent required before recording',
-                action: {
-                  id: 'action-due_cadence-1',
-                  type: 'call_lead',
-                  channel: 'call',
-                  dueAt: '2026-08-30T15:00:00.000Z',
-                  label: 'Call lead',
-                  overdue: true,
-                },
-              }),
-            ],
-          }
-          : lane,
-      ),
-    };
-    renderPage(explained);
+  it('hides the backlog band and the hero when the queue is empty', () => {
+    renderPage(emptySnapshot());
 
-    const cadenceLane = screen.getByRole('region', { name: 'Due cadence' });
-    expect(within(cadenceLane).getByText('Inbound SLA breached')).toBeTruthy();
-    expect(within(cadenceLane).getByText(/inbound_reply/)).toBeTruthy();
-    expect(within(cadenceLane).getByText('Verify first')).toBeTruthy();
-    expect(
-      within(cadenceLane).getByText('Verbal consent required before recording'),
-    ).toBeTruthy();
-    expect(within(cadenceLane).getByText('Pinned')).toBeTruthy();
-    expect(within(cadenceLane).getByText('Overdue')).toBeTruthy();
+    expect(screen.queryByText(/Unreviewed backlog/)).toBeNull();
+    expect(screen.queryByRole('group', { name: /Next up/ })).toBeNull();
   });
 
   it('disables every command while a command is pending', () => {
-    renderPage(snapshotWithAllLanes, { busy: true });
+    renderPage(denseSnapshot, { busy: true });
 
-    for (const name of ['Done', 'Snooze', 'Pin']) {
+    for (const name of ['Done', 'Complete · E', 'Snooze · H', 'Pin · P']) {
       for (const button of screen.getAllByRole('button', { name })) {
         expect((button as HTMLButtonElement).disabled).toBe(true);
       }
     }
   });
 
-  it('opens the lead from the person name', () => {
+  it('opens the lead from the person name in hero and rows', () => {
     const onOpenLead = vi.fn();
-    renderPage(snapshotWithAllLanes, { onOpenLead });
+    renderPage(denseSnapshot, { onOpenLead });
 
     fireEvent.click(screen.getByRole('button', { name: 'Person overdue 1' }));
     expect(onOpenLead).toHaveBeenCalledWith('person-overdue-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Person p1 2' }));
+    expect(onOpenLead).toHaveBeenCalledWith('person-p1-2');
   });
 });

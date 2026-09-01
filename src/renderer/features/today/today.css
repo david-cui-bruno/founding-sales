@@ -1,10 +1,21 @@
-/* Promise-first Today queue. Neutral surfaces; urgency comes from copy. */
+/* Promise-first Today queue: dense two-line rows, hover-revealed commands,
+   collapsed empty lanes, and a real capacity progress bar. Neutral surfaces;
+   urgency comes from copy. */
 
 .today {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
   min-width: 0;
+}
+
+/* Density-aware row heights: 44 compact / 56 comfortable. */
+.today {
+  --today-row-height: 56px;
+}
+
+[data-density="compact"] .today {
+  --today-row-height: 44px;
 }
 
 .today-route {
@@ -25,6 +36,7 @@
 /* Capacity is a label, never a filter. */
 .capacity-summary {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: var(--space-4);
   padding: var(--space-2) var(--space-4);
@@ -37,14 +49,147 @@
   font-variant-numeric: tabular-nums;
 }
 
+.capacity-summary__progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.capacity-summary__dials {
+  white-space: nowrap;
+}
+
+.capacity-summary__track {
+  flex: 1 1 auto;
+  height: 6px;
+  min-width: 80px;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+.capacity-summary__fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  transition: width 160ms ease;
+}
+
 .capacity-summary__errors {
   color: var(--text);
+}
+
+/* One collapsed line for the unreviewed backlog; rows live in Leads. */
+.today-backlog {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 28px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.today-backlog__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  /* accent-strong: the base accent misses 4.5:1 on step-2 surfaces. */
+  color: var(--accent-strong);
+  font: inherit;
+  font-weight: var(--weight-medium);
+}
+
+.today-backlog__link:hover {
+  text-decoration: underline;
+}
+
+.today-backlog__link:focus-visible {
+  border-radius: var(--radius-sm);
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+/* "Next up" hero: the first queue item, enlarged. */
+.today-hero__card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow), var(--inset-highlight);
+}
+
+.today-hero__card:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.today-hero__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.today-hero__eyebrow {
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.today-hero__line1 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.today-hero__person {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--text-comfortable);
+  line-height: var(--leading-comfortable);
+  font-weight: var(--weight-heading);
+}
+
+.today-hero__context {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.today-hero__reason {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.today-hero__action {
+  flex: 0 0 auto;
 }
 
 .today__lanes {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .today-lane {
@@ -53,21 +198,29 @@
   background: var(--surface);
 }
 
+/* Empty lanes collapse to one quiet 28px line. */
+.today-lane--collapsed {
+  background: transparent;
+}
+
+.today-lane__collapsed-line {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
 .today-lane__header {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
+  padding: var(--space-1) var(--space-4);
   border-bottom: 1px solid var(--line);
-}
-
-.today-lane:not(:has(.today-row)) {
-  background: transparent;
-  border-style: dashed;
-}
-
-.today-lane:not(:has(.today-row)) .today-lane__header {
-  border-bottom: none;
 }
 
 .today-lane__heading {
@@ -88,35 +241,48 @@
   font-variant-numeric: tabular-nums;
 }
 
-.today-lane__empty {
-  margin: 0;
-  padding: 0 var(--space-4) var(--space-2);
-  color: var(--muted);
-  font-size: var(--text-sm);
-}
-
 .today-lane__list {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* Dense two-line row; commands appear on hover and focus-within. */
 .today-row {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-4);
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--today-row-height);
+  padding: var(--space-1) var(--space-4);
 }
 
 .today-row + .today-row {
   border-top: 1px solid var(--line);
 }
 
-.today-row__lead {
+.today-row:hover {
+  background: var(--surface-sunken);
+}
+
+.today-row:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
+  border-radius: var(--radius-sm);
+}
+
+.today-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.today-row__line1 {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: var(--space-2);
+  min-width: 0;
 }
 
 .today-row__person {
@@ -125,84 +291,54 @@
   background: none;
   color: var(--text);
   font: inherit;
-  font-weight: 600;
+  font-weight: var(--weight-heading);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.today-row__person:focus-visible {
-  border-radius: var(--radius-sm);
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
-.today-row__context,
-.today-row__stage {
-  color: var(--muted);
-}
-
-/* Matrix cell as separate bands; no blended score anywhere. */
-.today-row__bands {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-4);
-  margin: 0;
-}
-
-.today-row__band dt {
-  color: var(--muted);
+.today-row__context {
+  color: var(--text-muted);
   font-size: var(--text-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.today-row__stage-chip {
+  flex: 0 0 auto;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-micro);
   font-weight: var(--weight-medium);
 }
 
-.today-row__band dd {
+.today-row__reason {
   margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-caption);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
 }
 
-.today-row__action {
+/* Hover/focus-revealed commands. Kept in the layout (opacity, not display)
+   so focus-within works and row height stays stable. */
+.today-row__actions {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
+  flex: 0 0 auto;
+  gap: var(--space-1);
+  opacity: 0;
+  transition: opacity 120ms ease;
 }
 
-.today-row__action-label {
-  font-weight: 600;
-}
-
-.today-row__action-channel,
-.today-row__action-due {
-  color: var(--muted);
-}
-
-.today-reason__text {
-  margin: 0;
-  color: var(--muted);
-}
-
-.today-reason__triggers {
-  margin: var(--space-1) 0 0;
-  padding-left: var(--space-4);
-  color: var(--muted);
-}
-
-.today-reason__flags {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-top: var(--space-1);
-}
-
-.today-reason__flags:empty {
-  display: none;
-}
-
-.today-reason__consent {
-  color: var(--text);
-  font-weight: 600;
-}
-
-.today-row__commands {
-  display: flex;
-  gap: var(--space-2);
+.today-row:hover .today-row__actions,
+.today-row:focus-within .today-row__actions,
+.today-row[data-focus-within="true"] .today-row__actions {
+  opacity: 1;
 }

@@ -436,6 +436,7 @@ export function planTodayQueue(input: {
   ];
   const diagnostics: TodayDiagnostic[] = [...(input.extraDiagnostics ?? [])];
   const seenCycleIds = new Set<string>();
+  let unreviewedBacklogCount = 0;
 
   for (const candidate of input.candidates) {
     if (seenCycleIds.has(candidate.cycleId)) {
@@ -455,6 +456,13 @@ export function planTodayQueue(input: {
     }
     if (disposition.kind === 'suppressed') {
       suppressed.push({ cycleId: disposition.cycleId, reason: disposition.reason });
+      continue;
+    }
+    // Unreviewed leads never flood the Overdue lane; they surface as one
+    // backlog count and the Leads screen owns reviewing them.
+    if (disposition.kind === 'lane' && disposition.lane === 'overdue'
+      && candidate.stage === 'unreviewed') {
+      unreviewedBacklogCount += 1;
       continue;
     }
     const pinControl = disposition.item.priority?.controls.pin ?? null;
@@ -539,6 +547,7 @@ export function planTodayQueue(input: {
     queuedDiscretionaryDialCount,
     dialCount: input.completedDiscretionaryDialCount + queuedDiscretionaryDialCount,
     remainingDiscretionaryDialCount: Math.max(0, remainingBudget - queuedDiscretionaryDialCount),
+    unreviewedBacklogCount,
     lanes: LANE_ORDER.map((lane) => ({ lane, items: laneBuckets.get(lane)! })),
     suppressed,
     diagnostics,

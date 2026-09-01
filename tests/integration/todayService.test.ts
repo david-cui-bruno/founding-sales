@@ -90,14 +90,14 @@ describe('todayService', () => {
     temp.cleanup();
   });
 
-  function seedLead(prefix: string): {
+  function seedLead(prefix: string, stage?: 'unreviewed' | 'ready' | 'contacted'): {
     prospect: SeededProspect;
     cycleId: string;
     actionId: string;
   } {
     const prospect = seedProspect(database.raw, prefix);
     const { cycleId, actionId } = insertOpenCycleWithAction({
-      database: database.raw, prefix, prospect,
+      database: database.raw, prefix, prospect, stage: stage ?? 'ready',
     });
     return { prospect, cycleId, actionId };
   }
@@ -110,7 +110,24 @@ describe('todayService', () => {
     expect(snapshot.dialBudget).toBe(40);
     expect(snapshot.conversationTarget).toBe(5);
     expect(snapshot.scheduledDials).toBeGreaterThanOrEqual(0);
+    expect(snapshot.unreviewedBacklogCount).toBe(0);
     expect(snapshot.revision).toBeGreaterThanOrEqual(0);
+  });
+
+  it('summarizes unreviewed overdue cycles as a backlog count with no lane rows', async () => {
+    const { cycleId } = seedLead('backlog', 'unreviewed');
+    seedLead('reviewed');
+
+    const snapshot = await provider.get();
+
+    expect(() => todaySnapshotSchema.parse(snapshot)).not.toThrow();
+    expect(snapshot.unreviewedBacklogCount).toBe(1);
+    const laneIdsWithBacklogCycle = snapshot.lanes.filter(
+      (lane) => lane.items.some((item) => item.salesCycleId === cycleId),
+    );
+    expect(laneIdsWithBacklogCycle).toHaveLength(0);
+    const overdue = snapshot.lanes.find((lane) => lane.id === 'overdue')!;
+    expect(overdue.items.map((item) => item.salesCycleId)).toEqual(['reviewed-cycle']);
   });
 
   it('places a seeded overdue promise in the Overdue lane exactly once', async () => {

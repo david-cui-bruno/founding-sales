@@ -572,6 +572,37 @@ describe('planTodayQueue capacity', () => {
     expect(new Set(all)).toEqual(new Set(rows.map((row) => row.cycleId)));
   });
 
+  it('routes unreviewed overdue rows into the backlog count instead of the Overdue lane', () => {
+    const unreviewedOverdue = candidate({
+      stage: 'unreviewed',
+      priority: null,
+      priorityState: 'missing',
+      action: {
+        workIntent: 'internal_review',
+        actionType: 'review_lead',
+        channel: null,
+        dueAt: '2026-08-30T12:00:00.000Z',
+      },
+    });
+    const reviewedOverdue = candidate({
+      action: { workIntent: 'promised_follow_up', dueAt: '2026-08-30T12:00:00.000Z' },
+    });
+    const queue = buildQueue({ candidates: [unreviewedOverdue, reviewedOverdue] });
+    const overdue = laneOf(queue, 'overdue');
+    expect(overdue.map((item) => item.cycleId)).toEqual([reviewedOverdue.cycleId]);
+    expect(queue.unreviewedBacklogCount).toBe(1);
+    // The backlog row appears in no lane at all.
+    const laneCycleIds = queue.lanes.flatMap((entry) => entry.items.map((item) => item.cycleId));
+    expect(laneCycleIds).not.toContain(unreviewedOverdue.cycleId);
+  });
+
+  it('keeps the backlog count at zero when nothing unreviewed is overdue', () => {
+    const queue = buildQueue({
+      candidates: [candidate({ priority: prioritySnapshot({ effectivePriority: 'p1' }) })],
+    });
+    expect(queue.unreviewedBacklogCount).toBe(0);
+  });
+
   it('flags duplicate cycle candidates as diagnostics', () => {
     const row = candidate({});
     const queue = planTodayQueue({

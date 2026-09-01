@@ -118,6 +118,12 @@ export type TodayQueue = {
   queuedDiscretionaryDialCount: number;
   dialCount: number;
   remainingDiscretionaryDialCount: number;
+  /**
+   * Unreviewed cycles whose review action is already overdue. They are
+   * summarized as one count instead of flooding the Overdue lane; the Leads
+   * screen owns reviewing them.
+   */
+  unreviewedBacklogCount: number;
   lanes: ReadonlyArray<{ lane: TodayLane; items: readonly TodayItem[] }>;
   suppressed: readonly {
     cycleId: string;

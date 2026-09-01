@@ -65,6 +65,7 @@ const snapshot = (revision: number, items: TodayItem[]): TodaySnapshot => ({
   scheduledDials: items.length,
   conversationTarget: 5,
   reviewErrorCount: 0,
+  unreviewedBacklogCount: 0,
   revision,
 });
 
@@ -134,8 +135,10 @@ describe('TodayRoute', () => {
     render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
     await screen.findByText('Blake Owner');
 
-    const pins = screen.getAllByRole('button', { name: 'Pin' });
-    fireEvent.click(pins[1]!);
+    // Avery is promoted to the Next up hero; Blake is the lane row whose
+    // pin comparison is still the lane-local row above (Avery).
+    const pins = screen.getAllByRole('button', { name: 'Pin · P' });
+    fireEvent.click(pins[0]!);
 
     await waitFor(() => expect(api.pin).toHaveBeenCalledTimes(1));
     expect(api.pin).toHaveBeenCalledWith({
@@ -144,6 +147,20 @@ describe('TodayRoute', () => {
       expiresAt: expect.any(String),
       comparedSalesCycleId: 'cycle-p1',
     });
+  });
+
+  it('navigates to Leads from the unreviewed backlog band', async () => {
+    const api = fakeApi({
+      get: vi.fn(async () => ({
+        ...snapshot(1, [item()]),
+        unreviewedBacklogCount: 354,
+      })) as unknown as TodayApi['get'],
+    });
+    render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+    await screen.findByText('Unreviewed backlog · 354');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review in Leads' }));
+    expect(window.location.hash).toBe('#/leads');
   });
 
   it('refetches after a successful complete receipt', async () => {

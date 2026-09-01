@@ -1,12 +1,18 @@
+import { Check, Clock, Pin } from 'lucide-react';
+import { useState, type FocusEvent, type RefCallback } from 'react';
+
 import type { TodayItem } from '../../../shared/contracts/todayContract';
 import { humanizeEnumLabel, titleCaseDisplayName } from '../../../shared/displayText';
-import { Button } from '../../components/Button';
+import { IconButton } from '../../components/IconButton';
 import { StatusPill } from '../../components/StatusPill';
-import { TodayReason } from './TodayReason';
+import { reasonLineFor } from './rowText';
 
 export type TodayQueueRowProps = {
   item: TodayItem;
   busy: boolean;
+  /** Roving tabindex: exactly one row in the queue is tab-reachable. */
+  tabbable: boolean;
+  rowRef: RefCallback<HTMLLIElement>;
   /** Lane-local row above, or null when this row is already first. */
   pinComparedSalesCycleId: string | null;
   /** Lane-local row below, or null when this row is already last. */
@@ -17,17 +23,18 @@ export type TodayQueueRowProps = {
   onPin(item: TodayItem, comparedSalesCycleId: string): void;
 };
 
-const dueTime = (dueAt: string): string =>
-  new Date(dueAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-
 /**
- * One queue row: who, the matrix cell in separate bands, the primary
- * action with its due time, and the lane explanation. Pin and snooze are
- * lane-local pairwise commands; the row exposes no cross-lane movement.
+ * One dense two-line queue row. Line 1: who (Title Case) plus a quiet stage
+ * chip; line 2: the humanized reason with a relative due time. Done/Snooze/
+ * Pin are icon commands revealed on hover and focus-within; E/H/P work while
+ * the row holds focus (handled by the lane container). Pin and snooze stay
+ * lane-local pairwise commands.
  */
 export function TodayQueueRow({
   item,
   busy,
+  tabbable,
+  rowRef,
   pinComparedSalesCycleId,
   snoozeComparedSalesCycleId,
   onOpenLead,
@@ -35,85 +42,73 @@ export function TodayQueueRow({
   onSnooze,
   onPin,
 }: TodayQueueRowProps) {
-  const priority = item.priorityContext;
+  const [focusWithin, setFocusWithin] = useState(false);
+
+  const handleBlur = (event: FocusEvent<HTMLLIElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setFocusWithin(false);
+    }
+  };
 
   return (
-    <li className="today-row">
-      <div className="today-row__lead">
-        <button
-          type="button"
-          className="today-row__person"
-          onClick={() => onOpenLead(item.personId)}
-        >
-          {titleCaseDisplayName(item.personName)}
-        </button>
-        {item.contextLabel !== null && (
-          <span className="today-row__context">{item.contextLabel}</span>
-        )}
-        <span className="today-row__stage">{humanizeEnumLabel(item.stage)}</span>
-        {item.pinned && <StatusPill>Pinned</StatusPill>}
+    <li
+      ref={rowRef}
+      className="today-row"
+      tabIndex={tabbable ? 0 : -1}
+      data-cycle-id={item.salesCycleId}
+      data-focus-within={focusWithin ? 'true' : undefined}
+      aria-label={titleCaseDisplayName(item.personName)}
+      onFocus={() => setFocusWithin(true)}
+      onBlur={handleBlur}
+    >
+      <div className="today-row__body">
+        <div className="today-row__line1">
+          <button
+            type="button"
+            className="today-row__person"
+            tabIndex={-1}
+            onClick={() => onOpenLead(item.personId)}
+          >
+            {titleCaseDisplayName(item.personName)}
+          </button>
+          {item.contextLabel !== null && (
+            <span className="today-row__context">{item.contextLabel}</span>
+          )}
+          <span className="today-row__stage-chip">
+            {humanizeEnumLabel(item.stage)}
+          </span>
+          {item.pinned && <StatusPill>Pinned</StatusPill>}
+          {item.verifyFirst && <StatusPill tone="urgent">Verify first</StatusPill>}
+        </div>
+        <p className="today-row__reason">{reasonLineFor(item)}</p>
       </div>
-      {priority !== null && (
-        <dl className="today-row__bands">
-          <div className="today-row__band">
-            <dt>Priority</dt>
-            <dd>{priority.priority}</dd>
-          </div>
-          <div className="today-row__band">
-            <dt>Fit</dt>
-            <dd className="numeric">{`${humanizeEnumLabel(priority.fitBand)} · ${priority.fitPoints}`}</dd>
-          </div>
-          <div className="today-row__band">
-            <dt>Timing</dt>
-            <dd className="numeric">{`${humanizeEnumLabel(priority.timingBand)} · ${priority.timingValue}`}</dd>
-          </div>
-          <div className="today-row__band">
-            <dt>Reach</dt>
-            <dd>{humanizeEnumLabel(priority.reachability)}</dd>
-          </div>
-          <div className="today-row__band">
-            <dt>Confidence</dt>
-            <dd>{priority.dataConfidence}</dd>
-          </div>
-        </dl>
-      )}
-      <div className="today-row__action">
-        <span className="today-row__action-label">{item.action.label}</span>
-        <span className="today-row__action-channel">{humanizeEnumLabel(item.action.channel)}</span>
-        <span className="today-row__action-due">Due {dueTime(item.action.dueAt)}</span>
-        {item.action.overdue && <StatusPill tone="danger">Overdue</StatusPill>}
-      </div>
-      <TodayReason item={item} />
-      <div className="today-row__commands">
-        <Button
-          variant="primary"
+      <div className="today-row__actions">
+        <IconButton
+          label="Complete · E"
+          icon={Check}
           disabled={busy}
           onClick={() => onComplete(item)}
-        >
-          Done
-        </Button>
-        <Button
-          variant="quiet"
+        />
+        <IconButton
+          label="Snooze · H"
+          icon={Clock}
           disabled={busy || snoozeComparedSalesCycleId === null}
           onClick={() => {
             if (snoozeComparedSalesCycleId !== null) {
               onSnooze(item, snoozeComparedSalesCycleId);
             }
           }}
-        >
-          Snooze
-        </Button>
-        <Button
-          variant="quiet"
+        />
+        <IconButton
+          label="Pin · P"
+          icon={Pin}
           disabled={busy || pinComparedSalesCycleId === null}
           onClick={() => {
             if (pinComparedSalesCycleId !== null) {
               onPin(item, pinComparedSalesCycleId);
             }
           }}
-        >
-          Pin
-        </Button>
+        />
       </div>
     </li>
   );

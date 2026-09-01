@@ -6,14 +6,34 @@ export type CapacitySummaryProps = {
 
 /**
  * Capacity is a label, never a filter: promised lanes stay visible even at
- * zero budget. Values come straight from the strict snapshot.
+ * zero budget. The dial budget renders as a real progress bar; values come
+ * straight from the strict snapshot.
  */
 export function CapacitySummary({ snapshot }: CapacitySummaryProps) {
+  const budget = snapshot.dialBudget;
+  const scheduled = Math.min(snapshot.scheduledDials, budget);
+  const percent = budget === 0 ? 0 : Math.round((scheduled / budget) * 100);
+  const label = `${snapshot.scheduledDials} of ${budget} dials today`;
+
   return (
     <div className="capacity-summary">
-      <span className="capacity-summary__dials">
-        {`${snapshot.scheduledDials} of ${snapshot.dialBudget} dials scheduled`}
-      </span>
+      <div className="capacity-summary__progress">
+        <span className="capacity-summary__dials">{label}</span>
+        <div
+          className="capacity-summary__track"
+          role="progressbar"
+          aria-label="Dial budget"
+          aria-valuemin={0}
+          aria-valuemax={budget}
+          aria-valuenow={snapshot.scheduledDials}
+          aria-valuetext={label}
+        >
+          <div
+            className="capacity-summary__fill"
+            style={{ width: `${percent}%` }}
+          />
+        </div>
+      </div>
       <span className="capacity-summary__conversations">
         {`Conversation target ${snapshot.conversationTarget}`}
       </span>

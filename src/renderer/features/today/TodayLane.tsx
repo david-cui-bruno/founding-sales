@@ -1,3 +1,5 @@
+import type { RefCallback } from 'react';
+
 import type { TodayItem, TodayLaneId } from '../../../shared/contracts/todayContract';
 import { TodayQueueRow } from './TodayQueueRow';
 
@@ -63,10 +65,22 @@ export const TODAY_LANE_ORDER: readonly TodayLaneId[] = Object.freeze([
   'later',
 ]);
 
+/** One row plus its lane-local pin/snooze comparison neighbors. */
+export type TodayLaneRow = {
+  item: TodayItem;
+  pinComparedSalesCycleId: string | null;
+  snoozeComparedSalesCycleId: string | null;
+};
+
 export type TodayLaneProps = {
   laneId: TodayLaneId;
-  items: readonly TodayItem[];
+  /** True lane size from the snapshot, including a row promoted to the hero. */
+  totalCount: number;
+  /** Rows this lane renders itself (the hero row is rendered above the lanes). */
+  rows: readonly TodayLaneRow[];
   busy: boolean;
+  tabbableCycleId: string | null;
+  registerRow(cycleId: string): RefCallback<HTMLLIElement>;
   onOpenLead(personId: string): void;
   onComplete(item: TodayItem): void;
   onSnooze(item: TodayItem, comparedSalesCycleId: string): void;
@@ -76,12 +90,16 @@ export type TodayLaneProps = {
 /**
  * One fixed lane. Rows render exactly in snapshot order; pin compares only
  * against the lane-local row above and snooze against the row below, so a
- * pin or snooze can never move a row across lanes.
+ * pin or snooze can never move a row across lanes. A lane with nothing to
+ * render collapses to one quiet line instead of an empty placeholder box.
  */
 export function TodayLane({
   laneId,
-  items,
+  totalCount,
+  rows,
   busy,
+  tabbableCycleId,
+  registerRow,
   onOpenLead,
   onComplete,
   onSnooze,
@@ -90,37 +108,44 @@ export function TodayLane({
   const meta = TODAY_LANE_META[laneId];
   const headingId = `today-lane-${laneId}`;
 
+  if (rows.length === 0) {
+    return (
+      <section
+        className="today-lane today-lane--collapsed"
+        aria-labelledby={headingId}
+      >
+        <h2 className="today-lane__collapsed-line" id={headingId}>
+          {`${meta.heading} — ${totalCount}`}
+        </h2>
+      </section>
+    );
+  }
+
   return (
     <section className="today-lane" aria-labelledby={headingId}>
       <header className="today-lane__header">
         <h2 className="today-lane__heading" id={headingId}>
           {meta.heading}
         </h2>
-        <span className="today-lane__count">{items.length}</span>
+        <span className="today-lane__count">{totalCount}</span>
       </header>
-      {items.length === 0 ? (
-        <p className="today-lane__empty">{meta.description}</p>
-      ) : (
-        <ul className="today-lane__list">
-          {items.map((item, index) => (
-            <TodayQueueRow
-              key={item.id}
-              item={item}
-              busy={busy}
-              pinComparedSalesCycleId={
-                index > 0 ? items[index - 1]!.salesCycleId : null
-              }
-              snoozeComparedSalesCycleId={
-                index < items.length - 1 ? items[index + 1]!.salesCycleId : null
-              }
-              onOpenLead={onOpenLead}
-              onComplete={onComplete}
-              onSnooze={onSnooze}
-              onPin={onPin}
-            />
-          ))}
-        </ul>
-      )}
+      <ul className="today-lane__list">
+        {rows.map((row) => (
+          <TodayQueueRow
+            key={row.item.id}
+            item={row.item}
+            busy={busy}
+            tabbable={row.item.salesCycleId === tabbableCycleId}
+            rowRef={registerRow(row.item.salesCycleId)}
+            pinComparedSalesCycleId={row.pinComparedSalesCycleId}
+            snoozeComparedSalesCycleId={row.snoozeComparedSalesCycleId}
+            onOpenLead={onOpenLead}
+            onComplete={onComplete}
+            onSnooze={onSnooze}
+            onPin={onPin}
+          />
+        ))}
+      </ul>
     </section>
   );
 }

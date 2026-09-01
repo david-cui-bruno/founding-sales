@@ -81,14 +81,14 @@ describe('FounderSalesDomain', () => {
     temp.cleanup();
   });
 
-  function seedLead(prefix: string): {
+  function seedLead(prefix: string, stage: 'unreviewed' | 'ready' = 'unreviewed'): {
     prospect: SeededProspect;
     cycleId: string;
     actionId: string;
   } {
     const prospect = seedProspect(database.raw, prefix);
     const { cycleId, actionId } = insertOpenCycleWithAction({
-      database: database.raw, prefix, prospect,
+      database: database.raw, prefix, prospect, stage,
     });
     return { prospect, cycleId, actionId };
   }
@@ -221,7 +221,10 @@ describe('FounderSalesDomain', () => {
 
   describe('today', () => {
     it('maps every internal lane to its contract id and never duplicates a cycle', () => {
-      const active = seedLead('alpha');
+      // Reviewed (ready) so the overdue promise stays in the Overdue lane;
+      // unreviewed backlog is summarized separately.
+      const active = seedLead('alpha', 'ready');
+      const backlog = seedLead('beta');
       const onboarding = seedProspect(database.raw, 'gamma');
       database.raw.exec('BEGIN IMMEDIATE');
       try {
@@ -258,7 +261,10 @@ describe('FounderSalesDomain', () => {
       // The default seeded promise is past due, so it lands in Overdue.
       expect(itemsByLane.get('overdue')!.map((item) => item.salesCycleId))
         .toEqual([active.cycleId]);
+      // The unreviewed overdue cycle is only a backlog count, never a row.
+      expect(snapshot.unreviewedBacklogCount).toBe(1);
       const allIds = snapshot.lanes.flatMap((lane) => lane.items.map((item) => item.salesCycleId));
+      expect(allIds).not.toContain(backlog.cycleId);
       expect(new Set(allIds).size).toBe(allIds.length);
     });
 

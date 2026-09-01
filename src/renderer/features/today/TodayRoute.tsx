@@ -131,6 +131,11 @@ export function TodayRoute({ api, onOpenLead }: TodayRouteProps) {
     [api, runCommand],
   );
 
+  const handleReviewBacklog = useCallback(() => {
+    // Reviewing the unreviewed backlog happens in Leads.
+    window.location.hash = '#/leads';
+  }, []);
+
   return (
     <div className="today-route">
       <PageHeader
@@ -162,6 +167,7 @@ export function TodayRoute({ api, onOpenLead }: TodayRouteProps) {
           onComplete={handleComplete}
           onSnooze={handleSnooze}
           onPin={handlePin}
+          onReviewBacklog={handleReviewBacklog}
         />
       )}
     </div>

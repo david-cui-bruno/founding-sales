@@ -70,6 +70,7 @@ const todaySnapshot: TodaySnapshot = {
   scheduledDials: 1,
   conversationTarget: 5,
   reviewErrorCount: 0,
+  unreviewedBacklogCount: 0,
   revision: 0,
 };
 

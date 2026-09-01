@@ -22,6 +22,7 @@ export const todaySnapshotSchema = z.object({
   lanes: z.array(z.object({ id: todayLaneIdSchema, items: z.array(todayItemSchema) }).strict()),
   dialBudget: z.number().int().nonnegative(), scheduledDials: z.number().int().nonnegative(),
   conversationTarget: z.number().int().nonnegative(), reviewErrorCount: z.number().int().nonnegative(), revision: z.number().int().nonnegative(),
+  unreviewedBacklogCount: z.number().int().nonnegative(),
 }).strict();
 
 export const completeActionRequestSchema = z.object({
