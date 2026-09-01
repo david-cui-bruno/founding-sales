@@ -26,6 +26,7 @@ const row = {
   category: 'pain',
   statement: 'FRBO owners lose weekends to showings.',
   status: 'active',
+  statusReason: null as string | null,
   confidence: 'medium',
   sampleSize: 1,
   firstObservedAt: '2026-08-30T12:00:00.000Z',

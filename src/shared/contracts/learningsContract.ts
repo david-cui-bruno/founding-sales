@@ -28,6 +28,7 @@ export const learningRowSchema = z.object({
   category: learningCategorySchema,
   statement: z.string().min(1).max(500),
   status: learningStatusSchema,
+  statusReason: z.string().max(500).nullable(),
   confidence: learningConfidenceSchema,
   sampleSize: z.number().int().min(1),
   firstObservedAt: z.string().datetime({ offset: true }),

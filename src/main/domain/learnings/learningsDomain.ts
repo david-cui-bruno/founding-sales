@@ -207,6 +207,7 @@ export function listLearnings(
       category: learning.category,
       statement: learning.statement,
       status: learning.status,
+      statusReason: learning.status_reason,
       confidence: learning.confidence,
       sampleSize: evidence.length,
       firstObservedAt: evidence[0]!.noted_at,
