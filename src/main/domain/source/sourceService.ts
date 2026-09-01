@@ -977,7 +977,9 @@ function toCanonicalIntakeCommand(command: NormalizedCommand): CanonicalIntakeCo
   };
 }
 
-function segmentForChannel(channel: Exclude<SourceChannel, 'custom'>): Prospect['segment'] {
+export function segmentForChannel(
+  channel: Exclude<SourceChannel, 'custom'>,
+): Prospect['segment'] {
   if (channel === 'frbo' || channel === 'community') return 'hot';
   if (
     channel === 'registry' || channel === 'parcel' || channel === 'deed'
