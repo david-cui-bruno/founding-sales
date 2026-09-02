@@ -8,6 +8,7 @@ import {
   FIT_WEIGHTS,
   fitScore,
   isInSeason,
+  rentalStockKind,
   scoreEvent,
   SEASONAL_WEIGHT,
   timingScore,
@@ -435,6 +436,67 @@ describe("fitScore — observability normalization", () => {
     }), { now: NOW });
     expect(noAbsentee.fit).toBe(100); // only vacancy observable
     expect(noAbsentee.reasons).toHaveLength(1);
+  });
+
+  it("multi_unit_stock: Boston multi-family use codes earn, 1-family and land earn 0", () => {
+    const withUse = (use_code: string | null) =>
+      baseEvent({
+        entity: {
+          cloud_entity_id: null,
+          person: null,
+          property: {
+            situs_address: null,
+            parcel_id: null,
+            unit_count: null,
+            year_built: null,
+            use_code,
+          },
+          known_person: false,
+        },
+      });
+
+    // Multi-family: signal observable and earned -> vacancy(15)+multi(12) of 27 observable = 100
+    const multi = fitScore(withUse("Residential 3-family"), { now: NOW });
+    expect(multi.fit).toBe(100);
+    expect(multi.reasons.map((r) => r.signal)).toContain("multi_unit_stock");
+
+    // 1-family: observable but earns 0 -> vacancy 15 of 27
+    const single = fitScore(withUse("Residential 1-family"), { now: NOW });
+    expect(single.fit).toBe(Math.round((100 * 15) / 27));
+    expect(single.reasons.map((r) => r.signal)).not.toContain("multi_unit_stock");
+
+    // Land: observable, earns 0 like 1-family
+    const land = fitScore(withUse("Residential Land"), { now: NOW });
+    expect(land.fit).toBe(Math.round((100 * 15) / 27));
+
+    // Unknown use code: UNOBSERVABLE, denominator unchanged (fit as before this signal)
+    const unknown = fitScore(withUse(null), { now: NOW });
+    expect(unknown.fit).toBe(100); // only vacancy observable
+    expect(unknown.reasons.map((r) => r.signal)).not.toContain("multi_unit_stock");
+  });
+
+  it("rentalStockKind classifies both Boston and Providence vocabularies", () => {
+    // Boston RentSmart property_type values
+    expect(rentalStockKind("Residential 3-family")).toBe("multi");
+    expect(rentalStockKind("Residential 2-family")).toBe("multi");
+    expect(rentalStockKind("Residential 4 or more family")).toBe("multi");
+    expect(rentalStockKind("Residential 7 or more units")).toBe("multi");
+    expect(rentalStockKind("Mixed Use (Res. and Comm.)")).toBe("multi");
+    expect(rentalStockKind("Residential 1-family")).toBe("single_or_none");
+    expect(rentalStockKind("Residential Land")).toBe("single_or_none");
+    expect(rentalStockKind("Condominium Main*")).toBe("single_or_none");
+    // Providence tax roll class codes
+    expect(rentalStockKind("2")).toBe("multi"); // 2-5 family
+    expect(rentalStockKind("03-610")).toBe("multi");
+    expect(rentalStockKind("03-11+")).toBe("multi");
+    expect(rentalStockKind("04-05U")).toBe("multi");
+    expect(rentalStockKind("04-610")).toBe("multi");
+    expect(rentalStockKind("04-11+")).toBe("multi");
+    expect(rentalStockKind("1")).toBe("single_or_none"); // single family
+    // Unknown vocabulary -> unknown (unobservable)
+    expect(rentalStockKind("Commercial Warehouse")).toBe("unknown");
+    expect(rentalStockKind(null)).toBe("unknown");
+    expect(rentalStockKind("")).toBe("unknown");
   });
 
   it("pre-1940 stock from property.year_built", () => {

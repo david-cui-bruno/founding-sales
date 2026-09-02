@@ -99,6 +99,7 @@ only with a version bump and a migration note.
     "timing": 41,                          // 0-100, decayed trigger mass
     "reasons": [                           // 1 to 3 entries, highest contribution first
       { "signal": "portfolio_in_band", "contribution": 15 },
+      { "signal": "multi_unit_stock", "contribution": 12 },
       { "signal": "permit_filed_recent", "contribution": 12 },
       { "signal": "pre_1940_stock", "contribution": 8 }
     ]

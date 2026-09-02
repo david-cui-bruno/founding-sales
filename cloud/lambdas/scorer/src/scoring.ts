@@ -24,6 +24,7 @@ export const FIT_WEIGHTS = {
   portfolio_in_band: 15,
   live_vacancy: 15,
   recent_acquisition: 15,
+  multi_unit_stock: 12,
   open_compliance_deadline: 12,
   self_managed_at_distance: 10,
   pre_1940_stock: 8,
@@ -84,6 +85,51 @@ function isWindowActive(
   if (!window) return false;
   const t = now.getTime();
   return t >= new Date(window.opens_at).getTime() && t <= new Date(window.closes_at).getTime();
+}
+
+/**
+ * Classify a property's rental-stock kind from its assessor use code.
+ * Both adapters emit `use_code` verbatim from their source vocabulary:
+ * Boston RentSmart `property_type` strings, Providence tax-roll `class`
+ * codes. Anything else is `unknown` = unobservable, so new vocabularies
+ * never penalize until they are classified here.
+ *
+ * Quality-pass evidence (2026-09-02, 25 top leads vs city records): every
+ * false positive was `Residential 1-family` (owner-occupant, not a
+ * landlord) or `Residential Land` (no tenants). Condos are grouped with
+ * single: the condo-main owner is an association, not a landlord prospect.
+ */
+export type RentalStockKind = "multi" | "single_or_none" | "unknown";
+
+const MULTI_UNIT_USE_CODES: ReadonlySet<string> = new Set([
+  // Providence tax-roll classes (adapter-pvd-taxroll RESIDENTIAL_RENTAL_CLASSES)
+  "2",
+  "03-610",
+  "03-11+",
+  "04-05U",
+  "04-610",
+  "04-11+",
+]);
+
+const SINGLE_OR_NONE_USE_CODES: ReadonlySet<string> = new Set([
+  // Providence single-family class
+  "1",
+]);
+
+export function rentalStockKind(useCode: string | null | undefined): RentalStockKind {
+  const code = useCode?.trim();
+  if (!code) return "unknown";
+  if (MULTI_UNIT_USE_CODES.has(code)) return "multi";
+  if (SINGLE_OR_NONE_USE_CODES.has(code)) return "single_or_none";
+  // Boston RentSmart property_type strings.
+  const lower = code.toLowerCase();
+  if (lower.startsWith("residential 1-family")) return "single_or_none";
+  if (lower.startsWith("residential land")) return "single_or_none";
+  if (lower.startsWith("condominium")) return "single_or_none";
+  if (/^residential \d+-family/.test(lower)) return "multi";
+  if (lower.startsWith("residential") && /(family|units)/.test(lower)) return "multi";
+  if (lower.startsWith("mixed use")) return "multi";
+  return "unknown";
 }
 
 /**
@@ -170,6 +216,17 @@ function observeFitSignals(
         }
       : { observable: false, earned: 0 };
 
+  // Multi-unit rental stock: single-family and bare land are usually
+  // owner-occupants, not landlords. Unknown vocabulary = unobservable.
+  const stockKind = rentalStockKind(property?.use_code);
+  const multiUnit: SignalObservation =
+    stockKind !== "unknown"
+      ? {
+          observable: true,
+          earned: stockKind === "multi" ? FIT_WEIGHTS.multi_unit_stock : 0,
+        }
+      : { observable: false, earned: 0 };
+
   // reachable direct contact: a person record makes reachability observable;
   // empty phones+emails = observed absent.
   const reachable: SignalObservation = person
@@ -220,6 +277,7 @@ function observeFitSignals(
     portfolio_in_band: portfolio,
     live_vacancy: vacancy,
     recent_acquisition: acquisition,
+    multi_unit_stock: multiUnit,
     open_compliance_deadline: compliance,
     self_managed_at_distance: selfManagedAtDistance,
     pre_1940_stock: pre1940,

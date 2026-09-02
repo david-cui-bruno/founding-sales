@@ -10,7 +10,7 @@
  *      the app treats (idempotency_key, scores_version) as an update.
  *   4. Group triggers by cloud_entity_id for compound detection.
  *   5. Score (fit + timing + reasons), re-emit enriched events to
- *      events/YYYY-MM-DD/scorer-<ulid>.ndjson with scores_version = 1.
+ *      events/YYYY-MM-DD/scorer-<ulid>.ndjson with scores_version = 2.
  *   6. Record scored state in the snapshots table.
  *
  * Logging: structured JSON, never person fields or free text.
@@ -34,7 +34,7 @@ import {
 import { scoreEvent, type EntityContext, type TriggerInstance } from "./scoring";
 import { log } from "./log";
 
-export const SCORES_VERSION = 1;
+export const SCORES_VERSION = 2;
 
 export interface HandlerDeps {
   s3: Pick<S3Client, "send">;
