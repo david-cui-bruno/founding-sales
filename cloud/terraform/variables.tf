@@ -64,3 +64,9 @@ variable "tracerfy_api_key" {
   type        = string
   sensitive   = true
 }
+
+variable "schedules_enabled" {
+  description = "Master switch for the adapter/scorer/resolver/enricher EventBridge schedules. Flipped to true 2026-09-02 after the founder-delegated quality pass (top-25 verified against city records, 88% pass at scores v2). Set false to pause the whole pipeline."
+  type        = bool
+  default     = true
+}

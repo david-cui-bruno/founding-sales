@@ -122,9 +122,10 @@ resource "aws_cloudwatch_log_group" "adapters" {
 }
 
 # ---------------------------------------------------------------------------
-# Schedules: created DISABLED on purpose. Enable per source once the founder
-# has reviewed the first batches (state change is a deliberate manual step or
-# a later tfvars flip).
+# Schedules: gated by var.schedules_enabled. Created DISABLED; enabled
+# 2026-09-02 after the quality pass (founder delegated the review; top-25
+# verified against city records at 88% pass, scores v2). Flip the variable
+# to false to pause the whole pipeline.
 # ---------------------------------------------------------------------------
 
 resource "aws_cloudwatch_event_rule" "adapters" {
@@ -132,7 +133,7 @@ resource "aws_cloudwatch_event_rule" "adapters" {
 
   name                = "${var.name_prefix}-${each.key}-schedule"
   schedule_expression = each.value.schedule
-  state               = "DISABLED"
+  state               = var.schedules_enabled ? "ENABLED" : "DISABLED"
 }
 
 resource "aws_cloudwatch_event_target" "adapters" {
