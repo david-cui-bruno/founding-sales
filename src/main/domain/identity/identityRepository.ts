@@ -78,6 +78,8 @@ const addContactMethodInputSchema = z.object({
   reachability: z.enum(['direct', 'indirect', 'none']),
   isPrimary: z.boolean().default(false),
   inContacts: z.boolean().nullable().optional(),
+  dncListed: z.boolean().default(false),
+  tcpaFlag: z.boolean().default(false),
 }).strict();
 
 const qualificationGateReasonSchema = z.enum([
@@ -181,6 +183,8 @@ const storedContactMethodRowSchema = z.object({
   reachability: z.enum(['direct', 'indirect', 'none']),
   is_primary: storedBooleanSchema,
   in_contacts: storedBooleanSchema.nullable(),
+  dnc_listed: storedBooleanSchema,
+  tcpa_flag: storedBooleanSchema,
   created_at: utcTimestampSchema,
   updated_at: utcTimestampSchema,
 }).strict();
@@ -252,6 +256,8 @@ const handleLookupRowSchema = storedPersonRowSchema.extend({
   contact_reachability: z.enum(['direct', 'indirect', 'none']),
   contact_is_primary: storedBooleanSchema,
   contact_in_contacts: storedBooleanSchema.nullable(),
+  contact_dnc_listed: storedBooleanSchema,
+  contact_tcpa_flag: storedBooleanSchema,
   contact_created_at: utcTimestampSchema,
   contact_updated_at: utcTimestampSchema,
 }).strict();
@@ -326,10 +332,12 @@ export class IdentityRepository {
     const row = this.database.raw.prepare(`
       INSERT INTO person_contact_methods (
         id, person_id, kind, normalized_value, raw_value, validation_state,
-        reachability, is_primary, in_contacts, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        reachability, is_primary, in_contacts, dnc_listed, tcpa_flag,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id, person_id, kind, normalized_value, raw_value, validation_state,
-        reachability, is_primary, in_contacts, created_at, updated_at
+        reachability, is_primary, in_contacts, dnc_listed, tcpa_flag,
+        created_at, updated_at
     `).get(
       id,
       parsed.personId,
@@ -340,6 +348,8 @@ export class IdentityRepository {
       parsed.reachability,
       parsed.isPrimary ? 1 : 0,
       parsed.inContacts == null ? null : parsed.inContacts ? 1 : 0,
+      parsed.dncListed ? 1 : 0,
+      parsed.tcpaFlag ? 1 : 0,
       now,
       now,
     );
@@ -507,7 +517,8 @@ export class IdentityRepository {
         c.kind AS contact_kind, c.normalized_value AS contact_normalized_value,
         c.raw_value AS contact_raw_value, c.validation_state AS contact_validation_state,
         c.reachability AS contact_reachability, c.is_primary AS contact_is_primary,
-        c.in_contacts AS contact_in_contacts, c.created_at AS contact_created_at,
+        c.in_contacts AS contact_in_contacts, c.dnc_listed AS contact_dnc_listed,
+        c.tcpa_flag AS contact_tcpa_flag, c.created_at AS contact_created_at,
         c.updated_at AS contact_updated_at
       FROM person_contact_methods AS c
       JOIN persons AS p ON p.id = c.person_id
@@ -527,6 +538,8 @@ export class IdentityRepository {
         reachability: row.contact_reachability,
         is_primary: row.contact_is_primary,
         in_contacts: row.contact_in_contacts,
+        dnc_listed: row.contact_dnc_listed,
+        tcpa_flag: row.contact_tcpa_flag,
         created_at: row.contact_created_at,
         updated_at: row.contact_updated_at,
       });
@@ -551,7 +564,8 @@ export class IdentityRepository {
     const id = idSchema.parse(personId);
     return this.database.raw.prepare(`
       SELECT id, person_id, kind, normalized_value, raw_value, validation_state,
-        reachability, is_primary, in_contacts, created_at, updated_at
+        reachability, is_primary, in_contacts, dnc_listed, tcpa_flag,
+        created_at, updated_at
       FROM person_contact_methods
       WHERE person_id = ?
       ORDER BY kind ASC, normalized_value ASC, id ASC
@@ -705,6 +719,8 @@ function parseContactMethod(value: unknown): ContactMethod {
     reachability: row.reachability,
     isPrimary: row.is_primary === 1,
     inContacts: row.in_contacts === null ? null : row.in_contacts === 1,
+    dncListed: row.dnc_listed === 1,
+    tcpaFlag: row.tcpa_flag === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

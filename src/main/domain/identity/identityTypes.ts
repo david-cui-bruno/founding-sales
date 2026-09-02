@@ -24,6 +24,8 @@ export type ContactMethod = {
   reachability: 'direct' | 'indirect' | 'none';
   isPrimary: boolean;
   inContacts: boolean | null;
+  dncListed: boolean;
+  tcpaFlag: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -116,6 +118,8 @@ export type AddContactMethodInput = {
   reachability: 'direct' | 'indirect' | 'none';
   isPrimary?: boolean;
   inContacts?: boolean | null;
+  dncListed?: boolean;
+  tcpaFlag?: boolean;
 };
 
 export type CreateProspectInput = QualificationSelection & {

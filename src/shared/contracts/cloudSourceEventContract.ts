@@ -214,6 +214,52 @@ export const cloudParcelPayloadSchema = z
   })
   .strict();
 
+/**
+ * Enrichment (Tracerfy skip trace) — rides channel `parcel` because
+ * enrichment attaches contact data to an entity's EXISTING identity; it
+ * never mints a person from a new source. Compliance lives in the schema:
+ * every phone carries its DNC + TCPA flags so the app can render dnc_listed
+ * numbers non-dialable, and emails must already be lowercased (the
+ * suppression HMACs assume it). Mirrors the cloud enrichmentPayloadSchema
+ * exactly.
+ */
+export const cloudEnrichmentPhoneSchema = z
+  .object({
+    e164: z.string().regex(/^\+[1-9]\d{6,14}$/, 'E.164'),
+    kind: z.enum(['mobile', 'landline', 'voip', 'other']),
+    dnc_listed: z.boolean(),
+    tcpa_flag: z.boolean(),
+    rank: z.number().int().min(1),
+  })
+  .strict();
+export type CloudEnrichmentPhone = z.infer<typeof cloudEnrichmentPhoneSchema>;
+
+export const cloudEnrichmentEmailSchema = z
+  .object({
+    address: z
+      .string()
+      .email()
+      .regex(/^[^A-Z]*$/, 'lowercase'),
+    rank: z.number().int().min(1),
+  })
+  .strict();
+export type CloudEnrichmentEmail = z.infer<typeof cloudEnrichmentEmailSchema>;
+
+export const cloudEnrichmentPayloadSchema = z
+  .object({
+    vendor: z.literal('tracerfy'),
+    /** false on vendor miss AND when suppression dropped every contact. */
+    hit: z.boolean(),
+    phones: z.array(cloudEnrichmentPhoneSchema),
+    emails: z.array(cloudEnrichmentEmailSchema),
+    /** Vendor credits charged for this lookup (5 per hit, 0 per miss). */
+    credits_used: z.number().int().min(0),
+    /** Vendor person was the property owner (flag or normalized name match). */
+    matched_owner: z.boolean(),
+  })
+  .strict();
+export type CloudEnrichmentPayload = z.infer<typeof cloudEnrichmentPayloadSchema>;
+
 export const cloudViolationPayloadSchema = z
   .object({
     violation_kind: z.string().min(1).nullable(),
@@ -234,7 +280,10 @@ export const cloudViolationPayloadSchema = z
 export const CLOUD_PAYLOAD_SCHEMAS: Partial<Record<CloudChannel, z.ZodTypeAny>> = {
   frbo: cloudFrboListingPayloadSchema,
   community: cloudCommunityPostPayloadSchema,
-  parcel: cloudParcelPayloadSchema,
+  // `parcel` is a union: tax-roll identity rows and enrichment results share
+  // the channel because both attach to parcel-minted entities. Both members
+  // are `.strict()`, so a payload must fully match one of them.
+  parcel: z.union([cloudParcelPayloadSchema, cloudEnrichmentPayloadSchema]),
   violation: cloudViolationPayloadSchema,
 };
 

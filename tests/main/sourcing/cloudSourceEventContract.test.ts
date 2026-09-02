@@ -6,7 +6,7 @@ import {
   validateCloudSourceEvent,
   type CloudSourceEvent,
 } from '../../../src/shared/contracts/cloudSourceEventContract';
-import { validFrboEvent, validParcelEvent } from '../../fixtures/cloudSourceEvents';
+import { validFrboEvent, validParcelEvent, validEnrichmentEvent } from '../../fixtures/cloudSourceEvents';
 
 describe('cloudSourceEventContract (local mirror)', () => {
   it('round-trips a valid frbo event', () => {
@@ -18,6 +18,60 @@ describe('cloudSourceEventContract (local mirror)', () => {
   it('accepts a person-bearing parcel event through full validation', () => {
     const result = validateCloudSourceEvent(validParcelEvent());
     expect(result.success).toBe(true);
+  });
+
+  it('round-trips a real cloud-shaped enrichment event on channel parcel', () => {
+    const event = validEnrichmentEvent();
+    const result = validateCloudSourceEvent(JSON.parse(JSON.stringify(event)));
+    expect(result.success).toBe(true);
+    if (result.success === false) return;
+    expect(result.data).toEqual(event);
+  });
+
+  it('rejects an enrichment phone with a non-E.164 number', () => {
+    const dirty = JSON.parse(JSON.stringify(validEnrichmentEvent())) as {
+      payload: { phones: Array<Record<string, unknown>> };
+    };
+    dirty.payload.phones[0]!.e164 = '4015550100';
+    expect(validateCloudSourceEvent(dirty).success).toBe(false);
+  });
+
+  it('rejects an enrichment email with uppercase characters', () => {
+    const dirty = JSON.parse(JSON.stringify(validEnrichmentEvent())) as {
+      payload: { emails: Array<Record<string, unknown>> };
+    };
+    dirty.payload.emails[0]!.address = 'Jane.Roe@example.com';
+    expect(validateCloudSourceEvent(dirty).success).toBe(false);
+  });
+
+  it('rejects an enrichment phone missing its DNC flag (strict)', () => {
+    const dirty = JSON.parse(JSON.stringify(validEnrichmentEvent())) as {
+      payload: { phones: Array<Record<string, unknown>> };
+    };
+    delete dirty.payload.phones[0]!.dnc_listed;
+    expect(validateCloudSourceEvent(dirty).success).toBe(false);
+  });
+
+  it('rejects an enrichment payload with rank 0 or a wrong vendor', () => {
+    const badRank = JSON.parse(JSON.stringify(validEnrichmentEvent())) as {
+      payload: { phones: Array<Record<string, unknown>> };
+    };
+    badRank.payload.phones[0]!.rank = 0;
+    expect(validateCloudSourceEvent(badRank).success).toBe(false);
+
+    const badVendor = JSON.parse(JSON.stringify(validEnrichmentEvent())) as {
+      payload: Record<string, unknown>;
+    };
+    badVendor.payload.vendor = 'otherco';
+    expect(validateCloudSourceEvent(badVendor).success).toBe(false);
+  });
+
+  it('still rejects a parcel payload matching neither union member', () => {
+    const dirty = JSON.parse(JSON.stringify(validParcelEvent())) as {
+      payload: Record<string, unknown>;
+    };
+    dirty.payload.extra_field = true;
+    expect(validateCloudSourceEvent(dirty).success).toBe(false);
   });
 
   it('lists every 0005 channel', () => {

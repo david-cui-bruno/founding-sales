@@ -22,10 +22,10 @@ const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
     salesCycleId: 'cycle-kevin',
     personName: 'Kevin Shin',
     phones: [
-      { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true },
+      { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, dncListed: false, tcpaFlag: false },
     ],
     emails: [
-      { id: 'email-1', kind: 'email', value: 'kevin@example.com', label: null, valid: true },
+      { id: 'email-1', kind: 'email', value: 'kevin@example.com', label: null, valid: true, dncListed: false, tcpaFlag: false },
     ],
     organizationLabel: 'Shin Properties',
     propertySummaries: ['12 Benefit St, Providence'],

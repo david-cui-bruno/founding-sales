@@ -56,6 +56,10 @@ export type IntakeContactInput = {
   reachability: 'direct' | 'indirect' | 'none';
   isPrimary?: boolean;
   inContacts?: boolean | null;
+  /** DNC registry listing from the enrichment scrub; flagged = non-dialable. */
+  dncListed?: boolean;
+  /** TCPA litigation/consent flag from the enrichment scrub. */
+  tcpaFlag?: boolean;
 };
 
 export type IntakeOrganizationInput = {
@@ -249,6 +253,8 @@ const contactInputSchema = z.object({
   reachability: z.enum(['direct', 'indirect', 'none']),
   isPrimary: z.boolean().default(false),
   inContacts: z.boolean().nullable().optional(),
+  dncListed: z.boolean().default(false),
+  tcpaFlag: z.boolean().default(false),
 }).strict();
 const organizationInputSchema = z.object({
   canonicalName: nonblankSchema,
@@ -338,6 +344,8 @@ type NormalizedContact = {
   reachability: 'direct' | 'indirect' | 'none';
   isPrimary: boolean;
   inContacts: boolean | null;
+  dncListed: boolean;
+  tcpaFlag: boolean;
 };
 
 type NormalizedOrganization = z.infer<typeof organizationInputSchema> & {
@@ -475,6 +483,8 @@ export class SourceService {
           reachability: contact.reachability,
           isPrimary: contact.isPrimary,
           inContacts: contact.inContacts,
+          dncListed: contact.dncListed,
+          tcpaFlag: contact.tcpaFlag,
         });
       }
     } else {
@@ -572,6 +582,13 @@ export class SourceService {
         contact.kind, contact.normalizedValue,
       ).some((match) => match.person.id === personId);
       if (alreadyLinked) continue;
+      // An existing person may already hold a primary of this kind (the
+      // one_primary_contact_per_kind index); appended contacts (e.g. an
+      // enrichment event landing after the identity event) keep the
+      // established primary and attach as secondary.
+      const hasPrimaryOfKind = this.identities
+        .listContactMethodsForPerson(personId)
+        .some((existing) => existing.kind === contact.kind && existing.isPrimary);
       this.identities.addContactMethod({
         personId,
         kind: contact.kind,
@@ -579,8 +596,10 @@ export class SourceService {
         rawValue: contact.rawValue,
         validationState: 'valid',
         reachability: contact.reachability,
-        isPrimary: contact.isPrimary,
+        isPrimary: hasPrimaryOfKind === false && contact.isPrimary,
         inContacts: contact.inContacts,
+        dncListed: contact.dncListed,
+        tcpaFlag: contact.tcpaFlag,
       });
     }
   }
@@ -816,6 +835,8 @@ function normalizeContacts(contacts: z.infer<typeof contactInputSchema>[]): Norm
       reachability: contact.reachability,
       isPrimary: contact.isPrimary,
       inContacts: contact.inContacts ?? null,
+      dncListed: contact.dncListed,
+      tcpaFlag: contact.tcpaFlag,
     };
     const existing = deduplicated.get(key);
     if (existing !== undefined) {
@@ -823,6 +844,8 @@ function normalizeContacts(contacts: z.infer<typeof contactInputSchema>[]): Norm
         existing.reachability !== canonical.reachability
         || existing.isPrimary !== canonical.isPrimary
         || existing.inContacts !== canonical.inContacts
+        || existing.dncListed !== canonical.dncListed
+        || existing.tcpaFlag !== canonical.tcpaFlag
       ) {
         throw new ContactNormalizationConflictError(contact.kind, normalizedValue);
       }

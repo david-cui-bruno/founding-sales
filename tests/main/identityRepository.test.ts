@@ -102,6 +102,8 @@ describe('IdentityRepository', () => {
       reachability: 'direct',
       isPrimary: true,
       inContacts: false,
+      dncListed: false,
+      tcpaFlag: false,
       createdAt: TIMESTAMP,
       updatedAt: TIMESTAMP,
     });

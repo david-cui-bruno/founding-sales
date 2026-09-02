@@ -15,6 +15,7 @@ import { migration0007SourcingOutbox } from './migrations/0007SourcingOutbox';
 import { migration0008DedupeCloudPersons } from './migrations/0008DedupeCloudPersons';
 import { migration0009SourcingFileLedger } from './migrations/0009SourcingFileLedger';
 import { migration0010NoDueDates } from './migrations/0010NoDueDates';
+import { migration0011ContactDncFlags } from './migrations/0011ContactDncFlags';
 import type { WorkspaceKey } from '../security/workspaceKeyTypes';
 
 export type MigrationResult = {
@@ -95,6 +96,11 @@ const productionMigrations = [
     id: '0010NoDueDates',
     schemaVersion: 10,
     migration: migration0010NoDueDates,
+  },
+  {
+    id: '0011ContactDncFlags',
+    schemaVersion: 11,
+    migration: migration0011ContactDncFlags,
   },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);

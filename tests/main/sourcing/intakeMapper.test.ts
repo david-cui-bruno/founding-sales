@@ -13,7 +13,7 @@ import {
   CloudEventUnmappableError,
   mapCloudSourceEvent,
 } from '../../../src/main/sourcing/intakeMapper';
-import { validFrboEvent, validParcelEvent } from '../../fixtures/cloudSourceEvents';
+import { validFrboEvent, validParcelEvent, validEnrichmentEvent } from '../../fixtures/cloudSourceEvents';
 import {
   createTempDatabase,
   createTestWorkspaceKey,
@@ -116,6 +116,71 @@ describe('mapCloudSourceEvent', () => {
       expect(mapped.command.contacts.map((contact) => contact.isPrimary)).toEqual(
         [true, false, true],
       );
+    });
+
+    it('maps enrichment phones with DNC/TCPA flags, ordered by rank, rank 1 primary', () => {
+      const event = validEnrichmentEvent();
+
+      const mapped = mapCloudSourceEvent(event);
+
+      expect(mapped.kind).toBe('intake');
+      if (mapped.kind !== 'intake') return;
+      expect(mapped.command.contacts).toEqual([
+        {
+          kind: 'phone',
+          value: '+14015550100',
+          reachability: 'direct',
+          isPrimary: true,
+          dncListed: false,
+          tcpaFlag: false,
+        },
+        {
+          kind: 'phone',
+          value: '+14015550101',
+          reachability: 'direct',
+          isPrimary: false,
+          dncListed: true,
+          tcpaFlag: false,
+        },
+        {
+          kind: 'email',
+          value: 'jane.roe@example.com',
+          reachability: 'direct',
+          isPrimary: true,
+        },
+      ]);
+    });
+
+    it('carries a tcpa_flag through to the contact input', () => {
+      const event = validEnrichmentEvent();
+      (event.payload as { phones: Array<{ tcpa_flag: boolean }> })
+        .phones[0]!.tcpa_flag = true;
+
+      const mapped = mapCloudSourceEvent(event);
+
+      if (mapped.kind !== 'intake') throw new Error('expected intake');
+      const flagged = mapped.command.contacts.find(
+        (contact) => contact.value === '+14015550101',
+      );
+      expect(flagged?.tcpaFlag).toBe(true);
+    });
+
+    it('keeps entity.person contacts (default flags) for an enrichment miss', () => {
+      const event = validEnrichmentEvent();
+      (event.payload as { hit: boolean; phones: unknown[] }).hit = false;
+      (event.payload as { phones: unknown[] }).phones = [];
+      (event.payload as { emails: unknown[] }).emails = [];
+      (event.entity.person as { phones: string[] }).phones = ['+14015559999'];
+
+      const mapped = mapCloudSourceEvent(event);
+
+      if (mapped.kind !== 'intake') throw new Error('expected intake');
+      expect(mapped.command.contacts).toEqual([{
+        kind: 'phone',
+        value: '+14015559999',
+        reachability: 'direct',
+        isPrimary: true,
+      }]);
     });
 
     it('falls back to the organization name when the person has no full name', () => {
@@ -285,6 +350,7 @@ describe('mapCloudSourceEvent', () => {
           { signal: 'portfolio_in_band', contribution: 15 },
           { signal: 'permit_filed_recent', contribution: 12 },
         ],
+        scoredAt: '2026-08-30T00:00:00.000Z',
       });
     });
 

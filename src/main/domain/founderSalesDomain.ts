@@ -159,6 +159,7 @@ export type FounderSalesDomainErrorCode =
   | 'LEAD_NOT_FOUND'
   | 'CYCLE_NOT_FOUND'
   | 'CONTACT_METHOD_NOT_FOUND'
+  | 'CONTACT_DNC_BLOCKED'
   | 'ACTION_NOT_SUPPORTED'
   | 'PRIORITY_PROJECTION_MISSING'
   | 'REVIEW_NOT_FOUND'
@@ -617,15 +618,17 @@ export class FounderSalesDomain {
       'SELECT channel FROM source_events WHERE id = ?',
     ).get(prospect.original_source_event_id) as { channel: string } | undefined)?.channel ?? 'custom';
     const contacts = this.database.raw.prepare(`
-      SELECT id, kind, normalized_value, validation_state
+      SELECT id, kind, normalized_value, validation_state, dnc_listed, tcpa_flag
       FROM person_contact_methods WHERE person_id = ?
       ORDER BY kind ASC, normalized_value ASC, id ASC
     `).all(person.id) as {
       id: string; kind: 'phone' | 'email'; normalized_value: string; validation_state: string;
+      dnc_listed: 0 | 1; tcpa_flag: 0 | 1;
     }[];
     const contactDto = (row: typeof contacts[number]) => ({
       id: row.id, kind: row.kind, value: row.normalized_value,
       label: null as string | null, valid: row.validation_state === 'valid',
+      dncListed: row.dnc_listed === 1, tcpaFlag: row.tcpa_flag === 1,
     });
     const organization = this.database.raw.prepare(`
       SELECT org.canonical_name AS name FROM prospect_organizations AS link
@@ -781,10 +784,12 @@ export class FounderSalesDomain {
         throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The cycle belongs to another person.');
       }
       const contact = this.database.raw.prepare(`
-        SELECT id, kind, normalized_value FROM person_contact_methods
+        SELECT id, kind, normalized_value, dnc_listed, tcpa_flag
+        FROM person_contact_methods
         WHERE id = ? AND person_id = ?
       `).get(request.contactMethodId, request.personId) as {
         id: string; kind: 'phone' | 'email'; normalized_value: string;
+        dnc_listed: 0 | 1; tcpa_flag: 0 | 1;
       } | undefined;
       if (contact === undefined) {
         throw new FounderSalesDomainError(
@@ -795,6 +800,14 @@ export class FounderSalesDomain {
         personId: request.personId,
         target: { kind: contact.kind, normalizedValue: contact.normalized_value },
       });
+      // Federal telemarketing scrub gate: a DNC-listed or TCPA-flagged
+      // contact is never dialable, regardless of channel or lifecycle state.
+      if (contact.dnc_listed === 1 || contact.tcpa_flag === 1) {
+        throw new FounderSalesDomainError(
+          'CONTACT_DNC_BLOCKED',
+          'The contact is on a do-not-call or TCPA suppression list; outreach is blocked.',
+        );
+      }
       this.services.events.appendActivity({
         id: this.ids.next(),
         personId: request.personId,
@@ -2469,6 +2482,25 @@ export class FounderSalesDomain {
   }
 
   /**
+   * TTL for the processed-file ledger: rows older than 90 days are pruned
+   * at the end of each successful poll. The cloud inbox retains files far
+   * shorter than that, so a pruned key can never be re-listed and
+   * re-processed; the ledger stays bounded instead of growing forever.
+   * Returns the number of pruned rows.
+   */
+  pruneProcessedFileLedger(): number {
+    const now = this.clock.now();
+    const cutoff = new Date(
+      new Date(now).getTime() - 90 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    return this.services.unitOfWork.immediate(() => (
+      this.database.raw.prepare(
+        'DELETE FROM sourcing_processed_files WHERE processed_at < ?',
+      ).run(cutoff).changes
+    ));
+  }
+
+  /**
    * One person-bearing cloud event through the standard intake pipeline.
    * `source_intake_receipts` (keyed `cloud:<idempotency_key>`) makes replays
    * no-ops; the cloud-entity link and the unreviewed cycle are created only
@@ -2592,6 +2624,11 @@ export class FounderSalesDomain {
    * created, located through the `cloud:<idempotency_key>` receipt. Unknown
    * receipts return false so the poller can count-and-skip; stale
    * scores_version replays are no-ops (idempotent by design).
+   *
+   * Version guard with a timestamp tiebreaker: a HIGHER version always
+   * wins regardless of timestamps; a SAME-version update applies only when
+   * its scoredAt is >= the stored cloud_scored_at, so a replayed old
+   * correction can never regress a fresher same-version score.
    */
   applyCloudScoreUpdate(input: {
     receiptKey: string;
@@ -2599,6 +2636,7 @@ export class FounderSalesDomain {
     fit: number;
     timing: number;
     reasons: readonly { signal: string; contribution: number }[];
+    scoredAt?: string;
   }): boolean {
     const parsed = z.object({
       receiptKey: z.string().min(1),
@@ -2609,12 +2647,14 @@ export class FounderSalesDomain {
         signal: z.string().min(1),
         contribution: z.number(),
       }).strict()).min(1).max(3),
+      scoredAt: z.string().datetime({ offset: true }).optional(),
     }).strict().parse(input);
     const receipt = this.database.raw.prepare(
       'SELECT prospect_id FROM source_intake_receipts WHERE source_event_id = ?',
     ).get(parsed.receiptKey) as { prospect_id: string } | undefined;
     if (receipt === undefined) return false;
     const now = this.clock.now();
+    const scoredAt = parsed.scoredAt ?? now;
     this.services.unitOfWork.immediate(() => {
       this.database.raw.prepare(`
         UPDATE prospects SET
@@ -2625,16 +2665,25 @@ export class FounderSalesDomain {
           cloud_scored_at = ?,
           updated_at = ?
         WHERE id = ?
-          AND (cloud_scores_version IS NULL OR cloud_scores_version <= ?)
+          AND (
+            cloud_scores_version IS NULL
+            OR cloud_scores_version < ?
+            OR (
+              cloud_scores_version = ?
+              AND (cloud_scored_at IS NULL OR cloud_scored_at <= ?)
+            )
+          )
       `).run(
         Math.round(parsed.fit),
         Math.round(parsed.timing),
         JSON.stringify(parsed.reasons),
         parsed.scoresVersion,
-        now,
+        scoredAt,
         now,
         receipt.prospect_id,
         parsed.scoresVersion,
+        parsed.scoresVersion,
+        scoredAt,
       );
     });
     return true;

@@ -11,6 +11,7 @@ import { cloudScoreChipSchema } from './leadsContract';
 
 export const contactMethodSchema = z.object({
   id: z.string().min(1), kind: z.enum(['phone', 'email']), value: z.string().min(1), label: z.string().nullable(), valid: z.boolean(),
+  dncListed: z.boolean(), tcpaFlag: z.boolean(),
 }).strict();
 export const cadenceSummarySchema = z.object({ name: z.string(), stepLabel: z.string(), touchIndex: z.number().int().positive(), touchLimit: z.number().int().positive() }).strict();
 export const activitySummarySchema = z.object({ id: z.string(), kind: z.enum(['call', 'voicemail', 'text', 'email', 'interview', 'offer', 'note', 'job', 'system']), occurredAt: z.string().datetime({ offset: true }), summary: z.string(), outcome: z.string().nullable(), markedInError: z.boolean() }).strict();

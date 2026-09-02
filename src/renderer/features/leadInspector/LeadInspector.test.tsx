@@ -24,10 +24,10 @@ const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
     salesCycleId: 'cycle-kevin',
     personName: 'Kevin Shin',
     phones: [
-      { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true },
+      { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, dncListed: false, tcpaFlag: false },
     ],
     emails: [
-      { id: 'email-1', kind: 'email', value: 'kevin@example.com', label: null, valid: true },
+      { id: 'email-1', kind: 'email', value: 'kevin@example.com', label: null, valid: true, dncListed: false, tcpaFlag: false },
     ],
     organizationLabel: 'Shin Properties',
     propertySummaries: ['12 Benefit St, Providence'],
@@ -250,6 +250,29 @@ describe('LeadInspector', () => {
         'This person opted out. Outreach is permanently disabled.',
       ),
     ).toBeTruthy();
+  });
+
+  it('shows a DNC badge and disables call/text for a flagged phone', async () => {
+    const api = createApi(detailFor({
+      phones: [
+        { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, dncListed: true, tcpaFlag: false },
+        { id: 'phone-2', kind: 'phone', value: '+14015550199', label: null, valid: true, dncListed: false, tcpaFlag: false },
+      ],
+    }));
+    const inspector = await renderInspector(api);
+
+    const call = within(inspector).getByRole('button', { name: 'Call +14015550100' });
+    const text = within(inspector).getByRole('button', { name: 'Text +14015550100' });
+    expect((call as HTMLButtonElement).disabled).toBe(true);
+    expect((text as HTMLButtonElement).disabled).toBe(true);
+    expect(within(inspector).getByText('DNC')).toBeTruthy();
+
+    fireEvent.click(call);
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+
+    // The unflagged phone stays dialable.
+    const cleanCall = within(inspector).getByRole('button', { name: 'Call +14015550199' });
+    expect((cleanCall as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('moves between tabs with arrow keys and renders each section', async () => {

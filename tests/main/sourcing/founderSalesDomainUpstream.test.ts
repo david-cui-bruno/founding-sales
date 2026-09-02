@@ -14,7 +14,7 @@ import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../../src/main/domain/prioritization/builtinPrioritizationRules';
 import { mapCloudSourceEvent } from '../../../src/main/sourcing/intakeMapper';
-import { validParcelEvent } from '../../fixtures/cloudSourceEvents';
+import { validParcelEvent, validEnrichmentEvent } from '../../fixtures/cloudSourceEvents';
 import { insertPerson, insertOpenCycleWithAction, DOMAIN_TIMESTAMP, seedProspect } from '../../fixtures/domainRows';
 import {
   createTempDatabase,
@@ -317,5 +317,158 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
       ],
       scoredAt: NOW,
     });
+  });
+
+  it('rejects a replayed same-version update with an OLDER scoredAt', () => {
+    const { personId } = importLinkedLead();
+    const receiptKey = `cloud:${validParcelEvent().idempotency_key}`;
+    domain.applyCloudScoreUpdate({
+      receiptKey, scoresVersion: 1, fit: 62, timing: 41,
+      reasons: [{ signal: 'portfolio_in_band', contribution: 15 }],
+      scoredAt: '2026-08-31T12:00:00.000Z',
+    });
+
+    // A replayed OLD same-version correction must not regress the score.
+    domain.applyCloudScoreUpdate({
+      receiptKey, scoresVersion: 1, fit: 20, timing: 10,
+      reasons: [{ signal: 'stale_replay', contribution: 1 }],
+      scoredAt: '2026-08-30T12:00:00.000Z',
+    });
+    expect(database.raw.prepare(
+      'SELECT cloud_fit, cloud_scored_at FROM prospects WHERE person_id = ?',
+    ).get(personId)).toEqual({
+      cloud_fit: 62, cloud_scored_at: '2026-08-31T12:00:00.000Z',
+    });
+
+    // A same-version correction with a NEWER scoredAt applies.
+    domain.applyCloudScoreUpdate({
+      receiptKey, scoresVersion: 1, fit: 47, timing: 44,
+      reasons: [{ signal: 'llc_owner_no_pm', contribution: 7 }],
+      scoredAt: '2026-08-31T13:00:00.000Z',
+    });
+    expect((database.raw.prepare(
+      'SELECT cloud_fit FROM prospects WHERE person_id = ?',
+    ).get(personId) as { cloud_fit: number }).cloud_fit).toBe(47);
+
+    // A HIGHER version wins even with an older timestamp.
+    domain.applyCloudScoreUpdate({
+      receiptKey, scoresVersion: 2, fit: 70, timing: 55,
+      reasons: [{ signal: 'live_vacancy', contribution: 15 }],
+      scoredAt: '2026-08-29T00:00:00.000Z',
+    });
+    expect((database.raw.prepare(
+      'SELECT cloud_fit FROM prospects WHERE person_id = ?',
+    ).get(personId) as { cloud_fit: number }).cloud_fit).toBe(70);
+
+    // A LOWER version never regresses.
+    domain.applyCloudScoreUpdate({
+      receiptKey, scoresVersion: 1, fit: 5, timing: 5,
+      reasons: [{ signal: 'stale', contribution: 1 }],
+      scoredAt: '2026-09-30T00:00:00.000Z',
+    });
+    expect((database.raw.prepare(
+      'SELECT cloud_fit FROM prospects WHERE person_id = ?',
+    ).get(personId) as { cloud_fit: number }).cloud_fit).toBe(70);
+  });
+
+  it('imports enrichment contacts with DNC flags and blocks the dial gate', () => {
+    // First the parcel identity event mints the person.
+    importLinkedLead();
+    // Then the enrichment event appends flagged contacts to the same entity.
+    const mapped = mapCloudSourceEvent(validEnrichmentEvent());
+    if (mapped.kind !== 'intake') throw new Error('expected intake');
+    const result = domain.importCloudSourceEvent({
+      command: mapped.command,
+      cloudEntityId: mapped.cloudEntityId,
+    });
+
+    const contacts = database.raw.prepare(`
+      SELECT normalized_value, is_primary, dnc_listed, tcpa_flag
+      FROM person_contact_methods
+      WHERE person_id = ? AND kind = 'phone'
+      ORDER BY normalized_value ASC
+    `).all(result.personId) as Array<{
+      normalized_value: string; is_primary: number;
+      dnc_listed: number; tcpa_flag: number;
+    }>;
+    expect(contacts).toEqual([
+      // Appended enrichment contacts keep the established primary: rank 1
+      // would be primary on a fresh person, but the parcel event's phone
+      // already holds one_primary_contact_per_kind.
+      { normalized_value: '+14015550100', is_primary: 0, dnc_listed: 0, tcpa_flag: 0 },
+      { normalized_value: '+14015550101', is_primary: 0, dnc_listed: 1, tcpa_flag: 0 },
+      // The original parcel event's phone keeps default (0) flags.
+      { normalized_value: '+14015551234', is_primary: 1, dnc_listed: 0, tcpa_flag: 0 },
+    ]);
+
+    const detail = domain.getLeadDetail({ personId: result.personId });
+    const flagged = detail.phones.find((phone) => phone.value === '+14015550101');
+    expect(flagged?.dncListed).toBe(true);
+    expect(flagged?.tcpaFlag).toBe(false);
+
+    const cycle = database.raw.prepare(
+      'SELECT id FROM sales_cycles WHERE person_id = ?',
+    ).get(result.personId) as { id: string };
+    const blockedContact = database.raw.prepare(
+      "SELECT id FROM person_contact_methods WHERE person_id = ? AND normalized_value = '+14015550101'",
+    ).get(result.personId) as { id: string };
+    expect(() => domain.beginOutbound({
+      channel: 'call',
+      personId: result.personId,
+      salesCycleId: cycle.id,
+      contactMethodId: blockedContact.id,
+    })).toThrow(/do-not-call|TCPA/i);
+    try {
+      domain.beginOutbound({
+        channel: 'call',
+        personId: result.personId,
+        salesCycleId: cycle.id,
+        contactMethodId: blockedContact.id,
+      });
+    } catch (error) {
+      expect((error as { code?: string }).code).toBe('CONTACT_DNC_BLOCKED');
+    }
+
+    // The clean contact still dials.
+    const cleanContact = database.raw.prepare(
+      "SELECT id FROM person_contact_methods WHERE person_id = ? AND normalized_value = '+14015550100'",
+    ).get(result.personId) as { id: string };
+    expect(() => domain.beginOutbound({
+      channel: 'call',
+      personId: result.personId,
+      salesCycleId: cycle.id,
+      contactMethodId: cleanContact.id,
+    })).not.toThrow();
+  });
+
+  it('blocks outbound to a tcpa-flagged contact too', () => {
+    const { personId, cycleId } = importLinkedLead();
+    database.raw.prepare(
+      'UPDATE person_contact_methods SET tcpa_flag = 1 WHERE person_id = ?',
+    ).run(personId);
+    const contact = database.raw.prepare(
+      'SELECT id FROM person_contact_methods WHERE person_id = ? LIMIT 1',
+    ).get(personId) as { id: string };
+    expect(() => domain.beginOutbound({
+      channel: 'call', personId, salesCycleId: cycleId, contactMethodId: contact.id,
+    })).toThrow(/do-not-call|TCPA/i);
+  });
+
+  it('prunes processed-file ledger rows older than 90 days', () => {
+    const old = '2026-05-01T00:00:00.000Z'; // > 90 days before NOW
+    const recent = '2026-08-01T00:00:00.000Z'; // < 90 days before NOW
+    database.raw.prepare(
+      'INSERT INTO sourcing_processed_files (key, processed_at) VALUES (?, ?)',
+    ).run('events/2026-05-01/old.ndjson', old);
+    database.raw.prepare(
+      'INSERT INTO sourcing_processed_files (key, processed_at) VALUES (?, ?)',
+    ).run('events/2026-08-01/recent.ndjson', recent);
+
+    const pruned = domain.pruneProcessedFileLedger();
+
+    expect(pruned).toBe(1);
+    expect(database.raw.prepare(
+      'SELECT key FROM sourcing_processed_files ORDER BY key ASC',
+    ).all()).toEqual([{ key: 'events/2026-08-01/recent.ndjson' }]);
   });
 });

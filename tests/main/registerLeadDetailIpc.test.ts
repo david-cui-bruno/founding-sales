@@ -33,7 +33,7 @@ const detail: LeadDetail = {
   salesCycleId: 'cycle-1',
   personName: 'Avery Landlord',
   phones: [
-    { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true },
+    { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, dncListed: false, tcpaFlag: false },
   ],
   emails: [],
   organizationLabel: null,

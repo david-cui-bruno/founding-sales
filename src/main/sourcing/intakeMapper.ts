@@ -29,10 +29,12 @@ import {
 import type { Prospect } from '../domain/identity/identityRepository';
 import type {
   CloudChannel,
+  CloudEnrichmentPayload,
   CloudPostalAddress,
   CloudScores,
   CloudSourceEvent,
 } from '../../shared/contracts/cloudSourceEventContract';
+import { cloudEnrichmentPayloadSchema } from '../../shared/contracts/cloudSourceEventContract';
 
 /**
  * The receipt natural key: `source_intake_receipts.source_event_id` for
@@ -82,6 +84,8 @@ export type MappedScoreUpdate = {
   fit: number;
   timing: number;
   reasons: CloudScores['reasons'];
+  /** Canonical event timestamp: the same-version replay tiebreaker. */
+  scoredAt: string;
 };
 
 export type MappedCloudSourceEvent =
@@ -155,6 +159,7 @@ function mapScoreUpdate(event: CloudSourceEvent): MappedScoreUpdate {
     fit: event.scores.fit,
     timing: event.scores.timing,
     reasons: event.scores.reasons,
+    scoredAt: canonicalTimestamp(event.observed_at),
   };
 }
 
@@ -223,6 +228,10 @@ function resolveDisplayName(event: CloudSourceEvent): string | null {
 }
 
 function mapContacts(event: CloudSourceEvent): IntakeContactInput[] {
+  const enrichment = parseEnrichmentPayload(event);
+  if (enrichment !== null) {
+    return mapEnrichmentContacts(enrichment);
+  }
   const person = event.entity.person;
   if (person === null) return [];
   return [
@@ -235,6 +244,46 @@ function mapContacts(event: CloudSourceEvent): IntakeContactInput[] {
     ...person.emails.map((value, index): IntakeContactInput => ({
       kind: 'email',
       value,
+      reachability: 'direct',
+      isPrimary: index === 0,
+    })),
+  ];
+}
+
+/**
+ * An event whose payload parses as the enrichment shape (channel parcel,
+ * hit true). Enrichment contacts replace entity.person.phones/emails and
+ * carry the vendor scrub's DNC/TCPA compliance flags.
+ */
+function parseEnrichmentPayload(
+  event: CloudSourceEvent,
+): CloudEnrichmentPayload | null {
+  if (event.channel !== 'parcel') return null;
+  const parsed = cloudEnrichmentPayloadSchema.safeParse(event.payload);
+  if (parsed.success === false || parsed.data.hit === false) return null;
+  return parsed.data;
+}
+
+/**
+ * Enrichment contacts, ordered by vendor rank; rank 1 is primary. Every
+ * phone carries its dnc_listed/tcpa_flag so the dial gate can refuse
+ * flagged numbers (the federal telemarketing scrub gate).
+ */
+function mapEnrichmentContacts(payload: CloudEnrichmentPayload): IntakeContactInput[] {
+  const phones = [...payload.phones].sort((left, right) => left.rank - right.rank);
+  const emails = [...payload.emails].sort((left, right) => left.rank - right.rank);
+  return [
+    ...phones.map((phone, index): IntakeContactInput => ({
+      kind: 'phone',
+      value: phone.e164,
+      reachability: 'direct',
+      isPrimary: index === 0,
+      dncListed: phone.dnc_listed,
+      tcpaFlag: phone.tcpa_flag,
+    })),
+    ...emails.map((email, index): IntakeContactInput => ({
+      kind: 'email',
+      value: email.address,
       reachability: 'direct',
       isPrimary: index === 0,
     })),

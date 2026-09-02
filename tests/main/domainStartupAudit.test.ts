@@ -59,11 +59,11 @@ describe('domain startup', () => {
       const readiness = assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 10,
+        expectedSchemaVersion: 11,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       });
       expect(readiness).toMatchObject({
-        schemaVersion: 10, encrypted: true, ftsAvailable: true,
+        schemaVersion: 11, encrypted: true, ftsAvailable: true,
       });
     });
 
@@ -72,7 +72,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 10,
+        expectedSchemaVersion: 11,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       database.raw.exec('ROLLBACK');
@@ -81,7 +81,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 10,
+        expectedSchemaVersion: 11,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       database.raw.pragma('busy_timeout = 5000');
@@ -89,7 +89,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 10,
+        expectedSchemaVersion: 11,
         expectedManifest: {
           ...DOMAIN_SCHEMA_MANIFEST,
           tables: [...DOMAIN_SCHEMA_MANIFEST.tables, 'missing_table'],

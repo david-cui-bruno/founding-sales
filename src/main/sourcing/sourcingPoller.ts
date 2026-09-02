@@ -270,6 +270,13 @@ export class SourcingPoller {
       throw firstFailure;
     }
 
+    // Ledger TTL: after a fully successful poll, drop processed-file rows
+    // older than 90 days. Never on a failed poll, so a retryable failure
+    // cannot race the prune.
+    await this.domainGate.withDomain((domain) => {
+      domain.pruneProcessedFileLedger();
+    });
+
     // Task 4 upstream leg: membership + outcome flush after the inbox is
     // drained. An AccessDenied (IAM PutObject on upstream/* may lag the app)
     // is logged and retried next poll; nothing was marked flushed.
@@ -370,6 +377,7 @@ export class SourcingPoller {
           fit: mapped.fit,
           timing: mapped.timing,
           reasons: mapped.reasons,
+          scoredAt: mapped.scoredAt,
         })
       ));
       if (!applied) {

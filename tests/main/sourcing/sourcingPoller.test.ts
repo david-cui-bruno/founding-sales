@@ -63,6 +63,7 @@ function fakeDomainGate(initialCursor: string | null = null): {
         ledger.add(key);
         ledgered.push(key);
       },
+      pruneProcessedFileLedger: () => 0,
       applyCloudScoreUpdate: ({ receiptKey }: { receiptKey: string }) => {
         scoreUpdates.push(receiptKey);
         return true;

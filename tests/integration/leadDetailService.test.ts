@@ -128,6 +128,8 @@ describe('leadDetailService over a real encrypted domain', () => {
       value: '+14015550100',
       label: null,
       valid: true,
+      dncListed: false,
+      tcpaFlag: false,
     });
     expect(detail.emails).toEqual([]);
     expect(detail.nextAction).not.toBeNull();

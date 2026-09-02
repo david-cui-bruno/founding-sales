@@ -123,3 +123,71 @@ export function validParcelEvent(): CloudSourceEvent {
   };
 }
 
+/**
+ * A real cloud-shaped enrichment event: channel `parcel`, payload =
+ * enrichmentPayloadSchema (Tracerfy skip trace). Phones carry DNC/TCPA
+ * flags, emails are lowercase, ranks order the contacts.
+ */
+export function validEnrichmentEvent(): CloudSourceEvent {
+  return {
+    contract_version: 1,
+    id: 'se_01JC0000000000000000000002',
+    idempotency_key: 'c'.repeat(64),
+    channel: 'parcel',
+    source_uri: 'tracerfy:enrich:ce_01JC0000000000000000000001',
+    fetched_at: '2026-09-02T03:00:00.000Z',
+    observed_at: '2026-09-02T02:59:00.000Z',
+    entity: {
+      cloud_entity_id: 'ce_01JC0000000000000000000001',
+      person: {
+        full_name: 'JANE ROE',
+        mailing_address: null,
+        phones: [],
+        emails: [],
+        org_names: [],
+      },
+      property: null,
+      known_person: true,
+    },
+    payload: {
+      vendor: 'tracerfy',
+      hit: true,
+      phones: [
+        {
+          e164: '+14015550101',
+          kind: 'landline',
+          dnc_listed: true,
+          tcpa_flag: false,
+          rank: 2,
+        },
+        {
+          e164: '+14015550100',
+          kind: 'mobile',
+          dnc_listed: false,
+          tcpa_flag: false,
+          rank: 1,
+        },
+      ],
+      emails: [
+        { address: 'jane.roe@example.com', rank: 1 },
+      ],
+      credits_used: 5,
+      matched_owner: true,
+    },
+    signal_flags: {
+      self_managed: null,
+      vacancy: null,
+      pain_mentions: [],
+      urgency: 0,
+      portfolio_hint: null,
+    },
+    trigger: null,
+    scores: null,
+    provenance: {
+      adapter: 'enricher',
+      adapter_version: '1.0.0',
+      confidence: 0.9,
+    },
+  };
+}
+

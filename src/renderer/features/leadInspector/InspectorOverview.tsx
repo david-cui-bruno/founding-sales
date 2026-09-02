@@ -12,6 +12,7 @@ import type {
 import { humanizeEnumLabel } from '../../../shared/displayText';
 import { Button } from '../../components/Button';
 import { Select } from '../../components/Select';
+import { StatusBadge } from '../../components/StatusBadge';
 import { StatusPill } from '../../components/StatusPill';
 import {
   cloudSignalLabel,
@@ -20,6 +21,10 @@ import {
 
 const OPT_OUT_REASON =
   'This person opted out. Outreach is permanently disabled.';
+
+/** DNC-listed or TCPA-flagged phones are non-dialable (federal scrub gate). */
+const isDncBlocked = (contact: ContactMethod) =>
+  contact.dncListed || contact.tcpaFlag;
 
 /** Founder-facing labels for the exact qualification gate reasons. */
 const DISMISS_REASON_OPTIONS: ReadonlyArray<{
@@ -57,11 +62,12 @@ function OutboundButton({
   onBeginOutbound(request: BeginOutboundRequest): void;
 }) {
   const verb = channel === 'call' ? 'Call' : channel === 'text' ? 'Text' : 'Email';
+  const blocked = contact.kind === 'phone' && isDncBlocked(contact);
 
   return (
     <Button
       variant="quiet"
-      disabled={detail.optedOut}
+      disabled={detail.optedOut || blocked}
       onClick={() =>
         onBeginOutbound({
           channel,
@@ -330,6 +336,9 @@ export function InspectorOverview({
                 contact={phone}
                 onBeginOutbound={onBeginOutbound}
               />
+              {isDncBlocked(phone) && (
+                <StatusBadge tone="danger" label="DNC" />
+              )}
             </span>
           ))}
           {detail.emails.map((email) => (

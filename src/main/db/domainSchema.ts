@@ -51,6 +51,8 @@ export type PersonContactMethodsTable = {
   reachability: Reachability;
   is_primary: StoredBoolean;
   in_contacts: StoredBoolean | null;
+  dnc_listed: StoredBoolean;
+  tcpa_flag: StoredBoolean;
   created_at: string;
   updated_at: string;
 };

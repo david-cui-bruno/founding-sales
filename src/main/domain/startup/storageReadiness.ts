@@ -5,7 +5,7 @@ import { inspectDatabaseEncryption } from '../../db/databaseEncryption';
 import { DomainStartupFatalError } from './domainStartupTypes';
 
 export type DomainStorageReadiness = Readonly<{
-  schemaVersion: 10;
+  schemaVersion: 11;
   encrypted: true;
   cipherVersion: string;
   ftsAvailable: true;
@@ -21,7 +21,7 @@ export type DomainSchemaManifest = Readonly<{
 }>;
 
 /**
- * The canonical load-bearing schema-10 manifest. Reads the live catalog from
+ * The canonical load-bearing schema-11 manifest. Reads the live catalog from
  * sqlite_master with binary-name ordering; a missing, renamed, or extra
  * load-bearing object is fatal before composition.
  */
@@ -121,7 +121,7 @@ const appMetaSchema = z.object({
 export function assertDomainStorageReady(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
-  expectedSchemaVersion: 10;
+  expectedSchemaVersion: 11;
   expectedManifest: DomainSchemaManifest;
 }): DomainStorageReadiness {
   const { database } = input;
@@ -144,7 +144,7 @@ export function assertDomainStorageReady(input: {
   const metadata = appMetaSchema.safeParse(metadataRow);
   if (!metadata.success || metadata.data.schema_version !== input.expectedSchemaVersion) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace schema version is not exactly 10.',
+      'schema_not_ready', 'The workspace schema version is not exactly 11.',
     );
   }
 
@@ -218,7 +218,7 @@ export function assertDomainStorageReady(input: {
   }
 
   return Object.freeze({
-    schemaVersion: 10 as const,
+    schemaVersion: 11 as const,
     encrypted: true as const,
     cipherVersion: encryption.cipherVersion ?? 'unknown',
     ftsAvailable: true as const,
