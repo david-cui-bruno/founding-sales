@@ -7,7 +7,7 @@
   bottom: 0;
   z-index: 30;
   display: flex;
-  min-width: 380px;
+  min-width: 420px;
   max-width: 640px;
   border-left: 1px solid var(--line, #d8dde1);
   background: var(--surface-raised, #ffffff);
@@ -41,14 +41,16 @@
   min-width: 0;
   overflow-y: auto;
   padding: var(--space-4, 16px);
-  gap: var(--space-4, 16px);
+  gap: var(--space-3, 12px);
 }
+
+/* Header: avatar + name + icon exits on one non-wrapping line, then the
+   stage pill and segment · source context below. */
 
 .lead-inspector__header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-3, 12px);
+  flex-direction: column;
+  gap: var(--space-2, 8px);
 }
 
 .lead-inspector__identity {
@@ -59,23 +61,42 @@
 }
 
 .lead-inspector__name {
+  flex: 1;
+  min-width: 0;
   margin: 0;
+  overflow: hidden;
   font-size: 1.05rem;
   line-height: 1.3;
-}
-
-.lead-inspector__meta {
-  margin: 2px 0 0;
-  font-size: 0.82rem;
-  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lead-inspector__header-actions {
   display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1, 4px);
+}
+
+.lead-inspector__subline {
+  display: flex;
   align-items: center;
   gap: var(--space-2, 8px);
-  flex-shrink: 0;
+  min-width: 0;
 }
+
+.lead-inspector__meta {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-caption, 12px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Tabs: exactly four so they always fit the 420px minimum without
+   horizontal scrolling. */
 
 .lead-inspector__tabs {
   display: flex;
@@ -98,6 +119,7 @@
   font: inherit;
   font-size: 0.85rem;
   color: var(--muted);
+  white-space: nowrap;
 }
 
 .lead-inspector__tab[aria-selected='true'] {
@@ -123,6 +145,32 @@
   gap: var(--space-4, 16px);
 }
 
+/* Review flow: the explicit decision block pinned to the top of Overview
+   for unreviewed leads. */
+
+.lead-inspector__review {
+  padding: var(--space-3, 12px);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-md, 14px);
+  background: var(--accent-soft);
+}
+
+.lead-inspector__review-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+}
+
+.lead-inspector__dismiss {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 8px);
+  margin-top: var(--space-2, 8px);
+}
+
+/* Fit and Timing: one compact two-column row. Micro label, large tabular
+   value, band pill inline. Nothing wraps mid-phrase. */
+
 .lead-inspector__bands {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -130,13 +178,45 @@
 }
 
 .lead-inspector__band {
-  padding: var(--space-3, 12px);
+  padding: var(--space-2, 8px) var(--space-3, 12px);
   border: 1px solid var(--line, #d8dde1);
   border-radius: var(--radius-md, 14px);
 }
 
-.lead-inspector__band p {
+.lead-inspector__band-label {
+  margin: 0 0 2px;
+  color: var(--muted);
+  font-size: var(--text-micro, 11px);
+  font-weight: var(--weight-medium, 500);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.lead-inspector__band-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2, 8px);
   margin: 0;
+  white-space: nowrap;
+}
+
+.lead-inspector__band-value {
+  font-size: 24px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.lead-inspector__band-denominator {
+  color: var(--muted);
+  font-size: var(--text-dense, 13px);
+  font-weight: 400;
+}
+
+.lead-inspector__band-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-dense, 13px);
 }
 
 .lead-inspector__band-title {
@@ -174,7 +254,7 @@
 }
 
 .lead-inspector__next-action p {
-  margin: 0 0 var(--space-2, 8px);
+  margin: 0;
 }
 
 .lead-inspector__opt-out-reason {
@@ -193,6 +273,14 @@
 .lead-inspector__outbound-pair {
   display: inline-flex;
   gap: var(--space-2, 8px);
+}
+
+/* Activity tab: the touch log plus the conversations subsection. */
+
+.lead-inspector__activity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4, 16px);
 }
 
 .lead-inspector__timeline,
@@ -235,6 +323,10 @@
 
 /* Cloud scores section: chip + top-3 reasons + log-only override controls. */
 
+.lead-inspector__cloud p {
+  margin: 0 0 var(--space-2, 8px);
+}
+
 .lead-inspector__cloud-chip {
   display: inline-block;
   padding: 0 var(--space-2);
@@ -250,8 +342,35 @@
   font-size: 0.85em;
 }
 
+.lead-inspector__cloud-reason--muted {
+  color: var(--muted);
+}
+
+/* Override controls: quiet, right-aligned, with the 11px training
+   explainer on the left so they read as feedback, not actions. */
+
 .lead-inspector__cloud-override {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--space-2);
   margin-top: var(--space-2);
+}
+
+.lead-inspector__cloud-explainer {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-micro, 11px);
+}
+
+.lead-inspector__cloud-override-buttons {
+  display: flex;
+  gap: var(--space-1, 4px);
+}
+
+.lead-inspector__cloud-override-buttons .button {
+  height: 24px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-caption, 12px);
+  color: var(--muted);
 }

@@ -96,6 +96,27 @@ export const cloudScoreOverrideRequestSchema = z.object({
   direction: z.enum(['up', 'down']),
 }).strict();
 
+/**
+ * Founder dismissal from the review flow: disqualifies the prospect behind
+ * the exact qualification gate reason and closes the cycle into
+ * Lost-Nurture through the existing guarded path.
+ */
+export const qualificationGateReasonSchema = z.enum([
+  'out_of_area',
+  'no_relevant_decision_relationship',
+  'institutional_outside_icp',
+  'harmful_operator',
+  'non_paying_operator',
+  'unresolved_duplicate',
+]);
+
+export const dismissLeadRequestSchema = z.object({
+  salesCycleId: salesCycleIdSchema,
+  personId: personIdSchema,
+  qualificationGateReason: qualificationGateReasonSchema,
+  expectedRevision: z.number().int().nonnegative(),
+}).strict();
+
 export type ContactMethod = z.infer<typeof contactMethodSchema>;
 export type CadenceSummary = z.infer<typeof cadenceSummarySchema>;
 export type ActivitySummary = z.infer<typeof activitySummarySchema>;
@@ -108,3 +129,5 @@ export type BeginOutboundRequest = z.infer<typeof beginOutboundRequestSchema>;
 export type ConfirmTransitionRequest = z.infer<typeof confirmTransitionRequestSchema>;
 export type CloudScoreDetail = z.infer<typeof cloudScoreDetailSchema>;
 export type CloudScoreOverrideRequest = z.infer<typeof cloudScoreOverrideRequestSchema>;
+export type QualificationGateReason = z.infer<typeof qualificationGateReasonSchema>;
+export type DismissLeadRequest = z.infer<typeof dismissLeadRequestSchema>;

@@ -4,6 +4,7 @@ import type {
   BeginOutboundRequest,
   CloudScoreOverrideRequest,
   ConfirmTransitionRequest,
+  DismissLeadRequest,
   LeadDetail,
 } from '../../../shared/contracts/leadDetailContract';
 import { ErrorState } from '../../components/ErrorState';
@@ -20,7 +21,6 @@ import { useResizableInspector } from './useResizableInspector';
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'activity', label: 'Activity' },
-  { id: 'conversations', label: 'Conversations' },
   { id: 'properties', label: 'Properties' },
   { id: 'history', label: 'History' },
 ] as const;
@@ -31,17 +31,21 @@ export type InspectorTabsProps = {
   detail: LeadDetail;
   onBeginOutbound(request: BeginOutboundRequest): void;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
+  onDismissLead(request: DismissLeadRequest): void;
   onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
 };
 
 /**
  * Shared tab sections for both the docked inspector and the full page so the
- * two views never diverge. Arrow keys cycle the tabs with wraparound.
+ * two views never diverge. Four tabs so the tablist always fits the minimum
+ * inspector width without horizontal scrolling; conversations live inside
+ * Activity as a subsection. Arrow keys cycle the tabs with wraparound.
  */
 export function InspectorTabs({
   detail,
   onBeginOutbound,
   onConfirmTransition,
+  onDismissLead,
   onOverrideCloudScore,
 }: InspectorTabsProps) {
   const [selected, setSelected] = useState<TabId>('overview');
@@ -116,14 +120,20 @@ export function InspectorTabs({
             detail={detail}
             onBeginOutbound={onBeginOutbound}
             onConfirmTransition={onConfirmTransition}
+            onDismissLead={onDismissLead}
             onOverrideCloudScore={onOverrideCloudScore}
           />
         )}
         {selected === 'activity' && (
-          <InspectorActivity activities={detail.activities} />
-        )}
-        {selected === 'conversations' && (
-          <InspectorConversation conversations={detail.conversations} />
+          <div className="lead-inspector__activity">
+            <InspectorActivity activities={detail.activities} />
+            {detail.conversations.length > 0 && (
+              <section aria-label="Conversations">
+                <h3 className="lead-inspector__band-title">Conversations</h3>
+                <InspectorConversation conversations={detail.conversations} />
+              </section>
+            )}
+          </div>
         )}
         {selected === 'properties' && (
           <InspectorProperties properties={detail.properties} />
@@ -141,11 +151,12 @@ export type LeadInspectorProps = {
   onOpenFullPage(personId: string): void;
   onBeginOutbound(request: BeginOutboundRequest): void;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
+  onDismissLead(request: DismissLeadRequest): void;
   onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
 };
 
 /**
- * The single right-docked lead panel: resizable within 380-640 px, labelled
+ * The single right-docked lead panel: resizable within 420-640 px, labelled
  * with the person's name, closed by Escape, safe for loading and error states.
  */
 export function LeadInspector({
@@ -155,6 +166,7 @@ export function LeadInspector({
   onOpenFullPage,
   onBeginOutbound,
   onConfirmTransition,
+  onDismissLead,
   onOverrideCloudScore,
 }: LeadInspectorProps) {
   const resize = useResizableInspector();
@@ -216,6 +228,7 @@ export function LeadInspector({
               detail={state.detail}
               onBeginOutbound={onBeginOutbound}
               onConfirmTransition={onConfirmTransition}
+              onDismissLead={onDismissLead}
               onOverrideCloudScore={onOverrideCloudScore}
             />
           </>

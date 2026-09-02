@@ -101,6 +101,7 @@ function createApi(detail: LeadDetail) {
     get: vi.fn(async () => detail),
     beginOutbound: vi.fn(async () => receipt),
     confirmTransition: vi.fn(async () => receipt),
+    dismissLead: vi.fn(async () => receipt),
     overrideCloudScore: vi.fn(async () => receipt),
   };
 }
@@ -146,23 +147,23 @@ describe('LeadInspector', () => {
     expect(screen.queryByRole('complementary')).toBeNull();
   });
 
-  it('clamps a too-small persisted width up to the minimum', async () => {
+  it('clamps a too-small persisted width up to the readable minimum', async () => {
     window.localStorage.setItem(WIDTH_KEY, '10');
     const inspector = await renderInspector(createApi(detailFor()));
 
-    expect(inspector.getAttribute('style')).toContain('380px');
+    expect(inspector.getAttribute('style')).toContain('420px');
   });
 
   it('resizes with an accessible separator and persists the clamped width', async () => {
     await renderInspector(createApi(detailFor()));
 
     const separator = screen.getByRole('separator', { name: 'Resize inspector' });
-    expect(separator.getAttribute('aria-valuemin')).toBe('380');
+    expect(separator.getAttribute('aria-valuemin')).toBe('420');
     expect(separator.getAttribute('aria-valuemax')).toBe('640');
 
     fireEvent.keyDown(separator, { key: 'ArrowLeft' });
     const widened = Number(separator.getAttribute('aria-valuenow'));
-    expect(widened).toBeGreaterThan(420);
+    expect(widened).toBeGreaterThan(460);
     expect(window.localStorage.getItem(WIDTH_KEY)).toBe(String(widened));
 
     for (let i = 0; i < 40; i += 1) {
@@ -174,8 +175,8 @@ describe('LeadInspector', () => {
     for (let i = 0; i < 40; i += 1) {
       fireEvent.keyDown(separator, { key: 'ArrowRight' });
     }
-    expect(separator.getAttribute('aria-valuenow')).toBe('380');
-    expect(window.localStorage.getItem(WIDTH_KEY)).toBe('380');
+    expect(separator.getAttribute('aria-valuenow')).toBe('420');
+    expect(window.localStorage.getItem(WIDTH_KEY)).toBe('420');
   });
 
   it('shows separate Fit and Timing explanations that are never combined', async () => {
@@ -257,6 +258,11 @@ describe('LeadInspector', () => {
 
     const overviewTab = within(inspector).getByRole('tab', { name: 'Overview' });
     expect(overviewTab.getAttribute('aria-selected')).toBe('true');
+    // Exactly four tabs so the tablist fits 420px without horizontal scroll.
+    expect(within(inspector).getAllByRole('tab')).toHaveLength(4);
+    expect(
+      within(inspector).queryByRole('tab', { name: 'Conversations' }),
+    ).toBeNull();
 
     fireEvent.keyDown(overviewTab, { key: 'ArrowRight' });
     const activityTab = within(inspector).getByRole('tab', { name: 'Activity' });
@@ -264,13 +270,10 @@ describe('LeadInspector', () => {
     expect(
       within(inspector).getByText('Left voicemail about 12 Benefit St'),
     ).toBeTruthy();
-
-    fireEvent.keyDown(activityTab, { key: 'ArrowRight' });
+    // Conversations render inside Activity as a labelled subsection.
     expect(
-      within(inspector)
-        .getByRole('tab', { name: 'Conversations' })
-        .getAttribute('aria-selected'),
-    ).toBe('true');
+      within(inspector).getByRole('region', { name: 'Conversations' }),
+    ).toBeTruthy();
     expect(within(inspector).getByText('5m 40s')).toBeTruthy();
 
     fireEvent.click(within(inspector).getByRole('tab', { name: 'Properties' }));
@@ -289,19 +292,72 @@ describe('LeadInspector', () => {
     ).toBe('true');
   });
 
+  it('hides the Conversations subsection when there are none', async () => {
+    const inspector = await renderInspector(
+      createApi(detailFor({ conversations: [] })),
+    );
+
+    fireEvent.click(within(inspector).getByRole('tab', { name: 'Activity' }));
+    expect(
+      within(inspector).queryByRole('region', { name: 'Conversations' }),
+    ).toBeNull();
+  });
+
   it('confirms the guarded review transition with the expected revision', async () => {
     const api = createApi(detailFor());
     const inspector = await renderInspector(api);
 
-    fireEvent.click(
-      within(inspector).getByRole('button', { name: 'Confirm ready' }),
-    );
+    const review = within(inspector).getByRole('region', {
+      name: 'Review this lead',
+    });
+    fireEvent.click(within(review).getByRole('button', { name: 'Mark ready' }));
 
     expect(api.confirmTransition).toHaveBeenCalledWith({
       transition: 'review_to_ready',
       salesCycleId: 'cycle-kevin',
       expectedRevision: 4,
     });
+  });
+
+  it('dismisses through the gate-reason select in the review section', async () => {
+    const api = createApi(detailFor());
+    const inspector = await renderInspector(api);
+
+    const review = within(inspector).getByRole('region', {
+      name: 'Review this lead',
+    });
+    fireEvent.click(within(review).getByRole('button', { name: 'Dismiss' }));
+
+    const reason = within(review).getByRole('combobox', {
+      name: 'Dismissal reason',
+    });
+    fireEvent.click(reason);
+    fireEvent.click(
+      within(review).getByRole('option', { name: 'Institutional, outside ICP' }),
+    );
+    fireEvent.click(
+      within(review).getByRole('button', { name: 'Confirm dismiss' }),
+    );
+
+    expect(api.dismissLead).toHaveBeenCalledWith({
+      salesCycleId: 'cycle-kevin',
+      personId: 'person-kevin',
+      qualificationGateReason: 'institutional_outside_icp',
+      expectedRevision: 4,
+    });
+  });
+
+  it('shows no review section for an already-reviewed lead', async () => {
+    const inspector = await renderInspector(
+      createApi(detailFor({ stage: 'ready' })),
+    );
+
+    expect(
+      within(inspector).queryByRole('region', { name: 'Review this lead' }),
+    ).toBeNull();
+    expect(
+      within(inspector).queryByRole('button', { name: 'Mark ready' }),
+    ).toBeNull();
   });
 
   it('shows the cloud chip with labelled top reasons and logs overrides', async () => {
@@ -327,6 +383,8 @@ describe('LeadInspector', () => {
         'Permit filed recently +12',
         'Pre-1940 housing stock +8',
       ]);
+    // The overrides read as feedback: the training explainer sits with them.
+    expect(within(inspector).getByText('Feedback trains scoring')).toBeTruthy();
 
     fireEvent.click(within(inspector).getByRole('button', { name: 'Wrong signal' }));
     expect(api.overrideCloudScore).toHaveBeenCalledWith({
@@ -339,6 +397,22 @@ describe('LeadInspector', () => {
       personId: 'person-kevin',
       direction: 'up',
     });
+  });
+
+  it('drops the +0 suffix for a zero-contribution signal', async () => {
+    const inspector = await renderInspector(createApi(detailFor({
+      cloudScores: {
+        scores: { fit: 0, timing: 0 },
+        reasons: [{ signal: 'no_signals', contribution: 0 }],
+        scoredAt: '2026-08-31T15:00:00.000Z',
+      },
+    })));
+
+    const reasons = within(inspector).getByRole('list', { name: 'Top cloud signals' });
+    const item = within(reasons).getByRole('listitem');
+    expect(item.textContent).toBe('No active signals');
+    expect(item.textContent).not.toContain('+0');
+    expect(item.className).toContain('lead-inspector__cloud-reason--muted');
   });
 
   it('renders no cloud section for an unscored lead', async () => {

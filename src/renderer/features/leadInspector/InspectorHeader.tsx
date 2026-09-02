@@ -1,9 +1,8 @@
-import { X } from 'lucide-react';
+import { ExternalLink, X } from 'lucide-react';
 
 import type { LeadDetail } from '../../../shared/contracts/leadDetailContract';
 import { humanizeEnumLabel, titleCaseDisplayName } from '../../../shared/displayText';
 import { Avatar } from '../../components/Avatar';
-import { Button } from '../../components/Button';
 import { IconButton } from '../../components/IconButton';
 import { StatusPill } from '../../components/StatusPill';
 
@@ -19,41 +18,49 @@ export type InspectorHeaderProps = {
   onOpenFullPage?: () => void;
 };
 
-/** Identity strip: who the lead is, where they came from, and exits. */
+/**
+ * Identity strip: avatar and name stay on one truncating line with the two
+ * icon exits top-right; the stage pill and segment · source context sit on
+ * their own line below. Nothing here ever wraps.
+ */
 export function InspectorHeader({
   detail,
   onClose,
   onOpenFullPage,
 }: InspectorHeaderProps) {
+  const name = titleCaseDisplayName(detail.personName);
+
   return (
     <header className="lead-inspector__header">
       <div className="lead-inspector__identity">
         <Avatar name={detail.personName} />
-        <div>
-          <h2 className="lead-inspector__name">
-            {titleCaseDisplayName(detail.personName)}
-          </h2>
-          <p className="lead-inspector__meta">
-            {detail.organizationLabel !== null && (
-              <span>{detail.organizationLabel} · </span>
-            )}
-            <span>{SEGMENT_LABELS[detail.segment]}</span>
-            <span> · via {detail.sourceLabel}</span>
-          </p>
+        <h2 className="lead-inspector__name" title={name}>
+          {name}
+        </h2>
+        <div className="lead-inspector__header-actions">
+          {onOpenFullPage !== undefined && (
+            <IconButton
+              label="Open full page"
+              icon={ExternalLink}
+              onClick={onOpenFullPage}
+            />
+          )}
+          {onClose !== undefined && (
+            <IconButton label="Close inspector" icon={X} onClick={onClose} />
+          )}
         </div>
       </div>
-      <div className="lead-inspector__header-actions">
+      <div className="lead-inspector__subline">
         <StatusPill tone={detail.optedOut ? 'danger' : 'neutral'}>
           {detail.optedOut ? 'Opted out' : humanizeEnumLabel(detail.stage)}
         </StatusPill>
-        {onOpenFullPage !== undefined && (
-          <Button variant="quiet" onClick={onOpenFullPage}>
-            Open full page
-          </Button>
-        )}
-        {onClose !== undefined && (
-          <IconButton label="Close inspector" icon={X} onClick={onClose} />
-        )}
+        <p className="lead-inspector__meta">
+          {detail.organizationLabel !== null && (
+            <span>{detail.organizationLabel} · </span>
+          )}
+          <span>{SEGMENT_LABELS[detail.segment]}</span>
+          <span> · via {detail.sourceLabel}</span>
+        </p>
       </div>
     </header>
   );

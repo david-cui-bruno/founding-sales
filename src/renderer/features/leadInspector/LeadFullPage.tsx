@@ -2,6 +2,7 @@ import type {
   BeginOutboundRequest,
   CloudScoreOverrideRequest,
   ConfirmTransitionRequest,
+  DismissLeadRequest,
 } from '../../../shared/contracts/leadDetailContract';
 import { ErrorState } from '../../components/ErrorState';
 import { LoadingState } from '../../components/LoadingState';
@@ -14,6 +15,7 @@ export type LeadFullPageProps = {
   onRetry(): void;
   onBeginOutbound(request: BeginOutboundRequest): void;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
+  onDismissLead(request: DismissLeadRequest): void;
   onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
 };
 
@@ -26,6 +28,7 @@ export function LeadFullPage({
   onRetry,
   onBeginOutbound,
   onConfirmTransition,
+  onDismissLead,
   onOverrideCloudScore,
 }: LeadFullPageProps) {
   if (state.status === 'loading') {
@@ -63,6 +66,7 @@ export function LeadFullPage({
         detail={state.detail}
         onBeginOutbound={onBeginOutbound}
         onConfirmTransition={onConfirmTransition}
+        onDismissLead={onDismissLead}
         onOverrideCloudScore={onOverrideCloudScore}
       />
     </article>

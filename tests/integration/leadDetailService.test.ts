@@ -224,4 +224,70 @@ describe('leadDetailService over a real encrypted domain', () => {
     expect(detail.stage).toBe('ready');
     expect(detail.history.length).toBeGreaterThan(0);
   });
+
+  it('dismisses an unreviewed lead through the disqualification path', async () => {
+    const prospect = seedProspect(database.raw, 'alpha');
+    database.raw.prepare(`
+      UPDATE prospects SET qualification_state = 'unreviewed' WHERE id = ?
+    `).run(prospect.prospectId);
+    const cycle = services.lifecycle.createUnreviewedCycle({
+      personId: prospect.personId,
+      prospectId: prospect.prospectId,
+      entrySourceEventId: prospect.sourceEventId,
+      effectiveAt: DOMAIN_TIMESTAMP,
+    });
+
+    const receipt = await leadDetail.dismissLead({
+      salesCycleId: cycle.id,
+      personId: prospect.personId,
+      qualificationGateReason: 'out_of_area',
+      expectedRevision: 0,
+    });
+
+    expect(receipt.affectedPersonIds).toEqual([prospect.personId]);
+    expect(receipt.affectedSalesCycleIds).toEqual([cycle.id]);
+    // The prospect is disqualified with the exact gate reason.
+    expect(database.raw.prepare(`
+      SELECT qualification_state, qualification_gate_reason
+      FROM prospects WHERE id = ?
+    `).get(prospect.prospectId)).toEqual({
+      qualification_state: 'disqualified',
+      qualification_gate_reason: 'out_of_area',
+    });
+    // The cycle closes into Lost-Nurture and leaves the actionable list.
+    expect(database.raw.prepare(`
+      SELECT stage, workflow_status, current_next_action_id, close_reason
+      FROM sales_cycles WHERE id = ?
+    `).get(cycle.id)).toEqual({
+      stage: 'lost_nurture',
+      workflow_status: 'closed',
+      current_next_action_id: null,
+      close_reason: 'disqualified',
+    });
+  });
+
+  it('rejects a dismissal whose person does not own the cycle', async () => {
+    const prospect = seedProspect(database.raw, 'alpha');
+    database.raw.prepare(`
+      UPDATE prospects SET qualification_state = 'unreviewed' WHERE id = ?
+    `).run(prospect.prospectId);
+    const cycle = services.lifecycle.createUnreviewedCycle({
+      personId: prospect.personId,
+      prospectId: prospect.prospectId,
+      entrySourceEventId: prospect.sourceEventId,
+      effectiveAt: DOMAIN_TIMESTAMP,
+    });
+
+    await expect(
+      leadDetail.dismissLead({
+        salesCycleId: cycle.id,
+        personId: 'someone-else',
+        qualificationGateReason: 'out_of_area',
+        expectedRevision: 0,
+      }),
+    ).rejects.toThrow();
+    expect(database.raw.prepare(
+      'SELECT qualification_state FROM prospects WHERE id = ?',
+    ).get(prospect.prospectId)).toEqual({ qualification_state: 'unreviewed' });
+  });
 });

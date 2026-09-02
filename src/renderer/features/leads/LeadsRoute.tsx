@@ -6,6 +6,7 @@ import type {
   LeadsListResponse,
 } from '../../../shared/contracts/leadsContract';
 import type { LeadsApi } from '../../../preload/apis/leadsApi';
+import { useLeadInspectorIfAvailable } from '../leadInspector/useLeadInspector';
 import { LeadsPage, type LeadsQueryView } from './LeadsPage';
 import { useLeadGridState } from './useLeadGridState';
 
@@ -68,6 +69,39 @@ export type LeadsRouteProps = {
 export function LeadsRoute({ api, onOpenLead, onOpenImport }: LeadsRouteProps) {
   const state = useLeadGridState();
   const query = useLeadsQuery(api, state.queryRequest);
+  const inspector = useLeadInspectorIfAvailable();
+
+  // The review flow's auto-advance: after Mark ready / Dismiss the inspector
+  // asks this route for the next person in the current list order. Refs keep
+  // the registered resolver reading live rows without re-registering per row.
+  const rowsRef = useRef<LeadsListResponse['rows']>([]);
+  rowsRef.current =
+    query.state.status === 'ready' ? query.state.response.rows : rowsRef.current;
+  const refreshRef = useRef(query.refresh);
+  refreshRef.current = query.refresh;
+  const selectRef = useRef(state.setSelectedPersonId);
+  selectRef.current = state.setSelectedPersonId;
+
+  const setReviewAdvance = inspector?.setReviewAdvance;
+  useEffect(() => {
+    if (setReviewAdvance === undefined) {
+      return undefined;
+    }
+    setReviewAdvance((personId) => {
+      const rows = rowsRef.current;
+      const index = rows.findIndex((row) => row.personId === personId);
+      const next = index === -1 ? null : rows[index + 1] ?? null;
+      // The reviewed lead changed stage (or left the list): refetch so the
+      // grid reflects the decision immediately.
+      refreshRef.current();
+      if (next === null) {
+        return null;
+      }
+      selectRef.current(next.personId);
+      return next.personId;
+    });
+    return () => setReviewAdvance(null);
+  }, [setReviewAdvance]);
 
   const view: LeadsQueryView =
     query.state.status === 'ready'

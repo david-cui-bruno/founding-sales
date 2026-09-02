@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -89,6 +89,7 @@ function createApi(details: LeadDetail[]) {
     }),
     beginOutbound: vi.fn(async () => receipt),
     confirmTransition: vi.fn(async () => receipt),
+    dismissLead: vi.fn(async () => receipt),
     overrideCloudScore: vi.fn(async () => receipt),
   };
 }
@@ -109,6 +110,16 @@ function Harness() {
       </button>
       <button type="button" onClick={() => inspector.closeLead()}>
         Close lead
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          inspector.setReviewAdvance((personId) =>
+            personId === 'person-kevin' ? 'person-dana' : null,
+          )
+        }
+      >
+        Register advance
       </button>
       <output data-testid="selected-person">
         {inspector.selectedPersonId ?? 'none'}
@@ -176,6 +187,7 @@ describe('LeadInspectorProvider', () => {
       ),
       beginOutbound: vi.fn(async () => receipt),
       confirmTransition: vi.fn(async () => receipt),
+      dismissLead: vi.fn(async () => receipt),
       overrideCloudScore: vi.fn(async () => receipt),
     };
     render(
@@ -277,5 +289,86 @@ describe('LeadInspectorProvider', () => {
     expect(() => render(<Harness />)).toThrow('LeadInspectorProvider');
 
     errorSpy.mockRestore();
+  });
+
+  it('advances to the next lead after Mark ready using the registered order', async () => {
+    const api = createApi([kevin, dana]);
+    render(
+      <LeadInspectorProvider api={api}>
+        <Harness />
+      </LeadInspectorProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Register advance' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+    await screen.findByRole('complementary', { name: 'Kevin Shin details' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mark ready' }));
+
+    await screen.findByRole('complementary', { name: 'Dana Whitman details' });
+    expect(api.confirmTransition).toHaveBeenCalledWith({
+      transition: 'review_to_ready',
+      salesCycleId: 'cycle-kevin',
+      expectedRevision: 4,
+    });
+    expect(screen.getByTestId('selected-person').textContent).toBe('person-dana');
+  });
+
+  it('advances to the next lead after a dismissal', async () => {
+    const api = createApi([kevin, dana]);
+    render(
+      <LeadInspectorProvider api={api}>
+        <Harness />
+      </LeadInspectorProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Register advance' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+    await screen.findByRole('complementary', { name: 'Kevin Shin details' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm dismiss' }));
+
+    await screen.findByRole('complementary', { name: 'Dana Whitman details' });
+    expect(api.dismissLead).toHaveBeenCalledWith({
+      salesCycleId: 'cycle-kevin',
+      personId: 'person-kevin',
+      qualificationGateReason: 'out_of_area',
+      expectedRevision: 4,
+    });
+  });
+
+  it('closes after reviewing the last lead in the registered order', async () => {
+    const api = createApi([kevin, dana]);
+    render(
+      <LeadInspectorProvider api={api}>
+        <Harness />
+      </LeadInspectorProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Register advance' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Dana Whitman' }));
+    await screen.findByRole('complementary', { name: 'Dana Whitman details' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mark ready' }));
+
+    await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull());
+  });
+
+  it('closes after a dismissal when no list registered an order', async () => {
+    const api = createApi([kevin, dana]);
+    render(
+      <LeadInspectorProvider api={api}>
+        <Harness />
+      </LeadInspectorProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+    await screen.findByRole('complementary', { name: 'Kevin Shin details' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm dismiss' }));
+
+    await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull());
   });
 });

@@ -177,22 +177,63 @@ describe('LeadsGrid', () => {
     expect(placeholders.length).toBeGreaterThanOrEqual(3);
   });
 
-  it('selects a row on click and marks it selected', () => {
+  it('opens the inspector AND selects on a single row click', () => {
     const onSelect = vi.fn();
+    const onOpenLead = vi.fn();
     render(
       <LeadsGrid
         rows={[leadRow, secondRow]}
         selectedPersonId="person-2"
         onSelect={onSelect}
         onUpdateField={vi.fn()}
+        onOpenLead={onOpenLead}
       />,
     );
 
     expect(
       screen.getByRole('row', { name: /Blake Owner/ }).getAttribute('aria-selected'),
     ).toBe('true');
+    // Real mouse path: a plain click on the row body both selects and opens.
     fireEvent.click(screen.getByRole('row', { name: /Avery Landlord/ }));
     expect(onSelect).toHaveBeenCalledWith('person-1');
+    expect(onOpenLead).toHaveBeenCalledWith('person-1');
+  });
+
+  it('still selects on click when no open handler is wired', () => {
+    const onSelect = vi.fn();
+    render(
+      <LeadsGrid
+        rows={[leadRow, secondRow]}
+        selectedPersonId={null}
+        onSelect={onSelect}
+        onUpdateField={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('row', { name: /Avery Landlord/ }));
+    expect(onSelect).toHaveBeenCalledWith('person-1');
+  });
+
+  it('keeps checkbox clicks select-only: no inspector open', () => {
+    const onOpenLead = vi.fn();
+    const onToggleChecked = vi.fn();
+    render(
+      <LeadsGrid
+        rows={[leadRow]}
+        selectedPersonId={null}
+        onSelect={vi.fn()}
+        onUpdateField={vi.fn()}
+        onOpenLead={onOpenLead}
+        checkedPersonIds={new Set()}
+        onToggleChecked={onToggleChecked}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Avery Landlord' }),
+    );
+    expect(onToggleChecked).toHaveBeenCalledWith('person-1');
+    expect(onOpenLead).not.toHaveBeenCalled();
   });
 
   it('moves selection with the keyboard and opens a lead with Enter', () => {

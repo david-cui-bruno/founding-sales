@@ -25,10 +25,12 @@ import {
 import {
   beginOutboundRequestSchema,
   confirmTransitionRequestSchema,
+  dismissLeadRequestSchema,
   leadDetailRequestSchema,
   leadDetailSchema,
   type BeginOutboundRequest,
   type ConfirmTransitionRequest,
+  type DismissLeadRequest,
   type LeadDetail,
   type LeadDetailRequest,
 } from '../../shared/contracts/leadDetailContract';
@@ -139,6 +141,8 @@ import type { TodayItem, TodayLane } from './today/todayTypes';
 export const FOUNDER_JOB_REQUEST_TYPE = 'founder_job_request_v1' as const;
 export const LEAD_IMPORT_JOB_TYPE = 'lead_import_v1' as const;
 const IMPORT_PREVIEW_TTL_MS = 30 * 60 * 1000;
+/** Dismissed leads get the mandatory manual re-look one year out. */
+const DISMISS_REACTIVATION_DELAY_MS = 365 * 24 * 60 * 60 * 1000;
 
 export type FounderSalesDomainErrorCode =
   | 'LEAD_NOT_FOUND'
@@ -367,8 +371,17 @@ export class FounderSalesDomain {
       ...filters,
     ].join(' AND ');
     const orderBy = {
+      // Within one priority band, cloud-scored leads outrank unscored ones
+      // (fit first, then timing, both DESC with NULLs last) so a "0 fit /
+      // 0 timing" row can never sit above a scored one. Cloud axes stay
+      // tiebreakers only: they never reorder the local priority bands.
       priority: `CASE WHEN projection.priority IS NULL THEN 1 ELSE 0 END,
-        projection.priority ASC, cycle.id ASC`,
+        projection.priority ASC,
+        CASE WHEN prospect.cloud_fit IS NULL THEN 1 ELSE 0 END,
+        prospect.cloud_fit DESC,
+        CASE WHEN prospect.cloud_timing IS NULL THEN 1 ELSE 0 END,
+        prospect.cloud_timing DESC,
+        cycle.id ASC`,
       due_at: 'action.due_at ASC, cycle.id ASC',
       person_name: 'person.display_name ASC, cycle.id ASC',
       last_contact: `CASE WHEN prospect.last_contact_at IS NULL THEN 1 ELSE 0 END,
@@ -825,6 +838,49 @@ export class FounderSalesDomain {
         if (request.transition === 'confirm_interviewed') writer.confirmInterviewed(command);
         else writer.confirmOffered(command);
       }
+      return this.receipt([cycle.person_id], [cycle.id]);
+    });
+  }
+
+  /**
+   * Founder dismissal from the review flow: one guarded command that
+   * disqualifies the prospect behind the exact gate reason and closes the
+   * cycle into Lost-Nurture. Append-only: it reuses the existing
+   * closeLostNurture path (reactivation planning included) end to end.
+   */
+  dismissLead(input: DismissLeadRequest): MutationReceipt {
+    const request = dismissLeadRequestSchema.parse(input);
+    const now = this.clock.now();
+    return this.services.unitOfWork.immediate(() => {
+      const cycle = this.requireCycle(request.salesCycleId);
+      if (cycle.person_id !== request.personId) {
+        throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The cycle belongs to another person.');
+      }
+      if (cycle.current_next_action_id === null) {
+        throw new FounderSalesDomainError('ACTION_NOT_SUPPORTED', 'The cycle has no current action.');
+      }
+      const prospect = this.database.raw.prepare(
+        'SELECT version FROM prospects WHERE id = ?',
+      ).get(cycle.prospect_id) as { version: number } | undefined;
+      if (prospect === undefined) {
+        throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The prospect does not exist.');
+      }
+      this.services.lifecycle.scopedWriter().closeLostNurture({
+        cycleId: cycle.id,
+        expectedCycleVersion: cycle.version,
+        expectedCurrentActionId: cycle.current_next_action_id,
+        reason: 'disqualified',
+        qualificationGateReason: request.qualificationGateReason,
+        notes: null,
+        effectiveAt: now,
+        // Unreviewed cycles have no cadence family, and every non-opt-out
+        // Lost-Nurture must carry reactivation work, so a dismissal plans
+        // the mandatory manual re-look one year out.
+        manualReactivationDueAt: new Date(
+          Date.parse(now) + DISMISS_REACTIVATION_DELAY_MS,
+        ).toISOString(),
+        expectedProspectVersion: prospect.version,
+      });
       return this.receipt([cycle.person_id], [cycle.id]);
     });
   }

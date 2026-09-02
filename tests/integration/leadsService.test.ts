@@ -57,6 +57,7 @@ describe('leadsService over a real encrypted domain', () => {
   let services: DomainServices;
   let domain: FounderSalesDomain;
   let leads: LeadsProvider;
+  let ruleVersionId: string;
 
   beforeEach(async () => {
     temp = createTempDatabase();
@@ -71,6 +72,7 @@ describe('leadsService over a real encrypted domain', () => {
     services.unitOfWork.immediate(() => {
       const installed = services.prioritizationRepository
         .installRuleVersion(BUILTIN_PRIORITIZATION_RULE_V1);
+      ruleVersionId = installed.id;
       services.prioritizationRepository.activateRuleVersion({
         ruleVersionId: installed.id, expectedActiveRuleVersionId: null,
       });
@@ -186,5 +188,104 @@ describe('leadsService over a real encrypted domain', () => {
     ).rejects.toThrow(/does not exist/);
     const page = await listAll();
     expect(page.total).toBe(1);
+  });
+
+  /** Sets the prospect's cloud axes exactly as the sourcing sync would. */
+  function setCloudScores(
+    prospectId: string,
+    fit: number | null,
+    timing: number | null,
+  ): void {
+    database.raw.prepare(
+      'UPDATE prospects SET cloud_fit = ?, cloud_timing = ? WHERE id = ?',
+    ).run(fit, timing, prospectId);
+  }
+
+  /**
+   * Installs a local priority projection through a faithful evaluation copy
+   * (the fidelity trigger demands both rows agree on every axis).
+   */
+  function insertPriorityProjection(
+    prospect: SeededProspect,
+    priority: 'p1' | 'p2' | 'p3',
+  ): void {
+    const evaluationId = `${prospect.prospectId}-evaluation`;
+    database.raw.prepare(`
+      INSERT INTO prioritization_evaluations (
+        id, prospect_id, rule_version_id, decision_kind, evaluated_at,
+        fit_points, fit_band, timing_millipoints, timing_band, reachability,
+        data_confidence, priority, earliest_trigger_expires_at, verify_first,
+        last_contact_activity_id, last_contact_at, qualification_json,
+        command_json, input_snapshot_json, result_json, explanation_json,
+        created_at
+      ) VALUES (?, ?, ?, 'evaluated', ?, 25, 'high', 30000, 'hot', 'indirect',
+                8, ?, NULL, 0, NULL, NULL, NULL, '{}', '{}', '{}', '[]', ?)
+    `).run(
+      evaluationId, prospect.prospectId, ruleVersionId,
+      CLOCK_NOW, priority, CLOCK_NOW,
+    );
+    database.raw.prepare(`
+      INSERT INTO prospect_priority_projection (
+        prospect_id, rule_version_id, evaluation_id, decision_kind, fit_points,
+        fit_band, timing_millipoints, timing_band, reachability,
+        data_confidence, priority, earliest_trigger_expires_at, verify_first,
+        last_contact_activity_id, last_contact_at, version, evaluated_at,
+        updated_at
+      ) VALUES (?, ?, ?, 'evaluated', 25, 'high', 30000, 'hot', 'indirect', 8,
+                ?, NULL, 0, NULL, NULL, 1, ?, ?)
+    `).run(
+      prospect.prospectId, ruleVersionId, evaluationId,
+      priority, CLOCK_NOW, CLOCK_NOW,
+    );
+  }
+
+  it('ranks cloud-scored leads above unscored within the same priority band', async () => {
+    // Insertion (and cycle.id) order is the reverse of the expected output so
+    // an accidental id-order pass cannot slip through.
+    const cloudNull = seedLead('alpha');
+    const cloudZero = seedLead('beta');
+    const cloudHigh = seedLead('gamma');
+    for (const lead of [cloudNull, cloudZero, cloudHigh]) {
+      insertPriorityProjection(lead, 'p1');
+    }
+    setCloudScores(cloudZero.prospectId, 0, 0);
+    setCloudScores(cloudHigh.prospectId, 71, 40);
+
+    const page = await listAll({ sort: 'priority' });
+
+    expect(page.rows.map((row) => row.personId)).toEqual([
+      cloudHigh.personId,
+      cloudZero.personId,
+      cloudNull.personId,
+    ]);
+  });
+
+  it('breaks cloud-fit ties with cloud timing, still inside one band', async () => {
+    const slowTiming = seedLead('alpha');
+    const fastTiming = seedLead('beta');
+    setCloudScores(slowTiming.prospectId, 62, 10);
+    setCloudScores(fastTiming.prospectId, 62, 41);
+
+    const page = await listAll({ sort: 'priority' });
+
+    expect(page.rows.map((row) => row.personId)).toEqual([
+      fastTiming.personId,
+      slowTiming.personId,
+    ]);
+  });
+
+  it('never lets cloud scores outrank the local priority band', async () => {
+    const higherBand = seedLead('alpha');
+    const scoredLowerBand = seedLead('beta');
+    insertPriorityProjection(higherBand, 'p1');
+    insertPriorityProjection(scoredLowerBand, 'p2');
+    setCloudScores(scoredLowerBand.prospectId, 100, 100);
+
+    const page = await listAll({ sort: 'priority' });
+
+    expect(page.rows.map((row) => row.personId)).toEqual([
+      higherBand.personId,
+      scoredLowerBand.personId,
+    ]);
   });
 });

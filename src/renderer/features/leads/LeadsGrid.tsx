@@ -204,7 +204,13 @@ export function LeadsGrid({
                     : 'leads-grid__row'
                 }
                 style={{ transform: `translateY(${virtualRow.start}px)` }}
-                onClick={() => onSelect(lead.personId)}
+                onClick={() => {
+                  // A plain row click both selects and opens the inspector.
+                  // Checkbox and inline-edit clicks stopPropagation upstream,
+                  // so they stay select/edit-only.
+                  onSelect(lead.personId);
+                  onOpenLead?.(lead.personId);
+                }}
                 onKeyDown={(event) => onRowKeyDown(event, lead.personId)}
               >
                 {row.getVisibleCells().map((cell) => {

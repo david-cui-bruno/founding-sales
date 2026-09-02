@@ -82,6 +82,8 @@ export function createLeadDetailProvider(
       runtime.withDomain((domain) => domain.beginOutbound(input)),
     confirmTransition: (input) =>
       runtime.withDomain((domain) => domain.confirmTransition(input)),
+    dismissLead: (input) =>
+      runtime.withDomain((domain) => domain.dismissLead(input)),
     overrideCloudScore: (input) =>
       runtime.withDomain((domain) => domain.enqueueCloudScoreOverride(input)),
   };

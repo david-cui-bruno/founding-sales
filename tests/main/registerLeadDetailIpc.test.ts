@@ -87,6 +87,7 @@ function fakeProvider(): LeadDetailProvider {
     get: vi.fn(async () => detail),
     beginOutbound: vi.fn(async () => receipt),
     confirmTransition: vi.fn(async () => receipt),
+    dismissLead: vi.fn(async () => receipt),
     overrideCloudScore: vi.fn(async () => receipt),
   };
 }
@@ -97,7 +98,7 @@ describe('registerLeadDetailIpc', () => {
     electron.removeHandler.mockReset();
   });
 
-  it('registers exactly the four lead-detail channels', () => {
+  it('registers exactly the five lead-detail channels', () => {
     registerLeadDetailIpc(fakeProvider());
 
     const channels = electron.handle.mock.calls.map((call) => call[0]);
@@ -105,6 +106,7 @@ describe('registerLeadDetailIpc', () => {
       'lead-detail:get',
       'lead-detail:begin-outbound',
       'lead-detail:confirm-transition',
+      'lead-detail:dismiss',
       'lead-detail:cloud-score-override',
     ]);
   });
@@ -202,7 +204,30 @@ describe('registerLeadDetailIpc', () => {
     expect(provider.confirmTransition).toHaveBeenCalledTimes(1);
   });
 
-  it('unregisters all four channels exactly once', () => {
+  it('validates gate-reason-guarded dismiss requests', async () => {
+    const provider = fakeProvider();
+    registerLeadDetailIpc(provider);
+
+    const handler = registeredIpcHandler(electron.handle, 'lead-detail:dismiss');
+    const dismiss = {
+      salesCycleId: 'cycle-1',
+      personId: 'person-1',
+      qualificationGateReason: 'out_of_area' as const,
+      expectedRevision: 4,
+    };
+    await expect(handler(trustedEvent, dismiss)).resolves.toEqual(receipt);
+    expect(provider.dismissLead).toHaveBeenCalledWith(dismiss);
+
+    await expect(
+      handler(trustedEvent, { ...dismiss, qualificationGateReason: 'did_not_vibe' }),
+    ).rejects.toThrow();
+    await expect(
+      handler(untrustedEvent, dismiss),
+    ).rejects.toThrow('trusted');
+    expect(provider.dismissLead).toHaveBeenCalledTimes(1);
+  });
+
+  it('unregisters all five channels exactly once', () => {
     const unregister = registerLeadDetailIpc(fakeProvider());
 
     unregister();
@@ -213,8 +238,9 @@ describe('registerLeadDetailIpc', () => {
       'lead-detail:begin-outbound',
       'lead-detail:cloud-score-override',
       'lead-detail:confirm-transition',
+      'lead-detail:dismiss',
       'lead-detail:get',
     ]);
-    expect(electron.removeHandler).toHaveBeenCalledTimes(4);
+    expect(electron.removeHandler).toHaveBeenCalledTimes(5);
   });
 });

@@ -3,11 +3,13 @@ import {
   beginOutboundRequestSchema,
   cloudScoreOverrideRequestSchema,
   confirmTransitionRequestSchema,
+  dismissLeadRequestSchema,
   leadDetailRequestSchema,
   leadDetailSchema,
   type BeginOutboundRequest,
   type CloudScoreOverrideRequest,
   type ConfirmTransitionRequest,
+  type DismissLeadRequest,
   type LeadDetailRequest,
 } from '../../shared/contracts/leadDetailContract';
 import type { IpcClient } from '../ipcClient';
@@ -35,6 +37,13 @@ export const createLeadDetailApi = (client: IpcClient) => ({
     client.request(
       'lead-detail:confirm-transition',
       confirmTransitionRequestSchema,
+      mutationReceiptSchema,
+      input,
+    ),
+  dismissLead: (input: DismissLeadRequest) =>
+    client.request(
+      'lead-detail:dismiss',
+      dismissLeadRequestSchema,
       mutationReceiptSchema,
       input,
     ),

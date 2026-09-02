@@ -1,12 +1,17 @@
+import { useState } from 'react';
+
 import type {
   BeginOutboundRequest,
   CloudScoreOverrideRequest,
   ConfirmTransitionRequest,
   ContactMethod,
+  DismissLeadRequest,
   LeadDetail,
+  QualificationGateReason,
 } from '../../../shared/contracts/leadDetailContract';
 import { humanizeEnumLabel } from '../../../shared/displayText';
 import { Button } from '../../components/Button';
+import { Select } from '../../components/Select';
 import { StatusPill } from '../../components/StatusPill';
 import {
   cloudSignalLabel,
@@ -16,10 +21,24 @@ import {
 const OPT_OUT_REASON =
   'This person opted out. Outreach is permanently disabled.';
 
+/** Founder-facing labels for the exact qualification gate reasons. */
+const DISMISS_REASON_OPTIONS: ReadonlyArray<{
+  value: QualificationGateReason;
+  label: string;
+}> = [
+  { value: 'out_of_area', label: 'Out of area' },
+  { value: 'no_relevant_decision_relationship', label: 'Not a decision maker' },
+  { value: 'institutional_outside_icp', label: 'Institutional, outside ICP' },
+  { value: 'harmful_operator', label: 'Harmful operator' },
+  { value: 'non_paying_operator', label: 'Won\u2019t pay for tools' },
+  { value: 'unresolved_duplicate', label: 'Unresolved duplicate' },
+];
+
 export type InspectorOverviewProps = {
   detail: LeadDetail;
   onBeginOutbound(request: BeginOutboundRequest): void;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
+  onDismissLead(request: DismissLeadRequest): void;
   onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
 };
 
@@ -58,6 +77,75 @@ function OutboundButton({
 }
 
 /**
+ * The explicit review flow for unreviewed leads: one primary Mark ready and
+ * one secondary Dismiss that requires an exact qualification gate reason.
+ */
+function ReviewSection({
+  detail,
+  onConfirmTransition,
+  onDismissLead,
+}: {
+  detail: LeadDetail;
+  onConfirmTransition(request: ConfirmTransitionRequest): void;
+  onDismissLead(request: DismissLeadRequest): void;
+}) {
+  const [dismissing, setDismissing] = useState(false);
+  const [reason, setReason] = useState<QualificationGateReason>('out_of_area');
+
+  return (
+    <section aria-label="Review this lead" className="lead-inspector__review">
+      <h3 className="lead-inspector__band-title">Review this lead</h3>
+      <div className="lead-inspector__review-actions">
+        <Button
+          onClick={() =>
+            onConfirmTransition({
+              transition: 'review_to_ready',
+              salesCycleId: detail.salesCycleId,
+              expectedRevision: detail.revision,
+            })
+          }
+        >
+          Mark ready
+        </Button>
+        {!dismissing && (
+          <Button variant="quiet" onClick={() => setDismissing(true)}>
+            Dismiss
+          </Button>
+        )}
+      </div>
+      {dismissing && (
+        <div className="lead-inspector__dismiss">
+          <Select<QualificationGateReason>
+            label="Dismissal reason"
+            options={DISMISS_REASON_OPTIONS}
+            value={reason}
+            onChange={setReason}
+          />
+          <div className="lead-inspector__review-actions">
+            <Button
+              variant="danger"
+              onClick={() =>
+                onDismissLead({
+                  salesCycleId: detail.salesCycleId,
+                  personId: detail.personId,
+                  qualificationGateReason: reason,
+                  expectedRevision: detail.revision,
+                })
+              }
+            >
+              Confirm dismiss
+            </Button>
+            <Button variant="quiet" onClick={() => setDismissing(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
  * Evidence-first summary. Fit and Timing stay separate labelled regions and
  * are never merged into one synthesized score.
  */
@@ -65,42 +153,51 @@ export function InspectorOverview({
   detail,
   onBeginOutbound,
   onConfirmTransition,
+  onDismissLead,
   onOverrideCloudScore,
 }: InspectorOverviewProps) {
   const context = detail.priorityContext;
 
   return (
     <div className="lead-inspector__overview">
+      {detail.stage === 'unreviewed' && (
+        <ReviewSection
+          detail={detail}
+          onConfirmTransition={onConfirmTransition}
+          onDismissLead={onDismissLead}
+        />
+      )}
+
       <div className="lead-inspector__bands">
-        <section
-          className="lead-inspector__band"
-          aria-label="Fit"
-        >
-          <h3 className="lead-inspector__band-title">Fit</h3>
+        <section className="lead-inspector__band" aria-label="Fit">
+          <h3 className="lead-inspector__band-label">Fit</h3>
           {context === null ? (
-            <p>Not yet evaluated.</p>
+            <p className="lead-inspector__band-empty">Not yet evaluated</p>
           ) : (
-            <p>
+            <p className="lead-inspector__band-row">
+              <span className="lead-inspector__band-value">
+                {context.fitPoints}
+                <span className="lead-inspector__band-denominator">/30</span>
+              </span>
               <StatusPill tone={fitTone(context.fitBand)}>
                 {humanizeEnumLabel(context.fitBand)}
-              </StatusPill>{' '}
-              {context.fitPoints}/30 fit points
+              </StatusPill>
             </p>
           )}
         </section>
-        <section
-          className="lead-inspector__band"
-          aria-label="Timing"
-        >
-          <h3 className="lead-inspector__band-title">Timing</h3>
+        <section className="lead-inspector__band" aria-label="Timing">
+          <h3 className="lead-inspector__band-label">Timing</h3>
           {context === null ? (
-            <p>Not yet evaluated.</p>
+            <p className="lead-inspector__band-empty">Not yet evaluated</p>
           ) : (
-            <p>
+            <p className="lead-inspector__band-row">
+              <span className="lead-inspector__band-value">
+                {context.timingValue}
+                <span className="lead-inspector__band-denominator">/40</span>
+              </span>
               <StatusPill tone={timingTone(context.timingBand)}>
                 {humanizeEnumLabel(context.timingBand)}
-              </StatusPill>{' '}
-              {context.timingValue}/40 timing value
+              </StatusPill>
             </p>
           )}
         </section>
@@ -148,35 +245,51 @@ export function InspectorOverview({
               aria-label="Top cloud signals"
             >
               {detail.cloudScores.reasons.map((reason) => (
-                <li key={reason.signal}>
+                <li
+                  key={reason.signal}
+                  className={
+                    Math.round(reason.contribution) === 0
+                      ? 'lead-inspector__cloud-reason--muted'
+                      : undefined
+                  }
+                >
                   {cloudSignalLabel(reason.signal)}
-                  {' '}
-                  <span className="lead-inspector__cloud-contribution">
-                    +{Math.round(reason.contribution)}
-                  </span>
+                  {Math.round(reason.contribution) !== 0 && (
+                    <>
+                      {' '}
+                      <span className="lead-inspector__cloud-contribution">
+                        +{Math.round(reason.contribution)}
+                      </span>
+                    </>
+                  )}
                 </li>
               ))}
             </ul>
           )}
           <div className="lead-inspector__cloud-override">
-            <Button
-              variant="quiet"
-              onClick={() => onOverrideCloudScore({
-                personId: detail.personId,
-                direction: 'up',
-              })}
-            >
-              Signal too low
-            </Button>
-            <Button
-              variant="quiet"
-              onClick={() => onOverrideCloudScore({
-                personId: detail.personId,
-                direction: 'down',
-              })}
-            >
-              Wrong signal
-            </Button>
+            <p className="lead-inspector__cloud-explainer">
+              Feedback trains scoring
+            </p>
+            <div className="lead-inspector__cloud-override-buttons">
+              <Button
+                variant="quiet"
+                onClick={() => onOverrideCloudScore({
+                  personId: detail.personId,
+                  direction: 'up',
+                })}
+              >
+                Signal too low
+              </Button>
+              <Button
+                variant="quiet"
+                onClick={() => onOverrideCloudScore({
+                  personId: detail.personId,
+                  direction: 'down',
+                })}
+              >
+                Wrong signal
+              </Button>
+            </div>
           </div>
         </section>
       )}
@@ -197,19 +310,6 @@ export function InspectorOverview({
             )}{' '}
             {detail.nextAction.label}
           </p>
-          {detail.stage === 'unreviewed' && (
-            <Button
-              onClick={() =>
-                onConfirmTransition({
-                  transition: 'review_to_ready',
-                  salesCycleId: detail.salesCycleId,
-                  expectedRevision: detail.revision,
-                })
-              }
-            >
-              Confirm ready
-            </Button>
-          )}
         </section>
       )}
 

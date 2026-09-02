@@ -216,8 +216,11 @@
   cursor: default;
 }
 
+/* Hovering a row must read obviously interactive: a clear step-up tint from
+   the step-2 grid surface (founder feedback: "I can't tell rows are
+   clickable"). Click opens the inspector, so the whole row is a target. */
 .leads-grid__row:hover {
-  background: var(--surface-sunken);
+  background: color-mix(in srgb, var(--text) 6%, var(--surface));
 }
 
 .leads-grid__row--selected,

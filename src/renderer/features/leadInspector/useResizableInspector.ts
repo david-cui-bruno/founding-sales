@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 export const INSPECTOR_WIDTH_KEY = 'callie.inspector.width';
-export const INSPECTOR_MIN_WIDTH = 380;
+/** Founder feedback: 380 forced side-scrolling; 420 is the readable floor. */
+export const INSPECTOR_MIN_WIDTH = 420;
 export const INSPECTOR_MAX_WIDTH = 640;
 const KEYBOARD_STEP = 20;
-const DEFAULT_WIDTH = 420;
+const DEFAULT_WIDTH = 460;
 
 const clampWidth = (value: number): number =>
   Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, Math.round(value)));

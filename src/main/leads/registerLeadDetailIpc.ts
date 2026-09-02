@@ -3,6 +3,7 @@ import {
   beginOutboundRequestSchema,
   cloudScoreOverrideRequestSchema,
   confirmTransitionRequestSchema,
+  dismissLeadRequestSchema,
   leadDetailRequestSchema,
   leadDetailSchema,
 } from '../../shared/contracts/leadDetailContract';
@@ -10,7 +11,7 @@ import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
 import type { LeadDetailProvider } from './leadDetailService';
 
 /**
- * Registers exactly the four strict lead-detail channels and returns one
+ * Registers exactly the five strict lead-detail channels and returns one
  * idempotent unregister function that removes all of them.
  */
 export function registerLeadDetailIpc(
@@ -37,6 +38,13 @@ export function registerLeadDetailIpc(
       requestSchema: confirmTransitionRequestSchema,
       responseSchema: mutationReceiptSchema,
       handler: (request) => provider.confirmTransition(request),
+      isTrustedRendererUrl,
+    }),
+    registerValidatedIpc({
+      channel: 'lead-detail:dismiss',
+      requestSchema: dismissLeadRequestSchema,
+      responseSchema: mutationReceiptSchema,
+      handler: (request) => provider.dismissLead(request),
       isTrustedRendererUrl,
     }),
     registerValidatedIpc({
