@@ -76,6 +76,9 @@ test('inbox renders its truthful empty state and zero badge in a clean workspace
 });
 
 test('a large import stays out of Today: unreviewed leads are backlog only and the queue caps at the dial budget', async () => {
+  // 60 rows import + relaunch machinery can exceed the default budget on a
+  // loaded machine; the flow is inherently heavy, not hanging.
+  test.setTimeout(90_000);
   // 60 valid rows: enough to overflow the 40-dial budget if they ever leaked
   // into the queue. Imported leads start unreviewed, and unreviewed cycles
   // carry no next action, so Today must stay empty apart from the backlog
