@@ -21,8 +21,10 @@ locals {
         SNAPSHOTS_TABLE   = aws_dynamodb_table.snapshots.name
         MAX_RUNTIME_MS    = "840000"
       }
-      # Weekly: Sundays 09:00 UTC.
-      schedule = "cron(0 9 ? * SUN *)"
+      # Monthly (1st, 09:00 UTC): the Providence roll is published annually
+      # per tax year; a monthly idempotent re-pull catches mid-year corrections
+      # without the cosmetic waste of a weekly run (review finding F11).
+      schedule = "cron(0 9 1 * ? *)"
     }
     "adapter-boston-rentsmart" = {
       source_dir  = "${path.module}/../lambdas/adapter-boston-rentsmart/dist"
@@ -82,6 +84,24 @@ locals {
       }
       schedule = "rate(15 minutes)"
     }
+    # Compliance: app opt-out HMAC uploads -> suppression table (the internal
+    # do-not-call list the enricher checks before any contact-bearing event
+    # reaches the inbox). Same cadence as the enricher it protects.
+    "suppression-sync" = {
+      source_dir  = "${path.module}/../lambdas/suppression-sync/dist"
+      memory_size = 256
+      timeout     = 60
+      # Own role: the ONLY writer of the suppression table. The shared
+      # adapters role stays read-only on it by design (enricher checks,
+      # never writes).
+      role_arn = aws_iam_role.lambda_suppression_sync.arn
+      environment = {
+        INBOX_BUCKET      = aws_s3_bucket.inbox.bucket
+        SNAPSHOTS_TABLE   = aws_dynamodb_table.snapshots.name
+        SUPPRESSION_TABLE = aws_dynamodb_table.suppression.name
+      }
+      schedule = "rate(15 minutes)"
+    }
   }
 }
 
@@ -97,7 +117,7 @@ resource "aws_lambda_function" "adapters" {
   for_each = local.adapter_functions
 
   function_name = "${var.name_prefix}-${each.key}"
-  role          = aws_iam_role.lambda_adapters.arn
+  role          = lookup(each.value, "role_arn", aws_iam_role.lambda_adapters.arn)
 
   filename         = data.archive_file.adapters[each.key].output_path
   source_code_hash = data.archive_file.adapters[each.key].output_base64sha256

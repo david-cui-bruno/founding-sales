@@ -219,3 +219,64 @@ resource "aws_iam_user_policy" "app_inbox" {
   user   = aws_iam_user.app_inbox.name
   policy = data.aws_iam_policy_document.app_inbox.json
 }
+
+# ---------------------------------------------------------------------------
+# Suppression-sync: the ONLY principal with write access to the suppression
+# table. Reads app opt-out HMAC uploads from the inbox, writes hashes the
+# enricher then checks (read-only) before emitting contact-bearing events.
+# ---------------------------------------------------------------------------
+
+resource "aws_iam_role" "lambda_suppression_sync" {
+  name               = "${var.name_prefix}-lambda-suppression-sync"
+  path               = var.iam_path
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+}
+
+data "aws_iam_policy_document" "lambda_suppression_sync" {
+  statement {
+    sid       = "ListInbox"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.inbox.arn]
+  }
+
+  statement {
+    sid       = "ReadUploads"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.inbox.arn}/upstream/suppressions/*"]
+  }
+
+  statement {
+    sid       = "LedgerReadWrite"
+    effect    = "Allow"
+    actions   = ["dynamodb:GetItem", "dynamodb:PutItem"]
+    resources = [aws_dynamodb_table.snapshots.arn]
+  }
+
+  statement {
+    sid       = "SuppressionWrite"
+    effect    = "Allow"
+    actions   = ["dynamodb:PutItem"]
+    resources = [aws_dynamodb_table.suppression.arn]
+  }
+
+  statement {
+    sid    = "Logs"
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+    ]
+    resources = [
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-suppression-sync*",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "lambda_suppression_sync" {
+  name   = "${var.name_prefix}-lambda-suppression-sync"
+  role   = aws_iam_role.lambda_suppression_sync.id
+  policy = data.aws_iam_policy_document.lambda_suppression_sync.json
+}

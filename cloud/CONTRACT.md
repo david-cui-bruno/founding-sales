@@ -126,6 +126,16 @@ Two objects, written by the app to `s3://callie-sourcing-inbox-326255650484/upst
 
 No names, no notes, no free text ever flows upstream.
 
+### `upstream/suppressions/<YYYY-MM-DD>.ndjson` (app -> cloud)
+
+One line per opted-out contact handle:
+   `{ "contact_hmac": "<64 hex>", "kind": "phone|email", "reason": "opt_out|wrong_person|founder_block", "observed_at": "..." }`
+
+The HMAC uses the same salt + canonicalization as membership uploads. The
+suppression-sync stage writes each hash into the suppression table; it is the
+table's ONLY writer (the enricher reads it, never writes). Raw handles never
+flow upstream.
+
 ## Compliance invariants
 
 - An event whose entity matches the suppression table (contact_hmac hit) is dropped
