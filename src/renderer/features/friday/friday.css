@@ -1,4 +1,6 @@
-/* Friday scoreboard: neutral metric tiles, counted funnel, and manual jobs. */
+/* Friday scoreboard: neutral metric tiles, counted funnel, and manual jobs.
+   Rhythm: bands separated by --space-6, band titles 13/600 with --space-3
+   below, cards on a 12-column grid with equal --space-4 gaps. */
 
 .friday {
   display: flex;
@@ -12,6 +14,7 @@
   flex-direction: column;
   gap: var(--space-1);
   align-items: flex-end;
+  justify-content: center;
 }
 
 .friday__week-picker {
@@ -62,33 +65,52 @@
   font-size: var(--text-caption);
 }
 
-/* Themed metric bands: Funnel / Revenue / Health. */
+/* Themed metric bands: Funnel / Revenue / Health. The container's --space-6
+   gap provides the space above each band title. */
 .friday__band {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
 }
 
 .friday__band-title {
-  margin: 0;
+  margin: 0 0 var(--space-3);
   color: var(--text-muted);
-  font-size: var(--text-caption);
+  font-size: var(--text-dense);
+  line-height: var(--leading-dense);
   font-weight: var(--weight-heading);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: -0.01em;
 }
 
-/* Metric tiles stay neutral; only focus uses the sanctioned accent ring. */
+/* Metric tiles stay neutral; only focus uses the sanctioned accent ring.
+   Twelve columns per band; per-band spans keep every row full so no card
+   is left alone on a row. */
 .friday__metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: var(--space-3);
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.friday__metrics > * {
+  grid-column: span 4;
+}
+
+/* Funnel: five cards break 3 + 2; the last two span the remaining width. */
+.friday__band--funnel .friday__metrics > :nth-child(4),
+.friday__band--funnel .friday__metrics > :nth-child(5) {
+  grid-column: span 6;
+}
+
+/* Revenue: two cards split the row evenly. */
+.friday__band--revenue .friday__metrics > * {
+  grid-column: span 6;
 }
 
 .metric-card {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  box-sizing: border-box;
+  min-height: 104px;
   padding: var(--space-4);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);

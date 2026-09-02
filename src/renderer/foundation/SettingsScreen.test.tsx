@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AppHealth } from '../../shared/healthContract';
@@ -58,18 +58,46 @@ afterEach(() => {
 });
 
 describe('SettingsScreen', () => {
-  it('renders the six grouped sections behind an anchor sub-nav', () => {
+  it('renders a master-detail with six sections and Diagnostics selected by default', () => {
     renderSettings();
 
-    const subnav = screen.getByRole('navigation', { name: 'Settings sections' });
-    expect(subnav.textContent).toContain('Appearance');
-    expect(subnav.textContent).toContain('Data & storage');
-    for (const name of [
+    const sections = screen.getByRole('navigation', { name: 'Settings sections' });
+    for (const label of [
       'Appearance', 'Data & storage', 'Sourcing',
       'Diagnostics', 'Keyboard shortcuts', 'About',
     ]) {
-      expect(screen.getByRole('region', { name })).toBeTruthy();
+      expect(within(sections).getByRole('button', { name: label })).toBeTruthy();
     }
+
+    // Diagnostics is the default detail: its exact strings are visible
+    // without a click, and the other sections stay unrendered.
+    expect(
+      within(sections)
+        .getByRole('button', { name: 'Diagnostics' })
+        .getAttribute('aria-current'),
+    ).toBe('true');
+    expect(screen.getByRole('region', { name: 'Diagnostics' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Appearance' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'About' })).toBeNull();
+  });
+
+  it('shows only the selected section in the detail pane', () => {
+    renderSettings();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
+
+    expect(screen.getByRole('region', { name: 'Appearance' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Diagnostics' })).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Appearance' }).getAttribute('aria-current'),
+    ).toBe('true');
+    expect(
+      screen.getByRole('button', { name: 'Diagnostics' }).getAttribute('aria-current'),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sourcing' }));
+    expect(screen.getByRole('region', { name: 'Sourcing' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Appearance' })).toBeNull();
   });
 
   it('keeps the exact diagnostics strings the packaged E2E asserts', () => {
@@ -88,6 +116,7 @@ describe('SettingsScreen', () => {
     });
     const revealDatabase = vi.fn(async () => ({ revealed: true }));
     renderSettings({ shell: { revealDatabase } });
+    fireEvent.click(screen.getByRole('button', { name: 'Data & storage' }));
 
     expect(
       screen.getByText('/Users/founder/Library/callie.sqlite3'),
@@ -102,6 +131,7 @@ describe('SettingsScreen', () => {
 
   it('hides the reveal action when no shell api is wired', () => {
     renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'Data & storage' }));
 
     expect(screen.queryByRole('button', { name: 'Reveal in Finder' })).toBeNull();
   });
@@ -109,9 +139,12 @@ describe('SettingsScreen', () => {
   it('lists the keyboard cheat sheet and about facts', () => {
     renderSettings();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }));
     expect(screen.getByText('⌘K')).toBeTruthy();
     expect(screen.getByText('J / K')).toBeTruthy();
     expect(screen.getByText('E / H / P')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'About' }));
     const about = screen.getByRole('region', { name: 'About' });
     expect(about.textContent).toContain('1.2.3');
     expect(about.textContent).toContain('9');

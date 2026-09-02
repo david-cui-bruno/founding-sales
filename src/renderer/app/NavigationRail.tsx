@@ -27,6 +27,39 @@ export function NavigationRail({
       }
     };
 
+  const renderItem = (item: NavigationItem) => {
+    const Icon = item.icon;
+    const current = item.route === route;
+
+    return (
+      <li key={item.route}>
+        <a
+          className={
+            current
+              ? 'nav-rail__item nav-rail__item--current'
+              : 'nav-rail__item'
+          }
+          href={routeHash(item.route)}
+          aria-current={current ? 'page' : undefined}
+          aria-disabled={item.enabled ? undefined : 'true'}
+          title={item.enabled ? undefined : `${item.label} is coming soon`}
+          onClick={onItemClick(item)}
+        >
+          <Icon className="nav-rail__icon" aria-hidden="true" size={16} />
+          <span className="nav-rail__label">{item.label}</span>
+          {item.route === 'review' && reviewCount > 0 && (
+            <span className="nav-rail__badge" aria-label={`${reviewCount} items awaiting review`}>
+              {reviewCount}
+            </span>
+          )}
+        </a>
+      </li>
+    );
+  };
+
+  const primaryItems = navigationItems.filter((item) => item.route !== 'settings');
+  const settingsItems = navigationItems.filter((item) => item.route === 'settings');
+
   return (
     <nav className="nav-rail" aria-label="Primary">
       <div className="nav-rail__header">
@@ -34,37 +67,9 @@ export function NavigationRail({
           Callie
         </p>
       </div>
-      <ul className="nav-rail__list">
-        {navigationItems.map((item) => {
-          const Icon = item.icon;
-          const current = item.route === route;
-
-          return (
-            <li key={item.route}>
-              <a
-                className={
-                  current
-                    ? 'nav-rail__item nav-rail__item--current'
-                    : 'nav-rail__item'
-                }
-                href={routeHash(item.route)}
-                aria-current={current ? 'page' : undefined}
-                aria-disabled={item.enabled ? undefined : 'true'}
-                title={item.enabled ? undefined : `${item.label} is coming soon`}
-                onClick={onItemClick(item)}
-              >
-                <Icon className="nav-rail__icon" aria-hidden="true" size={18} />
-                <span className="nav-rail__label">{item.label}</span>
-                {item.route === 'review' && reviewCount > 0 && (
-                  <span className="nav-rail__badge" aria-label={`${reviewCount} items awaiting review`}>
-                    {reviewCount}
-                  </span>
-                )}
-              </a>
-            </li>
-          );
-        })}
-      </ul>
+      <ul className="nav-rail__list">{primaryItems.map(renderItem)}</ul>
+      <div className="nav-rail__spacer" aria-hidden="true" />
+      <ul className="nav-rail__list">{settingsItems.map(renderItem)}</ul>
     </nav>
   );
 }

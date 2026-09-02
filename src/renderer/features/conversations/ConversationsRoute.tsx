@@ -6,7 +6,6 @@ import type {
   ConversationDetail,
   ConversationDetailRequest,
   ConversationRow,
-  ConversationsFilter,
   ConversationsListRequest,
   ConversationsListResponse,
 } from '../../../shared/contracts/conversationsContract';
@@ -39,13 +38,13 @@ const CLOSED_ATTACH: AttachState = { open: false, failed: false, submitting: fal
 
 /**
  * Route container for the conversations workspace: fetches the list through
- * the injected API on every query/filter change, loads one detail per
- * selection, and refreshes both after a successful transcript attach.
- * Stale responses are ignored.
+ * the injected API on every query change, loads one detail per selection,
+ * and refreshes both after a successful transcript attach. The channel
+ * filter is fixed to 'all': search alone narrows the list at founder data
+ * sizes. Stale responses are ignored.
  */
 export function ConversationsRoute({ api, onOpenLead }: ConversationsRouteProps) {
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<ConversationsFilter>('all');
   const [listState, setListState] = useState<ListState>({ kind: 'loading' });
   const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null);
   const [detailState, setDetailState] = useState<DetailState>({ kind: 'idle' });
@@ -60,7 +59,7 @@ export function ConversationsRoute({ api, onOpenLead }: ConversationsRouteProps)
       setListState({ kind: 'loading' });
     }
     api
-      .list({ query, filter, limit: PAGE_LIMIT, cursor: null })
+      .list({ query, filter: 'all', limit: PAGE_LIMIT, cursor: null })
       .then((response) => {
         if (listSequence.current === requestId) {
           setListState({
@@ -76,7 +75,7 @@ export function ConversationsRoute({ api, onOpenLead }: ConversationsRouteProps)
           setListState({ kind: 'error' });
         }
       });
-  }, [api, query, filter]);
+  }, [api, query]);
 
   useEffect(() => {
     loadList(true);
@@ -91,7 +90,7 @@ export function ConversationsRoute({ api, onOpenLead }: ConversationsRouteProps)
     const requestId = listSequence.current;
     const previous = listState;
     api
-      .list({ query, filter, limit: PAGE_LIMIT, cursor: previous.nextCursor })
+      .list({ query, filter: 'all', limit: PAGE_LIMIT, cursor: previous.nextCursor })
       .then((response) => {
         if (listSequence.current === requestId) {
           setListState({
@@ -107,7 +106,7 @@ export function ConversationsRoute({ api, onOpenLead }: ConversationsRouteProps)
           setListState({ kind: 'error' });
         }
       });
-  }, [api, query, filter, listState]);
+  }, [api, query, listState]);
 
   const loadDetail = useCallback((activityId: string) => {
     detailSequence.current += 1;
@@ -153,14 +152,12 @@ export function ConversationsRoute({ api, onOpenLead }: ConversationsRouteProps)
     <ConversationsPage
       listState={listState}
       query={query}
-      filter={filter}
       selectedActivityId={selectedActivityId}
       detailState={detailState}
       attachOpen={attachState.open}
       attachFailed={attachState.failed}
       attachSubmitting={attachState.submitting}
       onQueryChange={setQuery}
-      onFilterChange={setFilter}
       onSelect={handleSelect}
       onLoadMore={loadMore}
       onRetryList={() => loadList(true)}

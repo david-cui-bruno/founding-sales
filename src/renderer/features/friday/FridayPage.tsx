@@ -19,19 +19,27 @@ import './friday.css';
 /**
  * The audit's three themed bands. Membership is fixed by metric ID so a new
  * metric must be placed deliberately; all thirteen contract metrics are
- * assigned and an unassigned one simply would not render.
+ * assigned and an unassigned one simply would not render. The slug drives
+ * the band's 12-column card layout so no row ends with a lonely card.
  */
-const BANDS: readonly { title: string; metricIds: readonly MetricId[] }[] = [
+const BANDS: readonly {
+  title: string;
+  slug: string;
+  metricIds: readonly MetricId[];
+}[] = [
   {
     title: 'Funnel',
+    slug: 'funnel',
     metricIds: ['interviews', 'offers', 'wins', 'offer_rate', 'win_rate'],
   },
   {
     title: 'Revenue',
+    slug: 'revenue',
     metricIds: ['new_mrr', 'founding_customers'],
   },
   {
     title: 'Health',
+    slug: 'health',
     metricIds: [
       'jobs_requested', 'jobs_filled', 'fill_rate',
       'design_partner_fitness', 'overdue_actions', 'invalid_action_cycles',
@@ -99,7 +107,7 @@ export function FridayPage({
         return (
           <section
             key={band.title}
-            className="friday__band"
+            className={`friday__band friday__band--${band.slug}`}
             aria-label={band.title}
           >
             <h2 className="friday__band-title">{band.title}</h2>

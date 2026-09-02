@@ -113,18 +113,25 @@ describe('ConversationsRoute', () => {
     expect(within(callButton).queryByText('Transcript')).toBeNull();
   });
 
-  it('round-trips the filter control to the api', async () => {
+  it('carries no filter chips: search is the only list control', async () => {
     const api = createApi();
     await renderRoute(api);
 
-    fireEvent.click(screen.getByRole('button', { name: 'With transcript' }));
+    expect(screen.queryByRole('button', { name: 'With transcript' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'With recording' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Filter conversations' })).toBeNull();
+    expect(
+      screen.getByRole('searchbox', { name: 'Search conversations' }),
+    ).toBeDefined();
+  });
 
-    expect(api.list).toHaveBeenLastCalledWith(
-      expect.objectContaining({ filter: 'with_transcript' }),
-    );
-    await screen.findByText('Kevin Landlord');
-    expect(screen.getByRole('button', { name: 'With transcript' })
-      .getAttribute('aria-pressed')).toBe('true');
+  it('describes the route under the page title', async () => {
+    const api = createApi();
+    await renderRoute(api);
+
+    expect(
+      screen.getByText('Calls and voicemails, with transcripts'),
+    ).toBeDefined();
   });
 
   it('round-trips the search query to the api', async () => {

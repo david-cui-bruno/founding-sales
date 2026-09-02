@@ -1,5 +1,5 @@
 import { Monitor, Moon, Rows2, Rows3, Sun, type LucideIcon } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import type { AppHealth } from '../../shared/healthContract';
 import type { DensityPreference, DensityState } from '../app/useDensity';
@@ -29,14 +29,22 @@ const densityOptions: readonly {
   { value: 'compact', label: 'Compact density', icon: Rows3 },
 ];
 
-const SECTIONS = [
-  { id: 'settings-appearance', label: 'Appearance' },
-  { id: 'settings-data', label: 'Data & storage' },
-  { id: 'settings-sourcing', label: 'Sourcing' },
-  { id: 'settings-diagnostics', label: 'Diagnostics' },
-  { id: 'settings-shortcuts', label: 'Keyboard shortcuts' },
-  { id: 'settings-about', label: 'About' },
-] as const;
+type SettingsSectionId =
+  | 'appearance'
+  | 'data'
+  | 'sourcing'
+  | 'diagnostics'
+  | 'shortcuts'
+  | 'about';
+
+const SECTIONS: readonly { id: SettingsSectionId; label: string }[] = [
+  { id: 'appearance', label: 'Appearance' },
+  { id: 'data', label: 'Data & storage' },
+  { id: 'sourcing', label: 'Sourcing' },
+  { id: 'diagnostics', label: 'Diagnostics' },
+  { id: 'shortcuts', label: 'Keyboard shortcuts' },
+  { id: 'about', label: 'About' },
+];
 
 /**
  * Settings → Appearance: the same theme and density controls the old top bar
@@ -320,15 +328,17 @@ export type SettingsScreenProps = {
   shell?: SettingsShellApi;
   /** Sourcing status rows, rendered inside the Sourcing section. */
   sourcing?: ReactNode;
-  /** Extra diagnostics panels (Apple spike), rendered after the sections. */
+  /** Extra diagnostics panels (Apple spike), rendered with Diagnostics. */
   children?: ReactNode;
 };
 
 /**
- * The Settings route: grouped sections behind a small sticky anchor sub-nav.
- * Appearance / Data & storage / Sourcing / Diagnostics / Keyboard shortcuts /
- * About, in that order. Failure copy stays stable and never exposes raw
- * errors or internal paths.
+ * The Settings route: a two-pane master-detail. The left rail lists the six
+ * sections; the right pane renders ONLY the active section. Diagnostics is
+ * the default selection so the packaged foundation E2E finds its exact
+ * strings without any clicks. Selection is plain component state; the app
+ * router's hash is never touched. Failure copy stays stable and never
+ * exposes raw errors or internal paths.
  */
 export function SettingsScreen({
   state,
@@ -339,47 +349,62 @@ export function SettingsScreen({
   sourcing,
   children,
 }: SettingsScreenProps) {
+  const [active, setActive] = useState<SettingsSectionId>('diagnostics');
   const health = state.status === 'ready' ? state.health : null;
 
   return (
     <div className="settings">
       <PageHeader title="Settings" />
-      <nav className="settings__subnav" aria-label="Settings sections">
-        {SECTIONS.map((section) => (
-          <a
-            key={section.id}
-            className="settings__subnav-link"
-            href={`#${section.id}`}
-            onClick={(event) => {
-              // Scroll without rewriting the hash: the app router owns
-              // window.location.hash (#/settings), so a raw anchor jump
-              // would clobber the active route on reload.
-              event.preventDefault();
-              document
-                .getElementById(section.id)
-                ?.scrollIntoView({ block: 'start' });
-            }}
-          >
-            {section.label}
-          </a>
-        ))}
-      </nav>
-      <AppearanceSection theme={theme} density={density} />
-      <DataStorageSection health={health} shell={shell} />
-      <section
-        id="settings-sourcing"
-        className="settings__section"
-        aria-label="Sourcing"
-      >
-        <h2 className="settings__section-title">Sourcing</h2>
-        {sourcing ?? (
-          <p className="settings__quiet">Sourcing inbox: not configured</p>
-        )}
-      </section>
-      <DiagnosticsSection state={state} onRetry={onRetry} />
-      <ShortcutsSection />
-      <AboutSection health={health} />
-      {children}
+      <div className="settings__layout">
+        <nav className="settings__sections" aria-label="Settings sections">
+          <ul className="settings__section-list">
+            {SECTIONS.map((section) => (
+              <li key={section.id}>
+                <button
+                  type="button"
+                  className={
+                    section.id === active
+                      ? 'settings__section-link settings__section-link--current'
+                      : 'settings__section-link'
+                  }
+                  aria-current={section.id === active ? 'true' : undefined}
+                  onClick={() => setActive(section.id)}
+                >
+                  {section.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </nav>
+        <div className="settings__detail">
+          {active === 'appearance' && (
+            <AppearanceSection theme={theme} density={density} />
+          )}
+          {active === 'data' && (
+            <DataStorageSection health={health} shell={shell} />
+          )}
+          {active === 'sourcing' && (
+            <section
+              id="settings-sourcing"
+              className="settings__section"
+              aria-label="Sourcing"
+            >
+              <h2 className="settings__section-title">Sourcing</h2>
+              {sourcing ?? (
+                <p className="settings__quiet">Sourcing inbox: not configured</p>
+              )}
+            </section>
+          )}
+          {active === 'diagnostics' && (
+            <>
+              <DiagnosticsSection state={state} onRetry={onRetry} />
+              {children}
+            </>
+          )}
+          {active === 'shortcuts' && <ShortcutsSection />}
+          {active === 'about' && <AboutSection health={health} />}
+        </div>
+      </div>
     </div>
   );
 }

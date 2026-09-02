@@ -1,7 +1,6 @@
 import type {
   ConversationDetail,
   ConversationRow,
-  ConversationsFilter,
 } from '../../../shared/contracts/conversationsContract';
 import { ErrorState } from '../../components/ErrorState';
 import { LoadingState } from '../../components/LoadingState';
@@ -24,14 +23,12 @@ export type ConversationsPageProps = {
     | { kind: 'error' }
     | { kind: 'ready'; rows: ConversationRow[]; total: number; nextCursor: string | null };
   query: string;
-  filter: ConversationsFilter;
   selectedActivityId: string | null;
   detailState: DetailState;
   attachOpen: boolean;
   attachFailed: boolean;
   attachSubmitting: boolean;
   onQueryChange(query: string): void;
-  onFilterChange(filter: ConversationsFilter): void;
   onSelect(activityId: string): void;
   onLoadMore(): void;
   onRetryList(): void;
@@ -42,22 +39,17 @@ export type ConversationsPageProps = {
   onSubmitAttach(rawText: string): void;
 };
 
-const FILTER_LABELS: ReadonlyArray<{ id: ConversationsFilter; label: string }> = [
-  { id: 'all', label: 'All' },
-  { id: 'with_recording', label: 'With recording' },
-  { id: 'with_transcript', label: 'With transcript' },
-  { id: 'without_transcript', label: 'Without transcript' },
-];
-
 /**
- * Master-detail conversations workspace: searchable, filterable list of
+ * Master-detail conversations workspace: a searchable list of
  * call/voicemail activities on the left, the selected conversation with its
- * transcript on the right. A workspace with no conversations carries ONE
- * full empty state in the detail pane and a compact one-liner in the list.
+ * transcript on the right. Search alone filters the list at founder data
+ * sizes; there are no channel filter chips. A workspace with no
+ * conversations carries ONE full empty state in the detail pane and a
+ * compact one-liner in the list.
  */
 export function ConversationsPage(props: ConversationsPageProps) {
   const {
-    listState, query, filter, selectedActivityId, detailState,
+    listState, query, selectedActivityId, detailState,
     attachOpen, attachFailed, attachSubmitting,
   } = props;
 
@@ -68,6 +60,7 @@ export function ConversationsPage(props: ConversationsPageProps) {
     <div className="conversations-page">
       <PageHeader
         title="Conversations"
+        description="Calls and voicemails, with transcripts"
         count={
           listState.kind === 'ready'
             ? `${listState.total} ${listState.total === 1 ? 'call' : 'calls'}`
@@ -85,23 +78,6 @@ export function ConversationsPage(props: ConversationsPageProps) {
             value={query}
             onChange={(event) => props.onQueryChange(event.target.value)}
           />
-          <div
-            className="conversations__filters"
-            role="group"
-            aria-label="Filter conversations"
-          >
-            {FILTER_LABELS.map(({ id, label }) => (
-              <button
-                key={id}
-                type="button"
-                className="conversations__filter"
-                aria-pressed={filter === id}
-                onClick={() => props.onFilterChange(id)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
         </div>
         {listState.kind === 'loading' && <LoadingState label="Loading conversations" />}
         {listState.kind === 'error' && (

@@ -3,7 +3,6 @@ import { useState } from 'react';
 import type {
   AddEvidenceRequest,
   CaptureLearningRequest,
-  LearningCategory,
   LearningStatus,
   LearningsListResponse,
   UpdateLearningStatusRequest,
@@ -14,15 +13,8 @@ import { PageHeader } from '../../components/PageHeader';
 import { Select } from '../../components/Select';
 import { CaptureLearningDialog } from './CaptureLearningDialog';
 import { LearningCard } from './LearningCard';
-import { CATEGORY_LABELS } from './learningMeta';
 
 import './learnings.css';
-
-const CATEGORY_ORDER: LearningCategory[] = [
-  'pain', 'objection', 'alternative', 'winning_language',
-  'pricing_reaction', 'product_request', 'coaching',
-  'invalidated_assumption',
-];
 
 const STATUS_OPTIONS: { value: '' | LearningStatus; label: string }[] = [
   { value: '', label: 'All statuses' },
@@ -33,10 +25,8 @@ const STATUS_OPTIONS: { value: '' | LearningStatus; label: string }[] = [
 
 export type LearningsPageProps = {
   response: LearningsListResponse;
-  categories: LearningCategory[];
   statuses: LearningStatus[];
   query: string;
-  onCategoriesChange(categories: LearningCategory[]): void;
   onStatusesChange(statuses: LearningStatus[]): void;
   onQueryChange(query: string): void;
   onCapture(request: CaptureLearningRequest): Promise<void>;
@@ -48,15 +38,14 @@ export type LearningsPageProps = {
 
 /**
  * The learnings workspace: founder-curated insights with their evidence.
- * Multi-select category chips, a status filter, search, and a capture
- * dialog; the body is a responsive card grid.
+ * A status filter, search, and a capture dialog; the body is a responsive
+ * card grid. Search and the status select are enough at founder data
+ * sizes; there is no category chip row.
  */
 export function LearningsPage({
   response,
-  categories,
   statuses,
   query,
-  onCategoriesChange,
   onStatusesChange,
   onQueryChange,
   onCapture,
@@ -67,40 +56,16 @@ export function LearningsPage({
 }: LearningsPageProps) {
   const [capturing, setCapturing] = useState(false);
 
-  const toggleCategory = (category: LearningCategory) => {
-    onCategoriesChange(
-      categories.includes(category)
-        ? categories.filter((existing) => existing !== category)
-        : [...categories, category],
-    );
-  };
-
   return (
     <div className="learnings">
       <PageHeader
         title="Learnings"
+        description="What you're learning from calls, with evidence"
         primaryAction={
           <Button onClick={() => setCapturing(true)}>Capture learning</Button>
         }
       />
       <div className="learnings__toolbar">
-        <div
-          className="learnings__chips"
-          role="group"
-          aria-label="Category filters"
-        >
-          {CATEGORY_ORDER.map((category) => (
-            <button
-              key={category}
-              type="button"
-              className="learnings__chip"
-              aria-pressed={categories.includes(category)}
-              onClick={() => toggleCategory(category)}
-            >
-              {CATEGORY_LABELS[category]}
-            </button>
-          ))}
-        </div>
         <div className="learnings__toolbar-controls">
           <div className="learnings__field">
             <span className="learnings__field-label" aria-hidden="true">

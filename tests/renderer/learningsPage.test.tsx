@@ -142,23 +142,24 @@ describe('LearningsRoute list and filters', () => {
     expect(within(card).getByText('n = 3')).toBeTruthy();
   });
 
-  it('refetches when a category chip toggles on and off', async () => {
+  it('carries no category chips: search and status are the only filters', async () => {
     const { api } = renderRoute();
     await screen.findByText('Owners lose weekends to showings.');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Pain', pressed: false }));
-    await waitFor(() => {
-      expect(api.list).toHaveBeenLastCalledWith({
-        categories: ['pain'], statuses: [], query: '', limit: 200,
-      });
+    expect(screen.queryByRole('group', { name: 'Category filters' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pain', pressed: false })).toBeNull();
+    expect(api.list).toHaveBeenLastCalledWith({
+      categories: [], statuses: [], query: '', limit: 200,
     });
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Pain', pressed: true }));
-    await waitFor(() => {
-      expect(api.list).toHaveBeenLastCalledWith({
-        categories: [], statuses: [], query: '', limit: 200,
-      });
-    });
+  it('describes the route under the page title', async () => {
+    renderRoute();
+    await screen.findByText('Owners lose weekends to showings.');
+
+    expect(
+      screen.getByText("What you're learning from calls, with evidence"),
+    ).toBeTruthy();
   });
 
   it('refetches on status filter and search input changes', async () => {
@@ -191,19 +192,6 @@ describe('LearningsRoute list and filters', () => {
       screen.getByText('Capture what you learn on calls so patterns surface.'),
     ).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'Capture learning' })).toHaveLength(1);
-  });
-
-  it('marks selected category chips with the accent selected state', async () => {
-    renderRoute();
-    await screen.findByText('Owners lose weekends to showings.');
-
-    const chip = screen.getByRole('button', { name: 'Pain', pressed: false });
-    fireEvent.click(chip);
-
-    await waitFor(() => {
-      expect(chip.getAttribute('aria-pressed')).toBe('true');
-    });
-    expect(chip.className).toContain('learnings__chip');
   });
 
   it('is axe-clean at the page level', async () => {

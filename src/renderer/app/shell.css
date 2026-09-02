@@ -74,9 +74,11 @@ body[data-platform="darwin"] .nav-rail {
 }
 
 /* The sidebar header is the window drag strip; on darwin the traffic lights
-   occupy its leading edge, so the wordmark shifts right of that zone. */
+   occupy its leading edge (x:20, y:19, ~54px wide), so the wordmark starts
+   at 78px to clear them with breathing room at any window width. */
 .nav-rail__header {
   display: flex;
+  flex: none;
   align-items: center;
   height: var(--chrome-header-height);
   margin: 0 calc(-1 * var(--space-2)) var(--space-2);
@@ -85,7 +87,7 @@ body[data-platform="darwin"] .nav-rail {
 }
 
 body[data-platform="darwin"] .nav-rail__header {
-  padding-left: 72px;
+  padding-left: 78px;
 }
 
 .nav-rail__header :is(a, button) {
@@ -95,9 +97,11 @@ body[data-platform="darwin"] .nav-rail__header {
 .nav-rail__brand {
   margin: 0;
   color: var(--text);
-  font-size: var(--text-dense);
+  font-size: 15px;
+  line-height: var(--chrome-header-height);
   font-weight: var(--weight-heading);
   letter-spacing: -0.01em;
+  white-space: nowrap;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -111,11 +115,16 @@ body[data-platform="darwin"] .nav-rail__header {
   list-style: none;
 }
 
+/* Flex spacer that pins the Settings entry to the bottom of the rail. */
+.nav-rail__spacer {
+  flex: 1;
+}
+
 .nav-rail__item {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  height: 28px;
+  height: 32px;
   padding: 0 var(--space-3);
   border-radius: var(--radius-sm);
   color: var(--text-muted);
@@ -133,9 +142,15 @@ body[data-platform="darwin"] .nav-rail__header {
   background: color-mix(in srgb, var(--line) 55%, transparent);
 }
 
+/* Active destination: accent-soft pill with accent text. */
 .nav-rail__item--current {
-  color: var(--text);
-  background: color-mix(in srgb, var(--line) 75%, transparent);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.nav-rail__item--current:hover {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
 }
 
 .nav-rail__item[aria-disabled="true"] {
@@ -145,8 +160,8 @@ body[data-platform="darwin"] .nav-rail__header {
 
 .nav-rail__icon {
   flex: none;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
 }
 
 .nav-rail__label {
@@ -170,13 +185,27 @@ body[data-platform="darwin"] .nav-rail__header {
 }
 
 /* Per-route page header: one title, optional muted count, controls, and the
-   single accent primary action. */
+   single accent primary action, plus an optional one-line description. */
 .page-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-4);
+}
+
+.page-header__row {
   display: flex;
   gap: var(--space-3);
   align-items: center;
   min-height: 36px;
-  margin: 0 0 var(--space-4);
+}
+
+/* One quiet sentence explaining what the route is for; no boxes. */
+.page-header__description {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
 }
 
 .page-header__title {

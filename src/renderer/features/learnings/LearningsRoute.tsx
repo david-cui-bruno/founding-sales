@@ -4,7 +4,6 @@ import type { MutationReceipt } from '../../../shared/contracts/commonContract';
 import type {
   AddEvidenceRequest,
   CaptureLearningRequest,
-  LearningCategory,
   LearningStatus,
   LearningsListRequest,
   LearningsListResponse,
@@ -35,8 +34,9 @@ type LearningsRouteState =
 
 /**
  * Route container: fetches learnings through the injected API whenever the
- * founder's filters change and refetches after every mutation. Stale
- * responses are ignored.
+ * founder's filters change and refetches after every mutation. Categories
+ * are never narrowed from this screen; search and status carry the load.
+ * Stale responses are ignored.
  */
 export function LearningsRoute({
   api,
@@ -44,7 +44,6 @@ export function LearningsRoute({
   now = () => new Date().toISOString(),
 }: LearningsRouteProps) {
   const [state, setState] = useState<LearningsRouteState>({ kind: 'loading' });
-  const [categories, setCategories] = useState<LearningCategory[]>([]);
   const [statuses, setStatuses] = useState<LearningStatus[]>([]);
   const [query, setQuery] = useState('');
   const [mutationFailed, setMutationFailed] = useState(false);
@@ -54,7 +53,7 @@ export function LearningsRoute({
     requestSequence.current += 1;
     const requestId = requestSequence.current;
     api
-      .list({ categories, statuses, query, limit: 200 })
+      .list({ categories: [], statuses, query, limit: 200 })
       .then((response) => {
         if (requestSequence.current === requestId) {
           setState({ kind: 'ready', response });
@@ -65,7 +64,7 @@ export function LearningsRoute({
           setState({ kind: 'error' });
         }
       });
-  }, [api, categories, statuses, query]);
+  }, [api, statuses, query]);
 
   useEffect(() => {
     load();
@@ -117,10 +116,8 @@ export function LearningsRoute({
       )}
       <LearningsPage
         response={state.response}
-        categories={categories}
         statuses={statuses}
         query={query}
-        onCategoriesChange={setCategories}
         onStatusesChange={setStatuses}
         onQueryChange={setQuery}
         onCapture={(request) => mutate(api.capture(request))}

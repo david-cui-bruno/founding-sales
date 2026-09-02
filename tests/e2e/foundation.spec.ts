@@ -145,7 +145,8 @@ const inspectPackagedApplication = async (userDataPath: string) => {
     );
     await expect(page).toHaveURL(/callie:\/\/app\/index\.html/);
 
-    // Foundation diagnostics stay reachable behind the Settings route.
+    // Foundation diagnostics stay reachable behind the Settings route;
+    // Diagnostics is the default selected section of the master-detail.
     await page.getByRole('link', { name: 'Settings' }).click();
     await expect(page.getByText('Encrypted SQLite ready')).toBeVisible();
     await expect(page.getByText('FTS5 available')).toBeVisible();
@@ -153,6 +154,8 @@ const inspectPackagedApplication = async (userDataPath: string) => {
     // The sourcing status row renders regardless of credential state; the
     // packaged test env may report none, file, or keychain depending on the
     // machine, and auto-polling stays disabled under --use-mock-keychain.
+    // It lives in the Sourcing section of the settings master-detail.
+    await page.getByRole('button', { name: 'Sourcing', exact: true }).click();
     await expect(page.getByText(/^Sourcing inbox: /)).toBeVisible();
 
     const health = await page.evaluate(() => window.callie.health.get());

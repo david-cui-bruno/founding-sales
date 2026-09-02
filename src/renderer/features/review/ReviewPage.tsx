@@ -70,6 +70,7 @@ export function ReviewPage({
       <PageHeader
         title="Review"
         count={`${snapshot.totalOpenCount} open`}
+        description="Exceptions that need your judgment: unknown callers, possible duplicates, and unidentified property owners."
       />
       {systemErrors.length > 0 && (
         <div className="review__system-alert" role="alert">
