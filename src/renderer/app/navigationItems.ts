@@ -36,6 +36,6 @@ export const navigationItems: readonly NavigationItem[] = [
   },
   { route: 'learnings', label: 'Learnings', icon: GraduationCap, enabled: true },
   { route: 'friday', label: 'Friday', icon: ChartColumn, enabled: true },
-  { route: 'review', label: 'Review', icon: ClipboardCheck, enabled: true },
+  { route: 'inbox', label: 'Inbox', icon: ClipboardCheck, enabled: true },
   { route: 'settings', label: 'Settings', icon: Settings, enabled: true },
 ];

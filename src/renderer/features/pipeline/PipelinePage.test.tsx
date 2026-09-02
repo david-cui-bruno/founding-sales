@@ -36,9 +36,7 @@ const kevinCard: PipelineCard = {
     id: 'action-kevin',
     type: 'call_lead',
     channel: 'call' as const,
-    dueAt: '2026-08-31T15:00:00.000Z',
     label: 'call lead',
-    overdue: true,
   },
   lostReasonCode: null,
 };
@@ -63,9 +61,7 @@ const onboardingCard: PipelineCard = {
     id: 'action-maya',
     type: 'onboarding_checkin',
     channel: 'onboarding' as const,
-    dueAt: '2026-09-01T15:00:00.000Z',
     label: 'onboarding checkin',
-    overdue: false,
   },
   lostReasonCode: null,
 };
@@ -114,9 +110,7 @@ const unreviewedCard: PipelineCard = {
     id: 'action-fox',
     type: 'review_lead',
     channel: 'review' as const,
-    dueAt: '2026-09-02T15:00:00.000Z',
     label: 'Review lead',
-    overdue: false,
   },
   lostReasonCode: null,
 };
@@ -157,7 +151,6 @@ describe('PipelinePage', () => {
     render(<PipelinePage snapshot={pipelineSnapshot} onOpenLead={vi.fn()} />);
     const kevin = screen.getByRole('button', { name: /Kevin Shin/ });
     expect(within(kevin).getByText('call lead')).toBeTruthy();
-    expect(within(kevin).getByText('Overdue')).toBeTruthy();
     const maya = screen.getByRole('button', { name: /Maya Ortiz/ });
     expect(within(maya).getByText('Onboarding')).toBeTruthy();
     const ada = screen.getByRole('button', { name: /Ada Lin/ });

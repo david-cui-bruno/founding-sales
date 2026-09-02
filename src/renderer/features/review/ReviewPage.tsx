@@ -68,7 +68,7 @@ export function ReviewPage({
   return (
     <div className="review">
       <PageHeader
-        title="Review"
+        title="Inbox"
         count={`${snapshot.totalOpenCount} open`}
         description="Exceptions that need your judgment: unknown callers, possible duplicates, and unidentified property owners."
       />

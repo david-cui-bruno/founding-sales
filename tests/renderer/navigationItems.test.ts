@@ -17,7 +17,7 @@ describe('navigationItems', () => {
       { route: 'conversations', label: 'Conversations', enabled: true },
       { route: 'learnings', label: 'Learnings', enabled: true },
       { route: 'friday', label: 'Friday', enabled: true },
-      { route: 'review', label: 'Review', enabled: true },
+      { route: 'inbox', label: 'Inbox', enabled: true },
       { route: 'settings', label: 'Settings', enabled: true },
     ]);
   });

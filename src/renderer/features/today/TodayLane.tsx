@@ -20,19 +20,11 @@ export const TODAY_LANE_META: Readonly<Record<TodayLaneId, TodayLaneMeta>> =
     },
     fresh_inbound: {
       heading: 'Fresh inbound',
-      description: 'Inbound replies still inside their SLA.',
-    },
-    overdue: {
-      heading: 'Overdue',
-      description: 'Promised work past its due time.',
-    },
-    post_interview_offer: {
-      heading: 'Post-interview & offers',
-      description: 'Follow-ups promised after interviews and offers.',
+      description: 'Inbound replies, newest commitments first.',
     },
     due_cadence: {
       heading: 'Due cadence',
-      description: 'Non-discretionary work due today.',
+      description: 'Relationships your cadence says are next.',
     },
     new_p0: {
       heading: 'New P0',
@@ -48,7 +40,7 @@ export const TODAY_LANE_META: Readonly<Record<TodayLaneId, TodayLaneMeta>> =
     },
     later: {
       heading: 'Later',
-      description: 'Deferred work; nothing here is due today.',
+      description: 'Deferred work beyond today\u2019s capacity.',
     },
   });
 
@@ -56,8 +48,6 @@ export const TODAY_LANE_META: Readonly<Record<TodayLaneId, TodayLaneMeta>> =
 export const TODAY_LANE_ORDER: readonly TodayLaneId[] = Object.freeze([
   'onboarding',
   'fresh_inbound',
-  'overdue',
-  'post_interview_offer',
   'due_cadence',
   'new_p0',
   'p1',
@@ -69,7 +59,6 @@ export const TODAY_LANE_ORDER: readonly TodayLaneId[] = Object.freeze([
 export type TodayLaneRow = {
   item: TodayItem;
   pinComparedSalesCycleId: string | null;
-  snoozeComparedSalesCycleId: string | null;
 };
 
 export type TodayLaneProps = {
@@ -83,7 +72,7 @@ export type TodayLaneProps = {
   registerRow(cycleId: string): RefCallback<HTMLLIElement>;
   onOpenLead(personId: string): void;
   onComplete(item: TodayItem): void;
-  onSnooze(item: TodayItem, comparedSalesCycleId: string): void;
+  onSnooze(item: TodayItem): void;
   onPin(item: TodayItem, comparedSalesCycleId: string): void;
 };
 
@@ -138,7 +127,6 @@ export function TodayLane({
             tabbable={row.item.salesCycleId === tabbableCycleId}
             rowRef={registerRow(row.item.salesCycleId)}
             pinComparedSalesCycleId={row.pinComparedSalesCycleId}
-            snoozeComparedSalesCycleId={row.snoozeComparedSalesCycleId}
             onOpenLead={onOpenLead}
             onComplete={onComplete}
             onSnooze={onSnooze}

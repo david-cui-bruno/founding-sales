@@ -92,14 +92,7 @@ export function PipelineTable({ snapshot, onOpenLead }: PipelineTableProps) {
                   {card.nextAction === null ? (
                     '—'
                   ) : (
-                    <>
-                      {card.nextAction.label}
-                      {card.nextAction.overdue && (
-                        <span className="pipeline-table__overdue">
-                          Overdue
-                        </span>
-                      )}
-                    </>
+                    card.nextAction.label
                   )}
                 </td>
                 <td>{card.stageEnteredAt.slice(0, 10)}</td>

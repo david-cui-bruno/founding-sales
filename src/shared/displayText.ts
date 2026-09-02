@@ -74,9 +74,16 @@ export const titleCaseDisplayName = (name: string): string => {
  * snake_case conversion. Everything else falls back to Sentence case.
  */
 const ENUM_LABELS: Readonly<Record<string, string>> = Object.freeze({
-  non_discretionary_overdue: 'Overdue',
-  other_non_discretionary_due_today: 'Due today',
   inbound_demo: 'Inbound demo',
+  no_answer: 'No answer',
+  voicemail: 'Voicemail',
+  spoke: 'Spoke',
+  interview_booked: 'Interview booked',
+  not_interested: 'Not interested',
+  opted_out: 'Opted out',
+  marked_in_error: 'Marked in error',
+  snooze: 'Snoozed',
+  callback: 'Callback promised',
   frbo: 'FRBO',
   rireig: 'RIREIG',
   lost_nurture: 'Lost · Nurture',

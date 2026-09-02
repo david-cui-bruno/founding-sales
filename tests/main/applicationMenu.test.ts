@@ -101,7 +101,7 @@ describe('createApplicationMenuTemplate', () => {
       ['Conversations', 'CmdOrCtrl+4', 'conversations'],
       ['Learnings', 'CmdOrCtrl+5', 'learnings'],
       ['Friday', 'CmdOrCtrl+6', 'friday'],
-      ['Review', 'CmdOrCtrl+7', 'review'],
+      ['Inbox', 'CmdOrCtrl+7', 'inbox'],
       ['Settings', 'CmdOrCtrl+,', 'settings'],
     ];
 
@@ -154,7 +154,7 @@ describe('menu navigation scripts', () => {
       'conversations',
       'learnings',
       'friday',
-      'review',
+      'inbox',
       'settings',
     ]);
     for (const route of menuNavigationRoutes) {

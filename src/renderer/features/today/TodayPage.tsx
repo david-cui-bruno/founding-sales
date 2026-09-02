@@ -22,7 +22,7 @@ export type TodayPageProps = {
   busy?: boolean;
   onOpenLead(personId: string): void;
   onComplete(item: TodayItem): void;
-  onSnooze(item: TodayItem, comparedSalesCycleId: string): void;
+  onSnooze(item: TodayItem): void;
   onPin(item: TodayItem, comparedSalesCycleId: string): void;
   onReviewBacklog(): void;
 };
@@ -36,15 +36,12 @@ type LaneComputed = {
 type RowCommand = {
   item: TodayItem;
   pinComparedSalesCycleId: string | null;
-  snoozeComparedSalesCycleId: string | null;
 };
 
 const laneRowSpecs = (items: readonly TodayItem[]): TodayLaneRow[] =>
   items.map((item, index) => ({
     item,
     pinComparedSalesCycleId: index > 0 ? items[index - 1]!.salesCycleId : null,
-    snoozeComparedSalesCycleId:
-      index < items.length - 1 ? items[index + 1]!.salesCycleId : null,
   }));
 
 /**
@@ -180,8 +177,8 @@ export function TodayPage({
         case 'h':
         case 'H':
           event.preventDefault();
-          if (!busy && command.snoozeComparedSalesCycleId !== null) {
-            onSnooze(command.item, command.snoozeComparedSalesCycleId);
+          if (!busy) {
+            onSnooze(command.item);
           }
           return;
         case 'p':

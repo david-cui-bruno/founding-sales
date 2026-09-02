@@ -1,3 +1,7 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { expect, test } from 'playwright/test';
 
 import {
@@ -56,18 +60,67 @@ test('imports leads and opens the same person from Leads, Today, and Pipeline', 
   }
 });
 
-test('review renders its truthful empty state and zero badge in a clean workspace', async () => {
+test('inbox renders its truthful empty state and zero badge in a clean workspace', async () => {
   const workspace = await launchFounderWorkspace();
 
   try {
     const { page } = workspace;
-    await page.getByRole('link', { name: 'Review' }).click();
+    await page.getByRole('link', { name: 'Inbox' }).click();
     await expect(page.getByRole('main')).toBeVisible();
     await expect(
       page.getByRole('navigation', { name: 'Primary' }).locator('.nav-rail__badge'),
     ).toHaveCount(0);
   } finally {
     await workspace.close();
+  }
+});
+
+test('a large import stays out of Today: unreviewed leads are backlog only and the queue caps at the dial budget', async () => {
+  // 60 valid rows: enough to overflow the 40-dial budget if they ever leaked
+  // into the queue. Imported leads start unreviewed, and unreviewed cycles
+  // carry no next action, so Today must stay empty apart from the backlog
+  // band. No row carries a due date anywhere in this flow.
+  const fixtureDirectory = await mkdtemp(join(tmpdir(), 'callie-capacity-'));
+  const csvPath = join(fixtureDirectory, 'capacity-leads.csv');
+  const rows = ['Name,Phone,Email,Source,Doors,Organization'];
+  for (let index = 0; index < 60; index += 1) {
+    const suffix = String(index).padStart(2, '0');
+    rows.push(
+      `Cap Lead${suffix},+1401555${(1000 + index).toString()},cap${suffix}@example.com,registry,4,Cap Org ${suffix}`,
+    );
+  }
+  await writeFile(csvPath, `${rows.join('\n')}\n`);
+
+  const workspace = await launchFounderWorkspace();
+
+  try {
+    const { page } = workspace;
+
+    await page.getByRole('link', { name: 'Leads' }).click();
+    await page.getByRole('button', { name: 'Import', exact: true }).click();
+    await page.getByLabel('CSV file').setInputFiles(csvPath);
+    await page.getByRole('button', { name: 'Preview rows' }).click();
+    await expect(page.getByText('60 rows ready')).toBeVisible();
+    await page.getByRole('button', { name: 'Import 60 rows' }).click();
+    await page.getByRole('row', { name: /Cap Lead00/ }).waitFor();
+
+    // The real snapshot through preload: zero queue rows, full backlog.
+    const snapshot = await page.evaluate(() => window.callie.today.get());
+    const queuedRows = snapshot.lanes.reduce(
+      (total, lane) => total + lane.items.length,
+      0,
+    );
+    expect(queuedRows).toBe(0);
+    expect(queuedRows).toBeLessThanOrEqual(snapshot.dialBudget);
+    expect(snapshot.unreviewedBacklogCount).toBe(60);
+
+    // Today renders the backlog as one band, never as rows.
+    await page.getByRole('link', { name: 'Today' }).click();
+    await expect(page.getByText('Unreviewed backlog · 60')).toBeVisible();
+    await expect(page.locator('.today-row')).toHaveCount(0);
+  } finally {
+    await workspace.close();
+    await rm(fixtureDirectory, { recursive: true, force: true });
   }
 });
 

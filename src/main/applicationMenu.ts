@@ -12,7 +12,7 @@ export const menuNavigationRoutes = [
   'conversations',
   'learnings',
   'friday',
-  'review',
+  'inbox',
   'settings',
 ] as const;
 
@@ -62,7 +62,7 @@ const navigationEntries: readonly NavigationEntry[] = [
   { label: 'Conversations', accelerator: 'CmdOrCtrl+4', route: 'conversations' },
   { label: 'Learnings', accelerator: 'CmdOrCtrl+5', route: 'learnings' },
   { label: 'Friday', accelerator: 'CmdOrCtrl+6', route: 'friday' },
-  { label: 'Review', accelerator: 'CmdOrCtrl+7', route: 'review' },
+  { label: 'Inbox', accelerator: 'CmdOrCtrl+7', route: 'inbox' },
   { label: 'Settings', accelerator: 'CmdOrCtrl+,', route: 'settings' },
 ];
 

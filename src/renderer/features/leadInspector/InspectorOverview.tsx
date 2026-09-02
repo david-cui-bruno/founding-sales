@@ -305,9 +305,6 @@ export function InspectorOverview({
         <section aria-label="Next action" className="lead-inspector__next-action">
           <h3 className="lead-inspector__band-title">Next action</h3>
           <p>
-            {detail.nextAction.overdue && (
-              <StatusPill tone="urgent">overdue</StatusPill>
-            )}{' '}
             {detail.nextAction.label}
           </p>
         </section>

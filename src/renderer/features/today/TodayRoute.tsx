@@ -35,11 +35,14 @@ type TodayRouteState =
   | { kind: 'ready'; snapshot: TodaySnapshot };
 
 const PIN_REASON = 'Keep at the top of its lane';
-const SNOOZE_REASON = 'Snoozed from the Today queue';
+const SNOOZE_DEFAULT_MS = 24 * 60 * 60 * 1000;
 const CONTROL_TTL_MS = 24 * 60 * 60 * 1000;
 
 const controlExpiry = (): string =>
   new Date(Date.now() + CONTROL_TTL_MS).toISOString();
+
+const snoozeResurfaceAt = (): string =>
+  new Date(Date.now() + SNOOZE_DEFAULT_MS).toISOString();
 
 /**
  * Route container: fetches the snapshot through the injected API, ignores
@@ -107,13 +110,11 @@ export function TodayRoute({ api, onOpenLead }: TodayRouteProps) {
   );
 
   const handleSnooze = useCallback(
-    (item: TodayItem, comparedSalesCycleId: string) =>
+    (item: TodayItem) =>
       runCommand(() =>
         api.snooze({
           salesCycleId: item.salesCycleId,
-          reason: SNOOZE_REASON,
-          expiresAt: controlExpiry(),
-          comparedSalesCycleId,
+          resurfaceAt: snoozeResurfaceAt(),
         }),
       ),
     [api, runCommand],

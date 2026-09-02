@@ -94,13 +94,13 @@ describe('AppShell', () => {
 
   it('omits the review badge when nothing awaits review', () => {
     render(
-      <AppShell route="review" onNavigate={vi.fn()} reviewCount={0}>
+      <AppShell route="inbox" onNavigate={vi.fn()} reviewCount={0}>
         <p>Queue</p>
       </AppShell>,
     );
 
-    const review = screen.getByRole('link', { name: 'Review' });
-    expect(review.textContent).toBe('Review');
+    const review = screen.getByRole('link', { name: 'Inbox' });
+    expect(review.textContent).toBe('Inbox');
     expect(review.getAttribute('aria-current')).toBe('page');
   });
 });
@@ -153,9 +153,10 @@ describe('useHashRoute', () => {
 
     act(() => {
       window.location.hash = '#/review';
+      // Renamed route: legacy #/review links resolve to inbox.
       window.dispatchEvent(new HashChangeEvent('hashchange'));
     });
 
-    expect(screen.getByTestId('route').textContent).toBe('review');
+    expect(screen.getByTestId('route').textContent).toBe('inbox');
   });
 });

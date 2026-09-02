@@ -10,7 +10,6 @@ export type LeadsToolbarProps = {
 
 const SORT_OPTIONS: readonly { value: LeadsSort; label: string }[] = [
   { value: 'priority', label: 'Priority' },
-  { value: 'due_at', label: 'Due' },
   { value: 'person_name', label: 'Name' },
   { value: 'last_contact', label: 'Last contact' },
 ];

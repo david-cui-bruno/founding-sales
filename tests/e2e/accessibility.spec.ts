@@ -11,7 +11,7 @@ const routes = [
   { route: 'Pipeline', link: 'Pipeline' },
   { route: 'Conversations', link: 'Conversations' },
   { route: 'Learnings', link: 'Learnings' },
-  { route: 'Review', link: 'Review' },
+  { route: 'Inbox', link: 'Inbox' },
   { route: 'Friday', link: 'Friday' },
 ] as const;
 

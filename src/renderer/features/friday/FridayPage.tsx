@@ -42,7 +42,7 @@ const BANDS: readonly {
     slug: 'health',
     metricIds: [
       'jobs_requested', 'jobs_filled', 'fill_rate',
-      'design_partner_fitness', 'overdue_actions', 'invalid_action_cycles',
+      'design_partner_fitness', 'cycles_without_next_step', 'invalid_action_cycles',
     ],
   },
 ];

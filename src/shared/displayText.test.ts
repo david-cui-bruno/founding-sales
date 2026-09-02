@@ -56,10 +56,9 @@ describe('titleCaseDisplayName', () => {
 
 describe('humanizeEnumLabel', () => {
   it('maps known enum values through the explicit dictionary', () => {
-    expect(humanizeEnumLabel('non_discretionary_overdue')).toBe('Overdue');
-    expect(humanizeEnumLabel('other_non_discretionary_due_today')).toBe(
-      'Due today',
-    );
+    expect(humanizeEnumLabel('interview_booked')).toBe('Interview booked');
+    expect(humanizeEnumLabel('opted_out')).toBe('Opted out');
+    expect(humanizeEnumLabel('marked_in_error')).toBe('Marked in error');
     expect(humanizeEnumLabel('inbound_demo')).toBe('Inbound demo');
     expect(humanizeEnumLabel('frbo')).toBe('FRBO');
     expect(humanizeEnumLabel('rireig')).toBe('RIREIG');

@@ -15,8 +15,7 @@ afterEach(() => {
 });
 
 const LANE_IDS: readonly TodayLaneId[] = [
-  'onboarding', 'fresh_inbound', 'overdue', 'post_interview_offer',
-  'due_cadence', 'new_p0', 'p1', 'exploration', 'later',
+  'onboarding', 'fresh_inbound', 'due_cadence', 'new_p0', 'p1', 'exploration', 'later',
 ];
 
 const queueItem = (
@@ -44,11 +43,9 @@ const queueItem = (
     id: `action-${lane}-${seq}`,
     type: 'call_lead',
     channel: 'call',
-    dueAt: '2026-08-31T15:00:00.000Z',
     label: 'Call lead',
-    overdue: false,
   },
-  reason: 'other_non_discretionary_due_today',
+  reason: 'cadence_step_next',
   activeTriggers: [],
   verifyFirst: false,
   pinned: false,
@@ -57,7 +54,7 @@ const queueItem = (
 });
 
 const emptySnapshot = (overrides: Partial<TodaySnapshot> = {}): TodaySnapshot => ({
-  lanes: LANE_IDS.map((lane) => ({ id: lane, items: [] as TodayItem[] })),
+  lanes: LANE_IDS.map((lane) => ({ id: lane, items: [] as TodayItem[], overflowCount: 0 })),
   dialBudget: 40,
   scheduledDials: 0,
   conversationTarget: 5,
@@ -67,16 +64,17 @@ const emptySnapshot = (overrides: Partial<TodaySnapshot> = {}): TodaySnapshot =>
   ...overrides,
 });
 
-/** Overdue holds two rows and P1 two rows; every other lane is empty. */
+/** Due cadence holds two rows and P1 two rows; every other lane is empty. */
 const denseSnapshot: TodaySnapshot = emptySnapshot({
   lanes: LANE_IDS.map((lane) => ({
     id: lane,
     items:
-      lane === 'overdue'
+      lane === 'due_cadence'
         ? [queueItem(lane, 1), queueItem(lane, 2)]
         : lane === 'p1'
           ? [queueItem(lane, 1), queueItem(lane, 2)]
           : [],
+    overflowCount: 0,
   })),
   scheduledDials: 12,
 });
@@ -111,8 +109,8 @@ describe('TodayPage', () => {
       .getAllByRole('heading', { level: 2 })
       .map((node) => node.textContent);
     expect(headings).toEqual([
-      'Onboard now — 0', 'Fresh inbound — 0', 'Overdue', 'Post-interview & offers — 0',
-      'Due cadence — 0', 'New P0 — 0', 'P1', 'Exploration — 0', 'Later — 0',
+      'Onboard now — 0', 'Fresh inbound — 0', 'Due cadence',
+      'New P0 — 0', 'P1', 'Exploration — 0', 'Later — 0',
     ]);
   });
 
@@ -125,45 +123,44 @@ describe('TodayPage', () => {
     const headings = screen
       .getAllByRole('heading', { level: 2 })
       .map((node) => node.textContent);
-    expect(headings[2]).toBe('Overdue');
-    expect(headings[6]).toBe('P1');
+    expect(headings[2]).toBe('Due cadence');
+    expect(headings[4]).toBe('P1');
   });
 
   it('promotes the first item of the first non-empty lane into the Next up hero', () => {
     renderPage(denseSnapshot);
 
-    const hero = screen.getByRole('group', { name: 'Next up: Person overdue 1' });
-    expect(within(hero).getByRole('button', { name: 'Person overdue 1' })).toBeTruthy();
+    const hero = screen.getByRole('group', { name: 'Next up: Person due_cadence 1' });
+    expect(within(hero).getByRole('button', { name: 'Person due_cadence 1' })).toBeTruthy();
     expect(within(hero).getByRole('button', { name: 'Done' })).toBeTruthy();
     // The hero row does not render again inside the Overdue lane.
-    const overdueLane = screen.getByRole('region', { name: 'Overdue' });
-    expect(within(overdueLane).queryByText('Person overdue 1')).toBeNull();
-    expect(within(overdueLane).getByText('Person overdue 2')).toBeTruthy();
+    const dueLane = screen.getByRole('region', { name: 'Due cadence' });
+    expect(within(dueLane).queryByText('Person due_cadence 1')).toBeNull();
+    expect(within(dueLane).getByText('Person due_cadence 2')).toBeTruthy();
     // The lane count still reports the full snapshot size.
-    expect(within(overdueLane).getByText('2')).toBeTruthy();
+    expect(within(dueLane).getByText('2')).toBeTruthy();
   });
 
-  it('renders two-line rows: Title Case name, stage chip, humanized reason with relative time', () => {
+  it('renders two-line rows: Title Case name, stage chip, humanized reason', () => {
     const shouting = emptySnapshot({
       lanes: LANE_IDS.map((lane) => ({
         id: lane,
-        items: lane === 'overdue'
+        items: lane === 'due_cadence'
           ? [
-            queueItem('overdue', 1),
-            queueItem('overdue', 2, {
+            queueItem('due_cadence', 1, { personName: 'Avery Landlord' }),
+            queueItem('due_cadence', 2, {
               personName: 'FOX WILLIAM P ETAL',
-              reason: 'non_discretionary_overdue',
+              reason: 'callback_promised_today',
               action: {
                 id: 'action-shout',
                 type: 'call_lead',
                 channel: 'call',
-                dueAt: '2026-08-30T15:00:00.000Z',
                 label: 'Call lead',
-                overdue: true,
               },
             }),
           ]
           : [],
+        overflowCount: 0,
       })),
     });
     renderPage(shouting);
@@ -171,11 +168,11 @@ describe('TodayPage', () => {
     // Title Case, never shouting.
     expect(screen.getByText('Fox William P Etal')).toBeTruthy();
     // The raw machine enum never renders.
-    expect(screen.queryByText(/non_discretionary_overdue/)).toBeNull();
+    expect(screen.queryByText(/callback_promised_today/)).toBeNull();
     expect(screen.queryByText(/_/)).toBeNull();
-    // The reason line reads humanized with a relative due time.
-    const row = rowByCycleId('cycle-overdue-2');
-    expect(within(row).getByText(/Overdue · Call lead · due .+ago/)).toBeTruthy();
+    // The reason line reads humanized.
+    const row = rowByCycleId('cycle-due_cadence-2');
+    expect(within(row).getByText('Callback you promised for today · Call lead')).toBeTruthy();
     // The stage chip is humanized.
     expect(within(row).getByText('Ready')).toBeTruthy();
   });
@@ -197,8 +194,8 @@ describe('TodayPage', () => {
   it('moves focus with J/K and the arrow keys across hero and rows', () => {
     renderPage(denseSnapshot);
 
-    const hero = rowByCycleId('cycle-overdue-1');
-    const second = rowByCycleId('cycle-overdue-2');
+    const hero = rowByCycleId('cycle-due_cadence-1');
+    const second = rowByCycleId('cycle-due_cadence-2');
     const third = rowByCycleId('cycle-p1-1');
 
     hero.focus();
@@ -219,13 +216,13 @@ describe('TodayPage', () => {
     const onOpenLead = vi.fn();
     renderPage(denseSnapshot, { onOpenLead });
 
-    const row = rowByCycleId('cycle-overdue-2');
+    const row = rowByCycleId('cycle-due_cadence-2');
     row.focus();
     fireEvent.keyDown(row, { key: 'Enter' });
-    expect(onOpenLead).toHaveBeenCalledWith('person-overdue-2');
+    expect(onOpenLead).toHaveBeenCalledWith('person-due_cadence-2');
   });
 
-  it('runs E=complete, H=snooze, P=pin on the focused row with lane-local comparisons', () => {
+  it('runs E=complete, H=snooze, P=pin on the focused row', () => {
     const onComplete = vi.fn();
     const onSnooze = vi.fn();
     const onPin = vi.fn();
@@ -242,16 +239,10 @@ describe('TodayPage', () => {
       expect.objectContaining({ salesCycleId: 'cycle-p1-2' }),
       'cycle-p1-1',
     );
-    // The last row of the lane has no row below: H is a no-op.
+    // Snooze needs no lane-local comparison: it writes resurface_at.
     fireEvent.keyDown(secondP1, { key: 'h' });
-    expect(onSnooze).not.toHaveBeenCalled();
-
-    const firstP1 = rowByCycleId('cycle-p1-1');
-    firstP1.focus();
-    fireEvent.keyDown(firstP1, { key: 'h' });
     expect(onSnooze).toHaveBeenCalledWith(
-      expect.objectContaining({ salesCycleId: 'cycle-p1-1' }),
-      'cycle-p1-2',
+      expect.objectContaining({ salesCycleId: 'cycle-p1-2' }),
     );
   });
 
@@ -311,8 +302,8 @@ describe('TodayPage', () => {
     const onOpenLead = vi.fn();
     renderPage(denseSnapshot, { onOpenLead });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Person overdue 1' }));
-    expect(onOpenLead).toHaveBeenCalledWith('person-overdue-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Person due_cadence 1' }));
+    expect(onOpenLead).toHaveBeenCalledWith('person-due_cadence-1');
     fireEvent.click(screen.getByRole('button', { name: 'Person p1 2' }));
     expect(onOpenLead).toHaveBeenCalledWith('person-p1-2');
   });

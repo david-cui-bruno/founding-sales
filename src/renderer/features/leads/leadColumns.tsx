@@ -348,9 +348,6 @@ export function createLeadColumns(): ColumnDef<LeadRow>[] {
     {
       id: 'nextAction',
       header: 'Next action',
-      meta: columnMeta({
-        sort: { value: 'due_at', direction: 'ascending' },
-      }),
       cell: (context) =>
         context.row.original.nextAction === null ? (
           <Absent />

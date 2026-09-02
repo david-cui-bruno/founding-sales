@@ -82,7 +82,7 @@ describe('CommandPalette', () => {
       'Go to Conversations',
       'Go to Learnings',
       'Go to Friday',
-      'Go to Review',
+      'Go to Inbox',
       'Go to Settings',
       'Import leads…',
     ]);

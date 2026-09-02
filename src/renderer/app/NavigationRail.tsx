@@ -47,7 +47,7 @@ export function NavigationRail({
         >
           <Icon className="nav-rail__icon" aria-hidden="true" size={16} />
           <span className="nav-rail__label">{item.label}</span>
-          {item.route === 'review' && reviewCount > 0 && (
+          {item.route === 'inbox' && reviewCount > 0 && (
             <span className="nav-rail__badge" aria-label={`${reviewCount} items awaiting review`}>
               {reviewCount}
             </span>

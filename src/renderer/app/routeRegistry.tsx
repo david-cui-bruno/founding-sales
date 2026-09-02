@@ -58,7 +58,7 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
           onOpenLead={context.openLead}
         />
       );
-    case 'review':
+    case 'inbox':
       return (
         <ReviewRoute
           api={context.api.review}

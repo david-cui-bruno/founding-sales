@@ -26,18 +26,17 @@ type PipelineCardButtonProps = {
  */
 function cardStatusLine(card: PipelineCard): {
   text: string;
-  overdue: boolean;
 } | null {
   const wonBadge = wonOutcomeLabel(card);
   if (wonBadge !== null) {
-    return { text: wonBadge, overdue: false };
+    return { text: wonBadge };
   }
   const lostLabel = lostReasonLabel(card);
   if (lostLabel !== null) {
-    return { text: lostLabel, overdue: false };
+    return { text: lostLabel };
   }
   if (card.nextAction !== null && card.nextAction.channel !== 'review') {
-    return { text: card.nextAction.label, overdue: card.nextAction.overdue };
+    return { text: card.nextAction.label };
   }
   return null;
 }
@@ -81,9 +80,6 @@ function PipelineCardButton({ card, onOpenLead }: PipelineCardButtonProps) {
       {status !== null && (
         <span className="pipeline-card__status">
           {status.text}
-          {status.overdue && (
-            <span className="pipeline-card__overdue">Overdue</span>
-          )}
         </span>
       )}
     </button>

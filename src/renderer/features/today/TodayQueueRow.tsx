@@ -16,10 +16,9 @@ export type TodayQueueRowProps = {
   /** Lane-local row above, or null when this row is already first. */
   pinComparedSalesCycleId: string | null;
   /** Lane-local row below, or null when this row is already last. */
-  snoozeComparedSalesCycleId: string | null;
   onOpenLead(personId: string): void;
   onComplete(item: TodayItem): void;
-  onSnooze(item: TodayItem, comparedSalesCycleId: string): void;
+  onSnooze(item: TodayItem): void;
   onPin(item: TodayItem, comparedSalesCycleId: string): void;
 };
 
@@ -36,7 +35,6 @@ export function TodayQueueRow({
   tabbable,
   rowRef,
   pinComparedSalesCycleId,
-  snoozeComparedSalesCycleId,
   onOpenLead,
   onComplete,
   onSnooze,
@@ -92,12 +90,8 @@ export function TodayQueueRow({
         <IconButton
           label="Snooze · H"
           icon={Clock}
-          disabled={busy || snoozeComparedSalesCycleId === null}
-          onClick={() => {
-            if (snoozeComparedSalesCycleId !== null) {
-              onSnooze(item, snoozeComparedSalesCycleId);
-            }
-          }}
+          disabled={busy}
+          onClick={() => onSnooze(item)}
         />
         <IconButton
           label="Pin · P"
