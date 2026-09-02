@@ -140,14 +140,15 @@
   white-space: nowrap;
 }
 
-/* One chip per card: the two cloud axes, never a blended number. */
+/* One chip per card: the two cloud axes, never a blended number. Machine
+   data stays quiet: neutral fill and text, machine hairline border. */
 .pipeline-card__chip {
   display: inline-block;
   padding: 0 var(--space-2);
-  border: 1px solid var(--accent-line);
+  border: 1px solid var(--machine-line);
   border-radius: var(--radius-sm);
-  background: var(--accent-soft);
-  color: var(--accent-strong);
+  background: var(--surface);
+  color: var(--text);
   font-size: var(--text-micro);
   font-variant-numeric: tabular-nums;
   line-height: 1.6;
@@ -210,7 +211,7 @@
 .pipeline-table__overdue {
   margin-left: var(--space-2);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-caption);
 }
 
 /* Decorative placeholder for empty grid cells; faint per the audit. */

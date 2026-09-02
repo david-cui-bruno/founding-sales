@@ -1,7 +1,9 @@
+import { X } from 'lucide-react';
 import { useId, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 
 import { Button } from '../../components/Button';
+import { IconButton } from '../../components/IconButton';
 
 export type AttachTranscriptDialogProps = {
   personName: string;
@@ -72,9 +74,12 @@ export function AttachTranscriptDialog({
       <div className="attach-dialog__panel">
         <header className="attach-dialog__header">
           <h2 id={headingId}>Attach transcript</h2>
-          <Button variant="quiet" onClick={onClose} disabled={submitting}>
-            Close
-          </Button>
+          <IconButton
+            label="Close"
+            icon={X}
+            onClick={onClose}
+            disabled={submitting}
+          />
         </header>
         <p className="attach-dialog__copy">
           Paste the transcript of this conversation with {personName}. Lines

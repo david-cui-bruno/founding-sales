@@ -1,4 +1,4 @@
-import { Import, type LucideIcon } from 'lucide-react';
+import { Import, Search, type LucideIcon } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent, MouseEvent } from 'react';
 
@@ -135,25 +135,32 @@ export function CommandPalette({ navigate, openImport }: CommandPaletteProps) {
         aria-modal="true"
         aria-label="Command palette"
       >
-        <input
-          ref={inputRef}
-          className="command-palette__input"
-          type="text"
-          role="combobox"
-          aria-label="Command palette"
-          aria-expanded="true"
-          aria-controls="command-palette-listbox"
-          aria-autocomplete="list"
-          aria-activedescendant={
-            visible[selectedIndex]
-              ? `command-option-${visible[selectedIndex].id}`
-              : undefined
-          }
-          placeholder="Type a command…"
-          value={query}
-          onChange={onQueryChange}
-          onKeyDown={onInputKeyDown}
-        />
+        <div className="command-palette__input-row">
+          <Search
+            className="command-palette__search-icon"
+            aria-hidden="true"
+            size={16}
+          />
+          <input
+            ref={inputRef}
+            className="command-palette__input"
+            type="text"
+            role="combobox"
+            aria-label="Command palette"
+            aria-expanded="true"
+            aria-controls="command-palette-listbox"
+            aria-autocomplete="list"
+            aria-activedescendant={
+              visible[selectedIndex]
+                ? `command-option-${visible[selectedIndex].id}`
+                : undefined
+            }
+            placeholder="Type a command…"
+            value={query}
+            onChange={onQueryChange}
+            onKeyDown={onInputKeyDown}
+          />
+        </div>
         {visible.length > 0 ? (
           <ul
             id="command-palette-listbox"

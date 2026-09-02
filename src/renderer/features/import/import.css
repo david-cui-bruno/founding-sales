@@ -9,8 +9,15 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface-raised);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-overlay), var(--inset-highlight);
   color: var(--text);
+}
+
+/* Dialog entry: 240ms fade-and-lift, gated to no-preference. */
+@media (prefers-reduced-motion: no-preference) {
+  .import-dialog {
+    animation: motion-dialog-in var(--duration-dialog) var(--ease-out);
+  }
 }
 
 .import-dialog__header {

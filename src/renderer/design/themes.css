@@ -1,13 +1,17 @@
 /* The only file allowed to declare literal colors. Everything else uses vars.
+   Layered per the design audit: the PRIMITIVE section is the raw ramp and is
+   never referenced outside design/; the SEMANTIC section maps primitives to
+   purpose-named tokens that feature CSS consumes.
    Neutrals are a Radix-style 12-step ramp tuned in OKLCH with a faint cool
    tint (hue 270): step 1 = app canvas, 2 = surface, 3 = sunken surface,
    6 = non-interactive borders, 7 = interactive borders, 9 = faint text,
-   11 = muted text, 12 = high-contrast text. One indigo accent; muted status
-   colors exist only as backgrounds and dots, never CTAs. */
+   11 = muted text, 12 = high-contrast text. One bluebonnet accent; muted
+   status colors exist only as backgrounds and dots, never CTAs. */
 :root,
 [data-theme="light"] {
   color-scheme: light;
 
+  /* PRIMITIVE */
   /* Neutral ramp (light): oklch L 0.993 -> 0.242, C ~0.002-0.004, H 270. */
   --neutral-1: oklch(0.993 0.0014 270);
   --neutral-2: oklch(0.983 0.0016 270);
@@ -22,6 +26,7 @@
   --neutral-11: oklch(0.503 0.004 270);
   --neutral-12: oklch(0.242 0.004 270);
 
+  /* SEMANTIC */
   --canvas: var(--neutral-1);
   --surface: var(--neutral-2);
   --surface-raised: #ffffff;
@@ -35,12 +40,18 @@
   --line-interactive: var(--neutral-7);
   --line-strong: var(--line-interactive);
 
-  /* Indigo: the single interactive accent. */
-  --accent: #5e6ad2;
+  /* Bluebonnet: the single interactive accent (anchor #1937e3). Reserved for
+     act-here surfaces only: buttons, links, focus ring, selection states, and
+     active navigation. 7.5:1 as text on --surface; 7.8:1 under white text. */
+  --accent: #1937e3;
   --accent-text: #ffffff;
-  --accent-soft: rgba(94, 106, 210, 0.09);
-  --accent-strong: #4a55b8;
-  --accent-line: rgba(94, 106, 210, 0.35);
+  --accent-soft: rgba(25, 55, 227, 0.08);
+  /* Darker step for accent text on tinted fills: 9.5:1 on --surface. */
+  --accent-strong: #1128c4;
+  --accent-line: rgba(25, 55, 227, 0.35);
+  /* Machine-data hairline: the quiet accent-tinted border for scorer chips
+     and other machine-derived surfaces. Never a fill, never text. */
+  --machine-line: rgba(25, 55, 227, 0.28);
 
   /* Muted status set: backgrounds and dots only, never CTAs. */
   --status-success-bg: rgba(47, 158, 100, 0.1);
@@ -57,12 +68,12 @@
   /* Darker than the dot so 11px pill text clears 4.5:1 on step-2 surfaces. */
   --danger: #b53146;
   --danger-soft: var(--status-danger-bg);
-  --aurora-cyan: #5e6ad2;
-  --aurora-violet: #5e6ad2;
 
-  /* Elevation: hairline shadows; the overlay token is for true overlays only. */
+  /* Elevation: hairline shadows; the overlay token is for true overlays only.
+     The drawer token is the docked inspector's leftward lift. */
   --shadow: 0 1px 2px rgba(28, 29, 31, 0.04);
   --shadow-overlay: 0 8px 32px rgba(28, 29, 31, 0.16), 0 1px 2px rgba(28, 29, 31, 0.08);
+  --shadow-drawer: -12px 0 32px rgba(28, 29, 31, 0.1);
   /* Valid-but-invisible so multi-shadow lists stay parseable in light mode. */
   --inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0);
 }
@@ -70,6 +81,7 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
+  /* PRIMITIVE */
   /* Neutral ramp (dark): near-black hue-neutral canvas, oklch L 0.145 -> 0.945. */
   --neutral-1: oklch(0.145 0.002 270);
   --neutral-2: oklch(0.183 0.0022 270);
@@ -84,6 +96,7 @@
   --neutral-11: oklch(0.75 0.004 270);
   --neutral-12: oklch(0.945 0.002 270);
 
+  /* SEMANTIC */
   --canvas: var(--neutral-1);
   --surface: var(--neutral-2);
   --surface-raised: var(--neutral-3);
@@ -97,11 +110,14 @@
   --line-interactive: var(--neutral-7);
   --line-strong: var(--line-interactive);
 
-  --accent: #7c85e0;
+  /* Bluebonnet, lifted and desaturated for dark surfaces: 7.5:1 as text on
+     --surface; near-black accent text clears 8:1 on accent fills. */
+  --accent: #8fa3ff;
   --accent-text: #0f1011;
-  --accent-soft: rgba(124, 133, 224, 0.13);
-  --accent-strong: #98a0ea;
-  --accent-line: rgba(124, 133, 224, 0.4);
+  --accent-soft: rgba(143, 163, 255, 0.13);
+  --accent-strong: #a9b8ff;
+  --accent-line: rgba(143, 163, 255, 0.4);
+  --machine-line: rgba(143, 163, 255, 0.32);
 
   --status-success-bg: rgba(76, 183, 130, 0.13);
   --status-success-dot: #4cb782;
@@ -116,12 +132,11 @@
   --warning-soft: var(--status-warning-bg);
   --danger: #eb5768;
   --danger-soft: var(--status-danger-bg);
-  --aurora-cyan: #7c85e0;
-  --aurora-violet: #7c85e0;
 
   /* Dark elevation: lifted panels get a 1px top inset highlight instead of
      bigger drop shadows; the overlay token stays reserved for true overlays. */
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-overlay: 0 8px 32px rgba(0, 0, 0, 0.55), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-drawer: -12px 0 32px rgba(0, 0, 0, 0.5);
   --inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }

@@ -1,8 +1,10 @@
+import { X } from 'lucide-react';
 import { useId } from 'react';
 import type { KeyboardEvent } from 'react';
 
 import { Button } from '../../components/Button';
 import { ErrorState } from '../../components/ErrorState';
+import { IconButton } from '../../components/IconButton';
 import { LoadingState } from '../../components/LoadingState';
 import type { ImportCommitReceipt } from '../../../shared/contracts/importContract';
 import type { ImportApi } from './importApi';
@@ -56,9 +58,12 @@ export function ImportDialog({ api, open, onClose, onCommitted }: ImportDialogPr
     >
       <header className="import-dialog__header">
         <h2 id={headingId}>Import leads</h2>
-        <Button variant="quiet" onClick={onClose} disabled={state.step === 'committing'}>
-          Close
-        </Button>
+        <IconButton
+          label="Close"
+          icon={X}
+          onClick={onClose}
+          disabled={state.step === 'committing'}
+        />
       </header>
 
       {state.step === 'source' && (

@@ -4,6 +4,7 @@ import {
   useReactTable,
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 
@@ -167,7 +168,11 @@ export function LeadsGrid({
                     {flexRender(header.column.columnDef.header, header.getContext())}
                     {active && (
                       <span className="leads-grid__sort-arrow" aria-hidden="true">
-                        {columnSort.direction === 'ascending' ? '▲' : '▼'}
+                        {columnSort.direction === 'ascending' ? (
+                          <ChevronUp size={12} />
+                        ) : (
+                          <ChevronDown size={12} />
+                        )}
                       </span>
                     )}
                   </button>

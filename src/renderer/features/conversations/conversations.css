@@ -186,7 +186,7 @@
 
 .utterance--founder {
   border-left-color: var(--accent);
-  background: var(--accent-soft);
+  background: var(--surface-sunken);
 }
 
 .utterance__speaker {
@@ -221,7 +221,7 @@
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-overlay);
+  box-shadow: var(--shadow-overlay), var(--inset-highlight);
 }
 
 .attach-dialog__header {
@@ -274,4 +274,11 @@
 .attach-dialog__actions {
   display: flex;
   justify-content: flex-end;
+}
+
+/* Dialog entry: 240ms fade-and-lift, gated to no-preference. */
+@media (prefers-reduced-motion: no-preference) {
+  .attach-dialog__panel {
+    animation: motion-dialog-in var(--duration-dialog) var(--ease-out);
+  }
 }

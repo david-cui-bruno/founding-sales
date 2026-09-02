@@ -111,7 +111,9 @@ describe('TodayRoute', () => {
       </StrictMode>,
     );
 
-    expect(screen.getByText('Loading today')).toBeTruthy();
+    expect(
+      screen.getByRole('progressbar', { name: 'Loading today' }),
+    ).toBeTruthy();
     expect(await screen.findByText('Avery Landlord')).toBeTruthy();
   });
 

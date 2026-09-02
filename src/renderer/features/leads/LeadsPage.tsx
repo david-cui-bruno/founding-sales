@@ -3,8 +3,8 @@ import type { LeadFieldUpdateRequest, LeadRow } from '../../../shared/contracts/
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorState } from '../../components/ErrorState';
-import { LoadingState } from '../../components/LoadingState';
 import { PageHeader } from '../../components/PageHeader';
+import { ProgressBarThin } from '../../components/ProgressBarThin';
 import { LeadsBulkBar } from './LeadsBulkBar';
 import { LeadsFilterChips, type LeadStageCounts } from './LeadsFilterChips';
 import { LeadsGrid } from './LeadsGrid';
@@ -87,7 +87,7 @@ export function LeadsPage({
         counts={stageCounts(view, state)}
         onStagesChange={(stages: LifecycleStage[]) => state.setStages(stages)}
       />
-      {view.status === 'loading' && <LoadingState label="Loading leads" />}
+      {view.status === 'loading' && <ProgressBarThin label="Loading leads" />}
       {view.status === 'failed' && (
         <ErrorState
           title="Leads could not be loaded"

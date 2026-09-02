@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
 
 import type { MutationReceipt } from '../../../shared/contracts/commonContract';
 import type {
@@ -9,10 +10,10 @@ import type {
   TodayItem,
   TodaySnapshot,
 } from '../../../shared/contracts/todayContract';
-import { Button } from '../../components/Button';
 import { ErrorState } from '../../components/ErrorState';
-import { LoadingState } from '../../components/LoadingState';
+import { IconButton } from '../../components/IconButton';
 import { PageHeader } from '../../components/PageHeader';
+import { ProgressBarThin } from '../../components/ProgressBarThin';
 import { TodayPage } from './TodayPage';
 
 export type TodayRouteApi = {
@@ -141,9 +142,12 @@ export function TodayRoute({ api, onOpenLead }: TodayRouteProps) {
       <PageHeader
         title="Today"
         trailing={
-          <Button variant="quiet" disabled={busy} onClick={load}>
-            Refresh
-          </Button>
+          <IconButton
+            label="Refresh"
+            icon={RefreshCw}
+            disabled={busy}
+            onClick={load}
+          />
         }
       />
       {commandFailed && (
@@ -151,7 +155,7 @@ export function TodayRoute({ api, onOpenLead }: TodayRouteProps) {
           The command could not be applied. Refresh and try again.
         </div>
       )}
-      {state.kind === 'loading' && <LoadingState label="Loading today" />}
+      {state.kind === 'loading' && <ProgressBarThin label="Loading today" />}
       {state.kind === 'error' && (
         <ErrorState
           title="Today could not load"

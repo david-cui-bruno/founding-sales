@@ -74,7 +74,7 @@
   height: 100%;
   border-radius: var(--radius-full);
   background: var(--accent);
-  transition: width 160ms ease;
+  transition: width var(--duration-hover) var(--ease-out);
 }
 
 .capacity-summary__errors {
@@ -260,8 +260,16 @@
   border-top: 1px solid var(--line);
 }
 
+/* Hover feedback stays a background change only: no motion on row order
+   (J/K movement must be instant by rule). */
 .today-row:hover {
   background: var(--surface-sunken);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .today-row {
+    transition: background var(--duration-hover) var(--ease-out);
+  }
 }
 
 .today-row:focus-visible {
@@ -334,7 +342,7 @@
   flex: 0 0 auto;
   gap: var(--space-1);
   opacity: 0;
-  transition: opacity 120ms ease;
+  transition: opacity var(--duration-hover) var(--ease-out);
 }
 
 .today-row:hover .today-row__actions,

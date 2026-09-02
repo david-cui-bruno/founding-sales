@@ -1,3 +1,5 @@
+import { ChevronLeft, ChevronRight } from 'lucide-react';
+
 import type { FridayReport } from '../../../shared/contracts/fridayContract';
 import { PageHeader } from '../../components/PageHeader';
 
@@ -55,7 +57,7 @@ export function ScoreboardHeader({
               disabled={weekOffset <= MIN_WEEK_OFFSET}
               onClick={onPreviousWeek}
             >
-              ‹
+              <ChevronLeft size={14} aria-hidden="true" />
             </button>
             <span className="friday__period numeric">{formatPeriod(report)}</span>
             <button
@@ -65,7 +67,7 @@ export function ScoreboardHeader({
               disabled={weekOffset >= 0}
               onClick={onNextWeek}
             >
-              ›
+              <ChevronRight size={14} aria-hidden="true" />
             </button>
           </div>
           <span className="friday__as-of numeric">{formatAsOf(report)}</span>

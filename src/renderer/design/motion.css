@@ -1,14 +1,64 @@
-/* Motion tokens with a hard reduced-motion override. */
+/* Motion tokens with a hard reduced-motion override.
+   Grammar: 150ms hover feedback, 200ms menu/popover entry, 240ms
+   dialog/drawer entry, all on the decelerating ease-out. The command
+   palette and J/K row movement never animate (Raycast rule). */
 :root {
-  --motion-fast: 120ms;
-  --motion-medium: 200ms;
-  --motion-ease: cubic-bezier(0.2, 0, 0, 1);
+  --duration-hover: 150ms;
+  --duration-menu: 200ms;
+  --duration-dialog: 240ms;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+
+  /* Legacy aliases so existing rules keep resolving. */
+  --motion-fast: var(--duration-hover);
+  --motion-medium: var(--duration-menu);
+  --motion-ease: var(--ease-out);
+}
+
+/* Entry animations for floating layers. Applied via class; every keyframe
+   here is gated to no-preference below. */
+@media (prefers-reduced-motion: no-preference) {
+  .motion-menu-in {
+    animation: motion-menu-in var(--duration-menu) var(--ease-out);
+  }
+
+  .motion-dialog-in {
+    animation: motion-dialog-in var(--duration-dialog) var(--ease-out);
+  }
+
+  @keyframes motion-menu-in {
+    from {
+      opacity: 0;
+      transform: translateY(2px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes motion-dialog-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px) scale(0.99);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  /* Pressed-state feedback on real buttons only. */
+  .button:active:not(:disabled),
+  .icon-button:active:not(:disabled) {
+    transform: scale(0.97);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   :root {
-    --motion-fast: 0ms;
-    --motion-medium: 0ms;
+    --duration-hover: 0ms;
+    --duration-menu: 0ms;
+    --duration-dialog: 0ms;
   }
 
   *,

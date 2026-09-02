@@ -43,6 +43,9 @@
   color: var(--muted);
   font: inherit;
   font-size: var(--text-caption);
+  transition: background var(--duration-hover) var(--ease-out),
+    border-color var(--duration-hover) var(--ease-out),
+    color var(--duration-hover) var(--ease-out);
 }
 
 .leads-chip:hover {
@@ -80,13 +83,32 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-overlay);
+  box-shadow: var(--shadow-overlay), var(--inset-highlight);
   transform: translateX(-50%);
 }
 
 .leads-bulk-bar__count {
   color: var(--muted);
   font-size: var(--text-dense);
+}
+
+/* Floating bar entry: 200ms fade-and-lift that keeps the centering
+   transform, gated to no-preference. */
+@media (prefers-reduced-motion: no-preference) {
+  .leads-bulk-bar {
+    animation: leads-bulk-bar-in var(--duration-menu) var(--ease-out);
+  }
+
+  @keyframes leads-bulk-bar-in {
+    from {
+      opacity: 0;
+      transform: translateX(-50%) translateY(2px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  }
 }
 
 .leads-bulk-bar__input {
@@ -189,7 +211,8 @@
 }
 
 .leads-grid__sort-arrow {
-  font-size: 9px;
+  display: inline-flex;
+  color: var(--text-muted);
 }
 
 .leads-grid__scroll {
@@ -221,6 +244,12 @@
    clickable"). Click opens the inspector, so the whole row is a target. */
 .leads-grid__row:hover {
   background: color-mix(in srgb, var(--text) 6%, var(--surface));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .leads-grid__row {
+    transition: background var(--duration-hover) var(--ease-out);
+  }
 }
 
 .leads-grid__row--selected,
@@ -367,25 +396,26 @@
   box-shadow: var(--focus-ring);
 }
 
-/* Cloud score chip: the two cloud axes side by side, indigo accent. Fit and
-   Timing stay separate numbers by rule; this chip never shows one blended
-   value. */
+/* Cloud score chip: the two cloud axes side by side. Machine data reads
+   quiet: neutral surface and text with the accent-tinted machine hairline.
+   Fit and Timing stay separate numbers by rule; this chip never shows one
+   blended value. */
 
 .leads-grid__cloud-chip {
   display: inline-block;
   padding: 0 var(--space-2);
-  border: 1px solid var(--accent-line);
+  border: 1px solid var(--machine-line);
   border-radius: var(--radius-sm);
-  background: var(--accent-soft);
-  color: var(--accent-strong);
+  background: var(--surface);
+  color: var(--text);
   font-size: 0.85em;
   font-variant-numeric: tabular-nums;
   line-height: 1.6;
   white-space: nowrap;
 }
 
-/* Zero-signal chip ("Fit 0 · Timing 0"): real scorer output, but the indigo
-   accent would overstate it, so it drops to the muted neutrals. */
+/* Zero-signal chip ("Fit 0 · Timing 0"): real scorer output, but even the
+   machine hairline would overstate it, so it drops to the muted neutrals. */
 .leads-grid__cloud-chip--zero {
   border-color: var(--line);
   background: var(--surface-sunken);

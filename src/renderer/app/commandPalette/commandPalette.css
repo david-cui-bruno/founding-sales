@@ -20,14 +20,29 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-overlay);
+  /* Overlay elevation; the palette itself never animates open (Raycast rule). */
+  box-shadow: var(--shadow-overlay), var(--inset-highlight);
   color: var(--text);
 }
 
-.command-palette__input {
-  padding: var(--space-3) var(--space-4);
-  border: none;
+/* Search affordance row: quiet icon inline with the borderless input. */
+.command-palette__input-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: 0 var(--space-4);
   border-bottom: 1px solid var(--line);
+}
+
+.command-palette__search-icon {
+  flex: none;
+  color: var(--faint);
+}
+
+.command-palette__input {
+  flex: 1;
+  padding: var(--space-3) 0;
+  border: none;
   border-radius: 0;
   background: transparent;
   color: var(--text);
@@ -61,7 +76,7 @@
 
 .command-palette__option--selected {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-strong);
 }
 
 .command-palette__icon {
@@ -70,7 +85,7 @@
 }
 
 .command-palette__option--selected .command-palette__icon {
-  color: var(--accent);
+  color: var(--accent-strong);
 }
 
 .command-palette__empty {

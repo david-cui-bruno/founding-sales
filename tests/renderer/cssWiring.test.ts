@@ -116,4 +116,116 @@ describe('renderer CSS wiring', () => {
 
     expect(undefinedTokens).toEqual([]);
   });
+
+  const designDir = `${join('renderer', 'design')}`;
+
+  async function featureCssFiles(): Promise<string[]> {
+    const files = await walk(rendererRoot);
+    return files.filter(
+      (file) => file.endsWith('.css') && !file.includes(designDir),
+    );
+  }
+
+  /** Strip comments so prose like "indigo #5e6ad2" never trips the rules. */
+  const withoutComments = (css: string): string =>
+    css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it('keeps color literals out of feature CSS (hex, rgb/hsl/oklch, named)', async () => {
+    // Only design/themes.css declares colors. Feature CSS consumes semantic
+    // tokens; color-mix() over var() tokens plus the keywords transparent,
+    // currentColor, and inherit are the sanctioned escape hatches.
+    const NAMED_COLORS = new Set([
+      'aqua', 'beige', 'black', 'blue', 'brown', 'coral', 'crimson', 'cyan',
+      'fuchsia', 'gold', 'gray', 'green', 'grey', 'indigo', 'ivory', 'khaki',
+      'lavender', 'lime', 'magenta', 'maroon', 'navy', 'olive', 'orange',
+      'orchid', 'pink', 'plum', 'purple', 'red', 'salmon', 'silver', 'teal',
+      'tomato', 'turquoise', 'violet', 'white', 'yellow',
+    ]);
+    const violations: string[] = [];
+
+    for (const cssFile of await featureCssFiles()) {
+      const path = relative(process.cwd(), cssFile);
+      const content = withoutComments(await readFile(cssFile, 'utf8'));
+
+      for (const match of content.matchAll(/#[0-9a-fA-F]{3,8}\b/g)) {
+        violations.push(`${path}: hex literal ${match[0]}`);
+      }
+      for (const match of content.matchAll(/\b(?:rgba?|hsla?|oklch)\(/g)) {
+        violations.push(`${path}: color function ${match[0]}…)`);
+      }
+      for (const declaration of content.matchAll(
+        /([a-z-]+)\s*:\s*([^;{}]+)[;}]/g,
+      )) {
+        const property = declaration[1]!;
+        if (property.startsWith('--') || property === 'font-family') continue;
+        const value = declaration[2]!;
+        for (const word of value.split(/[^a-zA-Z]+/)) {
+          if (NAMED_COLORS.has(word.toLowerCase())) {
+            violations.push(
+              `${path}: named color "${word}" in ${property}: ${value.trim()}`,
+            );
+          }
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it('keeps px font-size literals out of feature CSS', async () => {
+    // The type scale lives in design/tokens.css; features pick a semantic
+    // step (--text-*) instead of restating pixel sizes.
+    const violations: string[] = [];
+
+    for (const cssFile of await featureCssFiles()) {
+      const path = relative(process.cwd(), cssFile);
+      const content = withoutComments(await readFile(cssFile, 'utf8'));
+      for (const match of content.matchAll(
+        /font-size\s*:\s*([0-9][0-9.]*px)/g,
+      )) {
+        violations.push(`${path}: font-size ${match[1]}`);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it('keeps primitive-layer tokens out of feature CSS (semantic only)', async () => {
+    // tokens.css and themes.css label their layers with /* PRIMITIVE */ and
+    // /* SEMANTIC */ markers. Feature CSS may only reference the semantic
+    // layer, so the ramp can be retuned without touching features.
+    const designRoot = join(rendererRoot, 'design');
+    const primitiveTokens = new Set<string>();
+
+    for (const name of ['tokens.css', 'themes.css']) {
+      const content = await readFile(join(designRoot, name), 'utf8');
+      expect(content, `${name} must label its PRIMITIVE layer`).toContain(
+        '/* PRIMITIVE */',
+      );
+      expect(content, `${name} must label its SEMANTIC layer`).toContain(
+        '/* SEMANTIC */',
+      );
+      for (const section of content.split('/* PRIMITIVE */').slice(1)) {
+        const primitiveOnly = section.split('/* SEMANTIC */')[0]!;
+        for (const match of primitiveOnly.matchAll(/(--[a-z][a-z0-9-]*)\s*:/g)) {
+          primitiveTokens.add(match[1]!);
+        }
+      }
+    }
+
+    expect(primitiveTokens.size).toBeGreaterThan(0);
+
+    const violations: string[] = [];
+    for (const cssFile of await featureCssFiles()) {
+      const path = relative(process.cwd(), cssFile);
+      const content = await readFile(cssFile, 'utf8');
+      for (const match of content.matchAll(/var\((--[a-z][a-z0-9-]*)[,)]/g)) {
+        if (primitiveTokens.has(match[1]!)) {
+          violations.push(`${path}: primitive token ${match[1]}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
 });

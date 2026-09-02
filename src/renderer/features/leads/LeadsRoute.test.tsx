@@ -123,7 +123,9 @@ describe('LeadsRoute', () => {
       </StrictMode>,
     );
 
-    expect(screen.getByRole('status').textContent).toContain('Loading');
+    expect(
+      screen.getByRole('progressbar', { name: 'Loading leads' }),
+    ).toBeTruthy();
     await screen.findByText('Avery Landlord');
     expect(screen.getByRole('columnheader', { name: 'Person' })).toBeTruthy();
   });

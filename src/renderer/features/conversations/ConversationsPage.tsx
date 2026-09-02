@@ -3,8 +3,8 @@ import type {
   ConversationRow,
 } from '../../../shared/contracts/conversationsContract';
 import { ErrorState } from '../../components/ErrorState';
-import { LoadingState } from '../../components/LoadingState';
 import { PageHeader } from '../../components/PageHeader';
+import { ProgressBarThin } from '../../components/ProgressBarThin';
 import { AttachTranscriptDialog } from './AttachTranscriptDialog';
 import { ConversationDetailPanel } from './ConversationDetail';
 import { ConversationList } from './ConversationList';
@@ -79,7 +79,9 @@ export function ConversationsPage(props: ConversationsPageProps) {
             onChange={(event) => props.onQueryChange(event.target.value)}
           />
         </div>
-        {listState.kind === 'loading' && <LoadingState label="Loading conversations" />}
+        {listState.kind === 'loading' && (
+          <ProgressBarThin label="Loading conversations" />
+        )}
         {listState.kind === 'error' && (
           <ErrorState
             title="The conversations could not load"

@@ -161,6 +161,11 @@
   font-size: var(--text-caption);
 }
 
+.metric-card__delta-arrow {
+  display: inline-flex;
+  vertical-align: -2px;
+}
+
 .metric-card__delta--up .metric-card__delta-arrow {
   color: var(--status-success-dot);
 }

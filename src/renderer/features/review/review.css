@@ -11,7 +11,7 @@
 .review__resolution-alert {
   padding: var(--space-3) var(--space-4);
   border: 1px solid var(--line);
-  border-left: 4px solid var(--danger, #c0392b);
+  border-left: 4px solid var(--danger);
   border-radius: var(--radius-sm);
   background: var(--surface);
 }

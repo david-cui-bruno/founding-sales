@@ -152,6 +152,8 @@ h1, h2, h3 {
   background: transparent;
   color: var(--text-muted);
   cursor: default;
+  transition: background var(--duration-hover) var(--ease-out),
+    color var(--duration-hover) var(--ease-out);
 }
 
 .icon-button:hover:not(:disabled) {
@@ -192,6 +194,7 @@ textarea::placeholder {
   color: var(--text-faint);
 }
 
+/* Avatars are identity, not actions: neutral per the accent grammar. */
 .avatar {
   display: inline-flex;
   align-items: center;
@@ -199,8 +202,8 @@ textarea::placeholder {
   width: 24px;
   height: 24px;
   border-radius: var(--radius-full);
-  background: var(--accent-soft);
-  color: var(--accent-strong);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
   font-size: 10px;
   font-weight: var(--weight-title);
   letter-spacing: 0.02em;
@@ -337,6 +340,13 @@ textarea::placeholder {
   background: var(--surface-sunken);
 }
 
+/* Popover entry: 200ms fade-and-lift, gated to no-preference. */
+@media (prefers-reduced-motion: no-preference) {
+  .select__listbox {
+    animation: motion-menu-in var(--duration-menu) var(--ease-out);
+  }
+}
+
 .select__chevron {
   flex: none;
   color: var(--text-faint);
@@ -453,5 +463,39 @@ textarea::placeholder {
 @keyframes loading-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* Thin indeterminate progress bar: 2px accent sweep pinned to the top of
+   the loading content region. Reduced motion renders a static accent bar. */
+.progress-bar-thin {
+  position: relative;
+  flex: none;
+  height: 2px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
+}
+
+.progress-bar-thin__fill {
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .progress-bar-thin__fill {
+    animation: progress-bar-thin-slide 1.2s var(--ease-out) infinite;
+  }
+
+  @keyframes progress-bar-thin-slide {
+    from {
+      transform: translateX(-110%);
+    }
+    to {
+      transform: translateX(260%);
+    }
   }
 }

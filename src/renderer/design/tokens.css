@@ -1,5 +1,14 @@
-/* Spacing, radius, typography, and sizing tokens. Colors live in themes.css. */
+/* Spacing, radius, typography, and sizing tokens. Colors live in themes.css.
+   Layered like themes.css: the PRIMITIVE section holds raw values that only
+   design/ may reference; the SEMANTIC section is the purpose-named layer
+   feature CSS consumes. cssWiring.test.ts enforces the boundary. */
 :root {
+  /* PRIMITIVE */
+  /* Raw density row heights; features use --grid-row. */
+  --grid-row-compact: 32px;
+  --grid-row-comfortable: 40px;
+
+  /* SEMANTIC */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -49,8 +58,6 @@
   --weight-heading: 600;
   --weight-title: 700;
 
-  --grid-row-compact: 32px;
-  --grid-row-comfortable: 40px;
   --grid-row: var(--grid-row-comfortable);
   --focus-ring: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
   --nav-rail-width: 216px;

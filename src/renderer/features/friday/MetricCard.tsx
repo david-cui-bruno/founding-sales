@@ -1,3 +1,5 @@
+import { TrendingDown, TrendingUp } from 'lucide-react';
+
 import type { Metric, MetricId } from '../../../shared/contracts/fridayContract';
 
 const USD_METRICS: ReadonlySet<MetricId> = new Set(['new_mrr']);
@@ -89,7 +91,11 @@ export function MetricCard({ metric, onOpenMetric }: MetricCardProps) {
             className={`metric-card__delta metric-card__delta--${deltaDirection}`}
           >
             <span aria-hidden="true" className="metric-card__delta-arrow">
-              {deltaDirection === 'up' ? '▲' : '▼'}
+              {deltaDirection === 'up' ? (
+                <TrendingUp size={12} />
+              ) : (
+                <TrendingDown size={12} />
+              )}
             </span>
             {` ${delta} vs prior week`}
           </span>
