@@ -6,15 +6,18 @@ import {
   logPastActivityRequestSchema,
   markActivityInErrorRequestSchema,
   pinActionRequestSchema,
+  setReviewPositionRequestSchema,
   snoozeActionRequestSchema,
   todaySnapshotSchema,
+  triageQueueSchema,
   type TodaySnapshot,
+  type TriageQueue,
 } from '../../shared/contracts/todayContract';
 import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
 import type { TodayProvider } from './todayService';
 
 /**
- * Registers exactly the eight strict Today channels and returns one
+ * Registers exactly the ten strict Today channels and returns one
  * idempotent unregister function that removes all of them.
  */
 export function registerTodayIpc(
@@ -76,6 +79,20 @@ export function registerTodayIpc(
       requestSchema: markActivityInErrorRequestSchema,
       responseSchema: mutationReceiptSchema,
       handler: (request) => provider.markActivityInError(request),
+      isTrustedRendererUrl,
+    }),
+    registerValidatedIpc<undefined, TriageQueue>({
+      channel: 'today:get-triage-queue',
+      requestSchema: null,
+      responseSchema: triageQueueSchema,
+      handler: () => provider.getTriageQueue(),
+      isTrustedRendererUrl,
+    }),
+    registerValidatedIpc({
+      channel: 'today:set-review-position',
+      requestSchema: setReviewPositionRequestSchema,
+      responseSchema: mutationReceiptSchema,
+      handler: (request) => provider.setReviewPosition(request),
       isTrustedRendererUrl,
     }),
   ];

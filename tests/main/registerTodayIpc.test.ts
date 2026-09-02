@@ -17,6 +17,7 @@ import type {
   CompleteActionRequest,
   LogPastActivityRequest,
   TodaySnapshot,
+  TriageQueue,
 } from '../../src/shared/contracts/todayContract';
 import type { TodayProvider } from '../../src/main/today/todayService';
 import { registerTodayIpc } from '../../src/main/today/registerTodayIpc';
@@ -36,10 +37,12 @@ const TODAY_CHANNELS = [
   'today:add-note',
   'today:complete',
   'today:get',
+  'today:get-triage-queue',
   'today:log-activity',
   'today:log-call-outcome',
   'today:mark-activity-in-error',
   'today:pin',
+  'today:set-review-position',
   'today:snooze',
 ] as const;
 
@@ -78,6 +81,7 @@ const validSnapshot: TodaySnapshot = {
           verifyFirst: false,
           pinned: false,
           consentRequirement: null,
+          cloudScores: null,
         },
       ],
       overflowCount: 0,
@@ -88,6 +92,8 @@ const validSnapshot: TodaySnapshot = {
   conversationTarget: 5,
   reviewErrorCount: 0,
   unreviewedBacklogCount: 0,
+  unreviewedCloudSignalCount: 0,
+  conversationsHeld: 0,
   revision: 3,
 };
 
@@ -126,6 +132,12 @@ const logActivityRequest: LogPastActivityRequest = {
   outcome: null,
 };
 
+const validTriageQueue: TriageQueue = {
+  items: [],
+  position: 0,
+  revision: 1,
+};
+
 function fakeProvider(): TodayProvider {
   return {
     get: vi.fn(async () => validSnapshot),
@@ -136,6 +148,8 @@ function fakeProvider(): TodayProvider {
     addLeadNote: vi.fn(async () => receipt),
     logCallOutcome: vi.fn(async () => receipt),
     markActivityInError: vi.fn(async () => receipt),
+    getTriageQueue: vi.fn(async () => validTriageQueue),
+    setReviewPosition: vi.fn(async () => receipt),
   };
 }
 
@@ -151,10 +165,10 @@ describe('registerTodayIpc', () => {
     electron.removeHandler.mockReset();
   });
 
-  it('registers exactly the eight strict Today channels', () => {
+  it('registers exactly the ten strict Today channels', () => {
     registerTodayIpc(fakeProvider());
 
-    expect(electron.handle).toHaveBeenCalledTimes(8);
+    expect(electron.handle).toHaveBeenCalledTimes(10);
     expect(electron.handle.mock.calls.map((call) => call[0]).sort()).toEqual([
       ...TODAY_CHANNELS,
     ]);
@@ -276,13 +290,13 @@ describe('registerTodayIpc', () => {
     await expect(invokeRegistered('today:get', trustedEvent)).rejects.toThrow();
   });
 
-  it('returns one idempotent unregister function that removes all eight channels', () => {
+  it('returns one idempotent unregister function that removes all ten channels', () => {
     const unregister = registerTodayIpc(fakeProvider());
 
     unregister();
     unregister();
 
-    expect(electron.removeHandler).toHaveBeenCalledTimes(8);
+    expect(electron.removeHandler).toHaveBeenCalledTimes(10);
     expect(
       electron.removeHandler.mock.calls.map((call) => call[0]).sort(),
     ).toEqual([...TODAY_CHANNELS]);

@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+
 import type {
   BeginOutboundRequest,
   CloudScoreOverrideRequest,
@@ -6,6 +8,7 @@ import type {
 } from '../../../shared/contracts/leadDetailContract';
 import { ErrorState } from '../../components/ErrorState';
 import { LoadingState } from '../../components/LoadingState';
+import { CallOutcomeSection, type CallOutcomeApi } from './CallOutcomeSection';
 import { InspectorHeader } from './InspectorHeader';
 import { InspectorTabs } from './LeadInspector';
 import type { LeadDetailState } from './useLeadInspector';
@@ -17,11 +20,18 @@ export type LeadFullPageProps = {
   onConfirmTransition(request: ConfirmTransitionRequest): void;
   onDismissLead(request: DismissLeadRequest): void;
   onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
+  /** Present when the call-outcome flow is available (audit 4.7). */
+  outcomeApi?: CallOutcomeApi;
+  /** Save & next: the next queue lead, or null when the queue is done. */
+  onOutcomeSaved?(nextPersonId: string | null): void;
+  /** Escape returns to the queue without logging anything. */
+  onClose?(): void;
 };
 
 /**
  * Full-width promotion of the same lead detail DTO. Reuses the inspector
- * header and tab sections so the two presentations cannot diverge.
+ * header and tab sections so the two presentations cannot diverge; the
+ * call flow appends the outcome section above the tabs.
  */
 export function LeadFullPage({
   state,
@@ -30,7 +40,21 @@ export function LeadFullPage({
   onConfirmTransition,
   onDismissLead,
   onOverrideCloudScore,
+  outcomeApi,
+  onOutcomeSaved,
+  onClose,
 }: LeadFullPageProps) {
+  useEffect(() => {
+    if (onClose === undefined) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
   if (state.status === 'loading') {
     return (
       <div className="lead-full-page">
@@ -60,7 +84,15 @@ export function LeadFullPage({
       className="lead-full-page"
       aria-label={`${state.detail.personName} full page`}
     >
-      <InspectorHeader detail={state.detail} />
+      <InspectorHeader detail={state.detail} onClose={onClose} />
+      {outcomeApi !== undefined && onOutcomeSaved !== undefined && (
+        <CallOutcomeSection
+          key={state.detail.personId}
+          detail={state.detail}
+          api={outcomeApi}
+          onSaved={onOutcomeSaved}
+        />
+      )}
       <InspectorTabs
         key={state.detail.personId}
         detail={state.detail}

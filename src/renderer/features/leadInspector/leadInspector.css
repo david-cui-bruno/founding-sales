@@ -330,13 +330,132 @@
   color: var(--muted);
 }
 
+/* Amendment rendering (audit 2.7): struck through at render, never deleted. */
+.lead-inspector__timeline-item--in-error .lead-inspector__timeline-summary {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+/* The full page overlays the workspace (the provider renders it as a
+   sibling of the shell): fixed over the content column, opaque canvas,
+   its own scroll context. Escape returns to the queue. */
 .lead-full-page {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--nav-rail-width);
+  z-index: 20;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  max-width: 60rem;
-  margin: 0 auto;
-  padding: var(--space-6);
+  padding: var(--space-6) max(var(--space-6), calc((100% - 60rem) / 2));
+  background: var(--canvas);
+  overflow-y: auto;
+}
+
+/* Call outcome section (audit 4.7): chips single-select, optional callback
+   date, optional local-only note, and the one Save & next action. */
+
+.call-outcome {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.call-outcome__title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-heading);
+}
+
+.call-outcome__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.call-outcome__chip {
+  height: var(--control-height);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line-interactive);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--text-md);
+}
+
+.call-outcome__chip:hover {
+  background: var(--surface-sunken);
+}
+
+.call-outcome__chip:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.call-outcome__chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: var(--weight-medium);
+}
+
+.call-outcome__details {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.call-outcome__callback-label,
+.call-outcome__note-label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.call-outcome__note-label {
+  flex: 1 1 auto;
+}
+
+.call-outcome__callback,
+.call-outcome__note {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line-interactive);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--text-md);
+}
+
+.call-outcome__note {
+  resize: vertical;
+}
+
+.call-outcome__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.call-outcome__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.call-outcome__hint {
+  color: var(--text-faint);
+  font-size: var(--text-sm);
 }
 
 /* Cloud scores section: chip + top-3 reasons + log-only override controls. */

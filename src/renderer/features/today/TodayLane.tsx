@@ -1,4 +1,5 @@
-import type { RefCallback } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
+import type { KeyboardEvent as ReactKeyboardEvent, RefCallback } from 'react';
 
 import type { TodayItem, TodayLaneId } from '../../../shared/contracts/todayContract';
 import { TodayQueueRow } from './TodayQueueRow';
@@ -55,85 +56,115 @@ export const TODAY_LANE_ORDER: readonly TodayLaneId[] = Object.freeze([
   'later',
 ]);
 
-/** One row plus its lane-local pin/snooze comparison neighbors. */
-export type TodayLaneRow = {
-  item: TodayItem;
-  pinComparedSalesCycleId: string | null;
-};
-
 export type TodayLaneProps = {
   laneId: TodayLaneId;
-  /** True lane size from the snapshot, including a row promoted to the hero. */
+  /** True lane size from the snapshot, including a row promoted to Next up. */
   totalCount: number;
-  /** Rows this lane renders itself (the hero row is rendered above the lanes). */
-  rows: readonly TodayLaneRow[];
+  /** Rows past the whole-queue cap, reported per lane by the snapshot. */
+  overflowCount: number;
+  /** Rows this lane renders itself (the hero row renders above the lanes). */
+  rows: readonly TodayItem[];
   busy: boolean;
+  collapsed: boolean;
+  onToggleCollapsed(laneId: TodayLaneId, collapsed: boolean): void;
   tabbableCycleId: string | null;
   registerRow(cycleId: string): RefCallback<HTMLLIElement>;
   onOpenLead(personId: string): void;
-  onComplete(item: TodayItem): void;
-  onSnooze(item: TodayItem): void;
-  onPin(item: TodayItem, comparedSalesCycleId: string): void;
+  onCall(item: TodayItem): void;
+  onSnoozeUntil(item: TodayItem, resurfaceAt: string): void;
+  onSkipToday(item: TodayItem): void;
+  onLogPastActivity(item: TodayItem): void;
+  onOpenInLeads(item: TodayItem): void;
 };
 
 /**
- * One fixed lane. Rows render exactly in snapshot order; pin compares only
- * against the lane-local row above and snooze against the row below, so a
- * pin or snooze can never move a row across lanes. A lane with nothing to
- * render collapses to one quiet line instead of an empty placeholder box.
+ * One collapsible lane section (audit 4.4): an 11px/600 title with a count
+ * and a chevron header button. ArrowLeft collapses and ArrowRight expands
+ * while the header holds focus; rows render exactly in snapshot order.
+ * Lanes with nothing to render return null; the page summarizes them in one
+ * "Nothing in:" line instead.
  */
 export function TodayLane({
   laneId,
   totalCount,
+  overflowCount,
   rows,
   busy,
+  collapsed,
+  onToggleCollapsed,
   tabbableCycleId,
   registerRow,
   onOpenLead,
-  onComplete,
-  onSnooze,
-  onPin,
+  onCall,
+  onSnoozeUntil,
+  onSkipToday,
+  onLogPastActivity,
+  onOpenInLeads,
 }: TodayLaneProps) {
   const meta = TODAY_LANE_META[laneId];
   const headingId = `today-lane-${laneId}`;
+  const listId = `today-lane-${laneId}-rows`;
 
-  if (rows.length === 0) {
-    return (
-      <section
-        className="today-lane today-lane--collapsed"
-        aria-labelledby={headingId}
-      >
-        <h2 className="today-lane__collapsed-line" id={headingId}>
-          {`${meta.heading} — ${totalCount}`}
-        </h2>
-      </section>
-    );
+  if (rows.length === 0 && totalCount === 0) {
+    return null;
   }
+
+  const onHeaderKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'ArrowLeft' && !collapsed) {
+      event.preventDefault();
+      event.stopPropagation();
+      onToggleCollapsed(laneId, true);
+    } else if (event.key === 'ArrowRight' && collapsed) {
+      event.preventDefault();
+      event.stopPropagation();
+      onToggleCollapsed(laneId, false);
+    }
+  };
+
+  const Chevron = collapsed ? ChevronRight : ChevronDown;
 
   return (
     <section className="today-lane" aria-labelledby={headingId}>
-      <header className="today-lane__header">
-        <h2 className="today-lane__heading" id={headingId}>
-          {meta.heading}
-        </h2>
-        <span className="today-lane__count">{totalCount}</span>
-      </header>
-      <ul className="today-lane__list">
-        {rows.map((row) => (
-          <TodayQueueRow
-            key={row.item.id}
-            item={row.item}
-            busy={busy}
-            tabbable={row.item.salesCycleId === tabbableCycleId}
-            rowRef={registerRow(row.item.salesCycleId)}
-            pinComparedSalesCycleId={row.pinComparedSalesCycleId}
-            onOpenLead={onOpenLead}
-            onComplete={onComplete}
-            onSnooze={onSnooze}
-            onPin={onPin}
-          />
-        ))}
-      </ul>
+      <h2 className="today-lane__heading" id={headingId}>
+        <button
+          type="button"
+          className="today-lane__header"
+          aria-expanded={!collapsed}
+          aria-controls={collapsed ? undefined : listId}
+          onClick={() => onToggleCollapsed(laneId, !collapsed)}
+          onKeyDown={onHeaderKeyDown}
+        >
+          <Chevron className="today-lane__chevron" size={14} aria-hidden="true" />
+          <span className="today-lane__title">{meta.heading}</span>
+          <span className="today-lane__count">{totalCount}</span>
+        </button>
+      </h2>
+      {!collapsed && (
+        <>
+          <ul className="today-lane__list" id={listId}>
+            {rows.map((item) => (
+              <TodayQueueRow
+                key={item.id}
+                item={item}
+                busy={busy}
+                tabbable={item.salesCycleId === tabbableCycleId}
+                rowRef={registerRow(item.salesCycleId)}
+                onOpenLead={onOpenLead}
+                onCall={onCall}
+                onSnoozeUntil={onSnoozeUntil}
+                onSkipToday={onSkipToday}
+                onLogPastActivity={onLogPastActivity}
+                onOpenInLeads={onOpenInLeads}
+              />
+            ))}
+          </ul>
+          {overflowCount > 0 && (
+            <p className="today-lane__overflow">
+              {`${overflowCount} more beyond today\u2019s capacity`}
+            </p>
+          )}
+        </>
+      )}
     </section>
   );
 }

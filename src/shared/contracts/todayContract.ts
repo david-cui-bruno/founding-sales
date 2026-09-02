@@ -7,6 +7,7 @@ import {
   primaryActionSchema,
   salesCycleIdSchema,
 } from './commonContract';
+import { cloudScoreChipSchema } from './leadsContract';
 
 /**
  * No-due-dates lanes (audit 4.9.5): Overdue and Post-interview/offer are
@@ -22,6 +23,8 @@ export const todayItemSchema = z.object({
   priorityContext: leadPriorityContextSchema.nullable(), action: primaryActionSchema, reason: z.string().min(1),
   activeTriggers: z.array(z.object({ label: z.string(), expiresAt: z.string().datetime({ offset: true }).nullable() }).strict()),
   verifyFirst: z.boolean(), pinned: z.boolean(), consentRequirement: z.string().nullable(),
+  /** Cloud axes chip (display only, never blended); null until scored. */
+  cloudScores: cloudScoreChipSchema.nullable(),
 }).strict();
 export const todaySnapshotSchema = z.object({
   lanes: z.array(z.object({
@@ -32,6 +35,10 @@ export const todaySnapshotSchema = z.object({
   dialBudget: z.number().int().nonnegative(), scheduledDials: z.number().int().nonnegative(),
   conversationTarget: z.number().int().nonnegative(), reviewErrorCount: z.number().int().nonnegative(), revision: z.number().int().nonnegative(),
   unreviewedBacklogCount: z.number().int().nonnegative(),
+  /** How many unreviewed leads carry a cloud score (backlog card copy). */
+  unreviewedCloudSignalCount: z.number().int().nonnegative(),
+  /** Conversations held today (spoke or interview booked), for queue-done. */
+  conversationsHeld: z.number().int().nonnegative(),
 }).strict();
 
 export const completeActionRequestSchema = z.object({
@@ -105,6 +112,40 @@ export const markActivityInErrorRequestSchema = z.object({
   reason: z.string().min(1).max(500),
 }).strict();
 
+/**
+ * One unreviewed lead in the triage queue (audit 4.6): enough context to
+ * decide Ready / Later / Not a fit without opening the full inspector.
+ * `cloudSignals` are the scorer's stable ids, mapped to labels renderer-side.
+ */
+export const triageLeadSchema = z.object({
+  personId: personIdSchema,
+  salesCycleId: salesCycleIdSchema,
+  personName: z.string().min(1),
+  contextLabel: z.string().nullable(),
+  propertySummary: z.string().nullable(),
+  phone: z.string().nullable(),
+  email: z.string().nullable(),
+  cloudScores: cloudScoreChipSchema.nullable(),
+  cloudSignals: z.array(z.string().min(1)).max(3),
+}).strict();
+
+/**
+ * The triage queue plus the persisted resume position: `position` counts
+ * decisions already made this pass, so the counter reads
+ * "Reviewing position+1 of position+items.length" and survives relaunch.
+ * Leads deferred with "Later" (future resurface_at) are excluded.
+ */
+export const triageQueueSchema = z.object({
+  items: z.array(triageLeadSchema),
+  position: z.number().int().nonnegative(),
+  revision: z.number().int().nonnegative(),
+}).strict();
+
+/** Persists the triage resume position (single-row review_position table). */
+export const setReviewPositionRequestSchema = z.object({
+  position: z.number().int().nonnegative(),
+}).strict();
+
 export type TodayLaneId = z.infer<typeof todayLaneIdSchema>;
 export type TodayItem = z.infer<typeof todayItemSchema>;
 export type TodaySnapshot = z.infer<typeof todaySnapshotSchema>;
@@ -116,3 +157,6 @@ export type AddLeadNoteRequest = z.infer<typeof addLeadNoteRequestSchema>;
 export type CallOutcome = z.infer<typeof callOutcomeSchema>;
 export type LogCallOutcomeRequest = z.infer<typeof logCallOutcomeRequestSchema>;
 export type MarkActivityInErrorRequest = z.infer<typeof markActivityInErrorRequestSchema>;
+export type TriageLead = z.infer<typeof triageLeadSchema>;
+export type TriageQueue = z.infer<typeof triageQueueSchema>;
+export type SetReviewPositionRequest = z.infer<typeof setReviewPositionRequestSchema>;

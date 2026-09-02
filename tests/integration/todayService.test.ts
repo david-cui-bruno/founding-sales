@@ -293,4 +293,53 @@ describe('todayService', () => {
       activityId: null,
     })).rejects.toThrow('cadence-bound');
   });
+
+  describe('triage queue and review position', () => {
+    it('lists unreviewed cycles in stable id order with the saved position', async () => {
+      seedLead('alpha', 'unreviewed');
+      seedLead('beta', 'unreviewed');
+      seedLead('gamma', 'ready');
+
+      const queue = await provider.getTriageQueue();
+      expect(queue.items.map((item) => item.salesCycleId)).toEqual([
+        'alpha-cycle', 'beta-cycle',
+      ]);
+      expect(queue.position).toBe(0);
+
+      await provider.setReviewPosition({ position: 1 });
+      const resumed = await provider.getTriageQueue();
+      expect(resumed.position).toBe(1);
+    });
+
+    it('excludes triage leads deferred to a future resurface date', async () => {
+      const { cycleId } = seedLead('alpha', 'unreviewed');
+      seedLead('beta', 'unreviewed');
+      await provider.snooze({
+        salesCycleId: cycleId,
+        resurfaceAt: '2026-09-30T15:00:00.000Z',
+      });
+
+      const queue = await provider.getTriageQueue();
+      expect(queue.items.map((item) => item.salesCycleId)).toEqual(['beta-cycle']);
+    });
+
+    it('reports position 0 once the pass has nothing left to review', async () => {
+      await provider.setReviewPosition({ position: 6 });
+      const queue = await provider.getTriageQueue();
+      expect(queue.items).toHaveLength(0);
+      expect(queue.position).toBe(0);
+    });
+
+    it('counts unreviewed cloud-scored leads for the backlog card', async () => {
+      const scored = seedLead('alpha', 'unreviewed');
+      seedLead('beta', 'unreviewed');
+      database.raw.prepare(`
+        UPDATE prospects SET cloud_fit = 62, cloud_timing = 41 WHERE id = ?
+      `).run(scored.prospect.prospectId);
+
+      const snapshot = await provider.get();
+      expect(snapshot.unreviewedBacklogCount).toBe(2);
+      expect(snapshot.unreviewedCloudSignalCount).toBe(1);
+    });
+  });
 });

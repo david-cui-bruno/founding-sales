@@ -7,6 +7,7 @@ import type {
   ConfirmTransitionRequest,
   DismissLeadRequest,
 } from '../../../shared/contracts/leadDetailContract';
+import type { CallOutcomeApi } from './CallOutcomeSection';
 import { LeadFullPage } from './LeadFullPage';
 import { LeadInspector } from './LeadInspector';
 import {
@@ -20,6 +21,8 @@ import './leadInspector.css';
 
 export type LeadInspectorProviderProps = {
   api: LeadDetailApi;
+  /** Optional Today commands enabling the full page call-outcome flow. */
+  outcomeApi?: CallOutcomeApi;
   children: ReactNode;
 };
 
@@ -35,6 +38,7 @@ type Selection = {
  */
 export function LeadInspectorProvider({
   api,
+  outcomeApi,
   children,
 }: LeadInspectorProviderProps) {
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -216,6 +220,21 @@ export function LeadInspectorProvider({
     [api],
   );
 
+  /**
+   * Save & next (audit 4.7): open the next queue lead's full page, or
+   * close back to Today when the queue has nothing else.
+   */
+  const handleOutcomeSaved = useCallback(
+    (nextPersonId: string | null) => {
+      if (nextPersonId === null) {
+        closeLead();
+      } else {
+        openFullPage(nextPersonId);
+      }
+    },
+    [closeLead, openFullPage],
+  );
+
   const handle = useMemo<LeadInspectorHandle>(
     () => ({
       openLead,
@@ -250,6 +269,9 @@ export function LeadInspectorProvider({
           onConfirmTransition={confirmTransition}
           onDismissLead={dismissLead}
           onOverrideCloudScore={overrideCloudScore}
+          outcomeApi={outcomeApi}
+          onOutcomeSaved={handleOutcomeSaved}
+          onClose={closeLead}
         />
       )}
     </LeadInspectorContext.Provider>

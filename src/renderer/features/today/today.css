@@ -1,6 +1,7 @@
-/* Promise-first Today queue: dense two-line rows, hover-revealed commands,
-   collapsed empty lanes, and a real capacity progress bar. Neutral surfaces;
-   urgency comes from copy. */
+/* Promise-first Today queue (audit Part 4): header dial meter, the Next up
+   card, collapsible dense lanes with hover-revealed Call + context menu,
+   one empty-lanes line, the backlog card, triage mode, and the queue-done
+   state. Neutral surfaces; urgency comes from copy. */
 
 .today {
   display: flex;
@@ -9,13 +10,13 @@
   min-width: 0;
 }
 
-/* Density-aware row heights: 44 compact / 56 comfortable. */
+/* Density-aware row heights: 44 default / 36 compact (audit 4.4). */
 .today {
-  --today-row-height: 56px;
+  --today-row-height: 44px;
 }
 
 [data-density="compact"] .today {
-  --today-row-height: 44px;
+  --today-row-height: 36px;
 }
 
 .today-route {
@@ -33,115 +34,92 @@
   color: var(--text);
 }
 
-/* Capacity is a label, never a filter. */
-.capacity-summary {
+/* ------------------------------------------------ header dial meter (4.2) */
+
+.dial-meter {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-4);
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface);
+  gap: var(--space-3);
+  min-width: 200px;
   color: var(--muted);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
 }
 
-.capacity-summary__progress {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex: 1 1 240px;
-  min-width: 0;
-}
-
-.capacity-summary__dials {
+.dial-meter__label {
   white-space: nowrap;
 }
 
-.capacity-summary__track {
+.dial-meter__track {
   flex: 1 1 auto;
-  height: 6px;
-  min-width: 80px;
+  height: 4px;
+  min-width: 96px;
   border-radius: var(--radius-full);
   background: var(--surface-sunken);
   overflow: hidden;
 }
 
-.capacity-summary__fill {
+.dial-meter__fill {
   height: 100%;
   border-radius: var(--radius-full);
   background: var(--accent);
   transition: width var(--duration-hover) var(--ease-out);
 }
 
-.capacity-summary__errors {
-  color: var(--text);
-}
+/* --------------------------------------------------- backlog card (4.5) */
 
-/* One collapsed line for the unreviewed backlog; rows live in Leads. */
-.today-backlog {
+.today-backlog-card {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-3);
-  min-height: 28px;
-  padding: 0 var(--space-4);
+  padding: var(--space-2) var(--space-4);
   border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--surface);
-  color: var(--muted);
-  font-size: var(--text-sm);
+}
+
+.today-backlog-card__line {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-md);
   font-variant-numeric: tabular-nums;
 }
 
-.today-backlog__link {
-  padding: 0;
-  border: 0;
-  background: none;
-  /* accent-strong: the base accent misses 4.5:1 on step-2 surfaces. */
-  color: var(--accent-strong);
-  font: inherit;
-  font-weight: var(--weight-medium);
+.today-backlog-card__signal {
+  color: var(--muted);
 }
 
-.today-backlog__link:hover {
-  text-decoration: underline;
-}
+/* ---------------------------------------------------- Next up card (4.3) */
 
-.today-backlog__link:focus-visible {
-  border-radius: var(--radius-sm);
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
-/* "Next up" hero: the first queue item, enlarged. */
-.today-hero__card {
+.today-next-up__card {
   display: flex;
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-3) var(--space-4);
   border: 1px solid var(--line);
+  /* The single act-here surface: an accent hairline, not a fill. */
+  border-left: 2px solid var(--accent);
   border-radius: var(--radius-md);
-  background: var(--surface-raised);
+  background: var(--surface);
   box-shadow: var(--shadow), var(--inset-highlight);
 }
 
-.today-hero__card:focus-visible {
+.today-next-up__card:focus-visible {
   box-shadow: var(--focus-ring);
   outline: none;
 }
 
-.today-hero__body {
+.today-next-up__body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 2px;
   min-width: 0;
   flex: 1 1 auto;
 }
 
-.today-hero__eyebrow {
+.today-next-up__eyebrow {
   color: var(--text-muted);
   font-size: var(--text-micro);
   font-weight: var(--weight-medium);
@@ -149,14 +127,15 @@
   text-transform: uppercase;
 }
 
-.today-hero__line1 {
+.today-next-up__line1 {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
 }
 
-.today-hero__person {
+/* 16/600 name per audit 4.3. */
+.today-next-up__person {
   padding: 0;
   border: 0;
   background: none;
@@ -167,24 +146,26 @@
   font-weight: var(--weight-heading);
 }
 
-.today-hero__context {
+.today-next-up__context {
   color: var(--muted);
   font-size: var(--text-sm);
 }
 
-.today-hero__reason {
+.today-next-up__reason {
   margin: 0;
   color: var(--muted);
-  font-size: var(--text-base);
-  line-height: var(--leading-base);
+  font-size: var(--text-md);
+  line-height: var(--leading-dense);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.today-hero__action {
+.today-next-up__action {
   flex: 0 0 auto;
 }
+
+/* -------------------------------------------------- collapsible lanes */
 
 .today__lanes {
   display: flex;
@@ -198,41 +179,48 @@
   background: var(--surface);
 }
 
-/* Empty lanes collapse to one quiet 28px line. */
-.today-lane--collapsed {
-  background: transparent;
-}
-
-.today-lane__collapsed-line {
-  display: flex;
-  align-items: center;
-  min-height: 28px;
+.today-lane__heading {
   margin: 0;
-  padding: 0 var(--space-4);
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  font-variant-numeric: tabular-nums;
 }
 
+/* 11px/600 lane titles + count (audit 4.4) on the disclosure header. */
 .today-lane__header {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-4);
-  border-bottom: 1px solid var(--line);
+  width: 100%;
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
 }
 
-.today-lane__heading {
-  margin: 0;
-  font-size: var(--text-md);
+.today-lane__header:focus-visible {
+  border-radius: var(--radius-sm);
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.today-lane__chevron {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.today-lane__title {
+  font-size: var(--text-micro);
+  line-height: var(--leading-micro);
   font-weight: var(--weight-heading);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .today-lane__count {
   min-width: 16px;
   padding: 0 5px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--surface-sunken);
   color: var(--muted);
   font-size: var(--text-xs);
@@ -245,15 +233,35 @@
   margin: 0;
   padding: 0;
   list-style: none;
+  border-top: 1px solid var(--line);
 }
 
-/* Dense two-line row; commands appear on hover and focus-within. */
+.today-lane__overflow {
+  margin: 0;
+  padding: var(--space-1) var(--space-4);
+  border-top: 1px solid var(--line);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* One quiet line naming every empty lane (audit 4.4). */
+.today__empty-lanes {
+  margin: 0;
+  padding: 0 var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  line-height: var(--leading-dense);
+}
+
+/* ------------------------------------------------------- queue rows */
+
 .today-row {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   min-height: var(--today-row-height);
-  padding: var(--space-1) var(--space-4);
+  padding: var(--space-1) var(--space-3);
 }
 
 .today-row + .today-row {
@@ -276,6 +284,12 @@
   box-shadow: var(--focus-ring);
   outline: none;
   border-radius: var(--radius-sm);
+}
+
+/* Keyboard focus mirrors hover: same sunken surface. */
+.today-row:focus,
+.today-row[data-focus-within="true"] {
+  background: var(--surface-sunken);
 }
 
 .today-row__body {
@@ -313,22 +327,26 @@
   text-overflow: ellipsis;
 }
 
-.today-row__stage-chip {
+/* One cloud chip max per row: machine-data grammar (hairline, no fill). */
+.today-row__cloud-chip {
   flex: 0 0 auto;
   padding: 0 var(--space-2);
-  border-radius: var(--radius-full);
-  background: var(--surface-sunken);
-  color: var(--muted);
+  border: 1px solid var(--machine-line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
   font-size: var(--text-xs);
   line-height: var(--leading-micro);
-  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
+/* 13px muted reason line (audit 4.4). */
 .today-row__reason {
   margin: 0;
   color: var(--muted);
-  font-size: var(--text-sm);
-  line-height: var(--leading-caption);
+  font-size: var(--text-md);
+  line-height: var(--leading-dense);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -339,6 +357,7 @@
    so focus-within works and row height stays stable. */
 .today-row__actions {
   display: flex;
+  align-items: center;
   flex: 0 0 auto;
   gap: var(--space-1);
   opacity: 0;
@@ -349,4 +368,289 @@
 .today-row:focus-within .today-row__actions,
 .today-row[data-focus-within="true"] .today-row__actions {
   opacity: 1;
+}
+
+/* --------------------------------------------- row context menu (4.4) */
+
+.today-row-menu {
+  position: relative;
+  display: flex;
+}
+
+.today-row-menu__popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  padding: var(--space-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-overlay), var(--inset-highlight);
+}
+
+.today-row-menu__item {
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--text-md);
+  text-align: left;
+}
+
+.today-row-menu__item:hover,
+.today-row-menu__item:focus-visible {
+  background: var(--surface-sunken);
+  outline: none;
+}
+
+.today-row-menu__item--confirm {
+  color: var(--accent-strong);
+  font-weight: var(--weight-medium);
+}
+
+.today-row-menu__date-label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.today-row-menu__date {
+  padding: 2px var(--space-1);
+  border: 1px solid var(--line-interactive);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--text-md);
+}
+
+/* ------------------------------------------------- queue-done (4.7) */
+
+.today-done {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-6) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  text-align: center;
+}
+
+.today-done__headline {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-comfortable);
+  font-weight: var(--weight-heading);
+  font-variant-numeric: tabular-nums;
+}
+
+.today-done__tomorrow {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-md);
+}
+
+/* --------------------------------------------------- triage mode (4.6) */
+
+.triage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  outline: none;
+}
+
+.triage__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.triage__counter {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.triage__progress {
+  flex: 1 1 auto;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+.triage__progress-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  transition: width var(--duration-hover) var(--ease-out);
+}
+
+.triage__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 640px;
+  width: 100%;
+  margin: 0 auto;
+  padding: var(--space-6);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow), var(--inset-highlight);
+}
+
+.triage__identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.triage__identity-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.triage__name {
+  margin: 0;
+  font-size: var(--text-subhead);
+  line-height: var(--leading-subhead);
+  font-weight: var(--weight-heading);
+}
+
+.triage__context {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.triage__cloud-chip {
+  flex: 0 0 auto;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--machine-line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.triage__signals {
+  margin: 0;
+  padding: 0 0 0 var(--space-4);
+  color: var(--text);
+  font-size: var(--text-md);
+  line-height: var(--leading-dense);
+}
+
+.triage__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin: 0;
+}
+
+.triage__facts dt {
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.triage__facts dd {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-md);
+}
+
+.triage__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.triage__dismiss {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* -------------------------------------------- shared small dialogs */
+
+.today-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--canvas) 55%, transparent);
+}
+
+.today-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: min(92vw, 440px);
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-overlay), var(--inset-highlight);
+}
+
+.today-dialog__title {
+  margin: 0;
+  font-size: var(--text-comfortable);
+  font-weight: var(--weight-heading);
+}
+
+.today-dialog__row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.today-dialog__date-label,
+.today-dialog__summary-label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.today-dialog__date,
+.today-dialog__summary {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line-interactive);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--text-md);
+}
+
+.today-dialog__summary {
+  resize: vertical;
+}
+
+.today-dialog__actions {
+  display: flex;
+  gap: var(--space-2);
 }

@@ -25,7 +25,7 @@ export type FounderAppProps = {
  */
 export function FounderApp({ api, health, initialRoute }: FounderAppProps) {
   return (
-    <LeadInspectorProvider api={api.leadDetail}>
+    <LeadInspectorProvider api={api.leadDetail} outcomeApi={api.today}>
       <FounderWorkspace api={api} health={health} initialRoute={initialRoute} />
     </LeadInspectorProvider>
   );

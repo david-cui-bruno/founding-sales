@@ -105,7 +105,11 @@ test('a large import stays out of Today: unreviewed leads are backlog only and t
     await page.getByRole('button', { name: 'Preview rows' }).click();
     await expect(page.getByText('60 rows ready')).toBeVisible();
     await page.getByRole('button', { name: 'Import 60 rows' }).click();
-    await page.getByRole('row', { name: /Cap Lead00/ }).waitFor();
+    // The grid is virtualized and priority-sorted with random-uuid ties, so
+    // any specific row may sit outside the rendered window; the header count
+    // is the deterministic import signal.
+    await page.getByRole('heading', { name: /Leads · 60 people/ }).waitFor();
+    await page.getByRole('row', { name: /Cap Lead/ }).first().waitFor();
 
     // The real snapshot through preload: zero queue rows, full backlog.
     const snapshot = await page.evaluate(() => window.callie.today.get());
@@ -117,9 +121,9 @@ test('a large import stays out of Today: unreviewed leads are backlog only and t
     expect(queuedRows).toBeLessThanOrEqual(snapshot.dialBudget);
     expect(snapshot.unreviewedBacklogCount).toBe(60);
 
-    // Today renders the backlog as one band, never as rows.
+    // Today renders the backlog as one card, never as rows.
     await page.getByRole('link', { name: 'Today' }).click();
-    await expect(page.getByText('Unreviewed backlog · 60')).toBeVisible();
+    await expect(page.getByText('60 unreviewed leads')).toBeVisible();
     await expect(page.locator('.today-row')).toHaveCount(0);
   } finally {
     await workspace.close();

@@ -1,10 +1,11 @@
-import { Check, Clock, Pin } from 'lucide-react';
+import { Phone } from 'lucide-react';
 import { useState, type FocusEvent, type RefCallback } from 'react';
 
 import type { TodayItem } from '../../../shared/contracts/todayContract';
-import { humanizeEnumLabel, titleCaseDisplayName } from '../../../shared/displayText';
+import { titleCaseDisplayName } from '../../../shared/displayText';
 import { IconButton } from '../../components/IconButton';
-import { StatusPill } from '../../components/StatusPill';
+import { formatCloudChip } from '../leads/cloudSignalLabels';
+import { RowContextMenu } from './RowContextMenu';
 import { reasonLineFor } from './rowText';
 
 export type TodayQueueRowProps = {
@@ -13,32 +14,31 @@ export type TodayQueueRowProps = {
   /** Roving tabindex: exactly one row in the queue is tab-reachable. */
   tabbable: boolean;
   rowRef: RefCallback<HTMLLIElement>;
-  /** Lane-local row above, or null when this row is already first. */
-  pinComparedSalesCycleId: string | null;
-  /** Lane-local row below, or null when this row is already last. */
   onOpenLead(personId: string): void;
-  onComplete(item: TodayItem): void;
-  onSnooze(item: TodayItem): void;
-  onPin(item: TodayItem, comparedSalesCycleId: string): void;
+  onCall(item: TodayItem): void;
+  onSnoozeUntil(item: TodayItem, resurfaceAt: string): void;
+  onSkipToday(item: TodayItem): void;
+  onLogPastActivity(item: TodayItem): void;
+  onOpenInLeads(item: TodayItem): void;
 };
 
 /**
- * One dense two-line queue row. Line 1: who (Title Case) plus a quiet stage
- * chip; line 2: the humanized reason with a relative due time. Done/Snooze/
- * Pin are icon commands revealed on hover and focus-within; E/H/P work while
- * the row holds focus (handled by the lane container). Pin and snooze stay
- * lane-local pairwise commands.
+ * One dense two-line queue row (audit 4.4). Line 1: who (Title Case,
+ * semibold) plus at most one cloud chip; line 2: the humanized reason.
+ * Hover and keyboard focus reveal exactly two commands: Call and the "···"
+ * context menu. Enter calls; S snoozes; X skips (handled by the page).
  */
 export function TodayQueueRow({
   item,
   busy,
   tabbable,
   rowRef,
-  pinComparedSalesCycleId,
   onOpenLead,
-  onComplete,
-  onSnooze,
-  onPin,
+  onCall,
+  onSnoozeUntil,
+  onSkipToday,
+  onLogPastActivity,
+  onOpenInLeads,
 }: TodayQueueRowProps) {
   const [focusWithin, setFocusWithin] = useState(false);
 
@@ -72,36 +72,29 @@ export function TodayQueueRow({
           {item.contextLabel !== null && (
             <span className="today-row__context">{item.contextLabel}</span>
           )}
-          <span className="today-row__stage-chip">
-            {humanizeEnumLabel(item.stage)}
-          </span>
-          {item.pinned && <StatusPill>Pinned</StatusPill>}
-          {item.verifyFirst && <StatusPill tone="urgent">Verify first</StatusPill>}
+          {item.cloudScores !== null && (
+            <span className="today-row__cloud-chip">
+              {formatCloudChip(item.cloudScores)}
+            </span>
+          )}
         </div>
         <p className="today-row__reason">{reasonLineFor(item)}</p>
       </div>
       <div className="today-row__actions">
         <IconButton
-          label="Complete · E"
-          icon={Check}
+          label={`Call ${titleCaseDisplayName(item.personName)}`}
+          icon={Phone}
           disabled={busy}
-          onClick={() => onComplete(item)}
+          onClick={() => onCall(item)}
         />
-        <IconButton
-          label="Snooze · H"
-          icon={Clock}
-          disabled={busy}
-          onClick={() => onSnooze(item)}
-        />
-        <IconButton
-          label="Pin · P"
-          icon={Pin}
-          disabled={busy || pinComparedSalesCycleId === null}
-          onClick={() => {
-            if (pinComparedSalesCycleId !== null) {
-              onPin(item, pinComparedSalesCycleId);
-            }
-          }}
+        <RowContextMenu
+          item={item}
+          busy={busy}
+          onCall={onCall}
+          onSnoozeUntil={onSnoozeUntil}
+          onSkipToday={onSkipToday}
+          onLogPastActivity={onLogPastActivity}
+          onOpenInLeads={onOpenInLeads}
         />
       </div>
     </li>

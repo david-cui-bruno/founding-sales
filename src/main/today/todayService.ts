@@ -6,8 +6,10 @@ import type {
   LogPastActivityRequest,
   MarkActivityInErrorRequest,
   PinActionRequest,
+  SetReviewPositionRequest,
   SnoozeActionRequest,
   TodaySnapshot,
+  TriageQueue,
 } from '../../shared/contracts/todayContract';
 
 /**
@@ -25,6 +27,8 @@ export type TodayProvider = {
   addLeadNote(input: AddLeadNoteRequest): Promise<MutationReceipt>;
   logCallOutcome(input: LogCallOutcomeRequest): Promise<MutationReceipt>;
   markActivityInError(input: MarkActivityInErrorRequest): Promise<MutationReceipt>;
+  getTriageQueue(): Promise<TriageQueue>;
+  setReviewPosition(input: SetReviewPositionRequest): Promise<MutationReceipt>;
 };
 
 /** The domain facade methods the Today slice consumes. */
@@ -37,6 +41,8 @@ export type TodayDomainInvoker = {
   addLeadNote(input: AddLeadNoteRequest): MutationReceipt;
   logCallOutcome(input: LogCallOutcomeRequest): MutationReceipt;
   markActivityInError(input: MarkActivityInErrorRequest): MutationReceipt;
+  getTriageQueue(): TriageQueue | Promise<TriageQueue>;
+  setReviewPosition(input: SetReviewPositionRequest): MutationReceipt;
 };
 
 /**
@@ -53,5 +59,7 @@ export function createTodayProvider(domain: TodayDomainInvoker): TodayProvider {
     addLeadNote: async (input) => domain.addLeadNote(input),
     logCallOutcome: async (input) => domain.logCallOutcome(input),
     markActivityInError: async (input) => domain.markActivityInError(input),
+    getTriageQueue: async () => domain.getTriageQueue(),
+    setReviewPosition: async (input) => domain.setReviewPosition(input),
   };
 }

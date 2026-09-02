@@ -8,9 +8,9 @@ import type { MutationReceipt } from '../../../shared/contracts/commonContract';
 import type {
   TodayItem,
   TodaySnapshot,
+  TriageQueue,
 } from '../../../shared/contracts/todayContract';
-import type { TodayApi } from '../../../preload/apis/todayApi';
-import { TodayRoute } from './TodayRoute';
+import { TodayRoute, type TodayLeadCommandApi, type TodayRouteApi } from './TodayRoute';
 
 afterEach(() => {
   cleanup();
@@ -44,6 +44,7 @@ const item = (overrides: Partial<TodayItem> = {}): TodayItem => ({
   verifyFirst: false,
   pinned: false,
   consentRequirement: null,
+  cloudScores: null,
   ...overrides,
 });
 
@@ -62,6 +63,8 @@ const snapshot = (revision: number, items: TodayItem[]): TodaySnapshot => ({
   conversationTarget: 5,
   reviewErrorCount: 0,
   unreviewedBacklogCount: 0,
+  unreviewedCloudSignalCount: 0,
+  conversationsHeld: 0,
   revision,
 });
 
@@ -71,7 +74,26 @@ const receipt: MutationReceipt = {
   affectedSalesCycleIds: ['cycle-p1'],
 };
 
-function fakeApi(overrides: Partial<TodayApi> = {}): TodayApi {
+const triageQueue = (
+  names: string[],
+  position = 0,
+): TriageQueue => ({
+  items: names.map((name, index): TriageQueue['items'][number] => ({
+    personId: `person-t${index}`,
+    salesCycleId: `cycle-t${index}`,
+    personName: name,
+    contextLabel: null,
+    propertySummary: null,
+    phone: null,
+    email: null,
+    cloudScores: null,
+    cloudSignals: [],
+  })),
+  position,
+  revision: 1,
+});
+
+function fakeApi(overrides: Partial<TodayRouteApi> = {}): TodayRouteApi {
   return {
     get: vi.fn(async () => snapshot(1, [
       item(),
@@ -92,11 +114,20 @@ function fakeApi(overrides: Partial<TodayApi> = {}): TodayApi {
     snooze: vi.fn(async () => receipt),
     pin: vi.fn(async () => receipt),
     logPastActivity: vi.fn(async () => receipt),
-    addLeadNote: vi.fn(async () => receipt),
-    logCallOutcome: vi.fn(async () => receipt),
-    markActivityInError: vi.fn(async () => receipt),
+    getTriageQueue: vi.fn(async () => triageQueue(['Cap Lead One', 'Cap Lead Two'])),
+    setReviewPosition: vi.fn(async () => receipt),
     ...overrides,
-  } as TodayApi;
+  } as TodayRouteApi;
+}
+
+function fakeLeadApi(overrides: Partial<TodayLeadCommandApi> = {}): TodayLeadCommandApi {
+  return {
+    beginOutbound: vi.fn(async () => receipt),
+    confirmTransition: vi.fn(async () => receipt),
+    dismissLead: vi.fn(async () => receipt),
+    get: vi.fn(async () => ({ revision: 0, phones: [{ id: 'phone-1' }] })),
+    ...overrides,
+  } as TodayLeadCommandApi;
 }
 
 describe('TodayRoute', () => {
@@ -114,11 +145,40 @@ describe('TodayRoute', () => {
     expect(await screen.findByText('Avery Landlord')).toBeTruthy();
   });
 
+  it('renders the header dial meter and the muted date, with no visible Refresh', async () => {
+    const api = fakeApi();
+    render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+    await screen.findByText('Avery Landlord');
+
+    const meter = screen.getByRole('progressbar', { name: 'Dial budget' });
+    expect(meter.getAttribute('aria-valuenow')).toBe('2');
+    expect(meter.getAttribute('aria-valuemax')).toBe('40');
+    expect(screen.getByText('2 of 40 dials')).toBeTruthy();
+    // No visible Refresh control; the manual path is visually hidden.
+    const refresh = screen.getByTestId('today-refresh');
+    expect(refresh.className).toContain('visually-hidden');
+  });
+
+  it('refetches on window focus', async () => {
+    const api = fakeApi();
+    render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+    await screen.findByText('Avery Landlord');
+    const fetchesBefore = (api.get as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    fireEvent(window, new Event('focus'));
+
+    await waitFor(() => {
+      expect(
+        (api.get as ReturnType<typeof vi.fn>).mock.calls.length,
+      ).toBeGreaterThan(fetchesBefore);
+    });
+  });
+
   it('shows a retryable error state without raw error details', async () => {
     const failing = vi.fn(async () => {
       throw new Error('SQLITE_IOERR at /private/tmp/callie.sqlite3');
     });
-    const api = fakeApi({ get: failing as unknown as TodayApi['get'] });
+    const api = fakeApi({ get: failing as unknown as TodayRouteApi['get'] });
     render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
 
     expect(await screen.findByRole('alert')).toBeTruthy();
@@ -129,60 +189,153 @@ describe('TodayRoute', () => {
     expect(await screen.findByText('Avery Landlord')).toBeTruthy();
   });
 
-  it('does not let pin move a row across lanes', async () => {
+  it('logs the call and opens the lead page from the Next up Call button', async () => {
+    const api = fakeApi();
+    const leadApi = fakeLeadApi();
+    const onOpenLeadPage = vi.fn();
+    render(
+      <TodayRoute
+        api={api}
+        leadApi={leadApi}
+        onOpenLead={vi.fn()}
+        onOpenLeadPage={onOpenLeadPage}
+      />,
+    );
+    await screen.findByText('Avery Landlord');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Call' }));
+
+    await waitFor(() => expect(leadApi.beginOutbound).toHaveBeenCalledTimes(1));
+    expect(leadApi.beginOutbound).toHaveBeenCalledWith({
+      channel: 'call',
+      personId: 'person-p1',
+      salesCycleId: 'cycle-p1',
+      contactMethodId: 'phone-1',
+    });
+    await waitFor(() => expect(onOpenLeadPage).toHaveBeenCalledWith('person-p1'));
+  });
+
+  it('writes resurface_at through snooze from the S key', async () => {
     const api = fakeApi();
     render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
     await screen.findByText('Blake Owner');
 
-    // Avery is promoted to the Next up hero; Blake is the lane row whose
-    // pin comparison is still the lane-local row above (Avery).
-    const pins = screen.getAllByRole('button', { name: 'Pin · P' });
-    fireEvent.click(pins[0]!);
+    const row = document.querySelector('[data-cycle-id="cycle-p1-b"]') as HTMLElement;
+    row.focus();
+    fireEvent.keyDown(row, { key: 's' });
 
-    await waitFor(() => expect(api.pin).toHaveBeenCalledTimes(1));
-    expect(api.pin).toHaveBeenCalledWith({
+    await waitFor(() => expect(api.snooze).toHaveBeenCalledTimes(1));
+    expect(api.snooze).toHaveBeenCalledWith({
       salesCycleId: 'cycle-p1-b',
-      reason: 'Keep at the top of its lane',
-      expiresAt: expect.any(String),
-      comparedSalesCycleId: 'cycle-p1',
+      resurfaceAt: expect.any(String),
     });
   });
 
-  it('navigates to Leads from the unreviewed backlog band', async () => {
+  it('enters triage from the backlog card, decides with keys, and resumes position', async () => {
     const api = fakeApi({
       get: vi.fn(async () => ({
         ...snapshot(1, [item()]),
-        unreviewedBacklogCount: 354,
-      })) as unknown as TodayApi['get'],
+        unreviewedBacklogCount: 2,
+        unreviewedCloudSignalCount: 1,
+      })) as unknown as TodayRouteApi['get'],
     });
-    render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
-    await screen.findByText('Unreviewed backlog · 354');
+    const leadApi = fakeLeadApi();
+    render(<TodayRoute api={api} leadApi={leadApi} onOpenLead={vi.fn()} />);
+    await screen.findByText('2 unreviewed leads');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Review in Leads' }));
-    expect(window.location.hash).toBe('#/leads');
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    expect(await screen.findByText('Reviewing 1 of 2')).toBeTruthy();
+    expect(screen.getByText('Cap Lead One')).toBeTruthy();
+
+    // 1 = Ready: the confirm-ready transition plus a persisted position.
+    (api.getTriageQueue as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      triageQueue(['Cap Lead Two'], 1),
+    );
+    fireEvent.keyDown(screen.getByRole('region', { name: 'Review unreviewed leads' }), {
+      key: '1',
+    });
+    await waitFor(() => expect(leadApi.confirmTransition).toHaveBeenCalledTimes(1));
+    expect(leadApi.confirmTransition).toHaveBeenCalledWith({
+      transition: 'review_to_ready',
+      salesCycleId: 'cycle-t0',
+      expectedRevision: 0,
+    });
+    await waitFor(() => expect(api.setReviewPosition).toHaveBeenCalledWith({ position: 1 }));
+    expect(await screen.findByText('Reviewing 2 of 2')).toBeTruthy();
   });
 
-  it('refetches after a successful complete receipt', async () => {
-    const api = fakeApi();
-    render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
-    await screen.findByText('Avery Landlord');
-    expect(api.get).toHaveBeenCalled();
-    const fetchesBefore = (api.get as ReturnType<typeof vi.fn>).mock.calls.length;
-
-    fireEvent.click(screen.getAllByRole('button', { name: 'Done' })[0]!);
-
-    await waitFor(() => expect(api.complete).toHaveBeenCalledTimes(1));
-    expect(api.complete).toHaveBeenCalledWith({
-      salesCycleId: 'cycle-p1',
-      actionId: 'action-p1',
-      outcome: 'answered',
-      activityId: null,
+  it('2 = Later snoozes the triage lead 30 days out', async () => {
+    const api = fakeApi({
+      get: vi.fn(async () => ({
+        ...snapshot(1, [item()]),
+        unreviewedBacklogCount: 2,
+      })) as unknown as TodayRouteApi['get'],
     });
-    await waitFor(() => {
-      expect(
-        (api.get as ReturnType<typeof vi.fn>).mock.calls.length,
-      ).toBeGreaterThan(fetchesBefore);
+    const leadApi = fakeLeadApi();
+    render(<TodayRoute api={api} leadApi={leadApi} onOpenLead={vi.fn()} />);
+    await screen.findByText('2 unreviewed leads');
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    await screen.findByText('Reviewing 1 of 2');
+
+    fireEvent.keyDown(screen.getByRole('region', { name: 'Review unreviewed leads' }), {
+      key: '2',
     });
+
+    await waitFor(() => expect(api.snooze).toHaveBeenCalledTimes(1));
+    const request = (api.snooze as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(request.salesCycleId).toBe('cycle-t0');
+    const days = (Date.parse(request.resurfaceAt) - Date.now()) / 86_400_000;
+    expect(days).toBeGreaterThan(29);
+    expect(days).toBeLessThan(31);
+  });
+
+  it('3 = Not a fit requires a dismissal reason through the Select', async () => {
+    const api = fakeApi({
+      get: vi.fn(async () => ({
+        ...snapshot(1, [item()]),
+        unreviewedBacklogCount: 2,
+      })) as unknown as TodayRouteApi['get'],
+    });
+    const leadApi = fakeLeadApi();
+    render(<TodayRoute api={api} leadApi={leadApi} onOpenLead={vi.fn()} />);
+    await screen.findByText('2 unreviewed leads');
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    await screen.findByText('Reviewing 1 of 2');
+
+    fireEvent.keyDown(screen.getByRole('region', { name: 'Review unreviewed leads' }), {
+      key: '3',
+    });
+    // Nothing is dismissed until the reason is confirmed.
+    expect(leadApi.dismissLead).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm dismiss' }));
+
+    await waitFor(() => expect(leadApi.dismissLead).toHaveBeenCalledTimes(1));
+    expect(leadApi.dismissLead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        salesCycleId: 'cycle-t0',
+        qualificationGateReason: 'out_of_area',
+      }),
+    );
+  });
+
+  it('Esc exits triage back to the queue', async () => {
+    const api = fakeApi({
+      get: vi.fn(async () => ({
+        ...snapshot(1, [item()]),
+        unreviewedBacklogCount: 2,
+      })) as unknown as TodayRouteApi['get'],
+    });
+    render(<TodayRoute api={api} leadApi={fakeLeadApi()} onOpenLead={vi.fn()} />);
+    await screen.findByText('2 unreviewed leads');
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    await screen.findByText('Reviewing 1 of 2');
+
+    fireEvent.keyDown(screen.getByRole('region', { name: 'Review unreviewed leads' }), {
+      key: 'Escape',
+    });
+
+    expect(await screen.findByText('Avery Landlord')).toBeTruthy();
+    expect(screen.queryByText(/Reviewing/)).toBeNull();
   });
 
   it('ignores a stale snapshot that resolves after a newer fetch', async () => {
@@ -196,12 +349,12 @@ describe('TodayRoute', () => {
         call += 1;
         if (call === 1) return stale;
         return Promise.resolve(snapshot(9, [item({ personName: 'Fresh Person' })]));
-      }) as unknown as TodayApi['get'],
+      }) as unknown as TodayRouteApi['get'],
     });
     render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
 
     await waitFor(() => expect(call).toBeGreaterThanOrEqual(1));
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    fireEvent.click(screen.getByTestId('today-refresh'));
     expect(await screen.findByText('Fresh Person')).toBeTruthy();
 
     releaseStale(snapshot(1, [item({ personName: 'Stale Person' })]));
@@ -211,14 +364,16 @@ describe('TodayRoute', () => {
 
   it('surfaces a safe command error and keeps the queue visible', async () => {
     const api = fakeApi({
-      complete: vi.fn(async () => {
+      snooze: vi.fn(async () => {
         throw new Error('opted_out person: raw tombstone id 123');
-      }) as unknown as TodayApi['complete'],
+      }) as unknown as TodayRouteApi['snooze'],
     });
     render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
     await screen.findByText('Avery Landlord');
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Done' })[0]!);
+    const row = document.querySelector('[data-cycle-id="cycle-p1"]') as HTMLElement;
+    row.focus();
+    fireEvent.keyDown(row, { key: 's' });
 
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.queryByText(/tombstone/)).toBeNull();

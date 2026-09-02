@@ -6,14 +6,17 @@ import {
   logPastActivityRequestSchema,
   markActivityInErrorRequestSchema,
   pinActionRequestSchema,
+  setReviewPositionRequestSchema,
   snoozeActionRequestSchema,
   todaySnapshotSchema,
+  triageQueueSchema,
   type AddLeadNoteRequest,
   type CompleteActionRequest,
   type LogCallOutcomeRequest,
   type LogPastActivityRequest,
   type MarkActivityInErrorRequest,
   type PinActionRequest,
+  type SetReviewPositionRequest,
   type SnoozeActionRequest,
 } from '../../shared/contracts/todayContract';
 import type { IpcClient } from '../ipcClient';
@@ -67,6 +70,15 @@ export const createTodayApi = (client: IpcClient) => ({
     client.request(
       'today:mark-activity-in-error',
       markActivityInErrorRequestSchema,
+      mutationReceiptSchema,
+      input,
+    ),
+  getTriageQueue: () =>
+    client.requestNoInput('today:get-triage-queue', triageQueueSchema),
+  setReviewPosition: (input: SetReviewPositionRequest) =>
+    client.request(
+      'today:set-review-position',
+      setReviewPositionRequestSchema,
       mutationReceiptSchema,
       input,
     ),

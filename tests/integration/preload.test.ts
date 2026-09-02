@@ -91,8 +91,8 @@ describe('preload workflow bridge', () => {
       'beginOutbound', 'confirmTransition', 'dismissLead', 'get', 'overrideCloudScore',
     ]);
     expect(Object.keys(api.today).sort()).toEqual([
-      'addLeadNote', 'complete', 'get', 'logCallOutcome', 'logPastActivity',
-      'markActivityInError', 'pin', 'snooze',
+      'addLeadNote', 'complete', 'get', 'getTriageQueue', 'logCallOutcome',
+      'logPastActivity', 'markActivityInError', 'pin', 'setReviewPosition', 'snooze',
     ]);
     expect(Object.keys(api.pipeline)).toEqual(['get']);
     expect(Object.keys(api.review).sort()).toEqual(['list', 'resolve']);

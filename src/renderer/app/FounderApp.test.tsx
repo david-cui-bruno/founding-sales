@@ -60,6 +60,7 @@ const todaySnapshot: TodaySnapshot = {
           verifyFirst: false,
           pinned: false,
           consentRequirement: null,
+          cloudScores: null,
         },
       ],
       overflowCount: 0,
@@ -70,6 +71,8 @@ const todaySnapshot: TodaySnapshot = {
   conversationTarget: 5,
   reviewErrorCount: 0,
   unreviewedBacklogCount: 0,
+  unreviewedCloudSignalCount: 0,
+  conversationsHeld: 0,
   revision: 0,
 };
 

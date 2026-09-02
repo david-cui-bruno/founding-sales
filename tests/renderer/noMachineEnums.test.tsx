@@ -70,6 +70,7 @@ const todaySnapshot: TodaySnapshot = {
           verifyFirst: false,
           pinned: false,
           consentRequirement: null,
+          cloudScores: null,
         },
       ],
       overflowCount: 3,
@@ -84,6 +85,8 @@ const todaySnapshot: TodaySnapshot = {
   conversationTarget: 5,
   reviewErrorCount: 0,
   unreviewedBacklogCount: 4,
+  unreviewedCloudSignalCount: 0,
+  conversationsHeld: 0,
   revision: 1,
 };
 
@@ -162,10 +165,12 @@ describe('no raw machine enums in rendered output', () => {
       <TodayPage
         snapshot={todaySnapshot}
         onOpenLead={vi.fn()}
-        onComplete={vi.fn()}
-        onSnooze={vi.fn()}
-        onPin={vi.fn()}
-        onReviewBacklog={vi.fn()}
+        onCall={vi.fn()}
+        onSnoozeUntil={vi.fn()}
+        onSkipToday={vi.fn()}
+        onLogPastActivity={vi.fn()}
+        onOpenInLeads={vi.fn()}
+        onStartTriage={vi.fn()}
       />,
     );
     expect(snakeCaseLeaks(container)).toEqual([]);

@@ -31,7 +31,13 @@ export type RouteContext = {
 export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
   switch (route) {
     case 'today':
-      return <TodayRoute api={context.api.today} onOpenLead={context.openLead} />;
+      return (
+        <TodayRoute
+          api={context.api.today}
+          leadApi={context.api.leadDetail}
+          onOpenLead={context.openLead}
+        />
+      );
     case 'leads':
       return (
         <LeadsRoute

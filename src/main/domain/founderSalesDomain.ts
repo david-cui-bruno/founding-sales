@@ -41,18 +41,22 @@ import {
   logPastActivityRequestSchema,
   markActivityInErrorRequestSchema,
   pinActionRequestSchema,
+  setReviewPositionRequestSchema,
   snoozeActionRequestSchema,
   todaySnapshotSchema,
+  triageQueueSchema,
   type AddLeadNoteRequest,
   type CompleteActionRequest,
   type LogCallOutcomeRequest,
   type LogPastActivityRequest,
   type MarkActivityInErrorRequest,
   type PinActionRequest,
+  type SetReviewPositionRequest,
   type SnoozeActionRequest,
   type TodayItem as TodayItemDto,
   type TodayLaneId,
   type TodaySnapshot,
+  type TriageQueue,
 } from '../../shared/contracts/todayContract';
 import {
   pipelineSnapshotSchema,
@@ -143,6 +147,7 @@ import { normalizeEmail, normalizePhone } from './source/sourceService';
 import type { Clock } from './support/clock';
 import type { IdGenerator } from './support/idGenerator';
 import type { TodayItem, TodayLane } from './today/todayTypes';
+import { resolveLocalDayInterval } from './today/todayOrdering';
 
 export const FOUNDER_JOB_REQUEST_TYPE = 'founder_job_request_v1' as const;
 export const LEAD_IMPORT_JOB_TYPE = 'lead_import_v1' as const;
@@ -903,10 +908,12 @@ export class FounderSalesDomain {
     const cycleIds = queue.lanes.flatMap(({ items }) => items.map((item) => item.cycleId));
     const context = new Map<string, {
       display_name: string; stage: LeadRow['stage']; organization_name: string | null;
+      cloud_fit: number | null; cloud_timing: number | null;
     }>();
     for (const cycleId of cycleIds) {
       const row = this.database.raw.prepare(`
         SELECT person.display_name, cycle.stage,
+          prospect.cloud_fit, prospect.cloud_timing,
           (
             SELECT canonical_name FROM prospect_organizations AS link
             JOIN organizations AS org ON org.id = link.organization_id
@@ -915,9 +922,11 @@ export class FounderSalesDomain {
           ) AS organization_name
         FROM sales_cycles AS cycle
         JOIN persons AS person ON person.id = cycle.person_id
+        JOIN prospects AS prospect ON prospect.id = cycle.prospect_id
         WHERE cycle.id = ?
       `).get(cycleId) as {
         display_name: string; stage: LeadRow['stage']; organization_name: string | null;
+        cloud_fit: number | null; cloud_timing: number | null;
       } | undefined;
       if (row !== undefined) context.set(cycleId, row);
     }
@@ -968,6 +977,9 @@ export class FounderSalesDomain {
         verifyFirst: item.verifyFirst ?? false,
         pinned: item.pinned,
         consentRequirement: null,
+        cloudScores: row.cloud_fit === null || row.cloud_timing === null
+          ? null
+          : { fit: row.cloud_fit, timing: row.cloud_timing },
       };
     };
     const lanes = queue.lanes.map(({ lane, items, overflowCount }) => ({
@@ -977,6 +989,26 @@ export class FounderSalesDomain {
         .filter((item): item is TodayItemDto => item !== null),
       overflowCount,
     }));
+    // Backlog copy (audit 4.5): how many unreviewed leads carry cloud signal.
+    const cloudSignalCount = (this.database.raw.prepare(`
+      SELECT COUNT(*) AS count
+      FROM sales_cycles AS cycle
+      JOIN persons AS person ON person.id = cycle.person_id
+      JOIN prospects AS prospect ON prospect.id = cycle.prospect_id
+      WHERE cycle.stage = 'unreviewed' AND cycle.workflow_status = 'active'
+        AND person.opted_out = 0 AND person.deleted_at IS NULL
+        AND prospect.cloud_fit IS NOT NULL AND prospect.cloud_timing IS NOT NULL
+    `).get() as { count: number }).count;
+    // Queue-done copy (audit 4.7): real conversations logged in this local day.
+    const dayInterval = resolveLocalDayInterval({
+      generatedAt: this.clock.now(), timezone,
+    });
+    const conversationsHeld = (this.database.raw.prepare(`
+      SELECT COUNT(*) AS count FROM activities
+      WHERE kind = 'call' AND direction = 'outbound'
+        AND call_outcome IN ('spoke', 'interview_booked')
+        AND occurred_at >= ? AND occurred_at < ?
+    `).get(dayInterval.localDayStartAt, dayInterval.localDayEndAt) as { count: number }).count;
     return todaySnapshotSchema.parse({
       lanes,
       dialBudget: capacity.dialBudget,
@@ -984,7 +1016,111 @@ export class FounderSalesDomain {
       conversationTarget: capacity.conversationTarget,
       reviewErrorCount: queue.diagnostics.length,
       unreviewedBacklogCount: queue.unreviewedBacklogCount,
+      unreviewedCloudSignalCount: cloudSignalCount,
+      conversationsHeld,
       revision: this.currentRevision(),
+    });
+  }
+
+  /**
+   * The triage queue (audit 4.6): unreviewed cycles in stable id order with
+   * the persisted resume position. Leads deferred to a future resurface_at
+   * are excluded, so "Later" removes a lead from this pass entirely.
+   */
+  getTriageQueue(): TriageQueue {
+    const now = this.clock.now();
+    const rows = this.database.raw.prepare(`
+      SELECT
+        cycle.id AS cycle_id, cycle.person_id, person.display_name,
+        prospect.cloud_fit, prospect.cloud_timing, prospect.cloud_score_reasons_json,
+        (
+          SELECT canonical_name FROM prospect_organizations AS link
+          JOIN organizations AS org ON org.id = link.organization_id
+          WHERE link.prospect_id = cycle.prospect_id
+          ORDER BY org.id ASC LIMIT 1
+        ) AS organization_name,
+        (
+          SELECT property.address_line_1 || ', ' || property.locality
+          FROM prospect_properties AS link
+          JOIN properties AS property ON property.id = link.property_id
+          WHERE link.prospect_id = cycle.prospect_id
+          ORDER BY property.id ASC LIMIT 1
+        ) AS property_summary,
+        (
+          SELECT COALESCE(raw_value, normalized_value) FROM person_contact_methods
+          WHERE person_id = cycle.person_id AND kind = 'phone'
+          ORDER BY is_primary DESC, id ASC LIMIT 1
+        ) AS phone,
+        (
+          SELECT COALESCE(raw_value, normalized_value) FROM person_contact_methods
+          WHERE person_id = cycle.person_id AND kind = 'email'
+          ORDER BY is_primary DESC, id ASC LIMIT 1
+        ) AS email
+      FROM sales_cycles AS cycle
+      JOIN persons AS person ON person.id = cycle.person_id
+      JOIN prospects AS prospect ON prospect.id = cycle.prospect_id
+      WHERE cycle.stage = 'unreviewed' AND cycle.workflow_status = 'active'
+        AND person.opted_out = 0 AND person.deleted_at IS NULL
+        AND (cycle.resurface_at IS NULL OR cycle.resurface_at <= ?)
+      ORDER BY cycle.id COLLATE BINARY
+    `).all(now) as Array<{
+      cycle_id: string; person_id: string; display_name: string;
+      cloud_fit: number | null; cloud_timing: number | null;
+      cloud_score_reasons_json: string | null;
+      organization_name: string | null; property_summary: string | null;
+      phone: string | null; email: string | null;
+    }>;
+    const positionRow = this.database.raw.prepare(
+      'SELECT position FROM review_position WHERE singleton = 1',
+    ).get() as { position: number } | undefined;
+    const storedPosition = positionRow?.position ?? 0;
+    // `position` counts decisions already made this pass, so it may exceed
+    // the remaining row count. An emptied queue starts the next pass at 0.
+    const position = rows.length === 0 ? 0 : storedPosition;
+    const signalsOf = (json: string | null): string[] => {
+      if (json === null) return [];
+      try {
+        const parsed = JSON.parse(json) as Array<{ signal?: unknown }>;
+        if (!Array.isArray(parsed)) return [];
+        return parsed
+          .map((entry) => entry.signal)
+          .filter((signal): signal is string => typeof signal === 'string')
+          .slice(0, 3);
+      } catch {
+        return [];
+      }
+    };
+    return triageQueueSchema.parse({
+      items: rows.map((row) => ({
+        personId: row.person_id,
+        salesCycleId: row.cycle_id,
+        personName: row.display_name,
+        contextLabel: row.organization_name,
+        propertySummary: row.property_summary,
+        phone: row.phone,
+        email: row.email,
+        cloudScores: row.cloud_fit === null || row.cloud_timing === null
+          ? null
+          : { fit: row.cloud_fit, timing: row.cloud_timing },
+        cloudSignals: signalsOf(row.cloud_score_reasons_json),
+      })),
+      position,
+      revision: this.currentRevision(),
+    });
+  }
+
+  /** CAS-free single-row write: the resume marker is founder UI state. */
+  setReviewPosition(input: SetReviewPositionRequest): MutationReceipt {
+    const request = setReviewPositionRequestSchema.parse(input);
+    const now = this.clock.now();
+    return this.services.unitOfWork.immediate(() => {
+      const changed = this.database.raw.prepare(`
+        UPDATE review_position SET position = ?, updated_at = ? WHERE singleton = 1
+      `).run(request.position, now);
+      if (changed.changes !== 1) {
+        throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The review position row is missing.');
+      }
+      return this.receipt([], []);
     });
   }
 

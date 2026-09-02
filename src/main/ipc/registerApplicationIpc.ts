@@ -105,6 +105,10 @@ export function createTodayProvider(runtime: DomainGate): TodayProvider {
       runtime.withDomain((domain) => domain.logCallOutcome(input)),
     markActivityInError: (input) =>
       runtime.withDomain((domain) => domain.markActivityInError(input)),
+    getTriageQueue: () =>
+      runtime.withDomain((domain) => domain.getTriageQueue()),
+    setReviewPosition: (input) =>
+      runtime.withDomain((domain) => domain.setReviewPosition(input)),
   };
 }
 
