@@ -58,25 +58,44 @@ export type MetricCardProps = {
 
 /**
  * One scoreboard tile. It becomes a drilldown button only when the domain
- * reports drilldown evidence; otherwise it stays a static surface.
+ * reports drilldown evidence; otherwise it stays a static surface. Metrics
+ * with no evidence render a quiet "No data yet" instead of an em dash, and a
+ * prior-week delta appears only when the domain could compute one.
  */
 export function MetricCard({ metric, onOpenMetric }: MetricCardProps) {
   const evidence = formatMetricEvidence(metric);
   const target = formatMetricTarget(metric);
   const delta = formatPriorDelta(metric);
+  const hasValue = metric.displayValue !== '—';
+  const deltaDirection = metric.priorDelta === null || metric.priorDelta === 0
+    ? null
+    : metric.priorDelta > 0 ? 'up' as const : 'down' as const;
 
   const body = (
     <>
       <span className="metric-card__label">{metric.label}</span>
-      <span className="metric-card__value">{metric.displayValue}</span>
+      {hasValue
+        ? <span className="metric-card__value numeric">{metric.displayValue}</span>
+        : <span className="metric-card__empty">No data yet</span>}
       {evidence !== null && (
-        <span className="metric-card__evidence">{evidence}</span>
+        <span className="metric-card__evidence numeric">{evidence}</span>
       )}
       {target !== null && (
         <span className="metric-card__target">Target {target}</span>
       )}
       {delta !== null && (
-        <span className="metric-card__delta">{delta} vs prior week</span>
+        deltaDirection !== null ? (
+          <span
+            className={`metric-card__delta metric-card__delta--${deltaDirection}`}
+          >
+            <span aria-hidden="true" className="metric-card__delta-arrow">
+              {deltaDirection === 'up' ? '▲' : '▼'}
+            </span>
+            {` ${delta} vs prior week`}
+          </span>
+        ) : (
+          <span className="metric-card__delta">No change vs prior week</span>
+        )
       )}
     </>
   );

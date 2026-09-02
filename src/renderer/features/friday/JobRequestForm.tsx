@@ -9,9 +9,9 @@ import type {
 import { Button } from '../../components/Button';
 import { StatusPill } from '../../components/StatusPill';
 
+// Local-time display; the strict ISO timestamp lives in the contract.
 const accepted = new Intl.DateTimeFormat('en-US', {
   month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-  timeZone: 'UTC',
 });
 
 const statusLabel: Record<JobRequest['status'], string> = {
@@ -32,6 +32,11 @@ function mintJobId(): string {
   return `job-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
 }
 
+/** Local date (yyyy-mm-dd) + time (HH:mm) to a canonical ISO instant. */
+function localDateTimeToIso(date: string, time: string): string {
+  return new Date(`${date}T${time === '' ? '00:00' : time}`).toISOString();
+}
+
 export type JobRequestFormProps = {
   jobs: JobRequest[];
   onCreateJob(input: CreateJobRequest): void;
@@ -44,7 +49,8 @@ export type JobRequestFormProps = {
  * Manual founder job tracking. Creating records the requested timestamp and
  * an optional Won cycle; filling requires the contractor-accepted timestamp
  * because contractor acceptance is the fill event. Cancelled jobs stay
- * visible; the domain excludes them from the fill denominator.
+ * visible; the domain excludes them from the fill denominator. Timestamps
+ * are entered as a local date + time pair, never as raw UTC strings.
  */
 export function JobRequestForm({
   jobs,
@@ -53,31 +59,37 @@ export function JobRequestForm({
   onCancelJob,
   now = () => new Date().toISOString(),
 }: JobRequestFormProps) {
-  const [requestedAt, setRequestedAt] = useState('');
+  const [requestedDate, setRequestedDate] = useState('');
+  const [requestedTime, setRequestedTime] = useState('');
   const [wonCycleId, setWonCycleId] = useState('');
   const [fillingJobId, setFillingJobId] = useState<string | null>(null);
-  const [contractorAcceptedAt, setContractorAcceptedAt] = useState('');
+  const [acceptedDate, setAcceptedDate] = useState('');
+  const [acceptedTime, setAcceptedTime] = useState('');
 
   const submitCreate = () => {
     onCreateJob({
       jobId: mintJobId(),
       salesCycleId: wonCycleId.trim() === '' ? null : wonCycleId.trim(),
-      requestedAt: requestedAt.trim() === '' ? now() : requestedAt.trim(),
+      requestedAt: requestedDate === ''
+        ? now()
+        : localDateTimeToIso(requestedDate, requestedTime),
     });
-    setRequestedAt('');
+    setRequestedDate('');
+    setRequestedTime('');
     setWonCycleId('');
   };
 
   const submitFill = () => {
-    if (fillingJobId === null || contractorAcceptedAt.trim() === '') {
+    if (fillingJobId === null || acceptedDate === '') {
       return;
     }
     onFillJob({
       jobId: fillingJobId,
-      contractorAcceptedAt: contractorAcceptedAt.trim(),
+      contractorAcceptedAt: localDateTimeToIso(acceptedDate, acceptedTime),
     });
     setFillingJobId(null);
-    setContractorAcceptedAt('');
+    setAcceptedDate('');
+    setAcceptedTime('');
   };
 
   return (
@@ -90,13 +102,21 @@ export function JobRequestForm({
         }}
       >
         <div className="friday-jobs__field">
-          <label htmlFor="friday-job-requested-at">Requested at</label>
+          <label htmlFor="friday-job-requested-date">Requested date</label>
           <input
-            id="friday-job-requested-at"
-            type="text"
-            value={requestedAt}
-            placeholder={now()}
-            onChange={(event) => setRequestedAt(event.target.value)}
+            id="friday-job-requested-date"
+            type="date"
+            value={requestedDate}
+            onChange={(event) => setRequestedDate(event.target.value)}
+          />
+        </div>
+        <div className="friday-jobs__field">
+          <label htmlFor="friday-job-requested-time">Requested time</label>
+          <input
+            id="friday-job-requested-time"
+            type="time"
+            value={requestedTime}
+            onChange={(event) => setRequestedTime(event.target.value)}
           />
         </div>
         <div className="friday-jobs__field">
@@ -132,7 +152,8 @@ export function JobRequestForm({
                     aria-label={`Fill ${job.id}`}
                     onClick={() => {
                       setFillingJobId(job.id);
-                      setContractorAcceptedAt('');
+                      setAcceptedDate('');
+                      setAcceptedTime('');
                     }}
                   >
                     Fill
@@ -158,17 +179,28 @@ export function JobRequestForm({
           aria-label={`Fill ${fillingJobId}`}
         >
           <p className="friday-jobs__confirm-copy">
-            Contractor acceptance is the fill event. Enter the timestamp the
-            contractor accepted this job.
+            Contractor acceptance is the fill event. Enter the date and time
+            the contractor accepted this job.
           </p>
-          <div className="friday-jobs__field">
-            <label htmlFor="friday-job-accepted-at">Contractor accepted at</label>
-            <input
-              id="friday-job-accepted-at"
-              type="text"
-              value={contractorAcceptedAt}
-              onChange={(event) => setContractorAcceptedAt(event.target.value)}
-            />
+          <div className="friday-jobs__confirm-fields">
+            <div className="friday-jobs__field">
+              <label htmlFor="friday-job-accepted-date">Accepted date</label>
+              <input
+                id="friday-job-accepted-date"
+                type="date"
+                value={acceptedDate}
+                onChange={(event) => setAcceptedDate(event.target.value)}
+              />
+            </div>
+            <div className="friday-jobs__field">
+              <label htmlFor="friday-job-accepted-time">Accepted time</label>
+              <input
+                id="friday-job-accepted-time"
+                type="time"
+                value={acceptedTime}
+                onChange={(event) => setAcceptedTime(event.target.value)}
+              />
+            </div>
           </div>
           <div className="friday-jobs__confirm-actions">
             <Button onClick={submitFill}>Confirm fill</Button>
@@ -176,7 +208,8 @@ export function JobRequestForm({
               variant="quiet"
               onClick={() => {
                 setFillingJobId(null);
-                setContractorAcceptedAt('');
+                setAcceptedDate('');
+                setAcceptedTime('');
               }}
             >
               Keep requested

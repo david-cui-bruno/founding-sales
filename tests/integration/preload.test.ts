@@ -22,6 +22,7 @@ type ExposedCallieApi = {
   conversations: Record<string, unknown>;
   learnings: Record<string, unknown>;
   sourcing: { pollNow: () => Promise<unknown>; status: () => Promise<unknown> };
+  shell: { revealDatabase: () => Promise<unknown> };
   appleSpike: Record<string, unknown>;
 };
 
@@ -78,6 +79,7 @@ describe('preload workflow bridge', () => {
       'learnings',
       'pipeline',
       'review',
+      'shell',
       'sourcing',
       'today',
     ]);
@@ -106,6 +108,7 @@ describe('preload workflow bridge', () => {
       'addEvidence', 'capture', 'list', 'updateStatus',
     ]);
     expect(Object.keys(api.sourcing).sort()).toEqual(['pollNow', 'setHmacSalt', 'status']);
+    expect(Object.keys(api.shell)).toEqual(['revealDatabase']);
   });
 
   it('invokes only health:get without arguments for the health probe', async () => {
@@ -149,6 +152,44 @@ describe('preload workflow bridge', () => {
       stages: [], revision: 0,
     });
     expect(electron.invoke).toHaveBeenCalledWith('pipeline:get');
+  });
+
+  it('invokes shell:reveal-database without arguments and validates the ack', async () => {
+    electron.invoke.mockResolvedValue({ revealed: true });
+    const api = exposedApi();
+
+    await expect(api.shell.revealDatabase()).resolves.toEqual({ revealed: true });
+    expect(electron.invoke).toHaveBeenCalledWith('shell:reveal-database');
+
+    electron.invoke.mockResolvedValue({ revealed: true, path: '/leak' });
+    await expect(api.shell.revealDatabase()).rejects.toThrow();
+  });
+
+  it('sends friday:get with no payload by default and one strict week request otherwise', async () => {
+    const report = {
+      periodStartsAt: '2026-08-31T04:00:00.000Z',
+      periodEndsAt: '2026-09-05T04:00:00.000Z',
+      asOf: '2026-08-31T15:00:00.000Z',
+      metrics: [] as never[],
+      sourceRows: [] as never[],
+      jobs: [] as never[],
+      revision: 0,
+    };
+    electron.invoke.mockResolvedValue(report);
+    const api = exposedApi() as unknown as {
+      friday: {
+        getCurrent: (input?: { weekOffset: number }) => Promise<unknown>;
+      };
+    };
+
+    await expect(api.friday.getCurrent()).resolves.toEqual(report);
+    expect(electron.invoke).toHaveBeenCalledWith('friday:get');
+
+    await expect(api.friday.getCurrent({ weekOffset: -2 })).resolves.toEqual(report);
+    expect(electron.invoke).toHaveBeenCalledWith('friday:get', { weekOffset: -2 });
+
+    await expect(api.friday.getCurrent({ weekOffset: 1 })).rejects.toThrow();
+    expect(electron.invoke).toHaveBeenCalledTimes(2);
   });
 
   it('invokes the sourcing channels without arguments and validates the status', async () => {

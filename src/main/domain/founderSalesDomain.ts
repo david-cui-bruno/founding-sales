@@ -88,6 +88,7 @@ import {
   cancelJobRequestSchema,
   createJobRequestSchema,
   fillJobRequestSchema,
+  fridayReportRequestSchema,
   fridayReportSchema,
   metricDrilldownRequestSchema,
   metricDrilldownSchema,
@@ -95,6 +96,7 @@ import {
   type CreateJobRequest,
   type FillJobRequest,
   type FridayReport,
+  type FridayReportRequest,
   type Metric,
   type MetricDrilldown,
   type MetricDrilldownRequest,
@@ -1328,39 +1330,22 @@ export class FounderSalesDomain {
 
   // -------------------------------------------------------------- friday
 
-  getFridayReport(): FridayReport {
+  getFridayReport(input?: FridayReportRequest): FridayReport {
+    const request = fridayReportRequestSchema.parse(input ?? { weekOffset: 0 });
     const asOf = this.clock.now();
     const settings = this.services.workspaceSettings.read();
     const timezone = this.configuredTimezone ?? settings.timezone;
-    const { periodStartsAt, periodEndsAt } = this.fridayWindow(asOf, timezone);
-
-    const stageCount = (stage: string): number => (this.database.raw.prepare(`
-      SELECT COUNT(*) AS count FROM stage_events
-      WHERE to_stage = ? AND effective_at >= ? AND effective_at < ?
-    `).get(stage, periodStartsAt, periodEndsAt) as { count: number }).count;
-    const interviews = stageCount('interviewed');
-    const offers = stageCount('offered');
-    const wins = stageCount('won');
+    const { periodStartsAt, periodEndsAt } = this.fridayWindow(
+      asOf, timezone, request.weekOffset,
+    );
+    const priorWindow = this.fridayWindow(asOf, timezone, request.weekOffset - 1);
 
     const founderJobs = this.listFounderJobs();
-    const inWindow = (timestamp: string | null): boolean => (
-      timestamp !== null && timestamp >= periodStartsAt && timestamp < periodEndsAt
-    );
-    const requestedJobs = founderJobs.filter(
-      (job) => job.status !== 'cancelled' && inWindow(job.requestedAt),
-    );
-    const filledJobs = founderJobs.filter(
-      (job) => job.status === 'filled' && inWindow(job.contractorAcceptedAt),
+    const current = this.fridayWindowTotals(periodStartsAt, periodEndsAt, founderJobs);
+    const prior = this.fridayWindowTotals(
+      priorWindow.periodStartsAt, priorWindow.periodEndsAt, founderJobs,
     );
 
-    const mrrCents = (this.database.raw.prepare(`
-      SELECT COALESCE(SUM(projected_mrr_cents), 0) AS total FROM won_terms
-      WHERE effective_at >= ? AND effective_at < ?
-    `).get(periodStartsAt, periodEndsAt) as { total: number }).total;
-    const foundingCustomers = (this.database.raw.prepare(`
-      SELECT COUNT(*) AS count FROM won_terms
-      WHERE founding_customer = 1 AND effective_at >= ? AND effective_at < ?
-    `).get(periodStartsAt, periodEndsAt) as { count: number }).count;
     const fitness = this.database.raw.prepare(`
       SELECT AVG(design_partner_fitness) AS average FROM sales_cycles
       WHERE design_partner_fitness IS NOT NULL
@@ -1379,45 +1364,68 @@ export class FounderSalesDomain {
       )
     `).get() as { count: number }).count;
 
-    const count = (id: MetricId, label: string, value: number, drilldownCount = 0): Metric => ({
+    // Weekly deltas compare this window to the one immediately before it.
+    // Point-in-time metrics (fitness, overdue, invalid cycles) have no
+    // meaningful weekly value, so their delta stays null.
+    const count = (
+      id: MetricId, label: string, value: number,
+      priorValue: number | null, drilldownCount = 0,
+    ): Metric => ({
       id, label, displayValue: String(value), numericValue: value,
-      target: null, priorDelta: null, numerator: null, denominator: null, drilldownCount,
+      target: null,
+      priorDelta: priorValue === null ? null : value - priorValue,
+      numerator: null, denominator: null, drilldownCount,
     });
-    const rate = (id: MetricId, label: string, numerator: number, denominator: number): Metric => ({
+    const rate = (
+      id: MetricId, label: string, numerator: number, denominator: number,
+      priorNumerator: number, priorDenominator: number,
+    ): Metric => ({
       id,
       label,
       displayValue: denominator === 0 ? '—' : `${Math.round((numerator / denominator) * 100)}%`,
       numericValue: denominator === 0 ? null : numerator / denominator,
       target: null,
-      priorDelta: null,
+      priorDelta: denominator === 0 || priorDenominator === 0
+        ? null
+        : numerator / denominator - priorNumerator / priorDenominator,
       numerator,
       denominator,
       drilldownCount: 0,
     });
     const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
     const metrics: Metric[] = [
-      count('interviews', 'Interviews', interviews, interviews),
-      count('offers', 'Offers', offers, offers),
-      count('wins', 'Wins', wins, wins),
-      rate('offer_rate', 'Offer rate', offers, interviews),
-      rate('win_rate', 'Win rate', wins, offers),
-      count('jobs_requested', 'Jobs requested', requestedJobs.length),
-      count('jobs_filled', 'Jobs filled', filledJobs.length),
-      rate('fill_rate', 'Fill rate', filledJobs.length, requestedJobs.length),
+      count('interviews', 'Interviews', current.interviews, prior.interviews, current.interviews),
+      count('offers', 'Offers', current.offers, prior.offers, current.offers),
+      count('wins', 'Wins', current.wins, prior.wins, current.wins),
+      rate(
+        'offer_rate', 'Offer rate', current.offers, current.interviews,
+        prior.offers, prior.interviews,
+      ),
+      rate('win_rate', 'Win rate', current.wins, current.offers, prior.wins, prior.offers),
+      count('jobs_requested', 'Jobs requested', current.requestedJobs, prior.requestedJobs),
+      count('jobs_filled', 'Jobs filled', current.filledJobs, prior.filledJobs),
+      rate(
+        'fill_rate', 'Fill rate', current.filledJobs, current.requestedJobs,
+        prior.filledJobs, prior.requestedJobs,
+      ),
       {
-        id: 'new_mrr', label: 'New MRR', displayValue: usd.format(mrrCents / 100),
-        numericValue: mrrCents / 100, target: null, priorDelta: null,
+        id: 'new_mrr', label: 'New MRR', displayValue: usd.format(current.mrrCents / 100),
+        numericValue: current.mrrCents / 100, target: null,
+        priorDelta: (current.mrrCents - prior.mrrCents) / 100,
         numerator: null, denominator: null, drilldownCount: 0,
       },
-      count('founding_customers', 'Founding customers', foundingCustomers),
+      count(
+        'founding_customers', 'Founding customers',
+        current.foundingCustomers, prior.foundingCustomers,
+      ),
       {
         id: 'design_partner_fitness', label: 'Design partner fitness',
         displayValue: fitness.average === null ? '—' : fitness.average.toFixed(1),
         numericValue: fitness.average, target: null, priorDelta: null,
         numerator: null, denominator: null, drilldownCount: 0,
       },
-      count('overdue_actions', 'Overdue actions', overdueActions),
-      count('invalid_action_cycles', 'Invalid action cycles', invalidActionCycles),
+      count('overdue_actions', 'Overdue actions', overdueActions, null),
+      count('invalid_action_cycles', 'Invalid action cycles', invalidActionCycles, null),
     ];
     const sourceRows = this.database.raw.prepare(`
       SELECT source.channel AS source,
@@ -1443,6 +1451,54 @@ export class FounderSalesDomain {
       jobs: founderJobs,
       revision: this.currentRevision(),
     });
+  }
+
+  /** Window-scoped funnel, job, and revenue totals for one Monday week. */
+  private fridayWindowTotals(
+    periodStartsAt: string,
+    periodEndsAt: string,
+    founderJobs: {
+      status: 'requested' | 'filled' | 'cancelled';
+      requestedAt: string;
+      contractorAcceptedAt: string | null;
+    }[],
+  ): {
+    interviews: number;
+    offers: number;
+    wins: number;
+    requestedJobs: number;
+    filledJobs: number;
+    mrrCents: number;
+    foundingCustomers: number;
+  } {
+    const stageCount = (stage: string): number => (this.database.raw.prepare(`
+      SELECT COUNT(*) AS count FROM stage_events
+      WHERE to_stage = ? AND effective_at >= ? AND effective_at < ?
+    `).get(stage, periodStartsAt, periodEndsAt) as { count: number }).count;
+    const inWindow = (timestamp: string | null): boolean => (
+      timestamp !== null && timestamp >= periodStartsAt && timestamp < periodEndsAt
+    );
+    const mrrCents = (this.database.raw.prepare(`
+      SELECT COALESCE(SUM(projected_mrr_cents), 0) AS total FROM won_terms
+      WHERE effective_at >= ? AND effective_at < ?
+    `).get(periodStartsAt, periodEndsAt) as { total: number }).total;
+    const foundingCustomers = (this.database.raw.prepare(`
+      SELECT COUNT(*) AS count FROM won_terms
+      WHERE founding_customer = 1 AND effective_at >= ? AND effective_at < ?
+    `).get(periodStartsAt, periodEndsAt) as { count: number }).count;
+    return {
+      interviews: stageCount('interviewed'),
+      offers: stageCount('offered'),
+      wins: stageCount('won'),
+      requestedJobs: founderJobs.filter(
+        (job) => job.status !== 'cancelled' && inWindow(job.requestedAt),
+      ).length,
+      filledJobs: founderJobs.filter(
+        (job) => job.status === 'filled' && inWindow(job.contractorAcceptedAt),
+      ).length,
+      mrrCents,
+      foundingCustomers,
+    };
   }
 
   getMetricDrilldown(input: MetricDrilldownRequest): MetricDrilldown {
@@ -1567,7 +1623,7 @@ export class FounderSalesDomain {
     });
   }
 
-  private fridayWindow(asOf: string, timezone: string): {
+  private fridayWindow(asOf: string, timezone: string, weekOffset = 0): {
     periodStartsAt: string;
     periodEndsAt: string;
   } {
@@ -1581,7 +1637,7 @@ export class FounderSalesDomain {
       const [year, month, day] = date.split('-').map(Number);
       return new Date(Date.UTC(year!, month! - 1, day! + days)).toISOString().slice(0, 10);
     };
-    const monday = shift(localDate, -daysSinceMonday);
+    const monday = shift(localDate, -daysSinceMonday + weekOffset * 7);
     const saturday = shift(monday, 5);
     return {
       periodStartsAt: this.localMidnightUtc(monday, timezone),

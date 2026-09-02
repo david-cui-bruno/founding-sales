@@ -124,7 +124,29 @@ describe('registerFridayIpc', () => {
 
     await expect(handler('friday:get')(trustedEvent)).resolves.toEqual(validReport);
     expect(provider.getCurrent).toHaveBeenCalledTimes(1);
-    await expect(handler('friday:get')(trustedEvent, {})).rejects.toThrow('arguments');
+    expect(provider.getCurrent).toHaveBeenCalledWith(undefined);
+  });
+
+  it('accepts one strict week-offset request and rejects malformed ones', async () => {
+    const provider = createProvider();
+    registerFridayIpc(provider);
+
+    await expect(
+      handler('friday:get')(trustedEvent, { weekOffset: -3 }),
+    ).resolves.toEqual(validReport);
+    expect(provider.getCurrent).toHaveBeenCalledWith({ weekOffset: -3 });
+
+    await expect(handler('friday:get')(trustedEvent, {})).rejects.toThrow();
+    await expect(
+      handler('friday:get')(trustedEvent, { weekOffset: 1 }),
+    ).rejects.toThrow();
+    await expect(
+      handler('friday:get')(trustedEvent, { weekOffset: -1, extra: true }),
+    ).rejects.toThrow();
+    await expect(
+      handler('friday:get')(trustedEvent, { weekOffset: -1 }, { weekOffset: -2 }),
+    ).rejects.toThrow('at most one');
+    expect(provider.getCurrent).toHaveBeenCalledTimes(1);
   });
 
   it('rejects an untrusted sender before invoking the provider', async () => {

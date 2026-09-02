@@ -79,8 +79,9 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
           onRetry={context.health.retry}
           theme={context.theme}
           density={context.density}
+          shell={context.api.shell}
+          sourcing={<SourcingStatusRow api={context.api.sourcing} />}
         >
-          <SourcingStatusRow api={context.api.sourcing} />
           <AppleSpikePanel api={context.api.appleSpike} />
         </SettingsScreen>
       );

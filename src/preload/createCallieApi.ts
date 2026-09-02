@@ -7,6 +7,7 @@ import { createLeadsApi } from './apis/leadsApi';
 import { createLearningsApi } from './apis/learningsApi';
 import { createPipelineApi } from './apis/pipelineApi';
 import { createReviewApi } from './apis/reviewApi';
+import { createShellApi } from './apis/shellApi';
 import { createSourcingApi } from './apis/sourcingApi';
 import { createTodayApi } from './apis/todayApi';
 import { createIpcClient, type IpcInvoker } from './ipcClient';
@@ -33,6 +34,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
     conversations: createConversationsApi(client),
     learnings: createLearningsApi(client),
     sourcing: createSourcingApi(client),
+    shell: createShellApi(client),
   } as const;
 };
 

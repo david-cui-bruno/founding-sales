@@ -6,6 +6,7 @@ import {
   cancelJobRequestSchema,
   createJobRequestSchema,
   fillJobRequestSchema,
+  fridayReportRequestSchema,
   fridayReportSchema,
   metricDrilldownRequestSchema,
   metricDrilldownSchema,
@@ -13,6 +14,7 @@ import {
   type CreateJobRequest,
   type FillJobRequest,
   type FridayReport,
+  type FridayReportRequest,
   type MetricDrilldown,
   type MetricDrilldownRequest,
 } from '../../shared/contracts/fridayContract';
@@ -25,7 +27,7 @@ const FRIDAY_FILL_JOB_CHANNEL = 'friday:fill-job';
 const FRIDAY_CANCEL_JOB_CHANNEL = 'friday:cancel-job';
 
 export type FridayApi = {
-  getCurrent(): Promise<FridayReport>;
+  getCurrent(input?: FridayReportRequest): Promise<FridayReport>;
   getDrilldown(input: MetricDrilldownRequest): Promise<MetricDrilldown>;
   createJob(input: CreateJobRequest): Promise<MutationReceipt>;
   fillJob(input: FillJobRequest): Promise<MutationReceipt>;
@@ -34,10 +36,16 @@ export type FridayApi = {
 
 /**
  * Narrow preload API for the Friday scoreboard. Requests are validated before
- * invoke and responses after invoke; the renderer never computes metrics.
+ * invoke and responses after invoke; the renderer never computes metrics. An
+ * omitted report request keeps the historical payload-free invoke for the
+ * current week.
  */
 export const createFridayApi = (client: IpcClient): FridayApi => ({
-  getCurrent: () => client.requestNoInput(FRIDAY_GET_CHANNEL, fridayReportSchema),
+  getCurrent: (input) => input === undefined
+    ? client.requestNoInput(FRIDAY_GET_CHANNEL, fridayReportSchema)
+    : client.request(
+      FRIDAY_GET_CHANNEL, fridayReportRequestSchema, fridayReportSchema, input,
+    ),
   getDrilldown: (input) => client.request(
     FRIDAY_DRILLDOWN_CHANNEL, metricDrilldownRequestSchema, metricDrilldownSchema, input,
   ),

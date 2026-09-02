@@ -110,6 +110,39 @@ describe('FridayPage', () => {
     expect(screen.getByText(/contractor accepted/i)).toBeTruthy();
   });
 
+  it('groups metrics into the Funnel, Revenue, and Health bands', () => {
+    renderPage();
+
+    const funnel = screen.getByRole('region', { name: 'Funnel' });
+    expect(funnel.textContent).toContain('Interviews');
+    expect(funnel.textContent).toContain('Offer rate');
+    const revenue = screen.getByRole('region', { name: 'Revenue' });
+    expect(revenue.textContent).toContain('New MRR');
+    const health = screen.getByRole('region', { name: 'Health' });
+    expect(health.textContent).toContain('Fill rate');
+    expect(revenue.textContent).not.toContain('Interviews');
+  });
+
+  it('drives the week picker and disables next-week at the current week', () => {
+    const onPreviousWeek = vi.fn();
+    const onNextWeek = vi.fn();
+    renderPage({ weekOffset: 0, onPreviousWeek, onNextWeek });
+
+    const next = screen.getByRole('button', { name: 'Next week' });
+    expect((next as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Previous week' }));
+    expect(onPreviousWeek).toHaveBeenCalledTimes(1);
+    expect(onNextWeek).not.toHaveBeenCalled();
+  });
+
+  it('enables next-week when browsing a past week', () => {
+    const onNextWeek = vi.fn();
+    renderPage({ weekOffset: -2, onNextWeek });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next week' }));
+    expect(onNextWeek).toHaveBeenCalledTimes(1);
+  });
+
   it('exposes a metric as a button only when drilldown evidence exists', () => {
     const onOpenMetric = vi.fn();
     renderPage({ onOpenMetric });
@@ -151,7 +184,7 @@ describe('FridayPage', () => {
 });
 
 describe('MetricCard', () => {
-  it('renders an em dash for a zero denominator', () => {
+  it('renders a quiet No data yet for a zero denominator', () => {
     render(
       <MetricCard
         metric={metric('fill_rate', {
@@ -162,8 +195,24 @@ describe('MetricCard', () => {
       />,
     );
 
-    expect(screen.getByText('—')).toBeTruthy();
+    expect(screen.getByText('No data yet')).toBeTruthy();
+    expect(screen.queryByText('—')).toBeNull();
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('colors the delta arrow by direction', () => {
+    const { container } = render(
+      <MetricCard
+        metric={metric('wins', {
+          label: 'Wins', displayValue: '1', numericValue: 1, priorDelta: -1,
+        })}
+        onOpenMetric={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('-1 vs prior week')).toBeTruthy();
+    expect(container.querySelector('.metric-card__delta--down')).not.toBeNull();
+    expect(container.querySelector('.metric-card__delta--up')).toBeNull();
   });
 });
 
@@ -220,7 +269,7 @@ describe('MetricDrilldownPanel', () => {
 });
 
 describe('JobRequestForm', () => {
-  it('creates a job request with the requested timestamp and optional Won cycle', () => {
+  it('creates a job request from the local date and time pair with an optional Won cycle', () => {
     const onCreateJob = vi.fn();
     render(
       <JobRequestForm
@@ -232,8 +281,11 @@ describe('JobRequestForm', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText('Requested at'), {
-      target: { value: '2026-08-31T15:30:00.000Z' },
+    fireEvent.change(screen.getByLabelText('Requested date'), {
+      target: { value: '2026-08-31' },
+    });
+    fireEvent.change(screen.getByLabelText('Requested time'), {
+      target: { value: '11:30' },
     });
     fireEvent.change(screen.getByLabelText('Won sales cycle (optional)'), {
       target: { value: 'cycle-9' },
@@ -243,7 +295,7 @@ describe('JobRequestForm', () => {
     expect(onCreateJob).toHaveBeenCalledWith({
       jobId: expect.stringMatching(/\S/),
       salesCycleId: 'cycle-9',
-      requestedAt: '2026-08-31T15:30:00.000Z',
+      requestedAt: new Date('2026-08-31T11:30').toISOString(),
     });
   });
 
@@ -283,14 +335,17 @@ describe('JobRequestForm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Fill job-1' }));
 
     expect(screen.getByText(/contractor acceptance is the fill event/i)).toBeTruthy();
-    fireEvent.change(screen.getByLabelText('Contractor accepted at'), {
-      target: { value: '2026-08-31T16:00:00.000Z' },
+    fireEvent.change(screen.getByLabelText('Accepted date'), {
+      target: { value: '2026-08-31' },
+    });
+    fireEvent.change(screen.getByLabelText('Accepted time'), {
+      target: { value: '16:00' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm fill' }));
 
     expect(onFillJob).toHaveBeenCalledWith({
       jobId: 'job-1',
-      contractorAcceptedAt: '2026-08-31T16:00:00.000Z',
+      contractorAcceptedAt: new Date('2026-08-31T16:00').toISOString(),
     });
   });
 

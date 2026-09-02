@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
+const electron = vi.hoisted(() => ({
+  showItemInFolder: vi.fn(),
+}));
+
+vi.mock('electron', () => ({
+  shell: { showItemInFolder: electron.showItemInFolder },
+}));
+
 import type { FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import {
   createConversationsProvider,
@@ -10,6 +18,7 @@ import {
   createLearningsProvider,
   createPipelineProvider,
   createReviewProvider,
+  createShellProvider,
   createTodayProvider,
   registerApplicationIpc,
   type FeatureRegistrars,
@@ -46,19 +55,20 @@ describe('registerApplicationIpc', () => {
       registerConversationsIpc: track('conversations', unregisters[8]!),
       registerLearningsIpc: track('learnings', unregisters[9]!),
       registerSourcingIpc: track('sourcing', unregisters[10]!),
+      registerShellIpc: track('shell', unregisters[11]!),
     } as unknown as FeatureRegistrars;
     return { registrars, calls };
   }
 
-  it('registers all eleven feature slices and unregisters each exactly once', () => {
-    const unregisters = Array.from({ length: 11 }, () => vi.fn());
+  it('registers all twelve feature slices and unregisters each exactly once', () => {
+    const unregisters = Array.from({ length: 12 }, () => vi.fn());
     const { registrars, calls } = fakeRegistrars(unregisters);
 
     const unregister = registerApplicationIpc(fakeGate(), undefined, registrars);
     expect(calls).toEqual([
       'health', 'leads', 'leadDetail', 'today',
       'pipeline', 'review', 'friday', 'imports',
-      'conversations', 'learnings', 'sourcing',
+      'conversations', 'learnings', 'sourcing', 'shell',
     ]);
 
     unregister();
@@ -71,20 +81,20 @@ describe('registerApplicationIpc', () => {
     const unregisters = [
       'health', 'leads', 'leadDetail', 'today',
       'pipeline', 'review', 'friday', 'imports',
-      'conversations', 'learnings', 'sourcing',
+      'conversations', 'learnings', 'sourcing', 'shell',
     ].map((name) => vi.fn(() => order.push(name)));
     const { registrars } = fakeRegistrars(unregisters);
 
     registerApplicationIpc(fakeGate(), undefined, registrars)();
     expect(order).toEqual([
-      'sourcing', 'learnings', 'conversations',
+      'shell', 'sourcing', 'learnings', 'conversations',
       'imports', 'friday', 'review', 'pipeline',
       'today', 'leadDetail', 'leads', 'health',
     ]);
   });
 
   it('passes the trusted-URL predicate to every slice registrar', () => {
-    const unregisters = Array.from({ length: 11 }, () => vi.fn());
+    const unregisters = Array.from({ length: 12 }, () => vi.fn());
     const { registrars } = fakeRegistrars(unregisters);
     const trust = (url: string) => url.startsWith('app://');
 
@@ -179,5 +189,42 @@ describe('registerApplicationIpc', () => {
     await expect(learnings.updateStatus({} as never)).resolves.toBe('status-updated');
 
     expect(gate.withDomain).toHaveBeenCalledTimes(30);
+  });
+
+  it('reveals only the health-reported database path through the shell provider', async () => {
+    electron.showItemInFolder.mockReset();
+    const gate = fakeGate();
+    vi.mocked(gate.getHealth).mockResolvedValue({
+      appVersion: '1.0.0',
+      schemaVersion: 9,
+      databasePath: '/tmp/callie.sqlite3',
+      databaseEncrypted: true,
+      cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
+      fts5Available: true,
+      pendingJobs: 0,
+      interruptedJobsRecovered: 0,
+      domainStatus: 'ready',
+      domainReady: true,
+      domainBlockingViolationCount: 0,
+      domainRepairableIssueCount: 0,
+      domainProjectionRefreshCandidateCount: 0,
+      pendingProjectionRebuilds: 0,
+      domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
+    });
+
+    const shellProvider = createShellProvider(gate);
+    await expect(shellProvider.revealDatabase()).resolves.toEqual({
+      revealed: true,
+    });
+    expect(electron.showItemInFolder).toHaveBeenCalledWith('/tmp/callie.sqlite3');
+  });
+
+  it('refuses to reveal when health does not validate', async () => {
+    electron.showItemInFolder.mockReset();
+    const gate = fakeGate();
+    vi.mocked(gate.getHealth).mockResolvedValue({ databasePath: 42 });
+
+    await expect(createShellProvider(gate).revealDatabase()).rejects.toThrow();
+    expect(electron.showItemInFolder).not.toHaveBeenCalled();
   });
 });

@@ -3,6 +3,7 @@ import type {
   CreateJobRequest,
   FillJobRequest,
   FridayReport,
+  Metric,
   MetricDrilldown,
   MetricId,
 } from '../../../shared/contracts/fridayContract';
@@ -15,8 +16,45 @@ import { SourceFunnelTable } from './SourceFunnelTable';
 
 import './friday.css';
 
+/**
+ * The audit's three themed bands. Membership is fixed by metric ID so a new
+ * metric must be placed deliberately; all thirteen contract metrics are
+ * assigned and an unassigned one simply would not render.
+ */
+const BANDS: readonly { title: string; metricIds: readonly MetricId[] }[] = [
+  {
+    title: 'Funnel',
+    metricIds: ['interviews', 'offers', 'wins', 'offer_rate', 'win_rate'],
+  },
+  {
+    title: 'Revenue',
+    metricIds: ['new_mrr', 'founding_customers'],
+  },
+  {
+    title: 'Health',
+    metricIds: [
+      'jobs_requested', 'jobs_filled', 'fill_rate',
+      'design_partner_fitness', 'overdue_actions', 'invalid_action_cycles',
+    ],
+  },
+];
+
+function bandMetrics(
+  report: FridayReport,
+  metricIds: readonly MetricId[],
+): Metric[] {
+  const byId = new Map(report.metrics.map((metric) => [metric.id, metric]));
+  return metricIds.flatMap((id) => {
+    const metric = byId.get(id);
+    return metric === undefined ? [] : [metric];
+  });
+}
+
 export type FridayPageProps = {
   report: FridayReport;
+  weekOffset?: number;
+  onPreviousWeek?(): void;
+  onNextWeek?(): void;
   onOpenMetric(metricId: MetricId): void;
   onCreateJob(input: CreateJobRequest): void;
   onFillJob(input: FillJobRequest): void;
@@ -28,10 +66,14 @@ export type FridayPageProps = {
 
 /**
  * Presentational scoreboard. Every metric value, rate, and window bound is
- * domain-calculated; this page only lays the strict report out.
+ * domain-calculated; this page only lays the strict report out in the three
+ * audit bands.
  */
 export function FridayPage({
   report,
+  weekOffset = 0,
+  onPreviousWeek = () => undefined,
+  onNextWeek = () => undefined,
   onOpenMetric,
   onCreateJob,
   onFillJob,
@@ -42,17 +84,37 @@ export function FridayPage({
 }: FridayPageProps) {
   return (
     <div className="friday">
-      <ScoreboardHeader report={report} />
+      <ScoreboardHeader
+        report={report}
+        weekOffset={weekOffset}
+        onPreviousWeek={onPreviousWeek}
+        onNextWeek={onNextWeek}
+      />
 
-      <div className="friday__metrics">
-        {report.metrics.map((metric) => (
-          <MetricCard
-            key={metric.id}
-            metric={metric}
-            onOpenMetric={onOpenMetric}
-          />
-        ))}
-      </div>
+      {BANDS.map((band) => {
+        const metrics = bandMetrics(report, band.metricIds);
+        if (metrics.length === 0) {
+          return null;
+        }
+        return (
+          <section
+            key={band.title}
+            className="friday__band"
+            aria-label={band.title}
+          >
+            <h2 className="friday__band-title">{band.title}</h2>
+            <div className="friday__metrics">
+              {metrics.map((metric) => (
+                <MetricCard
+                  key={metric.id}
+                  metric={metric}
+                  onOpenMetric={onOpenMetric}
+                />
+              ))}
+            </div>
+          </section>
+        );
+      })}
 
       {drilldown !== null && onOpenLead !== undefined
         && onCloseDrilldown !== undefined && (

@@ -117,6 +117,7 @@ describe('fridayService over a real encrypted domain', () => {
     if (found === undefined) throw new Error(`metric ${id} missing`);
     return found as {
       id: string; displayValue: string; numericValue: number | null;
+      priorDelta: number | null;
       numerator: number | null; denominator: number | null; drilldownCount: number;
     };
   };
@@ -235,6 +236,106 @@ describe('fridayService over a real encrypted domain', () => {
     await expect(friday.createJob({
       jobId: 'job-2', salesCycleId: 'missing-cycle', requestedAt: CLOCK_NOW,
     })).rejects.toThrow();
+  });
+
+  it('treats an omitted request and weekOffset 0 as the current week', async () => {
+    const defaultReport = await friday.getCurrent();
+    const explicitReport = await friday.getCurrent({ weekOffset: 0 });
+
+    expect(explicitReport.periodStartsAt).toBe(defaultReport.periodStartsAt);
+    expect(explicitReport.periodEndsAt).toBe(defaultReport.periodEndsAt);
+    expect(defaultReport.periodStartsAt).toBe('2026-08-31T04:00:00.000Z');
+    expect(defaultReport.periodEndsAt).toBe('2026-09-05T04:00:00.000Z');
+  });
+
+  it('shifts the Monday-anchored window back one week for weekOffset -1', async () => {
+    const { cycleId } = seedLead('alpha');
+    insertStageEvent({
+      id: 'stage-prior', cycleId, toStage: 'interviewed',
+      effectiveAt: '2026-08-26T15:00:00.000Z', sequence: 1,
+    });
+    insertStageEvent({
+      id: 'stage-current', cycleId, toStage: 'interviewed',
+      effectiveAt: CLOCK_NOW, sequence: 2,
+    });
+
+    const report = await friday.getCurrent({ weekOffset: -1 });
+
+    expect(report.periodStartsAt).toBe('2026-08-24T04:00:00.000Z');
+    expect(report.periodEndsAt).toBe('2026-08-29T04:00:00.000Z');
+    expect(report.asOf).toBe(CLOCK_NOW);
+    expect(metricById(report, 'interviews').numericValue).toBe(1);
+    expect(report.sourceRows).toEqual([
+      { source: 'custom', interviews: 1, offers: 0, wins: 0 },
+    ]);
+  });
+
+  it('rejects positive week offsets before touching the database', async () => {
+    await expect(friday.getCurrent({ weekOffset: 1 })).rejects.toThrow();
+    await expect(
+      friday.getCurrent({ weekOffset: 0.5 } as never),
+    ).rejects.toThrow();
+  });
+
+  it('reports prior-week deltas for counts and leaves unratable deltas null', async () => {
+    const { cycleId } = seedLead('alpha');
+    insertStageEvent({
+      id: 'stage-prior', cycleId, toStage: 'interviewed',
+      effectiveAt: '2026-08-26T15:00:00.000Z', sequence: 1,
+    });
+    insertStageEvent({
+      id: 'stage-current-1', cycleId, toStage: 'interviewed',
+      effectiveAt: CLOCK_NOW, sequence: 2,
+    });
+    insertStageEvent({
+      id: 'stage-current-2', cycleId, toStage: 'interviewed',
+      effectiveAt: '2026-08-31T16:00:00.000Z', sequence: 3,
+    });
+
+    const report = await friday.getCurrent();
+
+    // 2 interviews this week minus 1 last week.
+    expect(metricById(report, 'interviews').priorDelta).toBe(1);
+    expect(metricById(report, 'offers').priorDelta).toBe(0);
+    // Offer rate has interview evidence both weeks: 0/2 minus 0/1 is 0.
+    expect(metricById(report, 'offer_rate').priorDelta).toBe(0);
+    // Win rate has zero offers in both weeks, so no delta is computable.
+    expect(metricById(report, 'win_rate').priorDelta).toBeNull();
+    // Point-in-time and all-time metrics never report a weekly delta.
+    expect(metricById(report, 'design_partner_fitness').priorDelta).toBeNull();
+    expect(metricById(report, 'overdue_actions').priorDelta).toBeNull();
+    expect(metricById(report, 'invalid_action_cycles').priorDelta).toBeNull();
+  });
+
+  it('computes rate deltas when both weeks have evidence', async () => {
+    const { cycleId } = seedLead('alpha');
+    const { cycleId: otherCycleId } = seedLead('beta');
+    // Prior week: 1 interview, 1 offer => 100% offer rate.
+    insertStageEvent({
+      id: 'stage-prior-interview', cycleId, toStage: 'interviewed',
+      effectiveAt: '2026-08-26T15:00:00.000Z', sequence: 1,
+    });
+    insertStageEvent({
+      id: 'stage-prior-offer', cycleId, toStage: 'offered',
+      effectiveAt: '2026-08-26T16:00:00.000Z', sequence: 2,
+    });
+    // Current week: 2 interviews, 1 offer => 50% offer rate.
+    insertStageEvent({
+      id: 'stage-now-interview-1', cycleId, toStage: 'interviewed',
+      effectiveAt: CLOCK_NOW, sequence: 3,
+    });
+    insertStageEvent({
+      id: 'stage-now-interview-2', cycleId: otherCycleId, toStage: 'interviewed',
+      effectiveAt: CLOCK_NOW, sequence: 1,
+    });
+    insertStageEvent({
+      id: 'stage-now-offer', cycleId, toStage: 'offered',
+      effectiveAt: '2026-08-31T16:00:00.000Z', sequence: 4,
+    });
+
+    const report = await friday.getCurrent();
+
+    expect(metricById(report, 'offer_rate').priorDelta).toBeCloseTo(-0.5);
   });
 
   it('returns drilldown provenance rows that reference the seeded person', async () => {

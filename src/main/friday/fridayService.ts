@@ -4,6 +4,7 @@ import type {
   CreateJobRequest,
   FillJobRequest,
   FridayReport,
+  FridayReportRequest,
   MetricDrilldown,
   MetricDrilldownRequest,
 } from '../../shared/contracts/fridayContract';
@@ -13,7 +14,7 @@ import type {
  * owner injects a delegate backed by the encrypted domain.
  */
 export type FridayProvider = {
-  getCurrent(): Promise<FridayReport>;
+  getCurrent(input?: FridayReportRequest): Promise<FridayReport>;
   getDrilldown(input: MetricDrilldownRequest): Promise<MetricDrilldown>;
   createJob(input: CreateJobRequest): Promise<MutationReceipt>;
   fillJob(input: FillJobRequest): Promise<MutationReceipt>;
@@ -23,10 +24,11 @@ export type FridayProvider = {
 /**
  * The scoreboard queries and founder job commands exposed by the encrypted
  * founder-sales domain. Week bounds, funnel counting, rate math, job status
- * derivation, and the fill denominator all live there.
+ * derivation, and the fill denominator all live there. An omitted report
+ * request means the current week (weekOffset 0).
  */
 export type FridayReportSource = {
-  getFridayReport(): FridayReport | Promise<FridayReport>;
+  getFridayReport(input?: FridayReportRequest): FridayReport | Promise<FridayReport>;
   getMetricDrilldown(
     input: MetricDrilldownRequest,
   ): MetricDrilldown | Promise<MetricDrilldown>;
@@ -39,7 +41,7 @@ export type FridayReportSource = {
 export const createFridayService = (
   source: FridayReportSource,
 ): FridayProvider => ({
-  getCurrent: async () => source.getFridayReport(),
+  getCurrent: async (input) => source.getFridayReport(input),
   getDrilldown: async (input) => source.getMetricDrilldown(input),
   createJob: async (input) => source.createJobRequest(input),
   fillJob: async (input) => source.markJobFilled(input),

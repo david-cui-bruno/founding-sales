@@ -1,4 +1,4 @@
-/* Settings route: appearance preferences plus foundation diagnostics. */
+/* Settings route: grouped sections behind a sticky anchor sub-nav. */
 
 .settings {
   display: flex;
@@ -7,12 +7,45 @@
   max-width: 52rem;
 }
 
+/* Sticky in-page section nav. Sticks below the page header inside the
+   scrolling main region. */
+.settings__subnav {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+  background: var(--canvas);
+}
+
+.settings__subnav-link {
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--text-dense);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+}
+
+.settings__subnav-link:hover {
+  color: var(--text);
+  background: var(--surface-sunken);
+}
+
+.settings__subnav-link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .settings__section {
   padding: var(--space-4);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: var(--shadow), var(--inset-highlight);
+  scroll-margin-top: 44px;
 }
 
 .settings__section-title {
@@ -29,10 +62,122 @@
   padding: var(--space-2) 0;
 }
 
+.settings__row--top {
+  align-items: flex-start;
+}
+
 .settings__row-label {
+  flex: none;
   color: var(--text-muted);
   font-size: var(--text-dense);
   font-weight: var(--weight-medium);
+}
+
+.settings__quiet {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-dense);
+}
+
+/* Data & storage: the encrypted database path plus its actions. */
+.settings__path {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--text-dense); /* 13px monospace per the audit */
+  line-height: var(--leading-dense);
+  overflow-wrap: anywhere;
+}
+
+.settings__row-actions {
+  display: flex;
+  gap: var(--space-2);
+  padding-top: var(--space-1);
+}
+
+.settings__action {
+  height: var(--control-height);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line-interactive);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-dense);
+  font-weight: var(--weight-medium);
+}
+
+.settings__action:hover {
+  background: var(--surface-sunken);
+}
+
+.settings__action:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Quiet definition grid for sourcing counters and about facts. */
+.settings__counters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-2) 0 0;
+}
+
+.settings__counter dt {
+  color: var(--text-muted);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+}
+
+.settings__counter dd {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-dense);
+}
+
+/* Diagnostics: one StatusBadge per foundation fact. */
+.settings__status-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+/* Keyboard shortcut cheat sheet. */
+.settings__shortcuts {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.settings__shortcuts th,
+.settings__shortcuts td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-dense);
+  text-align: left;
+}
+
+.settings__shortcuts thead th {
+  color: var(--text-muted);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+}
+
+.settings__shortcuts tbody th {
+  white-space: nowrap;
+  font-weight: var(--weight-body);
+}
+
+.settings__shortcuts kbd {
+  padding: 1px var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
 }
 
 .settings__toggle-group {

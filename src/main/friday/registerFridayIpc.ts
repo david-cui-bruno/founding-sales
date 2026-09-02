@@ -1,3 +1,5 @@
+import { ipcMain } from 'electron';
+
 import {
   mutationReceiptSchema,
   type MutationReceipt,
@@ -6,17 +8,18 @@ import {
   cancelJobRequestSchema,
   createJobRequestSchema,
   fillJobRequestSchema,
+  fridayReportRequestSchema,
   fridayReportSchema,
   metricDrilldownRequestSchema,
   metricDrilldownSchema,
   type CancelJobRequest,
   type CreateJobRequest,
   type FillJobRequest,
-  type FridayReport,
   type MetricDrilldown,
   type MetricDrilldownRequest,
 } from '../../shared/contracts/fridayContract';
 import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
+import { validateSender } from '../ipc/validateSender';
 import type { FridayProvider } from './fridayService';
 
 export const FRIDAY_GET_CHANNEL = 'friday:get';
@@ -26,22 +29,38 @@ export const FRIDAY_FILL_JOB_CHANNEL = 'friday:fill-job';
 export const FRIDAY_CANCEL_JOB_CHANNEL = 'friday:cancel-job';
 
 /**
- * Registers exactly the five Friday channels. `friday:get` takes no request
- * payload; every response is re-validated against the strict contract before
- * it crosses the IPC boundary.
+ * Registers exactly the five Friday channels. `friday:get` accepts either no
+ * payload (the current week) or one strict week-offset request; every
+ * response is re-validated against the strict contract before it crosses the
+ * IPC boundary.
  */
 export function registerFridayIpc(
   provider: FridayProvider,
   isTrustedRendererUrl?: (url: string) => boolean,
 ): () => void {
+  ipcMain.handle(FRIDAY_GET_CHANNEL, async (event, ...args: unknown[]) => {
+    validateSender(event, isTrustedRendererUrl);
+
+    if (args.length > 1) {
+      throw new Error(`${FRIDAY_GET_CHANNEL} accepts at most one request.`);
+    }
+
+    const request = args.length === 0
+      ? undefined
+      : fridayReportRequestSchema.parse(args[0]);
+
+    return fridayReportSchema.parse(await provider.getCurrent(request));
+  });
+  let fridayGetRegistered = true;
+
   const unregisters = [
-    registerValidatedIpc<undefined, FridayReport>({
-      channel: FRIDAY_GET_CHANNEL,
-      requestSchema: null,
-      responseSchema: fridayReportSchema,
-      handler: () => provider.getCurrent(),
-      isTrustedRendererUrl,
-    }),
+    () => {
+      if (!fridayGetRegistered) {
+        return;
+      }
+      fridayGetRegistered = false;
+      ipcMain.removeHandler(FRIDAY_GET_CHANNEL);
+    },
     registerValidatedIpc<MetricDrilldownRequest, MetricDrilldown>({
       channel: FRIDAY_DRILLDOWN_CHANNEL,
       requestSchema: metricDrilldownRequestSchema,

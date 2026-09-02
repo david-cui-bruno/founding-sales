@@ -1,0 +1,208 @@
+// @vitest-environment jsdom
+
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import type { AppHealth } from '../../shared/healthContract';
+import type { DensityState } from '../app/useDensity';
+import type { ThemeState } from '../app/useTheme';
+import { SettingsScreen } from './SettingsScreen';
+import { formatRelativeLastPoll, SourcingStatusRow } from './SourcingStatusRow';
+
+const health: AppHealth = {
+  appVersion: '1.2.3',
+  schemaVersion: 9,
+  databasePath: '/Users/founder/Library/callie.sqlite3',
+  databaseEncrypted: true,
+  cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
+  fts5Available: true,
+  pendingJobs: 2,
+  interruptedJobsRecovered: 1,
+  domainStatus: 'ready',
+  domainReady: true,
+  domainBlockingViolationCount: 0,
+  domainRepairableIssueCount: 0,
+  domainProjectionRefreshCandidateCount: 0,
+  pendingProjectionRebuilds: 0,
+  domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
+};
+
+const theme: ThemeState = {
+  preference: 'system',
+  resolvedTheme: 'light',
+  setPreference: vi.fn(),
+};
+
+const density: DensityState = {
+  density: 'comfortable',
+  setDensity: vi.fn(),
+};
+
+function renderSettings(
+  overrides: Partial<Parameters<typeof SettingsScreen>[0]> = {},
+) {
+  return render(
+    <SettingsScreen
+      state={{ status: 'ready', health }}
+      onRetry={vi.fn()}
+      theme={theme}
+      density={density}
+      {...overrides}
+    />,
+  );
+}
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+describe('SettingsScreen', () => {
+  it('renders the six grouped sections behind an anchor sub-nav', () => {
+    renderSettings();
+
+    const subnav = screen.getByRole('navigation', { name: 'Settings sections' });
+    expect(subnav.textContent).toContain('Appearance');
+    expect(subnav.textContent).toContain('Data & storage');
+    for (const name of [
+      'Appearance', 'Data & storage', 'Sourcing',
+      'Diagnostics', 'Keyboard shortcuts', 'About',
+    ]) {
+      expect(screen.getByRole('region', { name })).toBeTruthy();
+    }
+  });
+
+  it('keeps the exact diagnostics strings the packaged E2E asserts', () => {
+    renderSettings();
+
+    expect(screen.getByText('Encrypted SQLite ready')).toBeTruthy();
+    expect(screen.getByText('FTS5 available')).toBeTruthy();
+    expect(screen.getByText('Schema 9')).toBeTruthy();
+  });
+
+  it('shows the database path in monospace with copy and reveal actions', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const revealDatabase = vi.fn(async () => ({ revealed: true }));
+    renderSettings({ shell: { revealDatabase } });
+
+    expect(
+      screen.getByText('/Users/founder/Library/callie.sqlite3'),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy path' }));
+    expect(writeText).toHaveBeenCalledWith('/Users/founder/Library/callie.sqlite3');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal in Finder' }));
+    expect(revealDatabase).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the reveal action when no shell api is wired', () => {
+    renderSettings();
+
+    expect(screen.queryByRole('button', { name: 'Reveal in Finder' })).toBeNull();
+  });
+
+  it('lists the keyboard cheat sheet and about facts', () => {
+    renderSettings();
+
+    expect(screen.getByText('⌘K')).toBeTruthy();
+    expect(screen.getByText('J / K')).toBeTruthy();
+    expect(screen.getByText('E / H / P')).toBeTruthy();
+    const about = screen.getByRole('region', { name: 'About' });
+    expect(about.textContent).toContain('1.2.3');
+    expect(about.textContent).toContain('9');
+  });
+
+  it('keeps the stable failure copy without raw errors', () => {
+    renderSettings({ state: { status: 'failed' } });
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'The local database could not be opened',
+    );
+    expect(screen.getByText('LOCAL_DATABASE_UNAVAILABLE')).toBeTruthy();
+  });
+});
+
+describe('SourcingStatusRow', () => {
+  const sourcingStatus = {
+    lastPolledAt: '2026-08-31T15:00:00.000Z',
+    lastKey: null as string | null,
+    backlogCount: null as number | null,
+    counters: {
+      imported: 4, replayed: 1, needsIdentity: 2, scoreUpdates: 3, quarantined: 0,
+    },
+    credentialState: 'keychain' as const,
+    hmacSaltState: 'set' as const,
+  };
+
+  it('renders a success badge for keychain credentials with the counters', async () => {
+    render(
+      <SourcingStatusRow
+        api={{ status: vi.fn(async () => sourcingStatus) }}
+      />,
+    );
+
+    const badge = await screen.findByText(/^Sourcing inbox: keychain, last poll/);
+    expect(badge.closest('.status-badge--success')).not.toBeNull();
+    expect(screen.getByText('Imported')).toBeTruthy();
+    expect(screen.getByText('Quarantined')).toBeTruthy();
+    expect(screen.getByText('4')).toBeTruthy();
+  });
+
+  it('renders warning for file credentials and danger for none', async () => {
+    const { unmount } = render(
+      <SourcingStatusRow
+        api={{
+          status: vi.fn(async () => ({
+            ...sourcingStatus, credentialState: 'file' as const,
+          })),
+        }}
+      />,
+    );
+    const fileBadge = await screen.findByText(/^Sourcing inbox: file/);
+    expect(fileBadge.closest('.status-badge--warning')).not.toBeNull();
+    unmount();
+
+    render(
+      <SourcingStatusRow
+        api={{
+          status: vi.fn(async () => ({
+            ...sourcingStatus,
+            credentialState: 'none' as const,
+            lastPolledAt: null,
+          })),
+        }}
+      />,
+    );
+    const noneBadge = await screen.findByText(
+      /^Sourcing inbox: none, last poll never$/,
+    );
+    expect(noneBadge.closest('.status-badge--danger')).not.toBeNull();
+  });
+
+  it('never blocks settings on a sourcing failure', async () => {
+    render(
+      <SourcingStatusRow
+        api={{ status: vi.fn(async () => { throw new Error('boom'); }) }}
+      />,
+    );
+
+    expect(await screen.findByText('Sourcing inbox: unavailable')).toBeTruthy();
+  });
+});
+
+describe('formatRelativeLastPoll', () => {
+  const now = () => Date.parse('2026-08-31T15:00:00.000Z');
+
+  it('formats never, just now, minutes, hours, and days', () => {
+    expect(formatRelativeLastPoll(null, now)).toBe('never');
+    expect(formatRelativeLastPoll('2026-08-31T14:59:40.000Z', now)).toBe('just now');
+    expect(formatRelativeLastPoll('2026-08-31T14:45:00.000Z', now)).toBe('15m ago');
+    expect(formatRelativeLastPoll('2026-08-31T12:00:00.000Z', now)).toBe('3h ago');
+    expect(formatRelativeLastPoll('2026-08-28T15:00:00.000Z', now)).toBe('3d ago');
+  });
+});

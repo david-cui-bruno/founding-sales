@@ -6,6 +6,7 @@ import type {
   CreateJobRequest,
   FillJobRequest,
   FridayReport,
+  FridayReportRequest,
   MetricDrilldown,
   MetricDrilldownRequest,
   MetricId,
@@ -15,7 +16,7 @@ import { LoadingState } from '../../components/LoadingState';
 import { FridayPage } from './FridayPage';
 
 export type FridayApi = {
-  getCurrent(): Promise<FridayReport>;
+  getCurrent(input?: FridayReportRequest): Promise<FridayReport>;
   getDrilldown(input: MetricDrilldownRequest): Promise<MetricDrilldown>;
   createJob(input: CreateJobRequest): Promise<MutationReceipt>;
   fillJob(input: FillJobRequest): Promise<MutationReceipt>;
@@ -32,25 +33,34 @@ type FridayRouteState =
   | { kind: 'error' }
   | { kind: 'ready'; report: FridayReport };
 
+/** Matches the -520 floor in fridayReportRequestSchema. */
+const MIN_WEEK_OFFSET = -520;
+
 /**
  * Route container: fetches the strict report through the injected API,
- * ignores stale responses, and refetches after every command receipt. It
- * never computes metrics or rates.
+ * ignores stale responses, and refetches after every command receipt or week
+ * change. It never computes metrics or rates; the picked weekOffset is the
+ * only piece of state it owns.
  */
 export function FridayRoute({ api, onOpenLead }: FridayRouteProps) {
   const [state, setState] = useState<FridayRouteState>({ kind: 'loading' });
+  const [weekOffset, setWeekOffset] = useState(0);
   const [drilldown, setDrilldown] = useState<MetricDrilldown | null>(null);
   const requestSequence = useRef(0);
 
   const load = useCallback(
-    (options: { showLoading: boolean } = { showLoading: true }) => {
+    (
+      offset: number,
+      options: { showLoading: boolean } = { showLoading: true },
+    ) => {
       requestSequence.current += 1;
       const requestId = requestSequence.current;
       if (options.showLoading) {
         setState({ kind: 'loading' });
       }
+      const request = offset === 0 ? undefined : { weekOffset: offset };
       api
-        .getCurrent()
+        .getCurrent(request)
         .then((report) => {
           if (requestSequence.current === requestId) {
             setState({ kind: 'ready', report });
@@ -66,11 +76,11 @@ export function FridayRoute({ api, onOpenLead }: FridayRouteProps) {
   );
 
   useEffect(() => {
-    load();
+    load(weekOffset);
     return () => {
       requestSequence.current += 1;
     };
-  }, [load]);
+  }, [load, weekOffset]);
 
   const openMetric = useCallback(
     (metricId: MetricId) => {
@@ -85,10 +95,10 @@ export function FridayRoute({ api, onOpenLead }: FridayRouteProps) {
   const runCommand = useCallback(
     (command: Promise<MutationReceipt>) => {
       command
-        .then(() => load({ showLoading: false }))
-        .catch(() => load({ showLoading: false }));
+        .then(() => load(weekOffset, { showLoading: false }))
+        .catch(() => load(weekOffset, { showLoading: false }));
     },
-    [load],
+    [load, weekOffset],
   );
 
   if (state.kind === 'loading') {
@@ -100,7 +110,7 @@ export function FridayRoute({ api, onOpenLead }: FridayRouteProps) {
       <ErrorState
         title="The scoreboard could not load"
         description="Retry to fetch this week's report."
-        onRetry={() => load()}
+        onRetry={() => load(weekOffset)}
       />
     );
   }
@@ -108,6 +118,10 @@ export function FridayRoute({ api, onOpenLead }: FridayRouteProps) {
   return (
     <FridayPage
       report={state.report}
+      weekOffset={weekOffset}
+      onPreviousWeek={() =>
+        setWeekOffset((current) => Math.max(current - 1, MIN_WEEK_OFFSET))}
+      onNextWeek={() => setWeekOffset((current) => Math.min(current + 1, 0))}
       onOpenMetric={openMetric}
       onCreateJob={(input) => runCommand(api.createJob(input))}
       onFillJob={(input) => runCommand(api.fillJob(input))}

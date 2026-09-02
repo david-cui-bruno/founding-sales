@@ -89,9 +89,32 @@ describe('FridayRoute', () => {
       render(<FridayRoute api={api} onOpenLead={vi.fn()} />);
     });
 
-    expect(api.getCurrent).toHaveBeenCalled();
+    expect(api.getCurrent).toHaveBeenCalledWith(undefined);
     expect(screen.getByRole('heading', { name: 'Friday scoreboard' })).toBeTruthy();
-    expect(screen.getByText('—')).toBeTruthy();
+    expect(screen.getByText('No data yet')).toBeTruthy();
+  });
+
+  it('refetches with a week offset when stepping back and clamps at the current week', async () => {
+    const api = createApi();
+
+    await act(async () => {
+      render(<FridayRoute api={api} onOpenLead={vi.fn()} />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Previous week' }));
+    });
+
+    expect(api.getCurrent).toHaveBeenLastCalledWith({ weekOffset: -1 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Next week' }));
+    });
+
+    expect(api.getCurrent).toHaveBeenLastCalledWith(undefined);
+    expect(
+      (screen.getByRole('button', { name: 'Next week' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   });
 
   it('shows a safe error state and retries', async () => {
@@ -155,15 +178,18 @@ describe('FridayRoute', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Fill job-1' }));
     });
     await act(async () => {
-      fireEvent.change(screen.getByLabelText('Contractor accepted at'), {
-        target: { value: '2026-08-31T16:00:00.000Z' },
+      fireEvent.change(screen.getByLabelText('Accepted date'), {
+        target: { value: '2026-08-31' },
+      });
+      fireEvent.change(screen.getByLabelText('Accepted time'), {
+        target: { value: '16:00' },
       });
       fireEvent.click(screen.getByRole('button', { name: 'Confirm fill' }));
     });
 
     expect(api.fillJob).toHaveBeenCalledWith({
       jobId: 'job-1',
-      contractorAcceptedAt: '2026-08-31T16:00:00.000Z',
+      contractorAcceptedAt: new Date('2026-08-31T16:00').toISOString(),
     });
     expect(api.getCurrent).toHaveBeenCalledTimes(2);
   });

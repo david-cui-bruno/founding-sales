@@ -1,5 +1,6 @@
 import type { FounderSalesDomain } from '../domain/founderSalesDomain';
 import type { FoundationRuntime } from '../foundation/foundationRuntime';
+import { appHealthSchema } from '../../shared/healthContract';
 import { registerConversationsIpc } from '../conversations/registerConversationsIpc';
 import { registerFridayIpc } from '../friday/registerFridayIpc';
 import { registerHealthIpc } from '../health/registerHealthIpc';
@@ -9,6 +10,7 @@ import { registerLeadsIpc } from '../leads/registerLeadsIpc';
 import { registerLearningsIpc } from '../learnings/registerLearningsIpc';
 import { registerPipelineIpc } from '../pipeline/registerPipelineIpc';
 import { registerReviewIpc } from '../review/registerReviewIpc';
+import { registerShellIpc, type ShellProvider } from './registerShellIpc';
 import { registerSourcingIpc } from '../sourcing/registerSourcingIpc';
 import { registerTodayIpc } from '../today/registerTodayIpc';
 import type { ConversationsProvider } from '../conversations/conversationsService';
@@ -43,6 +45,7 @@ export type FeatureRegistrars = {
   registerConversationsIpc: typeof registerConversationsIpc;
   registerLearningsIpc: typeof registerLearningsIpc;
   registerSourcingIpc: typeof registerSourcingIpc;
+  registerShellIpc: typeof registerShellIpc;
 };
 
 const defaultRegistrars: FeatureRegistrars = {
@@ -57,6 +60,7 @@ const defaultRegistrars: FeatureRegistrars = {
   registerConversationsIpc,
   registerLearningsIpc,
   registerSourcingIpc,
+  registerShellIpc,
 };
 
 export function createLeadsProvider(runtime: DomainGate): LeadsProvider {
@@ -113,7 +117,8 @@ export function createReviewProvider(runtime: DomainGate): ReviewProvider {
 
 export function createFridayProvider(runtime: DomainGate): FridayProvider {
   return {
-    getCurrent: () => runtime.withDomain((domain) => domain.getFridayReport()),
+    getCurrent: (input) =>
+      runtime.withDomain((domain) => domain.getFridayReport(input)),
     getDrilldown: (input) =>
       runtime.withDomain((domain) => domain.getMetricDrilldown(input)),
     createJob: (input) =>
@@ -165,6 +170,23 @@ export function createLearningsProvider(runtime: DomainGate): LearningsProvider 
 }
 
 /**
+ * Default shell provider: resolves the database location through the same
+ * validated health surface the renderer sees, so the reveal target can never
+ * be renderer-chosen. Electron is imported lazily because this module is
+ * also exercised in plain-node tests.
+ */
+export function createShellProvider(runtime: DomainGate): ShellProvider {
+  return {
+    revealDatabase: async () => {
+      const health = appHealthSchema.parse(await runtime.getHealth());
+      const { shell } = await import('electron');
+      shell.showItemInFolder(health.databasePath);
+      return { revealed: true } as const;
+    },
+  };
+}
+
+/**
  * Registers every workflow feature slice against one runtime and returns one
  * idempotent unregister function that removes each slice exactly once, in
  * reverse registration order.
@@ -174,6 +196,7 @@ export function registerApplicationIpc(
   isTrustedRendererUrl?: (url: string) => boolean,
   registrars: FeatureRegistrars = defaultRegistrars,
   sourcingProvider?: SourcingProvider,
+  shellProvider?: ShellProvider,
 ): () => void {
   const unregisters = [
     registrars.registerHealthIpc(runtime, isTrustedRendererUrl),
@@ -200,6 +223,10 @@ export function registerApplicationIpc(
     ),
     registrars.registerSourcingIpc(
       sourcingProvider ?? createIdleSourcingProvider(),
+      isTrustedRendererUrl,
+    ),
+    registrars.registerShellIpc(
+      shellProvider ?? createShellProvider(runtime),
       isTrustedRendererUrl,
     ),
   ];
