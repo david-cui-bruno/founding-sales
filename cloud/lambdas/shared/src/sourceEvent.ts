@@ -250,14 +250,64 @@ export const violationPayloadSchema = z
 export type ViolationPayload = z.infer<typeof violationPayloadSchema>;
 
 /**
+ * Enrichment (Tracerfy skip trace) — rides channel `parcel` because
+ * enrichment attaches contact data to an entity's EXISTING identity (natural
+ * key `enrich:<cloud_entity_id>`); it never mints a person from a new source.
+ * Compliance lives in the schema: every phone carries its DNC + TCPA flags
+ * so the app can render dnc_listed numbers non-dialable, and emails must
+ * already be lowercased (the suppression HMACs assume it).
+ */
+export const enrichmentPhoneSchema = z
+  .object({
+    e164: z.string().regex(/^\+[1-9]\d{6,14}$/, "E.164"),
+    kind: z.enum(["mobile", "landline", "voip", "other"]),
+    dnc_listed: z.boolean(),
+    tcpa_flag: z.boolean(),
+    rank: z.number().int().min(1),
+  })
+  .strict();
+export type EnrichmentPhone = z.infer<typeof enrichmentPhoneSchema>;
+
+export const enrichmentEmailSchema = z
+  .object({
+    address: z
+      .string()
+      .email()
+      .regex(/^[^A-Z]*$/, "lowercase"),
+    rank: z.number().int().min(1),
+  })
+  .strict();
+export type EnrichmentEmail = z.infer<typeof enrichmentEmailSchema>;
+
+export const enrichmentPayloadSchema = z
+  .object({
+    vendor: z.literal("tracerfy"),
+    /** false on vendor miss AND when suppression dropped every contact. */
+    hit: z.boolean(),
+    phones: z.array(enrichmentPhoneSchema),
+    emails: z.array(enrichmentEmailSchema),
+    /** Vendor credits charged for this lookup (5 per hit, 0 per miss). */
+    credits_used: z.number().int().min(0),
+    /** Vendor person was the property owner (flag or normalized name match). */
+    matched_owner: z.boolean(),
+  })
+  .strict();
+export type EnrichmentPayload = z.infer<typeof enrichmentPayloadSchema>;
+
+/**
  * Channel -> payload schema registry. Channels without an entry do not have a
  * v1 payload schema yet; validateSourceEvent rejects events for them so an
  * adapter cannot ship an unchecked payload.
+ *
+ * `parcel` is a union: tax-roll identity rows (parcelPayloadSchema) and
+ * enrichment results (enrichmentPayloadSchema) share the channel because both
+ * attach to parcel-minted entities. Both members are `.strict()`, so a payload
+ * must fully match one of them.
  */
 export const PAYLOAD_SCHEMAS: Partial<Record<Channel, z.ZodTypeAny>> = {
   frbo: frboListingPayloadSchema,
   community: communityPostPayloadSchema,
-  parcel: parcelPayloadSchema,
+  parcel: z.union([parcelPayloadSchema, enrichmentPayloadSchema]),
   violation: violationPayloadSchema,
 };
 

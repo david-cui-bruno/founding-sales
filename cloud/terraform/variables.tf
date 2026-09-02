@@ -58,3 +58,9 @@ variable "ntfy_topic" {
   default     = ""
   sensitive   = true
 }
+
+variable "tracerfy_api_key" {
+  description = "Tracerfy API bearer token for the enricher Lambda. Canonical value lives in SSM /callie-sourcing/tracerfy-api-key; wire it through terraform.tfvars. The sandbox (mock.tracerfy.com) accepts any non-empty token."
+  type        = string
+  sensitive   = true
+}

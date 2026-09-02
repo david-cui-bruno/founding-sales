@@ -127,6 +127,34 @@ data "aws_iam_policy_document" "lambda_adapters" {
     resources = ["${aws_s3_bucket.inbox.arn}/*"]
   }
 
+  # Enricher: suppression check before any contact-bearing event reaches the
+  # inbox (CONTRACT.md compliance invariant). Read-only by design.
+  statement {
+    sid       = "SuppressionRead"
+    effect    = "Allow"
+    actions   = ["dynamodb:GetItem"]
+    resources = [aws_dynamodb_table.suppression.arn]
+  }
+
+  # Enricher: spend-cap alarm (published once per month when the vendor
+  # credit cap is first hit).
+  statement {
+    sid       = "PublishOpsAlerts"
+    effect    = "Allow"
+    actions   = ["sns:Publish"]
+    resources = [aws_sns_topic.alerts.arn]
+  }
+
+  # Enricher: membership HMAC salt (shared secret with the Mac app) for
+  # suppression-table lookups. SecureString under the aws/ssm managed key,
+  # so ssm:GetParameter alone suffices.
+  statement {
+    sid       = "ReadMembershipHmacSalt"
+    effect    = "Allow"
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/callie-sourcing/membership-hmac-salt"]
+  }
+
   statement {
     sid    = "Logs"
     effect = "Allow"
@@ -138,6 +166,7 @@ data "aws_iam_policy_document" "lambda_adapters" {
     resources = [
       "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-adapter-*",
       "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-scorer*",
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-enricher*",
     ]
   }
 }

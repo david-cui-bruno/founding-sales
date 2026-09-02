@@ -4,7 +4,7 @@
 # These were first created via CLI during live verification and are absorbed
 # here via `tofu import` (see cloud/README.md). Build the bundles BEFORE
 # plan/apply:
-#   for d in adapter-pvd-taxroll adapter-boston-rentsmart scorer; do
+#   for d in adapter-pvd-taxroll adapter-boston-rentsmart scorer resolver enricher; do
 #     (cd cloud/lambdas/$d && PATH="/opt/homebrew/opt/node@24/bin:$PATH" npm install && npm run build)
 #   done
 # ---------------------------------------------------------------------------
@@ -57,6 +57,30 @@ locals {
         ENTITIES_TABLE = aws_dynamodb_table.entities.name
       }
       schedule = "rate(1 hour)"
+    }
+    # Enrichment gate: app-requested Tracerfy skip traces only (no bulk
+    # enrichment, ever — docs/superpowers/plans/2026-09-01-enrichment-gate.md).
+    # Suppression-checks every returned contact, flags DNC/TCPA in the payload
+    # and enforces a monthly vendor credit cap with an SNS alarm.
+    "enricher" = {
+      source_dir  = "${path.module}/../lambdas/enricher/dist"
+      memory_size = 512
+      timeout     = 300
+      environment = {
+        INBOX_BUCKET      = aws_s3_bucket.inbox.bucket
+        IDEMPOTENCY_TABLE = aws_dynamodb_table.idempotency.name
+        SNAPSHOTS_TABLE   = aws_dynamodb_table.snapshots.name
+        SUPPRESSION_TABLE = aws_dynamodb_table.suppression.name
+        SNS_TOPIC_ARN     = aws_sns_topic.alerts.arn
+        # GO-LIVE SWITCH: flip TRACERFY_BASE_URL to https://tracerfy.com when
+        # the funded Tracerfy account exists (and put the real token in
+        # terraform.tfvars). The sandbox mirrors the exact API, accepts any
+        # non-empty token, and bills nothing — never point prod traffic at it.
+        TRACERFY_BASE_URL         = "https://mock.tracerfy.com"
+        TRACERFY_API_KEY          = var.tracerfy_api_key
+        ENRICH_MONTHLY_CREDIT_CAP = "1000" # 1000 credits ≈ $20 at 5 credits/$0.10
+      }
+      schedule = "rate(15 minutes)"
     }
   }
 }
