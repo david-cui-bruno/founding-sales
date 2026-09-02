@@ -29,12 +29,13 @@ const baseRowSchema = z.object({
   workflow_status: z.enum(['active', 'onboarding']),
   current_next_action_id: idSchema.nullable(),
   stage_entered_at: utcTimestampSchema,
+  resurface_at: z.string().nullable(),
+  resurface_reason: z.string().nullable(),
   action_id: idSchema.nullable(),
   action_cycle_id: idSchema.nullable(),
   action_type: z.string().nullable(),
   action_channel: z.string().nullable(),
   action_status: z.enum(['pending', 'completed', 'cancelled', 'impossible']).nullable(),
-  action_due_at: z.string().nullable(),
   action_timezone: z.string().nullable(),
   action_allowed_window: z.string().nullable(),
   action_work_intent: z.string().nullable(),
@@ -136,12 +137,13 @@ export class TodayRepository {
         cycle.workflow_status AS workflow_status,
         cycle.current_next_action_id AS current_next_action_id,
         cycle.stage_entered_at AS stage_entered_at,
+        cycle.resurface_at AS resurface_at,
+        cycle.resurface_reason AS resurface_reason,
         action.id AS action_id,
         action.sales_cycle_id AS action_cycle_id,
         action.action_type AS action_type,
         action.channel AS action_channel,
         action.status AS action_status,
-        action.due_at AS action_due_at,
         action.timezone AS action_timezone,
         action.allowed_window AS action_allowed_window,
         action.work_intent AS action_work_intent,
@@ -198,6 +200,11 @@ export class TodayRepository {
       return diagnostic(cycleId, null, 'invalid_current_action', []);
     }
     const row = parsed.data;
+    // Unreviewed cycles never enter lanes: they surface as one triage
+    // backlog count and generate no work (no-due-dates model).
+    if (row.stage === 'unreviewed') {
+      return { kind: 'unreviewed_backlog', cycleId: row.cycle_id };
+    }
     if (row.current_next_action_id === null) {
       return diagnostic(row.cycle_id, row.person_id, 'missing_current_action', []);
     }
@@ -221,11 +228,19 @@ export class TodayRepository {
       return diagnostic(row.cycle_id, row.person_id, 'invalid_work_intent', [row.action_id]);
     }
     const workIntent = row.action_work_intent as NextActionWorkIntent;
-    if (row.action_due_at === null || !utcTimestampSchema.safeParse(row.action_due_at).success) {
-      return diagnostic(row.cycle_id, row.person_id, 'invalid_timestamp', [row.action_id]);
-    }
     if (row.action_timezone === null || !isValidTimezone(row.action_timezone)) {
       return diagnostic(row.cycle_id, row.person_id, 'invalid_timezone', [row.action_id]);
+    }
+    let resurfaceAt: string | null = null;
+    let resurfaceReason: 'snooze' | 'callback' | null = null;
+    if (row.resurface_at !== null || row.resurface_reason !== null) {
+      if (row.resurface_at === null
+        || !utcTimestampSchema.safeParse(row.resurface_at).success
+        || (row.resurface_reason !== 'snooze' && row.resurface_reason !== 'callback')) {
+        return diagnostic(row.cycle_id, row.person_id, 'invalid_resurface', [row.cycle_id]);
+      }
+      resurfaceAt = row.resurface_at;
+      resurfaceReason = row.resurface_reason;
     }
 
     const inboundSla = this.decodeInboundSla(row);
@@ -295,7 +310,6 @@ export class TodayRepository {
         workIntent,
         actionType: row.action_type ?? '',
         channel: row.action_channel,
-        dueAt: row.action_due_at,
         timezone: row.action_timezone,
         allowedWindow: row.action_allowed_window,
         inboundSla,
@@ -307,6 +321,8 @@ export class TodayRepository {
       verifyFirst: null,
       lastActivity,
       stageEnteredAt: row.stage_entered_at,
+      resurfaceAt,
+      resurfaceReason,
       inlineDiagnostics: [],
     };
     if (candidate.action.actionType.length === 0) {

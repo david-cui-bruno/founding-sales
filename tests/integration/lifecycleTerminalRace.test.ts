@@ -248,17 +248,17 @@ function seedRaceTerminal(database: AppDatabase, input: TerminalCase): Readonly<
     const inboundDue = inboundSourceId === null ? null : '2026-09-01T12:00:00.000Z';
     database.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
-        allowed_window, work_intent, sla_due_at, inbound_sla_kind,
+        id, sales_cycle_id, action_type, channel, status, timezone,
+        allowed_window, work_intent, inbound_sla_kind,
         inbound_sla_due_at, inbound_sla_source_event_id, inbound_sla_provenance_json,
         cadence_enrollment_id, cadence_step_id, cadence_component_id,
         version, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'pending', ?, 'America/New_York', ?, ?, NULL,
+      ) VALUES (?, ?, ?, ?, 'pending', 'America/New_York', ?, ?,
         ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
     `).run(
       actionId, cycleId, input.actionType ?? component.actionType,
       input.actionChannel === undefined ? component.channel : input.actionChannel,
-      DOMAIN_TIMESTAMP, component.actionType === 'call' ? 'afternoon' : 'founder_text_v1:sunday',
+      component.actionType === 'call' ? 'afternoon' : 'founder_text_v1:sunday',
       input.workIntent,
       inboundSourceId === null ? null : 'direct_referral_elapsed', inboundDue,
       inboundSourceId,

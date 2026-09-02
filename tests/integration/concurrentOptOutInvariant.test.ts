@@ -198,11 +198,11 @@ describe('independent encrypted opt-out races', () => {
         },
         {
           sql: `INSERT INTO next_actions (
-            id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+            id, sales_cycle_id, action_type, channel, status, timezone,
             work_intent, version, created_at, updated_at
           ) VALUES ('stale-cycle-action', 'stale-cycle', 'review_lead', NULL,
-            'pending', ?, 'America/New_York', 'internal_review', 1, ?, ?)`,
-          params: [DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP],
+            'pending', 'America/New_York', 'internal_review', 1, ?, ?)`,
+          params: [DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP],
         },
         {
           sql: `INSERT INTO stage_events (
@@ -247,11 +247,11 @@ describe('independent encrypted opt-out races', () => {
     );
     database!.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        id, sales_cycle_id, action_type, channel, status, timezone,
         work_intent, version, created_at, updated_at
-      ) VALUES ('cycle-first-action', 'cycle-first', 'review_lead', NULL, 'pending', ?,
+      ) VALUES ('cycle-first-action', 'cycle-first', 'review_lead', NULL, 'pending',
                 'America/New_York', 'internal_review', 1, ?, ?)
-    `).run(DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    `).run(DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
     const readyPath = `${temp!.path}.cycle-first-ready`;
     const startPath = `${readyPath}.start`;
     const attemptPath = `${readyPath}.attempt`;
@@ -312,11 +312,11 @@ describe('independent encrypted opt-out races', () => {
     database!.raw.exec('BEGIN IMMEDIATE');
     database!.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        id, sales_cycle_id, action_type, channel, status, timezone,
         work_intent, created_at, updated_at
-      ) VALUES ('replacement-action', ?, 'review_replacement', NULL, 'pending', ?,
+      ) VALUES ('replacement-action', ?, 'review_replacement', NULL, 'pending',
         'America/New_York', 'internal_review', ?, ?)
-    `).run(cycle.cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    `).run(cycle.cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
     database!.raw.prepare(`
       UPDATE sales_cycles SET current_next_action_id = 'replacement-action',
         version = version + 1, updated_at = ? WHERE id = ?

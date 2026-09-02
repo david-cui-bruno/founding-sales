@@ -1,12 +1,18 @@
 import { mutationReceiptSchema } from '../../shared/contracts/commonContract';
 import {
+  addLeadNoteRequestSchema,
   completeActionRequestSchema,
+  logCallOutcomeRequestSchema,
   logPastActivityRequestSchema,
+  markActivityInErrorRequestSchema,
   pinActionRequestSchema,
   snoozeActionRequestSchema,
   todaySnapshotSchema,
+  type AddLeadNoteRequest,
   type CompleteActionRequest,
+  type LogCallOutcomeRequest,
   type LogPastActivityRequest,
+  type MarkActivityInErrorRequest,
   type PinActionRequest,
   type SnoozeActionRequest,
 } from '../../shared/contracts/todayContract';
@@ -40,6 +46,27 @@ export const createTodayApi = (client: IpcClient) => ({
     client.request(
       'today:log-activity',
       logPastActivityRequestSchema,
+      mutationReceiptSchema,
+      input,
+    ),
+  addLeadNote: (input: AddLeadNoteRequest) =>
+    client.request(
+      'today:add-note',
+      addLeadNoteRequestSchema,
+      mutationReceiptSchema,
+      input,
+    ),
+  logCallOutcome: (input: LogCallOutcomeRequest) =>
+    client.request(
+      'today:log-call-outcome',
+      logCallOutcomeRequestSchema,
+      mutationReceiptSchema,
+      input,
+    ),
+  markActivityInError: (input: MarkActivityInErrorRequest) =>
+    client.request(
+      'today:mark-activity-in-error',
+      markActivityInErrorRequestSchema,
       mutationReceiptSchema,
       input,
     ),

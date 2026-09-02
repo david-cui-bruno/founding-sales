@@ -188,6 +188,8 @@ export type SalesCyclesTable = {
   close_notes: string | null;
   onboarding_stop_reason: string | null;
   closed_at: string | null;
+  resurface_at: string | null;
+  resurface_reason: 'snooze' | 'callback' | null;
   version: Generated<number>;
   created_at: string;
   updated_at: string;
@@ -199,11 +201,9 @@ export type NextActionsTable = {
   action_type: string;
   channel: string | null;
   status: 'pending' | 'completed' | 'cancelled' | 'impossible';
-  due_at: string;
   timezone: string;
   allowed_window: string | null;
   work_intent: 'internal_review' | 'inbound_response' | 'promised_follow_up' | 'discretionary_prospecting';
-  sla_due_at: string | null;
   inbound_sla_kind: 'inbound_demo_permitted_minutes' | 'direct_referral_elapsed' | null;
   inbound_sla_due_at: string | null;
   inbound_sla_source_event_id: string | null;
@@ -257,6 +257,16 @@ export type ActivitiesTable = {
   transcript_storage_ref: string | null;
   metadata_json: string;
   created_at: string;
+  note_text: string | null;
+  call_outcome:
+    | 'no_answer'
+    | 'voicemail'
+    | 'spoke'
+    | 'interview_booked'
+    | 'not_interested'
+    | 'opted_out'
+    | null;
+  callback_at: string | null;
 };
 
 export type ActivityAmendmentsTable = {
@@ -501,6 +511,12 @@ export type OptOutClosureReceiptHandlesTable = {
   sequence: number;
 };
 
+export type ReviewPositionTable = {
+  singleton: number;
+  position: number;
+  updated_at: string;
+};
+
 export type WorkspaceSettingsTable = {
   singleton: number;
   timezone: string;
@@ -542,6 +558,7 @@ export type DomainTables = {
   prospect_priority_projection: ProspectPriorityProjectionTable;
   prospect_properties: ProspectPropertiesTable;
   reactivation_rules: ReactivationRulesTable;
+  review_position: ReviewPositionTable;
   sales_cycles: SalesCyclesTable;
   sales_cycle_close_readiness: SalesCycleCloseReadinessTable;
   source_events: SourceEventsTable;

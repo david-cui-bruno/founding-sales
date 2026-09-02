@@ -12,8 +12,6 @@ import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork
 import { DOMAIN_TIMESTAMP, seedProspect } from '../fixtures/domainRows';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
-const DUE = '2026-08-30T12:15:00.000Z';
-const LATER = '2026-08-30T13:15:00.000Z';
 const NONE_SLA: Extract<InboundSla, { kind: 'none' }> = {
   kind: 'none', dueAt: null, sourceEventId: null, provenance: null,
 };
@@ -70,8 +68,8 @@ describe('installed-component next-action binding', () => {
       `).run(definition.id, DOMAIN_TIMESTAMP, step.id, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
       actions.insertNextAction({
         id: 'seed-action', salesCycleId: 'binding-cycle', actionType: 'review', channel: null,
-        status: 'pending', dueAt: DUE, timezone: 'America/New_York',
-        allowedWindow: null, slaDueAt: null, workIntent: 'internal_review',
+        status: 'pending', timezone: 'America/New_York',
+        allowedWindow: null, workIntent: 'internal_review',
         inboundSla: NONE_SLA,
         cadence: {
           cadenceEnrollmentId: null, cadenceDefinitionId: null,
@@ -101,15 +99,15 @@ describe('installed-component next-action binding', () => {
     insertRawAction('text', 'phone');
     expect(() => unitOfWork.immediate(() => actions.reschedulePendingAction({
       actionId: 'binding-action', salesCycleId: 'binding-cycle', expectedStatus: 'pending',
-      expectedVersion: 1, expectedDueAt: DUE,
+      expectedVersion: 1,
       expectedWorkIntent: 'discretionary_prospecting', expectedInboundSla: NONE_SLA,
-      expectedCadence: cadence, dueAt: LATER, updatedAt: DOMAIN_TIMESTAMP,
-      timezone: 'America/New_York', allowedWindow: 'afternoon', slaDueAt: null,
+      expectedCadence: cadence, updatedAt: DOMAIN_TIMESTAMP,
+      timezone: 'America/New_York', allowedWindow: 'afternoon',
       cadence,
     }))).toThrow();
     expect(database!.raw.prepare(`
-      SELECT due_at FROM next_actions WHERE id = 'binding-action'
-    `).get()).toEqual({ due_at: DUE });
+      SELECT allowed_window FROM next_actions WHERE id = 'binding-action'
+    `).get()).toEqual({ allowed_window: 'afternoon' });
   });
 
   it('reports a raw pending masquerade in the invariant audit', async () => {
@@ -132,13 +130,13 @@ describe('installed-component next-action binding', () => {
 
     const rescheduled = unitOfWork.immediate(() => actions.reschedulePendingAction({
       actionId: 'binding-action', salesCycleId: 'binding-cycle', expectedStatus: 'pending',
-      expectedVersion: 1, expectedDueAt: DUE,
+      expectedVersion: 1,
       expectedWorkIntent: 'discretionary_prospecting', expectedInboundSla: NONE_SLA,
-      expectedCadence: cadence, dueAt: LATER, updatedAt: DOMAIN_TIMESTAMP,
-      timezone: 'America/New_York', allowedWindow: 'afternoon', slaDueAt: null,
+      expectedCadence: cadence, updatedAt: DOMAIN_TIMESTAMP,
+      timezone: 'America/New_York', allowedWindow: 'afternoon',
       cadence,
     }));
-    expect(rescheduled).toMatchObject({ dueAt: LATER, version: 2, actionType, channel, cadence });
+    expect(rescheduled).toMatchObject({ version: 2, actionType, channel, cadence });
     expect(auditDomainInvariants({ database: database!, asOf: DOMAIN_TIMESTAMP }))
       .not.toContainEqual(expect.objectContaining({
         kind: 'action_cadence_binding_invalid', recordId: 'binding-action',
@@ -148,8 +146,8 @@ describe('installed-component next-action binding', () => {
   function insertAction(actionType: string, channel: string | null) {
     return unitOfWork.immediate(() => actions.insertNextAction({
       id: 'binding-action', salesCycleId: 'binding-cycle', actionType, channel,
-      status: 'pending', dueAt: DUE, timezone: 'America/New_York',
-      allowedWindow: 'afternoon', slaDueAt: null,
+      status: 'pending', timezone: 'America/New_York',
+      allowedWindow: 'afternoon',
       workIntent: 'discretionary_prospecting', inboundSla: NONE_SLA,
       cadence, createdAt: DOMAIN_TIMESTAMP,
     }));
@@ -158,13 +156,13 @@ describe('installed-component next-action binding', () => {
   function insertRawAction(actionType: string, channel: string | null): void {
     database!.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        id, sales_cycle_id, action_type, channel, status, timezone,
         allowed_window, work_intent, cadence_enrollment_id, cadence_step_id,
         cadence_component_id, version, created_at, updated_at
-      ) VALUES ('binding-action', 'binding-cycle', ?, ?, 'pending', ?,
+      ) VALUES ('binding-action', 'binding-cycle', ?, ?, 'pending',
         'America/New_York', 'afternoon', 'discretionary_prospecting', ?, ?, ?, 1, ?, ?)
     `).run(
-      actionType, channel, DUE, cadence.cadenceEnrollmentId,
+      actionType, channel, cadence.cadenceEnrollmentId,
       cadence.cadenceStepId, cadence.cadenceComponentId,
       DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
     );

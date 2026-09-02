@@ -8,8 +8,13 @@ import {
   salesCycleIdSchema,
 } from './commonContract';
 
+/**
+ * No-due-dates lanes (audit 4.9.5): Overdue and Post-interview/offer are
+ * gone; post-stage promises fold into Due cadence. Ordering inside a lane is
+ * priority band > cloud timing > last-touch age, computed at render.
+ */
 export const todayLaneIdSchema = z.enum([
-  'onboarding', 'fresh_inbound', 'overdue', 'post_interview_offer', 'due_cadence', 'new_p0', 'p1', 'exploration', 'later',
+  'onboarding', 'fresh_inbound', 'due_cadence', 'new_p0', 'p1', 'exploration', 'later',
 ]);
 export const todayItemSchema = z.object({
   id: z.string().min(1), lane: todayLaneIdSchema, personId: personIdSchema, salesCycleId: salesCycleIdSchema,
@@ -19,7 +24,11 @@ export const todayItemSchema = z.object({
   verifyFirst: z.boolean(), pinned: z.boolean(), consentRequirement: z.string().nullable(),
 }).strict();
 export const todaySnapshotSchema = z.object({
-  lanes: z.array(z.object({ id: todayLaneIdSchema, items: z.array(todayItemSchema) }).strict()),
+  lanes: z.array(z.object({
+    id: todayLaneIdSchema,
+    items: z.array(todayItemSchema),
+    overflowCount: z.number().int().nonnegative(),
+  }).strict()),
   dialBudget: z.number().int().nonnegative(), scheduledDials: z.number().int().nonnegative(),
   conversationTarget: z.number().int().nonnegative(), reviewErrorCount: z.number().int().nonnegative(), revision: z.number().int().nonnegative(),
   unreviewedBacklogCount: z.number().int().nonnegative(),
@@ -35,11 +44,14 @@ export const completeActionRequestSchema = z.object({
   activityId: z.string().min(1).nullable(),
 }).strict();
 
+/**
+ * Snooze writes the founder-chosen `resurface_at` on the sales cycle. The
+ * cycle leaves Today until that instant and re-enters with the reason
+ * 'Snoozed until today'.
+ */
 export const snoozeActionRequestSchema = z.object({
   salesCycleId: salesCycleIdSchema,
-  reason: z.string().min(1),
-  expiresAt: z.string().datetime({ offset: true }),
-  comparedSalesCycleId: salesCycleIdSchema,
+  resurfaceAt: z.string().datetime({ offset: true }),
 }).strict();
 
 export const pinActionRequestSchema = z.object({
@@ -59,6 +71,40 @@ export const logPastActivityRequestSchema = z.object({
   outcome: z.string().max(200).nullable(),
 }).strict();
 
+/**
+ * Founder note: THE one place prose is allowed. Stored locally in
+ * activities.note_text, never uploaded anywhere.
+ */
+export const addLeadNoteRequestSchema = z.object({
+  personId: personIdSchema,
+  salesCycleId: salesCycleIdSchema.nullable(),
+  text: z.string().min(1).max(10_000),
+}).strict();
+
+export const callOutcomeSchema = z.enum([
+  'no_answer', 'voicemail', 'spoke', 'interview_booked', 'not_interested', 'opted_out',
+]);
+
+/**
+ * Structured call outcome. A callback promise sets the cycle's
+ * `resurface_at` ('Callback you promised for today' on re-entry);
+ * `opted_out` routes through the existing person-wide opt-out closure.
+ */
+export const logCallOutcomeRequestSchema = z.object({
+  personId: personIdSchema,
+  salesCycleId: salesCycleIdSchema,
+  outcome: callOutcomeSchema,
+  callbackAt: z.string().datetime({ offset: true }).nullable(),
+  occurredAt: z.string().datetime({ offset: true }),
+}).strict();
+
+/** Amendment event (audit 2.7): append-only strike-through, never deletion. */
+export const markActivityInErrorRequestSchema = z.object({
+  personId: personIdSchema,
+  activityId: z.string().min(1),
+  reason: z.string().min(1).max(500),
+}).strict();
+
 export type TodayLaneId = z.infer<typeof todayLaneIdSchema>;
 export type TodayItem = z.infer<typeof todayItemSchema>;
 export type TodaySnapshot = z.infer<typeof todaySnapshotSchema>;
@@ -66,3 +112,7 @@ export type CompleteActionRequest = z.infer<typeof completeActionRequestSchema>;
 export type SnoozeActionRequest = z.infer<typeof snoozeActionRequestSchema>;
 export type PinActionRequest = z.infer<typeof pinActionRequestSchema>;
 export type LogPastActivityRequest = z.infer<typeof logPastActivityRequestSchema>;
+export type AddLeadNoteRequest = z.infer<typeof addLeadNoteRequestSchema>;
+export type CallOutcome = z.infer<typeof callOutcomeSchema>;
+export type LogCallOutcomeRequest = z.infer<typeof logCallOutcomeRequestSchema>;
+export type MarkActivityInErrorRequest = z.infer<typeof markActivityInErrorRequestSchema>;

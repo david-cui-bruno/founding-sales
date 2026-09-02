@@ -57,10 +57,8 @@ export type EnrollmentMutation = {
 export type NextActionDraft = {
   actionType: 'call' | 'voicemail' | 'text' | 'email' | 'resolve_contact_method';
   channel: CadenceChannel | null;
-  dueAt: string;
   timezone: string;
   allowedWindow: string;
-  slaDueAt: string | null;
   cadenceDefinitionId: string;
   cadenceStepId: string;
   cadenceComponentId: string;
@@ -70,10 +68,8 @@ export type NextActionInstruction =
   | { kind: 'create'; draft: NextActionDraft }
   | {
     kind: 'reschedule_current';
-    dueAt: string;
     timezone: string;
     allowedWindow: string;
-    slaDueAt: string | null;
     cadenceDefinitionId: string;
     cadenceStepId: string;
     cadenceComponentId: string;
@@ -246,7 +242,8 @@ export function planActionOutcome(input: CadenceOutcomeInput): TransitionRecipe 
       enrollment: enrollmentMutation('retry', input.definition.id, step.id, 0, 'active', null),
       nextAction: {
         kind: 'reschedule_current',
-        ...scheduled,
+        timezone: scheduled.timezone,
+        allowedWindow: scheduled.allowedWindow,
         cadenceDefinitionId: input.definition.id,
         cadenceStepId: step.id,
         cadenceComponentId: component.id,
@@ -435,10 +432,8 @@ function followTransition(
         draft: {
           actionType: 'resolve_contact_method',
           channel: null,
-          dueAt: new Date(assertCanonicalInstant(input.evaluationAt, 'evaluationAt')).toISOString(),
           timezone: input.timezone,
           allowedWindow: 'internal:immediate',
-          slaDueAt: null,
           cadenceDefinitionId: input.definition.id,
           cadenceStepId: step.id,
           cadenceComponentId: component.id,
@@ -673,7 +668,8 @@ function createInstruction(
     draft: {
       actionType: component.actionType,
       channel: component.channel,
-      ...scheduled,
+      timezone: scheduled.timezone,
+      allowedWindow: scheduled.allowedWindow,
       cadenceDefinitionId: definition.id,
       cadenceStepId: step.id,
       cadenceComponentId: component.id,

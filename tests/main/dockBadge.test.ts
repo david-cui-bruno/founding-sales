@@ -15,11 +15,11 @@ describe('badgeTextForCount', () => {
 });
 
 describe('createDockBadgeUpdater', () => {
-  it('shows the due count as the badge text', () => {
+  it('shows the fresh inbound count as the badge text', () => {
     const setBadge = vi.fn();
     const updater = createDockBadgeUpdater({
       platform: 'darwin',
-      getDueCount: () => 3,
+      getFreshInboundCount: () => 3,
       setBadge,
     });
 
@@ -29,11 +29,11 @@ describe('createDockBadgeUpdater', () => {
     expect(setBadge).toHaveBeenCalledWith('3');
   });
 
-  it('clears the badge when nothing is due', () => {
+  it('clears the badge when there is no fresh inbound', () => {
     const setBadge = vi.fn();
     const updater = createDockBadgeUpdater({
       platform: 'darwin',
-      getDueCount: () => 0,
+      getFreshInboundCount: () => 0,
       setBadge,
     });
 
@@ -47,7 +47,7 @@ describe('createDockBadgeUpdater', () => {
     const setBadge = vi.fn();
     const updater = createDockBadgeUpdater({
       platform: 'darwin',
-      getDueCount: () => 5,
+      getFreshInboundCount: () => 5,
       setBadge,
     });
 
@@ -64,7 +64,7 @@ describe('createDockBadgeUpdater', () => {
     let count = 2;
     const updater = createDockBadgeUpdater({
       platform: 'darwin',
-      getDueCount: () => count,
+      getFreshInboundCount: () => count,
       setBadge,
     });
 
@@ -80,16 +80,16 @@ describe('createDockBadgeUpdater', () => {
 
   it('does nothing off darwin', () => {
     const setBadge = vi.fn();
-    const getDueCount = vi.fn(() => 4);
+    const getFreshInboundCount = vi.fn(() => 4);
     const updater = createDockBadgeUpdater({
       platform: 'linux',
-      getDueCount,
+      getFreshInboundCount,
       setBadge,
     });
 
     updater.refresh();
 
-    expect(getDueCount).not.toHaveBeenCalled();
+    expect(getFreshInboundCount).not.toHaveBeenCalled();
     expect(setBadge).not.toHaveBeenCalled();
   });
 });

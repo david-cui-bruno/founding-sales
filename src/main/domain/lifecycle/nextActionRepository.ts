@@ -34,16 +34,15 @@ import {
 
 const insertActionSchema = z.object({
   id: idSchema, salesCycleId: idSchema, actionType: nonblankSchema,
-  channel: nonblankSchema.nullable(), status: z.literal('pending'), dueAt: utcTimestampSchema,
-  timezone: nonblankSchema, allowedWindow: z.string().nullable(), slaDueAt: utcTimestampSchema.nullable(),
+  channel: nonblankSchema.nullable(), status: z.literal('pending'),
+  timezone: nonblankSchema, allowedWindow: z.string().nullable(),
   workIntent: workIntentSchema, inboundSla: inboundSlaSchema,
   cadence: cadenceActionBindingSchema, createdAt: utcTimestampSchema,
 }).strict();
 const storedActionRowSchema = z.object({
   id: idSchema, sales_cycle_id: idSchema, action_type: nonblankSchema,
-  channel: nonblankSchema.nullable(), status: actionStatusSchema, due_at: utcTimestampSchema,
+  channel: nonblankSchema.nullable(), status: actionStatusSchema,
   timezone: nonblankSchema, allowed_window: z.string().nullable(), work_intent: workIntentSchema,
-  sla_due_at: utcTimestampSchema.nullable(),
   inbound_sla_kind: z.enum(['inbound_demo_permitted_minutes', 'direct_referral_elapsed']).nullable(),
   inbound_sla_due_at: utcTimestampSchema.nullable(), inbound_sla_source_event_id: idSchema.nullable(),
   inbound_sla_provenance_json: z.string().nullable(), cadence_enrollment_id: idSchema.nullable(),
@@ -54,8 +53,8 @@ const storedActionRowSchema = z.object({
 }).strict();
 
 const actionColumns = `
-  id, sales_cycle_id, action_type, channel, status, due_at, timezone,
-  allowed_window, work_intent, sla_due_at, inbound_sla_kind,
+  id, sales_cycle_id, action_type, channel, status, timezone,
+  allowed_window, work_intent, inbound_sla_kind,
   inbound_sla_due_at, inbound_sla_source_event_id, inbound_sla_provenance_json,
   cadence_enrollment_id, cadence_step_id, cadence_component_id,
   completion_activity_id, settlement_json, version, created_at, completed_at, updated_at
@@ -66,13 +65,10 @@ export type ReschedulePendingActionInput = ExpectedActionIntentAndSla & Readonly
   salesCycleId: string;
   expectedStatus: 'pending';
   expectedVersion: number;
-  expectedDueAt: string;
   expectedCadence: CadenceActionBinding;
-  dueAt: string;
   updatedAt: string;
   timezone: string;
   allowedWindow: string;
-  slaDueAt: string | null;
   cadence: CadenceActionBinding;
 }>;
 
@@ -121,16 +117,16 @@ export class NextActionRepository {
     const inbound = encodeInboundSla(parsed.inboundSla);
     const row = this.database.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
-        allowed_window, work_intent, sla_due_at, inbound_sla_kind,
+        id, sales_cycle_id, action_type, channel, status, timezone,
+        allowed_window, work_intent, inbound_sla_kind,
         inbound_sla_due_at, inbound_sla_source_event_id, inbound_sla_provenance_json,
         cadence_enrollment_id, cadence_step_id, cadence_component_id,
         completion_activity_id, settlement_json, version, created_at, completed_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1, ?, NULL, ?)
+      ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1, ?, NULL, ?)
       RETURNING ${actionColumns}
     `).get(
-      parsed.id, parsed.salesCycleId, parsed.actionType, parsed.channel, parsed.dueAt,
-      parsed.timezone, parsed.allowedWindow, parsed.workIntent, parsed.slaDueAt,
+      parsed.id, parsed.salesCycleId, parsed.actionType, parsed.channel,
+      parsed.timezone, parsed.allowedWindow, parsed.workIntent,
       inbound.kind, inbound.dueAt, inbound.sourceEventId, inbound.provenanceJson,
       parsed.cadence.cadenceEnrollmentId, parsed.cadence.cadenceStepId,
       parsed.cadence.cadenceComponentId, parsed.createdAt, parsed.createdAt,
@@ -142,12 +138,12 @@ export class NextActionRepository {
     this.unitOfWork.assertWriteScope();
     const parsed = z.object({
       actionId: idSchema, salesCycleId: idSchema, expectedStatus: z.literal('pending'),
-      expectedVersion: z.number().int().safe().positive(), expectedDueAt: utcTimestampSchema,
+      expectedVersion: z.number().int().safe().positive(),
       expectedWorkIntent: workIntentSchema, expectedInboundSla: inboundSlaSchema,
-      expectedCadence: cadenceActionBindingSchema, dueAt: utcTimestampSchema,
+      expectedCadence: cadenceActionBindingSchema,
       updatedAt: utcTimestampSchema,
       timezone: nonblankSchema, allowedWindow: nonblankSchema,
-      slaDueAt: utcTimestampSchema.nullable(), cadence: cadenceActionBindingSchema,
+      cadence: cadenceActionBindingSchema,
     }).strict().parse(input) as ReschedulePendingActionInput;
     assertIntentAndSla(parsed.expectedWorkIntent, parsed.expectedInboundSla);
     if (serializeCanonical(parsed.cadence) !== serializeCanonical(parsed.expectedCadence)) {
@@ -156,7 +152,6 @@ export class NextActionRepository {
     const current = this.getById(parsed.actionId);
     if (current === null || current.salesCycleId !== parsed.salesCycleId
       || current.status !== parsed.expectedStatus || current.version !== parsed.expectedVersion
-      || current.dueAt !== parsed.expectedDueAt
       || current.workIntent !== parsed.expectedWorkIntent
       || serializeCanonical(current.inboundSla) !== serializeCanonical(parsed.expectedInboundSla)
       || serializeCanonical(current.cadence) !== serializeCanonical(parsed.expectedCadence)) {
@@ -165,18 +160,18 @@ export class NextActionRepository {
     const expectedInbound = encodeInboundSla(parsed.expectedInboundSla);
     const row = this.database.raw.prepare(`
       UPDATE next_actions
-      SET due_at = ?, timezone = ?, allowed_window = ?, sla_due_at = ?,
+      SET timezone = ?, allowed_window = ?,
           version = version + 1, updated_at = ?
       WHERE id = ? AND sales_cycle_id = ? AND status = ? AND version = ?
-        AND due_at = ? AND work_intent = ?
+        AND work_intent = ?
         AND inbound_sla_kind IS ? AND inbound_sla_due_at IS ?
         AND inbound_sla_source_event_id IS ? AND inbound_sla_provenance_json IS ?
         AND cadence_enrollment_id IS ? AND cadence_step_id IS ? AND cadence_component_id IS ?
       RETURNING ${actionColumns}
     `).get(
-      parsed.dueAt, parsed.timezone, parsed.allowedWindow, parsed.slaDueAt, parsed.updatedAt,
+      parsed.timezone, parsed.allowedWindow, parsed.updatedAt,
       parsed.actionId, parsed.salesCycleId, parsed.expectedStatus, parsed.expectedVersion,
-      parsed.expectedDueAt, parsed.expectedWorkIntent, expectedInbound.kind,
+      parsed.expectedWorkIntent, expectedInbound.kind,
       expectedInbound.dueAt, expectedInbound.sourceEventId, expectedInbound.provenanceJson,
       parsed.expectedCadence.cadenceEnrollmentId, parsed.expectedCadence.cadenceStepId,
       parsed.expectedCadence.cadenceComponentId,
@@ -346,8 +341,8 @@ function parseAction(value: unknown, database: AppDatabase): NextAction {
   }
   const parsed = {
     id: row.id, salesCycleId: row.sales_cycle_id, actionType: row.action_type,
-    channel: row.channel, status: row.status, dueAt: row.due_at, timezone: row.timezone,
-    allowedWindow: row.allowed_window, workIntent: row.work_intent, slaDueAt: row.sla_due_at,
+    channel: row.channel, status: row.status, timezone: row.timezone,
+    allowedWindow: row.allowed_window, workIntent: row.work_intent,
     inboundSla, cadence, completionActivityId: row.completion_activity_id,
     settlement, version: row.version, createdAt: row.created_at,
     completedAt: row.completed_at, updatedAt: row.updated_at,

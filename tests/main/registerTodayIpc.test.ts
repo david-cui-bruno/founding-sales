@@ -33,9 +33,12 @@ const untrustedEvent: IpcInvokeEvent = {
 };
 
 const TODAY_CHANNELS = [
+  'today:add-note',
   'today:complete',
   'today:get',
   'today:log-activity',
+  'today:log-call-outcome',
+  'today:mark-activity-in-error',
   'today:pin',
   'today:snooze',
 ] as const;
@@ -43,11 +46,11 @@ const TODAY_CHANNELS = [
 const validSnapshot: TodaySnapshot = {
   lanes: [
     {
-      id: 'overdue',
+      id: 'due_cadence',
       items: [
         {
           id: 'cycle-1',
-          lane: 'overdue',
+          lane: 'due_cadence',
           personId: 'person-1',
           salesCycleId: 'cycle-1',
           personName: 'Avery Landlord',
@@ -66,11 +69,9 @@ const validSnapshot: TodaySnapshot = {
             id: 'action-1',
             type: 'call_lead',
             channel: 'call',
-            dueAt: '2026-08-30T15:00:00.000Z',
             label: 'Call lead',
-            overdue: true,
           },
-          reason: 'Non-discretionary work is overdue',
+          reason: 'Cadence says this is next',
           activeTriggers: [
             { label: 'inbound_reply', expiresAt: '2026-09-01T15:00:00.000Z' },
           ],
@@ -79,6 +80,7 @@ const validSnapshot: TodaySnapshot = {
           consentRequirement: null,
         },
       ],
+      overflowCount: 0,
     },
   ],
   dialBudget: 40,
@@ -104,9 +106,7 @@ const completeRequest: CompleteActionRequest = {
 
 const snoozeRequest = {
   salesCycleId: 'cycle-1',
-  reason: 'Founder is travelling',
-  expiresAt: '2026-09-01T15:00:00.000Z',
-  comparedSalesCycleId: 'cycle-2',
+  resurfaceAt: '2026-09-01T15:00:00.000Z',
 } as const;
 
 const pinRequest = {
@@ -133,6 +133,9 @@ function fakeProvider(): TodayProvider {
     snooze: vi.fn(async () => receipt),
     pin: vi.fn(async () => receipt),
     logPastActivity: vi.fn(async () => receipt),
+    addLeadNote: vi.fn(async () => receipt),
+    logCallOutcome: vi.fn(async () => receipt),
+    markActivityInError: vi.fn(async () => receipt),
   };
 }
 
@@ -148,10 +151,10 @@ describe('registerTodayIpc', () => {
     electron.removeHandler.mockReset();
   });
 
-  it('registers exactly the five strict Today channels', () => {
+  it('registers exactly the eight strict Today channels', () => {
     registerTodayIpc(fakeProvider());
 
-    expect(electron.handle).toHaveBeenCalledTimes(5);
+    expect(electron.handle).toHaveBeenCalledTimes(8);
     expect(electron.handle.mock.calls.map((call) => call[0]).sort()).toEqual([
       ...TODAY_CHANNELS,
     ]);
@@ -215,8 +218,7 @@ describe('registerTodayIpc', () => {
     await expect(
       invokeRegistered('today:snooze', trustedEvent, {
         salesCycleId: 'cycle-1',
-        reason: 'No comparison provided',
-        expiresAt: '2026-09-01T15:00:00.000Z',
+        resurfaceAt: 'not-a-timestamp',
       }),
     ).rejects.toThrow();
     await expect(
@@ -274,13 +276,13 @@ describe('registerTodayIpc', () => {
     await expect(invokeRegistered('today:get', trustedEvent)).rejects.toThrow();
   });
 
-  it('returns one idempotent unregister function that removes all five channels', () => {
+  it('returns one idempotent unregister function that removes all eight channels', () => {
     const unregister = registerTodayIpc(fakeProvider());
 
     unregister();
     unregister();
 
-    expect(electron.removeHandler).toHaveBeenCalledTimes(5);
+    expect(electron.removeHandler).toHaveBeenCalledTimes(8);
     expect(
       electron.removeHandler.mock.calls.map((call) => call[0]).sort(),
     ).toEqual([...TODAY_CHANNELS]);

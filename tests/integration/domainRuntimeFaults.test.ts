@@ -102,7 +102,7 @@ describe('DomainRuntime injected faults', () => {
   });
 
   it('fatal storage failure leaves zero writes and no clock/ID consumption', () => {
-    database.raw.prepare('UPDATE app_meta SET schema_version = 10 WHERE singleton = 1').run();
+    database.raw.prepare('UPDATE app_meta SET schema_version = 11 WHERE singleton = 1').run();
     let clockReads = 0;
     let idReads = 0;
     const runtime = new DomainRuntime({

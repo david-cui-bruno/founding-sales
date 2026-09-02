@@ -99,6 +99,12 @@ export function createTodayProvider(runtime: DomainGate): TodayProvider {
     pin: (input) => runtime.withDomain((domain) => domain.pinWithinLane(input)),
     logPastActivity: (input) =>
       runtime.withDomain((domain) => domain.logPastActivity(input)),
+    addLeadNote: (input) =>
+      runtime.withDomain((domain) => domain.addLeadNote(input)),
+    logCallOutcome: (input) =>
+      runtime.withDomain((domain) => domain.logCallOutcome(input)),
+    markActivityInError: (input) =>
+      runtime.withDomain((domain) => domain.markActivityInError(input)),
   };
 }
 

@@ -70,6 +70,11 @@ const appendActivityInputSchema = z.object({
   recordingStorageRef: textSchema.nullable().optional(),
   transcriptStorageRef: textSchema.nullable().optional(),
   metadata: z.unknown().optional(),
+  noteText: z.string().trim().min(1).max(10_000).nullable().optional(),
+  callOutcome: z.enum([
+    'no_answer', 'voicemail', 'spoke', 'interview_booked', 'not_interested', 'opted_out',
+  ]).nullable().optional(),
+  callbackAt: utcTimestampSchema.nullable().optional(),
 }).strict().superRefine((value, context) => {
   if (value.providerIdempotencyKey != null && value.adapter == null) {
     context.addIssue({
@@ -89,6 +94,20 @@ const appendActivityInputSchema = z.object({
       code: z.ZodIssueCode.custom,
       message: 'Cadence Activity evidence requires cycle, enrollment, step, and component IDs.',
       path: ['cadenceEnrollmentId'],
+    });
+  }
+  if (value.noteText != null && value.kind !== 'note') {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Founder note prose belongs only to note activities.',
+      path: ['noteText'],
+    });
+  }
+  if ((value.callOutcome != null || value.callbackAt != null) && value.kind !== 'call') {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Call outcome fields belong only to call activities.',
+      path: ['callOutcome'],
     });
   }
 });
@@ -155,6 +174,11 @@ const storedActivityRowSchema = z.object({
   transcript_storage_ref: textSchema.nullable(),
   metadata_json: jsonTextSchema,
   created_at: utcTimestampSchema,
+  note_text: z.string().nullable(),
+  call_outcome: z.enum([
+    'no_answer', 'voicemail', 'spoke', 'interview_booked', 'not_interested', 'opted_out',
+  ]).nullable(),
+  callback_at: utcTimestampSchema.nullable(),
 }).strict().superRefine((value, context) => {
   const cadenceEvidence = [
     value.cadence_enrollment_id,
@@ -228,7 +252,8 @@ const activityColumns = `
   kind, direction,
   channel, occurred_at, duration_seconds, observed_outcome, adapter,
   provider_idempotency_key, provider_reference, consent_policy_record_id,
-  recording_storage_ref, transcript_storage_ref, metadata_json, created_at
+  recording_storage_ref, transcript_storage_ref, metadata_json, created_at,
+  note_text, call_outcome, callback_at
 `;
 const amendmentColumns = `
   id, activity_id, amendment_kind, correction_json, reason, created_at
@@ -333,8 +358,8 @@ export class EventRepository {
         direction, channel, occurred_at, duration_seconds, observed_outcome,
         adapter, provider_idempotency_key, provider_reference,
         consent_policy_record_id, recording_storage_ref, transcript_storage_ref,
-        metadata_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        metadata_json, created_at, note_text, call_outcome, callback_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING ${activityColumns}
     `).get(
       id,
@@ -358,6 +383,9 @@ export class EventRepository {
       transcriptStorageRef,
       metadataJson,
       createdAt,
+      parsed.noteText ?? null,
+      parsed.callOutcome ?? null,
+      parsed.callbackAt ?? null,
     );
     return this.parseAndValidateActivity(row);
   }
@@ -523,6 +551,9 @@ function parseActivity(value: unknown): Activity {
     transcriptStorageRef: row.transcript_storage_ref,
     metadata: row.metadata_json,
     createdAt: row.created_at,
+    noteText: row.note_text,
+    callOutcome: row.call_outcome,
+    callbackAt: row.callback_at,
   } as Activity;
 }
 

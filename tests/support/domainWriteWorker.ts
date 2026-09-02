@@ -149,14 +149,9 @@ try {
   database.prepare(
     'INSERT INTO sales_cycles (id,person_id,prospect_id,entry_source_event_id,stage,' +
     'workflow_status,current_next_action_id,stage_entered_at,version,created_at,updated_at) ' +
-    "VALUES (?,?,?,?, 'unreviewed','active',?,?,1,?,?)"
+    "VALUES (?,?,?,?, 'unreviewed','active',NULL,?,1,?,?)"
   ).run(input.cycleId,input.personId,input.prospectId,input.sourceEventId,
-    input.actionId,input.timestamp,input.timestamp,input.timestamp);
-  database.prepare(
-    'INSERT INTO next_actions (id,sales_cycle_id,action_type,channel,status,due_at,' +
-    "timezone,work_intent,created_at,updated_at) VALUES (?,?,'review_lead',NULL,'pending',?," +
-    "'America/New_York','internal_review',?,?)"
-  ).run(input.actionId,input.cycleId,input.timestamp,input.timestamp,input.timestamp);
+    input.timestamp,input.timestamp,input.timestamp);
   database.prepare(
     'INSERT INTO stage_events (id,sales_cycle_id,from_stage,to_stage,effective_at,' +
     "confirmed_at,confirmation_kind,transition_sequence,created_at) VALUES (?,?,NULL," +
@@ -195,10 +190,10 @@ try {
   ).run(input.timestamp,input.enrollmentId,input.cycleId);
   if (enrollment.changes !== 1) throw new Error('stale enrollment');
   database.prepare(
-    'INSERT INTO next_actions (id,sales_cycle_id,action_type,channel,status,due_at,' +
-    "timezone,work_intent,created_at,updated_at) VALUES (?,?,'confirm_offer',NULL,'pending',?," +
+    'INSERT INTO next_actions (id,sales_cycle_id,action_type,channel,status,' +
+    "timezone,work_intent,created_at,updated_at) VALUES (?,?,'confirm_offer',NULL,'pending'," +
     "'America/New_York','internal_review',?,?)"
-  ).run(input.replacementActionId,input.cycleId,input.timestamp,input.timestamp,input.timestamp);
+  ).run(input.replacementActionId,input.cycleId,input.timestamp,input.timestamp);
   const cycle = database.prepare(
     'UPDATE sales_cycles SET current_next_action_id=?,version=version+1,updated_at=? ' +
     'WHERE id=? AND version=1 AND stage=\'interviewed\' AND workflow_status=\'active\' ' +

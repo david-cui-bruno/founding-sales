@@ -383,11 +383,11 @@ describe('OptOutService', () => {
       );
       database.raw.prepare(`
         INSERT INTO next_actions (
-          id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+          id, sales_cycle_id, action_type, channel, status, timezone,
           work_intent, created_at, updated_at
         ) VALUES ('won-receipt-action', 'won-receipt-cycle', 'onboard_customer',
-          'text', 'pending', ?, 'America/New_York', 'promised_follow_up', ?, ?)
-      `).run(DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+          'text', 'pending', 'America/New_York', 'promised_follow_up', ?, ?)
+      `).run(DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
       database.raw.prepare(`
         INSERT INTO won_terms (
           sales_cycle_id, doors_committed, billing_model, unit_rate_cents,
@@ -512,7 +512,6 @@ describe('OptOutService', () => {
       });
       const ready = lifecycle.reviewToReady({
         cycleId: unreviewed.id, expectedCycleVersion: unreviewed.version,
-        expectedCurrentActionId: unreviewed.currentNextActionId!,
         expectedProspectVersion: 1, effectiveAt: DOMAIN_TIMESTAMP,
       });
       addPhone(prospect.personId, `${prefix}-phone`);

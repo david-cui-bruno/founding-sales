@@ -1,7 +1,10 @@
 import { mutationReceiptSchema } from '../../shared/contracts/commonContract';
 import {
+  addLeadNoteRequestSchema,
   completeActionRequestSchema,
+  logCallOutcomeRequestSchema,
   logPastActivityRequestSchema,
+  markActivityInErrorRequestSchema,
   pinActionRequestSchema,
   snoozeActionRequestSchema,
   todaySnapshotSchema,
@@ -11,7 +14,7 @@ import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
 import type { TodayProvider } from './todayService';
 
 /**
- * Registers exactly the five strict Today channels and returns one
+ * Registers exactly the eight strict Today channels and returns one
  * idempotent unregister function that removes all of them.
  */
 export function registerTodayIpc(
@@ -52,6 +55,27 @@ export function registerTodayIpc(
       requestSchema: logPastActivityRequestSchema,
       responseSchema: mutationReceiptSchema,
       handler: (request) => provider.logPastActivity(request),
+      isTrustedRendererUrl,
+    }),
+    registerValidatedIpc({
+      channel: 'today:add-note',
+      requestSchema: addLeadNoteRequestSchema,
+      responseSchema: mutationReceiptSchema,
+      handler: (request) => provider.addLeadNote(request),
+      isTrustedRendererUrl,
+    }),
+    registerValidatedIpc({
+      channel: 'today:log-call-outcome',
+      requestSchema: logCallOutcomeRequestSchema,
+      responseSchema: mutationReceiptSchema,
+      handler: (request) => provider.logCallOutcome(request),
+      isTrustedRendererUrl,
+    }),
+    registerValidatedIpc({
+      channel: 'today:mark-activity-in-error',
+      requestSchema: markActivityInErrorRequestSchema,
+      responseSchema: mutationReceiptSchema,
+      handler: (request) => provider.markActivityInError(request),
       isTrustedRendererUrl,
     }),
   ];

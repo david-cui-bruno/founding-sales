@@ -102,13 +102,13 @@ describe('concurrent SalesCycle invariant', () => {
       );
       database.raw.prepare(`
         INSERT INTO next_actions (
-          id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+          id, sales_cycle_id, action_type, channel, status, timezone,
           allowed_window, work_intent, cadence_enrollment_id, cadence_step_id,
           cadence_component_id, version, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, 'pending', ?, 'America/New_York', 'afternoon',
+        ) VALUES (?, ?, ?, ?, 'pending', 'America/New_York', 'afternoon',
           'promised_follow_up', ?, ?, ?, 1, ?, ?)
       `).run(
-        actionId, cycleId, component.actionType, component.channel, DOMAIN_TIMESTAMP,
+        actionId, cycleId, component.actionType, component.channel,
         enrollmentId, step.id, component.id, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
       );
       database.raw.exec('COMMIT');
@@ -161,7 +161,7 @@ describe('concurrent SalesCycle invariant', () => {
       SELECT id, current_next_action_id FROM sales_cycles
       WHERE person_id = ? AND workflow_status IN ('active','onboarding')
     `).all(prospect.personId)).toEqual([
-      { id: 'worker-cycle', current_next_action_id: 'worker-action' },
+      { id: 'worker-cycle', current_next_action_id: null },
     ]);
   }, 10_000);
 
@@ -219,13 +219,13 @@ describe('concurrent SalesCycle invariant', () => {
       );
       database.raw.prepare(`
         INSERT INTO next_actions (
-          id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+          id, sales_cycle_id, action_type, channel, status, timezone,
           allowed_window, work_intent, cadence_enrollment_id, cadence_step_id,
           cadence_component_id, version, created_at, updated_at
-        ) VALUES (?, ?, 'call', 'phone', 'pending', ?, 'America/New_York',
+        ) VALUES (?, ?, 'call', 'phone', 'pending', 'America/New_York',
           'afternoon', 'promised_follow_up', ?, ?, ?, 1, ?, ?)
       `).run(
-        actionId, cycleId, DOMAIN_TIMESTAMP, enrollmentId, step.id, component.id,
+        actionId, cycleId, enrollmentId, step.id, component.id,
         DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
       );
       database.raw.exec('COMMIT');
@@ -383,14 +383,14 @@ describe('concurrent SalesCycle invariant', () => {
         },
         {
           sql: `INSERT INTO next_actions (
-            id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+            id, sales_cycle_id, action_type, channel, status, timezone,
             allowed_window, work_intent, cadence_enrollment_id, cadence_step_id,
             cadence_component_id, version, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, 'pending', ?, 'America/New_York', ?,
+          ) VALUES (?, ?, ?, ?, 'pending', 'America/New_York', ?,
             'promised_follow_up', ?, ?, ?, 1, ?, ?)`,
           params: [
             'winning-action', 'winning-cycle', component.actionType, component.channel,
-            OCTOBER, 'founder_text_v1:morning', 'winning-enrollment', step.id,
+            'founder_text_v1:morning', 'winning-enrollment', step.id,
             component.id, OCTOBER, OCTOBER,
           ],
         },

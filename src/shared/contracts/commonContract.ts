@@ -30,9 +30,7 @@ export const primaryActionSchema = z.object({
   id: z.string().min(1),
   type: z.string().min(1),
   channel: z.enum(['call', 'text', 'email', 'review', 'onboarding']),
-  dueAt: z.string().datetime({ offset: true }),
   label: z.string().min(1),
-  overdue: z.boolean(),
 }).strict();
 
 export const mutationReceiptSchema = z.object({

@@ -102,18 +102,31 @@ export function insertOpenCycleWithAction(input: {
       input.prospect.personId,
       input.prospect.prospectId,
       input.prospect.sourceEventId,
-      input.stage ?? 'unreviewed',
+      input.stage ?? 'ready',
       actionId,
       DOMAIN_TIMESTAMP,
       DOMAIN_TIMESTAMP,
       DOMAIN_TIMESTAMP,
     );
-    input.database.prepare(`
-      INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at,
-        timezone, created_at
-      ) VALUES (?, ?, 'review_lead', NULL, 'pending', ?, 'America/New_York', ?)
-    `).run(actionId, cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    // Pre-0010 schemas (migration tests) still carry NOT NULL due_at.
+    const hasDueAt = (input.database.prepare(
+      'PRAGMA table_info(next_actions)',
+    ).all() as { name: string }[]).some(({ name }) => name === 'due_at');
+    if (hasDueAt) {
+      input.database.prepare(`
+        INSERT INTO next_actions (
+          id, sales_cycle_id, action_type, channel, status, due_at,
+          timezone, work_intent, created_at
+        ) VALUES (?, ?, 'follow_up', NULL, 'pending', ?, 'America/New_York', 'promised_follow_up', ?)
+      `).run(actionId, cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    } else {
+      input.database.prepare(`
+        INSERT INTO next_actions (
+          id, sales_cycle_id, action_type, channel, status,
+          timezone, work_intent, created_at
+        ) VALUES (?, ?, 'follow_up', NULL, 'pending', 'America/New_York', 'promised_follow_up', ?)
+      `).run(actionId, cycleId, DOMAIN_TIMESTAMP);
+    }
     input.database.exec('COMMIT');
   } catch (error) {
     if (input.database.inTransaction) {

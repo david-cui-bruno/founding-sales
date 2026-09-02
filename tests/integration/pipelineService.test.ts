@@ -121,10 +121,10 @@ describe('pipelineService', () => {
 
     expect(snapshot.stages.map((lane) => lane.stage)).toEqual(FIXED_STAGE_ORDER);
     const byStage = new Map(snapshot.stages.map((lane) => [lane.stage, lane.cards]));
-    expect(byStage.get('unreviewed')?.map((card) => card.personId)).toEqual(['alpha-person']);
+    expect(byStage.get('ready')?.map((card) => card.personId)).toEqual(['alpha-person']);
     expect(byStage.get('contacted')?.map((card) => card.personId)).toEqual(['beta-person']);
     expect(byStage.get('offered')?.map((card) => card.personId)).toEqual(['gamma-person']);
-    expect(byStage.get('ready')).toEqual([]);
+    expect(byStage.get('unreviewed')).toEqual([]);
     expect(byStage.get('interviewed')).toEqual([]);
     expect(byStage.get('won')).toEqual([]);
 
@@ -145,7 +145,7 @@ describe('pipelineService', () => {
     expect(serialized).not.toMatch(/score|normalized_value|key_envelope/);
     const card = parsed.stages.find((lane) => lane.stage === 'contacted')?.cards[0];
     expect(card?.personName).toBe('Person alpha-person');
-    expect(card?.nextAction?.label).toBe('Review lead');
+    expect(card?.nextAction?.label).toBe('Follow up');
     expect(parsed.revision).toBeGreaterThanOrEqual(0);
   });
 });

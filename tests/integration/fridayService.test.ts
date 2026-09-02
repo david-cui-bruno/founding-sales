@@ -131,7 +131,7 @@ describe('fridayService over a real encrypted domain', () => {
     expect(report.metrics.map((metric) => metric.id)).toEqual([
       'interviews', 'offers', 'wins', 'offer_rate', 'win_rate',
       'jobs_requested', 'jobs_filled', 'fill_rate', 'new_mrr',
-      'founding_customers', 'design_partner_fitness', 'overdue_actions',
+      'founding_customers', 'design_partner_fitness', 'cycles_without_next_step',
       'invalid_action_cycles',
     ]);
   });
@@ -303,7 +303,7 @@ describe('fridayService over a real encrypted domain', () => {
     expect(metricById(report, 'win_rate').priorDelta).toBeNull();
     // Point-in-time and all-time metrics never report a weekly delta.
     expect(metricById(report, 'design_partner_fitness').priorDelta).toBeNull();
-    expect(metricById(report, 'overdue_actions').priorDelta).toBeNull();
+    expect(metricById(report, 'cycles_without_next_step').priorDelta).toBeNull();
     expect(metricById(report, 'invalid_action_cycles').priorDelta).toBeNull();
   });
 

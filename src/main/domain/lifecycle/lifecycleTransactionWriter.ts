@@ -38,6 +38,7 @@ import {
   reactivationReviewBlockerSchema,
   reactivationResultEnvelopeSchema,
   reactivationRuleCommandSchema,
+  toSalesCycleReceiptSnapshot,
   type ReactivateFromInboundCommand,
   type ReactivateFromRuleCommand,
   type PromoteUnknownInboundReviewCommand,
@@ -87,7 +88,6 @@ const createUnreviewedCycleSchema = z.object({
 const reviewToReadySchema = z.object({
   cycleId: lifecycleIdSchema,
   expectedCycleVersion: z.number().int().positive(),
-  expectedCurrentActionId: lifecycleIdSchema,
   expectedProspectVersion: z.number().int().positive(),
   effectiveAt: utcTimestampSchema,
 }).strict();
@@ -152,7 +152,6 @@ export type CreateUnreviewedCycleInput = Readonly<{
 export type ReviewToReadyInput = Readonly<{
   cycleId: string;
   expectedCycleVersion: number;
-  expectedCurrentActionId: string;
   expectedProspectVersion: number;
   effectiveAt: string;
 }>;
@@ -245,7 +244,7 @@ export type CloseLostNurtureQualification =
 export type CloseLostNurtureInput = Readonly<CloseLostNurtureQualification & {
   cycleId: string;
   expectedCycleVersion: number;
-  expectedCurrentActionId: string;
+  expectedCurrentActionId: string | null;
   notes: string | null;
   effectiveAt: string;
   manualReactivationDueAt: string | null;
@@ -394,20 +393,14 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       || (source.prospect_id !== null && source.prospect_id !== prospect.id)
     ) throw new LifecycleEligibilityError();
     const cycleId = this.ids.next();
-    const actionId = this.ids.next();
     const eventId = this.ids.next();
+    // Unreviewed cycles get NO next action: reviewing the lead is the
+    // inspector flow, never generated work (no-due-dates model).
     const cycle = this.cycles.insertCycleWithDeferredAction({
       id: cycleId, personId: person.id, prospectId: prospect.id,
       entrySourceEventId: parsed.entrySourceEventId, stage: 'unreviewed',
-      workflowStatus: 'active', currentNextActionId: actionId,
+      workflowStatus: 'active', currentNextActionId: null,
       stageEnteredAt: effectiveAt, createdAt: effectiveAt,
-    });
-    this.actions.insertNextAction({
-      id: actionId, salesCycleId: cycle.id, actionType: 'review_lead', channel: null,
-      status: 'pending', dueAt: effectiveAt, timezone: this.timezone,
-      allowedWindow: null, slaDueAt: null, workIntent: 'internal_review',
-      inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
-      cadence: NO_CADENCE, createdAt: effectiveAt,
     });
     this.events.appendStageEvent({
       id: eventId, salesCycleId: cycle.id, fromStage: null, toStage: 'unreviewed',
@@ -422,9 +415,12 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     this.unitOfWork.assertWriteScope();
     const parsed = reviewToReadySchema.parse(input);
     const effectiveAt = parsed.effectiveAt;
-    const cycle = this.requireExpectedOpenCycle(
-      parsed.cycleId, parsed.expectedCycleVersion, 'unreviewed', parsed.expectedCurrentActionId,
-    );
+    const cycle = this.cycles.getById(parsed.cycleId);
+    if (
+      cycle === null || cycle.version !== parsed.expectedCycleVersion
+      || cycle.stage !== 'unreviewed' || cycle.workflowStatus !== 'active'
+      || cycle.currentNextActionId !== null
+    ) throw new LifecycleConflictError('Expected lifecycle projection is stale.');
     this.assertTransitionEvidenceTimes(cycle, effectiveAt, effectiveAt, null);
     const prospect = this.identities.getCanonicalProspect(cycle.personId);
     if (
@@ -463,9 +459,9 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     };
     this.actions.insertNextAction({
       id: nextActionId, salesCycleId: cycle.id, actionType: draft.actionType,
-      channel: draft.channel, status: 'pending', dueAt: draft.dueAt,
+      channel: draft.channel, status: 'pending',
       timezone: draft.timezone, allowedWindow: draft.allowedWindow,
-      slaDueAt: draft.slaDueAt, workIntent: 'discretionary_prospecting',
+      workIntent: 'discretionary_prospecting',
       inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
       cadence, createdAt: effectiveAt,
     });
@@ -477,7 +473,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     });
     const transitioned = this.cycles.transitionOpenProjection({
       cycleId: cycle.id, expectedVersion: cycle.version, expectedStage: 'unreviewed',
-      expectedWorkflowStatus: 'active', expectedCurrentActionId: cycle.currentNextActionId!,
+      expectedWorkflowStatus: 'active', expectedCurrentActionId: null,
       nextStage: 'ready', nextWorkflowStatus: 'active', nextActionId,
       stageEnteredAt: effectiveAt,
     });
@@ -485,23 +481,6 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       id: eventId, salesCycleId: cycle.id, fromStage: 'unreviewed', toStage: 'ready',
       effectiveAt, confirmedAt: effectiveAt, confirmationKind: 'founder',
       transitionSequence: 2,
-    });
-    this.actions.settleAction({
-      actionId: cycle.currentNextActionId!, salesCycleId: cycle.id,
-      expectedStatus: 'pending', expectedVersion: 1,
-      expectedWorkIntent: 'internal_review',
-      expectedInboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
-      expectedCadence: NO_CADENCE, status: 'completed', completedAt: effectiveAt,
-      completionActivityId: null,
-      settlement: {
-        version: 1, outcome: 'reviewed_ready', reason: null, evidenceActivityId: null,
-        plannerTransition: {
-          definitionId: null, stepId: null, componentId: null,
-          attempt: null, outcome: 'reviewed_ready',
-        },
-        cadence: NO_CADENCE, workIntent: 'internal_review',
-        inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
-      },
     });
     this.cycles.assertCurrentActionPostcondition(cycle.id);
     return transitioned;
@@ -630,9 +609,9 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     const cadence = cadenceBinding(enrollmentId, draft);
     this.actions.insertNextAction({
       id: actionId, salesCycleId: cycle.id, actionType: draft.actionType,
-      channel: draft.channel, status: 'pending', dueAt: draft.dueAt,
+      channel: draft.channel, status: 'pending',
       timezone: draft.timezone, allowedWindow: draft.allowedWindow,
-      slaDueAt: draft.slaDueAt, workIntent: 'promised_follow_up',
+      workIntent: 'promised_follow_up',
       inboundSla: noneInboundSla(), cadence, createdAt: parsed.effectiveAt,
     });
     const projectedMrrCents = parsed.terms.billingModel === 'per_door_monthly'
@@ -762,7 +741,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     const closed = this.cycles.closeProjection({
       cycleId: cycle.id, expectedVersion: cycle.version, expectedStage: cycle.stage,
       expectedWorkflowStatus: cycle.workflowStatus as 'active' | 'onboarding',
-      expectedCurrentActionId: cycle.currentNextActionId!,
+      expectedCurrentActionId: cycle.currentNextActionId,
       finalStage: preserveWon ? 'won' : 'lost_nurture',
       closedAt: effectiveAt, closeReason: preserveWon ? null : 'opt_out', closeNotes: null,
       onboardingStopReason: preserveWon ? 'opt_out' : null,
@@ -775,28 +754,31 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
         confirmedAt: effectiveAt, confirmationKind: 'mechanical', transitionSequence: sequence,
       });
     }
-    const action = this.actions.getById(cycle.currentNextActionId!);
-    if (action === null) throw new LifecycleConflictError('Current action is missing.');
-    this.actions.settleAction({
-      actionId: action.id, salesCycleId: cycle.id, expectedStatus: 'pending',
-      expectedVersion: action.version, ...expectedIntentAndSla(action),
-      expectedCadence: action.cadence,
-      status: 'cancelled', completedAt: effectiveAt,
-      completionActivityId: evidence.salesCycleId === action.salesCycleId ? evidence.id : null,
-      settlement: {
-        version: 1, outcome: 'opted_out', reason: 'person_wide_opt_out',
-        evidenceActivityId: evidence.id,
-        plannerTransition: {
-          definitionId: action.cadence.cadenceDefinitionId,
-          stepId: action.cadence.cadenceStepId,
-          componentId: action.cadence.cadenceComponentId,
-          attempt: this.settlementAttempt(action),
-          outcome: 'opted_out',
-        }, cadence: action.cadence, workIntent: action.workIntent, inboundSla: action.inboundSla,
-      },
-    });
+    const action = cycle.currentNextActionId === null
+      ? null
+      : this.actions.getById(cycle.currentNextActionId);
+    if (action !== null) {
+      this.actions.settleAction({
+        actionId: action.id, salesCycleId: cycle.id, expectedStatus: 'pending',
+        expectedVersion: action.version, ...expectedIntentAndSla(action),
+        expectedCadence: action.cadence,
+        status: 'cancelled', completedAt: effectiveAt,
+        completionActivityId: evidence.salesCycleId === action.salesCycleId ? evidence.id : null,
+        settlement: {
+          version: 1, outcome: 'opted_out', reason: 'person_wide_opt_out',
+          evidenceActivityId: evidence.id,
+          plannerTransition: {
+            definitionId: action.cadence.cadenceDefinitionId,
+            stepId: action.cadence.cadenceStepId,
+            componentId: action.cadence.cadenceComponentId,
+            attempt: this.settlementAttempt(action),
+            outcome: 'opted_out',
+          }, cadence: action.cadence, workIntent: action.workIntent, inboundSla: action.inboundSla,
+        },
+      });
+    }
     const cancelledActionIds = [
-      action.id,
+      ...(action === null ? [] : [action.id]),
       ...this.cancelPendingOutboundForPerson(parsed.personId, evidence, effectiveAt),
     ].sort();
     this.cycles.assertCurrentActionPostcondition(cycle.id);
@@ -866,12 +848,12 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       if (recipe.nextAction.kind === 'reschedule_current') {
         this.actions.reschedulePendingAction({
           actionId: action.id, salesCycleId: cycle.id, expectedStatus: 'pending',
-          expectedVersion: action.version, expectedDueAt: action.dueAt,
+          expectedVersion: action.version,
           ...expectedIntentAndSla(action),
-          expectedCadence: action.cadence, dueAt: recipe.nextAction.dueAt,
+          expectedCadence: action.cadence,
           updatedAt: parsed.evaluationAt,
           timezone: recipe.nextAction.timezone, allowedWindow: recipe.nextAction.allowedWindow,
-          slaDueAt: recipe.nextAction.slaDueAt, cadence: action.cadence,
+          cadence: action.cadence,
         });
         this.assertOutcomePostcondition(cycle.id, mutatedEnrollment);
         return this.cycles.getById(cycle.id)!;
@@ -888,9 +870,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
         : nextIntentAndSla('promised_follow_up', noneInboundSla());
       this.actions.insertNextAction({
         id: nextActionId, salesCycleId: cycle.id, actionType: draft.actionType,
-        channel: draft.channel, status: 'pending', dueAt: draft.dueAt,
+        channel: draft.channel, status: 'pending',
         timezone: draft.timezone, allowedWindow: draft.allowedWindow,
-        slaDueAt: draft.slaDueAt,
         ...intentAndSla,
         cadence: binding, createdAt: parsed.evaluationAt,
       });
@@ -915,7 +896,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     this.unitOfWork.assertWriteScope();
     const parsed = z.object({
       cycleId: z.string().trim().min(1), expectedCycleVersion: z.number().int().positive(),
-      expectedCurrentActionId: z.string().trim().min(1),
+      expectedCurrentActionId: z.string().trim().min(1).nullable(),
       reason: z.enum([
         'no_response', 'not_interested', 'bad_timing', 'not_decision_maker',
         'not_qualified', 'price', 'trust', 'chose_alternative', 'product_gap',
@@ -946,7 +927,9 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       || cycle.currentNextActionId !== parsed.expectedCurrentActionId
       || cycle.workflowStatus !== 'active'
     ) throw new LifecycleConflictError('Lost-Nurture projection is stale.');
-    const action = this.requireCurrentAction(cycle);
+    const action = cycle.currentNextActionId === null
+      ? null
+      : this.requireCurrentAction(cycle);
     const enrollment = this.enrollments.getActiveForCycle(cycle.id);
     const family = enrollment === null
       ? null
@@ -984,7 +967,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     const closed = this.cycles.closeProjection({
       cycleId: cycle.id, expectedVersion: cycle.version, expectedStage: cycle.stage,
       expectedWorkflowStatus: cycle.workflowStatus as 'active' | 'onboarding',
-      expectedCurrentActionId: action.id, finalStage: 'lost_nurture',
+      expectedCurrentActionId: action?.id ?? null, finalStage: 'lost_nurture',
       closedAt: parsed.effectiveAt, closeReason: parsed.reason,
       closeNotes: parsed.notes, onboardingStopReason: null,
     });
@@ -994,22 +977,24 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       confirmedAt: parsed.effectiveAt, confirmationKind: 'founder',
       transitionSequence: this.nextTransitionSequence(cycle.id),
     });
-    this.actions.settleAction({
-      actionId: action.id, salesCycleId: cycle.id, expectedStatus: 'pending',
-      expectedVersion: action.version, ...expectedIntentAndSla(action),
-      expectedCadence: action.cadence,
-      status: 'cancelled', completedAt: parsed.effectiveAt, completionActivityId: null,
-      settlement: {
-        version: 1, outcome: 'lost_nurture', reason: parsed.reason,
-        evidenceActivityId: null,
-        plannerTransition: {
-          definitionId: action.cadence.cadenceDefinitionId,
-          stepId: action.cadence.cadenceStepId,
-          componentId: action.cadence.cadenceComponentId,
-          attempt: this.settlementAttempt(action), outcome: 'lost_nurture',
-        }, cadence: action.cadence, workIntent: action.workIntent, inboundSla: action.inboundSla,
-      },
-    });
+    if (action !== null) {
+      this.actions.settleAction({
+        actionId: action.id, salesCycleId: cycle.id, expectedStatus: 'pending',
+        expectedVersion: action.version, ...expectedIntentAndSla(action),
+        expectedCadence: action.cadence,
+        status: 'cancelled', completedAt: parsed.effectiveAt, completionActivityId: null,
+        settlement: {
+          version: 1, outcome: 'lost_nurture', reason: parsed.reason,
+          evidenceActivityId: null,
+          plannerTransition: {
+            definitionId: action.cadence.cadenceDefinitionId,
+            stepId: action.cadence.cadenceStepId,
+            componentId: action.cadence.cadenceComponentId,
+            attempt: this.settlementAttempt(action), outcome: 'lost_nurture',
+          }, cadence: action.cadence, workIntent: action.workIntent, inboundSla: action.inboundSla,
+        },
+      });
+    }
     this.cycles.assertCurrentActionPostcondition(cycle.id);
     return closed;
   }
@@ -1065,7 +1050,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       result: {
         version: 1,
         result: {
-          kind: 'reactivated', activationKind: 'rule', cycle, cadence: parsed.cadence,
+          kind: 'reactivated', activationKind: 'rule',
+          cycle: toSalesCycleReceiptSnapshot(cycle), cadence: parsed.cadence,
         },
       },
       createdAt: parsed.activatedAt,
@@ -1137,7 +1123,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       result: {
         version: 1,
         result: {
-          kind: 'reactivated', activationKind: 'inbound_response', cycle,
+          kind: 'reactivated', activationKind: 'inbound_response',
+          cycle: toSalesCycleReceiptSnapshot(cycle),
           cadence: parsed.cadence,
         },
       },
@@ -1306,9 +1293,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       : nextIntentAndSla('discretionary_prospecting', noneInboundSla());
     this.actions.insertNextAction({
       id: nextActionId, salesCycleId: cycle.id, actionType: draft.actionType,
-      channel: draft.channel, status: 'pending', dueAt: draft.dueAt,
+      channel: draft.channel, status: 'pending',
       timezone: draft.timezone, allowedWindow: draft.allowedWindow,
-      slaDueAt: draft.slaDueAt,
       ...intentAndSla,
       cadence: cadenceBinding(newEnrollmentId, draft), createdAt: parsed.evaluationAt,
     });
@@ -1389,10 +1375,33 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       throw new LifecycleIdempotencyConflictError();
     }
     const result = reactivationReceiptResultSchema.parse(receipt.result);
-    const cycle = result.result.cycle as SalesCycle;
-    if (cycle.id !== receipt.newCycleId) {
+    if (result.result.cycle.id !== receipt.newCycleId) {
       throw new LifecycleEvidenceError('Reactivation receipt result is missing its cycle.');
     }
+    // Replays return the immutable receipt snapshot, not the live
+    // projection. A freshly reactivated cycle always starts without a
+    // resurface marker, so the snapshot hydrates those fields as null.
+    const snapshot = result.result.cycle;
+    const cycle: SalesCycle = {
+      id: snapshot.id,
+      personId: snapshot.personId,
+      prospectId: snapshot.prospectId,
+      entrySourceEventId: snapshot.entrySourceEventId,
+      stage: snapshot.stage,
+      workflowStatus: snapshot.workflowStatus,
+      currentNextActionId: snapshot.currentNextActionId,
+      stageEnteredAt: snapshot.stageEnteredAt,
+      designPartnerFitness: snapshot.designPartnerFitness,
+      closeReason: snapshot.closeReason,
+      closeNotes: snapshot.closeNotes,
+      onboardingStopReason: snapshot.onboardingStopReason,
+      closedAt: snapshot.closedAt,
+      resurfaceAt: null,
+      resurfaceReason: null,
+      version: snapshot.version,
+      createdAt: snapshot.createdAt,
+      updatedAt: snapshot.updatedAt,
+    };
     return Object.freeze({ kind: 'reactivated', cycle });
   }
 
@@ -1587,9 +1596,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       : nextIntentAndSla('discretionary_prospecting', inboundSla);
     this.actions.insertNextAction({
       id: actionId, salesCycleId: input.newCycleId, actionType: draft.actionType,
-      channel: draft.channel, status: 'pending', dueAt: draft.dueAt,
+      channel: draft.channel, status: 'pending',
       timezone: draft.timezone, allowedWindow: draft.allowedWindow,
-      slaDueAt: draft.slaDueAt,
       ...intentAndSla, cadence: cadenceBinding(enrollmentId, draft), createdAt: input.activatedAt,
     });
     this.events.appendStageEvent({
@@ -1678,9 +1686,9 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     const cadence = cadenceBinding(enrollmentId, draft);
     this.actions.insertNextAction({
       id: actionId, salesCycleId: input.cycle.id, actionType: draft.actionType,
-      channel: draft.channel, status: 'pending', dueAt: draft.dueAt,
+      channel: draft.channel, status: 'pending',
       timezone: draft.timezone, allowedWindow: draft.allowedWindow,
-      slaDueAt: draft.slaDueAt, workIntent: 'promised_follow_up',
+      workIntent: 'promised_follow_up',
       inboundSla: noneInboundSla(), cadence, createdAt: input.effectiveAt,
     });
     const transitioned = this.cycles.transitionOpenProjection({
@@ -1952,8 +1960,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     const nextActionId = this.ids.next();
     this.actions.insertNextAction({
       id: nextActionId, salesCycleId: input.cycle.id, actionType: input.actionType,
-      channel: null, status: 'pending', dueAt: input.evaluationAt,
-      timezone: this.timezone, allowedWindow: null, slaDueAt: null,
+      channel: null, status: 'pending',
+      timezone: this.timezone, allowedWindow: null,
       workIntent: input.workIntent, inboundSla: noneInboundSla(),
       cadence: NO_CADENCE, createdAt: input.evaluationAt,
     });

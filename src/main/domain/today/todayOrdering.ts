@@ -1,9 +1,5 @@
 import { PrioritizationInputCorruptionError } from '../support/domainErrors';
 import { parseCanonicalUtcMillis } from '../prioritization/qualificationEngine';
-import {
-  compareProspectPriority,
-  toOrderablePriorityRow,
-} from '../prioritization/priorityOrdering';
 import type {
   ParsedTodayCandidate,
   TodayCapacity,
@@ -18,11 +14,14 @@ import type {
 
 const CANONICAL_UTC_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
+/**
+ * No-due-dates lane order (audit 4.9.5): Onboard now, Fresh inbound, Due
+ * cadence, New P0, P1, Exploration, Later. Overdue and Post-interview/offer
+ * are gone; post-stage promises fold into Due cadence.
+ */
 const LANE_ORDER: readonly TodayLane[] = [
   'won_onboarding',
   'inbound_interrupt',
-  'overdue',
-  'post_interview_offer',
   'due_primary',
   'new_p0',
   'p1',
@@ -33,6 +32,10 @@ const LANE_ORDER: readonly TodayLane[] = [
 const LANE_RANK: Readonly<Record<TodayLane, number>> = Object.freeze(
   Object.fromEntries(LANE_ORDER.map((lane, index) => [lane, index])) as Record<TodayLane, number>,
 );
+
+const PRIORITY_RANK: Readonly<Record<'p0' | 'p1' | 'p2' | 'p3', number>> = Object.freeze({
+  p0: 0, p1: 1, p2: 2, p3: 3,
+});
 
 function deepFreeze<T>(value: T): T {
   if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -150,6 +153,8 @@ function toItem(
     pinned: false,
     lastActivity: candidate.lastActivity,
     stageEnteredAt: candidate.stageEnteredAt,
+    resurfaceAt: candidate.resurfaceAt,
+    resurfaceReason: candidate.resurfaceReason,
     inlineDiagnostics: candidate.inlineDiagnostics,
   };
 }
@@ -159,72 +164,65 @@ function effectivePriorityOf(candidate: ParsedTodayCandidate): 'p0' | 'p1' | 'p2
 }
 
 /**
- * Pure first-match lane classification in the exact plan order. The persisted
- * work_intent is load-bearing; due time never converts discretionary work into
- * a promise.
+ * Pure first-match lane classification in the fixed no-due-dates order.
+ * Time never converts work into a promise: lanes derive from workflow
+ * status, work intent, and founder-chosen resurface markers only.
  */
 export function classifyTodayCandidate(
   candidate: ParsedTodayCandidate,
   context: TodayEvaluationContext,
 ): TodayPreCapacityDisposition {
   const asOfMillis = assertCanonical(context.generatedAt, 'generatedAt');
-  const dayStartMillis = assertCanonical(context.localDayStartAt, 'localDayStartAt');
-  const dayEndMillis = assertCanonical(context.localDayEndAt, 'localDayEndAt');
-  const dueAtMillis = assertCanonical(candidate.action.dueAt, 'Action due_at');
   const intent = candidate.action.workIntent;
   const sla = candidate.action.inboundSla;
+
+  // 0. A future founder-chosen resurface hides the cycle entirely.
+  let resurfaceReason: TodayLaneReason | null = null;
+  if (candidate.resurfaceAt !== null) {
+    const resurfaceMillis = assertCanonical(candidate.resurfaceAt, 'resurface_at');
+    if (resurfaceMillis > asOfMillis) {
+      return {
+        kind: 'suppressed',
+        cycleId: candidate.cycleId,
+        reason: 'resurface_scheduled',
+      };
+    }
+    resurfaceReason = candidate.resurfaceReason === 'callback'
+      ? 'callback_promised_today'
+      : 'snoozed_until_today';
+  }
 
   // 1. Won onboarding outranks everything.
   if (candidate.workflowStatus === 'onboarding') {
     return { kind: 'lane', lane: 'won_onboarding', item: toItem(candidate, 'won_onboarding', 'won_onboarding') };
   }
 
-  // 2. Fresh inbound inside its SLA.
-  if (intent === 'inbound_response' && sla.kind !== 'none') {
-    const slaDueMillis = assertCanonical(sla.dueAt, 'Inbound SLA due_at');
-    if (asOfMillis < slaDueMillis) {
-      return { kind: 'lane', lane: 'inbound_interrupt', item: toItem(candidate, 'inbound_interrupt', 'inbound_inside_sla') };
+  // 2. Fresh inbound: an inbound response is time-sensitive while inside its
+  // SLA and stays at the top of Fresh inbound after it (age ordering).
+  if (intent === 'inbound_response') {
+    if (sla.kind !== 'none') {
+      assertCanonical(sla.dueAt, 'Inbound SLA due_at');
     }
-    // 3a. Breached inbound SLA enters Overdue at exactly the deadline.
-    return { kind: 'lane', lane: 'overdue', item: toItem(candidate, 'overdue', 'inbound_sla_breached') };
+    return {
+      kind: 'lane',
+      lane: 'inbound_interrupt',
+      item: toItem(candidate, 'inbound_interrupt', resurfaceReason ?? 'inbound_inside_sla'),
+    };
   }
 
   const discretionary = intent === 'discretionary_prospecting';
 
-  // 3b. Non-discretionary overdue: strict dueAt < asOf; equality is due now.
-  if (!discretionary && dueAtMillis < asOfMillis) {
-    return { kind: 'lane', lane: 'overdue', item: toItem(candidate, 'overdue', 'non_discretionary_overdue') };
-  }
-
-  const dueToday = dueAtMillis >= dayStartMillis && dueAtMillis < dayEndMillis;
-
-  // 4. Promised follow-up at Interviewed/Offered due in founder-local Today.
-  if (intent === 'promised_follow_up'
-    && (candidate.stage === 'interviewed' || candidate.stage === 'offered')
-    && dueToday) {
-    return {
-      kind: 'lane',
-      lane: 'post_interview_offer',
-      item: toItem(candidate, 'post_interview_offer', 'post_stage_due_today'),
-    };
-  }
-
-  // 5. Any other non-discretionary work due in founder-local Today.
-  if (!discretionary && dueToday) {
-    return {
-      kind: 'lane',
-      lane: 'due_primary',
-      item: toItem(candidate, 'due_primary', 'other_non_discretionary_due_today'),
-    };
-  }
-
+  // 3. Non-discretionary work (cadence next steps, promises, internal
+  // review) is Due cadence: the cadence or founder said this is next.
   if (!discretionary) {
-    // Future promise/internal work waits in Later with its own reason.
-    const item = toItem(candidate, 'due_primary', 'future_promise');
-    return { kind: 'later', item: { ...item, lane: 'later', deferredFrom: 'due_primary' } };
+    const reason: TodayLaneReason = resurfaceReason
+      ?? (intent === 'promised_follow_up'
+        ? (candidate.cadence !== null ? 'cadence_step_next' : 'promised_follow_up')
+        : 'internal_review_waiting');
+    return { kind: 'lane', lane: 'due_primary', item: toItem(candidate, 'due_primary', reason) };
   }
 
-  // Suppression applies only to discretionary lanes 6-8.
+  // Suppression applies only to discretionary lanes.
   const suppression = discretionarySuppression(candidate, context, asOfMillis);
   if (suppression !== null) return suppression;
 
@@ -248,12 +246,12 @@ export function classifyTodayCandidate(
 
   const priority = effectivePriorityOf(candidate);
   if (priority === 'p0') {
-    return { kind: 'lane', lane: 'new_p0', item: toItem(candidate, 'new_p0', 'ready_p0') };
+    return { kind: 'lane', lane: 'new_p0', item: toItem(candidate, 'new_p0', resurfaceReason ?? 'ready_p0') };
   }
   if (priority === 'p1') {
-    return { kind: 'lane', lane: 'p1', item: toItem(candidate, 'p1', 'ready_p1') };
+    return { kind: 'lane', lane: 'p1', item: toItem(candidate, 'p1', resurfaceReason ?? 'ready_p1') };
   }
-  const reason = priority === 'p2' ? 'ready_p2' as const : 'ready_p3' as const;
+  const reason = resurfaceReason ?? (priority === 'p2' ? 'ready_p2' as const : 'ready_p3' as const);
   return { kind: 'lane', lane: 'exploration', item: toItem(candidate, 'exploration', reason) };
 }
 
@@ -314,61 +312,52 @@ function pinnedOf(item: TodayItem): boolean {
   return item.pinned;
 }
 
-function dueOrderedCompare(left: TodayItem, right: TodayItem): number {
+/**
+ * The within-lane comparator (audit 4.9.5): priority band, then cloud
+ * timing (higher first, nulls last), then last-touch age (older first,
+ * never-touched first as "oldest"), then stable ids. Computed at render;
+ * nothing here reads a stored due time.
+ */
+function bandTimingAgeCompare(left: TodayItem, right: TodayItem): number {
   if (pinnedOf(left) !== pinnedOf(right)) return pinnedOf(left) ? -1 : 1;
-  const byDue = compareCanonical(left.action.dueAt, right.action.dueAt);
-  if (byDue !== 0) return byDue;
-  const byStage = compareCanonical(left.stageEnteredAt, right.stageEnteredAt);
-  if (byStage !== 0) return byStage;
-  const leftSequence = left.cadence?.stepSequence ?? null;
-  const rightSequence = right.cadence?.stepSequence ?? null;
-  if ((leftSequence === null) !== (rightSequence === null)) {
-    return leftSequence === null ? 1 : -1;
+  const leftBand = left.priority === null
+    ? 4 : PRIORITY_RANK[left.priority.effectivePriority];
+  const rightBand = right.priority === null
+    ? 4 : PRIORITY_RANK[right.priority.effectivePriority];
+  if (leftBand !== rightBand) return leftBand - rightBand;
+  const leftTiming = left.priority?.cloudTiming ?? null;
+  const rightTiming = right.priority?.cloudTiming ?? null;
+  if ((leftTiming === null) !== (rightTiming === null)) {
+    return leftTiming === null ? 1 : -1;
   }
-  if (leftSequence !== null && rightSequence !== null && leftSequence !== rightSequence) {
-    return leftSequence - rightSequence;
+  if (leftTiming !== null && rightTiming !== null && leftTiming !== rightTiming) {
+    return rightTiming - leftTiming;
   }
+  const leftTouch = lastTouchOf(left);
+  const rightTouch = lastTouchOf(right);
+  if (leftTouch !== rightTouch) return compareCanonical(leftTouch, rightTouch);
   const byAction = compareCanonical(left.action.id, right.action.id);
   if (byAction !== 0) return byAction;
   return compareCanonical(left.cycleId, right.cycleId);
+}
+
+/** Never-touched sorts as oldest; otherwise the last activity instant. */
+function lastTouchOf(item: TodayItem): string {
+  return item.lastActivity?.occurredAt ?? '';
 }
 
 function inboundCompare(left: TodayItem, right: TodayItem): number {
   if (pinnedOf(left) !== pinnedOf(right)) return pinnedOf(left) ? -1 : 1;
-  const leftSla = left.action.inboundSla.dueAt ?? left.action.dueAt;
-  const rightSla = right.action.inboundSla.dueAt ?? right.action.dueAt;
-  const bySla = compareCanonical(leftSla, rightSla);
-  if (bySla !== 0) return bySla;
-  const byDue = compareCanonical(left.action.dueAt, right.action.dueAt);
-  if (byDue !== 0) return byDue;
-  const byStage = compareCanonical(left.stageEnteredAt, right.stageEnteredAt);
-  if (byStage !== 0) return byStage;
-  const byAction = compareCanonical(left.action.id, right.action.id);
-  if (byAction !== 0) return byAction;
-  return compareCanonical(left.cycleId, right.cycleId);
-}
-
-function priorityCompare(left: TodayItem, right: TodayItem): number {
-  if (pinnedOf(left) !== pinnedOf(right)) return pinnedOf(left) ? -1 : 1;
-  if (left.priority === null || right.priority === null) {
-    throw new PrioritizationInputCorruptionError(
-      'Priority lanes require a current effective snapshot.',
-    );
+  // Inside Fresh inbound, the tightest SLA first; missing SLA (post-window
+  // rows kept by intent) falls back to band/timing/age.
+  const leftSla = left.action.inboundSla.dueAt;
+  const rightSla = right.action.inboundSla.dueAt;
+  if ((leftSla === null) !== (rightSla === null)) return leftSla === null ? 1 : -1;
+  if (leftSla !== null && rightSla !== null) {
+    const bySla = compareCanonical(leftSla, rightSla);
+    if (bySla !== 0) return bySla;
   }
-  return compareProspectPriority(
-    toOrderablePriorityRow(left.priority),
-    toOrderablePriorityRow(right.priority),
-  );
-}
-
-function explorationCompare(left: TodayItem, right: TodayItem): number {
-  const leftPriority = left.priority?.effectivePriority;
-  const rightPriority = right.priority?.effectivePriority;
-  // P2 always precedes P3 even against a pinned P3.
-  if (leftPriority !== rightPriority) {
-    return leftPriority === 'p2' ? -1 : 1;
-  }
-  return priorityCompare(left, right);
+  return bandTimingAgeCompare(left, right);
 }
 
 /** Public within-lane comparator: pin applies only inside the assigned lane. */
@@ -379,25 +368,22 @@ export function compareTodayItems(left: TodayItem, right: TodayItem): number {
   switch (left.lane) {
     case 'inbound_interrupt':
       return inboundCompare(left, right);
-    case 'new_p0':
-    case 'p1':
-      return priorityCompare(left, right);
-    case 'exploration':
-      return explorationCompare(left, right);
     case 'later': {
       const leftFrom = left.deferredFrom === null ? Number.MAX_SAFE_INTEGER : LANE_RANK[left.deferredFrom];
       const rightFrom = right.deferredFrom === null ? Number.MAX_SAFE_INTEGER : LANE_RANK[right.deferredFrom];
       if (leftFrom !== rightFrom) return leftFrom - rightFrom;
-      return compareCanonical(left.cycleId, right.cycleId);
+      return bandTimingAgeCompare(left, right);
     }
     default:
-      return dueOrderedCompare(left, right);
+      return bandTimingAgeCompare(left, right);
   }
 }
 
 /**
- * Pure Today planner: classifies, applies pins after lane assignment, orders,
- * and applies exact durable capacity. No database, clock, IDs, or ambient time.
+ * Pure Today planner: classifies, applies pins after lane assignment, orders
+ * by lane rank > priority band > cloud timing > last-touch age, and applies
+ * the whole-queue capacity cap (dialBudget, default 40) with per-lane
+ * computed overflow counts. No database, clock, IDs, or ambient time.
  */
 export function planTodayQueue(input: {
   candidates: readonly ParsedTodayCandidate[];
@@ -405,14 +391,24 @@ export function planTodayQueue(input: {
   timezone: string;
   capacity: TodayCapacity;
   completedDiscretionaryDialCount: number;
+  unreviewedBacklogCount?: number;
   extraDiagnostics?: readonly TodayDiagnostic[];
-  extraSuppressed?: readonly { cycleId: string; reason: 'snoozed' | 'dismissed' | 'recently_contacted' }[];
+  extraSuppressed?: readonly {
+    cycleId: string;
+    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled';
+  }[];
 }): TodayQueue {
   const capacity = validateCapacity(input.capacity);
   if (!Number.isSafeInteger(input.completedDiscretionaryDialCount)
     || input.completedDiscretionaryDialCount < 0) {
     throw new PrioritizationInputCorruptionError(
       'Completed discretionary dial count must be a safe nonnegative integer.',
+    );
+  }
+  const unreviewedBacklogCount = input.unreviewedBacklogCount ?? 0;
+  if (!Number.isSafeInteger(unreviewedBacklogCount) || unreviewedBacklogCount < 0) {
+    throw new PrioritizationInputCorruptionError(
+      'Unreviewed backlog count must be a safe nonnegative integer.',
     );
   }
   const interval = resolveLocalDayInterval({
@@ -431,12 +427,14 @@ export function planTodayQueue(input: {
   const laneBuckets = new Map<TodayLane, TodayItem[]>(
     LANE_ORDER.map((lane): [TodayLane, TodayItem[]] => [lane, []]),
   );
-  const suppressed: { cycleId: string; reason: 'snoozed' | 'dismissed' | 'recently_contacted' }[] = [
+  const suppressed: {
+    cycleId: string;
+    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled';
+  }[] = [
     ...(input.extraSuppressed ?? []),
   ];
   const diagnostics: TodayDiagnostic[] = [...(input.extraDiagnostics ?? [])];
   const seenCycleIds = new Set<string>();
-  let unreviewedBacklogCount = 0;
 
   for (const candidate of input.candidates) {
     if (seenCycleIds.has(candidate.cycleId)) {
@@ -458,13 +456,6 @@ export function planTodayQueue(input: {
       suppressed.push({ cycleId: disposition.cycleId, reason: disposition.reason });
       continue;
     }
-    // Unreviewed leads never flood the Overdue lane; they surface as one
-    // backlog count and the Leads screen owns reviewing them.
-    if (disposition.kind === 'lane' && disposition.lane === 'overdue'
-      && candidate.stage === 'unreviewed') {
-      unreviewedBacklogCount += 1;
-      continue;
-    }
     const pinControl = disposition.item.priority?.controls.pin ?? null;
     const pinned = pinControl !== null
       && pinControl.createdAt <= input.generatedAt
@@ -482,57 +473,51 @@ export function planTodayQueue(input: {
     laneBuckets.get(lane)!.sort(compareTodayItems);
   }
 
-  // Exact durable capacity.
-  const remainingBudget = Math.max(
-    0, capacity.dialBudget - input.completedDiscretionaryDialCount,
-  );
-  let remaining = remainingBudget;
+  // Exploration slots: keep the configured number, defer the rest.
   const later = laneBuckets.get('later')!;
-
-  const isCall = (item: TodayItem): boolean => item.action.actionType === 'call';
-
-  // Select up to explorationSlots from ordered P2 then P3 candidates.
   const exploration = laneBuckets.get('exploration')!;
   const selectedExploration = exploration.slice(0, capacity.explorationSlots);
   const quotaOverflow = exploration.slice(capacity.explorationSlots);
-  const retainedExploration: TodayItem[] = [];
-  for (const item of selectedExploration) {
-    if (!isCall(item)) {
-      retainedExploration.push(item);
-      continue;
-    }
-    if (remaining > 0) {
-      retainedExploration.push(item);
-      remaining -= 1;
-    } else {
-      later.push({ ...item, lane: 'later', deferredFrom: 'exploration', laneReason: 'capacity_overflow' });
-    }
-  }
   for (const item of quotaOverflow) {
     later.push({ ...item, lane: 'later', deferredFrom: 'exploration', laneReason: 'exploration_quota_overflow' });
   }
-  laneBuckets.set('exploration', retainedExploration);
+  laneBuckets.set('exploration', selectedExploration);
 
-  // Retain P0 then P1 discretionary calls up to remaining; non-calls are free.
-  let queuedDiscretionaryDialCount = retainedExploration.filter(isCall).length;
-  for (const lane of ['new_p0', 'p1'] as const) {
+  // Whole-queue capacity: at most `dialBudget` rows across the actionable
+  // lanes, cut lane-by-lane in rank order with computed overflow counts.
+  const overflowByLane = new Map<TodayLane, number>(
+    LANE_ORDER.map((lane): [TodayLane, number] => [lane, 0]),
+  );
+  let remaining = capacity.dialBudget;
+  for (const lane of LANE_ORDER) {
+    if (lane === 'later') continue;
     const bucket = laneBuckets.get(lane)!;
-    const retained: TodayItem[] = [];
-    for (const item of bucket) {
-      if (!isCall(item)) {
-        retained.push(item);
-        continue;
-      }
-      if (remaining > 0) {
-        retained.push(item);
-        remaining -= 1;
-        queuedDiscretionaryDialCount += 1;
-      } else {
-        later.push({ ...item, lane: 'later', deferredFrom: lane, laneReason: 'capacity_overflow' });
-      }
+    if (bucket.length <= remaining) {
+      remaining -= bucket.length;
+      continue;
+    }
+    const retained = bucket.slice(0, remaining);
+    const cut = bucket.slice(remaining);
+    overflowByLane.set(lane, cut.length);
+    for (const item of cut) {
+      later.push({
+        ...item,
+        lane: 'later',
+        deferredFrom: lane as Exclude<TodayLane, 'later'>,
+        laneReason: 'capacity_overflow',
+      });
     }
     laneBuckets.set(lane, retained);
+    remaining = 0;
   }
+
+  const isCall = (item: TodayItem): boolean => item.action.actionType === 'call';
+  const queuedDiscretionaryDialCount = (['new_p0', 'p1', 'exploration'] as const)
+    .flatMap((lane) => laneBuckets.get(lane)!)
+    .filter(isCall).length;
+  const remainingBudget = Math.max(
+    0, capacity.dialBudget - input.completedDiscretionaryDialCount,
+  );
 
   later.sort(compareTodayItems);
   suppressed.sort((left, right) => compareCanonical(left.cycleId, right.cycleId));
@@ -548,7 +533,11 @@ export function planTodayQueue(input: {
     dialCount: input.completedDiscretionaryDialCount + queuedDiscretionaryDialCount,
     remainingDiscretionaryDialCount: Math.max(0, remainingBudget - queuedDiscretionaryDialCount),
     unreviewedBacklogCount,
-    lanes: LANE_ORDER.map((lane) => ({ lane, items: laneBuckets.get(lane)! })),
+    lanes: LANE_ORDER.map((lane) => ({
+      lane,
+      items: laneBuckets.get(lane)!,
+      overflowCount: overflowByLane.get(lane) ?? 0,
+    })),
     suppressed,
     diagnostics,
   };

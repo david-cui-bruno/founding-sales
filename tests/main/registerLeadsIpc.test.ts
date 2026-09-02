@@ -56,9 +56,7 @@ const leadRow: LeadRow = {
     id: 'action-1',
     type: 'call_lead',
     channel: 'call',
-    dueAt: '2026-08-31T15:00:00.000Z',
     label: 'Call lead',
-    overdue: false,
   },
   optedOut: false,
   lastActivityAt: '2026-08-30T12:00:00.000Z',
@@ -83,7 +81,7 @@ const listRequest: LeadsListRequest = {
   query: '',
   stages: [],
   priorities: [],
-  sort: 'due_at',
+  sort: 'priority',
 };
 
 function fakeProvider(): LeadsProvider {

@@ -19,7 +19,6 @@ import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork
 import { DOMAIN_TIMESTAMP, seedProspect } from '../fixtures/domainRows';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
-const DUE = '2026-08-30T12:15:00.000Z';
 const NONE_SLA: Extract<InboundSla, { kind: 'none' }> = {
   kind: 'none', dueAt: null, sourceEventId: null, provenance: null,
 };
@@ -224,8 +223,8 @@ describe('shared cadence settlement validation', () => {
       actions.insertNextAction({
         id: 'cadence-action', salesCycleId: 'cadence-cycle', actionType: input.actionType,
         channel: input.actionType === 'resolve_contact_method' ? null : component.channel,
-        status: 'pending', dueAt: DUE, timezone: 'America/New_York',
-        allowedWindow: 'afternoon', slaDueAt: null,
+        status: 'pending', timezone: 'America/New_York',
+        allowedWindow: 'afternoon',
         workIntent: 'discretionary_prospecting', inboundSla: NONE_SLA,
         cadence, createdAt: DOMAIN_TIMESTAMP,
       });
@@ -241,8 +240,8 @@ describe('shared cadence settlement validation', () => {
       }
       actions.insertNextAction({
         id: 'replacement-action', salesCycleId: 'cadence-cycle', actionType: 'review',
-        channel: null, status: 'pending', dueAt: DUE, timezone: 'America/New_York',
-        allowedWindow: null, slaDueAt: null, workIntent: 'internal_review',
+        channel: null, status: 'pending', timezone: 'America/New_York',
+        allowedWindow: null, workIntent: 'internal_review',
         inboundSla: NONE_SLA,
         cadence: {
           cadenceEnrollmentId: null, cadenceDefinitionId: null,

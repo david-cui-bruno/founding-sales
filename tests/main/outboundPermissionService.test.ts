@@ -170,11 +170,11 @@ describe('OutboundPermissionService', () => {
       );
       database.raw.prepare(`
         INSERT INTO next_actions (
-          id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+          id, sales_cycle_id, action_type, channel, status, timezone,
           work_intent, version, created_at, updated_at
-        ) VALUES ('selected-action', 'selected-cycle', 'call', 'phone', 'pending', ?,
+        ) VALUES ('selected-action', 'selected-cycle', 'call', 'phone', 'pending',
                   'America/New_York', 'discretionary_prospecting', 1, ?, ?)
-      `).run(DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+      `).run(DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
       database.raw.exec('COMMIT');
     } catch (error) {
       if (database.raw.inTransaction) database.raw.exec('ROLLBACK');

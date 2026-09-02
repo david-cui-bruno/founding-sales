@@ -41,7 +41,7 @@ describe('HealthService', () => {
 
     expect(service.getHealth()).toEqual({
       appVersion: '2.3.4',
-      schemaVersion: 9,
+      schemaVersion: 10,
       databasePath: tempDatabase.path,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',

@@ -240,11 +240,11 @@ describe('FounderSalesDomain', () => {
         );
         database.raw.prepare(`
           INSERT INTO next_actions (
-            id, sales_cycle_id, action_type, channel, status, due_at,
+            id, sales_cycle_id, action_type, channel, status,
             timezone, work_intent, created_at
-          ) VALUES ('gamma-action', 'gamma-cycle', 'onboard_client', NULL, 'pending', ?,
+          ) VALUES ('gamma-action', 'gamma-cycle', 'onboard_client', NULL, 'pending',
                     'America/New_York', 'promised_follow_up', ?)
-        `).run(DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+        `).run(DOMAIN_TIMESTAMP);
         database.raw.exec('COMMIT');
       } catch (error) {
         if (database.raw.inTransaction) database.raw.exec('ROLLBACK');
@@ -252,16 +252,16 @@ describe('FounderSalesDomain', () => {
       }
       const snapshot = domain.getToday();
       expect(snapshot.lanes.map((lane) => lane.id)).toEqual([
-        'onboarding', 'fresh_inbound', 'overdue', 'post_interview_offer',
-        'due_cadence', 'new_p0', 'p1', 'exploration', 'later',
+        'onboarding', 'fresh_inbound', 'due_cadence', 'new_p0', 'p1',
+        'exploration', 'later',
       ]);
       const itemsByLane = new Map(snapshot.lanes.map((lane) => [lane.id, lane.items]));
       expect(itemsByLane.get('onboarding')!.map((item) => item.salesCycleId))
         .toEqual(['gamma-cycle']);
-      // The default seeded promise is past due, so it lands in Overdue.
-      expect(itemsByLane.get('overdue')!.map((item) => item.salesCycleId))
+      // The default seeded promise lands in Due cadence.
+      expect(itemsByLane.get('due_cadence')!.map((item) => item.salesCycleId))
         .toEqual([active.cycleId]);
-      // The unreviewed overdue cycle is only a backlog count, never a row.
+      // The unreviewed cycle is only a backlog count, never a row.
       expect(snapshot.unreviewedBacklogCount).toBe(1);
       const allIds = snapshot.lanes.flatMap((lane) => lane.items.map((item) => item.salesCycleId));
       expect(allIds).not.toContain(backlog.cycleId);

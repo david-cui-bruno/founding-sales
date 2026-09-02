@@ -50,7 +50,7 @@ describe('LifecycleService', () => {
     `).run(prospect.prospectId);
     const clock = { now: () => DOMAIN_TIMESTAMP };
     const allocated = [
-      'cycle', 'review-action', 'initial-stage-event',
+      'cycle', 'initial-stage-event',
       'ready-enrollment', 'ready-action', 'ready-stage-event',
     ];
     const ids = { next: () => {
@@ -83,11 +83,11 @@ describe('LifecycleService', () => {
     });
     expect(unreviewed).toMatchObject({
       id: 'cycle', stage: 'unreviewed', workflowStatus: 'active',
-      currentNextActionId: 'review-action', version: 1,
+      currentNextActionId: null, version: 1,
     });
-    expect(database.raw.prepare(`
-      SELECT work_intent, status FROM next_actions WHERE id = 'review-action'
-    `).get()).toEqual({ work_intent: 'internal_review', status: 'pending' });
+    expect(database.raw.prepare(
+      'SELECT COUNT(*) AS count FROM next_actions',
+    ).get()).toEqual({ count: 0 });
     expect(events.listCycleStageEvents('cycle')).toMatchObject([
       { fromStage: null, toStage: 'unreviewed', transitionSequence: 1 },
     ]);
@@ -95,7 +95,7 @@ describe('LifecycleService', () => {
 
     const ready = service.reviewToReady({
       cycleId: 'cycle', expectedCycleVersion: 1,
-      expectedCurrentActionId: 'review-action', expectedProspectVersion: 1,
+      expectedProspectVersion: 1,
       effectiveAt: DOMAIN_TIMESTAMP,
     });
     expect(ready).toMatchObject({
@@ -109,9 +109,7 @@ describe('LifecycleService', () => {
       work_intent: 'discretionary_prospecting', status: 'pending',
       cadence_enrollment_id: 'ready-enrollment',
     });
-    expect(database.raw.prepare(`
-      SELECT status FROM next_actions WHERE id = 'review-action'
-    `).get()).toEqual({ status: 'completed' });
+
     expect(events.listCycleStageEvents('cycle').map(({ toStage, transitionSequence }) => ({
       toStage, transitionSequence,
     }))).toEqual([
@@ -138,7 +136,7 @@ describe('LifecycleService', () => {
       .run(prospect.prospectId);
     const clock = { now: () => DOMAIN_TIMESTAMP };
     const allocated = [
-      'cycle', 'review-action', 'event-unreviewed',
+      'cycle', 'event-unreviewed',
       'ready-enrollment', 'ready-action', 'event-ready',
       'event-contacted',
       'interview-enrollment', 'interview-action', 'event-interviewed',
@@ -165,7 +163,7 @@ describe('LifecycleService', () => {
       entrySourceEventId: prospect.sourceEventId, effectiveAt: DOMAIN_TIMESTAMP,
     });
     service.reviewToReady({
-      cycleId: 'cycle', expectedCycleVersion: 1, expectedCurrentActionId: 'review-action',
+      cycleId: 'cycle', expectedCycleVersion: 1,
       expectedProspectVersion: 1, effectiveAt: DOMAIN_TIMESTAMP,
     });
     unitOfWork.immediate(() => events.appendActivity({
@@ -319,7 +317,7 @@ describe('LifecycleService', () => {
       .run(prospect.prospectId);
     const clock = { now: () => DOMAIN_TIMESTAMP };
     const allocated = [
-      'cycle', 'review-action', 'event-unreviewed',
+      'cycle', 'event-unreviewed',
       'ready-enrollment', 'ready-action', 'event-ready',
       'voicemail-action',
     ];
@@ -342,7 +340,7 @@ describe('LifecycleService', () => {
       entrySourceEventId: prospect.sourceEventId, effectiveAt: DOMAIN_TIMESTAMP,
     });
     service.reviewToReady({
-      cycleId: 'cycle', expectedCycleVersion: 1, expectedCurrentActionId: 'review-action',
+      cycleId: 'cycle', expectedCycleVersion: 1,
       expectedProspectVersion: 1, effectiveAt: DOMAIN_TIMESTAMP,
     });
     const current = database.raw.prepare(`
@@ -394,11 +392,10 @@ describe('LifecycleService', () => {
     });
     expect(rescheduled).toMatchObject({ currentNextActionId: 'voicemail-action', version: 3 });
     expect(database.raw.prepare(`
-      SELECT status, version, due_at, updated_at
+      SELECT status, version, updated_at
       FROM next_actions WHERE id = 'voicemail-action'
     `).get()).toEqual({
       status: 'pending', version: 2,
-      due_at: '2026-08-30T17:00:00.000Z',
       updated_at: DOMAIN_TIMESTAMP,
     });
     expect(database.raw.prepare(`
@@ -423,7 +420,7 @@ describe('LifecycleService', () => {
     `).run(prospect.prospectId);
     const clock = { now: () => DOMAIN_TIMESTAMP };
     const allocated = [
-      'contact-cycle', 'contact-review-action', 'contact-unreviewed-event',
+      'contact-cycle', 'contact-unreviewed-event',
       'contact-enrollment', 'contact-first-action', 'contact-ready-event',
       'contacted-event', 'contact-next-action',
     ];
@@ -447,7 +444,7 @@ describe('LifecycleService', () => {
     });
     service.reviewToReady({
       cycleId: 'contact-cycle', expectedCycleVersion: 1,
-      expectedCurrentActionId: 'contact-review-action', expectedProspectVersion: 1,
+      expectedProspectVersion: 1,
       effectiveAt: DOMAIN_TIMESTAMP,
     });
     const binding = database.raw.prepare(`
@@ -495,7 +492,7 @@ describe('LifecycleService', () => {
       .run(prospect.prospectId);
     const clock = { now: () => DOMAIN_TIMESTAMP };
     const allocated = [
-      'cycle', 'review-action', 'event-unreviewed',
+      'cycle', 'event-unreviewed',
       'ready-enrollment', 'ready-action', 'event-ready',
       'manual-rule', 'event-lost',
       'reactivated-enrollment', 'reactivated-action', 'event-reactivated',
@@ -520,7 +517,7 @@ describe('LifecycleService', () => {
       entrySourceEventId: prospect.sourceEventId, effectiveAt: DOMAIN_TIMESTAMP,
     });
     service.reviewToReady({
-      cycleId: 'cycle', expectedCycleVersion: 1, expectedCurrentActionId: 'review-action',
+      cycleId: 'cycle', expectedCycleVersion: 1,
       expectedProspectVersion: 1, effectiveAt: DOMAIN_TIMESTAMP,
     });
     const closed = service.closeLostNurture({
@@ -578,7 +575,10 @@ describe('LifecycleService', () => {
       expectedCurrentActionId: 'reactivated-action', activityId: 'reactivated-contact',
       effectiveAt: '2026-10-01T13:00:00.000Z',
     });
-    expect(service.reactivateFromRule(activation)).toEqual(reactivated);
+    // A replay returns the immutable receipt snapshot (stage as created).
+    expect(service.reactivateFromRule(activation)).toMatchObject({
+      kind: 'reactivated', cycle: { id: 'reactivated-cycle', stage: 'ready', version: 1 },
+    });
   });
 
   it('rolls cycle and action inserts back when the final StageEvent phase fails', async () => {
@@ -593,7 +593,7 @@ describe('LifecycleService', () => {
     database.raw.prepare(`UPDATE prospects SET qualification_state = 'unreviewed' WHERE id = ?`)
       .run(prospect.prospectId);
     const clock = { now: () => DOMAIN_TIMESTAMP };
-    const allocated = ['rollback-cycle', 'rollback-action', ''];
+    const allocated = ['rollback-cycle', ''];
     const ids = { next: () => allocated.shift() ?? 'unexpected-id' };
     const identities = new IdentityRepository({ database, unitOfWork, clock, ids });
     const events = new EventRepository({ database, unitOfWork, clock, ids });
@@ -818,7 +818,7 @@ describe('LifecycleService', () => {
     `).run(prospect.prospectId);
     const clock = { now: () => DOMAIN_TIMESTAMP };
     const allocated = [
-      'cycle', 'review-action', 'event-unreviewed',
+      'cycle', 'event-unreviewed',
       'cold-enrollment', 'cold-action', 'event-ready',
       'hot-enrollment', 'hot-action',
     ];
@@ -841,7 +841,7 @@ describe('LifecycleService', () => {
       entrySourceEventId: prospect.sourceEventId, effectiveAt: DOMAIN_TIMESTAMP,
     });
     service.reviewToReady({
-      cycleId: 'cycle', expectedCycleVersion: 1, expectedCurrentActionId: 'review-action',
+      cycleId: 'cycle', expectedCycleVersion: 1,
       expectedProspectVersion: 1, effectiveAt: DOMAIN_TIMESTAMP,
     });
     unitOfWork.immediate(() => sources.append({
@@ -896,11 +896,11 @@ describe('LifecycleService', () => {
         );
         database!.raw.prepare(`
           INSERT INTO next_actions (
-            id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+            id, sales_cycle_id, action_type, channel, status, timezone,
             work_intent, created_at, updated_at
-          ) VALUES (?, ?, 'onboard_customer', 'text', 'pending', ?,
+          ) VALUES (?, ?, 'onboard_customer', 'text', 'pending',
             'America/New_York', 'promised_follow_up', ?, ?)
-        `).run(actionId, cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+        `).run(actionId, cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
         database!.raw.prepare(`
           INSERT INTO won_terms (
             sales_cycle_id, doors_committed, billing_model, unit_rate_cents,
@@ -978,11 +978,11 @@ describe('LifecycleService', () => {
     });
     database.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        id, sales_cycle_id, action_type, channel, status, timezone,
         work_intent, created_at, updated_at
-      ) VALUES ('a-supplemental-outbound', ?, 'send_follow_up', 'text', 'pending', ?,
+      ) VALUES ('a-supplemental-outbound', ?, 'send_follow_up', 'text', 'pending',
         'America/New_York', 'promised_follow_up', ?, ?)
-    `).run(historicalCycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    `).run(historicalCycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
     const noCycleProspect = seedProspect(database.raw, 'no-cycle-opt-out');
     const clock = { now: () => DOMAIN_TIMESTAMP };
     const ids = { next: () => 'unused-id' };

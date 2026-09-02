@@ -284,17 +284,17 @@ describe('LifecycleService cadence terminal mappings', () => {
       );
       database.raw.prepare(`
         INSERT INTO next_actions (
-          id, sales_cycle_id, action_type, channel, status, due_at, timezone,
-          allowed_window, work_intent, sla_due_at,
+          id, sales_cycle_id, action_type, channel, status, timezone,
+          allowed_window, work_intent,
           inbound_sla_kind, inbound_sla_due_at, inbound_sla_source_event_id,
           inbound_sla_provenance_json,
           cadence_enrollment_id, cadence_step_id, cadence_component_id,
           version, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
       `).run(
         actionId, cycleId, input.actionType ?? component.actionType,
         input.actionChannel === undefined ? component.channel : input.actionChannel,
-        DOMAIN_TIMESTAMP, TIMEZONE,
+        TIMEZONE,
         component.actionType === 'call' ? 'afternoon' : `founder_${component.channel}_v1:afternoon`,
         workIntent,
         isInbound ? 'direct_referral_elapsed' : null,

@@ -83,8 +83,8 @@ describe('authoritative next-action persistence', () => {
       });
       return actions.insertNextAction({
         id: 'action', salesCycleId: 'cycle', actionType: 'text', channel: 'text',
-        status: 'pending', dueAt: DUE, timezone: 'America/New_York',
-        allowedWindow: '[09:00,20:00)', slaDueAt: DUE, workIntent: 'inbound_response',
+        status: 'pending', timezone: 'America/New_York',
+        allowedWindow: '[09:00,20:00)', workIntent: 'inbound_response',
         inboundSla, cadence: NO_CADENCE, createdAt: DOMAIN_TIMESTAMP,
       });
     });
@@ -92,24 +92,20 @@ describe('authoritative next-action persistence', () => {
 
     const rescheduled = unitOfWork.immediate(() => actions.reschedulePendingAction({
       actionId: 'action', salesCycleId: 'cycle', expectedStatus: 'pending',
-      expectedVersion: 1, expectedDueAt: DUE, expectedWorkIntent: 'inbound_response',
-      expectedInboundSla: inboundSla, expectedCadence: NO_CADENCE,
-      dueAt: RESCHEDULED, updatedAt: DOMAIN_TIMESTAMP,
-      timezone: 'America/New_York', allowedWindow: '[13:00,17:00)',
-      slaDueAt: DUE, cadence: NO_CADENCE,
+      expectedVersion: 1, expectedWorkIntent: 'inbound_response',
+      expectedInboundSla: inboundSla, expectedCadence: NO_CADENCE, updatedAt: DOMAIN_TIMESTAMP,
+      timezone: 'America/New_York', allowedWindow: '[13:00,17:00)', cadence: NO_CADENCE,
     }));
     expect(rescheduled).toMatchObject({
-      id: 'action', status: 'pending', dueAt: RESCHEDULED,
+      id: 'action', status: 'pending',
       workIntent: 'inbound_response', inboundSla, version: 2, updatedAt: DOMAIN_TIMESTAMP,
     });
 
     expect(() => unitOfWork.immediate(() => actions.reschedulePendingAction({
       actionId: 'action', salesCycleId: 'cycle', expectedStatus: 'pending',
-      expectedVersion: 1, expectedDueAt: DUE, expectedWorkIntent: 'inbound_response',
-      expectedInboundSla: inboundSla, expectedCadence: NO_CADENCE,
-      dueAt: RESCHEDULED, updatedAt: DOMAIN_TIMESTAMP,
-      timezone: 'America/New_York', allowedWindow: '[13:00,17:00)',
-      slaDueAt: DUE, cadence: NO_CADENCE,
+      expectedVersion: 1, expectedWorkIntent: 'inbound_response',
+      expectedInboundSla: inboundSla, expectedCadence: NO_CADENCE, updatedAt: DOMAIN_TIMESTAMP,
+      timezone: 'America/New_York', allowedWindow: '[13:00,17:00)', cadence: NO_CADENCE,
     }))).toThrow(StaleDomainWriteError);
     expect(() => database!.raw.prepare(`
       UPDATE next_actions SET work_intent = 'discretionary_prospecting' WHERE id = 'action'
@@ -121,8 +117,8 @@ describe('authoritative next-action persistence', () => {
     unitOfWork.immediate(() => {
       actions.insertNextAction({
         id: 'replacement', salesCycleId: 'cycle', actionType: 'follow_up', channel: null,
-        status: 'pending', dueAt: RESCHEDULED, timezone: 'America/New_York',
-        allowedWindow: null, slaDueAt: null, workIntent: 'promised_follow_up',
+        status: 'pending', timezone: 'America/New_York',
+        allowedWindow: null, workIntent: 'promised_follow_up',
         inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
         cadence: NO_CADENCE, createdAt: RESCHEDULED,
       });
@@ -134,7 +130,7 @@ describe('authoritative next-action persistence', () => {
       expect(() => database!.raw.prepare(`
         UPDATE next_actions
         SET status = 'completed', completed_at = ?, settlement_json = ?,
-          due_at = '2026-09-01T12:00:00.000Z'
+          timezone = 'UTC'
         WHERE id = 'action'
       `).run(RESCHEDULED, JSON.stringify({
         version: 1, outcome: 'reviewed_ready', reason: null, evidenceActivityId: null,
@@ -161,10 +157,8 @@ describe('authoritative next-action persistence', () => {
       UPDATE next_actions SET status = 'impossible' WHERE id = 'action'
     `).run()).toThrow();
     for (const mutation of [
-      `UPDATE next_actions SET due_at = '2026-09-01T12:00:00.000Z' WHERE id = 'action'`,
       `UPDATE next_actions SET timezone = 'UTC' WHERE id = 'action'`,
       `UPDATE next_actions SET allowed_window = '[17:00,20:00)' WHERE id = 'action'`,
-      `UPDATE next_actions SET sla_due_at = '2026-09-01T12:00:00.000Z' WHERE id = 'action'`,
       `UPDATE next_actions SET created_at = '2026-08-29T12:00:00.000Z' WHERE id = 'action'`,
     ]) {
       expect(() => database!.raw.exec(mutation)).toThrow();
@@ -189,8 +183,7 @@ describe('authoritative next-action persistence', () => {
       });
       actions.insertNextAction({
         id: 'seed-action', salesCycleId: 'cycle', actionType: 'review', channel: null,
-        status: 'pending', dueAt: DUE, timezone: 'America/New_York', allowedWindow: null,
-        slaDueAt: null, workIntent: 'internal_review',
+        status: 'pending', timezone: 'America/New_York', allowedWindow: null, workIntent: 'internal_review',
         inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
         cadence: NO_CADENCE, createdAt: DOMAIN_TIMESTAMP,
       });
@@ -198,8 +191,7 @@ describe('authoritative next-action persistence', () => {
 
     expect(() => unitOfWork.immediate(() => actions.insertNextAction({
       id: 'bad-action', salesCycleId: 'cycle', actionType: 'text', channel: 'text',
-      status: 'pending', dueAt: DUE, timezone: 'America/New_York', allowedWindow: null,
-      slaDueAt: DUE, workIntent: 'inbound_response', cadence: NO_CADENCE,
+      status: 'pending', timezone: 'America/New_York', allowedWindow: null, workIntent: 'inbound_response', cadence: NO_CADENCE,
       inboundSla: {
         kind: 'inbound_demo_permitted_minutes', dueAt: DUE, sourceEventId: 'other-demo',
         provenance: {
@@ -242,8 +234,8 @@ describe('authoritative next-action persistence', () => {
       });
       actions.insertNextAction({
         id: 'validation-action', salesCycleId: 'validation-cycle', actionType: 'text',
-        channel: testCase.actionChannel, status: 'pending', dueAt: DUE,
-        timezone: 'America/New_York', allowedWindow: null, slaDueAt: null,
+        channel: testCase.actionChannel, status: 'pending',
+        timezone: 'America/New_York', allowedWindow: null,
         workIntent: 'promised_follow_up',
         inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
         cadence: NO_CADENCE, createdAt: DOMAIN_TIMESTAMP,
@@ -256,8 +248,8 @@ describe('authoritative next-action persistence', () => {
       });
       actions.insertNextAction({
         id: 'validation-replacement', salesCycleId: 'validation-cycle',
-        actionType: 'review', channel: null, status: 'pending', dueAt: DUE,
-        timezone: 'America/New_York', allowedWindow: null, slaDueAt: null,
+        actionType: 'review', channel: null, status: 'pending',
+        timezone: 'America/New_York', allowedWindow: null,
         workIntent: 'internal_review',
         inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
         cadence: NO_CADENCE, createdAt: DOMAIN_TIMESTAMP,
@@ -320,8 +312,8 @@ describe('authoritative next-action persistence', () => {
       `).run(definition.id, DOMAIN_TIMESTAMP, step.id, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
       actions.insertNextAction({
         id: 'attempt-action', salesCycleId: 'attempt-cycle', actionType: component.actionType,
-        channel: component.channel, status: 'pending', dueAt: DUE,
-        timezone: 'America/New_York', allowedWindow: 'afternoon', slaDueAt: null,
+        channel: component.channel, status: 'pending',
+        timezone: 'America/New_York', allowedWindow: 'afternoon',
         workIntent: 'discretionary_prospecting',
         inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
         cadence, createdAt: DOMAIN_TIMESTAMP,
@@ -336,8 +328,8 @@ describe('authoritative next-action persistence', () => {
       });
       actions.insertNextAction({
         id: 'attempt-replacement', salesCycleId: 'attempt-cycle', actionType: 'review',
-        channel: null, status: 'pending', dueAt: DUE, timezone: 'America/New_York',
-        allowedWindow: null, slaDueAt: null, workIntent: 'internal_review',
+        channel: null, status: 'pending', timezone: 'America/New_York',
+        allowedWindow: null, workIntent: 'internal_review',
         inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
         cadence: NO_CADENCE, createdAt: DOMAIN_TIMESTAMP,
       });
@@ -385,8 +377,7 @@ describe('authoritative next-action persistence', () => {
       });
       actions.insertNextAction({
         id: 'raw-current', salesCycleId: 'raw-cycle', actionType: 'review', channel: null,
-        status: 'pending', dueAt: DUE, timezone: 'America/New_York', allowedWindow: null,
-        slaDueAt: null, workIntent: 'internal_review',
+        status: 'pending', timezone: 'America/New_York', allowedWindow: null, workIntent: 'internal_review',
         inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
         cadence: NO_CADENCE, createdAt: DOMAIN_TIMESTAMP,
       });
@@ -399,12 +390,12 @@ describe('authoritative next-action persistence', () => {
     });
     database!.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        id, sales_cycle_id, action_type, channel, status, timezone,
         work_intent, completion_activity_id, settlement_json,
         version, created_at, completed_at, updated_at
-      ) VALUES ('raw-corrupt-settlement', 'raw-cycle', 'text', 'text', 'completed', ?,
+      ) VALUES ('raw-corrupt-settlement', 'raw-cycle', 'text', 'text', 'completed',
         'America/New_York', 'promised_follow_up', 'raw-optout-activity', ?, 2, ?, ?, ?)
-    `).run(DUE, serializeCanonical(settlement), DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    `).run(serializeCanonical(settlement), DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
 
     expect(() => actions.getById('raw-corrupt-settlement')).toThrow();
   });

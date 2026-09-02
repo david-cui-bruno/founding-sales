@@ -103,12 +103,13 @@ export function auditDomainInvariants(input: {
 
   const cycles = rows(`
     SELECT id, person_id, prospect_id, entry_source_event_id, stage, workflow_status, current_next_action_id,
-      stage_entered_at, close_reason, close_notes, closed_at, design_partner_fitness
+      stage_entered_at, close_reason, close_notes, closed_at, design_partner_fitness,
+      resurface_at, resurface_reason
     FROM sales_cycles ORDER BY id
   `);
   const actionRows = rows(`
-    SELECT id, sales_cycle_id, action_type, channel, status, due_at, timezone,
-      allowed_window, work_intent, sla_due_at, inbound_sla_kind, inbound_sla_due_at,
+    SELECT id, sales_cycle_id, action_type, channel, status, timezone,
+      allowed_window, work_intent, inbound_sla_kind, inbound_sla_due_at,
       inbound_sla_source_event_id, inbound_sla_provenance_json,
       cadence_enrollment_id, cadence_step_id, cadence_component_id,
       completion_activity_id, settlement_json, completed_at, version, created_at, updated_at
@@ -125,9 +126,9 @@ export function auditDomainInvariants(input: {
     if (!supportedIntents.has(String(action.work_intent))) {
       add('action_work_intent_invalid', action.id, 'Action work intent is unsupported.');
     }
-    if (!isCanonicalUtc(action.due_at) || typeof action.timezone !== 'string'
+    if (typeof action.timezone !== 'string'
       || action.timezone.trim().length === 0) {
-      add('action_schedule_invalid', action.id, 'Action due time/timezone is malformed.');
+      add('action_schedule_invalid', action.id, 'Action timezone is malformed.');
     }
     const cadenceParts = [
       action.cadence_enrollment_id, action.cadence_step_id, action.cadence_component_id,
@@ -318,9 +319,19 @@ export function auditDomainInvariants(input: {
     }
     const action = cycle.current_next_action_id === null
       ? undefined : actions.get(String(cycle.current_next_action_id));
-    if (isOpen && (action === undefined || action.sales_cycle_id !== cycle.id
+    if (isOpen && cycle.stage !== 'unreviewed'
+      && (action === undefined || action.sales_cycle_id !== cycle.id
       || action.status !== 'pending')) {
       add('current_action_invalid', id, 'Open cycle lacks one own pending current action.');
+    }
+    if (isOpen && cycle.stage === 'unreviewed' && cycle.current_next_action_id !== null) {
+      add('current_action_invalid', id, 'Unreviewed cycle cannot carry generated review work.');
+    }
+    if ((cycle.resurface_at === null) !== (cycle.resurface_reason === null)
+      || (cycle.resurface_at !== null && !isCanonicalUtc(cycle.resurface_at))
+      || (cycle.resurface_reason !== null
+        && cycle.resurface_reason !== 'snooze' && cycle.resurface_reason !== 'callback')) {
+      add('cycle_resurface_invalid', id, 'Founder resurface marker is malformed.');
     }
     if (!isOpen && cycle.current_next_action_id !== null) {
       add('closed_cycle_pointer_invalid', id, 'Closed cycle retains a current action pointer.');
@@ -374,10 +385,6 @@ export function auditDomainInvariants(input: {
       && (action.cadence_enrollment_id !== active[0]!.id
         || action.cadence_step_id !== active[0]!.current_step_id)) {
       add('current_action_cadence_invalid', id, 'Current action does not match the active enrollment step.');
-    }
-    if (cycle.stage === 'unreviewed'
-      && (action?.work_intent !== 'internal_review' || action.action_type !== 'review_lead')) {
-      add('unreviewed_action_invalid', id, 'Unreviewed cycle lacks durable internal review work.');
     }
     const stageEvents = rows(`
       SELECT from_stage, to_stage, effective_at, transition_sequence

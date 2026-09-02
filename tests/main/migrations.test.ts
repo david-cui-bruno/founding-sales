@@ -30,15 +30,15 @@ describe('database migrations', () => {
 
     expect(result).toEqual({
       fromVersion: 0,
-      toVersion: 9,
-      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger'],
+      toVersion: 10,
+      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger', '0010NoDueDates'],
     });
     expect(
       await database.kysely
         .selectFrom('app_meta')
         .select('schema_version')
         .executeTakeFirstOrThrow(),
-    ).toEqual({ schema_version: 9 });
+    ).toEqual({ schema_version: 10 });
 
     const objects = database.raw
       .prepare<[], { name: string; type: string }>(
@@ -70,8 +70,8 @@ describe('database migrations', () => {
     const secondResult = await migrateToLatest(database, options);
 
     expect(secondResult).toEqual({
-      fromVersion: 9,
-      toVersion: 9,
+      fromVersion: 10,
+      toVersion: 10,
       appliedMigrationIds: [],
     });
     expect(
@@ -79,7 +79,7 @@ describe('database migrations', () => {
         .selectFrom('app_meta')
         .select('schema_version')
         .executeTakeFirstOrThrow(),
-    ).toEqual({ schema_version: 9 });
+    ).toEqual({ schema_version: 10 });
     expect(
       database.raw
         .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM app_meta')
@@ -122,8 +122,8 @@ describe('database migrations', () => {
 
     await expect(migrateToLatest(database, options)).resolves.toEqual({
       fromVersion: 0,
-      toVersion: 9,
-      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger'],
+      toVersion: 10,
+      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger', '0010NoDueDates'],
     });
   });
 
@@ -186,8 +186,8 @@ describe('database migrations', () => {
 
     await expect(migrateToLatest(database, options)).resolves.toEqual({
       fromVersion: 1,
-      toVersion: 9,
-      appliedMigrationIds: ['0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger'],
+      toVersion: 10,
+      appliedMigrationIds: ['0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger', '0010NoDueDates'],
     });
   });
 

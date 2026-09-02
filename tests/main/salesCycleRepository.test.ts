@@ -47,7 +47,7 @@ describe('SalesCycleRepository', () => {
       personId: prospect.personId,
       prospectId: prospect.prospectId,
       entrySourceEventId: prospect.sourceEventId,
-      stage: 'unreviewed' as const,
+      stage: 'ready' as const,
       workflowStatus: 'active' as const,
       currentNextActionId: 'action-one',
       stageEnteredAt: DOMAIN_TIMESTAMP,
@@ -59,8 +59,8 @@ describe('SalesCycleRepository', () => {
       const cycle = cycles.insertCycleWithDeferredAction(cycleInput);
       actions.insertNextAction({
         id: 'action-one', salesCycleId: cycle.id, actionType: 'review_lead', channel: null,
-        status: 'pending', dueAt: DOMAIN_TIMESTAMP, timezone: 'America/New_York',
-        allowedWindow: null, slaDueAt: null, workIntent: 'internal_review',
+        status: 'pending', timezone: 'America/New_York',
+        allowedWindow: null, workIntent: 'internal_review',
         inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
         cadence: {
           cadenceEnrollmentId: null, cadenceDefinitionId: null,
@@ -73,7 +73,7 @@ describe('SalesCycleRepository', () => {
     });
 
     expect(result).toMatchObject({
-      id: 'cycle-one', stage: 'unreviewed', workflowStatus: 'active',
+      id: 'cycle-one', stage: 'ready', workflowStatus: 'active',
       currentNextActionId: 'action-one', version: 1,
     });
     expect(cycles.getOperationalCycleForPerson(prospect.personId)?.id).toBe('cycle-one');
@@ -84,15 +84,15 @@ describe('SalesCycleRepository', () => {
     unitOfWork.immediate(() => {
       cycles.insertCycleWithDeferredAction({
         id: 'cycle-one', personId: prospect.personId, prospectId: prospect.prospectId,
-        entrySourceEventId: prospect.sourceEventId, stage: 'unreviewed',
+        entrySourceEventId: prospect.sourceEventId, stage: 'ready',
         workflowStatus: 'active', currentNextActionId: 'action-one',
         stageEnteredAt: DOMAIN_TIMESTAMP, createdAt: DOMAIN_TIMESTAMP,
       });
       for (const id of ['action-one', 'action-two']) {
         actions.insertNextAction({
           id, salesCycleId: 'cycle-one', actionType: 'review_lead', channel: null,
-          status: 'pending', dueAt: DOMAIN_TIMESTAMP, timezone: 'America/New_York',
-          allowedWindow: null, slaDueAt: null, workIntent: 'internal_review',
+          status: 'pending', timezone: 'America/New_York',
+          allowedWindow: null, workIntent: 'internal_review',
           inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
           cadence: {
             cadenceEnrollmentId: null, cadenceDefinitionId: null,
@@ -103,19 +103,19 @@ describe('SalesCycleRepository', () => {
     });
 
     const transitioned = unitOfWork.immediate(() => cycles.transitionOpenProjection({
-      cycleId: 'cycle-one', expectedVersion: 1, expectedStage: 'unreviewed',
+      cycleId: 'cycle-one', expectedVersion: 1, expectedStage: 'ready',
       expectedWorkflowStatus: 'active', expectedCurrentActionId: 'action-one',
-      nextStage: 'ready', nextWorkflowStatus: 'active', nextActionId: 'action-two',
+      nextStage: 'contacted', nextWorkflowStatus: 'active', nextActionId: 'action-two',
       stageEnteredAt: LATER,
     }));
     expect(transitioned).toMatchObject({
-      stage: 'ready', currentNextActionId: 'action-two', version: 2,
+      stage: 'contacted', currentNextActionId: 'action-two', version: 2,
     });
 
     expect(() => unitOfWork.immediate(() => cycles.transitionOpenProjection({
-      cycleId: 'cycle-one', expectedVersion: 1, expectedStage: 'unreviewed',
+      cycleId: 'cycle-one', expectedVersion: 1, expectedStage: 'ready',
       expectedWorkflowStatus: 'active', expectedCurrentActionId: 'action-one',
-      nextStage: 'ready', nextWorkflowStatus: 'active', nextActionId: 'action-two',
+      nextStage: 'contacted', nextWorkflowStatus: 'active', nextActionId: 'action-two',
       stageEnteredAt: LATER,
     }))).toThrow(StaleDomainWriteError);
   });

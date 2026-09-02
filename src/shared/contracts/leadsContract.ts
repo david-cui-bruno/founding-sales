@@ -36,7 +36,7 @@ export const leadRowSchema = z.object({
 
 export const leadsListRequestSchema = z.object({
   query: z.string().max(200), stages: z.array(lifecycleStageSchema), priorities: z.array(prioritySchema),
-  sort: z.enum(['priority', 'due_at', 'person_name', 'last_contact']), cursor: z.string().nullable(),
+  sort: z.enum(['priority', 'person_name', 'last_contact']), cursor: z.string().nullable(),
   limit: z.number().int().min(1).max(200),
 }).strict();
 

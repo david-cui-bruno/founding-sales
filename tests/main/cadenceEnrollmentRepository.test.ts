@@ -54,8 +54,8 @@ describe('CadenceEnrollmentRepository', () => {
       });
       actions.insertNextAction({
         id: 'seed-action', salesCycleId: 'cycle', actionType: 'review', channel: null,
-        status: 'pending', dueAt: DOMAIN_TIMESTAMP, timezone: 'America/New_York',
-        allowedWindow: null, slaDueAt: null, workIntent: 'internal_review',
+        status: 'pending', timezone: 'America/New_York',
+        allowedWindow: null, workIntent: 'internal_review',
         inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
         cadence: NO_CADENCE, createdAt: DOMAIN_TIMESTAMP,
       });

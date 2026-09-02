@@ -35,13 +35,19 @@ import {
   type LeadDetailRequest,
 } from '../../shared/contracts/leadDetailContract';
 import {
+  addLeadNoteRequestSchema,
   completeActionRequestSchema,
+  logCallOutcomeRequestSchema,
   logPastActivityRequestSchema,
+  markActivityInErrorRequestSchema,
   pinActionRequestSchema,
   snoozeActionRequestSchema,
   todaySnapshotSchema,
+  type AddLeadNoteRequest,
   type CompleteActionRequest,
+  type LogCallOutcomeRequest,
   type LogPastActivityRequest,
+  type MarkActivityInErrorRequest,
   type PinActionRequest,
   type SnoozeActionRequest,
   type TodayItem as TodayItemDto,
@@ -185,7 +191,6 @@ type ActionRow = {
   action_type: string;
   channel: string | null;
   status: string;
-  due_at: string;
   version: number;
   work_intent: string;
   cadence_enrollment_id: string | null;
@@ -229,8 +234,6 @@ export type CloudOutcomeRow = {
 const LANE_MAP: Readonly<Record<TodayLane, TodayLaneId>> = Object.freeze({
   won_onboarding: 'onboarding',
   inbound_interrupt: 'fresh_inbound',
-  overdue: 'overdue',
-  post_interview_offer: 'post_interview_offer',
   due_primary: 'due_cadence',
   new_p0: 'new_p0',
   p1: 'p1',
@@ -350,7 +353,6 @@ export class FounderSalesDomain {
 
   listLeadRows(input: LeadsListRequest): LeadsListResponse {
     const request = leadsListRequestSchema.parse(input);
-    const now = this.clock.now();
     const filters: string[] = [];
     const parameters: unknown[] = [];
     if (request.query.length > 0) {
@@ -366,8 +368,7 @@ export class FounderSalesDomain {
       parameters.push(...request.priorities.map((priority) => priority.toLowerCase()));
     }
     const where = [
-      `cycle.current_next_action_id IS NOT NULL`,
-      `action.status = 'pending'`,
+      `cycle.workflow_status IN ('active','onboarding')`,
       ...filters,
     ].join(' AND ');
     const orderBy = {
@@ -382,7 +383,6 @@ export class FounderSalesDomain {
         CASE WHEN prospect.cloud_timing IS NULL THEN 1 ELSE 0 END,
         prospect.cloud_timing DESC,
         cycle.id ASC`,
-      due_at: 'action.due_at ASC, cycle.id ASC',
       person_name: 'person.display_name ASC, cycle.id ASC',
       last_contact: `CASE WHEN prospect.last_contact_at IS NULL THEN 1 ELSE 0 END,
         prospect.last_contact_at DESC, cycle.id ASC`,
@@ -391,7 +391,7 @@ export class FounderSalesDomain {
       FROM sales_cycles AS cycle
       JOIN persons AS person ON person.id = cycle.person_id
       JOIN prospects AS prospect ON prospect.id = cycle.prospect_id
-      JOIN next_actions AS action ON action.id = cycle.current_next_action_id
+      LEFT JOIN next_actions AS action ON action.id = cycle.current_next_action_id
       LEFT JOIN prospect_priority_projection AS projection
         ON projection.prospect_id = cycle.prospect_id
       LEFT JOIN source_events AS source ON source.id = prospect.original_source_event_id
@@ -411,7 +411,7 @@ export class FounderSalesDomain {
         prospect.segment,
         source.channel AS source_channel,
         action.id AS action_id, action.action_type, action.channel AS action_channel,
-        action.due_at, action.work_intent,
+        action.status AS action_status, action.work_intent,
         projection.fit_points, projection.fit_band, projection.timing_millipoints,
         projection.timing_band, projection.reachability, projection.data_confidence,
         projection.priority,
@@ -440,8 +440,8 @@ export class FounderSalesDomain {
       cycle_id: string; person_id: string; prospect_id: string; stage: LeadRow['stage'];
       display_name: string; opted_out: 0 | 1; segment: LeadRow['segment'];
       source_channel: LeadRow['source'] | null;
-      action_id: string; action_type: string; action_channel: string | null;
-      due_at: string; work_intent: string;
+      action_id: string | null; action_type: string | null; action_channel: string | null;
+      action_status: string | null; work_intent: string | null;
       fit_points: number | null; fit_band: ProjectionRow['fit_band'] | null;
       timing_millipoints: number | null; timing_band: ProjectionRow['timing_band'] | null;
       reachability: ProjectionRow['reachability'] | null; data_confidence: number | null;
@@ -477,18 +477,16 @@ export class FounderSalesDomain {
       cloudScores: row.cloud_fit === null || row.cloud_timing === null
         ? null
         : { fit: row.cloud_fit, timing: row.cloud_timing },
-      nextAction: {
+      nextAction: row.action_id === null || row.action_status !== 'pending' ? null : {
         id: row.action_id,
-        type: row.action_type,
+        type: row.action_type!,
         channel: actionChannel({
-          actionType: row.action_type,
+          actionType: row.action_type!,
           channel: row.action_channel,
           workIntent: row.work_intent,
           onboarding: false,
         }),
-        dueAt: row.due_at,
-        label: actionLabel(row.action_type),
-        overdue: row.due_at < now,
+        label: actionLabel(row.action_type!),
       },
       optedOut: row.opted_out === 1,
       lastActivityAt: row.last_activity_at,
@@ -580,7 +578,6 @@ export class FounderSalesDomain {
 
   getLeadDetail(input: LeadDetailRequest): LeadDetail {
     const request = leadDetailRequestSchema.parse(input);
-    const now = this.clock.now();
     const person = this.database.raw.prepare(
       'SELECT id, display_name, opted_out FROM persons WHERE id = ?',
     ).get(request.personId) as {
@@ -655,13 +652,19 @@ export class FounderSalesDomain {
       } | undefined) ?? null;
     const activities = this.database.raw.prepare(`
       SELECT id, kind, occurred_at, observed_outcome, duration_seconds,
-        recording_storage_ref, transcript_storage_ref, metadata_json
+        recording_storage_ref, transcript_storage_ref, metadata_json, note_text,
+        EXISTS (
+          SELECT 1 FROM activity_amendments AS amendment
+          WHERE amendment.activity_id = activities.id
+            AND amendment.amendment_kind = 'marked_in_error'
+        ) AS marked_in_error
       FROM activities WHERE person_id = ?
       ORDER BY occurred_at DESC, id DESC LIMIT 200
     `).all(person.id) as {
       id: string; kind: string; occurred_at: string; observed_outcome: string | null;
       duration_seconds: number | null; recording_storage_ref: string | null;
       transcript_storage_ref: string | null; metadata_json: string;
+      note_text: string | null; marked_in_error: 0 | 1;
     }[];
     const history = this.database.raw.prepare(`
       SELECT id, to_stage, effective_at, confirmation_kind
@@ -718,9 +721,7 @@ export class FounderSalesDomain {
           workIntent: action.work_intent,
           onboarding: cycle.workflow_status === 'onboarding',
         }),
-        dueAt: action.due_at,
         label: actionLabel(action.action_type),
-        overdue: action.due_at < now,
       },
       optedOut: person.opted_out === 1,
       cadence: cadence === null || action?.cadence_step_id == null ? null : {
@@ -733,9 +734,11 @@ export class FounderSalesDomain {
         id: activity.id,
         kind: activity.kind,
         occurredAt: activity.occurred_at,
-        summary: jsonSummary(activity.metadata_json)
+        summary: activity.note_text
+          ?? jsonSummary(activity.metadata_json)
           ?? `${actionLabel(activity.kind)}${activity.observed_outcome === null ? '' : ` · ${activity.observed_outcome}`}`,
         outcome: activity.observed_outcome,
+        markedInError: activity.marked_in_error === 1,
       })),
       conversations: activities
         .filter((activity) => activity.kind === 'call' && activity.duration_seconds !== null)
@@ -809,9 +812,6 @@ export class FounderSalesDomain {
     return this.services.unitOfWork.immediate(() => {
       const writer = this.services.lifecycle.scopedWriter();
       const cycle = this.requireCycle(request.salesCycleId);
-      if (cycle.current_next_action_id === null) {
-        throw new FounderSalesDomainError('ACTION_NOT_SUPPORTED', 'The cycle has no current action.');
-      }
       if (request.transition === 'review_to_ready') {
         const prospect = this.database.raw.prepare(
           'SELECT version FROM prospects WHERE id = ?',
@@ -822,11 +822,13 @@ export class FounderSalesDomain {
         writer.reviewToReady({
           cycleId: cycle.id,
           expectedCycleVersion: cycle.version,
-          expectedCurrentActionId: cycle.current_next_action_id,
           expectedProspectVersion: prospect.version,
           effectiveAt: now,
         });
       } else {
+        if (cycle.current_next_action_id === null) {
+          throw new FounderSalesDomainError('ACTION_NOT_SUPPORTED', 'The cycle has no current action.');
+        }
         const command = {
           cycleId: cycle.id,
           expectedCycleVersion: cycle.version,
@@ -855,9 +857,6 @@ export class FounderSalesDomain {
       const cycle = this.requireCycle(request.salesCycleId);
       if (cycle.person_id !== request.personId) {
         throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The cycle belongs to another person.');
-      }
-      if (cycle.current_next_action_id === null) {
-        throw new FounderSalesDomainError('ACTION_NOT_SUPPORTED', 'The cycle has no current action.');
       }
       const prospect = this.database.raw.prepare(
         'SELECT version FROM prospects WHERE id = ?',
@@ -957,9 +956,7 @@ export class FounderSalesDomain {
             workIntent: item.action.workIntent,
             onboarding: lane === 'onboarding',
           }),
-          dueAt: item.action.dueAt,
           label: actionLabel(item.action.actionType),
-          overdue: item.action.dueAt < queue.generatedAt,
         },
         reason: item.laneReason,
         activeTriggers: item.selectedTriggerReasons
@@ -973,11 +970,12 @@ export class FounderSalesDomain {
         consentRequirement: null,
       };
     };
-    const lanes = queue.lanes.map(({ lane, items }) => ({
+    const lanes = queue.lanes.map(({ lane, items, overflowCount }) => ({
       id: LANE_MAP[lane],
       items: items
         .map((item) => toDto(item, LANE_MAP[lane]))
         .filter((item): item is TodayItemDto => item !== null),
+      overflowCount,
     }));
     return todaySnapshotSchema.parse({
       lanes,
@@ -1055,14 +1053,25 @@ export class FounderSalesDomain {
     });
   }
 
+  /**
+   * Snooze writes the founder-chosen `resurface_at` on the cycle: it leaves
+   * Today entirely until that instant and re-enters with the reason
+   * 'Snoozed until today'. No priority-comparison event is recorded; this
+   * is queue control, not a preference signal.
+   */
   snoozePrimaryAction(input: SnoozeActionRequest): MutationReceipt {
     const request = snoozeActionRequestSchema.parse(input);
-    return this.manualPriorityControl({
-      salesCycleId: request.salesCycleId,
-      comparedSalesCycleId: request.comparedSalesCycleId,
-      reason: request.reason,
-      expiresAt: request.expiresAt,
-      kind: 'snooze',
+    const now = this.clock.now();
+    if (request.resurfaceAt <= now) {
+      throw new FounderSalesDomainError('ACTION_NOT_SUPPORTED', 'Snooze must resurface in the future.');
+    }
+    return this.services.unitOfWork.immediate(() => {
+      const cycle = this.requireCycle(request.salesCycleId);
+      if (cycle.workflow_status === 'closed') {
+        throw new FounderSalesDomainError('ACTION_NOT_SUPPORTED', 'A closed cycle cannot snooze.');
+      }
+      this.setCycleResurface(cycle, request.resurfaceAt, 'snooze', now);
+      return this.receipt([cycle.person_id], [cycle.id]);
     });
   }
 
@@ -1082,7 +1091,7 @@ export class FounderSalesDomain {
     comparedSalesCycleId: string;
     reason: string;
     expiresAt: string;
-    kind: 'pin' | 'snooze';
+    kind: 'pin';
   }): MutationReceipt {
     const now = this.clock.now();
     const cycle = this.requireCycle(input.salesCycleId);
@@ -1109,16 +1118,30 @@ export class FounderSalesDomain {
       controlId: this.ids.next(),
       preferenceEventId: this.ids.next(),
       controlledProspectId: cycle.prospect_id,
-      comparison: input.kind === 'pin'
-        ? { winner: controlledSide, loser: otherSide }
-        : { winner: otherSide, loser: controlledSide },
+      comparison: { winner: controlledSide, loser: otherSide },
       reason: input.reason,
       asOf: now,
       expiresAt: input.expiresAt,
     };
-    if (input.kind === 'pin') this.services.prioritization.pinProspect(command);
-    else this.services.prioritization.snoozeProspect(command);
+    this.services.prioritization.pinProspect(command);
     return this.receipt([cycle.person_id], [cycle.id]);
+  }
+
+  /** CAS write of the cycle's resurface marker under the current version. */
+  private setCycleResurface(
+    cycle: CycleRow,
+    resurfaceAt: string | null,
+    resurfaceReason: 'snooze' | 'callback' | null,
+    updatedAt: string,
+  ): void {
+    const changed = this.database.raw.prepare(`
+      UPDATE sales_cycles
+      SET resurface_at = ?, resurface_reason = ?, version = version + 1, updated_at = ?
+      WHERE id = ? AND version = ? AND workflow_status IN ('active','onboarding')
+    `).run(resurfaceAt, resurfaceReason, updatedAt, cycle.id, cycle.version);
+    if (changed.changes !== 1) {
+      throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The cycle changed concurrently.');
+    }
   }
 
   logPastActivity(input: LogPastActivityRequest): MutationReceipt {
@@ -1157,17 +1180,168 @@ export class FounderSalesDomain {
     });
   }
 
+  /**
+   * Founder note: THE one place prose is allowed. The text lives in the
+   * local encrypted activities.note_text column only; it is never uploaded
+   * anywhere and never leaves this machine.
+   */
+  addLeadNote(input: AddLeadNoteRequest): MutationReceipt {
+    const request = addLeadNoteRequestSchema.parse(input);
+    const now = this.clock.now();
+    return this.services.unitOfWork.immediate(() => {
+      const person = this.database.raw.prepare(
+        'SELECT id FROM persons WHERE id = ?',
+      ).get(request.personId) as { id: string } | undefined;
+      if (person === undefined) {
+        throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The person does not exist.');
+      }
+      let cycleIds: string[] = [];
+      if (request.salesCycleId !== null) {
+        const cycle = this.requireCycle(request.salesCycleId);
+        if (cycle.person_id !== request.personId) {
+          throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The cycle belongs to another person.');
+        }
+        cycleIds = [cycle.id];
+      }
+      const prospect = this.database.raw.prepare(
+        'SELECT id FROM prospects WHERE person_id = ?',
+      ).get(request.personId) as { id: string } | undefined;
+      this.services.events.appendActivity({
+        id: this.ids.next(),
+        personId: request.personId,
+        prospectId: prospect?.id ?? null,
+        salesCycleId: request.salesCycleId,
+        kind: 'note',
+        direction: 'internal',
+        channel: 'note',
+        occurredAt: now,
+        observedOutcome: null,
+        noteText: request.text,
+        metadata: { formatVersion: 1, loggedVia: 'founder_note' },
+      });
+      return this.receipt([request.personId], cycleIds);
+    });
+  }
+
+  /**
+   * Structured call outcome. `callbackAt` sets the cycle's resurface marker
+   * ('Callback you promised for today' on re-entry). `opted_out` routes
+   * through the existing person-wide opt-out closure using this call
+   * activity as founder-confirmed evidence.
+   */
+  logCallOutcome(input: LogCallOutcomeRequest): MutationReceipt {
+    const request = logCallOutcomeRequestSchema.parse(input);
+    const now = this.clock.now();
+    if (request.callbackAt !== null && request.callbackAt <= now) {
+      throw new FounderSalesDomainError('ACTION_NOT_SUPPORTED', 'A promised callback must be in the future.');
+    }
+    if (request.outcome === 'opted_out') {
+      // The opt-out service opens its own immediate transaction.
+      const cycle = this.requireCycle(request.salesCycleId);
+      if (cycle.person_id !== request.personId) {
+        throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The cycle belongs to another person.');
+      }
+      const prospect = this.database.raw.prepare(
+        'SELECT id FROM prospects WHERE person_id = ?',
+      ).get(request.personId) as { id: string } | undefined;
+      const activityId = this.ids.next();
+      this.services.optOut.apply({
+        personId: request.personId,
+        tombstoneId: this.ids.next(),
+        requestedAt: now,
+        policyVersion: 'founder_opt_out_v1',
+        decision: { kind: 'founder_confirmed', channel: 'call' },
+        evidence: {
+          kind: 'append_activity',
+          activity: {
+            id: activityId,
+            personId: request.personId,
+            prospectId: prospect?.id ?? null,
+            salesCycleId: request.salesCycleId,
+            kind: 'call',
+            direction: 'outbound',
+            channel: 'phone',
+            occurredAt: request.occurredAt,
+            observedOutcome: 'opted_out',
+            callOutcome: 'opted_out',
+            metadata: { formatVersion: 1, loggedVia: 'call_outcome' },
+          },
+        },
+        terminalStageEventId: cycle.workflow_status === 'onboarding' && cycle.stage === 'won'
+          ? null
+          : this.ids.next(),
+      });
+      return this.receipt([request.personId], [request.salesCycleId]);
+    }
+    return this.services.unitOfWork.immediate(() => {
+      const cycle = this.requireCycle(request.salesCycleId);
+      if (cycle.person_id !== request.personId) {
+        throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The cycle belongs to another person.');
+      }
+      const prospect = this.database.raw.prepare(
+        'SELECT id FROM prospects WHERE person_id = ?',
+      ).get(request.personId) as { id: string } | undefined;
+      this.services.events.appendActivity({
+        id: this.ids.next(),
+        personId: request.personId,
+        prospectId: prospect?.id ?? null,
+        salesCycleId: cycle.id,
+        kind: 'call',
+        direction: 'outbound',
+        channel: 'phone',
+        occurredAt: request.occurredAt,
+        observedOutcome: request.outcome,
+        callOutcome: request.outcome,
+        callbackAt: request.callbackAt,
+        metadata: { formatVersion: 1, loggedVia: 'call_outcome' },
+      });
+      if (request.callbackAt !== null && cycle.workflow_status !== 'closed') {
+        this.setCycleResurface(cycle, request.callbackAt, 'callback', now);
+      }
+      return this.receipt([request.personId], [cycle.id]);
+    });
+  }
+
+  /**
+   * Amendment event (audit 2.7): appends an immutable 'marked_in_error'
+   * amendment referencing the prior activity. Nothing is deleted; renderers
+   * strike the activity through at render time.
+   */
+  markActivityInError(input: MarkActivityInErrorRequest): MutationReceipt {
+    const request = markActivityInErrorRequestSchema.parse(input);
+    return this.services.unitOfWork.immediate(() => {
+      const activity = this.database.raw.prepare(
+        'SELECT id, person_id, sales_cycle_id FROM activities WHERE id = ?',
+      ).get(request.activityId) as {
+        id: string; person_id: string; sales_cycle_id: string | null;
+      } | undefined;
+      if (activity === undefined || activity.person_id !== request.personId) {
+        throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The activity does not belong to this person.');
+      }
+      this.services.events.appendActivityAmendment({
+        id: this.ids.next(),
+        activityId: activity.id,
+        amendmentKind: 'marked_in_error',
+        correction: { formatVersion: 1, markedInError: true },
+        reason: request.reason,
+      });
+      return this.receipt(
+        [request.personId],
+        activity.sales_cycle_id === null ? [] : [activity.sales_cycle_id],
+      );
+    });
+  }
+
   // ------------------------------------------------------------- pipeline
 
   getPipelineProjection(): PipelineSnapshot {
-    const now = this.clock.now();
     const rows = this.database.raw.prepare(`
       SELECT
         cycle.id AS cycle_id, cycle.person_id, cycle.prospect_id, cycle.stage,
         cycle.workflow_status, cycle.stage_entered_at, cycle.close_reason,
         person.display_name,
         action.id AS action_id, action.action_type, action.channel AS action_channel,
-        action.due_at, action.status AS action_status, action.work_intent,
+        action.status AS action_status, action.work_intent,
         projection.fit_points, projection.fit_band, projection.timing_millipoints,
         projection.timing_band, projection.reachability, projection.data_confidence,
         projection.priority,
@@ -1188,7 +1362,7 @@ export class FounderSalesDomain {
       workflow_status: 'active' | 'onboarding' | 'closed'; stage_entered_at: string;
       close_reason: string | null; display_name: string;
       action_id: string | null; action_type: string | null; action_channel: string | null;
-      due_at: string | null; action_status: string | null; work_intent: string | null;
+      action_status: string | null; work_intent: string | null;
       fit_points: number | null; fit_band: ProjectionRow['fit_band'] | null;
       timing_millipoints: number | null; timing_band: ProjectionRow['timing_band'] | null;
       reachability: ProjectionRow['reachability'] | null; data_confidence: number | null;
@@ -1232,9 +1406,7 @@ export class FounderSalesDomain {
               workIntent: row.work_intent,
               onboarding: row.workflow_status === 'onboarding',
             }),
-            dueAt: row.due_at!,
             label: actionLabel(row.action_type!),
-            overdue: row.due_at! < now,
           },
           lostReasonCode: row.stage === 'lost_nurture' ? row.close_reason : null,
         })),
@@ -1406,10 +1578,17 @@ export class FounderSalesDomain {
       SELECT AVG(design_partner_fitness) AS average FROM sales_cycles
       WHERE design_partner_fitness IS NOT NULL
     `).get() as { average: number | null };
-    const overdueActions = (this.database.raw.prepare(`
-      SELECT COUNT(*) AS count FROM next_actions
-      WHERE status = 'pending' AND due_at < ?
-    `).get(asOf) as { count: number }).count;
+    const cyclesWithoutNextStep = (this.database.raw.prepare(`
+      SELECT COUNT(*) AS count FROM sales_cycles AS cycle
+      WHERE cycle.workflow_status IN ('active', 'onboarding')
+        AND cycle.stage <> 'unreviewed'
+        AND (
+          cycle.current_next_action_id IS NULL OR NOT EXISTS (
+            SELECT 1 FROM next_actions AS action
+            WHERE action.id = cycle.current_next_action_id AND action.status = 'pending'
+          )
+        )
+    `).get() as { count: number }).count;
     const invalidActionCycles = (this.database.raw.prepare(`
       SELECT COUNT(*) AS count FROM sales_cycles AS cycle
       WHERE cycle.workflow_status IN ('active', 'onboarding') AND (
@@ -1480,7 +1659,7 @@ export class FounderSalesDomain {
         numericValue: fitness.average, target: null, priorDelta: null,
         numerator: null, denominator: null, drilldownCount: 0,
       },
-      count('overdue_actions', 'Overdue actions', overdueActions, null),
+      count('cycles_without_next_step', 'Cycles without next step', cyclesWithoutNextStep, null),
       count('invalid_action_cycles', 'Invalid action cycles', invalidActionCycles, null),
     ];
     const sourceRows = this.database.raw.prepare(`
@@ -2462,7 +2641,7 @@ export class FounderSalesDomain {
 
   private readAction(actionId: string): ActionRow | undefined {
     return this.database.raw.prepare(`
-      SELECT id, sales_cycle_id, action_type, channel, status, due_at, version,
+      SELECT id, sales_cycle_id, action_type, channel, status, version,
         work_intent, cadence_enrollment_id, cadence_step_id, cadence_component_id
       FROM next_actions WHERE id = ?
     `).get(actionId) as ActionRow | undefined;

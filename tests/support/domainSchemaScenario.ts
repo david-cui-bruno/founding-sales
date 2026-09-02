@@ -211,7 +211,7 @@ function runDatabaseScenario(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
         ).get(),
-        { schema_version: 9 },
+        { schema_version: 10 },
       );
       const actualTables = raw.prepare<string[], { name: string }>(`
         SELECT name FROM sqlite_master
@@ -251,7 +251,7 @@ function runDatabaseScenario(
         'PRAGMA table_info(next_actions)',
       ).all().map(({ name }) => name);
       for (const column of [
-        'work_intent', 'sla_due_at', 'inbound_sla_kind', 'inbound_sla_due_at',
+        'work_intent', 'inbound_sla_kind', 'inbound_sla_due_at',
         'inbound_sla_source_event_id', 'inbound_sla_provenance_json',
         'settlement_json', 'version', 'updated_at',
       ]) {
@@ -484,11 +484,11 @@ function runDatabaseScenario(
       assertDeferredConstraint(raw, () => {
         raw.prepare(`
           INSERT INTO next_actions (
-            id, sales_cycle_id, action_type, channel, status, due_at,
+            id, sales_cycle_id, action_type, channel, status,
             timezone, created_at, completed_at
           ) VALUES ('completed-before-cycle-action', 'completed-before-cycle-cycle',
-                    'call', 'phone', 'completed', ?, 'America/New_York', ?, ?)
-        `).run(DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+                    'call', 'phone', 'completed', 'America/New_York', ?, ?)
+        `).run(DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
         raw.prepare(`
           INSERT INTO sales_cycles (
             id, person_id, prospect_id, entry_source_event_id, stage,
@@ -518,11 +518,11 @@ function runDatabaseScenario(
       `).run());
       assert.throws(() => raw.prepare(`
         INSERT OR REPLACE INTO next_actions (
-          id, sales_cycle_id, action_type, channel, status, due_at,
+          id, sales_cycle_id, action_type, channel, status,
           timezone, created_at
-        ) VALUES ('retained-action', ?, 'call', 'phone', 'pending', ?,
+        ) VALUES ('retained-action', ?, 'call', 'phone', 'pending',
           'America/New_York', ?)
-      `).run(closedCycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP));
+      `).run(closedCycleId, DOMAIN_TIMESTAMP));
 
       raw.prepare(`
         INSERT INTO won_terms (
@@ -1069,21 +1069,21 @@ function runDatabaseScenario(
       `).run(blocked.personId, closedCycleId));
       assert.throws(() => raw.prepare(`
         INSERT INTO next_actions (
-          id, sales_cycle_id, action_type, channel, status, due_at, timezone, created_at
-        ) VALUES ('blocked-action', ?, 'call', 'phone', 'pending', ?,
+          id, sales_cycle_id, action_type, channel, status, timezone, created_at
+        ) VALUES ('blocked-action', ?, 'call', 'phone', 'pending',
                   'America/New_York', ?)
       `).run(
         insertClosedCycle({ database: raw, prefix: 'opt-out-guard-blocked', prospect: blocked }),
-        DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+        DOMAIN_TIMESTAMP,
       ));
       raw.prepare(`
         INSERT INTO next_actions (
-          id, sales_cycle_id, action_type, channel, status, due_at, timezone, created_at
-        ) VALUES ('blocked-internal', ?, 'internal_review', NULL, 'pending', ?,
+          id, sales_cycle_id, action_type, channel, status, timezone, created_at
+        ) VALUES ('blocked-internal', ?, 'internal_review', NULL, 'pending',
                   'America/New_York', ?)
       `).run(
         insertClosedCycle({ database: raw, prefix: 'opt-out-guard-internal', prospect: blocked }),
-        DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+        DOMAIN_TIMESTAMP,
       );
       assert.throws(() => raw.prepare(`
         INSERT INTO person_contact_methods (
@@ -1376,11 +1376,11 @@ function runDatabaseScenario(
       });
       assert.throws(() => raw.prepare(`
         INSERT INTO next_actions (
-          id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+          id, sales_cycle_id, action_type, channel, status, timezone,
           completion_activity_id, created_at, completed_at
-        ) VALUES ('completion-wrong-insert', ?, 'call', 'phone', 'completed', ?,
+        ) VALUES ('completion-wrong-insert', ?, 'call', 'phone', 'completed',
                   'America/New_York', 'completion-owner-activity', ?, ?)
-      `).run(firstCycle, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP));
+      `).run(firstCycle, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP));
       insertRawAction(raw, 'completion-wrong-update', firstCycle);
       assert.throws(() => raw.prepare(`
         UPDATE next_actions
@@ -1922,10 +1922,10 @@ function insertRawAction(
 ): void {
   database.prepare(`
     INSERT INTO next_actions (
-      id, sales_cycle_id, action_type, channel, status, due_at,
+      id, sales_cycle_id, action_type, channel, status,
       timezone, created_at
-    ) VALUES (?, ?, 'call', 'phone', 'pending', ?, 'America/New_York', ?)
-  `).run(actionId, cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    ) VALUES (?, ?, 'call', 'phone', 'pending', 'America/New_York', ?)
+  `).run(actionId, cycleId, DOMAIN_TIMESTAMP);
 }
 
 function insertRawActivity(

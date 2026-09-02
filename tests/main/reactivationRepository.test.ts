@@ -4,13 +4,13 @@ import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { BUILTIN_CADENCES } from '../../src/main/domain/cadence/builtinCadences';
 import { CadenceRepository } from '../../src/main/domain/cadence/cadenceRepository';
+import { toSalesCycleReceiptSnapshot } from '../../src/main/domain/lifecycle/reactivationContracts';
 import {
   ReactivationRepository,
   type InsertReactivationReceiptInput,
 } from '../../src/main/domain/lifecycle/reactivationRepository';
 import { SalesCycleRepository } from '../../src/main/domain/lifecycle/salesCycleRepository';
 import { auditDomainInvariants } from '../../src/main/domain/lifecycle/invariantAudit';
-import type { SalesCycle } from '../../src/main/domain/lifecycle/lifecycleTypes';
 import { LifecycleIdempotencyConflictError, StaleDomainWriteError } from '../../src/main/domain/support/domainErrors';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
 import { DOMAIN_TIMESTAMP, insertClosedCycle, seedProspect } from '../fixtures/domainRows';
@@ -40,7 +40,7 @@ describe('ReactivationRepository', () => {
     sourceEventId: string;
     sourceCycleId: string;
     newCycleId: string;
-    newCycle: SalesCycle;
+    newCycle: ReturnType<typeof toSalesCycleReceiptSnapshot>;
   }> {
     workspace = createTempDatabase();
     const key = createTestWorkspaceKey();
@@ -76,13 +76,13 @@ describe('ReactivationRepository', () => {
       `).run(newCycleId, COLD_CADENCE.id, OCTOBER, OCTOBER, OCTOBER);
       database.raw.prepare(`
         INSERT INTO next_actions (
-          id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+          id, sales_cycle_id, action_type, channel, status, timezone,
           work_intent, cadence_enrollment_id, cadence_step_id, cadence_component_id,
           created_at, updated_at
-        ) VALUES ('receipt-action', ?, 'call', 'call', 'pending', ?,
+        ) VALUES ('receipt-action', ?, 'call', 'call', 'pending',
           'America/New_York', 'discretionary_prospecting', 'receipt-enrollment',
           'cadence-b-v1-day-0', 'cadence-b-v1-day-0-call', ?, ?)
-      `).run(newCycleId, OCTOBER, OCTOBER, OCTOBER);
+      `).run(newCycleId, OCTOBER, OCTOBER);
       database.raw.prepare(`
         INSERT INTO stage_events (
           id, sales_cycle_id, from_stage, to_stage, effective_at, confirmed_at,
@@ -98,7 +98,7 @@ describe('ReactivationRepository', () => {
     return {
       personId: prospect.personId, prospectId: prospect.prospectId,
       sourceEventId: prospect.sourceEventId, sourceCycleId, newCycleId,
-      newCycle: cycles.getById(newCycleId)!,
+      newCycle: toSalesCycleReceiptSnapshot(cycles.getById(newCycleId)!),
     };
   }
 

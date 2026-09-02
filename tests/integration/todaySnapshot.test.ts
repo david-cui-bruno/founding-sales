@@ -116,11 +116,11 @@ describe('Today coherent snapshot across independent encrypted connections', () 
       );
       database.raw.prepare(`
         INSERT INTO next_actions (
-          id, sales_cycle_id, action_type, channel, status, due_at,
+          id, sales_cycle_id, action_type, channel, status,
           timezone, work_intent, created_at
-        ) VALUES (?, ?, 'call', 'phone', 'pending', ?, 'America/New_York',
+        ) VALUES (?, ?, 'call', 'phone', 'pending', 'America/New_York',
                   'discretionary_prospecting', ?)
-      `).run(actionId, cycleId, GENERATED_AT, DOMAIN_TIMESTAMP);
+      `).run(actionId, cycleId, DOMAIN_TIMESTAMP);
       database.raw.exec('COMMIT');
     } catch (error) {
       if (database.raw.inTransaction) database.raw.exec('ROLLBACK');

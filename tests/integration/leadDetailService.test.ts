@@ -118,7 +118,7 @@ describe('leadDetailService over a real encrypted domain', () => {
     expect(detail.personId).toBe(prospect.personId);
     expect(detail.salesCycleId).toBe(cycleId);
     expect(detail.personName).toBe(`Person ${prospect.personId}`);
-    expect(detail.stage).toBe('unreviewed');
+    expect(detail.stage).toBe('ready');
     expect(detail.workflowStatus).toBe('active');
     expect(detail.optedOut).toBe(false);
     expect(detail.phones).toHaveLength(1);

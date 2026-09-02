@@ -1,7 +1,10 @@
 import type { MutationReceipt } from '../../shared/contracts/commonContract';
 import type {
+  AddLeadNoteRequest,
   CompleteActionRequest,
+  LogCallOutcomeRequest,
   LogPastActivityRequest,
+  MarkActivityInErrorRequest,
   PinActionRequest,
   SnoozeActionRequest,
   TodaySnapshot,
@@ -19,6 +22,9 @@ export type TodayProvider = {
   snooze(input: SnoozeActionRequest): Promise<MutationReceipt>;
   pin(input: PinActionRequest): Promise<MutationReceipt>;
   logPastActivity(input: LogPastActivityRequest): Promise<MutationReceipt>;
+  addLeadNote(input: AddLeadNoteRequest): Promise<MutationReceipt>;
+  logCallOutcome(input: LogCallOutcomeRequest): Promise<MutationReceipt>;
+  markActivityInError(input: MarkActivityInErrorRequest): Promise<MutationReceipt>;
 };
 
 /** The domain facade methods the Today slice consumes. */
@@ -28,6 +34,9 @@ export type TodayDomainInvoker = {
   snoozePrimaryAction(input: SnoozeActionRequest): MutationReceipt;
   pinWithinLane(input: PinActionRequest): MutationReceipt;
   logPastActivity(input: LogPastActivityRequest): MutationReceipt;
+  addLeadNote(input: AddLeadNoteRequest): MutationReceipt;
+  logCallOutcome(input: LogCallOutcomeRequest): MutationReceipt;
+  markActivityInError(input: MarkActivityInErrorRequest): MutationReceipt;
 };
 
 /**
@@ -41,5 +50,8 @@ export function createTodayProvider(domain: TodayDomainInvoker): TodayProvider {
     snooze: async (input) => domain.snoozePrimaryAction(input),
     pin: async (input) => domain.pinWithinLane(input),
     logPastActivity: async (input) => domain.logPastActivity(input),
+    addLeadNote: async (input) => domain.addLeadNote(input),
+    logCallOutcome: async (input) => domain.logCallOutcome(input),
+    markActivityInError: async (input) => domain.markActivityInError(input),
   };
 }

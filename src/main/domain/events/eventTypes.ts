@@ -25,6 +25,14 @@ type ActivityCadenceEvidence =
     cadenceComponentId: string;
   };
 
+export type CallOutcomeKind =
+  | 'no_answer'
+  | 'voicemail'
+  | 'spoke'
+  | 'interview_booked'
+  | 'not_interested'
+  | 'opted_out';
+
 export type Activity = ActivityCadenceEvidence & {
   id: string;
   personId: string;
@@ -43,6 +51,10 @@ export type Activity = ActivityCadenceEvidence & {
   transcriptStorageRef: string | null;
   metadata: unknown;
   createdAt: string;
+  /** Founder-authored prose; the ONE place prose is allowed. Local-only. */
+  noteText: string | null;
+  callOutcome: CallOutcomeKind | null;
+  callbackAt: string | null;
 };
 
 export type ActivityAmendment = {
@@ -110,6 +122,9 @@ export type AppendActivityInput = AppendActivityCadenceEvidence & {
   recordingStorageRef?: string | null;
   transcriptStorageRef?: string | null;
   metadata?: unknown;
+  noteText?: string | null;
+  callOutcome?: CallOutcomeKind | null;
+  callbackAt?: string | null;
 };
 
 export type AppendActivityAmendmentInput = {

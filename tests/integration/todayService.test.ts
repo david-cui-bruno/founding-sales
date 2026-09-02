@@ -30,8 +30,7 @@ import {
 const CLOCK_NOW = '2026-08-31T15:00:00.000Z';
 
 const FIXED_LANE_ORDER = [
-  'onboarding', 'fresh_inbound', 'overdue', 'post_interview_offer',
-  'due_cadence', 'new_p0', 'p1', 'exploration', 'later',
+  'onboarding', 'fresh_inbound', 'due_cadence', 'new_p0', 'p1', 'exploration', 'later',
 ];
 
 class FixedClock {
@@ -114,8 +113,19 @@ describe('todayService', () => {
     expect(snapshot.revision).toBeGreaterThanOrEqual(0);
   });
 
-  it('summarizes unreviewed overdue cycles as a backlog count with no lane rows', async () => {
-    const { cycleId } = seedLead('backlog', 'unreviewed');
+  it('summarizes unreviewed cycles as a backlog count with no lane rows', async () => {
+    const prospect = seedProspect(database.raw, 'backlog');
+    database.raw.prepare(`
+      INSERT INTO sales_cycles (
+        id, person_id, prospect_id, entry_source_event_id, stage,
+        workflow_status, current_next_action_id, stage_entered_at,
+        version, created_at, updated_at
+      ) VALUES ('backlog-cycle', ?, ?, ?, 'unreviewed', 'active', NULL, ?, 1, ?, ?)
+    `).run(
+      prospect.personId, prospect.prospectId, prospect.sourceEventId,
+      DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
+    );
+    const cycleId = 'backlog-cycle';
     seedLead('reviewed');
 
     const snapshot = await provider.get();
@@ -126,11 +136,11 @@ describe('todayService', () => {
       (lane) => lane.items.some((item) => item.salesCycleId === cycleId),
     );
     expect(laneIdsWithBacklogCycle).toHaveLength(0);
-    const overdue = snapshot.lanes.find((lane) => lane.id === 'overdue')!;
-    expect(overdue.items.map((item) => item.salesCycleId)).toEqual(['reviewed-cycle']);
+    const dueCadence = snapshot.lanes.find((lane) => lane.id === 'due_cadence')!;
+    expect(dueCadence.items.map((item) => item.salesCycleId)).toEqual(['reviewed-cycle']);
   });
 
-  it('places a seeded overdue promise in the Overdue lane exactly once', async () => {
+  it('places a seeded promise in the Due cadence lane exactly once', async () => {
     const { prospect, cycleId } = seedLead('alpha');
 
     const snapshot = await provider.get();
@@ -138,14 +148,13 @@ describe('todayService', () => {
     const memberships = snapshot.lanes.filter(
       (lane) => lane.items.some((item) => item.salesCycleId === cycleId),
     );
-    expect(memberships.map((lane) => lane.id)).toEqual(['overdue']);
+    expect(memberships.map((lane) => lane.id)).toEqual(['due_cadence']);
     const item = memberships[0]!.items.find(
       (candidate) => candidate.salesCycleId === cycleId,
     )!;
     expect(item.personId).toBe(prospect.personId);
     expect(item.personName).toBe(`Person ${prospect.personId}`);
     expect(item.reason.length).toBeGreaterThan(0);
-    expect(item.action.overdue).toBe(true);
     expect(item.pinned).toBe(false);
   });
 
@@ -161,7 +170,7 @@ describe('todayService', () => {
     expect(new Set(cycleIds).size).toBe(cycleIds.length);
   });
 
-  it('keeps promised work visible regardless of the dial budget', async () => {
+  it('defers work past the whole-queue capacity into Later with an overflow count', async () => {
     database.raw.prepare(
       'UPDATE workspace_settings SET daily_dial_capacity = 0 WHERE singleton = 1',
     ).run();
@@ -170,8 +179,11 @@ describe('todayService', () => {
     const snapshot = await provider.get();
 
     expect(snapshot.dialBudget).toBe(0);
-    const overdue = snapshot.lanes.find((lane) => lane.id === 'overdue')!;
-    expect(overdue.items.map((item) => item.salesCycleId)).toContain(cycleId);
+    const dueCadence = snapshot.lanes.find((lane) => lane.id === 'due_cadence')!;
+    expect(dueCadence.items).toHaveLength(0);
+    expect(dueCadence.overflowCount).toBe(1);
+    const later = snapshot.lanes.find((lane) => lane.id === 'later')!;
+    expect(later.items.map((item) => item.salesCycleId)).toContain(cycleId);
   });
 
   it('logs a past activity through the provider and bumps the revision', async () => {
@@ -193,7 +205,7 @@ describe('todayService', () => {
     expect(receipt.revision).toBeGreaterThan(before.revision);
   });
 
-  it('rejects pin and snooze with a safe error when priority projections are missing', async () => {
+  it('rejects pin without projections and snoozes by writing resurface_at', async () => {
     const { cycleId } = seedLead('alpha');
     const { cycleId: comparedCycleId } = seedLead('beta');
 
@@ -203,12 +215,29 @@ describe('todayService', () => {
       expiresAt: '2026-09-01T15:00:00.000Z',
       comparedSalesCycleId: comparedCycleId,
     })).rejects.toThrow('priority projection');
+
+    // Snooze no longer records a preference comparison: it hides the cycle
+    // behind a founder-chosen resurface instant.
     await expect(provider.snooze({
       salesCycleId: cycleId,
-      reason: 'Founder is travelling',
-      expiresAt: '2026-09-01T15:00:00.000Z',
-      comparedSalesCycleId: comparedCycleId,
-    })).rejects.toThrow('priority projection');
+      resurfaceAt: '2026-08-30T15:00:00.000Z',
+    })).rejects.toThrow('future');
+    const receipt = await provider.snooze({
+      salesCycleId: cycleId,
+      resurfaceAt: '2026-09-01T15:00:00.000Z',
+    });
+    expect(receipt.affectedSalesCycleIds).toEqual([cycleId]);
+    expect(database.raw.prepare(
+      'SELECT resurface_at, resurface_reason FROM sales_cycles WHERE id = ?',
+    ).get(cycleId)).toEqual({
+      resurface_at: '2026-09-01T15:00:00.000Z', resurface_reason: 'snooze',
+    });
+
+    const snapshot = await provider.get();
+    const laneMembership = snapshot.lanes.filter(
+      (lane) => lane.items.some((item) => item.salesCycleId === cycleId),
+    );
+    expect(laneMembership).toHaveLength(0);
   });
 
   it('pins within the lane after both prospects hold current projections', async () => {
@@ -241,7 +270,7 @@ describe('todayService', () => {
     const laneOf = (cycleId: string) => snapshot.lanes.find(
       (lane) => lane.items.some((item) => item.salesCycleId === cycleId),
     )?.id;
-    expect(laneOf(first.cycleId)).toBe('overdue');
+    expect(laneOf(first.cycleId)).toBe('due_cadence');
     const pinnedItem = snapshot.lanes
       .flatMap((lane) => lane.items)
       .find((item) => item.salesCycleId === first.cycleId);

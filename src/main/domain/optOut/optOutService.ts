@@ -8,6 +8,7 @@ import type { Activity, AppendActivityInput } from '../events/eventTypes';
 import type { IdentityRepository } from '../identity/identityRepository';
 import type { LifecycleService } from '../lifecycle/lifecycleService';
 import type { SalesCycle } from '../lifecycle/lifecycleTypes';
+import { toSalesCycleReceiptSnapshot } from '../lifecycle/reactivationContracts';
 import { serializeCanonical } from '../lifecycle/lifecycleValidation';
 import {
   DomainRepositoryDatabaseMismatchError,
@@ -487,7 +488,11 @@ function freezeResult(input: {
   cycle: SalesCycle | null;
   alreadyApplied: boolean;
 }): ApplyOptOutResult {
-  return Object.freeze({ ...input, handles: Object.freeze([...input.handles]) });
+  return Object.freeze({
+    ...input,
+    cycle: input.cycle === null ? null : toSalesCycleReceiptSnapshot(input.cycle),
+    handles: Object.freeze([...input.handles]),
+  });
 }
 
 function compareHandleFact(

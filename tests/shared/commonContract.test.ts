@@ -88,21 +88,19 @@ describe('workflow common contracts', () => {
     expect(reachabilitySchema.options).toEqual(['direct', 'indirect', 'none']);
   });
 
-  it('accepts a strict primary action with an offset timestamp', () => {
+  it('accepts a strict primary action without due semantics', () => {
     expect(primaryActionSchema.parse({
       id: 'action-1',
       type: 'first_call',
       channel: 'call',
-      dueAt: '2026-08-30T12:00:00.000Z',
       label: 'Call Dana',
-      overdue: false,
     })).toMatchObject({ id: 'action-1', channel: 'call' });
   });
 
   it('rejects a primary action with an unknown channel or extra keys', () => {
     expect(() => primaryActionSchema.parse({
       id: 'action-1', type: 'first_call', channel: 'fax',
-      dueAt: '2026-08-30T12:00:00.000Z', label: 'Call Dana', overdue: false,
+      label: 'Call Dana',
     })).toThrow();
     expect(() => primaryActionSchema.parse({
       id: 'action-1', type: 'first_call', channel: 'call',

@@ -80,11 +80,11 @@ describe('cadence relational ownership constraints', () => {
   }): void {
     database!.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        id, sales_cycle_id, action_type, channel, status, timezone,
         cadence_enrollment_id, cadence_step_id, cadence_component_id, created_at
-      ) VALUES (?, ?, 'text', 'text', 'pending', ?, 'America/New_York', ?, ?, ?, ?)
+      ) VALUES (?, ?, 'text', 'text', 'pending', 'America/New_York', ?, ?, ?, ?)
     `).run(
-      input.id, input.cycleId, DOMAIN_TIMESTAMP, input.enrollmentId,
+      input.id, input.cycleId, input.enrollmentId,
       input.stepId, input.componentId, DOMAIN_TIMESTAMP,
     );
   }

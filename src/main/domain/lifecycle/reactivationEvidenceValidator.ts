@@ -143,13 +143,13 @@ export function collectReceiptEvidenceViolations(
   }
   const action = snapshot.currentNextActionId === null ? undefined : one(database, `
     SELECT sales_cycle_id, status, cadence_enrollment_id, cadence_step_id,
-      cadence_component_id, due_at, sla_due_at, created_at, completed_at, updated_at
+      cadence_component_id, created_at, completed_at, updated_at
     FROM next_actions WHERE id = ?
   `, snapshot.currentNextActionId);
   requireCanonicalRowTimestamps(action, [
-    'due_at', 'created_at', 'updated_at',
+    'created_at', 'updated_at',
   ], 'initial NextAction', violations);
-  for (const field of ['sla_due_at', 'completed_at'] as const) {
+  for (const field of ['completed_at'] as const) {
     if (action?.[field] !== null && action?.[field] !== undefined) {
       requireCanonicalTimestamp(action[field], `initial NextAction ${field}`, violations);
     }

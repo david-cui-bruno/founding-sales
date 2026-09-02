@@ -336,12 +336,16 @@ function validateLostNurtureClosure(
   const events = eventRows.map((row) => stageEventRowSchema.safeParse(row));
   const last = events.at(-1);
   const prior = events.at(-2);
+  // A cycle with no earlier StageEvents may have been born at any legal
+  // initial stage (unreviewed, ready via reactivation, contacted via
+  // inbound reactivation); the terminal event's from_stage records it.
+  const legalInitialStages = new Set(['unreviewed', 'ready', 'contacted']);
   if (events.some((candidate) => !candidate.success)
     || !last?.success || last.data.id !== event.id
     || event.transition_sequence !== events.length
     || (prior?.success
       ? prior.data.to_stage !== event.from_stage
-      : event.from_stage !== 'unreviewed')) {
+      : !legalInitialStages.has(String(event.from_stage)))) {
     add('terminal_stage_event_cardinality');
   }
 }

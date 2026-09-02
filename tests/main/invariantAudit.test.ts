@@ -79,13 +79,13 @@ describe('auditDomainInvariants', () => {
     `).run(seeded.actionId);
     database.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        id, sales_cycle_id, action_type, channel, status, timezone,
         cadence_enrollment_id, cadence_step_id, cadence_component_id,
         created_at, updated_at
-      ) VALUES ('wrong-channel-action', ?, 'call', 'email', 'pending', ?,
+      ) VALUES ('wrong-channel-action', ?, 'call', 'email', 'pending',
         'America/New_York', 'forged-overcap-enrollment', 'cadence-a-v1-day-0',
         'cadence-a-v1-day-0-call', ?, ?)
-    `).run(overCap.cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    `).run(overCap.cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
     database.raw.prepare(`
       INSERT INTO activities (
         id, person_id, prospect_id, sales_cycle_id, cadence_enrollment_id,
@@ -100,11 +100,11 @@ describe('auditDomainInvariants', () => {
     );
     database.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        id, sales_cycle_id, action_type, channel, status, timezone,
         created_at, updated_at
-      ) VALUES ('opted-out-pending-outbound', ?, 'text', 'text', 'pending', ?,
+      ) VALUES ('opted-out-pending-outbound', ?, 'text', 'text', 'pending',
         'America/New_York', ?, ?)
-    `).run(seeded.cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    `).run(seeded.cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
     database.raw.prepare(`
       INSERT INTO sales_cycle_close_readiness (
         sales_cycle_id, pain_confirmed, decision_authority_confirmed,
@@ -175,7 +175,6 @@ describe('auditDomainInvariants', () => {
       'opted_out_pending_outbound',
       'p0_reachability_invalid',
       'stage_event_chain_invalid',
-      'unreviewed_action_invalid',
       'won_terms_missing',
     ]));
     expect(first).toContainEqual(expect.objectContaining({
@@ -474,13 +473,13 @@ describe('auditDomainInvariants', () => {
     database.raw.exec('DROP TRIGGER protect_next_action_immutable_evidence');
     database.raw.prepare(`
       UPDATE next_actions SET
-        work_intent = 'inbound_response', sla_due_at = ?,
+        work_intent = 'inbound_response',
         inbound_sla_kind = 'inbound_demo_permitted_minutes',
         inbound_sla_due_at = ?, inbound_sla_source_event_id = ?,
         inbound_sla_provenance_json = ?
       WHERE id = ?
     `).run(
-      '2026-08-30T17:16:00.000Z', '2026-08-30T17:16:00.000Z', 'audit-demo-source',
+      '2026-08-30T17:16:00.000Z', 'audit-demo-source',
       serializeCanonical({
         version: 1, sourceEventId: 'audit-demo-source',
         sourceObservedAt: DOMAIN_TIMESTAMP,
@@ -495,13 +494,13 @@ describe('auditDomainInvariants', () => {
 
     database.raw.prepare(`
       UPDATE next_actions SET
-        work_intent = 'inbound_response', sla_due_at = ?,
+        work_intent = 'inbound_response',
         inbound_sla_kind = 'inbound_demo_permitted_minutes',
         inbound_sla_due_at = ?, inbound_sla_source_event_id = ?,
         inbound_sla_provenance_json = ?
       WHERE id = ?
     `).run(
-      DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, 'audit-demo-source',
+      DOMAIN_TIMESTAMP, 'audit-demo-source',
       serializeCanonical({
         version: 1, sourceEventId: 'audit-demo-source',
         sourceObservedAt: '2026-08-29T12:00:00.000Z',
@@ -617,7 +616,7 @@ describe('auditDomainInvariants', () => {
       INSERT INTO stage_events (
         id, sales_cycle_id, from_stage, to_stage, effective_at, confirmed_at,
         confirmation_kind, transition_sequence, created_at
-      ) VALUES ('canonical-stage', ?, NULL, 'unreviewed', ?, ?, 'mechanical', 1, ?)
+      ) VALUES ('canonical-stage', ?, NULL, 'ready', ?, ?, 'mechanical', 1, ?)
     `).run(workflow.cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
     expect(auditDomainInvariants({ database, asOf: DOMAIN_TIMESTAMP })).toEqual([]);
 
@@ -729,11 +728,11 @@ describe('auditDomainInvariants', () => {
     });
     database.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        id, sales_cycle_id, action_type, channel, status, timezone,
         work_intent, settlement_json, completed_at, created_at, updated_at
-      ) VALUES ('invalid-impossible-settlement', ?, 'follow_up', NULL, 'completed', ?,
+      ) VALUES ('invalid-impossible-settlement', ?, 'follow_up', NULL, 'completed',
         'America/New_York', 'promised_follow_up', ?, ?, ?, ?)
-    `).run(seeded.cycleId, DOMAIN_TIMESTAMP, serializeCanonical({
+    `).run(seeded.cycleId, serializeCanonical({
       version: 1, outcome: 'marked_impossible', reason: 'missing_phone',
       evidenceActivityId: null,
       plannerTransition: {
@@ -774,11 +773,11 @@ describe('auditDomainInvariants', () => {
     for (const [id, outcome] of cases) {
       database.raw.prepare(`
         INSERT INTO next_actions (
-          id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+          id, sales_cycle_id, action_type, channel, status, timezone,
           work_intent, settlement_json, completed_at, created_at, updated_at
-        ) VALUES (?, ?, 'follow_up', NULL, 'completed', ?, 'America/New_York',
+        ) VALUES (?, ?, 'follow_up', NULL, 'completed', 'America/New_York',
           'promised_follow_up', ?, ?, ?, ?)
-      `).run(id, seeded.cycleId, DOMAIN_TIMESTAMP, serializeCanonical({
+      `).run(id, seeded.cycleId, serializeCanonical({
         version: 1, outcome, reason: null, evidenceActivityId: null,
         plannerTransition: {
           definitionId: null, stepId: null, componentId: null,
@@ -824,12 +823,12 @@ describe('auditDomainInvariants', () => {
     );
     database.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        id, sales_cycle_id, action_type, channel, status, timezone,
         work_intent, completion_activity_id, settlement_json, completed_at,
         created_at, updated_at
-      ) VALUES ('invalid-offer-confirmation', ?, 'review', NULL, 'completed', ?,
+      ) VALUES ('invalid-offer-confirmation', ?, 'review', NULL, 'completed',
         'America/New_York', 'internal_review', 'offer-without-price', ?, ?, ?, ?)
-    `).run(seeded.cycleId, DOMAIN_TIMESTAMP, serializeCanonical({
+    `).run(seeded.cycleId, serializeCanonical({
       version: 1, outcome: 'offered_confirmed', reason: null,
       evidenceActivityId: 'offer-without-price',
       plannerTransition: {
@@ -901,13 +900,13 @@ describe('auditDomainInvariants', () => {
     );
     database.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        id, sales_cycle_id, action_type, channel, status, timezone,
         work_intent, cadence_enrollment_id, cadence_step_id, cadence_component_id,
         completion_activity_id, settlement_json, completed_at, created_at, updated_at
-      ) VALUES ('cadence-definition-mismatch', ?, 'call', 'phone', 'completed', ?,
+      ) VALUES ('cadence-definition-mismatch', ?, 'call', 'phone', 'completed',
         'America/New_York', 'promised_follow_up', 'snapshot-enrollment',
         'cadence-a-v1-day-0', 'cadence-a-v1-day-0-call', 'snapshot-activity', ?, ?, ?, ?)
-    `).run(seeded.cycleId, DOMAIN_TIMESTAMP, serializeCanonical({
+    `).run(seeded.cycleId, serializeCanonical({
       version: 1, outcome: 'answered', reason: null,
       evidenceActivityId: 'snapshot-activity',
       plannerTransition: {
@@ -928,13 +927,13 @@ describe('auditDomainInvariants', () => {
     ] as const) {
       database.raw.prepare(`
         INSERT INTO next_actions (
-          id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+          id, sales_cycle_id, action_type, channel, status, timezone,
           work_intent, cadence_enrollment_id, cadence_step_id, cadence_component_id,
           completion_activity_id, settlement_json, completed_at, created_at, updated_at
-        ) VALUES (?, ?, 'call', 'phone', 'completed', ?, 'America/New_York',
+        ) VALUES (?, ?, 'call', 'phone', 'completed', 'America/New_York',
           'promised_follow_up', 'snapshot-enrollment', 'cadence-a-v1-day-0',
           'cadence-a-v1-day-0-call', ?, ?, ?, ?, ?)
-      `).run(id, seeded.cycleId, DOMAIN_TIMESTAMP, completionActivityId, serializeCanonical({
+      `).run(id, seeded.cycleId, completionActivityId, serializeCanonical({
         version: 1, outcome, reason: null, evidenceActivityId,
         plannerTransition: {
           definitionId: 'cadence-a-v1', stepId: 'cadence-a-v1-day-0',
@@ -962,15 +961,15 @@ describe('auditDomainInvariants', () => {
     } as const;
     database.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        id, sales_cycle_id, action_type, channel, status, timezone,
         work_intent, inbound_sla_kind, inbound_sla_due_at,
         inbound_sla_source_event_id, inbound_sla_provenance_json,
         settlement_json, completed_at, created_at, updated_at
-      ) VALUES ('sla-snapshot-mismatch', ?, 'review_inbound', NULL, 'completed', ?,
+      ) VALUES ('sla-snapshot-mismatch', ?, 'review_inbound', NULL, 'completed',
         'America/New_York', 'inbound_response', 'direct_referral_elapsed', ?,
         'snapshot-referral', ?, ?, ?, ?, ?)
     `).run(
-      seeded.cycleId, DOMAIN_TIMESTAMP, referralDueAt, serializeCanonical(rawProvenance),
+      seeded.cycleId, referralDueAt, serializeCanonical(rawProvenance),
       serializeCanonical({
         version: 1, outcome: 'reviewed_ready', reason: null, evidenceActivityId: null,
         plannerTransition: {
@@ -1019,16 +1018,16 @@ describe('auditDomainInvariants', () => {
     });
     database.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+        id, sales_cycle_id, action_type, channel, status, timezone,
         work_intent, settlement_json, completed_at, created_at, updated_at
-      ) VALUES ('valid-internal-settlement', ?, 'review', NULL, 'completed', ?,
+      ) VALUES ('valid-internal-settlement', ?, 'review', NULL, 'completed',
           'America/New_York', 'internal_review', ?, ?, ?, ?),
-        ('valid-terminal-settlement', ?, 'review', NULL, 'cancelled', ?,
+        ('valid-terminal-settlement', ?, 'review', NULL, 'cancelled',
           'America/New_York', 'internal_review', ?, ?, ?, ?)
     `).run(
-      seeded.cycleId, DOMAIN_TIMESTAMP, exactInternal,
+      seeded.cycleId, exactInternal,
       DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
-      seeded.cycleId, DOMAIN_TIMESTAMP, exactTerminal,
+      seeded.cycleId, exactTerminal,
       DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP,
     );
 

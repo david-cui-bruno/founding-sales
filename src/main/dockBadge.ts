@@ -1,12 +1,14 @@
 /**
- * macOS dock badge showing the count of due next actions. Pure logic lives
- * here so it is unit-testable without Electron; src/main.ts injects the
- * platform, the due-count query, and `app.dock.setBadge`.
+ * macOS dock badge showing the count of fresh inbound leads awaiting a first
+ * touch. Due dates no longer exist anywhere in the app, so this is the only
+ * time-sensitive signal the badge may carry. Pure logic lives here so it is
+ * unit-testable without Electron; src/main.ts injects the platform, the
+ * fresh-inbound count query, and `app.dock.setBadge`.
  */
 
 export type DockBadgeDependencies = {
   platform: NodeJS.Platform;
-  getDueCount(): number;
+  getFreshInboundCount(): number;
   setBadge(text: string): void;
 };
 
@@ -34,7 +36,7 @@ export function createDockBadgeUpdater(
         return;
       }
 
-      const text = badgeTextForCount(deps.getDueCount());
+      const text = badgeTextForCount(deps.getFreshInboundCount());
       if (text === lastText) {
         return;
       }

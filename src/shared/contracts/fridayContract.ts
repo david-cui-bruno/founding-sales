@@ -4,7 +4,7 @@ import { personIdSchema, salesCycleIdSchema } from './commonContract';
 
 export const metricIdSchema = z.enum([
   'interviews', 'offers', 'wins', 'offer_rate', 'win_rate', 'jobs_requested', 'jobs_filled', 'fill_rate',
-  'new_mrr', 'founding_customers', 'design_partner_fitness', 'overdue_actions', 'invalid_action_cycles',
+  'new_mrr', 'founding_customers', 'design_partner_fitness', 'cycles_without_next_step', 'invalid_action_cycles',
 ]);
 export const metricSchema = z.object({
   id: metricIdSchema, label: z.string(), displayValue: z.string(), numericValue: z.number().nullable(),

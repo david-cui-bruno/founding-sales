@@ -37,6 +37,8 @@ export type SalesCycle = Readonly<{
   closeNotes: string | null;
   onboardingStopReason: string | null;
   closedAt: UtcTimestamp | null;
+  resurfaceAt: UtcTimestamp | null;
+  resurfaceReason: 'snooze' | 'callback' | null;
   version: number;
   createdAt: UtcTimestamp;
   updatedAt: UtcTimestamp;
@@ -148,11 +150,9 @@ export type NextAction = Readonly<{
   actionType: string;
   channel: string | null;
   status: 'pending' | 'completed' | 'cancelled' | 'impossible';
-  dueAt: UtcTimestamp;
   timezone: string;
   allowedWindow: string | null;
   workIntent: NextActionWorkIntent;
-  slaDueAt: UtcTimestamp | null;
   inboundSla: InboundSla;
   cadence: CadenceActionBinding;
   completionActivityId: string | null;
@@ -276,7 +276,7 @@ export type InsertCycleInput = Readonly<{
   entrySourceEventId: string;
   stage: LifecycleStage;
   workflowStatus: 'active' | 'onboarding';
-  currentNextActionId: string;
+  currentNextActionId: string | null;
   stageEnteredAt: UtcTimestamp;
   createdAt: UtcTimestamp;
 }>;
@@ -287,10 +287,8 @@ export type InsertNextActionInput = NextActionIntentAndSla & Readonly<{
   actionType: string;
   channel: string | null;
   status: 'pending';
-  dueAt: UtcTimestamp;
   timezone: string;
   allowedWindow: string | null;
-  slaDueAt: UtcTimestamp | null;
   cadence: CadenceActionBinding;
   createdAt: UtcTimestamp;
 }>;

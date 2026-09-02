@@ -86,9 +86,14 @@ export class TodayService {
         relatedIds: [entry.activityId],
       }));
       const candidates: ParsedTodayCandidate[] = [];
+      let unreviewedBacklogCount = 0;
       for (const result of loadResults) {
         if (result.kind === 'diagnostic') {
           diagnostics.push(result.diagnostic);
+          continue;
+        }
+        if (result.kind === 'unreviewed_backlog') {
+          unreviewedBacklogCount += 1;
           continue;
         }
         const enriched = this.enrichCandidate(result.candidate, generatedAt, interval);
@@ -104,6 +109,7 @@ export class TodayService {
         timezone: input.timezone,
         capacity: input.capacity,
         completedDiscretionaryDialCount: usage.count,
+        unreviewedBacklogCount,
         extraDiagnostics: diagnostics,
       });
     } finally {

@@ -151,10 +151,11 @@ const installDockBadge = (): void => {
   const dockBadgeUpdater = createDockBadgeUpdater({
     platform: process.platform,
     // TODO: RunningApplication currently exposes only databasePath and
-    // shutdown, so main has no public surface to count due next actions.
-    // Replace this injected 0 with a real due-count query once
-    // startApplication exposes one.
-    getDueCount: () => 0,
+    // shutdown, so main has no public surface to count fresh inbound leads.
+    // Replace this injected 0 with a real fresh-inbound count query once
+    // startApplication exposes one. Due dates no longer exist in the app,
+    // so the badge must never carry a due count.
+    getFreshInboundCount: () => 0,
     setBadge: (text) => dock.setBadge(text),
   });
   dockBadgeUpdater.refresh();

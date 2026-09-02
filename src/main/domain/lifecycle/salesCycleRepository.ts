@@ -33,9 +33,16 @@ const lostReasonSchema = z.enum([
 const insertCycleSchema = z.object({
   id: idSchema, personId: idSchema, prospectId: idSchema, entrySourceEventId: idSchema,
   stage: lifecycleStageSchema.exclude(['lost_nurture']),
-  workflowStatus: z.enum(['active', 'onboarding']), currentNextActionId: idSchema,
+  workflowStatus: z.enum(['active', 'onboarding']), currentNextActionId: idSchema.nullable(),
   stageEnteredAt: utcTimestampSchema, createdAt: utcTimestampSchema,
-}).strict();
+}).strict().superRefine((value, context) => {
+  if (value.currentNextActionId === null && value.stage !== 'unreviewed') {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Only Unreviewed cycles may start without a current action.',
+    });
+  }
+});
 const storedCycleSchema = z.object({
   id: idSchema, person_id: idSchema, prospect_id: idSchema, entry_source_event_id: idSchema,
   stage: lifecycleStageSchema, workflow_status: workflowStatusSchema,
@@ -43,6 +50,8 @@ const storedCycleSchema = z.object({
   design_partner_fitness: z.number().int().min(0).max(5).nullable(),
   close_reason: lostReasonSchema.nullable(), close_notes: z.string().nullable(),
   onboarding_stop_reason: z.string().nullable(), closed_at: utcTimestampSchema.nullable(),
+  resurface_at: utcTimestampSchema.nullable(),
+  resurface_reason: z.enum(['snooze', 'callback']).nullable(),
   version: z.number().int().safe().positive(), created_at: utcTimestampSchema,
   updated_at: utcTimestampSchema,
 }).strict();
@@ -50,7 +59,8 @@ const storedCycleSchema = z.object({
 const cycleColumns = `
   id, person_id, prospect_id, entry_source_event_id, stage, workflow_status,
   current_next_action_id, stage_entered_at, design_partner_fitness,
-  close_reason, close_notes, onboarding_stop_reason, closed_at, version,
+  close_reason, close_notes, onboarding_stop_reason, closed_at,
+  resurface_at, resurface_reason, version,
   created_at, updated_at
 `;
 const readinessStrengthSchema = z.enum(['unknown', 'weak', 'moderate', 'strong']);
@@ -68,7 +78,7 @@ export type TransitionOpenProjectionInput = Readonly<{
   expectedVersion: number;
   expectedStage: SalesCycle['stage'];
   expectedWorkflowStatus: 'active' | 'onboarding';
-  expectedCurrentActionId: string;
+  expectedCurrentActionId: string | null;
   nextStage: SalesCycle['stage'];
   nextWorkflowStatus: 'active' | 'onboarding';
   nextActionId: string;
@@ -80,7 +90,7 @@ export type CloseProjectionInput = Readonly<{
   expectedVersion: number;
   expectedStage: SalesCycle['stage'];
   expectedWorkflowStatus: 'active' | 'onboarding';
-  expectedCurrentActionId: string;
+  expectedCurrentActionId: string | null;
   finalStage: 'won' | 'lost_nurture';
   closedAt: string;
   closeReason: LostNurtureReason | null;
@@ -143,7 +153,7 @@ export class SalesCycleRepository {
       cycleId: idSchema, expectedVersion: z.number().int().safe().positive(),
       expectedStage: lifecycleStageSchema,
       expectedWorkflowStatus: z.enum(['active', 'onboarding']),
-      expectedCurrentActionId: idSchema, nextStage: lifecycleStageSchema,
+      expectedCurrentActionId: idSchema.nullable(), nextStage: lifecycleStageSchema,
       nextWorkflowStatus: z.enum(['active', 'onboarding']), nextActionId: idSchema,
       stageEnteredAt: utcTimestampSchema,
     }).strict().parse(input);
@@ -152,7 +162,7 @@ export class SalesCycleRepository {
       SET stage = ?, workflow_status = ?, current_next_action_id = ?,
           stage_entered_at = ?, version = version + 1, updated_at = ?
       WHERE id = ? AND version = ? AND stage = ? AND workflow_status = ?
-        AND current_next_action_id = ?
+        AND current_next_action_id IS ?
       RETURNING ${cycleColumns}
     `).get(
       parsed.nextStage, parsed.nextWorkflowStatus, parsed.nextActionId,
@@ -194,7 +204,7 @@ export class SalesCycleRepository {
       cycleId: idSchema, expectedVersion: z.number().int().safe().positive(),
       expectedStage: lifecycleStageSchema,
       expectedWorkflowStatus: z.enum(['active', 'onboarding']),
-      expectedCurrentActionId: idSchema, finalStage: z.enum(['won', 'lost_nurture']),
+      expectedCurrentActionId: idSchema.nullable(), finalStage: z.enum(['won', 'lost_nurture']),
       closedAt: utcTimestampSchema, closeReason: lostReasonSchema.nullable(),
       closeNotes: z.string().nullable(), onboardingStopReason: z.string().nullable(),
     }).strict().superRefine((value, context) => {
@@ -214,7 +224,7 @@ export class SalesCycleRepository {
           onboarding_stop_reason = ?, closed_at = ?, version = version + 1,
           updated_at = ?
       WHERE id = ? AND version = ? AND stage = ? AND workflow_status = ?
-        AND current_next_action_id = ?
+        AND current_next_action_id IS ?
       RETURNING ${cycleColumns}
     `).get(
       parsed.finalStage, parsed.finalStage, parsed.closedAt,
@@ -247,24 +257,67 @@ export class SalesCycleRepository {
   assertCurrentActionPostcondition(cycleId: string): void {
     const cycle = this.getById(cycleId);
     if (cycle === null) throw new LifecycleInvariantError('SalesCycle does not exist.');
-    const pending = this.database.raw.prepare<
-      [string, string], { status: string; due_at: string }
-    >(`
-      SELECT status, due_at FROM next_actions WHERE id = ? AND sales_cycle_id = ?
-    `).get(cycle.currentNextActionId ?? '', cycle.id);
     if (cycle.workflowStatus === 'closed') {
       if (cycle.currentNextActionId !== null) {
         throw new LifecycleInvariantError('A closed cycle cannot point to a current action.');
       }
       return;
     }
-    if (
-      cycle.currentNextActionId === null
-      || pending?.status !== 'pending'
-      || pending.due_at.trim().length === 0
-    ) {
-      throw new LifecycleInvariantError('An open cycle requires one own pending due-dated action.');
+    // Unreviewed cycles carry no generated work: reviewing a lead is the
+    // inspector flow, not a next action.
+    if (cycle.stage === 'unreviewed') {
+      if (cycle.currentNextActionId !== null) {
+        throw new LifecycleInvariantError('An unreviewed cycle cannot carry generated review work.');
+      }
+      return;
     }
+    const pending = this.database.raw.prepare<
+      [string, string], { status: string }
+    >(`
+      SELECT status FROM next_actions WHERE id = ? AND sales_cycle_id = ?
+    `).get(cycle.currentNextActionId ?? '', cycle.id);
+    if (cycle.currentNextActionId === null || pending?.status !== 'pending') {
+      throw new LifecycleInvariantError('An open cycle requires one own pending action.');
+    }
+  }
+
+  /**
+   * Founder-chosen resurface marker: snooze or promised callback. Setting a
+   * future instant hides the cycle from Today until it becomes due again;
+   * clearing (null/null) re-enters it immediately.
+   */
+  setResurface(input: {
+    cycleId: string;
+    expectedVersion: number;
+    resurfaceAt: string | null;
+    resurfaceReason: 'snooze' | 'callback' | null;
+    updatedAt: string;
+  }): SalesCycle {
+    this.unitOfWork.assertWriteScope();
+    const parsed = z.object({
+      cycleId: idSchema, expectedVersion: z.number().int().safe().positive(),
+      resurfaceAt: utcTimestampSchema.nullable(),
+      resurfaceReason: z.enum(['snooze', 'callback']).nullable(),
+      updatedAt: utcTimestampSchema,
+    }).strict().superRefine((value, context) => {
+      if ((value.resurfaceAt === null) !== (value.resurfaceReason === null)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Resurface time and reason are all-or-none.',
+        });
+      }
+    }).parse(input);
+    const row = this.database.raw.prepare(`
+      UPDATE sales_cycles
+      SET resurface_at = ?, resurface_reason = ?, version = version + 1, updated_at = ?
+      WHERE id = ? AND version = ? AND workflow_status IN ('active','onboarding')
+      RETURNING ${cycleColumns}
+    `).get(
+      parsed.resurfaceAt, parsed.resurfaceReason, parsed.updatedAt,
+      parsed.cycleId, parsed.expectedVersion,
+    );
+    if (row === undefined) throw new StaleDomainWriteError();
+    return parseCycle(row);
   }
 
   setDesignPartnerFitness(input: {
@@ -397,6 +450,7 @@ function parseCycle(value: unknown): SalesCycle {
     stageEnteredAt: row.stage_entered_at, designPartnerFitness: row.design_partner_fitness,
     closeReason: row.close_reason, closeNotes: row.close_notes,
     onboardingStopReason: row.onboarding_stop_reason, closedAt: row.closed_at,
+    resurfaceAt: row.resurface_at, resurfaceReason: row.resurface_reason,
     version: row.version, createdAt: row.created_at, updatedAt: row.updated_at,
   }) as SalesCycle;
 }

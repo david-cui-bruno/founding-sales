@@ -89,20 +89,18 @@ describe('TodayRepository', () => {
     status?: string;
     actionType?: string;
     channel?: string | null;
-    dueAt?: string;
   }): void {
     database.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, due_at,
+        id, sales_cycle_id, action_type, channel, status,
         timezone, work_intent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'America/New_York', ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, 'America/New_York', ?, ?)
     `).run(
       input.id,
       input.cycleId,
       input.actionType ?? 'call',
       input.channel === undefined ? 'phone' : input.channel,
       input.status ?? 'pending',
-      input.dueAt ?? DOMAIN_TIMESTAMP,
       input.workIntent ?? 'discretionary_prospecting',
       DOMAIN_TIMESTAMP,
     );
@@ -116,7 +114,6 @@ describe('TodayRepository', () => {
     workIntent?: string;
     actionType?: string;
     channel?: string | null;
-    dueAt?: string;
   }): { cycleId: string; actionId: string } {
     let result: { cycleId: string; actionId: string } = { cycleId: '', actionId: '' };
     withDeferredTransaction(() => {
@@ -127,7 +124,6 @@ describe('TodayRepository', () => {
         workIntent: input.workIntent,
         actionType: input.actionType,
         channel: input.channel,
-        dueAt: input.dueAt,
       });
     });
     return result;
@@ -142,8 +138,8 @@ describe('TodayRepository', () => {
   it('returns only the authoritative action among supplemental pending rows', () => {
     const prospect = seedProspect(database.raw, 'authoritative');
     const { cycleId, actionId } = insertCycleWithAction({ prefix: 'authoritative', prospect });
-    insertActionRow({ id: 'authoritative-older', cycleId, dueAt: '2026-08-01T00:00:00.000Z' });
-    insertActionRow({ id: 'authoritative-newer', cycleId, dueAt: '2026-09-30T00:00:00.000Z' });
+    insertActionRow({ id: 'authoritative-older', cycleId });
+    insertActionRow({ id: 'authoritative-newer', cycleId });
     const results = repository.listOperationalCandidates();
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({
@@ -187,23 +183,14 @@ describe('TodayRepository', () => {
     ]);
   });
 
-  it('keeps a valid Unreviewed internal review row actionable', () => {
+  it('routes Unreviewed cycles into the triage backlog, never the lanes', () => {
     const prospect = seedProspect(database.raw, 'unreviewed');
-    insertCycleWithAction({
-      prefix: 'unreviewed', prospect, stage: 'unreviewed',
-      workIntent: 'internal_review', actionType: 'review_lead', channel: null,
+    let cycleId = '';
+    withDeferredTransaction(() => {
+      cycleId = insertCycleRow({ prefix: 'unreviewed', prospect, stage: 'unreviewed', pointer: null }).cycleId;
     });
     const results = repository.listOperationalCandidates();
-    expect(results[0]).toMatchObject({
-      kind: 'candidate',
-      candidate: {
-        stage: 'unreviewed',
-        cadence: null,
-        priority: null,
-        priorityState: 'missing',
-        action: { workIntent: 'internal_review' },
-      },
-    });
+    expect(results[0]).toEqual({ kind: 'unreviewed_backlog', cycleId });
   });
 
   it('excludes closed and opted-out cycles from the candidate universe', () => {
@@ -235,13 +222,13 @@ describe('TodayRepository', () => {
       // A cadence-bound action whose enrollment does not exist.
       database.raw.prepare(`
         INSERT INTO next_actions (
-          id, sales_cycle_id, action_type, channel, status, due_at, timezone,
+          id, sales_cycle_id, action_type, channel, status, timezone,
           work_intent, cadence_enrollment_id, cadence_step_id, cadence_component_id,
           created_at
-        ) VALUES (?, ?, 'call', 'phone', 'pending', ?, 'America/New_York',
+        ) VALUES (?, ?, 'call', 'phone', 'pending', 'America/New_York',
                   'discretionary_prospecting', 'missing-enrollment', 'missing-step',
                   'missing-component', ?)
-      `).run(inserted.actionId, inserted.cycleId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+      `).run(inserted.actionId, inserted.cycleId, DOMAIN_TIMESTAMP);
     });
     database.raw.exec('PRAGMA foreign_keys = ON');
     const results = repository.listOperationalCandidates();

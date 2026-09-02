@@ -113,7 +113,6 @@ describe('TodayService', () => {
     workIntent?: string;
     actionType?: string;
     channel?: string | null;
-    dueAt?: string;
   }): { cycleId: string; actionId: string } {
     const cycleId = `${input.prefix}-cycle`;
     const actionId = `${input.prefix}-action`;
@@ -139,15 +138,14 @@ describe('TodayService', () => {
       );
       database.raw.prepare(`
         INSERT INTO next_actions (
-          id, sales_cycle_id, action_type, channel, status, due_at,
+          id, sales_cycle_id, action_type, channel, status,
           timezone, work_intent, created_at
-        ) VALUES (?, ?, ?, ?, 'pending', ?, 'America/New_York', ?, ?)
+        ) VALUES (?, ?, ?, ?, 'pending', 'America/New_York', ?, ?)
       `).run(
         actionId,
         cycleId,
         input.actionType ?? 'call',
         input.channel === undefined ? 'phone' : input.channel,
-        input.dueAt ?? GENERATED_AT,
         input.workIntent ?? 'discretionary_prospecting',
         DOMAIN_TIMESTAMP,
       );
@@ -280,7 +278,7 @@ describe('TodayService', () => {
     addDirectPhone(prospect, 'today-stale-phone');
     insertCycleWithAction({
       prefix: 'today-stale', prospect,
-      workIntent: 'promised_follow_up', dueAt: '2026-08-31T20:00:00.000Z',
+      workIntent: 'promised_follow_up',
     });
     // Evaluated yesterday: stale for today.
     priorities.recalculateProspect({

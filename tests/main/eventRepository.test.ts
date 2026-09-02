@@ -111,6 +111,9 @@ describe('EventRepository', () => {
       transcriptStorageRef: null,
       metadata: { initiatedBy: 'founder' },
       createdAt: TIMESTAMP,
+      noteText: null,
+      callOutcome: null,
+      callbackAt: null,
     });
     expect(events.getActivity(activity.id)).toEqual(activity);
   });
