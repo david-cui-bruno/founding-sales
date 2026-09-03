@@ -153,3 +153,14 @@ flow upstream.
 - Events carry no protected-characteristic data; the extraction prompt forbids it and
   the schema has nowhere to put it.
 - `payload` schemas are closed (`.strict()`); adapters cannot smuggle prose.
+
+## Known operational limits
+
+- SES inbound (the FRBO/community hot channel) is region-bound to us-east-1: a
+  regional outage pauses hot alerts until it clears. Batch adapters and scoring
+  are unaffected (S3/DynamoDB in-region but replayable; adapters re-emit
+  idempotently on the next run). Accepted SPOF at this scale.
+- Entity identity keys on sha256(normalized_name | zip5). Live scan 2026-09-03:
+  0 same-name collisions across 353 entities. If common-name collisions ever
+  exceed ~2% (per external review threshold), escalate to keying on
+  name + full standardized mailing address or probabilistic linkage.
