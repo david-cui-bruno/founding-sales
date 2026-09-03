@@ -56,9 +56,13 @@ Re-verify before building; portals move.
 - Providence tax roll (above) covers the launch market without RIGIS.
 - RI Rental Registry: public database is a Tolemi/BuildingBlocks SPA at
   ridoh-ri.tolemi.com over GraphQL (cg.tolemi.com/q, no auth wall, probed
-  2026-09-03). Caveat: search filter payloads are client-encrypted blobs, so a
-  headless-browser targeted lookup is the practical v0 (search owner name ->
-  read contact panel); a raw-GraphQL adapter would need the SPA's crypto.
+  2026-09-03). Caveat: search filter payloads are client-side-obfuscated blobs.
+  DECISION (2026-09-03): we do NOT reverse the SPA's internal serialization to
+  drive the GraphQL API directly — same principle as the ViewPoint Turnstile
+  call: use the interface the operator exposed, as they exposed it. v0 adapter
+  = headless-browser targeted lookups through the public search UI (one
+  owner-name search at a time, human-speed rate limit, only for entities
+  already in our pipeline).
   APRA bulk request drafted in `docs/sourcing/founder-actions/apra-request.md`
   remains the bulk path. Landlord name/address/email/phone are public by
   statute (RIGL 34-18-58) and there is no ToS gate on the public search.
