@@ -23,6 +23,7 @@ const detail: LeadDetail = {
   sourceLabel: 'frbo',
   segment: 'hot',
   cloudScores: null,
+  cloudLinked: false,
   priorityContext: null,
   priorityReasons: ['Direct phone on file'],
   nextAction: null,

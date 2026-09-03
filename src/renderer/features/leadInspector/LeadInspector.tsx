@@ -1,6 +1,10 @@
 import { useEffect, useId, useRef, useState } from 'react';
 
 import type {
+  FindContactInfoReceipt,
+  FindContactInfoRequest,
+} from '../../../shared/contracts/enrichmentRequestContract';
+import type {
   BeginOutboundRequest,
   CloudScoreOverrideRequest,
   ConfirmTransitionRequest,
@@ -33,6 +37,7 @@ export type InspectorTabsProps = {
   onConfirmTransition(request: ConfirmTransitionRequest): void;
   onDismissLead(request: DismissLeadRequest): void;
   onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
+  onFindContactInfo?(request: FindContactInfoRequest): Promise<FindContactInfoReceipt>;
 };
 
 /**
@@ -47,6 +52,7 @@ export function InspectorTabs({
   onConfirmTransition,
   onDismissLead,
   onOverrideCloudScore,
+  onFindContactInfo,
 }: InspectorTabsProps) {
   const [selected, setSelected] = useState<TabId>('overview');
   const idPrefix = useId();
@@ -122,6 +128,7 @@ export function InspectorTabs({
             onConfirmTransition={onConfirmTransition}
             onDismissLead={onDismissLead}
             onOverrideCloudScore={onOverrideCloudScore}
+            onFindContactInfo={onFindContactInfo}
           />
         )}
         {selected === 'activity' && (
@@ -153,6 +160,7 @@ export type LeadInspectorProps = {
   onConfirmTransition(request: ConfirmTransitionRequest): void;
   onDismissLead(request: DismissLeadRequest): void;
   onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
+  onFindContactInfo?(request: FindContactInfoRequest): Promise<FindContactInfoReceipt>;
 };
 
 /**
@@ -168,6 +176,7 @@ export function LeadInspector({
   onConfirmTransition,
   onDismissLead,
   onOverrideCloudScore,
+  onFindContactInfo,
 }: LeadInspectorProps) {
   const resize = useResizableInspector();
 
@@ -230,6 +239,7 @@ export function LeadInspector({
               onConfirmTransition={onConfirmTransition}
               onDismissLead={onDismissLead}
               onOverrideCloudScore={onOverrideCloudScore}
+              onFindContactInfo={onFindContactInfo}
             />
           </>
         )}

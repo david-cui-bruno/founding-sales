@@ -1,6 +1,10 @@
 import { useEffect } from 'react';
 
 import type {
+  FindContactInfoReceipt,
+  FindContactInfoRequest,
+} from '../../../shared/contracts/enrichmentRequestContract';
+import type {
   BeginOutboundRequest,
   CloudScoreOverrideRequest,
   ConfirmTransitionRequest,
@@ -20,6 +24,7 @@ export type LeadFullPageProps = {
   onConfirmTransition(request: ConfirmTransitionRequest): void;
   onDismissLead(request: DismissLeadRequest): void;
   onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
+  onFindContactInfo?(request: FindContactInfoRequest): Promise<FindContactInfoReceipt>;
   /** Present when the call-outcome flow is available (audit 4.7). */
   outcomeApi?: CallOutcomeApi;
   /** Save & next: the next queue lead, or null when the queue is done. */
@@ -40,6 +45,7 @@ export function LeadFullPage({
   onConfirmTransition,
   onDismissLead,
   onOverrideCloudScore,
+  onFindContactInfo,
   outcomeApi,
   onOutcomeSaved,
   onClose,
@@ -100,6 +106,7 @@ export function LeadFullPage({
         onConfirmTransition={onConfirmTransition}
         onDismissLead={onDismissLead}
         onOverrideCloudScore={onOverrideCloudScore}
+        onFindContactInfo={onFindContactInfo}
       />
     </article>
   );

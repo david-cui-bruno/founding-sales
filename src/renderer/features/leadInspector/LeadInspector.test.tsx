@@ -46,6 +46,7 @@ const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
     },
     priorityReasons: ['Owner of 3+ doors', 'Live vacancy posted this week'],
     cloudScores: null,
+    cloudLinked: false,
     nextAction: {
       id: 'action-1',
       type: 'review_lead',
@@ -102,6 +103,7 @@ function createApi(detail: LeadDetail) {
     confirmTransition: vi.fn(async () => receipt),
     dismissLead: vi.fn(async () => receipt),
     overrideCloudScore: vi.fn(async () => receipt),
+    findContactInfo: vi.fn(async () => ({ written: false, refusalReason: null })),
   };
 }
 

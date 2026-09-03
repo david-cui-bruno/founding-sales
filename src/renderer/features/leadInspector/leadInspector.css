@@ -293,6 +293,21 @@
   gap: var(--space-2);
 }
 
+/* Find contact info: one explicit enrichment request with inline receipt. */
+
+.lead-inspector__find-contact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.lead-inspector__find-contact-reason {
+  margin: 0;
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
 /* Activity tab: the touch log plus the conversations subsection. */
 
 .lead-inspector__activity {

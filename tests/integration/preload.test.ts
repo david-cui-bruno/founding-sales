@@ -88,7 +88,7 @@ describe('preload workflow bridge', () => {
       'bulkUpdate', 'list', 'updateField',
     ]);
     expect(Object.keys(api.leadDetail).sort()).toEqual([
-      'beginOutbound', 'confirmTransition', 'dismissLead', 'get', 'overrideCloudScore',
+      'beginOutbound', 'confirmTransition', 'dismissLead', 'findContactInfo', 'get', 'overrideCloudScore',
     ]);
     expect(Object.keys(api.today).sort()).toEqual([
       'addLeadNote', 'complete', 'get', 'getTriageQueue', 'logCallOutcome',

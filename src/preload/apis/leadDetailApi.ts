@@ -1,5 +1,10 @@
 import { mutationReceiptSchema } from '../../shared/contracts/commonContract';
 import {
+  findContactInfoReceiptSchema,
+  findContactInfoRequestSchema,
+  type FindContactInfoRequest,
+} from '../../shared/contracts/enrichmentRequestContract';
+import {
   beginOutboundRequestSchema,
   cloudScoreOverrideRequestSchema,
   confirmTransitionRequestSchema,
@@ -52,6 +57,13 @@ export const createLeadDetailApi = (client: IpcClient) => ({
       'lead-detail:cloud-score-override',
       cloudScoreOverrideRequestSchema,
       mutationReceiptSchema,
+      input,
+    ),
+  findContactInfo: (input: FindContactInfoRequest) =>
+    client.request(
+      'lead-detail:find-contact-info',
+      findContactInfoRequestSchema,
+      findContactInfoReceiptSchema,
       input,
     ),
 });

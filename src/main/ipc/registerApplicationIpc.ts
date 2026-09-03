@@ -17,7 +17,7 @@ import type { ConversationsProvider } from '../conversations/conversationsServic
 import type { FridayProvider } from '../friday/fridayService';
 import type { HealthProvider } from '../health/registerHealthIpc';
 import type { ImportProvider } from '../imports/importService';
-import type { LeadDetailProvider } from '../leads/leadDetailService';
+import type { LeadDetailProvider, EnrichmentRequester } from '../leads/leadDetailService';
 import type { LeadsProvider } from '../leads/leadsService';
 import type { LearningsProvider } from '../learnings/learningsService';
 import type { PipelineProvider } from '../pipeline/pipelineService';
@@ -75,6 +75,7 @@ export function createLeadsProvider(runtime: DomainGate): LeadsProvider {
 
 export function createLeadDetailProvider(
   runtime: DomainGate,
+  enrichmentRequester?: EnrichmentRequester,
 ): LeadDetailProvider {
   return {
     get: (input) => runtime.withDomain((domain) => domain.getLeadDetail(input)),
@@ -86,6 +87,11 @@ export function createLeadDetailProvider(
       runtime.withDomain((domain) => domain.dismissLead(input)),
     overrideCloudScore: (input) =>
       runtime.withDomain((domain) => domain.enqueueCloudScoreOverride(input)),
+    findContactInfo: async (input) => (
+      enrichmentRequester === undefined
+        ? { written: false, refusalReason: 'credentials_unavailable' }
+        : enrichmentRequester.request(input)
+    ),
   };
 }
 
@@ -209,12 +215,13 @@ export function registerApplicationIpc(
   registrars: FeatureRegistrars = defaultRegistrars,
   sourcingProvider?: SourcingProvider,
   shellProvider?: ShellProvider,
+  enrichmentRequester?: EnrichmentRequester,
 ): () => void {
   const unregisters = [
     registrars.registerHealthIpc(runtime, isTrustedRendererUrl),
     registrars.registerLeadsIpc(createLeadsProvider(runtime), isTrustedRendererUrl),
     registrars.registerLeadDetailIpc(
-      createLeadDetailProvider(runtime),
+      createLeadDetailProvider(runtime, enrichmentRequester),
       isTrustedRendererUrl,
     ),
     registrars.registerTodayIpc(createTodayProvider(runtime), isTrustedRendererUrl),

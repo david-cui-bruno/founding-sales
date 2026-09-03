@@ -237,6 +237,28 @@ export type CloudOutcomeRow = {
   observedAt: string;
 };
 
+/** One unflushed suppression outbox row (normalized handle, closed reason). */
+export type SuppressionOutboxRow = {
+  handleId: string;
+  kind: 'phone' | 'email';
+  normalizedValue: string;
+  reason: 'opt_out' | 'wrong_person' | 'founder_block';
+  observedAt: string;
+};
+
+/** Everything the enrichment request writer needs for one person. */
+export type EnrichmentCandidate = {
+  cloudEntityId: string | null;
+  ownerFullName: string;
+  situsAddress: {
+    line1: string;
+    locality: string;
+    region: string;
+    postalCode: string | null;
+  } | null;
+  lastRequestedAt: string | null;
+};
+
 const LANE_MAP: Readonly<Record<TodayLane, TodayLaneId>> = Object.freeze({
   won_onboarding: 'onboarding',
   inbound_interrupt: 'fresh_inbound',
@@ -617,6 +639,9 @@ export class FounderSalesDomain {
     const sourceChannel = (this.database.raw.prepare(
       'SELECT channel FROM source_events WHERE id = ?',
     ).get(prospect.original_source_event_id) as { channel: string } | undefined)?.channel ?? 'custom';
+    const cloudLink = this.database.raw.prepare(
+      'SELECT cloud_entity_id FROM cloud_entity_links WHERE person_id = ?',
+    ).get(person.id) as { cloud_entity_id: string } | undefined;
     const contacts = this.database.raw.prepare(`
       SELECT id, kind, normalized_value, validation_state, dnc_listed, tcpa_flag
       FROM person_contact_methods WHERE person_id = ?
@@ -715,6 +740,7 @@ export class FounderSalesDomain {
           reasons: cloudReasons,
           scoredAt: prospect.cloud_scored_at,
         },
+      cloudLinked: cloudLink !== undefined,
       priorityReasons: projection === undefined ? [] : [
         `Fit ${priorityContext.fitBand} ${priorityContext.fitPoints}/30`,
         `Timing ${priorityContext.timingBand} ${priorityContext.timingValue}/40`,
@@ -2748,6 +2774,124 @@ export class FounderSalesDomain {
         'UPDATE sourcing_outcome_outbox SET flushed_at = ? WHERE id = ? AND flushed_at IS NULL',
       );
       for (const id of ids) update.run(now, id);
+    });
+  }
+
+  /**
+   * Sweeps opt-out tombstone handles into the suppression outbox and returns
+   * the unflushed rows. The outbox is keyed by the handle id, so the sweep
+   * is idempotent and each handle uploads exactly once. Reason mapping:
+   * founder-entered blocks (observed_channel = 'manual') map to
+   * 'founder_block'; every other channel is a standard 'opt_out'.
+   * `wrong_person` has no app-side source yet, so it never serializes.
+   */
+  listUnflushedSuppressionHandles(): SuppressionOutboxRow[] {
+    this.services.unitOfWork.immediate(() => {
+      this.database.raw.prepare(`
+        INSERT OR IGNORE INTO sourcing_suppression_outbox (handle_id, flushed_at)
+        SELECT handle.id, NULL FROM opt_out_handles AS handle
+      `).run();
+    });
+    const rows = this.database.raw.prepare(`
+      SELECT handle.id, handle.kind, handle.normalized_value,
+        tombstone.observed_channel, tombstone.requested_at
+      FROM sourcing_suppression_outbox AS outbox
+      JOIN opt_out_handles AS handle ON handle.id = outbox.handle_id
+      JOIN opt_out_tombstones AS tombstone ON tombstone.id = handle.tombstone_id
+      WHERE outbox.flushed_at IS NULL
+      ORDER BY tombstone.requested_at ASC, handle.id ASC
+    `).all() as Array<{
+      id: string; kind: 'phone' | 'email'; normalized_value: string;
+      observed_channel: string; requested_at: string;
+    }>;
+    return rows.map((row) => ({
+      handleId: row.id,
+      kind: row.kind,
+      normalizedValue: row.normalized_value,
+      reason: row.observed_channel === 'manual'
+        ? 'founder_block' as const
+        : 'opt_out' as const,
+      observedAt: row.requested_at,
+    }));
+  }
+
+  /** Marks uploaded suppression outbox rows flushed with the injected clock. */
+  markSuppressionHandlesFlushed(input: { handleIds: readonly string[] }): void {
+    const handleIds = z.array(z.string().min(1)).parse(input.handleIds);
+    if (handleIds.length === 0) return;
+    const now = this.clock.now();
+    this.services.unitOfWork.immediate(() => {
+      const update = this.database.raw.prepare(
+        'UPDATE sourcing_suppression_outbox SET flushed_at = ? WHERE handle_id = ? AND flushed_at IS NULL',
+      );
+      for (const handleId of handleIds) update.run(now, handleId);
+    });
+  }
+
+  /**
+   * Everything the enrichment request writer needs for one person: the
+   * cloud entity link, the situs address of the first linked property that
+   * satisfies the vendor schema (line1 + locality + 2-letter region), the
+   * owner name, and the per-entity rate-limit timestamp.
+   */
+  getEnrichmentRequestCandidate(input: { personId: string }): EnrichmentCandidate {
+    const parsed = z.object({ personId: z.string().min(1) }).strict().parse(input);
+    const person = this.database.raw.prepare(
+      'SELECT id, display_name FROM persons WHERE id = ?',
+    ).get(parsed.personId) as { id: string; display_name: string } | undefined;
+    if (person === undefined) {
+      throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The person does not exist.');
+    }
+    const link = this.database.raw.prepare(
+      'SELECT cloud_entity_id FROM cloud_entity_links WHERE person_id = ?',
+    ).get(person.id) as { cloud_entity_id: string } | undefined;
+    const properties = this.database.raw.prepare(`
+      SELECT property.address_line_1, property.locality, property.region,
+        property.postal_code
+      FROM prospect_properties AS link
+      JOIN properties AS property ON property.id = link.property_id
+      JOIN prospects AS prospect ON prospect.id = link.prospect_id
+      JOIN sales_cycles AS cycle ON cycle.prospect_id = prospect.id
+      WHERE cycle.person_id = ?
+      ORDER BY property.id ASC
+    `).all(person.id) as {
+      address_line_1: string; locality: string; region: string;
+      postal_code: string | null;
+    }[];
+    const situs = properties.find((property) => (
+      property.address_line_1.trim().length > 0
+      && property.locality.trim().length > 0
+      && property.region.trim().length === 2
+    ));
+    const lastRequested = link === undefined ? undefined
+      : this.database.raw.prepare(
+        'SELECT last_requested_at FROM sourcing_enrichment_requests WHERE cloud_entity_id = ?',
+      ).get(link.cloud_entity_id) as { last_requested_at: string } | undefined;
+    return {
+      cloudEntityId: link === undefined ? null : link.cloud_entity_id,
+      ownerFullName: person.display_name,
+      situsAddress: situs === undefined ? null : {
+        line1: situs.address_line_1.trim(),
+        locality: situs.locality.trim(),
+        region: situs.region.trim(),
+        postalCode: situs.postal_code === null || situs.postal_code.trim().length === 0
+          ? null
+          : situs.postal_code.trim(),
+      },
+      lastRequestedAt: lastRequested === undefined ? null : lastRequested.last_requested_at,
+    };
+  }
+
+  /** Upserts the per-entity rate-limit timestamp after a successful upload. */
+  recordEnrichmentRequested(input: { cloudEntityId: string }): void {
+    const parsed = z.object({ cloudEntityId: z.string().min(1) }).strict().parse(input);
+    const now = this.clock.now();
+    this.services.unitOfWork.immediate(() => {
+      this.database.raw.prepare(`
+        INSERT INTO sourcing_enrichment_requests (cloud_entity_id, last_requested_at)
+        VALUES (?, ?)
+        ON CONFLICT (cloud_entity_id) DO UPDATE SET last_requested_at = excluded.last_requested_at
+      `).run(parsed.cloudEntityId, now);
     });
   }
 

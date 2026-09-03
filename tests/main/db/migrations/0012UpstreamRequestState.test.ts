@@ -12,13 +12,14 @@ import { migration0007SourcingOutbox } from '../../../../src/main/db/migrations/
 import { migration0008DedupeCloudPersons } from '../../../../src/main/db/migrations/0008DedupeCloudPersons';
 import { migration0009SourcingFileLedger } from '../../../../src/main/db/migrations/0009SourcingFileLedger';
 import { migration0010NoDueDates } from '../../../../src/main/db/migrations/0010NoDueDates';
+import { migration0011ContactDncFlags } from '../../../../src/main/db/migrations/0011ContactDncFlags';
 import {
   createTempDatabase,
   createTestWorkspaceKey,
   type TempDatabase,
 } from '../../../fixtures/tempDatabase';
 
-const migrateThroughSchema10 = createMigrationRunner([
+const migrateThroughSchema11 = createMigrationRunner([
   { id: '0001Foundation', schemaVersion: 1, migration: migration0001Foundation },
   { id: '0002DomainFoundation', schemaVersion: 2, migration: migration0002DomainFoundation },
   { id: '0003Transcripts', schemaVersion: 3, migration: migration0003Transcripts },
@@ -29,11 +30,10 @@ const migrateThroughSchema10 = createMigrationRunner([
   { id: '0008DedupeCloudPersons', schemaVersion: 8, migration: migration0008DedupeCloudPersons },
   { id: '0009SourcingFileLedger', schemaVersion: 9, migration: migration0009SourcingFileLedger },
   { id: '0010NoDueDates', schemaVersion: 10, migration: migration0010NoDueDates },
+  { id: '0011ContactDncFlags', schemaVersion: 11, migration: migration0011ContactDncFlags },
 ]);
 
-const TS = '2026-09-01T12:00:00.000Z';
-
-describe('0011 contact DNC flags migration', () => {
+describe('0012 upstream request state migration', () => {
   let database: AppDatabase;
   let temp: TempDatabase;
   let options: {
@@ -46,7 +46,7 @@ describe('0011 contact DNC flags migration', () => {
     const key = createTestWorkspaceKey();
     database = openDatabase({ path: temp.path, key });
     options = { backupDirectory: `${temp.path}.backups`, workspaceKey: key };
-    await migrateThroughSchema10(database, options);
+    await migrateThroughSchema11(database, options);
   });
 
   afterEach(() => {
@@ -54,55 +54,67 @@ describe('0011 contact DNC flags migration', () => {
     temp.cleanup();
   });
 
-  it('migrates schema 10 to schema 11 and adds both compliance columns', async () => {
+  it('migrates schema 11 to schema 12 and creates both empty tables', async () => {
     const result = await migrateToLatest(database, options);
 
-    expect(result.fromVersion).toBe(10);
+    expect(result.fromVersion).toBe(11);
     expect(result.toVersion).toBe(12);
-    expect(result.appliedMigrationIds).toEqual(['0011ContactDncFlags', '0012UpstreamRequestState']);
+    expect(result.appliedMigrationIds).toEqual(['0012UpstreamRequestState']);
     expect(database.raw.prepare<[], { schema_version: number }>(
       'SELECT schema_version FROM app_meta WHERE singleton = 1',
     ).get()).toEqual({ schema_version: 12 });
 
-    const columns = database.raw
-      .prepare<[], { name: string; notnull: number; dflt_value: string }>(
-        'PRAGMA table_info(person_contact_methods)',
-      )
-      .all()
-      .filter((column) => column.name === 'dnc_listed' || column.name === 'tcpa_flag');
-    expect(columns).toHaveLength(2);
-    for (const column of columns) {
-      expect(column.notnull).toBe(1);
-      expect(column.dflt_value).toBe('0');
-    }
+    expect(database.raw.prepare<[], { count: number }>(
+      'SELECT COUNT(*) AS count FROM sourcing_suppression_outbox',
+    ).get()).toEqual({ count: 0 });
+    expect(database.raw.prepare<[], { count: number }>(
+      'SELECT COUNT(*) AS count FROM sourcing_enrichment_requests',
+    ).get()).toEqual({ count: 0 });
   });
 
-  it('defaults existing rows to 0 and constrains new values to 0/1', async () => {
-    database.raw.prepare(`
-      INSERT INTO persons (
-        id, display_name, aliases_json, opted_out, never_record,
-        provenance_json, version, created_at, updated_at
-      ) VALUES ('person-1', 'Existing Person', '[]', 0, 0, NULL, 1, ?, ?)
-    `).run(TS, TS);
-    database.raw.prepare(`
-      INSERT INTO person_contact_methods (
-        id, person_id, kind, normalized_value, validation_state, reachability,
-        is_primary, created_at, updated_at
-      ) VALUES ('contact-1', 'person-1', 'phone', '+14015550100', 'valid', 'direct', 1, ?, ?)
-    `).run(TS, TS);
-
+  it('enforces the suppression outbox handle primary key (exactly-once rows)', async () => {
     await migrateToLatest(database, options);
 
-    expect(database.raw.prepare<[string], { dnc_listed: number; tcpa_flag: number }>(
-      'SELECT dnc_listed, tcpa_flag FROM person_contact_methods WHERE id = ?',
-    ).get('contact-1')).toEqual({ dnc_listed: 0, tcpa_flag: 0 });
+    const ts = '2026-09-01T12:00:00.000Z';
+    database.raw.prepare(`
+      INSERT INTO persons (
+        id, display_name, aliases_json, opted_out, never_record, version,
+        created_at, updated_at
+      ) VALUES ('person-1', 'Person', '[]', 0, 0, 1, ?, ?)
+    `).run(ts, ts);
+    database.raw.prepare(`
+      INSERT INTO activities (
+        id, person_id, kind, direction, channel, occurred_at, metadata_json, created_at
+      ) VALUES ('activity-1', 'person-1', 'note', 'internal', 'manual', ?, '{}', ?)
+    `).run(ts, ts);
+    database.raw.prepare(`
+      INSERT INTO opt_out_tombstones (
+        id, person_id, requested_at, observed_channel, source_activity_id,
+        evidence_ref, policy_version, created_at
+      ) VALUES ('tombstone-1', 'person-1', ?, 'manual', 'activity-1', NULL, 'v1', ?)
+    `).run(ts, ts);
+    database.raw.prepare(`
+      INSERT INTO opt_out_handles (id, tombstone_id, kind, normalized_value, created_at)
+      VALUES ('handle-1', 'tombstone-1', 'phone', '+14015550100', ?)
+    `).run(ts);
 
-    expect(() => database.raw.prepare(`
-      UPDATE person_contact_methods SET dnc_listed = 2 WHERE id = 'contact-1'
-    `).run()).toThrow(/CHECK/i);
-    expect(() => database.raw.prepare(`
-      UPDATE person_contact_methods SET tcpa_flag = 2 WHERE id = 'contact-1'
-    `).run()).toThrow(/CHECK/i);
+    database.raw.prepare(
+      "INSERT INTO sourcing_suppression_outbox (handle_id, flushed_at) VALUES ('handle-1', NULL)",
+    ).run();
+    expect(() => database.raw.prepare(
+      "INSERT INTO sourcing_suppression_outbox (handle_id, flushed_at) VALUES ('handle-1', NULL)",
+    ).run()).toThrow(/UNIQUE|PRIMARY/i);
+    // The outbox references real handles only.
+    expect(() => database.raw.prepare(
+      "INSERT INTO sourcing_suppression_outbox (handle_id, flushed_at) VALUES ('no-such-handle', NULL)",
+    ).run()).toThrow(/FOREIGN KEY/i);
+    // INSERT OR IGNORE is the sweep's idempotence primitive.
+    database.raw.prepare(
+      "INSERT OR IGNORE INTO sourcing_suppression_outbox (handle_id, flushed_at) VALUES ('handle-1', NULL)",
+    ).run();
+    expect(database.raw.prepare<[], { count: number }>(
+      'SELECT COUNT(*) AS count FROM sourcing_suppression_outbox',
+    ).get()).toEqual({ count: 1 });
   });
 
   it('is idempotent: a second run applies nothing', async () => {

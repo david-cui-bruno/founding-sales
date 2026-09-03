@@ -1,5 +1,9 @@
 import { mutationReceiptSchema } from '../../shared/contracts/commonContract';
 import {
+  findContactInfoReceiptSchema,
+  findContactInfoRequestSchema,
+} from '../../shared/contracts/enrichmentRequestContract';
+import {
   beginOutboundRequestSchema,
   cloudScoreOverrideRequestSchema,
   confirmTransitionRequestSchema,
@@ -11,7 +15,7 @@ import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
 import type { LeadDetailProvider } from './leadDetailService';
 
 /**
- * Registers exactly the five strict lead-detail channels and returns one
+ * Registers exactly the six strict lead-detail channels and returns one
  * idempotent unregister function that removes all of them.
  */
 export function registerLeadDetailIpc(
@@ -52,6 +56,13 @@ export function registerLeadDetailIpc(
       requestSchema: cloudScoreOverrideRequestSchema,
       responseSchema: mutationReceiptSchema,
       handler: (request) => provider.overrideCloudScore(request),
+      isTrustedRendererUrl,
+    }),
+    registerValidatedIpc({
+      channel: 'lead-detail:find-contact-info',
+      requestSchema: findContactInfoRequestSchema,
+      responseSchema: findContactInfoReceiptSchema,
+      handler: (request) => provider.findContactInfo(request),
       isTrustedRendererUrl,
     }),
   ];

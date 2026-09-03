@@ -1,5 +1,9 @@
 import type { MutationReceipt } from '../../shared/contracts/commonContract';
 import type {
+  FindContactInfoReceipt,
+  FindContactInfoRequest,
+} from '../../shared/contracts/enrichmentRequestContract';
+import type {
   BeginOutboundRequest,
   CloudScoreOverrideRequest,
   ConfirmTransitionRequest,
@@ -18,6 +22,12 @@ export type LeadDetailProvider = {
   confirmTransition(input: ConfirmTransitionRequest): Promise<MutationReceipt>;
   dismissLead(input: DismissLeadRequest): Promise<MutationReceipt>;
   overrideCloudScore(input: CloudScoreOverrideRequest): Promise<MutationReceipt>;
+  findContactInfo(input: FindContactInfoRequest): Promise<FindContactInfoReceipt>;
+};
+
+/** Upstream writer surface for the Find contact info action. */
+export type EnrichmentRequester = {
+  request(input: FindContactInfoRequest): Promise<FindContactInfoReceipt>;
 };
 
 /** The domain facade methods the lead detail slice consumes. */
@@ -35,6 +45,7 @@ export type LeadDetailDomainInvoker = {
  */
 export function createLeadDetailService(
   domain: LeadDetailDomainInvoker,
+  enrichment?: EnrichmentRequester,
 ): LeadDetailProvider {
   return {
     get: async (input) => domain.getLeadDetail(input),
@@ -42,5 +53,10 @@ export function createLeadDetailService(
     confirmTransition: async (input) => domain.confirmTransition(input),
     dismissLead: async (input) => domain.dismissLead(input),
     overrideCloudScore: async (input) => domain.enqueueCloudScoreOverride(input),
+    findContactInfo: async (input) => (
+      enrichment === undefined
+        ? { written: false, refusalReason: 'credentials_unavailable' }
+        : enrichment.request(input)
+    ),
   };
 }

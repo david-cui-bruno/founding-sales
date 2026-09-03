@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import type {
+  FindContactInfoRequest,
+} from '../../../shared/contracts/enrichmentRequestContract';
+import type {
   BeginOutboundRequest,
   CloudScoreOverrideRequest,
   ConfirmTransitionRequest,
@@ -220,6 +223,13 @@ export function LeadInspectorProvider({
     [api],
   );
 
+  const findContactInfo = useCallback(
+    // One explicit click, one request line; the receipt renders inline in
+    // the contact section (no toast, no activity row).
+    (request: FindContactInfoRequest) => api.findContactInfo(request),
+    [api],
+  );
+
   /**
    * Save & next (audit 4.7): open the next queue lead's full page, or
    * close back to Today when the queue has nothing else.
@@ -259,6 +269,7 @@ export function LeadInspectorProvider({
           onConfirmTransition={confirmTransition}
           onDismissLead={dismissLead}
           onOverrideCloudScore={overrideCloudScore}
+          onFindContactInfo={findContactInfo}
         />
       )}
       {selection !== null && selection.view === 'page' && (
@@ -269,6 +280,7 @@ export function LeadInspectorProvider({
           onConfirmTransition={confirmTransition}
           onDismissLead={dismissLead}
           onOverrideCloudScore={overrideCloudScore}
+          onFindContactInfo={findContactInfo}
           outcomeApi={outcomeApi}
           onOutcomeSaved={handleOutcomeSaved}
           onClose={closeLead}

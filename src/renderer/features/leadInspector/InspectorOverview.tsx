@@ -1,6 +1,10 @@
 import { useState } from 'react';
 
 import type {
+  FindContactInfoReceipt,
+  FindContactInfoRequest,
+} from '../../../shared/contracts/enrichmentRequestContract';
+import type {
   BeginOutboundRequest,
   CloudScoreOverrideRequest,
   ConfirmTransitionRequest,
@@ -45,6 +49,7 @@ export type InspectorOverviewProps = {
   onConfirmTransition(request: ConfirmTransitionRequest): void;
   onDismissLead(request: DismissLeadRequest): void;
   onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
+  onFindContactInfo?(request: FindContactInfoRequest): Promise<FindContactInfoReceipt>;
 };
 
 const fitTone = (band: string) => (band === 'high' ? 'urgent' : 'neutral');
@@ -151,6 +156,68 @@ function ReviewSection({
   );
 }
 
+/** Founder-facing receipt lines for the Find contact info refusals. */
+const FIND_CONTACT_RECEIPTS: Readonly<Record<string, string>> = {
+  written: 'Contact info requested. Results arrive with the next sync.',
+  rate_limited: 'Already requested in the last 30 days.',
+  not_eligible: 'This lead is missing a usable property address.',
+  credentials_unavailable: 'Sourcing credentials are not provisioned.',
+};
+
+/**
+ * Cloud-linked leads with no phone numbers can request enrichment. One
+ * explicit click writes one request; the receipt renders inline (no toast).
+ */
+function FindContactInfoSection({
+  detail,
+  onFindContactInfo,
+}: {
+  detail: LeadDetail;
+  onFindContactInfo(request: FindContactInfoRequest): Promise<FindContactInfoReceipt>;
+}) {
+  const [receipt, setReceipt] = useState<string | null>(null);
+  const [requesting, setRequesting] = useState(false);
+  const eligible = detail.phones.length === 0;
+
+  return (
+    <div className="lead-inspector__find-contact">
+      <Button
+        variant="quiet"
+        disabled={!eligible || requesting || receipt !== null}
+        onClick={() => {
+          setRequesting(true);
+          onFindContactInfo({ personId: detail.personId }).then(
+            (result) => {
+              setRequesting(false);
+              setReceipt(
+                result.written
+                  ? FIND_CONTACT_RECEIPTS.written!
+                  : FIND_CONTACT_RECEIPTS[result.refusalReason ?? 'not_eligible']!,
+              );
+            },
+            () => {
+              setRequesting(false);
+              setReceipt('The request failed. Try again later.');
+            },
+          );
+        }}
+      >
+        Find contact info
+      </Button>
+      {!eligible && (
+        <p className="lead-inspector__find-contact-reason">
+          Phone numbers are already on file.
+        </p>
+      )}
+      {receipt !== null && (
+        <p className="lead-inspector__find-contact-reason" role="status">
+          {receipt}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /**
  * Evidence-first summary. Fit and Timing stay separate labelled regions and
  * are never merged into one synthesized score.
@@ -161,6 +228,7 @@ export function InspectorOverview({
   onConfirmTransition,
   onDismissLead,
   onOverrideCloudScore,
+  onFindContactInfo,
 }: InspectorOverviewProps) {
   const context = detail.priorityContext;
 
@@ -351,6 +419,12 @@ export function InspectorOverview({
             />
           ))}
         </div>
+        {detail.cloudLinked && onFindContactInfo !== undefined && (
+          <FindContactInfoSection
+            detail={detail}
+            onFindContactInfo={onFindContactInfo}
+          />
+        )}
       </section>
 
       {detail.propertySummaries.length > 0 && (

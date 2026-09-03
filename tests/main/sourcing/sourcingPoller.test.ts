@@ -433,7 +433,7 @@ describe('SourcingPoller', () => {
 
   it('runs the upstream sync after draining the inbox and surfaces the salt state', async () => {
     const domain = fakeDomainGate();
-    const run = vi.fn(async () => ({ membershipUploaded: true, outcomesFlushed: 1 }));
+    const run = vi.fn(async () => ({ membershipUploaded: true, outcomesFlushed: 1, suppressionsFlushed: 0 }));
     const store = { putObjectText: vi.fn(async () => undefined) };
     const poller = new SourcingPoller({
       domainGate: domain.gate,

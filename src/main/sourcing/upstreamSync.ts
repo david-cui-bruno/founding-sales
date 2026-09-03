@@ -23,6 +23,7 @@ import { createHmac } from 'node:crypto';
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { z } from 'zod';
 
+import { suppressionUploadLineSchema } from '../../shared/contracts/suppressionUploadContract';
 import type { FoundationRuntime } from '../foundation/foundationRuntime';
 import type { Clock } from '../domain/support/clock';
 import {
@@ -34,6 +35,7 @@ import {
 
 export const UPSTREAM_MEMBERSHIP_PREFIX = 'upstream/membership/';
 export const UPSTREAM_OUTCOMES_PREFIX = 'upstream/outcomes/';
+export const UPSTREAM_SUPPRESSIONS_PREFIX = 'upstream/suppressions/';
 
 /** Minimal write-side store surface; S3 or an in-memory fake. */
 export type UpstreamObjectStore = {
@@ -77,6 +79,7 @@ export const outcomeUploadLineSchema = z.object({
 export type UpstreamSyncReport = {
   membershipUploaded: boolean;
   outcomesFlushed: number;
+  suppressionsFlushed: number;
 };
 
 /**
@@ -111,16 +114,17 @@ export class UpstreamSync {
   }
 
   /**
-   * One full sync: membership snapshot then outcome flush. Throws on upload
-   * failure so the caller (poller) can count it; outbox rows are marked
-   * flushed strictly after their upload succeeded, so a failed run retries
-   * the same rows next poll.
+   * One full sync: membership snapshot, outcome flush, then suppression
+   * flush. Throws on upload failure so the caller (poller) can count it;
+   * outbox rows are marked flushed strictly after their upload succeeded,
+   * so a failed run retries the same rows next poll.
    */
   async run(store: UpstreamObjectStore): Promise<UpstreamSyncReport> {
     const date = this.clock.now().slice(0, 10);
     const membershipUploaded = await this.uploadMembership(store, date);
     const outcomesFlushed = await this.flushOutcomes(store, date);
-    return { membershipUploaded, outcomesFlushed };
+    const suppressionsFlushed = await this.flushSuppressions(store, date);
+    return { membershipUploaded, outcomesFlushed, suppressionsFlushed };
   }
 
   private async uploadMembership(
@@ -176,6 +180,47 @@ export class UpstreamSync {
     });
     await this.domainGate.withDomain((domain) => {
       domain.markCloudOutcomesFlushed({ ids: rows.map((row) => row.id) });
+    });
+    return rows.length;
+  }
+
+  /**
+   * Suppression flush (upstream/suppressions/<date>.ndjson): salted HMACs
+   * of opt-out tombstone handles per suppressionUploadLineSchema. Without a
+   * provisioned salt the step is SKIPPED entirely — raw or empty-salted
+   * handles never leave the machine — and nothing is marked flushed, so the
+   * rows retry once a salt exists. Rows are marked flushed only after the
+   * upload succeeded (exactly-once via the handle-keyed outbox).
+   */
+  private async flushSuppressions(
+    store: UpstreamObjectStore,
+    date: string,
+  ): Promise<number> {
+    const salt = await this.loadHmacSalt();
+    if (salt === null) return 0;
+    const rows = await this.domainGate.withDomain(
+      (domain) => domain.listUnflushedSuppressionHandles(),
+    );
+    if (rows.length === 0) return 0;
+    const lines = rows.map((row) => JSON.stringify(suppressionUploadLineSchema.parse({
+      contact_hmac: contactHmac({
+        salt,
+        kind: row.kind,
+        normalizedValue: row.normalizedValue,
+      }),
+      kind: row.kind,
+      reason: row.reason,
+      observed_at: row.observedAt,
+    })));
+    await store.putObjectText({
+      key: `${UPSTREAM_SUPPRESSIONS_PREFIX}${date}.ndjson`,
+      body: `${lines.join('\n')}\n`,
+      contentType: 'application/x-ndjson',
+    });
+    await this.domainGate.withDomain((domain) => {
+      domain.markSuppressionHandlesFlushed({
+        handleIds: rows.map((row) => row.handleId),
+      });
     });
     return rows.length;
   }

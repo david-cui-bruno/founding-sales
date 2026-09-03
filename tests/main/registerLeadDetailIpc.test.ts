@@ -53,6 +53,7 @@ const detail: LeadDetail = {
   },
   priorityReasons: ['Fit high 24/30'],
   cloudScores: null,
+  cloudLinked: false,
   nextAction: null,
   optedOut: false,
   cadence: null,
@@ -89,6 +90,7 @@ function fakeProvider(): LeadDetailProvider {
     confirmTransition: vi.fn(async () => receipt),
     dismissLead: vi.fn(async () => receipt),
     overrideCloudScore: vi.fn(async () => receipt),
+    findContactInfo: vi.fn(async () => ({ written: false, refusalReason: null })),
   };
 }
 
@@ -98,7 +100,7 @@ describe('registerLeadDetailIpc', () => {
     electron.removeHandler.mockReset();
   });
 
-  it('registers exactly the five lead-detail channels', () => {
+  it('registers exactly the six lead-detail channels', () => {
     registerLeadDetailIpc(fakeProvider());
 
     const channels = electron.handle.mock.calls.map((call) => call[0]);
@@ -108,6 +110,7 @@ describe('registerLeadDetailIpc', () => {
       'lead-detail:confirm-transition',
       'lead-detail:dismiss',
       'lead-detail:cloud-score-override',
+      'lead-detail:find-contact-info',
     ]);
   });
 
@@ -227,7 +230,28 @@ describe('registerLeadDetailIpc', () => {
     expect(provider.dismissLead).toHaveBeenCalledTimes(1);
   });
 
-  it('unregisters all five channels exactly once', () => {
+  it('validates find-contact-info requests and receipts', async () => {
+    const provider = fakeProvider();
+    registerLeadDetailIpc(provider);
+
+    const handler = registeredIpcHandler(
+      electron.handle,
+      'lead-detail:find-contact-info',
+    );
+    await expect(handler(trustedEvent, { personId: 'person-1' }))
+      .resolves.toEqual({ written: false, refusalReason: null });
+    expect(provider.findContactInfo).toHaveBeenCalledWith({ personId: 'person-1' });
+
+    await expect(handler(trustedEvent, { personId: '' })).rejects.toThrow();
+    await expect(
+      handler(trustedEvent, { personId: 'person-1', extra: true }),
+    ).rejects.toThrow();
+    await expect(handler(untrustedEvent, { personId: 'person-1' }))
+      .rejects.toThrow('trusted');
+    expect(provider.findContactInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it('unregisters all six channels exactly once', () => {
     const unregister = registerLeadDetailIpc(fakeProvider());
 
     unregister();
@@ -239,8 +263,9 @@ describe('registerLeadDetailIpc', () => {
       'lead-detail:cloud-score-override',
       'lead-detail:confirm-transition',
       'lead-detail:dismiss',
+      'lead-detail:find-contact-info',
       'lead-detail:get',
     ]);
-    expect(electron.removeHandler).toHaveBeenCalledTimes(5);
+    expect(electron.removeHandler).toHaveBeenCalledTimes(6);
   });
 });

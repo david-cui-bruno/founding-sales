@@ -1,8 +1,12 @@
+import { createHmac } from 'node:crypto';
+
 import { describe, expect, it, vi } from 'vitest';
 
-import type { CloudOutcomeRow } from '../../../src/main/domain/founderSalesDomain';
+import type { CloudOutcomeRow, SuppressionOutboxRow } from '../../../src/main/domain/founderSalesDomain';
+import { suppressionUploadLineSchema } from '../../../src/shared/contracts/suppressionUploadContract';
 import {
   UpstreamSync,
+  contactHmac,
   membershipUploadSchema,
   outcomeUploadLineSchema,
   type UpstreamObjectStore,
@@ -16,6 +20,8 @@ type FakeDomain = {
   listCloudMembership: ReturnType<typeof vi.fn>;
   listUnflushedCloudOutcomes: ReturnType<typeof vi.fn>;
   markCloudOutcomesFlushed: ReturnType<typeof vi.fn>;
+  listUnflushedSuppressionHandles: ReturnType<typeof vi.fn>;
+  markSuppressionHandlesFlushed: ReturnType<typeof vi.fn>;
 };
 
 function fakeDomain(overrides: Partial<{
@@ -24,6 +30,7 @@ function fakeDomain(overrides: Partial<{
     manualContacts: { kind: 'phone' | 'email'; normalizedValue: string }[];
   };
   outcomes: CloudOutcomeRow[];
+  suppressions: SuppressionOutboxRow[];
 }> = {}): { gate: { withDomain<T>(operation: (domain: FakeDomain) => T): Promise<T> }; domain: FakeDomain } {
   const domain: FakeDomain = {
     listCloudMembership: vi.fn(() => overrides.membership ?? {
@@ -31,6 +38,8 @@ function fakeDomain(overrides: Partial<{
     }),
     listUnflushedCloudOutcomes: vi.fn(() => overrides.outcomes ?? []),
     markCloudOutcomesFlushed: vi.fn(),
+    listUnflushedSuppressionHandles: vi.fn(() => overrides.suppressions ?? []),
+    markSuppressionHandlesFlushed: vi.fn(),
   };
   return {
     gate: { withDomain: async (operation) => operation(domain) },
@@ -193,5 +202,97 @@ describe('UpstreamSync', () => {
     await buildSync({ gate: fakeDomain({ membership }).gate, salt: 's' }).run(second.store);
 
     expect(first.puts[0]!.body).toBe(second.puts[0]!.body);
+  });
+
+  it('uploads suppression handles as salted-HMAC ndjson and marks them flushed', async () => {
+    const suppressions: SuppressionOutboxRow[] = [
+      {
+        handleId: 'handle-1', kind: 'phone', normalizedValue: '+14015550100',
+        reason: 'founder_block', observedAt: NOW,
+      },
+      {
+        handleId: 'handle-2', kind: 'email', normalizedValue: 'owner@example.com',
+        reason: 'opt_out', observedAt: NOW,
+      },
+    ];
+    const { gate, domain } = fakeDomain({ suppressions });
+    const { store, puts } = fakeStore();
+
+    const report = await buildSync({ gate, salt: 'shared-salt' }).run(store);
+
+    expect(report.suppressionsFlushed).toBe(2);
+    const upload = puts.find((put) => put.key === 'upstream/suppressions/2026-09-01.ndjson');
+    expect(upload).toBeDefined();
+    expect(upload!.contentType).toBe('application/x-ndjson');
+    const lines = upload!.body.trim().split('\n').map(
+      (line) => suppressionUploadLineSchema.parse(JSON.parse(line)),
+    );
+    // The line HMACs must use the EXACT contactHmac canonicalization the
+    // membership upload uses, keyed with the same shared salt.
+    expect(lines).toEqual([
+      {
+        contact_hmac: contactHmac({
+          salt: 'shared-salt', kind: 'phone', normalizedValue: '+14015550100',
+        }),
+        kind: 'phone', reason: 'founder_block', observed_at: NOW,
+      },
+      {
+        contact_hmac: contactHmac({
+          salt: 'shared-salt', kind: 'email', normalizedValue: 'owner@example.com',
+        }),
+        kind: 'email', reason: 'opt_out', observed_at: NOW,
+      },
+    ]);
+    expect(upload!.body).not.toContain('+14015550100');
+    expect(upload!.body).not.toContain('owner@example.com');
+    expect(domain.markSuppressionHandlesFlushed).toHaveBeenCalledWith({
+      handleIds: ['handle-1', 'handle-2'],
+    });
+  });
+
+  it('matches the pinned HMAC vector so cloud and app hashes agree', () => {
+    // createHmac('sha256', 'salt').update('+14015550100').digest('hex')
+    expect(contactHmac({
+      salt: 'salt', kind: 'phone', normalizedValue: '+14015550100',
+    })).toBe(createHmac('sha256', 'salt').update('+14015550100', 'utf8').digest('hex'));
+    // Emails are lowercased and trimmed before hashing.
+    expect(contactHmac({
+      salt: 'salt', kind: 'email', normalizedValue: ' Owner@Example.com ',
+    })).toBe(createHmac('sha256', 'salt').update('owner@example.com', 'utf8').digest('hex'));
+  });
+
+  it('SKIPS the suppression step entirely when no salt is provisioned', async () => {
+    const suppressions: SuppressionOutboxRow[] = [{
+      handleId: 'handle-1', kind: 'phone', normalizedValue: '+14015550100',
+      reason: 'opt_out', observedAt: NOW,
+    }];
+    const { gate, domain } = fakeDomain({ suppressions });
+    const { store, puts } = fakeStore();
+
+    const report = await buildSync({ gate, salt: null }).run(store);
+
+    expect(report.suppressionsFlushed).toBe(0);
+    expect(puts.some((put) => put.key.startsWith('upstream/suppressions/'))).toBe(false);
+    // Never listed, never flushed: the rows retry once a salt exists.
+    expect(domain.listUnflushedSuppressionHandles).not.toHaveBeenCalled();
+    expect(domain.markSuppressionHandlesFlushed).not.toHaveBeenCalled();
+  });
+
+  it('never marks suppressions flushed when the upload fails', async () => {
+    const suppressions: SuppressionOutboxRow[] = [{
+      handleId: 'handle-1', kind: 'phone', normalizedValue: '+14015550100',
+      reason: 'opt_out', observedAt: NOW,
+    }];
+    const { gate, domain } = fakeDomain({ suppressions });
+    const store: UpstreamObjectStore = {
+      putObjectText: async ({ key }) => {
+        if (key.startsWith('upstream/suppressions/')) {
+          throw new Error('AccessDenied');
+        }
+      },
+    };
+
+    await expect(buildSync({ gate, salt: 's' }).run(store)).rejects.toThrow('AccessDenied');
+    expect(domain.markSuppressionHandlesFlushed).not.toHaveBeenCalled();
   });
 });

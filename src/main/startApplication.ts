@@ -27,6 +27,8 @@ import {
 import { HealthService } from './health/healthService';
 import { registerApplicationIpc } from './ipc/registerApplicationIpc';
 import type { SourcingProvider } from './sourcing/registerSourcingIpc';
+import { EnrichmentRequestWriter } from './sourcing/enrichmentRequestWriter';
+import type { EnrichmentRequester } from './leads/leadDetailService';
 import {
   createFileSystemInboxObjectStore,
   createS3InboxObjectStore,
@@ -50,7 +52,13 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
     isTrustedRendererUrl?: (url: string) => boolean,
     registrars?: undefined,
     sourcingProvider?: SourcingProvider,
+    shellProvider?: undefined,
+    enrichmentRequester?: EnrichmentRequester,
   ): () => void;
+  createEnrichmentRequester?(
+    runtime: FoundationRuntime,
+    userDataPath: string,
+  ): EnrichmentRequester;
   createSourcingPoller?(runtime: FoundationRuntime, userDataPath: string): SourcingPoller;
   createAppleBridgeSupervisor(
     options: AppleBridgeSupervisorOptions,
@@ -99,6 +107,33 @@ const domainClock = new SystemClock();
 const domainIds = new UuidGenerator();
 
 const SOURCING_POLL_INTERVAL_MS = 15 * 60 * 1000;
+
+/**
+ * Production enrichment requester over the same scoped key as the poller:
+ * the founder's "Find contact info" click writes exactly one request line
+ * to upstream/enrichment-requests/. Missing credentials surface as a
+ * validated 'credentials_unavailable' refusal, never a throw.
+ */
+function createProductionEnrichmentRequester(
+  runtime: FoundationRuntime,
+  userDataPath: string,
+): EnrichmentRequester {
+  const credentialStore = new SourcingCredentialStore({
+    safeStorage,
+    envelopePath: join(userDataPath, 'callie.sourcing-inbox-credentials.json'),
+    fallbackKeyFilePath: join(homedir(), '.callie-sourcing-app-inbox-key.json'),
+    clock: domainClock,
+    log: (message) => console.info(`[sourcing] ${message}`),
+  });
+  const writer = new EnrichmentRequestWriter({
+    domainGate: runtime,
+    createStore: () => createS3UpstreamObjectStore({
+      credentialProvider: async () => (await credentialStore.load())?.credentials ?? null,
+    }),
+    clock: domainClock,
+  });
+  return { request: (input) => writer.request(input) };
+}
 
 function createProductionSourcingPoller(
   runtime: FoundationRuntime,
@@ -174,6 +209,7 @@ const defaultDependencies: ApplicationStartupDependencies = {
   createHealthService: (options) => new HealthService(options),
   registerApplicationIpc,
   createSourcingPoller: createProductionSourcingPoller,
+  createEnrichmentRequester: createProductionEnrichmentRequester,
   createAppleBridgeSupervisor: (options) => new AppleBridgeSupervisor(options),
   registerAppleSpikeIpc,
   closeDatabase,
@@ -286,6 +322,8 @@ export async function startApplication(
           return startedPoller.getStatus();
         },
       },
+      undefined,
+      dependencies.createEnrichmentRequester?.(runtime, options.userDataPath),
     );
     throwIfStartupCancelled(options.signal);
     if (options.sourcingPollingEnabled === true && sourcingPoller !== undefined) {
