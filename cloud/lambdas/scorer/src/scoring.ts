@@ -109,11 +109,24 @@ const MULTI_UNIT_USE_CODES: ReadonlySet<string> = new Set([
   "04-05U",
   "04-610",
   "04-11+",
+  // Boston FY2026 assessment LU codes (adapter-boston-assessments):
+  // R2/R3/R4 = 2/3/4+ family, A = 7+ unit apartment, RC = mixed
+  // residential/commercial (rental stock above commercial).
+  "R2",
+  "R3",
+  "R4",
+  "A",
+  "RC",
 ]);
 
 const SINGLE_OR_NONE_USE_CODES: ReadonlySet<string> = new Set([
   // Providence single-family class
   "1",
+  // Boston FY2026 LU codes: 1-fam, residential land, condo unit (condo
+  // owners are grouped with single per the 2026-09-02 quality pass).
+  "R1",
+  "RL",
+  "CD",
 ]);
 
 export function rentalStockKind(useCode: string | null | undefined): RentalStockKind {

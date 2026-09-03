@@ -86,6 +86,8 @@ data "aws_iam_policy_document" "lambda_adapters" {
       "dynamodb:PutItem",
       "dynamodb:UpdateItem",
       "dynamodb:Query",
+      # adapter-boston-assessments sweeps the whole (small) entities table.
+      "dynamodb:Scan",
     ]
     resources = [
       aws_dynamodb_table.snapshots.arn,

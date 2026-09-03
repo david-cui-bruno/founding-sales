@@ -39,6 +39,22 @@ locals {
       # Daily 10:00 UTC.
       schedule = "cron(0 10 * * ? *)"
     }
+    "adapter-boston-assessments" = {
+      source_dir  = "${path.module}/../lambdas/adapter-boston-assessments/dist"
+      memory_size = 512
+      timeout     = 900
+      environment = {
+        INBOX_BUCKET      = aws_s3_bucket.inbox.bucket
+        IDEMPOTENCY_TABLE = aws_dynamodb_table.idempotency.name
+        SNAPSHOTS_TABLE   = aws_dynamodb_table.snapshots.name
+        ENTITIES_TABLE    = aws_dynamodb_table.entities.name
+        MAX_RUNTIME_MS    = "840000"
+      }
+      # Monthly (2nd, 11:00 UTC), after the pvd-taxroll monthly run: the
+      # FY2026 assessment roll is annual; the entity-driven sweep re-checks
+      # ownership for entities minted during the month (review finding F9).
+      schedule = "cron(0 11 2 * ? *)"
+    }
     "scorer" = {
       source_dir  = "${path.module}/../lambdas/scorer/dist"
       memory_size = 256

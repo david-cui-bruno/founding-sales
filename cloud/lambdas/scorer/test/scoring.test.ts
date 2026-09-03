@@ -493,6 +493,17 @@ describe("fitScore — observability normalization", () => {
     expect(rentalStockKind("04-610")).toBe("multi");
     expect(rentalStockKind("04-11+")).toBe("multi");
     expect(rentalStockKind("1")).toBe("single_or_none"); // single family
+    // Boston FY2026 assessment LU codes (adapter-boston-assessments)
+    expect(rentalStockKind("R2")).toBe("multi"); // 2-family
+    expect(rentalStockKind("R3")).toBe("multi"); // 3-family
+    expect(rentalStockKind("R4")).toBe("multi"); // 4+ family
+    expect(rentalStockKind("A")).toBe("multi"); // 7+ apartments
+    expect(rentalStockKind("RC")).toBe("multi"); // mixed res/comm
+    expect(rentalStockKind("R1")).toBe("single_or_none"); // 1-family
+    expect(rentalStockKind("RL")).toBe("single_or_none"); // res land
+    expect(rentalStockKind("CD")).toBe("single_or_none"); // condo unit
+    expect(rentalStockKind("C")).toBe("unknown"); // commercial: unclassified
+    expect(rentalStockKind("E")).toBe("unknown"); // exempt: unclassified
     // Unknown vocabulary -> unknown (unobservable)
     expect(rentalStockKind("Commercial Warehouse")).toBe("unknown");
     expect(rentalStockKind(null)).toBe("unknown");
