@@ -33,8 +33,8 @@ export function toOrderablePriorityRow(
     reachability: snapshot.reachability,
     dataConfidence: snapshot.dataConfidence,
     lastContactAt: snapshot.lastContactAt,
+    cloudSourcePercentile: snapshot.cloudSourcePercentile ?? null,
     cloudTiming: snapshot.cloudTiming ?? null,
-    cloudFit: snapshot.cloudFit ?? null,
   });
 }
 
@@ -60,13 +60,15 @@ export function buildProspectPriorityTuple(
     -row.dataConfidence,
     row.lastContactAt === null ? 0 : 1,
     lastContactMillis,
-    // Cloud axes: tiebreakers only, strictly after every local key. Unscored
-    // (null) rows order after scored rows; timing precedes fit and the two
-    // are never combined.
+    // Cloud tiebreakers only, strictly after every local key. The
+    // within-source percentile (F10) leads because raw cloud axes from
+    // different acquisition sources are not comparable; raw timing follows
+    // as a residual within-source tiebreaker. Unscored (null) rows order
+    // after scored rows.
+    row.cloudSourcePercentile === null ? 1 : 0,
+    row.cloudSourcePercentile === null ? NULL_SENTINEL : -row.cloudSourcePercentile,
     row.cloudTiming === null ? 1 : 0,
     row.cloudTiming === null ? NULL_SENTINEL : -row.cloudTiming,
-    row.cloudFit === null ? 1 : 0,
-    row.cloudFit === null ? NULL_SENTINEL : -row.cloudFit,
     row.prospectId,
   ]) as readonly [
     number, number, number, number, number, number, number, number, number,
@@ -110,9 +112,9 @@ export const PROSPECT_PRIORITY_ORDER_BY_SQL = `
   priority_orderable.data_confidence DESC,
   CASE WHEN priority_orderable.last_contact_at IS NULL THEN 0 ELSE 1 END ASC,
   priority_orderable.last_contact_at ASC,
+  CASE WHEN priority_orderable.cloud_source_percentile IS NULL THEN 1 ELSE 0 END ASC,
+  priority_orderable.cloud_source_percentile DESC,
   CASE WHEN priority_orderable.cloud_timing IS NULL THEN 1 ELSE 0 END ASC,
   priority_orderable.cloud_timing DESC,
-  CASE WHEN priority_orderable.cloud_fit IS NULL THEN 1 ELSE 0 END ASC,
-  priority_orderable.cloud_fit DESC,
   priority_orderable.prospect_id COLLATE BINARY ASC
 ` as const;

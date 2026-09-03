@@ -551,20 +551,46 @@ export class PrioritizationRepository {
 
   /**
    * Cloud-computed axes on the prospect row (Task 5). Both null until a
-   * scorer re-emission lands; tiebreaker/display data only.
+   * scorer re-emission lands; tiebreaker/display data only. The within-source
+   * percentile (F10) makes ordering comparable across acquisition sources:
+   * each scored prospect is placed 0-100 within the group sharing its
+   * original SourceEvent channel, because different channels observe
+   * different signal subsets and their raw axes are not comparable.
+   * The raw axes remain the only displayed numbers.
    */
   loadCloudScoreAxes(prospectId: string): {
     cloudFit: number | null;
     cloudTiming: number | null;
+    cloudSourcePercentile: number | null;
   } {
-    const row = this.database.raw.prepare(
-      'SELECT cloud_fit, cloud_timing FROM prospects WHERE id = ?',
-    ).get(idSchema.parse(prospectId)) as {
-      cloud_fit: number | null; cloud_timing: number | null;
+    const row = this.database.raw.prepare(`
+      SELECT
+        target.cloud_fit AS cloud_fit,
+        target.cloud_timing AS cloud_timing,
+        grouped.cloud_source_percentile AS cloud_source_percentile
+      FROM prospects AS target
+      LEFT JOIN (
+        SELECT
+          scored.id AS prospect_id,
+          100.0 * CUME_DIST() OVER (
+            PARTITION BY origin.channel
+            ORDER BY COALESCE(scored.cloud_fit, 0) + COALESCE(scored.cloud_timing, 0)
+          ) AS cloud_source_percentile
+        FROM prospects AS scored
+        JOIN source_events AS origin
+          ON origin.id = scored.original_source_event_id
+        WHERE scored.cloud_fit IS NOT NULL OR scored.cloud_timing IS NOT NULL
+      ) AS grouped ON grouped.prospect_id = target.id
+      WHERE target.id = ?
+    `).get(idSchema.parse(prospectId)) as {
+      cloud_fit: number | null;
+      cloud_timing: number | null;
+      cloud_source_percentile: number | null;
     } | undefined;
     return {
       cloudFit: row?.cloud_fit ?? null,
       cloudTiming: row?.cloud_timing ?? null,
+      cloudSourcePercentile: row?.cloud_source_percentile ?? null,
     };
   }
 

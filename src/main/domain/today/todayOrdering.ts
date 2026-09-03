@@ -313,8 +313,10 @@ function pinnedOf(item: TodayItem): boolean {
 }
 
 /**
- * The within-lane comparator (audit 4.9.5): priority band, then cloud
- * timing (higher first, nulls last), then last-touch age (older first,
+ * The within-lane comparator (audit 4.9.5, F10): priority band, then the
+ * within-source cloud percentile (higher first, nulls last) so no single
+ * acquisition source can monopolize a lane, then raw cloud timing as the
+ * residual within-source tiebreaker, then last-touch age (older first,
  * never-touched first as "oldest"), then stable ids. Computed at render;
  * nothing here reads a stored due time.
  */
@@ -325,6 +327,15 @@ function bandTimingAgeCompare(left: TodayItem, right: TodayItem): number {
   const rightBand = right.priority === null
     ? 4 : PRIORITY_RANK[right.priority.effectivePriority];
   if (leftBand !== rightBand) return leftBand - rightBand;
+  const leftPercentile = left.priority?.cloudSourcePercentile ?? null;
+  const rightPercentile = right.priority?.cloudSourcePercentile ?? null;
+  if ((leftPercentile === null) !== (rightPercentile === null)) {
+    return leftPercentile === null ? 1 : -1;
+  }
+  if (leftPercentile !== null && rightPercentile !== null
+    && leftPercentile !== rightPercentile) {
+    return rightPercentile - leftPercentile;
+  }
   const leftTiming = left.priority?.cloudTiming ?? null;
   const rightTiming = right.priority?.cloudTiming ?? null;
   if ((leftTiming === null) !== (rightTiming === null)) {

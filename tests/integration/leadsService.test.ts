@@ -23,6 +23,9 @@ import {
 } from '../../src/main/leads/leadsService';
 import {
   insertOpenCycleWithAction,
+  insertPerson,
+  insertProspect,
+  insertSourceEvent,
   seedProspect,
   type SeededProspect,
 } from '../fixtures/domainRows';
@@ -260,20 +263,6 @@ describe('leadsService over a real encrypted domain', () => {
     ]);
   });
 
-  it('breaks cloud-fit ties with cloud timing, still inside one band', async () => {
-    const slowTiming = seedLead('alpha');
-    const fastTiming = seedLead('beta');
-    setCloudScores(slowTiming.prospectId, 62, 10);
-    setCloudScores(fastTiming.prospectId, 62, 41);
-
-    const page = await listAll({ sort: 'priority' });
-
-    expect(page.rows.map((row) => row.personId)).toEqual([
-      fastTiming.personId,
-      slowTiming.personId,
-    ]);
-  });
-
   it('never lets cloud scores outrank the local priority band', async () => {
     const higherBand = seedLead('alpha');
     const scoredLowerBand = seedLead('beta');
@@ -287,5 +276,74 @@ describe('leadsService over a real encrypted domain', () => {
       higherBand.personId,
       scoredLowerBand.personId,
     ]);
+  });
+
+  /** Seeds a lead whose original SourceEvent uses a public-record channel. */
+  function seedChannelLead(
+    prefix: string,
+    channel: 'parcel' | 'violation',
+  ): SeededProspect {
+    const personId = `${prefix}-person`;
+    const prospectId = `${prefix}-prospect`;
+    const sourceEventId = `${prefix}-source`;
+    insertPerson(database.raw, personId);
+    insertSourceEvent({ database: database.raw, id: sourceEventId, personId, channel });
+    insertProspect({ database: database.raw, id: prospectId, personId, sourceEventId });
+    insertOpenCycleWithAction({
+      database: database.raw, prefix, prospect: { personId, prospectId, sourceEventId },
+    });
+    return { personId, prospectId, sourceEventId };
+  }
+
+  describe('within-source percentile ordering (F10)', () => {
+    it('interleaves sources whose raw cloud scores are systematically offset', async () => {
+      // Violation leads score systematically higher raw fit than parcel
+      // leads, yet the grid must interleave them: raw axes from different
+      // observable signal subsets are not comparable across sources.
+      const violationTop = seedChannelLead('v-top', 'violation');
+      const violationMid = seedChannelLead('v-mid', 'violation');
+      const violationLow = seedChannelLead('v-low', 'violation');
+      const parcelTop = seedChannelLead('p-top', 'parcel');
+      const parcelLow = seedChannelLead('p-low', 'parcel');
+      const unscored = seedChannelLead('p-none', 'parcel');
+      setCloudScores(violationTop.prospectId, 95, 5);
+      setCloudScores(violationMid.prospectId, 85, 5);
+      setCloudScores(violationLow.prospectId, 75, 5);
+      setCloudScores(parcelTop.prospectId, 63, 5);
+      setCloudScores(parcelLow.prospectId, 40, 5);
+
+      const page = await listAll({ sort: 'priority' });
+      const ordered = page.rows.map((row) => row.personId);
+
+      // Before the fix the raw cloud_fit sort would put all three violation
+      // leads first. With within-source percentiles both sources reach the
+      // top: both source tops share percentile 100.
+      const topThree = ordered.slice(0, 3);
+      expect(topThree).toContain(violationTop.personId);
+      expect(topThree).toContain(parcelTop.personId);
+
+      // Within-source relative order is preserved.
+      const positionOf = (personId: string) => ordered.indexOf(personId);
+      expect(positionOf(violationTop.personId))
+        .toBeLessThan(positionOf(violationMid.personId));
+      expect(positionOf(violationMid.personId))
+        .toBeLessThan(positionOf(violationLow.personId));
+      expect(positionOf(parcelTop.personId))
+        .toBeLessThan(positionOf(parcelLow.personId));
+
+      // Unscored still sorts last.
+      expect(ordered.at(-1)).toBe(unscored.personId);
+    });
+
+    it('keeps showing the raw cloud fit and timing, never the percentile', async () => {
+      const lead = seedChannelLead('raw', 'violation');
+      setCloudScores(lead.prospectId, 63, 41);
+
+      const page = await listAll({ sort: 'priority' });
+      const row = page.rows.find((entry) => entry.personId === lead.personId)!;
+
+      expect(row.cloudScores).toEqual({ fit: 63, timing: 41 });
+      expect(JSON.stringify(row)).not.toContain('ercentile');
+    });
   });
 });

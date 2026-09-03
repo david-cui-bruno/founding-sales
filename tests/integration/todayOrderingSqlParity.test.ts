@@ -62,8 +62,8 @@ describe('Today discretionary suborder SQL parity', () => {
         reachability TEXT NOT NULL,
         data_confidence INTEGER NOT NULL,
         last_contact_at TEXT,
-        cloud_timing INTEGER,
-        cloud_fit INTEGER
+        cloud_source_percentile REAL,
+        cloud_timing INTEGER
       )
     `);
   });
@@ -88,8 +88,8 @@ describe('Today discretionary suborder SQL parity', () => {
         row.reachability,
         row.dataConfidence,
         row.lastContactAt,
+        row.cloudSourcePercentile,
         row.cloudTiming,
-        row.cloudFit,
       );
     }
     // Today exposes the CTE under the exact fixed alias and uses the Task 11
@@ -119,8 +119,8 @@ describe('Today discretionary suborder SQL parity', () => {
           reachability: pick(random, REACHABILITIES),
           dataConfidence: Math.floor(random() * 11),
           lastContactAt: pick(random, LAST_CONTACTS),
+          cloudSourcePercentile: pick(random, CLOUD_AXES),
           cloudTiming: pick(random, CLOUD_AXES),
-          cloudFit: pick(random, CLOUD_AXES),
         });
       }
       const shuffled = [...rows].sort(() => random() - 0.5);

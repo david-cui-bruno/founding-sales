@@ -1006,6 +1006,7 @@ export class PrioritizationService {
       lastContactAt: projection.lastContactAt,
       cloudTiming: cloudAxes.cloudTiming,
       cloudFit: cloudAxes.cloudFit,
+      cloudSourcePercentile: cloudAxes.cloudSourcePercentile,
       controls: Object.freeze({
         priority: priorityControl,
         pin: effective.pin_to_top ?? null,

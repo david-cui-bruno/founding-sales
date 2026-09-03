@@ -56,8 +56,8 @@ describe('priority ordering SQL parity', () => {
         reachability TEXT NOT NULL,
         data_confidence INTEGER NOT NULL,
         last_contact_at TEXT,
-        cloud_timing INTEGER,
-        cloud_fit INTEGER
+        cloud_source_percentile REAL,
+        cloud_timing INTEGER
       )
     `);
   });
@@ -82,8 +82,8 @@ describe('priority ordering SQL parity', () => {
         row.reachability,
         row.dataConfidence,
         row.lastContactAt,
+        row.cloudSourcePercentile,
         row.cloudTiming,
-        row.cloudFit,
       );
     }
     const ordered = database.raw.prepare(`
@@ -115,8 +115,8 @@ describe('priority ordering SQL parity', () => {
               reachability,
               dataConfidence: index % 11,
               lastContactAt,
+              cloudSourcePercentile: CLOUD_AXES[(index + 2) % CLOUD_AXES.length]!,
               cloudTiming: CLOUD_AXES[index % CLOUD_AXES.length]!,
-              cloudFit: CLOUD_AXES[(index + 2) % CLOUD_AXES.length]!,
             });
           }
         }
@@ -133,8 +133,8 @@ describe('priority ordering SQL parity', () => {
         reachability: 'direct',
         dataConfidence: 5,
         lastContactAt: null,
+        cloudSourcePercentile: null,
         cloudTiming: null,
-        cloudFit: null,
       },
       {
         prospectId: 'tie-b',
@@ -145,8 +145,8 @@ describe('priority ordering SQL parity', () => {
         reachability: 'direct',
         dataConfidence: 5,
         lastContactAt: null,
+        cloudSourcePercentile: null,
         cloudTiming: null,
-        cloudFit: null,
       },
     );
     expect(sqlOrder(rows)).toEqual(jsOrder(rows));
@@ -166,8 +166,8 @@ describe('priority ordering SQL parity', () => {
           reachability: pick(random, REACHABILITIES),
           dataConfidence: Math.floor(random() * 11),
           lastContactAt: pick(random, LAST_CONTACTS),
+          cloudSourcePercentile: pick(random, CLOUD_AXES),
           cloudTiming: pick(random, CLOUD_AXES),
-          cloudFit: pick(random, CLOUD_AXES),
         });
       }
       expect(sqlOrder(rows)).toEqual(jsOrder(rows));

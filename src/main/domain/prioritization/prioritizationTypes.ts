@@ -288,12 +288,16 @@ export type OrderablePriorityRow = Readonly<{
   dataConfidence: number;
   lastContactAt: string | null;
   /**
-   * Cloud-computed axes (Task 5): pure tiebreakers AFTER every local key.
-   * Null when the prospect has no scored cloud event; nulls order last.
-   * The two axes stay separate keys, never combined into one number.
+   * Cloud tiebreakers (Task 5 / F10): pure tiebreakers AFTER every local
+   * key. `cloudSourcePercentile` is the 0-100 within-source standing of the
+   * prospect's scored cloud axes (percentile of cloud_fit + cloud_timing
+   * among prospects sharing the same original acquisition channel); it makes
+   * ranking comparable across sources whose raw axes are not. Null when the
+   * prospect has no scored cloud event; nulls order last. Raw timing remains
+   * a residual within-source tiebreaker; raw axes are display-only.
    */
+  cloudSourcePercentile: number | null;
   cloudTiming: number | null;
-  cloudFit: number | null;
 }>;
 
 export type EffectivePrioritySnapshot = DeepReadonly<{
@@ -319,6 +323,8 @@ export type EffectivePrioritySnapshot = DeepReadonly<{
   /** Cloud-computed axes from the prospect row; null until scored. */
   cloudTiming: number | null;
   cloudFit: number | null;
+  /** Within-source 0-100 percentile of the scored cloud axes (F10). */
+  cloudSourcePercentile: number | null;
   controls: {
     priority: EffectivePriorityControl | null;
     pin: EffectivePriorityControl | null;

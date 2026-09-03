@@ -40,6 +40,7 @@ function prioritySnapshot(
     fitPoints: number;
     prospectId: string;
     cloudTiming: number | null;
+    cloudSourcePercentile: number | null;
   }> = {},
 ): EffectivePrioritySnapshot {
   const control = (kind: 'pin_to_top' | 'snooze' | 'dismiss') => Object.freeze({
@@ -73,6 +74,7 @@ function prioritySnapshot(
     lastContactAt: overrides.lastContactAt ?? null,
     cloudTiming: overrides.cloudTiming ?? null,
     cloudFit: null,
+    cloudSourcePercentile: overrides.cloudSourcePercentile ?? null,
     controls: Object.freeze({
       priority: null,
       pin: overrides.pin ? control('pin_to_top') : null,
@@ -402,6 +404,61 @@ describe('compareTodayItems', () => {
     expect(sorted.map(({ cycleId }) => cycleId)).toEqual([
       cloudHot.cycleId, neverTouched.cycleId, older.cycleId, newer.cycleId,
     ]);
+  });
+
+  it('orders within a lane by the within-source percentile before raw cloud timing', () => {
+    // Raw timing favors the "violation" row, but the "parcel" row stands
+    // higher within its own source: the percentile must win (F10).
+    const parcelTop = classifiedItem(candidate({
+      priority: prioritySnapshot({
+        effectivePriority: 'p2', cloudSourcePercentile: 100, cloudTiming: 10,
+      }),
+    }));
+    const violationMid = classifiedItem(candidate({
+      priority: prioritySnapshot({
+        effectivePriority: 'p2', cloudSourcePercentile: 50, cloudTiming: 95,
+      }),
+    }));
+    const unscored = classifiedItem(candidate({
+      priority: prioritySnapshot({ effectivePriority: 'p2' }),
+    }));
+    const sorted = [violationMid, unscored, parcelTop].sort(compareTodayItems);
+    expect(sorted.map(({ cycleId }) => cycleId)).toEqual([
+      parcelTop.cycleId, violationMid.cycleId, unscored.cycleId,
+    ]);
+  });
+
+  it('fills the exploration lane using the within-source percentile, not raw scores', () => {
+    // Two "sources": the high-raw-score source would monopolize both
+    // exploration slots under raw ordering. Percentiles interleave them.
+    const violationTop = candidate({
+      priority: prioritySnapshot({
+        effectivePriority: 'p2', cloudSourcePercentile: 100, cloudTiming: 90,
+      }),
+    });
+    const violationMid = candidate({
+      priority: prioritySnapshot({
+        effectivePriority: 'p2', cloudSourcePercentile: 66, cloudTiming: 80,
+      }),
+    });
+    const parcelTop = candidate({
+      priority: prioritySnapshot({
+        effectivePriority: 'p2', cloudSourcePercentile: 100, cloudTiming: 20,
+      }),
+    });
+    const queue = planTodayQueue({
+      candidates: [violationMid, parcelTop, violationTop],
+      generatedAt: GENERATED_AT,
+      timezone: 'America/New_York',
+      capacity: { ...DEFAULT_TODAY_CAPACITY, explorationSlots: 2 },
+      completedDiscretionaryDialCount: 0,
+    });
+    const exploration = queue.lanes.find(({ lane }) => lane === 'exploration')!;
+    expect(exploration.items.map(({ cycleId }) => cycleId)).toEqual([
+      violationTop.cycleId, parcelTop.cycleId,
+    ]);
+    const later = queue.lanes.find(({ lane }) => lane === 'later')!;
+    expect(later.items.map(({ cycleId }) => cycleId)).toEqual([violationMid.cycleId]);
   });
 
   it('keeps a pinned row first inside its lane only', () => {

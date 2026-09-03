@@ -22,8 +22,8 @@ const BASE_ROW: OrderablePriorityRow = Object.freeze({
   reachability: 'direct',
   dataConfidence: 7,
   lastContactAt: '2026-08-01T00:00:00.000Z',
+  cloudSourcePercentile: null,
   cloudTiming: null,
-  cloudFit: null,
 });
 
 function row(overrides: Partial<OrderablePriorityRow>): OrderablePriorityRow {
@@ -101,22 +101,26 @@ describe('compareProspectPriority', () => {
     expect(compareProspectPriority(older, newer)).toBeLessThan(0);
   });
 
-  it('uses cloud timing then cloud fit only as a tiebreaker, nulls last', () => {
+  it('uses the within-source percentile then cloud timing only as a tiebreaker, nulls last', () => {
     // Different local keys always win over cloud values.
-    const localWinner = row({ prospectId: 'local', fitPoints: 20, cloudTiming: 1, cloudFit: 1 });
-    const cloudRich = row({ prospectId: 'cloud', fitPoints: 10, cloudTiming: 99, cloudFit: 99 });
+    const localWinner = row({
+      prospectId: 'local', fitPoints: 20, cloudSourcePercentile: 1, cloudTiming: 1,
+    });
+    const cloudRich = row({
+      prospectId: 'cloud', fitPoints: 10, cloudSourcePercentile: 99, cloudTiming: 99,
+    });
     expect(compareProspectPriority(localWinner, cloudRich)).toBeLessThan(0);
 
-    // Complete local tie: higher cloud timing first, then higher cloud fit,
-    // then unscored (null) rows, then the binary prospect id.
-    const hotTiming = row({ prospectId: 'z-hot', cloudTiming: 60, cloudFit: 10 });
-    const coolTiming = row({ prospectId: 'a-cool', cloudTiming: 40, cloudFit: 90 });
-    const highFit = row({ prospectId: 'b-fit', cloudTiming: 40, cloudFit: 95 });
+    // Complete local tie: higher within-source percentile first, then higher
+    // cloud timing, then unscored (null) rows, then the binary prospect id.
+    const topPercentile = row({ prospectId: 'z-top', cloudSourcePercentile: 60, cloudTiming: 10 });
+    const midPercentile = row({ prospectId: 'a-mid', cloudSourcePercentile: 40, cloudTiming: 90 });
+    const midHotTiming = row({ prospectId: 'b-hot', cloudSourcePercentile: 40, cloudTiming: 95 });
     const unscored = row({ prospectId: 'a-unscored' });
-    const sorted = [unscored, coolTiming, hotTiming, highFit]
+    const sorted = [unscored, midPercentile, topPercentile, midHotTiming]
       .sort(compareProspectPriority)
       .map((entry) => entry.prospectId);
-    expect(sorted).toEqual(['z-hot', 'b-fit', 'a-cool', 'a-unscored']);
+    expect(sorted).toEqual(['z-top', 'b-hot', 'a-mid', 'a-unscored']);
   });
 });
 
@@ -143,6 +147,7 @@ describe('toOrderablePriorityRow', () => {
     lastContactAt: '2026-08-01T00:00:00.000Z',
     cloudTiming: null,
     cloudFit: null,
+    cloudSourcePercentile: null,
     controls: { priority: null, pin: null, snooze: null, dismiss: null },
     explanation: [],
   }) as EffectivePrioritySnapshot;
@@ -157,8 +162,8 @@ describe('toOrderablePriorityRow', () => {
       reachability: 'direct',
       dataConfidence: 7,
       lastContactAt: '2026-08-01T00:00:00.000Z',
+      cloudSourcePercentile: null,
       cloudTiming: null,
-      cloudFit: null,
     });
   });
 
@@ -183,8 +188,8 @@ describe('fixed SQL ordering contract', () => {
       'priority_orderable.reachability',
       'priority_orderable.data_confidence',
       'priority_orderable.last_contact_at',
+      'priority_orderable.cloud_source_percentile',
       'priority_orderable.cloud_timing',
-      'priority_orderable.cloud_fit',
     ]);
     expect(aliasReferences.length).toBeGreaterThan(0);
     for (const reference of aliasReferences) {

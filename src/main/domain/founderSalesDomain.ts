@@ -401,13 +401,17 @@ export class FounderSalesDomain {
     ].join(' AND ');
     const orderBy = {
       // Within one priority band, cloud-scored leads outrank unscored ones
-      // (fit first, then timing, both DESC with NULLs last) so a "0 fit /
-      // 0 timing" row can never sit above a scored one. Cloud axes stay
-      // tiebreakers only: they never reorder the local priority bands.
+      // using the WITHIN-SOURCE percentile (F10): raw cloud axes from
+      // different acquisition sources observe different signal subsets and
+      // are not comparable, so a raw cross-source sort lets one source
+      // monopolize the top. Percentile DESC with NULLs last, then raw cloud
+      // timing as the residual within-source tiebreaker. Cloud keys stay
+      // tiebreakers only: they never reorder the local priority bands, and
+      // the percentile is ordering-only (rows keep showing raw fit/timing).
       priority: `CASE WHEN projection.priority IS NULL THEN 1 ELSE 0 END,
         projection.priority ASC,
-        CASE WHEN prospect.cloud_fit IS NULL THEN 1 ELSE 0 END,
-        prospect.cloud_fit DESC,
+        CASE WHEN cloud_rank.cloud_source_percentile IS NULL THEN 1 ELSE 0 END,
+        cloud_rank.cloud_source_percentile DESC,
         CASE WHEN prospect.cloud_timing IS NULL THEN 1 ELSE 0 END,
         prospect.cloud_timing DESC,
         cycle.id ASC`,
@@ -423,6 +427,18 @@ export class FounderSalesDomain {
       LEFT JOIN prospect_priority_projection AS projection
         ON projection.prospect_id = cycle.prospect_id
       LEFT JOIN source_events AS source ON source.id = prospect.original_source_event_id
+      LEFT JOIN (
+        SELECT
+          scored.id AS prospect_id,
+          100.0 * CUME_DIST() OVER (
+            PARTITION BY origin.channel
+            ORDER BY COALESCE(scored.cloud_fit, 0) + COALESCE(scored.cloud_timing, 0)
+          ) AS cloud_source_percentile
+        FROM prospects AS scored
+        JOIN source_events AS origin
+          ON origin.id = scored.original_source_event_id
+        WHERE scored.cloud_fit IS NOT NULL OR scored.cloud_timing IS NOT NULL
+      ) AS cloud_rank ON cloud_rank.prospect_id = cycle.prospect_id
       WHERE ${where}
     `;
     const total = (this.database.raw.prepare(
