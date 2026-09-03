@@ -54,8 +54,14 @@ Re-verify before building; portals move.
   per-municipality annual downloads via rigis.org (E911 address points ARE available:
   `FACILITY_E911_AddressPoints`).
 - Providence tax roll (above) covers the launch market without RIGIS.
-- RI Rental Registry: no API; APRA bulk request drafted in
-  `docs/sourcing/founder-actions/apra-request.md`; targeted portal lookups for v0.
+- RI Rental Registry: public database is a Tolemi/BuildingBlocks SPA at
+  ridoh-ri.tolemi.com over GraphQL (cg.tolemi.com/q, no auth wall, probed
+  2026-09-03). Caveat: search filter payloads are client-encrypted blobs, so a
+  headless-browser targeted lookup is the practical v0 (search owner name ->
+  read contact panel); a raw-GraphQL adapter would need the SPA's crypto.
+  APRA bulk request drafted in `docs/sourcing/founder-actions/apra-request.md`
+  remains the bulk path. Landlord name/address/email/phone are public by
+  statute (RIGL 34-18-58) and there is no ToS gate on the public search.
 
 ## Massachusetts
 
