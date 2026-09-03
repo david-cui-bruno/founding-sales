@@ -57,8 +57,12 @@ locals {
     }
     "scorer" = {
       source_dir  = "${path.module}/../lambdas/scorer/dist"
-      memory_size = 256
-      timeout     = 60
+      memory_size = 512
+      # 60s was fine for daily violation deltas; the Boston assessment spine
+      # can land thousands of events in one sweep (4.2k on 2026-09-03 timed
+      # out). Scoring is per-event idempotent, so a longer window just means
+      # fewer resumption ticks.
+      timeout     = 600
       environment = {
         INBOX_BUCKET    = aws_s3_bucket.inbox.bucket
         SNAPSHOTS_TABLE = aws_dynamodb_table.snapshots.name
