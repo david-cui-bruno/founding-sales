@@ -74,11 +74,12 @@ locals {
         SNAPSHOTS_TABLE   = aws_dynamodb_table.snapshots.name
         SUPPRESSION_TABLE = aws_dynamodb_table.suppression.name
         SNS_TOPIC_ARN     = aws_sns_topic.alerts.arn
-        # GO-LIVE SWITCH: flip TRACERFY_BASE_URL to https://tracerfy.com when
-        # the funded Tracerfy account exists (and put the real token in
-        # terraform.tfvars). The sandbox mirrors the exact API, accepts any
-        # non-empty token, and bills nothing — never point prod traffic at it.
-        TRACERFY_BASE_URL         = "https://mock.tracerfy.com"
+        # LIVE since 2026-09-03 (founder confirmed legal clearance; SAN in
+        # progress). Balance was 0 at flip: an empty request queue spends
+        # nothing, and the first request without credits 402s -> run throws ->
+        # errors alarm -> ntfy ("buy credits" signal). Sandbox for tests:
+        # https://mock.tracerfy.com.
+        TRACERFY_BASE_URL         = "https://tracerfy.com"
         TRACERFY_API_KEY          = var.tracerfy_api_key
         ENRICH_MONTHLY_CREDIT_CAP = "1000" # 1000 credits ≈ $20 at 5 credits/$0.10
       }
