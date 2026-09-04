@@ -18,6 +18,7 @@ import { migration0010NoDueDates } from './migrations/0010NoDueDates';
 import { migration0011ContactDncFlags } from './migrations/0011ContactDncFlags';
 import { migration0012UpstreamRequestState } from './migrations/0012UpstreamRequestState';
 import { migration0013ContactComplianceEvidence } from './migrations/0013ContactComplianceEvidence';
+import { migration0014OutboundJurisdictionClearance } from './migrations/0014OutboundJurisdictionClearance';
 import type { WorkspaceKey } from '../security/workspaceKeyTypes';
 
 export type MigrationResult = {
@@ -113,6 +114,11 @@ const productionMigrations = [
     id: '0013ContactComplianceEvidence',
     schemaVersion: 13,
     migration: migration0013ContactComplianceEvidence,
+  },
+  {
+    id: '0014OutboundJurisdictionClearance',
+    schemaVersion: 14,
+    migration: migration0014OutboundJurisdictionClearance,
   },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);

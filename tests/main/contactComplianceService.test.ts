@@ -7,6 +7,8 @@ import {
 } from '../../src/main/domain/compliance/contactCompliance';
 import { ContactComplianceService } from '../../src/main/domain/compliance/contactComplianceService';
 import type { ContactComplianceEvidence } from '../../src/main/domain/compliance/contactComplianceTypes';
+import { JurisdictionRepository } from '../../src/main/domain/compliance/jurisdictionRepository';
+import { FOUNDER_CHANNEL_POLICIES_V1 } from '../../src/main/domain/cadence/cadenceScheduler';
 import { IdentityRepository } from '../../src/main/domain/identity/identityRepository';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
 import {
@@ -82,6 +84,8 @@ describe('ContactComplianceService', () => {
     service = new ContactComplianceService({
       database, unitOfWork, identities, clock: { now: () => NOW },
       ids: { next: () => ids.shift() ?? 'unexpected-id' },
+      jurisdictions: new JurisdictionRepository({ database, unitOfWork }),
+      windows: FOUNDER_CHANNEL_POLICIES_V1,
     });
     unitOfWork.immediate(() => {
       identities.createPerson({ displayName: 'Contact' });
@@ -143,5 +147,33 @@ describe('ContactComplianceService', () => {
       SELECT count(*) AS count FROM contact_compliance_audit_events
       WHERE contact_method_id = ? AND operation = 'authoritative_correction'
     `).get('contact')).toEqual({ count: 0 });
+  });
+
+  it('recomputes call and text refusal reasons after contact evidence merge before commit', () => {
+    database.raw.prepare(`INSERT INTO person_outbound_jurisdictions
+      (person_id, region_code, timezone, source, effective_at, updated_at)
+      VALUES ('person', 'RI', 'America/New_York', 'manual_review', ?, ?)` ).run(NOW, NOW);
+    database.raw.prepare(`UPDATE outbound_jurisdiction_clearances SET
+      decision = 'allowed', registration_confirmed = 1,
+      state_dnc_subscription_confirmed = 1, consent_rule_confirmed = 1,
+      expires_at = '2026-10-01T00:00:00.000Z'
+      WHERE region_code = 'RI' AND channel = 'call'`).run();
+    database.raw.prepare(`INSERT INTO outbound_jurisdiction_clearances
+      (region_code, channel, decision, registration_confirmed,
+       state_dnc_subscription_confirmed, consent_rule_confirmed, source,
+       effective_at, expires_at, updated_at)
+      VALUES ('RI', 'text', 'allowed', 1, 1, 1, 'test', ?, '2026-10-01T00:00:00.000Z', ?)` ).run(NOW, NOW);
+    ids = ['merge-audit'];
+
+    unitOfWork.immediate(() => service.mergeFromIntake({
+      contactMethodId: 'contact', incoming: { ...CLEAR, tcpaFlag: true },
+      evidenceRef: 'fresh-scrub', observedAt: NOW,
+    }));
+
+    expect(database.raw.prepare(`SELECT resulting_call_reason_code, resulting_text_reason_code
+      FROM contact_compliance_audit_events WHERE id = 'merge-audit'`).get()).toEqual({
+      resulting_call_reason_code: 'federal_dnc_listed',
+      resulting_text_reason_code: 'federal_dnc_listed',
+    });
   });
 });

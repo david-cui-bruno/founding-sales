@@ -1,6 +1,7 @@
 import type { AppDatabase } from '../db/database';
 import { CadenceRepository } from './cadence/cadenceRepository';
 import { ContactComplianceService } from './compliance/contactComplianceService';
+import { JurisdictionRepository } from './compliance/jurisdictionRepository';
 import { FOUNDER_CHANNEL_POLICIES_V1 } from './cadence/cadenceScheduler';
 import { EventRepository } from './events/eventRepository';
 import { IdentityRepository } from './identity/identityRepository';
@@ -58,8 +59,10 @@ export function createDomainServices(input: {
   const unitOfWork = new DomainUnitOfWork(database);
   const jobs = new JobRepository(database);
   const identities = new IdentityRepository({ database, unitOfWork, clock, ids });
+  const jurisdictions = new JurisdictionRepository({ database, unitOfWork });
   const contactCompliance = new ContactComplianceService({
-    database, unitOfWork, identities, clock, ids,
+    database, unitOfWork, identities, jurisdictions,
+    windows: FOUNDER_CHANNEL_POLICIES_V1, clock, ids,
   });
   const events = new EventRepository({ database, unitOfWork, clock, ids });
   const sourceRepository = new SourceRepository({ database, unitOfWork, clock });

@@ -7,6 +7,7 @@ import type { Clock } from '../support/clock';
 import { DomainRepositoryDatabaseMismatchError } from '../support/domainErrors';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 import type { IdGenerator } from '../support/idGenerator';
+import { FOUNDER_CHANNEL_POLICIES_V1, type ChannelPolicySnapshots } from '../cadence/cadenceScheduler';
 import {
   evaluateFederalEvidence,
   mergeContactComplianceEvidence,
@@ -15,6 +16,8 @@ import {
   contactComplianceEvidenceSchema,
   type CorrectContactComplianceEvidenceInput,
 } from './contactComplianceTypes';
+import { JurisdictionRepository } from './jurisdictionRepository';
+import { evaluateOutboundAuthorization } from './outboundAuthorization';
 export type { CorrectContactComplianceEvidenceInput } from './contactComplianceTypes';
 
 const idSchema = z.string().trim().min(1);
@@ -41,6 +44,8 @@ export class ContactComplianceService {
   private readonly identities: IdentityRepository;
   private readonly clock: Clock;
   private readonly ids: IdGenerator;
+  private readonly jurisdictions: JurisdictionRepository;
+  private readonly windows: ChannelPolicySnapshots;
 
   constructor(input: {
     database: AppDatabase;
@@ -48,15 +53,23 @@ export class ContactComplianceService {
     identities: IdentityRepository;
     clock: Clock;
     ids: IdGenerator;
+    jurisdictions?: JurisdictionRepository;
+    windows?: ChannelPolicySnapshots;
   }) {
     if (input.database.raw !== input.unitOfWork.database.raw) {
       throw new DomainRepositoryDatabaseMismatchError();
     }
     input.identities.assertBoundTo(input.database, input.unitOfWork);
+    const jurisdictions = input.jurisdictions ?? new JurisdictionRepository({
+      database: input.database, unitOfWork: input.unitOfWork,
+    });
+    jurisdictions.assertBoundTo(input.database, input.unitOfWork);
     this.unitOfWork = input.unitOfWork;
     this.identities = input.identities;
     this.clock = input.clock;
     this.ids = input.ids;
+    this.jurisdictions = jurisdictions;
+    this.windows = input.windows ?? FOUNDER_CHANNEL_POLICIES_V1;
   }
 
   assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork): void {
@@ -64,6 +77,7 @@ export class ContactComplianceService {
       throw new DomainRepositoryDatabaseMismatchError();
     }
     this.identities.assertBoundTo(database, unitOfWork);
+    this.jurisdictions.assertBoundTo(database, unitOfWork);
   }
 
   mergeFromIntake(input: {
@@ -91,6 +105,27 @@ export class ContactComplianceService {
       contactMethodId, expected: current.complianceEvidence,
       evidence: merged.evidence, updatedAt: observedAt,
     });
+    const jurisdiction = this.jurisdictions.getPersonJurisdiction(updated.personId);
+    const authorization = (channel: 'call' | 'text') => evaluateOutboundAuthorization({
+      channel,
+      now: observedAt,
+      personOrHandleOptedOut: this.identities.isPersonOrHandleOptedOut(updated.personId, {
+        kind: updated.kind, normalizedValue: updated.normalizedValue,
+      }),
+      contact: {
+        kind: updated.kind,
+        normalizedValue: updated.normalizedValue,
+        validationState: updated.validationState,
+        evidence: updated.complianceEvidence,
+      },
+      jurisdiction,
+      clearance: jurisdiction === null
+        ? null
+        : this.jurisdictions.getClearance(jurisdiction.regionCode, channel),
+      windows: this.windows,
+    });
+    const callDecision = authorization('call');
+    const textDecision = authorization('text');
     this.identities.appendContactComplianceAudit({
       id: idSchema.parse(this.ids.next()),
       contactMethodId,
@@ -102,6 +137,8 @@ export class ContactComplianceService {
       evidenceRef,
       policyVersion: 'contact-compliance-v1',
       resultingReasonCode: merged.reasonCode,
+      resultingCallReasonCode: callDecision.kind === 'refused' ? callDecision.reasonCode : null,
+      resultingTextReasonCode: textDecision.kind === 'refused' ? textDecision.reasonCode : null,
       createdAt: canonicalTimestampSchema.parse(this.clock.now()),
     });
     return updated;

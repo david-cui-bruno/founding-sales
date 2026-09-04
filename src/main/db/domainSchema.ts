@@ -74,6 +74,43 @@ export type ContactComplianceAuditEventsTable = {
   evidence_ref: string | null;
   policy_version: string;
   resulting_reason_code: string;
+  resulting_call_reason_code: string | null;
+  resulting_text_reason_code: string | null;
+  created_at: string;
+};
+
+export type PersonOutboundJurisdictionsTable = {
+  person_id: string;
+  region_code: string;
+  timezone: string;
+  source: 'property_address' | 'residence_evidence' | 'manual_review';
+  evidence_ref: string | null;
+  effective_at: string;
+  review_at: string | null;
+  updated_at: string;
+};
+
+export type OutboundJurisdictionClearancesTable = {
+  region_code: string;
+  channel: 'call' | 'text';
+  decision: 'unknown' | 'allowed' | 'blocked';
+  registration_confirmed: StoredBoolean | null;
+  state_dnc_subscription_confirmed: StoredBoolean | null;
+  consent_rule_confirmed: StoredBoolean | null;
+  source: string;
+  effective_at: string;
+  expires_at: string | null;
+  updated_at: string;
+};
+
+export type OutboundJurisdictionAuditEventsTable = {
+  id: string;
+  subject_kind: 'person_jurisdiction' | 'state_clearance';
+  subject_key: string;
+  old_value_json: string | null;
+  new_value_json: string;
+  source: string;
+  effective_at: string;
   created_at: string;
 };
 
@@ -566,10 +603,13 @@ export type DomainTables = {
   opt_out_closure_receipts: OptOutClosureReceiptsTable;
   opt_out_handles: OptOutHandlesTable;
   opt_out_tombstones: OptOutTombstonesTable;
+  outbound_jurisdiction_audit_events: OutboundJurisdictionAuditEventsTable;
+  outbound_jurisdiction_clearances: OutboundJurisdictionClearancesTable;
   organization_aliases: OrganizationAliasesTable;
   organizations: OrganizationsTable;
   persons: PersonsTable;
   person_contact_methods: PersonContactMethodsTable;
+  person_outbound_jurisdictions: PersonOutboundJurisdictionsTable;
   contact_compliance_audit_events: ContactComplianceAuditEventsTable;
   prioritization_evaluations: PrioritizationEvaluationsTable;
   prioritization_preference_events: PrioritizationPreferenceEventsTable;

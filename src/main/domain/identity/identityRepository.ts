@@ -405,6 +405,20 @@ export class IdentityRepository {
     return row === undefined ? null : parseContactMethod(row);
   }
 
+  isPersonOrHandleOptedOut(
+    personId: string,
+    handle: { kind: 'phone' | 'email'; normalizedValue: string },
+  ): boolean {
+    const row = this.database.raw.prepare(`SELECT EXISTS (
+      SELECT 1 FROM persons WHERE id = ? AND opted_out = 1
+      UNION ALL
+      SELECT 1 FROM opt_out_handles WHERE kind = ? AND normalized_value = ?
+    ) AS opted_out`).get(idSchema.parse(personId), handle.kind, nonemptyTextSchema.parse(handle.normalizedValue)) as {
+      opted_out: 0 | 1;
+    };
+    return row.opted_out === 1;
+  }
+
   updateContactComplianceEvidence(input: {
     contactMethodId: string;
     expected: ContactComplianceEvidence;
@@ -445,18 +459,22 @@ export class IdentityRepository {
     return parseContactMethod(row);
   }
 
-  appendContactComplianceAudit(input: AppendContactComplianceAuditInput): void {
+  appendContactComplianceAudit(input: AppendContactComplianceAuditInput & {
+    resultingCallReasonCode?: string | null;
+    resultingTextReasonCode?: string | null;
+  }): void {
     this.unitOfWork.assertWriteScope();
     this.database.raw.prepare(`
       INSERT INTO contact_compliance_audit_events (
         id, contact_method_id, operation, old_evidence_json, new_evidence_json,
         source, evidence_timestamp, evidence_ref, policy_version,
-        resulting_reason_code, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        resulting_reason_code, resulting_call_reason_code, resulting_text_reason_code, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       input.id, input.contactMethodId, input.operation, input.oldEvidenceJson,
       input.newEvidenceJson, input.source, input.evidenceTimestamp, input.evidenceRef,
-      input.policyVersion, input.resultingReasonCode, input.createdAt,
+      input.policyVersion, input.resultingReasonCode, input.resultingCallReasonCode ?? null,
+      input.resultingTextReasonCode ?? null, input.createdAt,
     );
   }
 
