@@ -18,6 +18,7 @@ import {
   type FindContactInfoReceipt,
 } from '../../shared/contracts/enrichmentRequestContract';
 import type { Clock } from '../domain/support/clock';
+import { runWithAbortDeadline } from '../runtime/abortDeadline';
 import { InboxCredentialsUnavailableError } from './inboxClient';
 import type { UpstreamObjectStore, UpstreamSyncDomainGate } from './upstreamSync';
 
@@ -96,11 +97,21 @@ export class EnrichmentRequestWriter {
     });
     const date = now.slice(0, 10);
     const ulid = generateUlid(new Date(now).getTime());
-    await store.putObjectText({
-      key: `${UPSTREAM_ENRICHMENT_REQUESTS_PREFIX}${date}-${ulid}.ndjson`,
-      body: `${JSON.stringify(line)}\n`,
-      contentType: 'application/x-ndjson',
+    let uploadSignal!: AbortSignal;
+    await runWithAbortDeadline({
+      code: 'S3_UPLOAD_TIMEOUT',
+      timeoutMs: 60_000,
+      operation: (signal) => {
+        uploadSignal = signal;
+        return store.putObjectText({
+          key: `${UPSTREAM_ENRICHMENT_REQUESTS_PREFIX}${date}-${ulid}.ndjson`,
+          body: `${JSON.stringify(line)}\n`,
+          contentType: 'application/x-ndjson',
+          signal,
+        });
+      },
     });
+    uploadSignal.throwIfAborted();
     const cloudEntityId = candidate.cloudEntityId;
     await this.domainGate.withDomain((domain) => {
       domain.recordEnrichmentRequested({ cloudEntityId });

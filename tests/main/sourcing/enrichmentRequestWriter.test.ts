@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   enrichmentRequestSchema,
@@ -14,6 +14,7 @@ import {
 } from '../../../src/main/sourcing/enrichmentRequestWriter';
 import { InboxCredentialsUnavailableError } from '../../../src/main/sourcing/inboxClient';
 import type { UpstreamObjectStore } from '../../../src/main/sourcing/upstreamSync';
+import { RemoteOperationTimeoutError } from '../../../src/main/runtime/abortDeadline';
 
 const NOW = '2026-09-01T15:00:00.000Z';
 
@@ -64,7 +65,12 @@ function fakeGate(candidate: EnrichmentCandidate) {
 }
 
 function fakeStore() {
-  const puts: { key: string; body: string; contentType: string }[] = [];
+  const puts: {
+    key: string;
+    body: string;
+    contentType: string;
+    signal: AbortSignal;
+  }[] = [];
   const store: UpstreamObjectStore = {
     putObjectText: async (input) => {
       puts.push(input);
@@ -141,6 +147,8 @@ describe('EnrichmentRequestWriter', () => {
     expect(put.key.startsWith(`${UPSTREAM_ENRICHMENT_REQUESTS_PREFIX}2026-09-01-`)).toBe(true);
     expect(put.key.endsWith('.ndjson')).toBe(true);
     expect(put.contentType).toBe('application/x-ndjson');
+    expect(put.signal).toBeInstanceOf(AbortSignal);
+    expect(put.signal.aborted).toBe(false);
     const lines = put.body.trim().split('\n');
     expect(lines).toHaveLength(1);
     expect(enrichmentRequestSchema.parse(JSON.parse(lines[0]!)))
@@ -221,5 +229,62 @@ describe('EnrichmentRequestWriter', () => {
     const ulid = generateUlid(Date.parse(NOW));
     expect(ulid).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
     expect(generateUlid(Date.parse(NOW)).slice(0, 10)).toBe(ulid.slice(0, 10));
+  });
+});
+
+describe('EnrichmentRequestWriter upload deadline', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it('times out a hung upload without recording, ignores late settlement, and later recovers', async () => {
+    const { gate, domain } = fakeGate(CANDIDATE);
+    let resolveLate!: () => void;
+    let uploadAttempts = 0;
+    let firstSignal: AbortSignal | undefined;
+    const store: UpstreamObjectStore = {
+      putObjectText: async ({ signal }) => {
+        uploadAttempts += 1;
+        if (uploadAttempts === 1) {
+          firstSignal = signal;
+          await new Promise<void>((resolve) => {
+            resolveLate = resolve;
+          });
+        }
+      },
+    };
+    const writer = buildWriter({ gate, store });
+    const firstRequest = writer.request({ personId: 'p-1' });
+    const rejection = expect(firstRequest).rejects.toMatchObject({
+      name: 'RemoteOperationTimeoutError',
+      code: 'S3_UPLOAD_TIMEOUT',
+      timeoutMs: 60_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await rejection;
+
+    expect(firstSignal).toBeDefined();
+    expect(firstSignal?.aborted).toBe(true);
+    expect(firstSignal?.reason).toBeInstanceOf(RemoteOperationTimeoutError);
+    expect(domain.recordEnrichmentRequested).not.toHaveBeenCalled();
+
+    resolveLate();
+    await Promise.resolve();
+    expect(domain.recordEnrichmentRequested).not.toHaveBeenCalled();
+
+    await expect(writer.request({ personId: 'p-1' })).resolves.toEqual({
+      written: true,
+      refusalReason: null,
+    });
+    expect(domain.recordEnrichmentRequested).toHaveBeenCalledTimes(1);
+    expect(domain.recordEnrichmentRequested).toHaveBeenCalledWith({
+      cloudEntityId: CANDIDATE.cloudEntityId,
+    });
   });
 });

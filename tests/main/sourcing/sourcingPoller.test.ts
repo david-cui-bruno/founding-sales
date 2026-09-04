@@ -1,12 +1,21 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { InboxBatch } from '../../../src/main/sourcing/inboxClient';
+import {
+  InboxClient,
+  type InboxBatch,
+  type InboxObjectStore,
+} from '../../../src/main/sourcing/inboxClient';
 import {
   SourcingPoller,
   type SourcingPollerDomainGate,
 } from '../../../src/main/sourcing/sourcingPoller';
 import { validFrboEvent, validParcelEvent } from '../../fixtures/cloudSourceEvents';
 import type { CloudSourceEvent } from '../../../src/shared/contracts/cloudSourceEventContract';
+import type { CloudOutcomeRow } from '../../../src/main/domain/founderSalesDomain';
+import {
+  UpstreamSync,
+  type UpstreamObjectStore,
+} from '../../../src/main/sourcing/upstreamSync';
 
 const NOW = '2026-09-01T12:00:00.000Z';
 
@@ -195,7 +204,7 @@ describe('SourcingPoller', () => {
 
     // The ledger, not the cursor, defines progress: every poll lists the
     // whole inbox and skips ledgered keys.
-    expect(inbox.listNewObjects).toHaveBeenCalledWith(null);
+    expect(inbox.listNewObjects).toHaveBeenCalledWith(null, expect.any(AbortSignal));
     // The parcel event imports a real person; the person-null frbo event
     // imports an "Unknown owner" placeholder (Task 5); the scored
     // re-emission persists through applyCloudScoreUpdate.
@@ -457,7 +466,7 @@ describe('SourcingPoller', () => {
     await poller.pollNow();
     const status = await poller.getStatus();
 
-    expect(run).toHaveBeenCalledWith(store);
+    expect(run).toHaveBeenCalledWith(store, expect.any(AbortSignal));
     expect(status.hmacSaltState).toBe('set');
     expect(poller.getHealth().consecutiveFailures).toBe(0);
   });
@@ -493,5 +502,221 @@ describe('SourcingPoller', () => {
 
     expect(poller.getHealth().consecutiveFailures).toBe(0);
     expect(logged.join('\n')).toContain('AccessDenied');
+  });
+});
+
+describe('SourcingPoller remote deadlines', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it('passes one exact poll-owned signal through list, fetch, and UpstreamSync.run', async () => {
+    const domain = fakeDomainGate();
+    const key = 'events/2026-09-01/a.ndjson';
+    let listSignal: AbortSignal | undefined;
+    let fetchSignal: AbortSignal | undefined;
+    let upstreamSignal: AbortSignal | undefined;
+    const store = { putObjectText: vi.fn(async () => undefined) };
+    const run = vi.fn(async (_store: unknown, signal: AbortSignal) => {
+      upstreamSignal = signal;
+      return { membershipUploaded: false, outcomesFlushed: 0, suppressionsFlushed: 0 };
+    });
+    const poller = new SourcingPoller({
+      domainGate: domain.gate,
+      loadCredentials: async () => ({
+        credentials: { accessKeyId: 'AKIA', secretAccessKey: 'secret' },
+        source: 'keychain',
+      }),
+      createInboxClient: async () => ({
+        listNewObjects: async (_sinceKey, signal) => {
+          listSignal = signal;
+          return [key];
+        },
+        fetchNdjson: async (_key, signal) => {
+          fetchSignal = signal;
+          return batch(key, []);
+        },
+      }),
+      upstream: {
+        sync: { run } as never,
+        createStore: async () => store as never,
+        saltState: async () => 'none',
+        setSalt: async () => undefined,
+      },
+      clock: { now: () => NOW },
+    });
+
+    await poller.pollNow();
+
+    expect(listSignal).toBeDefined();
+    expect(fetchSignal).toBe(listSignal);
+    expect(upstreamSignal).toBe(listSignal);
+    expect(run).toHaveBeenCalledWith(store, listSignal);
+    expect(listSignal?.aborted).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('bounds one total poll at 14 minutes, leaves the ledger unchanged, and permits recovery', async () => {
+    const domain = fakeDomainGate();
+    const key = 'events/2026-09-01/a.ndjson';
+    let resolveLate!: (keys: string[]) => void;
+    let listAttempts = 0;
+    const inbox: FakeInbox = {
+      listNewObjects: vi.fn(async () => {
+        listAttempts += 1;
+        if (listAttempts === 1) {
+          return new Promise<string[]>((resolve) => {
+            resolveLate = resolve;
+          });
+        }
+        return [key];
+      }),
+      fetchNdjson: vi.fn(async () => batch(key, [])),
+    };
+    const { poller } = buildPoller({ gate: domain.gate, inbox });
+    const firstPoll = poller.pollNow();
+    const completion = expect(firstPoll).resolves.toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(14 * 60_000);
+    await completion;
+
+    expect(domain.ledgered).toEqual([]);
+    expect(poller.getHealth().consecutiveFailures).toBe(1);
+
+    await poller.pollNow();
+    expect(domain.ledgered).toEqual([key]);
+    expect(poller.getHealth().consecutiveFailures).toBe(0);
+
+    resolveLate([key]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(domain.ledgered).toEqual([key]);
+  });
+
+  it('leaves a hung body unledgered after 60 seconds and processes it on a later poll', async () => {
+    const domain = fakeDomainGate();
+    const key = 'events/2026-09-01/a.ndjson';
+    let resolveLate!: (body: string) => void;
+    let fetchAttempts = 0;
+    const objectStore: InboxObjectStore = {
+      listKeys: async ({ signal }) => {
+        signal.throwIfAborted();
+        return [key];
+      },
+      getObjectText: async ({ signal }) => {
+        signal.throwIfAborted();
+        fetchAttempts += 1;
+        if (fetchAttempts === 1) {
+          return new Promise<string>((resolve) => {
+            resolveLate = resolve;
+          });
+        }
+        return '';
+      },
+    };
+    const inbox = new InboxClient({ store: objectStore, clock: { now: () => NOW } });
+    const { poller } = buildPoller({ gate: domain.gate, inbox: inbox as never });
+    const firstPoll = poller.pollNow();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await firstPoll;
+
+    expect(domain.ledgered).toEqual([]);
+    expect(poller.getHealth().consecutiveFailures).toBe(1);
+
+    await poller.pollNow();
+    expect(domain.ledgered).toEqual([key]);
+    expect(poller.getHealth().consecutiveFailures).toBe(0);
+
+    resolveLate('');
+    await Promise.resolve();
+    expect(domain.ledgered).toEqual([key]);
+  });
+
+  it('does not flush a hung upstream outbox upload and succeeds on the next poll', async () => {
+    const pollDomain = fakeDomainGate();
+    const outcome: CloudOutcomeRow = {
+      id: 'stage:event-1',
+      cloudEntityId: 'ce_01JC0000000000000000000000',
+      label: 'won',
+      lossReasonCode: null,
+      overrideDirection: null,
+      observedAt: NOW,
+    };
+    let flushed = false;
+    const upstreamDomain = {
+      withDomain: async <T>(operation: (domain: {
+        listCloudMembership(): { cloudEntityIds: string[]; manualContacts: [] };
+        listUnflushedCloudOutcomes(): CloudOutcomeRow[];
+        markCloudOutcomesFlushed(): void;
+        listUnflushedSuppressionHandles(): [];
+        markSuppressionHandlesFlushed(): void;
+      }) => T): Promise<T> => operation({
+        listCloudMembership: () => ({ cloudEntityIds: [], manualContacts: [] }),
+        listUnflushedCloudOutcomes: () => (flushed ? [] : [outcome]),
+        markCloudOutcomesFlushed: () => {
+          flushed = true;
+        },
+        listUnflushedSuppressionHandles: () => [],
+        markSuppressionHandlesFlushed: () => undefined,
+      }),
+    };
+    const sync = new UpstreamSync({
+      domainGate: upstreamDomain as never,
+      loadHmacSalt: async () => null,
+      clock: { now: () => NOW },
+      batchIds: { next: () => 'batch-1' },
+    });
+    let resolveLate!: () => void;
+    let uploadAttempts = 0;
+    let firstUploadSignal: AbortSignal | undefined;
+    const store: UpstreamObjectStore = {
+      putObjectText: async ({ signal }) => {
+        uploadAttempts += 1;
+        if (uploadAttempts === 1) {
+          firstUploadSignal = signal;
+          await new Promise<void>((resolve) => {
+            resolveLate = resolve;
+          });
+        }
+      },
+    };
+    const poller = new SourcingPoller({
+      domainGate: pollDomain.gate,
+      loadCredentials: async () => ({
+        credentials: { accessKeyId: 'AKIA', secretAccessKey: 'secret' },
+        source: 'keychain',
+      }),
+      createInboxClient: async () => ({
+        listNewObjects: async () => [],
+        fetchNdjson: async () => batch('unused', []),
+      }),
+      upstream: {
+        sync,
+        createStore: async () => store,
+        saltState: async () => 'none',
+        setSalt: async () => undefined,
+      },
+      clock: { now: () => NOW },
+    });
+    const firstPoll = poller.pollNow();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await firstPoll;
+
+    expect(firstUploadSignal?.aborted).toBe(true);
+    expect(flushed).toBe(false);
+
+    resolveLate();
+    await Promise.resolve();
+    expect(flushed).toBe(false);
+
+    await poller.pollNow();
+    expect(flushed).toBe(true);
   });
 });

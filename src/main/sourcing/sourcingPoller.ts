@@ -36,11 +36,12 @@ import type { InboxBatch } from './inboxClient';
 import type { LoadedSourcingCredentials } from './sourcingCredentialStore';
 import type { UpstreamObjectStore, UpstreamSync } from './upstreamSync';
 import { buildNeedsIdentityIntakeCommand, mapCloudSourceEvent } from './intakeMapper';
+import { runWithAbortDeadline } from '../runtime/abortDeadline';
 
 /** The subset of the inbox client the poller drives; injected for tests. */
 export type PollableInbox = {
-  listNewObjects(sinceKey: string | null): Promise<string[]>;
-  fetchNdjson(key: string): Promise<InboxBatch>;
+  listNewObjects(sinceKey: string | null, signal: AbortSignal): Promise<string[]>;
+  fetchNdjson(key: string, signal: AbortSignal): Promise<InboxBatch>;
 };
 
 export type SourcingPollerDomainGate = Pick<FoundationRuntime, 'withDomain'>;
@@ -148,7 +149,11 @@ export class SourcingPoller {
     if (this.activePoll !== undefined) {
       return this.activePoll;
     }
-    const poll = this.runPoll()
+    const poll = runWithAbortDeadline({
+      code: 'POLL_TOTAL_TIMEOUT',
+      timeoutMs: 14 * 60_000,
+      operation: (signal) => this.runPoll(signal),
+    })
       .catch((error: unknown) => this.recordFailure(error))
       .finally(() => {
         if (this.activePoll === poll) {
@@ -204,10 +209,11 @@ export class SourcingPoller {
     await this.upstream.setSalt(salt);
   }
 
-  private async runPoll(): Promise<void> {
+  private async runPoll(signal: AbortSignal): Promise<void> {
     if (this.stopped) return;
 
     const loaded = await this.loadCredentials();
+    signal.throwIfAborted();
     this.credentialState = loaded.source;
     if (loaded.credentials === null) {
       // Not provisioned: idle quietly, never an error.
@@ -215,15 +221,18 @@ export class SourcingPoller {
     }
 
     const inbox = await this.createInboxClient(loaded);
+    signal.throwIfAborted();
     const { cursor, processedKeys } = await this.domainGate.withDomain(
       (domain) => ({
         cursor: domain.getSourcingCursor(),
         processedKeys: domain.getProcessedFileKeys(),
       }),
     );
+    signal.throwIfAborted();
     // List EVERYTHING and let the ledger decide: a startAfter cursor would
     // permanently skip keys that sort before it (the live zz-repair incident).
-    const allKeys = await inbox.listNewObjects(null);
+    const allKeys = await inbox.listNewObjects(null, signal);
+    signal.throwIfAborted();
     const keys = allKeys.filter((key) => !processedKeys.has(key));
     this.backlogCount = keys.length;
 
@@ -232,8 +241,10 @@ export class SourcingPoller {
     for (const key of keys) {
       if (this.stopped) return;
       try {
-        const batch = await inbox.fetchNdjson(key);
+        const batch = await inbox.fetchNdjson(key, signal);
+        signal.throwIfAborted();
         await this.processBatchOrThrow(batch);
+        signal.throwIfAborted();
       } catch (error) {
         // A failed file is NOT ledgered and retries next tick. Later files
         // may still process safely: the ledger, not a cursor, defines
@@ -249,21 +260,25 @@ export class SourcingPoller {
         maxProcessedKey = key;
       }
       const lastKey = maxProcessedKey;
+      signal.throwIfAborted();
       await this.domainGate.withDomain((domain) => {
         domain.recordProcessedFile({ key });
         // Keep the cursor as the max processed key so the status row still
         // shows freshness; it no longer gates which files are read.
         domain.recordSourcingPoll({ lastKey });
       });
+      signal.throwIfAborted();
       this.backlogCount = Math.max(0, this.backlogCount - 1);
     }
 
     if (keys.length === 0) {
       // Record the poll time so the status row reflects freshness even when
       // the inbox is quiet.
+      signal.throwIfAborted();
       await this.domainGate.withDomain((domain) => {
         domain.recordSourcingPoll({ lastKey: cursor.lastKey });
       });
+      signal.throwIfAborted();
     }
 
     if (firstFailure !== undefined) {
@@ -273,9 +288,11 @@ export class SourcingPoller {
     // Ledger TTL: after a fully successful poll, drop processed-file rows
     // older than 90 days. Never on a failed poll, so a retryable failure
     // cannot race the prune.
+    signal.throwIfAborted();
     await this.domainGate.withDomain((domain) => {
       domain.pruneProcessedFileLedger();
     });
+    signal.throwIfAborted();
 
     // Task 4 upstream leg: membership + outcome flush after the inbox is
     // drained. An AccessDenied (IAM PutObject on upstream/* may lag the app)
@@ -283,13 +300,16 @@ export class SourcingPoller {
     if (this.upstream !== undefined) {
       try {
         const store = await this.upstream.createStore(loaded);
-        await this.upstream.sync.run(store);
+        signal.throwIfAborted();
+        await this.upstream.sync.run(store, signal);
       } catch (error) {
+        signal.throwIfAborted();
         this.log(
           `sourcing upstream sync failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     }
+    signal.throwIfAborted();
     this.consecutiveFailures = 0;
   }
 

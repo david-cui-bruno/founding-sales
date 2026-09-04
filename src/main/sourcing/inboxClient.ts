@@ -27,6 +27,7 @@ import {
   type CloudSourceEvent,
 } from '../../shared/contracts/cloudSourceEventContract';
 import type { Clock } from '../domain/support/clock';
+import { runWithAbortDeadline } from '../runtime/abortDeadline';
 
 export const INBOX_BUCKET = 'callie-sourcing-inbox-326255650484';
 export const INBOX_EVENTS_PREFIX = 'events/';
@@ -54,8 +55,12 @@ export class InboxCredentialsUnavailableError extends Error {
 
 /** Minimal object-store surface the client needs; S3 or an in-memory fake. */
 export type InboxObjectStore = {
-  listKeys(input: { prefix: string; startAfter: string | null }): Promise<string[]>;
-  getObjectText(key: string): Promise<string>;
+  listKeys(input: {
+    prefix: string;
+    startAfter: string | null;
+    signal: AbortSignal;
+  }): Promise<string[]>;
+  getObjectText(input: { key: string; signal: AbortSignal }): Promise<string>;
 };
 
 export type QuarantinedLine = {
@@ -85,10 +90,19 @@ export class InboxClient {
    * Keys under `events/` strictly after `sinceKey` in lexicographic order.
    * Pass null to read from the beginning of the inbox.
    */
-  async listNewObjects(sinceKey: string | null): Promise<string[]> {
-    const keys = await this.store.listKeys({
-      prefix: INBOX_EVENTS_PREFIX,
-      startAfter: sinceKey,
+  async listNewObjects(
+    sinceKey: string | null,
+    signal: AbortSignal,
+  ): Promise<string[]> {
+    const keys = await runWithAbortDeadline({
+      code: 'S3_LIST_TIMEOUT',
+      timeoutMs: 60_000,
+      parentSignal: signal,
+      operation: (listSignal) => this.store.listKeys({
+        prefix: INBOX_EVENTS_PREFIX,
+        startAfter: sinceKey,
+        signal: listSignal,
+      }),
     });
     return [...keys].sort();
   }
@@ -98,8 +112,13 @@ export class InboxClient {
    * unparseable or contract-violating lines land in `quarantined` with the
    * reason and the raw line preserved for later inspection.
    */
-  async fetchNdjson(key: string): Promise<InboxBatch> {
-    const body = await this.store.getObjectText(key);
+  async fetchNdjson(key: string, signal: AbortSignal): Promise<InboxBatch> {
+    const body = await runWithAbortDeadline({
+      code: 'S3_FETCH_TIMEOUT',
+      timeoutMs: 60_000,
+      parentSignal: signal,
+      operation: (fetchSignal) => this.store.getObjectText({ key, signal: fetchSignal }),
+    });
     const events: CloudSourceEvent[] = [];
     const quarantined: QuarantinedLine[] = [];
 
@@ -209,7 +228,8 @@ export function createFileSystemInboxObjectStore(
   rootDirectory: string,
 ): InboxObjectStore {
   return {
-    async listKeys({ prefix, startAfter }) {
+    async listKeys({ prefix, startAfter, signal }) {
+      signal.throwIfAborted();
       const { readdir } = await import('node:fs/promises');
       const { join, relative, sep } = await import('node:path');
       const base = join(rootDirectory, prefix);
@@ -219,6 +239,7 @@ export function createFileSystemInboxObjectStore(
           recursive: true,
           withFileTypes: true,
         });
+        signal.throwIfAborted();
         keys = entries
           .filter((entry) => entry.isFile() && entry.name.endsWith('.ndjson'))
           .map((entry) => {
@@ -226,16 +247,21 @@ export function createFileSystemInboxObjectStore(
             return prefix + relative(base, absolute).split(sep).join('/');
           });
       } catch {
+        signal.throwIfAborted();
         return [];
       }
+      signal.throwIfAborted();
       keys.sort();
       return startAfter === null
         ? keys
         : keys.filter((key) => key > startAfter);
     },
-    async getObjectText(key) {
+    async getObjectText({ key, signal }) {
+      signal.throwIfAborted();
       const { join } = await import('node:path');
-      return readFile(join(rootDirectory, key), 'utf8');
+      const body = await readFile(join(rootDirectory, key), 'utf8');
+      signal.throwIfAborted();
+      return body;
     },
   };
 }
@@ -261,7 +287,7 @@ export async function createS3InboxObjectStore(input: {
   });
 
   return {
-    async listKeys({ prefix, startAfter }) {
+    async listKeys({ prefix, startAfter, signal }) {
       const keys: string[] = [];
       let continuationToken: string | undefined;
       do {
@@ -270,7 +296,8 @@ export async function createS3InboxObjectStore(input: {
           Prefix: prefix,
           StartAfter: startAfter ?? undefined,
           ContinuationToken: continuationToken,
-        }));
+        }), { abortSignal: signal });
+        signal.throwIfAborted();
         for (const object of page.Contents ?? []) {
           if (object.Key !== undefined) keys.push(object.Key);
         }
@@ -281,15 +308,18 @@ export async function createS3InboxObjectStore(input: {
       return keys;
     },
 
-    async getObjectText(key) {
+    async getObjectText({ key, signal }) {
       const response = await client.send(new GetObjectCommand({
         Bucket: bucket,
         Key: key,
-      }));
+      }), { abortSignal: signal });
+      signal.throwIfAborted();
       if (response.Body === undefined) {
         throw new Error(`S3 object has no body: ${key}`);
       }
-      return response.Body.transformToString('utf8');
+      const body = await response.Body.transformToString('utf8');
+      signal.throwIfAborted();
+      return body;
     },
   };
 }

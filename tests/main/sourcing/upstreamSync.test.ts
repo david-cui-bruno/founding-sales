@@ -1,10 +1,23 @@
 import { createHmac } from 'node:crypto';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const s3 = vi.hoisted(() => ({ send: vi.fn() }));
+
+vi.mock('@aws-sdk/client-s3', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aws-sdk/client-s3')>();
+  return {
+    ...actual,
+    S3Client: class {
+      readonly send = s3.send;
+    },
+  };
+});
 
 import type { CloudOutcomeRow, SuppressionOutboxRow } from '../../../src/main/domain/founderSalesDomain';
 import { suppressionUploadLineSchema } from '../../../src/shared/contracts/suppressionUploadContract';
 import {
+  createS3UpstreamObjectStore,
   UpstreamSync,
   contactHmac,
   membershipUploadSchema,
@@ -15,6 +28,7 @@ import {
 } from '../../../src/main/sourcing/upstreamSync';
 
 const NOW = '2026-09-01T12:00:00.000Z';
+const SIGNAL = new AbortController().signal;
 const CE_A = 'ce_01JC0000000000000000000000';
 const CE_B = 'ce_01JC0000000000000000000001';
 
@@ -49,8 +63,11 @@ function fakeDomain(overrides: Partial<{
   };
 }
 
-function fakeStore(): { store: UpstreamObjectStore; puts: { key: string; body: string; contentType: string }[] } {
-  const puts: { key: string; body: string; contentType: string }[] = [];
+function fakeStore(): {
+  store: UpstreamObjectStore;
+  puts: { key: string; body: string; contentType: string; signal: AbortSignal }[];
+} {
+  const puts: { key: string; body: string; contentType: string; signal: AbortSignal }[] = [];
   return {
     store: {
       putObjectText: async (input) => {
@@ -88,7 +105,7 @@ describe('UpstreamSync', () => {
     });
     const { store, puts } = fakeStore();
 
-    const report = await buildSync({ gate, salt: 'shared-salt' }).run(store);
+    const report = await buildSync({ gate, salt: 'shared-salt' }).run(store, SIGNAL);
 
     expect(report.membershipUploaded).toBe(true);
     const upload = puts.find((put) => put.key === 'upstream/membership/2026-09-01.json');
@@ -115,7 +132,7 @@ describe('UpstreamSync', () => {
     });
     const { store, puts } = fakeStore();
 
-    await buildSync({ gate, salt: null }).run(store);
+    await buildSync({ gate, salt: null }).run(store, SIGNAL);
 
     const upload = puts.find((put) => put.key.startsWith('upstream/membership/'));
     const parsed = JSON.parse(upload!.body) as Record<string, unknown>;
@@ -126,7 +143,7 @@ describe('UpstreamSync', () => {
     const { gate } = fakeDomain();
     const { store, puts } = fakeStore();
 
-    const report = await buildSync({ gate }).run(store);
+    const report = await buildSync({ gate }).run(store, SIGNAL);
 
     expect(report.membershipUploaded).toBe(false);
     expect(puts).toEqual([]);
@@ -146,7 +163,7 @@ describe('UpstreamSync', () => {
     const { gate, domain } = fakeDomain({ outcomes });
     const { store, puts } = fakeStore();
 
-    const report = await buildSync({ gate }).run(store);
+    const report = await buildSync({ gate }).run(store, SIGNAL);
 
     expect(report.outcomesFlushed).toBe(2);
     const upload = puts.find((put) => put.key === 'upstream/outcomes/2026-09-01.ndjson');
@@ -182,7 +199,7 @@ describe('UpstreamSync', () => {
       },
     };
 
-    await expect(buildSync({ gate }).run(store)).rejects.toThrow('AccessDenied');
+    await expect(buildSync({ gate }).run(store, SIGNAL)).rejects.toThrow('AccessDenied');
     expect(domain.markCloudOutcomesFlushed).not.toHaveBeenCalled();
   });
 
@@ -203,8 +220,8 @@ describe('UpstreamSync', () => {
     };
     const first = fakeStore();
     const second = fakeStore();
-    await buildSync({ gate: fakeDomain({ membership }).gate, salt: 's' }).run(first.store);
-    await buildSync({ gate: fakeDomain({ membership }).gate, salt: 's' }).run(second.store);
+    await buildSync({ gate: fakeDomain({ membership }).gate, salt: 's' }).run(first.store, SIGNAL);
+    await buildSync({ gate: fakeDomain({ membership }).gate, salt: 's' }).run(second.store, SIGNAL);
 
     expect(first.puts[0]!.body).toBe(second.puts[0]!.body);
   });
@@ -223,7 +240,7 @@ describe('UpstreamSync', () => {
     const { gate, domain } = fakeDomain({ suppressions });
     const { store, puts } = fakeStore();
 
-    const report = await buildSync({ gate, salt: 'shared-salt' }).run(store);
+    const report = await buildSync({ gate, salt: 'shared-salt' }).run(store, SIGNAL);
 
     expect(report.suppressionsFlushed).toBe(2);
     const upload = puts.find((put) => put.key.startsWith('upstream/suppression/'));
@@ -268,8 +285,8 @@ describe('UpstreamSync', () => {
       batchIds: { next: () => batchIds.shift()! },
     });
 
-    await sync.run(store);
-    await sync.run(store);
+    await sync.run(store, SIGNAL);
+    await sync.run(store, SIGNAL);
 
     const keys = puts
       .filter((put) => put.key.startsWith('upstream/suppression/'))
@@ -311,10 +328,10 @@ describe('UpstreamSync', () => {
       },
     };
 
-    await expect(sync.run(store)).rejects.toThrow('ambiguous put result');
+    await expect(sync.run(store, SIGNAL)).rejects.toThrow('ambiguous put result');
     fail = false;
     now = '2026-09-04T15:50:00.000Z';
-    await sync.run(store);
+    await sync.run(store, SIGNAL);
 
     expect(attemptedKeys).toHaveLength(2);
     expect(attemptedKeys[1]).not.toBe(attemptedKeys[0]);
@@ -340,7 +357,7 @@ describe('UpstreamSync', () => {
     const { gate } = fakeDomain({ suppressions });
     const { store, puts } = fakeStore();
 
-    await buildSync({ gate, salt: 'shared-salt' }).run(store);
+    await buildSync({ gate, salt: 'shared-salt' }).run(store, SIGNAL);
 
     const upload = puts.find((put) => put.key.startsWith('upstream/suppression/'))!;
     const serializedUpload = `${upload.key}\n${upload.body}`;
@@ -367,7 +384,7 @@ describe('UpstreamSync', () => {
     const { gate, domain } = fakeDomain({ suppressions });
     const { store, puts } = fakeStore();
 
-    const report = await buildSync({ gate, salt: null }).run(store);
+    const report = await buildSync({ gate, salt: null }).run(store, SIGNAL);
 
     expect(report.suppressionsFlushed).toBe(0);
     expect(puts.some((put) => put.key.startsWith('upstream/suppression/'))).toBe(false);
@@ -390,7 +407,185 @@ describe('UpstreamSync', () => {
       },
     };
 
-    await expect(buildSync({ gate, salt: 's' }).run(store)).rejects.toThrow('AccessDenied');
+    await expect(buildSync({ gate, salt: 's' }).run(store, SIGNAL)).rejects.toThrow('AccessDenied');
     expect(domain.markSuppressionHandlesFlushed).not.toHaveBeenCalled();
+  });
+});
+
+describe('UpstreamSync upload deadlines', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it('does not flush outcomes after a hung upload times out or settles late, then recovers', async () => {
+    const outcomes: CloudOutcomeRow[] = [{
+      id: 'stage:event-1', cloudEntityId: CE_A, label: 'won',
+      lossReasonCode: null, overrideDirection: null, observedAt: NOW,
+    }];
+    const { gate, domain } = fakeDomain({ outcomes });
+    const sync = buildSync({ gate, salt: null });
+    let resolveLate!: () => void;
+    let hang = true;
+    let uploadSignal: AbortSignal | undefined;
+    const store: UpstreamObjectStore = {
+      putObjectText: async ({ signal }) => {
+        uploadSignal = signal;
+        if (hang) {
+          await new Promise<void>((resolve) => {
+            resolveLate = resolve;
+          });
+        }
+      },
+    };
+    const result = sync.run(store, SIGNAL);
+    const rejection = expect(result).rejects.toMatchObject({
+      code: 'S3_UPLOAD_TIMEOUT',
+      timeoutMs: 60_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await rejection;
+    expect(uploadSignal?.aborted).toBe(true);
+    expect(domain.markCloudOutcomesFlushed).not.toHaveBeenCalled();
+
+    resolveLate();
+    await Promise.resolve();
+    expect(domain.markCloudOutcomesFlushed).not.toHaveBeenCalled();
+
+    hang = false;
+    await sync.run(store, SIGNAL);
+    expect(domain.markCloudOutcomesFlushed).toHaveBeenCalledWith({ ids: ['stage:event-1'] });
+  });
+
+  it('does not flush suppression handles after a hung upload times out or settles late, then recovers', async () => {
+    const suppressions: SuppressionOutboxRow[] = [{
+      handleId: 'handle-1', kind: 'phone', normalizedValue: '+14015550100',
+      reason: 'opt_out', observedAt: NOW,
+    }];
+    const { gate, domain } = fakeDomain({ suppressions });
+    const sync = buildSync({ gate, salt: 'shared-salt' });
+    let resolveLate!: () => void;
+    let hang = true;
+    const store: UpstreamObjectStore = {
+      putObjectText: async ({ signal }) => {
+        if (!signal.aborted && hang) {
+          await new Promise<void>((resolve) => {
+            resolveLate = resolve;
+          });
+        }
+      },
+    };
+    const result = sync.run(store, SIGNAL);
+    const rejection = expect(result).rejects.toMatchObject({ code: 'S3_UPLOAD_TIMEOUT' });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await rejection;
+    expect(domain.markSuppressionHandlesFlushed).not.toHaveBeenCalled();
+
+    resolveLate();
+    await Promise.resolve();
+    expect(domain.markSuppressionHandlesFlushed).not.toHaveBeenCalled();
+
+    hang = false;
+    await sync.run(store, SIGNAL);
+    expect(domain.markSuppressionHandlesFlushed).toHaveBeenCalledWith({
+      handleIds: ['handle-1'],
+    });
+  });
+
+  async function expectParentAbortReachesUpload(input: {
+    domain: Parameters<typeof fakeDomain>[0];
+    salt: string | null;
+  }): Promise<{ domain: FakeDomain; uploadSignal: AbortSignal }> {
+    const { gate, domain } = fakeDomain(input.domain);
+    const sync = buildSync({ gate, salt: input.salt });
+    let uploadSignal: AbortSignal | undefined;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const store: UpstreamObjectStore = {
+      putObjectText: async ({ signal }) => {
+        uploadSignal = signal;
+        markStarted();
+        return new Promise<void>(() => undefined);
+      },
+    };
+    const parent = new AbortController();
+    const reason = new Error('poll total deadline');
+    const result = sync.run(store, parent.signal);
+    await started;
+
+    parent.abort(reason);
+
+    await expect(result).rejects.toBe(reason);
+    expect(uploadSignal).toBeDefined();
+    expect(uploadSignal).not.toBe(parent.signal);
+    expect(uploadSignal?.aborted).toBe(true);
+    expect(uploadSignal?.reason).toBe(reason);
+    return { domain, uploadSignal: uploadSignal! };
+  }
+
+  it('forwards the parent abort into the membership upload child deadline', async () => {
+    await expectParentAbortReachesUpload({
+      domain: {
+        membership: { cloudEntityIds: [CE_A], manualContacts: [] },
+      },
+      salt: null,
+    });
+  });
+
+  it('forwards the parent abort into the outcome upload child deadline without flushing', async () => {
+    const { domain } = await expectParentAbortReachesUpload({
+      domain: {
+        outcomes: [{
+          id: 'stage:event-1', cloudEntityId: CE_A, label: 'won',
+          lossReasonCode: null, overrideDirection: null, observedAt: NOW,
+        }],
+      },
+      salt: null,
+    });
+    expect(domain.markCloudOutcomesFlushed).not.toHaveBeenCalled();
+  });
+
+  it('forwards the parent abort into the suppression upload child deadline without flushing', async () => {
+    const { domain } = await expectParentAbortReachesUpload({
+      domain: {
+        suppressions: [{
+          handleId: 'handle-1', kind: 'phone', normalizedValue: '+14015550100',
+          reason: 'opt_out', observedAt: NOW,
+        }],
+      },
+      salt: 'shared-salt',
+    });
+    expect(domain.markSuppressionHandlesFlushed).not.toHaveBeenCalled();
+  });
+});
+
+describe('S3 upstream object store cancellation', () => {
+  afterEach(() => {
+    s3.send.mockReset();
+  });
+
+  it('passes the exact upload child signal to S3 send', async () => {
+    s3.send.mockResolvedValue({});
+    const store = await createS3UpstreamObjectStore({
+      credentialProvider: async () => ({ accessKeyId: 'AKIA', secretAccessKey: 'secret' }),
+    });
+    const signal = new AbortController().signal;
+
+    await store.putObjectText({
+      key: 'upstream/outcomes/2026-09-01.ndjson',
+      body: '{}\n',
+      contentType: 'application/x-ndjson',
+      signal,
+    });
+
+    expect(s3.send.mock.calls[0]?.[1]).toEqual({ abortSignal: signal });
   });
 });

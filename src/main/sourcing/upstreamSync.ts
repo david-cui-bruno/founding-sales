@@ -26,6 +26,7 @@ import { z } from 'zod';
 import { suppressionUploadLineSchema } from '../../shared/contracts/suppressionUploadContract';
 import type { FoundationRuntime } from '../foundation/foundationRuntime';
 import type { Clock } from '../domain/support/clock';
+import { runWithAbortDeadline } from '../runtime/abortDeadline';
 import {
   INBOX_AWS_REGION,
   INBOX_BUCKET,
@@ -63,6 +64,7 @@ export type UpstreamObjectStore = {
     key: string;
     body: string;
     contentType: string;
+    signal: AbortSignal;
   }): Promise<void>;
 };
 
@@ -142,17 +144,21 @@ export class UpstreamSync {
    * outbox rows are marked flushed strictly after their upload succeeded,
    * so a failed run retries the same rows next poll.
    */
-  async run(store: UpstreamObjectStore): Promise<UpstreamSyncReport> {
+  async run(
+    store: UpstreamObjectStore,
+    signal: AbortSignal,
+  ): Promise<UpstreamSyncReport> {
     const date = this.clock.now().slice(0, 10);
-    const membershipUploaded = await this.uploadMembership(store, date);
-    const outcomesFlushed = await this.flushOutcomes(store, date);
-    const suppressionsFlushed = await this.flushSuppressions(store);
+    const membershipUploaded = await this.uploadMembership(store, date, signal);
+    const outcomesFlushed = await this.flushOutcomes(store, date, signal);
+    const suppressionsFlushed = await this.flushSuppressions(store, signal);
     return { membershipUploaded, outcomesFlushed, suppressionsFlushed };
   }
 
   private async uploadMembership(
     store: UpstreamObjectStore,
     date: string,
+    signal: AbortSignal,
   ): Promise<boolean> {
     const membership = await this.domainGate.withDomain(
       (domain) => domain.listCloudMembership(),
@@ -173,7 +179,7 @@ export class UpstreamSync {
     if (upload.cloud_entity_ids.length === 0 && !hasHmacs) {
       return false;
     }
-    await store.putObjectText({
+    await this.putWithDeadline(store, signal, {
       key: `${UPSTREAM_MEMBERSHIP_PREFIX}${date}.json`,
       body: JSON.stringify(membershipUploadSchema.parse(upload)),
       contentType: 'application/json',
@@ -184,6 +190,7 @@ export class UpstreamSync {
   private async flushOutcomes(
     store: UpstreamObjectStore,
     date: string,
+    signal: AbortSignal,
   ): Promise<number> {
     const rows = await this.domainGate.withDomain(
       (domain) => domain.listUnflushedCloudOutcomes(),
@@ -196,11 +203,12 @@ export class UpstreamSync {
       override_direction: row.overrideDirection,
       observed_at: row.observedAt,
     })));
-    await store.putObjectText({
+    await this.putWithDeadline(store, signal, {
       key: `${UPSTREAM_OUTCOMES_PREFIX}${date}.ndjson`,
       body: `${lines.join('\n')}\n`,
       contentType: 'application/x-ndjson',
     });
+    signal.throwIfAborted();
     await this.domainGate.withDomain((domain) => {
       domain.markCloudOutcomesFlushed({ ids: rows.map((row) => row.id) });
     });
@@ -217,6 +225,7 @@ export class UpstreamSync {
    */
   private async flushSuppressions(
     store: UpstreamObjectStore,
+    signal: AbortSignal,
   ): Promise<number> {
     const salt = await this.loadHmacSalt();
     if (salt === null) return 0;
@@ -238,17 +247,31 @@ export class UpstreamSync {
       reason: row.reason,
       observed_at: row.observedAt,
     })));
-    await store.putObjectText({
+    await this.putWithDeadline(store, signal, {
       key,
       body: `${lines.join('\n')}\n`,
       contentType: 'application/x-ndjson',
     });
+    signal.throwIfAborted();
     await this.domainGate.withDomain((domain) => {
       domain.markSuppressionHandlesFlushed({
         handleIds: rows.map((row) => row.handleId),
       });
     });
     return rows.length;
+  }
+
+  private async putWithDeadline(
+    store: UpstreamObjectStore,
+    parentSignal: AbortSignal,
+    input: { key: string; body: string; contentType: string },
+  ): Promise<void> {
+    await runWithAbortDeadline({
+      code: 'S3_UPLOAD_TIMEOUT',
+      timeoutMs: 60_000,
+      parentSignal,
+      operation: (signal) => store.putObjectText({ ...input, signal }),
+    });
   }
 }
 
@@ -272,13 +295,14 @@ export async function createS3UpstreamObjectStore(input: {
     credentials,
   });
   return {
-    async putObjectText({ key, body, contentType }) {
+    async putObjectText({ key, body, contentType, signal }) {
       await client.send(new PutObjectCommand({
         Bucket: bucket,
         Key: key,
         Body: body,
         ContentType: contentType,
-      }));
+      }), { abortSignal: signal });
+      signal.throwIfAborted();
     },
   };
 }
