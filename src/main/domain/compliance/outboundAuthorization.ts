@@ -1,24 +1,10 @@
 import type { ChannelPolicySnapshots } from '../cadence/cadenceScheduler';
+import type { OutboundAuthorizationReasonCode as SharedOutboundAuthorizationReasonCode } from '../../../shared/contracts/commonContract';
 import { evaluateFederalEvidence } from './contactCompliance';
 import type { ContactComplianceEvidence } from './contactComplianceTypes';
 
 export type OutboundChannel = 'call' | 'text';
-export type OutboundAuthorizationReasonCode =
-  | 'person_or_handle_opted_out'
-  | 'channel_contact_kind_mismatch'
-  | 'contact_validation_unusable'
-  | 'federal_status_unknown'
-  | 'federal_dnc_listed'
-  | 'federal_evidence_stale'
-  | 'federal_area_code_mismatch'
-  | 'tcpa_status_unknown'
-  | 'tcpa_blocked'
-  | 'jurisdiction_unknown'
-  | 'jurisdiction_blocked'
-  | 'state_registration_missing'
-  | 'state_dnc_subscription_missing'
-  | 'state_consent_rule_unknown'
-  | 'outside_recipient_window';
+export type OutboundAuthorizationReasonCode = SharedOutboundAuthorizationReasonCode;
 export type OutboundAuthorizationDecision =
   | Readonly<{ kind: 'allowed' }>
   | Readonly<{ kind: 'refused'; reasonCode: OutboundAuthorizationReasonCode }>;

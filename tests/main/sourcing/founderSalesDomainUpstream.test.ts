@@ -403,8 +403,11 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
 
     const detail = domain.getLeadDetail({ personId: result.personId });
     const flagged = detail.phones.find((phone) => phone.value === '+14015550101');
-    expect(flagged?.dncListed).toBe(true);
-    expect(flagged?.tcpaFlag).toBe(false);
+    expect(flagged?.compliance).toMatchObject({
+      status: 'federal_dnc_listed',
+      callRefusalReason: 'federal_dnc_listed',
+      textRefusalReason: 'federal_dnc_listed',
+    });
 
     const cycle = database.raw.prepare(
       'SELECT id FROM sales_cycles WHERE person_id = ?',

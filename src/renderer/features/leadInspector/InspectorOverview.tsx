@@ -26,10 +26,6 @@ import {
 const OPT_OUT_REASON =
   'This person opted out. Outreach is permanently disabled.';
 
-/** DNC-listed or TCPA-flagged phones are non-dialable (federal scrub gate). */
-const isDncBlocked = (contact: ContactMethod) =>
-  contact.dncListed || contact.tcpaFlag;
-
 /** Founder-facing labels for the exact qualification gate reasons. */
 const DISMISS_REASON_OPTIONS: ReadonlyArray<{
   value: QualificationGateReason;
@@ -67,23 +63,42 @@ function OutboundButton({
   onBeginOutbound(request: BeginOutboundRequest): void;
 }) {
   const verb = channel === 'call' ? 'Call' : channel === 'text' ? 'Text' : 'Email';
-  const blocked = contact.kind === 'phone' && isDncBlocked(contact);
+  const refusalReason = contact.kind === 'phone' && contact.compliance !== null
+    ? channel === 'call'
+      ? contact.compliance.callRefusalReason
+      : channel === 'text'
+        ? contact.compliance.textRefusalReason
+        : null
+    : null;
+  const blocked = refusalReason !== null;
+  const helpId = blocked ? `${contact.id}-${channel}-compliance-help` : undefined;
 
   return (
-    <Button
-      variant="quiet"
-      disabled={detail.optedOut || blocked}
-      onClick={() =>
-        onBeginOutbound({
-          channel,
-          personId: detail.personId,
-          salesCycleId: detail.salesCycleId,
-          contactMethodId: contact.id,
-        })
-      }
-    >
-      {verb} {contact.value}
-    </Button>
+    <>
+      <Button
+        variant="quiet"
+        disabled={detail.optedOut || blocked}
+        aria-describedby={helpId}
+        onClick={() => {
+          void Promise.resolve(onBeginOutbound({
+            channel,
+            personId: detail.personId,
+            salesCycleId: detail.salesCycleId,
+            contactMethodId: contact.id,
+          })).catch(() => {
+            // The main-process final gate is authoritative even after an
+            // allowed advisory snapshot. Keep the stale action from advancing.
+          });
+        }}
+      >
+        {verb} {contact.value}
+      </Button>
+      {helpId !== undefined && (
+        <span id={helpId} className="lead-inspector__outbound-refusal">
+          {refusalReason}
+        </span>
+      )}
+    </>
   );
 }
 
@@ -404,8 +419,11 @@ export function InspectorOverview({
                 contact={phone}
                 onBeginOutbound={onBeginOutbound}
               />
-              {isDncBlocked(phone) && (
-                <StatusBadge tone="danger" label="DNC" />
+              {phone.compliance !== null && (
+                <StatusBadge
+                  tone={phone.compliance.status === 'verified_clear' ? 'neutral' : 'danger'}
+                  label={phone.compliance.label}
+                />
               )}
             </span>
           ))}

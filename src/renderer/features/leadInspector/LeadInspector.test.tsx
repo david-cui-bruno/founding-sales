@@ -24,10 +24,10 @@ const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
     salesCycleId: 'cycle-kevin',
     personName: 'Kevin Shin',
     phones: [
-      { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, dncListed: false, tcpaFlag: false },
+      { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, compliance: { status: 'verified_clear', label: 'Verified clear until Sep 15, 2026', expiresAt: '2026-09-15T00:00:00.000Z', callRefusalReason: null, textRefusalReason: null } },
     ],
     emails: [
-      { id: 'email-1', kind: 'email', value: 'kevin@example.com', label: null, valid: true, dncListed: false, tcpaFlag: false },
+      { id: 'email-1', kind: 'email', value: 'kevin@example.com', label: null, valid: true, compliance: null },
     ],
     organizationLabel: 'Shin Properties',
     propertySummaries: ['12 Benefit St, Providence'],
@@ -254,11 +254,44 @@ describe('LeadInspector', () => {
     ).toBeTruthy();
   });
 
-  it('shows a DNC badge and disables call/text for a flagged phone', async () => {
+  it('renders each explicit phone compliance label', async () => {
+    const cases = [
+      ['verified_clear', 'Verified clear until Sep 15, 2026'],
+      ['federal_dnc_listed', 'Federal DNC listed'],
+      ['tcpa_blocked', 'TCPA blocked'],
+      ['compliance_unknown', 'Compliance unknown'],
+      ['scrub_expired', 'Scrub expired'],
+      ['area_code_not_covered', 'Area code not covered'],
+      ['state_clearance_required', 'State clearance required'],
+      ['outside_recipient_window', 'Outside recipient calling window'],
+    ] as const;
+    const inspector = await renderInspector(createApi(detailFor({
+      phones: cases.map(([status, label], index) => ({
+        id: `phone-${index}`,
+        kind: 'phone' as const,
+        value: `+1401555010${index}`,
+        label: null as string | null,
+        valid: true,
+        compliance: {
+          status,
+          label,
+          expiresAt: status === 'verified_clear' ? '2026-09-15T00:00:00.000Z' : null,
+          callRefusalReason: status === 'verified_clear' ? null : 'federal_status_unknown',
+          textRefusalReason: status === 'verified_clear' ? null : 'federal_status_unknown',
+        },
+      })),
+    })));
+
+    for (const [, label] of cases) {
+      expect(within(inspector).getByText(label)).toBeTruthy();
+    }
+  });
+
+  it('disables call and text for every status except verified clear with state clearance inside the current window', async () => {
     const api = createApi(detailFor({
       phones: [
-        { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, dncListed: true, tcpaFlag: false },
-        { id: 'phone-2', kind: 'phone', value: '+14015550199', label: null, valid: true, dncListed: false, tcpaFlag: false },
+        { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, compliance: { status: 'federal_dnc_listed', label: 'Federal DNC listed', expiresAt: null, callRefusalReason: 'federal_dnc_listed', textRefusalReason: 'federal_dnc_listed' } },
+        { id: 'phone-2', kind: 'phone', value: '+14015550199', label: null, valid: true, compliance: { status: 'verified_clear', label: 'Verified clear until Sep 15, 2026', expiresAt: '2026-09-15T00:00:00.000Z', callRefusalReason: null, textRefusalReason: null } },
       ],
     }));
     const inspector = await renderInspector(api);
@@ -267,7 +300,7 @@ describe('LeadInspector', () => {
     const text = within(inspector).getByRole('button', { name: 'Text +14015550100' });
     expect((call as HTMLButtonElement).disabled).toBe(true);
     expect((text as HTMLButtonElement).disabled).toBe(true);
-    expect(within(inspector).getByText('DNC')).toBeTruthy();
+    expect(within(inspector).getByText('Federal DNC listed')).toBeTruthy();
 
     fireEvent.click(call);
     expect(api.beginOutbound).not.toHaveBeenCalled();
@@ -275,6 +308,21 @@ describe('LeadInspector', () => {
     // The unflagged phone stays dialable.
     const cleanCall = within(inspector).getByRole('button', { name: 'Call +14015550199' });
     expect((cleanCall as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('uses the stable refusal reason as accessible disabled-control help text', async () => {
+    const inspector = await renderInspector(createApi(detailFor({
+      phones: [{ id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, compliance: { status: 'state_clearance_required', label: 'State clearance required', expiresAt: null, callRefusalReason: 'state_registration_missing', textRefusalReason: 'outside_recipient_window' } }],
+    })));
+
+    expect(within(inspector).getByRole('button', { name: 'Call +14015550100' }).getAttribute('aria-describedby')).toBeTruthy();
+    expect(within(inspector).getByText('state_registration_missing')).toBeTruthy();
+    expect(within(inspector).getByText('outside_recipient_window')).toBeTruthy();
+  });
+
+  it('never exposes source JSON, contact HMAC, evidence reference, or policy internals', async () => {
+    const inspector = await renderInspector(createApi(detailFor()));
+    expect(inspector.textContent).not.toMatch(/source[_ ]json|contact[_ ]hmac|evidence[_ ]ref|policy[_ ]version/i);
   });
 
   it('moves between tabs with arrow keys and renders each section', async () => {

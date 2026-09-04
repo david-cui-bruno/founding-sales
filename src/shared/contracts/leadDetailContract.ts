@@ -3,15 +3,37 @@ import { z } from 'zod';
 import {
   leadPriorityContextSchema,
   lifecycleStageSchema,
+  outboundAuthorizationReasonCodeSchema,
   personIdSchema,
   primaryActionSchema,
   salesCycleIdSchema,
 } from './commonContract';
 import { cloudScoreChipSchema } from './leadsContract';
 
+export const phoneComplianceStatusSchema = z.enum([
+  'verified_clear',
+  'federal_dnc_listed',
+  'tcpa_blocked',
+  'compliance_unknown',
+  'scrub_expired',
+  'area_code_not_covered',
+  'state_clearance_required',
+  'outside_recipient_window',
+]);
+
 export const contactMethodSchema = z.object({
-  id: z.string().min(1), kind: z.enum(['phone', 'email']), value: z.string().min(1), label: z.string().nullable(), valid: z.boolean(),
-  dncListed: z.boolean(), tcpaFlag: z.boolean(),
+  id: z.string().min(1),
+  kind: z.enum(['phone', 'email']),
+  value: z.string().min(1),
+  label: z.string().nullable(),
+  valid: z.boolean(),
+  compliance: z.object({
+    status: phoneComplianceStatusSchema,
+    label: z.string().min(1),
+    expiresAt: z.string().datetime({ offset: true }).nullable(),
+    callRefusalReason: outboundAuthorizationReasonCodeSchema.nullable(),
+    textRefusalReason: outboundAuthorizationReasonCodeSchema.nullable(),
+  }).strict().nullable(),
 }).strict();
 export const cadenceSummarySchema = z.object({ name: z.string(), stepLabel: z.string(), touchIndex: z.number().int().positive(), touchLimit: z.number().int().positive() }).strict();
 export const activitySummarySchema = z.object({ id: z.string(), kind: z.enum(['call', 'voicemail', 'text', 'email', 'interview', 'offer', 'note', 'job', 'system']), occurredAt: z.string().datetime({ offset: true }), summary: z.string(), outcome: z.string().nullable(), markedInError: z.boolean() }).strict();

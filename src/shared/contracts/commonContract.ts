@@ -15,6 +15,23 @@ export const prioritySchema = z.enum(['P0', 'P1', 'P2', 'P3']);
 export const fitBandSchema = z.enum(['low', 'medium', 'high']);
 export const timingBandSchema = z.enum(['cold', 'warm', 'hot']);
 export const reachabilitySchema = z.enum(['direct', 'indirect', 'none']);
+export const outboundAuthorizationReasonCodeSchema = z.enum([
+  'person_or_handle_opted_out',
+  'channel_contact_kind_mismatch',
+  'contact_validation_unusable',
+  'federal_status_unknown',
+  'federal_dnc_listed',
+  'federal_evidence_stale',
+  'federal_area_code_mismatch',
+  'tcpa_status_unknown',
+  'tcpa_blocked',
+  'jurisdiction_unknown',
+  'jurisdiction_blocked',
+  'state_registration_missing',
+  'state_dnc_subscription_missing',
+  'state_consent_rule_unknown',
+  'outside_recipient_window',
+]);
 
 export const leadPriorityContextSchema = z.object({
   priority: prioritySchema,
@@ -44,6 +61,9 @@ export type Priority = z.infer<typeof prioritySchema>;
 export type FitBand = z.infer<typeof fitBandSchema>;
 export type TimingBand = z.infer<typeof timingBandSchema>;
 export type Reachability = z.infer<typeof reachabilitySchema>;
+export type OutboundAuthorizationReasonCode = z.infer<
+  typeof outboundAuthorizationReasonCodeSchema
+>;
 export type LeadPriorityContext = z.infer<typeof leadPriorityContextSchema>;
 export type PrimaryAction = z.infer<typeof primaryActionSchema>;
 export type MutationReceipt = z.infer<typeof mutationReceiptSchema>;

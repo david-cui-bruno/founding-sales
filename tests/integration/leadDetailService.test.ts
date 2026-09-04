@@ -152,13 +152,39 @@ describe('leadDetailService over a real encrypted domain', () => {
       value: '+14015550100',
       label: null,
       valid: true,
-      dncListed: false,
-      tcpaFlag: false,
+      compliance: {
+        status: 'verified_clear',
+        label: 'Verified clear until Sep 15, 2026',
+        expiresAt: '2026-09-15T00:00:00.000Z',
+        callRefusalReason: null,
+        textRefusalReason: null,
+      },
     });
     expect(detail.emails).toEqual([]);
     expect(detail.nextAction).not.toBeNull();
     expect(detail.revision).toBeGreaterThanOrEqual(0);
     expect(JSON.stringify(detail)).not.toMatch(/leadScore|blended|combined/);
+    expect(JSON.stringify(detail)).not.toMatch(/source_json|contact_hmac|evidence_ref|policy_version/i);
+  });
+
+  it('projects explicit refusal statuses without evidence or policy internals', async () => {
+    const { prospect } = seedLead('blocked');
+    addPhone(prospect, 'blocked-phone');
+    database.raw.prepare(`UPDATE person_contact_methods SET federal_status = 'listed'
+      WHERE id = 'blocked-phone'`).run();
+
+    const detail = await leadDetail.get({ personId: prospect.personId });
+
+    expect(detail.phones[0]?.compliance).toEqual({
+      status: 'federal_dnc_listed',
+      label: 'Federal DNC listed',
+      expiresAt: null,
+      callRefusalReason: 'federal_dnc_listed',
+      textRefusalReason: 'federal_dnc_listed',
+    });
+    expect(Object.keys(detail.phones[0] ?? {})).toEqual([
+      'id', 'kind', 'value', 'label', 'valid', 'compliance',
+    ]);
   });
 
   it('rejects an unknown person', async () => {

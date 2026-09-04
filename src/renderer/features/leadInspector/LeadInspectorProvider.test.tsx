@@ -22,10 +22,10 @@ const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
     salesCycleId: 'cycle-kevin',
     personName: 'Kevin Shin',
     phones: [
-      { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, dncListed: false, tcpaFlag: false },
+      { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, compliance: { status: 'verified_clear', label: 'Verified clear until Sep 15, 2026', expiresAt: '2026-09-15T00:00:00.000Z', callRefusalReason: null, textRefusalReason: null } },
     ],
     emails: [
-      { id: 'email-1', kind: 'email', value: 'kevin@example.com', label: null, valid: true, dncListed: false, tcpaFlag: false },
+      { id: 'email-1', kind: 'email', value: 'kevin@example.com', label: null, valid: true, compliance: null },
     ],
     organizationLabel: 'Shin Properties',
     propertySummaries: ['12 Benefit St, Providence'],
@@ -283,6 +283,26 @@ describe('LeadInspectorProvider', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await screen.findByRole('complementary', { name: 'Kevin Shin details' });
     expect(api.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('still handles a final-gate refusal after an allowed detail snapshot', async () => {
+    const api = createApi([kevin, dana]);
+    api.beginOutbound.mockRejectedValueOnce(Object.assign(new Error('blocked'), {
+      reasonCode: 'federal_dnc_listed',
+    }));
+    render(
+      <LeadInspectorProvider api={api}>
+        <Harness />
+      </LeadInspectorProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+    await screen.findByRole('complementary', { name: 'Kevin Shin details' });
+    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+
+    expect(api.beginOutbound).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('complementary', { name: 'Kevin Shin details' })).toBeTruthy();
   });
 
   it('rejects useLeadInspector outside of the provider', () => {

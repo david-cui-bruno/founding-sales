@@ -30,6 +30,7 @@ import {
   leadDetailSchema,
   type BeginOutboundRequest,
   type ConfirmTransitionRequest,
+  type ContactMethod,
   type DismissLeadRequest,
   type LeadDetail,
   type LeadDetailRequest,
@@ -660,18 +661,66 @@ export class FounderSalesDomain {
       'SELECT cloud_entity_id FROM cloud_entity_links WHERE person_id = ?',
     ).get(person.id) as { cloud_entity_id: string } | undefined;
     const contacts = this.database.raw.prepare(`
-      SELECT id, kind, normalized_value, validation_state, dnc_listed, tcpa_flag
+      SELECT id, kind, normalized_value, validation_state, compliance_expires_at
       FROM person_contact_methods WHERE person_id = ?
       ORDER BY kind ASC, normalized_value ASC, id ASC
     `).all(person.id) as {
       id: string; kind: 'phone' | 'email'; normalized_value: string; validation_state: string;
-      dnc_listed: 0 | 1; tcpa_flag: 0 | 1;
+      compliance_expires_at: string | null;
     }[];
-    const contactDto = (row: typeof contacts[number]) => ({
-      id: row.id, kind: row.kind, value: row.normalized_value,
-      label: null as string | null, valid: row.validation_state === 'valid',
-      dncListed: row.dnc_listed === 1, tcpaFlag: row.tcpa_flag === 1,
-    });
+    const refusalReason = (row: typeof contacts[number], channel: 'call' | 'text') => {
+      const decision = this.services.unitOfWork.immediate(() =>
+        this.services.outboundPermission.inspectOutbound({
+          personId: person.id, contactMethodId: row.id, channel, now: this.clock.now(),
+        }),
+      );
+      return decision.kind === 'allowed' ? null : decision.reasonCode;
+    };
+    const contactDto = (row: typeof contacts[number]) => {
+      if (row.kind === 'email') {
+        return {
+          id: row.id, kind: row.kind, value: row.normalized_value,
+          label: null as string | null, valid: row.validation_state === 'valid',
+          compliance: null as ContactMethod['compliance'],
+        };
+      }
+      const callRefusalReason = refusalReason(row, 'call');
+      const textRefusalReason = refusalReason(row, 'text');
+      const reasons = [callRefusalReason, textRefusalReason];
+      const status = reasons.includes('federal_dnc_listed') ? 'federal_dnc_listed'
+        : reasons.includes('tcpa_blocked') ? 'tcpa_blocked'
+          : reasons.some((reason) => reason === 'federal_status_unknown'
+            || reason === 'tcpa_status_unknown') ? 'compliance_unknown'
+            : reasons.includes('federal_evidence_stale') ? 'scrub_expired'
+              : reasons.includes('federal_area_code_mismatch') ? 'area_code_not_covered'
+                : reasons.includes('outside_recipient_window') ? 'outside_recipient_window'
+                  : reasons.some((reason) => reason === 'jurisdiction_unknown'
+                    || reason === 'jurisdiction_blocked'
+                    || reason === 'state_registration_missing'
+                    || reason === 'state_dnc_subscription_missing'
+                    || reason === 'state_consent_rule_unknown') ? 'state_clearance_required'
+                    : 'verified_clear';
+      const labels = {
+        federal_dnc_listed: 'Federal DNC listed',
+        tcpa_blocked: 'TCPA blocked',
+        compliance_unknown: 'Compliance unknown',
+        scrub_expired: 'Scrub expired',
+        area_code_not_covered: 'Area code not covered',
+        state_clearance_required: 'State clearance required',
+        outside_recipient_window: 'Outside recipient calling window',
+      } as const;
+      const expiresAt = status === 'verified_clear' ? row.compliance_expires_at : null;
+      const label = status === 'verified_clear'
+        ? `Verified clear until ${new Date(expiresAt!).toLocaleDateString('en-US', {
+          month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
+        })}`
+        : labels[status];
+      return {
+        id: row.id, kind: row.kind, value: row.normalized_value,
+        label: null as string | null, valid: row.validation_state === 'valid',
+        compliance: { status, label, expiresAt, callRefusalReason, textRefusalReason },
+      };
+    };
     const organization = this.database.raw.prepare(`
       SELECT org.canonical_name AS name FROM prospect_organizations AS link
       JOIN organizations AS org ON org.id = link.organization_id
