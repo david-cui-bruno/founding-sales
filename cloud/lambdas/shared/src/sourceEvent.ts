@@ -253,16 +253,47 @@ export type ViolationPayload = z.infer<typeof violationPayloadSchema>;
  * Enrichment (Tracerfy skip trace) — rides channel `parcel` because
  * enrichment attaches contact data to an entity's EXISTING identity (natural
  * key `enrich:<cloud_entity_id>`); it never mints a person from a new source.
- * Compliance lives in the schema: every phone carries its DNC + TCPA flags
- * so the app can render dnc_listed numbers non-dialable, and emails must
- * already be lowercased (the suppression HMACs assume it).
+ * Compliance lives in the schema: every phone carries explicit evidence, and
+ * emails must already be lowercased (the suppression HMACs assume it).
  */
+export const contactComplianceEvidenceSchema = z
+  .object({
+    federal_status: z.enum(["unknown", "verified_clear", "listed"]),
+    tcpa_flag: z.boolean().nullable(),
+    covered_area_code: z.string().regex(/^\d{3}$/).nullable(),
+    source: z.enum(["ftc_download", "enrichment_vendor", "manual_import", "legacy"]),
+    scrubbed_at: z.string().datetime({ offset: true }).nullable(),
+    expires_at: z.string().datetime({ offset: true }).nullable(),
+  })
+  .strict()
+  .superRefine((evidence, context) => {
+    if (evidence.source === "enrichment_vendor" && evidence.federal_status === "verified_clear") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Vendor false results map to unknown, not verified_clear.",
+        path: ["federal_status"],
+      });
+    }
+    if (
+      evidence.federal_status === "verified_clear"
+      && (evidence.tcpa_flag !== false
+        || evidence.covered_area_code === null
+        || evidence.scrubbed_at === null
+        || evidence.expires_at === null)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Verified clear evidence requires TCPA clear, area-code coverage, scrub time, and expiration.",
+        path: ["federal_status"],
+      });
+    }
+  });
+
 export const enrichmentPhoneSchema = z
   .object({
     e164: z.string().regex(/^\+[1-9]\d{6,14}$/, "E.164"),
     kind: z.enum(["mobile", "landline", "voip", "other"]),
-    dnc_listed: z.boolean(),
-    tcpa_flag: z.boolean(),
+    compliance: contactComplianceEvidenceSchema,
     rank: z.number().int().min(1),
   })
   .strict();

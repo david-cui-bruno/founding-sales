@@ -240,6 +240,14 @@ function mapContacts(event: CloudSourceEvent): IntakeContactInput[] {
       value,
       reachability: 'direct',
       isPrimary: index === 0,
+      complianceEvidence: {
+        federalStatus: 'unknown',
+        tcpaFlag: null,
+        coveredAreaCode: null,
+        source: 'legacy',
+        scrubbedAt: null,
+        expiresAt: null,
+      },
     })),
     ...person.emails.map((value, index): IntakeContactInput => ({
       kind: 'email',
@@ -253,7 +261,7 @@ function mapContacts(event: CloudSourceEvent): IntakeContactInput[] {
 /**
  * An event whose payload parses as the enrichment shape (channel parcel,
  * hit true). Enrichment contacts replace entity.person.phones/emails and
- * carry the vendor scrub's DNC/TCPA compliance flags.
+ * carry the vendor's explicit compliance evidence.
  */
 function parseEnrichmentPayload(
   event: CloudSourceEvent,
@@ -265,9 +273,9 @@ function parseEnrichmentPayload(
 }
 
 /**
- * Enrichment contacts, ordered by vendor rank; rank 1 is primary. Every
- * phone carries its dnc_listed/tcpa_flag so the dial gate can refuse
- * flagged numbers (the federal telemarketing scrub gate).
+ * Enrichment contacts, ordered by vendor rank; rank 1 is primary. Every phone
+ * carries the evidence record exactly, translated only from wire casing to the
+ * app contract.
  */
 function mapEnrichmentContacts(payload: CloudEnrichmentPayload): IntakeContactInput[] {
   const phones = [...payload.phones].sort((left, right) => left.rank - right.rank);
@@ -278,8 +286,14 @@ function mapEnrichmentContacts(payload: CloudEnrichmentPayload): IntakeContactIn
       value: phone.e164,
       reachability: 'direct',
       isPrimary: index === 0,
-      dncListed: phone.dnc_listed,
-      tcpaFlag: phone.tcpa_flag,
+      complianceEvidence: {
+        federalStatus: phone.compliance.federal_status,
+        tcpaFlag: phone.compliance.tcpa_flag,
+        coveredAreaCode: phone.compliance.covered_area_code,
+        source: phone.compliance.source,
+        scrubbedAt: phone.compliance.scrubbed_at,
+        expiresAt: phone.compliance.expires_at,
+      },
     })),
     ...emails.map((email, index): IntakeContactInput => ({
       kind: 'email',

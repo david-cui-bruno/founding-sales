@@ -125,8 +125,8 @@ export function validParcelEvent(): CloudSourceEvent {
 
 /**
  * A real cloud-shaped enrichment event: channel `parcel`, payload =
- * enrichmentPayloadSchema (Tracerfy skip trace). Phones carry DNC/TCPA
- * flags, emails are lowercase, ranks order the contacts.
+ * enrichmentPayloadSchema (Tracerfy skip trace). Phones carry explicit
+ * compliance evidence, emails are lowercase, and ranks order the contacts.
  */
 export function validEnrichmentEvent(): CloudSourceEvent {
   return {
@@ -156,15 +156,27 @@ export function validEnrichmentEvent(): CloudSourceEvent {
         {
           e164: '+14015550101',
           kind: 'landline',
-          dnc_listed: true,
-          tcpa_flag: false,
+          compliance: {
+            federal_status: 'listed',
+            tcpa_flag: null,
+            covered_area_code: null,
+            source: 'enrichment_vendor',
+            scrubbed_at: null,
+            expires_at: null,
+          },
           rank: 2,
         },
         {
           e164: '+14015550100',
           kind: 'mobile',
-          dnc_listed: false,
-          tcpa_flag: false,
+          compliance: {
+            federal_status: 'unknown',
+            tcpa_flag: null,
+            covered_area_code: null,
+            source: 'enrichment_vendor',
+            scrubbed_at: null,
+            expires_at: null,
+          },
           rank: 1,
         },
       ],
@@ -190,4 +202,3 @@ export function validEnrichmentEvent(): CloudSourceEvent {
     },
   };
 }
-

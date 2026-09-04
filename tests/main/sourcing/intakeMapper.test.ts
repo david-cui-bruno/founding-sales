@@ -72,6 +72,14 @@ describe('mapCloudSourceEvent', () => {
             value: '+14015551234',
             reachability: 'direct',
             isPrimary: true,
+            complianceEvidence: {
+              federalStatus: 'unknown',
+              tcpaFlag: null,
+              coveredAreaCode: null,
+              source: 'legacy',
+              scrubbedAt: null,
+              expiresAt: null,
+            },
           },
           {
             kind: 'email',
@@ -118,7 +126,7 @@ describe('mapCloudSourceEvent', () => {
       );
     });
 
-    it('maps enrichment phones with DNC/TCPA flags, ordered by rank, rank 1 primary', () => {
+    it('carries the exact evidence record through cloud and app contracts', () => {
       const event = validEnrichmentEvent();
 
       const mapped = mapCloudSourceEvent(event);
@@ -131,16 +139,28 @@ describe('mapCloudSourceEvent', () => {
           value: '+14015550100',
           reachability: 'direct',
           isPrimary: true,
-          dncListed: false,
-          tcpaFlag: false,
+          complianceEvidence: {
+            federalStatus: 'unknown',
+            tcpaFlag: null,
+            coveredAreaCode: null,
+            source: 'enrichment_vendor',
+            scrubbedAt: null,
+            expiresAt: null,
+          },
         },
         {
           kind: 'phone',
           value: '+14015550101',
           reachability: 'direct',
           isPrimary: false,
-          dncListed: true,
-          tcpaFlag: false,
+          complianceEvidence: {
+            federalStatus: 'listed',
+            tcpaFlag: null,
+            coveredAreaCode: null,
+            source: 'enrichment_vendor',
+            scrubbedAt: null,
+            expiresAt: null,
+          },
         },
         {
           kind: 'email',
@@ -151,10 +171,10 @@ describe('mapCloudSourceEvent', () => {
       ]);
     });
 
-    it('carries a tcpa_flag through to the contact input', () => {
+    it('carries positive TCPA evidence through to the contact input', () => {
       const event = validEnrichmentEvent();
-      (event.payload as { phones: Array<{ tcpa_flag: boolean }> })
-        .phones[0]!.tcpa_flag = true;
+      (event.payload as { phones: Array<{ compliance: { tcpa_flag: boolean | null } }> })
+        .phones[0]!.compliance.tcpa_flag = true;
 
       const mapped = mapCloudSourceEvent(event);
 
@@ -162,7 +182,7 @@ describe('mapCloudSourceEvent', () => {
       const flagged = mapped.command.contacts.find(
         (contact) => contact.value === '+14015550101',
       );
-      expect(flagged?.tcpaFlag).toBe(true);
+      expect(flagged?.complianceEvidence?.tcpaFlag).toBe(true);
     });
 
     it('keeps entity.person contacts (default flags) for an enrichment miss', () => {
@@ -180,6 +200,14 @@ describe('mapCloudSourceEvent', () => {
         value: '+14015559999',
         reachability: 'direct',
         isPrimary: true,
+        complianceEvidence: {
+          federalStatus: 'unknown',
+          tcpaFlag: null,
+          coveredAreaCode: null,
+          source: 'legacy',
+          scrubbedAt: null,
+          expiresAt: null,
+        },
       }]);
     });
 

@@ -219,8 +219,32 @@ describe("handlerWithDeps", () => {
       matched_owner: true,
     });
     expect(event.payload.phones).toEqual([
-      { e164: "+14015550100", kind: "mobile", dnc_listed: false, tcpa_flag: false, rank: 1 },
-      { e164: "+14015550200", kind: "landline", dnc_listed: true, tcpa_flag: false, rank: 2 },
+      {
+        e164: "+14015550100",
+        kind: "mobile",
+        compliance: {
+          federal_status: "unknown",
+          tcpa_flag: null,
+          covered_area_code: null,
+          source: "enrichment_vendor",
+          scrubbed_at: null,
+          expires_at: null,
+        },
+        rank: 1,
+      },
+      {
+        e164: "+14015550200",
+        kind: "landline",
+        compliance: {
+          federal_status: "listed",
+          tcpa_flag: null,
+          covered_area_code: null,
+          source: "enrichment_vendor",
+          scrubbed_at: null,
+          expires_at: null,
+        },
+        rank: 2,
+      },
     ]);
     expect(event.payload.emails).toEqual([{ address: "jane.roe@example.com", rank: 1 }]);
 

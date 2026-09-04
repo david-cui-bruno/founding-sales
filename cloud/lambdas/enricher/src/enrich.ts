@@ -23,7 +23,7 @@ import {
   type EnrichmentRequest,
   type PostalAddress,
 } from "@callie-sourcing/shared";
-import type { TracerfyPerson } from "./tracerfy";
+import type { TracerfyPerson, TracerfyPhone } from "./tracerfy";
 
 export const ADAPTER_NAME = "enricher";
 export const ADAPTER_VERSION = "1.0.0";
@@ -69,6 +69,17 @@ export interface NormalizedContacts {
   invalidDropped: number;
 }
 
+function vendorCompliance(phone: TracerfyPhone): EnrichmentPhone["compliance"] {
+  return {
+    federal_status: phone.dnc === true ? "listed" : "unknown",
+    tcpa_flag: phone.tcpa === true ? true : null,
+    covered_area_code: null,
+    source: "enrichment_vendor",
+    scrubbed_at: null,
+    expires_at: null,
+  };
+}
+
 /**
  * Normalize the picked person's contact set: phones to E.164 (+1), emails
  * lowercased, both deduped, ranks defaulting to array position when the
@@ -90,8 +101,7 @@ export function normalizeContacts(person: TracerfyPerson): NormalizedContacts {
     phones.push({
       e164,
       kind: phoneKind(phone.type),
-      dnc_listed: phone.dnc ?? false,
-      tcpa_flag: phone.tcpa ?? false,
+      compliance: vendorCompliance(phone),
       rank: phone.rank ?? index + 1,
     });
   }

@@ -32,8 +32,32 @@ function validPayload(): EnrichmentPayload {
     vendor: "tracerfy",
     hit: true,
     phones: [
-      { e164: "+15125550100", kind: "mobile", dnc_listed: false, tcpa_flag: false, rank: 1 },
-      { e164: "+15125550200", kind: "landline", dnc_listed: true, tcpa_flag: false, rank: 2 },
+      {
+        e164: "+15125550100",
+        kind: "mobile",
+        compliance: {
+          federal_status: "unknown",
+          tcpa_flag: null,
+          covered_area_code: null,
+          source: "enrichment_vendor",
+          scrubbed_at: null,
+          expires_at: null,
+        },
+        rank: 1,
+      },
+      {
+        e164: "+15125550200",
+        kind: "landline",
+        compliance: {
+          federal_status: "listed",
+          tcpa_flag: null,
+          covered_area_code: null,
+          source: "enrichment_vendor",
+          scrubbed_at: null,
+          expires_at: null,
+        },
+        rank: 2,
+      },
     ],
     emails: [{ address: "jane.doe@example.com", rank: 1 }],
     credits_used: 5,
@@ -161,8 +185,7 @@ describe("enrichmentPayloadSchema", () => {
       enrichmentPhoneSchema.safeParse({
         e164: "5125550100",
         kind: "mobile",
-        dnc_listed: false,
-        tcpa_flag: false,
+        compliance: validPayload().phones[0]?.compliance,
         rank: 1,
       }).success,
     ).toBe(false);
@@ -172,6 +195,21 @@ describe("enrichmentPayloadSchema", () => {
     expect(enrichmentEmailSchema.safeParse({ address: "jane@example.com", rank: 1 }).success).toBe(
       true,
     );
+  });
+
+  it("rejects verified_clear without coverage, scrub time, or expiry", () => {
+    const phone = validPayload().phones[0];
+    expect(enrichmentPhoneSchema.safeParse({
+      ...phone,
+      compliance: {
+        federal_status: "verified_clear",
+        tcpa_flag: false,
+        covered_area_code: null,
+        source: "ftc_download",
+        scrubbed_at: null,
+        expires_at: null,
+      },
+    }).success).toBe(false);
   });
 
   it("rejects unknown vendor, unknown phone kind, and extra fields (strict)", () => {

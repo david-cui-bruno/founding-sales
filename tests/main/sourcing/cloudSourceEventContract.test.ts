@@ -44,12 +44,38 @@ describe('cloudSourceEventContract (local mirror)', () => {
     expect(validateCloudSourceEvent(dirty).success).toBe(false);
   });
 
-  it('rejects an enrichment phone missing its DNC flag (strict)', () => {
+  it('rejects an enrichment phone missing its compliance evidence (strict)', () => {
     const dirty = JSON.parse(JSON.stringify(validEnrichmentEvent())) as {
       payload: { phones: Array<Record<string, unknown>> };
     };
-    delete dirty.payload.phones[0]!.dnc_listed;
+    delete dirty.payload.phones[0]!.compliance;
     expect(validateCloudSourceEvent(dirty).success).toBe(false);
+  });
+
+  it('rejects verified_clear without coverage, scrub time, or expiry', () => {
+    const dirty = JSON.parse(JSON.stringify(validEnrichmentEvent())) as {
+      payload: { phones: Array<Record<string, unknown>> };
+    };
+    dirty.payload.phones[0]!.compliance = {
+      federal_status: 'verified_clear',
+      tcpa_flag: false,
+      covered_area_code: null,
+      source: 'ftc_download',
+      scrubbed_at: null,
+      expires_at: null,
+    };
+    expect(validateCloudSourceEvent(dirty).success).toBe(false);
+  });
+
+  it('carries the exact evidence record through the app contract', () => {
+    const event = validEnrichmentEvent();
+    const result = validateCloudSourceEvent(JSON.parse(JSON.stringify(event)));
+    expect(result.success).toBe(true);
+    if (result.success === false) return;
+    const payload = result.data.payload as typeof event.payload;
+    expect(payload.phones[0]?.compliance).toEqual(
+      (event.payload as { phones: Array<{ compliance: unknown }> }).phones[0]?.compliance,
+    );
   });
 
   it('rejects an enrichment payload with rank 0 or a wrong vendor', () => {

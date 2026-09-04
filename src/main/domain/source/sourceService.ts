@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
 import type { AppDatabase } from '../../db/database';
+import {
+  contactComplianceEvidenceSchema,
+  type ContactComplianceEvidence,
+} from '../compliance/contactComplianceTypes';
 import type {
   ContactMethodMatch,
   IdentityRepository,
@@ -56,10 +60,7 @@ export type IntakeContactInput = {
   reachability: 'direct' | 'indirect' | 'none';
   isPrimary?: boolean;
   inContacts?: boolean | null;
-  /** DNC registry listing from the enrichment scrub; flagged = non-dialable. */
-  dncListed?: boolean;
-  /** TCPA litigation/consent flag from the enrichment scrub. */
-  tcpaFlag?: boolean;
+  complianceEvidence?: ContactComplianceEvidence;
 };
 
 export type IntakeOrganizationInput = {
@@ -253,6 +254,7 @@ const contactInputSchema = z.object({
   reachability: z.enum(['direct', 'indirect', 'none']),
   isPrimary: z.boolean().default(false),
   inContacts: z.boolean().nullable().optional(),
+  complianceEvidence: contactComplianceEvidenceSchema.optional(),
   dncListed: z.boolean().default(false),
   tcpaFlag: z.boolean().default(false),
 }).strict();

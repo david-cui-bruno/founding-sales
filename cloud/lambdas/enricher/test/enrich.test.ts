@@ -50,11 +50,20 @@ describe("normalizeContacts", () => {
     ]);
     expect(contacts.phones[0]).toMatchObject({
       kind: "mobile",
-      dnc_listed: false,
-      tcpa_flag: false,
+      compliance: {
+        federal_status: "unknown",
+        tcpa_flag: null,
+        covered_area_code: null,
+        source: "enrichment_vendor",
+        scrubbed_at: null,
+        expires_at: null,
+      },
       rank: 1,
     });
-    expect(contacts.phones[1]).toMatchObject({ kind: "landline", dnc_listed: true });
+    expect(contacts.phones[1]).toMatchObject({
+      kind: "landline",
+      compliance: { federal_status: "listed" },
+    });
     expect(contacts.emails).toEqual([{ address: "jane.roe@example.com", rank: 1 }]);
     expect(contacts.invalidDropped).toBe(0);
   });
@@ -79,7 +88,7 @@ describe("normalizeContacts", () => {
     expect(contacts.invalidDropped).toBe(2);
   });
 
-  it("defaults missing dnc/tcpa/rank", () => {
+  it("maps missing vendor DNC and TCPA fields to unknown evidence", () => {
     const contacts = normalizeContacts(
       person({
         phones: [{ number: "4015550100" }],
@@ -87,11 +96,47 @@ describe("normalizeContacts", () => {
       }),
     );
     expect(contacts.phones[0]).toMatchObject({
-      dnc_listed: false,
-      tcpa_flag: false,
+      compliance: {
+        federal_status: "unknown",
+        tcpa_flag: null,
+        covered_area_code: null,
+        source: "enrichment_vendor",
+        scrubbed_at: null,
+        expires_at: null,
+      },
       rank: 1,
     });
     expect(contacts.emails[0]).toMatchObject({ rank: 1 });
+  });
+
+  it("maps vendor false DNC and TCPA fields to unknown evidence", () => {
+    const contacts = normalizeContacts(person({
+      phones: [{ number: "4015550100", dnc: false, tcpa: false }],
+    }));
+    expect(contacts.phones[0]?.compliance).toEqual({
+      federal_status: "unknown",
+      tcpa_flag: null,
+      covered_area_code: null,
+      source: "enrichment_vendor",
+      scrubbed_at: null,
+      expires_at: null,
+    });
+  });
+
+  it("maps a positive DNC result to listed", () => {
+    const contacts = normalizeContacts(person({
+      phones: [{ number: "4015550100", dnc: true, tcpa: false }],
+    }));
+    expect(contacts.phones[0]?.compliance.federal_status).toBe("listed");
+    expect(contacts.phones[0]?.compliance.tcpa_flag).toBeNull();
+  });
+
+  it("maps a positive TCPA result to true while federal remains unknown", () => {
+    const contacts = normalizeContacts(person({
+      phones: [{ number: "4015550100", dnc: false, tcpa: true }],
+    }));
+    expect(contacts.phones[0]?.compliance.federal_status).toBe("unknown");
+    expect(contacts.phones[0]?.compliance.tcpa_flag).toBe(true);
   });
 });
 
@@ -153,7 +198,19 @@ describe("contentFingerprint + naturalKey", () => {
     vendor: "tracerfy" as const,
     hit: true,
     phones: [
-      { e164: "+14015550100", kind: "mobile" as const, dnc_listed: false, tcpa_flag: false, rank: 1 },
+      {
+        e164: "+14015550100",
+        kind: "mobile" as const,
+        compliance: {
+          federal_status: "unknown" as const,
+          tcpa_flag: null,
+          covered_area_code: null,
+          source: "enrichment_vendor" as const,
+          scrubbed_at: null,
+          expires_at: null,
+        },
+        rank: 1,
+      },
     ],
     emails: [{ address: "jane.roe@example.com", rank: 1 }],
     credits_used: 5,
@@ -164,7 +221,19 @@ describe("contentFingerprint + naturalKey", () => {
     const twoPhones = {
       ...payload,
       phones: [
-        { e164: "+14015550200", kind: "landline" as const, dnc_listed: true, tcpa_flag: false, rank: 2 },
+        {
+          e164: "+14015550200",
+          kind: "landline" as const,
+          compliance: {
+            federal_status: "listed" as const,
+            tcpa_flag: null,
+            covered_area_code: null,
+            source: "enrichment_vendor" as const,
+            scrubbed_at: null,
+            expires_at: null,
+          },
+          rank: 2,
+        },
         ...payload.phones,
       ],
     };
