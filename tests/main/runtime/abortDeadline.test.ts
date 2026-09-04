@@ -33,7 +33,7 @@ describe('runWithAbortDeadline', () => {
     let operationSignal: AbortSignal | undefined;
     const result = runWithAbortDeadline({
       code: 'S3_LIST_TIMEOUT',
-      timeoutMs: 60_000,
+      timeoutMs: 30_000,
       operation: async (signal) => {
         operationSignal = signal;
         return new Promise<string>(() => undefined);
@@ -42,10 +42,10 @@ describe('runWithAbortDeadline', () => {
     const rejection = expect(result).rejects.toMatchObject({
       name: 'RemoteOperationTimeoutError',
       code: 'S3_LIST_TIMEOUT',
-      timeoutMs: 60_000,
+      timeoutMs: 30_000,
     });
 
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(30_000);
 
     await rejection;
     expect(operationSignal?.aborted).toBe(true);
@@ -117,7 +117,7 @@ describe('runWithAbortDeadline', () => {
 
     await expect(runWithAbortDeadline({
       code: 'S3_LIST_TIMEOUT',
-      timeoutMs: 60_000,
+      timeoutMs: 30_000,
       parentSignal: syncParent.signal,
       operation: () => {
         throw syncError;

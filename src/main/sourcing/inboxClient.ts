@@ -96,7 +96,7 @@ export class InboxClient {
   ): Promise<string[]> {
     const keys = await runWithAbortDeadline({
       code: 'S3_LIST_TIMEOUT',
-      timeoutMs: 60_000,
+      timeoutMs: 30_000,
       parentSignal: signal,
       operation: (listSignal) => this.store.listKeys({
         prefix: INBOX_EVENTS_PREFIX,

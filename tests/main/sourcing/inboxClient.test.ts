@@ -192,7 +192,7 @@ describe('InboxClient remote deadlines', () => {
     vi.useRealTimers();
   });
 
-  it('bounds a never-resolving list and aborts the store signal after 60 seconds', async () => {
+  it('bounds a never-resolving list and aborts the store signal after 30 seconds', async () => {
     let storeSignal: AbortSignal | undefined;
     const client = new InboxClient({
       store: {
@@ -208,10 +208,10 @@ describe('InboxClient remote deadlines', () => {
     const result = client.listNewObjects(null, parent.signal);
     const rejection = expect(result).rejects.toMatchObject({
       code: 'S3_LIST_TIMEOUT',
-      timeoutMs: 60_000,
+      timeoutMs: 30_000,
     });
 
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(30_000);
 
     await rejection;
     expect(storeSignal).toBeDefined();
