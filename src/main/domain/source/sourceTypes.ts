@@ -68,3 +68,17 @@ export type SourceEvent = {
   customSourceReason: CustomSourceReason | null;
   createdAt: string;
 };
+
+export type AppendContactComplianceAuditInput = Readonly<{
+  id: string;
+  contactMethodId: string;
+  operation: 'intake_merge' | 'authoritative_correction';
+  oldEvidenceJson: string;
+  newEvidenceJson: string;
+  source: 'ftc_download' | 'enrichment_vendor' | 'manual_import' | 'legacy';
+  evidenceTimestamp: string | null;
+  evidenceRef: string | null;
+  policyVersion: string;
+  resultingReasonCode: string;
+  createdAt: string;
+}>;

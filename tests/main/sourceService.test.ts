@@ -9,6 +9,7 @@ import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { resolveNativeBinding } from '../../src/main/db/sqliteDriver';
 import { IdentityRepository } from '../../src/main/domain/identity/identityRepository';
+import { ContactComplianceService } from '../../src/main/domain/compliance/contactComplianceService';
 import {
   IntakeReceiptRepository,
   serializeCanonicalIntakeCommand,
@@ -92,12 +93,17 @@ describe('SourceService', () => {
       unitOfWork,
       clock: { now: () => NOW },
     });
+    const contactCompliance = new ContactComplianceService({
+      database, unitOfWork, identities, clock: { now: () => NOW },
+      ids: { next: () => ids.shift() ?? 'unexpected-id' },
+    });
     service = new SourceService({
       database,
       unitOfWork,
       identities,
       sources,
       receipts,
+      contactCompliance,
       faultInjector,
     });
   }
@@ -357,6 +363,86 @@ describe('SourceService', () => {
       { kind: 'phone', normalized_value: '+14015550100' },
     ]);
     expect(counts().sales_cycles).toBe(0);
+  });
+
+  it('upgrades an existing phone from unknown to listed on later intake', () => {
+    ids.push('person', 'contact', 'prospect');
+    service.createPersonProspect(baseCommand('source-unknown'));
+
+    service.createPersonProspect(baseCommand('source-listed', {
+      contacts: [{
+        kind: 'phone', value: '(401) 555-0100', reachability: 'direct', isPrimary: true,
+        complianceEvidence: {
+          federalStatus: 'listed', tcpaFlag: false, coveredAreaCode: null,
+          source: 'manual_import', scrubbedAt: OBSERVED_AT, expiresAt: null,
+        },
+      }],
+    }));
+
+    const contact = identities.listContactMethodsForPerson('person')[0];
+    expect(contact?.complianceEvidence.federalStatus).toBe('listed');
+  });
+
+  it('rolls back contact update and audit event together on intake failure', () => {
+    ids.push('person', 'contact', 'prospect');
+    service.createPersonProspect(baseCommand('source-before-failure'));
+    rebuildService((point) => {
+      if (point === 'after_person') throw new Error('injected intake failure');
+    });
+
+    expect(() => service.createPersonProspect(baseCommand('source-failure', {
+      contacts: [{
+        kind: 'phone', value: '(401) 555-0100', reachability: 'direct',
+        complianceEvidence: {
+          federalStatus: 'listed', tcpaFlag: false, coveredAreaCode: null,
+          source: 'manual_import', scrubbedAt: OBSERVED_AT, expiresAt: null,
+        },
+      }],
+    }))).toThrow('injected intake failure');
+
+    expect(identities.getContactMethod('contact')?.complianceEvidence.federalStatus).toBe('unknown');
+    expect((database.raw.prepare(
+      'SELECT count(*) AS count FROM contact_compliance_audit_events WHERE contact_method_id = ?',
+    ).get('contact') as { count: number }).count).toBe(0);
+  });
+
+  it('replaying the same intake receipt does not append another audit event', () => {
+    ids.push('person', 'contact', 'prospect');
+    service.createPersonProspect(baseCommand('source-replay-base'));
+    const command = baseCommand('source-replay-merge', {
+      contacts: [{
+        kind: 'phone', value: '(401) 555-0100', reachability: 'direct',
+        complianceEvidence: {
+          federalStatus: 'listed', tcpaFlag: false, coveredAreaCode: null,
+          source: 'manual_import', scrubbedAt: OBSERVED_AT, expiresAt: null,
+        },
+      }],
+    });
+    service.createPersonProspect(command);
+    service.createPersonProspect(command);
+
+    expect((database.raw.prepare(
+      'SELECT count(*) AS count FROM contact_compliance_audit_events WHERE contact_method_id = ?',
+    ).get('contact') as { count: number }).count).toBe(1);
+  });
+
+  it('recomputes the resulting federal refusal before the contact-upsert transaction commits', () => {
+    ids.push('person', 'contact', 'prospect');
+    service.createPersonProspect(baseCommand('source-reason-base'));
+    service.createPersonProspect(baseCommand('source-reason-merge', {
+      contacts: [{
+        kind: 'phone', value: '(401) 555-0100', reachability: 'direct',
+        complianceEvidence: {
+          federalStatus: 'listed', tcpaFlag: false, coveredAreaCode: null,
+          source: 'manual_import', scrubbedAt: OBSERVED_AT, expiresAt: null,
+        },
+      }],
+    }));
+
+    expect(database.raw.prepare(`
+      SELECT resulting_reason_code FROM contact_compliance_audit_events
+      WHERE contact_method_id = ? AND operation = 'intake_merge'
+    `).get('contact')).toEqual({ resulting_reason_code: 'federal_dnc_listed' });
   });
 
   type DuplicateContactFacts = {

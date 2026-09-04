@@ -1,4 +1,8 @@
-import type { ContactComplianceEvidence } from './contactComplianceTypes';
+import type {
+  ComplianceMergeResult,
+  ContactComplianceEvidence,
+} from './contactComplianceTypes';
+export type { ComplianceMergeResult } from './contactComplianceTypes';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_EVIDENCE_LIFETIME_MS = 31 * DAY_MS;
@@ -80,4 +84,50 @@ export function evaluateFederalEvidence(input: {
     return { kind: 'blocked', reasonCode: 'federal_area_code_mismatch' };
   }
   return { kind: 'usable_clear' };
+}
+
+function reasonCode(input: {
+  normalizedPhone: string;
+  evidence: ContactComplianceEvidence;
+  now: string;
+}): string {
+  const result = evaluateFederalEvidence(input);
+  return result.kind === 'usable_clear' ? 'usable_clear' : result.reasonCode;
+}
+
+export function mergeContactComplianceEvidence(input: {
+  current: ContactComplianceEvidence;
+  incoming: ContactComplianceEvidence;
+  normalizedPhone: string;
+  now: string;
+}): ComplianceMergeResult {
+  const currentResult = evaluateFederalEvidence({
+    normalizedPhone: input.normalizedPhone, evidence: input.current, now: input.now,
+  });
+  const incomingResult = evaluateFederalEvidence({
+    normalizedPhone: input.normalizedPhone, evidence: input.incoming, now: input.now,
+  });
+  let evidence = input.current;
+  if (input.incoming.federalStatus === 'listed') evidence = input.incoming;
+  else if (input.current.federalStatus !== 'listed' && incomingResult.kind === 'usable_clear') {
+    evidence = input.incoming;
+  } else if (
+    input.current.federalStatus !== 'listed'
+    && currentResult.kind !== 'usable_clear'
+    && input.incoming.tcpaFlag === true
+  ) {
+    evidence = input.incoming;
+  }
+  if (input.current.federalStatus === 'listed' && evidence.federalStatus !== 'listed') {
+    evidence = input.current;
+  }
+  if (input.current.tcpaFlag === true || input.incoming.tcpaFlag === true) {
+    evidence = { ...evidence, tcpaFlag: true };
+  }
+  const changed = JSON.stringify(evidence) !== JSON.stringify(input.current);
+  return {
+    evidence,
+    changed,
+    reasonCode: reasonCode({ normalizedPhone: input.normalizedPhone, evidence, now: input.now }),
+  };
 }

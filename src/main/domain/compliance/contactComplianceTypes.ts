@@ -57,3 +57,18 @@ export type ContactComplianceEvidence = Readonly<{
   scrubbedAt: string | null;
   expiresAt: string | null;
 }>;
+
+export type ComplianceMergeResult = Readonly<{
+  evidence: ContactComplianceEvidence;
+  changed: boolean;
+  reasonCode: string;
+}>;
+
+export type CorrectContactComplianceEvidenceInput = Readonly<{
+  contactMethodId: string;
+  evidence: ContactComplianceEvidence;
+  evidenceRef: string;
+  correctionReason: string;
+  correctedAt: string;
+  policyVersion: 'contact_compliance_correction_v1';
+}>;

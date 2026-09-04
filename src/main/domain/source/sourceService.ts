@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 import type { AppDatabase } from '../../db/database';
+import { ContactComplianceService } from '../compliance/contactComplianceService';
+import { mergeContactComplianceEvidence } from '../compliance/contactCompliance';
 import {
   contactComplianceEvidenceSchema,
   type ContactComplianceEvidence,
@@ -348,6 +350,7 @@ type NormalizedContact = {
   inContacts: boolean | null;
   dncListed: boolean;
   tcpaFlag: boolean;
+  complianceEvidence: ContactComplianceEvidence;
 };
 
 type NormalizedOrganization = z.infer<typeof organizationInputSchema> & {
@@ -393,6 +396,7 @@ export class SourceService {
   private readonly identities: IdentityRepository;
   private readonly sources: SourceRepository;
   private readonly receipts: IntakeReceiptRepository;
+  private readonly contactCompliance: ContactComplianceService | null;
   private readonly faultInjector: ((point: IntakeFaultPoint) => void) | undefined;
 
   constructor(input: {
@@ -401,6 +405,7 @@ export class SourceService {
     identities: IdentityRepository;
     sources: SourceRepository;
     receipts: IntakeReceiptRepository;
+    contactCompliance?: ContactComplianceService;
     faultInjector?: (point: IntakeFaultPoint) => void;
   }) {
     if (input.database.raw !== input.unitOfWork.database.raw) {
@@ -409,10 +414,12 @@ export class SourceService {
     input.identities.assertBoundTo(input.database, input.unitOfWork);
     input.sources.assertBoundTo(input.database, input.unitOfWork);
     input.receipts.assertBoundTo(input.database, input.unitOfWork);
+    input.contactCompliance?.assertBoundTo(input.database, input.unitOfWork);
     this.unitOfWork = input.unitOfWork;
     this.identities = input.identities;
     this.sources = input.sources;
     this.receipts = input.receipts;
+    this.contactCompliance = input.contactCompliance ?? null;
     this.faultInjector = input.faultInjector;
   }
 
@@ -487,10 +494,11 @@ export class SourceService {
           inContacts: contact.inContacts,
           dncListed: contact.dncListed,
           tcpaFlag: contact.tcpaFlag,
+          complianceEvidence: contact.complianceEvidence,
         });
       }
     } else {
-      this.attachNewContacts(person.id, command.contacts);
+      this.attachNewContacts(person.id, command.contacts, command.source);
     }
     this.inject('after_person');
 
@@ -578,12 +586,33 @@ export class SourceService {
     return { personId: personId ?? null, reviewReason: null };
   }
 
-  private attachNewContacts(personId: string, contacts: NormalizedContact[]): void {
+  private attachNewContacts(
+    personId: string,
+    contacts: NormalizedContact[],
+    source: NormalizedCommand['source'],
+  ): void {
     for (const contact of contacts) {
-      const alreadyLinked = this.identities.findContactMatchesByNormalizedHandle(
+      const existing = this.identities.findContactMatchesByNormalizedHandle(
         contact.kind, contact.normalizedValue,
-      ).some((match) => match.person.id === personId);
-      if (alreadyLinked) continue;
+      ).find((match) => match.person.id === personId)?.contactMethod;
+      if (existing !== undefined) {
+        if (this.contactCompliance === null && existing.kind === 'phone') {
+          const merged = mergeContactComplianceEvidence({
+            current: existing.complianceEvidence,
+            incoming: contact.complianceEvidence,
+            normalizedPhone: existing.normalizedValue,
+            now: source.observedAt,
+          });
+          if (merged.changed) throw new Error('Contact compliance service is required for evidence changes.');
+        }
+        this.contactCompliance?.mergeFromIntake({
+          contactMethodId: existing.id,
+          incoming: contact.complianceEvidence,
+          evidenceRef: source.evidenceRef ?? null,
+          observedAt: source.observedAt,
+        });
+        continue;
+      }
       // An existing person may already hold a primary of this kind (the
       // one_primary_contact_per_kind index); appended contacts (e.g. an
       // enrichment event landing after the identity event) keep the
@@ -602,6 +631,7 @@ export class SourceService {
         inContacts: contact.inContacts,
         dncListed: contact.dncListed,
         tcpaFlag: contact.tcpaFlag,
+        complianceEvidence: contact.complianceEvidence,
       });
     }
   }
@@ -839,6 +869,10 @@ function normalizeContacts(contacts: z.infer<typeof contactInputSchema>[]): Norm
       inContacts: contact.inContacts ?? null,
       dncListed: contact.dncListed,
       tcpaFlag: contact.tcpaFlag,
+      complianceEvidence: contact.complianceEvidence ?? contactComplianceEvidenceSchema.parse({
+        federalStatus: contact.dncListed ? 'listed' : 'unknown',
+        tcpaFlag: contact.tcpaFlag ? true : null,
+      }),
     };
     const existing = deduplicated.get(key);
     if (existing !== undefined) {
@@ -848,6 +882,7 @@ function normalizeContacts(contacts: z.infer<typeof contactInputSchema>[]): Norm
         || existing.inContacts !== canonical.inContacts
         || existing.dncListed !== canonical.dncListed
         || existing.tcpaFlag !== canonical.tcpaFlag
+        || JSON.stringify(existing.complianceEvidence) !== JSON.stringify(canonical.complianceEvidence)
       ) {
         throw new ContactNormalizationConflictError(contact.kind, normalizedValue);
       }

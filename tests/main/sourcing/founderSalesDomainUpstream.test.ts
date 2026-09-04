@@ -441,6 +441,35 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
     })).not.toThrow();
   });
 
+  it('merges later compliance evidence into an existing cloud-linked phone', () => {
+    const { personId } = importLinkedLead();
+
+    services.sources.createPersonProspectForPerson({
+      person: { displayName: 'Existing cloud lead' },
+      contacts: [{
+        kind: 'phone', value: '+14015551234', reachability: 'direct',
+        complianceEvidence: {
+          federalStatus: 'listed', tcpaFlag: false, coveredAreaCode: null,
+          source: 'manual_import', scrubbedAt: NOW, expiresAt: null,
+        },
+      }],
+      source: {
+        id: 'later-compliance-source', channel: 'registry', observedAt: NOW,
+        sourceRecord: { recordId: 'later-compliance-source' }, evidenceRef: 'registry-row-1',
+      },
+    }, personId);
+
+    const contact = services.identities.listContactMethodsForPerson(personId)
+      .find(({ normalizedValue }) => normalizedValue === '+14015551234');
+    expect(contact?.complianceEvidence.federalStatus).toBe('listed');
+    expect(database.raw.prepare(`
+      SELECT operation, resulting_reason_code FROM contact_compliance_audit_events
+      WHERE contact_method_id = ? AND operation = 'intake_merge'
+    `).get(contact?.id)).toEqual({
+      operation: 'intake_merge', resulting_reason_code: 'federal_dnc_listed',
+    });
+  });
+
   it('blocks outbound to a tcpa-flagged contact too', () => {
     const { personId, cycleId } = importLinkedLead();
     database.raw.prepare(

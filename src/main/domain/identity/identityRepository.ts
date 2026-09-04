@@ -30,6 +30,8 @@ import type {
   Prospect,
   UpdateProspectQualificationInput,
 } from './identityTypes';
+import type { ContactComplianceEvidence } from '../compliance/contactComplianceTypes';
+import type { AppendContactComplianceAuditInput } from '../source/sourceTypes';
 
 export type {
   AddContactMethodInput,
@@ -389,6 +391,73 @@ export class IdentityRepository {
       now,
     );
     return parseContactMethod(row);
+  }
+
+  getContactMethod(contactMethodId: string): ContactMethod | null {
+    const id = idSchema.parse(contactMethodId);
+    const row = this.database.raw.prepare(`
+      SELECT id, person_id, kind, normalized_value, raw_value, validation_state,
+        reachability, is_primary, in_contacts, dnc_listed, tcpa_flag,
+        federal_status, compliance_tcpa_flag, covered_area_code, compliance_source,
+        scrubbed_at, compliance_expires_at, created_at, updated_at
+      FROM person_contact_methods WHERE id = ?
+    `).get(id);
+    return row === undefined ? null : parseContactMethod(row);
+  }
+
+  updateContactComplianceEvidence(input: {
+    contactMethodId: string;
+    expected: ContactComplianceEvidence;
+    evidence: ContactComplianceEvidence;
+    updatedAt: string;
+  }): ContactMethod {
+    this.unitOfWork.assertWriteScope();
+    const id = idSchema.parse(input.contactMethodId);
+    const expected = contactComplianceEvidenceSchema.parse(input.expected);
+    const evidence = contactComplianceEvidenceSchema.parse(input.evidence);
+    const updatedAt = utcTimestampSchema.parse(input.updatedAt);
+    const flags = compatibilityFlags(evidence);
+    const row = this.database.raw.prepare(`
+      UPDATE person_contact_methods SET
+        dnc_listed = ?, tcpa_flag = ?, federal_status = ?, compliance_tcpa_flag = ?,
+        covered_area_code = ?, compliance_source = ?, scrubbed_at = ?,
+        compliance_expires_at = ?, updated_at = ?
+      WHERE id = ?
+        AND federal_status = ?
+        AND compliance_tcpa_flag IS ?
+        AND covered_area_code IS ?
+        AND compliance_source = ?
+        AND scrubbed_at IS ?
+        AND compliance_expires_at IS ?
+      RETURNING id, person_id, kind, normalized_value, raw_value, validation_state,
+        reachability, is_primary, in_contacts, dnc_listed, tcpa_flag,
+        federal_status, compliance_tcpa_flag, covered_area_code, compliance_source,
+        scrubbed_at, compliance_expires_at, created_at, updated_at
+    `).get(
+      flags.dncListed ? 1 : 0, flags.tcpaFlag ? 1 : 0, evidence.federalStatus,
+      evidence.tcpaFlag == null ? null : evidence.tcpaFlag ? 1 : 0,
+      evidence.coveredAreaCode, evidence.source, evidence.scrubbedAt, evidence.expiresAt,
+      updatedAt, id, expected.federalStatus,
+      expected.tcpaFlag == null ? null : expected.tcpaFlag ? 1 : 0,
+      expected.coveredAreaCode, expected.source, expected.scrubbedAt, expected.expiresAt,
+    );
+    if (row === undefined) throw new StaleDomainWriteError();
+    return parseContactMethod(row);
+  }
+
+  appendContactComplianceAudit(input: AppendContactComplianceAuditInput): void {
+    this.unitOfWork.assertWriteScope();
+    this.database.raw.prepare(`
+      INSERT INTO contact_compliance_audit_events (
+        id, contact_method_id, operation, old_evidence_json, new_evidence_json,
+        source, evidence_timestamp, evidence_ref, policy_version,
+        resulting_reason_code, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.id, input.contactMethodId, input.operation, input.oldEvidenceJson,
+      input.newEvidenceJson, input.source, input.evidenceTimestamp, input.evidenceRef,
+      input.policyVersion, input.resultingReasonCode, input.createdAt,
+    );
   }
 
   createCanonicalProspect(input: CreateProspectInput): Prospect {

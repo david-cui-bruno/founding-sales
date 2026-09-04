@@ -1,5 +1,6 @@
 import type { AppDatabase } from '../db/database';
 import { CadenceRepository } from './cadence/cadenceRepository';
+import { ContactComplianceService } from './compliance/contactComplianceService';
 import { FOUNDER_CHANNEL_POLICIES_V1 } from './cadence/cadenceScheduler';
 import { EventRepository } from './events/eventRepository';
 import { IdentityRepository } from './identity/identityRepository';
@@ -24,6 +25,7 @@ export type DomainServices = Readonly<{
   unitOfWork: DomainUnitOfWork;
   jobs: JobRepository;
   identities: IdentityRepository;
+  contactCompliance: ContactComplianceService;
   events: EventRepository;
   sourceRepository: SourceRepository;
   intakeReceipts: IntakeReceiptRepository;
@@ -56,11 +58,15 @@ export function createDomainServices(input: {
   const unitOfWork = new DomainUnitOfWork(database);
   const jobs = new JobRepository(database);
   const identities = new IdentityRepository({ database, unitOfWork, clock, ids });
+  const contactCompliance = new ContactComplianceService({
+    database, unitOfWork, identities, clock, ids,
+  });
   const events = new EventRepository({ database, unitOfWork, clock, ids });
   const sourceRepository = new SourceRepository({ database, unitOfWork, clock });
   const intakeReceipts = new IntakeReceiptRepository({ database, unitOfWork, clock });
   const sources = new SourceService({
     database, unitOfWork, identities, sources: sourceRepository, receipts: intakeReceipts,
+    contactCompliance,
   });
   const cadences = new CadenceRepository({ database, unitOfWork, clock });
   const lifecycle = new LifecycleService({
@@ -95,6 +101,7 @@ export function createDomainServices(input: {
 
   // Assert every final binding before any read/time/ID access.
   identities.assertBoundTo(database, unitOfWork);
+  contactCompliance.assertBoundTo(database, unitOfWork);
   events.assertBoundTo(database, unitOfWork);
   sourceRepository.assertBoundTo(database, unitOfWork);
   intakeReceipts.assertBoundTo(database, unitOfWork);
@@ -110,6 +117,7 @@ export function createDomainServices(input: {
     unitOfWork,
     jobs,
     identities,
+    contactCompliance,
     events,
     sourceRepository,
     intakeReceipts,
