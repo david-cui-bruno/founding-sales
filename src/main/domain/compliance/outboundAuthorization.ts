@@ -1,4 +1,5 @@
 import type { ChannelPolicySnapshots } from '../cadence/cadenceScheduler';
+import { evaluateFederalEvidence } from './contactCompliance';
 import type { ContactComplianceEvidence } from './contactComplianceTypes';
 
 export type OutboundChannel = 'call' | 'text';
@@ -64,12 +65,8 @@ const refused = (reasonCode: OutboundAuthorizationReasonCode): OutboundAuthoriza
 );
 
 function instant(value: string): number | null {
-  const result = new Date(value).getTime();
-  return Number.isFinite(result) ? result : null;
-}
-function areaCode(phone: string): string | null {
-  const match = /^\+1(\d{3})\d{7}$/.exec(phone);
-  return match?.[1] ?? null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) && date.toISOString() === value ? date.getTime() : null;
 }
 function localParts(epoch: number, timezone: string): { weekday: number; minute: number } | null {
   try {
@@ -92,16 +89,12 @@ export function evaluateOutboundAuthorization(input: AuthorizationInput): Outbou
   if (input.personOrHandleOptedOut) return refused('person_or_handle_opted_out');
   if (input.contact.kind !== 'phone') return refused('channel_contact_kind_mismatch');
   if (input.contact.validationState !== 'valid') return refused('contact_validation_unusable');
-  const evidence = input.contact.evidence;
-  if (evidence.federalStatus === 'unknown') return refused('federal_status_unknown');
-  if (evidence.federalStatus === 'listed') return refused('federal_dnc_listed');
-  const expiresAt = evidence.expiresAt === null ? null : instant(evidence.expiresAt);
-  if (expiresAt === null || expiresAt <= now) return refused('federal_evidence_stale');
-  if (evidence.coveredAreaCode === null || evidence.coveredAreaCode !== areaCode(input.contact.normalizedValue)) {
-    return refused('federal_area_code_mismatch');
-  }
-  if (evidence.tcpaFlag === null) return refused('tcpa_status_unknown');
-  if (evidence.tcpaFlag) return refused('tcpa_blocked');
+  const federal = evaluateFederalEvidence({
+    normalizedPhone: input.contact.normalizedValue,
+    evidence: input.contact.evidence,
+    now: input.now,
+  });
+  if (federal.kind === 'blocked') return refused(federal.reasonCode);
   if (input.jurisdiction === null) return refused('jurisdiction_unknown');
   const reviewAt = input.jurisdiction.reviewAt === null ? null : instant(input.jurisdiction.reviewAt);
   if (input.jurisdiction.reviewAt !== null && (reviewAt === null || reviewAt <= now)) {
@@ -146,7 +139,8 @@ export function evaluateCallRecordingAuthorization(input: {
   const observedAt = input.consent.observedAt === null ? null : instant(input.consent.observedAt);
   const expiresAt = input.consent.expiresAt === null ? null : instant(input.consent.expiresAt);
   if (now === null || observedAt === null || observedAt > now || expiresAt === null || expiresAt <= now
-    || input.consent.source === null || input.consent.evidenceRef === null) {
+    || input.consent.source?.trim() === '' || input.consent.source === null
+    || input.consent.evidenceRef?.trim() === '' || input.consent.evidenceRef === null) {
     return { kind: 'refused', reasonCode: 'recording_consent_stale' };
   }
   return { kind: 'allowed' };

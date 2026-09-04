@@ -105,10 +105,11 @@ export class ContactComplianceService {
       contactMethodId, expected: current.complianceEvidence,
       evidence: merged.evidence, updatedAt: observedAt,
     });
+    const authorizationAt = canonicalTimestampSchema.parse(this.clock.now());
     const jurisdiction = this.jurisdictions.getPersonJurisdiction(updated.personId);
     const authorization = (channel: 'call' | 'text') => evaluateOutboundAuthorization({
       channel,
-      now: observedAt,
+      now: authorizationAt,
       personOrHandleOptedOut: this.identities.isPersonOrHandleOptedOut(updated.personId, {
         kind: updated.kind, normalizedValue: updated.normalizedValue,
       }),
@@ -139,7 +140,7 @@ export class ContactComplianceService {
       resultingReasonCode: merged.reasonCode,
       resultingCallReasonCode: callDecision.kind === 'refused' ? callDecision.reasonCode : null,
       resultingTextReasonCode: textDecision.kind === 'refused' ? textDecision.reasonCode : null,
-      createdAt: canonicalTimestampSchema.parse(this.clock.now()),
+      createdAt: authorizationAt,
     });
     return updated;
   }

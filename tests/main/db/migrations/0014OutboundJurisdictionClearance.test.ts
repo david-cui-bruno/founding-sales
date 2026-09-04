@@ -76,6 +76,7 @@ describe('0014 outbound jurisdiction clearance migration', () => {
   it('backfills one unambiguous property region and leaves conflicts unknown', async () => {
     person('ma'); property('ma', 'ma-1', 'Massachusetts');
     person('conflict'); property('conflict', 'c-1', 'Rhode Island'); property('conflict', 'c-2', 'CT');
+    person('mixed'); property('mixed', 'm-1', 'Massachusetts'); property('mixed', 'm-2', 'New Hampshire');
     person('blank'); property('blank', 'b-1', '   ');
     await through14(database, options);
     expect(database.raw.prepare(`SELECT person_id, region_code, timezone, source

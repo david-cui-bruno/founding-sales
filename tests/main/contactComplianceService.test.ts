@@ -176,4 +176,37 @@ describe('ContactComplianceService', () => {
       resulting_text_reason_code: 'federal_dnc_listed',
     });
   });
+
+  it('uses one transaction clock time for authorization reasons and audit creation', () => {
+    database.raw.prepare(`UPDATE person_contact_methods SET
+      dnc_listed = 0, tcpa_flag = 0, federal_status = 'unknown', compliance_tcpa_flag = NULL,
+      covered_area_code = NULL, compliance_source = 'legacy', scrubbed_at = NULL,
+      compliance_expires_at = NULL WHERE id = 'contact'`).run();
+    database.raw.prepare(`INSERT INTO person_outbound_jurisdictions
+      (person_id, region_code, timezone, source, effective_at, updated_at)
+      VALUES ('person', 'RI', 'America/New_York', 'manual_review', ?, ?)` ).run(NOW, NOW);
+    database.raw.prepare(`UPDATE outbound_jurisdiction_clearances SET
+      decision = 'allowed', registration_confirmed = 1,
+      state_dnc_subscription_confirmed = 1, consent_rule_confirmed = 1,
+      expires_at = '2026-10-01T00:00:00.000Z'
+      WHERE region_code = 'RI' AND channel = 'call'`).run();
+    database.raw.prepare(`INSERT INTO outbound_jurisdiction_clearances
+      (region_code, channel, decision, registration_confirmed,
+       state_dnc_subscription_confirmed, consent_rule_confirmed, source,
+       effective_at, expires_at, updated_at)
+      VALUES ('RI', 'text', 'allowed', 1, 1, 1, 'test', ?, '2026-10-01T00:00:00.000Z', ?)` ).run(NOW, NOW);
+    ids = ['timed-audit'];
+
+    unitOfWork.immediate(() => service.mergeFromIntake({
+      contactMethodId: 'contact', incoming: CLEAR, evidenceRef: 'future-observation',
+      observedAt: '2026-09-05T00:00:00.000Z',
+    }));
+
+    expect(database.raw.prepare(`SELECT resulting_call_reason_code, resulting_text_reason_code, created_at
+      FROM contact_compliance_audit_events WHERE id = 'timed-audit'`).get()).toEqual({
+      resulting_call_reason_code: null,
+      resulting_text_reason_code: null,
+      created_at: NOW,
+    });
+  });
 });

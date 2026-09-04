@@ -53,30 +53,36 @@ export const migration0014OutboundJurisdictionClearance = {
       ('RI', 'call', 'unknown', NULL, NULL, NULL, 'approved_design_2026_09_04', '${EFFECTIVE_AT}', NULL, '${EFFECTIVE_AT}'),
       ('CT', 'call', 'unknown', NULL, NULL, NULL, 'approved_design_2026_09_04', '${EFFECTIVE_AT}', NULL, '${EFFECTIVE_AT}')`).execute(db);
 
-    await sql.raw(`WITH normalized AS (
-      SELECT pr.person_id, p.id AS property_id,
-        CASE trim(p.region)
-          WHEN 'Massachusetts' THEN 'MA'
-          WHEN 'Rhode Island' THEN 'RI'
-          WHEN 'Connecticut' THEN 'CT'
-          ELSE upper(trim(p.region))
-        END AS region_code
+    await sql.raw(`WITH nonblank AS (
+      SELECT pr.person_id, upper(trim(p.region)) AS region_value
       FROM prospects pr
       JOIN prospect_properties pp ON pp.prospect_id = pr.id
       JOIN properties p ON p.id = pp.property_id
       WHERE trim(p.region) <> ''
     ), unambiguous AS (
-      SELECT person_id, min(region_code) AS region_code
-      FROM normalized
-      WHERE region_code GLOB '[A-Z][A-Z]'
+      SELECT person_id, min(region_value) AS region_value
+      FROM nonblank
       GROUP BY person_id
-      HAVING count(DISTINCT region_code) = 1
+      HAVING count(DISTINCT region_value) = 1
+    ), supported AS (
+      SELECT person_id,
+        CASE region_value
+          WHEN 'MASSACHUSETTS' THEN 'MA'
+          WHEN 'MA' THEN 'MA'
+          WHEN 'RHODE ISLAND' THEN 'RI'
+          WHEN 'RI' THEN 'RI'
+          WHEN 'CONNECTICUT' THEN 'CT'
+          WHEN 'CT' THEN 'CT'
+          ELSE NULL
+        END AS region_code
+      FROM unambiguous
     )
     INSERT INTO person_outbound_jurisdictions
       (person_id, region_code, timezone, source, evidence_ref, effective_at, review_at, updated_at)
     SELECT person_id, region_code, 'America/New_York', 'property_address', NULL,
       '${EFFECTIVE_AT}', NULL, '${EFFECTIVE_AT}'
-    FROM unambiguous`).execute(db);
+    FROM supported
+    WHERE region_code IS NOT NULL`).execute(db);
 
     await sql.raw(`INSERT INTO outbound_jurisdiction_audit_events
       (id, subject_kind, subject_key, old_value_json, new_value_json, source, effective_at, created_at)

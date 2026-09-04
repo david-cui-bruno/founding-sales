@@ -67,6 +67,32 @@ describe('evaluateOutboundAuthorization', () => {
     expect(decide()).toEqual({ kind: 'allowed' });
   });
 
+  it('refuses vendor-sourced clear federal evidence', () => {
+    expect(decide({ contact: {
+      kind: 'phone', normalizedValue: '+14015550100', validationState: 'valid',
+      evidence: { ...CLEAR, source: 'enrichment_vendor' },
+    } })).toEqual({ kind: 'refused', reasonCode: 'federal_status_unknown' });
+  });
+
+  it('refuses future and noncanonical federal timestamps', () => {
+    expect(decide({ contact: {
+      kind: 'phone', normalizedValue: '+14015550100', validationState: 'valid',
+      evidence: { ...CLEAR, scrubbedAt: '2026-09-04T15:00:00.000Z' },
+    } })).toEqual({ kind: 'refused', reasonCode: 'federal_evidence_stale' });
+    expect(decide({ contact: {
+      kind: 'phone', normalizedValue: '+14015550100', validationState: 'valid',
+      evidence: { ...CLEAR, scrubbedAt: '2026-09-01T00:00:00Z' },
+    } })).toEqual({ kind: 'refused', reasonCode: 'federal_evidence_stale' });
+  });
+
+  it('refuses federal evidence with a lifetime over 31 days', () => {
+    expect(decide({ contact: {
+      kind: 'phone', normalizedValue: '+14015550100', validationState: 'valid',
+      evidence: { ...CLEAR, scrubbedAt: '2026-08-01T00:00:00.000Z',
+        expiresAt: '2026-10-01T00:00:00.000Z' },
+    } })).toEqual({ kind: 'refused', reasonCode: 'federal_evidence_stale' });
+  });
+
   it('refuses one millisecond before opening and at the exclusive closing boundary', () => {
     expect(decide({ now: '2026-09-04T12:59:59.999Z' })).toEqual({ kind: 'refused', reasonCode: 'outside_recipient_window' });
     expect(decide({ now: '2026-09-05T00:00:00.000Z' })).toEqual({ kind: 'refused', reasonCode: 'outside_recipient_window' });
@@ -75,13 +101,15 @@ describe('evaluateOutboundAuthorization', () => {
   it('handles DST transitions in the recipient timezone without using host-local time', () => {
     const yearlong = { ...clearance, effectiveAt: '2026-01-01T00:00:00.000Z',
       expiresAt: '2027-01-01T00:00:00.000Z' };
-    const evidence = { ...CLEAR, scrubbedAt: '2026-01-01T00:00:00.000Z',
-      expiresAt: '2027-01-01T00:00:00.000Z' };
+    const springEvidence = { ...CLEAR, scrubbedAt: '2026-03-01T00:00:00.000Z',
+      expiresAt: '2026-04-01T00:00:00.000Z' };
+    const fallEvidence = { ...CLEAR, scrubbedAt: '2026-10-15T00:00:00.000Z',
+      expiresAt: '2026-11-15T00:00:00.000Z' };
     expect(decide({ now: '2026-03-08T17:00:00.000Z', clearance: yearlong,
-      contact: { kind: 'phone', normalizedValue: '+14015550100', validationState: 'valid', evidence } }))
+      contact: { kind: 'phone', normalizedValue: '+14015550100', validationState: 'valid', evidence: springEvidence } }))
       .toEqual({ kind: 'allowed' });
     expect(decide({ now: '2026-11-01T18:00:00.000Z', clearance: yearlong,
-      contact: { kind: 'phone', normalizedValue: '+14015550100', validationState: 'valid', evidence } }))
+      contact: { kind: 'phone', normalizedValue: '+14015550100', validationState: 'valid', evidence: fallEvidence } }))
       .toEqual({ kind: 'allowed' });
   });
 });
@@ -102,5 +130,24 @@ describe('evaluateCallRecordingAuthorization', () => {
   it('allows recording only with a separately current granted consent decision', () => {
     expect(evaluateCallRecordingAuthorization({ callDecision: { kind: 'allowed' }, consent: granted, now: '2026-09-04T14:00:00.000Z' }))
       .toEqual({ kind: 'allowed' });
+  });
+  it('refuses recording with blank consent provenance', () => {
+    expect(evaluateCallRecordingAuthorization({ callDecision: { kind: 'allowed' },
+      consent: { ...granted, source: '  ' }, now: '2026-09-04T14:00:00.000Z' }))
+      .toEqual({ kind: 'refused', reasonCode: 'recording_consent_stale' });
+    expect(evaluateCallRecordingAuthorization({ callDecision: { kind: 'allowed' },
+      consent: { ...granted, evidenceRef: '\t' }, now: '2026-09-04T14:00:00.000Z' }))
+      .toEqual({ kind: 'refused', reasonCode: 'recording_consent_stale' });
+  });
+  it('refuses recording with noncanonical timestamps', () => {
+    expect(evaluateCallRecordingAuthorization({ callDecision: { kind: 'allowed' },
+      consent: granted, now: '2026-09-04T14:00:00Z' }))
+      .toEqual({ kind: 'refused', reasonCode: 'recording_consent_stale' });
+    expect(evaluateCallRecordingAuthorization({ callDecision: { kind: 'allowed' },
+      consent: { ...granted, observedAt: '2026-09-04T13:00:00Z' }, now: '2026-09-04T14:00:00.000Z' }))
+      .toEqual({ kind: 'refused', reasonCode: 'recording_consent_stale' });
+    expect(evaluateCallRecordingAuthorization({ callDecision: { kind: 'allowed' },
+      consent: { ...granted, expiresAt: '2026-09-05T00:00:00Z' }, now: '2026-09-04T14:00:00.000Z' }))
+      .toEqual({ kind: 'refused', reasonCode: 'recording_consent_stale' });
   });
 });
