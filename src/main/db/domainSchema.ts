@@ -53,8 +53,28 @@ export type PersonContactMethodsTable = {
   in_contacts: StoredBoolean | null;
   dnc_listed: StoredBoolean;
   tcpa_flag: StoredBoolean;
+  federal_status: 'unknown' | 'verified_clear' | 'listed';
+  compliance_tcpa_flag: StoredBoolean | null;
+  covered_area_code: string | null;
+  compliance_source: 'ftc_download' | 'enrichment_vendor' | 'manual_import' | 'legacy';
+  scrubbed_at: string | null;
+  compliance_expires_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type ContactComplianceAuditEventsTable = {
+  id: string;
+  contact_method_id: string;
+  operation: 'intake_merge' | 'authoritative_correction' | 'legacy_backfill';
+  old_evidence_json: string;
+  new_evidence_json: string;
+  source: 'ftc_download' | 'enrichment_vendor' | 'manual_import' | 'legacy';
+  evidence_timestamp: string | null;
+  evidence_ref: string | null;
+  policy_version: string;
+  resulting_reason_code: string;
+  created_at: string;
 };
 
 export type OrganizationsTable = {
@@ -550,6 +570,7 @@ export type DomainTables = {
   organizations: OrganizationsTable;
   persons: PersonsTable;
   person_contact_methods: PersonContactMethodsTable;
+  contact_compliance_audit_events: ContactComplianceAuditEventsTable;
   prioritization_evaluations: PrioritizationEvaluationsTable;
   prioritization_preference_events: PrioritizationPreferenceEventsTable;
   prioritization_rule_versions: PrioritizationRuleVersionsTable;

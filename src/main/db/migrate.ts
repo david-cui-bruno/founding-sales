@@ -17,6 +17,7 @@ import { migration0009SourcingFileLedger } from './migrations/0009SourcingFileLe
 import { migration0010NoDueDates } from './migrations/0010NoDueDates';
 import { migration0011ContactDncFlags } from './migrations/0011ContactDncFlags';
 import { migration0012UpstreamRequestState } from './migrations/0012UpstreamRequestState';
+import { migration0013ContactComplianceEvidence } from './migrations/0013ContactComplianceEvidence';
 import type { WorkspaceKey } from '../security/workspaceKeyTypes';
 
 export type MigrationResult = {
@@ -107,6 +108,11 @@ const productionMigrations = [
     id: '0012UpstreamRequestState',
     schemaVersion: 12,
     migration: migration0012UpstreamRequestState,
+  },
+  {
+    id: '0013ContactComplianceEvidence',
+    schemaVersion: 13,
+    migration: migration0013ContactComplianceEvidence,
   },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);

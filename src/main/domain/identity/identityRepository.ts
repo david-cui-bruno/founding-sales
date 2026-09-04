@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 import type { AppDatabase } from '../../db/database';
 import type { Clock } from '../support/clock';
+import { compatibilityFlags } from '../compliance/contactCompliance';
+import { contactComplianceEvidenceSchema } from '../compliance/contactComplianceTypes';
 import {
   ContextLinkConflictError,
   DomainRepositoryDatabaseMismatchError,
@@ -80,6 +82,7 @@ const addContactMethodInputSchema = z.object({
   inContacts: z.boolean().nullable().optional(),
   dncListed: z.boolean().default(false),
   tcpaFlag: z.boolean().default(false),
+  complianceEvidence: contactComplianceEvidenceSchema.optional(),
 }).strict();
 
 const qualificationGateReasonSchema = z.enum([
@@ -185,6 +188,12 @@ const storedContactMethodRowSchema = z.object({
   in_contacts: storedBooleanSchema.nullable(),
   dnc_listed: storedBooleanSchema,
   tcpa_flag: storedBooleanSchema,
+  federal_status: z.enum(['unknown', 'verified_clear', 'listed']),
+  compliance_tcpa_flag: storedBooleanSchema.nullable(),
+  covered_area_code: z.string().regex(/^\d{3}$/).nullable(),
+  compliance_source: z.enum(['ftc_download', 'enrichment_vendor', 'manual_import', 'legacy']),
+  scrubbed_at: utcTimestampSchema.nullable(),
+  compliance_expires_at: utcTimestampSchema.nullable(),
   created_at: utcTimestampSchema,
   updated_at: utcTimestampSchema,
 }).strict();
@@ -258,6 +267,12 @@ const handleLookupRowSchema = storedPersonRowSchema.extend({
   contact_in_contacts: storedBooleanSchema.nullable(),
   contact_dnc_listed: storedBooleanSchema,
   contact_tcpa_flag: storedBooleanSchema,
+  contact_federal_status: z.enum(['unknown', 'verified_clear', 'listed']),
+  contact_compliance_tcpa_flag: storedBooleanSchema.nullable(),
+  contact_covered_area_code: z.string().regex(/^\d{3}$/).nullable(),
+  contact_compliance_source: z.enum(['ftc_download', 'enrichment_vendor', 'manual_import', 'legacy']),
+  contact_scrubbed_at: utcTimestampSchema.nullable(),
+  contact_compliance_expires_at: utcTimestampSchema.nullable(),
   contact_created_at: utcTimestampSchema,
   contact_updated_at: utcTimestampSchema,
 }).strict();
@@ -329,14 +344,28 @@ export class IdentityRepository {
     const parsed = addContactMethodInputSchema.parse(input);
     const id = idSchema.parse(this.ids.next());
     const now = utcTimestampSchema.parse(this.clock.now());
+    const suppliedEvidence = parsed.complianceEvidence ?? contactComplianceEvidenceSchema.parse({});
+    const evidence = contactComplianceEvidenceSchema.parse({
+      ...suppliedEvidence,
+      federalStatus: parsed.dncListed || suppliedEvidence.federalStatus === 'listed'
+        ? 'listed'
+        : suppliedEvidence.federalStatus,
+      tcpaFlag: parsed.tcpaFlag || suppliedEvidence.tcpaFlag === true
+        ? true
+        : suppliedEvidence.tcpaFlag,
+    });
+    const flags = compatibilityFlags(evidence);
     const row = this.database.raw.prepare(`
       INSERT INTO person_contact_methods (
         id, person_id, kind, normalized_value, raw_value, validation_state,
         reachability, is_primary, in_contacts, dnc_listed, tcpa_flag,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        federal_status, compliance_tcpa_flag, covered_area_code, compliance_source,
+        scrubbed_at, compliance_expires_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id, person_id, kind, normalized_value, raw_value, validation_state,
         reachability, is_primary, in_contacts, dnc_listed, tcpa_flag,
+        federal_status, compliance_tcpa_flag, covered_area_code, compliance_source,
+        scrubbed_at, compliance_expires_at,
         created_at, updated_at
     `).get(
       id,
@@ -348,8 +377,14 @@ export class IdentityRepository {
       parsed.reachability,
       parsed.isPrimary ? 1 : 0,
       parsed.inContacts == null ? null : parsed.inContacts ? 1 : 0,
-      parsed.dncListed ? 1 : 0,
-      parsed.tcpaFlag ? 1 : 0,
+      flags.dncListed ? 1 : 0,
+      flags.tcpaFlag ? 1 : 0,
+      evidence.federalStatus,
+      evidence.tcpaFlag == null ? null : evidence.tcpaFlag ? 1 : 0,
+      evidence.coveredAreaCode,
+      evidence.source,
+      evidence.scrubbedAt,
+      evidence.expiresAt,
       now,
       now,
     );
@@ -518,7 +553,14 @@ export class IdentityRepository {
         c.raw_value AS contact_raw_value, c.validation_state AS contact_validation_state,
         c.reachability AS contact_reachability, c.is_primary AS contact_is_primary,
         c.in_contacts AS contact_in_contacts, c.dnc_listed AS contact_dnc_listed,
-        c.tcpa_flag AS contact_tcpa_flag, c.created_at AS contact_created_at,
+        c.tcpa_flag AS contact_tcpa_flag,
+        c.federal_status AS contact_federal_status,
+        c.compliance_tcpa_flag AS contact_compliance_tcpa_flag,
+        c.covered_area_code AS contact_covered_area_code,
+        c.compliance_source AS contact_compliance_source,
+        c.scrubbed_at AS contact_scrubbed_at,
+        c.compliance_expires_at AS contact_compliance_expires_at,
+        c.created_at AS contact_created_at,
         c.updated_at AS contact_updated_at
       FROM person_contact_methods AS c
       JOIN persons AS p ON p.id = c.person_id
@@ -540,6 +582,12 @@ export class IdentityRepository {
         in_contacts: row.contact_in_contacts,
         dnc_listed: row.contact_dnc_listed,
         tcpa_flag: row.contact_tcpa_flag,
+        federal_status: row.contact_federal_status,
+        compliance_tcpa_flag: row.contact_compliance_tcpa_flag,
+        covered_area_code: row.contact_covered_area_code,
+        compliance_source: row.contact_compliance_source,
+        scrubbed_at: row.contact_scrubbed_at,
+        compliance_expires_at: row.contact_compliance_expires_at,
         created_at: row.contact_created_at,
         updated_at: row.contact_updated_at,
       });
@@ -565,6 +613,8 @@ export class IdentityRepository {
     return this.database.raw.prepare(`
       SELECT id, person_id, kind, normalized_value, raw_value, validation_state,
         reachability, is_primary, in_contacts, dnc_listed, tcpa_flag,
+        federal_status, compliance_tcpa_flag, covered_area_code, compliance_source,
+        scrubbed_at, compliance_expires_at,
         created_at, updated_at
       FROM person_contact_methods
       WHERE person_id = ?
@@ -721,6 +771,14 @@ function parseContactMethod(value: unknown): ContactMethod {
     inContacts: row.in_contacts === null ? null : row.in_contacts === 1,
     dncListed: row.dnc_listed === 1,
     tcpaFlag: row.tcpa_flag === 1,
+    complianceEvidence: {
+      federalStatus: row.federal_status,
+      tcpaFlag: row.compliance_tcpa_flag === null ? null : row.compliance_tcpa_flag === 1,
+      coveredAreaCode: row.covered_area_code,
+      source: row.compliance_source,
+      scrubbedAt: row.scrubbed_at,
+      expiresAt: row.compliance_expires_at,
+    },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

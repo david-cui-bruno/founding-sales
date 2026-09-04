@@ -1,4 +1,5 @@
 import type { QualificationGateReasonCode } from '../../db/domainSchema';
+import type { ContactComplianceEvidence } from '../compliance/contactComplianceTypes';
 
 export type Person = {
   id: string;
@@ -26,6 +27,7 @@ export type ContactMethod = {
   inContacts: boolean | null;
   dncListed: boolean;
   tcpaFlag: boolean;
+  complianceEvidence: ContactComplianceEvidence;
   createdAt: string;
   updatedAt: string;
 };
@@ -120,6 +122,7 @@ export type AddContactMethodInput = {
   inContacts?: boolean | null;
   dncListed?: boolean;
   tcpaFlag?: boolean;
+  complianceEvidence?: ContactComplianceEvidence;
 };
 
 export type CreateProspectInput = QualificationSelection & {
