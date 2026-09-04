@@ -36,6 +36,11 @@ interface FakeState {
   scanPageSize: number;
   runIds: string[];
   unprocessedBatchGetOnce: boolean;
+  conflictOnSuppressionWrite?: {
+    hash: string;
+    winner: DynamoItem;
+    remaining: number;
+  };
 }
 
 const VALID_LINE = {
@@ -101,6 +106,34 @@ function state(objects: FakeObjectVersion[] = []): FakeState {
 function readS(item: DynamoItem, key: string): string | undefined {
   const value = item[key];
   return value && "S" in value ? value.S : undefined;
+}
+
+function conditionalFailure(): Error {
+  return Object.assign(new Error("conditional write conflict"), {
+    name: "ConditionalCheckFailedException",
+  });
+}
+
+function conditionMatches(
+  input: Record<string, unknown>,
+  current: DynamoItem | undefined,
+): boolean {
+  const expression = input.ConditionExpression as string | undefined;
+  if (!expression) return true;
+  if (expression === "attribute_not_exists(contact_hash)") return current === undefined;
+  if (!current) return false;
+  const values = (input.ExpressionAttributeValues ?? {}) as DynamoItem;
+  const expected = [
+    ["kind", readS(values, ":expected_kind")],
+    ["reason", readS(values, ":expected_reason")],
+    ["observed_at", readS(values, ":expected_observed_at")],
+  ] as const;
+  return expected.every(([field, value]) =>
+    value === undefined
+      ? expression.includes(`attribute_not_exists(#${field})`) &&
+        readS(current, field) === undefined
+      : readS(current, field) === value,
+  );
 }
 
 function bodyToString(body: unknown): string {
@@ -186,7 +219,17 @@ function fakeDeps(s: FakeState): HandlerDeps {
         if (name === "PutItemCommand") {
           const item = input.Item as DynamoItem;
           if (tableName === "suppression") {
-            s.suppressions.set(readS(item, "contact_hash") ?? "", item);
+            const hash = readS(item, "contact_hash") ?? "";
+            const conflict = s.conflictOnSuppressionWrite;
+            if (conflict?.hash === hash && conflict.remaining > 0) {
+              conflict.remaining -= 1;
+              s.suppressions.set(hash, conflict.winner);
+              if (input.ConditionExpression) throw conditionalFailure();
+            }
+            if (!conditionMatches(input, s.suppressions.get(hash))) {
+              throw conditionalFailure();
+            }
+            s.suppressions.set(hash, item);
           } else if (tableName === "snapshots") {
             s.ledger.set(readS(item, "source_natural_key") ?? "", item);
           } else {
@@ -415,6 +458,36 @@ describe("suppression historical replay", () => {
     ).toHaveLength(0);
   });
 
+  it("retries a replay conflict and preserves the stronger earlier concurrent winner", async () => {
+    const hash = hashFor(13);
+    const winner = suppressionItem({
+      hash,
+      reason: "opt_out",
+      observedAt: "2026-09-04T08:00:00.000Z",
+    });
+    const s = state([
+      objectVersion({
+        body: ndjson(
+          lineFor(hash, {
+            reason: "founder_block",
+            observed_at: "2026-09-04T10:00:00.000Z",
+          }),
+        ),
+      }),
+    ]);
+    s.conflictOnSuppressionWrite = { hash, winner, remaining: 1 };
+
+    const result = replayResult(
+      await runHandler(fakeDeps(s), { mode: "replay", dryRun: false }),
+    );
+
+    expect(result.report.appliedMemberships).toBe(0);
+    expect(s.suppressions.get(hash)).toEqual(winner);
+    expect(
+      s.commands.filter((command) => command.name === "dynamo:BatchGetItemCommand"),
+    ).toHaveLength(2);
+  });
+
   it("quarantines invalid historical versions without ledgering them", async () => {
     const invalid = objectVersion({
       key: `${UPLOADS_PREFIX}middle.ndjson`,
@@ -616,6 +689,30 @@ describe("suppression historical replay", () => {
       s.commands.slice(commandCount).some((command) => command.name === "s3:PutObjectCommand"),
     ).toBe(false);
     expect(reconciled.reportKey.startsWith(REPORTS_PREFIX)).toBe(true);
+  });
+
+  it("rejects report keys that are not an exact generated key", async () => {
+    const ulid = "01K4AWJ1AN0000000000000001";
+    const invalidKeys = [
+      `${REPORTS_PREFIX}latest.json`,
+      `${REPORTS_PREFIX}2026-09-04/report.json`,
+      `${REPORTS_PREFIX}2026-09-03/2026-09-04T123456789Z-${ulid}.json`,
+      `${REPORTS_PREFIX}2026-09-04/2026-09-04T126056789Z-${ulid}.json`,
+      `${REPORTS_PREFIX}2026-09-04/2026-09-04T12:34:56.789Z-${ulid}.json`,
+      `${REPORTS_PREFIX}2026-09-04/2026-09-04T123456789Z-${ulid.toLowerCase()}.json`,
+      `${REPORTS_PREFIX}2026-09-04/2026-09-04T123456789Z-${ulid}.json.bak`,
+      `${REPORTS_PREFIX}/2026-09-04/2026-09-04T123456789Z-${ulid}.json`,
+      `${REPORTS_PREFIX}2026-09-04/extra/2026-09-04T123456789Z-${ulid}.json`,
+      `${REPORTS_PREFIX}2026-09-04/2026-09-04T123456789Z-${ulid.slice(1)}.json`,
+    ];
+
+    for (const reportKey of invalidKeys) {
+      const s = state();
+      await expect(
+        runHandler(fakeDeps(s), { mode: "reconcile", reportKey }),
+      ).rejects.toThrow("exact suppression replay report key");
+      expect(s.commands).toEqual([]);
+    }
   });
 
   it("only explicit replay continues past quarantined historical versions", async () => {

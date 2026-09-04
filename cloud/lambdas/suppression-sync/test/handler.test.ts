@@ -28,6 +28,11 @@ interface FakeState {
   commands: SentCommand[];
   listPageSize: number;
   failOnSuppressionHash?: string;
+  conflictOnSuppressionWrite?: {
+    hash: string;
+    winner: DynamoItem;
+    remaining: number;
+  };
 }
 
 const VALID_LINE = {
@@ -112,6 +117,34 @@ function readS(item: DynamoItem, key: string): string | undefined {
   return value && "S" in value ? value.S : undefined;
 }
 
+function conditionalFailure(): Error {
+  return Object.assign(new Error("conditional write conflict"), {
+    name: "ConditionalCheckFailedException",
+  });
+}
+
+function conditionMatches(
+  input: Record<string, unknown>,
+  current: DynamoItem | undefined,
+): boolean {
+  const expression = input.ConditionExpression as string | undefined;
+  if (!expression) return true;
+  if (expression === "attribute_not_exists(contact_hash)") return current === undefined;
+  if (!current) return false;
+  const values = (input.ExpressionAttributeValues ?? {}) as DynamoItem;
+  const expected = [
+    ["kind", readS(values, ":expected_kind")],
+    ["reason", readS(values, ":expected_reason")],
+    ["observed_at", readS(values, ":expected_observed_at")],
+  ] as const;
+  return expected.every(([field, value]) =>
+    value === undefined
+      ? expression.includes(`attribute_not_exists(#${field})`) &&
+        readS(current, field) === undefined
+      : readS(current, field) === value,
+  );
+}
+
 function fakeDeps(s: FakeState): HandlerDeps {
   return {
     s3: {
@@ -188,6 +221,15 @@ function fakeDeps(s: FakeState): HandlerDeps {
             if (hash === s.failOnSuppressionHash) {
               throw new Error("forced suppression write failure");
             }
+            const conflict = s.conflictOnSuppressionWrite;
+            if (conflict?.hash === hash && conflict.remaining > 0) {
+              conflict.remaining -= 1;
+              s.suppressions.set(hash, conflict.winner);
+              if (input.ConditionExpression) throw conditionalFailure();
+            }
+            if (!conditionMatches(input, s.suppressions.get(hash))) {
+              throw conditionalFailure();
+            }
             s.suppressions.set(hash, item);
           } else if (tableName === "snapshots") {
             s.ledger.set(readS(item, "source_natural_key") ?? "", item);
@@ -195,6 +237,22 @@ function fakeDeps(s: FakeState): HandlerDeps {
             throw new Error(`unexpected table ${tableName}`);
           }
           return {};
+        }
+
+        if (name === "BatchGetItemCommand") {
+          const requestItems = input.RequestItems as Record<
+            string,
+            { Keys: DynamoItem[] }
+          >;
+          const keys = requestItems.suppression?.Keys ?? [];
+          return {
+            Responses: {
+              suppression: keys
+                .map((key) => s.suppressions.get(readS(key, "contact_hash") ?? ""))
+                .filter((item): item is DynamoItem => item !== undefined),
+            },
+            UnprocessedKeys: {},
+          };
         }
 
         throw new Error(`unexpected dynamo command ${name}`);
@@ -210,6 +268,44 @@ function fakeDeps(s: FakeState): HandlerDeps {
 }
 
 describe("suppression-sync handler", () => {
+  it("rejects malformed runtime events before side effects", async () => {
+    const invalidEvents: unknown[] = [
+      null,
+      [],
+      "incremental",
+      { mode: "unknown" },
+      { mode: "replay", dryRun: "false" },
+      { mode: "reconcile", reportKey: 1 },
+      { mode: "incremental", maxObjects: 0 },
+      { mode: "incremental", maxObjects: -1 },
+      { mode: "incremental", maxObjects: 1.5 },
+      { mode: "incremental", maxObjects: Number.NaN },
+      { mode: "incremental", maxObjects: Number.POSITIVE_INFINITY },
+      { mode: "incremental", maxObjects: Number.MAX_SAFE_INTEGER + 1 },
+      { mode: "incremental", unexpected: true },
+      { mode: "replay", dryRun: true, unexpected: true },
+      { mode: "reconcile", reportKey: "report.json", unexpected: true },
+      { dryRun: true },
+      { reportKey: "report.json" },
+    ];
+
+    for (const event of invalidEvents) {
+      const s = state();
+      await expect(runHandler(fakeDeps(s), event as never)).rejects.toThrow(
+        "invalid suppression sync event",
+      );
+      expect(s.commands).toEqual([]);
+    }
+  });
+
+  it("accepts the explicit scheduled incremental payload", async () => {
+    const s = state([objectVersion()]);
+
+    const result = await runHandler(fakeDeps(s), { mode: "incremental" });
+
+    expect(result).toMatchObject({ filesSeen: 1, filesProcessed: 1 });
+  });
+
   it("processes two same-day immutable objects", async () => {
     const s = state([
       objectVersion({
@@ -430,7 +526,7 @@ describe("suppression-sync handler", () => {
         if (command.name !== "dynamo:PutItemCommand:suppression") return false;
         return readS(command.input.Item as DynamoItem, "contact_hash") === "a".repeat(64);
       }),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
   });
 
   it("replaying the exact same object identity is idempotent", async () => {
@@ -468,5 +564,89 @@ describe("suppression-sync handler", () => {
 
     expect(result.filesSeen).toBe(1);
     expect(result.filesProcessed).toBe(1);
+  });
+
+  it("incremental mode cannot weaken an existing membership", async () => {
+    const hash = "a".repeat(64);
+    const s = state([
+      objectVersion({
+        body: bodyFor("a", {
+          reason: "wrong_person",
+          observed_at: "2026-09-04T11:00:00.000Z",
+        }),
+      }),
+    ]);
+    s.suppressions.set(hash, {
+      contact_hash: { S: hash },
+      kind: { S: "phone" },
+      reason: { S: "opt_out" },
+      observed_at: { S: "2026-09-04T09:00:00.000Z" },
+      synced_at: { S: "2026-09-04T09:00:00.000Z" },
+    });
+
+    const result = await runHandler(fakeDeps(s), { mode: "incremental" });
+
+    expect(result.linesWritten).toBe(0);
+    expect(s.suppressions.get(hash)).toMatchObject({
+      reason: { S: "opt_out" },
+      observed_at: { S: "2026-09-04T09:00:00.000Z" },
+    });
+  });
+
+  it("incremental mode retries a conflict and preserves the concurrent winner", async () => {
+    const hash = "a".repeat(64);
+    const winner: DynamoItem = {
+      contact_hash: { S: hash },
+      kind: { S: "phone" },
+      reason: { S: "opt_out" },
+      observed_at: { S: "2026-09-04T08:00:00.000Z" },
+      synced_at: { S: "2026-09-04T08:00:00.000Z" },
+    };
+    const s = state([
+      objectVersion({
+        body: bodyFor("a", {
+          reason: "founder_block",
+          observed_at: "2026-09-04T10:00:00.000Z",
+        }),
+      }),
+    ]);
+    s.conflictOnSuppressionWrite = { hash, winner, remaining: 1 };
+
+    const result = await runHandler(fakeDeps(s), { mode: "incremental" });
+
+    expect(result.linesWritten).toBe(0);
+    expect(s.suppressions.get(hash)).toEqual(winner);
+    expect(
+      s.commands.filter((command) => command.name === "dynamo:BatchGetItemCommand"),
+    ).toHaveLength(2);
+  });
+
+  it("bounds repeated conditional membership conflicts", async () => {
+    const hash = "a".repeat(64);
+    const weakerWinner: DynamoItem = {
+      contact_hash: { S: hash },
+      kind: { S: "phone" },
+      reason: { S: "wrong_person" },
+      observed_at: { S: "2026-09-04T12:00:00.000Z" },
+      synced_at: { S: "2026-09-04T12:00:00.000Z" },
+    };
+    const s = state([
+      objectVersion({
+        body: bodyFor("a", {
+          reason: "opt_out",
+          observed_at: "2026-09-04T08:00:00.000Z",
+        }),
+      }),
+    ]);
+    s.conflictOnSuppressionWrite = {
+      hash,
+      winner: weakerWinner,
+      remaining: 100,
+    };
+
+    await expect(
+      runHandler(fakeDeps(s), { mode: "incremental" }),
+    ).rejects.toThrow("membership conflict retry limit exceeded");
+    expect(s.ledger.size).toBe(0);
   });
 });

@@ -181,6 +181,9 @@ resource "aws_cloudwatch_event_target" "adapters" {
 
   rule = aws_cloudwatch_event_rule.adapters[each.key].name
   arn  = aws_lambda_function.adapters[each.key].arn
+  input = each.key == "suppression-sync" ? jsonencode({
+    mode = "incremental"
+  }) : null
 }
 
 resource "aws_lambda_permission" "adapters_events" {

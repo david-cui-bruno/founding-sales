@@ -18,7 +18,7 @@ import {
   readValidatedObject,
   runReconciliation,
   runReplay,
-  writeSuppression,
+  persistSuppressionMonotonically,
   type HandlerDeps,
   type SuppressionReplayResult,
   type SuppressionSyncEvent,
@@ -50,6 +50,65 @@ function defaultDeps(): HandlerDeps {
       SUPPRESSION_TABLE: envOrThrow("SUPPRESSION_TABLE"),
     },
   };
+}
+
+function invalidEvent(): never {
+  throw new Error("invalid suppression sync event");
+}
+
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function parseSuppressionSyncEvent(value: unknown): SuppressionSyncEvent {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return invalidEvent();
+  }
+  const event = value as Record<string, unknown>;
+  const mode = event.mode;
+
+  if (mode === undefined || mode === "incremental") {
+    if (!hasOnlyKeys(event, ["mode", "maxObjects"])) return invalidEvent();
+    if (
+      event.maxObjects !== undefined &&
+      (typeof event.maxObjects !== "number" ||
+        !Number.isSafeInteger(event.maxObjects) ||
+        event.maxObjects <= 0)
+    ) {
+      return invalidEvent();
+    }
+    return {
+      ...(mode === "incremental" ? { mode } : {}),
+      ...(event.maxObjects === undefined
+        ? {}
+        : { maxObjects: event.maxObjects }),
+    };
+  }
+
+  if (mode === "replay") {
+    if (
+      !hasOnlyKeys(event, ["mode", "dryRun"]) ||
+      typeof event.dryRun !== "boolean"
+    ) {
+      return invalidEvent();
+    }
+    return { mode, dryRun: event.dryRun };
+  }
+
+  if (mode === "reconcile") {
+    if (
+      !hasOnlyKeys(event, ["mode", "reportKey"]) ||
+      typeof event.reportKey !== "string"
+    ) {
+      return invalidEvent();
+    }
+    return { mode, reportKey: event.reportKey };
+  }
+
+  return invalidEvent();
 }
 
 export interface HandlerResult {
@@ -101,8 +160,9 @@ async function runIncremental(
     }
 
     for (const line of object.lines) {
-      await writeSuppression(deps, line, now);
-      result.linesWritten += 1;
+      if (await persistSuppressionMonotonically(deps, line, now)) {
+        result.linesWritten += 1;
+      }
     }
     await ledgerMark(deps, object, now);
     result.filesProcessed += 1;
@@ -130,24 +190,29 @@ export function runHandler(
   deps: HandlerDeps,
   event: SuppressionSyncEvent,
 ): Promise<HandlerResult | SuppressionReplayResult>;
+export function runHandler(
+  deps: HandlerDeps,
+  event: unknown,
+): Promise<HandlerResult | SuppressionReplayResult>;
 export async function runHandler(
   deps: HandlerDeps,
-  event: SuppressionSyncEvent = {},
+  event: unknown = {},
 ): Promise<HandlerResult | SuppressionReplayResult> {
+  const parsedEvent = parseSuppressionSyncEvent(event);
   const now = deps.now ? deps.now() : new Date();
   const runId = deps.runId ? deps.runId(now.getTime()) : ulid(now.getTime());
 
-  if (event.mode === "replay") {
-    return runReplay(deps, { dryRun: event.dryRun, now, runId });
+  if (parsedEvent.mode === "replay") {
+    return runReplay(deps, { dryRun: parsedEvent.dryRun, now, runId });
   }
-  if (event.mode === "reconcile") {
-    return runReconciliation(deps, { reportKey: event.reportKey, now });
+  if (parsedEvent.mode === "reconcile") {
+    return runReconciliation(deps, { reportKey: parsedEvent.reportKey, now });
   }
-  return runIncremental(deps, event, now);
+  return runIncremental(deps, parsedEvent, now);
 }
 
 export async function handler(
-  event: SuppressionSyncEvent = {},
+  event: unknown = {},
 ): Promise<HandlerResult | SuppressionReplayResult> {
   return runHandler(defaultDeps(), event);
 }

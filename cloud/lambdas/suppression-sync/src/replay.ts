@@ -28,6 +28,7 @@ export const REPORTS_PREFIX = "upstream/suppression-reports/";
 const LEDGER_SNAPSHOT_DATE = "ledger";
 const BATCH_GET_LIMIT = 100;
 const MAX_UNPROCESSED_RETRIES = 10;
+const MAX_MEMBERSHIP_CONFLICT_RETRIES = 5;
 
 export interface HandlerDeps {
   s3: Pick<S3Client, "send">;
@@ -260,25 +261,6 @@ export async function ledgerMark(
   );
 }
 
-export async function writeSuppression(
-  deps: HandlerDeps,
-  line: SuppressionUploadLine,
-  now: Date,
-): Promise<void> {
-  await deps.dynamo.send(
-    new PutItemCommand({
-      TableName: deps.env.SUPPRESSION_TABLE,
-      Item: {
-        contact_hash: { S: line.contact_hmac },
-        kind: { S: line.kind },
-        reason: { S: line.reason },
-        observed_at: { S: line.observed_at },
-        synced_at: { S: now.toISOString() },
-      },
-    }),
-  );
-}
-
 function mergeUnionLine(
   current: SuppressionUploadLine | undefined,
   incoming: SuppressionUploadLine,
@@ -502,6 +484,96 @@ function membershipMatches(
   );
 }
 
+function expectedMembershipCondition(
+  current: Record<string, AttributeValue> | undefined,
+): {
+  ConditionExpression: string;
+  ExpressionAttributeNames?: Record<string, string>;
+  ExpressionAttributeValues?: Record<string, AttributeValue>;
+} {
+  if (!current) {
+    return { ConditionExpression: "attribute_not_exists(contact_hash)" };
+  }
+
+  const names: Record<string, string> = {};
+  const values: Record<string, AttributeValue> = {};
+  const clauses: string[] = [];
+  for (const field of ["kind", "reason", "observed_at"] as const) {
+    const name = `#${field}`;
+    names[name] = field;
+    const value = current[field];
+    if (value === undefined) {
+      clauses.push(`attribute_not_exists(${name})`);
+    } else {
+      const expected = `:expected_${field}`;
+      values[expected] = value;
+      clauses.push(`${name} = ${expected}`);
+    }
+  }
+  return {
+    ConditionExpression: clauses.join(" AND "),
+    ExpressionAttributeNames: names,
+    ...(Object.keys(values).length > 0
+      ? { ExpressionAttributeValues: values }
+      : {}),
+  };
+}
+
+function isConditionalConflict(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "ConditionalCheckFailedException"
+  );
+}
+
+export async function persistSuppressionMonotonically(
+  deps: HandlerDeps,
+  source: SuppressionUploadLine,
+  now: Date,
+  initial?: { current: Record<string, AttributeValue> | undefined },
+): Promise<boolean> {
+  let current = initial?.current;
+  if (initial === undefined) {
+    current = (await batchGetMemberships(deps, [source.contact_hmac])).get(
+      source.contact_hmac,
+    );
+  }
+
+  let conflicts = 0;
+  while (true) {
+    const membership = monotonicMembership(source, current);
+    if (membershipMatches(current, membership)) return false;
+
+    try {
+      await deps.dynamo.send(
+        new PutItemCommand({
+          TableName: deps.env.SUPPRESSION_TABLE,
+          Item: {
+            contact_hash: { S: membership.contact_hmac },
+            kind: { S: membership.kind },
+            reason: { S: membership.reason },
+            observed_at: { S: membership.observed_at },
+            synced_at: { S: now.toISOString() },
+          },
+          ...expectedMembershipCondition(current),
+        }),
+      );
+      return true;
+    } catch (error) {
+      if (!isConditionalConflict(error)) throw error;
+      conflicts += 1;
+      if (conflicts > MAX_MEMBERSHIP_CONFLICT_RETRIES) {
+        throw new Error("suppression membership conflict retry limit exceeded");
+      }
+      current = (await batchGetMemberships(deps, [source.contact_hmac])).get(
+        source.contact_hmac,
+      );
+    }
+  }
+}
+
 async function applyUnion(
   deps: HandlerDeps,
   union: ReadonlyMap<string, SuppressionUploadLine>,
@@ -512,11 +584,13 @@ async function applyUnion(
   for (const hash of [...union.keys()].sort(lexicalCompare)) {
     const source = union.get(hash);
     if (!source) continue;
-    const current = existing.get(hash);
-    const membership = monotonicMembership(source, current);
-    if (membershipMatches(current, membership)) continue;
-    await writeSuppression(deps, membership, now);
-    applied += 1;
+    if (
+      await persistSuppressionMonotonically(deps, source, now, {
+        current: existing.get(hash),
+      })
+    ) {
+      applied += 1;
+    }
   }
   return applied;
 }
@@ -617,7 +691,19 @@ export async function runReplay(
 }
 
 function assertReportKey(key: string): void {
-  if (!key.startsWith(REPORTS_PREFIX) || !key.endsWith(".json")) {
+  const match = new RegExp(
+    `^${REPORTS_PREFIX}(\\d{4}-\\d{2}-\\d{2})/(\\d{4}-\\d{2}-\\d{2})T(\\d{2})(\\d{2})(\\d{2})(\\d{3})Z-([0-9A-HJKMNP-TV-Z]{26})\\.json$`,
+  ).exec(key);
+  if (!match) {
+    throw new Error("reconciliation requires an exact suppression replay report key");
+  }
+  const [, directoryDate, timestampDate, hour, minute, second, millisecond] = match;
+  if (directoryDate !== timestampDate) {
+    throw new Error("reconciliation requires an exact suppression replay report key");
+  }
+  const isoTimestamp = `${timestampDate}T${hour}:${minute}:${second}.${millisecond}Z`;
+  const parsed = new Date(isoTimestamp);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== isoTimestamp) {
     throw new Error("reconciliation requires an exact suppression replay report key");
   }
 }
