@@ -155,6 +155,7 @@ function createProductionSourcingPoller(
     domainGate: runtime,
     loadHmacSalt: () => hmacSaltStore.load(),
     clock: domainClock,
+    batchIds: domainIds,
   });
   // TEST-ONLY escape hatch for the packaged E2E: when
   // CALLIE_SOURCING_FIXTURE_DIR points at a local directory, the poller

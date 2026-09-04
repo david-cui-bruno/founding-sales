@@ -1,7 +1,7 @@
 /**
  * Suppression upload — the app-side "never contact this handle again" sync,
  * written as ndjson lines to
- * s3://<inbox>/upstream/suppressions/<YYYY-MM-DD>.ndjson.
+ * s3://<inbox>/upstream/suppression/<YYYY-MM-DD>/<timestamp>-<batch-id>.ndjson.
  *
  * PII-free by construction: each line carries ONLY the salted HMAC of the
  * opted-out contact handle (same HMAC-SHA256 canonicalization as membership

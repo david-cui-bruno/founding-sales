@@ -9,6 +9,8 @@ import {
   contactHmac,
   membershipUploadSchema,
   outcomeUploadLineSchema,
+  suppressionObjectKey,
+  type UpstreamBatchIdGenerator,
   type UpstreamObjectStore,
 } from '../../../src/main/sourcing/upstreamSync';
 
@@ -62,11 +64,14 @@ function fakeStore(): { store: UpstreamObjectStore; puts: { key: string; body: s
 function buildSync(input: {
   gate: { withDomain<T>(operation: (domain: FakeDomain) => T): Promise<T> };
   salt?: string | null;
+  clock?: { now(): string };
+  batchIds?: UpstreamBatchIdGenerator;
 }): UpstreamSync {
   return new UpstreamSync({
     domainGate: input.gate as never,
     loadHmacSalt: async () => input.salt ?? null,
-    clock: { now: () => NOW },
+    clock: input.clock ?? { now: () => NOW },
+    batchIds: input.batchIds ?? { next: () => 'batch-1' },
   });
 }
 
@@ -204,7 +209,7 @@ describe('UpstreamSync', () => {
     expect(first.puts[0]!.body).toBe(second.puts[0]!.body);
   });
 
-  it('uploads suppression handles as salted-HMAC ndjson and marks them flushed', async () => {
+  it('marks only the uploaded handle IDs after success', async () => {
     const suppressions: SuppressionOutboxRow[] = [
       {
         handleId: 'handle-1', kind: 'phone', normalizedValue: '+14015550100',
@@ -221,7 +226,7 @@ describe('UpstreamSync', () => {
     const report = await buildSync({ gate, salt: 'shared-salt' }).run(store);
 
     expect(report.suppressionsFlushed).toBe(2);
-    const upload = puts.find((put) => put.key === 'upstream/suppressions/2026-09-01.ndjson');
+    const upload = puts.find((put) => put.key.startsWith('upstream/suppression/'));
     expect(upload).toBeDefined();
     expect(upload!.contentType).toBe('application/x-ndjson');
     const lines = upload!.body.trim().split('\n').map(
@@ -243,11 +248,104 @@ describe('UpstreamSync', () => {
         kind: 'email', reason: 'opt_out', observed_at: NOW,
       },
     ]);
-    expect(upload!.body).not.toContain('+14015550100');
-    expect(upload!.body).not.toContain('owner@example.com');
     expect(domain.markSuppressionHandlesFlushed).toHaveBeenCalledWith({
       handleIds: ['handle-1', 'handle-2'],
     });
+    expect(domain.markSuppressionHandlesFlushed).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses distinct immutable keys for two suppression uploads on the same day', async () => {
+    const suppressions: SuppressionOutboxRow[] = [{
+      handleId: 'handle-1', kind: 'phone', normalizedValue: '+14015550100',
+      reason: 'opt_out', observedAt: NOW,
+    }];
+    const { gate } = fakeDomain({ suppressions });
+    const { store, puts } = fakeStore();
+    const batchIds = ['batch-1', 'batch-2'];
+    const sync = buildSync({
+      gate,
+      salt: 'shared-salt',
+      batchIds: { next: () => batchIds.shift()! },
+    });
+
+    await sync.run(store);
+    await sync.run(store);
+
+    const keys = puts
+      .filter((put) => put.key.startsWith('upstream/suppression/'))
+      .map((put) => put.key);
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it('includes UTC timestamp and batch ID under the singular suppression prefix', () => {
+    expect(suppressionObjectKey({
+      now: '2026-09-04T11:49:23.599-04:00',
+      batchId: 'batch:/A B',
+    })).toBe(
+      'upstream/suppression/2026-09-04/20260904T154923599Z-batch-A-B.ndjson',
+    );
+  });
+
+  it('never reuses a key after clock advancement or retry', async () => {
+    const suppressions: SuppressionOutboxRow[] = [{
+      handleId: 'handle-1', kind: 'phone', normalizedValue: '+14015550100',
+      reason: 'opt_out', observedAt: NOW,
+    }];
+    const { gate } = fakeDomain({ suppressions });
+    const attemptedKeys: string[] = [];
+    let now = '2026-09-04T15:49:23.599Z';
+    let fail = true;
+    const batchIds = ['batch-1', 'batch-2'];
+    const sync = buildSync({
+      gate,
+      salt: 'shared-salt',
+      clock: { now: () => now },
+      batchIds: { next: () => batchIds.shift()! },
+    });
+    const store: UpstreamObjectStore = {
+      putObjectText: async ({ key }) => {
+        if (!key.startsWith('upstream/suppression/')) return;
+        attemptedKeys.push(key);
+        if (fail) throw new Error('ambiguous put result');
+      },
+    };
+
+    await expect(sync.run(store)).rejects.toThrow('ambiguous put result');
+    fail = false;
+    now = '2026-09-04T15:50:00.000Z';
+    await sync.run(store);
+
+    expect(attemptedKeys).toHaveLength(2);
+    expect(attemptedKeys[1]).not.toBe(attemptedKeys[0]);
+    expect(attemptedKeys).toEqual([
+      'upstream/suppression/2026-09-04/20260904T154923599Z-batch-1.ndjson',
+      'upstream/suppression/2026-09-04/20260904T155000000Z-batch-2.ndjson',
+    ]);
+  });
+
+  it('contains no cleartext contact values in the key or body', async () => {
+    const cleartextPhone = '+14015550100';
+    const cleartextEmail = 'owner@example.com';
+    const suppressions: SuppressionOutboxRow[] = [
+      {
+        handleId: 'handle-1', kind: 'phone', normalizedValue: cleartextPhone,
+        reason: 'founder_block', observedAt: NOW,
+      },
+      {
+        handleId: 'handle-2', kind: 'email', normalizedValue: cleartextEmail,
+        reason: 'opt_out', observedAt: NOW,
+      },
+    ];
+    const { gate } = fakeDomain({ suppressions });
+    const { store, puts } = fakeStore();
+
+    await buildSync({ gate, salt: 'shared-salt' }).run(store);
+
+    const upload = puts.find((put) => put.key.startsWith('upstream/suppression/'))!;
+    const serializedUpload = `${upload.key}\n${upload.body}`;
+    expect(serializedUpload).not.toContain(cleartextPhone);
+    expect(serializedUpload).not.toContain(cleartextEmail);
   });
 
   it('matches the pinned HMAC vector so cloud and app hashes agree', () => {
@@ -272,13 +370,13 @@ describe('UpstreamSync', () => {
     const report = await buildSync({ gate, salt: null }).run(store);
 
     expect(report.suppressionsFlushed).toBe(0);
-    expect(puts.some((put) => put.key.startsWith('upstream/suppressions/'))).toBe(false);
+    expect(puts.some((put) => put.key.startsWith('upstream/suppression/'))).toBe(false);
     // Never listed, never flushed: the rows retry once a salt exists.
     expect(domain.listUnflushedSuppressionHandles).not.toHaveBeenCalled();
     expect(domain.markSuppressionHandlesFlushed).not.toHaveBeenCalled();
   });
 
-  it('never marks suppressions flushed when the upload fails', async () => {
+  it('does not mark handles flushed when the put fails', async () => {
     const suppressions: SuppressionOutboxRow[] = [{
       handleId: 'handle-1', kind: 'phone', normalizedValue: '+14015550100',
       reason: 'opt_out', observedAt: NOW,
@@ -286,7 +384,7 @@ describe('UpstreamSync', () => {
     const { gate, domain } = fakeDomain({ suppressions });
     const store: UpstreamObjectStore = {
       putObjectText: async ({ key }) => {
-        if (key.startsWith('upstream/suppressions/')) {
+        if (key.startsWith('upstream/suppression/')) {
           throw new Error('AccessDenied');
         }
       },

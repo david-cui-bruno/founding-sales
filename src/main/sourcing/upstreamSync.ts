@@ -35,7 +35,27 @@ import {
 
 export const UPSTREAM_MEMBERSHIP_PREFIX = 'upstream/membership/';
 export const UPSTREAM_OUTCOMES_PREFIX = 'upstream/outcomes/';
-export const UPSTREAM_SUPPRESSIONS_PREFIX = 'upstream/suppressions/';
+export const UPSTREAM_SUPPRESSIONS_PREFIX = 'upstream/suppression/';
+
+export type UpstreamBatchIdGenerator = {
+  next(): string;
+};
+
+export function suppressionObjectKey(input: {
+  now: string;
+  batchId: string;
+}): string {
+  const utc = new Date(input.now).toISOString();
+  const timestamp = utc.replace(/[-:.]/g, '');
+  const sanitizedBatchId = input.batchId
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (sanitizedBatchId.length === 0) {
+    throw new Error('Suppression batch ID must contain a key-safe character.');
+  }
+  return `${UPSTREAM_SUPPRESSIONS_PREFIX}${utc.slice(0, 10)}/${timestamp}-${sanitizedBatchId}.ndjson`;
+}
 
 /** Minimal write-side store surface; S3 or an in-memory fake. */
 export type UpstreamObjectStore = {
@@ -102,15 +122,18 @@ export class UpstreamSync {
   private readonly domainGate: UpstreamSyncDomainGate;
   private readonly loadHmacSalt: () => Promise<string | null>;
   private readonly clock: Clock;
+  private readonly batchIds: UpstreamBatchIdGenerator;
 
   constructor(input: {
     domainGate: UpstreamSyncDomainGate;
     loadHmacSalt: () => Promise<string | null>;
     clock: Clock;
+    batchIds: UpstreamBatchIdGenerator;
   }) {
     this.domainGate = input.domainGate;
     this.loadHmacSalt = input.loadHmacSalt;
     this.clock = input.clock;
+    this.batchIds = input.batchIds;
   }
 
   /**
@@ -123,7 +146,7 @@ export class UpstreamSync {
     const date = this.clock.now().slice(0, 10);
     const membershipUploaded = await this.uploadMembership(store, date);
     const outcomesFlushed = await this.flushOutcomes(store, date);
-    const suppressionsFlushed = await this.flushSuppressions(store, date);
+    const suppressionsFlushed = await this.flushSuppressions(store);
     return { membershipUploaded, outcomesFlushed, suppressionsFlushed };
   }
 
@@ -185,16 +208,15 @@ export class UpstreamSync {
   }
 
   /**
-   * Suppression flush (upstream/suppressions/<date>.ndjson): salted HMACs
-   * of opt-out tombstone handles per suppressionUploadLineSchema. Without a
-   * provisioned salt the step is SKIPPED entirely — raw or empty-salted
-   * handles never leave the machine — and nothing is marked flushed, so the
-   * rows retry once a salt exists. Rows are marked flushed only after the
-   * upload succeeded (exactly-once via the handle-keyed outbox).
+   * Suppression flush (upstream/suppression/<date>/<timestamp>-<batch>.ndjson):
+   * salted HMACs of opt-out tombstone handles per suppressionUploadLineSchema.
+   * Without a provisioned salt the step is SKIPPED entirely — raw or
+   * empty-salted handles never leave the machine — and nothing is marked
+   * flushed, so the rows retry once a salt exists. Each put gets a fresh key;
+   * only the uploaded handle IDs are marked flushed after that put succeeds.
    */
   private async flushSuppressions(
     store: UpstreamObjectStore,
-    date: string,
   ): Promise<number> {
     const salt = await this.loadHmacSalt();
     if (salt === null) return 0;
@@ -202,6 +224,10 @@ export class UpstreamSync {
       (domain) => domain.listUnflushedSuppressionHandles(),
     );
     if (rows.length === 0) return 0;
+    const key = suppressionObjectKey({
+      now: this.clock.now(),
+      batchId: this.batchIds.next(),
+    });
     const lines = rows.map((row) => JSON.stringify(suppressionUploadLineSchema.parse({
       contact_hmac: contactHmac({
         salt,
@@ -213,7 +239,7 @@ export class UpstreamSync {
       observed_at: row.observedAt,
     })));
     await store.putObjectText({
-      key: `${UPSTREAM_SUPPRESSIONS_PREFIX}${date}.ndjson`,
+      key,
       body: `${lines.join('\n')}\n`,
       contentType: 'application/x-ndjson',
     });

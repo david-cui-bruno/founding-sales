@@ -2,7 +2,8 @@ import { z } from 'zod';
 
 /**
  * App-side mirror of cloud/lambdas/shared/src/suppressionUpload.ts — one
- * ndjson line in s3://<inbox>/upstream/suppressions/<YYYY-MM-DD>.ndjson.
+ * ndjson line in
+ * s3://<inbox>/upstream/suppression/<YYYY-MM-DD>/<timestamp>-<batch-id>.ndjson.
  *
  * PII-free by construction: each line carries ONLY the salted HMAC of the
  * opted-out contact handle (contactHmac canonicalization in
