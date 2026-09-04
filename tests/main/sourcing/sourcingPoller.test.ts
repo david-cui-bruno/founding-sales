@@ -356,7 +356,9 @@ describe('SourcingPoller', () => {
     expect(status.lastKey).toBeNull();
     expect(status.counters.imported).toBe(0);
     expect(poller.getExecutionState().consecutiveFailures).toBe(1);
-    expect(logged.join('\n')).toContain('intake exploded');
+    expect(logged.join('\n')).toContain('SOURCING_FILE_FAILED');
+    expect(logged.join('\n')).toContain('"errorClass":"Error"');
+    expect(logged.join('\n')).not.toContain('intake exploded');
   });
 
   it('retries the failed file on the next tick and recovers', async () => {
@@ -386,7 +388,9 @@ describe('SourcingPoller', () => {
 
     await expect(poller.pollNow()).resolves.toBeUndefined();
     expect(poller.getExecutionState().consecutiveFailures).toBe(1);
-    expect(logged.join('\n')).toContain('S3 unreachable');
+    expect(logged.join('\n')).toContain('SOURCING_POLL_FAILED');
+    expect(logged.join('\n')).toContain('"errorClass":"Error"');
+    expect(logged.join('\n')).not.toContain('S3 unreachable');
   });
 
   it('coalesces overlapping pollNow calls into one run', async () => {
@@ -503,7 +507,9 @@ describe('SourcingPoller', () => {
     expect(poller.getExecutionState().consecutiveFailures).toBe(1);
     expect(poller.getExecutionState().lastFailureCode).toBe('POLL_FAILED');
     expect(poller.getExecutionState().lastCompletedAt).toBeNull();
-    expect(logged.join('\n')).toContain('AccessDenied');
+    expect(logged.join('\n')).toContain('SOURCING_UPSTREAM_SYNC_FAILED');
+    expect(logged.join('\n')).toContain('"errorClass":"Error"');
+    expect(logged.join('\n')).not.toContain('AccessDenied');
   });
 });
 
