@@ -84,9 +84,9 @@ function localParts(epoch: number, timezone: string): { weekday: number; minute:
 }
 
 export function evaluateOutboundAuthorization(input: AuthorizationInput): OutboundAuthorizationDecision {
+  if (input.personOrHandleOptedOut) return refused('person_or_handle_opted_out');
   const now = instant(input.now);
   if (now === null) return refused('jurisdiction_unknown');
-  if (input.personOrHandleOptedOut) return refused('person_or_handle_opted_out');
   if (input.contact.kind !== 'phone') return refused('channel_contact_kind_mismatch');
   if (input.contact.validationState !== 'valid') return refused('contact_validation_unusable');
   const federal = evaluateFederalEvidence({

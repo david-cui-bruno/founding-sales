@@ -30,6 +30,19 @@ function decide(overrides: Partial<Parameters<typeof evaluateOutboundAuthorizati
 }
 
 describe('evaluateOutboundAuthorization', () => {
+  it('preserves permanent opt-out precedence over invalid time and lower refusals', () => {
+    expect(decide({
+      now: 'not-a-timestamp',
+      personOrHandleOptedOut: true,
+      contact: {
+        kind: 'email', normalizedValue: 'blocked@example.com',
+        validationState: 'invalid', evidence: CLEAR,
+      },
+      jurisdiction: null,
+      clearance: null,
+    })).toEqual({ kind: 'refused', reasonCode: 'person_or_handle_opted_out' });
+  });
+
   it('does not infer recipient jurisdiction from the phone area code', () => {
     expect(decide({ jurisdiction: null })).toEqual({ kind: 'refused', reasonCode: 'jurisdiction_unknown' });
   });
