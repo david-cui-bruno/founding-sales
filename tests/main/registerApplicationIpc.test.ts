@@ -313,6 +313,14 @@ describe('registerApplicationIpc', () => {
     expect(electron.showItemInFolder).toHaveBeenCalledWith('/tmp/callie.sqlite3');
   });
 
+  it('reveals the main-owned retained log directory without renderer input', async () => {
+    electron.showItemInFolder.mockReset();
+    const shellProvider = createShellProvider(fakeGate(), '/private/callie/logs');
+
+    await expect(shellProvider.revealLogDirectory()).resolves.toEqual({ revealed: true });
+    expect(electron.showItemInFolder).toHaveBeenCalledWith('/private/callie/logs');
+  });
+
   it('refuses to reveal when health does not validate', async () => {
     electron.showItemInFolder.mockReset();
     const gate = fakeGate();

@@ -17,6 +17,8 @@ import {
   startApplication,
   type RunningApplication,
 } from './main/startApplication';
+import { createFileLogSink } from './main/logging/fileLogSink';
+import { createSafeLogger } from './main/logging/safeLogger';
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -174,6 +176,8 @@ if (!started && ownsSingleInstanceLock) {
       installApplicationMenu();
       startupAbortController = new AbortController();
       const signal = startupAbortController.signal;
+      const fileLogSink = createFileLogSink({ userDataPath: app.getPath('userData') });
+      const logger = createSafeLogger({ write: fileLogSink.write });
 
       startupPromise = startApplication({
         appVersion: app.getVersion(),
@@ -208,6 +212,8 @@ if (!started && ownsSingleInstanceLock) {
         sourcingPollingEnabled: !app.commandLine.hasSwitch('use-mock-keychain'),
         isTrustedRendererUrl: rendererTrust.isTrustedRendererUrl,
         signal,
+        logger,
+        logDirectoryPath: fileLogSink.directoryPath,
         createWindow: () => createAndLoadWindow(signal),
       }).then(async (application) => {
         if (signal.aborted) {

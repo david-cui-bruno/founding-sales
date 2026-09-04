@@ -124,6 +124,7 @@ function AppearanceSection({
 
 export type SettingsShellApi = {
   revealDatabase(): Promise<unknown>;
+  revealLogDirectory(): Promise<unknown>;
 };
 
 /**
@@ -175,6 +176,22 @@ function DataStorageSection({
               </button>
             )}
           </div>
+          {shell !== undefined && (
+            <>
+              <p className="settings__quiet">
+                PII-safe operational logs are retained for 14 days.
+              </p>
+              <button
+                type="button"
+                className="settings__action"
+                onClick={() => {
+                  shell.revealLogDirectory().catch((): undefined => undefined);
+                }}
+              >
+                Reveal logs in Finder
+              </button>
+            </>
+          )}
         </>
       )}
     </section>

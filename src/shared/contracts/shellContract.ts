@@ -10,3 +10,9 @@ export const revealDatabaseResultSchema = z.object({
 }).strict();
 
 export type RevealDatabaseResult = z.infer<typeof revealDatabaseResultSchema>;
+
+export const revealLogDirectoryResultSchema = z.object({
+  revealed: z.literal(true),
+}).strict();
+
+export type RevealLogDirectoryResult = z.infer<typeof revealLogDirectoryResultSchema>;

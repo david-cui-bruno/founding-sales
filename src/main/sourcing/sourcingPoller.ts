@@ -43,6 +43,7 @@ import {
   type PollExecutionState,
   type SourcingPollHealth,
 } from './pollExecutionState';
+import { sanitizeErrorClass, type SafeLogger } from '../logging/safeLogger';
 
 /** The subset of the inbox client the poller drives; injected for tests. */
 export type PollableInbox = {
@@ -95,6 +96,7 @@ export class SourcingPoller {
   } | undefined;
   private readonly clock: Clock;
   private readonly log: (message: string) => void;
+  private readonly logger: SafeLogger;
 
   private readonly counters: SourcingCounters = {
     imported: 0,
@@ -140,6 +142,7 @@ export class SourcingPoller {
     };
     clock: Clock;
     log?: (message: string) => void;
+    logger?: SafeLogger;
     pollIds?: PollIdGenerator;
     watchdogTimer?: WatchdogTimer;
     fixtureExecutionEvidence?: () => FixtureExecutionEvidence;
@@ -150,6 +153,9 @@ export class SourcingPoller {
     this.upstream = input.upstream;
     this.clock = input.clock;
     this.log = input.log ?? (() => undefined);
+    this.logger = input.logger ?? {
+      log: (_level, eventCode, fields) => this.log(`${eventCode} ${JSON.stringify(fields ?? {})}`),
+    };
     this.pollIds = input.pollIds ?? { next: () => crypto.randomUUID() };
     this.watchdogTimer = input.watchdogTimer ?? {
       schedule: (callback) => {
@@ -350,10 +356,12 @@ export class SourcingPoller {
         // may still process safely: the ledger, not a cursor, defines
         // progress, so skipping ahead cannot lose the failed key.
         firstFailure ??= error;
-        this.log(
-          `sourcing file failed (not ledgered, retries next tick) ${key}: `
-          + `${error instanceof Error ? error.message : String(error)}`,
-        );
+        this.logger.log('error', 'SOURCING_FILE_FAILED', {
+          component: 'sourcing-poller',
+          pollId: this.activePoll?.pollId,
+          objectKey: key,
+          errorClass: sanitizeErrorClass(error),
+        });
         continue;
       }
       if (maxProcessedKey === null || key > maxProcessedKey) {
@@ -405,9 +413,11 @@ export class SourcingPoller {
         await this.upstream.sync.run(store, signal);
       } catch (error) {
         signal.throwIfAborted();
-        this.log(
-          `sourcing upstream sync failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        this.logger.log('error', 'SOURCING_UPSTREAM_SYNC_FAILED', {
+          component: 'sourcing-poller',
+          pollId: this.activePoll?.pollId,
+          errorClass: sanitizeErrorClass(error),
+        });
         throw error;
       }
     }
@@ -429,9 +439,11 @@ export class SourcingPoller {
   private async processBatchOrThrow(batch: InboxBatch): Promise<void> {
     this.counters.quarantined += batch.quarantined.length;
     for (const line of batch.quarantined) {
-      this.log(
-        `sourcing quarantine ${line.key}:${line.lineNumber}: ${line.reason}`,
-      );
+      this.logger.log('warn', 'SOURCING_LINE_QUARANTINED', {
+        component: 'sourcing-poller',
+        objectKey: line.key,
+        lineNumber: line.lineNumber,
+      });
     }
 
     for (const event of batch.events) {
@@ -446,10 +458,10 @@ export class SourcingPoller {
         // lock, transient) still throws so the whole file retries.
         if ((error as { name?: string }).name === 'IntakeIdempotencyConflictError') {
           this.counters.quarantined += 1;
-          this.log(
-            `sourcing quarantine ${mapped.receiptKey}: `
-            + `idempotency conflict (${(error as Error).message})`,
-          );
+          this.logger.log('warn', 'SOURCING_IDEMPOTENCY_CONFLICT', {
+            component: 'sourcing-poller',
+            errorClass: sanitizeErrorClass(error),
+          });
           continue;
         }
         throw error;
@@ -489,10 +501,10 @@ export class SourcingPoller {
           });
         });
       } else {
-        this.log(
-          `sourcing needs-identity skipped ${mapped.receiptKey} `
-          + `(${mapped.channel}, no usable situs address)`,
-        );
+        this.logger.log('info', 'SOURCING_NEEDS_IDENTITY_SKIPPED', {
+          component: 'sourcing-poller',
+          status: 'no_usable_situs',
+        });
       }
       this.counters.needsIdentity += 1;
     } else {
@@ -509,9 +521,10 @@ export class SourcingPoller {
         })
       ));
       if (!applied) {
-        this.log(
-          `sourcing score-update skipped ${mapped.receiptKey} (no intake receipt)`,
-        );
+        this.logger.log('info', 'SOURCING_SCORE_UPDATE_SKIPPED', {
+          component: 'sourcing-poller',
+          status: 'no_intake_receipt',
+        });
       }
     this.counters.scoreUpdates += 1;
     }
@@ -546,7 +559,12 @@ export class SourcingPoller {
       lastFailureCode: code,
       backlogCount: this.backlogCount,
     };
-    const message = error instanceof Error ? error.message : String(error);
-    this.log(`sourcing poll failed (failed files stay unledgered): ${message}`);
+    this.logger.log('error', 'SOURCING_POLL_FAILED', {
+      component: 'sourcing-poller',
+      pollId,
+      backlogCount: this.backlogCount ?? undefined,
+      status: code,
+      errorClass: sanitizeErrorClass(error),
+    });
   }
 }

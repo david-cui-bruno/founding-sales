@@ -192,12 +192,21 @@ export function createLearningsProvider(runtime: DomainGate): LearningsProvider 
  * be renderer-chosen. Electron is imported lazily because this module is
  * also exercised in plain-node tests.
  */
-export function createShellProvider(runtime: DomainGate): ShellProvider {
+export function createShellProvider(
+  runtime: DomainGate,
+  logDirectoryPath?: string,
+): ShellProvider {
   return {
     revealDatabase: async () => {
       const health = appHealthSchema.parse(await runtime.getHealth());
       const { shell } = await import('electron');
       shell.showItemInFolder(health.databasePath);
+      return { revealed: true } as const;
+    },
+    revealLogDirectory: async () => {
+      if (logDirectoryPath === undefined) throw new Error('LOG_DIRECTORY_UNAVAILABLE');
+      const { shell } = await import('electron');
+      shell.showItemInFolder(logDirectoryPath);
       return { revealed: true } as const;
     },
   };
@@ -215,6 +224,7 @@ export function registerApplicationIpc(
   sourcingProvider: SourcingProvider,
   shellProvider?: ShellProvider,
   enrichmentRequester?: EnrichmentRequester,
+  logDirectoryPath?: string,
 ): () => void {
   if (sourcingProvider === undefined) {
     throw new Error('Sourcing provider is required.');
@@ -248,7 +258,7 @@ export function registerApplicationIpc(
       isTrustedRendererUrl,
     ),
     registrars.registerShellIpc(
-      shellProvider ?? createShellProvider(runtime),
+      shellProvider ?? createShellProvider(runtime, logDirectoryPath),
       isTrustedRendererUrl,
     ),
   ];

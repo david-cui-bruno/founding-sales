@@ -126,7 +126,7 @@ describe('SettingsScreen', () => {
       value: { writeText },
     });
     const revealDatabase = vi.fn(async () => ({ revealed: true }));
-    renderSettings({ shell: { revealDatabase } });
+    renderSettings({ shell: { revealDatabase, revealLogDirectory: vi.fn() } });
     fireEvent.click(screen.getByRole('button', { name: 'Data & storage' }));
 
     expect(
@@ -138,6 +138,18 @@ describe('SettingsScreen', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reveal in Finder' }));
     expect(revealDatabase).toHaveBeenCalledTimes(1);
+  });
+
+  it('explains 14-day retained logs and reveals them without a renderer path', async () => {
+    const revealLogDirectory = vi.fn(async () => ({ revealed: true }));
+    renderSettings({ shell: { revealDatabase: vi.fn(), revealLogDirectory } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Data & storage' }));
+    expect(screen.getByText(/retained for 14 days/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal logs in Finder' }));
+
+    await waitFor(() => expect(revealLogDirectory).toHaveBeenCalledTimes(1));
+    expect(revealLogDirectory).toHaveBeenCalledWith();
   });
 
   it('hides the reveal action when no shell api is wired', () => {

@@ -28,7 +28,10 @@ type ExposedCallieApi = {
     retry: () => Promise<unknown>;
     status: () => Promise<unknown>;
   };
-  shell: { revealDatabase: () => Promise<unknown> };
+  shell: {
+    revealDatabase: () => Promise<unknown>;
+    revealLogDirectory: () => Promise<unknown>;
+  };
   appleSpike: Record<string, unknown>;
 };
 
@@ -124,7 +127,7 @@ describe('preload workflow bridge', () => {
       'addEvidence', 'capture', 'list', 'updateStatus',
     ]);
     expect(Object.keys(api.sourcing).sort()).toEqual(['pollNow', 'retry', 'setHmacSalt', 'status']);
-    expect(Object.keys(api.shell)).toEqual(['revealDatabase']);
+    expect(Object.keys(api.shell).sort()).toEqual(['revealDatabase', 'revealLogDirectory']);
   });
 
   it('invokes only health:get without arguments for the health probe', async () => {
@@ -179,6 +182,13 @@ describe('preload workflow bridge', () => {
 
     electron.invoke.mockResolvedValue({ revealed: true, path: '/leak' });
     await expect(api.shell.revealDatabase()).rejects.toThrow();
+  });
+
+  it('invokes shell:reveal-log-directory without arguments', async () => {
+    electron.invoke.mockResolvedValue({ revealed: true });
+
+    await expect(exposedApi().shell.revealLogDirectory()).resolves.toEqual({ revealed: true });
+    expect(electron.invoke).toHaveBeenCalledWith('shell:reveal-log-directory');
   });
 
   it('sends friday:get with no payload by default and one strict week request otherwise', async () => {

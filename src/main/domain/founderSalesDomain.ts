@@ -2707,10 +2707,9 @@ export class FounderSalesDomain {
     if (candidates.length === 1) return candidates[0]!.id;
     if (candidates.length > 1) {
       // Ambiguous: creating a recoverable duplicate beats a wrong merge.
-      console.info(
-        `[sourcing] ambiguous cloud name match "${normalizedName}" `
-        + `(${candidates.length} cloud-linked persons); creating a new person`,
-      );
+      console.info('SOURCING_CLOUD_NAME_MATCH_AMBIGUOUS', {
+        count: candidates.length,
+      });
     }
     return null;
   }

@@ -45,6 +45,7 @@ import {
 import { safeStorage } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
+import type { SafeLogger } from './logging/safeLogger';
 
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   registerApplicationIpc(
@@ -54,12 +55,18 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
     sourcingProvider: SourcingProvider,
     shellProvider?: undefined,
     enrichmentRequester?: EnrichmentRequester,
+    logDirectoryPath?: string,
   ): () => void;
   createEnrichmentRequester?(
     runtime: FoundationRuntime,
     userDataPath: string,
+    logger?: SafeLogger,
   ): EnrichmentRequester;
-  createSourcingPoller(runtime: FoundationRuntime, userDataPath: string): SourcingPoller;
+  createSourcingPoller(
+    runtime: FoundationRuntime,
+    userDataPath: string,
+    logger?: SafeLogger,
+  ): SourcingPoller;
   createAppleBridgeSupervisor(
     options: AppleBridgeSupervisorOptions,
   ): AppleBridgeSupervisorApi;
@@ -82,6 +89,8 @@ export type ApplicationStartupOptions = {
    * enables it for real launches.
    */
   sourcingPollingEnabled?: boolean;
+  logger?: SafeLogger;
+  logDirectoryPath?: string;
   createWindow(): void | Promise<void>;
 };
 
@@ -117,13 +126,14 @@ const SOURCING_POLL_INTERVAL_MS = 15 * 60 * 1000;
 function createProductionEnrichmentRequester(
   runtime: FoundationRuntime,
   userDataPath: string,
+  logger?: SafeLogger,
 ): EnrichmentRequester {
   const credentialStore = new SourcingCredentialStore({
     safeStorage,
     envelopePath: join(userDataPath, 'callie.sourcing-inbox-credentials.json'),
     fallbackKeyFilePath: join(homedir(), '.callie-sourcing-app-inbox-key.json'),
     clock: domainClock,
-    log: (message) => console.info(`[sourcing] ${message}`),
+    logger,
   });
   const writer = new EnrichmentRequestWriter({
     domainGate: runtime,
@@ -138,13 +148,14 @@ function createProductionEnrichmentRequester(
 function createProductionSourcingPoller(
   runtime: FoundationRuntime,
   userDataPath: string,
+  logger?: SafeLogger,
 ): SourcingPoller {
   const credentialStore = new SourcingCredentialStore({
     safeStorage,
     envelopePath: join(userDataPath, 'callie.sourcing-inbox-credentials.json'),
     fallbackKeyFilePath: join(homedir(), '.callie-sourcing-app-inbox-key.json'),
     clock: domainClock,
-    log: (message) => console.info(`[sourcing] ${message}`),
+    logger,
   });
   const hmacSaltStore = new SourcingHmacSaltStore({
     safeStorage,
@@ -244,7 +255,7 @@ function createProductionSourcingPoller(
     fixtureExecutionEvidence: fixtureEvidence === undefined
       ? undefined
       : () => ({ ...fixtureEvidence }),
-    log: (message) => console.info(`[sourcing] ${message}`),
+    logger,
   });
 }
 
@@ -360,6 +371,7 @@ export async function startApplication(
     sourcingPoller = dependencies.createSourcingPoller(
       runtime,
       options.userDataPath,
+      options.logger,
     );
     if (sourcingPoller === undefined) {
       throw new Error('Sourcing poller dependency is required.');
@@ -386,7 +398,12 @@ export async function startApplication(
         },
       },
       undefined,
-      dependencies.createEnrichmentRequester?.(runtime, options.userDataPath),
+      dependencies.createEnrichmentRequester?.(
+        runtime,
+        options.userDataPath,
+        options.logger,
+      ),
+      options.logDirectoryPath,
     );
     throwIfStartupCancelled(options.signal);
     if (options.sourcingPollingEnabled === true && sourcingPoller !== undefined) {

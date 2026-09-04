@@ -25,6 +25,7 @@ import {
   createFileInboxCredentialProvider,
   type InboxCredentials,
 } from './inboxClient';
+import type { SafeLogger } from '../logging/safeLogger';
 
 export type SourcingCredentialSource = 'keychain' | 'file' | 'none';
 
@@ -51,6 +52,7 @@ export class SourcingCredentialStore {
   private readonly fallbackKeyFilePath: string | null;
   private readonly clock: Clock;
   private readonly log: (message: string) => void;
+  private readonly logger: SafeLogger;
 
   constructor(input: {
     safeStorage: AsyncSafeStorage;
@@ -58,12 +60,16 @@ export class SourcingCredentialStore {
     fallbackKeyFilePath: string | null;
     clock: Clock;
     log?: (message: string) => void;
+    logger?: SafeLogger;
   }) {
     this.safeStorage = input.safeStorage;
     this.envelopePath = input.envelopePath;
     this.fallbackKeyFilePath = input.fallbackKeyFilePath;
     this.clock = input.clock;
     this.log = input.log ?? (() => undefined);
+    this.logger = input.logger ?? {
+      log: (_level, eventCode, fields) => this.log(`${eventCode} ${JSON.stringify(fields ?? {})}`),
+    };
   }
 
   async load(): Promise<LoadedSourcingCredentials> {
@@ -121,10 +127,10 @@ export class SourcingCredentialStore {
       const temporaryPath = `${this.envelopePath}.tmp`;
       await writeFile(temporaryPath, envelope, { mode: 0o600 });
       await rename(temporaryPath, this.envelopePath);
-      this.log(
-        'Sourcing inbox credentials were imported into protected storage; '
-        + `the plaintext key file ${this.fallbackKeyFilePath} can be deleted.`,
-      );
+      this.logger.log('info', 'SOURCING_CREDENTIALS_PROTECTED', {
+        component: 'sourcing-credential-store',
+        status: 'protected',
+      });
     } catch {
       // Never fail a poll because the protected write failed; the file
       // provider remains the source until the next attempt.
