@@ -29,6 +29,7 @@ import type { Clock } from '../domain/support/clock';
 import type {
   SourcingCounters,
   SourcingCredentialState,
+  FixtureExecutionEvidence,
   SourcingHmacSaltState,
   SourcingStatus,
 } from '../../shared/contracts/sourcingContract';
@@ -116,6 +117,7 @@ export class SourcingPoller {
   private stopped = false;
   private readonly pollIds: PollIdGenerator;
   private readonly watchdogTimer: WatchdogTimer;
+  private readonly fixtureExecutionEvidence: (() => FixtureExecutionEvidence) | undefined;
 
   constructor(input: {
     domainGate: SourcingPollerDomainGate;
@@ -140,6 +142,7 @@ export class SourcingPoller {
     log?: (message: string) => void;
     pollIds?: PollIdGenerator;
     watchdogTimer?: WatchdogTimer;
+    fixtureExecutionEvidence?: () => FixtureExecutionEvidence;
   }) {
     this.domainGate = input.domainGate;
     this.loadCredentials = input.loadCredentials;
@@ -155,6 +158,7 @@ export class SourcingPoller {
         return () => clearInterval(interval);
       },
     };
+    this.fixtureExecutionEvidence = input.fixtureExecutionEvidence;
   }
 
   /** Poll once at startup, then on every timer tick until stop(). */
@@ -230,6 +234,9 @@ export class SourcingPoller {
       hmacSaltState,
       execution: this.getExecutionState(),
       health: this.getHealth(),
+      ...(this.fixtureExecutionEvidence === undefined
+        ? {}
+        : { fixtureExecutionEvidence: this.fixtureExecutionEvidence() }),
     };
   }
 
@@ -252,10 +259,6 @@ export class SourcingPoller {
     const pollId = this.pollIds.next();
     const startedAt = this.clock.now();
     const controller = new AbortController();
-    let rejectAbort!: (reason: unknown) => void;
-    const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
-    const onAbort = (): void => rejectAbort(controller.signal.reason);
-    controller.signal.addEventListener('abort', onAbort, { once: true });
     const deadline = setTimeout(() => {
       controller.abort(
         new RemoteOperationTimeoutError('POLL_TOTAL_TIMEOUT', POLL_TOTAL_DEADLINE_MS),
@@ -264,14 +267,15 @@ export class SourcingPoller {
     deadline.unref();
     const owned = { pollId, startedAt, controller } as OwnedPoll;
     this.executionState = { ...this.executionState, state: 'running', pollId, startedAt };
-    owned.promise = Promise.race([this.runPoll(controller.signal), aborted])
-      .then((completed) => {
-        if (completed) this.recordSuccess(pollId);
+    owned.promise = this.runPoll(controller.signal)
+      .then((successfulBacklogSample) => {
+        if (successfulBacklogSample !== null) {
+          this.recordSuccess(pollId, successfulBacklogSample);
+        }
       })
       .catch((error: unknown) => this.recordFailure(error, pollId))
       .finally(() => {
         clearTimeout(deadline);
-        controller.signal.removeEventListener('abort', onAbort);
         if (this.activePoll?.pollId === pollId) {
           this.activePoll = undefined;
           this.executionState = {
@@ -304,15 +308,15 @@ export class SourcingPoller {
     await this.upstream.setSalt(salt);
   }
 
-  private async runPoll(signal: AbortSignal): Promise<boolean> {
-    if (this.stopped) return false;
+  private async runPoll(signal: AbortSignal): Promise<number | null> {
+    if (this.stopped) return null;
 
     const loaded = await this.loadCredentials();
     signal.throwIfAborted();
     this.credentialState = loaded.source;
     if (loaded.credentials === null) {
       // Not provisioned: idle quietly, never an error.
-      return false;
+      return null;
     }
 
     const inbox = await this.createInboxClient(loaded);
@@ -329,12 +333,13 @@ export class SourcingPoller {
     const allKeys = await inbox.listNewObjects(null, signal);
     signal.throwIfAborted();
     const keys = allKeys.filter((key) => !processedKeys.has(key));
+    const successfulBacklogSample = keys.length;
     this.backlogCount = keys.length;
 
     let firstFailure: unknown;
     let maxProcessedKey = cursor.lastKey;
     for (const key of keys) {
-      if (this.stopped) return false;
+      if (this.stopped) return null;
       try {
         const batch = await inbox.fetchNdjson(key, signal);
         signal.throwIfAborted();
@@ -406,7 +411,7 @@ export class SourcingPoller {
       }
     }
     signal.throwIfAborted();
-    return true;
+    return successfulBacklogSample;
   }
 
   /**
@@ -505,9 +510,9 @@ export class SourcingPoller {
     }
   }
 
-  private recordSuccess(pollId: string): void {
+  private recordSuccess(pollId: string, successfulBacklogSample: number): void {
     if (this.activePoll?.pollId !== pollId) return;
-    this.consecutiveBackloggedPolls = (this.backlogCount ?? 0) > 0
+    this.consecutiveBackloggedPolls = successfulBacklogSample > 0
       ? this.consecutiveBackloggedPolls + 1
       : 0;
     this.executionState = {
@@ -521,6 +526,7 @@ export class SourcingPoller {
 
   private recordFailure(error: unknown, pollId: string): void {
     if (this.activePoll?.pollId !== pollId) return;
+    this.consecutiveBackloggedPolls = 0;
     const code = error instanceof RemoteOperationTimeoutError
       ? error.code
       : error instanceof Error && /^[A-Z][A-Z0-9_]+$/.test(error.name)

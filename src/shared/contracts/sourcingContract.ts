@@ -41,6 +41,13 @@ export type SourcingPollHealth = {
   lastSuccessAgeMs: number | null;
 };
 
+export type FixtureExecutionEvidence = {
+  cleanupStarted: boolean;
+  cleanupCompleted: boolean;
+  replacementStartedAfterCleanup: boolean;
+  maxConcurrentExecutions: number;
+};
+
 const canonicalUtcTimestampSchema = z.string().regex(
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
 );
@@ -70,6 +77,13 @@ export const sourcingPollHealthSchema = z.object({
   lastSuccessAgeMs: z.number().nonnegative().nullable(),
 }).strict() as unknown as z.ZodType<SourcingPollHealth>;
 
+const fixtureExecutionEvidenceSchema = z.object({
+  cleanupStarted: z.boolean(),
+  cleanupCompleted: z.boolean(),
+  replacementStartedAfterCleanup: z.boolean(),
+  maxConcurrentExecutions: z.number().int().nonnegative(),
+}).strict();
+
 /**
  * Whether the founder has provisioned the shared membership HMAC salt
  * (Task 4). 'none' means membership uploads omit contact_hmacs entirely.
@@ -85,6 +99,7 @@ export const sourcingStatusSchema = z.object({
   hmacSaltState: sourcingHmacSaltStateSchema,
   execution: pollExecutionStateSchema,
   health: sourcingPollHealthSchema,
+  fixtureExecutionEvidence: fixtureExecutionEvidenceSchema.optional(),
 }).strict();
 
 /** Founder-pasted shared salt; never logged, stored via safeStorage only. */

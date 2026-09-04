@@ -218,17 +218,7 @@ export function registerApplicationIpc(
   enrichmentRequester?: EnrichmentRequester,
 ): () => void {
   const unregisters = [
-    registrars.registerHealthIpc({
-      getHealth: async () => {
-        const base = appHealthSchema.parse(await runtime.getHealth());
-        const sourcing = await (sourcingProvider ?? createIdleSourcingProvider()).status();
-        return appHealthSchema.parse({
-          ...base,
-          operationalStatus: sourcing.health.status === 'degraded' ? 'degraded' : 'ready',
-          sourcing: sourcing.health,
-        });
-      },
-    }, isTrustedRendererUrl),
+    registrars.registerHealthIpc(runtime, isTrustedRendererUrl),
     registrars.registerLeadsIpc(createLeadsProvider(runtime), isTrustedRendererUrl),
     registrars.registerLeadDetailIpc(
       createLeadDetailProvider(runtime, enrichmentRequester),

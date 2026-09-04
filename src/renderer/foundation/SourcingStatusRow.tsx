@@ -49,6 +49,8 @@ const COUNTER_LABELS = [
   ['quarantined', 'Quarantined'],
 ] as const;
 
+const POLL_TOTAL_DEADLINE_MS = 14 * 60_000;
+
 export const SourcingStatusRow = ({ api }: { api: SourcingStatusApi }) => {
   const [status, setStatus] = useState<SourcingStatus | 'loading' | 'unavailable'>('loading');
   const [retrying, setRetrying] = useState(false);
@@ -83,7 +85,11 @@ export const SourcingStatusRow = ({ api }: { api: SourcingStatusApi }) => {
   }, [load]);
 
   const retry = async (): Promise<void> => {
-    if (retrying || (typeof status !== 'string' && status.execution.state === 'running')) return;
+    const runningIsFresh = typeof status !== 'string'
+      && status.execution.state === 'running'
+      && status.execution.startedAt !== null
+      && Date.now() - Date.parse(status.execution.startedAt) <= POLL_TOTAL_DEADLINE_MS;
+    if (retrying || runningIsFresh) return;
     setRetrying(true);
     try {
       const value = await api.retry();
@@ -100,6 +106,9 @@ export const SourcingStatusRow = ({ api }: { api: SourcingStatusApi }) => {
   if (status === 'unavailable') return <p className="settings__quiet">Sourcing inbox: unavailable</p>;
   const relative = formatRelativeLastPoll(status.execution.lastCompletedAt);
   const running = status.execution.state === 'running';
+  const runningIsFresh = running
+    && status.execution.startedAt !== null
+    && Date.now() - Date.parse(status.execution.startedAt) <= POLL_TOTAL_DEADLINE_MS;
   return (
     <>
       <div className="settings__row">
@@ -125,7 +134,7 @@ export const SourcingStatusRow = ({ api }: { api: SourcingStatusApi }) => {
       <button
         type="button"
         className="settings__action"
-        disabled={retrying || running}
+        disabled={retrying || runningIsFresh}
         onClick={() => { void retry(); }}
       >
         {retrying ? 'Retrying…' : 'Retry sourcing poll'}

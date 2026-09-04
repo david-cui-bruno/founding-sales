@@ -8,6 +8,7 @@ import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
 import type { AppDatabase } from '../../src/main/db/database';
 import type { MigrationOptions } from '../../src/main/db/migrate';
 import type { HealthProvider } from '../../src/main/health/registerHealthIpc';
+import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import {
   startApplication,
   type ApplicationStartupDependencies,
@@ -78,6 +79,15 @@ describe('startApplication', () => {
         events.push(`health:${options.domainStartupReport.interruptedJobsRecovered}`);
         return { getHealth: () => health };
       },
+      createSourcingPoller: () => ({
+        getHealth: () => health.sourcing,
+        stop: (): void => undefined,
+        idle: async (): Promise<void> => undefined,
+        pollNow: async (): Promise<void> => undefined,
+        retry: async (): Promise<void> => undefined,
+        getStatus: async () => ({}) as never,
+        setHmacSalt: async (): Promise<void> => undefined,
+      }) as unknown as SourcingPoller,
       registerApplicationIpc: (provider: HealthProvider) => {
         events.push('ipc');
         captureHealth?.(provider);
@@ -201,6 +211,33 @@ describe('startApplication', () => {
 
     expect(events.filter((event) => event === 'unregister')).toHaveLength(1);
     expect(events.filter((event) => event === 'close')).toHaveLength(1);
+  });
+
+  it('waits for sourcing owner cleanup before unregistering IPC and closing SQLite', async () => {
+    const events: string[] = [];
+    let releaseCleanup!: () => void;
+    const cleanup = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+    const dependencies = createDependencies(events);
+    dependencies.createSourcingPoller = () => ({
+      getHealth: () => health.sourcing,
+      stop: (): void => { events.push('poller-stop'); },
+      idle: async (): Promise<void> => { await cleanup; events.push('poller-cleanup'); },
+      pollNow: async (): Promise<void> => undefined,
+      retry: async (): Promise<void> => undefined,
+      getStatus: async () => ({}) as never,
+      setHmacSalt: async (): Promise<void> => undefined,
+    }) as unknown as SourcingPoller;
+    const running = await startApplication({
+      appVersion: '1.0.0', userDataPath: '/tmp/callie-user-data', createWindow: () => undefined,
+    }, dependencies);
+
+    const shutdown = running.shutdown();
+    await Promise.resolve();
+    expect(events.slice(-1)).toEqual(['poller-stop']);
+    expect(events).not.toContain('close');
+    releaseCleanup();
+    await shutdown;
+    expect(events.slice(-3)).toEqual(['poller-cleanup', 'unregister', 'close']);
   });
 
   it('unregisters IPC and closes ready SQLite when bootstrap window creation fails', async () => {

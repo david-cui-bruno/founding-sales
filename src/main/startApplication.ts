@@ -45,7 +45,6 @@ import {
 import { safeStorage } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
-import { RemoteOperationTimeoutError } from './runtime/abortDeadline';
 
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   registerApplicationIpc(
@@ -165,8 +164,23 @@ function createProductionSourcingPoller(
   // it exists so the fixture-driven spec can exercise the full poll ->
   // intake -> score pipeline without credentials or network.
   const fixtureDirectory = process.env.CALLIE_SOURCING_FIXTURE_DIR ?? null;
-  let fixtureHangOnce = fixtureDirectory !== null
-    && process.env.CALLIE_SOURCING_FIXTURE_HANG_ONCE === '1';
+  const fixtureEvidence = fixtureDirectory !== null
+    && process.env.CALLIE_SOURCING_FIXTURE_HANG_ONCE === '1'
+    ? {
+      cleanupStarted: false,
+      cleanupCompleted: false,
+      replacementStartedAfterCleanup: false,
+      maxConcurrentExecutions: 0,
+    }
+    : undefined;
+  let fixtureHangOnce = fixtureEvidence !== undefined;
+  let fixtureActiveExecutions = 0;
+  let fixtureClockAdvanced = false;
+  const pollClock = fixtureEvidence === undefined ? domainClock : {
+    now: () => new Date(
+      Date.now() + (fixtureClockAdvanced ? 15 * 60_000 : 0),
+    ).toISOString(),
+  };
   return new SourcingPoller({
     domainGate: runtime,
     loadCredentials: fixtureDirectory === null
@@ -182,12 +196,34 @@ function createProductionSourcingPoller(
           credentialProvider: async () => loaded.credentials,
         });
       const client = new InboxClient({ store, clock: domainClock });
-      if (!fixtureHangOnce) return client;
+      if (fixtureEvidence === undefined) return client;
       return {
-        listNewObjects: async () => {
-          fixtureHangOnce = false;
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          throw new RemoteOperationTimeoutError('POLL_TOTAL_TIMEOUT', 14 * 60_000);
+        listNewObjects: async (sinceKey, signal) => {
+          fixtureActiveExecutions += 1;
+          fixtureEvidence.maxConcurrentExecutions = Math.max(
+            fixtureEvidence.maxConcurrentExecutions,
+            fixtureActiveExecutions,
+          );
+          if (fixtureHangOnce) {
+            fixtureHangOnce = false;
+            fixtureClockAdvanced = true;
+            return new Promise<string[]>((_resolve, reject) => {
+              signal.addEventListener('abort', () => {
+                fixtureEvidence.cleanupStarted = true;
+                setTimeout(() => {
+                  fixtureActiveExecutions -= 1;
+                  fixtureEvidence.cleanupCompleted = true;
+                  reject(signal.reason);
+                }, 100);
+              }, { once: true });
+            });
+          }
+          fixtureEvidence.replacementStartedAfterCleanup = fixtureEvidence.cleanupCompleted;
+          try {
+            return await client.listNewObjects(sinceKey, signal);
+          } finally {
+            fixtureActiveExecutions -= 1;
+          }
         },
         fetchNdjson: (key, signal) => client.fetchNdjson(key, signal),
       };
@@ -204,7 +240,10 @@ function createProductionSourcingPoller(
       saltState: () => hmacSaltStore.state(),
       setSalt: (salt) => hmacSaltStore.set(salt),
     },
-    clock: domainClock,
+    clock: pollClock,
+    fixtureExecutionEvidence: fixtureEvidence === undefined
+      ? undefined
+      : () => ({ ...fixtureEvidence }),
     log: (message) => console.info(`[sourcing] ${message}`),
   });
 }
@@ -320,6 +359,9 @@ export async function startApplication(
       options.userDataPath,
     );
     const startedPoller = sourcingPoller;
+    if (startedPoller !== undefined) {
+      runtime.setSourcingHealthProvider(() => startedPoller.getHealth());
+    }
     unregisterApplicationIpc = dependencies.registerApplicationIpc(
       runtime,
       options.isTrustedRendererUrl,

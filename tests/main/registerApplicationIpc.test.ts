@@ -9,6 +9,8 @@ vi.mock('electron', () => ({
 }));
 
 import type { FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
+import type { AppHealth } from '../../src/shared/healthContract';
+import type { SourcingStatus } from '../../src/shared/contracts/sourcingContract';
 import {
   createConversationsProvider,
   createFridayProvider,
@@ -33,6 +35,23 @@ const fakeGate = (domain: Partial<FounderSalesDomain> = {}): Gate => ({
 });
 
 describe('registerApplicationIpc', () => {
+  const degradedHealth: AppHealth = {
+    appVersion: '1.0.0', schemaVersion: 14, databasePath: '/fixture.sqlite3',
+    databaseEncrypted: true, cipherVersion: 'cipher', fts5Available: true,
+    pendingJobs: 0, interruptedJobsRecovered: 0, domainStatus: 'ready', domainReady: true,
+    domainBlockingViolationCount: 0, domainRepairableIssueCount: 0,
+    domainProjectionRefreshCandidateCount: 0, pendingProjectionRebuilds: 0,
+    domainStartupEvaluatedAt: '2026-09-01T12:00:00.000Z', operationalStatus: 'degraded',
+    sourcing: {
+      status: 'degraded', reasons: ['POLL_EXCEEDED_TOTAL_DEADLINE'], lastSuccessAgeMs: null,
+      state: {
+        state: 'running', pollId: 'poll-real', startedAt: '2026-09-01T11:45:00.000Z',
+        lastCompletedAt: null, consecutiveFailures: 0, lastFailureAt: null,
+        lastFailureCode: null, backlogCount: null,
+      },
+    },
+  };
+
   function fakeRegistrars(unregisters: ReturnType<typeof vi.fn>[]): {
     registrars: FeatureRegistrars;
     calls: string[];
@@ -102,6 +121,36 @@ describe('registerApplicationIpc', () => {
     for (const registrar of Object.values(registrars)) {
       expect(vi.mocked(registrar).mock.calls[0]![1]).toBe(trust);
     }
+  });
+
+  it('registers the primary runtime health unchanged instead of overlaying sourcing IPC status', async () => {
+    const unregisters = Array.from({ length: 12 }, () => vi.fn());
+    const { registrars } = fakeRegistrars(unregisters);
+    let registeredHealth: { getHealth(): Promise<unknown> } | undefined;
+    registrars.registerHealthIpc = vi.fn((provider) => {
+      registeredHealth = provider;
+      return unregisters[0]!;
+    });
+    const runtime = fakeGate();
+    vi.mocked(runtime.getHealth).mockResolvedValue(degradedHealth);
+    const healthySourcing = {
+      health: {
+        status: 'healthy', reasons: [], lastSuccessAgeMs: null,
+        state: {
+          state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
+          consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null, backlogCount: null,
+        },
+      },
+    } as SourcingStatus;
+
+    registerApplicationIpc(runtime, undefined, registrars, {
+      pollNow: async () => healthySourcing,
+      retry: async () => healthySourcing,
+      status: async () => healthySourcing,
+      setHmacSalt: async () => healthySourcing,
+    });
+
+    await expect(registeredHealth?.getHealth()).resolves.toEqual(degradedHealth);
   });
 
   it('routes every provider method through withDomain to the exact facade use case', async () => {

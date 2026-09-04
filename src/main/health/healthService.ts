@@ -11,7 +11,7 @@ export type HealthServiceOptions = {
   database: AppDatabase;
   jobs: Pick<JobRepository, 'listActive'>;
   domainStartupReport: DomainStartupReport;
-  sourcingHealth?: () => SourcingPollHealth;
+  sourcingHealth: () => SourcingPollHealth;
 };
 
 /**
@@ -33,16 +33,7 @@ export class HealthService {
     }
     const encryption = inspectDatabaseEncryption(this.options.database);
     const report = this.options.domainStartupReport;
-    const sourcing = this.options.sourcingHealth?.() ?? {
-      status: 'healthy' as const,
-      reasons: [],
-      state: {
-        state: 'idle' as const, pollId: null, startedAt: null, lastCompletedAt: null,
-        consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null,
-        backlogCount: null,
-      },
-      lastSuccessAgeMs: null,
-    };
+    const sourcing = this.options.sourcingHealth();
 
     return appHealthSchema.parse({
       appVersion: this.options.appVersion,

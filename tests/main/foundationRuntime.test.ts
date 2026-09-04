@@ -68,6 +68,42 @@ const keyDependencies = () => ({
 });
 
 describe('FoundationRuntime', () => {
+  it('requires and serves the explicitly composed sourcing health provider', async () => {
+    const database = { path: health.databasePath } as AppDatabase;
+    const runtime = new FoundationRuntime(runtimeOptions, {
+      ...keyDependencies(),
+      openDatabase: () => database,
+      migrateToLatest: async () => migrationResult,
+      createDomainRuntime: () => fakeDomainRuntime(),
+      createHealthService: (options) => ({
+        getHealth: () => ({
+          ...health,
+          operationalStatus: options.sourcingHealth().status === 'degraded' ? 'degraded' : 'ready',
+          sourcing: options.sourcingHealth(),
+        }),
+      }),
+      closeDatabase: () => undefined,
+    });
+    await runtime.initialize();
+
+    await expect(runtime.getHealth()).rejects.toThrow(
+      'Sourcing health provider has not been composed.',
+    );
+    runtime.setSourcingHealthProvider(() => ({
+      status: 'degraded', reasons: ['POLL_EXCEEDED_TOTAL_DEADLINE'], lastSuccessAgeMs: null,
+      state: {
+        state: 'running', pollId: 'poll-real', startedAt: '2026-09-01T11:45:00.000Z',
+        lastCompletedAt: null, consecutiveFailures: 0, lastFailureAt: null,
+        lastFailureCode: null, backlogCount: null,
+      },
+    }));
+    await expect(runtime.getHealth()).resolves.toMatchObject({
+      operationalStatus: 'degraded',
+      sourcing: { status: 'degraded', state: { pollId: 'poll-real' } },
+    });
+    await runtime.shutdown();
+  });
+
   it('resolves, converts, opens, and migrates in order before zeroing the key', async () => {
     const keyBytes = Buffer.alloc(32, 0x5a);
     const database = { path: health.databasePath } as AppDatabase;

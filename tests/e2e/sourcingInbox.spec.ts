@@ -137,15 +137,32 @@ test('fixture-only hung poll degrades health and Retry recovers without overlap'
 
   try {
     const { page } = workspace;
-    const degraded = await page.evaluate(async () => window.callie.sourcing.pollNow());
+    const firstPoll = page.evaluate(async () => window.callie.sourcing.pollNow());
+    await expect.poll(async () => page.evaluate(
+      async () => window.callie.sourcing.status(),
+    )).toMatchObject({
+      health: { status: 'degraded' },
+      execution: { state: 'running' },
+    });
+    const degraded = await page.evaluate(async () => window.callie.sourcing.status());
     expect(degraded.health.status).toBe('degraded');
-    expect(degraded.execution.lastFailureCode).toBe('POLL_TOTAL_TIMEOUT');
     expect(degraded.execution.lastCompletedAt).toBeNull();
 
-    const recovered = await page.evaluate(async () => window.callie.sourcing.retry());
+    const retry = page.evaluate(async () => window.callie.sourcing.retry());
+    await expect.poll(async () => page.evaluate(
+      async () => (await window.callie.sourcing.status()).fixtureExecutionEvidence,
+    )).toMatchObject({ cleanupStarted: true, cleanupCompleted: false });
+    const recovered = await retry;
+    await firstPoll;
     expect(recovered.health.status).toBe('healthy');
     expect(recovered.execution.state).toBe('idle');
     expect(recovered.execution.lastCompletedAt).not.toBeNull();
+    expect(recovered.fixtureExecutionEvidence).toEqual({
+      cleanupStarted: true,
+      cleanupCompleted: true,
+      replacementStartedAfterCleanup: true,
+      maxConcurrentExecutions: 1,
+    });
   } finally {
     await workspace.stop();
     await rm(fixtureDirectory, { recursive: true, force: true });

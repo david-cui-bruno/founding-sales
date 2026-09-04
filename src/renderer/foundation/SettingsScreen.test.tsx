@@ -289,6 +289,37 @@ describe('SourcingStatusRow', () => {
     resolveRetry(sourcingStatus);
     await waitFor(() => expect(status).toHaveBeenCalledTimes(2));
   });
+
+  it('allows accessible Retry for an expired running owner while coalescing a fresh one', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-01T12:15:00.001Z'));
+    const retry = vi.fn(async () => sourcingStatus);
+    const expiredRunning: SourcingStatus = {
+      ...sourcingStatus,
+      execution: {
+        ...sourcingStatus.execution,
+        state: 'running',
+        pollId: 'expired-poll',
+        startedAt: '2026-09-01T12:00:00.000Z',
+      },
+      health: {
+        ...sourcingStatus.health,
+        status: 'degraded',
+        reasons: ['POLL_EXCEEDED_TOTAL_DEADLINE'],
+        state: {
+          ...sourcingStatus.health.state,
+          state: 'running',
+          pollId: 'expired-poll',
+          startedAt: '2026-09-01T12:00:00.000Z',
+        },
+      },
+    };
+    render(<SourcingStatusRow api={{ status: async () => expiredRunning, retry }} />);
+
+    const button = await screen.findByRole('button', { name: 'Retry sourcing poll' });
+    expect(button.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(button);
+    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+  });
 });
 
 describe('formatRelativeLastPoll', () => {

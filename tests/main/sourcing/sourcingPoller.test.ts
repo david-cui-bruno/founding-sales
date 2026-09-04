@@ -620,12 +620,13 @@ describe('SourcingPoller remote deadlines', () => {
     expect(inbox.listNewObjects).toHaveBeenCalledTimes(1);
   });
 
-  it('aborts and awaits an expired owner, then stale settlement cannot clear its replacement', async () => {
+  it('waits for expired-owner cleanup before starting exactly one replacement', async () => {
     const domain = fakeDomainGate();
     let nowMs = Date.parse(NOW);
-    let resolveFirst!: (keys: string[]) => void;
+    let releaseCleanup!: () => void;
     let resolveSecond!: (keys: string[]) => void;
     let attempts = 0;
+    const events: string[] = [];
     const pollIds = ['poll-old', 'poll-new'];
     const poller = new SourcingPoller({
       domainGate: domain.gate,
@@ -634,11 +635,20 @@ describe('SourcingPoller remote deadlines', () => {
         source: 'keychain',
       }),
       createInboxClient: async () => ({
-        listNewObjects: async () => {
+        listNewObjects: async (_sinceKey, signal) => {
           attempts += 1;
-          return new Promise<string[]>((resolve) => {
-            if (attempts === 1) resolveFirst = resolve;
-            else resolveSecond = resolve;
+          events.push(`start:${attempts}`);
+          if (attempts === 2) {
+            return new Promise<string[]>((resolve) => { resolveSecond = resolve; });
+          }
+          return new Promise<string[]>((_resolve, reject) => {
+            signal.addEventListener('abort', () => {
+              events.push('abort:1');
+              void new Promise<void>((resolve) => { releaseCleanup = resolve; }).then(() => {
+                events.push('cleanup:1');
+                reject(signal.reason);
+              });
+            }, { once: true });
           });
         },
         fetchNdjson: async () => batch('unused', []),
@@ -653,11 +663,13 @@ describe('SourcingPoller remote deadlines', () => {
     const retry = poller.retry();
     await vi.advanceTimersByTimeAsync(0);
 
+    expect(events).toEqual(['start:1', 'abort:1']);
     expect(poller.getExecutionState()).toEqual(expect.objectContaining({
-      state: 'running', pollId: 'poll-new',
+      state: 'running', pollId: 'poll-old',
     }));
-    resolveFirst([]);
+    releaseCleanup();
     await vi.advanceTimersByTimeAsync(0);
+    expect(events).toEqual(['start:1', 'abort:1', 'cleanup:1', 'start:2']);
     expect(poller.getExecutionState().pollId).toBe('poll-new');
 
     resolveSecond([]);
@@ -667,17 +679,90 @@ describe('SourcingPoller remote deadlines', () => {
     }));
   });
 
+  it('idle waits for the aborted underlying execution cleanup before shutdown may close SQLite', async () => {
+    const domain = fakeDomainGate();
+    let releaseCleanup!: () => void;
+    const events: string[] = [];
+    const poller = new SourcingPoller({
+      domainGate: domain.gate,
+      loadCredentials: async () => ({
+        credentials: { accessKeyId: 'AKIA', secretAccessKey: 'secret' },
+        source: 'keychain',
+      }),
+      createInboxClient: async () => ({
+        listNewObjects: async (_sinceKey, signal) => new Promise<string[]>((_resolve, reject) => {
+          signal.addEventListener('abort', () => {
+            events.push('abort');
+            void new Promise<void>((resolve) => { releaseCleanup = resolve; }).then(() => {
+              events.push('cleanup');
+              reject(signal.reason);
+            });
+          }, { once: true });
+        }),
+        fetchNdjson: async () => batch('unused', []),
+      }),
+      clock: { now: () => NOW },
+    });
+
+    void poller.pollNow();
+    await vi.advanceTimersByTimeAsync(0);
+    poller.stop();
+    let idleSettled = false;
+    const idle = poller.idle().then(() => { idleSettled = true; });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(events).toEqual(['abort']);
+    expect(idleSettled).toBe(false);
+    releaseCleanup();
+    await idle;
+    expect(events).toEqual(['abort', 'cleanup']);
+  });
+
+  it('tracks successful backlog samples across success, failure, reset, and recovery', async () => {
+    const domain = fakeDomainGate();
+    let attempt = 0;
+    const poller = new SourcingPoller({
+      domainGate: domain.gate,
+      loadCredentials: async () => ({
+        credentials: { accessKeyId: 'AKIA', secretAccessKey: 'secret' },
+        source: 'keychain',
+      }),
+      createInboxClient: async () => ({
+        listNewObjects: async () => {
+          attempt += 1;
+          if (attempt === 3) throw new Error('intervening failure');
+          if (attempt === 6) return [];
+          return [`events/poll-${attempt}.ndjson`];
+        },
+        fetchNdjson: async (key) => batch(key, []),
+      }),
+      clock: { now: () => NOW },
+    });
+
+    await poller.pollNow();
+    expect(poller.getHealth().reasons).not.toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
+    await poller.pollNow();
+    expect(poller.getHealth().reasons).toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
+    await poller.pollNow();
+    expect(poller.getHealth().reasons).not.toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
+    await poller.pollNow();
+    expect(poller.getHealth().reasons).not.toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
+    await poller.pollNow();
+    expect(poller.getHealth().reasons).toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
+    await poller.pollNow();
+    expect(poller.getHealth().reasons).not.toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
+  });
+
   it('bounds one total poll at 14 minutes, leaves the ledger unchanged, and permits recovery', async () => {
     const domain = fakeDomainGate();
     const key = 'events/2026-09-01/a.ndjson';
-    let resolveLate!: (keys: string[]) => void;
     let listAttempts = 0;
     const inbox: FakeInbox = {
-      listNewObjects: vi.fn(async () => {
+      listNewObjects: vi.fn(async (_sinceKey, signal) => {
         listAttempts += 1;
         if (listAttempts === 1) {
-          return new Promise<string[]>((resolve) => {
-            resolveLate = resolve;
+          return new Promise<string[]>((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
           });
         }
         return [key];
@@ -698,9 +783,6 @@ describe('SourcingPoller remote deadlines', () => {
     expect(domain.ledgered).toEqual([key]);
     expect(poller.getExecutionState().consecutiveFailures).toBe(0);
 
-    resolveLate([key]);
-    await Promise.resolve();
-    await Promise.resolve();
     expect(domain.ledgered).toEqual([key]);
   });
 
