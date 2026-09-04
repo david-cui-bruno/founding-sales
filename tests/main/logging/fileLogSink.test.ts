@@ -125,17 +125,29 @@ describe('createFileLogSink', () => {
     expect(source).not.toMatch(/(?:^|[^A-Za-z])chmodSync/);
   });
 
-  it('rejects replacement of the validated logs directory before retained access', () => {
+  it('keeps retention and append bound to the opened directory after a parent symlink swap', () => {
     const userDataPath = temporaryRoot();
+    const logsPath = join(userDataPath, 'logs');
     const sink = createFileLogSink({
       userDataPath,
       now: () => new Date('2026-09-04T12:00:00Z'),
     });
-    renameSync(join(userDataPath, 'logs'), join(userDataPath, 'logs-original'));
-    mkdirSync(join(userDataPath, 'logs'), { mode: 0o700 });
+    const openedLogsPath = join(userDataPath, 'logs-original');
+    writeFileSync(join(logsPath, '2026-08-01.ndjson'), 'original-old\n', { mode: 0o600 });
+    renameSync(logsPath, openedLogsPath);
 
-    expect(() => sink.write('{"eventCode":"SAFE_EVENT"}'))
-      .toThrow('LOG_DIRECTORY_IDENTITY_CHANGED');
+    const target = temporaryRoot();
+    writeFileSync(join(target, '2026-08-01.ndjson'), 'target-old\n', { mode: 0o600 });
+    writeFileSync(join(target, '2026-09-04.ndjson'), 'target-today\n', { mode: 0o600 });
+    symlinkSync(target, logsPath);
+
+    sink.write('{"eventCode":"SAFE_EVENT"}');
+
+    expect(readdirSync(openedLogsPath)).toEqual(['2026-09-04.ndjson']);
+    expect(readFileSync(join(openedLogsPath, '2026-09-04.ndjson'), 'utf8'))
+      .toBe('{"eventCode":"SAFE_EVENT"}\n');
+    expect(readFileSync(join(target, '2026-08-01.ndjson'), 'utf8')).toBe('target-old\n');
+    expect(readFileSync(join(target, '2026-09-04.ndjson'), 'utf8')).toBe('target-today\n');
   });
 
   it('validates the opened descriptor before writing', () => {

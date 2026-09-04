@@ -20,7 +20,10 @@ const signingIdentity = resolveMacSigningIdentity({
 const config: ForgeConfig = {
   packagerConfig: {
     appBundleId: 'com.callie.foundersales',
-    asar: true,
+    asar: {
+      unpack: '**/*.node',
+      unpackDir: '.vite/build',
+    },
     icon: './assets/icon',
     osxSign: createAppleBridgeSigningOptions(signingIdentity),
     extendInfo: {
@@ -35,6 +38,7 @@ const config: ForgeConfig = {
 
       return !(
         filePath.startsWith('/.vite') ||
+        filePath === '/native/safe-log-fs/build/Release/safe_log_fs.node' ||
         filePath === '/node_modules' ||
         filePath.startsWith('/node_modules/better-sqlite3-multiple-ciphers')
       );
