@@ -138,6 +138,34 @@ describe("normalizeContacts", () => {
     expect(contacts.phones[0]?.compliance.federal_status).toBe("unknown");
     expect(contacts.phones[0]?.compliance.tcpa_flag).toBe(true);
   });
+
+  it("merges positive duplicate evidence that appears after false or missing evidence", () => {
+    const contacts = normalizeContacts(person({
+      phones: [
+        { number: "4015550100", dnc: false },
+        { number: "14015550100", dnc: true, tcpa: true },
+      ],
+    }));
+    expect(contacts.phones).toHaveLength(1);
+    expect(contacts.phones[0]?.compliance).toMatchObject({
+      federal_status: "listed",
+      tcpa_flag: true,
+    });
+  });
+
+  it("retains positive duplicate evidence that appears before false or missing evidence", () => {
+    const contacts = normalizeContacts(person({
+      phones: [
+        { number: "4015550100", dnc: true, tcpa: true },
+        { number: "14015550100", dnc: false },
+      ],
+    }));
+    expect(contacts.phones).toHaveLength(1);
+    expect(contacts.phones[0]?.compliance).toMatchObject({
+      federal_status: "listed",
+      tcpa_flag: true,
+    });
+  });
 });
 
 describe("pickPerson", () => {

@@ -43,6 +43,22 @@ describe('contact compliance evidence', () => {
       .toEqual({ kind: 'usable_clear' });
   });
 
+  it.each([
+    [true, 'tcpa_blocked'],
+    [null, 'tcpa_status_unknown'],
+  ] as const)(
+    'parses complete federal-clear evidence with TCPA %s and retains the evaluator block',
+    (tcpaFlag, reasonCode) => {
+      const evidence = contactComplianceEvidenceSchema.parse({ ...CLEAR, tcpaFlag });
+      expect(evidence.tcpaFlag).toBe(tcpaFlag);
+      expect(evaluateFederalEvidence({
+        normalizedPhone: '+14015550100',
+        evidence,
+        now: NOW,
+      })).toEqual({ kind: 'blocked', reasonCode });
+    },
+  );
+
   it('rejects a verified-clear expiration more than 31 days after the scrub timestamp', () => {
     expect(() => contactComplianceEvidenceSchema.parse({
       ...CLEAR,

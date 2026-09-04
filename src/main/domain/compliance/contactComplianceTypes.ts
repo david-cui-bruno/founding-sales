@@ -28,14 +28,13 @@ export const contactComplianceEvidenceSchema = z.object({
     });
   }
   if (evidence.federalStatus === 'verified_clear' && (
-    evidence.tcpaFlag !== false
-    || evidence.coveredAreaCode === null
+    evidence.coveredAreaCode === null
     || evidence.scrubbedAt === null
     || evidence.expiresAt === null
   )) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'Verified clear evidence requires TCPA clear, area-code coverage, scrub time, and expiration.',
+      message: 'Verified clear evidence requires area-code coverage, scrub time, and expiration.',
       path: ['federalStatus'],
     });
   }

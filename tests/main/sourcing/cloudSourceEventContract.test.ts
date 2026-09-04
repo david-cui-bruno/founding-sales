@@ -67,12 +67,35 @@ describe('cloudSourceEventContract (local mirror)', () => {
     expect(validateCloudSourceEvent(dirty).success).toBe(false);
   });
 
+  it.each([true, null])(
+    'accepts complete verified_clear federal evidence with TCPA %s',
+    (tcpaFlag) => {
+      const event = validEnrichmentEvent();
+      (event.payload as { phones: Array<{ compliance: Record<string, unknown> }> })
+        .phones[0]!.compliance = {
+          federal_status: 'verified_clear',
+          tcpa_flag: tcpaFlag,
+          covered_area_code: '401',
+          source: 'ftc_download',
+          scrubbed_at: '2026-09-01T12:00:00.000Z',
+          expires_at: '2026-09-30T12:00:00.000Z',
+        };
+      const result = validateCloudSourceEvent(event);
+      expect(result.success).toBe(true);
+      if (result.success === false) return;
+      const payload = result.data.payload as { phones: Array<{ compliance: { tcpa_flag: boolean | null } }> };
+      expect(payload.phones[0]?.compliance.tcpa_flag).toBe(tcpaFlag);
+    },
+  );
+
   it('carries the exact evidence record through the app contract', () => {
     const event = validEnrichmentEvent();
     const result = validateCloudSourceEvent(JSON.parse(JSON.stringify(event)));
     expect(result.success).toBe(true);
     if (result.success === false) return;
-    const payload = result.data.payload as typeof event.payload;
+    const payload = result.data.payload as {
+      phones: Array<{ compliance: unknown }>;
+    };
     expect(payload.phones[0]?.compliance).toEqual(
       (event.payload as { phones: Array<{ compliance: unknown }> }).phones[0]?.compliance,
     );

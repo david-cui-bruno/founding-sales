@@ -87,7 +87,7 @@ function vendorCompliance(phone: TracerfyPhone): EnrichmentPhone["compliance"] {
  */
 export function normalizeContacts(person: TracerfyPerson): NormalizedContacts {
   const phones: EnrichmentPhone[] = [];
-  const seenPhones = new Set<string>();
+  const phonesByE164 = new Map<string, EnrichmentPhone>();
   let invalidDropped = 0;
 
   for (const [index, phone] of (person.phones ?? []).entries()) {
@@ -96,14 +96,25 @@ export function normalizeContacts(person: TracerfyPerson): NormalizedContacts {
       invalidDropped += 1;
       continue;
     }
-    if (seenPhones.has(e164)) continue;
-    seenPhones.add(e164);
-    phones.push({
+    const existing = phonesByE164.get(e164);
+    if (existing !== undefined) {
+      const duplicateCompliance = vendorCompliance(phone);
+      if (duplicateCompliance.federal_status === "listed") {
+        existing.compliance.federal_status = "listed";
+      }
+      if (duplicateCompliance.tcpa_flag === true) {
+        existing.compliance.tcpa_flag = true;
+      }
+      continue;
+    }
+    const normalizedPhone: EnrichmentPhone = {
       e164,
       kind: phoneKind(phone.type),
       compliance: vendorCompliance(phone),
       rank: phone.rank ?? index + 1,
-    });
+    };
+    phonesByE164.set(e164, normalizedPhone);
+    phones.push(normalizedPhone);
   }
 
   const emails: EnrichmentEmail[] = [];

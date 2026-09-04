@@ -212,6 +212,25 @@ describe("enrichmentPayloadSchema", () => {
     }).success).toBe(false);
   });
 
+  it.each([true, null])(
+    "accepts complete verified_clear federal evidence with TCPA %s",
+    (tcpaFlag) => {
+      const phone = validPayload().phones[0];
+      const result = enrichmentPhoneSchema.parse({
+        ...phone,
+        compliance: {
+          federal_status: "verified_clear",
+          tcpa_flag: tcpaFlag,
+          covered_area_code: "401",
+          source: "ftc_download",
+          scrubbed_at: "2026-09-01T12:00:00.000Z",
+          expires_at: "2026-09-30T12:00:00.000Z",
+        },
+      });
+      expect(result.compliance.tcpa_flag).toBe(tcpaFlag);
+    },
+  );
+
   it("rejects unknown vendor, unknown phone kind, and extra fields (strict)", () => {
     expect(
       enrichmentPayloadSchema.safeParse({ ...validPayload(), vendor: "spokeo" }).success,
