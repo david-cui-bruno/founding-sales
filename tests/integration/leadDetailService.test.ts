@@ -187,6 +187,44 @@ describe('leadDetailService over a real encrypted domain', () => {
     ]);
   });
 
+  it('fails closed for otherwise-unmapped refusal reasons', async () => {
+    const { prospect } = seedLead('invalid');
+    addPhone(prospect, 'invalid-phone');
+    database.raw.prepare(`UPDATE person_contact_methods SET validation_state = 'invalid'
+      WHERE id = 'invalid-phone'`).run();
+
+    const compliance = (await leadDetail.get({ personId: prospect.personId }))
+      .phones[0]?.compliance;
+
+    expect(compliance).toMatchObject({
+      status: 'compliance_unknown',
+      callRefusalReason: 'contact_validation_unusable',
+      textRefusalReason: 'contact_validation_unusable',
+    });
+    expect(compliance?.label).toBe('Compliance unknown');
+    expect(compliance?.expiresAt).toBeNull();
+  });
+
+  it('gives state clearance priority over a simultaneous recipient-window refusal', async () => {
+    const { prospect } = seedLead('precedence');
+    addPhone(prospect, 'precedence-phone');
+    database.raw.prepare(`UPDATE person_outbound_jurisdictions
+      SET timezone = 'Pacific/Honolulu' WHERE person_id = ?`).run(prospect.personId);
+    database.raw.prepare(`UPDATE outbound_jurisdiction_clearances
+      SET registration_confirmed = 0 WHERE region_code = 'RI' AND channel = 'call'`).run();
+
+    const compliance = (await leadDetail.get({ personId: prospect.personId }))
+      .phones[0]?.compliance;
+
+    expect(compliance).toEqual({
+      status: 'state_clearance_required',
+      label: 'State clearance required',
+      expiresAt: null,
+      callRefusalReason: 'state_registration_missing',
+      textRefusalReason: 'outside_recipient_window',
+    });
+  });
+
   it('rejects an unknown person', async () => {
     await expect(
       leadDetail.get({ personId: 'missing-person' }),
@@ -366,6 +404,11 @@ describe('leadDetailService over a real encrypted domain', () => {
 
     const detail = await leadDetail.get({ personId: prospect.personId });
     expect(detail.optedOut).toBe(true);
+    expect(detail.phones[0]?.compliance).toMatchObject({
+      status: 'compliance_unknown',
+      callRefusalReason: 'person_or_handle_opted_out',
+      textRefusalReason: 'person_or_handle_opted_out',
+    });
   });
 
   it('confirms review_to_ready through the guarded transition', async () => {

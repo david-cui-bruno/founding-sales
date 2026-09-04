@@ -687,19 +687,29 @@ export class FounderSalesDomain {
       const callRefusalReason = refusalReason(row, 'call');
       const textRefusalReason = refusalReason(row, 'text');
       const reasons = [callRefusalReason, textRefusalReason];
+      const expiry = row.compliance_expires_at === null
+        ? null
+        : new Date(row.compliance_expires_at);
+      const hasValidFutureExpiry = expiry !== null
+        && Number.isFinite(expiry.getTime())
+        && expiry.toISOString() === row.compliance_expires_at
+        && row.compliance_expires_at > this.clock.now();
+      const bothChannelsAllowed = callRefusalReason === null && textRefusalReason === null;
       const status = reasons.includes('federal_dnc_listed') ? 'federal_dnc_listed'
         : reasons.includes('tcpa_blocked') ? 'tcpa_blocked'
           : reasons.some((reason) => reason === 'federal_status_unknown'
             || reason === 'tcpa_status_unknown') ? 'compliance_unknown'
             : reasons.includes('federal_evidence_stale') ? 'scrub_expired'
               : reasons.includes('federal_area_code_mismatch') ? 'area_code_not_covered'
-                : reasons.includes('outside_recipient_window') ? 'outside_recipient_window'
-                  : reasons.some((reason) => reason === 'jurisdiction_unknown'
-                    || reason === 'jurisdiction_blocked'
-                    || reason === 'state_registration_missing'
-                    || reason === 'state_dnc_subscription_missing'
-                    || reason === 'state_consent_rule_unknown') ? 'state_clearance_required'
-                    : 'verified_clear';
+                : reasons.some((reason) => reason === 'jurisdiction_unknown'
+                  || reason === 'jurisdiction_blocked'
+                  || reason === 'state_registration_missing'
+                  || reason === 'state_dnc_subscription_missing'
+                  || reason === 'state_consent_rule_unknown') ? 'state_clearance_required'
+                  : reasons.includes('outside_recipient_window') ? 'outside_recipient_window'
+                    : bothChannelsAllowed && hasValidFutureExpiry
+                      ? 'verified_clear'
+                      : 'compliance_unknown';
       const labels = {
         federal_dnc_listed: 'Federal DNC listed',
         tcpa_blocked: 'TCPA blocked',
