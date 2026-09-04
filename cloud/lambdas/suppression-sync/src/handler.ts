@@ -12,6 +12,7 @@ import { S3Client } from "@aws-sdk/client-s3";
 import { ulid } from "@callie-sourcing/shared";
 import { log } from "./log";
 import {
+  assertReportKey,
   ledgerHas,
   ledgerMark,
   listUploadObjects,
@@ -105,6 +106,7 @@ function parseSuppressionSyncEvent(value: unknown): SuppressionSyncEvent {
     ) {
       return invalidEvent();
     }
+    assertReportKey(event.reportKey);
     return { mode, reportKey: event.reportKey };
   }
 

@@ -29,6 +29,7 @@ const LEDGER_SNAPSHOT_DATE = "ledger";
 const BATCH_GET_LIMIT = 100;
 const MAX_UNPROCESSED_RETRIES = 10;
 const MAX_MEMBERSHIP_CONFLICT_RETRIES = 5;
+const CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 export interface HandlerDeps {
   s3: Pick<S3Client, "send">;
@@ -690,20 +691,33 @@ export async function runReplay(
   return { reportKey: key, report };
 }
 
-function assertReportKey(key: string): void {
+function decodeUlidTimestamp(runId: string): number {
+  let timestamp = 0;
+  for (const character of runId.slice(0, 10)) {
+    timestamp = timestamp * 32 + CROCKFORD_BASE32.indexOf(character);
+  }
+  return timestamp;
+}
+
+export function assertReportKey(key: string): void {
   const match = new RegExp(
-    `^${REPORTS_PREFIX}(\\d{4}-\\d{2}-\\d{2})/(\\d{4}-\\d{2}-\\d{2})T(\\d{2})(\\d{2})(\\d{2})(\\d{3})Z-([0-9A-HJKMNP-TV-Z]{26})\\.json$`,
+    `^${REPORTS_PREFIX}(\\d{4}-\\d{2}-\\d{2})/(\\d{4}-\\d{2}-\\d{2})T(\\d{2})(\\d{2})(\\d{2})(\\d{3})Z-([0-7][0-9A-HJKMNP-TV-Z]{25})\\.json$`,
   ).exec(key);
   if (!match) {
     throw new Error("reconciliation requires an exact suppression replay report key");
   }
-  const [, directoryDate, timestampDate, hour, minute, second, millisecond] = match;
-  if (directoryDate !== timestampDate) {
+  const [, directoryDate, timestampDate, hour, minute, second, millisecond, runId] =
+    match;
+  if (!runId || directoryDate !== timestampDate) {
     throw new Error("reconciliation requires an exact suppression replay report key");
   }
   const isoTimestamp = `${timestampDate}T${hour}:${minute}:${second}.${millisecond}Z`;
   const parsed = new Date(isoTimestamp);
-  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== isoTimestamp) {
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString() !== isoTimestamp ||
+    decodeUlidTimestamp(runId) !== parsed.getTime()
+  ) {
     throw new Error("reconciliation requires an exact suppression replay report key");
   }
 }

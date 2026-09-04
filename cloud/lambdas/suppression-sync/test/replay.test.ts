@@ -95,9 +95,9 @@ function state(objects: FakeObjectVersion[] = []): FakeState {
     listPageSize: 100,
     scanPageSize: 100,
     runIds: [
-      "01K4AWJ1AN0000000000000001",
-      "01K4AWJ1AN0000000000000002",
-      "01K4AWJ1AN0000000000000003",
+      "01M1P6MF4N0000000000000001",
+      "01M1P6MF4N0000000000000002",
+      "01M1P6MF4N0000000000000003",
     ],
     unprocessedBatchGetOnce: false,
   };
@@ -292,7 +292,7 @@ function fakeDeps(s: FakeState): HandlerDeps {
       SUPPRESSION_TABLE: "suppression",
     },
     now: () => NOW,
-    runId: () => s.runIds[nextRunId++] ?? "01K4AWJ1ANZZZZZZZZZZZZZZZZ",
+    runId: () => s.runIds[nextRunId++] ?? "01M1P6MF4NZZZZZZZZZZZZZZZZ",
   } as HandlerDeps;
 }
 
@@ -594,7 +594,7 @@ describe("suppression historical replay", () => {
     );
 
     expect(result.reportKey).toMatch(
-      /^upstream\/suppression-reports\/2026-09-04\/.+-01K4AWJ1AN0000000000000001\.json$/,
+      /^upstream\/suppression-reports\/2026-09-04\/.+-01M1P6MF4N0000000000000001\.json$/,
     );
     const put = s.commands.find((command) => command.name === "s3:PutObjectCommand");
     expect(put?.input).toMatchObject({
@@ -656,8 +656,8 @@ describe("suppression historical replay", () => {
   it("fails rather than overwriting an immutable report collision", async () => {
     const s = state([objectVersion()]);
     s.runIds = [
-      "01K4AWJ1AN0000000000000001",
-      "01K4AWJ1AN0000000000000001",
+      "01M1P6MF4N0000000000000001",
+      "01M1P6MF4N0000000000000001",
     ];
     const deps = fakeDeps(s);
 
@@ -691,8 +691,28 @@ describe("suppression historical replay", () => {
     expect(reconciled.reportKey.startsWith(REPORTS_PREFIX)).toBe(true);
   });
 
+  it("rejects a ULID whose first character exceeds the canonical 128-bit range", async () => {
+    const s = state();
+    const reportKey = `${REPORTS_PREFIX}2026-09-04/2026-09-04T123456789Z-81K4AWJ1AN0000000000000001.json`;
+
+    await expect(
+      runHandler(fakeDeps(s), { mode: "reconcile", reportKey }),
+    ).rejects.toThrow("exact suppression replay report key");
+    expect(s.commands).toEqual([]);
+  });
+
+  it("rejects a report key whose ULID timestamp differs from its filename", async () => {
+    const s = state();
+    const reportKey = `${REPORTS_PREFIX}2026-09-04/2026-09-04T123456789Z-01K4AWJ1AN0000000000000001.json`;
+
+    await expect(
+      runHandler(fakeDeps(s), { mode: "reconcile", reportKey }),
+    ).rejects.toThrow("exact suppression replay report key");
+    expect(s.commands).toEqual([]);
+  });
+
   it("rejects report keys that are not an exact generated key", async () => {
-    const ulid = "01K4AWJ1AN0000000000000001";
+    const ulid = "01M1P6MF4N0000000000000001";
     const invalidKeys = [
       `${REPORTS_PREFIX}latest.json`,
       `${REPORTS_PREFIX}2026-09-04/report.json`,
@@ -700,6 +720,10 @@ describe("suppression historical replay", () => {
       `${REPORTS_PREFIX}2026-09-04/2026-09-04T126056789Z-${ulid}.json`,
       `${REPORTS_PREFIX}2026-09-04/2026-09-04T12:34:56.789Z-${ulid}.json`,
       `${REPORTS_PREFIX}2026-09-04/2026-09-04T123456789Z-${ulid.toLowerCase()}.json`,
+      ...["I", "L", "O", "U"].map(
+        (excluded) =>
+          `${REPORTS_PREFIX}2026-09-04/2026-09-04T123456789Z-${ulid.slice(0, 10)}${excluded}${ulid.slice(11)}.json`,
+      ),
       `${REPORTS_PREFIX}2026-09-04/2026-09-04T123456789Z-${ulid}.json.bak`,
       `${REPORTS_PREFIX}/2026-09-04/2026-09-04T123456789Z-${ulid}.json`,
       `${REPORTS_PREFIX}2026-09-04/extra/2026-09-04T123456789Z-${ulid}.json`,

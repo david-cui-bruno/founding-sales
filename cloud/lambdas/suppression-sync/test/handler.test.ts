@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { runHandler, UPLOADS_PREFIX, type HandlerDeps } from "../src/handler";
+import {
+  REPORTS_PREFIX,
+  runHandler,
+  UPLOADS_PREFIX,
+  type HandlerDeps,
+} from "../src/handler";
 import { SuppressionObjectValidationError } from "../src/suppressionObject";
 
 const NOW = new Date("2026-09-04T12:00:00.000Z");
@@ -296,6 +301,24 @@ describe("suppression-sync handler", () => {
       );
       expect(s.commands).toEqual([]);
     }
+  });
+
+  it("validates reconcile report keys before reading time or generating a run ID", async () => {
+    const s = state();
+    const now = vi.fn(() => NOW);
+    const runId = vi.fn(() => "01M1P5EQ000000000000000001");
+    const deps = { ...fakeDeps(s), now, runId };
+
+    await expect(
+      runHandler(deps, {
+        mode: "reconcile",
+        reportKey: `${REPORTS_PREFIX}latest.json`,
+      }),
+    ).rejects.toThrow("exact suppression replay report key");
+
+    expect(now).not.toHaveBeenCalled();
+    expect(runId).not.toHaveBeenCalled();
+    expect(s.commands).toEqual([]);
   });
 
   it("accepts the explicit scheduled incremental payload", async () => {
