@@ -2,6 +2,10 @@ import { z } from 'zod';
 
 import type { Activity, AppendActivityInput } from '../events/eventTypes';
 import type { SalesCycleReceiptSnapshot } from '../lifecycle/reactivationContracts';
+export type {
+  OutboundAuthorizationDecision,
+  OutboundAuthorizationReasonCode,
+} from '../compliance/outboundAuthorization';
 
 export const optOutIdSchema = z.string().trim().min(1);
 export const optOutUtcTimestampSchema = z.string().datetime({ offset: true }).refine(

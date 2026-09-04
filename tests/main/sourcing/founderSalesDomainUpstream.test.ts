@@ -417,7 +417,7 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
       personId: result.personId,
       salesCycleId: cycle.id,
       contactMethodId: blockedContact.id,
-    })).toThrow(/do-not-call|TCPA/i);
+    })).toThrow();
     try {
       domain.beginOutbound({
         channel: 'call',
@@ -426,10 +426,10 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
         contactMethodId: blockedContact.id,
       });
     } catch (error) {
-      expect((error as { code?: string }).code).toBe('CONTACT_DNC_BLOCKED');
+      expect((error as { reasonCode?: string }).reasonCode).toBe('federal_dnc_listed');
     }
 
-    // The clean contact still dials.
+    // A legacy/unknown contact is not authorized merely because compatibility flags are clear.
     const cleanContact = database.raw.prepare(
       "SELECT id FROM person_contact_methods WHERE person_id = ? AND normalized_value = '+14015550100'",
     ).get(result.personId) as { id: string };
@@ -438,7 +438,7 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
       personId: result.personId,
       salesCycleId: cycle.id,
       contactMethodId: cleanContact.id,
-    })).not.toThrow();
+    })).toThrowError(expect.objectContaining({ reasonCode: 'federal_status_unknown' }));
   });
 
   it('merges later compliance evidence into an existing cloud-linked phone', () => {
@@ -472,15 +472,23 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
 
   it('blocks outbound to a tcpa-flagged contact too', () => {
     const { personId, cycleId } = importLinkedLead();
-    database.raw.prepare(
-      'UPDATE person_contact_methods SET tcpa_flag = 1 WHERE person_id = ?',
-    ).run(personId);
+    database.raw.prepare(`UPDATE person_contact_methods SET
+      federal_status = 'verified_clear', compliance_tcpa_flag = 1,
+      covered_area_code = '401', compliance_source = 'ftc_download',
+      scrubbed_at = '2026-08-15T00:00:00.000Z',
+      compliance_expires_at = '2026-09-15T00:00:00.000Z'
+      WHERE person_id = ?`).run(personId);
     const contact = database.raw.prepare(
-      'SELECT id FROM person_contact_methods WHERE person_id = ? LIMIT 1',
+      "SELECT id FROM person_contact_methods WHERE person_id = ? AND kind = 'phone' LIMIT 1",
     ).get(personId) as { id: string };
-    expect(() => domain.beginOutbound({
-      channel: 'call', personId, salesCycleId: cycleId, contactMethodId: contact.id,
-    })).toThrow(/do-not-call|TCPA/i);
+    try {
+      domain.beginOutbound({
+        channel: 'call', personId, salesCycleId: cycleId, contactMethodId: contact.id,
+      });
+      throw new Error('expected outbound refusal');
+    } catch (error) {
+      expect((error as { reasonCode?: string }).reasonCode).toBe('tcpa_blocked');
+    }
   });
 
   it('prunes processed-file ledger rows older than 90 days', () => {

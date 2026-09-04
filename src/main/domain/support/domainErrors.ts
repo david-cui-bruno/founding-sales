@@ -1,3 +1,5 @@
+import type { OutboundAuthorizationReasonCode } from '../compliance/outboundAuthorization';
+
 export class NestedDomainTransactionError extends Error {
   constructor() {
     super('A domain transaction is already active.');
@@ -135,6 +137,16 @@ export class OutboundContactBlockedError extends Error {
     super('Outbound contact is blocked by permanent opt-out evidence.');
     this.name = 'OutboundContactBlockedError';
     this.tombstoneIds = Object.freeze([...tombstoneIds]);
+  }
+}
+
+export class OutboundAuthorizationError extends Error {
+  readonly reasonCode: OutboundAuthorizationReasonCode;
+
+  constructor(reasonCode: OutboundAuthorizationReasonCode) {
+    super('Outbound contact is not authorized by the current compliance policy.');
+    this.name = 'OutboundAuthorizationError';
+    this.reasonCode = reasonCode;
   }
 }
 

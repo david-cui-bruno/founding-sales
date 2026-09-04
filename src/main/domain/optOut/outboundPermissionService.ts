@@ -1,7 +1,14 @@
 import type { AppDatabase } from '../../db/database';
 import type { IdentityRepository } from '../identity/identityRepository';
+import { FOUNDER_CHANNEL_POLICIES_V1, type ChannelPolicySnapshots } from '../cadence/cadenceScheduler';
+import { JurisdictionRepository } from '../compliance/jurisdictionRepository';
+import {
+  evaluateOutboundAuthorization,
+  type OutboundAuthorizationDecision,
+} from '../compliance/outboundAuthorization';
 import {
   DomainRepositoryDatabaseMismatchError,
+  OutboundAuthorizationError,
   OutboundContactBlockedError,
   StaleDomainWriteError,
 } from '../support/domainErrors';
@@ -19,22 +26,32 @@ export class OutboundPermissionService {
   private readonly unitOfWork: DomainUnitOfWork;
   private readonly identities: IdentityRepository;
   private readonly optOuts: OptOutRepository;
+  private readonly jurisdictions: JurisdictionRepository;
+  private readonly windows: ChannelPolicySnapshots;
 
   constructor(input: {
     database: AppDatabase;
     unitOfWork: DomainUnitOfWork;
     identities: IdentityRepository;
     optOuts: OptOutRepository;
+    jurisdictions?: JurisdictionRepository;
+    windows?: ChannelPolicySnapshots;
   }) {
     if (input.database.raw !== input.unitOfWork.database.raw) {
       throw new DomainRepositoryDatabaseMismatchError();
     }
     input.identities.assertBoundTo(input.database, input.unitOfWork);
     input.optOuts.assertBoundTo(input.database, input.unitOfWork);
+    const jurisdictions = input.jurisdictions ?? new JurisdictionRepository({
+      database: input.database, unitOfWork: input.unitOfWork,
+    });
+    jurisdictions.assertBoundTo(input.database, input.unitOfWork);
     this.database = input.database;
     this.unitOfWork = input.unitOfWork;
     this.identities = input.identities;
     this.optOuts = input.optOuts;
+    this.jurisdictions = jurisdictions;
+    this.windows = input.windows ?? FOUNDER_CHANNEL_POLICIES_V1;
   }
 
   assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork): void {
@@ -43,6 +60,7 @@ export class OutboundPermissionService {
     }
     this.identities.assertBoundTo(database, unitOfWork);
     this.optOuts.assertBoundTo(database, unitOfWork);
+    this.jurisdictions.assertBoundTo(database, unitOfWork);
   }
 
   inspectPerson(personId: string): OutboundPermission {
@@ -74,22 +92,46 @@ export class OutboundPermissionService {
     }
   }
 
+  inspectOutbound(input: {
+    personId: string;
+    contactMethodId: string;
+    channel: 'call' | 'text';
+    now: string;
+  }): OutboundAuthorizationDecision {
+    this.unitOfWork.assertWriteScope();
+    const contact = this.identities.getContactMethod(input.contactMethodId);
+    if (contact === null || contact.personId !== input.personId) {
+      throw new Error('Outbound contact method does not belong to the Person.');
+    }
+    const jurisdiction = this.jurisdictions.getPersonJurisdiction(input.personId);
+    return evaluateOutboundAuthorization({
+      channel: input.channel,
+      now: input.now,
+      personOrHandleOptedOut: this.identities.isPersonOrHandleOptedOut(input.personId, {
+        kind: contact.kind, normalizedValue: contact.normalizedValue,
+      }),
+      contact: {
+        kind: contact.kind,
+        normalizedValue: contact.normalizedValue,
+        validationState: contact.validationState,
+        evidence: contact.complianceEvidence,
+      },
+      jurisdiction,
+      clearance: jurisdiction === null
+        ? null
+        : this.jurisdictions.getClearance(jurisdiction.regionCode, input.channel),
+      windows: this.windows,
+    });
+  }
+
   assertMayExecuteOutbound(input: {
     personId: string;
-    target: { kind: OptOutHandleKind; normalizedValue: string };
+    contactMethodId: string;
+    channel: 'call' | 'text';
+    now: string;
   }): void {
-    this.unitOfWork.assertWriteScope();
-    const personPermission = this.inspectPerson(input.personId);
-    const targetBlocks = this.optOuts.listBlocksForHandle(
-      input.target.kind, input.target.normalizedValue,
-    );
-    const tombstoneIds = new Set(
-      personPermission.kind === 'blocked' ? personPermission.tombstoneIds : [],
-    );
-    targetBlocks.forEach(({ id }) => tombstoneIds.add(id));
-    if (tombstoneIds.size > 0) {
-      throw new OutboundContactBlockedError([...tombstoneIds].sort());
-    }
+    const decision = this.inspectOutbound(input);
+    if (decision.kind === 'refused') throw new OutboundAuthorizationError(decision.reasonCode);
   }
 
   assertCurrentSelectedCallReceipt(input: {

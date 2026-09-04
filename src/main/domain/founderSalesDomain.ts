@@ -148,6 +148,7 @@ import type { Clock } from './support/clock';
 import type { IdGenerator } from './support/idGenerator';
 import type { TodayItem, TodayLane } from './today/todayTypes';
 import { resolveLocalDayInterval } from './today/todayOrdering';
+import { OutboundAuthorizationError } from './support/domainErrors';
 
 export const FOUNDER_JOB_REQUEST_TYPE = 'founder_job_request_v1' as const;
 export const LEAD_IMPORT_JOB_TYPE = 'lead_import_v1' as const;
@@ -826,32 +827,42 @@ export class FounderSalesDomain {
         throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The cycle belongs to another person.');
       }
       const contact = this.database.raw.prepare(`
-        SELECT id, kind, normalized_value, dnc_listed, tcpa_flag
+        SELECT id, kind, normalized_value, validation_state
         FROM person_contact_methods
         WHERE id = ? AND person_id = ?
       `).get(request.contactMethodId, request.personId) as {
         id: string; kind: 'phone' | 'email'; normalized_value: string;
-        dnc_listed: 0 | 1; tcpa_flag: 0 | 1;
+        validation_state: 'unverified' | 'valid' | 'invalid';
       } | undefined;
       if (contact === undefined) {
         throw new FounderSalesDomainError(
           'CONTACT_METHOD_NOT_FOUND', 'The contact method does not belong to this person.',
         );
       }
-      this.services.outboundPermission.assertMayExecuteOutbound({
-        personId: request.personId,
-        target: { kind: contact.kind, normalizedValue: contact.normalized_value },
-      });
-      // Federal telemarketing scrub gate: a DNC-listed or TCPA-flagged
-      // contact is never dialable, regardless of channel or lifecycle state.
-      if (contact.dnc_listed === 1 || contact.tcpa_flag === 1) {
-        throw new FounderSalesDomainError(
-          'CONTACT_DNC_BLOCKED',
-          'The contact is on a do-not-call or TCPA suppression list; outreach is blocked.',
-        );
+      const expectedKind = request.channel === 'email' ? 'email' : 'phone';
+      if (contact.kind !== expectedKind) {
+        throw new OutboundAuthorizationError('channel_contact_kind_mismatch');
+      }
+      const activityId = this.ids.next();
+      if (request.channel === 'call' || request.channel === 'text') {
+        this.services.outboundPermission.assertMayExecuteOutbound({
+          personId: request.personId,
+          contactMethodId: contact.id,
+          channel: request.channel,
+          now,
+        });
+      } else {
+        if (this.services.identities.isPersonOrHandleOptedOut(request.personId, {
+          kind: contact.kind, normalizedValue: contact.normalized_value,
+        })) {
+          throw new OutboundAuthorizationError('person_or_handle_opted_out');
+        }
+        if (contact.validation_state !== 'valid') {
+          throw new OutboundAuthorizationError('contact_validation_unusable');
+        }
       }
       this.services.events.appendActivity({
-        id: this.ids.next(),
+        id: activityId,
         personId: request.personId,
         prospectId: cycle.prospect_id,
         salesCycleId: cycle.id,
@@ -860,7 +871,10 @@ export class FounderSalesDomain {
         channel: request.channel === 'call' ? 'phone' : request.channel,
         occurredAt: now,
         observedOutcome: null,
-        metadata: { formatVersion: 1, beganVia: 'founder_workflow_ui' },
+        metadata: {
+          authorizationPolicyVersion: 'outbound_compliance_v1',
+          authorizationReason: 'allowed',
+        },
       });
       return this.receipt([request.personId], [cycle.id]);
     });

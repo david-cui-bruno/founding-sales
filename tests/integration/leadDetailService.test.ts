@@ -103,9 +103,33 @@ describe('leadDetailService over a real encrypted domain', () => {
     database.raw.prepare(`
       INSERT INTO person_contact_methods (
         id, person_id, kind, normalized_value, validation_state, reachability,
-        is_primary, created_at, updated_at
-      ) VALUES (?, ?, 'phone', '+14015550100', 'valid', 'direct', 1, ?, ?)
+        is_primary, federal_status, compliance_tcpa_flag, covered_area_code,
+        compliance_source, scrubbed_at, compliance_expires_at, created_at, updated_at
+      ) VALUES (?, ?, 'phone', '+14015550100', 'valid', 'direct', 1,
+        'verified_clear', 0, '401', 'ftc_download', '2026-08-15T00:00:00.000Z',
+        '2026-09-15T00:00:00.000Z', ?, ?)
     `).run(id, prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    database.raw.prepare(`INSERT INTO person_outbound_jurisdictions
+      (person_id, region_code, timezone, source, effective_at, updated_at)
+      VALUES (?, 'RI', 'America/New_York', 'manual_review', ?, ?)`)
+      .run(prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    for (const channel of ['call', 'text']) {
+      database.raw.prepare(`INSERT OR REPLACE INTO outbound_jurisdiction_clearances
+        (region_code, channel, decision, registration_confirmed,
+         state_dnc_subscription_confirmed, consent_rule_confirmed, source,
+         effective_at, expires_at, updated_at)
+        VALUES ('RI', ?, 'allowed', 1, 1, 1, 'test',
+          '2026-08-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z', ?)`)
+        .run(channel, DOMAIN_TIMESTAMP);
+    }
+  }
+
+  function addEmail(prospect: SeededProspect, id: string): void {
+    database.raw.prepare(`INSERT INTO person_contact_methods (
+      id, person_id, kind, normalized_value, validation_state, reachability,
+      is_primary, created_at, updated_at
+    ) VALUES (?, ?, 'email', 'founder@example.com', 'valid', 'direct', 1, ?, ?)`)
+      .run(id, prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
   }
 
   it('returns the strict detail DTO for a seeded lead', async () => {
@@ -161,6 +185,121 @@ describe('leadDetailService over a real encrypted domain', () => {
     expect(detail.activities.some((activity) => activity.kind === 'call')).toBe(
       true,
     );
+    const activity = database.raw.prepare(`SELECT metadata_json FROM activities
+      WHERE person_id = ? AND direction = 'outbound' AND kind = 'call'`)
+      .get(prospect.personId) as { metadata_json: string };
+    expect(JSON.parse(activity.metadata_json)).toEqual({
+      authorizationPolicyVersion: 'outbound_compliance_v1',
+      authorizationReason: 'allowed',
+    });
+  });
+
+  it('rejects a phone used for email and an email used for call or text', async () => {
+    const { prospect, cycleId } = seedLead('kind');
+    addPhone(prospect, 'kind-phone');
+    addEmail(prospect, 'kind-email');
+    await expect(leadDetail.beginOutbound({ channel: 'email', personId: prospect.personId,
+      salesCycleId: cycleId, contactMethodId: 'kind-phone' })).rejects.toThrow();
+    await expect(leadDetail.beginOutbound({ channel: 'call', personId: prospect.personId,
+      salesCycleId: cycleId, contactMethodId: 'kind-email' })).rejects.toThrow();
+    await expect(leadDetail.beginOutbound({ channel: 'text', personId: prospect.personId,
+      salesCycleId: cycleId, contactMethodId: 'kind-email' })).rejects.toThrow();
+  });
+
+  it('keeps email validation and permanent opt-out gates without applying phone policy', async () => {
+    const allowed = seedLead('email-allowed');
+    addEmail(allowed.prospect, 'email-allowed-contact');
+    await expect(leadDetail.beginOutbound({ channel: 'email', personId: allowed.prospect.personId,
+      salesCycleId: allowed.cycleId, contactMethodId: 'email-allowed-contact' })).resolves.toBeDefined();
+
+    const invalid = seedLead('email-invalid');
+    addEmail(invalid.prospect, 'email-invalid-contact');
+    database.raw.prepare("UPDATE person_contact_methods SET validation_state = 'invalid' WHERE id = 'email-invalid-contact'").run();
+    await expect(leadDetail.beginOutbound({ channel: 'email', personId: invalid.prospect.personId,
+      salesCycleId: invalid.cycleId, contactMethodId: 'email-invalid-contact' }))
+      .rejects.toMatchObject({ reasonCode: 'contact_validation_unusable' });
+
+    const optedOut = seedLead('email-opted-out');
+    addEmail(optedOut.prospect, 'email-opted-out-contact');
+    services.optOut.apply({
+      personId: optedOut.prospect.personId,
+      tombstoneId: 'email-opted-out-tombstone',
+      requestedAt: CLOCK_NOW,
+      policyVersion: 'founder_opt_out_v1',
+      decision: { kind: 'structured_written', channel: 'gmail' },
+      evidence: {
+        kind: 'append_activity',
+        activity: {
+          id: 'email-opted-out-activity', personId: optedOut.prospect.personId,
+          kind: 'email', direction: 'inbound', channel: 'gmail', occurredAt: CLOCK_NOW,
+          observedOutcome: 'opted_out', adapter: 'gmail',
+          providerIdempotencyKey: 'email-opted-out-provider', metadata: {},
+        },
+      },
+      terminalStageEventId: 'email-opted-out-terminal',
+    });
+    await expect(leadDetail.beginOutbound({ channel: 'email', personId: optedOut.prospect.personId,
+      salesCycleId: optedOut.cycleId, contactMethodId: 'email-opted-out-contact' }))
+      .rejects.toMatchObject({ reasonCode: 'person_or_handle_opted_out' });
+  });
+
+  it('re-reads evidence immediately before appendActivity and does not append on refusal', async () => {
+    const { prospect, cycleId } = seedLead('mutation');
+    addPhone(prospect, 'mutation-phone');
+    await leadDetail.get({ personId: prospect.personId });
+    database.raw.prepare(`UPDATE person_contact_methods SET federal_status = 'listed'
+      WHERE id = 'mutation-phone'`).run();
+
+    await expect(leadDetail.beginOutbound({ channel: 'call', personId: prospect.personId,
+      salesCycleId: cycleId, contactMethodId: 'mutation-phone' })).rejects.toMatchObject({
+      reasonCode: 'federal_dnc_listed',
+    });
+    expect(database.raw.prepare(`SELECT COUNT(*) AS count FROM activities
+      WHERE person_id = ? AND direction = 'outbound'`).get(prospect.personId))
+      .toEqual({ count: 0 });
+  });
+
+  it('runs final authorization after ownership checks and immediately before appendActivity', async () => {
+    const { prospect, cycleId } = seedLead('order');
+    addPhone(prospect, 'order-phone');
+    const order: string[] = [];
+    const originalGet = services.identities.getContactMethod.bind(services.identities);
+    services.identities.getContactMethod = ((id: string) => {
+      order.push('load current state');
+      return originalGet(id);
+    }) as typeof services.identities.getContactMethod;
+    const originalAssert = services.outboundPermission.assertMayExecuteOutbound
+      .bind(services.outboundPermission);
+    services.outboundPermission.assertMayExecuteOutbound = ((input) => {
+      originalAssert(input);
+      order.push('authorize');
+    }) as typeof services.outboundPermission.assertMayExecuteOutbound;
+    const originalAppend = services.events.appendActivity.bind(services.events);
+    services.events.appendActivity = ((input) => {
+      order.push('appendActivity');
+      return originalAppend(input);
+    }) as typeof services.events.appendActivity;
+
+    await leadDetail.beginOutbound({ channel: 'call', personId: prospect.personId,
+      salesCycleId: cycleId, contactMethodId: 'order-phone' });
+    expect(order.slice(-3)).toEqual(['load current state', 'authorize', 'appendActivity']);
+  });
+
+  it('rolls back the outbound activity if the authorization transaction fails', async () => {
+    const { prospect, cycleId } = seedLead('rollback');
+    addPhone(prospect, 'rollback-phone');
+    const originalAppend = services.events.appendActivity.bind(services.events);
+    services.events.appendActivity = ((input) => {
+      originalAppend(input);
+      throw new Error('fault after append');
+    }) as typeof services.events.appendActivity;
+
+    await expect(leadDetail.beginOutbound({ channel: 'call', personId: prospect.personId,
+      salesCycleId: cycleId, contactMethodId: 'rollback-phone' }))
+      .rejects.toThrow('fault after append');
+    expect(database.raw.prepare(`SELECT COUNT(*) AS count FROM activities
+      WHERE person_id = ? AND direction = 'outbound'`).get(prospect.personId))
+      .toEqual({ count: 0 });
   });
 
   it('refuses outbound to an opted-out person', async () => {

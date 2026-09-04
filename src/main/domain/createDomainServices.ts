@@ -89,7 +89,8 @@ export function createDomainServices(input: {
     database, unitOfWork, identities, events, optOuts: optOutRepository, lifecycle, clock, ids,
   });
   const outboundPermission = new OutboundPermissionService({
-    database, unitOfWork, identities, optOuts: optOutRepository,
+    database, unitOfWork, identities, optOuts: optOutRepository, jurisdictions,
+    windows: FOUNDER_CHANNEL_POLICIES_V1,
   });
   const prioritizationRepository = new PrioritizationRepository({ database, unitOfWork, clock });
   const prioritization = new PrioritizationService({

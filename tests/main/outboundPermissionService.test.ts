@@ -3,12 +3,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { IdentityRepository } from '../../src/main/domain/identity/identityRepository';
+import { JurisdictionRepository } from '../../src/main/domain/compliance/jurisdictionRepository';
 import { OptOutRepository } from '../../src/main/domain/optOut/optOutRepository';
 import { OutboundPermissionService } from '../../src/main/domain/optOut/outboundPermissionService';
 import { todaySelectedCallReceiptV1Schema } from '../../src/main/domain/optOut/optOutTypes';
 import {
   DomainRepositoryDatabaseMismatchError,
   DomainTransactionRequiredError,
+  OutboundAuthorizationError,
   OutboundContactBlockedError,
 } from '../../src/main/domain/support/domainErrors';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
@@ -20,11 +22,13 @@ import {
 } from '../fixtures/tempDatabase';
 
 describe('OutboundPermissionService', () => {
+  const AUTHORIZATION_NOW = '2026-09-04T14:00:00.000Z';
   let database: AppDatabase;
   let temp: TempDatabase;
   let unitOfWork: DomainUnitOfWork;
   let identities: IdentityRepository;
   let optOuts: OptOutRepository;
+  let jurisdictions: JurisdictionRepository;
   let permissions: OutboundPermissionService;
   let id = 0;
 
@@ -42,8 +46,9 @@ describe('OutboundPermissionService', () => {
     };
     identities = new IdentityRepository(dependencies);
     optOuts = new OptOutRepository({ database, unitOfWork });
+    jurisdictions = new JurisdictionRepository({ database, unitOfWork });
     permissions = new OutboundPermissionService({
-      database, unitOfWork, identities, optOuts,
+      database, unitOfWork, identities, optOuts, jurisdictions,
     });
   });
 
@@ -61,6 +66,35 @@ describe('OutboundPermissionService', () => {
       });
       return person.id;
     });
+  }
+
+  function contactId(personId: string): string {
+    return identities.listContactMethodsForPerson(personId)[0]!.id;
+  }
+
+  function authorizeRegion(personId: string): void {
+    database.raw.prepare(`INSERT INTO person_outbound_jurisdictions
+      (person_id, region_code, timezone, source, effective_at, updated_at)
+      VALUES (?, 'RI', 'America/New_York', 'manual_review', ?, ?)`)
+      .run(personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    for (const channel of ['call', 'text'] as const) {
+      database.raw.prepare(`INSERT OR REPLACE INTO outbound_jurisdiction_clearances
+        (region_code, channel, decision, registration_confirmed,
+         state_dnc_subscription_confirmed, consent_rule_confirmed, source,
+         effective_at, expires_at, updated_at)
+        VALUES ('RI', ?, 'allowed', 1, 1, 1, 'test',
+                '2026-08-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z', ?)`)
+        .run(channel, DOMAIN_TIMESTAMP);
+    }
+  }
+
+  function makeFederalEvidenceClear(contactMethodId: string): void {
+    database.raw.prepare(`UPDATE person_contact_methods SET
+      federal_status = 'verified_clear', compliance_tcpa_flag = 0,
+      covered_area_code = '401', compliance_source = 'ftc_download',
+      scrubbed_at = '2026-08-15T00:00:00.000Z',
+      compliance_expires_at = '2026-09-15T00:00:00.000Z'
+      WHERE id = ?`).run(contactMethodId);
   }
 
   function block(personId: string, phone: string, tombstoneId: string): void {
@@ -105,25 +139,102 @@ describe('OutboundPermissionService', () => {
 
   it('requires an exact active scope for authoritative execution and exposes no contact values', () => {
     const personId = createPerson('+14015550100');
+    const selectedContactId = contactId(personId);
     block(personId, '+14015550100', 'execute-tombstone');
     expect(() => permissions.assertMayExecuteOutbound({
-      personId, target: { kind: 'phone', normalizedValue: '+14015550100' },
+      personId, contactMethodId: selectedContactId, channel: 'call', now: DOMAIN_TIMESTAMP,
     })).toThrow(DomainTransactionRequiredError);
 
     let thrown: unknown;
     unitOfWork.immediate(() => {
       try {
         permissions.assertMayExecuteOutbound({
-          personId, target: { kind: 'phone', normalizedValue: '+14015550100' },
+          personId, contactMethodId: selectedContactId, channel: 'call', now: DOMAIN_TIMESTAMP,
         });
       } catch (error) {
         thrown = error;
       }
     });
-    expect(thrown).toMatchObject({
-      reasonCode: 'person_or_handle_opted_out', tombstoneIds: ['execute-tombstone'],
-    });
+    expect(thrown).toMatchObject({ reasonCode: 'person_or_handle_opted_out' });
     expect(JSON.stringify(thrown)).not.toContain('+14015550100');
+  });
+
+  it('returns stable refusal codes for every explicit gate', () => {
+    const personId = createPerson('+14015550100');
+    const selectedContactId = contactId(personId);
+    const inspect = () => unitOfWork.immediate(() => permissions.inspectOutbound({
+      personId, contactMethodId: selectedContactId, channel: 'call', now: AUTHORIZATION_NOW,
+    }));
+
+    expect(inspect()).toEqual({ kind: 'refused', reasonCode: 'federal_status_unknown' });
+    database.raw.prepare("UPDATE person_contact_methods SET federal_status = 'listed' WHERE id = ?")
+      .run(selectedContactId);
+    expect(inspect()).toEqual({ kind: 'refused', reasonCode: 'federal_dnc_listed' });
+    makeFederalEvidenceClear(selectedContactId);
+    database.raw.prepare("UPDATE person_contact_methods SET compliance_expires_at = '2026-09-04T13:00:00.000Z' WHERE id = ?")
+      .run(selectedContactId);
+    expect(inspect()).toEqual({ kind: 'refused', reasonCode: 'federal_evidence_stale' });
+    makeFederalEvidenceClear(selectedContactId);
+    database.raw.prepare("UPDATE person_contact_methods SET covered_area_code = '212' WHERE id = ?")
+      .run(selectedContactId);
+    expect(inspect()).toEqual({ kind: 'refused', reasonCode: 'federal_area_code_mismatch' });
+    makeFederalEvidenceClear(selectedContactId);
+    database.raw.prepare('UPDATE person_contact_methods SET compliance_tcpa_flag = NULL WHERE id = ?')
+      .run(selectedContactId);
+    expect(inspect()).toEqual({ kind: 'refused', reasonCode: 'tcpa_status_unknown' });
+    database.raw.prepare('UPDATE person_contact_methods SET compliance_tcpa_flag = 1 WHERE id = ?')
+      .run(selectedContactId);
+    expect(inspect()).toEqual({ kind: 'refused', reasonCode: 'tcpa_blocked' });
+    makeFederalEvidenceClear(selectedContactId);
+    expect(inspect()).toEqual({ kind: 'refused', reasonCode: 'jurisdiction_unknown' });
+    authorizeRegion(personId);
+    expect(inspect()).toEqual({ kind: 'allowed' });
+
+    database.raw.prepare("UPDATE outbound_jurisdiction_clearances SET decision = 'blocked' WHERE region_code = 'RI' AND channel = 'call'").run();
+    expect(inspect()).toEqual({ kind: 'refused', reasonCode: 'jurisdiction_blocked' });
+    database.raw.prepare("UPDATE outbound_jurisdiction_clearances SET decision = 'allowed', registration_confirmed = 0 WHERE region_code = 'RI' AND channel = 'call'").run();
+    expect(inspect()).toEqual({ kind: 'refused', reasonCode: 'state_registration_missing' });
+    database.raw.prepare("UPDATE outbound_jurisdiction_clearances SET registration_confirmed = 1, state_dnc_subscription_confirmed = 0 WHERE region_code = 'RI' AND channel = 'call'").run();
+    expect(inspect()).toEqual({ kind: 'refused', reasonCode: 'state_dnc_subscription_missing' });
+    database.raw.prepare("UPDATE outbound_jurisdiction_clearances SET state_dnc_subscription_confirmed = 1, consent_rule_confirmed = 0 WHERE region_code = 'RI' AND channel = 'call'").run();
+    expect(inspect()).toEqual({ kind: 'refused', reasonCode: 'state_consent_rule_unknown' });
+    database.raw.prepare("UPDATE outbound_jurisdiction_clearances SET consent_rule_confirmed = 1 WHERE region_code = 'RI' AND channel = 'call'").run();
+    expect(unitOfWork.immediate(() => permissions.inspectOutbound({
+      personId, contactMethodId: selectedContactId, channel: 'call',
+      now: '2026-09-05T00:00:00.000Z',
+    }))).toEqual({ kind: 'refused', reasonCode: 'outside_recipient_window' });
+  });
+
+  it('rejects invalid and unverified contact methods', () => {
+    const personId = createPerson('+14015550100');
+    const selectedContactId = contactId(personId);
+    for (const state of ['invalid', 'unverified'] as const) {
+      database.raw.prepare('UPDATE person_contact_methods SET validation_state = ? WHERE id = ?')
+        .run(state, selectedContactId);
+      expect(unitOfWork.immediate(() => permissions.inspectOutbound({
+        personId, contactMethodId: selectedContactId, channel: 'call', now: DOMAIN_TIMESTAMP,
+      }))).toEqual({ kind: 'refused', reasonCode: 'contact_validation_unusable' });
+    }
+  });
+
+  it('authorizes the exact selected contact and preserves opt-out precedence', () => {
+    const personId = createPerson('+14015550100');
+    const firstContactId = contactId(personId);
+    const secondContact = unitOfWork.immediate(() => identities.addContactMethod({
+      personId, kind: 'phone', normalizedValue: '+14015550101',
+      validationState: 'valid', reachability: 'direct',
+    }));
+    makeFederalEvidenceClear(firstContactId);
+    authorizeRegion(personId);
+    block(personId, '+14015550101', 'selected-tombstone');
+
+    const decision = unitOfWork.immediate(() => permissions.inspectOutbound({
+      personId, contactMethodId: secondContact.id, channel: 'call', now: DOMAIN_TIMESTAMP,
+    }));
+    expect(decision).toEqual({ kind: 'refused', reasonCode: 'person_or_handle_opted_out' });
+    expect(() => unitOfWork.immediate(() => permissions.assertMayExecuteOutbound({
+      personId, contactMethodId: secondContact.id, channel: 'call', now: DOMAIN_TIMESTAMP,
+    }))).toThrow(OutboundAuthorizationError);
   });
 
   it('rejects mixed repository/service bindings before reads', () => {
