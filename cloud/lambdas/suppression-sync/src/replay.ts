@@ -1,0 +1,650 @@
+import { createHash } from "node:crypto";
+import {
+  BatchGetItemCommand,
+  GetItemCommand,
+  PutItemCommand,
+  ScanCommand,
+  type AttributeValue,
+  type DynamoDBClient,
+} from "@aws-sdk/client-dynamodb";
+import {
+  GetObjectCommand,
+  ListObjectVersionsCommand,
+  PutObjectCommand,
+  type S3Client,
+} from "@aws-sdk/client-s3";
+import type { SuppressionUploadLine } from "@callie-sourcing/shared";
+import { log } from "./log";
+import {
+  SuppressionObjectValidationError,
+  ledgerNaturalKey,
+  parseAndValidateSuppressionObject,
+  type SuppressionObjectDescriptor,
+  type ValidatedSuppressionObject,
+} from "./suppressionObject";
+
+export const UPLOADS_PREFIX = "upstream/suppression/";
+export const REPORTS_PREFIX = "upstream/suppression-reports/";
+const LEDGER_SNAPSHOT_DATE = "ledger";
+const BATCH_GET_LIMIT = 100;
+const MAX_UNPROCESSED_RETRIES = 10;
+
+export interface HandlerDeps {
+  s3: Pick<S3Client, "send">;
+  dynamo: Pick<DynamoDBClient, "send">;
+  env: {
+    INBOX_BUCKET: string;
+    SNAPSHOTS_TABLE: string;
+    SUPPRESSION_TABLE: string;
+  };
+  now?: () => Date;
+  runId?: (timestamp: number) => string;
+}
+
+export type SuppressionSyncEvent =
+  | { mode?: "incremental"; maxObjects?: number }
+  | { mode: "replay"; dryRun: boolean }
+  | { mode: "reconcile"; reportKey: string };
+
+export type SuppressionReplayReport = Readonly<{
+  generatedAt: string;
+  objectsSeen: number;
+  objectsValid: number;
+  objectsQuarantined: number;
+  uniqueMemberships: number;
+  appliedMemberships: number;
+  missingMemberships: number;
+  unexpectedMemberships: number;
+  sourceUnionChecksumSha256: string;
+  quarantine: ReadonlyArray<{
+    key: string;
+    versionId: string | null;
+    invalidLineNumbers: readonly number[];
+  }>;
+}>;
+
+export type SuppressionReplayResult = Readonly<{
+  reportKey: string;
+  report: SuppressionReplayReport;
+}>;
+
+type EvidenceObject = Readonly<{
+  key: string;
+  versionId: string | null;
+  etag: string;
+  lastModified: string;
+  checksumSha256: string;
+  status: "valid" | "quarantined";
+}>;
+
+type ReplaySource = Readonly<{
+  descriptors: readonly SuppressionObjectDescriptor[];
+  validObjects: readonly ValidatedSuppressionObject[];
+  union: ReadonlyMap<string, SuppressionUploadLine>;
+  quarantine: SuppressionReplayReport["quarantine"];
+  evidenceObjects: readonly EvidenceObject[];
+  sourceUnionChecksumSha256: string;
+}>;
+
+type Reconciliation = Readonly<{
+  existing: ReadonlyMap<string, Record<string, AttributeValue>>;
+  missingMemberships: number;
+  unexpectedMemberships: number;
+}>;
+
+const REASON_STRENGTH: Readonly<Record<SuppressionUploadLine["reason"], number>> = {
+  wrong_person: 1,
+  founder_block: 2,
+  opt_out: 3,
+};
+
+function sha256Utf8(value: string): string {
+  return createHash("sha256").update(Buffer.from(value, "utf8")).digest("hex");
+}
+
+function lexicalCompare(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function normalizeEtag(etag: string): string {
+  return etag.startsWith('"') && etag.endsWith('"') ? etag.slice(1, -1) : etag;
+}
+
+function requiredVersionMetadata(
+  key: string,
+  field: string,
+  value: unknown,
+): asserts value {
+  if (value === undefined || value === null) {
+    throw new Error(`listed suppression object ${key} is missing ${field}`);
+  }
+}
+
+export async function listUploadObjects(
+  deps: HandlerDeps,
+): Promise<SuppressionObjectDescriptor[]> {
+  const objects: SuppressionObjectDescriptor[] = [];
+  let keyMarker: string | undefined;
+  let versionIdMarker: string | undefined;
+
+  while (true) {
+    const page = await deps.s3.send(
+      new ListObjectVersionsCommand({
+        Bucket: deps.env.INBOX_BUCKET,
+        Prefix: UPLOADS_PREFIX,
+        KeyMarker: keyMarker,
+        VersionIdMarker: versionIdMarker,
+      }),
+    );
+
+    for (const version of page.Versions ?? []) {
+      const key = version.Key;
+      if (!key?.endsWith(".ndjson")) continue;
+      requiredVersionMetadata(key, "ETag", version.ETag);
+      requiredVersionMetadata(key, "LastModified", version.LastModified);
+      objects.push({
+        bucket: deps.env.INBOX_BUCKET,
+        key,
+        versionId: version.VersionId ?? null,
+        etag: normalizeEtag(version.ETag),
+        lastModified: version.LastModified.toISOString(),
+      });
+    }
+
+    if (!page.IsTruncated) break;
+    if (!page.NextKeyMarker) {
+      throw new Error("truncated suppression object version listing has no next key marker");
+    }
+    keyMarker = page.NextKeyMarker;
+    versionIdMarker = page.NextVersionIdMarker;
+  }
+
+  return objects.sort(
+    (left, right) =>
+      lexicalCompare(left.lastModified, right.lastModified) ||
+      lexicalCompare(left.key, right.key) ||
+      lexicalCompare(left.versionId ?? "", right.versionId ?? ""),
+  );
+}
+
+export async function readObjectText(
+  deps: HandlerDeps,
+  descriptor: SuppressionObjectDescriptor,
+): Promise<string> {
+  const raw = await deps.s3.send(
+    new GetObjectCommand({
+      Bucket: descriptor.bucket,
+      Key: descriptor.key,
+      VersionId: descriptor.versionId ?? undefined,
+    }),
+  );
+  return raw.Body
+    ? await (raw.Body as { transformToString(): Promise<string> }).transformToString()
+    : "";
+}
+
+export async function readValidatedObject(
+  deps: HandlerDeps,
+  descriptor: SuppressionObjectDescriptor,
+): Promise<ValidatedSuppressionObject> {
+  const text = await readObjectText(deps, descriptor);
+  return parseAndValidateSuppressionObject({ descriptor, text });
+}
+
+function stringAttribute(
+  item: Record<string, AttributeValue>,
+  name: string,
+): string | undefined {
+  return item[name]?.S;
+}
+
+function versionAttributeMatches(
+  item: Record<string, AttributeValue>,
+  expected: string | null,
+): boolean {
+  const value = item.object_version_id;
+  return expected === null ? value?.NULL === true : value?.S === expected;
+}
+
+export async function ledgerHas(
+  deps: HandlerDeps,
+  object: ValidatedSuppressionObject,
+): Promise<boolean> {
+  const result = await deps.dynamo.send(
+    new GetItemCommand({
+      TableName: deps.env.SNAPSHOTS_TABLE,
+      Key: {
+        source_natural_key: { S: ledgerNaturalKey(object) },
+        snapshot_date: { S: LEDGER_SNAPSHOT_DATE },
+      },
+    }),
+  );
+  const item = result.Item;
+  if (!item) return false;
+
+  return (
+    stringAttribute(item, "object_bucket") === object.descriptor.bucket &&
+    stringAttribute(item, "object_key") === object.descriptor.key &&
+    versionAttributeMatches(item, object.descriptor.versionId) &&
+    stringAttribute(item, "object_etag") === object.descriptor.etag &&
+    stringAttribute(item, "object_checksum_sha256") === object.checksumSha256
+  );
+}
+
+function versionAttribute(versionId: string | null): AttributeValue {
+  return versionId === null ? { NULL: true } : { S: versionId };
+}
+
+export async function ledgerMark(
+  deps: HandlerDeps,
+  object: ValidatedSuppressionObject,
+  now: Date,
+): Promise<void> {
+  await deps.dynamo.send(
+    new PutItemCommand({
+      TableName: deps.env.SNAPSHOTS_TABLE,
+      Item: {
+        source_natural_key: { S: ledgerNaturalKey(object) },
+        snapshot_date: { S: LEDGER_SNAPSHOT_DATE },
+        object_bucket: { S: object.descriptor.bucket },
+        object_key: { S: object.descriptor.key },
+        object_version_id: versionAttribute(object.descriptor.versionId),
+        object_etag: { S: object.descriptor.etag },
+        object_checksum_sha256: { S: object.checksumSha256 },
+        processed_at: { S: now.toISOString() },
+        valid_row_count: { N: String(object.validRowCount) },
+      },
+    }),
+  );
+}
+
+export async function writeSuppression(
+  deps: HandlerDeps,
+  line: SuppressionUploadLine,
+  now: Date,
+): Promise<void> {
+  await deps.dynamo.send(
+    new PutItemCommand({
+      TableName: deps.env.SUPPRESSION_TABLE,
+      Item: {
+        contact_hash: { S: line.contact_hmac },
+        kind: { S: line.kind },
+        reason: { S: line.reason },
+        observed_at: { S: line.observed_at },
+        synced_at: { S: now.toISOString() },
+      },
+    }),
+  );
+}
+
+function mergeUnionLine(
+  current: SuppressionUploadLine | undefined,
+  incoming: SuppressionUploadLine,
+): SuppressionUploadLine {
+  if (!current) return incoming;
+  return {
+    contact_hmac: current.contact_hmac,
+    kind: current.kind,
+    reason:
+      REASON_STRENGTH[incoming.reason] > REASON_STRENGTH[current.reason]
+        ? incoming.reason
+        : current.reason,
+    observed_at:
+      incoming.observed_at < current.observed_at
+        ? incoming.observed_at
+        : current.observed_at,
+  };
+}
+
+function sourceUnionChecksum(union: ReadonlyMap<string, SuppressionUploadLine>): string {
+  const canonical = [...union.values()]
+    .sort((left, right) => lexicalCompare(left.contact_hmac, right.contact_hmac))
+    .map((line) => ({
+      contact_hmac: line.contact_hmac,
+      kind: line.kind,
+      reason: line.reason,
+      observed_at: line.observed_at,
+    }));
+  return sha256Utf8(JSON.stringify(canonical));
+}
+
+async function buildReplaySource(
+  deps: HandlerDeps,
+  quarantineInvalid: boolean,
+): Promise<ReplaySource> {
+  const descriptors = await listUploadObjects(deps);
+  const validObjects: ValidatedSuppressionObject[] = [];
+  const union = new Map<string, SuppressionUploadLine>();
+  const quarantine: Array<{
+    key: string;
+    versionId: string | null;
+    invalidLineNumbers: readonly number[];
+  }> = [];
+  const evidenceObjects: EvidenceObject[] = [];
+
+  for (const descriptor of descriptors) {
+    const text = await readObjectText(deps, descriptor);
+    const checksumSha256 = sha256Utf8(text);
+    try {
+      const object = parseAndValidateSuppressionObject({ descriptor, text });
+      validObjects.push(object);
+      evidenceObjects.push({
+        key: descriptor.key,
+        versionId: descriptor.versionId,
+        etag: descriptor.etag,
+        lastModified: descriptor.lastModified,
+        checksumSha256,
+        status: "valid",
+      });
+      for (const line of object.lines) {
+        union.set(line.contact_hmac, mergeUnionLine(union.get(line.contact_hmac), line));
+      }
+    } catch (error) {
+      if (!(error instanceof SuppressionObjectValidationError) || !quarantineInvalid) {
+        throw error;
+      }
+      quarantine.push({
+        key: error.key,
+        versionId: error.versionId,
+        invalidLineNumbers: error.invalidLineNumbers,
+      });
+      evidenceObjects.push({
+        key: descriptor.key,
+        versionId: descriptor.versionId,
+        etag: descriptor.etag,
+        lastModified: descriptor.lastModified,
+        checksumSha256,
+        status: "quarantined",
+      });
+      log("warn", "suppression_object_quarantined", {
+        key: error.key,
+        version_id: error.versionId,
+        invalid_line_numbers: error.invalidLineNumbers,
+        invalid_line_count: error.invalidLineNumbers.length,
+      });
+    }
+  }
+
+  return {
+    descriptors,
+    validObjects,
+    union,
+    quarantine,
+    evidenceObjects,
+    sourceUnionChecksumSha256: sourceUnionChecksum(union),
+  };
+}
+
+function chunks<T>(values: readonly T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    result.push(values.slice(index, index + size));
+  }
+  return result;
+}
+
+async function batchGetMemberships(
+  deps: HandlerDeps,
+  hashes: readonly string[],
+): Promise<Map<string, Record<string, AttributeValue>>> {
+  const items = new Map<string, Record<string, AttributeValue>>();
+
+  for (const hashChunk of chunks(hashes, BATCH_GET_LIMIT)) {
+    let pending: Array<Record<string, AttributeValue>> = hashChunk.map((hash) => ({
+      contact_hash: { S: hash },
+    }));
+    let retries = 0;
+    while (pending.length > 0) {
+      const result = await deps.dynamo.send(
+        new BatchGetItemCommand({
+          RequestItems: {
+            [deps.env.SUPPRESSION_TABLE]: { Keys: pending },
+          },
+        }),
+      );
+      for (const item of result.Responses?.[deps.env.SUPPRESSION_TABLE] ?? []) {
+        const hash = stringAttribute(item, "contact_hash");
+        if (hash) items.set(hash, item);
+      }
+      pending = result.UnprocessedKeys?.[deps.env.SUPPRESSION_TABLE]?.Keys ?? [];
+      if (pending.length > 0 && ++retries > MAX_UNPROCESSED_RETRIES) {
+        throw new Error(
+          `suppression BatchGetItem left ${pending.length} keys unprocessed after retries`,
+        );
+      }
+    }
+  }
+
+  return items;
+}
+
+async function scanMembershipHashes(deps: HandlerDeps): Promise<Set<string>> {
+  const hashes = new Set<string>();
+  let exclusiveStartKey: Record<string, AttributeValue> | undefined;
+
+  while (true) {
+    const result = await deps.dynamo.send(
+      new ScanCommand({
+        TableName: deps.env.SUPPRESSION_TABLE,
+        ProjectionExpression: "contact_hash",
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+    for (const item of result.Items ?? []) {
+      const hash = stringAttribute(item, "contact_hash");
+      if (hash) hashes.add(hash);
+    }
+    if (!result.LastEvaluatedKey) break;
+    exclusiveStartKey = result.LastEvaluatedKey;
+  }
+
+  return hashes;
+}
+
+async function reconcileSource(
+  deps: HandlerDeps,
+  union: ReadonlyMap<string, SuppressionUploadLine>,
+): Promise<Reconciliation> {
+  const hashes = [...union.keys()].sort(lexicalCompare);
+  const existing = await batchGetMemberships(deps, hashes);
+  const cloudHashes = await scanMembershipHashes(deps);
+  return {
+    existing,
+    missingMemberships: hashes.filter((hash) => !existing.has(hash)).length,
+    unexpectedMemberships: [...cloudHashes].filter((hash) => !union.has(hash)).length,
+  };
+}
+
+function validKind(value: string | undefined): SuppressionUploadLine["kind"] | undefined {
+  return value === "phone" || value === "email" ? value : undefined;
+}
+
+function validReason(
+  value: string | undefined,
+): SuppressionUploadLine["reason"] | undefined {
+  return value === "opt_out" || value === "founder_block" || value === "wrong_person"
+    ? value
+    : undefined;
+}
+
+function monotonicMembership(
+  source: SuppressionUploadLine,
+  existing: Record<string, AttributeValue> | undefined,
+): SuppressionUploadLine {
+  if (!existing) return source;
+  const existingReason = validReason(stringAttribute(existing, "reason"));
+  const existingObservedAt = stringAttribute(existing, "observed_at");
+  return {
+    contact_hmac: source.contact_hmac,
+    kind: validKind(stringAttribute(existing, "kind")) ?? source.kind,
+    reason:
+      existingReason && REASON_STRENGTH[existingReason] > REASON_STRENGTH[source.reason]
+        ? existingReason
+        : source.reason,
+    observed_at:
+      existingObservedAt && existingObservedAt < source.observed_at
+        ? existingObservedAt
+        : source.observed_at,
+  };
+}
+
+function membershipMatches(
+  item: Record<string, AttributeValue> | undefined,
+  membership: SuppressionUploadLine,
+): boolean {
+  return (
+    item !== undefined &&
+    stringAttribute(item, "kind") === membership.kind &&
+    stringAttribute(item, "reason") === membership.reason &&
+    stringAttribute(item, "observed_at") === membership.observed_at
+  );
+}
+
+async function applyUnion(
+  deps: HandlerDeps,
+  union: ReadonlyMap<string, SuppressionUploadLine>,
+  existing: ReadonlyMap<string, Record<string, AttributeValue>>,
+  now: Date,
+): Promise<number> {
+  let applied = 0;
+  for (const hash of [...union.keys()].sort(lexicalCompare)) {
+    const source = union.get(hash);
+    if (!source) continue;
+    const current = existing.get(hash);
+    const membership = monotonicMembership(source, current);
+    if (membershipMatches(current, membership)) continue;
+    await writeSuppression(deps, membership, now);
+    applied += 1;
+  }
+  return applied;
+}
+
+async function ledgerValidObjects(
+  deps: HandlerDeps,
+  objects: readonly ValidatedSuppressionObject[],
+  now: Date,
+): Promise<void> {
+  for (const object of objects) {
+    if (!(await ledgerHas(deps, object))) {
+      await ledgerMark(deps, object, now);
+    }
+  }
+}
+
+function reportFor(input: {
+  source: ReplaySource;
+  now: Date;
+  appliedMemberships: number;
+  missingMemberships: number;
+  unexpectedMemberships: number;
+}): SuppressionReplayReport {
+  return {
+    generatedAt: input.now.toISOString(),
+    objectsSeen: input.source.descriptors.length,
+    objectsValid: input.source.validObjects.length,
+    objectsQuarantined: input.source.quarantine.length,
+    uniqueMemberships: input.source.union.size,
+    appliedMemberships: input.appliedMemberships,
+    missingMemberships: input.missingMemberships,
+    unexpectedMemberships: input.unexpectedMemberships,
+    sourceUnionChecksumSha256: input.source.sourceUnionChecksumSha256,
+    quarantine: input.source.quarantine,
+  };
+}
+
+function reportKey(now: Date, runId: string): string {
+  const date = now.toISOString().slice(0, 10);
+  const timestamp = now.toISOString().replace(/[:.]/g, "");
+  return `${REPORTS_PREFIX}${date}/${timestamp}-${runId}.json`;
+}
+
+async function writeEvidenceReport(
+  deps: HandlerDeps,
+  key: string,
+  report: SuppressionReplayReport,
+  objects: readonly EvidenceObject[],
+): Promise<void> {
+  await deps.s3.send(
+    new PutObjectCommand({
+      Bucket: deps.env.INBOX_BUCKET,
+      Key: key,
+      Body: `${JSON.stringify({ ...report, objects })}\n`,
+      ContentType: "application/json",
+      IfNoneMatch: "*",
+    }),
+  );
+}
+
+export async function runReplay(
+  deps: HandlerDeps,
+  input: { dryRun: boolean; now: Date; runId: string },
+): Promise<SuppressionReplayResult> {
+  const source = await buildReplaySource(deps, true);
+  const reconciliation = await reconcileSource(deps, source.union);
+  const appliedMemberships = input.dryRun
+    ? 0
+    : await applyUnion(deps, source.union, reconciliation.existing, input.now);
+
+  if (!input.dryRun) {
+    await ledgerValidObjects(deps, source.validObjects, input.now);
+  }
+
+  const report = reportFor({
+    source,
+    now: input.now,
+    appliedMemberships,
+    missingMemberships: input.dryRun ? reconciliation.missingMemberships : 0,
+    unexpectedMemberships: reconciliation.unexpectedMemberships,
+  });
+  const key = reportKey(input.now, input.runId);
+  await writeEvidenceReport(deps, key, report, source.evidenceObjects);
+
+  log("info", "suppression_replay_run", {
+    report_key: key,
+    dry_run: input.dryRun,
+    objects_seen: report.objectsSeen,
+    objects_valid: report.objectsValid,
+    objects_quarantined: report.objectsQuarantined,
+    unique_memberships: report.uniqueMemberships,
+    applied_memberships: report.appliedMemberships,
+    missing_memberships: report.missingMemberships,
+    unexpected_memberships: report.unexpectedMemberships,
+    source_union_checksum_sha256: report.sourceUnionChecksumSha256,
+  });
+  return { reportKey: key, report };
+}
+
+function assertReportKey(key: string): void {
+  if (!key.startsWith(REPORTS_PREFIX) || !key.endsWith(".json")) {
+    throw new Error("reconciliation requires an exact suppression replay report key");
+  }
+}
+
+export async function runReconciliation(
+  deps: HandlerDeps,
+  input: { reportKey: string; now: Date },
+): Promise<SuppressionReplayResult> {
+  assertReportKey(input.reportKey);
+  const source = await buildReplaySource(deps, false);
+  const reconciliation = await reconcileSource(deps, source.union);
+  const report = reportFor({
+    source,
+    now: input.now,
+    appliedMemberships: 0,
+    missingMemberships: reconciliation.missingMemberships,
+    unexpectedMemberships: reconciliation.unexpectedMemberships,
+  });
+
+  log("info", "suppression_reconciliation_run", {
+    report_key: input.reportKey,
+    objects_seen: report.objectsSeen,
+    objects_valid: report.objectsValid,
+    unique_memberships: report.uniqueMemberships,
+    missing_memberships: report.missingMemberships,
+    unexpected_memberships: report.unexpectedMemberships,
+    source_union_checksum_sha256: report.sourceUnionChecksumSha256,
+  });
+  return { reportKey: input.reportKey, report };
+}

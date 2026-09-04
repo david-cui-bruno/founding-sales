@@ -50,7 +50,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "raw_mail" {
 
 # ---------------------------------------------------------------------------
 # Inbox bucket: SourceEvent JSON objects the Mac app polls. Versioned so a
-# bad writer can't silently clobber events; noncurrent versions expire.
+# bad writer can't silently clobber events. Noncurrent versions are retained
+# globally because suppression history must remain replayable and this shared
+# bucket has no object tagging or dedicated suppression lifecycle boundary.
 # ---------------------------------------------------------------------------
 
 resource "aws_s3_bucket" "inbox" {
@@ -88,18 +90,15 @@ resource "aws_s3_bucket_versioning" "inbox" {
 resource "aws_s3_bucket_lifecycle_configuration" "inbox" {
   bucket = aws_s3_bucket.inbox.id
 
-  # Lifecycle on a versioned bucket: keep current versions, expire noncurrent
-  # versions after 30 days.
+  # Retain every current and noncurrent version. Only abandoned multipart
+  # uploads are cleaned up until suppression objects have a dedicated bucket
+  # or lifecycle tag that can safely isolate retention policy.
   rule {
-    id     = "expire-noncurrent"
+    id     = "abort-incomplete-multipart"
     status = "Enabled"
 
     filter {
       prefix = ""
-    }
-
-    noncurrent_version_expiration {
-      noncurrent_days = 30
     }
 
     abort_incomplete_multipart_upload {

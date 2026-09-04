@@ -62,7 +62,7 @@ locals {
       # can land thousands of events in one sweep (4.2k on 2026-09-03 timed
       # out). Scoring is per-event idempotent, so a longer window just means
       # fewer resumption ticks.
-      timeout     = 600
+      timeout = 600
       environment = {
         INBOX_BUCKET    = aws_s3_bucket.inbox.bucket
         SNAPSHOTS_TABLE = aws_dynamodb_table.snapshots.name
@@ -163,10 +163,9 @@ resource "aws_cloudwatch_log_group" "adapters" {
 }
 
 # ---------------------------------------------------------------------------
-# Schedules: gated by var.schedules_enabled. Created DISABLED; enabled
-# 2026-09-02 after the quality pass (founder delegated the review; top-25
-# verified against city records at 88% pass, scores v2). Flip the variable
-# to false to pause the whole pipeline.
+# Schedules remain gated solely by var.schedules_enabled. The Task 0
+# containment checkpoint holds both compliance-sensitive schedules paused;
+# this Task 9 code does not bypass or change that live control.
 # ---------------------------------------------------------------------------
 
 resource "aws_cloudwatch_event_rule" "adapters" {

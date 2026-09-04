@@ -360,7 +360,7 @@ describe("suppression-sync handler", () => {
     expect(s.ledger.size).toBe(0);
   });
 
-  it("reports exact invalid line numbers without logging contact data", async () => {
+  it("incremental mode still fails on an invalid current object", async () => {
     const contactData = "person@example.com";
     const phoneData = "+1-401-555-0199";
     const object = objectVersion({
@@ -379,7 +379,9 @@ describe("suppression-sync handler", () => {
     });
 
     try {
-      await expect(runHandler(fakeDeps(s))).rejects.toBeInstanceOf(
+      await expect(
+        runHandler(fakeDeps(s), { mode: "incremental" }),
+      ).rejects.toBeInstanceOf(
         SuppressionObjectValidationError,
       );
     } finally {
@@ -456,13 +458,13 @@ describe("suppression-sync handler", () => {
     ]);
   });
 
-  it("maxFiles bounds object versions for live testing", async () => {
+  it("maxObjects bounds object versions for live testing", async () => {
     const s = state([
       objectVersion({ key: `${UPLOADS_PREFIX}a.ndjson`, body: bodyFor("a") }),
       objectVersion({ key: `${UPLOADS_PREFIX}b.ndjson`, body: bodyFor("b") }),
     ]);
 
-    const result = await runHandler(fakeDeps(s), { maxFiles: 1 });
+    const result = await runHandler(fakeDeps(s), { maxObjects: 1 });
 
     expect(result.filesSeen).toBe(1);
     expect(result.filesProcessed).toBe(1);

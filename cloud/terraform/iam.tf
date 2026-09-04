@@ -238,15 +238,28 @@ data "aws_iam_policy_document" "lambda_suppression_sync" {
   statement {
     sid       = "ListInbox"
     effect    = "Allow"
-    actions   = ["s3:ListBucket"]
+    actions   = ["s3:ListBucket", "s3:ListBucketVersions"]
     resources = [aws_s3_bucket.inbox.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["upstream/suppression/*"]
+    }
   }
 
   statement {
     sid       = "ReadUploads"
     effect    = "Allow"
-    actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.inbox.arn}/upstream/suppressions/*"]
+    actions   = ["s3:GetObject", "s3:GetObjectVersion"]
+    resources = ["${aws_s3_bucket.inbox.arn}/upstream/suppression/*"]
+  }
+
+  statement {
+    sid       = "WriteReplayReports"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.inbox.arn}/upstream/suppression-reports/*"]
   }
 
   statement {
@@ -260,6 +273,13 @@ data "aws_iam_policy_document" "lambda_suppression_sync" {
     sid       = "SuppressionWrite"
     effect    = "Allow"
     actions   = ["dynamodb:PutItem"]
+    resources = [aws_dynamodb_table.suppression.arn]
+  }
+
+  statement {
+    sid       = "SuppressionReconcile"
+    effect    = "Allow"
+    actions   = ["dynamodb:BatchGetItem", "dynamodb:Scan"]
     resources = [aws_dynamodb_table.suppression.arn]
   }
 
