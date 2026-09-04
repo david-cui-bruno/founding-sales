@@ -25,50 +25,93 @@ export interface SafeLogger {
   ): void;
 }
 
-const NUMBER_FIELDS = [
-  'invalidLineCount', 'lineNumber', 'durationMs', 'count', 'backlogCount',
-  'unprocessedCount',
-] as const;
-const LEVELS = new Set(['debug', 'info', 'warn', 'error']);
-const EVENT_CODE = /^[A-Z][A-Z0-9_]{2,63}$/;
-const COMPONENT = /^[a-z][a-z0-9-]{0,63}$/;
-const OPERATIONAL_ID = /^(?:[A-Za-z]+-[A-Za-z0-9._:-]+|[0-9a-f]{8}-[0-9a-f-]{27,35})$/;
-const OBJECT_KEY = /^(?:inbox|events)\/[A-Za-z0-9._/-]{1,240}$/;
-const OPAQUE_OBJECT_VALUE = /^[A-Za-z0-9._:/=-]{1,240}$/;
-const CHECKSUM = /^[A-Za-z0-9+/=_-]{1,128}$/;
-const STATUS = /^(?:[a-z][a-z0-9_]{0,63}|[A-Z][A-Z0-9_]{2,63})$/;
-const FORBIDDEN_FRAGMENT = /(?:@|\s|\+\d|akia|secret|token|hmac|recovery|provider)/i;
+type FieldValidator = (value: unknown) => boolean;
+type EventPolicy = Readonly<{
+  level: 'debug' | 'info' | 'warn' | 'error';
+  component: 'sourcing-poller' | 'sourcing-credential-store';
+  fields: Readonly<Record<string, FieldValidator>>;
+}>;
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const ULID = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
+const EVENT_OBJECT_KEY = /^events\/(\d{4}-\d{2}-\d{2})\/(boston-assessments|boston-rentsmart|pvd-taxroll|enricher|mail-parse|scorer)-([0-9A-HJKMNP-TV-Z]{26})\.ndjson$/;
 const SAFE_ERROR_CLASSES = new Set([
   'Error', 'UnknownError', 'TypeError', 'SyntaxError', 'RangeError',
   'ReferenceError', 'URIError', 'EvalError', 'AggregateError', 'AbortError',
   'RemoteOperationTimeoutError',
 ]);
+const POLL_FAILURE_STATUSES = new Set([
+  'POLL_FAILED', 'S3_LIST_TIMEOUT', 'S3_FETCH_TIMEOUT', 'S3_BODY_TIMEOUT',
+  'S3_UPLOAD_TIMEOUT', 'POLL_TOTAL_TIMEOUT',
+]);
 
-function safeString(value: unknown, pattern: RegExp): value is string {
-  return typeof value === 'string'
-    && !FORBIDDEN_FRAGMENT.test(value)
-    && pattern.test(value);
-}
-
-function copySafeStringFields(entry: Record<string, unknown>, values: Record<string, unknown>): void {
-  const validators: Readonly<Record<string, RegExp>> = {
-    component: COMPONENT,
-    requestId: OPERATIONAL_ID,
-    pollId: OPERATIONAL_ID,
-    objectKey: OBJECT_KEY,
-    objectVersionId: OPAQUE_OBJECT_VALUE,
-    objectEtag: OPAQUE_OBJECT_VALUE,
-    objectChecksumSha256: CHECKSUM,
-    status: STATUS,
-  };
-  for (const [key, pattern] of Object.entries(validators)) {
-    if (safeString(values[key], pattern)) entry[key] = values[key];
-  }
-  if (values.objectVersionId === null) entry.objectVersionId = null;
-  if (typeof values.errorClass === 'string' && SAFE_ERROR_CLASSES.has(values.errorClass)) {
-    entry.errorClass = values.errorClass;
+function isCanonicalUtcDate(value: string): boolean {
+  try {
+    return new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) === value;
+  } catch {
+    return false;
   }
 }
+
+function isGeneratedObjectKey(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const match = EVENT_OBJECT_KEY.exec(value);
+  return match !== null && isCanonicalUtcDate(match[1]!) && ULID.test(match[3]!);
+}
+
+const isUuid: FieldValidator = (value) => typeof value === 'string' && UUID.test(value);
+const isErrorClass: FieldValidator = (value) => (
+  typeof value === 'string' && SAFE_ERROR_CLASSES.has(value)
+);
+const isNonNegativeInteger: FieldValidator = (value) => (
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+);
+const isPositiveInteger: FieldValidator = (value) => (
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+);
+const isOneOf = (...values: readonly string[]): FieldValidator => {
+  const allowed = new Set(values);
+  return (value) => typeof value === 'string' && allowed.has(value);
+};
+
+const EVENT_POLICIES: Readonly<Record<string, EventPolicy>> = {
+  SOURCING_FILE_FAILED: {
+    level: 'error', component: 'sourcing-poller',
+    fields: { pollId: isUuid, objectKey: isGeneratedObjectKey, errorClass: isErrorClass },
+  },
+  SOURCING_UPSTREAM_SYNC_FAILED: {
+    level: 'error', component: 'sourcing-poller',
+    fields: { pollId: isUuid, errorClass: isErrorClass },
+  },
+  SOURCING_LINE_QUARANTINED: {
+    level: 'warn', component: 'sourcing-poller',
+    fields: { objectKey: isGeneratedObjectKey, lineNumber: isPositiveInteger },
+  },
+  SOURCING_IDEMPOTENCY_CONFLICT: {
+    level: 'warn', component: 'sourcing-poller', fields: { errorClass: isErrorClass },
+  },
+  SOURCING_NEEDS_IDENTITY_SKIPPED: {
+    level: 'info', component: 'sourcing-poller',
+    fields: { status: isOneOf('no_usable_situs') },
+  },
+  SOURCING_SCORE_UPDATE_SKIPPED: {
+    level: 'info', component: 'sourcing-poller',
+    fields: { status: isOneOf('no_intake_receipt') },
+  },
+  SOURCING_POLL_FAILED: {
+    level: 'error', component: 'sourcing-poller',
+    fields: {
+      pollId: isUuid,
+      backlogCount: isNonNegativeInteger,
+      status: (value) => typeof value === 'string' && POLL_FAILURE_STATUSES.has(value),
+      errorClass: isErrorClass,
+    },
+  },
+  SOURCING_CREDENTIALS_PROTECTED: {
+    level: 'info', component: 'sourcing-credential-store',
+    fields: { status: isOneOf('protected') },
+  },
+};
 
 export function sanitizeErrorClass(error: unknown): string {
   if (!(error instanceof Error)) return 'UnknownError';
@@ -82,19 +125,16 @@ export function createSafeLogger(input: {
   const now = input.now ?? (() => new Date().toISOString());
   return {
     log(level, eventCode, fields = {}) {
-      if (!LEVELS.has(level) || !safeString(eventCode, EVENT_CODE)) return;
-      const entry: Record<string, unknown> = { timestamp: now(), level, eventCode };
-      const values = fields as Record<string, unknown>;
-      copySafeStringFields(entry, values);
-      for (const key of NUMBER_FIELDS) {
-        const value = values[key];
-        if (typeof value === 'number' && Number.isFinite(value)) entry[key] = value;
+      const policy = EVENT_POLICIES[eventCode];
+      if (policy === undefined || level !== policy.level || fields.component !== policy.component) {
+        return;
       }
-      if (
-        Array.isArray(values.invalidLineNumbers)
-        && values.invalidLineNumbers.every((value) => Number.isSafeInteger(value))
-      ) {
-        entry.invalidLineNumbers = [...values.invalidLineNumbers];
+      const entry: Record<string, unknown> = {
+        timestamp: now(), level, eventCode, component: policy.component,
+      };
+      const values = fields as Record<string, unknown>;
+      for (const [field, validate] of Object.entries(policy.fields)) {
+        if (validate(values[field])) entry[field] = values[field];
       }
       try {
         input.write(JSON.stringify(entry));

@@ -1,6 +1,5 @@
 import {
   closeSync,
-  chmodSync,
   constants,
   existsSync,
   fchmodSync,
@@ -23,9 +22,23 @@ export type FileLogSink = Readonly<{
   write(serializedEntry: string): void;
 }>;
 
-function assertRealDirectory(path: string, errorCode: string): void {
+type DirectoryIdentity = Readonly<{ device: number; inode: number }>;
+
+function assertRealDirectory(path: string, errorCode: string): DirectoryIdentity {
   const metadata = lstatSync(path);
-  if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw new Error(errorCode);
+  if (
+    metadata.isSymbolicLink()
+    || !metadata.isDirectory()
+    || (metadata.mode & 0o777) !== 0o700
+  ) throw new Error(errorCode);
+  return { device: metadata.dev, inode: metadata.ino };
+}
+
+function assertSameDirectory(path: string, expected: DirectoryIdentity): void {
+  const actual = assertRealDirectory(path, 'LOG_DIRECTORY_PERMISSIONS_UNSAFE');
+  if (actual.device !== expected.device || actual.inode !== expected.inode) {
+    throw new Error('LOG_DIRECTORY_IDENTITY_CHANGED');
+  }
 }
 
 function pruneExpiredFiles(directoryPath: string, today: Date): void {
@@ -67,8 +80,10 @@ export function createFileLogSink(input: {
   } else {
     mkdirSync(directoryPath, { mode: 0o700 });
   }
-  assertRealDirectory(directoryPath, 'LOG_DIRECTORY_PERMISSIONS_UNSAFE');
-  chmodSync(directoryPath, 0o700);
+  const directoryIdentity = assertRealDirectory(
+    directoryPath,
+    'LOG_DIRECTORY_PERMISSIONS_UNSAFE',
+  );
   const now = input.now ?? (() => new Date());
   const durableSync = input.fsync ?? fsyncSync;
   const descriptorStat = input.fstat ?? fstatSync;
@@ -76,15 +91,16 @@ export function createFileLogSink(input: {
   return {
     directoryPath,
     write(serializedEntry) {
+      assertSameDirectory(directoryPath, directoryIdentity);
       const current = now();
       pruneExpiredFiles(directoryPath, current);
+      assertSameDirectory(directoryPath, directoryIdentity);
       const path = join(directoryPath, `${current.toISOString().slice(0, 10)}.ndjson`);
       if (existsSync(path)) {
         const existing = lstatSync(path);
         if (existing.isSymbolicLink() || !existing.isFile()) {
           throw new Error('LOG_FILE_UNSAFE');
         }
-        chmodSync(path, 0o600);
       }
       const descriptor = openSync(
         path,

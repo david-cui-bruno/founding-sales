@@ -5,140 +5,119 @@ import {
   sanitizeErrorClass,
 } from '../../../src/main/logging/safeLogger';
 
-const FORBIDDEN_VALUES = [
-  'Ada Lovelace', '+1-401-555-0199', 'ada@example.com', '12 Main Street',
-  'Confidential subject', 'provider-secret-body', 'recovery phrase violet river',
-  'AKIAIOSFODNN7EXAMPLE', 'contact-hmac-value', 'oauth-token-value',
+const NOW = '2026-09-04T12:34:56.000Z';
+const POLL_ID = '257c539c-01bd-4006-989e-14678bab7e10';
+const OBJECT_KEY = 'events/2026-09-04/mail-parse-01ARZ3NDEKTSV4RRFFQ69G5FAV.ndjson';
+const ACCEPTED_SHAPE_PRIVATE_VALUES = [
+  'ADA_LOVELACE',
+  'ada-lovelace',
+  'contact-AdaLovelace',
+  'events/2026-09-04/mail-parse-01ADALOVELACEPRIVATEVALUE.ndjson',
+  'AdaLovelace',
+  'adalovelace',
+  'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
 ];
 
+function capture(
+  level: 'debug' | 'info' | 'warn' | 'error',
+  eventCode: string,
+  fields?: Record<string, unknown>,
+): { write: ReturnType<typeof vi.fn>; output: () => Record<string, unknown> } {
+  const write = vi.fn();
+  createSafeLogger({ now: () => NOW, write }).log(level, eventCode, fields as never);
+  return { write, output: () => JSON.parse(write.mock.calls[0]![0]) };
+}
+
 describe('createSafeLogger', () => {
-  it('serializes only the exact operational allowlist', () => {
-    const write = vi.fn();
-    const logger = createSafeLogger({
-      now: () => '2026-09-04T12:34:56.000Z',
-      write,
-    });
+  it('retains the intended fields for every actual production event policy', () => {
+    const cases = [
+      ['error', 'SOURCING_FILE_FAILED', {
+        component: 'sourcing-poller', pollId: POLL_ID, objectKey: OBJECT_KEY,
+        errorClass: 'TypeError',
+      }],
+      ['error', 'SOURCING_UPSTREAM_SYNC_FAILED', {
+        component: 'sourcing-poller', pollId: POLL_ID, errorClass: 'Error',
+      }],
+      ['warn', 'SOURCING_LINE_QUARANTINED', {
+        component: 'sourcing-poller', objectKey: OBJECT_KEY, lineNumber: 7,
+      }],
+      ['warn', 'SOURCING_IDEMPOTENCY_CONFLICT', {
+        component: 'sourcing-poller', errorClass: 'Error',
+      }],
+      ['info', 'SOURCING_NEEDS_IDENTITY_SKIPPED', {
+        component: 'sourcing-poller', status: 'no_usable_situs',
+      }],
+      ['info', 'SOURCING_SCORE_UPDATE_SKIPPED', {
+        component: 'sourcing-poller', status: 'no_intake_receipt',
+      }],
+      ['error', 'SOURCING_POLL_FAILED', {
+        component: 'sourcing-poller', pollId: POLL_ID, backlogCount: 4,
+        status: 'POLL_FAILED', errorClass: 'RemoteOperationTimeoutError',
+      }],
+      ['info', 'SOURCING_CREDENTIALS_PROTECTED', {
+        component: 'sourcing-credential-store', status: 'protected',
+      }],
+    ] as const;
 
-    logger.log('warn', 'SOURCING_OBJECT_REJECTED', {
-      component: 'sourcing-poller',
-      requestId: 'request-01',
-      pollId: 'poll-01',
-      objectKey: 'inbox/2026-09-04.ndjson',
-      objectVersionId: null,
-      objectEtag: 'etag-01',
-      objectChecksumSha256: 'abc123',
-      invalidLineNumbers: [2, 7],
-      invalidLineCount: 2,
-      lineNumber: 7,
-      durationMs: 42,
-      count: 3,
-      backlogCount: 4,
-      unprocessedCount: 5,
-      status: 'quarantined',
-      errorClass: 'SyntaxError',
-    });
-
-    expect(write).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(write.mock.calls[0]![0])).toEqual({
-      timestamp: '2026-09-04T12:34:56.000Z',
-      level: 'warn',
-      eventCode: 'SOURCING_OBJECT_REJECTED',
-      component: 'sourcing-poller',
-      requestId: 'request-01',
-      pollId: 'poll-01',
-      objectKey: 'inbox/2026-09-04.ndjson',
-      objectVersionId: null,
-      objectEtag: 'etag-01',
-      objectChecksumSha256: 'abc123',
-      invalidLineNumbers: [2, 7],
-      invalidLineCount: 2,
-      lineNumber: 7,
-      durationMs: 42,
-      count: 3,
-      backlogCount: 4,
-      unprocessedCount: 5,
-      status: 'quarantined',
-      errorClass: 'SyntaxError',
-    });
-  });
-
-  it('omits names, phones, emails, addresses, subjects, provider payloads, recovery material, credentials, and nested objects', () => {
-    const write = vi.fn();
-    const logger = createSafeLogger({ now: () => '2026-09-04T00:00:00.000Z', write });
-    const forbidden = FORBIDDEN_VALUES;
-
-    logger.log('error', 'SAFE_EVENT', {
-      component: 'runtime',
-      count: 1,
-      personName: forbidden[0],
-      phone: forbidden[1],
-      email: forbidden[2],
-      address: forbidden[3],
-      subject: forbidden[4],
-      providerPayload: { body: forbidden[5] },
-      recoveryMaterial: forbidden[6],
-      awsAccessKeyId: forbidden[7],
-      contactHmac: forbidden[8],
-      token: forbidden[9],
-      nested: { arbitrary: 'nested-private-value' },
-    } as never);
-
-    const output = write.mock.calls[0]![0] as string;
-    expect(JSON.parse(output)).toEqual({
-      timestamp: '2026-09-04T00:00:00.000Z',
-      level: 'error',
-      eventCode: 'SAFE_EVENT',
-      component: 'runtime',
-      count: 1,
-    });
-    for (const value of [...forbidden, 'nested-private-value']) {
-      expect(output).not.toContain(value);
+    for (const [level, eventCode, fields] of cases) {
+      const result = capture(level, eventCode, fields);
+      expect(result.write).toHaveBeenCalledTimes(1);
+      expect(result.output()).toEqual({ timestamp: NOW, level, eventCode, ...fields });
     }
   });
 
-  it('records only a sanitized class for hostile errors', () => {
-    const hostile = new Error('ada@example.com AKIAIOSFODNN7EXAMPLE recovery phrase');
-    hostile.name = 'TypeError\nada@example.com';
-
-    expect(sanitizeErrorClass(hostile)).toBe('Error');
-    expect(sanitizeErrorClass(new TypeError('private provider payload'))).toBe('TypeError');
-    expect(sanitizeErrorClass('private recovery string')).toBe('UnknownError');
+  it('rejects unsupported event codes and wrong event levels', () => {
+    expect(capture('info', 'SAFE_EVENT').write).not.toHaveBeenCalled();
+    expect(capture('info', 'SOURCING_FILE_FAILED').write).not.toHaveBeenCalled();
+    expect(capture('trace' as never, 'SOURCING_FILE_FAILED').write).not.toHaveBeenCalled();
   });
 
-  it('rejects invalid runtime levels and event codes', () => {
-    const write = vi.fn();
-    const logger = createSafeLogger({ write });
-
-    logger.log('trace' as never, 'SAFE_EVENT');
-    logger.log('info', 'ada@example.com');
-
-    expect(write).not.toHaveBeenCalled();
-  });
-
-  it('fails closed when forbidden values occupy eventCode or any allowed string field', () => {
-    const forbidden = FORBIDDEN_VALUES;
-    const stringFields = [
+  it('omits accepted-shape PII and opaque secrets at every string field ingress', () => {
+    const fields = [
       'component', 'requestId', 'pollId', 'objectKey', 'objectVersionId',
       'objectEtag', 'objectChecksumSha256', 'status', 'errorClass',
     ] as const;
 
-    for (const value of forbidden) {
-      const eventWrite = vi.fn();
-      createSafeLogger({ write: eventWrite }).log('info', value);
-      expect(eventWrite).not.toHaveBeenCalled();
-
-      for (const field of stringFields) {
-        const write = vi.fn();
-        createSafeLogger({ write }).log('info', 'SAFE_EVENT', { [field]: value });
-        const output = write.mock.calls[0]![0] as string;
-        expect(output).not.toContain(value);
-        expect(JSON.parse(output)).not.toHaveProperty(field);
+    for (const value of ACCEPTED_SHAPE_PRIVATE_VALUES) {
+      expect(capture('info', value).write).not.toHaveBeenCalled();
+      for (const field of fields) {
+        const eventCode = field === 'objectKey' ? 'SOURCING_FILE_FAILED' : 'SOURCING_POLL_FAILED';
+        const level = eventCode === 'SOURCING_FILE_FAILED' ? 'error' : 'error';
+        const result = capture(level, eventCode, {
+          component: 'sourcing-poller',
+          pollId: POLL_ID,
+          status: 'POLL_FAILED',
+          errorClass: 'Error',
+          [field]: value,
+        });
+        if (result.write.mock.calls.length === 0) continue;
+        const serialized = result.write.mock.calls[0]![0] as string;
+        expect(serialized).not.toContain(value);
+        expect(result.output()).not.toHaveProperty(field, value);
       }
     }
   });
 
-  it('maps every hostile Error.name to a fixed safe class', () => {
-    for (const name of FORBIDDEN_VALUES) {
+  it('omits fields that are not admitted by a specific event policy', () => {
+    const result = capture('info', 'SOURCING_CREDENTIALS_PROTECTED', {
+      component: 'sourcing-credential-store', status: 'protected',
+      requestId: POLL_ID, objectVersionId: 'opaque', objectEtag: 'abc',
+      objectChecksumSha256: 'abc', count: 7, nested: { private: true },
+    });
+
+    expect(result.output()).toEqual({
+      timestamp: NOW,
+      level: 'info',
+      eventCode: 'SOURCING_CREDENTIALS_PROTECTED',
+      component: 'sourcing-credential-store',
+      status: 'protected',
+    });
+  });
+
+  it('maps only fixed error classes and never serializes hostile Error.name values', () => {
+    expect(sanitizeErrorClass(new TypeError('private'))).toBe('TypeError');
+    expect(sanitizeErrorClass('private')).toBe('UnknownError');
+    for (const name of ACCEPTED_SHAPE_PRIVATE_VALUES) {
       const error = new Error('private');
       error.name = name;
       expect(sanitizeErrorClass(error)).toBe('Error');
@@ -146,10 +125,10 @@ describe('createSafeLogger', () => {
   });
 
   it('does not let a retained sink failure escape into live operations', () => {
-    const logger = createSafeLogger({
-      write: () => { throw new Error('disk unavailable'); },
-    });
-
-    expect(() => logger.log('error', 'SAFE_EVENT', { count: 1 })).not.toThrow();
+    const logger = createSafeLogger({ write: () => { throw new Error('disk unavailable'); } });
+    expect(() => logger.log('error', 'SOURCING_POLL_FAILED', {
+      component: 'sourcing-poller', pollId: POLL_ID, status: 'POLL_FAILED',
+      errorClass: 'Error',
+    })).not.toThrow();
   });
 });

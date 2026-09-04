@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -85,7 +86,7 @@ describe('createFileLogSink', () => {
     expect(fsync.mock.calls[0]![0]).toEqual(expect.any(Number));
   });
 
-  it('normalizes pre-existing log directory and daily file modes exactly', () => {
+  it('fails closed for a pre-existing log directory with the wrong exact mode', () => {
     const userDataPath = temporaryRoot();
     const logs = join(userDataPath, 'logs');
     mkdirSync(logs, { mode: 0o700 });
@@ -93,11 +94,48 @@ describe('createFileLogSink', () => {
     writeFileSync(logPath, '{}\n', { mode: 0o700 });
     chmodSync(logs, 0o500);
 
-    const sink = createFileLogSink({ userDataPath, now: () => new Date('2026-09-04T12:00:00Z') });
-    sink.write('{"eventCode":"SAFE_EVENT"}');
+    expect(() => createFileLogSink({
+      userDataPath,
+      now: () => new Date('2026-09-04T12:00:00Z'),
+    })).toThrow('LOG_DIRECTORY_PERMISSIONS_UNSAFE');
+    expect(statSync(logPath).mode & 0o777).toBe(0o700);
+    chmodSync(logs, 0o700);
+  });
 
-    expect(statSync(logs).mode & 0o777).toBe(0o700);
+  it('normalizes a pre-existing owner-executable daily file through its descriptor', () => {
+    const userDataPath = temporaryRoot();
+    const logs = join(userDataPath, 'logs');
+    mkdirSync(logs, { mode: 0o700 });
+    const logPath = join(logs, '2026-09-04.ndjson');
+    writeFileSync(logPath, '{}\n', { mode: 0o700 });
+
+    createFileLogSink({
+      userDataPath,
+      now: () => new Date('2026-09-04T12:00:00Z'),
+    }).write('{"eventCode":"SAFE_EVENT"}');
+
     expect(statSync(logPath).mode & 0o777).toBe(0o600);
+  });
+
+  it('contains no path-following chmod that could mutate a swapped symlink target', () => {
+    const source = readFileSync(
+      join(process.cwd(), 'src/main/logging/fileLogSink.ts'),
+      'utf8',
+    );
+    expect(source).not.toMatch(/(?:^|[^A-Za-z])chmodSync/);
+  });
+
+  it('rejects replacement of the validated logs directory before retained access', () => {
+    const userDataPath = temporaryRoot();
+    const sink = createFileLogSink({
+      userDataPath,
+      now: () => new Date('2026-09-04T12:00:00Z'),
+    });
+    renameSync(join(userDataPath, 'logs'), join(userDataPath, 'logs-original'));
+    mkdirSync(join(userDataPath, 'logs'), { mode: 0o700 });
+
+    expect(() => sink.write('{"eventCode":"SAFE_EVENT"}'))
+      .toThrow('LOG_DIRECTORY_IDENTITY_CHANGED');
   });
 
   it('validates the opened descriptor before writing', () => {
