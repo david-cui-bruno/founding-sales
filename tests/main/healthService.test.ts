@@ -37,11 +37,22 @@ describe('HealthService', () => {
       databasePath: tempDatabase.path,
       jobs,
       domainStartupReport: fakeStartupReport({ interruptedJobsRecovered: 3 }),
+      sourcingHealth: () => ({
+        status: 'degraded',
+        reasons: ['NO_SUCCESS_WITHIN_TWO_CADENCES'],
+        state: {
+          state: 'idle', pollId: null, startedAt: null,
+          lastCompletedAt: '2026-08-30T10:00:00.000Z', consecutiveFailures: 1,
+          lastFailureAt: '2026-08-30T10:30:00.000Z', lastFailureCode: 'S3_LIST_TIMEOUT',
+          backlogCount: 2,
+        },
+        lastSuccessAgeMs: 7_200_000,
+      }),
     });
 
     expect(service.getHealth()).toEqual({
       appVersion: '2.3.4',
-      schemaVersion: 12,
+      schemaVersion: 14,
       databasePath: tempDatabase.path,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
@@ -55,6 +66,17 @@ describe('HealthService', () => {
       domainProjectionRefreshCandidateCount: 0,
       pendingProjectionRebuilds: 0,
       domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
+      operationalStatus: 'degraded',
+      sourcing: {
+        status: 'degraded', reasons: ['NO_SUCCESS_WITHIN_TWO_CADENCES'],
+        lastSuccessAgeMs: 7_200_000,
+        state: {
+          state: 'idle', pollId: null, startedAt: null,
+          lastCompletedAt: '2026-08-30T10:00:00.000Z', consecutiveFailures: 1,
+          lastFailureAt: '2026-08-30T10:30:00.000Z', lastFailureCode: 'S3_LIST_TIMEOUT',
+          backlogCount: 2,
+        },
+      },
     });
   });
 });

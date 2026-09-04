@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SourcingStatus } from '../../src/shared/contracts/sourcingContract';
+import type { AppHealth } from '../../src/shared/healthContract';
 
 const electron = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn(),
@@ -21,7 +23,11 @@ type ExposedCallieApi = {
   imports: Record<string, unknown>;
   conversations: Record<string, unknown>;
   learnings: Record<string, unknown>;
-  sourcing: { pollNow: () => Promise<unknown>; status: () => Promise<unknown> };
+  sourcing: {
+    pollNow: () => Promise<unknown>;
+    retry: () => Promise<unknown>;
+    status: () => Promise<unknown>;
+  };
   shell: { revealDatabase: () => Promise<unknown> };
   appleSpike: Record<string, unknown>;
 };
@@ -47,7 +53,7 @@ describe('preload workflow bridge', () => {
     return exposure[1];
   }
 
-  const health = {
+  const health: AppHealth = {
     appVersion: '1.0.0',
     schemaVersion: 2,
     databasePath: '/tmp/callie.sqlite3',
@@ -63,6 +69,15 @@ describe('preload workflow bridge', () => {
     domainProjectionRefreshCandidateCount: 0,
     pendingProjectionRebuilds: 0,
     domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
+    operationalStatus: 'ready',
+    sourcing: {
+      status: 'healthy', reasons: [], lastSuccessAgeMs: null,
+      state: {
+        state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
+        consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null,
+        backlogCount: null,
+      },
+    },
   };
 
   it('exposes exactly the composed workflow APIs plus the Apple spike surface', () => {
@@ -108,7 +123,7 @@ describe('preload workflow bridge', () => {
     expect(Object.keys(api.learnings).sort()).toEqual([
       'addEvidence', 'capture', 'list', 'updateStatus',
     ]);
-    expect(Object.keys(api.sourcing).sort()).toEqual(['pollNow', 'setHmacSalt', 'status']);
+    expect(Object.keys(api.sourcing).sort()).toEqual(['pollNow', 'retry', 'setHmacSalt', 'status']);
     expect(Object.keys(api.shell)).toEqual(['revealDatabase']);
   });
 
@@ -194,13 +209,26 @@ describe('preload workflow bridge', () => {
   });
 
   it('invokes the sourcing channels without arguments and validates the status', async () => {
-    const sourcingStatus = {
+    const sourcingStatus: SourcingStatus = {
       lastPolledAt: null as string | null,
       lastKey: null as string | null,
       backlogCount: null as number | null,
       counters: { imported: 0, replayed: 0, needsIdentity: 0, scoreUpdates: 0, quarantined: 0 },
       credentialState: 'none',
       hmacSaltState: 'none',
+      execution: {
+        state: 'idle', pollId: null, startedAt: null,
+        lastCompletedAt: '2026-09-01T12:00:00.000Z', consecutiveFailures: 0,
+        lastFailureAt: null, lastFailureCode: null, backlogCount: 0,
+      },
+      health: {
+        status: 'healthy', reasons: [], lastSuccessAgeMs: 0,
+        state: {
+          state: 'idle', pollId: null, startedAt: null,
+          lastCompletedAt: '2026-09-01T12:00:00.000Z', consecutiveFailures: 0,
+          lastFailureAt: null, lastFailureCode: null, backlogCount: 0,
+        },
+      },
     };
     electron.invoke.mockResolvedValue(sourcingStatus);
     const api = exposedApi();
@@ -209,6 +237,8 @@ describe('preload workflow bridge', () => {
     expect(electron.invoke).toHaveBeenCalledWith('sourcing:status');
     await expect(api.sourcing.pollNow()).resolves.toEqual(sourcingStatus);
     expect(electron.invoke).toHaveBeenCalledWith('sourcing:poll-now');
+    await expect(api.sourcing.retry()).resolves.toEqual(sourcingStatus);
+    expect(electron.invoke).toHaveBeenCalledWith('sourcing:retry');
 
     electron.invoke.mockResolvedValue({
       ...sourcingStatus, credentialState: 'plaintext',

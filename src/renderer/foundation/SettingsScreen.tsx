@@ -219,6 +219,10 @@ function DiagnosticsSection({
             tone={state.health.domainReady ? 'success' : 'warning'}
             label={`Domain ${state.health.domainStatus}`}
           />
+          <StatusBadge
+            tone={state.health.operationalStatus === 'ready' ? 'success' : 'warning'}
+            label={`Operations ${state.health.operationalStatus}`}
+          />
           <dl className="settings__counters">
             <div className="settings__counter">
               <dt>Cipher</dt>

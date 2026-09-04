@@ -160,7 +160,7 @@ describe('SourcingPoller', () => {
     await poller.pollNow();
     const status = await poller.getStatus();
 
-    expect(status).toEqual({
+    expect(status).toEqual(expect.objectContaining({
       lastPolledAt: null,
       lastKey: null,
       backlogCount: null,
@@ -169,7 +169,7 @@ describe('SourcingPoller', () => {
       },
       credentialState: 'none',
       hmacSaltState: 'none',
-    });
+    }));
     expect(inbox.listNewObjects).not.toHaveBeenCalled();
   });
 
@@ -221,7 +221,7 @@ describe('SourcingPoller', () => {
       'events/2026-09-01/a.ndjson',
       'events/2026-09-01/b.ndjson',
     ]);
-    expect(status).toEqual({
+    expect(status).toEqual(expect.objectContaining({
       lastPolledAt: NOW,
       lastKey: 'events/2026-09-01/b.ndjson',
       backlogCount: 0,
@@ -230,7 +230,7 @@ describe('SourcingPoller', () => {
       },
       credentialState: 'keychain',
       hmacSaltState: 'none',
-    });
+    }));
   });
 
   it('picks up a key that sorts before an already-processed key on the next poll', async () => {
@@ -318,7 +318,7 @@ describe('SourcingPoller', () => {
     // The failed file is NOT ledgered; the later file processed anyway.
     expect(domain.ledgered).toEqual(['events/2026-09-01/b.ndjson']);
     expect(domain.imported).toEqual([`cloud:${second.idempotency_key}`]);
-    expect(poller.getHealth().consecutiveFailures).toBe(1);
+    expect(poller.getExecutionState().consecutiveFailures).toBe(1);
 
     await poller.pollNow();
 
@@ -331,7 +331,7 @@ describe('SourcingPoller', () => {
       `cloud:${second.idempotency_key}`,
       `cloud:${first.idempotency_key}`,
     ]);
-    expect(poller.getHealth().consecutiveFailures).toBe(0);
+    expect(poller.getExecutionState().consecutiveFailures).toBe(0);
   });
 
   it('keeps the cursor unchanged when a file fails mid-processing', async () => {
@@ -355,7 +355,7 @@ describe('SourcingPoller', () => {
     expect(domain.cursor()).toBeNull();
     expect(status.lastKey).toBeNull();
     expect(status.counters.imported).toBe(0);
-    expect(poller.getHealth().consecutiveFailures).toBe(1);
+    expect(poller.getExecutionState().consecutiveFailures).toBe(1);
     expect(logged.join('\n')).toContain('intake exploded');
   });
 
@@ -374,7 +374,7 @@ describe('SourcingPoller', () => {
 
     expect(domain.imported).toEqual([`cloud:${event.idempotency_key}`]);
     expect(domain.cursor()).toBe('events/2026-09-01/a.ndjson');
-    expect(poller.getHealth().consecutiveFailures).toBe(0);
+    expect(poller.getExecutionState().consecutiveFailures).toBe(0);
   });
 
   it('never throws when the inbox client cannot be constructed', async () => {
@@ -385,7 +385,7 @@ describe('SourcingPoller', () => {
     });
 
     await expect(poller.pollNow()).resolves.toBeUndefined();
-    expect(poller.getHealth().consecutiveFailures).toBe(1);
+    expect(poller.getExecutionState().consecutiveFailures).toBe(1);
     expect(logged.join('\n')).toContain('S3 unreachable');
   });
 
@@ -468,10 +468,10 @@ describe('SourcingPoller', () => {
 
     expect(run).toHaveBeenCalledWith(store, expect.any(AbortSignal));
     expect(status.hmacSaltState).toBe('set');
-    expect(poller.getHealth().consecutiveFailures).toBe(0);
+    expect(poller.getExecutionState().consecutiveFailures).toBe(0);
   });
 
-  it('keeps the poll healthy when the upstream upload is denied', async () => {
+  it('records an upstream upload denial as an incomplete poll failure', async () => {
     const domain = fakeDomainGate();
     const logged: string[] = [];
     const poller = new SourcingPoller({
@@ -500,7 +500,9 @@ describe('SourcingPoller', () => {
 
     await poller.pollNow();
 
-    expect(poller.getHealth().consecutiveFailures).toBe(0);
+    expect(poller.getExecutionState().consecutiveFailures).toBe(1);
+    expect(poller.getExecutionState().lastFailureCode).toBe('POLL_FAILED');
+    expect(poller.getExecutionState().lastCompletedAt).toBeNull();
     expect(logged.join('\n')).toContain('AccessDenied');
   });
 });
@@ -561,6 +563,110 @@ describe('SourcingPoller remote deadlines', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('exposes deterministic running identity and completes only after upstream uploads settle', async () => {
+    const domain = fakeDomainGate();
+    let releaseUpload!: () => void;
+    const upload = new Promise<void>((resolve) => { releaseUpload = resolve; });
+    const poller = new SourcingPoller({
+      domainGate: domain.gate,
+      loadCredentials: async () => ({
+        credentials: { accessKeyId: 'AKIA', secretAccessKey: 'secret' },
+        source: 'keychain',
+      }),
+      createInboxClient: async () => ({
+        listNewObjects: async () => [],
+        fetchNdjson: async () => batch('unused', []),
+      }),
+      upstream: {
+        sync: { run: async () => { await upload; } } as never,
+        createStore: async () => ({ putObjectText: async () => undefined }),
+        saltState: async () => 'none',
+        setSalt: async () => undefined,
+      },
+      clock: { now: () => NOW },
+      pollIds: { next: () => 'poll-deterministic' },
+    });
+
+    const running = poller.pollNow();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(poller.getExecutionState()).toEqual(expect.objectContaining({
+      state: 'running', pollId: 'poll-deterministic', startedAt: NOW,
+      lastCompletedAt: null,
+    }));
+
+    releaseUpload();
+    await running;
+    expect(poller.getExecutionState()).toEqual(expect.objectContaining({
+      state: 'idle', pollId: null, startedAt: null, lastCompletedAt: NOW,
+    }));
+  });
+
+  it('coalesces Retry onto a nonexpired poll', async () => {
+    const domain = fakeDomainGate();
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const inbox: FakeInbox = {
+      listNewObjects: vi.fn(async () => { await blocked; return []; }),
+      fetchNdjson: vi.fn(async () => batch('unused', [])),
+    };
+    const { poller } = buildPoller({ gate: domain.gate, inbox });
+
+    const scheduled = poller.pollNow();
+    const retried = poller.retry();
+    release();
+    await Promise.all([scheduled, retried]);
+
+    expect(inbox.listNewObjects).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts and awaits an expired owner, then stale settlement cannot clear its replacement', async () => {
+    const domain = fakeDomainGate();
+    let nowMs = Date.parse(NOW);
+    let resolveFirst!: (keys: string[]) => void;
+    let resolveSecond!: (keys: string[]) => void;
+    let attempts = 0;
+    const pollIds = ['poll-old', 'poll-new'];
+    const poller = new SourcingPoller({
+      domainGate: domain.gate,
+      loadCredentials: async () => ({
+        credentials: { accessKeyId: 'AKIA', secretAccessKey: 'secret' },
+        source: 'keychain',
+      }),
+      createInboxClient: async () => ({
+        listNewObjects: async () => {
+          attempts += 1;
+          return new Promise<string[]>((resolve) => {
+            if (attempts === 1) resolveFirst = resolve;
+            else resolveSecond = resolve;
+          });
+        },
+        fetchNdjson: async () => batch('unused', []),
+      }),
+      clock: { now: () => new Date(nowMs).toISOString() },
+      pollIds: { next: () => pollIds.shift() ?? 'unexpected' },
+    });
+
+    void poller.pollNow();
+    await vi.advanceTimersByTimeAsync(0);
+    nowMs += 14 * 60_000 + 1;
+    const retry = poller.retry();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(poller.getExecutionState()).toEqual(expect.objectContaining({
+      state: 'running', pollId: 'poll-new',
+    }));
+    resolveFirst([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(poller.getExecutionState().pollId).toBe('poll-new');
+
+    resolveSecond([]);
+    await retry;
+    expect(poller.getExecutionState()).toEqual(expect.objectContaining({
+      state: 'idle', pollId: null, lastCompletedAt: new Date(nowMs).toISOString(),
+    }));
+  });
+
   it('bounds one total poll at 14 minutes, leaves the ledger unchanged, and permits recovery', async () => {
     const domain = fakeDomainGate();
     const key = 'events/2026-09-01/a.ndjson';
@@ -586,11 +692,11 @@ describe('SourcingPoller remote deadlines', () => {
     await completion;
 
     expect(domain.ledgered).toEqual([]);
-    expect(poller.getHealth().consecutiveFailures).toBe(1);
+    expect(poller.getExecutionState().consecutiveFailures).toBe(1);
 
     await poller.pollNow();
     expect(domain.ledgered).toEqual([key]);
-    expect(poller.getHealth().consecutiveFailures).toBe(0);
+    expect(poller.getExecutionState().consecutiveFailures).toBe(0);
 
     resolveLate([key]);
     await Promise.resolve();
@@ -627,11 +733,11 @@ describe('SourcingPoller remote deadlines', () => {
     await firstPoll;
 
     expect(domain.ledgered).toEqual([]);
-    expect(poller.getHealth().consecutiveFailures).toBe(1);
+    expect(poller.getExecutionState().consecutiveFailures).toBe(1);
 
     await poller.pollNow();
     expect(domain.ledgered).toEqual([key]);
-    expect(poller.getHealth().consecutiveFailures).toBe(0);
+    expect(poller.getExecutionState().consecutiveFailures).toBe(0);
 
     resolveLate('');
     await Promise.resolve();

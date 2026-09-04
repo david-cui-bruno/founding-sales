@@ -41,7 +41,16 @@ const health = {
   domainProjectionRefreshCandidateCount: 0,
   pendingProjectionRebuilds: 0,
   domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
-} satisfies AppHealth;
+  operationalStatus: 'ready',
+  sourcing: {
+    status: 'healthy', reasons: [] as never[], lastSuccessAgeMs: null as number | null,
+    state: {
+      state: 'idle', pollId: null as string | null, startedAt: null as string | null, lastCompletedAt: null as string | null,
+      consecutiveFailures: 0, lastFailureAt: null as string | null, lastFailureCode: null as string | null,
+      backlogCount: null as number | null,
+    },
+  },
+};
 
 describe('FoundationRuntime.withDomain', () => {
   let temp: TempDatabase;

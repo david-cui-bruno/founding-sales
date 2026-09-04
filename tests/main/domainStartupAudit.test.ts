@@ -55,16 +55,25 @@ describe('domain startup', () => {
   }
 
   describe('storage readiness gate', () => {
-    it('passes the exact schema-9 manifest against the live catalog', () => {
+    it('passes the exact schema-14 manifest against the live catalog', () => {
       const readiness = assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 12,
+        expectedSchemaVersion: 14,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       });
       expect(readiness).toMatchObject({
-        schemaVersion: 12, encrypted: true, ftsAvailable: true,
+        schemaVersion: 14, encrypted: true, ftsAvailable: true,
       });
+      expect(DOMAIN_SCHEMA_MANIFEST.tables).toEqual(expect.arrayContaining([
+        'contact_compliance_audit_events',
+        'person_outbound_jurisdictions',
+        'outbound_jurisdiction_clearances',
+        'outbound_jurisdiction_audit_events',
+      ]));
+      expect(DOMAIN_SCHEMA_MANIFEST.indexes).toContain(
+        'contact_compliance_audit_contact_idx',
+      );
     });
 
     it('rejects an open raw transaction, wrong pragma, and manifest drift', () => {
@@ -72,7 +81,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 12,
+        expectedSchemaVersion: 14,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       database.raw.exec('ROLLBACK');
@@ -81,7 +90,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 12,
+        expectedSchemaVersion: 14,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       database.raw.pragma('busy_timeout = 5000');
@@ -89,7 +98,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 12,
+        expectedSchemaVersion: 14,
         expectedManifest: {
           ...DOMAIN_SCHEMA_MANIFEST,
           tables: [...DOMAIN_SCHEMA_MANIFEST.tables, 'missing_table'],
@@ -97,13 +106,28 @@ describe('domain startup', () => {
       })).toThrow(DomainStartupFatalError);
     });
 
-    it('rejects a wrong schema version before repositories exist', () => {
-      database.raw.prepare('UPDATE app_meta SET schema_version = 3 WHERE singleton = 1').run();
-      const { runtime, clockReads, idsUsed } = buildRuntime();
-      expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
-      expect(clockReads()).toBe(0);
-      expect(idsUsed()).toBe(0);
-    });
+    it.each([13, 15])(
+      'rejects schema version %i before repositories exist',
+      (schemaVersion) => {
+        database.raw.prepare(
+          'UPDATE app_meta SET schema_version = ? WHERE singleton = 1',
+        ).run(schemaVersion);
+        const { runtime, clockReads, idsUsed } = buildRuntime();
+        let caught: unknown;
+        try {
+          runtime.initialize();
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBeInstanceOf(DomainStartupFatalError);
+        expect(caught).toMatchObject({
+          code: 'schema_not_ready',
+          message: 'The workspace schema version is not exactly 14.',
+        });
+        expect(clockReads()).toBe(0);
+        expect(idsUsed()).toBe(0);
+      },
+    );
   });
 
   describe('bootstrap', () => {

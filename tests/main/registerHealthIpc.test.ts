@@ -13,8 +13,9 @@ vi.mock('electron', () => ({
 }));
 
 import { registerHealthIpc } from '../../src/main/health/registerHealthIpc';
+import type { AppHealth } from '../../src/shared/healthContract';
 
-const validHealth = {
+const validHealth: AppHealth = {
   appVersion: '1.0.0',
   schemaVersion: 2,
   databasePath: '/tmp/callie.sqlite3',
@@ -30,6 +31,15 @@ const validHealth = {
   domainProjectionRefreshCandidateCount: 0,
   pendingProjectionRebuilds: 0,
   domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
+  operationalStatus: 'ready',
+  sourcing: {
+    status: 'healthy', reasons: [], lastSuccessAgeMs: null,
+    state: {
+      state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
+      consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null,
+      backlogCount: null,
+    },
+  },
 };
 
 describe('registerHealthIpc', () => {

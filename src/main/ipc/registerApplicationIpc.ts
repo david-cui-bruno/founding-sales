@@ -218,7 +218,17 @@ export function registerApplicationIpc(
   enrichmentRequester?: EnrichmentRequester,
 ): () => void {
   const unregisters = [
-    registrars.registerHealthIpc(runtime, isTrustedRendererUrl),
+    registrars.registerHealthIpc({
+      getHealth: async () => {
+        const base = appHealthSchema.parse(await runtime.getHealth());
+        const sourcing = await (sourcingProvider ?? createIdleSourcingProvider()).status();
+        return appHealthSchema.parse({
+          ...base,
+          operationalStatus: sourcing.health.status === 'degraded' ? 'degraded' : 'ready',
+          sourcing: sourcing.health,
+        });
+      },
+    }, isTrustedRendererUrl),
     registrars.registerLeadsIpc(createLeadsProvider(runtime), isTrustedRendererUrl),
     registrars.registerLeadDetailIpc(
       createLeadDetailProvider(runtime, enrichmentRequester),
@@ -278,9 +288,23 @@ function createIdleSourcingProvider(): SourcingProvider {
     },
     credentialState: 'none',
     hmacSaltState: 'none',
+    execution: {
+      state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
+      consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null,
+      backlogCount: null,
+    },
+    health: {
+      status: 'healthy', reasons: [], lastSuccessAgeMs: null,
+      state: {
+        state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
+        consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null,
+        backlogCount: null,
+      },
+    },
   };
   return {
     pollNow: async () => idleStatus,
+    retry: async () => idleStatus,
     status: async () => idleStatus,
     setHmacSalt: async () => idleStatus,
   };

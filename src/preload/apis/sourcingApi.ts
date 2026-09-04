@@ -8,6 +8,7 @@ import type { IpcClient } from '../ipcClient';
 /** Preload-side sourcing API: every channel is schema-validated. */
 export const createSourcingApi = (client: IpcClient) => ({
   pollNow: () => client.requestNoInput('sourcing:poll-now', sourcingStatusSchema),
+  retry: () => client.requestNoInput('sourcing:retry', sourcingStatusSchema),
   status: () => client.requestNoInput('sourcing:status', sourcingStatusSchema),
   setHmacSalt: (input: SetHmacSaltRequest) =>
     client.request(

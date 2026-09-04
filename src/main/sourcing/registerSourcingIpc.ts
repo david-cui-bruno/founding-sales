@@ -9,6 +9,7 @@ import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
 export type SourcingProvider = {
   pollNow(): Promise<SourcingStatus>;
   status(): Promise<SourcingStatus>;
+  retry(): Promise<SourcingStatus>;
   setHmacSalt(input: SetHmacSaltRequest): Promise<SourcingStatus>;
 };
 
@@ -26,6 +27,13 @@ export function registerSourcingIpc(
       requestSchema: null,
       responseSchema: sourcingStatusSchema,
       handler: () => provider.pollNow(),
+      isTrustedRendererUrl,
+    }),
+    registerValidatedIpc<undefined, SourcingStatus>({
+      channel: 'sourcing:retry',
+      requestSchema: null,
+      responseSchema: sourcingStatusSchema,
+      handler: () => provider.retry(),
       isTrustedRendererUrl,
     }),
     registerValidatedIpc<undefined, SourcingStatus>({

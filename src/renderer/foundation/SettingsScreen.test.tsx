@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AppHealth } from '../../shared/healthContract';
+import type { SourcingStatus } from '../../shared/contracts/sourcingContract';
 import type { DensityState } from '../app/useDensity';
 import type { ThemeState } from '../app/useTheme';
 import { SettingsScreen } from './SettingsScreen';
@@ -25,6 +26,15 @@ const health: AppHealth = {
   domainProjectionRefreshCandidateCount: 0,
   pendingProjectionRebuilds: 0,
   domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
+  operationalStatus: 'ready',
+  sourcing: {
+    status: 'healthy', reasons: [], lastSuccessAgeMs: null,
+    state: {
+      state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
+      consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null,
+      backlogCount: null,
+    },
+  },
 };
 
 const theme: ThemeState = {
@@ -106,6 +116,7 @@ describe('SettingsScreen', () => {
     expect(screen.getByText('Encrypted SQLite ready')).toBeTruthy();
     expect(screen.getByText('FTS5 available')).toBeTruthy();
     expect(screen.getByText('Schema 9')).toBeTruthy();
+    expect(screen.getByText('Operations ready')).toBeTruthy();
   });
 
   it('shows the database path in monospace with copy and reveal actions', async () => {
@@ -161,7 +172,7 @@ describe('SettingsScreen', () => {
 });
 
 describe('SourcingStatusRow', () => {
-  const sourcingStatus = {
+  const sourcingStatus: SourcingStatus = {
     lastPolledAt: '2026-08-31T15:00:00.000Z',
     lastKey: null as string | null,
     backlogCount: null as number | null,
@@ -170,16 +181,29 @@ describe('SourcingStatusRow', () => {
     },
     credentialState: 'keychain' as const,
     hmacSaltState: 'set' as const,
+    execution: {
+      state: 'idle' as const, pollId: null, startedAt: null,
+      lastCompletedAt: '2026-08-31T15:00:00.000Z', consecutiveFailures: 0,
+      lastFailureAt: null, lastFailureCode: null, backlogCount: 0,
+    },
+    health: {
+      status: 'healthy' as const, reasons: [], lastSuccessAgeMs: 0,
+      state: {
+        state: 'idle' as const, pollId: null, startedAt: null,
+        lastCompletedAt: '2026-08-31T15:00:00.000Z', consecutiveFailures: 0,
+        lastFailureAt: null, lastFailureCode: null, backlogCount: 0,
+      },
+    },
   };
 
   it('renders a success badge for keychain credentials with the counters', async () => {
     render(
       <SourcingStatusRow
-        api={{ status: vi.fn(async () => sourcingStatus) }}
+        api={{ status: vi.fn(async () => sourcingStatus), retry: vi.fn(async () => sourcingStatus) }}
       />,
     );
 
-    const badge = await screen.findByText(/^Sourcing inbox: keychain, last poll/);
+    const badge = await screen.findByText(/^Sourcing inbox: keychain, last success/);
     expect(badge.closest('.status-badge--success')).not.toBeNull();
     expect(screen.getByText('Imported')).toBeTruthy();
     expect(screen.getByText('Quarantined')).toBeTruthy();
@@ -191,6 +215,9 @@ describe('SourcingStatusRow', () => {
       <SourcingStatusRow
         api={{
           status: vi.fn(async () => ({
+            ...sourcingStatus, credentialState: 'file' as const,
+          })),
+          retry: vi.fn(async () => ({
             ...sourcingStatus, credentialState: 'file' as const,
           })),
         }}
@@ -208,11 +235,12 @@ describe('SourcingStatusRow', () => {
             credentialState: 'none' as const,
             lastPolledAt: null,
           })),
+          retry: vi.fn(async () => sourcingStatus),
         }}
       />,
     );
     const noneBadge = await screen.findByText(
-      /^Sourcing inbox: none, last poll never$/,
+      /^Sourcing inbox: none, last success/,
     );
     expect(noneBadge.closest('.status-badge--danger')).not.toBeNull();
   });
@@ -220,11 +248,46 @@ describe('SourcingStatusRow', () => {
   it('never blocks settings on a sourcing failure', async () => {
     render(
       <SourcingStatusRow
-        api={{ status: vi.fn(async () => { throw new Error('boom'); }) }}
+        api={{
+          status: vi.fn(async () => { throw new Error('boom'); }),
+          retry: vi.fn(async () => { throw new Error('boom'); }),
+        }}
       />,
     );
 
     expect(await screen.findByText('Sourcing inbox: unavailable')).toBeTruthy();
+  });
+
+  it('refreshes at a one-minute cadence and immediately after Retry', async () => {
+    const interval = vi.spyOn(globalThis, 'setInterval').mockImplementation(() => 1 as never);
+    vi.spyOn(globalThis, 'clearInterval').mockImplementation(() => undefined);
+    let resolveInitial!: (value: typeof sourcingStatus) => void;
+    const initial = new Promise<typeof sourcingStatus>((resolve) => {
+      resolveInitial = resolve;
+    });
+    const status = vi.fn()
+      .mockReturnValueOnce(initial)
+      .mockResolvedValue(sourcingStatus);
+    let resolveRetry!: (value: typeof sourcingStatus) => void;
+    const retry = vi.fn(() => new Promise<typeof sourcingStatus>((resolve) => {
+      resolveRetry = resolve;
+    }));
+    const api = { status, retry };
+    render(<SourcingStatusRow api={api} />);
+    expect(status).toHaveBeenCalledTimes(1);
+    expect(interval).toHaveBeenCalledWith(expect.any(Function), 60_000);
+    await act(async () => {
+      resolveInitial(sourcingStatus);
+      await initial;
+      await Promise.resolve();
+    });
+    await screen.findByText(/^Sourcing inbox: keychain, last success/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry sourcing poll' }));
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Retrying…' }).hasAttribute('disabled')).toBe(true);
+    resolveRetry(sourcingStatus);
+    await waitFor(() => expect(status).toHaveBeenCalledTimes(2));
   });
 });
 

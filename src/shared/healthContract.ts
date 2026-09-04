@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { sourcingPollHealthSchema } from './contracts/sourcingContract';
 
 const canonicalUtcTimestampSchema = z.string().regex(
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
@@ -20,6 +21,8 @@ export const appHealthSchema = z.object({
   domainProjectionRefreshCandidateCount: z.number().int().nonnegative(),
   pendingProjectionRebuilds: z.number().int().nonnegative(),
   domainStartupEvaluatedAt: canonicalUtcTimestampSchema,
-});
+  operationalStatus: z.enum(['ready', 'degraded']),
+  sourcing: sourcingPollHealthSchema,
+}).strict();
 
 export type AppHealth = z.infer<typeof appHealthSchema>;

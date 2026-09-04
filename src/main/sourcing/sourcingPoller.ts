@@ -36,7 +36,12 @@ import type { InboxBatch } from './inboxClient';
 import type { LoadedSourcingCredentials } from './sourcingCredentialStore';
 import type { UpstreamObjectStore, UpstreamSync } from './upstreamSync';
 import { buildNeedsIdentityIntakeCommand, mapCloudSourceEvent } from './intakeMapper';
-import { runWithAbortDeadline } from '../runtime/abortDeadline';
+import { RemoteOperationTimeoutError } from '../runtime/abortDeadline';
+import {
+  evaluatePollHealth,
+  type PollExecutionState,
+  type SourcingPollHealth,
+} from './pollExecutionState';
 
 /** The subset of the inbox client the poller drives; injected for tests. */
 export type PollableInbox = {
@@ -55,10 +60,23 @@ export type PollTimer = {
   schedule(callback: () => void): () => void;
 };
 
-export type SourcingPollerHealth = {
-  consecutiveFailures: number;
-  lastFailureAt: string | null;
+export type PollIdGenerator = {
+  next(): string;
 };
+
+export type WatchdogTimer = {
+  schedule(callback: () => void): () => void;
+};
+
+type OwnedPoll = {
+  pollId: string;
+  startedAt: string;
+  controller: AbortController;
+  promise: Promise<void>;
+};
+
+const POLL_CADENCE_MS = 15 * 60_000;
+const POLL_TOTAL_DEADLINE_MS = 14 * 60_000;
 
 export class SourcingPoller {
   private readonly domainGate: SourcingPollerDomainGate;
@@ -86,11 +104,18 @@ export class SourcingPoller {
   };
   private credentialState: SourcingCredentialState = 'none';
   private backlogCount: number | null = null;
-  private consecutiveFailures = 0;
-  private lastFailureAt: string | null = null;
-  private activePoll: Promise<void> | undefined;
+  private executionState: PollExecutionState = {
+    state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
+    consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null,
+    backlogCount: null,
+  };
+  private consecutiveBackloggedPolls = 0;
+  private activePoll: OwnedPoll | undefined;
   private disarmTimer: (() => void) | undefined;
+  private disarmWatchdog: (() => void) | undefined;
   private stopped = false;
+  private readonly pollIds: PollIdGenerator;
+  private readonly watchdogTimer: WatchdogTimer;
 
   constructor(input: {
     domainGate: SourcingPollerDomainGate;
@@ -113,6 +138,8 @@ export class SourcingPoller {
     };
     clock: Clock;
     log?: (message: string) => void;
+    pollIds?: PollIdGenerator;
+    watchdogTimer?: WatchdogTimer;
   }) {
     this.domainGate = input.domainGate;
     this.loadCredentials = input.loadCredentials;
@@ -120,6 +147,14 @@ export class SourcingPoller {
     this.upstream = input.upstream;
     this.clock = input.clock;
     this.log = input.log ?? (() => undefined);
+    this.pollIds = input.pollIds ?? { next: () => crypto.randomUUID() };
+    this.watchdogTimer = input.watchdogTimer ?? {
+      schedule: (callback) => {
+        const interval = setInterval(callback, 60_000);
+        interval.unref();
+        return () => clearInterval(interval);
+      },
+    };
   }
 
   /** Poll once at startup, then on every timer tick until stop(). */
@@ -127,6 +162,7 @@ export class SourcingPoller {
     this.disarmTimer = timer.schedule(() => {
       void this.pollNow();
     });
+    this.disarmWatchdog = this.watchdogTimer.schedule(() => this.runWatchdog());
     await this.pollNow();
   }
 
@@ -134,11 +170,14 @@ export class SourcingPoller {
     this.stopped = true;
     this.disarmTimer?.();
     this.disarmTimer = undefined;
+    this.disarmWatchdog?.();
+    this.disarmWatchdog = undefined;
+    this.activePoll?.controller.abort(new Error('SOURCING_POLLER_STOPPED'));
   }
 
   /** Awaits any in-flight poll; used by tests and shutdown. */
   async idle(): Promise<void> {
-    await this.activePoll?.catch((): undefined => undefined);
+    await this.activePoll?.promise.catch((): undefined => undefined);
   }
 
   /**
@@ -146,22 +185,20 @@ export class SourcingPoller {
    * Never rejects: failures are logged and counted.
    */
   pollNow(): Promise<void> {
-    if (this.activePoll !== undefined) {
-      return this.activePoll;
+    if (this.activePoll !== undefined) return this.activePoll.promise;
+    return this.startOwnedPoll().promise;
+  }
+
+  async retry(): Promise<void> {
+    const owned = this.activePoll;
+    if (owned !== undefined) {
+      if (!this.isExpired(owned)) return owned.promise;
+      owned.controller.abort(
+        new RemoteOperationTimeoutError('POLL_TOTAL_TIMEOUT', POLL_TOTAL_DEADLINE_MS),
+      );
+      await owned.promise;
     }
-    const poll = runWithAbortDeadline({
-      code: 'POLL_TOTAL_TIMEOUT',
-      timeoutMs: 14 * 60_000,
-      operation: (signal) => this.runPoll(signal),
-    })
-      .catch((error: unknown) => this.recordFailure(error))
-      .finally(() => {
-        if (this.activePoll === poll) {
-          this.activePoll = undefined;
-        }
-      });
-    this.activePoll = poll;
-    return poll;
+    await this.pollNow();
   }
 
   async getStatus(): Promise<SourcingStatus> {
@@ -191,14 +228,72 @@ export class SourcingPoller {
       counters: { ...this.counters },
       credentialState: this.credentialState,
       hmacSaltState,
+      execution: this.getExecutionState(),
+      health: this.getHealth(),
     };
   }
 
-  getHealth(): SourcingPollerHealth {
-    return {
-      consecutiveFailures: this.consecutiveFailures,
-      lastFailureAt: this.lastFailureAt,
-    };
+  getExecutionState(): PollExecutionState {
+    return { ...this.executionState, backlogCount: this.backlogCount };
+  }
+
+  getHealth(): SourcingPollHealth {
+    return evaluatePollHealth({
+      state: this.getExecutionState(),
+      credentialState: this.credentialState,
+      consecutiveBackloggedPolls: this.consecutiveBackloggedPolls,
+      nowMs: Date.parse(this.clock.now()),
+      cadenceMs: POLL_CADENCE_MS,
+      totalDeadlineMs: POLL_TOTAL_DEADLINE_MS,
+    });
+  }
+
+  private startOwnedPoll(): OwnedPoll {
+    const pollId = this.pollIds.next();
+    const startedAt = this.clock.now();
+    const controller = new AbortController();
+    let rejectAbort!: (reason: unknown) => void;
+    const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
+    const onAbort = (): void => rejectAbort(controller.signal.reason);
+    controller.signal.addEventListener('abort', onAbort, { once: true });
+    const deadline = setTimeout(() => {
+      controller.abort(
+        new RemoteOperationTimeoutError('POLL_TOTAL_TIMEOUT', POLL_TOTAL_DEADLINE_MS),
+      );
+    }, POLL_TOTAL_DEADLINE_MS);
+    deadline.unref();
+    const owned = { pollId, startedAt, controller } as OwnedPoll;
+    this.executionState = { ...this.executionState, state: 'running', pollId, startedAt };
+    owned.promise = Promise.race([this.runPoll(controller.signal), aborted])
+      .then((completed) => {
+        if (completed) this.recordSuccess(pollId);
+      })
+      .catch((error: unknown) => this.recordFailure(error, pollId))
+      .finally(() => {
+        clearTimeout(deadline);
+        controller.signal.removeEventListener('abort', onAbort);
+        if (this.activePoll?.pollId === pollId) {
+          this.activePoll = undefined;
+          this.executionState = {
+            ...this.executionState, state: 'idle', pollId: null, startedAt: null,
+          };
+        }
+      });
+    this.activePoll = owned;
+    return owned;
+  }
+
+  private runWatchdog(): void {
+    const owned = this.activePoll;
+    if (owned !== undefined && this.isExpired(owned)) {
+      owned.controller.abort(
+        new RemoteOperationTimeoutError('POLL_TOTAL_TIMEOUT', POLL_TOTAL_DEADLINE_MS),
+      );
+    }
+  }
+
+  private isExpired(owned: OwnedPoll): boolean {
+    return Date.parse(this.clock.now()) - Date.parse(owned.startedAt) > POLL_TOTAL_DEADLINE_MS;
   }
 
   /** Stores the founder-pasted membership HMAC salt (Task 4). */
@@ -209,15 +304,15 @@ export class SourcingPoller {
     await this.upstream.setSalt(salt);
   }
 
-  private async runPoll(signal: AbortSignal): Promise<void> {
-    if (this.stopped) return;
+  private async runPoll(signal: AbortSignal): Promise<boolean> {
+    if (this.stopped) return false;
 
     const loaded = await this.loadCredentials();
     signal.throwIfAborted();
     this.credentialState = loaded.source;
     if (loaded.credentials === null) {
       // Not provisioned: idle quietly, never an error.
-      return;
+      return false;
     }
 
     const inbox = await this.createInboxClient(loaded);
@@ -239,7 +334,7 @@ export class SourcingPoller {
     let firstFailure: unknown;
     let maxProcessedKey = cursor.lastKey;
     for (const key of keys) {
-      if (this.stopped) return;
+      if (this.stopped) return false;
       try {
         const batch = await inbox.fetchNdjson(key, signal);
         signal.throwIfAborted();
@@ -307,10 +402,11 @@ export class SourcingPoller {
         this.log(
           `sourcing upstream sync failed: ${error instanceof Error ? error.message : String(error)}`,
         );
+        throw error;
       }
     }
     signal.throwIfAborted();
-    this.consecutiveFailures = 0;
+    return true;
   }
 
   /**
@@ -409,9 +505,34 @@ export class SourcingPoller {
     }
   }
 
-  private recordFailure(error: unknown): void {
-    this.consecutiveFailures += 1;
-    this.lastFailureAt = this.clock.now();
+  private recordSuccess(pollId: string): void {
+    if (this.activePoll?.pollId !== pollId) return;
+    this.consecutiveBackloggedPolls = (this.backlogCount ?? 0) > 0
+      ? this.consecutiveBackloggedPolls + 1
+      : 0;
+    this.executionState = {
+      ...this.executionState,
+      lastCompletedAt: this.clock.now(),
+      consecutiveFailures: 0,
+      lastFailureCode: null,
+      backlogCount: this.backlogCount,
+    };
+  }
+
+  private recordFailure(error: unknown, pollId: string): void {
+    if (this.activePoll?.pollId !== pollId) return;
+    const code = error instanceof RemoteOperationTimeoutError
+      ? error.code
+      : error instanceof Error && /^[A-Z][A-Z0-9_]+$/.test(error.name)
+        ? error.name
+        : 'POLL_FAILED';
+    this.executionState = {
+      ...this.executionState,
+      consecutiveFailures: this.executionState.consecutiveFailures + 1,
+      lastFailureAt: this.clock.now(),
+      lastFailureCode: code,
+      backlogCount: this.backlogCount,
+    };
     const message = error instanceof Error ? error.message : String(error);
     this.log(`sourcing poll failed (failed files stay unledgered): ${message}`);
   }

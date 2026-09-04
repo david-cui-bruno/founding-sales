@@ -124,3 +124,30 @@ test('fixture inbox events import a lead and render its cloud score chip', async
     await rm(fixtureDirectory, { recursive: true, force: true });
   }
 });
+
+test('fixture-only hung poll degrades health and Retry recovers without overlap', async () => {
+  const fixtureDirectory = await mkdtemp(join(tmpdir(), 'callie-sourcing-hung-fixture-'));
+  await mkdir(join(fixtureDirectory, 'events'), { recursive: true });
+  const workspace = await launchFounderWorkspace({
+    env: {
+      CALLIE_SOURCING_FIXTURE_DIR: fixtureDirectory,
+      CALLIE_SOURCING_FIXTURE_HANG_ONCE: '1',
+    },
+  });
+
+  try {
+    const { page } = workspace;
+    const degraded = await page.evaluate(async () => window.callie.sourcing.pollNow());
+    expect(degraded.health.status).toBe('degraded');
+    expect(degraded.execution.lastFailureCode).toBe('POLL_TOTAL_TIMEOUT');
+    expect(degraded.execution.lastCompletedAt).toBeNull();
+
+    const recovered = await page.evaluate(async () => window.callie.sourcing.retry());
+    expect(recovered.health.status).toBe('healthy');
+    expect(recovered.execution.state).toBe('idle');
+    expect(recovered.execution.lastCompletedAt).not.toBeNull();
+  } finally {
+    await workspace.stop();
+    await rm(fixtureDirectory, { recursive: true, force: true });
+  }
+});

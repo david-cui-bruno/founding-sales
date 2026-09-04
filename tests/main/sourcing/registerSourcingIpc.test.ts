@@ -34,6 +34,19 @@ const status: SourcingStatus = {
   counters: { imported: 2, replayed: 0, needsIdentity: 1, scoreUpdates: 0, quarantined: 0 },
   credentialState: 'keychain',
   hmacSaltState: 'none',
+  execution: {
+    state: 'idle', pollId: null, startedAt: null,
+    lastCompletedAt: '2026-09-01T12:00:00.000Z', consecutiveFailures: 0,
+    lastFailureAt: null, lastFailureCode: null, backlogCount: 0,
+  },
+  health: {
+    status: 'healthy', reasons: [], lastSuccessAgeMs: 0,
+    state: {
+      state: 'idle', pollId: null, startedAt: null,
+      lastCompletedAt: '2026-09-01T12:00:00.000Z', consecutiveFailures: 0,
+      lastFailureAt: null, lastFailureCode: null, backlogCount: 0,
+    },
+  },
 };
 
 describe('registerSourcingIpc', () => {
@@ -45,27 +58,32 @@ describe('registerSourcingIpc', () => {
     provider = {
       pollNow: vi.fn(async () => status),
       status: vi.fn(async () => status),
+      retry: vi.fn(async () => status),
       setHmacSalt: vi.fn(async () => ({ ...status, hmacSaltState: 'set' as const })),
     };
     registerSourcingIpc(provider);
   });
 
-  it('registers exactly the three sourcing channels', () => {
+  it('registers exactly the four sourcing channels', () => {
     expect(electron.handle.mock.calls.map((call) => call[0]).sort()).toEqual([
       'sourcing:poll-now',
+      'sourcing:retry',
       'sourcing:set-hmac-salt',
       'sourcing:status',
     ]);
   });
 
-  it('serves status and pollNow with schema-validated responses', async () => {
+  it('serves status, pollNow, and Retry with schema-validated responses', async () => {
     const statusHandler = registeredIpcHandler(electron.handle, 'sourcing:status');
     const pollHandler = registeredIpcHandler(electron.handle, 'sourcing:poll-now');
+    const retryHandler = registeredIpcHandler(electron.handle, 'sourcing:retry');
 
     await expect(statusHandler(trustedEvent)).resolves.toEqual(status);
     await expect(pollHandler(trustedEvent)).resolves.toEqual(status);
+    await expect(retryHandler(trustedEvent)).resolves.toEqual(status);
     expect(provider.status).toHaveBeenCalledTimes(1);
     expect(provider.pollNow).toHaveBeenCalledTimes(1);
+    expect(provider.retry).toHaveBeenCalledTimes(1);
   });
 
   it('rejects untrusted senders and unexpected arguments', async () => {
@@ -105,6 +123,8 @@ describe('registerSourcingIpc', () => {
 
     expect(
       electron.removeHandler.mock.calls.map((call) => call[0]).sort(),
-    ).toEqual(['sourcing:poll-now', 'sourcing:set-hmac-salt', 'sourcing:status']);
+    ).toEqual([
+      'sourcing:poll-now', 'sourcing:retry', 'sourcing:set-hmac-salt', 'sourcing:status',
+    ]);
   });
 });

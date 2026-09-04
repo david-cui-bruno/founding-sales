@@ -45,6 +45,7 @@ import {
 import { safeStorage } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
+import { RemoteOperationTimeoutError } from './runtime/abortDeadline';
 
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   registerApplicationIpc(
@@ -164,6 +165,8 @@ function createProductionSourcingPoller(
   // it exists so the fixture-driven spec can exercise the full poll ->
   // intake -> score pipeline without credentials or network.
   const fixtureDirectory = process.env.CALLIE_SOURCING_FIXTURE_DIR ?? null;
+  let fixtureHangOnce = fixtureDirectory !== null
+    && process.env.CALLIE_SOURCING_FIXTURE_HANG_ONCE === '1';
   return new SourcingPoller({
     domainGate: runtime,
     loadCredentials: fixtureDirectory === null
@@ -178,7 +181,16 @@ function createProductionSourcingPoller(
         : await createS3InboxObjectStore({
           credentialProvider: async () => loaded.credentials,
         });
-      return new InboxClient({ store, clock: domainClock });
+      const client = new InboxClient({ store, clock: domainClock });
+      if (!fixtureHangOnce) return client;
+      return {
+        listNewObjects: async () => {
+          fixtureHangOnce = false;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          throw new RemoteOperationTimeoutError('POLL_TOTAL_TIMEOUT', 14 * 60_000);
+        },
+        fetchNdjson: (key, signal) => client.fetchNdjson(key, signal),
+      };
     },
     upstream: {
       sync: upstreamSync,
@@ -318,6 +330,10 @@ export async function startApplication(
           return startedPoller.getStatus();
         },
         status: () => startedPoller.getStatus(),
+        retry: async () => {
+          await startedPoller.retry();
+          return startedPoller.getStatus();
+        },
         setHmacSalt: async ({ salt }) => {
           await startedPoller.setHmacSalt(salt);
           return startedPoller.getStatus();

@@ -5,7 +5,7 @@ import { inspectDatabaseEncryption } from '../../db/databaseEncryption';
 import { DomainStartupFatalError } from './domainStartupTypes';
 
 export type DomainStorageReadiness = Readonly<{
-  schemaVersion: 12;
+  schemaVersion: 14;
   encrypted: true;
   cipherVersion: string;
   ftsAvailable: true;
@@ -21,7 +21,7 @@ export type DomainSchemaManifest = Readonly<{
 }>;
 
 /**
- * The canonical load-bearing schema-12 manifest. Reads the live catalog from
+ * The canonical load-bearing schema-14 manifest. Reads the live catalog from
  * sqlite_master with binary-name ordering; a missing, renamed, or extra
  * load-bearing object is fatal before composition.
  */
@@ -34,6 +34,7 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'cadence_enrollments',
     'cadence_steps',
     'cloud_entity_links',
+    'contact_compliance_audit_events',
     'consent_policy_records',
     'cycle_reactivation_receipts',
     'learning_evidence',
@@ -46,7 +47,10 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'opt_out_tombstones',
     'organization_aliases',
     'organizations',
+    'outbound_jurisdiction_audit_events',
+    'outbound_jurisdiction_clearances',
     'person_contact_methods',
+    'person_outbound_jurisdictions',
     'persons',
     'prioritization_evaluations',
     'prioritization_preference_events',
@@ -77,6 +81,7 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
   ]),
   indexes: Object.freeze([
     'activities_provider_idempotency_idx',
+    'contact_compliance_audit_contact_idx',
     'jobs_type_idempotency_idx',
     'learning_evidence_learning_idx',
     'one_active_cadence_per_cycle',
@@ -123,7 +128,7 @@ const appMetaSchema = z.object({
 export function assertDomainStorageReady(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
-  expectedSchemaVersion: 12;
+  expectedSchemaVersion: 14;
   expectedManifest: DomainSchemaManifest;
 }): DomainStorageReadiness {
   const { database } = input;
@@ -146,7 +151,7 @@ export function assertDomainStorageReady(input: {
   const metadata = appMetaSchema.safeParse(metadataRow);
   if (!metadata.success || metadata.data.schema_version !== input.expectedSchemaVersion) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace schema version is not exactly 12.',
+      'schema_not_ready', 'The workspace schema version is not exactly 14.',
     );
   }
 
@@ -220,7 +225,7 @@ export function assertDomainStorageReady(input: {
   }
 
   return Object.freeze({
-    schemaVersion: 12 as const,
+    schemaVersion: 14 as const,
     encrypted: true as const,
     cipherVersion: encryption.cipherVersion ?? 'unknown',
     ftsAvailable: true as const,
