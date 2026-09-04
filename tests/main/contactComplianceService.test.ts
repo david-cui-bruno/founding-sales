@@ -66,7 +66,7 @@ describe('ContactComplianceService', () => {
   let unitOfWork: DomainUnitOfWork;
   let identities: IdentityRepository;
   let service: ContactComplianceService;
-  const ids = ['person', 'contact', 'correction-audit'];
+  let ids: string[];
 
   beforeEach(async () => {
     temp = createTempDatabase();
@@ -74,6 +74,7 @@ describe('ContactComplianceService', () => {
     database = openDatabase({ path: temp.path, key });
     await migrateToLatest(database, { backupDirectory: `${temp.path}.backups`, workspaceKey: key });
     unitOfWork = new DomainUnitOfWork(database);
+    ids = ['person', 'contact', 'correction-audit'];
     identities = new IdentityRepository({
       database, unitOfWork, clock: { now: () => NOW },
       ids: { next: () => ids.shift() ?? 'unexpected-id' },
@@ -118,5 +119,29 @@ describe('ContactComplianceService', () => {
       operation: 'authoritative_correction', evidence_ref: 'case-42',
       policy_version: 'contact_compliance_correction_v1', resulting_reason_code: 'usable_clear',
     });
+  });
+
+  it('derives authoritative correction refusal from the contact read inside the transaction', () => {
+    const originalGet = identities.getContactMethod.bind(identities);
+    identities.getContactMethod = ((contactMethodId: string) => {
+      const contact = originalGet(contactMethodId);
+      if (contact === null) return null;
+      try {
+        unitOfWork.assertWriteScope();
+        return { ...contact, normalizedValue: '+12125550100' };
+      } catch {
+        return contact;
+      }
+    }) as IdentityRepository['getContactMethod'];
+
+    expect(() => service.correctAuthoritatively({
+      contactMethodId: 'contact', evidence: CLEAR, evidenceRef: 'case-transaction',
+      correctionReason: 'must validate against transactional contact', correctedAt: NOW,
+      policyVersion: 'contact_compliance_correction_v1',
+    })).toThrow('fully usable');
+    expect(database.raw.prepare(`
+      SELECT count(*) AS count FROM contact_compliance_audit_events
+      WHERE contact_method_id = ? AND operation = 'authoritative_correction'
+    `).get('contact')).toEqual({ count: 0 });
   });
 });

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../../src/main/db/database';
 import { migrateToLatest } from '../../../src/main/db/migrate';
 import { IdentityRepository } from '../../../src/main/domain/identity/identityRepository';
+import { ContactComplianceService } from '../../../src/main/domain/compliance/contactComplianceService';
 import { IntakeReceiptRepository } from '../../../src/main/domain/source/intakeReceiptRepository';
 import { SourceRepository } from '../../../src/main/domain/source/sourceRepository';
 import { segmentForChannel, SourceService } from '../../../src/main/domain/source/sourceService';
@@ -432,7 +433,13 @@ describe('idempotent replay through the real intake pipeline', () => {
     });
     const sources = new SourceRepository({ database, unitOfWork, clock });
     const receipts = new IntakeReceiptRepository({ database, unitOfWork, clock });
-    service = new SourceService({ database, unitOfWork, identities, sources, receipts });
+    const contactCompliance = new ContactComplianceService({
+      database, unitOfWork, identities, clock,
+      ids: { next: () => ids.shift() ?? 'compliance-audit' },
+    });
+    service = new SourceService({
+      database, unitOfWork, identities, sources, receipts, contactCompliance,
+    });
   });
 
   afterEach(() => {

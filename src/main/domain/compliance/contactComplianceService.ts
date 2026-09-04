@@ -109,20 +109,23 @@ export class ContactComplianceService {
 
   correctAuthoritatively(input: CorrectContactComplianceEvidenceInput): ContactMethod {
     const parsed = correctionSchema.parse(input);
-    const evaluation = this.identities.getContactMethod(parsed.contactMethodId);
-    if (evaluation === null) throw new Error('Contact method not found.');
-    if (evaluation.kind !== 'phone') throw new Error('Compliance correction requires a phone contact.');
-    const federal = evaluateFederalEvidence({
-      normalizedPhone: evaluation.normalizedValue,
-      evidence: parsed.evidence,
-      now: parsed.correctedAt,
-    });
-    if (federal.kind !== 'usable_clear') {
-      throw new Error('Authoritative correction evidence must be fully usable.');
-    }
     return this.unitOfWork.immediate(() => {
       const current = this.identities.getContactMethod(parsed.contactMethodId);
       if (current === null) throw new Error('Contact method not found.');
+      if (current.kind !== 'phone') {
+        throw new Error('Compliance correction requires a phone contact.');
+      }
+      const federal = evaluateFederalEvidence({
+        normalizedPhone: current.normalizedValue,
+        evidence: parsed.evidence,
+        now: parsed.correctedAt,
+      });
+      const resultingReasonCode = federal.kind === 'usable_clear'
+        ? 'usable_clear'
+        : federal.reasonCode;
+      if (federal.kind !== 'usable_clear') {
+        throw new Error('Authoritative correction evidence must be fully usable.');
+      }
       const updated = this.identities.updateContactComplianceEvidence({
         contactMethodId: current.id,
         expected: current.complianceEvidence,
@@ -139,7 +142,7 @@ export class ContactComplianceService {
         evidenceTimestamp: parsed.evidence.scrubbedAt,
         evidenceRef: parsed.evidenceRef,
         policyVersion: parsed.policyVersion,
-        resultingReasonCode: 'usable_clear',
+        resultingReasonCode,
         createdAt: parsed.correctedAt,
       });
       return updated;

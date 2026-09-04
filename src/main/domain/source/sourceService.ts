@@ -2,7 +2,6 @@ import { z } from 'zod';
 
 import type { AppDatabase } from '../../db/database';
 import { ContactComplianceService } from '../compliance/contactComplianceService';
-import { mergeContactComplianceEvidence } from '../compliance/contactCompliance';
 import {
   contactComplianceEvidenceSchema,
   type ContactComplianceEvidence,
@@ -396,7 +395,7 @@ export class SourceService {
   private readonly identities: IdentityRepository;
   private readonly sources: SourceRepository;
   private readonly receipts: IntakeReceiptRepository;
-  private readonly contactCompliance: ContactComplianceService | null;
+  private readonly contactCompliance: ContactComplianceService;
   private readonly faultInjector: ((point: IntakeFaultPoint) => void) | undefined;
 
   constructor(input: {
@@ -405,7 +404,7 @@ export class SourceService {
     identities: IdentityRepository;
     sources: SourceRepository;
     receipts: IntakeReceiptRepository;
-    contactCompliance?: ContactComplianceService;
+    contactCompliance: ContactComplianceService;
     faultInjector?: (point: IntakeFaultPoint) => void;
   }) {
     if (input.database.raw !== input.unitOfWork.database.raw) {
@@ -414,12 +413,12 @@ export class SourceService {
     input.identities.assertBoundTo(input.database, input.unitOfWork);
     input.sources.assertBoundTo(input.database, input.unitOfWork);
     input.receipts.assertBoundTo(input.database, input.unitOfWork);
-    input.contactCompliance?.assertBoundTo(input.database, input.unitOfWork);
+    input.contactCompliance.assertBoundTo(input.database, input.unitOfWork);
     this.unitOfWork = input.unitOfWork;
     this.identities = input.identities;
     this.sources = input.sources;
     this.receipts = input.receipts;
-    this.contactCompliance = input.contactCompliance ?? null;
+    this.contactCompliance = input.contactCompliance;
     this.faultInjector = input.faultInjector;
   }
 
@@ -596,16 +595,7 @@ export class SourceService {
         contact.kind, contact.normalizedValue,
       ).find((match) => match.person.id === personId)?.contactMethod;
       if (existing !== undefined) {
-        if (this.contactCompliance === null && existing.kind === 'phone') {
-          const merged = mergeContactComplianceEvidence({
-            current: existing.complianceEvidence,
-            incoming: contact.complianceEvidence,
-            normalizedPhone: existing.normalizedValue,
-            now: source.observedAt,
-          });
-          if (merged.changed) throw new Error('Contact compliance service is required for evidence changes.');
-        }
-        this.contactCompliance?.mergeFromIntake({
+        this.contactCompliance.mergeFromIntake({
           contactMethodId: existing.id,
           incoming: contact.complianceEvidence,
           evidenceRef: source.evidenceRef ?? null,

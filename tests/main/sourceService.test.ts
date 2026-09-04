@@ -272,6 +272,10 @@ describe('SourceService', () => {
         identities: otherIdentities,
         sources: otherSources,
         receipts: otherReceipts,
+        contactCompliance: new ContactComplianceService({
+          database: otherDatabase, unitOfWork: otherUnitOfWork, identities: otherIdentities,
+          clock: { now: () => NOW }, ids: { next: () => 'other-compliance-audit' },
+        }),
       });
       otherService.createPersonProspect(baseCommand('ghost-source'));
 
@@ -284,6 +288,10 @@ describe('SourceService', () => {
           database,
           unitOfWork,
           ...dependencies,
+          contactCompliance: new ContactComplianceService({
+            database, unitOfWork, identities,
+            clock: { now: () => NOW }, ids: { next: () => 'compliance-audit' },
+          }),
         })).toThrow(DomainRepositoryDatabaseMismatchError);
       }
       expect(counts()).toMatchObject({ persons: 0, source_intake_receipts: 0 });
@@ -317,6 +325,10 @@ describe('SourceService', () => {
         database,
         unitOfWork,
         ...dependencies,
+        contactCompliance: new ContactComplianceService({
+          database, unitOfWork, identities,
+          clock: { now: () => NOW }, ids: { next: () => 'compliance-audit' },
+        }),
       })).toThrow(DomainRepositoryDatabaseMismatchError);
     }
   });
@@ -1080,6 +1092,11 @@ describe('SourceService', () => {
           identities: isolatedIdentities,
           sources: isolatedSources,
           receipts: isolatedReceipts,
+          contactCompliance: new ContactComplianceService({
+            database: isolatedDatabase, unitOfWork: isolatedUnitOfWork,
+            identities: isolatedIdentities, clock: { now: () => NOW },
+            ids: { next: () => isolatedIds.shift() ?? 'isolated-compliance-audit' },
+          }),
         });
         const result = isolatedService.createPersonProspect(command);
         const receipt = isolatedReceipts.getBySourceEventId(result.sourceEventId);
@@ -1208,6 +1225,11 @@ describe('SourceService', () => {
           identities: isolatedIdentities,
           sources: isolatedSources,
           receipts: isolatedReceipts,
+          contactCompliance: new ContactComplianceService({
+            database: isolatedDatabase, unitOfWork: isolatedUnitOfWork,
+            identities: isolatedIdentities, clock: { now: () => NOW },
+            ids: { next: () => isolatedIds.shift() ?? 'isolated-compliance-audit' },
+          }),
         });
         const result = isolatedService.createPersonProspect(baseCommand(
           'canonical-contact-spellings',
