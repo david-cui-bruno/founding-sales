@@ -5,6 +5,12 @@ import {
   sanitizeErrorClass,
 } from '../../../src/main/logging/safeLogger';
 
+const FORBIDDEN_VALUES = [
+  'Ada Lovelace', '+1-401-555-0199', 'ada@example.com', '12 Main Street',
+  'Confidential subject', 'provider-secret-body', 'recovery phrase violet river',
+  'AKIAIOSFODNN7EXAMPLE', 'contact-hmac-value', 'oauth-token-value',
+];
+
 describe('createSafeLogger', () => {
   it('serializes only the exact operational allowlist', () => {
     const write = vi.fn();
@@ -59,11 +65,7 @@ describe('createSafeLogger', () => {
   it('omits names, phones, emails, addresses, subjects, provider payloads, recovery material, credentials, and nested objects', () => {
     const write = vi.fn();
     const logger = createSafeLogger({ now: () => '2026-09-04T00:00:00.000Z', write });
-    const forbidden = [
-      'Ada Lovelace', '+1-401-555-0199', 'ada@example.com', '12 Main Street',
-      'Confidential subject', 'provider-secret-body', 'recovery phrase violet river',
-      'AKIAIOSFODNN7EXAMPLE', 'contact-hmac-value', 'oauth-token-value',
-    ];
+    const forbidden = FORBIDDEN_VALUES;
 
     logger.log('error', 'SAFE_EVENT', {
       component: 'runtime',
@@ -101,6 +103,46 @@ describe('createSafeLogger', () => {
     expect(sanitizeErrorClass(hostile)).toBe('Error');
     expect(sanitizeErrorClass(new TypeError('private provider payload'))).toBe('TypeError');
     expect(sanitizeErrorClass('private recovery string')).toBe('UnknownError');
+  });
+
+  it('rejects invalid runtime levels and event codes', () => {
+    const write = vi.fn();
+    const logger = createSafeLogger({ write });
+
+    logger.log('trace' as never, 'SAFE_EVENT');
+    logger.log('info', 'ada@example.com');
+
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when forbidden values occupy eventCode or any allowed string field', () => {
+    const forbidden = FORBIDDEN_VALUES;
+    const stringFields = [
+      'component', 'requestId', 'pollId', 'objectKey', 'objectVersionId',
+      'objectEtag', 'objectChecksumSha256', 'status', 'errorClass',
+    ] as const;
+
+    for (const value of forbidden) {
+      const eventWrite = vi.fn();
+      createSafeLogger({ write: eventWrite }).log('info', value);
+      expect(eventWrite).not.toHaveBeenCalled();
+
+      for (const field of stringFields) {
+        const write = vi.fn();
+        createSafeLogger({ write }).log('info', 'SAFE_EVENT', { [field]: value });
+        const output = write.mock.calls[0]![0] as string;
+        expect(output).not.toContain(value);
+        expect(JSON.parse(output)).not.toHaveProperty(field);
+      }
+    }
+  });
+
+  it('maps every hostile Error.name to a fixed safe class', () => {
+    for (const name of FORBIDDEN_VALUES) {
+      const error = new Error('private');
+      error.name = name;
+      expect(sanitizeErrorClass(error)).toBe('Error');
+    }
   });
 
   it('does not let a retained sink failure escape into live operations', () => {

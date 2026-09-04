@@ -1,13 +1,15 @@
 import {
   closeSync,
+  chmodSync,
   constants,
   existsSync,
+  fchmodSync,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
-  statSync,
   unlinkSync,
   writeSync,
 } from 'node:fs';
@@ -21,9 +23,9 @@ export type FileLogSink = Readonly<{
   write(serializedEntry: string): void;
 }>;
 
-function assertPrivateDirectory(path: string, errorCode: string): void {
-  const metadata = statSync(path);
-  if (!metadata.isDirectory() || (metadata.mode & 0o077) !== 0) throw new Error(errorCode);
+function assertRealDirectory(path: string, errorCode: string): void {
+  const metadata = lstatSync(path);
+  if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw new Error(errorCode);
 }
 
 function pruneExpiredFiles(directoryPath: string, today: Date): void {
@@ -31,9 +33,18 @@ function pruneExpiredFiles(directoryPath: string, today: Date): void {
     today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - (RETENTION_DAYS - 1),
   ));
   const oldestDate = oldest.toISOString().slice(0, 10);
+  const todayDate = today.toISOString().slice(0, 10);
   for (const name of readdirSync(directoryPath)) {
     const match = DAILY_LOG.exec(name);
-    if (match !== null && match[1]! < oldestDate) unlinkSync(join(directoryPath, name));
+    if (match === null) continue;
+    const date = match[1]!;
+    let valid = false;
+    try {
+      valid = new Date(`${date}T00:00:00.000Z`).toISOString().slice(0, 10) === date;
+    } catch {
+      valid = false;
+    }
+    if (!valid || date < oldestDate || date > todayDate) unlinkSync(join(directoryPath, name));
   }
 }
 
@@ -41,8 +52,13 @@ export function createFileLogSink(input: {
   userDataPath: string;
   now?: () => Date;
   fsync?: (fileDescriptor: number) => void;
+  fstat?: (fileDescriptor: number) => { isFile(): boolean; mode: number };
 }): FileLogSink {
-  assertPrivateDirectory(input.userDataPath, 'LOG_PARENT_PERMISSIONS_UNSAFE');
+  const userDataMetadata = lstatSync(input.userDataPath);
+  if (userDataMetadata.isSymbolicLink()) throw new Error('LOG_PARENT_SYMLINK_REJECTED');
+  if (!userDataMetadata.isDirectory() || (userDataMetadata.mode & 0o077) !== 0) {
+    throw new Error('LOG_PARENT_PERMISSIONS_UNSAFE');
+  }
   const directoryPath = join(input.userDataPath, 'logs');
   if (existsSync(directoryPath)) {
     if (lstatSync(directoryPath).isSymbolicLink()) {
@@ -51,9 +67,11 @@ export function createFileLogSink(input: {
   } else {
     mkdirSync(directoryPath, { mode: 0o700 });
   }
-  assertPrivateDirectory(directoryPath, 'LOG_DIRECTORY_PERMISSIONS_UNSAFE');
+  assertRealDirectory(directoryPath, 'LOG_DIRECTORY_PERMISSIONS_UNSAFE');
+  chmodSync(directoryPath, 0o700);
   const now = input.now ?? (() => new Date());
   const durableSync = input.fsync ?? fsyncSync;
+  const descriptorStat = input.fstat ?? fstatSync;
 
   return {
     directoryPath,
@@ -61,14 +79,22 @@ export function createFileLogSink(input: {
       const current = now();
       pruneExpiredFiles(directoryPath, current);
       const path = join(directoryPath, `${current.toISOString().slice(0, 10)}.ndjson`);
+      if (existsSync(path)) {
+        const existing = lstatSync(path);
+        if (existing.isSymbolicLink() || !existing.isFile()) {
+          throw new Error('LOG_FILE_UNSAFE');
+        }
+        chmodSync(path, 0o600);
+      }
       const descriptor = openSync(
         path,
         constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW,
         0o600,
       );
       try {
-        const metadata = statSync(path);
-        if (!metadata.isFile() || (metadata.mode & 0o077) !== 0) {
+        fchmodSync(descriptor, 0o600);
+        const metadata = descriptorStat(descriptor);
+        if (!metadata.isFile() || (metadata.mode & 0o777) !== 0o600) {
           throw new Error('LOG_FILE_PERMISSIONS_UNSAFE');
         }
         writeSync(descriptor, `${serializedEntry}\n`, undefined, 'utf8');

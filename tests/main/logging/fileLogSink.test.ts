@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -52,6 +53,16 @@ describe('createFileLogSink', () => {
     expect(lstatSync(join(userDataPath, 'logs')).isSymbolicLink()).toBe(true);
   });
 
+  it('rejects a symlinked userData path', () => {
+    const parent = temporaryRoot();
+    const target = temporaryRoot();
+    const linkedUserData = join(parent, 'linked-user-data');
+    symlinkSync(target, linkedUserData);
+
+    expect(() => createFileLogSink({ userDataPath: linkedUserData }))
+      .toThrow('LOG_PARENT_SYMLINK_REJECTED');
+  });
+
   it('rejects group- or world-accessible parent permissions', () => {
     const userDataPath = temporaryRoot();
     chmodSync(userDataPath, 0o755);
@@ -74,6 +85,40 @@ describe('createFileLogSink', () => {
     expect(fsync.mock.calls[0]![0]).toEqual(expect.any(Number));
   });
 
+  it('normalizes pre-existing log directory and daily file modes exactly', () => {
+    const userDataPath = temporaryRoot();
+    const logs = join(userDataPath, 'logs');
+    mkdirSync(logs, { mode: 0o700 });
+    const logPath = join(logs, '2026-09-04.ndjson');
+    writeFileSync(logPath, '{}\n', { mode: 0o700 });
+    chmodSync(logs, 0o500);
+
+    const sink = createFileLogSink({ userDataPath, now: () => new Date('2026-09-04T12:00:00Z') });
+    sink.write('{"eventCode":"SAFE_EVENT"}');
+
+    expect(statSync(logs).mode & 0o777).toBe(0o700);
+    expect(statSync(logPath).mode & 0o777).toBe(0o600);
+  });
+
+  it('validates the opened descriptor before writing', () => {
+    const seen: number[] = [];
+    const userDataPath = temporaryRoot();
+    const sink = createFileLogSink({
+      userDataPath,
+      now: () => new Date('2026-09-04T12:00:00Z'),
+      fstat: (descriptor) => {
+        seen.push(descriptor);
+        return fstatSync(descriptor);
+      },
+      fsync: (descriptor) => seen.push(descriptor),
+    });
+
+    sink.write('{"eventCode":"SAFE_EVENT"}');
+
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toBe(seen[1]);
+  });
+
   it('retains today plus the preceding thirteen UTC daily files', () => {
     const userDataPath = temporaryRoot();
     const logs = join(userDataPath, 'logs');
@@ -89,5 +134,33 @@ describe('createFileLogSink', () => {
     expect(readdirSync(logs).sort()).toEqual([
       '2026-08-22.ndjson', '2026-09-03.ndjson', '2026-09-04.ndjson', 'keep-me.txt',
     ]);
+  });
+
+  it('removes future and calendar-invalid daily-pattern names', () => {
+    const userDataPath = temporaryRoot();
+    const logs = join(userDataPath, 'logs');
+    mkdirSync(logs, { mode: 0o700 });
+    for (const date of ['2026-09-05', '2026-02-30', '2026-13-01']) {
+      writeFileSync(join(logs, `${date}.ndjson`), '{}\n', { mode: 0o600 });
+    }
+
+    createFileLogSink({
+      userDataPath,
+      now: () => new Date('2026-09-04T12:00:00Z'),
+    }).write('{"eventCode":"SAFE_EVENT"}');
+
+    expect(readdirSync(logs)).toEqual(['2026-09-04.ndjson']);
+  });
+
+  it('enforces the window again after the clock rolls backward', () => {
+    const userDataPath = temporaryRoot();
+    let current = new Date('2026-09-04T12:00:00Z');
+    const sink = createFileLogSink({ userDataPath, now: () => current });
+    sink.write('{"eventCode":"FIRST"}');
+
+    current = new Date('2026-08-01T12:00:00Z');
+    sink.write('{"eventCode":"SECOND"}');
+
+    expect(readdirSync(join(userDataPath, 'logs'))).toEqual(['2026-08-01.ndjson']);
   });
 });
