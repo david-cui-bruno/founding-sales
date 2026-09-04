@@ -75,4 +75,42 @@ describe('contact compliance evidence', () => {
       now: NOW,
     })).toEqual({ kind: 'blocked', reasonCode });
   });
+
+  it.each([
+    ['missing scrub time', { ...CLEAR, scrubbedAt: null }, NOW],
+    ['future scrub time', { ...CLEAR, scrubbedAt: '2026-09-04T12:00:00.001Z' }, NOW],
+    ['malformed scrub time', { ...CLEAR, scrubbedAt: 'not-a-timestamp' }, NOW],
+    ['noncanonical scrub time', { ...CLEAR, scrubbedAt: '2026-08-20T08:00:00-04:00' }, NOW],
+    ['malformed expiration', { ...CLEAR, expiresAt: 'not-a-timestamp' }, NOW],
+    ['noncanonical expiration', { ...CLEAR, expiresAt: '2026-09-20T08:00:00-04:00' }, NOW],
+    ['malformed current time', CLEAR, 'not-a-timestamp'],
+    ['noncanonical current time', CLEAR, '2026-09-04T08:00:00-04:00'],
+    ['expiration before scrub time', {
+      ...CLEAR,
+      scrubbedAt: '2026-08-20T12:00:00.000Z',
+      expiresAt: '2026-08-19T12:00:00.000Z',
+    }, '2026-08-10T12:00:00.000Z'],
+    ['expiration over 31 days after scrub', {
+      ...CLEAR,
+      scrubbedAt: '2026-08-01T12:00:00.000Z',
+      expiresAt: '2026-09-02T12:00:00.000Z',
+    }, '2026-08-15T12:00:00.000Z'],
+  ] as const)('fails closed for %s without relying on schema parsing', (_label, evidence, now) => {
+    expect(evaluateFederalEvidence({
+      normalizedPhone: '+14015550100',
+      evidence: evidence as ContactComplianceEvidence,
+      now,
+    })).toEqual({ kind: 'blocked', reasonCode: 'federal_evidence_stale' });
+  });
+
+  it.each(['enrichment_vendor', 'legacy'] as const)(
+    'rejects non-authoritative %s verified-clear evidence inside the evaluator',
+    (source) => {
+      expect(evaluateFederalEvidence({
+        normalizedPhone: '+14015550100',
+        evidence: { ...CLEAR, source },
+        now: NOW,
+      })).toEqual({ kind: 'blocked', reasonCode: 'federal_status_unknown' });
+    },
+  );
 });

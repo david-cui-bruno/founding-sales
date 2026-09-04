@@ -1,6 +1,14 @@
 import type { ContactComplianceEvidence } from './contactComplianceTypes';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_EVIDENCE_LIFETIME_MS = 31 * DAY_MS;
+
+function canonicalTimestamp(value: string | null): number | null {
+  if (value === null) return null;
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime()) || timestamp.toISOString() !== value) return null;
+  return timestamp.getTime();
+}
 
 export function phoneAreaCode(normalizedPhone: string): string | null {
   const match = /^\+1(\d{3})\d{7}$/.exec(normalizedPhone);
@@ -51,7 +59,21 @@ export function evaluateFederalEvidence(input: {
   if (evidence.tcpaFlag === null) {
     return { kind: 'blocked', reasonCode: 'tcpa_status_unknown' };
   }
-  if (evidence.expiresAt === null || new Date(input.now).getTime() >= new Date(evidence.expiresAt).getTime()) {
+  if (evidence.source !== 'ftc_download' && evidence.source !== 'manual_import') {
+    return { kind: 'blocked', reasonCode: 'federal_status_unknown' };
+  }
+  const now = canonicalTimestamp(input.now);
+  const scrubbedAt = canonicalTimestamp(evidence.scrubbedAt);
+  const expiresAt = canonicalTimestamp(evidence.expiresAt);
+  if (
+    now === null
+    || scrubbedAt === null
+    || expiresAt === null
+    || scrubbedAt > now
+    || now >= expiresAt
+    || expiresAt < scrubbedAt
+    || expiresAt - scrubbedAt > MAX_EVIDENCE_LIFETIME_MS
+  ) {
     return { kind: 'blocked', reasonCode: 'federal_evidence_stale' };
   }
   if (evidence.coveredAreaCode === null || phoneAreaCode(input.normalizedPhone) !== evidence.coveredAreaCode) {

@@ -104,6 +104,14 @@ describe('IdentityRepository', () => {
       inContacts: false,
       dncListed: false,
       tcpaFlag: false,
+      complianceEvidence: {
+        federalStatus: 'unknown',
+        tcpaFlag: null,
+        coveredAreaCode: null,
+        source: 'legacy',
+        scrubbedAt: null,
+        expiresAt: null,
+      },
       createdAt: TIMESTAMP,
       updatedAt: TIMESTAMP,
     });

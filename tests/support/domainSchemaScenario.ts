@@ -24,6 +24,7 @@ const domainTables = [
   'cadence_enrollments',
   'cadence_steps',
   'consent_policy_records',
+  'contact_compliance_audit_events',
   'cycle_reactivation_receipts',
   'learning_evidence',
   'learnings',
@@ -61,6 +62,7 @@ const domainTables = [
 
 const requiredIndexes = [
   'activities_provider_idempotency_idx',
+  'contact_compliance_audit_contact_idx',
   'jobs_type_idempotency_idx',
   'learning_evidence_learning_idx',
   'one_active_cadence_per_cycle',
@@ -211,7 +213,7 @@ function runDatabaseScenario(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
         ).get(),
-        { schema_version: 12 },
+        { schema_version: 13 },
       );
       const actualTables = raw.prepare<string[], { name: string }>(`
         SELECT name FROM sqlite_master
