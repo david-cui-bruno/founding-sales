@@ -100,6 +100,17 @@ describe('startApplication', () => {
     };
   }
 
+  it('rejects a missing sourcing poller dependency before IPC registration', async () => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    delete (dependencies as Partial<ApplicationStartupDependencies>).createSourcingPoller;
+
+    await expect(startApplication({
+      appVersion: '1.0.0', userDataPath: '/tmp/callie-user-data', createWindow: () => undefined,
+    }, dependencies)).rejects.toThrow('Sourcing poller dependency is required.');
+    expect(events).not.toContain('ipc');
+  });
+
   it('requests the existing-workspace key and never replaces it when the envelope is unavailable', async () => {
     const events: string[] = [];
     const userDataPath = mkdtempSync(join(tmpdir(), 'callie-existing-key-'));

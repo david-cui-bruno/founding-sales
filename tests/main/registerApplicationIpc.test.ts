@@ -11,6 +11,7 @@ vi.mock('electron', () => ({
 import type { FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import type { AppHealth } from '../../src/shared/healthContract';
 import type { SourcingStatus } from '../../src/shared/contracts/sourcingContract';
+import type { SourcingProvider } from '../../src/main/sourcing/registerSourcingIpc';
 import {
   createConversationsProvider,
   createFridayProvider,
@@ -33,6 +34,29 @@ const fakeGate = (domain: Partial<FounderSalesDomain> = {}): Gate => ({
     operation(domain as FounderSalesDomain)) as Gate['withDomain'],
   getHealth: vi.fn(async () => ({})),
 });
+
+const explicitSourcingProvider = (): SourcingProvider => {
+  const status = {
+    lastPolledAt: null, lastKey: null, backlogCount: null,
+    counters: { imported: 0, replayed: 0, needsIdentity: 0, scoreUpdates: 0, quarantined: 0 },
+    credentialState: 'none', hmacSaltState: 'none',
+    execution: {
+      state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
+      consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null, backlogCount: null,
+    },
+    health: {
+      status: 'healthy', reasons: [], lastSuccessAgeMs: null,
+      state: {
+        state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
+        consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null, backlogCount: null,
+      },
+    },
+  } as SourcingStatus;
+  return {
+    pollNow: async () => status, retry: async () => status,
+    status: async () => status, setHmacSalt: async () => status,
+  };
+};
 
 describe('registerApplicationIpc', () => {
   const degradedHealth: AppHealth = {
@@ -83,7 +107,9 @@ describe('registerApplicationIpc', () => {
     const unregisters = Array.from({ length: 12 }, () => vi.fn());
     const { registrars, calls } = fakeRegistrars(unregisters);
 
-    const unregister = registerApplicationIpc(fakeGate(), undefined, registrars);
+    const unregister = registerApplicationIpc(
+      fakeGate(), undefined, registrars, explicitSourcingProvider(),
+    );
     expect(calls).toEqual([
       'health', 'leads', 'leadDetail', 'today',
       'pipeline', 'review', 'friday', 'imports',
@@ -104,7 +130,7 @@ describe('registerApplicationIpc', () => {
     ].map((name) => vi.fn(() => order.push(name)));
     const { registrars } = fakeRegistrars(unregisters);
 
-    registerApplicationIpc(fakeGate(), undefined, registrars)();
+    registerApplicationIpc(fakeGate(), undefined, registrars, explicitSourcingProvider())();
     expect(order).toEqual([
       'shell', 'sourcing', 'learnings', 'conversations',
       'imports', 'friday', 'review', 'pipeline',
@@ -117,7 +143,7 @@ describe('registerApplicationIpc', () => {
     const { registrars } = fakeRegistrars(unregisters);
     const trust = (url: string) => url.startsWith('app://');
 
-    registerApplicationIpc(fakeGate(), trust, registrars);
+    registerApplicationIpc(fakeGate(), trust, registrars, explicitSourcingProvider());
     for (const registrar of Object.values(registrars)) {
       expect(vi.mocked(registrar).mock.calls[0]![1]).toBe(trust);
     }
@@ -151,6 +177,16 @@ describe('registerApplicationIpc', () => {
     });
 
     await expect(registeredHealth?.getHealth()).resolves.toEqual(degradedHealth);
+  });
+
+  it('rejects a missing sourcing provider instead of registering a healthy fallback', () => {
+    const unregisters = Array.from({ length: 12 }, () => vi.fn());
+    const { registrars, calls } = fakeRegistrars(unregisters);
+
+    expect(() => registerApplicationIpc(
+      fakeGate(), undefined, registrars, undefined as never,
+    )).toThrow('Sourcing provider is required.');
+    expect(calls).toEqual([]);
   });
 
   it('routes every provider method through withDomain to the exact facade use case', async () => {

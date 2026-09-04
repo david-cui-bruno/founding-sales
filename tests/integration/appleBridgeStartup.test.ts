@@ -4,6 +4,8 @@ import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
 
 import type { AppDatabase } from '../../src/main/db/database';
 import type { AppleBridgeSupervisorApi } from '../../src/main/appleBridge/appleBridgeSupervisor';
+import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
+import type { SourcingPollHealth } from '../../src/shared/contracts/sourcingContract';
 import {
   startApplication,
   type ApplicationStartupDependencies,
@@ -36,6 +38,20 @@ const APPLE_OPTIONS: NonNullable<ApplicationStartupOptions['appleBridge']> = {
   parentExecutablePath: '/Applications/Callie.app/Contents/MacOS/Callie',
 };
 
+function explicitIdleSourcingPoller(): SourcingPoller {
+  return {
+    getHealth: (): SourcingPollHealth => ({
+      status: 'healthy', reasons: [], lastSuccessAgeMs: null,
+      state: {
+        state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
+        consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null, backlogCount: null,
+      },
+    }),
+    stop: (): void => undefined,
+    idle: async (): Promise<void> => undefined,
+  } as unknown as SourcingPoller;
+}
+
 function dependencies(
   events: string[],
   supervisor: AppleBridgeSupervisorApi,
@@ -65,6 +81,7 @@ function dependencies(
         getHealth: async () => ({ state: 'ok' }),
       };
     },
+    createSourcingPoller: explicitIdleSourcingPoller,
     registerApplicationIpc: () => {
       events.push('health-ipc:register');
       return () => events.push('health-ipc:unregister');

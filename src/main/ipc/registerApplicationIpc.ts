@@ -23,7 +23,6 @@ import type { LearningsProvider } from '../learnings/learningsService';
 import type { PipelineProvider } from '../pipeline/pipelineService';
 import type { ReviewProvider } from '../review/reviewService';
 import type { SourcingProvider } from '../sourcing/registerSourcingIpc';
-import type { SourcingStatus } from '../../shared/contracts/sourcingContract';
 import type { TodayProvider } from '../today/todayService';
 
 /**
@@ -211,12 +210,16 @@ export function createShellProvider(runtime: DomainGate): ShellProvider {
  */
 export function registerApplicationIpc(
   runtime: DomainGate,
-  isTrustedRendererUrl?: (url: string) => boolean,
-  registrars: FeatureRegistrars = defaultRegistrars,
-  sourcingProvider?: SourcingProvider,
+  isTrustedRendererUrl: ((url: string) => boolean) | undefined,
+  registrars: FeatureRegistrars | undefined,
+  sourcingProvider: SourcingProvider,
   shellProvider?: ShellProvider,
   enrichmentRequester?: EnrichmentRequester,
 ): () => void {
+  if (sourcingProvider === undefined) {
+    throw new Error('Sourcing provider is required.');
+  }
+  registrars ??= defaultRegistrars;
   const unregisters = [
     registrars.registerHealthIpc(runtime, isTrustedRendererUrl),
     registrars.registerLeadsIpc(createLeadsProvider(runtime), isTrustedRendererUrl),
@@ -241,7 +244,7 @@ export function registerApplicationIpc(
       isTrustedRendererUrl,
     ),
     registrars.registerSourcingIpc(
-      sourcingProvider ?? createIdleSourcingProvider(),
+      sourcingProvider,
       isTrustedRendererUrl,
     ),
     registrars.registerShellIpc(
@@ -263,39 +266,3 @@ export function registerApplicationIpc(
 }
 
 export type { FounderSalesDomain };
-
-/**
- * Fallback provider when no poller is wired (bare registrations in tests):
- * reports a permanently idle, unprovisioned sourcing surface.
- */
-function createIdleSourcingProvider(): SourcingProvider {
-  const idleStatus: SourcingStatus = {
-    lastPolledAt: null,
-    lastKey: null,
-    backlogCount: null,
-    counters: {
-      imported: 0, replayed: 0, needsIdentity: 0, scoreUpdates: 0, quarantined: 0,
-    },
-    credentialState: 'none',
-    hmacSaltState: 'none',
-    execution: {
-      state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
-      consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null,
-      backlogCount: null,
-    },
-    health: {
-      status: 'healthy', reasons: [], lastSuccessAgeMs: null,
-      state: {
-        state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
-        consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null,
-        backlogCount: null,
-      },
-    },
-  };
-  return {
-    pollNow: async () => idleStatus,
-    retry: async () => idleStatus,
-    status: async () => idleStatus,
-    setHmacSalt: async () => idleStatus,
-  };
-}

@@ -5,6 +5,8 @@ import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
 import type { AppleBridgeSupervisorApi } from '../../src/main/appleBridge/appleBridgeSupervisor';
 import type { HealthProvider } from '../../src/main/health/registerHealthIpc';
 import type { ApplicationStartupDependencies } from '../../src/main/startApplication';
+import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
+import type { SourcingPollHealth } from '../../src/shared/contracts/sourcingContract';
 
 const mocks = vi.hoisted(() => ({
   appOn: vi.fn(),
@@ -99,6 +101,21 @@ describe('main process startup', () => {
       subscribe: () => () => undefined,
       stop: async () => undefined,
     };
+  }
+
+  function explicitIdleSourcingPoller(): SourcingPoller {
+    return {
+      getHealth: (): SourcingPollHealth => ({
+        status: 'healthy', reasons: [], lastSuccessAgeMs: null,
+        state: {
+          state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
+          consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null, backlogCount: null,
+        },
+      }),
+      stop: (): void => undefined,
+      idle: async (): Promise<void> => undefined,
+      start: async (): Promise<void> => undefined,
+    } as unknown as SourcingPoller;
   }
 
   it('quits a second instance before readiness or database startup', async () => {
@@ -276,6 +293,7 @@ describe('main process startup', () => {
         events.push('health');
         return { getHealth: () => ({}) };
       },
+      createSourcingPoller: explicitIdleSourcingPoller,
       registerApplicationIpc: (provider: HealthProvider) => {
         events.push('ipc');
         healthProvider = provider;
@@ -349,6 +367,7 @@ describe('main process startup', () => {
         events.push('health');
         return { getHealth: () => ({}) };
       },
+      createSourcingPoller: explicitIdleSourcingPoller,
       registerApplicationIpc: () => {
         events.push('ipc');
         return () => events.push('unregister');

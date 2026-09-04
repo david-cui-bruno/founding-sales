@@ -49,9 +49,9 @@ import { WorkspaceKeyStore } from './security/workspaceKeyStore';
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   registerApplicationIpc(
     runtime: FoundationRuntime,
-    isTrustedRendererUrl?: (url: string) => boolean,
-    registrars?: undefined,
-    sourcingProvider?: SourcingProvider,
+    isTrustedRendererUrl: ((url: string) => boolean) | undefined,
+    registrars: undefined,
+    sourcingProvider: SourcingProvider,
     shellProvider?: undefined,
     enrichmentRequester?: EnrichmentRequester,
   ): () => void;
@@ -59,7 +59,7 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
     runtime: FoundationRuntime,
     userDataPath: string,
   ): EnrichmentRequester;
-  createSourcingPoller?(runtime: FoundationRuntime, userDataPath: string): SourcingPoller;
+  createSourcingPoller(runtime: FoundationRuntime, userDataPath: string): SourcingPoller;
   createAppleBridgeSupervisor(
     options: AppleBridgeSupervisorOptions,
   ): AppleBridgeSupervisorApi;
@@ -354,19 +354,23 @@ export async function startApplication(
     throwIfStartupCancelled(options.signal);
     await runtime.initialize();
     throwIfStartupCancelled(options.signal);
-    sourcingPoller = dependencies.createSourcingPoller?.(
+    if (typeof dependencies.createSourcingPoller !== 'function') {
+      throw new Error('Sourcing poller dependency is required.');
+    }
+    sourcingPoller = dependencies.createSourcingPoller(
       runtime,
       options.userDataPath,
     );
-    const startedPoller = sourcingPoller;
-    if (startedPoller !== undefined) {
-      runtime.setSourcingHealthProvider(() => startedPoller.getHealth());
+    if (sourcingPoller === undefined) {
+      throw new Error('Sourcing poller dependency is required.');
     }
+    const startedPoller = sourcingPoller;
+    runtime.setSourcingHealthProvider(() => startedPoller.getHealth());
     unregisterApplicationIpc = dependencies.registerApplicationIpc(
       runtime,
       options.isTrustedRendererUrl,
       undefined,
-      startedPoller === undefined ? undefined : {
+      {
         pollNow: async () => {
           await startedPoller.pollNow();
           return startedPoller.getStatus();

@@ -333,8 +333,8 @@ export class SourcingPoller {
     const allKeys = await inbox.listNewObjects(null, signal);
     signal.throwIfAborted();
     const keys = allKeys.filter((key) => !processedKeys.has(key));
-    const successfulBacklogSample = keys.length;
     this.backlogCount = keys.length;
+    const processedThisPoll = new Set<string>();
 
     let firstFailure: unknown;
     let maxProcessedKey = cursor.lastKey;
@@ -367,6 +367,7 @@ export class SourcingPoller {
         // shows freshness; it no longer gates which files are read.
         domain.recordSourcingPoll({ lastKey });
       });
+      processedThisPoll.add(key);
       signal.throwIfAborted();
       this.backlogCount = Math.max(0, this.backlogCount - 1);
     }
@@ -411,6 +412,12 @@ export class SourcingPoller {
       }
     }
     signal.throwIfAborted();
+    const finalKeys = await inbox.listNewObjects(null, signal);
+    signal.throwIfAborted();
+    const successfulBacklogSample = finalKeys.filter(
+      (key) => !processedKeys.has(key) && !processedThisPoll.has(key),
+    ).length;
+    this.backlogCount = successfulBacklogSample;
     return successfulBacklogSample;
   }
 

@@ -409,7 +409,7 @@ describe('SourcingPoller', () => {
     release?.();
     await Promise.all([firstPoll, secondPoll]);
 
-    expect(inbox.listNewObjects).toHaveBeenCalledTimes(1);
+    expect(inbox.listNewObjects).toHaveBeenCalledTimes(2);
   });
 
   it('polls on start and on the injected timer, and stop disarms it', async () => {
@@ -430,11 +430,11 @@ describe('SourcingPoller', () => {
     };
 
     await poller.start(timer);
-    expect(inbox.listNewObjects).toHaveBeenCalledTimes(1);
+    expect(inbox.listNewObjects).toHaveBeenCalledTimes(2);
 
     tick?.();
     await poller.idle();
-    expect(inbox.listNewObjects).toHaveBeenCalledTimes(2);
+    expect(inbox.listNewObjects).toHaveBeenCalledTimes(4);
 
     poller.stop();
     expect(tick).toBeUndefined();
@@ -617,7 +617,7 @@ describe('SourcingPoller remote deadlines', () => {
     release();
     await Promise.all([scheduled, retried]);
 
-    expect(inbox.listNewObjects).toHaveBeenCalledTimes(1);
+    expect(inbox.listNewObjects).toHaveBeenCalledTimes(2);
   });
 
   it('waits for expired-owner cleanup before starting exactly one replacement', async () => {
@@ -641,6 +641,7 @@ describe('SourcingPoller remote deadlines', () => {
           if (attempts === 2) {
             return new Promise<string[]>((resolve) => { resolveSecond = resolve; });
           }
+          if (attempts > 2) return [];
           return new Promise<string[]>((_resolve, reject) => {
             signal.addEventListener('abort', () => {
               events.push('abort:1');
@@ -718,9 +719,11 @@ describe('SourcingPoller remote deadlines', () => {
     expect(events).toEqual(['abort', 'cleanup']);
   });
 
-  it('tracks successful backlog samples across success, failure, reset, and recovery', async () => {
+  it('keeps ordinary polls healthy when every listed arrival drains by completion', async () => {
     const domain = fakeDomainGate();
-    let attempt = 0;
+    const first = 'events/first.ndjson';
+    const second = 'events/second.ndjson';
+    const responses = [[first], [first], [first, second], [first, second]];
     const poller = new SourcingPoller({
       domainGate: domain.gate,
       loadCredentials: async () => ({
@@ -728,29 +731,60 @@ describe('SourcingPoller remote deadlines', () => {
         source: 'keychain',
       }),
       createInboxClient: async () => ({
-        listNewObjects: async () => {
-          attempt += 1;
-          if (attempt === 3) throw new Error('intervening failure');
-          if (attempt === 6) return [];
-          return [`events/poll-${attempt}.ndjson`];
-        },
+        listNewObjects: async () => responses.shift() ?? [],
         fetchNdjson: async (key) => batch(key, []),
       }),
       clock: { now: () => NOW },
     });
 
     await poller.pollNow();
+    expect(poller.getExecutionState().backlogCount).toBe(0);
+    expect(poller.getHealth().reasons).not.toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
+    await poller.pollNow();
+    expect(responses).toEqual([]);
+    expect(poller.getHealth().reasons).not.toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
+  });
+
+  it('samples authoritative completion backlog and resets on failure and zero recovery', async () => {
+    const domain = fakeDomainGate();
+    const a = 'events/a.ndjson';
+    const b = 'events/b.ndjson';
+    const c = 'events/c.ndjson';
+    const responses = [[], [a], [a], [a], [b], [b], [c], [c], []];
+    let failFetch = true;
+    const poller = new SourcingPoller({
+      domainGate: domain.gate,
+      loadCredentials: async () => ({
+        credentials: { accessKeyId: 'AKIA', secretAccessKey: 'secret' },
+        source: 'keychain',
+      }),
+      createInboxClient: async () => ({
+        listNewObjects: async () => responses.shift() ?? [],
+        fetchNdjson: async (key) => {
+          if (key === a && failFetch) {
+            failFetch = false;
+            throw new Error('intervening failure');
+          }
+          return batch(key, []);
+        },
+      }),
+      clock: { now: () => NOW },
+    });
+
+    await poller.pollNow();
+    expect(poller.getExecutionState().backlogCount).toBe(1);
+    expect(poller.getHealth().reasons).not.toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
+    await poller.pollNow();
+    expect(poller.getExecutionState().consecutiveFailures).toBe(1);
+    expect(poller.getHealth().reasons).not.toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
+    await poller.pollNow();
     expect(poller.getHealth().reasons).not.toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
     await poller.pollNow();
     expect(poller.getHealth().reasons).toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
     await poller.pollNow();
+    expect(poller.getExecutionState().backlogCount).toBe(0);
     expect(poller.getHealth().reasons).not.toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
-    await poller.pollNow();
-    expect(poller.getHealth().reasons).not.toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
-    await poller.pollNow();
-    expect(poller.getHealth().reasons).toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
-    await poller.pollNow();
-    expect(poller.getHealth().reasons).not.toContain('BACKLOG_PERSISTED_ACROSS_POLLS');
+    expect(responses).toEqual([]);
   });
 
   it('bounds one total poll at 14 minutes, leaves the ledger unchanged, and permits recovery', async () => {
