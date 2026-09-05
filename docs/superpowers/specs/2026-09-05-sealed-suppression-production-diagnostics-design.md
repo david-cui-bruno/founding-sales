@@ -1,6 +1,6 @@
 # Sealed Suppression Production Diagnostics Design
 
-**Status:** Approved in chat, pending written-spec review
+**Status:** Approved
 
 **Date:** 2026-09-05
 
@@ -95,7 +95,7 @@ It owns:
 - the closed full-diagnostic serializer
 - fixed execution-mode-to-level mapping
 
-Its only module exports used by `handler.ts` are these atomic high-level operations:
+Its only module exports used by `handler.ts` are these three atomic high-level operations:
 
 ```ts
 iterateProductionIncrementalObjects(
@@ -104,6 +104,10 @@ iterateProductionIncrementalObjects(
 ): AsyncIterable<ValidatedSuppressionObject>
 
 loadProductionReplaySource(
+  bucket: string,
+): Promise<ProductionReplaySource>
+
+loadProductionReconciliationSource(
   bucket: string,
 ): Promise<ProductionReplaySource>
 ```
@@ -119,6 +123,7 @@ These contracts are binding:
 - Incremental selection applies the parsed `maxObjects` limit before fetching or validating bodies, preserving current semantics.
 - Incremental mode hard-codes full invalid diagnostics to `error` and fails after the first invalid selected object.
 - Replay mode hard-codes full invalid diagnostics to `warn`, records quarantine evidence, and continues.
+- Reconciliation mode hard-codes full invalid diagnostics to `warn` and fails closed after the first invalid object. It never converts an invalid object into a usable reconciliation source.
 - Every invalid production object is diagnosed exactly once before a fresh capability-free error or quarantine record leaves the module.
 
 No production descriptor input exists outside this module. A fabricated descriptor therefore cannot reach the private `GetObject` operation.
@@ -211,13 +216,22 @@ The deployed entry may still use ordinary dependencies for DynamoDB and report-w
 6. The core builds the deterministic source union, applies or dry-runs memberships, writes immutable evidence, and returns replay aggregates.
 7. Scheduled completion reports valid-object count and quarantine count.
 
-### 7.3 Capability-free injected paths
+### 7.3 Production reconciliation
+
+1. Parse and validate the explicit reconciliation event and report key before starting acquisition.
+2. The sealed reconciliation loader lists, fetches, hashes, and validates every retained version with an internally fixed `warn` diagnostic level.
+3. An invalid version emits exactly one full `warn` diagnostic, then the loader fails closed without returning a source.
+4. When every version is valid, the ordinary source is passed to the shared reconciliation core.
+5. The core preserves the existing missing and unexpected membership report semantics.
+
+### 7.4 Capability-free injected paths
 
 1. Tests or pure callers supply a capability-free source.
 2. Invalid reads expose ordinary validation errors without authorized object metadata.
 3. Incremental emits one aggregate `error` diagnostic and fails closed.
 4. Replay emits one aggregate `warn` diagnostic, quarantines the object, and continues.
-5. No key, version ID, ETag, checksum, row body, contact HMAC, or PII can enter the aggregate record.
+5. Reconciliation emits one aggregate `warn` diagnostic and fails closed on an invalid object.
+6. No key, version ID, ETag, checksum, row body, contact HMAC, or PII can enter the aggregate record.
 
 ## 8. Error handling
 
@@ -270,14 +284,21 @@ Using an SDK-level mock of the module-private S3 client:
 3. No `error`-level or aggregate duplicate diagnostic is emitted for that object.
 4. Valid and quarantined counts retain existing replay semantics.
 
-### 10.4 Capability-free injected tests
+### 10.4 Production reconciliation tests
+
+1. An invalid retained version emits exactly one full `warn` diagnostic and fails closed.
+2. No capability-free aggregate duplicate is emitted.
+3. A fully valid source preserves existing missing and unexpected membership counts.
+
+### 10.5 Capability-free injected tests
 
 1. Incremental fake-source validation failure emits exactly one aggregate `error` diagnostic and no full metadata.
 2. Replay fake-source validation failure emits exactly one aggregate `warn` diagnostic, quarantines, and continues.
-3. Structural S3 test dependencies remain capability-free and satisfy the same aggregate-only rules.
-4. A fake cannot opt out of aggregate logging through a marker, claimed ownership property, or source brand.
+3. Reconciliation fake-source validation failure emits exactly one aggregate `warn` diagnostic and fails closed.
+4. Structural S3 test dependencies remain capability-free and satisfy the same aggregate-only rules.
+5. A fake cannot opt out of aggregate logging through a marker, claimed ownership property, or source brand.
 
-### 10.5 Regression gate
+### 10.6 Regression gate
 
 Run with the exact Node 24 prefix required by the parent plan:
 
@@ -303,7 +324,7 @@ The redesign is complete only when an independent reviewer verifies all of the f
 
 1. Production list and read cannot be intercepted separately.
 2. Production diagnostic level is internal and mode-derived.
-3. Incremental and replay production invalid objects each produce exactly one full diagnostic at the correct level.
-4. Capability-free fake invalid objects each produce exactly one aggregate-only diagnostic.
+3. Incremental, replay, and reconciliation production invalid objects each produce exactly one full diagnostic at the correct mode-derived level.
+4. Capability-free incremental, replay, and reconciliation invalid objects each produce exactly one aggregate-only diagnostic with the required fail-or-quarantine behavior.
 5. No new Critical or Important logging, outward-error, replay, reconciliation, or scheduled-completion regression exists.
 6. The fresh Node 24 regression gate passes.
