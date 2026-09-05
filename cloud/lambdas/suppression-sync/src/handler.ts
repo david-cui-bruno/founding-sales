@@ -1,9 +1,8 @@
 /**
  * Suppression-sync Lambda handler (EventBridge-invoked only when enabled).
  *
- * Incremental mode fails closed on invalid objects. Explicit replay mode parses
- * all retained versions, quarantines invalid history, applies the deterministic
- * source union, reconciles membership, and writes immutable private evidence.
+ * Production acquisition is sealed inside atomic mode-specific workflows.
+ * Exported handler seams accept only capability-free object sources.
  *
  * Logging never includes row bodies, contact HMACs, or other contact data.
  */
@@ -12,24 +11,40 @@ import { S3Client } from "@aws-sdk/client-s3";
 import { SafeHandlerError, ulid } from "@callie-sourcing/shared";
 import { log } from "./log";
 import {
+  iterateProductionIncrementalObjects,
+  loadProductionReconciliationSource,
+  loadProductionReplaySource,
+} from "./productionSuppressionWorkflow";
+import {
   assertReportKey,
   ledgerHas,
   ledgerMark,
   listUploadObjects,
+  persistSuppressionMonotonically,
   readValidatedObject,
   runReconciliation,
+  runReconciliationFromLoadedSource,
   runReplay,
-  persistSuppressionMonotonically,
+  runReplayFromLoadedSource,
   type HandlerDeps,
+  type ProductionHandlerDeps,
   type SuppressionReplayResult,
   type SuppressionSyncEvent,
 } from "./replay";
-import { productionSuppressionObjectSource, SuppressionObjectValidationError } from "./suppressionObject";
+import {
+  SuppressionObjectValidationError,
+  type ValidatedSuppressionObject,
+} from "./suppressionObject";
 
 export {
   REPORTS_PREFIX,
   UPLOADS_PREFIX,
+  type CapabilityFreeSuppressionObjectSource,
   type HandlerDeps,
+  type ProductionHandlerDeps,
+  type ProductionReplaySource,
+  type ReplayEvidenceObject,
+  type ReplayQuarantineEntry,
   type SuppressionReplayReport,
   type SuppressionReplayResult,
   type SuppressionSyncEvent,
@@ -41,7 +56,7 @@ function envOrThrow(name: string): string {
   return value;
 }
 
-function defaultDeps(): HandlerDeps {
+function defaultDeps(): ProductionHandlerDeps {
   return {
     s3: new S3Client({}),
     dynamo: new DynamoDBClient({}),
@@ -50,7 +65,6 @@ function defaultDeps(): HandlerDeps {
       SNAPSHOTS_TABLE: envOrThrow("SNAPSHOTS_TABLE"),
       SUPPRESSION_TABLE: envOrThrow("SUPPRESSION_TABLE"),
     },
-    objectSource: productionSuppressionObjectSource,
   };
 }
 
@@ -122,41 +136,25 @@ export interface HandlerResult {
   invalidLines: number;
 }
 
-async function runIncremental(
+async function processIncrementalObjects(
   deps: HandlerDeps,
-  event: Extract<SuppressionSyncEvent, { mode?: "incremental" }>,
+  objects: AsyncIterable<ValidatedSuppressionObject>,
   now: Date,
 ): Promise<HandlerResult> {
-  const allObjects = await listUploadObjects(deps);
-  const objects =
-    typeof event.maxObjects === "number"
-      ? allObjects.slice(0, event.maxObjects)
-      : allObjects;
-
   const result: HandlerResult = {
-    filesSeen: objects.length,
+    filesSeen: 0,
     filesProcessed: 0,
     filesSkipped: 0,
     linesWritten: 0,
     invalidLines: 0,
   };
 
-  for (const descriptor of objects) {
-    let object;
-    try {
-      object = await readValidatedObject(deps, descriptor, "error");
-    } catch (error) {
-      if (error instanceof SuppressionObjectValidationError) {
-        if (!deps.objectSource) log("error", "suppression_object_invalid_aggregate", { invalid_line_numbers: error.invalidLineNumbers, invalid_line_count: error.invalidLineNumbers.length });
-      }
-      throw error;
-    }
-
+  for await (const object of objects) {
+    result.filesSeen += 1;
     if (await ledgerHas(deps, object)) {
       result.filesSkipped += 1;
       continue;
     }
-
     for (const line of object.lines) {
       if (await persistSuppressionMonotonically(deps, line, now)) {
         result.linesWritten += 1;
@@ -167,6 +165,29 @@ async function runIncremental(
   }
 
   return result;
+}
+
+async function* iterateCapabilityFreeIncrementalObjects(
+  deps: HandlerDeps,
+  maxObjects?: number,
+): AsyncIterable<ValidatedSuppressionObject> {
+  const descriptors = await listUploadObjects(deps);
+  const selected = maxObjects === undefined
+    ? descriptors
+    : descriptors.slice(0, maxObjects);
+  for (const descriptor of selected) {
+    try {
+      yield await readValidatedObject(deps, descriptor);
+    } catch (error) {
+      if (error instanceof SuppressionObjectValidationError) {
+        log("error", "suppression_object_invalid_aggregate", {
+          invalid_line_numbers: error.invalidLineNumbers,
+          invalid_line_count: error.invalidLineNumbers.length,
+        });
+      }
+      throw error;
+    }
+  }
 }
 
 export function runHandler(
@@ -199,48 +220,121 @@ export async function runHandler(
   if (parsedEvent.mode === "reconcile") {
     return runReconciliation(deps, { reportKey: parsedEvent.reportKey, now });
   }
-  return runIncremental(deps, parsedEvent, now);
+  return processIncrementalObjects(
+    deps,
+    iterateCapabilityFreeIncrementalObjects(deps, parsedEvent.maxObjects),
+    now,
+  );
+}
+
+async function runProductionHandler(
+  deps: ProductionHandlerDeps,
+  event: unknown = {},
+): Promise<HandlerResult | SuppressionReplayResult> {
+  const parsedEvent = parseSuppressionSyncEvent(event);
+  const now = deps.now ? deps.now() : new Date();
+  const runId = deps.runId ? deps.runId(now.getTime()) : ulid(now.getTime());
+
+  if (parsedEvent.mode === "replay") {
+    const source = await loadProductionReplaySource(deps.env.INBOX_BUCKET);
+    return runReplayFromLoadedSource(deps, {
+      dryRun: parsedEvent.dryRun,
+      now,
+      runId,
+    }, source);
+  }
+  if (parsedEvent.mode === "reconcile") {
+    const source = await loadProductionReconciliationSource(
+      deps.env.INBOX_BUCKET,
+    );
+    return runReconciliationFromLoadedSource(deps, {
+      reportKey: parsedEvent.reportKey,
+      now,
+    }, source);
+  }
+  return processIncrementalObjects(
+    deps,
+    iterateProductionIncrementalObjects(
+      deps.env.INBOX_BUCKET,
+      parsedEvent.maxObjects,
+    ),
+    now,
+  );
+}
+
+function logScheduledCompletion(
+  result: HandlerResult | SuppressionReplayResult | undefined,
+  event: unknown,
+  durationMs: number,
+): void {
+  const incremental = result && "filesSeen" in result ? result : undefined;
+  const maintenance = result && "report" in result ? result.report : undefined;
+  if (maintenance) {
+    const reconcile = typeof event === "object" &&
+      event !== null &&
+      (event as { mode?: unknown }).mode === "reconcile";
+    log("info", "suppression_scheduled_maintenance_run", {
+      count: maintenance.objectsValid,
+      unprocessed_count: reconcile
+        ? maintenance.missingMemberships
+        : maintenance.objectsQuarantined,
+      durationMs,
+    });
+    return;
+  }
+  log("info", "suppression_sync_run", {
+    files_seen: incremental?.filesSeen ?? 0,
+    files_processed: incremental?.filesProcessed ?? 0,
+    files_skipped: incremental?.filesSkipped ?? 0,
+    lines_written: incremental?.linesWritten ?? 0,
+    invalid_lines: incremental?.invalidLines ?? 0,
+    durationMs,
+  });
+}
+
+function createSafeInvocation(
+  run: (event: unknown) => Promise<HandlerResult | SuppressionReplayResult>,
+  monotonicNow: () => number,
+): (event?: unknown) => Promise<HandlerResult | SuppressionReplayResult> {
+  return async (event = {}) => {
+    const startedAt = monotonicNow();
+    let result: HandlerResult | SuppressionReplayResult | undefined;
+    try {
+      result = await run(event);
+      return result;
+    } catch {
+      throw new SafeHandlerError();
+    } finally {
+      logScheduledCompletion(
+        result,
+        event,
+        Math.max(0, Math.round(monotonicNow() - startedAt)),
+      );
+    }
+  };
 }
 
 export function createHandler(
   depsFactory: () => HandlerDeps,
   monotonicNow: () => number = () => performance.now(),
 ): (event?: unknown) => Promise<HandlerResult | SuppressionReplayResult> {
-  return async (event = {}) => {
-    const startedAt = monotonicNow();
-    let result: HandlerResult | SuppressionReplayResult | undefined;
-    try {
-      const deps = depsFactory();
-      result = await runHandler(deps, event);
-      return result;
-    } catch {
-      throw new SafeHandlerError();
-    } finally {
-      const durationMs = Math.max(0, Math.round(monotonicNow() - startedAt));
-      const incremental = result && "filesSeen" in result ? result : undefined;
-      const maintenance = result && "report" in result ? result.report : undefined;
-      if (maintenance) {
-        const reconcile = typeof event === "object" && event !== null && (event as { mode?: unknown }).mode === "reconcile";
-        log("info", "suppression_scheduled_maintenance_run", {
-          count: maintenance.objectsValid,
-          unprocessed_count: reconcile ? maintenance.missingMemberships : maintenance.objectsQuarantined,
-          durationMs,
-        });
-      } else {
-        log("info", "suppression_sync_run", {
-          files_seen: incremental?.filesSeen ?? 0,
-          files_processed: incremental?.filesProcessed ?? 0,
-          files_skipped: incremental?.filesSkipped ?? 0,
-          lines_written: incremental?.linesWritten ?? 0,
-          invalid_lines: incremental?.invalidLines ?? 0,
-          durationMs,
-        });
-      }
-    }
-  };
+  return createSafeInvocation(
+    (event) => runHandler(depsFactory(), event),
+    monotonicNow,
+  );
 }
 
-const productionHandler = createHandler(defaultDeps);
+export function createProductionHandler(
+  depsFactory: () => ProductionHandlerDeps,
+  monotonicNow: () => number = () => performance.now(),
+): (event?: unknown) => Promise<HandlerResult | SuppressionReplayResult> {
+  return createSafeInvocation(
+    (event) => runProductionHandler(depsFactory(), event),
+    monotonicNow,
+  );
+}
+
+const productionHandler = createProductionHandler(defaultDeps);
 
 export async function handler(
   event: unknown = {},

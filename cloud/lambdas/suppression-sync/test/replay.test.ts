@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   runHandler,
   UPLOADS_PREFIX,
@@ -316,6 +316,58 @@ function suppressionItem(input: {
 }
 
 describe("suppression historical replay", () => {
+  it("does not let arbitrary injected source properties suppress aggregate diagnostics", async () => {
+    const descriptor = {
+      bucket: "inbox",
+      key: `${UPLOADS_PREFIX}injected-invalid.ndjson`,
+      versionId: "injected-version",
+      etag: "injected-etag",
+      lastModified: NOW.toISOString(),
+    } as const;
+    const deps = fakeDeps(state());
+    deps.capabilityFreeObjectSource = Object.assign({
+      list: async () => [descriptor],
+      read: async () => {
+        throw new SuppressionObjectValidationError({
+          key: descriptor.key,
+          versionId: descriptor.versionId,
+          invalidLineNumbers: [1],
+          checksumSha256: "f".repeat(64),
+        });
+      },
+    }, {
+      ownsDiagnostics: true,
+      sourceKind: "production",
+    });
+    const output: string[] = [];
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => {
+      output.push(String(value));
+    });
+
+    try {
+      const replay = replayResult(
+        await runHandler(deps, { mode: "replay", dryRun: true }),
+      );
+      expect(replay.report.objectsQuarantined).toBe(1);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+
+    const invalid = output
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((record) => record.eventCode === "SUPPRESSION_OBJECT_INVALID");
+    expect(invalid).toHaveLength(1);
+    expect(invalid[0]).toMatchObject({
+      level: "warn",
+      invalidLineNumbers: [1],
+      invalidLineCount: 1,
+    });
+    expect(invalid[0]).not.toHaveProperty("objectKey");
+    expect(invalid[0]).not.toHaveProperty("objectVersionId");
+    expect(invalid[0]).not.toHaveProperty("objectEtag");
+    expect(invalid[0]).not.toHaveProperty("objectChecksumSha256");
+  });
+
   it("replays every retained version in deterministic version order", async () => {
     const s = state([
       objectVersion({

@@ -8,14 +8,16 @@ vi.mock("@aws-sdk/client-s3", async (importOriginal) => {
 });
 import {
   createHandler,
+  createProductionHandler,
   REPORTS_PREFIX,
   runHandler,
   UPLOADS_PREFIX,
+  type CapabilityFreeSuppressionObjectSource,
   type HandlerDeps,
+  type ProductionHandlerDeps,
   type SuppressionReplayResult,
 } from "../src/handler";
-import * as suppressionObjects from "../src/suppressionObject";
-import { parseAndValidateSuppressionObject, productionSuppressionObjectSource, SuppressionObjectValidationError } from "../src/suppressionObject";
+import { parseAndValidateSuppressionObject, SuppressionObjectValidationError } from "../src/suppressionObject";
 
 const NOW = new Date("2026-09-04T12:00:00.000Z");
 
@@ -719,65 +721,200 @@ describe("exported handler boundary", () => {
     });
     expect(parsed).not.toHaveProperty("logMetadata");
   });
-  it("exports no fabricated-response issuer or reusable invalid-log policy consumer", async () => {
-    expect(suppressionObjects).not.toHaveProperty("listSuppressionObjectsFromS3");
-    expect(suppressionObjects).not.toHaveProperty("readValidatedSuppressionObjectFromS3");
-    expect(suppressionObjects).not.toHaveProperty("suppressionLogPolicy");
-    expect(suppressionObjects).not.toHaveProperty("suppressionObjectLogReaders");
-    expect(suppressionObjects).not.toHaveProperty("logSuppressionObjectDiagnostic");
-    expect(Object.keys(productionSuppressionObjectSource).sort()).toEqual(["list", "read"]);
-    await expect(productionSuppressionObjectSource.read({
-      bucket: "caller-controlled",
-      key: "private-person.ndjson",
-      versionId: "secret-token",
-      etag: "b".repeat(32),
-      lastModified: NOW.toISOString(),
-    })).rejects.toThrow("suppression object was not issued by the production list source");
-  });
-  it.each([
-    { mode: "incremental" as const, level: "error", event: { mode: "incremental" } },
-    { mode: "replay" as const, level: "warn", event: { mode: "replay", dryRun: true } },
-  ])("atomically owns the full production $mode diagnostic before wrappers see failure", async ({ level, event }) => {
-    const key = `${UPLOADS_PREFIX}private-person.ndjson`;
-    const versionId = "production-version";
-    const etag = "production-etag";
-    const body = "private@example.test";
-    productionS3Send.mockImplementation(async (command: unknown) => {
-      const name = (command as { constructor: { name: string } }).constructor.name;
-      if (name === "ListObjectVersionsCommand") return { Versions: [{ Key: key, VersionId: versionId, ETag: etag, LastModified: NOW }], IsTruncated: false };
-      if (name === "GetObjectCommand") return { Body: { transformToString: async () => body } };
-      throw new Error(`unexpected production command ${name}`);
+  const descriptor = {
+    bucket: "inbox",
+    key: `${UPLOADS_PREFIX}private-person.ndjson`,
+    versionId: "injected-version",
+    etag: "injected-etag",
+    lastModified: NOW.toISOString(),
+  } as const;
+  const capabilityFreeObjectSource: CapabilityFreeSuppressionObjectSource = {
+    list: async () => [descriptor],
+    read: async () => {
+      throw new SuppressionObjectValidationError({
+        key: descriptor.key,
+        versionId: descriptor.versionId,
+        invalidLineNumbers: [1],
+        checksumSha256: "f".repeat(64),
+      });
+    },
+  };
+
+  function invalidRecords(output: readonly string[]): Array<Record<string, unknown>> {
+    return output
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((record) => record.eventCode === "SUPPRESSION_OBJECT_INVALID");
+  }
+
+  function expectAggregateOnly(record: Record<string, unknown>, level: "error" | "warn"): void {
+    expect(record).toMatchObject({
+      level,
+      invalidLineNumbers: [1],
+      invalidLineCount: 1,
     });
-    const base = productionSuppressionObjectSource;
-    const wrappedSource = {
-      list: (...args: Parameters<typeof base.list>) => base.list(...args),
-      read: async (...args: Parameters<typeof base.read>) => {
-        try { return await base.read(...args); }
-        catch (error) {
-          expect(error).toBeInstanceOf(SuppressionObjectValidationError);
-          expect(error).not.toHaveProperty("logMetadata");
-          const failure = error as SuppressionObjectValidationError;
-          return parseAndValidateSuppressionObject({
-            descriptor: { bucket: "inbox", key: failure.key, versionId: failure.versionId, etag, lastModified: NOW.toISOString() },
-            text: bodyFor("a"),
-          });
-        }
-      },
-    };
+    expect(record).not.toHaveProperty("objectKey");
+    expect(record).not.toHaveProperty("objectVersionId");
+    expect(record).not.toHaveProperty("objectEtag");
+    expect(record).not.toHaveProperty("objectChecksumSha256");
+  }
+
+  it("keeps injected incremental acquisition aggregate-only and fails through the safe boundary", async () => {
     const deps = fakeDeps(state());
-    deps.objectSource = wrappedSource;
+    deps.capabilityFreeObjectSource = capabilityFreeObjectSource;
     const output: string[] = [];
     const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
+    const invocation = createHandler(() => deps, () => 20);
+
     try {
-      await runHandler(deps, event);
+      const failure = await invocation({ mode: "incremental" }).then(
+        () => undefined,
+        (error) => error,
+      );
+      assertSafeBoundaryFailure(
+        failure,
+        "SuppressionObjectValidationError",
+        "invalid suppression object lines",
+      );
+    } finally {
+      consoleSpy.mockRestore();
+    }
+
+    const invalid = invalidRecords(output);
+    expect(invalid).toHaveLength(1);
+    expectAggregateOnly(invalid[0]!, "error");
+  });
+
+  it("keeps injected replay acquisition aggregate-only and quarantines the invalid object", async () => {
+    const deps = fakeDeps(state());
+    deps.capabilityFreeObjectSource = capabilityFreeObjectSource;
+    const output: string[] = [];
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
+
+    let replay: SuppressionReplayResult;
+    try {
+      replay = await runHandler(deps, { mode: "replay", dryRun: true });
+    } finally {
+      consoleSpy.mockRestore();
+    }
+
+    expect(replay.report.objectsSeen).toBe(1);
+    expect(replay.report.objectsValid).toBe(0);
+    expect(replay.report.quarantine).toEqual([{
+      key: descriptor.key,
+      versionId: descriptor.versionId,
+      invalidLineNumbers: [1],
+    }]);
+    const invalid = invalidRecords(output);
+    expect(invalid).toHaveLength(1);
+    expectAggregateOnly(invalid[0]!, "warn");
+  });
+
+  it("keeps injected reconciliation acquisition aggregate-only and fails closed", async () => {
+    const deps = fakeDeps(state());
+    deps.capabilityFreeObjectSource = capabilityFreeObjectSource;
+    const replay = await runHandler(deps, { mode: "replay", dryRun: true });
+    const output: string[] = [];
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
+
+    try {
+      await expect(runHandler(deps, {
+        mode: "reconcile",
+        reportKey: replay.reportKey,
+      })).rejects.toBeInstanceOf(SuppressionObjectValidationError);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+
+    const invalid = invalidRecords(output);
+    expect(invalid).toHaveLength(1);
+    expectAggregateOnly(invalid[0]!, "warn");
+  });
+
+  it("processes production objects sequentially before a later object fails", async () => {
+    const valid = objectVersion({
+      key: `${UPLOADS_PREFIX}a-valid.ndjson`,
+      versionId: "valid-version",
+      etag: '"valid-etag"',
+      body: bodyFor("a"),
+    });
+    const invalid = objectVersion({
+      key: `${UPLOADS_PREFIX}b-invalid.ndjson`,
+      versionId: "invalid-version",
+      etag: '"invalid-etag"',
+      lastModified: "2026-09-04T12:01:00.000Z",
+      body: "private@example.test",
+    });
+    const s = state([valid, invalid]);
+    productionS3Send.mockImplementation(async (command: unknown) => {
+      const name = (command as { constructor: { name: string } }).constructor.name;
+      const input = (command as { input: Record<string, unknown> }).input;
+      s.commands.push({ name: `production:${name}`, input });
+      if (name === "ListObjectVersionsCommand") {
+        return {
+          Versions: s.objects.map((object) => ({
+            Key: object.key,
+            VersionId: object.versionId ?? undefined,
+            ETag: object.etag,
+            LastModified: new Date(object.lastModified),
+          })),
+          IsTruncated: false,
+        };
+      }
+      if (name === "GetObjectCommand") {
+        const object = s.objects.find((candidate) =>
+          candidate.key === input.Key && candidate.versionId === (input.VersionId ?? null));
+        if (!object) throw new Error("missing production fixture");
+        return { Body: { transformToString: async () => object.body } };
+      }
+      throw new Error(`unexpected production command ${name}`);
+    });
+    const output: string[] = [];
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
+    const invocation = createProductionHandler(
+      () => fakeDeps(s) satisfies ProductionHandlerDeps,
+      () => 25,
+    );
+
+    try {
+      const failure = await invocation({ mode: "incremental" }).then(
+        () => undefined,
+        (error) => error,
+      );
+      assertSafeBoundaryFailure(
+        failure,
+        "SuppressionObjectValidationError",
+        "invalid suppression object lines",
+      );
     } finally {
       consoleSpy.mockRestore();
       productionS3Send.mockReset();
     }
-    const invalid = output.map((line) => JSON.parse(line) as Record<string, unknown>).filter((record) => record.eventCode === "SUPPRESSION_OBJECT_INVALID");
-    expect(invalid).toHaveLength(1);
-    expect(invalid[0]).toMatchObject({ level, objectKey: key, objectVersionId: versionId, objectEtag: etag, objectChecksumSha256: sha256(body), invalidLineNumbers: [1], invalidLineCount: 1 });
-    expect(output.join("\n")).not.toContain(body);
+
+    const secondReadIndex = s.commands.findIndex((command) =>
+      command.name === "production:GetObjectCommand" && command.input.Key === invalid.key);
+    const membershipWriteIndex = s.commands.findIndex((command) =>
+      command.name === "dynamo:PutItemCommand:suppression");
+    const ledgerWriteIndex = s.commands.findIndex((command) =>
+      command.name === "dynamo:PutItemCommand:snapshots");
+    expect(membershipWriteIndex).toBeGreaterThan(-1);
+    expect(ledgerWriteIndex).toBeGreaterThan(membershipWriteIndex);
+    expect(secondReadIndex).toBeGreaterThan(ledgerWriteIndex);
+    expect(s.suppressions.has("a".repeat(64))).toBe(true);
+    expect(s.ledger.size).toBe(1);
+    expect(s.commands.filter((command) => command.name === "dynamo:PutItemCommand:suppression")).toHaveLength(1);
+    expect(s.commands.filter((command) => command.name === "dynamo:PutItemCommand:snapshots")).toHaveLength(1);
+    const diagnostic = invalidRecords(output);
+    expect(diagnostic).toHaveLength(1);
+    expect(diagnostic[0]).toMatchObject({
+      level: "error",
+      objectKey: invalid.key,
+      objectVersionId: invalid.versionId,
+      objectEtag: normalizedEtag(invalid.etag),
+      objectChecksumSha256: sha256(invalid.body),
+      invalidLineNumbers: [1],
+      invalidLineCount: 1,
+    });
+    expect(output.join("\n")).not.toContain(invalid.body);
   });
   it("includes dependency initialization, rounds fractional duration, and excludes warm idle", async () => {
     const object = objectVersion({ body: bodyFor("a") });

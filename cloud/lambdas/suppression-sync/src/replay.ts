@@ -19,7 +19,6 @@ import {
   SuppressionObjectValidationError,
   ledgerNaturalKey,
   parseAndValidateSuppressionObject,
-  type SuppressionObjectSource,
   type SuppressionObjectDescriptor,
   type ValidatedSuppressionObject,
 } from "./suppressionObject";
@@ -32,6 +31,16 @@ const MAX_UNPROCESSED_RETRIES = 10;
 const MAX_MEMBERSHIP_CONFLICT_RETRIES = 5;
 const CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
+export interface CapabilityFreeSuppressionObjectSource {
+  list(
+    bucket: string,
+    prefix: string,
+  ): Promise<readonly SuppressionObjectDescriptor[]>;
+  read(
+    descriptor: SuppressionObjectDescriptor,
+  ): Promise<ValidatedSuppressionObject>;
+}
+
 export interface HandlerDeps {
   s3: Pick<S3Client, "send">;
   dynamo: Pick<DynamoDBClient, "send">;
@@ -42,8 +51,13 @@ export interface HandlerDeps {
   };
   now?: () => Date;
   runId?: (timestamp: number) => string;
-  objectSource?: SuppressionObjectSource;
+  capabilityFreeObjectSource?: CapabilityFreeSuppressionObjectSource;
 }
+
+export type ProductionHandlerDeps = Omit<
+  HandlerDeps,
+  "capabilityFreeObjectSource"
+>;
 
 export type SuppressionSyncEvent =
   | { mode?: "incremental"; maxObjects?: number }
@@ -72,7 +86,13 @@ export type SuppressionReplayResult = Readonly<{
   report: SuppressionReplayReport;
 }>;
 
-type EvidenceObject = Readonly<{
+export type ReplayQuarantineEntry = Readonly<{
+  key: string;
+  versionId: string | null;
+  invalidLineNumbers: readonly number[];
+}>;
+
+export type ReplayEvidenceObject = Readonly<{
   key: string;
   versionId: string | null;
   etag: string;
@@ -81,13 +101,11 @@ type EvidenceObject = Readonly<{
   status: "valid" | "quarantined";
 }>;
 
-type ReplaySource = Readonly<{
-  descriptors: readonly SuppressionObjectDescriptor[];
+export type ProductionReplaySource = Readonly<{
+  objectsSeen: number;
   validObjects: readonly ValidatedSuppressionObject[];
-  union: ReadonlyMap<string, SuppressionUploadLine>;
-  quarantine: SuppressionReplayReport["quarantine"];
-  evidenceObjects: readonly EvidenceObject[];
-  sourceUnionChecksumSha256: string;
+  quarantine: readonly ReplayQuarantineEntry[];
+  evidenceObjects: readonly ReplayEvidenceObject[];
 }>;
 
 type Reconciliation = Readonly<{
@@ -114,8 +132,13 @@ function lexicalCompare(left: string, right: string): number {
 
 export async function listUploadObjects(
   deps: HandlerDeps,
-): Promise<SuppressionObjectDescriptor[]> {
-  if (deps.objectSource) return deps.objectSource.list(deps.env.INBOX_BUCKET, UPLOADS_PREFIX);
+): Promise<readonly SuppressionObjectDescriptor[]> {
+  if (deps.capabilityFreeObjectSource) {
+    return deps.capabilityFreeObjectSource.list(
+      deps.env.INBOX_BUCKET,
+      UPLOADS_PREFIX,
+    );
+  }
   const objects: SuppressionObjectDescriptor[] = [];
   let keyMarker: string | undefined;
   let versionIdMarker: string | undefined;
@@ -137,9 +160,10 @@ export async function listUploadObjects(
 export async function readValidatedObject(
   deps: HandlerDeps,
   descriptor: SuppressionObjectDescriptor,
-  diagnosticLevel: "error" | "warn" = "error",
 ): Promise<ValidatedSuppressionObject> {
-  if (deps.objectSource) return deps.objectSource.read(descriptor, diagnosticLevel);
+  if (deps.capabilityFreeObjectSource) {
+    return deps.capabilityFreeObjectSource.read(descriptor);
+  }
   const raw = await deps.s3.send(new GetObjectCommand({ Bucket: descriptor.bucket, Key: descriptor.key, VersionId: descriptor.versionId ?? undefined }));
   const text = raw.Body ? await (raw.Body as { transformToString(): Promise<string> }).transformToString() : "";
   try {
@@ -250,64 +274,86 @@ function sourceUnionChecksum(union: ReadonlyMap<string, SuppressionUploadLine>):
   return sha256Utf8(JSON.stringify(canonical));
 }
 
-async function buildReplaySource(
+export function toValidEvidence(
+  object: ValidatedSuppressionObject,
+): ReplayEvidenceObject {
+  return {
+    key: object.descriptor.key,
+    versionId: object.descriptor.versionId,
+    etag: object.descriptor.etag,
+    lastModified: object.descriptor.lastModified,
+    checksumSha256: object.checksumSha256,
+    status: "valid",
+  };
+}
+
+export function toQuarantinedEvidence(
+  descriptor: SuppressionObjectDescriptor,
+  error: SuppressionObjectValidationError,
+): ReplayEvidenceObject {
+  if (!error.checksumSha256) {
+    throw new Error("quarantined suppression object is missing checksum");
+  }
+  return {
+    key: descriptor.key,
+    versionId: descriptor.versionId,
+    etag: descriptor.etag,
+    lastModified: descriptor.lastModified,
+    checksumSha256: error.checksumSha256,
+    status: "quarantined",
+  };
+}
+
+function sourceUnion(
+  objects: readonly ValidatedSuppressionObject[],
+): ReadonlyMap<string, SuppressionUploadLine> {
+  const union = new Map<string, SuppressionUploadLine>();
+  for (const object of objects) {
+    for (const line of object.lines) {
+      union.set(
+        line.contact_hmac,
+        mergeUnionLine(union.get(line.contact_hmac), line),
+      );
+    }
+  }
+  return union;
+}
+
+async function loadCapabilityFreeReplaySource(
   deps: HandlerDeps,
   quarantineInvalid: boolean,
-): Promise<ReplaySource> {
+): Promise<ProductionReplaySource> {
   const descriptors = await listUploadObjects(deps);
   const validObjects: ValidatedSuppressionObject[] = [];
-  const union = new Map<string, SuppressionUploadLine>();
-  const quarantine: Array<{
-    key: string;
-    versionId: string | null;
-    invalidLineNumbers: readonly number[];
-  }> = [];
-  const evidenceObjects: EvidenceObject[] = [];
+  const quarantine: ReplayQuarantineEntry[] = [];
+  const evidenceObjects: ReplayEvidenceObject[] = [];
 
   for (const descriptor of descriptors) {
     try {
-      const object = await readValidatedObject(deps, descriptor, "warn");
-      const checksumSha256 = object.checksumSha256;
+      const object = await readValidatedObject(deps, descriptor);
       validObjects.push(object);
-      evidenceObjects.push({
-        key: descriptor.key,
-        versionId: descriptor.versionId,
-        etag: descriptor.etag,
-        lastModified: descriptor.lastModified,
-        checksumSha256,
-        status: "valid",
-      });
-      for (const line of object.lines) {
-        union.set(line.contact_hmac, mergeUnionLine(union.get(line.contact_hmac), line));
-      }
+      evidenceObjects.push(toValidEvidence(object));
     } catch (error) {
-      if (!(error instanceof SuppressionObjectValidationError) || !quarantineInvalid) {
-        throw error;
-      }
+      if (!(error instanceof SuppressionObjectValidationError)) throw error;
+      log("warn", "suppression_object_invalid_aggregate", {
+        invalid_line_numbers: error.invalidLineNumbers,
+        invalid_line_count: error.invalidLineNumbers.length,
+      });
+      if (!quarantineInvalid) throw error;
       quarantine.push({
         key: error.key,
         versionId: error.versionId,
         invalidLineNumbers: error.invalidLineNumbers,
       });
-      evidenceObjects.push({
-        key: descriptor.key,
-        versionId: descriptor.versionId,
-        etag: descriptor.etag,
-        lastModified: descriptor.lastModified,
-        checksumSha256: error.checksumSha256!,
-        status: "quarantined",
-      });
-      if (!deps.objectSource) log("warn", "suppression_object_invalid_aggregate", { invalid_line_numbers: error.invalidLineNumbers, invalid_line_count: error.invalidLineNumbers.length });
+      evidenceObjects.push(toQuarantinedEvidence(descriptor, error));
     }
   }
 
   return {
-    descriptors,
+    objectsSeen: descriptors.length,
     validObjects,
-    union,
     quarantine,
     evidenceObjects,
-    sourceUnionChecksumSha256: sourceUnionChecksum(union),
   };
 }
 
@@ -560,7 +606,9 @@ async function ledgerValidObjects(
 }
 
 function reportFor(input: {
-  source: ReplaySource;
+  source: ProductionReplaySource;
+  union: ReadonlyMap<string, SuppressionUploadLine>;
+  sourceUnionChecksumSha256: string;
   now: Date;
   appliedMemberships: number;
   missingMemberships: number;
@@ -568,14 +616,14 @@ function reportFor(input: {
 }): SuppressionReplayReport {
   return {
     generatedAt: input.now.toISOString(),
-    objectsSeen: input.source.descriptors.length,
+    objectsSeen: input.source.objectsSeen,
     objectsValid: input.source.validObjects.length,
     objectsQuarantined: input.source.quarantine.length,
-    uniqueMemberships: input.source.union.size,
+    uniqueMemberships: input.union.size,
     appliedMemberships: input.appliedMemberships,
     missingMemberships: input.missingMemberships,
     unexpectedMemberships: input.unexpectedMemberships,
-    sourceUnionChecksumSha256: input.source.sourceUnionChecksumSha256,
+    sourceUnionChecksumSha256: input.sourceUnionChecksumSha256,
     quarantine: input.source.quarantine,
   };
 }
@@ -590,7 +638,7 @@ async function writeEvidenceReport(
   deps: HandlerDeps,
   key: string,
   report: SuppressionReplayReport,
-  objects: readonly EvidenceObject[],
+  objects: readonly ReplayEvidenceObject[],
 ): Promise<void> {
   await deps.s3.send(
     new PutObjectCommand({
@@ -607,11 +655,24 @@ export async function runReplay(
   deps: HandlerDeps,
   input: { dryRun: boolean; now: Date; runId: string },
 ): Promise<SuppressionReplayResult> {
-  const source = await buildReplaySource(deps, true);
-  const reconciliation = await reconcileSource(deps, source.union);
+  return runReplayFromLoadedSource(
+    deps,
+    input,
+    await loadCapabilityFreeReplaySource(deps, true),
+  );
+}
+
+export async function runReplayFromLoadedSource(
+  deps: HandlerDeps,
+  input: { dryRun: boolean; now: Date; runId: string },
+  source: ProductionReplaySource,
+): Promise<SuppressionReplayResult> {
+  const union = sourceUnion(source.validObjects);
+  const sourceUnionChecksumSha256 = sourceUnionChecksum(union);
+  const reconciliation = await reconcileSource(deps, union);
   const appliedMemberships = input.dryRun
     ? 0
-    : await applyUnion(deps, source.union, reconciliation.existing, input.now);
+    : await applyUnion(deps, union, reconciliation.existing, input.now);
 
   if (!input.dryRun) {
     await ledgerValidObjects(deps, source.validObjects, input.now);
@@ -619,6 +680,8 @@ export async function runReplay(
 
   const report = reportFor({
     source,
+    union,
+    sourceUnionChecksumSha256,
     now: input.now,
     appliedMemberships,
     missingMemberships: input.dryRun ? reconciliation.missingMemberships : 0,
@@ -678,10 +741,29 @@ export async function runReconciliation(
   input: { reportKey: string; now: Date },
 ): Promise<SuppressionReplayResult> {
   assertReportKey(input.reportKey);
-  const source = await buildReplaySource(deps, false);
-  const reconciliation = await reconcileSource(deps, source.union);
+  return runReconciliationFromLoadedSource(
+    deps,
+    input,
+    await loadCapabilityFreeReplaySource(deps, false),
+  );
+}
+
+export async function runReconciliationFromLoadedSource(
+  deps: HandlerDeps,
+  input: { reportKey: string; now: Date },
+  source: ProductionReplaySource,
+): Promise<SuppressionReplayResult> {
+  assertReportKey(input.reportKey);
+  if (source.quarantine.length > 0) {
+    throw new Error("reconciliation source cannot contain quarantined objects");
+  }
+  const union = sourceUnion(source.validObjects);
+  const sourceUnionChecksumSha256 = sourceUnionChecksum(union);
+  const reconciliation = await reconcileSource(deps, union);
   const report = reportFor({
     source,
+    union,
+    sourceUnionChecksumSha256,
     now: input.now,
     appliedMemberships: 0,
     missingMemberships: reconciliation.missingMemberships,

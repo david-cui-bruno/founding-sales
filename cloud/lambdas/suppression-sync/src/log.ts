@@ -1,9 +1,14 @@
 import { createSafeLogger, defineLogPolicy, type LogLevel } from "@callie-sourcing/shared";
 
+type InvalidAggregateFields = {
+  invalid_line_numbers: readonly number[];
+  invalid_line_count: number;
+};
+
 type LogEvents = {
   suppression_sync_run: { files_seen: number; files_processed: number; files_skipped: number; lines_written: number; invalid_lines: number; durationMs: number };
   suppression_scheduled_maintenance_run: { count: number; unprocessed_count: number; durationMs: number };
-  suppression_object_invalid_aggregate: { invalid_line_numbers: readonly number[]; invalid_line_count: number };
+  suppression_object_invalid_aggregate: InvalidAggregateFields;
   suppression_replay_run: { report_key: string; dry_run: boolean; objects_seen: number; objects_valid: number; objects_quarantined: number; unique_memberships: number; applied_memberships: number; missing_memberships: number; unexpected_memberships: number; source_union_checksum_sha256: string };
   suppression_reconciliation_run: { report_key: string; objects_seen: number; objects_valid: number; unique_memberships: number; missing_memberships: number; unexpected_memberships: number; source_union_checksum_sha256: string };
 };
