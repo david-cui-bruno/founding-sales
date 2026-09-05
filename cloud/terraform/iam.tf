@@ -180,6 +180,52 @@ resource "aws_iam_role_policy" "lambda_adapters" {
   policy = data.aws_iam_policy_document.lambda_adapters.json
 }
 
+resource "aws_iam_role" "lambda_schedule_watchdog" {
+  name               = "${var.name_prefix}-lambda-schedule-watchdog"
+  path               = var.iam_path
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+}
+
+data "aws_iam_policy_document" "lambda_schedule_watchdog" {
+  statement {
+    sid    = "Logs"
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+    ]
+    resources = [
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-schedule-watchdog*",
+    ]
+  }
+
+  statement {
+    sid       = "ReadScheduledHealthMetrics"
+    effect    = "Allow"
+    actions   = ["cloudwatch:GetMetricData"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "PublishMonthlyHealthMetrics"
+    effect    = "Allow"
+    actions   = ["cloudwatch:PutMetricData"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "cloudwatch:namespace"
+      values   = ["Callie/Sourcing"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "lambda_schedule_watchdog" {
+  name   = "${var.name_prefix}-lambda-schedule-watchdog"
+  role   = aws_iam_role.lambda_schedule_watchdog.id
+  policy = data.aws_iam_policy_document.lambda_schedule_watchdog.json
+}
+
 # ---------------------------------------------------------------------------
 # Mac app inbox user: read-only access to the inbox bucket, nothing else.
 # IMPORTANT: the access key is created MANUALLY (aws iam create-access-key)

@@ -22,7 +22,9 @@ resource "aws_cloudwatch_dashboard" "pipeline" {
           metrics = concat(
             [["AWS/Lambda", "Invocations", "FunctionName", aws_lambda_function.mail_parse.function_name]],
             [for k in keys(local.adapter_functions) :
-            ["AWS/Lambda", "Invocations", "FunctionName", aws_lambda_function.adapters[k].function_name]]
+              ["AWS/Lambda", "Invocations", "FunctionName", aws_lambda_function.adapters[k].function_name]
+            ],
+            [["AWS/Lambda", "Invocations", "FunctionName", aws_lambda_function.schedule_watchdog.function_name]]
           )
         }
       },
@@ -36,7 +38,9 @@ resource "aws_cloudwatch_dashboard" "pipeline" {
           metrics = concat(
             [["AWS/Lambda", "Errors", "FunctionName", aws_lambda_function.mail_parse.function_name]],
             [for k in keys(local.adapter_functions) :
-            ["AWS/Lambda", "Errors", "FunctionName", aws_lambda_function.adapters[k].function_name]]
+              ["AWS/Lambda", "Errors", "FunctionName", aws_lambda_function.adapters[k].function_name]
+            ],
+            [["AWS/Lambda", "Errors", "FunctionName", aws_lambda_function.schedule_watchdog.function_name]]
           )
         }
       },
@@ -50,7 +54,9 @@ resource "aws_cloudwatch_dashboard" "pipeline" {
           metrics = concat(
             [["AWS/Lambda", "Duration", "FunctionName", aws_lambda_function.mail_parse.function_name]],
             [for k in keys(local.adapter_functions) :
-            ["AWS/Lambda", "Duration", "FunctionName", aws_lambda_function.adapters[k].function_name]]
+              ["AWS/Lambda", "Duration", "FunctionName", aws_lambda_function.adapters[k].function_name]
+            ],
+            [["AWS/Lambda", "Duration", "FunctionName", aws_lambda_function.schedule_watchdog.function_name]]
           )
         }
       },
@@ -61,9 +67,12 @@ resource "aws_cloudwatch_dashboard" "pipeline" {
           region = var.aws_region
           stat   = "Sum"
           period = 3600
-          metrics = [for k in keys(local.adapter_functions) :
-            ["AWS/Lambda", "Throttles", "FunctionName", aws_lambda_function.adapters[k].function_name]
-          ]
+          metrics = concat(
+            [for k in keys(local.adapter_functions) :
+              ["AWS/Lambda", "Throttles", "FunctionName", aws_lambda_function.adapters[k].function_name]
+            ],
+            [["AWS/Lambda", "Throttles", "FunctionName", aws_lambda_function.schedule_watchdog.function_name]]
+          )
         }
       },
       {
@@ -73,9 +82,12 @@ resource "aws_cloudwatch_dashboard" "pipeline" {
           region = var.aws_region
           stat   = "Sum"
           period = 3600
-          metrics = [for key in keys(local.adapter_functions) :
-            ["Callie/Sourcing", "ScheduledRunSuccess", "Component", key]
-          ]
+          metrics = concat(
+            [for key in keys(local.adapter_functions) :
+              ["Callie/Sourcing", "ScheduledRunSuccess", "Component", key]
+            ],
+            [["Callie/Sourcing", "ScheduledRunSuccess", "Component", "schedule-watchdog"]]
+          )
         }
       },
       {
@@ -93,6 +105,30 @@ resource "aws_cloudwatch_dashboard" "pipeline" {
       },
       {
         type = "metric", x = 0, y = 19, width = 12, height = 6,
+        properties = {
+          title  = "Monthly missing success"
+          region = var.aws_region
+          stat   = "Maximum"
+          period = 86400
+          metrics = [for component in local.monthly_health_targets :
+            ["Callie/Sourcing", "MonthlyMissingSuccess", "Component", component]
+          ]
+        }
+      },
+      {
+        type = "metric", x = 12, y = 19, width = 12, height = 6,
+        properties = {
+          title  = "Monthly persistent unprocessed"
+          region = var.aws_region
+          stat   = "Maximum"
+          period = 86400
+          metrics = [for component in local.monthly_health_targets :
+            ["Callie/Sourcing", "MonthlyPersistentUnprocessed", "Component", component]
+          ]
+        }
+      },
+      {
+        type = "metric", x = 0, y = 25, width = 12, height = 6,
         properties = {
           title  = "Inbox bucket size / object count"
           region = var.aws_region

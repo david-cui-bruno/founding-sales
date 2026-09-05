@@ -19,7 +19,7 @@ cloud/
   lambdas/resolver/                  # hourly entity resolution source
   lambdas/enricher/                  # quarter-hour approved enrichment source
   lambdas/suppression-sync/          # quarter-hour suppression membership sync
-  lambdas/schedule-watchdog/         # future schedule-health watchdog package
+  lambdas/schedule-watchdog/         # daily monthly schedule-health watchdog
 ```
 
 ## Naming and tagging conventions (shared account!)
@@ -38,14 +38,17 @@ checks and formatting. It must not initialize providers, inspect state, contact
 the shared account, enable either safety gate, or send notifications.
 
 ```bash
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; (cd cloud/lambdas/schedule-watchdog && npm run typecheck && npm test && npm run build)
 export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/infrastructure/terraformHardening.test.ts
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run typecheck
 tofu fmt -check -recursive cloud/terraform
 ```
 
 Live planning is deferred until trusted managed state and managed secret
 identifiers exist. It needs separate founder approval, must keep both gates
-false, must use a human-readable unsaved plan, and must retain only a sanitized
-summary.
+false, use restrictive `umask 077`, require a human-readable unsaved plan only,
+prove zero destroy and zero replacement, and retain a sanitized summary only.
+This hold point implies no apply.
 
 Saved plans, JSON rendering, raw Terraform secret variables, and
 backend-disabled create-only plans are forbidden as proof of live safety.

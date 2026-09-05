@@ -35,6 +35,11 @@ locals {
     )
     if source.cadence != "monthly" && source.has_unprocessed_metric
   }
+
+  monthly_health_targets = toset([
+    "adapter-pvd-taxroll",
+    "adapter-boston-assessments",
+  ])
 }
 
 resource "aws_sns_topic" "alerts" {
@@ -68,6 +73,34 @@ resource "aws_cloudwatch_log_metric_filter" "scheduled_run_unprocessed" {
 
   name           = "${var.name_prefix}-${each.key}-scheduled-run-unprocessed"
   log_group_name = aws_cloudwatch_log_group.adapters[each.key].name
+  pattern        = "{ $.eventCode = \"SCHEDULED_RUN_COMPLETED\" && $.status = \"success\" && $.unprocessedCount = * }"
+
+  metric_transformation {
+    name       = "ScheduledRunUnprocessed"
+    namespace  = "Callie/Sourcing"
+    value      = "$.unprocessedCount"
+    unit       = "Count"
+    dimensions = { Component = "$.component" }
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "schedule_watchdog_run_success" {
+  name           = "${var.name_prefix}-schedule-watchdog-run-success"
+  log_group_name = aws_cloudwatch_log_group.schedule_watchdog.name
+  pattern        = "{ $.eventCode = \"SCHEDULED_RUN_COMPLETED\" && $.status = \"success\" }"
+
+  metric_transformation {
+    name       = "ScheduledRunSuccess"
+    namespace  = "Callie/Sourcing"
+    value      = "1"
+    unit       = "Count"
+    dimensions = { Component = "$.component" }
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "schedule_watchdog_run_unprocessed" {
+  name           = "${var.name_prefix}-schedule-watchdog-run-unprocessed"
+  log_group_name = aws_cloudwatch_log_group.schedule_watchdog.name
   pattern        = "{ $.eventCode = \"SCHEDULED_RUN_COMPLETED\" && $.status = \"success\" && $.unprocessedCount = * }"
 
   metric_transformation {
@@ -151,6 +184,72 @@ resource "aws_cloudwatch_metric_alarm" "adapter_near_timeout" {
   ok_actions                            = [aws_sns_topic.alerts.arn]
 }
 
+resource "aws_cloudwatch_metric_alarm" "schedule_watchdog_errors" {
+  alarm_name          = "${var.name_prefix}-schedule-watchdog-errors"
+  alarm_description   = "Monthly schedule health evaluation failed."
+  namespace           = "AWS/Lambda"
+  metric_name         = "Errors"
+  dimensions          = { FunctionName = aws_lambda_function.schedule_watchdog.function_name }
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  ok_actions          = [aws_sns_topic.alerts.arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "schedule_watchdog_throttles" {
+  alarm_name          = "${var.name_prefix}-schedule-watchdog-throttles"
+  alarm_description   = "Monthly schedule health evaluation was throttled."
+  namespace           = "AWS/Lambda"
+  metric_name         = "Throttles"
+  dimensions          = { FunctionName = aws_lambda_function.schedule_watchdog.function_name }
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  ok_actions          = [aws_sns_topic.alerts.arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "schedule_watchdog_near_timeout" {
+  alarm_name                            = "${var.name_prefix}-schedule-watchdog-near-timeout"
+  alarm_description                     = "Monthly schedule health p95 duration reached 90 percent of its Lambda timeout."
+  namespace                             = "AWS/Lambda"
+  metric_name                           = "Duration"
+  dimensions                            = { FunctionName = aws_lambda_function.schedule_watchdog.function_name }
+  extended_statistic                    = "p95"
+  period                                = 300
+  evaluation_periods                    = 1
+  threshold                             = 60 * 1000 * 0.90
+  comparison_operator                   = "GreaterThanOrEqualToThreshold"
+  treat_missing_data                    = "notBreaching"
+  evaluate_low_sample_count_percentiles = "evaluate"
+  alarm_actions                         = [aws_sns_topic.alerts.arn]
+  ok_actions                            = [aws_sns_topic.alerts.arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "schedule_watchdog_missing_success" {
+  alarm_name          = "${var.name_prefix}-schedule-watchdog-missing-success"
+  alarm_description   = "No successful schedule-watchdog completion was observed for 48 hours."
+  namespace           = "Callie/Sourcing"
+  metric_name         = "ScheduledRunSuccess"
+  dimensions          = { Component = "schedule-watchdog" }
+  statistic           = "Sum"
+  period              = 3600
+  evaluation_periods  = 48
+  datapoints_to_alarm = 48
+  threshold           = 1
+  comparison_operator = "LessThanThreshold"
+  treat_missing_data  = "breaching"
+  alarm_actions       = local.scheduled_health_alarm_actions
+  ok_actions          = local.scheduled_health_alarm_actions
+}
+
 resource "aws_cloudwatch_metric_alarm" "scheduled_missing_success" {
   for_each = local.non_monthly_sources
 
@@ -184,6 +283,44 @@ resource "aws_cloudwatch_metric_alarm" "scheduled_persistent_unprocessed" {
   datapoints_to_alarm = 2
   threshold           = 0
   comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.scheduled_health_alarm_actions
+  ok_actions          = local.scheduled_health_alarm_actions
+}
+
+resource "aws_cloudwatch_metric_alarm" "monthly_missing_success" {
+  for_each = local.monthly_health_targets
+
+  alarm_name          = "${var.name_prefix}-${each.key}-monthly-missing-success"
+  alarm_description   = "Two eligible monthly ${each.key} windows had no successful completion."
+  namespace           = "Callie/Sourcing"
+  metric_name         = "MonthlyMissingSuccess"
+  dimensions          = { Component = each.key }
+  statistic           = "Maximum"
+  period              = 86400
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.scheduled_health_alarm_actions
+  ok_actions          = local.scheduled_health_alarm_actions
+}
+
+resource "aws_cloudwatch_metric_alarm" "monthly_persistent_unprocessed" {
+  for_each = local.monthly_health_targets
+
+  alarm_name          = "${var.name_prefix}-${each.key}-monthly-persistent-unprocessed"
+  alarm_description   = "Two eligible monthly ${each.key} windows retained positive unprocessed work."
+  namespace           = "Callie/Sourcing"
+  metric_name         = "MonthlyPersistentUnprocessed"
+  dimensions          = { Component = each.key }
+  statistic           = "Maximum"
+  period              = 86400
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = local.scheduled_health_alarm_actions
   ok_actions          = local.scheduled_health_alarm_actions
