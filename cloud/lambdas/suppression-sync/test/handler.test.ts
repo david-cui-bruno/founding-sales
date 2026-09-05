@@ -8,8 +8,8 @@ import {
   type HandlerDeps,
   type SuppressionReplayResult,
 } from "../src/handler";
-import { parseAndValidateSuppressionObject, SuppressionObjectValidationError } from "../src/suppressionObject";
-import { log } from "../src/log";
+import * as suppressionObjects from "../src/suppressionObject";
+import { parseAndValidateSuppressionObject, productionSuppressionObjectSource, SuppressionObjectValidationError } from "../src/suppressionObject";
 
 const NOW = new Date("2026-09-04T12:00:00.000Z");
 
@@ -529,11 +529,13 @@ describe("suppression-sync handler", () => {
       level: "error",
       eventCode: "SUPPRESSION_OBJECT_INVALID",
       component: "suppression-sync",
-      objectKey: object.key,
-      objectVersionId: object.versionId,
       invalidLineNumbers: [3, 5],
       invalidLineCount: 2,
     });
+    expect(logged).not.toHaveProperty("objectKey");
+    expect(logged).not.toHaveProperty("objectVersionId");
+    expect(logged).not.toHaveProperty("objectEtag");
+    expect(logged).not.toHaveProperty("objectChecksumSha256");
     expect(output[0]).not.toContain(contactData);
     expect(output[0]).not.toContain(phoneData);
     expect(output[0]).not.toContain("contact_hmac");
@@ -709,27 +711,21 @@ describe("exported handler boundary", () => {
       descriptor: { bucket: "fixture", key: "private-person.ndjson", versionId: "secret-token", etag: "b".repeat(32), lastModified: NOW.toISOString() },
       text: bodyFor("a"),
     });
-    const output: string[] = [];
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
-    try {
-      log("error", "suppression_object_invalid", { metadata: parsed.logMetadata, invalid_line_numbers: [1], invalid_line_count: 1 });
-    } finally { consoleSpy.mockRestore(); }
-    expect(JSON.parse(output[0]!)).not.toMatchObject({ objectKey: expect.anything(), objectVersionId: expect.anything(), objectEtag: expect.anything(), objectChecksumSha256: expect.anything() });
+    expect(parsed).not.toHaveProperty("logMetadata");
   });
-  it("cannot mint a checksum capability from a caller-supplied contact HMAC", () => {
-    const contactHmac = "0123456789abcdef".repeat(4);
-    const output: string[] = [];
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
-    try {
-      log("error", "suppression_object_invalid", {
-        metadata: { objectChecksumSha256: contactHmac },
-        invalid_line_numbers: [1],
-        invalid_line_count: 1,
-      } as never);
-    } finally { consoleSpy.mockRestore(); }
-    expect(output).toHaveLength(1);
-    expect(JSON.parse(output[0]!)).not.toHaveProperty("objectChecksumSha256");
-    expect(output[0]).not.toContain(contactHmac);
+  it("exports no fabricated-response issuer or reusable invalid-log policy consumer", async () => {
+    expect(suppressionObjects).not.toHaveProperty("listSuppressionObjectsFromS3");
+    expect(suppressionObjects).not.toHaveProperty("readValidatedSuppressionObjectFromS3");
+    expect(suppressionObjects).not.toHaveProperty("suppressionLogPolicy");
+    expect(suppressionObjects).not.toHaveProperty("suppressionObjectLogReaders");
+    expect(Object.keys(productionSuppressionObjectSource).sort()).toEqual(["list", "read"]);
+    await expect(productionSuppressionObjectSource.read({
+      bucket: "caller-controlled",
+      key: "private-person.ndjson",
+      versionId: "secret-token",
+      etag: "b".repeat(32),
+      lastModified: NOW.toISOString(),
+    })).rejects.toThrow("suppression object was not issued by the production list source");
   });
   it("includes dependency initialization, rounds fractional duration, and excludes warm idle", async () => {
     const object = objectVersion({ body: bodyFor("a") });
@@ -749,7 +745,7 @@ describe("exported handler boundary", () => {
     expect(output.join("\n")).not.toContain("a".repeat(64));
     for (const record of completions) expect(Object.keys(record).sort()).toEqual(["component", "count", "durationMs", "eventCode", "level", "unprocessedCount"].sort());
   });
-  it("preserves only AWS/body-owned metadata and safely finalizes a real parser failure", async () => {
+  it("does not mint production metadata from fake S3 responses and safely finalizes parser failure", async () => {
     const contactHmac = "0123456789abcdef".repeat(4);
     const object = objectVersion({ body: JSON.stringify({ ...VALID_LINE, contact_hmac: contactHmac, email: "private@example.test" }) });
     const output: string[] = [];
@@ -760,7 +756,11 @@ describe("exported handler boundary", () => {
     const records = output.map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(records.filter((record) => record.eventCode === "SCHEDULED_RUN_COMPLETED")).toHaveLength(1);
     const invalid = records.find((record) => record.eventCode === "SUPPRESSION_OBJECT_INVALID")!;
-    expect(invalid).toMatchObject({ objectKey: object.key, objectVersionId: object.versionId, objectEtag: "etag-1", objectChecksumSha256: sha256(object.body) });
+    expect(invalid).toMatchObject({ invalidLineNumbers: [1], invalidLineCount: 1 });
+    expect(invalid).not.toHaveProperty("objectKey");
+    expect(invalid).not.toHaveProperty("objectVersionId");
+    expect(invalid).not.toHaveProperty("objectEtag");
+    expect(invalid).not.toHaveProperty("objectChecksumSha256");
     const serialized = output.find((line) => line.includes("SCHEDULED_RUN_COMPLETED"))!;
     expect(JSON.parse(serialized)).toMatchObject({ count: 0, unprocessedCount: 0, durationMs: 0 });
     expect(serialized).not.toContain("private@example.test");

@@ -24,7 +24,7 @@ import {
   type SuppressionReplayResult,
   type SuppressionSyncEvent,
 } from "./replay";
-import { SuppressionObjectValidationError } from "./suppressionObject";
+import { logSuppressionObjectDiagnostic, productionSuppressionObjectSource, SuppressionObjectValidationError } from "./suppressionObject";
 
 export {
   REPORTS_PREFIX,
@@ -50,6 +50,7 @@ function defaultDeps(): HandlerDeps {
       SNAPSHOTS_TABLE: envOrThrow("SNAPSHOTS_TABLE"),
       SUPPRESSION_TABLE: envOrThrow("SUPPRESSION_TABLE"),
     },
+    objectSource: productionSuppressionObjectSource,
   };
 }
 
@@ -146,11 +147,7 @@ async function runIncremental(
       object = await readValidatedObject(deps, descriptor);
     } catch (error) {
       if (error instanceof SuppressionObjectValidationError) {
-        log("error", "suppression_object_invalid", {
-          metadata: error.logMetadata ?? {},
-          invalid_line_numbers: error.invalidLineNumbers,
-          invalid_line_count: error.invalidLineNumbers.length,
-        });
+        logSuppressionObjectDiagnostic("error", error);
       }
       throw error;
     }

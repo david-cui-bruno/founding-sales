@@ -22,6 +22,7 @@ interface FakeState {
   dynamoKeys: Set<string>;
   dynamoPuts: Array<Record<string, unknown>>;
   failDynamoWith?: Error;
+  missingObjectError?: Error;
 }
 
 function fakeDeps(state: FakeState): HandlerDeps {
@@ -33,7 +34,7 @@ function fakeDeps(state: FakeState): HandlerDeps {
         if (name === "GetObjectCommand") {
           const key: string = command.input.Key;
           const buf = state.rawMail.get(key);
-          if (!buf) throw new Error(`NoSuchKey: ${key}`);
+          if (!buf) throw state.missingObjectError ?? new Error(`NoSuchKey: ${key}`);
           return {
             Body: { transformToByteArray: async () => new Uint8Array(buf) },
           };
@@ -258,12 +259,17 @@ function assertSafeBoundaryFailure(failure: unknown, originalName: string, origi
 describe("exported handler boundary", () => {
   it("replaces PII-bearing provider failures with the fixed safe error", async () => {
     const state = newState("other-message", Buffer.from(""));
+    state.missingObjectError = Object.assign(
+      new Error("private@example.test-secret-token provider body"),
+      { name: "PrivateMailObjectError", privatePayload: "private@example.test-secret-token" },
+    );
     const output: string[] = [];
     const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
     const invocation = createHandler(() => fakeDeps(state));
     try {
       const failure = await invocation(sesEvent("private@example.test-secret-token")).then(() => undefined, (error) => error);
-      assertSafeBoundaryFailure(failure, "NoSuchKey", "private@example.test-secret-token");
+      assertSafeBoundaryFailure(failure, "PrivateMailObjectError", "private@example.test-secret-token");
+      expect(failure).not.toHaveProperty("privatePayload");
     } finally {
       consoleSpy.mockRestore();
     }

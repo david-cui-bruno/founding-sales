@@ -8,16 +8,19 @@ import {
   type DynamoDBClient,
 } from "@aws-sdk/client-dynamodb";
 import {
+  GetObjectCommand,
+  ListObjectVersionsCommand,
   PutObjectCommand,
   type S3Client,
 } from "@aws-sdk/client-s3";
 import type { SuppressionUploadLine } from "@callie-sourcing/shared";
 import { log } from "./log";
 import {
+  logSuppressionObjectDiagnostic,
   SuppressionObjectValidationError,
   ledgerNaturalKey,
-  listSuppressionObjectsFromS3,
-  readValidatedSuppressionObjectFromS3,
+  parseAndValidateSuppressionObject,
+  type SuppressionObjectSource,
   type SuppressionObjectDescriptor,
   type ValidatedSuppressionObject,
 } from "./suppressionObject";
@@ -40,6 +43,7 @@ export interface HandlerDeps {
   };
   now?: () => Date;
   runId?: (timestamp: number) => string;
+  objectSource?: SuppressionObjectSource;
 }
 
 export type SuppressionSyncEvent =
@@ -112,14 +116,40 @@ function lexicalCompare(left: string, right: string): number {
 export async function listUploadObjects(
   deps: HandlerDeps,
 ): Promise<SuppressionObjectDescriptor[]> {
-  return listSuppressionObjectsFromS3(deps, UPLOADS_PREFIX);
+  if (deps.objectSource) return deps.objectSource.list(deps.env.INBOX_BUCKET, UPLOADS_PREFIX);
+  const objects: SuppressionObjectDescriptor[] = [];
+  let keyMarker: string | undefined;
+  let versionIdMarker: string | undefined;
+  while (true) {
+    const page = await deps.s3.send(new ListObjectVersionsCommand({ Bucket: deps.env.INBOX_BUCKET, Prefix: UPLOADS_PREFIX, KeyMarker: keyMarker, VersionIdMarker: versionIdMarker }));
+    for (const version of page.Versions ?? []) {
+      const key = version.Key;
+      if (!key?.endsWith(".ndjson") || !version.ETag || !version.LastModified) continue;
+      objects.push({ bucket: deps.env.INBOX_BUCKET, key, versionId: version.VersionId ?? null, etag: version.ETag.startsWith('"') ? version.ETag.slice(1, -1) : version.ETag, lastModified: version.LastModified.toISOString() });
+    }
+    if (!page.IsTruncated) break;
+    if (!page.NextKeyMarker) throw new Error("truncated suppression object version listing has no next key marker");
+    keyMarker = page.NextKeyMarker;
+    versionIdMarker = page.NextVersionIdMarker;
+  }
+  return objects.sort((left, right) => lexicalCompare(left.lastModified, right.lastModified) || lexicalCompare(left.key, right.key) || lexicalCompare(left.versionId ?? "", right.versionId ?? ""));
 }
 
 export async function readValidatedObject(
   deps: HandlerDeps,
   descriptor: SuppressionObjectDescriptor,
 ): Promise<ValidatedSuppressionObject> {
-  return readValidatedSuppressionObjectFromS3(deps, descriptor);
+  if (deps.objectSource) return deps.objectSource.read(descriptor);
+  const raw = await deps.s3.send(new GetObjectCommand({ Bucket: descriptor.bucket, Key: descriptor.key, VersionId: descriptor.versionId ?? undefined }));
+  const text = raw.Body ? await (raw.Body as { transformToString(): Promise<string> }).transformToString() : "";
+  try {
+    return parseAndValidateSuppressionObject({ descriptor, text });
+  } catch (error) {
+    if (error instanceof SuppressionObjectValidationError) {
+      throw new SuppressionObjectValidationError({ key: error.key, versionId: error.versionId, invalidLineNumbers: error.invalidLineNumbers, checksumSha256: sha256Utf8(text) });
+    }
+    throw error;
+  }
 }
 
 function stringAttribute(
@@ -267,11 +297,7 @@ async function buildReplaySource(
         checksumSha256: error.checksumSha256!,
         status: "quarantined",
       });
-      log("warn", "suppression_object_quarantined", {
-        metadata: error.logMetadata ?? {},
-        invalid_line_numbers: error.invalidLineNumbers,
-        invalid_line_count: error.invalidLineNumbers.length,
-      });
+      logSuppressionObjectDiagnostic("warn", error);
     }
   }
 
