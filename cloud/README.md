@@ -1,8 +1,8 @@
 # Callie Lead Sourcing System — Cloud
 
-Terraform scaffold for the cloud side of the sourcing pipeline: SES inbound
-mail, S3 raw-mail + SourceEvent inbox buckets, DynamoDB tables, IAM, budgets,
-and the placeholder mail-parse Lambda.
+Terraform source for the cloud side of the sourcing pipeline: SES inbound mail,
+S3 raw-mail and SourceEvent inbox buckets, DynamoDB tables, IAM, budgets, the
+mail parser, and seven scheduled sourcing functions.
 
 Target account: `326255650484` (shared, no Org), region `us-east-1`.
 
@@ -10,89 +10,68 @@ Target account: `326255650484` (shared, no Org), region `us-east-1`.
 
 ```
 cloud/
-  terraform/            # all infrastructure (local backend for now)
-  lambdas/mail-parse/   # TypeScript stub bundled with esbuild
+  terraform/                         # infrastructure source
+  lambdas/mail-parse/                # inbound email parser
+  lambdas/adapter-pvd-taxroll/       # monthly Providence tax-roll source
+  lambdas/adapter-boston-rentsmart/  # daily Boston RentSmart source
+  lambdas/adapter-boston-assessments/# monthly Boston assessments source
+  lambdas/scorer/                    # quarter-hour scoring source
+  lambdas/resolver/                  # hourly entity resolution source
+  lambdas/enricher/                  # quarter-hour approved enrichment source
+  lambdas/suppression-sync/          # quarter-hour suppression membership sync
+  lambdas/schedule-watchdog/         # future schedule-health watchdog package
 ```
 
 ## Naming and tagging conventions (shared account!)
 
 - Every resource name is prefixed `callie-sourcing-`.
-- Every IAM role/user/policy lives under path `/callie-sourcing/`.
+- Every IAM role, user, and policy lives under path `/callie-sourcing/`.
 - Every resource carries tags `Project=callie-sourcing` and
-  `ManagedBy=terraform` (enforced via provider `default_tags`).
+  `ManagedBy=terraform` through provider `default_tags`.
 - Buckets are suffixed with the account id to guarantee global uniqueness.
 - Never touch resources outside this namespace.
 
-## Prerequisites
+## Local source verification only
 
-- Terraform >= 1.9
-- Admin credentials: `AWS_PROFILE=default` (aws CLI at `/opt/homebrew/bin/aws`)
-- Node 24 for the Lambda build: prefix `PATH="/opt/homebrew/opt/node@24/bin:$PATH"`
+Implementation-time verification is intentionally limited to static source
+checks and formatting. It must not initialize providers, inspect state, contact
+the shared account, enable either safety gate, or send notifications.
 
-## Build the Lambda bundle (required before plan/apply)
-
-The archive provider zips `lambdas/mail-parse/dist/` at plan time, so build first:
-
-```sh
-cd cloud/lambdas/mail-parse
-PATH="/opt/homebrew/opt/node@24/bin:$PATH" npm install
-PATH="/opt/homebrew/opt/node@24/bin:$PATH" npm run build   # typechecks, then esbuild -> dist/handler.js
+```bash
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/infrastructure/terraformHardening.test.ts
+tofu fmt -check -recursive cloud/terraform
 ```
 
-## Init / plan / apply
+Live planning is deferred until trusted managed state and managed secret
+identifiers exist. It needs separate founder approval, must keep both gates
+false, must use a human-readable unsaved plan, and must retain only a sanitized
+summary.
 
-```sh
-cd cloud/terraform
-terraform init                          # local backend for now
-terraform plan -out=tfplan
-AWS_PROFILE=default terraform apply tfplan
-```
+Saved plans, JSON rendering, raw Terraform secret variables, and
+backend-disabled create-only plans are forbidden as proof of live safety.
+Provider initialization, validation, state or plan display, application, AWS
+CLI or SDK access, schedule enablement, and notification enablement are outside
+this source-verification workflow. No apply is authorized by this guidance.
 
-Override the placeholder notification email before a real apply, e.g. in
-`terraform.tfvars` (gitignored):
+## Deferred live rollout requirements
 
-```hcl
-budget_notification_email = "you@usecallie.com"
-```
+Any future live rollout requires a separately approved runbook and trusted
+managed state. Before that approval, the operator must confirm the shared-account
+namespace, managed secret identifiers, notification recipient, SES receipt-rule
+ownership, and the existing app-inbox credential handling. Access-key material
+must remain outside Terraform state and in the Mac app's Keychain.
 
-Remote state: an S3 backend block is commented out in `versions.tf`. Create
-the state bucket + lock table, uncomment, then `terraform init -migrate-state`.
-
-## Manual steps after apply
-
-1. **Activate the SES receipt rule set.** Terraform creates
-   `callie-sourcing-inbound` but does not activate it, because SES allows only
-   one active rule set per account and this account is shared. Check first,
-   then activate:
-
-   ```sh
-   aws ses describe-active-receipt-rule-set   # confirm nothing else is active
-   aws ses set-active-receipt-rule-set --rule-set-name callie-sourcing-inbound
-   ```
-
-   (Alternatively uncomment `aws_ses_active_receipt_rule_set` in `ses.tf`.)
-
-2. **Create the app-inbox access key manually** (deliberately NOT in Terraform
-   so the secret never enters TF state), then store it in the Mac app's
-   Keychain:
-
-   ```sh
-   aws iam create-access-key --user-name callie-sourcing-app-inbox
-   ```
-
-3. **Activate the `Project` cost allocation tag** in the Billing console
-   (one-time) so the budget's tag filter matches spend.
+The `schedules_enabled` and `scheduled_health_alerts_enabled` gates remain false
+through source verification and through any separately approved baseline plan.
 
 ## SES sandbox note
 
-Inbound receiving works fine while the account is in the SES sandbox.
-Production access is only needed for **outbound sending**, which this stack
-does not do. Domain verification for `in.usecallie.com` happens automatically
-via the Route53 TXT record Terraform creates.
+Inbound receiving works while the account is in the SES sandbox. Production
+access is needed only for outbound sending, which this stack does not do. Domain
+verification for `in.usecallie.com` is represented by the Route53 source.
 
 ## Budgets
 
 `budgets.tf` defines a $50/month cost budget filtered by
 `Project=callie-sourcing` with an email notification at 80% actual spend.
-External data-vendor spend (cap $20/mo, alarm at $15) is billed outside AWS
-and is tracked separately, not via AWS Budgets.
+External data-vendor spend is billed outside AWS and is tracked separately.

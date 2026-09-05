@@ -12,9 +12,12 @@
 locals {
   adapter_functions = {
     "adapter-pvd-taxroll" = {
-      source_dir  = "${path.module}/../lambdas/adapter-pvd-taxroll/dist"
-      memory_size = 512
-      timeout     = 900
+      source_dir             = "${path.module}/../lambdas/adapter-pvd-taxroll/dist"
+      memory_size            = 512
+      timeout                = 900
+      cadence                = "monthly"
+      has_unprocessed_metric = true
+      error_description      = "Sourcing adapter-pvd-taxroll Lambda failed."
       environment = {
         INBOX_BUCKET      = aws_s3_bucket.inbox.bucket
         IDEMPOTENCY_TABLE = aws_dynamodb_table.idempotency.name
@@ -27,9 +30,12 @@ locals {
       schedule = "cron(0 9 1 * ? *)"
     }
     "adapter-boston-rentsmart" = {
-      source_dir  = "${path.module}/../lambdas/adapter-boston-rentsmart/dist"
-      memory_size = 512
-      timeout     = 900
+      source_dir             = "${path.module}/../lambdas/adapter-boston-rentsmart/dist"
+      memory_size            = 512
+      timeout                = 900
+      cadence                = "daily"
+      has_unprocessed_metric = false
+      error_description      = "Sourcing adapter-boston-rentsmart Lambda failed."
       environment = {
         INBOX_BUCKET      = aws_s3_bucket.inbox.bucket
         IDEMPOTENCY_TABLE = aws_dynamodb_table.idempotency.name
@@ -40,9 +46,12 @@ locals {
       schedule = "cron(0 10 * * ? *)"
     }
     "adapter-boston-assessments" = {
-      source_dir  = "${path.module}/../lambdas/adapter-boston-assessments/dist"
-      memory_size = 512
-      timeout     = 900
+      source_dir             = "${path.module}/../lambdas/adapter-boston-assessments/dist"
+      memory_size            = 512
+      timeout                = 900
+      cadence                = "monthly"
+      has_unprocessed_metric = true
+      error_description      = "Sourcing adapter-boston-assessments Lambda failed."
       environment = {
         INBOX_BUCKET      = aws_s3_bucket.inbox.bucket
         IDEMPOTENCY_TABLE = aws_dynamodb_table.idempotency.name
@@ -56,8 +65,11 @@ locals {
       schedule = "cron(0 11 2 * ? *)"
     }
     "scorer" = {
-      source_dir  = "${path.module}/../lambdas/scorer/dist"
-      memory_size = 512
+      source_dir             = "${path.module}/../lambdas/scorer/dist"
+      memory_size            = 512
+      cadence                = "quarter_hour"
+      has_unprocessed_metric = true
+      error_description      = "Sourcing scorer Lambda failed."
       # 60s was fine for daily violation deltas; the Boston assessment spine
       # can land thousands of events in one sweep (4.2k on 2026-09-03 timed
       # out). Scoring is per-event idempotent, so a longer window just means
@@ -71,9 +83,12 @@ locals {
       schedule = "rate(15 minutes)"
     }
     "resolver" = {
-      source_dir  = "${path.module}/../lambdas/resolver/dist"
-      memory_size = 512
-      timeout     = 300
+      source_dir             = "${path.module}/../lambdas/resolver/dist"
+      memory_size            = 512
+      timeout                = 300
+      cadence                = "hourly"
+      has_unprocessed_metric = true
+      error_description      = "Sourcing resolver Lambda failed."
       environment = {
         INBOX_BUCKET   = aws_s3_bucket.inbox.bucket
         ENTITIES_TABLE = aws_dynamodb_table.entities.name
@@ -85,9 +100,12 @@ locals {
     # Suppression-checks every returned contact, flags DNC/TCPA in the payload
     # and enforces a monthly vendor credit cap with an SNS alarm.
     "enricher" = {
-      source_dir  = "${path.module}/../lambdas/enricher/dist"
-      memory_size = 512
-      timeout     = 300
+      source_dir             = "${path.module}/../lambdas/enricher/dist"
+      memory_size            = 512
+      timeout                = 300
+      cadence                = "quarter_hour"
+      has_unprocessed_metric = true
+      error_description      = "Sourcing enricher Lambda failed."
       environment = {
         INBOX_BUCKET      = aws_s3_bucket.inbox.bucket
         IDEMPOTENCY_TABLE = aws_dynamodb_table.idempotency.name
@@ -109,9 +127,12 @@ locals {
     # do-not-call list the enricher checks before any contact-bearing event
     # reaches the inbox). Same cadence as the enricher it protects.
     "suppression-sync" = {
-      source_dir  = "${path.module}/../lambdas/suppression-sync/dist"
-      memory_size = 256
-      timeout     = 60
+      source_dir             = "${path.module}/../lambdas/suppression-sync/dist"
+      memory_size            = 256
+      timeout                = 60
+      cadence                = "quarter_hour"
+      has_unprocessed_metric = true
+      error_description      = "Suppression sync or replay failed; outbound enrichment must remain paused."
       # Own role: the ONLY writer of the suppression table. The shared
       # adapters role stays read-only on it by design (enricher checks,
       # never writes).

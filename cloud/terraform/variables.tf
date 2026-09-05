@@ -66,7 +66,13 @@ variable "tracerfy_api_key" {
 }
 
 variable "schedules_enabled" {
-  description = "Master switch for the adapter/scorer/resolver/enricher EventBridge schedules. Flipped to true 2026-09-02 after the founder-delegated quality pass (top-25 verified against city records, 88% pass at scores v2). Set false to pause the whole pipeline."
+  description = "Master switch for every scheduled sourcing and watchdog EventBridge rule. Keep false until an approved production rollout."
   type        = bool
-  default     = true
+  default     = false
+}
+
+variable "scheduled_health_alerts_enabled" {
+  description = "Enables notification actions for scheduled missing-success and persistent-work health alarms after an approved baseline."
+  type        = bool
+  default     = false
 }

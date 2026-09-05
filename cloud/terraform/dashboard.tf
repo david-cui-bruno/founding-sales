@@ -10,7 +10,7 @@ resource "aws_cloudwatch_dashboard" "pipeline" {
     widgets = [
       {
         type       = "text", x = 0, y = 0, width = 24, height = 1,
-        properties = { markdown = "## Callie sourcing pipeline — invocations, errors, duration. Source ROI and precision live in the app (outcome labels)." }
+        properties = { markdown = "## Callie sourcing pipeline — invocations, errors, throttles, duration, successful completions, and persistent work. Source ROI and precision live in the app (outcome labels)." }
       },
       {
         type = "metric", x = 0, y = 1, width = 12, height = 6,
@@ -56,6 +56,43 @@ resource "aws_cloudwatch_dashboard" "pipeline" {
       },
       {
         type = "metric", x = 12, y = 7, width = 12, height = 6,
+        properties = {
+          title  = "Throttles"
+          region = var.aws_region
+          stat   = "Sum"
+          period = 3600
+          metrics = [for k in keys(local.adapter_functions) :
+            ["AWS/Lambda", "Throttles", "FunctionName", aws_lambda_function.adapters[k].function_name]
+          ]
+        }
+      },
+      {
+        type = "metric", x = 0, y = 13, width = 12, height = 6,
+        properties = {
+          title  = "Scheduled run successes"
+          region = var.aws_region
+          stat   = "Sum"
+          period = 3600
+          metrics = [for key in keys(local.adapter_functions) :
+            ["Callie/Sourcing", "ScheduledRunSuccess", "Component", key]
+          ]
+        }
+      },
+      {
+        type = "metric", x = 12, y = 13, width = 12, height = 6,
+        properties = {
+          title  = "Unprocessed scheduled work"
+          region = var.aws_region
+          stat   = "Minimum"
+          period = 3600
+          metrics = [for key, source in local.adapter_functions :
+            ["Callie/Sourcing", "ScheduledRunUnprocessed", "Component", key]
+            if source.has_unprocessed_metric
+          ]
+        }
+      },
+      {
+        type = "metric", x = 0, y = 19, width = 12, height = 6,
         properties = {
           title  = "Inbox bucket size / object count"
           region = var.aws_region
