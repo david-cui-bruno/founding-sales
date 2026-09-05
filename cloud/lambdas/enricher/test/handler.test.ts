@@ -532,9 +532,24 @@ describe("handlerWithDeps", () => {
   });
 });
 
+function assertSafeBoundaryFailure(failure: unknown, originalName: string, originalMessage: string): void {
+  expect(failure).toBeInstanceOf(Error);
+  const error = failure as Error;
+  expect(error.name).toBe("SafeHandlerError");
+  expect(error.message).toBe("Cloud handler invocation failed");
+  expect(Object.getOwnPropertyNames(error).sort()).toEqual(["message", "name", "stack"].sort());
+  expect(error).not.toHaveProperty("cause");
+  expect(error.name).not.toBe(originalName);
+  expect(error.message).not.toContain(originalMessage);
+  expect(JSON.stringify(error)).not.toContain(originalMessage);
+}
+
 describe("exported handler boundary", () => {
   it("includes dependency initialization, rounds fractional duration, and excludes warm idle", async () => {
-    const { deps } = fakeDeps([]);
+    const pii = "private@example.test";
+    const { deps } = fakeDeps([{ status: 200, body: hitResponse() }], {
+      objects: new Map([[FILE_KEY, requestFile([request({ owner_full_name: pii })])]]),
+    });
     const output: string[] = [];
     const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
     const times = [100, 102.4, 105.6, 10_000, 10_007.4];
@@ -544,18 +559,20 @@ describe("exported handler boundary", () => {
     const completions = output.map((line) => JSON.parse(line) as Record<string, unknown>).filter((record) => record.eventCode === "SCHEDULED_RUN_COMPLETED");
     expect(completions).toHaveLength(2);
     expect(completions.map((record) => ({ durationMs: record.durationMs, count: record.count, unprocessedCount: record.unprocessedCount }))).toEqual([
-      { durationMs: 6, count: 0, unprocessedCount: 0 },
+      { durationMs: 6, count: 1, unprocessedCount: 0 },
       { durationMs: 7, count: 0, unprocessedCount: 0 },
     ]);
+    expect(output.join("\n")).not.toContain(pii);
     for (const record of completions) expect(Object.keys(record).sort()).toEqual(["component", "count", "durationMs", "eventCode", "level", "unprocessedCount"].sort());
   });
   it("finalizes failures with safe defaults and rejects only the fixed safe error", async () => {
     const output: string[] = [];
     const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
     const { deps } = fakeDeps([]);
-    deps.s3 = { send: async () => { throw new Error("private@example.test provider payload secret-token"); } } as HandlerDeps["s3"];
+    deps.s3 = { send: async () => { throw Object.assign(new Error("private@example.test provider payload secret-token"), { name: "PrivateProviderError", privatePayload: "must-not-escape" }); } } as HandlerDeps["s3"];
     const invocation = createHandler(() => deps, () => 20);
-    try { await expect(invocation(null)).rejects.toMatchObject({ name: "SafeHandlerError", message: "Cloud handler invocation failed" }); } finally { consoleSpy.mockRestore(); }
+    try { const failure = await invocation(null).then(() => undefined, (error) => error);
+      assertSafeBoundaryFailure(failure, "PrivateProviderError", "private@example.test provider payload secret-token"); } finally { consoleSpy.mockRestore(); }
     const completionLines = output.filter((line) => line.includes("SCHEDULED_RUN_COMPLETED"));
     expect(completionLines).toHaveLength(1);
     const serialized = completionLines[0]!;

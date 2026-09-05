@@ -8,8 +8,6 @@ import {
   type DynamoDBClient,
 } from "@aws-sdk/client-dynamodb";
 import {
-  GetObjectCommand,
-  ListObjectVersionsCommand,
   PutObjectCommand,
   type S3Client,
 } from "@aws-sdk/client-s3";
@@ -18,8 +16,8 @@ import { log } from "./log";
 import {
   SuppressionObjectValidationError,
   ledgerNaturalKey,
-  parseAndValidateSuppressionObject,
-  suppressionObjectDescriptorFromAws,
+  listSuppressionObjectsFromS3,
+  readValidatedSuppressionObjectFromS3,
   type SuppressionObjectDescriptor,
   type ValidatedSuppressionObject,
 } from "./suppressionObject";
@@ -111,89 +109,17 @@ function lexicalCompare(left: string, right: string): number {
   return 0;
 }
 
-function normalizeEtag(etag: string): string {
-  return etag.startsWith('"') && etag.endsWith('"') ? etag.slice(1, -1) : etag;
-}
-
-function requiredVersionMetadata(
-  key: string,
-  field: string,
-  value: unknown,
-): asserts value {
-  if (value === undefined || value === null) {
-    throw new Error(`listed suppression object ${key} is missing ${field}`);
-  }
-}
-
 export async function listUploadObjects(
   deps: HandlerDeps,
 ): Promise<SuppressionObjectDescriptor[]> {
-  const objects: SuppressionObjectDescriptor[] = [];
-  let keyMarker: string | undefined;
-  let versionIdMarker: string | undefined;
-
-  while (true) {
-    const page = await deps.s3.send(
-      new ListObjectVersionsCommand({
-        Bucket: deps.env.INBOX_BUCKET,
-        Prefix: UPLOADS_PREFIX,
-        KeyMarker: keyMarker,
-        VersionIdMarker: versionIdMarker,
-      }),
-    );
-
-    for (const version of page.Versions ?? []) {
-      const key = version.Key;
-      if (!key?.endsWith(".ndjson")) continue;
-      requiredVersionMetadata(key, "ETag", version.ETag);
-      requiredVersionMetadata(key, "LastModified", version.LastModified);
-      objects.push(suppressionObjectDescriptorFromAws({
-        bucket: deps.env.INBOX_BUCKET,
-        key,
-        versionId: version.VersionId ?? null,
-        etag: normalizeEtag(version.ETag),
-        lastModified: version.LastModified.toISOString(),
-      }));
-    }
-
-    if (!page.IsTruncated) break;
-    if (!page.NextKeyMarker) {
-      throw new Error("truncated suppression object version listing has no next key marker");
-    }
-    keyMarker = page.NextKeyMarker;
-    versionIdMarker = page.NextVersionIdMarker;
-  }
-
-  return objects.sort(
-    (left, right) =>
-      lexicalCompare(left.lastModified, right.lastModified) ||
-      lexicalCompare(left.key, right.key) ||
-      lexicalCompare(left.versionId ?? "", right.versionId ?? ""),
-  );
-}
-
-export async function readObjectText(
-  deps: HandlerDeps,
-  descriptor: SuppressionObjectDescriptor,
-): Promise<string> {
-  const raw = await deps.s3.send(
-    new GetObjectCommand({
-      Bucket: descriptor.bucket,
-      Key: descriptor.key,
-      VersionId: descriptor.versionId ?? undefined,
-    }),
-  );
-  return raw.Body
-    ? await (raw.Body as { transformToString(): Promise<string> }).transformToString()
-    : "";
+  return listSuppressionObjectsFromS3(deps, UPLOADS_PREFIX);
 }
 
 export async function readValidatedObject(
   deps: HandlerDeps,
   descriptor: SuppressionObjectDescriptor,
 ): Promise<ValidatedSuppressionObject> {
-  const text = await readObjectText(deps, descriptor);
-  return parseAndValidateSuppressionObject({ descriptor, text });
+  return readValidatedSuppressionObjectFromS3(deps, descriptor);
 }
 
 function stringAttribute(
@@ -309,9 +235,8 @@ async function buildReplaySource(
   const evidenceObjects: EvidenceObject[] = [];
 
   for (const descriptor of descriptors) {
-    const text = await readObjectText(deps, descriptor);
     try {
-      const object = parseAndValidateSuppressionObject({ descriptor, text });
+      const object = await readValidatedObject(deps, descriptor);
       const checksumSha256 = object.checksumSha256;
       validObjects.push(object);
       evidenceObjects.push({
@@ -339,11 +264,11 @@ async function buildReplaySource(
         versionId: descriptor.versionId,
         etag: descriptor.etag,
         lastModified: descriptor.lastModified,
-        checksumSha256: sha256Utf8(text),
+        checksumSha256: error.checksumSha256!,
         status: "quarantined",
       });
       log("warn", "suppression_object_quarantined", {
-        metadata: error.logMetadata,
+        metadata: error.logMetadata ?? {},
         invalid_line_numbers: error.invalidLineNumbers,
         invalid_line_count: error.invalidLineNumbers.length,
       });

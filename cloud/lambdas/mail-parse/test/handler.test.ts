@@ -243,6 +243,18 @@ describe("handlerWithDeps", () => {
   });
 });
 
+function assertSafeBoundaryFailure(failure: unknown, originalName: string, originalMessage: string): void {
+  expect(failure).toBeInstanceOf(Error);
+  const error = failure as Error;
+  expect(error.name).toBe("SafeHandlerError");
+  expect(error.message).toBe("Cloud handler invocation failed");
+  expect(Object.getOwnPropertyNames(error).sort()).toEqual(["message", "name", "stack"].sort());
+  expect(error).not.toHaveProperty("cause");
+  expect(error.name).not.toBe(originalName);
+  expect(error.message).not.toContain(originalMessage);
+  expect(JSON.stringify(error)).not.toContain(originalMessage);
+}
+
 describe("exported handler boundary", () => {
   it("replaces PII-bearing provider failures with the fixed safe error", async () => {
     const state = newState("other-message", Buffer.from(""));
@@ -250,10 +262,8 @@ describe("exported handler boundary", () => {
     const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
     const invocation = createHandler(() => fakeDeps(state));
     try {
-      await expect(invocation(sesEvent("private@example.test-secret-token"))).rejects.toMatchObject({
-        name: "SafeHandlerError",
-        message: "Cloud handler invocation failed",
-      });
+      const failure = await invocation(sesEvent("private@example.test-secret-token")).then(() => undefined, (error) => error);
+      assertSafeBoundaryFailure(failure, "NoSuchKey", "private@example.test-secret-token");
     } finally {
       consoleSpy.mockRestore();
     }

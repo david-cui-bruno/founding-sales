@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createSafeLogger,
-  createOpaqueLogValueAuthority,
   defineLogPolicy,
   SafeHandlerError,
   type CanonicalLogField,
+  type OpaqueLogReader,
+  type OpaqueLogValue,
 } from "../src/safeLog";
 
 const policy = defineLogPolicy({
@@ -21,14 +22,28 @@ const policy = defineLogPolicy({
       "lineNumber",
       "errorClass",
     ],
+    SUPPRESSION_OBJECT_QUARANTINED: ["objectKey", "objectChecksumSha256"],
   },
 });
 
+function createTestAuthority(policyIdentity: object, eventCode: string, field: CanonicalLogField): { issue(value: string): OpaqueLogValue; read: OpaqueLogReader } {
+  const values = new WeakMap<object, string>();
+  return {
+    issue(value) { const token = Object.freeze({}); values.set(token, value); return token; },
+    read(policy, event, candidateField, value) {
+      if (policy !== policyIdentity || event !== eventCode || candidateField !== field || typeof value !== "object" || value === null) return undefined;
+      const retained = values.get(value);
+      if (retained !== undefined) values.delete(value);
+      return retained;
+    },
+  };
+}
+
 const authorities = {
-  objectKey: createOpaqueLogValueAuthority(),
-  objectVersionId: createOpaqueLogValueAuthority(),
-  objectEtag: createOpaqueLogValueAuthority(),
-  objectChecksumSha256: createOpaqueLogValueAuthority(),
+  objectKey: createTestAuthority(policy, "SUPPRESSION_OBJECT_INVALID", "objectKey"),
+  objectVersionId: createTestAuthority(policy, "SUPPRESSION_OBJECT_INVALID", "objectVersionId"),
+  objectEtag: createTestAuthority(policy, "SUPPRESSION_OBJECT_INVALID", "objectEtag"),
+  objectChecksumSha256: createTestAuthority(policy, "SUPPRESSION_OBJECT_INVALID", "objectChecksumSha256"),
 };
 
 function capturedLogger() {
@@ -217,6 +232,30 @@ describe("createSafeLogger", () => {
     } as never);
 
     expect(parsedOnly(output)).not.toHaveProperty("objectEtag");
+
+    const secondEventOutput: string[] = [];
+    createSafeLogger(policy, (line) => secondEventOutput.push(line), {
+      SUPPRESSION_OBJECT_QUARANTINED: { objectChecksumSha256: authorities.objectChecksumSha256.read },
+    })("warn", "SUPPRESSION_OBJECT_QUARANTINED", { objectChecksumSha256: checksumCapability });
+    expect(parsedOnly(secondEventOutput)).not.toHaveProperty("objectChecksumSha256");
+
+    const secondPolicy = defineLogPolicy({
+      component: "suppression-sync",
+      events: { SUPPRESSION_OBJECT_INVALID: ["objectChecksumSha256"] },
+    });
+    const secondPolicyOutput: string[] = [];
+    createSafeLogger(secondPolicy, (line) => secondPolicyOutput.push(line), {
+      SUPPRESSION_OBJECT_INVALID: { objectChecksumSha256: authorities.objectChecksumSha256.read },
+    })("error", "SUPPRESSION_OBJECT_INVALID", { objectChecksumSha256: checksumCapability });
+    expect(parsedOnly(secondPolicyOutput)).not.toHaveProperty("objectChecksumSha256");
+
+    const reuseOutput: string[] = [];
+    const sameBinding = createSafeLogger(policy, (line) => reuseOutput.push(line), {
+      SUPPRESSION_OBJECT_INVALID: { objectChecksumSha256: authorities.objectChecksumSha256.read },
+    });
+    sameBinding("error", "SUPPRESSION_OBJECT_INVALID", { objectChecksumSha256: checksumCapability });
+    sameBinding("error", "SUPPRESSION_OBJECT_INVALID", { objectChecksumSha256: checksumCapability });
+    expect(reuseOutput.map((line) => JSON.parse(line).objectChecksumSha256)).toEqual([contactHmac, undefined]);
   });
 
   it("owns numeric validation and rejects fractional or invalid caller values", () => {

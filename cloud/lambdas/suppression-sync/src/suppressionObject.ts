@@ -1,15 +1,43 @@
 import { createHash } from "node:crypto";
 import {
-  createOpaqueLogValueAuthority,
+  GetObjectCommand,
+  ListObjectVersionsCommand,
+  type S3Client,
+} from "@aws-sdk/client-s3";
+import {
+  defineLogPolicy,
+  type CanonicalLogField,
+  type OpaqueLogReader,
   suppressionUploadLineSchema,
   type OpaqueLogValue,
   type SuppressionUploadLine,
 } from "@callie-sourcing/shared";
 
-const keyAuthority = createOpaqueLogValueAuthority();
-const versionAuthority = createOpaqueLogValueAuthority();
-const etagAuthority = createOpaqueLogValueAuthority();
-const checksumAuthority = createOpaqueLogValueAuthority();
+export const suppressionLogPolicy = defineLogPolicy({
+  component: "suppression-sync",
+  events: {
+    SCHEDULED_RUN_COMPLETED: ["durationMs", "count", "unprocessedCount"],
+    SUPPRESSION_OBJECT_INVALID: ["objectKey", "objectVersionId", "objectEtag", "objectChecksumSha256", "invalidLineNumbers", "invalidLineCount", "lineNumber", "errorClass"],
+    SUPPRESSION_MAINTENANCE_COMPLETED: ["count", "unprocessedCount"],
+  },
+});
+
+function createAuthority(field: CanonicalLogField): { issue(value: string): OpaqueLogValue; read: OpaqueLogReader } {
+  const values = new WeakMap<object, string>();
+  return {
+    issue(value) { const token = Object.freeze({}); values.set(token, value); return token; },
+    read(policy, eventCode, candidateField, value) {
+      if (policy !== suppressionLogPolicy || eventCode !== "SUPPRESSION_OBJECT_INVALID" || candidateField !== field || typeof value !== "object" || value === null) return undefined;
+      const retained = values.get(value);
+      if (retained !== undefined) values.delete(value);
+      return retained;
+    },
+  };
+}
+const keyAuthority = createAuthority("objectKey");
+const versionAuthority = createAuthority("objectVersionId");
+const etagAuthority = createAuthority("objectEtag");
+const checksumAuthority = createAuthority("objectChecksumSha256");
 
 export const suppressionObjectLogReaders = Object.freeze({
   objectKey: keyAuthority.read,
@@ -46,13 +74,15 @@ export class SuppressionObjectValidationError extends Error {
   readonly key: string;
   readonly versionId: string | null;
   readonly invalidLineNumbers: readonly number[];
-  readonly logMetadata: SuppressionObjectLogMetadata;
+  readonly logMetadata?: SuppressionObjectLogMetadata;
+  readonly checksumSha256?: string;
 
   constructor(input: {
     key: string;
     versionId: string | null;
     invalidLineNumbers: readonly number[];
-    logMetadata: SuppressionObjectLogMetadata;
+    logMetadata?: SuppressionObjectLogMetadata;
+    checksumSha256?: string;
   }) {
     super(`invalid suppression object lines: ${input.invalidLineNumbers.join(",")}`);
     this.name = "SuppressionObjectValidationError";
@@ -60,18 +90,55 @@ export class SuppressionObjectValidationError extends Error {
     this.versionId = input.versionId;
     this.invalidLineNumbers = input.invalidLineNumbers;
     this.logMetadata = input.logMetadata;
+    this.checksumSha256 = input.checksumSha256;
   }
 }
 
-export function suppressionObjectDescriptorFromAws(input: Omit<SuppressionObjectDescriptor, "logMetadata">): SuppressionObjectDescriptor {
-  return {
-    ...input,
-    logMetadata: {
-      objectKey: keyAuthority.issue(input.key),
-      ...(input.versionId === null ? {} : { objectVersionId: versionAuthority.issue(input.versionId) }),
-      objectEtag: etagAuthority.issue(input.etag),
-    },
-  };
+type SuppressionS3Deps = Readonly<{
+  s3: Pick<S3Client, "send">;
+  env: { INBOX_BUCKET: string };
+}>;
+
+function normalizeEtag(etag: string): string {
+  return etag.startsWith('"') && etag.endsWith('"') ? etag.slice(1, -1) : etag;
+}
+
+function requiredMetadata(key: string, field: string, value: unknown): asserts value {
+  if (value === undefined || value === null) throw new Error(`listed suppression object ${key} is missing ${field}`);
+}
+
+export async function listSuppressionObjectsFromS3(deps: SuppressionS3Deps, prefix: string): Promise<SuppressionObjectDescriptor[]> {
+  const objects: SuppressionObjectDescriptor[] = [];
+  let keyMarker: string | undefined;
+  let versionIdMarker: string | undefined;
+  while (true) {
+    const page = await deps.s3.send(new ListObjectVersionsCommand({ Bucket: deps.env.INBOX_BUCKET, Prefix: prefix, KeyMarker: keyMarker, VersionIdMarker: versionIdMarker }));
+    for (const version of page.Versions ?? []) {
+      const key = version.Key;
+      if (!key?.endsWith(".ndjson")) continue;
+      requiredMetadata(key, "ETag", version.ETag);
+      requiredMetadata(key, "LastModified", version.LastModified);
+      const versionId = version.VersionId ?? null;
+      const etag = normalizeEtag(version.ETag);
+      objects.push({
+        bucket: deps.env.INBOX_BUCKET,
+        key,
+        versionId,
+        etag,
+        lastModified: version.LastModified.toISOString(),
+        logMetadata: {
+          objectKey: keyAuthority.issue(key),
+          ...(versionId === null ? {} : { objectVersionId: versionAuthority.issue(versionId) }),
+          objectEtag: etagAuthority.issue(etag),
+        },
+      });
+    }
+    if (!page.IsTruncated) break;
+    if (!page.NextKeyMarker) throw new Error("truncated suppression object version listing has no next key marker");
+    keyMarker = page.NextKeyMarker;
+    versionIdMarker = page.NextVersionIdMarker;
+  }
+  return objects.sort((left, right) => left.lastModified.localeCompare(right.lastModified) || left.key.localeCompare(right.key) || (left.versionId ?? "").localeCompare(right.versionId ?? ""));
 }
 
 function sha256Utf8(value: string): string {
@@ -83,10 +150,6 @@ export function parseAndValidateSuppressionObject(input: {
   text: string;
 }): ValidatedSuppressionObject {
   const checksumSha256 = sha256Utf8(input.text);
-  const logMetadata = {
-    ...input.descriptor.logMetadata,
-    objectChecksumSha256: checksumAuthority.issue(checksumSha256),
-  };
   const lines: SuppressionUploadLine[] = [];
   const invalidLineNumbers: number[] = [];
 
@@ -106,17 +169,41 @@ export function parseAndValidateSuppressionObject(input: {
       key: input.descriptor.key,
       versionId: input.descriptor.versionId,
       invalidLineNumbers,
-      logMetadata,
     });
   }
 
   return {
     descriptor: input.descriptor,
     checksumSha256,
-    logMetadata,
+    logMetadata: input.descriptor.logMetadata ?? {},
     lines,
     validRowCount: lines.length,
   };
+}
+
+export async function readValidatedSuppressionObjectFromS3(
+  deps: SuppressionS3Deps,
+  descriptor: SuppressionObjectDescriptor,
+): Promise<ValidatedSuppressionObject> {
+  const raw = await deps.s3.send(new GetObjectCommand({ Bucket: descriptor.bucket, Key: descriptor.key, VersionId: descriptor.versionId ?? undefined }));
+  const text = raw.Body ? await (raw.Body as { transformToString(): Promise<string> }).transformToString() : "";
+  const checksumSha256 = sha256Utf8(text);
+  const logMetadata = { ...descriptor.logMetadata, objectChecksumSha256: checksumAuthority.issue(checksumSha256) };
+  try {
+    const parsed = parseAndValidateSuppressionObject({ descriptor, text });
+    return { ...parsed, logMetadata };
+  } catch (error) {
+    if (error instanceof SuppressionObjectValidationError) {
+      throw new SuppressionObjectValidationError({
+        key: error.key,
+        versionId: error.versionId,
+        invalidLineNumbers: error.invalidLineNumbers,
+        logMetadata,
+        checksumSha256,
+      });
+    }
+    throw error;
+  }
 }
 
 export function ledgerNaturalKey(object: ValidatedSuppressionObject): string {

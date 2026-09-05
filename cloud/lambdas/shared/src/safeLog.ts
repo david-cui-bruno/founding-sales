@@ -42,24 +42,13 @@ export class SafeHandlerError extends Error {
 }
 
 export type OpaqueLogValue = Readonly<{ __opaqueLogValue?: never }>;
-export type OpaqueLogReader = (value: unknown) => string | undefined;
+export type OpaqueLogReader = (
+  policy: object,
+  eventCode: string,
+  field: CanonicalLogField,
+  value: unknown,
+) => string | undefined;
 
-export function createOpaqueLogValueAuthority(): Readonly<{
-  issue(value: string): OpaqueLogValue;
-  read: OpaqueLogReader;
-}> {
-  const values = new WeakMap<object, string>();
-  return Object.freeze({
-    issue(value: string): OpaqueLogValue {
-      const capability = Object.freeze({});
-      values.set(capability, value);
-      return capability;
-    },
-    read(value: unknown): string | undefined {
-      return typeof value === "object" && value !== null ? values.get(value) : undefined;
-    },
-  });
-}
 const OPAQUE_FIELDS = new Set<CanonicalLogField>([
   "objectKey",
   "objectVersionId",
@@ -100,12 +89,11 @@ function safeErrorClass(value: unknown): string | undefined {
 function sanitizeField(
   field: CanonicalLogField,
   value: unknown,
-  opaqueReader?: OpaqueLogReader,
 ): unknown {
   if (INTEGER_FIELDS.has(field)) return safeInteger(value);
 
   if (OPAQUE_FIELDS.has(field)) {
-    return opaqueReader?.(value);
+    return undefined;
   }
 
   switch (field) {
@@ -176,7 +164,10 @@ export function createSafeLogger<
     const inputFields = fields as Partial<Record<CanonicalLogField, unknown>>;
     for (const field of allowedFields) {
       if (!Object.prototype.hasOwnProperty.call(inputFields, field)) continue;
-      const sanitized = sanitizeField(field, inputFields[field], opaqueReaders[eventCode]?.[field]);
+      const reader = opaqueReaders[eventCode]?.[field];
+      const sanitized = OPAQUE_FIELDS.has(field)
+        ? reader?.(policy, eventCode, field, inputFields[field])
+        : sanitizeField(field, inputFields[field]);
       if (sanitized !== undefined) record[field] = sanitized;
     }
     write(JSON.stringify(record));

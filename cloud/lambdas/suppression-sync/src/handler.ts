@@ -147,7 +147,7 @@ async function runIncremental(
     } catch (error) {
       if (error instanceof SuppressionObjectValidationError) {
         log("error", "suppression_object_invalid", {
-          metadata: error.logMetadata,
+          metadata: error.logMetadata ?? {},
           invalid_line_numbers: error.invalidLineNumbers,
           invalid_line_count: error.invalidLineNumbers.length,
         });
@@ -219,16 +219,26 @@ export function createHandler(
     } catch {
       throw new SafeHandlerError();
     } finally {
+      const durationMs = Math.max(0, Math.round(monotonicNow() - startedAt));
       const incremental = result && "filesSeen" in result ? result : undefined;
       const maintenance = result && "report" in result ? result.report : undefined;
-      log("info", "suppression_sync_run", {
-        files_seen: incremental?.filesSeen ?? maintenance?.objectsSeen ?? 0,
-        files_processed: incremental?.filesProcessed ?? maintenance?.objectsValid ?? 0,
-        files_skipped: incremental?.filesSkipped ?? 0,
-        lines_written: incremental?.linesWritten ?? 0,
-        invalid_lines: incremental?.invalidLines ?? 0,
-        durationMs: Math.max(0, Math.round(monotonicNow() - startedAt)),
-      });
+      if (maintenance) {
+        const reconcile = typeof event === "object" && event !== null && (event as { mode?: unknown }).mode === "reconcile";
+        log("info", "suppression_scheduled_maintenance_run", {
+          count: maintenance.objectsValid,
+          unprocessed_count: reconcile ? maintenance.missingMemberships : maintenance.objectsQuarantined,
+          durationMs,
+        });
+      } else {
+        log("info", "suppression_sync_run", {
+          files_seen: incremental?.filesSeen ?? 0,
+          files_processed: incremental?.filesProcessed ?? 0,
+          files_skipped: incremental?.filesSkipped ?? 0,
+          lines_written: incremental?.linesWritten ?? 0,
+          invalid_lines: incremental?.invalidLines ?? 0,
+          durationMs,
+        });
+      }
     }
   };
 }

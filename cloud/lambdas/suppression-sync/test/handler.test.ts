@@ -8,7 +8,7 @@ import {
   type HandlerDeps,
   type SuppressionReplayResult,
 } from "../src/handler";
-import { SuppressionObjectValidationError } from "../src/suppressionObject";
+import { parseAndValidateSuppressionObject, SuppressionObjectValidationError } from "../src/suppressionObject";
 import { log } from "../src/log";
 
 const NOW = new Date("2026-09-04T12:00:00.000Z");
@@ -691,7 +691,31 @@ describe("suppression-sync handler", () => {
   });
 });
 
+function assertSafeBoundaryFailure(failure: unknown, originalName: string, originalMessage: string): void {
+  expect(failure).toBeInstanceOf(Error);
+  const error = failure as Error;
+  expect(error.name).toBe("SafeHandlerError");
+  expect(error.message).toBe("Cloud handler invocation failed");
+  expect(Object.getOwnPropertyNames(error).sort()).toEqual(["message", "name", "stack"].sort());
+  expect(error).not.toHaveProperty("cause");
+  expect(error.name).not.toBe(originalName);
+  expect(error.message).not.toContain(originalMessage);
+  expect(JSON.stringify(error)).not.toContain(originalMessage);
+}
+
 describe("exported handler boundary", () => {
+  it("does not grant pure parser fixtures AWS or fetched-body capabilities", () => {
+    const parsed = parseAndValidateSuppressionObject({
+      descriptor: { bucket: "fixture", key: "private-person.ndjson", versionId: "secret-token", etag: "b".repeat(32), lastModified: NOW.toISOString() },
+      text: bodyFor("a"),
+    });
+    const output: string[] = [];
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
+    try {
+      log("error", "suppression_object_invalid", { metadata: parsed.logMetadata, invalid_line_numbers: [1], invalid_line_count: 1 });
+    } finally { consoleSpy.mockRestore(); }
+    expect(JSON.parse(output[0]!)).not.toMatchObject({ objectKey: expect.anything(), objectVersionId: expect.anything(), objectEtag: expect.anything(), objectChecksumSha256: expect.anything() });
+  });
   it("cannot mint a checksum capability from a caller-supplied contact HMAC", () => {
     const contactHmac = "0123456789abcdef".repeat(4);
     const output: string[] = [];
@@ -722,6 +746,7 @@ describe("exported handler boundary", () => {
       { durationMs: 6, count: 1, unprocessedCount: 0 },
       { durationMs: 0, count: 0, unprocessedCount: 0 },
     ]);
+    expect(output.join("\n")).not.toContain("a".repeat(64));
     for (const record of completions) expect(Object.keys(record).sort()).toEqual(["component", "count", "durationMs", "eventCode", "level", "unprocessedCount"].sort());
   });
   it("preserves only AWS/body-owned metadata and safely finalizes a real parser failure", async () => {
@@ -730,7 +755,8 @@ describe("exported handler boundary", () => {
     const output: string[] = [];
     const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
     const invocation = createHandler(() => fakeDeps(state([object])), () => 20);
-    try { await expect(invocation({ mode: "incremental" })).rejects.toMatchObject({ name: "SafeHandlerError", message: "Cloud handler invocation failed" }); } finally { consoleSpy.mockRestore(); }
+    try { const failure = await invocation({ mode: "incremental" }).then(() => undefined, (error) => error);
+      assertSafeBoundaryFailure(failure, "SuppressionObjectValidationError", "invalid suppression object lines"); } finally { consoleSpy.mockRestore(); }
     const records = output.map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(records.filter((record) => record.eventCode === "SCHEDULED_RUN_COMPLETED")).toHaveLength(1);
     const invalid = records.find((record) => record.eventCode === "SUPPRESSION_OBJECT_INVALID")!;
@@ -742,20 +768,28 @@ describe("exported handler boundary", () => {
     expect(output.join("\n")).not.toContain("private@example.test");
   });
   it("maps replay and reconcile success reports to nonzero completion aggregates", async () => {
-    const s = state([objectVersion({ body: bodyFor("a") })]);
+    const s = state([
+      objectVersion({ key: `${UPLOADS_PREFIX}valid-a.ndjson`, versionId: "valid-a", body: bodyFor("a") }),
+      objectVersion({ key: `${UPLOADS_PREFIX}valid-b.ndjson`, versionId: "valid-b", body: bodyFor("b") }),
+      objectVersion({ key: `${UPLOADS_PREFIX}invalid.ndjson`, versionId: "invalid", body: "private@example.test" }),
+    ]);
     const output: string[] = [];
     const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
     const invocation = createHandler(() => fakeDeps(s), () => 50);
     let replay: Awaited<ReturnType<typeof invocation>>;
     try {
-      replay = await invocation({ mode: "replay", dryRun: false });
+      replay = await invocation({ mode: "replay", dryRun: true });
+      const replayCompletions = output.map((line) => JSON.parse(line) as Record<string, unknown>).filter((record) => record.eventCode === "SCHEDULED_RUN_COMPLETED");
+      expect(replayCompletions).toHaveLength(1);
+      expect(replayCompletions[0]).toMatchObject({ count: 2, unprocessedCount: 1 });
+      expect(output.join("\n")).not.toContain("private@example.test");
+      output.length = 0;
+      s.objects = s.objects.filter((object) => object.versionId !== "invalid");
       await invocation({ mode: "reconcile", reportKey: (replay as SuppressionReplayResult).reportKey });
+      const reconcileCompletions = output.map((line) => JSON.parse(line) as Record<string, unknown>).filter((record) => record.eventCode === "SCHEDULED_RUN_COMPLETED");
+      expect(reconcileCompletions).toHaveLength(1);
+      expect(reconcileCompletions[0]).toMatchObject({ count: 2, unprocessedCount: 2 });
+      expect(output.join("\n")).not.toContain("private@example.test");
     } finally { consoleSpy.mockRestore(); }
-    const completions = output.map((line) => JSON.parse(line) as Record<string, unknown>).filter((record) => record.eventCode === "SCHEDULED_RUN_COMPLETED");
-    expect(completions).toHaveLength(2);
-    expect(completions.map(({ count, unprocessedCount }) => ({ count, unprocessedCount }))).toEqual([
-      { count: 1, unprocessedCount: 0 },
-      { count: 1, unprocessedCount: 0 },
-    ]);
   });
 });
