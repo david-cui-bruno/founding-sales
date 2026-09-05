@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { normalizeOwnerName } from "@callie-sourcing/shared";
 import {
   buildOwnerSql,
@@ -13,6 +13,7 @@ import {
   ROW_R3_OWNER_OCC,
   ROW_TRUST_ABSENTEE,
 } from "./fixtures";
+import { log } from "../src/log";
 
 const ENV = {
   INBOX_BUCKET: "inbox",
@@ -252,5 +253,33 @@ describe("handlerWithDeps", () => {
     await expect(handlerWithDeps(null, deps)).rejects.toThrow(
       /datastore_search_sql error/,
     );
+  });
+});
+
+describe("PII-safe handler logging", () => {
+  it("serializes only the package policy for PII-bearing inputs", () => {
+    const output: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((value) => {
+      output.push(String(value));
+    });
+
+    try {
+      log("info", 'run finished', { written: 4, entitiesScanned: 6, ownerName: "Private Person", row: { email: "private@example.test" } });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(output).toHaveLength(1);
+    const serialized = output[0]!;
+    const record = JSON.parse(serialized);
+    expect(record.component).toBe('adapter-boston-assessments');
+    expect(record.eventCode).toBe('SCHEDULED_RUN_COMPLETED');
+    expect(Object.keys(record).sort()).toEqual(
+      ['component', 'count', 'durationMs', 'eventCode', 'level', 'unprocessedCount'].sort(),
+    );
+    expect(serialized).not.toContain("Private");
+    expect(serialized).not.toContain("private@example.test");
+    expect(serialized).not.toContain("contact-hmac-secret");
+    expect(serialized).not.toContain("b".repeat(64));
   });
 });

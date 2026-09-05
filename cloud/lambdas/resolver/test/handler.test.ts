@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runResolver, type HandlerDeps } from "../src/handler";
 import { fromItem } from "../src/entitiesTable";
 import { ceId, parcelEvent, NOW } from "./fixtures";
 import type { CloudSourceEvent } from "@callie-sourcing/shared";
+import { log } from "../src/log";
 
 // ---------------------------------------------------------------------------
 // DI fakes
@@ -194,5 +195,33 @@ describe("runResolver", () => {
     const result = await runResolver(null, fakeDeps(state));
     expect(result.entitiesResolved).toBe(0);
     expect(state.entities.size).toBe(0);
+  });
+});
+
+describe("PII-safe handler logging", () => {
+  it("serializes only the package policy for PII-bearing inputs", () => {
+    const output: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((value) => {
+      output.push(String(value));
+    });
+
+    try {
+      log("info", 'resolver run complete', { eventsRead: 6, entitiesCreated: 4, person: { name: "Private Person", email: "private@example.test" } });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(output).toHaveLength(1);
+    const serialized = output[0]!;
+    const record = JSON.parse(serialized);
+    expect(record.component).toBe('resolver');
+    expect(record.eventCode).toBe('SCHEDULED_RUN_COMPLETED');
+    expect(Object.keys(record).sort()).toEqual(
+      ['component', 'count', 'durationMs', 'eventCode', 'level', 'unprocessedCount'].sort(),
+    );
+    expect(serialized).not.toContain("Private");
+    expect(serialized).not.toContain("private@example.test");
+    expect(serialized).not.toContain("contact-hmac-secret");
+    expect(serialized).not.toContain("b".repeat(64));
   });
 });

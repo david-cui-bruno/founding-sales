@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
 import { validateSourceEvent, type CloudSourceEvent } from "@callie-sourcing/shared";
 import type { SESEvent } from "aws-lambda";
@@ -11,6 +11,7 @@ import {
   unknownMailMime,
   zillowAlertMime,
 } from "./fixtures";
+import { log } from "../src/log";
 
 // ---------------------------------------------------------------------------
 // Hand-rolled DI fakes (no network)
@@ -240,5 +241,33 @@ describe("handlerWithDeps", () => {
     const state = newState("x", testMailMime);
     await handlerWithDeps({ Records: [] } as unknown as SESEvent, fakeDeps(state));
     expect(state.inboxPuts).toHaveLength(0);
+  });
+});
+
+describe("PII-safe handler logging", () => {
+  it("serializes only the package policy for PII-bearing inputs", () => {
+    const output: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((value) => {
+      output.push(String(value));
+    });
+
+    try {
+      log("info", 'classified inbound mail', { written: 4, messageId: "secret-message-id", subject: "Confidential subject", body: "Confidential body", fromAddress: "private@example.test" });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(output).toHaveLength(1);
+    const serialized = output[0]!;
+    const record = JSON.parse(serialized);
+    expect(record.component).toBe('mail-parse');
+    expect(record.eventCode).toBe('MAIL_CLASSIFIED');
+    expect(Object.keys(record).sort()).toEqual(
+      ['component', 'eventCode', 'level'].sort(),
+    );
+    expect(serialized).not.toContain("Private");
+    expect(serialized).not.toContain("private@example.test");
+    expect(serialized).not.toContain("contact-hmac-secret");
+    expect(serialized).not.toContain("b".repeat(64));
   });
 });

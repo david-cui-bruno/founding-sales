@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { validateSourceEvent } from "@callie-sourcing/shared";
 import { handlerWithDeps, REQUESTS_PREFIX, type HandlerDeps } from "../src/handler";
 import { contactHmac } from "../src/enrich";
 import { CE_ID_2, hitResponse, missResponse, person, request } from "./fixtures";
 import type { TracerfyLookupResponse } from "../src/tracerfy";
+import { log } from "../src/log";
 
 const SALT = "test-salt";
 
@@ -529,5 +530,33 @@ describe("handlerWithDeps", () => {
     expect(result.eventsWritten).toBe(0);
     expect(state.vendorCalls).toHaveLength(0);
     expect(saltFetched).toBe(false);
+  });
+});
+
+describe("PII-safe handler logging", () => {
+  it("serializes only the package policy for PII-bearing inputs", () => {
+    const output: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((value) => {
+      output.push(String(value));
+    });
+
+    try {
+      log("info", 'enricher run complete', { written: 4, requestsRead: 6, cloud_entity_id: "contact-hmac-secret", detail: "private@example.test" });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(output).toHaveLength(1);
+    const serialized = output[0]!;
+    const record = JSON.parse(serialized);
+    expect(record.component).toBe('enricher');
+    expect(record.eventCode).toBe('SCHEDULED_RUN_COMPLETED');
+    expect(Object.keys(record).sort()).toEqual(
+      ['component', 'count', 'durationMs', 'eventCode', 'level', 'unprocessedCount'].sort(),
+    );
+    expect(serialized).not.toContain("Private");
+    expect(serialized).not.toContain("private@example.test");
+    expect(serialized).not.toContain("contact-hmac-secret");
+    expect(serialized).not.toContain("b".repeat(64));
   });
 });

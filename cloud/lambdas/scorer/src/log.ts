@@ -1,23 +1,46 @@
-/**
- * Structured JSON logging.
- *
- * PII rule: never log person fields or free text from events. Keys, counts,
- * classifications, and IDs are OK.
- */
+import { createSafeLogger, defineLogPolicy, type LogLevel } from "@callie-sourcing/shared";
 
-export type LogLevel = "info" | "warn" | "error";
+const safeLog = createSafeLogger(
+  defineLogPolicy({
+    component: 'scorer',
+    events: {
+      SCHEDULED_RUN_COMPLETED: ["durationMs", "count", "unprocessedCount"],
+      RUN_NOTICE: ["count", "status"],
+    },
+  }),
+);
+
+let runStartedAt = Date.now();
+
+function numberField(fields: Record<string, unknown>, keys: readonly string[]): number {
+  for (const key of keys) {
+    const value = fields[key];
+    if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return value;
+  }
+  return 0;
+}
+
+export { type LogLevel };
 
 export function log(
   level: LogLevel,
   msg: string,
   fields: Record<string, unknown> = {},
 ): void {
-  console.log(
-    JSON.stringify({
-      level,
-      msg,
-      ...fields,
-      timestamp: new Date().toISOString(),
-    }),
-  );
+  if (msg === 'scorer run complete') {
+    const count = numberField(fields, ["scored"]);
+    const seen = numberField(fields, ["unscored"]);
+    safeLog(level, "SCHEDULED_RUN_COMPLETED", {
+      durationMs: Math.max(0, Date.now() - runStartedAt),
+      count,
+      unprocessedCount: Math.max(0, seen - count),
+    });
+    runStartedAt = Date.now();
+    return;
+  }
+
+  safeLog(level, "RUN_NOTICE", {
+    count: numberField(fields, ["count", "dropped", "invalid_lines", "status"]),
+    status: typeof fields.status === "string" ? fields.status : undefined,
+  });
 }

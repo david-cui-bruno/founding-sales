@@ -1,23 +1,28 @@
-/**
- * Structured JSON logging.
- *
- * PII rule: NEVER log email body content (may contain PII about people the
- * pipeline observed). Subject lines and message IDs are OK.
- */
+import { createSafeLogger, defineLogPolicy, type LogLevel } from "@callie-sourcing/shared";
 
-export type LogLevel = "info" | "warn" | "error";
+const safeLog = createSafeLogger(
+  defineLogPolicy({
+    component: "mail-parse",
+    events: {
+      MAIL_CLASSIFIED: [],
+      MAIL_PROCESSING_NOTICE: ["count", "errorClass"],
+    },
+  }),
+);
+
+export { type LogLevel };
 
 export function log(
   level: LogLevel,
   msg: string,
   fields: Record<string, unknown> = {},
 ): void {
-  console.log(
-    JSON.stringify({
-      level,
-      msg,
-      ...fields,
-      timestamp: new Date().toISOString(),
-    }),
-  );
+  if (msg === "classified inbound mail") {
+    safeLog(level, "MAIL_CLASSIFIED");
+    return;
+  }
+  safeLog(level, "MAIL_PROCESSING_NOTICE", {
+    count: typeof fields.written === "number" ? fields.written : 0,
+    errorClass: fields.error,
+  });
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   computeIdempotencyKey,
   newCloudEntityId,
@@ -7,6 +7,7 @@ import {
   type CloudSourceEvent,
 } from "@callie-sourcing/shared";
 import { runScorer, SCORES_VERSION, type HandlerDeps } from "../src/handler";
+import { log } from "../src/log";
 
 const NOW = new Date("2026-09-01T06:00:00.000Z");
 
@@ -515,5 +516,33 @@ describe("runScorer entity context", () => {
     expect(state.entityQueries).toEqual([]);
     expect(result.entityContextHits).toBe(0);
     expect(result.scored).toBe(1);
+  });
+});
+
+describe("PII-safe handler logging", () => {
+  it("serializes only the package policy for PII-bearing inputs", () => {
+    const output: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((value) => {
+      output.push(String(value));
+    });
+
+    try {
+      log("info", 'scorer run complete', { written: 4, eventsRead: 6, event: { name: "Private Person", address: "12 Private Street" } });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(output).toHaveLength(1);
+    const serialized = output[0]!;
+    const record = JSON.parse(serialized);
+    expect(record.component).toBe('scorer');
+    expect(record.eventCode).toBe('SCHEDULED_RUN_COMPLETED');
+    expect(Object.keys(record).sort()).toEqual(
+      ['component', 'count', 'durationMs', 'eventCode', 'level', 'unprocessedCount'].sort(),
+    );
+    expect(serialized).not.toContain("Private");
+    expect(serialized).not.toContain("private@example.test");
+    expect(serialized).not.toContain("contact-hmac-secret");
+    expect(serialized).not.toContain("b".repeat(64));
   });
 });

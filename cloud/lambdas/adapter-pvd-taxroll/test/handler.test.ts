@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CURSOR_KEY, handlerWithDeps, type HandlerDeps } from "../src/handler";
 import {
   ROW_COMMERCIAL,
@@ -7,6 +7,7 @@ import {
   ROW_TWO_FAMILY_OWNER_OCC,
 } from "./fixtures";
 import type { TaxRollRow } from "../src/taxroll";
+import { log } from "../src/log";
 
 const ENV = {
   INBOX_BUCKET: "inbox",
@@ -233,5 +234,33 @@ describe("handlerWithDeps", () => {
     deps.fetchImpl = (async () =>
       ({ ok: false, status: 500 }) as unknown as Response) as typeof fetch;
     await expect(handlerWithDeps(null, deps)).rejects.toThrow(/HTTP 500/);
+  });
+});
+
+describe("PII-safe handler logging", () => {
+  it("serializes only the package policy for PII-bearing inputs", () => {
+    const output: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((value) => {
+      output.push(String(value));
+    });
+
+    try {
+      log("info", 'run finished', { written: 4, fetched: 6, owner_name: "Private Owner", row: { phone: "+1-617-555-0123" } });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(output).toHaveLength(1);
+    const serialized = output[0]!;
+    const record = JSON.parse(serialized);
+    expect(record.component).toBe('adapter-pvd-taxroll');
+    expect(record.eventCode).toBe('SCHEDULED_RUN_COMPLETED');
+    expect(Object.keys(record).sort()).toEqual(
+      ['component', 'count', 'durationMs', 'eventCode', 'level', 'unprocessedCount'].sort(),
+    );
+    expect(serialized).not.toContain("Private");
+    expect(serialized).not.toContain("private@example.test");
+    expect(serialized).not.toContain("contact-hmac-secret");
+    expect(serialized).not.toContain("b".repeat(64));
   });
 });
