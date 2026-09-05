@@ -6,8 +6,10 @@ import {
   runHandler,
   UPLOADS_PREFIX,
   type HandlerDeps,
+  type SuppressionReplayResult,
 } from "../src/handler";
 import { SuppressionObjectValidationError } from "../src/suppressionObject";
+import { log } from "../src/log";
 
 const NOW = new Date("2026-09-04T12:00:00.000Z");
 
@@ -32,6 +34,7 @@ interface FakeState {
   ledger: Map<string, DynamoItem>;
   suppressions: Map<string, DynamoItem>;
   commands: SentCommand[];
+  reports: Map<string, string>;
   listPageSize: number;
   failOnSuppressionHash?: string;
   conflictOnSuppressionWrite?: {
@@ -73,6 +76,7 @@ function state(objects: FakeObjectVersion[] = []): FakeState {
     ledger: new Map(),
     suppressions: new Map(),
     commands: [],
+    reports: new Map(),
     listPageSize: 100,
   };
 }
@@ -192,12 +196,19 @@ function fakeDeps(s: FakeState): HandlerDeps {
 
         if (name === "GetObjectCommand") {
           const key = input.Key as string;
+          if (s.reports.has(key)) return { Body: { transformToString: async () => s.reports.get(key)! } };
           const versionId = (input.VersionId as string | undefined) ?? null;
           const object = s.objects.find(
             (candidate) => candidate.key === key && candidate.versionId === versionId,
           );
           if (!object) throw new Error(`missing fake object ${key} ${String(versionId)}`);
           return { Body: { transformToString: async () => object.body } };
+        }
+
+        if (name === "PutObjectCommand") {
+          const key = input.Key as string;
+          s.reports.set(key, String(input.Body));
+          return {};
         }
 
         throw new Error(`unexpected s3 command ${name}`);
@@ -259,6 +270,10 @@ function fakeDeps(s: FakeState): HandlerDeps {
             },
             UnprocessedKeys: {},
           };
+        }
+
+        if (name === "ScanCommand") {
+          return { Items: [...s.suppressions.values()] };
         }
 
         throw new Error(`unexpected dynamo command ${name}`);
@@ -677,26 +692,70 @@ describe("suppression-sync handler", () => {
 });
 
 describe("exported handler boundary", () => {
-  it("includes dependency initialization, rounds fractional duration, and excludes warm idle", async () => {
-    const deps = fakeDeps(state());
+  it("cannot mint a checksum capability from a caller-supplied contact HMAC", () => {
+    const contactHmac = "0123456789abcdef".repeat(4);
     const output: string[] = [];
     const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
-    const times = [100, 105.6, 10_000, 10_007.4];
-    const invocation = createHandler(() => deps, () => times.shift()!);
-    try { await invocation({ mode: "incremental" }); await invocation({ mode: "incremental" }); } finally { consoleSpy.mockRestore(); }
+    try {
+      log("error", "suppression_object_invalid", {
+        metadata: { objectChecksumSha256: contactHmac },
+        invalid_line_numbers: [1],
+        invalid_line_count: 1,
+      } as never);
+    } finally { consoleSpy.mockRestore(); }
+    expect(output).toHaveLength(1);
+    expect(JSON.parse(output[0]!)).not.toHaveProperty("objectChecksumSha256");
+    expect(output[0]).not.toContain(contactHmac);
+  });
+  it("includes dependency initialization, rounds fractional duration, and excludes warm idle", async () => {
+    const object = objectVersion({ body: bodyFor("a") });
+    const deps = fakeDeps(state([object]));
+    const output: string[] = [];
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
+    let now = 100;
+    let initialized = false;
+    const invocation = createHandler(() => { if (!initialized) { initialized = true; now += 5.6; } return deps; }, () => now);
+    try { await invocation({ mode: "incremental" }); now = 10_000; await invocation({ mode: "incremental" }); } finally { consoleSpy.mockRestore(); }
     const completions = output.map((line) => JSON.parse(line) as Record<string, unknown>).filter((record) => record.eventCode === "SCHEDULED_RUN_COMPLETED");
     expect(completions).toHaveLength(2);
-    expect(completions.map((record) => record.durationMs)).toEqual([6, 7]);
+    expect(completions.map((record) => ({ durationMs: record.durationMs, count: record.count, unprocessedCount: record.unprocessedCount }))).toEqual([
+      { durationMs: 6, count: 1, unprocessedCount: 0 },
+      { durationMs: 0, count: 0, unprocessedCount: 0 },
+    ]);
     for (const record of completions) expect(Object.keys(record).sort()).toEqual(["component", "count", "durationMs", "eventCode", "level", "unprocessedCount"].sort());
   });
-  it("finalizes failures with safe defaults and rejects only the fixed safe error", async () => {
+  it("preserves only AWS/body-owned metadata and safely finalizes a real parser failure", async () => {
+    const contactHmac = "0123456789abcdef".repeat(4);
+    const object = objectVersion({ body: JSON.stringify({ ...VALID_LINE, contact_hmac: contactHmac, email: "private@example.test" }) });
     const output: string[] = [];
     const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
-    const invocation = createHandler(() => { throw new Error("private@example.test provider payload secret-token"); }, () => 20);
+    const invocation = createHandler(() => fakeDeps(state([object])), () => 20);
     try { await expect(invocation({ mode: "incremental" })).rejects.toMatchObject({ name: "SafeHandlerError", message: "Cloud handler invocation failed" }); } finally { consoleSpy.mockRestore(); }
+    const records = output.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records.filter((record) => record.eventCode === "SCHEDULED_RUN_COMPLETED")).toHaveLength(1);
+    const invalid = records.find((record) => record.eventCode === "SUPPRESSION_OBJECT_INVALID")!;
+    expect(invalid).toMatchObject({ objectKey: object.key, objectVersionId: object.versionId, objectEtag: "etag-1", objectChecksumSha256: sha256(object.body) });
     const serialized = output.find((line) => line.includes("SCHEDULED_RUN_COMPLETED"))!;
     expect(JSON.parse(serialized)).toMatchObject({ count: 0, unprocessedCount: 0, durationMs: 0 });
     expect(serialized).not.toContain("private@example.test");
-    expect(serialized).not.toContain("secret-token");
+    expect(output.join("\n")).not.toContain(contactHmac);
+    expect(output.join("\n")).not.toContain("private@example.test");
+  });
+  it("maps replay and reconcile success reports to nonzero completion aggregates", async () => {
+    const s = state([objectVersion({ body: bodyFor("a") })]);
+    const output: string[] = [];
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
+    const invocation = createHandler(() => fakeDeps(s), () => 50);
+    let replay: Awaited<ReturnType<typeof invocation>>;
+    try {
+      replay = await invocation({ mode: "replay", dryRun: false });
+      await invocation({ mode: "reconcile", reportKey: (replay as SuppressionReplayResult).reportKey });
+    } finally { consoleSpy.mockRestore(); }
+    const completions = output.map((line) => JSON.parse(line) as Record<string, unknown>).filter((record) => record.eventCode === "SCHEDULED_RUN_COMPLETED");
+    expect(completions).toHaveLength(2);
+    expect(completions.map(({ count, unprocessedCount }) => ({ count, unprocessedCount }))).toEqual([
+      { count: 1, unprocessedCount: 0 },
+      { count: 1, unprocessedCount: 0 },
+    ]);
   });
 });

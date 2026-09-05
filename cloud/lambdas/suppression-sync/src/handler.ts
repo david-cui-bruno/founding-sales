@@ -147,8 +147,7 @@ async function runIncremental(
     } catch (error) {
       if (error instanceof SuppressionObjectValidationError) {
         log("error", "suppression_object_invalid", {
-          key: error.key,
-          version_id: error.versionId,
+          metadata: error.logMetadata,
           invalid_line_numbers: error.invalidLineNumbers,
           invalid_line_count: error.invalidLineNumbers.length,
         });
@@ -221,9 +220,10 @@ export function createHandler(
       throw new SafeHandlerError();
     } finally {
       const incremental = result && "filesSeen" in result ? result : undefined;
+      const maintenance = result && "report" in result ? result.report : undefined;
       log("info", "suppression_sync_run", {
-        files_seen: incremental?.filesSeen ?? 0,
-        files_processed: incremental?.filesProcessed ?? 0,
+        files_seen: incremental?.filesSeen ?? maintenance?.objectsSeen ?? 0,
+        files_processed: incremental?.filesProcessed ?? maintenance?.objectsValid ?? 0,
         files_skipped: incremental?.filesSkipped ?? 0,
         lines_written: incremental?.linesWritten ?? 0,
         invalid_lines: incremental?.invalidLines ?? 0,

@@ -1,8 +1,29 @@
 import { createHash } from "node:crypto";
 import {
+  createOpaqueLogValueAuthority,
   suppressionUploadLineSchema,
+  type OpaqueLogValue,
   type SuppressionUploadLine,
 } from "@callie-sourcing/shared";
+
+const keyAuthority = createOpaqueLogValueAuthority();
+const versionAuthority = createOpaqueLogValueAuthority();
+const etagAuthority = createOpaqueLogValueAuthority();
+const checksumAuthority = createOpaqueLogValueAuthority();
+
+export const suppressionObjectLogReaders = Object.freeze({
+  objectKey: keyAuthority.read,
+  objectVersionId: versionAuthority.read,
+  objectEtag: etagAuthority.read,
+  objectChecksumSha256: checksumAuthority.read,
+});
+
+export type SuppressionObjectLogMetadata = Readonly<{
+  objectKey?: OpaqueLogValue;
+  objectVersionId?: OpaqueLogValue;
+  objectEtag?: OpaqueLogValue;
+  objectChecksumSha256?: OpaqueLogValue;
+}>;
 
 export type SuppressionObjectDescriptor = Readonly<{
   bucket: string;
@@ -10,11 +31,13 @@ export type SuppressionObjectDescriptor = Readonly<{
   versionId: string | null;
   etag: string;
   lastModified: string;
+  logMetadata?: SuppressionObjectLogMetadata;
 }>;
 
 export type ValidatedSuppressionObject = Readonly<{
   descriptor: SuppressionObjectDescriptor;
   checksumSha256: string;
+  logMetadata: SuppressionObjectLogMetadata;
   lines: readonly SuppressionUploadLine[];
   validRowCount: number;
 }>;
@@ -23,18 +46,32 @@ export class SuppressionObjectValidationError extends Error {
   readonly key: string;
   readonly versionId: string | null;
   readonly invalidLineNumbers: readonly number[];
+  readonly logMetadata: SuppressionObjectLogMetadata;
 
   constructor(input: {
     key: string;
     versionId: string | null;
     invalidLineNumbers: readonly number[];
+    logMetadata: SuppressionObjectLogMetadata;
   }) {
     super(`invalid suppression object lines: ${input.invalidLineNumbers.join(",")}`);
     this.name = "SuppressionObjectValidationError";
     this.key = input.key;
     this.versionId = input.versionId;
     this.invalidLineNumbers = input.invalidLineNumbers;
+    this.logMetadata = input.logMetadata;
   }
+}
+
+export function suppressionObjectDescriptorFromAws(input: Omit<SuppressionObjectDescriptor, "logMetadata">): SuppressionObjectDescriptor {
+  return {
+    ...input,
+    logMetadata: {
+      objectKey: keyAuthority.issue(input.key),
+      ...(input.versionId === null ? {} : { objectVersionId: versionAuthority.issue(input.versionId) }),
+      objectEtag: etagAuthority.issue(input.etag),
+    },
+  };
 }
 
 function sha256Utf8(value: string): string {
@@ -45,6 +82,11 @@ export function parseAndValidateSuppressionObject(input: {
   descriptor: SuppressionObjectDescriptor;
   text: string;
 }): ValidatedSuppressionObject {
+  const checksumSha256 = sha256Utf8(input.text);
+  const logMetadata = {
+    ...input.descriptor.logMetadata,
+    objectChecksumSha256: checksumAuthority.issue(checksumSha256),
+  };
   const lines: SuppressionUploadLine[] = [];
   const invalidLineNumbers: number[] = [];
 
@@ -64,12 +106,14 @@ export function parseAndValidateSuppressionObject(input: {
       key: input.descriptor.key,
       versionId: input.descriptor.versionId,
       invalidLineNumbers,
+      logMetadata,
     });
   }
 
   return {
     descriptor: input.descriptor,
-    checksumSha256: sha256Utf8(input.text),
+    checksumSha256,
+    logMetadata,
     lines,
     validRowCount: lines.length,
   };

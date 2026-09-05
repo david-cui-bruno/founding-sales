@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createSafeLogger,
+  createOpaqueLogValueAuthority,
   defineLogPolicy,
   SafeHandlerError,
   type CanonicalLogField,
@@ -23,10 +24,21 @@ const policy = defineLogPolicy({
   },
 });
 
+const authorities = {
+  objectKey: createOpaqueLogValueAuthority(),
+  objectVersionId: createOpaqueLogValueAuthority(),
+  objectEtag: createOpaqueLogValueAuthority(),
+  objectChecksumSha256: createOpaqueLogValueAuthority(),
+};
+
 function capturedLogger() {
   const output: string[] = [];
   const write = vi.fn((serialized: string) => output.push(serialized));
-  return { log: createSafeLogger(policy, write), output, write };
+  return { log: createSafeLogger(policy, write, {
+    SUPPRESSION_OBJECT_INVALID: Object.fromEntries(
+      Object.entries(authorities).map(([field, authority]) => [field, authority.read]),
+    ),
+  }), output, write };
 }
 
 function parsedOnly(output: string[]): Record<string, unknown> {
@@ -85,11 +97,7 @@ describe("createSafeLogger", () => {
       Object.entries(retainedMetadata).map(([field, value]) => [
         field,
         typeof value === "string"
-          ? log.trust(
-              "SUPPRESSION_OBJECT_INVALID",
-              field as "objectKey" | "objectVersionId" | "objectEtag" | "objectChecksumSha256",
-              value,
-            )
+          ? authorities[field as keyof typeof authorities].issue(value)
           : value,
       ]),
     );
@@ -194,11 +202,7 @@ describe("createSafeLogger", () => {
     }
 
     const { log, output } = capturedLogger();
-    const objectKey = log.trust(
-      "SUPPRESSION_OBJECT_INVALID",
-      "objectKey",
-      acceptedShapeAdversaries.objectKey,
-    );
+    const objectKey = authorities.objectKey.issue(acceptedShapeAdversaries.objectKey);
     log("error", "SUPPRESSION_OBJECT_INVALID", { objectKey });
     expect(parsedOnly(output)).toHaveProperty("objectKey", acceptedShapeAdversaries.objectKey);
   });
@@ -206,11 +210,7 @@ describe("createSafeLogger", () => {
   it("does not allow a capability to cross event or field boundaries", () => {
     const { log, output } = capturedLogger();
     const contactHmac = "0123456789abcdef".repeat(4);
-    const checksumCapability = log.trust(
-      "SUPPRESSION_OBJECT_INVALID",
-      "objectChecksumSha256",
-      contactHmac,
-    );
+    const checksumCapability = authorities.objectChecksumSha256.issue(contactHmac);
 
     log("error", "SUPPRESSION_OBJECT_INVALID", {
       objectEtag: checksumCapability,

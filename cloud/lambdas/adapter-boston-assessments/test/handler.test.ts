@@ -261,8 +261,9 @@ describe("exported handler boundary", () => {
     const { deps } = fakeDeps([], []);
     const output: string[] = [];
     const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
-    const times = [100, 105.6, 10_000, 10_007.4];
-    const invocation = createHandler(() => deps, () => times.shift()!);
+    const times = [100, 102.4, 105.6, 10_000, 10_007.4];
+    let cold = true;
+    const invocation = createHandler(() => { if (cold) { cold = false; times.shift(); } return deps; }, () => times.shift()!);
     try {
       await invocation(null);
       await invocation(null);
@@ -272,7 +273,10 @@ describe("exported handler boundary", () => {
     const completions = output.map((line) => JSON.parse(line) as Record<string, unknown>)
       .filter((record) => record.eventCode === "SCHEDULED_RUN_COMPLETED");
     expect(completions).toHaveLength(2);
-    expect(completions.map((record) => record.durationMs)).toEqual([6, 7]);
+    expect(completions.map((record) => ({ durationMs: record.durationMs, count: record.count, unprocessedCount: record.unprocessedCount }))).toEqual([
+      { durationMs: 6, count: 0, unprocessedCount: 0 },
+      { durationMs: 7, count: 0, unprocessedCount: 0 },
+    ]);
     for (const record of completions) {
       expect(Object.keys(record).sort()).toEqual(["component", "count", "durationMs", "eventCode", "level", "unprocessedCount"].sort());
     }
@@ -281,7 +285,9 @@ describe("exported handler boundary", () => {
   it("finalizes failures with safe defaults and rejects only the fixed safe error", async () => {
     const output: string[] = [];
     const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
-    const invocation = createHandler(() => { throw new Error("private@example.test provider payload secret-token"); }, () => 20);
+    const { deps } = fakeDeps([entityFor("PRIVATE PERSON")], []);
+    deps.fetchImpl = (async () => ({ ok: true, status: 200, json: async () => ({ success: false, error: { message: "private@example.test provider payload secret-token" } }) }) as unknown as Response) as typeof fetch;
+    const invocation = createHandler(() => deps, () => 20);
     try {
       await expect(invocation(null)).rejects.toMatchObject({
         name: "SafeHandlerError",
@@ -290,9 +296,11 @@ describe("exported handler boundary", () => {
     } finally {
       consoleSpy.mockRestore();
     }
-    const serialized = output.find((line) => line.includes("SCHEDULED_RUN_COMPLETED"))!;
+    const completionLines = output.filter((line) => line.includes("SCHEDULED_RUN_COMPLETED"));
+    expect(completionLines).toHaveLength(1);
+    const serialized = completionLines[0]!;
     expect(JSON.parse(serialized)).toMatchObject({ count: 0, unprocessedCount: 0, durationMs: 0 });
-    expect(serialized).not.toContain("private@example.test");
-    expect(serialized).not.toContain("secret-token");
+    expect(output.join("\n")).not.toContain("private@example.test");
+    expect(output.join("\n")).not.toContain("secret-token");
   });
 });

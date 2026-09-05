@@ -1,12 +1,10 @@
 import { createSafeLogger, defineLogPolicy, type LogLevel } from "@callie-sourcing/shared";
+import { suppressionObjectLogReaders, type SuppressionObjectLogMetadata } from "./suppressionObject";
 
 type InvalidObjectFields = {
-  key: string;
-  version_id: string | null;
+  metadata: SuppressionObjectLogMetadata;
   invalid_line_numbers: readonly number[];
   invalid_line_count: number;
-  etag?: string;
-  checksum_sha256?: string;
   line_number?: number;
   error?: unknown;
 };
@@ -26,15 +24,9 @@ const safeLog = createSafeLogger(defineLogPolicy({
     SUPPRESSION_OBJECT_INVALID: ["objectKey", "objectVersionId", "objectEtag", "objectChecksumSha256", "invalidLineNumbers", "invalidLineCount", "lineNumber", "errorClass"],
     SUPPRESSION_MAINTENANCE_COMPLETED: ["count", "unprocessedCount"],
   },
-}));
+}), undefined, { SUPPRESSION_OBJECT_INVALID: suppressionObjectLogReaders });
 
 export { type LogLevel };
-
-function trusted(field: "objectKey" | "objectVersionId" | "objectEtag" | "objectChecksumSha256", value: string | null | undefined): object | undefined {
-  return typeof value === "string"
-    ? safeLog.trust("SUPPRESSION_OBJECT_INVALID", field, value)
-    : undefined;
-}
 
 export function log<M extends keyof LogEvents>(level: LogLevel, message: M, fields: LogEvents[M]): void {
   if (message === "suppression_sync_run") {
@@ -45,10 +37,7 @@ export function log<M extends keyof LogEvents>(level: LogLevel, message: M, fiel
   if (message === "suppression_object_invalid" || message === "suppression_object_quarantined") {
     const value = fields as InvalidObjectFields;
     safeLog(level, "SUPPRESSION_OBJECT_INVALID", {
-      objectKey: trusted("objectKey", value.key),
-      objectVersionId: trusted("objectVersionId", value.version_id),
-      objectEtag: trusted("objectEtag", value.etag),
-      objectChecksumSha256: trusted("objectChecksumSha256", value.checksum_sha256),
+      ...value.metadata,
       invalidLineNumbers: value.invalid_line_numbers,
       invalidLineCount: value.invalid_line_count,
       lineNumber: value.line_number,

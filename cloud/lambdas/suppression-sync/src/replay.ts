@@ -19,6 +19,7 @@ import {
   SuppressionObjectValidationError,
   ledgerNaturalKey,
   parseAndValidateSuppressionObject,
+  suppressionObjectDescriptorFromAws,
   type SuppressionObjectDescriptor,
   type ValidatedSuppressionObject,
 } from "./suppressionObject";
@@ -146,13 +147,13 @@ export async function listUploadObjects(
       if (!key?.endsWith(".ndjson")) continue;
       requiredVersionMetadata(key, "ETag", version.ETag);
       requiredVersionMetadata(key, "LastModified", version.LastModified);
-      objects.push({
+      objects.push(suppressionObjectDescriptorFromAws({
         bucket: deps.env.INBOX_BUCKET,
         key,
         versionId: version.VersionId ?? null,
         etag: normalizeEtag(version.ETag),
         lastModified: version.LastModified.toISOString(),
-      });
+      }));
     }
 
     if (!page.IsTruncated) break;
@@ -309,9 +310,9 @@ async function buildReplaySource(
 
   for (const descriptor of descriptors) {
     const text = await readObjectText(deps, descriptor);
-    const checksumSha256 = sha256Utf8(text);
     try {
       const object = parseAndValidateSuppressionObject({ descriptor, text });
+      const checksumSha256 = object.checksumSha256;
       validObjects.push(object);
       evidenceObjects.push({
         key: descriptor.key,
@@ -338,12 +339,11 @@ async function buildReplaySource(
         versionId: descriptor.versionId,
         etag: descriptor.etag,
         lastModified: descriptor.lastModified,
-        checksumSha256,
+        checksumSha256: sha256Utf8(text),
         status: "quarantined",
       });
       log("warn", "suppression_object_quarantined", {
-        key: error.key,
-        version_id: error.versionId,
+        metadata: error.logMetadata,
         invalid_line_numbers: error.invalidLineNumbers,
         invalid_line_count: error.invalidLineNumbers.length,
       });

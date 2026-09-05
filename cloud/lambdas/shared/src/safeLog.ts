@@ -41,14 +41,25 @@ export class SafeHandlerError extends Error {
   }
 }
 
-type TrustedValueMetadata = {
-  policy: object;
-  eventCode: string;
-  field: CanonicalLogField;
-  value: string;
-};
+export type OpaqueLogValue = Readonly<{ __opaqueLogValue?: never }>;
+export type OpaqueLogReader = (value: unknown) => string | undefined;
 
-const trustedValues = new WeakMap<object, TrustedValueMetadata>();
+export function createOpaqueLogValueAuthority(): Readonly<{
+  issue(value: string): OpaqueLogValue;
+  read: OpaqueLogReader;
+}> {
+  const values = new WeakMap<object, string>();
+  return Object.freeze({
+    issue(value: string): OpaqueLogValue {
+      const capability = Object.freeze({});
+      values.set(capability, value);
+      return capability;
+    },
+    read(value: unknown): string | undefined {
+      return typeof value === "object" && value !== null ? values.get(value) : undefined;
+    },
+  });
+}
 const OPAQUE_FIELDS = new Set<CanonicalLogField>([
   "objectKey",
   "objectVersionId",
@@ -87,21 +98,14 @@ function safeErrorClass(value: unknown): string | undefined {
 }
 
 function sanitizeField(
-  policy: object,
-  eventCode: string,
   field: CanonicalLogField,
   value: unknown,
+  opaqueReader?: OpaqueLogReader,
 ): unknown {
   if (INTEGER_FIELDS.has(field)) return safeInteger(value);
 
   if (OPAQUE_FIELDS.has(field)) {
-    if (typeof value !== "object" || value === null) return undefined;
-    const trusted = trustedValues.get(value);
-    return trusted?.policy === policy &&
-      trusted.eventCode === eventCode &&
-      trusted.field === field
-      ? trusted.value
-      : undefined;
+    return opaqueReader?.(value);
   }
 
   switch (field) {
@@ -148,17 +152,12 @@ export function createSafeLogger<
 >(
   policy: LogPolicy<Component, Events>,
   write: (serialized: string) => void = (serialized) => console.log(serialized),
+  opaqueReaders: Partial<Record<EventCode<Events>, Partial<Record<CanonicalLogField, OpaqueLogReader>>>> = {},
 ): (<Code extends EventCode<Events>>(
   level: LogLevel,
   eventCode: Code,
   fields?: EventFields<Events, Code>,
-) => void) & {
-  trust<Code extends EventCode<Events>>(
-    eventCode: Code,
-    field: Events[Code][number],
-    value: string,
-  ): object;
-} {
+) => void) {
   const logger = (<Code extends EventCode<Events>>(
     level: LogLevel,
     eventCode: Code,
@@ -177,20 +176,11 @@ export function createSafeLogger<
     const inputFields = fields as Partial<Record<CanonicalLogField, unknown>>;
     for (const field of allowedFields) {
       if (!Object.prototype.hasOwnProperty.call(inputFields, field)) continue;
-      const sanitized = sanitizeField(policy, eventCode, field, inputFields[field]);
+      const sanitized = sanitizeField(field, inputFields[field], opaqueReaders[eventCode]?.[field]);
       if (sanitized !== undefined) record[field] = sanitized;
     }
     write(JSON.stringify(record));
   }) as ReturnType<typeof createSafeLogger<Component, Events>>;
 
-  logger.trust = (eventCode, field, value) => {
-    const allowedFields = policy.events[eventCode];
-    if (!allowedFields?.includes(field) || !OPAQUE_FIELDS.has(field)) {
-      throw new Error("Trusted values require an authorized opaque event field");
-    }
-    const capability = Object.freeze({});
-    trustedValues.set(capability, { policy, eventCode, field, value });
-    return capability;
-  };
   return logger;
 }
