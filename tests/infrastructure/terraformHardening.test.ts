@@ -394,6 +394,9 @@ describe("scheduled source Terraform hardening", () => {
     expect(policy).toContain('"logs:CreateLogStream"');
     expect(policy).toContain('"logs:PutLogEvents"');
     expect(policy).toContain(
+      '"arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-schedule-watchdog:*"',
+    );
+    expect(policy).not.toContain(
       '"arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-schedule-watchdog*"',
     );
     expect(policy).toContain('actions   = ["cloudwatch:GetMetricData"]');

@@ -31,16 +31,19 @@ async function runWatchdogWithProgress(
 ): Promise<WatchdogResult> {
   const now = deps.now?.() ?? new Date();
   const history = await loadMonthlyMetricHistory(deps.cloudwatch, now);
-  const evaluations = MONTHLY_TARGETS.map((target) =>
-    evaluateMonthlyHealth(target, history[target.component], now));
-  const result = {
-    targetsEvaluated: evaluations.length,
-    unhealthyGaugeCount: evaluations.reduce(
-      (count, evaluation) => count + Number(evaluation.missingSuccess) + Number(evaluation.persistentUnprocessed),
-      0,
-    ),
+  const evaluations: ReturnType<typeof evaluateMonthlyHealth>[] = [];
+  const result: WatchdogResult = {
+    targetsEvaluated: 0,
+    unhealthyGaugeCount: 0,
   };
-  onEvaluated(result);
+  for (const target of MONTHLY_TARGETS) {
+    const evaluation = evaluateMonthlyHealth(target, history[target.component], now);
+    evaluations.push(evaluation);
+    result.targetsEvaluated += 1;
+    result.unhealthyGaugeCount += Number(evaluation.missingSuccess)
+      + Number(evaluation.persistentUnprocessed);
+    onEvaluated({ ...result });
+  }
   await publishMonthlyHealth(deps.cloudwatch, evaluations, now);
   return result;
 }

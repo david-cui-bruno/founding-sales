@@ -195,7 +195,7 @@ data "aws_iam_policy_document" "lambda_schedule_watchdog" {
       "logs:PutLogEvents",
     ]
     resources = [
-      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-schedule-watchdog*",
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-schedule-watchdog:*",
     ]
   }
 

@@ -197,4 +197,38 @@ describe("createHandler", () => {
     expect(output).toHaveLength(1);
     expect(JSON.parse(output[0]!)).toMatchObject({ status: "failure", count: 0, unprocessedCount: 0 });
   });
+
+  it("retains first-target progress when the second target evaluation fails", async () => {
+    const commands: unknown[] = [];
+    const output: string[] = [];
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
+    const cloudwatch = {
+      send: async (command: unknown) => {
+        commands.push(command);
+        return {
+          $metadata: {},
+          MetricDataResults: ids.map((Id) => ({
+            Id,
+            StatusCode: "Complete",
+            Timestamps: Id === "target1success" ? [new Date("2026-08-15T12:00:00.000Z")] : [],
+            Values: Id === "target1success" ? [1] : [],
+          })),
+        };
+      },
+    } as CloudWatchSender;
+    const invocation = createHandler(() => ({ cloudwatch, now: () => now }), () => 10);
+    try {
+      const failure = await invocation().then(() => undefined, (error: unknown) => error);
+      assertSafeBoundaryFailure(failure, ["missing unprocessed metric"]);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+    expect(commands.some((command) => command instanceof PutMetricDataCommand)).toBe(false);
+    expect(output).toHaveLength(1);
+    expect(JSON.parse(output[0]!)).toMatchObject({
+      status: "failure",
+      count: 1,
+      unprocessedCount: 1,
+    });
+  });
 });
