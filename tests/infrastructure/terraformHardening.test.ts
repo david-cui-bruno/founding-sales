@@ -32,6 +32,33 @@ function extractBlock(source: string, header: string): string {
   throw new Error(`unterminated Terraform block: ${header}`);
 }
 
+function extractContainingBlock(source: string, marker: string): string {
+  const markerIndex = source.indexOf(marker);
+  if (markerIndex < 0) throw new Error(`missing block marker: ${marker}`);
+  const stack: number[] = [];
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "{") stack.push(index);
+    else if (char === "}") {
+      const openIndex = stack.pop();
+      if (openIndex === undefined) throw new Error(`unmatched closing brace: ${marker}`);
+      if (openIndex < markerIndex && markerIndex < index) {
+        return source.slice(openIndex, index + 1);
+      }
+    }
+  }
+  throw new Error(`missing containing block: ${marker}`);
+}
+
 const SOURCES = {
   "adapter-pvd-taxroll": { cadence: "monthly", timeout: 900, unprocessed: true },
   "adapter-boston-rentsmart": { cadence: "daily", timeout: 900, unprocessed: false },
@@ -153,6 +180,9 @@ describe("scheduled source Terraform hardening", () => {
 
     for (const filter of [success, unprocessed]) {
       expect(filter).toContain("for_each = local.adapter_functions");
+      expect(filter).toContain(
+        "log_group_name = aws_cloudwatch_log_group.adapters[each.key].name",
+      );
       expect(filter).toContain('$.eventCode = \\"SCHEDULED_RUN_COMPLETED\\"');
       expect(filter).toContain('$.status = \\"success\\"');
       expect(filter).toContain('namespace  = "Callie/Sourcing"');
@@ -198,6 +228,13 @@ describe("scheduled source Terraform hardening", () => {
     expect(errors).toContain('metric_name         = "Errors"');
     expect(errors).toContain("alarm_description   = each.value.error_description");
     expect(throttles).toContain('metric_name         = "Throttles"');
+    for (const alarm of [errors, throttles]) {
+      expect(alarm).toContain('statistic           = "Sum"');
+      expect(alarm).toContain("threshold           = 1");
+      expect(alarm).toContain(
+        'comparison_operator = "GreaterThanOrEqualToThreshold"',
+      );
+    }
     expect(duration).toMatch(/metric_name\s*=\s*"Duration"/);
     expect(duration).toMatch(/extended_statistic\s*=\s*"p95"/);
     expect(duration).toMatch(
@@ -232,6 +269,8 @@ describe("scheduled source Terraform hardening", () => {
     expect(sources).toContain('if source.cadence != "monthly"');
     expect(alarm).toContain("for_each = local.non_monthly_sources");
     expect(alarm).toContain('metric_name         = "ScheduledRunSuccess"');
+    expect(alarm).toContain("dimensions          = { Component = each.key }");
+    expect(alarm).toContain('statistic           = "Sum"');
     expect(alarm).toContain("period              = each.value.period");
     expect(alarm).toContain(
       "evaluation_periods  = each.value.evaluation_periods",
@@ -239,6 +278,8 @@ describe("scheduled source Terraform hardening", () => {
     expect(alarm).toContain(
       "datapoints_to_alarm = each.value.datapoints_to_alarm",
     );
+    expect(alarm).toContain("threshold           = 1");
+    expect(alarm).toContain('comparison_operator = "LessThanThreshold"');
     expect(alarm).toContain('treat_missing_data  = "breaching"');
     expect(alarm).toContain(
       "alarm_actions       = local.scheduled_health_alarm_actions",
@@ -275,9 +316,11 @@ describe("scheduled source Terraform hardening", () => {
     );
     expect(alarm).toContain("for_each = local.non_monthly_unprocessed_sources");
     expect(alarm).toContain('metric_name         = "ScheduledRunUnprocessed"');
+    expect(alarm).toContain("dimensions          = { Component = each.key }");
     expect(alarm).toContain('statistic           = "Minimum"');
     expect(alarm).toContain("evaluation_periods  = 2");
     expect(alarm).toContain("datapoints_to_alarm = 2");
+    expect(alarm).toContain("threshold           = 0");
     expect(alarm).toContain('comparison_operator = "GreaterThanThreshold"');
     expect(alarm).toContain('treat_missing_data  = "notBreaching"');
     expect(alarm).toContain(
@@ -319,21 +362,62 @@ describe("scheduled source Terraform hardening", () => {
       ["Throttles", "Throttles"],
       ["Duration p95 (ms)", "Duration"],
     ] as const) {
-      expect(resource).toContain(`title  = "${title}"`);
-      expect(resource).toContain(
+      const widget = extractContainingBlock(resource, `title  = "${title}"`);
+      expect(occurrences(widget, "for k in keys(local.adapter_functions)")).toBe(1);
+      expect(widget).toContain(
         `["AWS/Lambda", "${metric}", "FunctionName", aws_lambda_function.adapters[k].function_name]`,
       );
     }
-    expect(resource).toContain('title  = "Scheduled run successes"');
-    expect(resource).toContain(
+    const successWidget = extractContainingBlock(
+      resource,
+      'title  = "Scheduled run successes"',
+    );
+    expect(occurrences(successWidget, "for key in keys(local.adapter_functions)")).toBe(
+      1,
+    );
+    expect(successWidget).toContain(
       '["Callie/Sourcing", "ScheduledRunSuccess", "Component", key]',
     );
-    expect(resource).toContain('title  = "Unprocessed scheduled work"');
-    expect(resource).toContain(
+    const workWidget = extractContainingBlock(
+      resource,
+      'title  = "Unprocessed scheduled work"',
+    );
+    expect(
+      occurrences(workWidget, "for key, source in local.adapter_functions"),
+    ).toBe(1);
+    expect(workWidget).toContain(
       '["Callie/Sourcing", "ScheduledRunUnprocessed", "Component", key]',
     );
-    expect(resource).toContain("if source.has_unprocessed_metric");
+    expect(workWidget).toContain("if source.has_unprocessed_metric");
     expect(resource).not.toContain("expression =");
+  });
+
+  it("prefixes every npm and npx command in the Task 2 files", () => {
+    const exactPrefix =
+      'export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; ';
+    const taskFiles = [
+      "cloud/terraform/variables.tf",
+      "cloud/terraform/adapters.tf",
+      "cloud/terraform/iam.tf",
+      "cloud/terraform/alarms.tf",
+      "cloud/terraform/dashboard.tf",
+      "tests/infrastructure/terraformHardening.test.ts",
+      "cloud/README.md",
+    ] as const;
+    let commandCount = 0;
+
+    for (const relativePath of taskFiles) {
+      const source = readFileSync(join(process.cwd(), relativePath), "utf8");
+      for (const line of source.split("\n")) {
+        const commandPattern = /\b(?:npm|npx)\s+(?:ci|install|run|test|exec|vitest)\b/g;
+        for (const match of line.matchAll(commandPattern)) {
+          commandCount += 1;
+          expect(line.slice(0, match.index).endsWith(exactPrefix)).toBe(true);
+        }
+      }
+    }
+
+    expect(commandCount).toBeGreaterThan(0);
   });
 
   it("documents source-only verification without saved plans JSON rendering or secrets", () => {

@@ -5,7 +5,9 @@
 # here via `tofu import` (see cloud/README.md). Build the bundles BEFORE
 # plan/apply:
 #   for d in adapter-pvd-taxroll adapter-boston-rentsmart scorer resolver enricher; do
-#     (cd cloud/lambdas/$d && PATH="/opt/homebrew/opt/node@24/bin:$PATH" npm install && npm run build)
+#     (cd cloud/lambdas/$d &&
+#       { export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm install; } &&
+#       { export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run build; })
 #   done
 # ---------------------------------------------------------------------------
 
