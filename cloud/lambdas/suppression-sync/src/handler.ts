@@ -24,7 +24,7 @@ import {
   type SuppressionReplayResult,
   type SuppressionSyncEvent,
 } from "./replay";
-import { logSuppressionObjectDiagnostic, productionSuppressionObjectSource, SuppressionObjectValidationError } from "./suppressionObject";
+import { productionSuppressionObjectSource, SuppressionObjectValidationError } from "./suppressionObject";
 
 export {
   REPORTS_PREFIX,
@@ -144,10 +144,10 @@ async function runIncremental(
   for (const descriptor of objects) {
     let object;
     try {
-      object = await readValidatedObject(deps, descriptor);
+      object = await readValidatedObject(deps, descriptor, "error");
     } catch (error) {
       if (error instanceof SuppressionObjectValidationError) {
-        logSuppressionObjectDiagnostic("error", error);
+        if (!deps.objectSource) log("error", "suppression_object_invalid_aggregate", { invalid_line_numbers: error.invalidLineNumbers, invalid_line_count: error.invalidLineNumbers.length });
       }
       throw error;
     }

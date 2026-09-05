@@ -16,7 +16,6 @@ import {
 import type { SuppressionUploadLine } from "@callie-sourcing/shared";
 import { log } from "./log";
 import {
-  logSuppressionObjectDiagnostic,
   SuppressionObjectValidationError,
   ledgerNaturalKey,
   parseAndValidateSuppressionObject,
@@ -138,8 +137,9 @@ export async function listUploadObjects(
 export async function readValidatedObject(
   deps: HandlerDeps,
   descriptor: SuppressionObjectDescriptor,
+  diagnosticLevel: "error" | "warn" = "error",
 ): Promise<ValidatedSuppressionObject> {
-  if (deps.objectSource) return deps.objectSource.read(descriptor);
+  if (deps.objectSource) return deps.objectSource.read(descriptor, diagnosticLevel);
   const raw = await deps.s3.send(new GetObjectCommand({ Bucket: descriptor.bucket, Key: descriptor.key, VersionId: descriptor.versionId ?? undefined }));
   const text = raw.Body ? await (raw.Body as { transformToString(): Promise<string> }).transformToString() : "";
   try {
@@ -266,7 +266,7 @@ async function buildReplaySource(
 
   for (const descriptor of descriptors) {
     try {
-      const object = await readValidatedObject(deps, descriptor);
+      const object = await readValidatedObject(deps, descriptor, "warn");
       const checksumSha256 = object.checksumSha256;
       validObjects.push(object);
       evidenceObjects.push({
@@ -297,7 +297,7 @@ async function buildReplaySource(
         checksumSha256: error.checksumSha256!,
         status: "quarantined",
       });
-      logSuppressionObjectDiagnostic("warn", error);
+      if (!deps.objectSource) log("warn", "suppression_object_invalid_aggregate", { invalid_line_numbers: error.invalidLineNumbers, invalid_line_count: error.invalidLineNumbers.length });
     }
   }
 

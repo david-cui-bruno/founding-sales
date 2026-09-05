@@ -80,7 +80,7 @@ export class SuppressionObjectValidationError extends Error {
 
 export interface SuppressionObjectSource {
   list(bucket: string, prefix: string): Promise<SuppressionObjectDescriptor[]>;
-  read(descriptor: SuppressionObjectDescriptor): Promise<ValidatedSuppressionObject>;
+  read(descriptor: SuppressionObjectDescriptor, diagnosticLevel?: "error" | "warn"): Promise<ValidatedSuppressionObject>;
 }
 
 const productionS3 = new S3Client({});
@@ -142,7 +142,7 @@ export function parseAndValidateSuppressionObject(input: { descriptor: Suppressi
   return { descriptor: input.descriptor, checksumSha256, lines, validRowCount: lines.length };
 }
 
-async function readProductionObject(descriptor: SuppressionObjectDescriptor): Promise<ValidatedSuppressionObject> {
+async function readProductionObject(descriptor: SuppressionObjectDescriptor, diagnosticLevel: "error" | "warn" = "error"): Promise<ValidatedSuppressionObject> {
   const listedMetadata = descriptorMetadata.get(descriptor);
   if (!listedMetadata) throw new Error("suppression object was not issued by the production list source");
   const raw = await productionS3.send(new GetObjectCommand({ Bucket: descriptor.bucket, Key: descriptor.key, VersionId: descriptor.versionId ?? undefined }));
@@ -152,15 +152,16 @@ async function readProductionObject(descriptor: SuppressionObjectDescriptor): Pr
   try { return parseAndValidateSuppressionObject({ descriptor, text }); }
   catch (error) {
     if (!(error instanceof SuppressionObjectValidationError)) throw error;
-    const enriched = new SuppressionObjectValidationError({ key: error.key, versionId: error.versionId, invalidLineNumbers: error.invalidLineNumbers, checksumSha256 });
-    validationMetadata.set(enriched, metadata);
-    throw enriched;
+    const internal = new SuppressionObjectValidationError({ key: error.key, versionId: error.versionId, invalidLineNumbers: error.invalidLineNumbers, checksumSha256 });
+    validationMetadata.set(internal, metadata);
+    writeFullDiagnostic(diagnosticLevel, internal);
+    throw new SuppressionObjectValidationError({ key: error.key, versionId: error.versionId, invalidLineNumbers: error.invalidLineNumbers, checksumSha256 });
   }
 }
 
 export const productionSuppressionObjectSource: SuppressionObjectSource = Object.freeze({ list: listProductionObjects, read: readProductionObject });
 
-export function logSuppressionObjectDiagnostic(level: LogLevel, error: SuppressionObjectValidationError, lineNumber?: number): void {
+function writeFullDiagnostic(level: LogLevel, error: SuppressionObjectValidationError, lineNumber?: number): void {
   invalidLog(level, "SUPPRESSION_OBJECT_INVALID", {
     ...validationMetadata.get(error),
     invalidLineNumbers: error.invalidLineNumbers,

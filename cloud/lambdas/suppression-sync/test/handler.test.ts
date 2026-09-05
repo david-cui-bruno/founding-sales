@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+
+const productionS3Send = vi.hoisted(() => vi.fn());
+vi.mock("@aws-sdk/client-s3", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aws-sdk/client-s3")>();
+  return { ...actual, S3Client: class { send = productionS3Send; } };
+});
 import {
   createHandler,
   REPORTS_PREFIX,
@@ -718,6 +724,7 @@ describe("exported handler boundary", () => {
     expect(suppressionObjects).not.toHaveProperty("readValidatedSuppressionObjectFromS3");
     expect(suppressionObjects).not.toHaveProperty("suppressionLogPolicy");
     expect(suppressionObjects).not.toHaveProperty("suppressionObjectLogReaders");
+    expect(suppressionObjects).not.toHaveProperty("logSuppressionObjectDiagnostic");
     expect(Object.keys(productionSuppressionObjectSource).sort()).toEqual(["list", "read"]);
     await expect(productionSuppressionObjectSource.read({
       bucket: "caller-controlled",
@@ -726,6 +733,51 @@ describe("exported handler boundary", () => {
       etag: "b".repeat(32),
       lastModified: NOW.toISOString(),
     })).rejects.toThrow("suppression object was not issued by the production list source");
+  });
+  it.each([
+    { mode: "incremental" as const, level: "error", event: { mode: "incremental" } },
+    { mode: "replay" as const, level: "warn", event: { mode: "replay", dryRun: true } },
+  ])("atomically owns the full production $mode diagnostic before wrappers see failure", async ({ level, event }) => {
+    const key = `${UPLOADS_PREFIX}private-person.ndjson`;
+    const versionId = "production-version";
+    const etag = "production-etag";
+    const body = "private@example.test";
+    productionS3Send.mockImplementation(async (command: unknown) => {
+      const name = (command as { constructor: { name: string } }).constructor.name;
+      if (name === "ListObjectVersionsCommand") return { Versions: [{ Key: key, VersionId: versionId, ETag: etag, LastModified: NOW }], IsTruncated: false };
+      if (name === "GetObjectCommand") return { Body: { transformToString: async () => body } };
+      throw new Error(`unexpected production command ${name}`);
+    });
+    const base = productionSuppressionObjectSource;
+    const wrappedSource = {
+      list: (...args: Parameters<typeof base.list>) => base.list(...args),
+      read: async (...args: Parameters<typeof base.read>) => {
+        try { return await base.read(...args); }
+        catch (error) {
+          expect(error).toBeInstanceOf(SuppressionObjectValidationError);
+          expect(error).not.toHaveProperty("logMetadata");
+          const failure = error as SuppressionObjectValidationError;
+          return parseAndValidateSuppressionObject({
+            descriptor: { bucket: "inbox", key: failure.key, versionId: failure.versionId, etag, lastModified: NOW.toISOString() },
+            text: bodyFor("a"),
+          });
+        }
+      },
+    };
+    const deps = fakeDeps(state());
+    deps.objectSource = wrappedSource;
+    const output: string[] = [];
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
+    try {
+      await runHandler(deps, event);
+    } finally {
+      consoleSpy.mockRestore();
+      productionS3Send.mockReset();
+    }
+    const invalid = output.map((line) => JSON.parse(line) as Record<string, unknown>).filter((record) => record.eventCode === "SUPPRESSION_OBJECT_INVALID");
+    expect(invalid).toHaveLength(1);
+    expect(invalid[0]).toMatchObject({ level, objectKey: key, objectVersionId: versionId, objectEtag: etag, objectChecksumSha256: sha256(body), invalidLineNumbers: [1], invalidLineCount: 1 });
+    expect(output.join("\n")).not.toContain(body);
   });
   it("includes dependency initialization, rounds fractional duration, and excludes warm idle", async () => {
     const object = objectVersion({ body: bodyFor("a") });
