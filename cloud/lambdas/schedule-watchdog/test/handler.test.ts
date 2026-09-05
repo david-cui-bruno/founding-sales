@@ -116,17 +116,15 @@ describe("createHandler", () => {
     }
   });
 
-  it.each(["read", "publish"])("turns a %s failure into a fresh safe error and one failure completion", async (failureAt) => {
+  it("logs zero counters when reading fails before evaluation", async () => {
     const secrets = ["AwsPrivateError", "private@example.test", "+1-555-0100", "Jane Roe", "secret-token", "raw payload"];
     const failure = Object.assign(new Error(secrets.slice(1).join(" ")), { name: secrets[0], cause: { payload: secrets[5] } });
     const output: string[] = [];
     const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
-    const base = successfulSender().cloudwatch;
     const cloudwatch = {
       send: async (command: unknown) => {
-        if (failureAt === "read" && command instanceof GetMetricDataCommand) throw failure;
-        if (failureAt === "publish" && command instanceof PutMetricDataCommand) throw failure;
-        return base.send(command as never);
+        if (command instanceof GetMetricDataCommand) throw failure;
+        throw new Error("unexpected command");
       },
     } as CloudWatchSender;
     const invocation = createHandler(() => ({ cloudwatch, now: () => now }), () => 20);
@@ -142,6 +140,35 @@ describe("createHandler", () => {
     expect(output).toHaveLength(2);
     for (const line of output) {
       expect(JSON.parse(line)).toMatchObject({ component: "schedule-watchdog", status: "failure", count: 0, unprocessedCount: 0, durationMs: 0 });
+      for (const secret of secrets) expect(line).not.toContain(secret);
+    }
+  });
+
+  it("preserves evaluated target and unhealthy gauge counters when publication fails", async () => {
+    const secrets = ["AwsPrivateError", "private@example.test", "+1-555-0100", "Jane Roe", "secret-token", "raw payload"];
+    const failure = Object.assign(new Error(secrets.slice(1).join(" ")), { name: secrets[0], cause: { payload: secrets[5] } });
+    const output: string[] = [];
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
+    const base = successfulSender([0, 1, 0, 1]).cloudwatch;
+    const cloudwatch = {
+      send: async (command: unknown) => {
+        if (command instanceof PutMetricDataCommand) throw failure;
+        return base.send(command as never);
+      },
+    } as CloudWatchSender;
+    const invocation = createHandler(() => ({ cloudwatch, now: () => now }), () => 20);
+    try {
+      const first = await invocation().then(() => undefined, (error: unknown) => error);
+      const second = await invocation().then(() => undefined, (error: unknown) => error);
+      assertSafeBoundaryFailure(first, secrets);
+      assertSafeBoundaryFailure(second, secrets);
+      expect(first).not.toBe(second);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+    expect(output).toHaveLength(2);
+    for (const line of output) {
+      expect(JSON.parse(line)).toMatchObject({ component: "schedule-watchdog", status: "failure", count: 2, unprocessedCount: 2, durationMs: 0 });
       for (const secret of secrets) expect(line).not.toContain(secret);
     }
   });

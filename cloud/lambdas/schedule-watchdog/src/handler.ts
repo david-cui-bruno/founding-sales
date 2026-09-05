@@ -25,19 +25,28 @@ export interface WatchdogResult {
   unhealthyGaugeCount: number;
 }
 
-export async function runWatchdog(deps: HandlerDeps): Promise<WatchdogResult> {
+async function runWatchdogWithProgress(
+  deps: HandlerDeps,
+  onEvaluated: (result: WatchdogResult) => void,
+): Promise<WatchdogResult> {
   const now = deps.now?.() ?? new Date();
   const history = await loadMonthlyMetricHistory(deps.cloudwatch, now);
   const evaluations = MONTHLY_TARGETS.map((target) =>
     evaluateMonthlyHealth(target, history[target.component], now));
-  await publishMonthlyHealth(deps.cloudwatch, evaluations, now);
-  return {
+  const result = {
     targetsEvaluated: evaluations.length,
     unhealthyGaugeCount: evaluations.reduce(
       (count, evaluation) => count + Number(evaluation.missingSuccess) + Number(evaluation.persistentUnprocessed),
       0,
     ),
   };
+  onEvaluated(result);
+  await publishMonthlyHealth(deps.cloudwatch, evaluations, now);
+  return result;
+}
+
+export async function runWatchdog(deps: HandlerDeps): Promise<WatchdogResult> {
+  return runWatchdogWithProgress(deps, () => {});
 }
 
 function defaultDeps(): HandlerDeps {
@@ -52,10 +61,12 @@ export function createHandler(
   return async () => {
     const startedAt = monotonicNow();
     let status: ScheduledRunStatus = "failure";
-    let result: WatchdogResult | undefined;
+    let progress: WatchdogResult | undefined;
     try {
       cachedDeps ??= depsFactory();
-      result = await runWatchdog(cachedDeps);
+      const result = await runWatchdogWithProgress(cachedDeps, (evaluated) => {
+        progress = evaluated;
+      });
       status = "success";
       return result;
     } catch {
@@ -64,8 +75,8 @@ export function createHandler(
       logScheduledRunCompleted(status === "success" ? "info" : "error", {
         status,
         durationMs: Math.max(0, Math.round(monotonicNow() - startedAt)),
-        targetsEvaluated: result?.targetsEvaluated ?? 0,
-        unhealthyGaugeCount: result?.unhealthyGaugeCount ?? 0,
+        targetsEvaluated: progress?.targetsEvaluated ?? 0,
+        unhealthyGaugeCount: progress?.unhealthyGaugeCount ?? 0,
       });
     }
   };
