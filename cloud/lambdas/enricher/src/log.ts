@@ -1,4 +1,4 @@
-import { createSafeLogger, defineLogPolicy, type LogLevel } from "@callie-sourcing/shared";
+import { createSafeLogger, defineLogPolicy, type LogLevel, type ScheduledRunStatus } from "@callie-sourcing/shared";
 
 type LogEvents = {
   "tracerfy rate limited, backing off once": { backoff_ms: number };
@@ -11,13 +11,13 @@ type LogEvents = {
   "tracerfy: server error after retry, stopping run": { cloud_entity_id: string; status: number };
   "tracerfy: unexpected response, stopping run": { cloud_entity_id: string; status: number; detail: string };
   "suppressed contacts dropped": { cloud_entity_id: string; dropped: number; all_dropped: boolean };
-  "enricher run complete": { eventsWritten: number; requestsSeen: number; durationMs: number };
+  "enricher run complete": { status: ScheduledRunStatus; eventsWritten: number; requestsSeen: number; durationMs: number };
 };
 
 const safeLog = createSafeLogger(defineLogPolicy({
   component: "enricher",
   events: {
-    SCHEDULED_RUN_COMPLETED: ["durationMs", "count", "unprocessedCount"],
+    SCHEDULED_RUN_COMPLETED: ["status", "durationMs", "count", "unprocessedCount"],
     ENRICHER_NOTICE: ["count"],
   },
 }));
@@ -28,6 +28,7 @@ export function log<M extends keyof LogEvents>(level: LogLevel, message: M, fiel
   if (message === "enricher run complete") {
     const value = fields as LogEvents["enricher run complete"];
     safeLog(level, "SCHEDULED_RUN_COMPLETED", {
+      status: value.status,
       durationMs: value.durationMs,
       count: value.eventsWritten,
       unprocessedCount: Math.max(0, value.requestsSeen - value.eventsWritten),

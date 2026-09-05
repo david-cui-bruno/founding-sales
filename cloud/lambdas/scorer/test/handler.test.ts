@@ -545,12 +545,12 @@ describe("exported handler boundary", () => {
     try { await invocation(); await invocation(); } finally { consoleSpy.mockRestore(); }
     const completions = output.map((line) => JSON.parse(line) as Record<string, unknown>).filter((record) => record.eventCode === "SCHEDULED_RUN_COMPLETED");
     expect(completions).toHaveLength(2);
-    expect(completions.map((record) => ({ durationMs: record.durationMs, count: record.count, unprocessedCount: record.unprocessedCount }))).toEqual([
-      { durationMs: 6, count: 1, unprocessedCount: 0 },
-      { durationMs: 7, count: 0, unprocessedCount: 1 },
+    expect(completions.map((record) => ({ status: record.status, durationMs: record.durationMs, count: record.count, unprocessedCount: record.unprocessedCount }))).toEqual([
+      { status: "success", durationMs: 6, count: 1, unprocessedCount: 0 },
+      { status: "success", durationMs: 7, count: 0, unprocessedCount: 1 },
     ]);
     expect(output.join("\n")).not.toContain(pii);
-    for (const record of completions) expect(Object.keys(record).sort()).toEqual(["component", "count", "durationMs", "eventCode", "level", "unprocessedCount"].sort());
+    for (const record of completions) expect(Object.keys(record).sort()).toEqual(["component", "count", "durationMs", "eventCode", "level", "status", "unprocessedCount"].sort());
   });
   it("finalizes failures with safe defaults and rejects only the fixed safe error", async () => {
     const output: string[] = [];
@@ -563,7 +563,7 @@ describe("exported handler boundary", () => {
     const completionLines = output.filter((line) => line.includes("SCHEDULED_RUN_COMPLETED"));
     expect(completionLines).toHaveLength(1);
     const serialized = completionLines[0]!;
-    expect(JSON.parse(serialized)).toMatchObject({ count: 0, unprocessedCount: 0, durationMs: 0 });
+    expect(JSON.parse(serialized)).toMatchObject({ status: "failure", count: 0, unprocessedCount: 0, durationMs: 0 });
     expect(output.join("\n")).not.toContain("private@example.test");
     expect(output.join("\n")).not.toContain("secret-token");
   });

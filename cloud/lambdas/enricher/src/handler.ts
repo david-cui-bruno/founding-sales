@@ -58,6 +58,7 @@ import {
   type EnrichmentPhone,
   type EnrichmentRequest,
   SafeHandlerError,
+  type ScheduledRunStatus,
 } from "@callie-sourcing/shared";
 import {
   ADAPTER_NAME,
@@ -665,15 +666,17 @@ export function createHandler(
   let cachedDeps: HandlerDeps | null = null;
   return async (event) => {
     const startedAt = monotonicNow();
+    let status: ScheduledRunStatus = "failure";
     let result: RunResult | undefined;
     try {
       cachedDeps ??= depsFactory();
       result = await handlerWithDeps(event, cachedDeps);
+      status = "success";
       return result;
     } catch {
       throw new SafeHandlerError();
     } finally {
-      log(result?.stopped ? "warn" : "info", "enricher run complete", { eventsWritten: result?.eventsWritten ?? 0, requestsSeen: result?.requestsSeen ?? 0, durationMs: Math.max(0, Math.round(monotonicNow() - startedAt)) });
+      log(result?.stopped ? "warn" : "info", "enricher run complete", { status, eventsWritten: result?.eventsWritten ?? 0, requestsSeen: result?.requestsSeen ?? 0, durationMs: Math.max(0, Math.round(monotonicNow() - startedAt)) });
     }
   };
 }

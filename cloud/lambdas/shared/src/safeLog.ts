@@ -1,4 +1,5 @@
 export type LogLevel = "info" | "warn" | "error";
+export type ScheduledRunStatus = "success" | "failure";
 
 export type CanonicalLogField =
   | "component"
@@ -86,6 +87,10 @@ function safeErrorClass(value: unknown): string | undefined {
   return SAFE_ERROR_CLASSES.has(value.name) ? value.name : "Error";
 }
 
+function safeScheduledRunStatus(value: unknown): ScheduledRunStatus | undefined {
+  return value === "success" || value === "failure" ? value : undefined;
+}
+
 function sanitizeField(
   field: CanonicalLogField,
   value: unknown,
@@ -101,8 +106,9 @@ function sanitizeField(
       return undefined;
     case "requestId":
     case "pollId":
-    case "status":
       return undefined;
+    case "status":
+      return safeScheduledRunStatus(value);
     case "objectKey":
     case "objectVersionId":
     case "objectEtag":

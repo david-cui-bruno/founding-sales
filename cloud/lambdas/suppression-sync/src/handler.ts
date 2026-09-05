@@ -8,7 +8,7 @@
  */
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { S3Client } from "@aws-sdk/client-s3";
-import { SafeHandlerError, ulid } from "@callie-sourcing/shared";
+import { SafeHandlerError, ulid, type ScheduledRunStatus } from "@callie-sourcing/shared";
 import { log } from "./log";
 import {
   iterateProductionIncrementalObjects,
@@ -263,6 +263,7 @@ async function runProductionHandler(
 }
 
 function logScheduledCompletion(
+  status: ScheduledRunStatus,
   result: HandlerResult | SuppressionReplayResult | undefined,
   event: unknown,
   durationMs: number,
@@ -274,6 +275,7 @@ function logScheduledCompletion(
       event !== null &&
       (event as { mode?: unknown }).mode === "reconcile";
     log("info", "suppression_scheduled_maintenance_run", {
+      status,
       count: maintenance.objectsValid,
       unprocessed_count: reconcile
         ? maintenance.missingMemberships
@@ -283,6 +285,7 @@ function logScheduledCompletion(
     return;
   }
   log("info", "suppression_sync_run", {
+    status,
     files_seen: incremental?.filesSeen ?? 0,
     files_processed: incremental?.filesProcessed ?? 0,
     files_skipped: incremental?.filesSkipped ?? 0,
@@ -298,14 +301,17 @@ function createSafeInvocation(
 ): (event?: unknown) => Promise<HandlerResult | SuppressionReplayResult> {
   return async (event = {}) => {
     const startedAt = monotonicNow();
+    let status: ScheduledRunStatus = "failure";
     let result: HandlerResult | SuppressionReplayResult | undefined;
     try {
       result = await run(event);
+      status = "success";
       return result;
     } catch {
       throw new SafeHandlerError();
     } finally {
       logScheduledCompletion(
+        status,
         result,
         event,
         Math.max(0, Math.round(monotonicNow() - startedAt)),

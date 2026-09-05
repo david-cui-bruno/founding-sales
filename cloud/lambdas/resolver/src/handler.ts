@@ -26,6 +26,7 @@ import {
   cloudSourceEventSchema,
   SafeHandlerError,
   type CloudSourceEvent,
+  type ScheduledRunStatus,
 } from "@callie-sourcing/shared";
 import {
   matchesStored,
@@ -246,15 +247,18 @@ export function createHandler(
   let cachedDeps: HandlerDeps | null = null;
   return async (event) => {
     const startedAt = monotonicNow();
+    let status: ScheduledRunStatus = "failure";
     let result: RunResult | undefined;
     try {
       cachedDeps ??= depsFactory();
       result = await handlerWithDeps(event, cachedDeps);
+      status = "success";
       return result;
     } catch {
       throw new SafeHandlerError();
     } finally {
       log("info", "resolver run complete", {
+        status,
         entitiesResolved: result?.entitiesResolved ?? 0,
         personEvents: result?.personEvents ?? 0,
         durationMs: Math.max(0, Math.round(monotonicNow() - startedAt)),

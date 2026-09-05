@@ -11,7 +11,7 @@ import {
 const policy = defineLogPolicy({
   component: "suppression-sync",
   events: {
-    SCHEDULED_RUN_COMPLETED: ["durationMs", "count", "unprocessedCount"],
+    SCHEDULED_RUN_COMPLETED: ["status", "durationMs", "count", "unprocessedCount"],
     SUPPRESSION_OBJECT_INVALID: [
       "objectKey",
       "objectVersionId",
@@ -72,6 +72,37 @@ const retainedMetadata: Partial<Record<CanonicalLogField, unknown>> = {
 };
 
 describe("createSafeLogger", () => {
+  it("retains only the two scheduled run statuses", () => {
+    const success = capturedLogger();
+    success.log("info", "SCHEDULED_RUN_COMPLETED", {
+      status: "success",
+      durationMs: 1,
+      count: 1,
+      unprocessedCount: 0,
+    });
+    expect(parsedOnly(success.output)).toMatchObject({ status: "success" });
+
+    const failure = capturedLogger();
+    failure.log("error", "SCHEDULED_RUN_COMPLETED", {
+      status: "failure",
+      durationMs: 1,
+      count: 0,
+      unprocessedCount: 0,
+    });
+    expect(parsedOnly(failure.output)).toMatchObject({ status: "failure" });
+
+    for (const unsafeStatus of ["ok", "failed", "private@example.test", "token=secret"]) {
+      const rejected = capturedLogger();
+      rejected.log("info", "SCHEDULED_RUN_COMPLETED", {
+        status: unsafeStatus,
+        durationMs: 1,
+        count: 0,
+        unprocessedCount: 0,
+      } as never);
+      expect(parsedOnly(rejected.output)).not.toHaveProperty("status");
+    }
+  });
+
   it("requires a stable event code from the closed policy", () => {
     const { log, write } = capturedLogger();
 

@@ -22,6 +22,7 @@ import {
   emitEvents,
   type CloudSourceEvent,
   SafeHandlerError,
+  type ScheduledRunStatus,
 } from "@callie-sourcing/shared";
 import {
   ADAPTER_NAME,
@@ -232,15 +233,17 @@ export function createHandler(
   let cachedDeps: HandlerDeps | null = null;
   return async (event) => {
     const startedAt = monotonicNow();
+    let status: ScheduledRunStatus = "failure";
     let result: RunResult | undefined;
     try {
       cachedDeps ??= depsFactory();
       result = await handlerWithDeps(event, cachedDeps);
+      status = "success";
       return result;
     } catch {
       throw new SafeHandlerError();
     } finally {
-      log("info", "run finished", { written: result?.written ?? 0, fetched: result?.fetched ?? 0, completed: result?.completed ?? false, durationMs: Math.max(0, Math.round(monotonicNow() - startedAt)) });
+      log("info", "run finished", { status, written: result?.written ?? 0, fetched: result?.fetched ?? 0, completed: result?.completed ?? true, durationMs: Math.max(0, Math.round(monotonicNow() - startedAt)) });
     }
   };
 }

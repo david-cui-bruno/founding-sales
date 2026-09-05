@@ -31,6 +31,7 @@ import {
   validateSourceEvent,
   SafeHandlerError,
   type CloudSourceEvent,
+  type ScheduledRunStatus,
 } from "@callie-sourcing/shared";
 import { scoreEvent, type EntityContext, type TriggerInstance } from "./scoring";
 import { log } from "./log";
@@ -394,14 +395,17 @@ export function createHandler(
   let cachedDeps: HandlerDeps | null = null;
   return async () => {
     const startedAt = monotonicNow();
+    let status: ScheduledRunStatus = "failure";
     let result: RunResult | undefined;
     try {
       cachedDeps ??= depsFactory();
       result = await runScorer(cachedDeps);
+      status = "success";
     } catch {
       throw new SafeHandlerError();
     } finally {
       log("info", "scorer run complete", {
+        status,
         scored: result?.scored ?? 0,
         unscored: result?.unscored ?? 0,
         durationMs: Math.max(0, Math.round(monotonicNow() - startedAt)),

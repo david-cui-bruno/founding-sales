@@ -1,9 +1,10 @@
-import { createSafeLogger, defineLogPolicy, type LogLevel } from "@callie-sourcing/shared";
+import { createSafeLogger, defineLogPolicy, type LogLevel, type ScheduledRunStatus } from "@callie-sourcing/shared";
 
 type LogEvents = {
   "run starting": { entitiesScanned: number; entitiesToSweep: number };
   "run time-boxed; remaining entities picked up next monthly run": { swept: number; total: number };
   "run finished": {
+    status: ScheduledRunStatus;
     written: number;
     entitiesScanned: number;
     entitiesSwept: number;
@@ -14,7 +15,7 @@ type LogEvents = {
 const safeLog = createSafeLogger(defineLogPolicy({
   component: "adapter-boston-assessments",
   events: {
-    SCHEDULED_RUN_COMPLETED: ["durationMs", "count", "unprocessedCount"],
+    SCHEDULED_RUN_COMPLETED: ["status", "durationMs", "count", "unprocessedCount"],
     RUN_NOTICE: [],
   },
 }));
@@ -30,6 +31,7 @@ export function log<Message extends keyof LogEvents>(
   if (message === "run finished") {
     const completion = fields as LogEvents["run finished"];
     safeLog(level, "SCHEDULED_RUN_COMPLETED", {
+      status: completion.status,
       durationMs: completion.durationMs,
       count: completion.written,
       unprocessedCount: Math.max(0, completion.entitiesScanned - completion.entitiesSwept),
