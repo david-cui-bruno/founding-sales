@@ -107,6 +107,12 @@ async function runScenario(): Promise<void> {
       await prepareEncryptedDatabase(workspace.path, createTestWorkspaceKey());
       assertEncryptedRetainedRow(workspace.path);
       assertArtifactsAbsent(workspace.path);
+    } else if (scenario === 'encrypted-schema-13-reopen') {
+      await assertEncryptedSchemaVersionAccepted(workspace.path, 13);
+    } else if (scenario === 'encrypted-schema-14-reopen') {
+      await assertEncryptedSchemaVersionAccepted(workspace.path, 14);
+    } else if (scenario === 'encrypted-schema-15-rejected') {
+      await assertEncryptedSchemaVersionRejected(workspace.path, 15);
     } else if (scenario === 'path-mismatched-marker') {
       await assertMismatchedMarkerIsImmutable(workspace.path);
     } else if (scenario === 'busy-wal') {
@@ -544,6 +550,54 @@ async function createEncryptedLatestSchema(databasePath: string): Promise<void> 
   } finally {
     closeDatabase(encrypted);
   }
+}
+
+async function createEncryptedSchemaVersion(
+  databasePath: string,
+  schemaVersion: number,
+): Promise<void> {
+  await createEncryptedLatestSchema(databasePath);
+  const encrypted = openDatabase({
+    path: databasePath,
+    key: createTestWorkspaceKey(),
+  });
+  try {
+    encrypted.raw.prepare(
+      'UPDATE app_meta SET schema_version = ? WHERE singleton = 1',
+    ).run(schemaVersion);
+    encrypted.raw.pragma('wal_checkpoint(TRUNCATE)');
+    const journalMode = encrypted.raw.pragma(
+      'journal_mode = DELETE',
+      { simple: true },
+    );
+    assert.equal(journalMode, 'delete');
+  } finally {
+    closeDatabase(encrypted);
+  }
+}
+
+async function assertEncryptedSchemaVersionAccepted(
+  databasePath: string,
+  schemaVersion: 13 | 14,
+): Promise<void> {
+  await createEncryptedSchemaVersion(databasePath, schemaVersion);
+  await prepareEncryptedDatabase(databasePath, createTestWorkspaceKey());
+  assertEncryptedRetainedRow(databasePath);
+  assertArtifactsAbsent(databasePath);
+}
+
+async function assertEncryptedSchemaVersionRejected(
+  databasePath: string,
+  schemaVersion: number,
+): Promise<void> {
+  await createEncryptedSchemaVersion(databasePath, schemaVersion);
+  const before = readFileSync(databasePath);
+  await assert.rejects(
+    prepareEncryptedDatabase(databasePath, createTestWorkspaceKey()),
+    /No valid database copy is available/,
+  );
+  assert.deepEqual(readFileSync(databasePath), before);
+  assertArtifactsAbsent(databasePath);
 }
 
 function insertRetainedRow(raw: ReturnType<typeof createRawDatabase>): void {

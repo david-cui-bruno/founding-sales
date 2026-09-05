@@ -163,6 +163,14 @@ describe('main process startup', () => {
     expect(mocks.startApplication).not.toHaveBeenCalled();
     await settleStartup();
 
+    expect(mocks.createFileLogSink).toHaveBeenCalledTimes(1);
+    expect(mocks.createFileLogSink).toHaveBeenCalledWith({
+      userDataPath: '/Users/founder/Library/Application Support/Callie',
+    });
+    expect(mocks.createSafeLogger).toHaveBeenCalledTimes(1);
+    expect(mocks.createSafeLogger).toHaveBeenCalledWith({
+      write: mocks.fileLogSink.write,
+    });
     expect(mocks.startApplication).toHaveBeenCalledTimes(1);
     expect(mocks.startApplication).toHaveBeenCalledWith({
       appVersion: '4.5.6',
