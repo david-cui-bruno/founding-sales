@@ -1103,7 +1103,7 @@ In `cloudWatchMetrics.test.ts`, use a fake `send` implementation that records co
 5. `StartTime = now - 70 days`, `EndTime = now`, and `ScanBy = "TimestampAscending"`.
 6. Pagination continues with `NextToken` and merges pages.
 7. Returned timestamp and value arrays must have equal lengths.
-8. Every result status must be `Complete`, global response messages must be absent, and every expected query ID must appear across the completed pagination sequence.
+8. Every result status must be `Complete` or `PartialData`; `PartialData` is accepted only on a response that also has `NextToken`, and every expected query must reach `Complete` before pagination ends. Global response messages must be absent.
 9. Unknown query IDs, invalid timestamps, non-finite values, and negative values fail closed.
 10. Samples are sorted ascending after page merge.
 11. Publication is one `PutMetricDataCommand` with exactly four data points, each value exactly `0` or `1`, `Unit = "Count"`, exact component dimension, and shared evaluation timestamp.
@@ -1211,7 +1211,7 @@ export async function publishMonthlyHealth(
 ): Promise<void>;
 ```
 
-Use stable query IDs `target0success`, `target0unprocessed`, `target1success`, and `target1unprocessed`. Send the same query set, start, end, scan order, and any returned `NextToken` until pagination ends. Reject any nonempty top-level `Messages`, reject any result whose `StatusCode` is not `Complete`, require every expected ID across the completed pagination sequence, and reject any unexpected ID. Pair timestamps and values only when array lengths match, validate every point, merge all pages, and sort ascending.
+Use stable query IDs `target0success`, `target0unprocessed`, `target1success`, and `target1unprocessed`. Send the same query set, start, end, scan order, and any returned `NextToken` until pagination ends. Reject any nonempty top-level `Messages`. Accept only `Complete` or `PartialData` result status, accept `PartialData` only when that response also returns `NextToken`, require every expected ID to reach `Complete` before pagination ends, and reject any unexpected ID. Pair timestamps and values only when array lengths match, validate every point, merge all pages, and sort ascending.
 
 Publish all four gauges in one call:
 
