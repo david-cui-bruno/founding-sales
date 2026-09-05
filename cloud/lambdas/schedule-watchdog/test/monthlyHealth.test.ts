@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+
+import { describe, expect, it, vi } from "vitest";
 
 import {
   MONTHLY_TARGETS,
@@ -137,6 +139,23 @@ describe("evaluateMonthlyHealth", () => {
     });
     expect(result.olderDue.toISOString()).toBe("2026-08-01T09:00:00.000Z");
     expect(result.newerDue.toISOString()).toBe("2026-09-01T09:00:00.000Z");
+  });
+
+  it("does not count zero-valued samples as positive success", () => {
+    const result = evaluateMonthlyHealth(
+      pvd,
+      samples(
+        [
+          sample("2026-08-15T12:00:00.000Z", 0),
+          sample("2026-09-05T12:00:00.000Z", 0),
+        ],
+        [],
+      ),
+      now,
+    );
+
+    expect(result.missingSuccess).toBe(true);
+    expect(result.persistentUnprocessed).toBe(false);
   });
 
   it("does not report two misses when only the newer window lacks success", () => {
@@ -280,6 +299,7 @@ describe("evaluateMonthlyHealth", () => {
         sample("2000-01-01T00:00:00.000Z", -1),
         sample("2000-01-01T00:00:00.000Z", Number.NaN),
         sample("2000-01-01T00:00:00.000Z", Number.POSITIVE_INFINITY),
+        sample("2000-01-01T00:00:00.000Z", "1" as unknown as number),
       ];
 
       for (const invalidSample of invalidSamples) {
@@ -297,5 +317,91 @@ describe("evaluateMonthlyHealth", () => {
     expect(() =>
       evaluateMonthlyHealth(pvd, samples([], []), new Date(Number.NaN)),
     ).toThrow("invalid date");
+  });
+});
+
+describe("purity regressions", () => {
+  it("guards the evaluator source against forbidden runtime integrations and clocks", () => {
+    const source = readFileSync(
+      new URL("../src/monthlyHealth.ts", import.meta.url),
+      "utf8",
+    );
+    const forbiddenPatterns = [
+      [
+        "AWS, provider, or client imports and construction",
+        /\b(?:from\s+|import\s*\(\s*|import\s+|require\s*\(\s*)["'][^"']*(?:@aws-sdk|aws-sdk|provider|client)[^"']*["']|\bnew\s+\w*Client\s*\(/i,
+      ],
+      ["environment access", /\bprocess\s*\.\s*env\b/],
+      [
+        "runtime network access",
+        /\bfetch\s*\(|\b(?:XMLHttpRequest|WebSocket)\b|\b(?:from\s+|import\s*\(\s*|import\s+|require\s*\(\s*)["'](?:node:)?(?:http|https|net|tls|dgram|undici)(?:\/[^"']*)?["']/i,
+      ],
+      [
+        "filesystem imports or access",
+        /\b(?:from\s+|import\s*\(\s*|import\s+|require\s*\(\s*)["'](?:node:)?fs(?:\/promises)?["']|\b(?:readFile|readFileSync|writeFile|writeFileSync|appendFile|appendFileSync|readdir|readdirSync|stat|statSync|openSync)\s*\(/i,
+      ],
+      [
+        "logger or console access",
+        /\bconsole\s*\.|\blogger\s*\.|\b(?:from\s+|import\s*\(\s*|import\s+|require\s*\(\s*)["'][^"']*(?:log|logger)[^"']*["']/i,
+      ],
+      [
+        "global clock lookup",
+        /\b(?:Date\s*\.\s*now|performance\s*\.\s*now|process\s*\.\s*hrtime)\s*\(|\bnew\s+Date\s*\(\s*\)/,
+      ],
+    ] as const;
+
+    for (const [description, pattern] of forbiddenPatterns) {
+      expect(source, description).not.toMatch(pattern);
+    }
+  });
+
+  it("does not read the global clock or mutate target, samples, timestamps, or now", () => {
+    const target = Object.freeze({ ...pvd });
+    const successTimestamp = new Date("2026-08-15T12:00:00.000Z");
+    const unprocessedTimestamp = new Date("2026-08-15T12:00:00.000Z");
+    const successSample = Object.freeze({
+      timestamp: successTimestamp,
+      value: 1,
+    });
+    const unprocessedSample = Object.freeze({
+      timestamp: unprocessedTimestamp,
+      value: 0,
+    });
+    const success = Object.freeze([successSample]);
+    const unprocessed = Object.freeze([unprocessedSample]);
+    const targetSamples: MonthlyTargetSamples = Object.freeze({
+      success,
+      unprocessed,
+    });
+    const now = new Date("2026-09-10T18:00:00.000Z");
+    const original = {
+      target: { ...target },
+      successTimestamp: successTimestamp.getTime(),
+      unprocessedTimestamp: unprocessedTimestamp.getTime(),
+      now: now.getTime(),
+    };
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => {
+      throw new Error("global clock accessed");
+    });
+
+    try {
+      const dueInstants = eligibleDueInstants(target, now);
+      const result = evaluateMonthlyHealth(target, targetSamples, now);
+
+      expect(dateNow).not.toHaveBeenCalled();
+      expect(dueInstants.map((instant) => instant.toISOString())).toEqual([
+        "2026-08-01T09:00:00.000Z",
+        "2026-09-01T09:00:00.000Z",
+      ]);
+      expect(result.missingSuccess).toBe(false);
+      expect(target).toEqual(original.target);
+      expect(targetSamples.success).toBe(success);
+      expect(targetSamples.unprocessed).toBe(unprocessed);
+      expect(successTimestamp.getTime()).toBe(original.successTimestamp);
+      expect(unprocessedTimestamp.getTime()).toBe(original.unprocessedTimestamp);
+      expect(now.getTime()).toBe(original.now);
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 });
