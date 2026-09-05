@@ -23,6 +23,7 @@ import {
   diffSnapshot,
   emitEvents,
   isAmbiguousName,
+  SafeHandlerError,
   type CloudSourceEvent,
 } from "@callie-sourcing/shared";
 import {
@@ -184,7 +185,6 @@ export async function handlerWithDeps(
   event: AdapterEvent | null | undefined,
   deps: HandlerDeps,
 ): Promise<RunResult> {
-  const startedAt = performance.now();
   const now = deps.now ?? (() => new Date());
   const startMs = now().getTime();
   const maxEntities = event?.maxEntities;
@@ -270,16 +270,36 @@ export async function handlerWithDeps(
       total: entities.length,
     });
   }
-  log("info", "run finished", {
-    ...result,
-    durationMs: Math.max(0, performance.now() - startedAt),
-  });
   return result;
 }
 
-let cachedDeps: HandlerDeps | null = null;
+export function createHandler(
+  depsFactory: () => HandlerDeps,
+  monotonicNow: () => number = () => performance.now(),
+): (event: AdapterEvent | null | undefined) => Promise<RunResult> {
+  let cachedDeps: HandlerDeps | null = null;
+  return async (event) => {
+    const startedAt = monotonicNow();
+    let result: RunResult | undefined;
+    try {
+      cachedDeps ??= depsFactory();
+      result = await handlerWithDeps(event, cachedDeps);
+      return result;
+    } catch {
+      throw new SafeHandlerError();
+    } finally {
+      log("info", "run finished", {
+        written: result?.written ?? 0,
+        entitiesScanned: result?.entitiesScanned ?? 0,
+        entitiesSwept: result?.entitiesSwept ?? 0,
+        durationMs: Math.max(0, Math.round(monotonicNow() - startedAt)),
+      });
+    }
+  };
+}
+
+const productionHandler = createHandler(defaultDeps);
 
 export async function handler(event: AdapterEvent | null | undefined): Promise<RunResult> {
-  cachedDeps ??= defaultDeps();
-  return handlerWithDeps(event, cachedDeps);
+  return productionHandler(event);
 }

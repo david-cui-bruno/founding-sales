@@ -6,8 +6,7 @@ import {
   validateSourceEvent,
   type CloudSourceEvent,
 } from "@callie-sourcing/shared";
-import { handlerWithDeps, runScorer, SCORES_VERSION, type HandlerDeps } from "../src/handler";
-import { log } from "../src/log";
+import { createHandler, handlerWithDeps, runScorer, SCORES_VERSION, type HandlerDeps } from "../src/handler";
 
 const NOW = new Date("2026-09-01T06:00:00.000Z");
 
@@ -519,64 +518,27 @@ describe("runScorer entity context", () => {
   });
 });
 
-describe("PII-safe handler logging", () => {
-  it("serializes only the package policy for PII-bearing inputs", () => {
+describe("exported handler boundary", () => {
+  it("includes dependency initialization, rounds fractional duration, and excludes warm idle", async () => {
+    const deps = fakeDeps({ objects: new Map(), puts: [], snapshots: new Map(), entities: [], entityQueries: [] });
     const output: string[] = [];
-    const spy = vi.spyOn(console, "log").mockImplementation((value) => {
-      output.push(String(value));
-    });
-
-    try {
-      log("info", 'scorer run complete', { written: 4, eventsRead: 6, event: { name: "Private Person", address: "12 Private Street" } });
-    } finally {
-      spy.mockRestore();
-    }
-
-    expect(output).toHaveLength(1);
-    const serialized = output[0]!;
-    const record = JSON.parse(serialized);
-    expect(record.component).toBe('scorer');
-    expect(record.eventCode).toBe('SCHEDULED_RUN_COMPLETED');
-    expect(Object.keys(record).sort()).toEqual(
-      ['component', 'count', 'durationMs', 'eventCode', 'level', 'unprocessedCount'].sort(),
-    );
-    expect(serialized).not.toContain("Private");
-    expect(serialized).not.toContain("private@example.test");
-    expect(serialized).not.toContain("contact-hmac-secret");
-    expect(serialized).not.toContain("b".repeat(64));
-  });
-});
-
-describe("scheduled completion duration", () => {
-  it("excludes warm-container idle time between consecutive invocations", async () => {
-    const output: string[] = [];
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => {
-      output.push(String(value));
-    });
-    const clockSpy = vi
-      .spyOn(performance, "now")
-      .mockReturnValueOnce(100)
-      .mockReturnValueOnce(105)
-      .mockReturnValueOnce(10_000)
-      .mockReturnValueOnce(10_007);
-
-    try {
-      await handlerWithDeps(fakeDeps({ objects: new Map(), puts: [], snapshots: new Map(), entities: [], entityQueries: [] }));
-      await handlerWithDeps(fakeDeps({ objects: new Map(), puts: [], snapshots: new Map(), entities: [], entityQueries: [] }));
-    } finally {
-      clockSpy.mockRestore();
-      consoleSpy.mockRestore();
-    }
-
-    const completions = output
-      .map((line) => JSON.parse(line) as Record<string, unknown>)
-      .filter((record) => record.eventCode === "SCHEDULED_RUN_COMPLETED");
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
+    const times = [100, 105.6, 10_000, 10_007.4];
+    const invocation = createHandler(() => deps, () => times.shift()!);
+    try { await invocation(); await invocation(); } finally { consoleSpy.mockRestore(); }
+    const completions = output.map((line) => JSON.parse(line) as Record<string, unknown>).filter((record) => record.eventCode === "SCHEDULED_RUN_COMPLETED");
     expect(completions).toHaveLength(2);
-    expect(completions.map((record) => record.durationMs)).toEqual([5, 7]);
-    for (const record of completions) {
-      expect(Object.keys(record).sort()).toEqual(
-        ["component", "count", "durationMs", "eventCode", "level", "unprocessedCount"].sort(),
-      );
-    }
+    expect(completions.map((record) => record.durationMs)).toEqual([6, 7]);
+    for (const record of completions) expect(Object.keys(record).sort()).toEqual(["component", "count", "durationMs", "eventCode", "level", "unprocessedCount"].sort());
+  });
+  it("finalizes failures with safe defaults and rejects only the fixed safe error", async () => {
+    const output: string[] = [];
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
+    const invocation = createHandler(() => { throw new Error("private@example.test provider payload secret-token"); }, () => 20);
+    try { await expect(invocation()).rejects.toMatchObject({ name: "SafeHandlerError", message: "Cloud handler invocation failed" }); } finally { consoleSpy.mockRestore(); }
+    const serialized = output.find((line) => line.includes("SCHEDULED_RUN_COMPLETED"))!;
+    expect(JSON.parse(serialized)).toMatchObject({ count: 0, unprocessedCount: 0, durationMs: 0 });
+    expect(serialized).not.toContain("private@example.test");
+    expect(serialized).not.toContain("secret-token");
   });
 });

@@ -1,48 +1,40 @@
 import { createSafeLogger, defineLogPolicy, type LogLevel } from "@callie-sourcing/shared";
 
-const safeLog = createSafeLogger(
-  defineLogPolicy({
-    component: 'adapter-boston-assessments',
-    events: {
-      SCHEDULED_RUN_COMPLETED: ["durationMs", "count", "unprocessedCount"],
-      RUN_NOTICE: ["count", "status"],
-    },
-  }),
-);
+type LogEvents = {
+  "run starting": { entitiesScanned: number; entitiesToSweep: number };
+  "run time-boxed; remaining entities picked up next monthly run": { swept: number; total: number };
+  "run finished": {
+    written: number;
+    entitiesScanned: number;
+    entitiesSwept: number;
+    durationMs: number;
+  };
+};
 
-
-function numberField(fields: Record<string, unknown>, keys: readonly string[]): number {
-  for (const key of keys) {
-    const value = fields[key];
-    if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return value;
-  }
-  return 0;
-}
+const safeLog = createSafeLogger(defineLogPolicy({
+  component: "adapter-boston-assessments",
+  events: {
+    SCHEDULED_RUN_COMPLETED: ["durationMs", "count", "unprocessedCount"],
+    RUN_NOTICE: [],
+  },
+}));
 
 export { type LogLevel };
 
-export function log(
+export function log<Message extends keyof LogEvents>(
   level: LogLevel,
-  msg: string,
-  fields: Record<string, unknown> = {},
+  message: Message,
+  fields: LogEvents[Message],
 ): void {
-  if (msg === 'run starting') {
-    return;
-  }
-
-  if (msg === 'run finished') {
-    const count = numberField(fields, ['written']);
-    const seen = numberField(fields, ['entitiesScanned', 'entitiesSwept']);
+  if (message === "run starting") return;
+  if (message === "run finished") {
+    const completion = fields as LogEvents["run finished"];
     safeLog(level, "SCHEDULED_RUN_COMPLETED", {
-      durationMs: numberField(fields, ["durationMs"]),
-      count,
-      unprocessedCount: Math.max(0, seen - count),
+      durationMs: completion.durationMs,
+      count: completion.written,
+      unprocessedCount: Math.max(0, completion.entitiesScanned - completion.entitiesSwept),
     });
     return;
   }
-
-  safeLog(level, "RUN_NOTICE", {
-    count: numberField(fields, ["count", "dropped", "invalid_lines", "status"]),
-    status: typeof fields.status === "string" ? fields.status : undefined,
-  });
+  safeLog(level, "RUN_NOTICE");
 }

@@ -1,44 +1,8 @@
 import { createSafeLogger, defineLogPolicy, type LogLevel } from "@callie-sourcing/shared";
-
-const safeLog = createSafeLogger(
-  defineLogPolicy({
-    component: 'scorer',
-    events: {
-      SCHEDULED_RUN_COMPLETED: ["durationMs", "count", "unprocessedCount"],
-      RUN_NOTICE: ["count", "status"],
-    },
-  }),
-);
-
-
-function numberField(fields: Record<string, unknown>, keys: readonly string[]): number {
-  for (const key of keys) {
-    const value = fields[key];
-    if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return value;
-  }
-  return 0;
-}
-
+type LogEvents = {
+  "scored event failed schema validation, dropping": { eventId: string; idempotencyKey: string; error: unknown };
+  "scorer run complete": { scored: number; unscored: number; durationMs: number };
+};
+const safeLog = createSafeLogger(defineLogPolicy({ component: "scorer", events: { SCHEDULED_RUN_COMPLETED: ["durationMs", "count", "unprocessedCount"], SCORER_EVENT_INVALID: ["errorClass"] } }));
 export { type LogLevel };
-
-export function log(
-  level: LogLevel,
-  msg: string,
-  fields: Record<string, unknown> = {},
-): void {
-  if (msg === 'scorer run complete') {
-    const count = numberField(fields, ["scored"]);
-    const seen = numberField(fields, ["unscored"]);
-    safeLog(level, "SCHEDULED_RUN_COMPLETED", {
-      durationMs: numberField(fields, ["durationMs"]),
-      count,
-      unprocessedCount: Math.max(0, seen - count),
-    });
-    return;
-  }
-
-  safeLog(level, "RUN_NOTICE", {
-    count: numberField(fields, ["count", "dropped", "invalid_lines", "status"]),
-    status: typeof fields.status === "string" ? fields.status : undefined,
-  });
-}
+export function log<M extends keyof LogEvents>(level: LogLevel, message: M, fields: LogEvents[M]): void { if (message === "scorer run complete") { const value = fields as LogEvents["scorer run complete"]; safeLog(level, "SCHEDULED_RUN_COMPLETED", { durationMs: value.durationMs, count: value.scored, unprocessedCount: Math.max(0, value.unscored - value.scored) }); return; } safeLog(level, "SCORER_EVENT_INVALID", { errorClass: (fields as LogEvents["scored event failed schema validation, dropping"]).error }); }

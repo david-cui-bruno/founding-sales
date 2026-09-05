@@ -22,7 +22,11 @@ import {
   ListObjectsV2Command,
   S3Client,
 } from "@aws-sdk/client-s3";
-import { cloudSourceEventSchema, type CloudSourceEvent } from "@callie-sourcing/shared";
+import {
+  cloudSourceEventSchema,
+  SafeHandlerError,
+  type CloudSourceEvent,
+} from "@callie-sourcing/shared";
 import {
   matchesStored,
   mergeWithStored,
@@ -232,18 +236,35 @@ export async function handlerWithDeps(
   event: ResolverEvent | null | undefined,
   deps: HandlerDeps,
 ): Promise<RunResult> {
-  const startedAt = performance.now();
-  const result = await runResolver(event, deps);
-  log("info", "resolver run complete", {
-    ...result,
-    durationMs: Math.max(0, performance.now() - startedAt),
-  });
-  return result;
+  return runResolver(event, deps);
 }
 
-let cachedDeps: HandlerDeps | null = null;
+export function createHandler(
+  depsFactory: () => HandlerDeps,
+  monotonicNow: () => number = () => performance.now(),
+): (event: ResolverEvent | null | undefined) => Promise<RunResult> {
+  let cachedDeps: HandlerDeps | null = null;
+  return async (event) => {
+    const startedAt = monotonicNow();
+    let result: RunResult | undefined;
+    try {
+      cachedDeps ??= depsFactory();
+      result = await handlerWithDeps(event, cachedDeps);
+      return result;
+    } catch {
+      throw new SafeHandlerError();
+    } finally {
+      log("info", "resolver run complete", {
+        entitiesResolved: result?.entitiesResolved ?? 0,
+        personEvents: result?.personEvents ?? 0,
+        durationMs: Math.max(0, Math.round(monotonicNow() - startedAt)),
+      });
+    }
+  };
+}
+
+const productionHandler = createHandler(defaultDeps);
 
 export async function handler(event: ResolverEvent | null | undefined): Promise<RunResult> {
-  cachedDeps ??= defaultDeps();
-  return handlerWithDeps(event, cachedDeps);
+  return productionHandler(event);
 }

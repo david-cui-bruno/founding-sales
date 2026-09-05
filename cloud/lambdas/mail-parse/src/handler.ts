@@ -20,7 +20,12 @@ import {
   PutItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { ulid, validateSourceEvent, type CloudSourceEvent } from "@callie-sourcing/shared";
+import {
+  SafeHandlerError,
+  ulid,
+  validateSourceEvent,
+  type CloudSourceEvent,
+} from "@callie-sourcing/shared";
 import { simpleParser, type ParsedMail } from "mailparser";
 import type { SESEvent } from "aws-lambda";
 import { classifyMail, TEST_CLASSIFY_HEADER, type Classification } from "./classify";
@@ -306,9 +311,20 @@ export async function handlerWithDeps(event: SESEvent, deps: HandlerDeps): Promi
   }
 }
 
-let cachedDeps: HandlerDeps | null = null;
+export function createHandler(depsFactory: () => HandlerDeps): (event: SESEvent) => Promise<void> {
+  let cachedDeps: HandlerDeps | null = null;
+  return async (event) => {
+    try {
+      cachedDeps ??= depsFactory();
+      await handlerWithDeps(event, cachedDeps);
+    } catch {
+      throw new SafeHandlerError();
+    }
+  };
+}
+
+const productionHandler = createHandler(defaultDeps);
 
 export async function handler(event: SESEvent): Promise<void> {
-  cachedDeps ??= defaultDeps();
-  await handlerWithDeps(event, cachedDeps);
+  await productionHandler(event);
 }

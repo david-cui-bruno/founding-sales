@@ -9,7 +9,7 @@
  */
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { S3Client } from "@aws-sdk/client-s3";
-import { ulid } from "@callie-sourcing/shared";
+import { SafeHandlerError, ulid } from "@callie-sourcing/shared";
 import { log } from "./log";
 import {
   assertReportKey,
@@ -125,7 +125,6 @@ async function runIncremental(
   deps: HandlerDeps,
   event: Extract<SuppressionSyncEvent, { mode?: "incremental" }>,
   now: Date,
-  startedAt: number,
 ): Promise<HandlerResult> {
   const allObjects = await listUploadObjects(deps);
   const objects =
@@ -171,14 +170,6 @@ async function runIncremental(
     result.filesProcessed += 1;
   }
 
-  log("info", "suppression_sync_run", {
-    files_seen: result.filesSeen,
-    files_processed: result.filesProcessed,
-    files_skipped: result.filesSkipped,
-    lines_written: result.linesWritten,
-    invalid_lines: result.invalidLines,
-    durationMs: Math.max(0, performance.now() - startedAt),
-  });
   return result;
 }
 
@@ -202,7 +193,6 @@ export async function runHandler(
   deps: HandlerDeps,
   event: unknown = {},
 ): Promise<HandlerResult | SuppressionReplayResult> {
-  const startedAt = performance.now();
   const parsedEvent = parseSuppressionSyncEvent(event);
   const now = deps.now ? deps.now() : new Date();
   const runId = deps.runId ? deps.runId(now.getTime()) : ulid(now.getTime());
@@ -213,11 +203,40 @@ export async function runHandler(
   if (parsedEvent.mode === "reconcile") {
     return runReconciliation(deps, { reportKey: parsedEvent.reportKey, now });
   }
-  return runIncremental(deps, parsedEvent, now, startedAt);
+  return runIncremental(deps, parsedEvent, now);
 }
+
+export function createHandler(
+  depsFactory: () => HandlerDeps,
+  monotonicNow: () => number = () => performance.now(),
+): (event?: unknown) => Promise<HandlerResult | SuppressionReplayResult> {
+  return async (event = {}) => {
+    const startedAt = monotonicNow();
+    let result: HandlerResult | SuppressionReplayResult | undefined;
+    try {
+      const deps = depsFactory();
+      result = await runHandler(deps, event);
+      return result;
+    } catch {
+      throw new SafeHandlerError();
+    } finally {
+      const incremental = result && "filesSeen" in result ? result : undefined;
+      log("info", "suppression_sync_run", {
+        files_seen: incremental?.filesSeen ?? 0,
+        files_processed: incremental?.filesProcessed ?? 0,
+        files_skipped: incremental?.filesSkipped ?? 0,
+        lines_written: incremental?.linesWritten ?? 0,
+        invalid_lines: incremental?.invalidLines ?? 0,
+        durationMs: Math.max(0, Math.round(monotonicNow() - startedAt)),
+      });
+    }
+  };
+}
+
+const productionHandler = createHandler(defaultDeps);
 
 export async function handler(
   event: unknown = {},
 ): Promise<HandlerResult | SuppressionReplayResult> {
-  return runHandler(defaultDeps(), event);
+  return productionHandler(event);
 }

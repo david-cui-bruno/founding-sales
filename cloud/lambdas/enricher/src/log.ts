@@ -1,44 +1,43 @@
 import { createSafeLogger, defineLogPolicy, type LogLevel } from "@callie-sourcing/shared";
 
-const safeLog = createSafeLogger(
-  defineLogPolicy({
-    component: 'enricher',
-    events: {
-      SCHEDULED_RUN_COMPLETED: ["durationMs", "count", "unprocessedCount"],
-      RUN_NOTICE: ["count", "status"],
-    },
-  }),
-);
+type LogEvents = {
+  "tracerfy rate limited, backing off once": { backoff_ms: number };
+  "tracerfy server error, retrying once": { status: number };
+  "invalid enrichment request lines skipped": { s3_key: string; invalid_lines: number };
+  "monthly credit cap reached, skipping request": { cloud_entity_id: string; month: string; month_to_date_credits: number; cap: number; alarm_published: boolean };
+  "tracerfy: insufficient credits, stopping run": { cloud_entity_id: string };
+  "tracerfy: account suspended, stopping run": { cloud_entity_id: string };
+  "tracerfy: still rate limited after backoff, stopping run": { cloud_entity_id: string };
+  "tracerfy: server error after retry, stopping run": { cloud_entity_id: string; status: number };
+  "tracerfy: unexpected response, stopping run": { cloud_entity_id: string; status: number; detail: string };
+  "suppressed contacts dropped": { cloud_entity_id: string; dropped: number; all_dropped: boolean };
+  "enricher run complete": { eventsWritten: number; requestsSeen: number; durationMs: number };
+};
 
-
-function numberField(fields: Record<string, unknown>, keys: readonly string[]): number {
-  for (const key of keys) {
-    const value = fields[key];
-    if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return value;
-  }
-  return 0;
-}
+const safeLog = createSafeLogger(defineLogPolicy({
+  component: "enricher",
+  events: {
+    SCHEDULED_RUN_COMPLETED: ["durationMs", "count", "unprocessedCount"],
+    ENRICHER_NOTICE: ["count"],
+  },
+}));
 
 export { type LogLevel };
 
-export function log(
-  level: LogLevel,
-  msg: string,
-  fields: Record<string, unknown> = {},
-): void {
-  if (msg === 'enricher run complete') {
-    const count = numberField(fields, ["eventsWritten"]);
-    const seen = numberField(fields, ["requestsSeen"]);
+export function log<M extends keyof LogEvents>(level: LogLevel, message: M, fields: LogEvents[M]): void {
+  if (message === "enricher run complete") {
+    const value = fields as LogEvents["enricher run complete"];
     safeLog(level, "SCHEDULED_RUN_COMPLETED", {
-      durationMs: numberField(fields, ["durationMs"]),
-      count,
-      unprocessedCount: Math.max(0, seen - count),
+      durationMs: value.durationMs,
+      count: value.eventsWritten,
+      unprocessedCount: Math.max(0, value.requestsSeen - value.eventsWritten),
     });
     return;
   }
-
-  safeLog(level, "RUN_NOTICE", {
-    count: numberField(fields, ["count", "dropped", "invalid_lines", "status"]),
-    status: typeof fields.status === "string" ? fields.status : undefined,
-  });
+  const count = message === "suppressed contacts dropped"
+    ? (fields as LogEvents["suppressed contacts dropped"]).dropped
+    : message === "invalid enrichment request lines skipped"
+      ? (fields as LogEvents["invalid enrichment request lines skipped"]).invalid_lines
+      : undefined;
+  safeLog(level, "ENRICHER_NOTICE", { count });
 }

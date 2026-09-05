@@ -21,6 +21,7 @@ import {
   diffSnapshot,
   emitEvents,
   type CloudSourceEvent,
+  SafeHandlerError,
 } from "@callie-sourcing/shared";
 import {
   ADAPTER_NAME,
@@ -134,7 +135,6 @@ export async function handlerWithDeps(
   event: AdapterEvent | null | undefined,
   deps: HandlerDeps,
 ): Promise<RunResult> {
-  const startedAt = performance.now();
   const now = deps.now ?? (() => new Date());
   const startMs = now().getTime();
   const maxRows = event?.maxRows;
@@ -222,16 +222,31 @@ export async function handlerWithDeps(
     }
   }
 
-  log("info", "run finished", {
-    ...result,
-    durationMs: Math.max(0, performance.now() - startedAt),
-  });
   return result;
 }
 
-let cachedDeps: HandlerDeps | null = null;
+export function createHandler(
+  depsFactory: () => HandlerDeps,
+  monotonicNow: () => number = () => performance.now(),
+): (event: AdapterEvent | null | undefined) => Promise<RunResult> {
+  let cachedDeps: HandlerDeps | null = null;
+  return async (event) => {
+    const startedAt = monotonicNow();
+    let result: RunResult | undefined;
+    try {
+      cachedDeps ??= depsFactory();
+      result = await handlerWithDeps(event, cachedDeps);
+      return result;
+    } catch {
+      throw new SafeHandlerError();
+    } finally {
+      log("info", "run finished", { written: result?.written ?? 0, fetched: result?.fetched ?? 0, completed: result?.completed ?? false, durationMs: Math.max(0, Math.round(monotonicNow() - startedAt)) });
+    }
+  };
+}
+
+const productionHandler = createHandler(defaultDeps);
 
 export async function handler(event: AdapterEvent | null | undefined): Promise<RunResult> {
-  cachedDeps ??= defaultDeps();
-  return handlerWithDeps(event, cachedDeps);
+  return productionHandler(event);
 }

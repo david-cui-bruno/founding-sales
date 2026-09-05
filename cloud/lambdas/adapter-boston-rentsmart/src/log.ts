@@ -1,48 +1,13 @@
 import { createSafeLogger, defineLogPolicy, type LogLevel } from "@callie-sourcing/shared";
-
-const safeLog = createSafeLogger(
-  defineLogPolicy({
-    component: 'adapter-boston-rentsmart',
-    events: {
-      SCHEDULED_RUN_COMPLETED: ["durationMs", "count", "unprocessedCount"],
-      RUN_NOTICE: ["count", "status"],
-    },
-  }),
-);
-
-
-function numberField(fields: Record<string, unknown>, keys: readonly string[]): number {
-  for (const key of keys) {
-    const value = fields[key];
-    if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return value;
-  }
-  return 0;
-}
-
+type LogEvents = {
+  "run starting": { sinceDate: string; storedWatermark: string | null; maxRows: number | null };
+  "run time-boxed, watermark advanced to last processed date": { watermark: string };
+  "run finished": { written: number; fetched: number; durationMs: number };
+};
+const safeLog = createSafeLogger(defineLogPolicy({ component: "adapter-boston-rentsmart", events: { SCHEDULED_RUN_COMPLETED: ["durationMs", "count", "unprocessedCount"], RUN_NOTICE: [] } }));
 export { type LogLevel };
-
-export function log(
-  level: LogLevel,
-  msg: string,
-  fields: Record<string, unknown> = {},
-): void {
-  if (msg === 'run starting') {
-    return;
-  }
-
-  if (msg === 'run finished') {
-    const count = numberField(fields, ['written']);
-    const seen = numberField(fields, ['fetched']);
-    safeLog(level, "SCHEDULED_RUN_COMPLETED", {
-      durationMs: numberField(fields, ["durationMs"]),
-      count,
-      unprocessedCount: Math.max(0, seen - count),
-    });
-    return;
-  }
-
-  safeLog(level, "RUN_NOTICE", {
-    count: numberField(fields, ["count", "dropped", "invalid_lines", "status"]),
-    status: typeof fields.status === "string" ? fields.status : undefined,
-  });
+export function log<M extends keyof LogEvents>(level: LogLevel, message: M, fields: LogEvents[M]): void {
+  if (message === "run starting") return;
+  if (message === "run finished") { const value = fields as LogEvents["run finished"]; safeLog(level, "SCHEDULED_RUN_COMPLETED", { durationMs: value.durationMs, count: value.written, unprocessedCount: 0 }); return; }
+  safeLog(level, "RUN_NOTICE");
 }

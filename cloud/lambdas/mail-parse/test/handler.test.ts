@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
 import { validateSourceEvent, type CloudSourceEvent } from "@callie-sourcing/shared";
 import type { SESEvent } from "aws-lambda";
-import { handlerWithDeps, type HandlerDeps } from "../src/handler";
+import { createHandler, handlerWithDeps, type HandlerDeps } from "../src/handler";
 import {
   apartmentsAlertMime,
   f5botAlertMime,
@@ -11,7 +11,6 @@ import {
   unknownMailMime,
   zillowAlertMime,
 } from "./fixtures";
-import { log } from "../src/log";
 
 // ---------------------------------------------------------------------------
 // Hand-rolled DI fakes (no network)
@@ -244,30 +243,20 @@ describe("handlerWithDeps", () => {
   });
 });
 
-describe("PII-safe handler logging", () => {
-  it("serializes only the package policy for PII-bearing inputs", () => {
+describe("exported handler boundary", () => {
+  it("replaces PII-bearing provider failures with the fixed safe error", async () => {
+    const state = newState("other-message", Buffer.from(""));
     const output: string[] = [];
-    const spy = vi.spyOn(console, "log").mockImplementation((value) => {
-      output.push(String(value));
-    });
-
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation((value) => output.push(String(value)));
+    const invocation = createHandler(() => fakeDeps(state));
     try {
-      log("info", 'classified inbound mail', { written: 4, messageId: "secret-message-id", subject: "Confidential subject", body: "Confidential body", fromAddress: "private@example.test" });
+      await expect(invocation(sesEvent("private@example.test-secret-token"))).rejects.toMatchObject({
+        name: "SafeHandlerError",
+        message: "Cloud handler invocation failed",
+      });
     } finally {
-      spy.mockRestore();
+      consoleSpy.mockRestore();
     }
-
-    expect(output).toHaveLength(1);
-    const serialized = output[0]!;
-    const record = JSON.parse(serialized);
-    expect(record.component).toBe('mail-parse');
-    expect(record.eventCode).toBe('MAIL_CLASSIFIED');
-    expect(Object.keys(record).sort()).toEqual(
-      ['component', 'eventCode', 'level'].sort(),
-    );
-    expect(serialized).not.toContain("Private");
-    expect(serialized).not.toContain("private@example.test");
-    expect(serialized).not.toContain("contact-hmac-secret");
-    expect(serialized).not.toContain("b".repeat(64));
+    expect(output.join("\n")).not.toContain("private@example.test-secret-token");
   });
 });

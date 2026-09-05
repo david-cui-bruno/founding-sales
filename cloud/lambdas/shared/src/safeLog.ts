@@ -34,6 +34,28 @@ type EventFields<
   Code extends EventCode<Events>,
 > = Partial<Record<Events[Code][number], unknown>>;
 
+export class SafeHandlerError extends Error {
+  constructor() {
+    super("Cloud handler invocation failed");
+    this.name = "SafeHandlerError";
+  }
+}
+
+type TrustedValueMetadata = {
+  policy: object;
+  eventCode: string;
+  field: CanonicalLogField;
+  value: string;
+};
+
+const trustedValues = new WeakMap<object, TrustedValueMetadata>();
+const OPAQUE_FIELDS = new Set<CanonicalLogField>([
+  "objectKey",
+  "objectVersionId",
+  "objectEtag",
+  "objectChecksumSha256",
+]);
+
 const SAFE_ERROR_CLASSES = new Set([
   "Error",
   "TypeError",
@@ -58,48 +80,29 @@ function safeInteger(value: unknown): number | undefined {
     : undefined;
 }
 
-function isUniform(value: string): boolean {
-  return value.length > 0 && [...value].every((character) => character === value[0]);
-}
-
-function safeObjectKey(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  if (!/^upstream\/suppression\/\d{4}-\d{2}-\d{2}\/[a-z0-9][a-z0-9._-]{0,127}\.ndjson$/.test(value)) {
-    return undefined;
-  }
-  if (/AKIA|ASIA/.test(value)) return undefined;
-  return value;
-}
-
-function safeVersionId(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  if (!/^[A-Za-z0-9._-]{8,128}$/.test(value)) return undefined;
-  if (/^(?:AKIA|ASIA)/.test(value)) return undefined;
-  return value;
-}
-
-function safeHex(value: unknown, length: number): string | undefined {
-  if (typeof value !== "string" || !new RegExp(`^[a-fA-F0-9]{${length}}$`).test(value)) {
-    return undefined;
-  }
-  return isUniform(value.toLowerCase()) ? undefined : value.toLowerCase();
-}
-
 function safeErrorClass(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (!(value instanceof Error)) return "UnknownError";
   return SAFE_ERROR_CLASSES.has(value.name) ? value.name : "Error";
 }
 
-function safeIdentifier(value: unknown): string | undefined {
-  if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) {
-    return undefined;
-  }
-  return value;
-}
-
-function sanitizeField(field: CanonicalLogField, value: unknown): unknown {
+function sanitizeField(
+  policy: object,
+  eventCode: string,
+  field: CanonicalLogField,
+  value: unknown,
+): unknown {
   if (INTEGER_FIELDS.has(field)) return safeInteger(value);
+
+  if (OPAQUE_FIELDS.has(field)) {
+    if (typeof value !== "object" || value === null) return undefined;
+    const trusted = trustedValues.get(value);
+    return trusted?.policy === policy &&
+      trusted.eventCode === eventCode &&
+      trusted.field === field
+      ? trusted.value
+      : undefined;
+  }
 
   switch (field) {
     case "component":
@@ -107,15 +110,12 @@ function sanitizeField(field: CanonicalLogField, value: unknown): unknown {
     case "requestId":
     case "pollId":
     case "status":
-      return safeIdentifier(value);
+      return undefined;
     case "objectKey":
-      return safeObjectKey(value);
     case "objectVersionId":
-      return safeVersionId(value);
     case "objectEtag":
-      return safeHex(value, 32);
     case "objectChecksumSha256":
-      return safeHex(value, 64);
+      return undefined;
     case "invalidLineNumbers":
       if (!Array.isArray(value)) return undefined;
       if (!value.every((line) => safeInteger(line) !== undefined && line > 0)) return undefined;
@@ -148,12 +148,22 @@ export function createSafeLogger<
 >(
   policy: LogPolicy<Component, Events>,
   write: (serialized: string) => void = (serialized) => console.log(serialized),
-): <Code extends EventCode<Events>>(
+): (<Code extends EventCode<Events>>(
   level: LogLevel,
   eventCode: Code,
   fields?: EventFields<Events, Code>,
-) => void {
-  return (level, eventCode, fields = {}) => {
+) => void) & {
+  trust<Code extends EventCode<Events>>(
+    eventCode: Code,
+    field: Events[Code][number],
+    value: string,
+  ): object;
+} {
+  const logger = (<Code extends EventCode<Events>>(
+    level: LogLevel,
+    eventCode: Code,
+    fields: EventFields<Events, Code> = {},
+  ) => {
     const allowedFields = policy.events[eventCode];
     if (!eventCode || !allowedFields) {
       throw new Error("A stable event code from the closed log policy is required");
@@ -167,9 +177,20 @@ export function createSafeLogger<
     const inputFields = fields as Partial<Record<CanonicalLogField, unknown>>;
     for (const field of allowedFields) {
       if (!Object.prototype.hasOwnProperty.call(inputFields, field)) continue;
-      const sanitized = sanitizeField(field, inputFields[field]);
+      const sanitized = sanitizeField(policy, eventCode, field, inputFields[field]);
       if (sanitized !== undefined) record[field] = sanitized;
     }
     write(JSON.stringify(record));
+  }) as ReturnType<typeof createSafeLogger<Component, Events>>;
+
+  logger.trust = (eventCode, field, value) => {
+    const allowedFields = policy.events[eventCode];
+    if (!allowedFields?.includes(field) || !OPAQUE_FIELDS.has(field)) {
+      throw new Error("Trusted values require an authorized opaque event field");
+    }
+    const capability = Object.freeze({});
+    trustedValues.set(capability, { policy, eventCode, field, value });
+    return capability;
   };
+  return logger;
 }

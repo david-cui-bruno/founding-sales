@@ -29,6 +29,7 @@ import {
   normalizeZip5,
   ulid,
   validateSourceEvent,
+  SafeHandlerError,
   type CloudSourceEvent,
 } from "@callie-sourcing/shared";
 import { scoreEvent, type EntityContext, type TriggerInstance } from "./scoring";
@@ -383,17 +384,34 @@ export async function runScorer(deps: HandlerDeps): Promise<RunResult> {
 }
 
 export async function handlerWithDeps(deps: HandlerDeps): Promise<void> {
-  const startedAt = performance.now();
-  const result = await runScorer(deps);
-  log("info", "scorer run complete", {
-    ...result,
-    durationMs: Math.max(0, performance.now() - startedAt),
-  });
+  await runScorer(deps);
 }
 
-let cachedDeps: HandlerDeps | null = null;
+export function createHandler(
+  depsFactory: () => HandlerDeps,
+  monotonicNow: () => number = () => performance.now(),
+): () => Promise<void> {
+  let cachedDeps: HandlerDeps | null = null;
+  return async () => {
+    const startedAt = monotonicNow();
+    let result: RunResult | undefined;
+    try {
+      cachedDeps ??= depsFactory();
+      result = await runScorer(cachedDeps);
+    } catch {
+      throw new SafeHandlerError();
+    } finally {
+      log("info", "scorer run complete", {
+        scored: result?.scored ?? 0,
+        unscored: result?.unscored ?? 0,
+        durationMs: Math.max(0, Math.round(monotonicNow() - startedAt)),
+      });
+    }
+  };
+}
+
+const productionHandler = createHandler(defaultDeps);
 
 export async function handler(): Promise<void> {
-  cachedDeps ??= defaultDeps();
-  await handlerWithDeps(cachedDeps);
+  await productionHandler();
 }

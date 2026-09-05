@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createSafeLogger,
   defineLogPolicy,
+  SafeHandlerError,
   type CanonicalLogField,
 } from "../src/safeLog";
 
@@ -80,9 +81,21 @@ describe("createSafeLogger", () => {
 
   it("preserves only the authorized suppression object metadata", () => {
     const { log, output } = capturedLogger();
+    const trustedMetadata = Object.fromEntries(
+      Object.entries(retainedMetadata).map(([field, value]) => [
+        field,
+        typeof value === "string"
+          ? log.trust(
+              "SUPPRESSION_OBJECT_INVALID",
+              field as "objectKey" | "objectVersionId" | "objectEtag" | "objectChecksumSha256",
+              value,
+            )
+          : value,
+      ]),
+    );
 
     log("error", "SUPPRESSION_OBJECT_INVALID", {
-      ...retainedMetadata,
+      ...trustedMetadata,
       errorClass: new TypeError("private row body"),
       contactHmac: "b".repeat(64),
       row: { email: "private@example.test" },
@@ -164,5 +177,66 @@ describe("createSafeLogger", () => {
       log("error", "SUPPRESSION_OBJECT_INVALID", { [field]: value } as never);
       expect(parsedOnly(output)).not.toHaveProperty(field);
     }
+  });
+
+  it("requires event-and-field-owned capabilities for every opaque metadata value", () => {
+    const acceptedShapeAdversaries = {
+      objectKey: "upstream/suppression/2026-09-04/private-person.ndjson",
+      objectVersionId: "lowercase-secret-token",
+      objectEtag: "0123456789abcdef0123456789abcdea",
+      objectChecksumSha256: "0123456789abcdef".repeat(4),
+    } as const;
+
+    for (const [field, value] of Object.entries(acceptedShapeAdversaries)) {
+      const { log, output } = capturedLogger();
+      log("error", "SUPPRESSION_OBJECT_INVALID", { [field]: value } as never);
+      expect(parsedOnly(output)).not.toHaveProperty(field);
+    }
+
+    const { log, output } = capturedLogger();
+    const objectKey = log.trust(
+      "SUPPRESSION_OBJECT_INVALID",
+      "objectKey",
+      acceptedShapeAdversaries.objectKey,
+    );
+    log("error", "SUPPRESSION_OBJECT_INVALID", { objectKey });
+    expect(parsedOnly(output)).toHaveProperty("objectKey", acceptedShapeAdversaries.objectKey);
+  });
+
+  it("does not allow a capability to cross event or field boundaries", () => {
+    const { log, output } = capturedLogger();
+    const contactHmac = "0123456789abcdef".repeat(4);
+    const checksumCapability = log.trust(
+      "SUPPRESSION_OBJECT_INVALID",
+      "objectChecksumSha256",
+      contactHmac,
+    );
+
+    log("error", "SUPPRESSION_OBJECT_INVALID", {
+      objectEtag: checksumCapability,
+    } as never);
+
+    expect(parsedOnly(output)).not.toHaveProperty("objectEtag");
+  });
+
+  it("owns numeric validation and rejects fractional or invalid caller values", () => {
+    const { log, output } = capturedLogger();
+    log("info", "SCHEDULED_RUN_COMPLETED", {
+      durationMs: 7.4,
+      count: -1,
+      unprocessedCount: Number.NaN,
+    });
+    expect(parsedOnly(output)).toEqual({
+      level: "info",
+      eventCode: "SCHEDULED_RUN_COMPLETED",
+      component: "suppression-sync",
+    });
+  });
+
+  it("provides a fixed outward failure class and message without a cause", () => {
+    const error = new SafeHandlerError();
+    expect(error.name).toBe("SafeHandlerError");
+    expect(error.message).toBe("Cloud handler invocation failed");
+    expect(error).not.toHaveProperty("cause");
   });
 });

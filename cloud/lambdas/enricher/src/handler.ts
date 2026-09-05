@@ -57,6 +57,7 @@ import {
   type EnrichmentEmail,
   type EnrichmentPhone,
   type EnrichmentRequest,
+  SafeHandlerError,
 } from "@callie-sourcing/shared";
 import {
   ADAPTER_NAME,
@@ -422,7 +423,6 @@ export async function handlerWithDeps(
   event: EnricherEvent | null | undefined,
   deps: HandlerDeps,
 ): Promise<RunResult> {
-  const startedAt = performance.now();
   const now = deps.now ?? (() => new Date());
   const maxFiles = event?.maxFiles;
   const maxRequests = event?.maxRequests;
@@ -639,10 +639,6 @@ export async function handlerWithDeps(
     }
   }
 
-  log(result.stopped ? "warn" : "info", "enricher run complete", {
-    ...result,
-    durationMs: Math.max(0, performance.now() - startedAt),
-  });
 
   if (result.stopped && THROWING_STOPS.has(result.stopped)) {
     // Founder/config problem: surface through the Lambda-errors alarm. All
@@ -662,11 +658,30 @@ async function isSuppressed(deps: HandlerDeps, hmac: string): Promise<boolean> {
   return result.Item !== undefined;
 }
 
-let cachedDeps: HandlerDeps | null = null;
+export function createHandler(
+  depsFactory: () => HandlerDeps,
+  monotonicNow: () => number = () => performance.now(),
+): (event: EnricherEvent | null | undefined) => Promise<RunResult> {
+  let cachedDeps: HandlerDeps | null = null;
+  return async (event) => {
+    const startedAt = monotonicNow();
+    let result: RunResult | undefined;
+    try {
+      cachedDeps ??= depsFactory();
+      result = await handlerWithDeps(event, cachedDeps);
+      return result;
+    } catch {
+      throw new SafeHandlerError();
+    } finally {
+      log(result?.stopped ? "warn" : "info", "enricher run complete", { eventsWritten: result?.eventsWritten ?? 0, requestsSeen: result?.requestsSeen ?? 0, durationMs: Math.max(0, Math.round(monotonicNow() - startedAt)) });
+    }
+  };
+}
+
+const productionHandler = createHandler(defaultDeps);
 
 export async function handler(
   event: EnricherEvent | null | undefined,
 ): Promise<RunResult> {
-  cachedDeps ??= defaultDeps();
-  return handlerWithDeps(event, cachedDeps);
+  return productionHandler(event);
 }
