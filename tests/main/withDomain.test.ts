@@ -18,7 +18,6 @@ import {
 import { SystemClock } from '../../src/main/domain/support/clock';
 import { UuidGenerator } from '../../src/main/domain/support/idGenerator';
 import { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
-import type { AppHealth } from '../../src/shared/healthContract';
 import {
   createTempDatabase,
   createTestWorkspaceKey,

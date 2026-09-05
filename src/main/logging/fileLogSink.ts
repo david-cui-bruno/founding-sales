@@ -34,6 +34,7 @@ function loadNativeSafeLogFs(): NativeSafeLogFs {
   ];
   const artifact = candidates.find((candidate) => existsSync(candidate));
   if (artifact === undefined) throw new Error('SAFE_LOG_FS_NATIVE_UNAVAILABLE');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- Native addons require runtime path loading.
   loadedNative = require(artifact) as NativeSafeLogFs;
   return loadedNative;
 }

@@ -58,11 +58,16 @@ describe('0011 contact DNC flags migration', () => {
     const result = await migrateToLatest(database, options);
 
     expect(result.fromVersion).toBe(10);
-    expect(result.toVersion).toBe(12);
-    expect(result.appliedMigrationIds).toEqual(['0011ContactDncFlags', '0012UpstreamRequestState']);
+    expect(result.toVersion).toBe(14);
+    expect(result.appliedMigrationIds).toEqual([
+      '0011ContactDncFlags',
+      '0012UpstreamRequestState',
+      '0013ContactComplianceEvidence',
+      '0014OutboundJurisdictionClearance',
+    ]);
     expect(database.raw.prepare<[], { schema_version: number }>(
       'SELECT schema_version FROM app_meta WHERE singleton = 1',
-    ).get()).toEqual({ schema_version: 12 });
+    ).get()).toEqual({ schema_version: 14 });
 
     const columns = database.raw
       .prepare<[], { name: string; notnull: number; dflt_value: string }>(
@@ -110,12 +115,12 @@ describe('0011 contact DNC flags migration', () => {
     const secondResult = await migrateToLatest(database, options);
 
     expect(secondResult).toEqual({
-      fromVersion: 12,
-      toVersion: 12,
+      fromVersion: 14,
+      toVersion: 14,
       appliedMigrationIds: [],
     });
     expect(database.raw.prepare<[], { schema_version: number }>(
       'SELECT schema_version FROM app_meta WHERE singleton = 1',
-    ).get()).toEqual({ schema_version: 12 });
+    ).get()).toEqual({ schema_version: 14 });
   });
 });

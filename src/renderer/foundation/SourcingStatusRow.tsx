@@ -59,8 +59,7 @@ export const SourcingStatusRow = ({ api }: { api: SourcingStatusApi }) => {
 
   const load = useCallback((): Promise<void> => {
     if (refresh.current !== null) return refresh.current;
-    let request!: Promise<void>;
-    request = api.status().then(
+    const request = api.status().then(
       (value) => {
         refresh.current = null;
         if (active.current) setStatus(value);

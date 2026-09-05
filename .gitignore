@@ -1,6 +1,7 @@
 .worktrees/
 .superpowers/
 native/apple-bridge/.build/
+native/safe-log-fs/build/
 build/generated/
 node_modules/
 out/

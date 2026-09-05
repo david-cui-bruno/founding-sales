@@ -105,8 +105,13 @@ describe('SourcingCredentialStore', () => {
       createdAt: NOW,
     });
     expect(readFileSync(envelopePath, 'utf8')).not.toContain('example-secret');
-    expect(logged.join('\n')).toContain(keyFilePath);
-    expect(logged.join('\n')).toContain('can be deleted');
+    const logOutput = logged.join('\n');
+    expect(logOutput).toBe(
+      'SOURCING_CREDENTIALS_PROTECTED {"component":"sourcing-credential-store","status":"protected"}',
+    );
+    expect(logOutput).not.toContain(keyFilePath);
+    expect(logOutput).not.toContain('example-secret');
+    expect(logOutput).not.toContain('can be deleted');
   });
 
   it('prefers the protected envelope on subsequent loads', async () => {

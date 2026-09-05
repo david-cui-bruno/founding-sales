@@ -8,21 +8,33 @@ import type { ApplicationStartupDependencies } from '../../src/main/startApplica
 import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import type { SourcingPollHealth } from '../../src/shared/contracts/sourcingContract';
 
-const mocks = vi.hoisted(() => ({
-  appOn: vi.fn(),
-  appQuit: vi.fn(),
-  browserWindows: vi.fn(() => []),
-  commandLineHasSwitch: vi.fn((name: string) => name.length < 0),
-  createWindow: vi.fn(),
-  loadUrl: vi.fn(),
-  protocolSchemes: vi.fn(),
-  requestSingleInstanceLock: vi.fn(() => true),
-  registerProtocol: vi.fn(),
-  startApplication: vi.fn(),
-  whenReady: vi.fn(),
-  windowDestroy: vi.fn(),
-  windowIsDestroyed: vi.fn(() => false),
-}));
+const mocks = vi.hoisted(() => {
+  const fileLogSink = {
+    directoryPath: '/Users/founder/Library/Application Support/Callie/logs',
+    write: vi.fn(),
+  };
+  const logger = { log: vi.fn() };
+
+  return {
+    appOn: vi.fn(),
+    appQuit: vi.fn(),
+    browserWindows: vi.fn(() => []),
+    commandLineHasSwitch: vi.fn((name: string) => name.length < 0),
+    createFileLogSink: vi.fn(() => fileLogSink),
+    createSafeLogger: vi.fn(() => logger),
+    createWindow: vi.fn(),
+    fileLogSink,
+    loadUrl: vi.fn(),
+    logger,
+    protocolSchemes: vi.fn(),
+    requestSingleInstanceLock: vi.fn(() => true),
+    registerProtocol: vi.fn(),
+    startApplication: vi.fn(),
+    whenReady: vi.fn(),
+    windowDestroy: vi.fn(),
+    windowIsDestroyed: vi.fn(() => false),
+  };
+});
 
 vi.mock('electron', () => ({
   app: {
@@ -56,6 +68,12 @@ vi.mock('../../src/main/protocol', () => ({
 }));
 vi.mock('../../src/main/startApplication', () => ({
   startApplication: mocks.startApplication,
+}));
+vi.mock('../../src/main/logging/fileLogSink', () => ({
+  createFileLogSink: mocks.createFileLogSink,
+}));
+vi.mock('../../src/main/logging/safeLogger', () => ({
+  createSafeLogger: mocks.createSafeLogger,
 }));
 
 describe('main process startup', () => {
@@ -167,6 +185,8 @@ describe('main process startup', () => {
       sourcingPollingEnabled: true,
       signal: expect.anything(),
       isTrustedRendererUrl: expect.any(Function),
+      logger: mocks.logger,
+      logDirectoryPath: mocks.fileLogSink.directoryPath,
       createWindow: expect.any(Function),
     });
     const startupOptions = mocks.startApplication.mock.calls[0]?.[0] as
