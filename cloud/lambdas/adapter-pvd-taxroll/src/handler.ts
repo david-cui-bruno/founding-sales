@@ -134,6 +134,7 @@ export async function handlerWithDeps(
   event: AdapterEvent | null | undefined,
   deps: HandlerDeps,
 ): Promise<RunResult> {
+  const startedAt = performance.now();
   const now = deps.now ?? (() => new Date());
   const startMs = now().getTime();
   const maxRows = event?.maxRows;
@@ -221,7 +222,10 @@ export async function handlerWithDeps(
     }
   }
 
-  log("info", "run finished", { ...result });
+  log("info", "run finished", {
+    ...result,
+    durationMs: Math.max(0, performance.now() - startedAt),
+  });
   return result;
 }
 

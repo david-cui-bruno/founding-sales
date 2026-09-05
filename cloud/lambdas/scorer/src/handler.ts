@@ -379,12 +379,16 @@ export async function runScorer(deps: HandlerDeps): Promise<RunResult> {
     }
   }
 
-  log("info", "scorer run complete", { ...result });
   return result;
 }
 
 export async function handlerWithDeps(deps: HandlerDeps): Promise<void> {
-  await runScorer(deps);
+  const startedAt = performance.now();
+  const result = await runScorer(deps);
+  log("info", "scorer run complete", {
+    ...result,
+    durationMs: Math.max(0, performance.now() - startedAt),
+  });
 }
 
 let cachedDeps: HandlerDeps | null = null;

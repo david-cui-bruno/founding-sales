@@ -20,7 +20,6 @@ const safeLog = createSafeLogger(
   }),
 );
 
-let runStartedAt = Date.now();
 
 function numberField(fields: Record<string, unknown>, ...keys: string[]): number {
   for (const key of keys) {
@@ -41,11 +40,10 @@ export function log(
     const count = numberField(fields, "files_processed");
     const seen = numberField(fields, "files_seen");
     safeLog(level, "SCHEDULED_RUN_COMPLETED", {
-      durationMs: Math.max(0, Date.now() - runStartedAt),
+      durationMs: numberField(fields, "durationMs"),
       count,
       unprocessedCount: Math.max(0, seen - count),
     });
-    runStartedAt = Date.now();
     return;
   }
 

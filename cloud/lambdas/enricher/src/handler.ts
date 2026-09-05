@@ -422,6 +422,7 @@ export async function handlerWithDeps(
   event: EnricherEvent | null | undefined,
   deps: HandlerDeps,
 ): Promise<RunResult> {
+  const startedAt = performance.now();
   const now = deps.now ?? (() => new Date());
   const maxFiles = event?.maxFiles;
   const maxRequests = event?.maxRequests;
@@ -638,7 +639,10 @@ export async function handlerWithDeps(
     }
   }
 
-  log(result.stopped ? "warn" : "info", "enricher run complete", { ...result });
+  log(result.stopped ? "warn" : "info", "enricher run complete", {
+    ...result,
+    durationMs: Math.max(0, performance.now() - startedAt),
+  });
 
   if (result.stopped && THROWING_STOPS.has(result.stopped)) {
     // Founder/config problem: surface through the Lambda-errors alarm. All

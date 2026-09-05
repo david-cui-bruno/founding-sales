@@ -225,7 +225,6 @@ export async function runResolver(
     if (finalEntity.parcelCount > 1) result.multiParcelEntities += 1;
   }
 
-  log("info", "resolver run complete", { ...result });
   return result;
 }
 
@@ -233,7 +232,13 @@ export async function handlerWithDeps(
   event: ResolverEvent | null | undefined,
   deps: HandlerDeps,
 ): Promise<RunResult> {
-  return runResolver(event, deps);
+  const startedAt = performance.now();
+  const result = await runResolver(event, deps);
+  log("info", "resolver run complete", {
+    ...result,
+    durationMs: Math.max(0, performance.now() - startedAt),
+  });
+  return result;
 }
 
 let cachedDeps: HandlerDeps | null = null;

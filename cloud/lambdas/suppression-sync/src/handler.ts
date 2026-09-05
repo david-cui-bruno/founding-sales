@@ -125,6 +125,7 @@ async function runIncremental(
   deps: HandlerDeps,
   event: Extract<SuppressionSyncEvent, { mode?: "incremental" }>,
   now: Date,
+  startedAt: number,
 ): Promise<HandlerResult> {
   const allObjects = await listUploadObjects(deps);
   const objects =
@@ -176,6 +177,7 @@ async function runIncremental(
     files_skipped: result.filesSkipped,
     lines_written: result.linesWritten,
     invalid_lines: result.invalidLines,
+    durationMs: Math.max(0, performance.now() - startedAt),
   });
   return result;
 }
@@ -200,6 +202,7 @@ export async function runHandler(
   deps: HandlerDeps,
   event: unknown = {},
 ): Promise<HandlerResult | SuppressionReplayResult> {
+  const startedAt = performance.now();
   const parsedEvent = parseSuppressionSyncEvent(event);
   const now = deps.now ? deps.now() : new Date();
   const runId = deps.runId ? deps.runId(now.getTime()) : ulid(now.getTime());
@@ -210,7 +213,7 @@ export async function runHandler(
   if (parsedEvent.mode === "reconcile") {
     return runReconciliation(deps, { reportKey: parsedEvent.reportKey, now });
   }
-  return runIncremental(deps, parsedEvent, now);
+  return runIncremental(deps, parsedEvent, now, startedAt);
 }
 
 export async function handler(
