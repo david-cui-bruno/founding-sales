@@ -584,43 +584,16 @@ git commit -m "fix: enforce PII-safe cloud logging"
 
 ---
 
-## Task 5: Restore resolver log permissions and add scheduled observability
+## Task 5: Scheduled observability and monthly health watchdog
 
-**Files:**
+**Status:** Superseded. Do not execute the former Terraform-only instructions or any backend-disabled plan workflow.
 
-- Modify `cloud/terraform/iam.tf`
-- Modify `cloud/terraform/alarms.tf`
-- Modify `cloud/terraform/dashboard.tf`
-- Modify `cloud/terraform/adapters.tf`
-- Create `tests/infrastructure/terraformHardening.test.ts`
+Use the approved replacement documents:
 
-- [ ] Write failing static tests that parse Terraform text and require the resolver log-group ARN, scheduled invocation/error/throttle/duration metrics, success/unprocessed metric filters, alarms, and the existing SNS alert target.
-- [ ] Run the static test and confirm current Terraform fails.
+- Design: `docs/superpowers/specs/2026-09-05-scheduled-observability-watchdog-design.md`
+- Implementation plan: `docs/superpowers/plans/2026-09-05-scheduled-observability-watchdog.md`
 
-```bash
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/infrastructure/terraformHardening.test.ts
-```
-
-- [ ] Add `arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-resolver*` to the shared execution-role log resources.
-- [ ] Add Invocations, Errors, Throttles, and p95 Duration widgets/alarms for every scheduled Lambda.
-- [ ] Add `SCHEDULED_RUN_COMPLETED` metric filters for scheduled success and numeric unprocessed count in namespace `Callie/Sourcing`.
-- [ ] Add missing-success alarms at twice cadence, near-timeout duration alarms, and persistent-unprocessed alarms routed to `aws_sns_topic.alerts`.
-- [ ] Format, validate, and create a refresh-free plan. Do not apply.
-
-```bash
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; (cd cloud/terraform && tofu init -backend=false && tofu fmt -check -recursive && tofu validate && tofu plan -refresh=false -var='schedules_enabled=false' -out="$JCODE_SCRATCH_DIR/runtime-hardening.tfplan")
-```
-
-```bash
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/infrastructure/terraformHardening.test.ts
-```
-
-- [ ] Commit.
-
-```bash
-git add cloud/terraform/iam.tf cloud/terraform/alarms.tf cloud/terraform/dashboard.tf cloud/terraform/adapters.tf tests/infrastructure/terraformHardening.test.ts
-git commit -m "fix: restore resolver logs and scheduled health alarms"
-```
+The replacement keeps schedules and scheduled health notifications disabled by default, first makes completion status trustworthy, uses source-level Terraform verification only, and implements monthly health with a daily calendar-aware watchdog. Live state-aware planning remains deferred to the separately approved Runtime Task 9 hold point.
 
 ---
 

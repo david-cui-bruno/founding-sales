@@ -1,6 +1,6 @@
 # Scheduled Observability and Monthly Health Watchdog Design
 
-**Status:** Approved in chat on 2026-09-05; written specification awaiting review
+**Status:** Approved on 2026-09-05
 **Supersedes:** Runtime Recovery Task 5 as written in `docs/superpowers/plans/2026-09-04-runtime-recovery-security-hardening.md`
 **Extends:** `docs/superpowers/specs/2026-09-04-runtime-recovery-security-hardening-design.md`, section 4
 
