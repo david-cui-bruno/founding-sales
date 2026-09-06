@@ -35,6 +35,8 @@ const detail: LeadDetail = {
   phones: [
     {
       id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true,
+      validationState: 'valid', reachability: 'none', sourceLabel: null, vendorRank: null,
+      phoneKind: null, ownershipState: 'unknown', evidenceObservedAt: null,
       compliance: {
         status: 'verified_clear', label: 'Verified clear until Sep 15, 2026',
         expiresAt: '2026-09-15T00:00:00.000Z',

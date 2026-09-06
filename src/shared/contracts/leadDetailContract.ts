@@ -27,6 +27,15 @@ export const contactMethodSchema = z.object({
   value: z.string().min(1),
   label: z.string().nullable(),
   valid: z.boolean(),
+  validationState: z.enum(['unverified', 'valid', 'invalid']),
+  reachability: z.enum(['direct', 'indirect', 'none']),
+  sourceLabel: z.string().min(1).nullable(),
+  vendorRank: z.number().int().positive().nullable(),
+  phoneKind: z.enum(['mobile', 'landline', 'voip', 'other']).nullable(),
+  ownershipState: z.enum([
+    'verified_person', 'vendor_candidate', 'conflicting_identity', 'unknown',
+  ]),
+  evidenceObservedAt: z.string().datetime({ offset: true }).nullable(),
   compliance: z.object({
     status: phoneComplianceStatusSchema,
     label: z.string().min(1),
@@ -141,6 +150,7 @@ export const dismissLeadRequestSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
 }).strict();
 
+export type PhoneComplianceStatus = z.infer<typeof phoneComplianceStatusSchema>;
 export type ContactMethod = z.infer<typeof contactMethodSchema>;
 export type CadenceSummary = z.infer<typeof cadenceSummarySchema>;
 export type ActivitySummary = z.infer<typeof activitySummarySchema>;

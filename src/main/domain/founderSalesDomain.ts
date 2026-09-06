@@ -134,6 +134,7 @@ import {
   type ImportStatusRequest,
 } from '../../shared/contracts/importContract';
 import { FOUNDER_CHANNEL_POLICIES_V1 } from './cadence/cadenceScheduler';
+import { comparePhoneCandidates } from './contacts/contactPresentation';
 import type { DomainServices } from './createDomainServices';
 import {
   isCloudPublicRecordChannel,
@@ -661,11 +662,18 @@ export class FounderSalesDomain {
       'SELECT cloud_entity_id FROM cloud_entity_links WHERE person_id = ?',
     ).get(person.id) as { cloud_entity_id: string } | undefined;
     const contacts = this.database.raw.prepare(`
-      SELECT id, kind, normalized_value, validation_state, compliance_expires_at
+      SELECT id, kind, normalized_value, validation_state, reachability, is_primary,
+        source_label, vendor_rank, phone_kind, ownership_state, evidence_observed_at,
+        compliance_expires_at
       FROM person_contact_methods WHERE person_id = ?
       ORDER BY kind ASC, normalized_value ASC, id ASC
     `).all(person.id) as {
-      id: string; kind: 'phone' | 'email'; normalized_value: string; validation_state: string;
+      id: string; kind: ContactMethod['kind']; normalized_value: string;
+      validation_state: ContactMethod['validationState']; reachability: ContactMethod['reachability'];
+      is_primary: 0 | 1; // Legacy evidence only, never a presentation or authorization decision.
+      source_label: string | null; vendor_rank: number | null;
+      phone_kind: ContactMethod['phoneKind']; ownership_state: ContactMethod['ownershipState'];
+      evidence_observed_at: string | null;
       compliance_expires_at: string | null;
     }[];
     const refusalReason = (row: typeof contacts[number], channel: 'call' | 'text') => {
@@ -676,13 +684,16 @@ export class FounderSalesDomain {
       );
       return decision.kind === 'allowed' ? null : decision.reasonCode;
     };
-    const contactDto = (row: typeof contacts[number]) => {
+    const contactDto = (row: typeof contacts[number]): ContactMethod => {
+      const contact: Omit<ContactMethod, 'compliance'> = {
+        id: row.id, kind: row.kind, value: row.normalized_value,
+        label: null, valid: row.validation_state === 'valid',
+        validationState: row.validation_state, reachability: row.reachability,
+        sourceLabel: row.source_label, vendorRank: row.vendor_rank, phoneKind: row.phone_kind,
+        ownershipState: row.ownership_state, evidenceObservedAt: row.evidence_observed_at,
+      };
       if (row.kind === 'email') {
-        return {
-          id: row.id, kind: row.kind, value: row.normalized_value,
-          label: null as string | null, valid: row.validation_state === 'valid',
-          compliance: null as ContactMethod['compliance'],
-        };
+        return { ...contact, compliance: null };
       }
       const callRefusalReason = refusalReason(row, 'call');
       const textRefusalReason = refusalReason(row, 'text');
@@ -726,8 +737,7 @@ export class FounderSalesDomain {
         })}`
         : labels[status];
       return {
-        id: row.id, kind: row.kind, value: row.normalized_value,
-        label: null as string | null, valid: row.validation_state === 'valid',
+        ...contact,
         compliance: { status, label, expiresAt, callRefusalReason, textRefusalReason },
       };
     };
@@ -798,7 +808,7 @@ export class FounderSalesDomain {
       personId: person.id,
       salesCycleId: cycle.id,
       personName: person.display_name,
-      phones: contacts.filter((row) => row.kind === 'phone').map(contactDto),
+      phones: contacts.filter((row) => row.kind === 'phone').map(contactDto).sort(comparePhoneCandidates),
       emails: contacts.filter((row) => row.kind === 'email').map(contactDto),
       organizationLabel: organization?.name ?? null,
       propertySummaries: properties.map(

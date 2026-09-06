@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   leadDetailSchema,
+  type ContactMethod,
   type LeadDetail,
 } from '../../../shared/contracts/leadDetailContract';
 import { LeadInspectorProvider } from './LeadInspectorProvider';
@@ -18,16 +19,23 @@ const receipt = {
   affectedSalesCycleIds: ['cycle-kevin'],
 };
 
+const legacyContactEvidence: Pick<ContactMethod,
+  'validationState' | 'reachability' | 'sourceLabel' | 'vendorRank' |
+  'phoneKind' | 'ownershipState' | 'evidenceObservedAt'> = {
+  validationState: 'valid', reachability: 'none', sourceLabel: null, vendorRank: null,
+  phoneKind: null, ownershipState: 'unknown', evidenceObservedAt: null,
+};
+
 const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
   leadDetailSchema.parse({
     personId: 'person-kevin',
     salesCycleId: 'cycle-kevin',
     personName: 'Kevin Shin',
     phones: [
-      { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, compliance: { status: 'verified_clear', label: 'Verified clear until Sep 15, 2026', expiresAt: '2026-09-15T00:00:00.000Z', callRefusalReason: null, textRefusalReason: null } },
+      { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, ...legacyContactEvidence, compliance: { status: 'verified_clear', label: 'Verified clear until Sep 15, 2026', expiresAt: '2026-09-15T00:00:00.000Z', callRefusalReason: null, textRefusalReason: null } },
     ],
     emails: [
-      { id: 'email-1', kind: 'email', value: 'kevin@example.com', label: null, valid: true, compliance: null },
+      { id: 'email-1', kind: 'email', value: 'kevin@example.com', label: null, valid: true, ...legacyContactEvidence, compliance: null },
     ],
     organizationLabel: 'Shin Properties',
     propertySummaries: ['12 Benefit St, Providence'],
@@ -272,6 +280,7 @@ describe('LeadInspector', () => {
         value: `+1401555010${index}`,
         label: null as string | null,
         valid: true,
+        ...legacyContactEvidence,
         compliance: {
           status,
           label,
@@ -305,12 +314,13 @@ describe('LeadInspector', () => {
           value: `+1401555020${index}`,
           label: null as string | null,
           valid: true,
+          ...legacyContactEvidence,
           compliance: {
             status, label, expiresAt: null as string | null,
             callRefusalReason, textRefusalReason,
           },
         })),
-        { id: 'clear-phone', kind: 'phone', value: '+14015550199', label: null, valid: true, compliance: { status: 'verified_clear', label: 'Verified clear until Sep 15, 2026', expiresAt: '2026-09-15T00:00:00.000Z', callRefusalReason: null, textRefusalReason: null } },
+        { id: 'clear-phone', kind: 'phone', value: '+14015550199', label: null, valid: true, ...legacyContactEvidence, compliance: { status: 'verified_clear', label: 'Verified clear until Sep 15, 2026', expiresAt: '2026-09-15T00:00:00.000Z', callRefusalReason: null, textRefusalReason: null } },
       ],
     }));
     const inspector = await renderInspector(api);
@@ -334,7 +344,7 @@ describe('LeadInspector', () => {
 
   it('uses the stable refusal reason as accessible disabled-control help text', async () => {
     const inspector = await renderInspector(createApi(detailFor({
-      phones: [{ id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, compliance: { status: 'state_clearance_required', label: 'State clearance required', expiresAt: null, callRefusalReason: 'state_registration_missing', textRefusalReason: 'outside_recipient_window' } }],
+      phones: [{ id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, ...legacyContactEvidence, compliance: { status: 'state_clearance_required', label: 'State clearance required', expiresAt: null, callRefusalReason: 'state_registration_missing', textRefusalReason: 'outside_recipient_window' } }],
     })));
 
     expect(within(inspector).getByRole('button', { name: 'Call +14015550100' }).getAttribute('aria-describedby')).toBeTruthy();

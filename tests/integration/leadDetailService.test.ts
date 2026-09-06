@@ -21,7 +21,11 @@ import {
   createLeadDetailService,
   type LeadDetailProvider,
 } from '../../src/main/leads/leadDetailService';
-import { leadDetailSchema } from '../../src/shared/contracts/leadDetailContract';
+import {
+  contactMethodSchema,
+  leadDetailSchema,
+  type ContactMethod,
+} from '../../src/shared/contracts/leadDetailContract';
 import {
   DOMAIN_TIMESTAMP,
   insertOpenCycleWithAction,
@@ -135,6 +139,9 @@ describe('leadDetailService over a real encrypted domain', () => {
   it('returns the strict detail DTO for a seeded lead', async () => {
     const { prospect, cycleId } = seedLead('alpha');
     addPhone(prospect, 'alpha-phone');
+    database.raw.prepare(`UPDATE person_contact_methods SET source_label = 'vendor-fixture',
+      vendor_rank = 2, phone_kind = 'mobile', ownership_state = 'vendor_candidate',
+      evidence_observed_at = '2026-08-30T12:00:00.000Z' WHERE id = 'alpha-phone'`).run();
 
     const detail = await leadDetail.get({ personId: prospect.personId });
 
@@ -152,6 +159,13 @@ describe('leadDetailService over a real encrypted domain', () => {
       value: '+14015550100',
       label: null,
       valid: true,
+      validationState: 'valid',
+      reachability: 'direct',
+      sourceLabel: 'vendor-fixture',
+      vendorRank: 2,
+      phoneKind: 'mobile',
+      ownershipState: 'vendor_candidate',
+      evidenceObservedAt: '2026-08-30T12:00:00.000Z',
       compliance: {
         status: 'verified_clear',
         label: 'Verified clear until Sep 15, 2026',
@@ -183,8 +197,85 @@ describe('leadDetailService over a real encrypted domain', () => {
       textRefusalReason: 'federal_dnc_listed',
     });
     expect(Object.keys(detail.phones[0] ?? {})).toEqual([
-      'id', 'kind', 'value', 'label', 'valid', 'compliance',
+      'id', 'kind', 'value', 'label', 'valid', 'validationState', 'reachability',
+      'sourceLabel', 'vendorRank', 'phoneKind', 'ownershipState', 'evidenceObservedAt', 'compliance',
     ]);
+  });
+
+  it('maps legacy phone and email evidence conservatively without inventing ownership or rank', async () => {
+    const { prospect } = seedLead('legacy');
+    addPhone(prospect, 'legacy-phone');
+    addEmail(prospect, 'legacy-email');
+    const detail = await leadDetail.get({ personId: prospect.personId });
+    for (const contact of [...detail.phones, ...detail.emails]) {
+      expect(contact).toMatchObject({
+        valid: true, validationState: 'valid', reachability: 'direct',
+        sourceLabel: null, vendorRank: null, phoneKind: null,
+        ownershipState: 'unknown', evidenceObservedAt: null,
+      });
+    }
+    expect(detail.emails[0]?.compliance).toBeNull();
+  });
+
+  it.each([
+    ['unverified', false, 'indirect', 'landline', 'unknown'],
+    ['invalid', false, 'none', 'voip', 'conflicting_identity'],
+    ['valid', true, 'direct', 'other', 'verified_person'],
+  ] as const)('preserves %s validation separately from ownership and phone kind', async (validation, valid, reachability, kind, ownership) => {
+    const { prospect } = seedLead('evidence');
+    addPhone(prospect, 'evidence-phone');
+    database.raw.prepare(`UPDATE person_contact_methods SET validation_state = ?,
+      reachability = ?, phone_kind = ?, ownership_state = ? WHERE id = 'evidence-phone'`)
+      .run(validation, reachability, kind, ownership);
+    const detail = await leadDetail.get({ personId: prospect.personId });
+    expect(detail.phones[0]).toMatchObject({
+      validationState: validation, valid, reachability, phoneKind: kind, ownershipState: ownership,
+    });
+    if (!valid) {
+      expect(detail.phones[0]?.compliance).toMatchObject({
+        status: 'compliance_unknown', callRefusalReason: 'contact_validation_unusable',
+        textRefusalReason: 'contact_validation_unusable',
+      });
+    }
+  });
+
+  it('orders mixed phone evidence deterministically instead of trusting legacy primary or phone order', async () => {
+    const { prospect } = seedLead('mixed');
+    addPhone(prospect, 'tcpa');
+    database.raw.prepare(`UPDATE person_contact_methods SET normalized_value = '+14015550199',
+      is_primary = 0, compliance_tcpa_flag = 1, ownership_state = 'verified_person'
+      WHERE id = 'tcpa'`).run();
+    const insert = database.raw.prepare(`INSERT INTO person_contact_methods (
+      id, person_id, kind, normalized_value, validation_state, reachability, is_primary,
+      federal_status, compliance_tcpa_flag, covered_area_code, compliance_source, scrubbed_at,
+      compliance_expires_at, ownership_state, vendor_rank, created_at, updated_at
+    ) VALUES (?, ?, 'phone', ?, ?, 'direct', ?, ?, 0, '401', 'ftc_download',
+      '2026-08-15T00:00:00.000Z', '2026-09-15T00:00:00.000Z', ?, ?, ?, ?)`);
+    for (const [id, value, validation, primary, federal, ownership, rank] of [
+      ['listed-rank-one', '+14015550100', 'valid', 1, 'listed', 'vendor_candidate', 1],
+      ['unknown-owner', '+14015550103', 'valid', 0, 'unknown', 'unknown', 2],
+      ['clear-vendor-three', '+14015550130', 'valid', 0, 'verified_clear', 'vendor_candidate', 3],
+      ['conflict-rank-one', '+14015550102', 'valid', 0, 'unknown', 'conflicting_identity', 1],
+      ['unknown-vendor', '+14015550105', 'unverified', 0, 'verified_clear', 'vendor_candidate', 2],
+      ['clear-verified', '+14015550190', 'valid', 0, 'verified_clear', 'verified_person', 4],
+      ['unknown-verified', '+14015550110', 'valid', 0, 'unknown', 'verified_person', 5],
+      ['clear-vendor-two', '+14015550120', 'valid', 0, 'verified_clear', 'vendor_candidate', 2],
+    ] as const) {
+      insert.run(id, prospect.personId, value, validation, primary, federal, ownership, rank,
+        DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    }
+    const before = database.raw.prepare('SELECT * FROM person_contact_methods ORDER BY id').all();
+    const first = await leadDetail.get({ personId: prospect.personId });
+    const second = await leadDetail.get({ personId: prospect.personId });
+    expect(first.phones.map(({ id }) => id)).toEqual([
+      'clear-verified', 'clear-vendor-two', 'clear-vendor-three', 'unknown-verified',
+      'unknown-vendor', 'unknown-owner', 'conflict-rank-one', 'tcpa', 'listed-rank-one',
+    ]);
+    expect(second.phones).toEqual(first.phones);
+    expect(first.phones.slice(-2).map(({ compliance }) => compliance?.status))
+      .toEqual(['tcpa_blocked', 'federal_dnc_listed']);
+    expect(first.phones.every((phone) => contactMethodSchema.safeParse(phone).success)).toBe(true);
+    expect(database.raw.prepare('SELECT * FROM person_contact_methods ORDER BY id').all()).toEqual(before);
   });
 
   it('fails closed for otherwise-unmapped refusal reasons', async () => {
@@ -307,14 +398,18 @@ describe('leadDetailService over a real encrypted domain', () => {
       .rejects.toMatchObject({ reasonCode: 'person_or_handle_opted_out' });
   });
 
-  it('re-reads evidence immediately before appendActivity and does not append on refusal', async () => {
+  it.each(['call', 'text'] as const)('re-reads evidence before %s appendActivity despite an allowed-looking stale detail', async (channel) => {
     const { prospect, cycleId } = seedLead('mutation');
     addPhone(prospect, 'mutation-phone');
-    await leadDetail.get({ personId: prospect.personId });
+    const snapshot = await leadDetail.get({ personId: prospect.personId });
+    expect(snapshot.phones[0]).toMatchObject({
+      validationState: 'valid', ownershipState: 'unknown',
+      compliance: { status: 'verified_clear', callRefusalReason: null, textRefusalReason: null },
+    });
     database.raw.prepare(`UPDATE person_contact_methods SET federal_status = 'listed'
       WHERE id = 'mutation-phone'`).run();
 
-    await expect(leadDetail.beginOutbound({ channel: 'call', personId: prospect.personId,
+    await expect(leadDetail.beginOutbound({ channel, personId: prospect.personId,
       salesCycleId: cycleId, contactMethodId: 'mutation-phone' })).rejects.toMatchObject({
       reasonCode: 'federal_dnc_listed',
     });
@@ -366,9 +461,14 @@ describe('leadDetailService over a real encrypted domain', () => {
       .toEqual({ count: 0 });
   });
 
-  it('refuses outbound to an opted-out person', async () => {
+  it.each(['call', 'text'] as const)('refuses %s after opt-out even when the earlier detail looked allowed', async (channel) => {
     const { prospect, cycleId } = seedLead('alpha');
     addPhone(prospect, 'alpha-phone');
+    const snapshot = await leadDetail.get({ personId: prospect.personId });
+    expect(snapshot.optedOut).toBe(false);
+    expect(snapshot.phones[0]?.compliance).toMatchObject({
+      status: 'verified_clear', callRefusalReason: null, textRefusalReason: null,
+    });
     services.optOut.apply({
       personId: prospect.personId,
       tombstoneId: 'alpha-tombstone',
@@ -395,12 +495,15 @@ describe('leadDetailService over a real encrypted domain', () => {
 
     await expect(
       leadDetail.beginOutbound({
-        channel: 'call',
+        channel,
         personId: prospect.personId,
         salesCycleId: cycleId,
         contactMethodId: 'alpha-phone',
       }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ reasonCode: 'person_or_handle_opted_out' });
+    expect(database.raw.prepare(`SELECT COUNT(*) AS count FROM activities
+      WHERE person_id = ? AND direction = 'outbound'`).get(prospect.personId))
+      .toEqual({ count: 0 });
 
     const detail = await leadDetail.get({ personId: prospect.personId });
     expect(detail.optedOut).toBe(true);
@@ -499,5 +602,47 @@ describe('leadDetailService over a real encrypted domain', () => {
     expect(database.raw.prepare(
       'SELECT qualification_state FROM prospects WHERE id = ?',
     ).get(prospect.prospectId)).toEqual({ qualification_state: 'unreviewed' });
+  });
+});
+
+describe('strict contact presentation DTO', () => {
+  const evidence = {
+    validationState: 'unverified', reachability: 'indirect', sourceLabel: 'vendor-fixture',
+    vendorRank: 1, phoneKind: 'mobile', ownershipState: 'vendor_candidate',
+    evidenceObservedAt: '2026-08-30T12:00:00.000Z',
+  } as const;
+  const contact: ContactMethod = {
+    id: 'candidate', kind: 'phone', value: '+14015550100', label: null, valid: false,
+    ...evidence,
+    compliance: {
+      status: 'state_clearance_required', label: 'State clearance required', expiresAt: null,
+      callRefusalReason: 'state_registration_missing', textRefusalReason: null,
+    },
+  };
+
+  it('accepts the expanded evidence while preserving independent channel refusals', () => {
+    expect(contactMethodSchema.parse(contact)).toEqual(contact);
+  });
+
+  it.each(Object.keys(evidence))('requires explicit %s rather than silently defaulting evidence', (field) => {
+    const missing: Record<string, unknown> = { ...contact };
+    delete missing[field];
+    expect(contactMethodSchema.safeParse(missing).success).toBe(false);
+  });
+
+  it.each([
+    ['validationState', 'verified'], ['reachability', 'reachable'], ['sourceLabel', ''],
+    ['vendorRank', 0], ['vendorRank', -1], ['vendorRank', 1.5], ['vendorRank', '1'],
+    ['phoneKind', 'cell'], ['ownershipState', 'matched_owner'], ['evidenceObservedAt', 'yesterday'],
+    ['evidenceObservedAt', '2026-08-30T12:00:00'],
+  ])('rejects invalid %s evidence %s', (field, value) => {
+    expect(contactMethodSchema.safeParse({ ...contact, [field]: value }).success).toBe(false);
+  });
+
+  it.each(['mayCall', 'mayText', 'authorized', 'isPrimary', 'leadScore', 'blendedScore'])('rejects reusable authorization or unapproved field %s', (field) => {
+    expect(contactMethodSchema.safeParse({ ...contact, [field]: true }).success).toBe(false);
+    expect(contactMethodSchema.safeParse({
+      ...contact, compliance: { ...contact.compliance, [field]: true },
+    }).success).toBe(false);
   });
 });
