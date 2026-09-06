@@ -2,11 +2,11 @@
 
 **Date:** 2026-09-06
 
-**Status:** Proposed design for review. The user approved automatic triage and the combined discovery/paid-pilot objective. Implementation has not started.
+**Status:** Approved by the user on 2026-09-06 at 23:25 UTC after reviewing the summary. Implementation planning is in progress. No application behavior has changed yet.
 
 **Source baseline:** `9d83fdf3215a6ed610313e3268fd3b7ebd127d98`.
 
-Upon approval, this design supersedes the routine manual triage and founder-only qualification authority in `2026-09-04-lead-review-triage-design.md` sections 3, 5, 7 and 8 where they conflict with the assessment workflow below. It retains explicit outreach initiation, fresh authorization, truthful contact evidence and one-lead enrichment. Historical decisions and communication evidence are not rewritten.
+This approved design supersedes the routine manual triage and founder-only qualification authority in `2026-09-04-lead-review-triage-design.md` sections 3, 5, 7 and 8 where they conflict with the assessment workflow below. It retains explicit outreach initiation, fresh authorization, truthful contact evidence and one-lead enrichment. Historical decisions and communication evidence are not rewritten.
 
 ## Outcome
 
