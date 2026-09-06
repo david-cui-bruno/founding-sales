@@ -533,3 +533,47 @@ it('renders all thirty permitted leads without losing ranks or recommendation co
   expect(report).toContain('- Watch: 30');
   expect(report.split('\n').filter((line) => /^\| \d/.test(line))).toHaveLength(30);
 });
+
+it.each(['Main-River', 'Main.River'])('rejects composed %s street text before Markdown escaping can disguise it', async (region) => {
+  const input = fixture();
+  Object.assign(input.snapshot.leads[0], { locality: '123', region, postalCode: 'Street' });
+  expect(() => assertTriageArtifactSafe(input)).not.toThrow();
+  expect(() => assertTriageArtifactSafe(`123 ${region} Street`)).toThrow(/^Unsafe triage artifact\.$/);
+  await expect(build(input)).rejects.toThrow(/^Invalid triage report input\.$/);
+});
+
+it.each(['Main-River', 'Main.River'])('native CLI rejects composed %s street text with zero output opens', (region) => {
+  const input = fixture();
+  Object.assign(input.snapshot.leads[0], { locality: '123', region, postalCode: 'Street' });
+  expect(() => assertTriageArtifactSafe(input)).not.toThrow();
+  expect(() => assertTriageArtifactSafe(`123 ${region} Street`)).toThrow(/^Unsafe triage artifact\.$/);
+  const files = cliFiles(input);
+  const result = node([...observeOutputOpens(files.directory), script, ...files.args], files.directory);
+  expectRefusal(result);
+  expect(result.stderr).not.toContain(region);
+  expect(existsSync(files.output)).toBe(false);
+});
+
+function safeHyphenFixture(): Input {
+  const input = fixture();
+  Object.assign(input.snapshot.leads[0], { personName: 'Ada-River', locality: 'North-River', region: 'RI', postalCode: '02900' });
+  input.snapshot.leads[0].organization.label = 'Main-River';
+  return input;
+}
+
+it('accepts safe hyphenated display text while retaining Markdown escaping', async () => {
+  const report = await build(safeHyphenFixture());
+  expect(report).toContain('Ada\\-River (person: p1, cycle: c1)');
+  expect(report).toContain('Locality: North\\-River RI 02900; Organization: Main\\-River, relationship: Unknown');
+});
+
+it('native CLI accepts safe hyphenated display text and writes private escaped Markdown', async () => {
+  const input = safeHyphenFixture();
+  const files = cliFiles(input);
+  const result = node([script, ...files.args], files.directory);
+  expect(result.status, result.stderr).toBe(0);
+  expect(existsSync(files.output)).toBe(true);
+  expect(readFileSync(files.output, 'utf8')).toBe(await build(input));
+  expect(readFileSync(files.output, 'utf8')).toContain('Locality: North\\-River RI 02900;');
+  expect(statSync(files.output).mode & 0o777).toBe(0o600);
+});

@@ -57,10 +57,13 @@ const inputSchema = z.object({
 // Entities prevent table/HTML/autolink syntax; backslashes neutralize Markdown.
 function text(value: string | null): string {
   if (value === null) return 'Unknown';
+  const display = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ');
+  // Screen visible text before escape characters can conceal an existing match.
+  assertTriageArtifactSafe(display);
   const entities: Record<string, string> = {
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '|': '&#124;', ':': '&#58;',
   };
-  return value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ')
+  return display
     .replace(/[\\`*_{}[\]()#+.!~-]/g, '\\$&')
     .replace(/[&<>|:]/g, (character) => entities[character]);
 }
@@ -83,7 +86,7 @@ function refusals(lead: LeadTriageEvidence): string {
 function details(lead: LeadTriageEvidence, assessment: LeadTriageAssessment): string {
   return [
     `Assessment: ${evidence(assessment.evidenceCodes)}`,
-    `Locality: ${[lead.locality, lead.region, lead.postalCode].map(text).join(' ')}`,
+    `Locality: ${text([lead.locality, lead.region, lead.postalCode].map((part) => part ?? 'Unknown').join(' '))}`,
     `Organization: ${text(lead.organization.label)}, relationship: ${lead.organization.relationship ?? 'Unknown'}`,
     `Organization evidence: ${evidence(lead.organization.evidenceCodes)}`,
     `Fit evidence: ${evidence(lead.fit.evidenceCodes)}`,
