@@ -4,9 +4,11 @@ import type { AppDatabase } from '../../src/main/db/database';
 import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
 import type { AppleBridgeSupervisorApi } from '../../src/main/appleBridge/appleBridgeSupervisor';
 import type { HealthProvider } from '../../src/main/health/registerHealthIpc';
-import type { ApplicationStartupDependencies } from '../../src/main/startApplication';
+import type { ApplicationStartupDependencies, ApplicationStartupOptions } from '../../src/main/startApplication';
 import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import type { SourcingPollHealth } from '../../src/shared/contracts/sourcingContract';
+import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
+import type { OutboundCommandServiceApi } from '../../src/main/communications/outboundPorts';
 
 const mocks = vi.hoisted(() => {
   const fileLogSink = {
@@ -31,6 +33,9 @@ const mocks = vi.hoisted(() => {
     registerProtocol: vi.fn(),
     startApplication: vi.fn(),
     whenReady: vi.fn(),
+    powerOn: vi.fn(),
+    powerRemove: vi.fn(),
+    powerListeners: new Map<string, Set<() => void>>(),
     windowDestroy: vi.fn(),
     windowIsDestroyed: vi.fn(() => false),
   };
@@ -49,6 +54,7 @@ vi.mock('electron', () => ({
   },
   BrowserWindow: { getAllWindows: mocks.browserWindows },
   protocol: { registerSchemesAsPrivileged: mocks.protocolSchemes },
+  powerMonitor: { on: mocks.powerOn, removeListener: mocks.powerRemove },
   safeStorage: {
     isAsyncEncryptionAvailable: vi.fn(async () => true),
     encryptStringAsync: vi.fn(async () => Buffer.from('protected')),
@@ -82,6 +88,14 @@ describe('main process startup', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    mocks.powerListeners.clear();
+    mocks.powerOn.mockReset().mockImplementation((event: string, callback: () => void) => {
+      const listeners = mocks.powerListeners.get(event) ?? new Set<() => void>();
+      listeners.add(callback); mocks.powerListeners.set(event, listeners);
+    });
+    mocks.powerRemove.mockReset().mockImplementation((event: string, callback: () => void) => {
+      mocks.powerListeners.get(event)?.delete(callback);
+    });
     vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
     vi.stubGlobal('MAIN_WINDOW_VITE_NAME', 'main_window');
     mocks.whenReady.mockReturnValue(
@@ -136,6 +150,54 @@ describe('main process startup', () => {
     } as unknown as SourcingPoller;
   }
 
+  const inertBackupRecovery = (): Pick<ApplicationStartupDependencies, 'createBackupService' | 'createRecoveryService'> => ({
+    createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined,
+      listAvailableBackups: async () => [], createBackup: async () => { throw new Error('unexpected backup'); } }),
+    createRecoveryService: () => ({ status: vi.fn(), beginSetup: vi.fn(), saveSetupMaterial: vi.fn(),
+      completeSetup: vi.fn(), selectAndRunRestoreDrill: vi.fn(), shutdown: async () => undefined }),
+  });
+
+  it('forwards real source events to the pending startup owner and captured late events cannot revive it after before-quit', async () => {
+    let outbound!: OutboundCommandServiceApi;
+    let resolveWindow!: () => void;
+    mocks.loadUrl.mockReturnValue(new Promise<void>((resolve) => { resolveWindow = resolve; }));
+    const close = vi.fn();
+    const dependencies: ApplicationStartupDependencies = {
+      ...inertBackupRecovery(),
+      loadWorkspaceKey: async () => ({ bytes: Buffer.alloc(32, 0x2a), version: 1 }),
+      prepareEncryptedDatabase: async () => undefined,
+      openDatabase: () => ({ path: '/fixture/main-events' }) as AppDatabase,
+      migrateToLatest: async () => ({ fromVersion: 0, toVersion: 2, appliedMigrationIds: [] }),
+      createDomainRuntime: () => fakeDomainRuntime(),
+      createHealthService: () => ({ getHealth: () => ({}) }),
+      createSourcingPoller: explicitIdleSourcingPoller,
+      createOutboundCommandService: (input) => { outbound = createOutboundCommandService(input); return outbound; },
+      registerApplicationIpc: vi.fn(() => vi.fn()),
+      createAppleBridgeSupervisor: disabledAppleBridgeSupervisor,
+      closeDatabase: close,
+    };
+    const actual = await vi.importActual<typeof import('../../src/main/startApplication')>('../../src/main/startApplication');
+    mocks.startApplication.mockImplementation((options) => actual.startApplication(options, dependencies));
+    await import('../../src/main'); await settleStartup();
+    expect(mocks.loadUrl).toHaveBeenCalledTimes(1);
+    expect(mocks.powerOn.mock.calls.map(([event]) => event)).toEqual(['resume', 'lock-screen', 'unlock-screen']);
+    const saved = Object.fromEntries(mocks.powerOn.mock.calls) as Record<string, () => void>;
+    saved['lock-screen'](); saved.resume();
+    expect((await outbound.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
+    saved['unlock-screen']();
+    expect((await outbound.getCapabilities()).phoneHandoff.reasonCode).toBe('inbound_safety_unwired');
+    const beforeQuit = mocks.appOn.mock.calls.find(([event]) => event === 'before-quit')![1];
+    beforeQuit({ preventDefault: vi.fn() }); beforeQuit({ preventDefault: vi.fn() });
+    expect((await outbound.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
+    saved.resume(); saved['unlock-screen'](); saved['lock-screen']();
+    expect((await outbound.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
+    expect(mocks.powerRemove).toHaveBeenCalledTimes(3);
+    expect([...mocks.powerListeners.values()].every((listeners) => listeners.size === 0)).toBe(true);
+    resolveWindow(); await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+  });
+
   it('quits a second instance before readiness or database startup', async () => {
     mocks.requestSingleInstanceLock.mockReturnValueOnce(false);
 
@@ -145,6 +207,73 @@ describe('main process startup', () => {
     expect(mocks.appQuit).toHaveBeenCalledTimes(1);
     expect(mocks.whenReady).not.toHaveBeenCalled();
     expect(mocks.startApplication).not.toHaveBeenCalled();
+    expect(mocks.powerOn).not.toHaveBeenCalled();
+  });
+
+  it('supplies owned resume, lock-screen and unlock-screen callbacks only after readiness', async () => {
+    mocks.startApplication.mockResolvedValue({ shutdown: async (): Promise<void> => undefined });
+    await import('../../src/main');
+    expect(mocks.powerOn).not.toHaveBeenCalled();
+    await settleStartup();
+    const options = mocks.startApplication.mock.calls[0][0] as ApplicationStartupOptions;
+    expect(options.registerOutboundLifecycle).toBeTypeOf('function');
+    const callbacks = { onWake: vi.fn(), onLock: vi.fn(), onUnlock: vi.fn() };
+    const foreign = (): void => undefined;
+    mocks.powerOn('resume', foreign);
+    const unregister = options.registerOutboundLifecycle!(callbacks);
+    expect(mocks.powerOn.mock.calls.slice(1)).toEqual([
+      ['resume', callbacks.onWake], ['lock-screen', callbacks.onLock], ['unlock-screen', callbacks.onUnlock],
+    ]);
+    for (const event of ['resume', 'lock-screen', 'unlock-screen']) {
+      for (const listener of mocks.powerListeners.get(event) ?? []) listener();
+    }
+    expect(callbacks.onWake).toHaveBeenCalledTimes(1);
+    expect(callbacks.onLock).toHaveBeenCalledTimes(1);
+    expect(callbacks.onUnlock).toHaveBeenCalledTimes(1);
+    unregister(); unregister();
+    expect(mocks.powerRemove).toHaveBeenCalledTimes(3);
+    expect([...mocks.powerListeners.get('resume')!]).toEqual([foreign]);
+    expect(mocks.powerListeners.get('lock-screen')!.size).toBe(0);
+    expect(mocks.powerListeners.get('unlock-screen')!.size).toBe(0);
+  });
+
+  it.each([2, 3])('rolls back successful lifecycle registrations after registration %s fails and preserves cleanup errors', async (nth) => {
+    mocks.startApplication.mockResolvedValue({ shutdown: async (): Promise<void> => undefined });
+    await import('../../src/main'); await settleStartup();
+    const register = (mocks.startApplication.mock.calls[0][0] as ApplicationStartupOptions).registerOutboundLifecycle;
+    expect(register).toBeTypeOf('function');
+    const registrationError = new Error('registration'); const cleanupError = new Error('removal');
+    const on = mocks.powerOn.getMockImplementation()!;
+    mocks.powerOn.mockImplementation((...args) => {
+      if (mocks.powerOn.mock.calls.length === nth) throw registrationError;
+      return on(...args);
+    });
+    const remove = mocks.powerRemove.getMockImplementation()!;
+    mocks.powerRemove.mockImplementation((...args) => { remove(...args); throw cleanupError; });
+    let error: unknown;
+    try { register!({ onWake: vi.fn(), onLock: vi.fn(), onUnlock: vi.fn() }); } catch (caught) { error = caught; }
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).cause).toBe(registrationError);
+    expect((error as AggregateError).errors).toEqual([registrationError, ...Array(nth - 1).fill(cleanupError)]);
+    expect([...mocks.powerListeners.values()].every((listeners) => listeners.size === 0)).toBe(true);
+    expect(mocks.powerRemove.mock.calls.map(([name]) => name)).toEqual(nth === 2 ? ['resume'] : ['lock-screen', 'resume']);
+  });
+
+  it('attempts every owned removal and remains idempotent when removal throws', async () => {
+    mocks.startApplication.mockResolvedValue({ shutdown: async (): Promise<void> => undefined });
+    await import('../../src/main'); await settleStartup();
+    const register = (mocks.startApplication.mock.calls[0][0] as ApplicationStartupOptions).registerOutboundLifecycle;
+    expect(register).toBeTypeOf('function');
+    const unregister = register!({ onWake: vi.fn(), onLock: vi.fn(), onUnlock: vi.fn() });
+    const remove = mocks.powerRemove.getMockImplementation()!;
+    const failure = new Error('remove');
+    mocks.powerRemove.mockImplementation((...args) => { remove(...args); throw failure; });
+    let error: unknown;
+    try { unregister(); } catch (caught) { error = caught; }
+    expect((error as AggregateError).errors).toEqual([failure, failure, failure]);
+    expect([...mocks.powerListeners.values()].every((listeners) => listeners.size === 0)).toBe(true);
+    expect(unregister).not.toThrow();
+    expect(mocks.powerRemove).toHaveBeenCalledTimes(3);
   });
 
   it('starts composition only after readiness and supplies the app-owned path and version', async () => {
@@ -195,6 +324,7 @@ describe('main process startup', () => {
       isTrustedRendererUrl: expect.any(Function),
       logger: mocks.logger,
       logDirectoryPath: mocks.fileLogSink.directoryPath,
+      registerOutboundLifecycle: expect.any(Function),
       createWindow: expect.any(Function),
     });
     const startupOptions = mocks.startApplication.mock.calls[0]?.[0] as
@@ -296,6 +426,7 @@ describe('main process startup', () => {
     let healthProvider: HealthProvider | undefined;
     let settleMigration: (() => void) | undefined;
     const dependencies: ApplicationStartupDependencies = {
+      ...inertBackupRecovery(),
       loadWorkspaceKey: async () => ({ bytes: Buffer.alloc(32, 0x2a), version: 1 }),
       prepareEncryptedDatabase: async () => undefined,
       openDatabase: () => {
@@ -374,6 +505,7 @@ describe('main process startup', () => {
     };
     mocks.loadUrl.mockReturnValue(loadFailure);
     const dependencies: ApplicationStartupDependencies = {
+      ...inertBackupRecovery(),
       loadWorkspaceKey: async () => ({ bytes: Buffer.alloc(32, 0x2a), version: 1 }),
       prepareEncryptedDatabase: async () => undefined,
       openDatabase: () => {

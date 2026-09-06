@@ -50,8 +50,12 @@ import { safeStorage, dialog } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
 import type { SafeLogger } from './logging/safeLogger';
+import { createOutboundCommandService } from './communications/outboundCommandService';
+import { unavailablePhoneHandoff, unavailableOutboundReadiness } from './communications/phoneHandoffLauncher';
+import type { OutboundCommandServiceApi, OutboundDomainGate } from './communications/outboundPorts';
 
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
+  createOutboundCommandService?: typeof createOutboundCommandService;
   createBackupService?(options: BackupServiceOptions): Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'>;
   createRecoveryService?(options: RecoveryServiceOptions): RecoveryProvider & { shutdown(): Promise<void> };
   registerApplicationIpc(
@@ -63,6 +67,7 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
     shellProvider?: undefined,
     enrichmentRequester?: EnrichmentRequester,
     logDirectoryPath?: string,
+    outbound?: OutboundCommandServiceApi,
   ): () => void;
   createEnrichmentRequester?(
     runtime: FoundationRuntime,
@@ -98,6 +103,11 @@ export type ApplicationStartupOptions = {
   sourcingPollingEnabled?: boolean;
   logger?: SafeLogger;
   logDirectoryPath?: string;
+  registerOutboundLifecycle?(callbacks: {
+    onWake(): void;
+    onLock(): void;
+    onUnlock(): void;
+  }): () => void;
   createWindow(): void | Promise<void>;
 };
 
@@ -309,15 +319,46 @@ export async function startApplication(
   let backupService: Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'> | undefined;
   let recoveryService: (RecoveryProvider & { shutdown(): Promise<void> }) | undefined;
   let shutdownPromise: Promise<void> | undefined;
+  let outbound: OutboundCommandServiceApi | undefined;
+  let unregisterOutboundLifecycle: (() => void) | undefined;
+  let removeStartupAbort: (() => void) | undefined;
+  let outboundClosed = false;
+  const cleanupErrors: unknown[] = [];
+
+  const detachOutboundLifecycle = (): void => {
+    const unregister = unregisterOutboundLifecycle;
+    unregisterOutboundLifecycle = undefined;
+    try { unregister?.(); } catch (error) { cleanupErrors.push(error); }
+  };
+  const detachStartupAbort = (): void => {
+    const remove = removeStartupAbort;
+    removeStartupAbort = undefined;
+    remove?.();
+  };
+  const closeOutbound = (): void => {
+    if (outboundClosed) return;
+    // Reserve permanent owner closure before any injected callback can reenter.
+    outboundClosed = true;
+    try { outbound?.dispose(); } catch (error) { cleanupErrors.push(error); }
+    detachOutboundLifecycle();
+    try { detachStartupAbort(); } catch (error) { cleanupErrors.push(error); }
+  };
 
   const shutdown = (): Promise<void> => {
     if (shutdownPromise !== undefined) {
       return shutdownPromise;
     }
 
-    shutdownPromise = (async () => {
-      const cleanupErrors: unknown[] = [];
-      // Close recovery admission and invalidate pending dialog results first.
+    // Memoize before disposal/listener callbacks, without deferring admission
+    // closure to a microtask. Reentrant callers share this exact completion.
+    let resolveShutdown!: () => void;
+    let rejectShutdown!: (error: unknown) => void;
+    shutdownPromise = new Promise<void>((resolve, reject) => {
+      resolveShutdown = resolve; rejectShutdown = reject;
+    });
+    closeOutbound();
+    void (async () => {
+      // Preserve recovery, backup, sourcing, IPC, helper and Foundation ownership.
       let recoveryCleanup: Promise<void> | undefined;
       try {
         recoveryCleanup = recoveryService?.shutdown();
@@ -391,7 +432,7 @@ export async function startApplication(
       if (cleanupErrors.length === 1) {
         throw cleanupErrors[0];
       }
-    })();
+    })().then(resolveShutdown, rejectShutdown);
 
     return shutdownPromise;
   };
@@ -399,6 +440,36 @@ export async function startApplication(
   try {
     throwIfStartupCancelled(options.signal);
     await runtime.initialize();
+    throwIfStartupCancelled(options.signal);
+    const domain: OutboundDomainGate = {
+      withDomain: (operation) => runtime.withDomain((current) => operation({
+        inspectOutboundCommand: (request) => current.inspectOutboundCommand(request),
+        prepareOutboundDispatch: (request) => current.prepareOutboundDispatch(request),
+        recordOutboundResult: (request, result) => current.recordOutboundResult(request, result),
+        recordOutboundRefusal: (request, reason) => current.recordOutboundRefusal(request, reason),
+      })),
+    };
+    outbound = (dependencies.createOutboundCommandService ?? createOutboundCommandService)({
+      domain, phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(),
+    });
+    if (options.signal !== undefined) {
+      const signal = options.signal;
+      removeStartupAbort = () => signal.removeEventListener('abort', closeOutbound);
+      signal.addEventListener('abort', closeOutbound, { once: true });
+      if (signal.aborted) closeOutbound();
+      throwIfStartupCancelled(signal);
+    }
+    unregisterOutboundLifecycle = options.registerOutboundLifecycle?.({
+      onWake: () => { if (!outboundClosed) outbound.invalidate('wake'); },
+      onLock: () => { if (!outboundClosed) outbound.invalidate('lock'); },
+      onUnlock: () => {
+        if (outboundClosed) return;
+        outbound.invalidate('wake');
+        if (!outboundClosed) outbound.resumeAfterUnlock();
+      },
+    });
+    // A registrar can synchronously abort before returning its owned disposer.
+    if (outboundClosed) detachOutboundLifecycle();
     throwIfStartupCancelled(options.signal);
     if (typeof dependencies.createSourcingPoller !== 'function') {
       throw new Error('Sourcing poller dependency is required.');
@@ -459,6 +530,7 @@ export async function startApplication(
         options.logger,
       ),
       options.logDirectoryPath,
+      outbound,
     );
     throwIfStartupCancelled(options.signal);
     if (options.sourcingPollingEnabled === true && sourcingPoller !== undefined) {
@@ -494,6 +566,7 @@ export async function startApplication(
     }
     await options.createWindow();
     throwIfStartupCancelled(options.signal);
+    detachStartupAbort();
 
     return {
       databasePath,
@@ -512,6 +585,7 @@ export async function startApplication(
       throw new AggregateError(
         [startupError, cleanupError],
         'Application startup and cleanup both failed.',
+        { cause: startupError },
       );
     }
 

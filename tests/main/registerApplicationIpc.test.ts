@@ -2,16 +2,25 @@ import { describe, expect, it, vi } from 'vitest';
 
 const electron = vi.hoisted(() => ({
   showItemInFolder: vi.fn(),
+  handle: vi.fn(), removeHandler: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
   shell: { showItemInFolder: electron.showItemInFolder },
+  safeStorage: {}, dialog: {}, ipcMain: { handle: electron.handle, removeHandler: electron.removeHandler },
 }));
 
 import type { FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import type { AppHealth } from '../../src/shared/healthContract';
 import type { SourcingStatus } from '../../src/shared/contracts/sourcingContract';
 import type { SourcingProvider } from '../../src/main/sourcing/registerSourcingIpc';
+import { startApplication, type ApplicationStartupDependencies } from '../../src/main/startApplication';
+import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
+import type { AppDatabase } from '../../src/main/db/database';
+import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
+import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
+import type { OutboundCommandServiceApi } from '../../src/main/communications/outboundPorts';
+import { registerLeadDetailIpc } from '../../src/main/leads/registerLeadDetailIpc';
 import {
   createConversationsProvider,
   createFridayProvider,
@@ -105,6 +114,52 @@ describe('registerApplicationIpc', () => {
     } as unknown as FeatureRegistrars;
     return { registrars, calls };
   }
+
+  it.each(['outer', 'nested'] as const)('startup consumes accepted %s IPC rollback and closes outbound despite cleanup errors', async (failureAt) => {
+    const handlers = new Set<string>(); const features = new Set<string>(); const listeners = new Set<() => void>();
+    const registrationError = new Error('registration'); const cleanupError = new Error('cleanup');
+    const { registrars } = fakeRegistrars([]);
+    for (const name of Object.keys(registrars) as (keyof FeatureRegistrars)[]) {
+      registrars[name] = vi.fn(() => {
+        if (failureAt === 'outer' && name === 'registerTodayIpc') throw registrationError;
+        features.add(name);
+        return () => { features.delete(name); if (name === 'registerHealthIpc') throw cleanupError; };
+      });
+    }
+    registrars.registerLeadDetailIpc = registerLeadDetailIpc;
+    electron.handle.mockReset().mockImplementation((channel: string) => {
+      if (failureAt === 'nested' && channel === 'lead-detail:outbound-capabilities') throw registrationError;
+      handlers.add(channel);
+    });
+    electron.removeHandler.mockReset().mockImplementation((channel: string) => { handlers.delete(channel); });
+    let service!: OutboundCommandServiceApi;
+    const dispose = vi.fn(); const close = vi.fn(); const window = vi.fn();
+    const dependencies: ApplicationStartupDependencies = {
+      loadWorkspaceKey: async () => ({ bytes: Buffer.alloc(32, 0x2a), version: 1 }),
+      prepareEncryptedDatabase: async () => undefined,
+      openDatabase: () => ({ path: '/fixture/rollback' }) as AppDatabase,
+      migrateToLatest: async () => ({ fromVersion: 0, toVersion: 2, appliedMigrationIds: [] }),
+      createDomainRuntime: () => fakeDomainRuntime(), createHealthService: () => ({ getHealth: () => degradedHealth }),
+      createSourcingPoller: () => ({ getHealth: () => degradedHealth.sourcing, stop: (): void => undefined,
+        idle: async (): Promise<void> => undefined }) as unknown as SourcingPoller,
+      createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined,
+        listAvailableBackups: async () => [], createBackup: async () => { throw new Error('unexpected backup'); } }),
+      createRecoveryService: () => ({ ...recoveryProvider, shutdown: async () => undefined }),
+      createOutboundCommandService: (input) => { service = createOutboundCommandService(input); dispose.mockImplementation(() => service.dispose()); return { ...service, dispose }; },
+      registerApplicationIpc: (runtime, trust, _unused, sourcing, recovery, shell, enrichment, logs, outbound) =>
+        registerApplicationIpc(runtime, trust, registrars, sourcing, recovery, shell, enrichment, logs, outbound),
+      createAppleBridgeSupervisor: () => { throw new Error('unexpected helper'); }, closeDatabase: close,
+    };
+    const error = await startApplication({ appVersion: '1', userDataPath: '/fixture/rollback', createWindow: window,
+      registerOutboundLifecycle: (owned) => { Object.values(owned).forEach((callback) => listeners.add(callback)); return () => listeners.clear(); },
+    }, dependencies).catch((caught: unknown) => caught) as AggregateError;
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error.cause).toBe(registrationError);
+    expect(error.errors).toEqual([registrationError, cleanupError]);
+    expect(handlers.size).toBe(0); expect(features.size).toBe(0); expect(listeners.size).toBe(0);
+    expect(dispose).toHaveBeenCalledTimes(1); expect(close).toHaveBeenCalledTimes(1); expect(window).not.toHaveBeenCalled();
+    expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
+  });
 
   it.each([3, 7, 13])('rolls back all successful outer registrations when registrar %s fails', (nth) => {
     const registry = new Set<string>();

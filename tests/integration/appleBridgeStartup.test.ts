@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
+import type { OutboundCommandServiceApi } from '../../src/main/communications/outboundPorts';
+
+vi.mock('electron', () => ({ safeStorage: {}, dialog: {} }));
 
 import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
 
@@ -58,6 +62,14 @@ function dependencies(
 ): ApplicationStartupDependencies {
   const database = { path: '/tmp/callie.sqlite3' } as AppDatabase;
   return {
+    createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined,
+      listAvailableBackups: async () => [], createBackup: async () => { throw new Error('unexpected backup'); } }),
+    createRecoveryService: () => ({ status: vi.fn(), beginSetup: vi.fn(), saveSetupMaterial: vi.fn(),
+      completeSetup: vi.fn(), selectAndRunRestoreDrill: vi.fn(), shutdown: async () => undefined }),
+    createOutboundCommandService: (input) => {
+      const service = createOutboundCommandService(input);
+      return { ...service, dispose: () => { events.push('outbound:dispose'); service.dispose(); } };
+    },
     loadWorkspaceKey: async () => ({ bytes: Buffer.alloc(32, 0x2a), version: 1 }),
     prepareEncryptedDatabase: async () => undefined,
     openDatabase: () => {
@@ -226,7 +238,8 @@ describe('Apple bridge application lifecycle', () => {
 
     await Promise.all([app.shutdown(), app.shutdown()]);
 
-    expect(events.slice(-4)).toEqual([
+    expect(events.slice(-5)).toEqual([
+      'outbound:dispose',
       'health-ipc:unregister',
       'apple-ipc:unregister',
       'helper:stop',
@@ -280,11 +293,31 @@ describe('Apple bridge application lifecycle', () => {
       helperStopError,
       databaseCloseError,
     ]);
-    expect(events.slice(-4)).toEqual([
+    expect(events.slice(-5)).toEqual([
+      'outbound:dispose',
       'health-ipc:unregister',
       'apple-ipc:unregister',
       'helper:stop',
       'database:close',
     ]);
+  });
+
+  it('optional helper failure never enables Phone and spike-registration failure uses the common outbound close', async () => {
+    const events: string[] = []; const helperStart = deferred<void>();
+    const startupDependencies = dependencies(events, fakeSupervisor(events, () => helperStart.promise));
+    let service!: OutboundCommandServiceApi;
+    startupDependencies.createOutboundCommandService = (input) => { service = createOutboundCommandService(input); return service; };
+    const app = await startApplication({ appVersion: '1', userDataPath: '/fixture/helper-failure', appleBridge: APPLE_OPTIONS,
+      createWindow: () => { events.push('window'); } }, startupDependencies);
+    helperStart.reject(new Error('optional helper failed')); await Promise.resolve();
+    expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('inbound_safety_unwired');
+    await app.shutdown();
+    expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
+    const failure = new Error('spike registration');
+    const second = dependencies(events, fakeSupervisor(events));
+    second.registerAppleSpikeIpc = () => { throw failure; };
+    await expect(startApplication({ appVersion: '1', userDataPath: '/fixture/spike-failure', appleBridge: APPLE_OPTIONS,
+      createWindow: () => { throw new Error('window must not open'); } }, second)).rejects.toBe(failure);
+    expect(events.slice(-4)).toEqual(['outbound:dispose', 'health-ipc:unregister', 'helper:stop', 'database:close']);
   });
 });
