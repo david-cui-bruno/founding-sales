@@ -153,7 +153,7 @@ describe('0015 recovery metadata migration', () => {
     )).toThrow();
   });
 
-  it('enforces immutable repair-event identity uniqueness', async () => {
+  it('enforces immutable repair-event identity uniqueness and preserves receipts byte-for-byte', async () => {
     await migrateToLatest(database, options);
     const insert = database.raw.prepare(`INSERT INTO identity_repair_events
       (id, manifest_sha256, candidate_id, canonical_person_id,
@@ -164,6 +164,27 @@ describe('0015 recovery metadata migration', () => {
     expect(() => insert.run(
       'repair-2', SHA, 'candidate-1', 'person-2', '["person-2"]', '[]', TS,
     )).toThrow();
+
+    const selectReceipt = database.raw.prepare(
+      'SELECT * FROM identity_repair_events WHERE id = ?',
+    );
+    const original = selectReceipt.get('repair-1');
+
+    expect(() => database.raw.prepare(`UPDATE identity_repair_events
+      SET canonical_person_id = 'person-rewritten' WHERE id = 'repair-1'`).run()).toThrow();
+    expect(selectReceipt.get('repair-1')).toEqual(original);
+
+    expect(() => database.raw.prepare(
+      "DELETE FROM identity_repair_events WHERE id = 'repair-1'",
+    ).run()).toThrow();
+    expect(selectReceipt.get('repair-1')).toEqual(original);
+
+    expect(database.raw.prepare(`SELECT name FROM sqlite_master
+      WHERE type = 'trigger' AND tbl_name = 'identity_repair_events'
+      ORDER BY name`).all()).toEqual([
+      { name: 'immutable_identity_repair_events' },
+      { name: 'immutable_identity_repair_events_delete' },
+    ]);
   });
 
   it('preserves schema-14 compliance and jurisdiction data', async () => {

@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { OperationalSafetyRepository } from '../../src/main/domain/operations/operationalSafetyRepository';
-import { DomainTransactionRequiredError } from '../../src/main/domain/support/domainErrors';
+import {
+  DomainRepositoryDatabaseMismatchError,
+  DomainTransactionRequiredError,
+} from '../../src/main/domain/support/domainErrors';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
@@ -126,6 +129,86 @@ describe('OperationalSafetyRepository', () => {
     });
   });
 
+  it.each([
+    {
+      name: 'recovery setup completion',
+      write: (subject: OperationalSafetyRepository) => subject.recordRecoverySetupCompleted({
+        completedAt: FIRST,
+      }),
+    },
+    {
+      name: 'restore drill',
+      write: (subject: OperationalSafetyRepository) => subject.recordRestoreDrill({
+        performedAt: FIRST,
+        backupSha256: SHA_A,
+      }),
+    },
+  ])('fails $name when the singleton is missing and rolls back surrounding writes', ({ write }) => {
+    database.raw.prepare('DELETE FROM recovery_readiness WHERE singleton = 1').run();
+
+    expect(() => unitOfWork.immediate(() => {
+      repository.recordBackup({
+        id: 'must-roll-back',
+        backupBasename: 'must-roll-back.sqlite3',
+        kind: 'manual',
+        schemaVersion: 15,
+        sha256: SHA_A,
+        sizeBytes: 100,
+        createdAt: FIRST,
+        verifiedAt: FIRST,
+      });
+      write(repository);
+    })).toThrow();
+
+    expect(repository.listBackups()).toEqual([]);
+  });
+
+  it('fails closed for malformed repository input and malformed persisted rows', () => {
+    expect(() => unitOfWork.immediate(() => repository.recordBackup({
+      id: 'malformed-input',
+      backupBasename: 'malformed.sqlite3',
+      kind: 'manual',
+      schemaVersion: 15,
+      sha256: 'short',
+      sizeBytes: 100,
+      createdAt: FIRST,
+      verifiedAt: FIRST,
+    }))).toThrow();
+    expect(repository.listBackups()).toEqual([]);
+
+    database.raw.pragma('ignore_check_constraints = ON');
+    database.raw.prepare(`INSERT INTO backup_receipts
+      (id, backup_basename, kind, schema_version, sha256, size_bytes, created_at, verified_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      'malformed-row', 'malformed-row.sqlite3', 'manual', 15, 'short', 100, FIRST, FIRST,
+    );
+    database.raw.pragma('ignore_check_constraints = OFF');
+    expect(() => repository.listBackups()).toThrow();
+
+    database.raw.prepare(`UPDATE recovery_readiness
+      SET updated_at = 'not-a-timestamp' WHERE singleton = 1`).run();
+    expect(() => repository.getRecoveryReadiness()).toThrow();
+  });
+
+  it('rejects a database and DomainUnitOfWork bound to different connections', async () => {
+    const otherTemp = createTempDatabase();
+    const otherKey = createTestWorkspaceKey();
+    const otherDatabase = openDatabase({ path: otherTemp.path, key: otherKey });
+    try {
+      await migrateToLatest(otherDatabase, {
+        backupDirectory: `${otherTemp.path}.backups`,
+        workspaceKey: otherKey,
+      });
+      expect(() => new OperationalSafetyRepository({
+        database,
+        unitOfWork: new DomainUnitOfWork(otherDatabase),
+      })).toThrow(DomainRepositoryDatabaseMismatchError);
+    } finally {
+      closeDatabase(otherDatabase);
+      otherTemp.cleanup();
+    }
+  });
+
   it('appends repair events with canonical JSON and rejects duplicate manifest candidates', () => {
     unitOfWork.immediate(() => {
       repository.appendIdentityRepairEvent({
@@ -163,6 +246,18 @@ describe('OperationalSafetyRepository', () => {
         appliedAt: SECOND,
       });
     })).toThrow();
+
+    const selectReceipt = database.raw.prepare(
+      'SELECT * FROM identity_repair_events WHERE id = ?',
+    );
+    const original = selectReceipt.get('repair-1');
+    expect(() => database.raw.prepare(`UPDATE identity_repair_events
+      SET canonical_person_id = 'person-rewritten' WHERE id = 'repair-1'`).run()).toThrow();
+    expect(selectReceipt.get('repair-1')).toEqual(original);
+    expect(() => database.raw.prepare(
+      "DELETE FROM identity_repair_events WHERE id = 'repair-1'",
+    ).run()).toThrow();
+    expect(selectReceipt.get('repair-1')).toEqual(original);
   });
 
   it('rolls back earlier repository writes when a later receipt violates uniqueness', () => {

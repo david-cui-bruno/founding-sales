@@ -179,6 +179,37 @@ describe('domain startup', () => {
       expect(idsUsed()).toBe(0);
     });
 
+    it('rejects a duplicate-capable malformed migration ledger before composition', () => {
+      database.raw.exec(`
+        ALTER TABLE kysely_migration RENAME TO kysely_migration_original;
+        CREATE TABLE kysely_migration (name TEXT NOT NULL, timestamp TEXT NOT NULL);
+        INSERT INTO kysely_migration (name, timestamp)
+          SELECT name, timestamp FROM kysely_migration_original;
+        INSERT INTO kysely_migration (name, timestamp)
+          SELECT name, timestamp FROM kysely_migration_original
+          WHERE name = '0015RecoveryMetadata';
+        DROP TABLE kysely_migration_original;
+      `);
+
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
+    });
+
+    it.each([
+      'immutable_identity_repair_events',
+      'immutable_identity_repair_events_delete',
+    ])('requires the exact %s trigger before composition', (triggerName) => {
+      expect(DOMAIN_SCHEMA_MANIFEST.triggers).toContain(triggerName);
+      database.raw.exec(`DROP TRIGGER ${triggerName}`);
+
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
+    });
+
     it('rejects app_meta and migration-ledger disagreement before composition', () => {
       database.raw.prepare(
         'UPDATE app_meta SET schema_version = 14 WHERE singleton = 1',

@@ -31,6 +31,16 @@ export const migration0015RecoveryMetadata = {
       applied_at TEXT NOT NULL,
       UNIQUE (manifest_sha256, candidate_id)
     )`).execute(db);
+    await sql.raw(`CREATE TRIGGER immutable_identity_repair_events
+      BEFORE UPDATE ON identity_repair_events
+      BEGIN
+        SELECT RAISE(ABORT, 'identity_repair_events rows are immutable');
+      END`).execute(db);
+    await sql.raw(`CREATE TRIGGER immutable_identity_repair_events_delete
+      BEFORE DELETE ON identity_repair_events
+      BEGIN
+        SELECT RAISE(ABORT, 'identity_repair_events rows are immutable');
+      END`).execute(db);
 
     const timestamp = new Date().toISOString();
     await sql`INSERT INTO recovery_readiness (singleton, updated_at)

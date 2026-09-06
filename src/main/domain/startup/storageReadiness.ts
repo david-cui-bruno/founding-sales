@@ -126,6 +126,8 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'immutable_consent_policy_records_delete',
     'immutable_cycle_reactivation_receipts',
     'immutable_cycle_reactivation_receipts_delete',
+    'immutable_identity_repair_events',
+    'immutable_identity_repair_events_delete',
     'immutable_learning_evidence',
     'immutable_learning_evidence_delete',
     'immutable_opt_out_closure_receipt_handles',

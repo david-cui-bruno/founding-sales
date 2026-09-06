@@ -120,21 +120,23 @@ export class OperationalSafetyRepository {
   recordRecoverySetupCompleted(input: { completedAt: string }): void {
     this.unitOfWork.assertWriteScope();
     const parsed = recoverySetupSchema.parse(input);
-    this.database.raw.prepare(`UPDATE recovery_readiness
+    const result = this.database.raw.prepare(`UPDATE recovery_readiness
       SET recovery_setup_completed_at = ?, updated_at = ?
       WHERE singleton = 1`).run(parsed.completedAt, parsed.completedAt);
+    assertExactlyOneChangedRow(result.changes);
   }
 
   recordRestoreDrill(input: { performedAt: string; backupSha256: string }): void {
     this.unitOfWork.assertWriteScope();
     const parsed = restoreDrillSchema.parse(input);
-    this.database.raw.prepare(`UPDATE recovery_readiness
+    const result = this.database.raw.prepare(`UPDATE recovery_readiness
       SET last_restore_drill_at = ?, last_restore_backup_sha256 = ?, updated_at = ?
       WHERE singleton = 1`).run(
       parsed.performedAt,
       parsed.backupSha256,
       parsed.performedAt,
     );
+    assertExactlyOneChangedRow(result.changes);
   }
 
   getRecoveryReadiness(): RecoveryReadiness {
@@ -180,4 +182,10 @@ function backupFromRow(row: z.infer<typeof backupRowSchema>): BackupReceipt {
     createdAt: row.created_at,
     verifiedAt: row.verified_at,
   };
+}
+
+function assertExactlyOneChangedRow(changes: number): void {
+  if (changes !== 1) {
+    throw new Error('Recovery readiness write must change exactly one singleton row.');
+  }
 }
