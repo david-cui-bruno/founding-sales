@@ -74,6 +74,7 @@ export class FoundationRuntime {
   private nextAttemptId = 0;
   private shutdownPromise: Promise<void> | undefined;
   private sourcingHealthProvider: (() => SourcingPollHealth) | undefined;
+  private readonly databaseOperations = new Set<Promise<void>>();
 
   constructor(
     private readonly options: FoundationRuntimeOptions,
@@ -108,6 +109,24 @@ export class FoundationRuntime {
     this.state = 'stopping';
     this.shutdownPromise = this.finishShutdown();
     return this.shutdownPromise;
+  }
+
+  /** Main-process only. Callers must not retain the handle past their operation. */
+  async withDatabase<TResult>(
+    operation: (database: AppDatabase) => TResult | Promise<TResult>,
+  ): Promise<TResult> {
+    this.throwIfUnavailable();
+    const foundation = await this.ensureInitialized();
+    this.throwIfUnavailable();
+    let release!: () => void;
+    const lease = new Promise<void>((resolve) => { release = resolve; });
+    this.databaseOperations.add(lease);
+    try {
+      return await operation(foundation.database);
+    } finally {
+      this.databaseOperations.delete(lease);
+      release();
+    }
   }
 
   /**
@@ -231,6 +250,7 @@ export class FoundationRuntime {
   private async finishShutdown(): Promise<void> {
     try {
       await this.initialization?.promise.catch((): undefined => undefined);
+      await Promise.all(this.databaseOperations);
       const ready = this.ready;
       this.ready = undefined;
       if (ready !== undefined) {

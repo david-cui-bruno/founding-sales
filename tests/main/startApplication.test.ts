@@ -58,6 +58,11 @@ describe('startApplication', () => {
 
     return {
       ...keyDependencies(),
+      createBackupService: () => ({
+        start: async () => undefined,
+        shutdown: async () => undefined,
+        createBackup: async () => { throw new Error('Unexpected backup request'); },
+      }),
       openDatabase: ({ path }) => {
         events.push(`open:${path}`);
         return database;
@@ -99,6 +104,68 @@ describe('startApplication', () => {
       closeDatabase: () => events.push('close'),
     };
   }
+
+  it('starts backups after initialization, wires fresh existing-workspace key loading and exposes explicit pre-release backup', async () => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    const loads: unknown[] = [];
+    const load = dependencies.loadWorkspaceKey;
+    dependencies.loadWorkspaceKey = async (input) => { loads.push(input); return load(input); };
+    const snapshot = {
+      path: '/disposable/pre_release.sqlite3', basename: 'pre_release.sqlite3',
+      kind: 'pre_release' as const, schemaVersion: 15, sha256: 'a'.repeat(64),
+      sizeBytes: 4096, createdAt: '2026-09-06T12:00:00.000Z', verifiedAt: '2026-09-06T12:00:00.000Z',
+    };
+    dependencies.createBackupService = (options) => {
+      expect(events).toContain('migrate');
+      expect(options.backupDirectory).toBe('/tmp/callie-backup-wiring/backups');
+      return {
+        start: async () => { events.push('backup-start'); },
+        shutdown: async () => { events.push('backup-stop'); },
+        createBackup: async (kind) => {
+          expect(kind).toBe('pre_release');
+          await options.databaseGate.withDatabase((database) => { expect(database).toBeDefined(); });
+          const key = await options.loadWorkspaceKey();
+          key.bytes.fill(0);
+          return snapshot;
+        },
+      };
+    };
+    const running = await startApplication({
+      appVersion: '1.0.0', userDataPath: '/tmp/callie-backup-wiring', createWindow: () => { events.push('window'); },
+    }, dependencies);
+    expect(events.indexOf('backup-start')).toBeGreaterThan(events.indexOf('recover'));
+    expect(events.indexOf('backup-start')).toBeLessThan(events.indexOf('window'));
+    await expect(running.createPreReleaseBackup()).resolves.toEqual(snapshot);
+    expect(loads.at(-1)).toEqual({
+      envelopePath: '/tmp/callie-backup-wiring/callie.key-envelope.json', databaseExists: true,
+    });
+    await running.shutdown();
+    expect(events.indexOf('backup-stop')).toBeLessThan(events.indexOf('close'));
+    await expect(running.createPreReleaseBackup()).rejects.toThrow();
+  });
+
+  it('waits for backup ownership cleanup before closing SQLite, including failed window startup', async () => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    let release!: () => void;
+    const cleanup = new Promise<void>((resolve) => { release = resolve; });
+    dependencies.createBackupService = () => ({
+      start: async () => { events.push('backup-start'); },
+      shutdown: async () => { events.push('backup-stopping'); await cleanup; events.push('backup-stopped'); },
+      createBackup: async () => { throw new Error('Unexpected request'); },
+    });
+    const startup = startApplication({
+      appVersion: '1.0.0', userDataPath: '/tmp/callie-backup-cleanup',
+      createWindow: () => { throw new Error('window failed'); },
+    }, dependencies);
+    const result = expect(startup).rejects.toThrow('window failed');
+    await vi.waitFor(() => expect(events).toContain('backup-stopping'));
+    expect(events).not.toContain('close');
+    release();
+    await result;
+    expect(events.indexOf('backup-stopped')).toBeLessThan(events.indexOf('close'));
+  });
 
   it('rejects a missing sourcing poller dependency before IPC registration', async () => {
     const events: string[] = [];
