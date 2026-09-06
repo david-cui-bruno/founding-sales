@@ -1,3 +1,4 @@
+import type { AttributeValue } from "@aws-sdk/client-dynamodb";
 import { describe, expect, it, vi } from "vitest";
 import {
   computeIdempotencyKey,
@@ -6,7 +7,7 @@ import {
   validateSourceEvent,
   type CloudSourceEvent,
 } from "@callie-sourcing/shared";
-import { createHandler, handlerWithDeps, runScorer, SCORES_VERSION, type HandlerDeps } from "../src/handler";
+import { createHandler, runScorer, SCORES_VERSION, type HandlerDeps } from "../src/handler";
 
 const NOW = new Date("2026-09-01T06:00:00.000Z");
 
@@ -19,7 +20,7 @@ interface FakeState {
   puts: Array<{ key: string; body: string }>;
   snapshots: Map<string, Record<string, unknown>>; // pk|sk -> item
   /** entities-table items served by the normalized_name GSI query. */
-  entities: Array<Record<string, any>>;
+  entities: Array<Record<string, AttributeValue>>;
   entityQueries: string[];
 }
 
@@ -71,7 +72,7 @@ function fakeDeps(state: FakeState): HandlerDeps {
           const queried: string = command.input.ExpressionAttributeValues[":name"].S;
           state.entityQueries.push(queried);
           return {
-            Items: state.entities.filter((item) => item.normalized_name.S === queried),
+            Items: state.entities.filter((item) => item.normalized_name!.S === queried),
           };
         }
         throw new Error(`unexpected dynamo command ${name}`);
@@ -344,7 +345,7 @@ function personEvent(overrides: Partial<CloudSourceEvent> = {}): CloudSourceEven
 }
 
 /** Entities-table item the way the resolver writes it. */
-function entityItem(overrides: Record<string, any> = {}): Record<string, any> {
+function entityItem(overrides: Record<string, AttributeValue> = {}): Record<string, AttributeValue> {
   return {
     entity_id: { S: "ce_00000000000000000000000001" },
     normalized_name: { S: "JOHN SMITH" },

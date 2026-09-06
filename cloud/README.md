@@ -2,7 +2,7 @@
 
 Terraform source for the cloud side of the sourcing pipeline: SES inbound mail,
 S3 raw-mail and SourceEvent inbox buckets, DynamoDB tables, IAM, budgets, the
-mail parser, and seven scheduled sourcing functions.
+mail parser, eight scheduled functions, and their shared package.
 
 Target account: `326255650484` (shared, no Org), region `us-east-1`.
 
@@ -38,11 +38,24 @@ checks and formatting. It must not initialize providers, inspect state, contact
 the shared account, enable either safety gate, or send notifications.
 
 ```bash
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; (cd cloud/lambdas/schedule-watchdog && npm run typecheck && npm test && npm run build)
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run lint:tracked
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run verify:lambdas
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run verify:secrets
 export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/infrastructure/terraformHardening.test.ts
 export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run typecheck
 tofu fmt -check -recursive cloud/terraform
 ```
+
+These commands require Node24.20.0 and separately installed lockfiles for all
+**ten** Lambda packages. Install shared first, then each of the nine function
+packages with its own `npm ci --prefix cloud/lambdas/<package>`, using the same
+Node PATH prefix above. See the root README for the tracked lockfile install
+loop. The verifier does not install dependencies and runs no deployments or
+provider calls. Shared runs typecheck/test; every function also builds.
+Tracked lint includes source/configuration, not Lambda dist or dependencies.
+Gitleaks8.30.1 history scanning does not exclude generated paths, while context
+scanning includes built Lambda bundles but never local Terraform state/inputs.
+CI/release files are source-only gates, not authorization to execute remotely.
 
 Live planning is deferred until trusted managed state and managed secret
 identifiers exist. It needs separate founder approval, must keep both gates

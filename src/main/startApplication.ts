@@ -1,3 +1,4 @@
+import { resolveApplicationPaths } from './applicationPaths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { RecoveryService, type RecoveryServiceOptions, type RecoveryDialogs } from './recovery/recoveryService';
@@ -290,12 +291,11 @@ export async function startApplication(
   options: ApplicationStartupOptions,
   dependencies: ApplicationStartupDependencies = defaultDependencies,
 ): Promise<RunningApplication> {
-  const databasePath = join(options.userDataPath, 'callie.sqlite3');
-  const keyEnvelopePath = join(options.userDataPath, 'callie.key-envelope.json');
+  const { databasePath, keyEnvelopePath, backupDirectory } = resolveApplicationPaths(options.userDataPath);
   const runtime = new FoundationRuntime(
     {
       appVersion: options.appVersion,
-      backupDirectory: join(options.userDataPath, 'backups'),
+      backupDirectory,
       databasePath,
       databaseExists: encryptedWorkspaceExists(databasePath),
       keyEnvelopePath,

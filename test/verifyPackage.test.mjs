@@ -2,14 +2,35 @@ import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createPackage } from '@electron/asar';
 import {
   createPackageCommandRunner,
   PackageVerificationError,
   selectPackagedApp,
-  verifyPackagedApp,
+  verifyPackagedApp as verifyActualPackagedApp,
 } from '../scripts/verifyPackage.mjs';
 
+const marker = { format: 'callie-release', version: 1, commitSha: 'a'.repeat(40), builtAt: '2026-09-06T17:00:00.000Z' };
+const markerSeams = {
+  checkHead: () => marker.commitSha,
+  readBuildMarker: () => marker,
+  readArchiveFile: (_path, name) => { expect(name).toBe('release-marker.json'); return Buffer.from(JSON.stringify(marker)); },
+};
+const verifyPackagedApp = (path, options) => verifyActualPackagedApp(path, { ...markerSeams, ...options });
 const temporaryDirectories = [];
+
+it('reads actual final ASAR bytes, not a listed filename or sibling marker', async () => {
+  const root = await makeTemporaryDirectory(); const { appPath } = await createPackagedApp(root);
+  const archiveSource = join(root, 'archive-source'); await mkdir(archiveSource);
+  const embeddedPath = join(archiveSource, 'release-marker.json');
+  const archive = join(appPath, 'Contents/Resources/app.asar');
+  await writeFile(embeddedPath, JSON.stringify(marker)); await createPackage(archiveSource, archive);
+  const options = { checkHead: markerSeams.checkHead, readBuildMarker: markerSeams.readBuildMarker, runCommand: successfulCommand };
+  expect(verifyActualPackagedApp(appPath, options).releaseMarker).toEqual(marker);
+  await writeFile(embeddedPath, JSON.stringify({ ...marker, commitSha: 'b'.repeat(40) }));
+  await createPackage(archiveSource, archive);
+  expect(() => verifyActualPackagedApp(appPath, options)).toThrow();
+});
 
 afterEach(async () => {
   await Promise.all(
@@ -663,5 +684,22 @@ describe('package verification', () => {
         fusesCommand: 'electron-fuses',
       }),
     ).toThrow('PACKAGE: could not verify final macOS code signature');
+  });
+});
+
+describe('final ASAR release provenance', () => {
+  it.each(['missing', 'malformed', 'stale', 'extra'])('rejects %s embedded marker even with successful native/fuse/helper checks', async (failure) => {
+    const { appPath } = await createPackagedApp(await makeTemporaryDirectory());
+    const readArchiveFile = () => {
+      if (failure === 'missing') throw new Error('missing');
+      if (failure === 'malformed') return Buffer.from('{');
+      return Buffer.from(JSON.stringify({ ...marker, ...(failure === 'stale' ? { commitSha: 'b'.repeat(40) } : { extra: true }) }));
+    };
+    expect(() => verifyPackagedApp(appPath, { runCommand: successfulCommand, readArchiveFile })).toThrow();
+  });
+  it('rejects tree or HEAD changes after native checks without regenerating the marker', async () => {
+    const { appPath } = await createPackagedApp(await makeTemporaryDirectory()); let checks = 0;
+    expect(() => verifyPackagedApp(appPath, { runCommand: successfulCommand, checkHead: () => { if (++checks > 1) throw new Error('changed'); return marker.commitSha; } })).toThrow();
+    expect(checks).toBe(2);
   });
 });

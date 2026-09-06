@@ -570,8 +570,8 @@ export async function handlerWithDeps(
 
       // Normalize then SUPPRESSION-check every contact (CONTRACT invariant:
       // person contact data must be checked before it can reach the inbox).
-      let phones: EnrichmentPhone[] = [];
-      let emails: EnrichmentEmail[] = [];
+      const phones: EnrichmentPhone[] = [];
+      const emails: EnrichmentEmail[] = [];
       if (picked) {
         const contacts = normalizeContacts(picked.person);
         result.invalidContactsDropped += contacts.invalidDropped;

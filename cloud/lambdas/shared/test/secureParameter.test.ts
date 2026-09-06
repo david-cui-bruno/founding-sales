@@ -4,9 +4,12 @@ import { loadSecureParameter } from "../src/secureParameter";
 
 function clientReturning(value: string | undefined) {
   return {
-    send: vi.fn(async (_command: unknown) => ({
-      Parameter: value === undefined ? undefined : { Value: value },
-    })),
+    send: vi.fn(async (...args: [unknown]) => {
+      void args;
+      return {
+        Parameter: value === undefined ? undefined : { Value: value },
+      };
+    }),
   };
 }
 

@@ -10,7 +10,7 @@
   },
   "scripts": {
     "start": "electron-forge start",
-    "package": "npm run build:safe-log-fs && electron-forge package",
+    "package": "npm run release:marker && npm run build:operational-tools && npm run build:safe-log-fs && electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint .",
@@ -24,13 +24,19 @@
     "build:swift": "swift build --package-path native/apple-bridge -c release --arch arm64",
     "build:apple-bridge": "node scripts/buildAppleBridge.mjs",
     "build:safe-log-fs": "node node_modules/node-gyp/bin/node-gyp.js rebuild --directory native/safe-log-fs",
-    "verify": "npm run typecheck && npm run lint && npm run test",
+    "verify": "npm run typecheck && npm run lint:tracked && npm run test",
     "verify:e2e": "npm run package && npm run test:e2e",
     "verify:package": "npm run package && node scripts/verifyPackage.mjs",
     "rebuild:native:node": "npm rebuild better-sqlite3-multiple-ciphers && node scripts/stageEncryptedSqliteNative.mjs node",
     "rebuild:native:electron": "electron-rebuild -f -w better-sqlite3-multiple-ciphers && node scripts/stageEncryptedSqliteNative.mjs electron",
     "rebuild": "npm run rebuild:native:node && npm run rebuild:native:electron && npm run rebuild:native:node",
-    "postinstall": "install-electron --no && npm run build:safe-log-fs && npm run rebuild"
+    "postinstall": "install-electron --no && npm run build:safe-log-fs && npm run rebuild",
+    "lint:tracked": "node scripts/lintTracked.mjs",
+    "verify:lambdas": "node scripts/verifyLambdas.mjs",
+    "verify:secrets": "node scripts/verifySecrets.mjs",
+    "release:marker": "node scripts/writeReleaseMarker.mjs",
+    "backup:pre-release": "node scripts/createPreReleaseBackup.mjs",
+    "verify:release": "npm run typecheck && npm run lint:tracked && npm run test && npm run verify:lambdas && npm run package && node scripts/verifyPackage.mjs && npm run verify:secrets && node scripts/verifySecrets.mjs --package && npm run test:e2e && node scripts/verifyPackage.mjs"
   },
   "keywords": [],
   "author": {

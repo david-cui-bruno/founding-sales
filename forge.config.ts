@@ -11,6 +11,10 @@ import {
 } from './build/appleBridge';
 import { retainOnlyPackagedEncryptedSqliteRuntime } from './scripts/packageEncryptedSqliteNative.mjs';
 import { resolveMacSigningIdentity } from './build/signingIdentity';
+import { createReleaseAssembly } from './scripts/writeReleaseMarker.mjs';
+
+const releaseAssembly = createReleaseAssembly({ root: __dirname });
+const appleBridgeHooks = createAppleBridgeForgeHooks({ projectRoot: __dirname });
 
 const signingIdentity = resolveMacSigningIdentity({
   env: process.env,
@@ -51,6 +55,7 @@ const config: ForgeConfig = {
       callback,
     ) => {
       retainOnlyPackagedEncryptedSqliteRuntime({ buildPath, platform, arch })
+        .then(() => releaseAssembly.copy(buildPath))
         .then(() => callback(), callback);
     }],
   },
@@ -61,7 +66,14 @@ const config: ForgeConfig = {
     new MakerRpm({}),
     new MakerDeb({}),
   ],
-  hooks: createAppleBridgeForgeHooks({ projectRoot: __dirname }),
+  hooks: {
+    ...appleBridgeHooks,
+    prePackage: async () => { releaseAssembly.begin(); },
+    postPackage: async (resolvedConfig, packageResult) => {
+      await appleBridgeHooks.postPackage?.(resolvedConfig, packageResult);
+      releaseAssembly.finish();
+    },
+  },
   plugins: [
     new AutoUnpackNativesPlugin({}),
     new VitePlugin({

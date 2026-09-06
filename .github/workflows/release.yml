@@ -1,0 +1,87 @@
+name: Exact SHA release gate (no publication)
+on:
+  workflow_dispatch:
+    inputs:
+      audited_sha:
+        description: Separately reviewed full 40-hex commit
+        required: true
+        type: string
+      tag:
+        description: Exact tag on which this workflow is dispatched
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  verify:
+    # External prerequisite: restricted dedicated runner and protected environment.
+    # Labels are routing, not proof of trust, approval, OS version or SDK support.
+    runs-on: [self-hosted, macOS, ARM64, callie-release-macos26-4]
+    environment: callie-release-gate
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      AUDITED_SHA: ${{ inputs.audited_sha }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      APPROVED_SHA: ${{ vars.CALLIE_APPROVED_RELEASE_SHA }}
+      RUNNER_APPROVED: ${{ vars.CALLIE_RELEASE_RUNNER_APPROVED }}
+    steps:
+      - name: Require external reviewer and runner approval before checkout
+        run: |
+          set -euo pipefail
+          test "$RUNNER_APPROVED" = 'true'
+          test "$AUDITED_SHA" = "$APPROVED_SHA"
+          [[ "$AUDITED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REF_TYPE" = 'tag'
+          test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
+          test "$GITHUB_SHA" = "$AUDITED_SHA"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.audited_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Verify detached checkout and exact fetched tag/main ancestry
+        run: |
+          set -euo pipefail
+          git checkout --detach "$AUDITED_SHA"
+          test "$(git rev-parse HEAD)" = "$AUDITED_SHA"
+          test "$(git rev-parse --is-shallow-repository)" = 'false'
+          test "$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")" = "$AUDITED_SHA"
+          git merge-base --is-ancestor "$AUDITED_SHA" refs/remotes/origin/main
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.20.0'
+      - name: Assert supported Node and architecture
+        run: |
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; node -e "if (process.versions.node !== '24.20.0' || process.platform !== 'darwin' || process.arch !== 'arm64') process.exit(1)"
+      - name: Install integrity-pinned Gitleaks 8.30.1
+        run: |
+          set -euo pipefail
+          umask 077
+          tool_dir="$(mktemp -d "$RUNNER_TEMP/callie-gitleaks.XXXXXX")"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_darwin_arm64.tar.gz -o "$tool_dir/gitleaks.tar.gz"
+          printf '%s  %s\n' b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5 "$tool_dir/gitleaks.tar.gz" | shasum -a 256 -c -
+          tar -xzf "$tool_dir/gitleaks.tar.gz" -C "$tool_dir" gitleaks
+          test "$("$tool_dir/gitleaks" version)" = '8.30.1'
+          echo "$tool_dir" >> "$GITHUB_PATH"
+      - name: Install root and independent pinned Lambda packages
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm ci
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm ci --prefix cloud/lambdas/shared
+          while IFS= read -r -d '' lock; do
+            test "$lock" = cloud/lambdas/shared/package-lock.json && continue
+            export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm ci --prefix "${lock%/package-lock.json}"
+          done < <(git ls-files -z -- 'cloud/lambdas/*/package-lock.json')
+      - name: Require supported macOS and SDK
+        run: |
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; node --input-type=module -e "import {execFileSync} from 'node:child_process'; for (const [command,args] of [['sw_vers',['-productVersion']],['xcrun',['--sdk','macosx','--show-sdk-version']]]) { const [major,minor] = execFileSync(command,args,{encoding:'utf8'}).trim().split('.').map(Number); if (!(major > 26 || (major === 26 && minor >= 4))) process.exit(1); }"
+      - name: Exact ref and single-artifact full release gates
+        run: |
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; node scripts/writeReleaseMarker.mjs --verify-ref
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run verify:release
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; node scripts/writeReleaseMarker.mjs --verify-ref
+          printf 'Verified exact SHA `%s`, tag `%s`. Package, scans, E2E and final ASAR marker gates passed.\n' "$AUDITED_SHA" "$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
