@@ -269,6 +269,11 @@ export type RecoveryReadinessStatus = {
   setupCompletedAt: string | null;
   lastRestoreDrillAt: string | null;
   outreachReady: boolean;
+  backup: {
+    status: 'available' | 'missing' | 'unavailable';
+    createdAt: string | null;
+    verifiedAt: string | null;
+  };
 };
 
 export type RecoverySetupSession = {
@@ -302,9 +307,10 @@ export type RecoveryProvider = {
     sessionId: string;
     founderConfirmed: true;
   }): Promise<RecoveryReadinessStatus>;
-  selectAndRunRestoreDrill(input: {
-    founderConfirmed: true;
-  }): Promise<
+  selectAndRunRestoreDrill(input:
+    | { founderConfirmed: true; materialSource: 'file' }
+    | { founderConfirmed: true; materialSource: 'paste'; recoveryMaterial: string }
+  ): Promise<
     | { kind: 'completed'; receipt: RestoreDrillReceipt }
     | { kind: 'cancelled' }
   >;
@@ -691,6 +697,10 @@ git commit -m "feat: add periodic verified encrypted backups"
 ---
 
 ## Task 8: Add one-time recovery export and a temporary-copy restore drill
+
+**Coordinator bindings (2026-09-06):** The five-method surface above is unchanged. All objects and both supplied-material union branches are strict. Backup freshness selects the latest created currently present, hash/identity-verified Task 7 artifact, never a receipt alone. `available` requires both canonical timestamps; `missing` and `unavailable` require null timestamps. Availability errors project `unavailable`. Display age from creation, verification separately, and a 24-hour stale warning. The unchanged `outreachReady` formula means only setup and immutable drill completion, not current freshness or readiness of every integration.
+
+File material uses a second main-owned picker after trusted backup selection. Paste material is explicit, bounded, ephemeral renderer input, cleared on submit/cancel/navigation and parsed in main. No arbitrary renderer path, active-session reuse, live-key fallback, or request/error logging is allowed. Zero parsed buffers and discard string references. Use the authoritative immutable receipt repository, known migration registry plus readable structures for schema support, and a read-only temporary-copy drill, never a live-source checkpoint helper or key-envelope restore. Necessary strict API/registrar/startup test consumers are in scope. Packaged native-picker acceptance must be reported honestly if the existing fixture harness cannot drive it; do not introduce production path/key bypasses.
 
 **Files:**
 

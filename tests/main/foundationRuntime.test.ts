@@ -68,6 +68,39 @@ const keyDependencies = () => ({
 });
 
 describe('FoundationRuntime', () => {
+  it.each([false, true])('keeps a main-only database lease alive through shutdown, releasing on rejection=%s', async (reject) => {
+    const database = { path: health.databasePath } as AppDatabase;
+    const events: string[] = [];
+    const runtime = new FoundationRuntime(runtimeOptions, {
+      ...keyDependencies(),
+      openDatabase: () => database,
+      migrateToLatest: async () => migrationResult,
+      createDomainRuntime: () => fakeDomainRuntime(),
+      createHealthService: () => ({ getHealth: () => health }),
+      closeDatabase: () => { events.push('close'); },
+    });
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const operation = runtime.withDatabase(async (leased) => {
+      expect(leased).toBe(database);
+      entered.resolve();
+      await release.promise;
+      events.push('released');
+      if (reject) throw new Error('operation failed');
+      return 'done';
+    });
+    const observed = operation.catch((error: Error) => error.message);
+    await entered.promise;
+    const stopping = runtime.shutdown();
+    await expect(runtime.withDatabase(() => 'late')).rejects.toThrow('cancelled');
+    expect(events).toEqual([]);
+    release.resolve();
+    await expect(observed).resolves.toBe(reject ? 'operation failed' : 'done');
+    await stopping;
+    expect(events).toEqual(['released', 'close']);
+    await expect(runtime.withDatabase(() => 'late')).rejects.toThrow('shut down');
+  });
+
   it('requires and serves the explicitly composed sourcing health provider', async () => {
     const database = { path: health.databasePath } as AppDatabase;
     const runtime = new FoundationRuntime(runtimeOptions, {

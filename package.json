@@ -20,6 +20,7 @@
     "test:e2e:apple": "playwright test --workers=1 tests/e2e/appleBridgeSmoke.spec.ts",
     "typecheck": "tsc --noEmit",
     "test:swift": "swift test --package-path native/apple-bridge",
+    "build:operational-tools": "node scripts/buildOperationalTools.mjs",
     "build:swift": "swift build --package-path native/apple-bridge -c release --arch arm64",
     "build:apple-bridge": "node scripts/buildAppleBridge.mjs",
     "build:safe-log-fs": "node node_modules/node-gyp/bin/node-gyp.js rebuild --directory native/safe-log-fs",

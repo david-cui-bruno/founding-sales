@@ -1,5 +1,7 @@
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { RecoveryService, type RecoveryServiceOptions, type RecoveryDialogs } from './recovery/recoveryService';
+import type { RecoveryProvider } from '../shared/contracts/recoveryContract';
 
 import {
   AppleBridgeSupervisor,
@@ -11,6 +13,8 @@ import {
   type AppleSpikeServiceApi,
 } from './appleBridge/appleSpikeService';
 import { registerAppleSpikeIpc } from './appleBridge/registerAppleSpikeIpc';
+import { BackupService, type BackupServiceOptions } from './backup/backupService';
+import type { VerifiedBackup } from './backup/verifiedBackup';
 import { closeDatabase, openDatabase } from './db/database';
 import { migrateToLatest } from './db/migrate';
 import { DomainRuntime } from './domain/domainRuntime';
@@ -42,17 +46,20 @@ import {
   UpstreamSync,
   type UpstreamObjectStore,
 } from './sourcing/upstreamSync';
-import { safeStorage } from 'electron';
+import { safeStorage, dialog } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
 import type { SafeLogger } from './logging/safeLogger';
 
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
+  createBackupService?(options: BackupServiceOptions): Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'>;
+  createRecoveryService?(options: RecoveryServiceOptions): RecoveryProvider & { shutdown(): Promise<void> };
   registerApplicationIpc(
     runtime: FoundationRuntime,
     isTrustedRendererUrl: ((url: string) => boolean) | undefined,
     registrars: undefined,
     sourcingProvider: SourcingProvider,
+    recoveryProvider: RecoveryProvider,
     shellProvider?: undefined,
     enrichmentRequester?: EnrichmentRequester,
     logDirectoryPath?: string,
@@ -96,6 +103,7 @@ export type ApplicationStartupOptions = {
 
 export type RunningApplication = {
   databasePath: string;
+  createPreReleaseBackup(): Promise<VerifiedBackup>;
   shutdown(): Promise<void>;
 };
 
@@ -298,6 +306,8 @@ export async function startApplication(
   let unregisterAppleSpikeIpc: (() => void) | undefined;
   let appleBridgeSupervisor: AppleBridgeSupervisorApi | undefined;
   let sourcingPoller: SourcingPoller | undefined;
+  let backupService: Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'> | undefined;
+  let recoveryService: (RecoveryProvider & { shutdown(): Promise<void> }) | undefined;
   let shutdownPromise: Promise<void> | undefined;
 
   const shutdown = (): Promise<void> => {
@@ -307,6 +317,20 @@ export async function startApplication(
 
     shutdownPromise = (async () => {
       const cleanupErrors: unknown[] = [];
+      // Close recovery admission and invalidate pending dialog results first.
+      let recoveryCleanup: Promise<void> | undefined;
+      try {
+        recoveryCleanup = recoveryService?.shutdown();
+        void recoveryCleanup?.catch((): undefined => undefined);
+      } catch (error) { cleanupErrors.push(error); }
+      // Stop both periodic owners before awaiting either one's asynchronous work.
+      let backupCleanup: Promise<void> | undefined;
+      try {
+        backupCleanup = backupService?.shutdown();
+        void backupCleanup?.catch((): undefined => undefined);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
 
       try {
         sourcingPoller?.stop();
@@ -316,6 +340,17 @@ export async function startApplication(
       } finally {
         sourcingPoller = undefined;
       }
+
+      try {
+        await backupCleanup;
+      } catch (error) {
+        cleanupErrors.push(error);
+      } finally {
+        backupService = undefined;
+      }
+
+      try { await recoveryCleanup; } catch (error) { cleanupErrors.push(error); }
+      finally { recoveryService = undefined; }
 
       try {
         unregisterApplicationIpc?.();
@@ -378,6 +413,25 @@ export async function startApplication(
     }
     const startedPoller = sourcingPoller;
     runtime.setSourcingHealthProvider(() => startedPoller.getHealth());
+    const backupOptions: BackupServiceOptions = {
+      databaseGate: runtime,
+      backupDirectory: join(options.userDataPath, 'backups'),
+      // Initialization has created/migrated the database. A missing envelope
+      // must never generate a replacement key for an existing workspace.
+      loadWorkspaceKey: () => dependencies.loadWorkspaceKey({ envelopePath: keyEnvelopePath, databaseExists: true }),
+      clock: domainClock,
+      ids: domainIds,
+    };
+    backupService = dependencies.createBackupService?.(backupOptions) ?? new BackupService(backupOptions);
+    // Key loading must not hold window startup. The service retains a safe
+    // failure code and retries at the next hourly due check.
+    void backupService.start().catch((): undefined => undefined);
+    const recoveryOptions: RecoveryServiceOptions = {
+      databaseGate: runtime, backups: backupService, liveDatabasePath: databasePath,
+      loadWorkspaceKey: backupOptions.loadWorkspaceKey, clock: domainClock, ids: domainIds,
+      dialogs: createRecoveryDialogs(backupOptions.backupDirectory),
+    };
+    recoveryService = dependencies.createRecoveryService?.(recoveryOptions) ?? new RecoveryService(recoveryOptions);
     unregisterApplicationIpc = dependencies.registerApplicationIpc(
       runtime,
       options.isTrustedRendererUrl,
@@ -397,6 +451,7 @@ export async function startApplication(
           return startedPoller.getStatus();
         },
       },
+      recoveryService,
       undefined,
       dependencies.createEnrichmentRequester?.(
         runtime,
@@ -440,7 +495,16 @@ export async function startApplication(
     await options.createWindow();
     throwIfStartupCancelled(options.signal);
 
-    return { databasePath, shutdown };
+    return {
+      databasePath,
+      createPreReleaseBackup: async () => {
+        if (shutdownPromise !== undefined || backupService === undefined) {
+          throw new Error('Application backups are unavailable.');
+        }
+        return backupService.createBackup('pre_release');
+      },
+      shutdown,
+    };
   } catch (startupError) {
     try {
       await shutdown();
@@ -459,4 +523,21 @@ function throwIfStartupCancelled(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     throw new ApplicationStartupCancelledError();
   }
+}
+
+function createRecoveryDialogs(backupDirectory: string): RecoveryDialogs {
+  return {
+    saveMaterial: async () => {
+      const result = await dialog.showSaveDialog({ title: 'Save private recovery material', defaultPath: 'callie-recovery.txt', filters: [{ name: 'Recovery material', extensions: ['txt'] }] });
+      return result.canceled ? null : result.filePath ?? null;
+    },
+    selectBackup: async () => {
+      const result = await dialog.showOpenDialog({ title: 'Select a verified Callie backup', defaultPath: backupDirectory, properties: ['openFile'], filters: [{ name: 'Encrypted backup', extensions: ['sqlite3'] }] });
+      return result.canceled ? null : result.filePaths[0] ?? null;
+    },
+    selectMaterial: async () => {
+      const result = await dialog.showOpenDialog({ title: 'Select your saved private recovery material', properties: ['openFile'], filters: [{ name: 'Recovery material', extensions: ['txt'] }] });
+      return result.canceled ? null : result.filePaths[0] ?? null;
+    },
+  };
 }

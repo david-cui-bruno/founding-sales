@@ -16,6 +16,9 @@ import {
 } from '../../src/main/startApplication';
 import type { AppHealth } from '../../src/shared/healthContract';
 
+const nativeDialogs = vi.hoisted(() => ({ showSaveDialog: vi.fn(), showOpenDialog: vi.fn() }));
+vi.mock('electron', () => ({ dialog: nativeDialogs, safeStorage: {} }));
+
 const health: AppHealth = {
   appVersion: '1.0.0',
   schemaVersion: 2,
@@ -58,6 +61,12 @@ describe('startApplication', () => {
 
     return {
       ...keyDependencies(),
+      createBackupService: () => ({
+        start: async () => undefined,
+        shutdown: async () => undefined,
+        listAvailableBackups: async () => [],
+        createBackup: async () => { throw new Error('Unexpected backup request'); },
+      }),
       openDatabase: ({ path }) => {
         events.push(`open:${path}`);
         return database;
@@ -99,6 +108,110 @@ describe('startApplication', () => {
       closeDatabase: () => events.push('close'),
     };
   }
+
+  it('constructs recovery from initialized backup availability before IPC and drains it before DB closure', async () => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    let release!: () => void;
+    const drained = new Promise<void>((resolve) => { release = resolve; });
+    const provider = { status: vi.fn(), beginSetup: vi.fn(), saveSetupMaterial: vi.fn(), completeSetup: vi.fn(), selectAndRunRestoreDrill: vi.fn(), shutdown: async () => { events.push('recovery-stop'); await drained; events.push('recovery-drained'); } };
+    dependencies.createRecoveryService = (options) => {
+      expect(events).toContain('recover');
+      expect(options.backups.listAvailableBackups).toBeTypeOf('function');
+      events.push('recovery-create');
+      return provider;
+    };
+    dependencies.registerApplicationIpc = (_runtime, _trust, _registrars, _sourcing, recovery) => {
+      expect(recovery).toBe(provider); events.push('ipc'); return () => events.push('unregister');
+    };
+    const app = await startApplication({ appVersion: '1', userDataPath: '/tmp/callie-recovery-wiring', createWindow: () => { events.push('window'); } }, dependencies);
+    expect(events.indexOf('recovery-create')).toBeLessThan(events.indexOf('ipc'));
+    const stopping = app.shutdown(); await vi.waitFor(() => expect(events).toContain('recovery-stop'));
+    expect(events).not.toContain('close'); release(); await stopping;
+    expect(events.indexOf('recovery-drained')).toBeLessThan(events.indexOf('close'));
+  });
+
+  it('binds native dialogs only in main with fixed backup location and propagates cancellation', async () => {
+    const events: string[] = []; const dependencies = createDependencies(events);
+    let dialogs!: import('../../src/main/recovery/recoveryService').RecoveryDialogs;
+    dependencies.createRecoveryService = (options) => {
+      dialogs = options.dialogs;
+      return { status: vi.fn(), beginSetup: vi.fn(), saveSetupMaterial: vi.fn(), completeSetup: vi.fn(), selectAndRunRestoreDrill: vi.fn(), shutdown: async () => undefined };
+    };
+    const app = await startApplication({ appVersion: '1', userDataPath: '/tmp/callie-native-dialog-fixture', createWindow: () => undefined }, dependencies);
+    try {
+      nativeDialogs.showSaveDialog.mockResolvedValueOnce({ canceled: true }).mockResolvedValueOnce({ canceled: false, filePath: '/synthetic/chosen-export.txt' });
+      expect(await dialogs.saveMaterial()).toBeNull(); expect(await dialogs.saveMaterial()).toBe('/synthetic/chosen-export.txt');
+      nativeDialogs.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: ['/synthetic/backup.sqlite3'] }).mockResolvedValueOnce({ canceled: true, filePaths: [] });
+      expect(await dialogs.selectBackup()).toBe('/synthetic/backup.sqlite3');
+      expect(nativeDialogs.showOpenDialog).toHaveBeenLastCalledWith(expect.objectContaining({ defaultPath: '/tmp/callie-native-dialog-fixture/backups', properties: ['openFile'] }));
+      expect(await dialogs.selectMaterial()).toBeNull();
+    } finally { await app.shutdown(); }
+  });
+
+  it('starts backups after initialization, wires fresh existing-workspace key loading and exposes explicit pre-release backup', async () => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    const loads: unknown[] = [];
+    const load = dependencies.loadWorkspaceKey;
+    dependencies.loadWorkspaceKey = async (input) => { loads.push(input); return load(input); };
+    const snapshot = {
+      path: '/disposable/pre_release.sqlite3', basename: 'pre_release.sqlite3',
+      kind: 'pre_release' as const, schemaVersion: 15, sha256: 'a'.repeat(64),
+      sizeBytes: 4096, createdAt: '2026-09-06T12:00:00.000Z', verifiedAt: '2026-09-06T12:00:00.000Z',
+    };
+    dependencies.createBackupService = (options) => {
+      expect(events).toContain('migrate');
+      expect(options.backupDirectory).toBe('/tmp/callie-backup-wiring/backups');
+      return {
+        start: async () => { events.push('backup-start'); },
+        shutdown: async () => { events.push('backup-stop'); },
+        listAvailableBackups: async () => [],
+        createBackup: async (kind) => {
+          expect(kind).toBe('pre_release');
+          await options.databaseGate.withDatabase((database) => { expect(database).toBeDefined(); });
+          const key = await options.loadWorkspaceKey();
+          key.bytes.fill(0);
+          return snapshot;
+        },
+      };
+    };
+    const running = await startApplication({
+      appVersion: '1.0.0', userDataPath: '/tmp/callie-backup-wiring', createWindow: () => { events.push('window'); },
+    }, dependencies);
+    expect(events.indexOf('backup-start')).toBeGreaterThan(events.indexOf('recover'));
+    expect(events.indexOf('backup-start')).toBeLessThan(events.indexOf('window'));
+    await expect(running.createPreReleaseBackup()).resolves.toEqual(snapshot);
+    expect(loads.at(-1)).toEqual({
+      envelopePath: '/tmp/callie-backup-wiring/callie.key-envelope.json', databaseExists: true,
+    });
+    await running.shutdown();
+    expect(events.indexOf('backup-stop')).toBeLessThan(events.indexOf('close'));
+    await expect(running.createPreReleaseBackup()).rejects.toThrow();
+  });
+
+  it('waits for backup ownership cleanup before closing SQLite, including failed window startup', async () => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    let release!: () => void;
+    const cleanup = new Promise<void>((resolve) => { release = resolve; });
+    dependencies.createBackupService = () => ({
+      start: async () => { events.push('backup-start'); },
+      shutdown: async () => { events.push('backup-stopping'); await cleanup; events.push('backup-stopped'); },
+      listAvailableBackups: async () => [],
+      createBackup: async () => { throw new Error('Unexpected request'); },
+    });
+    const startup = startApplication({
+      appVersion: '1.0.0', userDataPath: '/tmp/callie-backup-cleanup',
+      createWindow: () => { throw new Error('window failed'); },
+    }, dependencies);
+    const result = expect(startup).rejects.toThrow('window failed');
+    await vi.waitFor(() => expect(events).toContain('backup-stopping'));
+    expect(events).not.toContain('close');
+    release();
+    await result;
+    expect(events.indexOf('backup-stopped')).toBeLessThan(events.indexOf('close'));
+  });
 
   it('rejects a missing sourcing poller dependency before IPC registration', async () => {
     const events: string[] = [];
