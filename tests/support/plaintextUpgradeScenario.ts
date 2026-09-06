@@ -111,8 +111,10 @@ async function runScenario(): Promise<void> {
       await assertEncryptedSchemaVersionAccepted(workspace.path, 13);
     } else if (scenario === 'encrypted-schema-14-reopen') {
       await assertEncryptedSchemaVersionAccepted(workspace.path, 14);
-    } else if (scenario === 'encrypted-schema-15-rejected') {
-      await assertEncryptedSchemaVersionRejected(workspace.path, 15);
+    } else if (scenario === 'encrypted-schema-15-reopen') {
+      await assertEncryptedSchemaVersionAccepted(workspace.path, 15);
+    } else if (scenario === 'encrypted-schema-16-rejected') {
+      await assertEncryptedSchemaVersionRejected(workspace.path, 16);
     } else if (scenario === 'path-mismatched-marker') {
       await assertMismatchedMarkerIsImmutable(workspace.path);
     } else if (scenario === 'busy-wal') {
@@ -578,7 +580,7 @@ async function createEncryptedSchemaVersion(
 
 async function assertEncryptedSchemaVersionAccepted(
   databasePath: string,
-  schemaVersion: 13 | 14,
+  schemaVersion: 13 | 14 | 15,
 ): Promise<void> {
   await createEncryptedSchemaVersion(databasePath, schemaVersion);
   await prepareEncryptedDatabase(databasePath, createTestWorkspaceKey());

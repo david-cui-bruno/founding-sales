@@ -21,6 +21,23 @@ import {
 } from '../fixtures/tempDatabase';
 
 const BOOT_AT = '2026-08-30T12:00:00.000Z';
+const EXPECTED_MIGRATION_LEDGER = [
+  '0001Foundation',
+  '0002DomainFoundation',
+  '0003Transcripts',
+  '0004Learnings',
+  '0005SourcingChannels',
+  '0006SourcingState',
+  '0007SourcingOutbox',
+  '0008DedupeCloudPersons',
+  '0009SourcingFileLedger',
+  '0010NoDueDates',
+  '0011ContactDncFlags',
+  '0012UpstreamRequestState',
+  '0013ContactComplianceEvidence',
+  '0014OutboundJurisdictionClearance',
+  '0015RecoveryMetadata',
+] as const;
 
 describe('domain startup', () => {
   let database: AppDatabase;
@@ -55,25 +72,31 @@ describe('domain startup', () => {
   }
 
   describe('storage readiness gate', () => {
-    it('passes the exact schema-14 manifest against the live catalog', () => {
+    it('passes only the exact schema-15 manifest and ordered migration ledger', () => {
       const readiness = assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 14,
+        expectedSchemaVersion: 15,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       });
       expect(readiness).toMatchObject({
-        schemaVersion: 14, encrypted: true, ftsAvailable: true,
+        schemaVersion: 15, encrypted: true, ftsAvailable: true,
       });
       expect(DOMAIN_SCHEMA_MANIFEST.tables).toEqual(expect.arrayContaining([
         'contact_compliance_audit_events',
         'person_outbound_jurisdictions',
         'outbound_jurisdiction_clearances',
         'outbound_jurisdiction_audit_events',
+        'backup_receipts',
+        'recovery_readiness',
+        'identity_repair_events',
       ]));
       expect(DOMAIN_SCHEMA_MANIFEST.indexes).toContain(
         'contact_compliance_audit_contact_idx',
       );
+      expect(database.raw.prepare(
+        'SELECT name FROM kysely_migration ORDER BY timestamp, name',
+      ).all()).toEqual(EXPECTED_MIGRATION_LEDGER.map((name) => ({ name })));
     });
 
     it('rejects an open raw transaction, wrong pragma, and manifest drift', () => {
@@ -81,7 +104,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 14,
+        expectedSchemaVersion: 15,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       database.raw.exec('ROLLBACK');
@@ -90,7 +113,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 14,
+        expectedSchemaVersion: 15,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       database.raw.pragma('busy_timeout = 5000');
@@ -98,7 +121,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 14,
+        expectedSchemaVersion: 15,
         expectedManifest: {
           ...DOMAIN_SCHEMA_MANIFEST,
           tables: [...DOMAIN_SCHEMA_MANIFEST.tables, 'missing_table'],
@@ -106,7 +129,7 @@ describe('domain startup', () => {
       })).toThrow(DomainStartupFatalError);
     });
 
-    it.each([13, 15])(
+    it.each([14, 16, 99])(
       'rejects schema version %i before repositories exist',
       (schemaVersion) => {
         database.raw.prepare(
@@ -122,12 +145,106 @@ describe('domain startup', () => {
         expect(caught).toBeInstanceOf(DomainStartupFatalError);
         expect(caught).toMatchObject({
           code: 'schema_not_ready',
-          message: 'The workspace schema version is not exactly 14.',
+          message: 'The workspace schema version is not exactly 15.',
         });
         expect(clockReads()).toBe(0);
         expect(idsUsed()).toBe(0);
       },
     );
+
+    it.each([
+      {
+        name: 'missing',
+        corrupt: (db: AppDatabase) => db.raw.prepare(
+          "DELETE FROM kysely_migration WHERE name = '0015RecoveryMetadata'",
+        ).run(),
+      },
+      {
+        name: 'extra',
+        corrupt: (db: AppDatabase) => db.raw.prepare(
+          'INSERT INTO kysely_migration (name, timestamp) VALUES (?, ?)',
+        ).run('0016Unexpected', '9999-12-31T23:59:59.999Z'),
+      },
+      {
+        name: 'reordered',
+        corrupt: (db: AppDatabase) => db.raw.prepare(
+          "UPDATE kysely_migration SET timestamp = '9999-12-31T23:59:59.999Z' WHERE name = '0014OutboundJurisdictionClearance'",
+        ).run(),
+      },
+    ])('rejects a $name migration ledger before composition', ({ corrupt }) => {
+      corrupt(database);
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
+    });
+
+    it('rejects a duplicate-capable malformed migration ledger before composition', () => {
+      database.raw.exec(`
+        ALTER TABLE kysely_migration RENAME TO kysely_migration_original;
+        CREATE TABLE kysely_migration (name TEXT NOT NULL, timestamp TEXT NOT NULL);
+        INSERT INTO kysely_migration (name, timestamp)
+          SELECT name, timestamp FROM kysely_migration_original;
+        INSERT INTO kysely_migration (name, timestamp)
+          SELECT name, timestamp FROM kysely_migration_original
+          WHERE name = '0015RecoveryMetadata';
+        DROP TABLE kysely_migration_original;
+      `);
+
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
+    });
+
+    it.each([
+      'immutable_identity_repair_events',
+      'immutable_identity_repair_events_delete',
+    ])('requires the exact %s trigger before composition', (triggerName) => {
+      expect(DOMAIN_SCHEMA_MANIFEST.triggers).toContain(triggerName);
+      database.raw.exec(`DROP TRIGGER ${triggerName}`);
+
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
+    });
+
+    it('rejects app_meta and migration-ledger disagreement before composition', () => {
+      database.raw.prepare(
+        'UPDATE app_meta SET schema_version = 14 WHERE singleton = 1',
+      ).run();
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
+    });
+
+    it.each([
+      {
+        name: 'missing',
+        corrupt: (db: AppDatabase) => db.raw.exec('DROP TABLE backup_receipts'),
+      },
+      {
+        name: 'extra',
+        corrupt: (db: AppDatabase) => db.raw.exec(
+          'CREATE TABLE unexpected_schema15_table (id TEXT PRIMARY KEY)',
+        ),
+      },
+      {
+        name: 'malformed',
+        corrupt: (db: AppDatabase) => db.raw.exec(`
+          DROP TABLE backup_receipts;
+          CREATE TABLE backup_receipts (id TEXT PRIMARY KEY)
+        `),
+      },
+    ])('rejects a $name schema-15 catalog before composition', ({ corrupt }) => {
+      corrupt(database);
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
+    });
   });
 
   describe('bootstrap', () => {

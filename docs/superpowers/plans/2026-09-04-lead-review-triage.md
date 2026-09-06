@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - This plan follows the approved spec dated 2026-09-04.
-- Execute this plan only after both `docs/superpowers/plans/2026-09-04-outbound-compliance-hardening.md` and `docs/superpowers/plans/2026-09-04-runtime-recovery-security-hardening.md` are fully verified, including runtime Task 13. Schema 16 must never be opened by schema-15 identity tooling.
+- Execute tracked lead-review implementation only after outbound-compliance contracts/final authorization are complete and reviewed, and after either full runtime Task 13 sign-off or completion and independent review of the runtime plan's Schema-15 handoff exception, including its mandatory disposable-fixture handoff verification. Schema 16 must never be opened by schema-15 identity or recovery tooling. The handoff exception authorizes code and fixture verification only; accessing or migrating the founder workspace, capturing a live triage snapshot, or performing any runtime operational action still requires the applicable separate confirmation and hold point.
 - Schema ownership is locked across the plan set: compliance uses 0013 and 0014, runtime/recovery uses 0015, and this plan uses 0016. Do not renumber or duplicate the compliance evidence columns.
 - Consume `ContactComplianceEvidence`, `phoneComplianceStatusSchema`, and final authorization from the compliance plan. Do not create a second boolean-based compliance evaluator.
 - Raw vendor records are always presented as candidates, never as verified ownership.

@@ -570,6 +570,35 @@ export type OptOutClosureReceiptHandlesTable = {
   sequence: number;
 };
 
+export type BackupReceiptsTable = {
+  id: string;
+  backup_basename: string;
+  kind: 'daily' | 'manual' | 'pre_release';
+  schema_version: number;
+  sha256: string;
+  size_bytes: number;
+  created_at: string;
+  verified_at: string;
+};
+
+export type RecoveryReadinessTable = {
+  singleton: number;
+  recovery_setup_completed_at: string | null;
+  last_restore_drill_at: string | null;
+  last_restore_backup_sha256: string | null;
+  updated_at: string;
+};
+
+export type IdentityRepairEventsTable = {
+  id: string;
+  manifest_sha256: string;
+  candidate_id: string;
+  canonical_person_id: string;
+  created_person_ids_json: string;
+  reassigned_source_event_ids_json: string;
+  applied_at: string;
+};
+
 export type ReviewPositionTable = {
   singleton: number;
   position: number;
@@ -591,12 +620,14 @@ export type WorkspaceSettingsTable = {
 export type DomainTables = {
   activities: ActivitiesTable;
   activity_amendments: ActivityAmendmentsTable;
+  backup_receipts: BackupReceiptsTable;
   cadence_action_components: CadenceActionComponentsTable;
   cadence_definitions: CadenceDefinitionsTable;
   cadence_enrollments: CadenceEnrollmentsTable;
   cadence_steps: CadenceStepsTable;
   consent_policy_records: ConsentPolicyRecordsTable;
   cycle_reactivation_receipts: CycleReactivationReceiptsTable;
+  identity_repair_events: IdentityRepairEventsTable;
   lifecycle_review_items: LifecycleReviewItemsTable;
   next_actions: NextActionsTable;
   opt_out_closure_receipt_handles: OptOutClosureReceiptHandlesTable;
@@ -621,6 +652,7 @@ export type DomainTables = {
   prospect_priority_projection: ProspectPriorityProjectionTable;
   prospect_properties: ProspectPropertiesTable;
   reactivation_rules: ReactivationRulesTable;
+  recovery_readiness: RecoveryReadinessTable;
   review_position: ReviewPositionTable;
   sales_cycles: SalesCyclesTable;
   sales_cycle_close_readiness: SalesCycleCloseReadinessTable;

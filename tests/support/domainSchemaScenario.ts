@@ -84,6 +84,8 @@ const requiredTriggers = [
   'immutable_consent_policy_records_delete',
   'immutable_cycle_reactivation_receipts',
   'immutable_cycle_reactivation_receipts_delete',
+  'immutable_identity_repair_events',
+  'immutable_identity_repair_events_delete',
   'immutable_learning_evidence',
   'immutable_learning_evidence_delete',
   'immutable_transcript_utterances',
@@ -213,7 +215,7 @@ function runDatabaseScenario(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
         ).get(),
-        { schema_version: 14 },
+        { schema_version: 15 },
       );
       const actualTables = raw.prepare<string[], { name: string }>(`
         SELECT name FROM sqlite_master
