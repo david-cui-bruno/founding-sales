@@ -1,3 +1,4 @@
+import { createRecoveryApi } from './apis/recoveryApi';
 import { appHealthSchema, type AppHealth } from '../shared/healthContract';
 import { createConversationsApi } from './apis/conversationsApi';
 import { createFridayApi } from './apis/fridayApi';
@@ -35,6 +36,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
     learnings: createLearningsApi(client),
     sourcing: createSourcingApi(client),
     shell: createShellApi(client),
+    recovery: createRecoveryApi(client),
   } as const;
 };
 

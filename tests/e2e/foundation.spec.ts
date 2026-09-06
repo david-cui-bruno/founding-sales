@@ -13,7 +13,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chromium, expect, test, type Browser } from 'playwright/test';
+import { chromium, expect, test, type Browser, type Page } from 'playwright/test';
 import {
   describeProcessExit,
   terminatePackagedApplication,
@@ -56,6 +56,43 @@ test('packaged diagnostics use callie protocol and an isolated native SQLite dat
       await rm(userDataPath, { recursive: true, force: true });
     }
   }
+});
+
+// CDP can drive the production renderer/preload but not macOS native dialogs.
+// This is intentionally partial packaged coverage, not export/drill acceptance.
+test('packaged recovery setup is explicit and persists only completion across isolated relaunch', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'callie-recovery-e2e-'));
+  let setupCompletedAt: string | null = null;
+  try {
+    await inspectPackagedApplication(userDataPath, async (page) => {
+      await page.getByRole('button', { name: 'Data & storage', exact: true }).click();
+      await expect(page.getByText('Recovery setup/drill incomplete', { exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Begin recovery setup' })).toBeDisabled();
+      const before = await page.evaluate(() => window.callie.recovery.status());
+      expect(before.setupCompletedAt).toBeNull();
+      await page.getByLabel('I understand this reveals private recovery material').check();
+      await page.getByRole('button', { name: 'Begin recovery setup' }).click();
+      await expect(page.getByLabel('One-time recovery material')).toHaveText(/^CALLIE1-/);
+      expect(await page.evaluate(() => Object.keys(window.callie.recovery).sort())).toEqual(['beginSetup', 'completeSetup', 'saveSetupMaterial', 'selectAndRunRestoreDrill', 'status']);
+      // Explicit fixture confirmation, without claiming a native Save occurred.
+      await page.getByLabel('I stored the recovery material privately').check();
+      await page.getByRole('button', { name: 'Complete recovery setup' }).click();
+      await expect(page.getByLabel('One-time recovery material')).toHaveCount(0);
+      const after = await page.evaluate(() => window.callie.recovery.status());
+      setupCompletedAt = after.setupCompletedAt;
+      expect(setupCompletedAt).not.toBeNull();
+      expect(after.lastRestoreDrillAt).toBeNull();
+      expect(after.outreachReady).toBe(false);
+      expect(JSON.stringify(after)).not.toContain('CALLIE1-');
+    });
+    await inspectPackagedApplication(userDataPath, async (page) => {
+      await page.getByRole('button', { name: 'Data & storage', exact: true }).click();
+      await expect(page.getByLabel('One-time recovery material')).toHaveCount(0);
+      const status = await page.evaluate(() => window.callie.recovery.status());
+      expect(status.setupCompletedAt).toBe(setupCompletedAt);
+      expect(status.outreachReady).toBe(false);
+    });
+  } finally { await rm(userDataPath, { recursive: true, force: true }); }
 });
 
 test('packaged startup leaves an isolated database collision untouched and recovers on relaunch', async () => {
@@ -106,7 +143,7 @@ test('packaged startup leaves an isolated database collision untouched and recov
   }
 });
 
-const inspectPackagedApplication = async (userDataPath: string) => {
+const inspectPackagedApplication = async (userDataPath: string, inspectRecovery?: (page: Page) => Promise<void>) => {
   const debuggingPort = await availablePort();
   let application: ChildProcess | undefined;
   let browser: Browser | undefined;
@@ -158,6 +195,7 @@ const inspectPackagedApplication = async (userDataPath: string) => {
     await page.getByRole('button', { name: 'Sourcing', exact: true }).click();
     await expect(page.getByText(/^Sourcing inbox: /)).toBeVisible();
 
+    await inspectRecovery?.(page);
     const health = await page.evaluate(() => window.callie.health.get());
     return {
       databasePath: health.databasePath,

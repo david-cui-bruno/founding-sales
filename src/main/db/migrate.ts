@@ -153,6 +153,10 @@ function readSchemaVersion(db: AppDatabase): number {
   return metadata.schema_version;
 }
 
+export function isRegisteredSchemaVersion(version: number): boolean {
+  return productionMigrations.some((entry) => entry.schemaVersion === version);
+}
+
 export async function migrateToLatest(
   db: AppDatabase,
   options: MigrationOptions,

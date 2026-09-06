@@ -27,6 +27,8 @@ import {
   type FeatureRegistrars,
 } from '../../src/main/ipc/registerApplicationIpc';
 
+const recoveryProvider = { status: vi.fn(), beginSetup: vi.fn(), saveSetupMaterial: vi.fn(), completeSetup: vi.fn(), selectAndRunRestoreDrill: vi.fn() };
+
 type Gate = Parameters<typeof registerApplicationIpc>[0];
 
 const fakeGate = (domain: Partial<FounderSalesDomain> = {}): Gate => ({
@@ -99,21 +101,22 @@ describe('registerApplicationIpc', () => {
       registerLearningsIpc: track('learnings', unregisters[9]!),
       registerSourcingIpc: track('sourcing', unregisters[10]!),
       registerShellIpc: track('shell', unregisters[11]!),
+      registerRecoveryIpc: track('recovery', unregisters[12]!),
     } as unknown as FeatureRegistrars;
     return { registrars, calls };
   }
 
-  it('registers all twelve feature slices and unregisters each exactly once', () => {
-    const unregisters = Array.from({ length: 12 }, () => vi.fn());
+  it('registers all thirteen feature slices and unregisters each exactly once', () => {
+    const unregisters = Array.from({ length: 13 }, () => vi.fn());
     const { registrars, calls } = fakeRegistrars(unregisters);
 
     const unregister = registerApplicationIpc(
-      fakeGate(), undefined, registrars, explicitSourcingProvider(),
+      fakeGate(), undefined, registrars, explicitSourcingProvider(), recoveryProvider,
     );
     expect(calls).toEqual([
       'health', 'leads', 'leadDetail', 'today',
       'pipeline', 'review', 'friday', 'imports',
-      'conversations', 'learnings', 'sourcing', 'shell',
+      'conversations', 'learnings', 'sourcing', 'shell', 'recovery',
     ]);
 
     unregister();
@@ -126,31 +129,31 @@ describe('registerApplicationIpc', () => {
     const unregisters = [
       'health', 'leads', 'leadDetail', 'today',
       'pipeline', 'review', 'friday', 'imports',
-      'conversations', 'learnings', 'sourcing', 'shell',
+      'conversations', 'learnings', 'sourcing', 'shell', 'recovery',
     ].map((name) => vi.fn(() => order.push(name)));
     const { registrars } = fakeRegistrars(unregisters);
 
-    registerApplicationIpc(fakeGate(), undefined, registrars, explicitSourcingProvider())();
+    registerApplicationIpc(fakeGate(), undefined, registrars, explicitSourcingProvider(), recoveryProvider)();
     expect(order).toEqual([
-      'shell', 'sourcing', 'learnings', 'conversations',
+      'recovery', 'shell', 'sourcing', 'learnings', 'conversations',
       'imports', 'friday', 'review', 'pipeline',
       'today', 'leadDetail', 'leads', 'health',
     ]);
   });
 
   it('passes the trusted-URL predicate to every slice registrar', () => {
-    const unregisters = Array.from({ length: 12 }, () => vi.fn());
+    const unregisters = Array.from({ length: 13 }, () => vi.fn());
     const { registrars } = fakeRegistrars(unregisters);
     const trust = (url: string) => url.startsWith('app://');
 
-    registerApplicationIpc(fakeGate(), trust, registrars, explicitSourcingProvider());
+    registerApplicationIpc(fakeGate(), trust, registrars, explicitSourcingProvider(), recoveryProvider);
     for (const registrar of Object.values(registrars)) {
       expect(vi.mocked(registrar).mock.calls[0]![1]).toBe(trust);
     }
   });
 
   it('registers the primary runtime health unchanged instead of overlaying sourcing IPC status', async () => {
-    const unregisters = Array.from({ length: 12 }, () => vi.fn());
+    const unregisters = Array.from({ length: 13 }, () => vi.fn());
     const { registrars } = fakeRegistrars(unregisters);
     let registeredHealth: { getHealth(): Promise<unknown> } | undefined;
     registrars.registerHealthIpc = vi.fn((provider) => {
@@ -174,17 +177,17 @@ describe('registerApplicationIpc', () => {
       retry: async () => healthySourcing,
       status: async () => healthySourcing,
       setHmacSalt: async () => healthySourcing,
-    });
+    }, recoveryProvider);
 
     await expect(registeredHealth?.getHealth()).resolves.toEqual(degradedHealth);
   });
 
   it('rejects a missing sourcing provider instead of registering a healthy fallback', () => {
-    const unregisters = Array.from({ length: 12 }, () => vi.fn());
+    const unregisters = Array.from({ length: 13 }, () => vi.fn());
     const { registrars, calls } = fakeRegistrars(unregisters);
 
     expect(() => registerApplicationIpc(
-      fakeGate(), undefined, registrars, undefined as never,
+      fakeGate(), undefined, registrars, undefined as never, recoveryProvider,
     )).toThrow('Sourcing provider is required.');
     expect(calls).toEqual([]);
   });

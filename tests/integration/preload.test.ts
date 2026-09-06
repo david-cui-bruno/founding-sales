@@ -28,6 +28,7 @@ type ExposedCallieApi = {
     retry: () => Promise<unknown>;
     status: () => Promise<unknown>;
   };
+  recovery: import('../../src/shared/contracts/recoveryContract').RecoveryProvider;
   shell: {
     revealDatabase: () => Promise<unknown>;
     revealLogDirectory: () => Promise<unknown>;
@@ -96,11 +97,13 @@ describe('preload workflow bridge', () => {
       'leads',
       'learnings',
       'pipeline',
+      'recovery',
       'review',
       'shell',
       'sourcing',
       'today',
     ]);
+    expect(Object.keys(api.recovery).sort()).toEqual(['beginSetup', 'completeSetup', 'saveSetupMaterial', 'selectAndRunRestoreDrill', 'status']);
     expect(Object.keys(api.health)).toEqual(['get']);
     expect(Object.keys(api.leads).sort()).toEqual([
       'bulkUpdate', 'list', 'updateField',
@@ -281,4 +284,19 @@ describe('preload workflow bridge', () => {
       sort: 'priority', cursor: null, limit: 50,
     })).rejects.toThrow();
   });
+});
+
+// Each failure stays fixed and excludes request/response contents.
+it('recovery preload validates both directions and exposes no path or generic invoke', async () => {
+  const { createCallieApi } = await import('../../src/preload/createCallieApi');
+  const invoke = vi.fn(async (): Promise<unknown> => ({ kind: 'cancelled' }));
+  const api = createCallieApi({ invoke }).recovery;
+  await expect(api.selectAndRunRestoreDrill({ founderConfirmed: true, materialSource: 'paste', recoveryMaterial: 'synthetic-secret', path: '/private' } as never)).rejects.toThrow(/^RECOVERY_FAILED$/);
+  expect(invoke).not.toHaveBeenCalled();
+  expect(await api.saveSetupMaterial({ sessionId: 'fixture' })).toEqual({ kind: 'cancelled' });
+  expect(invoke).toHaveBeenLastCalledWith('recovery:save-setup-material', { sessionId: 'fixture' });
+  invoke.mockResolvedValue({ material: 'synthetic-secret' });
+  await expect(api.status()).rejects.toThrow(/^RECOVERY_FAILED$/);
+  expect(invoke).toHaveBeenLastCalledWith('recovery:status');
+  await expect((api.status as (...args: unknown[]) => Promise<unknown>)({})).rejects.toThrow(/^RECOVERY_FAILED$/);
 });

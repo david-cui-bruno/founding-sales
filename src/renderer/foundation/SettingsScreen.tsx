@@ -1,3 +1,5 @@
+import type { RecoveryProvider } from '../../shared/contracts/recoveryContract';
+import { RecoverySection } from './RecoverySection';
 import { Monitor, Moon, Rows2, Rows3, Sun, type LucideIcon } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 
@@ -135,9 +137,11 @@ export type SettingsShellApi = {
 function DataStorageSection({
   health,
   shell,
+  recovery,
 }: {
   health: AppHealth | null;
   shell?: SettingsShellApi;
+  recovery?: RecoveryProvider;
 }) {
   return (
     <section
@@ -146,6 +150,7 @@ function DataStorageSection({
       aria-label="Data & storage"
     >
       <h2 className="settings__section-title">Data &amp; storage</h2>
+      {recovery !== undefined && <RecoverySection recovery={recovery} />}
       {health === null ? (
         <p className="settings__quiet">Available once the foundation is ready.</p>
       ) : (
@@ -347,6 +352,7 @@ export type SettingsScreenProps = {
   theme: ThemeState;
   density: DensityState;
   shell?: SettingsShellApi;
+  recovery?: RecoveryProvider;
   /** Sourcing status rows, rendered inside the Sourcing section. */
   sourcing?: ReactNode;
   /** Extra diagnostics panels (Apple spike), rendered with Diagnostics. */
@@ -367,6 +373,7 @@ export function SettingsScreen({
   theme,
   density,
   shell,
+  recovery,
   sourcing,
   children,
 }: SettingsScreenProps) {
@@ -402,7 +409,7 @@ export function SettingsScreen({
             <AppearanceSection theme={theme} density={density} />
           )}
           {active === 'data' && (
-            <DataStorageSection health={health} shell={shell} />
+            <DataStorageSection health={health} shell={shell} recovery={recovery} />
           )}
           {active === 'sourcing' && (
             <section

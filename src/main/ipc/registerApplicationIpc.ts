@@ -1,3 +1,5 @@
+import { registerRecoveryIpc } from '../recovery/registerRecoveryIpc';
+import type { RecoveryProvider } from '../../shared/contracts/recoveryContract';
 import type { FounderSalesDomain } from '../domain/founderSalesDomain';
 import type { FoundationRuntime } from '../foundation/foundationRuntime';
 import { appHealthSchema } from '../../shared/healthContract';
@@ -45,6 +47,7 @@ export type FeatureRegistrars = {
   registerLearningsIpc: typeof registerLearningsIpc;
   registerSourcingIpc: typeof registerSourcingIpc;
   registerShellIpc: typeof registerShellIpc;
+  registerRecoveryIpc: typeof registerRecoveryIpc;
 };
 
 const defaultRegistrars: FeatureRegistrars = {
@@ -60,6 +63,7 @@ const defaultRegistrars: FeatureRegistrars = {
   registerLearningsIpc,
   registerSourcingIpc,
   registerShellIpc,
+  registerRecoveryIpc,
 };
 
 export function createLeadsProvider(runtime: DomainGate): LeadsProvider {
@@ -222,6 +226,7 @@ export function registerApplicationIpc(
   isTrustedRendererUrl: ((url: string) => boolean) | undefined,
   registrars: FeatureRegistrars | undefined,
   sourcingProvider: SourcingProvider,
+  recoveryProvider: RecoveryProvider,
   shellProvider?: ShellProvider,
   enrichmentRequester?: EnrichmentRequester,
   logDirectoryPath?: string,
@@ -229,6 +234,7 @@ export function registerApplicationIpc(
   if (sourcingProvider === undefined) {
     throw new Error('Sourcing provider is required.');
   }
+  if (recoveryProvider === undefined) throw new Error('Recovery provider is required.');
   registrars ??= defaultRegistrars;
   const unregisters = [
     registrars.registerHealthIpc(runtime, isTrustedRendererUrl),
@@ -261,6 +267,7 @@ export function registerApplicationIpc(
       shellProvider ?? createShellProvider(runtime, logDirectoryPath),
       isTrustedRendererUrl,
     ),
+    registrars.registerRecoveryIpc(recoveryProvider, isTrustedRendererUrl),
   ];
 
   let active = true;
