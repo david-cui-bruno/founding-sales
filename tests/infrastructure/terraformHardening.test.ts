@@ -362,7 +362,7 @@ case "$service:$operation" in
   kms:enable-key-rotation) : ;;
   kms:create-alias)
     printf '%s\\n' "${keyId}" > "$AWS_STATE/alias"
-    if [[ "$SCENARIO" == lost-create-alias-response || "$SCENARIO" == cleanup-failure || "$SCENARIO" == cleanup-false-success || "$SCENARIO" == recovery-ownership-mismatch || "$SCENARIO" == lost-schedule-key-deletion-response || "$SCENARIO" == schedule-key-deletion-false-success ]]; then exit 1; fi
+    if [[ "$SCENARIO" == lost-create-alias-response || "$SCENARIO" == cleanup-failure || "$SCENARIO" == cleanup-false-success || "$SCENARIO" == recovery-ownership-mismatch || "$SCENARIO" == lost-schedule-key-deletion-response || "$SCENARIO" == schedule-key-deletion-false-success || "$SCENARIO" == pending-deletion-without-date || "$SCENARIO" == deletion-date-without-pending-state || "$SCENARIO" == schedule-key-deletion-failure ]]; then exit 1; fi
     ;;
   kms:delete-alias)
     if [[ "$SCENARIO" == cleanup-failure ]]; then exit 1; fi
@@ -370,9 +370,15 @@ case "$service:$operation" in
     rm -f "$AWS_STATE/alias"
     ;;
   kms:schedule-key-deletion)
-    if [[ "$SCENARIO" == cleanup-failure ]]; then exit 1; fi
+    if [[ "$SCENARIO" == cleanup-failure || "$SCENARIO" == schedule-key-deletion-failure ]]; then exit 1; fi
     if [[ "$SCENARIO" == cleanup-false-success || "$SCENARIO" == schedule-key-deletion-false-success ]]; then exit 0; fi
-    printf '%s\\n' pending > "$AWS_STATE/deletion"
+    printf '%s\\n' PendingDeletion > "$AWS_STATE/key-state"
+    if [[ "$SCENARIO" != pending-deletion-without-date ]]; then
+      printf '%s\\n' 2030-01-01T00:00:00Z > "$AWS_STATE/deletion-date"
+    fi
+    if [[ "$SCENARIO" == deletion-date-without-pending-state ]]; then
+      printf '%s\\n' Enabled > "$AWS_STATE/key-state"
+    fi
     if [[ "$SCENARIO" == lost-schedule-key-deletion-response ]]; then exit 1; fi
     ;;
   kms:get-key-rotation-status) printf 'True\\n' ;;
@@ -387,9 +393,9 @@ case "$service:$operation" in
     if [[ "$query" == KeyMetadata.KeyId ]]; then printf '%s\\n' "${keyId}"
     elif [[ "$query" == KeyMetadata.Arn ]]; then printf '%s\\n' "${keyArn}"
     elif [[ "$query" == KeyMetadata.KeyState ]]; then
-      [[ -f "$AWS_STATE/deletion" ]] && printf 'PendingDeletion\\n' || printf 'Enabled\\n'
+      [[ -f "$AWS_STATE/key-state" ]] && cat "$AWS_STATE/key-state" || printf 'Enabled\\n'
     elif [[ "$query" == KeyMetadata.DeletionDate ]]; then
-      [[ -f "$AWS_STATE/deletion" ]] && printf '2030-01-01T00:00:00Z\\n' || printf 'None\\n'
+      [[ -f "$AWS_STATE/deletion-date" ]] && cat "$AWS_STATE/deletion-date" || printf 'None\\n'
     else printf '%s\\n' "${keyId}"; fi
     ;;
   *) echo "unexpected fake aws call: $service $operation" >&2; exit 2 ;;
@@ -448,7 +454,8 @@ esac
   if (scenario === "recover-cleanup-verified") {
     writeFileSync(receipt, readFileSync(receipt, "utf8").replace("phase=verified", "phase=cleanup-verified"));
     rmSync(join(stateDirectory, "alias"), { force: true });
-    writeFileSync(join(stateDirectory, "deletion"), "pending\n");
+    writeFileSync(join(stateDirectory, "key-state"), "PendingDeletion\n");
+    writeFileSync(join(stateDirectory, "deletion-date"), "2030-01-01T00:00:00Z\n");
     recover = run(["--recover", receipt]);
   }
   return {
@@ -461,7 +468,10 @@ esac
       : "",
     awsCalls: existsSync(awsLog) ? readFileSync(awsLog, "utf8") : "",
     aliasExists: existsSync(join(stateDirectory, "alias")),
-    deletionScheduled: existsSync(join(stateDirectory, "deletion")),
+    deletionScheduled: existsSync(join(stateDirectory, "key-state"))
+      && readFileSync(join(stateDirectory, "key-state"), "utf8").trim() === "PendingDeletion"
+      && existsSync(join(stateDirectory, "deletion-date"))
+      && readFileSync(join(stateDirectory, "deletion-date"), "utf8").trim() !== "",
   };
 }
 
@@ -1304,6 +1314,33 @@ describe("managed secret and remote state preparation", () => {
     expect(result.aliasExists).toBe(false);
     expect(result.deletionScheduled).toBe(false);
     expect(result.receiptContents).toContain("phase=pending-alias");
+    expect(result.awsCalls).toContain("kms schedule-key-deletion");
+    expect(result.output).not.toContain("runtime-key recovery cleanup verified");
+  });
+
+  for (const scenario of ["pending-deletion-without-date", "deletion-date-without-pending-state"]) {
+    it(`rejects incomplete key deletion postcondition for ${scenario}`, () => {
+      const result = runRuntimeKeyScenario(scenario);
+      expect(result.prepare.status).not.toBe(0);
+      expect(result.recover?.status).not.toBe(0);
+      expect(result.aliasExists).toBe(false);
+      expect(result.deletionScheduled).toBe(false);
+      expect(result.receiptContents).toContain("phase=pending-alias");
+      expect(result.awsCalls).toContain("kms schedule-key-deletion");
+      expect(result.output).not.toContain("runtime-key recovery cleanup verified");
+    });
+  }
+
+  it("retains recovery evidence when schedule-key-deletion fails after alias deletion", () => {
+    const result = runRuntimeKeyScenario("schedule-key-deletion-failure");
+    expect(result.prepare.status).not.toBe(0);
+    expect(result.recover?.status).not.toBe(0);
+    expect(result.aliasExists).toBe(false);
+    expect(result.deletionScheduled).toBe(false);
+    expect(result.receiptContents).toContain("phase=pending-alias");
+    expect(result.awsCalls).toContain("kms delete-alias");
+    expect(result.awsCalls).toContain("kms schedule-key-deletion");
+    expect(result.output).not.toContain("runtime-key recovery cleanup verified");
   });
 
   it("rejects an unsupported prepare region before receipt creation or AWS", () => {
