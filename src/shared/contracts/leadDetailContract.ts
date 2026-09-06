@@ -9,6 +9,7 @@ import {
   salesCycleIdSchema,
 } from './commonContract';
 import { cloudScoreChipSchema } from './leadsContract';
+import { findContactRefusalReasonSchema } from './enrichmentRequestContract';
 
 export const phoneComplianceStatusSchema = z.enum([
   'verified_clear',
@@ -64,6 +65,12 @@ export const cloudScoreDetailSchema = z.object({
   scoredAt: z.string().datetime({ offset: true }).nullable(),
 }).strict();
 
+export const findContactEligibilitySchema = z.object({
+  eligible: z.boolean(),
+  refusalReason: findContactRefusalReasonSchema.nullable(),
+}).strict();
+export type FindContactEligibility = z.infer<typeof findContactEligibilitySchema>;
+
 export const leadDetailSchema = z.object({
   personId: personIdSchema, salesCycleId: salesCycleIdSchema, personName: z.string().min(1), phones: z.array(contactMethodSchema),
   emails: z.array(contactMethodSchema), organizationLabel: z.string().nullable(), propertySummaries: z.array(z.string()),
@@ -71,6 +78,7 @@ export const leadDetailSchema = z.object({
   segment: z.enum(['hot', 'cold', 'warm']), priorityContext: leadPriorityContextSchema.nullable(),
   cloudScores: cloudScoreDetailSchema.nullable(),
   cloudLinked: z.boolean(),
+  findContactEligibility: findContactEligibilitySchema,
   priorityReasons: z.array(z.string().min(1)), nextAction: primaryActionSchema.nullable(), optedOut: z.boolean(),
   cadence: cadenceSummarySchema.nullable(), activities: z.array(activitySummarySchema), conversations: z.array(conversationSummarySchema),
   properties: z.array(propertySummarySchema), history: z.array(historyEventSchema), revision: z.number().int().nonnegative(),

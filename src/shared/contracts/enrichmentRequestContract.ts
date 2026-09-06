@@ -45,6 +45,12 @@ export const findContactInfoRequestSchema = z
   .strict();
 export type FindContactInfoRequest = z.infer<typeof findContactInfoRequestSchema>;
 
+export const findContactRefusalReasonSchema = z.enum([
+  'qualification_required', 'fit_gate_failed', 'identity_or_address_missing',
+  'direct_contact_exists', 'suppression_blocked', 'rate_limited',
+  'credentials_unavailable',
+]);
+
 /**
  * Receipt for the Find contact info action. `written` reports whether a
  * request line was uploaded this call; a refusal carries the closed reason.
@@ -52,9 +58,7 @@ export type FindContactInfoRequest = z.infer<typeof findContactInfoRequestSchema
 export const findContactInfoReceiptSchema = z
   .object({
     written: z.boolean(),
-    refusalReason: z
-      .enum(['rate_limited', 'not_eligible', 'credentials_unavailable'])
-      .nullable(),
+    refusalReason: findContactRefusalReasonSchema.nullable(),
   })
   .strict();
 export type FindContactInfoReceipt = z.infer<typeof findContactInfoReceiptSchema>;

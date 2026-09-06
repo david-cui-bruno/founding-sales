@@ -53,6 +53,7 @@ const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
     priorityReasons: ['Fit high 22/30', 'Timing hot 31/40', 'Reachability direct'],
     cloudScores: null,
     cloudLinked: false,
+    findContactEligibility: { eligible: false, refusalReason: 'qualification_required' },
     nextAction: {
       id: 'action-1',
       type: 'review_lead',

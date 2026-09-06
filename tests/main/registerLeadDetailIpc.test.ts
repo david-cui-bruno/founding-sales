@@ -63,6 +63,7 @@ const detail: LeadDetail = {
   priorityReasons: ['Fit high 24/30'],
   cloudScores: null,
   cloudLinked: false,
+  findContactEligibility: { eligible: false, refusalReason: 'qualification_required' },
   nextAction: null,
   optedOut: false,
   cadence: null,

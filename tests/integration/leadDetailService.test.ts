@@ -63,6 +63,7 @@ describe('leadDetailService over a real encrypted domain', () => {
   let services: DomainServices;
   let domain: FounderSalesDomain;
   let leadDetail: LeadDetailProvider;
+  let ruleVersionId: string;
 
   beforeEach(async () => {
     temp = createTempDatabase();
@@ -77,6 +78,7 @@ describe('leadDetailService over a real encrypted domain', () => {
     services.unitOfWork.immediate(() => {
       const installed = services.prioritizationRepository
         .installRuleVersion(BUILTIN_PRIORITIZATION_RULE_V1);
+      ruleVersionId = installed.id;
       services.prioritizationRepository.activateRuleVersion({
         ruleVersionId: installed.id, expectedActiveRuleVersionId: null,
       });
@@ -135,6 +137,129 @@ describe('leadDetailService over a real encrypted domain', () => {
     ) VALUES (?, ?, 'email', 'founder@example.com', 'valid', 'direct', 1, ?, ?)`)
       .run(id, prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
   }
+
+  function seedEnrichmentLead(fitBand: 'low' | 'medium' | 'high' | null = 'high') {
+    const lead = seedLead('enrichment');
+    database.raw.prepare(`INSERT INTO cloud_entity_links (cloud_entity_id, person_id, linked_at)
+      VALUES ('ce_01JC0000000000000000000000', ?, ?)`)
+      .run(lead.prospect.personId, DOMAIN_TIMESTAMP);
+    services.unitOfWork.immediate(() => {
+      const property = services.identities.createProperty({
+        addressLine1: '123 Hope St', locality: 'Providence', region: 'RI',
+        postalCode: '02906', countryCode: 'US',
+      });
+      services.identities.linkProperty({
+        prospectId: lead.prospect.prospectId, propertyId: property.id, relationship: 'owner',
+      });
+    });
+    if (fitBand !== null) {
+      // Faithful evaluation/projection pair, preserving the fidelity triggers.
+      const points = fitBand === 'high' ? 25 : fitBand === 'medium' ? 15 : 5;
+      database.raw.prepare(`INSERT INTO prioritization_evaluations (
+        id, prospect_id, rule_version_id, decision_kind, evaluated_at, fit_points, fit_band,
+        timing_millipoints, timing_band, reachability, data_confidence, priority,
+        earliest_trigger_expires_at, verify_first, command_json, input_snapshot_json,
+        result_json, explanation_json, created_at
+      ) VALUES ('enrichment-evaluation', ?, ?, 'evaluated', ?, ?, ?, 0, 'cold', 'none',
+        8, 'p3', NULL, 0, '{}', '{}', '{}', '[]', ?)`)
+        .run(lead.prospect.prospectId, ruleVersionId, CLOCK_NOW, points, fitBand, CLOCK_NOW);
+      database.raw.prepare(`INSERT INTO prospect_priority_projection (
+        prospect_id, rule_version_id, evaluation_id, fit_points, fit_band,
+        timing_millipoints, timing_band, reachability, data_confidence, priority,
+        earliest_trigger_expires_at, verify_first, version, evaluated_at, updated_at
+      ) VALUES (?, ?, 'enrichment-evaluation', ?, ?, 0, 'cold', 'none', 8, 'p3', NULL, 0, 1, ?, ?)`)
+        .run(lead.prospect.prospectId, ruleVersionId, points, fitBand, CLOCK_NOW, CLOCK_NOW);
+    }
+    return lead;
+  }
+
+  it.each(['medium', 'high'] as const)('projects complete %s-fit eligibility from persisted evidence without mutating', async (fitBand) => {
+    const { prospect } = seedEnrichmentLead(fitBand);
+    const changes = database.raw.prepare('SELECT total_changes() AS n').get();
+    expect(domain.getEnrichmentRequestCandidate({ personId: prospect.personId })).toEqual({
+      cloudEntityId: 'ce_01JC0000000000000000000000', ownerFullName: 'Person enrichment-person',
+      situsAddress: { line1: '123 Hope St', locality: 'Providence', region: 'RI', postalCode: '02906' },
+      lastRequestedAt: null, qualificationState: 'eligible', fitBand,
+      identityReady: true, hasUsableDirectContact: false, suppressionBlocked: false,
+    });
+    const detail = await leadDetail.get({ personId: prospect.personId });
+    expect(detail.findContactEligibility).toEqual({ eligible: true, refusalReason: null });
+    expect(leadDetailSchema.safeParse(detail).success).toBe(true);
+    expect(database.raw.prepare('SELECT total_changes() AS n').get()).toEqual(changes);
+  });
+
+  it.each(['unreviewed', 'disqualified', 'merge_review'] as const)('requires founder qualification for %s even with high fit', async (state) => {
+    const { prospect } = seedEnrichmentLead();
+    database.raw.prepare(`UPDATE prospects SET qualification_state = ?, qualification_gate_reason = ? WHERE id = ?`)
+      .run(state, state === 'disqualified' ? 'out_of_area' : null, prospect.prospectId);
+    const candidate = domain.getEnrichmentRequestCandidate({ personId: prospect.personId });
+    expect(candidate.qualificationState).toBe(state);
+    if (state === 'merge_review') expect(candidate.identityReady).toBe(false);
+    expect((await leadDetail.get({ personId: prospect.personId })).findContactEligibility)
+      .toEqual({ eligible: false, refusalReason: 'qualification_required' });
+  });
+
+  it.each(['low', null] as const)('refuses %s persisted fit even with high cloud scores', async (fitBand) => {
+    const { prospect } = seedEnrichmentLead(fitBand);
+    database.raw.prepare('UPDATE prospects SET cloud_fit = 99, cloud_timing = 99 WHERE id = ?').run(prospect.prospectId);
+    expect(domain.getEnrichmentRequestCandidate({ personId: prospect.personId }).fitBand).toBe(fitBand);
+    expect((await leadDetail.get({ personId: prospect.personId })).findContactEligibility)
+      .toEqual({ eligible: false, refusalReason: 'fit_gate_failed' });
+  });
+
+  it.each(['cloud link', 'address', 'name', 'deleted identity'] as const)('refuses missing %s', async (missing) => {
+    const { prospect } = seedEnrichmentLead();
+    if (missing === 'cloud link') database.raw.prepare('DELETE FROM cloud_entity_links').run();
+    if (missing === 'address') database.raw.prepare("UPDATE properties SET locality = ''").run();
+    if (missing === 'name') database.raw.prepare("UPDATE persons SET display_name = '  ' WHERE id = ?").run(prospect.personId);
+    if (missing === 'deleted identity') database.raw.prepare('UPDATE persons SET deleted_at = ? WHERE id = ?').run(CLOCK_NOW, prospect.personId);
+    expect((await leadDetail.get({ personId: prospect.personId })).findContactEligibility)
+      .toEqual({ eligible: false, refusalReason: 'identity_or_address_missing' });
+  });
+
+  it.each([
+    ['phone', 'verified_person', 'valid', 'direct', true],
+    ['email', 'verified_person', 'valid', 'indirect', true],
+    ['phone', 'vendor_candidate', 'valid', 'direct', false],
+    ['phone', 'unknown', 'valid', 'direct', false],
+    ['phone', 'conflicting_identity', 'valid', 'direct', false],
+    ['phone', 'verified_person', 'unverified', 'direct', false],
+    ['phone', 'verified_person', 'invalid', 'direct', false],
+    ['email', 'verified_person', 'valid', 'none', false],
+  ] as const)('derives usable contact from %s/%s/%s/%s evidence', async (kind, ownership, validation, reachability, usable) => {
+    const { prospect } = seedEnrichmentLead();
+    if (kind === 'phone') addPhone(prospect, 'contact');
+    else addEmail(prospect, 'contact');
+    database.raw.prepare(`UPDATE person_contact_methods SET ownership_state = ?, validation_state = ?, reachability = ? WHERE id = 'contact'`)
+      .run(ownership, validation, reachability);
+    expect(domain.getEnrichmentRequestCandidate({ personId: prospect.personId }).hasUsableDirectContact).toBe(usable);
+    expect((await leadDetail.get({ personId: prospect.personId })).findContactEligibility).toEqual({
+      eligible: !usable, refusalReason: usable ? 'direct_contact_exists' : null,
+    });
+  });
+
+  it('projects rate refusal from the persisted 30-day ledger', async () => {
+    const { prospect } = seedEnrichmentLead();
+    domain.recordEnrichmentRequested({ cloudEntityId: 'ce_01JC0000000000000000000000' });
+    expect(domain.getEnrichmentRequestCandidate({ personId: prospect.personId }).lastRequestedAt).toBe(CLOCK_NOW);
+    expect((await leadDetail.get({ personId: prospect.personId })).findContactEligibility)
+      .toEqual({ eligible: false, refusalReason: 'rate_limited' });
+  });
+
+  it('requires the exact closed eligibility DTO instead of an optional renderer hint', async () => {
+    const { prospect } = seedEnrichmentLead();
+    const detail = await leadDetail.get({ personId: prospect.personId });
+    const withoutEligibility: Record<string, unknown> = { ...detail };
+    delete withoutEligibility.findContactEligibility;
+    expect(leadDetailSchema.safeParse(withoutEligibility).success).toBe(false);
+    const invalidEligibility: unknown[] = [
+      { eligible: true, refusalReason: null, extra: true },
+      { eligible: false, refusalReason: 'not_eligible' },
+    ];
+    for (const eligibility of invalidEligibility) {
+      expect(leadDetailSchema.safeParse({ ...detail, findContactEligibility: eligibility }).success).toBe(false);
+    }
+  });
 
   it('returns the strict detail DTO for a seeded lead', async () => {
     const { prospect, cycleId } = seedLead('alpha');

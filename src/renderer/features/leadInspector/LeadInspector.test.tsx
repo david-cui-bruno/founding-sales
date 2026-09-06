@@ -8,6 +8,8 @@ import {
   type ContactMethod,
   type LeadDetail,
 } from '../../../shared/contracts/leadDetailContract';
+import { InspectorOverview } from './InspectorOverview';
+import type { FindContactInfoReceipt } from '../../../shared/contracts/enrichmentRequestContract';
 import { LeadInspectorProvider } from './LeadInspectorProvider';
 import { useLeadInspector } from './useLeadInspector';
 
@@ -115,6 +117,7 @@ const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
     priorityReasons: ['Owner of 3+ doors', 'Live vacancy posted this week'],
     cloudScores: null,
     cloudLinked: false,
+    findContactEligibility: { eligible: false, refusalReason: 'qualification_required' },
     nextAction: {
       id: 'action-1',
       type: 'review_lead',
@@ -815,5 +818,79 @@ describe('LeadInspector', () => {
 
     expect(within(inspector).queryByText(/Fit \d+ · Timing \d+/)).toBeNull();
     expect(within(inspector).queryByRole('button', { name: 'Wrong signal' })).toBeNull();
+  });
+});
+
+
+const enrichmentReasons = [
+  ['qualification_required', 'Founder qualification is required.'],
+  ['fit_gate_failed', 'Medium or High Fit is required.'],
+  ['identity_or_address_missing', 'A verified identity, cloud link, and usable property address are required.'],
+  ['direct_contact_exists', 'A usable verified contact is already on file.'],
+  ['suppression_blocked', 'Opt-out or suppression prevents contact enrichment.'],
+  ['rate_limited', 'Already requested in the last 30 days.'],
+  ['credentials_unavailable', 'Sourcing credentials are not provisioned.'],
+] as const;
+
+describe('domain-gated Find contact info', () => {
+  function renderEnrichment(input: {
+    eligibility: { eligible: boolean; refusalReason: FindContactInfoReceipt['refusalReason'] };
+    phones?: ContactMethod[];
+    result?: FindContactInfoReceipt;
+    fail?: boolean;
+  }) {
+    const onFindContactInfo = vi.fn(async (): Promise<FindContactInfoReceipt> => {
+      if (input.fail) throw new Error('Synthetic offline failure');
+      return input.result ?? { written: true, refusalReason: null };
+    });
+    // Inject the domain DTO directly so pre-implementation RED exercises the UI,
+    // not the old strict schema rejecting a new field before rendering.
+    const detail = {
+      ...detailFor({ cloudLinked: true, phones: input.phones ?? [] }),
+      findContactEligibility: input.eligibility,
+    };
+    render(<InspectorOverview detail={detail} onBeginOutbound={vi.fn()}
+      onConfirmTransition={vi.fn()} onDismissLead={vi.fn()} onOverrideCloudScore={vi.fn()}
+      onFindContactInfo={onFindContactInfo} />);
+    return onFindContactInfo;
+  }
+
+  it.each(enrichmentReasons)('keeps %s inert with a readable domain reason even with zero phones', (reason, label) => {
+    const request = renderEnrichment({ eligibility: { eligible: false, refusalReason: reason } });
+    const button = screen.getByRole('button', { name: 'Find contact info' });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(label)).toBeTruthy();
+    fireEvent.click(button);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('allows one explicit request with ten vendor candidates when the domain permits it', async () => {
+    const request = renderEnrichment({ eligibility: { eligible: true, refusalReason: null }, phones: tenCandidates() });
+    const button = screen.getByRole('button', { name: 'Find contact info' });
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Contact info requested. Results arrive with the next sync.'));
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith({ personId: 'person-kevin' });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it.each(enrichmentReasons)('shows a current %s refusal receipt in role=status', async (reason, label) => {
+    const request = renderEnrichment({
+      eligibility: { eligible: true, refusalReason: null }, result: { written: false, refusalReason: reason },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Find contact info' }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe(label));
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a request failure non-destructive and does not automatically retry', async () => {
+    const request = renderEnrichment({ eligibility: { eligible: true, refusalReason: null }, fail: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Find contact info' }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('The request failed. Try again later.'));
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('region', { name: 'Fit' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Timing' })).toBeTruthy();
   });
 });

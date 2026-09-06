@@ -32,6 +32,7 @@ import {
   type ConfirmTransitionRequest,
   type ContactMethod,
   type DismissLeadRequest,
+  type FindContactEligibility,
   type LeadDetail,
   type LeadDetailRequest,
 } from '../../shared/contracts/leadDetailContract';
@@ -260,7 +261,34 @@ export type EnrichmentCandidate = {
     postalCode: string | null;
   } | null;
   lastRequestedAt: string | null;
+  qualificationState: 'unreviewed' | 'eligible' | 'disqualified' | 'merge_review';
+  fitBand: 'low' | 'medium' | 'high' | null;
+  identityReady: boolean;
+  hasUsableDirectContact: boolean;
+  suppressionBlocked: boolean;
 };
+
+/** Ordered domain gates shared by the detail projection and upload boundary.
+ * Credentials are checked only by the writer, never probed by a detail read.
+ */
+export function getFindContactEligibility(
+  candidate: EnrichmentCandidate,
+  now: string,
+): FindContactEligibility {
+  let refusalReason: FindContactEligibility['refusalReason'] = null;
+  if (candidate.qualificationState !== 'eligible') refusalReason = 'qualification_required';
+  else if (candidate.fitBand !== 'medium' && candidate.fitBand !== 'high') refusalReason = 'fit_gate_failed';
+  else if (!candidate.identityReady || candidate.cloudEntityId === null
+    || candidate.situsAddress === null || candidate.ownerFullName.trim().length === 0) {
+    refusalReason = 'identity_or_address_missing';
+  } else if (candidate.hasUsableDirectContact) refusalReason = 'direct_contact_exists';
+  else if (candidate.suppressionBlocked !== false) refusalReason = 'suppression_blocked';
+  else if (candidate.lastRequestedAt !== null
+    && Date.parse(now) - Date.parse(candidate.lastRequestedAt) < 30 * 24 * 60 * 60 * 1000) {
+    refusalReason = 'rate_limited';
+  }
+  return { eligible: refusalReason === null, refusalReason };
+}
 
 const LANE_MAP: Readonly<Record<TodayLane, TodayLaneId>> = Object.freeze({
   won_onboarding: 'onboarding',
@@ -827,6 +855,9 @@ export class FounderSalesDomain {
           scoredAt: prospect.cloud_scored_at,
         },
       cloudLinked: cloudLink !== undefined,
+      findContactEligibility: getFindContactEligibility(
+        this.getEnrichmentRequestCandidate({ personId: person.id }), this.clock.now(),
+      ),
       priorityReasons: projection === undefined ? [] : [
         `Fit ${priorityContext.fitBand} ${priorityContext.fitPoints}/30`,
         `Timing ${priorityContext.timingBand} ${priorityContext.timingValue}/40`,
@@ -2930,19 +2961,27 @@ export class FounderSalesDomain {
    * Everything the enrichment request writer needs for one person: the
    * cloud entity link, the situs address of the first linked property that
    * satisfies the vendor schema (line1 + locality + 2-letter region), the
-   * owner name, and the per-entity rate-limit timestamp.
+   * owner name, per-entity rate-limit timestamp, and persisted eligibility.
    */
   getEnrichmentRequestCandidate(input: { personId: string }): EnrichmentCandidate {
     const parsed = z.object({ personId: z.string().min(1) }).strict().parse(input);
     const person = this.database.raw.prepare(
-      'SELECT id, display_name FROM persons WHERE id = ?',
-    ).get(parsed.personId) as { id: string; display_name: string } | undefined;
+      'SELECT id, display_name, deleted_at, opted_out FROM persons WHERE id = ?',
+    ).get(parsed.personId) as {
+      id: string; display_name: string; deleted_at: string | null; opted_out: 0 | 1;
+    } | undefined;
     if (person === undefined) {
       throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The person does not exist.');
     }
     const link = this.database.raw.prepare(
       'SELECT cloud_entity_id FROM cloud_entity_links WHERE person_id = ?',
     ).get(person.id) as { cloud_entity_id: string } | undefined;
+    // A person has one persisted prospect. Do not infer qualification from stage.
+    const prospect = this.database.raw.prepare(`
+      SELECT id, qualification_state FROM prospects WHERE person_id = ?
+    `).get(person.id) as {
+      id: string; qualification_state: EnrichmentCandidate['qualificationState'];
+    } | undefined;
     const properties = this.database.raw.prepare(`
       SELECT property.address_line_1, property.locality, property.region,
         property.postal_code
@@ -2965,6 +3004,18 @@ export class FounderSalesDomain {
       : this.database.raw.prepare(
         'SELECT last_requested_at FROM sourcing_enrichment_requests WHERE cloud_entity_id = ?',
       ).get(link.cloud_entity_id) as { last_requested_at: string } | undefined;
+    const usableContact = this.database.raw.prepare(`
+      SELECT id FROM person_contact_methods WHERE person_id = ?
+        AND ownership_state = 'verified_person' AND validation_state = 'valid'
+        AND reachability != 'none' LIMIT 1
+    `).get(person.id);
+    let suppressionBlocked = true;
+    try {
+      suppressionBlocked = person.opted_out !== 0
+        || this.services.outboundPermission.inspectPerson(person.id).kind !== 'allowed';
+    } catch {
+      // Unresolved membership is not permission. Do not duplicate opt-out policy.
+    }
     return {
       cloudEntityId: link === undefined ? null : link.cloud_entity_id,
       ownerFullName: person.display_name,
@@ -2977,6 +3028,12 @@ export class FounderSalesDomain {
           : situs.postal_code.trim(),
       },
       lastRequestedAt: lastRequested === undefined ? null : lastRequested.last_requested_at,
+      qualificationState: prospect?.qualification_state ?? 'unreviewed',
+      fitBand: prospect === undefined ? null : this.readProjection(prospect.id)?.fit_band ?? null,
+      identityReady: person.deleted_at === null && person.display_name.trim().length > 0
+        && prospect !== undefined && prospect.qualification_state !== 'merge_review',
+      hasUsableDirectContact: usableContact !== undefined,
+      suppressionBlocked,
     };
   }
 

@@ -173,15 +173,19 @@ function ReviewSection({
 }
 
 /** Founder-facing receipt lines for the Find contact info refusals. */
-const FIND_CONTACT_RECEIPTS: Readonly<Record<string, string>> = {
+const FIND_CONTACT_RECEIPTS: Readonly<Record<NonNullable<FindContactInfoReceipt['refusalReason']> | 'written', string>> = {
   written: 'Contact info requested. Results arrive with the next sync.',
+  qualification_required: 'Founder qualification is required.',
+  fit_gate_failed: 'Medium or High Fit is required.',
+  identity_or_address_missing: 'A verified identity, cloud link, and usable property address are required.',
+  direct_contact_exists: 'A usable verified contact is already on file.',
+  suppression_blocked: 'Opt-out or suppression prevents contact enrichment.',
   rate_limited: 'Already requested in the last 30 days.',
-  not_eligible: 'This lead is missing a usable property address.',
   credentials_unavailable: 'Sourcing credentials are not provisioned.',
 };
 
 /**
- * Cloud-linked leads with no phone numbers can request enrichment. One
+ * Domain-eligible leads can request enrichment regardless of candidate count. One
  * explicit click writes one request; the receipt renders inline (no toast).
  */
 function FindContactInfoSection({
@@ -193,7 +197,7 @@ function FindContactInfoSection({
 }) {
   const [receipt, setReceipt] = useState<string | null>(null);
   const [requesting, setRequesting] = useState(false);
-  const eligible = detail.phones.length === 0;
+  const { eligible, refusalReason } = detail.findContactEligibility;
 
   return (
     <div className="lead-inspector__find-contact">
@@ -207,8 +211,10 @@ function FindContactInfoSection({
               setRequesting(false);
               setReceipt(
                 result.written
-                  ? FIND_CONTACT_RECEIPTS.written!
-                  : FIND_CONTACT_RECEIPTS[result.refusalReason ?? 'not_eligible']!,
+                  ? FIND_CONTACT_RECEIPTS.written
+                  : result.refusalReason === null
+                    ? 'The request was not submitted.'
+                    : FIND_CONTACT_RECEIPTS[result.refusalReason],
               );
             },
             () => {
@@ -220,9 +226,9 @@ function FindContactInfoSection({
       >
         Find contact info
       </Button>
-      {!eligible && (
+      {!eligible && refusalReason !== null && (
         <p className="lead-inspector__find-contact-reason">
-          Phone numbers are already on file.
+          {FIND_CONTACT_RECEIPTS[refusalReason]}
         </p>
       )}
       {receipt !== null && (

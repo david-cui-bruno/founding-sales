@@ -50,12 +50,51 @@ const CANDIDATE: EnrichmentCandidate = {
     postalCode: '02906',
   },
   lastRequestedAt: null,
+  qualificationState: 'eligible',
+  fitBand: 'high',
+  identityReady: true,
+  hasUsableDirectContact: false,
+  suppressionBlocked: false,
 };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+// Each row fails this gate and every later domain gate, pinning precedence.
+const GATE_CASES: { reason: string; overrides: Partial<EnrichmentCandidate> }[] = [
+  { reason: 'qualification_required', overrides: {
+    qualificationState: 'unreviewed', fitBand: 'low', identityReady: false,
+    hasUsableDirectContact: true, suppressionBlocked: true, lastRequestedAt: NOW,
+  } },
+  { reason: 'qualification_required', overrides: { qualificationState: 'disqualified' } },
+  { reason: 'qualification_required', overrides: { qualificationState: 'merge_review' } },
+  { reason: 'fit_gate_failed', overrides: {
+    fitBand: 'low', identityReady: false, hasUsableDirectContact: true,
+    suppressionBlocked: true, lastRequestedAt: NOW,
+  } },
+  { reason: 'fit_gate_failed', overrides: { fitBand: null } },
+  { reason: 'identity_or_address_missing', overrides: {
+    identityReady: false, hasUsableDirectContact: true,
+    suppressionBlocked: true, lastRequestedAt: NOW,
+  } },
+  { reason: 'identity_or_address_missing', overrides: { cloudEntityId: null } },
+  { reason: 'identity_or_address_missing', overrides: { ownerFullName: '  ' } },
+  { reason: 'identity_or_address_missing', overrides: { situsAddress: null } },
+  { reason: 'direct_contact_exists', overrides: {
+    hasUsableDirectContact: true, suppressionBlocked: true, lastRequestedAt: NOW,
+  } },
+  { reason: 'suppression_blocked', overrides: { suppressionBlocked: true, lastRequestedAt: NOW } },
+  { reason: 'rate_limited', overrides: { lastRequestedAt: NOW } },
+];
 
 function fakeGate(candidate: EnrichmentCandidate) {
   const recordEnrichmentRequested = vi.fn();
   const domain = {
-    getEnrichmentRequestCandidate: vi.fn(() => candidate),
+    getEnrichmentRequestCandidate: vi.fn<(input: { personId: string }) => EnrichmentCandidate>(() => candidate),
     recordEnrichmentRequested,
   };
   return {
@@ -135,6 +174,133 @@ describe('contract schemas mirror the cloud schemas exactly', () => {
 });
 
 describe('EnrichmentRequestWriter', () => {
+  it.each(GATE_CASES)('refuses $reason at entry before store creation, upload, or recording ($overrides)', async ({ reason, overrides }) => {
+    const { gate, domain } = fakeGate({ ...CANDIDATE, ...overrides });
+    const { store, puts } = fakeStore();
+    const createStore = vi.fn(async () => store);
+    await expect(buildWriter({ gate, createStore }).request({ personId: 'p-1' }))
+      .resolves.toEqual({ written: false, refusalReason: reason });
+    expect(createStore).not.toHaveBeenCalled();
+    expect(puts).toEqual([]);
+    expect(domain.recordEnrichmentRequested).not.toHaveBeenCalled();
+    expect(findContactInfoReceiptSchema.safeParse({ written: false, refusalReason: reason }).success).toBe(true);
+  });
+
+  it('rejects the superseded generic refusal vocabulary', () => {
+    expect(findContactInfoReceiptSchema.safeParse({ written: false, refusalReason: 'not_eligible' }).success).toBe(false);
+  });
+
+  it.each(GATE_CASES)('rechecks $reason after credentials settle without uploading or recording ($overrides)', async ({ reason, overrides }) => {
+    const { gate, domain } = fakeGate(CANDIDATE);
+    const { store, puts } = fakeStore();
+    const credentials = deferred<UpstreamObjectStore>();
+    const entered = deferred<void>();
+    const createStore = vi.fn(() => { entered.resolve(); return credentials.promise; });
+    const request = buildWriter({ gate, createStore }).request({ personId: 'p-1' });
+    await entered.promise;
+    domain.getEnrichmentRequestCandidate.mockReturnValue({ ...CANDIDATE, ...overrides });
+    credentials.resolve(store);
+    await expect(request).resolves.toEqual({ written: false, refusalReason: reason });
+    expect(createStore).toHaveBeenCalledTimes(1);
+    expect(puts).toEqual([]);
+    expect(domain.recordEnrichmentRequested).not.toHaveBeenCalled();
+  });
+
+  it('uses final current identity and address for the single validated line and ledger', async () => {
+    const { gate, domain } = fakeGate(CANDIDATE);
+    const { store, puts } = fakeStore();
+    const credentials = deferred<UpstreamObjectStore>();
+    const entered = deferred<void>();
+    const request = buildWriter({ gate, createStore: () => {
+      entered.resolve(); return credentials.promise;
+    } }).request({ personId: 'p-1' });
+    await entered.promise;
+    domain.getEnrichmentRequestCandidate.mockReturnValue({
+      ...CANDIDATE, cloudEntityId: 'ce_01JC0000000000000000000001', ownerFullName: 'CURRENT OWNER',
+      situsAddress: { line1: '45 Current St', locality: 'Cranston', region: 'RI', postalCode: null },
+    });
+    credentials.resolve(store);
+    await expect(request).resolves.toEqual({ written: true, refusalReason: null });
+    expect(puts).toHaveLength(1);
+    expect(enrichmentRequestSchema.parse(JSON.parse(puts[0]!.body))).toEqual({
+      cloud_entity_id: 'ce_01JC0000000000000000000001', requested_at: NOW,
+      owner_full_name: 'CURRENT OWNER',
+      situs_address: { line1: '45 Current St', locality: 'Cranston', region: 'RI', postal_code: null },
+    });
+    expect(domain.recordEnrichmentRequested).toHaveBeenCalledTimes(1);
+    expect(domain.recordEnrichmentRequested).toHaveBeenCalledWith({
+      cloudEntityId: 'ce_01JC0000000000000000000001',
+    });
+  });
+
+  it('does not yield between the final synchronous decision and invoking upload', async () => {
+    const { gate, domain } = fakeGate(CANDIDATE);
+    let yielded = false;
+    domain.getEnrichmentRequestCandidate.mockImplementation(() => {
+      yielded = false;
+      queueMicrotask(() => { yielded = true; });
+      return CANDIDATE;
+    });
+    const putObjectText = vi.fn(async () => { expect(yielded).toBe(false); });
+    await buildWriter({ gate, store: { putObjectText } }).request({ personId: 'p-1' });
+    expect(putObjectText).toHaveBeenCalledTimes(1);
+    expect(domain.getEnrichmentRequestCandidate).toHaveBeenCalledTimes(2);
+  });
+
+  it('coalesces identical concurrent clicks through upload settlement and only then records once', async () => {
+    const { gate, domain } = fakeGate(CANDIDATE);
+    const upload = deferred<void>();
+    const started = deferred<void>();
+    const putObjectText = vi.fn(() => { started.resolve(); return upload.promise; });
+    const createStore = vi.fn(async () => ({ putObjectText }));
+    const writer = buildWriter({ gate, createStore });
+    const first = writer.request({ personId: 'p-1' });
+    const second = writer.request({ personId: 'p-1' });
+    await started.promise;
+    const third = writer.request({ personId: 'p-1' });
+    expect(domain.recordEnrichmentRequested).not.toHaveBeenCalled();
+    upload.resolve();
+    expect(await Promise.all([first, second, third])).toEqual([
+      { written: true, refusalReason: null }, { written: true, refusalReason: null },
+      { written: true, refusalReason: null },
+    ]);
+    expect(createStore).toHaveBeenCalledTimes(1);
+    expect(putObjectText).toHaveBeenCalledTimes(1);
+    expect(domain.recordEnrichmentRequested).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares concurrent upload failure without recording or automatically replaying', async () => {
+    const { gate, domain } = fakeGate(CANDIDATE);
+    const putObjectText = vi.fn(async () => { throw new Error('AccessDenied'); });
+    const writer = buildWriter({ gate, store: { putObjectText } });
+    const results = await Promise.allSettled([
+      writer.request({ personId: 'p-1' }), writer.request({ personId: 'p-1' }),
+    ]);
+    expect(results.map((result) => result.status)).toEqual(['rejected', 'rejected']);
+    expect(putObjectText).toHaveBeenCalledTimes(1);
+    expect(domain.recordEnrichmentRequested).not.toHaveBeenCalled();
+  });
+
+  it('does not serialize unrelated people behind a pending upload', async () => {
+    const { gate, domain } = fakeGate(CANDIDATE);
+    domain.getEnrichmentRequestCandidate.mockImplementation(({ personId }) => ({
+      ...CANDIDATE,
+      cloudEntityId: personId === 'p-2' ? 'ce_01JC0000000000000000000001' : CANDIDATE.cloudEntityId,
+    }));
+    const upload = deferred<void>();
+    const started = deferred<void>();
+    const putObjectText = vi.fn().mockImplementationOnce(() => {
+      started.resolve(); return upload.promise;
+    }).mockResolvedValue(undefined);
+    const writer = buildWriter({ gate, store: { putObjectText } });
+    const first = writer.request({ personId: 'p-1' });
+    await started.promise;
+    await expect(writer.request({ personId: 'p-2' })).resolves.toEqual({ written: true, refusalReason: null });
+    upload.resolve();
+    await first;
+    expect(putObjectText).toHaveBeenCalledTimes(2);
+  });
+
   it('writes exactly one cloud-schema line and records the rate-limit timestamp', async () => {
     const { gate, domain } = fakeGate(CANDIDATE);
     const { store, puts } = fakeStore();
@@ -176,7 +342,7 @@ describe('EnrichmentRequestWriter', () => {
   it('allows a request once the 30-day window has fully elapsed', async () => {
     const { gate } = fakeGate({
       ...CANDIDATE,
-      lastRequestedAt: '2026-08-01T15:00:00.000Z',
+      lastRequestedAt: '2026-08-02T15:00:00.000Z',
     });
     const { store, puts } = fakeStore();
 
@@ -192,9 +358,9 @@ describe('EnrichmentRequestWriter', () => {
     const { store, puts } = fakeStore();
 
     await expect(buildWriter({ gate: noLink.gate, store }).request({ personId: 'p-1' }))
-      .resolves.toEqual({ written: false, refusalReason: 'not_eligible' });
+      .resolves.toEqual({ written: false, refusalReason: 'identity_or_address_missing' });
     await expect(buildWriter({ gate: noAddress.gate, store }).request({ personId: 'p-1' }))
-      .resolves.toEqual({ written: false, refusalReason: 'not_eligible' });
+      .resolves.toEqual({ written: false, refusalReason: 'identity_or_address_missing' });
     expect(puts).toEqual([]);
   });
 
