@@ -215,12 +215,15 @@ describe('SourceService', () => {
     };
   }
 
-  function spawnSameSourceContender(sourceId: string): {
+  function spawnSameSourceContender(
+    sourceId: string,
+    command: CanonicalIntakeCommand = canonicalRaceCommand(sourceId),
+  ): {
     readyPath: string;
     exit: Promise<{ code: number | null; stderr: string }>;
   } {
     const readyPath = `${tempDatabase.path}.${sourceId}.receipt-ready`;
-    const commandJson = serializeCanonicalIntakeCommand(canonicalRaceCommand(sourceId));
+    const commandJson = serializeCanonicalIntakeCommand(command);
     const resultJson = serializeCanonicalIntakeResult(raceResult(sourceId));
     const sourceRecordJson = JSON.stringify({
       formatVersion: 1,
@@ -756,6 +759,42 @@ describe('SourceService', () => {
     expect(counts()).toMatchObject({
       persons: 1, prospects: 1, source_events: 1, source_intake_receipts: 1,
     });
+  }, 10_000);
+
+  it('replays legacy receipts with implicit valid contacts without weakening command equality', async () => {
+    const sourceId = 'legacy-implicit-valid';
+    const legacyCommand = {
+      ...canonicalRaceCommand(sourceId),
+      contacts: canonicalRaceCommand(sourceId).contacts.map((contact) => {
+        const { validationState: _validationState, ...legacyContact } = contact;
+        return legacyContact;
+      }),
+    } as CanonicalIntakeCommand;
+    const contender = spawnSameSourceContender(sourceId, legacyCommand);
+    await waitUntil(() => existsSync(contender.readyPath), 5_000);
+    expect(await contender.exit).toEqual({ code: 0, stderr: '' });
+
+    const legacyReceipt = receipts.getBySourceEventId(sourceId);
+    expect(legacyReceipt).not.toBeNull();
+    expect(legacyReceipt?.command.contacts[0]).not.toHaveProperty('validationState');
+    const legacyCommandJson = legacyReceipt?.commandJson;
+    const beforeReplay = counts();
+
+    expect(service.createPersonProspect(baseCommand(sourceId))).toEqual(raceResult(sourceId));
+    expect(counts()).toEqual(beforeReplay);
+    expect(receipts.getBySourceEventId(sourceId)?.commandJson)
+      .toBe(legacyCommandJson);
+
+    expect(() => service.createPersonProspect({
+      ...baseCommand(sourceId),
+      contacts: baseCommand(sourceId).contacts.map((contact) => ({
+        ...contact,
+        validationState: 'unverified' as const,
+      })),
+    })).toThrow(expect.objectContaining({
+      name: 'IntakeIdempotencyConflictError', reason: 'command_mismatch',
+    }));
+    expect(counts()).toEqual(beforeReplay);
   }, 10_000);
 
   it.each([

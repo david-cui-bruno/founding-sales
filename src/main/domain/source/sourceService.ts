@@ -482,7 +482,7 @@ export class SourceService {
     const commandJson = serializeCanonicalIntakeCommand(canonicalCommand);
     const receipt = this.receipts.getBySourceEventId(command.source.id);
     if (receipt !== null) {
-      if (receipt.commandJson !== commandJson) {
+      if (!commandsMatchForReplay(receipt.command, receipt.commandJson, commandJson)) {
         throw new IntakeIdempotencyConflictError(command.source.id, 'command_mismatch');
       }
       return receipt.result;
@@ -1090,6 +1090,24 @@ function toCanonicalIntakeCommand(command: NormalizedCommand): CanonicalIntakeCo
     },
     segment: command.segment,
   };
+}
+
+function commandsMatchForReplay(
+  storedCommand: CanonicalIntakeCommand,
+  storedCommandJson: string,
+  incomingCommandJson: string,
+): boolean {
+  if (storedCommandJson === incomingCommandJson) return true;
+  if (storedCommand.contacts.every((contact) => contact.validationState !== undefined)) {
+    return false;
+  }
+  return serializeCanonicalIntakeCommand({
+    ...storedCommand,
+    contacts: storedCommand.contacts.map((contact) => ({
+      ...contact,
+      validationState: contact.validationState ?? 'valid',
+    })),
+  }) === incomingCommandJson;
 }
 
 export function segmentForChannel(
