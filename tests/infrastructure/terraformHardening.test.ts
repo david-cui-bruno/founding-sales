@@ -732,3 +732,76 @@ describe("scheduled source Terraform hardening", () => {
     expect(section).not.toContain("TF_VAR_");
   });
 });
+
+describe("managed secret and remote state preparation", () => {
+  it("configures identifier-only Lambda parameters and rejects secret-valued Terraform inputs", () => {
+    const variables = readTerraform("variables.tf");
+    const lambda = readTerraform("lambda.tf");
+    const adapters = readTerraform("adapters.tf");
+    const example = readFileSync(join(terraformDirectory, "terraform.tfvars.example"), "utf8");
+
+    expect(lambda).toContain("NTFY_TOPIC_PARAM");
+    expect(adapters).toContain("TRACERFY_API_KEY_PARAM");
+    expect(adapters).toContain("HMAC_SALT_PARAM");
+    expect(lambda).not.toMatch(/\bNTFY_TOPIC\s*=/);
+    expect(adapters).not.toMatch(/\bTRACERFY_API_KEY\s*=/);
+    expect(variables).not.toContain('variable "ntfy_topic"');
+    expect(variables).not.toContain('variable "tracerfy_api_key"');
+    expect(example).not.toMatch(/(?:secret|token|password|api[_-]?key)\s*=\s*"[^"\n]+"/i);
+  });
+
+  it("grants exact SSM parameter ARNs and only the expected KMS key", () => {
+    const iam = readTerraform("iam.tf");
+    const secrets = readTerraform("secrets.tf");
+    const mailPolicy = extractBlock(iam, 'data "aws_iam_policy_document" "lambda_mail_parse"');
+    const adapterPolicy = extractBlock(iam, 'data "aws_iam_policy_document" "lambda_adapters"');
+
+    expect(mailPolicy).toContain("parameter/callie-sourcing/ntfy-topic");
+    expect(adapterPolicy).toContain("parameter/callie-sourcing/tracerfy-api-key");
+    expect(adapterPolicy).toContain("parameter/callie-sourcing/membership-hmac-salt");
+    expect(occurrences(mailPolicy, '"ssm:GetParameter"')).toBe(1);
+    expect(occurrences(adapterPolicy, '"ssm:GetParameter"')).toBe(1);
+    expect(mailPolicy).toContain('"kms:Decrypt"');
+    expect(adapterPolicy).toContain('"kms:Decrypt"');
+    expect(mailPolicy).toContain("aws_kms_key.runtime_secrets.arn");
+    expect(adapterPolicy).toContain("aws_kms_key.runtime_secrets.arn");
+    expect(iam).not.toMatch(/ssm:[^"\n]*\*/);
+    expect(secrets).toContain('resource "aws_kms_key" "runtime_secrets"');
+    expect(secrets).not.toContain('resource "aws_ssm_parameter"');
+  });
+
+  it("uses a partial S3 backend and public secret-free examples", () => {
+    const versions = readTerraform("versions.tf");
+    const backend = readFileSync(join(terraformDirectory, "backend.hcl.example"), "utf8");
+
+    expect(versions).toContain('backend "s3" {}');
+    expect(backend).toContain('bucket         = "callie-sourcing-tfstate-ACCOUNT_ID"');
+    expect(backend).toContain('key            = "cloud/terraform.tfstate"');
+    expect(backend).toContain('dynamodb_table = "callie-sourcing-tflock"');
+    expect(backend).toContain("encrypt        = true");
+    expect(backend).not.toMatch(/(?:secret|token|password|api[_-]?key)\s*=/i);
+  });
+
+  it("ships a fail-closed state bootstrap and documents both migration confirmations", () => {
+    const script = readFileSync(join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh"), "utf8");
+    const readme = readFileSync(join(process.cwd(), "cloud", "README.md"), "utf8");
+
+    expect(script).toContain("set -euo pipefail");
+    expect(script).toContain("aws s3api head-bucket");
+    expect(script).toContain("aws dynamodb describe-table");
+    expect(script).toContain("NoSuchBucket");
+    expect(script).toContain("ResourceNotFoundException");
+    expect(script).toContain("unable to verify that the state bucket is absent");
+    expect(script).toContain("unable to verify that the lock table is absent");
+    expect(script).toContain("put-bucket-encryption");
+    expect(script).toContain("put-bucket-versioning");
+    expect(script).toContain("put-public-access-block");
+    expect(script).toContain("SSEAlgorithm=aws:kms");
+    expect(script).toMatch(/exit 1/);
+    expect(readme).toContain("Hold Point 1");
+    expect(readme).toContain("explicit founder confirmation");
+    expect(readme).toContain("second explicit confirmation");
+    expect(readme).toContain("tofu init -migrate-state");
+    expect(readme).toContain("No apply is authorized");
+  });
+});

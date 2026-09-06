@@ -64,6 +64,7 @@ function fakeDeps(state: FakeState): HandlerDeps {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       }) as any,
     },
+    getNtfyTopic: async () => null,
     env: {
       RAW_MAIL_BUCKET: "raw-bucket",
       INBOX_BUCKET: "inbox-bucket",
@@ -257,6 +258,22 @@ function assertSafeBoundaryFailure(failure: unknown, originalName: string, origi
 }
 
 describe("exported handler boundary", () => {
+  it("resolves the optional ntfy topic once per invocation without warm caching", async () => {
+    const state = newState("msg-test", testMailMime);
+    const deps = fakeDeps(state);
+    let lookups = 0;
+    deps.getNtfyTopic = async () => {
+      lookups += 1;
+      return null;
+    };
+    const invocation = createHandler(() => deps);
+
+    await invocation(sesEvent("msg-test"));
+    state.dynamoKeys.clear();
+    await invocation(sesEvent("msg-test"));
+
+    expect(lookups).toBe(2);
+  });
   it("replaces PII-bearing provider failures with the fixed safe error", async () => {
     const state = newState("other-message", Buffer.from(""));
     state.missingObjectError = Object.assign(

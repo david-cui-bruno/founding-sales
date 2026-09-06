@@ -51,6 +51,20 @@ data "aws_iam_policy_document" "lambda_mail_parse" {
   }
 
   statement {
+    sid       = "ReadNtfyTopic"
+    effect    = "Allow"
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/callie-sourcing/ntfy-topic"]
+  }
+
+  statement {
+    sid       = "DecryptRuntimeSecrets"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = [aws_kms_key.runtime_secrets.arn]
+  }
+
+  statement {
     sid    = "Logs"
     effect = "Allow"
     actions = [
@@ -147,14 +161,22 @@ data "aws_iam_policy_document" "lambda_adapters" {
     resources = [aws_sns_topic.alerts.arn]
   }
 
-  # Enricher: membership HMAC salt (shared secret with the Mac app) for
-  # suppression-table lookups. SecureString under the aws/ssm managed key,
-  # so ssm:GetParameter alone suffices.
+  # Enricher runtime values are fetched by exact identifier only.
   statement {
-    sid       = "ReadMembershipHmacSalt"
+    sid     = "ReadEnricherParameters"
+    effect  = "Allow"
+    actions = ["ssm:GetParameter"]
+    resources = [
+      "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/callie-sourcing/tracerfy-api-key",
+      "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/callie-sourcing/membership-hmac-salt",
+    ]
+  }
+
+  statement {
+    sid       = "DecryptRuntimeSecrets"
     effect    = "Allow"
-    actions   = ["ssm:GetParameter"]
-    resources = ["arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/callie-sourcing/membership-hmac-salt"]
+    actions   = ["kms:Decrypt"]
+    resources = [aws_kms_key.runtime_secrets.arn]
   }
 
   statement {

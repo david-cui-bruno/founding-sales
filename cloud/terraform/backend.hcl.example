@@ -1,0 +1,7 @@
+# Public identifiers only. Copy to backend.hcl after Hold Point 1 approval and
+# replace ACCOUNT_ID with the reviewed shared-account identifier.
+bucket         = "callie-sourcing-tfstate-ACCOUNT_ID"
+key            = "cloud/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "callie-sourcing-tflock"
+encrypt        = true

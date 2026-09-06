@@ -67,6 +67,29 @@ must remain outside Terraform state and in the Mac app's Keychain.
 The `schedules_enabled` and `scheduled_health_alerts_enabled` gates remain false
 through source verification and through any separately approved baseline plan.
 
+## Hold Point 1: managed secrets and remote state
+
+Task 9 prepares only reversible source. Lambda configuration contains the public
+identifiers `TRACERFY_API_KEY_PARAM`, `NTFY_TOPIC_PARAM`, and `HMAC_SALT_PARAM`.
+Encrypted values are looked up from SSM once per invocation and are never stored
+in Terraform variables or state. The committed examples contain no replacement
+values. No apply is authorized by this preparation.
+
+Stop before any operational step. Obtain explicit founder confirmation before
+entering replacement values, creating state infrastructure, importing existing
+resources, migrating state, or applying Terraform. Keep both schedule gates
+false throughout the separately reviewed baseline change.
+
+The bootstrap script is an operator aid for that later approved workflow. It
+refuses existing bucket or table names and creates KMS-encrypted, versioned,
+publicly blocked S3 storage plus a KMS-encrypted DynamoDB lock table. Do not run
+it during source verification.
+
+After the protected backend is reviewed, obtain a second explicit confirmation
+before `tofu init -migrate-state`. Compare state serial and resource count before
+and after migration, verify locking, and retain private rollback evidence before
+removing local state. Schedule enablement requires a later health review.
+
 ## SES sandbox note
 
 Inbound receiving works while the account is in the SES sandbox. Production
