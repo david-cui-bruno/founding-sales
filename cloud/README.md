@@ -108,8 +108,15 @@ only when the full chain passes. Hostile same-UID or root compromise is explicit
 out of scope.
 
 1. **Stage A: prepare and verify the runtime key.** Run the dedicated key
-   bootstrap through the approved operator path. Retain its mode-0600 receipt,
-   verify the alias target and enabled rotation, and stop. Terraform reads this
+   bootstrap through the approved operator path. It creates a durable pending
+   receipt before AWS creation, tags the key with its unique run identity, and
+   retains enough evidence to reconcile a lost create-key or create-alias response.
+   If preparation stops ambiguously, do not retry `--prepare`; run `--recover` with
+   that same private receipt. Recovery deletes only an alias proven to target the
+   tagged key, verifies alias absence, schedules only the exactly tagged key for
+   deletion, verifies `PendingDeletion` plus a deletion date, and claims cleanup
+   only after every check succeeds. Retain a verified mode-0600 receipt, verify
+   the alias target and enabled rotation, and stop. Terraform reads this
    pre-existing alias; it does not create or replace the key during cutover.
 2. **Stage B: enter and prevalidate all three parameters.** Enter Tracerfy, ntfy,
    and membership-HMAC values directly into encrypted SSM under the prepared
@@ -136,10 +143,22 @@ table SSE, and readiness before success. An uncatchable interruption can still
 leave a partial resource. Inspect the receipt and run `--recover` before retrying
 or migration. Do not run either bootstrap during source verification.
 
+The backend configuration must include the exact reviewed state-key ARN as
+identifier-only `kms_key_id`. The backend operator identity needs S3 access scoped
+to the reviewed bucket/object and exact KMS permissions `kms:Encrypt`,
+`kms:Decrypt`, `kms:GenerateDataKey`, and `kms:DescribeKey` on that state-key ARN.
+Do not grant those KMS actions on `*` or on the runtime-secret key.
+
 After the protected backend is reviewed, obtain a second explicit confirmation
 before `tofu init -migrate-state`. Compare state serial and resource count before
 and after migration, verify locking, and retain private rollback evidence before
-removing local state. Schedule enablement requires a later health review.
+removing local state. Then verify the actual state object rather than relying on
+bucket defaults: run an approved `aws s3api head-object` for the exact reviewed
+bucket and `cloud/terraform.tfstate` key, inspect only `ServerSideEncryption` and
+`SSEKMSKeyId`, require `ServerSideEncryption` to equal `aws:kms`, and require
+`SSEKMSKeyId` to equal the exact reviewed state-key ARN. Do not accept an alias,
+SSE-S3/AES256, another key ARN, or missing metadata. Schedule enablement requires
+a later health review.
 
 ## SES sandbox note
 
