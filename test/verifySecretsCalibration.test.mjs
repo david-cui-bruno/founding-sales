@@ -3,7 +3,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createPackage } from '@electron/asar';
+import { finished } from 'node:stream/promises';
+import { createPackage, extractFile, listPackage } from '@electron/asar';
 import { expect, it } from 'vitest';
 import { scanWithGitleaks, verifySecrets } from '../scripts/verifySecrets.mjs';
 
@@ -206,7 +207,18 @@ it('calibrates real 8.30.1 on deleted generated-path and merge-only history plus
     }
     put('archive/inside.js', sentinel('archive')); put('archive/node_modules/dependency.js', sentinel('archive'));
     const resources = join(root, 'out/Callie.app/Contents/Resources'); mkdirSync(resources, { recursive: true });
-    await createPackage(join(root, 'archive'), join(resources, 'app.asar'));
+    const archivePath = join(resources, 'app.asar');
+    const archiveStream = await createPackage(join(root, 'archive'), archivePath);
+    // The pinned ASAR factory returns after end(), before the output is finished.
+    await finished(archiveStream);
+    const sourceDependency = readFileSync(join(root, 'archive/node_modules/dependency.js'));
+    const extractedDependency = extractFile(archivePath, 'node_modules/dependency.js');
+    expect(listPackage(archivePath)).toContain('/node_modules/dependency.js');
+    expect(sourceDependency.length).toBe(50);
+    expect(sourceDependency.equals(Buffer.from(sentinel('archive')))).toBe(true);
+    expect(extractedDependency.length).toBe(sourceDependency.length);
+    expect(createHash('sha256').update(extractedDependency).digest('hex') === createHash('sha256').update(sourceDependency).digest('hex')).toBe(true);
+    expect(archiveStream.writableFinished).toBe(true);
     put('out/Callie.app/Contents/Resources/app.asar.unpacked/module.node', sentinel('archive'));
     put('out/Callie.app/Contents/Helpers/helper.bin', sentinel('archive'));
     expect(verifySecrets({ root, mode: 'package', run })[0].findings).toBeGreaterThanOrEqual(1);

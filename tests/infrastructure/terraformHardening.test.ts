@@ -989,10 +989,7 @@ describe("scheduled source Terraform hardening", () => {
       "lambdas/schedule-watchdog/         # daily monthly schedule-health watchdog",
     );
     expect(section).toContain(
-      'export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; (cd cloud/lambdas/schedule-watchdog && n' +
-        "pm run typecheck && n" +
-        "pm test && n" +
-        "pm run build)",
+      'export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run verify:lambdas',
     );
     expect(compactSection).toContain("trusted managed state");
     expect(compactSection).toContain("managed secret identifiers");
@@ -1106,7 +1103,9 @@ describe("scheduled source Terraform hardening", () => {
       .flatMap((match) => match[1]!.trim().split("\n"))
       .filter(Boolean);
     expect(commands).toEqual([
-      'export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; (cd cloud/lambdas/schedule-watchdog && npm run typecheck && npm test && npm run build)',
+      'export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run lint:tracked',
+      'export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run verify:lambdas',
+      'export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run verify:secrets',
       'export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/infrastructure/terraformHardening.test.ts',
       'export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run typecheck',
       "tofu fmt -check -recursive cloud/terraform",

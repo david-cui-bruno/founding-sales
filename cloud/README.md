@@ -48,9 +48,9 @@ tofu fmt -check -recursive cloud/terraform
 
 These commands require Node24.20.0 and separately installed lockfiles for all
 **ten** Lambda packages. Install shared first, then each of the nine function
-packages with its own `npm ci --prefix cloud/lambdas/<package>`, using the same
-Node PATH prefix above. See the root README for the tracked lockfile install
-loop. The verifier does not install dependencies and runs no deployments or
+packages from each package's pinned lockfile. Use the root README's tracked
+lockfile install loop with its explicit Node PATH prefix. The verifier does
+not install dependencies and runs no deployments or
 provider calls. Shared runs typecheck/test; every function also builds.
 Tracked lint includes source/configuration, not Lambda dist or dependencies.
 Gitleaks8.30.1 history scanning does not exclude generated paths, while context

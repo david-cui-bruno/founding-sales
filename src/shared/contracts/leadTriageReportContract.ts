@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { personIdSchema, salesCycleIdSchema, outboundAuthorizationReasonCodeSchema } from './commonContract';
+import { personIdSchema, salesCycleIdSchema, outboundAuthorizationReasonCodeSchema } from './commonContract.ts';
 
 export const leadTriageSnapshotRequestSchema = z.object({
   limit: z.number().int().min(20).max(30),
