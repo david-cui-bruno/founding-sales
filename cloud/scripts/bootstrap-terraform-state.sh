@@ -23,8 +23,23 @@ bucket_phase="absent"
 table_phase="absent"
 
 write_receipt() {
-  local temporary_receipt="${receipt}.tmp.$$"
+  local receipt_directory receipt_basename temporary_receipt temporary_type
+  receipt_directory=$(dirname -- "$receipt") || return 1
+  receipt_basename=$(basename -- "$receipt") || return 1
   umask 077
+  temporary_receipt=$(mktemp "${receipt_directory}/.${receipt_basename}.tmp.XXXXXXXX") || return 1
+  case "$temporary_receipt" in
+    "${receipt_directory}/.${receipt_basename}.tmp."*) ;;
+    *) rm -f -- "$temporary_receipt"; return 1 ;;
+  esac
+  temporary_type=$(stat -f '%HT' "$temporary_receipt") || {
+    rm -f -- "$temporary_receipt"
+    return 1
+  }
+  [[ ! -L "$temporary_receipt" && -f "$temporary_receipt" && "$temporary_type" == "Regular File" ]] || {
+    rm -f -- "$temporary_receipt"
+    return 1
+  }
   printf 'format=%s\nversion=%s\naccount_id=%s\nregion=%s\nrun_id=%s\nbucket=%s\ntable=%s\nkms_key_arn=%s\nbucket_phase=%s\ntable_phase=%s\n' \
     "$receipt_format" "$receipt_version" "$account_id" "$region" "$run_id" \
     "$bucket_name" "$lock_table_name" "$kms_key_arn" "$bucket_phase" "$table_phase" >"$temporary_receipt" || {

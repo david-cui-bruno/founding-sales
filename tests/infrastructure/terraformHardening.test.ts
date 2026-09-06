@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -139,6 +140,7 @@ function runRecoveryScenario(scenario: string) {
   const binDirectory = join(directory, "bin");
   const receipt = join(directory, "receipt");
   const awsLog = join(directory, "aws.log");
+  const symlinkTarget = join(directory, "symlink-target");
   mkdirSync(binDirectory);
   writeFileSync(receipt, recoveryReceipt(), { mode: 0o600 });
   const fakeAws = join(binDirectory, "aws");
@@ -191,9 +193,33 @@ exit 99
     const fakeMv = join(binDirectory, "mv");
     writeFileSync(fakeMv, "#!/usr/bin/env bash\nexit 45\n", { mode: 0o755 });
   }
+  let command = join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh");
+  if (scenario === "receipt-temp-symlink") {
+    writeFileSync(symlinkTarget, "safe target contents\n", { mode: 0o600 });
+    const fakeMktemp = join(binDirectory, "mktemp");
+    writeFileSync(
+      fakeMktemp,
+      `#!/usr/bin/env bash
+malicious_path="$FAKE_WORK/.receipt.tmp.attacker"
+ln -s "$SYMLINK_TARGET" "$malicious_path"
+printf '%s\\n' "$malicious_path"
+`,
+      { mode: 0o755 },
+    );
+    const wrapper = join(directory, "run-bootstrap");
+    writeFileSync(
+      wrapper,
+      `#!/usr/bin/env bash
+ln -s "$SYMLINK_TARGET" "$RECEIPT.tmp.$$"
+source "$BOOTSTRAP_SCRIPT" --recover "$RECEIPT"
+`,
+      { mode: 0o755 },
+    );
+    command = wrapper;
+  }
   chmodSync(fakeAws, 0o755);
   const result = spawnSync(
-    join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh"),
+    command,
     ["--recover", receipt],
     {
       cwd: directory,
@@ -204,6 +230,9 @@ exit 99
         FAKE_AWS_LOG: awsLog,
         FAKE_SCENARIO: scenario,
         FAKE_WORK: directory,
+        BOOTSTRAP_SCRIPT: join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh"),
+        RECEIPT: receipt,
+        SYMLINK_TARGET: symlinkTarget,
       },
     },
   );
@@ -211,8 +240,12 @@ exit 99
   const receiptContents = readFileSync(receipt, "utf8");
   const awsCalls = readFileSync(awsLog, "utf8");
   const mode = statSync(receipt).mode & 0o777;
+  const receiptIsSymlink = lstatSync(receipt).isSymbolicLink();
+  const symlinkTargetContents = scenario === "receipt-temp-symlink"
+    ? readFileSync(symlinkTarget, "utf8")
+    : undefined;
   rmSync(directory, { recursive: true, force: true });
-  return { result, output, receiptContents, awsCalls, mode };
+  return { result, output, receiptContents, awsCalls, mode, receiptIsSymlink, symlinkTargetContents };
 }
 
 describe("scheduled source Terraform hardening", () => {
@@ -1036,6 +1069,25 @@ describe("managed secret and remote state preparation", () => {
     expect(output).not.toContain("recovery reconciliation completed");
     expect(awsCalls).not.toContain("delete-table");
     expect(awsCalls).not.toContain("delete-bucket");
+    expect(receiptContents).toBe(recoveryReceipt());
+    expect(mode).toBe(0o600);
+  });
+
+  it("fails closed without following prepositioned or returned receipt temp symlinks", () => {
+    const {
+      result,
+      output,
+      receiptContents,
+      mode,
+      receiptIsSymlink,
+      symlinkTargetContents,
+    } = runRecoveryScenario("receipt-temp-symlink");
+
+    expect(result.status).not.toBe(0);
+    expect(output).not.toContain("recovery reconciliation completed");
+    expect(output).not.toContain("automatic cleanup completed");
+    expect(symlinkTargetContents).toBe("safe target contents\n");
+    expect(receiptIsSymlink).toBe(false);
     expect(receiptContents).toBe(recoveryReceipt());
     expect(mode).toBe(0o600);
   });
