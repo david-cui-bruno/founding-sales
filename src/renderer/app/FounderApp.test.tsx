@@ -121,6 +121,7 @@ function fakeCallieApi(): CalliePreloadApi {
     leadDetail: {
       get: vi.fn(async () => detail),
       beginOutbound: pending,
+      getOutboundCapabilities: pending,
       confirmTransition: pending,
     },
     today: {

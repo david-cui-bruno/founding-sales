@@ -106,6 +106,76 @@ describe('registerApplicationIpc', () => {
     return { registrars, calls };
   }
 
+  it.each([3, 7, 13])('rolls back all successful outer registrations when registrar %s fails', (nth) => {
+    const registry = new Set<string>();
+    const order: string[] = [];
+    const registrationError = new Error('register');
+    const cleanupError = new Error('cleanup');
+    const { registrars } = fakeRegistrars([]);
+    let index = 0;
+    for (const name of Object.keys(registrars) as (keyof FeatureRegistrars)[]) {
+      const position = ++index;
+      registrars[name] = vi.fn(() => {
+        if (position === nth) throw registrationError;
+        registry.add(name);
+        return () => {
+          registry.delete(name);
+          order.push(name);
+          if (position === 1) throw cleanupError;
+        };
+      });
+    }
+    let caught: unknown;
+    try { registerApplicationIpc(fakeGate(), undefined, registrars, explicitSourcingProvider(), recoveryProvider); } catch (error) { caught = error; }
+    expect(caught).toBeInstanceOf(AggregateError);
+    expect((caught as AggregateError).errors).toEqual([registrationError, cleanupError]);
+    expect(registry.size).toBe(0);
+    expect(order).toEqual(Object.keys(registrars).slice(0, nth - 1).reverse());
+  });
+
+  it('cleans every owned outer handler in reverse and is idempotent after errors', () => {
+    const registry = new Set<string>();
+    const order: string[] = [];
+    const { registrars } = fakeRegistrars([]);
+    for (const name of Object.keys(registrars) as (keyof FeatureRegistrars)[]) {
+      registrars[name] = vi.fn(() => {
+        registry.add(name);
+        return () => { registry.delete(name); order.push(name); if (name === 'registerRecoveryIpc') throw new Error('cleanup'); };
+      });
+    }
+    const dispose = registerApplicationIpc(fakeGate(), undefined, registrars, explicitSourcingProvider(), recoveryProvider);
+    expect(dispose).toThrow();
+    expect(registry.size).toBe(0);
+    expect(order).toEqual(Object.keys(registrars).reverse());
+    expect(dispose).not.toThrow();
+    expect(order).toHaveLength(13);
+  });
+
+  it('uses the ninth outbound service argument without displacing enrichment or shell arguments', async () => {
+    const request = { commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', channel: 'call' as const,
+      personId: 'p', salesCycleId: 's', contactMethodId: 'c', expectedContactSnapshot: 'a'.repeat(64) };
+    const receipt = { commandId: request.commandId, channel: 'call' as const, status: 'unknown' as const,
+      reasonCode: 'handoff_uncertain' as const, mutation: { revision: 1, affectedPersonIds: ['p'], affectedSalesCycleIds: ['s'] } };
+    const outbound = { beginOutbound: vi.fn(async () => receipt), getCapabilities: vi.fn(), invalidate: vi.fn(), resumeAfterUnlock: vi.fn(), dispose: vi.fn() };
+    const enrichment = { request: vi.fn(async () => ({ written: false, refusalReason: 'credentials_unavailable' as const })) };
+    const shell = { revealDatabase: vi.fn(), revealLogDirectory: vi.fn() };
+    const { registrars } = fakeRegistrars(Array.from({ length: 13 }, () => vi.fn()));
+    const registerDetail = vi.fn<FeatureRegistrars['registerLeadDetailIpc']>(() => vi.fn());
+    registrars.registerLeadDetailIpc = registerDetail;
+    const gate = fakeGate();
+    registerApplicationIpc(gate, undefined, registrars, explicitSourcingProvider(), recoveryProvider,
+      shell, enrichment, '/fixture/logs', outbound);
+    const provider = registerDetail.mock.calls[0][0];
+    await expect(provider.beginOutbound(request)).resolves.toEqual(receipt);
+    await provider.getOutboundCapabilities();
+    await provider.findContactInfo({ personId: 'p' });
+    expect(outbound.beginOutbound).toHaveBeenCalledWith(request);
+    expect(outbound.getCapabilities).toHaveBeenCalledTimes(1);
+    expect(enrichment.request).toHaveBeenCalledWith({ personId: 'p' });
+    expect(registrars.registerShellIpc).toHaveBeenCalledWith(shell, undefined);
+    expect(gate.withDomain).not.toHaveBeenCalled();
+  });
+
   it('registers all thirteen feature slices and unregisters each exactly once', () => {
     const unregisters = Array.from({ length: 13 }, () => vi.fn());
     const { registrars, calls } = fakeRegistrars(unregisters);
@@ -198,7 +268,7 @@ describe('registerApplicationIpc', () => {
       updateLeadField: vi.fn(() => 'updated'),
       bulkUpdateLeads: vi.fn(() => 'bulk'),
       getLeadDetail: vi.fn(() => 'detail'),
-      beginOutbound: vi.fn(() => 'outbound'),
+      recordOutboundRefusal: vi.fn(() => 'outbound'),
       confirmTransition: vi.fn(() => 'transition'),
       getToday: vi.fn(() => 'today'),
       completePrimaryAction: vi.fn(() => 'complete'),

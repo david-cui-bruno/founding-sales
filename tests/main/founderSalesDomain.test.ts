@@ -408,12 +408,10 @@ describe('FounderSalesDomain', () => {
       });
     });
 
-    it('disables the old MutationReceipt API with a fixed safe error and zero writes', () => {
-      const request = setup();
+    it('removes the obsolete MutationReceipt outbound entrypoint without writes', () => {
+      setup();
       const before = database.raw.prepare('SELECT total_changes() AS n').get();
-      expect(() => domain.beginOutbound({ channel: request.channel, personId: request.personId,
-        salesCycleId: request.salesCycleId, contactMethodId: request.contactMethodId }))
-        .toThrow(expect.objectContaining({ code: 'ACTION_NOT_SUPPORTED', message: 'Phone handoff is not integrated yet.' }));
+      expect('beginOutbound' in domain).toBe(false);
       expect(database.raw.prepare('SELECT total_changes() AS n').get()).toEqual(before);
     });
 

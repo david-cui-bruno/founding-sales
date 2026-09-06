@@ -10,10 +10,14 @@ import {
 } from '../../../shared/contracts/leadDetailContract';
 import { InspectorOverview } from './InspectorOverview';
 import type { FindContactInfoReceipt } from '../../../shared/contracts/enrichmentRequestContract';
+import type { OutboundRequest, OutboundReceipt, OutboundCapabilities } from '../../../shared/contracts/outboundContract';
 import { LeadInspectorProvider } from './LeadInspectorProvider';
 import { useLeadInspector } from './useLeadInspector';
 
 const WIDTH_KEY = 'callie.inspector.width';
+
+const unavailable = { state: 'unavailable', reasonCode: 'not_integrated' } as const;
+const capabilities: OutboundCapabilities = { phoneHandoff: { state: 'available', reasonCode: null }, callObservation: unavailable, recording: unavailable, messagesSend: unavailable, gmailSend: unavailable, managedAudioImport: unavailable, appleTranscriptExtraction: unavailable, localDrafts: true };
 
 const receipt = {
   revision: 9,
@@ -173,7 +177,8 @@ const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
 function createApi(detail: LeadDetail) {
   return {
     get: vi.fn(async () => detail),
-    beginOutbound: vi.fn(async () => receipt),
+    beginOutbound: vi.fn(async (request: OutboundRequest): Promise<OutboundReceipt> => ({ commandId: request.commandId, channel: request.channel, status: 'handoff_accepted', reasonCode: null, mutation: receipt })),
+    getOutboundCapabilities: vi.fn(async () => capabilities),
     confirmTransition: vi.fn(async () => receipt),
     dismissLead: vi.fn(async () => receipt),
     overrideCloudScore: vi.fn(async () => receipt),
@@ -212,6 +217,43 @@ afterEach(() => {
 });
 
 describe('LeadInspector', () => {
+  it('requires explicit Phone confirmation before any outbound invocation', async () => {
+    const api = createApi(detailFor());
+    await renderInspector(api);
+    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Open Phone' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel call' }));
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+  });
+
+  it('clears unsubmitted confirmation on snapshot/channel changes and submits only the final current contact', async () => {
+    const detail = detailFor();
+    const api = createApi(detail);
+    const props = { onBeginOutbound: api.beginOutbound, onConfirmTransition: vi.fn(), onDismissLead: vi.fn(), onOverrideCloudScore: vi.fn(), capabilities };
+    const { rerender } = render(<InspectorOverview detail={detail} {...props} />);
+    const uuid = vi.spyOn(crypto, 'randomUUID');
+    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    expect(uuid).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel call' }));
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    const changed = detailFor({ phones: [{ ...detail.phones[0], contactSnapshot: 'b'.repeat(64) }] });
+    rerender(<InspectorOverview detail={changed} {...props} />);
+    expect(screen.queryByRole('button', { name: 'Open Phone' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Email kevin@example.com' }));
+    expect(screen.queryByRole('button', { name: 'Open Phone' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Phone' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Phone' }));
+    expect(uuid).toHaveBeenCalledTimes(1);
+    expect(api.beginOutbound).toHaveBeenCalledTimes(1);
+    expect(api.beginOutbound).toHaveBeenCalledWith(expect.objectContaining({ expectedContactSnapshot: 'b'.repeat(64), contactMethodId: 'phone-1' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Open Phone' })).toBeNull());
+    uuid.mockRestore();
+  });
+
   it('presents one rank-one candidate as evidence and keeps nine alternatives collapsed', async () => {
     const api = createApi(detailFor({ phones: tenCandidates() }));
     const inspector = await renderInspector(api);
@@ -407,12 +449,12 @@ describe('LeadInspector', () => {
     expect((allowed as HTMLButtonElement).disabled).toBe(false);
     expect(allowed.getAttribute('aria-describedby')).toBeNull();
     fireEvent.click(allowed);
-    expect(api.beginOutbound).toHaveBeenCalledTimes(1);
-    expect(api.beginOutbound).toHaveBeenCalledWith({
-      channel: blockedChannel === 'call' ? 'text' : 'call', personId: 'person-kevin',
-      salesCycleId: 'cycle-kevin', contactMethodId: 'channel-specific',
-    });
-    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+    if (blockedChannel === 'text') {
+      fireEvent.click(screen.getByRole('button', { name: 'Open Phone' }));
+      expect(api.beginOutbound).toHaveBeenCalledWith(expect.objectContaining({ channel: 'call', contactMethodId: 'channel-specific', expectedContactSnapshot: 'a'.repeat(64) }));
+      await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+    } else expect(screen.getByLabelText('Message')).toBeTruthy();
   });
 
   it.each(['Call', 'Text'] as const)('keeps the selected alternative contact ID for %s', async (verb) => {
@@ -420,12 +462,15 @@ describe('LeadInspector', () => {
     const inspector = await renderInspector(api);
     fireEvent.click(within(inspector).getByRole('button', { name: 'Show 9 alternative numbers' }));
     fireEvent.click(within(inspector).getByRole('button', { name: `${verb} +14015550103` }));
-    expect(api.beginOutbound).toHaveBeenCalledTimes(1);
-    expect(api.beginOutbound).toHaveBeenCalledWith({
-      channel: verb === 'Call' ? 'call' : 'text', personId: 'person-kevin',
-      salesCycleId: 'cycle-kevin', contactMethodId: 'clear-vendor',
-    });
-    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+    if (verb === 'Call') {
+      fireEvent.click(screen.getByRole('button', { name: 'Open Phone' }));
+      expect(api.beginOutbound).toHaveBeenCalledWith(expect.objectContaining({ channel: 'call', contactMethodId: 'clear-vendor', expectedContactSnapshot: 'a'.repeat(64) }));
+      await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+    } else {
+      expect(screen.getByRole('region', { name: 'Unsent text draft' }).textContent).toContain('+14015550103');
+      expect(api.get).toHaveBeenCalledTimes(1);
+    }
   });
 
   it('clamps persisted width and closes on Escape', async () => {
@@ -490,35 +535,18 @@ describe('LeadInspector', () => {
     expect(within(inspector).getByText('Review lead')).toBeTruthy();
   });
 
-  it('begins outbound touches through the injected API', async () => {
+  it('opens editable text/email drafts without invoking outbound and discards them on close', async () => {
     const api = createApi(detailFor());
-    const inspector = await renderInspector(api);
-
-    fireEvent.click(within(inspector).getByRole('button', { name: 'Call +14015550100' }));
-    expect(api.beginOutbound).toHaveBeenCalledWith({
-      channel: 'call',
-      personId: 'person-kevin',
-      salesCycleId: 'cycle-kevin',
-      contactMethodId: 'phone-1',
-    });
-
-    fireEvent.click(within(inspector).getByRole('button', { name: 'Text +14015550100' }));
-    expect(api.beginOutbound).toHaveBeenCalledWith({
-      channel: 'text',
-      personId: 'person-kevin',
-      salesCycleId: 'cycle-kevin',
-      contactMethodId: 'phone-1',
-    });
-
-    fireEvent.click(
-      within(inspector).getByRole('button', { name: 'Email kevin@example.com' }),
-    );
-    expect(api.beginOutbound).toHaveBeenCalledWith({
-      channel: 'email',
-      personId: 'person-kevin',
-      salesCycleId: 'cycle-kevin',
-      contactMethodId: 'email-1',
-    });
+    await renderInspector(api);
+    fireEvent.click(screen.getByRole('button', { name: 'Text +14015550100' }));
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Unsent text' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close draft' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Email kevin@example.com' }));
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('');
+    fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Local subject' } });
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+    expect(api.get).toHaveBeenCalledTimes(1);
   });
 
   it('hard-disables call, text, and email with a visible reason when opted out', async () => {

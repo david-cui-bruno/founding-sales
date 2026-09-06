@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import { outboundReceiptSchema, outboundCapabilitiesSchema, type OutboundReceipt, type OutboundCapabilities } from '../../shared/contracts/outboundContract';
 import { mutationReceiptSchema } from '../../shared/contracts/commonContract';
 import {
   findContactInfoReceiptSchema,
@@ -31,13 +33,19 @@ export const createLeadDetailApi = (client: IpcClient) => ({
       leadDetailSchema,
       input,
     ),
-  beginOutbound: (input: BeginOutboundRequest) =>
-    client.request(
-      'lead-detail:begin-outbound',
-      beginOutboundRequestSchema,
-      mutationReceiptSchema,
-      input,
-    ),
+  beginOutbound: async (input: BeginOutboundRequest): Promise<OutboundReceipt> => {
+    // Freeze the parsed identity across the asynchronous transport boundary.
+    const request = beginOutboundRequestSchema.parse(input);
+    const receipt = await client.request('lead-detail:begin-outbound', beginOutboundRequestSchema,
+      outboundReceiptSchema, request);
+    if (receipt.commandId !== request.commandId || receipt.channel !== request.channel) {
+      throw new Error('Outbound receipt does not match the request.');
+    }
+    return { ...receipt, reasonCode: receipt.reasonCode };
+  },
+  getOutboundCapabilities: (): Promise<OutboundCapabilities> =>
+    client.request('lead-detail:outbound-capabilities', z.object({}).strict(),
+      outboundCapabilitiesSchema as z.ZodType<OutboundCapabilities>, {}),
   confirmTransition: (input: ConfirmTransitionRequest) =>
     client.request(
       'lead-detail:confirm-transition',

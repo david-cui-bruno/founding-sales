@@ -1,3 +1,5 @@
+import { createLeadDetailApi } from '../../src/preload/apis/leadDetailApi';
+import { createIpcClient } from '../../src/preload/ipcClient';
 import type { LeadTriageSnapshot, LeadTriageEvidence } from '../../src/shared/contracts/leadTriageReportContract';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SourcingStatus } from '../../src/shared/contracts/sourcingContract';
@@ -110,7 +112,7 @@ describe('preload workflow bridge', () => {
       'bulkUpdate', 'list', 'updateField',
     ]);
     expect(Object.keys(api.leadDetail).sort()).toEqual([
-      'beginOutbound', 'confirmTransition', 'dismissLead', 'findContactInfo', 'get', 'overrideCloudScore',
+      'beginOutbound', 'confirmTransition', 'dismissLead', 'findContactInfo', 'get', 'getOutboundCapabilities', 'overrideCloudScore',
     ]);
     expect(Object.keys(api.today).sort()).toEqual([
       'addLeadNote', 'complete', 'get', 'getLeadTriageSnapshot', 'getTriageQueue', 'logCallOutcome',
@@ -351,4 +353,32 @@ it('recovery preload validates both directions and exposes no path or generic in
   await expect(api.status()).rejects.toThrow(/^RECOVERY_FAILED$/);
   expect(invoke).toHaveBeenLastCalledWith('recovery:status');
   await expect((api.status as (...args: unknown[]) => Promise<unknown>)({})).rejects.toThrow(/^RECOVERY_FAILED$/);
+});
+
+describe('strict outbound preload boundary', () => {
+  const request = { commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', channel: 'call' as const, personId: 'p', salesCycleId: 's', contactMethodId: 'c', expectedContactSnapshot: 'a'.repeat(64) };
+  const receipt = { commandId: request.commandId, channel: 'call', status: 'handoff_accepted', reasonCode: null as null, mutation: { revision: 1, affectedPersonIds: ['p'], affectedSalesCycleIds: ['s'] } };
+  it('validates UUID/snapshot and binds a strict receipt to the submitted command and channel', async () => {
+    const invoke = vi.fn(async (): Promise<unknown> => receipt);
+    const api = createLeadDetailApi(createIpcClient({ invoke }));
+    await expect(api.beginOutbound(request)).resolves.toEqual(receipt);
+    expect(invoke).toHaveBeenCalledWith('lead-detail:begin-outbound', request);
+    for (const patch of [{ commandId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }, { channel: 'text' }, { reasonCode: 'handoff_uncertain' }]) {
+      invoke.mockResolvedValueOnce({ ...receipt, ...patch });
+      await expect(api.beginOutbound(request)).rejects.toThrow();
+    }
+    const count = invoke.mock.calls.length;
+    for (const field of ['commandId', 'expectedContactSnapshot']) {
+      const invalid = { ...request }; delete invalid[field as keyof typeof invalid];
+      await expect(api.beginOutbound(invalid)).rejects.toThrow();
+    }
+    await expect(api.beginOutbound({ ...request, body: 'not allowed' } as never)).rejects.toThrow();
+    expect(invoke).toHaveBeenCalledTimes(count);
+  });
+  it('queries capabilities with a strict empty payload and rejects invalid response', async () => {
+    const invoke = vi.fn(async () => ({ localDrafts: true }));
+    const api = createLeadDetailApi(createIpcClient({ invoke }));
+    await expect(api.getOutboundCapabilities()).rejects.toThrow();
+    expect(invoke).toHaveBeenCalledWith('lead-detail:outbound-capabilities', {});
+  });
 });

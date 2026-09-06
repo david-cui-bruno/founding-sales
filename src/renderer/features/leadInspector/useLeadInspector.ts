@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+import type { OutboundReceipt, OutboundCapabilities } from '../../../shared/contracts/outboundContract';
 import { createContext, useContext } from 'react';
 
 import type { MutationReceipt } from '../../../shared/contracts/commonContract';
@@ -17,7 +19,8 @@ import type {
 /** Injected transport. The inspector never touches Electron directly. */
 export type LeadDetailApi = {
   get(input: LeadDetailRequest): Promise<LeadDetail>;
-  beginOutbound(input: BeginOutboundRequest): Promise<MutationReceipt>;
+  beginOutbound(input: BeginOutboundRequest): Promise<OutboundReceipt>;
+  getOutboundCapabilities(): Promise<OutboundCapabilities>;
   confirmTransition(input: ConfirmTransitionRequest): Promise<MutationReceipt>;
   dismissLead(input: DismissLeadRequest): Promise<MutationReceipt>;
   overrideCloudScore(input: CloudScoreOverrideRequest): Promise<MutationReceipt>;
@@ -75,3 +78,12 @@ export function useLeadInspector(): LeadInspectorHandle {
 export function useLeadInspectorIfAvailable(): LeadInspectorHandle | null {
   return useContext(LeadInspectorContext);
 }
+
+/** Shared presentation inputs. The provider owns request lifetime and receipts. */
+export type OutboundPresentation = {
+  capabilities?: OutboundCapabilities | null;
+  outboundPending?: boolean;
+  outboundBlocked?: boolean;
+  onLogPastActivity?(commandId?: string): void;
+};
+export type OutboundStatusPresentation = OutboundPresentation & { outboundStatus?: ReactNode };

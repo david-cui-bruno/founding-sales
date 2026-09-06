@@ -611,3 +611,34 @@
   font-size: var(--text-caption);
   color: var(--muted);
 }
+
+/* Truthful handoff status and unsent, memory-only draft controls. */
+.outbound-confirmation,
+.outbound-composer,
+.outbound-receipt {
+  margin-block: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.outbound-composer label {
+  display: grid;
+  gap: var(--space-1);
+  margin-block: var(--space-2);
+}
+
+.outbound-composer input,
+.outbound-composer textarea {
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line-interactive);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.outbound-composer textarea { resize: vertical; }
+.outbound-receipt__command { overflow-wrap: anywhere; font-size: var(--text-caption); }

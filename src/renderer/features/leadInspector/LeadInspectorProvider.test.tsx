@@ -8,8 +8,12 @@ import {
   type ContactMethod,
   type LeadDetail,
 } from '../../../shared/contracts/leadDetailContract';
+import type { OutboundRequest, OutboundReceipt, OutboundCapabilities } from '../../../shared/contracts/outboundContract';
 import { LeadInspectorProvider } from './LeadInspectorProvider';
 import { useLeadInspector } from './useLeadInspector';
+
+const unavailable = { state: 'unavailable', reasonCode: 'not_integrated' } as const;
+const capabilities: OutboundCapabilities = { phoneHandoff: { state: 'available', reasonCode: null }, callObservation: unavailable, recording: unavailable, messagesSend: unavailable, gmailSend: unavailable, managedAudioImport: unavailable, appleTranscriptExtraction: unavailable, localDrafts: true };
 
 const receipt = {
   revision: 9,
@@ -98,7 +102,8 @@ function createApi(details: LeadDetail[]) {
       }
       return detail;
     }),
-    beginOutbound: vi.fn(async () => receipt),
+    beginOutbound: vi.fn(async (request: OutboundRequest): Promise<OutboundReceipt> => ({ commandId: request.commandId, channel: request.channel, status: 'handoff_accepted', reasonCode: null, mutation: receipt })),
+    getOutboundCapabilities: vi.fn(async () => capabilities),
     confirmTransition: vi.fn(async () => receipt),
     dismissLead: vi.fn(async () => receipt),
     overrideCloudScore: vi.fn(async () => receipt),
@@ -197,7 +202,8 @@ describe('LeadInspectorProvider', () => {
             pending.set(personId, resolve);
           }),
       ),
-      beginOutbound: vi.fn(async () => receipt),
+      beginOutbound: vi.fn(async (request: OutboundRequest): Promise<OutboundReceipt> => ({ commandId: request.commandId, channel: request.channel, status: 'handoff_accepted', reasonCode: null, mutation: receipt })),
+    getOutboundCapabilities: vi.fn(async () => capabilities),
       confirmTransition: vi.fn(async () => receipt),
       dismissLead: vi.fn(async () => receipt),
       overrideCloudScore: vi.fn(async () => receipt),
@@ -296,24 +302,145 @@ describe('LeadInspectorProvider', () => {
     expect(api.get).toHaveBeenCalledTimes(2);
   });
 
-  it('still handles a final-gate refusal after an allowed detail snapshot', async () => {
-    const api = createApi([kevin, dana]);
-    api.beginOutbound.mockRejectedValueOnce(Object.assign(new Error('blocked'), {
-      reasonCode: 'federal_dnc_listed',
-    }));
-    render(
-      <LeadInspectorProvider api={api}>
-        <Harness />
-      </LeadInspectorProvider>,
-    );
-
+  async function openCall() {
     fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
     await screen.findByRole('complementary', { name: 'Kevin Shin details' });
     fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Phone' }));
+  }
 
+  it('synchronously excludes duplicate confirmation and retains one UUID through pending and unknown', async () => {
+    const api = createApi([kevin]);
+    let resolve!: (receipt: OutboundReceipt) => void;
+    api.beginOutbound.mockImplementation(() => new Promise((done) => { resolve = done; }));
+    render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+    await openCall();
+    const submit = screen.getByRole('button', { name: 'Open Phone' });
+    fireEvent.click(submit); fireEvent.click(submit);
     expect(api.beginOutbound).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole('complementary', { name: 'Kevin Shin details' })).toBeTruthy();
+    const request = api.beginOutbound.mock.calls[0][0];
+    expect(request).toEqual({ commandId: expect.stringMatching(/^[a-f0-9-]{36}$/), channel: 'call', personId: kevin.personId,
+      salesCycleId: kevin.salesCycleId, contactMethodId: 'phone-1', expectedContactSnapshot: 'a'.repeat(64) });
+    api.get.mockResolvedValueOnce(detailFor({ outboundAttempts: [{ commandId: request.commandId, channel: 'call', contactMethodId: 'phone-1', requestedAt: '2026-09-06T15:00:00.000Z', manualActivityId: null, status: 'handoff_accepted', reasonCode: null }] }));
+    await act(async () => resolve({ commandId: request.commandId, channel: 'call', status: 'unknown', reasonCode: 'handoff_uncertain', mutation: receipt }));
+    expect(await screen.findByText('Phone handoff unknown. Do not retry.')).toBeTruthy();
+    expect(screen.queryByText('Phone handoff accepted. Call outcome unverified.')).toBeNull();
+    expect(api.get).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    expect(screen.queryByRole('button', { name: 'Open Phone' })).toBeNull();
+    expect(api.beginOutbound).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(request.commandId)).toBeTruthy();
+  });
+
+  it('keeps receipt visible independently while same-Person detail refresh is pending', async () => {
+    const api = createApi([kevin]);
+    render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+    await screen.findByRole('complementary', { name: 'Kevin Shin details' });
+    api.get.mockImplementationOnce(() => new Promise(() => undefined));
+    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Phone' }));
+    expect(await screen.findByText('Phone handoff accepted. Call outcome unverified.')).toBeTruthy();
+    expect(screen.getByText('Loading lead details')).toBeTruthy();
+  });
+
+  it('isolates late A receipt and refresh from B selection and draft', async () => {
+    const api = createApi([kevin, dana]);
+    let resolve!: (receipt: OutboundReceipt) => void;
+    api.beginOutbound.mockImplementation(() => new Promise((done) => { resolve = done; }));
+    render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+    await openCall();
+    const request = api.beginOutbound.mock.calls[0][0];
+    fireEvent.click(screen.getByRole('button', { name: 'Open Dana Whitman' }));
+    await screen.findByRole('complementary', { name: 'Dana Whitman details' });
+    fireEvent.click(screen.getByRole('button', { name: 'Text +14015550100' }));
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Dana draft' } });
+    await act(async () => resolve({ commandId: request.commandId, channel: 'call', status: 'unknown', reasonCode: 'handoff_uncertain', mutation: receipt }));
+    expect(screen.getByTestId('selected-person').textContent).toBe(dana.personId);
+    expect(screen.queryByText(request.commandId)).toBeNull();
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Dana draft');
+    expect(api.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders fixed transport uncertainty without retrying or displaying raw error', async () => {
+    const api = createApi([kevin]);
+    api.beginOutbound.mockRejectedValueOnce(new Error('private transport details'));
+    render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+    await openCall();
+    expect(await screen.findByText('Phone handoff response unavailable. Execution is unknown. Do not retry.')).toBeTruthy();
+    expect(screen.queryByText(/private transport/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    expect(screen.queryByRole('button', { name: 'Open Phone' })).toBeNull();
+    expect(api.beginOutbound).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['unavailable', 'failure'] as const)('fails closed for capability %s with manual fallback', async (mode) => {
+    const api = createApi([kevin]);
+    if (mode === 'failure') api.getOutboundCapabilities.mockRejectedValueOnce(new Error('capability failed'));
+    else api.getOutboundCapabilities.mockResolvedValueOnce({ ...capabilities, phoneHandoff: { state: 'unavailable', reasonCode: 'inbound_safety_unwired' } });
+    render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+    await screen.findByRole('complementary', { name: 'Kevin Shin details' });
+    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    expect(screen.queryByRole('button', { name: 'Open Phone' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Log past activity' })).toBeTruthy();
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+  });
+
+  it('recovers durable unresolved attempt and explicitly opens linked manual form without saving', async () => {
+    const commandId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const api = createApi([detailFor({ outboundAttempts: [{ commandId, channel: 'call', contactMethodId: 'phone-1', requestedAt: '2026-09-06T15:00:00.000Z', manualActivityId: null, status: 'unknown', reasonCode: 'handoff_uncertain' }] })]);
+    const outcomeApi = { logCallOutcome: vi.fn<(input: import('../../../shared/contracts/todayContract').LogCallOutcomeRequest) => Promise<typeof receipt>>(async () => receipt), addLeadNote: vi.fn(async () => receipt), get: vi.fn(async () => ({ lanes: [] } as never)) };
+    render(<LeadInspectorProvider api={api} outcomeApi={outcomeApi}><Harness /></LeadInspectorProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+    await screen.findByText('Phone handoff unknown. Do not retry.');
+    fireEvent.click(screen.getByRole('button', { name: 'Log past activity' }));
+    expect(await screen.findByRole('article', { name: 'Kevin Shin full page' })).toBeTruthy();
+    expect(outcomeApi.logCallOutcome).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'No answer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save & next' }));
+    await waitFor(() => expect(outcomeApi.logCallOutcome).toHaveBeenCalledWith(expect.objectContaining({ personId: kevin.personId, salesCycleId: kevin.salesCycleId, outboundCommandId: commandId, outcome: 'no_answer' })));
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+  });
+
+  it('displays existing manual evidence without inviting another linked write', async () => {
+    const api = createApi([detailFor({ outboundAttempts: [{ commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', channel: 'call', contactMethodId: 'phone-1', requestedAt: '2026-09-06T15:00:00.000Z', manualActivityId: 'manual-activity', status: 'unknown', reasonCode: 'handoff_uncertain' }] })]);
+    render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+    await screen.findByText(/Manual evidence: manual-activity/);
+    expect(screen.getByText('Phone handoff unknown. Do not retry.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Log past activity' })).toBeNull();
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+  });
+
+  it('keeps recovered refusal manual fallback unlinked', async () => {
+    const api = createApi([detailFor({ outboundAttempts: [{ commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', channel: 'call', contactMethodId: 'phone-1', requestedAt: '2026-09-06T15:00:00.000Z', manualActivityId: null, status: 'refused', reasonCode: 'federal_dnc_listed' }] })]);
+    const outcomeApi = { logCallOutcome: vi.fn<(input: import('../../../shared/contracts/todayContract').LogCallOutcomeRequest) => Promise<typeof receipt>>(async () => receipt), addLeadNote: vi.fn(async () => receipt), get: vi.fn(async () => ({ lanes: [] } as never)) };
+    render(<LeadInspectorProvider api={api} outcomeApi={outcomeApi}><Harness /></LeadInspectorProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+    await screen.findByText('Phone handoff refused.');
+    fireEvent.click(screen.getByRole('button', { name: 'Log past activity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'No answer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save & next' }));
+    await waitFor(() => expect(outcomeApi.logCallOutcome).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(outcomeApi.logCallOutcome).mock.calls[0]?.[0]).not.toHaveProperty('outboundCommandId');
+  });
+
+  it('discards an unsent draft when changing Person and does not resurrect it on return', async () => {
+    const api = createApi([kevin, dana]);
+    render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+    await screen.findByRole('complementary', { name: 'Kevin Shin details' });
+    fireEvent.click(screen.getByRole('button', { name: 'Text +14015550100' }));
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Private unsent Kevin draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Open Dana Whitman' }));
+    await screen.findByRole('complementary', { name: 'Dana Whitman details' });
+    expect(screen.queryByLabelText('Message')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+    await screen.findByRole('complementary', { name: 'Kevin Shin details' });
+    fireEvent.click(screen.getByRole('button', { name: 'Text +14015550100' }));
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('');
+    expect(api.beginOutbound).not.toHaveBeenCalled();
   });
 
   it('rejects useLeadInspector outside of the provider', () => {

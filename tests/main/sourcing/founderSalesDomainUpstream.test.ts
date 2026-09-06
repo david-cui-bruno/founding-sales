@@ -436,39 +436,20 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
       textRefusalReason: 'contact_validation_unusable',
     });
 
-    const cycle = database.raw.prepare(
-      'SELECT id FROM sales_cycles WHERE person_id = ?',
-    ).get(result.personId) as { id: string };
     const blockedContact = database.raw.prepare(
       "SELECT id FROM person_contact_methods WHERE person_id = ? AND normalized_value = '+14015550101'",
     ).get(result.personId) as { id: string };
-    expect(() => domain.beginOutbound({
-      channel: 'call',
-      personId: result.personId,
-      salesCycleId: cycle.id,
-      contactMethodId: blockedContact.id,
-    })).toThrow();
-    try {
-      domain.beginOutbound({
-        channel: 'call',
-        personId: result.personId,
-        salesCycleId: cycle.id,
-        contactMethodId: blockedContact.id,
-      });
-    } catch (error) {
-      expect((error as { reasonCode?: string }).reasonCode).toBe('contact_validation_unusable');
-    }
+    expect(() => services.unitOfWork.immediate(() => services.outboundPermission.assertMayExecuteOutbound({
+      channel: 'call', personId: result.personId, contactMethodId: blockedContact.id, now: NOW,
+    }))).toThrowError(expect.objectContaining({ reasonCode: 'contact_validation_unusable' }));
 
     // A legacy/unknown contact is not authorized merely because compatibility flags are clear.
     const cleanContact = database.raw.prepare(
       "SELECT id FROM person_contact_methods WHERE person_id = ? AND normalized_value = '+14015550100'",
     ).get(result.personId) as { id: string };
-    expect(() => domain.beginOutbound({
-      channel: 'call',
-      personId: result.personId,
-      salesCycleId: cycle.id,
-      contactMethodId: cleanContact.id,
-    })).toThrowError(expect.objectContaining({ reasonCode: 'contact_validation_unusable' }));
+    expect(() => services.unitOfWork.immediate(() => services.outboundPermission.assertMayExecuteOutbound({
+      channel: 'call', personId: result.personId, contactMethodId: cleanContact.id, now: NOW,
+    }))).toThrowError(expect.objectContaining({ reasonCode: 'contact_validation_unusable' }));
   });
 
   it('merges later compliance evidence into an existing cloud-linked phone', () => {
@@ -501,7 +482,7 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
   });
 
   it('blocks outbound to a tcpa-flagged contact too', () => {
-    const { personId, cycleId } = importLinkedLead();
+    const { personId } = importLinkedLead();
     database.raw.prepare(`UPDATE person_contact_methods SET
       federal_status = 'verified_clear', compliance_tcpa_flag = 1,
       covered_area_code = '401', compliance_source = 'ftc_download',
@@ -511,14 +492,9 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
     const contact = database.raw.prepare(
       "SELECT id FROM person_contact_methods WHERE person_id = ? AND kind = 'phone' LIMIT 1",
     ).get(personId) as { id: string };
-    try {
-      domain.beginOutbound({
-        channel: 'call', personId, salesCycleId: cycleId, contactMethodId: contact.id,
-      });
-      throw new Error('expected outbound refusal');
-    } catch (error) {
-      expect((error as { reasonCode?: string }).reasonCode).toBe('tcpa_blocked');
-    }
+    expect(() => services.unitOfWork.immediate(() => services.outboundPermission.assertMayExecuteOutbound({
+      channel: 'call', personId, contactMethodId: contact.id, now: NOW,
+    }))).toThrowError(expect.objectContaining({ reasonCode: 'tcpa_blocked' }));
   });
 
   it('prunes processed-file ledger rows older than 90 days', () => {

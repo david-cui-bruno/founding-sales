@@ -31,7 +31,6 @@ import {
   dismissLeadRequestSchema,
   leadDetailRequestSchema,
   leadDetailSchema,
-  type BeginOutboundRequest,
   type ConfirmTransitionRequest,
   type ContactMethod,
   type DismissLeadRequest,
@@ -948,12 +947,6 @@ export class FounderSalesDomain implements OutboundDomainPort {
       })),
       revision: this.currentRevision(),
     });
-  }
-
-  beginOutbound(input: BeginOutboundRequest): MutationReceipt {
-    // Keep the old IPC type intact until its atomic switch. This is not a send or log API.
-    void input;
-    throw new FounderSalesDomainError('ACTION_NOT_SUPPORTED', 'Phone handoff is not integrated yet.');
   }
 
   inspectOutboundCommand(input: OutboundRequest): OutboundReceipt | null {

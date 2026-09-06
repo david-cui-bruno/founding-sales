@@ -1,4 +1,7 @@
-import { useState } from 'react';
+import type { OutboundReceipt } from '../../../shared/contracts/outboundContract';
+import type { OutboundPresentation } from './useLeadInspector';
+import { OutboundComposer } from './OutboundComposer';
+import { useEffect, useRef, useState } from 'react';
 
 import { selectPrimaryPhone } from '../../../shared/contactPresentation';
 import type {
@@ -40,9 +43,9 @@ const DISMISS_REASON_OPTIONS: ReadonlyArray<{
   { value: 'unresolved_duplicate', label: 'Unresolved duplicate' },
 ];
 
-export type InspectorOverviewProps = {
+export type InspectorOverviewProps = OutboundPresentation & {
   detail: LeadDetail;
-  onBeginOutbound(request: BeginOutboundRequest): void;
+  onBeginOutbound(request: BeginOutboundRequest): Promise<OutboundReceipt>;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
   onDismissLead(request: DismissLeadRequest): void;
   onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
@@ -56,12 +59,12 @@ function OutboundButton({
   detail,
   channel,
   contact,
-  onBeginOutbound,
+  onSelectOutbound,
 }: {
   detail: LeadDetail;
   channel: BeginOutboundRequest['channel'];
   contact: ContactMethod;
-  onBeginOutbound(request: BeginOutboundRequest): void;
+  onSelectOutbound(channel: BeginOutboundRequest['channel'], contact: ContactMethod): void;
 }) {
   const verb = channel === 'call' ? 'Call' : channel === 'text' ? 'Text' : 'Email';
   const refusalReason = contact.kind === 'phone' && contact.compliance !== null
@@ -80,17 +83,7 @@ function OutboundButton({
         variant="quiet"
         disabled={detail.optedOut || blocked}
         aria-describedby={helpId}
-        onClick={() => {
-          void Promise.resolve(onBeginOutbound({
-            channel,
-            personId: detail.personId,
-            salesCycleId: detail.salesCycleId,
-            contactMethodId: contact.id,
-          })).catch(() => {
-            // The main-process final gate is authoritative even after an
-            // allowed advisory snapshot. Keep the stale action from advancing.
-          });
-        }}
+        onClick={() => onSelectOutbound(channel, contact)}
       >
         {verb} {contact.value}
       </Button>
@@ -251,7 +244,34 @@ export function InspectorOverview({
   onDismissLead,
   onOverrideCloudScore,
   onFindContactInfo,
+  capabilities, outboundPending = false, outboundBlocked = false, onLogPastActivity,
 }: InspectorOverviewProps) {
+  const [selection, setSelection] = useState<{ channel: BeginOutboundRequest['channel']; contact: ContactMethod; personId: string; cycleId: string } | null>(null);
+  const submitting = useRef(false);
+  const contacts = [...detail.phones, ...detail.emails];
+  const current = selection === null ? undefined : contacts.find((contact) => contact.id === selection.contact.id);
+  const selectionCurrent = selection !== null && current !== undefined
+    && selection.personId === detail.personId && selection.cycleId === detail.salesCycleId
+    && current.contactSnapshot === selection.contact.contactSnapshot;
+  useEffect(() => {
+    if (selection !== null && !selectionCurrent) setSelection(null);
+  }, [selection, selectionCurrent]);
+  const choose = (channel: BeginOutboundRequest['channel'], contact: ContactMethod) => {
+    if (outboundPending || submitting.current) return;
+    setSelection({ channel, contact, personId: detail.personId, cycleId: detail.salesCycleId });
+  };
+  const canOpenPhone = capabilities?.phoneHandoff.state === 'available';
+  const confirm = () => {
+    if (!selectionCurrent || selection?.channel !== 'call' || current === undefined
+      || submitting.current || outboundPending || outboundBlocked || !canOpenPhone
+      || detail.optedOut || current.validationState !== 'valid' || current.compliance?.callRefusalReason !== null) return;
+    submitting.current = true; // React state alone does not exclude two synchronous submissions.
+    const request: BeginOutboundRequest = { commandId: crypto.randomUUID(), channel: 'call', personId: detail.personId,
+      salesCycleId: detail.salesCycleId, contactMethodId: current.id, expectedContactSnapshot: current.contactSnapshot };
+    void onBeginOutbound(request).catch(() => {
+      // Provider retains transport uncertainty, not an invented successful receipt.
+    }).finally(() => { submitting.current = false; setSelection(null); });
+  };
   const context = detail.priorityContext;
   const { primary, alternatives } = selectPrimaryPhone(detail.phones);
 
@@ -417,7 +437,7 @@ export function InspectorOverview({
           detail={detail}
           primary={primary}
           alternatives={alternatives}
-          onBeginOutbound={onBeginOutbound}
+          onSelectOutbound={choose}
         />
         <div className="lead-inspector__outbound-buttons">
           {detail.emails.map((email) => (
@@ -426,10 +446,25 @@ export function InspectorOverview({
               detail={detail}
               channel="email"
               contact={email}
-              onBeginOutbound={onBeginOutbound}
+              onSelectOutbound={choose}
             />
           ))}
         </div>
+        {selectionCurrent && selection !== null && selection.channel !== 'call' && (
+          <OutboundComposer key={`${detail.personId}:${selection.channel}:${selection.contact.id}:${selection.contact.contactSnapshot}`}
+            channel={selection.channel} recipientLabel={selection.contact.value} onClose={() => setSelection(null)} />
+        )}
+        {selectionCurrent && selection?.channel === 'call' && !outboundBlocked && (
+          <section className="outbound-confirmation" aria-label="Confirm Phone handoff">
+            <p>{selection.contact.value}</p>
+            <p>Continue in Phone. Callie cannot yet verify connection or recording.</p>
+            {canOpenPhone ? <Button disabled={outboundPending} onClick={confirm}>Open Phone</Button> : (
+              <p>Phone handoff unavailable. {capabilities?.phoneHandoff.reasonCode ?? 'Capability status could not be verified.'}</p>
+            )}
+            <Button variant="quiet" disabled={outboundPending} onClick={() => setSelection(null)}>Cancel call</Button>
+            {!canOpenPhone && onLogPastActivity !== undefined && <Button variant="quiet" onClick={() => onLogPastActivity()}>Log past activity</Button>}
+          </section>
+        )}
         {detail.cloudLinked && onFindContactInfo !== undefined && (
           <FindContactInfoSection
             detail={detail}
