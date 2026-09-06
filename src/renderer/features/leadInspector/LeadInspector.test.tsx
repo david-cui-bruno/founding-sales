@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   leadDetailSchema,
+  type ContactMethod,
   type LeadDetail,
 } from '../../../shared/contracts/leadDetailContract';
+import { InspectorOverview } from './InspectorOverview';
+import type { FindContactInfoReceipt } from '../../../shared/contracts/enrichmentRequestContract';
 import { LeadInspectorProvider } from './LeadInspectorProvider';
 import { useLeadInspector } from './useLeadInspector';
 
@@ -18,16 +21,83 @@ const receipt = {
   affectedSalesCycleIds: ['cycle-kevin'],
 };
 
+const legacyContactEvidence: Pick<ContactMethod,
+  'validationState' | 'reachability' | 'sourceLabel' | 'vendorRank' |
+  'phoneKind' | 'ownershipState' | 'evidenceObservedAt'> = {
+  validationState: 'valid', reachability: 'none', sourceLabel: null, vendorRank: null,
+  phoneKind: null, ownershipState: 'unknown', evidenceObservedAt: null,
+};
+
+const phoneFor = (overrides: Partial<ContactMethod> = {}): ContactMethod => ({
+  id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: false,
+  validationState: 'unverified', reachability: 'none', sourceLabel: null,
+  vendorRank: null, phoneKind: null, ownershipState: 'unknown', evidenceObservedAt: null,
+  compliance: null,
+  ...overrides,
+});
+
+const clearCompliance: NonNullable<ContactMethod['compliance']> = {
+  status: 'verified_clear', label: 'Verified clear until Sep 15, 2026',
+  expiresAt: '2026-09-15T00:00:00.000Z', callRefusalReason: null, textRefusalReason: null,
+};
+
+const unknownCompliance: NonNullable<ContactMethod['compliance']> = {
+  status: 'compliance_unknown', label: 'Compliance unknown', expiresAt: null,
+  callRefusalReason: 'federal_status_unknown', textRefusalReason: 'tcpa_status_unknown',
+};
+
+// Deliberately shuffled input, including a positively blocked rank-one phone.
+const tenCandidates = (): ContactMethod[] => {
+  const vendorPhone = (overrides: Partial<ContactMethod>) => phoneFor({
+    sourceLabel: 'Synthetic vendor', ownershipState: 'vendor_candidate', phoneKind: 'mobile',
+    evidenceObservedAt: '2026-09-04T12:00:00.000Z', compliance: unknownCompliance,
+    ...overrides,
+  });
+  return [
+    vendorPhone({ id: 'listed-rank-one', value: '+14015550108', vendorRank: 1,
+      compliance: { status: 'federal_dnc_listed', label: 'Federal DNC listed', expiresAt: null,
+        callRefusalReason: 'federal_dnc_listed', textRefusalReason: 'federal_dnc_listed' } }),
+    vendorPhone({ id: 'conflicting', value: '+14015550107', vendorRank: 2, ownershipState: 'conflicting_identity' }),
+    vendorPhone({ id: 'clear-vendor', value: '+14015550103', vendorRank: 2,
+      valid: true, validationState: 'valid', compliance: clearCompliance }),
+    vendorPhone({ id: 'unranked', value: '+14015550106' }),
+    vendorPhone({ id: 'primary', value: '+14015550101', vendorRank: 1 }),
+    vendorPhone({ id: 'tcpa', value: '+14015550110', vendorRank: 4,
+      compliance: { status: 'tcpa_blocked', label: 'TCPA blocked', expiresAt: null,
+        callRefusalReason: 'tcpa_blocked', textRefusalReason: 'tcpa_blocked' } }),
+    vendorPhone({ id: 'clear-unknown-owner', value: '+14015550104', vendorRank: 3,
+      valid: true, validationState: 'valid', ownershipState: 'unknown', compliance: clearCompliance }),
+    vendorPhone({ id: 'unknown-rank-three', value: '+14015550105', vendorRank: 3 }),
+    vendorPhone({ id: 'listed-rank-two', value: '+14015550109', vendorRank: 2,
+      compliance: { status: 'federal_dnc_listed', label: 'Federal DNC listed', expiresAt: null,
+        callRefusalReason: 'federal_dnc_listed', textRefusalReason: 'federal_dnc_listed' } }),
+    vendorPhone({ id: 'clear-verified', value: '+14015550102', vendorRank: 5,
+      valid: true, validationState: 'valid', ownershipState: 'verified_person', compliance: clearCompliance }),
+  ];
+};
+
+const evidenceValue = (row: HTMLElement, label: string): HTMLElement =>
+  within(row).getByText(label, { selector: 'dt' }).nextElementSibling as HTMLElement;
+
+function expectDisabledHelp(button: HTMLElement, expected: string) {
+  expect((button as HTMLButtonElement).disabled).toBe(true);
+  const helpId = button.getAttribute('aria-describedby');
+  expect(helpId).toBeTruthy();
+  const help = document.getElementById(helpId!);
+  expect(help?.textContent).toBe(expected);
+  expect(help?.closest('[hidden], [aria-hidden="true"]')).toBeNull();
+}
+
 const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
   leadDetailSchema.parse({
     personId: 'person-kevin',
     salesCycleId: 'cycle-kevin',
     personName: 'Kevin Shin',
     phones: [
-      { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, compliance: { status: 'verified_clear', label: 'Verified clear until Sep 15, 2026', expiresAt: '2026-09-15T00:00:00.000Z', callRefusalReason: null, textRefusalReason: null } },
+      { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, ...legacyContactEvidence, compliance: { status: 'verified_clear', label: 'Verified clear until Sep 15, 2026', expiresAt: '2026-09-15T00:00:00.000Z', callRefusalReason: null, textRefusalReason: null } },
     ],
     emails: [
-      { id: 'email-1', kind: 'email', value: 'kevin@example.com', label: null, valid: true, compliance: null },
+      { id: 'email-1', kind: 'email', value: 'kevin@example.com', label: null, valid: true, ...legacyContactEvidence, compliance: null },
     ],
     organizationLabel: 'Shin Properties',
     propertySummaries: ['12 Benefit St, Providence'],
@@ -47,6 +117,7 @@ const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
     priorityReasons: ['Owner of 3+ doors', 'Live vacancy posted this week'],
     cloudScores: null,
     cloudLinked: false,
+    findContactEligibility: { eligible: false, refusalReason: 'qualification_required' },
     nextAction: {
       id: 'action-1',
       type: 'review_lead',
@@ -138,6 +209,222 @@ afterEach(() => {
 });
 
 describe('LeadInspector', () => {
+  it('presents one rank-one candidate as evidence and keeps nine alternatives collapsed', async () => {
+    const api = createApi(detailFor({ phones: tenCandidates() }));
+    const inspector = await renderInspector(api);
+    const primary = within(inspector).getByRole('region', { name: 'Primary phone candidate' });
+
+    expect(within(inspector).getAllByRole('region', { name: 'Primary phone candidate' })).toHaveLength(1);
+    expect(within(primary).getByText('+14015550101')).toBeTruthy();
+    expect(within(primary).getByText('Primary candidate')).toBeTruthy();
+    expect(evidenceValue(primary, 'Source').textContent).toBe('Synthetic vendor');
+    expect(evidenceValue(primary, 'Vendor rank').textContent).toBe('1');
+    expect(evidenceValue(primary, 'Phone kind').textContent).toBe('Mobile');
+    expect(evidenceValue(primary, 'Ownership').textContent).toBe('Vendor candidate');
+    expect(evidenceValue(primary, 'Validation').textContent).toBe('Unverified');
+    expect(evidenceValue(primary, 'Compliance').textContent).toBe('Compliance unknown');
+    const observed = evidenceValue(primary, 'Evidence observed').querySelector('time');
+    expect(observed?.dateTime).toBe('2026-09-04T12:00:00.000Z');
+    expect(observed?.textContent).toContain('Sep 4, 2026');
+    expect(observed?.textContent).toContain('UTC');
+    expect(evidenceValue(primary, 'Compliance expires').textContent).toBe('Unknown');
+
+    const toggle = within(inspector).getByRole('button', { name: 'Show 9 alternative numbers' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    const alternatives = document.getElementById(toggle.getAttribute('aria-controls')!);
+    expect(alternatives).not.toBeNull();
+    expect(alternatives?.hidden).toBe(true);
+    expect(within(alternatives!).queryAllByRole('article')).toHaveLength(0);
+    expect(within(inspector).getAllByRole('button', { name: /^(Call|Text) / })).toHaveLength(2);
+    for (const button of within(primary).getAllByRole('button')) {
+      expectDisabledHelp(button, 'Phone validation is unverified.');
+      fireEvent.click(button);
+    }
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+  });
+
+  it('expands with Enter and collapses with Space while preserving ordered, focusable evidence', async () => {
+    const inspector = await renderInspector(createApi(detailFor({ phones: tenCandidates() })));
+    const toggle = within(inspector).getByRole('button', { name: 'Show 9 alternative numbers' });
+    toggle.focus();
+    expect(document.activeElement).toBe(toggle);
+    expect(fireEvent.keyDown(toggle, { key: 'Enter' })).toBe(false);
+    fireEvent.keyUp(toggle, { key: 'Enter' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(within(inspector).getByRole('button', { name: 'Hide 9 alternative numbers' })).toBe(toggle);
+    const alternatives = document.getElementById(toggle.getAttribute('aria-controls')!)!;
+    expect(alternatives.hidden).toBe(false);
+    fireEvent.keyDown(toggle, { key: 'Enter', repeat: true });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const rows = within(alternatives).getAllByRole('article');
+    expect(rows.map((row) => within(row).getByRole('heading').textContent)).toEqual([
+      '+14015550102', '+14015550103', '+14015550104', '+14015550105', '+14015550106',
+      '+14015550107', '+14015550108', '+14015550109', '+14015550110',
+    ]);
+    expect(rows.map((row) => evidenceValue(row, 'Ownership').textContent)).toEqual([
+      'Verified for this person', 'Vendor candidate', 'Unknown ownership', 'Vendor candidate',
+      'Vendor candidate', 'Conflicting identity', 'Vendor candidate', 'Vendor candidate', 'Vendor candidate',
+    ]);
+    expect(rows.map((row) => evidenceValue(row, 'Vendor rank').textContent)).toEqual([
+      '5', '2', '3', '3', 'Unknown', '2', '1', '2', '4',
+    ]);
+    for (const row of rows) {
+      expect(row.tabIndex).toBe(0);
+      row.focus();
+      expect(document.activeElement).toBe(row);
+      expect(evidenceValue(row, 'Source').textContent).toBe('Synthetic vendor');
+      expect(evidenceValue(row, 'Phone kind').textContent).toBe('Mobile');
+      expect(evidenceValue(row, 'Evidence observed').querySelector('time')?.dateTime)
+        .toBe('2026-09-04T12:00:00.000Z');
+      expect(evidenceValue(row, 'Compliance').textContent).toBeTruthy();
+      expect(evidenceValue(row, 'Validation').textContent).toBeTruthy();
+      expect(evidenceValue(row, 'Compliance expires').textContent).toBeTruthy();
+    }
+    const expiry = evidenceValue(rows[0]!, 'Compliance expires').querySelector('time');
+    expect(expiry?.dateTime).toBe('2026-09-15T00:00:00.000Z');
+    expect(expiry?.textContent).toContain('Sep 15, 2026');
+    expect(expiry?.textContent).toContain('UTC');
+    expect(evidenceValue(rows[6]!, 'Compliance').textContent).toBe('Federal DNC listed');
+    expect(evidenceValue(rows[8]!, 'Compliance').textContent).toBe('TCPA blocked');
+
+    toggle.focus();
+    expect(fireEvent.keyDown(toggle, { key: ' ' })).toBe(false);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(fireEvent.keyUp(toggle, { key: ' ' })).toBe(false);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(within(inspector).getByRole('button', { name: 'Show 9 alternative numbers' })).toBe(toggle);
+    expect(within(alternatives).queryAllByRole('article')).toHaveLength(0);
+    expect(document.activeElement).toBe(toggle);
+
+    fireEvent.keyDown(toggle, { key: ' ' });
+    fireEvent.keyUp(toggle, { key: ' ' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.keyDown(toggle, { key: 'Enter' });
+    fireEvent.keyUp(toggle, { key: 'Enter' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('shows no phone candidate or disclosure for zero phones and preserves email', async () => {
+    const inspector = await renderInspector(createApi(detailFor({ phones: [] })));
+    expect(within(inspector).queryByRole('region', { name: 'Primary phone candidate' })).toBeNull();
+    expect(within(inspector).getByText('No phone candidates on file.')).toBeTruthy();
+    expect(within(inspector).queryByRole('button', { name: /alternative numbers?/ })).toBeNull();
+    expect(within(inspector).queryAllByRole('button', { name: /^(Call|Text) / })).toHaveLength(0);
+    expect((within(inspector).getByRole('button', { name: 'Email kevin@example.com' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('fails closed for null compliance even when a single phone is valid', async () => {
+    const api = createApi(detailFor({ phones: [phoneFor({ valid: true, validationState: 'valid' })] }));
+    const inspector = await renderInspector(api);
+    for (const verb of ['Call', 'Text']) {
+      const button = within(inspector).getByRole('button', { name: `${verb} +14015550100` });
+      expectDisabledHelp(button, 'Compliance unknown. Outreach is disabled.');
+      fireEvent.click(button);
+    }
+    const primary = within(inspector).getByRole('region', { name: 'Primary phone candidate' });
+    expect(evidenceValue(primary, 'Source').textContent).toBe('Unknown source');
+    expect(evidenceValue(primary, 'Vendor rank').textContent).toBe('Unknown');
+    expect(evidenceValue(primary, 'Phone kind').textContent).toBe('Unknown');
+    expect(evidenceValue(primary, 'Ownership').textContent).toBe('Unknown ownership');
+    expect(evidenceValue(primary, 'Validation').textContent).toBe('Valid');
+    expect(evidenceValue(primary, 'Compliance').textContent).toBe('Compliance unknown');
+    expect(evidenceValue(primary, 'Evidence observed').textContent).toBe('Unknown');
+    expect(evidenceValue(primary, 'Compliance expires').textContent).toBe('Unknown');
+    expect(within(inspector).queryByRole('button', { name: /alternative numbers?/ })).toBeNull();
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+  });
+
+  it.each(['unverified', 'invalid'] as const)('refuses %s validation despite a legacy valid flag and clear compliance', async (validationState) => {
+    const api = createApi(detailFor({ phones: [phoneFor({
+      valid: true, validationState, ownershipState: 'verified_person', vendorRank: 1,
+      compliance: clearCompliance,
+    })] }));
+    const inspector = await renderInspector(api);
+    for (const verb of ['Call', 'Text']) {
+      const button = within(inspector).getByRole('button', { name: `${verb} +14015550100` });
+      expectDisabledHelp(button, `Phone validation is ${validationState}.`);
+      fireEvent.click(button);
+    }
+    const primary = within(inspector).getByRole('region', { name: 'Primary phone candidate' });
+    expect(evidenceValue(primary, 'Validation').textContent).toBe(validationState === 'invalid' ? 'Invalid' : 'Unverified');
+    expect(evidenceValue(primary, 'Ownership').textContent).toBe('Verified for this person');
+    expect(evidenceValue(primary, 'Compliance').textContent).toBe('Verified clear until Sep 15, 2026');
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 2])('retains all %i positively blocked phones without recommending any primary', async (count) => {
+    const phones = [
+      phoneFor({ id: 'tcpa', value: '+14015550102', vendorRank: 2, validationState: 'valid', valid: true,
+        compliance: { status: 'tcpa_blocked', label: 'TCPA blocked', expiresAt: null,
+          callRefusalReason: 'tcpa_blocked', textRefusalReason: 'tcpa_blocked' } }),
+      phoneFor({ id: 'listed', value: '+14015550101', vendorRank: 1, validationState: 'valid', valid: true,
+        compliance: { status: 'federal_dnc_listed', label: 'Federal DNC listed', expiresAt: null,
+          callRefusalReason: 'federal_dnc_listed', textRefusalReason: 'federal_dnc_listed' } }),
+    ].slice(0, count);
+    const api = createApi(detailFor({ phones }));
+    const inspector = await renderInspector(api);
+    expect(within(inspector).queryByRole('region', { name: 'Primary phone candidate' })).toBeNull();
+    expect(within(inspector).getByText('No recommended phone candidate. All numbers are positively blocked.')).toBeTruthy();
+    expect(within(inspector).queryAllByRole('button', { name: /^(Call|Text) / })).toHaveLength(0);
+    fireEvent.click(within(inspector).getByRole('button', {
+      name: `Show ${count} alternative ${count === 1 ? 'number' : 'numbers'}`,
+    }));
+    const rows = within(inspector).getAllByRole('article');
+    expect(rows.map((row) => within(row).getByRole('heading').textContent)).toEqual(
+      count === 1 ? ['+14015550102'] : ['+14015550101', '+14015550102'],
+    );
+    for (const row of rows) {
+      const expected = within(row).getByRole('heading').textContent === '+14015550101'
+        ? 'Federal DNC listed.' : 'TCPA blocked.';
+      for (const button of within(row).getAllByRole('button')) {
+        expectDisabledHelp(button, expected);
+        fireEvent.click(button);
+      }
+    }
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+  });
+
+  it.each(['call', 'text'] as const)('uses the independent %s refusal without blocking the other channel', async (blockedChannel) => {
+    const api = createApi(detailFor({ phones: [phoneFor({
+      id: 'channel-specific', valid: true, validationState: 'valid',
+      compliance: { ...clearCompliance, status: 'outside_recipient_window', label: 'Outside recipient calling window',
+        callRefusalReason: blockedChannel === 'call' ? 'outside_recipient_window' : null,
+        textRefusalReason: blockedChannel === 'text' ? 'outside_recipient_window' : null },
+    })] }));
+    const inspector = await renderInspector(api);
+    const blocked = within(inspector).getByRole('button', {
+      name: `${blockedChannel === 'call' ? 'Call' : 'Text'} +14015550100`,
+    });
+    expectDisabledHelp(blocked, 'Outside recipient calling window.');
+    fireEvent.click(blocked);
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+    const allowed = within(inspector).getByRole('button', {
+      name: `${blockedChannel === 'call' ? 'Text' : 'Call'} +14015550100`,
+    });
+    expect((allowed as HTMLButtonElement).disabled).toBe(false);
+    expect(allowed.getAttribute('aria-describedby')).toBeNull();
+    fireEvent.click(allowed);
+    expect(api.beginOutbound).toHaveBeenCalledTimes(1);
+    expect(api.beginOutbound).toHaveBeenCalledWith({
+      channel: blockedChannel === 'call' ? 'text' : 'call', personId: 'person-kevin',
+      salesCycleId: 'cycle-kevin', contactMethodId: 'channel-specific',
+    });
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+  });
+
+  it.each(['Call', 'Text'] as const)('keeps the selected alternative contact ID for %s', async (verb) => {
+    const api = createApi(detailFor({ phones: tenCandidates() }));
+    const inspector = await renderInspector(api);
+    fireEvent.click(within(inspector).getByRole('button', { name: 'Show 9 alternative numbers' }));
+    fireEvent.click(within(inspector).getByRole('button', { name: `${verb} +14015550103` }));
+    expect(api.beginOutbound).toHaveBeenCalledTimes(1);
+    expect(api.beginOutbound).toHaveBeenCalledWith({
+      channel: verb === 'Call' ? 'call' : 'text', personId: 'person-kevin',
+      salesCycleId: 'cycle-kevin', contactMethodId: 'clear-vendor',
+    });
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+  });
+
   it('clamps persisted width and closes on Escape', async () => {
     window.localStorage.setItem(WIDTH_KEY, '9999');
     const inspector = await renderInspector(createApi(detailFor()));
@@ -243,8 +530,12 @@ describe('LeadInspector', () => {
     expect((call as HTMLButtonElement).disabled).toBe(true);
     expect((text as HTMLButtonElement).disabled).toBe(true);
     expect((email as HTMLButtonElement).disabled).toBe(true);
+    expectDisabledHelp(call, 'This person opted out.');
+    expectDisabledHelp(text, 'This person opted out.');
 
     fireEvent.click(call);
+    fireEvent.click(text);
+    fireEvent.click(email);
     expect(api.beginOutbound).not.toHaveBeenCalled();
 
     expect(
@@ -272,6 +563,7 @@ describe('LeadInspector', () => {
         value: `+1401555010${index}`,
         label: null as string | null,
         valid: true,
+        ...legacyContactEvidence,
         compliance: {
           status,
           label,
@@ -282,6 +574,7 @@ describe('LeadInspector', () => {
       })),
     })));
 
+    fireEvent.click(within(inspector).getByRole('button', { name: 'Show 7 alternative numbers' }));
     for (const [, label] of cases) {
       expect(within(inspector).getByText(label)).toBeTruthy();
     }
@@ -305,41 +598,52 @@ describe('LeadInspector', () => {
           value: `+1401555020${index}`,
           label: null as string | null,
           valid: true,
+          ...legacyContactEvidence,
           compliance: {
             status, label, expiresAt: null as string | null,
             callRefusalReason, textRefusalReason,
           },
         })),
-        { id: 'clear-phone', kind: 'phone', value: '+14015550199', label: null, valid: true, compliance: { status: 'verified_clear', label: 'Verified clear until Sep 15, 2026', expiresAt: '2026-09-15T00:00:00.000Z', callRefusalReason: null, textRefusalReason: null } },
+        { id: 'clear-phone', kind: 'phone', value: '+14015550199', label: null, valid: true, ...legacyContactEvidence, compliance: { status: 'verified_clear', label: 'Verified clear until Sep 15, 2026', expiresAt: '2026-09-15T00:00:00.000Z', callRefusalReason: null, textRefusalReason: null } },
       ],
     }));
     const inspector = await renderInspector(api);
 
-    cases.forEach(([, , callReason, textReason], index) => {
+    fireEvent.click(within(inspector).getByRole('button', { name: 'Show 7 alternative numbers' }));
+    const expectedHelp = [
+      ['Federal DNC listed.', 'Federal DNC listed.'],
+      ['TCPA blocked.', 'TCPA blocked.'],
+      ['Federal DNC status is unknown.', 'TCPA status is unknown.'],
+      ['Federal scrub evidence has expired.', 'Federal scrub evidence has expired.'],
+      ['Area code is not covered by federal scrub evidence.', 'Area code is not covered by federal scrub evidence.'],
+      ['State registration is missing.', 'State consent requirements are unknown.'],
+      ['Outside recipient calling window.', 'Outside recipient calling window.'],
+    ];
+    expectedHelp.forEach(([callReason, textReason], index) => {
       const value = `+1401555020${index}`;
       const call = within(inspector).getByRole('button', { name: `Call ${value}` });
       const text = within(inspector).getByRole('button', { name: `Text ${value}` });
-      expect((call as HTMLButtonElement).disabled).toBe(true);
-      expect((text as HTMLButtonElement).disabled).toBe(true);
-      expect(document.getElementById(call.getAttribute('aria-describedby')!)?.textContent)
-        .toBe(callReason);
-      expect(document.getElementById(text.getAttribute('aria-describedby')!)?.textContent)
-        .toBe(textReason);
+      expectDisabledHelp(call, callReason);
+      expectDisabledHelp(text, textReason);
+      fireEvent.click(call);
+      fireEvent.click(text);
     });
+    expect(api.beginOutbound).not.toHaveBeenCalled();
     const clearCall = within(inspector).getByRole('button', { name: 'Call +14015550199' });
     const clearText = within(inspector).getByRole('button', { name: 'Text +14015550199' });
     expect((clearCall as HTMLButtonElement).disabled).toBe(false);
     expect((clearText as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('uses the stable refusal reason as accessible disabled-control help text', async () => {
+  it('presents each channel refusal as human-readable accessible disabled-control help', async () => {
     const inspector = await renderInspector(createApi(detailFor({
-      phones: [{ id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, compliance: { status: 'state_clearance_required', label: 'State clearance required', expiresAt: null, callRefusalReason: 'state_registration_missing', textRefusalReason: 'outside_recipient_window' } }],
+      phones: [{ id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, ...legacyContactEvidence, compliance: { status: 'state_clearance_required', label: 'State clearance required', expiresAt: null, callRefusalReason: 'state_registration_missing', textRefusalReason: 'outside_recipient_window' } }],
     })));
 
-    expect(within(inspector).getByRole('button', { name: 'Call +14015550100' }).getAttribute('aria-describedby')).toBeTruthy();
-    expect(within(inspector).getByText('state_registration_missing')).toBeTruthy();
-    expect(within(inspector).getByText('outside_recipient_window')).toBeTruthy();
+    expectDisabledHelp(within(inspector).getByRole('button', { name: 'Call +14015550100' }), 'State registration is missing.');
+    expectDisabledHelp(within(inspector).getByRole('button', { name: 'Text +14015550100' }), 'Outside recipient calling window.');
+    expect(within(inspector).queryByText('state_registration_missing')).toBeNull();
+    expect(within(inspector).queryByText('outside_recipient_window')).toBeNull();
   });
 
   it('never exposes source JSON, contact HMAC, evidence reference, or policy internals', async () => {
@@ -514,5 +818,79 @@ describe('LeadInspector', () => {
 
     expect(within(inspector).queryByText(/Fit \d+ · Timing \d+/)).toBeNull();
     expect(within(inspector).queryByRole('button', { name: 'Wrong signal' })).toBeNull();
+  });
+});
+
+
+const enrichmentReasons = [
+  ['qualification_required', 'Founder qualification is required.'],
+  ['fit_gate_failed', 'Medium or High Fit is required.'],
+  ['identity_or_address_missing', 'A verified identity, cloud link, and usable property address are required.'],
+  ['direct_contact_exists', 'A usable verified contact is already on file.'],
+  ['suppression_blocked', 'Opt-out or suppression prevents contact enrichment.'],
+  ['rate_limited', 'Already requested in the last 30 days.'],
+  ['credentials_unavailable', 'Sourcing credentials are not provisioned.'],
+] as const;
+
+describe('domain-gated Find contact info', () => {
+  function renderEnrichment(input: {
+    eligibility: { eligible: boolean; refusalReason: FindContactInfoReceipt['refusalReason'] };
+    phones?: ContactMethod[];
+    result?: FindContactInfoReceipt;
+    fail?: boolean;
+  }) {
+    const onFindContactInfo = vi.fn(async (): Promise<FindContactInfoReceipt> => {
+      if (input.fail) throw new Error('Synthetic offline failure');
+      return input.result ?? { written: true, refusalReason: null };
+    });
+    // Inject the domain DTO directly so pre-implementation RED exercises the UI,
+    // not the old strict schema rejecting a new field before rendering.
+    const detail = {
+      ...detailFor({ cloudLinked: true, phones: input.phones ?? [] }),
+      findContactEligibility: input.eligibility,
+    };
+    render(<InspectorOverview detail={detail} onBeginOutbound={vi.fn()}
+      onConfirmTransition={vi.fn()} onDismissLead={vi.fn()} onOverrideCloudScore={vi.fn()}
+      onFindContactInfo={onFindContactInfo} />);
+    return onFindContactInfo;
+  }
+
+  it.each(enrichmentReasons)('keeps %s inert with a readable domain reason even with zero phones', (reason, label) => {
+    const request = renderEnrichment({ eligibility: { eligible: false, refusalReason: reason } });
+    const button = screen.getByRole('button', { name: 'Find contact info' });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(label)).toBeTruthy();
+    fireEvent.click(button);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('allows one explicit request with ten vendor candidates when the domain permits it', async () => {
+    const request = renderEnrichment({ eligibility: { eligible: true, refusalReason: null }, phones: tenCandidates() });
+    const button = screen.getByRole('button', { name: 'Find contact info' });
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Contact info requested. Results arrive with the next sync.'));
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith({ personId: 'person-kevin' });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it.each(enrichmentReasons)('shows a current %s refusal receipt in role=status', async (reason, label) => {
+    const request = renderEnrichment({
+      eligibility: { eligible: true, refusalReason: null }, result: { written: false, refusalReason: reason },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Find contact info' }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe(label));
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a request failure non-destructive and does not automatically retry', async () => {
+    const request = renderEnrichment({ eligibility: { eligible: true, refusalReason: null }, fail: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Find contact info' }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('The request failed. Try again later.'));
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('region', { name: 'Fit' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Timing' })).toBeTruthy();
   });
 });

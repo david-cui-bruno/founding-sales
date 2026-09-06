@@ -7,7 +7,7 @@ import { inspectDatabaseEncryption } from '../../db/databaseEncryption';
 import { DomainStartupFatalError } from './domainStartupTypes';
 
 export type DomainStorageReadiness = Readonly<{
-  schemaVersion: 15;
+  schemaVersion: 16;
   encrypted: true;
   cipherVersion: string;
   ftsAvailable: true;
@@ -24,7 +24,7 @@ export type DomainSchemaManifest = Readonly<{
 }>;
 
 /**
- * The canonical load-bearing schema-15 manifest. Reads the live catalog from
+ * The canonical load-bearing schema-16 manifest. Reads the live catalog from
  * sqlite_master with binary-name ordering; a missing, renamed, extra, or
  * malformed load-bearing object is fatal before composition.
  */
@@ -223,7 +223,8 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'protect_trigger_event_receipt_proof',
     'synchronize_person_opt_out',
   ]),
-  catalogSha256: 'd888ea664cf61ff8e5404f3542f1d615d1c9b08ecf77612690236fd192e535a8',
+  // Generated from production migrations 0001 through 0016, including hardened 0015.
+  catalogSha256: 'afd4740063c216a075d8e6f144c018ea242e01ade847260c14003a41893fee66',
 });
 
 export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
@@ -242,6 +243,7 @@ export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
   '0013ContactComplianceEvidence',
   '0014OutboundJurisdictionClearance',
   '0015RecoveryMetadata',
+  '0016ContactPresentationEvidence',
 ] as const);
 
 const appMetaSchema = z.object({
@@ -255,7 +257,7 @@ const appMetaSchema = z.object({
 export function assertDomainStorageReady(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
-  expectedSchemaVersion: 15;
+  expectedSchemaVersion: 16;
   expectedManifest: DomainSchemaManifest;
 }): DomainStorageReadiness {
   const { database } = input;
@@ -278,7 +280,7 @@ export function assertDomainStorageReady(input: {
   const metadata = appMetaSchema.safeParse(metadataRow);
   if (!metadata.success || metadata.data.schema_version !== input.expectedSchemaVersion) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace schema version is not exactly 15.',
+      'schema_not_ready', 'The workspace schema version is not exactly 16.',
     );
   }
 
@@ -297,7 +299,7 @@ export function assertDomainStorageReady(input: {
     DOMAIN_MIGRATION_LEDGER,
   )) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace migration ledger is not exactly schema 15.',
+      'schema_not_ready', 'The workspace migration ledger is not exactly schema 16.',
     );
   }
 
@@ -372,7 +374,7 @@ export function assertDomainStorageReady(input: {
   }
 
   return Object.freeze({
-    schemaVersion: 15 as const,
+    schemaVersion: 16 as const,
     encrypted: true as const,
     cipherVersion: encryption.cipherVersion ?? 'unknown',
     ftsAvailable: true as const,

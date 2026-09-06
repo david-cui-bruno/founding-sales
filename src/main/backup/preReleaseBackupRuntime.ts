@@ -69,7 +69,7 @@ export function openExistingPreReleaseDatabase(paths: ApplicationPaths, key: Wor
     applyWorkspaceKey(raw, key.bytes);
     raw.pragma('foreign_keys = ON'); raw.pragma('recursive_triggers = ON'); raw.pragma('busy_timeout = 5000');
     if (!sameIdentity(original, existingFile(paths.databasePath))) fail();
-    assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 15, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
+    assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 16, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
     return database;
   } catch { if (database) closeDatabase(database); return fail(); }
   finally { closeSync(descriptor); }
@@ -77,8 +77,8 @@ export function openExistingPreReleaseDatabase(paths: ApplicationPaths, key: Wor
 export type PreReleaseReceipt = Omit<VerifiedBackup, 'path'>;
 function receiptOnly(value: VerifiedBackup): PreReleaseReceipt {
   const { basename, kind, schemaVersion, sha256, sizeBytes, createdAt, verifiedAt } = value;
-  if (!/^pre_release-[0-9]{8}T[0-9]{9}Z\.sqlite3$/.test(basename) || kind !== 'pre_release'
-    || schemaVersion !== 15 || !/^[a-f0-9]{64}$/.test(sha256) || !Number.isSafeInteger(sizeBytes) || sizeBytes <= 0
+  if (typeof basename !== 'string' || !/^pre_release-[0-9]{8}T[0-9]{9}Z\.sqlite3$/.test(basename) || kind !== 'pre_release'
+    || schemaVersion !== 16 || typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(sha256) || !Number.isSafeInteger(sizeBytes) || sizeBytes <= 0
     || [createdAt, verifiedAt].some(time => !Number.isFinite(Date.parse(time)) || new Date(time).toISOString() !== time)) fail();
   return { basename, kind, schemaVersion, sha256, sizeBytes, createdAt, verifiedAt };
 }

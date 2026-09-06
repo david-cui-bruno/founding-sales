@@ -9,6 +9,7 @@ import {
   salesCycleIdSchema,
 } from './commonContract';
 import { cloudScoreChipSchema } from './leadsContract';
+import { findContactRefusalReasonSchema } from './enrichmentRequestContract';
 
 export const phoneComplianceStatusSchema = z.enum([
   'verified_clear',
@@ -27,6 +28,15 @@ export const contactMethodSchema = z.object({
   value: z.string().min(1),
   label: z.string().nullable(),
   valid: z.boolean(),
+  validationState: z.enum(['unverified', 'valid', 'invalid']),
+  reachability: z.enum(['direct', 'indirect', 'none']),
+  sourceLabel: z.string().min(1).nullable(),
+  vendorRank: z.number().int().positive().nullable(),
+  phoneKind: z.enum(['mobile', 'landline', 'voip', 'other']).nullable(),
+  ownershipState: z.enum([
+    'verified_person', 'vendor_candidate', 'conflicting_identity', 'unknown',
+  ]),
+  evidenceObservedAt: z.string().datetime({ offset: true }).nullable(),
   compliance: z.object({
     status: phoneComplianceStatusSchema,
     label: z.string().min(1),
@@ -55,6 +65,12 @@ export const cloudScoreDetailSchema = z.object({
   scoredAt: z.string().datetime({ offset: true }).nullable(),
 }).strict();
 
+export const findContactEligibilitySchema = z.object({
+  eligible: z.boolean(),
+  refusalReason: findContactRefusalReasonSchema.nullable(),
+}).strict();
+export type FindContactEligibility = z.infer<typeof findContactEligibilitySchema>;
+
 export const leadDetailSchema = z.object({
   personId: personIdSchema, salesCycleId: salesCycleIdSchema, personName: z.string().min(1), phones: z.array(contactMethodSchema),
   emails: z.array(contactMethodSchema), organizationLabel: z.string().nullable(), propertySummaries: z.array(z.string()),
@@ -62,6 +78,7 @@ export const leadDetailSchema = z.object({
   segment: z.enum(['hot', 'cold', 'warm']), priorityContext: leadPriorityContextSchema.nullable(),
   cloudScores: cloudScoreDetailSchema.nullable(),
   cloudLinked: z.boolean(),
+  findContactEligibility: findContactEligibilitySchema,
   priorityReasons: z.array(z.string().min(1)), nextAction: primaryActionSchema.nullable(), optedOut: z.boolean(),
   cadence: cadenceSummarySchema.nullable(), activities: z.array(activitySummarySchema), conversations: z.array(conversationSummarySchema),
   properties: z.array(propertySummarySchema), history: z.array(historyEventSchema), revision: z.number().int().nonnegative(),
@@ -141,6 +158,7 @@ export const dismissLeadRequestSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
 }).strict();
 
+export type PhoneComplianceStatus = z.infer<typeof phoneComplianceStatusSchema>;
 export type ContactMethod = z.infer<typeof contactMethodSchema>;
 export type CadenceSummary = z.infer<typeof cadenceSummarySchema>;
 export type ActivitySummary = z.infer<typeof activitySummarySchema>;

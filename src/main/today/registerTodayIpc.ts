@@ -1,3 +1,4 @@
+import { leadTriageSnapshotRequestSchema, leadTriageSnapshotSchema, parseLeadTriageSnapshotResponse } from '../../shared/contracts/leadTriageReportContract';
 import { mutationReceiptSchema } from '../../shared/contracts/commonContract';
 import {
   addLeadNoteRequestSchema,
@@ -17,7 +18,7 @@ import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
 import type { TodayProvider } from './todayService';
 
 /**
- * Registers exactly the ten strict Today channels and returns one
+ * Registers exactly the eleven strict Today channels and returns one
  * idempotent unregister function that removes all of them.
  */
 export function registerTodayIpc(
@@ -25,6 +26,13 @@ export function registerTodayIpc(
   isTrustedRendererUrl?: (url: string) => boolean,
 ): () => void {
   const unregisters = [
+    registerValidatedIpc({
+      channel: 'today:get-lead-triage-snapshot',
+      requestSchema: leadTriageSnapshotRequestSchema,
+      responseSchema: leadTriageSnapshotSchema,
+      handler: async (request) => parseLeadTriageSnapshotResponse(request, await provider.getLeadTriageSnapshot(request)),
+      isTrustedRendererUrl,
+    }),
     registerValidatedIpc<undefined, TodaySnapshot>({
       channel: 'today:get',
       requestSchema: null,

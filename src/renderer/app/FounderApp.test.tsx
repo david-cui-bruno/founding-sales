@@ -24,6 +24,7 @@ const detail: LeadDetail = {
   segment: 'hot',
   cloudScores: null,
   cloudLinked: false,
+  findContactEligibility: { eligible: false, refusalReason: 'qualification_required' },
   priorityContext: null,
   priorityReasons: ['Direct phone on file'],
   nextAction: null,

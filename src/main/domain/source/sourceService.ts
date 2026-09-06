@@ -58,10 +58,20 @@ export type IntakeFaultPoint =
 export type IntakeContactInput = {
   kind: 'phone' | 'email';
   value: string;
+  validationState?: 'unverified' | 'valid' | 'invalid';
   reachability: 'direct' | 'indirect' | 'none';
   isPrimary?: boolean;
   inContacts?: boolean | null;
   complianceEvidence?: ContactComplianceEvidence;
+  presentationEvidence?: ContactPresentationEvidence;
+};
+
+export type ContactPresentationEvidence = {
+  sourceLabel: string | null;
+  vendorRank: number | null;
+  phoneKind: 'mobile' | 'landline' | 'voip' | 'other' | null;
+  ownershipState: 'verified_person' | 'vendor_candidate' | 'conflicting_identity' | 'unknown';
+  evidenceObservedAt: string | null;
 };
 
 export type IntakeOrganizationInput = {
@@ -252,10 +262,20 @@ const personInputSchema = z.object({
 const contactInputSchema = z.object({
   kind: z.enum(['phone', 'email']),
   value: z.string().min(1),
+  validationState: z.enum(['unverified', 'valid', 'invalid']).default('valid'),
   reachability: z.enum(['direct', 'indirect', 'none']),
   isPrimary: z.boolean().default(false),
   inContacts: z.boolean().nullable().optional(),
   complianceEvidence: contactComplianceEvidenceSchema.optional(),
+  presentationEvidence: z.object({
+    sourceLabel: z.string().trim().min(1).nullable(),
+    vendorRank: z.number().int().positive().nullable(),
+    phoneKind: z.enum(['mobile', 'landline', 'voip', 'other']).nullable(),
+    ownershipState: z.enum([
+      'verified_person', 'vendor_candidate', 'conflicting_identity', 'unknown',
+    ]),
+    evidenceObservedAt: utcTimestampSchema.nullable(),
+  }).strict().optional(),
   dncListed: z.boolean().default(false),
   tcpaFlag: z.boolean().default(false),
 }).strict();
@@ -344,12 +364,14 @@ type NormalizedContact = {
   kind: 'phone' | 'email';
   normalizedValue: string;
   rawValue: string;
+  validationState: 'unverified' | 'valid' | 'invalid';
   reachability: 'direct' | 'indirect' | 'none';
   isPrimary: boolean;
   inContacts: boolean | null;
   dncListed: boolean;
   tcpaFlag: boolean;
   complianceEvidence: ContactComplianceEvidence;
+  presentationEvidence: ContactPresentationEvidence | null;
 };
 
 type NormalizedOrganization = z.infer<typeof organizationInputSchema> & {
@@ -460,7 +482,7 @@ export class SourceService {
     const commandJson = serializeCanonicalIntakeCommand(canonicalCommand);
     const receipt = this.receipts.getBySourceEventId(command.source.id);
     if (receipt !== null) {
-      if (receipt.commandJson !== commandJson) {
+      if (!commandsMatchForReplay(receipt.command, receipt.commandJson, commandJson)) {
         throw new IntakeIdempotencyConflictError(command.source.id, 'command_mismatch');
       }
       return receipt.result;
@@ -487,13 +509,14 @@ export class SourceService {
           kind: contact.kind,
           normalizedValue: contact.normalizedValue,
           rawValue: contact.rawValue,
-          validationState: 'valid',
+          validationState: contact.validationState,
           reachability: contact.reachability,
           isPrimary: contact.isPrimary,
           inContacts: contact.inContacts,
           dncListed: contact.dncListed,
           tcpaFlag: contact.tcpaFlag,
           complianceEvidence: contact.complianceEvidence,
+          presentationEvidence: contact.presentationEvidence ?? undefined,
         });
       }
     } else {
@@ -601,6 +624,12 @@ export class SourceService {
           evidenceRef: source.evidenceRef ?? null,
           observedAt: source.observedAt,
         });
+        if (contact.presentationEvidence !== null) {
+          this.identities.mergeContactPresentationEvidence({
+            contactMethodId: existing.id,
+            incoming: contact.presentationEvidence,
+          });
+        }
         continue;
       }
       // An existing person may already hold a primary of this kind (the
@@ -615,13 +644,14 @@ export class SourceService {
         kind: contact.kind,
         normalizedValue: contact.normalizedValue,
         rawValue: contact.rawValue,
-        validationState: 'valid',
+        validationState: contact.validationState,
         reachability: contact.reachability,
         isPrimary: hasPrimaryOfKind === false && contact.isPrimary,
         inContacts: contact.inContacts,
         dncListed: contact.dncListed,
         tcpaFlag: contact.tcpaFlag,
         complianceEvidence: contact.complianceEvidence,
+        presentationEvidence: contact.presentationEvidence ?? undefined,
       });
     }
   }
@@ -854,6 +884,7 @@ function normalizeContacts(contacts: z.infer<typeof contactInputSchema>[]): Norm
       // Intake identity is the canonical handle. Importers that need the
       // original spelling retain it in immutable sourceRecord/provenance.
       rawValue: normalizedValue,
+      validationState: contact.validationState,
       reachability: contact.reachability,
       isPrimary: contact.isPrimary,
       inContacts: contact.inContacts ?? null,
@@ -863,6 +894,15 @@ function normalizeContacts(contacts: z.infer<typeof contactInputSchema>[]): Norm
         federalStatus: contact.dncListed ? 'listed' : 'unknown',
         tcpaFlag: contact.tcpaFlag ? true : null,
       }),
+      presentationEvidence: contact.presentationEvidence === undefined
+        ? null
+        : {
+            sourceLabel: contact.presentationEvidence.sourceLabel ?? null,
+            vendorRank: contact.presentationEvidence.vendorRank ?? null,
+            phoneKind: contact.presentationEvidence.phoneKind ?? null,
+            ownershipState: contact.presentationEvidence.ownershipState,
+            evidenceObservedAt: contact.presentationEvidence.evidenceObservedAt ?? null,
+          },
     };
     const existing = deduplicated.get(key);
     if (existing !== undefined) {
@@ -872,6 +912,8 @@ function normalizeContacts(contacts: z.infer<typeof contactInputSchema>[]): Norm
         || existing.inContacts !== canonical.inContacts
         || existing.dncListed !== canonical.dncListed
         || existing.tcpaFlag !== canonical.tcpaFlag
+        || existing.validationState !== canonical.validationState
+        || JSON.stringify(existing.presentationEvidence) !== JSON.stringify(canonical.presentationEvidence)
         || JSON.stringify(existing.complianceEvidence) !== JSON.stringify(canonical.complianceEvidence)
       ) {
         throw new ContactNormalizationConflictError(contact.kind, normalizedValue);
@@ -1011,9 +1053,13 @@ function toCanonicalIntakeCommand(command: NormalizedCommand): CanonicalIntakeCo
     contacts: command.contacts.map((contact) => ({
       kind: contact.kind,
       normalizedValue: contact.normalizedValue,
+      validationState: contact.validationState,
       reachability: contact.reachability,
       isPrimary: contact.isPrimary,
       inContacts: contact.inContacts,
+      ...(contact.presentationEvidence === null
+        ? {}
+        : { presentationEvidence: contact.presentationEvidence }),
     })),
     organizations: command.organizations.map((organization) => ({
       canonicalName: organization.canonicalName,
@@ -1044,6 +1090,24 @@ function toCanonicalIntakeCommand(command: NormalizedCommand): CanonicalIntakeCo
     },
     segment: command.segment,
   };
+}
+
+function commandsMatchForReplay(
+  storedCommand: CanonicalIntakeCommand,
+  storedCommandJson: string,
+  incomingCommandJson: string,
+): boolean {
+  if (storedCommandJson === incomingCommandJson) return true;
+  if (storedCommand.contacts.every((contact) => contact.validationState !== undefined)) {
+    return false;
+  }
+  return serializeCanonicalIntakeCommand({
+    ...storedCommand,
+    contacts: storedCommand.contacts.map((contact) => ({
+      ...contact,
+      validationState: contact.validationState ?? 'valid',
+    })),
+  }) === incomingCommandJson;
 }
 
 export function segmentForChannel(

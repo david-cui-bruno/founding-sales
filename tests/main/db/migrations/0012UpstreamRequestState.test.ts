@@ -58,16 +58,17 @@ describe('0012 upstream request state migration', () => {
     const result = await migrateToLatest(database, options);
 
     expect(result.fromVersion).toBe(11);
-    expect(result.toVersion).toBe(15);
+    expect(result.toVersion).toBe(16);
     expect(result.appliedMigrationIds).toEqual([
       '0012UpstreamRequestState',
       '0013ContactComplianceEvidence',
       '0014OutboundJurisdictionClearance',
       '0015RecoveryMetadata',
+      '0016ContactPresentationEvidence',
     ]);
     expect(database.raw.prepare<[], { schema_version: number }>(
       'SELECT schema_version FROM app_meta WHERE singleton = 1',
-    ).get()).toEqual({ schema_version: 15 });
+    ).get()).toEqual({ schema_version: 16 });
 
     expect(database.raw.prepare<[], { count: number }>(
       'SELECT COUNT(*) AS count FROM sourcing_suppression_outbox',
@@ -127,12 +128,12 @@ describe('0012 upstream request state migration', () => {
     const secondResult = await migrateToLatest(database, options);
 
     expect(secondResult).toEqual({
-      fromVersion: 15,
-      toVersion: 15,
+      fromVersion: 16,
+      toVersion: 16,
       appliedMigrationIds: [],
     });
     expect(database.raw.prepare<[], { schema_version: number }>(
       'SELECT schema_version FROM app_meta WHERE singleton = 1',
-    ).get()).toEqual({ schema_version: 15 });
+    ).get()).toEqual({ schema_version: 16 });
   });
 });

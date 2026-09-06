@@ -5,9 +5,22 @@ import { tmpdir } from 'node:os';
 import { createPackage } from '@electron/asar';
 import { afterEach, expect, it } from 'vitest';
 import { writeReleaseMarker } from '../scripts/writeReleaseMarker.mjs';
+import { validatePreReleaseReceipt } from '../scripts/createPreReleaseBackup.mjs';
 const roots = [];
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })));
-const receipt = { basename: 'pre_release-20260906T170000000Z.sqlite3', kind: 'pre_release', schemaVersion: 15, sha256: 'a'.repeat(64), sizeBytes: 100, createdAt: '2026-09-06T17:00:00.000Z', verifiedAt: '2026-09-06T17:00:00.000Z' };
+const receipt = { basename: 'pre_release-20260906T170000000Z.sqlite3', kind: 'pre_release', schemaVersion: 16, sha256: 'a'.repeat(64), sizeBytes: 100, createdAt: '2026-09-06T17:00:00.000Z', verifiedAt: '2026-09-06T17:00:00.000Z' };
+it('accepts exactly seven public fields in a current16 launcher receipt', () => { expect(validatePreReleaseReceipt(receipt)).toEqual(receipt); });
+it.each([
+  ['schemaVersion', 14], ['schemaVersion', 15], ['schemaVersion', 17], ['schemaVersion', '16'], ['schemaVersion', null], ['schemaVersion', true],
+  ['basename', [receipt.basename]], ['basename', 'private/path.sqlite3'], ['kind', 'manual'],
+  ['sha256', [receipt.sha256]], ['sha256', 'A'.repeat(64)], ['sizeBytes', '100'], ['sizeBytes', 0], ['sizeBytes', 1.5],
+  ['createdAt', [receipt.createdAt]], ['createdAt', '2026-09-06'], ['verifiedAt', null], ['verifiedAt', 'invalid'], ['path', '/private'],
+])('rejects malformed launcher receipt field %s=%j', (field, value) => {
+  expect(() => validatePreReleaseReceipt({ ...receipt, [field]: value })).toThrow('PRE_RELEASE_BACKUP_FAILED');
+});
+it.each(['basename', 'createdAt', 'kind', 'schemaVersion', 'sha256', 'sizeBytes', 'verifiedAt'])('rejects a launcher receipt missing %s', field => {
+  const missing = { ...receipt }; delete missing[field]; expect(() => validatePreReleaseReceipt(missing)).toThrow('PRE_RELEASE_BACKUP_FAILED');
+});
 async function fixture({ identity = 'com.callie.foundersales', output = receipt } = {}) {
   const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'backup-launcher-')); roots.push(root); mkdirSync(join(root, 'scripts')); mkdirSync(join(root, 'bin'));
   for (const name of ['createPreReleaseBackup.mjs', 'writeReleaseMarker.mjs']) cpSync(new URL(`../scripts/${name}`, import.meta.url), join(root, 'scripts', name));
@@ -23,6 +36,11 @@ async function fixture({ identity = 'com.callie.foundersales', output = receipt 
 }
 it('launches only exact repo-owned packaged executable with reserved flag and emits receipt alone', async () => {
   const { root, run } = await fixture(); const result = run(); expect(result.status).toBe(0); expect(JSON.parse(result.stdout)).toEqual(receipt); expect(result.stderr).not.toContain('PRIVATE-HOST'); expect(JSON.parse(readFileSync(join(root, 'called')))).toEqual(['--callie-pre-release-backup']);
+});
+it.each([14, 15, 17, '16'])('refuses unsupported host schema %j through the real launcher entrypoint without leaking stdout', async schemaVersion => {
+  const { root, run } = await fixture({ output: { ...receipt, schemaVersion } }); const result = run();
+  expect(existsSync(join(root, 'called'))).toBe(true); expect(result.status).toBe(1);
+  expect(result.stdout).toBe(''); expect(result.stderr.trim()).toBe('PRE_RELEASE_BACKUP_FAILED');
 });
 it.each([['--database', '/x'], ['--executable', '/x'], ['--user-data-dir=/x'], ['--key', 'x']])('rejects CLI override before launch %j', async (...args) => { const { root, run } = await fixture(); expect(run(args).status).not.toBe(0); expect(existsSync(join(root, 'called'))).toBe(false); });
 it.each(['CALLIE_USER_DATA', 'NODE_OPTIONS', 'ELECTRON_RUN_AS_NODE', 'DYLD_INSERT_LIBRARIES'])('rejects %s before launch', async name => { const { root, run } = await fixture(); expect(run([], { [name]: name === 'NODE_OPTIONS' ? '--no-warnings' : 'x' }).status).not.toBe(0); expect(existsSync(join(root, 'called'))).toBe(false); });

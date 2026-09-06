@@ -88,8 +88,16 @@ application lock, refuses a running app before key/DB/output work, and starts no
 windows, sourcing, recovery setup, IPC or timers. It uses existing protected
 safeStorage material with `databaseExists:true`, rejects unsafe/missing paths,
 plaintext, unsupported schema or changed receipt structures, and never creates
-or migrates a workspace. Current support is validated schema15. Legacy packages
-or workspaces need a separate approved bootstrap/copy procedure.
+or migrates a workspace. Current support is exact current schema16 only, validated
+against the production readiness ledger and full catalog. This explicitly
+supersedes the unreleased schema15-only host. A schema15 workspace is
+refused without migration or backup/receipt writes, as are older or future schemas.
+The historical schema15 audit and its seven-module graph remain unchanged and
+reject schema16. Backup or upgrade of an older founder workspace remains a
+separately approved protected-copy workflow, including historical audit/repair,
+migration-backup and restore-acceptance hold points. Never migrate an older
+workspace merely to make this command usable. Legacy packages also require a
+separately approved bootstrap/copy procedure.
 
 The actual BackupService creates an immutable verified `pre_release` copy and
 same-database receipt, drains, closes and zeroes owned keys before releasing the

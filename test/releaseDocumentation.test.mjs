@@ -39,6 +39,17 @@ it('executes one-artifact release ordering with fake tools and short-circuits ev
 });
 
 describe('release verification documentation', () => {
+  it('separates exact current16 pre-release backup from historical15 audit and the older-workspace protected-copy hold', () => {
+    const readme = readFileSync(join(projectRoot, 'README.md'), 'utf8');
+    const plan = readFileSync(join(projectRoot, 'docs/superpowers/plans/2026-09-04-runtime-recovery-security-hardening.md'), 'utf8');
+    expect(readme).toContain('exact current schema16 only');
+    expect(readme).toContain('supersedes the unreleased schema15-only host');
+    expect(readme).toContain('historical schema15 audit');
+    expect(readme).toMatch(/older founder workspace[\s\S]*separately approved protected-copy workflow/);
+    expect(readme).toMatch(/schema15[\s\S]*refused without migration or backup\/receipt writes/);
+    expect(plan).toMatch(/Task12[\s\S]*exact current schema16 only/);
+    expect(plan).toMatch(/Task10[\s\S]*historical[\s\S]*schema15/);
+  });
   it('packages before packaged E2E and verifies that artifact afterward', () => {
     const readme = readFileSync(join(projectRoot, 'README.md'), 'utf8');
     const packageJson = JSON.parse(

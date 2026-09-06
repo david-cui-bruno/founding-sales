@@ -54,7 +54,7 @@ describe('0009 sourcing file ledger migration', () => {
 
   it('migrates a fresh database to schema version 9', async () => {
     const result = await migrateToLatest(database, options);
-    expect(result.toVersion).toBe(15);
+    expect(result.toVersion).toBe(16);
     expect(result.appliedMigrationIds).toEqual([
       '0009SourcingFileLedger',
       '0010NoDueDates',
@@ -63,10 +63,11 @@ describe('0009 sourcing file ledger migration', () => {
       '0013ContactComplianceEvidence',
       '0014OutboundJurisdictionClearance',
       '0015RecoveryMetadata',
+      '0016ContactPresentationEvidence',
     ]);
     expect(database.raw.prepare<[], { schema_version: number }>(
       'SELECT schema_version FROM app_meta WHERE singleton = 1',
-    ).get()).toEqual({ schema_version: 15 });
+    ).get()).toEqual({ schema_version: 16 });
   });
 
   it('creates an empty processed-file ledger with key primary key and required processed_at', async () => {
@@ -95,7 +96,7 @@ describe('0009 sourcing file ledger migration', () => {
     const result = await migrateToLatest(database, options);
 
     expect(result.fromVersion).toBe(8);
-    expect(result.toVersion).toBe(15);
+    expect(result.toVersion).toBe(16);
     expect(result.appliedMigrationIds).toEqual([
       '0009SourcingFileLedger',
       '0010NoDueDates',
@@ -104,6 +105,7 @@ describe('0009 sourcing file ledger migration', () => {
       '0013ContactComplianceEvidence',
       '0014OutboundJurisdictionClearance',
       '0015RecoveryMetadata',
+      '0016ContactPresentationEvidence',
     ]);
     expect(database.raw.prepare<[], { last_key: string | null; polled_at: string }>(
       'SELECT last_key, polled_at FROM sourcing_cursor WHERE id = 1',

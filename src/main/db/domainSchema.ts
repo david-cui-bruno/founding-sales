@@ -59,6 +59,11 @@ export type PersonContactMethodsTable = {
   compliance_source: 'ftc_download' | 'enrichment_vendor' | 'manual_import' | 'legacy';
   scrubbed_at: string | null;
   compliance_expires_at: string | null;
+  source_label: string | null;
+  vendor_rank: number | null;
+  phone_kind: 'mobile' | 'landline' | 'voip' | 'other' | null;
+  ownership_state: 'verified_person' | 'vendor_candidate' | 'conflicting_identity' | 'unknown';
+  evidence_observed_at: string | null;
   created_at: string;
   updated_at: string;
 };

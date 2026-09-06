@@ -1,3 +1,4 @@
+import type { LeadTriageSnapshot, LeadTriageEvidence } from '../../src/shared/contracts/leadTriageReportContract';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SourcingStatus } from '../../src/shared/contracts/sourcingContract';
 import type { AppHealth } from '../../src/shared/healthContract';
@@ -16,7 +17,7 @@ type ExposedCallieApi = {
   health: { get: () => Promise<unknown> };
   leads: { list: (input: unknown) => Promise<unknown> };
   leadDetail: Record<string, unknown>;
-  today: { get: () => Promise<unknown> };
+  today: { get: () => Promise<unknown>; getLeadTriageSnapshot: (input: unknown) => Promise<unknown> };
   pipeline: { get: () => Promise<unknown> };
   review: Record<string, unknown>;
   friday: Record<string, unknown>;
@@ -112,7 +113,7 @@ describe('preload workflow bridge', () => {
       'beginOutbound', 'confirmTransition', 'dismissLead', 'findContactInfo', 'get', 'overrideCloudScore',
     ]);
     expect(Object.keys(api.today).sort()).toEqual([
-      'addLeadNote', 'complete', 'get', 'getTriageQueue', 'logCallOutcome',
+      'addLeadNote', 'complete', 'get', 'getLeadTriageSnapshot', 'getTriageQueue', 'logCallOutcome',
       'logPastActivity', 'markActivityInError', 'pin', 'setReviewPosition', 'snooze',
     ]);
     expect(Object.keys(api.pipeline)).toEqual(['get']);
@@ -165,6 +166,57 @@ describe('preload workflow bridge', () => {
       api.leads.list({ ...request, blended_score: true }),
     ).rejects.toThrow();
     expect(electron.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes the validated read-only lead snapshot through the composed API', async () => {
+    const snapshot: LeadTriageSnapshot = { generatedAt: '2026-08-31T15:00:00.000Z', requestedLimit: 30,
+      scannedQueueRows: 0, leads: [], revisionBefore: 0, revisionAfter: 0, privacyScanPassed: true };
+    electron.invoke.mockResolvedValue(snapshot);
+    const api = exposedApi();
+    expect(api.today.getLeadTriageSnapshot).toBeTypeOf('function');
+    await expect(api.today.getLeadTriageSnapshot({ limit: 30 })).resolves.toEqual(snapshot);
+    expect(electron.invoke).toHaveBeenCalledWith('today:get-lead-triage-snapshot', { limit: 30 });
+  });
+
+  it('rejects invalid snapshot requests locally and unsafe responses before exposure', async () => {
+    const api = exposedApi();
+    for (const input of [{ limit: 19 }, { limit: 31 }, { limit: 20.5 }, { limit: 30, extra: true }, {}]) {
+      await expect(api.today.getLeadTriageSnapshot(input)).rejects.toThrow();
+    }
+    expect(electron.invoke).not.toHaveBeenCalled();
+    const valid: LeadTriageSnapshot = { generatedAt: '2026-08-31T15:00:00.000Z', requestedLimit: 30,
+      scannedQueueRows: 0, leads: [], revisionBefore: 0, revisionAfter: 0, privacyScanPassed: true };
+    for (const patch of [{ privacyScanPassed: undefined as unknown }, { revisionAfter: 1 }, { rawPayload: { email: 'owner@example.com' } }]) {
+      electron.invoke.mockResolvedValue({ ...valid, ...patch });
+      await expect(api.today.getLeadTriageSnapshot({ limit: 30 })).rejects.toThrow();
+    }
+  });
+
+  it('rejects extra snapshot arguments locally and a response for a different request limit', async () => {
+    const valid: LeadTriageSnapshot = { generatedAt: '2026-08-31T15:00:00.000Z', requestedLimit: 30,
+      scannedQueueRows: 0, leads: [], revisionBefore: 0, revisionAfter: 0, privacyScanPassed: true };
+    electron.invoke.mockResolvedValue(valid);
+    const read = exposedApi().today.getLeadTriageSnapshot as (...args: unknown[]) => Promise<unknown>;
+    await expect(read({ limit: 30 }, {})).rejects.toThrow();
+    expect(electron.invoke).not.toHaveBeenCalled();
+    await expect(read({ limit: 20 })).rejects.toThrow();
+  });
+
+
+  it.each(['Avery +14015550100', 'owner@example.com', '123 Hope Street'])('rejects otherwise strict IPC evidence leaking %s', async (unsafe) => {
+    const evidence: LeadTriageEvidence = {
+  rank: 1, queueIndex: 0, personId: 'person-safe', salesCycleId: 'cycle-safe', personName: 'Avery',
+  locality: null, region: null, postalCode: null,
+  organization: { label: null, relationship: null, evidenceCodes: [] },
+  fit: { points: null, band: null, evidenceCodes: ['fit_evidence_missing'] },
+  timing: { value: null, band: null, triggers: [] }, cloud: { fit: null, timing: null, contributions: [] },
+  reachability: null, dataConfidence: null,
+  contacts: { phoneCount: 0, emailCount: 0, usableDirectCount: 0, maskedPrimaryPhone: null, evidenceCodes: [] },
+  compliance: { status: 'unknown', refusalReasonCodes: [] }, identityConcernCodes: [],
+};
+    electron.invoke.mockResolvedValue({ generatedAt: '2026-08-31T15:00:00.000Z', requestedLimit: 30,
+      scannedQueueRows: 1, leads: [{ ...evidence, personName: unsafe }], revisionBefore: 0, revisionAfter: 0, privacyScanPassed: true });
+    await expect(exposedApi().today.getLeadTriageSnapshot({ limit: 30 })).rejects.toThrow('Unsafe triage artifact');
   });
 
   it('invokes today:get and pipeline:get without arguments', async () => {

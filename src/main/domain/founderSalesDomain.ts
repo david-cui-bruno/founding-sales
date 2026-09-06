@@ -1,3 +1,5 @@
+import { collectLeadTriageSnapshot, type LeadTriageQueueRow } from '../today/leadTriageReportService';
+import { leadTriageSnapshotRequestSchema, type LeadTriageSnapshot, type LeadTriageSnapshotRequest } from '../../shared/contracts/leadTriageReportContract';
 import { createHash } from 'node:crypto';
 
 import Papa from 'papaparse';
@@ -32,6 +34,7 @@ import {
   type ConfirmTransitionRequest,
   type ContactMethod,
   type DismissLeadRequest,
+  type FindContactEligibility,
   type LeadDetail,
   type LeadDetailRequest,
 } from '../../shared/contracts/leadDetailContract';
@@ -134,6 +137,7 @@ import {
   type ImportStatusRequest,
 } from '../../shared/contracts/importContract';
 import { FOUNDER_CHANNEL_POLICIES_V1 } from './cadence/cadenceScheduler';
+import { comparePhoneCandidates } from './contacts/contactPresentation';
 import type { DomainServices } from './createDomainServices';
 import {
   isCloudPublicRecordChannel,
@@ -259,7 +263,34 @@ export type EnrichmentCandidate = {
     postalCode: string | null;
   } | null;
   lastRequestedAt: string | null;
+  qualificationState: 'unreviewed' | 'eligible' | 'disqualified' | 'merge_review';
+  fitBand: 'low' | 'medium' | 'high' | null;
+  identityReady: boolean;
+  hasUsableDirectContact: boolean;
+  suppressionBlocked: boolean;
 };
+
+/** Ordered domain gates shared by the detail projection and upload boundary.
+ * Credentials are checked only by the writer, never probed by a detail read.
+ */
+export function getFindContactEligibility(
+  candidate: EnrichmentCandidate,
+  now: string,
+): FindContactEligibility {
+  let refusalReason: FindContactEligibility['refusalReason'] = null;
+  if (candidate.qualificationState !== 'eligible') refusalReason = 'qualification_required';
+  else if (candidate.fitBand !== 'medium' && candidate.fitBand !== 'high') refusalReason = 'fit_gate_failed';
+  else if (!candidate.identityReady || candidate.cloudEntityId === null
+    || candidate.situsAddress === null || candidate.ownerFullName.trim().length === 0) {
+    refusalReason = 'identity_or_address_missing';
+  } else if (candidate.hasUsableDirectContact) refusalReason = 'direct_contact_exists';
+  else if (candidate.suppressionBlocked !== false) refusalReason = 'suppression_blocked';
+  else if (candidate.lastRequestedAt !== null
+    && Date.parse(now) - Date.parse(candidate.lastRequestedAt) < 30 * 24 * 60 * 60 * 1000) {
+    refusalReason = 'rate_limited';
+  }
+  return { eligible: refusalReason === null, refusalReason };
+}
 
 const LANE_MAP: Readonly<Record<TodayLane, TodayLaneId>> = Object.freeze({
   won_onboarding: 'onboarding',
@@ -661,11 +692,18 @@ export class FounderSalesDomain {
       'SELECT cloud_entity_id FROM cloud_entity_links WHERE person_id = ?',
     ).get(person.id) as { cloud_entity_id: string } | undefined;
     const contacts = this.database.raw.prepare(`
-      SELECT id, kind, normalized_value, validation_state, compliance_expires_at
+      SELECT id, kind, normalized_value, validation_state, reachability, is_primary,
+        source_label, vendor_rank, phone_kind, ownership_state, evidence_observed_at,
+        compliance_expires_at
       FROM person_contact_methods WHERE person_id = ?
       ORDER BY kind ASC, normalized_value ASC, id ASC
     `).all(person.id) as {
-      id: string; kind: 'phone' | 'email'; normalized_value: string; validation_state: string;
+      id: string; kind: ContactMethod['kind']; normalized_value: string;
+      validation_state: ContactMethod['validationState']; reachability: ContactMethod['reachability'];
+      is_primary: 0 | 1; // Legacy evidence only, never a presentation or authorization decision.
+      source_label: string | null; vendor_rank: number | null;
+      phone_kind: ContactMethod['phoneKind']; ownership_state: ContactMethod['ownershipState'];
+      evidence_observed_at: string | null;
       compliance_expires_at: string | null;
     }[];
     const refusalReason = (row: typeof contacts[number], channel: 'call' | 'text') => {
@@ -676,13 +714,16 @@ export class FounderSalesDomain {
       );
       return decision.kind === 'allowed' ? null : decision.reasonCode;
     };
-    const contactDto = (row: typeof contacts[number]) => {
+    const contactDto = (row: typeof contacts[number]): ContactMethod => {
+      const contact: Omit<ContactMethod, 'compliance'> = {
+        id: row.id, kind: row.kind, value: row.normalized_value,
+        label: null, valid: row.validation_state === 'valid',
+        validationState: row.validation_state, reachability: row.reachability,
+        sourceLabel: row.source_label, vendorRank: row.vendor_rank, phoneKind: row.phone_kind,
+        ownershipState: row.ownership_state, evidenceObservedAt: row.evidence_observed_at,
+      };
       if (row.kind === 'email') {
-        return {
-          id: row.id, kind: row.kind, value: row.normalized_value,
-          label: null as string | null, valid: row.validation_state === 'valid',
-          compliance: null as ContactMethod['compliance'],
-        };
+        return { ...contact, compliance: null };
       }
       const callRefusalReason = refusalReason(row, 'call');
       const textRefusalReason = refusalReason(row, 'text');
@@ -726,8 +767,7 @@ export class FounderSalesDomain {
         })}`
         : labels[status];
       return {
-        id: row.id, kind: row.kind, value: row.normalized_value,
-        label: null as string | null, valid: row.validation_state === 'valid',
+        ...contact,
         compliance: { status, label, expiresAt, callRefusalReason, textRefusalReason },
       };
     };
@@ -798,7 +838,7 @@ export class FounderSalesDomain {
       personId: person.id,
       salesCycleId: cycle.id,
       personName: person.display_name,
-      phones: contacts.filter((row) => row.kind === 'phone').map(contactDto),
+      phones: contacts.filter((row) => row.kind === 'phone').map(contactDto).sort(comparePhoneCandidates),
       emails: contacts.filter((row) => row.kind === 'email').map(contactDto),
       organizationLabel: organization?.name ?? null,
       propertySummaries: properties.map(
@@ -817,6 +857,9 @@ export class FounderSalesDomain {
           scoredAt: prospect.cloud_scored_at,
         },
       cloudLinked: cloudLink !== undefined,
+      findContactEligibility: getFindContactEligibility(
+        this.getEnrichmentRequestCandidate({ personId: person.id }), this.clock.now(),
+      ),
       priorityReasons: projection === undefined ? [] : [
         `Fit ${priorityContext.fitBand} ${priorityContext.fitPoints}/30`,
         `Timing ${priorityContext.timingBand} ${priorityContext.timingValue}/40`,
@@ -1150,6 +1193,32 @@ export class FounderSalesDomain {
     });
   }
 
+  /** One private selection/order builder for UI and evidence reads. */
+  private triageQueueSql(selection: string): string {
+    return `SELECT ${selection}
+      FROM sales_cycles AS cycle
+      JOIN persons AS person ON person.id = cycle.person_id
+      JOIN prospects AS prospect ON prospect.id = cycle.prospect_id
+      WHERE cycle.stage = 'unreviewed' AND cycle.workflow_status = 'active'
+        AND person.opted_out = 0 AND person.deleted_at IS NULL
+        AND (cycle.resurface_at IS NULL OR cycle.resurface_at <= ?)
+      ORDER BY cycle.id COLLATE BINARY
+    `;
+  }
+
+  getLeadTriageSnapshot(input: LeadTriageSnapshotRequest): LeadTriageSnapshot {
+    const request = leadTriageSnapshotRequestSchema.parse(input);
+    const revisionBefore = this.currentRevision();
+    const generatedAt = this.clock.now();
+    const orderedRows = this.database.raw.prepare(this.triageQueueSql(`
+      cycle.id AS cycle_id, cycle.person_id, cycle.prospect_id, person.display_name
+    `)).all(generatedAt) as LeadTriageQueueRow[];
+    return collectLeadTriageSnapshot({
+      database: this.database, services: this.services, orderedRows, request,
+      generatedAt, revisionBefore, currentRevision: () => this.currentRevision(),
+    });
+  }
+
   /**
    * The triage queue (audit 4.6): unreviewed cycles in stable id order with
    * the persisted resume position. Leads deferred to a future resurface_at
@@ -1157,8 +1226,7 @@ export class FounderSalesDomain {
    */
   getTriageQueue(): TriageQueue {
     const now = this.clock.now();
-    const rows = this.database.raw.prepare(`
-      SELECT
+    const rows = this.database.raw.prepare(this.triageQueueSql(`
         cycle.id AS cycle_id, cycle.person_id, person.display_name,
         prospect.cloud_fit, prospect.cloud_timing, prospect.cloud_score_reasons_json,
         (
@@ -1184,14 +1252,7 @@ export class FounderSalesDomain {
           WHERE person_id = cycle.person_id AND kind = 'email'
           ORDER BY is_primary DESC, id ASC LIMIT 1
         ) AS email
-      FROM sales_cycles AS cycle
-      JOIN persons AS person ON person.id = cycle.person_id
-      JOIN prospects AS prospect ON prospect.id = cycle.prospect_id
-      WHERE cycle.stage = 'unreviewed' AND cycle.workflow_status = 'active'
-        AND person.opted_out = 0 AND person.deleted_at IS NULL
-        AND (cycle.resurface_at IS NULL OR cycle.resurface_at <= ?)
-      ORDER BY cycle.id COLLATE BINARY
-    `).all(now) as Array<{
+    `)).all(now) as Array<{
       cycle_id: string; person_id: string; display_name: string;
       cloud_fit: number | null; cloud_timing: number | null;
       cloud_score_reasons_json: string | null;
@@ -2920,19 +2981,27 @@ export class FounderSalesDomain {
    * Everything the enrichment request writer needs for one person: the
    * cloud entity link, the situs address of the first linked property that
    * satisfies the vendor schema (line1 + locality + 2-letter region), the
-   * owner name, and the per-entity rate-limit timestamp.
+   * owner name, per-entity rate-limit timestamp, and persisted eligibility.
    */
   getEnrichmentRequestCandidate(input: { personId: string }): EnrichmentCandidate {
     const parsed = z.object({ personId: z.string().min(1) }).strict().parse(input);
     const person = this.database.raw.prepare(
-      'SELECT id, display_name FROM persons WHERE id = ?',
-    ).get(parsed.personId) as { id: string; display_name: string } | undefined;
+      'SELECT id, display_name, deleted_at, opted_out FROM persons WHERE id = ?',
+    ).get(parsed.personId) as {
+      id: string; display_name: string; deleted_at: string | null; opted_out: 0 | 1;
+    } | undefined;
     if (person === undefined) {
       throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The person does not exist.');
     }
     const link = this.database.raw.prepare(
       'SELECT cloud_entity_id FROM cloud_entity_links WHERE person_id = ?',
     ).get(person.id) as { cloud_entity_id: string } | undefined;
+    // A person has one persisted prospect. Do not infer qualification from stage.
+    const prospect = this.database.raw.prepare(`
+      SELECT id, qualification_state FROM prospects WHERE person_id = ?
+    `).get(person.id) as {
+      id: string; qualification_state: EnrichmentCandidate['qualificationState'];
+    } | undefined;
     const properties = this.database.raw.prepare(`
       SELECT property.address_line_1, property.locality, property.region,
         property.postal_code
@@ -2955,6 +3024,18 @@ export class FounderSalesDomain {
       : this.database.raw.prepare(
         'SELECT last_requested_at FROM sourcing_enrichment_requests WHERE cloud_entity_id = ?',
       ).get(link.cloud_entity_id) as { last_requested_at: string } | undefined;
+    const usableContact = this.database.raw.prepare(`
+      SELECT id FROM person_contact_methods WHERE person_id = ?
+        AND ownership_state = 'verified_person' AND validation_state = 'valid'
+        AND reachability != 'none' LIMIT 1
+    `).get(person.id);
+    let suppressionBlocked = true;
+    try {
+      suppressionBlocked = person.opted_out !== 0
+        || this.services.outboundPermission.inspectPerson(person.id).kind !== 'allowed';
+    } catch {
+      // Unresolved membership is not permission. Do not duplicate opt-out policy.
+    }
     return {
       cloudEntityId: link === undefined ? null : link.cloud_entity_id,
       ownerFullName: person.display_name,
@@ -2967,6 +3048,12 @@ export class FounderSalesDomain {
           : situs.postal_code.trim(),
       },
       lastRequestedAt: lastRequested === undefined ? null : lastRequested.last_requested_at,
+      qualificationState: prospect?.qualification_state ?? 'unreviewed',
+      fitBand: prospect === undefined ? null : this.readProjection(prospect.id)?.fit_band ?? null,
+      identityReady: person.deleted_at === null && person.display_name.trim().length > 0
+        && prospect !== undefined && prospect.qualification_state !== 'merge_review',
+      hasUsableDirectContact: usableContact !== undefined,
+      suppressionBlocked,
     };
   }
 

@@ -41,7 +41,7 @@ test('packaged diagnostics use callie protocol and an isolated native SQLite dat
 
     expect(firstLaunch).toEqual({
       databasePath: expectedDatabasePath,
-      schemaVersion: 15,
+      schemaVersion: 16,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,
@@ -127,7 +127,7 @@ test('packaged startup leaves an isolated database collision untouched and recov
 
     expect(health).toEqual({
       databasePath,
-      schemaVersion: 15,
+      schemaVersion: 16,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,
@@ -187,7 +187,7 @@ const inspectPackagedApplication = async (userDataPath: string, inspectRecovery?
     await page.getByRole('link', { name: 'Settings' }).click();
     await expect(page.getByText('Encrypted SQLite ready')).toBeVisible();
     await expect(page.getByText('FTS5 available')).toBeVisible();
-    await expect(page.getByText('Schema 15')).toBeVisible();
+    await expect(page.getByText('Schema 16')).toBeVisible();
     // The sourcing status row renders regardless of credential state; the
     // packaged test env may report none, file, or keychain depending on the
     // machine, and auto-polling stays disabled under --use-mock-keychain.

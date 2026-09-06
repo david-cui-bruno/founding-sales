@@ -28,8 +28,17 @@ export type ContactMethod = {
   dncListed: boolean;
   tcpaFlag: boolean;
   complianceEvidence: ContactComplianceEvidence;
+  presentationEvidence?: ContactPresentationEvidence;
   createdAt: string;
   updatedAt: string;
+};
+
+export type ContactPresentationEvidence = {
+  sourceLabel: string | null;
+  vendorRank: number | null;
+  phoneKind: 'mobile' | 'landline' | 'voip' | 'other' | null;
+  ownershipState: 'verified_person' | 'vendor_candidate' | 'conflicting_identity' | 'unknown';
+  evidenceObservedAt: string | null;
 };
 
 export type ContactMethodMatch = {
@@ -123,6 +132,7 @@ export type AddContactMethodInput = {
   dncListed?: boolean;
   tcpaFlag?: boolean;
   complianceEvidence?: ContactComplianceEvidence;
+  presentationEvidence?: ContactPresentationEvidence;
 };
 
 export type CreateProspectInput = QualificationSelection & {

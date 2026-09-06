@@ -383,30 +383,57 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
     });
 
     const contacts = database.raw.prepare(`
-      SELECT normalized_value, is_primary, dnc_listed, tcpa_flag
+      SELECT normalized_value, validation_state, is_primary, dnc_listed, tcpa_flag,
+        source_label, vendor_rank, phone_kind, ownership_state, evidence_observed_at
       FROM person_contact_methods
       WHERE person_id = ? AND kind = 'phone'
       ORDER BY normalized_value ASC
     `).all(result.personId) as Array<{
-      normalized_value: string; is_primary: number;
-      dnc_listed: number; tcpa_flag: number;
+      normalized_value: string; validation_state: string; is_primary: number;
+      dnc_listed: number; tcpa_flag: number; source_label: string | null;
+      vendor_rank: number | null; phone_kind: string | null; ownership_state: string;
+      evidence_observed_at: string | null;
     }>;
     expect(contacts).toEqual([
       // Appended enrichment contacts keep the established primary: rank 1
       // would be primary on a fresh person, but the parcel event's phone
       // already holds one_primary_contact_per_kind.
-      { normalized_value: '+14015550100', is_primary: 0, dnc_listed: 0, tcpa_flag: 0 },
-      { normalized_value: '+14015550101', is_primary: 0, dnc_listed: 1, tcpa_flag: 0 },
+      {
+        normalized_value: '+14015550100', validation_state: 'unverified',
+        is_primary: 0, dnc_listed: 0, tcpa_flag: 0, source_label: 'tracerfy',
+        vendor_rank: 1, phone_kind: 'mobile', ownership_state: 'vendor_candidate',
+        evidence_observed_at: '2026-09-02T02:59:00.000Z',
+      },
+      {
+        normalized_value: '+14015550101', validation_state: 'unverified',
+        is_primary: 0, dnc_listed: 1, tcpa_flag: 0, source_label: 'tracerfy',
+        vendor_rank: 2, phone_kind: 'landline', ownership_state: 'vendor_candidate',
+        evidence_observed_at: '2026-09-02T02:59:00.000Z',
+      },
       // The original parcel event's phone keeps default (0) flags.
-      { normalized_value: '+14015551234', is_primary: 1, dnc_listed: 0, tcpa_flag: 0 },
+      {
+        normalized_value: '+14015551234', validation_state: 'valid',
+        is_primary: 1, dnc_listed: 0, tcpa_flag: 0, source_label: null,
+        vendor_rank: null, phone_kind: null, ownership_state: 'unknown',
+        evidence_observed_at: null,
+      },
     ]);
+
+    domain.importCloudSourceEvent({ command: mapped.command, cloudEntityId: mapped.cloudEntityId });
+    expect(database.raw.prepare(`
+      SELECT COUNT(*) AS count FROM person_contact_methods WHERE person_id = ?
+    `).get(result.personId)).toEqual({ count: 5 });
+    expect(database.raw.prepare(`
+      SELECT vendor_rank FROM person_contact_methods
+      WHERE person_id = ? AND normalized_value = '+14015550100'
+    `).get(result.personId)).toEqual({ vendor_rank: 1 });
 
     const detail = domain.getLeadDetail({ personId: result.personId });
     const flagged = detail.phones.find((phone) => phone.value === '+14015550101');
     expect(flagged?.compliance).toMatchObject({
-      status: 'federal_dnc_listed',
-      callRefusalReason: 'federal_dnc_listed',
-      textRefusalReason: 'federal_dnc_listed',
+      status: 'compliance_unknown',
+      callRefusalReason: 'contact_validation_unusable',
+      textRefusalReason: 'contact_validation_unusable',
     });
 
     const cycle = database.raw.prepare(
@@ -429,7 +456,7 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
         contactMethodId: blockedContact.id,
       });
     } catch (error) {
-      expect((error as { reasonCode?: string }).reasonCode).toBe('federal_dnc_listed');
+      expect((error as { reasonCode?: string }).reasonCode).toBe('contact_validation_unusable');
     }
 
     // A legacy/unknown contact is not authorized merely because compatibility flags are clear.
@@ -441,7 +468,7 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
       personId: result.personId,
       salesCycleId: cycle.id,
       contactMethodId: cleanContact.id,
-    })).toThrowError(expect.objectContaining({ reasonCode: 'federal_status_unknown' }));
+    })).toThrowError(expect.objectContaining({ reasonCode: 'contact_validation_unusable' }));
   });
 
   it('merges later compliance evidence into an existing cloud-linked phone', () => {

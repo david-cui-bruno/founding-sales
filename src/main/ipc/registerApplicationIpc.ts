@@ -114,6 +114,8 @@ export function createTodayProvider(runtime: DomainGate): TodayProvider {
       runtime.withDomain((domain) => domain.logCallOutcome(input)),
     markActivityInError: (input) =>
       runtime.withDomain((domain) => domain.markActivityInError(input)),
+    getLeadTriageSnapshot: (input) =>
+      runtime.withDomain((domain) => domain.getLeadTriageSnapshot(input)),
     getTriageQueue: () =>
       runtime.withDomain((domain) => domain.getTriageQueue()),
     setReviewPosition: (input) =>

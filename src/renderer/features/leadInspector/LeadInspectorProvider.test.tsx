@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   leadDetailSchema,
+  type ContactMethod,
   type LeadDetail,
 } from '../../../shared/contracts/leadDetailContract';
 import { LeadInspectorProvider } from './LeadInspectorProvider';
@@ -16,16 +17,23 @@ const receipt = {
   affectedSalesCycleIds: ['cycle-kevin'],
 };
 
+const legacyContactEvidence: Pick<ContactMethod,
+  'validationState' | 'reachability' | 'sourceLabel' | 'vendorRank' |
+  'phoneKind' | 'ownershipState' | 'evidenceObservedAt'> = {
+  validationState: 'valid', reachability: 'none', sourceLabel: null, vendorRank: null,
+  phoneKind: null, ownershipState: 'unknown', evidenceObservedAt: null,
+};
+
 const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
   leadDetailSchema.parse({
     personId: 'person-kevin',
     salesCycleId: 'cycle-kevin',
     personName: 'Kevin Shin',
     phones: [
-      { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, compliance: { status: 'verified_clear', label: 'Verified clear until Sep 15, 2026', expiresAt: '2026-09-15T00:00:00.000Z', callRefusalReason: null, textRefusalReason: null } },
+      { id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true, ...legacyContactEvidence, compliance: { status: 'verified_clear', label: 'Verified clear until Sep 15, 2026', expiresAt: '2026-09-15T00:00:00.000Z', callRefusalReason: null, textRefusalReason: null } },
     ],
     emails: [
-      { id: 'email-1', kind: 'email', value: 'kevin@example.com', label: null, valid: true, compliance: null },
+      { id: 'email-1', kind: 'email', value: 'kevin@example.com', label: null, valid: true, ...legacyContactEvidence, compliance: null },
     ],
     organizationLabel: 'Shin Properties',
     propertySummaries: ['12 Benefit St, Providence'],
@@ -45,6 +53,7 @@ const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
     priorityReasons: ['Fit high 22/30', 'Timing hot 31/40', 'Reachability direct'],
     cloudScores: null,
     cloudLinked: false,
+    findContactEligibility: { eligible: false, refusalReason: 'qualification_required' },
     nextAction: {
       id: 'action-1',
       type: 'review_lead',
