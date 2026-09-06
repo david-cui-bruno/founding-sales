@@ -19,6 +19,8 @@ export const packagedApplicationBinary = join(
 );
 
 export type FounderWorkspace = {
+  /** Captured child for observation, not proof of graceful exit. */
+  readonly application: ChildProcess;
   page: Page;
   userDataPath: string;
   /** Terminates the app and browser but keeps the user-data directory. */
@@ -89,6 +91,8 @@ export async function launchFounderWorkspace(options: {
   userDataPath?: string;
   /** Only the existing sourcing fixture-directory/hang-once test overrides. */
   env?: Record<string, string>;
+  /** Synchronous observation before CDP connection or renderer discovery. */
+  onSpawn?: (application: ChildProcess) => void;
 } = {}): Promise<FounderWorkspace> {
   if (!existsSync(packagedApplicationBinary)) {
     throw new Error(
@@ -112,6 +116,7 @@ export async function launchFounderWorkspace(options: {
     application.once('error', (error) => {
       spawnError = error;
     });
+    options.onSpawn?.(application);
     browser = await connectToPackagedApplication(
       application,
       debuggingPort,
@@ -142,6 +147,7 @@ export async function launchFounderWorkspace(options: {
       }
     };
     return {
+      application,
       page,
       userDataPath,
       stop,

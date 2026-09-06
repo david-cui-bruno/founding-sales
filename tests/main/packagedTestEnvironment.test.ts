@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as files from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,7 +8,7 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as packagedProcess from '../support/packagedApplication';
-import type { FounderWorkspace } from '../support/founderWorkspace';
+import type { FounderWorkspace, launchFounderWorkspace } from '../support/founderWorkspace';
 
 // Execute the actual harness source with fake OS/process/CDP boundaries. Never
 // import Playwright, launch Electron, open a socket, or inspect the runner HOME.
@@ -86,6 +86,7 @@ function sourceHarness(fault?: Fault) {
   const allocated: string[] = [];
   const removed: string[] = [];
   const delays: number[] = [];
+  const events: string[] = [];
   let spawnAttempts = 0;
   let kind: LaunchKind = 'shared';
   const registeredTests: Array<() => Promise<void>> = [];
@@ -103,8 +104,14 @@ function sourceHarness(fault?: Fault) {
       databaseEncrypted: true, cipherVersion: 'fixture', fts5Available: true },
   };
   const browser = {
-    contexts: () => [{ pages: () => fault === 'no-page' || kind === 'collision' ? [] : [page] }],
-    close: async () => { if (fault === 'browser-close') throw new Error('fixture close failure'); },
+    contexts: () => {
+      events.push('renderer');
+      return [{ pages: () => fault === 'no-page' || kind === 'collision' ? [] : [page] }];
+    },
+    close: async () => {
+      events.push('browser-close');
+      if (fault === 'browser-close') throw new Error('fixture close failure');
+    },
   };
   // Renderer assertions are outside this source-only lifecycle test. Keep actual
   // callback/control flow, but replace UI-only matchers, not lifecycle code.
@@ -163,6 +170,8 @@ function sourceHarness(fault?: Fault) {
         const child = new FakeChild();
         const env = options?.env ?? parentEnv;
         launches.push({ child, binary, args, env });
+        events.push('spawn');
+        queueMicrotask(() => events.push('spawn-microtask'));
         child.beforeExit = () => expect(fs.existsSync(env.HOME ?? '')).toBe(true);
         if (fault === 'spawn-error') {
           child.pid = undefined;
@@ -180,6 +189,7 @@ function sourceHarness(fault?: Fault) {
     },
     'playwright/test': {
       chromium: { connectOverCDP: async (url: string) => {
+        events.push('cdp');
         expect(url).toBe('http://127.0.0.1:43123');
         if (fault === 'spawn-error') throw new Error('fixture debugger unavailable');
         if (fault === 'cdp-exit') {
@@ -230,7 +240,7 @@ function sourceHarness(fault?: Fault) {
     }, { filename });
     return exports;
   }
-  const launchShared = async (options = {}): Promise<FounderWorkspace> => {
+  const launchShared = async (options: Parameters<typeof launchFounderWorkspace>[0] = {}): Promise<FounderWorkspace> => {
     const module = load('tests/support/founderWorkspace.ts');
     return (module.launchFounderWorkspace as (options: object) => Promise<FounderWorkspace>)(options);
   };
@@ -252,7 +262,7 @@ function sourceHarness(fault?: Fault) {
     const module = load('tests/support/packagedTestEnvironment.ts');
     return (module.createPackagedTestEnvironment as (overrides: object) => Promise<Environment>)(overrides);
   };
-  return { parentEnv, launches, launchShared, run, createEnvironment, allocated, removed, delays,
+  return { parentEnv, launches, launchShared, run, createEnvironment, allocated, removed, delays, events,
     spawnAttempts: () => spawnAttempts };
 }
 
@@ -276,6 +286,94 @@ describe('normal packaged GUI child credential isolation', () => {
 });
 
 const launchKinds: LaunchKind[] = ['shared', 'foundation', 'collision', 'apple'];
+
+describe('shared captured-child observation seam', () => {
+  it('invokes onSpawn once with the captured instance synchronously before CDP and renderer discovery', async () => {
+    const harness = sourceHarness();
+    const observed: ChildProcess[] = [];
+    const workspace = await harness.launchShared({ onSpawn: (application) => {
+      observed.push(application);
+      harness.events.push('onSpawn');
+    } });
+    try {
+      expect(observed).toHaveLength(1);
+      expect(observed[0]).toBe(harness.launches[0].child);
+      expect(workspace.application).toBe(observed[0]);
+      expect(harness.events).toEqual(['spawn', 'onSpawn', 'cdp', 'spawn-microtask', 'renderer']);
+    } finally { await workspace.close(); }
+  });
+
+  it('returns the captured instance without a callback and keeps owned-profile stop/close semantics', async () => {
+    const harness = sourceHarness();
+    const workspace = await harness.launchShared();
+    try {
+      const { child, env } = harness.launches[0];
+      expect(workspace.application).toBe(child);
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+      await workspace.stop();
+      expect(child.closed).toBe(true);
+      expect(child.signals).toEqual(['SIGTERM']);
+      expect(fs.existsSync(env.HOME!)).toBe(false);
+      expect(fs.existsSync(workspace.userDataPath)).toBe(true);
+      await workspace.close();
+      expect(child.signals).toEqual(['SIGTERM']);
+      expect(fs.existsSync(workspace.userDataPath)).toBe(false);
+      expect(harness.events.filter((event) => event === 'browser-close')).toHaveLength(2);
+    } finally { await workspace.close(); }
+  });
+
+  it.each(['mkdir', 'port', 'spawn-throw'] as const)('does not invoke onSpawn on pre-capture failure (%s)', async (fault) => {
+    const harness = sourceHarness(fault);
+    const observed: ChildProcess[] = [];
+    await expect(harness.launchShared({ onSpawn: (application) => { observed.push(application); } })).rejects.toThrow();
+    expect(observed).toEqual([]);
+    expect(harness.launches).toEqual([]);
+    expect(harness.events).toEqual([]);
+    expect(harness.allocated.every((root) => !fs.existsSync(root))).toBe(true);
+  });
+
+  it.each([false, true])('cleans callback failure before CDP without deleting caller ownership (caller profile: %s)', async (callerOwned) => {
+    const harness = sourceHarness();
+    const profile = callerOwned ? await files.mkdtemp(path.join(temporaryRoot, 'caller-profile-')) : undefined;
+    if (profile !== undefined) await files.writeFile(path.join(profile, 'caller-owned.txt'), 'synthetic profile');
+    const failure = new Error('fixture observer failure');
+    const observed: ChildProcess[] = [];
+    const launch = harness.launchShared({ userDataPath: profile, onSpawn: (application) => {
+      observed.push(application);
+      harness.events.push('onSpawn');
+      throw failure;
+    } });
+    try {
+      await expect(launch).rejects.toBe(failure);
+      expect(observed).toHaveLength(1);
+      expect(observed[0]).toBe(harness.launches[0].child);
+      expect(harness.events).toEqual(['spawn', 'onSpawn', 'spawn-microtask']);
+      expect(harness.launches[0].child.closed).toBe(true);
+      expect(harness.launches[0].child.signals).toEqual(['SIGTERM']);
+      expect(harness.allocated.every((root) => !fs.existsSync(root))).toBe(true);
+      if (profile !== undefined) {
+        expect(await files.readFile(path.join(profile, 'caller-owned.txt'), 'utf8')).toBe('synthetic profile');
+        expect(harness.removed).not.toContain(profile);
+      }
+    } finally { await launch.then((workspace) => workspace.close(), (): undefined => undefined); }
+  });
+
+  it('installs the owned spawn-error listener before invoking onSpawn', async () => {
+    const harness = sourceHarness();
+    const failure = new Error('fixture synchronous spawn error');
+    const launch = harness.launchShared({ onSpawn: (application) => {
+      harness.events.push('onSpawn');
+      application.emit('error', failure);
+    } });
+    try {
+      await expect(launch).rejects.toThrow('The packaged application failed to spawn: fixture synchronous spawn error');
+      expect(harness.events).toEqual(['spawn', 'onSpawn', 'spawn-microtask']);
+      expect(harness.launches[0].child.closed).toBe(true);
+      expect(harness.allocated.every((root) => !fs.existsSync(root))).toBe(true);
+    } finally { await launch.then((workspace) => workspace.close(), (): undefined => undefined); }
+  });
+});
 
 describe('every packaged source call site', () => {
   it.each(launchKinds)('%s uses the same isolated environment and removes it after captured exit', async (kind) => {
@@ -328,15 +426,23 @@ describe('every packaged source call site', () => {
     const profile = await files.mkdtemp(path.join(temporaryRoot, 'caller-profile-'));
     const marker = path.join(fixture, 'caller-owned.txt');
     await files.writeFile(marker, 'synthetic fixture');
+    const observed: ChildProcess[] = [];
     const options = { userDataPath: profile, env: {
       CALLIE_SOURCING_FIXTURE_DIR: fixture, CALLIE_SOURCING_FIXTURE_HANG_ONCE: '1',
-    } };
+    }, onSpawn: (application: ChildProcess) => { observed.push(application); } };
     const first = await harness.launchShared(options);
+    expect(observed).toHaveLength(1);
+    expect(first.application).toBe(observed[0]);
+    expect(observed[0]).toBe(harness.launches[0].child);
     expect(harness.launches[0].env.CALLIE_SOURCING_FIXTURE_DIR).toBe(await files.realpath(fixture));
     expect(harness.launches[0].env.CALLIE_SOURCING_FIXTURE_HANG_ONCE).toBe('1');
     await first.stop();
     await first.close();
     const second = await harness.launchShared(options);
+    expect(observed).toHaveLength(2);
+    expect(second.application).toBe(observed[1]);
+    expect(observed[1]).toBe(harness.launches[1].child);
+    expect(second.application).not.toBe(first.application);
     expect(second.userDataPath).toBe(profile);
     expect(harness.launches[1].env.HOME === harness.launches[0].env.HOME).toBe(false);
     await second.close();
@@ -352,9 +458,25 @@ describe('every packaged source call site', () => {
       const profile = await files.mkdtemp(path.join(temporaryRoot, 'caller-profile-'));
       const marker = path.join(fixture, 'caller-owned.txt');
       await files.writeFile(marker, 'synthetic fixture');
+      const observed: ChildProcess[] = [];
+      const lifecycle: string[] = [];
       await expect(harness.launchShared({
         userDataPath: profile, env: { CALLIE_SOURCING_FIXTURE_DIR: fixture },
+        onSpawn: (application) => {
+          observed.push(application);
+          application.once('error', () => lifecycle.push('error'));
+          application.once('exit', () => lifecycle.push('exit'));
+          application.once('close', () => lifecycle.push('close'));
+        },
       })).rejects.toThrow();
+      if (fault === 'spawn-throw') {
+        expect(observed).toEqual([]);
+        expect(lifecycle).toEqual([]);
+      } else {
+        expect(observed).toHaveLength(1);
+        expect(observed[0]).toBe(harness.launches[0].child);
+        expect(lifecycle).toEqual(fault === 'spawn-error' ? ['error', 'close'] : ['exit', 'close']);
+      }
       expect(await files.readFile(marker, 'utf8')).toBe('synthetic fixture');
       expect(fs.existsSync(profile)).toBe(true);
       expect(harness.allocated.every((root) => !fs.existsSync(root))).toBe(true);
