@@ -30,6 +30,7 @@ const detail: LeadDetail = {
   nextAction: null,
   optedOut: false,
   cadence: null,
+  outboundAttempts: [],
   activities: [],
   conversations: [],
   properties: [],
@@ -120,6 +121,7 @@ function fakeCallieApi(): CalliePreloadApi {
     leadDetail: {
       get: vi.fn(async () => detail),
       beginOutbound: pending,
+      getOutboundCapabilities: pending,
       confirmTransition: pending,
     },
     today: {

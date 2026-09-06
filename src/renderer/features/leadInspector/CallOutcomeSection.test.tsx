@@ -10,9 +10,11 @@ import { CallOutcomeSection, type CallOutcomeApi } from './CallOutcomeSection';
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
 });
 
 const detail = {
+  outboundAttempts: [],
   personId: 'person-kevin',
   salesCycleId: 'cycle-kevin',
   personName: 'Kevin Shin',
@@ -142,5 +144,58 @@ describe('CallOutcomeSection', () => {
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.queryByText(/SQLITE_BUSY/)).toBeNull();
     expect(onSaved).not.toHaveBeenCalled();
+  });
+});
+
+describe('linked manual retry', () => {
+  it('preserves linked request on association conflict with no automatic unlinked save', async () => {
+    const api = fakeApi(null);
+    vi.mocked(api.logCallOutcome).mockRejectedValue(new Error('private wrong cycle details'));
+    const commandId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    render(<CallOutcomeSection detail={detail} api={api} onSaved={vi.fn()} outboundCommandId={commandId} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Spoke' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save & next' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('Nothing will be saved unlinked automatically');
+    expect(screen.queryByText(/private wrong cycle/)).toBeNull();
+    expect(api.logCallOutcome).toHaveBeenCalledTimes(1);
+    const first = vi.mocked(api.logCallOutcome).mock.calls[0][0];
+    fireEvent.click(screen.getByRole('button', { name: 'Save & next' }));
+    await waitFor(() => expect(api.logCallOutcome).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.logCallOutcome).mock.calls[1][0]).toEqual(first);
+    expect(first.outboundCommandId).toBe(commandId);
+    expect(api.addLeadNote).not.toHaveBeenCalled(); expect(api.get).not.toHaveBeenCalled();
+  });
+
+  it('does not relog a confirmed outcome or note when the separate next-lead fetch fails', async () => {
+    const api = fakeApi(null);
+    vi.mocked(api.get).mockRejectedValueOnce(new Error('queue failed'));
+    render(<CallOutcomeSection detail={detail} api={api} onSaved={vi.fn()} outboundCommandId="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" />);
+    fireEvent.click(screen.getByRole('button', { name: 'No answer' }));
+    fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'A manual note' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save & next' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('outcome was saved');
+    fireEvent.click(screen.getByRole('button', { name: 'Save & next' }));
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+    expect(api.logCallOutcome).toHaveBeenCalledTimes(1);
+    expect(api.addLeadNote).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains exact effective timestamp and callback payload after unresolved response', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime('2026-09-06T15:00:00.000Z');
+    const api = fakeApi(null);
+    vi.mocked(api.logCallOutcome).mockRejectedValueOnce(new Error('response lost'));
+    const commandId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    render(<CallOutcomeSection detail={detail} api={api} onSaved={vi.fn()} outboundCommandId={commandId} />);
+    fireEvent.click(screen.getByRole('button', { name: 'No answer' }));
+    fireEvent.change(screen.getByLabelText('Callback promised'), { target: { value: '2030-05-06' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save & next' }));
+    await screen.findByRole('alert');
+    const first = vi.mocked(api.logCallOutcome).mock.calls[0][0];
+    expect(first.outboundCommandId).toBe(commandId);
+    vi.setSystemTime('2026-09-06T16:00:00.000Z');
+    fireEvent.click(screen.getByRole('button', { name: 'Save & next' }));
+    await waitFor(() => expect(api.logCallOutcome).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.logCallOutcome).mock.calls[1][0]).toEqual(first);
   });
 });

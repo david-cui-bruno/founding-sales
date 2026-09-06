@@ -69,6 +69,7 @@ export const pinActionRequestSchema = z.object({
 }).strict();
 
 export const logPastActivityRequestSchema = z.object({
+  outboundCommandId: z.string().uuid().optional(),
   personId: personIdSchema,
   salesCycleId: salesCycleIdSchema.nullable(),
   kind: z.enum(['call', 'voicemail', 'text', 'email', 'note']),
@@ -98,6 +99,7 @@ export const callOutcomeSchema = z.enum([
  * `opted_out` routes through the existing person-wide opt-out closure.
  */
 export const logCallOutcomeRequestSchema = z.object({
+  outboundCommandId: z.string().uuid().optional(),
   personId: personIdSchema,
   salesCycleId: salesCycleIdSchema,
   outcome: callOutcomeSchema,

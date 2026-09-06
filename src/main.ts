@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, protocol, safeStorage } from 'electron';
+import { app, BrowserWindow, Menu, powerMonitor, protocol, safeStorage } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { createWindow } from './main/createWindow';
@@ -224,6 +224,34 @@ if (!started && ownsSingleInstanceLock) {
         signal,
         logger,
         logDirectoryPath: fileLogSink.directoryPath,
+        registerOutboundLifecycle: ({ onWake, onLock, onUnlock }) => {
+          const owned: (() => void)[] = [];
+          const cleanup = (): unknown[] => {
+            const errors: unknown[] = [];
+            for (const remove of owned.splice(0).reverse()) {
+              try { remove(); }
+              catch (error) { errors.push(error); }
+            }
+            return errors;
+          };
+          const register = (add: () => void, remove: () => void): void => {
+            add();
+            owned.push(remove);
+          };
+          try {
+            register(() => powerMonitor.on('resume', onWake), () => powerMonitor.removeListener('resume', onWake));
+            register(() => powerMonitor.on('lock-screen', onLock), () => powerMonitor.removeListener('lock-screen', onLock));
+            register(() => powerMonitor.on('unlock-screen', onUnlock), () => powerMonitor.removeListener('unlock-screen', onUnlock));
+          } catch (error) {
+            const errors = cleanup();
+            if (errors.length > 0) throw new AggregateError([error, ...errors], 'Outbound lifecycle registration and rollback failed.', { cause: error });
+            throw error;
+          }
+          return () => {
+            const errors = cleanup();
+            if (errors.length > 0) throw new AggregateError(errors, 'Outbound lifecycle cleanup failed.');
+          };
+        },
         createWindow: () => createAndLoadWindow(signal),
       }).then(async (application) => {
         if (signal.aborted) {

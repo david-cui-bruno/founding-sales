@@ -19,6 +19,7 @@ export type CallOutcomeApi = {
 export type CallOutcomeSectionProps = {
   detail: LeadDetail;
   api: CallOutcomeApi;
+  outboundCommandId?: string;
   /** Called after a save: the next queue lead to open, or null for Today. */
   onSaved(nextPersonId: string | null): void;
 };
@@ -51,7 +52,7 @@ const tomorrowLocalDate = (): string => {
  * outcome and moves to the next queue lead. A callback date writes the
  * cycle's resurface marker through logCallOutcome.
  */
-export function CallOutcomeSection({ detail, api, onSaved }: CallOutcomeSectionProps) {
+export function CallOutcomeSection({ detail, api, onSaved, outboundCommandId }: CallOutcomeSectionProps) {
   const [outcome, setOutcome] = useState<CallOutcome | null>(null);
   const [callbackDate, setCallbackDate] = useState('');
   const [note, setNote] = useState('');
@@ -59,27 +60,48 @@ export function CallOutcomeSection({ detail, api, onSaved }: CallOutcomeSectionP
   const [failed, setFailed] = useState(false);
   const sectionRef = useRef<HTMLElement>(null);
 
+  const pendingRef = useRef(false);
+  const submittedRef = useRef<LogCallOutcomeRequest | null>(null);
+  const submittedCallbackDateRef = useRef<string | null>(null);
+  const outcomeSavedRef = useRef(false);
+  const noteSavedRef = useRef(false);
+  const activeRef = useRef(true);
+  useEffect(() => { activeRef.current = true; return () => { activeRef.current = false; }; }, []);
   const canSave = outcome !== null && !saving;
 
   const save = useCallback(() => {
-    if (outcome === null || saving) return;
+    if (outcome === null || pendingRef.current) return;
+    pendingRef.current = true;
     setSaving(true);
     setFailed(false);
     const run = async () => {
-      await api.logCallOutcome({
+      const previous = submittedRef.current;
+      const unchangedLinkedRequest = outboundCommandId !== undefined && previous !== null
+        && previous.outboundCommandId === outboundCommandId && previous.personId === detail.personId
+        && previous.salesCycleId === detail.salesCycleId && previous.outcome === outcome
+        && submittedCallbackDateRef.current === callbackDate;
+      const request: LogCallOutcomeRequest = unchangedLinkedRequest ? previous : {
         personId: detail.personId,
         salesCycleId: detail.salesCycleId,
         outcome,
         callbackAt: callbackDate === '' ? null : callbackInstantFor(callbackDate),
-        occurredAt: new Date().toISOString(),
-      });
+        occurredAt: outboundCommandId === undefined ? new Date().toISOString() : submittedRef.current?.occurredAt ?? new Date().toISOString(),
+        ...(outboundCommandId === undefined ? {} : { outboundCommandId }),
+      };
+      submittedRef.current = request;
+      submittedCallbackDateRef.current = callbackDate;
+      if (!outcomeSavedRef.current) {
+        await api.logCallOutcome(request);
+        outcomeSavedRef.current = true;
+      }
       const trimmed = note.trim();
-      if (trimmed.length > 0) {
+      if (trimmed.length > 0 && !noteSavedRef.current) {
         await api.addLeadNote({
           personId: detail.personId,
           salesCycleId: detail.salesCycleId,
           text: trimmed,
         });
+        noteSavedRef.current = true;
       }
       // Next queue lead: the first row of the first non-empty lane that is
       // not the person just called.
@@ -91,16 +113,20 @@ export function CallOutcomeSection({ detail, api, onSaved }: CallOutcomeSectionP
     };
     run()
       .then((nextPersonId) => {
+        pendingRef.current = false;
+        if (!activeRef.current) return;
         setSaving(false);
         // Let the Today route (rendered underneath the overlay) refetch.
         window.dispatchEvent(new CustomEvent('callie:outcome-logged'));
         onSaved(nextPersonId);
       })
       .catch(() => {
+        pendingRef.current = false;
+        if (!activeRef.current) return;
         setSaving(false);
         setFailed(true);
       });
-  }, [api, callbackDate, detail, note, outcome, onSaved, saving]);
+  }, [api, callbackDate, detail, note, outcome, onSaved, outboundCommandId]);
 
   // Cmd+Enter saves from anywhere inside the section.
   const onKeyDown = useMemo(
@@ -131,6 +157,7 @@ export function CallOutcomeSection({ detail, api, onSaved }: CallOutcomeSectionP
       aria-label="Call outcome"
     >
       <h3 className="call-outcome__title">Call outcome</h3>
+      {outboundCommandId !== undefined && <p>Requested manual association: {outboundCommandId}. The saved command must match this person and cycle.</p>}
       <div
         className="call-outcome__chips"
         role="group"
@@ -141,6 +168,7 @@ export function CallOutcomeSection({ detail, api, onSaved }: CallOutcomeSectionP
             key={option.value}
             type="button"
             className="call-outcome__chip"
+            disabled={saving || outcomeSavedRef.current}
             aria-pressed={outcome === option.value}
             onClick={() =>
               setOutcome((current) =>
@@ -156,6 +184,7 @@ export function CallOutcomeSection({ detail, api, onSaved }: CallOutcomeSectionP
         <label className="call-outcome__callback-label">
           Callback promised
           <input
+            disabled={saving || outcomeSavedRef.current}
             type="date"
             className="call-outcome__callback"
             value={callbackDate}
@@ -166,6 +195,7 @@ export function CallOutcomeSection({ detail, api, onSaved }: CallOutcomeSectionP
         <label className="call-outcome__note-label">
           Note
           <textarea
+            disabled={saving || noteSavedRef.current}
             className="call-outcome__note"
             rows={2}
             placeholder="Optional. Stays on this machine."
@@ -176,7 +206,11 @@ export function CallOutcomeSection({ detail, api, onSaved }: CallOutcomeSectionP
       </div>
       {failed && (
         <p className="call-outcome__error" role="alert">
-          The outcome could not be saved. Try again.
+          {outcomeSavedRef.current
+            ? 'The outcome was saved. The separate note or next-lead request failed.'
+            : outboundCommandId !== undefined
+              ? 'The linked outcome could not be confirmed. The command must match this person and cycle. Your request is retained. Nothing will be saved unlinked automatically.'
+              : 'The outcome could not be saved. Try again.'}
         </p>
       )}
       <div className="call-outcome__actions">

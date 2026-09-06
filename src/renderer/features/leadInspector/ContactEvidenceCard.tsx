@@ -3,7 +3,6 @@ import { useId, useState } from 'react';
 import { isPositivelyBlocked } from '../../../shared/contactPresentation';
 import type { OutboundAuthorizationReasonCode } from '../../../shared/contracts/commonContract';
 import type {
-  BeginOutboundRequest,
   ContactMethod,
   LeadDetail,
 } from '../../../shared/contracts/leadDetailContract';
@@ -15,7 +14,7 @@ export type ContactEvidenceCardProps = {
   detail: LeadDetail;
   primary: ContactMethod | null;
   alternatives: readonly ContactMethod[];
-  onBeginOutbound(request: BeginOutboundRequest): void;
+  onSelectOutbound(channel: 'call' | 'text', contact: ContactMethod): void;
 };
 
 const OWNERSHIP_LABELS: Record<ContactMethod['ownershipState'], string> = {
@@ -57,12 +56,12 @@ function EvidenceTime({ value }: { value: string | null }) {
   );
 }
 
-type PhoneEvidenceProps = Pick<ContactEvidenceCardProps, 'detail' | 'onBeginOutbound'> & {
+type PhoneEvidenceProps = Pick<ContactEvidenceCardProps, 'detail' | 'onSelectOutbound'> & {
   contact: ContactMethod;
 };
 
 function PhoneAction({
-  detail, contact, channel, onBeginOutbound,
+  detail, contact, channel, onSelectOutbound,
 }: PhoneEvidenceProps & { channel: 'call' | 'text' }) {
   const helpId = useId();
   const refusalReason = channel === 'call'
@@ -79,16 +78,7 @@ function PhoneAction({
         variant="quiet"
         disabled={help !== null}
         aria-describedby={help === null ? undefined : helpId}
-        onClick={() => {
-          void Promise.resolve(onBeginOutbound({
-            channel,
-            personId: detail.personId,
-            salesCycleId: detail.salesCycleId,
-            contactMethodId: contact.id,
-          })).catch(() => {
-            // The unchanged main-process final gate remains authoritative.
-          });
-        }}
+        onClick={() => onSelectOutbound(channel, contact)}
       >
         {channel === 'call' ? 'Call' : 'Text'} {contact.value}
       </Button>
@@ -99,7 +89,7 @@ function PhoneAction({
   );
 }
 
-function PhoneEvidence({ detail, contact, onBeginOutbound }: PhoneEvidenceProps) {
+function PhoneEvidence({ detail, contact, onSelectOutbound }: PhoneEvidenceProps) {
   const titleId = useId();
   const positivelyBlocked = isPositivelyBlocked(contact.compliance?.status ?? 'compliance_unknown');
 
@@ -129,8 +119,8 @@ function PhoneEvidence({ detail, contact, onBeginOutbound }: PhoneEvidenceProps)
         <div><dt>Compliance expires</dt><dd><EvidenceTime value={contact.compliance?.expiresAt ?? null} /></dd></div>
       </dl>
       <div className="contact-evidence__actions">
-        <PhoneAction detail={detail} contact={contact} channel="call" onBeginOutbound={onBeginOutbound} />
-        <PhoneAction detail={detail} contact={contact} channel="text" onBeginOutbound={onBeginOutbound} />
+        <PhoneAction detail={detail} contact={contact} channel="call" onSelectOutbound={onSelectOutbound} />
+        <PhoneAction detail={detail} contact={contact} channel="text" onSelectOutbound={onSelectOutbound} />
       </div>
     </article>
   );
@@ -138,7 +128,7 @@ function PhoneEvidence({ detail, contact, onBeginOutbound }: PhoneEvidenceProps)
 
 /** Presentation only. Selection is shared with main, and rank never grants permission. */
 export function ContactEvidenceCard({
-  detail, primary, alternatives, onBeginOutbound,
+  detail, primary, alternatives, onSelectOutbound,
 }: ContactEvidenceCardProps) {
   const [expanded, setExpanded] = useState(false);
   const alternativesId = useId();
@@ -154,7 +144,7 @@ export function ContactEvidenceCard({
       ) : (
         <section aria-label="Primary phone candidate" className="contact-evidence__primary">
           <p className="contact-evidence__label">Primary candidate</p>
-          <PhoneEvidence detail={detail} contact={primary} onBeginOutbound={onBeginOutbound} />
+          <PhoneEvidence detail={detail} contact={primary} onSelectOutbound={onSelectOutbound} />
         </section>
       )}
       {alternatives.length > 0 && (
@@ -182,7 +172,7 @@ export function ContactEvidenceCard({
           </Button>
           <div id={alternativesId} hidden={!expanded} className="contact-evidence__alternatives">
             {expanded && alternatives.map((contact) => (
-              <PhoneEvidence key={contact.id} detail={detail} contact={contact} onBeginOutbound={onBeginOutbound} />
+              <PhoneEvidence key={contact.id} detail={detail} contact={contact} onSelectOutbound={onSelectOutbound} />
             ))}
           </div>
         </>

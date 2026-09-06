@@ -1,3 +1,4 @@
+import { contactSnapshot } from '../communications/contactSnapshot';
 import type { AppDatabase } from '../db/database';
 import type { DomainServices } from '../domain/createDomainServices';
 import { FOUNDER_CHANNEL_POLICIES_V1 } from '../domain/cadence/cadenceScheduler';
@@ -153,6 +154,7 @@ function readEvidence(input: CollectorInput, row: LeadTriageQueueRow, rank: numb
     states.push(clear ? 'verified_clear' : blocked ? 'blocked' : 'unknown');
     const presentation = contact.presentationEvidence;
     return {
+      contactSnapshot: contactSnapshot(contact),
       id: contact.id, kind: 'phone', value: contact.normalizedValue, label: null,
       valid: contact.validationState === 'valid', validationState: contact.validationState,
       reachability: contact.reachability, sourceLabel: null,

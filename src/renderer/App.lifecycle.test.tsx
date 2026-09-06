@@ -85,6 +85,7 @@ const pendingWorkflowApis = () => {
     leadDetail: {
       get: pending,
       beginOutbound: pending,
+      getOutboundCapabilities: pending,
       confirmTransition: pending,
     },
     today: {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { communicationRecencySql } from '../events/communicationEvidence';
 
 import type { AppDatabase } from '../../db/database';
 import {
@@ -180,6 +181,7 @@ export class TodayRepository {
         ON last_activity.id = (
           SELECT candidate.id FROM activities AS candidate
           WHERE candidate.sales_cycle_id = cycle.id
+            AND ${communicationRecencySql}
           ORDER BY candidate.occurred_at DESC, candidate.id DESC
           LIMIT 1
         )

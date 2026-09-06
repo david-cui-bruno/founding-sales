@@ -36,12 +36,6 @@ export type TodayRouteApi = {
 
 /** The lead-detail commands the call and triage flows reuse. */
 export type TodayLeadCommandApi = {
-  beginOutbound(input: {
-    channel: 'call';
-    personId: string;
-    salesCycleId: string;
-    contactMethodId: string;
-  }): Promise<MutationReceipt>;
   confirmTransition(input: ConfirmTransitionRequest): Promise<MutationReceipt>;
   dismissLead(input: DismissLeadRequest): Promise<MutationReceipt>;
   get(input: { personId: string }): Promise<{
@@ -176,37 +170,11 @@ export function TodayRoute({
     [api, runCommand],
   );
 
-  /**
-   * The call flow (audit 4.7): log the outbound call through the same
-   * beginOutbound path the inspector uses, then promote the lead to its
-   * full page where the outcome section waits. Without the lead command
-   * API (isolated tests) it degrades to opening the lead page directly.
-   */
-  const handleCall = useCallback(
-    (item: TodayItem) => {
-      const openPage = onOpenLeadPage ?? inspector?.openFullPage ?? onOpenLead;
-      if (leadApi === undefined) {
-        openPage(item.personId);
-        return;
-      }
-      runCommand(
-        async () => {
-          const detail = await leadApi.get({ personId: item.personId });
-          const phone = detail.phones[0];
-          if (phone !== undefined) {
-            await leadApi.beginOutbound({
-              channel: 'call',
-              personId: item.personId,
-              salesCycleId: item.salesCycleId,
-              contactMethodId: phone.id,
-            });
-          }
-        },
-        () => openPage(item.personId),
-      );
-    },
-    [inspector, leadApi, onOpenLead, onOpenLeadPage, runCommand],
-  );
+  /** Call selects the full page. Only its explicit confirmation can request a handoff. */
+  const handleCall = useCallback((item: TodayItem) => {
+    const openPage = onOpenLeadPage ?? inspector?.openFullPage ?? onOpenLead;
+    openPage(item.personId);
+  }, [inspector, onOpenLead, onOpenLeadPage]);
 
   const handleOpenInLeads = useCallback((item: TodayItem) => {
     window.location.hash = '#/leads';

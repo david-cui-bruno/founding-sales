@@ -10,6 +10,7 @@ import {
 } from './commonContract';
 import { cloudScoreChipSchema } from './leadsContract';
 import { findContactRefusalReasonSchema } from './enrichmentRequestContract';
+import { outboundAttemptSummarySchema } from './outboundContract';
 
 export const phoneComplianceStatusSchema = z.enum([
   'verified_clear',
@@ -24,6 +25,7 @@ export const phoneComplianceStatusSchema = z.enum([
 
 export const contactMethodSchema = z.object({
   id: z.string().min(1),
+  contactSnapshot: z.string().regex(/^[a-f0-9]{64}$/),
   kind: z.enum(['phone', 'email']),
   value: z.string().min(1),
   label: z.string().nullable(),
@@ -81,6 +83,7 @@ export const leadDetailSchema = z.object({
   findContactEligibility: findContactEligibilitySchema,
   priorityReasons: z.array(z.string().min(1)), nextAction: primaryActionSchema.nullable(), optedOut: z.boolean(),
   cadence: cadenceSummarySchema.nullable(), activities: z.array(activitySummarySchema), conversations: z.array(conversationSummarySchema),
+  outboundAttempts: z.array(outboundAttemptSummarySchema).max(20),
   properties: z.array(propertySummarySchema), history: z.array(historyEventSchema), revision: z.number().int().nonnegative(),
 }).strict();
 
@@ -88,27 +91,8 @@ export const leadDetailRequestSchema = z.object({
   personId: personIdSchema,
 }).strict();
 
-/** Outbound commands are discriminated by exact channel. */
-export const beginOutboundRequestSchema = z.discriminatedUnion('channel', [
-  z.object({
-    channel: z.literal('call'),
-    personId: personIdSchema,
-    salesCycleId: salesCycleIdSchema,
-    contactMethodId: z.string().min(1),
-  }).strict(),
-  z.object({
-    channel: z.literal('text'),
-    personId: personIdSchema,
-    salesCycleId: salesCycleIdSchema,
-    contactMethodId: z.string().min(1),
-  }).strict(),
-  z.object({
-    channel: z.literal('email'),
-    personId: personIdSchema,
-    salesCycleId: salesCycleIdSchema,
-    contactMethodId: z.string().min(1),
-  }).strict(),
-]);
+export { outboundRequestSchema as beginOutboundRequestSchema } from './outboundContract';
+export type { OutboundRequest as BeginOutboundRequest } from './outboundContract';
 
 /** Stage commands are discriminated by the exact guarded transition. */
 export const confirmTransitionRequestSchema = z.discriminatedUnion('transition', [
@@ -167,7 +151,6 @@ export type PropertySummary = z.infer<typeof propertySummarySchema>;
 export type HistoryEvent = z.infer<typeof historyEventSchema>;
 export type LeadDetail = z.infer<typeof leadDetailSchema>;
 export type LeadDetailRequest = z.infer<typeof leadDetailRequestSchema>;
-export type BeginOutboundRequest = z.infer<typeof beginOutboundRequestSchema>;
 export type ConfirmTransitionRequest = z.infer<typeof confirmTransitionRequestSchema>;
 export type CloudScoreDetail = z.infer<typeof cloudScoreDetailSchema>;
 export type CloudScoreOverrideRequest = z.infer<typeof cloudScoreOverrideRequestSchema>;

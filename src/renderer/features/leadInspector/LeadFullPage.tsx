@@ -1,3 +1,4 @@
+import type { OutboundReceipt } from '../../../shared/contracts/outboundContract';
 import { useEffect } from 'react';
 
 import type {
@@ -15,18 +16,19 @@ import { LoadingState } from '../../components/LoadingState';
 import { CallOutcomeSection, type CallOutcomeApi } from './CallOutcomeSection';
 import { InspectorHeader } from './InspectorHeader';
 import { InspectorTabs } from './LeadInspector';
-import type { LeadDetailState } from './useLeadInspector';
+import type { LeadDetailState, OutboundStatusPresentation } from './useLeadInspector';
 
-export type LeadFullPageProps = {
+export type LeadFullPageProps = OutboundStatusPresentation & {
   state: LeadDetailState;
   onRetry(): void;
-  onBeginOutbound(request: BeginOutboundRequest): void;
+  onBeginOutbound(request: BeginOutboundRequest): Promise<OutboundReceipt>;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
   onDismissLead(request: DismissLeadRequest): void;
   onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
   onFindContactInfo?(request: FindContactInfoRequest): Promise<FindContactInfoReceipt>;
   /** Present when the call-outcome flow is available (audit 4.7). */
   outcomeApi?: CallOutcomeApi;
+  outboundCommandId?: string;
   /** Save & next: the next queue lead, or null when the queue is done. */
   onOutcomeSaved?(nextPersonId: string | null): void;
   /** Escape returns to the queue without logging anything. */
@@ -46,9 +48,10 @@ export function LeadFullPage({
   onDismissLead,
   onOverrideCloudScore,
   onFindContactInfo,
-  outcomeApi,
+  outcomeApi, outboundCommandId,
   onOutcomeSaved,
   onClose,
+  ...outboundPresentation
 }: LeadFullPageProps) {
   useEffect(() => {
     if (onClose === undefined) return undefined;
@@ -64,6 +67,7 @@ export function LeadFullPage({
   if (state.status === 'loading') {
     return (
       <div className="lead-full-page">
+        {outboundPresentation.outboundStatus}
         <LoadingState label="Loading lead details" />
       </div>
     );
@@ -72,6 +76,7 @@ export function LeadFullPage({
   if (state.status === 'error') {
     return (
       <div className="lead-full-page">
+        {outboundPresentation.outboundStatus}
         <ErrorState
           title="Couldn't load this lead"
           description="The details were unavailable. Try again."
@@ -90,16 +95,19 @@ export function LeadFullPage({
       className="lead-full-page"
       aria-label={`${state.detail.personName} full page`}
     >
+      {outboundPresentation.outboundStatus}
       <InspectorHeader detail={state.detail} onClose={onClose} />
       {outcomeApi !== undefined && onOutcomeSaved !== undefined && (
         <CallOutcomeSection
-          key={state.detail.personId}
+          key={`${state.detail.personId}:${state.detail.salesCycleId}:${outboundCommandId ?? "unlinked"}`}
+          outboundCommandId={outboundCommandId}
           detail={state.detail}
           api={outcomeApi}
           onSaved={onOutcomeSaved}
         />
       )}
       <InspectorTabs
+              {...outboundPresentation}
         key={state.detail.personId}
         detail={state.detail}
         onBeginOutbound={onBeginOutbound}

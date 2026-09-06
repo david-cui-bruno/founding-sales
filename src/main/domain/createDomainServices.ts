@@ -9,6 +9,7 @@ import { LifecycleService } from './lifecycle/lifecycleService';
 import { OptOutRepository } from './optOut/optOutRepository';
 import { OptOutService } from './optOut/optOutService';
 import { OutboundPermissionService } from './optOut/outboundPermissionService';
+import { OutboundCommandRepository } from './outbound/outboundCommandRepository';
 import { PrioritizationRepository } from './prioritization/prioritizationRepository';
 import { PrioritizationService } from './prioritization/prioritizationService';
 import { IntakeReceiptRepository } from './source/intakeReceiptRepository';
@@ -35,6 +36,7 @@ export type DomainServices = Readonly<{
   lifecycle: LifecycleService;
   optOut: OptOutService;
   outboundPermission: OutboundPermissionService;
+  outboundCommands: OutboundCommandRepository;
   prioritizationRepository: PrioritizationRepository;
   prioritization: PrioritizationService;
   todayRepository: TodayRepository;
@@ -65,6 +67,7 @@ export function createDomainServices(input: {
     windows: FOUNDER_CHANNEL_POLICIES_V1, clock, ids,
   });
   const events = new EventRepository({ database, unitOfWork, clock, ids });
+  const outboundCommands = new OutboundCommandRepository({ database, unitOfWork, events });
   const sourceRepository = new SourceRepository({ database, unitOfWork, clock });
   const intakeReceipts = new IntakeReceiptRepository({ database, unitOfWork, clock });
   const sources = new SourceService({
@@ -107,6 +110,7 @@ export function createDomainServices(input: {
   identities.assertBoundTo(database, unitOfWork);
   contactCompliance.assertBoundTo(database, unitOfWork);
   events.assertBoundTo(database, unitOfWork);
+  outboundCommands.assertBoundTo(database, unitOfWork);
   sourceRepository.assertBoundTo(database, unitOfWork);
   intakeReceipts.assertBoundTo(database, unitOfWork);
   cadences.assertBoundTo(database, unitOfWork);
@@ -130,6 +134,7 @@ export function createDomainServices(input: {
     lifecycle,
     optOut,
     outboundPermission,
+    outboundCommands,
     prioritizationRepository,
     prioritization,
     todayRepository,

@@ -120,14 +120,14 @@ function fakeApi(overrides: Partial<TodayRouteApi> = {}): TodayRouteApi {
   } as TodayRouteApi;
 }
 
-function fakeLeadApi(overrides: Partial<TodayLeadCommandApi> = {}): TodayLeadCommandApi {
+function fakeLeadApi(overrides: Partial<TodayLeadCommandApi> = {}): TodayLeadCommandApi & { beginOutbound: ReturnType<typeof vi.fn> } {
   return {
     beginOutbound: vi.fn(async () => receipt),
     confirmTransition: vi.fn(async () => receipt),
     dismissLead: vi.fn(async () => receipt),
     get: vi.fn(async () => ({ revision: 0, phones: [{ id: 'phone-1' }] })),
     ...overrides,
-  } as TodayLeadCommandApi;
+  };
 }
 
 describe('TodayRoute', () => {
@@ -189,7 +189,7 @@ describe('TodayRoute', () => {
     expect(await screen.findByText('Avery Landlord')).toBeTruthy();
   });
 
-  it('logs the call and opens the lead page from the Next up Call button', async () => {
+  it('never implicitly launches and opens the lead page from the Next up Call button', async () => {
     const api = fakeApi();
     const leadApi = fakeLeadApi();
     const onOpenLeadPage = vi.fn();
@@ -205,13 +205,10 @@ describe('TodayRoute', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Call' }));
 
-    await waitFor(() => expect(leadApi.beginOutbound).toHaveBeenCalledTimes(1));
-    expect(leadApi.beginOutbound).toHaveBeenCalledWith({
-      channel: 'call',
-      personId: 'person-p1',
-      salesCycleId: 'cycle-p1',
-      contactMethodId: 'phone-1',
-    });
+    expect(leadApi.beginOutbound).not.toHaveBeenCalled();
+    expect(leadApi.get).not.toHaveBeenCalled();
+    expect(api.complete).not.toHaveBeenCalled();
+    expect(api.logPastActivity).not.toHaveBeenCalled();
     await waitFor(() => expect(onOpenLeadPage).toHaveBeenCalledWith('person-p1'));
   });
 

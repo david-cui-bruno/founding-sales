@@ -11,6 +11,7 @@ type PhoneComplianceStatus = NonNullable<ContactMethod['compliance']>['status'];
 
 function candidate(id: string, overrides: Partial<ContactMethod> = {}): ContactMethod {
   return {
+    contactSnapshot: 'a'.repeat(64),
     id, kind: 'phone', value: '+14015550100', label: null, valid: false,
     validationState: 'unverified', reachability: 'direct', sourceLabel: 'vendor',
     vendorRank: null, phoneKind: 'mobile', ownershipState: 'vendor_candidate',
