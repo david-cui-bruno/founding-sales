@@ -169,23 +169,38 @@ alias_is_absent() {
   grep -q "NotFoundException" <<<"$output"
 }
 
+key_is_pending_deletion() {
+  local candidate=$1 key_state deletion_date
+  key_state=$(aws kms describe-key --key-id "$candidate" --region "$region" --query KeyMetadata.KeyState --output text) || return 1
+  deletion_date=$(aws kms describe-key --key-id "$candidate" --region "$region" --query KeyMetadata.DeletionDate --output text) || return 1
+  [[ "$key_state" == "PendingDeletion" && -n "$deletion_date" && "$deletion_date" != "None" ]]
+}
+
 recover_cleanup() {
-  local alias_target key_state deletion_date
+  local alias_target
+  if [[ -z "$key_id" ]]; then reconcile_owned_key || { echo "unable to reconcile the owned runtime key" >&2; return 1; }; fi
+  key_has_ownership "$key_id" || { echo "runtime key ownership tags do not match the receipt" >&2; return 1; }
   if ! alias_is_absent; then
     alias_target=$(aws kms describe-key --key-id "$alias_name" --region "$region" --query KeyMetadata.KeyId --output text) || return 1
-    [[ -n "$key_id" && "$alias_target" == "$key_id" ]] || { echo "runtime alias is not owned by this receipt" >&2; return 1; }
+    [[ "$alias_target" == "$key_id" ]] || { echo "runtime alias is not owned by this receipt" >&2; return 1; }
+    key_has_ownership "$key_id" || { echo "runtime key ownership tags do not match the receipt" >&2; return 1; }
     aws kms delete-alias --alias-name "$alias_name" --region "$region" >/dev/null || return 1
     alias_is_absent || { echo "runtime alias absence was not verified" >&2; return 1; }
   fi
-  if [[ -z "$key_id" ]]; then reconcile_owned_key || { echo "unable to reconcile the owned runtime key" >&2; return 1; }; fi
   key_has_ownership "$key_id" || { echo "runtime key ownership tags do not match the receipt" >&2; return 1; }
-  aws kms schedule-key-deletion --key-id "$key_id" --pending-window-in-days 30 --region "$region" >/dev/null || return 1
-  key_state=$(aws kms describe-key --key-id "$key_id" --region "$region" --query KeyMetadata.KeyState --output text) || return 1
-  deletion_date=$(aws kms describe-key --key-id "$key_id" --region "$region" --query KeyMetadata.DeletionDate --output text) || return 1
-  [[ "$key_state" == "PendingDeletion" && -n "$deletion_date" && "$deletion_date" != "None" ]] || {
-    echo "runtime key scheduled deletion was not verified" >&2; return 1;
-  }
+  if ! key_is_pending_deletion "$key_id"; then
+    aws kms schedule-key-deletion --key-id "$key_id" --pending-window-in-days 30 --region "$region" >/dev/null || true
+    key_is_pending_deletion "$key_id" || { echo "runtime key scheduled deletion was not verified" >&2; return 1; }
+  fi
   persist_phase cleanup-verified || return 1
+  echo "runtime-key recovery cleanup verified; alias absent and owned key scheduled for deletion" >&2
+}
+
+verify_cleanup_terminal() {
+  [[ -n "$key_id" ]] || { echo "cleanup-verified receipt is missing its key id" >&2; return 1; }
+  alias_is_absent || { echo "runtime alias absence was not verified" >&2; return 1; }
+  key_has_ownership "$key_id" || { echo "runtime key ownership tags do not match the receipt" >&2; return 1; }
+  key_is_pending_deletion "$key_id" || { echo "runtime key scheduled deletion was not verified" >&2; return 1; }
   echo "runtime-key recovery cleanup verified; alias absent and owned key scheduled for deletion" >&2
 }
 
@@ -195,7 +210,12 @@ if [[ "$mode" == "--recover" ]]; then
   [[ $# -eq 2 ]] || usage
   receipt=$2
   load_receipt || { echo "invalid runtime-key recovery receipt" >&2; exit 1; }
-  recover_cleanup
+  case "$phase" in
+    pending-key|key-owned|pending-alias) recover_cleanup ;;
+    cleanup-verified) verify_cleanup_terminal ;;
+    verified) echo "verified runtime-key receipt is not eligible for recovery cleanup" >&2; exit 1 ;;
+    *) echo "invalid runtime-key recovery phase" >&2; exit 1 ;;
+  esac
   exit 0
 fi
 [[ $# -eq 3 ]] || usage
@@ -203,6 +223,7 @@ region=$2
 receipt=$3
 [[ "$mode" == "--prepare" || "$mode" == "--verify-parameters" ]] || usage
 [[ -n "$region" && -n "$receipt" ]] || usage
+[[ "$region" == "us-east-1" ]] || { echo "runtime-key bootstrap region must be us-east-1" >&2; exit 1; }
 bind_receipt_boundary || exit 1
 
 if [[ "$mode" == "--prepare" ]]; then

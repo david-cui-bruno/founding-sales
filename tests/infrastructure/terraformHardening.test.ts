@@ -353,12 +353,16 @@ case "$service:$operation" in
     ;;
   kms:list-keys) [[ -f "$AWS_STATE/key" ]] && printf '%s\\n' "${keyId}" || true ;;
   kms:list-resource-tags)
+    if [[ "$SCENARIO" == recovery-ownership-mismatch && -f "$AWS_STATE/alias" ]]; then
+      printf 'CallieBootstrapRunId\\twrong-run\\nCallieBootstrap\\truntime-secret-key-v1\\n'
+      exit 0
+    fi
     printf 'CallieBootstrapRunId\\t%s\\nCallieBootstrap\\truntime-secret-key-v1\\n' "$EXPECTED_RUN_ID"
     ;;
   kms:enable-key-rotation) : ;;
   kms:create-alias)
     printf '%s\\n' "${keyId}" > "$AWS_STATE/alias"
-    if [[ "$SCENARIO" == lost-create-alias-response || "$SCENARIO" == cleanup-failure || "$SCENARIO" == cleanup-false-success ]]; then exit 1; fi
+    if [[ "$SCENARIO" == lost-create-alias-response || "$SCENARIO" == cleanup-failure || "$SCENARIO" == cleanup-false-success || "$SCENARIO" == recovery-ownership-mismatch || "$SCENARIO" == lost-schedule-key-deletion-response || "$SCENARIO" == schedule-key-deletion-false-success ]]; then exit 1; fi
     ;;
   kms:delete-alias)
     if [[ "$SCENARIO" == cleanup-failure ]]; then exit 1; fi
@@ -367,8 +371,9 @@ case "$service:$operation" in
     ;;
   kms:schedule-key-deletion)
     if [[ "$SCENARIO" == cleanup-failure ]]; then exit 1; fi
-    if [[ "$SCENARIO" == cleanup-false-success ]]; then exit 0; fi
+    if [[ "$SCENARIO" == cleanup-false-success || "$SCENARIO" == schedule-key-deletion-false-success ]]; then exit 0; fi
     printf '%s\\n' pending > "$AWS_STATE/deletion"
+    if [[ "$SCENARIO" == lost-schedule-key-deletion-response ]]; then exit 1; fi
     ;;
   kms:get-key-rotation-status) printf 'True\\n' ;;
   kms:describe-key)
@@ -436,8 +441,16 @@ esac
       },
     },
   );
-  const prepare = run(["--prepare", "us-east-1", receipt]);
-  const recover = prepare.status === 0 ? null : run(["--recover", receipt]);
+  const prepareRegion = scenario === "unsupported-prepare-region" ? "us-west-2" : "us-east-1";
+  const prepare = run(["--prepare", prepareRegion, receipt]);
+  let recover = prepare.status === 0 ? null : run(["--recover", receipt]);
+  if (scenario === "recover-verified") recover = run(["--recover", receipt]);
+  if (scenario === "recover-cleanup-verified") {
+    writeFileSync(receipt, readFileSync(receipt, "utf8").replace("phase=verified", "phase=cleanup-verified"));
+    rmSync(join(stateDirectory, "alias"), { force: true });
+    writeFileSync(join(stateDirectory, "deletion"), "pending\n");
+    recover = run(["--recover", receipt]);
+  }
   return {
     prepare,
     recover,
@@ -1246,6 +1259,58 @@ describe("managed secret and remote state preparation", () => {
     expect(result.aliasExists).toBe(true);
     expect(result.deletionScheduled).toBe(false);
     expect(result.output).not.toContain("runtime-key recovery cleanup verified");
+  });
+
+  it("rejects recovery from a verified receipt without destructive AWS calls", () => {
+    const result = runRuntimeKeyScenario("recover-verified");
+    expect(result.prepare.status).toBe(0);
+    expect(result.recover?.status).not.toBe(0);
+    expect(result.aliasExists).toBe(true);
+    expect(result.deletionScheduled).toBe(false);
+    expect(result.awsCalls).not.toContain("kms delete-alias");
+    expect(result.awsCalls).not.toContain("kms schedule-key-deletion");
+  });
+
+  it("treats cleanup-verified recovery as terminal without new destructive calls", () => {
+    const result = runRuntimeKeyScenario("recover-cleanup-verified");
+    expect(result.prepare.status).toBe(0);
+    expect(result.recover?.status).toBe(0);
+    expect(result.awsCalls.match(/kms delete-alias/g) ?? []).toHaveLength(0);
+    expect(result.awsCalls.match(/kms schedule-key-deletion/g) ?? []).toHaveLength(0);
+    expect(result.output).toContain("runtime-key recovery cleanup verified");
+  });
+
+  it("proves exact run ownership before deleting the runtime alias", () => {
+    const result = runRuntimeKeyScenario("recovery-ownership-mismatch");
+    expect(result.prepare.status).not.toBe(0);
+    expect(result.recover?.status).not.toBe(0);
+    expect(result.aliasExists).toBe(true);
+    expect(result.awsCalls).not.toContain("kms delete-alias");
+  });
+
+  it("reconciles an accepted schedule-key-deletion with a lost response", () => {
+    const result = runRuntimeKeyScenario("lost-schedule-key-deletion-response");
+    expect(result.prepare.status).not.toBe(0);
+    expect(result.recover?.status).toBe(0);
+    expect(result.aliasExists).toBe(false);
+    expect(result.deletionScheduled).toBe(true);
+    expect(result.receiptContents).toContain("phase=cleanup-verified");
+  });
+
+  it("rejects schedule-key-deletion success when key state does not change", () => {
+    const result = runRuntimeKeyScenario("schedule-key-deletion-false-success");
+    expect(result.prepare.status).not.toBe(0);
+    expect(result.recover?.status).not.toBe(0);
+    expect(result.aliasExists).toBe(false);
+    expect(result.deletionScheduled).toBe(false);
+    expect(result.receiptContents).toContain("phase=pending-alias");
+  });
+
+  it("rejects an unsupported prepare region before receipt creation or AWS", () => {
+    const result = runRuntimeKeyScenario("unsupported-prepare-region");
+    expect(result.prepare.status).not.toBe(0);
+    expect(result.awsCalls).toBe("");
+    expect(result.receiptExists).toBe(false);
   });
 
   it("ships a fail-closed state bootstrap and documents both migration confirmations", () => {
