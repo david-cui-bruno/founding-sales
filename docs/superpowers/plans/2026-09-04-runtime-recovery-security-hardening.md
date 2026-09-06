@@ -823,7 +823,13 @@ Stop. Obtain explicit founder confirmation for this operational sequence.
 
 #### Staged schedule rollout
 
-Never enable schedules during source verification. In a later separately approved apply, set `schedules_enabled=true` while `scheduled_health_alerts_enabled=false`. Prove current completion metrics and watchdog heartbeats are arriving, and wait for all missing-success alarms to reach a known OK baseline from current observations. Only then obtain separate approval, then use a separate approved apply setting `scheduled_health_alerts_enabled=true`; verify notification action attachment and each alarm's current state afterward.
+Never enable schedules during source verification. In a later separately approved apply, set `schedules_enabled=true` while `scheduled_health_alerts_enabled=false`. Prove current completion metrics and watchdog heartbeats are arriving, and wait for all missing-success alarms to reach a known OK baseline from current observations. Only then obtain separate approval for the health-action change; that approval does not preserve or authorize reuse of the observed baseline.
+
+Immediately before the health-action apply, while health actions remain disabled, perform a fresh pre-apply check as the first step of a single tightly bounded precheck/apply/postcheck sequence. Re-read current completion metrics and watchdog heartbeats for every expected cadence, and require every affected missing-success alarm to be exactly `OK` from those current observations. The operator must not reuse the approval-time baseline. If the apply and immediate postcheck cannot follow without intervening work or delay, expire the precheck and repeat it before applying. If any alarm is `ALARM`, `INSUFFICIENT_DATA`, stale, or otherwise non-OK, abort before apply, leave `scheduled_health_alerts_enabled=false`, and do not attach notification actions.
+
+From a successful fresh precheck, immediately use the separate approved apply setting `scheduled_health_alerts_enabled=true`. Immediately after the apply, verify each affected alarm's `alarm_actions` contains exactly the reviewed SNS topic ARN and no additional actions, and require every affected missing-success alarm remains exactly `OK`.
+
+If any alarm is non-OK after apply, explicitly fail the rollout and do not claim transition coverage. Use a separately approved manual incident-notification path for the current condition rather than relying on a missing state transition. Restore current completion metrics and watchdog heartbeats until all affected alarms return to exactly `OK`; only then accept future transition coverage.
 
 No repository commit is associated with this hold point.
 

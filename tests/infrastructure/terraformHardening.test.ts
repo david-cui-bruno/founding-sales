@@ -115,6 +115,27 @@ function occurrences(source: string, value: string): number {
   return source.split(value).length - 1;
 }
 
+function readStagedScheduleRollouts(): string[] {
+  return [
+    join(process.cwd(), "cloud", "README.md"),
+    join(
+      process.cwd(),
+      "docs",
+      "superpowers",
+      "plans",
+      "2026-09-04-runtime-recovery-security-hardening.md",
+    ),
+  ].map((path) => {
+    const source = readFileSync(path, "utf8");
+    const start = source.indexOf("Staged schedule rollout");
+    if (start < 0) throw new Error(`missing staged schedule rollout: ${path}`);
+    const possibleEnds = [source.indexOf("\n---", start), source.indexOf("\n## ", start + 1)]
+      .filter((index) => index > start);
+    const end = possibleEnds.length > 0 ? Math.min(...possibleEnds) : source.length;
+    return source.slice(start, end).replace(/\s+/g, " ").trim();
+  });
+}
+
 const BOOTSTRAP_RUN_ID = "12345678-1234-4123-8123-123456789abc";
 const BOOTSTRAP_ACCOUNT_ID = "326255650484";
 const BOOTSTRAP_BUCKET = `callie-sourcing-tfstate-${BOOTSTRAP_ACCOUNT_ID}`;
@@ -1266,20 +1287,74 @@ describe("managed secret and remote state preparation", () => {
   });
 
   it("documents a separately approved schedule-first health-action rollout", () => {
-    const readme = readFileSync(join(process.cwd(), "cloud", "README.md"), "utf8");
-    const plan = readFileSync(
-      join(process.cwd(), "docs", "superpowers", "plans", "2026-09-04-runtime-recovery-security-hardening.md"),
-      "utf8",
-    );
-    for (const source of [readme, plan]) {
-      const rollout = source.slice(source.indexOf("Staged schedule rollout"));
+    for (const rollout of readStagedScheduleRollouts()) {
       expect(rollout).toContain("schedules_enabled=true");
       expect(rollout).toContain("scheduled_health_alerts_enabled=false");
       expect(rollout).toMatch(/current completion[\s\S]*watchdog heartbeats/i);
       expect(rollout).toMatch(/missing-success alarms[\s\S]*known OK baseline/i);
       expect(rollout).toMatch(/separate approved apply[\s\S]*scheduled_health_alerts_enabled=true/i);
-      expect(rollout).toMatch(/verify[\s\S]*action attachment[\s\S]*current state/i);
+      expect(rollout).toMatch(/verify[\s\S]*`alarm_actions`[\s\S]*exactly `OK`/i);
       expect(rollout).toMatch(/Never enable schedules during source verification/i);
+    }
+  });
+
+  it("requires a fresh all-OK precheck immediately before the health-action apply", () => {
+    for (const rollout of readStagedScheduleRollouts()) {
+      const approval = rollout.search(/obtain separate approval/i);
+      const precheck = rollout.search(/fresh pre-apply check/i);
+      const actionEnable = rollout.indexOf("scheduled_health_alerts_enabled=true");
+      expect(approval).toBeGreaterThanOrEqual(0);
+      expect(precheck).toBeGreaterThan(approval);
+      expect(actionEnable).toBeGreaterThan(precheck);
+      expect(rollout).toMatch(
+        /fresh pre-apply check[\s\S]{0,500}current completion metrics and watchdog heartbeats/i,
+      );
+      expect(rollout).toMatch(
+        /every affected missing-success alarm[\s\S]{0,160}exactly `OK`/i,
+      );
+      expect(rollout).toMatch(/while (?:health )?actions remain disabled/i);
+      expect(rollout).toMatch(/single tightly bounded precheck\/apply\/postcheck sequence/i);
+      expect(rollout).toMatch(/(?:must not|never) reuse the approval-time baseline/i);
+    }
+  });
+
+  it("aborts before apply and leaves health actions disabled for every non-OK precheck", () => {
+    for (const rollout of readStagedScheduleRollouts()) {
+      expect(rollout).toContain("`ALARM`");
+      expect(rollout).toContain("`INSUFFICIENT_DATA`");
+      expect(rollout).toMatch(/stale, or otherwise non-OK/i);
+      expect(rollout).toMatch(
+        /abort before apply[\s\S]{0,240}(?:leave|keep) `scheduled_health_alerts_enabled=false`/i,
+      );
+      expect(rollout).toMatch(/do not attach (?:notification )?actions/i);
+    }
+  });
+
+  it("requires exact action attachment and all alarms still exactly OK after apply", () => {
+    for (const rollout of readStagedScheduleRollouts()) {
+      const actionEnable = rollout.indexOf("scheduled_health_alerts_enabled=true");
+      const postcheck = rollout.search(/immediately after the apply/i);
+      expect(postcheck).toBeGreaterThan(actionEnable);
+      expect(rollout).toMatch(
+        /each affected alarm's `alarm_actions`[\s\S]{0,240}exactly the reviewed SNS topic ARN[\s\S]{0,180}no additional actions/i,
+      );
+      expect(rollout).toMatch(
+        /every affected missing-success alarm[\s\S]{0,180}(?:still|remains) exactly `OK`/i,
+      );
+    }
+  });
+
+  it("fails and explicitly recovers a non-OK post-apply incident before claiming coverage", () => {
+    for (const rollout of readStagedScheduleRollouts()) {
+      expect(rollout).toMatch(/If any alarm is non-OK after apply[\s\S]{0,160}fail the rollout/i);
+      expect(rollout).toMatch(/do not claim (?:notification |transition )?coverage/i);
+      expect(rollout).toMatch(/separately approved manual incident-notification path/i);
+      expect(rollout).toMatch(/current condition/i);
+      expect(rollout).toMatch(/rather than relying on a missing state transition/i);
+      expect(rollout).toMatch(
+        /restore current completion metrics and watchdog heartbeats[\s\S]{0,220}all affected alarms return to exactly `OK`/i,
+      );
+      expect(rollout).toMatch(/only then accept future transition coverage/i);
     }
   });
 

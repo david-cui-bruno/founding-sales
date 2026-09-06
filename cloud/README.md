@@ -181,9 +181,29 @@ separate approval and two applies that must not be combined:
    `scheduled_health_alerts_enabled=false`. Verify current completion metrics and
    watchdog heartbeats arrive for every expected cadence. Wait until all
    missing-success alarms reach a known OK baseline from current observations.
-2. Only after that baseline is reviewed, obtain separate approval, then use a
-   separate approved apply with `scheduled_health_alerts_enabled=true`. Verify notification
-   action attachment and each alarm's current state after the apply.
+2. Only after that baseline is reviewed, obtain separate approval for the health-action
+   change. That approval does not preserve or authorize reuse of the observed baseline.
+3. Immediately before the health-action apply, while health actions remain disabled,
+   perform a fresh pre-apply check as the first step of a single tightly bounded
+   precheck/apply/postcheck sequence. Re-read current completion metrics and watchdog
+   heartbeats for every expected cadence, and require every affected missing-success
+   alarm to be exactly `OK` from those current observations. The operator must not
+   reuse the approval-time baseline. If the apply and immediate postcheck cannot follow
+   without intervening work or delay, expire the precheck and repeat it before applying.
+   If any alarm is `ALARM`, `INSUFFICIENT_DATA`, stale, or otherwise non-OK, abort
+   before apply, leave `scheduled_health_alerts_enabled=false`, and do not attach
+   notification actions.
+4. From a successful fresh precheck, immediately use the separate approved apply with
+   `scheduled_health_alerts_enabled=true`.
+5. Immediately after the apply, verify each affected alarm's `alarm_actions` contains
+   exactly the reviewed SNS topic ARN and no additional actions, and require every
+   affected missing-success alarm remains exactly `OK`.
+
+If any alarm is non-OK after apply, explicitly fail the rollout and do not claim
+transition coverage. Use a separately approved manual incident-notification path for
+the current condition rather than relying on a missing state transition. Restore
+current completion metrics and watchdog heartbeats until all affected alarms return to
+exactly `OK`; only then accept future transition coverage.
 
 ## SES sandbox note
 
