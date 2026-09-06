@@ -63,14 +63,24 @@ export class EnrichmentRequestWriter {
     const personId = input.personId;
     const pending = this.inFlight.get(personId);
     if (pending !== undefined) return pending;
-    const request = this.requestOnce({ personId }).finally(() => {
-      this.inFlight.delete(personId);
+    let upload: Promise<void> = Promise.resolve();
+    const request = this.requestOnce({ personId }, (attempt) => {
+      upload = attempt;
+    }).finally(() => {
+      // The deadline may settle before a non-cooperative upload. Keep returning
+      // that same result until the attempt settles, without delaying timeout.
+      // On success, requestOnce also includes the normal ledger write.
+      const release = () => { this.inFlight.delete(personId); };
+      void upload.then(release, release);
     });
     this.inFlight.set(personId, request);
     return request;
   }
 
-  private async requestOnce(input: { personId: string }): Promise<FindContactInfoReceipt> {
+  private async requestOnce(
+    input: { personId: string },
+    trackUpload: (upload: Promise<void>) => void,
+  ): Promise<FindContactInfoReceipt> {
     const eligibility = await this.domainGate.withDomain((domain) => getFindContactEligibility(
       domain.getEnrichmentRequestCandidate(input), this.clock.now(),
     ));
@@ -113,12 +123,14 @@ export class EnrichmentRequestWriter {
           });
           const date = now.slice(0, 10);
           const ulid = generateUlid(Date.parse(now));
-          return store.putObjectText({
+          const upload = store.putObjectText({
             key: `${UPSTREAM_ENRICHMENT_REQUESTS_PREFIX}${date}-${ulid}.ndjson`,
             body: `${JSON.stringify(line)}\n`,
             contentType: 'application/x-ndjson',
             signal,
-          }).then(() => ({ cloudEntityId: line.cloud_entity_id }));
+          });
+          trackUpload(upload);
+          return upload.then(() => ({ cloudEntityId: line.cloud_entity_id }));
         });
       },
     });

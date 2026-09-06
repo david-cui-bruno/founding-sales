@@ -269,6 +269,38 @@ describe('EnrichmentRequestWriter', () => {
     expect(domain.recordEnrichmentRequested).toHaveBeenCalledTimes(1);
   });
 
+  it('retains ownership after upload settles until normal recording completes', async () => {
+    const { domain } = fakeGate(CANDIDATE);
+    const recordingEntered = deferred<void>();
+    const allowRecording = deferred<void>();
+    let domainVisits = 0;
+    const gate = {
+      withDomain: async <T,>(operation: (d: typeof domain) => T) => {
+        domainVisits += 1;
+        if (domainVisits === 3) {
+          recordingEntered.resolve();
+          await allowRecording.promise;
+        }
+        return operation(domain);
+      },
+    };
+    const putObjectText = vi.fn(async () => undefined);
+    const createStore = vi.fn(async () => ({ putObjectText }));
+    const writer = buildWriter({ gate, createStore });
+    const first = writer.request({ personId: 'p-1' });
+    await recordingEntered.promise;
+    expect(putObjectText).toHaveBeenCalledTimes(1);
+    expect(domain.recordEnrichmentRequested).not.toHaveBeenCalled();
+    const second = writer.request({ personId: 'p-1' });
+    allowRecording.resolve();
+    expect(await Promise.all([first, second])).toEqual([
+      { written: true, refusalReason: null }, { written: true, refusalReason: null },
+    ]);
+    expect(createStore).toHaveBeenCalledTimes(1);
+    expect(putObjectText).toHaveBeenCalledTimes(1);
+    expect(domain.recordEnrichmentRequested).toHaveBeenCalledTimes(1);
+  });
+
   it('shares concurrent upload failure without recording or automatically replaying', async () => {
     const { gate, domain } = fakeGate(CANDIDATE);
     const putObjectText = vi.fn(async () => { throw new Error('AccessDenied'); });
@@ -408,6 +440,53 @@ describe('EnrichmentRequestWriter upload deadline', () => {
     vi.useRealTimers();
   });
 
+  it.each(['resolve', 'reject'] as const)('retains same-person ownership after prompt timeout until the underlying upload can %s', async (settlement) => {
+    const { gate, domain } = fakeGate(CANDIDATE);
+    const underlying = deferred<void>();
+    let firstSignal: AbortSignal | undefined;
+    const putObjectText = vi.fn<UpstreamObjectStore['putObjectText']>()
+      .mockImplementationOnce(({ signal }) => {
+        firstSignal = signal;
+        return underlying.promise; // Intentionally ignores abort.
+      })
+      .mockResolvedValue(undefined);
+    const createStore = vi.fn(async () => ({ putObjectText }));
+    const writer = buildWriter({ gate, createStore });
+    const firstOutcome = vi.fn();
+    void writer.request({ personId: 'p-1' }).then(firstOutcome, firstOutcome);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    // The caller must receive the deadline error while the upload is unresolved.
+    expect(firstOutcome).toHaveBeenCalledTimes(1);
+    expect(firstOutcome).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'RemoteOperationTimeoutError', code: 'S3_UPLOAD_TIMEOUT', timeoutMs: 60_000,
+    }));
+    expect(firstSignal?.aborted).toBe(true);
+    expect(domain.recordEnrichmentRequested).not.toHaveBeenCalled();
+
+    // This is the formerly uncovered interval: do not settle the first upload yet.
+    const duringTimeout = await writer.request({ personId: 'p-1' }).catch((error: unknown) => error);
+    expect(createStore).toHaveBeenCalledTimes(1);
+    expect(putObjectText).toHaveBeenCalledTimes(1);
+    expect(domain.recordEnrichmentRequested).not.toHaveBeenCalled();
+    expect(duringTimeout).toBe(firstSignal?.reason);
+
+    if (settlement === 'resolve') underlying.resolve();
+    else underlying.reject(new Error('Late upload failure'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(domain.recordEnrichmentRequested).not.toHaveBeenCalled();
+    expect(createStore).toHaveBeenCalledTimes(1);
+    expect(putObjectText).toHaveBeenCalledTimes(1);
+
+    await expect(writer.request({ personId: 'p-1' })).resolves.toEqual({
+      written: true, refusalReason: null,
+    });
+    expect(createStore).toHaveBeenCalledTimes(2);
+    expect(putObjectText).toHaveBeenCalledTimes(2);
+    expect(domain.recordEnrichmentRequested).toHaveBeenCalledTimes(1);
+    expect(domain.recordEnrichmentRequested).toHaveBeenCalledWith({ cloudEntityId: CANDIDATE.cloudEntityId });
+  });
+
   it('times out a hung upload without recording, ignores late settlement, and later recovers', async () => {
     const { gate, domain } = fakeGate(CANDIDATE);
     let resolveLate!: () => void;
@@ -441,7 +520,8 @@ describe('EnrichmentRequestWriter upload deadline', () => {
     expect(domain.recordEnrichmentRequested).not.toHaveBeenCalled();
 
     resolveLate();
-    await Promise.resolve();
+    // Drain the async upload's settlement handlers, not just its inner promise.
+    await vi.advanceTimersByTimeAsync(0);
     expect(domain.recordEnrichmentRequested).not.toHaveBeenCalled();
 
     await expect(writer.request({ personId: 'p-1' })).resolves.toEqual({
