@@ -746,6 +746,7 @@ git commit -m "feat: add recovery export and restore drill"
 - Create `cloud/terraform/backend.hcl.example`
 - Create `cloud/terraform/terraform.tfvars.example`
 - Create `cloud/scripts/bootstrap-terraform-state.sh`
+- Create `cloud/scripts/bootstrap-runtime-secret-key.sh` for the staged Hold Point 1 key preparation and parameter prevalidation authorized by the Round 1 safety review.
 - Modify `cloud/terraform/variables.tf`
 - Modify `cloud/terraform/iam.tf`
 - Modify `cloud/terraform/lambda.tf`
@@ -796,14 +797,15 @@ git commit -m "feat: prepare managed cloud secrets and remote state"
 Stop. Obtain explicit founder confirmation for this operational sequence.
 
 1. Confirm the exposed credentials from Hold Point 0 remain revoked and their dependent schedules remain paused.
-2. Enter the already validated replacement provider value directly into encrypted SSM through an approved interactive operator path. Do not place it in shell history, repository files, Terraform variables, logs, or chat.
-3. Apply reviewed IAM/environment changes with `schedules_enabled=false`; invoke one bounded request and inspect only redacted logs.
-4. Verify the revoked provider credential cannot authenticate and is not referenced by Lambda configuration.
-5. Import the already validated replacement app-inbox AWS credential into the verified protected local envelope, test bounded list/fetch/upload, observe a successful manual poll, verify the old key remains inactive, then securely remove the quarantined plaintext import only after a second protected copy is validated.
-6. Bootstrap the encrypted/versioned/private state bucket and lock table. Review resource names and policies.
-7. Obtain a second explicit confirmation before `tofu init -migrate-state`.
-8. Compare state serial and resource count before/after, verify remote locking, archive the old local state privately, then remove plaintext local state only after rollback evidence is retained.
-9. Re-enable schedules only after health, logs, and alarms are verified.
+2. Create and verify the dedicated runtime-secret KMS key and stable alias through the approved bootstrap path, retain its private receipt, and stop before entering parameters.
+3. Enter all three runtime values directly into encrypted SSM under that exact key through an approved interactive operator path. Do not place them in shell history, repository files, Terraform variables, logs, or chat. Prevalidate all three encrypted parameters by identifier, key id, and decrypt access without displaying values.
+4. Only then apply the IAM and Lambda identifier cutover with `schedules_enabled=false`; invoke one bounded request and inspect only redacted logs. Retain prior deployed Lambda versions/configuration until verification completes so rollback never requires reintroducing secret-valued environment entries.
+5. Verify the revoked provider credential cannot authenticate and is not referenced by Lambda configuration.
+6. Import the already validated replacement app-inbox AWS credential into the verified protected local envelope, test bounded list/fetch/upload, observe a successful manual poll, verify the old key remains inactive, then securely remove the quarantined plaintext import only after a second protected copy is validated.
+7. Bootstrap the encrypted/versioned/private state bucket and lock table. Retain and inspect the recovery receipt, activation waits, and postcondition evidence before continuing.
+8. Obtain a second explicit confirmation before `tofu init -migrate-state`.
+9. Compare state serial and resource count before/after, verify remote locking, archive the old local state privately, then remove plaintext local state only after rollback evidence is retained.
+10. Re-enable schedules only after health, logs, and alarms are verified.
 
 No repository commit is associated with this hold point.
 

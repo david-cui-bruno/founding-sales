@@ -68,6 +68,41 @@ describe("loadSecureParameter", () => {
     }
   });
 
+  it("returns null only for an optional ParameterNotFound provider rejection", async () => {
+    const notFound = Object.assign(new Error("private parameter identifier"), {
+      name: "ParameterNotFound",
+    });
+    const client = { send: vi.fn(async () => Promise.reject(notFound)) };
+
+    await expect(
+      loadSecureParameter({
+        client,
+        parameterName: "/callie-sourcing/ntfy-topic",
+        required: false,
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("keeps non-not-found optional lookup failures sanitized and fail closed", async () => {
+    for (const name of ["AccessDeniedException", "ThrottlingException", "KMSInvalidStateException"]) {
+      const client = {
+        send: vi.fn(async () =>
+          Promise.reject(Object.assign(new Error("private provider detail"), { name })),
+        ),
+      };
+      await expect(
+        loadSecureParameter({
+          client,
+          parameterName: "/callie-sourcing/ntfy-topic",
+          required: false,
+        }),
+      ).rejects.toMatchObject({
+        name: "SecureParameterError",
+        message: "Secure parameter lookup failed",
+      });
+    }
+  });
+
   it("sanitizes provider failures and never caches across calls", async () => {
     const privateDetail = "private@example.test secret-token";
     const client = {

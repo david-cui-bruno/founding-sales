@@ -61,7 +61,19 @@ data "aws_iam_policy_document" "lambda_mail_parse" {
     sid       = "DecryptRuntimeSecrets"
     effect    = "Allow"
     actions   = ["kms:Decrypt"]
-    resources = [aws_kms_key.runtime_secrets.arn]
+    resources = [data.aws_kms_alias.runtime_secrets.target_key_arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${var.aws_region}.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:EncryptionContext:PARAMETER_ARN"
+      values   = ["arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/callie-sourcing/ntfy-topic"]
+    }
   }
 
   statement {
@@ -176,7 +188,22 @@ data "aws_iam_policy_document" "lambda_adapters" {
     sid       = "DecryptRuntimeSecrets"
     effect    = "Allow"
     actions   = ["kms:Decrypt"]
-    resources = [aws_kms_key.runtime_secrets.arn]
+    resources = [data.aws_kms_alias.runtime_secrets.target_key_arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${var.aws_region}.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:EncryptionContext:PARAMETER_ARN"
+      values = [
+        "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/callie-sourcing/tracerfy-api-key",
+        "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/callie-sourcing/membership-hmac-salt",
+      ]
+    }
   }
 
   statement {

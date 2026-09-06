@@ -75,15 +75,37 @@ Encrypted values are looked up from SSM once per invocation and are never stored
 in Terraform variables or state. The committed examples contain no replacement
 values. No apply is authorized by this preparation.
 
-Stop before any operational step. Obtain explicit founder confirmation before
-entering replacement values, creating state infrastructure, importing existing
-resources, migrating state, or applying Terraform. Keep both schedule gates
-false throughout the separately reviewed baseline change.
+Stop before any operational step. Obtain explicit founder confirmation, then use
+this staged order without combining stages:
 
-The bootstrap script is an operator aid for that later approved workflow. It
-refuses existing bucket or table names and creates KMS-encrypted, versioned,
-publicly blocked S3 storage plus a KMS-encrypted DynamoDB lock table. Do not run
-it during source verification.
+1. **Stage A: prepare and verify the runtime key.** Run the dedicated key
+   bootstrap through the approved operator path. Retain its mode-0600 receipt,
+   verify the alias target and enabled rotation, and stop. Terraform reads this
+   pre-existing alias; it does not create or replace the key during cutover.
+2. **Stage B: enter and prevalidate all three parameters.** Enter Tracerfy, ntfy,
+   and membership-HMAC values directly into encrypted SSM under the prepared
+   key. Run `bootstrap-runtime-secret-key.sh --verify-parameters` to confirm each
+   identifier uses that exact key and can be decrypted while displaying no
+   value. A missing optional ntfy parameter is allowed at runtime, but Hold Point
+   prevalidation deliberately requires all three before infrastructure cutover.
+3. **Stage C: cut over IAM and Lambda identifiers.** Review the exact plan with
+   both schedule gates false. Only after Stage B succeeds may the IAM conditions
+   and identifier-only Lambda environment changes be applied. Invoke bounded
+   checks and inspect only redacted logs.
+
+**Rollback:** keep schedules false and retain the previously deployed Lambda
+versions/configuration until Stage C verification completes. If any canary or
+decrypt check fails, restore those prior versions/configuration, do not delete or
+re-encrypt parameters, and investigate against the private receipts. Never roll
+back by placing a secret value in Terraform or Lambda environment configuration.
+
+The state bootstrap is an operator aid for that later approved workflow. It
+refuses existing names, records a mode-0600 recovery receipt, immediately applies
+bucket controls, cleans up resources created by a failed run, waits for lock-table
+activation, and verifies public-access blocking, versioning, encryption key,
+table SSE, and readiness before success. An uncatchable interruption can still
+leave a partial resource. Inspect the receipt and run `--recover` before retrying
+or migration. Do not run either bootstrap during source verification.
 
 After the protected backend is reviewed, obtain a second explicit confirmation
 before `tofu init -migrate-state`. Compare state serial and resource count before

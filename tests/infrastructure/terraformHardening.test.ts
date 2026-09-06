@@ -740,9 +740,23 @@ describe("managed secret and remote state preparation", () => {
     const adapters = readTerraform("adapters.tf");
     const example = readFileSync(join(terraformDirectory, "terraform.tfvars.example"), "utf8");
 
-    expect(lambda).toContain("NTFY_TOPIC_PARAM");
-    expect(adapters).toContain("TRACERFY_API_KEY_PARAM");
-    expect(adapters).toContain("HMAC_SALT_PARAM");
+    const mailLambda = extractBlock(lambda, 'resource "aws_lambda_function" "mail_parse"');
+    const mailEnvironment = extractContainingBlock(mailLambda, "NTFY_TOPIC_PARAM");
+    const enricher = extractBlock(adapters, '"enricher" =');
+    const enricherEnvironment = extractContainingBlock(enricher, "TRACERFY_API_KEY_PARAM");
+
+    expect(mailEnvironment).toMatch(
+      /NTFY_TOPIC_PARAM\s*=\s*local\.ntfy_topic_parameter_name/,
+    );
+    expect(enricherEnvironment).toMatch(
+      /TRACERFY_API_KEY_PARAM\s*=\s*local\.tracerfy_api_key_parameter_name/,
+    );
+    expect(enricherEnvironment).toMatch(
+      /HMAC_SALT_PARAM\s*=\s*local\.hmac_salt_parameter_name/,
+    );
+    expect(occurrences(mailEnvironment, "NTFY_TOPIC_PARAM")).toBe(1);
+    expect(occurrences(enricherEnvironment, "TRACERFY_API_KEY_PARAM")).toBe(1);
+    expect(occurrences(enricherEnvironment, "HMAC_SALT_PARAM")).toBe(1);
     expect(lambda).not.toMatch(/\bNTFY_TOPIC\s*=/);
     expect(adapters).not.toMatch(/\bTRACERFY_API_KEY\s*=/);
     expect(variables).not.toContain('variable "ntfy_topic"');
@@ -763,10 +777,28 @@ describe("managed secret and remote state preparation", () => {
     expect(occurrences(adapterPolicy, '"ssm:GetParameter"')).toBe(1);
     expect(mailPolicy).toContain('"kms:Decrypt"');
     expect(adapterPolicy).toContain('"kms:Decrypt"');
-    expect(mailPolicy).toContain("aws_kms_key.runtime_secrets.arn");
-    expect(adapterPolicy).toContain("aws_kms_key.runtime_secrets.arn");
+    const mailDecrypt = extractContainingBlock(mailPolicy, 'sid       = "DecryptRuntimeSecrets"');
+    const adapterDecrypt = extractContainingBlock(
+      adapterPolicy,
+      'sid       = "DecryptRuntimeSecrets"',
+    );
+    expect(mailDecrypt).toContain("data.aws_kms_alias.runtime_secrets.target_key_arn");
+    expect(adapterDecrypt).toContain("data.aws_kms_alias.runtime_secrets.target_key_arn");
+    for (const statement of [mailDecrypt, adapterDecrypt]) {
+      expect(statement).toContain('variable = "kms:ViaService"');
+      expect(statement).toContain('values   = ["ssm.${var.aws_region}.amazonaws.com"]');
+      expect(statement).toContain(
+        'variable = "kms:EncryptionContext:PARAMETER_ARN"',
+      );
+    }
+    expect(mailDecrypt).toContain("parameter/callie-sourcing/ntfy-topic");
+    expect(mailDecrypt).not.toContain("parameter/callie-sourcing/tracerfy-api-key");
+    expect(adapterDecrypt).toContain("parameter/callie-sourcing/tracerfy-api-key");
+    expect(adapterDecrypt).toContain("parameter/callie-sourcing/membership-hmac-salt");
+    expect(adapterDecrypt).not.toContain("parameter/callie-sourcing/ntfy-topic");
     expect(iam).not.toMatch(/ssm:[^"\n]*\*/);
-    expect(secrets).toContain('resource "aws_kms_key" "runtime_secrets"');
+    expect(secrets).toContain('data "aws_kms_alias" "runtime_secrets"');
+    expect(secrets).not.toContain('resource "aws_kms_key" "runtime_secrets"');
     expect(secrets).not.toContain('resource "aws_ssm_parameter"');
   });
 
@@ -793,6 +825,16 @@ describe("managed secret and remote state preparation", () => {
     expect(script).toContain("ResourceNotFoundException");
     expect(script).toContain("unable to verify that the state bucket is absent");
     expect(script).toContain("unable to verify that the lock table is absent");
+    expect(script).toContain("trap cleanup_on_failure ERR INT TERM");
+    expect(script).toContain("wait table-exists");
+    expect(script).toContain("get-public-access-block");
+    expect(script).toContain("get-bucket-versioning");
+    expect(script).toContain("get-bucket-encryption");
+    expect(script).toContain("describe-table");
+    expect(script).toContain("--recover");
+    expect(script).toContain("recovery receipt");
+    expect(script).toContain("recovery cleanup completed");
+    expect(script).toContain("rm -f -- \"$receipt\"");
     expect(script).toContain("put-bucket-encryption");
     expect(script).toContain("put-bucket-versioning");
     expect(script).toContain("put-public-access-block");
@@ -803,5 +845,39 @@ describe("managed secret and remote state preparation", () => {
     expect(readme).toContain("second explicit confirmation");
     expect(readme).toContain("tofu init -migrate-state");
     expect(readme).toContain("No apply is authorized");
+  });
+
+  it("documents staged runtime-key and all-parameter prevalidation before Lambda cutover", () => {
+    const script = readFileSync(
+      join(process.cwd(), "cloud", "scripts", "bootstrap-runtime-secret-key.sh"),
+      "utf8",
+    );
+    const readme = readFileSync(join(process.cwd(), "cloud", "README.md"), "utf8");
+    const plan = readFileSync(
+      join(
+        process.cwd(),
+        "docs",
+        "superpowers",
+        "plans",
+        "2026-09-04-runtime-recovery-security-hardening.md",
+      ),
+      "utf8",
+    );
+
+    expect(script).toContain("create-alias");
+    expect(script).toContain("describe-key");
+    expect(script).toContain("get-key-rotation-status");
+    expect(script).toContain("get-parameter");
+    expect(script).toContain("TRACERFY_API_KEY_PARAM");
+    expect(script).toContain("NTFY_TOPIC_PARAM");
+    expect(script).toContain("HMAC_SALT_PARAM");
+    expect(script).toContain("--verify-parameters");
+    expect(script).toContain("receipt_key_arn");
+    expect(readme).toContain("Stage A: prepare and verify the runtime key");
+    expect(readme).toContain("Stage B: enter and prevalidate all three parameters");
+    expect(readme).toContain("Stage C: cut over IAM and Lambda identifiers");
+    expect(readme).toContain("Rollback");
+    expect(plan).toMatch(/prevalidate all three encrypted parameters/i);
+    expect(plan).toMatch(/only then apply the IAM and Lambda identifier cutover/i);
   });
 });

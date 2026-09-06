@@ -21,7 +21,15 @@ export async function loadSecureParameter(input: {
       }),
     );
     value = response.Parameter?.Value;
-  } catch {
+  } catch (error) {
+    if (
+      !input.required &&
+      error &&
+      typeof error === "object" &&
+      (error as { name?: unknown }).name === "ParameterNotFound"
+    ) {
+      return null;
+    }
     throw new SecureParameterError("Secure parameter lookup failed");
   }
 

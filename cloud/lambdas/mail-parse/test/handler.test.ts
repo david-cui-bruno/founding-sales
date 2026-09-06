@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
-import { validateSourceEvent, type CloudSourceEvent } from "@callie-sourcing/shared";
+import {
+  loadSecureParameter,
+  validateSourceEvent,
+  type CloudSourceEvent,
+} from "@callie-sourcing/shared";
 import type { SESEvent } from "aws-lambda";
 import { createHandler, handlerWithDeps, type HandlerDeps } from "../src/handler";
 import {
@@ -258,6 +262,24 @@ function assertSafeBoundaryFailure(failure: unknown, originalName: string, origi
 }
 
 describe("exported handler boundary", () => {
+  it("continues ingestion when the optional ntfy parameter does not exist", async () => {
+    const state = newState("msg-test", testMailMime);
+    const deps = fakeDeps(state);
+    deps.getNtfyTopic = () =>
+      loadSecureParameter({
+        client: {
+          send: async () => {
+            throw Object.assign(new Error("private parameter identifier"), {
+              name: "ParameterNotFound",
+            });
+          },
+        },
+        parameterName: "/callie-sourcing/ntfy-topic",
+        required: false,
+      });
+
+    await expect(createHandler(() => deps)(sesEvent("msg-test"))).resolves.toBeUndefined();
+  });
   it("resolves the optional ntfy topic once per invocation without warm caching", async () => {
     const state = newState("msg-test", testMailMime);
     const deps = fakeDeps(state);
