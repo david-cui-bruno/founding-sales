@@ -36,7 +36,7 @@ function waveCsv(count: number): string {
   return `${rows.join('\n')}\n`;
 }
 
-test('call flow: Enter opens the lead page, outcome + callback removes the lead from Today across relaunch', async () => {
+test('call outcome flow: opening the lead page and saving a callback removes the lead across relaunch', async () => {
   test.setTimeout(180_000);
   const fixtureDirectory = await mkdtemp(join(tmpdir(), 'callie-today-call-'));
   const csvPath = join(fixtureDirectory, 'wave-leads.csv');
@@ -85,9 +85,18 @@ test('call flow: Enter opens the lead page, outcome + callback removes the lead 
     const nextUp = page.getByRole('group', { name: /^Next up:/ });
     await expect(nextUp).toBeVisible();
 
-    // Enter on the focused Next up card logs the call and opens the page.
-    await nextUp.focus();
-    await page.keyboard.press('Enter');
+    // Open the lead without initiating outbound. This fixture intentionally has
+    // unknown compliance evidence, so the Call/Enter path must remain blocked.
+    // The full-page outcome form records a call that already happened.
+    await nextUp.getByRole('button', {
+      name: readyLead.personName,
+      exact: true,
+    }).click();
+    const inspector = page.getByRole('complementary', {
+      name: `${readyLead.personName} details`,
+    });
+    await expect(inspector).toBeVisible();
+    await inspector.getByRole('button', { name: 'Open full page' }).click();
     const fullPage = page.locator('.lead-full-page');
     await expect(fullPage).toBeVisible();
     await expect(

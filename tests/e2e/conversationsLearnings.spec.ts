@@ -11,13 +11,29 @@ test('logs a call, attaches a pasted transcript, and both survive relaunch', asy
   try {
     const { page } = workspace;
 
-    // Create a real call activity through the inspector's Call control.
+    // Record a real call outcome through the packaged preload/domain boundary.
+    // The imported fixture intentionally has unknown compliance evidence, so
+    // initiating a new outbound call must remain disabled and fail closed.
     await page.getByRole('row', { name: /Kevin Shin/ }).click();
     await page.keyboard.press('Enter');
     await expect(
       page.getByRole('complementary', { name: 'Kevin Shin details' }),
     ).toBeVisible();
-    await page.getByRole('button', { name: /^Call / }).first().click();
+    await page.evaluate(async () => {
+      const list = await window.callie.leads.list({
+        query: 'Kevin Shin', stages: [], priorities: [], sort: 'person_name',
+        cursor: null, limit: 10,
+      });
+      const personId = list.rows[0]!.personId;
+      const detail = await window.callie.leadDetail.get({ personId });
+      await window.callie.today.logCallOutcome({
+        personId,
+        salesCycleId: detail.salesCycleId,
+        outcome: 'spoke',
+        callbackAt: null,
+        occurredAt: new Date().toISOString(),
+      });
+    });
     await page.getByRole('button', { name: 'Close inspector' }).click();
 
     // The call shows up in the Conversations workspace.
