@@ -21,7 +21,9 @@ const PLAINTEXT_HEADER = Buffer.from('SQLite format 3\u0000', 'utf8');
  * Every schema version a healthy encrypted workspace may legitimately hold
  * before migration runs. Extend this list with each registered migration.
  */
-const KNOWN_SCHEMA_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+const KNOWN_SCHEMA_VERSIONS: readonly number[] = [
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+];
 const STATE_MARKER_FORMAT = 'callie-plaintext-encryption-upgrade';
 const MAX_MARKER_BYTES = 64 * 1024;
 const DATABASE_SIDECAR_SUFFIXES = ['-wal', '-shm', '-journal'] as const;
