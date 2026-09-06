@@ -25,7 +25,6 @@ import {
   type LeadsListResponse,
 } from '../../shared/contracts/leadsContract';
 import {
-  beginOutboundRequestSchema,
   confirmTransitionRequestSchema,
   dismissLeadRequestSchema,
   leadDetailRequestSchema,
@@ -154,6 +153,13 @@ import type { IdGenerator } from './support/idGenerator';
 import type { TodayItem, TodayLane } from './today/todayTypes';
 import { resolveLocalDayInterval } from './today/todayOrdering';
 import { OutboundAuthorizationError } from './support/domainErrors';
+import { contactSnapshot } from '../communications/contactSnapshot';
+import type { OutboundDomainPort, Preparation } from '../communications/outboundPorts';
+import {
+  handoffResultSchema, outboundRequestSchema, outboundReceiptSchema,
+  type OutboundRequest, type OutboundReceipt, type OutboundReason, type HandoffResult,
+} from '../../shared/contracts/outboundContract';
+import { OutboundCommandEvidenceError, outboundCommandResult } from './outbound/outboundCommandRepository';
 
 export const FOUNDER_JOB_REQUEST_TYPE = 'founder_job_request_v1' as const;
 export const LEAD_IMPORT_JOB_TYPE = 'lead_import_v1' as const;
@@ -388,7 +394,7 @@ function jsonSummary(metadataJson: string): string | null {
  * services and returns a MutationReceipt whose revision is a monotonically
  * increasing per-connection change counter.
  */
-export class FounderSalesDomain {
+export class FounderSalesDomain implements OutboundDomainPort {
   private readonly services: DomainServices;
   private readonly database: AppDatabase;
   private readonly clock: Clock;
@@ -403,6 +409,9 @@ export class FounderSalesDomain {
     ids: IdGenerator;
     timezone?: string;
   }) {
+    input.services.outboundCommands.assertBoundTo(input.database, input.services.unitOfWork);
+    input.services.outboundPermission.assertBoundTo(input.database, input.services.unitOfWork);
+    input.services.identities.assertBoundTo(input.database, input.services.unitOfWork);
     this.services = input.services;
     this.database = input.database;
     this.clock = input.clock;
@@ -921,65 +930,127 @@ export class FounderSalesDomain {
   }
 
   beginOutbound(input: BeginOutboundRequest): MutationReceipt {
-    const request = beginOutboundRequestSchema.parse(input);
-    const now = this.clock.now();
+    // Keep the old IPC type intact until its atomic switch. This is not a send or log API.
+    void input;
+    throw new FounderSalesDomainError('ACTION_NOT_SUPPORTED', 'Phone handoff is not integrated yet.');
+  }
+
+  inspectOutboundCommand(input: OutboundRequest): OutboundReceipt | null {
+    const request = outboundRequestSchema.parse(input);
+    const state = this.services.outboundCommands.read(request);
+    return state === null ? null : this.outboundReceipt(request, outboundCommandResult(state));
+  }
+
+  prepareOutboundDispatch(input: OutboundRequest): Preparation {
+    const request = outboundRequestSchema.parse(input);
     return this.services.unitOfWork.immediate(() => {
-      const cycle = this.requireCycle(request.salesCycleId);
-      if (cycle.person_id !== request.personId) {
-        throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The cycle belongs to another person.');
-      }
-      const contact = this.database.raw.prepare(`
-        SELECT id, kind, normalized_value, validation_state
-        FROM person_contact_methods
-        WHERE id = ? AND person_id = ?
-      `).get(request.contactMethodId, request.personId) as {
-        id: string; kind: 'phone' | 'email'; normalized_value: string;
-        validation_state: 'unverified' | 'valid' | 'invalid';
-      } | undefined;
-      if (contact === undefined) {
-        throw new FounderSalesDomainError(
-          'CONTACT_METHOD_NOT_FOUND', 'The contact method does not belong to this person.',
-        );
-      }
-      const expectedKind = request.channel === 'email' ? 'email' : 'phone';
-      if (contact.kind !== expectedKind) {
-        throw new OutboundAuthorizationError('channel_contact_kind_mismatch');
-      }
-      const activityId = this.ids.next();
-      if (request.channel === 'call' || request.channel === 'text') {
-        this.services.outboundPermission.assertMayExecuteOutbound({
-          personId: request.personId,
-          contactMethodId: contact.id,
-          channel: request.channel,
-          now,
-        });
-      } else {
-        if (this.services.identities.isPersonOrHandleOptedOut(request.personId, {
-          kind: contact.kind, normalizedValue: contact.normalized_value,
-        })) {
-          throw new OutboundAuthorizationError('person_or_handle_opted_out');
-        }
-        if (contact.validation_state !== 'valid') {
-          throw new OutboundAuthorizationError('contact_validation_unusable');
-        }
-      }
-      this.services.events.appendActivity({
-        id: activityId,
-        personId: request.personId,
-        prospectId: cycle.prospect_id,
-        salesCycleId: cycle.id,
-        kind: request.channel === 'call' ? 'call' : request.channel,
-        direction: 'outbound',
-        channel: request.channel === 'call' ? 'phone' : request.channel,
-        occurredAt: now,
-        observedOutcome: null,
-        metadata: {
-          authorizationPolicyVersion: 'outbound_compliance_v1',
-          authorizationReason: 'allowed',
-        },
+      // Repeat lookup inside the serialized write boundary. Unresolved is unknown, not permission to retry.
+      const previous = this.inspectOutboundCommand(request);
+      if (previous !== null) return { kind: 'receipt', receipt: previous };
+      const { cycle, prospect, contact } = this.requireOutboundIdentity(request);
+      const refuse = (reason: OutboundReason): Preparation => ({
+        kind: 'receipt', receipt: this.appendOutboundRefusal(request, cycle.prospect_id, reason),
       });
-      return this.receipt([request.personId], [cycle.id]);
+      if (prospect.qualificationState !== 'eligible'
+        || !((cycle.workflow_status === 'active' && ['ready', 'contacted', 'interviewed', 'offered'].includes(cycle.stage))
+          || (cycle.workflow_status === 'onboarding' && cycle.stage === 'won'))) {
+        return refuse('cycle_not_executable');
+      }
+      if (contactSnapshot(contact) !== request.expectedContactSnapshot) return refuse('stale_contact');
+      const expectedKind = request.channel === 'email' ? 'email' : 'phone';
+      if (contact.kind !== expectedKind) return refuse('channel_contact_kind_mismatch');
+      // No production Text/Gmail dispatch port exists. Never reinterpret these as a Phone handoff.
+      if (request.channel !== 'call') return refuse('channel_unavailable');
+      const canonicalPhone = contact.normalizedValue;
+      if (/^\+[1-9][0-9]{7,14}$/.exec(canonicalPhone)?.[0] !== canonicalPhone) return refuse('invalid_target');
+      // Fresh authority, not inspector advice or a clock read made before entering the UOW.
+      const now = this.clock.now();
+      try {
+        this.services.outboundPermission.assertMayExecuteOutbound({
+          personId: request.personId, contactMethodId: contact.id, channel: 'call', now,
+        });
+      } catch (error) {
+        if (!(error instanceof OutboundAuthorizationError)) throw error;
+        return refuse(error.reasonCode);
+      }
+      for (const phase of ['requested', 'dispatching'] as const) {
+        this.services.outboundCommands.append({ request, phase, reasonCode: null, occurredAt: now }, cycle.prospect_id);
+      }
+      return Object.freeze({ kind: 'dispatch', canonicalPhone,
+        mutation: this.receipt([request.personId], [request.salesCycleId]) });
     });
+  }
+
+  recordOutboundRefusal(input: OutboundRequest, reason: OutboundReason): OutboundReceipt {
+    const request = outboundRequestSchema.parse(input);
+    return this.services.unitOfWork.immediate(() => {
+      const previous = this.inspectOutboundCommand(request);
+      if (previous !== null) return previous;
+      const { cycle } = this.requireOutboundIdentity(request);
+      return this.appendOutboundRefusal(request, cycle.prospect_id, reason);
+    });
+  }
+
+  recordOutboundResult(input: OutboundRequest, result: HandoffResult): OutboundReceipt {
+    const request = outboundRequestSchema.parse(input);
+    const parsed = handoffResultSchema.parse(result);
+    return this.services.unitOfWork.immediate(() => {
+      const previous = this.services.outboundCommands.read(request);
+      if (previous === null || previous.phase === 'requested'
+        || parsed.reasonCode === 'command_conflict' || parsed.reasonCode === 'command_evidence_invalid') {
+        throw new OutboundCommandEvidenceError('command_evidence_invalid');
+      }
+      if (previous.phase !== 'dispatching') {
+        if (previous.phase !== parsed.status || previous.reasonCode !== parsed.reasonCode) {
+          throw new OutboundCommandEvidenceError('command_evidence_invalid');
+        }
+        return this.outboundReceipt(request, outboundCommandResult(previous));
+      }
+      const cycle = this.requireCycle(request.salesCycleId);
+      this.services.outboundCommands.append({ request, phase: parsed.status,
+        reasonCode: parsed.reasonCode, occurredAt: this.clock.now() }, cycle.prospect_id);
+      return this.outboundReceipt(request, { status: parsed.status, reasonCode: parsed.reasonCode });
+    });
+  }
+
+  private requireOutboundIdentity(request: OutboundRequest) {
+    this.services.unitOfWork.assertWriteScope();
+    const person = this.services.identities.getPerson(request.personId);
+    if (person === null || person.deletedAt !== null) {
+      throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The person does not exist.');
+    }
+    const cycle = this.requireCycle(request.salesCycleId);
+    const prospect = this.database.raw.prepare(`SELECT person_id AS personId, qualification_state AS qualificationState
+      FROM prospects WHERE id = ?`).get(cycle.prospect_id) as { personId: string; qualificationState: string } | undefined;
+    if (cycle.person_id !== request.personId || prospect === undefined || prospect.personId !== request.personId) {
+      throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The sales cycle does not belong to this person.');
+    }
+    // Identity display reads trim text. Final authority must compare and validate
+    // the exact stored tuple, never silently repair a malformed target before use.
+    const contact = this.database.raw.prepare(`SELECT id, person_id AS personId, kind,
+      normalized_value AS normalizedValue, validation_state AS validationState, updated_at AS updatedAt
+      FROM person_contact_methods WHERE id = ?`).get(request.contactMethodId) as Parameters<typeof contactSnapshot>[0] | undefined;
+    if (contact === undefined || contact.personId !== request.personId) {
+      throw new FounderSalesDomainError('CONTACT_METHOD_NOT_FOUND', 'The contact method does not belong to this person.');
+    }
+    return { cycle, prospect, contact };
+  }
+
+  private appendOutboundRefusal(request: OutboundRequest, prospectId: string, reasonCode: OutboundReason): OutboundReceipt {
+    this.services.unitOfWork.assertWriteScope();
+    const status = ['channel_unavailable', 'phone_route_unverified', 'inbound_safety_unwired', 'workspace_inactive'].includes(reasonCode)
+      ? 'unavailable' : 'refused';
+    const result = handoffResultSchema.parse({ status, reasonCode });
+    const occurredAt = this.clock.now();
+    this.services.outboundCommands.append({ request, phase: 'requested', reasonCode: null, occurredAt }, prospectId);
+    this.services.outboundCommands.append({ request, phase: result.status, reasonCode: result.reasonCode, occurredAt }, prospectId);
+    return this.outboundReceipt(request, { status: result.status, reasonCode: result.reasonCode });
+  }
+
+  private outboundReceipt(request: OutboundRequest, result: HandoffResult): OutboundReceipt {
+    const receipt = outboundReceiptSchema.parse({ ...result, commandId: request.commandId, channel: request.channel,
+      mutation: this.receipt([request.personId], [request.salesCycleId]) });
+    return { ...receipt, reasonCode: receipt.reasonCode };
   }
 
   confirmTransition(input: ConfirmTransitionRequest): MutationReceipt {
