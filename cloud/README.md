@@ -78,6 +78,26 @@ values. No apply is authorized by this preparation.
 Stop before any operational step. Obtain explicit founder confirmation, then use
 this staged order without combining stages:
 
+Before either bootstrap, create a dedicated receipt directory owned only by the
+current operator. The directory must already exist, must be a real nonsymlink
+directory owned by the current effective UID, and must have exact mode `0700`:
+
+```bash
+install -d -m 0700 "$HOME/.callie-bootstrap-receipts"
+test ! -L "$HOME/.callie-bootstrap-receipts"
+test "$(stat -f '%HT' "$HOME/.callie-bootstrap-receipts")" = "Directory"
+test "$(stat -f '%u' "$HOME/.callie-bootstrap-receipts")" = "$(id -u)"
+test "$(stat -f '%Lp' "$HOME/.callie-bootstrap-receipts")" = "700"
+```
+
+Supply each bootstrap a receipt path with one non-dot basename directly inside
+that private directory, such as
+`$HOME/.callie-bootstrap-receipts/terraform-state.receipt`. Verify this boundary
+before invoking either bootstrap. The state bootstrap rejects a missing, symlinked,
+differently owned, group-writable, or other-writable receipt directory before any
+bootstrap behavior. This boundary protects against other local users. It does not
+claim protection from hostile code running as the same UID.
+
 1. **Stage A: prepare and verify the runtime key.** Run the dedicated key
    bootstrap through the approved operator path. Retain its mode-0600 receipt,
    verify the alias target and enabled rotation, and stop. Terraform reads this

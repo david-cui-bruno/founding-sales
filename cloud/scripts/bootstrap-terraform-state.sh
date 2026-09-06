@@ -13,6 +13,8 @@ usage() {
 }
 
 receipt=""
+receipt_directory=""
+receipt_basename=""
 account_id="$expected_account_id"
 region=""
 run_id=""
@@ -22,21 +24,57 @@ kms_key_arn=""
 bucket_phase="absent"
 table_phase="absent"
 
+bind_receipt_boundary() {
+  local supplied_directory supplied_basename canonical_directory directory_type directory_owner directory_mode effective_uid
+  supplied_directory=$(dirname -- "$receipt") || return 1
+  supplied_basename=$(basename -- "$receipt") || return 1
+  [[ "$supplied_basename" != "." && "$supplied_basename" != ".." && "$supplied_basename" != .* ]] || {
+    echo "recovery receipt basename must be one non-dot leaf" >&2
+    return 1
+  }
+  [[ -d "$supplied_directory" && ! -L "$supplied_directory" ]] || {
+    echo "recovery receipt parent must be an existing nonsymlink directory" >&2
+    return 1
+  }
+  canonical_directory=$(cd -P -- "$supplied_directory" && pwd -P) || return 1
+  [[ -n "$canonical_directory" && -d "$canonical_directory" && ! -L "$canonical_directory" ]] || return 1
+  directory_type=$(stat -f '%HT' "$canonical_directory") || return 1
+  directory_owner=$(stat -f '%u' "$canonical_directory") || return 1
+  directory_mode=$(stat -f '%Lp' "$canonical_directory") || return 1
+  effective_uid=$(id -u) || return 1
+  [[ "$directory_type" == "Directory" && "$directory_owner" == "$effective_uid" && "$directory_mode" == "700" ]] || {
+    echo "recovery receipt parent must be owned by the effective user with exact mode 0700" >&2
+    return 1
+  }
+  receipt_directory=$canonical_directory
+  receipt_basename=$supplied_basename
+  receipt="${receipt_directory}/${receipt_basename}"
+}
+
 write_receipt() {
-  local receipt_directory receipt_basename temporary_receipt temporary_type
-  receipt_directory=$(dirname -- "$receipt") || return 1
-  receipt_basename=$(basename -- "$receipt") || return 1
+  local temporary_receipt temporary_directory temporary_basename temporary_prefix temporary_suffix temporary_type temporary_mode installed_type installed_mode
   umask 077
   temporary_receipt=$(mktemp "${receipt_directory}/.${receipt_basename}.tmp.XXXXXXXX") || return 1
-  case "$temporary_receipt" in
-    "${receipt_directory}/.${receipt_basename}.tmp."*) ;;
-    *) rm -f -- "$temporary_receipt"; return 1 ;;
-  esac
+  temporary_directory=$(dirname -- "$temporary_receipt") || return 1
+  [[ "$temporary_directory" == "$receipt_directory" ]] || return 1
+  temporary_basename=$(basename -- "$temporary_receipt") || return 1
+  temporary_prefix=".${receipt_basename}.tmp."
+  [[ "$temporary_basename" == "$temporary_prefix"* ]] || return 1
+  temporary_suffix=${temporary_basename#"$temporary_prefix"}
+  [[ "$temporary_suffix" =~ ^[[:alnum:]]{8}$ ]] || return 1
   temporary_type=$(stat -f '%HT' "$temporary_receipt") || {
     rm -f -- "$temporary_receipt"
     return 1
   }
   [[ ! -L "$temporary_receipt" && -f "$temporary_receipt" && "$temporary_type" == "Regular File" ]] || {
+    rm -f -- "$temporary_receipt"
+    return 1
+  }
+  temporary_mode=$(stat -f '%Lp' "$temporary_receipt") || {
+    rm -f -- "$temporary_receipt"
+    return 1
+  }
+  [[ "$temporary_mode" == "600" ]] || {
     rm -f -- "$temporary_receipt"
     return 1
   }
@@ -54,6 +92,9 @@ write_receipt() {
     rm -f -- "$temporary_receipt"
     return 1
   }
+  installed_type=$(stat -f '%HT' "$receipt") || return 1
+  installed_mode=$(stat -f '%Lp' "$receipt") || return 1
+  [[ ! -L "$receipt" && -f "$receipt" && "$installed_type" == "Regular File" && "$installed_mode" == "600" ]] || return 1
 }
 
 persist_bucket_phase() {
@@ -256,6 +297,7 @@ verify_postconditions() {
 if [[ $1 == "--recover" ]]; then
   [[ $# -eq 2 ]] || usage
   receipt=$2
+  bind_receipt_boundary || exit 1
   validate_receipt
   [[ "$bucket_phase" != "verified" && "$table_phase" != "verified" ]] || {
     echo "verified resources are not eligible for recovery deletion; retaining recovery receipt" >&2
@@ -273,6 +315,7 @@ fi
 region=$2
 kms_key_arn=$3
 receipt=$4
+bind_receipt_boundary || exit 1
 [[ "$region" == "us-east-1" ]] || { echo "state bootstrap region must be us-east-1" >&2; exit 1; }
 [[ "$kms_key_arn" =~ ^arn:aws:kms:us-east-1:${expected_account_id}:key/[0-9a-f-]{36}$ ]] || {
   echo "state KMS key ARN must be canonical for the approved account" >&2; exit 1;

@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
@@ -141,6 +142,7 @@ function runRecoveryScenario(scenario: string) {
   const receipt = join(directory, "receipt");
   const awsLog = join(directory, "aws.log");
   const symlinkTarget = join(directory, "symlink-target");
+  const mktempLog = join(directory, "mktemp.log");
   mkdirSync(binDirectory);
   writeFileSync(receipt, recoveryReceipt(), { mode: 0o600 });
   const fakeAws = join(binDirectory, "aws");
@@ -217,6 +219,30 @@ source "$BOOTSTRAP_SCRIPT" --recover "$RECEIPT"
     );
     command = wrapper;
   }
+  if (scenario === "receipt-temp-traversal") {
+    mkdirSync(join(directory, ".receipt.tmp.attacker"));
+    const fakeMktemp = join(binDirectory, "mktemp");
+    writeFileSync(
+      fakeMktemp,
+      `#!/usr/bin/env bash
+printf 'called\n' >>"$FAKE_MKTEMP_LOG"
+printf '%s\n' "$FAKE_WORK/.receipt.tmp.attacker/../receipt"
+`,
+      { mode: 0o755 },
+    );
+  }
+  if (scenario === "receipt-parent-group-writable") {
+    chmodSync(directory, 0o770);
+    const fakeMktemp = join(binDirectory, "mktemp");
+    writeFileSync(
+      fakeMktemp,
+      `#!/usr/bin/env bash
+printf 'called\n' >>"$FAKE_MKTEMP_LOG"
+exit 91
+`,
+      { mode: 0o755 },
+    );
+  }
   chmodSync(fakeAws, 0o755);
   const result = spawnSync(
     command,
@@ -233,19 +259,32 @@ source "$BOOTSTRAP_SCRIPT" --recover "$RECEIPT"
         BOOTSTRAP_SCRIPT: join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh"),
         RECEIPT: receipt,
         SYMLINK_TARGET: symlinkTarget,
+        FAKE_MKTEMP_LOG: mktempLog,
       },
     },
   );
   const output = `${result.stdout}${result.stderr}`;
-  const receiptContents = readFileSync(receipt, "utf8");
-  const awsCalls = readFileSync(awsLog, "utf8");
-  const mode = statSync(receipt).mode & 0o777;
-  const receiptIsSymlink = lstatSync(receipt).isSymbolicLink();
+  const receiptExists = existsSync(receipt);
+  const receiptContents = receiptExists ? readFileSync(receipt, "utf8") : undefined;
+  const awsCalls = existsSync(awsLog) ? readFileSync(awsLog, "utf8") : "";
+  const mktempCalls = existsSync(mktempLog) ? readFileSync(mktempLog, "utf8") : "";
+  const mode = receiptExists ? statSync(receipt).mode & 0o777 : undefined;
+  const receiptIsSymlink = receiptExists ? lstatSync(receipt).isSymbolicLink() : undefined;
   const symlinkTargetContents = scenario === "receipt-temp-symlink"
     ? readFileSync(symlinkTarget, "utf8")
     : undefined;
   rmSync(directory, { recursive: true, force: true });
-  return { result, output, receiptContents, awsCalls, mode, receiptIsSymlink, symlinkTargetContents };
+  return {
+    result,
+    output,
+    receiptExists,
+    receiptContents,
+    awsCalls,
+    mktempCalls,
+    mode,
+    receiptIsSymlink,
+    symlinkTargetContents,
+  };
 }
 
 describe("scheduled source Terraform hardening", () => {
@@ -1088,6 +1127,31 @@ describe("managed secret and remote state preparation", () => {
     expect(output).not.toContain("automatic cleanup completed");
     expect(symlinkTargetContents).toBe("safe target contents\n");
     expect(receiptIsSymlink).toBe(false);
+    expect(receiptContents).toBe(recoveryReceipt());
+    expect(mode).toBe(0o600);
+  });
+
+  it("rejects a traversal-shaped mktemp return before touching the durable receipt", () => {
+    const { result, output, receiptExists, receiptContents, mode } =
+      runRecoveryScenario("receipt-temp-traversal");
+
+    expect(result.status).not.toBe(0);
+    expect(output).not.toContain("recovery reconciliation completed");
+    expect(output).not.toContain("automatic cleanup completed");
+    expect(receiptExists).toBe(true);
+    expect(receiptContents).toBe(recoveryReceipt());
+    expect(mode).toBe(0o600);
+  });
+
+  it("rejects a group-writable receipt parent before mktemp or AWS behavior", () => {
+    const { result, output, receiptContents, awsCalls, mktempCalls, mode } =
+      runRecoveryScenario("receipt-parent-group-writable");
+
+    expect(result.status).not.toBe(0);
+    expect(output).not.toContain("recovery reconciliation completed");
+    expect(output).not.toContain("automatic cleanup completed");
+    expect(mktempCalls).toBe("");
+    expect(awsCalls).toBe("");
     expect(receiptContents).toBe(recoveryReceipt());
     expect(mode).toBe(0o600);
   });
