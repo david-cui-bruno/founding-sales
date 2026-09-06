@@ -52,6 +52,9 @@ export async function retainOnlyPackagedEncryptedSqliteRuntime({
     }
   }
   await rm(join(packageRoot, 'build'), { recursive: true, force: true });
+  // Compiler inputs are not runtime dependencies. Keep lib, package metadata,
+  // the upstream LICENSE and the verified native binary in the packaged copy.
+  await rm(join(packageRoot, 'deps'), { recursive: true, force: true });
 
   const nativeFiles = await listNativeFiles(packageRoot);
   if (nativeFiles.length !== 1 || nativeFiles[0] !== runtimeBinary) {
