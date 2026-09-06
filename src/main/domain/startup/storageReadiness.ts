@@ -223,7 +223,7 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'protect_trigger_event_receipt_proof',
     'synchronize_person_opt_out',
   ]),
-  catalogSha256: '11cced103357d0c9d06d417a1629e9aeb6064156e0f68bbc9ae200e8fcd38acd',
+  catalogSha256: 'd888ea664cf61ff8e5404f3542f1d615d1c9b08ecf77612690236fd192e535a8',
 });
 
 export const DOMAIN_MIGRATION_LEDGER = Object.freeze([

@@ -48,7 +48,9 @@ const expectedTableSql = {
     kind TEXT NOT NULL CHECK (kind IN ('daily','manual','pre_release')),
     schema_version INTEGER NOT NULL CHECK (schema_version > 0),
     sha256 TEXT NOT NULL CHECK (
-      length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'
+      typeof(sha256) = 'text' AND length(sha256) = 64
+      AND length(CAST(sha256 AS BLOB)) = 64
+      AND sha256 NOT GLOB '*[^0-9a-f]*'
     ),
     size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
     created_at TEXT NOT NULL,
@@ -65,7 +67,9 @@ const expectedTableSql = {
     performed_at TEXT NOT NULL,
     backup_receipt_id TEXT NOT NULL,
     backup_sha256 TEXT NOT NULL CHECK (
-      length(backup_sha256) = 64 AND backup_sha256 NOT GLOB '*[^0-9a-f]*'
+      typeof(backup_sha256) = 'text' AND length(backup_sha256) = 64
+      AND length(CAST(backup_sha256 AS BLOB)) = 64
+      AND backup_sha256 NOT GLOB '*[^0-9a-f]*'
     ),
     PRIMARY KEY (performed_at, backup_sha256),
     FOREIGN KEY (backup_receipt_id) REFERENCES backup_receipts(id)
@@ -167,6 +171,52 @@ describe('0015 recovery metadata migration', () => {
     expect(() => insert.run(
       'backup-7', 'daily-7.sqlite3', 'manual', 15, 'G'.repeat(64), 10, TS, TS,
     )).toThrow();
+  });
+
+  const noncanonicalHashes = [
+    { label: '64-byte BLOB', value: Buffer.from(SHA, 'ascii') },
+    { label: 'hex prefix with embedded NUL and suffix', value: `${SHA}\0G` },
+  ];
+
+  it.each(noncanonicalHashes)('rejects a $label in backup receipt hashes', async ({ value }) => {
+    await migrateToLatest(database, options);
+    const insert = database.raw.prepare(`INSERT INTO backup_receipts
+      (id, backup_basename, kind, schema_version, sha256, size_bytes, created_at, verified_at)
+      VALUES (?, ?, 'manual', 15, ?, 10, ?, ?)`);
+
+    expect(() => insert.run('bad', 'bad.sqlite3', value, TS, TS))
+      .toThrow(/CHECK constraint failed/);
+    expect(database.raw.prepare('SELECT id FROM backup_receipts').all()).toEqual([]);
+
+    insert.run('valid', 'valid.sqlite3', SHA, TS, TS);
+    expect(database.raw.prepare('SELECT sha256 FROM backup_receipts').get())
+      .toEqual({ sha256: SHA });
+  });
+
+  it.each(noncanonicalHashes)('rejects a $label in restore-drill hashes', async ({ value }) => {
+    await migrateToLatest(database, options);
+    const insertBackup = database.raw.prepare(`INSERT INTO backup_receipts
+      (id, backup_basename, kind, schema_version, sha256, size_bytes, created_at, verified_at)
+      VALUES (?, ?, 'manual', 15, ?, 10, ?, ?)`);
+
+    // Seed corrupt historical evidence only in this disposable fixture. Restore the
+    // checks before testing the drill's own constraint, not just its linkage trigger.
+    database.raw.pragma('ignore_check_constraints = ON');
+    try {
+      insertBackup.run('legacy-bad', 'legacy-bad.sqlite3', value, TS, TS);
+    } finally {
+      database.raw.pragma('ignore_check_constraints = OFF');
+    }
+    expect(database.raw.pragma('ignore_check_constraints', { simple: true })).toBe(0);
+    const insertDrill = database.raw.prepare(`INSERT INTO restore_drill_receipts
+      (performed_at, backup_receipt_id, backup_sha256) VALUES (?, ?, ?)`);
+    expect(() => insertDrill.run(TS, 'legacy-bad', value)).toThrow(/CHECK constraint failed/);
+    expect(database.raw.prepare('SELECT * FROM restore_drill_receipts').all()).toEqual([]);
+
+    insertBackup.run('valid', 'valid.sqlite3', SHA, TS, TS);
+    insertDrill.run(TS, 'valid', SHA);
+    expect(database.raw.prepare('SELECT backup_sha256 FROM restore_drill_receipts').get())
+      .toEqual({ backup_sha256: SHA });
   });
 
   it('keeps backup and restore-drill receipts immutable and hash constrained', async () => {

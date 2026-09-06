@@ -10,7 +10,9 @@ export const migration0015RecoveryMetadata = {
       kind TEXT NOT NULL CHECK (kind IN ('daily','manual','pre_release')),
       schema_version INTEGER NOT NULL CHECK (schema_version > 0),
       sha256 TEXT NOT NULL CHECK (
-        length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'
+        typeof(sha256) = 'text' AND length(sha256) = 64
+        AND length(CAST(sha256 AS BLOB)) = 64
+        AND sha256 NOT GLOB '*[^0-9a-f]*'
       ),
       size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
       created_at TEXT NOT NULL,
@@ -27,7 +29,9 @@ export const migration0015RecoveryMetadata = {
       performed_at TEXT NOT NULL,
       backup_receipt_id TEXT NOT NULL,
       backup_sha256 TEXT NOT NULL CHECK (
-        length(backup_sha256) = 64 AND backup_sha256 NOT GLOB '*[^0-9a-f]*'
+        typeof(backup_sha256) = 'text' AND length(backup_sha256) = 64
+        AND length(CAST(backup_sha256 AS BLOB)) = 64
+        AND backup_sha256 NOT GLOB '*[^0-9a-f]*'
       ),
       PRIMARY KEY (performed_at, backup_sha256),
       FOREIGN KEY (backup_receipt_id) REFERENCES backup_receipts(id)
