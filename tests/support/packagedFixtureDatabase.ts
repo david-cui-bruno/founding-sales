@@ -68,7 +68,8 @@ function inspectRows(raw: RawDatabase, expected: FixtureSchema, sourceSha256: st
  * Test-runner only. No launcher, real-home discovery, key-store access, SQL API or
  * production bypass. Capture EVERY GUI child immediately after spawn and observe
  * its exit before offline work. Caller still proves descendant/graceful-Quit exit.
- * Inputs must be private 0600 normal-close files with NO sidecars (64 MiB maximum).
+ * Existing current/bootstrap DBs may be 0600/0644 under owned 0700 ancestors.
+ * All other inputs/artifacts stay 0600. Normal-close files need NO sidecars (64 MiB maximum).
  * The approved synthetic-only copy precedes cryptographic validation. SQLite opens
  * only that ciphertext copy for inspection. A leftover source sidecar is a hold.
  */
@@ -113,9 +114,14 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
   const databasePath = (profile: FixtureProfile) => join(profilePath(profile), 'callie.sqlite3');
   const envelopePath = (profile: FixtureProfile) => join(profilePath(profile), 'callie.key-envelope.json');
   const retain = (path: string, maxSize = 64 * 1024 * 1024): RetainedPrivateInput => {
+    // openDatabase only fixes its parent mode. This source-only exception is
+    // derived from exact captured paths, never a public mode/role override.
+    const ordinarySource = path === join(paths.current, 'callie.sqlite3')
+      || path === join(paths.bootstrap, 'callie.sqlite3');
     const validate = (stat: fs.Stats) => {
       if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.()
-        || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600 || stat.size < 1 || stat.size > maxSize) fail();
+        || stat.nlink !== 1 || ((stat.mode & 0o777) !== 0o600 && (!ordinarySource || (stat.mode & 0o777) !== 0o644))
+        || stat.size < 1 || stat.size > maxSize) fail();
       return stat;
     };
     assertDirectory(dirname(path));

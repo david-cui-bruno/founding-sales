@@ -163,7 +163,7 @@ describe('bounded packaged fixture database preparation', () => {
     if (kind === 'missing') fs.unlinkSync(path);
     if (kind === 'symlink') { fs.renameSync(path, path + '.original'); fs.symlinkSync(path + '.original', path); }
     if (kind === 'hardlink') fs.linkSync(path, path + '.alias');
-    if (kind === 'mode') fs.chmodSync(path, 0o644);
+    if (kind === 'mode') fs.chmodSync(path, 0o666);
     if (kind === 'oversize') fs.truncateSync(path, 64 * 1024 * 1024 + 1);
     if (kind === 'ancestor') { fs.renameSync(f.paths.current, f.paths.current + '.original'); fs.symlinkSync(f.paths.current + '.original', f.paths.current); }
     const open = vi.spyOn(driver, 'createRawDatabase');
@@ -388,5 +388,100 @@ describe('bounded packaged fixture database preparation', () => {
       const path = allocation.mock.results[0]?.value;
       if (typeof path === 'string') fs.rmSync(path, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    ['current', 0o600], ['current', 0o644], ['bootstrap', 0o600], ['bootstrap', 0o644],
+  ] as const)('accepts ordinary owned %s database mode %i without changing source bytes or mode', async (profile, mode) => {
+    await seed(profile, true);
+    // Synthetic fixture setup before the immutable baseline, never helper chmod.
+    fs.chmodSync(dbPath(profile), mode);
+    const before = identity(dbPath(profile)); const envelope = identity(envelopePath(profile));
+    const open = driver.createRawDatabase;
+    vi.spyOn(driver, 'createRawDatabase').mockImplementation((path, options) => {
+      expect(path.startsWith(f.paths.inspection + sep)).toBe(true);
+      expect(options).toEqual({ readonly: true, fileMustExist: true });
+      expect(fs.lstatSync(path).mode & 0o777).toBe(0o600);
+      return open(path, options);
+    });
+    const result = await f.inspectStoppedProfile(profile, material, 16);
+    expect(result.aggregateCounts).toEqual({ people: 1, prospects: 1, sourceEvents: 1 });
+    expect(identity(dbPath(profile))).toEqual(before);
+    expect(identity(envelopePath(profile))).toEqual(envelope);
+    expect(residue()).toEqual([]);
+  });
+
+  it('creates the actual manual backup from an ordinary owned644 current database without source chmod', async () => {
+    await seed('current', true); fs.chmodSync(dbPath('current'), 0o644);
+    const envelope = identity(envelopePath('current'));
+    const result = await f.createManualBackup(material);
+    expect(result.inspection.aggregateCounts).toEqual({ people: 1, prospects: 1, sourceEvents: 1 });
+    expect(fs.lstatSync(dbPath('current')).mode & 0o777).toBe(0o644);
+    expect(fs.lstatSync(result.backup.path).mode & 0o777).toBe(0o600);
+    expect(result.backup.sha256).toBe(digest(result.backup.path));
+    expect(identity(envelopePath('current'))).toEqual(envelope);
+    const current = await f.inspectStoppedProfile('current', material, 16);
+    expect(current.businessSha256).toBe(result.inspection.businessSha256);
+    expect(current.backupReceipts[0].sha256).toBe(result.backup.sha256);
+  });
+
+  it('validates ordinary owned644 bootstrap input while creating only600 historical DB/envelope artifacts', async () => {
+    await seed('bootstrap'); fs.chmodSync(dbPath('bootstrap'), 0o644);
+    const before = identity(dbPath('bootstrap')); const envelope = identity(envelopePath('bootstrap'));
+    await f.captureBootstrapEnvelope();
+    const historical = await f.createHistoricalProfile(material);
+    expect(historical.schemaVersion).toBe(15);
+    expect(identity(dbPath('bootstrap'))).toEqual(before);
+    expect(identity(envelopePath('bootstrap'))).toEqual(envelope);
+    expect(fs.lstatSync(dbPath('historical')).mode & 0o777).toBe(0o600);
+    expect(fs.lstatSync(envelopePath('historical')).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(envelopePath('historical')).equals(OPAQUE_ENVELOPE)).toBe(true);
+  });
+
+  it.each([
+    ['current', 0o664], ['current', 0o646], ['current', 0o666], ['current', 0o640],
+    ['bootstrap', 0o664], ['bootstrap', 0o646], ['bootstrap', 0o666], ['bootstrap', 0o640],
+  ] as const)('rejects unsafe or unsupported ordinary %s source mode %i', async (profile, mode) => {
+    await seed(profile, true); fs.chmodSync(dbPath(profile), mode);
+    const before = identity(dbPath(profile));
+    const open = vi.spyOn(driver, 'createRawDatabase');
+    await expect(f.inspectStoppedProfile(profile, material, 16)).rejects.toThrow(ERROR);
+    if (profile === 'current') await expect(f.createManualBackup(material)).rejects.toThrow(ERROR);
+    else {
+      await f.captureBootstrapEnvelope();
+      await expect(f.createHistoricalProfile(material)).rejects.toThrow(ERROR);
+    }
+    expect(open).not.toHaveBeenCalled(); expect(residue()).toEqual([]);
+    expect(identity(dbPath(profile))).toEqual(before);
+  });
+
+  it.each(['backup', 'current-envelope', 'bootstrap-envelope', 'historical-envelope', 'historical-db'])('keeps644 forbidden for the %s role', async role => {
+    await seed('current', true); await seed('bootstrap');
+    let path: string; let inspect: () => Promise<unknown>;
+    if (role === 'backup') {
+      const result = await f.createManualBackup(material); path = result.backup.path;
+      inspect = () => f.inspectStoppedBackup('current', result.backup.basename, material, 16);
+    } else if (role === 'current-envelope') {
+      path = envelopePath('current'); inspect = () => f.inspectStoppedProfile('current', material, 16);
+    } else if (role === 'bootstrap-envelope') {
+      path = envelopePath('bootstrap'); inspect = () => f.captureBootstrapEnvelope();
+    } else {
+      await f.captureBootstrapEnvelope(); await f.createHistoricalProfile(material);
+      path = role === 'historical-db' ? dbPath('historical') : envelopePath('historical');
+      inspect = () => f.inspectStoppedProfile('historical', material, 15);
+    }
+    fs.chmodSync(path, 0o644); const before = identity(path);
+    const open = vi.spyOn(driver, 'createRawDatabase');
+    await expect(inspect()).rejects.toThrow(ERROR);
+    expect(open).not.toHaveBeenCalled(); expect(identity(path)).toEqual(before); expect(residue()).toEqual([]);
+  });
+
+  it.each(['root', 'current'] as const)('requires700 on the owned %s ancestor even for ordinary644 source input', async ancestor => {
+    await seed('current'); fs.chmodSync(dbPath('current'), 0o644);
+    fs.chmodSync(f.paths[ancestor], 0o755);
+    try {
+      await expect(f.inspectStoppedProfile('current', material, 16)).rejects.toThrow(ERROR);
+      expect(residue()).toEqual([]);
+    } finally { fs.chmodSync(f.paths[ancestor], 0o700); }
   });
 });
