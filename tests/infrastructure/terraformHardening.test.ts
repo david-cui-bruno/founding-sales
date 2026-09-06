@@ -1,5 +1,15 @@
-import { readFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const terraformDirectory = join(process.cwd(), "cloud", "terraform");
@@ -100,6 +110,109 @@ const ERROR_DESCRIPTIONS = {
 
 function occurrences(source: string, value: string): number {
   return source.split(value).length - 1;
+}
+
+const BOOTSTRAP_RUN_ID = "12345678-1234-4123-8123-123456789abc";
+const BOOTSTRAP_ACCOUNT_ID = "326255650484";
+const BOOTSTRAP_BUCKET = `callie-sourcing-tfstate-${BOOTSTRAP_ACCOUNT_ID}`;
+const BOOTSTRAP_TABLE = "callie-sourcing-tflock";
+const BOOTSTRAP_KMS_ARN = `arn:aws:kms:us-east-1:${BOOTSTRAP_ACCOUNT_ID}:key/12345678-1234-1234-1234-123456789abc`;
+
+function recoveryReceipt(bucketPhase = "owned", tablePhase = "owned"): string {
+  return [
+    "format=callie-terraform-state-bootstrap",
+    "version=1",
+    `account_id=${BOOTSTRAP_ACCOUNT_ID}`,
+    "region=us-east-1",
+    `run_id=${BOOTSTRAP_RUN_ID}`,
+    `bucket=${BOOTSTRAP_BUCKET}`,
+    `table=${BOOTSTRAP_TABLE}`,
+    `kms_key_arn=${BOOTSTRAP_KMS_ARN}`,
+    `bucket_phase=${bucketPhase}`,
+    `table_phase=${tablePhase}`,
+    "",
+  ].join("\n");
+}
+
+function runRecoveryScenario(scenario: string) {
+  const directory = mkdtempSync(join(tmpdir(), "callie-bootstrap-recovery-"));
+  const binDirectory = join(directory, "bin");
+  const receipt = join(directory, "receipt");
+  const awsLog = join(directory, "aws.log");
+  mkdirSync(binDirectory);
+  writeFileSync(receipt, recoveryReceipt(), { mode: 0o600 });
+  const fakeAws = join(binDirectory, "aws");
+  writeFileSync(
+    fakeAws,
+    `#!/usr/bin/env bash
+set -u
+printf '%s\\n' "$*" >>"$FAKE_AWS_LOG"
+service=$1
+operation=$2
+if [[ "$service $operation" == "s3api head-bucket" ]]; then
+  if [[ -f "$FAKE_WORK/bucket-deleted" ]]; then echo NoSuchBucket >&2; exit 1; fi
+  exit 0
+fi
+if [[ "$service $operation" == "s3api get-bucket-tagging" ]]; then
+  [[ "$FAKE_SCENARIO" == "ownership-mismatch" ]] && { echo mismatch; exit 0; }
+  [[ "$*" == *CallieBootstrapRunId* ]] && echo "${BOOTSTRAP_RUN_ID}" || echo terraform-state-v1
+  exit 0
+fi
+if [[ "$service $operation" == "s3api delete-bucket" ]]; then
+  [[ "$FAKE_SCENARIO" == "s3-delete-fails" ]] && { echo AccessDenied >&2; exit 42; }
+  touch "$FAKE_WORK/bucket-deleted"
+  exit 0
+fi
+if [[ "$service $operation" == "dynamodb describe-table" ]]; then
+  if [[ -f "$FAKE_WORK/table-deleted" ]]; then echo ResourceNotFoundException >&2; exit 1; fi
+  echo "arn:aws:dynamodb:us-east-1:${BOOTSTRAP_ACCOUNT_ID}:table/${BOOTSTRAP_TABLE}"
+  exit 0
+fi
+if [[ "$service $operation" == "dynamodb list-tags-of-resource" ]]; then
+  [[ "$FAKE_SCENARIO" == "ownership-mismatch" ]] && { echo mismatch; exit 0; }
+  [[ "$*" == *CallieBootstrapRunId* ]] && echo "${BOOTSTRAP_RUN_ID}" || echo terraform-state-v1
+  exit 0
+fi
+if [[ "$service $operation" == "dynamodb delete-table" ]]; then
+  [[ "$FAKE_SCENARIO" == "table-delete-fails" ]] && { echo AccessDenied >&2; exit 43; }
+  touch "$FAKE_WORK/table-deleted"
+  exit 0
+fi
+if [[ "$service $operation $3" == "dynamodb wait table-not-exists" ]]; then
+  [[ "$FAKE_SCENARIO" == "table-wait-fails" ]] && { echo WaiterError >&2; exit 44; }
+  exit 0
+fi
+echo "unexpected fake aws call: $*" >&2
+exit 99
+`,
+    { mode: 0o755 },
+  );
+  if (scenario === "receipt-write-fails") {
+    const fakeMv = join(binDirectory, "mv");
+    writeFileSync(fakeMv, "#!/usr/bin/env bash\nexit 45\n", { mode: 0o755 });
+  }
+  chmodSync(fakeAws, 0o755);
+  const result = spawnSync(
+    join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh"),
+    ["--recover", receipt],
+    {
+      cwd: directory,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+        FAKE_AWS_LOG: awsLog,
+        FAKE_SCENARIO: scenario,
+        FAKE_WORK: directory,
+      },
+    },
+  );
+  const output = `${result.stdout}${result.stderr}`;
+  const receiptContents = readFileSync(receipt, "utf8");
+  const awsCalls = readFileSync(awsLog, "utf8");
+  const mode = statSync(receipt).mode & 0o777;
+  rmSync(directory, { recursive: true, force: true });
+  return { result, output, receiptContents, awsCalls, mode };
 }
 
 describe("scheduled source Terraform hardening", () => {
@@ -894,6 +1007,37 @@ describe("managed secret and remote state preparation", () => {
     expect(script).toContain("ambiguous bucket ownership; retaining recovery receipt");
     expect(script).toContain("ambiguous lock-table ownership; retaining recovery receipt");
     expect(script).not.toMatch(/ambiguous[\s\S]{0,200}rm -f -- "\$receipt"/);
+  });
+
+  for (const scenario of [
+    "s3-delete-fails",
+    "table-delete-fails",
+    "table-wait-fails",
+    "receipt-write-fails",
+  ]) {
+    it(`fails closed when recovery operation ${scenario} fails`, () => {
+      const { result, output, receiptContents, mode } = runRecoveryScenario(scenario);
+
+      expect(result.status).not.toBe(0);
+      expect(output).not.toContain("recovery reconciliation completed");
+      expect(output).not.toContain("automatic cleanup completed");
+      expect(receiptContents).not.toContain("bucket_phase=absent\ntable_phase=absent");
+      if (scenario.startsWith("s3")) expect(receiptContents).not.toContain("bucket_phase=absent");
+      if (scenario.startsWith("table")) expect(receiptContents).not.toContain("table_phase=absent");
+      if (scenario === "receipt-write-fails") expect(receiptContents).toBe(recoveryReceipt());
+      expect(mode).toBe(0o600);
+    });
+  }
+
+  it("refuses every recovery delete when exact ownership tags mismatch", () => {
+    const { result, output, receiptContents, awsCalls, mode } = runRecoveryScenario("ownership-mismatch");
+
+    expect(result.status).not.toBe(0);
+    expect(output).not.toContain("recovery reconciliation completed");
+    expect(awsCalls).not.toContain("delete-table");
+    expect(awsCalls).not.toContain("delete-bucket");
+    expect(receiptContents).toBe(recoveryReceipt());
+    expect(mode).toBe(0o600);
   });
 
   it("requires every state postcondition and exact lock-table KMS ARN", () => {

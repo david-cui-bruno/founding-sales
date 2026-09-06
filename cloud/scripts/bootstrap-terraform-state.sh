@@ -23,11 +23,34 @@ bucket_phase="absent"
 table_phase="absent"
 
 write_receipt() {
+  local temporary_receipt="${receipt}.tmp.$$"
   umask 077
   printf 'format=%s\nversion=%s\naccount_id=%s\nregion=%s\nrun_id=%s\nbucket=%s\ntable=%s\nkms_key_arn=%s\nbucket_phase=%s\ntable_phase=%s\n' \
     "$receipt_format" "$receipt_version" "$account_id" "$region" "$run_id" \
-    "$bucket_name" "$lock_table_name" "$kms_key_arn" "$bucket_phase" "$table_phase" >"$receipt"
-  chmod 0600 "$receipt"
+    "$bucket_name" "$lock_table_name" "$kms_key_arn" "$bucket_phase" "$table_phase" >"$temporary_receipt" || {
+      rm -f -- "$temporary_receipt"
+      return 1
+    }
+  chmod 0600 "$temporary_receipt" || {
+    rm -f -- "$temporary_receipt"
+    return 1
+  }
+  mv -f -- "$temporary_receipt" "$receipt" || {
+    rm -f -- "$temporary_receipt"
+    return 1
+  }
+}
+
+persist_bucket_phase() {
+  local next_phase=$1 previous_phase=$bucket_phase
+  bucket_phase=$next_phase
+  write_receipt || { bucket_phase=$previous_phase; return 1; }
+}
+
+persist_table_phase() {
+  local next_phase=$1 previous_phase=$table_phase
+  table_phase=$next_phase
+  write_receipt || { table_phase=$previous_phase; return 1; }
 }
 
 receipt_value() {
@@ -92,6 +115,22 @@ verify_table_ownership() {
   [[ "$run_tag" == "$run_id" && "$owner_tag" == "$ownership_marker" ]]
 }
 
+verify_bucket_absent() {
+  local output
+  if output=$(aws s3api head-bucket --bucket "$bucket_name" 2>&1); then
+    return 1
+  fi
+  grep -Eq "(404|Not Found|NoSuchBucket)" <<<"$output"
+}
+
+verify_table_absent() {
+  local output
+  if output=$(aws dynamodb describe-table --table-name "$lock_table_name" --region "$region" 2>&1); then
+    return 1
+  fi
+  grep -q "ResourceNotFoundException" <<<"$output"
+}
+
 reconcile_bucket() {
   local output
   if aws s3api head-bucket --bucket "$bucket_name" >/dev/null 2>&1; then
@@ -99,18 +138,25 @@ reconcile_bucket() {
       echo "ambiguous bucket ownership; retaining recovery receipt" >&2
       return 1
     fi
-    bucket_phase="owned"
-    write_receipt
-    verify_bucket_ownership || { echo "bucket ownership changed before delete; retaining recovery receipt" >&2; return 1; }
-    aws s3api delete-bucket --bucket "$bucket_name" --region "$region"
-    bucket_phase="absent"
-    write_receipt
+    persist_bucket_phase "owned" || { echo "failed to persist bucket recovery phase; retaining recovery receipt" >&2; return 1; }
+    if ! verify_bucket_ownership; then
+      echo "bucket ownership changed before delete; retaining recovery receipt" >&2
+      return 1
+    fi
+    if ! aws s3api delete-bucket --bucket "$bucket_name" --region "$region"; then
+      echo "bucket delete failed; retaining recovery receipt" >&2
+      return 1
+    fi
+    if ! verify_bucket_absent; then
+      echo "bucket absence could not be proven after delete; retaining recovery receipt" >&2
+      return 1
+    fi
+    persist_bucket_phase "absent" || { echo "failed to persist bucket absence; retaining recovery receipt" >&2; return 1; }
     return 0
   fi
-  output=$(aws s3api head-bucket --bucket "$bucket_name" 2>&1 || true)
+  output=$(aws s3api head-bucket --bucket "$bucket_name" 2>&1) || true
   if grep -Eq "(404|Not Found|NoSuchBucket)" <<<"$output"; then
-    bucket_phase="absent"
-    write_receipt
+    persist_bucket_phase "absent" || { echo "failed to persist bucket absence; retaining recovery receipt" >&2; return 1; }
     return 0
   fi
   echo "ambiguous bucket existence; retaining recovery receipt" >&2
@@ -126,19 +172,29 @@ reconcile_table() {
       echo "ambiguous lock-table ownership; retaining recovery receipt" >&2
       return 1
     fi
-    table_phase="owned"
-    write_receipt
-    verify_table_ownership || { echo "lock-table ownership changed before delete; retaining recovery receipt" >&2; return 1; }
-    aws dynamodb delete-table --table-name "$lock_table_name" --region "$region" >/dev/null
-    aws dynamodb wait table-not-exists --table-name "$lock_table_name" --region "$region"
-    table_phase="absent"
-    write_receipt
+    persist_table_phase "owned" || { echo "failed to persist lock-table recovery phase; retaining recovery receipt" >&2; return 1; }
+    if ! verify_table_ownership; then
+      echo "lock-table ownership changed before delete; retaining recovery receipt" >&2
+      return 1
+    fi
+    if ! aws dynamodb delete-table --table-name "$lock_table_name" --region "$region" >/dev/null; then
+      echo "lock-table delete failed; retaining recovery receipt" >&2
+      return 1
+    fi
+    if ! aws dynamodb wait table-not-exists --table-name "$lock_table_name" --region "$region"; then
+      echo "lock-table deletion waiter failed; retaining recovery receipt" >&2
+      return 1
+    fi
+    if ! verify_table_absent; then
+      echo "lock-table absence could not be proven after delete; retaining recovery receipt" >&2
+      return 1
+    fi
+    persist_table_phase "absent" || { echo "failed to persist lock-table absence; retaining recovery receipt" >&2; return 1; }
     return 0
   fi
-  output=$(aws dynamodb describe-table --table-name "$lock_table_name" --region "$region" 2>&1 || true)
+  output=$(aws dynamodb describe-table --table-name "$lock_table_name" --region "$region" 2>&1) || true
   if grep -q "ResourceNotFoundException" <<<"$output"; then
-    table_phase="absent"
-    write_receipt
+    persist_table_phase "absent" || { echo "failed to persist lock-table absence; retaining recovery receipt" >&2; return 1; }
     return 0
   fi
   echo "ambiguous lock-table existence; retaining recovery receipt" >&2
@@ -212,12 +268,12 @@ run_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
   echo "uuidgen did not produce a canonical version-4 run id" >&2; exit 1;
 }
 bucket_name="callie-sourcing-tfstate-${account_id}"
-write_receipt
+write_receipt || { echo "failed to create recovery receipt" >&2; exit 1; }
 validate_receipt
 
 trap cleanup_on_failure ERR INT TERM
 bucket_phase="pending"
-write_receipt
+write_receipt || { echo "failed to persist pending bucket phase" >&2; exit 1; }
 if [[ "$region" == "us-east-1" ]]; then
   aws s3api create-bucket --bucket "$bucket_name" --region "$region"
 else
@@ -227,7 +283,10 @@ fi
 aws s3api put-bucket-tagging --bucket "$bucket_name" --tagging \
   "TagSet=[{Key=CallieBootstrapRunId,Value=${run_id}},{Key=CallieBootstrap,Value=${ownership_marker}}]"
 bucket_phase="owned"
-write_receipt
+write_receipt || {
+  echo "failed to persist owned bucket phase; starting cleanup" >&2
+  cleanup_on_failure
+}
 aws s3api put-public-access-block --bucket "$bucket_name" \
   --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 aws s3api put-bucket-versioning --bucket "$bucket_name" --versioning-configuration Status=Enabled
@@ -235,14 +294,20 @@ aws s3api put-bucket-encryption --bucket "$bucket_name" \
   --server-side-encryption-configuration "Rules=[{ApplyServerSideEncryptionByDefault={SSEAlgorithm=aws:kms,KMSMasterKeyID=$kms_key_arn},BucketKeyEnabled=true}]"
 
 table_phase="pending"
-write_receipt
+write_receipt || {
+  echo "failed to persist pending lock-table phase; starting cleanup" >&2
+  cleanup_on_failure
+}
 aws dynamodb create-table --table-name "$lock_table_name" --region "$region" \
   --attribute-definitions AttributeName=LockID,AttributeType=S \
   --key-schema AttributeName=LockID,KeyType=HASH --billing-mode PAY_PER_REQUEST \
   --sse-specification Enabled=true,SSEType=KMS,KMSMasterKeyId="$kms_key_arn" \
   --tags Key=CallieBootstrapRunId,Value="$run_id" Key=CallieBootstrap,Value="$ownership_marker"
 table_phase="owned"
-write_receipt
+write_receipt || {
+  echo "failed to persist owned lock-table phase; starting cleanup" >&2
+  cleanup_on_failure
+}
 aws dynamodb wait table-exists --table-name "$lock_table_name" --region "$region"
 
 trap - ERR INT TERM
@@ -252,5 +317,5 @@ if ! verify_postconditions; then
 fi
 bucket_phase="verified"
 table_phase="verified"
-write_receipt
+write_receipt || { echo "failed to persist verified resource phases; retaining recovery receipt" >&2; exit 1; }
 echo "verified state storage created; retain the recovery receipt and stop before migration" >&2
