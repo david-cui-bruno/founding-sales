@@ -5,3 +5,4 @@ export * from "./normalize";
 export * from "./enrichmentRequest";
 export * from "./suppressionUpload";
 export * from "./safeLog";
+export * from "./secureParameter";

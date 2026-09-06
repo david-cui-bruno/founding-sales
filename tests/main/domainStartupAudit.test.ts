@@ -90,6 +90,7 @@ describe('domain startup', () => {
         'outbound_jurisdiction_audit_events',
         'backup_receipts',
         'recovery_readiness',
+        'restore_drill_receipts',
         'identity_repair_events',
       ]));
       expect(DOMAIN_SCHEMA_MANIFEST.indexes).toContain(
@@ -128,6 +129,63 @@ describe('domain startup', () => {
           tables: [...DOMAIN_SCHEMA_MANIFEST.tables, 'missing_table'],
         },
       })).toThrow(DomainStartupFatalError);
+    });
+
+    it.each([
+      {
+        objectType: 'legacy table',
+        corrupt: (subject: AppDatabase) => subject.raw.exec(`
+          DROP TABLE jobs;
+          CREATE TABLE jobs (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            state TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            idempotency_key TEXT
+          );
+          CREATE INDEX jobs_state_created_idx ON jobs(state, created_at);
+          CREATE UNIQUE INDEX jobs_type_idempotency_idx
+            ON jobs(type, idempotency_key)
+            WHERE idempotency_key IS NOT NULL;
+        `),
+      },
+      {
+        objectType: 'explicit index',
+        corrupt: (subject: AppDatabase) => subject.raw.exec(`
+          DROP INDEX jobs_state_created_idx;
+          CREATE INDEX jobs_state_created_idx ON jobs(type);
+        `),
+      },
+      {
+        objectType: 'schema-16 contact table',
+        corrupt: (subject: AppDatabase) => subject.raw.exec(
+          'ALTER TABLE person_contact_methods DROP COLUMN evidence_observed_at',
+        ),
+      },
+      {
+        objectType: 'trigger',
+        corrupt: (subject: AppDatabase) => subject.raw.exec(`
+          DROP TRIGGER immutable_identity_repair_events;
+          CREATE TRIGGER immutable_identity_repair_events
+            BEFORE UPDATE ON identity_repair_events
+            BEGIN
+              SELECT 1;
+            END;
+        `),
+      },
+    ])('rejects same-name $objectType SQL corruption', ({ corrupt }) => {
+      corrupt(database);
+
+      expect(() => assertDomainStorageReady({
+        database,
+        expectedBusyTimeoutMs: 5000,
+        expectedSchemaVersion: 16,
+        expectedManifest: DOMAIN_SCHEMA_MANIFEST,
+      })).toThrow(DomainStartupFatalError);
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(/schema SQL fingerprint is not exact/);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
     });
 
     it.each([15, 17, 99])(
@@ -199,8 +257,13 @@ describe('domain startup', () => {
     });
 
     it.each([
+      'immutable_backup_receipts',
+      'immutable_backup_receipts_delete',
       'immutable_identity_repair_events',
       'immutable_identity_repair_events_delete',
+      'immutable_restore_drill_receipts',
+      'immutable_restore_drill_receipts_delete',
+      'protect_restore_drill_backup_receipt',
     ])('requires the exact %s trigger before composition', (triggerName) => {
       expect(DOMAIN_SCHEMA_MANIFEST.triggers).toContain(triggerName);
       database.raw.exec(`DROP TRIGGER ${triggerName}`);

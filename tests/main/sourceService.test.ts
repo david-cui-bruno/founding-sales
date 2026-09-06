@@ -766,7 +766,8 @@ describe('SourceService', () => {
     const legacyCommand = {
       ...canonicalRaceCommand(sourceId),
       contacts: canonicalRaceCommand(sourceId).contacts.map((contact) => {
-        const { validationState: _validationState, ...legacyContact } = contact;
+        const { validationState, ...legacyContact } = contact;
+        expect(validationState).toBe('valid');
         return legacyContact;
       }),
     } as CanonicalIntakeCommand;

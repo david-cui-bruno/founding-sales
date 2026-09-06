@@ -76,6 +76,9 @@ async function runScenario(): Promise<void> {
         (id, backup_basename, kind, schema_version, sha256, size_bytes, created_at, verified_at)
         VALUES ('backup-1', 'daily-1.sqlite3', 'daily', 15, ?, 10, ?, ?)`)
         .run(RECOVERY_SHA, RECOVERY_TS, RECOVERY_TS);
+      database.raw.prepare(`INSERT INTO restore_drill_receipts
+        (performed_at, backup_receipt_id, backup_sha256)
+        VALUES (?, 'backup-1', ?)`).run(RECOVERY_TS, RECOVERY_SHA);
       database.raw.prepare(`UPDATE recovery_readiness SET recovery_setup_completed_at = ?,
         last_restore_drill_at = ?, last_restore_backup_sha256 = ?, updated_at = ?
         WHERE singleton = 1`).run(RECOVERY_TS, RECOVERY_TS, RECOVERY_SHA, RECOVERY_TS);
@@ -564,14 +567,16 @@ async function runScenario(): Promise<void> {
 function recoverySnapshot(raw: AppDatabase['raw']): unknown {
   return {
     tables: raw.prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'table'
-      AND name IN ('backup_receipts','recovery_readiness','identity_repair_events')
+      AND name IN ('backup_receipts','recovery_readiness','identity_repair_events','restore_drill_receipts')
       ORDER BY name`).all(),
     indexes: raw.prepare(`SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'index'
-      AND tbl_name IN ('backup_receipts','recovery_readiness','identity_repair_events')
+      AND tbl_name IN ('backup_receipts','recovery_readiness','identity_repair_events','restore_drill_receipts')
       ORDER BY name`).all(),
     triggers: raw.prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'trigger'
-      AND tbl_name = 'identity_repair_events' ORDER BY name`).all(),
+      AND tbl_name IN ('backup_receipts','recovery_readiness','identity_repair_events','restore_drill_receipts')
+      ORDER BY name`).all(),
     receipts: raw.prepare('SELECT * FROM backup_receipts ORDER BY id').all(),
+    drills: raw.prepare('SELECT * FROM restore_drill_receipts ORDER BY performed_at, backup_sha256').all(),
     readiness: raw.prepare('SELECT * FROM recovery_readiness ORDER BY singleton').all(),
     repairs: raw.prepare('SELECT * FROM identity_repair_events ORDER BY id').all(),
   };

@@ -5,6 +5,10 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
 import {
+  assertDomainStorageReady,
+  DOMAIN_SCHEMA_MANIFEST,
+} from '../../src/main/domain/startup/storageReadiness';
+import {
   DOMAIN_TIMESTAMP,
   insertCadenceDefinition,
   insertClosedCycle,
@@ -48,6 +52,7 @@ const domainTables = [
   'prospect_priority_projection',
   'prospect_properties',
   'reactivation_rules',
+  'restore_drill_receipts',
   'sales_cycles',
   'sales_cycle_close_readiness',
   'source_events',
@@ -74,6 +79,8 @@ const requiredTriggers = [
   'immutable_activities_delete',
   'immutable_activity_amendments',
   'immutable_activity_amendments_delete',
+  'immutable_backup_receipts',
+  'immutable_backup_receipts_delete',
   'immutable_cadence_action_components',
   'immutable_cadence_action_components_delete',
   'immutable_cadence_definitions',
@@ -108,6 +115,8 @@ const requiredTriggers = [
   'immutable_prioritization_rule_versions_delete',
   'immutable_prioritization_preference_events',
   'immutable_prioritization_preference_events_delete',
+  'immutable_restore_drill_receipts',
+  'immutable_restore_drill_receipts_delete',
   'protect_trigger_event_receipt_proof',
   'immutable_source_events',
   'immutable_source_events_delete',
@@ -169,6 +178,7 @@ const requiredTriggers = [
   'protect_prospect_original_source',
   'protect_reactivation_rule_delete',
   'protect_reactivation_rule_update',
+  'protect_restore_drill_backup_receipt',
   'protect_source_intake_receipt_prospect',
   'protect_trigger_event_ownership',
   'synchronize_person_opt_out',
@@ -211,6 +221,12 @@ function runDatabaseScenario(
   const raw = database.raw;
   switch (name) {
     case 'manifest': {
+      assert.equal(assertDomainStorageReady({
+        database,
+        expectedBusyTimeoutMs: 5000,
+        expectedSchemaVersion: 16,
+        expectedManifest: DOMAIN_SCHEMA_MANIFEST,
+      }).schemaVersion, 16);
       assert.deepEqual(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',

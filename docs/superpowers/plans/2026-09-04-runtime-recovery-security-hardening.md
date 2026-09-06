@@ -759,6 +759,7 @@ git commit -m "feat: add recovery export and restore drill"
 - Create `cloud/terraform/backend.hcl.example`
 - Create `cloud/terraform/terraform.tfvars.example`
 - Create `cloud/scripts/bootstrap-terraform-state.sh`
+- Create `cloud/scripts/bootstrap-runtime-secret-key.sh` for the staged Hold Point 1 key preparation and parameter prevalidation authorized by the Round 1 safety review.
 - Modify `cloud/terraform/variables.tf`
 - Modify `cloud/terraform/iam.tf`
 - Modify `cloud/terraform/lambda.tf`
@@ -788,13 +789,14 @@ export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; 
 - [ ] Implement encrypted parameter lookup and update enricher/mail-parse to fetch by identifier at invocation time.
 - [ ] Add a partial `backend "s3" {}` block and public example backend configuration. The bootstrap script creates encrypted/versioned/private state storage and locking, but refuses to overwrite existing resources.
 - [ ] Do not create secret-valued `aws_ssm_parameter` resources and do not put replacement values in examples.
-- [ ] Format, validate, and create a refresh-free plan. Do not apply, rotate, or migrate state in this task.
+- [ ] Run only the exact offline source-verification gates below. Do not initialize providers, validate, plan, display state or plans, contact AWS, rotate, migrate state, or apply in this task.
 
 ```bash
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; (cd cloud/lambdas/shared && npm run typecheck && npm test)
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; (cd cloud/lambdas/enricher && npm run typecheck && npm test && npm run build)
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; (cd cloud/lambdas/mail-parse && npm run typecheck && npm test && npm run build)
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; (cd cloud/terraform && tofu init -backend=false -reconfigure && tofu fmt -check -recursive && tofu validate && tofu plan -refresh=false -var='schedules_enabled=false' -out="$JCODE_SCRATCH_DIR/managed-secrets.tfplan")
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/infrastructure/terraformHardening.test.ts
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run typecheck
+tofu fmt -check -recursive cloud/terraform
+bash -n cloud/scripts/bootstrap-terraform-state.sh
+bash -n cloud/scripts/bootstrap-runtime-secret-key.sh
 ```
 
 - [ ] Commit.
@@ -809,14 +811,25 @@ git commit -m "feat: prepare managed cloud secrets and remote state"
 Stop. Obtain explicit founder confirmation for this operational sequence.
 
 1. Confirm the exposed credentials from Hold Point 0 remain revoked and their dependent schedules remain paused.
-2. Enter the already validated replacement provider value directly into encrypted SSM through an approved interactive operator path. Do not place it in shell history, repository files, Terraform variables, logs, or chat.
-3. Apply reviewed IAM/environment changes with `schedules_enabled=false`; invoke one bounded request and inspect only redacted logs.
-4. Verify the revoked provider credential cannot authenticate and is not referenced by Lambda configuration.
-5. Import the already validated replacement app-inbox AWS credential into the verified protected local envelope, test bounded list/fetch/upload, observe a successful manual poll, verify the old key remains inactive, then securely remove the quarantined plaintext import only after a second protected copy is validated.
-6. Bootstrap the encrypted/versioned/private state bucket and lock table. Review resource names and policies.
-7. Obtain a second explicit confirmation before `tofu init -migrate-state`.
-8. Compare state serial and resource count before/after, verify remote locking, archive the old local state privately, then remove plaintext local state only after rollback evidence is retained.
-9. Re-enable schedules only after health, logs, and alarms are verified.
+2. Bootstrap the encrypted/versioned/private state bucket and lock table first. Retain and inspect the recovery receipt, activation waits, and postcondition evidence before continuing.
+3. Obtain a second explicit confirmation before `tofu init -migrate-state`.
+4. Migrate the trusted local state, compare state serial and resource count before/after, verify remote locking, archive the old local state privately, and verify the actual state object uses `aws:kms` with the exact reviewed state-key ARN before removing plaintext local state.
+5. Create and verify the dedicated runtime-secret KMS key and stable alias through the approved bootstrap path, retain its private receipt, and stop before entering parameters.
+6. Enter all three runtime values directly into encrypted SSM under that exact key through an approved interactive operator path. Do not place them in shell history, repository files, Terraform variables, logs, or chat. Prevalidate all three encrypted parameters by identifier, key id, and decrypt access without displaying values.
+7. Only after trusted-state migration and postcondition verification, create a state-aware human-readable unsaved plan with restrictive `umask 077`, `schedules_enabled=false`, and `scheduled_health_alerts_enabled=false`. Do not use `-out`, JSON rendering, or retain raw plan output. Prove zero destroy and zero replacement and retain only a sanitized summary.
+8. Only then perform the separately approved IAM and Lambda identifier cutover apply with both gates false; invoke one bounded request and inspect only redacted logs. Retain prior deployed Lambda versions/configuration until verification completes so rollback never requires reintroducing secret-valued environment entries.
+9. Verify the revoked provider credential cannot authenticate and is not referenced by Lambda configuration.
+10. Import the already validated replacement app-inbox AWS credential into the verified protected local envelope, test bounded list/fetch/upload, observe a successful manual poll, verify the old key remains inactive, then securely remove the quarantined plaintext import only after a second protected copy is validated.
+
+#### Staged schedule rollout
+
+Never enable schedules during source verification. In a later separately approved apply, set `schedules_enabled=true` while `scheduled_health_alerts_enabled=false`. Prove current completion metrics and watchdog heartbeats are arriving, and wait for all missing-success alarms to reach a known OK baseline from current observations. Only then obtain separate approval for the health-action change; that approval does not preserve or authorize reuse of the observed baseline.
+
+Immediately before the health-action apply, while health actions remain disabled, perform a fresh pre-apply check as the first step of a single tightly bounded precheck/apply/postcheck sequence. Re-read current completion metrics and watchdog heartbeats for every expected cadence, and require every affected missing-success alarm to be exactly `OK` from those current observations. The operator must not reuse the approval-time baseline. If the apply and immediate postcheck cannot follow without intervening work or delay, expire the precheck and repeat it before applying. If any alarm is `ALARM`, `INSUFFICIENT_DATA`, stale, or otherwise non-OK, abort before apply, leave `scheduled_health_alerts_enabled=false`, and do not attach notification actions.
+
+From a successful fresh precheck, immediately use the separate approved apply setting `scheduled_health_alerts_enabled=true`. Immediately after the apply, verify each affected alarm's `alarm_actions` contains exactly the reviewed SNS topic ARN and no additional actions, and require every affected missing-success alarm remains exactly `OK`.
+
+If any alarm is non-OK after apply, explicitly fail the rollout and do not claim transition coverage. Use a separately approved manual incident-notification path for the current condition rather than relying on a missing state transition. Restore current completion metrics and watchdog heartbeats until all affected alarms return to exactly `OK`; only then accept future transition coverage.
 
 No repository commit is associated with this hold point.
 

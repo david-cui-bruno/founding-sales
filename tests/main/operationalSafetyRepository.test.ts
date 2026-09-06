@@ -116,6 +116,16 @@ describe('OperationalSafetyRepository', () => {
     });
 
     unitOfWork.immediate(() => {
+      repository.recordBackup({
+        id: 'backup-drilled',
+        backupBasename: 'drilled.sqlite3',
+        kind: 'manual',
+        schemaVersion: 15,
+        sha256: SHA_B,
+        sizeBytes: 200,
+        createdAt: FIRST,
+        verifiedAt: FIRST,
+      });
       repository.recordRestoreDrill({
         performedAt: SECOND,
         backupSha256: SHA_B,
@@ -123,6 +133,57 @@ describe('OperationalSafetyRepository', () => {
     });
     expect(repository.getRecoveryReadiness()).toEqual({
       recoverySetupCompletedAt: FIRST,
+      lastRestoreDrillAt: SECOND,
+      lastRestoreBackupSha256: SHA_B,
+      updatedAt: SECOND,
+    });
+  });
+
+  it('rejects non-canonical SHA-256 values and restore drills without backup proof', () => {
+    expect(() => unitOfWork.immediate(() => repository.recordBackup({
+      id: 'non-hex-backup',
+      backupBasename: 'non-hex.sqlite3',
+      kind: 'manual',
+      schemaVersion: 15,
+      sha256: 'G'.repeat(64),
+      sizeBytes: 100,
+      createdAt: FIRST,
+      verifiedAt: FIRST,
+    }))).toThrow();
+    expect(() => unitOfWork.immediate(() => repository.recordRestoreDrill({
+      performedAt: FIRST,
+      backupSha256: 'not-a-hash'.padEnd(64, 'x'),
+    }))).toThrow();
+    expect(() => unitOfWork.immediate(() => repository.recordRestoreDrill({
+      performedAt: FIRST,
+      backupSha256: SHA_A,
+    }))).toThrow();
+
+    expect(repository.listBackups()).toEqual([]);
+    expect(database.raw.prepare('SELECT * FROM restore_drill_receipts').all()).toEqual([]);
+  });
+
+  it('derives the latest restore drill from immutable receipts instead of singleton fields', () => {
+    unitOfWork.immediate(() => {
+      repository.recordBackup({
+        id: 'backup-a', backupBasename: 'a.sqlite3', kind: 'manual',
+        schemaVersion: 15, sha256: SHA_A, sizeBytes: 100,
+        createdAt: FIRST, verifiedAt: FIRST,
+      });
+      repository.recordBackup({
+        id: 'backup-b', backupBasename: 'b.sqlite3', kind: 'manual',
+        schemaVersion: 15, sha256: SHA_B, sizeBytes: 100,
+        createdAt: SECOND, verifiedAt: SECOND,
+      });
+      repository.recordRestoreDrill({ performedAt: FIRST, backupSha256: SHA_A });
+      repository.recordRestoreDrill({ performedAt: SECOND, backupSha256: SHA_B });
+    });
+    database.raw.prepare(`UPDATE recovery_readiness
+      SET last_restore_drill_at = ?, last_restore_backup_sha256 = ?, updated_at = ?
+      WHERE singleton = 1`).run(FIRST, SHA_A, FIRST);
+
+    expect(repository.getRecoveryReadiness()).toEqual({
+      recoverySetupCompletedAt: null,
       lastRestoreDrillAt: SECOND,
       lastRestoreBackupSha256: SHA_B,
       updatedAt: SECOND,

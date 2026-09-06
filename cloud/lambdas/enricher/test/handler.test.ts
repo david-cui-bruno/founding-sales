@@ -14,7 +14,6 @@ const ENV = {
   SUPPRESSION_TABLE: "suppress",
   SNS_TOPIC_ARN: "arn:aws:sns:us-east-1:000000000000:ops",
   TRACERFY_BASE_URL: "https://mock.tracerfy.example",
-  TRACERFY_API_KEY: "test-token",
   ENRICH_MONTHLY_CREDIT_CAP: 1000,
 };
 
@@ -165,6 +164,7 @@ function fakeDeps(
     dynamo,
     sns,
     fetchImpl,
+    getTracerfyApiKey: async () => "test-token",
     getHmacSalt: async () => SALT,
     env: { ...ENV },
     now: () => new Date("2026-09-01T15:05:00.000Z"),
@@ -545,6 +545,20 @@ function assertSafeBoundaryFailure(failure: unknown, originalName: string, origi
 }
 
 describe("exported handler boundary", () => {
+  it("resolves the Tracerfy key once per invocation without warm caching", async () => {
+    const { deps } = fakeDeps([], { objects: new Map() });
+    let lookups = 0;
+    deps.getTracerfyApiKey = async () => {
+      lookups += 1;
+      return `token-${lookups}`;
+    };
+    const invocation = createHandler(() => deps, () => 20);
+
+    await invocation(null);
+    await invocation(null);
+
+    expect(lookups).toBe(2);
+  });
   it("includes dependency initialization, rounds fractional duration, and excludes warm idle", async () => {
     const pii = "private@example.test";
     const { deps } = fakeDeps([{ status: 200, body: hitResponse() }], {

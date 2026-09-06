@@ -123,6 +123,9 @@ describe('0016 contact presentation evidence migration', () => {
       (id, backup_basename, kind, schema_version, sha256, size_bytes, created_at, verified_at)
       VALUES ('backup-1', 'daily-1.sqlite3', 'daily', 15, ?, 10, ?, ?)`)
       .run(SHA, TS, TS);
+    database.raw.prepare(`INSERT INTO restore_drill_receipts
+      (performed_at, backup_receipt_id, backup_sha256)
+      VALUES (?, 'backup-1', ?)`).run(TS, SHA);
     database.raw.prepare(`UPDATE recovery_readiness SET recovery_setup_completed_at = ?,
       last_restore_drill_at = ?, last_restore_backup_sha256 = ?, updated_at = ?
       WHERE singleton = 1`).run(TS, TS, SHA, TS);
@@ -139,7 +142,9 @@ describe('0016 contact presentation evidence migration', () => {
   });
 
   it('migrates schema 15 to the exact additive schema-16 contract without rewriting recovery evidence', async () => {
-    const recoveryNames = ['backup_receipts', 'identity_repair_events', 'recovery_readiness'];
+    const recoveryNames = [
+      'backup_receipts', 'identity_repair_events', 'recovery_readiness', 'restore_drill_receipts',
+    ];
     const before = {
       tables: database.raw.prepare(`SELECT name, sql FROM sqlite_master
         WHERE type = 'table' AND name IN (${recoveryNames.map(() => '?').join(',')})
@@ -148,8 +153,10 @@ describe('0016 contact presentation evidence migration', () => {
         WHERE type = 'index' AND tbl_name IN (${recoveryNames.map(() => '?').join(',')})
         ORDER BY name`).all(...recoveryNames),
       triggers: database.raw.prepare(`SELECT name, sql FROM sqlite_master
-        WHERE type = 'trigger' AND tbl_name = 'identity_repair_events' ORDER BY name`).all(),
+        WHERE type = 'trigger' AND tbl_name IN (${recoveryNames.map(() => '?').join(',')})
+        ORDER BY name`).all(...recoveryNames),
       receipts: database.raw.prepare('SELECT * FROM backup_receipts ORDER BY id').all(),
+      drills: database.raw.prepare('SELECT * FROM restore_drill_receipts ORDER BY performed_at, backup_sha256').all(),
       readiness: database.raw.prepare('SELECT * FROM recovery_readiness ORDER BY singleton').all(),
       repairs: database.raw.prepare('SELECT * FROM identity_repair_events ORDER BY id').all(),
       compliance: database.raw.prepare('SELECT * FROM contact_compliance_audit_events ORDER BY id').all(),
@@ -196,8 +203,10 @@ describe('0016 contact presentation evidence migration', () => {
         WHERE type = 'index' AND tbl_name IN (${recoveryNames.map(() => '?').join(',')})
         ORDER BY name`).all(...recoveryNames),
       triggers: database.raw.prepare(`SELECT name, sql FROM sqlite_master
-        WHERE type = 'trigger' AND tbl_name = 'identity_repair_events' ORDER BY name`).all(),
+        WHERE type = 'trigger' AND tbl_name IN (${recoveryNames.map(() => '?').join(',')})
+        ORDER BY name`).all(...recoveryNames),
       receipts: database.raw.prepare('SELECT * FROM backup_receipts ORDER BY id').all(),
+      drills: database.raw.prepare('SELECT * FROM restore_drill_receipts ORDER BY performed_at, backup_sha256').all(),
       readiness: database.raw.prepare('SELECT * FROM recovery_readiness ORDER BY singleton').all(),
       repairs: database.raw.prepare('SELECT * FROM identity_repair_events ORDER BY id').all(),
       compliance: database.raw.prepare('SELECT * FROM contact_compliance_audit_events ORDER BY id').all(),

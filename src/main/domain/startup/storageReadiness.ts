@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { z } from 'zod';
 
 import { checkFts5, type AppDatabase } from '../../db/database';
@@ -18,8 +20,7 @@ export type DomainSchemaManifest = Readonly<{
   tables: readonly string[];
   indexes: readonly string[];
   triggers: readonly string[];
-  tableSql: Readonly<Record<string, string>>;
-  triggerSql: Readonly<Record<string, string>>;
+  catalogSha256: string;
 }>;
 
 /**
@@ -77,6 +78,7 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'prospects',
     'reactivation_rules',
     'recovery_readiness',
+    'restore_drill_receipts',
     'review_position',
     'sales_cycle_close_readiness',
     'sales_cycles',
@@ -117,6 +119,8 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'immutable_activities_delete',
     'immutable_activity_amendments',
     'immutable_activity_amendments_delete',
+    'immutable_backup_receipts',
+    'immutable_backup_receipts_delete',
     'immutable_cadence_action_components',
     'immutable_cadence_action_components_delete',
     'immutable_cadence_definitions',
@@ -141,6 +145,8 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'immutable_prioritization_preference_events_delete',
     'immutable_prioritization_rule_versions',
     'immutable_prioritization_rule_versions_delete',
+    'immutable_restore_drill_receipts',
+    'immutable_restore_drill_receipts_delete',
     'immutable_source_events',
     'immutable_source_events_delete',
     'immutable_source_intake_receipts',
@@ -210,92 +216,15 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'protect_prospect_original_source',
     'protect_reactivation_rule_delete',
     'protect_reactivation_rule_update',
+    'protect_restore_drill_backup_receipt',
     'protect_settled_next_action_schedule',
     'protect_source_intake_receipt_prospect',
     'protect_trigger_event_ownership',
     'protect_trigger_event_receipt_proof',
     'synchronize_person_opt_out',
   ]),
-  tableSql: Object.freeze({
-    backup_receipts: `CREATE TABLE backup_receipts (
-      id TEXT PRIMARY KEY,
-      backup_basename TEXT NOT NULL UNIQUE,
-      kind TEXT NOT NULL CHECK (kind IN ('daily','manual','pre_release')),
-      schema_version INTEGER NOT NULL CHECK (schema_version > 0),
-      sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
-      size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
-      created_at TEXT NOT NULL,
-      verified_at TEXT NOT NULL
-    )`,
-    recovery_readiness: `CREATE TABLE recovery_readiness (
-      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      recovery_setup_completed_at TEXT,
-      last_restore_drill_at TEXT,
-      last_restore_backup_sha256 TEXT,
-      updated_at TEXT NOT NULL
-    )`,
-    identity_repair_events: `CREATE TABLE identity_repair_events (
-      id TEXT PRIMARY KEY,
-      manifest_sha256 TEXT NOT NULL,
-      candidate_id TEXT NOT NULL,
-      canonical_person_id TEXT NOT NULL,
-      created_person_ids_json TEXT NOT NULL,
-      reassigned_source_event_ids_json TEXT NOT NULL,
-      applied_at TEXT NOT NULL,
-      UNIQUE (manifest_sha256, candidate_id)
-    )`,
-    person_contact_methods: `CREATE TABLE person_contact_methods (
-      id TEXT PRIMARY KEY,
-      person_id TEXT NOT NULL REFERENCES persons(id),
-      kind TEXT NOT NULL CHECK (kind IN ('phone', 'email')),
-      normalized_value TEXT NOT NULL CHECK (length(normalized_value) > 0),
-      raw_value TEXT,
-      validation_state TEXT NOT NULL CHECK (
-        validation_state IN ('unverified', 'valid', 'invalid')
-      ),
-      reachability TEXT NOT NULL CHECK (
-        reachability IN ('direct', 'indirect', 'none')
-      ),
-      is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
-      in_contacts INTEGER CHECK (in_contacts IN (0, 1)),
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      dnc_listed INTEGER NOT NULL DEFAULT 0 CHECK (dnc_listed IN (0, 1)),
-      tcpa_flag INTEGER NOT NULL DEFAULT 0 CHECK (tcpa_flag IN (0, 1)),
-      federal_status TEXT NOT NULL DEFAULT 'unknown'
-        CHECK (federal_status IN ('unknown', 'verified_clear', 'listed')),
-      compliance_tcpa_flag INTEGER NULL
-        CHECK (compliance_tcpa_flag IS NULL OR compliance_tcpa_flag IN (0, 1)),
-      covered_area_code TEXT NULL
-        CHECK (covered_area_code IS NULL OR covered_area_code GLOB '[0-9][0-9][0-9]'),
-      compliance_source TEXT NOT NULL DEFAULT 'legacy'
-        CHECK (compliance_source IN ('ftc_download', 'enrichment_vendor', 'manual_import', 'legacy')),
-      scrubbed_at TEXT NULL,
-      compliance_expires_at TEXT NULL,
-      source_label TEXT,
-      vendor_rank INTEGER CHECK (vendor_rank IS NULL OR vendor_rank >= 1),
-      phone_kind TEXT CHECK (
-        phone_kind IS NULL OR phone_kind IN ('mobile','landline','voip','other')
-      ),
-      ownership_state TEXT NOT NULL DEFAULT 'unknown' CHECK (
-        ownership_state IN ('verified_person','vendor_candidate','conflicting_identity','unknown')
-      ),
-      evidence_observed_at TEXT,
-      UNIQUE (person_id, kind, normalized_value)
-    )`,
-  }),
-  triggerSql: Object.freeze({
-    immutable_identity_repair_events: `CREATE TRIGGER immutable_identity_repair_events
-      BEFORE UPDATE ON identity_repair_events
-      BEGIN
-        SELECT RAISE(ABORT, 'identity_repair_events rows are immutable');
-      END`,
-    immutable_identity_repair_events_delete: `CREATE TRIGGER immutable_identity_repair_events_delete
-      BEFORE DELETE ON identity_repair_events
-      BEGIN
-        SELECT RAISE(ABORT, 'identity_repair_events rows are immutable');
-      END`,
-  }),
+  // Generated from production migrations 0001 through 0016, including hardened 0015.
+  catalogSha256: 'afd4740063c216a075d8e6f144c018ea242e01ade847260c14003a41893fee66',
 });
 
 export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
@@ -431,29 +360,17 @@ export function assertDomainStorageReady(input: {
       'manifest_mismatch', 'The load-bearing schema catalog is not exact.',
     );
   }
-  for (const [name, expectedSql] of Object.entries(input.expectedManifest.tableSql)) {
-    const entry = catalog.find((candidate) => (
-      candidate.name === name && candidate.type === 'table'
-    ));
-    if (entry?.sql === null || entry === undefined || normalizeSql(entry.sql) !== normalizeSql(expectedSql)) {
-      throw new DomainStartupFatalError(
-        'manifest_mismatch', `Load-bearing table is malformed: ${name}`,
-      );
-    }
-  }
-  for (const [name, expectedSql] of Object.entries(input.expectedManifest.triggerSql)) {
-    const trigger = catalog.find((candidate) => (
-      candidate.name === name && candidate.type === 'trigger'
-    ));
-    if (
-      trigger?.sql === null
-      || trigger === undefined
-      || normalizeSql(trigger.sql) !== normalizeSql(expectedSql)
-    ) {
-      throw new DomainStartupFatalError(
-        'manifest_mismatch', `Load-bearing trigger is malformed: ${name}`,
-      );
-    }
+  const catalogSha256 = createHash('sha256')
+    .update(JSON.stringify(catalog.map(({ name, type, sql }) => [
+      type,
+      name,
+      normalizeSql(sql ?? ''),
+    ]).sort(compareCatalogEntries)))
+    .digest('hex');
+  if (catalogSha256 !== input.expectedManifest.catalogSha256) {
+    throw new DomainStartupFatalError(
+      'manifest_mismatch', `The load-bearing schema SQL fingerprint is not exact: ${catalogSha256}`,
+    );
   }
 
   return Object.freeze({
@@ -477,4 +394,10 @@ function sameValues(
 
 function normalizeSql(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+function compareCatalogEntries(left: string[], right: string[]): number {
+  if (left[0] !== right[0]) return left[0] < right[0] ? -1 : 1;
+  if (left[1] !== right[1]) return left[1] < right[1] ? -1 : 1;
+  return 0;
 }

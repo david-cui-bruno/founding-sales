@@ -12,15 +12,7 @@ terraform {
     }
   }
 
-  # Local backend for now. When ready to move to remote state, create an S3
-  # bucket (e.g. callie-sourcing-tfstate-326255650484) + DynamoDB lock table,
-  # then uncomment the block below and run `terraform init -migrate-state`.
-  #
-  # backend "s3" {
-  #   bucket         = "callie-sourcing-tfstate-326255650484"
-  #   key            = "cloud/terraform.tfstate"
-  #   region         = "us-east-1"
-  #   dynamodb_table = "callie-sourcing-tflock"
-  #   encrypt        = true
-  # }
+  # Configuration is supplied from backend.hcl only after both Hold Point 1
+  # confirmations. Source verification does not initialize this backend.
+  backend "s3" {}
 }

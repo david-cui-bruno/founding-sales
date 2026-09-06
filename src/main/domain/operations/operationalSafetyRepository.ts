@@ -5,7 +5,7 @@ import { DomainRepositoryDatabaseMismatchError } from '../support/domainErrors';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 
 const idSchema = z.string().trim().min(1);
-const sha256Schema = z.string().length(64);
+const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 const timestampSchema = z.string().datetime({ offset: true }).refine(
   (value) => new Date(value).toISOString() === value,
 );
@@ -33,9 +33,11 @@ const backupRowSchema = z.object({
 }).strict();
 const recoveryReadinessRowSchema = z.object({
   recovery_setup_completed_at: timestampSchema.nullable(),
-  last_restore_drill_at: timestampSchema.nullable(),
-  last_restore_backup_sha256: sha256Schema.nullable(),
   updated_at: timestampSchema,
+}).strict();
+const restoreDrillRowSchema = z.object({
+  performed_at: timestampSchema,
+  backup_sha256: sha256Schema,
 }).strict();
 const recoverySetupSchema = z.object({ completedAt: timestampSchema }).strict();
 const restoreDrillSchema = z.object({
@@ -129,27 +131,40 @@ export class OperationalSafetyRepository {
   recordRestoreDrill(input: { performedAt: string; backupSha256: string }): void {
     this.unitOfWork.assertWriteScope();
     const parsed = restoreDrillSchema.parse(input);
-    const result = this.database.raw.prepare(`UPDATE recovery_readiness
-      SET last_restore_drill_at = ?, last_restore_backup_sha256 = ?, updated_at = ?
-      WHERE singleton = 1`).run(
-      parsed.performedAt,
-      parsed.backupSha256,
-      parsed.performedAt,
+    const singleton = this.database.raw.prepare(
+      'SELECT singleton FROM recovery_readiness WHERE singleton = 1',
+    ).get();
+    if (singleton === undefined) {
+      throw new Error('Recovery readiness singleton is missing.');
+    }
+    const backup = z.object({ id: idSchema }).strict().parse(
+      this.database.raw.prepare(`SELECT id FROM backup_receipts
+        WHERE sha256 = ? ORDER BY verified_at DESC, id DESC LIMIT 1`).get(
+        parsed.backupSha256,
+      ),
     );
-    assertExactlyOneChangedRow(result.changes);
+    this.database.raw.prepare(`INSERT INTO restore_drill_receipts
+      (performed_at, backup_receipt_id, backup_sha256)
+      VALUES (?, ?, ?)`).run(parsed.performedAt, backup.id, parsed.backupSha256);
   }
 
   getRecoveryReadiness(): RecoveryReadiness {
     const parsed = recoveryReadinessRowSchema.parse(
       this.database.raw.prepare(`SELECT recovery_setup_completed_at,
-        last_restore_drill_at, last_restore_backup_sha256, updated_at
+        updated_at
         FROM recovery_readiness WHERE singleton = 1`).get(),
     );
+    const drillRow = this.database.raw.prepare(`SELECT performed_at, backup_sha256
+      FROM restore_drill_receipts
+      ORDER BY performed_at DESC, backup_sha256 DESC LIMIT 1`).get();
+    const drill = drillRow === undefined ? null : restoreDrillRowSchema.parse(drillRow);
     return {
       recoverySetupCompletedAt: parsed.recovery_setup_completed_at,
-      lastRestoreDrillAt: parsed.last_restore_drill_at,
-      lastRestoreBackupSha256: parsed.last_restore_backup_sha256,
-      updatedAt: parsed.updated_at,
+      lastRestoreDrillAt: drill?.performed_at ?? null,
+      lastRestoreBackupSha256: drill?.backup_sha256 ?? null,
+      updatedAt: drill !== null && drill.performed_at > parsed.updated_at
+        ? drill.performed_at
+        : parsed.updated_at,
     };
   }
 
