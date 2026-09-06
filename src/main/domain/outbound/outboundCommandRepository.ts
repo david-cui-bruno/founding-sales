@@ -7,6 +7,8 @@ import {
 import { outboundIntentFingerprint } from '../../communications/contactSnapshot';
 import type { AppDatabase } from '../../db/database';
 import type { EventRepository } from '../events/eventRepository';
+import type { Activity } from '../events/eventTypes';
+import { assertCanonicalOptOutClosureReceipt, parseStoredOptOutClosureReceipt } from '../optOut/optOutClosureReceiptValidator';
 import { DomainRepositoryDatabaseMismatchError } from '../support/domainErrors';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 
@@ -63,6 +65,20 @@ const rowSchema = z.object({
   observed_outcome: z.null(), duration_seconds: z.null(), provider_reference: z.null(),
   consent_policy_record_id: z.null(), recording_storage_ref: z.null(), transcript_storage_ref: z.null(),
   note_text: z.null(), call_outcome: z.null(), callback_at: z.null(),
+});
+const manualMetadataSchema = z.object({
+  formatVersion: z.literal(1), loggedManually: z.literal(true),
+  outboundCommandId: outboundRequestSchema.shape.commandId,
+  loggedVia: z.enum(['founder_workflow_ui', 'call_outcome']),
+  summary: z.string().min(1).max(2000).optional(),
+  callbackAt: z.string().datetime({ offset: true }).nullable().optional(),
+  currentBlockPresent: z.boolean(), prohibitedPastTouchReported: z.boolean(),
+  prohibitionAssessment: z.enum(['unknown', 'prohibited']),
+}).strict().refine((value) => (value.loggedVia === 'founder_workflow_ui') === (value.summary !== undefined)
+  && (value.prohibitionAssessment === 'prohibited') === value.prohibitedPastTouchReported
+  && (!value.prohibitedPastTouchReported || value.currentBlockPresent));
+const manualAssociationSchema = outboundRequestSchema.pick({
+  commandId: true, personId: true, salesCycleId: true, channel: true,
 });
 
 /** An unresolved intent is uncertainty, never work to replay or queue. */
@@ -150,9 +166,64 @@ export class OutboundCommandRepository {
       if (first === undefined || latest === undefined || first.request.personId !== personId) throw invalid();
       return {
         commandId, channel: first.request.channel, contactMethodId: first.request.contactMethodId,
-        requestedAt: first.occurredAt, manualActivityId: null, ...outboundCommandResult(latest),
+        requestedAt: first.occurredAt, manualActivityId: this.readManualActivity(facts)?.id ?? null,
+        ...outboundCommandResult(latest),
       };
     });
+  }
+
+  /** Historical evidence association only. Does not authorize or change execution. */
+  resolveManualAssociation(input: Pick<OutboundRequest, 'commandId' | 'personId' | 'salesCycleId' | 'channel'>): Activity | null {
+    const association = manualAssociationSchema.parse(input);
+    const facts = this.readFacts(association.commandId);
+    const request = facts[0]?.request;
+    if (request === undefined || request.personId !== association.personId
+      || request.salesCycleId !== association.salesCycleId || request.channel !== association.channel
+      || !this.permitsManualAssociation(facts)) throw new OutboundCommandEvidenceError('command_conflict');
+    return this.readManualActivity(facts);
+  }
+
+  private permitsManualAssociation(facts: StoredFact[]): boolean {
+    return ['dispatching', 'handoff_accepted', 'unknown'].includes(facts.at(-1)?.phase ?? '');
+  }
+
+  private readManualActivity(facts: StoredFact[]): Activity | null {
+    const first = facts[0];
+    if (first === undefined) throw invalid();
+    const row = this.database.raw.prepare(`SELECT id, channel, metadata_json FROM activities
+      INDEXED BY activities_provider_idempotency_idx WHERE adapter = ? AND provider_idempotency_key = ?`)
+      .get('callie_manual_outbound_v1', first.request.commandId) as { id: string; channel: string; metadata_json: string } | undefined;
+    if (row === undefined) return null;
+    if (!this.permitsManualAssociation(facts) || typeof row.metadata_json !== 'string'
+      || row.metadata_json.length > 32768) throw invalid();
+    let activity: Activity | null;
+    try { activity = this.events.getActivity(row.id); } catch { throw invalid(); }
+    if (activity === null || activity.id !== row.id || activity.channel !== row.channel
+      || (activity.observedOutcome !== null && activity.observedOutcome.length > 200)) throw invalid();
+    const metadata = manualMetadataSchema.safeParse(activity.metadata);
+    if (!metadata.success || metadata.data.outboundCommandId !== first.request.commandId
+      || activity.personId !== first.request.personId || activity.salesCycleId !== first.request.salesCycleId
+      || activity.prospectId !== first.prospectId || activity.kind !== first.request.channel
+      || activity.direction !== 'outbound' || activity.channel !== (first.request.channel === 'call' ? 'phone' : first.request.channel)
+      || activity.providerReference !== null || activity.durationSeconds !== null || activity.recordingStorageRef !== null
+      || activity.transcriptStorageRef !== null || activity.consentPolicyRecordId !== null || activity.noteText !== null
+      || activity.cadenceEnrollmentId !== null || activity.cadenceStepId !== null || activity.cadenceComponentId !== null
+      || (metadata.data.loggedVia === 'call_outcome'
+        ? activity.kind !== 'call' || (activity.observedOutcome === 'opted_out'
+          ? activity.callOutcome !== null : activity.callOutcome === null || activity.observedOutcome !== activity.callOutcome)
+        : activity.callOutcome !== null || activity.callbackAt !== null)) throw invalid();
+    const manualOptOut = metadata.data.loggedVia === 'call_outcome' && activity.observedOutcome === 'opted_out';
+    if (metadata.data.callbackAt !== undefined && !manualOptOut) throw invalid();
+    if (manualOptOut) {
+      // A tag alone cannot establish that the indivisible opt-out closure happened.
+      try {
+        const receipt = parseStoredOptOutClosureReceipt(this.database.raw.prepare(
+          'SELECT * FROM opt_out_closure_receipts WHERE source_activity_id = ?',
+        ).get(activity.id));
+        assertCanonicalOptOutClosureReceipt(this.database, receipt);
+      } catch { throw invalid(); }
+    }
+    return activity;
   }
 
   private assertIntent(facts: StoredFact[], request: OutboundRequest): void {

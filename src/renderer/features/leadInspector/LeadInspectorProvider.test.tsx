@@ -18,8 +18,9 @@ const receipt = {
 };
 
 const legacyContactEvidence: Pick<ContactMethod,
-  'validationState' | 'reachability' | 'sourceLabel' | 'vendorRank' |
+  'contactSnapshot' | 'validationState' | 'reachability' | 'sourceLabel' | 'vendorRank' |
   'phoneKind' | 'ownershipState' | 'evidenceObservedAt'> = {
+  contactSnapshot: 'a'.repeat(64),
   validationState: 'valid', reachability: 'none', sourceLabel: null, vendorRank: null,
   phoneKind: null, ownershipState: 'unknown', evidenceObservedAt: null,
 };
@@ -62,6 +63,7 @@ const detailFor = (overrides: Partial<LeadDetail> = {}): LeadDetail =>
     },
     optedOut: false,
     cadence: { name: 'FRBO warm', stepLabel: 'Call 1', touchIndex: 1, touchLimit: 4 },
+    outboundAttempts: [],
     activities: [
       {
         id: 'act-1',

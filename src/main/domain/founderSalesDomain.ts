@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto';
 
 import Papa from 'papaparse';
 import { z } from 'zod';
+import { communicationRecencySql, isLegacyOutboundRequest, outboundCommandFactSql } from './events/communicationEvidence';
+import type { Activity } from './events/eventTypes';
 
 import type { AppDatabase } from '../db/database';
 import type { JobRecord } from '../jobs/jobTypes';
@@ -518,6 +520,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
         (
           SELECT MAX(occurred_at) FROM activities
           WHERE activities.person_id = cycle.person_id
+            AND ${communicationRecencySql}
         ) AS last_activity_at
       ${baseSql}
       ORDER BY ${orderBy}
@@ -703,7 +706,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
     const contacts = this.database.raw.prepare(`
       SELECT id, kind, normalized_value, validation_state, reachability, is_primary,
         source_label, vendor_rank, phone_kind, ownership_state, evidence_observed_at,
-        compliance_expires_at
+        compliance_expires_at, updated_at
       FROM person_contact_methods WHERE person_id = ?
       ORDER BY kind ASC, normalized_value ASC, id ASC
     `).all(person.id) as {
@@ -713,7 +716,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
       source_label: string | null; vendor_rank: number | null;
       phone_kind: ContactMethod['phoneKind']; ownership_state: ContactMethod['ownershipState'];
       evidence_observed_at: string | null;
-      compliance_expires_at: string | null;
+      compliance_expires_at: string | null; updated_at: string;
     }[];
     const refusalReason = (row: typeof contacts[number], channel: 'call' | 'text') => {
       const decision = this.services.unitOfWork.immediate(() =>
@@ -726,6 +729,8 @@ export class FounderSalesDomain implements OutboundDomainPort {
     const contactDto = (row: typeof contacts[number]): ContactMethod => {
       const contact: Omit<ContactMethod, 'compliance'> = {
         id: row.id, kind: row.kind, value: row.normalized_value,
+        contactSnapshot: contactSnapshot({ id: row.id, personId: person.id, kind: row.kind,
+          normalizedValue: row.normalized_value, validationState: row.validation_state, updatedAt: row.updated_at }),
         label: null, valid: row.validation_state === 'valid',
         validationState: row.validation_state, reachability: row.reachability,
         sourceLabel: row.source_label, vendorRank: row.vendor_rank, phoneKind: row.phone_kind,
@@ -809,7 +814,8 @@ export class FounderSalesDomain implements OutboundDomainPort {
         name: string; attempt_cap: number; label: string; sequence: number;
       } | undefined) ?? null;
     const activities = this.database.raw.prepare(`
-      SELECT id, kind, occurred_at, observed_outcome, duration_seconds,
+      SELECT id, kind, direction, adapter, provider_idempotency_key, provider_reference,
+        call_outcome, occurred_at, observed_outcome, duration_seconds,
         recording_storage_ref, transcript_storage_ref, metadata_json, note_text,
         EXISTS (
           SELECT 1 FROM activity_amendments AS amendment
@@ -817,9 +823,12 @@ export class FounderSalesDomain implements OutboundDomainPort {
             AND amendment.amendment_kind = 'marked_in_error'
         ) AS marked_in_error
       FROM activities WHERE person_id = ?
+        AND NOT COALESCE(${outboundCommandFactSql}, 0)
       ORDER BY occurred_at DESC, id DESC LIMIT 200
     `).all(person.id) as {
-      id: string; kind: string; occurred_at: string; observed_outcome: string | null;
+      id: string; kind: string; direction: string; adapter: string | null;
+      provider_idempotency_key: string | null; provider_reference: string | null; call_outcome: string | null;
+      occurred_at: string; observed_outcome: string | null;
       duration_seconds: number | null; recording_storage_ref: string | null;
       transcript_storage_ref: string | null; metadata_json: string;
       note_text: string | null; marked_in_error: 0 | 1;
@@ -892,16 +901,28 @@ export class FounderSalesDomain implements OutboundDomainPort {
         touchIndex: cadence.sequence + 1,
         touchLimit: cadence.attempt_cap,
       },
-      activities: activities.map((activity) => ({
-        id: activity.id,
-        kind: activity.kind,
-        occurredAt: activity.occurred_at,
-        summary: activity.note_text
-          ?? jsonSummary(activity.metadata_json)
-          ?? `${actionLabel(activity.kind)}${activity.observed_outcome === null ? '' : ` · ${activity.observed_outcome}`}`,
-        outcome: activity.observed_outcome,
-        markedInError: activity.marked_in_error === 1,
-      })),
+      outboundAttempts: this.services.outboundCommands.listRecent(person.id, 20),
+      activities: activities.map((activity) => {
+        let metadata: unknown;
+        try { metadata = JSON.parse(activity.metadata_json); } catch { metadata = null; }
+        const legacy = isLegacyOutboundRequest({
+          kind: activity.kind, direction: activity.direction, observedOutcome: activity.observed_outcome,
+          adapter: activity.adapter, providerIdempotencyKey: activity.provider_idempotency_key,
+          providerReference: activity.provider_reference, durationSeconds: activity.duration_seconds,
+          recordingStorageRef: activity.recording_storage_ref, transcriptStorageRef: activity.transcript_storage_ref,
+          callOutcome: activity.call_outcome, metadata,
+        });
+        return {
+          id: activity.id,
+          kind: legacy ? 'system' : activity.kind,
+          occurredAt: activity.occurred_at,
+          summary: legacy ? 'Legacy outbound request, occurrence unverified' : activity.note_text
+            ?? jsonSummary(activity.metadata_json)
+            ?? `${actionLabel(activity.kind)}${activity.observed_outcome === null ? '' : ` · ${activity.observed_outcome}`}`,
+          outcome: activity.observed_outcome,
+          markedInError: activity.marked_in_error === 1,
+        };
+      }),
       conversations: activities
         .filter((activity) => activity.kind === 'call' && activity.duration_seconds !== null)
         .map((activity) => ({
@@ -1540,9 +1561,60 @@ export class FounderSalesDomain implements OutboundDomainPort {
     }
   }
 
+  private manualReplay(request: {
+    outboundCommandId?: string; personId: string; salesCycleId: string | null;
+    kind: string; direction: string; occurredAt: string; outcome: string | null;
+    summary?: string; callbackAt?: string | null;
+  }, loggedVia: 'founder_workflow_ui' | 'call_outcome'): MutationReceipt | null {
+    if (request.outboundCommandId === undefined) return null;
+    const conflict = () => new FounderSalesDomainError('ACTION_NOT_SUPPORTED',
+      'Manual command association conflicts with existing evidence. Use an explicit amendment.');
+    if (request.salesCycleId === null || request.direction !== 'outbound'
+      || (request.kind !== 'call' && request.kind !== 'text' && request.kind !== 'email')) throw conflict();
+    let existing: Activity | null;
+    try {
+      existing = this.services.outboundCommands.resolveManualAssociation({ commandId: request.outboundCommandId,
+        personId: request.personId, salesCycleId: request.salesCycleId, channel: request.kind });
+    } catch (error) {
+      if (error instanceof OutboundCommandEvidenceError) throw conflict();
+      throw error;
+    }
+    if (existing === null) return null;
+    const metadata = existing.metadata as { loggedVia: string; summary?: string; callbackAt?: string | null };
+    if (existing.occurredAt !== request.occurredAt || existing.observedOutcome !== request.outcome
+      || (existing.callbackAt ?? metadata.callbackAt ?? null) !== (request.callbackAt ?? null) || metadata.loggedVia !== loggedVia
+      || metadata.summary !== request.summary) throw conflict();
+    return this.receipt([request.personId], [request.salesCycleId]);
+  }
+
+  private manualAudit(request: {
+    personId: string; occurredAt: string; kind: string; direction: string; outboundCommandId?: string;
+  }): Record<string, unknown> {
+    // Current suppression is not proof of historical legality. Only a persisted
+    // effective prohibition at/before the reported outbound touch proves that block.
+    const tombstones = this.database.raw.prepare(`SELECT person_id, requested_at FROM opt_out_tombstones AS tombstone
+      WHERE tombstone.person_id = ? OR EXISTS (
+        SELECT 1 FROM opt_out_handles AS handle JOIN person_contact_methods AS contact
+          ON contact.kind = handle.kind AND contact.normalized_value = handle.normalized_value
+        WHERE handle.tombstone_id = tombstone.id AND contact.person_id = ?
+      )`).all(request.personId, request.personId) as { person_id: string; requested_at: string }[];
+    // A currently shared/reassigned handle establishes a current block, not who
+    // owned the reported target in the past. No historical target is supplied here.
+    const prohibited = request.direction === 'outbound' && ['call', 'voicemail', 'text', 'email'].includes(request.kind)
+      && tombstones.some((row) => row.person_id === request.personId && Number.isFinite(Date.parse(row.requested_at))
+        && Date.parse(row.requested_at) <= Date.parse(request.occurredAt));
+    return {
+      loggedManually: true, currentBlockPresent: tombstones.length > 0,
+      prohibitedPastTouchReported: prohibited, prohibitionAssessment: prohibited ? 'prohibited' : 'unknown',
+      ...(request.outboundCommandId === undefined ? {} : { outboundCommandId: request.outboundCommandId }),
+    };
+  }
+
   logPastActivity(input: LogPastActivityRequest): MutationReceipt {
     const request = logPastActivityRequestSchema.parse(input);
     return this.services.unitOfWork.immediate(() => {
+      const replay = this.manualReplay({ ...request, salesCycleId: request.salesCycleId, outcome: request.outcome }, 'founder_workflow_ui');
+      if (replay !== null) return replay;
       const person = this.database.raw.prepare(
         'SELECT id FROM persons WHERE id = ?',
       ).get(request.personId) as { id: string } | undefined;
@@ -1570,7 +1642,10 @@ export class FounderSalesDomain implements OutboundDomainPort {
         channel: request.kind === 'call' || request.kind === 'voicemail' ? 'phone' : request.kind,
         occurredAt: request.occurredAt,
         observedOutcome: request.outcome,
-        metadata: { formatVersion: 1, summary: request.summary, loggedVia: 'founder_workflow_ui' },
+        adapter: request.outboundCommandId === undefined ? null : 'callie_manual_outbound_v1',
+        providerIdempotencyKey: request.outboundCommandId ?? null,
+        metadata: { formatVersion: 1, summary: request.summary, loggedVia: 'founder_workflow_ui',
+          ...this.manualAudit(request) },
       });
       return this.receipt([request.personId], cycleIds);
     });
@@ -1628,11 +1703,17 @@ export class FounderSalesDomain implements OutboundDomainPort {
   logCallOutcome(input: LogCallOutcomeRequest): MutationReceipt {
     const request = logCallOutcomeRequestSchema.parse(input);
     const now = this.clock.now();
-    if (request.callbackAt !== null && request.callbackAt <= now) {
-      throw new FounderSalesDomainError('ACTION_NOT_SUPPORTED', 'A promised callback must be in the future.');
-    }
+    const manualRequest = { ...request, kind: 'call', direction: 'outbound' };
+    const validateCallback = () => {
+      if (request.callbackAt !== null && request.callbackAt <= now) {
+        throw new FounderSalesDomainError('ACTION_NOT_SUPPORTED', 'A promised callback must be in the future.');
+      }
+    };
     if (request.outcome === 'opted_out') {
-      // The opt-out service opens its own immediate transaction.
+      // Resolve synchronously before optOut.apply, which owns the sole atomic UOW.
+      const replay = this.manualReplay(manualRequest, 'call_outcome');
+      if (replay !== null) return replay;
+      validateCallback();
       const cycle = this.requireCycle(request.salesCycleId);
       if (cycle.person_id !== request.personId) {
         throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The cycle belongs to another person.');
@@ -1659,8 +1740,10 @@ export class FounderSalesDomain implements OutboundDomainPort {
             channel: 'phone',
             occurredAt: request.occurredAt,
             observedOutcome: 'opted_out',
-            callOutcome: 'opted_out',
-            metadata: { formatVersion: 1, loggedVia: 'call_outcome' },
+            adapter: request.outboundCommandId === undefined ? null : 'callie_manual_outbound_v1',
+            providerIdempotencyKey: request.outboundCommandId ?? null,
+            metadata: { formatVersion: 1, loggedVia: 'call_outcome', callbackAt: request.callbackAt,
+              ...this.manualAudit(manualRequest) },
           },
         },
         terminalStageEventId: cycle.workflow_status === 'onboarding' && cycle.stage === 'won'
@@ -1670,6 +1753,9 @@ export class FounderSalesDomain implements OutboundDomainPort {
       return this.receipt([request.personId], [request.salesCycleId]);
     }
     return this.services.unitOfWork.immediate(() => {
+      const replay = this.manualReplay(manualRequest, 'call_outcome');
+      if (replay !== null) return replay;
+      validateCallback();
       const cycle = this.requireCycle(request.salesCycleId);
       if (cycle.person_id !== request.personId) {
         throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The cycle belongs to another person.');
@@ -1689,7 +1775,9 @@ export class FounderSalesDomain implements OutboundDomainPort {
         observedOutcome: request.outcome,
         callOutcome: request.outcome,
         callbackAt: request.callbackAt,
-        metadata: { formatVersion: 1, loggedVia: 'call_outcome' },
+        adapter: request.outboundCommandId === undefined ? null : 'callie_manual_outbound_v1',
+        providerIdempotencyKey: request.outboundCommandId ?? null,
+        metadata: { formatVersion: 1, loggedVia: 'call_outcome', ...this.manualAudit(manualRequest) },
       });
       if (request.callbackAt !== null && cycle.workflow_status !== 'closed') {
         this.setCycleResurface(cycle, request.callbackAt, 'callback', now);

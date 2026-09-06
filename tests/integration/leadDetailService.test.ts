@@ -1,3 +1,4 @@
+import { contactSnapshot } from '../../src/main/communications/contactSnapshot';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -278,7 +279,11 @@ describe('leadDetailService over a real encrypted domain', () => {
     expect(detail.workflowStatus).toBe('active');
     expect(detail.optedOut).toBe(false);
     expect(detail.phones).toHaveLength(1);
+    expect(detail.outboundAttempts).toEqual([]);
     expect(detail.phones[0]).toEqual({
+      contactSnapshot: contactSnapshot(database.raw.prepare(`SELECT id, person_id AS personId, kind,
+        normalized_value AS normalizedValue, validation_state AS validationState, updated_at AS updatedAt
+        FROM person_contact_methods WHERE id = 'alpha-phone'`).get() as Parameters<typeof contactSnapshot>[0]),
       id: 'alpha-phone',
       kind: 'phone',
       value: '+14015550100',
@@ -322,7 +327,7 @@ describe('leadDetailService over a real encrypted domain', () => {
       textRefusalReason: 'federal_dnc_listed',
     });
     expect(Object.keys(detail.phones[0] ?? {})).toEqual([
-      'id', 'kind', 'value', 'label', 'valid', 'validationState', 'reachability',
+      'id', 'contactSnapshot', 'kind', 'value', 'label', 'valid', 'validationState', 'reachability',
       'sourceLabel', 'vendorRank', 'phoneKind', 'ownershipState', 'evidenceObservedAt', 'compliance',
     ]);
   });
@@ -737,6 +742,7 @@ describe('strict contact presentation DTO', () => {
     evidenceObservedAt: '2026-08-30T12:00:00.000Z',
   } as const;
   const contact: ContactMethod = {
+    contactSnapshot: 'a'.repeat(64),
     id: 'candidate', kind: 'phone', value: '+14015550100', label: null, valid: false,
     ...evidence,
     compliance: {

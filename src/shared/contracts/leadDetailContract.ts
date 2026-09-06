@@ -10,6 +10,7 @@ import {
 } from './commonContract';
 import { cloudScoreChipSchema } from './leadsContract';
 import { findContactRefusalReasonSchema } from './enrichmentRequestContract';
+import { outboundAttemptSummarySchema } from './outboundContract';
 
 export const phoneComplianceStatusSchema = z.enum([
   'verified_clear',
@@ -24,6 +25,7 @@ export const phoneComplianceStatusSchema = z.enum([
 
 export const contactMethodSchema = z.object({
   id: z.string().min(1),
+  contactSnapshot: z.string().regex(/^[a-f0-9]{64}$/),
   kind: z.enum(['phone', 'email']),
   value: z.string().min(1),
   label: z.string().nullable(),
@@ -81,6 +83,7 @@ export const leadDetailSchema = z.object({
   findContactEligibility: findContactEligibilitySchema,
   priorityReasons: z.array(z.string().min(1)), nextAction: primaryActionSchema.nullable(), optedOut: z.boolean(),
   cadence: cadenceSummarySchema.nullable(), activities: z.array(activitySummarySchema), conversations: z.array(conversationSummarySchema),
+  outboundAttempts: z.array(outboundAttemptSummarySchema).max(20),
   properties: z.array(propertySummarySchema), history: z.array(historyEventSchema), revision: z.number().int().nonnegative(),
 }).strict();
 

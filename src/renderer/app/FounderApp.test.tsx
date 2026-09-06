@@ -30,6 +30,7 @@ const detail: LeadDetail = {
   nextAction: null,
   optedOut: false,
   cadence: null,
+  outboundAttempts: [],
   activities: [],
   conversations: [],
   properties: [],

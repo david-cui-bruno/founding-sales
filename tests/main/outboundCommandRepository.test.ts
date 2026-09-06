@@ -71,6 +71,55 @@ describe('OutboundCommandRepository encrypted command ledger', () => {
       .run(...Object.values(row));
   }
 
+  const association = { commandId: request.commandId, personId: request.personId, salesCycleId: request.salesCycleId, channel: request.channel };
+  function manual(patch: Record<string, unknown> = {}, metadataPatch: Record<string, unknown> = {}) {
+    inject(fact('requested'), { adapter: 'callie_manual_outbound_v1', provider_idempotency_key: request.commandId,
+      kind: 'call', direction: 'outbound', channel: 'phone', observed_outcome: 'no_answer',
+      metadata_json: JSON.stringify({ formatVersion: 1, loggedVia: 'founder_workflow_ui', summary: 'Reported call',
+        outboundCommandId: request.commandId, loggedManually: true, currentBlockPresent: false,
+        prohibitedPastTouchReported: false, prohibitionAssessment: 'unknown', ...metadataPatch }), ...patch });
+  }
+
+  it('resolves canonical manual evidence by exact indexed command key without changing unknown execution', () => {
+    append(fact('requested')); append(fact('dispatching')); append(fact('unknown'));
+    expect(repository.resolveManualAssociation(association)).toBeNull();
+    manual();
+    const before = rows();
+    const activity = repository.resolveManualAssociation(association);
+    expect(activity).toMatchObject({ kind: 'call', observedOutcome: 'no_answer', providerIdempotencyKey: request.commandId });
+    expect(repository.listRecent(request.personId, 20)[0]).toMatchObject({ status: 'unknown', manualActivityId: activity!.id });
+    expect(repository.read(request)).toEqual({ phase: 'unknown', reasonCode: 'handoff_uncertain' });
+    expect(rows()).toEqual(before);
+  });
+
+  it('rejects a manually tagged opted-out row without its canonical atomic closure receipt', () => {
+    append(fact('requested')); append(fact('dispatching'));
+    manual({ observed_outcome: 'opted_out' }, { loggedVia: 'call_outcome', summary: undefined });
+    expect(() => repository.resolveManualAssociation(association)).toThrow(expect.objectContaining({ reasonCode: 'command_evidence_invalid' }));
+  });
+
+  it.each(['person', 'cycle', 'channel', 'requested', 'refused', 'unavailable', 'missing'] as const)('rejects unsafe association lookup %s', (variant) => {
+    if (variant !== 'missing') append(fact('requested'));
+    if (!['missing', 'requested', 'refused', 'unavailable'].includes(variant)) append(fact('dispatching'));
+    if (variant === 'refused' || variant === 'unavailable') append(fact(variant, { reasonCode: 'stale_contact' }));
+    expect(() => repository.resolveManualAssociation({ ...association,
+      ...(variant === 'person' ? { personId: 'other-person' } : {}),
+      ...(variant === 'cycle' ? { salesCycleId: 'other-cycle' } : {}),
+      ...(variant === 'channel' ? { channel: 'text' as const } : {}),
+    })).toThrow(expect.objectContaining({ reasonCode: 'command_conflict' }));
+  });
+
+  it.each([
+    { person_id: 'other-person', sales_cycle_id: 'other-cycle', prospect_id: 'other-prospect' },
+    { channel: ' phone ' }, { id: ' padded ' }, { observed_outcome: 'x'.repeat(201) },
+    { kind: 'text', channel: 'text' }, { direction: 'inbound' }, { provider_reference: 'not-manual' },
+    { metadata_json: '{' }, { metadata_json: JSON.stringify({ loggedManually: true }) },
+  ])('fails closed on malformed/noncanonical manual row %j', (patch) => {
+    append(fact('requested')); append(fact('dispatching')); manual(patch);
+    expect(() => repository.resolveManualAssociation(association)).toThrow(expect.objectContaining({ reasonCode: 'command_evidence_invalid' }));
+    expect(() => repository.listRecent(request.personId, 20)).toThrow(expect.objectContaining({ reasonCode: 'command_evidence_invalid' }));
+  });
+
   it('requires the exact active UOW and rejects mixed bindings before reads', () => {
     expect(() => repository.append(fact('requested'), 'owner-prospect')).toThrow(DomainTransactionRequiredError);
     const otherUnit = new DomainUnitOfWork(database);
@@ -242,11 +291,24 @@ describe('OutboundCommandRepository encrypted command ledger', () => {
     expect(() => repository.listRecent(request.personId, 20)).toThrow(expect.objectContaining({ reasonCode: 'command_evidence_invalid' }));
   });
 
+  it('associates an older command outside the twenty-attempt projection through exact lookup, and projects the twentieth link', () => {
+    for (let n = 1; n <= 25; n++) {
+      const current = { ...request, commandId: commandId(n) };
+      append(fact('requested', { request: current })); append(fact('dispatching', { request: current }));
+    }
+    for (const n of [20, 25]) manual({ provider_idempotency_key: commandId(n) }, { outboundCommandId: commandId(n) });
+    const recent = repository.listRecent(request.personId, 20);
+    expect(recent).toHaveLength(20);
+    expect(recent.at(-1)).toMatchObject({ commandId: commandId(20), manualActivityId: expect.any(String), status: 'unknown' });
+    expect(recent.slice(0, 19).every((item) => item.manualActivityId === null)).toBe(true);
+    expect(repository.resolveManualAssociation({ ...association, commandId: commandId(25) })).not.toBeNull();
+  });
+
   it('orders by request time, uses the exact indexed seam, and ignores later manual evidence', () => {
     append(fact('requested')); append(fact('dispatching')); append(fact('unknown'));
     const later = { ...request, commandId: commandId(2) };
     append(fact('requested', { request: later, occurredAt: '2026-09-04T14:01:00.000Z' }));
-    inject(fact('requested'), { adapter: 'callie_manual_outbound_v1', provider_idempotency_key: request.commandId, kind: 'call', direction: 'outbound', channel: 'phone' });
+    manual();
     const prepare = vi.spyOn(database.raw, 'prepare');
     repository.read(request);
     const queries = prepare.mock.calls.map(([sql]) => sql);
@@ -258,6 +320,6 @@ describe('OutboundCommandRepository encrypted command ledger', () => {
     expect(JSON.stringify(plan)).toContain('activities_provider_idempotency_idx');
     const recent = repository.listRecent(request.personId, 20);
     expect(recent.map((item) => item.commandId)).toEqual([later.commandId, request.commandId]);
-    expect(recent[1]).toMatchObject({ status: 'unknown', reasonCode: 'handoff_uncertain', manualActivityId: null });
+    expect(recent[1]).toMatchObject({ status: 'unknown', reasonCode: 'handoff_uncertain', manualActivityId: repository.resolveManualAssociation(association)!.id });
   });
 });

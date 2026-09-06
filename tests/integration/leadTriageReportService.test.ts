@@ -1,3 +1,4 @@
+import { contactSnapshot } from '../../src/main/communications/contactSnapshot';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
@@ -50,6 +51,10 @@ describe('read-only lead triage snapshot over an intact encrypted domain', () =>
     expect(snapshot.revisionBefore).toBe(queue.revision);
     expect(snapshot.revisionAfter).toBe(queue.revision);
     expect(snapshot.privacyScanPassed).toBe(true);
+    expect(JSON.stringify(snapshot)).not.toContain('contactSnapshot');
+    for (const contact of services.identities.listContactMethodsForPerson('q00-person')) {
+      expect(JSON.stringify(snapshot)).not.toContain(contactSnapshot(contact));
+    }
   });
 
   function tableBytes() {

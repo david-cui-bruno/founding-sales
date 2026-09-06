@@ -13,6 +13,7 @@ afterEach(() => {
 });
 
 const detail = {
+  outboundAttempts: [],
   personId: 'person-kevin',
   salesCycleId: 'cycle-kevin',
   personName: 'Kevin Shin',

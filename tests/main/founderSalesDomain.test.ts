@@ -104,19 +104,8 @@ describe('FounderSalesDomain', () => {
   });
 
   describe('durable outbound preparation (Task4, not live dispatch)', () => {
-    function setup(prefix = 'outbound', enrolled = false): OutboundRequest {
+    function setup(prefix = 'outbound', enrolled = false, segment: 'warm' | 'cold' = 'warm'): OutboundRequest {
       const prospect = seedProspect(database.raw, prefix);
-      let cycleId: string;
-      if (enrolled) {
-        database.raw.prepare("UPDATE prospects SET qualification_state = 'unreviewed' WHERE id = ?").run(prospect.prospectId);
-        cycleId = services.lifecycle.createUnreviewedCycle({
-          personId: prospect.personId, prospectId: prospect.prospectId,
-          entrySourceEventId: prospect.sourceEventId, effectiveAt: DOMAIN_TIMESTAMP,
-        }).id;
-        domain.confirmTransition({ transition: 'review_to_ready', salesCycleId: cycleId, expectedRevision: 0 });
-      } else {
-        cycleId = insertOpenCycleWithAction({ database: database.raw, prefix, prospect, stage: 'ready' }).cycleId;
-      }
       const contact = services.unitOfWork.immediate(() => services.identities.addContactMethod({
         personId: prospect.personId, kind: 'phone', normalizedValue: '+14015550100',
         validationState: 'valid', reachability: 'direct',
@@ -135,6 +124,17 @@ describe('FounderSalesDomain', () => {
         VALUES ('RI', 'call', 'allowed', 1, 1, 1, 'test',
           '2026-08-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z', ?)`)
         .run(CLOCK_NOW);
+      let cycleId: string;
+      if (enrolled) {
+        database.raw.prepare("UPDATE prospects SET qualification_state = 'unreviewed', segment = ? WHERE id = ?").run(segment, prospect.prospectId);
+        cycleId = services.lifecycle.createUnreviewedCycle({
+          personId: prospect.personId, prospectId: prospect.prospectId,
+          entrySourceEventId: prospect.sourceEventId, effectiveAt: DOMAIN_TIMESTAMP,
+        }).id;
+        domain.confirmTransition({ transition: 'review_to_ready', salesCycleId: cycleId, expectedRevision: 0 });
+      } else {
+        cycleId = insertOpenCycleWithAction({ database: database.raw, prefix, prospect, stage: 'ready' }).cycleId;
+      }
       return { commandId: '00000000-0000-4000-8000-000000000001', channel: 'call',
         personId: prospect.personId, salesCycleId: cycleId, contactMethodId: contact.id,
         expectedContactSnapshot: contactSnapshot(contact) };
@@ -157,6 +157,256 @@ describe('FounderSalesDomain', () => {
       expect(workflow()).toEqual(beforeWorkflow);
       expect(communications()).toEqual(beforeCommunications);
     }
+
+    describe('Task5 truthful projections', () => {
+      it('projects current persisted phone and email snapshots, not display-normalized or cached values', () => {
+        const request = setup();
+        services.unitOfWork.immediate(() => services.identities.addContactMethod({
+          personId: request.personId, kind: 'email', normalizedValue: 'fixture@example.test',
+          validationState: 'unverified', reachability: 'direct',
+        }));
+        const check = () => {
+          const detail = domain.getLeadDetail({ personId: request.personId });
+          for (const dto of [...detail.phones, ...detail.emails]) {
+            const row = database.raw.prepare(`SELECT id, person_id AS personId, kind,
+              normalized_value AS normalizedValue, validation_state AS validationState, updated_at AS updatedAt
+              FROM person_contact_methods WHERE id = ?`).get(dto.id) as Parameters<typeof contactSnapshot>[0];
+            expect(dto.contactSnapshot).toBe(contactSnapshot(row));
+          }
+          return detail.phones[0].contactSnapshot;
+        };
+        const original = check();
+        for (const [field, value] of [['normalized_value', '+14015550101\n'], ['validation_state', 'invalid'],
+          ['updated_at', '2026-09-01T00:00:00.000Z']]) {
+          database.raw.prepare(`UPDATE person_contact_methods SET ${field} = ? WHERE id = ?`).run(value, request.contactMethodId);
+          expect(check()).not.toBe(original);
+        }
+      });
+
+      it('keeps the last real manual touch ahead of newer request and handoff facts in lead and Today recency', () => {
+        const request = setup();
+        const occurredAt = '2026-08-30T15:00:00.000Z';
+        domain.logPastActivity({ personId: request.personId, salesCycleId: request.salesCycleId, kind: 'call',
+          direction: 'outbound', occurredAt, summary: 'Manually reported call', outcome: 'no_answer' });
+        const before = communications(); const today = domain.getToday();
+        domain.prepareOutboundDispatch(request); domain.recordOutboundResult(request, { status: 'handoff_accepted', reasonCode: null });
+        expect(listAll().rows[0].lastActivityAt).toBe(occurredAt);
+        expect(services.todayRepository.listOperationalCandidates()[0]).toMatchObject({ kind: 'candidate',
+          candidate: { lastActivity: { kind: 'call', occurredAt, observedOutcome: 'no_answer' } } });
+        expect(communications()).toEqual(before);
+        expect(domain.getToday()).toMatchObject({ scheduledDials: today.scheduledDials, conversationsHeld: today.conversationsHeld });
+      });
+
+      it('projects twenty complete attempts without phantom recency, dials, conversations or cadence effects', () => {
+        const request = setup('outbound', true);
+        const before = workflow();
+        const today = domain.getToday();
+        const recency = listAll().rows[0].lastActivityAt;
+        for (let n = 1; n <= 25; n++) {
+          const current = { ...request, commandId: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}` };
+          expect(domain.prepareOutboundDispatch(current).kind).toBe('dispatch');
+          domain.recordOutboundResult(current, { status: 'handoff_accepted', reasonCode: null });
+        }
+        const detail = domain.getLeadDetail({ personId: request.personId });
+        expect(detail.outboundAttempts).toHaveLength(20);
+        expect(detail.outboundAttempts.every((attempt) => attempt.status === 'handoff_accepted' && attempt.manualActivityId === null)).toBe(true);
+        expect(detail.outboundAttempts.at(-1)?.commandId).toBe('00000000-0000-4000-8000-000000000020');
+        expect(detail.activities.some((activity) => activity.summary.includes('Outbound Command'))).toBe(false);
+        expect(listAll().rows[0].lastActivityAt).toBe(recency);
+        expect(domain.getToday()).toMatchObject({ scheduledDials: today.scheduledDials, conversationsHeld: today.conversationsHeld });
+        expect(workflow()).toEqual(before);
+        expect(communications()).toEqual([]);
+        expect(JSON.stringify(facts())).not.toContain('todaySelectedCallReceipt');
+      });
+    });
+
+    describe('Task5 historical manual command evidence', () => {
+      const past = (request: OutboundRequest) => ({ personId: request.personId, salesCycleId: request.salesCycleId,
+        kind: request.channel, direction: 'outbound' as const, occurredAt: CLOCK_NOW,
+        outcome: 'no_answer', summary: 'Founder reported a past touch', outboundCommandId: request.commandId });
+      const call = (request: OutboundRequest) => ({ personId: request.personId, salesCycleId: request.salesCycleId,
+        outcome: 'no_answer' as const, callbackAt: null as string | null, occurredAt: CLOCK_NOW, outboundCommandId: request.commandId });
+      const changes = () => database.raw.prepare('SELECT total_changes() AS n').get();
+      const manual = () => database.raw.prepare("SELECT * FROM activities WHERE adapter = 'callie_manual_outbound_v1'").all() as { id: string; metadata_json: string }[];
+
+      it.each(['dispatching', 'handoff_accepted', 'unknown'] as const)('links one manual no-answer to %s without stage/cadence or execution changes, and replays across encrypted reopen', (phase) => {
+        const request = setup('outbound', true);
+        domain.prepareOutboundDispatch(request);
+        if (phase !== 'dispatching') domain.recordOutboundResult(request, { status: phase, reasonCode: phase === 'unknown' ? 'handoff_uncertain' : null });
+        const before = workflow(); const beforeFacts = facts(); const today = domain.getToday();
+        const receipt = domain.logPastActivity(past(request));
+        expect(manual()).toHaveLength(1);
+        expect(JSON.parse(manual()[0].metadata_json)).toMatchObject({ outboundCommandId: request.commandId,
+          loggedManually: true, loggedVia: 'founder_workflow_ui', prohibitionAssessment: 'unknown' });
+        expect(domain.getLeadDetail({ personId: request.personId }).outboundAttempts[0]).toMatchObject({
+          manualActivityId: manual()[0].id, status: phase === 'dispatching' ? 'unknown' : phase });
+        expect(workflow()).toEqual(before); expect(facts()).toEqual(beforeFacts);
+        expect(domain.getToday()).toMatchObject({ scheduledDials: today.scheduledDials, conversationsHeld: today.conversationsHeld });
+        const written = changes();
+        expect(domain.logPastActivity(past(request))).toEqual(receipt); expect(changes()).toEqual(written);
+        closeDatabase(database);
+        database = openDatabase({ path: temp.path, key: createTestWorkspaceKey() });
+        const ids = { next: () => { throw new Error('replay must not allocate IDs'); } };
+        services = createDomainServices({ database, clock, ids });
+        domain = createFounderSalesDomain({ database, services, clock, ids });
+        const reopened = changes(); domain.logPastActivity(past(request));
+        expect(changes()).toEqual(reopened); expect(manual()).toHaveLength(1); expect(facts()).toEqual(beforeFacts);
+      });
+
+      it.each(['missing', 'requested', 'refused', 'unavailable', 'other_person', 'other_cycle', 'channel', 'inbound', 'note', 'null_cycle'] as const)('refuses unsafe manual association: %s with no writes', (variant) => {
+        const request = setup();
+        if (variant === 'requested') services.unitOfWork.immediate(() => services.outboundCommands.append({ request, phase: 'requested', reasonCode: null, occurredAt: CLOCK_NOW }, 'outbound-prospect'));
+        else if (variant === 'refused' || variant === 'unavailable') domain.recordOutboundRefusal(request, variant === 'refused' ? 'stale_contact' : 'inbound_safety_unwired');
+        else if (variant !== 'missing') domain.prepareOutboundDispatch(request);
+        const other = seedLead('other-manual', 'ready');
+        const input = { ...past(request),
+          ...(variant === 'other_person' ? { personId: other.prospect.personId, salesCycleId: other.cycleId } : {}),
+          ...(variant === 'other_cycle' ? { salesCycleId: other.cycleId } : {}),
+          ...(variant === 'channel' ? { kind: 'text' as const } : {}),
+          ...(variant === 'inbound' ? { direction: 'inbound' as const } : {}),
+          ...(variant === 'note' ? { kind: 'note' as const } : {}),
+          ...(variant === 'null_cycle' ? { salesCycleId: null } : {}),
+        };
+        const before = changes();
+        expect(() => domain.logPastActivity(input)).toThrow(expect.objectContaining({ code: 'ACTION_NOT_SUPPORTED' }));
+        expect(changes()).toEqual(before); expect(manual()).toEqual([]);
+      });
+
+      it.each(['occurredAt', 'outcome', 'summary'] as const)('requires explicit amendment for changed manual %s', (field) => {
+        const request = setup(); domain.prepareOutboundDispatch(request); domain.logPastActivity(past(request));
+        const before = changes();
+        expect(() => domain.logPastActivity({ ...past(request), [field]: field === 'occurredAt' ? '2026-08-31T14:59:00.000Z' : 'different' }))
+          .toThrow(expect.objectContaining({ code: 'ACTION_NOT_SUPPORTED' }));
+        expect(changes()).toEqual(before); expect(manual()).toHaveLength(1);
+        expect(() => domain.logCallOutcome(call(request))).toThrow(expect.objectContaining({ code: 'ACTION_NOT_SUPPORTED' }));
+      });
+
+      it('keeps linked structured callback replay idempotent even after the callback time passes', () => {
+        const request = setup(); domain.prepareOutboundDispatch(request);
+        const input = { ...call(request), callbackAt: '2026-08-31T16:00:00.000Z' };
+        domain.logCallOutcome(input);
+        expect(database.raw.prepare('SELECT resurface_at FROM sales_cycles WHERE id = ?').get(request.salesCycleId)).toEqual({ resurface_at: input.callbackAt });
+        const before = workflow(); const written = changes(); clock.set('2026-08-31T17:00:00.000Z');
+        domain.logCallOutcome(input); expect(workflow()).toEqual(before); expect(changes()).toEqual(written);
+        expect(manual()).toHaveLength(1);
+      });
+
+      it('keeps linked opt-out activity and closure atomic and exact replay avoids a second closure', () => {
+        const request = setup('outbound', true); domain.prepareOutboundDispatch(request);
+        const input = { ...call(request), outcome: 'opted_out' as const };
+        const before = workflow(); const beforeFacts = facts();
+        database.raw.exec(`CREATE TRIGGER reject_manual_optout AFTER INSERT ON opt_out_tombstones
+          BEGIN SELECT RAISE(ABORT, 'fixture optout rollback'); END`);
+        expect(() => domain.logCallOutcome(input)).toThrow('fixture optout rollback');
+        expect(manual()).toEqual([]); expect(workflow()).toEqual(before); expect(facts()).toEqual(beforeFacts);
+        expect(database.raw.prepare('SELECT * FROM opt_out_closure_receipts').all()).toEqual([]);
+        database.raw.exec('DROP TRIGGER reject_manual_optout');
+        domain.logCallOutcome(input);
+        expect(manual()).toHaveLength(1);
+        expect(database.raw.prepare('SELECT workflow_status, close_reason FROM sales_cycles WHERE id = ?').get(request.salesCycleId))
+          .toEqual({ workflow_status: 'closed', close_reason: 'opt_out' });
+        const written = changes(); const closed = workflow(); clock.set('2026-09-01T00:00:00.000Z');
+        domain.logCallOutcome(input); expect(changes()).toEqual(written); expect(workflow()).toEqual(closed);
+        expect(database.raw.prepare('SELECT * FROM opt_out_closure_receipts').all()).toHaveLength(1);
+        expect(database.raw.inTransaction).toBe(false);
+        closeDatabase(database); database = openDatabase({ path: temp.path, key: createTestWorkspaceKey() });
+        const ids = { next: () => { throw new Error('optout replay must not allocate'); } };
+        services = createDomainServices({ database, clock, ids });
+        domain = createFounderSalesDomain({ database, services, clock, ids });
+        const reopened = changes(); domain.logCallOutcome(input); expect(changes()).toEqual(reopened);
+        expect(database.raw.prepare('SELECT * FROM opt_out_closure_receipts').all()).toHaveLength(1);
+        expect(manual()).toHaveLength(1);
+      });
+
+      it('retains exact opted-out callback input for replay but does not schedule work on a closed cycle', () => {
+        const request = setup(); domain.prepareOutboundDispatch(request);
+        const input = { ...call(request), outcome: 'opted_out' as const, callbackAt: '2026-08-31T16:00:00.000Z' };
+        domain.logCallOutcome(input);
+        const before = changes(); clock.set('2026-09-01T00:00:00.000Z');
+        domain.logCallOutcome(input); expect(changes()).toEqual(before);
+        expect(() => domain.logCallOutcome({ ...input, callbackAt: null })).toThrow(expect.objectContaining({ code: 'ACTION_NOT_SUPPORTED' }));
+        expect(database.raw.prepare('SELECT resurface_at FROM sales_cycles WHERE id = ?').get(request.salesCycleId)).toEqual({ resurface_at: null });
+      });
+
+      it.each(['before', 'after'] as const)('allows past manual touch after current opt-out and marks only prohibition effective %s touch', (position) => {
+        const request = setup(); domain.prepareOutboundDispatch(request);
+        domain.logCallOutcome({ ...call(request), outboundCommandId: undefined, outcome: 'opted_out' });
+        clock.set('2026-09-01T00:00:00.000Z'); // Outside the current calling window, with permanent opt-out.
+        const input = { ...past(request), occurredAt: position === 'before' ? '2026-08-31T15:01:00.000Z' : '2026-08-31T14:00:00.000Z' };
+        domain.logPastActivity(input);
+        expect(JSON.parse(manual()[0].metadata_json)).toMatchObject({ loggedManually: true, currentBlockPresent: true,
+          prohibitedPastTouchReported: position === 'before', prohibitionAssessment: position === 'before' ? 'prohibited' : 'unknown' });
+        const before = changes(); domain.logPastActivity(input); expect(changes()).toEqual(before);
+      });
+
+      it('requires explicit manual cadence completion and cannot complete using a handoff fact', () => {
+        const request = setup('outbound', true, 'cold'); domain.prepareOutboundDispatch(request);
+        domain.recordOutboundResult(request, { status: 'handoff_accepted', reasonCode: null });
+        const actionId = domain.getLeadDetail({ personId: request.personId }).nextAction!.id;
+        const before = workflow(); const beforeFacts = facts();
+        const factId = (facts().at(-1) as { id: string }).id;
+        expect(() => domain.completePrimaryAction({ salesCycleId: request.salesCycleId, actionId,
+          outcome: 'no_answer', activityId: factId })).toThrow();
+        expect(workflow()).toEqual(before); expect(communications()).toEqual([]);
+        domain.completePrimaryAction({ salesCycleId: request.salesCycleId, actionId, outcome: 'no_answer', activityId: null });
+        expect(communications()).toHaveLength(1); expect(facts()).toEqual(beforeFacts);
+        expect(database.raw.prepare('SELECT status FROM next_actions WHERE id = ?').get(actionId)).toEqual({ status: 'completed' });
+        expect(domain.getLeadDetail({ personId: request.personId }).stage).toBe('ready');
+      });
+
+      it('does not treat a current handle match as proof of historical contact ownership', () => {
+        const request = setup();
+        const prior = seedLead('prior-handle', 'ready');
+        clock.set('2026-08-30T13:00:00.000Z');
+        services.unitOfWork.immediate(() => services.identities.addContactMethod({
+          personId: prior.prospect.personId, kind: 'phone', normalizedValue: '+14015550100',
+          validationState: 'valid', reachability: 'direct',
+        }));
+        domain.logCallOutcome({ personId: prior.prospect.personId, salesCycleId: prior.cycleId,
+          occurredAt: clock.now(), outcome: 'opted_out', callbackAt: null });
+        clock.set(CLOCK_NOW);
+        domain.logPastActivity({ ...past(request), outboundCommandId: undefined, occurredAt: '2026-08-30T14:00:00.000Z' });
+        const activity = database.raw.prepare("SELECT metadata_json FROM activities WHERE person_id = ? AND kind = 'call'").get(request.personId) as { metadata_json: string };
+        expect(JSON.parse(activity.metadata_json)).toMatchObject({ currentBlockPresent: true,
+          prohibitedPastTouchReported: false, prohibitionAssessment: 'unknown', loggedManually: true });
+      });
+
+      it.each(['text', 'email'] as const)('associates genuine historical manual %s without claiming provider acceptance or changing its unknown command', (channel) => {
+        const base = setup();
+        const request = { ...base, channel };
+        services.unitOfWork.immediate(() => {
+          services.outboundCommands.append({ request, phase: 'requested', reasonCode: null, occurredAt: CLOCK_NOW }, 'outbound-prospect');
+          services.outboundCommands.append({ request, phase: 'dispatching', reasonCode: null, occurredAt: CLOCK_NOW }, 'outbound-prospect');
+        });
+        domain.logPastActivity({ ...past(request), summary: 'Founder said sent', outcome: null });
+        expect(manual()).toHaveLength(1);
+        const activity = services.events.getActivity(manual()[0].id)!;
+        expect(activity).toMatchObject({ kind: channel, direction: 'outbound', observedOutcome: null, providerReference: null });
+        expect(domain.getLeadDetail({ personId: request.personId }).outboundAttempts[0]).toMatchObject({ status: 'unknown', manualActivityId: activity.id });
+      });
+
+      it('rolls back manual append failure without changing command or workflow', () => {
+        const request = setup('outbound', true); domain.prepareOutboundDispatch(request);
+        const before = workflow(); const beforeFacts = facts();
+        database.raw.exec(`CREATE TRIGGER reject_manual AFTER INSERT ON activities
+          WHEN NEW.adapter = 'callie_manual_outbound_v1' BEGIN SELECT RAISE(ABORT, 'fixture manual rollback'); END`);
+        expect(() => domain.logPastActivity(past(request))).toThrow('fixture manual rollback');
+        expect(manual()).toEqual([]); expect(workflow()).toEqual(before); expect(facts()).toEqual(beforeFacts);
+        database.raw.exec('DROP TRIGGER reject_manual');
+        domain.logPastActivity(past(request)); expect(manual()).toHaveLength(1);
+      });
+
+      it('logs ordinary null-outcome and sent prose as manual evidence without provider acceptance or authorization', () => {
+        const request = setup(); clock.set('2026-09-01T00:00:00.000Z');
+        const before = workflow();
+        domain.logPastActivity({ ...past(request), outboundCommandId: undefined, kind: 'text', outcome: null, summary: 'I sent it' });
+        const activity = communications()[0] as { id: string; adapter: string | null; observed_outcome: string | null; metadata_json: string };
+        expect(activity.adapter).toBeNull(); expect(activity.observed_outcome).toBeNull();
+        expect(JSON.parse(activity.metadata_json)).toMatchObject({ loggedManually: true, prohibitionAssessment: 'unknown' });
+        expect(domain.getLeadDetail({ personId: request.personId }).activities.find((item) => item.id === activity.id)?.kind).toBe('text');
+        expect(workflow()).toEqual(before); expect(facts()).toEqual([]);
+      });
+    });
 
     it('disables the old MutationReceipt API with a fixed safe error and zero writes', () => {
       const request = setup();

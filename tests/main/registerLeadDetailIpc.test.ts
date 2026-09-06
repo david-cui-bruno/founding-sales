@@ -34,6 +34,7 @@ const detail: LeadDetail = {
   personName: 'Avery Landlord',
   phones: [
     {
+      contactSnapshot: 'a'.repeat(64),
       id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true,
       validationState: 'valid', reachability: 'none', sourceLabel: null, vendorRank: null,
       phoneKind: null, ownershipState: 'unknown', evidenceObservedAt: null,
@@ -67,6 +68,7 @@ const detail: LeadDetail = {
   nextAction: null,
   optedOut: false,
   cadence: null,
+  outboundAttempts: [],
   activities: [],
   conversations: [],
   properties: [],
