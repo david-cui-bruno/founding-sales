@@ -88,7 +88,9 @@ export function scanWithGitleaks({ root, target, kind, temporary, run = spawnSyn
   writeFileSync(report, '', { mode: 0o600, flag: 'wx' });
   const ignore = resolve(temporary, 'empty-ignore');
   if (!existsSync(ignore)) writeFileSync(ignore, '', { mode: 0o600, flag: 'wx' });
-  const args = [kind === 'history' ? 'git' : 'dir', '--redact=100', '--no-banner', '--no-color', '--config', resolve(root, '.gitleaks.toml'), '--ignore-gitleaks-allow', '--gitleaks-ignore-path', ignore, '--report-format', 'json', '--report-path', report, '--max-target-megabytes', '0', '--max-archive-depth', '5', '--max-decode-depth', '5', '--timeout', '600', ...(kind === 'history' ? ['--log-opts=--all --full-history -m'] : []), input];
+  // Gitleaks can exit 0 with partial results when its own deadline expires.
+  // Disable it and rely on execute's finite, checked parent error/signal timeout.
+  const args = [kind === 'history' ? 'git' : 'dir', '--redact=100', '--no-banner', '--no-color', '--config', resolve(root, '.gitleaks.toml'), '--ignore-gitleaks-allow', '--gitleaks-ignore-path', ignore, '--report-format', 'json', '--report-path', report, '--max-target-megabytes', '0', '--max-archive-depth', '5', '--max-decode-depth', '5', '--timeout', '0', ...(kind === 'history' ? ['--log-opts=--all --full-history -m'] : []), input];
   const result = execute('gitleaks', args, cwd, run);
   if (result.error || result.signal || ![0, 1].includes(result.status)) fail();
   const findings = JSON.parse(readFileSync(report, 'utf8'));

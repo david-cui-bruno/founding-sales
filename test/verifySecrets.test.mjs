@@ -47,13 +47,19 @@ it('rejects a missing scanner without a fallback', async () => {
   expect(() => verifySecrets({ root, run: () => { calls++; return { error: new Error('PRIVATE-MISSING'), status: null }; } })).toThrow('SECRET_VERIFICATION_FAILED');
   expect(calls).toBe(1);
 });
-it.each(['timeout', 'empty-success-report', 'findings-with-zero', 'clean-with-one'])('rejects scanner protocol failure: %s', async mode => {
+it.each(['timeout', 'parent-signal', 'empty-success-report', 'findings-with-zero', 'clean-with-one'])('rejects scanner protocol failure: %s', async mode => {
   const { root } = await fixture(); const temporary = join(root, 'reports'); mkdirSync(temporary, { mode: 0o700 });
   const run = (_command, args) => {
     writeFileSync(args[args.indexOf('--report-path') + 1], mode === 'empty-success-report' ? '' : mode === 'findings-with-zero' ? '[{"RuleID":"synthetic"}]' : '[]');
-    return { status: mode === 'clean-with-one' ? 1 : 0, ...(mode === 'timeout' ? { error: new Error('PRIVATE-TIMEOUT') } : {}) };
+    return {
+      status: mode === 'clean-with-one' ? 1 : 0,
+      ...(mode === 'timeout' ? { error: Object.assign(new Error('PRIVATE-TIMEOUT'), { code: 'ETIMEDOUT' }) } : {}),
+      ...(mode === 'parent-signal' ? { signal: 'SIGTERM' } : {}),
+    };
   };
-  expect(() => scanWithGitleaks({ root, target: root, kind: 'context', temporary, run })).toThrow();
+  const checked = expect(() => scanWithGitleaks({ root, target: root, kind: 'context', temporary, run }));
+  if (mode === 'timeout' || mode === 'parent-signal') checked.toThrowError(new Error('SECRET_VERIFICATION_FAILED'));
+  else checked.toThrow();
 });
 it.each(['history', 'context', 'package'])('keeps %s command roots separate from absolute configuration and private reports', kind => {
   const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'scan-cwd-')); roots.push(root);
@@ -77,6 +83,9 @@ it.each(['history', 'context', 'package'])('keeps %s command roots separate from
   expect(args[args.indexOf('--report-path') + 1]).toBe(join(temporary, `${kind}.json`));
   expect(args[args.indexOf('--gitleaks-ignore-path') + 1]).toBe(join(temporary, 'empty-ignore'));
   expect(args).toContain('--redact=100'); expect(args).toContain('--ignore-gitleaks-allow');
+  expect(args.filter(arg => arg === '--timeout')).toHaveLength(1);
+  expect(args[args.indexOf('--timeout') + 1]).toBe('0');
+  expect(options.timeout).toBe(660_000);
   expect(options.shell).toBe(false);
 });
 it.each(['symlink', 'file', 'nonprivate'])('rejects a %s directory scan target before invoking the scanner', kind => {

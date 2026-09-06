@@ -11,6 +11,69 @@ import { scanWithGitleaks, verifySecrets } from '../scripts/verifySecrets.mjs';
 // Public deterministic seeds produce unissued alphanumeric controls above 4.5.
 const syntheticPat = label => 'ghp_' + createHash('sha256').update(`Task12 unissued fixture ${label}`).digest('base64').replace(/[+/]/g, 'x').slice(0, 36);
 
+it('rejects a real owned deadline instead of accepting Gitleaks internal partial-success output', () => {
+  const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'gitleaks-timeout-'));
+  const stage = join(root, 'input'); mkdirSync(stage, { mode: 0o700 });
+  const file = join(stage, 'synthetic.txt');
+  const filler = 'token = "' + 'a'.repeat(32) + '"\n';
+  let sequence = 0;
+  const scan = ({ internalSeconds, parentMs }) => {
+    const temporary = join(root, `reports-${sequence++}`); mkdirSync(temporary, { mode: 0o700 });
+    let observed, output, failure;
+    const run = (command, args, options) => {
+      expect(options.timeout).toBe(660_000);
+      const bounded = [...args];
+      if (internalSeconds !== undefined) bounded[bounded.indexOf('--timeout') + 1] = String(internalSeconds);
+      const result = spawnSync(command, bounded, { ...options, timeout: parentMs });
+      observed = {
+        configuredInternal: args[args.indexOf('--timeout') + 1],
+        status: result.status, errorCode: result.error?.code, signal: result.signal,
+      };
+      // A killed scanner can remove or truncate its report. Preserve its actual
+      // process result without letting diagnostic report reads mask the error.
+      if (result.error || result.signal) return result;
+      const findings = JSON.parse(readFileSync(args[args.indexOf('--report-path') + 1], 'utf8'));
+      // Inspect only protocol metadata. Never retain or emit Secret/Match values.
+      observed.findings = findings.length;
+      observed.sentinelFound = findings.some(item => item.File === 'synthetic.txt' && item.RuleID === 'github-pat');
+      return result;
+    };
+    try { output = scanWithGitleaks({ root: process.cwd(), target: stage, kind: 'context', temporary, run }); }
+    catch (error) { failure = error; }
+    return { observed, output, failure };
+  };
+  try {
+    expect(execFileSync('gitleaks', ['version'], { encoding: 'utf8' }).trim()).toBe('8.30.1');
+    // Adapt only within three fixed sizes (2.15/4.30/8.60 MB), never to elapsed
+    // time assertions. Faster hosts may need more filler to expose partial exit0.
+    let legacy;
+    for (const repetitions of [50_000, 100_000, 200_000]) {
+      writeFileSync(file, filler.repeat(repetitions) + `\ntoken = "${syntheticPat('timeout')}"\n`, { mode: 0o600 });
+      legacy = scan({ internalSeconds: 1, parentMs: 10_000 });
+      expect(legacy.failure).toBeUndefined();
+      if (legacy.output.status === 'passed') break;
+    }
+    expect(legacy.output).toEqual({ kind: 'context', status: 'passed', findings: 0 });
+    expect(legacy.observed).toMatchObject({ status: 0, errorCode: undefined, signal: null, findings: 0, sentinelFound: false });
+    const digest = () => createHash('sha256').update(readFileSync(file)).digest('hex');
+    const before = digest();
+    // Same bytes and detectors, with the documented internal deadline disabled.
+    const completed = scan({ internalSeconds: 0, parentMs: 30_000 });
+    expect(completed.failure).toBeUndefined();
+    expect(completed.output).toEqual({ kind: 'context', status: 'findings', findings: 1 });
+    expect(completed.observed).toMatchObject({ status: 1, errorCode: undefined, signal: null, sentinelFound: true });
+    // Exercise the actual caller's unchanged argv, shortening only its owned
+    // parent deadline. No fake exit status, error, signal or report is returned.
+    const limited = scan({ parentMs: 100 });
+    expect.soft(limited.observed.configuredInternal).toBe('0');
+    expect(limited.observed.errorCode).toBe('ETIMEDOUT');
+    expect(limited.output).toBeUndefined();
+    expect(limited.failure).toEqual(new Error('SECRET_VERIFICATION_FAILED'));
+    expect(digest()).toBe(before);
+    console.log(JSON.stringify({ realScannerTimeout: true, fixtureBytes: readFileSync(file).length, legacyIncompleteExit: 0, completedSentinelDetected: true, parentError: limited.observed.errorCode, parentSignal: limited.observed.signal, parentFailureClosed: true }));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 60_000);
+
 it('disposes only the exact full source span, path and generic rule with real pinned Gitleaks', () => {
   const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'gitleaks-span-'));
   const exactPath = 'cloud/scripts/bootstrap-terraform-state.sh';
