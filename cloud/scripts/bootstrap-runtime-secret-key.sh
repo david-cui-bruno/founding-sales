@@ -87,21 +87,49 @@ receipt_key_arn=$(read_receipt_value key_arn)
 }
 actual_key_id=$(aws kms describe-key --key-id "$alias_name" --region "$region" --query KeyMetadata.KeyId --output text)
 [[ "$actual_key_id" == "$receipt_key_id" ]] || { echo "runtime-key alias target changed" >&2; exit 1; }
+actual_key_arn=$(aws kms describe-key --key-id "$alias_name" --region "$region" --query KeyMetadata.Arn --output text)
+[[ "$actual_key_arn" == "$receipt_key_arn" ]] || { echo "runtime-key alias ARN changed" >&2; exit 1; }
 rotation_enabled=$(aws kms get-key-rotation-status --key-id "$receipt_key_id" --region "$region" --query KeyRotationEnabled --output text)
 [[ "$rotation_enabled" == "True" ]] || { echo "runtime-key rotation is not enabled" >&2; exit 1; }
+account_id=$(cut -d: -f5 <<<"$receipt_key_arn")
+[[ "$receipt_key_arn" == "arn:aws:kms:${region}:${account_id}:key/${receipt_key_id}" && "$account_id" =~ ^[0-9]{12}$ ]] || {
+  echo "runtime-key receipt ARN is not canonical" >&2
+  exit 1
+}
 
 for mapping in "${parameter_names[@]}"; do
   parameter=${mapping#*=}
-  key_id=$(aws ssm get-parameter --name "$parameter" --region "$region" --query Parameter.KeyId --output text)
-  [[ "$key_id" == "$alias_name" || "$key_id" == "$receipt_key_id" || "$key_id" == "$receipt_key_arn" ]] || {
+  expected_parameter_arn="arn:aws:ssm:${region}:${account_id}:parameter${parameter}"
+  metadata_output=$(aws ssm describe-parameters \
+    --parameter-filters "Key=Name,Option=Equals,Values=${parameter}" \
+    --region "$region" \
+    --query 'Parameters[].[Name,Type,KeyId,ARN]' \
+    --output text)
+  metadata_row_count=$(printf '%s\n' "$metadata_output" | awk 'NF { count += 1 } END { print count + 0 }')
+  [[ "$metadata_row_count" -eq 1 ]] || {
+    echo "parameter metadata did not resolve to exactly one row" >&2
+    exit 1
+  }
+  IFS=$'\t' read -r metadata_name metadata_type metadata_key_id metadata_arn <<<"$metadata_output"
+  [[ "$metadata_name" == "$parameter" && "$metadata_type" == "SecureString" && "$metadata_arn" == "$expected_parameter_arn" ]] || {
+    echo "parameter metadata identity or type mismatch" >&2
+    exit 1
+  }
+  metadata_key_id=$(aws kms describe-key --key-id "$metadata_key_id" --region "$region" --query KeyMetadata.KeyId --output text)
+  metadata_key_arn=$(aws kms describe-key --key-id "$metadata_key_id" --region "$region" --query KeyMetadata.Arn --output text)
+  [[ "$metadata_key_id" == "$receipt_key_id" && "$metadata_key_arn" == "$receipt_key_arn" ]] || {
     echo "parameter is not encrypted by the prepared runtime key" >&2
     exit 1
   }
-  aws ssm get-parameter \
+  decrypted_parameter_arn=$(aws ssm get-parameter \
     --name "$parameter" \
     --with-decryption \
     --region "$region" \
     --query Parameter.ARN \
-    --output text >/dev/null
+    --output text)
+  [[ "$decrypted_parameter_arn" == "$expected_parameter_arn" ]] || {
+    echo "decrypted parameter identity mismatch" >&2
+    exit 1
+  }
 done
 echo "all runtime parameter identifiers and decrypt access prevalidated; no values displayed" >&2

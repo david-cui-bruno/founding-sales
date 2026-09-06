@@ -1,101 +1,222 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+receipt_format="callie-terraform-state-bootstrap"
+receipt_version="1"
+expected_account_id="326255650484"
+expected_table="callie-sourcing-tflock"
+ownership_marker="terraform-state-v1"
+
 usage() {
-  echo "usage: $0 --create <bucket> <lock-table> <region> <kms-key-id> <recovery-receipt> | --recover <recovery-receipt>" >&2
+  echo "usage: $0 --create <region> <kms-key-arn> <recovery-receipt> | --recover <recovery-receipt>" >&2
   exit 1
 }
 
-cleanup_bucket=false
-cleanup_table=false
-bucket_name=""
-lock_table_name=""
-region=""
 receipt=""
+account_id="$expected_account_id"
+region=""
+run_id=""
+bucket_name=""
+lock_table_name="$expected_table"
+kms_key_arn=""
+bucket_phase="absent"
+table_phase="absent"
 
 write_receipt() {
   umask 077
-  printf 'bucket=%s\ntable=%s\nregion=%s\ncleanup_bucket=%s\ncleanup_table=%s\n' \
-    "$bucket_name" "$lock_table_name" "$region" "$cleanup_bucket" "$cleanup_table" >"$receipt"
+  printf 'format=%s\nversion=%s\naccount_id=%s\nregion=%s\nrun_id=%s\nbucket=%s\ntable=%s\nkms_key_arn=%s\nbucket_phase=%s\ntable_phase=%s\n' \
+    "$receipt_format" "$receipt_version" "$account_id" "$region" "$run_id" \
+    "$bucket_name" "$lock_table_name" "$kms_key_arn" "$bucket_phase" "$table_phase" >"$receipt"
   chmod 0600 "$receipt"
 }
 
-cleanup_resources() {
+receipt_value() {
+  local key=$1
+  awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$receipt"
+}
+
+validate_receipt() {
+  [[ -f "$receipt" && ! -L "$receipt" ]] || { echo "missing regular nonsymlink recovery receipt" >&2; return 1; }
+  [[ "$(stat -f '%Lp' "$receipt")" == "600" ]] || { echo "receipt must be mode 0600" >&2; return 1; }
+
+  local observed_format observed_version expected_bucket
+  observed_format=$(receipt_value format)
+  observed_version=$(receipt_value version)
+  account_id=$(receipt_value account_id)
+  region=$(receipt_value region)
+  run_id=$(receipt_value run_id)
+  bucket_name=$(receipt_value bucket)
+  lock_table_name=$(receipt_value table)
+  kms_key_arn=$(receipt_value kms_key_arn)
+  bucket_phase=$(receipt_value bucket_phase)
+  table_phase=$(receipt_value table_phase)
+  expected_bucket="callie-sourcing-tfstate-${account_id}"
+
+  [[ "$observed_format" == "$receipt_format" && "$observed_version" == "$receipt_version" ]] || {
+    echo "invalid bootstrap receipt format or version" >&2; return 1;
+  }
+  [[ "$account_id" == "$expected_account_id" && "$region" == "us-east-1" ]] || {
+    echo "receipt account or region does not match the approved target" >&2; return 1;
+  }
+  [[ "$run_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || {
+    echo "invalid canonical bootstrap run id" >&2; return 1;
+  }
+  [[ "$bucket_name" == "$expected_bucket" && "$lock_table_name" == "$expected_table" ]] || {
+    echo "receipt resource names do not match exact expected names" >&2; return 1;
+  }
+  [[ "$kms_key_arn" =~ ^arn:aws:kms:us-east-1:${expected_account_id}:key/[0-9a-f-]{36}$ ]] || {
+    echo "receipt KMS key ARN is not canonical for the approved account" >&2; return 1;
+  }
+  [[ "$bucket_phase" =~ ^(absent|pending|owned|verified)$ && "$table_phase" =~ ^(absent|pending|owned|verified)$ ]] || {
+    echo "receipt contains an invalid resource phase" >&2; return 1;
+  }
+}
+
+verify_bucket_ownership() {
+  local run_tag owner_tag
+  run_tag=$(aws s3api get-bucket-tagging --bucket "$bucket_name" \
+    --query "TagSet[?Key=='CallieBootstrapRunId'].Value | [0]" --output text 2>/dev/null) || return 1
+  owner_tag=$(aws s3api get-bucket-tagging --bucket "$bucket_name" \
+    --query "TagSet[?Key=='CallieBootstrap'].Value | [0]" --output text 2>/dev/null) || return 1
+  [[ "$run_tag" == "$run_id" && "$owner_tag" == "$ownership_marker" ]]
+}
+
+verify_table_ownership() {
+  local table_arn run_tag owner_tag
+  table_arn=$(aws dynamodb describe-table --table-name "$lock_table_name" --region "$region" \
+    --query Table.TableArn --output text 2>/dev/null) || return 1
+  run_tag=$(aws dynamodb list-tags-of-resource --resource-arn "$table_arn" \
+    --query "Tags[?Key=='CallieBootstrapRunId'].Value | [0]" --output text 2>/dev/null) || return 1
+  owner_tag=$(aws dynamodb list-tags-of-resource --resource-arn "$table_arn" \
+    --query "Tags[?Key=='CallieBootstrap'].Value | [0]" --output text 2>/dev/null) || return 1
+  [[ "$run_tag" == "$run_id" && "$owner_tag" == "$ownership_marker" ]]
+}
+
+reconcile_bucket() {
+  local output
+  if aws s3api head-bucket --bucket "$bucket_name" >/dev/null 2>&1; then
+    if ! verify_bucket_ownership; then
+      echo "ambiguous bucket ownership; retaining recovery receipt" >&2
+      return 1
+    fi
+    bucket_phase="owned"
+    write_receipt
+    verify_bucket_ownership || { echo "bucket ownership changed before delete; retaining recovery receipt" >&2; return 1; }
+    aws s3api delete-bucket --bucket "$bucket_name" --region "$region"
+    bucket_phase="absent"
+    write_receipt
+    return 0
+  fi
+  output=$(aws s3api head-bucket --bucket "$bucket_name" 2>&1 || true)
+  if grep -Eq "(404|Not Found|NoSuchBucket)" <<<"$output"; then
+    bucket_phase="absent"
+    write_receipt
+    return 0
+  fi
+  echo "ambiguous bucket existence; retaining recovery receipt" >&2
+  return 1
+}
+
+reconcile_table() {
+  local output table_arn
+  if table_arn=$(aws dynamodb describe-table --table-name "$lock_table_name" --region "$region" \
+    --query Table.TableArn --output text 2>/dev/null); then
+    [[ -n "$table_arn" && "$table_arn" != "None" ]] || { echo "ambiguous lock-table identity; retaining recovery receipt" >&2; return 1; }
+    if ! verify_table_ownership; then
+      echo "ambiguous lock-table ownership; retaining recovery receipt" >&2
+      return 1
+    fi
+    table_phase="owned"
+    write_receipt
+    verify_table_ownership || { echo "lock-table ownership changed before delete; retaining recovery receipt" >&2; return 1; }
+    aws dynamodb delete-table --table-name "$lock_table_name" --region "$region" >/dev/null
+    aws dynamodb wait table-not-exists --table-name "$lock_table_name" --region "$region"
+    table_phase="absent"
+    write_receipt
+    return 0
+  fi
+  output=$(aws dynamodb describe-table --table-name "$lock_table_name" --region "$region" 2>&1 || true)
+  if grep -q "ResourceNotFoundException" <<<"$output"; then
+    table_phase="absent"
+    write_receipt
+    return 0
+  fi
+  echo "ambiguous lock-table existence; retaining recovery receipt" >&2
+  return 1
+}
+
+recover_resources() {
   local failed=false
-  if [[ "$cleanup_table" == true ]]; then
-    if aws dynamodb delete-table --table-name "$lock_table_name" --region "$region" >/dev/null &&
-      aws dynamodb wait table-not-exists --table-name "$lock_table_name" --region "$region"; then
-      cleanup_table=false
-    else
-      failed=true
-    fi
-  fi
-  if [[ "$cleanup_bucket" == true ]]; then
-    if aws s3api delete-bucket --bucket "$bucket_name" --region "$region" >/dev/null; then
-      cleanup_bucket=false
-    else
-      failed=true
-    fi
-  fi
-  write_receipt
-  [[ "$failed" == false ]]
+  reconcile_table || failed=true
+  reconcile_bucket || failed=true
+  [[ "$failed" == false && "$table_phase" == "absent" && "$bucket_phase" == "absent" ]]
 }
 
 cleanup_on_failure() {
   trap - ERR INT TERM
-  cleanup_resources || true
-  echo "bootstrap failed; inspect the recovery receipt and run --recover before retrying" >&2
+  recover_resources || {
+    echo "automatic cleanup is ambiguous or incomplete; retaining recovery receipt" >&2
+    exit 1
+  }
+  echo "automatic cleanup completed; retaining recovery receipt as evidence" >&2
   exit 1
 }
 
-recover() {
-  receipt=$1
-  [[ -f "$receipt" && ! -L "$receipt" ]] || { echo "missing regular recovery receipt" >&2; exit 1; }
-  bucket_name=$(awk -F= '$1=="bucket" {print $2}' "$receipt")
-  lock_table_name=$(awk -F= '$1=="table" {print $2}' "$receipt")
-  region=$(awk -F= '$1=="region" {print $2}' "$receipt")
-  cleanup_bucket=$(awk -F= '$1=="cleanup_bucket" {print $2}' "$receipt")
-  cleanup_table=$(awk -F= '$1=="cleanup_table" {print $2}' "$receipt")
-  [[ -n "$bucket_name" && -n "$lock_table_name" && -n "$region" ]] || usage
-  if cleanup_resources; then
-    rm -f -- "$receipt"
-    echo "recovery cleanup completed" >&2
-    exit 0
-  fi
-  echo "recovery cleanup remains incomplete; retain the recovery receipt" >&2
-  exit 1
+verify_postconditions() {
+  local public_block versioning bucket_encryption observed_table_status observed_table_sse observed_table_kms_arn
+  verify_bucket_ownership || return 1
+  verify_table_ownership || return 1
+  public_block=$(aws s3api get-public-access-block --bucket "$bucket_name" \
+    --query 'PublicAccessBlockConfiguration.[BlockPublicAcls,IgnorePublicAcls,BlockPublicPolicy,RestrictPublicBuckets]' --output text) || return 1
+  [[ "$public_block" == $'True\tTrue\tTrue\tTrue' ]] || return 1
+  versioning=$(aws s3api get-bucket-versioning --bucket "$bucket_name" --query Status --output text) || return 1
+  [[ "$versioning" == "Enabled" ]] || return 1
+  bucket_encryption=$(aws s3api get-bucket-encryption --bucket "$bucket_name" \
+    --query 'ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.[SSEAlgorithm,KMSMasterKeyID]' --output text) || return 1
+  [[ "$bucket_encryption" == $'aws:kms\t'"$kms_key_arn" ]] || return 1
+  observed_table_status=$(aws dynamodb describe-table --table-name "$lock_table_name" --region "$region" --query Table.TableStatus --output text) || return 1
+  observed_table_sse=$(aws dynamodb describe-table --table-name "$lock_table_name" --region "$region" --query Table.SSEDescription.Status --output text) || return 1
+  observed_table_kms_arn=$(aws dynamodb describe-table --table-name "$lock_table_name" --region "$region" --query Table.SSEDescription.KMSMasterKeyArn --output text) || return 1
+  [[ "$observed_table_status" == "ACTIVE" && "$observed_table_sse" == "ENABLED" ]] || return 1
+  [[ "$observed_table_kms_arn" == "$kms_key_arn" ]] || return 1
 }
 
 [[ $# -ge 2 ]] || usage
 if [[ $1 == "--recover" ]]; then
   [[ $# -eq 2 ]] || usage
-  recover "$2"
+  receipt=$2
+  validate_receipt
+  [[ "$bucket_phase" != "verified" && "$table_phase" != "verified" ]] || {
+    echo "verified resources are not eligible for recovery deletion; retaining recovery receipt" >&2
+    exit 1
+  }
+  if recover_resources; then
+    echo "recovery reconciliation completed; retaining recovery receipt as evidence" >&2
+    exit 0
+  fi
+  echo "recovery remains ambiguous or incomplete; retaining recovery receipt" >&2
+  exit 1
 fi
-[[ $1 == "--create" && $# -eq 6 ]] || usage
-bucket_name=$2
-lock_table_name=$3
-region=$4
-state_kms_key_id=$5
-receipt=$6
-for value in "$bucket_name" "$lock_table_name" "$region" "$state_kms_key_id" "$receipt"; do
-  [[ -n "$value" ]] || usage
-done
-[[ ! -e "$receipt" && ! -L "$receipt" ]] || { echo "refusing to overwrite recovery receipt" >&2; exit 1; }
 
-bucket_check=$(aws s3api head-bucket --bucket "$bucket_name" 2>&1) && {
-  echo "refusing to overwrite existing state bucket" >&2; exit 1;
+[[ $1 == "--create" && $# -eq 4 ]] || usage
+region=$2
+kms_key_arn=$3
+receipt=$4
+[[ "$region" == "us-east-1" ]] || { echo "state bootstrap region must be us-east-1" >&2; exit 1; }
+[[ "$kms_key_arn" =~ ^arn:aws:kms:us-east-1:${expected_account_id}:key/[0-9a-f-]{36}$ ]] || {
+  echo "state KMS key ARN must be canonical for the approved account" >&2; exit 1;
 }
-grep -Eq "(404|Not Found|NoSuchBucket)" <<<"$bucket_check" || {
-  echo "unable to verify that the state bucket is absent" >&2; exit 1;
+[[ ! -e "$receipt" && ! -L "$receipt" ]] || { echo "refusing to overwrite recovery receipt" >&2; exit 1; }
+run_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+[[ "$run_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || {
+  echo "uuidgen did not produce a canonical version-4 run id" >&2; exit 1;
 }
-table_check=$(aws dynamodb describe-table --table-name "$lock_table_name" --region "$region" 2>&1) && {
-  echo "refusing to overwrite existing lock table" >&2; exit 1;
-}
-grep -q "ResourceNotFoundException" <<<"$table_check" || {
-  echo "unable to verify that the lock table is absent" >&2; exit 1;
-}
+bucket_name="callie-sourcing-tfstate-${account_id}"
+write_receipt
+validate_receipt
 
 trap cleanup_on_failure ERR INT TERM
+bucket_phase="pending"
 write_receipt
 if [[ "$region" == "us-east-1" ]]; then
   aws s3api create-bucket --bucket "$bucket_name" --region "$region"
@@ -103,37 +224,33 @@ else
   aws s3api create-bucket --bucket "$bucket_name" --region "$region" \
     --create-bucket-configuration "LocationConstraint=$region"
 fi
-cleanup_bucket=true
+aws s3api put-bucket-tagging --bucket "$bucket_name" --tagging \
+  "TagSet=[{Key=CallieBootstrapRunId,Value=${run_id}},{Key=CallieBootstrap,Value=${ownership_marker}}]"
+bucket_phase="owned"
 write_receipt
 aws s3api put-public-access-block --bucket "$bucket_name" \
   --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 aws s3api put-bucket-versioning --bucket "$bucket_name" --versioning-configuration Status=Enabled
 aws s3api put-bucket-encryption --bucket "$bucket_name" \
-  --server-side-encryption-configuration "Rules=[{ApplyServerSideEncryptionByDefault={SSEAlgorithm=aws:kms,KMSMasterKeyID=$state_kms_key_id},BucketKeyEnabled=true}]"
+  --server-side-encryption-configuration "Rules=[{ApplyServerSideEncryptionByDefault={SSEAlgorithm=aws:kms,KMSMasterKeyID=$kms_key_arn},BucketKeyEnabled=true}]"
 
+table_phase="pending"
+write_receipt
 aws dynamodb create-table --table-name "$lock_table_name" --region "$region" \
   --attribute-definitions AttributeName=LockID,AttributeType=S \
   --key-schema AttributeName=LockID,KeyType=HASH --billing-mode PAY_PER_REQUEST \
-  --sse-specification Enabled=true,SSEType=KMS,KMSMasterKeyId="$state_kms_key_id"
-cleanup_table=true
+  --sse-specification Enabled=true,SSEType=KMS,KMSMasterKeyId="$kms_key_arn" \
+  --tags Key=CallieBootstrapRunId,Value="$run_id" Key=CallieBootstrap,Value="$ownership_marker"
+table_phase="owned"
 write_receipt
 aws dynamodb wait table-exists --table-name "$lock_table_name" --region "$region"
 
-public_block=$(aws s3api get-public-access-block --bucket "$bucket_name" \
-  --query 'PublicAccessBlockConfiguration.[BlockPublicAcls,IgnorePublicAcls,BlockPublicPolicy,RestrictPublicBuckets]' --output text)
-[[ "$public_block" == $'True\tTrue\tTrue\tTrue' ]] || { echo "state bucket public access block verification failed" >&2; exit 1; }
-[[ "$(aws s3api get-bucket-versioning --bucket "$bucket_name" --query Status --output text)" == "Enabled" ]] || {
-  echo "state bucket versioning verification failed" >&2; exit 1;
-}
-encryption=$(aws s3api get-bucket-encryption --bucket "$bucket_name" \
-  --query 'ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.[SSEAlgorithm,KMSMasterKeyID]' --output text)
-[[ "$encryption" == $'aws:kms\t'"$state_kms_key_id" ]] || { echo "state bucket encryption verification failed" >&2; exit 1; }
-table_state=$(aws dynamodb describe-table --table-name "$lock_table_name" --region "$region" \
-  --query 'Table.[TableStatus,SSEDescription.Status,SSEDescription.KMSMasterKeyArn]' --output text)
-[[ "$table_state" == ACTIVE$'\t'ENABLED$'\t'* ]] || { echo "lock table readiness or SSE verification failed" >&2; exit 1; }
-
-cleanup_bucket=false
-cleanup_table=false
-write_receipt
 trap - ERR INT TERM
+if ! verify_postconditions; then
+  echo "postcondition verification failed; retaining recovery receipt" >&2
+  exit 1
+fi
+bucket_phase="verified"
+table_phase="verified"
+write_receipt
 echo "verified state storage created; retain the recovery receipt and stop before migration" >&2

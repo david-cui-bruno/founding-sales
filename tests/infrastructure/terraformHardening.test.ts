@@ -823,8 +823,8 @@ describe("managed secret and remote state preparation", () => {
     expect(script).toContain("aws dynamodb describe-table");
     expect(script).toContain("NoSuchBucket");
     expect(script).toContain("ResourceNotFoundException");
-    expect(script).toContain("unable to verify that the state bucket is absent");
-    expect(script).toContain("unable to verify that the lock table is absent");
+    expect(script).toContain("ambiguous bucket existence; retaining recovery receipt");
+    expect(script).toContain("ambiguous lock-table existence; retaining recovery receipt");
     expect(script).toContain("trap cleanup_on_failure ERR INT TERM");
     expect(script).toContain("wait table-exists");
     expect(script).toContain("get-public-access-block");
@@ -833,8 +833,8 @@ describe("managed secret and remote state preparation", () => {
     expect(script).toContain("describe-table");
     expect(script).toContain("--recover");
     expect(script).toContain("recovery receipt");
-    expect(script).toContain("recovery cleanup completed");
-    expect(script).toContain("rm -f -- \"$receipt\"");
+    expect(script).toContain("recovery reconciliation completed");
+    expect(script).not.toContain("rm -f -- \"$receipt\"");
     expect(script).toContain("put-bucket-encryption");
     expect(script).toContain("put-bucket-versioning");
     expect(script).toContain("put-public-access-block");
@@ -845,6 +845,65 @@ describe("managed secret and remote state preparation", () => {
     expect(readme).toContain("second explicit confirmation");
     expect(readme).toContain("tofu init -migrate-state");
     expect(readme).toContain("No apply is authorized");
+  });
+
+  it("persists pending ownership before create and guards recovery deletion with resource tags", () => {
+    const script = readFileSync(join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh"), "utf8");
+    const bucketPending = script.indexOf('bucket_phase="pending"');
+    const bucketCreate = script.indexOf("aws s3api create-bucket");
+    const bucketTag = script.indexOf("aws s3api put-bucket-tagging");
+    const bucketControls = script.indexOf("aws s3api put-public-access-block");
+    const tablePending = script.indexOf('table_phase="pending"');
+    const tableCreate = script.indexOf("aws dynamodb create-table");
+
+    expect(bucketPending).toBeGreaterThan(0);
+    expect(bucketPending).toBeLessThan(bucketCreate);
+    expect(bucketTag).toBeGreaterThan(bucketCreate);
+    expect(bucketTag).toBeLessThan(bucketControls);
+    expect(tablePending).toBeGreaterThan(0);
+    expect(tablePending).toBeLessThan(tableCreate);
+    expect(script.slice(tableCreate, script.indexOf("\n\n", tableCreate))).toContain("--tags");
+    expect(script).toContain("CallieBootstrapRunId");
+    expect(script).toContain('ownership_marker="terraform-state-v1"');
+    expect(script).toContain("Key=CallieBootstrap,Value=${ownership_marker}");
+    expect(script).toContain("get-bucket-tagging");
+    expect(script).toContain("list-tags-of-resource");
+
+    const bucketOwnership = script.indexOf("verify_bucket_ownership");
+    const bucketDelete = script.indexOf("aws s3api delete-bucket");
+    const tableOwnership = script.indexOf("verify_table_ownership");
+    const tableDelete = script.indexOf("aws dynamodb delete-table");
+    expect(bucketOwnership).toBeGreaterThan(0);
+    expect(bucketOwnership).toBeLessThan(bucketDelete);
+    expect(tableOwnership).toBeGreaterThan(0);
+    expect(tableOwnership).toBeLessThan(tableDelete);
+  });
+
+  it("validates the versioned private receipt and retains it for ambiguous recovery", () => {
+    const script = readFileSync(join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh"), "utf8");
+    for (const field of [
+      'receipt_format="callie-terraform-state-bootstrap"', 'receipt_version="1"',
+      "account_id=", "region=", "run_id=", "bucket=", "table=", "kms_key_arn=",
+      "bucket_phase=", "table_phase=",
+    ]) expect(script).toContain(field);
+    expect(script).toContain("receipt must be mode 0600");
+    expect(script).toContain("invalid bootstrap receipt format or version");
+    expect(script).toContain("invalid canonical bootstrap run id");
+    expect(script).toContain('expected_bucket="callie-sourcing-tfstate-${account_id}"');
+    expect(script).toContain('expected_table="callie-sourcing-tflock"');
+    expect(script).toContain("ambiguous bucket ownership; retaining recovery receipt");
+    expect(script).toContain("ambiguous lock-table ownership; retaining recovery receipt");
+    expect(script).not.toMatch(/ambiguous[\s\S]{0,200}rm -f -- "\$receipt"/);
+  });
+
+  it("requires every state postcondition and exact lock-table KMS ARN", () => {
+    const script = readFileSync(join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh"), "utf8");
+    expect(script).toContain("get-public-access-block");
+    expect(script).toContain("get-bucket-versioning");
+    expect(script).toContain("get-bucket-encryption");
+    expect(script).toContain("Table.SSEDescription.KMSMasterKeyArn");
+    expect(script).toContain('[[ "$observed_table_kms_arn" == "$kms_key_arn" ]]');
+    expect(script).toContain("postcondition verification failed; retaining recovery receipt");
   });
 
   it("documents staged runtime-key and all-parameter prevalidation before Lambda cutover", () => {
@@ -868,11 +927,21 @@ describe("managed secret and remote state preparation", () => {
     expect(script).toContain("describe-key");
     expect(script).toContain("get-key-rotation-status");
     expect(script).toContain("get-parameter");
+    expect(script).toContain("describe-parameters");
+    expect(script).toContain("Parameters[].[Name,Type,KeyId,ARN]");
+    expect(script).not.toContain("--query Parameter.KeyId");
+    expect(script).toContain("expected_parameter_arn");
+    expect(script).toContain('[[ "$metadata_row_count" -eq 1 ]]');
+    expect(script).toContain("metadata_type");
+    expect(script).toContain('"SecureString"');
+    expect(script).not.toContain("mapfile");
     expect(script).toContain("TRACERFY_API_KEY_PARAM");
     expect(script).toContain("NTFY_TOPIC_PARAM");
     expect(script).toContain("HMAC_SALT_PARAM");
     expect(script).toContain("--verify-parameters");
     expect(script).toContain("receipt_key_arn");
+    expect(script).toContain('[[ "$actual_key_arn" == "$receipt_key_arn" ]]');
+    expect(script).toContain("metadata_key_arn");
     expect(readme).toContain("Stage A: prepare and verify the runtime key");
     expect(readme).toContain("Stage B: enter and prevalidate all three parameters");
     expect(readme).toContain("Stage C: cut over IAM and Lambda identifiers");
