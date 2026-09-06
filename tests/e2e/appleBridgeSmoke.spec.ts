@@ -10,10 +10,10 @@ import {
   assertPackagedDescendantsExit,
   describeProcessExit,
   snapshotPackagedProcessTree,
-  terminatePackagedApplication,
   waitForPackagedChildProcess,
   type PackagedProcessEntry,
 } from '../support/packagedApplication';
+import { createPackagedTestEnvironment, type PackagedTestEnvironment } from '../support/packagedTestEnvironment';
 
 const packagedApplication = join(
   process.cwd(),
@@ -28,6 +28,7 @@ const packagedApplication = join(
 test('packaged Apple helper handshakes and exits without permission or communication actions', async () => {
   let userDataPath: string | undefined;
   let application: ChildProcess | undefined;
+  let environment: PackagedTestEnvironment | undefined;
   let browser: Browser | undefined;
   let trackedDescendants: PackagedProcessEntry[] = [];
   let spawnError: Error | undefined;
@@ -37,12 +38,13 @@ test('packaged Apple helper handshakes and exits without permission or communica
     expect(existsSync(packagedApplication)).toBe(true);
     userDataPath = await mkdtemp(join(tmpdir(), 'callie-apple-smoke-e2e-'));
     const debuggingPort = await availablePort();
-    application = spawn(packagedApplication, [
+    environment = await createPackagedTestEnvironment();
+    application = environment.capture(spawn(packagedApplication, [
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,
       '--use-mock-keychain',
       '--apple-feasibility-spike',
-    ]);
+    ], { env: environment.env }));
     application.once('error', (error) => {
       spawnError = error;
     });
@@ -128,7 +130,9 @@ test('packaged Apple helper handshakes and exits without permission or communica
               // still receive exact instance-safe cleanup verification below.
             }
           }
-          await terminatePackagedApplication(application);
+        }
+        await environment?.cleanup();
+        if (application?.pid !== undefined) {
           await assertPackagedDescendantsExit(trackedDescendants, {
             timeoutMs: 5_000,
           });

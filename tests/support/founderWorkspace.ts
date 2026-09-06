@@ -5,10 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { chromium, type Browser, type Page } from 'playwright/test';
-import {
-  describeProcessExit,
-  terminatePackagedApplication,
-} from './packagedApplication';
+import { describeProcessExit } from './packagedApplication';
+import { createPackagedTestEnvironment } from './packagedTestEnvironment';
 
 export const packagedApplicationBinary = join(
   process.cwd(),
@@ -83,13 +81,13 @@ const connectToPackagedApplication = async (
 };
 
 /**
- * Launches the real packaged app against a fresh mkdtemp user-data directory
- * and resolves once the renderer page is reachable over CDP. `close()`
- * removes only that exact temporary directory.
+ * Launches a normal GUI fixture with isolated child HOME/inbox and a temporary
+ * user-data directory. stop() retains the profile for relaunch; close() removes
+ * only a profile created here. Neither changes the runner HOME.
  */
 export async function launchFounderWorkspace(options: {
   userDataPath?: string;
-  /** Extra environment variables for the packaged process (test seams). */
+  /** Only the existing sourcing fixture-directory/hang-once test overrides. */
   env?: Record<string, string>;
 } = {}): Promise<FounderWorkspace> {
   if (!existsSync(packagedApplicationBinary)) {
@@ -98,85 +96,70 @@ export async function launchFounderWorkspace(options: {
     );
   }
 
-  const userDataPath =
-    options.userDataPath ??
-    (await mkdtemp(join(tmpdir(), 'callie-founder-e2e-')));
+  const environment = await createPackagedTestEnvironment(options.env);
+  let userDataPath = options.userDataPath;
   const ownsUserData = options.userDataPath === undefined;
-  const debuggingPort = await availablePort();
-  let spawnError: Error | undefined;
-
-  const application = spawn(packagedApplicationBinary, [
-    `--user-data-dir=${userDataPath}`,
-    `--remote-debugging-port=${debuggingPort}`,
-    '--use-mock-keychain',
-  ], {
-    env: { ...process.env, ...options.env },
-  });
-  application.once('error', (error) => {
-    spawnError = error;
-  });
-
-  let browser: Browser;
+  let browser: Browser | undefined;
   try {
+    userDataPath ??= await mkdtemp(join(tmpdir(), 'callie-founder-e2e-'));
+    const debuggingPort = await availablePort();
+    let spawnError: Error | undefined;
+    const application = environment.capture(spawn(packagedApplicationBinary, [
+      `--user-data-dir=${userDataPath}`,
+      `--remote-debugging-port=${debuggingPort}`,
+      '--use-mock-keychain',
+    ], { env: environment.env }));
+    application.once('error', (error) => {
+      spawnError = error;
+    });
     browser = await connectToPackagedApplication(
       application,
       debuggingPort,
       () => spawnError,
     );
-  } catch (error) {
-    if (application.pid !== undefined) {
-      await terminatePackagedApplication(application);
+
+    let page: Page | undefined;
+    for (let attempt = 0; attempt < 200 && page === undefined; attempt += 1) {
+      page = browser
+        .contexts()
+        .flatMap((context) => context.pages())
+        .find((candidate) => candidate.url().startsWith('callie://'));
+      if (page === undefined) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
     }
-    if (ownsUserData) {
+    if (page === undefined) {
+      throw new Error('The packaged application did not create a renderer page.');
+    }
+
+    const stop = async (): Promise<void> => {
+      try {
+        await browser?.close();
+      } catch {
+        // The browser may already be gone when the app exits first.
+      } finally {
+        await environment.cleanup();
+      }
+    };
+    return {
+      page,
+      userDataPath,
+      stop,
+      close: async () => {
+        await stop();
+        if (ownsUserData) {
+          await rm(userDataPath, { recursive: true, force: true });
+        }
+      },
+    };
+  } catch (error) {
+    await browser?.close().catch((): undefined => undefined);
+    await environment.cleanup();
+    if (ownsUserData && userDataPath !== undefined) {
       await rm(userDataPath, { recursive: true, force: true });
     }
     throw error;
   }
-
-  let page: Page | undefined;
-  for (let attempt = 0; attempt < 200 && page === undefined; attempt += 1) {
-    page = browser
-      .contexts()
-      .flatMap((context) => context.pages())
-      .find((candidate) => candidate.url().startsWith('callie://'));
-    if (page === undefined) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  if (page === undefined) {
-    await browser.close().catch((): undefined => undefined);
-    if (application.pid !== undefined) {
-      await terminatePackagedApplication(application);
-    }
-    if (ownsUserData) {
-      await rm(userDataPath, { recursive: true, force: true });
-    }
-    throw new Error('The packaged application did not create a renderer page.');
-  }
-
-  const stop = async (): Promise<void> => {
-    try {
-      await browser.close();
-    } catch {
-      // The browser may already be gone when the app exits first.
-    } finally {
-      if (application.pid !== undefined) {
-        await terminatePackagedApplication(application);
-      }
-    }
-  };
-
-  return {
-    page,
-    userDataPath,
-    stop,
-    close: async () => {
-      await stop();
-      if (ownsUserData) {
-        await rm(userDataPath, { recursive: true, force: true });
-      }
-    },
-  };
 }
 
 export const workflowFixture = (name: string): string =>

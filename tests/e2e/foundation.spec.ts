@@ -14,10 +14,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { chromium, expect, test, type Browser, type Page } from 'playwright/test';
-import {
-  describeProcessExit,
-  terminatePackagedApplication,
-} from '../support/packagedApplication';
+import { describeProcessExit } from '../support/packagedApplication';
+import { createPackagedTestEnvironment } from '../support/packagedTestEnvironment';
 
 const packagedApplication = join(
   process.cwd(),
@@ -145,6 +143,7 @@ test('packaged startup leaves an isolated database collision untouched and recov
 
 const inspectPackagedApplication = async (userDataPath: string, inspectRecovery?: (page: Page) => Promise<void>) => {
   const debuggingPort = await availablePort();
+  const environment = await createPackagedTestEnvironment();
   let application: ChildProcess | undefined;
   let browser: Browser | undefined;
   let spawnError: Error | undefined;
@@ -153,11 +152,11 @@ const inspectPackagedApplication = async (userDataPath: string, inspectRecovery?
     // The packaged binary intentionally disables RunAsNode. Playwright's
     // Electron launcher requires that mode, so CDP inspects the real packaged
     // process without weakening the production fuse.
-    application = spawn(packagedApplication, [
+    application = environment.capture(spawn(packagedApplication, [
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,
       '--use-mock-keychain',
-    ]);
+    ], { env: environment.env }));
     application.once('error', (error) => {
       spawnError = error;
     });
@@ -188,9 +187,9 @@ const inspectPackagedApplication = async (userDataPath: string, inspectRecovery?
     await expect(page.getByText('Encrypted SQLite ready')).toBeVisible();
     await expect(page.getByText('FTS5 available')).toBeVisible();
     await expect(page.getByText('Schema 16')).toBeVisible();
-    // The sourcing status row renders regardless of credential state; the
-    // packaged test env may report none, file, or keychain depending on the
-    // machine, and auto-polling stays disabled under --use-mock-keychain.
+    // The status row uses the isolated local fixture inbox. The separate
+    // enrichment fallback also sees only the empty child HOME. Automatic
+    // polling stays disabled under --use-mock-keychain.
     // It lives in the Sourcing section of the settings master-detail.
     await page.getByRole('button', { name: 'Sourcing', exact: true }).click();
     await expect(page.getByText(/^Sourcing inbox: /)).toBeVisible();
@@ -208,23 +207,22 @@ const inspectPackagedApplication = async (userDataPath: string, inspectRecovery?
     try {
       await browser?.close();
     } finally {
-      if (application?.pid !== undefined) {
-        await terminatePackagedApplication(application);
-      }
+      await environment.cleanup();
     }
   }
 };
 
 const inspectFailedPackagedLaunch = async (userDataPath: string) => {
   const debuggingPort = await availablePort();
+  const environment = await createPackagedTestEnvironment();
   let application: ChildProcess | undefined;
 
   try {
-    application = spawn(packagedApplication, [
+    application = environment.capture(spawn(packagedApplication, [
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,
       '--use-mock-keychain',
-    ]);
+    ], { env: environment.env }));
     const [exit, rendererPageObserved] = await Promise.all([
       waitForPackagedExit(application),
       observeRendererPageUntilExit(application, debuggingPort),
@@ -236,9 +234,7 @@ const inspectFailedPackagedLaunch = async (userDataPath: string) => {
       rendererPageObserved,
     };
   } finally {
-    if (application?.pid !== undefined) {
-      await terminatePackagedApplication(application);
-    }
+    await environment.cleanup();
   }
 };
 
