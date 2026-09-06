@@ -14,6 +14,7 @@
 
 - Task 0 and Hold Point 0 are cross-plan preflight. Execute them immediately after the compliance plan's Task 0 schedule pause and before compliance Task 1 or any repository implementation.
 - Execute runtime Tasks 1–13 after the compliance plan has registered schema 13 and 14, and before the lead-review plan registers schema 16. This plan exclusively owns schema 15.
+- **Schema-15 handoff exception for read-only lead triage:** Lead-review implementation may begin before the full operational rollout in Task 13 only after all of the following are complete and independently reviewed: (a) runtime Task 6, including the runtime-owned `0015RecoveryMetadata`; (b) the production domain startup exact-schema version and load-bearing manifest are updated and tested for schema 15; (c) migration-backup verification passes for 14→15; (d) any implemented recovery/identity operational tools retain non-overridable exact-schema-15 guards that reject schema 14 and schema 16 before output creation, temporary-file creation, dry-run output, or write transactions; and (e) outbound-compliance contracts and the final outbound authorization gate consumed by lead review are complete and reviewed. This exception authorizes reversible tracked implementation and fixture-only verification only. It does not authorize founder-data access, opening or migrating the founder workspace, recovery-material handling, backup or restore operations on founder state, credential rotation/import, AWS or provider access, Terraform live actions including init, validate, plan, show, apply, or state migration, schedule enablement, live identity audit, review, or repair, production packaging rollout, live snapshot capture, or lead mutation. Those actions remain behind their existing hold points and separate confirmations.
 - Known exposed provider and AWS credentials must be revoked or deactivated in Hold Point 0; if no safe replacement is ready, keep the dependent feature offline rather than extending exposure.
 - Every `npm` or `npx` command begins with `export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"`.
 - List operations time out after 30 seconds. Object fetch plus body transformation time out after 60 seconds. Each upload times out after 60 seconds. One full poll owns a 14-minute deadline.
@@ -607,7 +608,12 @@ The replacement keeps schedules and scheduled health notifications disabled by d
 - Create `tests/main/operationalSafetyRepository.test.ts`
 - Modify `src/main/db/migrate.ts`
 - Modify `src/main/db/domainSchema.ts`
+- Modify `src/main/domain/startup/storageReadiness.ts`
+- Modify `src/main/domain/domainRuntime.ts`
 - Modify `tests/main/migrations.test.ts`
+- Modify `tests/main/domainStartupAudit.test.ts`
+- Modify exact schema-version fixtures and expectations in `tests/e2e/foundation.spec.ts` and `tests/integration/foundationRecovery.test.ts`
+- Modify other exact schema-version fixtures or expectations only if deterministically required by the schema-15 gate change
 
 - [ ] Write the failing schema-14→15 migration test for all tables, constraints, singleton initialization, uniqueness, and preservation of compliance/jurisdiction data.
 - [ ] Write failing repository tests for backup receipts, recovery readiness, restore drill updates, immutable repair-event uniqueness, and transaction rollback.
@@ -617,6 +623,7 @@ export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; 
 ```
 
 - [ ] Implement and register `0015RecoveryMetadata` after `0014OutboundJurisdictionClearance`.
+- [ ] Update the production domain exact-schema gate and load-bearing manifest to schema 15, including `backup_receipts`, `recovery_readiness`, and `identity_repair_events`. Prove schema 14, missing or extra load-bearing objects, and malformed schema-15 catalogs fail closed before domain composition.
 - [ ] Implement repository methods `recordBackup`, `listBackups`, `recordRecoverySetupCompleted`, `recordRestoreDrill`, `getRecoveryReadiness`, and `appendIdentityRepairEvent`.
 - [ ] Run focused and aggregate migration tests.
 
@@ -981,7 +988,7 @@ git commit -m "ci: enforce exact-sha security release gate"
 
 - [ ] Confirm outbound-compliance Task 10 completed after runtime Task 12, with exact suppression reconciliation and packaged final-gate acceptance, before starting this final runtime rollout.
 - [ ] Run tracked typecheck, lint, tests, Lambda gates, and secret scans on a clean checkout.
-- [ ] Do not hand the founder workspace to the lead-review plan or register schema 16 until every applicable hold point is resolved, schema-15 operational tools have completed against schema 15, and this Task 13 verification is signed off. If Hold Point 3 is not applicable, record the reviewed manifest disposition that makes repair unnecessary.
+- [ ] Do not hand the founder workspace to the lead-review plan or register schema 16 until either (A) every applicable operational hold point is resolved, schema-15 operational tools have completed against schema 15, and this Task 13 verification is signed off, or (B) the Schema-15 handoff exception for read-only lead triage has been completed and independently reviewed. Path B permits code/fixture work only and does not authorize opening or migrating the founder workspace. Any schema-15-only live audit or repair disposition required for production rollout must still be resolved before the founder workspace is migrated to schema 16.
 
 ```bash
 export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run typecheck
