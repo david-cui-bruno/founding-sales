@@ -1,5 +1,5 @@
-import { mkdirSync, rmSync, statSync } from 'node:fs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { DomainRuntime } from '../../src/main/domain/domainRuntime';
 
@@ -7,7 +7,7 @@ import {
   closeDatabase,
   openDatabase,
 } from '../../src/main/db/database';
-import { migrateToLatest } from '../../src/main/db/migrate';
+import { createMigrationRunner, migrateToLatest, productionMigrations } from '../../src/main/db/migrate';
 import { prepareEncryptedDatabase } from '../../src/main/db/plaintextDatabaseUpgrade';
 import { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
 import { HealthService } from '../../src/main/health/healthService';
@@ -25,6 +25,81 @@ describe('foundation initialization recovery', () => {
     await runtime?.shutdown();
     tempDatabase?.cleanup();
   });
+
+  it.each([16, 17])(
+    'rejects a real schema-15 database marked as version %i before migration or composition',
+    async (schemaVersion) => {
+      tempDatabase = createTempDatabase();
+      const backupDirectory = `${tempDatabase.path}.backups`;
+      const setupKey = createTestWorkspaceKey();
+      const setupDatabase = openDatabase({ path: tempDatabase.path, key: setupKey });
+      await createMigrationRunner(productionMigrations.slice(0, 15))(setupDatabase, {
+        backupDirectory,
+        workspaceKey: setupKey,
+      });
+      setupDatabase.raw.prepare(
+        'UPDATE app_meta SET schema_version = ? WHERE singleton = 1',
+      ).run(schemaVersion);
+      const beforeCatalog = setupDatabase.raw.prepare(`
+        SELECT type, name, tbl_name, sql
+        FROM sqlite_master
+        WHERE name NOT LIKE 'sqlite_%'
+        ORDER BY type, name
+      `).all();
+      const beforeLedger = setupDatabase.raw.prepare(`
+        SELECT name, timestamp FROM kysely_migration ORDER BY timestamp, name
+      `).all();
+      closeDatabase(setupDatabase);
+      rmSync(backupDirectory, { recursive: true, force: true });
+      const beforeBytes = readFileSync(tempDatabase.path);
+      const createDomainRuntime = vi.fn();
+      const createHealthService = vi.fn();
+
+      runtime = new FoundationRuntime(
+        {
+          appVersion: '1.0.0',
+          backupDirectory,
+          databasePath: tempDatabase.path,
+          databaseExists: true,
+          keyEnvelopePath: `${tempDatabase.path}.key-envelope.json`,
+        },
+        {
+          loadWorkspaceKey: async () => createTestWorkspaceKey(),
+          prepareEncryptedDatabase: async () => undefined,
+          openDatabase,
+          migrateToLatest,
+          createDomainRuntime,
+          createHealthService,
+          closeDatabase,
+        },
+      );
+
+      await expect(runtime.initialize()).rejects.toThrow(/schema version|migration ledger/i);
+
+      expect(createDomainRuntime).not.toHaveBeenCalled();
+      expect(createHealthService).not.toHaveBeenCalled();
+      expect(existsSync(backupDirectory)).toBe(false);
+      expect(readFileSync(tempDatabase.path)).toEqual(beforeBytes);
+
+      const verifyDatabase = openDatabase({
+        path: tempDatabase.path,
+        key: createTestWorkspaceKey(),
+      });
+      expect(verifyDatabase.raw.prepare(`
+        SELECT type, name, tbl_name, sql
+        FROM sqlite_master
+        WHERE name NOT LIKE 'sqlite_%'
+        ORDER BY type, name
+      `).all()).toEqual(beforeCatalog);
+      expect(verifyDatabase.raw.prepare(`
+        SELECT name, timestamp FROM kysely_migration ORDER BY timestamp, name
+      `).all()).toEqual(beforeLedger);
+      expect(verifyDatabase.raw.prepare(
+        'SELECT schema_version FROM app_meta WHERE singleton = 1',
+      ).get()).toEqual({ schema_version: schemaVersion });
+      closeDatabase(verifyDatabase);
+    },
+  );
 
   it('recovers from an isolated filesystem collision without replacing the path', async () => {
     tempDatabase = createTempDatabase();
