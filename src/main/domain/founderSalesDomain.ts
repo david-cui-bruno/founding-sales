@@ -1,3 +1,5 @@
+import { collectLeadTriageSnapshot, type LeadTriageQueueRow } from '../today/leadTriageReportService';
+import { leadTriageSnapshotRequestSchema, type LeadTriageSnapshot, type LeadTriageSnapshotRequest } from '../../shared/contracts/leadTriageReportContract';
 import { createHash } from 'node:crypto';
 
 import Papa from 'papaparse';
@@ -1191,6 +1193,32 @@ export class FounderSalesDomain {
     });
   }
 
+  /** One private selection/order builder for UI and evidence reads. */
+  private triageQueueSql(selection: string): string {
+    return `SELECT ${selection}
+      FROM sales_cycles AS cycle
+      JOIN persons AS person ON person.id = cycle.person_id
+      JOIN prospects AS prospect ON prospect.id = cycle.prospect_id
+      WHERE cycle.stage = 'unreviewed' AND cycle.workflow_status = 'active'
+        AND person.opted_out = 0 AND person.deleted_at IS NULL
+        AND (cycle.resurface_at IS NULL OR cycle.resurface_at <= ?)
+      ORDER BY cycle.id COLLATE BINARY
+    `;
+  }
+
+  getLeadTriageSnapshot(input: LeadTriageSnapshotRequest): LeadTriageSnapshot {
+    const request = leadTriageSnapshotRequestSchema.parse(input);
+    const revisionBefore = this.currentRevision();
+    const generatedAt = this.clock.now();
+    const orderedRows = this.database.raw.prepare(this.triageQueueSql(`
+      cycle.id AS cycle_id, cycle.person_id, cycle.prospect_id, person.display_name
+    `)).all(generatedAt) as LeadTriageQueueRow[];
+    return collectLeadTriageSnapshot({
+      database: this.database, services: this.services, orderedRows, request,
+      generatedAt, revisionBefore, currentRevision: () => this.currentRevision(),
+    });
+  }
+
   /**
    * The triage queue (audit 4.6): unreviewed cycles in stable id order with
    * the persisted resume position. Leads deferred to a future resurface_at
@@ -1198,8 +1226,7 @@ export class FounderSalesDomain {
    */
   getTriageQueue(): TriageQueue {
     const now = this.clock.now();
-    const rows = this.database.raw.prepare(`
-      SELECT
+    const rows = this.database.raw.prepare(this.triageQueueSql(`
         cycle.id AS cycle_id, cycle.person_id, person.display_name,
         prospect.cloud_fit, prospect.cloud_timing, prospect.cloud_score_reasons_json,
         (
@@ -1225,14 +1252,7 @@ export class FounderSalesDomain {
           WHERE person_id = cycle.person_id AND kind = 'email'
           ORDER BY is_primary DESC, id ASC LIMIT 1
         ) AS email
-      FROM sales_cycles AS cycle
-      JOIN persons AS person ON person.id = cycle.person_id
-      JOIN prospects AS prospect ON prospect.id = cycle.prospect_id
-      WHERE cycle.stage = 'unreviewed' AND cycle.workflow_status = 'active'
-        AND person.opted_out = 0 AND person.deleted_at IS NULL
-        AND (cycle.resurface_at IS NULL OR cycle.resurface_at <= ?)
-      ORDER BY cycle.id COLLATE BINARY
-    `).all(now) as Array<{
+    `)).all(now) as Array<{
       cycle_id: string; person_id: string; display_name: string;
       cloud_fit: number | null; cloud_timing: number | null;
       cloud_score_reasons_json: string | null;

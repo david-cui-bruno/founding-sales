@@ -1,3 +1,4 @@
+import { leadTriageSnapshotRequestSchema, leadTriageSnapshotSchema, parseLeadTriageSnapshotResponse, type LeadTriageSnapshotRequest } from '../../shared/contracts/leadTriageReportContract';
 import { mutationReceiptSchema } from '../../shared/contracts/commonContract';
 import {
   addLeadNoteRequestSchema,
@@ -23,6 +24,13 @@ import type { IpcClient } from '../ipcClient';
 
 /** Preload-side Today API: every request and response is schema-validated. */
 export const createTodayApi = (client: IpcClient) => ({
+  getLeadTriageSnapshot: async (...args: [LeadTriageSnapshotRequest]) => {
+    if (args.length !== 1) throw new Error('Lead triage snapshot requires one request.');
+    const input = leadTriageSnapshotRequestSchema.parse(args[0]);
+    return parseLeadTriageSnapshotResponse(input, await client.request(
+      'today:get-lead-triage-snapshot', leadTriageSnapshotRequestSchema, leadTriageSnapshotSchema, input,
+    ));
+  },
   get: () => client.requestNoInput('today:get', todaySnapshotSchema),
   complete: (input: CompleteActionRequest) =>
     client.request(

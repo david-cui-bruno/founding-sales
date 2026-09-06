@@ -1,3 +1,4 @@
+import type { LeadTriageSnapshot, LeadTriageSnapshotRequest } from '../../shared/contracts/leadTriageReportContract';
 import type { MutationReceipt } from '../../shared/contracts/commonContract';
 import type {
   AddLeadNoteRequest,
@@ -27,6 +28,7 @@ export type TodayProvider = {
   addLeadNote(input: AddLeadNoteRequest): Promise<MutationReceipt>;
   logCallOutcome(input: LogCallOutcomeRequest): Promise<MutationReceipt>;
   markActivityInError(input: MarkActivityInErrorRequest): Promise<MutationReceipt>;
+  getLeadTriageSnapshot(input: LeadTriageSnapshotRequest): Promise<LeadTriageSnapshot>;
   getTriageQueue(): Promise<TriageQueue>;
   setReviewPosition(input: SetReviewPositionRequest): Promise<MutationReceipt>;
 };
@@ -41,6 +43,7 @@ export type TodayDomainInvoker = {
   addLeadNote(input: AddLeadNoteRequest): MutationReceipt;
   logCallOutcome(input: LogCallOutcomeRequest): MutationReceipt;
   markActivityInError(input: MarkActivityInErrorRequest): MutationReceipt;
+  getLeadTriageSnapshot(input: LeadTriageSnapshotRequest): LeadTriageSnapshot | Promise<LeadTriageSnapshot>;
   getTriageQueue(): TriageQueue | Promise<TriageQueue>;
   setReviewPosition(input: SetReviewPositionRequest): MutationReceipt;
 };
@@ -59,6 +62,7 @@ export function createTodayProvider(domain: TodayDomainInvoker): TodayProvider {
     addLeadNote: async (input) => domain.addLeadNote(input),
     logCallOutcome: async (input) => domain.logCallOutcome(input),
     markActivityInError: async (input) => domain.markActivityInError(input),
+    getLeadTriageSnapshot: async (input) => domain.getLeadTriageSnapshot(input),
     getTriageQueue: async () => domain.getTriageQueue(),
     setReviewPosition: async (input) => domain.setReviewPosition(input),
   };
