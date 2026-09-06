@@ -190,10 +190,16 @@ export class OutboundCommandRepository {
   private readManualActivity(facts: StoredFact[]): Activity | null {
     const first = facts[0];
     if (first === undefined) throw invalid();
-    const row = this.database.raw.prepare(`SELECT id, channel, metadata_json FROM activities
+    const row = this.database.raw.prepare(`SELECT id, person_id, prospect_id, sales_cycle_id, channel, metadata_json FROM activities
       INDEXED BY activities_provider_idempotency_idx WHERE adapter = ? AND provider_idempotency_key = ?`)
-      .get('callie_manual_outbound_v1', first.request.commandId) as { id: string; channel: string; metadata_json: string } | undefined;
+      .get('callie_manual_outbound_v1', first.request.commandId) as {
+        id: string; person_id: string; prospect_id: string | null; sales_cycle_id: string | null;
+        channel: string; metadata_json: string;
+      } | undefined;
     if (row === undefined) return null;
+    // EventRepository normalizes stored IDs. Association ownership must match the raw tuple.
+    if (row.person_id !== first.request.personId || row.prospect_id !== first.prospectId
+      || row.sales_cycle_id !== first.request.salesCycleId) throw invalid();
     if (!this.permitsManualAssociation(facts) || typeof row.metadata_json !== 'string'
       || row.metadata_json.length > 32768) throw invalid();
     let activity: Activity | null;

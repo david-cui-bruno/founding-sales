@@ -13,7 +13,7 @@ import {
   DomainRepositoryDatabaseMismatchError, DomainTransactionRequiredError,
 } from '../../src/main/domain/support/domainErrors';
 import type { OutboundRequest } from '../../src/shared/contracts/outboundContract';
-import { insertOpenCycleWithAction, seedProspect } from '../fixtures/domainRows';
+import { insertClosedCycle, insertOpenCycleWithAction, seedProspect } from '../fixtures/domainRows';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
 const NOW = '2026-09-04T14:00:00.000Z';
@@ -91,6 +91,52 @@ describe('OutboundCommandRepository encrypted command ledger', () => {
     expect(repository.read(request)).toEqual({ phase: 'unknown', reasonCode: 'handoff_uncertain' });
     expect(rows()).toEqual(before);
   });
+
+  it.each(['person/prospect/cycle tuple', 'cycle only'] as const)(
+    'rejects FK-valid raw %s whitespace aliases in lookup and projection, including after encrypted reopen', (variant) => {
+      if (variant === 'person/prospect/cycle tuple') {
+        const prospect = seedProspect(database.raw, ' owner');
+        insertOpenCycleWithAction({ database: database.raw, prospect, prefix: ' owner' });
+      } else {
+        // A second cycle can share the same Person/Prospect. Independent Person or
+        // Prospect aliases cannot: composite owner FKs and UNIQUE(prospects.person_id).
+        insertClosedCycle({ database: database.raw, prefix: ' owner', prospect: {
+          personId: 'owner-person', prospectId: 'owner-prospect', sourceEventId: 'owner-source',
+        } });
+      }
+      append(fact('requested')); append(fact('dispatching'));
+      const rawOwners = {
+        person_id: variant === 'cycle only' ? 'owner-person' : ' owner-person',
+        prospect_id: variant === 'cycle only' ? 'owner-prospect' : ' owner-prospect',
+        sales_cycle_id: ' owner-cycle',
+      };
+      manual({ id: 'alias-manual', ...rawOwners });
+      expect(database.raw.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
+      expect(database.raw.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+      expect(database.raw.prepare('SELECT person_id, prospect_id, sales_cycle_id FROM activities WHERE id = ?')
+        .get('alias-manual')).toEqual(rawOwners);
+      // The ordinary reader normalizes these distinct raw owners. The association
+      // seam must reject the persisted mismatch instead of trusting this view.
+      expect(services.events.getActivity('alias-manual')).toMatchObject({
+        personId: 'owner-person', prospectId: 'owner-prospect', salesCycleId: 'owner-cycle',
+      });
+      const before = database.raw.prepare('SELECT * FROM activities ORDER BY rowid').all();
+      const assertRejected = () => {
+        expect.soft(() => repository.resolveManualAssociation(association))
+          .toThrow(expect.objectContaining({ reasonCode: 'command_evidence_invalid' }));
+        expect.soft(() => repository.listRecent(request.personId, 20))
+          .toThrow(expect.objectContaining({ reasonCode: 'command_evidence_invalid' }));
+      };
+      assertRejected();
+      closeDatabase(database);
+      expect(readFileSync(temp.path).subarray(0, 16).toString()).not.toBe('SQLite format 3\u0000');
+      database = openDatabase({ path: temp.path, key: createTestWorkspaceKey() });
+      compose();
+      expect(database.raw.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+      assertRejected();
+      expect(database.raw.prepare('SELECT * FROM activities ORDER BY rowid').all()).toEqual(before);
+    },
+  );
 
   it('rejects a manually tagged opted-out row without its canonical atomic closure receipt', () => {
     append(fact('requested')); append(fact('dispatching'));
