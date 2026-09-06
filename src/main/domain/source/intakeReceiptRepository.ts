@@ -40,9 +40,19 @@ const customSourceReasonSchema = z.enum([
 const canonicalContactSchema = z.object({
   kind: z.enum(['phone', 'email']),
   normalizedValue: z.string().min(1),
+  validationState: z.enum(['unverified', 'valid', 'invalid']).optional(),
   reachability: z.enum(['direct', 'indirect', 'none']),
   isPrimary: z.boolean(),
   inContacts: z.boolean().nullable(),
+  presentationEvidence: z.object({
+    sourceLabel: z.string().min(1).nullable(),
+    vendorRank: z.number().int().positive().nullable(),
+    phoneKind: z.enum(['mobile', 'landline', 'voip', 'other']).nullable(),
+    ownershipState: z.enum([
+      'verified_person', 'vendor_candidate', 'conflicting_identity', 'unknown',
+    ]),
+    evidenceObservedAt: utcTimestampSchema.nullable(),
+  }).strict().optional(),
 }).strict();
 const canonicalOrganizationSchema = z.object({
   canonicalName: z.string().min(1),

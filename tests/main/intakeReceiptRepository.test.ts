@@ -186,6 +186,42 @@ describe('IntakeReceiptRepository', () => {
       .toBe(serializeCanonicalIntakeCommand(reordered));
   });
 
+  it('includes validation and presentation evidence in deterministic receipt identity', () => {
+    const first: CanonicalIntakeCommand = {
+      ...command(),
+      contacts: [{
+        ...command().contacts[0]!,
+        validationState: 'unverified',
+        presentationEvidence: {
+          sourceLabel: 'tracerfy', vendorRank: 1, phoneKind: 'mobile',
+          ownershipState: 'vendor_candidate', evidenceObservedAt: OBSERVED_AT,
+        },
+      }],
+    };
+    const equivalent: CanonicalIntakeCommand = {
+      ...first,
+      contacts: [...first.contacts].reverse(),
+    };
+    const changed: CanonicalIntakeCommand = {
+      ...first,
+      contacts: [{ ...first.contacts[0]!, validationState: 'valid' }],
+    };
+
+    expect(serializeCanonicalIntakeCommand(first))
+      .toBe(serializeCanonicalIntakeCommand(equivalent));
+    expect(serializeCanonicalIntakeCommand(first))
+      .not.toBe(serializeCanonicalIntakeCommand(changed));
+    expect(JSON.parse(serializeCanonicalIntakeCommand(first))).toMatchObject({
+      command: { contacts: [{
+        validationState: 'unverified',
+        presentationEvidence: {
+          sourceLabel: 'tracerfy', vendorRank: 1, phoneKind: 'mobile',
+          ownershipState: 'vendor_candidate', evidenceObservedAt: OBSERVED_AT,
+        },
+      }] },
+    });
+  });
+
   it('requires its own active write scope and matching database', async () => {
     expect(() => repository.append({
       sourceEventId: 'source', command: command(), result: result(),
