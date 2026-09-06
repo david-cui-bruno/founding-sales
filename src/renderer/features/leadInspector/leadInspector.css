@@ -288,9 +288,91 @@
   gap: var(--space-2);
 }
 
-.lead-inspector__outbound-pair {
-  display: inline-flex;
+/* Phone candidates: one prominent card, with all other evidence behind a disclosure. */
+
+.contact-evidence {
+  display: grid;
   gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.contact-evidence__primary {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.contact-evidence__label {
+  margin: var(--space-3) var(--space-3) 0;
+  font-size: var(--text-caption);
+  font-weight: 600;
+}
+
+.contact-evidence__row {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  overflow-wrap: anywhere;
+}
+
+.contact-evidence__row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.contact-evidence__number {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.contact-evidence__metadata {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+  font-size: var(--text-caption);
+}
+
+.contact-evidence__metadata dt {
+  color: var(--muted);
+}
+
+.contact-evidence__metadata dd {
+  margin: 0;
+}
+
+.contact-evidence__alternatives:not([hidden]) {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.contact-evidence__alternatives .contact-evidence__row {
+  border: 1px solid var(--line);
+}
+
+.contact-evidence__alternatives .contact-evidence__row--blocked {
+  border-style: dashed;
+}
+
+.contact-evidence__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.contact-evidence__action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+.contact-evidence__empty,
+.contact-evidence__refusal {
+  margin: 0;
+  font-size: var(--text-caption);
+  color: var(--muted);
 }
 
 /* Find contact info: one explicit enrichment request with inline receipt. */

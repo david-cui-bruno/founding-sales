@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { selectPrimaryPhone } from '../../../shared/contactPresentation';
 import type {
   FindContactInfoReceipt,
   FindContactInfoRequest,
@@ -16,12 +17,12 @@ import type {
 import { humanizeEnumLabel } from '../../../shared/displayText';
 import { Button } from '../../components/Button';
 import { Select } from '../../components/Select';
-import { StatusBadge } from '../../components/StatusBadge';
 import { StatusPill } from '../../components/StatusPill';
 import {
   cloudSignalLabel,
   formatCloudChip,
 } from '../leads/cloudSignalLabels';
+import { ContactEvidenceCard } from './ContactEvidenceCard';
 
 const OPT_OUT_REASON =
   'This person opted out. Outreach is permanently disabled.';
@@ -246,6 +247,7 @@ export function InspectorOverview({
   onFindContactInfo,
 }: InspectorOverviewProps) {
   const context = detail.priorityContext;
+  const { primary, alternatives } = selectPrimaryPhone(detail.phones);
 
   return (
     <div className="lead-inspector__overview">
@@ -404,29 +406,14 @@ export function InspectorOverview({
         {detail.optedOut && (
           <p className="lead-inspector__opt-out-reason">{OPT_OUT_REASON}</p>
         )}
+        <ContactEvidenceCard
+          key={detail.personId}
+          detail={detail}
+          primary={primary}
+          alternatives={alternatives}
+          onBeginOutbound={onBeginOutbound}
+        />
         <div className="lead-inspector__outbound-buttons">
-          {detail.phones.map((phone) => (
-            <span key={phone.id} className="lead-inspector__outbound-pair">
-              <OutboundButton
-                detail={detail}
-                channel="call"
-                contact={phone}
-                onBeginOutbound={onBeginOutbound}
-              />
-              <OutboundButton
-                detail={detail}
-                channel="text"
-                contact={phone}
-                onBeginOutbound={onBeginOutbound}
-              />
-              {phone.compliance !== null && (
-                <StatusBadge
-                  tone={phone.compliance.status === 'verified_clear' ? 'neutral' : 'danger'}
-                  label={phone.compliance.label}
-                />
-              )}
-            </span>
-          ))}
           {detail.emails.map((email) => (
             <OutboundButton
               key={email.id}
