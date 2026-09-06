@@ -78,9 +78,10 @@ values. No apply is authorized by this preparation.
 Stop before any operational step. Obtain explicit founder confirmation, then use
 this staged order without combining stages:
 
-Before either bootstrap, create a dedicated receipt directory owned only by the
-current operator. The directory must already exist, must be a real nonsymlink
-directory owned by the current effective UID, and must have exact mode `0700`:
+Before either bootstrap, create the one supported operator receipt directory at
+canonical `$HOME/.callie-bootstrap-receipts`. Flexible receipt directories are
+not supported. The directory must already exist, be a real nonsymlink directory,
+be owned by the current effective UID, and have exact mode `0700`:
 
 ```bash
 install -d -m 0700 "$HOME/.callie-bootstrap-receipts"
@@ -90,13 +91,21 @@ test "$(stat -f '%u' "$HOME/.callie-bootstrap-receipts")" = "$(id -u)"
 test "$(stat -f '%Lp' "$HOME/.callie-bootstrap-receipts")" = "700"
 ```
 
+Verify every path component from `/` through that canonical directory before
+invoking either bootstrap. Each component must be a real nonsymlink directory,
+must be owned by root or the current effective UID, and must have no group or
+other write bit. Inspect `ls -lde` output for every component as well: any `allow ACL`
+entry is privacy-expanding and must be removed. A `deny-only ACL`, including the
+standard macOS home entry `group:everyone deny delete`, is permitted.
+
 Supply each bootstrap a receipt path with one non-dot basename directly inside
-that private directory, such as
-`$HOME/.callie-bootstrap-receipts/terraform-state.receipt`. Verify this boundary
-before invoking either bootstrap. The state bootstrap rejects a missing, symlinked,
-differently owned, group-writable, or other-writable receipt directory before any
-bootstrap behavior. This boundary protects against other local users. It does not
-claim protection from hostile code running as the same UID.
+the exact directory, such as
+`$HOME/.callie-bootstrap-receipts/terraform-state.receipt`. The state bootstrap
+canonicalizes `$HOME` and the supplied parent, requires that exact match, and
+repeats the complete ownership, mode, symlink, and ACL chain verification before
+temporary creation or AWS behavior. Protection from other local users applies
+only when the full chain passes. Hostile same-UID or root compromise is explicitly
+out of scope.
 
 1. **Stage A: prepare and verify the runtime key.** Run the dedicated key
    bootstrap through the approved operator path. Retain its mode-0600 receipt,

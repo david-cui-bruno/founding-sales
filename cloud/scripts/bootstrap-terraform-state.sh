@@ -25,7 +25,9 @@ bucket_phase="absent"
 table_phase="absent"
 
 bind_receipt_boundary() {
-  local supplied_directory supplied_basename canonical_directory directory_type directory_owner directory_mode effective_uid
+  local supplied_directory supplied_basename canonical_home expected_directory canonical_directory
+  local effective_uid path_component current_path directory_type directory_owner directory_mode mode_value acl_output acl_line
+  local -a path_components
   supplied_directory=$(dirname -- "$receipt") || return 1
   supplied_basename=$(basename -- "$receipt") || return 1
   [[ "$supplied_basename" != "." && "$supplied_basename" != ".." && "$supplied_basename" != .* ]] || {
@@ -36,13 +38,53 @@ bind_receipt_boundary() {
     echo "recovery receipt parent must be an existing nonsymlink directory" >&2
     return 1
   }
+  [[ -n "${HOME:-}" && -d "$HOME" ]] || {
+    echo "HOME must resolve from an existing directory" >&2
+    return 1
+  }
+  canonical_home=$(cd -P -- "$HOME" && pwd -P) || return 1
+  expected_directory="${canonical_home}/.callie-bootstrap-receipts"
   canonical_directory=$(cd -P -- "$supplied_directory" && pwd -P) || return 1
-  [[ -n "$canonical_directory" && -d "$canonical_directory" && ! -L "$canonical_directory" ]] || return 1
-  directory_type=$(stat -f '%HT' "$canonical_directory") || return 1
-  directory_owner=$(stat -f '%u' "$canonical_directory") || return 1
-  directory_mode=$(stat -f '%Lp' "$canonical_directory") || return 1
+  [[ "$canonical_directory" == "$expected_directory" ]] || {
+    echo "recovery receipt parent must be canonical HOME/.callie-bootstrap-receipts" >&2
+    return 1
+  }
   effective_uid=$(id -u) || return 1
-  [[ "$directory_type" == "Directory" && "$directory_owner" == "$effective_uid" && "$directory_mode" == "700" ]] || {
+
+  IFS='/' read -r -a path_components <<<"${canonical_directory#/}"
+  path_components=("" "${path_components[@]}")
+  current_path="/"
+  for path_component in "${path_components[@]}"; do
+    if [[ -n "$path_component" && "$current_path" == "/" ]]; then
+      current_path="/${path_component}"
+    elif [[ -n "$path_component" ]]; then
+      current_path="${current_path}/${path_component}"
+    fi
+    [[ -d "$current_path" && ! -L "$current_path" ]] || {
+      echo "recovery receipt ancestor must be a real nonsymlink directory" >&2
+      return 1
+    }
+    directory_type=$(stat -f '%HT' "$current_path") || return 1
+    directory_owner=$(stat -f '%u' "$current_path") || return 1
+    directory_mode=$(stat -f '%Lp' "$current_path") || return 1
+    [[ "$directory_type" == "Directory" && ( "$directory_owner" == "0" || "$directory_owner" == "$effective_uid" ) ]] || {
+      echo "recovery receipt ancestor must be owned by root or the effective user" >&2
+      return 1
+    }
+    mode_value=$((8#$directory_mode)) || return 1
+    (( (mode_value & 8#022) == 0 )) || {
+      echo "recovery receipt ancestor must not be group- or other-writable" >&2
+      return 1
+    }
+    acl_output=$(/bin/ls -lde "$current_path") || return 1
+    while IFS= read -r acl_line; do
+      if [[ "$acl_line" =~ ^[[:space:]]*[0-9]+:.*[[:space:]]allow[[:space:]] ]]; then
+        echo "recovery receipt ancestor must not contain allow ACL entries" >&2
+        return 1
+      fi
+    done <<<"$acl_output"
+  done
+  [[ "$directory_owner" == "$effective_uid" && "$directory_mode" == "700" ]] || {
     echo "recovery receipt parent must be owned by the effective user with exact mode 0700" >&2
     return 1
   }

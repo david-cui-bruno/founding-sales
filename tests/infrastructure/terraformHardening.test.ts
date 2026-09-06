@@ -139,11 +139,17 @@ function recoveryReceipt(bucketPhase = "owned", tablePhase = "owned"): string {
 function runRecoveryScenario(scenario: string) {
   const directory = mkdtempSync(join(tmpdir(), "callie-bootstrap-recovery-"));
   const binDirectory = join(directory, "bin");
-  const receipt = join(directory, "receipt");
+  const homeDirectory = join(directory, "home");
+  const receiptDirectory = scenario === "receipt-parent-outside-boundary"
+    ? join(homeDirectory, "alternate-receipts")
+    : join(homeDirectory, ".callie-bootstrap-receipts");
+  const receipt = join(receiptDirectory, "receipt");
   const awsLog = join(directory, "aws.log");
   const symlinkTarget = join(directory, "symlink-target");
   const mktempLog = join(directory, "mktemp.log");
   mkdirSync(binDirectory);
+  mkdirSync(homeDirectory, { mode: 0o700 });
+  mkdirSync(receiptDirectory, { mode: 0o700 });
   writeFileSync(receipt, recoveryReceipt(), { mode: 0o600 });
   const fakeAws = join(binDirectory, "aws");
   writeFileSync(
@@ -202,7 +208,7 @@ exit 99
     writeFileSync(
       fakeMktemp,
       `#!/usr/bin/env bash
-malicious_path="$FAKE_WORK/.receipt.tmp.attacker"
+malicious_path="$RECEIPT_DIRECTORY/.receipt.tmp.attacker"
 ln -s "$SYMLINK_TARGET" "$malicious_path"
 printf '%s\\n' "$malicious_path"
 `,
@@ -220,19 +226,43 @@ source "$BOOTSTRAP_SCRIPT" --recover "$RECEIPT"
     command = wrapper;
   }
   if (scenario === "receipt-temp-traversal") {
-    mkdirSync(join(directory, ".receipt.tmp.attacker"));
+    mkdirSync(join(receiptDirectory, ".receipt.tmp.attacker"));
     const fakeMktemp = join(binDirectory, "mktemp");
     writeFileSync(
       fakeMktemp,
       `#!/usr/bin/env bash
 printf 'called\n' >>"$FAKE_MKTEMP_LOG"
-printf '%s\n' "$FAKE_WORK/.receipt.tmp.attacker/../receipt"
+printf '%s\n' "$RECEIPT_DIRECTORY/.receipt.tmp.attacker/../receipt"
 `,
       { mode: 0o755 },
     );
   }
   if (scenario === "receipt-parent-group-writable") {
-    chmodSync(directory, 0o770);
+    chmodSync(receiptDirectory, 0o770);
+    const fakeMktemp = join(binDirectory, "mktemp");
+    writeFileSync(
+      fakeMktemp,
+      `#!/usr/bin/env bash
+printf 'called\n' >>"$FAKE_MKTEMP_LOG"
+exit 91
+`,
+      { mode: 0o755 },
+    );
+  }
+  if (scenario === "receipt-ancestor-group-writable") chmodSync(homeDirectory, 0o770);
+  if (scenario === "receipt-parent-allow-acl") {
+    const acl = spawnSync("/bin/chmod", ["+a", "everyone allow read", receiptDirectory]);
+    if (acl.status !== 0) throw new Error(`could not create allow ACL: ${acl.stderr}`);
+  }
+  if (scenario === "receipt-ancestor-deny-acl") {
+    const acl = spawnSync("/bin/chmod", ["+a", "everyone deny delete", homeDirectory]);
+    if (acl.status !== 0) throw new Error(`could not create deny ACL: ${acl.stderr}`);
+  }
+  if ([
+    "receipt-ancestor-group-writable",
+    "receipt-parent-outside-boundary",
+    "receipt-parent-allow-acl",
+  ].includes(scenario)) {
     const fakeMktemp = join(binDirectory, "mktemp");
     writeFileSync(
       fakeMktemp,
@@ -256,6 +286,8 @@ exit 91
         FAKE_AWS_LOG: awsLog,
         FAKE_SCENARIO: scenario,
         FAKE_WORK: directory,
+        HOME: homeDirectory,
+        RECEIPT_DIRECTORY: receiptDirectory,
         BOOTSTRAP_SCRIPT: join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh"),
         RECEIPT: receipt,
         SYMLINK_TARGET: symlinkTarget,
@@ -273,6 +305,10 @@ exit 91
   const symlinkTargetContents = scenario === "receipt-temp-symlink"
     ? readFileSync(symlinkTarget, "utf8")
     : undefined;
+  if (scenario === "receipt-ancestor-deny-acl") {
+    const clearAcl = spawnSync("/bin/chmod", ["-N", homeDirectory]);
+    if (clearAcl.status !== 0) throw new Error(`could not clear deny ACL: ${clearAcl.stderr}`);
+  }
   rmSync(directory, { recursive: true, force: true });
   return {
     result,
@@ -1156,6 +1192,46 @@ describe("managed secret and remote state preparation", () => {
     expect(mode).toBe(0o600);
   });
 
+  it("rejects a group-writable receipt ancestor before mktemp or AWS behavior", () => {
+    const { result, receiptContents, awsCalls, mktempCalls, mode } =
+      runRecoveryScenario("receipt-ancestor-group-writable");
+
+    expect(result.status).not.toBe(0);
+    expect(mktempCalls).toBe("");
+    expect(awsCalls).toBe("");
+    expect(receiptContents).toBe(recoveryReceipt());
+    expect(mode).toBe(0o600);
+  });
+
+  it("rejects receipt paths outside canonical HOME/.callie-bootstrap-receipts", () => {
+    const { result, receiptContents, awsCalls, mktempCalls, mode } =
+      runRecoveryScenario("receipt-parent-outside-boundary");
+
+    expect(result.status).not.toBe(0);
+    expect(mktempCalls).toBe("");
+    expect(awsCalls).toBe("");
+    expect(receiptContents).toBe(recoveryReceipt());
+    expect(mode).toBe(0o600);
+  });
+
+  it("rejects privacy-expanding allow ACLs before mktemp or AWS behavior", () => {
+    const { result, receiptContents, awsCalls, mktempCalls, mode } =
+      runRecoveryScenario("receipt-parent-allow-acl");
+
+    expect(result.status).not.toBe(0);
+    expect(mktempCalls).toBe("");
+    expect(awsCalls).toBe("");
+    expect(receiptContents).toBe(recoveryReceipt());
+    expect(mode).toBe(0o600);
+  });
+
+  it("permits deny-only ACLs on an otherwise trusted receipt ancestor chain", () => {
+    const { result, output } = runRecoveryScenario("receipt-ancestor-deny-acl");
+
+    expect(result.status).toBe(0);
+    expect(output).toContain("recovery reconciliation completed");
+  });
+
   it("requires every state postcondition and exact lock-table KMS ARN", () => {
     const script = readFileSync(join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh"), "utf8");
     expect(script).toContain("get-public-access-block");
@@ -1206,6 +1282,11 @@ describe("managed secret and remote state preparation", () => {
     expect(readme).toContain("Stage B: enter and prevalidate all three parameters");
     expect(readme).toContain("Stage C: cut over IAM and Lambda identifiers");
     expect(readme).toContain("Rollback");
+    expect(readme).toContain("canonical `$HOME/.callie-bootstrap-receipts`");
+    expect(readme).toContain("every path component from `/`");
+    expect(readme).toContain("allow ACL");
+    expect(readme).toContain("deny-only ACL");
+    expect(readme).toContain("same-UID or root compromise");
     expect(plan).toMatch(/prevalidate all three encrypted parameters/i);
     expect(plan).toMatch(/only then apply the IAM and Lambda identifier cutover/i);
   });
