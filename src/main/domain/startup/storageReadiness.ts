@@ -5,7 +5,7 @@ import { inspectDatabaseEncryption } from '../../db/databaseEncryption';
 import { DomainStartupFatalError } from './domainStartupTypes';
 
 export type DomainStorageReadiness = Readonly<{
-  schemaVersion: 15;
+  schemaVersion: 16;
   encrypted: true;
   cipherVersion: string;
   ftsAvailable: true;
@@ -19,10 +19,11 @@ export type DomainSchemaManifest = Readonly<{
   indexes: readonly string[];
   triggers: readonly string[];
   tableSql: Readonly<Record<string, string>>;
+  triggerSql: Readonly<Record<string, string>>;
 }>;
 
 /**
- * The canonical load-bearing schema-15 manifest. Reads the live catalog from
+ * The canonical load-bearing schema-16 manifest. Reads the live catalog from
  * sqlite_master with binary-name ordering; a missing, renamed, extra, or
  * malformed load-bearing object is fatal before composition.
  */
@@ -243,6 +244,57 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
       applied_at TEXT NOT NULL,
       UNIQUE (manifest_sha256, candidate_id)
     )`,
+    person_contact_methods: `CREATE TABLE person_contact_methods (
+      id TEXT PRIMARY KEY,
+      person_id TEXT NOT NULL REFERENCES persons(id),
+      kind TEXT NOT NULL CHECK (kind IN ('phone', 'email')),
+      normalized_value TEXT NOT NULL CHECK (length(normalized_value) > 0),
+      raw_value TEXT,
+      validation_state TEXT NOT NULL CHECK (
+        validation_state IN ('unverified', 'valid', 'invalid')
+      ),
+      reachability TEXT NOT NULL CHECK (
+        reachability IN ('direct', 'indirect', 'none')
+      ),
+      is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+      in_contacts INTEGER CHECK (in_contacts IN (0, 1)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      dnc_listed INTEGER NOT NULL DEFAULT 0 CHECK (dnc_listed IN (0, 1)),
+      tcpa_flag INTEGER NOT NULL DEFAULT 0 CHECK (tcpa_flag IN (0, 1)),
+      federal_status TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (federal_status IN ('unknown', 'verified_clear', 'listed')),
+      compliance_tcpa_flag INTEGER NULL
+        CHECK (compliance_tcpa_flag IS NULL OR compliance_tcpa_flag IN (0, 1)),
+      covered_area_code TEXT NULL
+        CHECK (covered_area_code IS NULL OR covered_area_code GLOB '[0-9][0-9][0-9]'),
+      compliance_source TEXT NOT NULL DEFAULT 'legacy'
+        CHECK (compliance_source IN ('ftc_download', 'enrichment_vendor', 'manual_import', 'legacy')),
+      scrubbed_at TEXT NULL,
+      compliance_expires_at TEXT NULL,
+      source_label TEXT,
+      vendor_rank INTEGER CHECK (vendor_rank IS NULL OR vendor_rank >= 1),
+      phone_kind TEXT CHECK (
+        phone_kind IS NULL OR phone_kind IN ('mobile','landline','voip','other')
+      ),
+      ownership_state TEXT NOT NULL DEFAULT 'unknown' CHECK (
+        ownership_state IN ('verified_person','vendor_candidate','conflicting_identity','unknown')
+      ),
+      evidence_observed_at TEXT,
+      UNIQUE (person_id, kind, normalized_value)
+    )`,
+  }),
+  triggerSql: Object.freeze({
+    immutable_identity_repair_events: `CREATE TRIGGER immutable_identity_repair_events
+      BEFORE UPDATE ON identity_repair_events
+      BEGIN
+        SELECT RAISE(ABORT, 'identity_repair_events rows are immutable');
+      END`,
+    immutable_identity_repair_events_delete: `CREATE TRIGGER immutable_identity_repair_events_delete
+      BEFORE DELETE ON identity_repair_events
+      BEGIN
+        SELECT RAISE(ABORT, 'identity_repair_events rows are immutable');
+      END`,
   }),
 });
 
@@ -262,6 +314,7 @@ export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
   '0013ContactComplianceEvidence',
   '0014OutboundJurisdictionClearance',
   '0015RecoveryMetadata',
+  '0016ContactPresentationEvidence',
 ] as const);
 
 const appMetaSchema = z.object({
@@ -275,7 +328,7 @@ const appMetaSchema = z.object({
 export function assertDomainStorageReady(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
-  expectedSchemaVersion: 15;
+  expectedSchemaVersion: 16;
   expectedManifest: DomainSchemaManifest;
 }): DomainStorageReadiness {
   const { database } = input;
@@ -298,7 +351,7 @@ export function assertDomainStorageReady(input: {
   const metadata = appMetaSchema.safeParse(metadataRow);
   if (!metadata.success || metadata.data.schema_version !== input.expectedSchemaVersion) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace schema version is not exactly 15.',
+      'schema_not_ready', 'The workspace schema version is not exactly 16.',
     );
   }
 
@@ -317,7 +370,7 @@ export function assertDomainStorageReady(input: {
     DOMAIN_MIGRATION_LEDGER,
   )) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace migration ledger is not exactly schema 15.',
+      'schema_not_ready', 'The workspace migration ledger is not exactly schema 16.',
     );
   }
 
@@ -388,9 +441,23 @@ export function assertDomainStorageReady(input: {
       );
     }
   }
+  for (const [name, expectedSql] of Object.entries(input.expectedManifest.triggerSql)) {
+    const trigger = catalog.find((candidate) => (
+      candidate.name === name && candidate.type === 'trigger'
+    ));
+    if (
+      trigger?.sql === null
+      || trigger === undefined
+      || normalizeSql(trigger.sql) !== normalizeSql(expectedSql)
+    ) {
+      throw new DomainStartupFatalError(
+        'manifest_mismatch', `Load-bearing trigger is malformed: ${name}`,
+      );
+    }
+  }
 
   return Object.freeze({
-    schemaVersion: 15 as const,
+    schemaVersion: 16 as const,
     encrypted: true as const,
     cipherVersion: encryption.cipherVersion ?? 'unknown',
     ftsAvailable: true as const,

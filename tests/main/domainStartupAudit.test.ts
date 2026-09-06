@@ -37,6 +37,7 @@ const EXPECTED_MIGRATION_LEDGER = [
   '0013ContactComplianceEvidence',
   '0014OutboundJurisdictionClearance',
   '0015RecoveryMetadata',
+  '0016ContactPresentationEvidence',
 ] as const;
 
 describe('domain startup', () => {
@@ -72,15 +73,15 @@ describe('domain startup', () => {
   }
 
   describe('storage readiness gate', () => {
-    it('passes only the exact schema-15 manifest and ordered migration ledger', () => {
+    it('passes only the exact schema-16 manifest and ordered migration ledger', () => {
       const readiness = assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 15,
+        expectedSchemaVersion: 16,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       });
       expect(readiness).toMatchObject({
-        schemaVersion: 15, encrypted: true, ftsAvailable: true,
+        schemaVersion: 16, encrypted: true, ftsAvailable: true,
       });
       expect(DOMAIN_SCHEMA_MANIFEST.tables).toEqual(expect.arrayContaining([
         'contact_compliance_audit_events',
@@ -104,7 +105,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 15,
+        expectedSchemaVersion: 16,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       database.raw.exec('ROLLBACK');
@@ -113,7 +114,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 15,
+        expectedSchemaVersion: 16,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       database.raw.pragma('busy_timeout = 5000');
@@ -121,7 +122,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 15,
+        expectedSchemaVersion: 16,
         expectedManifest: {
           ...DOMAIN_SCHEMA_MANIFEST,
           tables: [...DOMAIN_SCHEMA_MANIFEST.tables, 'missing_table'],
@@ -129,7 +130,7 @@ describe('domain startup', () => {
       })).toThrow(DomainStartupFatalError);
     });
 
-    it.each([14, 16, 99])(
+    it.each([15, 17, 99])(
       'rejects schema version %i before repositories exist',
       (schemaVersion) => {
         database.raw.prepare(
@@ -145,7 +146,7 @@ describe('domain startup', () => {
         expect(caught).toBeInstanceOf(DomainStartupFatalError);
         expect(caught).toMatchObject({
           code: 'schema_not_ready',
-          message: 'The workspace schema version is not exactly 15.',
+          message: 'The workspace schema version is not exactly 16.',
         });
         expect(clockReads()).toBe(0);
         expect(idsUsed()).toBe(0);
@@ -156,19 +157,19 @@ describe('domain startup', () => {
       {
         name: 'missing',
         corrupt: (db: AppDatabase) => db.raw.prepare(
-          "DELETE FROM kysely_migration WHERE name = '0015RecoveryMetadata'",
+          "DELETE FROM kysely_migration WHERE name = '0016ContactPresentationEvidence'",
         ).run(),
       },
       {
         name: 'extra',
         corrupt: (db: AppDatabase) => db.raw.prepare(
           'INSERT INTO kysely_migration (name, timestamp) VALUES (?, ?)',
-        ).run('0016Unexpected', '9999-12-31T23:59:59.999Z'),
+        ).run('0017Unexpected', '9999-12-31T23:59:59.999Z'),
       },
       {
         name: 'reordered',
         corrupt: (db: AppDatabase) => db.raw.prepare(
-          "UPDATE kysely_migration SET timestamp = '9999-12-31T23:59:59.999Z' WHERE name = '0014OutboundJurisdictionClearance'",
+          "UPDATE kysely_migration SET timestamp = '9999-12-31T23:59:59.999Z' WHERE name = '0015RecoveryMetadata'",
         ).run(),
       },
     ])('rejects a $name migration ledger before composition', ({ corrupt }) => {
@@ -187,7 +188,7 @@ describe('domain startup', () => {
           SELECT name, timestamp FROM kysely_migration_original;
         INSERT INTO kysely_migration (name, timestamp)
           SELECT name, timestamp FROM kysely_migration_original
-          WHERE name = '0015RecoveryMetadata';
+          WHERE name = '0016ContactPresentationEvidence';
         DROP TABLE kysely_migration_original;
       `);
 
@@ -210,9 +211,24 @@ describe('domain startup', () => {
       expect(idsUsed()).toBe(0);
     });
 
+    it('rejects rewritten immutable identity-repair trigger SQL before composition', () => {
+      database.raw.exec(`
+        DROP TRIGGER immutable_identity_repair_events;
+        CREATE TRIGGER immutable_identity_repair_events
+        BEFORE UPDATE ON identity_repair_events
+        BEGIN
+          SELECT RAISE(ABORT, 'forged trigger');
+        END
+      `);
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
+    });
+
     it('rejects app_meta and migration-ledger disagreement before composition', () => {
       database.raw.prepare(
-        'UPDATE app_meta SET schema_version = 14 WHERE singleton = 1',
+        'UPDATE app_meta SET schema_version = 15 WHERE singleton = 1',
       ).run();
       const { runtime, clockReads, idsUsed } = buildRuntime();
       expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
@@ -228,7 +244,7 @@ describe('domain startup', () => {
       {
         name: 'extra',
         corrupt: (db: AppDatabase) => db.raw.exec(
-          'CREATE TABLE unexpected_schema15_table (id TEXT PRIMARY KEY)',
+          'CREATE TABLE unexpected_schema16_table (id TEXT PRIMARY KEY)',
         ),
       },
       {
@@ -238,7 +254,7 @@ describe('domain startup', () => {
           CREATE TABLE backup_receipts (id TEXT PRIMARY KEY)
         `),
       },
-    ])('rejects a $name schema-15 catalog before composition', ({ corrupt }) => {
+    ])('rejects a $name schema-16 catalog before composition', ({ corrupt }) => {
       corrupt(database);
       const { runtime, clockReads, idsUsed } = buildRuntime();
       expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);

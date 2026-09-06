@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../../../src/main/db/database';
-import { createMigrationRunner, migrateToLatest } from '../../../../src/main/db/migrate';
+import { createMigrationRunner } from '../../../../src/main/db/migrate';
 import { migration0001Foundation } from '../../../../src/main/db/migrations/0001Foundation';
 import { migration0002DomainFoundation } from '../../../../src/main/db/migrations/0002DomainFoundation';
 import { migration0003Transcripts } from '../../../../src/main/db/migrations/0003Transcripts';
@@ -16,6 +16,7 @@ import { migration0011ContactDncFlags } from '../../../../src/main/db/migrations
 import { migration0012UpstreamRequestState } from '../../../../src/main/db/migrations/0012UpstreamRequestState';
 import { migration0013ContactComplianceEvidence } from '../../../../src/main/db/migrations/0013ContactComplianceEvidence';
 import { migration0014OutboundJurisdictionClearance } from '../../../../src/main/db/migrations/0014OutboundJurisdictionClearance';
+import { migration0015RecoveryMetadata } from '../../../../src/main/db/migrations/0015RecoveryMetadata';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../../../fixtures/tempDatabase';
 
 const migrationsThrough14 = [
@@ -35,6 +36,10 @@ const migrationsThrough14 = [
   { id: '0014OutboundJurisdictionClearance', schemaVersion: 14, migration: migration0014OutboundJurisdictionClearance },
 ] as const;
 const migrateThrough14 = createMigrationRunner(migrationsThrough14);
+const migrateThroughSchema15 = createMigrationRunner([
+  ...migrationsThrough14,
+  { id: '0015RecoveryMetadata', schemaVersion: 15, migration: migration0015RecoveryMetadata },
+] as const);
 const TS = '2026-09-05T12:00:00.000Z';
 const SHA = 'a'.repeat(64);
 
@@ -89,7 +94,7 @@ describe('0015 recovery metadata migration', () => {
   });
 
   it('migrates schema 14 to the exact schema-15 table contracts', async () => {
-    await expect(migrateToLatest(database, options)).resolves.toEqual({
+    await expect(migrateThroughSchema15(database, options)).resolves.toEqual({
       fromVersion: 14,
       toVersion: 15,
       appliedMigrationIds: ['0015RecoveryMetadata'],
@@ -113,7 +118,7 @@ describe('0015 recovery metadata migration', () => {
   });
 
   it('initializes exactly one empty recovery-readiness singleton', async () => {
-    await migrateToLatest(database, options);
+    await migrateThroughSchema15(database, options);
 
     expect(database.raw.prepare(`SELECT singleton, recovery_setup_completed_at,
       last_restore_drill_at, last_restore_backup_sha256, updated_at
@@ -130,7 +135,7 @@ describe('0015 recovery metadata migration', () => {
   });
 
   it('enforces backup receipt checks and basename uniqueness', async () => {
-    await migrateToLatest(database, options);
+    await migrateThroughSchema15(database, options);
     const insert = database.raw.prepare(`INSERT INTO backup_receipts
       (id, backup_basename, kind, schema_version, sha256, size_bytes, created_at, verified_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
@@ -154,7 +159,7 @@ describe('0015 recovery metadata migration', () => {
   });
 
   it('enforces immutable repair-event identity uniqueness and preserves receipts byte-for-byte', async () => {
-    await migrateToLatest(database, options);
+    await migrateThroughSchema15(database, options);
     const insert = database.raw.prepare(`INSERT INTO identity_repair_events
       (id, manifest_sha256, candidate_id, canonical_person_id,
        created_person_ids_json, reassigned_source_event_ids_json, applied_at)
@@ -224,7 +229,7 @@ describe('0015 recovery metadata migration', () => {
       ).all(),
     };
 
-    await migrateToLatest(database, options);
+    await migrateThroughSchema15(database, options);
 
     expect({
       compliance: database.raw.prepare(

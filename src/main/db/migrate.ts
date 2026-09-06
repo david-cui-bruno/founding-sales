@@ -20,6 +20,7 @@ import { migration0012UpstreamRequestState } from './migrations/0012UpstreamRequ
 import { migration0013ContactComplianceEvidence } from './migrations/0013ContactComplianceEvidence';
 import { migration0014OutboundJurisdictionClearance } from './migrations/0014OutboundJurisdictionClearance';
 import { migration0015RecoveryMetadata } from './migrations/0015RecoveryMetadata';
+import { migration0016ContactPresentationEvidence } from './migrations/0016ContactPresentationEvidence';
 import type { WorkspaceKey } from '../security/workspaceKeyTypes';
 
 export type MigrationResult = {
@@ -50,7 +51,7 @@ export type RegisteredMigration = Readonly<{
   };
 }>;
 
-const productionMigrations = [
+export const productionMigrations = [
   {
     id: '0001Foundation',
     schemaVersion: 1,
@@ -125,6 +126,11 @@ const productionMigrations = [
     id: '0015RecoveryMetadata',
     schemaVersion: 15,
     migration: migration0015RecoveryMetadata,
+  },
+  {
+    id: '0016ContactPresentationEvidence',
+    schemaVersion: 16,
+    migration: migration0016ContactPresentationEvidence,
   },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);

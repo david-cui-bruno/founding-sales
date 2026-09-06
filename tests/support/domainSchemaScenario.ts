@@ -215,7 +215,37 @@ function runDatabaseScenario(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
         ).get(),
-        { schema_version: 15 },
+        { schema_version: 16 },
+      );
+      assert.deepEqual(raw.prepare<[], { name: string }>(`
+        SELECT name FROM kysely_migration ORDER BY timestamp, name
+      `).all().map(({ name: migrationName }) => migrationName), [
+        '0001Foundation',
+        '0002DomainFoundation',
+        '0003Transcripts',
+        '0004Learnings',
+        '0005SourcingChannels',
+        '0006SourcingState',
+        '0007SourcingOutbox',
+        '0008DedupeCloudPersons',
+        '0009SourcingFileLedger',
+        '0010NoDueDates',
+        '0011ContactDncFlags',
+        '0012UpstreamRequestState',
+        '0013ContactComplianceEvidence',
+        '0014OutboundJurisdictionClearance',
+        '0015RecoveryMetadata',
+        '0016ContactPresentationEvidence',
+      ]);
+      assert.deepEqual(
+        raw.prepare('PRAGMA table_info(person_contact_methods)').all().slice(19),
+        [
+          { cid: 19, name: 'source_label', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 },
+          { cid: 20, name: 'vendor_rank', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 0 },
+          { cid: 21, name: 'phone_kind', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 },
+          { cid: 22, name: 'ownership_state', type: 'TEXT', notnull: 1, dflt_value: "'unknown'", pk: 0 },
+          { cid: 23, name: 'evidence_observed_at', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 },
+        ],
       );
       const actualTables = raw.prepare<string[], { name: string }>(`
         SELECT name FROM sqlite_master

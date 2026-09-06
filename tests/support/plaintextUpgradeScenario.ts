@@ -113,8 +113,12 @@ async function runScenario(): Promise<void> {
       await assertEncryptedSchemaVersionAccepted(workspace.path, 14);
     } else if (scenario === 'encrypted-schema-15-reopen') {
       await assertEncryptedSchemaVersionAccepted(workspace.path, 15);
-    } else if (scenario === 'encrypted-schema-16-rejected') {
-      await assertEncryptedSchemaVersionRejected(workspace.path, 16);
+    } else if (scenario === 'encrypted-schema-16-reopen') {
+      await assertEncryptedSchemaVersionAccepted(workspace.path, 16);
+    } else if (scenario === 'encrypted-schema-17-rejected') {
+      await assertEncryptedSchemaVersionRejected(workspace.path, 17);
+    } else if (scenario === 'encrypted-schema-future-rejected') {
+      await assertEncryptedSchemaVersionRejected(workspace.path, 99);
     } else if (scenario === 'path-mismatched-marker') {
       await assertMismatchedMarkerIsImmutable(workspace.path);
     } else if (scenario === 'busy-wal') {
@@ -580,7 +584,7 @@ async function createEncryptedSchemaVersion(
 
 async function assertEncryptedSchemaVersionAccepted(
   databasePath: string,
-  schemaVersion: 13 | 14 | 15,
+  schemaVersion: 13 | 14 | 15 | 16,
 ): Promise<void> {
   await createEncryptedSchemaVersion(databasePath, schemaVersion);
   await prepareEncryptedDatabase(databasePath, createTestWorkspaceKey());
@@ -593,13 +597,21 @@ async function assertEncryptedSchemaVersionRejected(
   schemaVersion: number,
 ): Promise<void> {
   await createEncryptedSchemaVersion(databasePath, schemaVersion);
+  const paths = plaintextUpgradePaths(databasePath);
+  const artifactBytes = new Map([
+    [paths.encrypting, Buffer.from('existing-encrypting-artifact')],
+    [paths.recovery, Buffer.from('existing-recovery-artifact')],
+  ]);
+  for (const [path, bytes] of artifactBytes) writeFileSync(path, bytes);
   const before = readFileSync(databasePath);
   await assert.rejects(
     prepareEncryptedDatabase(databasePath, createTestWorkspaceKey()),
     /No valid database copy is available/,
   );
   assert.deepEqual(readFileSync(databasePath), before);
-  assertArtifactsAbsent(databasePath);
+  for (const [path, bytes] of artifactBytes) {
+    assert.deepEqual(readFileSync(path), bytes);
+  }
 }
 
 function insertRetainedRow(raw: ReturnType<typeof createRawDatabase>): void {
