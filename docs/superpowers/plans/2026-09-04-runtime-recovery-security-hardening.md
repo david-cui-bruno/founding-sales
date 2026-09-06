@@ -623,19 +623,25 @@ export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; 
 ```
 
 - [ ] Implement and register `0015RecoveryMetadata` after `0014OutboundJurisdictionClearance`.
-- [ ] Update the production domain exact-schema gate and load-bearing manifest to schema 15, including `backup_receipts`, `recovery_readiness`, and `identity_repair_events`. Prove schema 14, missing or extra load-bearing objects, and malformed schema-15 catalogs fail closed before domain composition.
+- [ ] Update the production startup/domain exact-schema gate and load-bearing manifest to schema 15, including `backup_receipts`, `recovery_readiness`, and `identity_repair_events`. Before domain composition, fail closed for schema 14, schema 16 and every future schema, missing or extra load-bearing objects, malformed schema-15 catalogs, any migration ledger other than the exact ordered history through `0015RecoveryMetadata` (including missing, extra, or reordered entries), and every mismatch between `app_meta.schema_version` and the migration ledger.
 - [ ] Implement repository methods `recordBackup`, `listBackups`, `recordRecoverySetupCompleted`, `recordRestoreDrill`, `getRecoveryReadiness`, and `appendIdentityRepairEvent`.
-- [ ] Run focused and aggregate migration tests.
+- [ ] Run the mandatory Schema-15 handoff verification using disposable fixtures only. It must cover the Task 6 focused and aggregate migration and repository tests, migration-backup verification, `tests/main/domainStartupAudit.test.ts`, `tests/integration/foundationRecovery.test.ts`, the applicable packaged checks in `tests/e2e/foundation.spec.ts`, every other exact-schema fixture changed deterministically for this task, and root typecheck. Do not open or migrate the founder workspace or use founder data.
 
 ```bash
 export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/main/db/migrations/0015RecoveryMetadata.test.ts tests/main/operationalSafetyRepository.test.ts tests/main/migrations.test.ts tests/integration/migrationBackup.test.ts
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/main/domainStartupAudit.test.ts tests/integration/foundationRecovery.test.ts
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx playwright test --workers=1 tests/e2e/foundation.spec.ts
+# Run every other deterministically changed exact-schema fixture with its focused npm/npx test command, using this same exact PATH prefix.
 export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run typecheck
 ```
 
-- [ ] Commit.
+- [ ] Review and commit the complete accepted Task 6 slice. Stage the required migration, repository, production startup/readiness, domain runtime, startup audit, and named exact-schema fixture paths explicitly. If another exact-schema fixture changed deterministically, add only that reviewed path. Before committing, inspect `git diff --cached --name-only` and `git diff --cached`; unstage any unrelated file and confirm no required Task 6 path is omitted.
 
 ```bash
-git add src/main/db/migrations/0015RecoveryMetadata.ts tests/main/db/migrations/0015RecoveryMetadata.test.ts src/main/domain/operations/operationalSafetyRepository.ts tests/main/operationalSafetyRepository.test.ts src/main/db/migrate.ts src/main/db/domainSchema.ts tests/main/migrations.test.ts
+git add src/main/db/migrations/0015RecoveryMetadata.ts tests/main/db/migrations/0015RecoveryMetadata.test.ts src/main/domain/operations/operationalSafetyRepository.ts tests/main/operationalSafetyRepository.test.ts src/main/db/migrate.ts src/main/db/domainSchema.ts src/main/domain/startup/storageReadiness.ts src/main/domain/domainRuntime.ts tests/main/migrations.test.ts tests/main/domainStartupAudit.test.ts tests/e2e/foundation.spec.ts tests/integration/foundationRecovery.test.ts
+# Add only other exact-schema fixture paths shown by the reviewed deterministic-change check.
+git diff --cached --name-only
+git diff --cached
 git commit -m "feat: add operational recovery audit schema"
 ```
 
