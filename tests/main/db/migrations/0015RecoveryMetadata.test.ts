@@ -37,6 +37,7 @@ const migrationsThrough14 = [
 const migrateThrough14 = createMigrationRunner(migrationsThrough14);
 const TS = '2026-09-05T12:00:00.000Z';
 const SHA = 'a'.repeat(64);
+const SHA_B = 'b'.repeat(64);
 
 const normalizeSql = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
@@ -46,7 +47,9 @@ const expectedTableSql = {
     backup_basename TEXT NOT NULL UNIQUE,
     kind TEXT NOT NULL CHECK (kind IN ('daily','manual','pre_release')),
     schema_version INTEGER NOT NULL CHECK (schema_version > 0),
-    sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+    sha256 TEXT NOT NULL CHECK (
+      length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'
+    ),
     size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
     created_at TEXT NOT NULL,
     verified_at TEXT NOT NULL
@@ -57,6 +60,15 @@ const expectedTableSql = {
     last_restore_drill_at TEXT,
     last_restore_backup_sha256 TEXT,
     updated_at TEXT NOT NULL
+  )`,
+  restore_drill_receipts: `CREATE TABLE restore_drill_receipts (
+    performed_at TEXT NOT NULL,
+    backup_receipt_id TEXT NOT NULL,
+    backup_sha256 TEXT NOT NULL CHECK (
+      length(backup_sha256) = 64 AND backup_sha256 NOT GLOB '*[^0-9a-f]*'
+    ),
+    PRIMARY KEY (performed_at, backup_sha256),
+    FOREIGN KEY (backup_receipt_id) REFERENCES backup_receipts(id)
   )`,
   identity_repair_events: `CREATE TABLE identity_repair_events (
     id TEXT PRIMARY KEY,
@@ -101,7 +113,8 @@ describe('0015 recovery metadata migration', () => {
     const rows = database.raw.prepare<[], { name: keyof typeof expectedTableSql; sql: string }>(`
       SELECT name, sql FROM sqlite_master
       WHERE type = 'table' AND name IN (
-        'backup_receipts', 'recovery_readiness', 'identity_repair_events'
+        'backup_receipts', 'recovery_readiness', 'restore_drill_receipts',
+        'identity_repair_events'
       )
       ORDER BY name
     `).all();
@@ -151,6 +164,37 @@ describe('0015 recovery metadata migration', () => {
     expect(() => insert.run(
       'backup-6', 'daily-6.sqlite3', 'pre_release', 15, SHA, 0, TS, TS,
     )).toThrow();
+    expect(() => insert.run(
+      'backup-7', 'daily-7.sqlite3', 'manual', 15, 'G'.repeat(64), 10, TS, TS,
+    )).toThrow();
+  });
+
+  it('keeps backup and restore-drill receipts immutable and hash constrained', async () => {
+    await migrateToLatest(database, options);
+    database.raw.prepare(`INSERT INTO backup_receipts
+      (id, backup_basename, kind, schema_version, sha256, size_bytes, created_at, verified_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      'backup-1', 'daily-1.sqlite3', 'daily', 15, SHA, 10, TS, TS,
+    );
+    database.raw.prepare(`INSERT INTO restore_drill_receipts
+      (performed_at, backup_receipt_id, backup_sha256)
+      VALUES (?, ?, ?)`).run(TS, 'backup-1', SHA);
+
+    expect(() => database.raw.prepare(
+      "UPDATE backup_receipts SET size_bytes = 11 WHERE id = 'backup-1'",
+    ).run()).toThrow();
+    expect(() => database.raw.prepare(
+      "DELETE FROM backup_receipts WHERE id = 'backup-1'",
+    ).run()).toThrow();
+    expect(() => database.raw.prepare(
+      "UPDATE restore_drill_receipts SET backup_sha256 = ? WHERE backup_receipt_id = 'backup-1'",
+    ).run(SHA_B)).toThrow();
+    expect(() => database.raw.prepare(
+      "DELETE FROM restore_drill_receipts WHERE backup_receipt_id = 'backup-1'",
+    ).run()).toThrow();
+    expect(() => database.raw.prepare(`INSERT INTO restore_drill_receipts
+      (performed_at, backup_receipt_id, backup_sha256)
+      VALUES (?, ?, ?)`).run(TS, 'backup-1', 'Z'.repeat(64))).toThrow();
   });
 
   it('enforces immutable repair-event identity uniqueness and preserves receipts byte-for-byte', async () => {

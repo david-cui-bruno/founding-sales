@@ -129,6 +129,53 @@ describe('domain startup', () => {
       })).toThrow(DomainStartupFatalError);
     });
 
+    it.each([
+      {
+        objectType: 'legacy table',
+        corrupt: (subject: AppDatabase) => subject.raw.exec(`
+          DROP TABLE jobs;
+          CREATE TABLE jobs (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            state TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            idempotency_key TEXT
+          );
+          CREATE INDEX jobs_state_created_idx ON jobs(state, created_at);
+          CREATE UNIQUE INDEX jobs_type_idempotency_idx
+            ON jobs(type, idempotency_key)
+            WHERE idempotency_key IS NOT NULL;
+        `),
+      },
+      {
+        objectType: 'explicit index',
+        corrupt: (subject: AppDatabase) => subject.raw.exec(`
+          DROP INDEX jobs_state_created_idx;
+          CREATE INDEX jobs_state_created_idx ON jobs(type);
+        `),
+      },
+      {
+        objectType: 'trigger',
+        corrupt: (subject: AppDatabase) => subject.raw.exec(`
+          DROP TRIGGER immutable_identity_repair_events;
+          CREATE TRIGGER immutable_identity_repair_events
+            BEFORE UPDATE ON identity_repair_events
+            BEGIN
+              SELECT 1;
+            END;
+        `),
+      },
+    ])('rejects same-name $objectType SQL corruption', ({ corrupt }) => {
+      corrupt(database);
+
+      expect(() => assertDomainStorageReady({
+        database,
+        expectedBusyTimeoutMs: 5000,
+        expectedSchemaVersion: 15,
+        expectedManifest: DOMAIN_SCHEMA_MANIFEST,
+      })).toThrow(DomainStartupFatalError);
+    });
+
     it.each([14, 16, 99])(
       'rejects schema version %i before repositories exist',
       (schemaVersion) => {

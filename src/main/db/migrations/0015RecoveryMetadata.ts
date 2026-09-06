@@ -9,7 +9,9 @@ export const migration0015RecoveryMetadata = {
       backup_basename TEXT NOT NULL UNIQUE,
       kind TEXT NOT NULL CHECK (kind IN ('daily','manual','pre_release')),
       schema_version INTEGER NOT NULL CHECK (schema_version > 0),
-      sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+      sha256 TEXT NOT NULL CHECK (
+        length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
       size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
       created_at TEXT NOT NULL,
       verified_at TEXT NOT NULL
@@ -20,6 +22,15 @@ export const migration0015RecoveryMetadata = {
       last_restore_drill_at TEXT,
       last_restore_backup_sha256 TEXT,
       updated_at TEXT NOT NULL
+    )`).execute(db);
+    await sql.raw(`CREATE TABLE restore_drill_receipts (
+      performed_at TEXT NOT NULL,
+      backup_receipt_id TEXT NOT NULL,
+      backup_sha256 TEXT NOT NULL CHECK (
+        length(backup_sha256) = 64 AND backup_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      PRIMARY KEY (performed_at, backup_sha256),
+      FOREIGN KEY (backup_receipt_id) REFERENCES backup_receipts(id)
     )`).execute(db);
     await sql.raw(`CREATE TABLE identity_repair_events (
       id TEXT PRIMARY KEY,
@@ -40,6 +51,35 @@ export const migration0015RecoveryMetadata = {
       BEFORE DELETE ON identity_repair_events
       BEGIN
         SELECT RAISE(ABORT, 'identity_repair_events rows are immutable');
+      END`).execute(db);
+    await sql.raw(`CREATE TRIGGER immutable_backup_receipts
+      BEFORE UPDATE ON backup_receipts
+      BEGIN
+        SELECT RAISE(ABORT, 'backup_receipts rows are immutable');
+      END`).execute(db);
+    await sql.raw(`CREATE TRIGGER immutable_backup_receipts_delete
+      BEFORE DELETE ON backup_receipts
+      BEGIN
+        SELECT RAISE(ABORT, 'backup_receipts rows are immutable');
+      END`).execute(db);
+    await sql.raw(`CREATE TRIGGER protect_restore_drill_backup_receipt
+      BEFORE INSERT ON restore_drill_receipts
+      WHEN NOT EXISTS (
+        SELECT 1 FROM backup_receipts
+        WHERE id = NEW.backup_receipt_id AND sha256 = NEW.backup_sha256
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'restore drill requires matching verified backup receipt');
+      END`).execute(db);
+    await sql.raw(`CREATE TRIGGER immutable_restore_drill_receipts
+      BEFORE UPDATE ON restore_drill_receipts
+      BEGIN
+        SELECT RAISE(ABORT, 'restore_drill_receipts rows are immutable');
+      END`).execute(db);
+    await sql.raw(`CREATE TRIGGER immutable_restore_drill_receipts_delete
+      BEFORE DELETE ON restore_drill_receipts
+      BEGIN
+        SELECT RAISE(ABORT, 'restore_drill_receipts rows are immutable');
       END`).execute(db);
 
     const timestamp = new Date().toISOString();
