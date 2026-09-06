@@ -374,6 +374,103 @@ describe('LeadInspectorProvider', () => {
     expect(api.beginOutbound).toHaveBeenCalledTimes(1);
   });
 
+  it('retains live transport uncertainty over a deferred accepted refresh and requests manual association explicitly', async () => {
+    const api = createApi([kevin]);
+    let resolveDetail!: (detail: LeadDetail) => void;
+    api.get.mockResolvedValueOnce(kevin).mockImplementationOnce(() => new Promise((resolve) => { resolveDetail = resolve; }));
+    api.beginOutbound.mockRejectedValueOnce(new Error('private lost reply'));
+    const outcomeApi = { logCallOutcome: vi.fn<(input: import('../../../shared/contracts/todayContract').LogCallOutcomeRequest) => Promise<typeof receipt>>(async () => receipt), addLeadNote: vi.fn(async () => receipt), get: vi.fn(async () => ({ lanes: [] } as never)) };
+    render(<LeadInspectorProvider api={api} outcomeApi={outcomeApi}><Harness /></LeadInspectorProvider>);
+    await openCall();
+    expect(await screen.findByText('Phone handoff response unavailable. Execution is unknown. Do not retry.')).toBeTruthy();
+    const request = api.beginOutbound.mock.calls[0][0];
+    expect(request.commandId).toMatch(/^[a-f0-9-]{36}$/);
+    expect(screen.getByText(request.commandId)).toBeTruthy();
+    expect(screen.getByText('Loading lead details')).toBeTruthy();
+    await act(async () => resolveDetail(detailFor({ outboundAttempts: [{ commandId: request.commandId, channel: 'call', contactMethodId: 'phone-1', requestedAt: '2026-09-06T15:00:00.000Z', manualActivityId: null, status: 'handoff_accepted', reasonCode: null }] })));
+
+    expect(screen.queryByText('Phone handoff accepted. Call outcome unverified.')).toBeNull();
+    expect(screen.getByText('Phone handoff response unavailable. Execution is unknown. Do not retry.')).toBeTruthy();
+    expect(screen.getByText(request.commandId)).toBeTruthy();
+    expect(screen.queryByText(/private lost reply/)).toBeNull();
+    expect(api.get).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    expect(screen.queryByRole('button', { name: 'Open Phone' })).toBeNull();
+    expect(api.beginOutbound).toHaveBeenCalledTimes(1);
+    expect(outcomeApi.logCallOutcome).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Log past activity' }));
+    expect(await screen.findByRole('article', { name: 'Kevin Shin full page' })).toBeTruthy();
+    expect(outcomeApi.logCallOutcome).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'No answer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save & next' }));
+    await waitFor(() => expect(outcomeApi.logCallOutcome).toHaveBeenCalledTimes(1));
+    expect(outcomeApi.logCallOutcome).toHaveBeenCalledWith(expect.objectContaining({ personId: kevin.personId, salesCycleId: kevin.salesCycleId, outboundCommandId: request.commandId, outcome: 'no_answer' }));
+    expect(api.beginOutbound).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps live transport uncertainty beside refreshed manual evidence without another linked-write invitation', async () => {
+    const api = createApi([kevin]);
+    let resolveDetail!: (detail: LeadDetail) => void;
+    api.get.mockResolvedValueOnce(kevin).mockImplementationOnce(() => new Promise((resolve) => { resolveDetail = resolve; }));
+    api.beginOutbound.mockRejectedValueOnce(new Error('lost reply'));
+    const outcomeApi = { logCallOutcome: vi.fn<(input: import('../../../shared/contracts/todayContract').LogCallOutcomeRequest) => Promise<typeof receipt>>(async () => receipt), addLeadNote: vi.fn(async () => receipt), get: vi.fn(async () => ({ lanes: [] } as never)) };
+    render(<LeadInspectorProvider api={api} outcomeApi={outcomeApi}><Harness /></LeadInspectorProvider>);
+    await openCall();
+    await screen.findByText('Phone handoff response unavailable. Execution is unknown. Do not retry.');
+    const request = api.beginOutbound.mock.calls[0][0];
+    await act(async () => resolveDetail(detailFor({ outboundAttempts: [{ commandId: request.commandId, channel: 'call', contactMethodId: 'phone-1', requestedAt: '2026-09-06T15:00:00.000Z', manualActivityId: 'manual-activity', status: 'handoff_accepted', reasonCode: null }] })));
+
+    expect(screen.queryByText('Phone handoff accepted. Call outcome unverified.')).toBeNull();
+    expect(screen.getByText('Phone handoff response unavailable. Execution is unknown. Do not retry.')).toBeTruthy();
+    expect(screen.getByText(request.commandId)).toBeTruthy();
+    expect(screen.getByText('Manual evidence: manual-activity. This does not verify the handoff.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Log past activity' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    expect(screen.queryByRole('button', { name: 'Open Phone' })).toBeNull();
+    expect(api.beginOutbound).toHaveBeenCalledTimes(1);
+    expect(outcomeApi.logCallOutcome).not.toHaveBeenCalled();
+    expect(outcomeApi.addLeadNote).not.toHaveBeenCalled();
+  });
+
+  it.each([null, 'manual-activity'])('keeps cold accepted recovery truthful with manual evidence %s', async (manualActivityId) => {
+    const commandId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const api = createApi([detailFor({ outboundAttempts: [{ commandId, channel: 'call', contactMethodId: 'phone-1', requestedAt: '2026-09-06T15:00:00.000Z', manualActivityId, status: 'handoff_accepted', reasonCode: null }] })]);
+    render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+    expect(await screen.findByText('Phone handoff accepted. Call outcome unverified.')).toBeTruthy();
+    expect(screen.queryByText('Phone handoff response unavailable. Execution is unknown. Do not retry.')).toBeNull();
+    expect(screen.getByText(commandId)).toBeTruthy();
+    if (manualActivityId === null) {
+      expect(screen.getByRole('button', { name: 'Log past activity' })).toBeTruthy();
+    } else {
+      expect(screen.getByText('Manual evidence: manual-activity. This does not verify the handoff.')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Log past activity' })).toBeNull();
+    }
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing', 'refused'] as const)('keeps live transport uncertainty manual fallback unlinked with %s durable evidence', async (evidence) => {
+    const api = createApi([kevin]);
+    let resolveDetail!: (detail: LeadDetail) => void;
+    api.get.mockResolvedValueOnce(kevin).mockImplementationOnce(() => new Promise((resolve) => { resolveDetail = resolve; }));
+    api.beginOutbound.mockRejectedValueOnce(new Error('lost reply'));
+    const outcomeApi = { logCallOutcome: vi.fn<(input: import('../../../shared/contracts/todayContract').LogCallOutcomeRequest) => Promise<typeof receipt>>(async () => receipt), addLeadNote: vi.fn(async () => receipt), get: vi.fn(async () => ({ lanes: [] } as never)) };
+    render(<LeadInspectorProvider api={api} outcomeApi={outcomeApi}><Harness /></LeadInspectorProvider>);
+    await openCall();
+    await screen.findByText('Phone handoff response unavailable. Execution is unknown. Do not retry.');
+    const request = api.beginOutbound.mock.calls[0][0];
+    await act(async () => resolveDetail(detailFor({ outboundAttempts: evidence === 'missing' ? [] : [{ commandId: request.commandId, channel: 'call', contactMethodId: 'phone-1', requestedAt: '2026-09-06T15:00:00.000Z', manualActivityId: null, status: 'refused', reasonCode: 'federal_dnc_listed' }] })));
+    expect(screen.getByText('Phone handoff response unavailable. Execution is unknown. Do not retry.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Log past activity' }));
+    expect(await screen.findByRole('article', { name: 'Kevin Shin full page' })).toBeTruthy();
+    expect(outcomeApi.logCallOutcome).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'No answer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save & next' }));
+    await waitFor(() => expect(outcomeApi.logCallOutcome).toHaveBeenCalledTimes(1));
+    expect(outcomeApi.logCallOutcome.mock.calls[0][0]).not.toHaveProperty('outboundCommandId');
+    expect(api.beginOutbound).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['unavailable', 'failure'] as const)('fails closed for capability %s with manual fallback', async (mode) => {
     const api = createApi([kevin]);
     if (mode === 'failure') api.getOutboundCapabilities.mockRejectedValueOnce(new Error('capability failed'));

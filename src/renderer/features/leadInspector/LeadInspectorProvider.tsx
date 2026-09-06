@@ -327,10 +327,15 @@ export function LeadInspectorProvider({
   const currentDetail = personId === undefined ? undefined : lastDetails.current.get(personId);
   const attempts = currentDetail?.outboundAttempts ?? [];
   const receipt = currentOutbound?.receipt;
+  const uncertainCommandId = currentOutbound?.uncertain ? currentOutbound.request.commandId : undefined;
   const recoveredCurrent = attempts.find((attempt) => attempt.commandId === currentOutbound?.request.commandId);
+  const recoveredManualActivityId = recoveredCurrent?.manualActivityId ?? null;
+  const recoveredCanLink = recoveredCurrent?.channel === 'call'
+    && (recoveredCurrent.status === 'handoff_accepted' || recoveredCurrent.status === 'unknown');
+  // A detail read can supply manual evidence, but cannot resolve a live lost reply.
   const displayed: { receipt: OutboundReceipt; manualActivityId: string | null }[] = [
     ...(receipt === null || receipt === undefined ? [] : [{ receipt, manualActivityId: attempts.find((attempt) => attempt.commandId === receipt.commandId)?.manualActivityId ?? null }]),
-    ...attempts.filter((attempt) => attempt.commandId !== receipt?.commandId).map((attempt) => ({
+    ...attempts.filter((attempt) => attempt.commandId !== receipt?.commandId && attempt.commandId !== uncertainCommandId).map((attempt) => ({
       receipt: { commandId: attempt.commandId, channel: attempt.channel, status: attempt.status, reasonCode: attempt.reasonCode,
         mutation: { revision: currentDetail.revision, affectedPersonIds: [personId], affectedSalesCycleIds: [] as string[] } },
       manualActivityId: attempt.manualActivityId,
@@ -338,10 +343,14 @@ export function LeadInspectorProvider({
   ];
   const outboundStatus = <>
     {currentOutbound?.pending && <p role="status">Phone handoff request pending. <span>{currentOutbound.request.commandId}</span></p>}
-    {currentOutbound?.uncertain && recoveredCurrent === undefined && <section className="outbound-receipt">
+    {currentOutbound?.uncertain && <section className="outbound-receipt">
       <p role="status">Phone handoff response unavailable. Execution is unknown. Do not retry.</p>
       <p>{currentOutbound.request.commandId}</p>
-      <Button variant="quiet" onClick={() => logPastActivity()}>Log past activity</Button>
+      {recoveredManualActivityId !== null ? (
+        <p>Manual evidence: {recoveredManualActivityId}. This does not verify the handoff.</p>
+      ) : (
+        <Button variant="quiet" onClick={() => logPastActivity(recoveredCanLink ? recoveredCurrent.commandId : undefined)}>Log past activity</Button>
+      )}
     </section>}
     {displayed.map(({ receipt: result, manualActivityId }) => <div key={result.commandId}>
       {manualActivityId === null ? <OutboundReceiptPanel receipt={result} onLogPastActivity={logPastActivity} /> : (
