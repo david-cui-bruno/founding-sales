@@ -52,19 +52,6 @@ variable "monthly_budget_limit_usd" {
   default     = "50"
 }
 
-variable "ntfy_topic" {
-  description = "ntfy.sh topic for hot-lead pushes (value lives in SSM /callie-sourcing/ntfy-topic). Empty disables pushes."
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
-variable "tracerfy_api_key" {
-  description = "Tracerfy API bearer token for the enricher Lambda. Canonical value lives in SSM /callie-sourcing/tracerfy-api-key; wire it through terraform.tfvars. The sandbox (mock.tracerfy.com) accepts any non-empty token."
-  type        = string
-  sensitive   = true
-}
-
 variable "schedules_enabled" {
   description = "Master switch for every scheduled sourcing and watchdog EventBridge rule. Keep false until an approved production rollout."
   type        = bool

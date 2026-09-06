@@ -1,5 +1,18 @@
-import { readFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const terraformDirectory = join(process.cwd(), "cloud", "terraform");
@@ -100,6 +113,366 @@ const ERROR_DESCRIPTIONS = {
 
 function occurrences(source: string, value: string): number {
   return source.split(value).length - 1;
+}
+
+const BOOTSTRAP_RUN_ID = "12345678-1234-4123-8123-123456789abc";
+const BOOTSTRAP_ACCOUNT_ID = "326255650484";
+const BOOTSTRAP_BUCKET = `callie-sourcing-tfstate-${BOOTSTRAP_ACCOUNT_ID}`;
+const BOOTSTRAP_TABLE = "callie-sourcing-tflock";
+const BOOTSTRAP_KMS_ARN = `arn:aws:kms:us-east-1:${BOOTSTRAP_ACCOUNT_ID}:key/12345678-1234-1234-1234-123456789abc`;
+
+function recoveryReceipt(bucketPhase = "owned", tablePhase = "owned"): string {
+  return [
+    "format=callie-terraform-state-bootstrap",
+    "version=1",
+    `account_id=${BOOTSTRAP_ACCOUNT_ID}`,
+    "region=us-east-1",
+    `run_id=${BOOTSTRAP_RUN_ID}`,
+    `bucket=${BOOTSTRAP_BUCKET}`,
+    `table=${BOOTSTRAP_TABLE}`,
+    `kms_key_arn=${BOOTSTRAP_KMS_ARN}`,
+    `bucket_phase=${bucketPhase}`,
+    `table_phase=${tablePhase}`,
+    "",
+  ].join("\n");
+}
+
+function runRecoveryScenario(scenario: string) {
+  const directory = mkdtempSync(join(tmpdir(), "callie-bootstrap-recovery-"));
+  const binDirectory = join(directory, "bin");
+  const homeDirectory = join(directory, "home");
+  const receiptDirectory = scenario === "receipt-parent-outside-boundary"
+    ? join(homeDirectory, "alternate-receipts")
+    : join(homeDirectory, ".callie-bootstrap-receipts");
+  const receipt = join(receiptDirectory, "receipt");
+  const awsLog = join(directory, "aws.log");
+  const symlinkTarget = join(directory, "symlink-target");
+  const mktempLog = join(directory, "mktemp.log");
+  mkdirSync(binDirectory);
+  mkdirSync(homeDirectory, { mode: 0o700 });
+  mkdirSync(receiptDirectory, { mode: 0o700 });
+  writeFileSync(receipt, recoveryReceipt(), { mode: 0o600 });
+  const fakeAws = join(binDirectory, "aws");
+  writeFileSync(
+    fakeAws,
+    `#!/usr/bin/env bash
+set -u
+printf '%s\\n' "$*" >>"$FAKE_AWS_LOG"
+service=$1
+operation=$2
+if [[ "$service $operation" == "s3api head-bucket" ]]; then
+  if [[ -f "$FAKE_WORK/bucket-deleted" ]]; then echo NoSuchBucket >&2; exit 1; fi
+  exit 0
+fi
+if [[ "$service $operation" == "s3api get-bucket-tagging" ]]; then
+  [[ "$FAKE_SCENARIO" == "ownership-mismatch" ]] && { echo mismatch; exit 0; }
+  [[ "$*" == *CallieBootstrapRunId* ]] && echo "${BOOTSTRAP_RUN_ID}" || echo terraform-state-v1
+  exit 0
+fi
+if [[ "$service $operation" == "s3api delete-bucket" ]]; then
+  [[ "$FAKE_SCENARIO" == "s3-delete-fails" ]] && { echo AccessDenied >&2; exit 42; }
+  touch "$FAKE_WORK/bucket-deleted"
+  exit 0
+fi
+if [[ "$service $operation" == "dynamodb describe-table" ]]; then
+  if [[ -f "$FAKE_WORK/table-deleted" ]]; then echo ResourceNotFoundException >&2; exit 1; fi
+  echo "arn:aws:dynamodb:us-east-1:${BOOTSTRAP_ACCOUNT_ID}:table/${BOOTSTRAP_TABLE}"
+  exit 0
+fi
+if [[ "$service $operation" == "dynamodb list-tags-of-resource" ]]; then
+  [[ "$FAKE_SCENARIO" == "ownership-mismatch" ]] && { echo mismatch; exit 0; }
+  [[ "$*" == *CallieBootstrapRunId* ]] && echo "${BOOTSTRAP_RUN_ID}" || echo terraform-state-v1
+  exit 0
+fi
+if [[ "$service $operation" == "dynamodb delete-table" ]]; then
+  [[ "$FAKE_SCENARIO" == "table-delete-fails" ]] && { echo AccessDenied >&2; exit 43; }
+  touch "$FAKE_WORK/table-deleted"
+  exit 0
+fi
+if [[ "$service $operation $3" == "dynamodb wait table-not-exists" ]]; then
+  [[ "$FAKE_SCENARIO" == "table-wait-fails" ]] && { echo WaiterError >&2; exit 44; }
+  exit 0
+fi
+echo "unexpected fake aws call: $*" >&2
+exit 99
+`,
+    { mode: 0o755 },
+  );
+  if (scenario === "receipt-write-fails") {
+    const fakeMv = join(binDirectory, "mv");
+    writeFileSync(fakeMv, "#!/usr/bin/env bash\nexit 45\n", { mode: 0o755 });
+  }
+  let command = join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh");
+  if (scenario === "receipt-temp-symlink") {
+    writeFileSync(symlinkTarget, "safe target contents\n", { mode: 0o600 });
+    const fakeMktemp = join(binDirectory, "mktemp");
+    writeFileSync(
+      fakeMktemp,
+      `#!/usr/bin/env bash
+malicious_path="$RECEIPT_DIRECTORY/.receipt.tmp.attacker"
+ln -s "$SYMLINK_TARGET" "$malicious_path"
+printf '%s\\n' "$malicious_path"
+`,
+      { mode: 0o755 },
+    );
+    const wrapper = join(directory, "run-bootstrap");
+    writeFileSync(
+      wrapper,
+      `#!/usr/bin/env bash
+ln -s "$SYMLINK_TARGET" "$RECEIPT.tmp.$$"
+source "$BOOTSTRAP_SCRIPT" --recover "$RECEIPT"
+`,
+      { mode: 0o755 },
+    );
+    command = wrapper;
+  }
+  if (scenario === "receipt-temp-traversal") {
+    mkdirSync(join(receiptDirectory, ".receipt.tmp.attacker"));
+    const fakeMktemp = join(binDirectory, "mktemp");
+    writeFileSync(
+      fakeMktemp,
+      `#!/usr/bin/env bash
+printf 'called\n' >>"$FAKE_MKTEMP_LOG"
+printf '%s\n' "$RECEIPT_DIRECTORY/.receipt.tmp.attacker/../receipt"
+`,
+      { mode: 0o755 },
+    );
+  }
+  if (scenario === "receipt-parent-group-writable") {
+    chmodSync(receiptDirectory, 0o770);
+    const fakeMktemp = join(binDirectory, "mktemp");
+    writeFileSync(
+      fakeMktemp,
+      `#!/usr/bin/env bash
+printf 'called\n' >>"$FAKE_MKTEMP_LOG"
+exit 91
+`,
+      { mode: 0o755 },
+    );
+  }
+  if (scenario === "receipt-ancestor-group-writable") chmodSync(homeDirectory, 0o770);
+  if (scenario === "receipt-parent-allow-acl") {
+    const acl = spawnSync("/bin/chmod", ["+a", "everyone allow read", receiptDirectory]);
+    if (acl.status !== 0) throw new Error(`could not create allow ACL: ${acl.stderr}`);
+  }
+  if (scenario === "receipt-ancestor-deny-acl") {
+    const acl = spawnSync("/bin/chmod", ["+a", "everyone deny delete", homeDirectory]);
+    if (acl.status !== 0) throw new Error(`could not create deny ACL: ${acl.stderr}`);
+  }
+  if ([
+    "receipt-ancestor-group-writable",
+    "receipt-parent-outside-boundary",
+    "receipt-parent-allow-acl",
+  ].includes(scenario)) {
+    const fakeMktemp = join(binDirectory, "mktemp");
+    writeFileSync(
+      fakeMktemp,
+      `#!/usr/bin/env bash
+printf 'called\n' >>"$FAKE_MKTEMP_LOG"
+exit 91
+`,
+      { mode: 0o755 },
+    );
+  }
+  chmodSync(fakeAws, 0o755);
+  const result = spawnSync(
+    command,
+    ["--recover", receipt],
+    {
+      cwd: directory,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+        FAKE_AWS_LOG: awsLog,
+        FAKE_SCENARIO: scenario,
+        FAKE_WORK: directory,
+        HOME: homeDirectory,
+        RECEIPT_DIRECTORY: receiptDirectory,
+        BOOTSTRAP_SCRIPT: join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh"),
+        RECEIPT: receipt,
+        SYMLINK_TARGET: symlinkTarget,
+        FAKE_MKTEMP_LOG: mktempLog,
+      },
+    },
+  );
+  const output = `${result.stdout}${result.stderr}`;
+  const receiptExists = existsSync(receipt);
+  const receiptContents = receiptExists ? readFileSync(receipt, "utf8") : undefined;
+  const awsCalls = existsSync(awsLog) ? readFileSync(awsLog, "utf8") : "";
+  const mktempCalls = existsSync(mktempLog) ? readFileSync(mktempLog, "utf8") : "";
+  const mode = receiptExists ? statSync(receipt).mode & 0o777 : undefined;
+  const receiptIsSymlink = receiptExists ? lstatSync(receipt).isSymbolicLink() : undefined;
+  const symlinkTargetContents = scenario === "receipt-temp-symlink"
+    ? readFileSync(symlinkTarget, "utf8")
+    : undefined;
+  if (scenario === "receipt-ancestor-deny-acl") {
+    const clearAcl = spawnSync("/bin/chmod", ["-N", homeDirectory]);
+    if (clearAcl.status !== 0) throw new Error(`could not clear deny ACL: ${clearAcl.stderr}`);
+  }
+  rmSync(directory, { recursive: true, force: true });
+  return {
+    result,
+    output,
+    receiptExists,
+    receiptContents,
+    awsCalls,
+    mktempCalls,
+    mode,
+    receiptIsSymlink,
+    symlinkTargetContents,
+  };
+}
+
+function runRuntimeKeyScenario(scenario: string) {
+  const directory = mkdtempSync(join(tmpdir(), "callie-runtime-key-"));
+  const binDirectory = join(directory, "bin");
+  const homeDirectory = join(directory, "home");
+  const receiptDirectory = scenario === "alternate-receipt-path"
+    ? join(homeDirectory, "other")
+    : join(homeDirectory, ".callie-bootstrap-receipts");
+  const receipt = join(receiptDirectory, "runtime-key.receipt");
+  const awsLog = join(directory, "aws.log");
+  const stateDirectory = join(directory, "state");
+  mkdirSync(binDirectory, { recursive: true, mode: 0o700 });
+  mkdirSync(receiptDirectory, { recursive: true, mode: 0o700 });
+  mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
+  chmodSync(homeDirectory, 0o700);
+
+  const keyId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const keyArn = `arn:aws:kms:us-east-1:${BOOTSTRAP_ACCOUNT_ID}:key/${keyId}`;
+  const fakeAws = `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$AWS_LOG"
+service=$1; operation=$2; shift 2
+case "$service:$operation" in
+  kms:create-key)
+    printf '%s\\n' owned > "$AWS_STATE/key"
+    if [[ "$SCENARIO" == lost-create-key-response ]]; then exit 1; fi
+    printf '%s\\n' "${keyId}"
+    ;;
+  kms:list-keys) [[ -f "$AWS_STATE/key" ]] && printf '%s\\n' "${keyId}" || true ;;
+  kms:list-resource-tags)
+    if [[ "$SCENARIO" == recovery-ownership-mismatch && -f "$AWS_STATE/alias" ]]; then
+      printf 'CallieBootstrapRunId\\twrong-run\\nCallieBootstrap\\truntime-secret-key-v1\\n'
+      exit 0
+    fi
+    printf 'CallieBootstrapRunId\\t%s\\nCallieBootstrap\\truntime-secret-key-v1\\n' "$EXPECTED_RUN_ID"
+    ;;
+  kms:enable-key-rotation) : ;;
+  kms:create-alias)
+    printf '%s\\n' "${keyId}" > "$AWS_STATE/alias"
+    if [[ "$SCENARIO" == lost-create-alias-response || "$SCENARIO" == cleanup-failure || "$SCENARIO" == cleanup-false-success || "$SCENARIO" == recovery-ownership-mismatch || "$SCENARIO" == lost-schedule-key-deletion-response || "$SCENARIO" == schedule-key-deletion-false-success || "$SCENARIO" == pending-deletion-without-date || "$SCENARIO" == deletion-date-without-pending-state || "$SCENARIO" == schedule-key-deletion-failure ]]; then exit 1; fi
+    ;;
+  kms:delete-alias)
+    if [[ "$SCENARIO" == cleanup-failure ]]; then exit 1; fi
+    if [[ "$SCENARIO" == cleanup-false-success ]]; then exit 0; fi
+    rm -f "$AWS_STATE/alias"
+    ;;
+  kms:schedule-key-deletion)
+    if [[ "$SCENARIO" == cleanup-failure || "$SCENARIO" == schedule-key-deletion-failure ]]; then exit 1; fi
+    if [[ "$SCENARIO" == cleanup-false-success || "$SCENARIO" == schedule-key-deletion-false-success ]]; then exit 0; fi
+    printf '%s\\n' PendingDeletion > "$AWS_STATE/key-state"
+    if [[ "$SCENARIO" != pending-deletion-without-date ]]; then
+      printf '%s\\n' 2030-01-01T00:00:00Z > "$AWS_STATE/deletion-date"
+    fi
+    if [[ "$SCENARIO" == deletion-date-without-pending-state ]]; then
+      printf '%s\\n' Enabled > "$AWS_STATE/key-state"
+    fi
+    if [[ "$SCENARIO" == lost-schedule-key-deletion-response ]]; then exit 1; fi
+    ;;
+  kms:get-key-rotation-status) printf 'True\\n' ;;
+  kms:describe-key)
+    key=""; query=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in --key-id) key=$2; shift 2;; --query) query=$2; shift 2;; *) shift;; esac
+    done
+    if [[ "$key" == alias/* ]]; then
+      [[ -f "$AWS_STATE/alias" ]] || { echo NotFoundException >&2; exit 254; }
+    elif [[ ! -f "$AWS_STATE/key" ]]; then echo NotFoundException >&2; exit 254; fi
+    if [[ "$query" == KeyMetadata.KeyId ]]; then printf '%s\\n' "${keyId}"
+    elif [[ "$query" == KeyMetadata.Arn ]]; then printf '%s\\n' "${keyArn}"
+    elif [[ "$query" == KeyMetadata.KeyState ]]; then
+      [[ -f "$AWS_STATE/key-state" ]] && cat "$AWS_STATE/key-state" || printf 'Enabled\\n'
+    elif [[ "$query" == KeyMetadata.DeletionDate ]]; then
+      [[ -f "$AWS_STATE/deletion-date" ]] && cat "$AWS_STATE/deletion-date" || printf 'None\\n'
+    else printf '%s\\n' "${keyId}"; fi
+    ;;
+  *) echo "unexpected fake aws call: $service $operation" >&2; exit 2 ;;
+esac
+`;
+  const awsPath = join(binDirectory, "aws");
+  writeFileSync(awsPath, fakeAws, { mode: 0o700 });
+
+  if (scenario === "receipt-parent-symlink") {
+    rmSync(receiptDirectory, { recursive: true });
+    const realDirectory = join(homeDirectory, "real-receipts");
+    mkdirSync(realDirectory, { mode: 0o700 });
+    symlinkSync(realDirectory, receiptDirectory);
+  }
+  if (scenario === "ancestor-replacement") {
+    rmSync(receiptDirectory, { recursive: true });
+    const outside = join(directory, "outside");
+    mkdirSync(outside, { mode: 0o700 });
+    symlinkSync(outside, receiptDirectory);
+  }
+  if (scenario === "receipt-parent-allow-acl") {
+    const acl = spawnSync("chmod", ["+a", `user:${process.env.USER}:allow:read`, receiptDirectory]);
+    if (acl.status !== 0) throw new Error(`unable to install test ACL: ${acl.stderr}`);
+  }
+  if (scenario === "receipt-temp-symlink") {
+    const target = join(directory, "target");
+    writeFileSync(target, "safe\n", { mode: 0o600 });
+    const mktemp = `#!/usr/bin/env bash\nln -sf "$SYMLINK_TARGET" "$RECEIPT_TEMP"\nprintf '%s\\n' "$RECEIPT_TEMP"\n`;
+    writeFileSync(join(binDirectory, "mktemp"), mktemp, { mode: 0o700 });
+  }
+
+  const run = (args: string[]) => spawnSync(
+    "bash",
+    [join(process.cwd(), "cloud", "scripts", "bootstrap-runtime-secret-key.sh"), ...args],
+    {
+      cwd: directory,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+        HOME: homeDirectory,
+        AWS_LOG: awsLog,
+        AWS_STATE: stateDirectory,
+        SCENARIO: scenario,
+        EXPECTED_RUN_ID: BOOTSTRAP_RUN_ID,
+        CALLIE_BOOTSTRAP_RUN_ID: BOOTSTRAP_RUN_ID,
+        RECEIPT_TEMP: join(receiptDirectory, ".runtime-key.receipt.tmp.ABCDEFGH"),
+        SYMLINK_TARGET: join(directory, "target"),
+      },
+    },
+  );
+  const prepareRegion = scenario === "unsupported-prepare-region" ? "us-west-2" : "us-east-1";
+  const prepare = run(["--prepare", prepareRegion, receipt]);
+  let recover = prepare.status === 0 ? null : run(["--recover", receipt]);
+  if (scenario === "recover-verified") recover = run(["--recover", receipt]);
+  if (scenario === "recover-cleanup-verified") {
+    writeFileSync(receipt, readFileSync(receipt, "utf8").replace("phase=verified", "phase=cleanup-verified"));
+    rmSync(join(stateDirectory, "alias"), { force: true });
+    writeFileSync(join(stateDirectory, "key-state"), "PendingDeletion\n");
+    writeFileSync(join(stateDirectory, "deletion-date"), "2030-01-01T00:00:00Z\n");
+    recover = run(["--recover", receipt]);
+  }
+  return {
+    prepare,
+    recover,
+    output: `${prepare.stdout}${prepare.stderr}${recover?.stdout ?? ""}${recover?.stderr ?? ""}`,
+    receiptExists: existsSync(receipt),
+    receiptContents: existsSync(receipt) && !lstatSync(receipt).isSymbolicLink()
+      ? readFileSync(receipt, "utf8")
+      : "",
+    awsCalls: existsSync(awsLog) ? readFileSync(awsLog, "utf8") : "",
+    aliasExists: existsSync(join(stateDirectory, "alias")),
+    deletionScheduled: existsSync(join(stateDirectory, "key-state"))
+      && readFileSync(join(stateDirectory, "key-state"), "utf8").trim() === "PendingDeletion"
+      && existsSync(join(stateDirectory, "deletion-date"))
+      && readFileSync(join(stateDirectory, "deletion-date"), "utf8").trim() !== "",
+  };
 }
 
 describe("scheduled source Terraform hardening", () => {
@@ -730,5 +1103,506 @@ describe("scheduled source Terraform hardening", () => {
     expect(section).not.toMatch(/\b(?:terraform|tofu) (?:init|validate|plan|show|apply)\b/);
     expect(section).not.toMatch(/\baws\s/);
     expect(section).not.toContain("TF_VAR_");
+  });
+});
+
+describe("managed secret and remote state preparation", () => {
+  it("configures identifier-only Lambda parameters and rejects secret-valued Terraform inputs", () => {
+    const variables = readTerraform("variables.tf");
+    const lambda = readTerraform("lambda.tf");
+    const adapters = readTerraform("adapters.tf");
+    const example = readFileSync(join(terraformDirectory, "terraform.tfvars.example"), "utf8");
+
+    const mailLambda = extractBlock(lambda, 'resource "aws_lambda_function" "mail_parse"');
+    const mailEnvironment = extractContainingBlock(mailLambda, "NTFY_TOPIC_PARAM");
+    const enricher = extractBlock(adapters, '"enricher" =');
+    const enricherEnvironment = extractContainingBlock(enricher, "TRACERFY_API_KEY_PARAM");
+
+    expect(mailEnvironment).toMatch(
+      /NTFY_TOPIC_PARAM\s*=\s*local\.ntfy_topic_parameter_name/,
+    );
+    expect(enricherEnvironment).toMatch(
+      /TRACERFY_API_KEY_PARAM\s*=\s*local\.tracerfy_api_key_parameter_name/,
+    );
+    expect(enricherEnvironment).toMatch(
+      /HMAC_SALT_PARAM\s*=\s*local\.hmac_salt_parameter_name/,
+    );
+    expect(occurrences(mailEnvironment, "NTFY_TOPIC_PARAM")).toBe(1);
+    expect(occurrences(enricherEnvironment, "TRACERFY_API_KEY_PARAM")).toBe(1);
+    expect(occurrences(enricherEnvironment, "HMAC_SALT_PARAM")).toBe(1);
+    expect(lambda).not.toMatch(/\bNTFY_TOPIC\s*=/);
+    expect(adapters).not.toMatch(/\bTRACERFY_API_KEY\s*=/);
+    expect(variables).not.toContain('variable "ntfy_topic"');
+    expect(variables).not.toContain('variable "tracerfy_api_key"');
+    expect(example).not.toMatch(/(?:secret|token|password|api[_-]?key)\s*=\s*"[^"\n]+"/i);
+  });
+
+  it("grants exact SSM parameter ARNs and only the expected KMS key", () => {
+    const iam = readTerraform("iam.tf");
+    const secrets = readTerraform("secrets.tf");
+    const mailPolicy = extractBlock(iam, 'data "aws_iam_policy_document" "lambda_mail_parse"');
+    const adapterPolicy = extractBlock(iam, 'data "aws_iam_policy_document" "lambda_adapters"');
+
+    expect(mailPolicy).toContain("parameter/callie-sourcing/ntfy-topic");
+    expect(adapterPolicy).toContain("parameter/callie-sourcing/tracerfy-api-key");
+    expect(adapterPolicy).toContain("parameter/callie-sourcing/membership-hmac-salt");
+    expect(occurrences(mailPolicy, '"ssm:GetParameter"')).toBe(1);
+    expect(occurrences(adapterPolicy, '"ssm:GetParameter"')).toBe(1);
+    expect(mailPolicy).toContain('"kms:Decrypt"');
+    expect(adapterPolicy).toContain('"kms:Decrypt"');
+    const mailDecrypt = extractContainingBlock(mailPolicy, 'sid       = "DecryptRuntimeSecrets"');
+    const adapterDecrypt = extractContainingBlock(
+      adapterPolicy,
+      'sid       = "DecryptRuntimeSecrets"',
+    );
+    expect(mailDecrypt).toContain("data.aws_kms_alias.runtime_secrets.target_key_arn");
+    expect(adapterDecrypt).toContain("data.aws_kms_alias.runtime_secrets.target_key_arn");
+    for (const statement of [mailDecrypt, adapterDecrypt]) {
+      expect(statement).toContain('variable = "kms:ViaService"');
+      expect(statement).toContain('values   = ["ssm.${var.aws_region}.amazonaws.com"]');
+      expect(statement).toContain(
+        'variable = "kms:EncryptionContext:PARAMETER_ARN"',
+      );
+    }
+    expect(mailDecrypt).toContain("parameter/callie-sourcing/ntfy-topic");
+    expect(mailDecrypt).not.toContain("parameter/callie-sourcing/tracerfy-api-key");
+    expect(adapterDecrypt).toContain("parameter/callie-sourcing/tracerfy-api-key");
+    expect(adapterDecrypt).toContain("parameter/callie-sourcing/membership-hmac-salt");
+    expect(adapterDecrypt).not.toContain("parameter/callie-sourcing/ntfy-topic");
+    expect(iam).not.toMatch(/ssm:[^"\n]*\*/);
+    expect(secrets).toContain('data "aws_kms_alias" "runtime_secrets"');
+    expect(secrets).not.toContain('resource "aws_kms_key" "runtime_secrets"');
+    expect(secrets).not.toContain('resource "aws_ssm_parameter"');
+  });
+
+  it("uses a partial S3 backend and public secret-free examples", () => {
+    const versions = readTerraform("versions.tf");
+    const backend = readFileSync(join(terraformDirectory, "backend.hcl.example"), "utf8");
+
+    expect(versions).toContain('backend "s3" {}');
+    expect(backend).toContain('bucket         = "callie-sourcing-tfstate-ACCOUNT_ID"');
+    expect(backend).toContain('key            = "cloud/terraform.tfstate"');
+    expect(backend).toContain('dynamodb_table = "callie-sourcing-tflock"');
+    expect(backend).toContain("encrypt        = true");
+    expect(backend).toContain(
+      'kms_key_id     = "arn:aws:kms:us-east-1:ACCOUNT_ID:key/KMS_KEY_ID"',
+    );
+    expect(backend).not.toMatch(/(?:secret|token|password|api[_-]?key)\s*=/i);
+  });
+
+  it("documents exact backend KMS access and verifies the migrated state object's exact encryption", () => {
+    const readme = readFileSync(join(process.cwd(), "cloud", "README.md"), "utf8");
+    expect(readme).toContain("kms:Encrypt");
+    expect(readme).toContain("kms:Decrypt");
+    expect(readme).toContain("kms:GenerateDataKey");
+    expect(readme).toContain("kms:DescribeKey");
+    expect(readme).toContain("aws s3api head-object");
+    expect(readme).toContain("ServerSideEncryption");
+    expect(readme).toContain("SSEKMSKeyId");
+    expect(readme).toMatch(/actual state object[\s\S]{0,500}aws:kms/i);
+    expect(readme).toMatch(/exact reviewed state-key ARN/i);
+  });
+
+  it("keeps Task 9 source-only and puts any future plan only below Hold Point 1", () => {
+    const plan = readFileSync(
+      join(process.cwd(), "docs", "superpowers", "plans", "2026-09-04-runtime-recovery-security-hardening.md"),
+      "utf8",
+    );
+    const taskStart = plan.indexOf("## Task 9:");
+    const holdStart = plan.indexOf("### Hold Point 1:", taskStart);
+    const task = plan.slice(taskStart, holdStart);
+    const hold = plan.slice(holdStart, plan.indexOf("\n---", holdStart));
+    expect(task).toContain("tofu fmt -check -recursive cloud/terraform");
+    expect(task).toContain("n" + "px vitest run tests/infrastructure/terraformHardening.test.ts");
+    expect(task).not.toMatch(/\b(?:terraform|tofu) (?:init|validate|plan|show|apply)\b/);
+    expect(hold).toContain("human-readable unsaved plan");
+    expect(hold).toContain("schedules_enabled=false");
+    expect(hold).toContain("scheduled_health_alerts_enabled=false");
+    expect(hold).not.toContain("-out=");
+  });
+
+  for (const scenario of [
+    "alternate-receipt-path",
+    "receipt-parent-symlink",
+    "ancestor-replacement",
+    "receipt-parent-allow-acl",
+  ]) {
+    it(`rejects runtime receipt boundary violation ${scenario} before AWS`, () => {
+      const result = runRuntimeKeyScenario(scenario);
+      expect(result.prepare.status).not.toBe(0);
+      expect(result.awsCalls).toBe("");
+      expect(result.receiptExists).toBe(false);
+    });
+  }
+
+  it("does not follow a substituted runtime receipt temp symlink", () => {
+    const result = runRuntimeKeyScenario("receipt-temp-symlink");
+    expect(result.prepare.status).not.toBe(0);
+    expect(result.output).not.toContain("runtime-secret key prepared");
+  });
+
+  for (const scenario of ["lost-create-key-response", "lost-create-alias-response"]) {
+    it(`recovers safely from ${scenario}`, () => {
+      const result = runRuntimeKeyScenario(scenario);
+      expect(result.prepare.status).not.toBe(0);
+      expect(result.receiptContents).toContain("run_id=");
+      expect(result.receiptContents).toContain("phase=");
+      expect(result.recover?.status).toBe(0);
+      expect(result.aliasExists).toBe(false);
+      expect(result.deletionScheduled).toBe(true);
+      expect(result.output).toContain("runtime-key recovery cleanup verified");
+    });
+  }
+
+  it("retains recovery evidence and never claims cleanup when cleanup fails", () => {
+    const result = runRuntimeKeyScenario("cleanup-failure");
+    expect(result.prepare.status).not.toBe(0);
+    expect(result.recover?.status).not.toBe(0);
+    expect(result.receiptContents).toContain("phase=pending-alias");
+    expect(result.output).not.toContain("runtime-key recovery cleanup verified");
+  });
+
+  it("detects cleanup commands that return success without changing AWS state", () => {
+    const result = runRuntimeKeyScenario("cleanup-false-success");
+    expect(result.prepare.status).not.toBe(0);
+    expect(result.recover?.status).not.toBe(0);
+    expect(result.aliasExists).toBe(true);
+    expect(result.deletionScheduled).toBe(false);
+    expect(result.output).not.toContain("runtime-key recovery cleanup verified");
+  });
+
+  it("rejects recovery from a verified receipt without destructive AWS calls", () => {
+    const result = runRuntimeKeyScenario("recover-verified");
+    expect(result.prepare.status).toBe(0);
+    expect(result.recover?.status).not.toBe(0);
+    expect(result.aliasExists).toBe(true);
+    expect(result.deletionScheduled).toBe(false);
+    expect(result.awsCalls).not.toContain("kms delete-alias");
+    expect(result.awsCalls).not.toContain("kms schedule-key-deletion");
+  });
+
+  it("treats cleanup-verified recovery as terminal without new destructive calls", () => {
+    const result = runRuntimeKeyScenario("recover-cleanup-verified");
+    expect(result.prepare.status).toBe(0);
+    expect(result.recover?.status).toBe(0);
+    expect(result.awsCalls.match(/kms delete-alias/g) ?? []).toHaveLength(0);
+    expect(result.awsCalls.match(/kms schedule-key-deletion/g) ?? []).toHaveLength(0);
+    expect(result.output).toContain("runtime-key recovery cleanup verified");
+  });
+
+  it("proves exact run ownership before deleting the runtime alias", () => {
+    const result = runRuntimeKeyScenario("recovery-ownership-mismatch");
+    expect(result.prepare.status).not.toBe(0);
+    expect(result.recover?.status).not.toBe(0);
+    expect(result.aliasExists).toBe(true);
+    expect(result.awsCalls).not.toContain("kms delete-alias");
+  });
+
+  it("reconciles an accepted schedule-key-deletion with a lost response", () => {
+    const result = runRuntimeKeyScenario("lost-schedule-key-deletion-response");
+    expect(result.prepare.status).not.toBe(0);
+    expect(result.recover?.status).toBe(0);
+    expect(result.aliasExists).toBe(false);
+    expect(result.deletionScheduled).toBe(true);
+    expect(result.receiptContents).toContain("phase=cleanup-verified");
+  });
+
+  it("rejects schedule-key-deletion success when key state does not change", () => {
+    const result = runRuntimeKeyScenario("schedule-key-deletion-false-success");
+    expect(result.prepare.status).not.toBe(0);
+    expect(result.recover?.status).not.toBe(0);
+    expect(result.aliasExists).toBe(false);
+    expect(result.deletionScheduled).toBe(false);
+    expect(result.receiptContents).toContain("phase=pending-alias");
+    expect(result.awsCalls).toContain("kms schedule-key-deletion");
+    expect(result.output).not.toContain("runtime-key recovery cleanup verified");
+  });
+
+  for (const scenario of ["pending-deletion-without-date", "deletion-date-without-pending-state"]) {
+    it(`rejects incomplete key deletion postcondition for ${scenario}`, () => {
+      const result = runRuntimeKeyScenario(scenario);
+      expect(result.prepare.status).not.toBe(0);
+      expect(result.recover?.status).not.toBe(0);
+      expect(result.aliasExists).toBe(false);
+      expect(result.deletionScheduled).toBe(false);
+      expect(result.receiptContents).toContain("phase=pending-alias");
+      expect(result.awsCalls).toContain("kms schedule-key-deletion");
+      expect(result.output).not.toContain("runtime-key recovery cleanup verified");
+    });
+  }
+
+  it("retains recovery evidence when schedule-key-deletion fails after alias deletion", () => {
+    const result = runRuntimeKeyScenario("schedule-key-deletion-failure");
+    expect(result.prepare.status).not.toBe(0);
+    expect(result.recover?.status).not.toBe(0);
+    expect(result.aliasExists).toBe(false);
+    expect(result.deletionScheduled).toBe(false);
+    expect(result.receiptContents).toContain("phase=pending-alias");
+    expect(result.awsCalls).toContain("kms delete-alias");
+    expect(result.awsCalls).toContain("kms schedule-key-deletion");
+    expect(result.output).not.toContain("runtime-key recovery cleanup verified");
+  });
+
+  it("rejects an unsupported prepare region before receipt creation or AWS", () => {
+    const result = runRuntimeKeyScenario("unsupported-prepare-region");
+    expect(result.prepare.status).not.toBe(0);
+    expect(result.awsCalls).toBe("");
+    expect(result.receiptExists).toBe(false);
+  });
+
+  it("ships a fail-closed state bootstrap and documents both migration confirmations", () => {
+    const script = readFileSync(join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh"), "utf8");
+    const readme = readFileSync(join(process.cwd(), "cloud", "README.md"), "utf8");
+
+    expect(script).toContain("set -euo pipefail");
+    expect(script).toContain("aws s3api head-bucket");
+    expect(script).toContain("aws dynamodb describe-table");
+    expect(script).toContain("NoSuchBucket");
+    expect(script).toContain("ResourceNotFoundException");
+    expect(script).toContain("ambiguous bucket existence; retaining recovery receipt");
+    expect(script).toContain("ambiguous lock-table existence; retaining recovery receipt");
+    expect(script).toContain("trap cleanup_on_failure ERR INT TERM");
+    expect(script).toContain("wait table-exists");
+    expect(script).toContain("get-public-access-block");
+    expect(script).toContain("get-bucket-versioning");
+    expect(script).toContain("get-bucket-encryption");
+    expect(script).toContain("describe-table");
+    expect(script).toContain("--recover");
+    expect(script).toContain("recovery receipt");
+    expect(script).toContain("recovery reconciliation completed");
+    expect(script).not.toContain("rm -f -- \"$receipt\"");
+    expect(script).toContain("put-bucket-encryption");
+    expect(script).toContain("put-bucket-versioning");
+    expect(script).toContain("put-public-access-block");
+    expect(script).toContain("SSEAlgorithm=aws:kms");
+    expect(script).toMatch(/exit 1/);
+    expect(readme).toContain("Hold Point 1");
+    expect(readme).toContain("explicit founder confirmation");
+    expect(readme).toContain("second explicit confirmation");
+    expect(readme).toContain("tofu init -migrate-state");
+    expect(readme).toContain("No apply is authorized");
+  });
+
+  it("persists pending ownership before create and guards recovery deletion with resource tags", () => {
+    const script = readFileSync(join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh"), "utf8");
+    const bucketPending = script.indexOf('bucket_phase="pending"');
+    const bucketCreate = script.indexOf("aws s3api create-bucket");
+    const bucketTag = script.indexOf("aws s3api put-bucket-tagging");
+    const bucketControls = script.indexOf("aws s3api put-public-access-block");
+    const tablePending = script.indexOf('table_phase="pending"');
+    const tableCreate = script.indexOf("aws dynamodb create-table");
+
+    expect(bucketPending).toBeGreaterThan(0);
+    expect(bucketPending).toBeLessThan(bucketCreate);
+    expect(bucketTag).toBeGreaterThan(bucketCreate);
+    expect(bucketTag).toBeLessThan(bucketControls);
+    expect(tablePending).toBeGreaterThan(0);
+    expect(tablePending).toBeLessThan(tableCreate);
+    expect(script.slice(tableCreate, script.indexOf("\n\n", tableCreate))).toContain("--tags");
+    expect(script).toContain("CallieBootstrapRunId");
+    expect(script).toContain('ownership_marker="terraform-state-v1"');
+    expect(script).toContain("Key=CallieBootstrap,Value=${ownership_marker}");
+    expect(script).toContain("get-bucket-tagging");
+    expect(script).toContain("list-tags-of-resource");
+
+    const bucketOwnership = script.indexOf("verify_bucket_ownership");
+    const bucketDelete = script.indexOf("aws s3api delete-bucket");
+    const tableOwnership = script.indexOf("verify_table_ownership");
+    const tableDelete = script.indexOf("aws dynamodb delete-table");
+    expect(bucketOwnership).toBeGreaterThan(0);
+    expect(bucketOwnership).toBeLessThan(bucketDelete);
+    expect(tableOwnership).toBeGreaterThan(0);
+    expect(tableOwnership).toBeLessThan(tableDelete);
+  });
+
+  it("validates the versioned private receipt and retains it for ambiguous recovery", () => {
+    const script = readFileSync(join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh"), "utf8");
+    for (const field of [
+      'receipt_format="callie-terraform-state-bootstrap"', 'receipt_version="1"',
+      "account_id=", "region=", "run_id=", "bucket=", "table=", "kms_key_arn=",
+      "bucket_phase=", "table_phase=",
+    ]) expect(script).toContain(field);
+    expect(script).toContain("receipt must be mode 0600");
+    expect(script).toContain("invalid bootstrap receipt format or version");
+    expect(script).toContain("invalid canonical bootstrap run id");
+    expect(script).toContain('expected_bucket="callie-sourcing-tfstate-${account_id}"');
+    expect(script).toContain('expected_table="callie-sourcing-tflock"');
+    expect(script).toContain("ambiguous bucket ownership; retaining recovery receipt");
+    expect(script).toContain("ambiguous lock-table ownership; retaining recovery receipt");
+    expect(script).not.toMatch(/ambiguous[\s\S]{0,200}rm -f -- "\$receipt"/);
+  });
+
+  for (const scenario of [
+    "s3-delete-fails",
+    "table-delete-fails",
+    "table-wait-fails",
+    "receipt-write-fails",
+  ]) {
+    it(`fails closed when recovery operation ${scenario} fails`, () => {
+      const { result, output, receiptContents, mode } = runRecoveryScenario(scenario);
+
+      expect(result.status).not.toBe(0);
+      expect(output).not.toContain("recovery reconciliation completed");
+      expect(output).not.toContain("automatic cleanup completed");
+      expect(receiptContents).not.toContain("bucket_phase=absent\ntable_phase=absent");
+      if (scenario.startsWith("s3")) expect(receiptContents).not.toContain("bucket_phase=absent");
+      if (scenario.startsWith("table")) expect(receiptContents).not.toContain("table_phase=absent");
+      if (scenario === "receipt-write-fails") expect(receiptContents).toBe(recoveryReceipt());
+      expect(mode).toBe(0o600);
+    });
+  }
+
+  it("refuses every recovery delete when exact ownership tags mismatch", () => {
+    const { result, output, receiptContents, awsCalls, mode } = runRecoveryScenario("ownership-mismatch");
+
+    expect(result.status).not.toBe(0);
+    expect(output).not.toContain("recovery reconciliation completed");
+    expect(awsCalls).not.toContain("delete-table");
+    expect(awsCalls).not.toContain("delete-bucket");
+    expect(receiptContents).toBe(recoveryReceipt());
+    expect(mode).toBe(0o600);
+  });
+
+  it("fails closed without following prepositioned or returned receipt temp symlinks", () => {
+    const {
+      result,
+      output,
+      receiptContents,
+      mode,
+      receiptIsSymlink,
+      symlinkTargetContents,
+    } = runRecoveryScenario("receipt-temp-symlink");
+
+    expect(result.status).not.toBe(0);
+    expect(output).not.toContain("recovery reconciliation completed");
+    expect(output).not.toContain("automatic cleanup completed");
+    expect(symlinkTargetContents).toBe("safe target contents\n");
+    expect(receiptIsSymlink).toBe(false);
+    expect(receiptContents).toBe(recoveryReceipt());
+    expect(mode).toBe(0o600);
+  });
+
+  it("rejects a traversal-shaped mktemp return before touching the durable receipt", () => {
+    const { result, output, receiptExists, receiptContents, mode } =
+      runRecoveryScenario("receipt-temp-traversal");
+
+    expect(result.status).not.toBe(0);
+    expect(output).not.toContain("recovery reconciliation completed");
+    expect(output).not.toContain("automatic cleanup completed");
+    expect(receiptExists).toBe(true);
+    expect(receiptContents).toBe(recoveryReceipt());
+    expect(mode).toBe(0o600);
+  });
+
+  it("rejects a group-writable receipt parent before mktemp or AWS behavior", () => {
+    const { result, output, receiptContents, awsCalls, mktempCalls, mode } =
+      runRecoveryScenario("receipt-parent-group-writable");
+
+    expect(result.status).not.toBe(0);
+    expect(output).not.toContain("recovery reconciliation completed");
+    expect(output).not.toContain("automatic cleanup completed");
+    expect(mktempCalls).toBe("");
+    expect(awsCalls).toBe("");
+    expect(receiptContents).toBe(recoveryReceipt());
+    expect(mode).toBe(0o600);
+  });
+
+  it("rejects a group-writable receipt ancestor before mktemp or AWS behavior", () => {
+    const { result, receiptContents, awsCalls, mktempCalls, mode } =
+      runRecoveryScenario("receipt-ancestor-group-writable");
+
+    expect(result.status).not.toBe(0);
+    expect(mktempCalls).toBe("");
+    expect(awsCalls).toBe("");
+    expect(receiptContents).toBe(recoveryReceipt());
+    expect(mode).toBe(0o600);
+  });
+
+  it("rejects receipt paths outside canonical HOME/.callie-bootstrap-receipts", () => {
+    const { result, receiptContents, awsCalls, mktempCalls, mode } =
+      runRecoveryScenario("receipt-parent-outside-boundary");
+
+    expect(result.status).not.toBe(0);
+    expect(mktempCalls).toBe("");
+    expect(awsCalls).toBe("");
+    expect(receiptContents).toBe(recoveryReceipt());
+    expect(mode).toBe(0o600);
+  });
+
+  it("rejects privacy-expanding allow ACLs before mktemp or AWS behavior", () => {
+    const { result, receiptContents, awsCalls, mktempCalls, mode } =
+      runRecoveryScenario("receipt-parent-allow-acl");
+
+    expect(result.status).not.toBe(0);
+    expect(mktempCalls).toBe("");
+    expect(awsCalls).toBe("");
+    expect(receiptContents).toBe(recoveryReceipt());
+    expect(mode).toBe(0o600);
+  });
+
+  it("permits deny-only ACLs on an otherwise trusted receipt ancestor chain", () => {
+    const { result, output } = runRecoveryScenario("receipt-ancestor-deny-acl");
+
+    expect(result.status).toBe(0);
+    expect(output).toContain("recovery reconciliation completed");
+  });
+
+  it("requires every state postcondition and exact lock-table KMS ARN", () => {
+    const script = readFileSync(join(process.cwd(), "cloud", "scripts", "bootstrap-terraform-state.sh"), "utf8");
+    expect(script).toContain("get-public-access-block");
+    expect(script).toContain("get-bucket-versioning");
+    expect(script).toContain("get-bucket-encryption");
+    expect(script).toContain("Table.SSEDescription.KMSMasterKeyArn");
+    expect(script).toContain('[[ "$observed_table_kms_arn" == "$kms_key_arn" ]]');
+    expect(script).toContain("postcondition verification failed; retaining recovery receipt");
+  });
+
+  it("documents staged runtime-key and all-parameter prevalidation before Lambda cutover", () => {
+    const script = readFileSync(
+      join(process.cwd(), "cloud", "scripts", "bootstrap-runtime-secret-key.sh"),
+      "utf8",
+    );
+    const readme = readFileSync(join(process.cwd(), "cloud", "README.md"), "utf8");
+    const plan = readFileSync(
+      join(
+        process.cwd(),
+        "docs",
+        "superpowers",
+        "plans",
+        "2026-09-04-runtime-recovery-security-hardening.md",
+      ),
+      "utf8",
+    );
+
+    expect(script).toContain("create-alias");
+    expect(script).toContain("describe-key");
+    expect(script).toContain("get-key-rotation-status");
+    expect(script).toContain("get-parameter");
+    expect(script).toContain("describe-parameters");
+    expect(script).toContain("Parameters[].[Name,Type,KeyId,ARN]");
+    expect(script).not.toContain("--query Parameter.KeyId");
+    expect(script).toContain("expected_parameter_arn");
+    expect(script).toContain('[[ "$metadata_row_count" -eq 1 ]]');
+    expect(script).toContain("metadata_type");
+    expect(script).toContain('"SecureString"');
+    expect(script).not.toContain("mapfile");
+    expect(script).toContain("TRACERFY_API_KEY_PARAM");
+    expect(script).toContain("NTFY_TOPIC_PARAM");
+    expect(script).toContain("HMAC_SALT_PARAM");
+    expect(script).toContain("--verify-parameters");
+    expect(script).toContain("receipt_key_arn");
+    expect(script).toContain('[[ "$actual_key_arn" == "$receipt_key_arn" ]]');
+    expect(script).toContain("metadata_key_arn");
+    expect(readme).toContain("Stage A: prepare and verify the runtime key");
+    expect(readme).toContain("Stage B: enter and prevalidate all three parameters");
+    expect(readme).toContain("Stage C: cut over IAM and Lambda identifiers");
+    expect(readme).toContain("Rollback");
+    expect(readme).toContain("canonical `$HOME/.callie-bootstrap-receipts`");
+    expect(readme).toContain("every path component from `/`");
+    expect(readme).toContain("allow ACL");
+    expect(readme).toContain("deny-only ACL");
+    expect(readme).toContain("same-UID or root compromise");
+    expect(plan).toMatch(/prevalidate all three encrypted parameters/i);
+    expect(plan).toMatch(/only then apply the IAM and Lambda identifier cutover/i);
   });
 });

@@ -120,7 +120,8 @@ locals {
         # errors alarm -> ntfy ("buy credits" signal). Sandbox for tests:
         # https://mock.tracerfy.com.
         TRACERFY_BASE_URL         = "https://tracerfy.com"
-        TRACERFY_API_KEY          = var.tracerfy_api_key
+        TRACERFY_API_KEY_PARAM    = local.tracerfy_api_key_parameter_name
+        HMAC_SALT_PARAM           = local.hmac_salt_parameter_name
         ENRICH_MONTHLY_CREDIT_CAP = "1000" # 1000 credits ≈ $20 at 5 credits/$0.10
       }
       schedule = "rate(15 minutes)"
