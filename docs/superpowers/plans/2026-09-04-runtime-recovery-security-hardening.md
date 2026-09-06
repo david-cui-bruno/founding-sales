@@ -811,16 +811,19 @@ git commit -m "feat: prepare managed cloud secrets and remote state"
 Stop. Obtain explicit founder confirmation for this operational sequence.
 
 1. Confirm the exposed credentials from Hold Point 0 remain revoked and their dependent schedules remain paused.
-2. Create and verify the dedicated runtime-secret KMS key and stable alias through the approved bootstrap path, retain its private receipt, and stop before entering parameters.
-3. Enter all three runtime values directly into encrypted SSM under that exact key through an approved interactive operator path. Do not place them in shell history, repository files, Terraform variables, logs, or chat. Prevalidate all three encrypted parameters by identifier, key id, and decrypt access without displaying values.
-4. Under this separately approved Hold Point only, create a human-readable unsaved plan with restrictive `umask 077`, `schedules_enabled=false`, and `scheduled_health_alerts_enabled=false`. Do not use `-out`, JSON rendering, or retain raw plan output. Prove zero destroy and zero replacement and retain only a sanitized summary.
-5. Only then apply the IAM and Lambda identifier cutover with both gates false; invoke one bounded request and inspect only redacted logs. Retain prior deployed Lambda versions/configuration until verification completes so rollback never requires reintroducing secret-valued environment entries.
-6. Verify the revoked provider credential cannot authenticate and is not referenced by Lambda configuration.
-7. Import the already validated replacement app-inbox AWS credential into the verified protected local envelope, test bounded list/fetch/upload, observe a successful manual poll, verify the old key remains inactive, then securely remove the quarantined plaintext import only after a second protected copy is validated.
-8. Bootstrap the encrypted/versioned/private state bucket and lock table. Retain and inspect the recovery receipt, activation waits, and postcondition evidence before continuing.
-9. Obtain a second explicit confirmation before `tofu init -migrate-state`.
-10. Compare state serial and resource count before/after, verify remote locking, archive the old local state privately, then remove plaintext local state only after rollback evidence is retained.
-11. Re-enable schedules only after health, logs, and alarms are verified.
+2. Bootstrap the encrypted/versioned/private state bucket and lock table first. Retain and inspect the recovery receipt, activation waits, and postcondition evidence before continuing.
+3. Obtain a second explicit confirmation before `tofu init -migrate-state`.
+4. Migrate the trusted local state, compare state serial and resource count before/after, verify remote locking, archive the old local state privately, and verify the actual state object uses `aws:kms` with the exact reviewed state-key ARN before removing plaintext local state.
+5. Create and verify the dedicated runtime-secret KMS key and stable alias through the approved bootstrap path, retain its private receipt, and stop before entering parameters.
+6. Enter all three runtime values directly into encrypted SSM under that exact key through an approved interactive operator path. Do not place them in shell history, repository files, Terraform variables, logs, or chat. Prevalidate all three encrypted parameters by identifier, key id, and decrypt access without displaying values.
+7. Only after trusted-state migration and postcondition verification, create a state-aware human-readable unsaved plan with restrictive `umask 077`, `schedules_enabled=false`, and `scheduled_health_alerts_enabled=false`. Do not use `-out`, JSON rendering, or retain raw plan output. Prove zero destroy and zero replacement and retain only a sanitized summary.
+8. Only then perform the separately approved IAM and Lambda identifier cutover apply with both gates false; invoke one bounded request and inspect only redacted logs. Retain prior deployed Lambda versions/configuration until verification completes so rollback never requires reintroducing secret-valued environment entries.
+9. Verify the revoked provider credential cannot authenticate and is not referenced by Lambda configuration.
+10. Import the already validated replacement app-inbox AWS credential into the verified protected local envelope, test bounded list/fetch/upload, observe a successful manual poll, verify the old key remains inactive, then securely remove the quarantined plaintext import only after a second protected copy is validated.
+
+#### Staged schedule rollout
+
+Never enable schedules during source verification. In a later separately approved apply, set `schedules_enabled=true` while `scheduled_health_alerts_enabled=false`. Prove current completion metrics and watchdog heartbeats are arriving, and wait for all missing-success alarms to reach a known OK baseline from current observations. Only then obtain separate approval, then use a separate approved apply setting `scheduled_health_alerts_enabled=true`; verify notification action attachment and each alarm's current state afterward.
 
 No repository commit is associated with this hold point.
 

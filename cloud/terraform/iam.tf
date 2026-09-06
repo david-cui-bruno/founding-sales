@@ -155,8 +155,83 @@ data "aws_iam_policy_document" "lambda_adapters" {
     resources = ["${aws_s3_bucket.inbox.arn}/*"]
   }
 
-  # Enricher: suppression check before any contact-bearing event reaches the
-  # inbox (CONTRACT.md compliance invariant). Read-only by design.
+  statement {
+    sid    = "Logs"
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+    ]
+    resources = [
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-adapter-*",
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-scorer*",
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-resolver*",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "lambda_adapters" {
+  name   = "${var.name_prefix}-lambda-adapters"
+  role   = aws_iam_role.lambda_adapters.id
+  policy = data.aws_iam_policy_document.lambda_adapters.json
+}
+
+# --- Enricher: adapter data plus dedicated secret and suppression access ----
+
+resource "aws_iam_role" "lambda_enricher" {
+  name               = "${var.name_prefix}-lambda-enricher"
+  path               = var.iam_path
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+}
+
+data "aws_iam_policy_document" "lambda_enricher" {
+  statement {
+    sid    = "SnapshotsAndEntities"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:Query",
+    ]
+    resources = [
+      aws_dynamodb_table.snapshots.arn,
+      aws_dynamodb_table.entities.arn,
+      "${aws_dynamodb_table.entities.arn}/index/*",
+    ]
+  }
+
+  statement {
+    sid     = "IdempotencyTable"
+    effect  = "Allow"
+    actions = ["dynamodb:GetItem", "dynamodb:PutItem"]
+    resources = [
+      aws_dynamodb_table.idempotency.arn,
+    ]
+  }
+
+  statement {
+    sid       = "WriteInbox"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.inbox.arn}/*"]
+  }
+
+  statement {
+    sid       = "ListInbox"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.inbox.arn]
+  }
+
+  statement {
+    sid       = "ReadInbox"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.inbox.arn}/*"]
+  }
+
   statement {
     sid       = "SuppressionRead"
     effect    = "Allow"
@@ -164,8 +239,6 @@ data "aws_iam_policy_document" "lambda_adapters" {
     resources = [aws_dynamodb_table.suppression.arn]
   }
 
-  # Enricher: spend-cap alarm (published once per month when the vendor
-  # credit cap is first hit).
   statement {
     sid       = "PublishOpsAlerts"
     effect    = "Allow"
@@ -173,7 +246,6 @@ data "aws_iam_policy_document" "lambda_adapters" {
     resources = [aws_sns_topic.alerts.arn]
   }
 
-  # Enricher runtime values are fetched by exact identifier only.
   statement {
     sid     = "ReadEnricherParameters"
     effect  = "Allow"
@@ -207,26 +279,28 @@ data "aws_iam_policy_document" "lambda_adapters" {
   }
 
   statement {
-    sid    = "Logs"
-    effect = "Allow"
-    actions = [
-      "logs:CreateLogGroup",
-      "logs:CreateLogStream",
-      "logs:PutLogEvents",
-    ]
+    sid     = "CreateLogGroup"
+    effect  = "Allow"
+    actions = ["logs:CreateLogGroup"]
     resources = [
-      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-adapter-*",
-      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-scorer*",
-      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-resolver*",
-      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-enricher*",
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-enricher",
+    ]
+  }
+
+  statement {
+    sid     = "WriteLogs"
+    effect  = "Allow"
+    actions = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = [
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${var.name_prefix}-enricher:*",
     ]
   }
 }
 
-resource "aws_iam_role_policy" "lambda_adapters" {
-  name   = "${var.name_prefix}-lambda-adapters"
-  role   = aws_iam_role.lambda_adapters.id
-  policy = data.aws_iam_policy_document.lambda_adapters.json
+resource "aws_iam_role_policy" "lambda_enricher" {
+  name   = "${var.name_prefix}-lambda-enricher"
+  role   = aws_iam_role.lambda_enricher.id
+  policy = data.aws_iam_policy_document.lambda_enricher.json
 }
 
 resource "aws_iam_role" "lambda_schedule_watchdog" {

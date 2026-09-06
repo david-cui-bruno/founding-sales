@@ -138,7 +138,7 @@ async function processMessage(
   deps: HandlerDeps,
   messageId: string,
   now: () => Date,
-  ntfyTopic: string | null,
+  getNtfyTopic: () => Promise<string | null>,
 ): Promise<RecordResult> {
   const s3Key = `${RAW_MAIL_PREFIX}${messageId}`;
   const raw = await deps.s3.send(
@@ -273,19 +273,20 @@ async function processMessage(
 
   // Hot-lead phone push. Fire-and-forget: a push failure must never fail
   // mail processing (the event is already durably in the inbox).
-  if (ntfyTopic) {
-    try {
+  try {
+    const ntfyTopic = await getNtfyTopic();
+    if (ntfyTopic) {
       const pushed = await pushHotEvents(
         { fetchImpl: deps.fetchImpl ?? fetch, topic: ntfyTopic },
         events,
       );
       if (pushed > 0) log("info", "sent hot-lead pushes", { messageId, pushed });
-    } catch (error) {
-      log("warn", "hot-lead push failed (event already in inbox)", {
-        messageId,
-        error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
-      });
     }
+  } catch (error) {
+    log("warn", "hot-lead push failed (event already in inbox)", {
+      messageId,
+      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    });
   }
 
   return result;
@@ -294,7 +295,9 @@ async function processMessage(
 export async function handlerWithDeps(event: SESEvent, deps: HandlerDeps): Promise<void> {
   const now = deps.now ?? (() => new Date());
   const records = event.Records ?? [];
-  const ntfyTopic = await deps.getNtfyTopic();
+  let ntfyTopicPromise: Promise<string | null> | undefined;
+  const getNtfyTopic = (): Promise<string | null> =>
+    (ntfyTopicPromise ??= deps.getNtfyTopic());
 
   if (records.length === 0) {
     log("warn", "received event with no SES records");
@@ -304,7 +307,7 @@ export async function handlerWithDeps(event: SESEvent, deps: HandlerDeps): Promi
   for (const record of records) {
     const messageId = record.ses.mail.messageId;
     try {
-      await processMessage(deps, messageId, now, ntfyTopic);
+      await processMessage(deps, messageId, now, getNtfyTopic);
     } catch (error) {
       // Log and rethrow: SES lambda_action is async (Event invocation), so a
       // throw surfaces in Lambda error metrics/retries instead of vanishing.

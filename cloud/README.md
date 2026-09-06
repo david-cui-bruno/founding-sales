@@ -107,7 +107,16 @@ temporary creation or AWS behavior. Protection from other local users applies
 only when the full chain passes. Hostile same-UID or root compromise is explicitly
 out of scope.
 
-1. **Stage A: prepare and verify the runtime key.** Run the dedicated key
+1. **Stage A: prepare and verify remote state storage.** Bootstrap the
+   encrypted/versioned/private state bucket and lock table first. Retain and
+   inspect the recovery receipt, activation waits, and postcondition evidence.
+   Verify the backend configuration names the exact reviewed state-key ARN.
+2. **Stage B: obtain a second explicit confirmation and migrate trusted state.**
+   Only after Stage A succeeds, obtain a second explicit confirmation before
+   `tofu init -migrate-state`. Compare state serial and resource count before
+   and after migration, verify locking, and retain private rollback evidence.
+   Verify the actual state object with the approved metadata-only check below.
+3. **Stage C: prepare and verify the runtime key.** Run the dedicated key
    bootstrap through the approved operator path. It creates a durable pending
    receipt before AWS creation, tags the key with its unique run identity, and
    retains enough evidence to reconcile a lost create-key or create-alias response.
@@ -118,24 +127,28 @@ out of scope.
    only after every check succeeds. Retain a verified mode-0600 receipt, verify
    the alias target and enabled rotation, and stop. Terraform reads this
    pre-existing alias; it does not create or replace the key during cutover.
-2. **Stage B: enter and prevalidate all three parameters.** Enter Tracerfy, ntfy,
+4. **Stage D: enter and prevalidate all three parameters.** Enter Tracerfy, ntfy,
    and membership-HMAC values directly into encrypted SSM under the prepared
    key. Run `bootstrap-runtime-secret-key.sh --verify-parameters` to confirm each
    identifier uses that exact key and can be decrypted while displaying no
    value. A missing optional ntfy parameter is allowed at runtime, but Hold Point
    prevalidation deliberately requires all three before infrastructure cutover.
-3. **Stage C: cut over IAM and Lambda identifiers.** Review the exact plan with
-   both schedule gates false. Only after Stage B succeeds may the IAM conditions
-   and identifier-only Lambda environment changes be applied. Invoke bounded
-   checks and inspect only redacted logs.
+5. **Stage E: state-aware IAM and Lambda identifier cutover.** Only after the
+   trusted-state migration and its state-object postcondition verification,
+   create a human-readable unsaved plan with restrictive `umask 077`,
+   `schedules_enabled=false`, and `scheduled_health_alerts_enabled=false`.
+   Prove zero destroy and zero replacement. Retain only a sanitized summary.
+   In a separately approved apply, cut over IAM and identifier-only Lambda
+   configuration with both gates false, then invoke bounded checks and inspect
+   only redacted logs.
 
 **Rollback:** keep schedules false and retain the previously deployed Lambda
-versions/configuration until Stage C verification completes. If any canary or
+versions/configuration until Stage E verification completes. If any canary or
 decrypt check fails, restore those prior versions/configuration, do not delete or
 re-encrypt parameters, and investigate against the private receipts. Never roll
 back by placing a secret value in Terraform or Lambda environment configuration.
 
-The state bootstrap is an operator aid for that later approved workflow. It
+The state bootstrap is the first operational stage of that later approved workflow. It
 refuses existing names, records a mode-0600 recovery receipt, immediately applies
 bucket controls, cleans up resources created by a failed run, waits for lock-table
 activation, and verifies public-access blocking, versioning, encryption key,
@@ -149,16 +162,28 @@ to the reviewed bucket/object and exact KMS permissions `kms:Encrypt`,
 `kms:Decrypt`, `kms:GenerateDataKey`, and `kms:DescribeKey` on that state-key ARN.
 Do not grant those KMS actions on `*` or on the runtime-secret key.
 
-After the protected backend is reviewed, obtain a second explicit confirmation
-before `tofu init -migrate-state`. Compare state serial and resource count before
-and after migration, verify locking, and retain private rollback evidence before
-removing local state. Then verify the actual state object rather than relying on
+After the protected backend is reviewed, Stage B requires the second confirmation
+and trusted-state migration before any IAM/Lambda plan or cutover. Verify the
+actual state object rather than relying on
 bucket defaults: run an approved `aws s3api head-object` for the exact reviewed
 bucket and `cloud/terraform.tfstate` key, inspect only `ServerSideEncryption` and
 `SSEKMSKeyId`, require `ServerSideEncryption` to equal `aws:kms`, and require
 `SSEKMSKeyId` to equal the exact reviewed state-key ARN. Do not accept an alias,
 SSE-S3/AES256, another key ARN, or missing metadata. Schedule enablement requires
 a later health review.
+
+## Staged schedule rollout
+
+Never enable schedules during source verification. A future rollout requires a
+separate approval and two applies that must not be combined:
+
+1. Apply `schedules_enabled=true` while keeping
+   `scheduled_health_alerts_enabled=false`. Verify current completion metrics and
+   watchdog heartbeats arrive for every expected cadence. Wait until all
+   missing-success alarms reach a known OK baseline from current observations.
+2. Only after that baseline is reviewed, obtain separate approval, then use a
+   separate approved apply with `scheduled_health_alerts_enabled=true`. Verify notification
+   action attachment and each alarm's current state after the apply.
 
 ## SES sandbox note
 

@@ -1142,22 +1142,27 @@ describe("managed secret and remote state preparation", () => {
     const secrets = readTerraform("secrets.tf");
     const mailPolicy = extractBlock(iam, 'data "aws_iam_policy_document" "lambda_mail_parse"');
     const adapterPolicy = extractBlock(iam, 'data "aws_iam_policy_document" "lambda_adapters"');
+    const enricherPolicy = extractBlock(iam, 'data "aws_iam_policy_document" "lambda_enricher"');
 
     expect(mailPolicy).toContain("parameter/callie-sourcing/ntfy-topic");
-    expect(adapterPolicy).toContain("parameter/callie-sourcing/tracerfy-api-key");
-    expect(adapterPolicy).toContain("parameter/callie-sourcing/membership-hmac-salt");
+    expect(adapterPolicy).not.toContain("parameter/callie-sourcing/tracerfy-api-key");
+    expect(adapterPolicy).not.toContain("parameter/callie-sourcing/membership-hmac-salt");
+    expect(enricherPolicy).toContain("parameter/callie-sourcing/tracerfy-api-key");
+    expect(enricherPolicy).toContain("parameter/callie-sourcing/membership-hmac-salt");
     expect(occurrences(mailPolicy, '"ssm:GetParameter"')).toBe(1);
-    expect(occurrences(adapterPolicy, '"ssm:GetParameter"')).toBe(1);
+    expect(occurrences(adapterPolicy, '"ssm:GetParameter"')).toBe(0);
+    expect(occurrences(enricherPolicy, '"ssm:GetParameter"')).toBe(1);
     expect(mailPolicy).toContain('"kms:Decrypt"');
-    expect(adapterPolicy).toContain('"kms:Decrypt"');
+    expect(adapterPolicy).not.toContain('"kms:Decrypt"');
+    expect(enricherPolicy).toContain('"kms:Decrypt"');
     const mailDecrypt = extractContainingBlock(mailPolicy, 'sid       = "DecryptRuntimeSecrets"');
-    const adapterDecrypt = extractContainingBlock(
-      adapterPolicy,
+    const enricherDecrypt = extractContainingBlock(
+      enricherPolicy,
       'sid       = "DecryptRuntimeSecrets"',
     );
     expect(mailDecrypt).toContain("data.aws_kms_alias.runtime_secrets.target_key_arn");
-    expect(adapterDecrypt).toContain("data.aws_kms_alias.runtime_secrets.target_key_arn");
-    for (const statement of [mailDecrypt, adapterDecrypt]) {
+    expect(enricherDecrypt).toContain("data.aws_kms_alias.runtime_secrets.target_key_arn");
+    for (const statement of [mailDecrypt, enricherDecrypt]) {
       expect(statement).toContain('variable = "kms:ViaService"');
       expect(statement).toContain('values   = ["ssm.${var.aws_region}.amazonaws.com"]');
       expect(statement).toContain(
@@ -1166,9 +1171,17 @@ describe("managed secret and remote state preparation", () => {
     }
     expect(mailDecrypt).toContain("parameter/callie-sourcing/ntfy-topic");
     expect(mailDecrypt).not.toContain("parameter/callie-sourcing/tracerfy-api-key");
-    expect(adapterDecrypt).toContain("parameter/callie-sourcing/tracerfy-api-key");
-    expect(adapterDecrypt).toContain("parameter/callie-sourcing/membership-hmac-salt");
-    expect(adapterDecrypt).not.toContain("parameter/callie-sourcing/ntfy-topic");
+    expect(enricherDecrypt).toContain("parameter/callie-sourcing/tracerfy-api-key");
+    expect(enricherDecrypt).toContain("parameter/callie-sourcing/membership-hmac-salt");
+    expect(enricherDecrypt).not.toContain("parameter/callie-sourcing/ntfy-topic");
+    expect(enricherPolicy).toContain('sid       = "SuppressionRead"');
+    expect(enricherPolicy).toContain('sid       = "PublishOpsAlerts"');
+    expect(adapterPolicy).not.toContain('sid       = "SuppressionRead"');
+    expect(adapterPolicy).not.toContain('sid       = "PublishOpsAlerts"');
+    expect(enricherPolicy).toContain("${var.name_prefix}-enricher:*");
+    expect(enricherPolicy).toContain("${var.name_prefix}-enricher\"");
+    expect(enricherPolicy).not.toContain("${var.name_prefix}-enricher*");
+    expect(adapterPolicy).not.toContain("${var.name_prefix}-enricher*");
     expect(iam).not.toMatch(/ssm:[^"\n]*\*/);
     expect(secrets).toContain('data "aws_kms_alias" "runtime_secrets"');
     expect(secrets).not.toContain('resource "aws_kms_key" "runtime_secrets"');
@@ -1219,6 +1232,55 @@ describe("managed secret and remote state preparation", () => {
     expect(hold).toContain("schedules_enabled=false");
     expect(hold).toContain("scheduled_health_alerts_enabled=false");
     expect(hold).not.toContain("-out=");
+  });
+
+  it("orders protected backend migration before the state-aware IAM and Lambda cutover", () => {
+    const readme = readFileSync(join(process.cwd(), "cloud", "README.md"), "utf8");
+    const plan = readFileSync(
+      join(process.cwd(), "docs", "superpowers", "plans", "2026-09-04-runtime-recovery-security-hardening.md"),
+      "utf8",
+    );
+    for (const source of [readme, plan]) {
+      const holdStart = source.indexOf("Hold Point 1:");
+      const hold = source.slice(holdStart, source.indexOf("\n---", holdStart) < 0 ? undefined : source.indexOf("\n---", holdStart));
+      const bootstrap = hold.search(/bootstrap the\s+encrypted\/versioned\/private state bucket/i);
+      const secondConfirmation = hold.indexOf("second explicit confirmation");
+      const migration = hold.indexOf("tofu init -migrate-state");
+      const statePostcondition = hold.indexOf("actual state object");
+      const planStep = hold.indexOf("human-readable unsaved plan");
+      const cutoverOffset = hold
+        .slice(planStep)
+        .search(/(?:cut over IAM and identifier-only Lambda|IAM and Lambda identifier cutover apply)/i);
+      const cutover = cutoverOffset < 0 ? -1 : planStep + cutoverOffset;
+      expect(bootstrap).toBeGreaterThanOrEqual(0);
+      expect(secondConfirmation).toBeGreaterThan(bootstrap);
+      expect(migration).toBeGreaterThan(secondConfirmation);
+      expect(statePostcondition).toBeGreaterThan(migration);
+      expect(planStep).toBeGreaterThan(statePostcondition);
+      expect(cutover).toBeGreaterThan(planStep);
+      expect(hold).toContain("zero destroy");
+      expect(hold).toContain("zero replacement");
+      expect(hold).toContain("schedules_enabled=false");
+      expect(hold).toContain("scheduled_health_alerts_enabled=false");
+    }
+  });
+
+  it("documents a separately approved schedule-first health-action rollout", () => {
+    const readme = readFileSync(join(process.cwd(), "cloud", "README.md"), "utf8");
+    const plan = readFileSync(
+      join(process.cwd(), "docs", "superpowers", "plans", "2026-09-04-runtime-recovery-security-hardening.md"),
+      "utf8",
+    );
+    for (const source of [readme, plan]) {
+      const rollout = source.slice(source.indexOf("Staged schedule rollout"));
+      expect(rollout).toContain("schedules_enabled=true");
+      expect(rollout).toContain("scheduled_health_alerts_enabled=false");
+      expect(rollout).toMatch(/current completion[\s\S]*watchdog heartbeats/i);
+      expect(rollout).toMatch(/missing-success alarms[\s\S]*known OK baseline/i);
+      expect(rollout).toMatch(/separate approved apply[\s\S]*scheduled_health_alerts_enabled=true/i);
+      expect(rollout).toMatch(/verify[\s\S]*action attachment[\s\S]*current state/i);
+      expect(rollout).toMatch(/Never enable schedules during source verification/i);
+    }
   });
 
   for (const scenario of [
@@ -1593,9 +1655,9 @@ describe("managed secret and remote state preparation", () => {
     expect(script).toContain("receipt_key_arn");
     expect(script).toContain('[[ "$actual_key_arn" == "$receipt_key_arn" ]]');
     expect(script).toContain("metadata_key_arn");
-    expect(readme).toContain("Stage A: prepare and verify the runtime key");
-    expect(readme).toContain("Stage B: enter and prevalidate all three parameters");
-    expect(readme).toContain("Stage C: cut over IAM and Lambda identifiers");
+    expect(readme).toContain("Stage C: prepare and verify the runtime key");
+    expect(readme).toContain("Stage D: enter and prevalidate all three parameters");
+    expect(readme).toContain("Stage E: state-aware IAM and Lambda identifier cutover");
     expect(readme).toContain("Rollback");
     expect(readme).toContain("canonical `$HOME/.callie-bootstrap-receipts`");
     expect(readme).toContain("every path component from `/`");
@@ -1603,6 +1665,6 @@ describe("managed secret and remote state preparation", () => {
     expect(readme).toContain("deny-only ACL");
     expect(readme).toContain("same-UID or root compromise");
     expect(plan).toMatch(/prevalidate all three encrypted parameters/i);
-    expect(plan).toMatch(/only then apply the IAM and Lambda identifier cutover/i);
+    expect(plan).toMatch(/only then perform the separately approved IAM and Lambda identifier cutover apply/i);
   });
 });

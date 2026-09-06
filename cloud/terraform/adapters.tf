@@ -108,6 +108,7 @@ locals {
       cadence                = "quarter_hour"
       has_unprocessed_metric = true
       error_description      = "Sourcing enricher Lambda failed."
+      role_arn               = aws_iam_role.lambda_enricher.arn
       environment = {
         INBOX_BUCKET      = aws_s3_bucket.inbox.bucket
         IDEMPOTENCY_TABLE = aws_dynamodb_table.idempotency.name

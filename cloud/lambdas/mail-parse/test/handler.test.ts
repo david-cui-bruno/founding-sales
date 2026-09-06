@@ -263,7 +263,7 @@ function assertSafeBoundaryFailure(failure: unknown, originalName: string, origi
 
 describe("exported handler boundary", () => {
   it("continues ingestion when the optional ntfy parameter does not exist", async () => {
-    const state = newState("msg-test", testMailMime);
+    const state = newState("msg-test", testOverrideF5botMime);
     const deps = fakeDeps(state);
     deps.getNtfyTopic = () =>
       loadSecureParameter({
@@ -280,8 +280,26 @@ describe("exported handler boundary", () => {
 
     await expect(createHandler(() => deps)(sesEvent("msg-test"))).resolves.toBeUndefined();
   });
+  it("writes the inbox and skips push when optional ntfy lookup is rejected", async () => {
+    const state = newState("msg-test", testOverrideF5botMime);
+    const deps = fakeDeps(state);
+    const fetchImpl = vi.fn();
+    deps.fetchImpl = fetchImpl as unknown as typeof fetch;
+    deps.getNtfyTopic = async () => {
+      throw Object.assign(new Error("ciphertext rejected for private parameter"), {
+        name: "KMSInvalidStateException",
+      });
+    };
+
+    await expect(createHandler(() => deps)(sesEvent("msg-test"))).resolves.toBeUndefined();
+
+    expect(state.dynamoPuts).toHaveLength(1);
+    expect(state.inboxPuts).toHaveLength(1);
+    expect(parseNdjson(state.inboxPuts[0]!.body)).toHaveLength(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
   it("resolves the optional ntfy topic once per invocation without warm caching", async () => {
-    const state = newState("msg-test", testMailMime);
+    const state = newState("msg-test", testOverrideF5botMime);
     const deps = fakeDeps(state);
     let lookups = 0;
     deps.getNtfyTopic = async () => {
