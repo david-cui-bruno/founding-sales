@@ -1,3 +1,4 @@
+import type { DiscoveryBrief, DiscoverySnapshot } from '../../src/shared/contracts/discoveryContract';
 import { createLeadDetailApi } from '../../src/preload/apis/leadDetailApi';
 import { createIpcClient } from '../../src/preload/ipcClient';
 import type { LeadTriageSnapshot, LeadTriageEvidence } from '../../src/shared/contracts/leadTriageReportContract';
@@ -19,6 +20,7 @@ type ExposedCallieApi = {
   health: { get: () => Promise<unknown> };
   leads: { list: (input: unknown) => Promise<unknown> };
   leadDetail: Record<string, unknown>;
+  discovery: import('../../src/shared/contracts/discoveryContract').DiscoveryApi;
   today: { get: () => Promise<unknown>; getLeadTriageSnapshot: (input: unknown) => Promise<unknown> };
   pipeline: { get: () => Promise<unknown> };
   review: Record<string, unknown>;
@@ -93,6 +95,7 @@ describe('preload workflow bridge', () => {
     expect(Object.keys(api).sort()).toEqual([
       'appleSpike',
       'conversations',
+      'discovery',
       'friday',
       'health',
       'imports',
@@ -107,6 +110,7 @@ describe('preload workflow bridge', () => {
       'today',
     ]);
     expect(Object.keys(api.recovery).sort()).toEqual(['beginSetup', 'completeSetup', 'saveSetupMaterial', 'selectAndRunRestoreDrill', 'status']);
+    expect(Object.keys(api.discovery).sort()).toEqual(['begin', 'get', 'getBrief', 'override']);
     expect(Object.keys(api.health)).toEqual(['get']);
     expect(Object.keys(api.leads).sort()).toEqual([
       'bulkUpdate', 'list', 'updateField',
@@ -134,6 +138,102 @@ describe('preload workflow bridge', () => {
     ]);
     expect(Object.keys(api.sourcing).sort()).toEqual(['pollNow', 'retry', 'setHmacSalt', 'status']);
     expect(Object.keys(api.shell).sort()).toEqual(['revealDatabase', 'revealLogDirectory']);
+  });
+
+  const discoveryRequest = { commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', personId: 'person-1',
+    salesCycleId: 'cycle-1', assessmentId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', expectedFingerprint: 'a'.repeat(64) };
+  const discoveryMutation = { revision: 1, affectedPersonIds: ['person-1'], affectedSalesCycleIds: ['cycle-1'] };
+  const discoveryReceipt = { mutation: discoveryMutation, personId: 'person-1', salesCycleId: 'cycle-1',
+    assessmentId: discoveryRequest.assessmentId, actionId: 'action-1' };
+  const discoveryBrief: DiscoveryBrief = { personId: 'person-1', salesCycleId: 'cycle-1', personName: 'Synthetic Owner',
+    assessment: null, stale: false, latestOverride: null, pilotNextStep: null };
+  const discoverySnapshot: DiscoverySnapshot = { prepared: [discoveryBrief], judgment: [],
+    counts: { unassessed: 1, research: 0, watch: 0, excluded: 0 }, processing: 'idle',
+    researchCapability: 'not_configured', generatedAt: '2026-09-06T12:00:00.000Z', revision: 0 };
+  const discoveryOverride = { commandId: discoveryRequest.commandId, personId: discoveryRequest.personId,
+    assessmentId: discoveryRequest.assessmentId, expectedFingerprint: discoveryRequest.expectedFingerprint,
+    decision: 'watch' as const, reason: 'Founder context' };
+
+  it('exposes the strict discovery namespace with exact channels and no-input get', async () => {
+    const api = exposedApi().discovery;
+    electron.invoke.mockResolvedValueOnce(discoverySnapshot).mockResolvedValueOnce(discoveryBrief)
+      .mockResolvedValueOnce(discoveryReceipt).mockResolvedValueOnce(discoveryMutation);
+    await expect(api.get()).resolves.toEqual(discoverySnapshot);
+    await expect(api.getBrief({ personId: 'person-1' })).resolves.toEqual(discoveryBrief);
+    await expect(api.begin(discoveryRequest)).resolves.toEqual(discoveryReceipt);
+    await expect(api.override(discoveryOverride)).resolves.toEqual(discoveryMutation);
+    expect(electron.invoke.mock.calls).toEqual([['discovery:get'], ['discovery:get-brief', { personId: 'person-1' }],
+      ['discovery:begin', discoveryRequest], ['discovery:override', discoveryOverride]]);
+  });
+
+  it('rejects malformed discovery input and extra arguments before invoking', async () => {
+    const api = exposedApi().discovery;
+    await expect(Reflect.apply(api.get, api, [undefined])).rejects.toThrow();
+    for (const [method, input] of [['getBrief', { personId: 'person-1' }], ['begin', discoveryRequest],
+      ['override', discoveryOverride]] as const) {
+      await expect(api[method]({ ...input, surprise: true } as never)).rejects.toThrow();
+      await expect(Reflect.apply(api[method], api, [])).rejects.toThrow();
+      await expect(Reflect.apply(api[method], api, [input, input])).rejects.toThrow();
+    }
+    for (const invalid of [{ commandId: 'bad' }, { assessmentId: 'bad' }, { expectedFingerprint: 'F'.repeat(64) }]) {
+      await expect(api.begin({ ...discoveryRequest, ...invalid })).rejects.toThrow();
+      await expect(api.override({ ...discoveryOverride, ...invalid })).rejects.toThrow();
+    }
+    expect(electron.invoke).not.toHaveBeenCalled();
+  });
+
+  it.each(['personId', 'salesCycleId', 'assessmentId', 'mutationPerson', 'mutationCycle'] as const)(
+    'independently refuses discovery begin receipt ownership mismatch: %s', async key => {
+      const changed = structuredClone(discoveryReceipt);
+      if (key === 'personId') { changed.personId = 'other-person'; changed.mutation.affectedPersonIds = ['other-person']; }
+      if (key === 'salesCycleId') { changed.salesCycleId = 'other-cycle'; changed.mutation.affectedSalesCycleIds = ['other-cycle']; }
+      if (key === 'assessmentId') changed.assessmentId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+      if (key === 'mutationPerson') changed.mutation.affectedPersonIds = ['other-person'];
+      if (key === 'mutationCycle') changed.mutation.affectedSalesCycleIds = ['other-cycle'];
+      electron.invoke.mockResolvedValue(changed);
+      await expect(exposedApi().discovery.begin(discoveryRequest)).rejects.toThrow();
+    });
+
+  it('independently refuses wrong-Person brief and override responses', async () => {
+    electron.invoke.mockResolvedValueOnce({ ...discoveryBrief, personId: 'other-person' })
+      .mockResolvedValueOnce({ ...discoveryMutation, affectedPersonIds: ['other-person'] });
+    await expect(exposedApi().discovery.getBrief({ personId: 'person-1' })).rejects.toThrow();
+    await expect(exposedApi().discovery.override(discoveryOverride)).rejects.toThrow();
+  });
+
+  it.each(['duplicate prepared', 'duplicate judgment', 'cross bucket', 'over cap', 'unknown field'])(
+    'independently refuses invalid discovery snapshot: %s', async invalid => {
+      electron.invoke.mockResolvedValue({ ...discoverySnapshot,
+        ...(invalid === 'duplicate prepared' ? { prepared: [discoveryBrief, discoveryBrief] } : {}),
+        ...(invalid === 'duplicate judgment' ? { prepared: [], judgment: [discoveryBrief, discoveryBrief] } : {}),
+        ...(invalid === 'cross bucket' ? { judgment: [discoveryBrief] } : {}),
+        ...(invalid === 'over cap' ? { prepared: Array.from({ length: 11 }, (_, i) => ({ ...discoveryBrief, personId: `p-${i}` })) } : {}),
+        ...(invalid === 'unknown field' ? { surprise: true } : {}),
+      });
+      await expect(exposedApi().discovery.get()).rejects.toThrow();
+    });
+
+  it('independently refuses unknown fields in discovery command responses', async () => {
+    electron.invoke.mockResolvedValueOnce({ ...discoveryBrief, surprise: true })
+      .mockResolvedValueOnce({ ...discoveryReceipt, surprise: true })
+      .mockResolvedValueOnce({ ...discoveryMutation, surprise: true });
+    await expect(exposedApi().discovery.getBrief({ personId: 'person-1' })).rejects.toThrow();
+    await expect(exposedApi().discovery.begin(discoveryRequest)).rejects.toThrow();
+    await expect(exposedApi().discovery.override(discoveryOverride)).rejects.toThrow();
+  });
+
+  it.each(['begin', 'getBrief', 'override'] as const)('freezes discovery %s identity across an asynchronous response', async method => {
+    const input = { ...(method === 'begin' ? discoveryRequest : method === 'override' ? discoveryOverride : { personId: 'person-1' }) };
+    let resolve!: (value: unknown) => void;
+    electron.invoke.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const pending = exposedApi().discovery[method](input as never);
+    input.personId = 'other-person';
+    resolve(method === 'begin' ? { ...discoveryReceipt, personId: 'other-person',
+      mutation: { ...discoveryMutation, affectedPersonIds: ['other-person'] } }
+      : method === 'getBrief' ? { ...discoveryBrief, personId: 'other-person' }
+        : { ...discoveryMutation, affectedPersonIds: ['other-person'] });
+    await expect(pending).rejects.toThrow();
+    expect(electron.invoke.mock.calls[0][1].personId).toBe('person-1');
   });
 
   it('invokes only health:get without arguments for the health probe', async () => {

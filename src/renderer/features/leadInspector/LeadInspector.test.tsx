@@ -515,6 +515,35 @@ describe('LeadInspector', () => {
     expect(window.localStorage.getItem(WIDTH_KEY)).toBe('420');
   });
 
+  it('shows Not assessed for missing Fit and Timing without fabricating scores or enabling enrichment', async () => {
+    const api = createApi(detailFor({ priorityContext: null, priorityReasons: [], cloudLinked: true,
+      findContactEligibility: { eligible: false, refusalReason: 'fit_gate_failed' } }));
+    const inspector = await renderInspector(api);
+    for (const axis of ['Fit', 'Timing']) {
+      const region = within(inspector).getByRole('region', { name: axis });
+      expect(within(region).getByText('Not assessed')).toBeTruthy();
+      expect(region.textContent).not.toMatch(/0\/30|0\/40|Low|Cold/);
+    }
+    expect(within(inspector).queryByText('Priority')).toBeNull();
+    expect((within(inspector).getByRole('button', { name: 'Find contact info' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(api.findContactInfo).not.toHaveBeenCalled();
+    expect(api.confirmTransition).not.toHaveBeenCalled();
+    expect(api.beginOutbound).not.toHaveBeenCalled();
+  });
+
+  it('displays a real zero projection as Fit 0/30 Low and Timing 0/40 Cold, not Not assessed', async () => {
+    const inspector = await renderInspector(createApi(detailFor({ priorityContext: {
+      priority: 'P3', fitPoints: 0, fitBand: 'low', timingValue: 0, timingBand: 'cold', reachability: 'none', dataConfidence: 0,
+    }, priorityReasons: ['Fit low 0/30', 'Timing cold 0/40'] })));
+    const fit = within(inspector).getByRole('region', { name: 'Fit' });
+    const timing = within(inspector).getByRole('region', { name: 'Timing' });
+    expect(fit.textContent).toContain('0/30');
+    expect(within(fit).getByText('Low')).toBeTruthy();
+    expect(timing.textContent).toContain('0/40');
+    expect(within(timing).getByText('Cold')).toBeTruthy();
+    expect(within(inspector).queryByText('Not assessed')).toBeNull();
+  });
+
   it('shows separate Fit and Timing explanations that are never combined', async () => {
     const inspector = await renderInspector(createApi(detailFor()));
 

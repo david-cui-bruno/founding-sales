@@ -1,3 +1,4 @@
+import { createDiscoveryApi } from './apis/discoveryApi';
 import { createRecoveryApi } from './apis/recoveryApi';
 import { appHealthSchema, type AppHealth } from '../shared/healthContract';
 import { createConversationsApi } from './apis/conversationsApi';
@@ -28,6 +29,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
     leads: createLeadsApi(client),
     leadDetail: createLeadDetailApi(client),
     today: createTodayApi(client),
+    discovery: createDiscoveryApi(client),
     pipeline: createPipelineApi(client),
     review: createReviewApi(client),
     friday: createFridayApi(client),

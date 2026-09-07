@@ -317,18 +317,8 @@ const PIPELINE_STAGE_ORDER = [
   'unreviewed', 'ready', 'contacted', 'interviewed', 'offered', 'won', 'lost_nurture',
 ] as const;
 
-const FALLBACK_PRIORITY_CONTEXT: LeadPriorityContext = Object.freeze({
-  priority: 'P3',
-  fitPoints: 0,
-  fitBand: 'low',
-  timingValue: 0,
-  timingBand: 'cold',
-  reachability: 'none',
-  dataConfidence: 0,
-});
-
-function toPriorityContext(row: ProjectionRow | undefined): LeadPriorityContext {
-  if (row === undefined) return FALLBACK_PRIORITY_CONTEXT;
+function toPriorityContext(row: ProjectionRow | undefined): LeadPriorityContext | null {
+  if (row === undefined) return null;
   return {
     priority: row.priority.toUpperCase() as LeadPriorityContext['priority'],
     fitPoints: row.fit_points,
@@ -555,7 +545,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
       source: row.source_channel ?? 'custom',
       segment: row.segment,
       priorityContext: row.priority === null
-        ? FALLBACK_PRIORITY_CONTEXT
+        ? null
         : toPriorityContext({
           prospect_id: row.prospect_id,
           fit_points: row.fit_points!,
@@ -883,7 +873,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
       findContactEligibility: getFindContactEligibility(
         this.getEnrichmentRequestCandidate({ personId: person.id }), this.clock.now(),
       ),
-      priorityReasons: projection === undefined ? [] : [
+      priorityReasons: priorityContext === null ? [] : [
         `Fit ${priorityContext.fitBand} ${priorityContext.fitPoints}/30`,
         `Timing ${priorityContext.timingBand} ${priorityContext.timingValue}/40`,
         `Reachability ${priorityContext.reachability}`,
@@ -1867,7 +1857,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
           stage: row.stage,
           stageEnteredAt: row.stage_entered_at,
           priorityContext: row.priority === null
-            ? FALLBACK_PRIORITY_CONTEXT
+            ? null
             : toPriorityContext({
               prospect_id: row.prospect_id,
               fit_points: row.fit_points!,

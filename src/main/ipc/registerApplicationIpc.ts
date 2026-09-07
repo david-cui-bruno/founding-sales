@@ -1,3 +1,5 @@
+import { createDiscoveryProvider } from '../discovery/discoveryProvider';
+import { registerDiscoveryIpc } from '../discovery/registerDiscoveryIpc';
 import type { OutboundCommandServiceApi } from '../communications/outboundPorts';
 import { unavailableOutboundCapabilities } from '../leads/leadDetailService';
 import { registerRecoveryIpc } from '../recovery/registerRecoveryIpc';
@@ -50,6 +52,7 @@ export type FeatureRegistrars = {
   registerSourcingIpc: typeof registerSourcingIpc;
   registerShellIpc: typeof registerShellIpc;
   registerRecoveryIpc: typeof registerRecoveryIpc;
+  registerDiscoveryIpc: typeof registerDiscoveryIpc;
 };
 
 const defaultRegistrars: FeatureRegistrars = {
@@ -66,6 +69,7 @@ const defaultRegistrars: FeatureRegistrars = {
   registerSourcingIpc,
   registerShellIpc,
   registerRecoveryIpc,
+  registerDiscoveryIpc,
 };
 
 export function createLeadsProvider(runtime: DomainGate): LeadsProvider {
@@ -277,6 +281,15 @@ export function registerApplicationIpc(
       isTrustedRendererUrl,
     ),
     () => registrars.registerRecoveryIpc(recoveryProvider, isTrustedRendererUrl),
+    () => registrars.registerDiscoveryIpc({
+      provider: {
+        get: () => runtime.withDomain(domain => createDiscoveryProvider(domain).get()),
+        getBrief: input => runtime.withDomain(domain => createDiscoveryProvider(domain).getBrief(input)),
+        begin: input => runtime.withDomain(domain => createDiscoveryProvider(domain).begin(input)),
+        override: input => runtime.withDomain(domain => createDiscoveryProvider(domain).override(input)),
+      },
+      isTrustedRendererUrl,
+    }),
   ];
 
   const unregisters: (() => void)[] = [];

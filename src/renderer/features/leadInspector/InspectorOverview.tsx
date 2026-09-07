@@ -289,7 +289,7 @@ export function InspectorOverview({
         <section className="lead-inspector__band" aria-label="Fit">
           <h3 className="lead-inspector__band-label">Fit</h3>
           {context === null ? (
-            <p className="lead-inspector__band-empty">Not yet evaluated</p>
+            <p className="lead-inspector__band-empty">Not assessed</p>
           ) : (
             <p className="lead-inspector__band-row">
               <span className="lead-inspector__band-value">
@@ -305,7 +305,7 @@ export function InspectorOverview({
         <section className="lead-inspector__band" aria-label="Timing">
           <h3 className="lead-inspector__band-label">Timing</h3>
           {context === null ? (
-            <p className="lead-inspector__band-empty">Not yet evaluated</p>
+            <p className="lead-inspector__band-empty">Not assessed</p>
           ) : (
             <p className="lead-inspector__band-row">
               <span className="lead-inspector__band-value">

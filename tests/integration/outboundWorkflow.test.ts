@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { openDatabase, closeDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { DomainRuntime } from '../../src/main/domain/domainRuntime';
+import { createDiscoveryWorker, type DiscoveryWorker } from '../../src/main/discovery/discoveryWorker';
 import { createDomainServices } from '../../src/main/domain/createDomainServices';
 import { UuidGenerator } from '../../src/main/domain/support/idGenerator';
 import type { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
@@ -82,6 +83,19 @@ async function fixture(input: {
   if (!input.temp) temps.push(temp);
   let runtime!: FoundationRuntime;
   let service!: OutboundCommandServiceApi;
+  let worker!: DiscoveryWorker;
+  const scheduled = new Set<{ run(): void; at: number }>();
+  // Run the REAL worker to quiescence before baselines, then hold its timer callbacks
+  // while asserting outbound isolation. No assessment, projection or revision is faked.
+  const drainDiscovery = async () => {
+    for (let pass = 0; pass < 10; pass++) {
+      await worker.idle();
+      const due = [...scheduled].filter(job => job.at <= Date.now());
+      if (due.length === 0) return;
+      for (const job of due) { scheduled.delete(job); job.run(); }
+    }
+    throw new Error('Synthetic discovery work did not quiesce within ten bounded pumps');
+  };
   const dispatch = vi.fn(input.dispatch ?? (async () => accepted));
   const factory = vi.fn<typeof createOutboundCommandService>((options) => {
     service = createOutboundCommandService({ ...options,
@@ -100,6 +114,14 @@ async function fixture(input: {
       return new HealthService(options);
     },
     createOutboundCommandService: factory,
+    createDiscoveryWorker: input => {
+      worker = createDiscoveryWorker({ ...input, schedule: (run, delayMs) => {
+        const job = { run, at: Date.now() + delayMs };
+        scheduled.add(job);
+        return () => { scheduled.delete(job); };
+      } });
+      return worker;
+    },
     createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined,
       createBackup: unexpected, listAvailableBackups: async () => [] }),
     createRecoveryService: () => ({ status: unexpected, beginSetup: unexpected, saveSetupMaterial: unexpected,
@@ -116,7 +138,10 @@ async function fixture(input: {
   };
   const app = await startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path),
     isTrustedRendererUrl: (url) => url === trustedUrl, createWindow: () => undefined }, dependencies);
-  cleanups.push(() => app.shutdown());
+  cleanups.push(async () => {
+    await app.shutdown();
+    expect(scheduled.size).toBe(0); // Startup still owns real worker cancellation and drain.
+  });
   const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
     const handler = ipc.handlers.get(channel);
     if (!handler) throw new Error(`Missing fixture channel: ${channel}`);
@@ -126,7 +151,7 @@ async function fixture(input: {
   const api = createLeadDetailApi(client);
   const outbound = vi.spyOn(api, 'beginOutbound'); // Observation only, real preload still executes.
   expect(await runtime.getHealth()).toMatchObject({ databaseEncrypted: true });
-  return { temp, runtime, app, service, dispatch, invoke, api, outbound,
+  return { temp, runtime, app, service, dispatch, invoke, api, outbound, drainDiscovery,
     today: createTodayApi(client), leads: createLeadsApi(client) };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
@@ -157,7 +182,9 @@ async function seed(f: Fixture, prefix = 'workflow'): Promise<OutboundRequest> {
     return { personId: prospect.personId, salesCycleId };
   });
   await f.api.confirmTransition({ transition: 'review_to_ready', salesCycleId: identity.salesCycleId, expectedRevision: 0 });
+  await f.drainDiscovery();
   const detail = await f.api.get({ personId: identity.personId });
+  expect(detail.priorityContext).not.toBeNull(); // Real queued priority refresh completed before invariance baselines.
   return { ...identity, commandId: randomUUID(), channel: 'call', contactMethodId: `${prefix}-phone`,
     expectedContactSnapshot: detail.phones[0].contactSnapshot };
 }
@@ -373,6 +400,7 @@ describe('assembled truthful outbound workflow (encrypted source fixtures, not l
     expect(reopened.service).not.toBe(f.service);
     reply.resolve(accepted); // Late acknowledgement cannot persist into the reopened owner.
     await Promise.resolve();
+    await reopened.drainDiscovery();
     const reopenedRevision = await revision(reopened);
     const recovered = await reopened.api.beginOutbound({ ...request });
     expect(recovered).toEqual({ commandId: request.commandId, channel: 'call', status: 'unknown', reasonCode: 'handoff_uncertain',

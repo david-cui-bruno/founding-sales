@@ -1,3 +1,5 @@
+import { validParcelEvent } from '../fixtures/cloudSourceEvents';
+import { cloudSourceEventSchema } from '../../src/shared/contracts/cloudSourceEventContract';
 import { randomUUID } from 'node:crypto';
 import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
 import { createLeadDetailProvider, createTodayProvider } from '../../src/main/ipc/registerApplicationIpc';
@@ -149,7 +151,7 @@ describe('leadDetailService over a real encrypted domain', () => {
       .run(id, prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
   }
 
-  function seedEnrichmentLead(fitBand: 'low' | 'medium' | 'high' | null = 'high') {
+  function seedEnrichmentLead(fitBand: 'low' | 'medium' | 'high' | null = 'high', includeOwnerEvidence = true) {
     const lead = seedLead('enrichment');
     database.raw.prepare(`INSERT INTO cloud_entity_links (cloud_entity_id, person_id, linked_at)
       VALUES ('ce_01JC0000000000000000000000', ?, ?)`)
@@ -162,6 +164,22 @@ describe('leadDetailService over a real encrypted domain', () => {
       services.identities.linkProperty({
         prospectId: lead.prospect.prospectId, propertyId: property.id, relationship: 'owner',
       });
+      if (includeOwnerEvidence) {
+        // Supported identity is evidence-backed, not inferred from a nonempty display name.
+        const source = validParcelEvent();
+        source.entity.cloud_entity_id = 'ce_01JC0000000000000000000000';
+        source.entity.person = { ...source.entity.person!, full_name: 'Person enrichment-person',
+          org_names: [], phones: [], emails: [] };
+        source.entity.property = { ...source.entity.property!,
+          situs_address: { line1: '123 Hope St', locality: 'Providence', region: 'RI', postal_code: '02906', country_code: 'US' },
+          parcel_id: null, unit_count: null };
+        source.source_uri = 'fixture:enrichment:linked-owner';
+        source.fetched_at = CLOCK_NOW;
+        services.sourceRepository.append({ id: 'enrichment-owner-source', channel: 'parcel',
+          personId: lead.prospect.personId, prospectId: lead.prospect.prospectId, salesCycleId: lead.cycleId,
+          observedAt: source.observed_at, sourceRecord: { cloudSourceEvent: cloudSourceEventSchema.parse(source) },
+          evidenceRef: source.source_uri });
+      }
     });
     if (fitBand !== null) {
       // Faithful evaluation/projection pair, preserving the fidelity triggers.
@@ -183,6 +201,18 @@ describe('leadDetailService over a real encrypted domain', () => {
     }
     return lead;
   }
+
+  it('refuses enrichment for a nonempty name without supported owner evidence', async () => {
+    const { prospect } = seedEnrichmentLead('high', false);
+    const before = database.raw.prepare('SELECT total_changes() AS n').get();
+    expect(domain.getEnrichmentRequestCandidate({ personId: prospect.personId })).toMatchObject({
+      ownerFullName: 'Person enrichment-person', fitBand: 'high', identityReady: false,
+    });
+    expect((await leadDetail.get({ personId: prospect.personId })).findContactEligibility)
+      .toEqual({ eligible: false, refusalReason: 'identity_or_address_missing' });
+    expect(database.raw.prepare('SELECT total_changes() AS n').get()).toEqual(before);
+    expect(database.raw.prepare('SELECT count(*) AS n FROM sourcing_enrichment_requests').get()).toEqual({ n: 0 });
+  });
 
   it.each(['medium', 'high'] as const)('projects complete %s-fit eligibility from persisted evidence without mutating', async (fitBand) => {
     const { prospect } = seedEnrichmentLead(fitBand);
@@ -270,6 +300,43 @@ describe('leadDetailService over a real encrypted domain', () => {
     for (const eligibility of invalidEligibility) {
       expect(leadDetailSchema.safeParse({ ...detail, findContactEligibility: eligibility }).success).toBe(false);
     }
+  });
+
+  it.each(['detail', 'list', 'pipeline'] as const)('keeps an absent projection null in real %s output without getter writes', async surface => {
+    const { prospect } = seedLead('not-assessed');
+    const before = database.raw.prepare('SELECT total_changes() AS n').get();
+    const detail = await leadDetail.get({ personId: prospect.personId });
+    const list = domain.listLeadRows({ query: '', stages: [], priorities: [], sort: 'priority', cursor: null, limit: 20 });
+    const pipeline = domain.getPipelineProjection();
+    const output = surface === 'detail' ? detail : surface === 'list' ? list.rows.find(row => row.personId === prospect.personId)
+      : pipeline.stages.flatMap(stage => stage.cards).find(card => card.personId === prospect.personId);
+    expect(output).toBeDefined();
+    expect(output?.priorityContext).toBeNull();
+    expect(detail.priorityReasons).toEqual([]);
+    expect(detail.findContactEligibility).toEqual({ eligible: false, refusalReason: 'fit_gate_failed' });
+    expect(database.raw.prepare('SELECT total_changes() AS n').get()).toEqual(before);
+    for (const table of ['prioritization_evaluations', 'prospect_priority_projection', 'discovery_assessments', 'sourcing_enrichment_requests']) {
+      expect(database.raw.prepare(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({ n: 0 });
+    }
+  });
+
+  it('preserves real zero scores in detail, list and pipeline after a canonical evaluation', async () => {
+    const { prospect } = seedLead('real-zero');
+    services.prioritization.recalculateProspect({ evaluationId: 'real-zero-evaluation', prospectId: prospect.prospectId,
+      ruleVersionId, evaluatedAt: CLOCK_NOW, expectedProjectionVersion: null });
+    expect(services.prioritizationRepository.getProjection(prospect.prospectId)).toMatchObject({
+      fitPoints: 0, fitBand: 'low', timingMilliPoints: 0, timingBand: 'cold', priority: 'p3' });
+    const before = database.raw.prepare('SELECT total_changes() AS n').get();
+    const detail = await leadDetail.get({ personId: prospect.personId });
+    const list = domain.listLeadRows({ query: '', stages: [], priorities: [], sort: 'priority', cursor: null, limit: 20 });
+    const pipeline = domain.getPipelineProjection();
+    for (const output of [detail, list.rows[0], pipeline.stages.flatMap(stage => stage.cards)[0]]) {
+      expect(output?.priorityContext).toMatchObject({ fitPoints: 0, fitBand: 'low', timingValue: 0, timingBand: 'cold', priority: 'P3' });
+    }
+    expect(detail.priorityReasons).toContain('Fit low 0/30');
+    expect(detail.priorityReasons).toContain('Timing cold 0/40');
+    expect(detail.findContactEligibility.eligible).toBe(false);
+    expect(database.raw.prepare('SELECT total_changes() AS n').get()).toEqual(before);
   });
 
   it('returns the strict detail DTO for a seeded lead', async () => {
