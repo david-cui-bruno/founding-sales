@@ -1,6 +1,6 @@
 import { BUILTIN_CADENCES } from '../../src/main/domain/cadence/builtinCadences';
 import { attachTranscript } from '../../src/main/domain/conversations/conversationsDomain';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { collectDiscoveryEvidence, validateDiscoveryClaim, DiscoveryEvidenceDiagnosticError } from '../../src/main/domain/discovery/discoveryEvidence';
 import { evaluateDiscovery } from '../../src/main/domain/discovery/discoveryPolicy';
 import { BUILTIN_PRIORITIZATION_RULE_V1 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
@@ -35,6 +35,83 @@ function statement(owner: ReturnType<typeof seedDiscoveryOwner>, text: string, i
 }
 
 describe('coherent collector evidence admission', () => {
+  it('uses the owner index for both source reads without changing evidence as unrelated sources grow', () => {
+    const owner = seedDiscoveryOwner(f, { prefix: 'indexed-owner', units: 10 });
+    const other = seedDiscoveryOwner(f, { prefix: 'indexed-other', units: 99 });
+    const raw = f.database.raw;
+    const source = f.services.sourceRepository.getById(owner.sourceEventId)!;
+    const event = source.sourceRecord.cloudSourceEvent as CloudSourceEvent;
+    const personOnly = f.services.sources.appendSourceInteraction({ id: 'indexed-person-only', personId: owner.personId,
+      prospectId: null, channel: 'parcel', observedAt: source.observedAt, sourceRecord: { cloudSourceEvent: event } });
+    const link = raw.prepare('INSERT INTO cloud_entity_links (cloud_entity_id, person_id, linked_at) VALUES (?, ?, ?)');
+    link.run(event.entity.cloud_entity_id, owner.personId, DISCOVERY_NOW);
+    link.run('indexed-unreferenced-owned', owner.personId, DISCOVERY_NOW);
+    link.run('indexed-unrelated', other.personId, DISCOVERY_NOW);
+    const expected = collect(owner.prospectId);
+    expect(expected.validatedClaims.some(c => c.refs.some(r => r.kind === 'source' && r.sourceEventId === personOnly.id))).toBe(true);
+    expect(expected.properties[0]?.doorCount).toBe(10);
+
+    // Grow unrelated encrypted rows without changing any of this owner's evidence.
+    const insert = raw.prepare(`INSERT INTO source_events (id, person_id, prospect_id, channel, observed_at, source_record_json, created_at)
+      SELECT ?, person_id, prospect_id, channel, observed_at, source_record_json, created_at FROM source_events WHERE id = ?`);
+    raw.transaction(() => { for (let i = 0; i < 128; i++) insert.run(`indexed-unrelated-${i}`, other.sourceEventId); })();
+    const prepare = raw.prepare.bind(raw);
+    const reads: Array<{ sql: string; bindings: unknown[]; rows: unknown[] }> = [];
+    const restoreStatements: Array<() => void> = [];
+    // Observe the SQL, bindings and rows actually used by the collector. Every
+    // statement still executes unchanged against the real encrypted database.
+    const observer = vi.spyOn(raw, 'prepare').mockImplementation(sql => {
+      const statement = prepare(sql);
+      if (/^SELECT \* FROM (source_events|cloud_entity_links) WHERE/.test(sql)) {
+        const all = statement.all.bind(statement);
+        const execution = vi.spyOn(statement, 'all').mockImplementation((...bindings: unknown[]) => {
+          const rows = all(...bindings);
+          reads.push({ sql, bindings, rows });
+          return rows;
+        });
+        restoreStatements.push(() => execution.mockRestore());
+      }
+      return statement;
+    });
+    try {
+      const snapshot = collect(owner.prospectId);
+      expect(snapshot).toEqual(expected); // Includes the complete fingerprint and citations.
+      for (const claim of snapshot.validatedClaims) expect(validateDiscoveryClaim({ snapshot, claim })).toBe(true);
+    } finally {
+      observer.mockRestore();
+      restoreStatements.forEach(restore => restore());
+    }
+    expect(reads).toHaveLength(2);
+    const sourceRead = reads.find(read => read.sql.startsWith('SELECT * FROM source_events'))!;
+    const cloudRead = reads.find(read => read.sql.startsWith('SELECT * FROM cloud_entity_links'))!;
+    expect(sourceRead.rows).toEqual(prepare('SELECT * FROM source_events WHERE person_id = ? OR prospect_id = ? ORDER BY observed_at, id')
+      .all(owner.personId, owner.prospectId));
+    expect(cloudRead.rows).toEqual(prepare(`SELECT * FROM cloud_entity_links WHERE person_id = ?
+      OR cloud_entity_id IN (SELECT json_extract(source_record_json, '$.sourceRecord.cloudSourceEvent.entity.cloud_entity_id')
+        FROM source_events WHERE (person_id = ? OR prospect_id = ?) AND json_valid(source_record_json))
+      ORDER BY cloud_entity_id`).all(owner.personId, owner.personId, owner.prospectId));
+    for (const read of reads) {
+      const plan = prepare(`EXPLAIN QUERY PLAN ${read.sql}`).all(...read.bindings) as Array<{ detail: string }>;
+      const sourceSteps = plan.filter(step => /\bsource_events\b/.test(step.detail)).map(step => step.detail);
+      expect.soft(sourceSteps, read.sql).toEqual([expect.stringContaining('SEARCH source_events USING INDEX source_events_person_observed_idx (person_id=?)')]);
+      expect.soft(sourceSteps.some(step => /\bSCAN source_events\b/.test(step)), read.sql).toBe(false);
+    }
+    expect(raw.pragma('foreign_key_check')).toEqual([]);
+  });
+
+  it('rejects a source that references another person\'s prospect under the admitted composite foreign key', () => {
+    const owner = seedDiscoveryOwner(f, { prefix: 'fk-owner', units: 10 });
+    const other = seedDiscoveryOwner(f, { prefix: 'fk-other', units: 99 });
+    const before = collect(owner.prospectId);
+    expect(f.database.raw.pragma('foreign_keys', { simple: true })).toBe(1);
+    expect(() => f.database.raw.prepare(`INSERT INTO source_events
+      (id, person_id, prospect_id, channel, observed_at, source_record_json, created_at)
+      SELECT 'foreign-owner-source', ?, ?, channel, observed_at, source_record_json, created_at FROM source_events WHERE id = ?`)
+      .run(other.personId, owner.prospectId, other.sourceEventId)).toThrow(/FOREIGN KEY constraint failed/);
+    expect(collect(owner.prospectId)).toEqual(before);
+    expect(f.database.raw.pragma('foreign_key_check')).toEqual([]);
+  });
+
   it('validates real owned structured activity values without promoting arbitrary metadata semantics', () => {
     const owner = seedDiscoveryOwner(f, { prefix: 'structured', units: 10 });
     f.services.unitOfWork.immediate(() => f.services.events.appendActivity({ id: 'structured-call', personId: owner.personId,

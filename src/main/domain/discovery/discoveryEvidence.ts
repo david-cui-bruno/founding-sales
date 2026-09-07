@@ -78,11 +78,14 @@ export function collectDiscoveryEvidence(input: CollectionInput): DiscoveryEvide
   const organizations = services.identities.listOrganizationsForProspect(prospectId);
   const contacts = services.identities.listContactMethodsForPerson(person.id);
   const permission = services.outboundPermission.inspectPerson(person.id);
-  const rawSources = database.raw.prepare('SELECT * FROM source_events WHERE person_id = ? OR prospect_id = ? ORDER BY observed_at, id').all(person.id, prospectId) as Row[];
+  // Startup validates the composite (prospect_id, person_id) FK, and the
+  // canonical Prospect above belongs to this Person. Its sources are therefore
+  // already included by person_id, including rows with no prospect_id.
+  const rawSources = database.raw.prepare('SELECT * FROM source_events WHERE person_id = ? ORDER BY observed_at, id').all(person.id) as Row[];
   const cloudLinks = database.raw.prepare(`SELECT * FROM cloud_entity_links WHERE person_id = ?
     OR cloud_entity_id IN (SELECT json_extract(source_record_json, '$.sourceRecord.cloudSourceEvent.entity.cloud_entity_id')
-      FROM source_events WHERE (person_id = ? OR prospect_id = ?) AND json_valid(source_record_json))
-    ORDER BY cloud_entity_id`).all(person.id, person.id, prospectId) as Row[];
+      FROM source_events WHERE person_id = ? AND json_valid(source_record_json))
+    ORDER BY cloud_entity_id`).all(person.id, person.id) as Row[];
   const activities = all('SELECT * FROM activities WHERE person_id = ? ORDER BY occurred_at, id');
   const amendments = all('SELECT m.* FROM activity_amendments m JOIN activities a ON a.id = m.activity_id WHERE a.person_id = ? ORDER BY m.id');
   const transcripts = all('SELECT * FROM transcripts WHERE person_id = ? ORDER BY id');
