@@ -4,6 +4,7 @@ import type { AppDatabase } from '../../db/database';
 import type { Clock } from '../support/clock';
 import {
   PrioritizationIdempotencyConflictError,
+  DomainRepositoryDatabaseMismatchError,
   PrioritizationInputCorruptionError,
   PrioritizationOperationalBlockError,
   PrioritizationStaleWriteError,
@@ -180,6 +181,13 @@ export class PrioritizationService {
   scopedWriter(): PrioritizationTransactionWriter {
     this.unitOfWork.assertWriteScope();
     return this.writer;
+  }
+
+  assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork,
+    dependencies: { prioritizationRepository: PrioritizationRepository; outboundPermission: OutboundPermissionService }): void {
+    if (this.database !== database || this.unitOfWork !== unitOfWork
+      || this.repository !== dependencies.prioritizationRepository
+      || this.outboundPermission !== dependencies.outboundPermission) throw new DomainRepositoryDatabaseMismatchError();
   }
 
   recordTriggerEvent(input: RecordTriggerEventInput): TriggerEvent {

@@ -5,6 +5,8 @@ import { JurisdictionRepository } from './compliance/jurisdictionRepository';
 import { FOUNDER_CHANNEL_POLICIES_V1 } from './cadence/cadenceScheduler';
 import { DiscoveryRepository } from './discovery/discoveryRepository';
 import { DiscoveryReadService } from './discovery/discoveryReadService';
+import { DiscoveryFactWriter } from './discovery/discoveryFactWriter';
+import { DiscoveryService } from './discovery/discoveryService';
 import { EventRepository } from './events/eventRepository';
 import { IdentityRepository } from './identity/identityRepository';
 import { LifecycleService } from './lifecycle/lifecycleService';
@@ -29,6 +31,7 @@ export type DomainServices = Readonly<{
   unitOfWork: DomainUnitOfWork;
   discoveryRepository: DiscoveryRepository;
   discoveryRead: DiscoveryReadService;
+  discovery: DiscoveryService;
   jobs: JobRepository;
   identities: IdentityRepository;
   contactCompliance: ContactComplianceService;
@@ -91,6 +94,7 @@ export function createDomainServices(input: {
     ids,
     timezone,
     policies: FOUNDER_CHANNEL_POLICIES_V1,
+    discoveryRepository,
   });
   const optOutRepository = new OptOutRepository({ database, unitOfWork });
   const optOut = new OptOutService({
@@ -113,6 +117,11 @@ export function createDomainServices(input: {
   const discoveryRead = new DiscoveryReadService({ database, unitOfWork, clock,
     services: { discoveryRepository, today, workspaceSettings, jobs, identities, sourceRepository,
       events, outboundPermission, prioritizationRepository, prioritization } });
+  const evidenceServices = { identities, sourceRepository, events, outboundPermission,
+    prioritizationRepository, prioritization, workspaceSettings };
+  const factWriter = new DiscoveryFactWriter({ database, unitOfWork, services: evidenceServices });
+  const discovery = new DiscoveryService({ database, unitOfWork, clock, ids, factWriter,
+    services: { ...evidenceServices, lifecycle, discoveryRepository, discoveryRead } });
 
   // Assert every final binding before any read/time/ID access.
   discoveryRepository.assertBoundTo(database, unitOfWork);
@@ -134,6 +143,7 @@ export function createDomainServices(input: {
     unitOfWork,
     discoveryRepository,
     discoveryRead,
+    discovery,
     jobs,
     identities,
     contactCompliance,

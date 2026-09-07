@@ -2,6 +2,10 @@ import type { AppDatabase } from '../../db/database';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 import { revalidateDiscoverySnapshot, type DiscoveryEvidenceServices } from './discoveryEvidence';
 import type { DiscoveryEvidenceSnapshot } from './discoveryTypes';
+import { DomainRepositoryDatabaseMismatchError } from '../support/domainErrors';
+
+const dependencyKeys = ['identities', 'sourceRepository', 'events', 'outboundPermission',
+  'prioritizationRepository', 'prioritization', 'workspaceSettings'] as const;
 
 /** Only collector-admitted facts. No qualification, relationship, profile or verification invention. */
 export class DiscoveryFactWriter {
@@ -13,6 +17,14 @@ export class DiscoveryFactWriter {
     services.prioritizationRepository.assertBoundTo(database, unitOfWork);
     services.outboundPermission.assertBoundTo(database, unitOfWork);
     services.workspaceSettings.assertBoundTo(database, unitOfWork);
+    this.input = { ...input, services: { ...services } };
+  }
+
+  assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork, services: DiscoveryEvidenceServices): void {
+    if (this.input.database !== database || this.input.unitOfWork !== unitOfWork
+      || dependencyKeys.some(key => this.input.services[key] !== services[key])) {
+      throw new DomainRepositoryDatabaseMismatchError();
+    }
   }
 
   apply(snapshot: DiscoveryEvidenceSnapshot): void {

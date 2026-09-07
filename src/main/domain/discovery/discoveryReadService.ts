@@ -14,6 +14,7 @@ import { collectDiscoveryEvidence, DiscoveryEvidenceDiagnosticError, validateDis
 import { compareDiscoveryCandidates, selectDiscoveryCandidates } from './discoveryPolicy';
 import type { DiscoveryReadBucket } from './discoveryRepository';
 import type { DiscoveryEvidenceSnapshot } from './discoveryTypes';
+import { DomainRepositoryDatabaseMismatchError } from '../support/domainErrors';
 
 type Services = Pick<DomainServices, 'discoveryRepository' | 'today' | 'workspaceSettings' | 'jobs' |
   'identities' | 'sourceRepository' | 'events' | 'outboundPermission' | 'prioritizationRepository' | 'prioritization'>;
@@ -35,6 +36,18 @@ export class DiscoveryReadService {
     services.outboundPermission.assertBoundTo(database, unitOfWork);
     services.prioritizationRepository.assertBoundTo(database, unitOfWork);
     services.workspaceSettings.assertBoundTo(database, unitOfWork);
+    this.input = { ...input, services: { ...services } };
+  }
+
+  assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork,
+    services: Pick<Services, 'identities' | 'sourceRepository' | 'events' | 'outboundPermission' |
+      'prioritizationRepository' | 'prioritization' | 'workspaceSettings' | 'discoveryRepository'>): void {
+    const keys = ['identities', 'sourceRepository', 'events', 'outboundPermission',
+      'prioritizationRepository', 'prioritization', 'workspaceSettings', 'discoveryRepository'] as const;
+    if (this.input.database !== database || this.input.unitOfWork !== unitOfWork
+      || keys.some(key => this.input.services[key] !== services[key])) {
+      throw new DomainRepositoryDatabaseMismatchError();
+    }
   }
 
   get(): DiscoverySnapshot {

@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto';
 
 import Papa from 'papaparse';
 import { z } from 'zod';
+import { collectDiscoveryEvidence } from './discovery/discoveryEvidence';
+import type { BeginDiscoveryRequest, OverrideDiscoveryRequest } from '../../shared/contracts/discoveryContract';
 import { communicationRecencySql, isLegacyOutboundRequest, outboundCommandFactSql } from './events/communicationEvidence';
 import type { Activity } from './events/eventTypes';
 
@@ -3136,11 +3138,25 @@ export class FounderSalesDomain implements OutboundDomainPort {
    * owner name, per-entity rate-limit timestamp, and persisted eligibility.
    */
   getEnrichmentRequestCandidate(input: { personId: string }): EnrichmentCandidate {
+    if (this.database.raw.inTransaction) return this.readEnrichmentRequestCandidate(input);
+    this.database.raw.exec('BEGIN');
+    try { return this.readEnrichmentRequestCandidate(input); }
+    finally { this.database.raw.exec('ROLLBACK'); }
+  }
+
+  getDiscovery() { return this.services.discovery.get(); }
+  getDiscoveryBrief(personId: string) { return this.services.discovery.getBrief(personId); }
+  beginDiscovery(input: BeginDiscoveryRequest) { return this.services.discovery.begin(input); }
+  overrideDiscovery(input: OverrideDiscoveryRequest) { return this.services.discovery.override(input); }
+  assessDiscoveryProspect(prospectId: string) { return this.services.discovery.assess(prospectId); }
+
+  private readEnrichmentRequestCandidate(input: { personId: string }): EnrichmentCandidate {
     const parsed = z.object({ personId: z.string().min(1) }).strict().parse(input);
     const person = this.database.raw.prepare(
-      'SELECT id, display_name, deleted_at, opted_out FROM persons WHERE id = ?',
+      'SELECT id, display_name, deleted_at, opted_out, provenance_json FROM persons WHERE id = ?',
     ).get(parsed.personId) as {
       id: string; display_name: string; deleted_at: string | null; opted_out: 0 | 1;
+      provenance_json: string | null;
     } | undefined;
     if (person === undefined) {
       throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The person does not exist.');
@@ -3188,6 +3204,19 @@ export class FounderSalesDomain implements OutboundDomainPort {
     } catch {
       // Unresolved membership is not permission. Do not duplicate opt-out policy.
     }
+    let identitySupported = false;
+    try {
+      const provenance = z.object({ needsIdentity: z.boolean().optional() }).passthrough().nullable()
+        .parse(person.provenance_json === null ? null : JSON.parse(person.provenance_json));
+      if (prospect !== undefined && provenance?.needsIdentity !== true
+        && !/^unknown owner\b/i.test(person.display_name.trim())) {
+        const evidence = collectDiscoveryEvidence({ database: this.database, services: this.services,
+          prospectId: prospect.id, asOf: this.clock.now() });
+        identitySupported = evidence.identitySupported && !evidence.unresolvedIdentity && evidence.conflicts.length === 0;
+      }
+    } catch {
+      // Unverifiable or malformed ownership is never paid-enrichment authority.
+    }
     return {
       cloudEntityId: link === undefined ? null : link.cloud_entity_id,
       ownerFullName: person.display_name,
@@ -3202,7 +3231,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
       lastRequestedAt: lastRequested === undefined ? null : lastRequested.last_requested_at,
       qualificationState: prospect?.qualification_state ?? 'unreviewed',
       fitBand: prospect === undefined ? null : this.readProjection(prospect.id)?.fit_band ?? null,
-      identityReady: person.deleted_at === null && person.display_name.trim().length > 0
+      identityReady: identitySupported && person.deleted_at === null && person.display_name.trim().length > 0
         && prospect !== undefined && prospect.qualification_state !== 'merge_review',
       hasUsableDirectContact: usableContact !== undefined,
       suppressionBlocked,

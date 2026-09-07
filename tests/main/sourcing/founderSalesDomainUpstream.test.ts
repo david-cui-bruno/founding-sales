@@ -13,7 +13,7 @@ import {
 import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../../src/main/domain/prioritization/builtinPrioritizationRules';
-import { mapCloudSourceEvent } from '../../../src/main/sourcing/intakeMapper';
+import { buildNeedsIdentityIntakeCommand, mapCloudSourceEvent } from '../../../src/main/sourcing/intakeMapper';
 import { validParcelEvent, validEnrichmentEvent } from '../../fixtures/cloudSourceEvents';
 import { insertPerson, insertOpenCycleWithAction, DOMAIN_TIMESTAMP, seedProspect } from '../../fixtures/domainRows';
 import {
@@ -95,6 +95,26 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
       input.id, input.cycleId, input.toStage, NOW, NOW, input.sequence, NOW,
     );
   }
+
+  it('does not treat a renamed needsIdentity placeholder as source-supported enrichment ownership', () => {
+    const event = validParcelEvent();
+    event.entity.person = null;
+    const mapped = mapCloudSourceEvent(event);
+    if (mapped.kind !== 'needs-identity') throw new Error('expected placeholder intake');
+    const command = buildNeedsIdentityIntakeCommand(mapped)!;
+    const { personId } = domain.importCloudSourceEvent({ command, cloudEntityId: mapped.cloudEntityId });
+    database.raw.prepare('UPDATE persons SET display_name = ? WHERE id = ?').run('Edited Owner Name', personId);
+    const provenance = database.raw.prepare('SELECT provenance_json FROM persons WHERE id = ?').get(personId) as { provenance_json: string };
+    expect(JSON.parse(provenance.provenance_json)).toMatchObject({ needsIdentity: true });
+    expect(domain.getEnrichmentRequestCandidate({ personId }).identityReady).toBe(false);
+  });
+
+  it('requires current exact source/property ownership rather than a nonempty imported name', () => {
+    const { personId } = importLinkedLead();
+    expect(domain.getEnrichmentRequestCandidate({ personId }).identityReady).toBe(true);
+    database.raw.prepare('UPDATE properties SET address_line_1 = ?').run('Unrelated Property St');
+    expect(domain.getEnrichmentRequestCandidate({ personId }).identityReady).toBe(false);
+  });
 
   it('enqueues outcome labels for linked persons when listing unflushed rows', () => {
     const { cycleId } = importLinkedLead();

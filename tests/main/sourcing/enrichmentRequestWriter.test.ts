@@ -15,6 +15,11 @@ import {
 import { InboxCredentialsUnavailableError } from '../../../src/main/sourcing/inboxClient';
 import type { UpstreamObjectStore } from '../../../src/main/sourcing/upstreamSync';
 import { RemoteOperationTimeoutError } from '../../../src/main/runtime/abortDeadline';
+import { randomUUID } from 'node:crypto';
+import { createFounderSalesDomain } from '../../../src/main/domain/founderSalesDomain';
+import { mapCloudSourceEvent } from '../../../src/main/sourcing/intakeMapper';
+import { validParcelEvent } from '../../fixtures/cloudSourceEvents';
+import { createDiscoveryDatabase, DISCOVERY_NOW } from '../../fixtures/discoveryDatabase';
 
 const NOW = '2026-09-01T15:00:00.000Z';
 
@@ -174,6 +179,44 @@ describe('contract schemas mirror the cloud schemas exactly', () => {
 });
 
 describe('EnrichmentRequestWriter', () => {
+  it('keeps prepared real source intake single-lead and rechecks changed ownership after credential acquisition', async () => {
+    const f = await createDiscoveryDatabase();
+    try {
+      const domain = createFounderSalesDomain({ database: f.database, services: f.services,
+        clock: { now: () => DISCOVERY_NOW }, ids: { next: randomUUID } });
+      const event = validParcelEvent(); event.entity.property!.unit_count = 10;
+      event.entity.person!.phones = []; event.entity.person!.emails = [];
+      const mapped = mapCloudSourceEvent(event); if (mapped.kind !== 'intake') throw new Error('expected real intake');
+      const owner = domain.importCloudSourceEvent({ command: mapped.command, cloudEntityId: mapped.cloudEntityId });
+      const prospect = f.services.identities.getCanonicalProspect(owner.personId)!;
+      const { store, puts } = fakeStore();
+      let acquisitions = 0;
+      const writer = new EnrichmentRequestWriter({
+        domainGate: { withDomain: async (operation: (value: typeof domain) => unknown) => operation(domain) } as never,
+        createStore: async () => {
+          acquisitions += 1;
+          f.database.raw.prepare('UPDATE persons SET provenance_json = ? WHERE id = ?')
+            .run(JSON.stringify({ needsIdentity: true }), owner.personId);
+          return store;
+        }, clock: { now: () => DISCOVERY_NOW },
+      });
+      domain.assessDiscoveryProspect(prospect.id);
+      expect(await writer.request({ personId: owner.personId })).toEqual({ written: false, refusalReason: 'qualification_required' });
+      expect(acquisitions).toBe(0);
+      const assessment = f.services.discoveryRepository.getCurrent(prospect.id)!;
+      domain.beginDiscovery({ commandId: randomUUID(), personId: owner.personId, salesCycleId: assessment.salesCycleId,
+        assessmentId: assessment.id, expectedFingerprint: assessment.fingerprint });
+      expect(domain.getEnrichmentRequestCandidate({ personId: owner.personId })).toMatchObject({
+        qualificationState: 'eligible', fitBand: 'medium', identityReady: true, hasUsableDirectContact: false });
+      expect(puts).toEqual([]);
+      expect(await writer.request({ personId: owner.personId })).toEqual({ written: false, refusalReason: 'identity_or_address_missing' });
+      expect(acquisitions).toBe(1);
+      expect(puts).toEqual([]);
+      expect(f.database.raw.prepare('SELECT * FROM sourcing_enrichment_requests').all()).toEqual([]);
+      expect(f.services.identities.listContactMethodsForPerson(owner.personId)).toEqual([]);
+    } finally { f.close(); }
+  });
+
   it.each(GATE_CASES)('refuses $reason at entry before store creation, upload, or recording ($overrides)', async ({ reason, overrides }) => {
     const { gate, domain } = fakeGate({ ...CANDIDATE, ...overrides });
     const { store, puts } = fakeStore();

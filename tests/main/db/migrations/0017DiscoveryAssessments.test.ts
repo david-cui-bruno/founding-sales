@@ -139,6 +139,20 @@ describe('0017 discovery assessments migration', () => {
       [6, otherReady.currentNextActionId], [7, '{}'], [8, '{bad']] as const) {
       const bad = [...prepArgs]; bad[index] = value; expect(() => prepSql.run(...bad)).toThrow();
     }
+    // Task2 M1: keep both JSON documents coherent with EVERY scalar being
+    // changed. These must reach the relational guard, not a JSON CHECK.
+    const foreignActionReceipt = { ...receipt, actionId: otherReady.currentNextActionId };
+    expect(() => prepSql.run(request.commandId, assessment.id, owner.personId, owner.prospectId,
+      owner.salesCycleId, assessment.fingerprint, otherReady.currentNextActionId,
+      JSON.stringify(request), JSON.stringify(foreignActionReceipt))).toThrow('FOREIGN KEY constraint failed');
+    const foreignOwnerRequest = { ...request, personId: other.personId, salesCycleId: other.salesCycleId };
+    const foreignOwnerReceipt = { ...receipt, personId: other.personId, salesCycleId: other.salesCycleId,
+      actionId: otherReady.currentNextActionId,
+      mutation: { revision: 1, affectedPersonIds: [other.personId], affectedSalesCycleIds: [other.salesCycleId] } };
+    expect(() => prepSql.run(request.commandId, assessment.id, other.personId, other.prospectId,
+      other.salesCycleId, assessment.fingerprint, otherReady.currentNextActionId,
+      JSON.stringify(foreignOwnerRequest), JSON.stringify(foreignOwnerReceipt)))
+      .toThrow('Discovery receipt ownership mismatch.');
     prepSql.run(...prepArgs);
     for (const table of ['discovery_overrides', 'discovery_preparations']) {
       expect(() => f.database.raw.exec(`UPDATE ${table} SET id = id`)).toThrow();
