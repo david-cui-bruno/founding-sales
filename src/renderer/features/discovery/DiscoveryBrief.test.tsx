@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { discoveryBriefSchema, type DiscoveryApi, type DiscoveryBrief as Brief } from '../../../shared/contracts/discoveryContract';
 import { DiscoveryBrief } from './DiscoveryBrief';
@@ -65,4 +65,27 @@ it('traps dialog Tab focus and restores the explicit trigger on Escape', () => {
   expect(document.activeElement).toBe(screen.getByRole('combobox', { name: 'Discovery decision' }));
   fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
   expect(screen.queryByRole('dialog')).toBeNull(); expect(document.activeElement).toBe(trigger);
+});
+
+it.each(['First line\nSecond line', 'First part\tSecond part'])('explains an invalid reason without changing founder text and accepts a correction: %j', async invalidReason => {
+  const onOverride = override(); render(<DiscoveryBrief brief={brief()} onOverride={onOverride} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Adjust discovery' }));
+  const dialog = screen.getByRole('dialog'); const field = within(dialog).getByRole('textbox', { name: 'Reason' }) as HTMLTextAreaElement;
+  const save = within(dialog).getByRole('button', { name: 'Save discovery decision' });
+  fireEvent.change(field, { target: { value: invalidReason } });
+  save.focus(); fireEvent.click(save);
+  expect(onOverride).not.toHaveBeenCalled(); expect(field.value).toBe(invalidReason);
+  const feedback = within(dialog).getByRole('alert');
+  expect(feedback.textContent).toMatch(/one line.*without control characters/i);
+  expect(field.getAttribute('aria-invalid')).toBe('true');
+  expect(field.getAttribute('aria-describedby')).toBe(feedback.id); expect(feedback.id).not.toBe('');
+  expect(document.activeElement).toBe(field);
+  fireEvent.change(field, { target: { value: 'Existing relationship, check next month' } });
+  expect(within(dialog).queryByRole('alert')).toBeNull(); expect(field.getAttribute('aria-invalid')).not.toBe('true');
+  fireEvent.click(save);
+  await screen.findByText(/Discovery decision saved/);
+  expect(onOverride).toHaveBeenCalledTimes(1);
+  expect(onOverride).toHaveBeenCalledWith(expect.objectContaining({ reason: 'Existing relationship, check next month' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Adjust discovery' }));
+  expect(within(screen.getByRole('dialog')).queryByRole('alert')).toBeNull();
 });

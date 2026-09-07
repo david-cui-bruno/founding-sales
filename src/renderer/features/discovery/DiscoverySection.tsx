@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import type { DiscoveryApi, DiscoveryBrief as Brief } from '../../../shared/contracts/discoveryContract';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { DiscoveryApi, DiscoveryBrief as Brief, OverrideDiscoveryRequest } from '../../../shared/contracts/discoveryContract';
 import { Button } from '../../components/Button';
 import { DiscoveryBrief } from './DiscoveryBrief';
 import { useLeadInspectorIfAvailable } from '../leadInspector/useLeadInspector';
@@ -9,11 +9,29 @@ export function DiscoverySection({ api, onOpenPerson }: { api: DiscoveryApi; onO
   const { snapshot, error, busyPersonId, refresh, begin } = useDiscovery(api);
   const [retries, setRetries] = useState<ReadonlyMap<string, Brief>>(() => new Map());
   const active = useRef(true);
+  const apiRef = useRef(api);
+  apiRef.current = api;
   const navigation = useRef(0);
   const submitting = useRef(false);
   const inspector = useLeadInspectorIfAvailable();
-  useEffect(() => { navigation.current++; }, [inspector?.selectedPersonId]);
-  useEffect(() => { active.current = true; return () => { active.current = false; navigation.current++; }; }, []);
+  const selectedPersonId = inspector?.selectedPersonId;
+  const selectionRef = useRef(selectedPersonId);
+  selectionRef.current = selectedPersonId;
+  useEffect(() => { navigation.current++; }, [selectedPersonId]);
+  useEffect(() => { active.current = true; return () => { active.current = false; navigation.current++; }; }, [api]);
+  const override = useCallback(async (request: OverrideDiscoveryRequest) => {
+    const current = navigation.current;
+    const isCurrent = () => active.current && navigation.current === current
+      && apiRef.current === api && selectionRef.current === selectedPersonId;
+    try {
+      const receipt = await api.override(request);
+      if (isCurrent()) await refresh();
+      return receipt;
+    } catch (failure) {
+      if (staleDiscoveryError(failure) && isCurrent()) void refresh();
+      throw failure;
+    }
+  }, [api, refresh, selectedPersonId]);
   const contactOptions = async (brief: Brief) => {
     if (submitting.current) return;
     submitting.current = true;
@@ -31,11 +49,7 @@ export function DiscoverySection({ api, onOpenPerson }: { api: DiscoveryApi; onO
   };
   const card = (brief: Brief, prepared: boolean) => <article key={brief.personId} className="discovery-card">
     <h3>{brief.personName}</h3>
-    <DiscoveryBrief brief={brief} onOverride={async request => {
-      const receipt = await api.override(request);
-      await refresh();
-      return receipt;
-    }} />
+    <DiscoveryBrief brief={brief} onOverride={override} />
     <div className="discovery-card__actions">
       <Button variant="quiet" onClick={() => { navigation.current++; onOpenPerson(brief.personId); }}>View evidence for {brief.personName}</Button>
       {prepared && <Button disabled={busyPersonId !== null || brief.stale || brief.assessment === null}

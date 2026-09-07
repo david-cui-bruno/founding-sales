@@ -1,5 +1,5 @@
 import { mutationReceiptSchema } from '../../../shared/contracts/commonContract';
-import { discoveryBriefSchema, type DiscoveryApi, type DiscoveryBrief as Brief } from '../../../shared/contracts/discoveryContract';
+import { discoveryBriefSchema, type DiscoveryApi, type DiscoveryBrief as Brief, type OverrideDiscoveryRequest } from '../../../shared/contracts/discoveryContract';
 import type { LogPastActivityRequest } from '../../../shared/contracts/todayContract';
 import { DiscoveryBrief } from '../discovery/DiscoveryBrief';
 import { staleDiscoveryError } from '../discovery/useDiscovery';
@@ -433,10 +433,13 @@ function SelectedDiscovery({ api, personId, salesCycleId }: { api: DiscoveryApi;
   const [brief, setBrief] = useState<Brief | null>(null);
   const [failed, setFailed] = useState(false);
   const mounted = useRef(true);
+  const generation = useRef(0);
   const apiRef = useRef(api);
   apiRef.current = api;
   const pending = useRef<{ api: DiscoveryApi; promise: Promise<Brief> } | null>(null);
   const load = useCallback(async () => {
+    if (!mounted.current || apiRef.current !== api) return;
+    const current = generation.current;
     setFailed(false);
     if (pending.current?.api !== api) {
       const promise = api.getBrief({ personId });
@@ -448,22 +451,31 @@ function SelectedDiscovery({ api, personId, salesCycleId }: { api: DiscoveryApi;
     try {
       const value = discoveryBriefSchema.parse(await promise);
       if (value.personId !== personId || value.salesCycleId !== salesCycleId) throw new Error('Mismatched discovery owner');
-      if (mounted.current && apiRef.current === api) setBrief(value);
-    } catch { if (mounted.current && apiRef.current === api) setFailed(true); }
+      if (mounted.current && generation.current === current && apiRef.current === api) setBrief(value);
+    } catch { if (mounted.current && generation.current === current && apiRef.current === api) setFailed(true); }
   }, [api, personId, salesCycleId]);
-  useEffect(() => { mounted.current = true; void load(); return () => { mounted.current = false; }; }, [load]);
+  useEffect(() => {
+    generation.current++; mounted.current = true; void load();
+    return () => { mounted.current = false; generation.current++; };
+  }, [load]);
+  const assessmentId = brief?.assessment?.id;
+  const fingerprint = brief?.assessment?.fingerprint;
+  const override = useCallback(async (request: OverrideDiscoveryRequest) => {
+    if (request.personId !== personId || request.assessmentId !== assessmentId
+      || request.expectedFingerprint !== fingerprint) throw new Error('DISCOVERY_STALE_ASSESSMENT');
+    const current = generation.current;
+    const isCurrent = () => mounted.current && generation.current === current && apiRef.current === api;
+    try {
+      const receipt = mutationReceiptSchema.parse(await api.override(request));
+      if (!receipt.affectedPersonIds.includes(personId)) throw new Error('Mismatched override receipt');
+      // The issued decision keeps its result, but only its live UI can refresh.
+      if (isCurrent()) void load();
+      return receipt;
+    } catch (error) { if (staleDiscoveryError(error) && isCurrent()) void load(); throw error; }
+  }, [api, personId, assessmentId, fingerprint, load]);
   return <section aria-label="Prepared conversation evidence">
     {failed && <p role="alert">Discovery evidence could not refresh.</p>}
-    {brief === null ? <p>{failed ? 'Evidence unavailable' : 'Loading discovery evidence'}</p> : <DiscoveryBrief brief={brief} onOverride={async request => {
-      if (request.personId !== personId || request.assessmentId !== brief.assessment?.id
-        || request.expectedFingerprint !== brief.assessment.fingerprint) throw new Error('DISCOVERY_STALE_ASSESSMENT');
-      try {
-        const receipt = mutationReceiptSchema.parse(await api.override(request));
-        if (!receipt.affectedPersonIds.includes(personId)) throw new Error('Mismatched override receipt');
-        void load(); // A read failure cannot undo or misreport a successful decision.
-        return receipt;
-      } catch (error) { if (staleDiscoveryError(error)) void load(); throw error; }
-    }} />}
+    {brief === null ? <p>{failed ? 'Evidence unavailable' : 'Loading discovery evidence'}</p> : <DiscoveryBrief brief={brief} onOverride={override} />}
     <Button variant="quiet" onClick={() => { void load(); }}>Refresh discovery evidence</Button>
   </section>;
 }

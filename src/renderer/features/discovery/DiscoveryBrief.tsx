@@ -20,22 +20,24 @@ export function DiscoveryBrief({ brief, onOverride }: {
   const [editing, setEditing] = useState(false);
   const [decision, setDecision] = useState<OverrideDiscoveryRequest['decision']>('watch');
   const [reason, setReason] = useState('');
+  const [reasonError, setReasonError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const pending = useRef(false);
   const retained = useRef<OverrideDiscoveryRequest | null>(null);
   const generation = useRef(0);
   const titleId = useId();
+  const reasonErrorId = useId();
   const reasonRef = useRef<HTMLTextAreaElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const close = () => { setEditing(false); triggerRef.current?.focus(); };
   useEffect(() => {
     generation.current++;
-    setEditing(false); setReason(''); setMessage(null); setBusy(false);
+    setEditing(false); setReason(''); setReasonError(null); setMessage(null); setBusy(false);
     pending.current = false; retained.current = null;
     return () => { generation.current++; };
-  }, [brief.personId, brief.salesCycleId, brief.assessment?.id]);
+  }, [brief.personId, brief.salesCycleId, brief.assessment?.id, onOverride]);
   useEffect(() => { if (editing) reasonRef.current?.focus(); }, [editing]);
   if (!parsed.success) return <p role="alert">Discovery evidence unavailable.</p>;
   const value = parsed.data;
@@ -46,7 +48,12 @@ export function DiscoveryBrief({ brief, onOverride }: {
       commandId: crypto.randomUUID(), personId: value.personId, assessmentId: assessment.id,
       expectedFingerprint: assessment.fingerprint, decision, reason: reason.trim(),
     });
-    if (!input.success) return;
+    if (!input.success) {
+      setReasonError('Use one line of 1 to 2,000 characters without control characters.');
+      reasonRef.current?.focus();
+      return;
+    }
+    setReasonError(null);
     const current = generation.current;
     retained.current = input.data;
     pending.current = true; setBusy(true); setMessage(null);
@@ -96,7 +103,10 @@ export function DiscoveryBrief({ brief, onOverride }: {
       <p>Affects discovery visibility only. Does not dismiss, opt out, or close this sales cycle.</p>
       <Select<OverrideDiscoveryRequest['decision']> label="Discovery decision" options={[{ value: 'watch', label: 'Watch' }, { value: 'exclude', label: 'Exclude' }, { value: 'reconsider', label: 'Reconsider' }]}
         value={decision} disabled={busy || retained.current !== null} onChange={setDecision} />
-      <label>Reason<textarea ref={reasonRef} value={reason} maxLength={2000} disabled={busy || retained.current !== null} onChange={event => setReason(event.target.value)} /></label>
+      <label>Reason<textarea ref={reasonRef} value={reason} maxLength={2000} disabled={busy || retained.current !== null}
+        aria-invalid={reasonError !== null} aria-describedby={reasonError === null ? undefined : reasonErrorId}
+        onChange={event => { setReason(event.target.value); setReasonError(null); }} /></label>
+      {reasonError !== null && <p id={reasonErrorId} role="alert">{reasonError}</p>}
       <Button disabled={busy || reason.trim().length === 0} onClick={() => { void save(); }}>Save discovery decision</Button>
       <Button variant="quiet" disabled={busy} onClick={close}>Close decision</Button>
     </div></div>}

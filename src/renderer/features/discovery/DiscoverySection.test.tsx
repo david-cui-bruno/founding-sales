@@ -177,3 +177,62 @@ it('opens successfully prepared contact options after a bounded hung refresh wit
   expect(screen.queryByRole('button', { name: /Retry contact options/ })).toBeNull();
   view.unmount(); expect(vi.getTimerCount()).toBe(0);
 });
+
+it.each(['success', 'stale'] as const)('refreshes a mounted override %s without repeating the mutation under StrictMode', async outcome => {
+  vi.useFakeTimers(); const api = apiFor(); let settle!: () => void;
+  api.override.mockImplementation(() => new Promise((resolve, reject) => {
+    settle = () => outcome === 'success'
+      ? resolve({ revision: 2, affectedPersonIds: ['owner-person'], affectedSalesCycleIds: ['cycle-owner-person'] })
+      : reject(new Error('DISCOVERY_STALE_ASSESSMENT'));
+  }));
+  const view = render(<StrictMode><DiscoverySection api={api} onOpenPerson={vi.fn()} /></StrictMode>);
+  await act(async () => undefined);
+  expect(api.get).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Adjust discovery' }));
+  fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Existing relationship' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save discovery decision' }));
+  await act(async () => { settle(); await vi.advanceTimersByTimeAsync(0); });
+  expect(api.get).toHaveBeenCalledTimes(2);
+  expect(screen.getByText(outcome === 'success' ? /Discovery decision saved/ : /Evidence changed\. Refresh/)).toBeTruthy();
+  expect(api.override).toHaveBeenCalledTimes(1); expect(api.begin).not.toHaveBeenCalled();
+  view.unmount(); expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each([
+  ['success', 'unmount'], ['stale', 'unmount'],
+  ['success', 'replace-api'], ['stale', 'replace-api'],
+  ['success', 'return-api'], ['stale', 'return-api'],
+] as const)('does not restart Today reads or timers after late override %s and %s', async (outcome, change) => {
+  vi.useFakeTimers(); const api = apiFor(); const replacement = apiFor(); let settle!: () => void;
+  api.override.mockImplementation(() => new Promise((resolve, reject) => {
+    settle = () => outcome === 'success'
+      ? resolve({ revision: 2, affectedPersonIds: ['owner-person'], affectedSalesCycleIds: ['cycle-owner-person'] })
+      : reject(new Error('DISCOVERY_STALE_ASSESSMENT'));
+  }));
+  const tree = (current: DiscoveryApi) => <StrictMode><DiscoverySection api={current} onOpenPerson={vi.fn()} /></StrictMode>;
+  const view = render(tree(api));
+  await act(async () => undefined);
+  fireEvent.click(screen.getByRole('button', { name: 'Adjust discovery' }));
+  fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Original decision' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save discovery decision' }));
+  expect(api.override).toHaveBeenCalledTimes(1);
+  if (change === 'unmount') view.unmount();
+  else {
+    view.rerender(tree(replacement)); await act(async () => undefined);
+    if (change === 'return-api') { view.rerender(tree(api)); await act(async () => undefined); }
+  }
+  // Drain jsdom's zero-delay focus work before observing discovery timers.
+  await act(async () => vi.advanceTimersByTimeAsync(0));
+  // A forbidden late read would remain pending and expose its leaked timeout.
+  api.get.mockImplementation(() => new Promise(() => undefined));
+  const reads = api.get.mock.calls.length; const replacementReads = replacement.get.mock.calls.length;
+  const timers = vi.getTimerCount(); const html = view.container.innerHTML;
+  await act(async () => settle());
+  expect.soft(api.get).toHaveBeenCalledTimes(reads);
+  expect.soft(replacement.get).toHaveBeenCalledTimes(replacementReads);
+  expect.soft(vi.getTimerCount()).toBe(timers);
+  expect.soft(view.container.innerHTML).toBe(html);
+  expect(api.override).toHaveBeenCalledTimes(1); expect(replacement.override).not.toHaveBeenCalled();
+  expect(api.begin).not.toHaveBeenCalled();
+  view.unmount(); expect(vi.getTimerCount()).toBe(0);
+});

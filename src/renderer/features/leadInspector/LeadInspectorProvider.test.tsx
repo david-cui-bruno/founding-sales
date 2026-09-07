@@ -153,6 +153,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
 });
 
 describe('LeadInspectorProvider', () => {
@@ -774,4 +775,86 @@ it.each(['closed', 'no_action'] as const)('never offers confirmation without an 
   fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
   fireEvent.click(await screen.findByRole('tab', { name: 'Activity' }));
   expect(screen.queryByRole('button', { name: 'Confirm Offered' })).toBeNull(); expect(api.confirmTransition).not.toHaveBeenCalled();
+});
+
+function assessedDiscoveryApi() {
+  return {
+    get: vi.fn<DiscoveryApi['get']>(), begin: vi.fn<DiscoveryApi['begin']>(),
+    override: vi.fn<DiscoveryApi['override']>(),
+    getBrief: vi.fn<DiscoveryApi['getBrief']>(async ({ personId }) => {
+      const detail = personId === kevin.personId ? kevin : dana;
+      return discoveryBriefSchema.parse({
+        personId, salesCycleId: detail.salesCycleId, personName: detail.personName, stale: false, latestOverride: null, pilotNextStep: null,
+        assessment: {
+          id: personId === kevin.personId ? '10000000-0000-4000-8000-000000000001' : '10000000-0000-4000-8000-000000000002',
+          personId, prospectId: `prospect-${personId}`, salesCycleId: detail.salesCycleId,
+          fingerprint: (personId === kevin.personId ? 'a' : 'b').repeat(64), policyVersion: 'discovery-v1', ruleVersionId: 'rules', modelVersion: null,
+          evaluatedAt: '2026-09-06T12:00:00.000Z', expiresAt: '2026-09-07T12:00:00.000Z', localDate: '2026-09-06', overrideId: null,
+          disposition: 'research', reasonCodes: ['unknown_owner'], axes: { fit: null, timing: { milliPoints: 0, band: 'cold', hasSupportedTrigger: false }, reachability: 'none' },
+          claims: [], unknowns: ['Owner identity is not established'], questions: ['Who handles maintenance?'], identitySupported: false, needsResearch: true,
+          ranking: { priority: null, earliestTriggerExpiresAt: null, dataConfidence: 0, lastContactAt: null, latestSourceObservedAt: null },
+        },
+      });
+    }),
+  } satisfies DiscoveryApi;
+}
+
+it.each(['success', 'stale'] as const)('refreshes the mounted inspector override %s exactly once under StrictMode', async outcome => {
+  vi.useFakeTimers(); const api = createApi([kevin]); const discoveryApi = assessedDiscoveryApi(); let settle!: () => void;
+  discoveryApi.override.mockImplementation(() => new Promise((resolve, reject) => {
+    settle = () => outcome === 'success' ? resolve(receipt) : reject(new Error('DISCOVERY_STALE_ASSESSMENT'));
+  }));
+  const view = render(<StrictMode><LeadInspectorProvider api={api} discoveryApi={discoveryApi}><Harness /></LeadInspectorProvider></StrictMode>);
+  fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' })); await act(async () => undefined);
+  expect(discoveryApi.getBrief).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Adjust discovery' }));
+  fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Existing relationship' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save discovery decision' }));
+  await act(async () => { settle(); await vi.advanceTimersByTimeAsync(0); });
+  expect(discoveryApi.getBrief.mock.calls).toEqual([[{ personId: kevin.personId }], [{ personId: kevin.personId }]]);
+  expect(screen.getByText(outcome === 'success' ? /Discovery decision saved/ : /Evidence changed\. Refresh/)).toBeTruthy();
+  expect(discoveryApi.override).toHaveBeenCalledTimes(1); expect(api.confirmTransition).not.toHaveBeenCalled();
+  view.unmount(); expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each([
+  ['success', 'selection'], ['stale', 'selection'], ['success', 'close'], ['stale', 'close'],
+  ['success', 'unmount'], ['stale', 'unmount'], ['success', 'replace-api'], ['stale', 'replace-api'],
+  ['success', 'return-api'], ['stale', 'return-api'],
+] as const)('ignores inspector override %s after %s without old-Person reads, state or timers', async (outcome, change) => {
+  vi.useFakeTimers(); const api = createApi([kevin, dana]);
+  const discoveryApi = assessedDiscoveryApi(); const replacement = assessedDiscoveryApi(); let settle!: () => void;
+  discoveryApi.override.mockImplementation(() => new Promise((resolve, reject) => {
+    settle = () => outcome === 'success' ? resolve(receipt) : reject(new Error('DISCOVERY_STALE_ASSESSMENT'));
+  }));
+  const tree = (current: DiscoveryApi) => <StrictMode><LeadInspectorProvider api={api} discoveryApi={current}><Harness /></LeadInspectorProvider></StrictMode>;
+  const view = render(tree(discoveryApi));
+  fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' })); await act(async () => undefined);
+  fireEvent.click(screen.getByRole('button', { name: 'Adjust discovery' }));
+  fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Original decision' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save discovery decision' }));
+  expect(discoveryApi.override).toHaveBeenCalledTimes(1);
+  if (change === 'unmount') view.unmount();
+  else if (change === 'close') fireEvent.click(screen.getByRole('button', { name: 'Close lead' }));
+  else if (change === 'selection') {
+    fireEvent.click(screen.getByRole('button', { name: 'Open Dana Whitman' })); await act(async () => undefined);
+    fireEvent.click(screen.getByRole('button', { name: 'Text +14015550100' }));
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Keep Dana draft' } });
+  } else {
+    view.rerender(tree(replacement)); await act(async () => undefined);
+    if (change === 'return-api') { view.rerender(tree(discoveryApi)); await act(async () => undefined); }
+  }
+  // Drain jsdom's zero-delay focus work before observing discovery timers.
+  await act(async () => vi.advanceTimersByTimeAsync(0));
+  const calls = discoveryApi.getBrief.mock.calls.slice(); const replacementCalls = replacement.getBrief.mock.calls.slice();
+  const timers = vi.getTimerCount(); const html = view.container.innerHTML; const focus = document.activeElement;
+  await act(async () => settle());
+  expect.soft(discoveryApi.getBrief.mock.calls).toEqual(calls);
+  expect.soft(replacement.getBrief.mock.calls).toEqual(replacementCalls);
+  expect.soft(view.container.innerHTML).toBe(html); expect.soft(document.activeElement).toBe(focus);
+  expect.soft(vi.getTimerCount()).toBe(timers);
+  expect(discoveryApi.override).toHaveBeenCalledTimes(1); expect(replacement.override).not.toHaveBeenCalled();
+  expect(discoveryApi.get).not.toHaveBeenCalled(); expect(discoveryApi.begin).not.toHaveBeenCalled();
+  expect(api.confirmTransition).not.toHaveBeenCalled(); expect(api.beginOutbound).not.toHaveBeenCalled(); expect(api.findContactInfo).not.toHaveBeenCalled();
+  view.unmount(); expect(vi.getTimerCount()).toBe(0);
 });

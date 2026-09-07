@@ -31,11 +31,15 @@ export function useDiscovery(api: DiscoveryApi) {
   }), []);
 
   const refresh = useCallback(async (): Promise<void> => {
+    if (!active.current || apiRef.current !== api) return;
     const current = epoch.current;
     if (reads.current?.api !== api) {
       // Retain the actual transport promise after a UI timeout. Later reads
       // join it rather than starting overlapping IPC requests.
-      const promise = Promise.resolve().then(() => api.get()).then(raw => {
+      const promise = Promise.resolve().then(() => {
+        if (!active.current || apiRef.current !== api) throw new Error('Discovery reader disposed');
+        return api.get();
+      }).then(raw => {
         const value = discoverySnapshotSchema.parse(raw);
         const ids = [...value.prepared, ...value.judgment].map(brief => brief.personId);
         if (new Set(ids).size !== ids.length) throw new Error('Duplicate Person');
