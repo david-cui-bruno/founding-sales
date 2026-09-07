@@ -64,19 +64,31 @@ export class DiscoveryWorkerCommands {
 
   scanAndEnqueueDiscoveryPage(): DiscoveryScanPage {
     const { services } = this.input;
-    return services.unitOfWork.immediate(() => {
-      const page = this.scanDiscoveryPage({ afterProspectId: services.discoveryRepository.readScanCursor(), limit: 50 });
-      this.enqueueDiscoveryPage(page);
+    try {
+      const page = services.unitOfWork.immediate(() => {
+        const page = this.scanDiscoveryPage({ afterProspectId: services.discoveryRepository.readScanCursor(), limit: 50 });
+        this.enqueueDiscoveryPage(page);
+        return page;
+      });
+      services.discoveryRead.clearScanFailure(); // Clear only after this page really committed.
       return page;
-    });
+    } catch (error) {
+      services.discoveryRead.recordScanFailure(); // Outside rollback, still inside this synchronous runtime lease.
+      throw error;
+    }
   }
 
   discoveryWorkDelay(): { scan: number; job: number | null } {
     const { services, clock } = this.input; const at = clock.now();
-    const state = services.discoveryRepository.readScanState();
-    const scan = state.cursor !== null || state.lastCompleteScanAt === null || state.lastCompleteLocalDate !== this.day(at).localDate
-      ? 0 : Math.max(0, Date.parse(state.lastCompleteScanAt) + 60_000 - Date.parse(at));
-    return { scan, job: services.jobs.nextDiscoveryDelay(at) };
+    try {
+      const state = services.discoveryRepository.readScanState();
+      const scan = state.cursor !== null || state.lastCompleteScanAt === null || state.lastCompleteLocalDate !== this.day(at).localDate
+        ? 0 : Math.max(0, Date.parse(state.lastCompleteScanAt) + 60_000 - Date.parse(at));
+      return { scan, job: services.jobs.nextDiscoveryDelay(at) };
+    } catch (error) {
+      services.discoveryRead.recordScanFailure();
+      throw error;
+    }
   }
 
   processNextDiscoveryJob(): boolean {
@@ -127,11 +139,17 @@ export class DiscoveryWorkerCommands {
           || command.expectedProjectionVersion !== candidate.expectedProjectionVersion
           || command.qualifiedInputFingerprint !== candidate.qualifiedInputFingerprint
           || command.refreshFingerprint !== candidate.refreshFingerprint) {
-          this.enqueueRefresh(command.prospectId, asOf); return { status: 'superseded' };
+          const replacement = this.enqueueRefresh(command.prospectId, asOf);
+          if (replacement?.id !== job.id) {
+            if (!replacement || !['queued', 'running'].includes(replacement.state)) throw new Error('DISCOVERY_REFRESH_NOT_RUNNABLE');
+            return { status: 'superseded' };
+          }
+          // Timezone is deliberately absent from the established v1 key. An alias is
+          // not a successor: execute this repair against the freshly validated inputs.
         }
         return services.prioritization.scopedWriter().recalculateProspect({ evaluationId: command.evaluationId,
           prospectId: command.prospectId, ruleVersionId: rule.id, evaluatedAt: asOf,
-          expectedProjectionVersion: command.expectedProjectionVersion });
+          expectedProjectionVersion: candidate.expectedProjectionVersion });
       });
     });
   }
@@ -237,7 +255,10 @@ export class DiscoveryWorkerCommands {
       if (!(error instanceof DiscoveryEvidenceDiagnosticError) || !['evidence_too_large', 'invalid_evidence'].includes(error.code)) throw error;
       diagnostic = error.code as typeof diagnostic;
     }
-    if (snapshot && previous && this.isCurrent(previous, snapshot, asOf)) return;
+    const current = snapshot !== null && previous !== null && this.isCurrent(previous, snapshot, asOf);
+    services.jobs.reconcileDiscoveryDiagnostics({ personId: identity.personId, prospectId,
+      scope: 'assessment', proof: current ? 'current_result' : snapshot ? 'valid_evidence' : 'invalid' }, services.unitOfWork);
+    if (current) return;
     const payload = assessmentCommand.parse({ formatVersion: 1, personId: identity.personId, prospectId,
       salesCycleId: snapshot?.salesCycleId ?? null, fingerprint: snapshot?.inputFingerprint ?? null,
       policyVersion: 'discovery-v1', ruleVersionId: services.prioritizationRepository.getActiveRuleVersion()!.id,
@@ -259,10 +280,12 @@ export class DiscoveryWorkerCommands {
     if (!activeRule) throw new Error('DISCOVERY_ACTIVE_RULE_REQUIRED');
     const scan = scanPriorityProjections({ repository: services.prioritizationRepository, listEligibleProspectIds: () => [prospectId],
       activeRule, asOf, workspaceTimezone: services.workspaceSettings.read().timezone });
+    services.jobs.reconcileDiscoveryDiagnostics({ personId: identity.personId, prospectId,
+      scope: 'priority', proof: scan.corruptProspectIds.length ? 'invalid' : scan.candidates.length ? 'valid_evidence' : 'current_result' }, services.unitOfWork);
     if (scan.corruptProspectIds.length) throw new DiscoveryEvidenceDiagnosticError('invalid_evidence');
     return scan.candidates[0] ?? null;
   }
-  private enqueueRefresh(prospectId: string, asOf: string): void {
+  private enqueueRefresh(prospectId: string, asOf: string): JobRecord | undefined {
     const { services, ids } = this.input;
     let candidate;
     try { candidate = this.refreshCandidate(prospectId, asOf); }
@@ -280,7 +303,7 @@ export class DiscoveryWorkerCommands {
     const founderTimezone = services.workspaceSettings.read().timezone;
     const founderLocalDate = this.day(asOf).localDate;
     const id = ids.next();
-    services.jobs.enqueue({ id, type: PRIORITY_PROJECTION_REBUILD_JOB_TYPE,
+    return services.jobs.enqueue({ id, type: PRIORITY_PROJECTION_REBUILD_JOB_TYPE,
       idempotencyKey: deriveRefreshIdempotencyKey({ prospectId, ruleVersionId, founderLocalDate, refreshFingerprint: candidate.refreshFingerprint }),
       payload: buildRebuildCommand({ jobId: id, evaluationId: ids.next(), candidate, ruleVersionId, founderTimezone,
         founderLocalDate, evaluatedAt: asOf }), at: asOf });

@@ -6,6 +6,7 @@ import { DomainRuntime } from '../../src/main/domain/domainRuntime';
 import type { DomainServices } from '../../src/main/domain/createDomainServices';
 import { createDiscoveryWorker, type DiscoveryWorker } from '../../src/main/discovery/discoveryWorker';
 import { unavailableDiscoveryResearch } from '../../src/main/discovery/discoveryResearchPort';
+import { seedProspect } from '../fixtures/domainRows';
 import { createDiscoveryDatabase, seedDiscoveryOwner, DISCOVERY_NOW, type DiscoveryDatabase } from '../fixtures/discoveryDatabase';
 
 let f: DiscoveryDatabase; let runtime: FoundationRuntime | undefined; let services: DomainServices;
@@ -39,6 +40,38 @@ async function turn() {
 }
 
 describe('encrypted discovery restart and command identity', () => {
+  it('retains failed diagnostic provenance and resolved status on encrypted reopen, then exposes renewed corruption', async () => {
+    const owner = seedProspect(f.database.raw, 'diagnostic-reopen'); await reopen();
+    services.prioritization.recalculateProspect({ evaluationId: 'diagnostic-evaluation', prospectId: owner.prospectId,
+      ruleVersionId: 'founder-priority-v1', evaluatedAt: DISCOVERY_NOW, expectedProjectionVersion: null });
+    const raw = services.unitOfWork.database.raw;
+    const original = raw.prepare('SELECT result_json AS bytes FROM prioritization_evaluations WHERE id = ?')
+      .get('diagnostic-evaluation') as { bytes: string };
+    const trigger = raw.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'immutable_prioritization_evaluations'").get() as { sql: string };
+    raw.exec('DROP TRIGGER immutable_prioritization_evaluations');
+    raw.prepare("UPDATE prioritization_evaluations SET result_json = 'not-json' WHERE id = ?").run('diagnostic-evaluation');
+    start(); await turn();
+    const failed = services.jobs.listByTypeState('discovery_assessment', 'failed', 50)[0]!;
+    expect(await runtime!.withDomain(d => d.getDiscovery().processing)).toBe('error');
+    raw.prepare('UPDATE prioritization_evaluations SET result_json = ? WHERE id = ?').run(original.bytes, 'diagnostic-evaluation');
+    await turn();
+    expect(await runtime!.withDomain(d => d.getDiscovery().processing)).toBe('idle');
+    const resolved = services.jobs.get(failed.id)!;
+    expect(resolved).toMatchObject({ state: 'failed', error: failed.error, payload: failed.payload,
+      result: { kind: 'discovery_diagnostic_status_v1', status: 'resolved' } });
+    raw.exec(trigger.sql);
+    worker!.stop(); await worker!.idle(); await runtime!.shutdown(); callbacks = []; await reopen();
+    expect(services.jobs.get(failed.id)).toEqual(resolved);
+    expect(await runtime!.withDomain(d => d.getDiscovery().processing)).toBe('idle');
+    services.unitOfWork.database.raw.exec('DROP TRIGGER immutable_prioritization_evaluations');
+    services.unitOfWork.database.raw.prepare("UPDATE prioritization_evaluations SET result_json = 'not-json' WHERE id = ?").run('diagnostic-evaluation');
+    start(); await turn(); await turn();
+    expect(await runtime!.withDomain(d => d.getDiscovery().processing)).toBe('error');
+    expect(services.jobs.get(failed.id)).toMatchObject({ state: 'failed', error: failed.error, payload: failed.payload,
+      result: { kind: 'discovery_diagnostic_status_v1', status: 'unresolved' } });
+    expect(services.jobs.listByTypeState('discovery_assessment', 'failed', 50)).toHaveLength(1);
+  });
+
   it.each([false, true])('recovers after persistence before completion, changed evidence=%s', async changed => {
     const owner = seedDiscoveryOwner(f, { prefix: 'restart', units: 10 }); await reopen();
     await runtime!.withDomain(d => d.scanAndEnqueueDiscoveryPage());

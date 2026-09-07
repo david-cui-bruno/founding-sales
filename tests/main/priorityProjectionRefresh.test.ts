@@ -56,11 +56,10 @@ describe('priority projection refresh at startup', () => {
 
   let runtimeCounter = 0;
 
-  function buildRuntime() {
+  function buildRuntime(clock = { now: () => BOOT_AT }) {
     runtimeCounter += 1;
     const prefix = `refresh-id-${runtimeCounter}`;
     let idCounter = 0;
-    const clock = { now: () => BOOT_AT };
     const ids = { next: () => `${prefix}-${++idCounter}` };
     return new DomainRuntime({ database, clock, ids });
   }
@@ -142,10 +141,51 @@ describe('priority projection refresh at startup', () => {
     expect(services.prioritizationRepository.getProjection(p.prospectId)).toEqual(before);
   });
 
-  it.each(['source', 'rule', 'projection'] as const)('revalidates %s before executing an older startup refresh command', kind => {
-    const p = seedProspect(database.raw, `changed-${kind}`); const runtime = buildRuntime(); runtime.initialize();
+  it('repairs a same-date timezone change without losing the canonical startup job', () => {
+    const at = '2026-09-06T12:00:00.000Z';
+    const p = seedProspect(database.raw, 'timezone-alias');
+    let id = 0;
+    const clock = { now: () => at }; const ids = { next: () => `timezone-${++id}` };
+    const runtime = new DomainRuntime({ database, clock, ids }); runtime.initialize();
+    const services = runtime.getServices();
+    const old = services.jobs.listActive().find(job => job.type === PRIORITY_PROJECTION_REBUILD_JOB_TYPE)!;
+    expect(old.payload).toMatchObject({ founderTimezone: 'America/New_York', founderLocalDate: '2026-09-06' });
+    database.raw.prepare("UPDATE workspace_settings SET timezone = 'America/Chicago' WHERE singleton = 1").run();
+    const domain = createFounderSalesDomain({ database, services, clock, ids });
+    domain.processPriorityRefreshJob(old.id);
+    expect(services.prioritizationRepository.getProjection(p.prospectId)).toMatchObject({ version: 1, evaluatedAt: at });
+    expect(services.jobs.get(old.id)).toMatchObject({ state: 'succeeded', payload: old.payload, idempotencyKey: old.idempotencyKey });
+    expect(services.jobs.get(old.id)?.result).not.toEqual({ status: 'superseded' });
+    domain.scanAndEnqueueDiscoveryPage();
+    expect(domain.processNextDiscoveryJob()).toBe(false);
+    expect(database.raw.prepare('SELECT COUNT(*) AS count FROM jobs').get()).toEqual({ count: 1 });
+    expect(domain.getDiscovery().processing).toBe('idle');
+  });
+
+  it('keeps a failed normal v1 repair unresolved until a real current projection exists', () => {
+    const p = seedProspect(database.raw, 'failed-v1-proof'); const runtime = buildRuntime(); runtime.initialize();
     const services = runtime.getServices(); const old = services.jobs.listActive()[0]!;
-    const domain = createFounderSalesDomain({ database, services, clock: { now: () => BOOT_AT }, ids: { next: () => `successor-${++runtimeCounter}` } });
+    services.jobs.start(old.id, BOOT_AT); services.jobs.fail(old.id, { code: 'invalid_evidence', message: 'Original failure.' }, BOOT_AT);
+    const failed = services.jobs.get(old.id)!;
+    const domain = createFounderSalesDomain({ database, services, clock: { now: () => BOOT_AT }, ids: { next: () => `proof-${++runtimeCounter}` } });
+    domain.scanAndEnqueueDiscoveryPage();
+    expect(services.prioritizationRepository.getProjection(p.prospectId)).toBeNull();
+    expect(domain.processNextDiscoveryJob()).toBe(false);
+    expect(domain.getDiscovery().processing).toBe('error');
+    expect(services.jobs.get(old.id)).toEqual(failed);
+    services.prioritization.recalculateProspect({ evaluationId: 'external-current-proof', prospectId: p.prospectId,
+      ruleVersionId: 'founder-priority-v1', evaluatedAt: BOOT_AT, expectedProjectionVersion: null });
+    domain.scanAndEnqueueDiscoveryPage();
+    expect(domain.getDiscovery().processing).toBe('idle');
+    expect(services.jobs.get(old.id)).toEqual({ ...failed, result: { kind: 'discovery_diagnostic_status_v1', status: 'resolved' } });
+  });
+
+  it.each(['source', 'rule', 'projection', 'day'] as const)('revalidates %s before executing an older startup refresh command', kind => {
+    let at = BOOT_AT;
+    const p = seedProspect(database.raw, `changed-${kind}`); const runtime = buildRuntime({ now: () => at }); runtime.initialize();
+    const services = runtime.getServices(); const old = services.jobs.listActive()[0]!;
+    if (kind === 'day') at = '2026-08-31T12:00:00.000Z';
+    const domain = createFounderSalesDomain({ database, services, clock: { now: () => at }, ids: { next: () => `successor-${++runtimeCounter}` } });
     if (kind === 'source') addDirectPhone(p, 'changed-contact');
     if (kind === 'rule') services.unitOfWork.immediate(() => {
       services.prioritizationRepository.installRuleVersion({ ...services.prioritizationRepository.getActiveRuleVersion()!.document, id: 'worker-refresh-v2', version: 2 });
@@ -162,6 +202,7 @@ describe('priority projection refresh at startup', () => {
     const projection = services.prioritizationRepository.getProjection(p.prospectId)!;
     expect(projection.ruleVersionId).toBe(kind === 'rule' ? 'worker-refresh-v2' : 'founder-priority-v1');
     expect(projection.version).toBe(1);
+    expect(projection.evaluatedAt).toBe(at);
     if (kind === 'source') expect(projection.reachability).toBe('direct');
     if (kind === 'projection') expect(projection.evaluationId).toBe('newer-projection');
   });

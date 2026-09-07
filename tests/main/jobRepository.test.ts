@@ -3,11 +3,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
+import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
 import {
   InvalidJobTransitionError,
   JobRepository,
 } from '../../src/main/jobs/jobRepository';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
+import { seedProspect } from '../fixtures/domainRows';
 
 describe('JobRepository', () => {
   let database: AppDatabase | undefined;
@@ -96,6 +98,56 @@ describe('JobRepository', () => {
     expect(() => repository.retryFailed('a', at)).toThrow(InvalidJobTransitionError);
     repository.start('foreign'); repository.fail('foreign', { code: 'transient', message: 'Synthetic' });
     expect(() => repository.retryFailed('foreign', at)).toThrow(InvalidJobTransitionError);
+  });
+
+  it('reconciles only bounded matching diagnostic history, preserving its failure and exposing unresolved rows before LIMIT', async () => {
+    const repository = await createRepository(); const at = '2026-09-06T12:00:00.000Z';
+    const uow = new DomainUnitOfWork(database!);
+    const owner = seedProspect(database!.raw, 'diagnostic-owner');
+    const input = { personId: owner.personId, prospectId: owner.prospectId, scope: 'assessment' as const, proof: 'current_result' as const };
+    for (let i = 0; i < 55; i++) {
+      const id = `diagnostic-${i.toString().padStart(2, '0')}`;
+      repository.enqueue({ id, type: 'discovery_assessment', payload: { formatVersion: 1, personId: owner.personId, prospectId: owner.prospectId }, at });
+      repository.start(id, at); repository.fail(id, { code: 'invalid_evidence', message: 'Original diagnostic.' }, at);
+    }
+    const before = repository.get('diagnostic-00')!;
+    expect(() => repository.reconcileDiscoveryDiagnostics(input, uow)).toThrow();
+    uow.immediate(() => repository.reconcileDiscoveryDiagnostics({ ...input, personId: 'other' }, uow));
+    expect(repository.get(before.id)).toEqual(before);
+    expect(() => uow.immediate(() => { repository.reconcileDiscoveryDiagnostics(input, uow); throw new Error('rollback'); })).toThrow('rollback');
+    expect(repository.get(before.id)).toEqual(before);
+    uow.immediate(() => repository.reconcileDiscoveryDiagnostics(input, uow));
+    expect(repository.listUnresolvedDiscoveryFailures(1).map(j => j.id)).toEqual(['diagnostic-50']);
+    expect(repository.get(before.id)).toEqual({ ...before, result: { kind: 'discovery_diagnostic_status_v1', status: 'resolved' } });
+    uow.immediate(() => repository.reconcileDiscoveryDiagnostics(input, uow));
+    expect(repository.listUnresolvedDiscoveryFailures(50)).toEqual([]);
+    const changes = database!.raw.prepare('SELECT total_changes() AS n').get();
+    uow.immediate(() => repository.reconcileDiscoveryDiagnostics(input, uow));
+    expect(database!.raw.prepare('SELECT total_changes() AS n').get()).toEqual(changes);
+    uow.immediate(() => repository.reconcileDiscoveryDiagnostics({ ...input, proof: 'invalid' }, uow));
+    expect(repository.listUnresolvedDiscoveryFailures(1).map(j => j.id)).toEqual([before.id]);
+    expect(repository.get(before.id)).toEqual({ ...before, result: { kind: 'discovery_diagnostic_status_v1', status: 'unresolved' } });
+    for (const limit of [0, 51, 1.5]) expect(() => repository.listUnresolvedDiscoveryFailures(limit)).toThrow();
+    expect(() => repository.succeed(before.id, {})).toThrow(InvalidJobTransitionError);
+    expect(() => repository.cancel(before.id)).toThrow(InvalidJobTransitionError);
+  });
+
+  it('does not hide unrelated, transient, malformed or forged diagnostic metadata', async () => {
+    const repository = await createRepository(); const at = '2026-09-06T12:00:00.000Z'; const uow = new DomainUnitOfWork(database!);
+    const owner = seedProspect(database!.raw, 'diagnostic-negative');
+    for (const [id, type, code] of [['foreign', 'other', 'invalid_evidence'], ['transient', 'discovery_assessment', 'discovery_transient'],
+      ['malformed', 'discovery_assessment', 'invalid_evidence']]) {
+      repository.enqueue({ id, type: type!, payload: id === 'malformed' ? {} : { formatVersion: 1, personId: owner.personId, prospectId: owner.prospectId }, at });
+      repository.start(id!, at); repository.fail(id!, { code: code!, message: 'Original.' }, at);
+    }
+    uow.immediate(() => repository.reconcileDiscoveryDiagnostics({ personId: owner.personId, prospectId: owner.prospectId,
+      scope: 'assessment', proof: 'current_result' }, uow));
+    for (const id of ['foreign', 'transient', 'malformed']) expect(repository.get(id)?.result).toBeNull();
+    expect(repository.listUnresolvedDiscoveryFailures(50).map(j => j.id)).toEqual(['malformed', 'transient']);
+    database!.raw.prepare('UPDATE jobs SET result_json = ? WHERE id = ?')
+      .run(JSON.stringify({ kind: 'discovery_diagnostic_status_v1', status: 'resolved' }), 'malformed');
+    expect(() => repository.get('malformed')).toThrow();
+    expect(() => repository.listUnresolvedDiscoveryFailures(50)).toThrow();
   });
 
   it('moves a queued job through running to succeeded', async () => {

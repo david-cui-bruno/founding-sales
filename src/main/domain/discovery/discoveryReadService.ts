@@ -27,6 +27,12 @@ const jobTypes = ['discovery_assessment', PRIORITY_PROJECTION_REBUILD_JOB_TYPE] 
 
 /** SELECT-only composition. No preparation, refresh, worker reference, or cached evidence. */
 export class DiscoveryReadService {
+  // Runtime-instance status only. No exception text, durable job, or evidence is retained.
+  private scanFailure: 'scan_failed' | null = null;
+
+  recordScanFailure(): void { this.scanFailure = 'scan_failed'; }
+  clearScanFailure(): void { this.scanFailure = null; }
+
   constructor(private readonly input: { database: AppDatabase; unitOfWork: DomainUnitOfWork; services: Services; clock: Clock }) {
     const { database, unitOfWork, services } = input;
     services.discoveryRepository.assertBoundTo(database, unitOfWork);
@@ -180,17 +186,19 @@ export class DiscoveryReadService {
   private processing(): DiscoverySnapshot['processing'] {
     const { database, services } = this.input;
     const scanCursor = services.discoveryRepository.readScanCursor(); // Validate durable scan state, never start/resume it.
+    if (this.scanFailure !== null) return 'error';
     const latest = jobTypes.flatMap(type => {
       const row = database.raw.prepare(`SELECT id FROM jobs WHERE type = ?
         ORDER BY created_at DESC, id COLLATE BINARY DESC LIMIT 1`).get(type) as { id: string } | undefined;
       return row === undefined ? [] : [services.jobs.get(row.id)!];
     });
     // Any unfinished owned work matters, not only the newest successful command.
-    for (const state of ['running', 'queued', 'failed'] as const) {
+    for (const state of ['running', 'queued'] as const) {
       if (jobTypes.some(type => services.jobs.listByTypeState(type, state, 1).length > 0)) {
-        return state === 'failed' ? 'error' : 'running';
+        return 'running';
       }
     }
+    if (services.jobs.listUnresolvedDiscoveryFailures(1).length > 0) return 'error';
     if (scanCursor !== null) return 'running';
     if (latest.some(job => job.state === 'cancelled')) return 'paused';
     return 'idle';

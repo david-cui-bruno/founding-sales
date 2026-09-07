@@ -110,6 +110,44 @@ describe('bounded real-runtime local discovery worker', () => {
     const w = makeWorker(); w.start(); await timer.turn(w); expect(count('discovery_current')).toBe(2);
   });
 
+  it.each(['enqueue', 'scan', 'delay'] as const)('reports first-page %s failure during backoff, then clears only after recovery', async kind => {
+    seedDiscoveryOwner(f, { prefix: 'scan-error-a', units: 10 }); seedDiscoveryOwner(f, { prefix: 'scan-error-b', units: 10 });
+    const original = f.services.jobs.enqueue.bind(f.services.jobs); let calls = 0;
+    const fail = kind === 'enqueue' ? vi.spyOn(f.services.jobs, 'enqueue').mockImplementation(input => {
+      if (++calls === 2) throw new Error('synthetic page failure'); return original(input);
+    }) : kind === 'scan' ? vi.spyOn(f.services.discoveryRepository, 'listScanPage').mockImplementation(() => { throw new Error('synthetic scan failure'); })
+      : vi.spyOn(f.services.jobs, 'nextDiscoveryDelay').mockImplementation(() => { throw new Error('synthetic pre-job failure'); });
+    const w = makeWorker(); w.start(); await timer.turn(w);
+    expect(count('jobs')).toBe(0); expect(f.services.discoveryRepository.readScanCursor()).toBeNull();
+    expect(f.services.discoveryRepository.readScanState().lastCompleteScanAt).toBeNull();
+    expect(timer.nextDelay()).toBe(60_000);
+    const changes = f.database.raw.prepare('SELECT total_changes() AS n').get();
+    expect(await runtime.withDomain(d => d.getDiscovery().processing)).toBe('error');
+    expect(f.database.raw.prepare('SELECT total_changes() AS n').get()).toEqual(changes);
+    fail.mockRestore();
+    expect(await runtime.withDomain(d => d.getDiscovery().processing)).toBe('error');
+    await timer.turn(w); expect(count('discovery_current')).toBe(2);
+    expect(await runtime.withDomain(d => d.getDiscovery().processing)).toBe('idle');
+    w.stop(); await w.idle(); const gate = vi.spyOn(runtime, 'withDomain');
+    timer.late(); await w.idle(); expect(gate).not.toHaveBeenCalled();
+  });
+
+  it('keeps scan failure instance-local and rejects late callbacks after stop and runtime replacement', async () => {
+    seedDiscoveryOwner(f, { prefix: 'scan-lifetime', units: 10 });
+    const scan = vi.spyOn(f.services.discoveryRepository, 'listScanPage').mockImplementation(() => { throw new Error('synthetic'); });
+    const w = makeWorker(); w.start(); await timer.turn(w);
+    expect(await runtime.withDomain(d => d.getDiscovery().processing)).toBe('error');
+    w.stop(); await w.idle(); scan.mockRestore(); await runtime.shutdown();
+    const replacement = new DomainRuntime({ database: f.database, clock: { now: () => DISCOVERY_NOW }, ids: { next: randomUUID } });
+    replacement.initialize(); const services = replacement.getServices();
+    const domain = createFounderSalesDomain({ database: f.database, services, clock: { now: () => DISCOVERY_NOW }, ids: { next: randomUUID } });
+    const gate = vi.spyOn(runtime, 'withDomain'); const before = jobs();
+    timer.late(); await w.idle(); expect(gate).not.toHaveBeenCalled(); expect(jobs()).toEqual(before);
+    expect(domain.getDiscovery().processing).toBe('idle');
+    domain.scanAndEnqueueDiscoveryPage(); expect(domain.processNextDiscoveryJob()).toBe(true);
+    expect(domain.getDiscovery().processing).toBe('idle'); replacement.shutdown();
+  });
+
   it('retries transient failures at 1s, 5s and 30s, then stops without starving newer jobs', async () => {
     seedDiscoveryOwner(f, { prefix: 'retry', units: 10 });
     const assess = vi.spyOn(f.services.discovery, 'assess').mockImplementation(() => { throw new Error('Synthetic transient'); });
@@ -277,6 +315,57 @@ describe('bounded real-runtime local discovery worker', () => {
     expect(f.services.prioritizationRepository.getProjection(broken.prospectId)?.version).toBe(2);
     expect(count('discovery_assessments')).toBe(0);
     expect(f.services.jobs.get(failed[0]!.id)?.state).toBe('failed'); // Historical diagnostic is never a claimed assessment.
+    expect(f.services.jobs.get(failed[0]!.id)).toMatchObject({ error: failed[0]!.error, payload: failed[0]!.payload });
+    expect(f.services.discoveryRead.get().processing).toBe('idle');
+    const repaired = f.services.prioritizationRepository.getProjection(broken.prospectId)!;
+    f.database.raw.prepare("UPDATE prioritization_evaluations SET result_json = 'not-json' WHERE id = ?").run(repaired.evaluationId);
+    await timer.turn(w); expect(f.services.discoveryRead.get().processing).toBe('error');
+    expect(f.services.jobs.listByTypeState('discovery_assessment', 'failed', 50).map(j => j.id)).toEqual([failed[0]!.id]);
+    const renewed = f.services.jobs.get(failed[0]!.id); await timer.turn(w);
+    expect(f.services.jobs.get(failed[0]!.id)).toEqual(renewed);
+  });
+
+  it('resolves only corrected diagnostics while an unresolved neighbor still reports error', async () => {
+    const owners = ['resolved-owner', 'unresolved-owner'].map(prefix => seedDiscoveryOwner(f, { prefix, units: 10 }));
+    const originals = owners.map(owner => (f.database.raw.prepare('SELECT source_record_json AS bytes FROM source_events WHERE id = ?')
+      .get(owner.sourceEventId) as { bytes: string }).bytes);
+    f.database.raw.exec('DROP TRIGGER immutable_source_events');
+    for (const owner of owners) f.database.raw.prepare('UPDATE source_events SET source_record_json = ? WHERE id = ?')
+      .run(JSON.stringify({ raw: 'x'.repeat(1024 * 1024) }), owner.sourceEventId);
+    const w = makeWorker(); w.start(); await timer.turn(w);
+    const history = f.services.jobs.listByTypeState('discovery_assessment', 'failed', 50);
+    expect(history).toHaveLength(2);
+    f.database.raw.prepare('UPDATE source_events SET source_record_json = ? WHERE id = ?').run(originals[0], owners[0]!.sourceEventId);
+    await timer.turn(w); expect(count('discovery_current')).toBe(1);
+    expect(f.services.discoveryRead.get().processing).toBe('error');
+    f.database.raw.prepare('UPDATE source_events SET source_record_json = ? WHERE id = ?').run(originals[1], owners[1]!.sourceEventId);
+    await timer.turn(w); expect(count('discovery_current')).toBe(2);
+    expect(f.services.discoveryRead.get().processing).toBe('idle');
+    for (const job of history) expect(f.services.jobs.get(job.id)).toMatchObject({ state: 'failed', payload: job.payload, error: job.error });
+  });
+
+  it('does not call a normal failed assessment resolved merely because its original evidence was restored', async () => {
+    const owner = seedDiscoveryOwner(f, { prefix: 'restore-normal-command', units: 10 });
+    const original = f.database.raw.prepare('SELECT source_record_json AS bytes FROM source_events WHERE id = ?')
+      .get(owner.sourceEventId) as { bytes: string };
+    f.database.raw.exec('DROP TRIGGER immutable_source_events');
+    const w = makeWorker({ capability: () => 'available', research: async input => {
+      f.database.raw.prepare("UPDATE source_events SET source_record_json = '{}' WHERE id = ?").run(owner.sourceEventId);
+      return input.claims;
+    } });
+    w.start(); await timer.turn(w); w.stop(); await w.idle();
+    const failed = f.services.jobs.listByTypeState('discovery_assessment', 'failed', 50)[0]!;
+    expect(failed).toMatchObject({ error: { code: 'invalid_evidence' }, payload: { diagnostic: null } });
+    f.database.raw.prepare('UPDATE source_events SET source_record_json = ? WHERE id = ?').run(original.bytes, owner.sourceEventId);
+    const local = makeWorker(); local.start(); await timer.turn(local); await timer.turn(local);
+    expect(count('discovery_current')).toBe(0);
+    expect(f.services.discoveryRead.get().processing).toBe('error');
+    expect(f.services.jobs.get(failed.id)).toMatchObject({ state: 'failed', payload: failed.payload, error: failed.error });
+    // A separately performed accepted assessment supplies the proof. This worker has not revived the failed command.
+    f.services.discovery.assess(owner.prospectId); await timer.turn(local);
+    expect(f.services.discoveryRead.get().processing).toBe('idle');
+    expect(f.services.jobs.get(failed.id)).toMatchObject({ state: 'failed', payload: failed.payload, error: failed.error,
+      result: { kind: 'discovery_diagnostic_status_v1', status: 'resolved' } });
   });
 
   it('shares the 25-job budget across actual owned types and leaves legacy placeholders and sourcing untouched', async () => {

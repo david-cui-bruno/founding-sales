@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
 import type { AppDatabase } from '../db/database';
+import type { DomainUnitOfWork } from '../domain/support/domainUnitOfWork';
 import { PRIORITY_PROJECTION_REBUILD_JOB_TYPE } from '../domain/startup/domainStartupTypes';
 import type { EnqueueJobInput, JobRecord, JobState } from './jobTypes';
 
@@ -15,6 +16,23 @@ const retryableDiscoverySql = `state = 'failed' AND retry_count < 3
   AND error_code IN ('discovery_transient', 'interrupted_by_restart', 'research_timeout', 'research_failed')`;
 const discoveryDueSql = `CASE WHEN state IN ('queued', 'running') THEN 0
   ELSE unixepoch(updated_at, 'subsec') * 1000 + CASE retry_count WHEN 0 THEN 1000 WHEN 1 THEN 5000 ELSE 30000 END END`;
+const diagnosticStatusSchema = z.object({ kind: z.literal('discovery_diagnostic_status_v1'),
+  status: z.enum(['resolved', 'unresolved']) }).strict();
+const diagnosticIdSchema = z.string().min(1).refine(value => value.trim() === value);
+const resolvedDiagnosticJson = JSON.stringify(diagnosticStatusSchema.parse({ kind: 'discovery_diagnostic_status_v1', status: 'resolved' }));
+// Only diagnostic failures with canonical command ownership can carry this metadata.
+// The same predicate protects writes and status filtering before LIMIT.
+const ownedDiagnosticSql = `error_code IN ('invalid_evidence', 'evidence_too_large') AND CASE WHEN json_valid(payload_json) THEN
+  json_type(payload_json, '$.formatVersion') = 'integer' AND json_extract(payload_json, '$.formatVersion') = 1
+  AND json_type(payload_json, '$.prospectId') = 'text'
+  AND length(trim(json_extract(payload_json, '$.prospectId'))) > 0
+  AND trim(json_extract(payload_json, '$.prospectId')) = json_extract(payload_json, '$.prospectId')
+  AND ((type = 'discovery_assessment' AND json_type(payload_json, '$.personId') = 'text'
+    AND length(trim(json_extract(payload_json, '$.personId'))) > 0
+    AND trim(json_extract(payload_json, '$.personId')) = json_extract(payload_json, '$.personId'))
+    OR (type = '${PRIORITY_PROJECTION_REBUILD_JOB_TYPE}' AND json_type(payload_json, '$.jobId') = 'text'
+      AND json_extract(payload_json, '$.jobId') = id))
+  ELSE 0 END`;
 
 const jobStateSchema = z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled']);
 const jobIdSchema = z.string().min(1);
@@ -114,11 +132,21 @@ const storedJobRowSchema = z
         break;
       case 'failed':
         addLifecycleIssues(context, row, {
-          resultMustBeNull: true,
+          resultMustBeNull: row.result_json === null,
           errorMustBePresent: true,
           startedAtMustBePresent: true,
           finishedAtMustBePresent: true,
         });
+        if (row.result_json !== null) {
+          const identity = z.object({ formatVersion: z.literal(1), prospectId: diagnosticIdSchema,
+            personId: diagnosticIdSchema.optional(), jobId: diagnosticIdSchema.optional() }).safeParse(row.payload_json.value);
+          if (!diagnosticStatusSchema.safeParse(row.result_json.value).success
+            || !['invalid_evidence', 'evidence_too_large'].includes(row.error_code ?? '') || !identity.success
+            || !(row.type === 'discovery_assessment' && identity.data.personId
+              || row.type === PRIORITY_PROJECTION_REBUILD_JOB_TYPE && identity.data.jobId === row.id)) {
+            context.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid diagnostic resolution metadata.', path: ['result_json'] });
+          }
+        }
         break;
       case 'cancelled':
         addLifecycleIssues(context, row, {
@@ -325,6 +353,45 @@ export class JobRepository {
       .all();
 
     return rows.map(parseStoredJobRow);
+  }
+
+  /** Evidence revalidation, not a job success or retry. Original error, payload and lifecycle stay intact. */
+  reconcileDiscoveryDiagnostics(input: { personId: string; prospectId: string; scope: 'assessment' | 'priority';
+    proof: 'invalid' | 'valid_evidence' | 'current_result' },
+    unitOfWork: DomainUnitOfWork): void {
+    if (unitOfWork.database.raw !== this.database.raw) throw new Error('DISCOVERY_DIAGNOSTIC_DATABASE_MISMATCH');
+    unitOfWork.assertWriteScope();
+    const parsed = z.object({ personId: diagnosticIdSchema, prospectId: diagnosticIdSchema,
+      scope: z.enum(['assessment', 'priority']), proof: z.enum(['invalid', 'valid_evidence', 'current_result']) }).strict().parse(input);
+    const resolved = parsed.proof !== 'invalid';
+    const metadata = JSON.stringify(diagnosticStatusSchema.parse({ kind: 'discovery_diagnostic_status_v1',
+      status: resolved ? 'resolved' : 'unresolved' }));
+    const scope = parsed.scope === 'assessment'
+      ? `type = 'discovery_assessment' AND json_extract(payload_json, '$.kind') IS NULL`
+      : `(type = '${PRIORITY_PROJECTION_REBUILD_JOB_TYPE}' OR json_extract(payload_json, '$.kind') = 'priority_diagnostic')`;
+    const rows = this.database.raw.prepare(`SELECT ${returnedJobColumns} FROM jobs
+      WHERE state = 'failed' AND (${ownedDiagnosticSql}) AND (${scope})
+      AND json_extract(payload_json, '$.prospectId') = ?
+      AND (type = '${PRIORITY_PROJECTION_REBUILD_JOB_TYPE}' OR json_extract(payload_json, '$.personId') = ?)
+      AND EXISTS (SELECT 1 FROM prospects p JOIN persons n ON n.id = p.person_id WHERE p.id = ? AND n.id = ?)
+      AND (? OR (type = 'discovery_assessment' AND json_extract(payload_json, '$.diagnostic') IN ('invalid_evidence', 'evidence_too_large')
+        AND ((json_extract(payload_json, '$.kind') = 'priority_diagnostic' AND json_extract(payload_json, '$.diagnostic') = 'invalid_evidence')
+          OR (json_extract(payload_json, '$.kind') IS NULL AND json_extract(payload_json, '$.fingerprint') IS NULL
+            AND json_extract(payload_json, '$.salesCycleId') IS NULL))))
+      AND result_json IS NOT ? AND (? OR result_json IS NOT NULL)
+      ORDER BY created_at, id LIMIT 50`).all(parsed.prospectId, parsed.personId, parsed.prospectId, parsed.personId,
+      parsed.proof !== 'valid_evidence' ? 1 : 0, metadata, resolved ? 1 : 0);
+    for (const row of rows) {
+      const job = parseStoredJobRow(row);
+      this.database.raw.prepare("UPDATE jobs SET result_json = ? WHERE id = ? AND state = 'failed'").run(metadata, job.id);
+    }
+  }
+
+  listUnresolvedDiscoveryFailures(limit: number): JobRecord[] {
+    return this.database.raw.prepare(`SELECT ${returnedJobColumns} FROM jobs
+      WHERE type IN ('discovery_assessment', '${PRIORITY_PROJECTION_REBUILD_JOB_TYPE}') AND state = 'failed'
+      AND NOT (result_json IS ? AND coalesce((${ownedDiagnosticSql}), 0))
+      ORDER BY created_at, id LIMIT ?`).all(resolvedDiagnosticJson, queryLimitSchema.parse(limit)).map(parseStoredJobRow);
   }
 
   listByTypeState(type: DiscoveryJobType, state: JobState, limit: number): JobRecord[] {
