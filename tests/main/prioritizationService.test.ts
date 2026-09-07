@@ -54,7 +54,7 @@ class UnusedIds {
   }
 }
 
-describe('PrioritizationService', () => {
+describe.each(['public', 'scoped'] as const)('PrioritizationService (%s)', (mode) => {
   let database: AppDatabase;
   let temp: TempDatabase;
   let unitOfWork: DomainUnitOfWork;
@@ -82,6 +82,14 @@ describe('PrioritizationService', () => {
     service = new PrioritizationService({
       database, unitOfWork, clock, repository, outboundPermission,
     });
+    if (mode === 'scoped') {
+      service.recordTriggerEvent = input => unitOfWork.immediate(
+        () => service.scopedWriter().recordTriggerEvent(input),
+      );
+      service.recalculateProspect = input => unitOfWork.immediate(
+        () => service.scopedWriter().recalculateProspect(input),
+      );
+    }
     unitOfWork.immediate(() => {
       const installed = repository.installRuleVersion(BUILTIN_PRIORITIZATION_RULE_V1);
       repository.activateRuleVersion({
@@ -137,6 +145,49 @@ describe('PrioritizationService', () => {
       expectedProjectionVersion: overrides.expectedProjectionVersion ?? null,
     });
   }
+
+  it('requires the exact active UOW even for a retained writer and rolls back the entire caller scope', () => {
+    const prospect = seedProspect(database.raw, 'scoped-rollback');
+    const command = { evaluationId: 'scoped-eval', prospectId: prospect.prospectId,
+      ruleVersionId: 'founder-priority-v1', evaluatedAt: EVAL_AT, expectedProjectionVersion: null as number | null };
+    expect(() => service.scopedWriter()).toThrow();
+    const writer = unitOfWork.immediate(() => service.scopedWriter());
+    expect(() => writer.recalculateProspect(command)).toThrow();
+    const foreign = new DomainUnitOfWork(database);
+    expect(() => foreign.immediate(() => writer.recalculateProspect(command))).toThrow();
+    expect(() => unitOfWork.immediate(() => {
+      writer.recalculateProspect(command);
+      throw new Error('rollback caller');
+    })).toThrow('rollback caller');
+    expect(repository.getEvaluationById(command.evaluationId)).toBeNull();
+    expect(repository.getProjection(prospect.prospectId)).toBeNull();
+    const scoped = unitOfWork.immediate(() => writer.recalculateProspect(command));
+    expect(service.recalculateProspect(command)).toEqual(scoped);
+  });
+
+  it('rolls back scoped trigger plus recalculation and preserves the actual source proof gate', () => {
+    const prospect = seedProspect(database.raw, 'combined-rollback');
+    const other = seedProspect(database.raw, 'wrong-proof-owner');
+    database.raw.prepare(`INSERT INTO source_events (id, person_id, channel, observed_at, source_record_json, created_at)
+      VALUES ('combined-source', ?, 'frbo', ?, '{}', ?)`).run(prospect.personId, DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
+    const command = { id: 'combined-trigger', prospectId: prospect.prospectId, triggerType: 'live_vacancy' as const,
+      effectiveAt: DOMAIN_TIMESTAMP, sourceExpiresAt: null as string | null, strengthMultiplier: 1, verificationState: 'unverified' as const,
+      evidence: { formatVersion: 1 as const, triggerType: 'live_vacancy' as const, authoredUnderRuleVersionId: 'founder-priority-v1',
+        function: 'decaying' as const, evidenceRefs: ['fixture-listing'] as const,
+        proof: { kind: 'source_event' as const, sourceEventId: 'combined-source', sourceObservedAt: DOMAIN_TIMESTAMP } } };
+    const scoped = unitOfWork.immediate(() => service.scopedWriter());
+    expect(() => scoped.recordTriggerEvent(command)).toThrow();
+    expect(() => service.recordTriggerEvent({ ...command, prospectId: other.prospectId })).toThrow();
+    expect(() => unitOfWork.immediate(() => {
+      scoped.recordTriggerEvent(command);
+      scoped.recalculateProspect({ evaluationId: 'combined-eval', prospectId: prospect.prospectId,
+        ruleVersionId: 'founder-priority-v1', evaluatedAt: EVAL_AT, expectedProjectionVersion: null });
+      throw new Error('rollback combined');
+    })).toThrow('rollback combined');
+    expect(repository.getTriggerEventById(command.id)).toBeNull();
+    expect(repository.getEvaluationById('combined-eval')).toBeNull();
+    expect(repository.getProjection(prospect.prospectId)).toBeNull();
+  });
 
   it('rejects mixed database/UoW composition at construction', () => {
     const otherUnit = new DomainUnitOfWork(database);

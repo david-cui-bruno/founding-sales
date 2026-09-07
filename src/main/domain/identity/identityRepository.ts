@@ -673,6 +673,19 @@ export class IdentityRepository {
     `).run(parsed.prospectId, parsed.organizationId, relationship, now);
   }
 
+  /** Fill one collector-supported absent value. Never replace founder facts or linkage. */
+  fillMissingPropertyDoorCount(input: { prospectId: string; propertyId: string; doorCount: number }): void {
+    this.unitOfWork.assertWriteScope();
+    const parsed = z.object({ prospectId: idSchema, propertyId: idSchema,
+      doorCount: z.number().int().safe().nonnegative() }).strict().parse(input);
+    this.database.raw.prepare(`
+      UPDATE properties SET door_count = ?, updated_at = ?
+      WHERE id = ? AND door_count IS NULL AND EXISTS (
+        SELECT 1 FROM prospect_properties WHERE prospect_id = ? AND property_id = properties.id
+      )
+    `).run(parsed.doorCount, utcTimestampSchema.parse(this.clock.now()), parsed.propertyId, parsed.prospectId);
+  }
+
   linkProperty(input: LinkPropertyInput): void {
     this.unitOfWork.assertWriteScope();
     const parsed = linkPropertyInputSchema.parse(input);

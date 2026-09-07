@@ -45,6 +45,21 @@ function freeze<T>(value: T): T {
 }
 
 describe('pure discovery evaluation', () => {
+  it.each(['valid', 'current-cycle', 'activation-key', 'rule-id'])('M1 receipt tuple coherence: %s (not DB provenance)', mismatch => {
+    const receipt: TriggerEvent = {
+      ...trigger(), triggerType: 'nurture_resurrection', sourceEventId: null,
+      reactivationReceiptActivationKey: mismatch === 'activation-key' ? 'wrong-key' : 'rule:rule-1',
+      reactivationRuleId: mismatch === 'rule-id' ? 'wrong-rule' : 'rule-1',
+      evidence: { formatVersion: 1, triggerType: 'nurture_resurrection', authoredUnderRuleVersionId: RULE.id,
+        evidenceRefs: ['rule:rule-1'], function: 'windowed', startsAt: AS_OF, endsAt: '2026-09-20T12:00:00.000Z',
+        proof: { kind: 'reactivation_rule_receipt', activationKey: 'rule:rule-1', ruleId: 'rule-1', ruleType: 'manual',
+          sourceCycleId: 'old-cycle', newCycleId: mismatch === 'current-cycle' ? 'wrong-cycle' : 'cycle-1', activatedAt: AS_OF } },
+    };
+    const result = evaluate({ triggers: [receipt] });
+    expect(result.axes.timing.hasSupportedTrigger).toBe(mismatch === 'valid');
+    expect(result.axes.timing.milliPoints).toBe(mismatch === 'valid' ? 10000 : 0);
+  });
+
   it('explores a supported named owner without pretending Unreviewed is Eligible or penalizing missing contact', () => {
     const snapshot = freeze(evidence());
     const result = evaluateDiscovery({ snapshot, rule: RULE, asOf: AS_OF });
