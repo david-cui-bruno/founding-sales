@@ -15,12 +15,12 @@ import type {
 import { ErrorState } from '../../components/ErrorState';
 import { LoadingState } from '../../components/LoadingState';
 import { InspectorActivity } from './InspectorActivity';
-import { InspectorConversation } from './InspectorConversation';
+import { InspectorConversation, FounderConfirmation } from './InspectorConversation';
 import { InspectorHeader } from './InspectorHeader';
 import { InspectorHistory } from './InspectorHistory';
 import { InspectorOverview } from './InspectorOverview';
 import { InspectorProperties } from './InspectorProperties';
-import type { LeadDetailState, OutboundStatusPresentation } from './useLeadInspector';
+import type { LeadDetailState, OutboundStatusPresentation, DiscoveryPresentation } from './useLeadInspector';
 import { useResizableInspector } from './useResizableInspector';
 
 const TABS = [
@@ -32,7 +32,7 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]['id'];
 
-export type InspectorTabsProps = OutboundStatusPresentation & {
+export type InspectorTabsProps = OutboundStatusPresentation & DiscoveryPresentation & {
   detail: LeadDetail;
   onBeginOutbound(request: BeginOutboundRequest): Promise<OutboundReceipt>;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
@@ -136,6 +136,7 @@ export function InspectorTabs({
         )}
         {selected === 'activity' && (
           <div className="lead-inspector__activity">
+            <FounderConfirmation detail={detail} onConfirmTransition={onConfirmTransition} />
             <InspectorActivity activities={detail.activities} />
             {detail.conversations.length > 0 && (
               <section aria-label="Conversations">
@@ -154,7 +155,7 @@ export function InspectorTabs({
   );
 }
 
-export type LeadInspectorProps = OutboundStatusPresentation & {
+export type LeadInspectorProps = OutboundStatusPresentation & DiscoveryPresentation & {
   state: LeadDetailState;
   onClose(): void;
   onRetry(): void;
@@ -220,6 +221,7 @@ export function LeadInspector({
       />
       <div className="lead-inspector__body">
         {outboundPresentation.outboundStatus}
+        {outboundPresentation.pastActivityControls}
         {state.status === 'loading' && (
           <LoadingState label="Loading lead details" />
         )}

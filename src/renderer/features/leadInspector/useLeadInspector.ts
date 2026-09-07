@@ -44,7 +44,7 @@ export type LeadInspectorHandle = {
   /** Replaces the current selection; the app never stacks inspectors. */
   openLead(personId: string): void;
   /** Promotes a person to the full page view using the same detail DTO. */
-  openFullPage(personId: string): void;
+  openFullPage(personId: string, options?: { refresh: boolean }): void;
   closeLead(): void;
   selectedPersonId: string | null;
   /**
@@ -87,3 +87,9 @@ export type OutboundPresentation = {
   onLogPastActivity?(commandId?: string): void;
 };
 export type OutboundStatusPresentation = OutboundPresentation & { outboundStatus?: ReactNode };
+
+/** Discovery and manual evidence are injected separately from outbound execution. */
+export type DiscoveryPresentation = {
+  discoveryEvidence?: ReactNode;
+  pastActivityControls?: ReactNode;
+};

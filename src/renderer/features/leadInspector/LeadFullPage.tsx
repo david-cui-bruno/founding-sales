@@ -16,9 +16,9 @@ import { LoadingState } from '../../components/LoadingState';
 import { CallOutcomeSection, type CallOutcomeApi } from './CallOutcomeSection';
 import { InspectorHeader } from './InspectorHeader';
 import { InspectorTabs } from './LeadInspector';
-import type { LeadDetailState, OutboundStatusPresentation } from './useLeadInspector';
+import type { LeadDetailState, OutboundStatusPresentation, DiscoveryPresentation } from './useLeadInspector';
 
-export type LeadFullPageProps = OutboundStatusPresentation & {
+export type LeadFullPageProps = OutboundStatusPresentation & DiscoveryPresentation & {
   state: LeadDetailState;
   onRetry(): void;
   onBeginOutbound(request: BeginOutboundRequest): Promise<OutboundReceipt>;
@@ -66,23 +66,25 @@ export function LeadFullPage({
 
   if (state.status === 'loading') {
     return (
-      <div className="lead-full-page">
+      <article className="lead-full-page">
         {outboundPresentation.outboundStatus}
+        {outboundPresentation.pastActivityControls}
         <LoadingState label="Loading lead details" />
-      </div>
+      </article>
     );
   }
 
   if (state.status === 'error') {
     return (
-      <div className="lead-full-page">
+      <article className="lead-full-page">
         {outboundPresentation.outboundStatus}
+        {outboundPresentation.pastActivityControls}
         <ErrorState
           title="Couldn't load this lead"
           description="The details were unavailable. Try again."
           onRetry={onRetry}
         />
-      </div>
+      </article>
     );
   }
 
@@ -96,6 +98,7 @@ export function LeadFullPage({
       aria-label={`${state.detail.personName} full page`}
     >
       {outboundPresentation.outboundStatus}
+        {outboundPresentation.pastActivityControls}
       <InspectorHeader detail={state.detail} onClose={onClose} />
       {outcomeApi !== undefined && onOutcomeSaved !== undefined && (
         <CallOutcomeSection

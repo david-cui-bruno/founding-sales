@@ -642,3 +642,42 @@
 
 .outbound-composer textarea { resize: vertical; }
 .outbound-receipt__command { overflow-wrap: anywhere; font-size: var(--text-caption); }
+
+.discovery-brief {
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+}
+.discovery-brief ul {
+  padding-inline-start: var(--space-4);
+}
+.discovery-brief__decision,
+.lead-inspector__confirmation {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+.discovery-brief__decision textarea {
+  display: block;
+  width: 100%;
+  min-height: 5rem;
+}
+.lead-inspector__manual-controls {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-2);
+}
+.discovery-brief__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 35%);
+}
+.discovery-brief__decision {
+  width: min(32rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+}

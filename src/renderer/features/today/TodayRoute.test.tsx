@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { discoverySnapshotSchema, type DiscoveryApi } from '../../../shared/contracts/discoveryContract';
 import type { MutationReceipt } from '../../../shared/contracts/commonContract';
 import type {
   TodayItem,
@@ -376,4 +377,27 @@ describe('TodayRoute', () => {
     expect(screen.queryByText(/tombstone/)).toBeNull();
     expect(screen.getByText('Avery Landlord')).toBeTruthy();
   });
+});
+
+it('keeps commitments before discovery and moves the large manual backlog behind an optional control', async () => {
+  const api = fakeApi({ get: vi.fn(async () => ({ ...snapshot(1, [item()]), unreviewedBacklogCount: 2881 })) });
+  const discoveryApi: DiscoveryApi = {
+    get: vi.fn(async () => discoverySnapshotSchema.parse({ prepared: [], judgment: [], counts: { unassessed: 2881, research: 0, watch: 0, excluded: 0 }, processing: 'running', researchCapability: 'not_configured', generatedAt: '2026-09-06T12:00:00.000Z', revision: 1 })),
+    getBrief: vi.fn(), begin: vi.fn(), override: vi.fn(),
+  };
+  render(<TodayRoute api={api} discoveryApi={discoveryApi} onOpenLead={vi.fn()} />);
+  const lead = await screen.findByText('Avery Landlord');
+  const heading = await screen.findByRole('heading', { name: 'Prepared conversations' });
+  expect(lead.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Review' })).toBeNull();
+  fireEvent.click(screen.getByText('Manual review (optional)'));
+  expect(screen.getByRole('button', { name: 'Review' })).toBeTruthy();
+  expect(api.getTriageQueue).not.toHaveBeenCalled();
+});
+it('does not announce Queue done while discovery is still preparing', async () => {
+  const api = fakeApi({ get: vi.fn(async () => snapshot(1, [])) });
+  const discoveryApi: DiscoveryApi = { get: vi.fn(async () => discoverySnapshotSchema.parse({ prepared: [], judgment: [], counts: { unassessed: 2881, research: 0, watch: 0, excluded: 0 }, processing: 'running', researchCapability: 'not_configured', generatedAt: '2026-09-06T12:00:00.000Z', revision: 1 })), getBrief: vi.fn(), begin: vi.fn(), override: vi.fn() };
+  render(<TodayRoute api={api} discoveryApi={discoveryApi} onOpenLead={vi.fn()} />);
+  await screen.findByText('Preparing your shortlist');
+  expect(screen.queryByText(/Queue done/)).toBeNull();
 });

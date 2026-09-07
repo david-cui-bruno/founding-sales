@@ -34,6 +34,7 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
       return (
         <TodayRoute
           api={context.api.today}
+          discoveryApi={context.api.discovery}
           leadApi={context.api.leadDetail}
           onOpenLead={context.openLead}
         />

@@ -1,5 +1,5 @@
 import type { OutboundReceipt } from '../../../shared/contracts/outboundContract';
-import type { OutboundPresentation } from './useLeadInspector';
+import type { OutboundPresentation, DiscoveryPresentation } from './useLeadInspector';
 import { OutboundComposer } from './OutboundComposer';
 import { useEffect, useRef, useState } from 'react';
 
@@ -43,7 +43,7 @@ const DISMISS_REASON_OPTIONS: ReadonlyArray<{
   { value: 'unresolved_duplicate', label: 'Unresolved duplicate' },
 ];
 
-export type InspectorOverviewProps = OutboundPresentation & {
+export type InspectorOverviewProps = OutboundPresentation & DiscoveryPresentation & {
   detail: LeadDetail;
   onBeginOutbound(request: BeginOutboundRequest): Promise<OutboundReceipt>;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
@@ -244,10 +244,12 @@ export function InspectorOverview({
   onDismissLead,
   onOverrideCloudScore,
   onFindContactInfo,
+  discoveryEvidence,
   capabilities, outboundPending = false, outboundBlocked = false, onLogPastActivity,
 }: InspectorOverviewProps) {
   const [selection, setSelection] = useState<{ channel: BeginOutboundRequest['channel']; contact: ContactMethod; personId: string; cycleId: string } | null>(null);
   const submitting = useRef(false);
+  const [manualOpen, setManualOpen] = useState(false);
   const contacts = [...detail.phones, ...detail.emails];
   const current = selection === null ? undefined : contacts.find((contact) => contact.id === selection.contact.id);
   const selectionCurrent = selection !== null && current !== undefined
@@ -277,12 +279,14 @@ export function InspectorOverview({
 
   return (
     <div className="lead-inspector__overview">
-      {detail.stage === 'unreviewed' && (
-        <ReviewSection
+      {discoveryEvidence}
+      {detail.stage === 'unreviewed' && (discoveryEvidence === undefined ? <ReviewSection
           detail={detail}
           onConfirmTransition={onConfirmTransition}
           onDismissLead={onDismissLead}
-        />
+        /> : <section className="lead-inspector__manual-controls"><Button variant="quiet" aria-expanded={manualOpen} onClick={() => setManualOpen(value => !value)}>Founder manual controls</Button>
+          {manualOpen && <ReviewSection detail={detail} onConfirmTransition={onConfirmTransition} onDismissLead={onDismissLead} />}
+        </section>
       )}
 
       <div className="lead-inspector__bands">

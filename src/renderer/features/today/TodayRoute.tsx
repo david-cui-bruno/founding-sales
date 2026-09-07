@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import type { DiscoveryApi } from '../../../shared/contracts/discoveryContract';
+import { DiscoverySection } from '../discovery/DiscoverySection';
 import type { MutationReceipt } from '../../../shared/contracts/commonContract';
 import type {
   ConfirmTransitionRequest,
@@ -46,6 +48,7 @@ export type TodayLeadCommandApi = {
 
 export type TodayRouteProps = {
   api: TodayRouteApi;
+  discoveryApi?: DiscoveryApi;
   leadApi?: TodayLeadCommandApi;
   onOpenLead(personId: string): void;
   /** Promotes a person to the full-page view for the call outcome flow. */
@@ -80,6 +83,7 @@ const todayDateLine = (): string =>
 export function TodayRoute({
   api,
   leadApi,
+  discoveryApi,
   onOpenLead,
   onOpenLeadPage,
 }: TodayRouteProps) {
@@ -299,6 +303,8 @@ export function TodayRoute({
       )}
       {snapshot !== null && (
         <TodayPage
+          discovery={discoveryApi === undefined ? undefined : <DiscoverySection api={discoveryApi}
+            onOpenPerson={onOpenLeadPage ?? (inspector === null ? onOpenLead : personId => inspector.openFullPage(personId, { refresh: true }))} />}
           snapshot={snapshot}
           busy={busy}
           onOpenLead={onOpenLead}

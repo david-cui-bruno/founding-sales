@@ -3,6 +3,7 @@ import type {
   FocusEvent as ReactFocusEvent,
   KeyboardEvent as ReactKeyboardEvent,
   RefCallback,
+  ReactNode,
 } from 'react';
 
 import type {
@@ -20,6 +21,7 @@ import './today.css';
 
 export type TodayPageProps = {
   snapshot: TodaySnapshot;
+  discovery?: ReactNode;
   busy?: boolean;
   onOpenLead(personId: string): void;
   /** Logs the outbound call and promotes the lead to its full page. */
@@ -57,6 +59,7 @@ export const skipTodayResurfaceAt = (): string => {
  */
 export function TodayPage({
   snapshot,
+  discovery,
   busy = false,
   onOpenLead,
   onCall,
@@ -69,6 +72,7 @@ export function TodayPage({
   const [collapsedLanes, setCollapsedLanes] = useState<ReadonlySet<TodayLaneId>>(
     () => new Set<TodayLaneId>(),
   );
+  const [manualOpen, setManualOpen] = useState(false);
   const [logItem, setLogItem] = useState<TodayItem | null>(null);
 
   const laneById = useMemo(
@@ -264,12 +268,8 @@ export function TodayPage({
       onKeyDown={handleKeyDown}
       onFocusCapture={handleFocusCapture}
     >
-      <BacklogCard
-        count={snapshot.unreviewedBacklogCount}
-        cloudSignalCount={snapshot.unreviewedCloudSignalCount}
-        onReview={onStartTriage}
-      />
-      {queueEmpty ? (
+
+      {queueEmpty && discovery !== undefined ? <p>No commitments due right now.</p> : queueEmpty ? (
         <section className="today-done" aria-label="Queue done">
           <p className="today-done__headline">
             {`Queue done · ${snapshot.scheduledDials} ${
@@ -324,6 +324,18 @@ export function TodayPage({
             </p>
           )}
         </>
+      )}
+      {discovery}
+      {discovery === undefined ? <BacklogCard count={snapshot.unreviewedBacklogCount}
+        cloudSignalCount={snapshot.unreviewedCloudSignalCount} onReview={onStartTriage} /> : (
+        <section className="today__manual-review">
+          <button type="button" aria-expanded={manualOpen} onClick={() => setManualOpen(value => !value)}>Manual review (optional)</button>
+          {manualOpen && <>
+          <p>Existing founder review controls. Prepared conversations do not require routine review.</p>
+          <BacklogCard count={snapshot.unreviewedBacklogCount}
+            cloudSignalCount={snapshot.unreviewedCloudSignalCount} onReview={onStartTriage} />
+          </>}
+        </section>
       )}
       {logItem !== null && (
         <LogPastActivityDialog

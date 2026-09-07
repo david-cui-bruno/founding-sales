@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { discoveryBriefSchema, type DiscoveryApi, type DiscoveryBrief } from '../../../shared/contracts/discoveryContract';
 import {
   leadDetailSchema,
   type ContactMethod,
@@ -628,4 +630,148 @@ describe('LeadInspectorProvider', () => {
 
     await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull());
   });
+});
+
+it('injects owner-bound discovery evidence and ignores an older Person brief without changing the current draft', async () => {
+  const api = createApi([kevin, dana]); let resolve!: (value: DiscoveryBrief) => void;
+  const discoveryApi: DiscoveryApi = { get: vi.fn(), begin: vi.fn(), override: vi.fn(),
+    getBrief: vi.fn<DiscoveryApi['getBrief']>(({ personId }) => personId === kevin.personId ? new Promise(done => { resolve = done; }) : Promise.resolve(discoveryBriefSchema.parse({ personId: dana.personId, salesCycleId: dana.salesCycleId, personName: dana.personName, assessment: null, stale: false, latestOverride: null, pilotNextStep: null }))) };
+  render(<LeadInspectorProvider api={api} discoveryApi={discoveryApi}><Harness /></LeadInspectorProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+  await screen.findByRole('complementary', { name: 'Kevin Shin details' });
+  fireEvent.click(screen.getByRole('button', { name: 'Open Dana Whitman' }));
+  const panel = await screen.findByRole('complementary', { name: 'Dana Whitman details' });
+  expect(await within(panel).findByRole('region', { name: 'Discovery evidence for Dana Whitman' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Text +14015550100' }));
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Only in memory for Dana' } });
+  await act(async () => resolve(discoveryBriefSchema.parse({ personId: kevin.personId, salesCycleId: kevin.salesCycleId, personName: kevin.personName, assessment: null, stale: false, latestOverride: null, pilotNextStep: null })));
+  expect(screen.queryByRole('region', { name: 'Discovery evidence for Kevin Shin' })).toBeNull();
+  expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Only in memory for Dana');
+  expect(api.findContactInfo).not.toHaveBeenCalled(); expect(api.beginOutbound).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button', { name: 'Mark ready' })).toBeNull();
+  fireEvent.click(screen.getByText('Founder manual controls'));
+  expect(screen.getByRole('button', { name: 'Mark ready' })).toBeTruthy();
+});
+
+it('logs an actual dated price communication into the real domain and separately confirms Offered using its owned activity ID', async () => {
+  const { createTempDatabase, createTestWorkspaceKey } = await import('../../../../tests/fixtures/tempDatabase');
+  const { openDatabase, closeDatabase } = await import('../../../main/db/database');
+  const { migrateToLatest } = await import('../../../main/db/migrate');
+  const { createDomainServices } = await import('../../../main/domain/createDomainServices');
+  const { createFounderSalesDomain } = await import('../../../main/domain/founderSalesDomain');
+  const { createLeadDetailService } = await import('../../../main/leads/leadDetailService');
+  const { seedProspect } = await import('../../../../tests/fixtures/domainRows');
+  const { BUILTIN_PRIORITIZATION_RULE_V1 } = await import('../../../main/domain/prioritization/builtinPrioritizationRules');
+  const temp = createTempDatabase(); const key = createTestWorkspaceKey();
+  const database = openDatabase({ path: temp.path, key });
+  try {
+    await migrateToLatest(database, { backupDirectory: `${temp.path}.backups`, workspaceKey: key });
+    const clock = { now: () => '2026-09-06T15:00:00.000Z' }; let sequence = 0;
+    const ids = { next: () => `task8-generated-${++sequence}` };
+    const services = createDomainServices({ database, clock, ids });
+    services.unitOfWork.immediate(() => {
+      const rule = services.prioritizationRepository.installRuleVersion(BUILTIN_PRIORITIZATION_RULE_V1);
+      services.prioritizationRepository.activateRuleVersion({ ruleVersionId: rule.id, expectedActiveRuleVersionId: null });
+      services.cadences.installBuiltins();
+    });
+    const prospect = seedProspect(database.raw, 'person-kevin');
+    database.raw.prepare("UPDATE prospects SET qualification_state = 'unreviewed' WHERE id = ?").run(prospect.prospectId);
+    const enteredAt = '2026-08-30T12:00:00.000Z';
+    const unreviewed = services.lifecycle.createUnreviewedCycle({ personId: prospect.personId, prospectId: prospect.prospectId, entrySourceEventId: prospect.sourceEventId, effectiveAt: enteredAt });
+    const ready = services.lifecycle.reviewToReady({ cycleId: unreviewed.id, expectedCycleVersion: unreviewed.version, expectedProspectVersion: 1, effectiveAt: enteredAt });
+    services.unitOfWork.immediate(() => services.events.appendActivity({ id: 'actual-interview', personId: prospect.personId, prospectId: prospect.prospectId, salesCycleId: ready.id, kind: 'interview', direction: 'outbound', channel: 'phone', occurredAt: enteredAt, observedOutcome: 'substantive', metadata: {} }));
+    const interviewed = services.lifecycle.confirmInterviewed({ cycleId: ready.id, expectedCycleVersion: ready.version, expectedCurrentActionId: ready.currentNextActionId!, suggestionActivityId: 'actual-interview', effectiveAt: enteredAt, confirmedAt: enteredAt });
+    const cycle = { cycleId: interviewed.id };
+    const domain = createFounderSalesDomain({ database, services, clock, ids });
+    const api = createLeadDetailService(domain);
+    const confirm = vi.spyOn(api, 'confirmTransition'); const outbound = vi.spyOn(api, 'beginOutbound');
+    const pastActivityApi = { logPastActivity: vi.fn(async (request: import('../../../shared/contracts/todayContract').LogPastActivityRequest) => domain.logPastActivity(request)) };
+    const RealHarness = () => { const inspector = useLeadInspector(); return <button onClick={() => inspector.openFullPage(prospect.personId)}>Open real lead</button>; };
+    render(<LeadInspectorProvider api={api} pastActivityApi={pastActivityApi}><RealHarness /></LeadInspectorProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Open real lead' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Log dated past activity' }));
+    fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-09-01' } });
+    fireEvent.change(screen.getByLabelText('What happened'), { target: { value: 'I stated the $50 pilot price on our call.' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'I stated the price' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Log activity' }));
+    await screen.findByText(/Past activity saved/);
+    expect(confirm).not.toHaveBeenCalled(); expect(outbound).not.toHaveBeenCalled();
+    expect(domain.getLeadDetail({ personId: prospect.personId }).stage).toBe('interviewed');
+    const logged = domain.getLeadDetail({ personId: prospect.personId });
+    const activity = logged.activities.find(entry => entry.outcome === 'price_said')!;
+    expect(activity.occurredAt).toBe(new Date('2026-09-01T12:00:00').toISOString());
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
+    const selection = await screen.findByRole('combobox', { name: 'Price-stated evidence' });
+    fireEvent.click(selection); fireEvent.click(screen.getByRole('option', { name: new RegExp(activity.id) }));
+    expect(confirm).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Offered' }));
+    await waitFor(() => expect(domain.getLeadDetail({ personId: prospect.personId }).stage).toBe('offered'));
+    expect(confirm).toHaveBeenCalledWith({ transition: 'confirm_offered', salesCycleId: cycle.cycleId, suggestionActivityId: activity.id, expectedRevision: logged.revision });
+    expect(pastActivityApi.logPastActivity).toHaveBeenCalledTimes(1);
+    expect(domain.getLeadDetail({ personId: prospect.personId }).stage).not.toBe('won');
+  } finally { cleanup(); closeDatabase(database); temp.cleanup(); }
+});
+
+it('loads injected discovery evidence under StrictMode', async () => {
+  const api = createApi([kevin]);
+  const discoveryApi: DiscoveryApi = { get: vi.fn(), begin: vi.fn(), override: vi.fn(), getBrief: vi.fn(async () => discoveryBriefSchema.parse({ personId: kevin.personId, salesCycleId: kevin.salesCycleId, personName: kevin.personName, assessment: null, stale: false, latestOverride: null, pilotNextStep: null })) };
+  render(<StrictMode><LeadInspectorProvider api={api} discoveryApi={discoveryApi}><Harness /></LeadInspectorProvider></StrictMode>);
+  fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+  expect(await screen.findByRole('region', { name: 'Discovery evidence for Kevin Shin' })).toBeTruthy();
+});
+it('preserves a successful log outside bounded history without inferring price activity IDs', async () => {
+  const current = detailFor({ stage: 'interviewed', activities: [
+    { id: 'internal-note', kind: 'note', occurredAt: '2026-09-01T12:00:00.000Z', summary: '$50', outcome: 'price_said', markedInError: false },
+    { id: 'withdrawn-price', kind: 'call', occurredAt: '2026-09-01T12:00:00.000Z', summary: 'Retracted', outcome: 'price_said', markedInError: true },
+  ] });
+  const api = createApi([current]); const pastActivityApi = { logPastActivity: vi.fn(async () => receipt) };
+  render(<LeadInspectorProvider api={api} pastActivityApi={pastActivityApi}><Harness /></LeadInspectorProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Open Kevin full page' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Log dated past activity' }));
+  fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-08-01' } });
+  fireEvent.change(screen.getByLabelText('What happened'), { target: { value: 'Actual older communication' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'I stated the price' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Log activity' }));
+  await screen.findByText(/Past activity saved/);
+  fireEvent.click(await screen.findByRole('tab', { name: 'Activity' }));
+  expect((screen.getByRole('button', { name: 'Confirm Offered' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText(/No eligible evidence in recent Activity/)).toBeTruthy();
+  expect(api.confirmTransition).not.toHaveBeenCalled(); expect(pastActivityApi.logPastActivity).toHaveBeenCalledTimes(1);
+});
+it('does not refresh a different Person or destroy their draft after late founder confirmation', async () => {
+  const current = detailFor({ stage: 'interviewed', activities: [{ id: 'owned-price', kind: 'call', occurredAt: '2026-09-01T12:00:00.000Z', summary: 'Price stated', outcome: 'price_said', markedInError: false }] });
+  const api = createApi([current, dana]); let resolve!: (value: typeof receipt) => void;
+  api.confirmTransition.mockImplementation(() => new Promise(done => { resolve = done; }));
+  render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'Activity' }));
+  fireEvent.click(screen.getByRole('combobox', { name: 'Price-stated evidence' }));
+  fireEvent.click(screen.getByRole('option', { name: /owned-price/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm Offered' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open Dana Whitman' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Text +14015550100' }));
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Keep Dana draft' } });
+  await act(async () => resolve(receipt));
+  expect(api.get).toHaveBeenCalledTimes(2);
+  expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Keep Dana draft');
+});
+
+it('preserves the Ready-to-Interviewed founder backfill rule with explicitly chosen actual conversation evidence', async () => {
+  const current = detailFor({ stage: 'ready', activities: [{ id: 'actual-answer', kind: 'call', occurredAt: '2026-09-01T12:00:00.000Z', summary: 'Actual conversation', outcome: 'answered', markedInError: false }] });
+  const api = createApi([current]); render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'Activity' }));
+  fireEvent.click(screen.getByRole('combobox', { name: 'Conversation evidence' }));
+  fireEvent.click(screen.getByRole('option', { name: /actual-answer/ }));
+  expect(api.confirmTransition).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm Interviewed' }));
+  await waitFor(() => expect(api.confirmTransition).toHaveBeenCalledWith({ transition: 'confirm_interviewed', salesCycleId: 'cycle-kevin', expectedRevision: 4, suggestionActivityId: 'actual-answer' }));
+});
+it.each(['closed', 'no_action'] as const)('never offers confirmation without an active cycle/current action: %s', async gate => {
+  const current = detailFor({ stage: 'interviewed', workflowStatus: gate === 'closed' ? 'closed' : 'active', nextAction: gate === 'no_action' ? null : kevin.nextAction,
+    activities: [{ id: 'price', kind: 'call', occurredAt: '2026-09-01T12:00:00.000Z', summary: 'Price stated', outcome: 'price_said', markedInError: false }] });
+  const api = createApi([current]); render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'Activity' }));
+  expect(screen.queryByRole('button', { name: 'Confirm Offered' })).toBeNull(); expect(api.confirmTransition).not.toHaveBeenCalled();
 });

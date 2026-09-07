@@ -1,3 +1,9 @@
+import { mutationReceiptSchema } from '../../../shared/contracts/commonContract';
+import { discoveryBriefSchema, type DiscoveryApi, type DiscoveryBrief as Brief } from '../../../shared/contracts/discoveryContract';
+import type { LogPastActivityRequest } from '../../../shared/contracts/todayContract';
+import { DiscoveryBrief } from '../discovery/DiscoveryBrief';
+import { staleDiscoveryError } from '../discovery/useDiscovery';
+import { LogPastActivityDialog } from '../today/LogPastActivityDialog';
 import { outboundCapabilitiesSchema, outboundReceiptSchema, type OutboundCapabilities, type OutboundReceipt } from '../../../shared/contracts/outboundContract';
 import { Button } from '../../components/Button';
 import { OutboundReceiptPanel, outboundReceiptMessage } from './OutboundReceiptPanel';
@@ -28,6 +34,8 @@ import './leadInspector.css';
 
 export type LeadInspectorProviderProps = {
   api: LeadDetailApi;
+  discoveryApi?: DiscoveryApi;
+  pastActivityApi?: { logPastActivity(input: LogPastActivityRequest): Promise<import('../../../shared/contracts/commonContract').MutationReceipt> };
   /** Optional Today commands enabling the full page call-outcome flow. */
   outcomeApi?: CallOutcomeApi;
   children: ReactNode;
@@ -47,6 +55,8 @@ type Selection = {
  */
 export function LeadInspectorProvider({
   api,
+  discoveryApi,
+  pastActivityApi,
   outcomeApi,
   children,
 }: LeadInspectorProviderProps) {
@@ -117,14 +127,14 @@ export function LeadInspectorProvider({
   );
 
   const openWith = useCallback(
-    (personId: string, view: Selection['view']) => {
+    (personId: string, view: Selection['view'], forceRefresh = false) => {
       if (selectionRef.current?.personId !== personId) setManual(null);
       selectionRef.current = { personId, view };
       setSelection({ personId, view });
       const current = detailStateRef.current;
       const alreadyLoaded =
         current.status === 'ready' && current.detail.personId === personId;
-      if (!alreadyLoaded) {
+      if (forceRefresh || !alreadyLoaded) {
         fetchDetail(personId);
       }
     },
@@ -137,7 +147,7 @@ export function LeadInspectorProvider({
   );
 
   const openFullPage = useCallback(
-    (personId: string) => openWith(personId, 'page'),
+    (personId: string, options?: { refresh: boolean }) => openWith(personId, 'page', options?.refresh),
     [openWith],
   );
 
@@ -243,7 +253,12 @@ export function LeadInspectorProvider({
 
   const confirmTransition = useCallback(
     async (request: ConfirmTransitionRequest) => {
+      const owner = selectionRef.current?.personId;
+      const selected = owner === undefined ? undefined : lastDetails.current.get(owner);
+      if (selected === undefined || selected.salesCycleId !== request.salesCycleId) throw new Error('Selection changed');
       await api.confirmTransition(request);
+      if (!mounted.current || selectionRef.current?.personId !== owner
+        || lastDetails.current.get(owner)?.salesCycleId !== request.salesCycleId) return;
       if (request.transition === 'review_to_ready') {
         // Mark ready is part of the review burn-down: advance to the next
         // lead instead of leaving the founder staring at the same one.
@@ -368,12 +383,19 @@ export function LeadInspectorProvider({
     outboundPending: currentOutbound?.pending ?? false,
     outboundBlocked: currentOutbound?.uncertain || receipt?.status === 'unknown' || attempts.some((attempt) => attempt.channel === 'call' && attempt.status === 'unknown') };
 
+  const discoveryPresentation = {
+    discoveryEvidence: discoveryApi === undefined || currentDetail === undefined ? undefined : <SelectedDiscovery
+      key={`${personId}:${currentDetail.salesCycleId}`} api={discoveryApi} personId={personId!} salesCycleId={currentDetail.salesCycleId} />,
+    pastActivityControls: pastActivityApi === undefined || currentDetail === undefined ? undefined : <PastActivityControls
+      key={`${personId}:${currentDetail.salesCycleId}`} detail={currentDetail} api={pastActivityApi} onSaved={() => refresh(currentDetail.personId)} />,
+  };
   return (
     <LeadInspectorContext.Provider value={handle}>
       {children}
       {selection !== null && selection.view === 'inspector' && (
         <LeadInspector
           {...outboundPresentation}
+          {...discoveryPresentation}
           state={detailState}
           onClose={closeLead}
           onRetry={retry}
@@ -388,6 +410,7 @@ export function LeadInspectorProvider({
       {selection !== null && selection.view === 'page' && (
         <LeadFullPage
           {...outboundPresentation}
+          {...discoveryPresentation}
           outboundCommandId={manual?.personId === personId && manual?.cycleId === currentDetail?.salesCycleId ? manual.commandId : undefined}
           state={detailState}
           onRetry={retry}
@@ -403,4 +426,67 @@ export function LeadInspectorProvider({
       )}
     </LeadInspectorContext.Provider>
   );
+}
+
+/** A keyed selected-Person reader. It never prepares or enriches on mount. */
+function SelectedDiscovery({ api, personId, salesCycleId }: { api: DiscoveryApi; personId: string; salesCycleId: string }) {
+  const [brief, setBrief] = useState<Brief | null>(null);
+  const [failed, setFailed] = useState(false);
+  const mounted = useRef(true);
+  const apiRef = useRef(api);
+  apiRef.current = api;
+  const pending = useRef<{ api: DiscoveryApi; promise: Promise<Brief> } | null>(null);
+  const load = useCallback(async () => {
+    setFailed(false);
+    if (pending.current?.api !== api) {
+      const promise = api.getBrief({ personId });
+      pending.current = { api, promise };
+      void promise.then(() => { if (pending.current?.promise === promise) pending.current = null; },
+        () => { if (pending.current?.promise === promise) pending.current = null; });
+    }
+    const promise = pending.current.promise;
+    try {
+      const value = discoveryBriefSchema.parse(await promise);
+      if (value.personId !== personId || value.salesCycleId !== salesCycleId) throw new Error('Mismatched discovery owner');
+      if (mounted.current && apiRef.current === api) setBrief(value);
+    } catch { if (mounted.current && apiRef.current === api) setFailed(true); }
+  }, [api, personId, salesCycleId]);
+  useEffect(() => { mounted.current = true; void load(); return () => { mounted.current = false; }; }, [load]);
+  return <section aria-label="Prepared conversation evidence">
+    {failed && <p role="alert">Discovery evidence could not refresh.</p>}
+    {brief === null ? <p>{failed ? 'Evidence unavailable' : 'Loading discovery evidence'}</p> : <DiscoveryBrief brief={brief} onOverride={async request => {
+      if (request.personId !== personId || request.assessmentId !== brief.assessment?.id
+        || request.expectedFingerprint !== brief.assessment.fingerprint) throw new Error('DISCOVERY_STALE_ASSESSMENT');
+      try {
+        const receipt = mutationReceiptSchema.parse(await api.override(request));
+        if (!receipt.affectedPersonIds.includes(personId)) throw new Error('Mismatched override receipt');
+        void load(); // A read failure cannot undo or misreport a successful decision.
+        return receipt;
+      } catch (error) { if (staleDiscoveryError(error)) void load(); throw error; }
+    }} />}
+    <Button variant="quiet" onClick={() => { void load(); }}>Refresh discovery evidence</Button>
+  </section>;
+}
+
+function PastActivityControls({ detail, api, onSaved }: { detail: LeadDetail; api: NonNullable<LeadInspectorProviderProps['pastActivityApi']>; onSaved(): void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const pending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  return <section aria-label="Past communication evidence">
+    <Button variant="quiet" disabled={busy} onClick={() => setOpen(true)}>Log dated past activity</Button>
+    {message !== null && <p role="status">{message}</p>}
+    {open && <LogPastActivityDialog item={detail} busy={busy} onClose={() => setOpen(false)} onSubmit={request => {
+      if (pending.current || request.personId !== detail.personId || request.salesCycleId !== detail.salesCycleId) return;
+      pending.current = true; setBusy(true); setOpen(false); setMessage(null);
+      void api.logPastActivity(request).then(() => {
+        if (!mounted.current) return;
+        setMessage('Past activity saved. In Activity, select the actual price-stated evidence and separately confirm Offered. If the event is outside recent history, do not guess its ID.');
+        onSaved();
+      }, () => { if (mounted.current) setMessage('Past activity response unavailable. Check Activity before logging it again.'); })
+        .finally(() => { pending.current = false; if (mounted.current) setBusy(false); });
+    }} />}
+  </section>;
 }
