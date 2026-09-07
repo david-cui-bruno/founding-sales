@@ -515,6 +515,127 @@ describe('EventRepository', () => {
       .toThrowError(expect.objectContaining({ name: 'ActivityMediaConsentError' }));
   });
 
+  async function storedManualTranscript(overrides: Partial<{
+    recordingRef: string | null; transcriptRef: string; omitTranscript: boolean;
+    transcriptPerson: 'first' | 'second'; transcriptActivity: string; source: string; formatVersion: number;
+    consentPerson: 'first' | 'second'; consentActivity: string | null;
+    policyKind: string; policyVersion: string; decision: string; evidence: string;
+    effectiveAt: string; consentCreatedAt: string; transcriptCreatedAt: string;
+  }> = {}): Promise<void> {
+    await setup();
+    const fixture: Required<typeof overrides> = {
+      recordingRef: null, transcriptRef: 'db:transcripts/manual-transcript', omitTranscript: false,
+      transcriptPerson: 'first', transcriptActivity: 'activity-one', source: 'manual_paste', formatVersion: 1,
+      consentPerson: 'first', consentActivity: 'activity-one', policyKind: 'recording',
+      policyVersion: 'manual-attach-v1', decision: 'granted', evidence: '{"kind":"founder_manual_attach"}',
+      effectiveAt: LATER, consentCreatedAt: LATER, transcriptCreatedAt: LATER,
+      ...overrides,
+    };
+    unitOfWork.immediate(() => events.appendActivity(activityInput({
+      id: 'other-activity', providerIdempotencyKey: 'other-provider',
+    })));
+    const raw = database!.raw;
+    // Only malformed persisted-owner/source/format cases bypass INSERT constraints, never
+    // immutable triggers. Restore enforcement before exercising repository reads.
+    if (fixture.transcriptPerson === 'second' || fixture.consentPerson === 'second') raw.pragma('foreign_keys = OFF');
+    if (fixture.source !== 'manual_paste' || fixture.formatVersion !== 1) raw.pragma('ignore_check_constraints = ON');
+    try {
+      raw.transaction(() => {
+        raw.prepare(`INSERT INTO consent_policy_records (
+          id, person_id, activity_id, policy_kind, policy_version, effective_at, decision, evidence_json, created_at
+        ) VALUES ('manual-consent', ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+          fixture.consentPerson === 'first' ? first.personId : second.personId,
+          fixture.consentActivity, fixture.policyKind, fixture.policyVersion, fixture.effectiveAt,
+          fixture.decision, fixture.evidence, fixture.consentCreatedAt,
+        );
+        raw.prepare(`INSERT INTO activities (
+          id, person_id, prospect_id, sales_cycle_id, kind, direction, channel, occurred_at,
+          adapter, provider_idempotency_key, consent_policy_record_id,
+          recording_storage_ref, transcript_storage_ref, metadata_json, created_at
+        ) VALUES ('activity-one', ?, ?, ?, 'call', 'outbound', 'phone', ?, 'phone',
+          'provider-one', 'manual-consent', ?, ?, '{}', ?)`).run(
+          first.personId, first.prospectId, firstCycleId, TIMESTAMP,
+          fixture.recordingRef, fixture.transcriptRef, TIMESTAMP,
+        );
+        if (!fixture.omitTranscript) raw.prepare(`INSERT INTO transcripts (
+          id, activity_id, person_id, source, format_version, raw_text, created_at
+        ) VALUES ('manual-transcript', ?, ?, ?, ?, 'Lead: Pasted statement.', ?)`).run(
+          fixture.transcriptActivity, fixture.transcriptPerson === 'first' ? first.personId : second.personId,
+          fixture.source, fixture.formatVersion, fixture.transcriptCreatedAt,
+        );
+      }).immediate();
+    } finally {
+      raw.pragma('foreign_keys = ON');
+      raw.pragma('ignore_check_constraints = OFF');
+    }
+  }
+
+  it.each(['granted', 'not_required'])('reads only proven later manual evidence with %s consent', async (decision) => {
+    await storedManualTranscript({ decision });
+    const revision = database!.raw.prepare('SELECT total_changes() AS count').get();
+    expect(events.getActivity('activity-one')).toMatchObject({
+      occurredAt: TIMESTAMP, createdAt: TIMESTAMP, recordingStorageRef: null,
+      transcriptStorageRef: 'db:transcripts/manual-transcript', consentPolicyRecordId: 'manual-consent',
+    });
+    // A no-media provider retry is a canonical read, not new recording permission.
+    expect(unitOfWork.immediate(() => events.appendActivity(activityInput()))).toEqual(events.getActivity('activity-one'));
+    expect(database!.raw.prepare('SELECT effective_at, created_at FROM consent_policy_records WHERE id = ?')
+      .get('manual-consent')).toEqual({ effective_at: LATER, created_at: LATER });
+    expect(database!.raw.prepare('SELECT total_changes() AS count').get()).toEqual(revision);
+  });
+
+  it.each([
+    { label: 'actual recording', overrides: { recordingRef: 'media/recording.enc' } },
+    { label: 'generic managed transcript', overrides: { transcriptRef: 'media/transcript.enc' } },
+    { label: 'wrong transcript reference', overrides: { transcriptRef: 'db:transcripts/another-transcript' } },
+    { label: 'non-exact transcript reference', overrides: { transcriptRef: 'db:transcripts/manual-transcript ' } },
+    { label: 'missing persisted transcript', overrides: { omitTranscript: true } },
+    { label: 'wrong transcript Person', overrides: { transcriptPerson: 'second' } },
+    { label: 'wrong transcript Activity', overrides: { transcriptActivity: 'other-activity' } },
+    { label: 'non-manual source', overrides: { source: 'managed_recording' } },
+    { label: 'unsupported transcript format', overrides: { formatVersion: 2 } },
+    { label: 'wrong consent Person', overrides: { consentPerson: 'second' } },
+    { label: 'wrong consent Activity', overrides: { consentActivity: 'other-activity' } },
+    { label: 'unbound consent', overrides: { consentActivity: null } },
+    { label: 'wrong policy kind', overrides: { policyKind: 'outbound' } },
+    { label: 'generic recording policy', overrides: { policyVersion: 'v1' } },
+    { label: 'denied decision', overrides: { decision: 'denied' } },
+    { label: 'unknown decision', overrides: { decision: 'unknown' } },
+    { label: 'missing manual evidence', overrides: { evidence: '{}' } },
+    { label: 'wrong evidence kind', overrides: { evidence: '{"kind":"recording"}' } },
+    { label: 'malformed evidence', overrides: { evidence: '{bad' } },
+    { label: 'non-object evidence', overrides: { evidence: 'null' } },
+    { label: 'non-exact manual evidence', overrides: { evidence: '{"kind":"founder_manual_attach","other":true}' } },
+    { label: 'consent effective after attachment', overrides: { effectiveAt: '2026-08-30T14:00:00.000Z' } },
+    { label: 'mismatched consent creation', overrides: { consentCreatedAt: TIMESTAMP } },
+    { label: 'mismatched transcript creation', overrides: { transcriptCreatedAt: TIMESTAMP } },
+  ] as const)('does not admit later manual evidence with $label', async ({ overrides }) => {
+    await storedManualTranscript(overrides);
+    const revision = database!.raw.prepare('SELECT total_changes() AS count').get();
+    expect(() => events.getActivity('activity-one'))
+      .toThrowError(expect.objectContaining({ name: 'ActivityMediaConsentError' }));
+    expect(() => unitOfWork.immediate(() => events.appendActivity(activityInput())))
+      .toThrowError(expect.objectContaining({ name: 'ActivityMediaConsentError' }));
+    expect(database!.raw.prepare('SELECT total_changes() AS count').get()).toEqual(revision);
+  });
+
+  it.each([
+    { label: 'recording', media: { recordingStorageRef: 'media/recording.enc' } },
+    { label: 'managed transcript', media: { transcriptStorageRef: 'media/transcript.enc' } },
+    { label: 'manual transcript ref', media: { transcriptStorageRef: 'db:transcripts/manual-transcript' } },
+  ])('never uses later manual consent to append or replay supplied $label', async ({ media }) => {
+    await storedManualTranscript();
+    expect(events.getActivity('activity-one')?.transcriptStorageRef).toBe('db:transcripts/manual-transcript');
+    for (const newActivity of [false, true]) {
+      expect(() => unitOfWork.immediate(() => events.appendActivity(activityInput({
+        ...(newActivity ? { id: 'new-media', providerIdempotencyKey: 'new-provider' } : {}),
+        consentPolicyRecordId: 'manual-consent', ...media,
+      })))).toThrowError(expect.objectContaining({ name: 'ActivityMediaConsentError' }));
+    }
+    expect(events.getActivity('new-media')).toBeNull();
+    expect(events.getActivity('activity-one')).toMatchObject({ occurredAt: TIMESTAMP, recordingStorageRef: null });
+  });
+
   it('rejects a provider-key collision owned by another Person/Prospect/Cycle', async () => {
     await setup();
     unitOfWork.immediate(() => events.appendActivity(activityInput()));
