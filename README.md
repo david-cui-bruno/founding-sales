@@ -2,6 +2,37 @@
 
 Local-first macOS founder-sales application.
 
+## Automatic customer discovery
+
+While Callie is open, local processing assesses retained source evidence and prepares
+an advisory shortlist in Today. It resumes pending work when the app reopens. It
+is not an always-on service and does not process records while the app is closed.
+No model account is needed for deterministic assessment and discovery questions.
+Optional additional research is **not configured by default**. A shortlist is not
+outreach permission, verified buying intent, or automatic paid enrichment.
+
+Use **Prepared conversations → View evidence → Contact options**. Evidence remains
+read-only until Contact options prepares that one selected Person and opens the
+existing inspector. Unknown owners and ownership conflicts are not promoted into
+verified contacts. Missing assessment means **Not assessed**, not zero Fit. Local
+Fit and Timing remain separate from cloud scores. Due promises and follow-ups
+stay ahead of new prospecting. Watch, exclude and reconsider decisions preserve
+founder context without rewriting sales history.
+
+Calls/messages remain explicit actions. Text/email drafts are unsent and discarded
+when closed. Record an actual conversation, confirm Interviewed with its evidence,
+and explicitly mark **I stated the price** when logging a real price communication
+before separately confirming Offered. A generated pilot suggestion is not an
+executed offer, booked meeting, paid pilot, payment, or Won outcome.
+
+Local assessment and priority-refresh recovery is finite: the initial attempt has
+at most **three shared lifetime retry/recovery credits per substantive-input
+lineage**. Ordinary failures and interrupted-restart retries share those credits.
+Restoration or successful recovery does not reset them. Exhaustion remains visible
+as preparation needing attention, with original diagnostics retained. Changed
+substantive evidence can create new work, but returning to exhausted old evidence
+does not grant another budget.
+
 ## Apple Silicon development and verification
 
 This foundation targets Apple Silicon macOS. Build and package it on an arm64

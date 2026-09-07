@@ -9,16 +9,21 @@ import { createMigrationRunner, productionMigrations } from '../../src/main/db/m
 import { assertPrivateDirectory, type RetainedPrivateInput } from '../../src/main/db/readOnlyEncryptedDatabase';
 import { applyWorkspaceKey, createRawDatabase, type RawDatabase } from '../../src/main/db/sqliteDriver';
 import { assertDomainStorageReady, DOMAIN_MIGRATION_LEDGER, DOMAIN_SCHEMA_MANIFEST } from '../../src/main/domain/startup/storageReadiness';
+import { createDomainServices } from '../../src/main/domain/createDomainServices';
+import { BUILTIN_PRIORITIZATION_RULE_V1 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
+import { seedDiscoveryOwner, DISCOVERY_NOW } from '../fixtures/discoveryDatabase';
 import { parseRecoveryKeyMaterial } from '../../src/main/security/recoveryKey';
 import type { WorkspaceKey } from '../../src/main/security/workspaceKeyTypes';
 
-export type FixtureProfile = 'bootstrap' | 'current' | 'historical';
-type FixtureSchema = 15 | 17;
+export type FixtureProfile = 'bootstrap' | 'current' | 'historical' | 'through16';
+type FixtureSchema = 15 | 16 | 17;
 type BackupRow = { id: string; backup_basename: string; kind: string; schema_version: number; sha256: string; size_bytes: number; created_at: string; verified_at: string };
 type DrillRow = { performed_at: string; backup_receipt_id: string; backup_sha256: string };
 export type FixtureInspection = {
   schemaVersion: FixtureSchema; ledger: string[]; catalogSha256: string;
   sourceSha256: string; businessSha256: string;
+  /** Fixed pre-selection business subset, only for through16 comparisons across16→17. */
+  preserved16Sha256?: string;
   aggregateCounts: { people: number; prospects: number; sourceEvents: number };
   backupReceipts: BackupRow[]; drillReceipts: DrillRow[];
 };
@@ -98,10 +103,84 @@ const SCHEMA15_TABLES = Object.freeze([
   'won_terms',
   'workspace_settings',
 ]);
+// Fixed accepted schema16 catalog, independent of the current17 manifest.
+const SCHEMA16_CATALOG = 'afd4740063c216a075d8e6f144c018ea242e01ade847260c14003a41893fee66';
+const SCHEMA16_TABLES = Object.freeze([
+  'activities',
+  'activity_amendments',
+  'app_meta',
+  'backup_receipts',
+  'cadence_action_components',
+  'cadence_definitions',
+  'cadence_enrollments',
+  'cadence_steps',
+  'cloud_entity_links',
+  'consent_policy_records',
+  'contact_compliance_audit_events',
+  'cycle_reactivation_receipts',
+  'foundation_fts_probe',
+  'foundation_fts_probe_config',
+  'foundation_fts_probe_content',
+  'foundation_fts_probe_data',
+  'foundation_fts_probe_docsize',
+  'foundation_fts_probe_idx',
+  'identity_repair_events',
+  'jobs',
+  'kysely_migration',
+  'kysely_migration_lock',
+  'learning_evidence',
+  'learnings',
+  'lifecycle_review_items',
+  'next_actions',
+  'opt_out_closure_receipt_handles',
+  'opt_out_closure_receipts',
+  'opt_out_handles',
+  'opt_out_tombstones',
+  'organization_aliases',
+  'organizations',
+  'outbound_jurisdiction_audit_events',
+  'outbound_jurisdiction_clearances',
+  'person_contact_methods',
+  'person_outbound_jurisdictions',
+  'persons',
+  'prioritization_evaluations',
+  'prioritization_preference_events',
+  'prioritization_rule_versions',
+  'priority_overrides',
+  'properties',
+  'prospect_organizations',
+  'prospect_priority_projection',
+  'prospect_properties',
+  'prospects',
+  'reactivation_rules',
+  'recovery_readiness',
+  'restore_drill_receipts',
+  'review_position',
+  'sales_cycle_close_readiness',
+  'sales_cycles',
+  'source_events',
+  'source_intake_receipts',
+  'sourcing_cursor',
+  'sourcing_enrichment_requests',
+  'sourcing_outcome_outbox',
+  'sourcing_processed_files',
+  'sourcing_suppression_outbox',
+  'stage_events',
+  'transcript_utterances',
+  'transcripts',
+  'trigger_events',
+  'won_terms',
+  'workspace_settings',
+]);
+// No jobs, assessment/projection refresh, property fact refresh or backup metadata.
+// These named tables have identical columns in the pinned16 and current17 catalogs.
+const PRESERVED16_TABLES = Object.freeze(['persons', 'prospects', 'source_events', 'source_intake_receipts',
+  'person_contact_methods', 'sales_cycles', 'stage_events', 'next_actions', 'cadence_enrollments',
+  'cadence_action_components', 'activities']);
 const metadataTables = new Set(['app_meta', 'kysely_migration', 'kysely_migration_lock', 'backup_receipts', 'restore_drill_receipts', 'recovery_readiness']);
 
-function inspectRows(raw: RawDatabase, expected: FixtureSchema, sourceSha256: string): FixtureInspection {
-  if (expected !== 15 && expected !== 17) fail();
+function inspectRows(raw: RawDatabase, expected: FixtureSchema, sourceSha256: string, through16: boolean): FixtureInspection {
+  if (expected !== 15 && expected !== 16 && expected !== 17) fail();
   if (raw.pragma('integrity_check', { simple: true }) !== 'ok' || (raw.pragma('foreign_key_check') as unknown[]).length) fail();
   const meta = raw.prepare('SELECT singleton, schema_version FROM app_meta').all() as { singleton: number; schema_version: number }[];
   if (meta.length !== 1 || meta[0].singleton !== 1 || meta[0].schema_version !== expected) fail();
@@ -113,16 +192,22 @@ function inspectRows(raw: RawDatabase, expected: FixtureSchema, sourceSha256: st
   const fingerprint = catalog.map(row => [row.type, row.name, (row.sql ?? '').replace(/\s+/g, ' ').trim()])
     .sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
   const catalogSha256 = hash(JSON.stringify(fingerprint));
-  if (catalogSha256 !== (expected === 15 ? SCHEMA15_CATALOG : DOMAIN_SCHEMA_MANIFEST.catalogSha256)) fail();
+  if (catalogSha256 !== (expected === 15 ? SCHEMA15_CATALOG : expected === 16 ? SCHEMA16_CATALOG : DOMAIN_SCHEMA_MANIFEST.catalogSha256)) fail();
   // Catalog-validated, fixed tables only. Canonical row multisets, no business rows
   // escape. This is a same-schema digest, not a cross-migration equivalence claim.
   const business = createHash('sha256');
-  for (const table of expected === 15 ? SCHEMA15_TABLES : DOMAIN_SCHEMA_MANIFEST.tables) {
+  for (const table of expected === 15 ? SCHEMA15_TABLES : expected === 16 ? SCHEMA16_TABLES : DOMAIN_SCHEMA_MANIFEST.tables) {
     if (metadataTables.has(table) || table.startsWith('foundation_fts_probe')) continue;
     const rows = raw.prepare(`SELECT * FROM "${table}"`).raw().all().map(row => JSON.stringify(row)).sort();
     business.update(JSON.stringify([table, rows]));
   }
+  const preserved = createHash('sha256');
+  if (through16) for (const table of PRESERVED16_TABLES) {
+    const rows = raw.prepare(`SELECT * FROM "${table}"`).raw().all().map(row => JSON.stringify(row)).sort();
+    preserved.update(JSON.stringify([table, rows]));
+  }
   return {
+    ...(through16 ? { preserved16Sha256: preserved.digest('hex') } : {}),
     schemaVersion: expected, ledger: ledger.map(row => row.name), catalogSha256, sourceSha256,
     businessSha256: business.digest('hex'),
     aggregateCounts: raw.prepare('SELECT (SELECT COUNT(*) FROM persons) AS people, (SELECT COUNT(*) FROM prospects) AS prospects, (SELECT COUNT(*) FROM source_events) AS sourceEvents').get() as FixtureInspection['aggregateCounts'],
@@ -150,7 +235,7 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
     if (parent === fs.realpathSync(process.cwd())) fail();
     root = fs.mkdtempSync(join(parent, 'callie-packaged-fixture-'));
   } catch { return fail(); }
-  const paths = Object.freeze({ root, bootstrap: join(root, 'bootstrap'), current: join(root, 'current'), historical: join(root, 'historical'), exports: join(root, 'exports'), inspection: join(root, 'inspection') });
+  const paths = Object.freeze({ root, bootstrap: join(root, 'bootstrap'), current: join(root, 'current'), historical: join(root, 'historical'), through16: join(root, 'through16'), exports: join(root, 'exports'), inspection: join(root, 'inspection') });
   const directories = new Map<string, fs.Stats>();
   const makeDirectory = (path: string) => {
     fs.mkdirSync(path, { mode: 0o700 }); assertPrivateDirectory(path); directories.set(path, fs.lstatSync(path));
@@ -175,7 +260,7 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
     }
   };
   const profilePath = (profile: FixtureProfile) => {
-    if (!['bootstrap', 'current', 'historical'].includes(profile)) return fail();
+    if (!['bootstrap', 'current', 'historical', 'through16'].includes(profile)) return fail();
     const path = paths[profile]; assertDirectory(path); return path;
   };
   const databasePath = (profile: FixtureProfile) => join(profilePath(profile), 'callie.sqlite3');
@@ -238,6 +323,7 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
     finally { key?.bytes.fill(0); }
   });
   const inspect = (profile: FixtureProfile, path: string, key: WorkspaceKey, expected: FixtureSchema) => {
+    if (expected === 16 && profile !== 'through16' || profile === 'through16' && expected === 15) fail();
     const sources: RetainedPrivateInput[] = [];
     let raw: RawDatabase | undefined; let temporary: string | undefined; let temporaryIdentity: fs.Stats | undefined;
     let failed = false; let result: FixtureInspection | undefined;
@@ -260,7 +346,7 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
       raw.pragma('query_only = ON'); raw.pragma('temp_store = MEMORY');
       applyWorkspaceKey(raw, key.bytes);
       if (!raw.readonly || raw.pragma('query_only', { simple: true }) !== 1) fail();
-      result = inspectRows(raw, expected, sources[0].sha256);
+      result = inspectRows(raw, expected, sources[0].sha256, profile === 'through16');
     } catch { failed = true; }
     finally {
       const attempt = (operation: () => void) => { try { operation(); } catch { failed = true; } };
@@ -330,6 +416,39 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
           if (migration.fromVersion !== 0 || migration.toVersion !== 15) fail();
           closeDatabase(database); database = undefined;
           return inspect('historical', databasePath('historical'), key, 15);
+        } finally {
+          try { if (database) closeDatabase(database); }
+          finally { try { envelope.assertUnchanged(); } finally { envelope.close(); } }
+        }
+      });
+    },
+    createThrough16Profile(material: string) {
+      return withMaterial(material, async key => {
+        if (!envelopeCapture) fail();
+        absent(paths.through16);
+        const envelope = retain(envelopePath('bootstrap'), 64 * 1024);
+        let database: AppDatabase | undefined;
+        try {
+          if (!same(envelopeCapture.identity, fs.fstatSync(envelope.descriptor)) || envelopeCapture.sha256 !== envelope.sha256) fail();
+          inspect('bootstrap', databasePath('bootstrap'), key, 17); // Proves supplied key matches bootstrap DB, NOT safeStorage.
+          envelope.assertUnchanged();
+          makeDirectory(paths.through16); makeDirectory(join(paths.through16, 'backups'));
+          fs.writeFileSync(envelopePath('through16'), envelope.bytes, { flag: 'wx', mode: 0o600 });
+          fs.writeFileSync(databasePath('through16'), '', { flag: 'wx', mode: 0o600 });
+          database = openDatabase({ path: databasePath('through16'), key });
+          const migration = await createMigrationRunner(productionMigrations.filter(entry => entry.schemaVersion <= 16))(database, {
+            workspaceKey: key, backupDirectory: join(paths.through16, 'backups'),
+          });
+          if (migration.fromVersion !== 0 || migration.toVersion !== 16) fail();
+          const services = createDomainServices({ database, clock: { now: () => DISCOVERY_NOW }, ids: { next: randomUUID } });
+          services.unitOfWork.immediate(() => {
+            services.prioritizationRepository.installRuleVersion(BUILTIN_PRIORITIZATION_RULE_V1);
+            services.cadences.installBuiltins();
+          });
+          seedDiscoveryOwner({ services }, { prefix: 'through16-complete', units: 10 });
+          seedDiscoveryOwner({ services }, { prefix: 'through16-incomplete', units: null });
+          closeDatabase(database); database = undefined;
+          return inspect('through16', databasePath('through16'), key, 16);
         } finally {
           try { if (database) closeDatabase(database); }
           finally { try { envelope.assertUnchanged(); } finally { envelope.close(); } }

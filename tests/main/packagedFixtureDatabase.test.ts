@@ -1,5 +1,5 @@
 import { ChildProcess, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import * as fs from 'node:fs';
 import { join, relative, sep } from 'node:path';
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, openDatabase } from '../../src/main/db/database';
 import * as migrations from '../../src/main/db/migrate';
 import * as driver from '../../src/main/db/sqliteDriver';
+import { DomainRuntime } from '../../src/main/domain/domainRuntime';
 import { OperationalSafetyRepository } from '../../src/main/domain/operations/operationalSafetyRepository';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
 import { BackupService } from '../../src/main/backup/backupService';
@@ -38,8 +39,8 @@ describe('bounded packaged fixture database preparation', () => {
     material = materialFor();
   });
   afterEach(async () => { vi.restoreAllMocks(); if (f) await f.cleanup(); });
-  const dbPath = (profile: 'bootstrap' | 'current' | 'historical') => join(f.paths[profile], 'callie.sqlite3');
-  const envelopePath = (profile: 'bootstrap' | 'current' | 'historical') => join(f.paths[profile], 'callie.key-envelope.json');
+  const dbPath = (profile: 'bootstrap' | 'current' | 'historical' | 'through16') => join(f.paths[profile], 'callie.sqlite3');
+  const envelopePath = (profile: 'bootstrap' | 'current' | 'historical' | 'through16') => join(f.paths[profile], 'callie.key-envelope.json');
   async function seed(profile: 'bootstrap' | 'current', nonzero = false, byte = 0x2a) {
     const key = createTestWorkspaceKey(byte);
     fs.writeFileSync(dbPath(profile), '', { flag: 'wx', mode: 0o600 });
@@ -191,6 +192,7 @@ describe('bounded packaged fixture database preparation', () => {
       await expect(f.createManualBackup(material)).rejects.toThrow(ERROR);
       await expect(f.captureBootstrapEnvelope()).rejects.toThrow(ERROR);
       await expect(f.createHistoricalProfile(material)).rejects.toThrow(ERROR);
+      await expect(f.createThrough16Profile(material)).rejects.toThrow(ERROR);
       await expect(f.cleanup()).rejects.toThrow(ERROR);
       expect(fs.existsSync(f.paths.root)).toBe(true);
       expect(() => f.captureChild(child)).toThrow(ERROR);
@@ -232,6 +234,72 @@ describe('bounded packaged fixture database preparation', () => {
     expect(live.drillReceipts).toEqual([{ performed_at: TIME, backup_receipt_id: after.backupReceipts[0].id, backup_sha256: result.backup.sha256 }]);
     expect(live.aggregateCounts.people).toBe(2); expect(backup.aggregateCounts.people).toBe(1);
     expect(live.businessSha256).not.toBe(backup.businessSha256);
+  });
+
+  it('creates separate nonzero through16 and preserves its exact encrypted backup and named subset across17', async () => {
+    expect(f.createThrough16Profile).toBeTypeOf('function');
+    await seed('bootstrap'); await seed('current', true);
+    await expect(f.createThrough16Profile(material)).rejects.toThrow(ERROR);
+    await f.captureBootstrapEnvelope(); await f.createHistoricalProfile(material);
+    const untouched = (['bootstrap', 'current', 'historical'] as const).map(profile => [
+      identity(dbPath(profile)), identity(envelopePath(profile))]);
+    const before = await f.createThrough16Profile(material);
+    expect(before.schemaVersion).toBe(16); expect(before.ledger).toHaveLength(16);
+    expect(before.ledger.at(-1)).toBe('0016ContactPresentationEvidence');
+    // Independently pinned from the accepted pre17 catalog, not from the inspected file.
+    expect(before.catalogSha256).toBe('afd4740063c216a075d8e6f144c018ea242e01ade847260c14003a41893fee66');
+    expect(before.aggregateCounts).toEqual({ people: 2, prospects: 2, sourceEvents: 2 });
+    expect(before.preserved16Sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(fs.lstatSync(dbPath('through16')).mode & 0o777).toBe(0o600);
+    await expect(f.createThrough16Profile(material)).rejects.toThrow(ERROR);
+    await expect(f.inspectStoppedProfile('through16', material, 17)).rejects.toThrow(ERROR);
+    const key = createTestWorkspaceKey(); const database = openDatabase({ path: dbPath('through16'), key });
+    try {
+      expect(await migrations.migrateToLatest(database, { workspaceKey: key, backupDirectory: join(f.paths.through16, 'backups') }))
+        .toEqual({ fromVersion: 16, toVersion: 17, appliedMigrationIds: ['0017DiscoveryAssessments'] });
+      const runtime = new DomainRuntime({ database, clock: { now: () => TIME }, ids: { next: randomUUID } });
+      expect(runtime.initialize().status).toBe('ready');
+      for (const row of database.raw.prepare('SELECT id FROM prospects').all() as { id: string }[]) runtime.getServices().discovery.assess(row.id);
+      runtime.shutdown();
+    } finally { closeDatabase(database); key.bytes.fill(0); }
+    const backups = fs.readdirSync(join(f.paths.through16, 'backups')).filter(name => name.startsWith('pre-migration-schema-16-'));
+    expect(backups).toHaveLength(1);
+    const backup = await f.inspectStoppedBackup('through16', backups[0], material, 16);
+    expect(backup.businessSha256).toBe(before.businessSha256); // SAME schema only
+    expect(backup.aggregateCounts).toEqual(before.aggregateCounts);
+    const after = await f.inspectStoppedProfile('through16', material, 17);
+    expect(after.preserved16Sha256).toBe(before.preserved16Sha256);
+    expect(after.ledger.at(-1)).toBe('0017DiscoveryAssessments');
+    expect((['bootstrap', 'current', 'historical'] as const).map(profile => [identity(dbPath(profile)), identity(envelopePath(profile))])).toEqual(untouched);
+    expect((await f.inspectStoppedProfile('current', material, 17)).preserved16Sha256).toBeUndefined();
+    expect(residue()).toEqual([]);
+  });
+
+  it.each(['wrong-key', 'changed-envelope', 'sidecar', 'mode', 'catalog', 'business'])('through16 preserves existing guards and detects %s', async fault => {
+    expect(f.createThrough16Profile).toBeTypeOf('function');
+    await seed('bootstrap'); await f.captureBootstrapEnvelope();
+    if (fault === 'wrong-key' || fault === 'changed-envelope') {
+      if (fault === 'changed-envelope') fs.writeFileSync(envelopePath('bootstrap'), 'changed synthetic envelope');
+      await expect(f.createThrough16Profile(fault === 'wrong-key' ? materialFor(0x55) : material)).rejects.toThrow(ERROR);
+      expect(fs.existsSync(f.paths.through16)).toBe(false); return;
+    }
+    const before = await f.createThrough16Profile(material);
+    if (fault === 'sidecar') fs.writeFileSync(dbPath('through16') + '-wal', 'refuse sidecar', { mode: 0o600 });
+    if (fault === 'mode') fs.chmodSync(dbPath('through16'), 0o644);
+    if (fault === 'catalog' || fault === 'business') {
+      const key = createTestWorkspaceKey(); const database = openDatabase({ path: dbPath('through16'), key });
+      try {
+        if (fault === 'catalog') database.raw.exec('CREATE TABLE forbidden_extra(value TEXT)');
+        else database.raw.exec("UPDATE persons SET display_name = 'Changed synthetic owner'");
+      } finally { closeDatabase(database); key.bytes.fill(0); }
+    }
+    if (fault === 'business') {
+      const after = await f.inspectStoppedProfile('through16', material, 16);
+      expect(after.aggregateCounts).toEqual(before.aggregateCounts);
+      expect(after.businessSha256).not.toBe(before.businessSha256);
+      expect(after.preserved16Sha256).not.toBe(before.preserved16Sha256);
+    } else await expect(f.inspectStoppedProfile('through16', material, 16)).rejects.toThrow(ERROR);
+    expect(residue()).toEqual([]);
   });
 
   it('creates only a new genuine through15 database with the explicitly captured opaque synthetic envelope', async () => {
