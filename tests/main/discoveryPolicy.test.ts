@@ -1,3 +1,6 @@
+import { resolvePriorityMatrix } from '../../src/main/domain/prioritization/priorityMatrix';
+import { randomUUID } from 'node:crypto';
+import { createDiscoveryDatabase, seedDiscoveryOwner } from '../fixtures/discoveryDatabase';
 import { describe, expect, it } from 'vitest';
 
 import { buildDiscoveryQuestions } from '../../src/main/domain/discovery/discoveryBrief';
@@ -292,5 +295,45 @@ describe('advisory candidate order and allocation', () => {
     expect(result.find(a => a.personId === 'same')?.salesCycleId).toBe('preferred-cycle');
     expect(selectDiscoveryCandidates({ assessments: [...values].reverse(), limit: 10 })).toEqual(result);
     expect(JSON.stringify(values)).toBe(before);
+  });
+});
+
+
+describe('durable discovery rank parity', () => {
+  it('orders the complete persisted tuple before paging with null axes and binary stable IDs', async () => {
+    const f = await createDiscoveryDatabase();
+    try {
+      const values: DiscoveryAssessment[] = [];
+      for (let i = 0; i < 36; i++) {
+        const o = seedDiscoveryOwner(f, { prefix: `rank-${i}`, units: i < 24 ? 10 : null });
+        const a = assessment(o.personId, i >= 24);
+        Object.assign(a, { personId: o.personId, prospectId: o.prospectId, salesCycleId: o.salesCycleId, id: randomUUID() });
+        // Deliberately varied persisted rank inputs test each SQL key, not source scoring.
+        if (i < 24) {
+
+          a.axes.timing = { milliPoints: 9000 + i % 3, band: 'warm', hasSupportedTrigger: true };
+          a.axes.fit!.points = 15 + i % 4;
+          a.ranking.earliestTriggerExpiresAt = i % 2 ? null : '2026-09-06T23:00:00.000Z';
+          a.axes.reachability = (['none', 'indirect', 'direct'] as const)[i % 3]!;
+          a.ranking.priority = resolvePriorityMatrix({ fitBand: a.axes.fit!.band, timingBand: a.axes.timing.band, reachability: a.axes.reachability, selectedPositiveTriggerKeys: ['live_vacancy'] }).priority;
+        }
+        a.ranking.dataConfidence = i % 5;
+        a.ranking.lastContactAt = i % 3 ? `2026-09-0${1 + i % 5}T12:00:00.000Z` : null;
+        a.ranking.latestSourceObservedAt = i % 4 ? AS_OF : null;
+        values.push(discoveryAssessmentSchema.parse(a));
+      }
+      f.services.unitOfWork.immediate(() => {
+        for (const a of [...values].reverse()) {
+          f.services.discoveryRepository.appendAssessment(a);
+          f.services.discoveryRepository.setCurrent(a.prospectId, a.id);
+        }
+      });
+      for (const bucket of ['primary', 'exploration'] as const) {
+        const expected = values.filter(a => (a.ranking.priority !== null) === (bucket === 'primary')).sort(compareDiscoveryCandidates);
+        const pages = [0, 7, 14, 21].flatMap(offset => f.services.discoveryRepository.listRankedCurrentPage({ bucket, offset, limit: 7 }));
+        expect(pages.map(a => a.id)).toEqual(expected.map(a => a.id));
+        expect(f.services.discoveryRepository.listRankedCurrentPage({ bucket, offset: 0, limit: 1 })[0]?.id).toBe(expected[0]?.id);
+      }
+    } finally { f.close(); }
   });
 });

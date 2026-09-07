@@ -4,6 +4,7 @@ import { ContactComplianceService } from './compliance/contactComplianceService'
 import { JurisdictionRepository } from './compliance/jurisdictionRepository';
 import { FOUNDER_CHANNEL_POLICIES_V1 } from './cadence/cadenceScheduler';
 import { DiscoveryRepository } from './discovery/discoveryRepository';
+import { DiscoveryReadService } from './discovery/discoveryReadService';
 import { EventRepository } from './events/eventRepository';
 import { IdentityRepository } from './identity/identityRepository';
 import { LifecycleService } from './lifecycle/lifecycleService';
@@ -27,6 +28,7 @@ import { JobRepository } from '../jobs/jobRepository';
 export type DomainServices = Readonly<{
   unitOfWork: DomainUnitOfWork;
   discoveryRepository: DiscoveryRepository;
+  discoveryRead: DiscoveryReadService;
   jobs: JobRepository;
   identities: IdentityRepository;
   contactCompliance: ContactComplianceService;
@@ -108,6 +110,9 @@ export function createDomainServices(input: {
     outboundPermission,
   });
   const workspaceSettings = new WorkspaceSettingsRepository({ database, unitOfWork });
+  const discoveryRead = new DiscoveryReadService({ database, unitOfWork, clock,
+    services: { discoveryRepository, today, workspaceSettings, jobs, identities, sourceRepository,
+      events, outboundPermission, prioritizationRepository, prioritization } });
 
   // Assert every final binding before any read/time/ID access.
   discoveryRepository.assertBoundTo(database, unitOfWork);
@@ -128,6 +133,7 @@ export function createDomainServices(input: {
   return Object.freeze({
     unitOfWork,
     discoveryRepository,
+    discoveryRead,
     jobs,
     identities,
     contactCompliance,

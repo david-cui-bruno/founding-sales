@@ -9,6 +9,7 @@ import {
 import type { AppDatabase } from '../../db/database';
 import { DomainRepositoryDatabaseMismatchError } from '../support/domainErrors';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
+import { PROSPECT_PRIORITY_ORDER_BY_SQL } from '../prioritization/priorityOrdering';
 
 const shape = discoveryAssessmentSchema.shape;
 const jsonSchema = z.string().min(2).max(2_000_000);
@@ -36,6 +37,37 @@ const scanRowSchema = z.object({
   last_complete_scan_at: shape.evaluatedAt.nullable(), last_complete_local_date: shape.localDate.nullable(),
 }).strict().refine(row => (row.last_complete_scan_at === null) === (row.last_complete_local_date === null));
 const overrideInputSchema = overrideDiscoveryRequestSchema.extend({ createdAt: discoveryOverrideSchema.shape.createdAt });
+
+export type DiscoveryReadBucket = 'primary' | 'exploration' | 'judgment' | 'other';
+const contextSchema = z.object({ personId: shape.personId, prospectId: shape.prospectId,
+  salesCycleId: shape.salesCycleId, personName: z.string().min(1) }).strict();
+// Same cycle choice as the collector: an open cycle wins, otherwise latest history.
+const currentCycleSql = `(SELECT c.id FROM sales_cycles c WHERE c.person_id = p.person_id
+  ORDER BY CASE WHEN c.workflow_status NOT IN ('closed', 'merged') THEN 0 ELSE 1 END,
+    c.created_at DESC, c.id COLLATE BINARY DESC LIMIT 1)`;
+const readRankingSql = `WITH priority_orderable AS (
+  SELECT a.id, a.prospect_id, a.person_id, a.disposition,
+    json_extract(a.assessment_json, '$.identitySupported') AS identity_supported,
+    json_extract(a.assessment_json, '$.axes.fit.band') AS fit_band,
+    json_extract(a.assessment_json, '$.axes.fit.completeness') AS fit_completeness,
+    json_extract(a.assessment_json, '$.ranking.priority') AS effective_priority,
+    json_extract(a.assessment_json, '$.ranking.earliestTriggerExpiresAt') AS earliest_trigger_expires_at,
+    json_extract(a.assessment_json, '$.axes.timing.milliPoints') AS timing_millipoints,
+    json_extract(a.assessment_json, '$.axes.fit.points') AS fit_points,
+    json_extract(a.assessment_json, '$.axes.reachability') AS reachability,
+    json_extract(a.assessment_json, '$.ranking.dataConfidence') AS data_confidence,
+    json_extract(a.assessment_json, '$.ranking.lastContactAt') AS last_contact_at,
+    json_extract(a.assessment_json, '$.ranking.latestSourceObservedAt') AS latest_source_observed_at,
+    NULL AS cloud_source_percentile, NULL AS cloud_timing
+  FROM discovery_current c JOIN discovery_assessments a ON a.id = c.assessment_id
+), bucketed AS (SELECT *, CASE
+  WHEN disposition = 'candidate' AND identity_supported = 1
+    AND fit_band IN ('medium', 'high') AND effective_priority IS NOT NULL THEN 'primary'
+  WHEN disposition = 'candidate' AND identity_supported = 1 AND effective_priority IS NULL
+    AND (fit_points IS NULL OR (fit_band = 'low' AND fit_completeness = 'partial')) THEN 'exploration'
+  WHEN disposition = 'judgment' THEN 'judgment' ELSE 'other' END AS bucket
+  FROM priority_orderable)
+`;
 
 const corrupt = (): never => { throw new Error('Discovery storage is corrupt.'); };
 const conflict = (): never => { throw new Error('Discovery command conflicts with immutable history.'); };
@@ -151,6 +183,58 @@ export class DiscoveryRepository {
       return discoveryOverrideSchema.parse({ id: row.id, assessmentId: row.assessment_id, decision: row.decision,
         reason: row.reason, createdAt: row.created_at, evidenceChanged: current !== null && current.fingerprint !== row.fingerprint });
     });
+  }
+
+  /** Immutable JSON is strictly parsed again after SQL ranks the ENTIRE current set.
+   * The pointer/assessment and owner indexes serve these pages; no ID-first LIMIT.
+   * Non-primary pages use the accepted evidence/conversation/Person comparator.
+   */
+  listRankedCurrentPage(input: { bucket: DiscoveryReadBucket; offset: number; limit: number }): DiscoveryAssessment[] {
+    const { bucket, offset, limit } = z.object({ bucket: z.enum(['primary', 'exploration', 'judgment', 'other']),
+      offset: z.number().int().safe().nonnegative(), limit: z.number().int().min(1).max(50) }).strict().parse(input);
+    return read(() => {
+      const order = bucket === 'primary' ? PROSPECT_PRIORITY_ORDER_BY_SQL : `
+        latest_source_observed_at IS NULL ASC, latest_source_observed_at DESC,
+        last_contact_at IS NOT NULL ASC, last_contact_at ASC, person_id COLLATE BINARY ASC`;
+      const rows = this.database.raw.prepare(`${readRankingSql}
+        SELECT id, prospect_id FROM bucketed AS priority_orderable WHERE bucket = ?
+        ORDER BY ${order}, id COLLATE BINARY ASC LIMIT ? OFFSET ?`).all(bucket, limit, offset) as { id: string; prospect_id: string }[];
+      return rows.map(row => {
+        const assessment = this.getCurrent(row.prospect_id);
+        if (assessment?.id !== row.id) return corrupt();
+        return assessment;
+      });
+    });
+  }
+
+  countReadOwners(): number {
+    return read(() => z.object({ count: z.number().int().safe().nonnegative() }).strict().parse(
+      this.database.raw.prepare(`SELECT count(*) AS count FROM prospects p
+        WHERE EXISTS (SELECT 1 FROM sales_cycles c WHERE c.prospect_id = p.id AND c.person_id = p.person_id)`).get(),
+    ).count);
+  }
+
+  getReadContext(personId: string): Required<z.infer<typeof contextSchema>> | null {
+    const id = shape.personId.parse(personId);
+    return read(() => {
+      const row = this.database.raw.prepare(`SELECT p.person_id AS personId, p.id AS prospectId,
+        c.id AS salesCycleId, n.display_name AS personName FROM prospects p
+        JOIN persons n ON n.id = p.person_id JOIN sales_cycles c ON c.id = ${currentCycleSql}
+        AND c.person_id = p.person_id AND c.prospect_id = p.id WHERE p.person_id = ?`).get(id);
+      if (row === undefined) return null;
+      const parsed = contextSchema.parse(row);
+      return { personId: parsed.personId, prospectId: parsed.prospectId,
+        salesCycleId: parsed.salesCycleId, personName: parsed.personName };
+    });
+  }
+
+  /** Compare override evidence to freshly collected bytes, not the old current pointer. */
+  overrideForFingerprint(prospectId: string, fingerprint: string): DiscoveryOverride | null {
+    const latest = this.getLatestOverride(prospectId);
+    if (latest === null) return null;
+    const assessment = this.getAssessment(latest.assessmentId);
+    if (assessment === null) return corrupt();
+    return { ...latest, evidenceChanged: assessment.fingerprint !== shape.fingerprint.parse(fingerprint) };
   }
 
   getPreparation(commandId: string): { request: BeginDiscoveryRequest; receipt: BeginDiscoveryReceipt } | null {

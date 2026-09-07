@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import type { AppDatabase } from '../../db/database';
 import type { Clock } from '../support/clock';
-import { PrioritizationInputCorruptionError } from '../support/domainErrors';
+import { DomainRepositoryDatabaseMismatchError, PrioritizationInputCorruptionError } from '../support/domainErrors';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 import type { OutboundPermissionService } from '../optOut/outboundPermissionService';
 import type { PrioritizationService } from '../prioritization/prioritizationService';
@@ -67,54 +67,72 @@ export class TodayService {
       );
     }
     const generatedAt = utcTimestampSchema.parse(this.clock.now());
-    const interval = resolveLocalDayInterval({
-      generatedAt, timezone: input.timezone,
-    });
+    resolveLocalDayInterval({ generatedAt, timezone: input.timezone });
     this.database.raw.exec('BEGIN');
     try {
-      const loadResults = this.repository.listOperationalCandidates();
-      const usage = this.repository.loadCompletedDiscretionaryDialUsage({
-        dayStartAt: interval.localDayStartAt,
-        dayEndAt: interval.localDayEndAt,
-        timezone: input.timezone,
-        localDate: interval.localDate,
-      });
-      const diagnostics: TodayDiagnostic[] = usage.diagnostics.map((entry): TodayDiagnostic => ({
-        cycleId: entry.cycleId,
-        personId: null,
-        kind: entry.kind,
-        relatedIds: [entry.activityId],
-      }));
-      const candidates: ParsedTodayCandidate[] = [];
-      let unreviewedBacklogCount = 0;
-      for (const result of loadResults) {
-        if (result.kind === 'diagnostic') {
-          diagnostics.push(result.diagnostic);
-          continue;
-        }
-        if (result.kind === 'unreviewed_backlog') {
-          unreviewedBacklogCount += 1;
-          continue;
-        }
-        const enriched = this.enrichCandidate(result.candidate, generatedAt, interval);
-        if (enriched.kind === 'diagnostic') {
-          diagnostics.push(enriched.diagnostic);
-          continue;
-        }
-        candidates.push(enriched.candidate);
-      }
-      return planTodayQueue({
-        candidates,
-        generatedAt,
-        timezone: input.timezone,
-        capacity: input.capacity,
-        completedDiscretionaryDialCount: usage.count,
-        unreviewedBacklogCount,
-        extraDiagnostics: diagnostics,
-      });
+      return this.buildInCurrentSnapshot({ ...input, generatedAt });
     } finally {
       this.database.raw.exec('ROLLBACK');
     }
+  }
+
+  assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork): void {
+    if (this.database !== database || this.unitOfWork !== unitOfWork) throw new DomainRepositoryDatabaseMismatchError();
+  }
+
+  /** Caller owns the existing snapshot. No Clock read or transaction boundary. */
+  buildInCurrentSnapshot(input: {
+    timezone: string;
+    capacity: TodayCapacity;
+    channelPolicies: ChannelPolicySnapshots;
+    generatedAt: string;
+  }): TodayQueue {
+    if (!this.database.raw.inTransaction) {
+      throw new PrioritizationInputCorruptionError('Today requires an active read snapshot.');
+    }
+    validateChannelPolicies(input.channelPolicies);
+    const generatedAt = utcTimestampSchema.parse(input.generatedAt);
+    const interval = resolveLocalDayInterval({ generatedAt, timezone: input.timezone });
+    const loadResults = this.repository.listOperationalCandidates();
+    const usage = this.repository.loadCompletedDiscretionaryDialUsage({
+      dayStartAt: interval.localDayStartAt,
+      dayEndAt: interval.localDayEndAt,
+      timezone: input.timezone,
+      localDate: interval.localDate,
+    });
+    const diagnostics: TodayDiagnostic[] = usage.diagnostics.map((entry): TodayDiagnostic => ({
+      cycleId: entry.cycleId,
+      personId: null,
+      kind: entry.kind,
+      relatedIds: [entry.activityId],
+    }));
+    const candidates: ParsedTodayCandidate[] = [];
+    let unreviewedBacklogCount = 0;
+    for (const result of loadResults) {
+      if (result.kind === 'diagnostic') {
+        diagnostics.push(result.diagnostic);
+        continue;
+      }
+      if (result.kind === 'unreviewed_backlog') {
+        unreviewedBacklogCount += 1;
+        continue;
+      }
+      const enriched = this.enrichCandidate(result.candidate, generatedAt, interval);
+      if (enriched.kind === 'diagnostic') {
+        diagnostics.push(enriched.diagnostic);
+        continue;
+      }
+      candidates.push(enriched.candidate);
+    }
+    return planTodayQueue({
+      candidates,
+      generatedAt,
+      timezone: input.timezone,
+      capacity: input.capacity,
+      completedDiscretionaryDialCount: usage.count,
+      unreviewedBacklogCount,
+      extraDiagnostics: diagnostics,
+    });
   }
 
   private enrichCandidate(
