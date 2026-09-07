@@ -62,6 +62,7 @@ export function NavigationRail({
 
   return (
     <nav className="nav-rail" aria-label="Primary">
+      <div className="nav-rail__native-controls" aria-hidden="true" />
       <div className="nav-rail__header">
         <p className="nav-rail__brand" aria-hidden="true">
           Callie

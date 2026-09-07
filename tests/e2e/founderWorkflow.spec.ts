@@ -22,6 +22,23 @@ test('empty healthy app opens Today and health stays callable through preload', 
       'page',
     );
 
+    if (process.platform === 'darwin') {
+      await expect(page.locator('body')).toHaveAttribute('data-platform', 'darwin');
+      const nativeRow = page.locator('.nav-rail__native-controls');
+      const brand = page.locator('.nav-rail__brand');
+      await expect(nativeRow).toBeVisible();
+      await expect(brand).toHaveCount(1);
+      await expect(brand).toBeVisible();
+      const nativeBox = await nativeRow.boundingBox();
+      const brandBox = await brand.boundingBox();
+      expect(nativeBox).not.toBeNull();
+      expect(brandBox).not.toBeNull();
+      expect(nativeBox!.height).toBeGreaterThan(0);
+      expect(brandBox!.y).toBeGreaterThanOrEqual(nativeBox!.y + nativeBox!.height);
+      // Final packaged acceptance must also observe the actual OS traffic
+      // lights above Callie. DOM bounds cannot locate native window buttons.
+    }
+
     const health = await page.evaluate(() => window.callie.health.get());
     expect(health.databaseEncrypted).toBe(true);
     expect(health.domainReady).toBe(true);
