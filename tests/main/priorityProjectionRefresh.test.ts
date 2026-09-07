@@ -178,6 +178,16 @@ describe('priority projection refresh at startup', () => {
     domain.scanAndEnqueueDiscoveryPage();
     expect(domain.getDiscovery().processing).toBe('idle');
     expect(services.jobs.get(old.id)).toEqual({ ...failed, result: { kind: 'discovery_diagnostic_status_v1', status: 'resolved' } });
+    // Remove only the synthetic current projection, retaining immutable evidence and command history.
+    database.raw.prepare('DELETE FROM prospect_priority_projection WHERE prospect_id = ?').run(p.prospectId);
+    domain.scanAndEnqueueDiscoveryPage();
+    expect(services.prioritizationRepository.getProjection(p.prospectId)).toBeNull();
+    expect(domain.processNextDiscoveryJob()).toBe(false);
+    expect(domain.getDiscovery().processing).toBe('error');
+    expect(services.jobs.get(old.id)).toEqual({ ...failed, result: { kind: 'discovery_diagnostic_status_v1', status: 'unresolved' } });
+    expect(database.raw.prepare('SELECT count(*) AS n FROM jobs').get()).toEqual({ n: 1 });
+    domain.scanAndEnqueueDiscoveryPage();
+    expect(services.jobs.get(old.id)).toEqual({ ...failed, result: { kind: 'discovery_diagnostic_status_v1', status: 'unresolved' } });
   });
 
   it.each(['source', 'rule', 'projection', 'day'] as const)('revalidates %s before executing an older startup refresh command', kind => {

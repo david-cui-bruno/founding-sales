@@ -366,6 +366,14 @@ describe('bounded real-runtime local discovery worker', () => {
     expect(f.services.discoveryRead.get().processing).toBe('idle');
     expect(f.services.jobs.get(failed.id)).toMatchObject({ state: 'failed', payload: failed.payload, error: failed.error,
       result: { kind: 'discovery_diagnostic_status_v1', status: 'resolved' } });
+    // Losing the pointer is not corrupt source evidence, but removes the current-result proof.
+    const assessments = count('discovery_assessments');
+    f.database.raw.prepare('DELETE FROM discovery_current WHERE prospect_id = ?').run(owner.prospectId);
+    await runtime.withDomain(d => d.scanAndEnqueueDiscoveryPage());
+    expect(f.services.discoveryRepository.getCurrent(owner.prospectId)).toBeNull();
+    expect(count('discovery_assessments')).toBe(assessments);
+    expect(f.services.jobs.get(failed.id)).toEqual({ ...failed, result: { kind: 'discovery_diagnostic_status_v1', status: 'unresolved' } });
+    expect(f.services.discoveryRead.get().processing).not.toBe('idle');
   });
 
   it('shares the 25-job budget across actual owned types and leaves legacy placeholders and sourcing untouched', async () => {

@@ -150,6 +150,71 @@ describe('JobRepository', () => {
     expect(() => repository.listUnresolvedDiscoveryFailures(50)).toThrow();
   });
 
+  it.each(['assessment', 'priority'] as const)('revokes normal %s resolution when current proof disappears while stable diagnostics retain valid-evidence proof', async scope => {
+    const repository = await createRepository(); const at = '2026-09-06T12:00:00.000Z';
+    const uow = new DomainUnitOfWork(database!); const owner = seedProspect(database!.raw, `proof-${scope}`);
+    const identity = { formatVersion: 1, personId: owner.personId, prospectId: owner.prospectId };
+    const normal: Record<string, unknown> = scope === 'assessment' ? { ...identity, diagnostic: null, fingerprint: 'a'.repeat(64), salesCycleId: 'cycle' }
+      : { formatVersion: 1, jobId: 'normal', prospectId: owner.prospectId };
+    const stable: Record<string, unknown> = scope === 'assessment' ? { ...identity, diagnostic: 'invalid_evidence', fingerprint: null, salesCycleId: null }
+      : { ...identity, kind: 'priority_diagnostic', diagnostic: 'invalid_evidence' };
+    for (const [id, payload] of [['normal', normal], ['stable', stable]] as const) {
+      repository.enqueue({ id, type: id === 'normal' && scope === 'priority' ? 'priority_projection_rebuild_v1' : 'discovery_assessment', payload, at });
+      repository.start(id, at); repository.fail(id, { code: 'invalid_evidence', message: 'Original diagnostic.' }, at);
+    }
+    const originals = ['normal', 'stable'].map(id => repository.get(id)!);
+    const reconcile = (proof: 'invalid' | 'valid_evidence' | 'current_result') => uow.immediate(() =>
+      repository.reconcileDiscoveryDiagnostics({ personId: owner.personId, prospectId: owner.prospectId, scope, proof }, uow));
+    reconcile('invalid'); expect(originals.map(j => repository.get(j.id))).toEqual(originals);
+    reconcile('valid_evidence');
+    expect(repository.get('normal')).toEqual(originals[0]);
+    expect(repository.get('stable')?.result).toMatchObject({ status: 'resolved' });
+    reconcile('current_result'); expect(repository.get('normal')?.result).toMatchObject({ status: 'resolved' });
+    reconcile('valid_evidence');
+    expect(repository.get('normal')).toEqual({ ...originals[0], result: { kind: 'discovery_diagnostic_status_v1', status: 'unresolved' } });
+    expect(repository.get('stable')).toEqual({ ...originals[1], result: { kind: 'discovery_diagnostic_status_v1', status: 'resolved' } });
+    reconcile('invalid');
+    for (const original of originals) expect(repository.get(original.id)).toEqual({ ...original,
+      result: { kind: 'discovery_diagnostic_status_v1', status: 'unresolved' } });
+    reconcile('valid_evidence'); reconcile('current_result');
+    const changes = database!.raw.prepare('SELECT total_changes() AS n').get();
+    reconcile('current_result'); expect(database!.raw.prepare('SELECT total_changes() AS n').get()).toEqual(changes);
+    for (const original of originals) expect(repository.get(original.id)).toEqual({ ...original,
+      result: { kind: 'discovery_diagnostic_status_v1', status: 'resolved' } });
+  });
+
+  it('shares one 50-row budget across opposite normal/stable proof changes with rollback and no churn', async () => {
+    const repository = await createRepository(); const at = '2026-09-06T12:00:00.000Z';
+    const uow = new DomainUnitOfWork(database!); const owner = seedProspect(database!.raw, 'mixed-proof-budget');
+    const input = { personId: owner.personId, prospectId: owner.prospectId, scope: 'priority' as const, proof: 'valid_evidence' as const };
+    for (const stable of [false, true]) {
+      for (let i = stable ? 1 : 0; i < 80; i += 2) {
+        const id = `mixed-${i.toString().padStart(2, '0')}`;
+        repository.enqueue({ id, type: stable ? 'discovery_assessment' : 'priority_projection_rebuild_v1',
+          payload: stable ? { formatVersion: 1, personId: owner.personId, prospectId: owner.prospectId, kind: 'priority_diagnostic', diagnostic: 'invalid_evidence' }
+            : { formatVersion: 1, jobId: id, prospectId: owner.prospectId }, at });
+        repository.start(id, at); repository.fail(id, { code: 'invalid_evidence', message: 'Original mixed diagnostic.' }, at);
+      }
+      if (!stable) uow.immediate(() => repository.reconcileDiscoveryDiagnostics({ ...input, proof: 'current_result' }, uow));
+    }
+    const before = Array.from({ length: 80 }, (_, i) => repository.get(`mixed-${i.toString().padStart(2, '0')}`)!);
+    const provenanceQuery = database!.raw.prepare(`SELECT id, type, idempotency_key, state, payload_json, error_code, error_message,
+      created_at, started_at, finished_at, updated_at, progress_current, progress_total, retry_count FROM jobs ORDER BY id`);
+    const provenance = provenanceQuery.all();
+    expect(() => uow.immediate(() => { repository.reconcileDiscoveryDiagnostics(input, uow); throw new Error('rollback mixed'); })).toThrow('rollback mixed');
+    expect(before.map(j => repository.get(j.id))).toEqual(before);
+    uow.immediate(() => repository.reconcileDiscoveryDiagnostics(input, uow));
+    before.forEach((job, i) => expect(repository.get(job.id)).toEqual(i >= 50 ? job : { ...job,
+      result: { kind: 'discovery_diagnostic_status_v1', status: i % 2 ? 'resolved' : 'unresolved' } }));
+    uow.immediate(() => repository.reconcileDiscoveryDiagnostics(input, uow));
+    before.forEach((job, i) => expect(repository.get(job.id)).toEqual({ ...job,
+      result: { kind: 'discovery_diagnostic_status_v1', status: i % 2 ? 'resolved' : 'unresolved' } }));
+    const changes = database!.raw.prepare('SELECT total_changes() AS n').get();
+    uow.immediate(() => repository.reconcileDiscoveryDiagnostics(input, uow));
+    expect(database!.raw.prepare('SELECT total_changes() AS n').get()).toEqual(changes);
+    expect(provenanceQuery.all()).toEqual(provenance);
+  });
+
   it('moves a queued job through running to succeeded', async () => {
     const repository = await createRepository();
 

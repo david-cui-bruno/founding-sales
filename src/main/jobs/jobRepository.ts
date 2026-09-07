@@ -20,6 +20,7 @@ const diagnosticStatusSchema = z.object({ kind: z.literal('discovery_diagnostic_
   status: z.enum(['resolved', 'unresolved']) }).strict();
 const diagnosticIdSchema = z.string().min(1).refine(value => value.trim() === value);
 const resolvedDiagnosticJson = JSON.stringify(diagnosticStatusSchema.parse({ kind: 'discovery_diagnostic_status_v1', status: 'resolved' }));
+const unresolvedDiagnosticJson = JSON.stringify(diagnosticStatusSchema.parse({ kind: 'discovery_diagnostic_status_v1', status: 'unresolved' }));
 // Only diagnostic failures with canonical command ownership can carry this metadata.
 // The same predicate protects writes and status filtering before LIMIT.
 const ownedDiagnosticSql = `error_code IN ('invalid_evidence', 'evidence_too_large') AND CASE WHEN json_valid(payload_json) THEN
@@ -363,26 +364,29 @@ export class JobRepository {
     unitOfWork.assertWriteScope();
     const parsed = z.object({ personId: diagnosticIdSchema, prospectId: diagnosticIdSchema,
       scope: z.enum(['assessment', 'priority']), proof: z.enum(['invalid', 'valid_evidence', 'current_result']) }).strict().parse(input);
-    const resolved = parsed.proof !== 'invalid';
-    const metadata = JSON.stringify(diagnosticStatusSchema.parse({ kind: 'discovery_diagnostic_status_v1',
-      status: resolved ? 'resolved' : 'unresolved' }));
     const scope = parsed.scope === 'assessment'
       ? `type = 'discovery_assessment' AND json_extract(payload_json, '$.kind') IS NULL`
       : `(type = '${PRIORITY_PROJECTION_REBUILD_JOB_TYPE}' OR json_extract(payload_json, '$.kind') = 'priority_diagnostic')`;
-    const rows = this.database.raw.prepare(`SELECT ${returnedJobColumns} FROM jobs
+    const stableDiagnostic = `type = 'discovery_assessment' AND json_extract(payload_json, '$.diagnostic') IN ('invalid_evidence', 'evidence_too_large')
+      AND ((json_extract(payload_json, '$.kind') = 'priority_diagnostic' AND json_extract(payload_json, '$.diagnostic') = 'invalid_evidence')
+        OR (json_extract(payload_json, '$.kind') IS NULL AND json_extract(payload_json, '$.fingerprint') IS NULL
+          AND json_extract(payload_json, '$.salesCycleId') IS NULL))`;
+    // Compute each row's target before LIMIT: valid evidence resolves a diagnostic,
+    // but revokes a normal command's resolution when its current output is missing/stale.
+    const rows = this.database.raw.prepare(`WITH candidates AS (
+      SELECT ${returnedJobColumns}, CASE WHEN ? = 'current_result' OR (? = 'valid_evidence' AND (${stableDiagnostic}))
+        THEN ? ELSE ? END AS next_result_json FROM jobs
       WHERE state = 'failed' AND (${ownedDiagnosticSql}) AND (${scope})
       AND json_extract(payload_json, '$.prospectId') = ?
       AND (type = '${PRIORITY_PROJECTION_REBUILD_JOB_TYPE}' OR json_extract(payload_json, '$.personId') = ?)
       AND EXISTS (SELECT 1 FROM prospects p JOIN persons n ON n.id = p.person_id WHERE p.id = ? AND n.id = ?)
-      AND (? OR (type = 'discovery_assessment' AND json_extract(payload_json, '$.diagnostic') IN ('invalid_evidence', 'evidence_too_large')
-        AND ((json_extract(payload_json, '$.kind') = 'priority_diagnostic' AND json_extract(payload_json, '$.diagnostic') = 'invalid_evidence')
-          OR (json_extract(payload_json, '$.kind') IS NULL AND json_extract(payload_json, '$.fingerprint') IS NULL
-            AND json_extract(payload_json, '$.salesCycleId') IS NULL))))
-      AND result_json IS NOT ? AND (? OR result_json IS NOT NULL)
-      ORDER BY created_at, id LIMIT 50`).all(parsed.prospectId, parsed.personId, parsed.prospectId, parsed.personId,
-      parsed.proof !== 'valid_evidence' ? 1 : 0, metadata, resolved ? 1 : 0);
+      ) SELECT ${returnedJobColumns}, next_result_json FROM candidates
+      WHERE result_json IS NOT next_result_json AND (next_result_json = ? OR result_json IS NOT NULL)
+      ORDER BY created_at, id LIMIT 50`).all(parsed.proof, parsed.proof, resolvedDiagnosticJson, unresolvedDiagnosticJson,
+      parsed.prospectId, parsed.personId, parsed.prospectId, parsed.personId, resolvedDiagnosticJson);
     for (const row of rows) {
       const job = parseStoredJobRow(row);
+      const metadata = z.object({ next_result_json: z.enum([resolvedDiagnosticJson, unresolvedDiagnosticJson]) }).parse(row).next_result_json;
       this.database.raw.prepare("UPDATE jobs SET result_json = ? WHERE id = ? AND state = 'failed'").run(metadata, job.id);
     }
   }
