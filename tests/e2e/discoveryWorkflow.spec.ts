@@ -89,16 +89,21 @@ test('P1 automatic source-backed shortlist, unfinished-work restart, evidence, s
     await page.getByRole('button', { name: 'Close draft' }).click();
     expect((await page.evaluate(personId => window.callie.discovery.getBrief({ personId }), id)).pilotNextStep).toBeNull();
     // Explicit founder-recorded actual conversation. Generated text never advances a stage.
-    const activityId = await page.evaluate(async ({ personId, salesCycleId }) => {
+    // Match the deliberately exact evidence grammar with the canonical stored street,
+    // just as the assembled source test does. Intake lowercases property context.
+    expect(ready.properties).toHaveLength(1);
+    const street = ready.properties[0].address.split(', ')[0];
+    expect(street).toBe('100 synthetic st');
+    const activityId = await page.evaluate(async ({ personId, salesCycleId, street }) => {
       await window.callie.today.logCallOutcome({ personId, salesCycleId, outcome: 'spoke', callbackAt: null, occurredAt: new Date().toISOString() });
       const spoken = (await window.callie.leadDetail.get({ personId })).activities[0];
       await window.callie.today.logPastActivity({ personId, salesCycleId, kind: 'call', direction: 'outbound',
         occurredAt: new Date().toISOString(), summary: 'I completed a synthetic discovery conversation.', outcome: 'answered' });
       const detail = await window.callie.leadDetail.get({ personId }); const activity = detail.activities.find(a => a.outcome === 'answered')!;
-      await window.callie.conversations.attachTranscript({ personId, activityId: spoken.id, rawText: 'Lead: I self-manage 100 Synthetic St.' });
+      await window.callie.conversations.attachTranscript({ personId, activityId: spoken.id, rawText: `Lead: I self-manage ${street}.` });
       await window.callie.leadDetail.confirmTransition({ transition: 'confirm_interviewed', salesCycleId, expectedRevision: detail.revision, suggestionActivityId: activity.id });
       return spoken.id;
-    }, { personId: id, salesCycleId: selected!.salesCycleId });
+    }, { personId: id, salesCycleId: selected!.salesCycleId, street });
     await expect.poll(() => page.evaluate(personId => window.callie.discovery.getBrief({ personId }), id), { timeout: 90_000 })
       .toMatchObject({ pilotNextStep: { activityIds: [activityId] } });
     await page.getByRole('button', { name: 'Close inspector' }).click();
