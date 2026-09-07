@@ -26,10 +26,17 @@ test('creates four job requests, fills three, shows 3 / 4 and 75%, and opens dri
     await expect(period).toHaveText(currentPeriod);
     await expect(page.getByRole('button', { name: 'Next week' })).toBeDisabled();
 
-    // Create four job requests through the real form's date + time pair.
+    // Use the actual reporting clock, not a calendar date that expires next Monday.
+    const jobTime = await page.evaluate(async () => {
+      const at = new Date((await window.callie.friday.getCurrent()).asOf);
+      const pad = (value: number) => String(value).padStart(2, '0');
+      return { date: `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`,
+        time: `${pad(at.getHours())}:${pad(at.getMinutes())}` };
+    });
+    // Four distinct requests and three acceptances within the same reporting minute.
     for (let index = 0; index < 4; index += 1) {
-      await page.getByLabel('Requested date').fill('2026-08-31');
-      await page.getByLabel('Requested time').fill(`1${index}:00`);
+      await page.getByLabel('Requested date').fill(jobTime.date);
+      await page.getByLabel('Requested time').fill(jobTime.time);
       await page.getByRole('button', { name: 'Request job' }).click();
       await expect(page.locator('.friday-jobs__row')).toHaveCount(index + 1);
     }
@@ -46,8 +53,8 @@ test('creates four job requests, fills three, shows 3 / 4 and 75%, and opens dri
           exact: false,
         }),
       ).toBeVisible();
-      await page.getByLabel('Accepted date').fill('2026-08-31');
-      await page.getByLabel('Accepted time').fill(`2${index}:00`);
+      await page.getByLabel('Accepted date').fill(jobTime.date);
+      await page.getByLabel('Accepted time').fill(jobTime.time);
       await page.getByRole('button', { name: 'Confirm fill' }).click();
       await expect(page.getByText(/Contractor accepted/).nth(index)).toBeVisible();
     }

@@ -32,7 +32,7 @@ function event(index: number) {
 
 test('P1 automatic source-backed shortlist, unfinished-work restart, evidence, selected manual pilot and unsent draft', async () => {
   test.setTimeout(240_000); // Real worker's bounded minute scan, never a test repair API.
-  const directory = await mkdtemp(join(tmpdir(), 'callie-discovery-inbox-'));
+  const directory = await mkdtemp(join(tmpdir(), 'callie-sourcing-fixture-'));
   let workspace: FounderWorkspace | undefined; let first: FounderWorkspace | undefined;
   try {
     await mkdir(join(directory, 'events', '2026-09-06'), { recursive: true });

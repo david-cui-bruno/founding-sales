@@ -138,9 +138,10 @@ test('a large import stays out of Today: unreviewed leads are backlog only and t
     expect(queuedRows).toBeLessThanOrEqual(snapshot.dialBudget);
     expect(snapshot.unreviewedBacklogCount).toBe(60);
 
-    // Today renders the backlog as one card, never as rows.
+    // Automatic triage has a separate prepared area, not 60 auto-enrolled queue rows.
     await page.getByRole('link', { name: 'Today' }).click();
-    await expect(page.getByText('60 unreviewed leads')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Prepared conversations', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Manual review (optional)', exact: true })).toBeVisible();
     await expect(page.locator('.today-row')).toHaveCount(0);
   } finally {
     await workspace.close();

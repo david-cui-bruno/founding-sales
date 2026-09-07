@@ -49,15 +49,16 @@ test('call outcome flow: opening the lead page and saving a callback removes the
     const { page } = workspace;
     await importLeads(page, csvPath, 3);
 
-    // Triage one lead to Ready through the real triage mode (R-key surface).
+    // Triage one lead through the retained optional manual-review workflow.
     await page.getByRole('link', { name: 'Today' }).click();
-    await expect(page.getByText('3 unreviewed leads')).toBeVisible();
-    await page.getByRole('button', { name: 'Review', exact: true }).click();
+    await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(3);
+    await page.getByRole('button', { name: 'Manual review (optional)', exact: true }).click();
+    await page.getByRole('region', { name: 'Unreviewed backlog', exact: true }).getByRole('button', { name: 'Review', exact: true }).click();
     await expect(page.getByText('Reviewing 1 of 3')).toBeVisible();
     await page.keyboard.press('1');
     await expect(page.getByText('Reviewing 2 of 3')).toBeVisible();
     await page.keyboard.press('Escape');
-    await expect(page.getByText('2 unreviewed leads')).toBeVisible();
+    await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(2);
 
     // The freshly ready lead's first cadence touch is discretionary work
     // that waits on a priority projection; simulate the inbound reply that
@@ -112,7 +113,7 @@ test('call outcome flow: opening the lead page and saving a callback removes the
 
     // The queue held nothing else: back on Today with the queue done.
     await expect(page.locator('.lead-full-page')).toHaveCount(0);
-    await expect(page.getByText(/Queue done · /)).toBeVisible();
+    await expect(page.getByText('No commitments due right now.', { exact: true })).toBeVisible();
     await expect(page.locator('.today-row')).toHaveCount(0);
 
     // The real snapshot agrees: the called lead left every lane.
@@ -134,7 +135,7 @@ test('call outcome flow: opening the lead page and saving a callback removes the
       'aria-current',
       'page',
     );
-    await expect(page.getByText('2 unreviewed leads')).toBeVisible();
+    await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(2);
     await expect(page.locator('.today-row')).toHaveCount(0);
     const snapshot = await page.evaluate(() => window.callie.today.get());
     const laneMembers = snapshot.lanes.flatMap((lane) =>
@@ -164,8 +165,9 @@ test('triage mode: 1/2/3 decisions advance the counter and the position resumes 
     await importLeads(page, csvPath, 6);
 
     await page.getByRole('link', { name: 'Today' }).click();
-    await expect(page.getByText('6 unreviewed leads')).toBeVisible();
-    await page.getByRole('button', { name: 'Review', exact: true }).click();
+    await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(6);
+    await page.getByRole('button', { name: 'Manual review (optional)', exact: true }).click();
+    await page.getByRole('region', { name: 'Unreviewed backlog', exact: true }).getByRole('button', { name: 'Review', exact: true }).click();
     await expect(page.getByText('Reviewing 1 of 6')).toBeVisible();
 
     // 1 = Ready (confirm-ready transition).
@@ -184,9 +186,9 @@ test('triage mode: 1/2/3 decisions advance the counter and the position resumes 
 
     // Esc exits saving the position. Ready and Dismiss leave the backlog;
     // the Later lead stays unreviewed (it resurfaces in 30 days), so the
-    // card honestly counts 4.
+    // public backlog count remains 4 while the primary UI prepares conversations.
     await page.keyboard.press('Escape');
-    await expect(page.getByText('4 unreviewed leads')).toBeVisible();
+    await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(4);
   } finally {
     await workspace.stop();
   }
@@ -199,8 +201,9 @@ test('triage mode: 1/2/3 decisions advance the counter and the position resumes 
       'aria-current',
       'page',
     );
-    await expect(page.getByText('4 unreviewed leads')).toBeVisible();
-    await page.getByRole('button', { name: 'Review', exact: true }).click();
+    await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(4);
+    await page.getByRole('button', { name: 'Manual review (optional)', exact: true }).click();
+    await page.getByRole('region', { name: 'Unreviewed backlog', exact: true }).getByRole('button', { name: 'Review', exact: true }).click();
     await expect(page.getByText('Reviewing 4 of 6')).toBeVisible();
   } finally {
     await relaunched.close();
