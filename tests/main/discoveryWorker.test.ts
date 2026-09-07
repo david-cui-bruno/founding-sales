@@ -273,6 +273,67 @@ describe('bounded real-runtime local discovery worker', () => {
       .toContainEqual({ status: 'superseded_research' });
   });
 
+  it.each(['current', 'missing'] as const)('settles credit3 stale research only with fresh current proof or a runnable replacement, output=%s', async output => {
+    const owner = seedDiscoveryOwner(f, { prefix: 'credit3-research-proof', units: 10 });
+    const raw = f.database.raw;
+    await runtime.withDomain(d => d.scanAndEnqueueDiscoveryPage());
+    const root = f.services.jobs.listByTypeState('discovery_assessment', 'queued', 50)[0]!;
+    const original = raw.prepare('SELECT source_record_json AS bytes FROM source_events WHERE id = ?').get(owner.sourceEventId) as { bytes: string };
+    const trigger = raw.prepare("SELECT sql FROM sqlite_master WHERE name = 'immutable_source_events'").get() as { sql: string };
+    raw.exec('DROP TRIGGER immutable_source_events');
+    raw.prepare("UPDATE source_events SET source_record_json = '{}' WHERE id = ?").run(owner.sourceEventId);
+    await runtime.withDomain(d => d.processDiscoveryJob(root.id));
+    const failed = f.services.jobs.get(root.id)!;
+    expect(failed).toMatchObject({ state: 'failed', retryCount: 0, error: { code: 'invalid_evidence' } });
+    raw.prepare('UPDATE source_events SET source_record_json = ? WHERE id = ?').run(original.bytes, owner.sourceEventId);
+    raw.exec(trigger.sql);
+    for (const credit of [1, 2]) {
+      vi.setSystemTime(`2026-09-06T12:0${credit}:00.000Z`);
+      await runtime.withDomain(d => { d.scanAndEnqueueDiscoveryPage(); expect(d.processNextDiscoveryJob()).toBe(true); });
+      expect(f.services.jobs.listByTypeState('discovery_assessment', 'succeeded', 50).map(j => j.retryCount))
+        .toEqual(credit === 1 ? [1] : [1, 2]);
+      expect(f.services.discoveryRepository.getCurrent(owner.prospectId)).not.toBeNull();
+      raw.prepare('DELETE FROM discovery_current WHERE prospect_id = ?').run(owner.prospectId);
+    }
+    const ancestors = f.services.jobs.listByTypeState('discovery_assessment', 'succeeded', 50);
+    vi.setSystemTime('2026-09-06T12:03:00.000Z');
+    const request = await runtime.withDomain(d => { d.scanAndEnqueueDiscoveryPage(); return d.prepareDiscoveryResearch(); });
+    expect(request).not.toBeNull();
+    const child = f.services.jobs.get(request!.jobId)!;
+    expect(child).toMatchObject({ state: 'running', retryCount: 3, payload: { recovery: { rootJobId: root.id } } });
+    raw.prepare(`INSERT INTO person_contact_methods (id, person_id, kind, normalized_value, validation_state,
+      reachability, is_primary, created_at, updated_at) VALUES (?, ?, 'phone', '+14015559876', 'valid', 'direct', 1, ?, ?)`)
+      .run('credit3-new-phone', owner.personId, DISCOVERY_NOW, DISCOVERY_NOW);
+    if (output === 'current') f.services.discovery.assess(owner.prospectId);
+    else {
+      // A real normal command succeeds, then loses only its pointer. Its terminal
+      // canonical row is not an admitted recovery root or a runnable replacement.
+      await runtime.withDomain(d => d.scanAndEnqueueDiscoveryPage());
+      const replacement = f.services.jobs.listByTypeState('discovery_assessment', 'queued', 50)[0]!;
+      await runtime.withDomain(d => d.processDiscoveryJob(replacement.id));
+      expect(f.services.jobs.get(replacement.id)?.state).toBe('succeeded');
+    }
+    const fresh = f.services.discoveryRepository.getCurrent(owner.prospectId)!;
+    expect(fresh).not.toBeNull(); expect(fresh.fingerprint).not.toBe(request!.fingerprint);
+    if (output === 'missing') raw.prepare('DELETE FROM discovery_current WHERE prospect_id = ?').run(owner.prospectId);
+    expect(f.services.jobs.get(root.id)).toEqual(failed); // No scan has yet proved the newly committed output.
+    const before = { jobs: count('jobs'), assessments: raw.prepare('SELECT * FROM discovery_assessments ORDER BY id').all() };
+    await runtime.withDomain(d => { d.completeDiscoveryResearch(request!, request!.claims); d.scanAndEnqueueDiscoveryPage(); });
+    expect(f.services.discoveryRepository.getCurrent(owner.prospectId)).toEqual(output === 'current' ? fresh : null);
+    expect(count('jobs')).toBe(before.jobs);
+    expect(raw.prepare('SELECT * FROM discovery_assessments ORDER BY id').all()).toEqual(before.assessments);
+    for (const ancestor of ancestors) expect(f.services.jobs.get(ancestor.id)).toEqual(ancestor);
+    expect(f.services.jobs.get(root.id)).toEqual(output === 'current' ? { ...failed,
+      result: { kind: 'discovery_diagnostic_status_v1', status: 'resolved' } } : failed);
+    expect(f.services.jobs.listDueDiscovery(new Date().toISOString(), 50)).toEqual([]);
+    expect(f.services.jobs.get(child.id)).toMatchObject({ state: output === 'current' ? 'succeeded' : 'failed',
+      retryCount: 3, payload: child.payload, error: output === 'current' ? null : { code: 'discovery_transient' } });
+    expect(f.services.discoveryRead.get().processing).toBe(output === 'current' ? 'idle' : 'error');
+    const settled = jobs();
+    await runtime.withDomain(d => { d.completeDiscoveryResearch(request!, request!.claims); d.scanAndEnqueueDiscoveryPage(); });
+    expect(jobs()).toEqual(settled);
+  });
+
   it('refuses a result admitted by another facade runtime epoch even over the same encrypted database', async () => {
     seedDiscoveryOwner(f, { prefix: 'epoch', units: 10 });
     const request = await runtime.withDomain(d => { d.scanAndEnqueueDiscoveryPage(); return d.prepareDiscoveryResearch()!; });

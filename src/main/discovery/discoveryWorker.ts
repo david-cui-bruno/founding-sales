@@ -193,7 +193,10 @@ export class DiscoveryWorkerCommands {
         if (request.personId !== snapshot.personId || request.salesCycleId !== snapshot.salesCycleId
           || request.fingerprint !== snapshot.inputFingerprint || request.localDate !== this.day(at).localDate
           || request.overrideId !== (services.discoveryRepository.getLatestOverride(request.prospectId)?.id ?? null)) {
-          this.requireReplacement(this.enqueueAssessment(request.prospectId, at), request.jobId);
+          const assessment = services.discoveryRepository.getCurrent(request.prospectId);
+          if (assessment === null || !this.isCurrent(assessment, snapshot, at)) {
+            this.requireReplacement(this.enqueueAssessment(request.prospectId, at), request.jobId);
+          }
           services.jobs.succeed(request.jobId, { status: 'superseded_research' }, at); return false;
         }
         const validated = z.array(discoveryClaimSchema).max(100).parse(claims);
