@@ -55,7 +55,8 @@ const migrateToSchemaOne = createMigrationRunner([
     migration: migration0001Foundation,
   },
 ]);
-const migrateThroughSchema15 = createMigrationRunner(productionMigrations.slice(0, -1));
+const migrateThroughSchema15 = createMigrationRunner(productionMigrations.filter(x => x.schemaVersion <= 15));
+const migrateThroughSchema16 = createMigrationRunner(productionMigrations.filter(x => x.schemaVersion <= 16));
 const RECOVERY_TS = '2026-09-05T12:00:00.000Z';
 const RECOVERY_SHA = 'a'.repeat(64);
 
@@ -70,8 +71,9 @@ async function runScenario(): Promise<void> {
   try {
     database = openDatabase({ path: workspace.path, key });
 
-    if (scenario === 'schema-15-to-16-recovery-preservation') {
-      await migrateThroughSchema15(database, { backupDirectory, workspaceKey: key });
+    if (scenario === 'schema-15-to-16-recovery-preservation' || scenario === 'schema-16-to-17-recovery-preservation') {
+      const fromVersion = scenario === 'schema-15-to-16-recovery-preservation' ? 15 : 16;
+      await (fromVersion === 15 ? migrateThroughSchema15 : migrateThroughSchema16)(database, { backupDirectory, workspaceKey: key });
       database.raw.prepare(`INSERT INTO backup_receipts
         (id, backup_basename, kind, schema_version, sha256, size_bytes, created_at, verified_at)
         VALUES ('backup-1', 'daily-1.sqlite3', 'daily', 15, ?, 10, ?, ?)`)
@@ -89,19 +91,19 @@ async function runScenario(): Promise<void> {
         .run(RECOVERY_SHA, RECOVERY_TS);
       const before = recoverySnapshot(database.raw);
 
-      const result = await migrateToLatest(database, { backupDirectory, workspaceKey: key });
+      const result = await (fromVersion === 15 ? migrateThroughSchema16 : migrateToLatest)(database, { backupDirectory, workspaceKey: key });
       assert.deepEqual(result, {
-        fromVersion: 15,
-        toVersion: 16,
-        appliedMigrationIds: ['0016ContactPresentationEvidence'],
+        fromVersion,
+        toVersion: fromVersion + 1,
+        appliedMigrationIds: [fromVersion === 15 ? '0016ContactPresentationEvidence' : '0017DiscoveryAssessments'],
       });
       assert.deepEqual(recoverySnapshot(database.raw), before);
 
       const backups = listBackups(backupDirectory);
-      const schema15Backup = backups.find((path) => basename(path).startsWith('pre-migration-schema-15-'));
-      assert.ok(schema15Backup);
-      assertBackupFile(schema15Backup, key.bytes, 15);
-      const backupRaw = createRawDatabase(schema15Backup, { readonly: true, fileMustExist: true });
+      const historicalBackup = backups.find((path) => basename(path).startsWith(`pre-migration-schema-${fromVersion}-`));
+      assert.ok(historicalBackup);
+      assertBackupFile(historicalBackup, key.bytes, fromVersion);
+      const backupRaw = createRawDatabase(historicalBackup, { readonly: true, fileMustExist: true });
       try {
         applyWorkspaceKey(backupRaw, key.bytes);
         assert.deepEqual(recoverySnapshot(backupRaw), before);
@@ -110,7 +112,7 @@ async function runScenario(): Promise<void> {
       }
 
       const restoredPath = `${workspace.path}.restored`;
-      copyFileSync(schema15Backup, restoredPath);
+      copyFileSync(historicalBackup, restoredPath);
       const restored = openDatabase({ path: restoredPath, key });
       try {
         assert.deepEqual(recoverySnapshot(restored.raw), before);

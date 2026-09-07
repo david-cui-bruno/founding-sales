@@ -1,4 +1,5 @@
 import type { Generated } from 'kysely';
+import type { DiscoveryAssessment, DiscoveryOverride } from '../../shared/contracts/discoveryContract';
 
 export type StoredBoolean = 0 | 1;
 export type LifecycleStage =
@@ -622,7 +623,33 @@ export type WorkspaceSettingsTable = {
   updated_at: string;
 };
 
+export type DiscoveryAssessmentsTable = {
+  id: string; person_id: string; prospect_id: string; sales_cycle_id: string;
+  fingerprint: string; policy_version: DiscoveryAssessment['policyVersion']; rule_version_id: string;
+  model_version: string | null; evaluated_at: string; expires_at: string; local_date: string;
+  override_id: string | null; disposition: DiscoveryAssessment['disposition']; assessment_json: string;
+};
+export type DiscoveryCurrentTable = {
+  prospect_id: string; assessment_id: string; version: number;
+};
+export type DiscoveryOverridesTable = {
+  id: string; assessment_id: string; person_id: string; prospect_id: string; sales_cycle_id: string;
+  fingerprint: string; decision: DiscoveryOverride['decision']; reason: string; created_at: string;
+};
+export type DiscoveryPreparationsTable = {
+  id: string; assessment_id: string; person_id: string; prospect_id: string; sales_cycle_id: string;
+  fingerprint: string; action_id: string; request_json: string; receipt_json: string;
+};
+export type DiscoveryScanStateTable = {
+  singleton: 1; cursor: string | null; last_complete_scan_at: string | null; last_complete_local_date: string | null;
+};
+
 export type DomainTables = {
+  discovery_assessments: DiscoveryAssessmentsTable;
+  discovery_current: DiscoveryCurrentTable;
+  discovery_overrides: DiscoveryOverridesTable;
+  discovery_preparations: DiscoveryPreparationsTable;
+  discovery_scan_state: DiscoveryScanStateTable;
   activities: ActivitiesTable;
   activity_amendments: ActivityAmendmentsTable;
   backup_receipts: BackupReceiptsTable;

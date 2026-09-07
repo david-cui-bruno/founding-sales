@@ -3,6 +3,7 @@ import { CadenceRepository } from './cadence/cadenceRepository';
 import { ContactComplianceService } from './compliance/contactComplianceService';
 import { JurisdictionRepository } from './compliance/jurisdictionRepository';
 import { FOUNDER_CHANNEL_POLICIES_V1 } from './cadence/cadenceScheduler';
+import { DiscoveryRepository } from './discovery/discoveryRepository';
 import { EventRepository } from './events/eventRepository';
 import { IdentityRepository } from './identity/identityRepository';
 import { LifecycleService } from './lifecycle/lifecycleService';
@@ -25,6 +26,7 @@ import { JobRepository } from '../jobs/jobRepository';
 
 export type DomainServices = Readonly<{
   unitOfWork: DomainUnitOfWork;
+  discoveryRepository: DiscoveryRepository;
   jobs: JobRepository;
   identities: IdentityRepository;
   contactCompliance: ContactComplianceService;
@@ -59,6 +61,7 @@ export function createDomainServices(input: {
   const { database, clock, ids } = input;
   const timezone = input.timezone ?? 'America/New_York';
   const unitOfWork = new DomainUnitOfWork(database);
+  const discoveryRepository = new DiscoveryRepository({ database, unitOfWork });
   const jobs = new JobRepository(database);
   const identities = new IdentityRepository({ database, unitOfWork, clock, ids });
   const jurisdictions = new JurisdictionRepository({ database, unitOfWork });
@@ -107,6 +110,7 @@ export function createDomainServices(input: {
   const workspaceSettings = new WorkspaceSettingsRepository({ database, unitOfWork });
 
   // Assert every final binding before any read/time/ID access.
+  discoveryRepository.assertBoundTo(database, unitOfWork);
   identities.assertBoundTo(database, unitOfWork);
   contactCompliance.assertBoundTo(database, unitOfWork);
   events.assertBoundTo(database, unitOfWork);
@@ -123,6 +127,7 @@ export function createDomainServices(input: {
 
   return Object.freeze({
     unitOfWork,
+    discoveryRepository,
     jobs,
     identities,
     contactCompliance,

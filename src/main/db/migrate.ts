@@ -21,6 +21,7 @@ import { migration0013ContactComplianceEvidence } from './migrations/0013Contact
 import { migration0014OutboundJurisdictionClearance } from './migrations/0014OutboundJurisdictionClearance';
 import { migration0015RecoveryMetadata } from './migrations/0015RecoveryMetadata';
 import { migration0016ContactPresentationEvidence } from './migrations/0016ContactPresentationEvidence';
+import { migration0017DiscoveryAssessments } from './migrations/0017DiscoveryAssessments';
 import type { WorkspaceKey } from '../security/workspaceKeyTypes';
 
 export type MigrationResult = {
@@ -131,6 +132,11 @@ export const productionMigrations = [
     id: '0016ContactPresentationEvidence',
     schemaVersion: 16,
     migration: migration0016ContactPresentationEvidence,
+  },
+  {
+    id: '0017DiscoveryAssessments',
+    schemaVersion: 17,
+    migration: migration0017DiscoveryAssessments,
   },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);

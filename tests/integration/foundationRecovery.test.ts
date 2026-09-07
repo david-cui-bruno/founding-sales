@@ -26,7 +26,7 @@ describe('foundation initialization recovery', () => {
     tempDatabase?.cleanup();
   });
 
-  it.each([16, 17])(
+  it.each([16, 17, 18])(
     'rejects a real schema-15 database marked as version %i before migration or composition',
     async (schemaVersion) => {
       tempDatabase = createTempDatabase();
@@ -150,7 +150,7 @@ describe('foundation initialization recovery', () => {
 
     expect(recoveredHealth).toEqual({
       appVersion: '1.0.0',
-      schemaVersion: 16,
+      schemaVersion: 17,
       databasePath: tempDatabase.path,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',

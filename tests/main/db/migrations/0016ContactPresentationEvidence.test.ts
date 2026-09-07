@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../../../src/main/db/database';
-import { createMigrationRunner, migrateToLatest } from '../../../../src/main/db/migrate';
+import { createMigrationRunner, productionMigrations } from '../../../../src/main/db/migrate';
 import { migration0001Foundation } from '../../../../src/main/db/migrations/0001Foundation';
 import { migration0002DomainFoundation } from '../../../../src/main/db/migrations/0002DomainFoundation';
 import { migration0003Transcripts } from '../../../../src/main/db/migrations/0003Transcripts';
@@ -36,6 +36,8 @@ const migrationsThrough15 = [
   { id: '0014OutboundJurisdictionClearance', schemaVersion: 14, migration: migration0014OutboundJurisdictionClearance },
   { id: '0015RecoveryMetadata', schemaVersion: 15, migration: migration0015RecoveryMetadata },
 ] as const;
+const migrateThrough16 = createMigrationRunner(productionMigrations.filter(x => x.schemaVersion <= 16));
+
 const migrateThrough15 = createMigrationRunner(migrationsThrough15);
 const TS = '2026-09-05T12:00:00.000Z';
 const SHA = 'a'.repeat(64);
@@ -163,7 +165,7 @@ describe('0016 contact presentation evidence migration', () => {
       jurisdiction: database.raw.prepare('SELECT * FROM person_outbound_jurisdictions ORDER BY person_id').all(),
     };
 
-    await expect(migrateToLatest(database, options)).resolves.toEqual({
+    await expect(migrateThrough16(database, options)).resolves.toEqual({
       fromVersion: 15,
       toVersion: 16,
       appliedMigrationIds: ['0016ContactPresentationEvidence'],
@@ -213,7 +215,7 @@ describe('0016 contact presentation evidence migration', () => {
       jurisdiction: database.raw.prepare('SELECT * FROM person_outbound_jurisdictions ORDER BY person_id').all(),
     }).toEqual(before);
 
-    await expect(migrateToLatest(database, options)).resolves.toEqual({
+    await expect(migrateThrough16(database, options)).resolves.toEqual({
       fromVersion: 16,
       toVersion: 16,
       appliedMigrationIds: [],

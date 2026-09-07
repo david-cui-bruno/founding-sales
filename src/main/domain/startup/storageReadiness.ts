@@ -7,7 +7,7 @@ import { inspectDatabaseEncryption } from '../../db/databaseEncryption';
 import { DomainStartupFatalError } from './domainStartupTypes';
 
 export type DomainStorageReadiness = Readonly<{
-  schemaVersion: 16;
+  schemaVersion: 17;
   encrypted: true;
   cipherVersion: string;
   ftsAvailable: true;
@@ -24,7 +24,7 @@ export type DomainSchemaManifest = Readonly<{
 }>;
 
 /**
- * The canonical load-bearing schema-16 manifest. Reads the live catalog from
+ * The canonical load-bearing schema-17 manifest. Reads the live catalog from
  * sqlite_master with binary-name ordering; a missing, renamed, extra, or
  * malformed load-bearing object is fatal before composition.
  */
@@ -42,6 +42,11 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'consent_policy_records',
     'contact_compliance_audit_events',
     'cycle_reactivation_receipts',
+    'discovery_assessments',
+    'discovery_current',
+    'discovery_overrides',
+    'discovery_preparations',
+    'discovery_scan_state',
     'foundation_fts_probe',
     'foundation_fts_probe_config',
     'foundation_fts_probe_content',
@@ -100,8 +105,12 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'activities_person_occurred_idx',
     'activities_provider_idempotency_idx',
     'contact_compliance_audit_contact_idx',
+    'discovery_assessments_disposition_expires_idx',
+    'discovery_assessments_prospect_evaluated_idx',
+    'discovery_overrides_owner_created_idx',
     'jobs_state_created_idx',
     'jobs_type_idempotency_idx',
+    'jobs_type_state_created_idx',
     'learning_evidence_learning_idx',
     'one_active_cadence_per_cycle',
     'one_open_cycle_per_person',
@@ -115,6 +124,17 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'trigger_events_source_event_unique',
   ]),
   triggers: Object.freeze([
+    'discovery_assessments_no_delete',
+    'discovery_assessments_no_update',
+    'discovery_assessments_owner_insert',
+    'discovery_current_owner_insert',
+    'discovery_current_owner_update',
+    'discovery_overrides_no_delete',
+    'discovery_overrides_no_update',
+    'discovery_overrides_owner_insert',
+    'discovery_preparations_no_delete',
+    'discovery_preparations_no_update',
+    'discovery_preparations_owner_insert',
     'immutable_activities',
     'immutable_activities_delete',
     'immutable_activity_amendments',
@@ -223,8 +243,8 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'protect_trigger_event_receipt_proof',
     'synchronize_person_opt_out',
   ]),
-  // Generated from production migrations 0001 through 0016, including hardened 0015.
-  catalogSha256: 'afd4740063c216a075d8e6f144c018ea242e01ade847260c14003a41893fee66',
+  // Generated from production migrations 0001 through 0017, including hardened 0015.
+  catalogSha256: 'aa9c8e771ceed6d559b1cc97a82252d9463c34d2936db1c2545f3d3ce4fe1fab',
 });
 
 export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
@@ -244,6 +264,7 @@ export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
   '0014OutboundJurisdictionClearance',
   '0015RecoveryMetadata',
   '0016ContactPresentationEvidence',
+  '0017DiscoveryAssessments',
 ] as const);
 
 const appMetaSchema = z.object({
@@ -257,7 +278,7 @@ const appMetaSchema = z.object({
 export function assertDomainStorageReady(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
-  expectedSchemaVersion: 16;
+  expectedSchemaVersion: 17;
   expectedManifest: DomainSchemaManifest;
 }): DomainStorageReadiness {
   const { database } = input;
@@ -280,7 +301,7 @@ export function assertDomainStorageReady(input: {
   const metadata = appMetaSchema.safeParse(metadataRow);
   if (!metadata.success || metadata.data.schema_version !== input.expectedSchemaVersion) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace schema version is not exactly 16.',
+      'schema_not_ready', 'The workspace schema version is not exactly 17.',
     );
   }
 
@@ -299,7 +320,7 @@ export function assertDomainStorageReady(input: {
     DOMAIN_MIGRATION_LEDGER,
   )) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace migration ledger is not exactly schema 16.',
+      'schema_not_ready', 'The workspace migration ledger is not exactly schema 17.',
     );
   }
 
@@ -374,7 +395,7 @@ export function assertDomainStorageReady(input: {
   }
 
   return Object.freeze({
-    schemaVersion: 16 as const,
+    schemaVersion: 17 as const,
     encrypted: true as const,
     cipherVersion: encryption.cipherVersion ?? 'unknown',
     ftsAvailable: true as const,

@@ -68,17 +68,17 @@ describe('real temporary-copy SQLCipher restore drill', () => {
     expect(receipt.aggregateCounts).toEqual({ people: 1, prospects: 1, sourceEvents: 1 });
     expect(JSON.stringify(receipt)).not.toMatch(/PRIVATE|LIVE ONLY|body/);
   });
-  it('admits the actual schema16 fixture through the production registry without an override', async () => {
+  it('admits the actual schema17 fixture through the production registry without an override', async () => {
     const request = await input();
-    expect(request.backup.schemaVersion).toBe(16);
-    expect(migrations.isRegisteredSchemaVersion(16)).toBe(true);
-    expect(runRestoreDrill(request).schemaVersion).toBe(16);
-  });
-  it('rejects an actually unregistered schema17 without source mutation or temporary residue', async () => {
-    f.database.raw.prepare('UPDATE app_meta SET schema_version = 17').run();
-    const request = await input(); const before = fs.readFileSync(request.backup.path);
     expect(request.backup.schemaVersion).toBe(17);
-    expect(migrations.isRegisteredSchemaVersion(17)).toBe(false);
+    expect(migrations.isRegisteredSchemaVersion(17)).toBe(true);
+    expect(runRestoreDrill(request).schemaVersion).toBe(17);
+  });
+  it('rejects an actually unregistered schema18 without source mutation or temporary residue', async () => {
+    f.database.raw.prepare('UPDATE app_meta SET schema_version = 18').run();
+    const request = await input(); const before = fs.readFileSync(request.backup.path);
+    expect(request.backup.schemaVersion).toBe(18);
+    expect(migrations.isRegisteredSchemaVersion(18)).toBe(false);
     expect(() => runRestoreDrill(request)).toThrow(/^RECOVERY_FAILED$/);
     expect(fs.readFileSync(request.backup.path)).toEqual(before); expect(temps(f.root)).toEqual([]);
   });

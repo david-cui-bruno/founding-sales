@@ -100,7 +100,7 @@ function sourceHarness(fault?: Fault) {
     evaluate: async () => kind === 'apple' ? {
       enabled: true,
       bridge: { state: 'ready', helperVersion: '1.0.0', protocolVersion: 1 },
-    } : { databasePath: '/synthetic/callie.sqlite3', schemaVersion: 16,
+    } : { databasePath: '/synthetic/callie.sqlite3', schemaVersion: 17,
       databaseEncrypted: true, cipherVersion: 'fixture', fts5Available: true },
   };
   const browser = {

@@ -22,7 +22,7 @@ import {
   closeDatabase,
   openDatabase,
 } from '../../src/main/db/database';
-import { migrateToLatest } from '../../src/main/db/migrate';
+import { createMigrationRunner, migrateToLatest, productionMigrations } from '../../src/main/db/migrate';
 import { migration0001Foundation } from '../../src/main/db/migrations/0001Foundation';
 import {
   encryptedWorkspaceExists,
@@ -102,7 +102,7 @@ async function runScenario(): Promise<void> {
       await assertAllInvalidCopiesArePreserved(workspace.path);
     } else if (scenario === 'wrong-key') {
       await assertWrongKeyIsImmutable(workspace.path);
-    } else if (scenario === 'encrypted-schema-two-reopen') {
+    } else if (scenario === 'encrypted-current-schema-reopen') {
       await createEncryptedLatestSchema(workspace.path);
       await prepareEncryptedDatabase(workspace.path, createTestWorkspaceKey());
       assertEncryptedRetainedRow(workspace.path);
@@ -115,8 +115,10 @@ async function runScenario(): Promise<void> {
       await assertEncryptedSchemaVersionAccepted(workspace.path, 15);
     } else if (scenario === 'encrypted-schema-16-reopen') {
       await assertEncryptedSchemaVersionAccepted(workspace.path, 16);
-    } else if (scenario === 'encrypted-schema-17-rejected') {
-      await assertEncryptedSchemaVersionRejected(workspace.path, 17);
+    } else if (scenario === 'encrypted-schema-17-reopen') {
+      await assertEncryptedSchemaVersionAccepted(workspace.path, 17);
+    } else if (scenario === 'encrypted-schema-18-rejected') {
+      await assertEncryptedSchemaVersionRejected(workspace.path, 18);
     } else if (scenario === 'encrypted-schema-future-rejected') {
       await assertEncryptedSchemaVersionRejected(workspace.path, 99);
     } else if (scenario === 'path-mismatched-marker') {
@@ -562,12 +564,14 @@ async function createEncryptedSchemaVersion(
   databasePath: string,
   schemaVersion: number,
 ): Promise<void> {
-  await createEncryptedLatestSchema(databasePath);
-  const encrypted = openDatabase({
-    path: databasePath,
-    key: createTestWorkspaceKey(),
-  });
+  const key = createTestWorkspaceKey();
+  const encrypted = openDatabase({ path: databasePath, key });
   try {
+    const supported = productionMigrations.some(entry => entry.schemaVersion === schemaVersion);
+    await createMigrationRunner(productionMigrations.filter(entry => !supported || entry.schemaVersion <= schemaVersion))(
+      encrypted, { backupDirectory: `${databasePath}.backups`, workspaceKey: key },
+    );
+    insertRetainedRow(encrypted.raw);
     encrypted.raw.prepare(
       'UPDATE app_meta SET schema_version = ? WHERE singleton = 1',
     ).run(schemaVersion);
@@ -579,12 +583,13 @@ async function createEncryptedSchemaVersion(
     assert.equal(journalMode, 'delete');
   } finally {
     closeDatabase(encrypted);
+    key.bytes.fill(0);
   }
 }
 
 async function assertEncryptedSchemaVersionAccepted(
   databasePath: string,
-  schemaVersion: 13 | 14 | 15 | 16,
+  schemaVersion: 13 | 14 | 15 | 16 | 17,
 ): Promise<void> {
   await createEncryptedSchemaVersion(databasePath, schemaVersion);
   await prepareEncryptedDatabase(databasePath, createTestWorkspaceKey());

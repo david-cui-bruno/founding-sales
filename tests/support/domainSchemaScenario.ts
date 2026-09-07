@@ -21,6 +21,7 @@ import {
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
 
 const domainTables = [
+  'discovery_assessments', 'discovery_current', 'discovery_overrides', 'discovery_preparations', 'discovery_scan_state',
   'activities',
   'activity_amendments',
   'cadence_action_components',
@@ -66,6 +67,8 @@ const domainTables = [
 ] as const;
 
 const requiredIndexes = [
+  'discovery_assessments_prospect_evaluated_idx', 'discovery_assessments_disposition_expires_idx',
+  'discovery_overrides_owner_created_idx', 'jobs_type_state_created_idx',
   'activities_provider_idempotency_idx',
   'contact_compliance_audit_contact_idx',
   'jobs_type_idempotency_idx',
@@ -75,6 +78,11 @@ const requiredIndexes = [
 ] as const;
 
 const requiredTriggers = [
+  'discovery_assessments_owner_insert', 'discovery_current_owner_insert', 'discovery_current_owner_update',
+  'discovery_overrides_owner_insert', 'discovery_preparations_owner_insert',
+  'discovery_assessments_no_update', 'discovery_assessments_no_delete',
+  'discovery_overrides_no_update', 'discovery_overrides_no_delete',
+  'discovery_preparations_no_update', 'discovery_preparations_no_delete',
   'immutable_activities',
   'immutable_activities_delete',
   'immutable_activity_amendments',
@@ -224,14 +232,14 @@ function runDatabaseScenario(
       assert.equal(assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 16,
+        expectedSchemaVersion: 17,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
-      }).schemaVersion, 16);
+      }).schemaVersion, 17);
       assert.deepEqual(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
         ).get(),
-        { schema_version: 16 },
+        { schema_version: 17 },
       );
       assert.deepEqual(raw.prepare<[], { name: string }>(`
         SELECT name FROM kysely_migration ORDER BY timestamp, name
@@ -251,7 +259,7 @@ function runDatabaseScenario(
         '0013ContactComplianceEvidence',
         '0014OutboundJurisdictionClearance',
         '0015RecoveryMetadata',
-        '0016ContactPresentationEvidence',
+        '0016ContactPresentationEvidence', '0017DiscoveryAssessments',
       ]);
       assert.deepEqual(
         raw.prepare('PRAGMA table_info(person_contact_methods)').all().slice(19),

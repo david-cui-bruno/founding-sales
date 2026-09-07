@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../../../src/main/db/database';
-import { createMigrationRunner, migrateToLatest } from '../../../../src/main/db/migrate';
+import { createMigrationRunner, productionMigrations } from '../../../../src/main/db/migrate';
 import { migration0001Foundation } from '../../../../src/main/db/migrations/0001Foundation';
 import { migration0002DomainFoundation } from '../../../../src/main/db/migrations/0002DomainFoundation';
 import { migration0003Transcripts } from '../../../../src/main/db/migrations/0003Transcripts';
@@ -17,6 +17,8 @@ import {
   createTestWorkspaceKey,
   type TempDatabase,
 } from '../../../fixtures/tempDatabase';
+
+const migrateThrough11 = createMigrationRunner(productionMigrations.filter(x => x.schemaVersion <= 11));
 
 const migrateThroughSchema10 = createMigrationRunner([
   { id: '0001Foundation', schemaVersion: 1, migration: migration0001Foundation },
@@ -55,21 +57,16 @@ describe('0011 contact DNC flags migration', () => {
   });
 
   it('migrates schema 10 to schema 11 and adds both compliance columns', async () => {
-    const result = await migrateToLatest(database, options);
+    const result = await migrateThrough11(database, options);
 
     expect(result.fromVersion).toBe(10);
-    expect(result.toVersion).toBe(16);
+    expect(result.toVersion).toBe(11);
     expect(result.appliedMigrationIds).toEqual([
       '0011ContactDncFlags',
-      '0012UpstreamRequestState',
-      '0013ContactComplianceEvidence',
-      '0014OutboundJurisdictionClearance',
-      '0015RecoveryMetadata',
-      '0016ContactPresentationEvidence',
     ]);
     expect(database.raw.prepare<[], { schema_version: number }>(
       'SELECT schema_version FROM app_meta WHERE singleton = 1',
-    ).get()).toEqual({ schema_version: 16 });
+    ).get()).toEqual({ schema_version: 11 });
 
     const columns = database.raw
       .prepare<[], { name: string; notnull: number; dflt_value: string }>(
@@ -98,7 +95,7 @@ describe('0011 contact DNC flags migration', () => {
       ) VALUES ('contact-1', 'person-1', 'phone', '+14015550100', 'valid', 'direct', 1, ?, ?)
     `).run(TS, TS);
 
-    await migrateToLatest(database, options);
+    await migrateThrough11(database, options);
 
     expect(database.raw.prepare<[string], { dnc_listed: number; tcpa_flag: number }>(
       'SELECT dnc_listed, tcpa_flag FROM person_contact_methods WHERE id = ?',
@@ -113,16 +110,16 @@ describe('0011 contact DNC flags migration', () => {
   });
 
   it('is idempotent: a second run applies nothing', async () => {
-    await migrateToLatest(database, options);
-    const secondResult = await migrateToLatest(database, options);
+    await migrateThrough11(database, options);
+    const secondResult = await migrateThrough11(database, options);
 
     expect(secondResult).toEqual({
-      fromVersion: 16,
-      toVersion: 16,
+      fromVersion: 11,
+      toVersion: 11,
       appliedMigrationIds: [],
     });
     expect(database.raw.prepare<[], { schema_version: number }>(
       'SELECT schema_version FROM app_meta WHERE singleton = 1',
-    ).get()).toEqual({ schema_version: 16 });
+    ).get()).toEqual({ schema_version: 11 });
   });
 });

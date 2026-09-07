@@ -37,7 +37,7 @@ const EXPECTED_MIGRATION_LEDGER = [
   '0013ContactComplianceEvidence',
   '0014OutboundJurisdictionClearance',
   '0015RecoveryMetadata',
-  '0016ContactPresentationEvidence',
+  '0016ContactPresentationEvidence', '0017DiscoveryAssessments',
 ] as const;
 
 describe('domain startup', () => {
@@ -73,15 +73,15 @@ describe('domain startup', () => {
   }
 
   describe('storage readiness gate', () => {
-    it('passes only the exact schema-16 manifest and ordered migration ledger', () => {
+    it('passes only the exact schema-17 manifest and ordered migration ledger', () => {
       const readiness = assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 16,
+        expectedSchemaVersion: 17,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       });
       expect(readiness).toMatchObject({
-        schemaVersion: 16, encrypted: true, ftsAvailable: true,
+        schemaVersion: 17, encrypted: true, ftsAvailable: true,
       });
       expect(DOMAIN_SCHEMA_MANIFEST.tables).toEqual(expect.arrayContaining([
         'contact_compliance_audit_events',
@@ -106,7 +106,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 16,
+        expectedSchemaVersion: 17,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       database.raw.exec('ROLLBACK');
@@ -115,7 +115,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 16,
+        expectedSchemaVersion: 17,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       database.raw.pragma('busy_timeout = 5000');
@@ -123,7 +123,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 16,
+        expectedSchemaVersion: 17,
         expectedManifest: {
           ...DOMAIN_SCHEMA_MANIFEST,
           tables: [...DOMAIN_SCHEMA_MANIFEST.tables, 'missing_table'],
@@ -144,6 +144,7 @@ describe('domain startup', () => {
             idempotency_key TEXT
           );
           CREATE INDEX jobs_state_created_idx ON jobs(state, created_at);
+          CREATE INDEX jobs_type_state_created_idx ON jobs(type, state, created_at, id);
           CREATE UNIQUE INDEX jobs_type_idempotency_idx
             ON jobs(type, idempotency_key)
             WHERE idempotency_key IS NOT NULL;
@@ -179,7 +180,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 16,
+        expectedSchemaVersion: 17,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       const { runtime, clockReads, idsUsed } = buildRuntime();
@@ -188,7 +189,7 @@ describe('domain startup', () => {
       expect(idsUsed()).toBe(0);
     });
 
-    it.each([15, 17, 99])(
+    it.each([15, 16, 18, 99])(
       'rejects schema version %i before repositories exist',
       (schemaVersion) => {
         database.raw.prepare(
@@ -204,7 +205,7 @@ describe('domain startup', () => {
         expect(caught).toBeInstanceOf(DomainStartupFatalError);
         expect(caught).toMatchObject({
           code: 'schema_not_ready',
-          message: 'The workspace schema version is not exactly 16.',
+          message: 'The workspace schema version is not exactly 17.',
         });
         expect(clockReads()).toBe(0);
         expect(idsUsed()).toBe(0);
@@ -222,7 +223,7 @@ describe('domain startup', () => {
         name: 'extra',
         corrupt: (db: AppDatabase) => db.raw.prepare(
           'INSERT INTO kysely_migration (name, timestamp) VALUES (?, ?)',
-        ).run('0017Unexpected', '9999-12-31T23:59:59.999Z'),
+        ).run('0018Unexpected', '9999-12-31T23:59:59.999Z'),
       },
       {
         name: 'reordered',
@@ -307,7 +308,7 @@ describe('domain startup', () => {
       {
         name: 'extra',
         corrupt: (db: AppDatabase) => db.raw.exec(
-          'CREATE TABLE unexpected_schema16_table (id TEXT PRIMARY KEY)',
+          'CREATE TABLE unexpected_schema17_table (id TEXT PRIMARY KEY)',
         ),
       },
       {
@@ -317,7 +318,7 @@ describe('domain startup', () => {
           CREATE TABLE backup_receipts (id TEXT PRIMARY KEY)
         `),
       },
-    ])('rejects a $name schema-16 catalog before composition', ({ corrupt }) => {
+    ])('rejects a $name schema-17 catalog before composition', ({ corrupt }) => {
       corrupt(database);
       const { runtime, clockReads, idsUsed } = buildRuntime();
       expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
