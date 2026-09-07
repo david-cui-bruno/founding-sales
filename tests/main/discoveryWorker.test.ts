@@ -344,7 +344,7 @@ describe('bounded real-runtime local discovery worker', () => {
     for (const job of history) expect(f.services.jobs.get(job.id)).toMatchObject({ state: 'failed', payload: job.payload, error: job.error });
   });
 
-  it('does not call a normal failed assessment resolved merely because its original evidence was restored', async () => {
+  it('automatically recovers a normal failed assessment after exact evidence restoration without erasing its failure', async () => {
     const owner = seedDiscoveryOwner(f, { prefix: 'restore-normal-command', units: 10 });
     const original = f.database.raw.prepare('SELECT source_record_json AS bytes FROM source_events WHERE id = ?')
       .get(owner.sourceEventId) as { bytes: string };
@@ -358,11 +358,11 @@ describe('bounded real-runtime local discovery worker', () => {
     expect(failed).toMatchObject({ error: { code: 'invalid_evidence' }, payload: { diagnostic: null } });
     f.database.raw.prepare('UPDATE source_events SET source_record_json = ? WHERE id = ?').run(original.bytes, owner.sourceEventId);
     const local = makeWorker(); local.start(); await timer.turn(local); await timer.turn(local);
-    expect(count('discovery_current')).toBe(0);
-    expect(f.services.discoveryRead.get().processing).toBe('error');
+    expect(count('discovery_current')).toBe(1);
     expect(f.services.jobs.get(failed.id)).toMatchObject({ state: 'failed', payload: failed.payload, error: failed.error });
-    // A separately performed accepted assessment supplies the proof. This worker has not revived the failed command.
-    f.services.discovery.assess(owner.prospectId); await timer.turn(local);
+    const recovery = f.services.jobs.listByTypeState('discovery_assessment', 'succeeded', 50)[0]!;
+    expect(recovery).toMatchObject({ retryCount: 1, payload: { recovery: { kind: 'discovery_recovery_v1', rootJobId: failed.id } } });
+    await timer.turn(local); // Resolution follows fresh current-result proof, not enqueue/success alone.
     expect(f.services.discoveryRead.get().processing).toBe('idle');
     expect(f.services.jobs.get(failed.id)).toMatchObject({ state: 'failed', payload: failed.payload, error: failed.error,
       result: { kind: 'discovery_diagnostic_status_v1', status: 'resolved' } });
@@ -374,17 +374,100 @@ describe('bounded real-runtime local discovery worker', () => {
     expect(count('discovery_assessments')).toBe(assessments);
     expect(f.services.jobs.get(failed.id)).toEqual({ ...failed, result: { kind: 'discovery_diagnostic_status_v1', status: 'unresolved' } });
     expect(f.services.discoveryRead.get().processing).not.toBe('idle');
+    await timer.turn(local); await timer.turn(local);
+    expect(count('discovery_current')).toBe(1);
+    expect(count('discovery_assessments')).toBe(assessments + 1);
+    expect(f.services.discoveryRead.get().processing).toBe('idle');
+  });
+
+  it('keeps one recovery lineage across non-initial assessment generation loss and stops after three shared credits', async () => {
+    const owner = seedDiscoveryOwner(f, { prefix: 'generation-recovery', units: 10 });
+    const raw = f.database.raw;
+    const original = raw.prepare('SELECT source_record_json AS bytes FROM source_events WHERE id = ?').get(owner.sourceEventId) as { bytes: string };
+    raw.exec('DROP TRIGGER immutable_source_events');
+    let corrupt = false;
+    const w = makeWorker({ capability: () => 'available', research: async request => {
+      if (corrupt) raw.prepare("UPDATE source_events SET source_record_json = '{}' WHERE id = ?").run(owner.sourceEventId);
+      return request.claims;
+    } });
+    w.start(); await timer.turn(w);
+    const initial = f.services.discoveryRepository.getCurrent(owner.prospectId)!;
+    expect(initial).not.toBeNull();
+    vi.setSystemTime('2026-09-07T12:00:00.000Z'); corrupt = true;
+    await timer.turn(w); w.stop(); await w.idle();
+    const root = f.services.jobs.listByTypeState('discovery_assessment', 'failed', 50)[0]!;
+    expect(root).toMatchObject({ error: { code: 'invalid_evidence' }, payload: { generation: initial.expiresAt } });
+    raw.prepare('UPDATE source_events SET source_record_json = ? WHERE id = ?').run(original.bytes, owner.sourceEventId);
+    let researchCalls = 0;
+    const local = makeWorker({ capability: () => 'available', research: async request => { researchCalls++; return request.claims; } }); local.start();
+    await timer.turn(local); await timer.turn(local); await timer.turn(local);
+    for (let spent = 1; spent <= 3; spent++) {
+      expect(f.services.discoveryRepository.getCurrent(owner.prospectId)).not.toBeNull();
+      const children = f.services.jobs.listByTypeState('discovery_assessment', 'succeeded', 50)
+        .filter(job => (job.payload as { recovery?: unknown }).recovery);
+      expect(children.map(job => job.retryCount)).toEqual(Array.from({ length: spent }, (_, i) => i + 1));
+      if (spent > 1) expect(children.at(-1)?.payload).toMatchObject({ generation: 'initial', recovery: { rootJobId: root.id } });
+      raw.prepare('DELETE FROM discovery_current WHERE prospect_id = ?').run(owner.prospectId);
+      if (spent === 1) {
+        const normal: Record<string, unknown> = { ...children[0]!.payload as object, generation: 'initial' }; delete normal.recovery;
+        f.services.jobs.enqueue({ type: 'discovery_assessment', payload: normal, at: new Date().toISOString(),
+          idempotencyKey: JSON.stringify(['discovery_assessment', normal.personId, normal.prospectId, normal.salesCycleId,
+            normal.fingerprint, normal.policyVersion, normal.ruleVersionId, normal.localDate, normal.overrideId, normal.generation]) });
+      }
+      const beforeCalls = researchCalls;
+      await timer.turn(local); await timer.turn(local);
+      expect(researchCalls - beforeCalls).toBe(spent < 3 ? 1 : 0);
+    }
+    expect(f.services.discoveryRepository.getCurrent(owner.prospectId)).toBeNull();
+    expect(f.services.discoveryRead.get().processing).toBe('error');
+    const unchanged = jobs(); await timer.turn(local); expect(jobs()).toEqual(unchanged);
+    expect(f.services.jobs.get(root.id)).toMatchObject({ state: 'failed', payload: root.payload, error: root.error, retryCount: 0 });
+  });
+
+  it('automatically retries a recovery that fails real optional-research evidence revalidation without erasing either failure', async () => {
+    const owner = seedDiscoveryOwner(f, { prefix: 'research-recovery-twice', units: 10 });
+    const raw = f.database.raw;
+    const original = raw.prepare('SELECT source_record_json AS bytes FROM source_events WHERE id = ?').get(owner.sourceEventId) as { bytes: string };
+    raw.exec('DROP TRIGGER immutable_source_events');
+    let corrupt = true;
+    const w = makeWorker({ capability: () => 'available', research: async request => {
+      if (corrupt) raw.prepare("UPDATE source_events SET source_record_json = '{}' WHERE id = ?").run(owner.sourceEventId);
+      return request.claims;
+    } });
+    w.start(); await timer.turn(w);
+    const root = f.services.jobs.listByTypeState('discovery_assessment', 'failed', 50)[0]!;
+    raw.prepare('UPDATE source_events SET source_record_json = ? WHERE id = ?').run(original.bytes, owner.sourceEventId);
+    await timer.turn(w);
+    const failures = f.services.jobs.listByTypeState('discovery_assessment', 'failed', 50);
+    expect(failures.map(job => job.retryCount)).toEqual([0, 1]);
+    expect(failures.every(job => job.error?.code === 'invalid_evidence')).toBe(true);
+    corrupt = false;
+    raw.prepare('UPDATE source_events SET source_record_json = ? WHERE id = ?').run(original.bytes, owner.sourceEventId);
+    await timer.turn(w); await timer.turn(w);
+    expect(f.services.discoveryRepository.getCurrent(owner.prospectId)).not.toBeNull();
+    expect(f.services.jobs.listByTypeState('discovery_assessment', 'succeeded', 50)[0]?.retryCount).toBe(2);
+    expect(f.services.discoveryRead.get().processing).toBe('idle');
+    expect(f.services.jobs.get(root.id)).toMatchObject({ state: 'failed', payload: root.payload, error: root.error });
+    for (const failure of failures) expect(f.services.jobs.get(failure.id)).toEqual({ ...failure, result: { kind: 'discovery_diagnostic_status_v1', status: 'resolved' } });
   });
 
   it('shares the 25-job budget across actual owned types and leaves legacy placeholders and sourcing untouched', async () => {
     for (let i = 0; i < 25; i++) { seedDiscoveryOwner(f, { prefix: `mixed-${i}`, units: 10 }); seedProspect(f.database.raw, `priority-${i}`); }
     const foreign = ['discovery.scan', 'discovery.assess', 'discovery.research', 'priority_projection_rebuild', 'sourcing']
       .map(type => f.services.jobs.enqueue({ type, payload: {}, at: DISCOVERY_NOW }));
+    await runtime.withDomain(d => d.scanAndEnqueueDiscoveryPage());
+    const originalJobs = ['discovery_assessment', PRIORITY_PROJECTION_REBUILD_JOB_TYPE].flatMap(type =>
+      f.services.jobs.listByTypeState(type as 'discovery_assessment' | typeof PRIORITY_PROJECTION_REBUILD_JOB_TYPE, 'queued', 50));
+    originalJobs.filter((_job, i) => i % 2 === 0).forEach(job => {
+      f.services.jobs.start(job.id, DISCOVERY_NOW); f.services.jobs.fail(job.id, { code: 'invalid_evidence', message: 'Synthetic original failure' }, DISCOVERY_NOW);
+    });
+    vi.setSystemTime(Date.now() + 60_000);
     const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('No worker networking permitted'));
     const w = makeWorker(); w.start(); await timer.turn(w);
     expect(f.database.raw.prepare("SELECT count(*) AS n FROM jobs WHERE state = 'succeeded'").get()).toEqual({ n: 25 });
     await timer.turn(w);
     expect(f.database.raw.prepare("SELECT count(*) AS n FROM jobs WHERE state = 'succeeded'").get()).toEqual({ n: 50 });
+    expect(f.database.raw.prepare("SELECT count(*) AS n FROM jobs WHERE state = 'succeeded' AND retry_count = 1").get()).toEqual({ n: 25 });
     for (const job of foreign) expect(f.services.jobs.get(job.id)).toEqual(job);
     expect(fetch).not.toHaveBeenCalled(); expect(count('activities')).toBe(0);
   });

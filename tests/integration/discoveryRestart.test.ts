@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, openDatabase } from '../../src/main/db/database';
 import { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
 import { DomainRuntime } from '../../src/main/domain/domainRuntime';
+import { PRIORITY_PROJECTION_REBUILD_JOB_TYPE, type PriorityProjectionRebuildCommandV1 } from '../../src/main/domain/startup/domainStartupTypes';
 import type { DomainServices } from '../../src/main/domain/createDomainServices';
 import { createDiscoveryWorker, type DiscoveryWorker } from '../../src/main/discovery/discoveryWorker';
 import { unavailableDiscoveryResearch } from '../../src/main/discovery/discoveryResearchPort';
@@ -40,6 +41,63 @@ async function turn() {
 }
 
 describe('encrypted discovery restart and command identity', () => {
+  it.each(['assessment', 'priority'].flatMap(family => ['queued', 'running', 'committed', 'missing_after_commit'].map(checkpoint => ({ family, checkpoint }))))('preserves recovery credits and output across $family encrypted $checkpoint checkpoint', async ({ family, checkpoint }) => {
+    const assessment = family === 'assessment';
+    const owner = assessment ? seedDiscoveryOwner(f, { prefix: 'recovery-reopen', units: 10 }) : seedProspect(f.database.raw, 'recovery-reopen');
+    await reopen();
+    await runtime!.withDomain(d => d.scanAndEnqueueDiscoveryPage());
+    const type = assessment ? 'discovery_assessment' : PRIORITY_PROJECTION_REBUILD_JOB_TYPE;
+    const root = services.jobs.listByTypeState(type, 'queued', 50)[0]!;
+    const raw = services.unitOfWork.database.raw;
+    const field = assessment ? 'source_record_json' : 'observed_at';
+    const original = raw.prepare(`SELECT ${field} AS bytes FROM source_events WHERE id = ?`).get(owner.sourceEventId) as { bytes: string };
+    const trigger = raw.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'immutable_source_events'").get() as { sql: string };
+    raw.exec('DROP TRIGGER immutable_source_events');
+    raw.prepare(`UPDATE source_events SET ${field} = ? WHERE id = ?`).run(assessment ? '{}' : 'invalid-time', owner.sourceEventId);
+    await runtime!.withDomain(d => { if (assessment) d.processDiscoveryJob(root.id); else d.processPriorityRefreshJob(root.id); });
+    const failed = services.jobs.get(root.id)!; expect(failed.error?.code).toBe('invalid_evidence');
+    raw.prepare(`UPDATE source_events SET ${field} = ? WHERE id = ?`).run(original.bytes, owner.sourceEventId);
+    raw.exec(trigger.sql);
+    vi.setSystemTime(Date.now() + 60_000);
+    await runtime!.withDomain(d => d.scanAndEnqueueDiscoveryPage());
+    const child = services.jobs.listByTypeState(type, 'queued', 50)[0]!;
+    expect(child).toMatchObject({ retryCount: 1, payload: { recovery: { rootJobId: root.id } } });
+    if (checkpoint !== 'queued') services.jobs.start(child.id, new Date().toISOString());
+    let priorOutputId: string | undefined;
+    if (checkpoint === 'committed' || checkpoint === 'missing_after_commit') {
+      if (assessment) {
+        await runtime!.withDomain(d => d.assessDiscoveryProspect(owner.prospectId));
+        priorOutputId = services.discoveryRepository.getCurrent(owner.prospectId)!.id;
+      } else {
+        const command = child.payload as PriorityProjectionRebuildCommandV1;
+        services.prioritization.recalculateProspect({ evaluationId: command.evaluationId, prospectId: command.prospectId,
+          ruleVersionId: command.ruleVersionId, evaluatedAt: command.evaluatedAt, expectedProjectionVersion: command.expectedProjectionVersion });
+        priorOutputId = services.prioritizationRepository.getProjection(owner.prospectId)!.evaluationId;
+      }
+      if (checkpoint === 'missing_after_commit') raw.prepare(`DELETE FROM ${assessment ? 'discovery_current' : 'prospect_priority_projection'} WHERE prospect_id = ?`).run(owner.prospectId);
+    }
+    await runtime!.shutdown(); await reopen();
+    expect(services.jobs.get(root.id)).toMatchObject({ id: failed.id, state: 'failed', payload: failed.payload, error: failed.error, retryCount: failed.retryCount });
+    expect(services.jobs.get(child.id)).toMatchObject({ idempotencyKey: child.idempotencyKey, payload: child.payload, retryCount: 1 });
+    start(); await turn(); await turn(); await turn();
+    const currentId = assessment ? services.discoveryRepository.getCurrent(owner.prospectId)?.id
+      : services.prioritizationRepository.getProjection(owner.prospectId)?.evaluationId;
+    expect(currentId).toBeDefined();
+    if (checkpoint === 'committed') expect(currentId).toBe(priorOutputId);
+    if (checkpoint === 'missing_after_commit') expect(currentId).not.toBe(priorOutputId);
+    const completed = services.jobs.get(child.id)!;
+    expect(completed.state).toBe('succeeded');
+    expect(completed.retryCount).toBe(checkpoint === 'queued' ? 1 : 2);
+    if (!assessment && checkpoint === 'missing_after_commit') {
+      expect(services.jobs.listByTypeState(type, 'succeeded', 50).map(j => j.retryCount)).toEqual([2, 3]);
+      expect(services.prioritizationRepository.getEvaluationById(priorOutputId!)).not.toBeNull();
+    }
+    expect(await runtime!.withDomain(d => d.getDiscovery().processing)).toBe('idle');
+    const historyCount = services.unitOfWork.database.raw.prepare(`SELECT count(*) AS n FROM ${assessment ? 'discovery_assessments' : 'prioritization_evaluations'}`).get();
+    await turn();
+    expect(services.unitOfWork.database.raw.prepare(`SELECT count(*) AS n FROM ${assessment ? 'discovery_assessments' : 'prioritization_evaluations'}`).get()).toEqual(historyCount);
+  });
+
   it('retains failed diagnostic provenance and resolved status on encrypted reopen, then exposes renewed corruption', async () => {
     const owner = seedProspect(f.database.raw, 'diagnostic-reopen'); await reopen();
     services.prioritization.recalculateProspect({ evaluationId: 'diagnostic-evaluation', prospectId: owner.prospectId,

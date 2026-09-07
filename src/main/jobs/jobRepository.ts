@@ -6,6 +6,8 @@ import type { AppDatabase } from '../db/database';
 import type { DomainUnitOfWork } from '../domain/support/domainUnitOfWork';
 import { PRIORITY_PROJECTION_REBUILD_JOB_TYPE } from '../domain/startup/domainStartupTypes';
 import type { EnqueueJobInput, JobRecord, JobState } from './jobTypes';
+import { canonicalDiscoveryKey, hasRecovery, recoveryCommand, recoveryDelay, recoveryKeys,
+  recoveryTip, validateRecoveryRoot } from './discoveryRecovery';
 
 export type { EnqueueJobInput, JobRecord, JobState } from './jobTypes';
 
@@ -23,7 +25,7 @@ const resolvedDiagnosticJson = JSON.stringify(diagnosticStatusSchema.parse({ kin
 const unresolvedDiagnosticJson = JSON.stringify(diagnosticStatusSchema.parse({ kind: 'discovery_diagnostic_status_v1', status: 'unresolved' }));
 // Only diagnostic failures with canonical command ownership can carry this metadata.
 // The same predicate protects writes and status filtering before LIMIT.
-const ownedDiagnosticSql = `error_code IN ('invalid_evidence', 'evidence_too_large') AND CASE WHEN json_valid(payload_json) THEN
+const baseOwnedDiagnosticSql = `error_code IN ('invalid_evidence', 'evidence_too_large') AND CASE WHEN json_valid(payload_json) THEN
   json_type(payload_json, '$.formatVersion') = 'integer' AND json_extract(payload_json, '$.formatVersion') = 1
   AND json_type(payload_json, '$.prospectId') = 'text'
   AND length(trim(json_extract(payload_json, '$.prospectId'))) > 0
@@ -181,6 +183,24 @@ const returnedJobColumns = `
   updated_at
 `;
 
+function jobJson(alias: string): string {
+  return `json_object(${returnedJobColumns.split(',').map(column => column.trim()).map(column => `'${column}', ${alias}.${column}`).join(', ')})`;
+}
+
+// Pure validators receive bounded SQL snapshots. Normal historic diagnostic shapes
+// retain their accepted predicate; successor metadata cannot bypass it before LIMIT.
+const ownedDiagnosticSql = `${baseOwnedDiagnosticSql} AND CASE WHEN
+  (CASE WHEN json_valid(payload_json) THEN json_type(payload_json, '$.recovery') IS NOT NULL ELSE 0 END)
+  OR (CASE WHEN json_valid(idempotency_key) THEN json_extract(idempotency_key, '$[0]') = 'discovery_recovery_v1' ELSE 0 END)
+  THEN discovery_recovery_valid(${jobJson('jobs')},
+    (SELECT ${jobJson('recovery_root')} FROM jobs recovery_root
+      WHERE recovery_root.id = json_extract(jobs.payload_json, '$.recovery.rootJobId')),
+    (SELECT json_group_array(json(entry)) FROM (SELECT ${jobJson('recovery_child')} AS entry
+      FROM jobs recovery_child WHERE recovery_child.type = jobs.type AND recovery_child.idempotency_key IN (
+        discovery_recovery_key(jobs.type, jobs.payload_json, 1), discovery_recovery_key(jobs.type, jobs.payload_json, 2),
+        discovery_recovery_key(jobs.type, jobs.payload_json, 3)) ORDER BY recovery_child.retry_count)))
+  ELSE 1 END`;
+
 export class InvalidJobTransitionError extends Error {
   readonly jobId: string;
 
@@ -192,7 +212,23 @@ export class InvalidJobTransitionError extends Error {
 }
 
 export class JobRepository {
-  constructor(private readonly database: AppDatabase) {}
+  constructor(private readonly database: AppDatabase) {
+    database.raw.function('discovery_recovery_key', { deterministic: true }, (type, payload, slot) => {
+      try { return recoveryKeys(z.string().parse(type), JSON.parse(z.string().parse(payload)))[z.number().int().min(1).max(3).parse(slot) - 1]!; }
+      catch { return null; }
+    });
+    database.raw.function('discovery_recovery_valid', { deterministic: true }, (jobJson, rootJson, childrenJson) => {
+      try {
+        const job = parseStoredJobRow(JSON.parse(z.string().parse(jobJson)));
+        const root = parseStoredJobRow(JSON.parse(z.string().parse(rootJson)));
+        const children = z.array(z.unknown()).max(3).parse(JSON.parse(z.string().parse(childrenJson))).map(parseStoredJobRow);
+        validateRecoveryRoot(root, job.type, job.payload);
+        recoveryTip(root, children);
+        if (!children.some(child => child.id === job.id)) throw new Error('DISCOVERY_INVALID_RECOVERY');
+        return 1;
+      } catch { throw new Error('DISCOVERY_INVALID_RECOVERY'); }
+    });
+  }
 
   enqueue(input: EnqueueJobInput): JobRecord {
     const parsedInput = enqueueJobInputSchema.parse(input);
@@ -343,6 +379,80 @@ export class JobRepository {
     return row === undefined ? null : parseStoredJobRow(row);
   }
 
+  /** Called only with freshly revalidated domain inputs, inside the scan/execution UOW. */
+  enqueueDiscoveryRecovery(input: EnqueueJobInput, unitOfWork: DomainUnitOfWork,
+    consumedJobId?: string): JobRecord | undefined {
+    if (unitOfWork.database.raw !== this.database.raw) throw new Error('DISCOVERY_RECOVERY_DATABASE_MISMATCH');
+    unitOfWork.assertWriteScope();
+    const parsed = enqueueJobInputSchema.parse(input);
+    const command = recoveryCommand(parsed.type, parsed.payload);
+    const at = utcIsoTimestampSchema.parse(parsed.at);
+    if (command.recovery || parsed.idempotencyKey !== canonicalDiscoveryKey(parsed.type, command)
+      || 'jobId' in command && command.jobId !== parsed.id) throw new Error('DISCOVERY_INVALID_RECOVERY');
+    const owner = this.database.raw.prepare('SELECT p.person_id AS id FROM prospects p JOIN persons n ON n.id = p.person_id WHERE p.id = ?')
+      .get(command.prospectId) as { id: string } | undefined;
+    if (!owner || 'personId' in command && command.personId !== owner.id) throw new Error('DISCOVERY_INVALID_RECOVERY');
+    const canonicalRow = this.database.raw.prepare(`SELECT ${returnedJobColumns} FROM jobs WHERE type = ? AND idempotency_key = ?`)
+      .get(parsed.type, parsed.idempotencyKey);
+    const canonical = canonicalRow === undefined ? undefined : parseStoredJobRow(canonicalRow);
+    const children = this.recoveryChildren(parsed.type, command);
+    if (consumedJobId !== undefined && children.length === 0) throw new Error('DISCOVERY_INVALID_RECOVERY');
+    if (children.length === 0 && (!canonical || canonical.state !== 'failed' || canonical.error?.code !== 'invalid_evidence')) {
+      return canonical ?? this.enqueue(input);
+    }
+    if (canonical && (canonical.state === 'cancelled' || canonical.state === 'failed'
+      && !['invalid_evidence', 'evidence_too_large'].includes(canonical.error?.code ?? ''))) return canonical;
+    const rootId = children.length ? recoveryCommand(children[0]!.type, children[0]!.payload).recovery?.rootJobId : canonical?.id;
+    const root = rootId ? this.get(rootId) : null;
+    if (!root) throw new Error('DISCOVERY_INVALID_RECOVERY');
+    validateRecoveryRoot(root, parsed.type, command);
+    const tip = recoveryTip(root, children);
+    const handoff = consumedJobId !== undefined;
+    if (handoff) {
+      const previous = recoveryCommand(tip.type, tip.payload);
+      if (tip.id !== consumedJobId || !hasRecovery(tip) || tip.state !== 'running' || !('evaluationId' in previous)
+        || !this.database.raw.prepare('SELECT id FROM prioritization_evaluations WHERE id = ? AND prospect_id = ?')
+          .get(previous.evaluationId, previous.prospectId)) throw new Error('DISCOVERY_INVALID_RECOVERY');
+    } else if (tip.state === 'queued' || tip.state === 'running') return tip;
+    if (!handoff && tip.state !== 'succeeded' && !(tip.state === 'failed'
+      && ['invalid_evidence', 'evidence_too_large'].includes(tip.error?.code ?? ''))) return tip;
+    if (tip.retryCount >= 3 || !handoff && Date.parse(at) < Date.parse(tip.updatedAt) + recoveryDelay(tip.retryCount)) return undefined;
+    const slot = tip.retryCount + 1;
+    const id = parsed.id ?? randomUUID();
+    const payload = { ...command, recovery: { kind: 'discovery_recovery_v1', rootJobId: root.id } };
+    if ('jobId' in command && (command.jobId !== id || [root, ...children].some(job =>
+      (job.payload as { evaluationId?: string }).evaluationId === command.evaluationId))) {
+      throw new Error('DISCOVERY_INVALID_RECOVERY');
+    }
+    const row = this.database.raw.prepare(`INSERT INTO jobs (id, type, idempotency_key, state, progress_current,
+      progress_total, retry_count, payload_json, result_json, error_code, error_message, created_at, started_at, finished_at, updated_at)
+      VALUES (?, ?, ?, 'queued', 0, ?, ?, ?, NULL, NULL, NULL, ?, NULL, NULL, ?) RETURNING ${returnedJobColumns}`)
+      .get(id, parsed.type, recoveryKeys(parsed.type, command)[slot - 1], parsed.progressTotal ?? null,
+        slot, serializeJson(payload, 'payload'), at, at);
+    const child = parseStoredJobRow(row);
+    if (handoff) this.succeed(tip.id, { status: 'superseded_recovery', successorJobId: child.id }, at);
+    return child;
+  }
+
+  /** Three indexed slots and one direct root read, never a historical lineage walk. */
+  validateDiscoveryRecovery(job: JobRecord): void {
+    if (!hasRecovery(job)) return;
+    const command = recoveryCommand(job.type, job.payload);
+    const root = command.recovery ? this.get(command.recovery.rootJobId) : null;
+    if (!root) throw new Error('DISCOVERY_INVALID_RECOVERY');
+    const children = this.recoveryChildren(job.type, command);
+    const tip = recoveryTip(root, children);
+    if (tip.id !== job.id) throw new Error('DISCOVERY_INVALID_RECOVERY');
+  }
+
+  private recoveryChildren(type: string, payload: unknown): JobRecord[] {
+    const keys = recoveryKeys(type, payload);
+    return keys.flatMap(key => {
+      const row = this.database.raw.prepare(`SELECT ${returnedJobColumns} FROM jobs WHERE type = ? AND idempotency_key = ?`).get(type, key);
+      return row === undefined ? [] : [parseStoredJobRow(row)];
+    });
+  }
+
   listActive(): JobRecord[] {
     const rows = this.database.raw
       .prepare(
@@ -407,6 +517,28 @@ export class JobRepository {
 
   retryFailed(id: string, at: string): JobRecord {
     const timestamp = utcIsoTimestampSchema.parse(at);
+    const job = this.get(id);
+    if (job) {
+      if (hasRecovery(job) && !['discovery_transient', 'interrupted_by_restart', 'research_timeout', 'research_failed'].includes(job.error?.code ?? '')) {
+        throw new InvalidJobTransitionError(id);
+      }
+      if (['invalid_evidence', 'evidence_too_large'].includes(job.error?.code ?? '')) {
+        let canonical = false;
+        try { canonical = job.idempotencyKey === canonicalDiscoveryKey(job.type, job.payload); } catch { /* Stable/legacy diagnostics have no normal command key. */ }
+        if (canonical) throw new InvalidJobTransitionError(id);
+      }
+      let children: JobRecord[] = [];
+      try { children = this.recoveryChildren(job.type, job.payload); }
+      catch (error) { if (hasRecovery(job)) throw error; }
+      if (hasRecovery(job)) {
+        const command = recoveryCommand(job.type, job.payload);
+        const root = command.recovery ? this.get(command.recovery.rootJobId) : null;
+        if (!root || recoveryTip(root, children).id !== job.id) throw new InvalidJobTransitionError(id);
+      }
+      if (children.some(child => recoveryCommand(child.type, child.payload).recovery?.rootJobId === id)) {
+        throw new InvalidJobTransitionError(id);
+      }
+    }
     return this.updateAndRead(`UPDATE jobs SET state = 'queued', retry_count = retry_count + 1,
       progress_current = 0, result_json = NULL, error_code = NULL, error_message = NULL,
       started_at = NULL, finished_at = NULL, updated_at = ?

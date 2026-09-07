@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase, closeDatabase } from '../../src/main/db/database';
 import { createDomainServices } from '../../src/main/domain/createDomainServices';
+import { createFounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import { FOUNDER_CHANNEL_POLICIES_V1 } from '../../src/main/domain/cadence/cadenceScheduler';
 import { attachTranscript } from '../../src/main/domain/conversations/conversationsDomain';
 import { DiscoveryReadService } from '../../src/main/domain/discovery/discoveryReadService';
@@ -24,6 +25,46 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); f.close(); });
 type Owner = ReturnType<typeof seedDiscoveryOwner>;
 function owner(prefix: string, units: number | null = 10): Owner { return seedDiscoveryOwner(f, { prefix, units }); }
+
+it('reports actual queued recovery, current proof, unresolved neighbors and exhausted output loss without getter writes', () => {
+  const domain = createFounderSalesDomain({ database: f.database, services: f.services, clock: { now: () => now }, ids: { next: randomUUID } });
+  const first = owner('snapshot-recovery'); const raw = f.database.raw;
+  raw.exec('DROP TRIGGER immutable_source_events');
+  const fail = (o: Owner) => {
+    domain.scanAndEnqueueDiscoveryPage();
+    const job = f.services.jobs.listByTypeState('discovery_assessment', 'queued', 50).find(j => (j.payload as { prospectId: string }).prospectId === o.prospectId)!;
+    const original = raw.prepare('SELECT source_record_json AS bytes FROM source_events WHERE id = ?').get(o.sourceEventId) as { bytes: string };
+    raw.prepare("UPDATE source_events SET source_record_json = '{}' WHERE id = ?").run(o.sourceEventId);
+    domain.processDiscoveryJob(job.id);
+    expect(f.services.jobs.get(job.id)?.error?.code).toBe('invalid_evidence');
+    return { job: f.services.jobs.get(job.id)!, restore: () => raw.prepare('UPDATE source_events SET source_record_json = ? WHERE id = ?').run(original.bytes, o.sourceEventId) };
+  };
+  const root = fail(first); root.restore();
+  now = '2026-09-06T12:01:00.000Z'; domain.scanAndEnqueueDiscoveryPage();
+  expect(domain.getDiscovery().processing).toBe('running');
+  const queued = selectedBusinessRows(); domain.getDiscovery(); domain.getDiscovery(); expect(selectedBusinessRows()).toEqual(queued);
+  expect(domain.processNextDiscoveryJob()).toBe(true); domain.scanAndEnqueueDiscoveryPage();
+  expect(f.services.discoveryRepository.getCurrent(first.prospectId)).not.toBeNull();
+  expect(domain.getDiscovery().processing).toBe('idle');
+  const neighbor = fail(owner('snapshot-unresolved-neighbor'));
+  expect(domain.getDiscovery().processing).toBe('error');
+  neighbor.restore(); now = '2026-09-06T12:02:00.000Z'; domain.scanAndEnqueueDiscoveryPage();
+  domain.processNextDiscoveryJob(); domain.scanAndEnqueueDiscoveryPage();
+  expect(domain.getDiscovery().processing).toBe('idle');
+  for (const minute of [3, 4]) {
+    raw.prepare('DELETE FROM discovery_current WHERE prospect_id = ?').run(first.prospectId);
+    now = `2026-09-06T12:0${minute}:00.000Z`; domain.scanAndEnqueueDiscoveryPage();
+    expect(domain.getDiscovery().processing).toBe('running');
+    expect(domain.processNextDiscoveryJob()).toBe(true); domain.scanAndEnqueueDiscoveryPage();
+    expect(domain.getDiscovery().processing).toBe('idle');
+  }
+  raw.prepare('DELETE FROM discovery_current WHERE prospect_id = ?').run(first.prospectId);
+  now = '2026-09-06T12:05:00.000Z'; domain.scanAndEnqueueDiscoveryPage();
+  expect(domain.processNextDiscoveryJob()).toBe(false);
+  expect(f.services.jobs.get(root.job.id)).toEqual({ ...root.job, result: { kind: 'discovery_diagnostic_status_v1', status: 'unresolved' } });
+  expect(domain.getDiscovery().processing).toBe('error');
+  const exhausted = selectedBusinessRows(); domain.getDiscovery(); domain.getDiscovery(); expect(selectedBusinessRows()).toEqual(exhausted);
+});
 function assess(o: Owner, overrides: Partial<DiscoveryAssessment> = {}) {
   return f.services.unitOfWork.immediate(() => {
     const snapshot = collectDiscoveryEvidence({ database: f.database, services: f.services, prospectId: o.prospectId, asOf: now });

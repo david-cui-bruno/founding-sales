@@ -173,7 +173,7 @@ describe('encrypted application outbound lifetime (source fixtures, no live Phon
         expect(listeners.size).toBe(3);
         const names = ['registerHealthIpc', 'registerLeadsIpc', 'registerTodayIpc', 'registerPipelineIpc',
           'registerReviewIpc', 'registerFridayIpc', 'registerImportIpc', 'registerConversationsIpc',
-          'registerLearningsIpc', 'registerSourcingIpc', 'registerShellIpc', 'registerRecoveryIpc'];
+          'registerLearningsIpc', 'registerSourcingIpc', 'registerShellIpc', 'registerRecoveryIpc', 'registerDiscoveryIpc'];
         const registrars = Object.fromEntries(names.map((name) => [name, () => {
           features.add(name); return () => { features.delete(name); };
         }])) as unknown as Omit<FeatureRegistrars, 'registerLeadDetailIpc'>;

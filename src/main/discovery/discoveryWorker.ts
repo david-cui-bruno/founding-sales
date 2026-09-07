@@ -11,21 +11,12 @@ import type { IdGenerator } from '../domain/support/idGenerator';
 import { resolveLocalDayInterval } from '../domain/today/todayOrdering';
 import type { FoundationRuntime } from '../foundation/foundationRuntime';
 import type { JobRecord, DiscoveryJobType } from '../jobs/jobRepository';
+import { assessmentCommand, refreshCommand, hasRecovery } from '../jobs/discoveryRecovery';
 import type { DiscoveryResearchPort } from './discoveryResearchPort';
 
 const shape = discoveryAssessmentSchema.shape;
-const assessmentCommand = z.object({ formatVersion: z.literal(1), personId: shape.personId,
-  prospectId: shape.prospectId, salesCycleId: shape.salesCycleId.nullable(), fingerprint: shape.fingerprint.nullable(),
-  policyVersion: shape.policyVersion, ruleVersionId: shape.ruleVersionId, localDate: shape.localDate,
-  overrideId: shape.overrideId, generation: z.union([z.literal('initial'), shape.expiresAt]),
-  diagnostic: z.enum(['evidence_too_large', 'invalid_evidence']).nullable() }).strict();
 const priorityDiagnosticCommand = z.object({ formatVersion: z.literal(1), kind: z.literal('priority_diagnostic'),
   personId: shape.personId, prospectId: shape.prospectId, diagnostic: z.literal('invalid_evidence') }).strict();
-const refreshCommand = z.object({ formatVersion: z.literal(1), jobId: z.string().min(1), evaluationId: z.string().min(1),
-  prospectId: shape.prospectId, ruleVersionId: shape.ruleVersionId, founderTimezone: z.string().min(1),
-  founderLocalDate: shape.localDate, evaluatedAt: shape.evaluatedAt, expectedProjectionVersion: z.number().int().positive().nullable(),
-  qualifiedInputFingerprint: shape.fingerprint, refreshFingerprint: shape.fingerprint,
-  reasons: z.array(z.enum(['missing_projection', 'wrong_active_rule', 'prior_founder_local_day', 'projection_expired', 'relevant_input_changed'])).min(1).max(5) }).strict();
 
 export type DiscoveryResearchRequest = Readonly<{ epoch: symbol; jobId: string; personId: string;
   prospectId: string; salesCycleId: string; fingerprint: string; localDate: string; overrideId: string | null;
@@ -116,7 +107,11 @@ export class DiscoveryWorkerCommands {
           || command.fingerprint !== snapshot.inputFingerprint || command.ruleVersionId !== snapshot.ruleVersionId
           || command.localDate !== this.day(asOf).localDate
           || command.overrideId !== (services.discoveryRepository.getLatestOverride(command.prospectId)?.id ?? null)) {
-          this.enqueueAssessment(command.prospectId, asOf); return 'superseded';
+          this.requireReplacement(this.enqueueAssessment(command.prospectId, asOf), job.id); return 'superseded';
+        }
+        if (!hasRecovery(job) && job.idempotencyKey !== null) {
+          const effective = this.enqueueAssessment(command.prospectId, asOf);
+          if (effective?.id !== job.id) { this.requireReplacement(effective, job.id); return 'superseded'; }
         }
         return 'assess';
       });
@@ -147,6 +142,14 @@ export class DiscoveryWorkerCommands {
           // Timezone is deliberately absent from the established v1 key. An alias is
           // not a successor: execute this repair against the freshly validated inputs.
         }
+        if (hasRecovery(job) && services.prioritizationRepository.getStoredEvaluationCommand(command.evaluationId)) {
+          this.requireReplacement(this.enqueueRefresh(command.prospectId, asOf, job.id), job.id);
+          return { status: 'superseded_recovery' };
+        }
+        if (!hasRecovery(job) && job.idempotencyKey !== null) {
+          const effective = this.enqueueRefresh(command.prospectId, asOf);
+          if (effective?.id !== job.id) { this.requireReplacement(effective, job.id); return { status: 'superseded' }; }
+        }
         return services.prioritization.scopedWriter().recalculateProspect({ evaluationId: command.evaluationId,
           prospectId: command.prospectId, ruleVersionId: rule.id, evaluatedAt: asOf,
           expectedProjectionVersion: candidate.expectedProjectionVersion });
@@ -161,10 +164,15 @@ export class DiscoveryWorkerCommands {
     try {
       return services.unitOfWork.immediate(() => {
         const command = assessmentCommand.parse(job.payload);
+        services.jobs.validateDiscoveryRecovery(job);
         const snapshot = this.collect(command.prospectId, at);
         if (command.fingerprint !== snapshot.inputFingerprint || command.personId !== snapshot.personId
           || command.salesCycleId !== snapshot.salesCycleId || command.localDate !== this.day(at).localDate
           || command.overrideId !== (services.discoveryRepository.getLatestOverride(command.prospectId)?.id ?? null)) return null;
+        // A canonical output-only alias must not spend an uncharged research attempt
+        // before the synchronous dispatcher hands it to the bounded recovery tip.
+        if (!hasRecovery(job) && job.idempotencyKey !== null
+          && this.enqueueAssessment(command.prospectId, at)?.id !== job.id) return null;
         if (job.state === 'failed') services.jobs.retryFailed(job.id, at);
         services.jobs.start(job.id, at);
         return { epoch: this.epoch, jobId: job.id, personId: snapshot.personId, prospectId: snapshot.prospectId,
@@ -185,7 +193,7 @@ export class DiscoveryWorkerCommands {
         if (request.personId !== snapshot.personId || request.salesCycleId !== snapshot.salesCycleId
           || request.fingerprint !== snapshot.inputFingerprint || request.localDate !== this.day(at).localDate
           || request.overrideId !== (services.discoveryRepository.getLatestOverride(request.prospectId)?.id ?? null)) {
-          this.enqueueAssessment(request.prospectId, at);
+          this.requireReplacement(this.enqueueAssessment(request.prospectId, at), request.jobId);
           services.jobs.succeed(request.jobId, { status: 'superseded_research' }, at); return false;
         }
         const validated = z.array(discoveryClaimSchema).max(100).parse(claims);
@@ -219,10 +227,14 @@ export class DiscoveryWorkerCommands {
       job = jobs.retryFailed(id, at);
     }
     if (job.state === 'queued') jobs.start(id, at);
-    try { const result = operation(job); jobs.succeed(id, result, this.input.clock.now()); }
+    try {
+      jobs.validateDiscoveryRecovery(job);
+      const result = operation(job);
+      if (jobs.get(id)?.state === 'running') jobs.succeed(id, result, this.input.clock.now());
+    }
     catch (error) {
       const code = error instanceof DiscoveryEvidenceDiagnosticError ? error.code
-        : error instanceof z.ZodError || error instanceof Error && error.message === 'DISCOVERY_INVALID_COMMAND'
+        : error instanceof z.ZodError || error instanceof Error && ['DISCOVERY_INVALID_COMMAND', 'DISCOVERY_INVALID_RECOVERY'].includes(error.message)
           ? 'invalid_command' : 'discovery_transient';
       jobs.fail(id, { code, message: `Local discovery work failed: ${code}.` }, this.input.clock.now());
     }
@@ -230,6 +242,9 @@ export class DiscoveryWorkerCommands {
 
   private collect(prospectId: string, asOf: string) {
     return collectDiscoveryEvidence({ database: this.input.database, services: this.input.services, prospectId, asOf });
+  }
+  private requireReplacement(job: JobRecord | undefined, previousId: string): void {
+    if (!job || job.id === previousId || !['queued', 'running'].includes(job.state)) throw new Error('DISCOVERY_REFRESH_NOT_RUNNABLE');
   }
   private day(asOf: string) { return resolveLocalDayInterval({ generatedAt: asOf, timezone: this.input.services.workspaceSettings.read().timezone }); }
   private isCurrent(a: z.infer<typeof discoveryAssessmentSchema>, s: DiscoveryEvidenceSnapshot, at: string): boolean {
@@ -242,7 +257,7 @@ export class DiscoveryWorkerCommands {
       && a.claims.every(claim => claim.certainty !== 'fact' || validateDiscoveryClaim({ snapshot: s, claim }));
   }
 
-  private enqueueAssessment(prospectId: string, asOf: string): void {
+  private enqueueAssessment(prospectId: string, asOf: string): JobRecord | undefined {
     const { services } = this.input;
     const identity = services.prioritizationRepository.loadQualificationInputs(prospectId);
     // Valid no-cycle Prospects still participate in priority refresh, never invented discovery context.
@@ -268,7 +283,8 @@ export class DiscoveryWorkerCommands {
     const key = diagnostic ? ['discovery_assessment', identity.personId, prospectId, diagnostic]
       : ['discovery_assessment', payload.personId, prospectId, payload.salesCycleId, payload.fingerprint,
         payload.policyVersion, payload.ruleVersionId, payload.localDate, payload.overrideId, payload.generation];
-    services.jobs.enqueue({ type: 'discovery_assessment', idempotencyKey: JSON.stringify(key), payload, at: asOf });
+    const input = { type: 'discovery_assessment', idempotencyKey: JSON.stringify(key), payload, at: asOf };
+    return diagnostic ? services.jobs.enqueue(input) : services.jobs.enqueueDiscoveryRecovery(input, services.unitOfWork);
   }
 
   private refreshCandidate(prospectId: string, asOf: string) {
@@ -285,7 +301,7 @@ export class DiscoveryWorkerCommands {
     if (scan.corruptProspectIds.length) throw new DiscoveryEvidenceDiagnosticError('invalid_evidence');
     return scan.candidates[0] ?? null;
   }
-  private enqueueRefresh(prospectId: string, asOf: string): JobRecord | undefined {
+  private enqueueRefresh(prospectId: string, asOf: string, consumedJobId?: string): JobRecord | undefined {
     const { services, ids } = this.input;
     let candidate;
     try { candidate = this.refreshCandidate(prospectId, asOf); }
@@ -303,10 +319,10 @@ export class DiscoveryWorkerCommands {
     const founderTimezone = services.workspaceSettings.read().timezone;
     const founderLocalDate = this.day(asOf).localDate;
     const id = ids.next();
-    return services.jobs.enqueue({ id, type: PRIORITY_PROJECTION_REBUILD_JOB_TYPE,
+    return services.jobs.enqueueDiscoveryRecovery({ id, type: PRIORITY_PROJECTION_REBUILD_JOB_TYPE,
       idempotencyKey: deriveRefreshIdempotencyKey({ prospectId, ruleVersionId, founderLocalDate, refreshFingerprint: candidate.refreshFingerprint }),
       payload: buildRebuildCommand({ jobId: id, evaluationId: ids.next(), candidate, ruleVersionId, founderTimezone,
-        founderLocalDate, evaluatedAt: asOf }), at: asOf });
+        founderLocalDate, evaluatedAt: asOf }), at: asOf }, services.unitOfWork, consumedJobId);
   }
 }
 

@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { createFounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import { DomainRuntime } from '../../src/main/domain/domainRuntime';
+import type { PriorityProjectionRebuildCommandV1 } from '../../src/main/domain/startup/domainStartupTypes';
 import {
   PRIORITY_PROJECTION_REBUILD_JOB_TYPE,
 } from '../../src/main/domain/startup/domainStartupTypes';
@@ -94,6 +95,189 @@ describe('priority projection refresh at startup', () => {
     `).run(id, prospect.personId, `+1401555${phoneCounter}`,
       DOMAIN_TIMESTAMP, DOMAIN_TIMESTAMP);
   }
+
+  function failedRecoveryFixture(existingProjection = false) {
+    const owner = seedProspect(database.raw, 'recovery');
+    let at = BOOT_AT;
+    const clock = { now: () => at };
+    const runtime = buildRuntime(clock); runtime.initialize();
+    const services = runtime.getServices();
+    const domain = createFounderSalesDomain({ database, services, clock, ids: { next: () => `recovery-${++runtimeCounter}` } });
+    if (existingProjection) {
+      domain.processPriorityRefreshJob(services.jobs.listActive()[0]!.id);
+      at = '2026-08-31T12:00:00.000Z'; domain.scanAndEnqueueDiscoveryPage();
+    }
+    const root = services.jobs.listActive()[0]!;
+    const original = database.raw.prepare('SELECT observed_at AS bytes FROM source_events WHERE id = ?')
+      .get(owner.sourceEventId) as { bytes: string };
+    const trigger = database.raw.prepare("SELECT sql FROM sqlite_master WHERE name = 'immutable_source_events'").get() as { sql: string };
+    database.raw.exec('DROP TRIGGER immutable_source_events');
+    const source = (bytes: string) => database.raw.prepare('UPDATE source_events SET observed_at = ? WHERE id = ?').run(bytes, owner.sourceEventId);
+    const corrupt = () => source('not-a-timestamp');
+    const restore = () => source(original.bytes);
+    const advance = () => { at = new Date(Date.parse(at) + 60_000).toISOString(); };
+    corrupt(); domain.processPriorityRefreshJob(root.id);
+    const failed = services.jobs.get(root.id)!;
+    expect(failed.error?.code).toBe('invalid_evidence');
+    restore(); advance();
+    return { owner, services, domain, failed, corrupt, restore, advance, clock,
+      restoreSchema: () => database.raw.exec(trigger.sql), setAt: (value: string) => { at = value; } };
+  }
+
+  // Seed a persisted recovery checkpoint using real dispatch/output, not a fabricated
+  // projection or failure. Only the new ledger metadata/count is fixture-injected.
+  function recoveryCheckpoint(f: ReturnType<typeof failedRecoveryFixture>, state: 'succeeded' | 'failed') {
+    const original = f.failed.payload as PriorityProjectionRebuildCommandV1;
+    const id = `checkpoint-${++runtimeCounter}`;
+    const payload = { ...original, jobId: id, evaluationId: `${id}-evaluation`, evaluatedAt: f.clock.now() };
+    f.services.jobs.enqueue({ id, type: PRIORITY_PROJECTION_REBUILD_JOB_TYPE, payload, at: f.clock.now() });
+    if (state === 'failed') f.corrupt();
+    f.domain.processPriorityRefreshJob(id);
+    expect(f.services.jobs.get(id)?.state).toBe(state);
+    if (state === 'failed') expect(f.services.jobs.get(id)?.error?.code).toBe('invalid_evidence');
+    f.restore();
+    const key = JSON.stringify(['discovery_recovery_v1', PRIORITY_PROJECTION_REBUILD_JOB_TYPE,
+      payload.prospectId, payload.ruleVersionId, payload.founderLocalDate, payload.qualifiedInputFingerprint, 1]);
+    database.raw.prepare('UPDATE jobs SET idempotency_key = ?, payload_json = ?, retry_count = 1 WHERE id = ?')
+      .run(key, JSON.stringify({ ...payload, recovery: { kind: 'discovery_recovery_v1', rootJobId: f.failed.id } }), id);
+    f.advance();
+    return f.services.jobs.get(id)!;
+  }
+
+  it('recovers actual v1 invalid evidence with a fresh evaluation and unchanged original command', () => {
+    const f = failedRecoveryFixture();
+    f.domain.scanAndEnqueueDiscoveryPage();
+    expect(f.services.prioritizationRepository.getProjection(f.owner.prospectId)).toBeNull();
+    expect(f.domain.processNextDiscoveryJob()).toBe(true);
+    const projection = f.services.prioritizationRepository.getProjection(f.owner.prospectId)!;
+    expect(projection).not.toBeNull();
+    expect(projection.evaluationId).not.toBe((f.failed.payload as PriorityProjectionRebuildCommandV1).evaluationId);
+    f.domain.scanAndEnqueueDiscoveryPage();
+    expect(f.domain.getDiscovery().processing).toBe('idle');
+    expect(f.services.jobs.get(f.failed.id)).toEqual({ ...f.failed, result: { kind: 'discovery_diagnostic_status_v1', status: 'resolved' } });
+  });
+
+  it('reconstructs missing output after prior real recovery success instead of replaying its old evaluation', () => {
+    const f = failedRecoveryFixture(); const first = recoveryCheckpoint(f, 'succeeded');
+    f.domain.scanAndEnqueueDiscoveryPage();
+    const prior = f.services.prioritizationRepository.getProjection(f.owner.prospectId)!;
+    database.raw.prepare('DELETE FROM prospect_priority_projection WHERE prospect_id = ?').run(f.owner.prospectId);
+    f.domain.scanAndEnqueueDiscoveryPage();
+    expect(f.services.jobs.get(f.failed.id)?.result).toEqual({ kind: 'discovery_diagnostic_status_v1', status: 'unresolved' });
+    expect(f.domain.processNextDiscoveryJob()).toBe(true);
+    const current = f.services.prioritizationRepository.getProjection(f.owner.prospectId)!;
+    expect(current).not.toBeNull(); expect(current.evaluationId).not.toBe(prior.evaluationId);
+    expect(f.services.prioritizationRepository.getEvaluationById(prior.evaluationId)).not.toBeNull();
+    expect(f.services.jobs.get(first.id)).toEqual(first);
+  });
+
+  it('recovers an evidence-failed recovery itself without resetting the original retry allowance', () => {
+    const f = failedRecoveryFixture(); const first = recoveryCheckpoint(f, 'failed');
+    f.domain.scanAndEnqueueDiscoveryPage();
+    expect(f.domain.processNextDiscoveryJob()).toBe(true);
+    expect(f.services.prioritizationRepository.getProjection(f.owner.prospectId)).not.toBeNull();
+    const succeeded = f.services.jobs.listByTypeState(PRIORITY_PROJECTION_REBUILD_JOB_TYPE, 'succeeded', 50);
+    expect(succeeded).toHaveLength(1); expect(succeeded[0]?.retryCount).toBe(2);
+    expect(f.services.jobs.get(first.id)).toEqual(first);
+    expect(f.services.jobs.get(f.failed.id)).toEqual(f.failed);
+  });
+
+  it('retains the recovery locator when projection identity disappears and startup queues an output-only canonical alias', () => {
+    const f = failedRecoveryFixture(true);
+    expect(f.failed.payload).toMatchObject({ expectedProjectionVersion: 1 });
+    f.domain.scanAndEnqueueDiscoveryPage(); f.domain.processNextDiscoveryJob(); f.domain.scanAndEnqueueDiscoveryPage();
+    const first = f.services.jobs.listByTypeState(PRIORITY_PROJECTION_REBUILD_JOB_TYPE, 'succeeded', 50)
+      .find(job => (job.payload as { recovery?: unknown }).recovery)!;
+    expect(first.retryCount).toBe(1);
+    database.raw.prepare('DELETE FROM prospect_priority_projection WHERE prospect_id = ?').run(f.owner.prospectId);
+    f.restoreSchema(); f.advance();
+    const startup = buildRuntime(f.clock); startup.initialize();
+    const alias = f.services.jobs.listByTypeState(PRIORITY_PROJECTION_REBUILD_JOB_TYPE, 'queued', 50)[0]!;
+    expect(alias.retryCount).toBe(0);
+    f.domain.processPriorityRefreshJob(alias.id);
+    expect(f.services.jobs.get(alias.id)?.result).toEqual({ status: 'superseded' });
+    const next = f.services.jobs.listByTypeState(PRIORITY_PROJECTION_REBUILD_JOB_TYPE, 'queued', 50)[0]!;
+    expect(next).toMatchObject({ retryCount: 2, payload: { expectedProjectionVersion: null,
+      reasons: ['missing_projection'], recovery: { rootJobId: f.failed.id } } });
+    expect((next.payload as PriorityProjectionRebuildCommandV1).refreshFingerprint)
+      .not.toBe((f.failed.payload as PriorityProjectionRebuildCommandV1).refreshFingerprint);
+    f.domain.processNextDiscoveryJob();
+    expect(f.services.prioritizationRepository.getProjection(f.owner.prospectId)).not.toBeNull();
+    expect(f.services.jobs.get(first.id)).toEqual(first);
+  });
+
+  it.each(['timezone', 'source', 'rule', 'day', 'projection'] as const)('revalidates %s during actual recovery without stale writes or false supersession', change => {
+    const f = failedRecoveryFixture(); f.domain.scanAndEnqueueDiscoveryPage();
+    const child = f.services.jobs.listByTypeState(PRIORITY_PROJECTION_REBUILD_JOB_TYPE, 'queued', 50)[0]!;
+    if (change === 'timezone') database.raw.prepare("UPDATE workspace_settings SET timezone = 'America/Chicago' WHERE singleton = 1").run();
+    if (change === 'source') addDirectPhone(f.owner, 'recovery-new-phone');
+    if (change === 'rule') f.services.unitOfWork.immediate(() => {
+      f.services.prioritizationRepository.installRuleVersion({ ...f.services.prioritizationRepository.getActiveRuleVersion()!.document, id: 'recovery-rule', version: 2 });
+      f.services.prioritizationRepository.activateRuleVersion({ ruleVersionId: 'recovery-rule', expectedActiveRuleVersionId: 'founder-priority-v1' });
+    });
+    if (change === 'day') f.setAt('2026-08-31T12:00:00.000Z');
+    if (change === 'projection') f.services.prioritization.recalculateProspect({ evaluationId: 'newer-than-recovery', prospectId: f.owner.prospectId,
+      ruleVersionId: 'founder-priority-v1', evaluatedAt: f.clock.now(), expectedProjectionVersion: null });
+    f.domain.processPriorityRefreshJob(child.id);
+    expect(f.services.jobs.get(child.id)).toMatchObject({ state: 'succeeded', payload: child.payload, retryCount: 1 });
+    if (change === 'source' || change === 'rule' || change === 'day') expect(f.domain.processNextDiscoveryJob()).toBe(true);
+    const projection = f.services.prioritizationRepository.getProjection(f.owner.prospectId)!;
+    expect(projection).not.toBeNull();
+    if (change === 'timezone') expect(f.services.jobs.get(child.id)?.result).not.toEqual({ status: 'superseded' });
+    if (change === 'source') expect(projection.reachability).toBe('direct');
+    if (change === 'rule') expect(projection.ruleVersionId).toBe('recovery-rule');
+    if (change === 'projection') expect(projection.evaluationId).toBe('newer-than-recovery');
+  });
+
+  it.each([false, true])('keeps consumed-evaluation handoff atomic and never reports missing output repaired, exhausted=%s', exhausted => {
+    const f = failedRecoveryFixture();
+    if (exhausted) database.raw.prepare('UPDATE jobs SET retry_count = 2 WHERE id = ?').run(f.failed.id);
+    f.domain.scanAndEnqueueDiscoveryPage();
+    const child = f.services.jobs.listByTypeState(PRIORITY_PROJECTION_REBUILD_JOB_TYPE, 'queued', 50)[0]!;
+    const command = child.payload as PriorityProjectionRebuildCommandV1;
+    f.services.jobs.start(child.id, f.clock.now());
+    f.services.prioritization.recalculateProspect({ evaluationId: command.evaluationId, prospectId: command.prospectId,
+      ruleVersionId: command.ruleVersionId, evaluatedAt: command.evaluatedAt, expectedProjectionVersion: command.expectedProjectionVersion });
+    database.raw.prepare('DELETE FROM prospect_priority_projection WHERE prospect_id = ?').run(f.owner.prospectId);
+    const succeed = vi.spyOn(f.services.jobs, 'succeed');
+    if (!exhausted) succeed.mockImplementationOnce(() => { throw new Error('Synthetic handoff completion rollback'); });
+    f.domain.processPriorityRefreshJob(child.id);
+    succeed.mockRestore();
+    expect(f.services.prioritizationRepository.getProjection(f.owner.prospectId)).toBeNull();
+    expect(f.services.jobs.get(child.id)).toMatchObject({ state: 'failed', retryCount: exhausted ? 3 : 1 });
+    expect(database.raw.prepare('SELECT count(*) AS n FROM jobs').get()).toEqual({ n: 2 });
+    f.advance();
+    if (exhausted) {
+      f.domain.scanAndEnqueueDiscoveryPage();
+      expect(f.domain.processNextDiscoveryJob()).toBe(false); expect(f.domain.getDiscovery().processing).toBe('error');
+    } else {
+      f.domain.processPriorityRefreshJob(child.id);
+      const replacement = f.services.jobs.listByTypeState(PRIORITY_PROJECTION_REBUILD_JOB_TYPE, 'queued', 50)[0]!;
+      expect(replacement.retryCount).toBe(3);
+      expect(f.services.jobs.get(child.id)?.result).toEqual({ status: 'superseded_recovery', successorJobId: replacement.id });
+      f.domain.processPriorityRefreshJob(replacement.id);
+      expect(f.services.prioritizationRepository.getProjection(f.owner.prospectId)?.evaluationId).not.toBe(command.evaluationId);
+    }
+    expect(f.services.prioritizationRepository.getEvaluationById(command.evaluationId)).not.toBeNull();
+  });
+
+  it.each(['source', 'day'])('supersedes a consumed recovery evaluation after genuinely changed %s instead of forcing the old lineage', change => {
+    const f = failedRecoveryFixture(); f.domain.scanAndEnqueueDiscoveryPage();
+    const child = f.services.jobs.listByTypeState(PRIORITY_PROJECTION_REBUILD_JOB_TYPE, 'queued', 50)[0]!;
+    const command = child.payload as PriorityProjectionRebuildCommandV1;
+    f.services.jobs.start(child.id, f.clock.now());
+    f.services.prioritization.recalculateProspect({ evaluationId: command.evaluationId, prospectId: command.prospectId,
+      ruleVersionId: command.ruleVersionId, evaluatedAt: command.evaluatedAt, expectedProjectionVersion: command.expectedProjectionVersion });
+    database.raw.prepare('DELETE FROM prospect_priority_projection WHERE prospect_id = ?').run(f.owner.prospectId);
+    if (change === 'source') addDirectPhone(f.owner, 'changed-after-consumed-evaluation');
+    else f.setAt('2026-08-31T12:00:00.000Z');
+    f.domain.processPriorityRefreshJob(child.id);
+    expect(f.services.jobs.get(child.id)).toMatchObject({ state: 'succeeded', result: { status: 'superseded' }, payload: child.payload });
+    expect(f.domain.processNextDiscoveryJob()).toBe(true);
+    const projection = f.services.prioritizationRepository.getProjection(f.owner.prospectId)!;
+    expect(projection).not.toBeNull(); expect(projection.evaluationId).not.toBe(command.evaluationId);
+    expect(f.services.prioritizationRepository.getEvaluationById(command.evaluationId)).not.toBeNull();
+  });
 
   it('queues a missing-projection rebuild job for an eligible prospect', () => {
     seedProspect(database.raw, 'refresh-missing');
