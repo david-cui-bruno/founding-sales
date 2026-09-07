@@ -34,6 +34,8 @@ type Utterance = { id: string; transcript_id: string; activity_id: string; perso
   speaker: string; text: string; occurred_at: string; prospect_id: string | null; sequence: number;
   raw_text: string; transcript_storage_ref: string | null; consent_policy_record_id: string | null };
 const admissions = new WeakMap<DiscoveryEvidenceSnapshot, CollectionInput>();
+const dependencyKeys = ['identities', 'sourceRepository', 'events', 'outboundPermission',
+  'prioritizationRepository', 'prioritization', 'workspaceSettings'] as const satisfies readonly (keyof DiscoveryEvidenceServices)[];
 const normalized = (text: string) => text.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 const json = canonicalRuleJson;
 const hash = (value: unknown) => createHash('sha256').update(json(value)).digest('hex');
@@ -52,7 +54,7 @@ function freeze<T>(value: T): T {
 export function revalidateDiscoverySnapshot(snapshot: DiscoveryEvidenceSnapshot, database: AppDatabase,
   services: DiscoveryEvidenceServices): void {
   const input = admissions.get(snapshot);
-  if (!input || input.database !== database || input.services !== services
+  if (!input || input.database !== database || dependencyKeys.some(key => input.services[key] !== services[key])
     || collectDiscoveryEvidence(input).inputFingerprint !== snapshot.inputFingerprint) {
     throw new DiscoveryEvidenceDiagnosticError('stale_evidence');
   }
@@ -150,7 +152,39 @@ export function collectDiscoveryEvidence(input: CollectionInput): DiscoveryEvide
     }
     // The source must name this identity AND describe an already-linked exact property.
     const address = event.entity.property?.situs_address;
-    if (!address || !address.locality || !address.region) continue;
+    if (!address) continue;
+    const sourceParcelId = event.entity.property!.parcel_id;
+    const parcelMatches = sourceParcelId === null ? [] : properties.filter(p =>
+      (p.sourceRecord as { parcelId?: unknown } | null)?.parcelId === sourceParcelId);
+    if (parcelMatches.length > 1) {
+      const claim = sourceClaim(source, 'entity.property.parcel_id', 'Ambiguous linked parcel identifier', sourceParcelId);
+      conflicts.push({ kind: 'ownership', claimIds: [claim.id] }); continue;
+    }
+    if (parcelMatches.length === 1) {
+      const property = parcelMatches[0]!;
+      // Resolve only this Person's existing links. Never hide a known-parcel
+      // contradiction behind another property's otherwise scoreable evidence.
+      const fields = [
+        ['line1', property.addressLine1, address.line1], ['locality', property.locality, address.locality],
+        ['region', property.region, address.region], ['country_code', property.countryCode, address.country_code],
+        ['postal_code', property.postalCode, address.postal_code],
+      ] as const;
+      const disagreements = fields.filter(([, stored, observed]) => stored !== null && observed !== null
+        && normalized(stored) !== normalized(observed));
+      if (disagreements.length) {
+        const claimIds = [sourceClaim(source, 'entity.property.parcel_id', 'Linked parcel identifier', sourceParcelId).id];
+        for (const [field, stored, observed] of disagreements) {
+          claimIds.push(sourceClaim(source, `entity.property.situs_address.${field}`, `Conflicting property ${field}`, observed).id);
+          // Canonical rows have no independent citation carrier. Preserve their
+          // values as unresolved context, not as facts falsely citing this source.
+          claimIds.push(addClaim({ id: hash([source.id, property.id, field, stored]),
+            label: `Stored property ${property.id} ${field} requires reconciliation`, value: stored,
+            certainty: 'unknown', refs: [] }).id);
+        }
+        conflicts.push({ kind: 'property', claimIds }); continue;
+      }
+    }
+    if (!address.locality || !address.region) continue;
     const matches = properties.filter(p => p.addressLine2 === null && normalized(p.addressLine1) === normalized(address.line1)
       && normalized(p.locality) === normalized(address.locality!) && normalized(p.region) === normalized(address.region!)
       && p.countryCode.toUpperCase() === address.country_code.toUpperCase()
@@ -213,7 +247,7 @@ export function collectDiscoveryEvidence(input: CollectionInput): DiscoveryEvide
     const counts = supports.map(s => s.event.entity.property!.unit_count).filter((n): n is number => n !== null);
     const countConflict = new Set(counts).size > 1 || (property.doorCount !== null && counts.some(n => n !== property.doorCount));
     if (countConflict) conflicts.push({ kind: 'property', claimIds: supports.flatMap(s => s.doorClaim ? [s.doorClaim.id] : []) });
-    const maintenanceProfile = admitProfile(property, usableUtterances, addClaim, conflicts);
+    const maintenanceProfile = admitProfile(property, properties, usableUtterances, addClaim, conflicts);
     admittedProperties.push({ id: property.id, doorCount: countConflict ? null : counts[0] ?? null,
       countryCode: property.countryCode, region: property.region, locality: property.locality,
       verifiedAt: property.verifiedAt !== null && property.verifiedAt <= asOf ? property.verifiedAt : null, maintenanceProfile });
@@ -249,7 +283,8 @@ export function collectDiscoveryEvidence(input: CollectionInput): DiscoveryEvide
     && (a.prospect_id === null || a.prospect_id === prospectId)
     && (a.kind === 'interview' || (a.kind === 'call' && (a.observed_outcome === 'spoke' || a.call_outcome === 'spoke'))));
   const conflictIds = new Set(conflicts.flatMap(c => c.claimIds));
-  const completeClaims = [...validatedClaims.filter(c => conflictIds.has(c.id)), ...validatedClaims.filter(c => !conflictIds.has(c.id)), ...presentation];
+  const allClaims = [...validatedClaims, ...presentation];
+  const completeClaims = [...allClaims.filter(c => conflictIds.has(c.id)), ...allClaims.filter(c => !conflictIds.has(c.id))];
   const snapshot: DiscoveryEvidenceSnapshot = {
     personId: person.id, prospectId, salesCycleId: cycle.id, personName: person.displayName,
     personVersion: person.version, prospectVersion: prospect.version, cycleVersion: cycle.version,
@@ -263,7 +298,10 @@ export function collectDiscoveryEvidence(input: CollectionInput): DiscoveryEvide
     conversationActivityIds: conversations.map(a => String(a.id)), inputFingerprint: createHash('sha256').update(rawJson).digest('hex'), ruleVersionId: rule.id,
   };
   bound({ raw, snapshot });
-  freeze(snapshot); admissions.set(snapshot, { ...input });
+  // Capture bindings, not a mutable caller-owned container or the full service graph.
+  const { identities, sourceRepository, events, outboundPermission, prioritizationRepository, prioritization, workspaceSettings } = services;
+  freeze(snapshot); admissions.set(snapshot, { ...input,
+    services: { identities, sourceRepository, events, outboundPermission, prioritizationRepository, prioritization, workspaceSettings } });
   return snapshot;
 }
 
@@ -272,8 +310,11 @@ function utteranceRef(u: Utterance): DiscoveryEvidenceRef {
 }
 
 /** Deliberately narrow explicit statements, not sentiment, keywords, or model labels. */
-function admitProfile(property: Property, utterances: Utterance[], add: (c: DiscoveryClaim) => DiscoveryClaim,
+function admitProfile(property: Property, linkedProperties: Property[], utterances: Utterance[], add: (c: DiscoveryClaim) => DiscoveryClaim,
   conflicts: Array<{ kind: 'identity' | 'ownership' | 'property'; claimIds: string[] }>): MaintenanceProfileV1 | null {
+  // Street-only sentences cannot distinguish cities, units, or duplicate linked rows.
+  // Include unsupported linked properties too. A profile's refs cannot resolve ambiguity.
+  if (linkedProperties.filter(p => normalized(p.addressLine1) === normalized(property.addressLine1)).length !== 1) return null;
   let profile: MaintenanceProfileV1 | null;
   try { profile = parseMaintenanceProfileV1(property.maintenanceProfile); } catch { profile = null; }
   const supported: Array<{ management: 'self_managed' | 'third_party'; claim: DiscoveryClaim; id: string }> = [];

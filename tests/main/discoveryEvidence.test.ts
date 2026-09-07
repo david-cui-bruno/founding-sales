@@ -258,6 +258,42 @@ describe('coherent collector evidence admission', () => {
     expect(amended.inputFingerprint).not.toBe(snapshot.inputFingerprint);
   });
 
+  it.each(['other-locality', 'normalized-unit'])('does not attribute an ambiguous street-only statement across linked properties: %s', context => {
+    const event = validParcelEvent(); const owner = intake(event);
+    const property = f.services.identities.listPropertiesForProspect(owner.prospectId)[0]!;
+    if (context === 'other-locality') {
+      const second = validParcelEvent(); second.idempotency_key = 'e'.repeat(64); second.id = 'se_01JC0000000000000000000004';
+      second.entity.property!.parcel_id = 'AMBIGUOUS-SECOND'; second.entity.property!.situs_address.locality = 'Pawtucket';
+      const mapped = mapCloudSourceEvent(second); if (mapped.kind !== 'intake') throw new Error('Expected intake');
+      expect(f.services.sources.createPersonProspect(mapped.command).personId).toBe(owner.personId);
+    } else {
+      f.services.unitOfWork.immediate(() => {
+        const unit = f.services.identities.createProperty({ addressLine1: `  ${property.addressLine1.toUpperCase()}  `,
+          addressLine2: 'unit 2', locality: property.locality, region: property.region, countryCode: property.countryCode });
+        f.services.identities.linkProperty({ prospectId: owner.prospectId, propertyId: unit.id });
+      });
+    }
+    const linked = f.services.identities.listPropertiesForProspect(owner.prospectId);
+    expect(linked).toHaveLength(2);
+    const baselineFit = evaluateDiscovery({ snapshot: collect(owner.prospectId), rule: BUILTIN_PRIORITIZATION_RULE_V1, asOf: DISCOVERY_NOW }).axes.fit?.points;
+    const cycle = f.database.raw.prepare('SELECT id FROM sales_cycles WHERE prospect_id = ?').get(owner.prospectId) as { id: string };
+    const quote = `I self-manage ${property.addressLine1}.`;
+    const ref = statement({ ...owner, salesCycleId: cycle.id }, quote, 'ambiguous-management');
+    for (const p of linked) f.database.raw.prepare('UPDATE properties SET maintenance_profile_json = ? WHERE id = ?').run(
+      JSON.stringify({ formatVersion: 1, management: 'self_managed', relevantProfile: 'unknown', evidenceRefs: [ref] }), p.id);
+    const before = f.database.raw.prepare('SELECT total_changes() AS n').get();
+    const snapshot = collect(owner.prospectId);
+    expect(snapshot.properties).toHaveLength(context === 'other-locality' ? 2 : 1);
+    expect(snapshot.properties.every(p => p.maintenanceProfile === null)).toBe(true);
+    expect(snapshot.validatedClaims.some(c => c.value === 'self_managed')).toBe(false);
+    expect(snapshot.conflicts).toEqual([]);
+    expect(snapshot.validatedClaims.find(c => c.value === quote)?.refs[0]).toMatchObject({ kind: 'utterance', utteranceId: ref, quote });
+    const assessment = evaluateDiscovery({ snapshot, rule: BUILTIN_PRIORITIZATION_RULE_V1, asOf: DISCOVERY_NOW });
+    expect(assessment.unknowns).toContain('Management style is unknown');
+    expect(assessment.axes.fit?.points).toBe(baselineFit);
+    expect(f.database.raw.prepare('SELECT total_changes() AS n').get()).toEqual(before);
+  });
+
   it.each(['wrong-person', 'wrong-property', 'founder', 'unknown', 'unsupported'])('rejects %s statement proof', (kind) => {
     const owner = seedDiscoveryOwner(f, { prefix: 'speaker', units: 10 });
     const other = seedDiscoveryOwner(f, { prefix: 'other-speaker', units: 5 });
@@ -281,6 +317,79 @@ describe('coherent collector evidence admission', () => {
     expect(snapshot.conflicts.some(c => c.kind === 'property')).toBe(true);
     expect(evaluateDiscovery({ snapshot, rule: BUILTIN_PRIORITIZATION_RULE_V1, asOf: DISCOVERY_NOW }).disposition).toBe('judgment');
     expect(f.services.identities.listPropertiesForProspect(owner.prospectId)[0]?.doorCount).toBe(10);
+  });
+
+  it.each([
+    ['line1', 'address_line_1', '99 Founder St'], ['locality', 'locality', 'Cranston'],
+    ['region', 'region', 'MA'], ['country_code', 'country_code', 'CA'], ['postal_code', 'postal_code', '99999'],
+  ])('retains known-parcel %s disagreement for judgment despite another supported property and display truncation', (field, column, storedValue) => {
+    const event = validParcelEvent(); const owner = intake(event);
+    const property = f.services.identities.listPropertiesForProspect(owner.prospectId)[0]!;
+    const second = validParcelEvent(); second.idempotency_key = '9'.repeat(64); second.id = 'se_01JC0000000000000000000006';
+    second.entity.property!.parcel_id = 'INDEPENDENT-SECOND'; second.entity.property!.situs_address.line1 = 'Second St';
+    second.entity.property!.unit_count = 10;
+    const mapped = mapCloudSourceEvent(second); if (mapped.kind !== 'intake') throw new Error('Expected intake');
+    expect(f.services.sources.createPersonProspect(mapped.command).personId).toBe(owner.personId);
+    for (let i = 0; i < 20; i++) f.services.sources.appendSourceInteraction({ id: `address-repeat-${i}`, personId: owner.personId,
+      prospectId: owner.prospectId, channel: 'parcel', observedAt: second.observed_at, sourceRecord: { cloudSourceEvent: second } });
+    f.database.raw.prepare(`UPDATE properties SET ${column} = ? WHERE id = ?`).run(storedValue, property.id);
+    const rows = f.database.raw.prepare('SELECT * FROM properties ORDER BY id').all();
+    const sources = f.database.raw.prepare('SELECT * FROM source_events ORDER BY id').all();
+    const changes = f.database.raw.prepare('SELECT total_changes() AS n').get();
+    const snapshot = collect(owner.prospectId);
+    expect(snapshot.properties).toHaveLength(1);
+    expect(snapshot.properties[0]?.doorCount).toBe(10);
+    const assessment = evaluateDiscovery({ snapshot, rule: BUILTIN_PRIORITIZATION_RULE_V1, asOf: DISCOVERY_NOW });
+    expect(assessment.disposition).toBe('judgment');
+    expect(assessment.axes.fit).toBeNull();
+    expect(snapshot.conflicts.some(c => c.kind === 'property')).toBe(true);
+    expect(snapshot.validatedClaims.length).toBeGreaterThan(100);
+    const sourceAddress = event.entity.property!.situs_address;
+    const sourceValue = sourceAddress[field as keyof typeof sourceAddress];
+    const sourceClaim = snapshot.validatedClaims.find(c => c.refs.some(r => r.kind === 'source'
+      && r.sourceEventId === owner.sourceEventId && r.field === `entity.property.situs_address.${field}`))!;
+    expect(sourceClaim).toMatchObject({ value: sourceValue, certainty: 'fact', refs: [{ kind: 'source',
+      sourceEventId: owner.sourceEventId, field: `entity.property.situs_address.${field}`, observedAt: event.observed_at }] });
+    expect(validateDiscoveryClaim({ snapshot, claim: sourceClaim })).toBe(true);
+    expect(validateDiscoveryClaim({ snapshot, claim: { ...sourceClaim, value: storedValue } })).toBe(false);
+    expect(snapshot.conflicts.some(c => c.claimIds.includes(sourceClaim.id))).toBe(true);
+    expect(snapshot.claims).toContainEqual(sourceClaim);
+    expect(assessment.claims).toContainEqual(sourceClaim);
+    const storedClaim = snapshot.claims.find(c => c.value === storedValue)!;
+    expect(storedClaim).toMatchObject({ certainty: 'unknown', refs: [] });
+    expect(validateDiscoveryClaim({ snapshot, claim: storedClaim })).toBe(false);
+    expect(assessment.claims).toContainEqual(storedClaim);
+    expect(f.database.raw.prepare('SELECT * FROM properties ORDER BY id').all()).toEqual(rows);
+    expect(f.database.raw.prepare('SELECT * FROM source_events ORDER BY id').all()).toEqual(sources);
+    expect(f.database.raw.prepare('SELECT total_changes() AS n').get()).toEqual(changes);
+  });
+
+  it('refuses ambiguous linked parcel identifiers rather than choosing one exact civic match', () => {
+    const owner = seedDiscoveryOwner(f, { prefix: 'duplicate-parcel', units: 10 });
+    const property = f.services.identities.listPropertiesForProspect(owner.prospectId)[0]!;
+    f.services.unitOfWork.immediate(() => {
+      const duplicate = f.services.identities.createProperty({ addressLine1: 'Another St', locality: property.locality,
+        region: property.region, countryCode: property.countryCode, sourceRecord: property.sourceRecord });
+      f.services.identities.linkProperty({ prospectId: owner.prospectId, propertyId: duplicate.id });
+    });
+    const snapshot = collect(owner.prospectId);
+    expect(snapshot.properties).toEqual([]);
+    expect(snapshot.conflicts.some(c => c.kind === 'ownership')).toBe(true);
+  });
+
+  it('does not globally match an unrelated source parcel to an unlinked property', () => {
+    const owner = seedDiscoveryOwner(f, { prefix: 'unlinked-parcel', units: 10 });
+    const event = structuredClone(f.services.sourceRepository.getById(owner.sourceEventId)!.sourceRecord.cloudSourceEvent) as CloudSourceEvent;
+    event.entity.property!.parcel_id = 'UNLINKED-PARCEL'; event.entity.property!.situs_address.line1 = 'Unlinked St';
+    event.entity.property!.unit_count = 99;
+    f.services.unitOfWork.immediate(() => f.services.identities.createProperty({ addressLine1: 'Different Stored St', locality: 'Providence',
+      region: 'RI', countryCode: 'US', sourceRecord: { parcelId: 'UNLINKED-PARCEL' } }));
+    append(owner, event, 'unlinked-source');
+    const snapshot = collect(owner.prospectId);
+    expect(snapshot.conflicts).toEqual([]);
+    expect(snapshot.properties).toHaveLength(1);
+    expect(snapshot.properties[0]?.doorCount).toBe(10);
+    expect(snapshot.validatedClaims.some(c => c.refs.some(r => r.kind === 'source' && r.sourceEventId === 'unlinked-source'))).toBe(false);
   });
 
   it('does not invent a missing property attachment or support from a verified timestamp', () => {
