@@ -3,9 +3,18 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
 import type { AppDatabase } from '../db/database';
-import type { EnqueueJobInput, JobRecord } from './jobTypes';
+import { PRIORITY_PROJECTION_REBUILD_JOB_TYPE } from '../domain/startup/domainStartupTypes';
+import type { EnqueueJobInput, JobRecord, JobState } from './jobTypes';
 
 export type { EnqueueJobInput, JobRecord, JobState } from './jobTypes';
+
+export type DiscoveryJobType = 'discovery_assessment' | typeof PRIORITY_PROJECTION_REBUILD_JOB_TYPE;
+const discoveryJobTypeSchema = z.enum(['discovery_assessment', PRIORITY_PROJECTION_REBUILD_JOB_TYPE]);
+const queryLimitSchema = z.number().int().min(1).max(50);
+const retryableDiscoverySql = `state = 'failed' AND retry_count < 3
+  AND error_code IN ('discovery_transient', 'interrupted_by_restart', 'research_timeout', 'research_failed')`;
+const discoveryDueSql = `CASE WHEN state IN ('queued', 'running') THEN 0
+  ELSE unixepoch(updated_at, 'subsec') * 1000 + CASE retry_count WHEN 0 THEN 1000 WHEN 1 THEN 5000 ELSE 30000 END END`;
 
 const jobStateSchema = z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled']);
 const jobIdSchema = z.string().min(1);
@@ -201,8 +210,8 @@ export class JobRepository {
     return parseStoredJobRow(row);
   }
 
-  start(id: string): JobRecord {
-    const timestamp = new Date().toISOString();
+  start(id: string, at?: string): JobRecord {
+    const timestamp = utcIsoTimestampSchema.parse(at ?? new Date().toISOString());
 
     return this.updateAndRead(
       `UPDATE jobs
@@ -253,8 +262,8 @@ export class JobRepository {
     );
   }
 
-  succeed(id: string, result: unknown): JobRecord {
-    const timestamp = new Date().toISOString();
+  succeed(id: string, result: unknown, at?: string): JobRecord {
+    const timestamp = utcIsoTimestampSchema.parse(at ?? new Date().toISOString());
     const resultJson = serializeJson(result, 'result');
 
     return this.updateAndRead(
@@ -268,9 +277,9 @@ export class JobRepository {
     );
   }
 
-  fail(id: string, error: { code: string; message: string }): JobRecord {
+  fail(id: string, error: { code: string; message: string }, at?: string): JobRecord {
     const parsedError = errorSchema.parse(error);
-    const timestamp = new Date().toISOString();
+    const timestamp = utcIsoTimestampSchema.parse(at ?? new Date().toISOString());
 
     return this.updateAndRead(
       `UPDATE jobs
@@ -316,6 +325,39 @@ export class JobRepository {
       .all();
 
     return rows.map(parseStoredJobRow);
+  }
+
+  listByTypeState(type: DiscoveryJobType, state: JobState, limit: number): JobRecord[] {
+    const rows = this.database.raw.prepare(`SELECT ${returnedJobColumns} FROM jobs
+      WHERE type = ? AND state = ? ORDER BY created_at ASC, id ASC LIMIT ?`)
+      .all(discoveryJobTypeSchema.parse(type), jobStateSchema.parse(state), queryLimitSchema.parse(limit));
+    return rows.map(parseStoredJobRow);
+  }
+
+  retryFailed(id: string, at: string): JobRecord {
+    const timestamp = utcIsoTimestampSchema.parse(at);
+    return this.updateAndRead(`UPDATE jobs SET state = 'queued', retry_count = retry_count + 1,
+      progress_current = 0, result_json = NULL, error_code = NULL, error_message = NULL,
+      started_at = NULL, finished_at = NULL, updated_at = ?
+      WHERE id = ? AND type IN (?, ?) AND state = 'failed' AND retry_count < 3 RETURNING ${returnedJobColumns}`,
+    [timestamp, jobIdSchema.parse(id), 'discovery_assessment', PRIORITY_PROJECTION_REBUILD_JOB_TYPE], id);
+  }
+
+  /** Filter BEFORE LIMIT so exhausted/diagnostic failures cannot starve later jobs. */
+  listDueDiscovery(at: string, limit: number): JobRecord[] {
+    const now = Date.parse(utcIsoTimestampSchema.parse(at));
+    return this.database.raw.prepare(`SELECT ${returnedJobColumns} FROM jobs
+      WHERE type IN (?, ?) AND (state IN ('queued', 'running') OR (${retryableDiscoverySql}))
+      AND ${discoveryDueSql} <= ? ORDER BY created_at ASC, id ASC LIMIT ?`)
+      .all('discovery_assessment', PRIORITY_PROJECTION_REBUILD_JOB_TYPE, now, queryLimitSchema.parse(limit)).map(parseStoredJobRow);
+  }
+
+  nextDiscoveryDelay(at: string): number | null {
+    const now = Date.parse(utcIsoTimestampSchema.parse(at));
+    const row = this.database.raw.prepare(`SELECT min(${discoveryDueSql}) AS due FROM jobs
+      WHERE type IN (?, ?) AND (state IN ('queued', 'running') OR (${retryableDiscoverySql}))`)
+      .get('discovery_assessment', PRIORITY_PROJECTION_REBUILD_JOB_TYPE) as { due: number | null };
+    return row.due === null ? null : Math.max(0, z.number().finite().parse(row.due) - now);
   }
 
   recoverInterruptedJobs(at?: string): number {

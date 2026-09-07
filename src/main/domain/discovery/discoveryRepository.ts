@@ -9,6 +9,7 @@ import {
 import type { AppDatabase } from '../../db/database';
 import { DomainRepositoryDatabaseMismatchError } from '../support/domainErrors';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
+import type { DiscoveryScanPage } from './discoveryTypes';
 import { PROSPECT_PRIORITY_ORDER_BY_SQL } from '../prioritization/priorityOrdering';
 
 const shape = discoveryAssessmentSchema.shape;
@@ -269,13 +270,39 @@ export class DiscoveryRepository {
       assessment.prospectId, request.salesCycleId, request.expectedFingerprint, receipt.actionId, requestJson, receiptJson);
   }
 
-  readScanCursor(): string | null {
+  listScanPage(input: { afterProspectId: string | null; limit: number }): DiscoveryScanPage {
+    const parsed = z.object({ afterProspectId: shape.prospectId.nullable(), limit: z.number().int().min(1).max(50) }).strict().parse(input);
+    return read(() => {
+      const rows = this.database.raw.prepare(`SELECT p.id, p.person_id, n.id AS owner_id FROM prospects p
+        LEFT JOIN persons n ON n.id = p.person_id
+        WHERE (? IS NULL OR p.id COLLATE BINARY > ?)
+        ORDER BY p.id COLLATE BINARY ASC LIMIT ?`).all(parsed.afterProspectId, parsed.afterProspectId, parsed.limit);
+      const prospectIds = rows.map(row => z.object({ id: shape.prospectId, person_id: shape.personId, owner_id: shape.personId })
+        .strict().refine(value => value.person_id === value.owner_id).parse(row).id);
+      const done = prospectIds.length < parsed.limit;
+      return { prospectIds, cursor: done ? null : prospectIds.at(-1)!, done };
+    });
+  }
+
+  readScanState(): { cursor: string | null; lastCompleteScanAt: string | null; lastCompleteLocalDate: string | null } {
     return read(() => {
       const rows = this.database.raw.prepare('SELECT * FROM discovery_scan_state').all();
-      if (rows.length === 0) return null;
+      if (rows.length === 0) return { cursor: null, lastCompleteScanAt: null, lastCompleteLocalDate: null };
       if (rows.length !== 1) return corrupt();
-      return scanRowSchema.parse(rows[0]).cursor;
+      const row = scanRowSchema.parse(rows[0]);
+      return { cursor: row.cursor, lastCompleteScanAt: row.last_complete_scan_at, lastCompleteLocalDate: row.last_complete_local_date };
     });
+  }
+
+  readScanCursor(): string | null { return this.readScanState().cursor; }
+
+  completeScan(at: string, localDate: string): void {
+    this.unitOfWork.assertWriteScope();
+    const timestamp = shape.evaluatedAt.parse(at); const date = shape.localDate.parse(localDate);
+    this.readScanState();
+    this.database.raw.prepare(`INSERT INTO discovery_scan_state(singleton, cursor, last_complete_scan_at, last_complete_local_date)
+      VALUES (1, NULL, ?, ?) ON CONFLICT(singleton) DO UPDATE SET cursor = NULL,
+      last_complete_scan_at = excluded.last_complete_scan_at, last_complete_local_date = excluded.last_complete_local_date`).run(timestamp, date);
   }
 
   writeScanCursor(cursor: string | null): void {

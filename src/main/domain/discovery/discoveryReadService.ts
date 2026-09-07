@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PRIORITY_PROJECTION_REBUILD_JOB_TYPE } from '../startup/domainStartupTypes';
 import {
   discoveryBriefRequestSchema, discoveryBriefSchema, discoverySnapshotSchema,
   type DiscoveryAssessment, type DiscoveryBrief, type DiscoveryOverride, type DiscoverySnapshot,
@@ -22,7 +23,7 @@ type ReadTime = { asOf: string; localDate: string; ruleVersionId: string | null 
 type Checked = { brief: DiscoveryBrief; researchDiagnostic: boolean };
 const MAX_CHECKS = 50;
 const PAGE_SIZE = 10;
-const jobTypes = ['discovery.scan', 'discovery.assess', 'discovery.research'] as const;
+const jobTypes = ['discovery_assessment', PRIORITY_PROJECTION_REBUILD_JOB_TYPE] as const;
 
 /** SELECT-only composition. No preparation, refresh, worker reference, or cached evidence. */
 export class DiscoveryReadService {
@@ -178,18 +179,19 @@ export class DiscoveryReadService {
 
   private processing(): DiscoverySnapshot['processing'] {
     const { database, services } = this.input;
-    services.discoveryRepository.readScanCursor(); // Validate durable scan state, never start/resume it.
+    const scanCursor = services.discoveryRepository.readScanCursor(); // Validate durable scan state, never start/resume it.
     const latest = jobTypes.flatMap(type => {
       const row = database.raw.prepare(`SELECT id FROM jobs WHERE type = ?
         ORDER BY created_at DESC, id COLLATE BINARY DESC LIMIT 1`).get(type) as { id: string } | undefined;
       return row === undefined ? [] : [services.jobs.get(row.id)!];
     });
-    // Active state is indexed and authoritative even if a newer queued job exists.
-    for (const type of jobTypes) {
-      const row = database.raw.prepare("SELECT id FROM jobs WHERE type = ? AND state = 'running' LIMIT 1").get(type) as { id: string } | undefined;
-      if (row !== undefined && services.jobs.get(row.id)?.state === 'running') return 'running';
+    // Any unfinished owned work matters, not only the newest successful command.
+    for (const state of ['running', 'queued', 'failed'] as const) {
+      if (jobTypes.some(type => services.jobs.listByTypeState(type, state, 1).length > 0)) {
+        return state === 'failed' ? 'error' : 'running';
+      }
     }
-    if (latest.some(job => job.state === 'failed')) return 'error';
+    if (scanCursor !== null) return 'running';
     if (latest.some(job => job.state === 'cancelled')) return 'paused';
     return 'idle';
   }

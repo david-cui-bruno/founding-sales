@@ -64,6 +64,26 @@ function setStage(o: Owner, stage: 'contacted' | 'interviewed' | 'offered') {
 const todayInput = { timezone: 'America/New_York', capacity: DEFAULT_TODAY_CAPACITY, channelPolicies: FOUNDER_CHANNEL_POLICIES_V1 };
 
 describe('encrypted read-only discovery composition', () => {
+  it('reports an unfinished durable scan page as running even between completed job batches', () => {
+    const o = owner('cursor-progress');
+    f.services.unitOfWork.immediate(() => f.services.discoveryRepository.writeScanCursor(o.prospectId));
+    const before = selectedBusinessRows();
+    expect(f.services.discoveryRead.get().processing).toBe('running');
+    expect(selectedBusinessRows()).toEqual(before);
+  });
+
+  it('reports actual owned queued work and does not hide an older failure behind a newer success', () => {
+    owner('actual-jobs');
+    const jobs = f.services.jobs;
+    const queued = jobs.enqueue({ type: 'discovery_assessment', payload: {}, at: now });
+    expect(f.services.discoveryRead.get().processing).toBe('running');
+    jobs.start(queued.id); jobs.fail(queued.id, { code: 'invalid_evidence', message: 'Synthetic invalid evidence' });
+    const newer = jobs.enqueue({ type: 'priority_projection_rebuild_v1', payload: {}, at: '2026-09-06T12:00:01.000Z' });
+    jobs.start(newer.id); jobs.succeed(newer.id, {});
+    const before = selectedBusinessRows();
+    expect(f.services.discoveryRead.get().processing).toBe('error');
+    expect(selectedBusinessRows()).toEqual(before);
+  });
   it('composes an idle Not assessed read without writes, jobs or capability claims', () => {
     const o = owner('pending'); const before = selectedBusinessRows();
     expect(f.services.discoveryRead).toBeDefined();
@@ -280,16 +300,17 @@ describe('encrypted read-only discovery composition', () => {
     owner('jobs'); const jobs = f.services.jobs;
     const unrelated = jobs.enqueue({ type: 'other', payload: {}, at: now }); jobs.start(unrelated.id);
     expect(f.services.discoveryRead.get().processing).toBe('idle');
-    const j = jobs.enqueue({ type: 'discovery.scan', payload: {}, at: now });
-    expect(f.services.discoveryRead.get().processing).toBe('idle');
+    const j = jobs.enqueue({ type: 'discovery_assessment', payload: {}, at: now });
+    expect(f.services.discoveryRead.get().processing).toBe('running');
     jobs.start(j.id); expect(f.services.discoveryRead.get().processing).toBe('running');
     jobs.fail(j.id, { code: 'test_error', message: 'Synthetic failure' });
     expect(f.services.discoveryRead.get().processing).toBe('error');
+    jobs.retryFailed(j.id, now); jobs.start(j.id); jobs.succeed(j.id, {});
     now = '2026-09-06T12:00:01.000Z';
-    const paused = jobs.enqueue({ type: 'discovery.scan', payload: {}, at: now });
+    const paused = jobs.enqueue({ type: 'discovery_assessment', payload: {}, at: now });
     jobs.cancel(paused.id); expect(f.services.discoveryRead.get().processing).toBe('paused');
     now = '2026-09-06T12:00:02.000Z';
-    const succeeded = jobs.enqueue({ type: 'discovery.scan', payload: {}, at: now });
+    const succeeded = jobs.enqueue({ type: 'discovery_assessment', payload: {}, at: now });
     jobs.start(succeeded.id); jobs.succeed(succeeded.id, {});
     expect(f.services.discoveryRead.get().processing).toBe('idle');
     const before = selectedBusinessRows(); f.services.discoveryRead.get(); expect(selectedBusinessRows()).toEqual(before);

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
+import { createFounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import { DomainRuntime } from '../../src/main/domain/domainRuntime';
 import {
   PRIORITY_PROJECTION_REBUILD_JOB_TYPE,
@@ -108,6 +109,7 @@ describe('priority projection refresh at startup', () => {
       type: string; state: string; idempotency_key: string; payload_json: string;
     };
     expect(job.state).toBe('queued');
+    expect(job.type).toBe('priority_projection_rebuild_v1');
     const payload = JSON.parse(job.payload_json) as Record<string, unknown>;
     expect(payload).toMatchObject({
       formatVersion: 1,
@@ -124,6 +126,44 @@ describe('priority projection refresh at startup', () => {
       founderLocalDate: '2026-08-30',
       refreshFingerprint: payload.refreshFingerprint as string,
     }));
+  });
+
+  it('executes the actual startup-enqueued durable v1 command through prioritization', () => {
+    const p = seedProspect(database.raw, 'execute-refresh');
+    const runtime = buildRuntime(); runtime.initialize();
+    const services = runtime.getServices();
+    const queued = services.jobs.listActive().find(j => j.type === PRIORITY_PROJECTION_REBUILD_JOB_TYPE)!;
+    const domain = createFounderSalesDomain({ database, services, clock: { now: () => BOOT_AT }, ids: { next: () => 'unused-id' } });
+    domain.processPriorityRefreshJob(queued.id);
+    expect(services.jobs.get(queued.id)?.state).toBe('succeeded');
+    expect(services.prioritizationRepository.getProjection(p.prospectId)).toMatchObject({ ruleVersionId: 'founder-priority-v1', version: 1 });
+    const before = services.prioritizationRepository.getProjection(p.prospectId);
+    domain.processPriorityRefreshJob(queued.id);
+    expect(services.prioritizationRepository.getProjection(p.prospectId)).toEqual(before);
+  });
+
+  it.each(['source', 'rule', 'projection'] as const)('revalidates %s before executing an older startup refresh command', kind => {
+    const p = seedProspect(database.raw, `changed-${kind}`); const runtime = buildRuntime(); runtime.initialize();
+    const services = runtime.getServices(); const old = services.jobs.listActive()[0]!;
+    const domain = createFounderSalesDomain({ database, services, clock: { now: () => BOOT_AT }, ids: { next: () => `successor-${++runtimeCounter}` } });
+    if (kind === 'source') addDirectPhone(p, 'changed-contact');
+    if (kind === 'rule') services.unitOfWork.immediate(() => {
+      services.prioritizationRepository.installRuleVersion({ ...services.prioritizationRepository.getActiveRuleVersion()!.document, id: 'worker-refresh-v2', version: 2 });
+      services.prioritizationRepository.activateRuleVersion({ ruleVersionId: 'worker-refresh-v2', expectedActiveRuleVersionId: 'founder-priority-v1' });
+    });
+    if (kind === 'projection') services.prioritization.recalculateProspect({ evaluationId: 'newer-projection', prospectId: p.prospectId,
+      ruleVersionId: 'founder-priority-v1', evaluatedAt: BOOT_AT, expectedProjectionVersion: null });
+    domain.processPriorityRefreshJob(old.id);
+    expect(services.jobs.get(old.id)).toMatchObject({ state: 'succeeded', payload: old.payload });
+    if (kind !== 'projection') {
+      expect(services.prioritizationRepository.getProjection(p.prospectId)).toBeNull();
+      expect(domain.processNextDiscoveryJob()).toBe(true);
+    }
+    const projection = services.prioritizationRepository.getProjection(p.prospectId)!;
+    expect(projection.ruleVersionId).toBe(kind === 'rule' ? 'worker-refresh-v2' : 'founder-priority-v1');
+    expect(projection.version).toBe(1);
+    if (kind === 'source') expect(projection.reachability).toBe('direct');
+    if (kind === 'projection') expect(projection.evaluationId).toBe('newer-projection');
   });
 
   it('same-local-day restart reuses the exact stored job without duplication', () => {

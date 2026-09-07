@@ -188,6 +188,61 @@ describe('startApplication', () => {
     } finally { await app.shutdown(); }
   });
 
+  it('starts one discovery owner before the window and stops admission before awaiting its idle drain', async () => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    const drain = deferred<void>();
+    dependencies.createDiscoveryWorker = () => {
+      events.push('discovery-created');
+      return { start: () => { events.push('discovery-start'); }, wake: () => undefined,
+        stop: () => { events.push('discovery-stop'); }, idle: () => drain.promise };
+    };
+    const app = await startApplication({ appVersion: '1', userDataPath: '/fixture/discovery',
+      createWindow: () => { events.push('window'); } }, dependencies);
+    try {
+      expect(events.filter(e => e === 'discovery-start')).toHaveLength(1);
+      expect(events.indexOf('discovery-start')).toBeLessThan(events.indexOf('window'));
+      const shutdown = app.shutdown();
+      expect(events).toContain('discovery-stop');
+      expect(events).not.toContain('close');
+      drain.resolve(); await shutdown;
+      expect(events.at(-1)).toBe('close');
+    } finally { drain.resolve(); await app.shutdown(); }
+  });
+
+  it.each(['start', 'window', 'abort'] as const)('stops and drains discovery before SQLite during %s startup failure', async failure => {
+    const events: string[] = []; const dependencies = createDependencies(events);
+    const controller = new AbortController(); const windowEntered = deferred<void>(); const windowDone = deferred<void>();
+    const idle = deferred<void>();
+    dependencies.createDiscoveryWorker = input => {
+      expect(input.research.capability()).toBe('not_configured');
+      return { wake: () => undefined, start: () => { events.push('worker-start'); if (failure === 'start') throw new Error('worker start failed'); },
+        stop: () => { events.push('worker-stop'); }, idle: () => { events.push('worker-idle'); return idle.promise; } };
+    };
+    const pending = startApplication({ appVersion: '1', userDataPath: '/fixture/worker-rollback', signal: controller.signal,
+      createWindow: () => { windowEntered.resolve(); if (failure === 'window') throw new Error('window failed'); return windowDone.promise; } }, dependencies);
+    const rejected = expect(pending).rejects.toThrow();
+    if (failure === 'abort') {
+      await windowEntered.promise; controller.abort();
+      expect(events).toContain('worker-stop'); expect(events).not.toContain('close'); windowDone.resolve();
+    }
+    // Release only after the caller has retained the rejection handler.
+    idle.resolve(); await rejected;
+    expect(events.filter(e => e === 'worker-stop')).toHaveLength(1);
+    expect(events.indexOf('worker-stop')).toBeLessThan(events.indexOf('worker-idle'));
+    expect(events.indexOf('worker-idle')).toBeLessThan(events.indexOf('close'));
+  });
+
+  it('preserves aggregate cleanup errors when discovery stop and idle both fail', async () => {
+    const events: string[] = []; const dependencies = createDependencies(events);
+    dependencies.createDiscoveryWorker = () => ({ start: () => undefined, wake: () => undefined,
+      stop: () => { throw new Error('worker stop failed'); }, idle: async () => { throw new Error('worker idle failed'); } });
+    const app = await startApplication({ appVersion: '1', userDataPath: '/fixture/worker-errors', createWindow: () => undefined }, dependencies);
+    await expect(app.shutdown()).rejects.toMatchObject({ errors: [expect.objectContaining({ message: 'worker stop failed' }),
+      expect.objectContaining({ message: 'worker idle failed' })] });
+    expect(events.at(-1)).toBe('close');
+  });
+
   it('closes synchronously before owner drains and reserves one shutdown completion before reentrant disposal', async () => {
     const events: string[] = [];
     const dependencies = createDependencies(events);

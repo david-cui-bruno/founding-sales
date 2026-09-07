@@ -4,8 +4,10 @@ import { createHash } from 'node:crypto';
 
 import Papa from 'papaparse';
 import { z } from 'zod';
+import { DiscoveryWorkerCommands, type DiscoveryResearchRequest } from '../discovery/discoveryWorker';
+import type { DiscoveryScanPage } from './discovery/discoveryTypes';
 import { collectDiscoveryEvidence } from './discovery/discoveryEvidence';
-import type { BeginDiscoveryRequest, OverrideDiscoveryRequest } from '../../shared/contracts/discoveryContract';
+import type { BeginDiscoveryRequest, OverrideDiscoveryRequest, DiscoveryClaim } from '../../shared/contracts/discoveryContract';
 import { communicationRecencySql, isLegacyOutboundRequest, outboundCommandFactSql } from './events/communicationEvidence';
 import type { Activity } from './events/eventTypes';
 
@@ -402,6 +404,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
   private readonly database: AppDatabase;
   private readonly clock: Clock;
   private readonly ids: IdGenerator;
+  private readonly discoveryWorkerCommands: DiscoveryWorkerCommands;
   private readonly configuredTimezone: string | undefined;
   private readonly importPreviews = new Map<string, StoredImportPreview>();
 
@@ -415,6 +418,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
     input.services.outboundCommands.assertBoundTo(input.database, input.services.unitOfWork);
     input.services.outboundPermission.assertBoundTo(input.database, input.services.unitOfWork);
     input.services.identities.assertBoundTo(input.database, input.services.unitOfWork);
+    this.discoveryWorkerCommands = new DiscoveryWorkerCommands(input);
     this.services = input.services;
     this.database = input.database;
     this.clock = input.clock;
@@ -3143,6 +3147,18 @@ export class FounderSalesDomain implements OutboundDomainPort {
     try { return this.readEnrichmentRequestCandidate(input); }
     finally { this.database.raw.exec('ROLLBACK'); }
   }
+
+  scanDiscoveryPage(input: { afterProspectId: string | null; limit: number }) { return this.discoveryWorkerCommands.scanDiscoveryPage(input); }
+  enqueueDiscoveryPage(page: DiscoveryScanPage) { return this.discoveryWorkerCommands.enqueueDiscoveryPage(page); }
+  scanAndEnqueueDiscoveryPage() { return this.discoveryWorkerCommands.scanAndEnqueueDiscoveryPage(); }
+  discoveryWorkDelay() { return this.discoveryWorkerCommands.discoveryWorkDelay(); }
+  processNextDiscoveryJob() { return this.discoveryWorkerCommands.processNextDiscoveryJob(); }
+  processDiscoveryJob(jobId: string) { return this.discoveryWorkerCommands.processDiscoveryJob(jobId); }
+  processPriorityRefreshJob(jobId: string) { return this.discoveryWorkerCommands.processPriorityRefreshJob(jobId); }
+
+  prepareDiscoveryResearch() { return this.discoveryWorkerCommands.prepareDiscoveryResearch(); }
+  completeDiscoveryResearch(request: DiscoveryResearchRequest, claims: readonly DiscoveryClaim[]) { return this.discoveryWorkerCommands.completeDiscoveryResearch(request, claims); }
+  failDiscoveryResearch(request: DiscoveryResearchRequest, code: 'invalid_research' | 'research_timeout' | 'research_failed') { return this.discoveryWorkerCommands.failDiscoveryResearch(request, code); }
 
   getDiscovery() { return this.services.discovery.get(); }
   getDiscoveryBrief(personId: string) { return this.services.discovery.getBrief(personId); }

@@ -76,6 +76,28 @@ describe('JobRepository', () => {
       );
   }
 
+  it('lists only bounded owned state in stable order and retries the identical failed command three times', async () => {
+    const repository = await createRepository(); const at = '2026-09-06T12:00:00.000Z';
+    for (const id of ['b', 'a']) repository.enqueue({ id, type: 'discovery_assessment', payload: { id }, idempotencyKey: id, at });
+    repository.enqueue({ id: 'foreign', type: 'other', payload: {}, at });
+    expect(repository.listByTypeState('discovery_assessment', 'queued', 1).map(j => j.id)).toEqual(['a']);
+    for (const limit of [0, 51, 1.5]) expect(() => repository.listByTypeState('discovery_assessment', 'queued', limit)).toThrow();
+    expect(() => repository.listByTypeState('other' as never, 'queued', 1)).toThrow();
+    const original = repository.get('a')!;
+    expect(() => repository.retryFailed('a', at)).toThrow(InvalidJobTransitionError);
+    for (let retry = 1; retry <= 3; retry++) {
+      repository.start('a'); repository.fail('a', { code: 'transient', message: 'Synthetic' });
+      expect(() => repository.retryFailed('a', '2026-09-06T12:00:00Z')).toThrow();
+      expect(repository.retryFailed('a', at)).toMatchObject({ id: 'a', state: 'queued', retryCount: retry,
+        payload: original.payload, idempotencyKey: original.idempotencyKey, error: null, result: null, updatedAt: at });
+      expect(database!.raw.prepare('SELECT started_at, finished_at FROM jobs WHERE id = ?').get('a')).toEqual({ started_at: null, finished_at: null });
+    }
+    repository.start('a'); repository.fail('a', { code: 'transient', message: 'Synthetic' });
+    expect(() => repository.retryFailed('a', at)).toThrow(InvalidJobTransitionError);
+    repository.start('foreign'); repository.fail('foreign', { code: 'transient', message: 'Synthetic' });
+    expect(() => repository.retryFailed('foreign', at)).toThrow(InvalidJobTransitionError);
+  });
+
   it('moves a queued job through running to succeeded', async () => {
     const repository = await createRepository();
 

@@ -1,3 +1,5 @@
+import { createDiscoveryWorker, type DiscoveryWorker } from './discovery/discoveryWorker';
+import { unavailableDiscoveryResearch } from './discovery/discoveryResearchPort';
 import { resolveApplicationPaths } from './applicationPaths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -56,6 +58,7 @@ import { unavailablePhoneHandoff, unavailableOutboundReadiness } from './communi
 import type { OutboundCommandServiceApi, OutboundDomainGate } from './communications/outboundPorts';
 
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
+  createDiscoveryWorker?: typeof createDiscoveryWorker;
   createOutboundCommandService?: typeof createOutboundCommandService;
   createBackupService?(options: BackupServiceOptions): Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'>;
   createRecoveryService?(options: RecoveryServiceOptions): RecoveryProvider & { shutdown(): Promise<void> };
@@ -322,9 +325,17 @@ export async function startApplication(
   let outbound: OutboundCommandServiceApi | undefined;
   let unregisterOutboundLifecycle: (() => void) | undefined;
   let removeStartupAbort: (() => void) | undefined;
+  let discoveryWorker: DiscoveryWorker | undefined;
+  let discoveryClosed = false;
   let outboundClosed = false;
   const cleanupErrors: unknown[] = [];
 
+  const closeDiscovery = (): void => {
+    if (discoveryClosed) return;
+    discoveryClosed = true;
+    try { discoveryWorker?.stop(); } catch (error) { cleanupErrors.push(error); }
+  };
+  const abortStartup = (): void => { closeDiscovery(); closeOutbound(); };
   const detachOutboundLifecycle = (): void => {
     const unregister = unregisterOutboundLifecycle;
     unregisterOutboundLifecycle = undefined;
@@ -356,6 +367,7 @@ export async function startApplication(
     shutdownPromise = new Promise<void>((resolve, reject) => {
       resolveShutdown = resolve; rejectShutdown = reject;
     });
+    closeDiscovery();
     closeOutbound();
     void (async () => {
       // Preserve recovery, backup, sourcing, IPC, helper and Foundation ownership.
@@ -381,6 +393,9 @@ export async function startApplication(
       } finally {
         sourcingPoller = undefined;
       }
+
+      try { await discoveryWorker?.idle(); } catch (error) { cleanupErrors.push(error); }
+      finally { discoveryWorker = undefined; }
 
       try {
         await backupCleanup;
@@ -454,9 +469,9 @@ export async function startApplication(
     });
     if (options.signal !== undefined) {
       const signal = options.signal;
-      removeStartupAbort = () => signal.removeEventListener('abort', closeOutbound);
-      signal.addEventListener('abort', closeOutbound, { once: true });
-      if (signal.aborted) closeOutbound();
+      removeStartupAbort = () => signal.removeEventListener('abort', abortStartup);
+      signal.addEventListener('abort', abortStartup, { once: true });
+      if (signal.aborted) abortStartup();
       throwIfStartupCancelled(signal);
     }
     unregisterOutboundLifecycle = options.registerOutboundLifecycle?.({
@@ -470,6 +485,15 @@ export async function startApplication(
     });
     // A registrar can synchronously abort before returning its owned disposer.
     if (outboundClosed) detachOutboundLifecycle();
+    throwIfStartupCancelled(options.signal);
+    discoveryWorker = (dependencies.createDiscoveryWorker ?? createDiscoveryWorker)({
+      domainGate: runtime, clock: domainClock, research: unavailableDiscoveryResearch,
+      schedule: (run, delay) => { const timer = setTimeout(run, delay); timer.unref(); return () => clearTimeout(timer); },
+    });
+    // An injected factory can synchronously abort before handing back ownership.
+    if (discoveryClosed) discoveryWorker.stop();
+    throwIfStartupCancelled(options.signal);
+    discoveryWorker.start();
     throwIfStartupCancelled(options.signal);
     if (typeof dependencies.createSourcingPoller !== 'function') {
       throw new Error('Sourcing poller dependency is required.');
