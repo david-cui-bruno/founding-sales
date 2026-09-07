@@ -101,7 +101,11 @@ export function collectDiscoveryEvidence(input: CollectionInput): DiscoveryEvide
     propertyLinks: all('SELECT * FROM prospect_properties WHERE prospect_id = ? ORDER BY property_id', prospectId),
     organizationLinks: all('SELECT * FROM prospect_organizations WHERE prospect_id = ? ORDER BY organization_id', prospectId),
     organizationAliases: all(`SELECT a.* FROM organization_aliases a JOIN prospect_organizations l ON l.organization_id = a.organization_id WHERE l.prospect_id = ? ORDER BY a.id`, prospectId),
-    intakeReceipts: all('SELECT * FROM source_intake_receipts WHERE person_id = ? ORDER BY source_event_id'),
+    // The admitted composite FK binds non-NULL receipt source IDs to this Person.
+    // SQLite's nullable TEXT PRIMARY KEY still permits NULL IDs; retain those rows.
+    intakeReceipts: database.raw.prepare(`SELECT * FROM source_intake_receipts WHERE person_id = ?
+      AND (source_event_id IN (SELECT id FROM source_events WHERE person_id = ?) OR source_event_id IS NULL)
+      ORDER BY source_event_id`).all(person.id, person.id) as Row[],
     reactivationReceipts: all('SELECT * FROM cycle_reactivation_receipts WHERE person_id = ? ORDER BY activation_key'),
     reactivationRules: all('SELECT r.* FROM reactivation_rules r JOIN sales_cycles c ON c.id = r.sales_cycle_id WHERE c.person_id = ? ORDER BY r.id'),
     stageEvents: all('SELECT e.* FROM stage_events e JOIN sales_cycles c ON c.id = e.sales_cycle_id WHERE c.person_id = ? ORDER BY e.id'),

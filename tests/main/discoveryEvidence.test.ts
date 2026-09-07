@@ -1,8 +1,9 @@
 import { BUILTIN_CADENCES } from '../../src/main/domain/cadence/builtinCadences';
 import { attachTranscript } from '../../src/main/domain/conversations/conversationsDomain';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { collectDiscoveryEvidence, validateDiscoveryClaim, DiscoveryEvidenceDiagnosticError } from '../../src/main/domain/discovery/discoveryEvidence';
+import { collectDiscoveryEvidence, revalidateDiscoverySnapshot, validateDiscoveryClaim, DiscoveryEvidenceDiagnosticError } from '../../src/main/domain/discovery/discoveryEvidence';
 import { evaluateDiscovery } from '../../src/main/domain/discovery/discoveryPolicy';
+import { DomainRuntime } from '../../src/main/domain/domainRuntime';
 import { BUILTIN_PRIORITIZATION_RULE_V1 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
 import { mapCloudSourceEvent, buildNeedsIdentityIntakeCommand } from '../../src/main/sourcing/intakeMapper';
 import { validFrboEvent, validParcelEvent } from '../fixtures/cloudSourceEvents';
@@ -33,8 +34,108 @@ function statement(owner: ReturnType<typeof seedDiscoveryOwner>, text: string, i
     { activityId: id, personId: owner.personId, rawText: speaker === 'unknown' ? text : `${speaker === 'lead' ? 'Lead' : 'Founder'}: ${text}` });
   return `${id}-utterance`;
 }
+function appendNullIntakeReceipt(sourceEventId: string, createdAt = DISCOVERY_NOW) {
+  f.database.raw.prepare(`INSERT INTO source_intake_receipts
+    (source_event_id, person_id, prospect_id, command_json, result_json, created_at)
+    SELECT NULL, person_id, prospect_id, command_json, result_json, ? FROM source_intake_receipts WHERE source_event_id = ?`)
+    .run(createdAt, sourceEventId);
+}
 
 describe('coherent collector evidence admission', () => {
+  it('uses indexed receipt reads while preserving admitted NULL rows and exact evidence as real intakes grow', () => {
+    const owner = seedDiscoveryOwner(f, { prefix: 'receipt-index-owner', units: 10 });
+    const other = seedDiscoveryOwner(f, { prefix: 'receipt-index-other', units: 99 });
+    const raw = f.database.raw;
+    appendNullIntakeReceipt(owner.sourceEventId, '2026-09-04T12:00:00.000Z');
+    appendNullIntakeReceipt(other.sourceEventId);
+    appendNullIntakeReceipt(owner.sourceEventId, '2026-09-05T12:00:00.000Z');
+    expect(raw.pragma('foreign_key_check')).toEqual([]);
+    let sequence = 0;
+    const readmitted = new DomainRuntime({ database: f.database, clock: { now: () => DISCOVERY_NOW },
+      ids: { next: () => `receipt-readmission-${++sequence}` } });
+    try { expect(readmitted.initialize().status).toBe('ready'); } finally { readmitted.shutdown(); }
+    const expected = collect(owner.prospectId);
+    // Use genuine intake commands so unrelated receipt JSON is actually populated.
+    for (let i = 0; i < 32; i++) seedDiscoveryOwner(f, { prefix: `receipt-index-unrelated-${i}`, units: 3 });
+    const prepare = raw.prepare.bind(raw);
+    const reads: Array<{ sql: string; bindings: unknown[]; rows: unknown[] }> = [];
+    const restoreStatements: Array<() => void> = [];
+    // Observe the real collector statement and its real execution, never replace
+    // its SQL, bindings, or result with a test-authored alternative.
+    const observer = vi.spyOn(raw, 'prepare').mockImplementation(sql => {
+      const statement = prepare(sql);
+      if (/^SELECT \* FROM source_intake_receipts\b/.test(sql)) {
+        const all = statement.all.bind(statement);
+        const execution = vi.spyOn(statement, 'all').mockImplementation((...bindings: unknown[]) => {
+          const rows = all(...bindings);
+          reads.push({ sql, bindings, rows });
+          return rows;
+        });
+        restoreStatements.push(() => execution.mockRestore());
+      }
+      return statement;
+    });
+    const changes = prepare('SELECT total_changes() AS n').get();
+    raw.exec('PRAGMA query_only = ON; BEGIN');
+    try {
+      const snapshot = collectDiscoveryEvidence({ database: f.database, services: f.services, prospectId: owner.prospectId, asOf: DISCOVERY_NOW });
+      expect(snapshot).toEqual(expected); // Full fingerprint, facts, conflicts and citations.
+      for (const claim of snapshot.validatedClaims) expect(validateDiscoveryClaim({ snapshot, claim })).toBe(true);
+    } finally {
+      raw.exec('ROLLBACK; PRAGMA query_only = OFF');
+      observer.mockRestore();
+      restoreStatements.forEach(restore => restore());
+    }
+    expect(prepare('SELECT total_changes() AS n').get()).toEqual(changes);
+    expect(reads).toHaveLength(1);
+    const read = reads[0]!;
+    const legacy = prepare('SELECT * FROM source_intake_receipts WHERE person_id = ? ORDER BY source_event_id').all(owner.personId);
+    expect(read.rows).toEqual(legacy);
+    expect(read.rows).toEqual([
+      expect.objectContaining({ source_event_id: null, person_id: owner.personId, created_at: '2026-09-04T12:00:00.000Z' }),
+      expect.objectContaining({ source_event_id: null, person_id: owner.personId, created_at: '2026-09-05T12:00:00.000Z' }),
+      expect.objectContaining({ source_event_id: owner.sourceEventId, person_id: owner.personId }),
+    ]);
+    const plan = prepare(`EXPLAIN QUERY PLAN ${read.sql}`).all(...read.bindings) as Array<{ detail: string }>;
+    const details = plan.map(step => step.detail);
+    expect.soft(details.filter(step => step.includes('SEARCH source_intake_receipts USING INDEX sqlite_autoindex_source_intake_receipts_1 (source_event_id=?)'))).toHaveLength(2);
+    expect.soft(details).toContain('SEARCH source_events USING INDEX source_events_person_observed_idx (person_id=?)');
+    expect.soft(details.some(step => /\bSCAN (source_intake_receipts|source_events)\b/.test(step))).toBe(false);
+  });
+
+  it('rejects a receipt referencing another person\'s source at the deferred foreign-key commit', () => {
+    const owner = seedDiscoveryOwner(f, { prefix: 'receipt-fk-owner', units: 10 });
+    const other = seedDiscoveryOwner(f, { prefix: 'receipt-fk-other', units: 99 });
+    const source = f.services.sourceRepository.getById(owner.sourceEventId)!;
+    const unreceipted = f.services.sources.appendSourceInteraction({ id: 'receipt-fk-source', personId: owner.personId,
+      prospectId: null, channel: 'parcel', observedAt: source.observedAt, sourceRecord: source.sourceRecord });
+    const before = collect(owner.prospectId);
+    expect(f.database.raw.pragma('foreign_keys', { simple: true })).toBe(1);
+    expect(() => f.database.raw.transaction(() => f.database.raw.prepare(`INSERT INTO source_intake_receipts
+      (source_event_id, person_id, prospect_id, command_json, result_json, created_at)
+      SELECT ?, person_id, prospect_id, command_json, result_json, created_at FROM source_intake_receipts WHERE source_event_id = ?`)
+      .run(unreceipted.id, other.sourceEventId))()).toThrow(/FOREIGN KEY constraint failed/);
+    expect(collect(owner.prospectId)).toEqual(before);
+    expect(f.database.raw.pragma('foreign_key_check')).toEqual([]);
+  });
+
+  it('keeps receipt-only changes in the freshness fingerprint including an added NULL receipt', () => {
+    const owner = seedDiscoveryOwner(f, { prefix: 'receipt-freshness', units: 10 });
+    const snapshot = collect(owner.prospectId);
+    f.services.unitOfWork.immediate(() => {
+      revalidateDiscoverySnapshot(snapshot, f.database, f.services);
+      expect(() => revalidateDiscoverySnapshot({ ...snapshot }, f.database, f.services)).toThrow('stale_evidence');
+    });
+    appendNullIntakeReceipt(owner.sourceEventId);
+    const fresh = collect(owner.prospectId);
+    expect(fresh.inputFingerprint).not.toBe(snapshot.inputFingerprint);
+    expect(fresh.validatedClaims).toEqual(snapshot.validatedClaims);
+    f.services.unitOfWork.immediate(() => {
+      expect(() => revalidateDiscoverySnapshot(snapshot, f.database, f.services)).toThrow('stale_evidence');
+      revalidateDiscoverySnapshot(fresh, f.database, f.services);
+    });
+  });
+
   it('uses the owner index for both source reads without changing evidence as unrelated sources grow', () => {
     const owner = seedDiscoveryOwner(f, { prefix: 'indexed-owner', units: 10 });
     const other = seedDiscoveryOwner(f, { prefix: 'indexed-other', units: 99 });
