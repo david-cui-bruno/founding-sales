@@ -38,6 +38,7 @@ import { HealthService } from './health/healthService';
 import { registerApplicationIpc } from './ipc/registerApplicationIpc';
 import type { SourcingProvider } from './sourcing/registerSourcingIpc';
 import { EnrichmentRequestWriter } from './sourcing/enrichmentRequestWriter';
+import { createFileSystemEnrichmentRequestStore } from './sourcing/enrichmentFixtureStore';
 import type { EnrichmentRequester } from './leads/leadDetailService';
 import {
   createFileSystemInboxObjectStore,
@@ -150,11 +151,22 @@ const SOURCING_POLL_INTERVAL_MS = 15 * 60 * 1000;
  * to upstream/enrichment-requests/. Missing credentials surface as a
  * validated 'credentials_unavailable' refusal, never a throw.
  */
-function createProductionEnrichmentRequester(
+export function createProductionEnrichmentRequester(
   runtime: FoundationRuntime,
   userDataPath: string,
   logger?: SafeLogger,
 ): EnrichmentRequester {
+  // TEST-ONLY: exercise the real writer/gates while substituting only its external
+  // transport. An invalid fixture path must fail, never fall back to host credentials.
+  const fixtureDirectory = process.env.CALLIE_SOURCING_FIXTURE_DIR;
+  if (fixtureDirectory !== undefined) {
+    const writer = new EnrichmentRequestWriter({
+      domainGate: runtime,
+      createStore: async () => createFileSystemEnrichmentRequestStore(fixtureDirectory),
+      clock: domainClock,
+    });
+    return { request: input => writer.request(input) };
+  }
   const credentialStore = new SourcingCredentialStore({
     safeStorage,
     envelopePath: join(userDataPath, 'callie.sourcing-inbox-credentials.json'),
