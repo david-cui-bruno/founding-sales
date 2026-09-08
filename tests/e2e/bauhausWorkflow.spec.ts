@@ -95,27 +95,18 @@ test('all workspaces and shared overlays remain usable with Bauhaus light and da
     // Successful import remounts the Leads route. Done must focus its new trigger.
     await expect(page.getByRole('button', { name: 'Import', exact: true })).toBeFocused();
 
-    // Create genuine commitments using the retained manual-review UI and the
-    // same public completion command used by the callback workflow fixture.
-    // No mocked Today snapshot, outbound request, or real person is involved.
-    await page.getByRole('link', { name: 'Today', exact: true }).click();
-    await page.getByRole('button', { name: 'Manual review (optional)', exact: true }).click();
-    await page.getByRole('region', { name: 'Unreviewed backlog', exact: true })
-      .getByRole('button', { name: 'Review', exact: true }).click();
-    for (let index = 1; index <= 3; index++) {
-      await expect(page.getByText(`Reviewing ${index} of 3`, { exact: true })).toBeVisible();
-      await page.keyboard.press('1');
-    }
-    await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(0);
-    await page.keyboard.press('Escape');
+    // Fixture-only manual reports through the real public commands. No dispatch.
     const names = await page.evaluate(async () => {
-      const ready = await window.callie.leads.list({ query: '', stages: ['ready'], priorities: [], sort: 'person_name', cursor: null, limit: 10 });
-      for (const row of ready.rows) {
+      const leads = await window.callie.leads.list({ query: '', stages: [], priorities: [], sort: 'person_name', cursor: null, limit: 10 });
+      for (const row of leads.rows) {
         const detail = await window.callie.leadDetail.get({ personId: row.personId });
-        await window.callie.today.complete({ salesCycleId: detail.salesCycleId, actionId: detail.nextAction!.id, outcome: 'replied', activityId: null });
+        await window.callie.leadDetail.confirmTransition({ transition: 'review_to_ready', salesCycleId: detail.salesCycleId, expectedRevision: detail.revision });
+        await window.callie.today.logCallOutcome({ personId: row.personId, salesCycleId: detail.salesCycleId,
+          outcome: 'spoke', callbackAt: new Date(Date.now() + 1000).toISOString(), occurredAt: new Date().toISOString() });
       }
-      return ready.rows.map(row => row.personName);
+      return leads.rows.map(row => row.personName);
     });
+    await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).lanes.flatMap(lane => lane.items).length).toBe(3);
     expect(names).toHaveLength(3);
 
     for (const theme of ['light', 'dark'] as const) {
@@ -126,15 +117,12 @@ test('all workspaces and shared overlays remain usable with Bauhaus light and da
         await expect(page.getByRole('main').getByRole('heading', { level: 1 }).first()).toBeVisible();
         await expect(page.getByRole('link', { name: route, exact: true })).toHaveAttribute('aria-current', 'page');
         if (route === 'Today') {
-          const hero = page.getByRole('group', { name: /^Next up:/ });
-          const also = page.getByRole('region', { name: 'Also today', exact: true });
-          await expect(hero).toBeVisible();
-          await expect(also.locator('.today-row')).toHaveCount(2);
-          for (const name of names) await expect(page.locator('.today__bento').getByRole('button', { name, exact: true })).toBeVisible();
-          const heroBox = await hero.boundingBox();
-          const alsoBox = await also.boundingBox();
-          expect(alsoBox!.x).toBeGreaterThan(heroBox!.x + heroBox!.width);
-          expect(Math.abs(alsoBox!.y - heroBox!.y)).toBeLessThan(2);
+          const queue = page.getByRole('list', { name: 'Work queue', exact: true });
+          await expect(queue).toBeVisible();
+          await expect(queue.locator('.today-row')).toHaveCount(3);
+          for (const name of names) await expect(queue.getByRole('button', { name, exact: true })).toBeVisible();
+          await expect(page.getByText('Prepared conversations', { exact: true })).toHaveCount(0);
+
         }
         await fitAndCapture(page, info, `${theme}-${route.toLowerCase()}`);
         await accessible(page, `${theme} ${route}`);
@@ -145,7 +133,7 @@ test('all workspaces and shared overlays remain usable with Bauhaus light and da
       }
 
       await page.getByRole('link', { name: 'Today', exact: true }).click();
-      const row = page.getByRole('region', { name: 'Also today', exact: true }).locator('.today-row').first();
+      const row = page.getByRole('list', { name: 'Work queue', exact: true }).locator('.today-row').first();
       await expect(row).toBeVisible();
       const comfortableHeight = (await row.boundingBox())!.height;
       await setTheme(page, theme);

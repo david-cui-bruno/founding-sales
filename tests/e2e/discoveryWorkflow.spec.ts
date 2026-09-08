@@ -30,7 +30,7 @@ function event(index: number) {
   return cloudSourceEventSchema.parse(value);
 }
 
-test('P1 automatic source-backed shortlist, unfinished-work restart, evidence, selected manual pilot and unsent draft', async () => {
+test('P1 automatic source evidence, unfinished-work restart, contact-first workspace and persistent unsent draft', async () => {
   const info = test.info();
   test.setTimeout(240_000); // Real worker's bounded minute scan, never a test repair API.
   const directory = await mkdtemp(join(tmpdir(), 'callie-sourcing-fixture-'));
@@ -61,38 +61,37 @@ test('P1 automatic source-backed shortlist, unfinished-work restart, evidence, s
     await expect.poll(() => page.evaluate(async () => (await window.callie.discovery.get()).processing)).toBe('idle');
     const snapshot = await page.evaluate(() => window.callie.discovery.get());
     expect(snapshot.prepared).toHaveLength(10);
-    await page.getByRole('button', { name: 'Refresh shortlist' }).click();
-    await expect(page.getByRole('heading', { name: 'Prepared conversations' })).toBeVisible();
-    await expect(page.locator('.discovery__cards .discovery-card')).toHaveCount(3);
-    await page.screenshot({ path: info.outputPath('today-prepared-bento.png') });
-    await page.getByRole('button', { name: 'Research and diagnostics', exact: true }).click();
-    await expect(page.getByText('Additional research not configured')).toBeVisible();
-    await page.getByRole('button', { name: 'Research and diagnostics', exact: true }).click();
-    await page.getByRole('button', { name: 'Show 7 more prepared people', exact: true }).click();
-    await expect(page.locator('.discovery__cards .discovery-card')).toHaveCount(10);
+    await expect(page.getByText('Prepared conversations', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Refresh shortlist', exact: true })).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath('today-contact-first.png') });
     const selected = snapshot.prepared.find(b => b.personName === 'Synthetic 0 Holdings LLC');
     expect(selected).toBeDefined();
     const id = selected!.personId;
     const before = await page.evaluate(request => window.callie.leads.list(request), listRequest);
     expect(before.rows).toHaveLength(125); expect(before.rows.every(row => row.stage === 'unreviewed' && row.lastActivityAt === null)).toBe(true);
-    await page.getByRole('button', { name: `Open brief for ${selected!.personName}`, exact: true }).click();
+    await page.getByRole('link', { name: 'Leads', exact: true }).click();
+    await page.getByRole('row', { name: /Synthetic 0 Holdings/i }).click();
     const inspector = page.getByRole('complementary', { name: `${selected!.personName} details` });
+    await expect(inspector.getByRole('region', { name: 'Known portfolio', exact: true })).toBeVisible();
+    await inspector.getByText('Details', { exact: true }).click();
     const ref = selected!.assessment!.claims.flatMap(c => c.refs).find(ref => ref.kind === 'source')!;
     if (ref.kind !== 'source') throw new Error('Expected retained source citation');
     await expect(inspector.getByText(`Source ${ref.sourceEventId}, ${ref.field}, ${ref.observedAt}`, { exact: true }).first()).toBeVisible();
     expect((await page.evaluate(personId => window.callie.leadDetail.get({ personId }), id)).stage).toBe('unreviewed');
     await inspector.getByRole('button', { name: 'Close inspector' }).click();
-    await page.getByRole('button', { name: `Contact options for ${selected!.personName}`, exact: true }).click();
+    // Retained selected-pilot capability is explicit, never a read or opening a draft.
+    await page.evaluate(brief => window.callie.discovery.begin({ commandId: crypto.randomUUID(), personId: brief.personId, salesCycleId: brief.salesCycleId, assessmentId: brief.assessment!.id, expectedFingerprint: brief.assessment!.fingerprint }), selected!);
+    await page.getByRole('row', { name: /Synthetic 0 Holdings/i }).click();
     await expect.poll(() => page.evaluate(personId => window.callie.leadDetail.get({ personId }), id)).toMatchObject({ stage: 'ready' });
     const ready = await page.evaluate(personId => window.callie.leadDetail.get({ personId }), id);
     expect(ready.activities).toEqual([]); expect(ready.nextAction).not.toBeNull();
     const untouched = (await page.evaluate(request => window.callie.leads.list(request), listRequest)).rows.filter(row => row.personId !== id);
     expect(untouched.every(row => row.stage === 'unreviewed' && row.lastActivityAt === null)).toBe(true);
-    const email = page.getByRole('button', { name: 'Email owner0@example.test' });
+    const email = inspector.getByRole('button', { name: 'Email', exact: true });
     await email.click(); await page.getByLabel('Message', { exact: true }).fill('Unsent synthetic draft');
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
     await page.getByRole('button', { name: 'Close draft' }).click(); await email.click();
-    await expect(page.getByLabel('Message', { exact: true })).toHaveValue('');
+    await expect(page.getByLabel('Message', { exact: true })).toHaveValue('Unsent synthetic draft');
     await page.getByRole('button', { name: 'Close draft' }).click();
     expect((await page.evaluate(personId => window.callie.discovery.getBrief({ personId }), id)).pilotNextStep).toBeNull();
     // Explicit founder-recorded actual conversation. Generated text never advances a stage.
@@ -116,6 +115,7 @@ test('P1 automatic source-backed shortlist, unfinished-work restart, evidence, s
     await page.getByRole('button', { name: 'Close inspector' }).click();
     await page.getByRole('link', { name: 'Leads', exact: true }).click();
     await page.getByRole('row', { name: /Synthetic 0 Holdings/i }).click();
+    await page.getByRole('tab', { name: 'Activity', exact: true }).click();
     await page.getByRole('button', { name: 'Log dated past activity', exact: true }).click();
     await page.getByLabel('Date', { exact: true }).fill('2026-09-01');
     await page.getByLabel('What happened').fill('I stated the $50 supervised trial price in this synthetic conversation.');
@@ -138,7 +138,7 @@ test('P1 automatic source-backed shortlist, unfinished-work restart, evidence, s
   } finally { await workspace?.stop(); await first?.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('P2 same executable migrates nonzero16, retains exact encrypted16 backup and preserves the named untouched subset', async () => {
+test('P2 same executable migrates nonzero16 to19, retains exact encrypted backup and intentional action changes', async () => {
   test.setTimeout(180_000);
   const fixtures = allocatePackagedFixtureDatabase(); let workspace: FounderWorkspace | undefined; let material = '';
   try {
@@ -151,10 +151,12 @@ test('P2 same executable migrates nonzero16, retains exact encrypted16 backup an
     expect(original.ledger.at(-1)).toBe('0016ContactPresentationEvidence');
     const launch = () => launchFounderWorkspace({ userDataPath: fixtures.paths.through16, onSpawn: child => { fixtures.captureChild(child); } });
     workspace = await launch();
-    expect(await workspace.page.evaluate(() => window.callie.health.get())).toMatchObject({ schemaVersion: 17, databaseEncrypted: true, domainReady: true });
+    expect(await workspace.page.evaluate(() => window.callie.health.get())).toMatchObject({ schemaVersion: 19, databaseEncrypted: true, domainReady: true });
     await expect.poll(() => workspace!.page.evaluate(() => window.callie.discovery.get()), { timeout: 90_000 }).toMatchObject({ counts: { unassessed: 0 }, processing: 'idle' });
     const assessed = await workspace.page.evaluate(request => window.callie.leads.list(request), listRequest);
     expect(assessed.rows.every(row => row.stage === 'unreviewed' && row.lastActivityAt === null)).toBe(true);
+    const actions = await workspace.page.evaluate(async people => Promise.all(people.map(personId => window.callie.leadDetail.get({ personId }))), assessed.rows.map(row => row.personId));
+    expect(actions.every(detail => detail.nextAction?.dueAt != null)).toBe(true);
     const ids = (await workspace.page.evaluate(() => window.callie.discovery.get())).prepared.map(b => b.assessment!.id);
     expect(ids).toHaveLength(2);
     await workspace.stop(); workspace = undefined;
@@ -163,14 +165,14 @@ test('P2 same executable migrates nonzero16, retains exact encrypted16 backup an
     const backup = await fixtures.inspectStoppedBackup('through16', names[0], material, 16);
     expect(backup.businessSha256).toBe(original.businessSha256); // SAME schema only
     expect(backup.aggregateCounts).toEqual(original.aggregateCounts); expect(backup.sourceSha256).toBe(retainedHash);
-    const migrated = await fixtures.inspectStoppedProfile('through16', material, 17);
-    expect(migrated.preserved16Sha256).toBe(original.preserved16Sha256);
-    expect(migrated.ledger.slice(-2)).toEqual(['0016ContactPresentationEvidence', '0017DiscoveryAssessments']);
+    const migrated = await fixtures.inspectStoppedProfile('through16', material, 19);
+    expect(migrated.preservedActionIndependentSha256).toBe(original.preservedActionIndependentSha256);
+    expect(migrated.ledger.slice(-4)).toEqual(['0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts']);
     workspace = await launch();
     expect((await workspace.page.evaluate(() => window.callie.discovery.get())).prepared.map(b => b.assessment!.id)).toEqual(ids);
     await workspace.stop(); workspace = undefined;
     expect(await sha256(backupPath)).toBe(retainedHash);
-    expect((await fixtures.inspectStoppedProfile('through16', material, 17)).preserved16Sha256).toBe(original.preserved16Sha256);
+    expect((await fixtures.inspectStoppedProfile('through16', material, 19)).preservedActionIndependentSha256).toBe(original.preservedActionIndependentSha256);
     expect((await readdir(join(fixtures.paths.through16, 'backups'))).filter(name => name.startsWith('pre-migration-schema-16-'))).toEqual(names);
   } finally { material = ''; await workspace?.stop(); await fixtures.cleanup(); }
 });

@@ -69,6 +69,8 @@ Exposed as `window.callie.outreach`. Open auto-generates only pristine new draft
 
 Editable body excludes the signature/postal/reply-opt-out footer. Render the persisted senderEmail/footer, not fresh settings. Explicit reopen may refresh that preview and revision. Send rejects any sender/footer change since preview. Lock, wake, configuration changes and shutdown invalidate pending provider work and async requests before external invocation or persistence. Replies stay in Gmail; opt-outs must be recorded in FSS manually.
 
+If the contact snapshot changes, explicit reopen preserves the prior unsent draft with a superseded marker and creates a fresh target. It never silently retargets reviewed text. Sending/unknown drafts cannot be superseded to bypass uncertainty.
+
 ## Portfolio contract
 
 UI worker extends LeadDetail with optional portfolio/contactReason for fixture compatibility. Production always supplies both. Portfolio: `{role:'owner'|'manager'|'unknown',ownedCount:number,managedCount:number,linkedCount:number,knownUnits:number|null,locations:string[],summary:string,completeness:'partial',facts:{id:string,text:string}[]}`. ContactReason: `{text:string,evidenceIds:string[]}|null`. Linked property alone is not ownership. Draft context consumes supported portfolio.facts, not scores or noteText.
@@ -80,3 +82,5 @@ Provider worker owns providers/**, provider tests and setup docs only.
 UI worker owns renderer Today/inspector/composer/settings, leadDetailContract portfolio extension, new domain/portfolio module, ONLY getLeadDetail portfolio projection in facade, UI/portfolio tests.
 Root owns shared outreach contract, migration0019, durable email core/evidence, IPC/preload/runtime wiring, integration and package acceptance. Cadence worker registers0019 after file exists.
 Supplemental pending historical rows are retained. Uniqueness is the single authoritative current-next-action pointer per operational cycle, not a new unique index over all historical pending rows. Supplemental rows must never enter Today work. Actual callback evidence, not legacy promised_follow_up labels, determines commitments. Warm Unreviewed contacts stay visible, but their internal action must not become founder review homework. New approved playbook overrides previous due-date choices. No additional approval poll for reversible code; stop at live authorization/send/handoff boundary.
+
+Raw cold/hot Unreviewed internal actions remain background backlog, not unlimited founder-facing queue rows. Warm Unreviewed remains contact-first. The displayed capacity meter counts queued discretionary calls only, not completed daily dials. Historical selected-call receipts remain internal evidence and are never fabricated.
