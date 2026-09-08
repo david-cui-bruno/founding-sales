@@ -1,19 +1,21 @@
 import { dirname, join } from 'node:path';
 import { BackupService } from '../../src/main/backup/backupService';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
-import { migrateToLatest } from '../../src/main/db/migrate';
+import { createMigrationRunner, migrateToLatest, productionMigrations } from '../../src/main/db/migrate';
 import { OperationalSafetyRepository } from '../../src/main/domain/operations/operationalSafetyRepository';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
 import { createRecoveryKeyMaterial } from '../../src/main/security/recoveryKey';
 import { createTempDatabase, createTestWorkspaceKey } from './tempDatabase';
 
-export async function recoveryFixture() {
+export async function recoveryFixture(options: { schemaVersion?: 17 | 18 | 19 } = {}) {
   const temp = createTempDatabase();
   const root = dirname(dirname(temp.path));
   const key = createTestWorkspaceKey();
   const material = createRecoveryKeyMaterial(key);
   const database = openDatabase({ path: temp.path, key });
-  const migration = await migrateToLatest(database, { backupDirectory: join(root, 'migrations'), workspaceKey: key });
+  const migrate = options.schemaVersion === undefined ? migrateToLatest
+    : createMigrationRunner(productionMigrations.filter(entry => entry.schemaVersion <= options.schemaVersion!));
+  const migration = await migrate(database, { backupDirectory: join(root, 'migrations'), workspaceKey: key });
   key.bytes.fill(0);
   let time = '2026-09-06T12:00:00.000Z';
   let id = 0;

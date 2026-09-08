@@ -68,17 +68,27 @@ describe('real temporary-copy SQLCipher restore drill', () => {
     expect(receipt.aggregateCounts).toEqual({ people: 1, prospects: 1, sourceEvents: 1 });
     expect(JSON.stringify(receipt)).not.toMatch(/PRIVATE|LIVE ONLY|body/);
   });
-  it('admits the actual schema17 fixture through the production registry without an override', async () => {
-    const request = await input();
-    expect(request.backup.schemaVersion).toBe(17);
-    expect(migrations.isRegisteredSchemaVersion(17)).toBe(true);
-    expect(runRestoreDrill(request).schemaVersion).toBe(17);
+  it.each([17, 18, 19] as const)('admits an actual schema%s fixture through the production registry without an override', async (schemaVersion) => {
+    const historical = await recoveryFixture({ schemaVersion });
+    try {
+      const backup = await historical.backups.createBackup('manual');
+      const before = fs.readFileSync(backup.path);
+      const liveBefore = fs.readFileSync(historical.database.path);
+      expect(backup.schemaVersion).toBe(schemaVersion);
+      expect(historical.schemaVersion).toBe(schemaVersion);
+      expect(migrations.isRegisteredSchemaVersion(schemaVersion)).toBe(true);
+      expect(runRestoreDrill({ backup, liveDatabasePath: historical.database.path, material: historical.material,
+        clock: historical.clock, temporaryRoot: historical.root }).schemaVersion).toBe(schemaVersion);
+      expect(fs.readFileSync(backup.path)).toEqual(before);
+      expect(fs.readFileSync(historical.database.path)).toEqual(liveBefore);
+      expect(temps(historical.root)).toEqual([]);
+    } finally { await historical.cleanup(); }
   });
-  it('rejects an actually unregistered schema18 without source mutation or temporary residue', async () => {
-    f.database.raw.prepare('UPDATE app_meta SET schema_version = 18').run();
+  it('rejects an actually unregistered schema20 without source mutation or temporary residue', async () => {
+    f.database.raw.prepare('UPDATE app_meta SET schema_version = 20').run();
     const request = await input(); const before = fs.readFileSync(request.backup.path);
-    expect(request.backup.schemaVersion).toBe(18);
-    expect(migrations.isRegisteredSchemaVersion(18)).toBe(false);
+    expect(request.backup.schemaVersion).toBe(20);
+    expect(migrations.isRegisteredSchemaVersion(20)).toBe(false);
     expect(() => runRestoreDrill(request)).toThrow(/^RECOVERY_FAILED$/);
     expect(fs.readFileSync(request.backup.path)).toEqual(before); expect(temps(f.root)).toEqual([]);
   });

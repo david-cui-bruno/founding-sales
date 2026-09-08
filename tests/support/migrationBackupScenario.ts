@@ -55,8 +55,12 @@ const migrateToSchemaOne = createMigrationRunner([
     migration: migration0001Foundation,
   },
 ]);
-const migrateThroughSchema15 = createMigrationRunner(productionMigrations.filter(x => x.schemaVersion <= 15));
-const migrateThroughSchema16 = createMigrationRunner(productionMigrations.filter(x => x.schemaVersion <= 16));
+const recoveryTransitions: Record<string, { fromVersion: number; toVersion: number; appliedMigrationIds: string[] }> = {
+  'schema-15-to-16-recovery-preservation': { fromVersion: 15, toVersion: 16, appliedMigrationIds: ['0016ContactPresentationEvidence'] },
+  'schema-16-to-17-recovery-preservation': { fromVersion: 16, toVersion: 17, appliedMigrationIds: ['0017DiscoveryAssessments'] },
+  'schema-17-to-19-recovery-preservation': { fromVersion: 17, toVersion: 19, appliedMigrationIds: ['0018PlaybookDueActions', '0019EmailDrafts'] },
+  'schema-18-to-19-recovery-preservation': { fromVersion: 18, toVersion: 19, appliedMigrationIds: ['0019EmailDrafts'] },
+};
 const RECOVERY_TS = '2026-09-05T12:00:00.000Z';
 const RECOVERY_SHA = 'a'.repeat(64);
 
@@ -71,9 +75,15 @@ async function runScenario(): Promise<void> {
   try {
     database = openDatabase({ path: workspace.path, key });
 
-    if (scenario === 'schema-15-to-16-recovery-preservation' || scenario === 'schema-16-to-17-recovery-preservation') {
-      const fromVersion = scenario === 'schema-15-to-16-recovery-preservation' ? 15 : 16;
-      await (fromVersion === 15 ? migrateThroughSchema15 : migrateThroughSchema16)(database, { backupDirectory, workspaceKey: key });
+    if (scenario in recoveryTransitions) {
+      const transition = recoveryTransitions[scenario];
+      const { fromVersion, toVersion } = transition;
+      const migrateFrom = createMigrationRunner(productionMigrations.filter(entry => entry.schemaVersion <= fromVersion));
+      // Historical cases stop at their real schema, not a metadata relabel of latest.
+      const migrateTo = toVersion === 19 ? migrateToLatest
+        : createMigrationRunner(productionMigrations.filter(entry => entry.schemaVersion <= toVersion));
+      await migrateFrom(database, { backupDirectory, workspaceKey: key });
+      assert.equal(readSchemaVersion(database), fromVersion);
       database.raw.prepare(`INSERT INTO backup_receipts
         (id, backup_basename, kind, schema_version, sha256, size_bytes, created_at, verified_at)
         VALUES ('backup-1', 'daily-1.sqlite3', 'daily', 15, ?, 10, ?, ?)`)
@@ -91,12 +101,8 @@ async function runScenario(): Promise<void> {
         .run(RECOVERY_SHA, RECOVERY_TS);
       const before = recoverySnapshot(database.raw);
 
-      const result = await (fromVersion === 15 ? migrateThroughSchema16 : migrateToLatest)(database, { backupDirectory, workspaceKey: key });
-      assert.deepEqual(result, {
-        fromVersion,
-        toVersion: fromVersion + 1,
-        appliedMigrationIds: [fromVersion === 15 ? '0016ContactPresentationEvidence' : '0017DiscoveryAssessments'],
-      });
+      const result = await migrateTo(database, { backupDirectory, workspaceKey: key });
+      assert.deepEqual(result, transition);
       assert.deepEqual(recoverySnapshot(database.raw), before);
 
       const backups = listBackups(backupDirectory);
