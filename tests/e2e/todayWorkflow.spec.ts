@@ -36,7 +36,7 @@ function waveCsv(count: number, source = 'registry'): string {
   return `${rows.join('\n')}\n`;
 }
 
-test('call outcome flow: opening the lead page and saving a callback removes the lead across relaunch', async () => {
+test('call outcome flow removes only the selected callback contact and preserves other warm work across relaunch', async () => {
   test.setTimeout(180_000);
   const fixtureDirectory = await mkdtemp(join(tmpdir(), 'callie-today-call-'));
   const csvPath = join(fixtureDirectory, 'wave-leads.csv');
@@ -44,10 +44,17 @@ test('call outcome flow: opening the lead page and saving a callback removes the
 
   const workspace = await launchFounderWorkspace();
   const { userDataPath } = workspace;
+  let callbackOwner: { personId: string; salesCycleId: string } | undefined;
+  let remainingMembers: string[] = [];
+  let businessAfterCallback: Awaited<ReturnType<typeof readLeadState>> = [];
 
   try {
     const { page } = workspace;
     await importLeads(page, csvPath, 3);
+    const imported = await readLeadState(page);
+    expect(imported).toHaveLength(3);
+    // Manual CSV import defaults Segment to warm, independently of Source.
+    expect(imported.every(detail => detail.segment === 'warm' && detail.stage === 'unreviewed')).toBe(true);
 
     // Optional manual review remains in explicit Details, never default Today.
     await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(3);
@@ -65,10 +72,8 @@ test('call outcome flow: opening the lead page and saving a callback removes the
     // Leads closes the inspector after reviewing the last matching row.
     await expect(page.getByRole('complementary')).toHaveCount(0);
 
-    // The freshly ready lead's first cadence touch is discretionary work
-    // that waits on a priority projection; simulate the inbound reply that
-    // makes it promised work (Fresh inbound) through the real preload
-    // complete command.
+    // Seed this contact's inbound response through the real preload command.
+    // The other two genuine warm contacts must remain in the work queue.
     const readyLead = await page.evaluate(async () => {
       const list = await window.callie.leads.list({
         query: '', stages: ['ready'], priorities: [], sort: 'person_name',
@@ -82,15 +87,23 @@ test('call outcome flow: opening the lead page and saving a callback removes the
         outcome: 'replied',
         activityId: null,
       });
-      return { personId: row.personId, personName: row.personName };
+      return { personId: row.personId, personName: row.personName, salesCycleId: detail.salesCycleId };
     });
+    callbackOwner = readyLead;
+    const otherContactsBefore = imported.filter(detail => detail.personId !== readyLead.personId);
 
     // Remount Today so the route refetches after the preload-side write.
     await page.getByRole('link', { name: 'Leads' }).click();
     await page.getByRole('link', { name: 'Today' }).click();
     const queue = page.getByRole('list', { name: 'Work queue' });
     await expect(queue).toBeVisible();
-    await expect(queue.getByRole('listitem')).toHaveCount(1);
+    await expect(queue.getByRole('listitem')).toHaveCount(3);
+    const queuedBefore = (await page.evaluate(() => window.callie.today.get())).lanes.flatMap(lane => lane.items);
+    expect(queuedBefore.map(item => `${item.personId}:${item.salesCycleId}`).sort())
+      .toEqual(imported.map(detail => `${detail.personId}:${detail.salesCycleId}`).sort());
+    const remaining = queuedBefore.filter(item => item.personId !== readyLead.personId);
+    expect(remaining).toHaveLength(2);
+    remainingMembers = remaining.map(item => `${item.personId}:${item.salesCycleId}`).sort();
 
     // Open the lead without initiating outbound. This fixture intentionally has
     // unknown compliance evidence, so actual Phone handoff must remain blocked.
@@ -126,18 +139,28 @@ test('call outcome flow: opening the lead page and saving a callback removes the
     await fullPage.getByLabel('Callback promised').fill(iso);
     await fullPage.getByRole('button', { name: 'Save & next' }).click();
 
-    // The queue held nothing else: back on Today with the queue done.
-    await expect(page.locator('.lead-full-page')).toHaveCount(0);
-    await expect(page.getByText('No contacts due right now.', { exact: true })).toBeVisible();
-    await expect(page.locator('.today-row')).toHaveCount(0);
+    // Save & next opens the next genuine warm contact without calling it.
+    await expect(fullPage).toHaveAttribute('aria-label', `${remaining[0].personName} full page`);
+    await fullPage.getByRole('button', { name: 'Close inspector' }).click();
+    await expect(fullPage).toHaveCount(0);
+    await expect(queue.getByRole('listitem')).toHaveCount(2);
+    await expect(queue.getByRole('button', { name: readyLead.personName, exact: true })).toHaveCount(0);
+    for (const contact of remaining) {
+      await expect(queue.getByRole('button', { name: contact.personName, exact: true })).toBeVisible();
+    }
 
     // The real snapshot agrees: the called lead left every lane.
     const snapshot = await page.evaluate(() => window.callie.today.get());
-    const laneMembers = snapshot.lanes.flatMap((lane) =>
-      lane.items.map((item) => item.personId),
-    );
-    expect(laneMembers).not.toContain(readyLead.personId);
+    const laneMembers = snapshot.lanes.flatMap(lane => lane.items);
+    expect(laneMembers.some(item => item.personId === readyLead.personId || item.salesCycleId === readyLead.salesCycleId)).toBe(false);
+    expect(laneMembers.map(item => `${item.personId}:${item.salesCycleId}`).sort()).toEqual(remainingMembers);
     expect(snapshot.conversationsHeld).toBe(1);
+    businessAfterCallback = await readLeadState(page);
+    expect(businessAfterCallback.filter(detail => detail.personId !== readyLead.personId)).toEqual(otherContactsBefore);
+    const called = businessAfterCallback.find(detail => detail.personId === readyLead.personId)!;
+    expect(called.salesCycleId).toBe(readyLead.salesCycleId);
+    expect(called.activities.filter(activity => activity.kind === 'call')).toHaveLength(1);
+    expect(called.outboundAttempts).toEqual([]);
   } finally {
     await workspace.stop();
   }
@@ -151,12 +174,13 @@ test('call outcome flow: opening the lead page and saving a callback removes the
       'page',
     );
     await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(2);
-    await expect(page.locator('.today-row')).toHaveCount(0);
+    await expect(page.getByRole('list', { name: 'Work queue' }).getByRole('listitem')).toHaveCount(2);
     const snapshot = await page.evaluate(() => window.callie.today.get());
-    const laneMembers = snapshot.lanes.flatMap((lane) =>
-      lane.items.map((item) => item.salesCycleId),
-    );
-    expect(laneMembers).toHaveLength(0);
+    const laneMembers = snapshot.lanes.flatMap(lane => lane.items);
+    expect(callbackOwner).toBeDefined();
+    expect(laneMembers.some(item => item.personId === callbackOwner!.personId || item.salesCycleId === callbackOwner!.salesCycleId)).toBe(false);
+    expect(laneMembers.map(item => `${item.personId}:${item.salesCycleId}`).sort()).toEqual(remainingMembers);
+    expect(await readLeadState(page)).toEqual(businessAfterCallback);
   } finally {
     await relaunched.close();
     await rm(fixtureDirectory, { recursive: true, force: true });
@@ -175,7 +199,7 @@ async function readLeadState(page: import('playwright/test').Page) {
     return Promise.all(list.rows.map(async ({ personId }) => {
       const detail = await window.callie.leadDetail.get({ personId });
       return {
-        personId, salesCycleId: detail.salesCycleId, stage: detail.stage,
+        personId, salesCycleId: detail.salesCycleId, stage: detail.stage, segment: detail.segment,
         workflowStatus: detail.workflowStatus, optedOut: detail.optedOut,
         nextAction: detail.nextAction, cadence: detail.cadence,
         activities: detail.activities, history: detail.history,
