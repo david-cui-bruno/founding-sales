@@ -38,6 +38,9 @@
   /* Geometry colors are decorative. Blue alone signals ordinary actions.
      Red/yellow are not text colors or substitutes for status semantics. */
   --bauhaus-red: #d9472b;
+  /* Small weekday text needs stronger contrast than decorative red. */
+  --date-badge-bg: #c63e25;
+  --date-badge-text: #ffffff;
   --bauhaus-yellow: #edc64a;
   --bauhaus-blue: #1748b6;
   --accent: var(--bauhaus-blue);
@@ -108,6 +111,8 @@
 
   /* Lifted Bauhaus colors retain contrast against dark ink surfaces. */
   --bauhaus-red: #f17a60;
+  --date-badge-bg: #f17a60;
+  --date-badge-text: #0f1011;
   --bauhaus-yellow: #edc64a;
   --bauhaus-blue: #9ab7ff;
   --accent: var(--bauhaus-blue);

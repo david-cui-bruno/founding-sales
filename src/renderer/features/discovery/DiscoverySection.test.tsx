@@ -27,7 +27,7 @@ it('renders evidence/questions without beginning and prepares only the explicitl
   await screen.findByRole('heading', { name: 'Prepared conversations' });
   fireEvent.click(screen.getByRole('button', { name: 'Research and diagnostics' }));
   expect(await screen.findByText('Additional research not configured')).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'View evidence for Example Owner' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open brief for Example Owner' }));
   expect(open).toHaveBeenCalledWith('owner-person'); expect(api.begin).not.toHaveBeenCalled();
   const button = screen.getByRole('button', { name: 'Contact options for Other Owner' });
   button.focus(); expect(document.activeElement).toBe(button);
@@ -46,7 +46,7 @@ it('retains exact lost-reply request even when a refresh removes the prepared Pe
   const first = api.begin.mock.calls[0][0];
   api.get.mockResolvedValue(snapshot([]));
   fireEvent.click(screen.getByRole('button', { name: 'Refresh shortlist' }));
-  await waitFor(() => expect(screen.queryByRole('button', { name: 'View evidence for Example Owner' })).toBeNull());
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Open brief for Example Owner' })).toBeNull());
   fireEvent.click(screen.getByRole('button', { name: 'Retry contact options for Example Owner' }));
   await waitFor(() => expect(open).toHaveBeenCalledWith('owner-person'));
   expect(api.begin.mock.calls[1][0]).toEqual(first);
@@ -83,7 +83,7 @@ it('ignores late navigation after evidence selection changes or unmount', async 
   api.begin.mockImplementation(() => new Promise(done => { resolve = done; }));
   const view = render(<DiscoverySection api={api} onOpenPerson={open} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Contact options for Example Owner' }));
-  fireEvent.click(screen.getByRole('button', { name: 'View evidence for Other Owner' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open brief for Other Owner' }));
   view.unmount();
   await act(async () => resolve({ personId: 'owner-person', salesCycleId: 'cycle-owner-person', assessmentId: brief().assessment!.id, actionId: 'action-owner', mutation: { revision: 2, affectedPersonIds: ['owner-person'], affectedSalesCycleIds: ['cycle-owner-person'] } }));
   expect(open).toHaveBeenCalledTimes(1); expect(open).toHaveBeenCalledWith('other');
@@ -146,7 +146,7 @@ it('does not abandon a lost reply merely because the founder views another Perso
   fireEvent.click(await screen.findByRole('button', { name: 'Contact options for Example Owner' }));
   await screen.findByRole('button', { name: 'Retry contact options for Example Owner' });
   const first = api.begin.mock.calls[0][0];
-  fireEvent.click(screen.getByRole('button', { name: 'View evidence for Other Owner' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open brief for Other Owner' }));
   fireEvent.click(screen.getByRole('button', { name: 'Retry contact options for Example Owner' }));
   await waitFor(() => expect(api.begin).toHaveBeenCalledTimes(2));
   expect(api.begin.mock.calls[1][0]).toEqual(first);
@@ -250,7 +250,7 @@ it('keeps prepared evidence compact and reveals the complete shortlist on demand
   await screen.findByRole('heading', { name: 'Prospect 0' });
   expect(screen.queryByRole('region', { name: /Discovery evidence for/ })).toBeNull();
   expect(screen.queryByRole('heading', { name: 'Prospect 3' })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'View evidence for Prospect 0' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open brief for Prospect 0' }));
   expect(open).toHaveBeenCalledWith('person-0'); expect(api.begin).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Show 3 more prepared people' }));
   expect(screen.getAllByRole('heading', { level: 3 }).map(el => el.textContent)).toEqual(people.map(p => p.personName));
@@ -275,10 +275,19 @@ it('does not claim paused work is preparing just because unassessed records rema
 it('keeps read-only selection separate from the prepared contact destination', async () => {
   const api = apiFor(); const detail = vi.fn(); const prepared = vi.fn();
   render(<DiscoverySection api={api} onOpenPerson={detail} onPreparedPerson={prepared} />);
-  fireEvent.click(await screen.findByRole('button', { name: 'View evidence for Example Owner' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Open brief for Example Owner' }));
   expect(detail).toHaveBeenCalledWith('owner-person'); expect(prepared).not.toHaveBeenCalled();
   expect(api.begin).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Contact options for Example Owner' }));
   await waitFor(() => expect(prepared).toHaveBeenCalledWith('owner-person'));
   expect(detail).toHaveBeenCalledTimes(1);
+});
+
+it('names each visible Open brief action for voice access without preparing the person', async () => {
+  const api = apiFor(); const open = vi.fn();
+  render(<DiscoverySection api={api} onOpenPerson={open} />);
+  const button = await screen.findByRole('button', { name: 'Open brief for Example Owner' });
+  expect(button.textContent).toBe('Open brief');
+  fireEvent.click(button);
+  expect(open).toHaveBeenCalledWith('owner-person'); expect(api.begin).not.toHaveBeenCalled();
 });

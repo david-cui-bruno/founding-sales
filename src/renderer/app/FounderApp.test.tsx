@@ -257,7 +257,7 @@ describe('FounderApp', () => {
 it('injects discovery into Today and the selected inspector without enrichment or outbound side effects', async () => {
   const api = fakeCallieApi();
   render(<FounderApp api={api} health={readyHealth} />);
-  fireEvent.click(await screen.findByRole('button', { name: 'View evidence for Kevin Shin' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Open brief for Kevin Shin' }));
   const page = await screen.findByRole('complementary', { name: 'Kevin Shin details' });
   expect(await within(page).findByText('Who handles maintenance?')).toBeTruthy();
   expect(api.discovery.getBrief).toHaveBeenCalledWith({ personId: 'person-kevin' });
@@ -276,7 +276,7 @@ it('refreshes the same selected inspector after preparation instead of showing c
   const api = fakeCallieApi();
   vi.mocked(api.leadDetail.get).mockResolvedValueOnce({ ...detail, stage: 'unreviewed' });
   render(<FounderApp api={api} health={readyHealth} />);
-  fireEvent.click(await screen.findByRole('button', { name: 'View evidence for Kevin Shin' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Open brief for Kevin Shin' }));
   const firstPage = await screen.findByRole('complementary', { name: 'Kevin Shin details' });
   expect(within(firstPage).getByText('Founder manual controls')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Contact options for Kevin Shin' }));

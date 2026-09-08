@@ -56,7 +56,7 @@ export function DiscoverySection({ api, onOpenPerson, onPreparedPerson = onOpenP
     {brief.stale && <p>Evidence changed. Refresh before preparing.</p>}
     {!prepared && <p>{brief.assessment?.reasonCodes.map(code => code.replaceAll('_', ' ')).join(' · ')}</p>}
     <div className="discovery-card__actions">
-      <Button variant="primary" onClick={() => { navigation.current++; onOpenPerson(brief.personId); }} aria-label={`View evidence for ${brief.personName}`}>Open brief</Button>
+      <Button variant="primary" onClick={() => { navigation.current++; onOpenPerson(brief.personId); }} aria-label={`Open brief for ${brief.personName}`}>Open brief</Button>
       {prepared && <Button variant="quiet" disabled={busyPersonId !== null || brief.stale || brief.assessment === null}
         onClick={() => { void contactOptions(brief); }} aria-label={`Contact options for ${brief.personName}`}>Contact options</Button>}
     </div>

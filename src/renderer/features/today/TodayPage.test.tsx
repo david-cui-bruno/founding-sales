@@ -411,6 +411,7 @@ it('opens the primary brief read-only while keeping explicit Call and hero actio
 it('bounds Also today and reveals all queued records in order with keyboard continuity', () => {
   renderPage(emptySnapshot({ lanes: [{ id: 'p1', items: Array.from({ length: 9 }, (_, i) => queueItem('p1', i + 1)), overflowCount: 12 }] }));
   const also = screen.getByRole('region', { name: 'Also today' });
+  expect(within(also).getByRole('heading', { name: 'Also today 8' })).toBeTruthy();
   expect(within(also).getAllByRole('listitem')).toHaveLength(3);
   expect(screen.queryByText('Person p1 5')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Show 5 more queued people' }));
@@ -437,4 +438,30 @@ it('keeps undisplayed lanes out of Also today until their records are requested'
   fireEvent.click(screen.getByRole('button', { name: 'Show 1 more queued people' }));
   expect(screen.getByRole('region', { name: /P1/ })).toBeTruthy();
   expect(screen.getByText('Person p1 1')).toBeTruthy();
+});
+
+it.each(['menu', 'snooze'] as const)('invalidates the hero %s session when a new sales cycle replaces it', mode => {
+  const commands = { onOpenLead: vi.fn(), onCall: vi.fn(), onSnoozeUntil: vi.fn(), onSkipToday: vi.fn(),
+    onLogPastActivity: vi.fn(), onOpenInLeads: vi.fn(), onStartTriage: vi.fn() };
+  const a = queueItem('p1', 1, { personName: 'Same Person', personId: 'same-person' });
+  const b = queueItem('p1', 2, { personName: 'Same Person', personId: 'same-person' });
+  const tree = (item: TodayItem) => <TodayPage {...commands} snapshot={emptySnapshot({ lanes: [{ id: 'p1', items: [item], overflowCount: 0 }] })} />;
+  const view = render(tree(a));
+  fireEvent.click(screen.getByRole('button', { name: 'More actions for Same Person' }));
+  if (mode === 'snooze') {
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Snooze until…' }));
+    fireEvent.change(screen.getByLabelText('Snooze until'), { target: { value: '2030-05-06' } });
+  }
+  const staleCommand = mode === 'snooze' ? screen.getByRole('button', { name: 'Snooze' }) : screen.getByRole('menuitem', { name: 'Skip today' });
+  view.rerender(tree(b));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.queryByRole('menu')).toBeNull();
+  expect(staleCommand.isConnected).toBe(false);
+  fireEvent.click(staleCommand);
+  expect(commands.onSnoozeUntil).not.toHaveBeenCalled(); expect(commands.onSkipToday).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'More actions for Same Person' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Snooze until…' }));
+  expect((screen.getByLabelText('Snooze until') as HTMLInputElement).value).not.toBe('2030-05-06');
+  fireEvent.click(screen.getByRole('button', { name: 'Snooze' }));
+  expect(commands.onSnoozeUntil).toHaveBeenCalledWith(b, expect.any(String));
 });

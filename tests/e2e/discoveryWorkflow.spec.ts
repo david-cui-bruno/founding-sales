@@ -75,7 +75,7 @@ test('P1 automatic source-backed shortlist, unfinished-work restart, evidence, s
     const id = selected!.personId;
     const before = await page.evaluate(request => window.callie.leads.list(request), listRequest);
     expect(before.rows).toHaveLength(125); expect(before.rows.every(row => row.stage === 'unreviewed' && row.lastActivityAt === null)).toBe(true);
-    await page.getByRole('button', { name: `View evidence for ${selected!.personName}`, exact: true }).click();
+    await page.getByRole('button', { name: `Open brief for ${selected!.personName}`, exact: true }).click();
     const inspector = page.getByRole('complementary', { name: `${selected!.personName} details` });
     const ref = selected!.assessment!.claims.flatMap(c => c.refs).find(ref => ref.kind === 'source')!;
     if (ref.kind !== 'source') throw new Error('Expected retained source citation');

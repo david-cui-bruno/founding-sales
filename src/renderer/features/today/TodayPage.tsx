@@ -296,6 +296,7 @@ export function TodayPage({
         <div className="today__bento">
           {nextUp !== null && (
             <NextUpCard
+              key={nextUp.salesCycleId}
               item={nextUp}
               busy={busy}
               tabbable={nextUp.salesCycleId === tabbableCycleId}
@@ -309,7 +310,7 @@ export function TodayPage({
             />
           )}
           <section className="today__also" aria-label="Also today">
-          <h2 className="today__section-title">Also today <span>{lanes.reduce((sum, lane) => sum + lane.totalCount + lane.overflowCount, 0) - (nextUp === null ? 0 : 1)}</span></h2>
+          <h2 className="today__section-title">Also today <span>{lanes.reduce((sum, lane) => sum + lane.totalCount, 0) - (nextUp === null ? 0 : 1)}</span></h2>
           <div className="today__lanes">
             {lanes.filter(lane => lane.rows.length > 0 || lane.overflowCount > 0).map((lane) => (
               <TodayLane

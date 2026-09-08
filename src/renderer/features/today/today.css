@@ -717,8 +717,8 @@
   flex: 0 0 64px;
   height: 64px;
   border-radius: 50%;
-  background: var(--bauhaus-red);
-  color: var(--accent-text);
+  background: var(--date-badge-bg);
+  color: var(--date-badge-text);
 }
 .today-header__date span { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .08em; }
 .today-header__date strong { font: 750 var(--text-title)/1.2 var(--font-display); }
@@ -765,7 +765,7 @@
 .today__also .today__lanes { gap: var(--space-2); }
 .today__also .today-lane { border: 0; border-radius: 0; background: none; }
 .today__also .today-lane__header { padding-inline: 0; }
-.today__also .today-row { padding-inline: 0; min-height: 58px; }
+.today__also .today-row { padding-inline: 0; min-height: calc(var(--today-row-height) + var(--space-3)); }
 .today__also .today-row__reason { white-space: normal; }
 .today__also .today-lane__overflow { padding-inline: 0; }
 .today__queue-details, .today__disclosure, .today__manual-review > button { font-size: var(--text-sm); color: var(--text-muted); }

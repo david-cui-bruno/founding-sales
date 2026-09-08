@@ -191,7 +191,7 @@ describe('assembled automatic discovery through startup, encrypted DB, registrar
     expect(brief.pilotNextStep).toBeNull(); expect(brief.assessment?.axes.fit).toMatchObject({ points: 15, completeness: 'partial' });
     expect(brief.assessment?.questions).toHaveLength(3);
     const inspectionBefore = isolated(f);
-    fireEvent.click(await screen.findByRole('button', { name: 'View evidence for Synthetic 0 Holdings LLC' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open brief for Synthetic 0 Holdings LLC' }));
     await act(async () => { await f.api.leadDetail.get({ personId: selected.personId }); });
     const inspector = await screen.findByRole('complementary', { name: /Synthetic 0.*details/ });
     for (const claim of brief.assessment!.claims) for (const ref of claim.refs) if (ref.kind === 'source') {
@@ -271,7 +271,7 @@ describe('assembled automatic discovery through startup, encrypted DB, registrar
     expect(isolated(f)).toEqual(business); expect(rows(f, 'discovery_assessments')).toEqual([]);
     fireEvent.click(screen.getByRole('link', { name: 'Today' })); await screen.findByRole('heading', { name: 'Prepared conversations' }); await refresh(f);
     expect((await f.api.discovery.getBrief({ personId: owner.personId })).assessment?.axes.fit).toMatchObject({ points: 0, completeness: 'partial' });
-    fireEvent.click(await screen.findByRole('button', { name: 'View evidence for Synthetic 0 Holdings LLC' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open brief for Synthetic 0 Holdings LLC' }));
     expect(await screen.findByText('Fit: 0 supported points /30 (partial)')).toBeTruthy();
     expect(screen.getAllByText('No current trigger established').length).toBeGreaterThan(0);
     expect(rows(f, 'discovery_preparations')).toEqual([]); expect(isolated(f)).toEqual(business);
