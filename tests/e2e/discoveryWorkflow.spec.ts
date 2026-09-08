@@ -31,6 +31,7 @@ function event(index: number) {
 }
 
 test('P1 automatic source-backed shortlist, unfinished-work restart, evidence, selected manual pilot and unsent draft', async () => {
+  const info = test.info();
   test.setTimeout(240_000); // Real worker's bounded minute scan, never a test repair API.
   const directory = await mkdtemp(join(tmpdir(), 'callie-sourcing-fixture-'));
   let workspace: FounderWorkspace | undefined; let first: FounderWorkspace | undefined;
@@ -62,14 +63,20 @@ test('P1 automatic source-backed shortlist, unfinished-work restart, evidence, s
     expect(snapshot.prepared).toHaveLength(10);
     await page.getByRole('button', { name: 'Refresh shortlist' }).click();
     await expect(page.getByRole('heading', { name: 'Prepared conversations' })).toBeVisible();
+    await expect(page.locator('.discovery__cards .discovery-card')).toHaveCount(3);
+    await page.screenshot({ path: info.outputPath('today-prepared-bento.png') });
+    await page.getByRole('button', { name: 'Research and diagnostics', exact: true }).click();
     await expect(page.getByText('Additional research not configured')).toBeVisible();
+    await page.getByRole('button', { name: 'Research and diagnostics', exact: true }).click();
+    await page.getByRole('button', { name: 'Show 7 more prepared people', exact: true }).click();
+    await expect(page.locator('.discovery__cards .discovery-card')).toHaveCount(10);
     const selected = snapshot.prepared.find(b => b.personName === 'Synthetic 0 Holdings LLC');
     expect(selected).toBeDefined();
     const id = selected!.personId;
     const before = await page.evaluate(request => window.callie.leads.list(request), listRequest);
     expect(before.rows).toHaveLength(125); expect(before.rows.every(row => row.stage === 'unreviewed' && row.lastActivityAt === null)).toBe(true);
     await page.getByRole('button', { name: `View evidence for ${selected!.personName}`, exact: true }).click();
-    const inspector = page.getByRole('article', { name: `${selected!.personName} full page` });
+    const inspector = page.getByRole('complementary', { name: `${selected!.personName} details` });
     const ref = selected!.assessment!.claims.flatMap(c => c.refs).find(ref => ref.kind === 'source')!;
     if (ref.kind !== 'source') throw new Error('Expected retained source citation');
     await expect(inspector.getByText(`Source ${ref.sourceEventId}, ${ref.field}, ${ref.observedAt}`, { exact: true }).first()).toBeVisible();
