@@ -143,8 +143,8 @@ body[data-platform="darwin"] .nav-rail__header {
   text-decoration: none;
   user-select: none;
   -webkit-user-select: none;
-  transition: background var(--motion-fast) var(--motion-ease),
-    color var(--motion-fast) var(--motion-ease);
+  /* Selected and ordinary links invert foreground/background polarity.
+     Keep the pair discrete: interpolating both produces unreadable frames. */
 }
 
 .nav-rail__item:hover {

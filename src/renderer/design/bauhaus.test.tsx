@@ -116,4 +116,69 @@ describe('Bauhaus shared rendered design', () => {
       await page.close();
     }
   });
+
+  it.each(['light', 'dark'])('keeps nav labels readable during rapid route swaps with motion enabled in %s', async (theme) => {
+    const page = await browser.newPage({ reducedMotion: 'no-preference' });
+    try {
+      await page.setContent(`<html data-theme="${theme}"><head><style>${css}</style></head><body>${renderToStaticMarkup(
+        <NavigationRail route="today" onNavigate={() => undefined} reviewCount={3} />,
+      )}</body></html>`);
+      const result = await page.evaluate(() => {
+        const rail = document.querySelector('.nav-rail')!;
+        const links = Array.from(rail.querySelectorAll<HTMLAnchorElement>('a'));
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext('2d')!;
+        // Canvas resolves interpolated color()/rgba() syntax and composites
+        // transparent link backgrounds over the actual opaque rail surface.
+        const rgb = (value: string, background?: string): string => {
+          context.clearRect(0, 0, 1, 1);
+          if (background) {
+            context.fillStyle = background;
+            context.fillRect(0, 0, 1, 1);
+          }
+          context.fillStyle = value;
+          context.fillRect(0, 0, 1, 1);
+          return `rgb(${Array.from(context.getImageData(0, 0, 1, 1).data).slice(0, 3).join(', ')})`;
+        };
+        const samples: { route: string; time: number; color: string; background: string }[] = [];
+        let previous = links[0]!;
+        getComputedStyle(previous).getPropertyValue('color');
+        for (const route of ['leads', 'conversations', 'today', 'inbox']) {
+          const next = links.find((link) => link.hash === `#/${route}`)!;
+          previous.classList.remove('nav-rail__item--current');
+          next.classList.add('nav-rail__item--current');
+          getComputedStyle(previous).getPropertyValue('color');
+          getComputedStyle(next).getPropertyValue('color');
+          const transitions = [previous, next].flatMap((link) => link.getAnimations());
+          transitions.forEach((animation) => animation.pause());
+          // Seek actual CSS animations, not wall-clock sleeps. With discrete
+          // colors there are no transitions, so every sample sees safe endpoints.
+          for (const time of [0, 10, 20, 30, 45, 60, 90, 150]) {
+            transitions.forEach((animation) => { animation.currentTime = time; });
+            for (const link of [previous, next]) {
+              const style = getComputedStyle(link);
+              samples.push({
+                route: link.hash, time,
+                color: rgb(style.color),
+                background: rgb(style.backgroundColor, getComputedStyle(rail).backgroundColor),
+              });
+            }
+          }
+          // Change routes again while any original transition is mid-flight.
+          transitions.forEach((animation) => { animation.currentTime = 20; });
+          previous = next;
+        }
+        return { reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, samples };
+      });
+      expect(result.reduced).toBe(false);
+      expect(result.samples).toHaveLength(64);
+      for (const sample of result.samples) {
+        expect(contrast(sample.color, sample.background), `${theme} ${sample.route} at ${sample.time}ms`)
+          .toBeGreaterThanOrEqual(4.5);
+      }
+    } finally {
+      await page.close();
+    }
+  });
 });
