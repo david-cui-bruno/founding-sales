@@ -185,6 +185,7 @@ describe('assembled automatic discovery through startup, encrypted DB, registrar
     expect(snapshot.prepared.slice(-2).map(b => b.personId)).toEqual([owners[35].personId, owners[36].personId]);
     expect(snapshot.prepared.some(b => b.personId === unknown.personId || b.personId === conflict.personId)).toBe(false);
     expect(snapshot.judgment.find(b => b.personId === conflict.personId)?.assessment?.reasonCodes).toContain('ownership_conflict');
+    fireEvent.click(screen.getByRole('button', { name: 'Research and diagnostics' }));
     expect(await screen.findByText('Additional research not configured')).toBeTruthy();
     const brief = await f.api.discovery.getBrief({ personId: selected.personId });
     expect(brief.pilotNextStep).toBeNull(); expect(brief.assessment?.axes.fit).toMatchObject({ points: 15, completeness: 'partial' });
@@ -192,7 +193,7 @@ describe('assembled automatic discovery through startup, encrypted DB, registrar
     const inspectionBefore = isolated(f);
     fireEvent.click(await screen.findByRole('button', { name: 'View evidence for Synthetic 0 Holdings LLC' }));
     await act(async () => { await f.api.leadDetail.get({ personId: selected.personId }); });
-    const inspector = await screen.findByRole('article', { name: /Synthetic 0.*full page/ });
+    const inspector = await screen.findByRole('complementary', { name: /Synthetic 0.*details/ });
     for (const claim of brief.assessment!.claims) for (const ref of claim.refs) if (ref.kind === 'source') {
       expect(f.services.sourceRepository.getById(ref.sourceEventId)?.observedAt).toBe(ref.observedAt);
       expect(within(inspector).getAllByText(`Source ${ref.sourceEventId}, ${ref.field}, ${ref.observedAt}`).length).toBeGreaterThan(0);
@@ -253,7 +254,9 @@ describe('assembled automatic discovery through startup, encrypted DB, registrar
   it('S1 preserves actual absent-score displays across views and distinguishes a real supported zero', async () => {
     const f = await fixture(); const owner = intake(f, 0, false, true); const business = isolated(f);
     expect((await f.api.pipeline.get()).stages.flatMap(stage => stage.cards).map(card => card.priorityContext)).toEqual([null]);
-    await f.mount(); expect(await screen.findByText(/1 not assessed/)).toBeTruthy();
+    await f.mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Research and diagnostics' }));
+    expect(await screen.findByText(/1 not assessed/)).toBeTruthy();
     fireEvent.click(screen.getByRole('link', { name: 'Leads' }));
     const row = await screen.findByRole('row', { name: /Synthetic 0/i });
     for (const axis of ['fit', 'timing']) expect(row.querySelector(`.leads-grid__col--${axis}`)?.textContent).toBe('—');
