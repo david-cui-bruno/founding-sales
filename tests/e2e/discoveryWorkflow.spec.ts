@@ -90,10 +90,10 @@ test('P1 automatic source evidence, unfinished-work restart, contact-first works
     const untouched = (await page.evaluate(request => window.callie.leads.list(request), listRequest)).rows.filter(row => row.personId !== id);
     expect(untouched.every(row => row.stage === 'unreviewed' && row.lastActivityAt === null)).toBe(true);
     const email = inspector.getByRole('button', { name: 'Email', exact: true });
-    await email.click(); await page.getByLabel('Message', { exact: true }).fill('Unsent synthetic draft');
+    await email.click(); await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Unsent synthetic draft');
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
     await page.getByRole('button', { name: 'Close draft' }).click(); await email.click();
-    await expect(page.getByLabel('Message', { exact: true })).toHaveValue('Unsent synthetic draft');
+    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('Unsent synthetic draft');
     await page.getByRole('button', { name: 'Close draft' }).click();
     expect((await page.evaluate(personId => window.callie.discovery.getBrief({ personId }), id)).pilotNextStep).toBeNull();
     // Explicit founder-recorded actual conversation. Generated text never advances a stage.
