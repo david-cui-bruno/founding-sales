@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { NavigationRail } from '../app/NavigationRail';
+import { Avatar } from '../components/Avatar';
 import { Button } from '../components/Button';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorState } from '../components/ErrorState';
@@ -17,6 +18,7 @@ import { StatusPill } from '../components/StatusPill';
 const css = ['design/tokens.css', 'design/themes.css', 'design/base.css',
   'design/motion.css', 'app/shell.css'].map((path) =>
   readFileSync(`src/renderer/${path}`, 'utf8')).join('\n');
+const inspectorCss = readFileSync('src/renderer/features/leadInspector/leadInspector.css', 'utf8');
 let browser: Browser;
 beforeAll(async () => { browser = await chromium.launch({ headless: true }); });
 afterAll(async () => { await browser?.close(); });
@@ -34,6 +36,60 @@ function contrast(a: string, b: string): number {
 }
 
 describe('Bauhaus shared rendered design', () => {
+  it.each([
+    ['light', 'no-preference'], ['dark', 'no-preference'], ['light', 'reduce'], ['dark', 'reduce'],
+  ] as const)('keeps inspector identity and status readable throughout entry in %s with %s motion', async (theme, reducedMotion) => {
+    const page = await browser.newPage({ reducedMotion });
+    try {
+      await page.setContent(`<html data-theme="${theme}"><head><style>${css}\n${inspectorCss}</style></head><body>${renderToStaticMarkup(
+        <aside className="lead-inspector" aria-label="Maya Ortiz details"><div className="lead-inspector__body">
+          <div className="lead-inspector__identity"><Avatar name="Maya Ortiz" /><h2>Maya Ortiz</h2></div>
+          <StatusPill tone="neutral">Ready</StatusPill>
+        </div></aside>,
+      )}</body></html>`);
+      const result = await page.evaluate(() => {
+        const inspector = document.querySelector<HTMLElement>('.lead-inspector')!;
+        // Restart and seek the actual authored CSS animation, never wall-clock waits.
+        inspector.style.animation = 'none'; getComputedStyle(inspector).getPropertyValue('animation-name');
+        inspector.style.animation = ''; getComputedStyle(inspector).getPropertyValue('animation-name');
+        const animations = inspector.getAnimations(); animations.forEach(animation => animation.pause());
+        const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
+        const context = canvas.getContext('2d')!;
+        const composite = (color: string, background: string, opacity: number) => {
+          context.globalAlpha = 1; context.clearRect(0, 0, 1, 1);
+          context.fillStyle = background; context.fillRect(0, 0, 1, 1);
+          context.globalAlpha = opacity; context.fillStyle = color; context.fillRect(0, 0, 1, 1);
+          return `rgb(${Array.from(context.getImageData(0, 0, 1, 1).data).slice(0, 3).join(', ')})`;
+        };
+        const backdrop = getComputedStyle(document.body).backgroundColor;
+        const samples: { selector: string; time: number; opacity: number; color: string; background: string; transform: string }[] = [];
+        for (const time of [90, 120, 30, 60, 180, 240]) {
+          animations.forEach(animation => { animation.currentTime = time; });
+          const parent = getComputedStyle(inspector); const opacity = Number(parent.opacity);
+          for (const selector of ['.avatar', '.status-pill']) {
+            const style = getComputedStyle(inspector.querySelector(selector)!);
+            const background = composite(style.backgroundColor, parent.backgroundColor, 1);
+            samples.push({ selector, time, opacity, transform: parent.transform,
+              color: composite(style.color, backdrop, opacity), background: composite(background, backdrop, opacity) });
+          }
+        }
+        return { animationCount: animations.length, samples };
+      });
+      expect(result.animationCount).toBe(reducedMotion === 'reduce' ? 0 : 1);
+      if (reducedMotion === 'no-preference') {
+        expect(result.samples.find(sample => sample.time === 30)!.transform)
+          .not.toBe(result.samples.find(sample => sample.time === 240)!.transform);
+      }
+      for (const sample of result.samples.filter(sample => sample.time === 240)) {
+        expect(contrast(sample.color, sample.background), `${theme} settled ${sample.selector}`).toBeGreaterThanOrEqual(4.5);
+      }
+      for (const sample of result.samples) {
+        expect(contrast(sample.color, sample.background), `${theme} ${sample.selector} at ${sample.time}ms, opacity ${sample.opacity}, ${sample.color} on ${sample.background}`)
+          .toBeGreaterThanOrEqual(4.5);
+      }
+    } finally { await page.close(); }
+  });
+
   it.each(['light', 'dark'])('renders crisp geometry, legible semantics and native chrome in %s', async (theme) => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     try {
