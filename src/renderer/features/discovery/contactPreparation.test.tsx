@@ -2,9 +2,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { discoveryBriefSchema, discoverySnapshotSchema, type DiscoveryApi, type DiscoveryBrief } from '../../../shared/contracts/discoveryContract';
+import { beginDiscoveryReceiptSchema, discoveryBriefSchema, discoverySnapshotSchema, type DiscoveryApi, type DiscoveryBrief } from '../../../shared/contracts/discoveryContract';
 import { leadDetailSchema, type LeadDetail } from '../../../shared/contracts/leadDetailContract';
 import type { FindContactInfoReceipt } from '../../../shared/contracts/enrichmentRequestContract';
+import type { EmailDraft, OutreachApi, OutreachStatus } from '../../../shared/contracts/outreachContract';
 import { LeadInspectorProvider } from '../leadInspector/LeadInspectorProvider';
 import { useLeadInspector, type LeadDetailApi } from '../leadInspector/useLeadInspector';
 import { TodayRoute, type TodayRouteApi } from '../today/TodayRoute';
@@ -46,7 +47,7 @@ function fixture() {
     confirmTransition: vi.fn<LeadDetailApi['confirmTransition']>(), dismissLead: vi.fn<LeadDetailApi['dismissLead']>(), overrideCloudScore: vi.fn<LeadDetailApi['overrideCloudScore']>(),
     findContactInfo: vi.fn<LeadDetailApi['findContactInfo']>(async () => ({ written: true, refusalReason: null })),
   };
-  const mount = () => render(<StrictMode><LeadInspectorProvider api={api} discoveryApi={discovery}><Harness /></LeadInspectorProvider></StrictMode>);
+  const mount = (outreachApi?: OutreachApi) => render(<StrictMode><LeadInspectorProvider api={api} discoveryApi={discovery} outreachApi={outreachApi}><Harness /></LeadInspectorProvider></StrictMode>);
   return { api, discovery, mount, setDetail: (value: LeadDetail) => { current = value; } };
 }
 function Harness() {
@@ -106,12 +107,20 @@ it('retains the exact uncertain preparation request across person switches and e
   expect(f.discovery.begin.mock.calls[1][0]).toEqual(request); expect(f.api.findContactInfo).toHaveBeenCalledTimes(1);
 });
 
-it('does not continue a late preparation after the person changes', async () => {
+it('does not continue a valid late preparation until the owner explicitly retries the retained request', async () => {
   const f = fixture(); const result = deferred<Awaited<ReturnType<DiscoveryApi['begin']>>>(); f.discovery.begin.mockReturnValue(result.promise);
   f.mount(); await openA(); fireEvent.click(await action()); await waitFor(() => expect(f.discovery.begin).toHaveBeenCalledTimes(1));
   fireEvent.click(screen.getByRole('button', { name: 'Open B' })); await screen.findByRole('complementary', { name: 'Owner b details' });
-  const request = f.discovery.begin.mock.calls[0][0]; await act(async () => result.resolve({ ...request, actionId: 'action-a', mutation: receipt }));
+  const request = f.discovery.begin.mock.calls[0][0];
+  const validReceipt = { personId: request.personId, salesCycleId: request.salesCycleId, assessmentId: request.assessmentId, actionId: 'action-a', mutation: receipt };
+  expect(beginDiscoveryReceiptSchema.safeParse(validReceipt).success).toBe(true);
+  await act(async () => result.resolve(validReceipt));
   expect(f.api.findContactInfo).not.toHaveBeenCalled(); expect(screen.getByRole('complementary', { name: 'Owner b details' })).toBeTruthy();
+  f.setDetail(detail('a', { stage: 'ready', findContactEligibility: { eligible: true, refusalReason: null } }));
+  await openA(); fireEvent.click(await action()); await screen.findByText(/Contact info requested/);
+  // The same resolved receipt must now traverse the real successful parse path.
+  expect(f.discovery.begin).toHaveBeenCalledTimes(2); expect(f.discovery.begin.mock.calls[1][0]).toEqual(request);
+  expect(f.api.findContactInfo).toHaveBeenCalledOnce(); expect(f.api.findContactInfo).toHaveBeenCalledWith({ personId: 'a' });
 });
 
 it('honors the current detail gate after successful preparation', async () => {
@@ -135,6 +144,46 @@ it('refreshes requested contacts beyond a minute and retains an open editor duri
   await act(async () => pending.resolve(emailDetail())); expect(screen.getByLabelText('Message')).toBe(message);
   expect(document.activeElement).toBe(message); expect(message.value).toBe('Keep this exact unsent prose');
   expect(f.api.findContactInfo).toHaveBeenCalledOnce(); expect(f.api.beginOutbound).not.toHaveBeenCalled();
+});
+
+it('preserves the API-backed email editor on focus refresh and reopens its saved unsent draft', async () => {
+  const f = fixture(); f.setDetail(emailDetail());
+  const status: OutreachStatus = { model: 'ready', modelName: 'fixture-model', gmail: 'ready', accountEmail: 'founder@example.test', senderName: 'Fixture Founder', postalAddress: '123 Fixture St' };
+  let saved: EmailDraft = { id: 'draft-a', personId: 'a', contactMethodId: 'email-a', salesCycleId: 'cycle-a', recipient: 'a@example.test', subject: 'Initial subject', body: 'Initial saved draft', revision: 1, status: 'draft', generation: 'model', messageId: null, notice: null, updatedAt: '2026-09-08T12:00:00.000Z' };
+  const outreachApi: OutreachApi = {
+    status: vi.fn(async () => status), configure: vi.fn(), connectGmail: vi.fn(), disconnectGmail: vi.fn(),
+    openDraft: vi.fn(async () => ({ ...saved })),
+    saveDraft: vi.fn(async input => {
+      expect(input.draftId).toBe(saved.id); expect(input.expectedRevision).toBe(saved.revision);
+      saved = { ...saved, subject: input.subject, body: input.body, generation: 'edited', revision: saved.revision + 1 };
+      return { ...saved };
+    }),
+    generateDraft: vi.fn(), sendDraft: vi.fn(),
+  };
+  f.mount(outreachApi); await openA(); fireEvent.click(screen.getByRole('button', { name: 'Email' }));
+  await waitFor(() => expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Initial saved draft'));
+  expect(outreachApi.openDraft).toHaveBeenCalledWith({ personId: 'a', contactMethodId: 'email-a' });
+  const opens = vi.mocked(outreachApi.openDraft).mock.calls.length;
+  const message = screen.getByLabelText('Message') as HTMLTextAreaElement;
+  const subject = screen.getByLabelText('Subject') as HTMLInputElement;
+  fireEvent.change(subject, { target: { value: 'Exact unsent subject' } });
+  fireEvent.change(message, { target: { value: 'Exact unsent API-backed prose' } }); message.focus();
+  const pending = deferred<LeadDetail>(); f.api.get.mockReturnValueOnce(pending.promise);
+  await act(async () => { fireEvent(window, new Event('focus')); });
+  expect(screen.getByLabelText('Message')).toBe(message); expect(document.activeElement).toBe(message);
+  await act(async () => pending.resolve({ ...emailDetail(), revision: 2 }));
+  expect(screen.getByLabelText('Message')).toBe(message); expect(screen.getByLabelText('Subject')).toBe(subject);
+  expect(document.activeElement).toBe(message); expect(message.value).toBe('Exact unsent API-backed prose'); expect(subject.value).toBe('Exact unsent subject');
+  expect(outreachApi.openDraft).toHaveBeenCalledTimes(opens); expect(outreachApi.saveDraft).not.toHaveBeenCalled();
+  expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Close draft' }));
+  await waitFor(() => expect(screen.queryByLabelText('Message')).toBeNull());
+  expect(saved.body).toBe('Exact unsent API-backed prose'); expect(saved.subject).toBe('Exact unsent subject'); expect(saved.status).toBe('draft');
+  fireEvent.click(screen.getByRole('button', { name: 'Email' }));
+  await waitFor(() => expect(outreachApi.openDraft).toHaveBeenCalledTimes(opens + 1));
+  await waitFor(() => expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe(saved.body));
+  expect(outreachApi.sendDraft).not.toHaveBeenCalled(); expect(outreachApi.generateDraft).not.toHaveBeenCalled();
+  expect(f.api.beginOutbound).not.toHaveBeenCalled(); expect(f.discovery.begin).not.toHaveBeenCalled(); expect(f.api.findContactInfo).not.toHaveBeenCalled();
 });
 
 it('never retries an uncertain lookup, bounds pending reads, and stops them on teardown', async () => {
