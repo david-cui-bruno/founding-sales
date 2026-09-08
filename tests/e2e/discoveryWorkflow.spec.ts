@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { AxeBuilder } from '@axe-core/playwright';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -63,10 +64,26 @@ test('P1 automatic source evidence, unfinished-work restart, contact-first works
     expect(snapshot.prepared).toHaveLength(10);
     await expect(page.getByText('Prepared conversations', { exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Refresh shortlist', exact: true })).toHaveCount(0);
-    await page.screenshot({ path: info.outputPath('today-contact-first.png') });
     const suggestions = page.getByRole('region', { name: 'Suggested contacts' });
     await expect(suggestions).toBeVisible();
     await expect(suggestions.getByRole('button')).toHaveCount(3);
+    for (const theme of ['dark', 'light'] as const) {
+      await page.getByRole('link', { name: 'Settings', exact: true }).click();
+      await page.getByRole('button', { name: 'Appearance', exact: true }).click();
+      await page.getByRole('region', { name: 'Appearance', exact: true })
+        .getByRole('button', { name: theme === 'light' ? 'Light appearance' : 'Dark appearance', exact: true }).click();
+      await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+      await page.getByRole('link', { name: 'Today', exact: true }).click();
+      await expect(suggestions.getByRole('button')).toHaveCount(3);
+      for (const width of [1050, 1440]) {
+        await page.setViewportSize({ width, height: width === 1050 ? 700 : 900 });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+        const accessibility = await new AxeBuilder({ page }).setLegacyMode(true).analyze();
+        expect(accessibility.violations.filter(v => ['serious', 'critical'].includes(v.impact ?? ''))
+          .map(v => ({ id: v.id, nodes: v.nodes.map(n => n.target) })), `${theme} suggestions ${width}`).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`${theme}-suggested-contacts-${width}.png`), animations: 'disabled' });
+      }
+    }
     const selected = snapshot.prepared[0];
     expect(selected).toBeDefined();
     const selectedIndex = Number(selected.personName.match(/\d+/)![0]);
