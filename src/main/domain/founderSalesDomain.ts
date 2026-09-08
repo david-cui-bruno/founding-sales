@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 
 import Papa from 'papaparse';
 import { z } from 'zod';
+import { buildPortfolioContext } from './portfolio/portfolioContext';
 import { DiscoveryWorkerCommands, type DiscoveryResearchRequest } from '../discovery/discoveryWorker';
 import type { DiscoveryScanPage } from './discovery/discoveryTypes';
 import { collectDiscoveryEvidence } from './discovery/discoveryEvidence';
@@ -848,6 +849,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
       }
     })();
     return leadDetailSchema.parse({
+      ...buildPortfolioContext(this.database, person.id),
       personId: person.id,
       salesCycleId: cycle.id,
       personName: person.display_name,

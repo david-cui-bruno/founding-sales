@@ -73,6 +73,21 @@ export const findContactEligibilitySchema = z.object({
 }).strict();
 export type FindContactEligibility = z.infer<typeof findContactEligibilitySchema>;
 
+export const portfolioContextSchema = z.object({
+  role: z.enum(['owner', 'manager', 'unknown']),
+  ownedCount: z.number().int().nonnegative(),
+  managedCount: z.number().int().nonnegative(),
+  linkedCount: z.number().int().nonnegative(),
+  knownUnits: z.number().int().nonnegative().nullable(),
+  locations: z.array(z.string()),
+  summary: z.string(),
+  completeness: z.literal('partial'),
+  facts: z.array(z.object({ id: z.string(), text: z.string() }).strict()),
+}).strict();
+export const contactReasonSchema = z.object({ text: z.string(), evidenceIds: z.array(z.string()).min(1) }).strict();
+export type PortfolioContext = z.infer<typeof portfolioContextSchema>;
+export type ContactReason = z.infer<typeof contactReasonSchema>;
+
 export const leadDetailSchema = z.object({
   personId: personIdSchema, salesCycleId: salesCycleIdSchema, personName: z.string().min(1), phones: z.array(contactMethodSchema),
   emails: z.array(contactMethodSchema), organizationLabel: z.string().nullable(), propertySummaries: z.array(z.string()),
@@ -85,6 +100,8 @@ export const leadDetailSchema = z.object({
   cadence: cadenceSummarySchema.nullable(), activities: z.array(activitySummarySchema), conversations: z.array(conversationSummarySchema),
   outboundAttempts: z.array(outboundAttemptSummarySchema).max(20),
   properties: z.array(propertySummarySchema), history: z.array(historyEventSchema), revision: z.number().int().nonnegative(),
+  portfolio: portfolioContextSchema.optional(),
+  contactReason: contactReasonSchema.nullable().optional(),
 }).strict();
 
 export const leadDetailRequestSchema = z.object({
