@@ -160,7 +160,7 @@ export class SalesCycleRepository {
     const row = this.database.raw.prepare(`
       UPDATE sales_cycles
       SET stage = ?, workflow_status = ?, current_next_action_id = ?,
-          stage_entered_at = ?, version = version + 1, updated_at = ?
+          resurface_at = NULL, resurface_reason = NULL, stage_entered_at = ?, version = version + 1, updated_at = ?
       WHERE id = ? AND version = ? AND stage = ? AND workflow_status = ?
         AND current_next_action_id IS ?
       RETURNING ${cycleColumns}
@@ -185,7 +185,7 @@ export class SalesCycleRepository {
     }).strict().parse(input);
     const row = this.database.raw.prepare(`
       UPDATE sales_cycles
-      SET current_next_action_id = ?, version = version + 1, updated_at = ?
+      SET current_next_action_id = ?, resurface_at = NULL, resurface_reason = NULL, version = version + 1, updated_at = ?
       WHERE id = ? AND version = ? AND stage = ? AND workflow_status = ?
         AND current_next_action_id = ?
       RETURNING ${cycleColumns}
@@ -260,14 +260,6 @@ export class SalesCycleRepository {
     if (cycle.workflowStatus === 'closed') {
       if (cycle.currentNextActionId !== null) {
         throw new LifecycleInvariantError('A closed cycle cannot point to a current action.');
-      }
-      return;
-    }
-    // Unreviewed cycles carry no generated work: reviewing a lead is the
-    // inspector flow, not a next action.
-    if (cycle.stage === 'unreviewed') {
-      if (cycle.currentNextActionId !== null) {
-        throw new LifecycleInvariantError('An unreviewed cycle cannot carry generated review work.');
       }
       return;
     }

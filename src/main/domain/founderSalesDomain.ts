@@ -141,7 +141,7 @@ import {
   type ImportStatus,
   type ImportStatusRequest,
 } from '../../shared/contracts/importContract';
-import { FOUNDER_CHANNEL_POLICIES_V1 } from './cadence/cadenceScheduler';
+import { PLAYBOOK_CHANNEL_POLICIES_V2 } from './cadence/cadenceScheduler';
 import { comparePhoneCandidates } from './contacts/contactPresentation';
 import type { DomainServices } from './createDomainServices';
 import {
@@ -1157,7 +1157,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
     const queue = this.services.today.build({
       timezone,
       capacity,
-      channelPolicies: FOUNDER_CHANNEL_POLICIES_V1,
+      channelPolicies: PLAYBOOK_CHANNEL_POLICIES_V2,
     });
     const cycleIds = queue.lanes.flatMap(({ items }) => items.map((item) => item.cycleId));
     const context = new Map<string, {
@@ -1211,6 +1211,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
         stage: row.stage,
         priorityContext,
         action: {
+          dueAt: item.action.dueAt ?? null,
           id: item.action.id,
           type: item.action.actionType,
           channel: actionChannel({
@@ -1219,7 +1220,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
             workIntent: item.action.workIntent,
             onboarding: lane === 'onboarding',
           }),
-          label: actionLabel(item.action.actionType),
+          label: item.action.actionType === 'review_lead' ? 'Contact' : actionLabel(item.action.actionType),
         },
         reason: item.laneReason,
         activeTriggers: item.selectedTriggerReasons
@@ -1549,6 +1550,22 @@ export class FounderSalesDomain implements OutboundDomainPort {
     `).run(resurfaceAt, resurfaceReason, updatedAt, cycle.id, cycle.version);
     if (changed.changes !== 1) {
       throw new FounderSalesDomainError('CYCLE_NOT_FOUND', 'The cycle changed concurrently.');
+    }
+    if (resurfaceAt !== null && cycle.current_next_action_id !== null) {
+      const independentPostStage = resurfaceReason === 'callback'
+        && ['interviewed', 'offered', 'won'].includes(cycle.stage);
+      const actionChanged = this.database.raw.prepare(`
+        UPDATE next_actions
+        SET due_at = CASE WHEN ? AND action_type <> 'call' THEN due_at ELSE ? END,
+          due_source = CASE WHEN ? AND action_type <> 'call' THEN due_source ELSE ? END,
+          version = version + 1, updated_at = ?
+        WHERE id = ? AND sales_cycle_id = ? AND status = 'pending'
+      `).run(Number(independentPostStage), resurfaceAt, Number(independentPostStage),
+        resurfaceReason === 'callback' ? 'recorded_callback' : 'founder_resurface',
+        updatedAt, cycle.current_next_action_id, cycle.id);
+      if (actionChanged.changes !== 1) {
+        throw new FounderSalesDomainError('ACTION_NOT_SUPPORTED', 'The current action changed concurrently.');
+      }
     }
   }
 

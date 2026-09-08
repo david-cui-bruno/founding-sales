@@ -32,7 +32,9 @@ import {
   workIntentSchema,
 } from './lifecycleValidation';
 
+const dueSourceSchema = z.enum(['legacy_unscheduled', 'recorded_callback', 'founder_resurface', 'playbook_v1', 'internal_review']);
 const insertActionSchema = z.object({
+  dueAt: utcTimestampSchema.optional(), dueSource: dueSourceSchema.optional(),
   id: idSchema, salesCycleId: idSchema, actionType: nonblankSchema,
   channel: nonblankSchema.nullable(), status: z.literal('pending'),
   timezone: nonblankSchema, allowedWindow: z.string().nullable(),
@@ -40,6 +42,7 @@ const insertActionSchema = z.object({
   cadence: cadenceActionBindingSchema, createdAt: utcTimestampSchema,
 }).strict();
 const storedActionRowSchema = z.object({
+  due_at: utcTimestampSchema, due_source: dueSourceSchema,
   id: idSchema, sales_cycle_id: idSchema, action_type: nonblankSchema,
   channel: nonblankSchema.nullable(), status: actionStatusSchema,
   timezone: nonblankSchema, allowed_window: z.string().nullable(), work_intent: workIntentSchema,
@@ -53,7 +56,7 @@ const storedActionRowSchema = z.object({
 }).strict();
 
 const actionColumns = `
-  id, sales_cycle_id, action_type, channel, status, timezone,
+  due_at, due_source,  id, sales_cycle_id, action_type, channel, status, timezone,
   allowed_window, work_intent, inbound_sla_kind,
   inbound_sla_due_at, inbound_sla_source_event_id, inbound_sla_provenance_json,
   cadence_enrollment_id, cadence_step_id, cadence_component_id,
@@ -61,6 +64,7 @@ const actionColumns = `
 `;
 
 export type ReschedulePendingActionInput = ExpectedActionIntentAndSla & Readonly<{
+  dueAt?: string;
   actionId: string;
   salesCycleId: string;
   expectedStatus: 'pending';
@@ -117,14 +121,15 @@ export class NextActionRepository {
     const inbound = encodeInboundSla(parsed.inboundSla);
     const row = this.database.raw.prepare(`
       INSERT INTO next_actions (
-        id, sales_cycle_id, action_type, channel, status, timezone,
+        due_at, due_source, id, sales_cycle_id, action_type, channel, status, timezone,
         allowed_window, work_intent, inbound_sla_kind,
         inbound_sla_due_at, inbound_sla_source_event_id, inbound_sla_provenance_json,
         cadence_enrollment_id, cadence_step_id, cadence_component_id,
         completion_activity_id, settlement_json, version, created_at, completed_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1, ?, NULL, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1, ?, NULL, ?)
       RETURNING ${actionColumns}
     `).get(
+      parsed.dueAt ?? parsed.createdAt, parsed.dueSource ?? (parsed.dueAt ? 'playbook_v1' : 'legacy_unscheduled'),
       parsed.id, parsed.salesCycleId, parsed.actionType, parsed.channel,
       parsed.timezone, parsed.allowedWindow, parsed.workIntent,
       inbound.kind, inbound.dueAt, inbound.sourceEventId, inbound.provenanceJson,
@@ -137,6 +142,7 @@ export class NextActionRepository {
   reschedulePendingAction(input: ReschedulePendingActionInput): NextAction {
     this.unitOfWork.assertWriteScope();
     const parsed = z.object({
+      dueAt: utcTimestampSchema.optional(),
       actionId: idSchema, salesCycleId: idSchema, expectedStatus: z.literal('pending'),
       expectedVersion: z.number().int().safe().positive(),
       expectedWorkIntent: workIntentSchema, expectedInboundSla: inboundSlaSchema,
@@ -160,7 +166,7 @@ export class NextActionRepository {
     const expectedInbound = encodeInboundSla(parsed.expectedInboundSla);
     const row = this.database.raw.prepare(`
       UPDATE next_actions
-      SET timezone = ?, allowed_window = ?,
+      SET due_at = ?, timezone = ?, allowed_window = ?,
           version = version + 1, updated_at = ?
       WHERE id = ? AND sales_cycle_id = ? AND status = ? AND version = ?
         AND work_intent = ?
@@ -169,7 +175,7 @@ export class NextActionRepository {
         AND cadence_enrollment_id IS ? AND cadence_step_id IS ? AND cadence_component_id IS ?
       RETURNING ${actionColumns}
     `).get(
-      parsed.timezone, parsed.allowedWindow, parsed.updatedAt,
+      parsed.dueAt ?? current.dueAt, parsed.timezone, parsed.allowedWindow, parsed.updatedAt,
       parsed.actionId, parsed.salesCycleId, parsed.expectedStatus, parsed.expectedVersion,
       parsed.expectedWorkIntent, expectedInbound.kind,
       expectedInbound.dueAt, expectedInbound.sourceEventId, expectedInbound.provenanceJson,
@@ -340,6 +346,7 @@ function parseAction(value: unknown, database: AppDatabase): NextAction {
     throw new z.ZodError([{ code: 'custom', path: [], message: 'Stored settlement evidence conflicts.' }]);
   }
   const parsed = {
+    dueAt: row.due_at, dueSource: row.due_source,
     id: row.id, salesCycleId: row.sales_cycle_id, actionType: row.action_type,
     channel: row.channel, status: row.status, timezone: row.timezone,
     allowedWindow: row.allowed_window, workIntent: row.work_intent,

@@ -15,9 +15,8 @@ import type {
 const CANONICAL_UTC_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 /**
- * No-due-dates lane order (audit 4.9.5): Onboard now, Fresh inbound, Due
- * cadence, New P0, P1, Exploration, Later. Overdue and Post-interview/offer
- * are gone; post-stage promises fold into Due cadence.
+ * Stable lane identities for the dated playbook. Commitments and warm work
+ * lead the due lane. Automatic prospecting waits while warm work remains.
  */
 const LANE_ORDER: readonly TodayLane[] = [
   'won_onboarding',
@@ -133,19 +132,33 @@ function timezoneOffsetMillis(utcMillis: number, timezone: string): number {
   return asUtc - utcMillis;
 }
 
+function effectiveDueAt(candidate: ParsedTodayCandidate): string {
+  const actionDue = candidate.action.dueAt ?? candidate.stageEnteredAt;
+  const callback = candidate.commitment?.kind === 'callback' ? candidate.commitment : null;
+  if (callback !== null) {
+    // A future callback cannot postpone an independent post-stage obligation.
+    return ['interviewed', 'offered', 'won'].includes(candidate.stage)
+      && candidate.action.actionType !== 'call' && actionDue < callback.dueAt
+      ? actionDue : callback.dueAt;
+  }
+  return candidate.resurfaceAt ?? actionDue;
+}
+
 function toItem(
   candidate: ParsedTodayCandidate,
   lane: Exclude<TodayLane, 'later'>,
   laneReason: TodayLaneReason,
 ): TodayItem {
   return {
+    segment: candidate.segment ?? 'cold',
+    commitment: candidate.commitment ?? (['interviewed', 'offered', 'won'].includes(candidate.stage) ? { kind: 'post_stage' } : null),
     cycleId: candidate.cycleId,
     personId: candidate.personId,
     prospectId: candidate.prospectId,
     lane,
     deferredFrom: null,
     laneReason,
-    action: candidate.action,
+    action: { ...candidate.action, dueAt: effectiveDueAt(candidate) },
     cadence: candidate.cadence,
     priority: candidate.priority,
     selectedTriggerReasons: candidate.selectedTriggerReasons,
@@ -164,9 +177,8 @@ function effectivePriorityOf(candidate: ParsedTodayCandidate): 'p0' | 'p1' | 'p2
 }
 
 /**
- * Pure first-match lane classification in the fixed no-due-dates order.
- * Time never converts work into a promise: lanes derive from workflow
- * status, work intent, and founder-chosen resurface markers only.
+ * Pure dated classification. Time and legacy work-intent labels never turn
+ * automatic prospecting into an evidenced promise.
  */
 export function classifyTodayCandidate(
   candidate: ParsedTodayCandidate,
@@ -176,50 +188,38 @@ export function classifyTodayCandidate(
   const intent = candidate.action.workIntent;
   const sla = candidate.action.inboundSla;
 
-  // 0. A future founder-chosen resurface hides the cycle entirely.
-  let resurfaceReason: TodayLaneReason | null = null;
-  if (candidate.resurfaceAt !== null) {
-    const resurfaceMillis = assertCanonical(candidate.resurfaceAt, 'resurface_at');
-    if (resurfaceMillis > asOfMillis) {
-      return {
-        kind: 'suppressed',
-        cycleId: candidate.cycleId,
-        reason: 'resurface_scheduled',
-      };
-    }
-    resurfaceReason = candidate.resurfaceReason === 'callback'
-      ? 'callback_promised_today'
-      : 'snoozed_until_today';
+  const commitment = candidate.commitment ?? (['interviewed', 'offered', 'won'].includes(candidate.stage)
+    ? { kind: 'post_stage' as const } : null);
+  const callback = commitment?.kind === 'callback' ? commitment : null;
+  // A genuine callback overrides a generic snooze. Only owned activity proof
+  // admitted by the repository qualifies, never the old promise label.
+  const dueAt = effectiveDueAt(candidate);
+  if (assertCanonical(dueAt, 'action dueAt') > asOfMillis) {
+    return { kind: 'suppressed', cycleId: candidate.cycleId,
+      reason: candidate.resurfaceAt !== null && callback === null ? 'resurface_scheduled' : 'not_due' };
   }
-
-  // 1. Won onboarding outranks everything.
+  const resurfaceReason: TodayLaneReason | null = callback !== null ? 'callback_promised_today'
+    : candidate.resurfaceAt !== null ? 'snoozed_until_today' : null;
   if (candidate.workflowStatus === 'onboarding') {
     return { kind: 'lane', lane: 'won_onboarding', item: toItem(candidate, 'won_onboarding', 'won_onboarding') };
   }
-
-  // 2. Fresh inbound: an inbound response is time-sensitive while inside its
-  // SLA and stays at the top of Fresh inbound after it (age ordering).
-  if (intent === 'inbound_response') {
-    if (sla.kind !== 'none') {
-      assertCanonical(sla.dueAt, 'Inbound SLA due_at');
-    }
-    return {
-      kind: 'lane',
-      lane: 'inbound_interrupt',
-      item: toItem(candidate, 'inbound_interrupt', resurfaceReason ?? 'inbound_inside_sla'),
-    };
+  if (commitment !== null) {
+    return { kind: 'lane', lane: 'due_primary', item: toItem(candidate, 'due_primary',
+      callback !== null && callback.dueAt <= context.generatedAt ? 'callback_promised_today' : 'promised_follow_up') };
   }
-
-  const discretionary = intent === 'discretionary_prospecting';
-
-  // 3. Non-discretionary work (cadence next steps, promises, internal
-  // review) is Due cadence: the cadence or founder said this is next.
-  if (!discretionary) {
-    const reason: TodayLaneReason = resurfaceReason
-      ?? (intent === 'promised_follow_up'
-        ? (candidate.cadence !== null ? 'cadence_step_next' : 'promised_follow_up')
-        : 'internal_review_waiting');
-    return { kind: 'lane', lane: 'due_primary', item: toItem(candidate, 'due_primary', reason) };
+  if (intent === 'inbound_response') {
+    if (sla.kind !== 'none') assertCanonical(sla.dueAt, 'Inbound SLA due_at');
+    return { kind: 'lane', lane: 'inbound_interrupt', item: toItem(candidate, 'inbound_interrupt', 'inbound_inside_sla') };
+  }
+  if (candidate.segment === 'warm') {
+    return { kind: 'lane', lane: 'due_primary', item: toItem(candidate, 'due_primary', 'warm_priority') };
+  }
+  if (context.hasActiveWarm) {
+    return { kind: 'suppressed', cycleId: candidate.cycleId, reason: 'warm_pipeline_active' };
+  }
+  if (intent !== 'discretionary_prospecting') {
+    return { kind: 'lane', lane: 'due_primary', item: toItem(candidate, 'due_primary', resurfaceReason
+      ?? (intent === 'internal_review' ? 'internal_review_waiting' : 'cadence_step_next')) };
   }
 
   // Suppression applies only to discretionary lanes.
@@ -313,14 +313,17 @@ function pinnedOf(item: TodayItem): boolean {
 }
 
 /**
- * The within-lane comparator (audit 4.9.5, F10): priority band, then the
- * within-source cloud percentile (higher first, nulls last) so no single
- * acquisition source can monopolize a lane, then raw cloud timing as the
- * residual within-source tiebreaker, then last-touch age (older first,
- * never-touched first as "oldest"), then stable ids. Computed at render;
- * nothing here reads a stored due time.
+ * Commitments, warm work and due time precede priority/cloud/age tiebreakers.
+ * The residual source percentile ordering prevents a single acquisition
+ * source from monopolizing equally urgent work.
  */
 function bandTimingAgeCompare(left: TodayItem, right: TodayItem): number {
+  const commitmentRank = (item: TodayItem) => item.commitment != null ? 0 : item.segment === 'warm' ? 1 : 2;
+  const rank = commitmentRank(left) - commitmentRank(right);
+  if (rank !== 0) return rank;
+  if (left.action.dueAt && right.action.dueAt && left.action.dueAt !== right.action.dueAt) {
+    return compareCanonical(left.action.dueAt, right.action.dueAt);
+  }
   if (pinnedOf(left) !== pinnedOf(right)) return pinnedOf(left) ? -1 : 1;
   const leftBand = left.priority === null
     ? 4 : PRIORITY_RANK[left.priority.effectivePriority];
@@ -392,12 +395,13 @@ export function compareTodayItems(left: TodayItem, right: TodayItem): number {
 
 /**
  * Pure Today planner: classifies, applies pins after lane assignment, orders
- * by lane rank > priority band > cloud timing > last-touch age, and applies
- * the whole-queue capacity cap (dialBudget, default 40) with per-lane
+ * by lane rank > commitment/warm > due time > priority, and applies
+ * the discretionary dial cap (dialBudget, default 40) with per-lane
  * computed overflow counts. No database, clock, IDs, or ambient time.
  */
 export function planTodayQueue(input: {
   candidates: readonly ParsedTodayCandidate[];
+  hasActiveWarm?: boolean;
   generatedAt: string;
   timezone: string;
   capacity: TodayCapacity;
@@ -406,7 +410,7 @@ export function planTodayQueue(input: {
   extraDiagnostics?: readonly TodayDiagnostic[];
   extraSuppressed?: readonly {
     cycleId: string;
-    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled';
+    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active';
   }[];
 }): TodayQueue {
   const capacity = validateCapacity(input.capacity);
@@ -427,6 +431,7 @@ export function planTodayQueue(input: {
     timezone: input.timezone,
   });
   const context: TodayEvaluationContext = {
+    hasActiveWarm: input.hasActiveWarm ?? input.candidates.some(candidate => candidate.segment === 'warm'),
     generatedAt: input.generatedAt,
     timezone: input.timezone,
     localDayStartAt: interval.localDayStartAt,
@@ -440,7 +445,7 @@ export function planTodayQueue(input: {
   );
   const suppressed: {
     cycleId: string;
-    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled';
+    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active';
   }[] = [
     ...(input.extraSuppressed ?? []),
   ];
@@ -494,38 +499,30 @@ export function planTodayQueue(input: {
   }
   laneBuckets.set('exploration', selectedExploration);
 
-  // Whole-queue capacity: at most `dialBudget` rows across the actionable
-  // lanes, cut lane-by-lane in rank order with computed overflow counts.
-  const overflowByLane = new Map<TodayLane, number>(
-    LANE_ORDER.map((lane): [TodayLane, number] => [lane, 0]),
-  );
-  let remaining = capacity.dialBudget;
+  // Capacity constrains discretionary dials, never warm work or commitments.
+  const overflowByLane = new Map<TodayLane, number>(LANE_ORDER.map(lane => [lane, 0]));
+  let remaining = Math.max(0, capacity.dialBudget - input.completedDiscretionaryDialCount);
   for (const lane of LANE_ORDER) {
     if (lane === 'later') continue;
-    const bucket = laneBuckets.get(lane)!;
-    if (bucket.length <= remaining) {
-      remaining -= bucket.length;
-      continue;
-    }
-    const retained = bucket.slice(0, remaining);
-    const cut = bucket.slice(remaining);
-    overflowByLane.set(lane, cut.length);
-    for (const item of cut) {
-      later.push({
-        ...item,
-        lane: 'later',
-        deferredFrom: lane as Exclude<TodayLane, 'later'>,
-        laneReason: 'capacity_overflow',
-      });
+    const retained: TodayItem[] = [];
+    for (const item of laneBuckets.get(lane)!) {
+      const protectedWork = item.commitment != null || item.segment === 'warm'
+        || lane === 'won_onboarding' || lane === 'inbound_interrupt';
+      if (protectedWork || item.action.actionType !== 'call' || remaining > 0) {
+        retained.push(item);
+        if (!protectedWork && item.action.actionType === 'call') remaining -= 1;
+      } else {
+        overflowByLane.set(lane, overflowByLane.get(lane)! + 1);
+        later.push({ ...item, lane: 'later', deferredFrom: lane, laneReason: 'capacity_overflow' });
+      }
     }
     laneBuckets.set(lane, retained);
-    remaining = 0;
   }
 
-  const isCall = (item: TodayItem): boolean => item.action.actionType === 'call';
-  const queuedDiscretionaryDialCount = (['new_p0', 'p1', 'exploration'] as const)
+  const queuedDiscretionaryDialCount = LANE_ORDER.filter(lane => lane !== 'later')
     .flatMap((lane) => laneBuckets.get(lane)!)
-    .filter(isCall).length;
+    .filter(item => item.action.actionType === 'call' && item.commitment == null
+      && item.segment !== 'warm' && item.lane !== 'won_onboarding' && item.lane !== 'inbound_interrupt').length;
   const remainingBudget = Math.max(
     0, capacity.dialBudget - input.completedDiscretionaryDialCount,
   );

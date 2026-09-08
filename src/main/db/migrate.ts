@@ -22,6 +22,8 @@ import { migration0014OutboundJurisdictionClearance } from './migrations/0014Out
 import { migration0015RecoveryMetadata } from './migrations/0015RecoveryMetadata';
 import { migration0016ContactPresentationEvidence } from './migrations/0016ContactPresentationEvidence';
 import { migration0017DiscoveryAssessments } from './migrations/0017DiscoveryAssessments';
+import { migration0018PlaybookDueActions } from './migrations/0018PlaybookDueActions';
+import { migration0019EmailDrafts } from './migrations/0019EmailDrafts';
 import type { WorkspaceKey } from '../security/workspaceKeyTypes';
 
 export type MigrationResult = {
@@ -138,6 +140,8 @@ export const productionMigrations = [
     schemaVersion: 17,
     migration: migration0017DiscoveryAssessments,
   },
+  { id: '0018PlaybookDueActions', schemaVersion: 18, migration: migration0018PlaybookDueActions },
+  { id: '0019EmailDrafts', schemaVersion: 19, migration: migration0019EmailDrafts },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);
 

@@ -144,7 +144,11 @@ export type ActionSettlement = Readonly<{
   inboundSla: InboundSla;
 }>;
 
+export type ActionDueSource = 'legacy_unscheduled' | 'recorded_callback' | 'founder_resurface' | 'playbook_v1' | 'internal_review';
+
 export type NextAction = Readonly<{
+  dueAt: UtcTimestamp;
+  dueSource: ActionDueSource;
   id: string;
   salesCycleId: string;
   actionType: string;
@@ -282,6 +286,8 @@ export type InsertCycleInput = Readonly<{
 }>;
 
 export type InsertNextActionInput = NextActionIntentAndSla & Readonly<{
+  dueAt?: UtcTimestamp;
+  dueSource?: ActionDueSource;
   id: string;
   salesCycleId: string;
   actionType: string;

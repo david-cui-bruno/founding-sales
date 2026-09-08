@@ -2,7 +2,7 @@ import type { AppDatabase } from '../db/database';
 import { CadenceRepository } from './cadence/cadenceRepository';
 import { ContactComplianceService } from './compliance/contactComplianceService';
 import { JurisdictionRepository } from './compliance/jurisdictionRepository';
-import { FOUNDER_CHANNEL_POLICIES_V1 } from './cadence/cadenceScheduler';
+import { PLAYBOOK_CHANNEL_POLICIES_V2 } from './cadence/cadenceScheduler';
 import { DiscoveryRepository } from './discovery/discoveryRepository';
 import { DiscoveryReadService } from './discovery/discoveryReadService';
 import { DiscoveryFactWriter } from './discovery/discoveryFactWriter';
@@ -72,7 +72,7 @@ export function createDomainServices(input: {
   const jurisdictions = new JurisdictionRepository({ database, unitOfWork });
   const contactCompliance = new ContactComplianceService({
     database, unitOfWork, identities, jurisdictions,
-    windows: FOUNDER_CHANNEL_POLICIES_V1, clock, ids,
+    windows: PLAYBOOK_CHANNEL_POLICIES_V2, clock, ids,
   });
   const events = new EventRepository({ database, unitOfWork, clock, ids });
   const outboundCommands = new OutboundCommandRepository({ database, unitOfWork, events });
@@ -93,7 +93,7 @@ export function createDomainServices(input: {
     clock,
     ids,
     timezone,
-    policies: FOUNDER_CHANNEL_POLICIES_V1,
+    policies: PLAYBOOK_CHANNEL_POLICIES_V2,
     discoveryRepository,
   });
   const optOutRepository = new OptOutRepository({ database, unitOfWork });
@@ -102,7 +102,7 @@ export function createDomainServices(input: {
   });
   const outboundPermission = new OutboundPermissionService({
     database, unitOfWork, identities, optOuts: optOutRepository, jurisdictions,
-    windows: FOUNDER_CHANNEL_POLICIES_V1,
+    windows: PLAYBOOK_CHANNEL_POLICIES_V2,
   });
   const prioritizationRepository = new PrioritizationRepository({ database, unitOfWork, clock });
   const prioritization = new PrioritizationService({

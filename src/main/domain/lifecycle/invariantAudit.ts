@@ -3,7 +3,7 @@ import type { ZodType } from 'zod';
 import { BUILTIN_CADENCES } from '../cadence/builtinCadences';
 import { readInstalledCadenceAggregate } from '../cadence/cadenceRepository';
 import {
-  FOUNDER_CHANNEL_POLICIES_V1, nextStrictFutureOctoberOne,
+  FOUNDER_CHANNEL_POLICIES_V1, PLAYBOOK_CHANNEL_POLICIES_V2, nextStrictFutureOctoberOne,
 } from '../cadence/cadenceScheduler';
 import type { SourceEvent } from '../source/sourceTypes';
 import { normalizeEmail, normalizePhone } from '../source/sourceService';
@@ -108,7 +108,7 @@ export function auditDomainInvariants(input: {
     FROM sales_cycles ORDER BY id
   `);
   const actionRows = rows(`
-    SELECT id, sales_cycle_id, action_type, channel, status, timezone,
+    SELECT id, sales_cycle_id, action_type, channel, status, timezone, due_at,
       allowed_window, work_intent, inbound_sla_kind, inbound_sla_due_at,
       inbound_sla_source_event_id, inbound_sla_provenance_json,
       cadence_enrollment_id, cadence_step_id, cadence_component_id,
@@ -126,6 +126,7 @@ export function auditDomainInvariants(input: {
     if (!supportedIntents.has(String(action.work_intent))) {
       add('action_work_intent_invalid', action.id, 'Action work intent is unsupported.');
     }
+    if (!isCanonicalUtc(action.due_at)) add('action_schedule_invalid', action.id, 'Action requires a canonical due date.');
     if (typeof action.timezone !== 'string'
       || action.timezone.trim().length === 0) {
       add('action_schedule_invalid', action.id, 'Action timezone is malformed.');
@@ -319,14 +320,12 @@ export function auditDomainInvariants(input: {
     }
     const action = cycle.current_next_action_id === null
       ? undefined : actions.get(String(cycle.current_next_action_id));
-    if (isOpen && cycle.stage !== 'unreviewed'
+    if (isOpen
       && (action === undefined || action.sales_cycle_id !== cycle.id
       || action.status !== 'pending')) {
       add('current_action_invalid', id, 'Open cycle lacks one own pending current action.');
     }
-    if (isOpen && cycle.stage === 'unreviewed' && cycle.current_next_action_id !== null) {
-      add('current_action_invalid', id, 'Unreviewed cycle cannot carry generated review work.');
-    }
+
     if ((cycle.resurface_at === null) !== (cycle.resurface_reason === null)
       || (cycle.resurface_at !== null && !isCanonicalUtc(cycle.resurface_at))
       || (cycle.resurface_reason !== null
@@ -1048,7 +1047,8 @@ function inboundSlaEvidenceValid(
       observedAt: String(source.observed_at), sourceRecord: {},
       evidenceRef: source.evidence_ref === null ? null : String(source.evidence_ref),
       referral: null, customSourceReason: null, createdAt: String(source.created_at),
-    }, action.timezone, FOUNDER_CHANNEL_POLICIES_V1);
+    }, action.timezone, inbound.data.provenance?.policyId === PLAYBOOK_CHANNEL_POLICIES_V2.text.id
+      ? PLAYBOOK_CHANNEL_POLICIES_V2 : FOUNDER_CHANNEL_POLICIES_V1);
     return canonicalJson(expected) === canonicalJson(inbound.data);
   } catch {
     return false;

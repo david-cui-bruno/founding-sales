@@ -5,7 +5,7 @@ import { migrateToLatest } from '../../src/main/db/migrate';
 import { createDomainServices, type DomainServices } from '../../src/main/domain/createDomainServices';
 import { createFounderSalesDomain, FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import { BUILTIN_PRIORITIZATION_RULE_V1 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import { seedProspect } from '../fixtures/domainRows';
+import { DOMAIN_TIMESTAMP, insertOpenCycleWithAction, seedProspect } from '../fixtures/domainRows';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
 const NOW = '2026-08-31T15:00:00.000Z';
@@ -35,6 +35,16 @@ describe('today call flow (audit 4.7)', () => {
 
   afterEach(() => { closeDatabase(database); temp.cleanup(); });
 
+  it('keeps independent post-stage work due when a call books a future callback', () => {
+    const prospect = seedProspect(database.raw, 'post-stage');
+    const cycle = insertOpenCycleWithAction({ database: database.raw, prospect, prefix: 'post-stage', stage: 'interviewed' });
+    domain.logCallOutcome({ personId: prospect.personId, salesCycleId: cycle.cycleId,
+      outcome: 'spoke', callbackAt: '2026-09-15T12:00:00.000Z', occurredAt: NOW });
+    expect(database.raw.prepare('SELECT due_at FROM next_actions WHERE id = ?').get(cycle.actionId))
+      .toEqual({ due_at: DOMAIN_TIMESTAMP });
+    expect(domain.getToday().lanes.flatMap(lane => lane.items).map(item => item.salesCycleId)).toContain(cycle.cycleId);
+  });
+
   it('replied lands in Fresh inbound; a callback outcome removes the cycle until its date', () => {
     const prospect = seedProspect(database.raw, 'alpha');
     database.raw.prepare(`UPDATE prospects SET qualification_state = 'unreviewed' WHERE id = ?`).run(prospect.prospectId);
@@ -53,6 +63,9 @@ describe('today call flow (audit 4.7)', () => {
       personId: prospect.personId, salesCycleId: cycle.id, outcome: 'spoke',
       callbackAt: '2026-09-15T12:00:00.000Z', occurredAt: NOW,
     });
+    expect(database.raw.prepare(`SELECT a.due_at, a.due_source FROM sales_cycles c
+      JOIN next_actions a ON a.id = c.current_next_action_id WHERE c.id = ?`).get(cycle.id))
+      .toEqual({ due_at: '2026-09-15T12:00:00.000Z', due_source: 'recorded_callback' });
     snapshot = domain.getToday();
     const lanesAfter = snapshot.lanes.filter((lane) => lane.items.some((i) => i.salesCycleId === cycle.id)).map((l) => l.id);
     expect(lanesAfter).toEqual([]);

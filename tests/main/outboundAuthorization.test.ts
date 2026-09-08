@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { FOUNDER_CHANNEL_POLICIES_V1 } from '../../src/main/domain/cadence/cadenceScheduler';
+import { FOUNDER_CHANNEL_POLICIES_V1, PLAYBOOK_CHANNEL_POLICIES_V2 } from '../../src/main/domain/cadence/cadenceScheduler';
 import {
   evaluateCallRecordingAuthorization,
   evaluateOutboundAuthorization,
@@ -30,6 +30,16 @@ function decide(overrides: Partial<Parameters<typeof evaluateOutboundAuthorizati
 }
 
 describe('evaluateOutboundAuthorization', () => {
+  it.each(['2026-09-05T14:00:00.000Z', '2026-09-08T22:00:00.000Z', '2026-09-08T12:59:59.999Z'])(
+    'enforces the approved RI weekday 09–18 policy at %s', now => {
+      expect(decide({ now, windows: PLAYBOOK_CHANNEL_POLICIES_V2 }))
+        .toEqual({ kind: 'refused', reasonCode: 'outside_recipient_window' });
+    });
+  it('permits a cleared manual call at the inclusive RI opening boundary', () => {
+    expect(decide({ now: '2026-09-08T13:00:00.000Z', windows: PLAYBOOK_CHANNEL_POLICIES_V2 }))
+      .toEqual({ kind: 'allowed' });
+  });
+
   it('preserves permanent opt-out precedence over invalid time and lower refusals', () => {
     expect(decide({
       now: 'not-a-timestamp',

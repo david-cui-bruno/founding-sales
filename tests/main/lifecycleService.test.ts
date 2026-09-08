@@ -12,6 +12,7 @@ import { auditDomainInvariants } from '../../src/main/domain/lifecycle/invariant
 import { ReactivationRepository } from '../../src/main/domain/lifecycle/reactivationRepository';
 import { SourceRepository } from '../../src/main/domain/source/sourceRepository';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
+import { TodayRepository } from '../../src/main/domain/today/todayRepository';
 import {
   DOMAIN_TIMESTAMP,
   insertClosedCycle,
@@ -83,11 +84,11 @@ describe('LifecycleService', () => {
     });
     expect(unreviewed).toMatchObject({
       id: 'cycle', stage: 'unreviewed', workflowStatus: 'active',
-      currentNextActionId: null, version: 1,
+      currentNextActionId: 'cycle:review', version: 1,
     });
     expect(database.raw.prepare(
-      'SELECT COUNT(*) AS count FROM next_actions',
-    ).get()).toEqual({ count: 0 });
+      'SELECT action_type, channel, due_at FROM next_actions WHERE id = ?',
+    ).get('cycle:review')).toEqual({ action_type: 'review_lead', channel: null, due_at: DOMAIN_TIMESTAMP });
     expect(events.listCycleStageEvents('cycle')).toMatchObject([
       { fromStage: null, toStage: 'unreviewed', transitionSequence: 1 },
     ]);
@@ -222,6 +223,9 @@ describe('LifecycleService', () => {
     expect(interviewed).toMatchObject({
       stage: 'interviewed', currentNextActionId: 'interview-action', version: 4,
     });
+    expect(new TodayRepository({ database, unitOfWork }).listOperationalCandidates()).toMatchObject([
+      { kind: 'candidate', candidate: { stage: 'interviewed', cadence: { family: 'post_interview' } } },
+    ]);
     expectOwnedLifecycleAuditClean(database, 'cycle');
     const fitted = service.setDesignPartnerFitness({
       cycleId: 'cycle', expectedCycleVersion: 4, fitness: 5,
@@ -278,6 +282,9 @@ describe('LifecycleService', () => {
       stage: 'won', workflowStatus: 'onboarding',
       currentNextActionId: 'onboarding-action', version: 7,
     });
+    expect(new TodayRepository({ database, unitOfWork }).listOperationalCandidates()).toMatchObject([
+      { kind: 'candidate', candidate: { stage: 'won', cadence: { family: 'onboarding' } } },
+    ]);
     expectOwnedLifecycleAuditClean(database, 'cycle');
     expect(database.raw.prepare(`
       SELECT projected_mrr_cents FROM won_terms WHERE sales_cycle_id = 'cycle'
@@ -354,13 +361,16 @@ describe('LifecycleService', () => {
       kind: 'call', direction: 'outbound', channel: 'phone', occurredAt: DOMAIN_TIMESTAMP,
       observedOutcome: 'no_answer', metadata: {},
     }));
+    database.raw.prepare("UPDATE sales_cycles SET resurface_at = ?, resurface_reason = 'snooze' WHERE id = 'cycle'").run(DOMAIN_TIMESTAMP);
     const advanced = service.completeCurrentAction({
       cycleId: 'cycle', expectedCycleVersion: 2, expectedCurrentActionId: 'ready-action',
       expectedActionVersion: 1, expectedEnrollmentVersion: 1,
       outcome: 'no_answer', activityId: 'no-answer', impossibleDisposition: null,
       evaluationAt: DOMAIN_TIMESTAMP, manualReactivationDueAt: null,
     });
-    expect(advanced).toMatchObject({ currentNextActionId: 'voicemail-action', version: 3 });
+    expect(advanced).toMatchObject({ currentNextActionId: 'voicemail-action', version: 3, resurfaceAt: null });
+    expect(database.raw.prepare('SELECT due_at FROM next_actions WHERE id = ?').get('voicemail-action'))
+      .toEqual({ due_at: '2026-08-30T17:00:00.000Z' });
     expect(database.raw.prepare(`
       SELECT status FROM next_actions WHERE id = 'ready-action'
     `).get()).toEqual({ status: 'completed' });

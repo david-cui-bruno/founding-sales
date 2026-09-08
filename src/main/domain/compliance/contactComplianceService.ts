@@ -7,7 +7,7 @@ import type { Clock } from '../support/clock';
 import { DomainRepositoryDatabaseMismatchError } from '../support/domainErrors';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 import type { IdGenerator } from '../support/idGenerator';
-import { FOUNDER_CHANNEL_POLICIES_V1, type ChannelPolicySnapshots } from '../cadence/cadenceScheduler';
+import { PLAYBOOK_CHANNEL_POLICIES_V2, type ChannelPolicySnapshots } from '../cadence/cadenceScheduler';
 import {
   evaluateFederalEvidence,
   mergeContactComplianceEvidence,
@@ -69,7 +69,7 @@ export class ContactComplianceService {
     this.clock = input.clock;
     this.ids = input.ids;
     this.jurisdictions = jurisdictions;
-    this.windows = input.windows ?? FOUNDER_CHANNEL_POLICIES_V1;
+    this.windows = input.windows ?? PLAYBOOK_CHANNEL_POLICIES_V2;
   }
 
   assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork): void {

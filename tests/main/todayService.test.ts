@@ -114,6 +114,8 @@ describe('TodayService', () => {
     actionType?: string;
     channel?: string | null;
   }): { cycleId: string; actionId: string } {
+    // These fixtures exercise cold priority lanes, not warm introduction bypass.
+    database.raw.prepare("UPDATE prospects SET segment = 'cold' WHERE id = ?").run(input.prospect.prospectId);
     const cycleId = `${input.prefix}-cycle`;
     const actionId = `${input.prefix}-action`;
     database.raw.exec('BEGIN IMMEDIATE');

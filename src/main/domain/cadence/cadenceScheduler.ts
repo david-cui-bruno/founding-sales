@@ -69,6 +69,32 @@ export const FOUNDER_CHANNEL_POLICIES_V1: ChannelPolicySnapshots = deepFreeze({
   },
 });
 
+/** Current conservative RI-safe policy. V1 remains immutable for historical SLA verification. */
+const weekdays = [1, 2, 3, 4, 5] as const;
+
+export const PLAYBOOK_CHANNEL_POLICIES_V2: ChannelPolicySnapshots = deepFreeze({
+  call: {
+    id: 'playbook_call_v2',
+    windows: [
+      { days: weekdays, startMinute: 9 * 60, endMinute: 12 * 60, label: 'morning' },
+      { days: weekdays, startMinute: 13 * 60, endMinute: 17 * 60, label: 'afternoon' },
+      { days: weekdays, startMinute: 17 * 60, endMinute: 18 * 60, label: 'evening' },
+    ],
+  },
+  text: {
+    id: 'playbook_text_v2',
+    windows: [
+      { days: weekdays, startMinute: 9 * 60, endMinute: 18 * 60, label: 'weekdays' },
+    ],
+  },
+  email: {
+    id: 'playbook_email_v2',
+    windows: [
+      { days: weekdays, startMinute: 8 * 60, endMinute: 18 * 60, label: 'weekdays' },
+    ],
+  },
+});
+
 function deepFreeze<T>(value: T): T {
   if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
     Object.freeze(value);
@@ -200,7 +226,15 @@ function endOfFinalAllowedWindow(
     .sort((left, right) => left.endMinute - right.endMinute);
   const finalWindow = windows.at(-1);
   if (finalWindow === undefined) {
-    throw new CadenceSchedulingError('The SLA date has no allowed call window.');
+    // Calendar deadline landing on a prohibited day moves to the next legal
+    // day's final window. The original elapsed referral SLA remains separate.
+    for (let offset = 1; offset <= 7; offset += 1) {
+      const next = addLocalDays(date, offset);
+      if (policy.windows.some(window => window.days.includes(weekdayFor(next)))) {
+        return endOfFinalAllowedWindow(next, timezone, policy);
+      }
+    }
+    throw new CadenceSchedulingError('The SLA policy has no allowed call window.');
   }
   return new Date(localAtMinute(date, finalWindow.endMinute, timezone)).toISOString();
 }

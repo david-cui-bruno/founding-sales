@@ -465,7 +465,7 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
         try {
           assertDirectory(join(paths.current, 'backups'));
           database = openDatabase({ path, key });
-          assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 17, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
+          assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 19, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
           const current = database;
           service = new BackupService({ databaseGate: { withDatabase: async operation => operation(current) },
             backupDirectory: join(paths.current, 'backups'), loadWorkspaceKey: async () => parseRecoveryKeyMaterial(material),

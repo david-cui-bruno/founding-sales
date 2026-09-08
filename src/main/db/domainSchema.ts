@@ -261,6 +261,8 @@ export type SalesCyclesTable = {
 };
 
 export type NextActionsTable = {
+  due_at: string;
+  due_source: 'legacy_unscheduled' | 'recorded_callback' | 'founder_resurface' | 'playbook_v1' | 'internal_review';
   id: string;
   sales_cycle_id: string;
   action_type: string;

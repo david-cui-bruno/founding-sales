@@ -25,8 +25,8 @@ describe('0017 discovery assessments migration', () => {
       services.cadences.installBuiltins();
     });
     f = { database, services, temp, key, close() { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); } };
-    owner = seedDiscoveryOwner(f, { prefix: 'one', units: 10 });
-    other = seedDiscoveryOwner(f, { prefix: 'two', units: null });
+    owner = seedDiscoveryOwner(f, { prefix: 'one', units: 10, legacyUnreviewed: true });
+    other = seedDiscoveryOwner(f, { prefix: 'two', units: null, legacyUnreviewed: true });
   });
   afterEach(() => f?.close());
   const migrate = () => migrateToLatest(f.database, { workspaceKey: f.key, backupDirectory: `${f.temp.path}.backups` });
@@ -56,9 +56,12 @@ describe('0017 discovery assessments migration', () => {
     const snapshot = () => tables.map(table => f.database.raw.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
     const before = snapshot();
     const priorLedger = f.database.raw.prepare('SELECT name, timestamp FROM kysely_migration ORDER BY name').all();
-    expect(await migrate()).toEqual({ fromVersion: 16, toVersion: 17, appliedMigrationIds: ['0017DiscoveryAssessments'] });
+    expect(await createMigrationRunner(productionMigrations.filter(x => x.schemaVersion <= 17))(f.database,
+      { workspaceKey: f.key, backupDirectory: `${f.temp.path}.backups` }))
+      .toEqual({ fromVersion: 16, toVersion: 17, appliedMigrationIds: ['0017DiscoveryAssessments'] });
     expect(f.database.raw.prepare('SELECT schema_version FROM app_meta WHERE singleton = 1').get()).toMatchObject({ schema_version: 17 });
     expect(snapshot()).toEqual(before);
+    expect(await migrate()).toEqual({ fromVersion: 17, toVersion: 19, appliedMigrationIds: ['0018PlaybookDueActions', '0019EmailDrafts'] });
     expect(f.database.raw.prepare('SELECT name, timestamp FROM kysely_migration WHERE name < ? ORDER BY name').all('0017')).toEqual(priorLedger);
     expect(f.database.raw.prepare('SELECT name FROM kysely_migration ORDER BY name').all()).toEqual(productionMigrations.map(x => ({ name: x.id })));
     for (const table of ['discovery_assessments', 'discovery_current', 'discovery_overrides', 'discovery_preparations', 'discovery_scan_state']) {
@@ -68,14 +71,14 @@ describe('0017 discovery assessments migration', () => {
       { name: 'type' }, { name: 'state' }, { name: 'created_at' }, { name: 'id' },
     ]);
     expect(assertDomainStorageReady({ database: f.database, expectedBusyTimeoutMs: 5000,
-      expectedSchemaVersion: 17, expectedManifest: DOMAIN_SCHEMA_MANIFEST }).schemaVersion).toBe(17);
+      expectedSchemaVersion: 19, expectedManifest: DOMAIN_SCHEMA_MANIFEST }).schemaVersion).toBe(19);
     const catalog = f.database.raw.prepare(`SELECT name, type, sql FROM sqlite_master
       WHERE type IN ('table','index','trigger') AND (type <> 'index' OR sql IS NOT NULL)
       ORDER BY name COLLATE BINARY`).all() as { name: string; type: string; sql: string | null }[];
     const hash = createHash('sha256').update(JSON.stringify(catalog.map(x => [x.type, x.name, (x.sql ?? '').replace(/\s+/g, ' ').trim()])
       .sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))).digest('hex');
     expect(hash).toBe(DOMAIN_SCHEMA_MANIFEST.catalogSha256);
-    expect(await migrate()).toEqual({ fromVersion: 17, toVersion: 17, appliedMigrationIds: [] });
+    expect(await migrate()).toEqual({ fromVersion: 19, toVersion: 19, appliedMigrationIds: [] });
   });
 
   it('guards assessment history, exact FK-valid owner tuples and pointer insert/update/version at SQL level', async () => {

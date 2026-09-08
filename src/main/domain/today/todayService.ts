@@ -117,6 +117,7 @@ export class TodayService {
         unreviewedBacklogCount += 1;
         continue;
       }
+      if (result.candidate.stage === 'unreviewed') unreviewedBacklogCount += 1;
       const enriched = this.enrichCandidate(result.candidate, generatedAt, interval);
       if (enriched.kind === 'diagnostic') {
         diagnostics.push(enriched.diagnostic);
@@ -126,6 +127,7 @@ export class TodayService {
     }
     return planTodayQueue({
       candidates,
+      hasActiveWarm: this.repository.hasActiveWarm(),
       generatedAt,
       timezone: input.timezone,
       capacity: input.capacity,

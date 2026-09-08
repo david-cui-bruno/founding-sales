@@ -37,8 +37,8 @@ export async function createDiscoveryDatabase(): Promise<DiscoveryDatabase> {
 }
 
 export function seedDiscoveryOwner(
-  fixture: Pick<DiscoveryDatabase, 'services'>,
-  input: { prefix: string; units: number | null },
+  fixture: Pick<DiscoveryDatabase, 'services'> & { database?: AppDatabase },
+  input: { prefix: string; units: number | null; legacyUnreviewed?: boolean },
 ): { personId: string; prospectId: string; salesCycleId: string; sourceEventId: string } {
   const event = validParcelEvent();
   const fingerprint = createHash('sha256').update(input.prefix).digest('hex');
@@ -57,6 +57,22 @@ export function seedDiscoveryOwner(
   const mapped = mapCloudSourceEvent(validated);
   if (mapped.kind !== 'intake') throw new Error('Expected synthetic parcel intake.');
   const intake = fixture.services.sources.createPersonProspect(mapped.command);
+  // Historical migration fixtures must use the historical schema, not today's
+  // writer, which intentionally requires dated actions from migration 0018.
+  if (input.legacyUnreviewed) {
+    if (!fixture.database) throw new Error('Legacy fixture requires its database.');
+    const id = randomUUID();
+    fixture.services.unitOfWork.immediate(() => {
+      fixture.database!.raw.prepare(`INSERT INTO sales_cycles (id, person_id, prospect_id, entry_source_event_id,
+        stage, workflow_status, current_next_action_id, stage_entered_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'unreviewed', 'active', NULL, ?, ?, ?)`)
+        .run(id, intake.personId, intake.prospectId, intake.sourceEventId, DISCOVERY_NOW, DISCOVERY_NOW, DISCOVERY_NOW);
+      fixture.services.events.appendStageEvent({ id: randomUUID(), salesCycleId: id, fromStage: null,
+        toStage: 'unreviewed', effectiveAt: DISCOVERY_NOW, confirmedAt: DISCOVERY_NOW,
+        confirmationKind: 'mechanical', transitionSequence: 1 });
+    });
+    return { personId: intake.personId, prospectId: intake.prospectId, sourceEventId: intake.sourceEventId, salesCycleId: id };
+  }
   const cycle = fixture.services.lifecycle.createUnreviewedCycle({
     personId: intake.personId, prospectId: intake.prospectId,
     entrySourceEventId: intake.sourceEventId, effectiveAt: DISCOVERY_NOW,

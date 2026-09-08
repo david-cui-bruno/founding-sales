@@ -69,7 +69,7 @@ export function openExistingPreReleaseDatabase(paths: ApplicationPaths, key: Wor
     applyWorkspaceKey(raw, key.bytes);
     raw.pragma('foreign_keys = ON'); raw.pragma('recursive_triggers = ON'); raw.pragma('busy_timeout = 5000');
     if (!sameIdentity(original, existingFile(paths.databasePath))) fail();
-    assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 17, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
+    assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 19, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
     return database;
   } catch { if (database) closeDatabase(database); return fail(); }
   finally { closeSync(descriptor); }

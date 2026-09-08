@@ -6,7 +6,7 @@ import {
 } from '../../../shared/contracts/discoveryContract';
 import type { AppDatabase } from '../../db/database';
 import type { DomainServices } from '../createDomainServices';
-import { FOUNDER_CHANNEL_POLICIES_V1 } from '../cadence/cadenceScheduler';
+import { PLAYBOOK_CHANNEL_POLICIES_V2 } from '../cadence/cadenceScheduler';
 import type { Clock } from '../support/clock';
 import type { DomainUnitOfWork } from '../support/domainUnitOfWork';
 import { resolveLocalDayInterval } from '../today/todayOrdering';
@@ -79,7 +79,7 @@ export class DiscoveryReadService {
     return services.today.buildInCurrentSnapshot({ generatedAt: asOf, timezone: settings.timezone,
       capacity: { dialBudget: settings.dailyDialCapacity, conversationTarget: settings.dailyConversationTarget,
         explorationSlots: settings.explorationSlots, resurfacingWindowSeconds: settings.resurfaceSuppressionDays * 86_400 },
-      channelPolicies: FOUNDER_CHANNEL_POLICIES_V1 }).remainingDiscretionaryDialCount;
+      channelPolicies: PLAYBOOK_CHANNEL_POLICIES_V2 }).remainingDiscretionaryDialCount;
   }
 
   private inReadScope<T>(read: (asOf: string) => T): T {
