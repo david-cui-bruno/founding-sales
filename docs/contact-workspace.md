@@ -6,6 +6,8 @@
 2. Select a name. The overview shows identity, the **known, partial portfolio**, and a supported reason to contact. Unknown holdings stay unknown. Scores, source evidence and manual controls are inside **Details**.
 3. Choose **Call** or **Email**. There is no required Next sequence.
 
+For CSV imports, choose the import source channel or include an explicit **Segment** column (`warm`, `hot`, or `cold`). A free-text Source column does not select a cadence. Custom imports without a Segment currently default to warm, so cold lists must be identified rather than left at that default.
+
 ## Calling
 
 **Call** shows the selected number and an explicit **Open Phone** confirmation when the local capability and compliance checks permit it. It never uses Callie's own prospecting voice. A Phone handoff does not prove a connected call. Afterward, use **Activity** to record what actually happened, including a promised callback or an opt-out. No automatic dial or text is introduced by this redesign.
