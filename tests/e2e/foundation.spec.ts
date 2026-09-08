@@ -14,18 +14,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { chromium, expect, test, type Browser, type Page } from 'playwright/test';
-import { describeProcessExit } from '../support/packagedApplication';
+import { describeProcessExit, packagedApplicationBinary as packagedApplication } from '../support/packagedApplication';
 import { createPackagedTestEnvironment } from '../support/packagedTestEnvironment';
-
-const packagedApplication = join(
-  process.cwd(),
-  'out',
-  'Callie Founder Sales System-darwin-arm64',
-  'Callie Founder Sales System.app',
-  'Contents',
-  'MacOS',
-  'Callie Founder Sales System',
-);
 
 test('packaged diagnostics use callie protocol and an isolated native SQLite database', async () => {
   let userDataPath: string | undefined;

@@ -9,21 +9,12 @@ import { chromium, expect, test, type Browser, type Dialog } from 'playwright/te
 import {
   assertPackagedDescendantsExit,
   describeProcessExit,
+  packagedApplicationBinary as packagedApplication,
   snapshotPackagedProcessTree,
   waitForPackagedChildProcess,
   type PackagedProcessEntry,
 } from '../support/packagedApplication';
 import { createPackagedTestEnvironment, type PackagedTestEnvironment } from '../support/packagedTestEnvironment';
-
-const packagedApplication = join(
-  process.cwd(),
-  'out',
-  'Callie Founder Sales System-darwin-arm64',
-  'Callie Founder Sales System.app',
-  'Contents',
-  'MacOS',
-  'Callie Founder Sales System',
-);
 
 test('packaged Apple helper handshakes and exits without permission or communication actions', async () => {
   let userDataPath: string | undefined;

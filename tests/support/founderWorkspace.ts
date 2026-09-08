@@ -5,18 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { chromium, type Browser, type Page } from 'playwright/test';
-import { describeProcessExit } from './packagedApplication';
+import { describeProcessExit, packagedApplicationBinary } from './packagedApplication';
 import { createPackagedTestEnvironment } from './packagedTestEnvironment';
 
-export const packagedApplicationBinary = join(
-  process.cwd(),
-  'out',
-  'Callie Founder Sales System-darwin-arm64',
-  'Callie Founder Sales System.app',
-  'Contents',
-  'MacOS',
-  'Callie Founder Sales System',
-);
+export { packagedApplicationBinary } from './packagedApplication';
 
 export type FounderWorkspace = {
   /** Captured child for observation, not proof of graceful exit. */
