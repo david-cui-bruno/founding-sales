@@ -4,9 +4,19 @@
 
 1. Open **Today**. It shows real warm contacts and due commitments. Raw cold/hot research stays in the background instead of becoming a review queue. Active warm work pauses discretionary cold/hot work, but not genuine callbacks or post-interview commitments.
 2. Select a name. The overview shows identity, the **known, partial portfolio**, and a supported reason to contact. Unknown holdings stay unknown. Scores, source evidence and manual controls are inside **Details**.
-3. Choose **Call** or **Email**. There is no required Next sequence.
+3. Choose **Call** or **Email**. If contact details are missing, use **Find contact info** as described below. There is no required Next sequence.
 
 For CSV imports, choose the import source channel or include an explicit **Segment** column (`warm`, `hot`, or `cold`). A free-text Source column does not select a cadence. Custom imports without a Segment currently default to warm, so cold lists must be identified rather than left at that default.
+
+## Finding a first contact
+
+When queue capacity permits, **Suggested contacts** on Today shows at most three automatically assessed, supported Medium/High-Fit candidates. Selecting a name only opens its overview. It does not qualify the person, spend lookup credits or contact anyone.
+
+For a supported prospect with no contact details, **Find contact info** applies the existing mechanical Ready preparation and requests one lookup. This starts that person's cadence without a separate manual qualification step. Current identity, fit, suppression and rate-limit checks still apply. Unsupported or conflicting records remain blocked, and active warm work takes priority.
+
+“Contact info requested” means a request was submitted, not that a match was found. Cloud processing and app synchronization each run on a 15-minute schedule. The selected overview checks locally for arriving results for up to 35 minutes and checks again when you return to the window. Those checks do not request another lookup. A missing or uncertain response never triggers an automatic lookup retry.
+
+Returned addresses and phone numbers are vendor candidates, not verified contacts. You can prepare and edit an email draft, but an unverified or conflicting address cannot be used to send. This workflow does not manufacture verification or phone compliance clearance.
 
 ## Calling
 
