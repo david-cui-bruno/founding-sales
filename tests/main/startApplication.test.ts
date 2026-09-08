@@ -123,6 +123,21 @@ describe('startApplication', () => {
     };
   }
 
+  it('owns email service registration, lock invalidation and disposal before database shutdown', async () => {
+    const events:string[]=[];const dependencies=createDependencies(events);
+    const email={invalidate:vi.fn(),dispose:vi.fn(()=>events.push('email-dispose'))} as unknown as ReturnType<typeof import('../../src/main/outreach/emailService').createEmailService>;
+    dependencies.createEmailService=()=>email;
+    dependencies.registerOutreachIpc=({provider})=>{expect(provider).toBe(email);events.push('email-ipc');return ()=>events.push('email-unregister');};
+    let callbacks!:Parameters<NonNullable<ApplicationStartupOptions['registerOutboundLifecycle']>>[0];
+    const app=await startApplication({appVersion:'1',userDataPath:'/fixture/email',createWindow:()=>undefined,
+      registerOutboundLifecycle:owned=>{callbacks=owned;return ()=>undefined;}},dependencies);
+    expect(events).toContain('email-ipc');callbacks.onLock();expect(email.invalidate).toHaveBeenLastCalledWith(true);
+    callbacks.onUnlock();expect(email.invalidate).toHaveBeenLastCalledWith(false);
+    await app.shutdown();expect(email.dispose).toHaveBeenCalledTimes(1);
+    expect(events.indexOf('email-dispose')).toBeLessThan(events.indexOf('close'));
+    expect(events.indexOf('email-unregister')).toBeLessThan(events.indexOf('close'));
+  });
+
   it('constructs one outbound service after initialization, registers lifecycle before exposure and passes argument nine unchanged', async () => {
     const events: string[] = [];
     const dependencies = createDependencies(events);

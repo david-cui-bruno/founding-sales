@@ -1,3 +1,6 @@
+import { createEmailService } from './outreach/emailService';
+import { createOutreachProviders } from './outreach/providers/outreachProviders';
+import { registerOutreachIpc } from './ipc/registerOutreachIpc';
 import { createDiscoveryWorker, type DiscoveryWorker } from './discovery/discoveryWorker';
 import { unavailableDiscoveryResearch } from './discovery/discoveryResearchPort';
 import { resolveApplicationPaths } from './applicationPaths';
@@ -49,7 +52,7 @@ import {
   UpstreamSync,
   type UpstreamObjectStore,
 } from './sourcing/upstreamSync';
-import { safeStorage, dialog } from 'electron';
+import { safeStorage, dialog, shell } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
 import type { SafeLogger } from './logging/safeLogger';
@@ -58,6 +61,8 @@ import { unavailablePhoneHandoff, unavailableOutboundReadiness } from './communi
 import type { OutboundCommandServiceApi, OutboundDomainGate } from './communications/outboundPorts';
 
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
+  createEmailService?(runtime:FoundationRuntime,userDataPath:string):ReturnType<typeof createEmailService>;
+  registerOutreachIpc?:typeof registerOutreachIpc;
   createDiscoveryWorker?: typeof createDiscoveryWorker;
   createOutboundCommandService?: typeof createOutboundCommandService;
   createBackupService?(options: BackupServiceOptions): Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'>;
@@ -293,6 +298,9 @@ const defaultDependencies: ApplicationStartupDependencies = {
   }),
   createHealthService: (options) => new HealthService(options),
   registerApplicationIpc,
+  registerOutreachIpc,
+  createEmailService: (runtime,userDataPath) => createEmailService({databaseGate:runtime,
+    providers:createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)})}),
   createSourcingPoller: createProductionSourcingPoller,
   createEnrichmentRequester: createProductionEnrichmentRequester,
   createAppleBridgeSupervisor: (options) => new AppleBridgeSupervisor(options),
@@ -315,6 +323,8 @@ export async function startApplication(
     },
     dependencies,
   );
+  let email:ReturnType<typeof createEmailService>|undefined;
+  let unregisterEmail:(()=>void)|undefined;
   let unregisterApplicationIpc: (() => void) | undefined;
   let unregisterAppleSpikeIpc: (() => void) | undefined;
   let appleBridgeSupervisor: AppleBridgeSupervisorApi | undefined;
@@ -350,6 +360,7 @@ export async function startApplication(
     if (outboundClosed) return;
     // Reserve permanent owner closure before any injected callback can reenter.
     outboundClosed = true;
+    try { email?.dispose(); } catch (error) { cleanupErrors.push(error); }
     try { outbound?.dispose(); } catch (error) { cleanupErrors.push(error); }
     detachOutboundLifecycle();
     try { detachStartupAbort(); } catch (error) { cleanupErrors.push(error); }
@@ -408,6 +419,7 @@ export async function startApplication(
       try { await recoveryCleanup; } catch (error) { cleanupErrors.push(error); }
       finally { recoveryService = undefined; }
 
+      try { unregisterEmail?.(); } catch(error) { cleanupErrors.push(error); } finally { unregisterEmail=undefined; }
       try {
         unregisterApplicationIpc?.();
       } catch (error) {
@@ -467,6 +479,8 @@ export async function startApplication(
     outbound = (dependencies.createOutboundCommandService ?? createOutboundCommandService)({
       domain, phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(),
     });
+    email = dependencies.createEmailService?.(runtime,options.userDataPath);
+    if(outboundClosed)email?.dispose();
     if (options.signal !== undefined) {
       const signal = options.signal;
       removeStartupAbort = () => signal.removeEventListener('abort', abortStartup);
@@ -475,10 +489,11 @@ export async function startApplication(
       throwIfStartupCancelled(signal);
     }
     unregisterOutboundLifecycle = options.registerOutboundLifecycle?.({
-      onWake: () => { if (!outboundClosed) outbound.invalidate('wake'); },
-      onLock: () => { if (!outboundClosed) outbound.invalidate('lock'); },
+      onWake: () => { if (!outboundClosed) {email?.invalidate();outbound.invalidate('wake');} },
+      onLock: () => { if (!outboundClosed) {email?.invalidate(true);outbound.invalidate('lock');} },
       onUnlock: () => {
         if (outboundClosed) return;
+        email?.invalidate(false);
         outbound.invalidate('wake');
         if (!outboundClosed) outbound.resumeAfterUnlock();
       },
@@ -556,6 +571,7 @@ export async function startApplication(
       options.logDirectoryPath,
       outbound,
     );
+    if(email)unregisterEmail=(dependencies.registerOutreachIpc??registerOutreachIpc)({provider:email,isTrustedRendererUrl:options.isTrustedRendererUrl});
     throwIfStartupCancelled(options.signal);
     if (options.sourcingPollingEnabled === true && sourcingPoller !== undefined) {
       const timer: PollTimer = {

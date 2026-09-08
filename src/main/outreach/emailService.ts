@@ -1,0 +1,138 @@
+import { randomUUID } from 'node:crypto';
+import type { AppDatabase } from '../db/database';
+import type { FounderSalesDomain } from '../domain/founderSalesDomain';
+import { contactSnapshot } from '../communications/contactSnapshot';
+import { configureOutreachSchema,draftRevisionSchema,openDraftSchema,saveDraftSchema,sendDraftSchema,
+  type EmailDraft,type OutreachApi,type OutreachStatus,type SendDraftRequest } from '../../shared/contracts/outreachContract';
+import type { EmailSendResult,OutreachProviders } from './providers/providerTypes';
+import { EmailRepository,publicDraft,type EmailReservation } from './emailRepository';
+import { authorizeEmail,emailDomain,readEmailAction,recordEmailAcceptance } from './emailEvidence';
+import { EMAIL_PLAYBOOK } from './emailPlaybook';
+
+export type EmailDatabaseGate = {
+  withDatabase<T>(operation:(database:AppDatabase)=>T|Promise<T>):Promise<T>;
+  withDomain<T>(operation:(domain:FounderSalesDomain)=>T|Promise<T>):Promise<T>;
+};
+export function createEmailService(options:{databaseGate:EmailDatabaseGate;providers:OutreachProviders;now?:()=>string;id?:()=>string}):OutreachApi & {dispose():void;invalidate(locked?:boolean):void} {
+  const gate=options.databaseGate, providers=options.providers, now=options.now??(()=>new Date().toISOString()), id=options.id??randomUUID;
+  let closed=false,locked=false,epoch=0,initialized:Promise<void>|undefined;
+  const controllers=new Set<AbortController>();
+  const flights=new Map<string,{revision:number;commandId:string;promise:Promise<EmailDraft>}>();
+  const assertOpen=()=>{if(closed||locked)throw new Error('email_workspace_inactive');};
+  const ready=()=> initialized??=gate.withDatabase(db=>db.raw.transaction(()=>{
+    const repo=new EmailRepository(db);
+    const rows=db.raw.prepare(`SELECT i.reservation_json FROM email_send_intents i JOIN email_drafts d ON d.id=i.draft_id
+      LEFT JOIN email_send_results r ON r.command_id=i.command_id WHERE d.status='sending' AND r.command_id IS NULL`).all() as {reservation_json:string}[];
+    for(const row of rows)repo.finish(JSON.parse(row.reservation_json) as EmailReservation,{status:'unknown',reasonCode:'interrupted_send'},now());
+  }).immediate());
+  const invalidate=(lock?:boolean)=>{if(lock!==undefined)locked=lock;epoch++;for(const controller of controllers)controller.abort();controllers.clear();};
+  const api:OutreachApi & {dispose():void;invalidate(locked?:boolean):void}={
+    status:()=>providers.status(),
+    configure:input=>{assertOpen();invalidate();return providers.configure(configureOutreachSchema.parse(input));},
+    connectGmail:()=>{assertOpen();invalidate();return providers.connectGmail();},
+    disconnectGmail:()=>{assertOpen();invalidate();return providers.disconnectGmail();},
+    dispose:()=>{closed=true;invalidate();providers.dispose();},invalidate,
+    async openDraft(input) {
+      assertOpen();const request=openDraftSchema.parse(input);await ready();
+      const detail=await gate.withDomain(domain=>domain.getLeadDetail({personId:request.personId}));
+      const contact=detail.emails.find(item=>item.id===request.contactMethodId);
+      if(!contact)throw new Error('email_contact_missing');
+      const setup=await providers.status();
+      const opened=await gate.withDatabase(db=>db.raw.transaction(()=>{
+        const repo=new EmailRepository(db);const old=repo.findOpen(detail.salesCycleId,contact.id);
+        if(old){repo.bindAccount(old.id,setup.accountEmail,emailFooter(setup),now());return {draft:repo.get(old.id),created:false};}
+        const current=db.raw.prepare(`SELECT id,person_id AS personId,kind,normalized_value AS normalizedValue,
+          validation_state AS validationState,updated_at AS updatedAt FROM person_contact_methods WHERE id=?`).get(contact.id) as Parameters<typeof contactSnapshot>[0]|undefined;
+        if(!current || current.personId!==detail.personId || current.kind!=='email' || current.normalizedValue!==contact.value)throw new Error('email_contact_changed');
+        const draft=repo.create({id:id(),personId:detail.personId,salesCycleId:detail.salesCycleId,contactMethodId:contact.id,
+          recipient:current.normalizedValue,contactSnapshot:contactSnapshot(current),accountEmail:setup.accountEmail,footer:emailFooter(setup),updatedAt:now()});
+        return {draft,created:true};
+      }).immediate());
+      if(opened.created && setup.model==='ready')return api.generateDraft({draftId:opened.draft.id,expectedRevision:opened.draft.revision});
+      if(opened.created && setup.model!=='ready')return gate.withDatabase(db=>publicDraft(new EmailRepository(db).notice(opened.draft.id,'Add your model key in Settings → Connections for a prepared draft. You can also write this email yourself.')));
+      return publicDraft(opened.draft);
+    },
+    async saveDraft(input) {
+      assertOpen();const request=saveDraftSchema.parse(input);await ready();
+      return gate.withDatabase(db=>publicDraft(new EmailRepository(db).save(request,now())));
+    },
+    async generateDraft(input) {
+      assertOpen();const request=draftRevisionSchema.parse(input);await ready();const startEpoch=epoch;
+      const draft=await gate.withDatabase(db=>new EmailRepository(db).get(request.draftId));
+      if(draft.status!=='draft'||draft.revision!==request.expectedRevision)throw new Error('email_draft_changed');
+      const detail=await gate.withDomain(domain=>domain.getLeadDetail({personId:draft.personId}));
+      if(detail.salesCycleId!==draft.salesCycleId)throw new Error('email_cycle_changed');
+      const controller=new AbortController();controllers.add(controller);
+      try {
+        const facts=[...(detail.portfolio?.facts??[])];
+        // Local-only notes, raw activity summaries and transcripts are deliberately excluded.
+        const result=await providers.generate({personName:detail.personName,organizationLabel:detail.organizationLabel,
+          segment:detail.segment,stage:detail.stage,actionLabel:detail.nextAction?.label??null,facts:facts.slice(0,40),playbook:EMAIL_PLAYBOOK},controller.signal);
+        if(epoch!==startEpoch||closed)throw new Error('email_workspace_changed');
+        const saved=saveDraftSchema.parse({...request,subject:result.subject,body:result.body});
+        return await gate.withDatabase(db=>publicDraft(new EmailRepository(db).save(saved,now(),'model')));
+      } catch {
+        return gate.withDatabase(db=>publicDraft(new EmailRepository(db).notice(draft.id,'Could not prepare the email. Your existing draft is unchanged. Check Settings → Connections.')));
+      } finally {controllers.delete(controller);}
+    },
+    sendDraft(input) {
+      assertOpen();const request=sendDraftSchema.parse(input);
+      const existing=flights.get(request.draftId);
+      if(existing){if(existing.commandId===request.commandId && existing.revision===request.expectedRevision)return existing.promise;
+        return Promise.reject(new Error('email_send_in_progress'));}
+      const promise=send(request).finally(()=>flights.delete(request.draftId));
+      flights.set(request.draftId,{revision:request.expectedRevision,commandId:request.commandId,promise});return promise;
+    },
+  };
+  async function send(request:SendDraftRequest):Promise<EmailDraft> {
+    await ready();assertOpen();const startEpoch=epoch;
+    const replay=await gate.withDatabase(db=>{
+      const repo=new EmailRepository(db),previous=repo.intent(request.commandId),draft=repo.get(request.draftId);
+      if(previous){if(previous.draftId!==request.draftId||previous.draftRevision!==request.expectedRevision)throw new Error('email_command_conflict');return publicDraft(draft);}
+      return draft.status==='draft'?null:publicDraft(draft);
+    });
+    if(replay)return replay;
+    const setup=await providers.status();
+    if(setup.gmail!=='ready'||!setup.accountEmail||!setup.senderName.trim()||!setup.postalAddress.trim())throw new Error('email_sender_setup_required');
+    const controller=new AbortController();controllers.add(controller);
+    try {
+      const prepared=await providers.prepare(controller.signal);
+      // Hold the database lease across dispatch/result. No await between final serialized authority and sendOnce.
+      return await gate.withDatabase(async db=>{
+        const repo=new EmailRepository(db),services=emailDomain(db,now,id);
+        const reservation=services.unitOfWork.immediate(()=>{
+          if(closed||epoch!==startEpoch||controller.signal.aborted)throw new Error('email_workspace_changed');
+          const draft=repo.get(request.draftId);
+          if(draft.revision!==request.expectedRevision||draft.status!=='draft')throw new Error('email_draft_changed');
+          if(draft.footer!==emailFooter(setup)||draft.accountEmail!==prepared.accountEmail||setup.accountEmail!==prepared.accountEmail)throw new Error('email_sender_changed');
+          if(!draft.subject.trim()||!draft.body.trim())throw new Error('email_content_required');
+          const createdAt=now(),cycle=authorizeEmail(db,services,draft,createdAt);
+          const policy=services.events.appendConsentPolicyRecord({personId:draft.personId,policyKind:'outbound',policyVersion:'fss-email-explicit-v1',
+            effectiveAt:createdAt,decision:'granted',evidence:{explicitSend:true,commandId:request.commandId,contactMethodId:draft.contactMethodId,
+              contactSnapshot:draft.contactSnapshot,sender:prepared.accountEmail,personWideSuppressionChecked:true,postalAddressPresent:true,replyOptOut:true}});
+          const value:EmailReservation={email:{commandId:request.commandId,from:prepared.accountEmail,to:draft.recipient,subject:draft.subject,
+            body:`${draft.body}\n\n${draft.footer}`},draftId:draft.id,draftRevision:draft.revision,
+            personId:draft.personId,salesCycleId:cycle.id,prospectId:cycle.prospectId,cycleVersion:cycle.version,
+            action:readEmailAction(db,cycle),policyId:policy.id,createdAt};
+          repo.reserve(value);return value;
+        });
+        let result:EmailSendResult;
+        try {result=await prepared.sendOnce(reservation.email);}catch{result={status:'unknown',reasonCode:'network_uncertain'};}
+        try {
+          return services.unitOfWork.immediate(()=>{
+            if(result.status==='accepted')recordEmailAcceptance(db,services,reservation,result,now());
+            return publicDraft(repo.finish(reservation,result,now()));
+          });
+        }catch {
+          // Never retry a committed intent, even if receipt/evidence persistence failed after acceptance.
+          return services.unitOfWork.immediate(()=>publicDraft(repo.finish(reservation,{status:'unknown',reasonCode:'result_not_persisted'},now())));
+        }
+      });
+    }finally{controllers.delete(controller);}
+  }
+  return api;
+}
+
+function emailFooter(setup:OutreachStatus):string {
+  return `${setup.senderName}\n${setup.postalAddress}\nTo stop these emails, reply "stop".`;
+}

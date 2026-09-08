@@ -1,3 +1,4 @@
+import { createOutreachApi } from './apis/outreachApi';
 import { createDiscoveryApi } from './apis/discoveryApi';
 import { createRecoveryApi } from './apis/recoveryApi';
 import { appHealthSchema, type AppHealth } from '../shared/healthContract';
@@ -26,6 +27,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       get: (): Promise<AppHealth> =>
         client.requestNoInput('health:get', appHealthSchema),
     },
+    outreach: createOutreachApi(client),
     leads: createLeadsApi(client),
     leadDetail: createLeadDetailApi(client),
     today: createTodayApi(client),
