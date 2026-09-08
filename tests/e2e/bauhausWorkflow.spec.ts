@@ -148,9 +148,21 @@ test('all workspaces and shared overlays remain usable with Bauhaus light and da
       await page.getByRole('button', { name: 'Import', exact: true }).click();
       const importDialog = page.getByRole('dialog', { name: 'Import leads', exact: true });
       await expect(importDialog).toBeVisible();
+      await expect(importDialog).toBeInViewport({ ratio: 1 });
+      await expect.poll(() => importDialog.evaluate(el => el.contains(document.activeElement))).toBe(true);
       await fitAndCapture(page, info, `${theme}-import`);
       await accessible(page, `${theme} import`);
+      for (let tab = 0; tab < 12; tab++) {
+        await page.keyboard.press('Tab');
+        expect(await importDialog.evaluate(el => el.contains(document.activeElement))).toBe(true);
+      }
+      await page.keyboard.press('Escape');
+      await expect(importDialog).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Import', exact: true })).toBeFocused();
+      await page.getByRole('button', { name: 'Import', exact: true }).click();
+      await expect(importDialog).toBeInViewport({ ratio: 1 });
       await importDialog.getByRole('button', { name: 'Close', exact: true }).click();
+      await expect(page.getByRole('button', { name: 'Import', exact: true })).toBeFocused();
 
       await page.keyboard.press('Meta+k');
       await expect(page.getByRole('dialog', { name: 'Command palette', exact: true })).toBeVisible();
