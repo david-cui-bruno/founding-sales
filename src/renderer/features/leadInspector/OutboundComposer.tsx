@@ -56,7 +56,6 @@ function EmailComposer({ api, personId, contactMethodId, recipientLabel, onClose
     <label>Subject<input maxLength={240} value={value.subject} disabled={!editable} onChange={event => session.edit('subject', event.target.value)} onBlur={flush} /></label>
     <label>Message<textarea rows={7} maxLength={20000} value={value.body} disabled={!editable} onChange={event => session.edit('body', event.target.value)} onBlur={flush} /></label>
     {setup?.model !== 'ready' && <p>AI drafting is not configured or available. Your own edits can still be saved.</p>}
-    {draft?.generation === 'model' && <p className="outbound-composer__hint">AI-assisted draft. Review the facts and wording before sending.</p>}
     {!ready && <p>Sending requires Gmail, sender identity and a postal address in <a href="#/settings" onClick={() => { flush(); openConnections(); }}>Settings → Connections</a>.</p>}
     {setup !== null && draft !== null && !identityCurrent && <p role="alert">Sender settings changed. Close and reopen this draft to review the current send identity before sending.</p>}
     {setup !== null && <section className="outbound-composer__preview" aria-label="Send identity and footer preview">
@@ -64,6 +63,16 @@ function EmailComposer({ api, personId, contactMethodId, recipientLabel, onClose
       <p>Included below your message:</p><pre>{footer}</pre>
     </section>}
     {disabled && <p role="alert">Outreach is disabled for this person.</p>}
+    <div className="outbound-composer__actions">
+      <Button disabled={!editable || value.conflict || !ready || !recipientCurrent || !value.body.trim() || !value.subject.trim()} onClick={() => { void session.send(); }}>Send</Button>
+      <Button variant="quiet" disabled={!editable} onClick={() => { void session.saveDisplayedEdits().catch((): undefined => undefined); }}>{value.conflict ? 'Save my displayed edits' : 'Save draft'}</Button>
+      {setup?.model === 'ready' && <Button variant="quiet" disabled={!editable || value.conflict} onClick={() => { void session.generate(); }}>Generate draft</Button>}
+      <Button variant="quiet" disabled={value.busy} onClick={() => { void session.flush().then(() => { if (active.current) onClose(); }, (): undefined => undefined); }}>Close draft</Button>
+      {value.error !== null && !value.conflict && <Button variant="quiet" disabled={value.busy || value.loading} onClick={() => { void session.open(); }}>Reload saved draft</Button>}
+    </div>
+    {/* Blur starts saving during pointer-down. Feedback must not move the
+        action targets before pointer-up, including when saved notices clear. */}
+    {draft?.generation === 'model' && <p className="outbound-composer__hint">AI-assisted draft. Review the facts and wording before sending.</p>}
     {value.error !== null && <p role="alert">{value.error}</p>}
     {value.conflict && draft !== null && <details><summary>Compare saved version</summary><h4>{draft.subject}</h4><pre>{draft.body}</pre></details>}
     {value.saving && <p role="status">Saving edits…</p>}
@@ -71,13 +80,6 @@ function EmailComposer({ api, personId, contactMethodId, recipientLabel, onClose
     {draft?.status === 'sending' && <p role="status">Send pending. Do not resend.</p>}
     {draft?.status === 'sent' && <p role="status">Accepted by Gmail. This does not confirm delivery or a reply.</p>}
     {draft?.notice && <p role="status">{draft.notice}</p>}
-    <div className="outbound-composer__actions">
-      <Button disabled={!editable || value.conflict || !ready || !recipientCurrent || !value.body.trim() || !value.subject.trim()} onClick={() => { void session.send(); }}>Send</Button>
-      <Button variant="quiet" disabled={!editable} onClick={() => { void session.saveDisplayedEdits().catch((): undefined => undefined); }}>{value.conflict ? 'Save my displayed edits' : 'Save draft'}</Button>
-      {value.error !== null && !value.conflict && <Button variant="quiet" disabled={value.busy || value.loading} onClick={() => { void session.open(); }}>Reload saved draft</Button>}
-      {setup?.model === 'ready' && <Button variant="quiet" disabled={!editable || value.conflict} onClick={() => { void session.generate(); }}>Generate draft</Button>}
-      <Button variant="quiet" disabled={value.busy} onClick={() => { void session.flush().then(() => { if (active.current) onClose(); }, (): undefined => undefined); }}>Close draft</Button>
-    </div>
   </section>;
 }
 function LocalComposer({ channel, recipientLabel, onClose }: OutboundComposerProps) {
