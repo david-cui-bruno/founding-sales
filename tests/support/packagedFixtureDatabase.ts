@@ -16,7 +16,7 @@ import { parseRecoveryKeyMaterial } from '../../src/main/security/recoveryKey';
 import type { WorkspaceKey } from '../../src/main/security/workspaceKeyTypes';
 
 export type FixtureProfile = 'bootstrap' | 'current' | 'historical' | 'through16';
-type FixtureSchema = 15 | 16 | 17;
+type FixtureSchema = 15 | 16 | 17 | 19;
 type BackupRow = { id: string; backup_basename: string; kind: string; schema_version: number; sha256: string; size_bytes: number; created_at: string; verified_at: string };
 type DrillRow = { performed_at: string; backup_receipt_id: string; backup_sha256: string };
 export type FixtureInspection = {
@@ -103,7 +103,7 @@ const SCHEMA15_TABLES = Object.freeze([
   'won_terms',
   'workspace_settings',
 ]);
-// Fixed accepted schema16 catalog, independent of the current17 manifest.
+// Fixed accepted schema16 catalog, independent of the current manifest.
 const SCHEMA16_CATALOG = 'afd4740063c216a075d8e6f144c018ea242e01ade847260c14003a41893fee66';
 const SCHEMA16_TABLES = Object.freeze([
   'activities',
@@ -172,6 +172,81 @@ const SCHEMA16_TABLES = Object.freeze([
   'won_terms',
   'workspace_settings',
 ]);
+// Fixed historical17 evidence from the accepted e87ecd5 schema, not today's manifest.
+const SCHEMA17_CATALOG = 'aa9c8e771ceed6d559b1cc97a82252d9463c34d2936db1c2545f3d3ce4fe1fab';
+const SCHEMA17_TABLES = Object.freeze([
+    'activities',
+    'activity_amendments',
+    'app_meta',
+    'backup_receipts',
+    'cadence_action_components',
+    'cadence_definitions',
+    'cadence_enrollments',
+    'cadence_steps',
+    'cloud_entity_links',
+    'consent_policy_records',
+    'contact_compliance_audit_events',
+    'cycle_reactivation_receipts',
+    'discovery_assessments',
+    'discovery_current',
+    'discovery_overrides',
+    'discovery_preparations',
+    'discovery_scan_state',
+    'foundation_fts_probe',
+    'foundation_fts_probe_config',
+    'foundation_fts_probe_content',
+    'foundation_fts_probe_data',
+    'foundation_fts_probe_docsize',
+    'foundation_fts_probe_idx',
+    'identity_repair_events',
+    'jobs',
+    'kysely_migration',
+    'kysely_migration_lock',
+    'learning_evidence',
+    'learnings',
+    'lifecycle_review_items',
+    'next_actions',
+    'opt_out_closure_receipt_handles',
+    'opt_out_closure_receipts',
+    'opt_out_handles',
+    'opt_out_tombstones',
+    'organization_aliases',
+    'organizations',
+    'outbound_jurisdiction_audit_events',
+    'outbound_jurisdiction_clearances',
+    'person_contact_methods',
+    'person_outbound_jurisdictions',
+    'persons',
+    'prioritization_evaluations',
+    'prioritization_preference_events',
+    'prioritization_rule_versions',
+    'priority_overrides',
+    'properties',
+    'prospect_organizations',
+    'prospect_priority_projection',
+    'prospect_properties',
+    'prospects',
+    'reactivation_rules',
+    'recovery_readiness',
+    'restore_drill_receipts',
+    'review_position',
+    'sales_cycle_close_readiness',
+    'sales_cycles',
+    'source_events',
+    'source_intake_receipts',
+    'sourcing_cursor',
+    'sourcing_enrichment_requests',
+    'sourcing_outcome_outbox',
+    'sourcing_processed_files',
+    'sourcing_suppression_outbox',
+    'stage_events',
+    'transcript_utterances',
+    'transcripts',
+    'trigger_events',
+    'won_terms',
+    'workspace_settings',
+  ]);
+
 // No jobs, assessment/projection refresh, property fact refresh or backup metadata.
 // These named tables have identical columns in the pinned16 and current17 catalogs.
 const PRESERVED16_TABLES = Object.freeze(['persons', 'prospects', 'source_events', 'source_intake_receipts',
@@ -180,7 +255,7 @@ const PRESERVED16_TABLES = Object.freeze(['persons', 'prospects', 'source_events
 const metadataTables = new Set(['app_meta', 'kysely_migration', 'kysely_migration_lock', 'backup_receipts', 'restore_drill_receipts', 'recovery_readiness']);
 
 function inspectRows(raw: RawDatabase, expected: FixtureSchema, sourceSha256: string, through16: boolean): FixtureInspection {
-  if (expected !== 15 && expected !== 16 && expected !== 17) fail();
+  if (expected !== 15 && expected !== 16 && expected !== 17 && expected !== 19) fail();
   if (raw.pragma('integrity_check', { simple: true }) !== 'ok' || (raw.pragma('foreign_key_check') as unknown[]).length) fail();
   const meta = raw.prepare('SELECT singleton, schema_version FROM app_meta').all() as { singleton: number; schema_version: number }[];
   if (meta.length !== 1 || meta[0].singleton !== 1 || meta[0].schema_version !== expected) fail();
@@ -192,11 +267,11 @@ function inspectRows(raw: RawDatabase, expected: FixtureSchema, sourceSha256: st
   const fingerprint = catalog.map(row => [row.type, row.name, (row.sql ?? '').replace(/\s+/g, ' ').trim()])
     .sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
   const catalogSha256 = hash(JSON.stringify(fingerprint));
-  if (catalogSha256 !== (expected === 15 ? SCHEMA15_CATALOG : expected === 16 ? SCHEMA16_CATALOG : DOMAIN_SCHEMA_MANIFEST.catalogSha256)) fail();
+  if (catalogSha256 !== (expected === 15 ? SCHEMA15_CATALOG : expected === 16 ? SCHEMA16_CATALOG : expected === 17 ? SCHEMA17_CATALOG : DOMAIN_SCHEMA_MANIFEST.catalogSha256)) fail();
   // Catalog-validated, fixed tables only. Canonical row multisets, no business rows
   // escape. This is a same-schema digest, not a cross-migration equivalence claim.
   const business = createHash('sha256');
-  for (const table of expected === 15 ? SCHEMA15_TABLES : expected === 16 ? SCHEMA16_TABLES : DOMAIN_SCHEMA_MANIFEST.tables) {
+  for (const table of expected === 15 ? SCHEMA15_TABLES : expected === 16 ? SCHEMA16_TABLES : expected === 17 ? SCHEMA17_TABLES : DOMAIN_SCHEMA_MANIFEST.tables) {
     if (metadataTables.has(table) || table.startsWith('foundation_fts_probe')) continue;
     const rows = raw.prepare(`SELECT * FROM "${table}"`).raw().all().map(row => JSON.stringify(row)).sort();
     business.update(JSON.stringify([table, rows]));
@@ -404,7 +479,7 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
         let database: AppDatabase | undefined;
         try {
           if (!same(envelopeCapture.identity, fs.fstatSync(envelope.descriptor)) || envelopeCapture.sha256 !== envelope.sha256) fail();
-          inspect('bootstrap', databasePath('bootstrap'), key, 17); // Proves supplied key matches bootstrap DB, NOT safeStorage.
+          inspect('bootstrap', databasePath('bootstrap'), key, 19); // Proves supplied key matches bootstrap DB, NOT safeStorage.
           envelope.assertUnchanged();
           makeDirectory(paths.historical); makeDirectory(join(paths.historical, 'backups'));
           fs.writeFileSync(envelopePath('historical'), envelope.bytes, { flag: 'wx', mode: 0o600 });
@@ -430,7 +505,7 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
         let database: AppDatabase | undefined;
         try {
           if (!same(envelopeCapture.identity, fs.fstatSync(envelope.descriptor)) || envelopeCapture.sha256 !== envelope.sha256) fail();
-          inspect('bootstrap', databasePath('bootstrap'), key, 17); // Proves supplied key matches bootstrap DB, NOT safeStorage.
+          inspect('bootstrap', databasePath('bootstrap'), key, 19); // Proves supplied key matches bootstrap DB, NOT safeStorage.
           envelope.assertUnchanged();
           makeDirectory(paths.through16); makeDirectory(join(paths.through16, 'backups'));
           fs.writeFileSync(envelopePath('through16'), envelope.bytes, { flag: 'wx', mode: 0o600 });
@@ -445,8 +520,8 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
             services.prioritizationRepository.installRuleVersion(BUILTIN_PRIORITIZATION_RULE_V1);
             services.cadences.installBuiltins();
           });
-          seedDiscoveryOwner({ services }, { prefix: 'through16-complete', units: 10 });
-          seedDiscoveryOwner({ services }, { prefix: 'through16-incomplete', units: null });
+          seedDiscoveryOwner({ services, database }, { prefix: 'through16-complete', units: 10, legacyUnreviewed: true });
+          seedDiscoveryOwner({ services, database }, { prefix: 'through16-incomplete', units: null, legacyUnreviewed: true });
           closeDatabase(database); database = undefined;
           return inspect('through16', databasePath('through16'), key, 16);
         } finally {
@@ -458,7 +533,7 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
     createManualBackup(material: string) {
       return withMaterial(material, async key => {
         const path = databasePath('current');
-        const before = inspect('current', path, key, 17);
+        const before = inspect('current', path, key, 19);
         if (before.aggregateCounts.people < 1) fail();
         const envelope = retain(envelopePath('current'), 64 * 1024);
         let database: AppDatabase | undefined; let service: BackupService | undefined;
@@ -473,8 +548,8 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
           const backup = await service.createBackup('manual');
           await service.shutdown(); service = undefined;
           closeDatabase(database); database = undefined;
-          const inspection = inspect('current', backupPath('current', backup.basename), key, 17);
-          const after = inspect('current', path, key, 17);
+          const inspection = inspect('current', backupPath('current', backup.basename), key, 19);
+          const after = inspect('current', path, key, 19);
           if (inspection.sourceSha256 !== backup.sha256 || inspection.businessSha256 !== before.businessSha256
             || after.businessSha256 !== before.businessSha256
             || !after.backupReceipts.some(row => row.backup_basename === backup.basename && row.sha256 === backup.sha256 && row.size_bytes === backup.sizeBytes)) fail();

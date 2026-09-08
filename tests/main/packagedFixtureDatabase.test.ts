@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, openDatabase } from '../../src/main/db/database';
 import * as migrations from '../../src/main/db/migrate';
 import * as driver from '../../src/main/db/sqliteDriver';
-import { DomainRuntime } from '../../src/main/domain/domainRuntime';
+import { createDomainServices } from '../../src/main/domain/createDomainServices';
 import { OperationalSafetyRepository } from '../../src/main/domain/operations/operationalSafetyRepository';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
 import { BackupService } from '../../src/main/backup/backupService';
@@ -95,7 +95,7 @@ describe('bounded packaged fixture database preparation', () => {
       await f.cleanup(); await f.cleanup();
       expect(fs.existsSync(f.paths.root)).toBe(false);
       expect(fs.existsSync(other.paths.root)).toBe(true);
-      await expect(f.inspectStoppedProfile('current', material, 17)).rejects.toThrow(ERROR);
+      await expect(f.inspectStoppedProfile('current', material, 19)).rejects.toThrow(ERROR);
     } finally { await other.cleanup(); }
   });
 
@@ -126,11 +126,11 @@ describe('bounded packaged fixture database preparation', () => {
       });
       return raw;
     });
-    const result = await f.inspectStoppedProfile('current', material, 17);
+    const result = await f.inspectStoppedProfile('current', material, 19);
     expect(result.aggregateCounts).toEqual({ people: 1, prospects: 1, sourceEvents: 1 });
-    expect(result.schemaVersion).toBe(17);
-    expect(result.ledger).toHaveLength(17);
-    expect(result.ledger.at(-1)).toBe('0017DiscoveryAssessments');
+    expect(result.schemaVersion).toBe(19);
+    expect(result.ledger).toHaveLength(19);
+    expect(result.ledger.at(-1)).toBe('0019EmailDrafts');
     expect(result.businessSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(result)).not.toMatch(/SYNTHETIC PRIVATE NAME|synthetic|CALLIE1-/);
     expect(seen).toHaveLength(1); expect(seen.every(path => !fs.existsSync(path))).toBe(true);
@@ -144,7 +144,7 @@ describe('bounded packaged fixture database preparation', () => {
     await seed('current', true); const before = identity(dbPath('current'));
     const resources = observeResources();
     const value = kind === 'wrong' ? materialFor(0x55) : kind === 'malformed' ? 'invalid' : kind === 'version' ? material.replace('CALLIE1', 'CALLIE2') : material.slice(0, -1) + (material.endsWith('0') ? '1' : '0');
-    await expect(f.inspectStoppedProfile('current', value, 17)).rejects.toThrow(ERROR);
+    await expect(f.inspectStoppedProfile('current', value, 19)).rejects.toThrow(ERROR);
     expect(identity(dbPath('current'))).toEqual(before); expect(residue()).toEqual([]);
     if (kind === 'wrong') { expect(resources.opened).toHaveLength(1); resources.assertReleased(); }
     else expect(resources.opened).toHaveLength(0);
@@ -153,7 +153,7 @@ describe('bounded packaged fixture database preparation', () => {
   it.each(['-wal', '-shm', '-journal'])('rejects existing source %s before copying or opening SQLite', async suffix => {
     await seed('current'); fs.writeFileSync(dbPath('current') + suffix, 'stopped-source-conflict', { mode: 0o600 });
     const open = vi.spyOn(driver, 'createRawDatabase'); const copy = vi.spyOn(fs, 'mkdtempSync');
-    await expect(f.inspectStoppedProfile('current', material, 17)).rejects.toThrow(ERROR);
+    await expect(f.inspectStoppedProfile('current', material, 19)).rejects.toThrow(ERROR);
     expect(open).not.toHaveBeenCalled(); expect(copy).not.toHaveBeenCalled(); expect(residue()).toEqual([]);
     expect(fs.readFileSync(dbPath('current') + suffix, 'utf8')).toBe('stopped-source-conflict');
   });
@@ -168,13 +168,13 @@ describe('bounded packaged fixture database preparation', () => {
     if (kind === 'oversize') fs.truncateSync(path, 64 * 1024 * 1024 + 1);
     if (kind === 'ancestor') { fs.renameSync(f.paths.current, f.paths.current + '.original'); fs.symlinkSync(f.paths.current + '.original', f.paths.current); }
     const open = vi.spyOn(driver, 'createRawDatabase');
-    await expect(f.inspectStoppedProfile('current', material, 17)).rejects.toThrow(ERROR);
+    await expect(f.inspectStoppedProfile('current', material, 19)).rejects.toThrow(ERROR);
     expect(open).not.toHaveBeenCalled(); expect(residue()).toEqual([]);
   });
 
   it('rejects escaped or unknown selectors without inspecting outside the captured root', async () => {
     const open = vi.spyOn(driver, 'createRawDatabase');
-    await expect(f.inspectStoppedProfile('../current' as 'current', material, 17)).rejects.toThrow(ERROR);
+    await expect(f.inspectStoppedProfile('../current' as 'current', material, 19)).rejects.toThrow(ERROR);
     await expect(f.inspectStoppedBackup('current', '../callie.sqlite3', material, 17)).rejects.toThrow(ERROR);
     await expect(f.inspectStoppedBackup('current', dbPath('current'), material, 17)).rejects.toThrow(ERROR);
     expect(open).not.toHaveBeenCalled(); expect(residue()).toEqual([]);
@@ -188,7 +188,7 @@ describe('bounded packaged fixture database preparation', () => {
     });
     const exited = once(child, 'exit'); f.captureChild(child);
     try {
-      await expect(f.inspectStoppedProfile('current', material, 17)).rejects.toThrow(ERROR);
+      await expect(f.inspectStoppedProfile('current', material, 19)).rejects.toThrow(ERROR);
       await expect(f.createManualBackup(material)).rejects.toThrow(ERROR);
       await expect(f.captureBootstrapEnvelope()).rejects.toThrow(ERROR);
       await expect(f.createHistoricalProfile(material)).rejects.toThrow(ERROR);
@@ -197,27 +197,27 @@ describe('bounded packaged fixture database preparation', () => {
       expect(fs.existsSync(f.paths.root)).toBe(true);
       expect(() => f.captureChild(child)).toThrow(ERROR);
     } finally { child.stdin!.end(); await exited; }
-    expect((await f.inspectStoppedProfile('current', material, 17)).schemaVersion).toBe(17);
+    expect((await f.inspectStoppedProfile('current', material, 19)).schemaVersion).toBe(19);
     expect(() => f.captureChild({ exitCode: 0 } as ChildProcess)).toThrow(ERROR);
     await f.cleanup(); expect(fs.existsSync(f.paths.root)).toBe(false);
   });
 
   it('creates a real manual nonzero encrypted backup and repository receipt without changing business data', async () => {
     await seed('current', true);
-    const before = await f.inspectStoppedProfile('current', material, 17);
+    const before = await f.inspectStoppedProfile('current', material, 19);
     const envelope = identity(envelopePath('current'));
     const resources = observeResources(); const create = vi.spyOn(BackupService.prototype, 'createBackup');
     const result = await f.createManualBackup(material);
     expect(create).toHaveBeenCalledWith('manual');
-    expect(result.backup.kind).toBe('manual'); expect(result.backup.schemaVersion).toBe(17);
+    expect(result.backup.kind).toBe('manual'); expect(result.backup.schemaVersion).toBe(19);
     expect(result.backup.sha256).toBe(digest(result.backup.path));
     expect(fs.readFileSync(result.backup.path).subarray(0, 16).equals(Buffer.from('SQLite format 3\0'))).toBe(false);
     expect(result.inspection.aggregateCounts).toEqual({ people: 1, prospects: 1, sourceEvents: 1 });
     expect(result.inspection.businessSha256).toBe(before.businessSha256);
-    const after = await f.inspectStoppedProfile('current', material, 17);
+    const after = await f.inspectStoppedProfile('current', material, 19);
     expect(after.businessSha256).toBe(before.businessSha256);
     expect(after.backupReceipts).toHaveLength(1);
-    expect(after.backupReceipts[0]).toMatchObject({ backup_basename: result.backup.basename, sha256: result.backup.sha256, kind: 'manual', schema_version: 17, size_bytes: result.backup.sizeBytes });
+    expect(after.backupReceipts[0]).toMatchObject({ backup_basename: result.backup.basename, sha256: result.backup.sha256, kind: 'manual', schema_version: 19, size_bytes: result.backup.sizeBytes });
     expect(identity(envelopePath('current'))).toEqual(envelope); resources.assertReleased();
     // Persisted drill metadata via the real repository, not fabricated receipt SQL.
     const key = createTestWorkspaceKey(); const database = openDatabase({ path: dbPath('current'), key });
@@ -229,8 +229,8 @@ describe('bounded packaged fixture database preparation', () => {
       expect(() => database.raw.exec('DELETE FROM restore_drill_receipts')).toThrow();
       database.raw.prepare('INSERT INTO persons(id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)').run('p2', 'EXTRA SYNTHETIC', TIME, TIME);
     } finally { closeDatabase(database); key.bytes.fill(0); }
-    const live = await f.inspectStoppedProfile('current', material, 17);
-    const backup = await f.inspectStoppedBackup('current', result.backup.basename, material, 17);
+    const live = await f.inspectStoppedProfile('current', material, 19);
+    const backup = await f.inspectStoppedBackup('current', result.backup.basename, material, 19);
     expect(live.drillReceipts).toEqual([{ performed_at: TIME, backup_receipt_id: after.backupReceipts[0].id, backup_sha256: result.backup.sha256 }]);
     expect(live.aggregateCounts.people).toBe(2); expect(backup.aggregateCounts.people).toBe(1);
     expect(live.businessSha256).not.toBe(backup.businessSha256);
@@ -255,12 +255,14 @@ describe('bounded packaged fixture database preparation', () => {
     await expect(f.inspectStoppedProfile('through16', material, 17)).rejects.toThrow(ERROR);
     const key = createTestWorkspaceKey(); const database = openDatabase({ path: dbPath('through16'), key });
     try {
-      expect(await migrations.migrateToLatest(database, { workspaceKey: key, backupDirectory: join(f.paths.through16, 'backups') }))
+      expect(await migrations.createMigrationRunner(migrations.productionMigrations.filter(entry => entry.schemaVersion <= 17))(database, { workspaceKey: key, backupDirectory: join(f.paths.through16, 'backups') }))
         .toEqual({ fromVersion: 16, toVersion: 17, appliedMigrationIds: ['0017DiscoveryAssessments'] });
-      const runtime = new DomainRuntime({ database, clock: { now: () => TIME }, ids: { next: randomUUID } });
-      expect(runtime.initialize().status).toBe('ready');
-      for (const row of database.raw.prepare('SELECT id FROM prospects').all() as { id: string }[]) runtime.getServices().discovery.assess(row.id);
-      runtime.shutdown();
+      // Historical17 cannot initialize today's runtime, which correctly requires19.
+      const services = createDomainServices({ database, clock: { now: () => TIME }, ids: { next: randomUUID } });
+      services.unitOfWork.immediate(() => services.prioritizationRepository.activateRuleVersion({
+        ruleVersionId: 'founder-priority-v1', expectedActiveRuleVersionId: null,
+      }));
+      for (const row of database.raw.prepare('SELECT id FROM prospects').all() as { id: string }[]) services.discovery.assess(row.id);
     } finally { closeDatabase(database); key.bytes.fill(0); }
     const backups = fs.readdirSync(join(f.paths.through16, 'backups')).filter(name => name.startsWith('pre-migration-schema-16-'));
     expect(backups).toHaveLength(1);
@@ -270,8 +272,29 @@ describe('bounded packaged fixture database preparation', () => {
     const after = await f.inspectStoppedProfile('through16', material, 17);
     expect(after.preserved16Sha256).toBe(before.preserved16Sha256);
     expect(after.ledger.at(-1)).toBe('0017DiscoveryAssessments');
+    const backupIdentity = identity(join(f.paths.through16, 'backups', backups[0]));
+    const currentKey = createTestWorkspaceKey();
+    const currentDatabase = openDatabase({ path: dbPath('through16'), key: currentKey });
+    try {
+      expect(await migrations.migrateToLatest(currentDatabase, { workspaceKey: currentKey, backupDirectory: join(f.paths.through16, 'backups') }))
+        .toEqual({ fromVersion: 17, toVersion: 19, appliedMigrationIds: ['0018PlaybookDueActions', '0019EmailDrafts'] });
+      // Schema18 deliberately adds the single dated review action and pointer.
+      // Do not present an unchanged16 digest as evidence for those new semantics.
+      expect(currentDatabase.raw.prepare(`SELECT n.action_type, n.due_source, n.due_at,
+        (SELECT count(*) FROM next_actions a WHERE a.sales_cycle_id = c.id AND a.status = 'pending') AS pending
+        FROM sales_cycles c JOIN next_actions n ON n.id = c.current_next_action_id ORDER BY c.id`).all())
+        .toEqual(Array.from({ length: 2 }, () => ({ action_type: 'review_lead', due_source: 'internal_review', due_at: TIME, pending: 1 })));
+    } finally { closeDatabase(currentDatabase); currentKey.bytes.fill(0); }
+    const current = await f.inspectStoppedProfile('through16', material, 19);
+    expect(current.ledger.at(-1)).toBe('0019EmailDrafts');
+    expect(current.aggregateCounts).toEqual(before.aggregateCounts);
+    expect(current.preserved16Sha256).not.toBe(before.preserved16Sha256);
+    expect(identity(join(f.paths.through16, 'backups', backups[0]))).toEqual(backupIdentity);
+    const backup17 = fs.readdirSync(join(f.paths.through16, 'backups')).filter(name => name.startsWith('pre-migration-schema-17-'));
+    expect(backup17).toHaveLength(1);
+    expect((await f.inspectStoppedBackup('through16', backup17[0], material, 17)).businessSha256).toBe(after.businessSha256);
     expect((['bootstrap', 'current', 'historical'] as const).map(profile => [identity(dbPath(profile)), identity(envelopePath(profile))])).toEqual(untouched);
-    expect((await f.inspectStoppedProfile('current', material, 17)).preserved16Sha256).toBeUndefined();
+    expect((await f.inspectStoppedProfile('current', material, 19)).preserved16Sha256).toBeUndefined();
     expect(residue()).toEqual([]);
   });
 
@@ -350,10 +373,10 @@ describe('bounded packaged fixture database preparation', () => {
     try {
       if (kind === 'catalog') database.raw.exec('CREATE TABLE unrecognized (value TEXT)');
       if (kind === 'ledger') database.raw.exec("DELETE FROM kysely_migration WHERE name = '0017DiscoveryAssessments'");
-      if (kind === 'version') database.raw.exec('UPDATE app_meta SET schema_version = 18');
+      if (kind === 'version') database.raw.exec('UPDATE app_meta SET schema_version = 20');
     } finally { closeDatabase(database); key.bytes.fill(0); }
     const before = identity(dbPath('current')); const resources = observeResources();
-    await expect(f.inspectStoppedProfile('current', material, 17)).rejects.toThrow(ERROR);
+    await expect(f.inspectStoppedProfile('current', material, 19)).rejects.toThrow(ERROR);
     await expect(f.createManualBackup(material)).rejects.toThrow(ERROR);
     expect(identity(dbPath('current'))).toEqual(before); expect(residue()).toEqual([]); resources.assertReleased();
   });
@@ -372,7 +395,7 @@ describe('bounded packaged fixture database preparation', () => {
       if (fault === 'close') vi.spyOn(raw, 'close').mockImplementationOnce(() => { throw new Error('private close details'); });
       return raw;
     });
-    await expect(f.inspectStoppedProfile('current', material, 17)).rejects.toThrow(ERROR);
+    await expect(f.inspectStoppedProfile('current', material, 19)).rejects.toThrow(ERROR);
     expect(identity(dbPath('current'))).toEqual(before); resources.assertReleased();
     if (fault !== 'cleanup') expect(residue()).toEqual([]);
   });
@@ -382,7 +405,7 @@ describe('bounded packaged fixture database preparation', () => {
     const stat = fs.fstatSync;
     vi.spyOn(fs, 'fstatSync').mockImplementationOnce(fd => Object.assign(stat(fd), { size: 64 * 1024 * 1024 + 1 }));
     const read = vi.spyOn(fs, 'readSync');
-    await expect(f.inspectStoppedProfile('current', material, 17)).rejects.toThrow(ERROR);
+    await expect(f.inspectStoppedProfile('current', material, 19)).rejects.toThrow(ERROR);
     expect(read).not.toHaveBeenCalled(); expect(residue()).toEqual([]);
   });
 
@@ -405,11 +428,11 @@ describe('bounded packaged fixture database preparation', () => {
 
   it('detects business field changes even when aggregate counts are identical', async () => {
     await seed('current', true);
-    const before = await f.inspectStoppedProfile('current', material, 17);
+    const before = await f.inspectStoppedProfile('current', material, 19);
     const key = createTestWorkspaceKey(); const database = openDatabase({ path: dbPath('current'), key });
     try { database.raw.prepare('UPDATE persons SET display_name = ? WHERE id = ?').run('DIFFERENT SYNTHETIC', 'p1'); }
     finally { closeDatabase(database); key.bytes.fill(0); }
-    const after = await f.inspectStoppedProfile('current', material, 17);
+    const after = await f.inspectStoppedProfile('current', material, 19);
     expect(after.aggregateCounts).toEqual(before.aggregateCounts);
     expect(after.businessSha256).not.toBe(before.businessSha256);
   });
@@ -429,14 +452,14 @@ describe('bounded packaged fixture database preparation', () => {
         return open(path, options);
       });
     }
-    await expect(f.inspectStoppedProfile('current', material, 17)).rejects.toThrow(ERROR);
+    await expect(f.inspectStoppedProfile('current', material, 19)).rejects.toThrow(ERROR);
     expect(identity(dbPath('current'))).toEqual(before); expect(residue()).toEqual([]);
   });
 
   it('does not treat an empty current profile as a nonzero manual backup or overwrite a missing target', async () => {
     await seed('current'); const before = identity(dbPath('current'));
     await expect(f.createManualBackup(material)).rejects.toThrow(ERROR);
-    await expect(f.inspectStoppedBackup('current', 'manual-20260906T120000000Z.sqlite3', material, 17)).rejects.toThrow(ERROR);
+    await expect(f.inspectStoppedBackup('current', 'manual-20260906T120000000Z.sqlite3', material, 19)).rejects.toThrow(ERROR);
     expect(identity(dbPath('current'))).toEqual(before);
   });
 
@@ -483,7 +506,7 @@ describe('bounded packaged fixture database preparation', () => {
       expect(fs.lstatSync(path).mode & 0o777).toBe(0o600);
       return open(path, options);
     });
-    const result = await f.inspectStoppedProfile(profile, material, 17);
+    const result = await f.inspectStoppedProfile(profile, material, 19);
     expect(result.aggregateCounts).toEqual({ people: 1, prospects: 1, sourceEvents: 1 });
     expect(identity(dbPath(profile))).toEqual(before);
     expect(identity(envelopePath(profile))).toEqual(envelope);
@@ -499,7 +522,7 @@ describe('bounded packaged fixture database preparation', () => {
     expect(fs.lstatSync(result.backup.path).mode & 0o777).toBe(0o600);
     expect(result.backup.sha256).toBe(digest(result.backup.path));
     expect(identity(envelopePath('current'))).toEqual(envelope);
-    const current = await f.inspectStoppedProfile('current', material, 17);
+    const current = await f.inspectStoppedProfile('current', material, 19);
     expect(current.businessSha256).toBe(result.inspection.businessSha256);
     expect(current.backupReceipts[0].sha256).toBe(result.backup.sha256);
   });
@@ -524,7 +547,7 @@ describe('bounded packaged fixture database preparation', () => {
     await seed(profile, true); fs.chmodSync(dbPath(profile), mode);
     const before = identity(dbPath(profile));
     const open = vi.spyOn(driver, 'createRawDatabase');
-    await expect(f.inspectStoppedProfile(profile, material, 17)).rejects.toThrow(ERROR);
+    await expect(f.inspectStoppedProfile(profile, material, 19)).rejects.toThrow(ERROR);
     if (profile === 'current') await expect(f.createManualBackup(material)).rejects.toThrow(ERROR);
     else {
       await f.captureBootstrapEnvelope();
@@ -539,9 +562,9 @@ describe('bounded packaged fixture database preparation', () => {
     let path: string; let inspect: () => Promise<unknown>;
     if (role === 'backup') {
       const result = await f.createManualBackup(material); path = result.backup.path;
-      inspect = () => f.inspectStoppedBackup('current', result.backup.basename, material, 17);
+      inspect = () => f.inspectStoppedBackup('current', result.backup.basename, material, 19);
     } else if (role === 'current-envelope') {
-      path = envelopePath('current'); inspect = () => f.inspectStoppedProfile('current', material, 17);
+      path = envelopePath('current'); inspect = () => f.inspectStoppedProfile('current', material, 19);
     } else if (role === 'bootstrap-envelope') {
       path = envelopePath('bootstrap'); inspect = () => f.captureBootstrapEnvelope();
     } else {
@@ -559,7 +582,7 @@ describe('bounded packaged fixture database preparation', () => {
     await seed('current'); fs.chmodSync(dbPath('current'), 0o644);
     fs.chmodSync(f.paths[ancestor], 0o755);
     try {
-      await expect(f.inspectStoppedProfile('current', material, 17)).rejects.toThrow(ERROR);
+      await expect(f.inspectStoppedProfile('current', material, 19)).rejects.toThrow(ERROR);
       expect(residue()).toEqual([]);
     } finally { fs.chmodSync(f.paths[ancestor], 0o700); }
   });
