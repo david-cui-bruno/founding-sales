@@ -198,6 +198,9 @@ describe('assembled automatic discovery through startup, encrypted DB, registrar
     expect(brief.assessment?.questions).toHaveLength(3);
     const inspectionBefore = isolated(f);
     fireEvent.click(screen.getByRole('link', { name: 'Leads' }));
+    // Real search makes the selected owner reachable regardless of its UUID-tied
+    // priority rank in the virtualized grid. It does not alter business state.
+    fireEvent.change(await screen.findByRole('searchbox', { name: 'Search leads' }), { target: { value: brief.personName } });
     fireEvent.click(await screen.findByRole('row', { name: /Synthetic 0/i }));
     await act(async () => { await f.api.leadDetail.get({ personId: selected.personId }); });
     const inspector = await screen.findByRole('complementary', { name: /Synthetic 0.*details/ });
@@ -242,6 +245,7 @@ describe('assembled automatic discovery through startup, encrypted DB, registrar
     expect((await f.api.discovery.getBrief({ personId: selected.personId })).pilotNextStep).toMatchObject({ activityIds: [spokenId] });
     vi.setSystemTime('2026-09-06T20:00:00.000Z');
     cleanup(); await f.mount(); fireEvent.click(screen.getByRole('link', { name: 'Leads' }));
+    fireEvent.change(await screen.findByRole('searchbox', { name: 'Search leads' }), { target: { value: brief.personName } });
     fireEvent.click(await screen.findByRole('row', { name: /Synthetic 0/i }));
     fireEvent.click(await screen.findByRole('tab', { name: 'Activity' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Log dated past activity' }));

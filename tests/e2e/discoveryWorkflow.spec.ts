@@ -70,6 +70,8 @@ test('P1 automatic source evidence, unfinished-work restart, contact-first works
     const before = await page.evaluate(request => window.callie.leads.list(request), listRequest);
     expect(before.rows).toHaveLength(125); expect(before.rows.every(row => row.stage === 'unreviewed' && row.lastActivityAt === null)).toBe(true);
     await page.getByRole('link', { name: 'Leads', exact: true }).click();
+    // The selected owner need not be inside the priority-sorted virtual viewport.
+    await page.getByRole('searchbox', { name: 'Search leads' }).fill(selected!.personName);
     await page.getByRole('row', { name: /Synthetic 0 Holdings/i }).click();
     const inspector = page.getByRole('complementary', { name: `${selected!.personName} details` });
     await expect(inspector.getByRole('region', { name: 'Known portfolio', exact: true })).toBeVisible();
@@ -114,6 +116,7 @@ test('P1 automatic source evidence, unfinished-work restart, contact-first works
       .toMatchObject({ pilotNextStep: { activityIds: [activityId] } });
     await page.getByRole('button', { name: 'Close inspector' }).click();
     await page.getByRole('link', { name: 'Leads', exact: true }).click();
+    await page.getByRole('searchbox', { name: 'Search leads' }).fill(selected!.personName);
     await page.getByRole('row', { name: /Synthetic 0 Holdings/i }).click();
     await page.getByRole('tab', { name: 'Activity', exact: true }).click();
     await page.getByRole('button', { name: 'Log dated past activity', exact: true }).click();
