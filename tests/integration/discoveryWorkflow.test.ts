@@ -14,17 +14,21 @@ import { startApplication, type ApplicationStartupDependencies } from '../../src
 import { registerApplicationIpc } from '../../src/main/ipc/registerApplicationIpc';
 import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
 import { createEmailService } from '../../src/main/outreach/emailService';
+import { generateOpenAiDraft } from '../../src/main/outreach/providers/openAiDraftProvider';
+import type { GroundedDraftContext } from '../../src/main/outreach/providers/providerTypes';
 import { createDiscoveryWorker, type DiscoveryWorker } from '../../src/main/discovery/discoveryWorker';
 import { unavailableDiscoveryResearch, type DiscoveryResearchPort } from '../../src/main/discovery/discoveryResearchPort';
 import type { DiscoveryEvidenceSnapshot } from '../../src/main/domain/discovery/discoveryTypes';
 import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
+import { EnrichmentRequestWriter } from '../../src/main/sourcing/enrichmentRequestWriter';
+import type { UpstreamObjectStore } from '../../src/main/sourcing/upstreamSync';
 import { mapCloudSourceEvent, buildNeedsIdentityIntakeCommand } from '../../src/main/sourcing/intakeMapper';
 import { cloudSourceEventSchema, type CloudSourceEvent } from '../../src/shared/contracts/cloudSourceEventContract';
 import type { BeginDiscoveryRequest, DiscoveryBrief, DiscoveryClaim } from '../../src/shared/contracts/discoveryContract';
 import type { CalliePreloadApi } from '../../src/shared/preload';
 import { FounderApp } from '../../src/renderer/app/FounderApp';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
-import { validParcelEvent, validFrboEvent } from '../fixtures/cloudSourceEvents';
+import { validParcelEvent, validFrboEvent, validEnrichmentEvent } from '../fixtures/cloudSourceEvents';
 import type { RegisteredIpcHandler } from '../fixtures/registeredIpcHandler';
 
 const boundary = vi.hoisted(() => ({ handlers: new Map<string, RegisteredIpcHandler>(), expose: vi.fn(), invoke: vi.fn(), frozen: null as unknown, admission: null as unknown }));
@@ -68,7 +72,7 @@ afterEach(async () => {
 const held = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; };
 
 // One actual startup owner. No parallel domain graph, mock shortlist or provider success.
-async function fixture(input: { temp?: TempDatabase; research?: DiscoveryResearchPort } = {}) {
+async function fixture(input: { temp?: TempDatabase; research?: DiscoveryResearchPort; enrichmentStore?: UpstreamObjectStore; draftFetch?: typeof globalThis.fetch } = {}) {
   const temp = input.temp ?? createTempDatabase(); if (!input.temp) temps.push(temp);
   let runtime!: FoundationRuntime; let domain!: DomainRuntime; let worker!: DiscoveryWorker; let database!: AppDatabase;
   const clock = { now: () => new Date().toISOString() };
@@ -80,13 +84,17 @@ async function fixture(input: { temp?: TempDatabase; research?: DiscoveryResearc
     openDatabase: options => { database = openDatabase(options); return database; }, closeDatabase, migrateToLatest,
     createDomainRuntime: db => { domain = new DomainRuntime({ database: db, clock, ids: { next: randomUUID } }); return domain; },
     createHealthService: options => new HealthService(options),
-    createEnrichmentRequester: () => ({ request: enrichmentUpload }),
+    createEnrichmentRequester: runtime => input.enrichmentStore
+      ? new EnrichmentRequestWriter({ domainGate: runtime, clock, createStore: async () => input.enrichmentStore! })
+      : { request: enrichmentUpload },
     createOutboundCommandService: options => createOutboundCommandService({ ...options,
       phone: { inspectCapability: async () => ({ state: 'unavailable', reasonCode: 'phone_route_unverified' }), dispatch: phoneDispatch } }),
     createEmailService: runtime => createEmailService({ databaseGate: runtime, now: clock.now, providers: {
-      status: async () => ({ model: 'unconfigured', modelName: '', gmail: 'unconfigured', accountEmail: null, senderName: '', postalAddress: '' }),
+      status: async () => ({ model: input.draftFetch ? 'ready' : 'unconfigured', modelName: input.draftFetch ? 'fixture-model' : '', gmail: 'unconfigured', accountEmail: null, senderName: '', postalAddress: '' }),
       configure: outreachExternal, connectGmail: outreachExternal, disconnectGmail: outreachExternal,
-      generate: outreachExternal, prepare: outreachExternal, dispose: () => undefined,
+      generate: input.draftFetch ? (context, signal) => generateOpenAiDraft({ context, signal,
+        credentials: { apiKey: 'fixture-only-key', model: 'fixture-model' }, fetch: input.draftFetch! }) : outreachExternal,
+      prepare: outreachExternal, dispose: () => undefined,
     } }),
     createDiscoveryWorker: options => {
       worker = createDiscoveryWorker({ ...options, clock, research: input.research ?? unavailableDiscoveryResearch,
@@ -149,9 +157,13 @@ function intake(f: Fixture, index: number, incomplete = false, scoredZero = fals
   return { ...result, salesCycleId: cycle.id };
 }
 const rows = (f: Fixture, table: string) => f.database.raw.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all() as Record<string, unknown>[];
-const isolated = (f: Fixture, selected?: Owner) => Object.fromEntries(['sales_cycles', 'stage_events', 'next_actions', 'cadence_enrollments',
-  'cadence_action_components', 'activities', 'person_contact_methods', 'sourcing_enrichment_requests'].map(table => [table,
-  rows(f, table).filter(row => !selected || row.person_id !== selected.personId && row.sales_cycle_id !== selected.salesCycleId && row.id !== selected.salesCycleId)]));
+const isolated = (f: Fixture, selected?: Owner) => {
+  const selectedCloudIds = new Set(selected ? rows(f, 'cloud_entity_links').filter(row => row.person_id === selected.personId).map(row => row.cloud_entity_id) : []);
+  return Object.fromEntries(['sales_cycles', 'stage_events', 'next_actions', 'cadence_enrollments',
+    'cadence_action_components', 'activities', 'person_contact_methods', 'sourcing_enrichment_requests'].map(table => [table,
+    rows(f, table).filter(row => !selected || row.person_id !== selected.personId && row.sales_cycle_id !== selected.salesCycleId
+      && row.id !== selected.salesCycleId && !(table === 'sourcing_enrichment_requests' && selectedCloudIds.has(row.cloud_entity_id)))]));
+};
 const beginRequest = (brief: DiscoveryBrief): BeginDiscoveryRequest => ({ commandId: randomUUID(), personId: brief.personId,
   salesCycleId: brief.salesCycleId, assessmentId: brief.assessment!.id, expectedFingerprint: brief.assessment!.fingerprint });
 function revise(f: Fixture, owner: Owner) {
@@ -162,6 +174,109 @@ function revise(f: Fixture, owner: Owner) {
 async function drainResearch(f: Fixture) { await act(async () => { await f.drain(); }); }
 
 describe('assembled automatic discovery through startup, encrypted DB, registrar, full preload and FounderApp', () => {
+  // Removing the reachable UI path, mechanical preparation, actual upload, intake
+  // refresh or durable draft must break this test. Only the external object store is fake.
+  it('S0 selects a no-contact suggestion through real preparation and enrichment intake to a durable unsent draft', async () => {
+    const uploads: Parameters<UpstreamObjectStore['putObjectText']>[0][] = [];
+    const draftContexts: GroundedDraftContext[] = [];
+    const f = await fixture({ enrichmentStore: { putObjectText: async input => { uploads.push(input); } }, draftFetch: async (url, init) => {
+      expect(url).toBe('https://api.openai.com/v1/responses');
+      const request = JSON.parse(String(init!.body));
+      expect(request).toMatchObject({ model: 'fixture-model', store: false, text: { format: { type: 'json_schema', strict: true } } });
+      const context = JSON.parse(request.input) as GroundedDraftContext;
+      draftContexts.push(context);
+      return Response.json({ id: 'response_fixture', status: 'completed', model: 'fixture-model', output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({ subject: 'A question about property maintenance', body: 'Could we talk briefly about how you arrange maintenance?', evidenceIds: [] }) }] }] });
+    } });
+    const owners: Owner[] = [];
+    const events: CloudSourceEvent[] = [];
+    for (let index = 0; index < 5; index++) {
+      const event = validParcelEvent();
+      const hash = createHash('sha256').update(`contact-repair-${index}`).digest('hex');
+      event.id = `se_0${hash.slice(0, 25).toUpperCase()}`;
+      event.idempotency_key = hash;
+      event.entity.cloud_entity_id = `ce_0${hash.slice(0, 25).toUpperCase()}`;
+      event.entity.person!.full_name = `Contact Repair Owner ${index}`;
+      event.entity.person!.org_names = [];
+      event.entity.person!.phones = [];
+      event.entity.person!.emails = [];
+      event.entity.property!.situs_address.line1 = `${800 + index} Synthetic St`;
+      event.entity.property!.parcel_id = `CONTACT-REPAIR-${index}`;
+      event.entity.property!.unit_count = 10;
+      event.entity.property!.year_built = 1918;
+      const mapped = mapCloudSourceEvent(cloudSourceEventSchema.parse(event));
+      if (mapped.kind !== 'intake') throw new Error('Expected parcel intake');
+      const result = await f.runtime.withDomain(domain => domain.importCloudSourceEvent({ command: mapped.command, cloudEntityId: mapped.cloudEntityId }));
+      const detail = await f.api.leadDetail.get({ personId: result.personId });
+      expect(detail).toMatchObject({ stage: 'unreviewed', phones: [], emails: [], cloudLinked: true });
+      owners.push({ ...result, salesCycleId: detail.salesCycleId });
+      events.push(event);
+    }
+    await drainResearch(f);
+    const snapshot = await f.api.discovery.get();
+    expect(snapshot.prepared).toHaveLength(5);
+    const selected = snapshot.prepared[0];
+    const index = owners.findIndex(owner => owner.personId === selected.personId);
+    const owner = owners[index]; const source = events[index];
+    const beforeRead = isolated(f); const unrelated = isolated(f, owner);
+    await f.mount();
+    const suggestions = await screen.findByRole('region', { name: 'Suggested contacts' });
+    const selectedSuggestion = await within(suggestions).findByRole('button', { name: selected.personName });
+    expect(within(suggestions).getAllByRole('button')).toHaveLength(3);
+    fireEvent.click(selectedSuggestion);
+    const inspector = await screen.findByRole('complementary', { name: `${selected.personName} details` });
+    expect(isolated(f)).toEqual(beforeRead);
+    expect(uploads).toEqual([]);
+    const findContact = within(inspector).getByRole('button', { name: 'Find contact info' }) as HTMLButtonElement;
+    await waitFor(() => expect(findContact.disabled).toBe(false));
+    fireEvent.click(findContact);
+    await waitFor(() => expect(uploads).toHaveLength(1));
+    expect(JSON.parse(uploads[0].body)).toEqual({ cloud_entity_id: source.entity.cloud_entity_id,
+      requested_at: NOW, owner_full_name: selected.personName,
+      situs_address: { line1: `${800 + index} synthetic st`, locality: 'providence', region: 'ri', postal_code: '02906' } });
+    expect(uploads[0].key).toMatch(/^upstream\/enrichment-requests\/2026-09-06-[0-9A-HJKMNP-TV-Z]{26}\.ndjson$/);
+    expect(uploads[0].contentType).toBe('application/x-ndjson');
+    await waitFor(() => expect(rows(f, 'sourcing_enrichment_requests')).toHaveLength(1));
+    const ready = await f.api.leadDetail.get({ personId: owner.personId });
+    expect(ready).toMatchObject({ stage: 'ready', activities: [], phones: [], emails: [] });
+    expect(f.manualReview).not.toHaveBeenCalled();
+    expect(f.facadeReview).not.toHaveBeenCalled();
+    expect(rows(f, 'discovery_preparations')).toHaveLength(1);
+    // Deliver a real cloud-shaped response through the production mapper/facade,
+    // not a pre-inserted valid email or a mocked detail response.
+    const response = validEnrichmentEvent();
+    response.entity.cloud_entity_id = source.entity.cloud_entity_id;
+    response.entity.person!.full_name = selected.personName;
+    response.observed_at = NOW;
+    const mapped = mapCloudSourceEvent(cloudSourceEventSchema.parse(response));
+    if (mapped.kind !== 'intake') throw new Error('Expected enrichment intake');
+    await act(async () => { await f.runtime.withDomain(domain => domain.importCloudSourceEvent({ command: mapped.command, cloudEntityId: mapped.cloudEntityId })); });
+    fireEvent(window, new Event('focus'));
+    fireEvent.click(await within(inspector).findByRole('button', { name: 'Email' }));
+    const message = await within(inspector).findByRole('textbox', { name: 'Message' });
+    await waitFor(() => expect((message as HTMLTextAreaElement).value).toBe('Could we talk briefly about how you arrange maintenance?'));
+    expect(draftContexts).toHaveLength(1);
+    expect(draftContexts[0]).toMatchObject({ personName: selected.personName, segment: 'cold', stage: 'ready' });
+    expect(draftContexts[0].facts.map(fact => fact.text)).toEqual([`Recorded owner of ${800 + index} Synthetic St, Providence, RI.`]);
+    expect(Object.keys(draftContexts[0]).sort()).toEqual(['actionLabel', 'facts', 'organizationLabel', 'personName', 'playbook', 'segment', 'stage']);
+    fireEvent.change(message, { target: { value: 'A selected-source introduction, saved but never sent.' } });
+    expect((within(inspector).getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(inspector).getByRole('button', { name: 'Close draft' }));
+    await waitFor(() => expect(within(inspector).queryByRole('textbox', { name: 'Message' })).toBeNull());
+    expect(isolated(f, owner)).toEqual(unrelated);
+    expect((await f.api.leadDetail.get({ personId: owner.personId })).emails[0]).toMatchObject({ validationState: 'unverified', ownershipState: 'vendor_candidate' });
+    cleanup(); await f.stop();
+    const reopened = await fixture({ temp: f.temp });
+    await reopened.mount();
+    fireEvent.click(screen.getByRole('link', { name: 'Leads' }));
+    fireEvent.change(await screen.findByRole('searchbox', { name: 'Search leads' }), { target: { value: selected.personName } });
+    fireEvent.click(await screen.findByRole('row', { name: new RegExp(selected.personName) }));
+    const reopenedInspector = await screen.findByRole('complementary', { name: `${selected.personName} details` });
+    fireEvent.click(within(reopenedInspector).getByRole('button', { name: 'Email' }));
+    expect((await within(reopenedInspector).findByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('A selected-source introduction, saved but never sent.');
+    expect((await reopened.api.leadDetail.get({ personId: owner.personId })).activities).toEqual([]);
+    expect(uploads).toHaveLength(1);
+  });
+
   // Disconnecting startup must fail the SAME nonzero assertion after successful health, intake and rendering.
   it('S1 automatically shortlists 35+ source owners, prepares only one, records actual pilot evidence and reopens idempotently', async () => {
     const f = await fixture(); const owners = Array.from({ length: 37 }, (_, i) => intake(f, i, i >= 35));
