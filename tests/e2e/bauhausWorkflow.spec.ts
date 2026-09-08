@@ -44,6 +44,8 @@ test('Bauhaus identity reaches the real shell, heading and navigation without re
     expect(styles.canvas).toBe('rgb(246, 240, 223)');
     expect(styles.display).not.toBe(styles.body);
     expect(parseFloat(styles.navRadius)).toBeLessThanOrEqual(2);
+    await fitAndCapture(page, test.info(), 'light-today-quiet');
+    await accessible(page, 'light quiet Today');
     const nativeBox = await page.locator('.nav-rail__native-controls').boundingBox();
     const brandBox = await page.locator('.nav-rail__brand').boundingBox();
     expect(brandBox!.y).toBeGreaterThanOrEqual(nativeBox!.y + nativeBox!.height);
@@ -65,6 +67,29 @@ test('all workspaces and shared overlays remain usable with Bauhaus light and da
     const done = page.getByRole('dialog').getByRole('button', { name: 'Done', exact: true });
     if (await done.isVisible()) await done.click();
 
+    // Create genuine commitments using the retained manual-review UI and the
+    // same public completion command used by the callback workflow fixture.
+    // No mocked Today snapshot, outbound request, or real person is involved.
+    await page.getByRole('link', { name: 'Today', exact: true }).click();
+    await page.getByRole('button', { name: 'Manual review (optional)', exact: true }).click();
+    await page.getByRole('region', { name: 'Unreviewed backlog', exact: true })
+      .getByRole('button', { name: 'Review', exact: true }).click();
+    for (let index = 1; index <= 3; index++) {
+      await expect(page.getByText(`Reviewing ${index} of 3`, { exact: true })).toBeVisible();
+      await page.keyboard.press('1');
+    }
+    await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(0);
+    await page.keyboard.press('Escape');
+    const names = await page.evaluate(async () => {
+      const ready = await window.callie.leads.list({ query: '', stages: ['ready'], priorities: [], sort: 'person_name', cursor: null, limit: 10 });
+      for (const row of ready.rows) {
+        const detail = await window.callie.leadDetail.get({ personId: row.personId });
+        await window.callie.today.complete({ salesCycleId: detail.salesCycleId, actionId: detail.nextAction!.id, outcome: 'replied', activityId: null });
+      }
+      return ready.rows.map(row => row.personName);
+    });
+    expect(names).toHaveLength(3);
+
     for (const theme of ['light', 'dark'] as const) {
       await page.setViewportSize({ width: 1440, height: 900 });
       await setTheme(page, theme);
@@ -72,6 +97,17 @@ test('all workspaces and shared overlays remain usable with Bauhaus light and da
         await page.getByRole('link', { name: route, exact: true }).click();
         await expect(page.getByRole('main').getByRole('heading', { level: 1 }).first()).toBeVisible();
         await expect(page.getByRole('link', { name: route, exact: true })).toHaveAttribute('aria-current', 'page');
+        if (route === 'Today') {
+          const hero = page.getByRole('group', { name: /^Next up:/ });
+          const also = page.getByRole('region', { name: 'Also today', exact: true });
+          await expect(hero).toBeVisible();
+          await expect(also.locator('.today-row')).toHaveCount(2);
+          for (const name of names) await expect(page.locator('.today__bento').getByRole('button', { name, exact: true })).toBeVisible();
+          const heroBox = await hero.boundingBox();
+          const alsoBox = await also.boundingBox();
+          expect(alsoBox!.x).toBeGreaterThan(heroBox!.x + heroBox!.width);
+          expect(Math.abs(alsoBox!.y - heroBox!.y)).toBeLessThan(2);
+        }
         await fitAndCapture(page, info, `${theme}-${route.toLowerCase()}`);
         await accessible(page, `${theme} ${route}`);
         // The app's actual minimum supported window is 1050x700.
