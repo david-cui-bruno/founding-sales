@@ -9,6 +9,24 @@ afterEach(() => f.close());
 const detail = (personId: string) => createFounderSalesDomain({ database: f.database, services: f.services,
   clock: { now: () => DISCOVERY_NOW }, ids: { next: randomUUID } }).getLeadDetail({ personId });
 
+it.each([
+  ['referral', true, 'Introduced by Alex Referral'],
+  ['referral', false, 'Recorded referral, referrer not recorded'],
+  ['inbound_demo', false, 'Requested a demo'],
+] as const)('prefers factual %s source context over a property fact (known referrer %s)', (channel, knownReferrer, reason) => {
+  const owner = seedDiscoveryOwner(f, { prefix: 'Warm', units: 4 });
+  const raw = f.database.raw;
+  raw.prepare(`INSERT INTO persons(id,display_name,aliases_json,created_at,updated_at)
+    VALUES('referrer','Alex Referral','[]',?,?)`).run(DISCOVERY_NOW, DISCOVERY_NOW);
+  raw.prepare(`INSERT INTO source_events(id,person_id,prospect_id,channel,observed_at,source_record_json,referred_by_person_id,referrer_unknown_reason,created_at)
+    VALUES('warm-source',?,?,?,?,'{}',?,?,?)`).run(owner.personId, owner.prospectId, channel, DISCOVERY_NOW,
+    knownReferrer ? 'referrer' : null, channel === 'referral' && !knownReferrer ? 'Not supplied' : null, DISCOVERY_NOW);
+  const result = detail(owner.personId);
+  expect(result.contactReason).toEqual({ text: reason, evidenceIds: ['source:warm-source:reason'] });
+  expect(result.portfolio?.facts).toContainEqual({ id: 'source:warm-source:reason', text: reason });
+  expect(result.portfolio?.ownedCount).toBe(1);
+});
+
 it('projects sourced owner holdings with a partial scope and a cited property-specific reason', () => {
   const owner = seedDiscoveryOwner(f, { prefix: 'Known', units: 4 });
   const value = detail(owner.personId) as ReturnType<typeof detail> & { portfolio?: unknown; contactReason?: unknown };

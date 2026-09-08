@@ -26,9 +26,10 @@ export function buildPortfolioContext(database: AppDatabase, personId: string): 
     p.locality,p.region,p.country_code,p.door_count FROM prospect_properties l
     JOIN prospects lead ON lead.id = l.prospect_id JOIN properties p ON p.id = l.property_id
     WHERE lead.person_id = ? ORDER BY p.id,l.prospect_id`).all(personId) as PropertyRow[];
-  const sources = raw.prepare(`SELECT id,prospect_id,channel,source_record_json FROM source_events
-    WHERE person_id = ? ORDER BY observed_at DESC,id`).all(personId) as {
-      id: string; prospect_id: string | null; channel: string; source_record_json: string;
+  const sources = raw.prepare(`SELECT s.id,s.prospect_id,s.channel,s.source_record_json,p.display_name AS referrer_name FROM source_events s
+    LEFT JOIN persons p ON p.id = s.referred_by_person_id
+    WHERE s.person_id = ? ORDER BY s.observed_at DESC,s.id`).all(personId) as {
+      id: string; prospect_id: string | null; channel: string; source_record_json: string; referrer_name: string | null;
     }[];
   const records = sources.flatMap(source => {
     if (!['parcel', 'registry', 'deed'].includes(source.channel)) return [];
@@ -65,6 +66,15 @@ export function buildPortfolioContext(database: AppDatabase, personId: string): 
   const locations = new Set<string>();
   const facts: PortfolioContext['facts'] = [];
   let contactReason: ContactReason | null = null;
+  const warmSource = sources.find(source => source.channel === 'referral' || source.channel === 'inbound_demo');
+  if (warmSource !== undefined) {
+    const text = warmSource.channel === 'inbound_demo' ? 'Requested a demo'
+      : warmSource.referrer_name?.trim() ? `Introduced by ${titleCaseDisplayName(warmSource.referrer_name)}`
+        : 'Recorded referral, referrer not recorded';
+    const id = `source:${warmSource.id}:reason`;
+    facts.push({ id, text });
+    contactReason = { text, evidenceIds: [id] };
+  }
   for (const group of groups.values()) {
     const first = group.rows[0]!;
     const owned = group.owned.length > 0;
