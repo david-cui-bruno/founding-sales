@@ -51,6 +51,8 @@ test('call outcome flow: opening the lead page and saving a callback removes the
 
     // Optional manual review remains in explicit Details, never default Today.
     await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(3);
+    await page.getByRole('searchbox', { name: 'Search leads' }).fill('Wave Lead00');
+    await expect(page.getByRole('row', { name: /Wave Lead/ })).toHaveCount(1);
     await page.getByRole('row', { name: /Wave Lead00/ }).click();
     await page.keyboard.press('Enter');
     const reviewInspector = page.getByRole('complementary', { name: 'Wave Lead00 details' });
@@ -60,7 +62,8 @@ test('call outcome flow: opening the lead page and saving a callback removes the
     await reviewInspector.getByRole('button', { name: 'Founder manual controls' }).click();
     await reviewInspector.getByRole('button', { name: 'Mark ready' }).click();
     await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(2);
-    await reviewInspector.getByRole('button', { name: 'Close inspector' }).click();
+    // Leads closes the inspector after reviewing the last matching row.
+    await expect(page.getByRole('complementary')).toHaveCount(0);
 
     // The freshly ready lead's first cadence touch is discretionary work
     // that waits on a priority projection; simulate the inbound reply that
