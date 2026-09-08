@@ -12,6 +12,12 @@ import { describe, expect, it } from 'vitest';
 
 const rendererRoot = join(process.cwd(), 'src', 'renderer');
 
+// A semantic token such as --bauhaus-red is an identifier, not a named-color
+// literal. Strip only the var() identifier, never its fallback value.
+const colorWords = (value: string): string[] => value
+  .replace(/var\(\s*--[a-z][a-z0-9-]*/gi, 'var(')
+  .split(/[^a-zA-Z]+/);
+
 async function walk(directory: string): Promise<string[]> {
   const out: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -26,6 +32,13 @@ async function walk(directory: string): Promise<string[]> {
 }
 
 describe('renderer CSS wiring', () => {
+  it('distinguishes semantic color identifiers from literal fallback colors', () => {
+    expect(colorWords('var(--bauhaus-red)')).not.toContain('red');
+    expect(colorWords('var(--bauhaus-yellow, red)')).toContain('red');
+    expect(colorWords('1px solid red')).toContain('red');
+    expect(colorWords('color-mix(in srgb, var(--bauhaus-blue), yellow)')).toContain('yellow');
+  });
+
   it('imports every non-design CSS file from a sibling module or aggregator', async () => {
     const files = await walk(rendererRoot);
     const cssFiles = files.filter(
@@ -159,7 +172,7 @@ describe('renderer CSS wiring', () => {
         const property = declaration[1]!;
         if (property.startsWith('--') || property === 'font-family') continue;
         const value = declaration[2]!;
-        for (const word of value.split(/[^a-zA-Z]+/)) {
+        for (const word of colorWords(value)) {
           if (NAMED_COLORS.has(word.toLowerCase())) {
             violations.push(
               `${path}: named color "${word}" in ${property}: ${value.trim()}`,

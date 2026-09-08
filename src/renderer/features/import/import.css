@@ -21,6 +21,8 @@
 }
 
 .import-dialog__header {
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: space-between;

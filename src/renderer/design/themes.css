@@ -1,100 +1,95 @@
-/* The only file allowed to declare literal colors. Everything else uses vars.
-   Layered per the design audit: the PRIMITIVE section is the raw ramp and is
-   never referenced outside design/; the SEMANTIC section maps primitives to
-   purpose-named tokens that feature CSS consumes.
-   Neutrals are a Radix-style 12-step ramp tuned in OKLCH with a faint cool
-   tint (hue 270): step 1 = app canvas, 2 = surface, 3 = sunken surface,
-   6 = non-interactive borders, 7 = interactive borders, 9 = faint text,
-   11 = muted text, 12 = high-contrast text. One bluebonnet accent; muted
-   status colors exist only as backgrounds and dots, never CTAs. */
+/* Bauhaus paper and ink palettes. Only this file declares literal colors.
+   Decorative red/yellow geometry is separate from action/status semantics.
+   Both explicit palettes remain available to the persisted system/light/dark
+   preference. Raw ramps stay private to design/. */
 :root,
 [data-theme="light"] {
   color-scheme: light;
 
   /* PRIMITIVE */
-  /* Neutral ramp (light): oklch L 0.993 -> 0.242, C ~0.002-0.004, H 270. */
-  --neutral-1: oklch(0.993 0.0014 270);
-  --neutral-2: oklch(0.983 0.0016 270);
-  --neutral-3: oklch(0.963 0.002 270);
-  --neutral-4: oklch(0.943 0.0024 270);
-  --neutral-5: oklch(0.921 0.0028 270);
-  --neutral-6: oklch(0.893 0.0032 270);
-  --neutral-7: oklch(0.853 0.0036 270);
-  --neutral-8: oklch(0.79 0.004 270);
-  --neutral-9: oklch(0.64 0.004 270);
-  --neutral-10: oklch(0.607 0.004 270);
-  --neutral-11: oklch(0.503 0.004 270);
-  --neutral-12: oklch(0.242 0.004 270);
+  --neutral-1: #f6f0df;
+  --neutral-2: #fffaf0;
+  --neutral-3: #efe3c6;
+  --neutral-4: #e9ddc1;
+  --neutral-5: #e0d5bb;
+  --neutral-6: #d5ccb5;
+  --neutral-7: #8c826e;
+  --neutral-8: #817965;
+  --neutral-9: #646458;
+  --neutral-10: #626358;
+  --neutral-11: #5c5d53;
+  --neutral-12: #202529;
 
   /* SEMANTIC */
   --canvas: var(--neutral-1);
   --surface: var(--neutral-2);
-  --surface-raised: #ffffff;
+  --surface-raised: #fffaf0;
   --surface-sunken: var(--neutral-3);
   --text: var(--neutral-12);
   --text-muted: var(--neutral-11);
   --text-faint: var(--neutral-9);
+  --surface-navigation: var(--neutral-3);
   --muted: var(--text-muted);
   --faint: var(--text-faint);
   --line: var(--neutral-6);
   --line-interactive: var(--neutral-7);
   --line-strong: var(--line-interactive);
 
-  /* Bluebonnet: the single interactive accent (anchor #1937e3). Reserved for
-     act-here surfaces only: buttons, links, focus ring, selection states, and
-     active navigation. 7.5:1 as text on --surface; 7.8:1 under white text. */
-  --accent: #1937e3;
+  /* Geometry colors are decorative. Blue alone signals ordinary actions.
+     Red/yellow are not text colors or substitutes for status semantics. */
+  --bauhaus-red: #d9472b;
+  --bauhaus-yellow: #edc64a;
+  --bauhaus-blue: #1748b6;
+  --accent: var(--bauhaus-blue);
   --accent-text: #ffffff;
-  --accent-soft: rgba(25, 55, 227, 0.08);
-  /* Darker step for accent text on tinted fills: 9.5:1 on --surface. */
-  --accent-strong: #1128c4;
-  --accent-line: rgba(25, 55, 227, 0.35);
+  --accent-soft: rgba(23, 72, 182, 0.08);
+  /* Darker blue for text on selection tints. */
+  --accent-strong: #123c99;
+  --accent-line: rgba(23, 72, 182, 0.35);
   /* Machine-data hairline: the quiet accent-tinted border for scorer chips
      and other machine-derived surfaces. Never a fill, never text. */
-  --machine-line: rgba(25, 55, 227, 0.28);
+  --machine-line: rgba(23, 72, 182, 0.28);
 
   /* Muted status set: backgrounds and dots only, never CTAs. */
   --status-success-bg: rgba(47, 158, 100, 0.1);
-  --status-success-dot: #2f9e64;
+  --status-success-dot: #267347;
   --status-warning-bg: rgba(183, 121, 31, 0.1);
-  --status-warning-dot: #b7791f;
-  --status-danger-bg: rgba(197, 54, 74, 0.08);
-  --status-danger-dot: #c5364a;
+  --status-warning-dot: #825c12;
+  --status-danger-bg: rgba(172, 50, 30, 0.08);
+  --status-danger-dot: #ac321e;
 
-  --positive: #2f9e64;
+  --positive: #21653e;
   --positive-soft: var(--status-success-bg);
-  --warning: #b7791f;
+  --warning: #825c12;
   --warning-soft: var(--status-warning-bg);
-  /* Darker than the dot so 11px pill text clears 4.5:1 on step-2 surfaces. */
-  --danger: #b53146;
+  /* Status text is tuned for 4.5:1 even over tinted sunken surfaces. */
+  --danger: #ac321e;
   --danger-soft: var(--status-danger-bg);
 
-  /* Elevation: hairline shadows; the overlay token is for true overlays only.
-     The drawer token is the docked inspector's leftward lift. */
-  --shadow: 0 1px 2px rgba(28, 29, 31, 0.04);
-  --shadow-overlay: 0 8px 32px rgba(28, 29, 31, 0.16), 0 1px 2px rgba(28, 29, 31, 0.08);
-  --shadow-drawer: -12px 0 32px rgba(28, 29, 31, 0.1);
+  /* Flat surfaces, restrained offset shadows only for real overlays. */
+  --shadow: 0 0 0 transparent;
+  --shadow-overlay: 4px 4px 0 rgba(32, 37, 41, 0.18);
+  --shadow-drawer: -4px 0 0 rgba(32, 37, 41, 0.12);
   /* Valid-but-invisible so multi-shadow lists stay parseable in light mode. */
-  --inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0);
+  --inset-highlight: inset 0 0 0 transparent;
 }
 
 [data-theme="dark"] {
   color-scheme: dark;
 
   /* PRIMITIVE */
-  /* Neutral ramp (dark): near-black hue-neutral canvas, oklch L 0.145 -> 0.945. */
-  --neutral-1: oklch(0.145 0.002 270);
-  --neutral-2: oklch(0.183 0.0022 270);
-  --neutral-3: oklch(0.21 0.0026 270);
-  --neutral-4: oklch(0.232 0.003 270);
-  --neutral-5: oklch(0.255 0.0034 270);
-  --neutral-6: oklch(0.29 0.004 270);
-  --neutral-7: oklch(0.34 0.0048 270);
-  --neutral-8: oklch(0.42 0.0052 270);
-  --neutral-9: oklch(0.54 0.005 270);
-  --neutral-10: oklch(0.59 0.0048 270);
-  --neutral-11: oklch(0.75 0.004 270);
-  --neutral-12: oklch(0.945 0.002 270);
+  --neutral-1: #191c1e;
+  --neutral-2: #24282a;
+  --neutral-3: #303536;
+  --neutral-4: #393e3e;
+  --neutral-5: #424745;
+  --neutral-6: #555b57;
+  --neutral-7: #7f857b;
+  --neutral-8: #91968b;
+  --neutral-9: #a6ab9d;
+  --neutral-10: #b6baac;
+  --neutral-11: #cccdbf;
+  --neutral-12: #f6f0df;
 
   /* SEMANTIC */
   --canvas: var(--neutral-1);
@@ -104,39 +99,41 @@
   --text: var(--neutral-12);
   --text-muted: var(--neutral-11);
   --text-faint: var(--neutral-9);
+  --surface-navigation: var(--neutral-3);
   --muted: var(--text-muted);
   --faint: var(--text-faint);
   --line: var(--neutral-6);
   --line-interactive: var(--neutral-7);
   --line-strong: var(--line-interactive);
 
-  /* Bluebonnet, lifted and desaturated for dark surfaces: 7.5:1 as text on
-     --surface; near-black accent text clears 8:1 on accent fills. */
-  --accent: #8fa3ff;
+  /* Lifted Bauhaus colors retain contrast against dark ink surfaces. */
+  --bauhaus-red: #f17a60;
+  --bauhaus-yellow: #edc64a;
+  --bauhaus-blue: #9ab7ff;
+  --accent: var(--bauhaus-blue);
   --accent-text: #0f1011;
-  --accent-soft: rgba(143, 163, 255, 0.13);
-  --accent-strong: #a9b8ff;
-  --accent-line: rgba(143, 163, 255, 0.4);
-  --machine-line: rgba(143, 163, 255, 0.32);
+  --accent-soft: rgba(154, 183, 255, 0.13);
+  --accent-strong: #b8ccff;
+  --accent-line: rgba(154, 183, 255, 0.4);
+  --machine-line: rgba(154, 183, 255, 0.32);
 
   --status-success-bg: rgba(76, 183, 130, 0.13);
   --status-success-dot: #4cb782;
   --status-warning-bg: rgba(217, 161, 60, 0.13);
   --status-warning-dot: #d9a13c;
-  --status-danger-bg: rgba(235, 87, 104, 0.12);
-  --status-danger-dot: #eb5768;
+  --status-danger-bg: rgba(241, 122, 96, 0.12);
+  --status-danger-dot: #f17a60;
 
-  --positive: #4cb782;
+  --positive: #62c994;
   --positive-soft: var(--status-success-bg);
   --warning: #d9a13c;
   --warning-soft: var(--status-warning-bg);
-  --danger: #eb5768;
+  --danger: #ff927a;
   --danger-soft: var(--status-danger-bg);
 
-  /* Dark elevation: lifted panels get a 1px top inset highlight instead of
-     bigger drop shadows; the overlay token stays reserved for true overlays. */
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-overlay: 0 8px 32px rgba(0, 0, 0, 0.55), 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-drawer: -12px 0 32px rgba(0, 0, 0, 0.5);
-  --inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  /* Dark surfaces use the same flat border-led geometry. */
+  --shadow: 0 0 0 transparent;
+  --shadow-overlay: 4px 4px 0 rgba(0, 0, 0, 0.4);
+  --shadow-drawer: -4px 0 0 rgba(0, 0, 0, 0.3);
+  --inset-highlight: inset 0 0 0 transparent;
 }

@@ -15,12 +15,13 @@
   --space-4: 16px;
   --space-6: 24px;
 
-  /* Radius scale: 6 controls/inputs/chips, 8 cards, 12 dialogs. */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  /* Bauhaus geometry: crisp controls, nearly square cards and dialogs. */
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
   --radius-full: 999px;
 
+  --font-display: Futura, "Avenir Next", "Arial Black", sans-serif;
   --font-ui: "InterVariable", -apple-system, system-ui, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -43,6 +44,8 @@
   --leading-subhead: 25px;
   --text-section: 20px;
   --leading-section: 26px;
+  --text-display: 32px;
+  --leading-display: 38px;
   --text-title: 24px;
   --leading-title: 30px;
 
@@ -59,7 +62,7 @@
   --weight-title: 700;
 
   --grid-row: var(--grid-row-comfortable);
-  --focus-ring: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+  --focus-ring: 0 0 0 2px color-mix(in srgb, var(--accent) 85%, transparent);
   --nav-rail-width: 216px;
   --control-height: 28px;
   /* Sidebar header: the macOS drag strip that hosts the traffic lights. */

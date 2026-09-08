@@ -68,7 +68,7 @@ describe('NavigationRail window chrome', () => {
     expect(nativeRow!.tabIndex).toBe(-1);
     expect(getComputedStyle(nativeRow!).display).toBe(display);
     expect(brands).toHaveLength(1);
-    expect(brands[0]!.textContent).toBe('Callie');
+    expect(brands[0]!.textContent).toBe('FSS');
     expect(brands[0]!.parentElement).toBe(header);
     expect(brands[0]!.getAttribute('aria-hidden')).toBe('true');
     expect(header!.nextElementSibling?.className).toBe('nav-rail__list');
