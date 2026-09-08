@@ -1,7 +1,15 @@
 /* Lead import workflow surfaces. */
 
 .import-dialog {
-  display: flex;
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  width: min(44rem, calc(100vw - var(--space-6) * 2));
+  height: fit-content;
+  max-height: calc(100dvh - var(--space-6) * 2);
+  margin: auto;
+  overflow: auto;
+  display: none;
   flex-direction: column;
   gap: var(--space-4);
   max-width: 44rem;
@@ -11,6 +19,14 @@
   background: var(--surface-raised);
   box-shadow: var(--shadow-overlay), var(--inset-highlight);
   color: var(--text);
+}
+
+.import-dialog[open] {
+  display: flex;
+}
+
+.import-dialog::backdrop {
+  background: color-mix(in srgb, var(--canvas) 70%, transparent);
 }
 
 /* Dialog entry: 240ms fade-and-lift, gated to no-preference. */

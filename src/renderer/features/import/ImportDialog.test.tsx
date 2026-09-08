@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 
 import type {
@@ -56,11 +56,57 @@ const renderDialogWithPreview = async (previewValue: ImportPreview) => {
   return { api, onCommitted, onClose };
 };
 
+// jsdom has no native dialog API. These shims model only open/close state;
+// real browser/package checks must verify top-layer placement and Tab containment.
+beforeEach(() => {
+  Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
+    configurable: true,
+    value(this: HTMLDialogElement) { this.setAttribute('open', ''); },
+  });
+  Object.defineProperty(HTMLDialogElement.prototype, 'close', {
+    configurable: true,
+    value(this: HTMLDialogElement) { this.removeAttribute('open'); },
+  });
+});
+
 afterEach(() => {
   cleanup();
+  Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal');
+  Reflect.deleteProperty(HTMLDialogElement.prototype, 'close');
 });
 
 describe('ImportDialog', () => {
+  it('opens a native modal, focuses its close control and restores the opener when closed', () => {
+    const api = createApi();
+    const onClose = vi.fn();
+    const onCommitted = vi.fn();
+    render(<button type="button">Open import</button>);
+    const opener = screen.getByRole('button', { name: 'Open import' });
+    opener.focus();
+    const view = render(<ImportDialog api={api} open onClose={onClose} onCommitted={onCommitted} />);
+
+    const dialog = screen.getByRole('dialog', { name: 'Import leads' });
+    expect(dialog.tagName).toBe('DIALOG');
+    expect(dialog.hasAttribute('open')).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close' }));
+
+    view.rerender(<ImportDialog api={api} open={false} onClose={onClose} onCommitted={onCommitted} />);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(opener);
+
+    view.rerender(<ImportDialog api={api} open onClose={onClose} onCommitted={onCommitted} />);
+    expect(screen.getByRole('dialog').hasAttribute('open')).toBe(true);
+    view.unmount();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('requests controlled closing from the Close button', () => {
+    const onClose = vi.fn();
+    render(<ImportDialog api={createApi()} open onClose={onClose} onCommitted={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('renders nothing while closed', () => {
     render(
       <ImportDialog api={createApi()} open={false} onClose={vi.fn()} onCommitted={vi.fn()} />,
@@ -244,7 +290,9 @@ describe('ImportDialog', () => {
     const onClose = vi.fn();
     render(<ImportDialog api={createApi()} open onClose={onClose} onCommitted={vi.fn()} />);
 
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    const cancel = new Event('cancel', { bubbles: false, cancelable: true });
+    fireEvent(screen.getByRole('dialog'), cancel);
+    expect(cancel.defaultPrevented).toBe(true);
 
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -256,8 +304,13 @@ describe('ImportDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Import 1 row' }));
     await screen.findByText('Importing rows…');
 
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    const cancel = new Event('cancel', { bubbles: false, cancelable: true });
+    fireEvent(screen.getByRole('dialog'), cancel);
+    expect(cancel.defaultPrevented).toBe(true);
 
+    const close = screen.getByRole('button', { name: 'Close' });
+    expect(close.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(close);
     expect(onClose).not.toHaveBeenCalled();
   });
 
