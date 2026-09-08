@@ -122,11 +122,11 @@ test('a large cold import gets internal dated actions without founder review hom
   // dated work, which must not become founder homework or outreach.
   const fixtureDirectory = await mkdtemp(join(tmpdir(), 'callie-capacity-'));
   const csvPath = join(fixtureDirectory, 'capacity-leads.csv');
-  const rows = ['Name,Phone,Email,Source,Doors,Organization'];
+  const rows = ['Name,Phone,Email,Source,Segment,Doors,Organization'];
   for (let index = 0; index < 60; index += 1) {
     const suffix = String(index).padStart(2, '0');
     rows.push(
-      `Cap Lead${suffix},+1401555${(1000 + index).toString()},cap${suffix}@example.com,registry,4,Cap Org ${suffix}`,
+      `Cap Lead${suffix},+1401555${(1000 + index).toString()},cap${suffix}@example.com,registry,cold,4,Cap Org ${suffix}`,
     );
   }
   await writeFile(csvPath, `${rows.join('\n')}\n`);
@@ -166,6 +166,7 @@ test('a large cold import gets internal dated actions without founder review hom
     expect(details).toHaveLength(60);
     expect(new Set(details.map(detail => detail.nextAction?.id)).size).toBe(60);
     for (const detail of details) {
+      expect(detail.segment).toBe('cold');
       expect(detail.stage).toBe('unreviewed');
       expect(detail.nextAction?.dueAt).toEqual(expect.any(String));
       expect(detail.outboundAttempts).toEqual([]);
