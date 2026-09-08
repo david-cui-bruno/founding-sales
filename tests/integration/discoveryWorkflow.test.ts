@@ -13,6 +13,7 @@ import { HealthService } from '../../src/main/health/healthService';
 import { startApplication, type ApplicationStartupDependencies } from '../../src/main/startApplication';
 import { registerApplicationIpc } from '../../src/main/ipc/registerApplicationIpc';
 import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
+import { createEmailService } from '../../src/main/outreach/emailService';
 import { createDiscoveryWorker, type DiscoveryWorker } from '../../src/main/discovery/discoveryWorker';
 import { unavailableDiscoveryResearch, type DiscoveryResearchPort } from '../../src/main/discovery/discoveryResearchPort';
 import type { DiscoveryEvidenceSnapshot } from '../../src/main/domain/discovery/discoveryTypes';
@@ -73,7 +74,7 @@ async function fixture(input: { temp?: TempDatabase; research?: DiscoveryResearc
   const clock = { now: () => new Date().toISOString() };
   const scheduled = new Set<{ run(): void; at: number }>();
   const late: (() => void)[] = [];
-  const phoneDispatch = vi.fn(unexpected); const enrichmentUpload = vi.fn(unexpected);
+  const phoneDispatch = vi.fn(unexpected); const enrichmentUpload = vi.fn(unexpected); const outreachExternal = vi.fn(unexpected);
   const dependencies: ApplicationStartupDependencies = {
     loadWorkspaceKey: async () => createTestWorkspaceKey(), prepareEncryptedDatabase: async () => undefined,
     openDatabase: options => { database = openDatabase(options); return database; }, closeDatabase, migrateToLatest,
@@ -82,6 +83,11 @@ async function fixture(input: { temp?: TempDatabase; research?: DiscoveryResearc
     createEnrichmentRequester: () => ({ request: enrichmentUpload }),
     createOutboundCommandService: options => createOutboundCommandService({ ...options,
       phone: { inspectCapability: async () => ({ state: 'unavailable', reasonCode: 'phone_route_unverified' }), dispatch: phoneDispatch } }),
+    createEmailService: runtime => createEmailService({ databaseGate: runtime, now: clock.now, providers: {
+      status: async () => ({ model: 'unconfigured', modelName: '', gmail: 'unconfigured', accountEmail: null, senderName: '', postalAddress: '' }),
+      configure: outreachExternal, connectGmail: outreachExternal, disconnectGmail: outreachExternal,
+      generate: outreachExternal, prepare: outreachExternal, dispose: () => undefined,
+    } }),
     createDiscoveryWorker: options => {
       worker = createDiscoveryWorker({ ...options, clock, research: input.research ?? unavailableDiscoveryResearch,
         schedule: (run, delay) => { const job = { run, at: Date.now() + delay }; scheduled.add(job); late.push(run); return () => { scheduled.delete(job); }; } });
@@ -98,6 +104,10 @@ async function fixture(input: { temp?: TempDatabase; research?: DiscoveryResearc
   };
   const app = await startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path),
     isTrustedRendererUrl: url => url === 'callie://app/index.html', createWindow: () => undefined }, dependencies);
+  let stopped = false;
+  const stop = async () => { if (stopped) return; stopped = true; await app.shutdown(); expect(scheduled.size).toBe(0);
+    expect(phoneDispatch).not.toHaveBeenCalled(); expect(enrichmentUpload).not.toHaveBeenCalled(); expect(outreachExternal).not.toHaveBeenCalled(); };
+  stops.push(stop); // Own cleanup before any fixture assertion can fail and leak IPC channels.
   const services = domain.getServices();
   const manualReview = vi.spyOn(services.lifecycle, 'reviewToReady');
   const facadeReview = await runtime.withDomain(d => vi.spyOn(d, 'confirmTransition'));
@@ -108,11 +118,7 @@ async function fixture(input: { temp?: TempDatabase; research?: DiscoveryResearc
   boundary.expose.mockClear(); vi.resetModules(); await import('../../src/preload');
   expect(boundary.expose.mock.calls[0][0]).toBe('callie');
   const api = boundary.expose.mock.calls[0][1] as CalliePreloadApi;
-  expect(await api.health.get()).toMatchObject({ databaseEncrypted: true, schemaVersion: 17, domainReady: true });
-  let stopped = false;
-  const stop = async () => { if (stopped) return; stopped = true; await app.shutdown(); expect(scheduled.size).toBe(0);
-    expect(phoneDispatch).not.toHaveBeenCalled(); expect(enrichmentUpload).not.toHaveBeenCalled(); };
-  stops.push(stop);
+  expect(await api.health.get()).toMatchObject({ databaseEncrypted: true, schemaVersion: 19, domainReady: true });
   const turn = async () => { await worker.idle(); const due = [...scheduled].filter(job => job.at <= Date.now());
     for (const job of due) { scheduled.delete(job); job.run(); } await worker.idle(); };
   const drain = async () => { for (let n = 0; n < 12; n++) { await turn(); if (![...scheduled].some(job => job.at <= Date.now())) return; }
@@ -153,7 +159,7 @@ function revise(f: Fixture, owner: Owner) {
   return f.services.sources.appendSourceInteraction({ id: randomUUID(), personId: owner.personId, prospectId: owner.prospectId,
     salesCycleId: owner.salesCycleId, channel: 'parcel', observedAt: source.observedAt, sourceRecord: source.sourceRecord });
 }
-async function refresh(f: Fixture) { await act(async () => { await f.drain(); }); fireEvent.click(screen.getByRole('button', { name: 'Refresh shortlist' })); }
+async function drainResearch(f: Fixture) { await act(async () => { await f.drain(); }); }
 
 describe('assembled automatic discovery through startup, encrypted DB, registrar, full preload and FounderApp', () => {
   // Disconnecting startup must fail the SAME nonzero assertion after successful health, intake and rendering.
@@ -172,8 +178,9 @@ describe('assembled automatic discovery through startup, encrypted DB, registrar
     const selected = owners[0]; const baseline = isolated(f, selected);
     expect((await f.api.leadDetail.get({ personId: selected.personId })).priorityContext).toBeNull();
     expect((await f.api.leads.list({ query: '', stages: [], priorities: [], sort: 'priority', cursor: null, limit: 200 })).rows.every(row => row.priorityContext === null)).toBe(true);
-    await f.mount(); await screen.findByRole('heading', { name: 'Prepared conversations' });
-    await refresh(f);
+    await f.mount(); await screen.findByRole('heading', { name: 'Contacts due' });
+    expect(screen.queryByRole('button', { name: 'Refresh shortlist' })).toBeNull();
+    await drainResearch(f);
     const snapshot = await f.api.discovery.get();
     expect(snapshot.prepared.length, 'startup-owned worker must produce a shortlist').toBeGreaterThan(0);
     expect(snapshot.prepared).toHaveLength(10);
@@ -185,25 +192,30 @@ describe('assembled automatic discovery through startup, encrypted DB, registrar
     expect(snapshot.prepared.slice(-2).map(b => b.personId)).toEqual([owners[35].personId, owners[36].personId]);
     expect(snapshot.prepared.some(b => b.personId === unknown.personId || b.personId === conflict.personId)).toBe(false);
     expect(snapshot.judgment.find(b => b.personId === conflict.personId)?.assessment?.reasonCodes).toContain('ownership_conflict');
-    fireEvent.click(screen.getByRole('button', { name: 'Research and diagnostics' }));
-    expect(await screen.findByText('Additional research not configured')).toBeTruthy();
+    expect(snapshot.researchCapability).toBe('not_configured');
     const brief = await f.api.discovery.getBrief({ personId: selected.personId });
     expect(brief.pilotNextStep).toBeNull(); expect(brief.assessment?.axes.fit).toMatchObject({ points: 15, completeness: 'partial' });
     expect(brief.assessment?.questions).toHaveLength(3);
     const inspectionBefore = isolated(f);
-    fireEvent.click(await screen.findByRole('button', { name: 'Open brief for Synthetic 0 Holdings LLC' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Leads' }));
+    fireEvent.click(await screen.findByRole('row', { name: /Synthetic 0/i }));
     await act(async () => { await f.api.leadDetail.get({ personId: selected.personId }); });
     const inspector = await screen.findByRole('complementary', { name: /Synthetic 0.*details/ });
+    expect(within(inspector).getByRole('region', { name: 'Known portfolio' })).toBeTruthy();
+    expect(within(inspector).queryByText(/supported points/)).toBeNull();
+    expect(rows(f, 'discovery_preparations')).toEqual([]); expect(isolated(f)).toEqual(inspectionBefore);
+    fireEvent.click(within(inspector).getByText('Details', { selector: 'summary' }));
+    await within(inspector).findByText('Fit: 15 supported points /30 (partial)');
     for (const claim of brief.assessment!.claims) for (const ref of claim.refs) if (ref.kind === 'source') {
       expect(f.services.sourceRepository.getById(ref.sourceEventId)?.observedAt).toBe(ref.observedAt);
       expect(within(inspector).getAllByText(`Source ${ref.sourceEventId}, ${ref.field}, ${ref.observedAt}`).length).toBeGreaterThan(0);
     }
     expect(rows(f, 'discovery_preparations')).toEqual([]); expect(isolated(f)).toEqual(inspectionBefore);
     fireEvent.click(within(inspector).getByRole('button', { name: 'Close inspector' }));
-    const begin = vi.spyOn(f.api.discovery, 'begin');
-    fireEvent.click(screen.getByRole('button', { name: 'Contact options for Synthetic 0 Holdings LLC' }));
-    await waitFor(() => expect(rows(f, 'discovery_preparations')).toHaveLength(1));
-    const request = begin.mock.calls[0][0]; const receipt = await begin.mock.results[0].value;
+    // The default contact UI no longer prepares a lifecycle. Exercise the retained
+    // explicit preload command independently, never as a side effect of selection.
+    const request = beginRequest(brief); const receipt = await f.api.discovery.begin(request);
+    expect(rows(f, 'discovery_preparations')).toHaveLength(1);
     expect(f.manualReview).not.toHaveBeenCalled();
     expect(f.facadeReview.mock.calls.filter(([request]) => request.transition === 'review_to_ready')).toEqual([]);
     expect(f.services.identities.getCanonicalProspect(selected.personId)?.qualificationState).toBe('eligible');
@@ -231,6 +243,7 @@ describe('assembled automatic discovery through startup, encrypted DB, registrar
     vi.setSystemTime('2026-09-06T20:00:00.000Z');
     cleanup(); await f.mount(); fireEvent.click(screen.getByRole('link', { name: 'Leads' }));
     fireEvent.click(await screen.findByRole('row', { name: /Synthetic 0/i }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Activity' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Log dated past activity' }));
     fireEvent.change(screen.getByLabelText('What happened'), { target: { value: 'We discussed a $50 supervised trial.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Log activity' }));
@@ -255,13 +268,14 @@ describe('assembled automatic discovery through startup, encrypted DB, registrar
     const f = await fixture(); const owner = intake(f, 0, false, true); const business = isolated(f);
     expect((await f.api.pipeline.get()).stages.flatMap(stage => stage.cards).map(card => card.priorityContext)).toEqual([null]);
     await f.mount();
-    fireEvent.click(await screen.findByRole('button', { name: 'Research and diagnostics' }));
-    expect(await screen.findByText(/1 not assessed/)).toBeTruthy();
+    await screen.findByRole('heading', { name: 'Contacts due' });
     fireEvent.click(screen.getByRole('link', { name: 'Leads' }));
     const row = await screen.findByRole('row', { name: /Synthetic 0/i });
     for (const axis of ['fit', 'timing']) expect(row.querySelector(`.leads-grid__col--${axis}`)?.textContent).toBe('—');
     expect(row.textContent).not.toMatch(/0\/30|0\/40|Low|P3/);
     fireEvent.click(row); const inspector = await screen.findByRole('complementary', { name: /Synthetic 0/i });
+    expect(within(inspector).queryByText('Not assessed')).toBeNull();
+    fireEvent.click(within(inspector).getByText('Details', { selector: 'summary' }));
     expect(within(inspector).getAllByText('Not assessed').length).toBeGreaterThanOrEqual(2);
     fireEvent.click(within(inspector).getByRole('button', { name: 'Close inspector' }));
     fireEvent.click(screen.getByRole('link', { name: 'Pipeline' }));
@@ -269,9 +283,12 @@ describe('assembled automatic discovery through startup, encrypted DB, registrar
     expect(card.querySelector('.pipeline-card__chip')).toBeNull(); expect(card.textContent).not.toMatch(/0\/30|Low|P3/);
     fireEvent.click(screen.getByRole('radio', { name: 'Table' })); expect(await screen.findByText('No priority data')).toBeTruthy();
     expect(isolated(f)).toEqual(business); expect(rows(f, 'discovery_assessments')).toEqual([]);
-    fireEvent.click(screen.getByRole('link', { name: 'Today' })); await screen.findByRole('heading', { name: 'Prepared conversations' }); await refresh(f);
+    fireEvent.click(screen.getByRole('link', { name: 'Today' })); await screen.findByRole('heading', { name: 'Contacts due' }); await drainResearch(f);
     expect((await f.api.discovery.getBrief({ personId: owner.personId })).assessment?.axes.fit).toMatchObject({ points: 0, completeness: 'partial' });
-    fireEvent.click(await screen.findByRole('button', { name: 'Open brief for Synthetic 0 Holdings LLC' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Leads' }));
+    fireEvent.click(await screen.findByRole('row', { name: /Synthetic 0/i }));
+    const assessedInspector = await screen.findByRole('complementary', { name: /Synthetic 0/i });
+    fireEvent.click(within(assessedInspector).getByText('Details', { selector: 'summary' }));
     expect(await screen.findByText('Fit: 0 supported points /30 (partial)')).toBeTruthy();
     expect(screen.getAllByText('No current trigger established').length).toBeGreaterThan(0);
     expect(rows(f, 'discovery_preparations')).toEqual([]); expect(isolated(f)).toEqual(business);
@@ -430,7 +447,7 @@ describe('assembled automatic discovery through startup, encrypted DB, registrar
       result: { kind: 'discovery_diagnostic_status_v1', status: 'resolved' } });
   });
 
-  it('S4 puts a real due promise before prospecting, rechecks capacity and discards unsent drafts without writes', async () => {
+  it('S4 puts a real due promise first, rechecks capacity and preserves unsent email without lifecycle or outbound writes', async () => {
     vi.setSystemTime('2026-09-08T16:00:00.000Z'); // Permitted local contact window, still no dispatch.
     const f = await fixture(); const owner = intake(f, 0); const other = intake(f, 2);
     // Pre-existing synthetic contact/compliance evidence, fixed before the no-side-effects baseline.
@@ -453,43 +470,48 @@ describe('assembled automatic discovery through startup, encrypted DB, registrar
     vi.setSystemTime(Date.now() + 60_000); await f.drain();
     const today = await f.api.today.get(); expect(today.lanes.flatMap(lane => lane.items)[0]?.personId).toBe(owner.personId);
     await f.mount();
-    expect(await screen.findByText(/Callback you promised/)).toBeTruthy();
-    const due = screen.getByText(/Callback you promised/); const prepared = screen.getByRole('heading', { name: 'Prepared conversations' });
-    expect(due.compareDocumentPosition(prepared) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const queue = await screen.findByRole('list', { name: 'Work queue' });
+    const first = within(queue).getAllByRole('listitem')[0];
+    expect(first.getAttribute('data-cycle-id')).toBe(owner.salesCycleId);
+    expect(within(first).getByText(/Callback you promised/)).toBeTruthy();
     const fetched = beginRequest(await f.api.discovery.getBrief({ personId: other.personId }));
     f.database.raw.exec('UPDATE workspace_settings SET daily_dial_capacity = 0');
     const before = isolated(f); await expect(f.api.discovery.begin(fetched)).rejects.toThrow(); expect(isolated(f)).toEqual(before);
     fireEvent.click(screen.getByRole('link', { name: 'Leads' }));
     fireEvent.click(await screen.findByRole('row', { name: /Synthetic 0/i }));
     expect((await f.api.leadDetail.get({ personId: owner.personId })).phones[0].compliance?.textRefusalReason).toBeNull();
-    const email = await screen.findByRole('button', { name: 'Email owner0@example.test' });
+    const email = await screen.findByRole('button', { name: 'Email' });
     const storage = vi.spyOn(Storage.prototype, 'setItem'); const writes = rows(f, 'activities'); const business = isolated(f);
     const clipboard = vi.fn(unexpected); const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: clipboard } });
     const outbound = vi.spyOn(f.api.leadDetail, 'beginOutbound');
-    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     try {
-      fireEvent.click(email); fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Unsent subject' } });
+      fireEvent.click(email);
+      await waitFor(() => expect((screen.getByLabelText('Subject') as HTMLInputElement).disabled).toBe(false));
+      fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Unsent subject' } });
       fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Unsent private draft' } });
       expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
-      fireEvent.click(screen.getByRole('button', { name: 'Close draft' })); fireEvent.click(email);
-      expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('');
-      expect((screen.getByLabelText('Subject') as HTMLInputElement).value).toBe('');
       fireEvent.click(screen.getByRole('button', { name: 'Close draft' }));
+      await waitFor(() => expect(screen.queryByLabelText('Message')).toBeNull());
+      expect(rows(f, 'email_drafts')).toEqual([expect.objectContaining({ subject: 'Unsent subject', body: 'Unsent private draft', status: 'draft' })]);
+      fireEvent.click(email);
+      await waitFor(() => expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Unsent private draft'));
+      expect((screen.getByLabelText('Subject') as HTMLInputElement).value).toBe('Unsent subject');
+      fireEvent.click(screen.getByRole('button', { name: 'Close draft' }));
+      await waitFor(() => expect(screen.queryByLabelText('Message')).toBeNull());
+      fireEvent.click(screen.getByText('Details', { selector: 'summary' }));
       fireEvent.click(screen.getByRole('button', { name: 'Text +14015550100' }));
       fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Unsent synthetic text' } });
       expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
-      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
       fireEvent.click(screen.getByRole('button', { name: 'Close draft' }));
       fireEvent.click(screen.getByRole('button', { name: 'Text +14015550100' }));
       expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('');
       fireEvent.click(screen.getByRole('button', { name: 'Close draft' }));
       expect(clipboard).not.toHaveBeenCalled(); expect(outbound).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
     } finally {
       if (descriptor) Object.defineProperty(navigator, 'clipboard', descriptor); else Reflect.deleteProperty(navigator, 'clipboard');
-      vi.useFakeTimers({ toFake: ['Date'] });
     }
+    expect(rows(f, 'email_send_intents')).toEqual([]); expect(rows(f, 'email_send_results')).toEqual([]);
     expect(storage).not.toHaveBeenCalled(); expect(rows(f, 'activities')).toEqual(writes); expect(isolated(f)).toEqual(business);
   });
 });
