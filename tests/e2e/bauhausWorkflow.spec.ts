@@ -59,6 +59,31 @@ test('Bauhaus identity reaches the real shell, heading and navigation without re
   } finally { await workspace.close(); }
 });
 
+test('command-palette import restores logical route focus when its original control is replaced', async () => {
+  const workspace = await launchSeededFounderWorkspace();
+  try {
+    const { page } = workspace;
+    const opener = page.getByRole('button', { name: 'All 3', exact: true });
+    await opener.focus();
+    expect(await opener.evaluate(el => el.id)).toBe('');
+    await page.keyboard.press('Meta+k');
+    await page.getByRole('combobox', { name: 'Command palette', exact: true }).fill('Import');
+    await page.keyboard.press('Enter');
+    const dialog = page.getByRole('dialog', { name: 'Import leads', exact: true });
+    await expect(dialog).toBeInViewport({ ratio: 1 });
+    await dialog.getByLabel('CSV file').setInputFiles({
+      name: 'palette-focus.csv', mimeType: 'text/csv',
+      buffer: Buffer.from('Name,Phone,Email,Source,Doors,Organization\nPalette Focus Owner,+14015550999,palette-focus@example.test,frbo,4,Palette Fixture\n'),
+    });
+    await dialog.getByRole('button', { name: 'Preview rows', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Import 1 row', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Done', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'All 4', exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Leads', exact: true })).toBeFocused();
+  } finally { await workspace.close(); }
+});
+
 test('all workspaces and shared overlays remain usable with Bauhaus light and dark styling', async () => {
   const info = test.info();
   test.setTimeout(180_000);
