@@ -34,6 +34,7 @@ export interface OutreachProviders {
  disconnectGmail():Promise<OutreachStatus>;
  generate(context:GroundedDraftContext,signal:AbortSignal):Promise<GeneratedDraft>;
  prepare(signal:AbortSignal):Promise<PreparedGmailSender>;
+ invalidate?():void; // Required on the real factory; optional only for existing fixtures.
  dispose():void;
 }
 ```
@@ -50,6 +51,7 @@ export interface EmailDraft {
  recipient:string;subject:string;body:string;revision:number;
  status:'draft'|'sending'|'sent'|'unknown';generation:'none'|'model'|'edited';
  messageId:string|null;notice:string|null;updatedAt:string;
+ senderEmail?:string|null;footer?:string; // Production always supplies the frozen preview.
 }
 export interface OutreachApi {
  status():Promise<OutreachStatus>;
@@ -65,6 +67,8 @@ export interface OutreachApi {
 
 Exposed as `window.callie.outreach`. Open auto-generates only pristine new draft when configured. Save uses optimistic revision. Send flushes edits first. Recipient is read-only. Unknown locks resend and directs explicit Sent-folder checking, without broader read scopes. Never mix recipients on person switch or overwrite edits from late generation.
 
+Editable body excludes the signature/postal/reply-opt-out footer. Render the persisted senderEmail/footer, not fresh settings. Explicit reopen may refresh that preview and revision. Send rejects any sender/footer change since preview. Lock, wake, configuration changes and shutdown invalidate pending provider work and async requests before external invocation or persistence. Replies stay in Gmail; opt-outs must be recorded in FSS manually.
+
 ## Portfolio contract
 
 UI worker extends LeadDetail with optional portfolio/contactReason for fixture compatibility. Production always supplies both. Portfolio: `{role:'owner'|'manager'|'unknown',ownedCount:number,managedCount:number,linkedCount:number,knownUnits:number|null,locations:string[],summary:string,completeness:'partial',facts:{id:string,text:string}[]}`. ContactReason: `{text:string,evidenceIds:string[]}|null`. Linked property alone is not ownership. Draft context consumes supported portfolio.facts, not scores or noteText.
@@ -75,4 +79,4 @@ Cadence worker owns migration0018, migration registry/readiness and action/caden
 Provider worker owns providers/**, provider tests and setup docs only.
 UI worker owns renderer Today/inspector/composer/settings, leadDetailContract portfolio extension, new domain/portfolio module, ONLY getLeadDetail portfolio projection in facade, UI/portfolio tests.
 Root owns shared outreach contract, migration0019, durable email core/evidence, IPC/preload/runtime wiring, integration and package acceptance. Cadence worker registers0019 after file exists.
-Supplemental pending rows must not be silently deleted: preserve explicit cancellation/settlement provenance before enforcing strict operational uniqueness. Actual callback evidence, not legacy promised_follow_up labels, determines commitments. New approved playbook overrides previous due-date choices. No additional approval poll for reversible code; stop at live authorization/send/handoff boundary.
+Supplemental pending historical rows are retained. Uniqueness is the single authoritative current-next-action pointer per operational cycle, not a new unique index over all historical pending rows. Supplemental rows must never enter Today work. Actual callback evidence, not legacy promised_follow_up labels, determines commitments. Warm Unreviewed contacts stay visible, but their internal action must not become founder review homework. New approved playbook overrides previous due-date choices. No additional approval poll for reversible code; stop at live authorization/send/handoff boundary.

@@ -33,12 +33,13 @@ export function authorizeEmail(database:AppDatabase,services:DomainServices,draf
     || contact.presentationEvidence?.ownershipState==='conflicting_identity')throw new Error('email_contact_not_valid');
   services.outboundPermission.assertMayContactHandle('email',contact.normalizedValue);
   if(contact.normalizedValue!==draft.recipient || contactSnapshot(contact)!==draft.contactSnapshot)throw new Error('email_contact_changed');
-  if(cycle.personId!==person.id || cycle.qualification!=='eligible' || cycle.workflowStatus==='closed')throw new Error('email_cycle_not_executable');
+  if(cycle.personId!==person.id || cycle.workflowStatus==='closed' || !['eligible','unreviewed'].includes(cycle.qualification))throw new Error('email_cycle_not_executable');
   if(cycle.stage==='unreviewed') {
     services.lifecycle.scopedWriter().reviewToReady({cycleId:cycle.id,expectedCycleVersion:cycle.version,
       expectedProspectVersion:cycle.prospectVersion,effectiveAt:now});
     cycle=readEmailCycle(database,cycle.id);
   }
+  if(cycle.qualification!=='eligible')throw new Error('email_cycle_not_executable');
   if(!['ready','contacted','interviewed','offered','won'].includes(cycle.stage))throw new Error('email_cycle_not_executable');
   return cycle;
 }

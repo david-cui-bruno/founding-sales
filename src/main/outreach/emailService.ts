@@ -19,13 +19,14 @@ export function createEmailService(options:{databaseGate:EmailDatabaseGate;provi
   const controllers=new Set<AbortController>();
   const flights=new Map<string,{revision:number;commandId:string;promise:Promise<EmailDraft>}>();
   const assertOpen=()=>{if(closed||locked)throw new Error('email_workspace_inactive');};
+  const assertCurrent=(expected:number)=>{assertOpen();if(epoch!==expected)throw new Error('email_workspace_changed');};
   const ready=()=> initialized??=gate.withDatabase(db=>db.raw.transaction(()=>{
     const repo=new EmailRepository(db);
     const rows=db.raw.prepare(`SELECT i.reservation_json FROM email_send_intents i JOIN email_drafts d ON d.id=i.draft_id
       LEFT JOIN email_send_results r ON r.command_id=i.command_id WHERE d.status='sending' AND r.command_id IS NULL`).all() as {reservation_json:string}[];
     for(const row of rows)repo.finish(JSON.parse(row.reservation_json) as EmailReservation,{status:'unknown',reasonCode:'interrupted_send'},now());
   }).immediate());
-  const invalidate=(lock?:boolean)=>{if(lock!==undefined)locked=lock;epoch++;for(const controller of controllers)controller.abort();controllers.clear();};
+  const invalidate=(lock?:boolean)=>{if(lock!==undefined)locked=lock;epoch++;providers.invalidate?.();for(const controller of controllers)controller.abort();controllers.clear();};
   const api:OutreachApi & {dispose():void;invalidate(locked?:boolean):void}={
     status:()=>providers.status(),
     configure:input=>{assertOpen();invalidate();return providers.configure(configureOutreachSchema.parse(input));},
@@ -33,12 +34,14 @@ export function createEmailService(options:{databaseGate:EmailDatabaseGate;provi
     disconnectGmail:()=>{assertOpen();invalidate();return providers.disconnectGmail();},
     dispose:()=>{closed=true;invalidate();providers.dispose();},invalidate,
     async openDraft(input) {
-      assertOpen();const request=openDraftSchema.parse(input);await ready();
+      assertOpen();const startEpoch=epoch;const request=openDraftSchema.parse(input);await ready();assertCurrent(startEpoch);
       const detail=await gate.withDomain(domain=>domain.getLeadDetail({personId:request.personId}));
+      assertCurrent(startEpoch);
       const contact=detail.emails.find(item=>item.id===request.contactMethodId);
       if(!contact)throw new Error('email_contact_missing');
-      const setup=await providers.status();
+      const setup=await providers.status();assertCurrent(startEpoch);
       const opened=await gate.withDatabase(db=>db.raw.transaction(()=>{
+        assertCurrent(startEpoch);
         const repo=new EmailRepository(db);const old=repo.findOpen(detail.salesCycleId,contact.id);
         if(old){repo.bindAccount(old.id,setup.accountEmail,emailFooter(setup),now());return {draft:repo.get(old.id),created:false};}
         const current=db.raw.prepare(`SELECT id,person_id AS personId,kind,normalized_value AS normalizedValue,
@@ -48,31 +51,37 @@ export function createEmailService(options:{databaseGate:EmailDatabaseGate;provi
           recipient:current.normalizedValue,contactSnapshot:contactSnapshot(current),accountEmail:setup.accountEmail,footer:emailFooter(setup),updatedAt:now()});
         return {draft,created:true};
       }).immediate());
+      assertCurrent(startEpoch);
       if(opened.created && setup.model==='ready')return api.generateDraft({draftId:opened.draft.id,expectedRevision:opened.draft.revision});
-      if(opened.created && setup.model!=='ready')return gate.withDatabase(db=>publicDraft(new EmailRepository(db).notice(opened.draft.id,'Add your model key in Settings → Connections for a prepared draft. You can also write this email yourself.')));
+      if(opened.created && setup.model!=='ready')return gate.withDatabase(db=>{assertCurrent(startEpoch);return publicDraft(new EmailRepository(db).notice(opened.draft.id,'Add your model key in Settings → Connections for a prepared draft. You can also write this email yourself.'));});
       return publicDraft(opened.draft);
     },
     async saveDraft(input) {
-      assertOpen();const request=saveDraftSchema.parse(input);await ready();
-      return gate.withDatabase(db=>publicDraft(new EmailRepository(db).save(request,now())));
+      assertOpen();const startEpoch=epoch;const request=saveDraftSchema.parse(input);await ready();assertCurrent(startEpoch);
+      return gate.withDatabase(db=>{assertCurrent(startEpoch);return publicDraft(new EmailRepository(db).save(request,now()));});
     },
     async generateDraft(input) {
-      assertOpen();const request=draftRevisionSchema.parse(input);await ready();const startEpoch=epoch;
-      const draft=await gate.withDatabase(db=>new EmailRepository(db).get(request.draftId));
-      if(draft.status!=='draft'||draft.revision!==request.expectedRevision)throw new Error('email_draft_changed');
-      const detail=await gate.withDomain(domain=>domain.getLeadDetail({personId:draft.personId}));
-      if(detail.salesCycleId!==draft.salesCycleId)throw new Error('email_cycle_changed');
+      assertOpen();const request=draftRevisionSchema.parse(input);const startEpoch=epoch;
       const controller=new AbortController();controllers.add(controller);
       try {
+        await ready();assertCurrent(startEpoch);
+        const draft=await gate.withDatabase(db=>new EmailRepository(db).get(request.draftId));
+        assertCurrent(startEpoch);
+        if(draft.status!=='draft'||draft.revision!==request.expectedRevision)throw new Error('email_draft_changed');
+        const detail=await gate.withDomain(domain=>domain.getLeadDetail({personId:draft.personId}));
+        assertCurrent(startEpoch);
+        if(detail.salesCycleId!==draft.salesCycleId)throw new Error('email_cycle_changed');
         const facts=[...(detail.portfolio?.facts??[])];
         // Local-only notes, raw activity summaries and transcripts are deliberately excluded.
         const result=await providers.generate({personName:detail.personName,organizationLabel:detail.organizationLabel,
           segment:detail.segment,stage:detail.stage,actionLabel:detail.nextAction?.label??null,facts:facts.slice(0,40),playbook:EMAIL_PLAYBOOK},controller.signal);
-        if(epoch!==startEpoch||closed)throw new Error('email_workspace_changed');
+        assertCurrent(startEpoch);
         const saved=saveDraftSchema.parse({...request,subject:result.subject,body:result.body});
-        return await gate.withDatabase(db=>publicDraft(new EmailRepository(db).save(saved,now(),'model')));
-      } catch {
-        return gate.withDatabase(db=>publicDraft(new EmailRepository(db).notice(draft.id,'Could not prepare the email. Your existing draft is unchanged. Check Settings → Connections.')));
+        return await gate.withDatabase(db=>{assertCurrent(startEpoch);return publicDraft(new EmailRepository(db).save(saved,now(),'model'));});
+      } catch(error) {
+        assertCurrent(startEpoch);
+        if(error instanceof Error && ['email_draft_changed','email_cycle_changed'].includes(error.message))throw error;
+        return gate.withDatabase(db=>{assertCurrent(startEpoch);return publicDraft(new EmailRepository(db).notice(request.draftId,'Could not prepare the email. Your existing draft is unchanged. Check Settings → Connections.'));});
       } finally {controllers.delete(controller);}
     },
     sendDraft(input) {
@@ -85,18 +94,20 @@ export function createEmailService(options:{databaseGate:EmailDatabaseGate;provi
     },
   };
   async function send(request:SendDraftRequest):Promise<EmailDraft> {
-    await ready();assertOpen();const startEpoch=epoch;
+    const startEpoch=epoch;await ready();assertCurrent(startEpoch);
     const replay=await gate.withDatabase(db=>{
       const repo=new EmailRepository(db),previous=repo.intent(request.commandId),draft=repo.get(request.draftId);
       if(previous){if(previous.draftId!==request.draftId||previous.draftRevision!==request.expectedRevision)throw new Error('email_command_conflict');return publicDraft(draft);}
       return draft.status==='draft'?null:publicDraft(draft);
     });
     if(replay)return replay;
-    const setup=await providers.status();
+    assertCurrent(startEpoch);
+    const setup=await providers.status();assertCurrent(startEpoch);
     if(setup.gmail!=='ready'||!setup.accountEmail||!setup.senderName.trim()||!setup.postalAddress.trim())throw new Error('email_sender_setup_required');
     const controller=new AbortController();controllers.add(controller);
     try {
-      const prepared=await providers.prepare(controller.signal);
+      assertCurrent(startEpoch);
+      const prepared=await providers.prepare(controller.signal);assertCurrent(startEpoch);
       // Hold the database lease across dispatch/result. No await between final serialized authority and sendOnce.
       return await gate.withDatabase(async db=>{
         const repo=new EmailRepository(db),services=emailDomain(db,now,id);
