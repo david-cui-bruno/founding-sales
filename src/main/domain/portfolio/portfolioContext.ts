@@ -1,6 +1,6 @@
 import type { AppDatabase } from '../../db/database';
 import { titleCaseDisplayName } from '../../../shared/displayText';
-import { cloudSourceEventSchema } from '../../../shared/contracts/cloudSourceEventContract';
+import { cloudParcelPayloadSchema, cloudSourceEventSchema } from '../../../shared/contracts/cloudSourceEventContract';
 import type { ContactReason, PortfolioContext } from '../../../shared/contracts/leadDetailContract';
 
 type PropertyRow = { id: string; prospect_id: string; relationship: string | null; address_line_1: string;
@@ -9,7 +9,7 @@ const normalize = (value: string | null) => (value ?? '').trim().toLowerCase().r
 const addressKey = (p: PropertyRow) => [p.country_code, p.region, p.locality, p.address_line_1, p.address_line_2].map(normalize).join('|');
 
 /** Read-only, all associated prospects. Links are not automatically ownership.
- * Explicit stored relationship assertions and exact named public owner records
+ * Explicit stored relationship assertions and exact named tax-roll owner records
  * are the only role evidence. Repeated observations never multiply holdings.
  */
 export function buildPortfolioContext(database: AppDatabase, personId: string): { portfolio: PortfolioContext; contactReason: ContactReason | null } {
@@ -32,14 +32,18 @@ export function buildPortfolioContext(database: AppDatabase, personId: string): 
       id: string; prospect_id: string | null; channel: string; source_record_json: string; referrer_name: string | null;
     }[];
   const records = sources.flatMap(source => {
-    if (!['parcel', 'registry', 'deed'].includes(source.channel)) return [];
+    // Parcel also transports contact enrichment, which is not title evidence.
+    // Registry/deed have no supported payload validators yet, so fail closed.
+    if (source.channel !== 'parcel') return [];
     try {
       const parsed = cloudSourceEventSchema.safeParse(JSON.parse(source.source_record_json).sourceRecord?.cloudSourceEvent);
-      if (!parsed.success || parsed.data.channel !== source.channel) return [];
+      if (!parsed.success || parsed.data.channel !== source.channel
+        || !cloudParcelPayloadSchema.safeParse(parsed.data.payload).success) return [];
       const event = parsed.data;
       const descriptor = event.entity.person;
-      if (descriptor === null || ![descriptor.full_name, ...descriptor.org_names].some(name => name !== null
-        && names.some(known => normalize(known.name) === normalize(name)))) return [];
+      // An organization association alone does not identify the named owner.
+      if (descriptor?.full_name == null
+        || !names.some(known => normalize(known.name) === normalize(descriptor.full_name))) return [];
       return [{ source, event }];
     } catch { return []; }
   });
