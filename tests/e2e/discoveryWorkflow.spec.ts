@@ -75,6 +75,7 @@ test('P1 automatic source evidence, unfinished-work restart, contact-first works
     await page.getByRole('row', { name: /Synthetic 0 Holdings/i }).click();
     const inspector = page.getByRole('complementary', { name: `${selected!.personName} details` });
     await expect(inspector.getByRole('region', { name: 'Known portfolio', exact: true })).toBeVisible();
+    await page.screenshot({ path: info.outputPath('source-backed-portfolio-overview.png'), animations: 'disabled' });
     await inspector.getByText('Details', { exact: true }).click();
     const ref = selected!.assessment!.claims.flatMap(c => c.refs).find(ref => ref.kind === 'source')!;
     if (ref.kind !== 'source') throw new Error('Expected retained source citation');
