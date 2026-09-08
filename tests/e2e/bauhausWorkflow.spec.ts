@@ -15,7 +15,7 @@ async function setTheme(page: Page, theme: 'light' | 'dark') {
 
 async function accessible(page: Page, label: string) {
   const result = await new AxeBuilder({ page }).setLegacyMode(true).analyze();
-  expect.soft(result.violations.filter(v => ['serious', 'critical'].includes(v.impact ?? ''))
+  expect.soft(result.violations.filter(v => ['serious', 'critical'].includes(v.impact ?? '') || v.id === 'label-content-name-mismatch')
     .map(v => ({ id: v.id, nodes: v.nodes.map(n => n.target) })), label).toEqual([]);
 }
 
@@ -115,6 +115,21 @@ test('all workspaces and shared overlays remain usable with Bauhaus light and da
         await fitAndCapture(page, info, `${theme}-${route.toLowerCase()}-narrow`);
         await page.setViewportSize({ width: 1440, height: 900 });
       }
+
+      await page.getByRole('link', { name: 'Today', exact: true }).click();
+      const row = page.getByRole('region', { name: 'Also today', exact: true }).locator('.today-row').first();
+      await expect(row).toBeVisible();
+      const comfortableHeight = (await row.boundingBox())!.height;
+      await setTheme(page, theme);
+      await page.getByRole('button', { name: 'Compact density', exact: true }).click();
+      await page.getByRole('link', { name: 'Today', exact: true }).click();
+      await expect(page.locator('html')).toHaveAttribute('data-density', 'compact');
+      await expect(row).toBeVisible();
+      expect((await row.boundingBox())!.height).toBeLessThan(comfortableHeight);
+      await fitAndCapture(page, info, `${theme}-today-compact-density`);
+      await setTheme(page, theme);
+      await page.getByRole('button', { name: 'Comfortable density', exact: true }).click();
+      await expect(page.locator('html')).toHaveAttribute('data-density', 'comfortable');
 
       await page.getByRole('link', { name: 'Leads', exact: true }).click();
       await page.getByRole('row', { name: /Kevin Shin/ }).click();
