@@ -298,6 +298,48 @@ describe('bounded packaged fixture database preparation', () => {
     expect(residue()).toEqual([]);
   });
 
+  it('preserves a nonempty action-independent projection on direct16→19 migration and detects business mutations', async () => {
+    await seed('bootstrap'); await f.captureBootstrapEnvelope();
+    const before = await f.createThrough16Profile(material);
+    expect(before.preservedActionIndependentSha256).toMatch(/^[a-f0-9]{64}$/);
+    const key = createTestWorkspaceKey(); const database = openDatabase({ path: dbPath('through16'), key });
+    try {
+      for (const table of ['persons', 'prospects', 'properties', 'source_events', 'stage_events', 'cadence_action_components']) {
+        expect((database.raw.prepare(`SELECT count(*) AS count FROM ${table}`).get() as { count: number }).count).toBeGreaterThan(0);
+      }
+      expect(await migrations.migrateToLatest(database, { workspaceKey: key, backupDirectory: join(f.paths.through16, 'backups') }))
+        .toEqual({ fromVersion: 16, toVersion: 19, appliedMigrationIds: ['0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts'] });
+      // Expected hydration/action metadata is deliberately outside this projection.
+      database.raw.exec("UPDATE properties SET door_count = 12, updated_at = '2026-09-08T12:00:00.000Z' WHERE door_count IS NULL");
+      database.raw.exec('UPDATE sales_cycles SET version = version + 1');
+    } finally { closeDatabase(database); key.bytes.fill(0); }
+    const after = await f.inspectStoppedProfile('through16', material, 19);
+    expect(after.preservedActionIndependentSha256).toBe(before.preservedActionIndependentSha256);
+    expect(after.preserved16Sha256).not.toBe(before.preserved16Sha256);
+    const names = fs.readdirSync(join(f.paths.through16, 'backups')).filter(name => name.startsWith('pre-migration-schema-16-'));
+    expect(names).toHaveLength(1);
+    const saved = identity(join(f.paths.through16, 'backups', names[0]));
+    const backup = await f.inspectStoppedBackup('through16', names[0], material, 16);
+    expect(backup.sourceSha256).toBe(saved.hash);
+    expect(backup.businessSha256).toBe(before.businessSha256);
+    expect(backup.preservedActionIndependentSha256).toBe(before.preservedActionIndependentSha256);
+    let preceding = after.preservedActionIndependentSha256;
+    for (const mutation of [
+      "UPDATE persons SET display_name = display_name || ' changed'",
+      "UPDATE properties SET address_line_1 = address_line_1 || ' changed'",
+      "UPDATE sales_cycles SET resurface_at = '2026-09-10T12:00:00.000Z', resurface_reason = 'snooze'",
+      "INSERT INTO person_contact_methods (id, person_id, kind, normalized_value, validation_state, reachability, created_at, updated_at) SELECT 'synthetic-contact', id, 'email', 'synthetic@example.test', 'unverified', 'none', created_at, updated_at FROM persons LIMIT 1",
+    ]) {
+      const mutationKey = createTestWorkspaceKey(); const changed = openDatabase({ path: dbPath('through16'), key: mutationKey });
+      try { changed.raw.exec(mutation); } finally { closeDatabase(changed); mutationKey.bytes.fill(0); }
+      const inspected = await f.inspectStoppedProfile('through16', material, 19);
+      expect(inspected.preservedActionIndependentSha256).not.toBe(preceding);
+      preceding = inspected.preservedActionIndependentSha256;
+    }
+    expect(identity(join(f.paths.through16, 'backups', names[0]))).toEqual(saved);
+    expect((await f.inspectStoppedProfile('bootstrap', material, 19)).preservedActionIndependentSha256).toBeUndefined();
+  });
+
   it.each(['wrong-key', 'changed-envelope', 'sidecar', 'mode', 'catalog', 'business'])('through16 preserves existing guards and detects %s', async fault => {
     expect(f.createThrough16Profile).toBeTypeOf('function');
     await seed('bootstrap'); await f.captureBootstrapEnvelope();

@@ -24,6 +24,8 @@ export type FixtureInspection = {
   sourceSha256: string; businessSha256: string;
   /** Fixed pre-selection business subset, only for through16 comparisons across16→17. */
   preserved16Sha256?: string;
+  /** Fixed stable16 columns only. Excludes action state and discovery property hydration. */
+  preservedActionIndependentSha256?: string;
   aggregateCounts: { people: number; prospects: number; sourceEvents: number };
   backupReceipts: BackupRow[]; drillReceipts: DrillRow[];
 };
@@ -252,6 +254,43 @@ const SCHEMA17_TABLES = Object.freeze([
 const PRESERVED16_TABLES = Object.freeze(['persons', 'prospects', 'source_events', 'source_intake_receipts',
   'person_contact_methods', 'sales_cycles', 'stage_events', 'next_actions', 'cadence_enrollments',
   'cadence_action_components', 'activities']);
+// Bounded, named historical16 projection. Neither caller-selected SQL nor catalog-derived columns.
+// No next_actions. Cycle pointer/version/update metadata intentionally changes during scheduling.
+// Property door_count/updated_at may be hydrated from source facts by discovery after startup.
+// Identity, source payloads, property linkage/address, contact evidence, lifecycle and history remain covered.
+const ACTION_INDEPENDENT16_PROJECTIONS = Object.freeze([
+  ['persons', `id, display_name, aliases_json, opted_out, opted_out_at, never_record, deleted_at, provenance_json,
+    version, created_at, updated_at`],
+  ['prospects', `id, person_id, original_source_event_id, segment, qualification_state, qualification_gate_reason,
+    qualification_reason, last_contact_at, version, created_at, updated_at`],
+  ['source_events', `id, person_id, prospect_id, sales_cycle_id, channel, observed_at, source_record_json, evidence_ref,
+    referred_by_person_id, referrer_unknown_reason, created_at`],
+  ['source_intake_receipts', `source_event_id, person_id, prospect_id, command_json, result_json, created_at`],
+  ['person_contact_methods', `id, person_id, kind, normalized_value, raw_value, validation_state, reachability, is_primary,
+    in_contacts, dnc_listed, tcpa_flag, federal_status, compliance_tcpa_flag, covered_area_code,
+    compliance_source, scrubbed_at, compliance_expires_at, source_label, vendor_rank, phone_kind,
+    ownership_state, evidence_observed_at, created_at, updated_at`],
+  ['properties', `id, organization_id, address_line_1, address_line_2, locality, region, postal_code, country_code,
+    property_type, maintenance_profile_json, source_record_json, verified_at, created_at`],
+  ['prospect_properties', `prospect_id, property_id, relationship, created_at`],
+  ['activities', `id, person_id, prospect_id, sales_cycle_id, cadence_enrollment_id, cadence_step_id, cadence_component_id,
+    kind, direction, channel, occurred_at, duration_seconds, observed_outcome, adapter,
+    provider_idempotency_key, provider_reference, consent_policy_record_id, recording_storage_ref,
+    transcript_storage_ref, metadata_json, created_at, note_text, call_outcome, callback_at`],
+  ['activity_amendments', `id, activity_id, amendment_kind, correction_json, reason, created_at`],
+  ['stage_events', `id, sales_cycle_id, from_stage, to_stage, effective_at, confirmed_at, confirmation_kind,
+    transition_sequence, backfill_provenance_json, created_at`],
+  ['cadence_definitions', `id, family, version, name, content_hash, attempt_cap, definition_json, created_at`],
+  ['cadence_steps', `id, cadence_definition_id, sequence, day_offset, label, breakup, step_json, created_at`],
+  ['cadence_action_components', `id, cadence_step_id, sequence, action_type, channel, condition_json, outcome_graph_json, template_json,
+    created_at`],
+  ['cadence_enrollments', `id, sales_cycle_id, cadence_definition_id, status, anchor_at, current_step_id, scheduled_step_count,
+    mode, allowed_step_ids_json, version, stop_reason, created_at, updated_at`],
+  ['sales_cycles', `id, person_id, prospect_id, entry_source_event_id, stage, workflow_status, stage_entered_at,
+    design_partner_fitness, close_reason, close_notes, onboarding_stop_reason, closed_at, resurface_at,
+    resurface_reason, created_at`],
+] as const);
+
 const metadataTables = new Set(['app_meta', 'kysely_migration', 'kysely_migration_lock', 'backup_receipts', 'restore_drill_receipts', 'recovery_readiness']);
 
 function inspectRows(raw: RawDatabase, expected: FixtureSchema, sourceSha256: string, through16: boolean): FixtureInspection {
@@ -281,8 +320,13 @@ function inspectRows(raw: RawDatabase, expected: FixtureSchema, sourceSha256: st
     const rows = raw.prepare(`SELECT * FROM "${table}"`).raw().all().map(row => JSON.stringify(row)).sort();
     preserved.update(JSON.stringify([table, rows]));
   }
+  const independent = createHash('sha256');
+  if (through16) for (const [table, columns] of ACTION_INDEPENDENT16_PROJECTIONS) {
+    const rows = raw.prepare(`SELECT ${columns} FROM "${table}"`).raw().all().map(row => JSON.stringify(row)).sort();
+    independent.update(JSON.stringify([table, columns, rows]));
+  }
   return {
-    ...(through16 ? { preserved16Sha256: preserved.digest('hex') } : {}),
+    ...(through16 ? { preserved16Sha256: preserved.digest('hex'), preservedActionIndependentSha256: independent.digest('hex') } : {}),
     schemaVersion: expected, ledger: ledger.map(row => row.name), catalogSha256, sourceSha256,
     businessSha256: business.digest('hex'),
     aggregateCounts: raw.prepare('SELECT (SELECT COUNT(*) FROM persons) AS people, (SELECT COUNT(*) FROM prospects) AS prospects, (SELECT COUNT(*) FROM source_events) AS sourceEvents').get() as FixtureInspection['aggregateCounts'],
