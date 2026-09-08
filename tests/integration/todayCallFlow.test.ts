@@ -9,19 +9,22 @@ import { DOMAIN_TIMESTAMP, insertOpenCycleWithAction, seedProspect } from '../fi
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
 const NOW = '2026-08-31T15:00:00.000Z';
+const CALLBACK_DUE = '2026-09-01T15:00:00.000Z';
 
 describe('today call flow (audit 4.7)', () => {
   let database: AppDatabase;
   let temp: TempDatabase;
   let services: DomainServices;
   let domain: FounderSalesDomain;
+  let currentTime: string;
 
   beforeEach(async () => {
     temp = createTempDatabase();
     const key = createTestWorkspaceKey();
     database = openDatabase({ path: temp.path, key });
     await migrateToLatest(database, { backupDirectory: `${temp.path}.backups`, workspaceKey: key });
-    const clock = { now: () => NOW };
+    currentTime = NOW;
+    const clock = { now: () => currentTime };
     let n = 0;
     const ids = { next: () => `gen-${++n}` };
     services = createDomainServices({ database, clock, ids });
@@ -35,14 +38,29 @@ describe('today call flow (audit 4.7)', () => {
 
   afterEach(() => { closeDatabase(database); temp.cleanup(); });
 
-  it('keeps independent post-stage work due when a call books a future callback', () => {
+  it('labels a due evidenced callback as Call back without retargeting the canonical action', () => {
+    const prospect = seedProspect(database.raw, 'callback-label');
+    const cycle = insertOpenCycleWithAction({ database: database.raw, prospect, prefix: 'callback-label', stage: 'ready' });
+    domain.logCallOutcome({ personId: prospect.personId, salesCycleId: cycle.cycleId,
+      outcome: 'spoke', callbackAt: CALLBACK_DUE, occurredAt: NOW });
+    currentTime = CALLBACK_DUE;
+    const item = domain.getToday().lanes.flatMap(lane => lane.items).find(item => item.salesCycleId === cycle.cycleId)!;
+    expect(item.reason).toBe('callback_promised_today');
+    expect(item.action).toMatchObject({ id: cycle.actionId, type: 'follow_up', label: 'Call back' });
+    expect(domain.getLeadDetail({ personId: prospect.personId }).nextAction?.label).toBe('Follow up');
+  });
+
+  it.each([CALLBACK_DUE, '2026-09-15T12:00:00.000Z'])('keeps earlier independent post-stage work due and correctly labeled with callback %s', (callbackAt) => {
     const prospect = seedProspect(database.raw, 'post-stage');
     const cycle = insertOpenCycleWithAction({ database: database.raw, prospect, prefix: 'post-stage', stage: 'interviewed' });
     domain.logCallOutcome({ personId: prospect.personId, salesCycleId: cycle.cycleId,
-      outcome: 'spoke', callbackAt: '2026-09-15T12:00:00.000Z', occurredAt: NOW });
+      outcome: 'spoke', callbackAt, occurredAt: NOW });
+    currentTime = CALLBACK_DUE;
     expect(database.raw.prepare('SELECT due_at FROM next_actions WHERE id = ?').get(cycle.actionId))
       .toEqual({ due_at: DOMAIN_TIMESTAMP });
-    expect(domain.getToday().lanes.flatMap(lane => lane.items).map(item => item.salesCycleId)).toContain(cycle.cycleId);
+    const item = domain.getToday().lanes.flatMap(lane => lane.items).find(item => item.salesCycleId === cycle.cycleId)!;
+    expect(item.reason).toBe('promised_follow_up');
+    expect(item.action.label).toBe('Follow up');
   });
 
   it('replied lands in Fresh inbound; a callback outcome removes the cycle until its date', () => {

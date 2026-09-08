@@ -1223,7 +1223,8 @@ export class FounderSalesDomain implements OutboundDomainPort {
             workIntent: item.action.workIntent,
             onboarding: lane === 'onboarding',
           }),
-          label: item.action.actionType === 'review_lead' ? 'Contact' : actionLabel(item.action.actionType),
+          label: item.laneReason === 'callback_promised_today' ? 'Call back'
+            : item.action.actionType === 'review_lead' ? 'Contact' : actionLabel(item.action.actionType),
         },
         reason: item.laneReason,
         activeTriggers: item.selectedTriggerReasons

@@ -205,7 +205,7 @@ export function classifyTodayCandidate(
   }
   if (commitment !== null) {
     return { kind: 'lane', lane: 'due_primary', item: toItem(candidate, 'due_primary',
-      callback !== null && callback.dueAt <= context.generatedAt ? 'callback_promised_today' : 'promised_follow_up') };
+      callback !== null && callback.dueAt === dueAt ? 'callback_promised_today' : 'promised_follow_up') };
   }
   if (intent === 'inbound_response') {
     if (sla.kind !== 'none') assertCanonical(sla.dueAt, 'Inbound SLA due_at');
