@@ -211,6 +211,7 @@ type CycleRow = {
 
 type ActionRow = {
   id: string;
+  due_at: string;
   sales_cycle_id: string;
   action_type: string;
   channel: string | null;
@@ -495,7 +496,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
         prospect.segment,
         source.channel AS source_channel,
         action.id AS action_id, action.action_type, action.channel AS action_channel,
-        action.status AS action_status, action.work_intent,
+        action.status AS action_status, action.work_intent, action.due_at AS action_due_at,
         projection.fit_points, projection.fit_band, projection.timing_millipoints,
         projection.timing_band, projection.reachability, projection.data_confidence,
         projection.priority,
@@ -526,7 +527,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
       display_name: string; opted_out: 0 | 1; segment: LeadRow['segment'];
       source_channel: LeadRow['source'] | null;
       action_id: string | null; action_type: string | null; action_channel: string | null;
-      action_status: string | null; work_intent: string | null;
+      action_status: string | null; work_intent: string | null; action_due_at: string | null;
       fit_points: number | null; fit_band: ProjectionRow['fit_band'] | null;
       timing_millipoints: number | null; timing_band: ProjectionRow['timing_band'] | null;
       reachability: ProjectionRow['reachability'] | null; data_confidence: number | null;
@@ -564,6 +565,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
         : { fit: row.cloud_fit, timing: row.cloud_timing },
       nextAction: row.action_id === null || row.action_status !== 'pending' ? null : {
         id: row.action_id,
+        dueAt: row.action_due_at,
         type: row.action_type!,
         channel: actionChannel({
           actionType: row.action_type!,
@@ -882,6 +884,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
       ],
       nextAction: action === undefined || action.status !== 'pending' ? null : {
         id: action.id,
+        dueAt: action.due_at,
         type: action.action_type,
         channel: actionChannel({
           actionType: action.action_type,
@@ -1833,7 +1836,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
         cycle.workflow_status, cycle.stage_entered_at, cycle.close_reason,
         person.display_name,
         action.id AS action_id, action.action_type, action.channel AS action_channel,
-        action.status AS action_status, action.work_intent,
+        action.status AS action_status, action.work_intent, action.due_at AS action_due_at,
         projection.fit_points, projection.fit_band, projection.timing_millipoints,
         projection.timing_band, projection.reachability, projection.data_confidence,
         projection.priority,
@@ -1854,7 +1857,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
       workflow_status: 'active' | 'onboarding' | 'closed'; stage_entered_at: string;
       close_reason: string | null; display_name: string;
       action_id: string | null; action_type: string | null; action_channel: string | null;
-      action_status: string | null; work_intent: string | null;
+      action_status: string | null; work_intent: string | null; action_due_at: string | null;
       fit_points: number | null; fit_band: ProjectionRow['fit_band'] | null;
       timing_millipoints: number | null; timing_band: ProjectionRow['timing_band'] | null;
       reachability: ProjectionRow['reachability'] | null; data_confidence: number | null;
@@ -1891,6 +1894,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
             }),
           nextAction: row.action_id === null || row.action_status !== 'pending' ? null : {
             id: row.action_id,
+            dueAt: row.action_due_at,
             type: row.action_type!,
             channel: actionChannel({
               actionType: row.action_type!,
@@ -3351,7 +3355,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
 
   private readAction(actionId: string): ActionRow | undefined {
     return this.database.raw.prepare(`
-      SELECT id, sales_cycle_id, action_type, channel, status, version,
+      SELECT id, due_at, sales_cycle_id, action_type, channel, status, version,
         work_intent, cadence_enrollment_id, cadence_step_id, cadence_component_id
       FROM next_actions WHERE id = ?
     `).get(actionId) as ActionRow | undefined;

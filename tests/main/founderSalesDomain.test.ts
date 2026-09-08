@@ -640,6 +640,25 @@ describe('FounderSalesDomain', () => {
   });
 
   describe('leads', () => {
+    it.each(['detail', 'list', 'pipeline'] as const)('projects the real dated Unreviewed action in %s without lifecycle writes', (surface) => {
+      const prospect = seedProspect(database.raw, `dated-${surface}`);
+      database.raw.prepare("UPDATE prospects SET qualification_state = 'unreviewed' WHERE id = ?").run(prospect.prospectId);
+      const cycle = services.lifecycle.createUnreviewedCycle({ personId: prospect.personId,
+        prospectId: prospect.prospectId, entrySourceEventId: prospect.sourceEventId, effectiveAt: CLOCK_NOW });
+      const persisted = database.raw.prepare('SELECT id, due_at FROM next_actions WHERE id = ?')
+        .get(cycle.currentNextActionId) as { id: string; due_at: string };
+      const before = database.raw.prepare('SELECT total_changes() AS count').get();
+      const action = surface === 'detail' ? domain.getLeadDetail({ personId: prospect.personId }).nextAction
+        : surface === 'list' ? listAll().rows.find(row => row.personId === prospect.personId)!.nextAction
+          : domain.getPipelineProjection().stages.flatMap(stage => stage.cards)
+            .find(card => card.personId === prospect.personId)!.nextAction;
+      expect(action).toMatchObject({ id: persisted.id, dueAt: persisted.due_at });
+      expect(persisted.due_at).toBe(CLOCK_NOW);
+      expect(database.raw.prepare('SELECT total_changes() AS count').get()).toEqual(before);
+      expect(database.raw.prepare('SELECT stage FROM sales_cycles WHERE id = ?').get(cycle.id))
+        .toEqual({ stage: 'unreviewed' });
+    });
+
     it('lists seeded people with strict rows and no blended score', () => {
       seedLead('alpha');
       seedLead('beta');
