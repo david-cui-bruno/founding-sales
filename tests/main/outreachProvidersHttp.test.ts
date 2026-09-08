@@ -139,4 +139,11 @@ describe('single-invocation Gmail sender', () => {
     expect(await first).toMatchObject({ status: 'accepted' });
     expect(calls).toBe(1);
   });
+  it('accepts the shared 240-character subject limit and refuses 241 before HTTP', async () => {
+    let calls = 0;
+    const fetcher: typeof fetch = async () => { calls++; return Response.json({ id: 'm' }); };
+    expect(await sender(fetcher).sendOnce({ ...email, subject: 'é'.repeat(240) })).toMatchObject({ status: 'accepted' });
+    expect(await sender(fetcher).sendOnce({ ...email, subject: 'x'.repeat(241) })).toMatchObject({ status: 'not_sent' });
+    expect(calls).toBe(1);
+  });
 });

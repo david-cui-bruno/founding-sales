@@ -30,6 +30,8 @@ export interface OutreachProviders {
   disconnectGmail(): Promise<OutreachStatus>;
   generate(context: GroundedDraftContext, signal: AbortSignal): Promise<GeneratedDraft>;
   prepare(signal: AbortSignal): Promise<PreparedGmailSender>;
+  /** Production manager always implements this. Optional for existing fixture ports. */
+  invalidate?(): void;
   dispose(): void;
 }
 

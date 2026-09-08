@@ -21,7 +21,7 @@ const empty = (): StoredCredentials => ({ model: { apiKey: '', model: '' },
 /** One manager per immutable workspace runtime. No eager reads, HTTP, OAuth or
  * background reconnect. Mutations serialize, epochs invalidate synchronously.
  */
-export function createOutreachProviders(options: OutreachProviderOptions): OutreachProviders {
+export function createOutreachProviders(options: OutreachProviderOptions): OutreachProviders & { invalidate(): void } {
   const store = new CredentialStore({ directory: options.directory, safeStorage: options.safeStorage });
   const fetcher = options.fetch ?? globalThis.fetch;
   const now = options.now ?? Date.now;
@@ -155,6 +155,7 @@ export function createOutreachProviders(options: OutreachProviderOptions): Outre
           isCurrent: () => !disposed && epoch === expected && gmail.expiresAt > now() + 1000 });
       });
     },
+    invalidate() { if (!disposed) invalidate(); },
     dispose() { if (disposed) return; disposed = true; invalidate(); },
   };
 }

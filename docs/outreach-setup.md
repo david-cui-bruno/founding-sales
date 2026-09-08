@@ -2,7 +2,7 @@
 
 ## What is implemented, and what is not verified
 
-Callie has main-process adapters for OpenAI's Responses API and sending through **your own Gmail mailbox**. No account is provisioned for you. No Jcode credentials, browser profiles, home-directory credential files, or other applications' tokens are imported.
+FSS has main-process adapters for OpenAI's Responses API and sending through **your own Gmail mailbox**. No account is provisioned for you. No Jcode credentials, browser profiles, home-directory credential files, or other applications' tokens are imported.
 
 Automated checks use fictional credentials, controlled HTTP responses and a local loopback OAuth callback. They do **not** establish that your key, Google project, account policies, billing, quota, or live mailbox will work. Setup does not send a test email.
 
@@ -31,7 +31,7 @@ Use a Google Cloud project you control. This application does not bundle a share
 2. Configure the OAuth consent screen, audience and required project details. If the app is in testing, add your own account as an allowed test user. Organization-managed Google Workspace accounts may require an administrator to allow the app or scopes.
 3. Create an OAuth client with application type **Desktop app**, not Web application. Copy its client ID and, if provided, client secret into Settings → Connections. A desktop client secret is not a confidential-server security boundary. PKCE protects the authorization-code exchange.
 4. Save the configuration, then explicitly choose **Connect Gmail**. The system browser opens Google's authorization screen. Check that the selected account is the mailbox you intend to send from.
-5. Requested scopes are only `openid`, `email`, and `https://www.googleapis.com/auth/gmail.send`. Google may display the equivalent userinfo-email scope name. Callie retrieves the verified account email using the OpenID userinfo endpoint, not Gmail mailbox-read permission.
+5. Requested scopes are only `openid`, `email`, and `https://www.googleapis.com/auth/gmail.send`. Google may display the equivalent userinfo-email scope name. FSS retrieves the verified account email using the OpenID userinfo endpoint, not Gmail mailbox-read permission.
 6. The callback is a short-lived `http://127.0.0.1:<ephemeral port>/oauth/callback/<random path>` listener. Allow local loopback connections if a firewall prompts. No public server, custom DNS or externally reachable callback is required. Random state and PKCE S256 are validated. The listener closes on completion, cancellation, browser failure or timeout (two minutes).
 7. Verify the connected email in Settings before using Send. Changing Google client settings invalidates prior prepared sends and clears locally stored authorization for that client.
 
@@ -57,7 +57,7 @@ Credentials are serialized only into an OS-protected safeStorage ciphertext enve
 
 **Disconnect Gmail** invalidates outstanding prepared sends and clears local access/refresh tokens. It does not send email or make a remote revocation request. To revoke the Google account's grant as well, use your Google Account's connected-app controls. Other backups of encrypted credentials, if any, are not remotely erased by disconnect. Do not export credentials in database backups or diagnostic logs.
 
-Workspace lock, restore or shutdown must dispose the provider manager and cancel pending work before changing database runtime. Recreate the manager for a new unlocked runtime. No operation reconnects or sends automatically after restart. Secure-storage problems should be addressed through normal application/OS recovery, never a password reset or plaintext credential workaround.
+Workspace lock or wake must call the provider manager's `invalidate()` hook to cancel pending OAuth, configuration writes, generation and prepared sends without reconnecting. Restore or shutdown must permanently `dispose()` the manager before changing database runtime. Recreate it for a new runtime. Invalidation itself does not authorize new work while locked: the root workspace gate must refuse new setup/send requests until unlock. No operation reconnects or sends automatically after restart. Secure-storage problems should be addressed through normal application/OS recovery, never a password reset or plaintext credential workaround.
 
 ## Developer validation
 

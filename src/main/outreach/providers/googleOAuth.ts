@@ -67,7 +67,7 @@ export async function authorizeGoogle(input: {
     const code = url.searchParams.get('code');
     if (url.searchParams.getAll('code').length !== 1 || !code || code.length > 4096 || /[\r\n\u0000]/.test(code)) { refuse(400); return; }
     received = true;
-    response.end('Authorization received. You may return to Callie.', () => resolveCode(code));
+    response.end('Authorization received. You may return to FSS.', () => resolveCode(code));
   });
   server.requestTimeout = 5000;
   server.headersTimeout = 5000;

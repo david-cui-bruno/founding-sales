@@ -24,5 +24,5 @@ export const gmailCredentialsSchema = z.object({
 }).strict();
 export const storedCredentialsSchema = z.object({
   model: modelCredentialsSchema, gmail: gmailCredentialsSchema,
-  senderName: z.string().max(200).regex(/^[^\r\n\u0000]*$/), postalAddress: z.string().max(2000).regex(/^[^\u0000]*$/),
+  senderName: z.string().max(240).regex(/^[^\r\n\u0000]*$/), postalAddress: z.string().max(2000).regex(/^[^\u0000]*$/),
 }).strict();

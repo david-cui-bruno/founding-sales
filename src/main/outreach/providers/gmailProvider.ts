@@ -6,7 +6,7 @@ import { fail, gmailCredentialsSchema, mailboxSchema, secretSchema } from './pro
 
 const emailSchema = z.object({
   commandId: z.string().uuid(), from: mailboxSchema, to: mailboxSchema,
-  subject: z.string().min(1).max(200).regex(/^[^\r\n\u0000]*$/),
+  subject: z.string().min(1).max(240).regex(/^[^\r\n\u0000]*$/),
   body: z.string().min(1).max(24000).regex(/^[^\u0000]*$/),
 }).strict();
 const receiptSchema = z.object({ id: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/),

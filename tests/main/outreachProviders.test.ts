@@ -133,7 +133,7 @@ describe('main-only provider manager', () => {
     expect(await manager.status()).toMatchObject({ model: 'error', gmail: 'error' });
     await expect(manager.configure({ apiKey: 'replacement' })).rejects.toThrow('credentials_corrupt');
   });
-  it('does not commit credentials after disposal while encryption was in flight', async () => {
+  it.each(['dispose', 'invalidate'] as const)('does not commit credentials after %s while encryption was in flight', async (action) => {
     const directory = await fixture();
     await new CredentialStore({ directory, safeStorage }).save(stored);
     let release: () => void;
@@ -147,7 +147,7 @@ describe('main-only provider manager', () => {
     managers.push(manager);
     const change = manager.configure({ apiKey: 'replacement-secret' });
     await encryptionStarted;
-    manager.dispose(); release();
+    manager[action](); release();
     await expect(change).rejects.toThrow('provider_invalidated');
     expect((await new CredentialStore({ directory, safeStorage }).load()).model.apiKey).toBe('fixture-api-secret');
   });
@@ -210,5 +210,61 @@ describe('main-only provider manager', () => {
     expect(await manager.status()).toMatchObject({ gmail: 'reauthorize' });
     await expect(manager.prepare(new AbortController().signal)).rejects.toThrow('gmail_reauthorize');
     expect(requests).toBe(1);
+  });
+  it('accepts shared sender-name length 240 and rejects 241 without altering setup', async () => {
+    const directory = await fixture();
+    const manager = createOutreachProviders({ directory, safeStorage, openExternal: async () => undefined });
+    managers.push(manager);
+    expect(await manager.configure({ senderName: 'N'.repeat(240) })).toMatchObject({ senderName: 'N'.repeat(240) });
+    await expect(manager.configure({ senderName: 'N'.repeat(241) })).rejects.toThrow('invalid_configuration');
+    expect((await manager.status()).senderName).toBe('N'.repeat(240));
+  });
+  it('invalidates pending OAuth without persisting tokens or permanently closing the manager', async () => {
+    const directory = await fixture();
+    let opened: () => void;
+    const browserOpened = new Promise<void>((resolve) => { opened = resolve; });
+    let callback: URL;
+    let requests = 0;
+    let browsers = 0;
+    const manager = createOutreachProviders({ directory, safeStorage,
+      openExternal: async (url) => {
+        browsers++;
+        const auth = new URL(url); callback = new URL(auth.searchParams.get('redirect_uri'));
+        callback.searchParams.set('code', 'fixture-code'); callback.searchParams.set('state', auth.searchParams.get('state'));
+        opened();
+      }, fetch: async (url) => {
+        requests++;
+        return String(url).endsWith('/token')
+          ? Response.json({ access_token: 'a', refresh_token: 'r', expires_in: 3600, token_type: 'Bearer',
+            scope: 'openid email https://www.googleapis.com/auth/gmail.send' })
+          : Response.json({ sub: 'id', email: 'founder@example.com', email_verified: true });
+      } });
+    managers.push(manager);
+    await manager.configure({ googleClientId: 'fixture.apps.googleusercontent.com' });
+    const connecting = manager.connectGmail().then(() => 'connected', (error: Error) => error.message);
+    await browserOpened;
+    manager.invalidate?.();
+    await fetch(callback).catch((): undefined => undefined);
+    expect(await connecting).toBe('oauth_cancelled');
+    expect((await new CredentialStore({ directory, safeStorage }).load()).gmail.refreshToken).toBe('');
+    expect(await manager.status()).toMatchObject({ gmail: 'unconfigured' });
+    expect(await manager.configure({ senderName: 'Still active' })).toMatchObject({ senderName: 'Still active' });
+    expect(browsers).toBe(1); expect(requests).toBe(0);
+  });
+  it('fences a late token refresh after nonterminal invalidation', async () => {
+    const directory = await fixture();
+    await new CredentialStore({ directory, safeStorage }).save({ ...stored, gmail: { ...stored.gmail, expiresAt: 0 } });
+    let started: () => void;
+    let release: (response: Response) => void;
+    const requested = new Promise<void>((resolve) => { started = resolve; });
+    const manager = createOutreachProviders({ directory, safeStorage, openExternal: async () => undefined,
+      fetch: () => { started(); return new Promise<Response>((resolve) => { release = resolve; }); } });
+    managers.push(manager);
+    const preparation = manager.prepare(new AbortController().signal).then(() => 'prepared', (error: Error) => error.message);
+    await requested;
+    manager.invalidate?.();
+    release(Response.json({ access_token: 'late-access', expires_in: 3600, token_type: 'Bearer' }));
+    expect(await preparation).toMatch(/^(provider_invalidated|network_uncertain)$/);
+    expect((await new CredentialStore({ directory, safeStorage }).load()).gmail.accessToken).toBe('fixture-access-secret');
   });
 });
