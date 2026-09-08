@@ -272,9 +272,9 @@ describe('TodayRoute', () => {
   });
 });
 
-it('renders only the main-ordered queue without launching discovery or manual judgment', async () => {
+it('keeps the main-ordered queue alongside read-only discovery without manual judgment', async () => {
   const api = fakeApi({ get: vi.fn(async () => ({ ...snapshot(1, [item()]), unreviewedBacklogCount: 2881 })) });
-  const discoveryApi: DiscoveryApi = { get: vi.fn(), getBrief: vi.fn(), begin: vi.fn(), override: vi.fn() };
+  const discoveryApi: DiscoveryApi = { get: vi.fn(async () => ({ prepared: [], judgment: [], counts: { unassessed: 0, research: 0, watch: 0, excluded: 0 }, processing: 'idle' as const, researchCapability: 'not_configured' as const, generatedAt: '2026-09-08T12:00:00.000Z', revision: 1 })), getBrief: vi.fn(), begin: vi.fn(), override: vi.fn() };
   const leadApi = fakeLeadApi();
   render(<TodayRoute api={api} leadApi={leadApi} discoveryApi={discoveryApi} onOpenLead={vi.fn()} />);
   await screen.findByText('Avery Landlord');
@@ -282,7 +282,8 @@ it('renders only the main-ordered queue without launching discovery or manual ju
   expect(screen.queryByText(/Prepared conversations|Manual review|Preparing your shortlist/)).toBeNull();
   expect(screen.queryByRole('button', { name: /Review|Next|Prepare|Refresh/i })).toBeNull();
   expect(api.getTriageQueue).not.toHaveBeenCalled();
-  expect(discoveryApi.get).not.toHaveBeenCalled();
+  expect(discoveryApi.get).toHaveBeenCalled();
+  expect(discoveryApi.begin).not.toHaveBeenCalled();
   expect(leadApi.confirmTransition).not.toHaveBeenCalled();
 });
 it('states only that no contacts are due rather than claiming all discovery is done', async () => {

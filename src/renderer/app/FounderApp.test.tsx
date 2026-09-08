@@ -271,14 +271,14 @@ describe('FounderApp', () => {
   });
 });
 
-it('opens contact context without discovery or outreach side effects, with diagnostics only on request', async () => {
+it('opens contact context with read-only suggestions and diagnostics only on request', async () => {
   const api = fakeCallieApi();
   render(<FounderApp api={api} health={readyHealth} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Kevin Shin' }));
   const page = await screen.findByRole('complementary', { name: 'Kevin Shin details' });
   expect(within(page).getByRole('heading', { name: 'Known portfolio' })).toBeTruthy();
   expect(screen.queryByText('Who handles maintenance?')).toBeNull();
-  expect(api.discovery.get).not.toHaveBeenCalled(); expect(api.discovery.getBrief).not.toHaveBeenCalled();
+  expect(api.discovery.get).toHaveBeenCalled(); expect(api.discovery.getBrief).not.toHaveBeenCalled();
   fireEvent.click(within(page).getByText('Details', { selector: 'summary' }));
   expect(await within(page).findByText('Who handles maintenance?')).toBeTruthy();
   expect(api.discovery.getBrief).toHaveBeenCalledWith({ personId: 'person-kevin' });

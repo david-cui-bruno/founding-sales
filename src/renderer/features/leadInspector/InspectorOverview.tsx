@@ -26,6 +26,7 @@ import {
   formatCloudChip,
 } from '../leads/cloudSignalLabels';
 import { ContactEvidenceCard, phoneActionHelp } from './ContactEvidenceCard';
+import { FIND_CONTACT_RECEIPTS } from './ContactPreparation';
 
 const OPT_OUT_REASON =
   'This person opted out. Outreach is permanently disabled.';
@@ -165,18 +166,6 @@ function ReviewSection({
   );
 }
 
-/** Founder-facing receipt lines for the Find contact info refusals. */
-const FIND_CONTACT_RECEIPTS: Readonly<Record<NonNullable<FindContactInfoReceipt['refusalReason']> | 'written', string>> = {
-  written: 'Contact info requested. Results arrive with the next sync.',
-  qualification_required: 'Founder qualification is required.',
-  fit_gate_failed: 'Medium or High Fit is required.',
-  identity_or_address_missing: 'A verified identity, cloud link, and usable property address are required.',
-  direct_contact_exists: 'A usable verified contact is already on file.',
-  suppression_blocked: 'Opt-out or suppression prevents contact enrichment.',
-  rate_limited: 'Already requested in the last 30 days.',
-  credentials_unavailable: 'Sourcing credentials are not provisioned.',
-};
-
 /**
  * Domain-eligible leads can request enrichment regardless of candidate count. One
  * explicit click writes one request; the receipt renders inline (no toast).
@@ -244,7 +233,7 @@ export function InspectorOverview({
   onDismissLead,
   onOverrideCloudScore,
   onFindContactInfo,
-  discoveryEvidence, outreachApi,
+  discoveryEvidence, contactPreparation, outreachApi,
   capabilities, outboundPending = false, outboundBlocked = false, onLogPastActivity,
 }: InspectorOverviewProps) {
   const [selection, setSelection] = useState<{ channel: BeginOutboundRequest['channel']; contact: ContactMethod; personId: string; cycleId: string } | null>(null);
@@ -301,10 +290,13 @@ export function InspectorOverview({
         {primaryEmail !== null && <div><Button variant="quiet" disabled={detail.optedOut || outboundPending}
           onClick={() => choose('email', primaryEmail)}>Email</Button><span>{primaryEmail.value}</span></div>}
         {detail.emails.length === 0 && <p>No email contact on file.</p>}
+        {contacts.length === 0 && contactPreparation}
       </section>
         {selectionCurrent && selection !== null && selection.channel !== 'call' && (
           <OutboundComposer key={`${detail.personId}:${selection.channel}:${selection.contact.id}:${selection.contact.contactSnapshot}`}
             api={outreachApi} personId={detail.personId} contactMethodId={selection.contact.id} disabled={detail.optedOut}
+            sendBlockedReason={current?.ownershipState === 'conflicting_identity' ? 'This email address has conflicting identity evidence. You can prepare a draft, but not send yet.'
+              : current?.validationState !== 'valid' || current?.valid !== true ? 'This email address is unverified. You can prepare a draft, but not send yet.' : null}
             channel={selection.channel} recipientLabel={selection.contact.value} onClose={() => setSelection(null)} />
         )}
         {selectionCurrent && selection?.channel === 'call' && !outboundBlocked && (
@@ -493,7 +485,7 @@ export function InspectorOverview({
             />
           ))}
         </div>
-        {detail.cloudLinked && onFindContactInfo !== undefined && (
+        {detail.cloudLinked && onFindContactInfo !== undefined && (contacts.length > 0 || contactPreparation === undefined) && (
           <FindContactInfoSection
             detail={detail}
             onFindContactInfo={onFindContactInfo}

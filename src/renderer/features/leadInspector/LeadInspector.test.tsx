@@ -887,7 +887,7 @@ describe('LeadInspector', () => {
 
 
 const enrichmentReasons = [
-  ['qualification_required', 'Founder qualification is required.'],
+  ['qualification_required', 'Contact preparation is required before lookup.'],
   ['fit_gate_failed', 'Medium or High Fit is required.'],
   ['identity_or_address_missing', 'A verified identity, cloud link, and usable property address are required.'],
   ['direct_contact_exists', 'A usable verified contact is already on file.'],
