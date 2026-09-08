@@ -14,7 +14,10 @@ async function setTheme(page: Page, theme: 'light' | 'dark') {
 }
 
 async function accessible(page: Page, label: string) {
-  const result = await new AxeBuilder({ page }).setLegacyMode(true).analyze();
+  const result = await new AxeBuilder({ page }).setLegacyMode(true)
+    .options({ rules: { 'label-content-name-mismatch': { enabled: true } } }).analyze();
+  expect([...result.passes, ...result.inapplicable, ...result.incomplete, ...result.violations]
+    .some(rule => rule.id === 'label-content-name-mismatch'), `${label}: Label in Name rule ran`).toBe(true);
   expect.soft(result.violations.filter(v => ['serious', 'critical'].includes(v.impact ?? '') || v.id === 'label-content-name-mismatch')
     .map(v => ({ id: v.id, nodes: v.nodes.map(n => n.target) })), label).toEqual([]);
 }
