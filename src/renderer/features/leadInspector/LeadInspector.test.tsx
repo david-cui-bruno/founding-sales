@@ -205,7 +205,10 @@ async function renderInspector(api: Api) {
     </LeadInspectorProvider>,
   );
   fireEvent.click(screen.getByRole('button', { name: 'Open lead' }));
-  return screen.findByRole('complementary');
+  const panel = await screen.findByRole('complementary');
+  // This legacy safety suite exercises the explicitly disclosed diagnostics.
+  fireEvent.click(await screen.findByText('Details', { selector: 'summary' }));
+  return panel;
 }
 
 beforeEach(() => {
@@ -232,6 +235,7 @@ describe('LeadInspector', () => {
     const api = createApi(detail);
     const props = { onBeginOutbound: api.beginOutbound, onConfirmTransition: vi.fn(), onDismissLead: vi.fn(), onOverrideCloudScore: vi.fn(), capabilities };
     const { rerender } = render(<InspectorOverview detail={detail} {...props} />);
+    fireEvent.click(screen.getByText('Details', { selector: 'summary' }));
     const uuid = vi.spyOn(crypto, 'randomUUID');
     fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
     expect(uuid).not.toHaveBeenCalled();
@@ -912,6 +916,7 @@ describe('domain-gated Find contact info', () => {
     render(<InspectorOverview detail={detail} onBeginOutbound={vi.fn()}
       onConfirmTransition={vi.fn()} onDismissLead={vi.fn()} onOverrideCloudScore={vi.fn()}
       onFindContactInfo={onFindContactInfo} />);
+    fireEvent.click(screen.getByText('Details', { selector: 'summary' }));
     return onFindContactInfo;
   }
 

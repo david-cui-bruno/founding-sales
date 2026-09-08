@@ -68,7 +68,6 @@ export function LeadFullPage({
     return (
       <article className="lead-full-page">
         {outboundPresentation.outboundStatus}
-        {outboundPresentation.pastActivityControls}
         <LoadingState label="Loading lead details" />
       </article>
     );
@@ -78,7 +77,6 @@ export function LeadFullPage({
     return (
       <article className="lead-full-page">
         {outboundPresentation.outboundStatus}
-        {outboundPresentation.pastActivityControls}
         <ErrorState
           title="Couldn't load this lead"
           description="The details were unavailable. Try again."
@@ -98,18 +96,11 @@ export function LeadFullPage({
       aria-label={`${state.detail.personName} full page`}
     >
       {outboundPresentation.outboundStatus}
-        {outboundPresentation.pastActivityControls}
       <InspectorHeader detail={state.detail} onClose={onClose} />
-      {outcomeApi !== undefined && onOutcomeSaved !== undefined && (
-        <CallOutcomeSection
-          key={`${state.detail.personId}:${state.detail.salesCycleId}:${outboundCommandId ?? "unlinked"}`}
-          outboundCommandId={outboundCommandId}
-          detail={state.detail}
-          api={outcomeApi}
-          onSaved={onOutcomeSaved}
-        />
-      )}
       <InspectorTabs
+        activityTools={outcomeApi !== undefined && onOutcomeSaved !== undefined ? <CallOutcomeSection
+          key={`${state.detail.personId}:${state.detail.salesCycleId}:${outboundCommandId ?? 'unlinked'}`}
+          outboundCommandId={outboundCommandId} detail={state.detail} api={outcomeApi} onSaved={onOutcomeSaved} /> : undefined}
               {...outboundPresentation}
         key={state.detail.personId}
         detail={state.detail}

@@ -34,6 +34,7 @@ import './leadInspector.css';
 
 export type LeadInspectorProviderProps = {
   api: LeadDetailApi;
+  outreachApi?: import('../../../shared/contracts/outreachContract').OutreachApi;
   discoveryApi?: DiscoveryApi;
   pastActivityApi?: { logPastActivity(input: LogPastActivityRequest): Promise<import('../../../shared/contracts/commonContract').MutationReceipt> };
   /** Optional Today commands enabling the full page call-outcome flow. */
@@ -55,6 +56,7 @@ type Selection = {
  */
 export function LeadInspectorProvider({
   api,
+  outreachApi,
   discoveryApi,
   pastActivityApi,
   outcomeApi,
@@ -93,10 +95,10 @@ export function LeadInspectorProvider({
   const reviewAdvanceRef = useRef<ReviewAdvanceResolver | null>(null);
 
   const fetchDetail = useCallback(
-    (personId: string) => {
+    (personId: string, preserveView = false) => {
       requestSequence.current += 1;
       const sequence = requestSequence.current;
-      setDetailState({ status: 'loading' });
+      if (!preserveView) setDetailState({ status: 'loading' });
       api.get({ personId }).then(
         (detail) => {
           if (requestSequence.current === sequence) {
@@ -105,7 +107,7 @@ export function LeadInspectorProvider({
           }
         },
         () => {
-          if (requestSequence.current === sequence) {
+          if (requestSequence.current === sequence && !preserveView) {
             setDetailState({ status: 'error' });
           }
         },
@@ -177,6 +179,21 @@ export function LeadInspectorProvider({
 
   const refresh = useCallback((personId: string) => {
     if (mounted.current && selectionRef.current?.personId === personId) fetchDetail(personId);
+  }, [fetchDetail]);
+
+  useEffect(() => {
+    const onEmailSent = (event: Event) => {
+      if (!(event instanceof CustomEvent)) return;
+      const owner = event.detail as { personId?: unknown; salesCycleId?: unknown } | null;
+      if (owner === null || typeof owner !== 'object' || typeof owner.personId !== 'string') return;
+      if (selectionRef.current?.personId === owner.personId
+        && lastDetails.current.get(owner.personId)?.salesCycleId === owner.salesCycleId) {
+        // Keep the sent receipt/editor mounted while updating activity and action.
+        fetchDetail(owner.personId, true);
+      }
+    };
+    window.addEventListener('callie:email-sent', onEmailSent);
+    return () => window.removeEventListener('callie:email-sent', onEmailSent);
   }, [fetchDetail]);
 
   /**
@@ -262,27 +279,21 @@ export function LeadInspectorProvider({
       if (request.transition === 'review_to_ready') {
         // Mark ready is part of the review burn-down: advance to the next
         // lead instead of leaving the founder staring at the same one.
-        setSelection((current) => {
-          if (current !== null) {
-            advanceAfterReview(current.personId);
-          }
-          return current;
-        });
+        advanceAfterReview(owner);
         return;
       }
-      setSelection((current) => {
-        if (current !== null) {
-          fetchDetail(current.personId);
-        }
-        return current;
-      });
+      fetchDetail(owner);
     },
     [advanceAfterReview, api, fetchDetail],
   );
 
   const dismissLead = useCallback(
     async (request: DismissLeadRequest) => {
+      if (selectionRef.current?.personId !== request.personId
+        || lastDetails.current.get(request.personId)?.salesCycleId !== request.salesCycleId) throw new Error('Selection changed');
       await api.dismissLead(request);
+      if (!mounted.current || selectionRef.current?.personId !== request.personId
+        || lastDetails.current.get(request.personId)?.salesCycleId !== request.salesCycleId) return;
       const resolver = reviewAdvanceRef.current;
       if (resolver === null) {
         // The dismissed lead left the actionable list; keeping its stale
@@ -379,7 +390,7 @@ export function LeadInspectorProvider({
       {manualActivityId === null && (result.status === 'refused' || result.status === 'unavailable') && <Button variant="quiet" onClick={() => logPastActivity()}>Log past activity</Button>}
     </div>)}
   </>;
-  const outboundPresentation = { capabilities, outboundStatus, onLogPastActivity: logPastActivity,
+  const outboundPresentation = { outreachApi, capabilities, outboundStatus, onLogPastActivity: logPastActivity,
     outboundPending: currentOutbound?.pending ?? false,
     outboundBlocked: currentOutbound?.uncertain || receipt?.status === 'unknown' || attempts.some((attempt) => attempt.channel === 'call' && attempt.status === 'unknown') };
 

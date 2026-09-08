@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { OutreachApi } from '../../../shared/contracts/outreachContract';
 import type { OutboundReceipt, OutboundCapabilities } from '../../../shared/contracts/outboundContract';
 import { createContext, useContext } from 'react';
 
@@ -81,6 +82,7 @@ export function useLeadInspectorIfAvailable(): LeadInspectorHandle | null {
 
 /** Shared presentation inputs. The provider owns request lifetime and receipts. */
 export type OutboundPresentation = {
+  outreachApi?: OutreachApi;
   capabilities?: OutboundCapabilities | null;
   outboundPending?: boolean;
   outboundBlocked?: boolean;

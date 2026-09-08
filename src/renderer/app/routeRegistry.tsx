@@ -88,6 +88,7 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
           density={context.density}
           shell={context.api.shell}
           recovery={context.api.recovery}
+          outreachApi={context.api.outreach}
           sourcing={<SourcingStatusRow api={context.api.sourcing} />}
         >
           <AppleSpikePanel api={context.api.appleSpike} />

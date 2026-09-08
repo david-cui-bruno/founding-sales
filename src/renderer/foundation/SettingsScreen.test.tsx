@@ -473,3 +473,41 @@ describe('Data & storage recovery flow', () => {
     expect(screen.queryByText('late-secret')).toBeNull();
   });
 });
+
+const outreachStatus: import('../../shared/contracts/outreachContract').OutreachStatus = { model: 'unconfigured' as const, modelName: '', gmail: 'unconfigured' as const, accountEmail: null, senderName: '', postalAddress: '' };
+function connectionsApi() {
+  const unavailable = async (): Promise<never> => { throw new Error('Not used by settings'); };
+  return { status: vi.fn(async () => outreachStatus), configure: vi.fn(async () => outreachStatus), connectGmail: vi.fn(async () => outreachStatus), disconnectGmail: vi.fn(async () => outreachStatus), openDraft: unavailable, saveDraft: unavailable, generateDraft: unavailable, sendDraft: unavailable };
+}
+it('exposes user-owned connection setup only through explicit save/connect/disconnect and never retains secret fields', async () => {
+  const api = connectionsApi(); renderSettings({ outreachApi: api });
+  fireEvent.click(screen.getByRole('button', { name: 'Connections' }));
+  await screen.findByLabelText('OpenAI API key');
+  expect(api.connectGmail).not.toHaveBeenCalled(); expect(api.configure).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: 'fixture-key' } });
+  fireEvent.change(screen.getByLabelText('OpenAI model'), { target: { value: 'fixture-model' } });
+  fireEvent.change(screen.getByLabelText('Sender name'), { target: { value: 'Fictional Founder' } });
+  fireEvent.change(screen.getByLabelText('Postal address'), { target: { value: '123 Fictional St' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save connections' }));
+  await waitFor(() => expect(api.configure).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'fixture-key', model: 'fixture-model', senderName: 'Fictional Founder', postalAddress: '123 Fictional St' })));
+  await waitFor(() => expect((screen.getByLabelText('OpenAI API key') as HTMLInputElement).value).toBe(''));
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Gmail' })); await waitFor(() => expect(api.connectGmail).toHaveBeenCalledOnce());
+  fireEvent.click(screen.getByRole('button', { name: 'Disconnect Gmail' })); await waitFor(() => expect(api.disconnectGmail).toHaveBeenCalledOnce());
+  expect(screen.getByText(/Review replies in Gmail/)).toBeTruthy();
+});
+it('renders a safe setup error instead of raw provider secrets', async () => {
+  const api = connectionsApi(); api.status.mockRejectedValueOnce(new Error('fixture-secret-that-must-not-render'));
+  renderSettings({ outreachApi: api }); fireEvent.click(screen.getByRole('button', { name: 'Connections' }));
+  expect(await screen.findByRole('alert')).toBeTruthy(); expect(screen.queryByText(/fixture-secret/)).toBeNull();
+});
+it('never erases existing sender settings when credentials are entered during a slow status read', async () => {
+  const api = connectionsApi(); let resolve!: (value: typeof outreachStatus) => void;
+  api.status.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  renderSettings({ outreachApi: api }); fireEvent.click(screen.getByRole('button', { name: 'Connections' }));
+  fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: 'fixture-key' } });
+  expect((screen.getByRole('button', { name: 'Save connections' }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => resolve({ ...outreachStatus, modelName: 'saved-model', senderName: 'Saved Founder', postalAddress: '123 Saved St' }));
+  expect((screen.getByLabelText('Sender name') as HTMLInputElement).value).toBe('Saved Founder');
+  fireEvent.click(screen.getByRole('button', { name: 'Save connections' }));
+  await waitFor(() => expect(api.configure).toHaveBeenCalledWith(expect.objectContaining({ senderName: 'Saved Founder', postalAddress: '123 Saved St' })));
+});

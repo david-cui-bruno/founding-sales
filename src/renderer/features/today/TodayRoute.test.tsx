@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { discoverySnapshotSchema, type DiscoveryApi } from '../../../shared/contracts/discoveryContract';
+import { type DiscoveryApi } from '../../../shared/contracts/discoveryContract';
 import type { MutationReceipt } from '../../../shared/contracts/commonContract';
 import type {
   TodayItem,
@@ -151,13 +151,13 @@ describe('TodayRoute', () => {
     render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
     await screen.findByText('Avery Landlord');
 
-    const meter = screen.getByRole('progressbar', { name: 'Dial budget' });
+    fireEvent.click(screen.getByText('Queue capacity'));
+    const meter = screen.getByRole('meter', { name: 'Queued discretionary calls' });
     expect(meter.getAttribute('aria-valuenow')).toBe('2');
     expect(meter.getAttribute('aria-valuemax')).toBe('40');
-    expect(screen.getByText('2 of 40 dials')).toBeTruthy();
-    // No visible Refresh control; the manual path is visually hidden.
-    const refresh = screen.getByTestId('today-refresh');
-    expect(refresh.className).toContain('visually-hidden');
+    expect(screen.getByText('2 queued discretionary calls · target 40')).toBeTruthy();
+    expect(screen.queryByTestId('today-refresh')).toBeNull();
+    expect(screen.queryByRole('button', { name: /refresh/i })).toBeNull();
   });
 
   it('refetches on window focus', async () => {
@@ -190,7 +190,7 @@ describe('TodayRoute', () => {
     expect(await screen.findByText('Avery Landlord')).toBeTruthy();
   });
 
-  it('never implicitly launches and opens the lead page from the Next up Call button', async () => {
+  it('never implicitly launches and opens the lead page from the explicit row Call button', async () => {
     const api = fakeApi();
     const leadApi = fakeLeadApi();
     const onOpenLeadPage = vi.fn();
@@ -204,7 +204,7 @@ describe('TodayRoute', () => {
     );
     await screen.findByText('Avery Landlord');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Call' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Call Avery Landlord' }));
 
     expect(leadApi.beginOutbound).not.toHaveBeenCalled();
     expect(leadApi.get).not.toHaveBeenCalled();
@@ -229,113 +229,6 @@ describe('TodayRoute', () => {
     });
   });
 
-  it('enters triage from the backlog card, decides with keys, and resumes position', async () => {
-    const api = fakeApi({
-      get: vi.fn(async () => ({
-        ...snapshot(1, [item()]),
-        unreviewedBacklogCount: 2,
-        unreviewedCloudSignalCount: 1,
-      })) as unknown as TodayRouteApi['get'],
-    });
-    const leadApi = fakeLeadApi();
-    render(<TodayRoute api={api} leadApi={leadApi} onOpenLead={vi.fn()} />);
-    await screen.findByText('2 unreviewed leads');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
-    expect(await screen.findByText('Reviewing 1 of 2')).toBeTruthy();
-    expect(screen.getByText('Cap Lead One')).toBeTruthy();
-
-    // 1 = Ready: the confirm-ready transition plus a persisted position.
-    (api.getTriageQueue as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-      triageQueue(['Cap Lead Two'], 1),
-    );
-    fireEvent.keyDown(screen.getByRole('region', { name: 'Review unreviewed leads' }), {
-      key: '1',
-    });
-    await waitFor(() => expect(leadApi.confirmTransition).toHaveBeenCalledTimes(1));
-    expect(leadApi.confirmTransition).toHaveBeenCalledWith({
-      transition: 'review_to_ready',
-      salesCycleId: 'cycle-t0',
-      expectedRevision: 0,
-    });
-    await waitFor(() => expect(api.setReviewPosition).toHaveBeenCalledWith({ position: 1 }));
-    expect(await screen.findByText('Reviewing 2 of 2')).toBeTruthy();
-  });
-
-  it('2 = Later snoozes the triage lead 30 days out', async () => {
-    const api = fakeApi({
-      get: vi.fn(async () => ({
-        ...snapshot(1, [item()]),
-        unreviewedBacklogCount: 2,
-      })) as unknown as TodayRouteApi['get'],
-    });
-    const leadApi = fakeLeadApi();
-    render(<TodayRoute api={api} leadApi={leadApi} onOpenLead={vi.fn()} />);
-    await screen.findByText('2 unreviewed leads');
-    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
-    await screen.findByText('Reviewing 1 of 2');
-
-    fireEvent.keyDown(screen.getByRole('region', { name: 'Review unreviewed leads' }), {
-      key: '2',
-    });
-
-    await waitFor(() => expect(api.snooze).toHaveBeenCalledTimes(1));
-    const request = (api.snooze as ReturnType<typeof vi.fn>).mock.calls[0]![0];
-    expect(request.salesCycleId).toBe('cycle-t0');
-    const days = (Date.parse(request.resurfaceAt) - Date.now()) / 86_400_000;
-    expect(days).toBeGreaterThan(29);
-    expect(days).toBeLessThan(31);
-  });
-
-  it('3 = Not a fit requires a dismissal reason through the Select', async () => {
-    const api = fakeApi({
-      get: vi.fn(async () => ({
-        ...snapshot(1, [item()]),
-        unreviewedBacklogCount: 2,
-      })) as unknown as TodayRouteApi['get'],
-    });
-    const leadApi = fakeLeadApi();
-    render(<TodayRoute api={api} leadApi={leadApi} onOpenLead={vi.fn()} />);
-    await screen.findByText('2 unreviewed leads');
-    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
-    await screen.findByText('Reviewing 1 of 2');
-
-    fireEvent.keyDown(screen.getByRole('region', { name: 'Review unreviewed leads' }), {
-      key: '3',
-    });
-    // Nothing is dismissed until the reason is confirmed.
-    expect(leadApi.dismissLead).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm dismiss' }));
-
-    await waitFor(() => expect(leadApi.dismissLead).toHaveBeenCalledTimes(1));
-    expect(leadApi.dismissLead).toHaveBeenCalledWith(
-      expect.objectContaining({
-        salesCycleId: 'cycle-t0',
-        qualificationGateReason: 'out_of_area',
-      }),
-    );
-  });
-
-  it('Esc exits triage back to the queue', async () => {
-    const api = fakeApi({
-      get: vi.fn(async () => ({
-        ...snapshot(1, [item()]),
-        unreviewedBacklogCount: 2,
-      })) as unknown as TodayRouteApi['get'],
-    });
-    render(<TodayRoute api={api} leadApi={fakeLeadApi()} onOpenLead={vi.fn()} />);
-    await screen.findByText('2 unreviewed leads');
-    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
-    await screen.findByText('Reviewing 1 of 2');
-
-    fireEvent.keyDown(screen.getByRole('region', { name: 'Review unreviewed leads' }), {
-      key: 'Escape',
-    });
-
-    expect(await screen.findByText('Avery Landlord')).toBeTruthy();
-    expect(screen.queryByText(/Reviewing/)).toBeNull();
-  });
-
   it('ignores a stale snapshot that resolves after a newer fetch', async () => {
     let call = 0;
     let releaseStale: (value: TodaySnapshot) => void = () => undefined;
@@ -352,7 +245,7 @@ describe('TodayRoute', () => {
     render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
 
     await waitFor(() => expect(call).toBeGreaterThanOrEqual(1));
-    fireEvent.click(screen.getByTestId('today-refresh'));
+    fireEvent(window, new Event('focus'));
     expect(await screen.findByText('Fresh Person')).toBeTruthy();
 
     releaseStale(snapshot(1, [item({ personName: 'Stale Person' })]));
@@ -379,33 +272,36 @@ describe('TodayRoute', () => {
   });
 });
 
-it('keeps commitments before discovery and moves the large manual backlog behind an optional control', async () => {
+it('renders only the main-ordered queue without launching discovery or manual judgment', async () => {
   const api = fakeApi({ get: vi.fn(async () => ({ ...snapshot(1, [item()]), unreviewedBacklogCount: 2881 })) });
-  const discoveryApi: DiscoveryApi = {
-    get: vi.fn(async () => discoverySnapshotSchema.parse({ prepared: [], judgment: [], counts: { unassessed: 2881, research: 0, watch: 0, excluded: 0 }, processing: 'running', researchCapability: 'not_configured', generatedAt: '2026-09-06T12:00:00.000Z', revision: 1 })),
-    getBrief: vi.fn(), begin: vi.fn(), override: vi.fn(),
-  };
-  render(<TodayRoute api={api} discoveryApi={discoveryApi} onOpenLead={vi.fn()} />);
-  const lead = await screen.findByText('Avery Landlord');
-  const heading = await screen.findByRole('heading', { name: 'Prepared conversations' });
-  expect(lead.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(screen.queryByRole('button', { name: 'Review' })).toBeNull();
-  fireEvent.click(screen.getByText('Manual review (optional)'));
-  expect(screen.getByRole('button', { name: 'Review' })).toBeTruthy();
+  const discoveryApi: DiscoveryApi = { get: vi.fn(), getBrief: vi.fn(), begin: vi.fn(), override: vi.fn() };
+  const leadApi = fakeLeadApi();
+  render(<TodayRoute api={api} leadApi={leadApi} discoveryApi={discoveryApi} onOpenLead={vi.fn()} />);
+  await screen.findByText('Avery Landlord');
+  expect(screen.getByRole('list', { name: 'Work queue' })).toBeTruthy();
+  expect(screen.queryByText(/Prepared conversations|Manual review|Preparing your shortlist/)).toBeNull();
+  expect(screen.queryByRole('button', { name: /Review|Next|Prepare|Refresh/i })).toBeNull();
   expect(api.getTriageQueue).not.toHaveBeenCalled();
+  expect(discoveryApi.get).not.toHaveBeenCalled();
+  expect(leadApi.confirmTransition).not.toHaveBeenCalled();
 });
-it('does not announce Queue done while discovery is still preparing', async () => {
+it('states only that no contacts are due rather than claiming all discovery is done', async () => {
   const api = fakeApi({ get: vi.fn(async () => snapshot(1, [])) });
-  const discoveryApi: DiscoveryApi = { get: vi.fn(async () => discoverySnapshotSchema.parse({ prepared: [], judgment: [], counts: { unassessed: 2881, research: 0, watch: 0, excluded: 0 }, processing: 'running', researchCapability: 'not_configured', generatedAt: '2026-09-06T12:00:00.000Z', revision: 1 })), getBrief: vi.fn(), begin: vi.fn(), override: vi.fn() };
-  render(<TodayRoute api={api} discoveryApi={discoveryApi} onOpenLead={vi.fn()} />);
-  await screen.findByText('Preparing your shortlist');
-  expect(screen.queryByText(/Queue done/)).toBeNull();
+  render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+  await screen.findByText('No contacts due right now.');
+  expect(screen.queryByText(/Queue done|All done/)).toBeNull();
+});
+it('refreshes queue membership after an accepted email without a focus workaround', async () => {
+  const api = fakeApi(); render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+  await screen.findByText('Avery Landlord'); const reads = vi.mocked(api.get).mock.calls.length;
+  fireEvent(window, new CustomEvent('callie:email-sent', { detail: { personId: 'person-p1', salesCycleId: 'cycle-p1' } }));
+  await waitFor(() => expect(vi.mocked(api.get).mock.calls.length).toBe(reads + 1));
 });
 
 it('shows the real current date badge and opens the primary brief without a call or mutation', async () => {
   const api = fakeApi(); const open = vi.fn(); const fullPage = vi.fn();
   render(<TodayRoute api={api} onOpenLead={open} onOpenLeadPage={fullPage} />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Open brief' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Avery Landlord' }));
   expect(open).toHaveBeenCalledWith('person-p1'); expect(fullPage).not.toHaveBeenCalled();
   expect(api.complete).not.toHaveBeenCalled(); expect(api.logPastActivity).not.toHaveBeenCalled();
   const badge = screen.getByLabelText('Current date');

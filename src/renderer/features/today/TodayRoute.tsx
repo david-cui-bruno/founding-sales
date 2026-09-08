@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { DiscoveryApi } from '../../../shared/contracts/discoveryContract';
-import { DiscoverySection } from '../discovery/DiscoverySection';
 import type { MutationReceipt } from '../../../shared/contracts/commonContract';
 import type {
   ConfirmTransitionRequest,
@@ -15,16 +14,13 @@ import type {
   SnoozeActionRequest,
   TodayItem,
   TodaySnapshot,
-  TriageLead,
   TriageQueue,
 } from '../../../shared/contracts/todayContract';
 import { ErrorState } from '../../components/ErrorState';
-import { PageHeader } from '../../components/PageHeader';
 import { ProgressBarThin } from '../../components/ProgressBarThin';
 import { useLeadInspectorIfAvailable } from '../leadInspector/useLeadInspector';
 import { DialMeter } from './DialMeter';
 import { TodayPage, skipTodayResurfaceAt } from './TodayPage';
-import { TriageMode, type TriageDecision } from './TriageMode';
 
 export type TodayRouteApi = {
   get(): Promise<TodaySnapshot>;
@@ -60,13 +56,6 @@ type TodayRouteState =
   | { kind: 'error' }
   | { kind: 'ready'; snapshot: TodaySnapshot };
 
-type TriageState =
-  | { kind: 'closed' }
-  | { kind: 'loading' }
-  | { kind: 'open'; queue: TriageQueue };
-
-const LATER_RESURFACE_MS = 30 * 24 * 60 * 60 * 1000;
-
 const todayDateLine = (): string =>
   new Date().toLocaleDateString(undefined, {
     weekday: 'long',
@@ -77,18 +66,15 @@ const todayDateLine = (): string =>
 /**
  * Route container (audit 4.2): fetches the snapshot through the injected
  * API, refetches after every successful MutationReceipt and on window
- * focus (no visible Refresh control; a hidden manual path stays for E2E).
- * Owns triage mode and the call flow's navigation to the lead full page.
+ * focus without a manual refresh or judgment surface.
+ * Call navigates to the contact workspace without initiating outreach.
  */
 export function TodayRoute({
   api,
-  leadApi,
-  discoveryApi,
   onOpenLead,
   onOpenLeadPage,
 }: TodayRouteProps) {
   const [state, setState] = useState<TodayRouteState>({ kind: 'loading' });
-  const [triage, setTriage] = useState<TriageState>({ kind: 'closed' });
   const [busy, setBusy] = useState(false);
   const [commandFailed, setCommandFailed] = useState(false);
   const requestSequence = useRef(0);
@@ -118,16 +104,16 @@ export function TodayRoute({
     };
   }, [load]);
 
-  // Poll on window focus instead of a visible Refresh control; the hidden
-  // data hook below keeps a manual path for tests. Saved call outcomes
-  // (logged from the full-page overlay) also trigger a refetch.
+  // Read again on window focus and after explicit saved outcomes.
   useEffect(() => {
     const onFocus = () => load();
     window.addEventListener('focus', onFocus);
     window.addEventListener('callie:outcome-logged', onFocus);
+    window.addEventListener('callie:email-sent', onFocus);
     return () => {
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('callie:outcome-logged', onFocus);
+      window.removeEventListener('callie:email-sent', onFocus);
     };
   }, [load]);
 
@@ -185,92 +171,7 @@ export function TodayRoute({
     onOpenLead(item.personId);
   }, [onOpenLead]);
 
-  const loadTriage = useCallback(() => {
-    setTriage({ kind: 'loading' });
-    api
-      .getTriageQueue()
-      .then((queue) => setTriage({ kind: 'open', queue }))
-      .catch(() => {
-        setTriage({ kind: 'closed' });
-        setCommandFailed(true);
-      });
-  }, [api]);
-
-  const handleTriageDecide = useCallback(
-    (lead: TriageLead, decision: TriageDecision, dismissReason: DismissLeadRequest['qualificationGateReason'] | null) => {
-      if (leadApi === undefined) return;
-      setBusy(true);
-      setCommandFailed(false);
-      const run = async () => {
-        if (decision === 'ready') {
-          const detail = await leadApi.get({ personId: lead.personId });
-          await leadApi.confirmTransition({
-            transition: 'review_to_ready',
-            salesCycleId: lead.salesCycleId,
-            expectedRevision: detail.revision,
-          });
-        } else if (decision === 'later') {
-          await api.snooze({
-            salesCycleId: lead.salesCycleId,
-            resurfaceAt: new Date(Date.now() + LATER_RESURFACE_MS).toISOString(),
-          });
-        } else {
-          const detail = await leadApi.get({ personId: lead.personId });
-          await leadApi.dismissLead({
-            salesCycleId: lead.salesCycleId,
-            personId: lead.personId,
-            qualificationGateReason: dismissReason ?? 'out_of_area',
-            expectedRevision: detail.revision,
-          });
-        }
-        // Every decision advances the persisted pass position.
-        const current = triage.kind === 'open' ? triage.queue : null;
-        const nextPosition = (current?.position ?? 0) + 1;
-        await api.setReviewPosition({ position: nextPosition });
-        const queue = await api.getTriageQueue();
-        setTriage({ kind: 'open', queue });
-      };
-      run()
-        .then(() => setBusy(false))
-        .catch(() => {
-          setBusy(false);
-          setCommandFailed(true);
-        });
-    },
-    [api, leadApi, triage],
-  );
-
-  const handleTriageExit = useCallback(() => {
-    const queue = triage.kind === 'open' ? triage.queue : null;
-    const finishedPass = queue !== null && queue.items.length === 0;
-    setTriage({ kind: 'closed' });
-    load();
-    // Finishing a pass resets the counter; leaving mid-pass keeps it.
-    if (finishedPass) {
-      void api.setReviewPosition({ position: 0 }).catch((): undefined => undefined);
-    }
-  }, [api, load, triage]);
-
   const snapshot = state.kind === 'ready' ? state.snapshot : null;
-
-  if (triage.kind !== 'closed') {
-    return (
-      <div className="today-route" data-testid="today-route">
-        <PageHeader title="Today" description={todayDateLine()} />
-        {triage.kind === 'loading' && (
-          <ProgressBarThin label="Loading triage queue" />
-        )}
-        {triage.kind === 'open' && (
-          <TriageMode
-            queue={triage.queue}
-            busy={busy}
-            onDecide={handleTriageDecide}
-            onExit={handleTriageExit}
-          />
-        )}
-      </div>
-    );
-  }
 
   return (
     <div className="today-route" data-testid="today-route">
@@ -285,16 +186,7 @@ export function TodayRoute({
           <strong>{new Date().toLocaleDateString(undefined, { day: '2-digit' })}</strong>
         </time>
       </header>
-      {snapshot !== null && <details className="today-header__progress"><summary>Today’s progress</summary><DialMeter snapshot={snapshot} /></details>}
-      {/* Hidden manual refresh path: no visible control by design. */}
-      <button
-        type="button"
-        className="visually-hidden"
-        data-testid="today-refresh"
-        onClick={load}
-      >
-        Refresh Today
-      </button>
+      {snapshot !== null && <details className="today-header__progress"><summary>Queue capacity</summary><DialMeter snapshot={snapshot} /></details>}
       {commandFailed && (
         <div className="today-route__command-error" role="alert">
           The command could not be applied. Try again.
@@ -310,10 +202,8 @@ export function TodayRoute({
       )}
       {snapshot !== null && (
         <TodayPage
-          discovery={discoveryApi === undefined ? undefined : <DiscoverySection api={discoveryApi}
-            onOpenPerson={onOpenLead}
-            onPreparedPerson={onOpenLeadPage ?? (inspector === null ? onOpenLead : personId => inspector.openFullPage(personId, { refresh: true }))} />}
           snapshot={snapshot}
+          selectedPersonId={inspector?.selectedPersonId}
           busy={busy}
           onOpenLead={onOpenLead}
           onCall={handleCall}
@@ -321,7 +211,7 @@ export function TodayRoute({
           onSkipToday={handleSkipToday}
           onLogPastActivity={handleLogPastActivity}
           onOpenInLeads={handleOpenInLeads}
-          onStartTriage={loadTriage}
+          onStartTriage={() => undefined}
         />
       )}
     </div>

@@ -60,17 +60,19 @@ type PhoneEvidenceProps = Pick<ContactEvidenceCardProps, 'detail' | 'onSelectOut
   contact: ContactMethod;
 };
 
+export function phoneActionHelp(detail: LeadDetail, contact: ContactMethod, channel: 'call' | 'text'): string | null {
+  const reason = channel === 'call' ? contact.compliance?.callRefusalReason : contact.compliance?.textRefusalReason;
+  return detail.optedOut ? 'This person opted out.'
+    : contact.validationState !== 'valid' ? `Phone validation is ${contact.validationState}.`
+      : contact.compliance === null ? 'Compliance unknown. Outreach is disabled.'
+        : reason === null ? null : REFUSAL_LABELS[reason!];
+}
+
 function PhoneAction({
   detail, contact, channel, onSelectOutbound,
 }: PhoneEvidenceProps & { channel: 'call' | 'text' }) {
   const helpId = useId();
-  const refusalReason = channel === 'call'
-    ? contact.compliance?.callRefusalReason
-    : contact.compliance?.textRefusalReason;
-  const help = detail.optedOut ? 'This person opted out.'
-    : contact.validationState !== 'valid' ? `Phone validation is ${contact.validationState}.`
-      : contact.compliance === null ? 'Compliance unknown. Outreach is disabled.'
-        : refusalReason === null ? null : REFUSAL_LABELS[refusalReason];
+  const help = phoneActionHelp(detail, contact, channel);
 
   return (
     <div className="contact-evidence__action">

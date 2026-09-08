@@ -1,5 +1,5 @@
 import type { OutboundReceipt } from '../../../shared/contracts/outboundContract';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 
 import type {
   FindContactInfoReceipt,
@@ -33,6 +33,7 @@ const TABS = [
 type TabId = (typeof TABS)[number]['id'];
 
 export type InspectorTabsProps = OutboundStatusPresentation & DiscoveryPresentation & {
+  activityTools?: ReactNode;
   detail: LeadDetail;
   onBeginOutbound(request: BeginOutboundRequest): Promise<OutboundReceipt>;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
@@ -54,6 +55,7 @@ export function InspectorTabs({
   onDismissLead,
   onOverrideCloudScore,
   onFindContactInfo,
+  activityTools,
   ...outboundPresentation
 }: InspectorTabsProps) {
   const [selected, setSelected] = useState<TabId>('overview');
@@ -136,6 +138,8 @@ export function InspectorTabs({
         )}
         {selected === 'activity' && (
           <div className="lead-inspector__activity">
+            {outboundPresentation.pastActivityControls}
+            {activityTools}
             <FounderConfirmation detail={detail} onConfirmTransition={onConfirmTransition} />
             <InspectorActivity activities={detail.activities} />
             {detail.conversations.length > 0 && (
@@ -221,7 +225,6 @@ export function LeadInspector({
       />
       <div className="lead-inspector__body">
         {outboundPresentation.outboundStatus}
-        {outboundPresentation.pastActivityControls}
         {state.status === 'loading' && (
           <LoadingState label="Loading lead details" />
         )}

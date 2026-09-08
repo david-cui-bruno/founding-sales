@@ -7,10 +7,12 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import type { TodayItem, TodaySnapshot } from '../../../shared/contracts/todayContract';
 import { TodayPage } from './TodayPage';
 import { TodayRoute, type TodayRouteApi } from './TodayRoute';
+import { LeadFullPage } from '../leadInspector/LeadFullPage';
+import { leadDetailSchema } from '../../../shared/contracts/leadDetailContract';
 
 // Browser-only presentation fixtures. No app, providers, or transport is launched.
 const css = ['design/tokens.css', 'design/themes.css', 'design/base.css',
-  'design/motion.css', 'features/today/today.css'].map(path =>
+  'design/motion.css', 'features/today/today.css', 'features/leadInspector/leadInspector.css'].map(path =>
   readFileSync(`src/renderer/${path}`, 'utf8')).join('\n');
 const items: TodayItem[] = [1, 2].map((index): TodayItem => ({
   id: `cycle-${index}`, salesCycleId: `cycle-${index}`, personId: `person-${index}`,
@@ -60,14 +62,62 @@ it.each(['light', 'dark'])('keeps the actual Today weekday at small-text contras
   } finally { await page.close(); }
 });
 
-it('changes actual Also today row geometry with the persisted density attribute', async () => {
+it.each(['light', 'dark'])('keeps real queue selection and keyboard focus distinct in %s', async theme => {
+  const page = await browser.newPage({ viewport: { width: 420, height: 800 } });
+  try {
+    await page.setContent(`<html data-theme="${theme}"><head><style>${css}</style></head><body>${renderToStaticMarkup(
+      <TodayPage snapshot={snapshot} selectedPersonId="person-1" onOpenLead={noOp} onCall={noOp} onSnoozeUntil={noOp}
+        onSkipToday={noOp} onLogPastActivity={noOp} onOpenInLeads={noOp} onStartTriage={noOp} />,
+    )}</body></html>`);
+    const selected = page.locator('.today-row[aria-current="true"]');
+    expect(await selected.count()).toBe(1);
+    const style = await selected.evaluate(element => ({ background: getComputedStyle(element).backgroundColor, shadow: getComputedStyle(element).boxShadow }));
+    expect(style.background).not.toBe('rgba(0, 0, 0, 0)'); expect(style.shadow).not.toBe('none');
+    await page.keyboard.press('Tab');
+    expect(await selected.evaluate(element => element === document.activeElement)).toBe(true);
+    expect(await selected.evaluate(element => getComputedStyle(element).outlineStyle)).toBe('solid');
+    expect(await page.evaluate(() => document.body.scrollWidth <= innerWidth)).toBe(true);
+  } finally { await page.close(); }
+});
+
+const person = leadDetailSchema.parse({ personId: 'person', salesCycleId: 'cycle', personName: 'Avery Fictional Property Owner',
+  phones: [{ id: 'phone', kind: 'phone', value: '+14015550100', label: null, valid: true, validationState: 'valid', contactSnapshot: 'a'.repeat(64),
+    reachability: 'direct', sourceLabel: null, vendorRank: null, phoneKind: 'mobile', ownershipState: 'verified_person', evidenceObservedAt: null,
+    compliance: { status: 'verified_clear', label: 'Verified clear', expiresAt: null, callRefusalReason: null, textRefusalReason: null } }],
+  emails: [{ id: 'email', kind: 'email', value: 'avery-owner-with-long-address@example.com', label: null, valid: true, validationState: 'valid', contactSnapshot: 'b'.repeat(64),
+    reachability: 'direct', sourceLabel: null, vendorRank: null, phoneKind: null, ownershipState: 'verified_person', evidenceObservedAt: null, compliance: null }],
+  organizationLabel: 'Fictional Properties', propertySummaries: [], stage: 'ready', workflowStatus: 'active', sourceLabel: 'parcel', segment: 'cold',
+  priorityContext: null, priorityReasons: [], cloudScores: null, cloudLinked: false, findContactEligibility: { eligible: false, refusalReason: null },
+  nextAction: null, optedOut: false, cadence: null, outboundAttempts: [], activities: [], conversations: [], properties: [], history: [], revision: 1,
+  portfolio: { role: 'owner', ownedCount: 1, managedCount: 0, linkedCount: 0, knownUnits: 4, locations: ['Providence, RI'],
+    summary: '1 known owned property. 4 known units where recorded. Partial records, not a complete portfolio.', completeness: 'partial', facts: [] },
+  contactReason: { text: 'Recorded owner of 12 Fictional Elm St.', evidenceIds: ['property'] } });
+it.each(['light', 'dark'])('keeps portfolio and primary action readable at narrow width in %s', async theme => {
+  const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+  try {
+    await page.setContent(`<html data-theme="${theme}"><head><style>${css}</style></head><body>${renderToStaticMarkup(
+      <LeadFullPage state={{ status: 'ready', detail: person }} onRetry={noOp} onBeginOutbound={unavailable}
+        onConfirmTransition={noOp} onDismissLead={noOp} onOverrideCloudScore={noOp} />,
+    )}</body></html>`);
+    const call = page.getByRole('button', { name: 'Call', exact: true });
+    expect(await call.isVisible()).toBe(true); expect(await page.getByRole('button', { name: 'Email', exact: true }).isVisible()).toBe(true);
+    const callColors = await call.evaluate(element => ({ text: getComputedStyle(element).color, background: getComputedStyle(element).backgroundColor }));
+    expect(contrast(callColors.text, callColors.background)).toBeGreaterThanOrEqual(4.5);
+    const portfolioColors = await page.locator('.lead-inspector__portfolio').evaluate(element => ({ text: getComputedStyle(element).color, background: getComputedStyle(document.body).backgroundColor }));
+    expect(contrast(portfolioColors.text, portfolioColors.background)).toBeGreaterThanOrEqual(4.5);
+    expect(await page.evaluate(() => document.body.scrollWidth <= innerWidth)).toBe(true);
+    expect(await page.getByRole('button', { name: /Next|Prepare|Refresh|Mark ready/ }).count()).toBe(0);
+  } finally { await page.close(); }
+});
+
+it('changes actual compact queue row geometry with the persisted density attribute', async () => {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   try {
     await page.setContent(`<html data-theme="light" data-density="comfortable"><head><style>${css}</style></head><body>${renderToStaticMarkup(
       <TodayPage snapshot={snapshot} onOpenLead={noOp} onCall={noOp} onSnoozeUntil={noOp}
         onSkipToday={noOp} onLogPastActivity={noOp} onOpenInLeads={noOp} onStartTriage={noOp} />,
     )}</body></html>`);
-    const row = page.locator('.today__also .today-row');
+    const row = page.locator('.today-work-list .today-row').nth(1);
     const comfortable = (await row.boundingBox())!.height;
     await page.evaluate(() => { document.documentElement.dataset.density = 'compact'; });
     const compact = (await row.boundingBox())!.height;

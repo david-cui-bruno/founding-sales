@@ -113,6 +113,11 @@ function createApi(details: LeadDetail[]) {
   };
 }
 
+function openDetails() {
+  const summary = screen.getByText('Details', { selector: 'summary' });
+  if (!(summary.parentElement as HTMLDetailsElement).open) fireEvent.click(summary);
+}
+
 function Harness() {
   const inspector = useLeadInspector();
 
@@ -308,7 +313,7 @@ describe('LeadInspectorProvider', () => {
   async function openCall() {
     fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
     await screen.findByRole('complementary', { name: 'Kevin Shin details' });
-    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Call' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Open Phone' }));
   }
 
@@ -329,7 +334,7 @@ describe('LeadInspectorProvider', () => {
     expect(await screen.findByText('Phone handoff unknown. Do not retry.')).toBeTruthy();
     expect(screen.queryByText('Phone handoff accepted. Call outcome unverified.')).toBeNull();
     expect(api.get).toHaveBeenCalledTimes(2);
-    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Call' }));
     expect(screen.queryByRole('button', { name: 'Open Phone' })).toBeNull();
     expect(api.beginOutbound).toHaveBeenCalledTimes(1);
     expect(screen.getByText(request.commandId)).toBeTruthy();
@@ -341,7 +346,7 @@ describe('LeadInspectorProvider', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
     await screen.findByRole('complementary', { name: 'Kevin Shin details' });
     api.get.mockImplementationOnce(() => new Promise(() => undefined));
-    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Call' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open Phone' }));
     expect(await screen.findByText('Phone handoff accepted. Call outcome unverified.')).toBeTruthy();
     expect(screen.getByText('Loading lead details')).toBeTruthy();
@@ -356,6 +361,7 @@ describe('LeadInspectorProvider', () => {
     const request = api.beginOutbound.mock.calls[0][0];
     fireEvent.click(screen.getByRole('button', { name: 'Open Dana Whitman' }));
     await screen.findByRole('complementary', { name: 'Dana Whitman details' });
+    openDetails();
     fireEvent.click(screen.getByRole('button', { name: 'Text +14015550100' }));
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Dana draft' } });
     await act(async () => resolve({ commandId: request.commandId, channel: 'call', status: 'unknown', reasonCode: 'handoff_uncertain', mutation: receipt }));
@@ -372,7 +378,7 @@ describe('LeadInspectorProvider', () => {
     await openCall();
     expect(await screen.findByText('Phone handoff response unavailable. Execution is unknown. Do not retry.')).toBeTruthy();
     expect(screen.queryByText(/private transport/)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Call' }));
     expect(screen.queryByRole('button', { name: 'Open Phone' })).toBeNull();
     expect(api.beginOutbound).toHaveBeenCalledTimes(1);
   });
@@ -397,13 +403,14 @@ describe('LeadInspectorProvider', () => {
     expect(screen.getByText(request.commandId)).toBeTruthy();
     expect(screen.queryByText(/private lost reply/)).toBeNull();
     expect(api.get).toHaveBeenCalledTimes(2);
-    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Call' }));
     expect(screen.queryByRole('button', { name: 'Open Phone' })).toBeNull();
     expect(api.beginOutbound).toHaveBeenCalledTimes(1);
     expect(outcomeApi.logCallOutcome).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Log past activity' }));
     expect(await screen.findByRole('article', { name: 'Kevin Shin full page' })).toBeTruthy();
     expect(outcomeApi.logCallOutcome).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
     fireEvent.click(screen.getByRole('button', { name: 'No answer' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save & next' }));
     await waitFor(() => expect(outcomeApi.logCallOutcome).toHaveBeenCalledTimes(1));
@@ -428,7 +435,7 @@ describe('LeadInspectorProvider', () => {
     expect(screen.getByText(request.commandId)).toBeTruthy();
     expect(screen.getByText('Manual evidence: manual-activity. This does not verify the handoff.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Log past activity' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Call' }));
     expect(screen.queryByRole('button', { name: 'Open Phone' })).toBeNull();
     expect(api.beginOutbound).toHaveBeenCalledTimes(1);
     expect(outcomeApi.logCallOutcome).not.toHaveBeenCalled();
@@ -467,6 +474,7 @@ describe('LeadInspectorProvider', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Log past activity' }));
     expect(await screen.findByRole('article', { name: 'Kevin Shin full page' })).toBeTruthy();
     expect(outcomeApi.logCallOutcome).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
     fireEvent.click(screen.getByRole('button', { name: 'No answer' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save & next' }));
     await waitFor(() => expect(outcomeApi.logCallOutcome).toHaveBeenCalledTimes(1));
@@ -481,7 +489,7 @@ describe('LeadInspectorProvider', () => {
     render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
     fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
     await screen.findByRole('complementary', { name: 'Kevin Shin details' });
-    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Call' }));
     expect(screen.queryByRole('button', { name: 'Open Phone' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Log past activity' })).toBeTruthy();
     expect(api.beginOutbound).not.toHaveBeenCalled();
@@ -497,6 +505,7 @@ describe('LeadInspectorProvider', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Log past activity' }));
     expect(await screen.findByRole('article', { name: 'Kevin Shin full page' })).toBeTruthy();
     expect(outcomeApi.logCallOutcome).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
     fireEvent.click(screen.getByRole('button', { name: 'No answer' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save & next' }));
     await waitFor(() => expect(outcomeApi.logCallOutcome).toHaveBeenCalledWith(expect.objectContaining({ personId: kevin.personId, salesCycleId: kevin.salesCycleId, outboundCommandId: commandId, outcome: 'no_answer' })));
@@ -520,6 +529,7 @@ describe('LeadInspectorProvider', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
     await screen.findByText('Phone handoff refused.');
     fireEvent.click(screen.getByRole('button', { name: 'Log past activity' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
     fireEvent.click(screen.getByRole('button', { name: 'No answer' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save & next' }));
     await waitFor(() => expect(outcomeApi.logCallOutcome).toHaveBeenCalledTimes(1));
@@ -531,6 +541,7 @@ describe('LeadInspectorProvider', () => {
     render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
     fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
     await screen.findByRole('complementary', { name: 'Kevin Shin details' });
+    openDetails();
     fireEvent.click(screen.getByRole('button', { name: 'Text +14015550100' }));
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Private unsent Kevin draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'Open Dana Whitman' }));
@@ -538,6 +549,7 @@ describe('LeadInspectorProvider', () => {
     expect(screen.queryByLabelText('Message')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
     await screen.findByRole('complementary', { name: 'Kevin Shin details' });
+    openDetails();
     fireEvent.click(screen.getByRole('button', { name: 'Text +14015550100' }));
     expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('');
     expect(api.beginOutbound).not.toHaveBeenCalled();
@@ -563,6 +575,7 @@ describe('LeadInspectorProvider', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
     await screen.findByRole('complementary', { name: 'Kevin Shin details' });
 
+    openDetails();
     fireEvent.click(screen.getByRole('button', { name: 'Mark ready' }));
 
     await screen.findByRole('complementary', { name: 'Dana Whitman details' });
@@ -586,6 +599,7 @@ describe('LeadInspectorProvider', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
     await screen.findByRole('complementary', { name: 'Kevin Shin details' });
 
+    openDetails();
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm dismiss' }));
 
@@ -610,6 +624,7 @@ describe('LeadInspectorProvider', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Dana Whitman' }));
     await screen.findByRole('complementary', { name: 'Dana Whitman details' });
 
+    openDetails();
     fireEvent.click(screen.getByRole('button', { name: 'Mark ready' }));
 
     await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull());
@@ -626,6 +641,7 @@ describe('LeadInspectorProvider', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
     await screen.findByRole('complementary', { name: 'Kevin Shin details' });
 
+    openDetails();
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm dismiss' }));
 
@@ -640,9 +656,13 @@ it('injects owner-bound discovery evidence and ignores an older Person brief wit
   render(<LeadInspectorProvider api={api} discoveryApi={discoveryApi}><Harness /></LeadInspectorProvider>);
   fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
   await screen.findByRole('complementary', { name: 'Kevin Shin details' });
+  openDetails();
+  await waitFor(() => expect(discoveryApi.getBrief).toHaveBeenCalled());
   fireEvent.click(screen.getByRole('button', { name: 'Open Dana Whitman' }));
   const panel = await screen.findByRole('complementary', { name: 'Dana Whitman details' });
+  openDetails();
   expect(await within(panel).findByRole('region', { name: 'Discovery evidence for Dana Whitman' })).toBeTruthy();
+  openDetails();
   fireEvent.click(screen.getByRole('button', { name: 'Text +14015550100' }));
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Only in memory for Dana' } });
   await act(async () => resolve(discoveryBriefSchema.parse({ personId: kevin.personId, salesCycleId: kevin.salesCycleId, personName: kevin.personName, assessment: null, stale: false, latestOverride: null, pilotNextStep: null })));
@@ -690,7 +710,8 @@ it('logs an actual dated price communication into the real domain and separately
     const RealHarness = () => { const inspector = useLeadInspector(); return <button onClick={() => inspector.openFullPage(prospect.personId)}>Open real lead</button>; };
     render(<LeadInspectorProvider api={api} pastActivityApi={pastActivityApi}><RealHarness /></LeadInspectorProvider>);
     fireEvent.click(screen.getByRole('button', { name: 'Open real lead' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Log dated past activity' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Activity' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Log dated past activity' }));
     fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-09-01' } });
     fireEvent.change(screen.getByLabelText('What happened'), { target: { value: 'I stated the $50 pilot price on our call.' } });
     fireEvent.click(screen.getByRole('checkbox', { name: 'I stated the price' }));
@@ -718,6 +739,7 @@ it('loads injected discovery evidence under StrictMode', async () => {
   const discoveryApi: DiscoveryApi = { get: vi.fn(), begin: vi.fn(), override: vi.fn(), getBrief: vi.fn(async () => discoveryBriefSchema.parse({ personId: kevin.personId, salesCycleId: kevin.salesCycleId, personName: kevin.personName, assessment: null, stale: false, latestOverride: null, pilotNextStep: null })) };
   render(<StrictMode><LeadInspectorProvider api={api} discoveryApi={discoveryApi}><Harness /></LeadInspectorProvider></StrictMode>);
   fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+  fireEvent.click(await screen.findByText('Details', { selector: 'summary' }));
   expect(await screen.findByRole('region', { name: 'Discovery evidence for Kevin Shin' })).toBeTruthy();
 });
 it('preserves a successful log outside bounded history without inferring price activity IDs', async () => {
@@ -728,6 +750,7 @@ it('preserves a successful log outside bounded history without inferring price a
   const api = createApi([current]); const pastActivityApi = { logPastActivity: vi.fn(async () => receipt) };
   render(<LeadInspectorProvider api={api} pastActivityApi={pastActivityApi}><Harness /></LeadInspectorProvider>);
   fireEvent.click(screen.getByRole('button', { name: 'Open Kevin full page' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'Activity' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Log dated past activity' }));
   fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-08-01' } });
   fireEvent.change(screen.getByLabelText('What happened'), { target: { value: 'Actual older communication' } });
@@ -750,6 +773,7 @@ it('does not refresh a different Person or destroy their draft after late founde
   fireEvent.click(screen.getByRole('option', { name: /owned-price/ }));
   fireEvent.click(screen.getByRole('button', { name: 'Confirm Offered' }));
   fireEvent.click(screen.getByRole('button', { name: 'Open Dana Whitman' }));
+  fireEvent.click(await screen.findByText('Details', { selector: 'summary' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Text +14015550100' }));
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Keep Dana draft' } });
   await act(async () => resolve(receipt));
@@ -799,6 +823,24 @@ function assessedDiscoveryApi() {
   } satisfies DiscoveryApi;
 }
 
+it('does not close a newer contact when an earlier explicit dismissal resolves', async () => {
+  const api = createApi([kevin, dana]); let resolve!: (value: typeof receipt) => void;
+  api.dismissLead.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' })); await screen.findByRole('complementary', { name: 'Kevin Shin details' });
+  openDetails(); fireEvent.click(screen.getByRole('button', { name: 'Dismiss' })); fireEvent.click(screen.getByRole('button', { name: 'Confirm dismiss' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open Dana Whitman' })); await screen.findByRole('complementary', { name: 'Dana Whitman details' });
+  await act(async () => resolve(receipt)); expect(screen.getByTestId('selected-person').textContent).toBe('person-dana');
+});
+it('refreshes accepted email evidence only for the matching selected contact and cycle', async () => {
+  const api = createApi([kevin, dana]); render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Open Dana Whitman' })); await screen.findByRole('complementary', { name: 'Dana Whitman details' });
+  fireEvent(window, new CustomEvent('callie:email-sent', { detail: { personId: kevin.personId, salesCycleId: kevin.salesCycleId } }));
+  expect(api.get).toHaveBeenCalledOnce();
+  fireEvent(window, new CustomEvent('callie:email-sent', { detail: { personId: dana.personId, salesCycleId: dana.salesCycleId } }));
+  await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2)); expect(screen.getByRole('complementary', { name: 'Dana Whitman details' })).toBeTruthy();
+});
+
 it.each(['success', 'stale'] as const)('refreshes the mounted inspector override %s exactly once under StrictMode', async outcome => {
   vi.useFakeTimers(); const api = createApi([kevin]); const discoveryApi = assessedDiscoveryApi(); let settle!: () => void;
   discoveryApi.override.mockImplementation(() => new Promise((resolve, reject) => {
@@ -806,6 +848,7 @@ it.each(['success', 'stale'] as const)('refreshes the mounted inspector override
   }));
   const view = render(<StrictMode><LeadInspectorProvider api={api} discoveryApi={discoveryApi}><Harness /></LeadInspectorProvider></StrictMode>);
   fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' })); await act(async () => undefined);
+  openDetails(); await act(async () => undefined);
   expect(discoveryApi.getBrief).toHaveBeenCalledTimes(1);
   fireEvent.click(screen.getByRole('button', { name: 'Adjust discovery' }));
   fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Existing relationship' } });
@@ -830,6 +873,7 @@ it.each([
   const tree = (current: DiscoveryApi) => <StrictMode><LeadInspectorProvider api={api} discoveryApi={current}><Harness /></LeadInspectorProvider></StrictMode>;
   const view = render(tree(discoveryApi));
   fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' })); await act(async () => undefined);
+  openDetails(); await act(async () => undefined);
   fireEvent.click(screen.getByRole('button', { name: 'Adjust discovery' }));
   fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Original decision' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save discovery decision' }));
@@ -838,6 +882,7 @@ it.each([
   else if (change === 'close') fireEvent.click(screen.getByRole('button', { name: 'Close lead' }));
   else if (change === 'selection') {
     fireEvent.click(screen.getByRole('button', { name: 'Open Dana Whitman' })); await act(async () => undefined);
+    openDetails();
     fireEvent.click(screen.getByRole('button', { name: 'Text +14015550100' }));
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Keep Dana draft' } });
   } else {

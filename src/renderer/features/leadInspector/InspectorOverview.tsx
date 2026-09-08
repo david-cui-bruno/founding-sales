@@ -25,7 +25,7 @@ import {
   cloudSignalLabel,
   formatCloudChip,
 } from '../leads/cloudSignalLabels';
-import { ContactEvidenceCard } from './ContactEvidenceCard';
+import { ContactEvidenceCard, phoneActionHelp } from './ContactEvidenceCard';
 
 const OPT_OUT_REASON =
   'This person opted out. Outreach is permanently disabled.';
@@ -244,12 +244,13 @@ export function InspectorOverview({
   onDismissLead,
   onOverrideCloudScore,
   onFindContactInfo,
-  discoveryEvidence,
+  discoveryEvidence, outreachApi,
   capabilities, outboundPending = false, outboundBlocked = false, onLogPastActivity,
 }: InspectorOverviewProps) {
   const [selection, setSelection] = useState<{ channel: BeginOutboundRequest['channel']; contact: ContactMethod; personId: string; cycleId: string } | null>(null);
   const submitting = useRef(false);
   const [manualOpen, setManualOpen] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const contacts = [...detail.phones, ...detail.emails];
   const current = selection === null ? undefined : contacts.find((contact) => contact.id === selection.contact.id);
   const selectionCurrent = selection !== null && current !== undefined
@@ -276,9 +277,50 @@ export function InspectorOverview({
   };
   const context = detail.priorityContext;
   const { primary, alternatives } = selectPrimaryPhone(detail.phones);
+  const callHelp = primary === null ? 'No usable phone candidate on file.' : phoneActionHelp(detail, primary, 'call');
+  // A display preference only. Main still authorizes the exact contact at Send.
+  const primaryEmail = detail.emails.find(email => email.valid && email.validationState === 'valid'
+    && email.ownershipState !== 'conflicting_identity') ?? detail.emails[0] ?? null;
 
   return (
     <div className="lead-inspector__overview">
+      <section className="lead-inspector__portfolio" aria-label="Known portfolio">
+        <h3>Known portfolio</h3>
+        <p>{detail.portfolio?.summary ?? 'No supported portfolio context recorded. Holdings and unit counts are unknown.'}</p>
+        {detail.portfolio !== undefined && detail.portfolio.locations.length > 0 && <p>{detail.portfolio.locations.join(' · ')}</p>}
+        {detail.portfolio !== undefined && <ul>{detail.portfolio.facts.slice(0, 3).map(fact => <li key={fact.id}>{fact.text}</li>)}</ul>}
+      </section>
+      {detail.contactReason != null && <section aria-label="Reason to contact"><h3>Reason to contact</h3><p>{detail.contactReason.text}</p></section>}
+      {detail.optedOut && <p className="lead-inspector__opt-out-reason">{OPT_OUT_REASON}</p>}
+      <section className="lead-inspector__contact-actions" aria-label="Contact actions">
+        <div><Button variant="primary" disabled={callHelp !== null || outboundPending || outboundBlocked}
+          aria-describedby={callHelp === null ? undefined : 'primary-call-help'} onClick={() => { if (primary !== null) choose('call', primary); }}>Call</Button>
+          {primary !== null && <span>{primary.value}</span>}
+          {callHelp !== null && <p id="primary-call-help">{callHelp}</p>}
+        </div>
+        {primaryEmail !== null && <div><Button variant="quiet" disabled={detail.optedOut || outboundPending}
+          onClick={() => choose('email', primaryEmail)}>Email</Button><span>{primaryEmail.value}</span></div>}
+        {detail.emails.length === 0 && <p>No email contact on file.</p>}
+      </section>
+        {selectionCurrent && selection !== null && selection.channel !== 'call' && (
+          <OutboundComposer key={`${detail.personId}:${selection.channel}:${selection.contact.id}:${selection.contact.contactSnapshot}`}
+            api={outreachApi} personId={detail.personId} contactMethodId={selection.contact.id} disabled={detail.optedOut}
+            channel={selection.channel} recipientLabel={selection.contact.value} onClose={() => setSelection(null)} />
+        )}
+        {selectionCurrent && selection?.channel === 'call' && !outboundBlocked && (
+          <section className="outbound-confirmation" aria-label="Confirm Phone handoff">
+            <p>{selection.contact.value}</p>
+            <p>Continue in Phone. Callie cannot yet verify connection or recording.</p>
+            {canOpenPhone ? <Button disabled={outboundPending} onClick={confirm}>Open Phone</Button> : (
+              <p>Phone handoff unavailable. {capabilities?.phoneHandoff.reasonCode ?? 'Capability status could not be verified.'}</p>
+            )}
+            <Button variant="quiet" disabled={outboundPending} onClick={() => setSelection(null)}>Cancel call</Button>
+            {!canOpenPhone && onLogPastActivity !== undefined && <Button variant="quiet" onClick={() => onLogPastActivity()}>Log past activity</Button>}
+          </section>
+        )}
+      <details className="lead-inspector__diagnostics" open={diagnosticsOpen}>
+        <summary onClick={event => { event.preventDefault(); setDiagnosticsOpen(value => !value); }}>Details</summary>
+        {diagnosticsOpen && <div>
       {discoveryEvidence}
       {detail.stage === 'unreviewed' && (discoveryEvidence === undefined ? <ReviewSection
           detail={detail}
@@ -433,9 +475,6 @@ export function InspectorOverview({
 
       <section aria-label="Reach out" className="lead-inspector__outbound">
         <h3 className="lead-inspector__band-title">Reach out</h3>
-        {detail.optedOut && (
-          <p className="lead-inspector__opt-out-reason">{OPT_OUT_REASON}</p>
-        )}
         <ContactEvidenceCard
           key={detail.personId}
           detail={detail}
@@ -454,21 +493,6 @@ export function InspectorOverview({
             />
           ))}
         </div>
-        {selectionCurrent && selection !== null && selection.channel !== 'call' && (
-          <OutboundComposer key={`${detail.personId}:${selection.channel}:${selection.contact.id}:${selection.contact.contactSnapshot}`}
-            channel={selection.channel} recipientLabel={selection.contact.value} onClose={() => setSelection(null)} />
-        )}
-        {selectionCurrent && selection?.channel === 'call' && !outboundBlocked && (
-          <section className="outbound-confirmation" aria-label="Confirm Phone handoff">
-            <p>{selection.contact.value}</p>
-            <p>Continue in Phone. Callie cannot yet verify connection or recording.</p>
-            {canOpenPhone ? <Button disabled={outboundPending} onClick={confirm}>Open Phone</Button> : (
-              <p>Phone handoff unavailable. {capabilities?.phoneHandoff.reasonCode ?? 'Capability status could not be verified.'}</p>
-            )}
-            <Button variant="quiet" disabled={outboundPending} onClick={() => setSelection(null)}>Cancel call</Button>
-            {!canOpenPhone && onLogPastActivity !== undefined && <Button variant="quiet" onClick={() => onLogPastActivity()}>Log past activity</Button>}
-          </section>
-        )}
         {detail.cloudLinked && onFindContactInfo !== undefined && (
           <FindContactInfoSection
             detail={detail}
@@ -487,6 +511,8 @@ export function InspectorOverview({
           </ul>
         </section>
       )}
+        </div>}
+      </details>
     </div>
   );
 }

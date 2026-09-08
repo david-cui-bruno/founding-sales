@@ -55,6 +55,7 @@ export function InspectorHeader({
           {detail.optedOut ? 'Opted out' : humanizeEnumLabel(detail.stage)}
         </StatusPill>
         <p className="lead-inspector__meta">
+          <span>{detail.portfolio?.role === 'owner' ? 'Owner' : detail.portfolio?.role === 'manager' ? 'Property manager' : 'Role unconfirmed'} · </span>
           {detail.organizationLabel !== null && (
             <span>{detail.organizationLabel} · </span>
           )}
