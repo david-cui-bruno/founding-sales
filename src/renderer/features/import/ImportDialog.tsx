@@ -52,7 +52,12 @@ export function ImportDialog({ api, open, onClose, onCommitted }: ImportDialogPr
       const returnTarget = opener?.isConnected
         ? opener
         : opener?.id ? document.getElementById(opener.id) : null;
-      returnTarget?.focus();
+      // Palette/empty-state openers can disappear without an ID replacement.
+      // The active primary route is a connected, naturally focusable fallback.
+      const fallback = document.querySelector<HTMLAnchorElement>(
+        'nav[aria-label="Primary"] a[aria-current="page"]',
+      );
+      (returnTarget ?? fallback)?.focus();
     };
   }, [open]);
 

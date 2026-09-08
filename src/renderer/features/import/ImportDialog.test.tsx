@@ -120,6 +120,23 @@ describe('ImportDialog', () => {
     expect(document.activeElement).toBe(replacement);
   });
 
+  it.each([undefined, 'removed-import-trigger'])('returns focus to the current primary route when opener %s has no replacement', (id) => {
+    const api = createApi();
+    const onClose = vi.fn();
+    const onCommitted = vi.fn();
+    const navigation = <nav className="nav-rail" aria-label="Primary"><a href="#/leads" aria-current="page">Leads</a></nav>;
+    const workspace = render(<>{navigation}<button id={id}>Open import</button></>);
+    const opener = screen.getByRole('button', { name: 'Open import' });
+    opener.focus();
+    const view = render(<ImportDialog api={api} open onClose={onClose} onCommitted={onCommitted} />);
+
+    workspace.rerender(navigation);
+    expect(opener.isConnected).toBe(false);
+    view.rerender(<ImportDialog api={api} open={false} onClose={onClose} onCommitted={onCommitted} />);
+
+    expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Leads' }));
+  });
+
   it('requests controlled closing from the Close button', () => {
     const onClose = vi.fn();
     render(<ImportDialog api={createApi()} open onClose={onClose} onCommitted={vi.fn()} />);
