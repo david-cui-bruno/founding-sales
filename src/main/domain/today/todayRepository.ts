@@ -197,8 +197,8 @@ export class TodayRepository {
         SELECT MAX(promise.rowid) FROM activities promise
         WHERE promise.sales_cycle_id = cycle.id AND promise.person_id = cycle.person_id
           AND promise.callback_at IS NOT NULL AND promise.kind = 'call'
-          AND NOT EXISTS (SELECT 1 FROM activity_amendments amendment WHERE amendment.activity_id = promise.id)
-      ) AND NOT EXISTS (SELECT 1 FROM activities fulfilled WHERE fulfilled.sales_cycle_id = cycle.id
+      ) AND NOT EXISTS (SELECT 1 FROM activity_amendments amendment WHERE amendment.activity_id = callback.id)
+        AND NOT EXISTS (SELECT 1 FROM activities fulfilled WHERE fulfilled.sales_cycle_id = cycle.id
             AND fulfilled.person_id = cycle.person_id AND fulfilled.kind = 'call'
             AND fulfilled.direction = 'outbound' AND fulfilled.observed_outcome IS NOT NULL
             AND fulfilled.rowid > callback.rowid AND fulfilled.occurred_at >= callback.callback_at

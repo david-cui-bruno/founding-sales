@@ -260,6 +260,11 @@ describe('TodayRepository', () => {
     append('newer-rebook', '2026-09-03T14:00:00.000Z', '2026-09-02T15:00:00.000Z');
     append('newer-fulfilled', null, '2026-09-03T15:00:00.000Z');
     expect(repository.listOperationalCandidates()[0]).toMatchObject({ kind: 'candidate', candidate: { commitment: null } });
+    database.raw.prepare(`INSERT INTO activity_amendments
+      (id, activity_id, amendment_kind, correction_json, reason, created_at)
+      VALUES ('correct-rebooking', 'newer-rebook', 'correction', '{}', 'corrected callback', ?)`)
+      .run(DOMAIN_TIMESTAMP);
+    expect(repository.listOperationalCandidates()[0]).toMatchObject({ kind: 'candidate', candidate: { commitment: null } });
   });
 
   it('counts only valid same-day discretionary selected-call receipts once', () => {
