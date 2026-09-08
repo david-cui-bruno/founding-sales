@@ -242,12 +242,13 @@ describe('encrypted read-only discovery composition', () => {
   it('preserves Today calculation and transaction ownership, counts completed and queued dials exactly once', () => {
     for (let i = 0; i < 12; i++) assess(owner(`capacity-${i}`));
     const promise = seedProspect(f.database.raw, 'promise');
-    const due = insertOpenCycleWithAction({ database: f.database.raw, prefix: 'promise', prospect: promise });
+    const due = insertOpenCycleWithAction({ database: f.database.raw, prefix: 'promise', prospect: promise, stage: 'interviewed' });
     const prospect = seedProspect(f.database.raw, 'queued');
+    f.database.raw.prepare("UPDATE prospects SET segment='cold' WHERE id IN (?,?)").run(promise.prospectId,prospect.prospectId);
     const work = { cycleId: 'queued-cycle', actionId: 'queued-call-action' };
     f.services.unitOfWork.immediate(() => {
     f.database.raw.prepare("INSERT INTO sales_cycles (id, person_id, prospect_id, entry_source_event_id, stage, workflow_status, current_next_action_id, stage_entered_at, version, created_at, updated_at) VALUES (?, ?, ?, ?, 'ready', 'active', ?, ?, 1, ?, ?)").run(work.cycleId, prospect.personId, prospect.prospectId, prospect.sourceEventId, work.actionId, now, now, now);
-    f.database.raw.prepare("INSERT INTO next_actions (id, sales_cycle_id, action_type, channel, status, timezone, work_intent, created_at) VALUES (?, ?, 'call', 'phone', 'pending', 'America/New_York', 'discretionary_prospecting', ?)").run(work.actionId, work.cycleId, now);
+    f.database.raw.prepare("INSERT INTO next_actions (id, sales_cycle_id, action_type, channel, status, timezone, work_intent, created_at, due_at) VALUES (?, ?, 'call', 'phone', 'pending', 'America/New_York', 'discretionary_prospecting', ?, ?)").run(work.actionId, work.cycleId, now, now);
     });
     f.database.raw.prepare("INSERT INTO person_contact_methods (id, person_id, kind, normalized_value, validation_state, reachability, is_primary, created_at, updated_at) VALUES ('queued-phone', ?, 'phone', '+14015554001', 'valid', 'direct', 1, ?, ?)").run(prospect.personId, now, now);
     f.services.prioritization.recalculateProspect({ evaluationId: 'queued-eval', prospectId: prospect.prospectId, ruleVersionId: 'founder-priority-v1', evaluatedAt: now, expectedProjectionVersion: null });

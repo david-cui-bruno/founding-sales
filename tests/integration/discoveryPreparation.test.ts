@@ -77,7 +77,8 @@ describe('atomic selected discovery preparation', () => {
       expect(services.discovery.begin(input)).toEqual(first);
       expect(() => services.discovery.begin({ ...input, expectedFingerprint: 'f'.repeat(64) })).toThrow(/conflict/i);
       expect(() => services.discovery.begin({ ...input, commandId: randomUUID() })).toThrow();
-      expect(database.raw.prepare('SELECT count(*) AS n FROM next_actions').get()).toEqual({ n: 1 });
+      expect(database.raw.prepare("SELECT count(*) AS n FROM next_actions WHERE status='pending'").get()).toEqual({ n: 1 });
+      expect(database.raw.prepare("SELECT count(*) AS n FROM next_actions WHERE status='completed' AND action_type='review_lead'").get()).toEqual({ n: 1 });
     } finally { closeDatabase(database); }
   });
 

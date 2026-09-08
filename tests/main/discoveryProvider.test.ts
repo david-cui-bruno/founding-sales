@@ -28,6 +28,7 @@ const changes = () => f.database.raw.prepare('SELECT total_changes() AS n').get(
 describe('discovery provider over the real encrypted domain and IPC/preload', () => {
   it('reads unassessed and prepared owners without writes, qualification, enrichment or actions', async () => {
     const owner = seedDiscoveryOwner(f, { prefix: 'read-only', units: 10 });
+    const internalActions = f.database.raw.prepare('SELECT * FROM next_actions ORDER BY id').all();
     const api = bridge();
     const before = changes();
     expect(await api.get()).toMatchObject({ prepared: [], counts: { unassessed: 1 }, researchCapability: 'not_configured' });
@@ -40,7 +41,8 @@ describe('discovery provider over the real encrypted domain and IPC/preload', ()
     expect((await api.getBrief({ personId: owner.personId })).assessment?.axes.fit?.points).toBe(15);
     expect(changes()).toEqual(assessed);
     expect(f.services.identities.getCanonicalProspect(owner.personId)?.qualificationState).toBe('unreviewed');
-    for (const table of ['next_actions', 'activities', 'sourcing_enrichment_requests', 'discovery_preparations']) {
+    expect(f.database.raw.prepare('SELECT * FROM next_actions ORDER BY id').all()).toEqual(internalActions);
+    for (const table of ['activities', 'sourcing_enrichment_requests', 'discovery_preparations']) {
       expect(f.database.raw.prepare(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({ n: 0 });
     }
   });
@@ -62,7 +64,9 @@ describe('discovery provider over the real encrypted domain and IPC/preload', ()
     expect(changes()).toEqual(after);
     expect(f.services.identities.getCanonicalProspect(owner.personId)?.qualificationState).toBe('eligible');
     expect(f.services.identities.getCanonicalProspect(other.personId)?.qualificationState).toBe('unreviewed');
-    expect(f.database.raw.prepare('SELECT count(*) AS n FROM next_actions').get()).toEqual({ n: 1 });
+    expect(f.database.raw.prepare("SELECT count(*) AS n FROM next_actions WHERE status='pending'").get()).toEqual({ n: 2 });
+    expect(f.database.raw.prepare("SELECT count(*) AS n FROM next_actions WHERE sales_cycle_id=? AND status='pending'").get(owner.salesCycleId)).toEqual({ n: 1 });
+    expect(f.database.raw.prepare("SELECT action_type FROM next_actions WHERE sales_cycle_id=? AND status='pending'").get(other.salesCycleId)).toEqual({ action_type: 'review_lead' });
     expect(f.database.raw.prepare('SELECT count(*) AS n FROM activities').get()).toEqual({ n: 0 });
     expect(f.database.raw.prepare('SELECT count(*) AS n FROM sourcing_enrichment_requests').get()).toEqual({ n: 0 });
   });

@@ -102,6 +102,7 @@ describe('preload workflow bridge', () => {
       'leadDetail',
       'leads',
       'learnings',
+      'outreach',
       'pipeline',
       'recovery',
       'review',

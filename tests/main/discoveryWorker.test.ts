@@ -64,6 +64,7 @@ function jobs() { return f.database.raw.prepare('SELECT type, state, retry_count
 describe('bounded real-runtime local discovery worker', () => {
   it('assesses 125 genuine owners in bounded yielding turns, preserves unrelated jobs and never prepares outbound work', async () => {
     for (let i = 0; i < 125; i++) seedDiscoveryOwner(f, { prefix: `bounded-${i}`, units: 10 });
+    const internalActions = f.database.raw.prepare('SELECT * FROM next_actions ORDER BY id').all();
     f.services.jobs.enqueue({ id: 'unrelated', type: 'sourcing', payload: {}, at: DISCOVERY_NOW });
     const scan = vi.spyOn(f.services.discoveryRepository, 'listScanPage');
     const w = makeWorker(); const gate = vi.spyOn(runtime, 'withDomain');
@@ -78,7 +79,8 @@ describe('bounded real-runtime local discovery worker', () => {
     expect(count('discovery_current')).toBe(125);
     expect(f.services.jobs.get('unrelated')?.state).toBe('queued');
     expect(count('activities')).toBe(0);
-    expect(count('next_actions')).toBe(0);
+    expect(f.database.raw.prepare('SELECT * FROM next_actions ORDER BY id').all()).toEqual(internalActions);
+    expect(count('discovery_preparations')).toBe(0);
     expect(timer.nextDelay()).toBe(60_000);
     w.stop(); await w.idle(); const touches = gate.mock.calls.length;
     timer.late(); await w.idle(); expect(gate.mock.calls).toHaveLength(touches);

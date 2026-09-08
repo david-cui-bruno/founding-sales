@@ -215,7 +215,7 @@ function OpenLead({ personId }: { personId: string }) {
 async function showInspector(f: Fixture, personId: string) {
   render(createElement(LeadInspectorProvider, { api: f.api, children: createElement(OpenLead, { personId }) }));
   fireEvent.click(screen.getByRole('button', { name: `Inspect ${personId}` }));
-  await screen.findByRole('button', { name: 'Call +14015550100' });
+  await screen.findByRole('button', { name: 'Call' });
 }
 
 // Catches phantom communication writes on handoff, missing manual persistence,
@@ -233,7 +233,7 @@ describe('assembled truthful outbound workflow (encrypted source fixtures, not l
     expect(rows.cadence_enrollments).toHaveLength(1);
     expect(rows.cadence_action_components.length).toBeGreaterThan(0);
     await showInspector(f, identity.personId);
-    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Call' }));
     const confirmation = screen.getByRole('region', { name: 'Confirm Phone handoff' });
     expect(f.outbound).not.toHaveBeenCalled();
     expect(await facts(f)).toEqual([]);
@@ -284,7 +284,7 @@ describe('assembled truthful outbound workflow (encrypted source fixtures, not l
     expect(f.dispatch).toHaveBeenCalledTimes(1);
   });
 
-  it('edits and discards real memory-only email/text composers without outbound, storage or autosave', async () => {
+  it('keeps legacy no-outreach-API fixture composers unsent and memory-only', async () => {
     const f = await fixture();
     const request = await seed(f);
     const before = await projections(f, request.personId);
@@ -298,7 +298,7 @@ describe('assembled truthful outbound workflow (encrypted source fixtures, not l
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: clipboard } });
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     try {
-      fireEvent.click(screen.getByRole('button', { name: 'Email workflow@example.test' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Email' }));
       const email = screen.getByRole('region', { name: 'Unsent email draft' });
       fireEvent.change(within(email).getByLabelText('Subject'), { target: { value: 'Fixture subject' } });
       fireEvent.change(within(email).getByLabelText('Message'), { target: { value: 'Unsent fixture email' } });
@@ -308,10 +308,11 @@ describe('assembled truthful outbound workflow (encrypted source fixtures, not l
       fireEvent.click(within(email).getByRole('button', { name: 'Send' }));
       fireEvent.click(within(email).getByRole('button', { name: 'Close draft' }));
       expect(screen.queryByRole('region', { name: 'Unsent email draft' })).toBeNull();
-      fireEvent.click(screen.getByRole('button', { name: 'Email workflow@example.test' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Email' }));
       expect((screen.getByLabelText('Subject') as HTMLInputElement).value).toBe('');
       expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('');
       fireEvent.click(screen.getByRole('button', { name: 'Close draft' }));
+      if (!screen.queryByRole('button', { name: 'Text +14015550100' })) fireEvent.click(screen.getByText('Details', { exact: true }));
       fireEvent.click(screen.getByRole('button', { name: 'Text +14015550100' }));
       const text = screen.getByRole('region', { name: 'Unsent text draft' });
       fireEvent.change(within(text).getByLabelText('Message'), { target: { value: 'Unsent fixture text' } });
@@ -319,6 +320,7 @@ describe('assembled truthful outbound workflow (encrypted source fixtures, not l
       expect((within(text).getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
       fireEvent.click(within(text).getByRole('button', { name: 'Close draft' }));
+      if (!screen.queryByRole('button', { name: 'Text +14015550100' })) fireEvent.click(screen.getByText('Details', { exact: true }));
       fireEvent.click(screen.getByRole('button', { name: 'Text +14015550100' }));
       expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('');
       fireEvent.click(screen.getByRole('button', { name: 'Close draft' }));
@@ -415,7 +417,7 @@ describe('assembled truthful outbound workflow (encrypted source fixtures, not l
     await showInspector(reopened, request.personId);
     expect(await screen.findByText('Phone handoff unknown. Do not retry.')).toBeTruthy();
     expect(screen.getByText(request.commandId)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Call +14015550100' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Call' }));
     expect(screen.queryByRole('button', { name: 'Open Phone' })).toBeNull();
     expect(reopened.outbound).toHaveBeenCalledTimes(3); // Only the three explicit requests above.
     expect(reopened.dispatch).not.toHaveBeenCalled();
