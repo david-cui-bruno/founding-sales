@@ -117,7 +117,12 @@ export class TodayService {
         unreviewedBacklogCount += 1;
         continue;
       }
-      if (result.candidate.stage === 'unreviewed') unreviewedBacklogCount += 1;
+      if (result.candidate.stage === 'unreviewed') {
+        unreviewedBacklogCount += 1;
+        // Raw cold/hot discovery records are research backlog, not founder
+        // review homework. Real warm introductions are contact-first work.
+        if (result.candidate.segment !== 'warm') continue;
+      }
       const enriched = this.enrichCandidate(result.candidate, generatedAt, interval);
       if (enriched.kind === 'diagnostic') {
         diagnostics.push(enriched.diagnostic);
@@ -156,6 +161,11 @@ export class TodayService {
           relatedIds: [...permission.tombstoneIds],
         },
       };
+    }
+    if (candidate.segment === 'warm' && candidate.action.workIntent === 'internal_review') {
+      // Warm membership/ordering never consumes a priority projection. Keep
+      // the permission gate, but do not collect expensive unused inputs.
+      return { kind: 'candidate', candidate };
     }
     let snapshot: EffectivePrioritySnapshot | null = null;
     let priorityState: ParsedTodayCandidate['priorityState'] = 'missing';
