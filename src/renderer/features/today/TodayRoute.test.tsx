@@ -401,3 +401,14 @@ it('does not announce Queue done while discovery is still preparing', async () =
   await screen.findByText('Preparing your shortlist');
   expect(screen.queryByText(/Queue done/)).toBeNull();
 });
+
+it('shows the real current date badge and opens the primary brief without a call or mutation', async () => {
+  const api = fakeApi(); const open = vi.fn(); const fullPage = vi.fn();
+  render(<TodayRoute api={api} onOpenLead={open} onOpenLeadPage={fullPage} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Open brief' }));
+  expect(open).toHaveBeenCalledWith('person-p1'); expect(fullPage).not.toHaveBeenCalled();
+  expect(api.complete).not.toHaveBeenCalled(); expect(api.logPastActivity).not.toHaveBeenCalled();
+  const badge = screen.getByLabelText('Current date');
+  expect(badge.textContent).toContain(new Date().toLocaleDateString(undefined, { day: '2-digit' }));
+  expect(badge.getAttribute('datetime')).toBe(new Date().toLocaleDateString('en-CA'));
+});

@@ -25,6 +25,7 @@ it('renders evidence/questions without beginning and prepares only the explicitl
   api.get.mockResolvedValue(snapshot([brief(), brief('other')]));
   render(<DiscoverySection api={api} onOpenPerson={open} />);
   await screen.findByRole('heading', { name: 'Prepared conversations' });
+  fireEvent.click(screen.getByRole('button', { name: 'Research and diagnostics' }));
   expect(await screen.findByText('Additional research not configured')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'View evidence for Example Owner' }));
   expect(open).toHaveBeenCalledWith('owner-person'); expect(api.begin).not.toHaveBeenCalled();
@@ -188,6 +189,8 @@ it.each(['success', 'stale'] as const)('refreshes a mounted override %s without 
   const view = render(<StrictMode><DiscoverySection api={api} onOpenPerson={vi.fn()} /></StrictMode>);
   await act(async () => undefined);
   expect(api.get).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Research and diagnostics' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Review discovery decision for Example Owner' }));
   fireEvent.click(screen.getByRole('button', { name: 'Adjust discovery' }));
   fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Existing relationship' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save discovery decision' }));
@@ -212,6 +215,8 @@ it.each([
   const tree = (current: DiscoveryApi) => <StrictMode><DiscoverySection api={current} onOpenPerson={vi.fn()} /></StrictMode>;
   const view = render(tree(api));
   await act(async () => undefined);
+  fireEvent.click(screen.getByRole('button', { name: 'Research and diagnostics' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Review discovery decision for Example Owner' }));
   fireEvent.click(screen.getByRole('button', { name: 'Adjust discovery' }));
   fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Original decision' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save discovery decision' }));
@@ -235,4 +240,45 @@ it.each([
   expect(api.override).toHaveBeenCalledTimes(1); expect(replacement.override).not.toHaveBeenCalled();
   expect(api.begin).not.toHaveBeenCalled();
   view.unmount(); expect(vi.getTimerCount()).toBe(0);
+});
+
+it('keeps prepared evidence compact and reveals the complete shortlist on demand', async () => {
+  const api = apiFor(); const open = vi.fn();
+  const people = Array.from({ length: 6 }, (_, i) => ({ ...brief(`person-${i}`), personName: `Prospect ${i}` }));
+  api.get.mockResolvedValue(snapshot(people));
+  render(<DiscoverySection api={api} onOpenPerson={open} />);
+  await screen.findByRole('heading', { name: 'Prospect 0' });
+  expect(screen.queryByRole('region', { name: /Discovery evidence for/ })).toBeNull();
+  expect(screen.queryByRole('heading', { name: 'Prospect 3' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'View evidence for Prospect 0' }));
+  expect(open).toHaveBeenCalledWith('person-0'); expect(api.begin).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Show 3 more prepared people' }));
+  expect(screen.getAllByRole('heading', { level: 3 }).map(el => el.textContent)).toEqual(people.map(p => p.personName));
+  expect(screen.queryByText('Additional research not configured')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Research and diagnostics' }));
+  expect(screen.getByText('Additional research not configured')).toBeTruthy();
+});
+
+it('keeps failed loading actionable instead of claiming preparation is running', async () => {
+  const api = apiFor(); api.get.mockRejectedValue(new Error('offline'));
+  render(<DiscoverySection api={api} onOpenPerson={vi.fn()} />);
+  await screen.findByRole('alert');
+  expect(screen.queryByText('Preparing your shortlist')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Refresh shortlist' })).toBeTruthy();
+});
+it('does not claim paused work is preparing just because unassessed records remain', async () => {
+  const api = apiFor(); api.get.mockResolvedValue({ ...snapshot([]), processing: 'paused' });
+  render(<DiscoverySection api={api} onOpenPerson={vi.fn()} />);
+  await screen.findByText(/Preparation paused/);
+  expect(screen.queryByText('Preparing your shortlist')).toBeNull();
+});
+it('keeps read-only selection separate from the prepared contact destination', async () => {
+  const api = apiFor(); const detail = vi.fn(); const prepared = vi.fn();
+  render(<DiscoverySection api={api} onOpenPerson={detail} onPreparedPerson={prepared} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'View evidence for Example Owner' }));
+  expect(detail).toHaveBeenCalledWith('owner-person'); expect(prepared).not.toHaveBeenCalled();
+  expect(api.begin).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Contact options for Example Owner' }));
+  await waitFor(() => expect(prepared).toHaveBeenCalledWith('owner-person'));
+  expect(detail).toHaveBeenCalledTimes(1);
 });

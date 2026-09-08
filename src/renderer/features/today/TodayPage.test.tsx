@@ -112,7 +112,7 @@ describe('TodayPage', () => {
 
     const headings = screen
       .getAllByRole('heading', { level: 2 })
-      .map((node) => node.textContent);
+      .map((node) => node.textContent).filter(text => !text?.startsWith('Also today'));
     // Non-empty lanes render as sections (count included in the header).
     expect(headings).toEqual(['Due cadence2', 'P12']);
     // Empty lanes collapse into one muted line.
@@ -131,7 +131,7 @@ describe('TodayPage', () => {
     renderPage(shuffled);
     const headings = screen
       .getAllByRole('heading', { level: 2 })
-      .map((node) => node.textContent);
+      .map((node) => node.textContent).filter(text => !text?.startsWith('Also today'));
     expect(headings).toEqual(['Due cadence2', 'P12']);
   });
 
@@ -396,4 +396,45 @@ describe('TodayPage', () => {
       }),
     );
   });
+});
+
+it('opens the primary brief read-only while keeping explicit Call and hero actions', () => {
+  const onOpenLead = vi.fn(); const onCall = vi.fn();
+  renderPage(denseSnapshot, { onOpenLead, onCall });
+  const hero = screen.getByRole('group', { name: 'Next up: Person due_cadence 1' });
+  fireEvent.click(within(hero).getByRole('button', { name: 'Open brief' }));
+  expect(onOpenLead).toHaveBeenCalledWith('person-due_cadence-1');
+  expect(onCall).not.toHaveBeenCalled();
+  fireEvent.click(within(hero).getByRole('button', { name: 'More actions for Person due_cadence 1' }));
+  expect(screen.getByRole('menuitem', { name: 'Log past activity' })).toBeTruthy();
+});
+it('bounds Also today and reveals all queued records in order with keyboard continuity', () => {
+  renderPage(emptySnapshot({ lanes: [{ id: 'p1', items: Array.from({ length: 9 }, (_, i) => queueItem('p1', i + 1)), overflowCount: 12 }] }));
+  const also = screen.getByRole('region', { name: 'Also today' });
+  expect(within(also).getAllByRole('listitem')).toHaveLength(3);
+  expect(screen.queryByText('Person p1 5')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Show 5 more queued people' }));
+  expect(within(also).getAllByRole('listitem').map(row => row.getAttribute('data-cycle-id'))).toEqual([
+    'cycle-p1-2', 'cycle-p1-3', 'cycle-p1-4', 'cycle-p1-5', 'cycle-p1-6', 'cycle-p1-7', 'cycle-p1-8', 'cycle-p1-9',
+  ]);
+  const fourth = rowByCycleId('cycle-p1-4'); fourth.focus();
+  fireEvent.keyDown(fourth, { key: 'j' });
+  expect(document.activeElement).toBe(rowByCycleId('cycle-p1-5'));
+  expect(screen.getByText('12 more beyond today’s capacity')).toBeTruthy();
+});
+it('does not hide overflow-only lanes as an empty queue', () => {
+  renderPage(emptySnapshot({ lanes: [{ id: 'later', items: [], overflowCount: 27 }] }));
+  expect(screen.getByText('27 more beyond today’s capacity')).toBeTruthy();
+  expect(screen.queryByRole('region', { name: 'Queue done' })).toBeNull();
+});
+
+it('keeps undisplayed lanes out of Also today until their records are requested', () => {
+  renderPage(emptySnapshot({ lanes: [
+    { id: 'due_cadence', items: [1, 2, 3, 4].map(i => queueItem('due_cadence', i)), overflowCount: 0 },
+    { id: 'p1', items: [queueItem('p1', 1)], overflowCount: 0 },
+  ] }));
+  expect(screen.queryByRole('region', { name: /P1/ })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Show 1 more queued people' }));
+  expect(screen.getByRole('region', { name: /P1/ })).toBeTruthy();
+  expect(screen.getByText('Person p1 1')).toBeTruthy();
 });

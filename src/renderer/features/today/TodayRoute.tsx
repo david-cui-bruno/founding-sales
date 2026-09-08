@@ -274,11 +274,18 @@ export function TodayRoute({
 
   return (
     <div className="today-route" data-testid="today-route">
-      <PageHeader
-        title="Today"
-        description={todayDateLine()}
-        trailing={snapshot !== null ? <DialMeter snapshot={snapshot} /> : undefined}
-      />
+      <header className="today-header">
+        <div>
+          <p className="today-header__eyebrow">{todayDateLine()}</p>
+          <h1>Today</h1>
+          <p className="today-header__subtitle">Keep your commitments. Make room for a good conversation.</p>
+        </div>
+        <time className="today-header__date" aria-label="Current date" dateTime={new Date().toLocaleDateString('en-CA')}>
+          <span>{new Date().toLocaleDateString(undefined, { weekday: 'short' })}</span>
+          <strong>{new Date().toLocaleDateString(undefined, { day: '2-digit' })}</strong>
+        </time>
+      </header>
+      {snapshot !== null && <details className="today-header__progress"><summary>Today’s progress</summary><DialMeter snapshot={snapshot} /></details>}
       {/* Hidden manual refresh path: no visible control by design. */}
       <button
         type="button"
@@ -304,7 +311,8 @@ export function TodayRoute({
       {snapshot !== null && (
         <TodayPage
           discovery={discoveryApi === undefined ? undefined : <DiscoverySection api={discoveryApi}
-            onOpenPerson={onOpenLeadPage ?? (inspector === null ? onOpenLead : personId => inspector.openFullPage(personId, { refresh: true }))} />}
+            onOpenPerson={onOpenLead}
+            onPreparedPerson={onOpenLeadPage ?? (inspector === null ? onOpenLead : personId => inspector.openFullPage(personId, { refresh: true }))} />}
           snapshot={snapshot}
           busy={busy}
           onOpenLead={onOpenLead}

@@ -2,11 +2,12 @@ import type { RefCallback } from 'react';
 
 import type { TodayItem } from '../../../shared/contracts/todayContract';
 import { titleCaseDisplayName } from '../../../shared/displayText';
-import { Avatar } from '../../components/Avatar';
+import { RowContextMenu } from './RowContextMenu';
+import type { TodayQueueRowProps } from './TodayQueueRow';
 import { Button } from '../../components/Button';
 import { reasonLineFor } from './rowText';
 
-export type NextUpCardProps = {
+export type NextUpCardProps = Pick<TodayQueueRowProps, 'onSnoozeUntil' | 'onSkipToday' | 'onLogPastActivity' | 'onOpenInLeads'> & {
   item: TodayItem;
   busy: boolean;
   tabbable: boolean;
@@ -15,11 +16,8 @@ export type NextUpCardProps = {
   onCall(item: TodayItem): void;
 };
 
-/**
- * The "Next up" card (audit 4.3): the top queue item pulled out with an
- * avatar, 16/600 name, the reason line, and one Call button. Enter on the
- * focused card calls (handled by the page keymap). A bluebonnet hairline
- * marks it as the single act-here surface.
+/** The first real queue item, with a read-only brief and explicit workflow actions.
+ * Enter on the focused card retains the existing Call route shortcut.
  */
 export function NextUpCard({
   item,
@@ -28,6 +26,7 @@ export function NextUpCard({
   rowRef,
   onOpenLead,
   onCall,
+  onSnoozeUntil, onSkipToday, onLogPastActivity, onOpenInLeads,
 }: NextUpCardProps) {
   const name = titleCaseDisplayName(item.personName);
 
@@ -41,9 +40,8 @@ export function NextUpCard({
         role="group"
         aria-label={`Next up: ${name}`}
       >
-        <Avatar name={item.personName} />
         <div className="today-next-up__body">
-          <span className="today-next-up__eyebrow">Next up</span>
+          <span className="today-next-up__eyebrow">A good place to start</span>
           <div className="today-next-up__line1">
             <button
               type="button"
@@ -60,9 +58,12 @@ export function NextUpCard({
           <p className="today-next-up__reason">{reasonLineFor(item)}</p>
         </div>
         <div className="today-next-up__action">
-          <Button variant="primary" disabled={busy} onClick={() => onCall(item)}>
+          <Button variant="primary" onClick={() => onOpenLead(item.personId)}>Open brief</Button>
+          <Button variant="quiet" disabled={busy} onClick={() => onCall(item)}>
             Call
           </Button>
+          <RowContextMenu item={item} busy={busy} onCall={onCall} onSnoozeUntil={onSnoozeUntil}
+            onSkipToday={onSkipToday} onLogPastActivity={onLogPastActivity} onOpenInLeads={onOpenInLeads} />
         </div>
       </div>
     </section>

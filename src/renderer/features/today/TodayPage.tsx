@@ -72,6 +72,7 @@ export function TodayPage({
   const [collapsedLanes, setCollapsedLanes] = useState<ReadonlySet<TodayLaneId>>(
     () => new Set<TodayLaneId>(),
   );
+  const [showAll, setShowAll] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [logItem, setLogItem] = useState<TodayItem | null>(null);
 
@@ -80,7 +81,7 @@ export function TodayPage({
     [snapshot],
   );
 
-  const { nextUp, lanes, emptyLaneIds, focusOrder, itemByCycleId } = useMemo(() => {
+  const { nextUp, lanes, emptyLaneIds, hiddenCount, focusOrder, itemByCycleId } = useMemo(() => {
     const ordered: LaneComputed[] = TODAY_LANE_ORDER.map((laneId) => {
       const lane = laneById.get(laneId);
       const items = lane === undefined ? [] : [...lane.items];
@@ -99,13 +100,20 @@ export function TodayPage({
     const empties = ordered
       .filter((lane) => lane.totalCount === 0 && lane.overflowCount === 0)
       .map((lane) => lane.laneId);
+    const remainingCount = ordered.reduce((sum, lane) => sum + lane.rows.length, 0);
+    let slots = showAll ? remainingCount : 3;
+    const visible = ordered.map(lane => {
+      const rows = lane.rows.slice(0, slots);
+      slots -= rows.length;
+      return { ...lane, rows };
+    });
     const order: string[] = [];
     const byId = new Map<string, TodayItem>();
     if (hero !== null) {
       order.push(hero.salesCycleId);
       byId.set(hero.salesCycleId, hero);
     }
-    for (const lane of ordered) {
+    for (const lane of visible) {
       if (collapsedLanes.has(lane.laneId)) continue;
       for (const item of lane.rows) {
         order.push(item.salesCycleId);
@@ -114,12 +122,13 @@ export function TodayPage({
     }
     return {
       nextUp: hero,
-      lanes: ordered,
+      lanes: visible,
+      hiddenCount: Math.max(0, remainingCount - 3),
       emptyLaneIds: empties,
       focusOrder: order,
       itemByCycleId: byId,
     };
-  }, [laneById, collapsedLanes]);
+  }, [laneById, collapsedLanes, showAll]);
 
   const rowElements = useRef(new Map<string, HTMLElement>());
   const [focusedCycleId, setFocusedCycleId] = useState<string | null>(null);
@@ -181,6 +190,7 @@ export function TodayPage({
       const isEditable =
         target instanceof HTMLInputElement ||
         target instanceof HTMLTextAreaElement;
+      if (isEditable || target.closest('[role="dialog"], [role="menu"]') !== null) return;
       if (!isEditable && (event.key === 'r' || event.key === 'R')) {
         if (snapshot.unreviewedBacklogCount > 0) {
           event.preventDefault();
@@ -283,7 +293,7 @@ export function TodayPage({
           </p>
         </section>
       ) : (
-        <>
+        <div className="today__bento">
           {nextUp !== null && (
             <NextUpCard
               item={nextUp}
@@ -292,10 +302,16 @@ export function TodayPage({
               rowRef={registerRow(nextUp.salesCycleId)}
               onOpenLead={onOpenLead}
               onCall={onCall}
+              onSnoozeUntil={onSnoozeUntil}
+              onSkipToday={onSkipToday}
+              onLogPastActivity={setLogItem}
+              onOpenInLeads={onOpenInLeads}
             />
           )}
+          <section className="today__also" aria-label="Also today">
+          <h2 className="today__section-title">Also today <span>{lanes.reduce((sum, lane) => sum + lane.totalCount + lane.overflowCount, 0) - (nextUp === null ? 0 : 1)}</span></h2>
           <div className="today__lanes">
-            {lanes.map((lane) => (
+            {lanes.filter(lane => lane.rows.length > 0 || lane.overflowCount > 0).map((lane) => (
               <TodayLane
                 key={lane.laneId}
                 laneId={lane.laneId}
@@ -316,14 +332,18 @@ export function TodayPage({
               />
             ))}
           </div>
+          {hiddenCount > 0 && <button className="today__disclosure" type="button" aria-expanded={showAll}
+            onClick={() => setShowAll(value => !value)}>{showAll ? 'Show fewer queued people' : `Show ${hiddenCount} more queued people`}</button>}
+          {lanes.every(lane => lane.rows.length === 0 && lane.overflowCount === 0) && <p>No other commitments due.</p>}
           {emptyLaneIds.length > 0 && (
-            <p className="today__empty-lanes">
+            <details className="today__queue-details"><summary>Queue details</summary><p className="today__empty-lanes">
               {`Nothing in: ${emptyLaneIds
                 .map((laneId) => TODAY_LANE_META[laneId].heading)
                 .join(' · ')}`}
-            </p>
+            </p></details>
           )}
-        </>
+          </section>
+        </div>
       )}
       {discovery}
       {discovery === undefined ? <BacklogCard count={snapshot.unreviewedBacklogCount}
