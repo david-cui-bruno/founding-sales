@@ -47,7 +47,12 @@ export function ImportDialog({ api, open, onClose, onCommitted }: ImportDialogPr
     dialog.querySelector<HTMLButtonElement>('button')?.focus();
     return () => {
       dialog.close();
-      if (opener?.isConnected) opener.focus();
+      // Import refreshes can remount the originating route while this dialog
+      // stays open. Resolve its stable trigger ID instead of focusing stale DOM.
+      const returnTarget = opener?.isConnected
+        ? opener
+        : opener?.id ? document.getElementById(opener.id) : null;
+      returnTarget?.focus();
     };
   }, [open]);
 

@@ -100,6 +100,26 @@ describe('ImportDialog', () => {
     expect(document.activeElement).toBe(opener);
   });
 
+  it('restores focus to the connected replacement when a successful import remounts its opener', () => {
+    const api = createApi();
+    const onClose = vi.fn();
+    const onCommitted = vi.fn();
+    const trigger = render(<button key="before" id="leads-import-trigger">Import</button>);
+    const original = screen.getByRole('button', { name: 'Import' });
+    original.focus();
+    const view = render(<ImportDialog api={api} open onClose={onClose} onCommitted={onCommitted} />);
+
+    // A refreshed Leads route has a new DOM button with the same stable ID.
+    trigger.rerender(<button key="after" id="leads-import-trigger">Import</button>);
+    const replacement = screen.getByRole('button', { name: 'Import' });
+    expect(original.isConnected).toBe(false);
+    expect(replacement).not.toBe(original);
+    expect(replacement.isConnected).toBe(true);
+    view.rerender(<ImportDialog api={api} open={false} onClose={onClose} onCommitted={onCommitted} />);
+
+    expect(document.activeElement).toBe(replacement);
+  });
+
   it('requests controlled closing from the Close button', () => {
     const onClose = vi.fn();
     render(<ImportDialog api={createApi()} open onClose={onClose} onCommitted={vi.fn()} />);
