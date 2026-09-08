@@ -802,11 +802,11 @@ describe('FounderSalesDomain', () => {
         .toEqual(['gamma-cycle']);
       // The default seeded promise lands in Due cadence.
       expect(itemsByLane.get('due_cadence')!.map((item) => item.salesCycleId))
-        .toEqual([active.cycleId]);
-      // The unreviewed cycle is only a backlog count, never a row.
+        .toEqual([active.cycleId, backlog.cycleId]);
+      // Unreviewed has one dated internal slot and is also summarized as backlog.
       expect(snapshot.unreviewedBacklogCount).toBe(1);
       const allIds = snapshot.lanes.flatMap((lane) => lane.items.map((item) => item.salesCycleId));
-      expect(allIds).not.toContain(backlog.cycleId);
+      expect(allIds).toContain(backlog.cycleId);
       expect(new Set(allIds).size).toBe(allIds.length);
     });
 
@@ -817,6 +817,13 @@ describe('FounderSalesDomain', () => {
       expect(snapshot.lanes.length).toBeGreaterThan(0);
       const laneIds = snapshot.lanes.map((lane) => lane.id);
       expect(new Set(laneIds).size).toBe(laneIds.length);
+    });
+
+    it('reports queued discretionary calls, never historical receipt counts as daily progress', () => {
+      const build = services.today.build.bind(services.today);
+      vi.spyOn(services.today, 'build').mockImplementation(input => ({ ...build(input),
+        queuedDiscretionaryDialCount: 2, completedDiscretionaryDialCount: 7, dialCount: 9 }));
+      expect(domain.getToday().scheduledDials).toBe(2);
     });
 
     it('logs an internal note as a plain activity', () => {

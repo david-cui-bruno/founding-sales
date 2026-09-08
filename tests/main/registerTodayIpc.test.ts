@@ -71,6 +71,7 @@ const validSnapshot: TodaySnapshot = {
             dataConfidence: 8,
           },
           action: {
+            dueAt: null,
             id: 'action-1',
             type: 'call_lead',
             channel: 'call',

@@ -53,6 +53,7 @@ const leadRow: LeadRow = {
     dataConfidence: 8,
   },
   nextAction: {
+    dueAt: null,
     id: 'action-1',
     type: 'call_lead',
     channel: 'call',

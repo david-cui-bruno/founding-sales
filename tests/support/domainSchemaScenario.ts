@@ -67,6 +67,7 @@ const domainTables = [
 ] as const;
 
 const requiredIndexes = [
+  'next_actions_due_idx', 'email_draft_open_contact',
   'discovery_assessments_prospect_evaluated_idx', 'discovery_assessments_disposition_expires_idx',
   'discovery_overrides_owner_created_idx', 'jobs_type_state_created_idx',
   'activities_provider_idempotency_idx',
@@ -78,6 +79,10 @@ const requiredIndexes = [
 ] as const;
 
 const requiredTriggers = [
+  'initialize_next_action_due', 'initialize_unreviewed_action',
+  'protect_next_action_due', 'protect_operational_action_pointer',
+  'email_send_intents_no_update', 'email_send_intents_no_delete',
+  'email_send_results_no_update', 'email_send_results_no_delete',
   'discovery_assessments_owner_insert', 'discovery_current_owner_insert', 'discovery_current_owner_update',
   'discovery_overrides_owner_insert', 'discovery_preparations_owner_insert',
   'discovery_assessments_no_update', 'discovery_assessments_no_delete',
@@ -234,7 +239,7 @@ function runDatabaseScenario(
         expectedBusyTimeoutMs: 5000,
         expectedSchemaVersion: 19,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
-      }).schemaVersion, 17);
+      }).schemaVersion, 19);
       assert.deepEqual(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
@@ -260,6 +265,7 @@ function runDatabaseScenario(
         '0014OutboundJurisdictionClearance',
         '0015RecoveryMetadata',
         '0016ContactPresentationEvidence', '0017DiscoveryAssessments',
+        '0018PlaybookDueActions', '0019EmailDrafts',
       ]);
       assert.deepEqual(
         raw.prepare('PRAGMA table_info(person_contact_methods)').all().slice(19),

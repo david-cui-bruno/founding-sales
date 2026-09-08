@@ -257,7 +257,7 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'synchronize_person_opt_out',
   ]),
   // Generated from production migrations 0001 through 0019, including hardened 0015.
-  catalogSha256: 'cc8e972b0506a5ebda236facf155abe199e9204d4d01914732abd898e44fb458',
+  catalogSha256: 'a6108cfce2bc4242d0872e81cc2afc88634f6309c55605bd3fc995804fde9073',
 });
 
 export const DOMAIN_MIGRATION_LEDGER = Object.freeze([

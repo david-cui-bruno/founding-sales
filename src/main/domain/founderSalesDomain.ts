@@ -1267,7 +1267,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
     return todaySnapshotSchema.parse({
       lanes,
       dialBudget: capacity.dialBudget,
-      scheduledDials: queue.dialCount,
+      scheduledDials: queue.queuedDiscretionaryDialCount,
       conversationTarget: capacity.conversationTarget,
       reviewErrorCount: queue.diagnostics.length,
       unreviewedBacklogCount: queue.unreviewedBacklogCount,
