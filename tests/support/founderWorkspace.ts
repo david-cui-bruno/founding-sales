@@ -180,6 +180,10 @@ export async function launchSeededFounderWorkspace(): Promise<FounderWorkspace> 
     await page.getByRole('button', { name: 'Preview rows' }).click();
     await page.getByText('3 rows ready').waitFor();
     await page.getByRole('button', { name: 'Import 3 rows' }).click();
+    // Finish the real modal workflow before interacting with its inert backdrop.
+    const dialog = page.getByRole('dialog', { name: 'Import leads', exact: true });
+    await dialog.getByRole('button', { name: 'Done', exact: true }).click();
+    await dialog.waitFor({ state: 'hidden' });
     await page.getByRole('row', { name: /Kevin Shin/ }).waitFor();
     return workspace;
   } catch (error) {

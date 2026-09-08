@@ -36,6 +36,8 @@ test('CSV preview performs no writes; commit imports exactly once; relaunch pres
     await page.getByRole('button', { name: 'Preview rows' }).click();
     await expect(page.getByText('3 rows ready')).toBeVisible();
     await page.getByRole('button', { name: 'Import 3 rows' }).click();
+    await page.getByRole('dialog', { name: 'Import leads' }).getByRole('button', { name: 'Done', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Import leads' })).toHaveCount(0);
     await expect(page.getByRole('row', { name: /Kevin Shin/ })).toBeVisible();
     await expect(page.getByRole('row', { name: /Maya Ortiz/ })).toBeVisible();
     await expect(page.getByRole('row', { name: /Dana Reyes/ })).toBeVisible();

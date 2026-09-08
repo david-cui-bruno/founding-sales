@@ -67,8 +67,8 @@ test('all workspaces and shared overlays remain usable with Bauhaus light and da
     const { page } = workspace;
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
-    const done = page.getByRole('dialog').getByRole('button', { name: 'Done', exact: true });
-    if (await done.isVisible()) await done.click();
+    // Successful import remounts the Leads route. Done must focus its new trigger.
+    await expect(page.getByRole('button', { name: 'Import', exact: true })).toBeFocused();
 
     // Create genuine commitments using the retained manual-review UI and the
     // same public completion command used by the callback workflow fixture.

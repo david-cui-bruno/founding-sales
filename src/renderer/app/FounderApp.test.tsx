@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { discoveryBriefSchema, discoverySnapshotSchema, type DiscoveryApi } from '../../shared/contracts/discoveryContract';
 import type { PipelineSnapshot } from '../../shared/contracts/pipelineContract';
@@ -186,8 +186,23 @@ const readyHealth: FoundationHealth = {
   retry: vi.fn(),
 };
 
+// jsdom lacks the native dialog API. Model open state only here, as in
+// ImportDialog.test. Packaged bauhausWorkflow verifies real modal behavior.
+beforeEach(() => {
+  Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
+    configurable: true,
+    value(this: HTMLDialogElement) { this.setAttribute('open', ''); },
+  });
+  Object.defineProperty(HTMLDialogElement.prototype, 'close', {
+    configurable: true,
+    value(this: HTMLDialogElement) { this.removeAttribute('open'); },
+  });
+});
+
 afterEach(() => {
   cleanup();
+  Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal');
+  Reflect.deleteProperty(HTMLDialogElement.prototype, 'close');
   window.location.hash = '';
 });
 
@@ -231,7 +246,9 @@ describe('FounderApp', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: 'Import' }),
     );
-    expect(await screen.findByRole('dialog')).not.toBeNull();
+    const dialog = await screen.findByRole('dialog', { name: 'Import leads' });
+    expect(dialog.tagName).toBe('DIALOG');
+    expect(dialog.hasAttribute('open')).toBe(true);
   });
 
   it('routes Conversations and Learnings to their live workspaces', async () => {

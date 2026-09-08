@@ -122,6 +122,8 @@ test('a large import stays out of Today: unreviewed leads are backlog only and t
     await page.getByRole('button', { name: 'Preview rows' }).click();
     await expect(page.getByText('60 rows ready')).toBeVisible();
     await page.getByRole('button', { name: 'Import 60 rows' }).click();
+    await page.getByRole('dialog', { name: 'Import leads' }).getByRole('button', { name: 'Done', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Import leads' })).toHaveCount(0);
     // The grid is virtualized and priority-sorted with random-uuid ties, so
     // any specific row may sit outside the rendered window; the header count
     // is the deterministic import signal.

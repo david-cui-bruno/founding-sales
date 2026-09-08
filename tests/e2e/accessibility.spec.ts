@@ -39,7 +39,7 @@ test('seeded workspace routes have no serious or critical axe violations', async
           route,
           id: violation.id,
           impact: violation.impact,
-          nodes: violation.nodes.map((node) => node.target),
+          nodes: violation.nodes.map((node) => ({ target: node.target, failure: node.failureSummary })),
         })),
       ).toEqual([]);
     }
