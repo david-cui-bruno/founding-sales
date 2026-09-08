@@ -14,10 +14,10 @@ export const migration0019EmailDrafts = {
         body TEXT NOT NULL CHECK(length(body)<=20000), revision INTEGER NOT NULL CHECK(revision>0),
         status TEXT NOT NULL CHECK(status IN ('draft','sending','sent','unknown')),
         generation TEXT NOT NULL CHECK(generation IN ('none','model','edited')),
-        message_id TEXT, notice TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        message_id TEXT, notice TEXT, superseded_at TEXT CHECK(superseded_at IS NULL OR status='draft'), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
         FOREIGN KEY(sales_cycle_id,person_id) REFERENCES sales_cycles(id,person_id)
       )`,
-      `CREATE UNIQUE INDEX email_draft_open_contact ON email_drafts(sales_cycle_id,contact_method_id) WHERE status <> 'sent'`,
+      `CREATE UNIQUE INDEX email_draft_open_contact ON email_drafts(sales_cycle_id,contact_method_id) WHERE status <> 'sent' AND superseded_at IS NULL`,
       `CREATE TABLE email_send_intents (
         command_id TEXT PRIMARY KEY NOT NULL, draft_id TEXT NOT NULL REFERENCES email_drafts(id),
         draft_revision INTEGER NOT NULL CHECK(draft_revision>0), content_hash TEXT NOT NULL CHECK(length(content_hash)=64),

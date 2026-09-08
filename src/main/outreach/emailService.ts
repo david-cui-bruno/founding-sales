@@ -43,10 +43,17 @@ export function createEmailService(options:{databaseGate:EmailDatabaseGate;provi
       const opened=await gate.withDatabase(db=>db.raw.transaction(()=>{
         assertCurrent(startEpoch);
         const repo=new EmailRepository(db);const old=repo.findOpen(detail.salesCycleId,contact.id);
-        if(old){repo.bindAccount(old.id,setup.accountEmail,emailFooter(setup),now());return {draft:repo.get(old.id),created:false};}
         const current=db.raw.prepare(`SELECT id,person_id AS personId,kind,normalized_value AS normalizedValue,
           validation_state AS validationState,updated_at AS updatedAt FROM person_contact_methods WHERE id=?`).get(contact.id) as Parameters<typeof contactSnapshot>[0]|undefined;
         if(!current || current.personId!==detail.personId || current.kind!=='email' || current.normalizedValue!==contact.value)throw new Error('email_contact_changed');
+        if(old){
+          if(old.status!=='draft'||old.contactSnapshot===contactSnapshot(current)){
+            repo.bindAccount(old.id,setup.accountEmail,emailFooter(setup),now());return {draft:repo.get(old.id),created:false};
+          }
+          // Never silently retarget reviewed content. Preserve it and start a new draft
+          // only on this explicit open. Sending/unknown drafts cannot take this path.
+          repo.supersede(old.id,now());
+        }
         const draft=repo.create({id:id(),personId:detail.personId,salesCycleId:detail.salesCycleId,contactMethodId:contact.id,
           recipient:current.normalizedValue,contactSnapshot:contactSnapshot(current),accountEmail:setup.accountEmail,footer:emailFooter(setup),updatedAt:now()});
         return {draft,created:true};
@@ -67,7 +74,7 @@ export function createEmailService(options:{databaseGate:EmailDatabaseGate;provi
         await ready();assertCurrent(startEpoch);
         const draft=await gate.withDatabase(db=>new EmailRepository(db).get(request.draftId));
         assertCurrent(startEpoch);
-        if(draft.status!=='draft'||draft.revision!==request.expectedRevision)throw new Error('email_draft_changed');
+        if(draft.status!=='draft'||draft.supersededAt!==null||draft.revision!==request.expectedRevision)throw new Error('email_draft_changed');
         const detail=await gate.withDomain(domain=>domain.getLeadDetail({personId:draft.personId}));
         assertCurrent(startEpoch);
         if(detail.salesCycleId!==draft.salesCycleId)throw new Error('email_cycle_changed');
@@ -114,7 +121,7 @@ export function createEmailService(options:{databaseGate:EmailDatabaseGate;provi
         const reservation=services.unitOfWork.immediate(()=>{
           if(closed||epoch!==startEpoch||controller.signal.aborted)throw new Error('email_workspace_changed');
           const draft=repo.get(request.draftId);
-          if(draft.revision!==request.expectedRevision||draft.status!=='draft')throw new Error('email_draft_changed');
+          if(draft.revision!==request.expectedRevision||draft.status!=='draft'||draft.supersededAt!==null)throw new Error('email_draft_changed');
           if(draft.footer!==emailFooter(setup)||draft.accountEmail!==prepared.accountEmail||setup.accountEmail!==prepared.accountEmail)throw new Error('email_sender_changed');
           if(!draft.subject.trim()||!draft.body.trim())throw new Error('email_content_required');
           const createdAt=now(),cycle=authorizeEmail(db,services,draft,createdAt);

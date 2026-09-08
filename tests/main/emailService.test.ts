@@ -109,6 +109,28 @@ describe('durable explicit email using real encrypted SQLite', () => {
     await expect(service.sendDraft({draftId:draft.id,expectedRevision:draft.revision,commandId:randomUUID()})).rejects.toThrow();
     expect(sent).toHaveLength(0);
   });
+  it.each(['recipient','metadata'])('explicit reopen creates a fresh target after %s changes and preserves old edits',async change=>{
+    const draft=await readyDraft();
+    if(change==='recipient')db.raw.prepare('UPDATE person_contact_methods SET normalized_value=? WHERE id=?').run('new-owner@example.com',contactMethodId);
+    else db.raw.prepare('UPDATE person_contact_methods SET updated_at=? WHERE id=?').run('2026-09-08T15:01:00.000Z',contactMethodId);
+    const fresh=await service.openDraft({personId,contactMethodId});
+    expect(fresh.id).not.toBe(draft.id);expect(fresh.body).toBe('');
+    expect(fresh.recipient).toBe(change==='recipient'?'new-owner@example.com':draft.recipient);
+    expect(db.raw.prepare('SELECT body,recipient,superseded_at AS supersededAt FROM email_drafts WHERE id=?').get(draft.id))
+      .toEqual({body:draft.body,recipient:draft.recipient,supersededAt:now()});
+    await expect(service.saveDraft({draftId:draft.id,expectedRevision:draft.revision,subject:'stale',body:'stale'})).rejects.toThrow();
+    const edited=await service.saveDraft({draftId:fresh.id,expectedRevision:fresh.revision,subject:'Current review',body:'New reviewed email'});
+    expect((await service.sendDraft({draftId:edited.id,expectedRevision:edited.revision,commandId:randomUUID()})).status).toBe('sent');
+    expect(sent).toHaveLength(1);expect(sent[0].to).toBe(fresh.recipient);
+  });
+  it('a changed contact cannot bypass an unknown send by reopening',async()=>{
+    const draft=await readyDraft();outcome={status:'unknown',reasonCode:'network_uncertain'};
+    await service.sendDraft({draftId:draft.id,expectedRevision:draft.revision,commandId:randomUUID()});
+    db.raw.prepare('UPDATE person_contact_methods SET normalized_value=? WHERE id=?').run('changed@example.com',contactMethodId);
+    const reopened=await service.openDraft({personId,contactMethodId});
+    expect(reopened.id).toBe(draft.id);expect(reopened.status).toBe('unknown');
+    expect(sent).toHaveLength(1);expect(db.raw.prepare('SELECT COUNT(*) AS n FROM email_drafts').get()).toEqual({n:1});
+  });
   it('rejects sender or footer changes made after the reviewed preview',async()=>{
     const draft=await readyDraft();setup.postalAddress='Different office';
     await expect(service.sendDraft({draftId:draft.id,expectedRevision:draft.revision,commandId:randomUUID()})).rejects.toThrow();
