@@ -427,3 +427,172 @@ it.each(['dispatch', 'reconcile'] as const)('propagates tick cancellation into e
   expect(await f.execution.readDispatch('acct','action')).toEqual(before);
   expect(f.sends()).toBe(mode === 'dispatch' ? 0 : 1); expect(f.sentLookups()).toBe(0);
 });
+
+import { requestedCallFixture } from './requestedFollowupFixture';
+import { DynamoRequestedFollowupRepository } from '../src/requestedFollowupRepository';
+import { requestedFollowupDraftSchema } from '../../../../src/shared/contracts/requestedFollowupContract';
+import { requestedFollowupContextRevision } from '../../../../src/main/outreach/requestedFollowupService';
+import { loadRequestedApproval, requestedApprovalCommandSchema } from '../src/requestedFollowupApproval';
+async function capturedPhoneFixture() {
+  const f = await requestedCallFixture(); const drafts = new DynamoRequestedFollowupRepository(f.options);
+  const binding = { kind: 'owner_supplied' as const, email: 'requested@example.invalid', originalCall: f.originalCall };
+  const context = await drafts.readContext({ accountId: 'acct', originalCall: f.originalCall, recipientBinding: binding, expectedAccountVersion: 1, mode: 'manual' });
+  let draft = requestedFollowupDraftSchema.parse({ kind: 'requested_phone_followup', id: 'requested-draft', accountId: 'acct', revision: 1, mailboxSubject: context.mailbox.subject,
+    sender: context.mailbox.sender, recipient: binding.email, recipientBinding: binding, accountVersion: context.account.account.version, researchRevision: context.account.researchRevision,
+    contextRevision: 'a'.repeat(64), originalCall: f.originalCall, mailContext: context.mailContext, subject: 'Requested information', body: 'The exact information you requested on our call.', evidenceIds: [], generation: 'edited', updatedAt: f.options.clock.now() });
+  draft = { ...draft, contextRevision: requestedFollowupContextRevision(draft) }; await drafts.save(draft,null);
+  const command = requestedApprovalCommandSchema.parse({ commandId: randomUUID(), workspaceId: 'ws', accountId: 'acct', expectedAuthorityGeneration: 1, expectedVersion: await f.execution.currentVersion('acct'),
+    kind: 'approve-requested-followup', payload: { draft, expectedRemoteDraftRevision: 1, approvalId: 'requested-approval', actionId: 'requested-action', intentCommandId: randomUUID(),
+      request: { statement: 'recipient_requested_information_by_email', recipient: draft.recipient }, expiresAt: '2026-09-09T01:00:00.000Z' } });
+  const receipt = await f.owner.apply(command, `Bearer ${f.pairing.credential}`);
+  let sends = 0; let sentLookups = 0; let uncertain = false; const mime: string[] = [];
+  const fetch: typeof globalThis.fetch = async (resource, init) => {
+    init?.signal?.throwIfAborted(); const url = new URL(String(resource));
+    if (url.pathname.endsWith('/profile')) return Response.json({ historyId: '2' });
+    if (url.pathname.endsWith('/history')) return Response.json({ historyId: '2', history: [] });
+    if (url.pathname.endsWith('/messages') && url.searchParams.get('q')?.startsWith('in:sent')) { sentLookups++; return Response.json({ messages: [] }); }
+    if (url.pathname.endsWith('/messages')) return Response.json({ messages: [] });
+    if (url.pathname.endsWith('/messages/send')) { sends++; const wire = JSON.parse(String(init?.body));
+      expect(wire.threadId).toBeUndefined(); mime.push(Buffer.from(wire.raw,'base64url').toString());
+      if (uncertain) throw new Error('fictional lost first-email response');
+      return Response.json({ id: 'actual-first-email', threadId: 'actual-provider-thread' }); }
+    throw new Error('unexpected fictional requested HTTP');
+  };
+  return { ...f, drafts, draft, command, receipt, fetch, mime, sends: () => sends, sentLookups: () => sentLookups, uncertain: () => { uncertain = true; },
+    source: () => createSourceCoordinator({ auth: f.auth, authorization: f.authorization, fetch }) };
+}
+it('one captured phone-request approval expands full scope, survives AUTH changes and sends one actual threadless email', async () => {
+  const f = await capturedPhoneFixture();
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.record.state).toBe('pending_preflight');
+  expect(await f.execution.readDispatch('acct','requested-action')).toBeNull();
+  await f.source().tick(new AbortController().signal);
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.record.state).toBe('pending_preflight');
+  await f.source().tick(new AbortController().signal);
+  const captured = await loadRequestedApproval(f.store,f.command.commandId);
+  expect(captured?.record.state).toBe('materialized'); expect(captured?.receipt).toEqual(f.receipt); expect(f.sends()).toBe(1);
+  expect(f.mime[0]).not.toMatch(/^(In-Reply-To|References):/mi);
+  expect((await f.threads.scope('acct','mailbox'))?.participantAddresses).toEqual(['recipient@example.invalid','requested@example.invalid']);
+  expect(await f.store.list('MAIL_THREAD#')).toEqual([]);
+  await f.source().tick(new AbortController().signal); expect(f.sends()).toBe(1);
+});
+it('materialized unknown requested email resumes reconciliation without another capture or send', async () => {
+  const f = await capturedPhoneFixture(); f.uncertain();
+  await f.source().tick(new AbortController().signal); await f.source().tick(new AbortController().signal); await f.source().tick(new AbortController().signal);
+  expect(f.sends()).toBe(1); expect(f.sentLookups()).toBe(1);
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.record.state).toBe('materialized');
+  expect(await f.execution.readDispatch('acct','requested-action')).toMatchObject({ state: 'unknown' });
+});
+it.each(['before', 'after'] as const)('recovers requested scope crash %s admission with one immutable scope plan and no double revision', async crash => {
+  const f = await capturedPhoneFixture(); const send = f.dynamo.send.bind(f.dynamo); let interrupted = false; let admitted = 0;
+  f.dynamo.send = async command => {
+    const put = command instanceof TransactWriteItemsCommand ? command.input.TransactItems?.find(item => item.Put?.Item?.sk?.S === mailCursorKey('acct','mailbox'))?.Put : undefined;
+    const data = put?.Item?.data?.S ? JSON.parse(put.Item.data.S) : null;
+    const admission = data?.scope?.participantAddresses?.includes(f.draft.recipient) && data.poll === null;
+    if (admission && !interrupted) { interrupted = true;
+      if (crash === 'after') { const result = await send(command); admitted++; void result; }
+      throw new Error('fictional scope commit interruption');
+    }
+    const result = await send(command); if (admission) admitted++; return result;
+  };
+  await f.source().tick(new AbortController().signal);
+  const pending = (await loadRequestedApproval(f.store,f.command.commandId))!; const plan = pending.record.scopePlan;
+  expect(pending.record.state).toBe('pending_preflight'); expect(plan).not.toBeNull(); expect(f.sends()).toBe(0);
+  await f.source().tick(new AbortController().signal); await f.source().tick(new AbortController().signal);
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.record.scopePlan).toEqual(plan);
+  expect((await f.threads.scope('acct','mailbox'))?.revision).toBe(plan!.desiredScope.revision);
+  expect(admitted).toBe(1); expect(f.sends()).toBe(1);
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.receipt).toEqual(f.receipt);
+});
+it.each(['http', 'page'] as const)('automatically resumes a captured requested approval after incomplete %s preflight', async failure => {
+  const f = await capturedPhoneFixture(); let interrupted = false;
+  const fetch: typeof globalThis.fetch = async (resource, init) => {
+    const url = new URL(String(resource));
+    if (!interrupted && url.pathname.endsWith('/messages') && !url.searchParams.get('q')?.startsWith('in:sent')) {
+      interrupted = true; if (failure === 'http') throw new Error('fictional disconnected preflight');
+      return Response.json({ messages: [], nextPageToken: 'continue-real-checkpoint' });
+    }
+    return f.fetch(resource,init);
+  };
+  const source = () => createSourceCoordinator({ auth: f.auth,authorization: f.authorization,fetch });
+  await source().tick(new AbortController().signal);
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.record.state).toBe('pending_preflight'); expect(f.sends()).toBe(0);
+  await source().tick(new AbortController().signal);
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.record.state).toBe('materialized'); expect(f.sends()).toBe(1);
+});
+it('new real-shaped relevant inbound mail invalidates a captured first-email approval while retaining edited text', async () => {
+  const f = await capturedPhoneFixture();
+  const fetch: typeof globalThis.fetch = async (resource,init) => {
+    const url = new URL(String(resource));
+    if (url.pathname.endsWith('/messages')) return Response.json({ messages: [{ id: 'new-inbound' }] });
+    if (url.pathname.endsWith('/messages/new-inbound')) return Response.json({ id: 'new-inbound', threadId: 'observed-thread', internalDate: String(Date.parse(f.options.clock.now())),
+      payload: { mimeType: 'text/plain', headers: [{ name: 'From', value: f.draft.recipient }, { name: 'To', value: f.draft.sender }, { name: 'Subject', value: 'New question' }, { name: 'Message-ID', value: '<real-shaped-inbound@example.invalid>' }], body: { data: Buffer.from('I have another question about the details.').toString('base64url') } } });
+    return f.fetch(resource,init);
+  };
+  await createSourceCoordinator({ auth:f.auth,authorization:f.authorization,fetch }).tick(new AbortController().signal);
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.record.state).toBe('needs_review'); expect(f.sends()).toBe(0);
+  expect((await f.drafts.get('acct',f.draft.id))?.draft.body).toBe(f.draft.body);
+  expect(await f.execution.readDispatch('acct','requested-action')).toBeNull();
+});
+it.each(['content','expiry','revoke'] as const)('does not rebase captured requested approval after %s changes', async change => {
+  const f = await capturedPhoneFixture();
+  if (change === 'content') await f.drafts.save({ ...f.draft,revision:2,body:'A new unapproved edit.' },1);
+  if (change === 'expiry') f.advance('2026-09-09T01:00:00.000Z');
+  if (change === 'revoke') await f.execution.applyCommand({ commandId:'revoke-request',workspaceId:'ws',accountId:'acct',expectedAuthorityGeneration:1,expectedVersion:await f.execution.currentVersion('acct'),kind:'revoke',payload:{reason:'Owner revoked'} });
+  await f.source().tick(new AbortController().signal);
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.record.state).toBe(change === 'content' ? 'needs_review' : change === 'expiry' ? 'expired' : 'revoked');
+  expect(f.sends()).toBe(0); expect(await f.execution.readDispatch('acct','requested-action')).toBeNull();
+});
+it('reconciles ambiguous requested materialization commit from exact durable keys without repeating admissions', async () => {
+  const f = await capturedPhoneFixture(); const send = f.dynamo.send.bind(f.dynamo); let finalizations = 0;
+  f.dynamo.send = async command => {
+    const final = command instanceof TransactWriteItemsCommand && command.input.TransactItems?.some(item => item.Put?.Item?.sk?.S?.startsWith('REQUESTED_APPROVAL#')
+      && JSON.parse(item.Put.Item.data!.S!).state === 'materialized');
+    const result = await send(command);
+    if (final && ++finalizations === 1) throw new Error('fictional lost materialization acknowledgement');
+    return result;
+  };
+  await f.source().tick(new AbortController().signal); await f.source().tick(new AbortController().signal);
+  expect(finalizations).toBe(1); expect(f.sends()).toBe(1);
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.record.state).toBe('materialized');
+});
+it('a changed concurrent scope is never silently overwritten by the captured scope plan', async () => {
+  const f = await capturedPhoneFixture(); const send = f.dynamo.send.bind(f.dynamo); let raced = false;
+  f.dynamo.send = async command => {
+    const put = command instanceof TransactWriteItemsCommand ? command.input.TransactItems?.find(item => item.Put?.Item?.sk?.S === mailCursorKey('acct','mailbox'))?.Put : undefined;
+    const data = put?.Item?.data?.S ? JSON.parse(put.Item.data.S) : null;
+    if (!raced && data?.scope?.participantAddresses?.includes(f.draft.recipient) && data.poll === null) {
+      raced = true; const cursor = (await f.threads.cursorState('acct','mailbox'))!;
+      await f.threads.admitScope({ ...cursor.data.scope!,revision:cursor.data.scope!.revision+1,participantAddresses:[...cursor.data.scope!.participantAddresses,'competing@example.invalid'].sort() },cursor.rev);
+    }
+    return send(command);
+  };
+  await f.source().tick(new AbortController().signal); await f.source().tick(new AbortController().signal);
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.record.state).toBe('needs_review');
+  expect((await f.threads.scope('acct','mailbox'))?.participantAddresses).toEqual(['competing@example.invalid','recipient@example.invalid']);
+  expect(f.sends()).toBe(0);
+});
+it('paused requested capture resumes after configuration-only AUTH updates without another approval command', async () => {
+  const f = await capturedPhoneFixture(); const stored = (await f.store.get<unknown>(ownerSourceKey('acct')))!;
+  const config = ownerSourceConfigurationSchema.parse(stored.data);
+  await f.apply('configure-owner',{expectedConfigurationRevision:1,configuration:{...config,revision:2,state:'paused'},mailScope:null});
+  await f.source().tick(new AbortController().signal); expect(f.sends()).toBe(0);
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.record.state).toBe('pending_preflight');
+  await f.apply('configure-owner',{expectedConfigurationRevision:2,configuration:{...config,revision:3,state:'active'},mailScope:null});
+  await f.source().tick(new AbortController().signal); await f.source().tick(new AbortController().signal);
+  expect(f.sends()).toBe(1);
+  expect(await f.owner.apply(f.command,`Bearer ${f.pairing.credential}`)).toEqual(f.receipt);
+  const commands = await f.store.list<{command?:{kind:string}}>('COMMAND#');
+  expect(commands.filter(row=>row.stored.data.command?.kind==='approve-requested-followup')).toHaveLength(1);
+});
+it('two source instances materialize captured first-email approval once without duplicate transaction targets', async () => {
+  const f = await capturedPhoneFixture();
+  for (let turn=0;turn<3;turn++) await Promise.all([f.source().tick(new AbortController().signal),f.source().tick(new AbortController().signal)]);
+  expect(f.sends()).toBe(1);
+  const finalizations = f.dynamo.transactions.filter(tx=>tx.TransactItems?.some(item=>item.Put?.Item?.sk?.S?.startsWith('REQUESTED_APPROVAL#')&&JSON.parse(item.Put.Item.data!.S!).state==='materialized'));
+  expect(finalizations).toHaveLength(1);
+  const final = finalizations[0]!.TransactItems!;
+  expect(final.filter(item=>item.Put?.Item?.sk?.S==='AUTH#acct')).toHaveLength(1);
+  expect(final.filter(item=>item.Put?.Item?.sk?.S==='ACTION#acct#requested-action')).toHaveLength(1);
+  expect(final.some(item=>item.ConditionCheck?.Key?.sk?.S==='AUTH#acct')).toBe(false);
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.receipt).toEqual(f.receipt);
+});
