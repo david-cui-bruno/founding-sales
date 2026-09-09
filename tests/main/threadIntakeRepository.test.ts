@@ -1,3 +1,4 @@
+import { mailScopeFingerprint, createGmailThreadProvider } from '../../src/main/outreach/providers/gmailThreadProvider';
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { SqlThreadIntakeRepository } from '../../src/main/outreach/threadIntakeRepository';
@@ -106,8 +107,10 @@ it('SQL poll completeness is durable and newer failure cannot reuse prior ready 
     const account = f.repo.create({ commandId: randomUUID(), name: 'Fictional PM', domain: null });
     new DelegationRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } }).initializeLocalAuthority(account.id);
     const repo = new SqlThreadIntakeRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } });
+    const scope = { version: 1 as const, accountId: account.id, mailboxSubject: 'sub1', revision: 1, participantAddresses: ['pm@fixture.invalid'], knownThreadIds: ['t1'], since: PM_NOW, approvedAt: PM_NOW };
+    repo.admitScope(scope, null);
     repo.beginPoll(account.id, 'sub1', 'attempt1');
-    repo.applyPage({ ...page(account.id), threads: [] }, null, 'attempt1');
+    repo.applyPage({ ...page(account.id), nextCursor: { ...page(account.id).nextCursor, scopeRevision: 1, scopeFingerprint: mailScopeFingerprint(scope) }, threads: [] }, null, 'attempt1');
     const ready = repo.cursorState(account.id, 'sub1'); expect(ready?.data.poll?.status).toBe('complete');
     repo.beginPoll(account.id, 'sub1', 'attempt2'); repo.failPoll(account.id, 'sub1', 'attempt2');
     expect(repo.cursorState(account.id, 'sub1')?.data.poll?.status).toBe('failed');
@@ -133,5 +136,64 @@ it('does not persist suppression from a quoted optout footer across encrypted SQ
       expect(restored.getThread(account.id, 't1')?.thread.messages[0]?.bodyParts[0]?.text).toContain('> Reply unsubscribe');
       expect(restored.checkpoint(account.id, 'sub1')).toEqual(incoming.nextCursor);
     } finally { closeDatabase(reopened); }
+  } finally { f.close(); }
+});
+
+it('persists admitted full account scope and invalidates old poll across SQL restart', async () => {
+  const f = await createPmFixture();
+  try {
+    const account = f.repo.create({ commandId: randomUUID(), name: 'Fictional PM', domain: null });
+    new DelegationRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } }).initializeLocalAuthority(account.id);
+    const repo = new SqlThreadIntakeRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } });
+    expect(() => repo.beginPoll(account.id, 'sub1', 'missing')).toThrow('mail_scope_required');
+    const scope = { version: 1 as const, accountId: account.id, mailboxSubject: 'sub1', revision: 1, participantAddresses: ['a@fixture.invalid', 'b@fixture.invalid'], knownThreadIds: ['t1'], since: PM_NOW, approvedAt: PM_NOW };
+    repo.admitScope(scope, null); repo.beginPoll(account.id, 'sub1', 'old');
+    const before = repo.cursorState(account.id, 'sub1')!;
+    repo.admitScope({ ...scope, revision: 2, participantAddresses: ['a@fixture.invalid'] }, before.rev);
+    expect(() => repo.applyPage(page(account.id), null, 'old')).toThrow();
+    expect(() => repo.admitScope({ ...scope, revision: 3 }, before.rev)).toThrow('stale_mail_scope');
+    closeDatabase(f.db); const reopened = openDatabase({ path: f.db.path, key: createTestWorkspaceKey() });
+    try { expect(new SqlThreadIntakeRepository({ database: reopened, workspaceId: 'ws', clock: { now: () => PM_NOW } }).cursorState(account.id, 'sub1')?.data).toMatchObject({ scope: { revision: 2, participantAddresses: ['a@fixture.invalid'] }, checkpoint: null, poll: null }); }
+    finally { closeDatabase(reopened); }
+  } finally { f.close(); }
+});
+
+it('scope admission rollback cannot erase existing scope or pending crash evidence', async () => {
+  const f = await createPmFixture();
+  try {
+    const account = f.repo.create({ commandId: randomUUID(), name: 'Fictional PM', domain: null });
+    new DelegationRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } }).initializeLocalAuthority(account.id);
+    const repo = new SqlThreadIntakeRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } });
+    const scope = { version: 1 as const, accountId: account.id, mailboxSubject: 'sub1', revision: 1, participantAddresses: ['a@fixture.invalid'], knownThreadIds: ['t1'], since: PM_NOW, approvedAt: PM_NOW };
+    repo.admitScope(scope, null); repo.beginPoll(account.id, 'sub1', 'crashed'); const before = repo.cursorState(account.id, 'sub1')!;
+    f.db.raw.exec("CREATE TRIGGER fixture_scope_failure BEFORE UPDATE ON delegated_mail_cursors BEGIN SELECT RAISE(ABORT,'fixture crash'); END");
+    expect(() => repo.admitScope({ ...scope, revision: 2, participantAddresses: ['a@fixture.invalid', 'b@fixture.invalid'] }, before.rev)).toThrow('fixture crash');
+    expect(repo.cursorState(account.id, 'sub1')).toEqual(before);
+    closeDatabase(f.db); const reopened = openDatabase({ path: f.db.path, key: createTestWorkspaceKey() });
+    try { expect(new SqlThreadIntakeRepository({ database: reopened, workspaceId: 'ws', clock: { now: () => PM_NOW } }).cursorState(account.id, 'sub1')?.data.poll?.status).toBe('pending'); }
+    finally { closeDatabase(reopened); }
+  } finally { f.close(); }
+});
+
+import { googleScopes } from '../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
+it.each([
+  ['<p>What does <b>unsubscribe</b> mean?</p>', false],
+  ['<p>Reply <strong>unsubscribe</strong> to stop emails.</p>', false],
+  ['<p>Please <strong>stop emailing me</strong>.</p>', true],
+])('actual HTML intake creates suppression only for attributable authored intent: %s', async (html, suppressed) => {
+  const f = await createPmFixture();
+  try {
+    const account = f.repo.create({ commandId: randomUUID(), name: 'Fictional PM', domain: null });
+    new DelegationRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } }).initializeLocalAuthority(account.id);
+    const provider = createGmailThreadProvider({ now: () => Date.parse(PM_NOW), grant: { provider: 'google', subject: 'sub1', email: 'founder@fixture.invalid', owner: 'remote', purpose: 'permitted_correspondence', capabilities: ['relevant_read'], grantedScopes: [googleScopes.relevant_read] }, accessToken: 'fixture',
+      fetch: (async raw => { const url = new URL(String(raw));
+        if (url.pathname.endsWith('/profile')) return Response.json({ historyId: '11' });
+        if (url.pathname.endsWith('/messages')) return Response.json({ messages: [{ id: 'm1' }] });
+        return Response.json({ id: 'm1', threadId: 't1', internalDate: String(Date.parse(PM_NOW)), payload: { mimeType: 'text/html', headers: [{ name: 'From', value: 'pm@fixture.invalid' }, { name: 'To', value: 'founder@fixture.invalid' }, { name: 'Subject', value: 'reply' }], body: { data: Buffer.from(html).toString('base64url') } } });
+      }) as typeof fetch });
+    const incoming = await provider.readRelevantThreads({ accountId: account.id, knownThreadIds: ['t1'], participantAddresses: ['pm@fixture.invalid'], since: PM_NOW, cursor: null, maxPages: 1, maxBodyBytes: 1000 }, new AbortController().signal);
+    const repo = new SqlThreadIntakeRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } });
+    repo.applyPage(incoming, null); expect(repo.isSuppressed(account.id)).toBe(suppressed);
+    expect(f.db.raw.prepare('SELECT count(*) AS n FROM pm_account_suppression_tombstones').get()).toEqual({ n: suppressed ? 1 : 0 });
   } finally { f.close(); }
 });

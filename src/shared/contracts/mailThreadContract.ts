@@ -12,13 +12,21 @@ export type MailMessage = z.infer<typeof mailMessageSchema>;
 export const relevantThreadSchema = z.strictObject({ accountId: id, mailboxSubject: id, provider: z.literal('gmail'),
   providerThreadId: providerId, messages: z.array(mailMessageSchema).min(1).max(200) }).refine(t => t.messages.every(m => m.threadId === t.providerThreadId) && new Set(t.messages.map(m => m.id)).size === t.messages.length);
 export type RelevantThread = z.infer<typeof relevantThreadSchema>;
+const scopeRevision = z.number().int().positive().safe();
+const sortedUnique = (values: string[]) => values.every((value, index) => index === 0 || value > values[index - 1]!);
+export const mailAccountScopeSchema = z.strictObject({ version: z.literal(1), accountId: id, mailboxSubject: id,
+  revision: scopeRevision, participantAddresses: z.array(z.string().email().max(254).regex(/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+$/)).min(1).max(20).refine(sortedUnique),
+  knownThreadIds: z.array(providerId).max(100).refine(sortedUnique), since: z.string().datetime(), approvedAt: z.string().datetime() })
+  .refine(scope => scope.since <= scope.approvedAt);
+export type MailAccountScope = z.infer<typeof mailAccountScopeSchema>;
+const scopeBinding = { scopeRevision: scopeRevision.nullable().optional(), scopeFingerprint: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional() };
 /** Account-scoped checkpoints, never stored as synthetic provider threads. A scan
  * captures historyId BEFORE listing, so history replay covers arrivals during it. */
 export const mailCheckpointSchema = z.strictObject({ version: z.literal(1), accountId: id, mailboxSubject: id,
-  mode: z.enum(['scan', 'history']), historyId: z.string().regex(/^\d+$/), pageToken: z.string().min(1).max(2048).nullable(), since: z.string().datetime() });
+  ...scopeBinding, mode: z.enum(['scan', 'history']), historyId: z.string().regex(/^\d+$/), pageToken: z.string().min(1).max(2048).nullable(), since: z.string().datetime() });
 export type MailCheckpoint = z.infer<typeof mailCheckpointSchema>;
 export type ThreadReadRequest = { accountId: string; knownThreadIds: string[]; participantAddresses: string[]; since: string;
-  cursor: MailCheckpoint | null; maxPages: number; maxBodyBytes: number };
+  scope?: MailAccountScope; cursor: MailCheckpoint | null; maxPages: number; maxBodyBytes: number };
 export type ThreadPage = { threads: RelevantThread[]; nextCursor: MailCheckpoint; complete: boolean };
 export const replyClassificationSchema = z.strictObject({ kind: z.enum(['substantive', 'scheduling', 'mixed', 'opt_out', 'rejection', 'out_of_office', 'delivery_failure', 'ambiguous']),
   evidence: z.array(z.strictObject({ messageId: providerId, quote: z.string().max(500) })).min(1).max(10), requiresApproval: z.literal(true) });
@@ -44,11 +52,11 @@ export const accountReplyDraftSchema = z.strictObject({ id, accountId: id, threa
   generation: z.enum(['model', 'edited']), updatedAt: z.string().datetime() });
 export type AccountReplyDraft = z.infer<typeof accountReplyDraftSchema>;
 export type SavedReplyDraft = { draft: AccountReplyDraft; stale: boolean };
-export const mailPollStateSchema = z.strictObject({ attemptId: id, accountId: id, mailboxSubject: id,
+export const mailPollStateSchema = z.strictObject({ ...scopeBinding, attemptId: id, accountId: id, mailboxSubject: id,
   status: z.enum(['pending', 'complete', 'failed']), startedAt: z.string().datetime(), completedAt: z.string().datetime().nullable() })
   .refine(p => p.status === 'pending' ? p.completedAt === null : p.completedAt !== null && p.completedAt >= p.startedAt);
 export type MailPollState = z.infer<typeof mailPollStateSchema>;
-export const mailCursorEnvelopeSchema = z.strictObject({ checkpoint: mailCheckpointSchema.nullable(), poll: mailPollStateSchema.nullable() })
+export const mailCursorEnvelopeSchema = z.strictObject({ scope: mailAccountScopeSchema.nullable().default(null), checkpoint: mailCheckpointSchema.nullable(), poll: mailPollStateSchema.nullable() })
   .refine(e => (!e.poll || !e.checkpoint || e.poll.accountId === e.checkpoint.accountId && e.poll.mailboxSubject === e.checkpoint.mailboxSubject)
     && (e.poll?.status !== 'complete' || e.checkpoint?.mode === 'history' && e.checkpoint.pageToken === null));
 export type MailCursorEnvelope = z.infer<typeof mailCursorEnvelopeSchema>;

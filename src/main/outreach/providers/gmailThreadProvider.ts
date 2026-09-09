@@ -1,7 +1,12 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { mailCheckpointSchema, mailMessageSchema, type MailMessage, type ThreadPage, type ThreadReadRequest, type MailCheckpoint } from '../../../shared/contracts/mailThreadContract';
+import { mailAccountScopeSchema, type MailAccountScope, mailCheckpointSchema, mailMessageSchema, type MailMessage, type ThreadPage, type ThreadReadRequest, type MailCheckpoint } from '../../../shared/contracts/mailThreadContract';
 import { requireCapabilities, type GoogleGrant } from '../../../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
 import { requestJsonOnce } from './providerHttp';
+/** Stable canonical schema field order includes every approved scope field. */
+export function mailScopeFingerprint(input: MailAccountScope): string {
+  return createHash('sha256').update(JSON.stringify(mailAccountScopeSchema.parse(input))).digest('hex');
+}
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/);
 const listSchema = z.object({ messages: z.array(z.object({ id })).max(100).optional(), nextPageToken: z.string().max(2048).optional(), historyId: z.string().regex(/^\d+$/).optional(),
   history: z.array(z.object({ messagesAdded: z.array(z.object({ message: z.object({ id }) })).max(100).optional() })).max(100).optional() });
@@ -32,7 +37,7 @@ function inertHtml(html: string): string {
   for (const token of html.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '').split(/(<[^>]*>)/g)) {
     if (/^<blockquote\b/i.test(token)) { depth++; chunks.push('\n'); }
     else if (/^<\/blockquote\s*>/i.test(token)) { depth = Math.max(0, depth - 1); chunks.push('\n'); }
-    else if (/^</.test(token)) chunks.push('\n');
+    else if (/^</.test(token)) { if (/^<\/?(?:p|div|br|li|ul|ol|table|tr|td|h[1-6]|hr)\b/i.test(token)) chunks.push('\n'); }
     else chunks.push(token.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').split(/\r?\n/).map(line => depth ? `> ${line}` : line).join('\n'));
   }
   return chunks.join('');
@@ -68,8 +73,14 @@ export function createGmailThreadProvider(input: { grant: GoogleGrant; accessTok
     const contacts = z.array(z.string().email().regex(/^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9.-]+$/)).min(1).max(20).parse(request.participantAddresses).map(s => s.toLowerCase());
     z.string().datetime().parse(request.since);
     const boundedSince = new Date(Math.max(Date.parse(request.since), (input.now ?? Date.now)() - 30 * 86400000)).toISOString();
+    const scope = request.scope ? mailAccountScopeSchema.parse(request.scope) : null;
+    if (scope && (scope.accountId !== request.accountId || scope.mailboxSubject !== input.grant.subject
+      || JSON.stringify(scope.participantAddresses) !== JSON.stringify(contacts) || JSON.stringify(scope.knownThreadIds) !== JSON.stringify(request.knownThreadIds) || scope.since !== request.since)) throw new Error('mail_scope_mismatch');
+    if (scope && Date.parse(scope.since) < (input.now ?? Date.now)() - 30 * 86400000) throw new Error('mail_scope_window_invalid');
+    const binding = scope ? { scopeRevision: scope.revision, scopeFingerprint: mailScopeFingerprint(scope) } : {};
     let checkpoint = request.cursor ? mailCheckpointSchema.parse(request.cursor) : null;
     if (checkpoint && (checkpoint.accountId !== request.accountId || checkpoint.mailboxSubject !== input.grant.subject || checkpoint.since !== request.since)) throw new Error('mail_checkpoint_identity_conflict');
+    if (scope && checkpoint && (checkpoint.scopeRevision !== scope.revision || checkpoint.scopeFingerprint !== binding.scopeFingerprint)) checkpoint = null;
     const get = async (path: string, params: Record<string, string> = {}) => {
       const url = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/${path}`); url.search = new URLSearchParams(params).toString();
       return requestJsonOnce({ fetch: input.fetch, signal, url: url.href, maxBytes: 512000,
@@ -78,7 +89,7 @@ export function createGmailThreadProvider(input: { grant: GoogleGrant; accessTok
     const scan = async (): Promise<MailCheckpoint> => {
       const response = await get('profile'); if (response.status !== 200) throw new Error('gmail_read_rejected');
       const profile = z.object({ historyId: z.string().regex(/^\d+$/) }).parse(response.data);
-      return { version: 1, accountId: request.accountId, mailboxSubject: input.grant.subject, mode: 'scan', historyId: profile.historyId, pageToken: null, since: request.since };
+      return { ...binding, version: 1, accountId: request.accountId, mailboxSubject: input.grant.subject, mode: 'scan', historyId: profile.historyId, pageToken: null, since: request.since };
     };
     checkpoint ??= await scan();
     const threads: ThreadPage['threads'] = []; let complete = false;

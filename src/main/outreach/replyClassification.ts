@@ -9,8 +9,8 @@ export function classifyReply(message: MailMessage): ReplyClassification {
     if (!/^\s*>/.test(line)) lines.push(line);
   }
   const text = lines.join('\n').trim();
-  const directOptOut = text.split(/[.!\n]/).some(sentence => /^(?:please\s+)?(?:unsubscribe(?: me)?|stop (?:emailing|contacting|messaging) me|remove me(?: from (?:your|the) (?:list|mailing list))?|(?:do not|don't) contact me)\s*$/i.test(sentence.trim())
-    || /,\s*(?:but\s+)?(?:please\s+)?stop (?:emailing|contacting|messaging) me\s*$/i.test(sentence.trim()));
+  const directOptOut = text.replace(/\s+/g, ' ').split(/[.!]/).some(sentence => /^(?:please\s+)?(?:unsubscribe(?: me)?|stop (?:emailing|contacting|messaging) me|remove me(?: from (?:your|the) (?:list|mailing list))?|(?:do not|don't) contact me)\s*$/i.test(sentence.trim())
+    || /,\s*but\s+(?:please\s+)?stop (?:emailing|contacting|messaging) me\s*$/i.test(sentence.trim()));
   let kind: ReplyClassification['kind'] = 'ambiguous';
   if (!message.bodyParts.some(part => part.truncated) && directOptOut) kind = 'opt_out';
   else if (/\b(out of (?:the )?office|automatic reply|on vacation)\b/i.test(text)) kind = 'out_of_office';

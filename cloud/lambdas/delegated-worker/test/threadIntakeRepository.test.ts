@@ -1,3 +1,4 @@
+import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
 import { describe, expect, it } from 'vitest';
 import { DynamoThreadIntakeRepository } from '../src/threadIntakeRepository';
 import { createExecutionRepository } from '../src/executionRepository';
@@ -30,10 +31,11 @@ describe('real SDK Dynamo intake requests with offline conditional interpreter',
 });
 
 import { createMailPoller, MAIL_POLL_INTERVAL_MS } from '../src/mailPoller';
-it('poller authorizes before HTTP and persists intake before reporting dispatch readiness', async () => {
+it('poller uses admitted A+B scope despite caller A-only data and persists B optout before readiness', async () => {
   const dynamo = new ConditionalCommandHarness(); const options = { dynamo, tableName: 'fictional', workspaceId: 'ws', clock: { now: () => now } };
   await createExecutionRepository(options).seedLocalAuthority('a1');
   const store = new DynamoThreadIntakeRepository(options); const order: string[] = [];
+  await store.admitScope({ version: 1, accountId: 'a1', mailboxSubject: 'sub1', revision: 1, participantAddresses: ['a@fixture.invalid', 'b@fixture.invalid'], knownThreadIds: ['t1'], since: now, approvedAt: now }, null);
   const { RemoteGoogleAuthorization } = await import('../src/remoteGoogleAuthorization');
   const { WorkerAuth } = await import('../src/workerAuth');
   const { googleScopes } = await import('../src/googleGrantCapabilities');
@@ -50,11 +52,20 @@ it('poller authorizes before HTTP and persists intake before reporting dispatch 
   const begun = await google.beginGoogleGrant(pair.pairingId, ['relevant_read']);
   await google.completeGoogleGrant(new URL(begun.authorizationUrl).searchParams.get('state')!, 'fictional-code');
   const poller = createMailPoller({ store, authorization: { authorizedAccess: async (...args) => { order.push('authorized'); return google.authorizedAccess(...args); } },
-    fetch: (async (raw: string | URL | Request) => { order.push('http'); const url = new URL(String(raw)); return new Response(JSON.stringify(url.pathname.endsWith('/profile') ? { historyId: '11' } : {})); }) as typeof globalThis.fetch });
+    fetch: (async (raw: string | URL | Request) => {
+      order.push('http'); const url = new URL(String(raw));
+      if (url.pathname.endsWith('/profile')) return Response.json({ historyId: '11' });
+      if (url.pathname.endsWith('/history')) return Response.json({ historyId: '12' });
+      if (url.pathname.endsWith('/messages')) return Response.json({ messages: url.searchParams.get('q')?.includes('from:b@fixture.invalid') ? [{ id: 'b_reply' }] : [] });
+      return Response.json({ id: 'b_reply', threadId: 't1', internalDate: String(Date.parse(now)), payload: { mimeType: 'text/plain', headers: [{ name: 'From', value: 'b@fixture.invalid' }, { name: 'To', value: 'founder@fixture.invalid' }, { name: 'Subject', value: 'reply' }, { name: 'Message-ID', value: '<b@fixture.invalid>' }], body: { data: Buffer.from('Please stop emailing me').toString('base64url') } } });
+    }) as typeof globalThis.fetch });
   expect(MAIL_POLL_INTERVAL_MS).toBe(120000);
-  expect(await poller.pollOnce({ pairingId: pair.pairingId, accountId: 'a1', mailboxSubject: 'sub1', knownThreadIds: [], participantAddresses: ['pm@fixture.invalid'], since: now }, new AbortController().signal)).toMatchObject({ complete: false, suppressed: false });
+  const caller = { pairingId: pair.pairingId, accountId: 'a1', mailboxSubject: 'sub1', participantAddresses: ['a@fixture.invalid'], knownThreadIds: ['t1'], since: now };
+  expect(await poller.pollOnce(caller, new AbortController().signal)).toMatchObject({ complete: false, suppressed: true });
+  expect(await poller.pollOnce(caller, new AbortController().signal)).toMatchObject({ complete: true, suppressed: true });
+  expect((await store.cursorState('a1', 'sub1'))?.data.poll).toMatchObject({ scopeRevision: 1, scopeFingerprint: mailScopeFingerprint((await store.scope('a1', 'sub1'))!) });
   expect(order[0]).toBe('authorized');
-  expect(await store.checkpoint('a1', 'sub1')).toMatchObject({ historyId: '11' });
+  expect(await store.checkpoint('a1', 'sub1')).toMatchObject({ historyId: '12' });
 });
 it('two concurrent pollers cannot double-advance revision and an ambiguous commit remains durable', async () => {
   const dynamo = new ConditionalCommandHarness(); const options = { dynamo, tableName: 'fictional', workspaceId: 'ws', clock: { now: () => now } };
@@ -100,11 +111,13 @@ it('durable poll attempt invalidates previous success before authorization and f
   const dynamo = new ConditionalCommandHarness(); const options = { dynamo, tableName: 'fictional', workspaceId: 'ws', clock: { now: () => now } };
   await createExecutionRepository(options).seedLocalAuthority('a1');
   const store = new DynamoThreadIntakeRepository(options);
+  const scope = { version: 1 as const, accountId: 'a1', mailboxSubject: 'sub1', revision: 1, participantAddresses: ['pm@fixture.invalid'], knownThreadIds: ['t1'], since: now, approvedAt: now };
+  await store.admitScope(scope, null);
   await store.beginPoll('a1', 'sub1', 'attempt1');
-  await store.applyPage({ ...p, threads: [] }, null, 'attempt1');
+  await store.applyPage({ ...p, nextCursor: { ...p.nextCursor, scopeRevision: 1, scopeFingerprint: mailScopeFingerprint(scope) }, threads: [] }, null, 'attempt1');
   expect((await store.cursorState('a1', 'sub1'))?.data.poll?.status).toBe('complete');
   const poller = createMailPoller({ store, authorization: { authorizedAccess: async () => { throw new Error('grant_revoked'); } }, fetch: (async () => { throw new Error('no network'); }) as typeof globalThis.fetch });
-  await expect(poller.pollOnce({ pairingId: 'fixture', accountId: 'a1', mailboxSubject: 'sub1', knownThreadIds: [], participantAddresses: ['pm@fixture.invalid'], since: now }, new AbortController().signal)).rejects.toThrow('grant_revoked');
+  await expect(poller.pollOnce({ pairingId: 'fixture', accountId: 'a1', mailboxSubject: 'sub1' }, new AbortController().signal)).rejects.toThrow('grant_revoked');
   expect((await store.cursorState('a1', 'sub1'))?.data.poll?.status).toBe('failed');
   await expect(store.applyPage({ ...p, threads: [] }, p.nextCursor, 'attempt1')).rejects.toThrow('stale_poll_attempt');
 });
@@ -119,4 +132,31 @@ it('does not create durable Dynamo suppression from quoted intent while retainin
   expect(await restored.isSuppressed('a1')).toBe(false);
   expect((await restored.getThread('a1', 't1'))?.thread.messages[0]?.bodyParts[0]?.text).toContain('> Please stop');
   expect(await restored.checkpoint('a1', 'sub1')).toEqual(incoming.nextCursor);
+});
+
+it('requires admitted complete account scope and resets evidence on scope CAS changes', async () => {
+  const dynamo = new ConditionalCommandHarness(); const options = { dynamo, tableName: 'fictional', workspaceId: 'ws', clock: { now: () => now } };
+  await createExecutionRepository(options).seedLocalAuthority('a1'); const repo = new DynamoThreadIntakeRepository(options);
+  await expect(repo.beginPoll('a1', 'sub1', 'missing')).rejects.toThrow('mail_scope_required');
+  const scope = { version: 1 as const, accountId: 'a1', mailboxSubject: 'sub1', revision: 1, participantAddresses: ['a@fixture.invalid', 'b@fixture.invalid'], knownThreadIds: ['t1'], since: now, approvedAt: now };
+  await repo.admitScope(scope, null);
+  await repo.beginPoll('a1', 'sub1', 'old');
+  const before = await repo.cursorState('a1', 'sub1');
+  await repo.admitScope({ ...scope, revision: 2, participantAddresses: ['a@fixture.invalid', 'b@fixture.invalid', 'c@fixture.invalid'] }, before!.rev);
+  expect(await new DynamoThreadIntakeRepository(options).scope('a1', 'sub1')).toMatchObject({ revision: 2 });
+  expect((await repo.cursorState('a1', 'sub1'))?.data).toMatchObject({ checkpoint: null, poll: null });
+  await expect(repo.applyPage(p, null, 'old')).rejects.toThrow();
+  await expect(repo.admitScope({ ...scope, revision: 3 }, before!.rev)).rejects.toThrow('stale_mail_scope');
+});
+
+it('scope CAS has one winner and an ambiguous admission commit remains durably reset', async () => {
+  const dynamo = new ConditionalCommandHarness(); const options = { dynamo, tableName: 'fictional', workspaceId: 'ws', clock: { now: () => now } };
+  await createExecutionRepository(options).seedLocalAuthority('a1'); const repo = new DynamoThreadIntakeRepository(options);
+  const scope = { version: 1 as const, accountId: 'a1', mailboxSubject: 'sub1', revision: 1, participantAddresses: ['a@fixture.invalid'], knownThreadIds: ['t1'], since: now, approvedAt: now };
+  const results = await Promise.allSettled([repo.admitScope(scope, null), new DynamoThreadIntakeRepository(options).admitScope(scope, null)]);
+  expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+  await repo.beginPoll('a1', 'sub1', 'crashed'); const before = await repo.cursorState('a1', 'sub1');
+  dynamo.afterCommit = () => { dynamo.afterCommit = undefined; throw new Error('ambiguous_commit'); };
+  await expect(repo.admitScope({ ...scope, revision: 2, participantAddresses: ['a@fixture.invalid', 'b@fixture.invalid'] }, before!.rev)).rejects.toThrow('ambiguous_commit');
+  expect((await new DynamoThreadIntakeRepository(options).cursorState('a1', 'sub1'))?.data).toMatchObject({ scope: { revision: 2 }, checkpoint: null, poll: null });
 });

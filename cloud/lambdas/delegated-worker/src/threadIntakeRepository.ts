@@ -1,4 +1,5 @@
-import { mailCheckpointSchema, mailCursorEnvelopeSchema, type MailCursorEnvelope, threadProjectionSchema, accountReplyDraftSchema, type AccountReplyDraft, type SavedReplyDraft, type MailCheckpoint, type ThreadPage, type ThreadProjection, type IntakeResult } from '../../../../src/shared/contracts/mailThreadContract';
+import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
+import { mailAccountScopeSchema, type MailAccountScope, mailCheckpointSchema, mailCursorEnvelopeSchema, type MailCursorEnvelope, threadProjectionSchema, accountReplyDraftSchema, type AccountReplyDraft, type SavedReplyDraft, type MailCheckpoint, type ThreadPage, type ThreadProjection, type IntakeResult } from '../../../../src/shared/contracts/mailThreadContract';
 import { workerEventSchema } from '../../../../src/shared/contracts/delegationContract';
 import { mergeThread, validateReplyDraftSave } from '../../../../src/main/outreach/threadIntake';
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions } from './dynamoStore';
@@ -16,14 +17,31 @@ export class DynamoThreadIntakeRepository {
     const stored = await this.store.get<unknown>(mailCursorKey(accountId, subject));
     if (!stored) return null;
     const data = mailCursorEnvelopeSchema.parse(stored.data);
-    for (const identity of [data.checkpoint, data.poll]) if (identity && (identity.accountId !== accountId || identity.mailboxSubject !== subject)) throw new Error('mail_checkpoint_identity_conflict');
+    for (const identity of [data.scope, data.checkpoint, data.poll]) if (identity && (identity.accountId !== accountId || identity.mailboxSubject !== subject)) throw new Error('mail_checkpoint_identity_conflict');
     return { ...stored, data };
   }
   async checkpoint(accountId: string, subject: string): Promise<MailCheckpoint | null> { return (await this.cursorState(accountId, subject))?.data.checkpoint ?? null; }
+  async scope(accountId: string, subject: string): Promise<MailAccountScope | null> { return (await this.cursorState(accountId, subject))?.data.scope ?? null; }
+  /** Internal admission seam. C6 must authenticate and derive the complete account scope. */
+  async admitScope(input: MailAccountScope, expectedEnvelopeRevision: number | null): Promise<void> {
+    const scope = mailAccountScopeSchema.parse(input);
+    if (Date.parse(scope.since) < Date.parse(this.store.now()) - 30 * 86400000 || scope.approvedAt > this.store.now()) throw new Error('mail_scope_window_invalid');
+    const cursor = await this.cursorState(scope.accountId, scope.mailboxSubject);
+    if ((cursor?.rev ?? null) !== expectedEnvelopeRevision || scope.revision !== (cursor?.data.scope?.revision ?? 0) + 1) throw new Error('stale_mail_scope');
+    const key = executionAuthorityKey(scope.accountId); const authority = await this.store.get<unknown>(key);
+    if (!authority) throw new Error('authority_missing');
+    const current = authorityRecordSchema.parse(authority.data);
+    if (current.authority.accountId !== scope.accountId || !(current.authority.owner === 'local' && current.authority.state === 'local' || current.authority.owner === 'worker' && (current.authority.state === 'active' || current.authority.state === 'paused'))) throw new Error('mail_scope_wrong_owner');
+    await this.store.transact([this.store.check(key, authority.rev, executionAuthorityFields(current)),
+      this.store.put(mailCursorKey(scope.accountId, scope.mailboxSubject), { scope, checkpoint: null, poll: null }, cursor?.rev ?? null)]);
+  }
   async beginPoll(accountId: string, mailboxSubject: string, attemptId: string): Promise<void> {
     const current = await this.cursorState(accountId, mailboxSubject);
-    const data = mailCursorEnvelopeSchema.parse({ checkpoint: current?.data.checkpoint ?? null,
-      poll: { attemptId, accountId, mailboxSubject, status: 'pending', startedAt: this.store.now(), completedAt: null } });
+    const scope = current?.data.scope; if (!scope) throw new Error('mail_scope_required');
+    const binding = { scopeRevision: scope.revision, scopeFingerprint: mailScopeFingerprint(scope) };
+    const prior = current.data.checkpoint;
+    const data = mailCursorEnvelopeSchema.parse({ scope, checkpoint: prior?.scopeRevision === binding.scopeRevision && prior.scopeFingerprint === binding.scopeFingerprint ? prior : null,
+      poll: { ...binding, attemptId, accountId, mailboxSubject, status: 'pending', startedAt: this.store.now(), completedAt: null } });
     await this.store.transact([this.store.put(mailCursorKey(accountId, mailboxSubject), data, current?.rev ?? null)]);
   }
   async failPoll(accountId: string, mailboxSubject: string, attemptId: string): Promise<void> {
@@ -70,7 +88,10 @@ export class DynamoThreadIntakeRepository {
     const key = mailCursorKey(accountId, checkpoint.mailboxSubject); const cursor = await this.cursorState(accountId, checkpoint.mailboxSubject);
     if (attemptId && (cursor?.data.poll?.attemptId !== attemptId || cursor.data.poll.status !== 'pending')) throw new Error('stale_poll_attempt');
     if (JSON.stringify(cursor?.data.checkpoint ?? null) !== JSON.stringify(expected)) throw new Error('stale_mail_checkpoint');
-    const envelope = mailCursorEnvelopeSchema.parse({ checkpoint, poll: attemptId && cursor?.data.poll ? { ...cursor.data.poll,
+    const scope = cursor?.data.scope ?? null;
+    if (scope && (checkpoint.scopeRevision !== scope.revision || checkpoint.scopeFingerprint !== mailScopeFingerprint(scope) || checkpoint.since !== scope.since)) throw new Error('mail_scope_mismatch');
+    if (attemptId && (!scope || cursor?.data.poll?.scopeRevision !== scope.revision || cursor.data.poll.scopeFingerprint !== mailScopeFingerprint(scope))) throw new Error('mail_scope_mismatch');
+    const envelope = mailCursorEnvelopeSchema.parse({ scope, checkpoint, poll: attemptId && cursor?.data.poll ? { ...cursor.data.poll,
       status: page.complete ? 'complete' : 'pending', completedAt: page.complete ? this.store.now() : null } : null });
     const items = [this.store.put(key, envelope, cursor?.rev ?? null)]; const results: IntakeResult[] = [];
     const head = await this.store.get<{ sequence: number }>('EVENT_HEAD'); let sequence = integer.parse(head?.data.sequence ?? 0);

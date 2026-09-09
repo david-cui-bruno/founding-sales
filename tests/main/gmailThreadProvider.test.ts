@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createGmailThreadProvider } from '../../src/main/outreach/providers/gmailThreadProvider';
+import { createGmailThreadProvider, mailScopeFingerprint } from '../../src/main/outreach/providers/gmailThreadProvider';
 import { createPreparedGmailSender } from '../../src/main/outreach/providers/gmailProvider';
 import { googleScopes, type GoogleGrant } from '../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
 const grant: GoogleGrant = { provider: 'google', subject: 'subject-1', email: 'founder@fixture.invalid', owner: 'remote', purpose: 'permitted_correspondence', capabilities: ['relevant_read'], grantedScopes: [googleScopes.relevant_read] };
@@ -112,7 +112,8 @@ it('folds long ASCII References within serialized byte bounds and rejects multib
   expect(await make().sendOnce(email)).toMatchObject({ status: 'accepted' });
   for (const line of (sent[0]?.split('\r\n\r\n')[0] ?? '').split('\r\n')) expect(Buffer.byteLength(line)).toBeLessThanOrEqual(998);
   const unicode = Array.from({ length: 4 }, (_, i) => `<${i}${'é'.repeat(175)}@fixture.invalid>`);
-  expect(await make().sendOnce({ ...email, inReplyTo: unicode[0]!, references: unicode })).toMatchObject({ status: 'not_sent' });
+  const invalid = { ...email, inReplyTo: unicode[0]!, references: unicode };
+  expect(await make().sendOnce(invalid)).toMatchObject({ status: 'not_sent' });
   expect(sent).toHaveLength(1);
 });
 
@@ -142,4 +143,29 @@ it('retains HTML quote evidence without attributing its optout footer to the cur
   const page = await createGmailThreadProvider({ now: () => Date.parse('2026-09-08T12:00:00.000Z'), grant, accessToken: 'fixture', fetch }).readRelevantThreads(request, new AbortController().signal);
   expect(JSON.stringify(page)).toContain('Reply unsubscribe to stop emails.');
   expect(mergeThread(null, page.threads[0]!).signals[0]?.kind).toBe('scheduling');
+});
+
+it('preserves inline HTML continuity so an optout mention cannot become authored intent', async () => {
+  const fetch = transport(url => {
+    if (url.pathname.endsWith('/profile')) return { historyId: '10' };
+    if (url.pathname.endsWith('/messages')) return { messages: [{ id: 'm1' }] };
+    const m = metadata('m1'); return url.searchParams.get('format') !== 'full' ? m : { ...m, payload: { ...m.payload, mimeType: 'text/html', body: { data: Buffer.from('<p>What does <b>unsubscribe</b> mean?</p>').toString('base64url') } } };
+  });
+  const page = await createGmailThreadProvider({ now: () => Date.parse('2026-09-08T12:00:00.000Z'), grant, accessToken: 'fixture', fetch }).readRelevantThreads(request, new AbortController().signal);
+  expect(mergeThread(null, page.threads[0]!).signals[0]?.kind).toBe('substantive');
+  expect(page.threads[0]?.messages[0]?.bodyParts[0]?.text).toContain('What does unsubscribe mean?');
+});
+
+import { mailAccountScopeSchema } from '../../src/shared/contracts/mailThreadContract';
+it('fingerprints every admitted scope field and resets mismatched history to bounded scan', async () => {
+  const scope = mailAccountScopeSchema.parse({ version: 1, accountId: request.accountId, mailboxSubject: grant.subject, revision: 1, participantAddresses: request.participantAddresses, knownThreadIds: request.knownThreadIds, since: request.since, approvedAt: '2026-09-08T12:00:00.000Z' });
+  for (const change of [{ accountId: 'other' }, { mailboxSubject: 'other' }, { revision: 2 }, { participantAddresses: ['other@fixture.invalid'] }, { knownThreadIds: ['other'] }, { since: '2026-09-02T00:00:00.000Z' }, { approvedAt: '2026-09-08T13:00:00.000Z' }]) expect(mailScopeFingerprint({ ...scope, ...change })).not.toBe(mailScopeFingerprint(scope));
+  expect(mailAccountScopeSchema.safeParse({ ...scope, participantAddresses: ['z@fixture.invalid', 'a@fixture.invalid'] }).success).toBe(false);
+  const paths: string[] = [];
+  const fetch = transport(url => { paths.push(url.pathname); return url.pathname.endsWith('/profile') ? { historyId: '20' } : {}; });
+  const provider = createGmailThreadProvider({ now: () => Date.parse(scope.approvedAt), grant, accessToken: 'fixture', fetch });
+  const page = await provider.readRelevantThreads({ ...request, scope, cursor: { version: 1, accountId: scope.accountId, mailboxSubject: scope.mailboxSubject, mode: 'history', historyId: '10', pageToken: null, since: scope.since, scopeRevision: 1, scopeFingerprint: 'a'.repeat(64) } }, new AbortController().signal);
+  expect(paths[0]).toContain('/profile'); expect(paths.join()).not.toContain('/history');
+  expect(page.complete).toBe(false); expect(page.nextCursor.scopeFingerprint).toBe(mailScopeFingerprint(scope));
+  await expect(provider.readRelevantThreads({ ...request, scope: { ...scope, since: '2020-01-01T00:00:00.000Z' }, since: '2020-01-01T00:00:00.000Z' }, new AbortController().signal)).rejects.toThrow('mail_scope_window_invalid');
 });
