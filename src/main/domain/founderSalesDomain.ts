@@ -2913,11 +2913,14 @@ export class FounderSalesDomain implements OutboundDomainPort {
         input.command, matchedPersonId,
       );
     if (result.disposition === 'created') {
-      // A replayed cloud event returns the stored receipt with its original
-      // 'created' disposition; the cycle from the first import already exists.
-      const cycleExists = this.database.raw.prepare(
-        'SELECT 1 FROM sales_cycles WHERE entry_source_event_id = ?',
-      ).get(result.sourceEventId) !== undefined;
+      // Migration can rebind a 'created' receipt to a canonical pair while
+      // removing its duplicate cycle. Any lifecycle for that pair, including
+      // closed or parked history, already fulfills the initial-cycle import.
+      const cycleExists = this.database.raw.prepare(`
+        SELECT 1 FROM sales_cycles
+        WHERE entry_source_event_id = ? OR (person_id = ? AND prospect_id = ?)
+        LIMIT 1
+      `).get(result.sourceEventId, result.personId, result.prospectId) !== undefined;
       if (!cycleExists) {
         this.services.lifecycle.createUnreviewedCycle({
           personId: result.personId,
