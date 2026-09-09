@@ -1,3 +1,4 @@
+import { meetingOutcomePayloadSchema } from './meetingContract';
 import { z } from 'zod';
 import { threadObservedPayloadSchema } from './mailThreadContract';
 import { accountIdSchema, accountInstantSchema, accountSchema, accountEvidenceBatchSchema } from './accountContract';
@@ -37,6 +38,7 @@ export const delegationCommandSchema = z.discriminatedUnion('kind', [
 export type DelegationCommand = Readonly<z.infer<typeof delegationCommandSchema>>;
 const eventBase = { id, workspaceId: id, accountId: id, authorityGeneration: revision, aggregateVersion: revision.min(1) };
 export const workerEventSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ ...eventBase, kind: z.literal('meeting.outcome'), payload: meetingOutcomePayloadSchema }),
   z.strictObject({ ...eventBase, kind: z.literal('thread.observed'), payload: threadObservedPayloadSchema }),
   z.strictObject({ ...eventBase, kind: z.literal('manual.outcome'), payload: manualOutcomeSchema, receipt: commandReceiptSchema }),
   z.strictObject({ ...eventBase, kind: z.literal('authority.changed'), payload: z.strictObject({ authority: authorityStateSchema, receipt: commandReceiptSchema }) }),

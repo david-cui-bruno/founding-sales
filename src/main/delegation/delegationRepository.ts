@@ -7,6 +7,7 @@ import { accountIdSchema, accountInstantSchema } from '../../shared/contracts/ac
 import { approvalSnapshotSchema, authorityStateSchema, commandReceiptSchema, delegationCommandSchema, workerEventSchema,
   type ApprovalSnapshot, type AuthorityState, type CommandReceipt, type DelegationCommand, type WorkerEvent } from '../../shared/contracts/delegationContract';
 
+import { meetingOutcomePayloadSchema } from '../../shared/contracts/meetingContract';
 import { threadProjectionSchema } from '../../shared/contracts/mailThreadContract';
 
 type AuthorityRow = { account_id: string; workspace_id: string; owner: 'local' | 'worker'; generation: number;
@@ -116,6 +117,7 @@ export class DelegationRepository {
         this.raw.prepare('UPDATE delegated_authorities SET aggregate_version=?,updated_at=? WHERE account_id=? AND workspace_id=?')
           .run(event.aggregateVersion, at, event.accountId, event.workspaceId);
       }
+      if (event.kind === 'meeting.outcome') this.applyMeeting(event, at);
       if (event.kind === 'thread.observed') this.applyThread(event, at);
       if (event.kind === 'action.outcome') {
         const p = event.payload;
@@ -132,6 +134,21 @@ export class DelegationRepository {
         DO UPDATE SET aggregate_version=excluded.aggregate_version,event_id=excluded.event_id`).run(event.workspaceId, event.accountId, stream, event.aggregateVersion, event.id);
       return 'applied';
     });
+  }
+  private applyMeeting(event: Extract<WorkerEvent, { kind: 'meeting.outcome' }>, at: string) {
+    const payload = meetingOutcomePayloadSchema.parse(event.payload); const { outcome, observedAt } = payload;
+    if (accountInstantSchema.parse(observedAt) > at) throw new Error('Future meeting observation');
+    const row = this.raw.prepare('SELECT provider_event_id,revision,projection_json FROM delegated_meetings WHERE workspace_id=? AND account_id=? AND id=?')
+      .get(event.workspaceId, event.accountId, outcome.meetingId) as { provider_event_id: string; revision: number; projection_json: string } | undefined;
+    const previous = row ? meetingOutcomePayloadSchema.parse(JSON.parse(row.projection_json)) : null;
+    if (row && (row.provider_event_id !== outcome.providerEventId || previous!.outcome.calendarId !== outcome.calendarId)) throw new Error('Meeting immutable provider identity conflict');
+    // The immutable event ledger still records late messages, but a cancelled
+    // provider identity can never turn back into a booked projection.
+    if (previous?.outcome.status === 'cancelled' && outcome.status !== 'cancelled') return;
+    const state = outcome.status === 'booked' ? 'created' : outcome.status;
+    this.raw.prepare(`INSERT INTO delegated_meetings VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace_id,account_id,id)
+      DO UPDATE SET revision=excluded.revision,state=excluded.state,projection_json=excluded.projection_json,updated_at=excluded.updated_at`)
+      .run(event.workspaceId, event.accountId, outcome.meetingId, 'google_calendar', outcome.providerEventId, (row?.revision ?? 0) + 1, state, JSON.stringify(payload), at);
   }
   private applyThread(event: Extract<WorkerEvent, { kind: 'thread.observed' }>, at: string) {
     const { projection, approvalInvalidation, observedAt } = event.payload;
@@ -182,8 +199,12 @@ export class DelegationRepository {
     if (event.kind !== 'authority.changed') {
       if (owner.owner !== 'worker') throw new Error('Stale execution generation');
       if (event.authorityGeneration !== owner.generation) {
-        const prior = event.kind === 'action.outcome' && this.raw.prepare('SELECT 1 FROM delegated_action_outcomes WHERE workspace_id=? AND account_id=? AND action_id=? AND authority_generation=? AND content_hash=? AND target_hash=?')
-          .get(event.workspaceId, event.accountId, event.payload.actionId, event.authorityGeneration, event.payload.contentHash, event.payload.targetHash);
+        const prior = event.kind === 'action.outcome' ? this.raw.prepare('SELECT 1 FROM delegated_action_outcomes WHERE workspace_id=? AND account_id=? AND action_id=? AND authority_generation=? AND content_hash=? AND target_hash=?')
+          .get(event.workspaceId, event.accountId, event.payload.actionId, event.authorityGeneration, event.payload.contentHash, event.payload.targetHash)
+          : event.kind === 'meeting.outcome' ? this.raw.prepare(`SELECT 1 FROM delegated_applied_events WHERE workspace_id=? AND account_id=? AND authority_generation=?
+            AND json_extract(event_json,'$.kind')='meeting.outcome' AND json_extract(event_json,'$.payload.outcome.meetingId')=?
+            AND json_extract(event_json,'$.payload.outcome.providerEventId')=? AND json_extract(event_json,'$.payload.outcome.calendarId')=? LIMIT 1`)
+            .get(event.workspaceId, event.accountId, event.authorityGeneration, event.payload.outcome.meetingId, event.payload.outcome.providerEventId, event.payload.outcome.calendarId) : undefined;
         if (!prior || event.authorityGeneration > owner.generation) throw new Error('Stale execution generation');
       }
       return;
