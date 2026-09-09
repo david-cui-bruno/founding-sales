@@ -148,3 +148,5 @@ Fixture AUTH/event versions now include the real configure-owner receipt. Actual
 Fresh scoped strict/noUnchecked and root-compatible noImplicitAny TypeScript checks and exact five-path lint passed. Final focused matrix and exact-path commit are recorded at completion. Scope: `cloud/lambdas/delegated-worker/src/meetingRepository.ts`, `cloud/lambdas/delegated-worker/src/meetingCoordinator.ts`, their two owned tests, `tests/main/meetingProjection.test.ts`, and this report. No shared owner/delegation contract, projector, C1/C2/C3/C4/C6 source, DDL or presentation edits. This is offline source integration, not live Google/DynamoDB or Mac-asleep acceptance.
 
 Final source-fence matrix (01:38:21 UTC): **103 passed**, remote47 (repository36/coordinator11) plus main56 (SQL7/provider14/rules16/delegation19). Strict and root-compatible scoped typechecks, owned-path lint and diff-check passed. No scoped blockers remain. Re-review and live/C6 end-to-end activation acceptance remain pending.
+
+Source-configuration fence commit: `3616226` (six exact paths, 150 insertions, 34 deletions). Committed stat inspected, no sibling source included.
