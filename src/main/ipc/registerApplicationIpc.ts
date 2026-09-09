@@ -1,3 +1,5 @@
+import { registerLocalWorkspaceIpc } from '../workspace/registerLocalWorkspaceIpc';
+import { createLocalWorkspaceProvider } from '../workspace/localWorkspaceProvider';
 import { registerDailyIpc } from '../today/registerDailyIpc';
 import type { DailyApi } from '../../shared/contracts/dailyContract';
 import { createDiscoveryProvider } from '../discovery/discoveryProvider';
@@ -46,6 +48,7 @@ export type FeatureRegistrars = {
   registerLeadDetailIpc: typeof registerLeadDetailIpc;
   registerTodayIpc: typeof registerTodayIpc;
   registerDailyIpc: typeof registerDailyIpc;
+  registerLocalWorkspaceIpc: typeof registerLocalWorkspaceIpc;
   registerPipelineIpc: typeof registerPipelineIpc;
   registerReviewIpc: typeof registerReviewIpc;
   registerFridayIpc: typeof registerFridayIpc;
@@ -64,6 +67,7 @@ const defaultRegistrars: FeatureRegistrars = {
   registerLeadDetailIpc,
   registerTodayIpc,
   registerDailyIpc,
+  registerLocalWorkspaceIpc,
   registerPipelineIpc,
   registerReviewIpc,
   registerFridayIpc,
@@ -242,7 +246,7 @@ export function createShellProvider(
  * reverse registration order.
  */
 export function registerApplicationIpc(
-  runtime: DomainGate,
+  runtime: DomainGate & Pick<FoundationRuntime, 'withDatabase'>,
   isTrustedRendererUrl: ((url: string) => boolean) | undefined,
   registrars: FeatureRegistrars | undefined,
   sourcingProvider: SourcingProvider,
@@ -299,6 +303,7 @@ export function registerApplicationIpc(
       isTrustedRendererUrl,
     }),
     () => registrars.registerDailyIpc(createDailyProvider(runtime), isTrustedRendererUrl),
+    () => registrars.registerLocalWorkspaceIpc(createLocalWorkspaceProvider(runtime), isTrustedRendererUrl),
   ];
 
   const unregisters: (() => void)[] = [];

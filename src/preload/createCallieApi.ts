@@ -1,3 +1,4 @@
+import { createLocalWorkspaceApi } from './apis/localWorkspaceApi';
 import { createDailyApi } from './apis/dailyApi';
 import {policyImportConfirmSchema,policyImportResumeSchema,policyImportStatusSchema,policyImportPreviewSchema,policyImportReportSchema} from '../shared/contracts/accountRoutePolicyImportContract';
 import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedFollowupSchema,approveRequestedFollowupSchema,savedRequestedFollowupSchema,requestedApprovalStatusSchema} from '../shared/contracts/requestedFollowupContract';
@@ -64,6 +65,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
     leadDetail: createLeadDetailApi(client),
     today: createTodayApi(client),
     daily: createDailyApi(client),
+    localWorkspace: createLocalWorkspaceApi(client),
     discovery: createDiscoveryApi(client),
     pipeline: createPipelineApi(client),
     review: createReviewApi(client),

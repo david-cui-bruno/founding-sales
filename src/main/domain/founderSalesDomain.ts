@@ -1,3 +1,4 @@
+import { localCommitmentsSnapshotSchema, type LocalCommitmentsSnapshot } from '../../shared/contracts/localWorkspaceContract';
 import { LegacyWorkflowTransition, type WorkflowTransitionCommand } from './workspace/legacyWorkflowTransition';
 import { countMilestones, readAcquisitionFacts } from './campaign/acquisitionReport';
 import { projectAccountPipeline } from './campaign/accountPipelineProjection';
@@ -1175,7 +1176,32 @@ export class FounderSalesDomain implements OutboundDomainPort {
 
   getDaily() { return this.services.daily.get(); }
 
-  getToday(): TodaySnapshot {
+  getLocalCommitments(): LocalCommitmentsSnapshot {
+    const { queue, toDto } = this.buildTodayProjection();
+    const items: LocalCommitmentsSnapshot['items'] = [];
+    for (const { lane, items: candidates } of queue.lanes) {
+      for (const candidate of candidates) {
+        // Use the scheduler's exact protected-work membership, not intent labels or reason prose.
+        const protectedWork = candidate.commitment != null || candidate.segment === 'warm'
+          || lane === 'won_onboarding' || lane === 'inbound_interrupt';
+        const founderReturn = candidate.resurfaceAt !== null
+          && (candidate.resurfaceReason === 'snooze' || candidate.resurfaceReason === 'callback')
+          && Date.parse(candidate.resurfaceAt) <= Date.parse(queue.generatedAt);
+        if (!protectedWork && !founderReturn) continue;
+        const kind: LocalCommitmentsSnapshot['items'][number]['kind'] = lane === 'won_onboarding' ? 'onboarding'
+          : candidate.commitment?.kind === 'callback' && candidate.action.dueAt === candidate.commitment.dueAt ? 'callback'
+          : candidate.commitment != null ? 'post_stage'
+          : lane === 'inbound_interrupt' ? 'inbound_response'
+          : founderReturn ? 'founder_resurface' : 'warm_relationship';
+        const item = toDto(candidate, LANE_MAP[lane]);
+        if (item !== null) items.push({ kind, item });
+      }
+    }
+    return localCommitmentsSnapshotSchema.parse({ scope: 'local_database', generatedAt: queue.generatedAt,
+      revision: this.currentRevision(), reviewErrorCount: queue.diagnostics.length, items });
+  }
+
+  private buildTodayProjection() {
     const settings = this.services.workspaceSettings.read();
     const timezone = this.configuredTimezone ?? settings.timezone;
     const capacity = {
@@ -1268,6 +1294,11 @@ export class FounderSalesDomain implements OutboundDomainPort {
           : { fit: row.cloud_fit, timing: row.cloud_timing },
       };
     };
+    return { queue, toDto, timezone, capacity };
+  }
+
+  getToday(): TodaySnapshot {
+    const { queue, toDto, timezone, capacity } = this.buildTodayProjection();
     const lanes = queue.lanes.map(({ lane, items, overflowCount }) => ({
       id: LANE_MAP[lane],
       items: items
