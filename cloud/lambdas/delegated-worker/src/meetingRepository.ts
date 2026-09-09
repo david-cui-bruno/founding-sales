@@ -1,3 +1,4 @@
+import { ownerSourceKey, ownerSourceConfigurationSchema } from '../../../../src/shared/contracts/ownerCommandContract';
 import { z } from 'zod';
 import { workerEventSchema } from '../../../../src/shared/contracts/delegationContract';
 import { saveMeetingOfferSchema, meetingOfferSchema, type MeetingOffer, reserveMeetingSchema, saveSchedulingRulesSchema, schedulingRulesSchema, meetingReservationSchema, meetingOutcomeSchema, type ReserveMeetingInput, type MeetingReservation, type MeetingReservationResult, type MeetingOutcome } from '../../../../src/shared/contracts/meetingContract';
@@ -96,6 +97,15 @@ export class DynamoMeetingRepository {
     const old = await this.store.get<unknown>(commandKey(commandId)); if (!old) return null;
     const record = meetingReservationSchema.parse(old.data); if (record.intent.commandId !== commandId) throw new Error('command_identity_conflict'); return record;
   }
+  /** Selection is an independent final fence, never a replacement for AUTH or grants. */
+  async sourceFence(raw: ReserveMeetingInput) {
+    const { intent, calendarId } = reserveMeetingSchema.parse(raw); this.store.workspace(intent.workspaceId);
+    const key = ownerSourceKey(intent.accountId); const row = await this.store.get<unknown>(key);
+    const parsed = ownerSourceConfigurationSchema.safeParse(row?.data);
+    if (!row || !parsed.success || parsed.data.state !== 'active' || parsed.data.workspaceId !== intent.workspaceId || parsed.data.accountId !== intent.accountId
+      || parsed.data.pairingId !== intent.pairingId || parsed.data.mailboxSubject !== intent.mailboxSubject || parsed.data.calendarId !== calendarId) throw new Error('meeting_source_inactive');
+    return this.store.check(key, row.rev);
+  }
   private async evidence(input: ReserveMeetingInput) {
     const { intent, calendarId } = input; this.store.workspace(intent.workspaceId);
     requireExplicitCalendarId(calendarId);
@@ -108,6 +118,7 @@ export class DynamoMeetingRepository {
     const current = authorityRecordSchema.parse(auth.data);
     if (current.authority.accountId !== intent.accountId || current.authority.owner !== 'worker' || current.authority.state !== 'active'
       || current.authority.generation !== intent.expectedAuthorityGeneration || current.version !== intent.expectedVersion) throw new Error('stale_authority');
+    const source = await this.sourceFence(input);
     const barrier = createIntakeBarrier(this.store);
     const subject = { accountId: intent.accountId, mailboxSubject: intent.mailboxSubject, requiredThreadId: intent.threadId };
     const intake = await barrier.check({ ...subject, requiredRecipient: intent.attendeeEmails[0] }, new AbortController().signal);
@@ -132,7 +143,7 @@ export class DynamoMeetingRepository {
     const relevant = projection.signals.filter(s => s.evidence.some(e => e.messageId === message.id));
     if (!relevant.length || relevant.some(s => ['rejection', 'opt_out', 'out_of_office', 'delivery_failure'].includes(s.kind))) throw new Error('agreement_unclear');
     let mixed = intent.mixedReply || relevant.some(s => ['mixed', 'substantive'].includes(s.kind)) || intent.agreement!.kind !== 'offered_slot';
-    const checks = [this.store.check(rulesKey(calendarId), storedRules.rev), this.store.check(executionAuthorityKey(intent.accountId), auth.rev, executionAuthorityFields(current)),
+    const checks = [source, this.store.check(rulesKey(calendarId), storedRules.rev), this.store.check(executionAuthorityKey(intent.accountId), auth.rev, executionAuthorityFields(current)),
       ...intake.checks, this.store.check(threadKey, thread.rev), this.store.absent(mailSuppressionKey(intent.accountId))];
     if (intent.agreement?.kind === 'offered_slot') {
       const agreement = intent.agreement; const key = offerKey(intent.accountId, intent.threadId); const row = await this.store.get<unknown>(key);

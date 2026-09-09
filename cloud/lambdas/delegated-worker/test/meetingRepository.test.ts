@@ -1,4 +1,7 @@
+import { randomUUID } from 'node:crypto';
+import { OwnerCommandCoordinator } from '../src/ownerCommandCoordinator';
 import { describe, expect, it } from 'vitest';
+import { ownerCommandSchema, ownerSourceKey, ownerSourceConfigurationSchema } from '../../../../src/shared/contracts/ownerCommandContract';
 import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
 import { createDispatchService } from '../src/dispatchService';
 import { createMailPoller } from '../src/mailPoller';
@@ -15,22 +18,23 @@ import { DynamoThreadIntakeRepository, mailCursorKey, mailThreadKey, mailSuppres
 import { ConditionalCommandHarness } from './sdkHarness';
 import type { MeetingIntent, SchedulingRules, MeetingOutcome } from '../../../../src/shared/contracts/meetingContract';
 
-export async function meetingFixture(mail = false) {
+export async function meetingFixture(mail = false, configured = true) {
   let now = '2026-09-14T12:00:00.000Z'; const dynamo = new ConditionalCommandHarness();
   const options = { dynamo, workspaceId: 'ws-fiction', tableName: 'table-fiction', clock: { now: () => now } };
   const store = new DynamoStore(options); const auth = new WorkerAuth(options);
   const authorization = new RemoteGoogleAuthorization({ auth, config: { clientId: 'fictional.apps.googleusercontent.com', clientSecret: 'fictional', redirectUri: 'https://worker.example.test/oauth/callback', encryptionKey: Buffer.alloc(32, 9) }, fetch: async (url) => {
-    if (String(url).endsWith('/token')) return Response.json({ access_token: 'fictional-token', refresh_token: 'fictional-refresh', token_type: 'Bearer', expires_in: 3600, scope: `openid email ${googleScopes.availability} ${googleScopes.event_write}${mail ? ` ${googleScopes.send} ${googleScopes.relevant_read}` : ''}` });
+    if (String(url).endsWith('/token')) return Response.json({ access_token: 'fictional-token', refresh_token: 'fictional-refresh', token_type: 'Bearer', expires_in: 3600, scope: `openid email ${googleScopes.availability} ${googleScopes.event_write} ${googleScopes.relevant_read}${mail ? ` ${googleScopes.send}` : ''}` });
     if (String(url).endsWith('/userinfo')) return Response.json({ sub: 'subject-fiction', email: 'founder@example.test', email_verified: true });
     if (String(url).endsWith('/revoke')) return new Response('', { status: 200 });
     throw new Error('unconfigured fictional OAuth');
   } });
-  const pair = await auth.redeemPairing((await auth.issuePairing({ scopes: ['google:grant'], expiresInSeconds: 300 })).code, 'fictional-source');
+  const pair = await auth.redeemPairing((await auth.issuePairing({ scopes: ['google:grant', 'commands:write'], expiresInSeconds: 300 })).code, 'fictional-source');
   const calendarId = 'founder@example.test';
-  const url = await authorization.beginGoogleGrant(pair.pairingId, mail ? ['availability', 'event_write', 'send', 'relevant_read'] : ['availability', 'event_write'], { confirmed: true, ownedCalendarId: calendarId, conflictCalendarIds: [calendarId, 'other@example.test'] });
+  const url = await authorization.beginGoogleGrant(pair.pairingId, mail ? ['availability', 'event_write', 'send', 'relevant_read'] : ['availability', 'event_write', 'relevant_read'], { confirmed: true, ownedCalendarId: calendarId, conflictCalendarIds: [calendarId, 'other@example.test'] });
   await authorization.completeGoogleGrant(new URL(url.authorizationUrl).searchParams.get('state')!, 'fictional-code');
   const rules: SchedulingRules = { revision: 1, confirmed: true, timezone: 'America/New_York', weeklyWindows: [{ weekday: 2, start: '09:00', end: '17:00' }], durationMinutes: 30, bufferBeforeMinutes: 10, bufferAfterMinutes: 10, minimumNoticeMinutes: 60, horizonDays: 30, ownedCalendarId: calendarId, conflictCalendarIds: [calendarId, 'other@example.test'], location: { kind: 'text', value: 'Fictional office' }, allowCancel: true, allowReschedule: true };
-  const intent: MeetingIntent = { workspaceId: options.workspaceId, accountId: 'acct-fiction', meetingId: 'meeting-fiction', commandId: 'command-fiction', operation: 'create', expectedAuthorityGeneration: 1, expectedVersion: 1, rulesRevision: 1, threadId: 'thread-fiction', threadRevision: 1, contextRevision: 'context-fiction', mailboxSubject: 'subject-fiction', pairingId: pair.pairingId, start: '2026-09-15T14:00:00.000Z', end: '2026-09-15T14:30:00.000Z', localStart: '2026-09-15T10:00:00', offset: '-04:00', timezone: rules.timezone, agreementEvidenceId: 'message-fiction', agreement: { kind: 'explicit_slot', start: '2026-09-15T14:00:00.000Z', end: '2026-09-15T14:30:00.000Z', quote: 'Tuesday at 10 works.' }, mixedReply: false, approvalId: 'base-approval', attendeeEmails: ['prospect@example.test'], inviteAttendees: true, summary: 'Fictional meeting', etag: null };
+  const intent: MeetingIntent = { workspaceId: options.workspaceId, accountId: 'acct-fiction', meetingId: 'meeting-fiction', commandId: 'command-fiction', operation: 'create', expectedAuthorityGeneration: 1, expectedVersion: 2, rulesRevision: 1, threadId: 'thread-fiction', threadRevision: 1, contextRevision: 'context-fiction', mailboxSubject: 'subject-fiction', pairingId: pair.pairingId, start: '2026-09-15T14:00:00.000Z', end: '2026-09-15T14:30:00.000Z', localStart: '2026-09-15T10:00:00', offset: '-04:00', timezone: rules.timezone, agreementEvidenceId: 'message-fiction', agreement: { kind: 'explicit_slot', start: '2026-09-15T14:00:00.000Z', end: '2026-09-15T14:30:00.000Z', quote: 'Tuesday at 10 works.' }, mixedReply: false, approvalId: 'base-approval', attendeeEmails: ['prospect@example.test'], inviteAttendees: true, summary: 'Fictional meeting', etag: null };
+  const configurationCommands: ReturnType<typeof ownerCommandSchema.parse>[] = [];
   const seedAccount = async (accountId: string) => {
     const scope = { version: 1 as const, accountId, mailboxSubject: intent.mailboxSubject, revision: 1, participantAddresses: ['prospect@example.test'], knownThreadIds: [intent.threadId], since: now, approvedAt: now };
     const binding = { scopeRevision: scope.revision, scopeFingerprint: mailScopeFingerprint(scope) };
@@ -40,13 +44,22 @@ export async function meetingFixture(mail = false) {
       store.put(mailThreadKey(accountId, intent.threadId), { thread: { accountId, mailboxSubject: intent.mailboxSubject, provider: 'gmail', providerThreadId: intent.threadId,
         messages: [{ id: 'message-fiction', threadId: intent.threadId, rfcMessageId: '<earlier@example.test>', references: [], from: ['prospect@example.test'], to: ['founder@example.test'], cc: [], date: now, subject: 'Meeting', bodyParts: [{ mimeType: 'text/plain', text: 'Tuesday at 10 works.', truncated: false }] }] }, revision: 1, contextRevision: intent.contextRevision,
         signals: [{ kind: 'scheduling', requiresApproval: true, evidence: [{ messageId: 'message-fiction', quote: 'Tuesday at 10 works.' }] }] }, null)]);
+    if (configured) {
+    const account = { id: accountId, name: 'Fictional configured PM', domain: null as string | null, version: 1 };
+    await store.transact([store.put(`ACCOUNT#${accountId}`, { account, sources: [], claims: [], routes: [], researchRevision: 1, history: [{ at: now, account, claims: [], routes: [] }] }, null)]);
+    const command = ownerCommandSchema.parse({ commandId: randomUUID(), workspaceId: options.workspaceId, accountId, expectedAuthorityGeneration: 1, expectedVersion: 1,
+      kind: 'configure-owner', payload: { expectedConfigurationRevision: 0, configuration: { version: 1, workspaceId: options.workspaceId, accountId, pairingId: pair.pairingId, revision: 1,
+        state: 'active', mailboxSubject: intent.mailboxSubject, calendarId, research: null }, mailScope: null } });
+    await new OwnerCommandCoordinator({ auth, authorization }).apply(command, `Bearer ${pair.credential}`);
+    configurationCommands.push(command);
+    }
   };
   await seedAccount(intent.accountId);
   const repository = () => new DynamoMeetingRepository(options, authorization);
   await repository().saveRules({ rules, expectedRevision: null });
-  await repository().approveIntent({ intent, calendarId });
+  if (configured) await repository().approveIntent({ intent, calendarId });
   const access = await authorization.authorizedAccess(pair.pairingId, ['availability', 'event_write']);
-  return { options, store, dynamo, authorization, auth, pair, rules, intent, calendarId, access, repository, seedAccount, advance: () => { now = '2026-09-14T12:06:00.000Z'; } };
+  return { configurationCommands, options, store, dynamo, authorization, auth, pair, rules, intent, calendarId, access, repository, seedAccount, advance: () => { now = '2026-09-14T12:06:00.000Z'; } };
 }
 export function booked(identity: { meetingId: string; calendarId: string; providerEventId: string }): MeetingOutcome {
   return { ...identity, status: 'booked', reason: null, event: { ...identity, status: 'confirmed', etag: '"v1"', start: '2026-09-15T14:00:00.000Z', end: '2026-09-15T14:30:00.000Z', attendees: [{ email: 'prospect@example.test', responseStatus: 'needsAction' }], meetUrl: null } };
@@ -57,14 +70,14 @@ describe('durable meeting reservations on actual Dynamo command boundary', () =>
     const a = booked(r.record.identity);
     for (const outcome of [a, { ...a, status: 'unknown' as const, reason: 'lookup_timeout', event: null }, a]) await f.repository().recordOutcome(f.intent.commandId, outcome);
     const events = (await f.store.eventsAfter(null)).events;
-    expect(events).toHaveLength(4); expect(new Set(events.map(e => e.id)).size).toBe(4);
+    expect(events).toHaveLength(5); expect(new Set(events.map(e => e.id)).size).toBe(5);
     await f.repository().recordOutcome(f.intent.commandId, a);
     expect((await f.store.eventsAfter(null)).events).toEqual(events);
   });
   it('settles a same-meeting pending successor when an older command observes cancellation', async () => {
     const f = await meetingFixture(); const r = await f.repository().reserve({ intent: f.intent, calendarId: f.calendarId }, f.access.accessEvidence);
     const a = booked(r.record.identity); await f.repository().recordOutcome(f.intent.commandId, a);
-    const successor = { ...f.intent, operation: 'update' as const, commandId: 'reschedule-b', expectedVersion: 3, approvalId: 'approval-b', etag: a.event!.etag };
+    const successor = { ...f.intent, operation: 'update' as const, commandId: 'reschedule-b', expectedVersion: f.intent.expectedVersion + 2, approvalId: 'approval-b', etag: a.event!.etag };
     await f.repository().approveIntent({ intent: successor, calendarId: f.calendarId });
     await f.repository().reserve({ intent: successor, calendarId: f.calendarId }, f.access.accessEvidence);
     const cancelled = { ...a, status: 'cancelled' as const, event: { ...a.event!, status: 'cancelled' as const } };
@@ -92,7 +105,7 @@ describe('durable meeting reservations on actual Dynamo command boundary', () =>
   it('fences successor command races before same-meeting cancellation cleanup', async () => {
     const f = await meetingFixture(); const r = await f.repository().reserve({ intent: f.intent, calendarId: f.calendarId }, f.access.accessEvidence);
     const a = booked(r.record.identity); await f.repository().recordOutcome(f.intent.commandId, a);
-    const successor = { ...f.intent, operation: 'update' as const, commandId: 'racing-b', expectedVersion: 3, approvalId: 'racing-approval', etag: a.event!.etag };
+    const successor = { ...f.intent, operation: 'update' as const, commandId: 'racing-b', expectedVersion: f.intent.expectedVersion + 2, approvalId: 'racing-approval', etag: a.event!.etag };
     await f.repository().approveIntent({ intent: successor, calendarId: f.calendarId });
     await f.repository().reserve({ intent: successor, calendarId: f.calendarId }, f.access.accessEvidence);
     const key = 'MEETING_COMMAND#racing-b'; const current = (await f.store.get(key))!;
@@ -117,7 +130,7 @@ describe('durable meeting reservations on actual Dynamo command boundary', () =>
     await expect(f.repository().saveRules({ rules: aliasRules, expectedRevision: null })).rejects.toThrow('calendar_resource_id_required');
     // Simulate legacy persisted alias selection, not an admission shortcut for production.
     await f.store.transact([f.store.put('MEETING_RULES#primary', aliasRules, null)]);
-    const url = await f.authorization.beginGoogleGrant(f.pair.pairingId, ['availability', 'event_write'], { confirmed: true, ownedCalendarId: 'primary', conflictCalendarIds: ['primary'] });
+    const url = await f.authorization.beginGoogleGrant(f.pair.pairingId, ['availability', 'event_write', 'relevant_read'], { confirmed: true, ownedCalendarId: 'primary', conflictCalendarIds: ['primary'] });
     await f.authorization.completeGoogleGrant(new URL(url.authorizationUrl).searchParams.get('state')!, 'fictional-code');
     const access = await f.authorization.authorizedAccess(f.pair.pairingId, ['availability', 'event_write']);
     const aliasIntent = { ...f.intent, accountId: 'alias-account', commandId: 'alias-command', meetingId: 'alias-meeting' };
@@ -149,7 +162,7 @@ describe('durable meeting reservations on actual Dynamo command boundary', () =>
     await policy.admitApproval({ id: action.approvalId, commandId, intentHash: fingerprint(outgoing), draft, permissionEvidenceId: permission.id, approvedAt: f.options.clock.now(), expiresAt: permission.expiresAt });
     await policy.admitIntent(outgoing); await policy.configureCaps({ sender: draft.sender, dailyLimit: 3 }, null);
     const execution = createExecutionRepository({ ...f.options, dispatchPolicy: policy });
-    await execution.prepareAction({ ...action, expectedVersion: 1 });
+    await execution.prepareAction({ ...action, expectedVersion: f.intent.expectedVersion });
     let sentRfc = ''; let sends = 0; let incoming = false;
     const fetch: typeof globalThis.fetch = async (url, init) => {
       const path = new URL(String(url)).pathname;
@@ -180,6 +193,33 @@ describe('durable meeting reservations on actual Dynamo command boundary', () =>
     const intent: MeetingIntent = { ...f.intent, approvalId: null, expectedVersion: await execution.currentVersion(f.intent.accountId), threadRevision: current.revision, contextRevision: current.contextRevision,
       agreementEvidenceId: 'actual-reply', agreement: { kind: 'offered_slot' as const, offerId: offer.id, offerRevision: 1, slotId: 'actual-slot', quote: 'That works!' } };
     expect((await f.repository().reserve({ intent, calendarId: f.calendarId }, (await f.authorization.authorizedAccess(f.pair.pairingId, ['availability', 'event_write'])).accessEvidence)).kind).toBe('reserved');
+  });
+  it.each(['missing', 'paused', 'pairing', 'mailbox', 'calendar', 'workspace', 'account'] as const)('holds a %s owner-source configuration before reservation', async defect => {
+    const f = await meetingFixture(false, false); f.intent.expectedVersion = 1;
+    if (defect !== 'missing') {
+      const config: ReturnType<typeof ownerSourceConfigurationSchema.parse> = { version: 1, workspaceId: f.intent.workspaceId, accountId: f.intent.accountId, pairingId: f.intent.pairingId, revision: 1,
+        state: defect === 'paused' ? 'paused' : 'active', mailboxSubject: f.intent.mailboxSubject, calendarId: f.calendarId, research: null };
+      if (defect === 'pairing') config.pairingId = 'wrong-pairing';
+      if (defect === 'mailbox') config.mailboxSubject = 'wrong-mailbox';
+      if (defect === 'calendar') config.calendarId = 'wrong@example.test';
+      if (defect === 'workspace') config.workspaceId = 'wrong-workspace';
+      if (defect === 'account') config.accountId = 'wrong-account';
+      await f.store.transact([f.store.put(ownerSourceKey(f.intent.accountId), ownerSourceConfigurationSchema.parse(config), null)]);
+    }
+    await expect(f.repository().reserve({ intent: f.intent, calendarId: f.calendarId }, f.access.accessEvidence)).rejects.toThrow('meeting_source_inactive');
+    expect(await f.repository().command(f.intent.commandId)).toBeNull();
+  });
+  it.each(['paused', 'pairing', 'mailbox', 'calendar'] as const)('fences a source %s change at the exact final transaction', async change => {
+    const f = await meetingFixture(); const key = ownerSourceKey(f.intent.accountId); const row = (await f.store.get<unknown>(key))!;
+    const config = ownerSourceConfigurationSchema.parse(row.data);
+    const changed = { ...config, revision: config.revision + 1,
+      ...(change === 'paused' ? { state: 'paused' as const } : change === 'pairing' ? { pairingId: 'different-pairing' }
+        : change === 'mailbox' ? { mailboxSubject: 'different-mailbox' } : { calendarId: 'different@example.test' }) };
+    f.dynamo.beforeTransaction = () => { f.dynamo.beforeTransaction = undefined; void f.store.transact([f.store.put(key, changed, row.rev)]); };
+    await expect(f.repository().reserve({ intent: f.intent, calendarId: f.calendarId }, f.access.accessEvidence)).rejects.toThrow('TransactionCanceledException');
+    const final = f.dynamo.transactions.at(-1)!;
+    expect(final.TransactItems?.filter(item => item.ConditionCheck?.Key?.sk?.S === key)).toHaveLength(1);
+    expect(await f.repository().command(f.intent.commandId)).toBeNull();
   });
   it('persists stable identity before dispatch and never redispatches after restart', async () => {
     const f = await meetingFixture(); const first = await f.repository().reserve({ intent: f.intent, calendarId: f.calendarId }, f.access.accessEvidence);
@@ -253,19 +293,19 @@ describe('durable meeting reservations on actual Dynamo command boundary', () =>
     const f = await meetingFixture(); const reserved = await f.repository().reserve({ intent: f.intent, calendarId: f.calendarId }, f.access.accessEvidence);
     await f.repository().recordOutcome(f.intent.commandId, booked(reserved.record.identity));
     const events = await f.store.eventsAfter(null);
-    expect(events.events).toHaveLength(2);
-    expect(events.events[0]).toMatchObject({ kind: 'meeting.outcome', aggregateVersion: 2, payload: { outcome: { status: 'unknown', reason: 'reservation_pending' } } });
-    expect(events.events[1]).toMatchObject({ kind: 'meeting.outcome', aggregateVersion: 3, authorityGeneration: 1, payload: { commandId: f.intent.commandId, outcome: { status: 'booked' } } });
-    expect((await f.store.get<{ version: number }>(executionAuthorityKey(f.intent.accountId)))?.data.version).toBe(3);
+    expect(events.events).toHaveLength(3);
+    expect(events.events[1]).toMatchObject({ kind: 'meeting.outcome', aggregateVersion: 3, payload: { outcome: { status: 'unknown', reason: 'reservation_pending' } } });
+    expect(events.events[2]).toMatchObject({ kind: 'meeting.outcome', aggregateVersion: 4, authorityGeneration: 1, payload: { commandId: f.intent.commandId, outcome: { status: 'booked' } } });
+    expect((await f.store.get<{ version: number }>(executionAuthorityKey(f.intent.accountId)))?.data.version).toBe(4);
     await f.repository().recordOutcome(f.intent.commandId, booked(reserved.record.identity));
-    expect((await f.store.eventsAfter(null)).events).toHaveLength(2);
+    expect((await f.store.eventsAfter(null)).events).toHaveLength(3);
   });
   it('holds when another configured relevant intake adapter has not completed', async () => {
     const f = await meetingFixture();
     await f.store.transact([f.store.put(`DISPATCH_INTAKE#${f.intent.accountId}`, { accountId: f.intent.accountId, adapters: [
       { id: 'gmail-primary', kind: 'gmail', enabled: true, relevant: true, mailboxSubject: f.intent.mailboxSubject },
       { id: 'gmail-other', kind: 'gmail', enabled: true, relevant: true, mailboxSubject: 'other-subject' },
-    ], manualDependencies: [] }, 1)]);
+    ], manualDependencies: [] }, 2)]);
     await expect(f.repository().reserve({ intent: f.intent, calendarId: f.calendarId }, f.access.accessEvidence)).rejects.toThrow('intake_incomplete');
   });
   it('keeps a durably booked outcome when publication fails and replays outbox without a new outcome', async () => {
@@ -275,7 +315,7 @@ describe('durable meeting reservations on actual Dynamo command boundary', () =>
     const reserved = await repository.reserve({ intent: f.intent, calendarId: f.calendarId }, f.access.accessEvidence);
     expect((await repository.recordOutcome(f.intent.commandId, booked(reserved.record.identity))).status).toBe('booked');
     fail = false; await new DynamoStore(options).retryPublications();
-    expect(published).toHaveLength(2); expect((await f.store.eventsAfter(null)).events).toHaveLength(2);
+    expect(published).toHaveLength(2); expect((await f.store.eventsAfter(null)).events).toHaveLength(3);
   });
   it('requires complete fresh polling and exact current thread agreement evidence', async () => {
     const f = await meetingFixture(); f.advance();

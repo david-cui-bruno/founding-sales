@@ -59,6 +59,7 @@ export class MeetingCoordinator {
       const rules = old?.rules ?? await repository.rules(calendarId);
       if (!old) { const valid = validateMeetingIntent(intent, rules, repository.store.now()); if (valid.allowed === false) throw new Error(valid.reason); }
       [rules.ownedCalendarId, ...rules.conflictCalendarIds].forEach(requireExplicitCalendarId);
+      if (!old) await repository.sourceFence({ intent, calendarId });
       const access = await authorization.authorizedAccess(intent.pairingId, ['availability', 'event_write'], signal);
       if (access.grant.subject !== intent.mailboxSubject) throw new Error('google_subject_mismatch');
       const calendar = createCalendarProvider({ ...access, fetch: this.input.fetch });
