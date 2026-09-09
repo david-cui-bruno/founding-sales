@@ -1,5 +1,6 @@
+import { acquisitionMilestonePayloadSchema, acquisitionMilestoneReportSchema } from '../../src/shared/contracts/acquisitionReportContract';
 import { describe, expect, it } from 'vitest';
-import { countMilestones, fromMeetingWorkerEvents, readAcquisitionFacts } from '../../src/main/domain/campaign/acquisitionReport';
+import { countMilestones, fromMeetingWorkerEvents, fromAcquisitionWorkerEvents, readAcquisitionFacts } from '../../src/main/domain/campaign/acquisitionReport';
 import { projectAccountPipeline } from '../../src/main/domain/campaign/accountPipelineProjection';
 import { createPmFixture, PM_NOW } from '../fixtures/pmAccounts';
 import { DelegationRepository } from '../../src/main/delegation/delegationRepository';
@@ -70,7 +71,8 @@ describe('truthful acquisition report', () => {
     const f = await createPmFixture();
     try {
       const account = f.repo.create({ commandId: '10000000-0000-4000-8000-000000000001', name: 'Fictional PM', domain: null });
-      const repo = new DelegationRepository({ database: f.db, workspaceId: 'w', clock: { now: () => at } });
+      let clockNow = at;
+      const repo = new DelegationRepository({ database: f.db, workspaceId: 'w', clock: { now: () => clockNow } });
       repo.initializeLocalAuthority(account.id);
       repo.queueCommand({ commandId: 'delegate', workspaceId: 'w', accountId: account.id, expectedAuthorityGeneration: 0, expectedVersion: 0, kind: 'delegate', payload: { delegationId: 'fictional-delegation', approvedAt: PM_NOW } });
       repo.applyWorkerEvent({ id: 'authority-event', workspaceId: 'w', accountId: account.id, authorityGeneration: 1, aggregateVersion: 1, kind: 'authority.changed',
@@ -84,7 +86,47 @@ describe('truthful acquisition report', () => {
       const facts = readAcquisitionFacts(f.db);
       expect(facts).toHaveLength(1);
       expect(countMilestones(facts, window)).toMatchObject({ meetingsBooked: 1, meetingsHeld: 0, pilotStarts: 0, costCents: null });
+      clockNow = '2026-09-09T02:00:00.000Z';
+      const attendance = { id: 'attendance-event', workspaceId: 'w', accountId: account.id, authorityGeneration: 1, aggregateVersion: 3, kind: 'acquisition.milestone_reported' as const,
+        payload: { commandId: '10000000-0000-4000-8000-000000000002', observedAt: clockNow, source: 'owner_report' as const,
+          report: { kind: 'meeting_attended' as const, ...identity, occurredAt: clockNow, sourceRef: 'owner-attendance-note', ownerNote: 'I attended this fictional meeting.' } },
+        receipt: { commandId: '10000000-0000-4000-8000-000000000002', status: 'applied' as const, authorityGeneration: 1, aggregateVersion: 3, reason: null as null } };
+      repo.queueCommand({ commandId: '10000000-0000-4000-8000-000000000002', workspaceId: 'w', accountId: account.id, expectedAuthorityGeneration: 1, expectedVersion: 2, kind: 'report-acquisition-milestone', payload: attendance.payload.report });
+      expect(repo.applyWorkerEvent(attendance)).toBe('applied');
+      expect(repo.applyWorkerEvent(attendance)).toBe('duplicate');
+      expect(countMilestones(readAcquisitionFacts(f.db), window)).toMatchObject({ meetingsBooked: 1, meetingsHeld: 1, pilotStarts: 0 });
+      expect(() => repo.applyWorkerEvent({ ...attendance, payload: { ...attendance.payload, report: { ...attendance.payload.report, ownerNote: 'Changed report' } } })).toThrow();
+
     } finally { f.close(); }
+  });
+
+  it('admits only explicit owner milestone evidence with immutable identity and ordered observation time', () => {
+    const report = { kind: 'meeting_attended', meetingId: 'm', calendarId: 'cal', providerEventId: 'abcde', occurredAt: at,
+      sourceRef: 'owner-note-1', ownerNote: 'I attended the fictional meeting.' };
+    expect(acquisitionMilestoneReportSchema.safeParse(report).success).toBe(true);
+    expect(acquisitionMilestoneReportSchema.safeParse({ ...report, source: 'model' }).success).toBe(false);
+    expect(acquisitionMilestoneReportSchema.safeParse({ ...report, providerEventId: '' }).success).toBe(false);
+    expect(acquisitionMilestoneReportSchema.safeParse({ ...report, ownerNote: ' ' }).success).toBe(false);
+    const payload = { commandId: 'milestone-command', report, observedAt: at, source: 'owner_report' };
+    expect(acquisitionMilestonePayloadSchema.safeParse(payload).success).toBe(true);
+    expect(acquisitionMilestonePayloadSchema.safeParse({ ...payload, source: 'model' }).success).toBe(false);
+    expect(acquisitionMilestonePayloadSchema.safeParse({ ...payload, observedAt: '2026-09-08T00:00:00.000Z' }).success).toBe(false);
+    expect(acquisitionMilestoneReportSchema.safeParse({ kind: 'pilot_started', pilotId: 'pilot-1', occurredAt: at, sourceRef: 'pilot-log', ownerNote: 'The explicitly scoped fictional pilot actually started.' }).success).toBe(true);
+  });
+
+  it('counts owner-reported attendance and pilot facts once by stable identity, separately from bookings', () => {
+    const common = { workspaceId: 'w', accountId: 'a', authorityGeneration: 1, kind: 'acquisition.milestone_reported' };
+    const proof = { occurredAt: at, sourceRef: 'owner-record', ownerNote: 'I observed this fictional outcome.' };
+    const events = [
+      { ...common, id: 'attended', aggregateVersion: 1, payload: { commandId: 'attended-command', source: 'owner_report', observedAt: at,
+        report: { kind: 'meeting_attended', meetingId: 'm', calendarId: 'cal', providerEventId: 'abcde', ...proof } } },
+      ...['pilot_willingness', 'pilot_started', 'pilot_started'].map((kind, i) => ({ ...common, id: `pilot-${i}`, aggregateVersion: i + 2,
+        payload: { commandId: `pilot-command-${i}`, source: 'owner_report', observedAt: at, report: { kind, pilotId: 'pilot-1', ...proof } } })),
+    ];
+    const canonical = events.map(event => ({ ...event, receipt: { commandId: event.payload.commandId, status: 'applied', authorityGeneration: 1, aggregateVersion: event.aggregateVersion, reason: null as null } }));
+    const facts = fromAcquisitionWorkerEvents(canonical);
+    expect(facts).toHaveLength(4);
+    expect(countMilestones(facts, window)).toMatchObject({ meetingsBooked: 0, meetingsHeld: 1, pilotWillingness: 1, pilotStarts: 1 });
   });
 
 });

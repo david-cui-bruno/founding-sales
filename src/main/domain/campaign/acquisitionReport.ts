@@ -1,6 +1,6 @@
 import type { AppDatabase } from '../../db/database';
 import { listActualCallAttempts } from '../accounts/accountOutreach';
-import { acquisitionFactSchema, acquisitionWindowSchema, type AcquisitionFact, type AcquisitionReport, type AcquisitionWindow } from '../../../shared/contracts/acquisitionReportContract';
+import { acquisitionMilestonePayloadSchema, acquisitionFactSchema, acquisitionWindowSchema, type AcquisitionFact, type AcquisitionReport, type AcquisitionWindow } from '../../../shared/contracts/acquisitionReportContract';
 import { workerEventSchema } from '../../../shared/contracts/delegationContract';
 
 const actualKinds = new Set(['manual_call', 'conversation', 'positive_response', 'calendar_booking_confirmed', 'calendar_cancelled', 'meeting_held', 'pilot_willingness', 'pilot_started']);
@@ -24,7 +24,7 @@ export function countMilestones(events: readonly AcquisitionFact[], observation:
     if (!e.occurredAt || !e.evidence || !actualKinds.has(e.kind)) continue;
     if (['meeting_held', 'pilot_started', 'pilot_willingness'].includes(e.kind) && e.evidence.source !== 'human') continue;
     const identity = e.kind.startsWith('calendar_') || e.kind === 'meeting_held' ? e.meetingId
-      : e.kind === 'pilot_started' ? e.pilotId : e.id;
+      : e.kind === 'pilot_started' || e.kind === 'pilot_willingness' ? e.pilotId : e.id;
     if (!identity) continue;
     const key = JSON.stringify([e.kind, identity]);
     if (!first.has(key)) first.set(key, e);
@@ -57,10 +57,28 @@ export function fromMeetingWorkerEvents(events: readonly unknown[]): Acquisition
   });
 }
 
+/** Canonical owner testimony remains labeled human-reported, never provider-verified attendance. */
+export function fromAcquisitionWorkerEvents(events: readonly unknown[]): AcquisitionFact[] {
+  const milestones: AcquisitionFact[] = events.flatMap(input => {
+    const parsed = workerEventSchema.safeParse(input);
+    if (!parsed.success || parsed.data.kind !== 'acquisition.milestone_reported') return [];
+    const event = parsed.data;
+    const payload = acquisitionMilestonePayloadSchema.parse(event.payload);
+    const report = payload.report;
+    const fact: AcquisitionFact = { id: `${event.workspaceId}:${event.id}`, accountId: event.accountId,
+      occurredAt: report.occurredAt, kind: report.kind === 'meeting_attended' ? 'meeting_held' : report.kind,
+      evidence: { source: 'human', reference: report.sourceRef } };
+    if (report.kind === 'meeting_attended') fact.meetingId = JSON.stringify([event.workspaceId, report.calendarId, report.providerEventId, report.meetingId]);
+    else fact.pilotId = JSON.stringify([event.workspaceId, event.accountId, report.pilotId]);
+    return [fact];
+  });
+  return [...fromMeetingWorkerEvents(events), ...milestones];
+}
+
 /** Reads canonical persisted facts only. Operational hold, inferred interest and connected calls are not attendance/conversations. */
 export function readAcquisitionFacts(database: AppDatabase): AcquisitionFact[] {
-  const rows = database.raw.prepare("SELECT event_json FROM delegated_applied_events WHERE json_extract(event_json,'$.kind')='meeting.outcome' ORDER BY applied_at,id").all() as { event_json: string }[];
-  const meetings = fromMeetingWorkerEvents(rows.map(row => JSON.parse(row.event_json)));
+  const rows = database.raw.prepare("SELECT event_json FROM delegated_applied_events WHERE json_extract(event_json,'$.kind') IN('meeting.outcome','acquisition.milestone_reported') ORDER BY applied_at,id").all() as { event_json: string }[];
+  const meetings = fromAcquisitionWorkerEvents(rows.map(row => JSON.parse(row.event_json)));
   const calls = listActualCallAttempts(database, { from: '0001-01-01T00:00:00.000Z', to: '9999-12-31T23:59:59.999Z' }).map(call => ({
     id: `account-call:${call.attemptId}`, accountId: call.accountId, kind: 'manual_call', occurredAt: call.reportedAt,
     evidence: { source: 'human' as const, reference: call.commandId },

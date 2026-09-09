@@ -1,3 +1,4 @@
+import { auditDomainInvariants } from '../../src/main/domain/lifecycle/invariantAudit';
 import { copyFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { closeDatabase, openDatabase } from '../../src/main/db/database';
@@ -78,6 +79,8 @@ describe('explicit persisted meeting-first transition', () => {
       expect(readWorkflowMode(db)).toBe('meeting_first');
       expect(restored.transitionWorkflow(command)).toEqual(manifest);
       expect(db.raw.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+      const ownedIds = new Set([automatic.id, callback.id, unreviewed.id, ...manifest.actionSnapshots.map(action => action.id), ...manifest.enrollmentSnapshots.map(enrollment => enrollment.id), ...manifest.parkedActions.map(action => action.id)]);
+      expect(auditDomainInvariants({ database: db, asOf: at }).filter(issue => ownedIds.has(issue.recordId))).toEqual([]);
     } finally { closeDatabase(db); f.temp.cleanup(); }
   });
   it('rolls the receipt, cancellations and mode back together if the final CAS write fails', async () => {

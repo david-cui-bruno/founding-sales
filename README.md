@@ -12,8 +12,11 @@ calendar events. A queued message, connection acceptance, old Interviewed stage,
 or generated pilot suggestion is not a real meeting or pilot. Booking updates and
 cancellations retain meeting identity. Calendar operational `held` means an
 execution hold, not attendance. Attendance and actual pilot starts require separate
-human evidence. Their capture integration is not yet supplied by the calendar
-worker. Missing costs, time and model usage stay unknown, not zero.
+owner-reported evidence, admitted through authenticated owner commands and the
+ordered immutable event ledger. Attendance binds the account's existing calendar
+identity and elapsed scheduled end. Source references and notes are owner testimony,
+not external verification or model-generated facts. Missing costs, time and model
+usage stay unknown, not zero. Renderer exposure and live acceptance remain gated.
 
 Schema23 adds an initially empty workflow state and immutable transition receipts.
 Migration alone does not change legacy mode or enroll historical owner rows.
