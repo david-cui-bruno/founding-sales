@@ -24,6 +24,26 @@ export function readWorkflowMode(database: AppDatabase): WorkflowMode {
 export function assertLegacyScheduling(database: AppDatabase, kind: Parameters<typeof canScheduleLegacy>[0]['kind']): void {
   if (!canScheduleLegacy({ mode: readWorkflowMode(database), kind })) throw new LifecycleEligibilityError('Meeting-first mode stops superseded automatic legacy acquisition.');
 }
+/** Exact legacy review shape only. New obligation evidence always defeats parking. */
+export function legacyReviewParkingEligibilitySql(cycle: 'c' | 'cycle'): string {
+  return `${cycle}.stage='unreviewed' AND ${cycle}.workflow_status='active'
+    AND ${cycle}.resurface_at IS NULL AND ${cycle}.resurface_reason IS NULL
+    AND EXISTS (SELECT 1 FROM next_actions review WHERE review.id=${cycle}.current_next_action_id
+      AND review.sales_cycle_id=${cycle}.id AND review.status='pending' AND review.action_type='review_lead'
+      AND review.work_intent='internal_review' AND review.channel IS NULL
+      AND review.inbound_sla_kind IS NULL AND review.inbound_sla_due_at IS NULL
+      AND review.inbound_sla_source_event_id IS NULL AND review.inbound_sla_provenance_json IS NULL
+      AND review.due_source='internal_review' AND review.cadence_enrollment_id IS NULL
+      AND review.cadence_step_id IS NULL AND review.cadence_component_id IS NULL)
+    AND NOT EXISTS (SELECT 1 FROM next_actions owed WHERE owed.sales_cycle_id=${cycle}.id
+      AND owed.status='pending' AND owed.id<>${cycle}.current_next_action_id)
+    AND NOT EXISTS (SELECT 1 FROM activities evidence WHERE evidence.sales_cycle_id=${cycle}.id
+      AND (evidence.callback_at IS NOT NULL OR evidence.direction='inbound'))
+    AND NOT EXISTS (SELECT 1 FROM source_events inbound WHERE inbound.person_id=${cycle}.person_id
+      AND inbound.channel IN ('inbound_demo','referral'))
+    AND NOT EXISTS (SELECT 1 FROM email_drafts uncertain WHERE uncertain.sales_cycle_id=${cycle}.id
+      AND uncertain.status IN ('sending','unknown'))`;
+}
 const commandSchema = z.strictObject({ commandId: z.string().trim().min(1), expectedMode: z.enum(['legacy', 'meeting_first']), manifestId: z.string().trim().min(1) });
 export type WorkflowTransitionCommand = z.infer<typeof commandSchema>;
 export type WorkflowTransitionManifest = {
@@ -33,6 +53,7 @@ export type WorkflowTransitionManifest = {
   catalogs: { id: string; contentHash: string; version: number }[];
   enrollmentSnapshots: { id: string; definitionId: string; version: number; status: string; currentStepId: string | null; allowedStepIdsJson: string | null }[];
   callbackEvidenceIds: string[]; unknownDraftIds: string[];
+  parkedReviewActions: { id: string; cycleId: string; version: number }[];
   parkedActions: { id: string; supersededActionId: string; cycleId: string }[];
 };
 const noCadence: CadenceActionBinding = { cadenceEnrollmentId: null, cadenceDefinitionId: null, cadenceStepId: null, cadenceComponentId: null } as const;
@@ -70,14 +91,17 @@ export class LegacyWorkflowTransition {
         if (!['cadence_a', 'cadence_b', 'cadence_c'].includes(definition.family)) return false;
         return !database.raw.prepare("SELECT 1 FROM email_drafts WHERE sales_cycle_id=? AND status IN('sending','unknown') LIMIT 1").get(cycle.id);
       });
+      const parkedReviewActions = database.raw.prepare(`SELECT review.id,c.id AS cycleId,review.version
+        FROM sales_cycles c JOIN next_actions review ON review.id=c.current_next_action_id
+        WHERE ${legacyReviewParkingEligibilitySql('c')} ORDER BY review.id`).all() as WorkflowTransitionManifest['parkedReviewActions'];
       const cancelledActionIds = candidates.map(action => action.id);
       const stoppedEnrollmentIds = [...new Set(candidates.map(action => action.cadence.cadenceEnrollmentId!))].filter(id =>
         !actionSnapshots.some(action => action.cadence.cadenceEnrollmentId === id && !cancelledActionIds.includes(action.id)));
       const manifest: WorkflowTransitionManifest = { ...command, mode: 'meeting_first', revision, occurredAt, cancelledActionIds, stoppedEnrollmentIds,
         preservedActionIds: actionSnapshots.filter(a => !cancelledActionIds.includes(a.id)).map(a => a.id),
         parkedPersonIds: [...new Set(sourceIdentities.filter(source => candidates.some(a => a.salesCycleId === source.cycleId)
-          || cycles.getById(source.cycleId)?.stage === 'unreviewed').map(source => source.personId))].sort(),
-        sourceIdentities, actionSnapshots,
+          || parkedReviewActions.some(a => a.cycleId === source.cycleId)).map(source => source.personId))].sort(),
+        sourceIdentities, actionSnapshots, parkedReviewActions,
         enrollmentSnapshots: database.raw.prepare('SELECT id,cadence_definition_id AS definitionId,version,status,current_step_id AS currentStepId,allowed_step_ids_json AS allowedStepIdsJson FROM cadence_enrollments ORDER BY id').all() as WorkflowTransitionManifest['enrollmentSnapshots'],
         callbackEvidenceIds: (database.raw.prepare('SELECT id FROM activities WHERE callback_at IS NOT NULL ORDER BY id').all() as { id: string }[]).map(row => row.id),
         unknownDraftIds: (database.raw.prepare("SELECT id FROM email_drafts WHERE status IN('sending','unknown') ORDER BY id").all() as { id: string }[]).map(row => row.id),

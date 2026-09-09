@@ -877,10 +877,20 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
           effectiveAt: parsed.evaluationAt,
         })
       : cycle;
+    // Resolution/retry restores this same owed outbound component, not a new touch.
+    const sameOwedComponent = recipe.nextAction?.kind === 'create'
+      && ['resolve', 'retry'].includes(recipe.enrollment.kind)
+      && recipe.nextAction.draft.cadenceDefinitionId === action.cadence.cadenceDefinitionId
+      && recipe.nextAction.draft.cadenceStepId === action.cadence.cadenceStepId
+      && recipe.nextAction.draft.cadenceComponentId === action.cadence.cadenceComponentId
+      && (action.workIntent === 'promised_follow_up' || action.workIntent === 'inbound_response'
+        || action.dueSource === 'recorded_callback' || action.dueSource === 'founder_resurface'
+        || cycle.resurfaceReason === 'callback'
+        || !!this.database.raw.prepare('SELECT 1 FROM activities WHERE sales_cycle_id=? AND callback_at IS NOT NULL LIMIT 1').get(cycle.id));
     // Fulfill the existing evidenced obligation, but never seed another automatic
     // acquisition step after explicit transition. Fulfillment cadences are unaffected.
     if (definition.category === 'prospecting' && recipe.currentAction.kind !== 'none' && recipe.currentAction.kind !== 'remain_pending'
-      && readWorkflowMode(this.database) === 'meeting_first') {
+      && !sameOwedComponent && readWorkflowMode(this.database) === 'meeting_first') {
       const receipt = this.database.raw.prepare('SELECT manifest_id FROM workflow_transition_receipts ORDER BY created_at DESC,command_id DESC LIMIT 1').get() as { manifest_id: string } | undefined;
       if (!receipt) throw new LifecycleEvidenceError('Meeting-first mode requires its transition manifest.');
       const parkedId = `parked-legacy:${receipt.manifest_id}:${action.id}`;

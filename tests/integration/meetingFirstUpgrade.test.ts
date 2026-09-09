@@ -41,7 +41,7 @@ async function fixture() {
     database.raw.prepare("UPDATE prospects SET segment='warm' WHERE id=?").run(prospect.prospectId);
     return result;
   };
-  return { database, unitOfWork, transition, actions, events, lifecycle, seed, temp, key };
+  return { database, unitOfWork, transition, actions, events, sources, lifecycle, seed, temp, key };
 }
 const command = { commandId: 'transition-command', expectedMode: 'legacy' as const, manifestId: 'manifest-1' };
 describe('explicit persisted meeting-first transition', () => {
@@ -100,12 +100,22 @@ describe('explicit persisted meeting-first transition', () => {
     const f = await fixture();
     try {
       const auto = f.seed('parked');
+      const unresolved = f.seed('parked-unresolved', false);
+      const oldReview = f.actions.getById(unresolved.currentNextActionId!)!;
       const today = new TodayRepository({ database: f.database, unitOfWork: f.unitOfWork });
       expect(today.hasActiveWarm()).toBe(true);
       f.transition.transitionWorkflow(command);
       expect(today.hasActiveWarm()).toBe(false);
       expect(today.listOperationalCandidates()).toEqual([]);
       expect(f.database.raw.prepare('SELECT stage FROM sales_cycles WHERE id=?').get(auto.id)).toEqual({ stage: 'ready' });
+      expect(f.actions.getById(oldReview.id)).toEqual(oldReview);
+      const futureReview = f.seed('future-review', false);
+      expect(today.listOperationalCandidates()).toHaveLength(1);
+      expect(() => f.lifecycle.reviewToReady({ cycleId: futureReview.id, expectedCycleVersion: futureReview.version, expectedProspectVersion: 1, effectiveAt: at })).toThrow(/Meeting-first/);
+      // A later genuine obligation on the same identity must not inherit legacy parking.
+      f.database.raw.prepare("UPDATE next_actions SET due_source='recorded_callback',version=version+1 WHERE id=?").run(oldReview.id);
+      expect(today.hasActiveWarm()).toBe(true);
+      expect(today.listOperationalCandidates()).toHaveLength(2);
     } finally { closeDatabase(f.database); f.temp.cleanup(); }
   });
   it('completes preserved callback evidence without restarting automatic acquisition', async () => {
@@ -128,6 +138,76 @@ describe('explicit persisted meeting-first transition', () => {
       expect(f.actions.getById(result.currentNextActionId!)).toMatchObject({ actionType: 'parked_legacy', channel: null });
       expect(today.listOperationalCandidates()).toEqual([]);
       expect(today.hasActiveWarm()).toBe(false);
+    } finally { closeDatabase(f.database); f.temp.cleanup(); }
+  });
+
+  it.each(['promised', 'inbound'] as const)('restores the same owed %s component after resolving a preserved contact method', async kind => {
+    const f = await fixture();
+    try {
+      let cycle;
+      if (kind === 'promised') {
+        cycle = f.seed('resolver-promise');
+        f.database.raw.prepare("UPDATE next_actions SET due_source='recorded_callback' WHERE id=?").run(cycle.currentNextActionId);
+      } else {
+        const prospect = seedProspect(f.database.raw, 'resolver-inbound');
+        const sourceCycleId = insertClosedCycle({ database: f.database.raw, prefix: 'resolver-history', prospect });
+        f.unitOfWork.immediate(() => f.sources.append({ id: 'explicit-inbound-demo', personId: prospect.personId, prospectId: prospect.prospectId,
+          channel: 'inbound_demo', observedAt: at, sourceRecord: { message: 'Please respond' } }));
+        const definition = BUILTIN_CADENCES.find(c => c.family === 'cadence_c')!;
+        f.lifecycle.reactivateFromInboundResponse({ evidence: { kind: 'source_event', sourceEventId: 'explicit-inbound-demo', channel: 'inbound_demo' },
+          personId: prospect.personId, prospectId: prospect.prospectId, sourceCycleId, newCycleId: 'resolver-inbound-cycle', activatedAt: at,
+          cadence: { definitionId: definition.id, family: 'cadence_c', version: definition.version, contentHash: definition.contentHash } });
+        cycle = f.database.raw.prepare('SELECT id,version,current_next_action_id AS currentNextActionId,person_id AS personId,prospect_id AS prospectId FROM sales_cycles WHERE id=?').get('resolver-inbound-cycle') as ReturnType<typeof f.seed>;
+      }
+      const action = f.actions.getById(cycle.currentNextActionId!)!;
+      if (kind === 'promised') f.database.raw.prepare(`INSERT INTO activities(id,person_id,prospect_id,sales_cycle_id,kind,direction,channel,occurred_at,metadata_json,created_at,callback_at)
+        VALUES('resolver-callback-evidence',?,?,?,'call','outbound','phone',?,'{}',?,?)`).run(cycle.personId, cycle.prospectId, cycle.id, at, at, at);
+      f.unitOfWork.immediate(() => f.events.appendActivity({ id: 'unavailable-owed', personId: cycle.personId, prospectId: cycle.prospectId, salesCycleId: cycle.id,
+        cadenceEnrollmentId: action.cadence.cadenceEnrollmentId, cadenceStepId: action.cadence.cadenceStepId, cadenceComponentId: action.cadence.cadenceComponentId,
+        kind: action.channel === 'phone' ? 'call' : 'text', direction: 'outbound', channel: action.channel!, occurredAt: at, observedOutcome: 'channel_unavailable', metadata: {} }));
+      const blocked = f.lifecycle.completeCurrentAction({ cycleId: cycle.id, expectedCycleVersion: cycle.version, expectedCurrentActionId: action.id,
+        expectedActionVersion: action.version, expectedEnrollmentVersion: 1, outcome: 'channel_unavailable', activityId: 'unavailable-owed', impossibleDisposition: null,
+        evaluationAt: at, manualReactivationDueAt: null });
+      const resolver = f.actions.getById(blocked.currentNextActionId!)!;
+      expect(resolver.actionType).toBe('resolve_contact_method');
+      f.transition.transitionWorkflow(command);
+      const restored = f.lifecycle.completeCurrentAction({ cycleId: cycle.id, expectedCycleVersion: blocked.version, expectedCurrentActionId: resolver.id,
+        expectedActionVersion: resolver.version, expectedEnrollmentVersion: 2, outcome: 'resolved', activityId: null, impossibleDisposition: null,
+        evaluationAt: at, manualReactivationDueAt: null });
+      expect(f.actions.getById(restored.currentNextActionId!)).toMatchObject({ actionType: action.actionType, channel: action.channel,
+        workIntent: action.workIntent, inboundSla: action.inboundSla, cadence: action.cadence, status: 'pending' });
+      expect(f.database.raw.prepare('SELECT status FROM cadence_enrollments WHERE id=?').get(action.cadence.cadenceEnrollmentId)).toEqual({ status: 'active' });
+      expect(new TodayRepository({ database: f.database, unitOfWork: f.unitOfWork }).listOperationalCandidates()).toHaveLength(1);
+      const owed = f.actions.getById(restored.currentNextActionId!)!;
+      const outcome = owed.channel === 'phone' ? 'no_answer' : 'accepted';
+      f.unitOfWork.immediate(() => f.events.appendActivity({ id: 'owed-fulfilled', personId: cycle.personId, prospectId: cycle.prospectId, salesCycleId: cycle.id,
+        cadenceEnrollmentId: owed.cadence.cadenceEnrollmentId, cadenceStepId: owed.cadence.cadenceStepId, cadenceComponentId: owed.cadence.cadenceComponentId,
+        kind: owed.channel === 'phone' ? 'call' : 'text', direction: 'outbound', channel: owed.channel!, occurredAt: at, observedOutcome: outcome, metadata: {} }));
+      const settled = f.lifecycle.completeCurrentAction({ cycleId: cycle.id, expectedCycleVersion: restored.version, expectedCurrentActionId: owed.id,
+        expectedActionVersion: owed.version, expectedEnrollmentVersion: 3, outcome, activityId: 'owed-fulfilled', impossibleDisposition: null,
+        evaluationAt: at, manualReactivationDueAt: null });
+      expect(f.actions.getById(owed.id)).toMatchObject({ status: 'completed', completionActivityId: 'owed-fulfilled' });
+      expect(f.actions.getById(settled.currentNextActionId!)).toMatchObject({ actionType: 'parked_legacy' });
+      expect(f.database.raw.prepare('SELECT status FROM cadence_enrollments WHERE id=?').get(action.cadence.cadenceEnrollmentId)).toEqual({ status: 'stopped' });
+    } finally { closeDatabase(f.database); f.temp.cleanup(); }
+  });
+
+  it.each(['callback', 'inbound'] as const)('does not manifest-park an unresolved review with real %s evidence', async kind => {
+    const f = await fixture();
+    try {
+      const cycle = f.seed(`unresolved-${kind}`, false);
+      if (kind === 'callback') f.database.raw.prepare(`INSERT INTO activities(id,person_id,prospect_id,sales_cycle_id,kind,direction,channel,occurred_at,metadata_json,created_at,callback_at)
+        VALUES('review-callback',?,?,?,'call','outbound','phone',?,'{}',?,?)`).run(cycle.personId, cycle.prospectId, cycle.id, at, at, at);
+      else f.unitOfWork.immediate(() => f.sources.append({ id: 'review-inbound-evidence', personId: cycle.personId, prospectId: cycle.prospectId,
+        channel: 'inbound_demo', observedAt: at, sourceRecord: { message: 'Please respond' } }));
+      const actionBefore = f.actions.getById(cycle.currentNextActionId!);
+      const manifest = f.transition.transitionWorkflow(command);
+      expect(manifest.parkedReviewActions).toEqual([]);
+      expect(manifest.parkedPersonIds).not.toContain(cycle.personId);
+      expect(f.actions.getById(cycle.currentNextActionId!)).toEqual(actionBefore);
+      const today = new TodayRepository({ database: f.database, unitOfWork: f.unitOfWork });
+      expect(today.hasActiveWarm()).toBe(true);
+      expect(today.listOperationalCandidates()).toHaveLength(1);
     } finally { closeDatabase(f.database); f.temp.cleanup(); }
   });
 

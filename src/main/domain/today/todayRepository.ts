@@ -1,3 +1,4 @@
+import { legacyReviewParkingEligibilitySql } from '../workspace/legacyWorkflowTransition';
 import { z } from 'zod';
 import { communicationRecencySql } from '../events/communicationEvidence';
 
@@ -14,6 +15,17 @@ import type {
   TodayDiagnostic,
   TodayDiagnosticKind,
 } from './todayTypes';
+
+// Immutable receipt + exact current action/version prevents parking future reviews or obligations.
+function manifestParkedReviewSql(cycle: 'c' | 'cycle'): string {
+  return `(${legacyReviewParkingEligibilitySql(cycle)}) AND EXISTS (
+    SELECT 1 FROM workflow_transition_receipts receipt, json_each(receipt.result_json,'$.parkedReviewActions') parked
+    JOIN next_actions current ON current.id=${cycle}.current_next_action_id
+    WHERE json_extract(receipt.result_json,'$.mode')='meeting_first'
+      AND json_extract(parked.value,'$.id')=current.id
+      AND json_extract(parked.value,'$.cycleId')=${cycle}.id
+      AND json_extract(parked.value,'$.version')=current.version)`;
+}
 
 const idSchema = z.string().trim().min(1);
 const utcTimestampSchema = z.string().regex(
@@ -137,6 +149,7 @@ export class TodayRepository {
       JOIN prospects p ON p.id = c.prospect_id JOIN persons person ON person.id = c.person_id
       WHERE c.workflow_status IN ('active','onboarding') AND p.segment = 'warm'
         AND NOT EXISTS (SELECT 1 FROM next_actions parked WHERE parked.id=c.current_next_action_id AND parked.action_type='parked_legacy')
+        AND NOT (${manifestParkedReviewSql('c')})
         AND person.opted_out = 0 AND person.deleted_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM opt_out_tombstones t WHERE t.person_id = person.id)
       `).get() as { count: number }).count > 0;
@@ -215,6 +228,7 @@ export class TodayRepository {
         )
       WHERE cycle.workflow_status IN ('active', 'onboarding')
         AND (action.action_type IS NULL OR action.action_type <> 'parked_legacy')
+        AND NOT (${manifestParkedReviewSql('cycle')})
         AND person.opted_out = 0
         AND person.deleted_at IS NULL
       ORDER BY cycle.id COLLATE BINARY
