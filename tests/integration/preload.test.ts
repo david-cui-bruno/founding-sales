@@ -117,13 +117,18 @@ describe('preload workflow bridge', () => {
       'today',
     ]);
     expect(Object.keys(api.delegation).sort()).toEqual([
-      'beginPhone', 'bootstrap', 'configure', 'configurePolicy', 'configureResearch', 'pair', 'status', 'submit', 'sync',
+      'approveRequestedFollowup', 'beginPhone', 'bootstrap', 'configure', 'configurePolicy', 'configureResearch',
+      'editRequestedFollowup', 'getRequestedFollowup', 'pair', 'policyImport', 'prepareRequestedFollowup', 'status', 'submit', 'sync',
     ]);
     expect(Object.keys(api.linkedin).sort()).toEqual([
       'begin', 'copy', 'get', 'open', 'prepare', 'recover', 'reportOutcome', 'save',
     ]);
-    for (const namespace of [api.delegation, api.linkedin]) {
+    expect(Object.keys(api.delegation.policyImport).sort()).toEqual(['confirm', 'resume', 'selectAndPreview', 'status']);
+    const { policyImport, ...delegationMethods } = api.delegation;
+    for (const namespace of [delegationMethods, api.linkedin, policyImport]) {
       for (const method of Object.values(namespace)) expect(method).toBeTypeOf('function');
+    }
+    for (const namespace of [api.delegation, api.linkedin, policyImport]) {
       expect(namespace).not.toHaveProperty('invoke');
       expect(namespace).not.toHaveProperty('run');
       expect(namespace).not.toHaveProperty('dispatch');
