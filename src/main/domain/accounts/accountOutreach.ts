@@ -137,13 +137,23 @@ export class AccountOutreach {
       OR EXISTS(SELECT 1 FROM pm_account_links l WHERE l.account_id=? AND l.person_id=p.id AND l.valid_from<=? AND (l.valid_to IS NULL OR l.valid_to>?))) LIMIT 1`)
       .get(route.personId, route.channel, route.value, route.accountId, at, at);
   }
+  private retainedHandleRestriction(route: AccountRoute, at: string): string | null {
+    if (this.legacySuppressed(route, at)) return 'account_or_route_opted_out';
+    if (route.channel !== 'phone') return null;
+    // A company receipt cannot silently clear a retained person-contact restriction
+    // on the same canonical handle. Use the existing authoritative correction path.
+    if (this.raw.prepare("SELECT 1 FROM person_contact_methods WHERE kind='phone' AND normalized_value=? AND (dnc_listed=1 OR federal_status='listed') LIMIT 1").get(route.value)) return 'federal_dnc_listed';
+    if (this.raw.prepare("SELECT 1 FROM person_contact_methods WHERE kind='phone' AND normalized_value=? AND (tcpa_flag=1 OR compliance_tcpa_flag=1) LIMIT 1").get(route.value)) return 'tcpa_blocked';
+    return null;
+  }
   reserve(request: AccountOutboundRequest, expectedOwnerGeneration: string | null): AccountReservation {
     request = accountOutboundRequestSchema.parse(request);
     return this.atomic(() => {
       const previous = this.inspect(request); if (previous) return { kind: 'receipt', receipt: previous };
       const at = this.now(); const { snapshot, route, policy } = this.context(request, at);
-      const authorization = route && this.legacySuppressed(route, at)
-        ? { kind: 'blocked' as const, reason: 'account_or_route_opted_out' }
+      const restriction = route ? this.retainedHandleRestriction(route, at) : null;
+      const authorization = restriction
+        ? { kind: 'blocked' as const, reason: restriction }
         : authorizeAccountRoute({ request, route, policy, expectedOwnerGeneration, evidenceFingerprint: snapshot.fingerprint, now: at, windows: PLAYBOOK_CHANNEL_POLICIES_V2 });
       if (authorization.kind === 'blocked') return { kind: 'receipt', receipt: this.refusal(request, authorization.reason, snapshot.account.version, at) };
       const receipt: AccountOutboundReceipt = { commandId: request.commandId, accountId: request.accountId, attemptId: this.deps.ids.next(), status: 'unknown', reason: 'handoff_uncertain' };

@@ -248,4 +248,14 @@ describe('real SQL company outbound workflow with fictional phone boundary', () 
     expect(f.calls).toEqual([]); expect(f.db.raw.prepare('SELECT COUNT(*) AS n FROM pm_account_outbound_intents').get()).toEqual({ n: 0 });
   });
 
+  it.each(['dnc', 'tcpa'] as const)('does not downgrade existing normalized-handle %s restrictions with company policy', async restriction => {
+    const f = await fixture(); const person = randomUUID(); const contact = randomUUID(); insertPerson(f.db.raw, person);
+    f.db.raw.prepare("INSERT INTO person_contact_methods(id,person_id,kind,normalized_value,validation_state,reachability,is_primary,created_at,updated_at) VALUES(?,?,'phone','+14015550100','valid','direct',1,?,?)").run(contact, person, now, now);
+    f.onReady(() => {
+      if (restriction === 'dnc') f.db.raw.prepare("UPDATE person_contact_methods SET dnc_listed=1,federal_status='listed' WHERE id=?").run(contact);
+      else f.db.raw.prepare('UPDATE person_contact_methods SET tcpa_flag=1,compliance_tcpa_flag=1 WHERE id=?').run(contact);
+    });
+    expect(await f.makeService().begin(f.request)).toMatchObject({ reason: restriction === 'dnc' ? 'federal_dnc_listed' : 'tcpa_blocked' }); expect(f.calls).toEqual([]);
+  });
+
 });
