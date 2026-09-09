@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createInboundReadiness, type InboundAdapter, type InboundRegistry } from '../../src/main/communications/inboundReadiness';
 import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
+import { OutboundAuthorizationError } from '../../src/main/domain/support/domainErrors';
 import type { OutboundDomainGate, OutboundDomainPort, PhoneHandoffPort } from '../../src/main/communications/outboundPorts';
 import type { Capability, HandoffResult, OutboundReceipt, OutboundRequest } from '../../src/shared/contracts/outboundContract';
 
@@ -73,14 +74,28 @@ describe('inbound readiness barrier', () => {
     expect(f.domainPort.prepareOutboundDispatch).not.toHaveBeenCalled();
   });
 
-  it('blocks when opt-out evidence is applied during synchronization', async () => {
+  it('lets current synchronized opt-out evidence reach domain authorization and prevents dispatch', async () => {
     let optedOut = false;
     const readiness = createInboundReadiness(registry({
       initialized: true,
-      adapters: [adapter({ synchronize: vi.fn(async () => { optedOut = true; return { revision: 'r1' }; }), isAppliedCurrent: vi.fn(() => !optedOut) })],
+      adapters: [adapter({
+        synchronize: vi.fn(async () => {
+          optedOut = true;
+          return { revision: 'opt-out-applied' };
+        }),
+        isAppliedCurrent: vi.fn((_, revision) => optedOut && revision === 'opt-out-applied'),
+      })],
     }));
+    const f = serviceFixture(readiness);
+    f.domainPort.prepareOutboundDispatch = vi.fn<OutboundDomainPort['prepareOutboundDispatch']>(() => {
+      if (optedOut) throw new OutboundAuthorizationError('person_or_handle_opted_out');
+      return { kind: 'dispatch', canonicalPhone: '+12025550123', mutation };
+    });
 
-    await expect(readiness.check('person-1', new AbortController().signal)).resolves.toEqual(blocked);
+    await expect(f.service.beginOutbound(request)).resolves.toMatchObject({ status: 'refused', reasonCode: 'person_or_handle_opted_out' });
+    expect(f.domainPort.prepareOutboundDispatch).toHaveBeenCalledWith(request);
+    expect(f.domainPort.recordOutboundRefusal).toHaveBeenCalledWith(request, 'person_or_handle_opted_out');
+    expect(f.phone.dispatch).not.toHaveBeenCalled();
   });
 
   it('blocks when registry revision changes while synchronizing', async () => {
@@ -115,10 +130,12 @@ describe('inbound readiness barrier', () => {
     const readiness = createInboundReadiness(registry({ initialized: true, adapters: [adapter({ synchronize, isAppliedCurrent })] }));
 
     await expect(readiness.check('person-1', new AbortController().signal)).resolves.toEqual({ kind: 'ready' });
+    await expect(readiness.check('person-1', new AbortController().signal)).resolves.toEqual({ kind: 'ready' });
     await expect(readiness.checkSubject({ kind: 'account', id: 'account-1' }, new AbortController().signal)).resolves.toEqual({ kind: 'ready' });
-    expect(synchronize).toHaveBeenCalledTimes(2);
+    expect(synchronize).toHaveBeenCalledTimes(3);
     expect(synchronize.mock.calls[0][0]).toEqual({ kind: 'person', id: 'person-1' });
-    expect(synchronize.mock.calls[1][0]).toEqual({ kind: 'account', id: 'account-1' });
+    expect(synchronize.mock.calls[1][0]).toEqual({ kind: 'person', id: 'person-1' });
+    expect(synchronize.mock.calls[2][0]).toEqual({ kind: 'account', id: 'account-1' });
 
     const stale = createInboundReadiness(registry({ initialized: true, adapters: [adapter({ isAppliedCurrent: vi.fn(() => false) })] }));
     await expect(stale.check('person-1', new AbortController().signal)).resolves.toEqual(blocked);
