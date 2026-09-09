@@ -275,3 +275,5 @@ Observed at 01:46:11+: **1 SQL integration test GREEN**, **127 focused worker te
 ### Follow-up rerun at 01:50 UTC
 
 After D1 separated campaign_manual policy from unchanged individually approved dispatch policy, fresh current-source runs passed all **127 C4 worker tests**, the **1 actual encrypted SQL cap/reopen regression**, and **worker-wide strict typecheck**. The previously reported C6 test180 fixture type error is resolved. No C4 code adjustment was needed. This rerun uses D1's current working implementation; its final counterpart commit is pending notification and is not falsely pinned here.
+
+Pinned D1 counterpart: `d456c3fa8167e8ccd21fc1499aef10ce0efd5131`. Fresh post-commit rerun at 01:51:05 passed the same 127 worker tests, SQL1 and worker strict typecheck.
