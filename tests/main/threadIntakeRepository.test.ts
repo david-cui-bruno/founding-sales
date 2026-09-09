@@ -180,6 +180,8 @@ it.each([
   ['<p>What does <b>unsubscribe</b> mean?</p>', false],
   ['<p>Reply <strong>unsubscribe</strong> to stop emails.</p>', false],
   ['<p>Please <strong>stop emailing me</strong>.</p>', true],
+  ['<p>Please stop emailing me</p><p>Thanks,<br>Pat</p>', true],
+  ['Please stop emailing me\n\nThanks,\nPat', true],
 ])('actual HTML intake creates suppression only for attributable authored intent: %s', async (html, suppressed) => {
   const f = await createPmFixture();
   try {
@@ -189,7 +191,7 @@ it.each([
       fetch: (async raw => { const url = new URL(String(raw));
         if (url.pathname.endsWith('/profile')) return Response.json({ historyId: '11' });
         if (url.pathname.endsWith('/messages')) return Response.json({ messages: [{ id: 'm1' }] });
-        return Response.json({ id: 'm1', threadId: 't1', internalDate: String(Date.parse(PM_NOW)), payload: { mimeType: 'text/html', headers: [{ name: 'From', value: 'pm@fixture.invalid' }, { name: 'To', value: 'founder@fixture.invalid' }, { name: 'Subject', value: 'reply' }], body: { data: Buffer.from(html).toString('base64url') } } });
+        return Response.json({ id: 'm1', threadId: 't1', internalDate: String(Date.parse(PM_NOW)), payload: { mimeType: html.startsWith('<') ? 'text/html' : 'text/plain', headers: [{ name: 'From', value: 'pm@fixture.invalid' }, { name: 'To', value: 'founder@fixture.invalid' }, { name: 'Subject', value: 'reply' }], body: { data: Buffer.from(html).toString('base64url') } } });
       }) as typeof fetch });
     const incoming = await provider.readRelevantThreads({ accountId: account.id, knownThreadIds: ['t1'], participantAddresses: ['pm@fixture.invalid'], since: PM_NOW, cursor: null, maxPages: 1, maxBodyBytes: 1000 }, new AbortController().signal);
     const repo = new SqlThreadIntakeRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } });

@@ -9,7 +9,11 @@ export function classifyReply(message: MailMessage): ReplyClassification {
     if (!/^\s*>/.test(line)) lines.push(line);
   }
   const text = lines.join('\n').trim();
-  const directOptOut = text.replace(/\s+/g, ' ').split(/[.!]/).some(sentence => /^(?:please\s+)?(?:unsubscribe(?: me)?|stop (?:emailing|contacting|messaging) me|remove me(?: from (?:your|the) (?:list|mailing list))?|(?:do not|don't) contact me)\s*$/i.test(sentence.trim())
+  // A conventional closing starts a signature, not a continuation of the request.
+  // Keep inline/soft-wrapped sentence text together so mentions stay mentions.
+  const closing = lines.findIndex((line, index) => index > 0 && lines.slice(0, index).some(part => part.trim().length > 0) && /^[ \t]*(?:thanks|thank you|best(?: regards)?|kind regards|regards|sincerely)[,.!]?[ \t]*$/i.test(line));
+  const authored = closing > 0 ? lines.slice(0, closing).join('\n').trim() : text;
+  const directOptOut = authored.replace(/\s+/g, ' ').split(/[.!]/).some(sentence => /^(?:please\s+)?(?:unsubscribe(?: me)?|stop (?:emailing|contacting|messaging) me|remove me(?: from (?:your|the) (?:list|mailing list))?|(?:do not|don't) contact me)\s*$/i.test(sentence.trim())
     || /,\s*but\s+(?:please\s+)?stop (?:emailing|contacting|messaging) me\s*$/i.test(sentence.trim()));
   let kind: ReplyClassification['kind'] = 'ambiguous';
   if (!message.bodyParts.some(part => part.truncated) && directOptOut) kind = 'opt_out';
