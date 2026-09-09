@@ -28,6 +28,7 @@ import { TodayService } from '../../src/main/domain/today/todayService';
 import {
   WorkspaceSettingsRepository,
 } from '../../src/main/domain/workspace/workspaceSettingsRepository';
+import type { AccountEvidenceSnapshot } from '../../src/shared/contracts/accountContract';
 import { JobRepository } from '../../src/main/jobs/jobRepository';
 import {
   createTempDatabase,
@@ -129,6 +130,37 @@ describe('createDomainServices', () => {
     });
     database.raw.prepare("UPDATE workspace_settings SET timezone = 'Nowhere/Invalid'").run();
     expect(() => services.workspaceSettings.read()).toThrow();
+  });
+
+  it('wires configured meeting-first account settings into the production Today service', () => {
+    const { services } = build();
+    services.unitOfWork.immediate(() => {
+      services.workspaceSettings.updateMeetingFirstAccountCallSettingsCas({
+        expectedRevision: 0,
+        newCallSlots: 1,
+        totalCallCapacity: 1,
+        updatedAt: '2026-08-30T12:01:00.000Z',
+      });
+    });
+    const snapshot = (accountId: string): AccountEvidenceSnapshot => ({
+      account: { id: accountId, name: accountId, domain: `${accountId}.example`, version: 1 },
+      claims: [
+        { kind: 'fact', key: 'residential_scope', value: 'Residential multifamily property management', evidenceIds: [`${accountId}-scope`] },
+        { kind: 'fact', key: 'operating_footprint', value: 'Regional property manager', evidenceIds: [`${accountId}-footprint`] },
+      ],
+      routes: [
+        { id: `${accountId}-route`, accountId, personId: null, channel: 'phone', value: '+15555550100', purpose: 'business', evidenceIds: [`${accountId}-route-evidence`], verification: 'published', version: 1 },
+      ],
+      portfolio: [],
+      unknowns: [],
+      conflicts: [],
+      fingerprint: 'b'.repeat(64),
+    });
+    expect(services.today.planMeetingFirstAccountCalls({
+      due: [snapshot('warm-due')],
+      ranked: [snapshot('new-configured')],
+      generatedAt: '2026-08-30T12:00:00.000Z',
+    })).toEqual({ accountIds: ['warm-due', 'new-configured'], workloadConflict: true });
   });
 
   it('rejects substituted discovery bindings before any query, clock or ID access but accepts equivalent Pick containers', () => {

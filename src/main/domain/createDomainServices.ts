@@ -1,5 +1,5 @@
 import { AccountRepository } from './accounts/accountRepository';
-import { AccountOutreach } from './accounts/accountOutreach';
+import { AccountOutreach, createSqlAccountRoutePolicy } from './accounts/accountOutreach';
 import type { AppDatabase } from '../db/database';
 import { CadenceRepository } from './cadence/cadenceRepository';
 import { ContactComplianceService } from './compliance/contactComplianceService';
@@ -69,8 +69,9 @@ export function createDomainServices(input: {
   const { database, clock, ids } = input;
   const timezone = input.timezone ?? 'America/New_York';
   const unitOfWork = new DomainUnitOfWork(database);
-  // No company policy adapter until serialized schema21 supplies genuine evidence.
-  const accountOutreach = new AccountOutreach({ database, clock, ids, accounts: new AccountRepository({ database, clock, ids }) });
+  // Read-only binding: no policy admission or implicit local execution owner.
+  const accountOutreach = new AccountOutreach({ database, clock, ids, accounts: new AccountRepository({ database, clock, ids }),
+    policy: createSqlAccountRoutePolicy({ database, clock }) });
   const discoveryRepository = new DiscoveryRepository({ database, unitOfWork });
   const jobs = new JobRepository(database);
   const identities = new IdentityRepository({ database, unitOfWork, clock, ids });
@@ -114,11 +115,11 @@ export function createDomainServices(input: {
     database, unitOfWork, clock, repository: prioritizationRepository, outboundPermission,
   });
   const todayRepository = new TodayRepository({ database, unitOfWork });
+  const workspaceSettings = new WorkspaceSettingsRepository({ database, unitOfWork });
   const today = new TodayService({
     database, unitOfWork, clock, repository: todayRepository, priorities: prioritization,
-    outboundPermission,
+    outboundPermission, workspaceSettings,
   });
-  const workspaceSettings = new WorkspaceSettingsRepository({ database, unitOfWork });
   const discoveryRead = new DiscoveryReadService({ database, unitOfWork, clock,
     services: { discoveryRepository, today, workspaceSettings, jobs, identities, sourceRepository,
       events, outboundPermission, prioritizationRepository, prioritization } });
