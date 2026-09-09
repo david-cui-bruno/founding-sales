@@ -600,6 +600,17 @@ test('unpaired local records remain selectable without worker authority or autom
     expect(positions).toHaveLength(3);
     for (const y of positions) expect(y).toBeLessThan(width === 1440 ? 900 : 700);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    const heading = await page.locator('.native-desk__lane h2').first().evaluate(el => {
+      const label = el.querySelector<HTMLElement>('.native-desk__lane-label')!;
+      const summary = el.querySelector<HTMLElement>('.native-desk__lane-summary')!;
+      const range = document.createRange(); range.selectNodeContents(label);
+      return {lines: range.getClientRects().length, labelWidth: label.getBoundingClientRect().width,
+        labelScroll: label.scrollWidth, summaryRight: summary.getBoundingClientRect().right, right: el.getBoundingClientRect().right};
+    });
+    expect(heading.lines).toBe(1);
+    expect(heading.labelWidth + 1).toBeGreaterThanOrEqual(heading.labelScroll);
+    expect(heading.summaryRight).toBeLessThanOrEqual(heading.right + 1);
+    await expect(page.locator('.native-desk__detail-bar')).toContainText('Existing commitments and relationships');
     await page.screenshot({path: testInfo.outputPath(`local-commitments-${width}.png`), animations: 'disabled'});
   }
   await page.getByRole('button', {name: 'Open contact workspace', exact: true}).click();
