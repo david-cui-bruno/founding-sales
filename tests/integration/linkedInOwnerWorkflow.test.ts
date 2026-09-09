@@ -1,9 +1,10 @@
+import { createLinkedInDraftProvider } from '../../src/main/linkedin/linkedInDraftProvider';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { LinkedInRepository } from '../../src/main/linkedin/linkedInRepository';
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { createLinkedInFixture } from '../fixtures/linkedInWorkspace';
-import { LinkedInService } from '../../src/main/linkedin/linkedInService';
+import { LinkedInService, createRuntimeLinkedInApi } from '../../src/main/linkedin/linkedInService';
 import { DelegationRepository } from '../../src/main/delegation/delegationRepository';
 import { ExecutionClient } from '../../src/main/delegation/executionClient';
 import { SqlDelegationTransport } from '../../src/main/delegation/delegationSync';
@@ -42,10 +43,10 @@ async function ownerFixture() {
   await client.sync(new AbortController().signal);
   const draft = f.drafts.create(f.drafts.requireStep(f.version.steps[0]!.id, 1), 'Reviewed');
   const service = () => new LinkedInService({ repository: f.drafts, owner: { repository, client } });
-  const bind = (database: AppDatabase) => {
+  const bind = (database: AppDatabase, signal?: AbortSignal) => {
     const repository = new DelegationRepository({ database, workspaceId: f.workspaceId, clock: f.clock });
     const transport = new SqlDelegationTransport({ database, workspaceId: f.workspaceId, pairingId: 'fictional-pairing', clock: f.clock });
-    const client = new ExecutionClient({ repository, transport, pairing: { endpoint: 'https://worker.example.test', workspaceId: f.workspaceId, credential: 'a'.repeat(43) }, fetch: http });
+    const client = new ExecutionClient({ repository, transport, pairing: { endpoint: 'https://worker.example.test', workspaceId: f.workspaceId, credential: 'a'.repeat(43) }, fetch: http, signal });
     return { repository, client, service: new LinkedInService({ repository: new LinkedInRepository({ ...f.deps, database }), owner: { repository, client } }) };
   };
   return { ...f, repository, client, draft, service, commands, bind, setOnline: (value: boolean) => { online = value; } };
@@ -190,4 +191,64 @@ it('serializes competing retry IDs through two actual encrypted connections and 
     f.setOnline(true); expect(await f.service().begin(first)).toMatchObject({ status: 'started' });
     expect(f.commands.filter(value => value.kind === 'prepare-manual')).toHaveLength(1);
   } finally { closeDatabase(second); f.close(); }
+});
+
+it('runtime API reacquires actual encrypted SQL and fresh owner per operation, deriving durable draft enrollment', async () => {
+  const f = await ownerFixture(); const lifetime = new AbortController(); const signals: AbortSignal[] = [];
+  let leases = 0; let live = false; let owners = 0;
+  const gate = { async withDatabase<T>(run: (db: AppDatabase, signal: AbortSignal) => Promise<T>): Promise<T> {
+    const database = openDatabase({ path: f.path, key: f.key }); leases++; live = true;
+    try { return await run(database, lifetime.signal); } finally { live = false; closeDatabase(database); }
+  } };
+  try {
+    const api = createRuntimeLinkedInApi({ databaseGate: gate, workspaceId: f.workspaceId, clock: f.clock,
+      ownerFactory: (database, signal) => { expect(live).toBe(true); owners++; signals.push(signal); return f.bind(database, signal); },
+      shell: { openExternal: async () => { expect(live).toBe(true); } }, clipboard: { writeText: () => { expect(live).toBe(true); } } });
+    expect((await api.prepare({ enrollmentId: f.enrollment.id, stepId: f.draft.stepId, expectedVersion: 1 })).id).toBe(f.draft.id);
+    expect((await api.get({ draftId: f.draft.id, expectedRevision: 1 })).enrollmentId).toBe(f.enrollment.id);
+    await api.copy({ draftId: f.draft.id, expectedRevision: 1 }); await api.open({ draftId: f.draft.id, expectedRevision: 1 });
+    await api.save({ draftId: f.draft.id, expectedRevision: 1, body: 'Scoped runtime edit' });
+    const begin = { commandId: randomUUID(), draftId: f.draft.id, expectedRevision: 2 };
+    expect(await api.begin(begin)).toMatchObject({ status: 'started' });
+    expect(await api.recover({ draftId: f.draft.id, expectedRevision: 2 })).toMatchObject({ started: true, approvalCommandId: begin.commandId });
+    expect(await api.reportOutcome({ commandId: randomUUID(), draftId: f.draft.id, expectedRevision: 2, outcome: 'human_reported_sent', observedAt: f.now })).toMatchObject({ receipt: { status: 'applied' } });
+    expect(leases).toBe(8); expect(owners).toBe(8); expect(live).toBe(false); expect(signals.every(signal => signal.aborted)).toBe(true);
+    await expect(api.prepare({ enrollmentId: 'wrong-enrollment', stepId: f.draft.stepId, expectedVersion: 1 })).rejects.toThrow();
+    const foreign = createRuntimeLinkedInApi({ databaseGate: gate, workspaceId: 'wrong-workspace', clock: f.clock, ownerFactory: (database, signal) => f.bind(database, signal) });
+    await expect(foreign.get({ draftId: f.draft.id, expectedRevision: 2 })).rejects.toThrow('draft_missing');
+    lifetime.abort(); await expect(api.get({ draftId: f.draft.id, expectedRevision: 2 })).rejects.toThrow();
+    expect(owners).toBe(9);
+  } finally { f.close(); }
+});
+
+it('runtime lease abort cancels actual draft HTTP and rejects late completion without saving', async () => {
+  const f = await createLinkedInFixture(); const lifetime = new AbortController();
+  let release!: (response: Response) => void; let reached!: () => void;
+  const reachedHttp = new Promise<void>(resolve => { reached = resolve; });
+  const response = new Promise<Response>(resolve => { release = resolve; });
+  let httpSignal: AbortSignal | null | undefined; let ownerSignal: AbortSignal | undefined; let live = false;
+  const provider = createLinkedInDraftProvider({ credentials: { load: async () => ({ model: { apiKey: 'fictional-key', model: 'fictional-model' } }) },
+    fetch: async (_url, init) => { expect(live).toBe(true); httpSignal = init?.signal; reached(); return response; } });
+  try {
+    const api = createRuntimeLinkedInApi({ workspaceId: f.workspaceId, clock: f.clock, provider,
+      databaseGate: { async withDatabase<T>(run: (db: AppDatabase, signal: AbortSignal) => Promise<T>): Promise<T> {
+        const database = openDatabase({ path: f.path, key: f.key }); live = true;
+        try { return await run(database, lifetime.signal); } finally { live = false; closeDatabase(database); }
+      } },
+      ownerFactory: (database, signal) => {
+        ownerSignal = signal;
+        const repository = new DelegationRepository({ database, workspaceId: f.workspaceId, clock: f.clock });
+        const transport = new SqlDelegationTransport({ database, workspaceId: f.workspaceId, pairingId: 'fictional-pairing', clock: f.clock });
+        const client = new ExecutionClient({ repository, transport, pairing: { endpoint: 'https://worker.example.test', workspaceId: f.workspaceId, credential: 'a'.repeat(43) }, signal,
+          fetch: async () => { throw new Error('unexpected owner HTTP during draft generation'); } });
+        return { repository, client };
+      } });
+    const pending = api.prepare({ enrollmentId: f.enrollment.id, stepId: f.version.steps[0]!.id, expectedVersion: 1 });
+    const rejected = expect(pending).rejects.toThrow();
+    await reachedHttp; expect(live).toBe(true); lifetime.abort();
+    expect(httpSignal?.aborted).toBe(true); expect(ownerSignal?.aborted).toBe(true);
+    release(Response.json({ status: 'completed', output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({ body: 'Late fictional response', evidenceIds: ['product:callie:description:v1'] }) }] }] }));
+    await rejected; expect(live).toBe(false);
+    expect(f.db.raw.prepare('SELECT count(*) AS n FROM manual_linkedin_drafts').get()).toEqual({ n: 0 });
+  } finally { f.close(); }
 });

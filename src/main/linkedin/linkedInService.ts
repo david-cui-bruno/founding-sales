@@ -1,12 +1,14 @@
+import type { z } from 'zod';
+import type { AppDatabase } from '../db/database';
 import { CALLIE_PRODUCT_FACTS } from '../../shared/product/callieProductFacts';
 import type { ActionState, DelegationCommand } from '../../shared/contracts/delegationContract';
-import { linkedInBeginSchema, linkedInPrepareSchema, type LinkedInBegin, linkedInRevisionSchema, linkedInReportSchema, type LinkedInApi, type LinkedInPrepare, type LinkedInSave, type LinkedInRevision, type LinkedInReport } from '../../shared/contracts/linkedInContract';
+import { linkedInSaveSchema, linkedInBeginSchema, linkedInPrepareSchema, type LinkedInBegin, linkedInRevisionSchema, linkedInReportSchema, type LinkedInApi, type LinkedInPrepare, type LinkedInSave, type LinkedInRevision, type LinkedInReport } from '../../shared/contracts/linkedInContract';
 import { approvedLinkedInFactsSchema, type ApprovedLinkedInFacts, type LinkedInDraftProvider } from './linkedInDraftProvider';
 import type { DelegationRepository } from '../delegation/delegationRepository';
 import type { ExecutionClient } from '../delegation/executionClient';
 import { accountFingerprint } from '../domain/accounts/accountEvidence';
 import { prepareManualCommandSchema, completeManualCommandSchema } from '../../shared/contracts/ownerCommandContract';
-import type { LinkedInRepository, LinkedInActionIdentity } from './linkedInRepository';
+import { LinkedInRepository, type LinkedInActionIdentity } from './linkedInRepository';
 export function validateLinkedInTarget(target: string): string {
   if (!/^https:\/\/(?:www\.)?linkedin\.com\/(?:in\/[A-Za-z0-9_-]+|messaging\/thread\/[A-Za-z0-9_-]+)\/?$/.test(target)) throw new Error('linkedin_target_invalid');
   return target;
@@ -130,4 +132,55 @@ export class LinkedInService implements LinkedInApi {
     const receipt = owner.repository.commandStatus(input.commandId); if (!receipt) throw new Error('owner_receipt_missing');
     return { draftId: draft.id, revision: draft.revision, receipt };
   }
+}
+
+/** C6 supplies its lifetime-checked wrapper around FoundationRuntime.withDatabase.
+ * Repositories and owner clients are constructed only inside one operation lease. */
+export function createRuntimeLinkedInApi(options: Omit<ConstructorParameters<typeof LinkedInService>[0], 'repository' | 'owner'> & {
+  databaseGate: { withDatabase<T>(run: (database: AppDatabase, signal: AbortSignal) => Promise<T>): Promise<T> };
+  workspaceId: string;
+  clock: { now(): string };
+  ownerFactory(database: AppDatabase, signal: AbortSignal): NonNullable<ConstructorParameters<typeof LinkedInService>[0]['owner']>;
+}): LinkedInApi {
+  const { databaseGate, workspaceId, clock, ownerFactory, ...adapters } = options;
+  const draftEnrollment = (database: AppDatabase, input: LinkedInRevision) => {
+    const row = database.raw.prepare('SELECT enrollment_id FROM manual_linkedin_drafts WHERE workspace_id=? AND id=?')
+      .get(workspaceId, input.draftId) as { enrollment_id: string } | undefined;
+    if (!row) throw new Error('draft_missing');
+    return row.enrollment_id;
+  };
+  const run = <Q, R>(schema: z.ZodType<Q>, raw: Q, enrollment: (database: AppDatabase, input: Q) => string,
+    operation: (service: LinkedInService, input: Q) => Promise<R>): Promise<R> => databaseGate.withDatabase(async (database, external) => {
+    external.throwIfAborted();
+    const input = schema.parse(raw);
+    const enrollmentId = enrollment(database, input);
+    const lifetime = new AbortController();
+    const signal = AbortSignal.any([external, lifetime.signal]);
+    let service: LinkedInService | undefined;
+    const abort = () => service?.dispose();
+    try {
+      const repository = new LinkedInRepository({ database, workspaceId, enrollmentId, clock });
+      const owner = ownerFactory(database, signal);
+      service = new LinkedInService({ ...adapters, repository, owner });
+      signal.addEventListener('abort', abort, { once: true });
+      signal.throwIfAborted();
+      const result = await operation(service, input);
+      signal.throwIfAborted();
+      return result;
+    } finally {
+      service?.dispose();
+      lifetime.abort();
+      signal.removeEventListener('abort', abort);
+    }
+  });
+  return {
+    prepare: input => run(linkedInPrepareSchema, input, (_database, request) => request.enrollmentId, (service, request) => service.prepare(request)),
+    get: input => run(linkedInRevisionSchema, input, draftEnrollment, (service, request) => service.get(request)),
+    save: input => run(linkedInSaveSchema, input, draftEnrollment, (service, request) => service.save(request)),
+    copy: input => run(linkedInRevisionSchema, input, draftEnrollment, (service, request) => service.copy(request)),
+    open: input => run(linkedInRevisionSchema, input, draftEnrollment, (service, request) => service.open(request)),
+    begin: input => run(linkedInBeginSchema, input, draftEnrollment, (service, request) => service.begin(request)),
+    recover: input => run(linkedInRevisionSchema, input, draftEnrollment, (service, request) => service.recover(request)),
+    reportOutcome: input => run(linkedInReportSchema, input, draftEnrollment, (service, request) => service.reportOutcome(request)),
+  };
 }
