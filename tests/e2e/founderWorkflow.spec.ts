@@ -195,7 +195,7 @@ test('light/dark and density preferences survive renderer reload', async () => {
 
     // Theme and density controls now live in Settings → Appearance, one of
     // the sections of the settings master-detail.
-    await page.getByRole('link', { name: 'Settings' }).click();
+    await page.getByRole('link', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Appearance', exact: true }).click();
     const appearance = page.getByRole('region', { name: 'Appearance' });
     await appearance.getByRole('button', { name: 'Dark appearance' }).click();
