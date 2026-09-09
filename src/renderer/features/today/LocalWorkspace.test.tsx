@@ -149,3 +149,16 @@ it('labels retained personal detail as existing commitments rather than company 
   const heading = screen.getByRole('heading', { name: /^Calls/ });
   expect(within(heading).getByText('Calls').classList.contains('native-desk__lane-label')).toBe(true);
 });
+it('keeps the exact local account selected when an initially failed daily read recovers', async () => {
+  const f = fixture(); const daily = f.api.daily.get;
+  f.api.daily.get = vi.fn().mockRejectedValueOnce(Error('unavailable')).mockImplementation(daily);
+  const open = vi.fn();
+  render(<NativeDeskRoute api={f.api} surface="accounts" onOpenLead={open} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' }));
+  expect(screen.getByRole('heading', { name: 'Account A' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await waitFor(() => expect(screen.queryByText(/Daily workspace unavailable/)).toBeNull());
+  expect(screen.getByRole('heading', { name: 'Account A' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
+  expect(open).not.toHaveBeenCalled();
+});

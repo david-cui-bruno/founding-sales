@@ -19,8 +19,9 @@ export function LocalAccountDetail({ account }: { account: AccountEvidenceSnapsh
   </section>;
 }
 
-export function LocalOnlyAccountLibrary({ read }: { read: LocalRead<LocalWorkspaceSnapshot> }) {
-  const [selected, select] = useState<string | null>(null);
+export function LocalOnlyAccountLibrary({ read, initialSelected = null, onSelectionChange }: { read: LocalRead<LocalWorkspaceSnapshot>; initialSelected?: string | null; onSelectionChange?(key: string): void }) {
+  const [selected, setSelected] = useState<string | null>(initialSelected);
+  const select = (key: string) => { setSelected(key); onSelectionChange?.(key); };
   const account = (read.value?.accounts.state === 'available' ? read.value.accounts.snapshots : []).find(a => localAccountKey(a.account.id) === selected);
   return <div className="native-desk__layout"><nav className="native-desk__queue" aria-label="Local accounts"><LocalAccountLibrary read={read} selected={selected} onSelect={select} /></nav><div className="native-desk__detail">{account && <LocalAccountDetail account={account} />}</div></div>;
 }

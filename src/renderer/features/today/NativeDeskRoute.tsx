@@ -187,7 +187,7 @@ export function NativeDeskRoute({
   }, [api, localHold, snapshot, current?.config, current?.error]);
   const refresh = () => { local.refresh(); load(); };
   const localOnly = surface === 'accounts'
-    ? <LocalOnlyAccountLibrary read={local.read.overview} />
+    ? <LocalOnlyAccountLibrary read={local.read.overview} initialSelected={viewSelection(api.daily).get(JSON.stringify([snapshot?.workspaceId ?? null, surface]))} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} />
     : surface === 'today' ? <LocalOnlyCalls read={local.read.retained} onOpenLead={onOpenLead} initialSelected={viewSelection(api.daily).get(JSON.stringify([snapshot?.workspaceId ?? null, surface]))} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} /> : <p>Campaign scope unavailable. No worker actions are enabled.</p>;
   if (!snapshot)
     return (
