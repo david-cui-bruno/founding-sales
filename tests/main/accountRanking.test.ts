@@ -63,4 +63,36 @@ describe('rankAccount', () => {
     ]);
     expect(result.unknowns).toEqual(['residential_scope', 'operating_footprint', 'business_route']);
   });
+
+  it('does not promote explicit commercial or non-residential exclusions into supported fit', () => {
+    for (const value of ['Commercial only. No residential properties.', 'Non-residential property management']) {
+      const result = rankAccount(snapshot({
+        claims: [
+          { kind: 'fact', key: 'residential_scope', value, evidenceIds: ['scope-negative'] },
+          { kind: 'fact', key: 'operating_footprint', value: 'Regional property manager', evidenceIds: ['footprint'] },
+        ],
+        routes: [
+          { id: 'route-phone', accountId: 'pm-account', personId: null, channel: 'phone', value: '+15555550100', purpose: 'business', evidenceIds: ['route'], verification: 'published', version: 2 },
+        ],
+      }), asOf);
+      expect(result.fit).toBe('not_target');
+      expect(result.reasons).not.toContainEqual(expect.objectContaining({
+        text: 'Evidence supports residential or multifamily property management fit.',
+      }));
+    }
+  });
+
+  it('keeps contradictory residential scope evidence uncertain', () => {
+    const result = rankAccount(snapshot({
+      claims: [
+        { kind: 'fact', key: 'residential_scope', value: 'Residential multifamily property management', evidenceIds: ['scope-positive'] },
+        { kind: 'fact', key: 'residential_scope', value: 'Commercial only. No residential properties.', evidenceIds: ['scope-negative'] },
+        { kind: 'fact', key: 'operating_footprint', value: 'Regional property manager', evidenceIds: ['footprint'] },
+      ],
+      routes: [
+        { id: 'route-phone', accountId: 'pm-account', personId: null, channel: 'phone', value: '+15555550100', purpose: 'business', evidenceIds: ['route'], verification: 'published', version: 2 },
+      ],
+    }), asOf);
+    expect(result.fit).toBe('uncertain');
+  });
 });

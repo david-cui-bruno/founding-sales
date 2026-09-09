@@ -33,6 +33,16 @@ describe('planDailyAccountCalls', () => {
     })).toEqual({ accountIds: ['warm-a', 'warm-b', 'cold-a'], workloadConflict: true });
   });
 
+  it('retains due work when configured new-call slots are zero', () => {
+    expect(planDailyAccountCalls({
+      due: ['warm-due'],
+      ranked: ['new-cold'],
+      newCallSlots: 0,
+      completedAccountIds: [],
+      totalCallCapacity: null,
+    })).toEqual({ accountIds: ['warm-due'], workloadConflict: false });
+  });
+
   it('requires explicit nullable capacity and nonnegative new-call slots', () => {
     expect(() => planDailyAccountCalls({
       due: [], ranked: ['cold'], newCallSlots: -1, completedAccountIds: [], totalCallCapacity: null,

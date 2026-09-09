@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BUILTIN_CADENCES } from '../../src/main/domain/cadence/builtinCadences';
 import { PLAYBOOK_CHANNEL_POLICIES_V2, scheduleComponent } from '../../src/main/domain/cadence/cadenceScheduler';
-import { planTodayQueue } from '../../src/main/domain/today/todayOrdering';
+import { planDailyAccountCalls, planTodayQueue } from '../../src/main/domain/today/todayOrdering';
 import { DEFAULT_TODAY_CAPACITY, type ParsedTodayCandidate } from '../../src/main/domain/today/todayTypes';
 
 const now = '2026-09-08T15:00:00.000Z';
@@ -54,6 +54,22 @@ describe('approved playbook queue', () => {
       lead('legacy-label')]);
     expect(result.lanes.filter(lane => lane.lane !== 'later').flatMap(lane => lane.items.map(item => item.personId)))
       .toEqual(['interview']);
+  });
+  it('keeps callback and warm obligations while adding configured meeting-first new account work', () => {
+    const result = queue([lead('warm-intro', { segment: 'warm' }),
+      lead('due-callback', { commitment: { kind: 'callback', activityId: 'promise-activity', dueAt: now } })]);
+    expect(result.lanes.filter(lane => lane.lane !== 'later').flatMap(lane => lane.items.map(item => item.personId)))
+      .toEqual(['due-callback', 'warm-intro']);
+    expect(planDailyAccountCalls({
+      due: ['due-callback-account', 'warm-intro-account'],
+      ranked: ['new-pm-account'],
+      newCallSlots: 1,
+      completedAccountIds: [],
+      totalCallCapacity: null,
+    })).toEqual({
+      accountIds: ['due-callback-account', 'warm-intro-account', 'new-pm-account'],
+      workloadConflict: false,
+    });
   });
 });
 

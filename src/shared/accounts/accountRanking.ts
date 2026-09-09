@@ -19,6 +19,16 @@ function hasAny(value: string, terms: readonly string[]): boolean {
   return terms.some(term => value.includes(term));
 }
 
+function isExplicitNonResidentialScope(value: string): boolean {
+  return hasAny(value, [
+    'commercial only',
+    'commercial-only',
+    'no residential',
+    'non-residential',
+    'nonresidential',
+  ]);
+}
+
 function evidenceFrom(claims: readonly AccountClaim[], predicate: (claim: AccountClaim) => boolean): string[] {
   const ids: string[] = [];
   for (const claim of claims) {
@@ -37,8 +47,12 @@ function businessRoute(routes: readonly AccountRoute[]): AccountRoute | null {
 export function rankAccount(snapshot: AccountEvidenceSnapshot, asOf: string): AccountRank {
   if (!UTC_INSTANT.test(asOf)) throw new Error('asOf must be a canonical UTC timestamp.');
   const reasons: { text: string; evidenceIds: string[] }[] = [];
+  const negativeScopeEvidence = evidenceFrom(snapshot.claims, claim => claim.kind === 'fact'
+    && claim.key === 'residential_scope'
+    && isExplicitNonResidentialScope(textOf(claim)));
   const supportedScopeEvidence = evidenceFrom(snapshot.claims, claim => claim.kind === 'fact'
     && claim.key === 'residential_scope'
+    && !isExplicitNonResidentialScope(textOf(claim))
     && hasAny(textOf(claim), ['residential', 'multifamily', 'multi-family', 'rental', 'apartments']));
   if (supportedScopeEvidence.length > 0) {
     reasons.push({
@@ -67,9 +81,9 @@ export function rankAccount(snapshot: AccountEvidenceSnapshot, asOf: string): Ac
 
   const unknowns = [...snapshot.unknowns];
   if (route === null && !unknowns.includes('business_route')) unknowns.push('business_route');
-  const fit = supportedScopeEvidence.length > 0 && regionalEvidence.length > 0 ? 'supported'
-    : snapshot.claims.some(claim => claim.kind === 'fact' && claim.key === 'residential_scope'
-      && hasAny(textOf(claim), ['commercial only', 'commercial-only'])) ? 'not_target' : 'uncertain';
+  const fit = supportedScopeEvidence.length > 0 && negativeScopeEvidence.length > 0 ? 'uncertain'
+    : negativeScopeEvidence.length > 0 ? 'not_target'
+      : supportedScopeEvidence.length > 0 && regionalEvidence.length > 0 ? 'supported' : 'uncertain';
 
   return Object.freeze({
     accountId: snapshot.account.id,
