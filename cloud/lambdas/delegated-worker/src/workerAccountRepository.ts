@@ -9,15 +9,15 @@ import { researchLimitsSchema, type AccountResearchStore, type ResearchClaim, ty
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions, type Stored } from './dynamoStore';
 import { budgetSchema, type Budget } from './discoveryReservationStore';
 const projectionSchema = z.strictObject({ at: accountInstantSchema, account: accountSchema, claims: z.array(accountClaimSchema), routes: z.array(accountRouteSchema) });
-const accountRecordSchema = z.strictObject({ account: accountSchema, history: z.array(projectionSchema).min(1), sources: z.array(accountSourceSchema),
+export const accountRecordSchema = z.strictObject({ account: accountSchema, history: z.array(projectionSchema).min(1), sources: z.array(accountSourceSchema),
   claims: z.array(accountClaimSchema), routes: z.array(accountRouteSchema), researchRevision: integer.positive() });
-type AccountRecord = z.infer<typeof accountRecordSchema>;
+export type AccountRecord = z.infer<typeof accountRecordSchema>;
 const jobSchema = z.strictObject({ id: z.uuid(), accountId: accountIdSchema, limits: researchLimitsSchema, attempt: integer.positive().max(3),
   claimToken: z.string(), receiptCommandId: z.uuid(), receiptCommitted: z.boolean(), costMicros: integer.nullable(),
   state: z.enum(['queued', 'running', 'completed', 'parked']), reservedCost: integer, claimedAt: accountInstantSchema.nullable() });
 type JobRecord = z.infer<typeof jobSchema>;
 type Receipt = { fingerprint: string; kind: string; accountId: string; result: Account | AccountEvidenceReceipt; sequence: number; claimToken?: string };
-const accountKey = (id: string) => `ACCOUNT#${keyPart(id)}`;
+export const accountKey = (id: string) => `ACCOUNT#${keyPart(id)}`;
 const jobKey = (id: string) => `JOB#${keyPart(id)}`;
 const receiptKey = (id: string) => `ACCOUNT_COMMAND#${keyPart(id)}`;
 const jobFields = (job: JobRecord) => ({ accountId: job.accountId, state: job.state, claimToken: job.claimToken, receiptCommitted: job.receiptCommitted });
