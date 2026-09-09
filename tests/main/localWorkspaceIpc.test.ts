@@ -73,7 +73,7 @@ function lifetimeFixture(load?: () => Promise<void>) {
     prepareEncryptedDatabase: async () => undefined,
     openDatabase: options => { opens++; database = openDatabase(options); return database; },
     migrateToLatest,
-    createDomainRuntime: db => new DomainRuntime({ database: db, 
+    createDomainRuntime: db => new DomainRuntime({ database: db,
       clock: { now: () => '2026-09-09T12:00:00.000Z' }, ids: { next: () => crypto.randomUUID() } }),
     createHealthService: options => new HealthService(options),
     closeDatabase,

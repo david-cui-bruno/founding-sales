@@ -146,7 +146,12 @@ test('explicit local transition preserves a real callback and local account with
 
     await workspace.stop(); workspace = undefined;
     workspace = await launch(); observe(workspace);
-    expect((await workspace.page.evaluate(() => window.callie.localWorkspace.get())).transitionReceipt).toEqual(applied.transitionReceipt);
+    const reopened = await workspace.page.evaluate(() => window.callie.localWorkspace.get());
+    expect(reopened.transitionReceipt).toEqual(applied.transitionReceipt);
+    expect(reopened.accounts).toMatchObject({state: 'available', snapshots: [{account: {id: seeded.accountId}}]});
+    await workspace.page.getByRole('link', {name: 'Accounts', exact: true}).click();
+    await workspace.page.getByRole('button', {name: /Fixture Residential Management/}).click();
+    await expect(workspace.page.getByRole('heading', {name: 'Fixture Residential Management', exact: true})).toBeVisible();
     expect((await workspace.page.evaluate(() => window.callie.localWorkspace.getCommitments())).items).toEqual(beforeWork.items);
     expect((await workspace.page.evaluate(() => window.callie.daily.get())).workspaceId).toBeNull();
     await workspace.page.getByRole('link', { name: 'Settings', exact: true }).click();
