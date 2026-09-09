@@ -58,14 +58,161 @@ import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
 import type { SafeLogger } from './logging/safeLogger';
 import { createOutboundCommandService } from './communications/outboundCommandService';
-import { unavailablePhoneHandoff, unavailableOutboundReadiness } from './communications/phoneHandoffLauncher';
-import type { OutboundCommandServiceApi, OutboundDomainGate } from './communications/outboundPorts';
+import { createPhoneHandoffLauncher, unavailablePhoneHandoff, unavailableOutboundReadiness } from './communications/phoneHandoffLauncher';
+import type { OutboundCommandServiceApi, OutboundDomainGate, PhoneHandoffPort, OutboundReadinessPort } from './communications/outboundPorts';
+
+import { createInboundReadiness, type InboundRegistry, type InboundAdapter } from './communications/inboundReadiness';
+import { createNativePhoneLaunchDriver, inspectNativePhoneRouteCandidate, resolveVerifiedNativePhoneHelper,
+  type NativePhoneDriverOptions, type NativePhoneProcessRequest } from './communications/phoneLaunchDriver';
+import { PhoneRouteSettings, createPhoneSetupService, type PhoneSetupService } from './communications/phoneRouteSettings';
+import { registerPhoneSetupIpc } from './communications/registerPhoneSetupIpc';
+
+export type PhoneInboundRegistry = InboundRegistry & {
+  initialize(adapters: readonly InboundAdapter[]): void;
+  replace(adapters: readonly InboundAdapter[]): void;
+  register(adapter: InboundAdapter): () => void;
+  reset(): void;
+};
+/** Startup must explicitly finish adapter discovery, including an empty result.
+ * Future inbound owners register here before exposing their sending paths. */
+export function createPhoneInboundRegistry(): PhoneInboundRegistry {
+  let initialized = false;
+  let revision = 0;
+  let adapters: readonly InboundAdapter[] = Object.freeze([]);
+  const replace = (next: readonly InboundAdapter[]) => {
+    if (new Set(next.map(adapter => adapter.id)).size !== next.length) throw new Error('Duplicate inbound adapter');
+    adapters = Object.freeze([...next]); initialized = true; ++revision;
+  };
+  return {
+    snapshot: () => ({ initialized, revision, adapters }),
+    initialize: replace,
+    replace,
+    register(adapter) {
+      if (!initialized) throw new Error('Inbound registry is uninitialized');
+      replace([...adapters, adapter]);
+      let removed = false;
+      return () => {
+        if (removed) return;
+        removed = true;
+        if (adapters.includes(adapter)) replace(adapters.filter(current => current !== adapter));
+      };
+    },
+    reset() { initialized = false; adapters = Object.freeze([]); ++revision; },
+  };
+}
+
+export type PhoneBindings = {
+  phone: PhoneHandoffPort;
+  readiness: OutboundReadinessPort;
+  setup?: PhoneSetupService;
+  onSetupChanged?(callback: () => void): void;
+  invalidate?(locked?: boolean): void;
+  dispose?(): void;
+  /** Fictional process capture only. Never exposed over IPC. */
+  fixtureInvocations?: readonly NativePhoneProcessRequest[];
+};
+export type ProductionPhoneBindingsOptions = {
+  settings: PhoneRouteSettings;
+  registry: InboundRegistry;
+  helper: Parameters<typeof resolveVerifiedNativePhoneHelper>[0];
+  native?: Pick<NativePhoneDriverOptions, 'platform' | 'runAsync' | 'runSync'>;
+  now?: () => string;
+};
+
+/** No helper/OS work at construction. The first explicit inspection verifies the
+ * packaged same-team helper, shared by candidate inspection and proof-gated dispatch. */
+export function createProductionPhoneBindings(input: ProductionPhoneBindingsOptions): PhoneBindings {
+  let closed = false;
+  const supported = (input.native?.platform ?? process.platform) === 'darwin';
+  let locked = false;
+  let epoch = 0;
+  let inspectedEpoch: number | undefined;
+  let onChange = (): void => undefined;
+  let helper: Promise<string> | undefined;
+  let launcher: PhoneHandoffPort | undefined;
+  const unavailable = unavailablePhoneHandoff();
+  const resolveHelper = () => helper ??= resolveVerifiedNativePhoneHelper(input.helper);
+  const proof = () => !supported || closed || locked ? null : input.settings.read()?.fingerprint ?? null;
+  const setup = createPhoneSetupService({ settings: input.settings, now: input.now ?? (() => new Date().toISOString()),
+    inspectCandidate: async () => {
+      if (!supported || closed || locked) return null;
+      try {
+        const verifiedHelperPath = await resolveHelper();
+        if (!supported || closed || locked) return null;
+        return inspectNativePhoneRouteCandidate({ ...input.native, verifiedHelperPath });
+      } catch { return null; }
+    },
+    onChange: () => { ++epoch; inspectedEpoch = undefined; onChange(); },
+  });
+  return {
+    setup,
+    readiness: createInboundReadiness(input.registry),
+    onSetupChanged(callback) { onChange = callback; },
+    invalidate(suspended) { ++epoch; inspectedEpoch = undefined; if (suspended !== undefined) locked = suspended; setup.invalidate(suspended); },
+    dispose() { closed = true; ++epoch; inspectedEpoch = undefined; setup.dispose(); },
+    phone: {
+      async inspectCapability() {
+        const version = epoch;
+        inspectedEpoch = undefined;
+        if (!proof()) return unavailable.inspectCapability();
+        try {
+          const verifiedHelperPath = await resolveHelper();
+          if (version !== epoch || !proof()) return unavailable.inspectCapability();
+          launcher ??= createPhoneHandoffLauncher({
+            driver: createNativePhoneLaunchDriver({ ...input.native, verifiedHelperPath, setupFingerprint: proof }),
+            // Domain authorization checks DNC, jurisdiction and exact contact. The
+            // launcher independently rejects short or malformed targets.
+            isExcludedNumber: () => false,
+          });
+          const capability = await launcher.inspectCapability();
+          if (version !== epoch || !proof()) return unavailable.inspectCapability();
+          if (capability.state === 'available') inspectedEpoch = version;
+          return capability;
+        } catch { return unavailable.inspectCapability(); }
+      },
+      dispatch(phone) {
+        const authorized = inspectedEpoch === epoch && !closed && !locked;
+        inspectedEpoch = undefined;
+        return authorized && launcher ? launcher.dispatch(phone) : unavailable.dispatch(phone);
+      },
+    },
+  };
+}
+
+export function createStartupPhoneBindings(options: ApplicationStartupOptions, registry: InboundRegistry): PhoneBindings {
+  const settings = new PhoneRouteSettings(join(options.userDataPath,
+    options.phoneRouteMode === 'fixture' ? 'phone-route-fixture.json' : 'phone-route.json'));
+  if (options.phoneRouteMode === 'fixture') {
+    const invocations: NativePhoneProcessRequest[] = [];
+    const reply = JSON.stringify({ version: 1, status: 'available', fingerprint: 'fictional-phone-route-v1' });
+    const bindings = createProductionPhoneBindings({ settings, registry,
+      helper: { path: { isPackaged: true, resourcesPath: '/Fictional/Callie.app/Contents/Resources',
+        developmentExecutablePath: '/forbidden', environment: {} },
+      signature: { parentExecutablePath: '/Fictional/Callie', expectedIdentifier: 'fictional.helper',
+        run: async () => ({ signed: true, identifier: 'fictional.helper', teamIdentifier: 'FICTIONAL' }) } },
+      native: { platform: 'darwin', runSync: () => reply, runAsync: async request => {
+        if (request.args[0] === '--phone-route-open') invocations.push(request);
+        return reply;
+      } },
+    });
+    return { ...bindings, fixtureInvocations: invocations };
+  }
+  const bridge = options.appleBridge;
+  return createProductionPhoneBindings({ settings, registry,
+    helper: { path: { isPackaged: bridge?.isPackaged ?? false, resourcesPath: bridge?.resourcesPath ?? '',
+      developmentExecutablePath: '/unavailable', environment: {} },
+    signature: { expectedIdentifier: bridge?.expectedIdentifier ?? '', parentExecutablePath: bridge?.parentExecutablePath ?? '' } },
+    native: { platform: bridge?.platform ?? process.platform },
+  });
+}
 
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   createEmailService?(runtime:FoundationRuntime,userDataPath:string):ReturnType<typeof createEmailService>;
   registerOutreachIpc?:typeof registerOutreachIpc;
   createDiscoveryWorker?: typeof createDiscoveryWorker;
   createOutboundCommandService?: typeof createOutboundCommandService;
+  createPhoneBindings?(runtime: FoundationRuntime): PhoneBindings;
+  registerPhoneSetupIpc?: typeof registerPhoneSetupIpc;
   createBackupService?(options: BackupServiceOptions): Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'>;
   createRecoveryService?(options: RecoveryServiceOptions): RecoveryProvider & { shutdown(): Promise<void> };
   registerApplicationIpc(
@@ -105,6 +252,7 @@ export type ApplicationStartupOptions = {
   isTrustedRendererUrl?: (url: string) => boolean;
   appleBridge?: AppleBridgeSupervisorOptions;
   appleSpikeEnabled?: boolean;
+  phoneRouteMode?: 'native' | 'fixture';
   /**
    * Auto-polls the sourcing inbox on startup plus every 15 minutes. Off by
    * default so tests and packaged E2E runs never touch the network; main.ts
@@ -345,6 +493,9 @@ export async function startApplication(
   let recoveryService: (RecoveryProvider & { shutdown(): Promise<void> }) | undefined;
   let shutdownPromise: Promise<void> | undefined;
   let outbound: OutboundCommandServiceApi | undefined;
+  let phoneBindings: PhoneBindings | undefined;
+  let startupInboundRegistry: PhoneInboundRegistry | undefined;
+  let unregisterPhoneSetup: (() => void) | undefined;
   let unregisterOutboundLifecycle: (() => void) | undefined;
   let removeStartupAbort: (() => void) | undefined;
   let discoveryWorker: DiscoveryWorker | undefined;
@@ -373,6 +524,8 @@ export async function startApplication(
     // Reserve permanent owner closure before any injected callback can reenter.
     outboundClosed = true;
     try { email?.dispose(); } catch (error) { cleanupErrors.push(error); }
+    startupInboundRegistry?.reset();
+    try { phoneBindings?.dispose?.(); } catch (error) { cleanupErrors.push(error); }
     try { outbound?.dispose(); } catch (error) { cleanupErrors.push(error); }
     detachOutboundLifecycle();
     try { detachStartupAbort(); } catch (error) { cleanupErrors.push(error); }
@@ -431,6 +584,7 @@ export async function startApplication(
       try { await recoveryCleanup; } catch (error) { cleanupErrors.push(error); }
       finally { recoveryService = undefined; }
 
+      try { unregisterPhoneSetup?.(); } catch (error) { cleanupErrors.push(error); } finally { unregisterPhoneSetup = undefined; }
       try { unregisterEmail?.(); } catch(error) { cleanupErrors.push(error); } finally { unregisterEmail=undefined; }
       try {
         unregisterApplicationIpc?.();
@@ -488,11 +642,23 @@ export async function startApplication(
         recordOutboundRefusal: (request, reason) => current.recordOutboundRefusal(request, reason),
       })),
     };
+    if (dependencies === defaultDependencies && options.phoneRouteMode !== undefined) {
+      startupInboundRegistry = createPhoneInboundRegistry();
+    }
+    phoneBindings = dependencies.createPhoneBindings?.(runtime)
+      ?? (dependencies === defaultDependencies && options.phoneRouteMode !== undefined
+        ? createStartupPhoneBindings(options, startupInboundRegistry)
+        : { phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness() });
     outbound = (dependencies.createOutboundCommandService ?? createOutboundCommandService)({
-      domain, phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(),
+      domain, phone: phoneBindings.phone, readiness: phoneBindings.readiness,
     });
+    phoneBindings.onSetupChanged?.(() => { if (!outboundClosed) outbound.invalidate('wake'); });
     email = dependencies.createEmailService?.(runtime,options.userDataPath);
     if(outboundClosed)email?.dispose();
+    // The composed v1 email service sends drafts but owns no inbound adapter, and
+    // the optional Apple spike is not a synchronization adapter. This explicit
+    // discovery result must be extended by future inbound owners before activation.
+    startupInboundRegistry?.initialize([]);
     if (options.signal !== undefined) {
       const signal = options.signal;
       removeStartupAbort = () => signal.removeEventListener('abort', abortStartup);
@@ -501,10 +667,11 @@ export async function startApplication(
       throwIfStartupCancelled(signal);
     }
     unregisterOutboundLifecycle = options.registerOutboundLifecycle?.({
-      onWake: () => { if (!outboundClosed) {email?.invalidate();outbound.invalidate('wake');} },
-      onLock: () => { if (!outboundClosed) {email?.invalidate(true);outbound.invalidate('lock');} },
+      onWake: () => { if (!outboundClosed) {phoneBindings?.invalidate?.();email?.invalidate();outbound.invalidate('wake');} },
+      onLock: () => { if (!outboundClosed) {phoneBindings?.invalidate?.(true);email?.invalidate(true);outbound.invalidate('lock');} },
       onUnlock: () => {
         if (outboundClosed) return;
+        phoneBindings?.invalidate?.(false);
         email?.invalidate(false);
         outbound.invalidate('wake');
         if (!outboundClosed) outbound.resumeAfterUnlock();
@@ -583,6 +750,9 @@ export async function startApplication(
       options.logDirectoryPath,
       outbound,
     );
+    if (phoneBindings.setup) unregisterPhoneSetup = (dependencies.registerPhoneSetupIpc ?? registerPhoneSetupIpc)({
+      provider: phoneBindings.setup, isTrustedRendererUrl: options.isTrustedRendererUrl,
+    });
     if(email)unregisterEmail=(dependencies.registerOutreachIpc??registerOutreachIpc)({provider:email,isTrustedRendererUrl:options.isTrustedRendererUrl});
     throwIfStartupCancelled(options.signal);
     if (options.sourcingPollingEnabled === true && sourcingPoller !== undefined) {

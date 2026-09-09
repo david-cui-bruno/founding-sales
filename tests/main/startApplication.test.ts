@@ -1,3 +1,4 @@
+import { createInboundReadiness } from '../../src/main/communications/inboundReadiness';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +12,7 @@ import type { HealthProvider } from '../../src/main/health/registerHealthIpc';
 import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import {
   startApplication,
+  createPhoneInboundRegistry,
   type ApplicationStartupDependencies,
   type ApplicationStartupOptions,
 } from '../../src/main/startApplication';
@@ -122,6 +124,47 @@ describe('startApplication', () => {
       closeDatabase: () => events.push('close'),
     };
   }
+
+  it('uses injected phone bindings and disposes setup before closing the runtime', async () => {
+    const events: string[] = []; const dependencies = createDependencies(events);
+    const phone = { inspectCapability: vi.fn(async () => ({ state: 'available' as const, reasonCode: null })), dispatch: vi.fn() };
+    const readiness = createInboundReadiness({ snapshot: () => ({ initialized: true, revision: 1, adapters: [] }) });
+    const setup = { status: vi.fn(), confirm: vi.fn(), clear: vi.fn(), invalidate: vi.fn(), dispose: vi.fn() };
+    const bindings = { phone, readiness, setup, invalidate: vi.fn(), dispose: vi.fn(() => events.push('phone-dispose')) };
+    dependencies.createPhoneBindings = () => { expect(events).toContain('recover'); return bindings; };
+    dependencies.registerPhoneSetupIpc = () => () => events.push('phone-unregister');
+    let outbound!: OutboundCommandServiceApi;
+    dependencies.createOutboundCommandService = input => { outbound = createOutboundCommandService(input); return outbound; };
+    let callbacks!: Parameters<NonNullable<ApplicationStartupOptions['registerOutboundLifecycle']>>[0];
+    const app = await startApplication({ appVersion: '1', userDataPath: '/fixture/phone', createWindow: () => undefined,
+      registerOutboundLifecycle: owned => { callbacks = owned; return () => undefined; } }, dependencies);
+    expect((await outbound.getCapabilities()).phoneHandoff.state).toBe('available');
+    callbacks.onLock(); expect(bindings.invalidate).toHaveBeenLastCalledWith(true);
+    callbacks.onWake(); expect((await outbound.getCapabilities()).phoneHandoff.state).toBe('unavailable');
+    callbacks.onUnlock(); expect(bindings.invalidate).toHaveBeenLastCalledWith(false);
+    expect((await outbound.getCapabilities()).phoneHandoff.state).toBe('available');
+    await app.shutdown(); await app.shutdown();
+    expect(bindings.dispose).toHaveBeenCalledTimes(1);
+    expect(events.indexOf('phone-dispose')).toBeLessThan(events.indexOf('close'));
+    expect(events.indexOf('phone-unregister')).toBeLessThan(events.indexOf('close'));
+  });
+
+  it('initializes a revisioned registry explicitly and invalidates snapshots on adapter registration/removal/reset', () => {
+    const registry = createPhoneInboundRegistry();
+    expect(registry.snapshot()).toEqual({ initialized: false, revision: 0, adapters: [] });
+    registry.initialize([]);
+    const empty = registry.snapshot();
+    const adapter = { id: 'fictional-inbound', relevant: () => true,
+      synchronize: async () => ({ revision: 'fixture' }), isAppliedCurrent: () => true };
+    const remove = registry.register(adapter);
+    expect(registry.snapshot()).toMatchObject({ initialized: true, revision: empty.revision + 1, adapters: [adapter] });
+    expect(empty.adapters).toEqual([]);
+    remove(); remove();
+    expect(registry.snapshot()).toEqual({ initialized: true, revision: empty.revision + 2, adapters: [] });
+    registry.reset();
+    expect(registry.snapshot().initialized).toBe(false);
+    expect(() => registry.register(adapter)).toThrow();
+  });
 
   it('owns email service registration, lock invalidation and disposal before database shutdown', async () => {
     const events:string[]=[];const dependencies=createDependencies(events);

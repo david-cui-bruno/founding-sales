@@ -320,6 +320,7 @@ describe('main process startup', () => {
       },
       appleSpikeEnabled: false,
       sourcingPollingEnabled: true,
+      phoneRouteMode: 'native',
       signal: expect.anything(),
       isTrustedRendererUrl: expect.any(Function),
       logger: mocks.logger,
@@ -383,6 +384,7 @@ describe('main process startup', () => {
     expect(mocks.commandLineHasSwitch).toHaveBeenCalledWith('use-mock-keychain');
     expect(mocks.startApplication.mock.calls[0]?.[0]).toMatchObject({
       sourcingPollingEnabled: false,
+      phoneRouteMode: 'fixture',
     });
   });
 

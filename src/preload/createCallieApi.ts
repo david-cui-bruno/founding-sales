@@ -1,3 +1,4 @@
+import { createPhoneSetupApi } from './apis/phoneSetupApi';
 import { createOutreachApi } from './apis/outreachApi';
 import { createDiscoveryApi } from './apis/discoveryApi';
 import { createRecoveryApi } from './apis/recoveryApi';
@@ -27,6 +28,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       get: (): Promise<AppHealth> =>
         client.requestNoInput('health:get', appHealthSchema),
     },
+    phoneSetup: createPhoneSetupApi(client),
     outreach: createOutreachApi(client),
     leads: createLeadsApi(client),
     leadDetail: createLeadDetailApi(client),
