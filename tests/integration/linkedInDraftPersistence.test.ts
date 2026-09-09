@@ -70,3 +70,24 @@ it('recovers latest edits after process-style database reopen without model conf
     expect((await service.prepare({ stepId: f.version.steps[0]!.id, expectedVersion: 1 })).body).toBe('Saved before lost IPC response');
   } finally { if (reopened) closeDatabase(reopened); f.close(); }
 });
+it('switches to a separately admitted real person route without leaking the prior editable draft', async () => {
+  const f = await createLinkedInFixture();
+  try {
+    const old = f.drafts.create(f.drafts.requireStep(f.version.steps[0]!.id, 1), 'Person one private edit');
+    const { AccountRepository } = await import('../../src/main/domain/accounts/accountRepository');
+    const accounts = new AccountRepository({ database: f.db, clock: f.clock, ids: { next: randomUUID } });
+    const snapshot = accounts.snapshot(f.account.id, f.now);
+    const personId = randomUUID(); const routeId = randomUUID();
+    f.db.raw.prepare('INSERT INTO persons(id,display_name,created_at,updated_at) VALUES(?,?,?,?)').run(personId, 'Fictional second person', f.now, f.now);
+    accounts.admitEvidence({ commandId: randomUUID(), accountId: f.account.id, expectedVersion: snapshot.account.version, sources: [], claims: [],
+      routes: [{ id: routeId, accountId: f.account.id, personId, channel: 'linkedin', value: 'https://linkedin.com/in/fictional-second-person', purpose: 'business', verification: 'published', evidenceIds: snapshot.routes.find(route => route.id === f.routeId)!.evidenceIds }] });
+    f.repo.switchRoute({ commandId: randomUUID(), enrollmentId: f.enrollment.id, expectedVersion: 1, selectedRouteId: routeId, contextRevision: 1, executionContextId: randomUUID() });
+    const context = f.drafts.requireStep(f.version.steps[0]!.id, 2);
+    expect(f.drafts.find(context)).toBeNull();
+    const next = f.drafts.create(context, 'Separate new person draft');
+    expect(next.personId).toBe(personId); expect(next.id).not.toBe(old.id);
+    expect(next.body).not.toContain('private');
+    expect(f.drafts.requireRevision(old.id, 1).body).toBe('Person one private edit');
+    expect(() => f.drafts.requireAction(old.id, 1)).toThrow('stale_context');
+  } finally { f.close(); }
+});

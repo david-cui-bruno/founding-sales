@@ -44,3 +44,16 @@ describe('manual LinkedIn safety', () => {
     } finally { f.close(); }
   });
 });
+it('suppression blocks open/copy/generation without erasing drafts', async () => {
+  const f = await createLinkedInFixture();
+  try {
+    const draft = f.drafts.create(f.drafts.requireStep(f.version.steps[0]!.id, 1), 'Preserve');
+    const shell = { openExternal: vi.fn(async () => undefined) }; const clipboard = { writeText: vi.fn(async () => undefined) };
+    const service = new LinkedInService({ repository: f.drafts, shell, clipboard });
+    f.db.raw.prepare('INSERT INTO pm_account_suppression_tombstones VALUES(?,?,?,?,?,?)').run('fictional-optout', f.account.id, f.now, 'human', 'fictional-evidence', f.now);
+    await expect(service.open({ draftId: draft.id, expectedRevision: 1 })).rejects.toThrow('linkedin_suppressed');
+    await expect(service.copy({ draftId: draft.id, expectedRevision: 1 })).rejects.toThrow('linkedin_suppressed');
+    expect((await service.get({ draftId: draft.id, expectedRevision: 1 })).body).toBe('Preserve');
+    expect(shell.openExternal).not.toHaveBeenCalled(); expect(clipboard.writeText).not.toHaveBeenCalled();
+  } finally { f.close(); }
+});

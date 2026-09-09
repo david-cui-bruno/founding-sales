@@ -3,7 +3,7 @@ import { createLinkedInDraftProvider } from '../../src/main/linkedin/linkedInDra
 import { LinkedInService } from '../../src/main/linkedin/linkedInService';
 import { createLinkedInFixture } from '../fixtures/linkedInWorkspace';
 const credentials = { model: { apiKey: 'fictional-key', model: 'fictional-model' } };
-const productFacts = { approvalId: 'fictional-approval', facts: [{ id: 'product:one', text: 'Fictional approved product fact.' }] };
+const productFacts = { approvalId: 'fictional-approval', version: 1, sourceRef: 'fictional-approved-source', approvalKind: 'owner_approved_description' as const, facts: [{ id: 'product:one', text: 'Fictional approved product fact.' }] };
 const response = (evidenceIds: string[] = ['product:one']) => new Response(JSON.stringify({ id: 'fixture_response', status: 'completed', output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({ body: 'Fictional prepared message', evidenceIds }) }] }] }));
 describe('configured LinkedIn draft provider', () => {
   it('generates through actual HTTP parser with pinned B1 evidence, preserves human edits on repeated prepare', async () => {
@@ -48,4 +48,35 @@ describe('configured LinkedIn draft provider', () => {
       await expect(service.prepare({ stepId: f.version.steps[0]!.id, expectedVersion: 1 })).rejects.toThrow('disposed');
     } finally { f.close(); }
   });
+});
+it('dispose aborts in-flight provider and no late response persists', async () => {
+  const f = await createLinkedInFixture();
+  try {
+    let release!: () => void; let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const http = async () => { entered(); await new Promise<void>(resolve => { release = resolve; }); return response(); };
+    const provider = createLinkedInDraftProvider({ credentials: { load: async () => credentials }, fetch: http });
+    const service = new LinkedInService({ repository: f.drafts, provider, productFacts });
+    const pending = service.prepare({ stepId: f.version.steps[0]!.id, expectedVersion: 1 });
+    await started; service.dispose(); release();
+    await expect(pending).rejects.toThrow();
+    expect(f.db.raw.prepare('SELECT count(*) AS n FROM manual_linkedin_drafts').get()).toEqual({ n: 0 });
+  } finally { f.close(); }
+});
+it('passes versioned owner-approved Callie description provenance through the real draft HTTP boundary', async () => {
+  const f = await createLinkedInFixture();
+  try {
+    let sent: Record<string, unknown> | undefined;
+    const provider = createLinkedInDraftProvider({ credentials: { load: async () => credentials }, fetch: async (_url, init) => {
+      sent = JSON.parse(JSON.parse(String(init?.body)).input) as Record<string, unknown>;
+      return response([]);
+    } });
+    const service = new LinkedInService({ repository: f.drafts, provider });
+    expect((await service.prepare({ stepId: f.version.steps[0]!.id, expectedVersion: 1 })).body).toBe('Fictional prepared message');
+    expect(sent).toMatchObject({ productFactsVersion: 1, productApprovalKind: 'owner_approved_description',
+      productApprovalId: 'callie-product-description:2026-09-08:v1', productSourceRef: 'docs/superpowers/specs/2026-09-08-meeting-first-fss-design.md#1-the-product-in-one-minute' });
+    expect(JSON.stringify(sent)).toContain('tenant requests');
+    expect(JSON.stringify(sent)).toContain('coordinates contractors');
+    expect(JSON.stringify(sent)).not.toMatch(/guaranteed|savings|customer count/i);
+  } finally { f.close(); }
 });

@@ -61,6 +61,14 @@ export class LinkedInRepository {
     if (draft.state === 'held' || draft.state === 'closed' || linkedInHash(draft.body) !== draft.contentHash || context.targetHash !== draft.targetHash) throw new Error('draft_unavailable');
     return { draft, context };
   }
+  handoffId(draft: LinkedInDraft): string | null {
+    const row = this.raw.prepare('SELECT handoff_id FROM delegated_manual_handoffs WHERE workspace_id=? AND account_id=? AND action_id=?')
+      .get(this.deps.workspaceId, draft.accountId, `${draft.id}:${draft.revision}`) as { handoff_id: string } | undefined;
+    return row?.handoff_id ?? null;
+  }
+  assertObservedAt(observedAt: string, startedAt: string) {
+    if (observedAt < startedAt || observedAt > this.deps.clock.now()) throw new Error('observation_time_invalid');
+  }
   approve(input: { commandId: string; draftId: string; expectedRevision: number }) {
     z.uuid().parse(input.commandId);
     return this.atomic(() => {
