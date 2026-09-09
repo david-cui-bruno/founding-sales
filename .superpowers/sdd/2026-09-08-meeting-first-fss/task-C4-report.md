@@ -354,3 +354,26 @@ npx --no-install tsc --noEmit --skipLibCheck --esModuleInterop --target ESNext -
 ```
 
 C6/humpback owns endpoint authentication, current AUTH/pairing/suppression, mail/noMail composition and final proof expiry/revision check. They were sent frozen counterpart7e1aa9c; their endpoint/phone integration completion is not claimed here. This validator grants no provider/human side-effect authority by itself. No endpoint/scheduler/renderer changes, real calls, LinkedIn sends, live providers, cloud requests, installs or builds performed. Offline SDK transaction interpreter remains distinct from live Dynamo acceptance.
+
+## Verified Sent acceptance after concurrent terminal cancellation (2026-09-09 02:12 UTC)
+
+Read FULL updated task-C4-settlement-review.md including terminal repair review. Narrow followup `db162d8`, three exact owned paths inspected (51+/7-). Production delta only admits the existing accepted `sent_lookup`/`sent_match` pair with exact provider thread identity, alongside existing accepted provider_result. Cancellation still requires provider_result/provider_not_sent/null identity. Original reservation/RFC/content/target binding, terminal immutable markers/checks/caps/event semantics unchanged.
+
+RED: actual campaign dispatch yields unknown, real createSendReconciler starts and pauses at fictional Sent list HTTP, a genuine original-bound provider_not_sent settlement commits, then the paused exact Sent response completes. Before fix, reconciliation returned unknown/evidence_uncommitted (one failed/88 skipped). After fix it persists verified Sent acceptance as separate conflict fact, holds enrollment, preserves terminal ACTION/current flight/reservation/cap byte-for-byte, replays without event/count changes and performs no second send. This is already-in-flight reconciliation, not a new terminal poll. Four negative tests reject wrong reason, wrong thread, missing identity and wrong RFC without evidence/marker/event writes.
+
+Fresh commands, each with required Node24 PATH export:
+```sh
+npm test --prefix cloud/lambdas/delegated-worker -- test/dispatchRepository.test.ts -t 'already-running unknown Sent'
+# RED1 then GREEN1
+npm test --prefix cloud/lambdas/delegated-worker -- test/intakeBarrier.test.ts test/dispatchRepository.test.ts test/dispatchService.test.ts test/sendReconciler.test.ts test/commandService.test.ts
+# 163 GREEN =14+93+16+12+28
+npm test -- tests/main/dispatchCampaignProjection.test.ts
+# 3 GREEN, now includes cancelled -> sent_lookup/sent_match with original receipts/cap unchanged through real SQL close/reopen/replay
+npx --no-install tsc --noEmit --skipLibCheck --esModuleInterop --target ESNext --module ESNext --moduleResolution node --strict cloud/lambdas/delegated-worker/test/dispatchRepository.test.ts
+npx --no-install tsc --noEmit --skipLibCheck --esModuleInterop --target ESNext --module ESNext --moduleResolution node --noImplicitAny tests/main/dispatchCampaignProjection.test.ts
+npx --no-install eslint --no-ignore --max-warnings 0 cloud/lambdas/delegated-worker/src/dispatchRepository.ts cloud/lambdas/delegated-worker/test/dispatchRepository.test.ts
+npx --no-install eslint --no-ignore --max-warnings 0 tests/main/dispatchCampaignProjection.test.ts
+# GREEN strict worker/main-compatible TS, exact lint and diff --check.
+```
+
+An intermediate test-helper type was too narrow to accept campaign intent (standalone discriminant inference). Fixed by specifying only actual frozen-message/options fields consumed, no cast or schema weakening. SQL test uses actual C4 appendOutcome with the same typed Sent shape, while the worker race above verifies actual strict Sent producer output. No live provider/network/cloud acceptance, installs/builds, terminal polling or resend added. D1 counterpart remains a77b9d0; C6 handoff endpoint work remains separately owned. A docs-only requested-phone-followup consumption proposal was sent to C3/skunk, with no new source implementation authorized or performed.
