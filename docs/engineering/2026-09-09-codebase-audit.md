@@ -3,6 +3,8 @@
 Date: 2026-09-09. Audited application revision: `005a11e2e5ad897f4a436469d93a0db28c66081b`.
 Status: assessment and proposed cleanup sequence, **not implementation approval or a release**.
 
+**Historical baseline:** the findings and line references below describe revision `005a11e` before cleanup. David approved the bounded followthrough at 2026-09-09T21:51:19Z. See [the implementation and acceptance map](2026-09-09-cleanup-followthrough.md) for repaired items, newly registered first-use tests, and deliberately unresolved product gates. The original audit is retained rather than rewritten as if these fixes existed at inspection time.
+
 ## Decision
 
 **Keep the working foundation. Clean up proven residue, repair misleading verification, then finish one real user workflow using the existing services. Do not rewrite FSS or broadly roll it back.**

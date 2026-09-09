@@ -9,7 +9,7 @@ const local: LocalWorkspaceSnapshot = { scope: 'local_database', generatedAt: '2
 const commitments: LocalCommitmentsSnapshot = { scope: 'local_database', generatedAt: local.generatedAt, revision: 1, reviewErrorCount: 0, items: [{ kind: 'callback', item: { id: 'cycle-retained', salesCycleId: 'cycle-retained', personId: 'person-retained', personName: 'Retained Person', contextLabel: 'Existing relationship', stage: 'interviewed', priorityContext: null, action: { id: 'action-retained', type: 'follow_up', channel: 'email', label: 'Send requested details', dueAt: local.generatedAt }, lane: 'later', reason: 'Recorded callback', activeTriggers: [], verifyFirst: false, pinned: false, consentRequirement: null, cloudScores: null } }] };
 function fixture(scoped = false) {
   const f = nativeDeskFixture(scoped ? dailyFixture() : dailyFixture({ workspaceId: null, accounts: [], answers: [], calls: { accountIds: [], workloadConflict: false }, ownerStatus: [], transport: [], meetings: [], campaigns: [], issues: [{ code: 'scope_unknown', count: 1 }] }));
-  const api = { ...f.api, localWorkspace: { get: vi.fn(async () => structuredClone(local)), getCommitments: vi.fn(async () => structuredClone(commitments)), transition: vi.fn() } };
+  const api = { ...f.api, localWorkspace: { ...f.api.localWorkspace, get: vi.fn(async () => structuredClone(local)), getCommitments: vi.fn(async () => structuredClone(commitments)), transition: vi.fn() } };
   return { ...f, api };
 }
 it.each(['accounts', 'campaigns'] as const)('keeps the %s route identity and truthful status in settled legacy mode', async surface => {

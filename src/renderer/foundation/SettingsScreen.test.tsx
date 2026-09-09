@@ -516,7 +516,8 @@ describe('Local workflow transition', () => {
   const receipt: import('../../shared/contracts/localWorkspaceContract').LocalWorkflowReceipt = { commandId: 'committed-command', manifestId: 'committed-manifest', mode: 'meeting_first' as const, revision: 1, occurredAt: '2026-09-09T12:00:00.000Z', cancelledActionIds: [], stoppedEnrollmentIds: [], preservedActionIds: ['not-a-due-count'], parkedPersonIds: [], callbackEvidenceIds: [], unknownDraftIds: [], parkedReviewActions: [], parkedActions: [] };
   function localApi() {
     const snapshot: import('../../shared/contracts/localWorkspaceContract').LocalWorkspaceSnapshot = { scope: 'local_database', generatedAt: receipt.occurredAt, workflowMode: 'legacy', transitionReceipt: null, accounts: { state: 'available', snapshots: [] } };
-    return { get: vi.fn(async () => snapshot), getCommitments: vi.fn(), transition: vi.fn(async (command: import('../../shared/contracts/localWorkspaceContract').LocalWorkflowTransition) => ({ ...receipt, commandId: command.commandId, manifestId: command.manifestId })) };
+    const unavailableCompanyIntake = async () => { throw Error('Company intake unavailable in this fixture'); };
+    return { get: vi.fn(async () => snapshot), getCommitments: vi.fn(), reviewCompany: vi.fn(unavailableCompanyIntake), createCompany: vi.fn(unavailableCompanyIntake), getCompanyCreateStatus: vi.fn(unavailableCompanyIntake), transition: vi.fn(async (command: import('../../shared/contracts/localWorkspaceContract').LocalWorkflowTransition) => ({ ...receipt, commandId: command.commandId, manifestId: command.manifestId })) };
   }
   async function open(api = localApi()) {
     const view = renderSettings({ localWorkspaceApi: api });

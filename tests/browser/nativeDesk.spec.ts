@@ -861,3 +861,76 @@ test('approved A scrollable lanes keep every queued row keyboard reachable witho
   expect((await methods(page)).filter(method => !['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments'].includes(method))).toEqual([]);
   await assertClean(page, state);
 });
+
+
+test('local company form keeps A geometry and explicit review/create/reuse boundaries', async ({ page }, testInfo) => {
+  const state = await mount(page);
+  await page.evaluate(async () => {
+    const f = window.nativeDeskBrowser.fixture;
+    const snapshot = await f.api.daily.get();
+    f.setSnapshot({ ...snapshot, workspaceId: null, accounts: [], answers: [], meetings: [], campaigns: [], ownerStatus: [], transport: [], calls: { accountIds: [], workloadConflict: false } });
+    const local = await f.api.localWorkspace.get();
+    f.setLocalSnapshot({ ...local, accounts: { state: 'available', snapshots: [] } });
+    // Explicit synthetic presentation adapter. Real persistence/IPC is covered by
+    // accountPreparation.spec.ts against the separately signed application.
+    let saved: { id: string; name: string; domain: string | null; version: number } | null = null;
+    f.api.localWorkspace.reviewCompany = async input => {
+      f.calls.push({ method: 'localWorkspace.reviewCompany', input });
+      return { scope: 'local_database', input, complete: true, candidates: saved ? [{ account: saved, signals: ['same_domain'] }] : [] };
+    };
+    f.api.localWorkspace.createCompany = async input => {
+      f.calls.push({ method: 'localWorkspace.createCompany', input });
+      saved = { id: 'browser-local-company', name: input.name, domain: input.domain, version: 1 };
+      f.setLocalSnapshot({ ...local, accounts: { state: 'available', snapshots: [{ account: saved, claims: [], routes: [], portfolio: [], unknowns: ['Maintenance workflow not recorded'], conflicts: [], fingerprint: 'd'.repeat(64) }] } });
+      return { status: 'saved', commandId: input.commandId, account: saved, replayed: false };
+    };
+  });
+  await page.getByRole('link', { name: 'Accounts', exact: true }).click();
+  await page.getByRole('button', { name: 'Add company', exact: true }).click();
+  await page.getByRole('button', { name: 'Review company', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText('Enter a company name and an optional hostname such as company.example, without a URL or path.');
+  await expect(page.getByRole('button', { name: 'Create company', exact: true })).toBeDisabled();
+  expect((await methods(page)).filter(name => /localWorkspace\.(reviewCompany|createCompany|getCompanyCreateStatus)/.test(name))).toEqual([]);
+  await page.getByRole('textbox', { name: 'Company name', exact: true }).fill('Browser Residential Management');
+  await page.getByRole('textbox', { name: 'Company domain (optional)', exact: true }).fill('not a hostname');
+  await page.getByRole('button', { name: 'Review company', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText('Enter a company name and an optional hostname such as company.example, without a URL or path.');
+  await expect(page.getByRole('button', { name: 'Create company', exact: true })).toBeDisabled();
+  expect((await methods(page)).filter(name => /localWorkspace\.(reviewCompany|createCompany|getCompanyCreateStatus)/.test(name))).toEqual([]);
+  await page.getByRole('textbox', { name: 'Company domain (optional)', exact: true }).fill('browser.example');
+  for (const theme of ['light', 'dark'] as const) {
+    await page.evaluate(theme => window.nativeDeskBrowser.preferences(theme, 'compact'), theme);
+    for (const width of [1440, 1050]) {
+      await page.setViewportSize({ width, height: width === 1440 ? 900 : 700 });
+      for (const name of ['Company name', 'Company domain (optional)']) {
+        const box = await page.getByRole('textbox', { name, exact: true }).boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.x).toBeGreaterThanOrEqual(0);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`company-form-${width}-${theme}.png`), animations: 'disabled' });
+      const audit = await new AxeBuilder({ page }).analyze();
+      expect(audit.violations.filter(issue => issue.impact === 'critical' || issue.impact === 'serious')).toEqual([]);
+    }
+  }
+  expect((await methods(page)).filter(name => /localWorkspace\.(reviewCompany|createCompany|getCompanyCreateStatus)/.test(name))).toEqual([]);
+  await page.getByRole('button', { name: 'Review company', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Create company', exact: true })).toBeEnabled();
+  expect((await methods(page)).filter(name => name === 'localWorkspace.createCompany')).toEqual([]);
+  await page.getByRole('button', { name: 'Create company', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Browser Residential Management', exact: true })).toBeVisible();
+  expect((await methods(page)).filter(name => name === 'localWorkspace.createCompany')).toHaveLength(1);
+  await page.getByRole('button', { name: 'Add company', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Company name', exact: true }).fill('Different Browser Name');
+  await page.getByRole('textbox', { name: 'Company domain (optional)', exact: true }).fill('browser.example');
+  await page.getByRole('button', { name: 'Review company', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Create company', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Open existing company', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Browser Residential Management', exact: true })).toBeVisible();
+  const inventory = await methods(page);
+  expect(inventory.filter(name => name === 'localWorkspace.createCompany')).toHaveLength(1);
+  expect(inventory.filter(name => name === 'localWorkspace.reviewCompany')).toHaveLength(2);
+  expect(inventory.every(name => ['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments', 'localWorkspace.reviewCompany', 'localWorkspace.createCompany'].includes(name))).toBe(true);
+  await assertClean(page, state);
+});
