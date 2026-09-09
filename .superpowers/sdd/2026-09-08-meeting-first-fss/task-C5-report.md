@@ -115,4 +115,6 @@ Multiple matches, wrong/missing References, stale offers, conflicting newer cont
 
 ## Commit
 
-Pending exact-path source commit and stat inspection. No shared staged contents will be included.
+Source commit: `0eb6ca040ca030eaf021126ce68d669a27d95355` (`feat: coordinate agreed meetings with real calendar identities`). Exact-path `git commit --only` included the 12 approved source/test paths and this report. Inspected stat: 13 files changed, 1247 insertions, 2 deletions. Owned paths were clean afterward. No unrelated shared staged contents were included.
+
+Shared `delegationContract.ts` and `delegationRepository.ts` turn released to C6 humpback after this commit. Root notified and independent review requested. This report's commit-reference update is a separate exact-path documentation commit.
