@@ -48,7 +48,9 @@ test('unpaired daily workspace stays empty and read-only through navigation and 
           await page.setViewportSize(size);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
           await page.screenshot({ path: test.info().outputPath(`${route.toLowerCase()}-${theme}-${size.width}.png`), animations: 'disabled' });
-          const audit = await new AxeBuilder({ page }).analyze();
+          // Electron CDP cannot create Axe's helper target. Audit the existing
+          // renderer, matching every other packaged accessibility suite.
+          const audit = await new AxeBuilder({ page }).setLegacyMode(true).analyze();
           expect(audit.violations.filter(issue => issue.impact === 'critical' || issue.impact === 'serious')).toEqual([]);
         }
       }
