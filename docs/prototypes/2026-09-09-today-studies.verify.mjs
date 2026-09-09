@@ -1,11 +1,11 @@
-const fs=require('node:fs');
-const path=require('node:path');
-const assert=require('node:assert/strict');
-const {pathToFileURL}=require('node:url');
-const projectRequire=require('node:module').createRequire(path.join(process.cwd(),'package.json'));
-const {chromium}=projectRequire('playwright');
-const {default:AxeBuilder}=projectRequire('@axe-core/playwright');
-const output=process.env.FSS_STUDY_RESULTS||path.join(require('node:os').homedir(),'.jcode/scratch/fss-today-variations-20260909');
+import fs from 'node:fs';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import {pathToFileURL} from 'node:url';
+import {homedir} from 'node:os';
+import {chromium} from 'playwright';
+import {AxeBuilder} from '@axe-core/playwright';
+const output=process.env.FSS_STUDY_RESULTS||path.join(homedir(),'.jcode/scratch/fss-today-variations-20260909');
 fs.mkdirSync(output,{recursive:true});
 const checks=[];
 (async()=>{

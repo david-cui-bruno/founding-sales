@@ -43,11 +43,11 @@ A call handoff is not a connected call. Copying or opening a LinkedIn step is no
 
 ## Verification
 
-Browser checks are retained in [`2026-09-09-today-studies.verify.cjs`](2026-09-09-today-studies.verify.cjs). They use the repository's existing Playwright and Axe dependencies, with all HTTP requests blocked. Run from the repository root:
+Browser checks are retained in [`2026-09-09-today-studies.verify.mjs`](2026-09-09-today-studies.verify.mjs). They use the repository's existing Playwright and Axe dependencies, with all HTTP requests blocked. Run from the repository root:
 
 ```bash
 export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"
-node docs/prototypes/2026-09-09-today-studies.verify.cjs
+node docs/prototypes/2026-09-09-today-studies.verify.mjs
 ```
 
 Screenshots and JSON results default to `~/.jcode/scratch/fss-today-variations-20260909/`. Set `FSS_STUDY_RESULTS` to another scratch directory if needed. `FSS_STUDY_TARGET` can point the same checks at an exact copied HTML file.
