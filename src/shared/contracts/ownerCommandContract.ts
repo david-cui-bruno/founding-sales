@@ -1,3 +1,4 @@
+import {accountRecordSchema} from './accountRecordContract';
 import { saveMeetingOfferSchema } from './meetingContract';
 import { z } from 'zod';
 import { acquisitionMilestoneReportSchema } from './acquisitionReportContract';
@@ -52,7 +53,12 @@ export const configureOwnerCommandSchema = z.strictObject({ ...ownerCommandBase,
   mailScope: z.strictObject({ expectedEnvelopeRevision: revision.min(1).nullable(), since: instant }).nullable(),
 }) });
 export const reportAcquisitionMilestoneCommandSchema = z.strictObject({ ...ownerCommandBase, kind: z.literal('report-acquisition-milestone'), payload: acquisitionMilestoneReportSchema });
-export const ownerCommandSchemas = [submitApprovedReplyCommandSchema, prepareManualCommandSchema, completeManualCommandSchema, approveReplyCommandSchema, ownerCampaignCommandSchema, configureOwnerCommandSchema, reportAcquisitionMilestoneCommandSchema] as const;
+export const selectedAccountSuppressionSchema=z.strictObject({id,observedAt:instant,source:id,evidenceRef:id});
+export const bootstrapSelectedAccountCommandSchema=z.strictObject({...ownerCommandBase,kind:z.literal('bootstrap-selected-account'),payload:z.strictObject({record:accountRecordSchema,asOf:instant,expectedResearchRevision:revision.min(1).nullable(),suppression:z.array(selectedAccountSuppressionSchema).max(100)})});
+export const bootstrapSelectedAccountSchema=z.strictObject({commandId:z.uuid(),accountId:id});
+export const accountBootstrapPayloadSchema=z.strictObject({commandId:z.uuid(),recordFingerprint:hash,researchRevision:revision.min(1)});
+
+export const ownerCommandSchemas = [bootstrapSelectedAccountCommandSchema, submitApprovedReplyCommandSchema, prepareManualCommandSchema, completeManualCommandSchema, approveReplyCommandSchema, ownerCampaignCommandSchema, configureOwnerCommandSchema, reportAcquisitionMilestoneCommandSchema] as const;
 export const ownerCommandSchema = z.discriminatedUnion('kind', ownerCommandSchemas);
 export type OwnerCommand = z.infer<typeof ownerCommandSchema>;
 

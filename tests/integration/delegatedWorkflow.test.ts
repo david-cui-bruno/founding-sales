@@ -374,3 +374,29 @@ it('does not return configuration proof when lifecycle aborts during response bo
     expect(f.requests).toContain('/research/configure');
   } finally { f.close(); }
 });
+
+it.each([
+  ['2026-09-08T12:00:00+02:00', false],
+  ['2026-09-08T13:00:00+02:00', true],
+  ['2026-09-08T11:00:00.000Z', true],
+] as const)('checks meeting attendance by instant through authenticated HTTP and SQL: %s', async (occurredAt, accepted) => {
+ const f=await fixture();
+ try {
+  await f.client.submit(f.command);await f.client.sync(new AbortController().signal);
+  const {DynamoStore}=await import('../../cloud/lambdas/delegated-worker/src/dynamoStore');
+  const {meetingReservationSchema,meetingOutcomeSchema}=await import('../../src/shared/contracts/meetingContract');
+  const identity={meetingId:'offset-meeting',calendarId:'calendar@example.test',providerEventId:'abcde12345'};
+  // A canonical historical provider receipt, not a synthetic attendance event.
+  const start='2026-09-08T10:00:00.000Z',end='2026-09-08T10:30:00.000Z';
+  const outcome=meetingOutcomeSchema.parse({...identity,status:'booked',reason:null,event:{...identity,status:'confirmed',etag:'"fictional"',start,end,attendees:[],meetUrl:null}});
+  const rules={revision:1,confirmed:true,timezone:'UTC',weeklyWindows:[{weekday:2,start:'09:00',end:'17:00'}],durationMinutes:30,bufferBeforeMinutes:0,bufferAfterMinutes:0,minimumNoticeMinutes:0,horizonDays:30,conflictCalendarIds:[identity.calendarId],ownedCalendarId:identity.calendarId,location:{kind:'text',value:'Fictional office'},allowReschedule:false,allowCancel:false};
+  const intent:import('../../src/shared/contracts/meetingContract').MeetingIntent={workspaceId:f.command.workspaceId,accountId:f.command.accountId,commandId:'historical-meeting-command',meetingId:identity.meetingId,operation:'create',expectedAuthorityGeneration:1,expectedVersion:1,rulesRevision:1,threadId:'historical-thread',threadRevision:1,contextRevision:'historical-context',mailboxSubject:'fictional-mailbox',pairingId:f.pairing.pairingId,start,end,localStart:'2026-09-08T10:00:00',offset:'+00:00',timezone:'UTC',agreementEvidenceId:'historical-message',agreement:{kind:'explicit_slot',start,end,quote:'Confirmed time'},mixedReply:false,approvalId:null,attendeeEmails:['recipient@example.test'],inviteAttendees:false,summary:'Callie meeting',etag:null};
+  const record=meetingReservationSchema.parse({intent,rules,identity,fingerprint:'a'.repeat(64),state:'recorded',outcome});
+  const store=new DynamoStore(f.options);await store.transact([store.put('MEETING#offset-meeting',{accountId:f.command.accountId,calendarId:identity.calendarId,commandId:intent.commandId,outcome},null),store.put('MEETING_COMMAND#historical-meeting-command',record,null)]);
+  const command:DelegationCommand={...f.command,commandId:randomUUID(),expectedAuthorityGeneration:1,expectedVersion:1,kind:'report-acquisition-milestone',payload:{kind:'meeting_attended',...identity,occurredAt,sourceRef:'owner-observation',ownerNote:'Fictional attendance testimony'}};
+  const response=await f.http('https://worker.example.test/commands',{method:'POST',headers:{authorization:`Bearer ${f.pairing.credential}`},body:JSON.stringify(command)});
+  expect(response.status).toBe(accepted?200:400);
+  if(accepted) {f.repository.queueCommand(command);await f.client.sync(new AbortController().signal);expect(f.repository.commandStatus(command.commandId)?.status).toBe('applied');expect(readAcquisitionFacts(f.db).filter(fact=>fact.kind==='meeting_held')).toHaveLength(1);}
+  else expect(readAcquisitionFacts(f.db).filter(fact=>fact.kind==='meeting_held')).toHaveLength(0);
+ } finally {f.close();}
+});

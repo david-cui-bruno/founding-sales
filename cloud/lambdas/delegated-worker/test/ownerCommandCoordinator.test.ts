@@ -108,7 +108,7 @@ it('authenticates revisioned paused source configuration without grants or provi
 import { googleScopes } from '../src/googleGrantCapabilities';
 import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
 import { createHash, randomUUID } from 'node:crypto';
-async function configuredManualFixture() {
+async function configuredManualFixture(channel:'call'|'linkedin'='call') {
   const f = await approvalFixture(); const now = f.options.clock.now(); const store = new DynamoStore(f.options);
   const google = new RemoteGoogleAuthorization({ auth: f.auth, config: { clientId: 'fictional.apps.googleusercontent.com', clientSecret: 'fictional', redirectUri: 'https://worker.example.test/oauth/callback', encryptionKey: Buffer.alloc(32, 7) }, fetch: async url => {
     if (String(url) === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'fictional', refresh_token: 'fictional-refresh', token_type: 'Bearer', expires_in: 3600, scope: `openid email ${googleScopes.relevant_read} ${googleScopes.send}` });
@@ -119,7 +119,7 @@ async function configuredManualFixture() {
   const grant = await google.beginGoogleGrant(f.pairing.pairingId, ['relevant_read','send']);
   await google.completeGoogleGrant(new URL(grant.authorizationUrl).searchParams.get('state')!, 'fictional-code');
   const account = { id: 'account', name: 'Fictional PM', domain: null, version: 1 };
-  const route = { id: 'route', accountId: 'account', personId: null, channel: 'phone', value: '+12025550123', version: 1, purpose: 'business', verification: 'published', evidenceIds: ['source'] };
+  const route = { id: 'route', accountId: 'account', personId: null, channel: channel==='call'?'phone':'linkedin', value: channel==='call'?'+12025550123':'https://www.linkedin.com/in/fictional-pm', version: 1, purpose: 'business', verification: 'published', evidenceIds: ['source'] };
   await store.transact([store.put('ACCOUNT#account', { account, sources: [{ id: 'source', url: 'https://example.invalid/team', fetchedAt: now, sha256: 'a'.repeat(64), excerpt: 'Fictional published phone', permitted: true }], claims: [], routes: [route], researchRevision: 1, history: [{ at: now, account, claims: [], routes: [route] }] }, null)]);
   const coordinator = new OwnerCommandCoordinator({ auth: f.auth, authorization: google });
   let version = 2;
@@ -191,4 +191,27 @@ it('authenticates a real C3 checkpoint separately from event catchup and rejects
  expect(proof.validUntil).toBeLessThanOrEqual(Date.parse(f.options.clock.now())+5000);
  await f.execution.applyCommand({...envelope,commandId:'pause',expectedVersion:f.getVersion(),kind:'pause',payload:{reason:'owner pause'}});
  await expect(f.coordinator.checkpoint({workspaceId:'ws',accountId:'account'},`Bearer ${f.pairing.credential}`,new AbortController().signal)).rejects.toThrow();
+});
+
+async function startedManual(channel:'call'|'linkedin'='call') {
+ const f=await configuredManualFixture(channel);
+ const version={id:'late-campaign',campaignId:'late-campaign',version:1,audienceHash:'a'.repeat(64),offer:'Fictional offer',objective:'meeting',cohortAccountIds:['account'],approvedAt:null,steps:[{id:'step',channel,condition:'initial',delayHours:0}],capScope:'campaign_version_lifetime',channelCaps:{call:1,email:0,linkedin:1},contentPolicyHash:'b'.repeat(64)};
+ await f.apply('campaign-command',{kind:'campaign.version',version});await f.apply('campaign-command',{kind:'campaign.approve',campaignVersionId:version.id,snapshotHash:fingerprint(version),approvedAt:f.options.clock.now()});await f.apply('campaign-command',{kind:'campaign.enroll',enrollmentId:'late-enrollment',campaignVersionId:version.id,selectedRouteId:'route',executionContextId:'context',contextRevision:1});
+ const payload={actionId:'late-action',channel,routeId:'route',routeVersion:1,targetHash:createHash('sha256').update(f.route.value).digest('hex'),contentHash:'b'.repeat(64),contextRevision:'context',campaign:{campaignId:'late-campaign',campaignRevision:1,enrollmentId:'late-enrollment',enrollmentRevision:1,stepId:'step'}};
+ await f.apply('prepare-manual',payload);const event=(await f.store.eventsAfter(null)).events.find(event=>event.kind==='manual.handoff');if(event?.kind!=='manual.handoff')throw Error('handoff missing');
+ const report=async(outcome:string,generation=1)=>f.coordinator.apply({...envelope,commandId:randomUUID(),expectedVersion:await f.execution.currentVersion('account'),expectedAuthorityGeneration:generation,kind:'complete-manual',payload:{handoffId:event.payload.handoffId,targetHash:payload.targetHash,outcome:{actionId:payload.actionId,channel,outcome,observedAt:f.options.clock.now(),evidenceRef:randomUUID()}}},`Bearer ${f.pairing.credential}`);
+ return {...f,report};
+}
+it.each(['pause','revoke'] as const)('records immutable started-call results and opt-out after %s without restoring execution',async(kind)=>{
+ const f=await startedManual();await f.execution.applyCommand({...envelope,commandId:randomUUID(),expectedVersion:await f.execution.currentVersion('account'),kind,payload:{reason:'explicit stop'}});
+ const generation=kind==='revoke'?2:1;await f.report('connected',generation);await f.report('opt_out',generation);
+ expect((await f.store.get<{authority:{state:string;generation:number}}>('AUTH#account'))?.data.authority).toMatchObject({state:kind==='revoke'?'revoked':'paused',generation});
+ expect((await f.store.eventsAfter(null)).events.at(-1)).toMatchObject({kind:'manual.outcome',authorityGeneration:1,payload:{outcome:'opt_out'}});
+ expect(await f.store.get('MAIL_SUPPRESSION#account')).not.toBeNull();
+});
+it.each(['call','linkedin'] as const)('resolves %s unknown to a definitive human result without second handoff',async(channel)=>{
+ const f=await startedManual(channel);await f.report('unknown');await f.report(channel==='call'?'connected':'human_reported_sent');
+ expect((await f.store.eventsAfter(null)).events.filter(event=>event.kind==='manual.handoff')).toHaveLength(1);
+ expect(f.options.dynamo.inspect(`CAMPAIGN_CAP#late-campaign#${channel}`)).toEqual({reserved:0,sent:1});
+ await expect(f.report('unknown')).rejects.toThrow();
 });

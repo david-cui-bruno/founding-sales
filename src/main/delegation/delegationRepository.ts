@@ -47,17 +47,23 @@ export class DelegationRepository {
       return this.authority(accountId)!;
     });
   }
-  queueCommand(input: DelegationCommand): CommandReceipt {
+  queueCommand(input: DelegationCommand, assertCurrent?: () => void): CommandReceipt {
     const command = delegationCommandSchema.parse(input);
     if (command.workspaceId !== this.deps.workspaceId) throw new Error('Workspace command mismatch');
     const fingerprint = accountFingerprint(command);
     return this.atomic(() => {
+      assertCurrent?.();
       const prior = this.raw.prepare('SELECT fingerprint,receipt_json FROM delegated_commands WHERE command_id=?').get(command.commandId) as { fingerprint: string; receipt_json: string } | undefined;
       if (prior) {
         if (prior.fingerprint !== fingerprint) throw new Error('Command fingerprint conflict');
         return commandReceiptSchema.parse(JSON.parse(prior.receipt_json));
       }
       const owner = this.owner(command.accountId);
+      if(command.kind==='complete-manual'){
+        const handoff=this.getManualHandoff(command.payload.handoffId);const outcome=command.payload.outcome;
+        if(!handoff||handoff.consumedAt===null||handoff.accountId!==command.accountId||handoff.actionId!==outcome.actionId||handoff.channel!==outcome.channel||handoff.targetHash!==command.payload.targetHash||outcome.observedAt<handoff.consumedAt||outcome.observedAt>this.now())throw Error('manual_started_identity_required');
+        if(outcome.outcome==='opt_out')this.raw.prepare('INSERT OR IGNORE INTO pm_account_suppression_tombstones VALUES(?,?,?,?,?,?)').run(`manual-${command.commandId}`,command.accountId,outcome.observedAt,'manual_owner_report',outcome.evidenceRef,this.now());
+      }
       const valid = owner !== undefined && owner.generation === command.expectedAuthorityGeneration && owner.aggregate_version === command.expectedVersion;
       const receipt: CommandReceipt = { commandId: command.commandId, status: valid ? 'pending' : 'rejected',
         authorityGeneration: owner?.generation ?? 0, aggregateVersion: owner?.aggregate_version ?? 0, reason: valid ? null : 'Missing or stale authority' };
@@ -80,7 +86,10 @@ export class DelegationRepository {
     return rows.map(row => delegationCommandSchema.parse(JSON.parse(row.command_json))).filter(command => this.commandStatus(command.commandId)?.status === 'pending');
   }
   hasPendingStop(accountId: string): boolean {
-    return this.pendingCommands().some(command => command.accountId === accountId && (command.kind === 'pause' || command.kind === 'revoke' || command.kind === 'complete-manual'));
+    if(this.pendingCommands().some(command => command.accountId === accountId && ['pause','revoke','complete-manual'].includes(command.kind)))return true;
+    const stops=(this.raw.prepare("SELECT command_json FROM delegated_commands WHERE workspace_id=? AND account_id=? AND json_extract(command_json,'$.kind') IN('pause','revoke')").all(this.deps.workspaceId,accountId) as {command_json:string}[]).map(row=>delegationCommandSchema.parse(JSON.parse(row.command_json))).map(command=>this.commandStatus(command.commandId));
+    const applied=Math.max(-1,...stops.filter(receipt=>receipt?.status==='applied').map(receipt=>receipt!.aggregateVersion));
+    return stops.some(receipt=>receipt?.status==='rejected'&&receipt.aggregateVersion>applied);
   }
   /** queueCommand already atomically set delegating. All local dispatch fences
    * read that row, so no new local intent can appear after this scoped check. */
@@ -90,8 +99,9 @@ export class DelegationRepository {
       if (!command) return false;
       const owner = this.owner(command.accountId);
       if (!owner || owner.generation !== command.expectedAuthorityGeneration || owner.aggregate_version !== command.expectedVersion) return false;
+      if(command.kind==='bootstrap-selected-account')return owner.owner==='local'&&owner.state==='local'&&owner.generation===0&&owner.aggregate_version===0;
       if (command.kind !== 'delegate') return owner.owner === 'worker' && (command.kind === 'pause' || command.kind === 'revoke' || command.kind === 'complete-manual'
-        ? ['active', 'paused'].includes(owner.state) : owner.state === 'active' && !this.hasPendingStop(command.accountId));
+        ? (command.kind==='complete-manual'?['active','paused','revoked']:['active','paused']).includes(owner.state) : owner.state === 'active' && !this.hasPendingStop(command.accountId));
       if (owner.owner !== 'local' || owner.state !== 'delegating') return false;
       const accountPending = this.raw.prepare(`SELECT 1 FROM pm_account_outbound_intents i WHERE i.account_id=? AND i.channel='email'
         AND NOT EXISTS(SELECT 1 FROM pm_account_outbound_results r WHERE r.command_id=i.command_id AND r.outcome IN('accepted','provider_accepted','not_sent','cancelled')) LIMIT 1`).get(command.accountId);
@@ -107,7 +117,7 @@ export class DelegationRepository {
   commandStatus(commandId: string): CommandReceipt | null {
     const applied = this.raw.prepare(`SELECT event_json FROM delegated_applied_events WHERE workspace_id=?
       AND ((json_extract(event_json,'$.kind')='authority.changed' AND json_extract(event_json,'$.payload.receipt.commandId')=?)
-        OR (json_extract(event_json,'$.kind') IN('manual.outcome','manual.handoff','campaign.changed','acquisition.milestone_reported') AND json_extract(event_json,'$.receipt.commandId')=?)) ORDER BY aggregate_version DESC LIMIT 1`)
+        OR (json_extract(event_json,'$.kind') IN('account.bootstrap','manual.outcome','manual.handoff','campaign.changed','acquisition.milestone_reported') AND json_extract(event_json,'$.receipt.commandId')=?)) ORDER BY aggregate_version DESC LIMIT 1`)
       .get(this.deps.workspaceId, commandId, commandId) as { event_json: string } | undefined;
     if (applied) {
       const event = workerEventSchema.parse(JSON.parse(applied.event_json));
@@ -186,6 +196,13 @@ export class DelegationRepository {
         this.raw.prepare('UPDATE delegated_authorities SET aggregate_version=?,updated_at=? WHERE account_id=? AND workspace_id=?')
           .run(event.aggregateVersion, at, event.accountId, event.workspaceId);
       }
+      if(event.kind==='account.bootstrap') {
+        const command=this.getCommand(event.receipt.commandId);
+        if(!command||command.kind!=='bootstrap-selected-account')throw Error('bootstrap_command_missing');
+        const prior=this.raw.prepare("SELECT aggregate_version FROM delegated_event_cursors WHERE workspace_id=? AND account_id=? AND stream='research'").get(event.workspaceId,event.accountId) as {aggregate_version:number}|undefined;
+        if((prior?.aggregate_version??null)!==command.payload.expectedResearchRevision)throw Error('bootstrap_cursor_conflict');
+        if(!prior)this.raw.prepare('INSERT INTO delegated_event_cursors VALUES(?,?,?,?,?)').run(event.workspaceId,event.accountId,'research',event.payload.researchRevision,event.id);
+      }
       if (event.kind === 'meeting.outcome') this.applyMeeting(event, at);
       if (event.kind === 'manual.handoff') {
         const p = event.payload;
@@ -261,6 +278,11 @@ export class DelegationRepository {
       const previous = this.commandStatus(receipt.commandId);
       if (previous && previous.status !== 'pending') throw new Error('Command acknowledgment conflict');
     }
+    if(event.kind==='account.bootstrap') {
+      const command=this.getCommand(event.receipt.commandId);
+      if(!command||command.kind!=='bootstrap-selected-account'||command.accountId!==event.accountId||command.workspaceId!==event.workspaceId||event.payload.commandId!==command.commandId||command.expectedVersion!==0||command.expectedAuthorityGeneration!==0||owner.owner!=='local'||owner.state!=='local'||owner.generation!==0||owner.aggregate_version!==0||event.authorityGeneration!==0||event.aggregateVersion!==1||event.payload.recordFingerprint!==accountFingerprint(command.payload.record)||event.payload.researchRevision!==command.payload.record.researchRevision)throw Error('bootstrap_acknowledgment_conflict');
+      return;
+    }
     if (event.kind === 'manual.handoff' || event.kind === 'campaign.changed' || event.kind === 'acquisition.milestone_reported') {
       const command = this.getCommand(event.receipt.commandId);
       if (!command || command.accountId !== event.accountId || command.workspaceId !== event.workspaceId
@@ -276,7 +298,7 @@ export class DelegationRepository {
       if (queued) {
         const command = delegationCommandSchema.parse(JSON.parse(queued.command_json));
         if (!['manual-outcome','complete-manual'].includes(command.kind) || command.workspaceId !== event.workspaceId || command.accountId !== event.accountId
-          || command.expectedAuthorityGeneration !== event.authorityGeneration || command.expectedVersion + 1 !== event.aggregateVersion
+          || command.expectedAuthorityGeneration !== (command.kind==='complete-manual'?owner.generation:event.authorityGeneration) || command.expectedVersion + 1 !== event.aggregateVersion
           || command.expectedVersion !== owner.aggregate_version || accountFingerprint(command.kind === 'complete-manual' ? command.payload.outcome : command.payload) !== accountFingerprint(event.payload)) {
           throw new Error('Manual acknowledgment command correspondence conflict');
         }
@@ -284,6 +306,14 @@ export class DelegationRepository {
     }
     if (event.kind !== 'authority.changed') {
       if (owner.owner !== 'worker') throw new Error('Stale execution generation');
+      if(event.kind==='manual.outcome'){
+        const command=this.getCommand(event.receipt.commandId);
+        if(command?.kind==='complete-manual'){
+          const handoff=this.getManualHandoff(command.payload.handoffId);
+          if(!handoff||handoff.consumedAt===null||handoff.authorityGeneration!==event.authorityGeneration||handoff.authorityGeneration>owner.generation||handoff.actionId!==event.payload.actionId||handoff.targetHash!==command.payload.targetHash||handoff.channel!==event.payload.channel)throw Error('manual_original_handoff_required');
+          return;
+        }
+      }
       if (event.authorityGeneration !== owner.generation) {
         const prior = event.kind === 'action.outcome' ? this.raw.prepare('SELECT 1 FROM delegated_action_outcomes WHERE workspace_id=? AND account_id=? AND action_id=? AND authority_generation=? AND content_hash=? AND target_hash=?')
           .get(event.workspaceId, event.accountId, event.payload.actionId, event.authorityGeneration, event.payload.contentHash, event.payload.targetHash)

@@ -41,6 +41,10 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
         await input.google.completeGoogleGrant(query.get('state')!, query.has('error') ? null : query.get('code'));
         return { statusCode: 200, headers: { ...headers, 'Content-Type': 'text/plain; charset=utf-8' }, body: 'Authorization completed. Return to FSS.' };
       }
+      if(path==='/commands/reconcile' && method==='POST') {
+        const owner=new OwnerCommandCoordinator({auth:input.auth,authorization:input.google??new RemoteGoogleAuthorization({auth:input.auth})});
+        return response(200,await owner.reconcile(body(),event.headers.authorization??''));
+      }
       if(path==='/readiness' && method==='POST') {
         const owner=new OwnerCommandCoordinator({auth:input.auth,authorization:input.google??new RemoteGoogleAuthorization({auth:input.auth})});
         return response(200,await owner.checkpoint(body(),event.headers.authorization??'',AbortSignal.timeout(15000)));
@@ -142,7 +146,7 @@ export function createProductionHandler(env: NodeJS.ProcessEnv, boundaries: Prod
       if(scheduled.success && env.DELEGATED_WORKER_ENABLED==='true' && env.DELEGATED_WORKER_SCHEDULE_ARN && scheduled.data.resources[0]===env.DELEGATED_WORKER_SCHEDULE_ARN) {
         const services=await createProductionServices(env,boundaries);
         if(!services) return response(503,{error:'worker_disabled'});
-        return response(200,await services.source.tick(AbortSignal.timeout(240000)));
+        return response(200,await services.source.tick(AbortSignal.timeout(45000)));
       }
       const parsed = eventSchema.safeParse(event);
       if (env.DELEGATED_WORKER_ENABLED !== 'true') return response(503, { error: 'worker_disabled' });

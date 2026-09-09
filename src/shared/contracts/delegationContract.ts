@@ -1,4 +1,4 @@
-import { ownerCommandSchemas, manualOutcomeSchema, manualHandoffSchema } from './ownerCommandContract';
+import { accountBootstrapPayloadSchema, ownerCommandSchemas, manualOutcomeSchema, manualHandoffSchema } from './ownerCommandContract';
 import { acquisitionMilestonePayloadSchema } from './acquisitionReportContract';
 import { campaignEventPayloadSchema } from './campaignContract';
 import { meetingOutcomePayloadSchema } from './meetingContract';
@@ -37,6 +37,7 @@ export const delegationCommandSchema = z.discriminatedUnion('kind', [
 export type DelegationCommand = Readonly<z.infer<typeof delegationCommandSchema>>;
 const eventBase = { id, workspaceId: id, accountId: id, authorityGeneration: revision, aggregateVersion: revision.min(1) };
 export const workerEventSchema = z.discriminatedUnion('kind', [
+  z.strictObject({...eventBase,kind:z.literal('account.bootstrap'),payload:accountBootstrapPayloadSchema,receipt:commandReceiptSchema}),
   z.strictObject({ ...eventBase, kind: z.literal('acquisition.milestone_reported'), payload: acquisitionMilestonePayloadSchema, receipt: commandReceiptSchema }),
   z.strictObject({ ...eventBase, kind: z.literal('meeting.outcome'), payload: meetingOutcomePayloadSchema }),
   z.strictObject({ ...eventBase, kind: z.literal('thread.observed'), payload: threadObservedPayloadSchema }),
@@ -56,7 +57,7 @@ export const workerEventSchema = z.discriminatedUnion('kind', [
   if (event.kind === 'thread.observed' && event.payload.projection.thread.accountId !== event.accountId) {
     ctx.addIssue({ code: 'custom', message: 'Thread event account mismatch' });
   }
-  if (['manual.outcome', 'manual.handoff', 'campaign.changed', 'acquisition.milestone_reported'].includes(event.kind) && 'receipt' in event && (event.receipt.status !== 'applied' || event.receipt.authorityGeneration !== event.authorityGeneration
+  if (['account.bootstrap','manual.outcome', 'manual.handoff', 'campaign.changed', 'acquisition.milestone_reported'].includes(event.kind) && 'receipt' in event && (event.receipt.status !== 'applied' || event.receipt.authorityGeneration !== event.authorityGeneration
     || event.receipt.aggregateVersion !== event.aggregateVersion)) {
     ctx.addIssue({ code: 'custom', message: 'Manual acknowledgment receipt mismatch' });
   }

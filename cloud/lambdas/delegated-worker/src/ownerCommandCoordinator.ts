@@ -12,7 +12,7 @@ import { intakeRegistryKey, intakeRegistrySchema, createIntakeBarrier } from './
 import type { WorkerAuth } from './workerAuth';
 import type { RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
 import { ownerCheckpointRequestSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand } from '../../../../src/shared/contracts/ownerCommandContract';
-import { commandReceiptSchema, workerEventSchema, type CommandReceipt, type WorkerEvent } from '../../../../src/shared/contracts/delegationContract';
+import { delegationCommandSchema, commandReceiptSchema, workerEventSchema, type CommandReceipt, type WorkerEvent } from '../../../../src/shared/contracts/delegationContract';
 import { DynamoStore, fingerprint, keyPart } from './dynamoStore';
 import { authorityRecordSchema, executionAuthorityKey, executionAuthorityFields, createExecutionRepository } from './executionRepository';
 import { DynamoThreadIntakeRepository, mailThreadKey, mailCursorKey, mailSuppressionKey } from './threadIntakeRepository';
@@ -22,14 +22,29 @@ import { DynamoDispatchRepository, dispatchApprovalKey, dispatchPermissionKey, d
  * admitted immutable records cannot dispatch without a separate requested work item. */
 export class OwnerCommandCoordinator {
   constructor(readonly input: { auth: WorkerAuth; authorization: RemoteGoogleAuthorization }) {}
+  async reconcile(raw:unknown,authorization:string):Promise<CommandReceipt> {
+    const command=delegationCommandSchema.parse(raw);const principal=await this.input.auth.authenticate(authorization,['commands:write']);this.input.auth.store.workspace(command.workspaceId);
+    const store=new DynamoStore({...this.input.auth.options,dynamo:this.input.auth.fencedDynamo(principal)});const key=`COMMAND#${keyPart(command.commandId)}`;const fp=fingerprint(command);
+    const previous=await store.get<{fingerprint:string;receipt:CommandReceipt;sequence:number}>(key);
+    if(previous){if(previous.data.fingerprint!==fp)throw Error('command_fingerprint_conflict');await store.publish(previous.data.sequence);return commandReceiptSchema.parse(previous.data.receipt);}
+    if(command.kind==='delegate'||command.kind==='complete-manual')throw Error('command_requires_explicit_reconciliation');
+    const authKey=executionAuthorityKey(command.accountId);const row=await store.get<unknown>(authKey);if(!row)throw Error('authority_missing');const current=authorityRecordSchema.parse(row.data);
+    if(current.authority.owner!=='worker'||command.expectedAuthorityGeneration>current.authority.generation||command.expectedVersion>current.version||command.expectedAuthorityGeneration===current.authority.generation&&command.expectedVersion===current.version)throw Error('command_not_proven_stale');
+    const next={...current,version:current.version+1};const receipt:CommandReceipt={commandId:command.commandId,status:'rejected',authorityGeneration:current.authority.generation,aggregateVersion:next.version,reason:'Stale owner command; explicit fresh action required'};
+    const event=workerEventSchema.parse({id:`command-${fingerprint([command.workspaceId,command.commandId])}`,workspaceId:command.workspaceId,accountId:command.accountId,authorityGeneration:current.authority.generation,aggregateVersion:next.version,kind:'authority.changed',payload:{authority:current.authority,receipt}});
+    const outbox=await store.eventItems(event);await store.transact([store.put(authKey,next,row.rev,executionAuthorityFields(next),executionAuthorityFields(current)),store.put(key,{fingerprint:fp,receipt,sequence:outbox.sequence,command},null),...outbox.items]);await store.publish(outbox.sequence);return receipt;
+  }
   async checkpoint(raw:unknown,authorization:string,signal:AbortSignal) {
     const target=ownerCheckpointRequestSchema.parse(raw); const principal=await this.input.auth.authenticate(authorization,['events:read']);this.input.auth.store.workspace(target.workspaceId);
     const store=new DynamoStore({...this.input.auth.options,dynamo:this.input.auth.fencedDynamo(principal)});
-    const source=await this.activeSource(target,principal.pairingId,store);
-    const threads=new DynamoThreadIntakeRepository(this.input.auth.options);
-    const poll=await createMailPoller({authorization:this.input.authorization,store:threads,fetch:this.input.authorization.input.fetch??globalThis.fetch}).pollOnce({accountId:target.accountId,pairingId:principal.pairingId,mailboxSubject:source.config.mailboxSubject!},signal);
-    if(!poll.complete||poll.suppressed) throw new Error('intake_unavailable');
-    const intake=await createIntakeBarrier(store).check({accountId:target.accountId,mailboxSubject:source.config.mailboxSubject!},signal);
+    const source=await this.activeSource(target,principal.pairingId,store,true);
+    let intake;
+    if(source.config.mailboxSubject){
+      const threads=new DynamoThreadIntakeRepository(this.input.auth.options);
+      const poll=await createMailPoller({authorization:this.input.authorization,store:threads,fetch:this.input.authorization.input.fetch??globalThis.fetch}).pollOnce({accountId:target.accountId,pairingId:principal.pairingId,mailboxSubject:source.config.mailboxSubject},signal);
+      if(!poll.complete||poll.suppressed)throw Error('intake_unavailable');
+      intake=await createIntakeBarrier(store).check({accountId:target.accountId,mailboxSubject:source.config.mailboxSubject},signal);
+    }else intake=await this.noMailIntake(target.accountId,store);
     if(intake.status!=='ready')throw new Error('intake_unavailable');
     const authKey=executionAuthorityKey(target.accountId);const row=await store.get<unknown>(authKey);const authority=authorityRecordSchema.parse(row?.data);
     if(authority.authority.owner!=='worker'||authority.authority.state!=='active')throw new Error('authority_inactive');
@@ -65,11 +80,12 @@ export class OwnerCommandCoordinator {
       await store.publish(previous.data.sequence);
       return commandReceiptSchema.parse(previous.data.receipt);
     }
+    if(command.kind==='bootstrap-selected-account')return this.bootstrap(command,store,fp,key);
     const authKey = executionAuthorityKey(command.accountId);
     const authorityRow = await store.get<unknown>(authKey);
     if (!authorityRow) throw new Error('authority_missing');
     const current = authorityRecordSchema.parse(authorityRow.data);
-    if (current.authority.accountId !== command.accountId || current.authority.owner !== 'worker' || (current.authority.state !== 'active' && !(command.kind === 'configure-owner' && current.authority.state === 'paused'))
+    if (current.authority.accountId !== command.accountId || current.authority.owner !== 'worker' || (current.authority.state !== 'active' && !((command.kind === 'configure-owner' && current.authority.state === 'paused') || (command.kind==='complete-manual' && ['paused','revoked'].includes(current.authority.state))))
       || current.authority.generation !== command.expectedAuthorityGeneration || current.version !== command.expectedVersion) throw new Error('stale_authority');
     const claimKey = `OWNER_COMMAND_CLAIM#${keyPart(command.commandId)}`;
     let claim = await store.get<{ fingerprint: string; pairingId: string; at: string }>(claimKey);
@@ -79,7 +95,7 @@ export class OwnerCommandCoordinator {
     }
     if (!claim || claim.data.fingerprint !== fp || claim.data.pairingId !== principal.pairingId) throw new Error('owner_claim_conflict');
     const next = { authority: current.authority, version: current.version + 1 };
-    const receipt: CommandReceipt = { commandId: command.commandId, status: 'applied', authorityGeneration: command.expectedAuthorityGeneration, aggregateVersion: next.version, reason: null };
+    let receipt: CommandReceipt = { commandId: command.commandId, status: 'applied', authorityGeneration: command.expectedAuthorityGeneration, aggregateVersion: next.version, reason: null };
     const base = { id: `command-${fingerprint([command.workspaceId, command.commandId])}`, workspaceId: command.workspaceId, accountId: command.accountId,
       authorityGeneration: command.expectedAuthorityGeneration, aggregateVersion: next.version };
     let proof: TransactWriteItem[];
@@ -101,7 +117,7 @@ export class OwnerCommandCoordinator {
       event=workerEventSchema.parse({...base,kind:'authority.changed',payload:{authority:current.authority,receipt}});
     } else if (command.kind === 'report-acquisition-milestone') {
       const report=command.payload;
-      if(report.occurredAt>store.now()) throw new Error('future_milestone');
+      if(Date.parse(report.occurredAt)>Date.parse(store.now())) throw new Error('future_milestone');
       const identity=report.kind==='meeting_attended'?report.meetingId:report.pilotId;
       proof=[store.put(`ACQUISITION_MILESTONE#${keyPart(command.accountId)}#${report.kind}#${keyPart(identity)}`,{report,commandId:command.commandId},null)];
       if(report.kind==='meeting_attended') {
@@ -113,7 +129,7 @@ export class OwnerCommandCoordinator {
         const reservation=meetingReservationSchema.parse(reservationRow?.data);
         if(outcome.status!=='booked'||outcome.providerEventId!==report.providerEventId||reservation.intent.accountId!==command.accountId
           ||reservation.identity.calendarId!==report.calendarId||reservation.identity.providerEventId!==report.providerEventId
-          ||reservation.intent.end>report.occurredAt) throw new Error('meeting_not_elapsed');
+          ||Date.parse(reservation.intent.end)>Date.parse(report.occurredAt)) throw new Error('meeting_not_elapsed');
         proof.push(store.check(key,row.rev),store.check(commandKey,reservationRow!.rev));
       }
       event=workerEventSchema.parse({...base,kind:'acquisition.milestone_reported',receipt,payload:{commandId:command.commandId,report,observedAt:store.now(),source:'owner_report'}});
@@ -126,7 +142,8 @@ export class OwnerCommandCoordinator {
       event = workerEventSchema.parse({ ...base, kind: 'manual.handoff', payload: plan.handoff, campaign: plan.campaign, receipt });
     } else if (command.kind === 'complete-manual') {
       const plan = await this.completeManual(command, principal.pairingId, store);
-      proof = plan.items; event = workerEventSchema.parse({ ...base, kind: 'manual.outcome', payload: command.payload.outcome, campaign: plan.campaign, receipt });
+      receipt={...receipt,authorityGeneration:plan.generation};
+      proof = plan.items; event = workerEventSchema.parse({ ...base, authorityGeneration:plan.generation, kind: 'manual.outcome', payload: command.payload.outcome, campaign: plan.campaign, receipt });
     } else {
       proof = command.kind === 'configure-owner' ? await this.configure(command, principal.pairingId, claim.data.at, store) : await this.approveReply(command, principal.pairingId, claim.data.at, store);
       event = workerEventSchema.parse({ ...base, kind: 'authority.changed', payload: { authority: current.authority, receipt } });
@@ -137,18 +154,48 @@ export class OwnerCommandCoordinator {
     await store.publish(outbox.sequence);
     return receipt;
   }
-  private async activeSource(command: Pick<OwnerCommand,'accountId'|'workspaceId'>, pairingId: string, store: DynamoStore) {
+  private async bootstrap(command:Extract<OwnerCommand,{kind:'bootstrap-selected-account'}>,store:DynamoStore,fp:string,key:string):Promise<CommandReceipt> {
+    const p=command.payload;const record=p.record;
+    if(command.expectedVersion!==0||command.expectedAuthorityGeneration!==0||record.account.id!==command.accountId||p.asOf>store.now()||Buffer.byteLength(JSON.stringify(p))>200000||record.history.length>200||record.sources.length>100||record.claims.length>500||record.routes.length>500)throw Error('bootstrap_identity_conflict');
+    const sources=new Set(record.sources.map(source=>source.id));
+    if(record.history.some(item=>item.account.id!==command.accountId||item.at>p.asOf||item.routes.some(route=>route.accountId!==command.accountId||route.evidenceIds.some(id=>!sources.has(id))))||record.routes.some(route=>route.accountId!==command.accountId||route.evidenceIds.some(id=>!sources.has(id)))||record.sources.some(source=>source.fetchedAt>p.asOf)||p.suppression.some(item=>item.observedAt>p.asOf))throw Error('bootstrap_evidence_conflict');
+    const aKey=accountKey(command.accountId);const previous=await store.get(aKey);
+    if(previous ? p.expectedResearchRevision!==record.researchRevision||fingerprint(accountRecordSchema.parse(previous.data))!==fingerprint(record) : p.expectedResearchRevision!==null||record.researchRevision!==1)throw Error('bootstrap_record_conflict');
+    const authKey=executionAuthorityKey(command.accountId);const prior=await store.get<unknown>(authKey);
+    if(prior){const parsed=authorityRecordSchema.parse(prior.data);if(parsed.version!==0||parsed.authority.owner!=='local'||parsed.authority.state!=='local'||parsed.authority.generation!==0)throw Error('bootstrap_authority_conflict');}
+    const next={authority:{accountId:command.accountId,owner:'local' as const,state:'local' as const,generation:0},version:1};
+    const receipt:CommandReceipt={commandId:command.commandId,status:'applied',authorityGeneration:0,aggregateVersion:1,reason:null};
+    const event=workerEventSchema.parse({id:`command-${fingerprint([command.workspaceId,command.commandId])}`,workspaceId:command.workspaceId,accountId:command.accountId,authorityGeneration:0,aggregateVersion:1,kind:'account.bootstrap',receipt,payload:{commandId:command.commandId,recordFingerprint:fingerprint(record),researchRevision:record.researchRevision}});
+    const outbox=await store.eventItems(event);const suppressionKey=mailSuppressionKey(command.accountId);const suppression=await store.get(suppressionKey);
+    await store.transact([previous?store.check(aKey,previous.rev):store.put(aKey,record,null,{accountId:command.accountId,version:record.account.version}),store.put(authKey,next,prior?.rev??null,executionAuthorityFields(next)),store.put(key,{fingerprint:fp,receipt,sequence:outbox.sequence,command},null),...(p.suppression.length&&!suppression?[store.put(suppressionKey,{accountId:command.accountId,source:'selected_owner_bootstrap',evidence:p.suppression},null)]:[]),...outbox.items]);
+    await store.publish(outbox.sequence);return receipt;
+  }
+  private async noMailIntake(accountId:string,store:DynamoStore){
+    const account=await store.get<unknown>(accountKey(accountId));const key=intakeRegistryKey(accountId);const row=await store.get<unknown>(key);
+    if(!account||!row||accountRecordSchema.parse(account.data).routes.some(route=>route.channel==='email')||(await store.list(`MAIL_THREAD#${keyPart(accountId)}#`)).length)throw Error('relevant_mail_requires_reader');
+    const registry=intakeRegistrySchema.parse(row.data);if(registry.accountId!==accountId||registry.adapters.some(adapter=>adapter.relevant))throw Error('relevant_mail_requires_reader');
+    const checks=[store.check(accountKey(accountId),account.rev),store.check(key,row.rev)];const revisions=[{key,revision:row.rev},{key:accountKey(accountId),revision:account.rev}];
+    for(const dependency of registry.manualDependencies){
+      const commandKey=`COMMAND#${keyPart(dependency.commandId)}`;const command=await store.get<{receipt:CommandReceipt;sequence:number}>(commandKey);if(!command)throw Error('manual_outcome_pending');
+      const eventKey=store.eventKey(command.data.sequence);const eventRow=await store.get<{event:unknown}>(eventKey);const event=workerEventSchema.parse(eventRow?.data.event);
+      if(commandReceiptSchema.parse(command.data.receipt).status!=='applied'||event.kind!=='manual.outcome'||event.accountId!==accountId||event.workspaceId!==store.options.workspaceId||event.receipt.commandId!==dependency.commandId||event.payload.actionId!==dependency.actionId||event.payload.channel!==dependency.channel||event.payload.outcome!==dependency.outcome||['unknown','reply','opt_out'].includes(dependency.outcome))throw Error('manual_outcome_pending');
+      checks.push(store.check(commandKey,command.rev),store.check(eventKey,eventRow!.rev));revisions.push({key:commandKey,revision:command.rev},{key:eventKey,revision:eventRow!.rev});
+    }
+    return {status:'ready' as const,checks,revisions,validUntil:Date.parse(store.now())+5000};
+  }
+  private async activeSource(command: Pick<OwnerCommand,'accountId'|'workspaceId'>, pairingId: string, store: DynamoStore, allowNoMail=false) {
     const key = ownerSourceKey(command.accountId); const row = await store.get<unknown>(key);
     if (!row) throw new Error('source_setup_required');
     const config = ownerSourceConfigurationSchema.parse(row.data);
-    if (config.state !== 'active' || config.workspaceId !== command.workspaceId || config.accountId !== command.accountId || config.pairingId !== pairingId || !config.mailboxSubject) throw new Error('source_paused_or_mismatched');
+    if (config.state !== 'active' || config.workspaceId !== command.workspaceId || config.accountId !== command.accountId || config.pairingId !== pairingId || (!config.mailboxSubject&&!allowNoMail)) throw new Error('source_paused_or_mismatched');
+    if(!config.mailboxSubject)return {config,checks:[store.check(key,row.rev)]};
     const grant = await this.input.authorization.status(pairingId);
     const grantKey = `GOOGLE_GRANT#${keyPart(pairingId)}`; const grantRow = await store.get(grantKey);
     if (grant.state !== 'ready' || grant.grant?.subject !== config.mailboxSubject || !grantRow) throw new Error('source_grant_unavailable');
     return { config, checks: [store.check(key,row.rev), store.check(grantKey,grantRow.rev)] };
   }
   private async prepareManual(command: Extract<OwnerCommand,{kind:'prepare-manual'}>, pairingId: string, at: string, store: DynamoStore) {
-    const p = command.payload; const source = await this.activeSource(command,pairingId,store);
+    const p = command.payload; const source = await this.activeSource(command,pairingId,store,true);
     const repo = new WorkerCampaignRepository(store.options);
     const route = await repo.accountRoute(command.accountId,p.routeId);
     if (route.route.version !== p.routeVersion || route.route.channel !== (p.channel === 'call' ? 'phone' : 'linkedin')
@@ -159,7 +206,7 @@ export class OwnerCommandCoordinator {
       authorityGeneration:command.expectedAuthorityGeneration,selectedRouteId:p.routeId,contextRevision:p.contextRevision,contentHash:p.contentHash,targetHash:p.targetHash };
     const expiresAt = new Date(Date.parse(at)+60000).toISOString();
     const plan = await new CampaignExecution(repo).prepareManualChecks(input);
-    const intake = await createIntakeBarrier(store).check({accountId:command.accountId,mailboxSubject:source.config.mailboxSubject!},new AbortController().signal);
+    const intake = source.config.mailboxSubject?await createIntakeBarrier(store).check({accountId:command.accountId,mailboxSubject:source.config.mailboxSubject},new AbortController().signal):await this.noMailIntake(command.accountId,store);
     if (intake.status !== 'ready') throw new Error('manual_intake_unavailable');
     if (await store.get(mailSuppressionKey(command.accountId))) throw new Error('manual_account_suppressed');
     const handoff = manualHandoffSchema.parse({...p,handoffId:`handoff-${fingerprint([command.workspaceId,command.commandId])}`,expiresAt});
@@ -170,18 +217,19 @@ export class OwnerCommandCoordinator {
       store.put(registryKey,{...registry,manualDependencies:[...registry.manualDependencies,{commandId:command.commandId,actionId:p.actionId,channel:p.channel,outcome:'pending'}]},registryRow.rev),
       store.put(`MANUAL_HANDOFF#${keyPart(handoff.handoffId)}`,{handoff,accountId:command.accountId,pairingId,generation:command.expectedAuthorityGeneration,issuedAt:at,lastOutcome:null},null),
       store.put(`MANUAL_ACTION#${keyPart(command.accountId)}#${keyPart(p.actionId)}`,{handoffId:handoff.handoffId},null)];
-    return {handoff,campaign:campaignEventPayloadSchema.parse({commandId:command.commandId,version:null,enrollment:null,evidence:null,cap:plan.cap}),finalize:()=>{ if(store.now()>=expiresAt||Date.parse(store.now())>=intake.validUntil) throw new Error('manual_proof_expired'); return [...items,...plan.finalize()]; }};
+    return {handoff,campaign:campaignEventPayloadSchema.parse({commandId:command.commandId,version:null,enrollment:null,evidence:null,cap:plan.cap}),finalize:()=>{ if(store.now()>=expiresAt||Date.parse(store.now())>=intake.validUntil) throw new Error('manual_proof_expired'); const all=[...items,...plan.finalize()];return all.filter((item,index)=>!item.ConditionCheck||all.findIndex(other=>fingerprint(other)===fingerprint(item))===index); }};
   }
   private async completeManual(command: Extract<OwnerCommand,{kind:'complete-manual'}>,pairingId:string,store:DynamoStore) {
     const p=command.payload; const key=`MANUAL_HANDOFF#${keyPart(p.handoffId)}`;
     const row=await store.get<{handoff:ManualHandoff;accountId:string;pairingId:string;generation:number;issuedAt:string;lastOutcome:ManualOutcome|null}>(key);
     if(!row) throw new Error('manual_handoff_missing');
     const handoff=manualHandoffSchema.parse(row.data.handoff); const outcome=p.outcome;
-    if(row.data.accountId!==command.accountId||row.data.pairingId!==pairingId||row.data.generation!==command.expectedAuthorityGeneration
+    if(row.data.accountId!==command.accountId||row.data.pairingId!==pairingId||row.data.generation>command.expectedAuthorityGeneration
       ||handoff.targetHash!==p.targetHash||handoff.actionId!==outcome.actionId||handoff.channel!==outcome.channel||outcome.observedAt<row.data.issuedAt||outcome.observedAt>store.now()) throw new Error('manual_outcome_identity');
-    if(row.data.lastOutcome && (!['no_reply','reply','opt_out'].includes(outcome.outcome)||outcome.observedAt<row.data.lastOutcome.observedAt)) throw new Error('manual_outcome_conflict');
+    if(row.data.lastOutcome && (outcome.observedAt<row.data.lastOutcome.observedAt || row.data.lastOutcome.outcome==='opt_out' || (row.data.lastOutcome.outcome==='unknown' ? outcome.outcome==='unknown' : !['no_reply','reply','opt_out'].includes(outcome.outcome)))) throw new Error('manual_outcome_conflict');
     const repo=new WorkerCampaignRepository(store.options);
     const reservation=campaignReservationSchema.parse((await repo.required(campaignReservationKey(command.accountId,outcome.actionId))).data);
+    if(reservation.input.authorityGeneration!==row.data.generation)throw Error('manual_original_generation_conflict');
     const enrollment=enrollmentSchema.parse((await repo.required(campaignEnrollmentKey(handoff.campaign.enrollmentId))).data);
     const actual=outcome.channel==='call' ? ['connected','no_answer','voicemail','busy','wrong_number'].includes(outcome.outcome) : outcome.outcome==='human_reported_sent';
     const state=actual||row.data.lastOutcome && reservation.state==='sent' ? 'human_reported_sent' as const : ['cancelled','not_sent','not_called'].includes(outcome.outcome)?'cancelled' as const:'unknown' as const;
@@ -193,7 +241,7 @@ export class OwnerCommandCoordinator {
     if(!registryRow) throw new Error('manual_intake_missing'); const registry=intakeRegistrySchema.parse(registryRow.data);
     const items=[...plan.items,store.put(key,{...row.data,lastOutcome:outcome},row.rev),store.put(registryKey,{...registry,manualDependencies:registry.manualDependencies.map(dependency=>dependency.actionId===outcome.actionId?{commandId:command.commandId,actionId:outcome.actionId,channel:outcome.channel,outcome:outcome.outcome}:dependency)},registryRow.rev)];
     if(outcome.outcome==='opt_out' && !await store.get(mailSuppressionKey(command.accountId))) items.push(store.put(mailSuppressionKey(command.accountId),{accountId:command.accountId,observedAt:outcome.observedAt,evidence:outcome.evidenceRef},null));
-    return {items,campaign:plan.payload};
+    return {items,campaign:plan.payload,generation:row.data.generation};
   }
   private async configure(command: Extract<OwnerCommand, { kind: 'configure-owner' }>, pairingId: string, at: string, store: DynamoStore): Promise<TransactWriteItem[]> {
     const p = command.payload; const config = ownerSourceConfigurationSchema.parse(p.configuration);
@@ -234,6 +282,12 @@ export class OwnerCommandCoordinator {
       const old = intake ? intakeRegistrySchema.parse(intake.data) : null;
       if (old && old.adapters.some(adapter => adapter.enabled && adapter.relevant && (adapter.kind !== 'gmail' || adapter.mailboxSubject !== config.mailboxSubject))) throw new Error('selected_intake_conflict');
       checks.push(store.put(intakeKey, { accountId: command.accountId, adapters: [{ id: 'configured-gmail', kind: 'gmail', enabled: true, relevant: true, mailboxSubject: config.mailboxSubject }], manualDependencies: old?.manualDependencies ?? [] }, intake?.rev ?? null));
+    } else if(config.state==='active'&&config.mailboxSubject===null){
+      if(p.mailScope!==null||config.calendarId!==null)throw Error('no_mail_configuration_conflict');
+      const account=await store.get<unknown>(accountKey(command.accountId));if(!account||accountRecordSchema.parse(account.data).routes.some(route=>route.channel==='email')||(await store.list(`MAIL_THREAD#${keyPart(command.accountId)}#`)).length)throw Error('relevant_mail_requires_reader');
+      const intakeKey=intakeRegistryKey(command.accountId);const prior=await store.get<unknown>(intakeKey);const registry=prior?intakeRegistrySchema.parse(prior.data):null;
+      if(registry?.adapters.some(adapter=>adapter.relevant))throw Error('cannot_narrow_mail_scope');
+      checks.push(store.check(accountKey(command.accountId),account.rev),store.put(intakeKey,{accountId:command.accountId,adapters:[],manualDependencies:registry?.manualDependencies??[]},prior?.rev??null));
     } else if (p.mailScope !== null) throw new Error('inactive_scope_change');
     return [...checks, store.put(key, config, previous?.rev ?? null)];
   }
