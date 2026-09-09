@@ -229,6 +229,32 @@ test('paused configuration cancels an offscreen draft autosave without losing te
   await assertClean(page,state);
 });
 
+test('an edit made while already paused never revives its timer after active remount', async ({page}) => {
+  const state = await mount(page);
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  await page.evaluate(()=>{
+    window.nativeDeskBrowser.fixture.setConfiguration({state:'paused',workspaceId:'ws',endpoint:'https://owner.fixture.invalid',configuration:{revision:2,configuration:{version:1,state:'paused',research:null},updatedAt:new Date().toISOString()}});
+    window.nativeDeskBrowser.refresh();
+  });
+  await page.getByRole('button',{name:'Email · Account A',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Save edits',exact:true})).toBeDisabled();
+  await page.getByRole('textbox',{name:'Email body'}).fill('An edit retained while already paused');
+  await page.evaluate(()=>window.nativeDeskBrowser.navigate('accounts'));
+  await expect(page.getByRole('heading',{name:'Accounts',level:1,exact:true})).toBeVisible();
+  await page.evaluate(()=>{
+    window.nativeDeskBrowser.fixture.setConfiguration({state:'active',workspaceId:'ws',endpoint:'https://owner.fixture.invalid',configuration:{revision:3,configuration:{version:1,state:'active',research:null},updatedAt:new Date().toISOString()}});
+    window.nativeDeskBrowser.navigate('today');
+  });
+  await expect(page.getByRole('textbox',{name:'Email body'})).toHaveValue('An edit retained while already paused');
+  await expect(page.getByRole('button',{name:'Save edits',exact:true})).toBeEnabled();
+  await page.clock.runFor(1200);
+  expect((await methods(page)).filter(method=>method==='editRequestedFollowup')).toHaveLength(0);
+  await page.getByRole('button',{name:'Save edits',exact:true}).click();
+  expect((await methods(page)).filter(method=>method==='editRequestedFollowup')).toHaveLength(1);
+  await assertClean(page,state);
+});
+
 test('approval continuation does not revive after leaving and reopening the same workspace', async ({page}) => {
   const state = await mount(page);
   await page.evaluate(()=>{
