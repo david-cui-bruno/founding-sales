@@ -33,6 +33,8 @@ export const campaignCommandPayloadSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('campaign.outcome'), enrollmentId: id, expectedEnrollmentVersion: revision.positive(), evidence: stepEvidenceSchema }),
 ]);
 export type CampaignCommandPayload = z.infer<typeof campaignCommandPayloadSchema>;
+export const campaignCapSnapshotSchema = z.strictObject({ campaignVersionId: id, channel: campaignChannelSchema, revision: revision.positive(), reserved: revision, sent: revision });
+export type CampaignCapSnapshot = z.infer<typeof campaignCapSnapshotSchema>;
 export const campaignEventPayloadSchema = z.strictObject({ commandId: z.uuid(), version: campaignVersionSchema.nullable(),
-  enrollment: enrollmentSchema.nullable(), evidence: stepEvidenceSchema.nullable() });
+  enrollment: enrollmentSchema.nullable(), evidence: stepEvidenceSchema.nullable(), cap: campaignCapSnapshotSchema.optional() });
 export type CampaignEventPayload = z.infer<typeof campaignEventPayloadSchema>;

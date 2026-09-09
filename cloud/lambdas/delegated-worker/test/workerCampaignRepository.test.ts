@@ -96,7 +96,8 @@ describe('real SDK campaign transactional plans', () => {
     await f.store.transact((await execution.prepareManualChecks(binding)).finalize());
     if (state === 'switched') await f.apply({ kind: 'campaign.route', enrollmentId: id(8), expectedEnrollmentVersion: 1, selectedRouteId: id(6), contextRevision: 2, executionContextId: 'context-two' });
     else if (state !== 'active') await f.apply({ kind: 'campaign.state', enrollmentId: id(8), expectedEnrollmentVersion: 1, state, reason: 'late interruption' });
-    await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: state === 'active' ? 1 : 2, evidence });
+    const accepted = await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: state === 'active' ? 1 : 2, evidence });
+    expect(accepted.cap).toEqual({ campaignVersionId: id(2), channel: 'call', revision: 3, reserved: 0, sent: 1 });
     expect(f.dynamo.inspect(`CAMPAIGN_CAP#${id(2)}#call`)).toEqual({ reserved: 0, sent: 1 });
     expect(f.dynamo.inspect(campaignEnrollmentKey(id(8)))).toMatchObject({ state: state === 'active' ? 'completed' : state === 'switched' ? 'active' : state, currentStepId: state === 'active' ? null : id(5) });
     await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: state === 'active' ? 2 : 3, evidence: { ...evidence, observation: 'no_reply', outcome: 'no_reply' } });
@@ -111,6 +112,7 @@ describe('real SDK campaign transactional plans', () => {
     await expect(execution.prepareManualChecks(input)).rejects.toThrow('campaign_content_unapproved');
     await f.repo.admitActionApproval({ ...input, expiresAt: '2026-09-09T12:05:00.000Z', approvedAt: now });
     const plan = await execution.prepareManualChecks(input);
+    expect(plan.cap).toEqual({ campaignVersionId: id(2), channel: 'call', revision: 2, reserved: 1, sent: 0 });
     const keys = plan.finalize().map(item => item.Put?.Item?.sk?.S ?? item.ConditionCheck?.Key?.sk?.S);
     expect(keys).toContain(campaignEnrollmentKey(id(8)));
     expect(keys.some(key => key?.startsWith('CAMPAIGN_CAP#'))).toBe(true);
@@ -124,6 +126,8 @@ describe('real SDK campaign transactional plans', () => {
     await expect(execution.prepareManualChecks(second).then(next => f.store.transact(next.finalize()))).rejects.toThrow();
 
     const outcome = await f.repo.prepareOutcomePlan({ commandId: id(20), accountId: id(4), actionId: id(10), state: 'unknown', observedAt: now });
+    expect(outcome.payload.cap).toEqual({ campaignVersionId: id(2), channel: 'call', revision: 2, reserved: 1, sent: 0 });
+    expect(outcome.items.some(item => item.ConditionCheck?.Key?.sk?.S === `CAMPAIGN_CAP#${id(2)}#call`)).toBe(true);
     await f.store.transact(outcome.items);
     expect(f.dynamo.inspect(`CAMPAIGN_CAP#${id(2)}#call`)).toMatchObject({ reserved: 1, sent: 0 });
     f.advance('2026-09-09T12:05:00.000Z');

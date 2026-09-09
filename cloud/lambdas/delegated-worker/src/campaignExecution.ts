@@ -1,11 +1,11 @@
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
-import { enrollmentSchema } from '../../../../src/shared/contracts/campaignContract';
+import { enrollmentSchema, campaignCapSnapshotSchema, type CampaignCapSnapshot } from '../../../../src/shared/contracts/campaignContract';
 import { planNext } from '../../../../src/main/domain/campaign/sequencePlanner';
 import { fingerprint } from './dynamoStore';
 import { WorkerCampaignRepository, campaignExecutionInputSchema, campaignActionApprovalSchema, campaignActionApprovalKey, campaignEnrollmentKey,
   campaignVersionKey, campaignApprovalKey, campaignCapKey, campaignCapSchema, campaignReservationKey, type CampaignExecutionInput } from './workerCampaignRepository';
 
-export type CampaignExecutionPlan = { checks: TransactWriteItem[]; consume: TransactWriteItem[]; finalize(): TransactWriteItem[] };
+export type CampaignExecutionPlan = { cap: CampaignCapSnapshot; checks: TransactWriteItem[]; consume: TransactWriteItem[]; finalize(): TransactWriteItem[] };
 /** Concrete persisted policy binding shared by C4 reservation and C6 manual tokens. Never dispatches. */
 export class CampaignExecution {
   constructor(readonly repository: WorkerCampaignRepository) {}
@@ -39,7 +39,7 @@ export class CampaignExecution {
     const consume = [store.put(`CAMPAIGN_STEP_RESERVATION#${encodeURIComponent(enrollment.id)}#${encodeURIComponent(input.stepId)}`, { actionId: input.actionId }, null),
       store.put(capKey, { ...cap, reserved: cap.reserved + 1 }, capRow.rev), store.put(campaignReservationKey(input.accountId, input.actionId),
       { input, campaignVersionId: version.id, routeVersion: enrollment.selectedRouteVersion, numericContextRevision: enrollment.contextRevision, state: 'reserved' }, null)];
-    return { checks, consume, finalize() {
+    return { cap: campaignCapSnapshotSchema.parse({ campaignVersionId: version.id, channel: input.channel, revision: capRow.rev + 1, reserved: cap.reserved + 1, sent: cap.sent }), checks, consume, finalize() {
       const now = store.now();
       if (now < approvedAt || now >= expiresAt) throw new Error('campaign_evidence_expired');
       if (planNext(version, enrollment, evidence, now).kind !== 'prepare') throw new Error('campaign_step_ineligible');

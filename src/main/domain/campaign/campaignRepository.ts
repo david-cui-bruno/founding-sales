@@ -148,6 +148,17 @@ export class CampaignRepository {
           evidence.routeId, route.version, evidence.contextRevision, evidence.executionContextId, evidence.actionId, evidence.channel, evidence.state, evidence.outcome, evidence.observation, evidence.source, evidence.observedAt, payload.commandId);
       }
     } else if (payload.evidence) throw new Error('campaign_projection_binding');
+    if (payload.cap) {
+      const cap = payload.cap;
+      if (!this.getVersion(cap.campaignVersionId).cohortAccountIds.includes(accountId) || payload.enrollment && payload.enrollment.campaignVersionId !== cap.campaignVersionId) throw new Error('campaign_cap_projection_binding');
+      const old = this.raw.prepare('SELECT revision,reserved,sent FROM campaign_caps WHERE workspace_id=? AND campaign_version_id=? AND channel=?').get(this.ws,cap.campaignVersionId,cap.channel) as { revision: number; reserved: number; sent: number } | undefined;
+      if (!old || cap.revision < old.revision || cap.revision > old.revision + 1 || cap.revision === old.revision && (cap.reserved !== old.reserved || cap.sent !== old.sent)) throw new Error('campaign_cap_projection_conflict');
+      if (cap.revision > old.revision) {
+        const result = this.raw.prepare('UPDATE campaign_caps SET revision=?,reserved=?,sent=? WHERE workspace_id=? AND campaign_version_id=? AND channel=? AND revision=?').run(cap.revision,cap.reserved,cap.sent,this.ws,cap.campaignVersionId,cap.channel,old.revision);
+        if (result.changes !== 1) throw new Error('campaign_cap_projection_conflict');
+      }
+    }
+
   }
 
 }

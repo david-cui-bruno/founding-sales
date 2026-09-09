@@ -130,11 +130,13 @@ export class WorkerCampaignRepository {
         }
         const actual = evidence.state === 'human_reported_sent' || evidence.state === 'provider_accepted';
         if (actual && ((evidence.channel === 'email') !== (evidence.source === 'provider') || (evidence.source === 'provider') !== (evidence.state === 'provider_accepted'))) throw new Error('campaign_outcome_source');
+        const capKey = campaignCapKey(old.campaignVersionId, evidence.channel); const capRow = await this.required(capKey); const cap = campaignCapSchema.parse(capRow.data);
+        payload.cap = { campaignVersionId: old.campaignVersionId, channel: evidence.channel, revision: capRow.rev, ...cap };
         if (actual && !observationOnly) {
           if (reservation.state === 'sent' || reservation.state === 'cancelled') throw new Error('campaign_outcome_conflict');
-          const capKey = campaignCapKey(old.campaignVersionId, evidence.channel); const capRow = await this.required(capKey); const cap = campaignCapSchema.parse(capRow.data);
           if (cap.reserved < 1) throw new Error('campaign_cap_conflict');
           items.push(this.store.put(capKey, { reserved: cap.reserved - 1, sent: cap.sent + 1 }, capRow.rev));
+          payload.cap = { ...payload.cap, revision: capRow.rev + 1, reserved: cap.reserved - 1, sent: cap.sent + 1 };
           const { version } = await this.approvedVersion(old.campaignVersionId);
           const index = version.steps.findIndex(step => step.id === evidence.stepId);
           const next = version.steps[index + 1];
@@ -143,6 +145,7 @@ export class WorkerCampaignRepository {
             if (!next) enrollment.state = 'completed';
           }
         }
+        if (!(actual && !observationOnly)) items.push(this.store.check(capKey, capRow.rev));
         const state = observationOnly ? reservation.state : actual ? 'sent' : evidence.state === 'unknown' ? 'unknown' : reservation.state;
         items.push(this.store.put(reservationKey, { ...reservation, state }, reservationRow.rev));
         // Enqueue and unresolved evidence never advance. Only actual outcomes select the next step.

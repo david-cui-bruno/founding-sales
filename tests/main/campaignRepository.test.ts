@@ -1,8 +1,31 @@
 import { describe, expect, it } from 'vitest';
+import { openDatabase, closeDatabase } from '../../src/main/db/database';
+import { CampaignRepository } from '../../src/main/domain/campaign/campaignRepository';
+import type { CampaignEventPayload } from '../../src/shared/contracts/campaignContract';
 import { randomUUID } from 'node:crypto';
 import { createCampaignFixture } from '../fixtures/campaignWorkspace';
 
 describe('real SQL campaign ownership', () => {
+  it('projects actual cap snapshots with exact CAS and durable reopen, never regressing or skipping', async () => {
+    const f = await createCampaignFixture();
+    try {
+      const payload = { commandId: randomUUID(), version: null, enrollment: null, evidence: null, cap: { campaignVersionId: f.versions[0].id, channel: 'call' as const, revision: 2, reserved: 1, sent: 0 } } as CampaignEventPayload;
+      f.db.raw.transaction(() => f.repo.applyProjection(f.account.id, payload)).immediate();
+      const second = openDatabase({ path: f.path, key: f.key });
+      try {
+        const repo = new CampaignRepository({ database: second, workspaceId: f.workspaceId, clock: f.clock });
+        second.raw.transaction(() => repo.applyProjection(f.account.id, payload)).immediate();
+        expect(second.raw.prepare('SELECT revision,reserved,sent FROM campaign_caps WHERE campaign_version_id=? AND channel=?').get(f.versions[0].id, 'call')).toEqual({ revision: 2, reserved: 1, sent: 0 });
+        for (const revision of [1, 4]) expect(() => second.raw.transaction(() => repo.applyProjection(f.account.id, { ...payload, cap: { ...payload.cap!, revision } })).immediate()).toThrow('campaign_cap_projection');
+        expect(() => second.raw.transaction(() => repo.applyProjection(f.account.id, { ...payload, cap: { ...payload.cap!, reserved: 0 } })).immediate()).toThrow('campaign_cap_projection');
+        second.raw.transaction(() => repo.applyProjection(f.account.id, { ...payload, cap: { ...payload.cap!, revision: 3, reserved: 0, sent: 1 } })).immediate();
+      } finally { closeDatabase(second); }
+      const reopened = openDatabase({ path: f.path, key: f.key });
+      try { expect(reopened.raw.prepare('SELECT revision,reserved,sent FROM campaign_caps WHERE campaign_version_id=? AND channel=?').get(f.versions[0].id, 'call')).toEqual({ revision: 3, reserved: 0, sent: 1 }); }
+      finally { closeDatabase(reopened); }
+    } finally { f.close(); }
+  });
+
   it.each(['active', 'held', 'paused', 'conversation'] as const)('one account slot remains unique while %s', async state => {
     const f = await createCampaignFixture();
     try {
