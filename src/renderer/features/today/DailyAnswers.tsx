@@ -1,3 +1,4 @@
+import { ClipboardCheck } from 'lucide-react';
 import {
   useEffect,
   useLayoutEffect,
@@ -42,12 +43,12 @@ export function DailyAnswers({
   unavailable?: boolean;
 }) {
   return (
-    <section className="native-desk__lane" aria-labelledby="daily-answers">
+    <section className="native-desk__lane" aria-labelledby="daily-answers" tabIndex={0}>
       <h2 id="daily-answers">
-        Needs your approval <span>{items.length}</span>
+        <span className="native-desk__lane-label"><ClipboardCheck size={14} aria-hidden="true" />Needs your approval</span> <span className="native-desk__count">{items.length}</span>
       </h2>
       {items.length === 0 ? (
-        <p className="native-desk__empty">{unavailable ? 'Account approvals are unavailable in this unpaired workspace.' : 'No approvals waiting.'}</p>
+        <p className="native-desk__empty">{unavailable ? 'Account approvals are unavailable.' : 'No approvals waiting.'}</p>
       ) : (
         items.map((a) => (
           <button

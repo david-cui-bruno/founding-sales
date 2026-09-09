@@ -1,3 +1,4 @@
+import { CalendarDays } from 'lucide-react';
 import type { DailyMeeting } from '../../../shared/contracts/dailyContract';
 export const meetingKey = (m: DailyMeeting) => `meeting:${m.accountId}:${m.id}`;
 export function UpcomingMeetings({
@@ -14,12 +15,12 @@ export function UpcomingMeetings({
   unavailable?: boolean;
 }) {
   return (
-    <section className="native-desk__lane" aria-labelledby="daily-meetings">
+    <section className="native-desk__lane" aria-labelledby="daily-meetings" tabIndex={0}>
       <h2 id="daily-meetings">
-        Upcoming meetings <span>{items.length}</span>
+        <span className="native-desk__lane-label"><CalendarDays size={14} aria-hidden="true" />Upcoming meetings</span> <span className="native-desk__count">{items.length}</span>
       </h2>
       {!items.length ? (
-        <p className="native-desk__empty">{unavailable ? 'Account meetings are unavailable in this unpaired workspace.' : 'No stored meetings.'}</p>
+        <p className="native-desk__empty">{unavailable ? 'Account meetings are unavailable.' : 'No stored meetings.'}</p>
       ) : (
         items.map((m) => (
           <button

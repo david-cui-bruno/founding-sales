@@ -1,3 +1,4 @@
+import { Phone, RefreshCw } from 'lucide-react';
 import { useLocalWorkspaceRead, type LocalDeskRead } from './localWorkspaceRead';
 import { RetainedWork, RetainedWorkDetail, LocalOnlyCalls, retainedKey } from './RetainedWork';
 import { LocalAccountLibrary, LocalAccountDetail, localAccountKey, LocalOnlyAccountLibrary } from './LocalAccountLibrary';
@@ -568,10 +569,11 @@ export function NativeDesk({
                 : 'Review the exact frozen plan.'}
           </p>
         </div>
-        <div>
-          <button onClick={onRefresh}>Refresh</button>
+        <div className="native-desk__header-status">
           <details className="native-desk__connection">
-            <summary>{configLabel}</summary>
+            <summary>{unavailableScope ? 'Worker unavailable' : 'Worker freshness unknown'}</summary>
+            <p>{configLabel}</p>
+            <p>Local records are separate from worker-authorized work. Pairing and owner checks are required for worker actions.</p>
             <p>Remote freshness unknown. This is a local snapshot.</p>
             <p>Snapshot: {snapshot.freshness.generatedAt}</p>
             <a href="#/settings">Review Settings</a>
@@ -596,22 +598,23 @@ export function NativeDesk({
               </p>
             ))}
           </details>
+          <button className="native-desk__refresh" aria-label="Refresh" title="Refresh" onClick={onRefresh}><RefreshCw size={16} aria-hidden="true" /></button>
         </div>
       </header>
       {localHold && <p role="status">Local workflow unavailable or inconsistent. Worker actions are held. Refresh to check status.</p>}
       {incomplete && <p role="status">The daily snapshot is incomplete. Account work may be missing. Existing owner checks still apply.</p>}
       <div className="native-desk__layout">
-        <nav className="native-desk__queue" aria-label={`${title} queue`}>
-          <p className="native-desk__hint">j / k to move · Enter to review</p>
+        <nav className={`native-desk__queue${surface === 'today' ? ' native-desk__queue--today' : ''}`} aria-label={`${title} queue`} tabIndex={0}>
+          <div className="native-desk__queue-title"><h2>{surface === 'today' ? 'Your next conversations' : surface === 'accounts' ? 'Your accounts' : 'Your campaigns'}</h2><p className="native-desk__hint" title="j / k to move · Enter to review">j / k · ↵</p></div>
           {surface === 'today' ? (
             <>
-              <section className="native-desk__lane">
+              <section className="native-desk__lane" aria-label="Calls" tabIndex={0}>
                 <h2>
-                  <span className="native-desk__lane-label">Calls</span> <span className="native-desk__lane-summary">{localRead?.retained.value ? `${localRead.retained.value.items.length} retained${localRead.retained.error ? ' (stale)' : ''}` : 'Retained work unavailable'} · {unavailableScope ? 'Account allocation unavailable' : `${snapshot.calls.accountIds.length} account calls`}</span>
+                  <Phone size={14} aria-hidden="true" /><span className="native-desk__lane-label">Calls</span><span className="native-desk__count">{(localRead?.retained.value?.items.length ?? 0) + snapshot.calls.accountIds.length}</span> <span className="native-desk__lane-summary">{localRead?.retained.value ? `${localRead.retained.value.items.length} retained${localRead.retained.error ? ' (stale)' : ''}` : 'Retained work unavailable'} · {unavailableScope ? 'Account allocation unavailable' : `${snapshot.calls.accountIds.length} account calls`}</span>
                 </h2>
                 {localRead && <RetainedWork read={localRead.retained} selected={selected} onSelect={select} />}
                 {!snapshot.calls.accountIds.length ? (
-                  <p className="native-desk__empty">{unavailableScope ? 'Account call allocation is unavailable in this unpaired workspace.' : 'No calls allocated.'}</p>
+                  <p className="native-desk__empty">{unavailableScope ? 'Account call allocation is unavailable.' : 'No calls allocated.'}</p>
                 ) : (
                   snapshot.calls.accountIds.map((id) => (
                     <button
@@ -667,7 +670,7 @@ export function NativeDesk({
                   <span>{a.account.domain ?? 'Domain unknown'}</span>
                 </button>
               ))}
-              {!snapshot.accounts.length && <p>{unavailableScope ? 'Worker-scoped accounts are unavailable in this unpaired workspace.' : 'No stored accounts.'}</p>}
+              {!snapshot.accounts.length && <p>{unavailableScope ? 'Worker-scoped accounts are unavailable.' : 'No stored accounts.'}</p>}
             </section>
             </>
           ) : (
@@ -694,11 +697,11 @@ export function NativeDesk({
                   </span>
                 </button>
               ))}
-              {!snapshot.campaigns.length && <p>{unavailableScope ? 'Campaign scope is unavailable in this unpaired workspace.' : 'No frozen campaigns.'}</p>}
+              {!snapshot.campaigns.length && <p>{unavailableScope ? 'Campaign scope is unavailable.' : 'No frozen campaigns.'}</p>}
             </section>
           )}
         </nav>
-        <div className="native-desk__detail">
+        <div className={`native-desk__detail${!retained && !localAccount && !account && !campaign && !meeting && !answer ? ' native-desk__detail--welcome' : ''}`}>
           {selected && (
             <div className="native-desk__detail-bar">
               <span>
@@ -772,11 +775,10 @@ export function NativeDesk({
               <h2>
                 {selected
                   ? 'This item is no longer in the local queue.'
-                  : 'Make room for a good conversation.'}
+                  : keys.length ? 'Make room for a good conversation.' : surface === 'today' ? 'No conversations queued.' : surface === 'accounts' ? 'Your account library starts here.' : 'No frozen campaigns to review.'}
               </h2>
               <p>
-                Select an item to review its company context and exact saved
-                work.
+                {selected ? 'Your selection is retained. Refresh to check its saved work.' : keys.length ? 'Select an item to review its company context and exact saved work.' : surface === 'today' ? 'Retained commitments and available account work will appear here.' : surface === 'accounts' ? 'Local company evidence will appear here. Local records do not establish worker ownership.' : 'Saved campaign plans will appear here for review. No campaign actions are enabled by this view.'}
               </p>
             </div>
           )}

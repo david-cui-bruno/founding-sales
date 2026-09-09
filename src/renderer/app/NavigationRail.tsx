@@ -1,4 +1,5 @@
-import type { MouseEvent } from 'react';
+import { useId, useState, type MouseEvent } from 'react';
+import { MoreHorizontal } from 'lucide-react';
 
 import { navigationItems, type NavigationItem } from './navigationItems';
 import { routeHash, type AppRoute } from './routes';
@@ -19,6 +20,8 @@ export function NavigationRail({
   onNavigate,
   reviewCount,
 }: NavigationRailProps) {
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreId = useId();
   const onItemClick =
     (item: NavigationItem) => (event: MouseEvent<HTMLAnchorElement>) => {
       event.preventDefault();
@@ -57,7 +60,8 @@ export function NavigationRail({
     );
   };
 
-  const primaryItems = navigationItems.filter((item) => item.route !== 'settings');
+  const primaryItems = navigationItems.filter((item) => ['today', 'accounts', 'campaigns'].includes(item.route));
+  const otherItems = navigationItems.filter((item) => !['today', 'accounts', 'campaigns', 'settings'].includes(item.route));
   const settingsItems = navigationItems.filter((item) => item.route === 'settings');
 
   return (
@@ -70,6 +74,8 @@ export function NavigationRail({
         <p className="nav-rail__brand-native" aria-hidden="true">Callie</p>
       </div>
       <ul className="nav-rail__list">{primaryItems.map(renderItem)}</ul>
+      <button className="nav-rail__more-toggle nav-rail__item" type="button" aria-label="More workspaces" aria-controls={moreId} aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}><MoreHorizontal size={16} aria-hidden="true" /><span>More</span></button>
+      <ul id={moreId} className="nav-rail__list nav-rail__other-workspaces">{otherItems.map(renderItem)}</ul>
       <div className="nav-rail__spacer" aria-hidden="true" />
       <ul className="nav-rail__list">{settingsItems.map(renderItem)}</ul>
     </nav>

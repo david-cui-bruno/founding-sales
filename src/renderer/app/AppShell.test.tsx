@@ -160,3 +160,29 @@ describe('useHashRoute', () => {
     expect(screen.getByTestId('route').textContent).toBe('inbox');
   });
 });
+
+it('keeps other workspaces behind a reversible presentation disclosure without changing routes', () => {
+  const onNavigate = vi.fn();
+  const view = render(<AppShell route="today" onNavigate={onNavigate} reviewCount={2}><section className="native-desk" data-workflow-mode="meeting_first" /></AppShell>);
+  const toggle = screen.getByRole('button', { name: 'More workspaces' });
+  const group = document.getElementById(toggle.getAttribute('aria-controls')!);
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  expect(group?.hasAttribute('hidden')).toBe(false);
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  for (const name of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox']) {
+    const link = screen.getByRole('link', { name: new RegExp(`^${name}`) });
+    expect(group?.contains(link)).toBe(true);
+    fireEvent.click(link);
+  }
+  expect(onNavigate.mock.calls.map(([route]) => route)).toEqual(['leads', 'pipeline', 'conversations', 'learnings', 'friday', 'inbox']);
+  expect(group?.contains(screen.getByRole('link', { name: 'Settings' }))).toBe(false);
+  view.rerender(<AppShell route="leads" onNavigate={onNavigate} reviewCount={2}><p>Legacy route</p></AppShell>);
+  expect(screen.getByRole('link', { name: 'Leads' }).getAttribute('aria-current')).toBe('page');
+  expect(group?.hasAttribute('hidden')).toBe(false);
+  view.rerender(<AppShell route="today" onNavigate={onNavigate} reviewCount={2}><section className="native-desk" data-workflow-mode="meeting_first" /></AppShell>);
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  view.rerender(<AppShell route="today" onNavigate={onNavigate} reviewCount={2}><p>Legacy Today</p></AppShell>);
+  expect(group?.hasAttribute('hidden')).toBe(false);
+});

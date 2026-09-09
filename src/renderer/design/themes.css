@@ -157,6 +157,7 @@
   --accent-text: #fff;
   --native-queue: #f3f5f8;
   --native-rail: #e9edf2;
+  --native-brand: #b83d2c;
   --native-action: #f8fafc;
   --native-shadow: 0 2px 4px #18233409, 0 12px 28px #18233409;
   --native-row-shadow: 0 2px 4px #1722320b;
@@ -174,6 +175,7 @@
   --accent-text: #17223b;
   --native-queue: #202732;
   --native-rail: #191f28;
+  --native-brand: #f0937e;
   --native-action: #222a35;
   --native-shadow: 0 2px 4px #0002, 0 12px 28px #0002;
 }

@@ -73,3 +73,13 @@
   --grid-row: var(--grid-row-compact);
   --control-height: 26px;
 }
+
+/* SEMANTIC: approved A sizes are opt-in, not changes to legacy typography. */
+.app-shell:has(.native-desk[data-workflow-mode='meeting_first']),
+.native-desk[data-workflow-mode='meeting_first'] {
+  --text-native-brand: 30px;
+  --text-native-brand-narrow: 27px;
+  --text-native-page: 25px;
+  --text-native-identity: 26px;
+  --text-native-footnote: 10px;
+}
