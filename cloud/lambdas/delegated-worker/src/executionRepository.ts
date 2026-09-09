@@ -11,8 +11,14 @@ const actionKey = (account: string, action: string) => `ACTION#${keyPart(account
 const authFields = (record: AuthorityRecord) => ({ accountId: record.authority.accountId, generation: record.authority.generation,
   version: record.version, owner: record.authority.owner, state: record.authority.state });
 const dispatchSchema = reserveDispatchInputSchema;
-const preparedSchema = z.strictObject({ input: dispatchSchema, state: z.enum(['prepared', 'queued']) });
-type ActionRecord = { input: ReserveDispatchInput; state: string; reservation?: z.infer<typeof reservationSchema>; outcomeFingerprint?: string; sequence?: number };
+const actionIdentitySchema = dispatchSchema.omit({ expectedVersion: true });
+function actionIdentity(input: ReserveDispatchInput) {
+  return { actionId: input.actionId, workspaceId: input.workspaceId, accountId: input.accountId,
+    expectedAuthorityGeneration: input.expectedAuthorityGeneration, approvalId: input.approvalId,
+    contentHash: input.contentHash, targetHash: input.targetHash };
+}
+const preparedSchema = z.strictObject({ input: actionIdentitySchema, state: z.enum(['prepared', 'queued']), queueSequence: integer.positive().optional() });
+type ActionRecord = { input: z.infer<typeof actionIdentitySchema>; state: string; queueSequence?: number; reservation?: z.infer<typeof reservationSchema>; outcomeFingerprint?: string; sequence?: number };
 /** Explicit C2-authenticated setup and C3/C5-approved intent admission are separate
  * capabilities. Neither is reachable from applyCommand or account research. */
 export class DynamoExecutionRepository implements ExecutionRepository {
@@ -89,7 +95,41 @@ export class DynamoExecutionRepository implements ExecutionRepository {
     this.current(current.data, parsed.expectedAuthorityGeneration, parsed.expectedVersion);
     if (current.data.authority.owner !== 'worker' || current.data.authority.state !== 'active') throw new Error('authority_not_active');
     await this.store.transact([this.store.check(authKey(parsed.accountId), current.rev, authFields(current.data)),
-      this.store.put(actionKey(parsed.accountId, parsed.actionId), { input: parsed, state: 'prepared' }, null, { state: 'prepared' })]);
+      this.store.put(actionKey(parsed.accountId, parsed.actionId), { input: actionIdentity(parsed), state: 'prepared' }, null, { state: 'prepared' })]);
+  }
+  /** Trusted preparation primitive, not a permission grant or transport command.
+   * Stable action identity is immutable. The caller supplies a fresh CAS version. */
+  async queueAction(input: ReserveDispatchInput): Promise<void> {
+    const parsed = dispatchSchema.parse(input); this.store.workspace(parsed.workspaceId);
+    const identity = actionIdentity(parsed);
+    const key = actionKey(parsed.accountId, parsed.actionId);
+    const action = await this.store.get<ActionRecord>(key);
+    if (!action) throw new Error('action_not_eligible');
+    if (fingerprint(actionIdentitySchema.parse(action.data.input)) !== fingerprint(identity)) throw new Error('action_fingerprint_conflict');
+    // A prior queue transition is immutable, even if dispatch/outcome happened.
+    // Replay can only publish its event, never reset the action to queued.
+    if (action.data.queueSequence !== undefined) {
+      await this.store.publish(integer.positive().parse(action.data.queueSequence)); return;
+    }
+    if (action.data.state !== 'prepared') throw new Error('action_not_eligible');
+    const prepared = preparedSchema.parse(action.data);
+    const authority = await this.authority(parsed.accountId);
+    this.current(authority.data, parsed.expectedAuthorityGeneration, parsed.expectedVersion);
+    if (authority.data.authority.owner !== 'worker' || authority.data.authority.state !== 'active') throw new Error('authority_not_active');
+    const next = { ...authority.data, version: authority.data.version + 1 };
+    const outbox = await this.store.eventItems(workerEventSchema.parse({ id: `queue-${fingerprint(identity)}`,
+      workspaceId: parsed.workspaceId, accountId: parsed.accountId, authorityGeneration: parsed.expectedAuthorityGeneration,
+      aggregateVersion: next.version, kind: 'action.outcome', payload: { actionId: parsed.actionId, state: 'queued',
+        contentHash: parsed.contentHash, targetHash: parsed.targetHash, observedAt: this.store.now(), evidenceRef: parsed.approvalId } }));
+    try {
+      await this.store.transact([this.store.put(authKey(parsed.accountId), next, authority.rev, authFields(next), authFields(authority.data)),
+        this.store.put(key, { ...prepared, state: 'queued', queueSequence: outbox.sequence }, action.rev, { state: 'queued' }, { state: 'prepared' }), ...outbox.items]);
+    } catch (error) {
+      const committed = await this.store.get<ActionRecord>(key);
+      if (!committed || fingerprint(committed.data.input) !== fingerprint(identity) || committed.data.queueSequence === undefined) throw error;
+      await this.store.publish(integer.positive().parse(committed.data.queueSequence)); return;
+    }
+    await this.store.publish(outbox.sequence);
   }
   async reserveDispatch(input: ReserveDispatchInput) {
     const parsed = dispatchSchema.parse(input); this.store.workspace(parsed.workspaceId);
@@ -100,7 +140,7 @@ export class DynamoExecutionRepository implements ExecutionRepository {
     const action = await this.store.get<ActionRecord>(key);
     if (!action || !['prepared', 'queued'].includes(action.data.state)) throw new Error('action_not_eligible');
     const prepared = preparedSchema.parse(action.data);
-    if (fingerprint(prepared.input) !== fingerprint(parsed)) throw new Error('action_fingerprint_conflict');
+    if (fingerprint(prepared.input) !== fingerprint(actionIdentity(parsed))) throw new Error('action_fingerprint_conflict');
     const reservation = reservationSchema.parse({ actionId: parsed.actionId, workspaceId: parsed.workspaceId, accountId: parsed.accountId,
       authorityGeneration: parsed.expectedAuthorityGeneration, contentHash: parsed.contentHash, targetHash: parsed.targetHash, state: 'dispatching' });
     // No replay-to-send after an ambiguous transaction result. The caller must
@@ -112,7 +152,8 @@ export class DynamoExecutionRepository implements ExecutionRepository {
         contentHash: parsed.contentHash, targetHash: parsed.targetHash, observedAt: this.store.now(), evidenceRef: parsed.approvalId } }));
     await this.store.transact([this.store.put(authKey(parsed.accountId), next, authority.rev, authFields(next), authFields(authority.data)),
       this.store.put(key, { ...prepared, state: 'dispatching', reservation }, action.rev, { state: 'dispatching' }, { state: prepared.state }), ...outbox.items]);
-    await this.store.publish(outbox.sequence);
+    // The committed outbox is drained separately. No external await may delay
+    // the sender continuation after this final reservation boundary.
     return reservation;
   }
   async appendOutcome(input: AppendOutcomeInput): Promise<void> {

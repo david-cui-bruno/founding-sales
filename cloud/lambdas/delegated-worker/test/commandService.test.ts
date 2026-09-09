@@ -189,3 +189,64 @@ it('manual outcome carries command-correlated applied receipt with unchanged pay
   expect(events[1]).toMatchObject({ kind: 'manual.outcome', receipt, payload: manual.payload });
   expect(receipt).toMatchObject({ commandId: manual.commandId, status: 'applied', authorityGeneration: 1, aggregateVersion: 2 });
 });
+it('keeps two prepared identities dispatchable across current version advances', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  await repo.prepareAction(dispatch);
+  const second = { ...dispatch, actionId: 'second' }; await repo.prepareAction(second);
+  await repo.reserveDispatch(dispatch);
+  await expect(repo.reserveDispatch({ ...second, expectedVersion: 2 })).resolves.toMatchObject({ actionId: 'second', authorityGeneration: 1 });
+});
+it('preserves prepared approval identity across intervening manual command but rejects changed approval', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db); await repo.prepareAction(dispatch);
+  await repo.applyCommand({ ...command, expectedVersion: 1, kind: 'manual-outcome', payload: { actionId: 'call', channel: 'call', outcome: 'not_called', observedAt: clock.now(), evidenceRef: 'human' } });
+  await expect(repo.reserveDispatch({ ...dispatch, expectedVersion: 2, approvalId: 'changed' })).rejects.toThrow('action_fingerprint_conflict');
+  await expect(repo.reserveDispatch({ ...dispatch, expectedVersion: 2 })).resolves.toMatchObject({ actionId: dispatch.actionId });
+});
+it('queues atomically and replays only publication after crash without resurrecting or duplicating action', async () => {
+  const db = new ConditionalCommandHarness(); let down = false;
+  const repo = await delegated(db, async () => { if (down) throw new Error('publisher_down'); });
+  await repo.prepareAction(dispatch); down = true;
+  await expect(repo.queueAction(dispatch)).rejects.toThrow('publisher_down');
+  expect(db.inspect('ACTION#acct#action')).toMatchObject({ state: 'queued' });
+  expect(db.inspect('AUTH#acct')).toMatchObject({ version: 2 });
+  expect((await repo.eventsAfter(null)).events).toHaveLength(1);
+  down = false; await repo.queueAction(dispatch);
+  expect((await repo.eventsAfter(null)).events[1]).toMatchObject({ kind: 'action.outcome', aggregateVersion: 2, payload: { state: 'queued', actionId: 'action' } });
+  await repo.reserveDispatch({ ...dispatch, expectedVersion: 2 });
+  await repo.queueAction(dispatch);
+  expect(db.inspect('ACTION#acct#action')).toMatchObject({ state: 'dispatching' });
+  expect(db.inspect('AUTH#acct')).toMatchObject({ version: 3 });
+});
+it('does not put external publication between committed reservation and the sender continuation', async () => {
+  const db = new ConditionalCommandHarness(); let down = false; let publicationCalls = 0;
+  const repo = await delegated(db, async () => { publicationCalls++; if (down) throw new Error('publisher_down'); });
+  await repo.prepareAction(dispatch); down = true;
+  const before = publicationCalls; let fictionalSenderCalls = 0;
+  const reservation = await repo.reserveDispatch(dispatch);
+  fictionalSenderCalls++;
+  expect(reservation.state).toBe('dispatching'); expect(fictionalSenderCalls).toBe(1);
+  expect(publicationCalls).toBe(before);
+  expect(db.inspect('ACTION#acct#action')).toMatchObject({ state: 'dispatching' });
+  expect((await repo.eventsAfter(null)).events).toHaveLength(1);
+  down = false; await repo.retryPublications();
+  expect((await repo.eventsAfter(null)).events[1]).toMatchObject({ payload: { state: 'dispatching' } });
+});
+it('queue transaction fences authority and prepared state and exact concurrent replay has one event', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db); await repo.prepareAction(dispatch);
+  await Promise.all([repo.queueAction(dispatch), repo.queueAction(dispatch)]);
+  const events = (await repo.eventsAfter(null)).events;
+  expect(events.filter(event => event.kind === 'action.outcome' && event.payload.state === 'queued')).toHaveLength(1);
+  const tx = db.transactions.find(transaction => transaction.TransactItems?.some(item => item.Put?.Item?.state?.S === 'queued'))!;
+  expect(tx.TransactItems).toHaveLength(4);
+  expect(JSON.stringify(tx)).toContain('generation'); expect(JSON.stringify(tx)).toContain('prepared');
+  await expect(repo.queueAction({ ...dispatch, targetHash: 'd'.repeat(64) })).rejects.toThrow('action_fingerprint_conflict');
+  await expect(repo.queueAction({ ...dispatch, expectedAuthorityGeneration: 2 })).rejects.toThrow('action_fingerprint_conflict');
+});
+it('pause blocks a fresh queue and dispatch without rewriting the stable prepared identity', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db); await repo.prepareAction(dispatch);
+  await repo.applyCommand({ ...command, expectedVersion: 1 });
+  await expect(repo.queueAction({ ...dispatch, expectedVersion: 2 })).rejects.toThrow('authority_not_active');
+  await expect(repo.reserveDispatch({ ...dispatch, expectedVersion: 2 })).rejects.toThrow('authority_not_active');
+  expect(db.inspect('ACTION#acct#action')).toMatchObject({ state: 'prepared', input: { approvalId: dispatch.approvalId, expectedAuthorityGeneration: 1 } });
+  expect(db.inspect('ACTION#acct#action')).not.toHaveProperty('input.expectedVersion');
+});
