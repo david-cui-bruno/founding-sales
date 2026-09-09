@@ -1,0 +1,145 @@
+import { z } from 'zod';
+import { authorityStateSchema, commandReceiptSchema, delegationCommandSchema, reservationSchema, workerEventSchema, reserveDispatchInputSchema, appendOutcomeInputSchema,
+  type AppendOutcomeInput, type CommandReceipt, type DelegationCommand, type ExecutionRepository, type ReserveDispatchInput, type WorkerEvent } from '../../../../src/shared/contracts/delegationContract';
+import { accountIdSchema } from '../../../../src/shared/contracts/accountContract';
+import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions } from './dynamoStore';
+const authorityRecordSchema = z.strictObject({ authority: authorityStateSchema, version: integer });
+type AuthorityRecord = z.infer<typeof authorityRecordSchema>;
+type CommandRecord = { fingerprint: string; receipt: CommandReceipt; sequence: number };
+const authKey = (account: string) => `AUTH#${keyPart(account)}`;
+const actionKey = (account: string, action: string) => `ACTION#${keyPart(account)}#${keyPart(action)}`;
+const authFields = (record: AuthorityRecord) => ({ accountId: record.authority.accountId, generation: record.authority.generation,
+  version: record.version, owner: record.authority.owner, state: record.authority.state });
+const dispatchSchema = reserveDispatchInputSchema;
+const preparedSchema = z.strictObject({ input: dispatchSchema, state: z.enum(['prepared', 'queued']) });
+type ActionRecord = { input: ReserveDispatchInput; state: string; reservation?: z.infer<typeof reservationSchema>; outcomeFingerprint?: string; sequence?: number };
+/** Explicit C2-authenticated setup and C3/C5-approved intent admission are separate
+ * capabilities. Neither is reachable from applyCommand or account research. */
+export class DynamoExecutionRepository implements ExecutionRepository {
+  private readonly store: DynamoStore;
+  constructor(options: RepositoryOptions) { this.store = new DynamoStore(options); }
+  async seedLocalAuthority(accountId: string): Promise<void> {
+    accountIdSchema.parse(accountId);
+    const record: AuthorityRecord = { authority: { accountId, owner: 'local', generation: 0, state: 'local' }, version: 0 };
+    // Conditional creation only. Never overwrite a delegated/revoked/unknown owner.
+    await this.store.transact([this.store.put(authKey(accountId), record, null, authFields(record))]);
+  }
+  private async authority(accountId: string) {
+    const stored = await this.store.get<unknown>(authKey(accountId));
+    if (!stored) throw new Error('authority_missing');
+    const data = authorityRecordSchema.parse(stored.data);
+    if (data.authority.accountId !== accountId) throw new Error('authority_identity_conflict');
+    return { ...stored, data };
+  }
+  private current(record: AuthorityRecord, generation: number, version: number): void {
+    if (record.authority.generation !== generation || record.version !== version) throw new Error('stale_authority');
+  }
+  private async replay(key: string, expected: string): Promise<CommandReceipt | null> {
+    const prior = await this.store.get<CommandRecord>(key);
+    if (!prior) return null;
+    if (prior.data.fingerprint !== expected) throw new Error('command_fingerprint_conflict');
+    const receipt = commandReceiptSchema.parse(prior.data.receipt);
+    await this.store.publish(integer.positive().parse(prior.data.sequence));
+    return receipt;
+  }
+  async applyCommand(input: DelegationCommand): Promise<CommandReceipt> {
+    const command = delegationCommandSchema.parse(input);
+    this.store.workspace(command.workspaceId);
+    const key = `COMMAND#${keyPart(command.commandId)}`;
+    const fp = fingerprint(command);
+    const prior = await this.replay(key, fp);
+    if (prior) return prior;
+    const current = await this.authority(command.accountId);
+    this.current(current.data, command.expectedAuthorityGeneration, command.expectedVersion);
+    const authority = { ...current.data.authority };
+    if (command.kind === 'delegate') {
+      if (authority.owner !== 'local' || authority.state !== 'local' || authority.generation !== 0) throw new Error('authority_transition_denied');
+      authority.owner = 'worker'; authority.state = 'active'; authority.generation++;
+    } else if (command.kind === 'pause' || command.kind === 'revoke') {
+      if (authority.owner !== 'worker' || !['active', 'paused'].includes(authority.state)) throw new Error('authority_transition_denied');
+      authority.state = command.kind === 'pause' ? 'paused' : 'revoked';
+      if (command.kind === 'revoke') authority.generation++;
+    } else if (authority.owner !== 'worker') throw new Error('authority_transition_denied');
+    const next = { authority, version: current.data.version + 1 };
+    const receipt = commandReceiptSchema.parse({ commandId: command.commandId, status: 'applied', authorityGeneration: authority.generation,
+      aggregateVersion: next.version, reason: null });
+    const base = { id: `command-${fingerprint([command.workspaceId, command.commandId])}`, workspaceId: command.workspaceId, accountId: command.accountId,
+      authorityGeneration: authority.generation, aggregateVersion: next.version };
+    const event = workerEventSchema.parse(command.kind === 'manual-outcome' ? { ...base, kind: 'manual.outcome', payload: command.payload }
+      : { ...base, kind: 'authority.changed', payload: { authority, receipt } });
+    const outbox = await this.store.eventItems(event);
+    try {
+      await this.store.transact([this.store.put(authKey(command.accountId), next, current.rev, authFields(next), authFields(current.data)),
+        this.store.put(key, { fingerprint: fp, receipt, sequence: outbox.sequence }, null), ...outbox.items]);
+    } catch (error) {
+      // Includes ambiguous commit responses. Exact receipts win, altered payloads
+      // conflict, absent receipts fail closed. No lease/timer based re-dispatch.
+      const committed = await this.replay(key, fp);
+      if (committed) return committed;
+      throw error;
+    }
+    await this.store.publish(outbox.sequence);
+    return receipt;
+  }
+  /** Only approved-intent composition may call this. C3/C5 must first persist and
+   * verify their exact approval/context/permission snapshot. This does not send. */
+  async prepareAction(input: ReserveDispatchInput): Promise<void> {
+    const parsed = dispatchSchema.parse(input); this.store.workspace(parsed.workspaceId);
+    const current = await this.authority(parsed.accountId);
+    this.current(current.data, parsed.expectedAuthorityGeneration, parsed.expectedVersion);
+    if (current.data.authority.owner !== 'worker' || current.data.authority.state !== 'active') throw new Error('authority_not_active');
+    await this.store.transact([this.store.check(authKey(parsed.accountId), current.rev, authFields(current.data)),
+      this.store.put(actionKey(parsed.accountId, parsed.actionId), { input: parsed, state: 'prepared' }, null, { state: 'prepared' })]);
+  }
+  async reserveDispatch(input: ReserveDispatchInput) {
+    const parsed = dispatchSchema.parse(input); this.store.workspace(parsed.workspaceId);
+    const authority = await this.authority(parsed.accountId);
+    this.current(authority.data, parsed.expectedAuthorityGeneration, parsed.expectedVersion);
+    if (authority.data.authority.owner !== 'worker' || authority.data.authority.state !== 'active') throw new Error('authority_not_active');
+    const key = actionKey(parsed.accountId, parsed.actionId);
+    const action = await this.store.get<ActionRecord>(key);
+    if (!action || !['prepared', 'queued'].includes(action.data.state)) throw new Error('action_not_eligible');
+    const prepared = preparedSchema.parse(action.data);
+    if (fingerprint(prepared.input) !== fingerprint(parsed)) throw new Error('action_fingerprint_conflict');
+    const reservation = reservationSchema.parse({ actionId: parsed.actionId, workspaceId: parsed.workspaceId, accountId: parsed.accountId,
+      authorityGeneration: parsed.expectedAuthorityGeneration, contentHash: parsed.contentHash, targetHash: parsed.targetHash, state: 'dispatching' });
+    // No replay-to-send after an ambiguous transaction result. The caller must
+    // reconcile the stable action identity, never call its provider again.
+    const next = { ...authority.data, version: authority.data.version + 1 };
+    const outbox = await this.store.eventItems(workerEventSchema.parse({ id: `dispatch-${fingerprint(reservation)}`,
+      workspaceId: parsed.workspaceId, accountId: parsed.accountId, authorityGeneration: reservation.authorityGeneration,
+      aggregateVersion: next.version, kind: 'action.outcome', payload: { actionId: parsed.actionId, state: 'dispatching',
+        contentHash: parsed.contentHash, targetHash: parsed.targetHash, observedAt: this.store.now(), evidenceRef: parsed.approvalId } }));
+    await this.store.transact([this.store.put(authKey(parsed.accountId), next, authority.rev, authFields(next), authFields(authority.data)),
+      this.store.put(key, { ...prepared, state: 'dispatching', reservation }, action.rev, { state: 'dispatching' }, { state: prepared.state }), ...outbox.items]);
+    await this.store.publish(outbox.sequence);
+    return reservation;
+  }
+  async appendOutcome(input: AppendOutcomeInput): Promise<void> {
+    const parsed = appendOutcomeInputSchema.parse(input);
+    const reservation = parsed.reservation; this.store.workspace(reservation.workspaceId);
+    const key = actionKey(reservation.accountId, reservation.actionId);
+    const action = await this.store.get<ActionRecord>(key);
+    if (!action || fingerprint(action.data.reservation) !== fingerprint(reservation)) throw new Error('reservation_identity_conflict');
+    const fp = fingerprint(parsed);
+    if (action.data.outcomeFingerprint === fp) { if (action.data.sequence) await this.store.publish(action.data.sequence); return; }
+    if (!['dispatching', 'unknown'].includes(action.data.state)) throw new Error('outcome_conflict');
+    const authority = await this.authority(reservation.accountId);
+    const next = { ...authority.data, version: authority.data.version + 1 };
+    // The event generation belongs to the ORIGINAL reservation, even after revoke.
+    // Current ownership is preserved byte-for-byte apart from aggregate version.
+    const event: WorkerEvent = workerEventSchema.parse({ id: `outcome-${fp}`, workspaceId: reservation.workspaceId, accountId: reservation.accountId,
+      authorityGeneration: reservation.authorityGeneration, aggregateVersion: next.version, kind: 'action.outcome', payload: {
+        actionId: reservation.actionId, contentHash: reservation.contentHash, targetHash: reservation.targetHash,
+        state: parsed.state, observedAt: parsed.observedAt, evidenceRef: parsed.evidenceRef } });
+    const outbox = await this.store.eventItems(event);
+    await this.store.transact([this.store.put(authKey(reservation.accountId), next, authority.rev, authFields(next), authFields(authority.data)),
+      this.store.put(key, { ...action.data, state: parsed.state, outcomeFingerprint: fp, sequence: outbox.sequence }, action.rev,
+        { state: parsed.state }, { state: action.data.state }), ...outbox.items]);
+    await this.store.publish(outbox.sequence);
+  }
+  eventsAfter(cursor: string | null) { return this.store.eventsAfter(cursor); }
+  retryPublications() { return this.store.retryPublications(); }
+  retryPublication(sequence: number) { return this.store.publish(integer.positive().parse(sequence)); }
+}
+export function createExecutionRepository(options: RepositoryOptions): DynamoExecutionRepository { return new DynamoExecutionRepository(options); }

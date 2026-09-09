@@ -1,0 +1,179 @@
+import { describe, expect, it } from 'vitest';
+import { createExecutionRepository } from '../src/executionRepository';
+import { createCommandService } from '../src/commandService';
+import { ScriptedDynamo, row, transaction, ConditionalCommandHarness } from './sdkHarness';
+const clock = { now: () => '2026-09-09T00:00:00.000Z' };
+const command = { commandId: 'pause-1', workspaceId: 'ws', accountId: 'acct', expectedAuthorityGeneration: 1, expectedVersion: 2,
+  kind: 'pause' as const, payload: { reason: 'Operator pause' } };
+const active = { authority: { accountId: 'acct', owner: 'worker', generation: 1, state: 'active' }, version: 2 };
+describe('DynamoDB command repository', () => {
+  it('atomically CASes authority, immutable command receipt, contiguous durable outbox', async () => {
+    const db = new ScriptedDynamo([{}, row(active, 2), {}, transaction]);
+    const repo = createExecutionRepository({ dynamo: db, tableName: 't', workspaceId: 'ws', clock });
+    const receipt = await createCommandService(repo).submit(command);
+    expect(receipt).toEqual({ commandId: 'pause-1', status: 'applied', authorityGeneration: 1, aggregateVersion: 3, reason: null });
+    const tx = db.transactions[0]!;
+    expect(tx.TransactItems).toHaveLength(4);
+    expect(JSON.stringify(tx)).toContain('attribute_not_exists');
+    expect(JSON.stringify(tx)).toContain('#rev = :rev');
+    expect(JSON.stringify(tx)).toContain('authority.changed');
+    expect(db.reads.every(read => read.ConsistentRead === true)).toBe(true);
+  });
+  it('fails closed on absent authority rather than implicitly delegating research accounts', async () => {
+    const db = new ScriptedDynamo([{}, {}]);
+    const repo = createExecutionRepository({ dynamo: db, tableName: 't', workspaceId: 'ws', clock });
+    await expect(repo.applyCommand(command)).rejects.toThrow('authority_missing');
+    expect(db.transactions).toHaveLength(0);
+  });
+  it('rejects unknown command keys before SDK calls', async () => {
+    const db = new ScriptedDynamo([]);
+    const repo = createExecutionRepository({ dynamo: db, tableName: 't', workspaceId: 'ws', clock });
+    await expect(createCommandService(repo).submit({ ...command, surprise: true })).rejects.toThrow();
+    expect(db.commands).toHaveLength(0);
+  });
+});
+
+it('rejects stale generation before any write', async () => {
+  const db = new ScriptedDynamo([{}, row({ ...active, authority: { ...active.authority, generation: 2 } }, 2)]);
+  await expect(createExecutionRepository({ dynamo: db, tableName: 't', workspaceId: 'ws', clock }).applyCommand(command)).rejects.toThrow('stale_authority');
+  expect(db.transactions).toHaveLength(0);
+});
+it('does not advance durable cursor past a missing event', async () => {
+  const db = new ScriptedDynamo([row({ sequence: 3 }), {}]);
+  const repo = createExecutionRepository({ dynamo: db, tableName: 't', workspaceId: 'ws', clock });
+  expect(await repo.eventsAfter(null)).toEqual({ events: [], nextCursor: null });
+});
+it('does not advance durable cursor past an unpublished event', async () => {
+  const db = new ScriptedDynamo([row({ sequence: 3 }), row({ published: false, sequence: 1, event: {} })]);
+  const repo = createExecutionRepository({ dynamo: db, tableName: 't', workspaceId: 'ws', clock });
+  expect(await repo.eventsAfter(null)).toEqual({ events: [], nextCursor: null });
+});
+it('never resends an existing dispatching action even for identical input', async () => {
+  const db = new ScriptedDynamo([row(active, 2), row({ state: 'dispatching' })]);
+  const repo = createExecutionRepository({ dynamo: db, tableName: 't', workspaceId: 'ws', clock });
+  await expect(repo.reserveDispatch({ actionId: 'action', workspaceId: 'ws', accountId: 'acct', expectedAuthorityGeneration: 1, expectedVersion: 2,
+    approvalId: 'approval', contentHash: 'a'.repeat(64), targetHash: 'b'.repeat(64) })).rejects.toThrow('action_not_eligible');
+  expect(db.transactions).toHaveLength(0);
+});
+
+const dispatch = { actionId: 'action', workspaceId: 'ws', accountId: 'acct', expectedAuthorityGeneration: 1, expectedVersion: 1,
+  approvalId: 'approval', contentHash: 'a'.repeat(64), targetHash: 'b'.repeat(64) };
+async function delegated(db: ConditionalCommandHarness, publish?: (event: import('../../../../src/shared/contracts/delegationContract').WorkerEvent) => Promise<void>) {
+  const repo = createExecutionRepository({ dynamo: db, tableName: 't', workspaceId: 'ws', clock, publish });
+  await repo.seedLocalAuthority('acct');
+  await repo.applyCommand({ commandId: 'delegate', workspaceId: 'ws', accountId: 'acct', expectedAuthorityGeneration: 0, expectedVersion: 0,
+    kind: 'delegate', payload: { delegationId: 'approved-delegation', approvedAt: clock.now() } });
+  return repo;
+}
+it('exact replay returns original pause receipt and changed payload conflicts', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  const pause = { ...command, expectedVersion: 1 };
+  const first = await repo.applyCommand(pause);
+  const count = db.transactions.length;
+  expect(await repo.applyCommand(pause)).toEqual(first);
+  expect(db.transactions).toHaveLength(count);
+  await expect(repo.applyCommand({ ...pause, payload: { reason: 'Changed' } })).rejects.toThrow('fingerprint_conflict');
+});
+it('publishes only committed state and retries publication without repeating mutation after crash', async () => {
+  const db = new ConditionalCommandHarness(); let fail = false; const published: string[] = [];
+  const repo = await delegated(db, async event => {
+    expect(db.inspect('AUTH#acct')).toBeDefined();
+    if (fail) throw new Error('publication_crash');
+    published.push(event.id);
+  });
+  fail = true;
+  const pause = { ...command, expectedVersion: 1 };
+  await expect(repo.applyCommand(pause)).rejects.toThrow('publication_crash');
+  expect((await repo.eventsAfter(null)).events).toHaveLength(1);
+  const committed = db.transactions.length;
+  fail = false;
+  expect((await repo.applyCommand(pause)).status).toBe('applied');
+  expect(db.transactions.length).toBe(committed + 1); // publication acknowledgement only
+  expect((await repo.eventsAfter(null)).events).toHaveLength(2);
+  expect(published).toHaveLength(2);
+});
+it('two contenders construct real authority/action conditions and only one offline reservation wins', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  await repo.prepareAction(dispatch);
+  const results = await Promise.allSettled([repo.reserveDispatch(dispatch), repo.reserveDispatch(dispatch)]);
+  expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+  expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
+  const checks = db.transactions.flatMap(tx => tx.TransactItems ?? []).filter(item => item.ConditionCheck);
+  expect(JSON.stringify(checks)).toContain('generation');
+  expect(JSON.stringify(checks)).toContain('accountId');
+  expect(JSON.stringify(checks)).toContain('version');
+});
+it('late outcome retains reservation generation after revoke and never reactivates authority', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  await repo.prepareAction(dispatch); const reservation = await repo.reserveDispatch(dispatch);
+  await repo.applyCommand({ ...command, kind: 'revoke', expectedVersion: 2 });
+  const outcome = { reservation, state: 'provider_accepted' as const, observedAt: clock.now(), evidenceRef: 'provider-receipt' };
+  await repo.appendOutcome(outcome); await repo.appendOutcome(outcome);
+  const events = (await repo.eventsAfter(null)).events;
+  expect(events).toHaveLength(4);
+  expect(events[3]).toMatchObject({ authorityGeneration: 1, kind: 'action.outcome', payload: { state: 'provider_accepted' } });
+  expect(db.inspect('AUTH#acct')).toMatchObject({ authority: { generation: 2, state: 'revoked', owner: 'worker' } });
+  await expect(repo.reserveDispatch({ ...dispatch, expectedAuthorityGeneration: 2, expectedVersion: 4 })).rejects.toThrow('authority_not_active');
+});
+it('unknown actions cannot be dispatched again or overwritten with a different reservation identity', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  await repo.prepareAction(dispatch); const reservation = await repo.reserveDispatch(dispatch);
+  await repo.appendOutcome({ reservation, state: 'unknown', observedAt: clock.now(), evidenceRef: 'timeout' });
+  await expect(repo.reserveDispatch({ ...dispatch, expectedVersion: 3 })).rejects.toThrow('action_not_eligible');
+  await expect(repo.appendOutcome({ reservation: { ...reservation, contentHash: 'c'.repeat(64) }, state: 'provider_accepted', observedAt: clock.now(), evidenceRef: 'receipt' })).rejects.toThrow('reservation_identity_conflict');
+});
+it('an ambiguous reservation commit does not return send eligibility on retry', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  await repo.prepareAction(dispatch);
+  db.afterCommit = () => { throw new Error('transport_lost_after_commit'); };
+  await expect(repo.reserveDispatch(dispatch)).rejects.toThrow('transport_lost_after_commit');
+  db.afterCommit = undefined;
+  await expect(repo.reserveDispatch({ ...dispatch, expectedVersion: 2 })).rejects.toThrow('action_not_eligible');
+});
+it('manual outcome retains exact channel vocabulary rather than fabricating sent', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  await repo.applyCommand({ ...command, expectedVersion: 1, kind: 'manual-outcome', payload: { actionId: 'call', channel: 'call',
+    outcome: 'not_called', observedAt: clock.now(), evidenceRef: 'human-report' } });
+  expect((await repo.eventsAfter(null)).events[1]).toMatchObject({ kind: 'manual.outcome', payload: { channel: 'call', outcome: 'not_called' } });
+});
+
+it('reservation publishes durable dispatching provenance before returning', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  await repo.prepareAction(dispatch); await repo.reserveDispatch(dispatch);
+  expect((await repo.eventsAfter(null)).events[1]).toMatchObject({ kind: 'action.outcome', authorityGeneration: 1, aggregateVersion: 2, payload: { actionId: 'action', state: 'dispatching', evidenceRef: 'approval' } });
+});
+it('recovers an exact committed command receipt after transaction response loss', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  db.afterCommit = () => { throw new Error('response_lost'); };
+  const receipt = await repo.applyCommand({ ...command, expectedVersion: 1 });
+  expect(receipt).toMatchObject({ status: 'applied', aggregateVersion: 2 });
+  db.afterCommit = undefined;
+  expect(await repo.applyCommand({ ...command, expectedVersion: 1 })).toEqual(receipt);
+});
+it('two same-command contenders replay the same receipt and altered payload loses', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  const pause = { ...command, expectedVersion: 1 };
+  const receipts = await Promise.all([repo.applyCommand(pause), repo.applyCommand(pause)]);
+  expect(receipts[0]).toEqual(receipts[1]);
+  expect((await repo.eventsAfter(null)).events).toHaveLength(2);
+  await expect(repo.applyCommand({ ...pause, payload: { reason: 'different' } })).rejects.toThrow('fingerprint_conflict');
+});
+it('refuses a corrupt persisted event head rather than resetting missing sequence to zero', async () => {
+  const db = new ScriptedDynamo([row({})]);
+  await expect(createExecutionRepository({ dynamo: db, tableName: 't', workspaceId: 'ws', clock }).eventsAfter(null)).rejects.toThrow();
+});
+it('rejects cross-workspace commands before accessing DynamoDB', async () => {
+  const db = new ScriptedDynamo([]);
+  await expect(createExecutionRepository({ dynamo: db, tableName: 't', workspaceId: 'ws', clock }).applyCommand({ ...command, workspaceId: 'other' })).rejects.toThrow('workspace_mismatch');
+  expect(db.commands).toHaveLength(0);
+});
+it('drains pending publication in durable sequence without applying commands again', async () => {
+  const db = new ConditionalCommandHarness(); let fail = false;
+  const repo = await delegated(db, async () => { if (fail) throw new Error('publication_down'); });
+  fail = true;
+  await expect(repo.applyCommand({ ...command, expectedVersion: 1 })).rejects.toThrow('publication_down');
+  fail = false;
+  await repo.retryPublications();
+  expect((await repo.eventsAfter(null)).events).toHaveLength(2);
+  expect(db.inspect('AUTH#acct')).toMatchObject({ version: 2, authority: { state: 'paused' } });
+});
