@@ -143,3 +143,8 @@ export class DynamoExecutionRepository implements ExecutionRepository {
   retryPublication(sequence: number) { return this.store.publish(integer.positive().parse(sequence)); }
 }
 export function createExecutionRepository(options: RepositoryOptions): DynamoExecutionRepository { return new DynamoExecutionRepository(options); }
+
+// C3 reuses the exact AUTH envelope and scalar fences. Intake must preserve
+// authority, advance only version, and atomically commit its state and event.
+export { authorityRecordSchema, authKey as executionAuthorityKey, authFields as executionAuthorityFields };
+export type { AuthorityRecord };
