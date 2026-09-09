@@ -43,6 +43,19 @@ export const todaySnapshotSchema = z.object({
   conversationsHeld: z.number().int().nonnegative(),
 }).strict();
 
+export const dailyAccountCallPlanSchema = z.object({
+  accountIds: z.array(z.string().min(1)),
+  workloadConflict: z.boolean(),
+}).strict();
+
+export const dailyAccountCallPlanningInputSchema = z.object({
+  due: z.array(z.string().min(1)),
+  ranked: z.array(z.string().min(1)),
+  newCallSlots: z.number().int().nonnegative(),
+  completedAccountIds: z.array(z.string().min(1)),
+  totalCallCapacity: z.number().int().nonnegative().nullable(),
+}).strict();
+
 export const completeActionRequestSchema = z.object({
   salesCycleId: salesCycleIdSchema,
   actionId: z.string().min(1),
@@ -153,6 +166,8 @@ export const setReviewPositionRequestSchema = z.object({
 export type TodayLaneId = z.infer<typeof todayLaneIdSchema>;
 export type TodayItem = z.infer<typeof todayItemSchema>;
 export type TodaySnapshot = z.infer<typeof todaySnapshotSchema>;
+export type DailyAccountCallPlan = z.infer<typeof dailyAccountCallPlanSchema>;
+export type DailyAccountCallPlanningInput = z.infer<typeof dailyAccountCallPlanningInputSchema>;
 export type CompleteActionRequest = z.infer<typeof completeActionRequestSchema>;
 export type SnoozeActionRequest = z.infer<typeof snoozeActionRequestSchema>;
 export type PinActionRequest = z.infer<typeof pinActionRequestSchema>;
