@@ -47,8 +47,9 @@ function decodedSubject(value: string): string {
 }
 /** Narrow bounded Sent lookup. No send port or retry path exists here. */
 export function createSendReconciler(input: DispatchDependencies) {
-  return { async reconcileSend(commandId: string): Promise<ReconciliationOutcome> {
+  return { async reconcileSend(commandId: string, signal: AbortSignal = new AbortController().signal): Promise<ReconciliationOutcome> {
     try {
+      signal.throwIfAborted();
       const intent = await input.policy.loadIntent(commandId);
       if (!intent) return { status: 'unknown', reason: 'reservation_missing' };
       const action = await input.execution.readDispatch(intent.action.accountId, intent.action.actionId);
@@ -58,10 +59,12 @@ export function createSendReconciler(input: DispatchDependencies) {
       const existing = await input.policy.sendEvidence(commandId);
       const accepted = existing.find(evidence => evidence.state === 'provider_accepted' && fingerprint(evidence.reservation) === fingerprint(reservation));
       if (accepted?.providerIdentity) return { status: 'provider_accepted', reason: 'sent_match', providerIdentity: { messageId: accepted.providerIdentity.messageId, threadId: accepted.providerIdentity.threadId ?? null } };
-      const signal = new AbortController().signal;
+      signal.throwIfAborted();
       const access = await input.authorization.authorizedAccess(intent.pairingId, ['relevant_read'], signal);
+      signal.throwIfAborted();
       if (access.grant.subject !== intent.mailboxSubject || access.grant.email !== intent.frozenMessage.from || access.grant.owner !== 'remote') return { status: 'unknown', reason: 'lookup_unavailable' };
       const get = async (path: string, params: Record<string, string>) => {
+        signal.throwIfAborted();
         const url = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/${path}`); url.search = new URLSearchParams(params).toString();
         const response = await requestJsonOnce({ fetch: input.fetch, signal, url: url.href, maxBytes: 200000,
           init: { method: 'GET', headers: { Authorization: `Bearer ${access.accessToken}` } } });

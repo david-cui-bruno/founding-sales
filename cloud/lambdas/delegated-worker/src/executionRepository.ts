@@ -150,7 +150,8 @@ export class DynamoExecutionRepository implements ExecutionRepository {
     }
     await this.store.publish(outbox.sequence);
   }
-  async reserveDispatch(input: ReserveDispatchInput, evidence?: GoogleAccessEvidence) {
+  async reserveDispatch(input: ReserveDispatchInput, evidence?: GoogleAccessEvidence, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const parsed = dispatchSchema.parse(input); this.store.workspace(parsed.workspaceId);
     const authority = await this.authority(parsed.accountId);
     this.current(authority.data, parsed.expectedAuthorityGeneration, parsed.expectedVersion);
@@ -171,6 +172,7 @@ export class DynamoExecutionRepository implements ExecutionRepository {
       workspaceId: parsed.workspaceId, accountId: parsed.accountId, authorityGeneration: reservation.authorityGeneration,
       aggregateVersion: next.version, kind: 'action.outcome', payload: { actionId: parsed.actionId, state: 'dispatching',
         contentHash: parsed.contentHash, targetHash: parsed.targetHash, observedAt: this.store.now(), evidenceRef: parsed.approvalId }, ...(plan.campaign ? { campaign: plan.campaign } : {}) }));
+    signal?.throwIfAborted();
     await this.store.transact([this.store.put(authKey(parsed.accountId), next, authority.rev, authFields(next), authFields(authority.data)),
       this.store.put(key, { ...prepared, state: 'dispatching', reservation }, action.rev, { state: 'dispatching' }, { state: prepared.state }), ...plan.finalize(), ...outbox.items]);
     // The committed outbox is drained separately. No external await may delay

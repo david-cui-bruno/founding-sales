@@ -1,5 +1,5 @@
 import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DynamoStore } from '../src/dynamoStore';
 import { ConditionalCommandHarness } from './sdkHarness';
 import { createIntakeBarrier, intakeRegistryKey } from '../src/intakeBarrier';
@@ -70,4 +70,66 @@ it('abort and missing adapter registry cannot imply inbox freshness', async () =
   const signal = AbortSignal.abort();
   expect((await barrier.check(subject, signal)).status).toBe('blocked');
   expect((await barrier.check({ ...subject, accountId: 'missing' }, new AbortController().signal)).status).toBe('blocked');
+});
+
+import { dispatchFixture } from './dispatchFixture';
+import { createSendReconciler } from '../src/sendReconciler';
+
+it.each(['dispatch', 'reconcile'] as const)('%s passes caller cancellation into actual expired C2 OAuth refresh', async operation => {
+  const f = await dispatchFixture();
+  if (operation === 'reconcile') { f.onSend(async () => { throw new Error('timeout'); }); await f.service().dispatch(f.intent.commandId); }
+  f.advance('2026-09-09T02:00:00.000Z');
+  const controller = new AbortController(); let aborted = false; let refreshes = 0;
+  f.onOAuthFetch(async (url, init) => {
+    expect(String(url)).toBe('https://oauth2.googleapis.com/token'); refreshes++;
+    return new Promise<Response>((_resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('fictional refresh deadline')), 30);
+      init?.signal?.addEventListener('abort', () => { clearTimeout(timeout); aborted = true; reject(new Error('cancelled')); }, { once: true });
+      queueMicrotask(() => controller.abort());
+    });
+  });
+  if (operation === 'dispatch') expect((await f.service().dispatch(f.intent.commandId, controller.signal)).status).toBe('held');
+  else {
+    const lookup = createSendReconciler({ execution: f.execution, policy: f.policy, authorization: f.authorization, fetch: async () => { throw new Error('lookup after cancellation'); } });
+    expect((await lookup.reconcileSend(f.intent.commandId, controller.signal)).status).toBe('unknown');
+  }
+  expect(refreshes).toBe(1); expect(aborted).toBe(true);
+  expect(f.sends()).toBe(operation === 'dispatch' ? 0 : 1);
+  if (operation === 'dispatch') expect(f.dynamo.inspect('DISPATCH_CAP#sender%40example.invalid#2026-09-09')).toBeUndefined();
+});
+it('caller cancellation after credential read prevents any reservation or send', async () => {
+  const f = await dispatchFixture(); const controller = new AbortController();
+  const original = f.authorization.authorizedAccess.bind(f.authorization);
+  vi.spyOn(f.authorization, 'authorizedAccess').mockImplementation(async (...args) => {
+    const result = await original(...args); if (args[1].includes('send')) controller.abort(); return result;
+  });
+  expect((await f.service().dispatch(f.intent.commandId, controller.signal)).status).toBe('held');
+  expect(f.sends()).toBe(0); expect(f.dynamo.inspect('DISPATCH_CAP#sender%40example.invalid#2026-09-09')).toBeUndefined();
+});
+it('cancellation during actual final reservation planning refuses ACTION and cap transaction', async () => {
+  const f = await dispatchFixture(); const controller = new AbortController();
+  const original = f.policy.reservationPlan.bind(f.policy);
+  vi.spyOn(f.policy, 'reservationPlan').mockImplementation(async (...args) => {
+    const plan = await original(...args); controller.abort(); return plan;
+  });
+  await expect(f.execution.reserveDispatch({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence, controller.signal)).rejects.toThrow();
+  expect((await f.execution.readDispatch('acct', f.intent.action.actionId))?.state).toBe('prepared');
+  expect(f.dynamo.inspect('DISPATCH_CAP#sender%40example.invalid#2026-09-09')).toBeUndefined();
+});
+it('already cancelled dispatch performs no new intake, grant, reservation or provider work', async () => {
+  const f = await dispatchFixture(); const controller = new AbortController(); controller.abort();
+  const transactions = f.dynamo.transactions.length;
+  expect((await f.service().dispatch(f.intent.commandId, controller.signal)).status).toBe('held');
+  expect(f.dynamo.transactions).toHaveLength(transactions); expect(f.sends()).toBe(0);
+});
+it('caller cancellation reaches cooperative Sent lookup and preserves unknown evidence without resend', async () => {
+  const f = await dispatchFixture(); f.onSend(async () => { throw new Error('timeout'); }); await f.service().dispatch(f.intent.commandId);
+  const original = await f.policy.sendEvidence(f.intent.commandId); const controller = new AbortController(); let aborted = false;
+  const lookup = createSendReconciler({ execution: f.execution, policy: f.policy, authorization: f.authorization, fetch: async (_url, init) => new Promise<Response>((_resolve, reject) => {
+    const deadline = setTimeout(() => reject(new Error('fictional lookup deadline')), 30);
+    init?.signal?.addEventListener('abort', () => { clearTimeout(deadline); aborted = true; reject(new Error('cancelled')); }, { once: true });
+    queueMicrotask(() => controller.abort());
+  }) });
+  expect((await lookup.reconcileSend(f.intent.commandId, controller.signal)).status).toBe('unknown');
+  expect(aborted).toBe(true); expect(await f.policy.sendEvidence(f.intent.commandId)).toEqual(original); expect(f.sends()).toBe(1);
 });

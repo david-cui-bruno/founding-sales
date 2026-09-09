@@ -22,7 +22,9 @@ export async function fixture(configured = true) {
   const dynamo = new ConditionalCommandHarness(); let now = '2026-09-09T00:04:00.000Z';
   const options = { dynamo, tableName: 't', workspaceId: 'ws', clock: { now: () => now } };
   const store = new DynamoStore(options); const auth = new WorkerAuth(options);
-  const fetch: typeof globalThis.fetch = async url => {
+  let oauthFetch: typeof globalThis.fetch | null = null;
+  const fetch: typeof globalThis.fetch = async (url, init) => {
+    if (oauthFetch) return oauthFetch(url, init);
     if (String(url) === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'fictional-access', refresh_token: 'fictional-refresh', token_type: 'Bearer', expires_in: 3600, scope: `openid email ${googleScopes.send} ${googleScopes.relevant_read}` });
     if (String(url) === 'https://openidconnect.googleapis.com/v1/userinfo') return Response.json({ sub: 'mailbox', email: 'sender@example.invalid', email_verified: true });
     throw new Error('unconfigured external boundary');
@@ -67,7 +69,7 @@ export async function fixture(configured = true) {
     return owner.apply(command, `Bearer ${pair.credential}`);
   };
   if (configured) await configure();
-  return { dynamo, options, store, authorization, access, policy, intent, approval, permission, draft, message, scope, scopeBinding, configure, execution, commands, advance: (value: string) => { now = value; } };
+  return { dynamo, options, store, authorization, access, policy, intent, approval, permission, draft, message, scope, scopeBinding, configure, execution, commands, onOAuthFetch: (handler: typeof globalThis.fetch) => { oauthFetch = handler; }, advance: (value: string) => { now = value; } };
 }
 
 export async function dispatchFixture() {

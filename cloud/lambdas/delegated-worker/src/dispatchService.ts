@@ -20,10 +20,9 @@ function heldReason(error: unknown): string { return error instanceof Error && r
 export function createDispatchService(input: DispatchDependencies) {
   const threads = new DynamoThreadIntakeRepository(input.policy.store.options);
   const poller = createMailPoller({ authorization: input.authorization, store: threads, fetch: input.fetch });
-  return { async dispatch(commandId: string): Promise<DispatchOutcome> {
-    const signal = new AbortController().signal;
+  return { async dispatch(commandId: string, signal: AbortSignal = new AbortController().signal): Promise<DispatchOutcome> {
     let intent;
-    try { intent = await input.policy.loadIntent(commandId); } catch { return { status: 'held', reason: 'dispatch_identity_unavailable' }; }
+    try { signal.throwIfAborted(); intent = await input.policy.loadIntent(commandId); signal.throwIfAborted(); } catch { return { status: 'held', reason: 'dispatch_identity_unavailable' }; }
     if (!intent) return { status: 'held', reason: 'dispatch_intent_missing' };
     let reservation: Reservation;
     let prepared;
@@ -47,14 +46,18 @@ export function createDispatchService(input: DispatchDependencies) {
       }
       // Only identity crosses this boundary. C3 loads the complete authorized
       // account scope; the current recipient never narrows the account cursor.
+      signal.throwIfAborted();
       const poll = await poller.pollOnce({ accountId: intent.action.accountId, pairingId: intent.pairingId, mailboxSubject: intent.mailboxSubject }, signal);
       if (!poll.complete || poll.suppressed) return { status: 'held', reason: 'intake_incomplete' };
+      signal.throwIfAborted();
       const access = await input.authorization.authorizedAccess(intent.pairingId, ['send', 'relevant_read'], signal);
+      signal.throwIfAborted();
       if (access.grant.subject !== intent.mailboxSubject || access.grant.email !== intent.frozenMessage.from || access.grant.owner !== 'remote') return { status: 'held', reason: 'sender_identity_conflict' };
       prepared = createPreparedGmailSender({ accountEmail: access.grant.email, accessToken: access.accessToken, fetch: input.fetch, signal, isCurrent: () => !signal.aborted });
       const expectedVersion = await input.execution.currentVersion(intent.action.accountId);
       // No refresh, publication or other async operation after this reservation.
-      reservation = await input.execution.reserveDispatch({ ...intent.action, expectedVersion }, access.accessEvidence);
+      signal.throwIfAborted();
+      reservation = await input.execution.reserveDispatch({ ...intent.action, expectedVersion }, access.accessEvidence, signal);
     } catch (error) {
       // A lost reservation response may have committed. Never infer non-delivery
       // from absence or attempt another reservation in this invocation.
