@@ -176,11 +176,11 @@ export function createRuntimeLinkedInApi(options: Omit<ConstructorParameters<typ
   return {
     prepare: input => run(linkedInPrepareSchema, input, (_database, request) => request.enrollmentId, (service, request) => service.prepare(request)),
     get: input => run(linkedInRevisionSchema, input, draftEnrollment, (service, request) => service.get(request)),
-    save: input => run(linkedInSaveSchema, input, draftEnrollment, (service, request) => service.save(request)),
+    save: input => run(linkedInSaveSchema, input, (database, request) => draftEnrollment(database, request), (service, request) => service.save(request)),
     copy: input => run(linkedInRevisionSchema, input, draftEnrollment, (service, request) => service.copy(request)),
     open: input => run(linkedInRevisionSchema, input, draftEnrollment, (service, request) => service.open(request)),
-    begin: input => run(linkedInBeginSchema, input, draftEnrollment, (service, request) => service.begin(request)),
+    begin: input => run(linkedInBeginSchema, input, (database, request) => draftEnrollment(database, request), (service, request) => service.begin(request)),
     recover: input => run(linkedInRevisionSchema, input, draftEnrollment, (service, request) => service.recover(request)),
-    reportOutcome: input => run(linkedInReportSchema, input, draftEnrollment, (service, request) => service.reportOutcome(request)),
+    reportOutcome: input => run(linkedInReportSchema, input, (database, request) => draftEnrollment(database, request), (service, request) => service.reportOutcome(request)),
   };
 }
