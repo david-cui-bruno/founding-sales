@@ -16,15 +16,43 @@ import type {
   TodayDiagnosticKind,
 } from './todayTypes';
 
+// Resolve JSON identities once per statement against authoritative column affinities.
+// Materializing current.id lets SQLite index membership without persistent writes or caches.
+const parkedReviewManifestCte = `WITH parked_review_manifest AS MATERIALIZED (
+  SELECT current.id AS action_id, json_extract(parked.value,'$.cycleId') AS cycle_id
+  FROM workflow_transition_receipts receipt, json_each(receipt.result_json,'$.parkedReviewActions') parked
+  JOIN next_actions current ON json_extract(parked.value,'$.id')=current.id
+  WHERE json_extract(receipt.result_json,'$.mode')='meeting_first'
+    AND json_extract(parked.value,'$.version')=current.version
+)`;
+
 // Immutable receipt + exact current action/version prevents parking future reviews or obligations.
-function manifestParkedReviewSql(cycle: 'c' | 'cycle'): string {
-  return `(${legacyReviewParkingEligibilitySql(cycle)}) AND EXISTS (
-    SELECT 1 FROM workflow_transition_receipts receipt, json_each(receipt.result_json,'$.parkedReviewActions') parked
+function manifestParkedReviewSql(cycle: 'c' | 'cycle', materialized: boolean): string {
+  const membership = materialized
+    ? `SELECT 1 FROM parked_review_manifest parked WHERE parked.action_id=${cycle}.current_next_action_id AND parked.cycle_id=${cycle}.id`
+    : `SELECT 1 FROM workflow_transition_receipts receipt, json_each(receipt.result_json,'$.parkedReviewActions') parked
     JOIN next_actions current ON current.id=${cycle}.current_next_action_id
     WHERE json_extract(receipt.result_json,'$.mode')='meeting_first'
       AND json_extract(parked.value,'$.id')=current.id
       AND json_extract(parked.value,'$.cycleId')=${cycle}.id
-      AND json_extract(parked.value,'$.version')=current.version)`;
+      AND json_extract(parked.value,'$.version')=current.version`;
+  return `(${legacyReviewParkingEligibilitySql(cycle)}) AND EXISTS (
+    ${membership})`;
+}
+
+function readWithMalformedJsonFallback<T>(optimized: () => T, original: () => T): T {
+  try {
+    return optimized();
+  } catch (error) {
+    // Materialization can eagerly visit malformed entries that the original EXISTS
+    // short-circuited past. Retry only this driver error with the original SELECT,
+    // preserving both its successful reads and its errors without filtering receipts.
+    if (error instanceof Error && 'code' in error
+      && error.code === 'SQLITE_ERROR' && error.message === 'malformed JSON') {
+      return original();
+    }
+    throw error;
+  }
 }
 
 const idSchema = z.string().trim().min(1);
@@ -145,18 +173,23 @@ export class TodayRepository {
   }
 
   hasActiveWarm(): boolean {
-    return (this.database.raw.prepare(`SELECT COUNT(*) AS count FROM sales_cycles c
+    const sql = (materialized: boolean) => `${materialized ? parkedReviewManifestCte : ''} SELECT COUNT(*) AS count FROM sales_cycles c
       JOIN prospects p ON p.id = c.prospect_id JOIN persons person ON person.id = c.person_id
       WHERE c.workflow_status IN ('active','onboarding') AND p.segment = 'warm'
         AND NOT EXISTS (SELECT 1 FROM next_actions parked WHERE parked.id=c.current_next_action_id AND parked.action_type='parked_legacy')
-        AND NOT (${manifestParkedReviewSql('c')})
+        AND NOT (${manifestParkedReviewSql('c', materialized)})
         AND person.opted_out = 0 AND person.deleted_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM opt_out_tombstones t WHERE t.person_id = person.id)
-      `).get() as { count: number }).count > 0;
+      `;
+    const row = readWithMalformedJsonFallback(
+      () => this.database.raw.prepare(sql(true)).get(),
+      () => this.database.raw.prepare(sql(false)).get(),
+    ) as { count: number };
+    return row.count > 0;
   }
 
   listOperationalCandidates(): readonly TodayCandidateLoadResult[] {
-    const rows = this.database.raw.prepare(`
+    const sql = (materialized: boolean) => `${materialized ? parkedReviewManifestCte : ''}
       SELECT
         prospect.segment, action.due_at AS action_due_at,
         callback.id AS callback_activity_id, callback.callback_at AS callback_due_at,
@@ -228,11 +261,15 @@ export class TodayRepository {
         )
       WHERE cycle.workflow_status IN ('active', 'onboarding')
         AND (action.action_type IS NULL OR action.action_type <> 'parked_legacy')
-        AND NOT (${manifestParkedReviewSql('cycle')})
+        AND NOT (${manifestParkedReviewSql('cycle', materialized)})
         AND person.opted_out = 0
         AND person.deleted_at IS NULL
       ORDER BY cycle.id COLLATE BINARY
-    `).all();
+    `;
+    const rows = readWithMalformedJsonFallback(
+      () => this.database.raw.prepare(sql(true)).all(),
+      () => this.database.raw.prepare(sql(false)).all(),
+    );
     return Object.freeze(rows.map((value) => this.parseRow(value)));
   }
 
