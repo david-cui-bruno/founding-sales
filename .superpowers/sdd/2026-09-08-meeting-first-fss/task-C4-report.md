@@ -330,3 +330,27 @@ npx --no-install eslint --no-ignore --max-warnings 0 cloud/lambdas/delegated-wor
 ```
 
 Honest intermediate limitations: aggregate worker `npm run typecheck --prefix cloud/lambdas/delegated-worker` was attempted and blocked by concurrently edited ownerCommandCoordinator.test.ts:246 widened channel type plus newly imported legacy migrate.ts unused expect-error/0017 optional strings. No foreign edits made. An initial combined worker+main compatible-noImplicitAny invocation incorrectly mixed worker strictNullChecks expectations and reported four existing null/empty-array inference errors. Separate strict worker and root-compatible main checks above passed. Actual Dynamo requests are still checked by offline synthetic interpreter, not live Dynamo. No live providers/network/grants, install/build/root suite or deployment performed. Separate pending handoff-specific readiness work is not included in this frozen repair.
+
+## Separate handoff-specific intake proof (2026-09-09 02:09 UTC)
+
+Frozen source `7e1aa9c`: exactly intakeBarrier.ts, new test/intakeBarrier.test.ts and owned dispatchFixture.ts return handles (three paths, inspected 132+/6-). This is separate from terminal evidence repair `2e16b52`. Root approved exact signature/ownership before edits.
+
+Internal interfaces: `validatePendingHandoff(store,accountId,{handoffId,pairingId,generation})` returns `{dependency,checks,revisions,validUntil}|null`; `createIntakeBarrier(store).checkHandoff(subject,identity,signal)` consumes it. The ordinary `check` signature and behavior retain every pending dependency.
+
+Real C6 owner command admission produces the tested handoff and campaign reservation. Validator requires current strict MANUAL_HANDOFF with lastOutcome:null, issuedAt/no-future and unexpired, exact account/pairing/generation/id; one exact pending registry dependency; immutable prepare-manual COMMAND fingerprint/full payload/deterministic handoff ID/applied receipt/version; actual original manual.handoff EVENT full payload/receipt/workspace/account/generation. Returned revision fences include registry, handoff, command and event. Only the proved own dependency can be skipped. Mailbox scope/cursor/current completeness and all other dependencies remain mandatory. validUntil is at most handoff expiry and five seconds from proof read, and mailbox proof can shorten it further.
+
+RED: initial test fixture import typo was corrected before meaningful evidence. Actual owner-admitted fixture then reproduced normal `manual_outcome_pending` self-block, with 9 tests failing on missing validatePendingHandoff API. GREEN: 14 focused cases cover own-only exemption, ordinary-send hold, second pending dependency hold, missing/corrupt/foreign/expired/consumed proof, caller cancellation/current poll failure, and actual Dynamo final condition failure after independent registry/handoff/command/event/cursor revision races.
+
+Fresh exact commands, each prefixed with required Node24 PATH export documented above:
+```sh
+npm test --prefix cloud/lambdas/delegated-worker -- test/intakeBarrier.test.ts test/dispatchRepository.test.ts test/dispatchService.test.ts test/sendReconciler.test.ts test/commandService.test.ts
+# 158 GREEN (14+88+16+12+28)
+npx --no-install tsc --noEmit --skipLibCheck --esModuleInterop --target ESNext --module ESNext --moduleResolution node --strict cloud/lambdas/delegated-worker/test/intakeBarrier.test.ts
+npx --no-install eslint --no-ignore --max-warnings 0 cloud/lambdas/delegated-worker/src/intakeBarrier.ts cloud/lambdas/delegated-worker/test/intakeBarrier.test.ts cloud/lambdas/delegated-worker/test/dispatchFixture.ts
+npm test -- tests/main/dispatchCampaignProjection.test.ts
+# 2 GREEN after this commit, actual encrypted temp SQL + reopen
+npx --no-install tsc --noEmit --skipLibCheck --esModuleInterop --target ESNext --module ESNext --moduleResolution node --noImplicitAny tests/main/dispatchCampaignProjection.test.ts
+# Strict focused worker and compatible main TS, exact lint and diff --check GREEN.
+```
+
+C6/humpback owns endpoint authentication, current AUTH/pairing/suppression, mail/noMail composition and final proof expiry/revision check. They were sent frozen counterpart7e1aa9c; their endpoint/phone integration completion is not claimed here. This validator grants no provider/human side-effect authority by itself. No endpoint/scheduler/renderer changes, real calls, LinkedIn sends, live providers, cloud requests, installs or builds performed. Offline SDK transaction interpreter remains distinct from live Dynamo acceptance.
