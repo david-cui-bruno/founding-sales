@@ -7,7 +7,7 @@ import { inspectDatabaseEncryption } from '../../db/databaseEncryption';
 import { DomainStartupFatalError } from './domainStartupTypes';
 
 export type DomainStorageReadiness = Readonly<{
-  schemaVersion: 22;
+  schemaVersion: 23;
   encrypted: true;
   cipherVersion: string;
   ftsAvailable: true;
@@ -24,7 +24,7 @@ export type DomainSchemaManifest = Readonly<{
 }>;
 
 /**
- * The canonical load-bearing schema-22 manifest. Reads the live catalog from
+ * The canonical load-bearing schema-23 manifest. Reads the live catalog from
  * sqlite_master with binary-name ordering; a missing, renamed, extra, or
  * malformed load-bearing object is fatal before composition.
  */
@@ -38,6 +38,12 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'cadence_definitions',
     'cadence_enrollments',
     'cadence_steps',
+    'campaign_approvals',
+    'campaign_caps',
+    'campaign_command_receipts',
+    'campaign_enrollments',
+    'campaign_step_receipts',
+    'campaign_versions',
     'cloud_entity_links',
     'consent_policy_records',
     'contact_compliance_audit_events',
@@ -48,12 +54,15 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'delegated_authorities',
     'delegated_commands',
     'delegated_event_cursors',
+    'delegated_local_configuration',
     'delegated_mail_cursors',
+    'delegated_manual_handoffs',
     'delegated_manual_outcomes',
     'delegated_meetings',
     'delegated_reconciliation',
     'delegated_reply_drafts',
     'delegated_threads',
+    'delegated_transport_state',
     'discovery_approved_budgets',
     'discovery_assessments',
     'discovery_current',
@@ -78,6 +87,8 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'learning_evidence',
     'learnings',
     'lifecycle_review_items',
+    'manual_linkedin_draft_approvals',
+    'manual_linkedin_drafts',
     'meeting_first_call_settings',
     'next_actions',
     'opt_out_closure_receipt_handles',
@@ -134,11 +145,14 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'transcripts',
     'trigger_events',
     'won_terms',
+    'workflow_transition_receipts',
     'workspace_settings',
+    'workspace_workflow_state',
   ]),
   indexes: Object.freeze([
     'activities_person_occurred_idx',
     'activities_provider_idempotency_idx',
+    'campaign_one_nonterminal_account',
     'contact_compliance_audit_contact_idx',
     'delegated_receipt_once',
     'discovery_assessments_disposition_expires_idx',
@@ -167,6 +181,14 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'trigger_events_source_event_unique',
   ]),
   triggers: Object.freeze([
+    'campaign_approvals_no_delete',
+    'campaign_approvals_no_update',
+    'campaign_command_receipts_no_delete',
+    'campaign_command_receipts_no_update',
+    'campaign_step_receipts_no_delete',
+    'campaign_step_receipts_no_update',
+    'campaign_versions_no_delete',
+    'campaign_versions_no_update',
     'delegated_action_outcomes_no_delete',
     'delegated_action_outcomes_no_update',
     'delegated_applied_events_no_delete',
@@ -250,6 +272,8 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'immutable_won_terms_delete',
     'initialize_next_action_due',
     'initialize_unreviewed_action',
+    'manual_linkedin_draft_approvals_no_delete',
+    'manual_linkedin_draft_approvals_no_update',
     'pm_account_claim_evidence_no_delete',
     'pm_account_claim_evidence_no_update',
     'pm_account_claims_no_delete',
@@ -341,9 +365,11 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'protect_trigger_event_ownership',
     'protect_trigger_event_receipt_proof',
     'synchronize_person_opt_out',
+    'workflow_transition_receipts_no_delete',
+    'workflow_transition_receipts_no_update',
   ]),
-  // Generated from actual production migrations through 0022.
-  catalogSha256: '13e641da99b4e61f4dd7a05a1d07bda21ac642dd3646d5ad35c0a582a7fb106e',
+  // Generated from actual production migrations through 0023.
+  catalogSha256: '53f24bedc785b09d913ee35d89fa7d07ebafa0ebea493efba1660234cc8fb89a',
 });
 
 export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
@@ -367,7 +393,7 @@ export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
   '0018PlaybookDueActions',
   '0019EmailDrafts',
   '0020PmAccounts',
-  '0021DelegatedWork', '0022MailPersistence',
+  '0021DelegatedWork', '0022MailPersistence', '0023Campaigns',
 ] as const);
 
 const appMetaSchema = z.object({
@@ -381,7 +407,7 @@ const appMetaSchema = z.object({
 export function assertDomainStorageReady(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
-  expectedSchemaVersion: 22;
+  expectedSchemaVersion: 23;
   expectedManifest: DomainSchemaManifest;
 }): DomainStorageReadiness {
   const { database } = input;
@@ -404,7 +430,7 @@ export function assertDomainStorageReady(input: {
   const metadata = appMetaSchema.safeParse(metadataRow);
   if (!metadata.success || metadata.data.schema_version !== input.expectedSchemaVersion) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace schema version is not exactly 22.',
+      'schema_not_ready', 'The workspace schema version is not exactly 23.',
     );
   }
 
@@ -423,7 +449,7 @@ export function assertDomainStorageReady(input: {
     DOMAIN_MIGRATION_LEDGER,
   )) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace migration ledger is not exactly schema 22.',
+      'schema_not_ready', 'The workspace migration ledger is not exactly schema 23.',
     );
   }
 
@@ -498,7 +524,7 @@ export function assertDomainStorageReady(input: {
   }
 
   return Object.freeze({
-    schemaVersion: 22 as const,
+    schemaVersion: 23 as const,
     encrypted: true as const,
     cipherVersion: encryption.cipherVersion ?? 'unknown',
     ftsAvailable: true as const,

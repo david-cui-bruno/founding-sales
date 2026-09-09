@@ -67,6 +67,7 @@ const domainTables = [
 ] as const;
 
 const requiredIndexes = [
+  'campaign_one_nonterminal_account',
   'next_actions_due_idx', 'email_draft_open_contact',
   'discovery_assessments_prospect_evaluated_idx', 'discovery_assessments_disposition_expires_idx',
   'discovery_overrides_owner_created_idx', 'jobs_type_state_created_idx',
@@ -79,6 +80,19 @@ const requiredIndexes = [
 ] as const;
 
 const requiredTriggers = [
+  'campaign_versions_no_delete',
+  'campaign_versions_no_update',
+  'campaign_approvals_no_delete',
+  'campaign_approvals_no_update',
+  'campaign_step_receipts_no_delete',
+  'campaign_step_receipts_no_update',
+  'campaign_command_receipts_no_delete',
+  'campaign_command_receipts_no_update',
+  'manual_linkedin_draft_approvals_no_delete',
+  'manual_linkedin_draft_approvals_no_update',
+  'workflow_transition_receipts_no_update',
+  'workflow_transition_receipts_no_delete',
+
   'discovery_receipts_ceiling_guard',
   'discovery_reservations_budget_guard',
   'delegated_action_outcomes_no_delete',
@@ -287,14 +301,14 @@ function runDatabaseScenario(
       assert.equal(assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 22,
+        expectedSchemaVersion: 23,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
-      }).schemaVersion, 22);
+      }).schemaVersion, 23);
       assert.deepEqual(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
         ).get(),
-        { schema_version: 22 },
+        { schema_version: 23 },
       );
       assert.deepEqual(raw.prepare<[], { name: string }>(`
         SELECT name FROM kysely_migration ORDER BY timestamp, name
@@ -315,7 +329,7 @@ function runDatabaseScenario(
         '0014OutboundJurisdictionClearance',
         '0015RecoveryMetadata',
         '0016ContactPresentationEvidence', '0017DiscoveryAssessments',
-        '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence',
+        '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns',
       ]);
       assert.deepEqual(
         raw.prepare('PRAGMA table_info(person_contact_methods)').all().slice(19),

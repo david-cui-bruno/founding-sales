@@ -198,7 +198,7 @@ test('P2 same executable migrates nonzero16 to19, retains exact encrypted backup
     expect(original.ledger.at(-1)).toBe('0016ContactPresentationEvidence');
     const launch = () => launchFounderWorkspace({ userDataPath: fixtures.paths.through16, onSpawn: child => { fixtures.captureChild(child); } });
     workspace = await launch();
-    expect(await workspace.page.evaluate(() => window.callie.health.get())).toMatchObject({ schemaVersion: 22, databaseEncrypted: true, domainReady: true });
+    expect(await workspace.page.evaluate(() => window.callie.health.get())).toMatchObject({ schemaVersion: 23, databaseEncrypted: true, domainReady: true });
     await expect.poll(() => workspace!.page.evaluate(() => window.callie.discovery.get()), { timeout: 90_000 }).toMatchObject({ counts: { unassessed: 0 }, processing: 'idle' });
     const assessed = await workspace.page.evaluate(request => window.callie.leads.list(request), listRequest);
     expect(assessed.rows.every(row => row.stage === 'unreviewed' && row.lastActivityAt === null)).toBe(true);
@@ -212,14 +212,14 @@ test('P2 same executable migrates nonzero16 to19, retains exact encrypted backup
     const backup = await fixtures.inspectStoppedBackup('through16', names[0], material, 16);
     expect(backup.businessSha256).toBe(original.businessSha256); // SAME schema only
     expect(backup.aggregateCounts).toEqual(original.aggregateCounts); expect(backup.sourceSha256).toBe(retainedHash);
-    const migrated = await fixtures.inspectStoppedProfile('through16', material, 22);
+    const migrated = await fixtures.inspectStoppedProfile('through16', material, 23);
     expect(migrated.preservedActionIndependentSha256).toBe(original.preservedActionIndependentSha256);
-    expect(migrated.ledger.slice(-7)).toEqual(['0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence']);
+    expect(migrated.ledger.slice(-8)).toEqual(['0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns']);
     workspace = await launch();
     expect((await workspace.page.evaluate(() => window.callie.discovery.get())).prepared.map(b => b.assessment!.id)).toEqual(ids);
     await workspace.stop(); workspace = undefined;
     expect(await sha256(backupPath)).toBe(retainedHash);
-    expect((await fixtures.inspectStoppedProfile('through16', material, 22)).preservedActionIndependentSha256).toBe(original.preservedActionIndependentSha256);
+    expect((await fixtures.inspectStoppedProfile('through16', material, 23)).preservedActionIndependentSha256).toBe(original.preservedActionIndependentSha256);
     expect((await readdir(join(fixtures.paths.through16, 'backups'))).filter(name => name.startsWith('pre-migration-schema-16-'))).toEqual(names);
   } finally { material = ''; await workspace?.stop(); await fixtures.cleanup(); }
 });

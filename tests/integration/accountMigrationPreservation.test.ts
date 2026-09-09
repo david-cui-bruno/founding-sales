@@ -3,7 +3,7 @@ import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { closeDatabase, openDatabase } from '../../src/main/db/database';
-import { createMigrationRunner, migrateToLatest, productionMigrations } from '../../src/main/db/migrate';
+import { createMigrationRunner, productionMigrations } from '../../src/main/db/migrate';
 import type { RawDatabase } from '../../src/main/db/sqliteDriver';
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
 import { DOMAIN_TIMESTAMP as at, insertOpenCycleWithAction, insertPerson, seedProspect } from '../fixtures/domainRows';
@@ -45,7 +45,7 @@ function catalog(raw: RawDatabase) {
 }
 
 describe('genuine historical19 account migration preservation', () => {
-  it('preserves exact named identities, catalogs, receipts, callbacks, drafts, unknown sends and opt-outs through registered migrations', async () => {
+  it.each([22, 23])('preserves exact named identities, catalogs, receipts, callbacks, drafts, unknown sends and opt-outs through registered schema%s', async target => {
     const temp = createTempDatabase(); const key = createTestWorkspaceKey();
     let db = openDatabase({ path: temp.path, key });
     try {
@@ -99,17 +99,18 @@ describe('genuine historical19 account migration preservation', () => {
       expect(before.cadence_action_components.length).toBeGreaterThan(0);
       expect(db.raw.pragma('foreign_key_check')).toEqual([]);
       closeDatabase(db); db = openDatabase({ path: temp.path, key });
-      const result = await migrateToLatest(db, options);
-      expect(result).toEqual({ fromVersion: 19, toVersion: 22,
-        appliedMigrationIds: ['0020PmAccounts', '0021DelegatedWork', '0022MailPersistence'] });
-      expect(db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: 22 });
+      const migrate = createMigrationRunner(productionMigrations.filter(entry => entry.schemaVersion <= target));
+      const result = await migrate(db, options);
+      expect(result).toEqual({ fromVersion: 19, toVersion: target,
+        appliedMigrationIds: ['0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', ...(target === 23 ? ['0023Campaigns'] : [])] });
+      expect(db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: target });
       expect(historicalRows(db.raw)).toEqual(before);
       // All original catalog objects retain their exact SQL. Added objects are checked separately.
       expect(catalog(db.raw).filter(row => originalCatalog.some(old => old.name === row.name))).toEqual(originalCatalog);
       expect(db.raw.prepare('SELECT id,status,message_id,notice FROM email_drafts WHERE id=?').get('legacy-unknown'))
         .toEqual({ id: 'legacy-unknown', status: 'unknown', message_id: null, notice: null });
       for (const table of ['pm_accounts', 'pm_account_sources', 'pm_account_routes', 'cadence_enrollments',
-        'delegated_authorities', 'delegated_mail_cursors', 'delegated_reply_drafts']) {
+        'delegated_authorities', 'delegated_mail_cursors', 'delegated_reply_drafts', ...(target === 23 ? ['campaign_versions','campaign_approvals','campaign_enrollments','campaign_caps','campaign_command_receipts','campaign_step_receipts','manual_linkedin_drafts','manual_linkedin_draft_approvals','delegated_transport_state','delegated_manual_handoffs','delegated_local_configuration','workspace_workflow_state','workflow_transition_receipts'] : [])]) {
         expect(db.raw.prepare(`SELECT * FROM ${table}`).all()).toEqual([]);
       }
       expect(db.raw.prepare('SELECT new_call_slots,total_call_capacity FROM meeting_first_call_settings').get())
@@ -118,7 +119,7 @@ describe('genuine historical19 account migration preservation', () => {
       expect(db.raw.pragma('integrity_check', { simple: true })).toBe('ok');
       closeDatabase(db); db = openDatabase({ path: temp.path, key });
       expect(historicalRows(db.raw)).toEqual(before);
-      expect((await migrateToLatest(db, options)).appliedMigrationIds).toEqual([]);
+      expect((await migrate(db, options)).appliedMigrationIds).toEqual([]);
     } finally { closeDatabase(db); key.bytes.fill(0); temp.cleanup(); }
   });
 });

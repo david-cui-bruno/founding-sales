@@ -750,3 +750,20 @@ export type MailPersistenceTables = {
   delegated_mail_cursors: { workspace_id: string; account_id: string; mailbox_subject: string; checkpoint_json: string; revision: number; updated_at: string };
   delegated_reply_drafts: { workspace_id: string; account_id: string; id: string; thread_id: string; revision: number; thread_revision: number; context_revision: string; draft_json: string; updated_at: string };
 };
+
+/** Additive23 campaign and owner-coordinated transport projections. */
+export type CampaignTables = {
+  workspace_workflow_state: { singleton: number; mode: 'legacy' | 'meeting_first'; revision: number; updated_at: string };
+  workflow_transition_receipts: { command_id: string; manifest_id: string; fingerprint: string; result_json: string; created_at: string };
+  campaign_versions: { workspace_id: string; id: string; campaign_id: string; version: number; snapshot_json: string; snapshot_hash: string; created_at: string };
+  campaign_approvals: { workspace_id: string; campaign_version_id: string; snapshot_hash: string; approved_at: string; command_id: string };
+  campaign_enrollments: { workspace_id: string; id: string; account_id: string; campaign_version_id: string; selected_route_id: string; selected_route_version: number; person_id: string | null; current_step_id: string | null; version: number; state: string; context_revision: number; execution_context_id: string; started_at: string; updated_at: string };
+  campaign_step_receipts: { workspace_id: string; id: string; account_id: string; enrollment_id: string; step_id: string; route_id: string; route_version: number; context_revision: number; execution_context_id: string; action_id: string; channel: string; state: string; outcome: string; observation: string; source: string; observed_at: string; command_id: string };
+  campaign_caps: { workspace_id: string; campaign_version_id: string; channel: string; revision: number; reserved: number; sent: number };
+  campaign_command_receipts: { workspace_id: string; command_id: string; fingerprint: string; result_json: string; created_at: string };
+  manual_linkedin_drafts: { workspace_id: string; id: string; account_id: string; enrollment_id: string; campaign_version_id: string; person_id: string | null; step_id: string; route_id: string; route_version: number; context_revision: number; execution_context_id: string; revision: number; body: string; content_hash: string; target_hash: string; state: string; created_at: string; updated_at: string };
+  manual_linkedin_draft_approvals: { workspace_id: string; draft_id: string; draft_revision: number; content_hash: string; target_hash: string; context_revision: number; execution_context_id: string; approved_at: string; command_id: string };
+  delegated_transport_state: { workspace_id: string; pairing_id: string; revision: number; cursor: string | null; completed_at: string | null; attempt_id: string; started_at: string; state: string };
+  delegated_manual_handoffs: { workspace_id: string; account_id: string; handoff_id: string; action_id: string; authority_generation: number; target_hash: string; content_hash: string; context_revision: string; channel: string; route_id: string; route_version: number; expires_at: string; event_id: string; consumed_at: string | null; outcome_command_id: string | null };
+  delegated_local_configuration: { workspace_id: string; pairing_id: string; revision: number; configuration_json: string; updated_at: string };
+};
