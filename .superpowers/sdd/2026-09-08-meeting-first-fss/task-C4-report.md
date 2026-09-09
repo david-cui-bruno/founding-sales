@@ -237,3 +237,11 @@ npx --no-install tsc --noEmit --skipLibCheck --esModuleInterop --target ESNext -
 ```
 
 `npm run typecheck --prefix cloud/lambdas/delegated-worker` and scoped `eslint --no-ignore --max-warnings 0` on the three changed TS paths passed. The final 125-test rerun happened after the nullable projection fix. Exact-path diff check and committed file lists passed inspection. C6 owns admission implementation and shared contract commits. Subsequent C6/D1 integration changes require their own rerun/re-review; no live/end-to-end activation claim is added here.
+
+## Separate durable campaign cap snapshot delta (01:39 UTC)
+
+`1167d5f` adds typed `DispatchReservationPlan.campaign?: CampaignEventPayload`. For real campaign reservations the payload includes the exact concrete D1 `CampaignExecutionPlan.cap` snapshot `{campaignVersionId,channel,revision,reserved,sent}` from the same planned cap Put. C1 carries it in the existing dispatching action.outcome event. No second event, AUTH increment, reservation algorithm, or asynchronous publication was added. Outcome payloads already flow through the same integration and now receive D1's actual current cap snapshot too, including a cap CAS for unknown/no-write outcomes. Schema and producer are D1/C6-owned.
+
+Observed RED: actual successful campaign dispatch produced no reservation cap snapshot. Focused `-t 'cap snapshots'` failed on the missing property. Frozen contract uses singular `campaign.cap`. After the concrete D1 producer and C6 cap-only event refinement landed, tests verified reservation revision2/reserved1/sent0, accepted revision3/reserved0/sent1, one event per action transition, and unknown retaining current envelope revision/reserved1/sent0 with no resend. No absent snapshot is converted into zero/current in C4.
+
+Fresh four-file C4 command with the required Node24 export: **127 passed (77/10/12/28)**. Worker strict typecheck, the earlier exact root-compatible five-production-source tsc command, and scoped ESLint on dispatchRepository.ts/executionRepository.ts/dispatchRepository.test.ts all exited0. Exact-path whitespace/diff inspection passed before `--only` commit; three-file commit list inspected. Local cap projector acceptance is guppy/C6-owned, not claimed by these SDK-interpreter event tests. No live operations occurred.
