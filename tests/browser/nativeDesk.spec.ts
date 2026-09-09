@@ -208,3 +208,82 @@ test('failed canonical save prevents approval and ambiguous receipt retries the 
   expect(approvalCalls[0].input).toEqual(approvalCalls[1].input);
   await assertClean(page,state);
 });
+
+test('paused configuration cancels an offscreen draft autosave without losing text', async ({page}) => {
+  const state = await mount(page);
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  const emailA = page.getByRole('button',{name:'Email · Account A',exact:true});
+  await emailA.click();
+  await page.getByRole('textbox',{name:'Email body'}).fill('Retain A without sending it after pause');
+  await page.getByRole('button',{name:'Email · Account B',exact:true}).click();
+  await page.evaluate(()=>{
+    window.nativeDeskBrowser.fixture.setConfiguration({state:'paused',workspaceId:'ws',endpoint:'https://owner.fixture.invalid',configuration:{revision:2,configuration:{version:1,state:'paused',research:null},updatedAt:new Date().toISOString()}});
+    window.nativeDeskBrowser.refresh();
+  });
+  await expect(page.getByRole('button',{name:'Save edits',exact:true})).toBeDisabled();
+  await page.clock.runFor(1200);
+  expect((await methods(page)).filter(method=>method==='editRequestedFollowup')).toHaveLength(0);
+  await emailA.click();
+  await expect(page.getByRole('textbox',{name:'Email body'})).toHaveValue('Retain A without sending it after pause');
+  await assertClean(page,state);
+});
+
+test('approval continuation does not revive after leaving and reopening the same workspace', async ({page}) => {
+  const state = await mount(page);
+  await page.evaluate(()=>{
+    type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+    const api: Mutable<typeof window.nativeDeskBrowser.fixture.api.delegation> = window.nativeDeskBrowser.fixture.api.delegation;
+    const original = api.editRequestedFollowup;
+    api.editRequestedFollowup = async input => {
+      await new Promise<void>(resolve=>document.addEventListener('fixture-release-edit',()=>resolve(),{once:true}));
+      return original(input);
+    };
+  });
+  const emailA = page.getByRole('button',{name:'Email · Account A',exact:true});
+  await emailA.click();
+  await page.getByText('Approval permission',{exact:true}).click();
+  await page.getByRole('checkbox').check();
+  await page.getByLabel('Approval expiry').fill(new Date(Date.now()+86400000).toISOString().slice(0,16));
+  const approve = page.getByRole('button',{name:'Approve email',exact:true});
+  await approve.click();
+  await expect(approve).toBeDisabled();
+  await page.evaluate(()=>window.nativeDeskBrowser.navigate('accounts'));
+  await expect(page.getByRole('heading',{name:'Accounts',exact:true,level:1})).toBeVisible();
+  await page.evaluate(()=>window.nativeDeskBrowser.navigate('today'));
+  await expect(page.getByRole('textbox',{name:'Email body'})).toBeVisible();
+  await page.evaluate(()=>document.dispatchEvent(new Event('fixture-release-edit')));
+  await expect.poll(async()=>(await methods(page)).filter(method=>method==='editRequestedFollowup').length).toBe(1);
+  expect((await methods(page)).filter(method=>method==='approveRequestedFollowup')).toHaveLength(0);
+  await expect(approve).toBeEnabled();
+  await assertClean(page,state);
+});
+
+for (const terminal of ['applied','rejected'] as const) {
+  test(`pending manual outcome can explicitly reconcile to ${terminal} with identical command`, async ({page}) => {
+    const state = await mount(page);
+    await page.evaluate(terminal=>{
+      type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+      const api: Mutable<typeof window.nativeDeskBrowser.fixture.api.linkedin> = window.nativeDeskBrowser.fixture.api.linkedin;
+      const original = api.reportOutcome;
+      let calls = 0;
+      api.reportOutcome = async input => {
+        const result = await original(input);
+        calls++;
+        return calls===1 ? result : {...result,receipt:{...result.receipt,status:terminal,reason:terminal==='rejected'?'Fixture terminal rejection':null}};
+      };
+    },terminal);
+    await page.getByRole('button',{name:'Manual LinkedIn · Account A',exact:true}).click();
+    await page.getByRole('button',{name:'Begin manual step',exact:true}).click();
+    await page.getByRole('combobox',{name:'Manual outcome'}).selectOption('not_sent');
+    await page.getByRole('button',{name:'Record outcome',exact:true}).click();
+    const retry = page.getByRole('button',{name:/Retry.*outcome/i});
+    await expect(retry).toBeEnabled();
+    await retry.click();
+    await expect(page.getByText(new RegExp(`receipt: ${terminal}`))).toBeVisible();
+    const reports = await page.evaluate(()=>window.nativeDeskBrowser.fixture.calls.filter(call=>call.method==='linkedin.reportOutcome'));
+    expect(reports).toHaveLength(2);
+    expect(reports[0].input).toEqual(reports[1].input);
+    await assertClean(page,state);
+  });
+}

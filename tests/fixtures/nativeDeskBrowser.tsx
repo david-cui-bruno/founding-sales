@@ -28,7 +28,7 @@ function Harness() {
     },
   };
   return <AppShell route={route} onNavigate={setRoute} reviewCount={0}>
-    <div data-rerender={tick}><NativeDeskRoute api={fixture.api} onOpenLead={id => opened.push(id)} surface={surface} legacy={<h1>Legacy Today fixture</h1>}/></div>
+    <div data-rerender={tick}><NativeDeskRoute key={route} api={fixture.api} onOpenLead={id => opened.push(id)} surface={surface} legacy={<h1>Legacy Today fixture</h1>}/></div>
   </AppShell>;
 }
 export type NativeDeskBrowser = {
