@@ -558,7 +558,7 @@ describe('leadDetailService over a real encrypted domain', () => {
     const outbound = createOutboundCommandService({ domain: gate,
       phone: { inspectCapability: async () => ({ state: 'available', reasonCode: null }), dispatch },
       readiness: { getCapability: () => ({ state: 'available', reasonCode: null }),
-        check: async () => { beforeReady(); return readyReply(); }, assertCurrent: assertCurrentReadiness },
+        check: async (personId) => { beforeReady(); return readyReply(personId); }, assertCurrent: assertCurrentReadiness },
     });
     const provider = createLeadDetailProvider(gate, undefined, injected ? outbound : undefined);
     const dispose = registerLeadDetailIpc(provider);

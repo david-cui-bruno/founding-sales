@@ -83,6 +83,9 @@ function capabilities(phoneHandoff: Capability): OutboundCapabilities {
 function unavailable(reasonCode: CapabilityReason): Capability {
   return { state: 'unavailable', reasonCode };
 }
+function hasRequestedPersonProof(proof: OutboundReadinessProof, request: OutboundRequest): boolean {
+  return proof.subject.kind === 'person' && proof.subject.id === request.personId;
+}
 
 export function createOutboundCommandService(input: {
   domain: OutboundDomainGate; phone: PhoneHandoffPort;
@@ -176,6 +179,9 @@ export function createOutboundCommandService(input: {
       const started = await withDomain(current, (value) => {
         let prepared: Preparation;
         try {
+          if (!hasRequestedPersonProof(readinessResult.proof, request)) {
+            return { kind: 'receipt' as const, receipt: validateReceipt(request, value.recordOutboundRefusal(request, 'inbound_safety_unwired')) };
+          }
           try { readiness.assertCurrent(readinessResult.proof); }
           catch { return { kind: 'receipt' as const, receipt: validateReceipt(request, value.recordOutboundRefusal(request, 'inbound_safety_unwired')) }; }
           prepared = value.prepareOutboundDispatch(request);

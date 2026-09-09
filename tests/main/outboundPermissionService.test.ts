@@ -288,9 +288,9 @@ describe('OutboundPermissionService', () => {
       },
       readiness: {
         getCapability: () => ({ state: 'available', reasonCode: null }),
-        check: async () => {
+        check: async (personId) => {
           block(priorOwner, '+14015550100', 'during-preflight');
-          return readyReply();
+          return readyReply(personId);
         },
         assertCurrent: assertCurrentReadiness,
       },

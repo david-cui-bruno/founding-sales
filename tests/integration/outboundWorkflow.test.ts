@@ -112,7 +112,7 @@ async function fixture(input: {
   const factory = vi.fn<typeof createOutboundCommandService>((options) => {
     service = createOutboundCommandService({ ...options,
       phone: { inspectCapability: async () => available, dispatch },
-      readiness: input.readiness ?? { getCapability: () => available, check: async () => readyReply(), assertCurrent: assertCurrentReadiness },
+      readiness: input.readiness ?? { getCapability: () => available, check: async (personId) => readyReply(personId), assertCurrent: assertCurrentReadiness },
     });
     return service;
   });
@@ -376,7 +376,7 @@ describe('assembled truthful outbound workflow (encrypted source fixtures, not l
     const rows = await businessRows(f);
     expect(afterOptOut).toHaveLength(1);
     expect(afterOptOut[0].observed_outcome).toBe('opted_out');
-    ready.resolve(readyReply());
+    ready.resolve(readyReply(request.personId));
     const receipt = await pending;
     expect(receipt).toEqual({ commandId: request.commandId, channel: 'call', status: 'refused', reasonCode: 'cycle_not_executable',
       mutation: { revision: await revision(f), affectedPersonIds: [request.personId], affectedSalesCycleIds: [request.salesCycleId] } });

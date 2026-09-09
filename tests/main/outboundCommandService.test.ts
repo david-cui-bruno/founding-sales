@@ -32,15 +32,15 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const flush = () => vi.advanceTimersByTimeAsync(0);
-function readinessProof(personId = request.personId): OutboundReadinessProof {
+function readinessProof(subject: OutboundReadinessProof['subject'] = { kind: 'person', id: request.personId }): OutboundReadinessProof {
   return Object.freeze({
-    subject: Object.freeze({ kind: 'person' as const, id: personId }),
+    subject: Object.freeze({ ...subject }),
     registryRevision: 1,
     checkpoints: Object.freeze([]),
   });
 }
-function readyReply(personId = request.personId): Awaited<ReturnType<OutboundReadinessPort['check']>> {
-  return { kind: 'ready', proof: readinessProof(personId) };
+function readyReply(subject?: OutboundReadinessProof['subject']): Awaited<ReturnType<OutboundReadinessPort['check']>> {
+  return { kind: 'ready', proof: readinessProof(subject) };
 }
 
 // Only injected in-memory command evidence. This fixture does not claim SQL,
@@ -251,6 +251,19 @@ describe('preflight refusals and final domain authority', () => {
     f.readiness.check.mockResolvedValue({ kind: 'blocked', reasonCode });
     expect(await f.service.beginOutbound(request)).toMatchObject({ reasonCode });
     expect(f.domain.recordOutboundRefusal).toHaveBeenCalledWith(request, reasonCode);
+    expect(f.phone.dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: 'wrong person', subject: { kind: 'person' as const, id: 'other-person' } },
+    { label: 'account proof', subject: { kind: 'account' as const, id: 'account-1' } },
+  ])('refuses a current %s readiness proof before final preparation or dispatch', async ({ subject }) => {
+    const f = fixture();
+    f.readiness.check.mockResolvedValue(readyReply(subject));
+
+    await expect(f.service.beginOutbound(request)).resolves.toMatchObject({ status: 'unavailable', reasonCode: 'inbound_safety_unwired' });
+    expect(f.readiness.assertCurrent).not.toHaveBeenCalled();
+    expect(f.domain.prepareOutboundDispatch).not.toHaveBeenCalled();
     expect(f.phone.dispatch).not.toHaveBeenCalled();
   });
 

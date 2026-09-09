@@ -147,7 +147,7 @@ const assertCurrentReadiness = (): void => undefined;
       service = createOutboundCommandService({ ...options,
         ...(input.productionPorts ? {} : {
           phone: input.phone ?? { inspectCapability: async () => available, dispatch: async () => accepted },
-          readiness: input.readiness ?? { getCapability: () => available, check: async () => readyReply(), assertCurrent: assertCurrentReadiness },
+          readiness: input.readiness ?? { getCapability: () => available, check: async (personId) => readyReply(personId), assertCurrent: assertCurrentReadiness },
         }),
       });
       return service;
@@ -354,12 +354,12 @@ const assertCurrentReadiness = (): void => undefined;
     expect(thirdSignal.aborted).toBe(true);
     const fourth = f.invoke({ ...request, commandId: randomUUID() });
     const fourthSignal = await checks[3].entered.promise;
-    checks[0].reply.resolve(readyReply()); checks[1].reply.reject(new Error('late prior epoch')); checks[2].reply.resolve(readyReply());
+    checks[0].reply.resolve(readyReply(request.personId)); checks[1].reply.reject(new Error('late prior epoch')); checks[2].reply.resolve(readyReply(request.personId));
     for (const old of [first, second, third]) expect(await old).toBeInstanceOf(Error);
     expect(fourthSignal.aborted).toBe(false);
     await expect(f.invoke({ ...request, commandId: randomUUID() })).resolves.toMatchObject({ reasonCode: 'outbound_busy' });
     expect(index).toBe(4); expect(dispatch).not.toHaveBeenCalled(); expect(f.ports.prepare).not.toHaveBeenCalled();
-    checks[3].reply.resolve(readyReply());
+    checks[3].reply.resolve(readyReply(request.personId));
     await expect(fourth).resolves.toMatchObject({ status: 'handoff_accepted' });
     expect(dispatch).toHaveBeenCalledTimes(1);
     await (await f.starting).shutdown(); expect(vi.getTimerCount()).toBe(0);
@@ -369,8 +369,8 @@ const assertCurrentReadiness = (): void => undefined;
     const ready = held<ReturnType<typeof readyReply>>(); const entered = held<void>();
     const dispatch = vi.fn(async () => accepted); let first = true;
     const f = await fixture({ phone: { inspectCapability: async () => available, dispatch },
-      readiness: { getCapability: () => available, check: () => {
-        if (!first) return Promise.resolve(readyReply());
+      readiness: { getCapability: () => available, check: (_person) => {
+        if (!first) return Promise.resolve(readyReply(_person));
         first = false; entered.resolve(); return ready.promise;
       }, assertCurrent: assertCurrentReadiness },
     });
@@ -381,7 +381,7 @@ const assertCurrentReadiness = (): void => undefined;
     });
     else await f.runtime.withDomain((domain) => domain.logCallOutcome({ personId: request.personId, salesCycleId: request.salesCycleId,
       outcome: 'opted_out', occurredAt: NOW, callbackAt: null }));
-    ready.resolve(readyReply());
+    ready.resolve(readyReply(request.personId));
     const reasonCode = edit === 'contact' ? 'stale_contact' : 'cycle_not_executable';
     await expect(pending).resolves.toMatchObject({ status: 'refused', reasonCode });
     f.callbacks.onWake(); f.callbacks.onLock(); f.callbacks.onUnlock();
@@ -395,9 +395,9 @@ const assertCurrentReadiness = (): void => undefined;
     const ready = held<ReturnType<typeof readyReply>>(); const reply = held<HandoffResult>();
     const entered = held<void>(); const releaseGate = held<void>();
     const a = await fixture({
-      readiness: { getCapability: () => available, check: () => {
+      readiness: { getCapability: () => available, check: (_person) => {
         if (stage === 'readiness') { entered.resolve(); return ready.promise; }
-        return Promise.resolve(readyReply());
+        return Promise.resolve(readyReply(_person));
       }, assertCurrent: assertCurrentReadiness },
       phone: { inspectCapability: async () => available, dispatch: () => {
         if (stage === 'dispatch') { entered.resolve(); return reply.promise; }
@@ -422,7 +422,7 @@ const assertCurrentReadiness = (): void => undefined;
     const b = await fixture(); const bRequest = await seed(b.runtime);
     expect(b.service).not.toBe(a.service); expect(b.runtime).not.toBe(a.runtime);
     const bCounts = b.counts();
-    if (stage === 'readiness') ready.resolve(readyReply());
+    if (stage === 'readiness') ready.resolve(readyReply(request.personId));
     if (stage === 'dispatch') reply.reject(new Error('late A reply'));
     releaseGate.resolve();
     await Promise.all(gate.mock.results.map((result) => result.value.catch((): undefined => undefined)));
@@ -456,7 +456,7 @@ const assertCurrentReadiness = (): void => undefined;
       expect(await pending).toBeInstanceOf(Error);
       expect(f.features.size).toBe(0); expect(ipc.handlers.size).toBe(0);
       const atClose = f.counts();
-      if (late === 'resolve') ready.resolve(readyReply()); else ready.reject(new Error('late readiness'));
+      if (late === 'resolve') ready.resolve(readyReply(request.personId)); else ready.reject(new Error('late readiness'));
       await Promise.resolve(); await Promise.resolve();
       expect(f.counts()).toEqual(atClose);
       expect(atClose.postCloseSql).toBe(0); expect(atClose.closes).toBe(1);

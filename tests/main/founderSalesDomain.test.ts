@@ -637,7 +637,7 @@ describe('FounderSalesDomain', () => {
       const dispatch = vi.fn(async (): Promise<HandoffResult> => ({ status: 'handoff_accepted', reasonCode: null }));
       const makeService = () => createOutboundCommandService({
         domain: { withDomain: async (operation) => operation(domain) },
-        readiness: { getCapability: () => ({ state: 'available', reasonCode: null }), check: async () => readyReply(), assertCurrent: assertCurrentReadiness },
+        readiness: { getCapability: () => ({ state: 'available', reasonCode: null }), check: async (personId) => readyReply(personId), assertCurrent: assertCurrentReadiness },
         phone: { inspectCapability: async () => ({ state: 'available', reasonCode: null }), dispatch },
       });
       expect(await makeService().beginOutbound(request)).toMatchObject({ status: 'unknown', reasonCode: 'result_not_persisted' });
