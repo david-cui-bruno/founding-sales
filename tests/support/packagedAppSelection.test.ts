@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createPackage, uncacheAll } from '@electron/asar';
 import { readArtifactIdentity, resolveReleaseArtifact } from '../../scripts/releaseArtifact.mjs';
@@ -13,6 +14,16 @@ describe('packaged test artifact selection', () => {
     vi.unstubAllEnvs();
     vi.resetModules();
   });
+
+  it('collects the real packaged first-use test with Playwright without launching an application', () => {
+    const result = spawnSync(process.execPath, [join(process.cwd(), 'node_modules/playwright/cli.js'), 'test', '--list', 'tests/e2e/accountPreparation.spec.ts'], {
+      cwd: process.cwd(), env: { ...process.env }, encoding: 'utf8', timeout: 15_000, maxBuffer: 2 * 1024 * 1024,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('real local company intake reviews, creates, reuses and reopens');
+    expect(result.stdout).toContain('Total: 1 test in 1 file');
+  }, 20_000);
 
   it('targets an explicitly selected candidate output instead of the running installed build', async () => {
     vi.stubEnv('CALLIE_E2E_OUT_DIR', '/fixture/fss-candidate');

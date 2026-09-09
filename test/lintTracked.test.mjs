@@ -28,11 +28,11 @@ it('executes only supported tracked sources without ignores, with literal bounde
 it.each(['git', 'lint'])('fails closed on %s command failure', failure => { expect(fixture(['a.ts'], failure).run().status).not.toBe(0); });
 it('permits only reviewed literal CJS requires in the exact compatibility files', async () => {
   const { ESLint } = await import('eslint'); const eslint = new ESLint({ ignore: false });
-  for (const [filePath, module] of [['scripts/probeEncryptedSqlite.cjs', 'electron'], ['scripts/probeEncryptedSqliteNative.cjs', 'node:os'], ['scripts/lambdaImportResolver.cjs', 'typescript']]) {
+  for (const [filePath, module] of [['scripts/probeEncryptedSqlite.cjs', 'electron'], ['scripts/probeEncryptedSqliteNative.cjs', 'node:os'], ['scripts/lambdaImportResolver.cjs', 'typescript'], ...['node:crypto', 'node:fs', 'node:path', '@electron/asar', './releaseMarkerContract.cjs'].map(module => ['scripts/releaseArtifactCore.cjs', module])]) {
     const [result] = await eslint.lintText(`const value = require('${module}'); void value;`, { filePath });
     expect(result.messages.filter(m => m.ruleId === '@typescript-eslint/no-require-imports')).toEqual([]);
   }
-  for (const [filePath, code] of [['scripts/lambdaImportResolver.cjs', "require('electron')"], ['scripts/probeEncryptedSqlite.cjs', "require('unknown-module')"], ['scripts/probeEncryptedSqlite.cjs', 'require(process.argv[2])'], ['scripts/not-approved.cjs', "require('node:fs')"]]) {
+  for (const [filePath, code] of [['scripts/lambdaImportResolver.cjs', "require('electron')"], ['scripts/probeEncryptedSqlite.cjs', "require('unknown-module')"], ['scripts/probeEncryptedSqlite.cjs', 'require(process.argv[2])'], ['scripts/not-approved.cjs', "require('node:fs')"], ['scripts/releaseArtifactCore.cjs', "require('node:child_process')"], ['scripts/releaseArtifactCore.cjs', 'require(process.argv[2])'], ['scripts/not-approved.cjs', "require('@electron/asar')"]]) {
     const [result] = await eslint.lintText(code, { filePath }); expect(result.messages.some(m => m.ruleId === '@typescript-eslint/no-require-imports')).toBe(true);
   }
 });

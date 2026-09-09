@@ -10,7 +10,7 @@ afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, 
 async function fixture({ behavior = 'clean', shallow = false } = {}) {
   const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'secret-wrapper-')); roots.push(root);
   mkdirSync(join(root, 'scripts')); mkdirSync(join(root, 'bin')); mkdirSync(join(root, 'src'));
-  for (const name of ['verifySecrets.mjs', 'verifyPackage.mjs', 'verifyAppleBridgePackage.mjs', 'writeReleaseMarker.mjs']) cpSync(new URL(`../scripts/${name}`, import.meta.url), join(root, 'scripts', name));
+  for (const name of ['verifySecrets.mjs', 'verifyPackage.mjs', 'verifyAppleBridgePackage.mjs', 'writeReleaseMarker.mjs', 'releaseMarkerContract.cjs']) cpSync(new URL(`../scripts/${name}`, import.meta.url), join(root, 'scripts', name));
   symlinkSync(resolve('node_modules'), join(root, 'node_modules'));
   writeFileSync(join(root, '.gitleaks.toml'), '[extend]\nuseDefault = true\n');
   writeFileSync(join(root, 'src/code.ts'), 'export const clean = 1;');

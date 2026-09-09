@@ -23,7 +23,7 @@ it.each(['basename', 'createdAt', 'kind', 'schemaVersion', 'sha256', 'sizeBytes'
 });
 async function fixture({ identity = 'com.callie.foundersales', output = receipt } = {}) {
   const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'backup-launcher-')); roots.push(root); mkdirSync(join(root, 'scripts')); mkdirSync(join(root, 'bin'));
-  for (const name of ['createPreReleaseBackup.mjs', 'writeReleaseMarker.mjs']) cpSync(new URL(`../scripts/${name}`, import.meta.url), join(root, 'scripts', name));
+  for (const name of ['createPreReleaseBackup.mjs', 'writeReleaseMarker.mjs', 'releaseMarkerContract.cjs']) cpSync(new URL(`../scripts/${name}`, import.meta.url), join(root, 'scripts', name));
   symlinkSync(resolve('node_modules'), join(root, 'node_modules')); writeFileSync(join(root, '.gitignore'), 'out/\nbuild/generated/\nnode_modules/\narchive/\ncalled\n');
   const product = 'Callie Founder Sales System'; const contents = join(root, 'out', `${product}-darwin-arm64`, `${product}.app/Contents`);
   mkdirSync(join(contents, 'MacOS'), { recursive: true }); mkdirSync(join(contents, 'Resources')); writeFileSync(join(contents, 'Info.plist'), 'fixture');
