@@ -2,6 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { AppDatabase } from '../db/database';
 import type { Clock } from '../domain/support/clock';
 import { accountFingerprint } from '../domain/accounts/accountEvidence';
+import { AccountRepository } from '../domain/accounts/accountRepository';
+import { legacyRouteSuppression } from '../domain/accounts/accountOutreach';
+import { CampaignRepository } from '../domain/campaign/campaignRepository';
+import { manualHandoffSchema, type ManualHandoff } from '../../shared/contracts/ownerCommandContract';
 import type { AccountSourcePolicy } from '../domain/accounts/accountRepository';
 import { accountIdSchema, accountInstantSchema } from '../../shared/contracts/accountContract';
 import { approvalSnapshotSchema, authorityStateSchema, commandReceiptSchema, delegationCommandSchema, workerEventSchema,
@@ -66,19 +70,84 @@ export class DelegationRepository {
       return receipt;
     });
   }
+  executionVersion(accountId: string): number | null { return this.owner(accountIdSchema.parse(accountId))?.aggregate_version ?? null; }
+  getCommand(commandId: string): DelegationCommand | null {
+    const row = this.raw.prepare('SELECT command_json FROM delegated_commands WHERE workspace_id=? AND command_id=?').get(this.deps.workspaceId, commandId) as { command_json: string } | undefined;
+    return row ? delegationCommandSchema.parse(JSON.parse(row.command_json)) : null;
+  }
+  pendingCommands(): DelegationCommand[] {
+    const rows = this.raw.prepare('SELECT command_json FROM delegated_commands WHERE workspace_id=? ORDER BY created_at,command_id').all(this.deps.workspaceId) as { command_json: string }[];
+    return rows.map(row => delegationCommandSchema.parse(JSON.parse(row.command_json))).filter(command => this.commandStatus(command.commandId)?.status === 'pending');
+  }
+  hasPendingStop(accountId: string): boolean {
+    return this.pendingCommands().some(command => command.accountId === accountId && (command.kind === 'pause' || command.kind === 'revoke' || command.kind === 'complete-manual'));
+  }
+  /** queueCommand already atomically set delegating. All local dispatch fences
+   * read that row, so no new local intent can appear after this scoped check. */
+  canSubmitCommand(commandId: string): boolean {
+    return this.atomic(() => {
+      const command = this.pendingCommands().find(value => value.commandId === commandId);
+      if (!command) return false;
+      const owner = this.owner(command.accountId);
+      if (!owner || owner.generation !== command.expectedAuthorityGeneration || owner.aggregate_version !== command.expectedVersion) return false;
+      if (command.kind !== 'delegate') return owner.owner === 'worker' && (command.kind === 'pause' || command.kind === 'revoke' || command.kind === 'complete-manual'
+        ? ['active', 'paused'].includes(owner.state) : owner.state === 'active' && !this.hasPendingStop(command.accountId));
+      if (owner.owner !== 'local' || owner.state !== 'delegating') return false;
+      const accountPending = this.raw.prepare(`SELECT 1 FROM pm_account_outbound_intents i WHERE i.account_id=? AND i.channel='email'
+        AND NOT EXISTS(SELECT 1 FROM pm_account_outbound_results r WHERE r.command_id=i.command_id AND r.outcome IN('accepted','provider_accepted','not_sent','cancelled')) LIMIT 1`).get(command.accountId);
+      const legacyPending = this.raw.prepare(`SELECT 1 FROM email_send_intents i JOIN email_drafts d ON d.id=i.draft_id
+        LEFT JOIN email_send_results r ON r.command_id=i.command_id WHERE (r.status IS NULL OR r.status='unknown') AND
+        (EXISTS(SELECT 1 FROM pm_account_links l WHERE l.account_id=? AND l.person_id=d.person_id)
+        OR EXISTS(SELECT 1 FROM pm_account_routes ar WHERE ar.account_id=? AND (ar.person_id=d.person_id OR (ar.channel='email' AND lower(ar.value)=lower(d.recipient))))) LIMIT 1`)
+        .get(command.accountId, command.accountId);
+      return !accountPending && !legacyPending;
+    });
+  }
   /** A queued receipt is immutable. Owner-applied receipts are read separately. */
   commandStatus(commandId: string): CommandReceipt | null {
     const applied = this.raw.prepare(`SELECT event_json FROM delegated_applied_events WHERE workspace_id=?
       AND ((json_extract(event_json,'$.kind')='authority.changed' AND json_extract(event_json,'$.payload.receipt.commandId')=?)
-        OR (json_extract(event_json,'$.kind')='manual.outcome' AND json_extract(event_json,'$.receipt.commandId')=?)) ORDER BY aggregate_version DESC LIMIT 1`)
+        OR (json_extract(event_json,'$.kind') IN('manual.outcome','manual.handoff','campaign.changed') AND json_extract(event_json,'$.receipt.commandId')=?)) ORDER BY aggregate_version DESC LIMIT 1`)
       .get(this.deps.workspaceId, commandId, commandId) as { event_json: string } | undefined;
     if (applied) {
       const event = workerEventSchema.parse(JSON.parse(applied.event_json));
       if (event.kind === 'authority.changed') return event.payload.receipt;
-      if (event.kind === 'manual.outcome') return event.receipt;
+      if ('receipt' in event) return event.receipt;
     }
     const queued = this.raw.prepare('SELECT receipt_json FROM delegated_commands WHERE workspace_id=? AND command_id=?').get(this.deps.workspaceId, commandId) as { receipt_json: string } | undefined;
     return queued ? commandReceiptSchema.parse(JSON.parse(queued.receipt_json)) : null;
+  }
+  getManualHandoff(handoffId: string): (ManualHandoff & { accountId: string; authorityGeneration: number; consumedAt: string | null }) | null {
+    const row = this.raw.prepare(`SELECT e.event_json,h.consumed_at FROM delegated_manual_handoffs h JOIN delegated_applied_events e ON e.id=h.event_id
+      WHERE h.workspace_id=? AND h.handoff_id=?`).get(this.deps.workspaceId, accountIdSchema.parse(handoffId)) as { event_json: string; consumed_at: string | null } | undefined;
+    if (!row) return null;
+    const event = workerEventSchema.parse(JSON.parse(row.event_json));
+    if (event.kind !== 'manual.handoff') throw new Error('Invalid handoff event');
+    return { ...event.payload, accountId: event.accountId, authorityGeneration: event.authorityGeneration, consumedAt: row.consumed_at };
+  }
+  consumeManualHandoff(input: ManualHandoff & { accountId: string; authorityGeneration: number }, assertCurrent: () => void): { status: 'started' | 'already_started'; handoffId: string } {
+    const { accountId, authorityGeneration, ...raw } = input;
+    const payload = manualHandoffSchema.parse(raw); accountIdSchema.parse(accountId);
+    return this.atomic(() => {
+      const handoff = this.getManualHandoff(payload.handoffId);
+      if (!handoff) throw new Error('Manual owner acknowledgment missing');
+      const { consumedAt, ...identity } = handoff;
+      if (accountFingerprint(identity) !== accountFingerprint({ ...payload, accountId, authorityGeneration })) throw new Error('Manual immutable handoff mismatch');
+      if (consumedAt !== null) return { status: 'already_started', handoffId: payload.handoffId };
+      const owner = this.owner(accountId); const at = this.now();
+      if (!owner || owner.owner !== 'worker' || owner.state !== 'active' || owner.generation !== authorityGeneration || this.hasPendingStop(accountId)
+        || payload.expiresAt <= at) throw new Error('Manual authority unavailable');
+      const snapshot = new AccountRepository({ database: this.deps.database, clock: this.deps.clock, ids: { next: randomUUID } }).snapshot(accountId, at);
+      const route = snapshot.routes.find(route => route.id === payload.routeId && route.version === payload.routeVersion);
+      if (!route || route.channel !== (payload.channel === 'call' ? 'phone' : 'linkedin') || createHash('sha256').update(route.value).digest('hex') !== payload.targetHash) throw new Error('Manual route changed');
+      const legacy = legacyRouteSuppression(this.deps.database, route, at);
+      if (legacy.person || legacy.handle || this.raw.prepare('SELECT 1 FROM pm_account_suppression_tombstones WHERE account_id=?').get(accountId)
+        || this.raw.prepare('SELECT 1 FROM pm_handle_suppression_tombstones WHERE kind=? AND normalized_value=?').get(route.channel, route.value.toLowerCase())) throw new Error('Manual target suppressed');
+      assertCurrent();
+      const result = this.raw.prepare('UPDATE delegated_manual_handoffs SET consumed_at=? WHERE workspace_id=? AND handoff_id=? AND consumed_at IS NULL').run(at, this.deps.workspaceId, payload.handoffId);
+      if (result.changes !== 1) throw new Error('Manual handoff already consumed');
+      return { status: 'started', handoffId: payload.handoffId };
+    });
   }
   saveApproval(input: ApprovalSnapshot): ApprovalSnapshot {
     const snapshot = approvalSnapshotSchema.parse(input); const fingerprint = accountFingerprint(snapshot);
@@ -118,6 +187,14 @@ export class DelegationRepository {
           .run(event.aggregateVersion, at, event.accountId, event.workspaceId);
       }
       if (event.kind === 'meeting.outcome') this.applyMeeting(event, at);
+      if (event.kind === 'manual.handoff') {
+        const p = event.payload;
+        this.raw.prepare('INSERT INTO delegated_manual_handoffs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)')
+          .run(event.workspaceId, event.accountId, p.handoffId, p.actionId, event.authorityGeneration, p.targetHash, p.contentHash,
+            p.contextRevision, p.channel, p.routeId, p.routeVersion, p.expiresAt, event.id);
+      }
+      const campaign = event.kind === 'campaign.changed' ? event.payload : 'campaign' in event ? event.campaign : undefined;
+      if (campaign) new CampaignRepository(this.deps).applyProjection(event.accountId, campaign);
       if (event.kind === 'thread.observed') this.applyThread(event, at);
       if (event.kind === 'action.outcome') {
         const p = event.payload;
@@ -179,19 +256,28 @@ export class DelegationRepository {
   private validateExecution(event: WorkerEvent) {
     const owner = this.owner(event.accountId);
     if (!owner) throw new Error('Execution event requires explicit authority');
-    if (event.kind === 'manual.outcome' || event.kind === 'authority.changed') {
-      const receipt = event.kind === 'manual.outcome' ? event.receipt : event.payload.receipt;
+    if ('receipt' in event || event.kind === 'authority.changed') {
+      const receipt = 'receipt' in event ? event.receipt : event.payload.receipt;
       const previous = this.commandStatus(receipt.commandId);
       if (previous && previous.status !== 'pending') throw new Error('Command acknowledgment conflict');
+    }
+    if (event.kind === 'manual.handoff' || event.kind === 'campaign.changed') {
+      const command = this.getCommand(event.receipt.commandId);
+      if (!command || command.accountId !== event.accountId || command.workspaceId !== event.workspaceId
+        || command.expectedAuthorityGeneration !== event.authorityGeneration || command.expectedVersion !== owner.aggregate_version
+        || command.expectedVersion + 1 !== event.aggregateVersion) throw new Error('Owner acknowledgment command mismatch');
+      if (event.kind === 'manual.handoff') {
+        if (command.kind !== 'prepare-manual' || accountFingerprint({ ...command.payload, handoffId: event.payload.handoffId, expiresAt: event.payload.expiresAt }) !== accountFingerprint(event.payload)) throw new Error('Manual handoff command mismatch');
+      } else if (command.kind !== 'campaign-command') throw new Error('Campaign command mismatch');
     }
     if (event.kind === 'manual.outcome') {
       const queued = this.raw.prepare('SELECT command_json FROM delegated_commands WHERE command_id=?')
         .get(event.receipt.commandId) as { command_json: string } | undefined;
       if (queued) {
         const command = delegationCommandSchema.parse(JSON.parse(queued.command_json));
-        if (command.kind !== 'manual-outcome' || command.workspaceId !== event.workspaceId || command.accountId !== event.accountId
+        if (!['manual-outcome','complete-manual'].includes(command.kind) || command.workspaceId !== event.workspaceId || command.accountId !== event.accountId
           || command.expectedAuthorityGeneration !== event.authorityGeneration || command.expectedVersion + 1 !== event.aggregateVersion
-          || command.expectedVersion !== owner.aggregate_version || accountFingerprint(command.payload) !== accountFingerprint(event.payload)) {
+          || command.expectedVersion !== owner.aggregate_version || accountFingerprint(command.kind === 'complete-manual' ? command.payload.outcome : command.payload) !== accountFingerprint(event.payload)) {
           throw new Error('Manual acknowledgment command correspondence conflict');
         }
       }

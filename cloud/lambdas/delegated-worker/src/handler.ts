@@ -2,6 +2,8 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { GetParameterCommand, SSMClient, type GetParameterCommandOutput } from '@aws-sdk/client-ssm';
 import { z } from 'zod';
 import { delegationCommandSchema } from '../../../../src/shared/contracts/delegationContract';
+import { ownerCommandSchema } from '../../../../src/shared/contracts/ownerCommandContract';
+import { OwnerCommandCoordinator } from './ownerCommandCoordinator';
 import { WorkerAuth } from './workerAuth';
 import { DynamoExecutionRepository } from './executionRepository';
 import { RemoteGoogleAuthorization, type RemoteGoogleConfig } from './remoteGoogleAuthorization';
@@ -43,6 +45,10 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
         const command = path === '/emergency' ? await input.auth.emergencyCommand(principal, rawCommand) : delegationCommandSchema.parse(rawCommand);
         input.auth.store.workspace(command.workspaceId);
         if (path === '/emergency' && command.kind !== 'pause' && command.kind !== 'revoke') return response(403, { error: 'worker_scope_denied' });
+        if (path === '/commands' && ownerCommandSchema.safeParse(command).success) {
+          const owner = new OwnerCommandCoordinator({ auth: input.auth, authorization: input.google ?? new RemoteGoogleAuthorization({ auth: input.auth }) });
+          return response(200, await owner.apply(command, event.headers.authorization!));
+        }
         const repository = new DynamoExecutionRepository({ ...input.auth.options, dynamo: input.auth.fencedDynamo(principal) });
         return response(200, await repository.applyCommand(command));
       }

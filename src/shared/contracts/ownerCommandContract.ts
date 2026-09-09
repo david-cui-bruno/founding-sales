@@ -1,0 +1,54 @@
+import { z } from 'zod';
+import { audienceQuerySchema, researchCapabilitySchema, researchLimitsSchema } from '../../main/research/companyResearchTypes';
+import { campaignCommandPayloadSchema } from './campaignContract';
+import { accountReplyDraftSchema } from './mailThreadContract';
+import { accountIdSchema as id, accountInstantSchema as instant } from './accountContract';
+const revision = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const hash = z.string().regex(/^[a-f0-9]{64}$/);
+const manualBase = { actionId: id, observedAt: instant, evidenceRef: id, replyText: z.string().max(10000).nullable().optional() };
+export const manualOutcomeSchema = z.discriminatedUnion('channel', [
+  z.strictObject({ ...manualBase, channel: z.literal('call'), outcome: z.enum(['connected', 'no_answer', 'voicemail', 'busy', 'wrong_number', 'cancelled', 'not_called', 'unknown', 'opt_out']) }),
+  z.strictObject({ ...manualBase, channel: z.literal('linkedin'), outcome: z.enum(['human_reported_sent', 'reply', 'no_reply', 'opt_out', 'cancelled', 'not_sent', 'unknown']) }),
+]);
+export type ManualOutcome = Readonly<z.infer<typeof manualOutcomeSchema>>;
+export const ownerResearchConfigurationSchema = z.strictObject({ workspaceId: id, budgetId: id, audience: audienceQuerySchema,
+  audienceRevision: revision.min(1), sourceRevision: revision.min(1), budgetRevision: revision.min(1),
+  discoveryLimits: researchLimitsSchema, researchLimits: researchLimitsSchema, capability: researchCapabilitySchema,
+  maxAccountBudgetMicros: revision.min(1), permittedSources: z.array(z.url().max(2048)).max(500), preparationCommandId: z.uuid() });
+/** Activation selector only. AUTH, actual grants, budgets and exact approvals
+ * remain independent mandatory authority. No per-message scheduler allowlist. */
+export const ownerSourceConfigurationSchema = z.strictObject({ version: z.literal(1), workspaceId: id, accountId: id, pairingId: id,
+  revision: revision.min(1), state: z.enum(['paused','active']), mailboxSubject: id.nullable(), calendarId: id.nullable(), research: ownerResearchConfigurationSchema.nullable() });
+export type OwnerSourceConfiguration = z.infer<typeof ownerSourceConfigurationSchema>;
+export const ownerSourceKey = (accountId: string): string => `OWNER_SOURCE#${encodeURIComponent(id.parse(accountId))}`;
+export const ownerCommandBase = { commandId: z.uuid(), workspaceId: id, accountId: id, expectedAuthorityGeneration: revision, expectedVersion: revision };
+export const ownerCampaignBindingSchema = z.strictObject({ campaignId: id, campaignRevision: revision.min(1), enrollmentId: id,
+  enrollmentRevision: revision.min(1), stepId: id });
+export const manualHandoffBindingSchema = z.strictObject({ actionId: id, channel: z.enum(['call', 'linkedin']), routeId: id,
+  routeVersion: revision.min(1), targetHash: hash, contentHash: hash, contextRevision: id, campaign: ownerCampaignBindingSchema });
+export const submitApprovedReplyCommandSchema = z.strictObject({ ...ownerCommandBase, kind: z.literal('submit-approved-reply'),
+  payload: z.strictObject({ intentCommandId: z.uuid() }) });
+export const prepareManualCommandSchema = z.strictObject({ ...ownerCommandBase, kind: z.literal('prepare-manual'), payload: manualHandoffBindingSchema });
+export const completeManualCommandSchema = z.strictObject({ ...ownerCommandBase, kind: z.literal('complete-manual'),
+  payload: z.strictObject({ handoffId: id, targetHash: hash, outcome: manualOutcomeSchema }) });
+export const manualHandoffSchema = manualHandoffBindingSchema.extend({ handoffId: id, expiresAt: instant });
+export type ManualHandoff = z.infer<typeof manualHandoffSchema>;
+export const ownerReplyBindingSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('thread_participant'), threadId: id, sourceMessageId: id, sourceMessageHash: hash }),
+  z.strictObject({ kind: z.literal('account_route'), routeId: id, routeVersion: revision.min(1), accountVersion: revision.min(1) }),
+]);
+export const approveReplyCommandSchema = z.strictObject({ ...ownerCommandBase, kind: z.literal('approve-reply'), payload: z.strictObject({
+  draft: accountReplyDraftSchema, expectedRemoteDraftRevision: revision.min(1), approvalId: id, actionId: id, intentCommandId: z.uuid(),
+  permission: z.strictObject({ id, sourceMessageId: id, sourceMessageHash: hash, basis: z.enum(['requested_followup', 'ongoing_correspondence']), expiresAt: instant }),
+  binding: ownerReplyBindingSchema, expiresAt: instant,
+}) });
+/** Canonical owner command members. DelegationCommand imports these exact schemas
+ * during its serialized integration turn. No arbitrary execute payload exists. */
+export const ownerCampaignCommandSchema = z.strictObject({ ...ownerCommandBase, kind: z.literal('campaign-command'), payload: campaignCommandPayloadSchema.refine(value => value.kind !== 'campaign.outcome', 'Outcomes require actual reserved action evidence') });
+export const configureOwnerCommandSchema = z.strictObject({ ...ownerCommandBase, kind: z.literal('configure-owner'), payload: z.strictObject({
+  expectedConfigurationRevision: revision, configuration: ownerSourceConfigurationSchema,
+  mailScope: z.strictObject({ expectedEnvelopeRevision: revision.min(1).nullable(), since: instant }).nullable(),
+}) });
+export const ownerCommandSchemas = [submitApprovedReplyCommandSchema, prepareManualCommandSchema, completeManualCommandSchema, approveReplyCommandSchema, ownerCampaignCommandSchema, configureOwnerCommandSchema] as const;
+export const ownerCommandSchema = z.discriminatedUnion('kind', ownerCommandSchemas);
+export type OwnerCommand = z.infer<typeof ownerCommandSchema>;

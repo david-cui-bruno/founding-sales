@@ -1,3 +1,5 @@
+import { ownerCommandSchemas, manualOutcomeSchema, manualHandoffSchema } from './ownerCommandContract';
+import { campaignEventPayloadSchema } from './campaignContract';
 import { meetingOutcomePayloadSchema } from './meetingContract';
 import { z } from 'zod';
 import { threadObservedPayloadSchema } from './mailThreadContract';
@@ -21,15 +23,11 @@ export const approvalSnapshotSchema = z.strictObject({ id, accountId: id, recipi
   contextRevision: id, campaignId: id.nullable(), campaignRevision: revision, permissionEvidenceId: id,
   approvedAt: accountInstantSchema });
 export type ApprovalSnapshot = Readonly<z.infer<typeof approvalSnapshotSchema>>;
-const manualBase = { actionId: id, observedAt: accountInstantSchema, evidenceRef: id };
-export const manualOutcomeSchema = z.discriminatedUnion('channel', [
-  z.strictObject({ ...manualBase, channel: z.literal('call'), outcome: z.enum(['connected', 'no_answer', 'voicemail', 'busy', 'wrong_number', 'cancelled', 'not_called']) }),
-  z.strictObject({ ...manualBase, channel: z.literal('linkedin'), outcome: z.enum(['human_reported_sent', 'reply', 'opt_out', 'cancelled', 'not_sent', 'unknown']) }),
-]);
-export type ManualOutcome = Readonly<z.infer<typeof manualOutcomeSchema>>;
+export { manualOutcomeSchema, type ManualOutcome } from './ownerCommandContract';
 const commandBase = { commandId: id, workspaceId: id, accountId: id, expectedAuthorityGeneration: revision, expectedVersion: revision };
 /** C3/C4/C5 extend this union explicitly. Arbitrary payloads never execute. */
 export const delegationCommandSchema = z.discriminatedUnion('kind', [
+  ...ownerCommandSchemas,
   z.strictObject({ ...commandBase, kind: z.literal('delegate'), payload: z.strictObject({ delegationId: id, approvedAt: accountInstantSchema }) }),
   z.strictObject({ ...commandBase, kind: z.literal('pause'), payload: z.strictObject({ reason }) }),
   z.strictObject({ ...commandBase, kind: z.literal('revoke'), payload: z.strictObject({ reason }) }),
@@ -40,9 +38,11 @@ const eventBase = { id, workspaceId: id, accountId: id, authorityGeneration: rev
 export const workerEventSchema = z.discriminatedUnion('kind', [
   z.strictObject({ ...eventBase, kind: z.literal('meeting.outcome'), payload: meetingOutcomePayloadSchema }),
   z.strictObject({ ...eventBase, kind: z.literal('thread.observed'), payload: threadObservedPayloadSchema }),
-  z.strictObject({ ...eventBase, kind: z.literal('manual.outcome'), payload: manualOutcomeSchema, receipt: commandReceiptSchema }),
+  z.strictObject({ ...eventBase, kind: z.literal('manual.handoff'), payload: manualHandoffSchema, receipt: commandReceiptSchema }),
+  z.strictObject({ ...eventBase, kind: z.literal('campaign.changed'), payload: campaignEventPayloadSchema, receipt: commandReceiptSchema }),
+  z.strictObject({ ...eventBase, kind: z.literal('manual.outcome'), payload: manualOutcomeSchema, receipt: commandReceiptSchema, campaign: campaignEventPayloadSchema.optional() }),
   z.strictObject({ ...eventBase, kind: z.literal('authority.changed'), payload: z.strictObject({ authority: authorityStateSchema, receipt: commandReceiptSchema }) }),
-  z.strictObject({ ...eventBase, kind: z.literal('action.outcome'), payload: z.strictObject({ actionId: id, state: actionStateSchema,
+  z.strictObject({ ...eventBase, kind: z.literal('action.outcome'), campaign: campaignEventPayloadSchema.optional(), payload: z.strictObject({ actionId: id, state: actionStateSchema,
     contentHash: hash, targetHash: hash, observedAt: accountInstantSchema, evidenceRef: id }) }),
   z.strictObject({ ...eventBase, authorityGeneration: z.literal(0), kind: z.literal('research.created'),
     payload: z.strictObject({ account: accountSchema, createdAt: accountInstantSchema }) }),
@@ -54,9 +54,16 @@ export const workerEventSchema = z.discriminatedUnion('kind', [
   if (event.kind === 'thread.observed' && event.payload.projection.thread.accountId !== event.accountId) {
     ctx.addIssue({ code: 'custom', message: 'Thread event account mismatch' });
   }
-  if (event.kind === 'manual.outcome' && (event.receipt.status !== 'applied' || event.receipt.authorityGeneration !== event.authorityGeneration
+  if (['manual.outcome', 'manual.handoff', 'campaign.changed'].includes(event.kind) && 'receipt' in event && (event.receipt.status !== 'applied' || event.receipt.authorityGeneration !== event.authorityGeneration
     || event.receipt.aggregateVersion !== event.aggregateVersion)) {
     ctx.addIssue({ code: 'custom', message: 'Manual acknowledgment receipt mismatch' });
+  }
+  const campaign = event.kind === 'campaign.changed' ? event.payload : 'campaign' in event ? event.campaign : undefined;
+  if (campaign && (campaign.enrollment && campaign.enrollment.accountId !== event.accountId
+    || campaign.version && !campaign.version.cohortAccountIds.includes(event.accountId)
+    || event.kind === 'campaign.changed' && campaign.commandId !== event.receipt.commandId
+    || (event.kind === 'manual.outcome' || event.kind === 'action.outcome') && campaign.evidence?.actionId !== event.payload.actionId)) {
+    ctx.addIssue({ code: 'custom', message: 'Campaign event identity mismatch' });
   }
   if (event.kind === 'authority.changed' && (event.payload.authority.accountId !== event.accountId
     || event.payload.authority.generation !== event.authorityGeneration || event.payload.receipt.authorityGeneration !== event.authorityGeneration
@@ -79,7 +86,9 @@ export type ReserveDispatchInput = Readonly<z.infer<typeof reserveDispatchInputS
 export const appendOutcomeInputSchema = z.strictObject({ reservation: reservationSchema, state: z.enum(['unknown', 'provider_accepted', 'cancelled']),
   observedAt: accountInstantSchema, evidenceRef: id });
 export type AppendOutcomeInput = Readonly<z.infer<typeof appendOutcomeInputSchema>>;
-export const eventPageSchema = z.strictObject({ events: z.array(workerEventSchema).max(1000), nextCursor: id.nullable() });
+const transportCursor = z.string().regex(/^[a-f0-9]{64}:[1-9][0-9]*$/).nullable();
+export const eventPageSchema = z.strictObject({ events: z.array(workerEventSchema).max(1000), nextCursor: transportCursor, headCursor: transportCursor, complete: z.boolean() })
+  .refine(page => page.complete === (page.nextCursor === page.headCursor), 'Transport completeness mismatch');
 export type EventPage = Readonly<z.infer<typeof eventPageSchema>>;
 export interface ExecutionRepository {
   applyCommand(command: DelegationCommand): Promise<CommandReceipt>;

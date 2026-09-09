@@ -1,0 +1,220 @@
+import { createHash } from 'node:crypto';
+import { CampaignExecution } from './campaignExecution';
+import { WorkerCampaignRepository, campaignActionApprovalKey, campaignActionApprovalSchema, campaignReservationKey, campaignReservationSchema, campaignEnrollmentKey } from './workerCampaignRepository';
+import { enrollmentSchema } from '../../../../src/shared/contracts/campaignContract';
+import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
+import { threadProjectionSchema, mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThreadContract';
+import { accountRecordSchema, accountKey } from './workerAccountRepository';
+import { intakeRegistryKey, intakeRegistrySchema, createIntakeBarrier } from './intakeBarrier';
+import type { WorkerAuth } from './workerAuth';
+import type { RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
+import { ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand } from '../../../../src/shared/contracts/ownerCommandContract';
+import { commandReceiptSchema, workerEventSchema, type CommandReceipt, type WorkerEvent } from '../../../../src/shared/contracts/delegationContract';
+import { DynamoStore, fingerprint, keyPart } from './dynamoStore';
+import { authorityRecordSchema, executionAuthorityKey, executionAuthorityFields, createExecutionRepository } from './executionRepository';
+import { DynamoThreadIntakeRepository, mailThreadKey, mailCursorKey, mailSuppressionKey } from './threadIntakeRepository';
+import { DynamoDispatchRepository, dispatchApprovalKey, dispatchPermissionKey, dispatchIntentKey, type DispatchIntent } from './dispatchRepository';
+
+/** Authenticated owner admission. No provider action is performed here. Partially
+ * admitted immutable records cannot dispatch without a separate requested work item. */
+export class OwnerCommandCoordinator {
+  constructor(readonly input: { auth: WorkerAuth; authorization: RemoteGoogleAuthorization }) {}
+  async apply(raw: unknown, authorization: string): Promise<CommandReceipt> {
+    const command = ownerCommandSchema.parse(raw);
+    const principal = await this.input.auth.authenticate(authorization, ['commands:write']);
+    this.input.auth.store.workspace(command.workspaceId);
+    const options = { ...this.input.auth.options, dynamo: this.input.auth.fencedDynamo(principal) };
+    const store = new DynamoStore(options);
+    const key = `COMMAND#${keyPart(command.commandId)}`;
+    const fp = fingerprint(command);
+    const previous = await store.get<{ fingerprint: string; receipt: CommandReceipt }>(key);
+    if (previous) {
+      if (previous.data.fingerprint !== fp) throw new Error('command_fingerprint_conflict');
+      return commandReceiptSchema.parse(previous.data.receipt);
+    }
+    const authKey = executionAuthorityKey(command.accountId);
+    const authorityRow = await store.get<unknown>(authKey);
+    if (!authorityRow) throw new Error('authority_missing');
+    const current = authorityRecordSchema.parse(authorityRow.data);
+    if (current.authority.accountId !== command.accountId || current.authority.owner !== 'worker' || (current.authority.state !== 'active' && !(command.kind === 'configure-owner' && current.authority.state === 'paused'))
+      || current.authority.generation !== command.expectedAuthorityGeneration || current.version !== command.expectedVersion) throw new Error('stale_authority');
+    if (command.kind === 'submit-approved-reply') throw new Error('owner_command_unavailable');
+    const claimKey = `OWNER_COMMAND_CLAIM#${keyPart(command.commandId)}`;
+    let claim = await store.get<{ fingerprint: string; pairingId: string; at: string }>(claimKey);
+    if (!claim) {
+      await store.transact([store.put(claimKey, { fingerprint: fp, pairingId: principal.pairingId, at: store.now() }, null), store.check(authKey, authorityRow.rev)]);
+      claim = await store.get(claimKey);
+    }
+    if (!claim || claim.data.fingerprint !== fp || claim.data.pairingId !== principal.pairingId) throw new Error('owner_claim_conflict');
+    const next = { authority: current.authority, version: current.version + 1 };
+    const receipt: CommandReceipt = { commandId: command.commandId, status: 'applied', authorityGeneration: command.expectedAuthorityGeneration, aggregateVersion: next.version, reason: null };
+    const base = { id: `command-${fingerprint([command.workspaceId, command.commandId])}`, workspaceId: command.workspaceId, accountId: command.accountId,
+      authorityGeneration: command.expectedAuthorityGeneration, aggregateVersion: next.version };
+    let proof: TransactWriteItem[];
+    let finalize = (): TransactWriteItem[] => proof;
+    let event: WorkerEvent;
+    if (command.kind === 'campaign-command') {
+      const plan = await new WorkerCampaignRepository(store.options).planCommand({ commandId: command.commandId, accountId: command.accountId, payload: command.payload });
+      proof = plan.items; event = workerEventSchema.parse({ ...base, kind: 'campaign.changed', payload: plan.payload, receipt });
+    } else if (command.kind === 'prepare-manual') {
+      const plan = await this.prepareManual(command, principal.pairingId, claim.data.at, store);
+      proof = []; finalize = plan.finalize;
+      event = workerEventSchema.parse({ ...base, kind: 'manual.handoff', payload: plan.handoff, receipt });
+    } else if (command.kind === 'complete-manual') {
+      const plan = await this.completeManual(command, principal.pairingId, store);
+      proof = plan.items; event = workerEventSchema.parse({ ...base, kind: 'manual.outcome', payload: command.payload.outcome, campaign: plan.campaign, receipt });
+    } else {
+      proof = command.kind === 'configure-owner' ? await this.configure(command, principal.pairingId, claim.data.at, store) : await this.approveReply(command, principal.pairingId, claim.data.at, store);
+      event = workerEventSchema.parse({ ...base, kind: 'authority.changed', payload: { authority: current.authority, receipt } });
+    }
+    const outbox = await store.eventItems(event);
+    await store.transact([store.put(authKey, next, authorityRow.rev, executionAuthorityFields(next), executionAuthorityFields(current)),
+      store.put(key, { fingerprint: fp, receipt, sequence: outbox.sequence }, null), ...finalize(), ...outbox.items]);
+    await store.publish(outbox.sequence);
+    return receipt;
+  }
+  private async activeSource(command: OwnerCommand, pairingId: string, store: DynamoStore) {
+    const key = ownerSourceKey(command.accountId); const row = await store.get<unknown>(key);
+    if (!row) throw new Error('source_setup_required');
+    const config = ownerSourceConfigurationSchema.parse(row.data);
+    if (config.state !== 'active' || config.workspaceId !== command.workspaceId || config.accountId !== command.accountId || config.pairingId !== pairingId || !config.mailboxSubject) throw new Error('source_paused_or_mismatched');
+    const grant = await this.input.authorization.status(pairingId);
+    const grantKey = `GOOGLE_GRANT#${keyPart(pairingId)}`; const grantRow = await store.get(grantKey);
+    if (grant.state !== 'ready' || grant.grant?.subject !== config.mailboxSubject || !grantRow) throw new Error('source_grant_unavailable');
+    return { config, checks: [store.check(key,row.rev), store.check(grantKey,grantRow.rev)] };
+  }
+  private async prepareManual(command: Extract<OwnerCommand,{kind:'prepare-manual'}>, pairingId: string, at: string, store: DynamoStore) {
+    const p = command.payload; const source = await this.activeSource(command,pairingId,store);
+    const repo = new WorkerCampaignRepository(store.options);
+    const route = await repo.accountRoute(command.accountId,p.routeId);
+    if (route.route.version !== p.routeVersion || route.route.channel !== (p.channel === 'call' ? 'phone' : 'linkedin')
+      || createHash('sha256').update(route.route.value).digest('hex') !== p.targetHash || route.route.verification === 'unverified') throw new Error('manual_target_mismatch');
+    const record = accountRecordSchema.parse(route.row.data);
+    if (!route.route.evidenceIds.length || route.route.evidenceIds.some(id => !record.sources.some(source => source.id === id && source.permitted))) throw new Error('manual_target_unproven');
+    const input = { workspaceId: command.workspaceId, accountId: command.accountId, ...p.campaign, actionId:p.actionId, channel:p.channel,
+      authorityGeneration:command.expectedAuthorityGeneration,selectedRouteId:p.routeId,contextRevision:p.contextRevision,contentHash:p.contentHash,targetHash:p.targetHash };
+    const expiresAt = new Date(Date.parse(at)+60000).toISOString();
+    const approval = { ...input, approvedAt:at,expiresAt };
+    const approvalKey = campaignActionApprovalKey(command.accountId,p.actionId); const prior = await store.get(approvalKey);
+    if (prior) { if (fingerprint(campaignActionApprovalSchema.parse(prior.data)) !== fingerprint(approval)) throw new Error('manual_approval_conflict'); }
+    else await repo.admitActionApproval(approval);
+    const plan = await new CampaignExecution(repo).prepareManualChecks(input);
+    const intake = await createIntakeBarrier(store).check({accountId:command.accountId,mailboxSubject:source.config.mailboxSubject!},new AbortController().signal);
+    if (intake.status !== 'ready') throw new Error('manual_intake_unavailable');
+    if (await store.get(mailSuppressionKey(command.accountId))) throw new Error('manual_account_suppressed');
+    const handoff = manualHandoffSchema.parse({...p,handoffId:`handoff-${fingerprint([command.workspaceId,command.commandId])}`,expiresAt});
+    const registryKey = intakeRegistryKey(command.accountId); const registryRow = await store.get<unknown>(registryKey);
+    if (!registryRow || intake.revisions.find(row=>row.key===registryKey)?.revision!==registryRow.rev) throw new Error('manual_intake_changed');
+    const registry = intakeRegistrySchema.parse(registryRow.data);
+    const items = [...source.checks,...intake.checks.filter(item=>item.ConditionCheck?.Key?.sk?.S!==registryKey),store.absent(mailSuppressionKey(command.accountId)),
+      store.put(registryKey,{...registry,manualDependencies:[...registry.manualDependencies,{commandId:command.commandId,actionId:p.actionId,channel:p.channel,outcome:'pending'}]},registryRow.rev),
+      store.put(`MANUAL_HANDOFF#${keyPart(handoff.handoffId)}`,{handoff,accountId:command.accountId,pairingId,generation:command.expectedAuthorityGeneration,issuedAt:at,lastOutcome:null},null),
+      store.put(`MANUAL_ACTION#${keyPart(command.accountId)}#${keyPart(p.actionId)}`,{handoffId:handoff.handoffId},null)];
+    return {handoff,finalize:()=>{ if(store.now()>=expiresAt||Date.parse(store.now())>=intake.validUntil) throw new Error('manual_proof_expired'); return [...items,...plan.finalize()]; }};
+  }
+  private async completeManual(command: Extract<OwnerCommand,{kind:'complete-manual'}>,pairingId:string,store:DynamoStore) {
+    const p=command.payload; const key=`MANUAL_HANDOFF#${keyPart(p.handoffId)}`;
+    const row=await store.get<{handoff:ManualHandoff;accountId:string;pairingId:string;generation:number;issuedAt:string;lastOutcome:ManualOutcome|null}>(key);
+    if(!row) throw new Error('manual_handoff_missing');
+    const handoff=manualHandoffSchema.parse(row.data.handoff); const outcome=p.outcome;
+    if(row.data.accountId!==command.accountId||row.data.pairingId!==pairingId||row.data.generation!==command.expectedAuthorityGeneration
+      ||handoff.targetHash!==p.targetHash||handoff.actionId!==outcome.actionId||handoff.channel!==outcome.channel||outcome.observedAt<row.data.issuedAt||outcome.observedAt>store.now()) throw new Error('manual_outcome_identity');
+    if(row.data.lastOutcome && (!['no_reply','reply','opt_out'].includes(outcome.outcome)||outcome.observedAt<row.data.lastOutcome.observedAt)) throw new Error('manual_outcome_conflict');
+    const repo=new WorkerCampaignRepository(store.options);
+    const reservation=campaignReservationSchema.parse((await repo.required(campaignReservationKey(command.accountId,outcome.actionId))).data);
+    const enrollment=enrollmentSchema.parse((await repo.required(campaignEnrollmentKey(handoff.campaign.enrollmentId))).data);
+    const actual=outcome.channel==='call' ? ['connected','no_answer','voicemail','busy','wrong_number'].includes(outcome.outcome) : outcome.outcome==='human_reported_sent';
+    const state=actual||row.data.lastOutcome && reservation.state==='sent' ? 'human_reported_sent' as const : ['cancelled','not_sent','not_called'].includes(outcome.outcome)?'cancelled' as const:'unknown' as const;
+    const plan=await repo.planCommand({commandId:command.commandId,accountId:command.accountId,payload:{kind:'campaign.outcome',enrollmentId:enrollment.id,expectedEnrollmentVersion:enrollment.version,
+      evidence:{enrollmentId:reservation.input.enrollmentId,accountId:reservation.input.accountId,campaignVersionId:reservation.campaignVersionId,actionId:outcome.actionId,stepId:reservation.input.stepId,routeId:reservation.input.selectedRouteId,routeVersion:reservation.routeVersion,
+        contextRevision:reservation.numericContextRevision,executionContextId:reservation.input.contextRevision,channel:outcome.channel,
+        observedAt:outcome.observedAt,outcome:outcome.outcome,observation:outcome.outcome==='no_reply'?'no_reply':outcome.outcome==='reply'?'replied':'unknown',source:'human',state}}});
+    const registryKey=intakeRegistryKey(command.accountId); const registryRow=await store.get<unknown>(registryKey);
+    if(!registryRow) throw new Error('manual_intake_missing'); const registry=intakeRegistrySchema.parse(registryRow.data);
+    const items=[...plan.items,store.put(key,{...row.data,lastOutcome:outcome},row.rev),store.put(registryKey,{...registry,manualDependencies:registry.manualDependencies.map(dependency=>dependency.actionId===outcome.actionId?{commandId:command.commandId,actionId:outcome.actionId,channel:outcome.channel,outcome:outcome.outcome}:dependency)},registryRow.rev)];
+    if(outcome.outcome==='opt_out' && !await store.get(mailSuppressionKey(command.accountId))) items.push(store.put(mailSuppressionKey(command.accountId),{accountId:command.accountId,observedAt:outcome.observedAt,evidence:outcome.evidenceRef},null));
+    return {items,campaign:plan.payload};
+  }
+  private async configure(command: Extract<OwnerCommand, { kind: 'configure-owner' }>, pairingId: string, at: string, store: DynamoStore): Promise<TransactWriteItem[]> {
+    const p = command.payload; const config = ownerSourceConfigurationSchema.parse(p.configuration);
+    if (config.workspaceId !== command.workspaceId || config.accountId !== command.accountId || config.pairingId !== pairingId
+      || config.revision !== p.expectedConfigurationRevision + 1 || config.research && config.research.workspaceId !== command.workspaceId) throw new Error('source_configuration_identity');
+    const key = ownerSourceKey(command.accountId); const previous = await store.get<unknown>(key);
+    if ((previous ? ownerSourceConfigurationSchema.parse(previous.data).revision : 0) !== p.expectedConfigurationRevision) throw new Error('stale_source_configuration');
+    const checks: TransactWriteItem[] = [];
+    if (config.state === 'active' && config.mailboxSubject !== null) {
+      const grant = await this.input.authorization.status(pairingId);
+      if (grant.state !== 'ready' || grant.grant?.subject !== config.mailboxSubject || !grant.grant.grantedScopes.includes('https://www.googleapis.com/auth/gmail.readonly')) throw new Error('source_grant_unavailable');
+      const grantRow = await store.get(`GOOGLE_GRANT#${keyPart(pairingId)}`); if (!grantRow) throw new Error('source_grant_unavailable');
+      checks.push(store.check(`GOOGLE_GRANT#${keyPart(pairingId)}`, grantRow.rev));
+      const recordRow = await store.get<unknown>(accountKey(command.accountId)); if (!recordRow) throw new Error('selected_account_missing');
+      const record = accountRecordSchema.parse(recordRow.data);
+      if (record.account.id !== command.accountId) throw new Error('selected_account_mismatch');
+      const routes = record.routes.filter(route => route.accountId === command.accountId && route.channel === 'email' && !record.routes.some(next => next.id === route.id && next.version > route.version));
+      if (routes.some(route => route.evidenceIds.length === 0 || route.evidenceIds.some(id => !record.sources.some(source => source.id === id && source.permitted)))) throw new Error('selected_scope_provenance_missing');
+      const threadRows = await store.list<unknown>(`MAIL_THREAD#${keyPart(command.accountId)}#`);
+      const projections = threadRows.map(row => ({ ...row, projection: threadProjectionSchema.parse(row.stored.data) })).filter(row => row.projection.thread.mailboxSubject === config.mailboxSubject);
+      if (projections.some(row => row.projection.thread.accountId !== command.accountId)) throw new Error('selected_scope_identity');
+      const participants = [...new Set([...routes.map(route => route.value.toLowerCase()), ...projections.flatMap(row => row.projection.thread.messages.flatMap(message => [...message.from,...message.to,...message.cc]))]
+        .filter(address => address !== grant.grant!.email.toLowerCase()))].sort();
+      const knownThreadIds = [...new Set(projections.map(row => row.projection.thread.providerThreadId))].sort();
+      const threads = new DynamoThreadIntakeRepository(store.options); let cursor = await threads.cursorState(command.accountId, config.mailboxSubject);
+      if (p.mailScope !== null) {
+        const scope = mailAccountScopeSchema.parse({ version: 1, accountId: command.accountId, mailboxSubject: config.mailboxSubject, revision: (cursor?.data.scope?.revision ?? 0) + 1,
+          participantAddresses: participants, knownThreadIds, since: p.mailScope.since, approvedAt: at });
+        await threads.admitScope(scope, p.mailScope.expectedEnvelopeRevision);
+        cursor = await threads.cursorState(command.accountId, config.mailboxSubject);
+      }
+      const scope = cursor?.data.scope;
+      if (!scope || scope.participantAddresses.some(address => !participants.includes(address)) || participants.some(address => !scope.participantAddresses.includes(address))
+        || knownThreadIds.some(id => !scope.knownThreadIds.includes(id))) throw new Error('selected_scope_incomplete');
+      checks.push(store.check(accountKey(command.accountId), recordRow.rev), store.check(mailCursorKey(command.accountId, config.mailboxSubject), cursor!.rev),
+        ...projections.map(row => store.check(row.key, row.stored.rev)));
+      const intakeKey = intakeRegistryKey(command.accountId); const intake = await store.get<unknown>(intakeKey);
+      const old = intake ? intakeRegistrySchema.parse(intake.data) : null;
+      if (old && old.adapters.some(adapter => adapter.enabled && adapter.relevant && (adapter.kind !== 'gmail' || adapter.mailboxSubject !== config.mailboxSubject))) throw new Error('selected_intake_conflict');
+      checks.push(store.put(intakeKey, { accountId: command.accountId, adapters: [{ id: 'configured-gmail', kind: 'gmail', enabled: true, relevant: true, mailboxSubject: config.mailboxSubject }], manualDependencies: old?.manualDependencies ?? [] }, intake?.rev ?? null));
+    } else if (p.mailScope !== null) throw new Error('inactive_scope_change');
+    return [...checks, store.put(key, config, previous?.rev ?? null)];
+  }
+  private async approveReply(command: Extract<OwnerCommand, { kind: 'approve-reply' }>, pairingId: string, at: string, store: DynamoStore) {
+    const p = command.payload; const draft = p.draft;
+    if (draft.accountId !== command.accountId || draft.updatedAt > at || p.expiresAt <= at || p.permission.expiresAt <= at
+      || Date.parse(p.expiresAt) - Date.parse(at) > 86400000 || Date.parse(p.permission.expiresAt) - Date.parse(at) > 86400000) throw new Error('approval_not_current');
+    const threads = new DynamoThreadIntakeRepository(store.options);
+    const projection = await threads.getThread(command.accountId, draft.threadId);
+    if (!projection || projection.revision !== draft.threadRevision || projection.contextRevision !== draft.contextRevision
+      || projection.thread.mailboxSubject !== draft.mailboxSubject || projection.signals.some(signal => signal.kind === 'opt_out')) throw new Error('thread_not_current');
+    const source = projection.thread.messages.find(message => message.id === p.permission.sourceMessageId);
+    if (!source || !source.rfcMessageId || fingerprint(source) !== p.permission.sourceMessageHash) throw new Error('recipient_permission_unproven');
+    const saved = await threads.getReplyDraft(command.accountId, draft.id);
+    if (!saved || saved.stale) throw new Error('approval_not_current');
+    if (fingerprint(saved.draft) !== fingerprint(draft)) await threads.saveReplyDraft(draft, p.expectedRemoteDraftRevision);
+    const policy = new DynamoDispatchRepository(store.options, this.input.authorization);
+    const message = { commandId: p.intentCommandId, from: draft.sender, to: draft.recipient, subject: draft.subject, body: draft.body,
+      threadId: draft.threadId, inReplyTo: source.rfcMessageId, references: [...new Set([...source.references, source.rfcMessageId])] };
+    const intent: DispatchIntent = { commandId: p.intentCommandId, kind: 'standalone_reply', action: { actionId: p.actionId, workspaceId: command.workspaceId,
+      accountId: command.accountId, expectedAuthorityGeneration: command.expectedAuthorityGeneration, approvalId: p.approvalId,
+      contentHash: fingerprint(message), targetHash: fingerprint({ sender: draft.sender, recipient: draft.recipient, threadId: draft.threadId }) },
+      draftId: draft.id, draftRevision: draft.revision, pairingId, mailboxSubject: draft.mailboxSubject, frozenMessage: message, binding: p.binding };
+    const permission = { ...p.permission, accountId: command.accountId, recipient: draft.recipient, sender: draft.sender, threadId: draft.threadId, recordedAt: at };
+    const approval = { id: p.approvalId, commandId: p.intentCommandId, intentHash: fingerprint(intent), draft, permissionEvidenceId: permission.id, approvedAt: at, expiresAt: p.expiresAt };
+    const immutable = async (key: string, value: unknown, admit: () => Promise<void>) => {
+      const previous = await store.get(key);
+      if (await store.get(`REVOKED#${key}`)) throw new Error('approval_revoked');
+      if (previous) { if (fingerprint(previous.data) !== fingerprint(value)) throw new Error('approval_fingerprint_conflict'); }
+      else await admit();
+    };
+    await immutable(dispatchPermissionKey(command.accountId, permission.id), permission, () => policy.admitPermission(permission));
+    await immutable(dispatchApprovalKey(approval.id), approval, () => policy.admitApproval(approval));
+    await immutable(dispatchIntentKey(intent.commandId), intent, () => policy.admitIntent(intent));
+    const execution = createExecutionRepository(store.options);
+    if (!await execution.readDispatch(command.accountId, p.actionId)) await execution.prepareAction({ ...intent.action, expectedVersion: command.expectedVersion });
+    const keys = [dispatchPermissionKey(command.accountId, permission.id), dispatchApprovalKey(approval.id), dispatchIntentKey(intent.commandId),
+      `MAIL_DRAFT#${keyPart(command.accountId)}#${keyPart(draft.id)}`, mailThreadKey(command.accountId, draft.threadId)];
+    return Promise.all(keys.map(async key => {
+      const row = await store.get(key); if (!row) throw new Error('approval_evidence_missing');
+      return store.check(key, row.rev);
+    }));
+  }
+}

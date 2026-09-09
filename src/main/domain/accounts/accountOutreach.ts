@@ -27,7 +27,7 @@ export type AccountRoutePolicyEvidence = Pick<PhonePolicy, 'contact' | 'jurisdic
 export interface AccountRoutePolicyPort {
   read(snapshot: AccountEvidenceSnapshot, route: AccountRoute): AccountRoutePolicyEvidence | null;
 }
-function legacyRouteSuppression(database: AppDatabase, route: AccountRoute, at: string) {
+export function legacyRouteSuppression(database: AppDatabase, route: AccountRoute, at: string) {
   const raw = database.raw;
   const handle = !!raw.prepare('SELECT 1 FROM opt_out_handles WHERE kind=? AND normalized_value=? LIMIT 1').get(route.channel, route.value);
   const person = !!raw.prepare(`SELECT 1 FROM persons p WHERE (p.opted_out=1 OR p.deleted_at IS NOT NULL

@@ -7,7 +7,7 @@ describe('C1 encrypted migration', () => {
     const f = await createPmFixture();
     try {
       f.repo.create({ commandId: randomUUID(), name: 'Fictional PM', domain: null });
-      expect(f.db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: 22 });
+      expect(f.db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: 23 });
       expect(f.db.raw.prepare('SELECT * FROM delegated_authorities').all()).toEqual([]);
       expect(f.db.raw.prepare('SELECT * FROM persons ORDER BY id').all()).toEqual(f.historicalPersons);
     } finally { f.close(); }
@@ -223,7 +223,7 @@ it('admits research evidence and receipts in the same event transaction, rejecti
   } finally { f.close(); }
 });
 
-import { createMigrationRunner, migrateToLatest, productionMigrations } from '../../src/main/db/migrate';
+import { createMigrationRunner, productionMigrations } from '../../src/main/db/migrate';
 import { seedProspect, insertOpenCycleWithAction } from '../fixtures/domainRows';
 it('preserves genuine historical20 unknown email sends and all nonempty historical business tables through21 then22 and reopen', async () => {
   const temp = createTempDatabase(); const key = createTestWorkspaceKey(); const db = openDatabase({ path: temp.path, key });
@@ -242,7 +242,7 @@ it('preserves genuine historical20 unknown email sends and all nonempty historic
     expect(await createMigrationRunner(productionMigrations.slice(0, 21))(db, options)).toEqual({ fromVersion: 20, toVersion: 21, appliedMigrationIds: ['0021DelegatedWork'] });
     const historical21Tables = (db.raw.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('app_meta','kysely_migration','kysely_migration_lock') ORDER BY name").all() as { name: string }[]).map(row => row.name);
     const historical21Rows = historical21Tables.map(table => db.raw.prepare(`SELECT * FROM "${table}"`).all());
-    expect(await migrateToLatest(db, options)).toEqual({ fromVersion: 21, toVersion: 22, appliedMigrationIds: ['0022MailPersistence'] });
+    expect(await createMigrationRunner(productionMigrations.slice(0, 22))(db, options)).toEqual({ fromVersion: 21, toVersion: 22, appliedMigrationIds: ['0022MailPersistence'] });
     expect(historical21Tables.map(table => db.raw.prepare(`SELECT * FROM "${table}"`).all())).toEqual(historical21Rows);
     expect(tables.map(table => db.raw.prepare(`SELECT * FROM "${table}"`).all())).toEqual(before);
     expect(db.raw.prepare('SELECT * FROM delegated_authorities').all()).toEqual([]);

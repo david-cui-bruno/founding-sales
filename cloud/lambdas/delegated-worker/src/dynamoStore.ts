@@ -95,7 +95,7 @@ export class DynamoStore {
     const high = integer.parse(head ? head.data.sequence : 0);
     for (let sequence = 1; sequence <= high; sequence++) await this.publish(sequence);
   }
-  async eventsAfter(cursor: string | null): Promise<EventPage> {
+  async eventsAfter(cursor: string | null): Promise<EventPage & { headCursor: string | null; complete: boolean }> {
     let after = 0;
     if (cursor !== null) {
       const parts = /^([a-f0-9]{64}):(\d+)$/.exec(cursor);
@@ -114,6 +114,7 @@ export class DynamoStore {
       if (outbox.sequence !== seq) throw new Error('event_gap');
       events.push(outbox.event); after = seq;
     }
-    return { events, nextCursor: after === 0 ? null : `${accountFingerprint(this.options.workspaceId)}:${after}` };
+    const encodeCursor = (sequence: number) => sequence === 0 ? null : `${accountFingerprint(this.options.workspaceId)}:${sequence}`;
+    return { events, nextCursor: encodeCursor(after), headCursor: encodeCursor(high), complete: after === high };
   }
 }

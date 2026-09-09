@@ -1,3 +1,4 @@
+import { assertLocalEmailAuthority } from '../delegation/executionRouter';
 import { randomUUID } from 'node:crypto';
 import type { AppDatabase } from '../db/database';
 import type { FounderSalesDomain } from '../domain/founderSalesDomain';
@@ -13,7 +14,8 @@ export type EmailDatabaseGate = {
   withDatabase<T>(operation:(database:AppDatabase)=>T|Promise<T>):Promise<T>;
   withDomain<T>(operation:(domain:FounderSalesDomain)=>T|Promise<T>):Promise<T>;
 };
-export function createEmailService(options:{databaseGate:EmailDatabaseGate;providers:OutreachProviders;now?:()=>string;id?:()=>string}):OutreachApi & {dispose():void;invalidate(locked?:boolean):void} {
+export function createEmailService(options:{databaseGate:EmailDatabaseGate;providers:OutreachProviders;expectedWorkspaceId?:string;now?:()=>string;id?:()=>string}):OutreachApi & {dispose():void;invalidate(locked?:boolean):void} {
+  const expectedWorkspaceId=options.expectedWorkspaceId;
   const gate=options.databaseGate, providers=options.providers, now=options.now??(()=>new Date().toISOString()), id=options.id??randomUUID;
   let closed=false,locked=false,epoch=0,initialized:Promise<void>|undefined;
   const controllers=new Set<AbortController>();
@@ -123,6 +125,7 @@ export function createEmailService(options:{databaseGate:EmailDatabaseGate;provi
           const draft=repo.get(request.draftId);
           if(draft.revision!==request.expectedRevision||draft.status!=='draft'||draft.supersededAt!==null)throw new Error('email_draft_changed');
           if(draft.footer!==emailFooter(setup)||draft.accountEmail!==prepared.accountEmail||setup.accountEmail!==prepared.accountEmail)throw new Error('email_sender_changed');
+          assertLocalEmailAuthority(db,{personId:draft.personId,recipient:draft.recipient,expectedWorkspaceId});
           if(!draft.subject.trim()||!draft.body.trim())throw new Error('email_content_required');
           const createdAt=now(),cycle=authorizeEmail(db,services,draft,createdAt);
           const policy=services.events.appendConsentPolicyRecord({personId:draft.personId,policyKind:'outbound',policyVersion:'fss-email-explicit-v1',
