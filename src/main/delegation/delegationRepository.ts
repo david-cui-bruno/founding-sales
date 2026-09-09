@@ -98,10 +98,11 @@ export class DelegationRepository {
       const command = this.pendingCommands().find(value => value.commandId === commandId);
       if (!command) return false;
       const owner = this.owner(command.accountId);
+      if(command.kind==='complete-manual'){const handoff=this.getManualHandoff(command.payload.handoffId);return !!owner&&owner.owner==='worker'&&['active','paused','revoked'].includes(owner.state)&&command.expectedAuthorityGeneration<=owner.generation&&command.expectedVersion<=owner.aggregate_version&&!!handoff&&handoff.consumedAt!==null&&handoff.accountId===command.accountId&&handoff.authorityGeneration<=command.expectedAuthorityGeneration;}
       if (!owner || owner.generation !== command.expectedAuthorityGeneration || owner.aggregate_version !== command.expectedVersion) return false;
       if(command.kind==='bootstrap-selected-account')return owner.owner==='local'&&owner.state==='local'&&owner.generation===0&&owner.aggregate_version===0;
-      if (command.kind !== 'delegate') return owner.owner === 'worker' && (command.kind === 'pause' || command.kind === 'revoke' || command.kind === 'complete-manual'
-        ? (command.kind==='complete-manual'?['active','paused','revoked']:['active','paused']).includes(owner.state) : owner.state === 'active' && !this.hasPendingStop(command.accountId));
+      if (command.kind !== 'delegate') return owner.owner === 'worker' && (command.kind === 'pause' || command.kind === 'revoke'
+        ? ['active','paused'].includes(owner.state) : owner.state === 'active' && !this.hasPendingStop(command.accountId));
       if (owner.owner !== 'local' || owner.state !== 'delegating') return false;
       const accountPending = this.raw.prepare(`SELECT 1 FROM pm_account_outbound_intents i WHERE i.account_id=? AND i.channel='email'
         AND NOT EXISTS(SELECT 1 FROM pm_account_outbound_results r WHERE r.command_id=i.command_id AND r.outcome IN('accepted','provider_accepted','not_sent','cancelled')) LIMIT 1`).get(command.accountId);
@@ -298,8 +299,7 @@ export class DelegationRepository {
       if (queued) {
         const command = delegationCommandSchema.parse(JSON.parse(queued.command_json));
         if (!['manual-outcome','complete-manual'].includes(command.kind) || command.workspaceId !== event.workspaceId || command.accountId !== event.accountId
-          || command.expectedAuthorityGeneration !== (command.kind==='complete-manual'?owner.generation:event.authorityGeneration) || command.expectedVersion + 1 !== event.aggregateVersion
-          || command.expectedVersion !== owner.aggregate_version || accountFingerprint(command.kind === 'complete-manual' ? command.payload.outcome : command.payload) !== accountFingerprint(event.payload)) {
+          || (command.kind==='complete-manual'?command.expectedAuthorityGeneration>owner.generation||command.expectedVersion>owner.aggregate_version||event.aggregateVersion!==owner.aggregate_version+1:command.expectedAuthorityGeneration!==event.authorityGeneration||command.expectedVersion+1!==event.aggregateVersion||command.expectedVersion!==owner.aggregate_version) || accountFingerprint(command.kind === 'complete-manual' ? command.payload.outcome : command.payload) !== accountFingerprint(event.payload)) {
           throw new Error('Manual acknowledgment command correspondence conflict');
         }
       }

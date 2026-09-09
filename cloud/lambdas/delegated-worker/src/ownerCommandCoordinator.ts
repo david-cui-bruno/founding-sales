@@ -86,7 +86,7 @@ export class OwnerCommandCoordinator {
     if (!authorityRow) throw new Error('authority_missing');
     const current = authorityRecordSchema.parse(authorityRow.data);
     if (current.authority.accountId !== command.accountId || current.authority.owner !== 'worker' || (current.authority.state !== 'active' && !((command.kind === 'configure-owner' && current.authority.state === 'paused') || (command.kind==='complete-manual' && ['paused','revoked'].includes(current.authority.state))))
-      || current.authority.generation !== command.expectedAuthorityGeneration || current.version !== command.expectedVersion) throw new Error('stale_authority');
+      || (command.kind==='complete-manual' ? command.expectedAuthorityGeneration>current.authority.generation||command.expectedVersion>current.version : current.authority.generation !== command.expectedAuthorityGeneration || current.version !== command.expectedVersion)) throw new Error('stale_authority');
     const claimKey = `OWNER_COMMAND_CLAIM#${keyPart(command.commandId)}`;
     let claim = await store.get<{ fingerprint: string; pairingId: string; at: string }>(claimKey);
     if (!claim) {
@@ -226,20 +226,22 @@ export class OwnerCommandCoordinator {
     const handoff=manualHandoffSchema.parse(row.data.handoff); const outcome=p.outcome;
     if(row.data.accountId!==command.accountId||row.data.pairingId!==pairingId||row.data.generation>command.expectedAuthorityGeneration
       ||handoff.targetHash!==p.targetHash||handoff.actionId!==outcome.actionId||handoff.channel!==outcome.channel||outcome.observedAt<row.data.issuedAt||outcome.observedAt>store.now()) throw new Error('manual_outcome_identity');
-    if(row.data.lastOutcome && (outcome.observedAt<row.data.lastOutcome.observedAt || row.data.lastOutcome.outcome==='opt_out' || (row.data.lastOutcome.outcome==='unknown' ? outcome.outcome==='unknown' : !['no_reply','reply','opt_out'].includes(outcome.outcome)))) throw new Error('manual_outcome_conflict');
     const repo=new WorkerCampaignRepository(store.options);
     const reservation=campaignReservationSchema.parse((await repo.required(campaignReservationKey(command.accountId,outcome.actionId))).data);
     if(reservation.input.authorityGeneration!==row.data.generation)throw Error('manual_original_generation_conflict');
     const enrollment=enrollmentSchema.parse((await repo.required(campaignEnrollmentKey(handoff.campaign.enrollmentId))).data);
     const actual=outcome.channel==='call' ? ['connected','no_answer','voicemail','busy','wrong_number'].includes(outcome.outcome) : outcome.outcome==='human_reported_sent';
-    const state=actual||row.data.lastOutcome && reservation.state==='sent' ? 'human_reported_sent' as const : ['cancelled','not_sent','not_called'].includes(outcome.outcome)?'cancelled' as const:'unknown' as const;
+    const definitiveNotSent=['not_sent','not_called'].includes(outcome.outcome);
+    const contradiction=reservation.state==='cancelled'&&actual||reservation.state==='sent'&&definitiveNotSent;
+    if(row.data.lastOutcome && (Date.parse(outcome.observedAt)<Date.parse(row.data.lastOutcome.observedAt) || row.data.lastOutcome.outcome==='opt_out' || !contradiction && (['unknown','cancelled'].includes(row.data.lastOutcome.outcome) ? outcome.outcome===row.data.lastOutcome.outcome : !['no_reply','reply','opt_out'].includes(outcome.outcome)))) throw new Error('manual_outcome_conflict');
+    const state=definitiveNotSent?'cancelled' as const:actual||row.data.lastOutcome && reservation.state==='sent' ? 'human_reported_sent' as const : outcome.outcome==='cancelled'?'cancelled' as const:'unknown' as const;
     const plan=await repo.planCommand({commandId:command.commandId,accountId:command.accountId,payload:{kind:'campaign.outcome',enrollmentId:enrollment.id,expectedEnrollmentVersion:enrollment.version,
       evidence:{enrollmentId:reservation.input.enrollmentId,accountId:reservation.input.accountId,campaignVersionId:reservation.campaignVersionId,actionId:outcome.actionId,stepId:reservation.input.stepId,routeId:reservation.input.selectedRouteId,routeVersion:reservation.routeVersion,
         contextRevision:reservation.numericContextRevision,executionContextId:reservation.input.contextRevision,channel:outcome.channel,
         observedAt:outcome.observedAt,outcome:outcome.outcome,observation:outcome.outcome==='no_reply'?'no_reply':outcome.outcome==='reply'?'replied':'unknown',source:'human',state}}});
     const registryKey=intakeRegistryKey(command.accountId); const registryRow=await store.get<unknown>(registryKey);
     if(!registryRow) throw new Error('manual_intake_missing'); const registry=intakeRegistrySchema.parse(registryRow.data);
-    const items=[...plan.items,store.put(key,{...row.data,lastOutcome:outcome},row.rev),store.put(registryKey,{...registry,manualDependencies:registry.manualDependencies.map(dependency=>dependency.actionId===outcome.actionId?{commandId:command.commandId,actionId:outcome.actionId,channel:outcome.channel,outcome:outcome.outcome}:dependency)},registryRow.rev)];
+    const items=[...plan.items,store.put(key,{...row.data,lastOutcome:plan.payload.evidence?.conflict?row.data.lastOutcome:outcome},row.rev),store.put(registryKey,{...registry,manualDependencies:registry.manualDependencies.map(dependency=>dependency.actionId===outcome.actionId?{commandId:command.commandId,actionId:outcome.actionId,channel:outcome.channel,outcome:plan.payload.evidence?.conflict||outcome.outcome==='cancelled'?'unknown':outcome.outcome}:dependency)},registryRow.rev)];
     if(outcome.outcome==='opt_out' && !await store.get(mailSuppressionKey(command.accountId))) items.push(store.put(mailSuppressionKey(command.accountId),{accountId:command.accountId,observedAt:outcome.observedAt,evidence:outcome.evidenceRef},null));
     return {items,campaign:plan.payload,generation:row.data.generation};
   }
