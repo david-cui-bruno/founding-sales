@@ -245,7 +245,8 @@ describe('AppleSpikePanel', () => {
     fireEvent.change(screen.getByLabelText('Type call consent phrase'), {
       target: { value: 'I CONSENT TO THIS TEST CALL' },
     });
-    expect(button.hasAttribute('disabled')).toBe(false);
+    // Rendering the region precedes the asynchronous evidence subscription.
+    await waitFor(() => expect(button.hasAttribute('disabled')).toBe(false));
     act(() => {
       button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
