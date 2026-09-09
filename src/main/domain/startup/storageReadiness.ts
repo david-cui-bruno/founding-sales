@@ -7,7 +7,7 @@ import { inspectDatabaseEncryption } from '../../db/databaseEncryption';
 import { DomainStartupFatalError } from './domainStartupTypes';
 
 export type DomainStorageReadiness = Readonly<{
-  schemaVersion: 23;
+  schemaVersion: 24;
   encrypted: true;
   cipherVersion: string;
   ftsAvailable: true;
@@ -24,12 +24,13 @@ export type DomainSchemaManifest = Readonly<{
 }>;
 
 /**
- * The canonical load-bearing schema-23 manifest. Reads the live catalog from
+ * The canonical load-bearing schema-24 manifest. Reads the live catalog from
  * sqlite_master with binary-name ordering; a missing, renamed, extra, or
  * malformed load-bearing object is fatal before composition.
  */
 export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
   tables: Object.freeze([
+    'account_route_policy_import_reviews',
     'activities',
     'activity_amendments',
     'app_meta',
@@ -61,6 +62,7 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'delegated_meetings',
     'delegated_reconciliation',
     'delegated_reply_drafts',
+    'delegated_requested_followup_drafts',
     'delegated_threads',
     'delegated_transport_state',
     'discovery_approved_budgets',
@@ -181,6 +183,8 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'trigger_events_source_event_unique',
   ]),
   triggers: Object.freeze([
+    'account_route_policy_import_reviews_no_delete',
+    'account_route_policy_import_reviews_no_update',
     'campaign_approvals_no_delete',
     'campaign_approvals_no_update',
     'campaign_command_receipts_no_delete',
@@ -368,8 +372,8 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'workflow_transition_receipts_no_delete',
     'workflow_transition_receipts_no_update',
   ]),
-  // Generated from actual production migrations through 0023.
-  catalogSha256: '53f24bedc785b09d913ee35d89fa7d07ebafa0ebea493efba1660234cc8fb89a',
+  // Generated from actual production migrations through 0024.
+  catalogSha256: '8d85ca6f37fc541761f7135d7de32a66802ca07ff46185d6004d5ce70bcc97c0',
 });
 
 export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
@@ -393,7 +397,7 @@ export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
   '0018PlaybookDueActions',
   '0019EmailDrafts',
   '0020PmAccounts',
-  '0021DelegatedWork', '0022MailPersistence', '0023Campaigns',
+  '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews',
 ] as const);
 
 const appMetaSchema = z.object({
@@ -407,7 +411,7 @@ const appMetaSchema = z.object({
 export function assertDomainStorageReady(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
-  expectedSchemaVersion: 23;
+  expectedSchemaVersion: 24;
   expectedManifest: DomainSchemaManifest;
 }): DomainStorageReadiness {
   const { database } = input;
@@ -430,7 +434,7 @@ export function assertDomainStorageReady(input: {
   const metadata = appMetaSchema.safeParse(metadataRow);
   if (!metadata.success || metadata.data.schema_version !== input.expectedSchemaVersion) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace schema version is not exactly 23.',
+      'schema_not_ready', 'The workspace schema version is not exactly 24.',
     );
   }
 
@@ -449,7 +453,7 @@ export function assertDomainStorageReady(input: {
     DOMAIN_MIGRATION_LEDGER,
   )) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace migration ledger is not exactly schema 23.',
+      'schema_not_ready', 'The workspace migration ledger is not exactly schema 24.',
     );
   }
 
@@ -524,7 +528,7 @@ export function assertDomainStorageReady(input: {
   }
 
   return Object.freeze({
-    schemaVersion: 23 as const,
+    schemaVersion: 24 as const,
     encrypted: true as const,
     cipherVersion: encryption.cipherVersion ?? 'unknown',
     ftsAvailable: true as const,

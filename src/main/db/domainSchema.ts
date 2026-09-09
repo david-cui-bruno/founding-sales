@@ -767,3 +767,9 @@ export type CampaignTables = {
   delegated_manual_handoffs: { workspace_id: string; account_id: string; handoff_id: string; action_id: string; authority_generation: number; target_hash: string; content_hash: string; context_revision: string; channel: string; route_id: string; route_version: number; expires_at: string; event_id: string; consumed_at: string | null; outcome_command_id: string | null };
   delegated_local_configuration: { workspace_id: string; pairing_id: string; revision: number; configuration_json: string; updated_at: string };
 };
+
+/** Additive24 threadless drafts and immutable local-owner artifact reviews. */
+export type RequestedFollowupAndPolicyReviewTables = {
+  delegated_requested_followup_drafts: { workspace_id: string; account_id: string; id: string; revision: number; context_revision: string; draft_json: string; approval_json: string | null; updated_at: string };
+  account_route_policy_import_reviews: { id: string; workspace_id: string; artifact_sha256: string; artifact_bytes: Buffer; row_plans_json: string; row_count: number; review_reason: string; reviewed_at: string; reviewer_kind: 'local_owner_review'; review_policy_version: 'account_route_policy_import_review_v1' };
+};

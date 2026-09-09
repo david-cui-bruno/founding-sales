@@ -16,7 +16,7 @@ import { parseRecoveryKeyMaterial } from '../../src/main/security/recoveryKey';
 import type { WorkspaceKey } from '../../src/main/security/workspaceKeyTypes';
 
 export type FixtureProfile = 'bootstrap' | 'current' | 'historical' | 'through16';
-type FixtureSchema = 15 | 16 | 17 | 19 | 20 | 21 | 22 | 23;
+type FixtureSchema = 15 | 16 | 17 | 19 | 20 | 21 | 22 | 23 | 24;
 type BackupRow = { id: string; backup_basename: string; kind: string; schema_version: number; sha256: string; size_bytes: number; created_at: string; verified_at: string };
 type DrillRow = { performed_at: string; backup_receipt_id: string; backup_sha256: string };
 export type FixtureInspection = {
@@ -37,6 +37,128 @@ const absent = (path: string) => {
   fail();
 };
 const noSidecars = (path: string) => { for (const suffix of ['-wal', '-shm', '-journal']) absent(path + suffix); };
+// Pinned from genuine encrypted23 before additive24 (118 tables,29 indexes,186 triggers).
+const SCHEMA23_CATALOG = '53f24bedc785b09d913ee35d89fa7d07ebafa0ebea493efba1660234cc8fb89a';
+const SCHEMA23_TABLES = Object.freeze([
+  'activities',
+  'activity_amendments',
+  'app_meta',
+  'backup_receipts',
+  'cadence_action_components',
+  'cadence_definitions',
+  'cadence_enrollments',
+  'cadence_steps',
+  'campaign_approvals',
+  'campaign_caps',
+  'campaign_command_receipts',
+  'campaign_enrollments',
+  'campaign_step_receipts',
+  'campaign_versions',
+  'cloud_entity_links',
+  'consent_policy_records',
+  'contact_compliance_audit_events',
+  'cycle_reactivation_receipts',
+  'delegated_action_outcomes',
+  'delegated_applied_events',
+  'delegated_approvals',
+  'delegated_authorities',
+  'delegated_commands',
+  'delegated_event_cursors',
+  'delegated_local_configuration',
+  'delegated_mail_cursors',
+  'delegated_manual_handoffs',
+  'delegated_manual_outcomes',
+  'delegated_meetings',
+  'delegated_reconciliation',
+  'delegated_reply_drafts',
+  'delegated_threads',
+  'delegated_transport_state',
+  'discovery_approved_budgets',
+  'discovery_assessments',
+  'discovery_current',
+  'discovery_overrides',
+  'discovery_preparations',
+  'discovery_receipts',
+  'discovery_reservations',
+  'discovery_scan_state',
+  'email_drafts',
+  'email_send_intents',
+  'email_send_results',
+  'foundation_fts_probe',
+  'foundation_fts_probe_config',
+  'foundation_fts_probe_content',
+  'foundation_fts_probe_data',
+  'foundation_fts_probe_docsize',
+  'foundation_fts_probe_idx',
+  'identity_repair_events',
+  'jobs',
+  'kysely_migration',
+  'kysely_migration_lock',
+  'learning_evidence',
+  'learnings',
+  'lifecycle_review_items',
+  'manual_linkedin_draft_approvals',
+  'manual_linkedin_drafts',
+  'meeting_first_call_settings',
+  'next_actions',
+  'opt_out_closure_receipt_handles',
+  'opt_out_closure_receipts',
+  'opt_out_handles',
+  'opt_out_tombstones',
+  'organization_aliases',
+  'organizations',
+  'outbound_jurisdiction_audit_events',
+  'outbound_jurisdiction_clearances',
+  'person_contact_methods',
+  'person_outbound_jurisdictions',
+  'persons',
+  'pm_account_claim_evidence',
+  'pm_account_claims',
+  'pm_account_commands',
+  'pm_account_link_evidence',
+  'pm_account_links',
+  'pm_account_outbound_intents',
+  'pm_account_outbound_results',
+  'pm_account_research_jobs',
+  'pm_account_route_evidence',
+  'pm_account_route_policy_evidence',
+  'pm_account_route_policy_receipts',
+  'pm_account_routes',
+  'pm_account_sources',
+  'pm_account_suppression_tombstones',
+  'pm_accounts',
+  'pm_handle_suppression_tombstones',
+  'prioritization_evaluations',
+  'prioritization_preference_events',
+  'prioritization_rule_versions',
+  'priority_overrides',
+  'properties',
+  'prospect_organizations',
+  'prospect_priority_projection',
+  'prospect_properties',
+  'prospects',
+  'reactivation_rules',
+  'recovery_readiness',
+  'restore_drill_receipts',
+  'review_position',
+  'sales_cycle_close_readiness',
+  'sales_cycles',
+  'source_events',
+  'source_intake_receipts',
+  'sourcing_cursor',
+  'sourcing_enrichment_requests',
+  'sourcing_outcome_outbox',
+  'sourcing_processed_files',
+  'sourcing_suppression_outbox',
+  'stage_events',
+  'transcript_utterances',
+  'transcripts',
+  'trigger_events',
+  'won_terms',
+  'workflow_transition_receipts',
+  'workspace_settings',
+  'workspace_workflow_state',
+]);
 const SCHEMA15_CATALOG = 'd888ea664cf61ff8e5404f3542f1d615d1c9b08ecf77612690236fd192e535a8';
 const SCHEMA15_TABLES = Object.freeze([
   'activities',
@@ -680,7 +802,7 @@ const SCHEMA19_TABLES = Object.freeze([
 const metadataTables = new Set(['app_meta', 'kysely_migration', 'kysely_migration_lock', 'backup_receipts', 'restore_drill_receipts', 'recovery_readiness']);
 
 function inspectRows(raw: RawDatabase, expected: FixtureSchema, sourceSha256: string, through16: boolean): FixtureInspection {
-  if (expected !== 15 && expected !== 16 && expected !== 17 && expected !== 19 && expected !== 20 && expected !== 21 && expected !== 22 && expected !== 23) fail();
+  if (expected !== 15 && expected !== 16 && expected !== 17 && expected !== 19 && expected !== 20 && expected !== 21 && expected !== 22 && expected !== 23 && expected !== 24) fail();
   if (raw.pragma('integrity_check', { simple: true }) !== 'ok' || (raw.pragma('foreign_key_check') as unknown[]).length) fail();
   const meta = raw.prepare('SELECT singleton, schema_version FROM app_meta').all() as { singleton: number; schema_version: number }[];
   if (meta.length !== 1 || meta[0].singleton !== 1 || meta[0].schema_version !== expected) fail();
@@ -692,11 +814,11 @@ function inspectRows(raw: RawDatabase, expected: FixtureSchema, sourceSha256: st
   const fingerprint = catalog.map(row => [row.type, row.name, (row.sql ?? '').replace(/\s+/g, ' ').trim()])
     .sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
   const catalogSha256 = hash(JSON.stringify(fingerprint));
-  if (catalogSha256 !== (expected === 15 ? SCHEMA15_CATALOG : expected === 16 ? SCHEMA16_CATALOG : expected === 17 ? SCHEMA17_CATALOG : expected === 19 ? SCHEMA19_CATALOG : expected === 20 ? SCHEMA20_CATALOG : expected === 21 ? SCHEMA21_CATALOG : expected === 22 ? SCHEMA22_CATALOG : DOMAIN_SCHEMA_MANIFEST.catalogSha256)) fail();
+  if (catalogSha256 !== (expected === 15 ? SCHEMA15_CATALOG : expected === 16 ? SCHEMA16_CATALOG : expected === 17 ? SCHEMA17_CATALOG : expected === 19 ? SCHEMA19_CATALOG : expected === 20 ? SCHEMA20_CATALOG : expected === 21 ? SCHEMA21_CATALOG : expected === 22 ? SCHEMA22_CATALOG : expected === 23 ? SCHEMA23_CATALOG : DOMAIN_SCHEMA_MANIFEST.catalogSha256)) fail();
   // Catalog-validated, fixed tables only. Canonical row multisets, no business rows
   // escape. This is a same-schema digest, not a cross-migration equivalence claim.
   const business = createHash('sha256');
-  for (const table of expected === 15 ? SCHEMA15_TABLES : expected === 16 ? SCHEMA16_TABLES : expected === 17 ? SCHEMA17_TABLES : expected === 19 ? SCHEMA19_TABLES : expected === 20 ? SCHEMA20_TABLES : expected === 21 ? SCHEMA21_TABLES : expected === 22 ? SCHEMA22_TABLES : DOMAIN_SCHEMA_MANIFEST.tables) {
+  for (const table of expected === 15 ? SCHEMA15_TABLES : expected === 16 ? SCHEMA16_TABLES : expected === 17 ? SCHEMA17_TABLES : expected === 19 ? SCHEMA19_TABLES : expected === 20 ? SCHEMA20_TABLES : expected === 21 ? SCHEMA21_TABLES : expected === 22 ? SCHEMA22_TABLES : expected === 23 ? SCHEMA23_TABLES : DOMAIN_SCHEMA_MANIFEST.tables) {
     if (metadataTables.has(table) || table.startsWith('foundation_fts_probe')) continue;
     const rows = raw.prepare(`SELECT * FROM "${table}"`).raw().all().map(row => JSON.stringify(row)).sort();
     business.update(JSON.stringify([table, rows]));
@@ -909,7 +1031,7 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
         let database: AppDatabase | undefined;
         try {
           if (!same(envelopeCapture.identity, fs.fstatSync(envelope.descriptor)) || envelopeCapture.sha256 !== envelope.sha256) fail();
-          inspect('bootstrap', databasePath('bootstrap'), key, 23); // Proves supplied key matches bootstrap DB, NOT safeStorage.
+          inspect('bootstrap', databasePath('bootstrap'), key, 24); // Proves supplied key matches bootstrap DB, NOT safeStorage.
           envelope.assertUnchanged();
           makeDirectory(paths.historical); makeDirectory(join(paths.historical, 'backups'));
           fs.writeFileSync(envelopePath('historical'), envelope.bytes, { flag: 'wx', mode: 0o600 });
@@ -935,7 +1057,7 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
         let database: AppDatabase | undefined;
         try {
           if (!same(envelopeCapture.identity, fs.fstatSync(envelope.descriptor)) || envelopeCapture.sha256 !== envelope.sha256) fail();
-          inspect('bootstrap', databasePath('bootstrap'), key, 23); // Proves supplied key matches bootstrap DB, NOT safeStorage.
+          inspect('bootstrap', databasePath('bootstrap'), key, 24); // Proves supplied key matches bootstrap DB, NOT safeStorage.
           envelope.assertUnchanged();
           makeDirectory(paths.through16); makeDirectory(join(paths.through16, 'backups'));
           fs.writeFileSync(envelopePath('through16'), envelope.bytes, { flag: 'wx', mode: 0o600 });
@@ -963,14 +1085,14 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
     createManualBackup(material: string) {
       return withMaterial(material, async key => {
         const path = databasePath('current');
-        const before = inspect('current', path, key, 23);
+        const before = inspect('current', path, key, 24);
         if (before.aggregateCounts.people < 1) fail();
         const envelope = retain(envelopePath('current'), 64 * 1024);
         let database: AppDatabase | undefined; let service: BackupService | undefined;
         try {
           assertDirectory(join(paths.current, 'backups'));
           database = openDatabase({ path, key });
-          assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 23, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
+          assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 24, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
           const current = database;
           service = new BackupService({ databaseGate: { withDatabase: async operation => operation(current) },
             backupDirectory: join(paths.current, 'backups'), loadWorkspaceKey: async () => parseRecoveryKeyMaterial(material),
@@ -978,8 +1100,8 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
           const backup = await service.createBackup('manual');
           await service.shutdown(); service = undefined;
           closeDatabase(database); database = undefined;
-          const inspection = inspect('current', backupPath('current', backup.basename), key, 23);
-          const after = inspect('current', path, key, 23);
+          const inspection = inspect('current', backupPath('current', backup.basename), key, 24);
+          const after = inspect('current', path, key, 24);
           if (inspection.sourceSha256 !== backup.sha256 || inspection.businessSha256 !== before.businessSha256
             || after.businessSha256 !== before.businessSha256
             || !after.backupReceipts.some(row => row.backup_basename === backup.basename && row.sha256 === backup.sha256 && row.size_bytes === backup.sizeBytes)) fail();

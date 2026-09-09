@@ -80,6 +80,8 @@ const requiredIndexes = [
 ] as const;
 
 const requiredTriggers = [
+  'account_route_policy_import_reviews_no_delete',
+  'account_route_policy_import_reviews_no_update',
   'campaign_versions_no_delete',
   'campaign_versions_no_update',
   'campaign_approvals_no_delete',
@@ -301,14 +303,14 @@ function runDatabaseScenario(
       assert.equal(assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 23,
+        expectedSchemaVersion: 24,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
-      }).schemaVersion, 23);
+      }).schemaVersion, 24);
       assert.deepEqual(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
         ).get(),
-        { schema_version: 23 },
+        { schema_version: 24 },
       );
       assert.deepEqual(raw.prepare<[], { name: string }>(`
         SELECT name FROM kysely_migration ORDER BY timestamp, name
@@ -329,7 +331,7 @@ function runDatabaseScenario(
         '0014OutboundJurisdictionClearance',
         '0015RecoveryMetadata',
         '0016ContactPresentationEvidence', '0017DiscoveryAssessments',
-        '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns',
+        '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews',
       ]);
       assert.deepEqual(
         raw.prepare('PRAGMA table_info(person_contact_methods)').all().slice(19),
