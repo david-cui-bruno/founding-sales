@@ -27,7 +27,7 @@ export function createMailPoller(input: { authorization: Pick<RemoteGoogleAuthor
       return { complete: page.complete, suppressed: await input.store.isSuppressed(target.accountId), results };
     } catch (error) {
       // An ambiguous persistence error can leave pending, which is fail-closed.
-      await input.store.failPoll(target.accountId, target.mailboxSubject, attemptId).catch(() => undefined);
+      await input.store.failPoll(target.accountId, target.mailboxSubject, attemptId).catch((): void => undefined);
       throw error;
     }
   } };
