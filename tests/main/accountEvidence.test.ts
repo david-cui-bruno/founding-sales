@@ -4,7 +4,8 @@ import { closeDatabase, openDatabase } from '../../src/main/db/database';
 import { createTestWorkspaceKey } from '../fixtures/tempDatabase';
 import { describe, expect, it } from 'vitest';
 import { createPmFixture, PM_NOW } from '../fixtures/pmAccounts';
-import type { AccountEvidenceBatch } from '../../src/shared/contracts/accountContract';
+import { projectAccountEvidence } from '../../src/main/domain/accounts/accountEvidence';
+import type { AccountEvidenceBatch, AccountClaim } from '../../src/shared/contracts/accountContract';
 
 export function evidence(accountId: string, expectedVersion = 1): AccountEvidenceBatch {
   const id = randomUUID();
@@ -173,4 +174,20 @@ it('reads a snapshot inside a consumer transaction without permitting nested acc
       expect(() => f.repo.create({ commandId: randomUUID(), name: 'Nested', domain: null })).toThrow();
     }).immediate();
   } finally { f.close(); }
+});
+
+
+it('keeps portfolio unknown for prospect-stated counts without promoting their provenance', () => {
+  const account = { id: 'fictional-account', name: 'Example PM', domain: null as string | null, version: 1 };
+  const stated: AccountClaim = { kind: 'prospect_stated_problem', key: 'portfolio',
+    value: { count: 100, measure: 'units', scope: 'managed' }, evidenceIds: ['fictional-source'] };
+  const snapshot = projectAccountEvidence(account, [stated], []);
+  expect(snapshot.portfolio).toEqual([]);
+  expect(snapshot.unknowns).toContain('portfolio');
+  expect(snapshot.claims).toEqual([stated]);
+  expect(stated.kind).toBe('prospect_stated_problem');
+  const supported = projectAccountEvidence(account, [stated, { ...stated, kind: 'fact' }], []);
+  expect(supported.portfolio).toEqual([{ ...stated.value, evidenceIds: ['fictional-source'] }]);
+  expect(supported.unknowns).not.toContain('portfolio');
+  expect(supported.claims[0].kind).toBe('prospect_stated_problem');
 });

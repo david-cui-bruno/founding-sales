@@ -17,7 +17,8 @@ export function projectAccountEvidence(account: Account, claims: AccountClaim[],
   }
   const conflicts = [...counts].filter(([, values]) => values.size > 1).map(([key]) => key).sort();
   const unknowns = ['portfolio', 'residential_scope', 'operating_footprint', 'maintenance_workflow', 'technology', 'role', 'pain']
-    .filter(key => !claims.some(claim => claim.key === key && claim.kind !== 'hypothesis'));
+    .filter(key => key === 'portfolio' ? portfolio.length === 0
+      : !claims.some(claim => claim.key === key && claim.kind !== 'hypothesis'));
   const projection = { account, claims, routes, portfolio, unknowns, conflicts };
   return { ...projection, fingerprint: accountFingerprint(projection) };
 }
