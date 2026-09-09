@@ -36,7 +36,7 @@ export const delegationCommandSchema = z.discriminatedUnion('kind', [
 export type DelegationCommand = Readonly<z.infer<typeof delegationCommandSchema>>;
 const eventBase = { id, workspaceId: id, accountId: id, authorityGeneration: revision, aggregateVersion: revision.min(1) };
 export const workerEventSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ ...eventBase, kind: z.literal('manual.outcome'), payload: manualOutcomeSchema }),
+  z.strictObject({ ...eventBase, kind: z.literal('manual.outcome'), payload: manualOutcomeSchema, receipt: commandReceiptSchema }),
   z.strictObject({ ...eventBase, kind: z.literal('authority.changed'), payload: z.strictObject({ authority: authorityStateSchema, receipt: commandReceiptSchema }) }),
   z.strictObject({ ...eventBase, kind: z.literal('action.outcome'), payload: z.strictObject({ actionId: id, state: actionStateSchema,
     contentHash: hash, targetHash: hash, observedAt: accountInstantSchema, evidenceRef: id }) }),
@@ -47,6 +47,10 @@ export const workerEventSchema = z.discriminatedUnion('kind', [
   z.strictObject({ ...eventBase, authorityGeneration: z.literal(0), kind: z.literal('research.receipt'), payload: z.strictObject({ jobId: id,
     receiptCommandId: id.nullable(), status: z.enum(['completed', 'parked']), costMicros: revision.nullable(), observedAt: accountInstantSchema }) }),
 ]).superRefine((event, ctx) => {
+  if (event.kind === 'manual.outcome' && (event.receipt.status !== 'applied' || event.receipt.authorityGeneration !== event.authorityGeneration
+    || event.receipt.aggregateVersion !== event.aggregateVersion)) {
+    ctx.addIssue({ code: 'custom', message: 'Manual acknowledgment receipt mismatch' });
+  }
   if (event.kind === 'authority.changed' && (event.payload.authority.accountId !== event.accountId
     || event.payload.authority.generation !== event.authorityGeneration || event.payload.receipt.authorityGeneration !== event.authorityGeneration
     || event.payload.receipt.aggregateVersion !== event.aggregateVersion || event.payload.receipt.status === 'pending')) {

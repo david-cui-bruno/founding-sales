@@ -15,7 +15,7 @@ describe('C1 encrypted migration', () => {
 });
 
 import { DelegationRepository } from '../../src/main/delegation/delegationRepository';
-import { delegationCommandSchema, workerEventSchema, type DelegationCommand, type WorkerEvent } from '../../src/shared/contracts/delegationContract';
+import { delegationCommandSchema, workerEventSchema, type DelegationCommand, type WorkerEvent, type CommandReceipt } from '../../src/shared/contracts/delegationContract';
 import { closeDatabase, openDatabase } from '../../src/main/db/database';
 import { createTestWorkspaceKey, createTempDatabase } from '../fixtures/tempDatabase';
 const workspaceId = 'fictional-workspace';
@@ -187,7 +187,7 @@ it('applies pause/revoke acknowledgments and late old-generation outcomes withou
     expect(repo.authority(a.id)).toEqual({ accountId: a.id, owner: 'worker', generation: 2, state: 'revoked' });
     expect(() => repo.initializeLocalAuthority(a.id)).toThrow();
     const manual: WorkerEvent = { id: 'manual', workspaceId, accountId: a.id, authorityGeneration: 2, aggregateVersion: 6,
-      kind: 'manual.outcome', payload: { actionId: 'call', channel: 'call', outcome: 'no_answer', observedAt: PM_NOW, evidenceRef: 'human-report' } };
+      kind: 'manual.outcome', receipt: { commandId: 'manual-report', status: 'applied', authorityGeneration: 2, aggregateVersion: 6, reason: null }, payload: { actionId: 'call', channel: 'call', outcome: 'no_answer', observedAt: PM_NOW, evidenceRef: 'human-report' } };
     repo.applyWorkerEvent(manual);
     expect(JSON.parse((f.db.raw.prepare('SELECT outcome_json FROM delegated_manual_outcomes').get() as { outcome_json: string }).outcome_json)).toEqual(manual.payload);
     expect(workerEventSchema.safeParse({ ...manual, payload: { ...manual.payload, channel: 'linkedin' } }).success).toBe(false);
@@ -297,4 +297,74 @@ it('keeps account and normalized handle suppression tombstones permanently witho
  expect(f.db.raw.prepare('SELECT * FROM persons ORDER BY id').all()).toEqual(f.historicalPersons);
  closeDatabase(f.db);const reopened=openDatabase({path:f.db.path,key:createTestWorkspaceKey()});try{expect(reopened.raw.prepare('SELECT account_id FROM pm_account_suppression_tombstones').get()).toEqual({account_id:a.id});expect(reopened.raw.prepare('SELECT normalized_value FROM pm_handle_suppression_tombstones').get()).toEqual({normalized_value:'+12025550123'});}finally{closeDatabase(reopened);}
  }finally{f.close();}
+});
+
+it('keeps ordered synchronization moving through two distinct remote emergency pauses and a revoke', async () => {
+  const f = await createPmFixture();
+  try {
+    const a = f.repo.create({ commandId: randomUUID(), name: 'Emergency PM', domain: null });
+    const repo = local(f); repo.initializeLocalAuthority(a.id);
+    const command: DelegationCommand = { ...pause(a.id), kind: 'delegate', payload: { delegationId: 'grant', approvedAt: PM_NOW } };
+    repo.queueCommand(command); repo.applyWorkerEvent(changed(command));
+    const event: Extract<WorkerEvent, { kind: 'authority.changed' }> = { id: 'pause-A', workspaceId, accountId: a.id, aggregateVersion: 2, authorityGeneration: 1,
+      kind: 'authority.changed', payload: { authority: { accountId: a.id, owner: 'worker', generation: 1, state: 'paused' },
+        receipt: { commandId: 'emergency-A', status: 'applied', authorityGeneration: 1, aggregateVersion: 2, reason: null } } };
+    expect(repo.applyWorkerEvent(event)).toBe('applied');
+    const second = { ...event, id: 'pause-B', aggregateVersion: 3, payload: { ...event.payload, receipt: { ...event.payload.receipt, commandId: 'emergency-B', aggregateVersion: 3 } } };
+    expect(repo.applyWorkerEvent(second)).toBe('applied');
+    expect(repo.applyWorkerEvent(second)).toBe('duplicate');
+    expect(repo.applyWorkerEvent({ ...event, id: 'revoke-C', aggregateVersion: 4, authorityGeneration: 2, payload: {
+      authority: { accountId: a.id, owner: 'worker', generation: 2, state: 'revoked' },
+      receipt: { commandId: 'emergency-C', status: 'applied', authorityGeneration: 2, aggregateVersion: 4, reason: null } } })).toBe('applied');
+    expect(repo.authority(a.id)).toMatchObject({ owner: 'worker', generation: 2, state: 'revoked' });
+    expect(f.db.raw.prepare('SELECT aggregate_version FROM delegated_event_cursors').get()).toEqual({ aggregate_version: 4 });
+  } finally { f.close(); }
+});
+it('acknowledges a manual outcome command durably without rewriting its original pending replay receipt', async () => {
+  const f = await createPmFixture();
+  try {
+    const a = f.repo.create({ commandId: randomUUID(), name: 'Manual PM', domain: null });
+    const repo = local(f); repo.initializeLocalAuthority(a.id);
+    const delegate: DelegationCommand = { ...pause(a.id), kind: 'delegate', payload: { delegationId: 'grant', approvedAt: PM_NOW } };
+    repo.queueCommand(delegate); repo.applyWorkerEvent(changed(delegate));
+    const command: Extract<DelegationCommand, { kind: 'manual-outcome' }> = { commandId: 'manual-command', workspaceId, accountId: a.id,
+      expectedAuthorityGeneration: 1, expectedVersion: 1, kind: 'manual-outcome',
+      payload: { actionId: 'call-attempt', channel: 'call', outcome: 'no_answer', observedAt: PM_NOW, evidenceRef: 'user-report' } };
+    const pending = repo.queueCommand(command);
+    const event: WorkerEvent = { id: 'manual-ack', workspaceId, accountId: a.id, authorityGeneration: 1, aggregateVersion: 2,
+      kind: 'manual.outcome', payload: command.payload, receipt: { commandId: command.commandId, status: 'applied', authorityGeneration: 1, aggregateVersion: 2, reason: null } };
+    const applied: CommandReceipt = { commandId: command.commandId, status: 'applied', authorityGeneration: 1, aggregateVersion: 2, reason: null };
+    for (const receipt of [
+      { ...event.receipt, status: 'pending' as const },
+      { ...event.receipt, authorityGeneration: 2 },
+      { ...event.receipt, aggregateVersion: 3 },
+      { ...event.receipt, commandId: delegate.commandId },
+    ]) expect(() => repo.applyWorkerEvent({ ...event, receipt })).toThrow();
+    expect(() => repo.applyWorkerEvent({ ...event, payload: { ...command.payload, actionId: 'wrong-action' } })).toThrow(/correspondence/i);
+    const other = f.repo.create({ commandId: randomUUID(), name: 'Other PM', domain: null });
+    repo.initializeLocalAuthority(other.id);
+    const otherDelegate: DelegationCommand = { ...delegate, commandId: randomUUID(), accountId: other.id };
+    repo.queueCommand(otherDelegate); repo.applyWorkerEvent(changed(otherDelegate));
+    expect(() => repo.applyWorkerEvent({ ...event, accountId: other.id })).toThrow(/correspondence/i);
+    expect(workerEventSchema.safeParse({ ...event, receipt: { ...event.receipt, arbitrary: true } }).success).toBe(false);
+    expect(f.db.raw.prepare('SELECT COUNT(*) AS count FROM delegated_manual_outcomes').get()).toEqual({ count: 0 });
+    expect(repo.commandStatus(command.commandId)).toEqual(pending);
+    expect(repo.applyWorkerEvent(event)).toBe('applied');
+    expect(() => repo.applyWorkerEvent({ ...event, id: 'duplicate-command-ack', aggregateVersion: 3,
+      receipt: { ...event.receipt, aggregateVersion: 3 } })).toThrow(/acknowledgment conflict/i);
+    expect(f.db.raw.prepare('SELECT aggregate_version FROM delegated_event_cursors').get()).toEqual({ aggregate_version: 2 });
+    expect(repo.commandStatus(command.commandId)).toEqual(applied);
+    expect(repo.queueCommand(command)).toEqual(pending);
+    expect(repo.applyWorkerEvent(event)).toBe('duplicate');
+    closeDatabase(f.db); const reopened = openDatabase({ path: f.db.path, key: createTestWorkspaceKey() });
+    try {
+      const next = new DelegationRepository({ database: reopened, workspaceId, clock: { now: () => PM_NOW } });
+      expect(next.commandStatus(command.commandId)).toEqual(applied);
+      expect(next.queueCommand(command)).toEqual(pending);
+      expect(next.applyWorkerEvent(event)).toBe('duplicate');
+      expect(() => next.queueCommand({ ...command, payload: { ...command.payload, channel: 'call', outcome: 'connected' } })).toThrow(/conflict/i);
+      expect(() => next.applyWorkerEvent({ ...event, payload: { ...command.payload, channel: 'call', outcome: 'connected' } })).toThrow(/conflict/i);
+      expect(reopened.raw.prepare('SELECT COUNT(*) AS count FROM delegated_manual_outcomes').get()).toEqual({ count: 1 });
+    } finally { closeDatabase(reopened); }
+  } finally { f.close(); }
 });

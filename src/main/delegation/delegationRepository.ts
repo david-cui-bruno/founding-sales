@@ -66,11 +66,13 @@ export class DelegationRepository {
   /** A queued receipt is immutable. Owner-applied receipts are read separately. */
   commandStatus(commandId: string): CommandReceipt | null {
     const applied = this.raw.prepare(`SELECT event_json FROM delegated_applied_events WHERE workspace_id=?
-      AND json_extract(event_json,'$.kind')='authority.changed' AND json_extract(event_json,'$.payload.receipt.commandId')=? ORDER BY aggregate_version DESC LIMIT 1`)
-      .get(this.deps.workspaceId, commandId) as { event_json: string } | undefined;
+      AND ((json_extract(event_json,'$.kind')='authority.changed' AND json_extract(event_json,'$.payload.receipt.commandId')=?)
+        OR (json_extract(event_json,'$.kind')='manual.outcome' AND json_extract(event_json,'$.receipt.commandId')=?)) ORDER BY aggregate_version DESC LIMIT 1`)
+      .get(this.deps.workspaceId, commandId, commandId) as { event_json: string } | undefined;
     if (applied) {
       const event = workerEventSchema.parse(JSON.parse(applied.event_json));
       if (event.kind === 'authority.changed') return event.payload.receipt;
+      if (event.kind === 'manual.outcome') return event.receipt;
     }
     const queued = this.raw.prepare('SELECT receipt_json FROM delegated_commands WHERE workspace_id=? AND command_id=?').get(this.deps.workspaceId, commandId) as { receipt_json: string } | undefined;
     return queued ? commandReceiptSchema.parse(JSON.parse(queued.receipt_json)) : null;
@@ -131,6 +133,23 @@ export class DelegationRepository {
   private validateExecution(event: WorkerEvent) {
     const owner = this.owner(event.accountId);
     if (!owner) throw new Error('Execution event requires explicit authority');
+    if (event.kind === 'manual.outcome' || event.kind === 'authority.changed') {
+      const receipt = event.kind === 'manual.outcome' ? event.receipt : event.payload.receipt;
+      const previous = this.commandStatus(receipt.commandId);
+      if (previous && previous.status !== 'pending') throw new Error('Command acknowledgment conflict');
+    }
+    if (event.kind === 'manual.outcome') {
+      const queued = this.raw.prepare('SELECT command_json FROM delegated_commands WHERE command_id=?')
+        .get(event.receipt.commandId) as { command_json: string } | undefined;
+      if (queued) {
+        const command = delegationCommandSchema.parse(JSON.parse(queued.command_json));
+        if (command.kind !== 'manual-outcome' || command.workspaceId !== event.workspaceId || command.accountId !== event.accountId
+          || command.expectedAuthorityGeneration !== event.authorityGeneration || command.expectedVersion + 1 !== event.aggregateVersion
+          || command.expectedVersion !== owner.aggregate_version || accountFingerprint(command.payload) !== accountFingerprint(event.payload)) {
+          throw new Error('Manual acknowledgment command correspondence conflict');
+        }
+      }
+    }
     if (event.kind !== 'authority.changed') {
       if (owner.owner !== 'worker') throw new Error('Stale execution generation');
       if (event.authorityGeneration !== owner.generation) {
@@ -146,7 +165,7 @@ export class DelegationRepository {
     if (!queued) {
       // Authenticated C6 transport may deliver emergency commands submitted directly to the worker.
       // Such events can only reduce already-delegated authority, never grant or restore local rights.
-      const paused = owner.state === 'active' && authority.state === 'paused' && authority.generation === owner.generation;
+      const paused = (owner.state === 'active' || owner.state === 'paused') && authority.state === 'paused' && authority.generation === owner.generation;
       const revoked = owner.state !== 'revoked' && authority.state === 'revoked' && authority.generation === owner.generation + 1;
       if (receipt.status !== 'applied' || owner.owner !== 'worker' || authority.owner !== 'worker' || (!paused && !revoked)) throw new Error('Unproven remote authority transition');
       return;
