@@ -1,3 +1,5 @@
+import { AccountRoutePolicyStore, type RoutePolicyReceipt } from '../../src/main/delegation/accountRoutePolicyStore';
+import { DelegationRepository } from '../../src/main/delegation/delegationRepository';
 import { createInboundReadiness } from '../../src/main/communications/inboundReadiness';
 import type { AccountCallReport, AccountOutboundReceipt } from '../../src/shared/contracts/accountOutboundContract';
 import { randomUUID } from 'node:crypto';
@@ -16,18 +18,18 @@ import type { HandoffResult } from '../../src/shared/contracts/outboundContract'
 const now = '2026-09-08T14:00:00.000Z';
 const cleanup: (() => void)[] = [];
 afterEach(() => { vi.useRealTimers(); cleanup.splice(0).reverse().forEach(fn => fn()); });
-async function fixture() {
+async function fixture(sqlPolicy = false) {
   const temp = createTempDatabase(); const key = createTestWorkspaceKey();
   let db = openDatabase({ path: temp.path, key });
   cleanup.push(() => { closeDatabase(db); key.bytes.fill(0); temp.cleanup(); });
   await migrateToLatest(db, { backupDirectory: `${temp.path}.backups`, workspaceKey: key });
-  const clock = { now: () => now }; const ids = { next: randomUUID };
+  let clockNow = now; const clock = { now: () => clockNow }; const ids = { next: randomUUID };
   const makeRepo = () => new AccountRepository({ database: db, clock, ids, sourcePolicy: { attest: s => s.url === 'https://example.invalid/team' } });
   const repo = makeRepo(); const account = repo.create({ commandId: randomUUID(), name: 'Fictional PM', domain: 'example.invalid' });
-  const sourceId = randomUUID(); const routeId = randomUUID();
+  const sourceId = randomUUID(); const routeId = randomUUID(); const policySourceId = randomUUID(); const provenance = randomUUID(); const workspaceId = randomUUID();
   repo.admitEvidence({ commandId: randomUUID(), accountId: account.id, expectedVersion: 1,
-    sources: [{ id: sourceId, url: 'https://example.invalid/team', fetchedAt: now, sha256: 'a'.repeat(64), excerpt: 'Business switchboard', permitted: true }], claims: [],
-    routes: [{ id: routeId, accountId: account.id, personId: null, channel: 'phone', value: '+14015550100', purpose: 'business', evidenceIds: [sourceId], verification: 'published' }] });
+    sources: [{ id: sourceId, url: 'https://example.invalid/team', fetchedAt: now, sha256: 'a'.repeat(64), excerpt: 'Business switchboard', permitted: true }, ...(sqlPolicy ? [{ id: policySourceId, url: 'https://example.invalid/team', fetchedAt: now, sha256: 'b'.repeat(64), excerpt: 'Fictional separately attested validation, federal scrub and recipient jurisdiction clearance record.', permitted: true }] : [])], claims: [],
+    routes: [{ id: routeId, accountId: account.id, personId: null, channel: 'phone', value: '+14015550100', purpose: 'business', evidenceIds: sqlPolicy ? [sourceId, policySourceId] : [sourceId], verification: 'published' }] });
   const snapshot = repo.snapshot(account.id, now);
   const request = { commandId: randomUUID(), accountId: account.id, routeId, expectedRouteVersion: 1, expectedEvidenceFingerprint: snapshot.fingerprint, channel: 'call' as const };
   let evidence: AccountRoutePolicyEvidence | null = { accountId: account.id, routeId, routeVersion: 1, evidenceFingerprint: snapshot.fingerprint,
@@ -37,7 +39,7 @@ async function fixture() {
     jurisdiction: { regionCode: 'RI', timezone: 'America/New_York', reviewAt: null },
     clearance: { decision: 'allowed', registrationConfirmed: true, stateDncSubscriptionConfirmed: true, consentRuleConfirmed: true, effectiveAt: '2026-09-01T00:00:00.000Z', expiresAt: '2026-10-01T00:00:00.000Z' } };
   let outreach: AccountOutreach;
-  const bind = () => { outreach = new AccountOutreach({ database: db, clock, ids, accounts: makeRepo(), policy: { read: () => evidence } }); };
+  const bind = () => { outreach = sqlPolicy ? createDomainServices({ database: db, clock, ids }).accountOutreach : new AccountOutreach({ database: db, clock, ids, accounts: makeRepo(), policy: { read: () => evidence } }); };
   bind();
   const calls: string[] = []; const subjects: unknown[] = [];
   let onReady = () => {}; let dispatchResult: () => Promise<HandoffResult> = async () => ({ status: 'handoff_accepted', reasonCode: null });
@@ -47,7 +49,18 @@ async function fixture() {
       expect(db.raw.prepare('SELECT COUNT(*) AS n FROM pm_account_outbound_intents').get()).toEqual({ n: 1 });
       calls.push(target); return dispatchResult();
     } }, readiness: createInboundReadiness({ snapshot: () => ({ initialized: true, revision: 1, adapters: [{ id: 'fictional-inbound', relevant: () => true, synchronize: async subject => { subjects.push(subject); onReady(); return { revision: 'fictional-1' }; }, isAppliedCurrent: (_subject, revision) => revision === 'fictional-1' }] }) }), ...overrides });
-  return { request, calls, subjects, makeService, get outreach() { return outreach; }, get db(): AppDatabase { return db; }, repo,
+  const policyReceipt = (overrides: Partial<RoutePolicyReceipt> = {}): RoutePolicyReceipt => ({ id: randomUUID(), accountId: account.id, routeId, routeVersion: 1,
+    canonicalTarget: '+14015550100', evidenceFingerprint: snapshot.fingerprint, revision: 1, evidenceRef: policySourceId,
+    evidenceIds: [policySourceId], provenance, observedAt: now, effectiveAt: now, expiresAt: '2026-09-09T14:00:00.000Z',
+    policy: { contact: evidence!.contact, jurisdiction: evidence!.jurisdiction, clearance: evidence!.clearance }, ...overrides });
+  const admitPolicy = (overrides: Partial<RoutePolicyReceipt> = {}) => {
+    const receipt = policyReceipt(overrides);
+    new AccountRoutePolicyStore({ database: db, clock, admission: { attest: value => value.provenance === provenance && value.evidenceRef === policySourceId } }).admit(receipt);
+    return receipt;
+  };
+  return { request, calls, subjects, makeService, admitPolicy, policyReceipt, setTime: (value: string) => { clockNow = value; },
+    initializeOwner: () => new DelegationRepository({ database: db, clock, workspaceId }).initializeLocalAuthority(account.id),
+    secondConnection: () => { const other = openDatabase({ path: temp.path, key }); cleanup.push(() => closeDatabase(other)); return other; }, get outreach() { return outreach; }, get db(): AppDatabase { return db; }, repo,
     setEvidence: (value: AccountRoutePolicyEvidence | null) => { evidence = value; }, get evidence() { return evidence!; },
     onReady: (fn: () => void) => { onReady = fn; }, result: (fn: () => Promise<HandoffResult>) => { dispatchResult = fn; },
     reopen: () => { closeDatabase(db); db = openDatabase({ path: temp.path, key }); bind(); } };
@@ -256,6 +269,115 @@ describe('real SQL company outbound workflow with fictional phone boundary', () 
       else f.db.raw.prepare('UPDATE person_contact_methods SET tcpa_flag=1,compliance_tcpa_flag=1 WHERE id=?').run(contact);
     });
     expect(await f.makeService().begin(f.request)).toMatchObject({ reason: restriction === 'dnc' ? 'federal_dnc_listed' : 'tcpa_blocked' }); expect(f.calls).toEqual([]);
+  });
+
+});
+
+
+describe('schema21 production SQL policy binding with fictional admitted evidence and phone', () => {
+  it('requires separate admitted compliance and explicit local owner, then dispatches account-only', async () => {
+    const f = await fixture(true);
+    expect(await f.makeService().begin(f.request)).toMatchObject({ reason: 'account_policy_evidence_unavailable' });
+    const receipt = f.admitPolicy(); f.initializeOwner();
+    const request = { ...f.request, commandId: randomUUID() }; const result = await f.makeService().begin(request);
+    expect(result.status).toBe('handoff_accepted'); expect(f.calls).toEqual(['+14015550100']);
+    expect(f.db.raw.prepare('SELECT COUNT(*) AS n FROM persons').get()).toEqual({ n: 0 });
+    expect(f.db.raw.prepare('SELECT route_version,evidence_fingerprint,canonical_target FROM pm_account_outbound_intents WHERE command_id=?').get(request.commandId))
+      .toEqual({ route_version: receipt.routeVersion, evidence_fingerprint: receipt.evidenceFingerprint, canonical_target: receipt.canonicalTarget });
+  });
+  it('does not admit policy without the trusted evidence attestation boundary', async () => {
+    const f = await fixture(true); f.initializeOwner();
+    expect(() => new AccountRoutePolicyStore({ database: f.db, clock: { now: () => now } }).admit(f.policyReceipt())).toThrow(/attestation/);
+    expect(await f.makeService().begin(f.request)).toMatchObject({ reason: 'account_policy_evidence_unavailable' }); expect(f.calls).toEqual([]);
+  });
+  it.each(['missing', 'worker', 'delegating', 'paused', 'revoked'] as const)('rejects %s execution authority instead of assuming local clearance', async state => {
+    const f = await fixture(true); f.admitPolicy();
+    if (state !== 'missing') { f.initializeOwner(); f.db.raw.prepare('UPDATE delegated_authorities SET owner=?,state=? WHERE account_id=?').run(state === 'worker' ? 'worker' : 'local', state === 'worker' ? 'active' : state, f.request.accountId); }
+    expect((await f.makeService().begin(f.request)).status).toBe('refused'); expect(f.calls).toEqual([]);
+  });
+  it('rechecks owner generation from a second SQL connection after readiness', async () => {
+    const f = await fixture(true); f.admitPolicy(); f.initializeOwner(); const other = f.secondConnection();
+    f.onReady(() => { other.raw.prepare('UPDATE delegated_authorities SET generation=generation+1 WHERE account_id=?').run(f.request.accountId); });
+    expect(await f.makeService().begin(f.request)).toMatchObject({ reason: 'account_owner_changed' }); expect(f.calls).toEqual([]);
+  });
+  it.each(['account', 'handle'] as const)('rechecks durable %s suppression committed by a second SQL connection', async scope => {
+    const f = await fixture(true); f.admitPolicy(); f.initializeOwner(); const other = f.secondConnection();
+    f.onReady(() => {
+      if (scope === 'account') other.raw.prepare('INSERT INTO pm_account_suppression_tombstones(id,account_id,observed_at,source,evidence_ref,admitted_at) VALUES(?,?,?,?,?,?)')
+        .run(randomUUID(), f.request.accountId, now, 'fictional-user-report', randomUUID(), now);
+      else other.raw.prepare('INSERT INTO pm_handle_suppression_tombstones(id,kind,normalized_value,observed_at,source,evidence_ref,admitted_at) VALUES(?,?,?,?,?,?,?)')
+        .run(randomUUID(), 'phone', '+14015550100', now, 'fictional-user-report', randomUUID(), now);
+    });
+    expect(await f.makeService().begin(f.request)).toMatchObject({ reason: 'account_or_route_opted_out' }); expect(f.calls).toEqual([]);
+  });
+  it('requires the latest unexpired policy revision, never falls back to earlier clearance', async () => {
+    const f = await fixture(true); f.initializeOwner(); f.admitPolicy();
+    f.admitPolicy({ revision: 2, expiresAt: '2026-09-08T15:00:00.000Z', policy: { ...f.policyReceipt().policy, clearance: { ...f.policyReceipt().policy.clearance!, decision: 'blocked' } } });
+    expect(await f.makeService().begin(f.request)).toMatchObject({ reason: 'jurisdiction_blocked' }); expect(f.calls).toEqual([]);
+    f.setTime('2026-09-08T15:00:00.000Z');
+    expect(await f.makeService().begin({ ...f.request, commandId: randomUUID() })).toMatchObject({ reason: 'account_policy_evidence_unavailable' });
+  });
+  it('rejects a receipt bound to an older account evidence fingerprint even with unchanged route', async () => {
+    const f = await fixture(true); f.initializeOwner(); f.admitPolicy(); const before = f.repo.snapshot(f.request.accountId, now);
+    f.repo.admitEvidence({ commandId: randomUUID(), accountId: f.request.accountId, expectedVersion: before.account.version, sources: [], routes: [],
+      claims: [{ kind: 'fact', key: 'operating_footprint', value: 'Fictional changed territory', evidenceIds: before.routes[0].evidenceIds }] });
+    const latest = f.repo.snapshot(f.request.accountId, now);
+    expect(await f.makeService().begin({ ...f.request, expectedEvidenceFingerprint: latest.fingerprint })).toMatchObject({ reason: 'account_policy_evidence_unavailable' }); expect(f.calls).toEqual([]);
+  });
+  it('persists real-policy unknown dispatch and explicit attempt evidence across encrypted restart without retry', async () => {
+    const f = await fixture(true); f.initializeOwner(); f.admitPolicy(); f.result(async () => { throw new Error('Fictional uncertain phone'); });
+    const result = await f.makeService().begin(f.request); expect(result.status).toBe('unknown');
+    const report: AccountCallReport = { commandId: f.request.commandId, attemptId: result.attemptId!, outcome: 'no_answer', notes: null };
+    const outcome = await f.makeService().reportCallOutcome(report); f.reopen();
+    expect(await f.makeService().begin(f.request)).toEqual(result); expect(await f.makeService().reportCallOutcome(report)).toEqual(outcome);
+    expect(f.outreach.listActualCallAttempts({ from: now, to: '2026-09-09T00:00:00.000Z' })).toHaveLength(1); expect(f.calls).toHaveLength(1);
+  });
+  it('rechecks a newly admitted restrictive policy revision after readiness', async () => {
+    const f = await fixture(true); f.initializeOwner(); f.admitPolicy();
+    f.onReady(() => { const policy = f.policyReceipt().policy;
+      f.admitPolicy({ revision: 2, policy: { ...policy, contact: { ...policy.contact, evidence: { ...policy.contact.evidence, federalStatus: 'listed' } } } }); });
+    expect(await f.makeService().begin(f.request)).toMatchObject({ reason: 'federal_dnc_listed' }); expect(f.calls).toEqual([]);
+  });
+  it.each(['validation', 'jurisdiction', 'local_time', 'email'] as const)('preserves %s refusal with durable policy evidence', async constraint => {
+    const f = await fixture(true); f.initializeOwner(); const policy = f.policyReceipt().policy;
+    if (constraint === 'validation') policy.contact.validationState = 'unverified';
+    if (constraint === 'jurisdiction') policy.jurisdiction = null;
+    f.admitPolicy({ policy });
+    if (constraint === 'local_time') f.setTime('2026-09-08T23:00:00.000Z');
+    const reason = { validation: 'contact_validation_unusable', jurisdiction: 'jurisdiction_unknown', local_time: 'outside_recipient_window', email: 'email_execution_unavailable' }[constraint];
+    expect(await f.makeService().begin({ ...f.request, channel: constraint === 'email' ? 'email' : 'call' })).toMatchObject({ reason }); expect(f.calls).toEqual([]);
+  });
+  it('honors a genuine opted-out linked person without fabricating route person identity', async () => {
+    const f = await fixture(true); const person = randomUUID(); insertPerson(f.db.raw, person);
+    const snapshot = f.repo.snapshot(f.request.accountId, now);
+    f.repo.admitLinks({ commandId: randomUUID(), accountId: f.request.accountId, expectedVersion: snapshot.account.version,
+      links: [{ id: randomUUID(), kind: 'person_role', personId: person, role: 'Office contact', authority: 'unconfirmed', authorityEvidenceIds: [],
+        relationship: 'Fictional office contact', evidenceIds: snapshot.routes[0].evidenceIds, validFrom: now, validTo: null }] });
+    const current = f.repo.snapshot(f.request.accountId, now); f.request.expectedEvidenceFingerprint = current.fingerprint;
+    f.admitPolicy({ evidenceFingerprint: current.fingerprint }); f.initializeOwner();
+    const services = createDomainServices({ database: f.db, clock: { now: () => now }, ids: { next: randomUUID } });
+    f.onReady(() => { services.optOut.apply({ personId: person, tombstoneId: randomUUID(), requestedAt: now, policyVersion: 'founder_opt_out_v1',
+      decision: { kind: 'structured_written', channel: 'imessage' }, evidence: { kind: 'append_activity', activity: { id: randomUUID(), personId: person,
+        kind: 'text', direction: 'inbound', channel: 'imessage', occurredAt: now, observedOutcome: 'opted_out', adapter: 'messages',
+        providerIdempotencyKey: randomUUID(), metadata: { structuredOptOut: true } } }, terminalStageEventId: null }); });
+    expect(await f.makeService().begin(f.request)).toMatchObject({ reason: 'account_or_route_opted_out' }); expect(f.calls).toEqual([]);
+    expect(current.routes[0].personId).toBeNull();
+  });
+  it('two real SQL connections racing the same command reserve and hand off only once', async () => {
+    const f = await fixture(true); f.admitPolicy(); f.initializeOwner(); const other = f.secondConnection();
+    const secondDomain = createDomainServices({ database: other, clock: { now: () => now }, ids: { next: randomUUID } }).accountOutreach;
+    const first = f.makeService(); const second = f.makeService({ domain: { withDomain: async fn => fn(secondDomain) } });
+    const receipts = await Promise.all([first.begin(f.request), second.begin(f.request)]);
+    expect(receipts[0].attemptId).toBe(receipts[1].attemptId); expect(f.calls).toHaveLength(1);
+    expect(other.raw.prepare('SELECT COUNT(*) AS n FROM pm_account_outbound_intents').get()).toEqual({ n: 1 });
+  });
+
+  it('does not count an orphan user-report envelope without any dispatch evidence', async () => {
+    const f = await fixture(true); f.admitPolicy(); f.initializeOwner();
+    const reserved = f.outreach.reserve(f.request, f.outreach.ownerGeneration(f.request));
+    f.db.raw.prepare("INSERT INTO pm_account_outbound_results(id,command_id,attempt_id,account_id,kind,outcome,result_json,created_at) VALUES(?,?,?,?,'call_outcome','connected',?,?)")
+      .run(randomUUID(), f.request.commandId, reserved.receipt.attemptId, f.request.accountId, JSON.stringify({ version: 1, source: 'user_report', outcome: 'connected', notes: null }), now);
+    expect(f.outreach.listActualCallAttempts({ from: now, to: '2026-09-09T00:00:00.000Z' })).toEqual([]);
   });
 
 });

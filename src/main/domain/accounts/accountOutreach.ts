@@ -1,9 +1,10 @@
+import { routePolicyReceiptSchema } from '../../delegation/accountRoutePolicyStore';
 import type { AppDatabase } from '../../db/database';
 import type { Clock } from '../support/clock';
 import type { IdGenerator } from '../support/idGenerator';
 import type { AccountRepository } from './accountRepository';
 import type { AccountEvidenceSnapshot, AccountRoute } from '../../../shared/contracts/accountContract';
-import { accountInstantSchema } from '../../../shared/contracts/accountContract';
+import { accountIdSchema, accountInstantSchema } from '../../../shared/contracts/accountContract';
 import { accountFingerprint } from './accountEvidence';
 import { PLAYBOOK_CHANNEL_POLICIES_V2, type ChannelPolicySnapshots } from '../cadence/cadenceScheduler';
 import { evaluateOutboundAuthorization } from '../compliance/outboundAuthorization';
@@ -17,7 +18,7 @@ import { accountCallEvidenceSchema, accountCallRangeSchema, accountCallReportSch
 type PhonePolicy = Parameters<typeof evaluateOutboundAuthorization>[0];
 /** Trusted main-process read port, never renderer supplied. Must read genuine route-bound
  * compliance, suppression and execution ownership in the caller's SQL transaction.
- * Schema20 cannot supply this for company-only routes. No production adapter/default clearance exists. */
+ * Schema21 supplies immutable policy receipts. Missing evidence always denies. */
 export type AccountRoutePolicyEvidence = Pick<PhonePolicy, 'contact' | 'jurisdiction' | 'clearance'> & {
   accountId: string; routeId: string; routeVersion: number; evidenceFingerprint: string;
   evidenceRef: string; ownerGeneration: string; ownerEnabled: boolean;
@@ -26,6 +27,69 @@ export type AccountRoutePolicyEvidence = Pick<PhonePolicy, 'contact' | 'jurisdic
 export interface AccountRoutePolicyPort {
   read(snapshot: AccountEvidenceSnapshot, route: AccountRoute): AccountRoutePolicyEvidence | null;
 }
+function legacyRouteSuppression(database: AppDatabase, route: AccountRoute, at: string) {
+  const raw = database.raw;
+  const handle = !!raw.prepare('SELECT 1 FROM opt_out_handles WHERE kind=? AND normalized_value=? LIMIT 1').get(route.channel, route.value);
+  const person = !!raw.prepare(`SELECT 1 FROM persons p WHERE (p.opted_out=1 OR p.deleted_at IS NOT NULL
+    OR EXISTS(SELECT 1 FROM opt_out_tombstones t WHERE t.person_id=p.id)) AND
+    (p.id=? OR EXISTS(SELECT 1 FROM person_contact_methods c WHERE c.person_id=p.id AND c.kind=? AND c.normalized_value=?)
+    OR EXISTS(SELECT 1 FROM pm_account_links l WHERE l.account_id=? AND l.person_id=p.id AND l.admitted_at<=?
+      AND l.valid_from<=? AND (l.valid_to IS NULL OR l.valid_to>?))) LIMIT 1`)
+    .get(route.personId, route.channel, route.value, route.accountId, at, at, at);
+  return { person, handle };
+}
+
+/** Read-only production binding. Admission remains AccountRoutePolicyStore's separately
+ * attested capability. This never creates evidence or initializes execution ownership. */
+export function createSqlAccountRoutePolicy(input: { database: AppDatabase; clock: Clock }): AccountRoutePolicyPort {
+  const { database, clock } = input;
+  return { read(snapshot, route) {
+    const raw = database.raw;
+    if (!raw.inTransaction) throw new Error('Account policy read requires the authorization transaction');
+    const at = accountInstantSchema.parse(clock.now());
+    // Select latest first, then validate. Never fall back past a newer expired/blocked receipt.
+    const row = raw.prepare(`SELECT * FROM pm_account_route_policy_receipts
+      WHERE account_id=? AND route_id=? AND route_version=? ORDER BY revision DESC LIMIT 1`)
+      .get(snapshot.account.id, route.id, route.version) as {
+        id: string; account_id: string; route_id: string; route_version: number; canonical_target: string; evidence_fingerprint: string;
+        revision: number; evidence_ref: string; provenance: string; observed_at: string; admitted_at: string;
+        effective_at: string; expires_at: string; policy_json: string; receipt_fingerprint: string;
+      } | undefined;
+    if (!row) return null;
+    const evidenceIds = (raw.prepare('SELECT source_id FROM pm_account_route_policy_evidence WHERE receipt_id=? ORDER BY source_id').all(row.id) as { source_id: string }[]).map(value => value.source_id);
+    let parsed: ReturnType<typeof routePolicyReceiptSchema.safeParse>;
+    try { parsed = routePolicyReceiptSchema.safeParse({ id: row.id, accountId: row.account_id, routeId: row.route_id, routeVersion: row.route_version,
+      canonicalTarget: row.canonical_target, evidenceFingerprint: row.evidence_fingerprint, revision: row.revision,
+      evidenceRef: row.evidence_ref, evidenceIds, provenance: row.provenance, observedAt: row.observed_at,
+      effectiveAt: row.effective_at, expiresAt: row.expires_at, policy: JSON.parse(row.policy_json) }); } catch { return null; }
+    if (!parsed.success || !accountInstantSchema.safeParse(row.admitted_at).success || !/^[a-f0-9]{64}$/.test(row.receipt_fingerprint)) return null;
+    const receipt = parsed.data;
+    if (receipt.canonicalTarget !== route.value || receipt.policy.contact.normalizedValue !== route.value || receipt.policy.contact.kind !== route.channel
+      || receipt.evidenceFingerprint !== snapshot.fingerprint || receipt.observedAt > at || row.admitted_at > at
+      || receipt.effectiveAt > at || receipt.expiresAt <= at || receipt.expiresAt <= receipt.effectiveAt) return null;
+    for (const sourceId of [...evidenceIds, receipt.evidenceRef]) {
+      if (!raw.prepare('SELECT 1 FROM pm_account_sources WHERE account_id=? AND id=? AND fetched_at<=? AND admitted_at<=?')
+        .get(route.accountId, sourceId, receipt.observedAt, at)) return null;
+    }
+    const owner = raw.prepare('SELECT workspace_id,owner,generation,state,updated_at FROM delegated_authorities WHERE account_id=?').get(route.accountId) as {
+      workspace_id: string; owner: string; generation: number; state: string; updated_at: string;
+    } | undefined;
+    if (!owner || !accountIdSchema.safeParse(owner.workspace_id).success || !Number.isSafeInteger(owner.generation) || owner.generation < 0
+      || !accountInstantSchema.safeParse(owner.updated_at).success || owner.updated_at > at) return null;
+    const legacy = legacyRouteSuppression(database, route, at);
+    return {
+      accountId: route.accountId, routeId: route.id, routeVersion: route.version, evidenceFingerprint: snapshot.fingerprint,
+      // Immutable receipt ID freezes the selected compliance revision/provenance in contextRevision.
+      evidenceRef: receipt.id, ownerGeneration: accountFingerprint({ workspaceId: owner.workspace_id, owner: owner.owner, generation: owner.generation, state: owner.state }),
+      ownerEnabled: owner.owner === 'local' && owner.state === 'local',
+      suppression: { account: !!raw.prepare('SELECT 1 FROM pm_account_suppression_tombstones WHERE account_id=? LIMIT 1').get(route.accountId),
+        person: legacy.person, handle: legacy.handle || !!raw.prepare('SELECT 1 FROM pm_handle_suppression_tombstones WHERE kind=? AND normalized_value=? LIMIT 1').get(route.channel, route.value) },
+      contact: receipt.policy.contact as AccountRoutePolicyEvidence['contact'], jurisdiction: receipt.policy.jurisdiction as AccountRoutePolicyEvidence['jurisdiction'],
+      clearance: receipt.policy.clearance as AccountRoutePolicyEvidence['clearance'],
+    };
+  } };
+}
+
 export function authorizeAccountRoute(input: {
   request: AccountOutboundRequest; route: AccountRoute | null; evidenceFingerprint: string;
   policy: AccountRoutePolicyEvidence | null; expectedOwnerGeneration: string | null; now: string; windows: ChannelPolicySnapshots;
@@ -64,7 +128,11 @@ export function listActualCallAttempts(database: AppDatabase, input: AccountCall
   const rows = database.raw.prepare(`SELECT r.account_id,r.command_id,r.attempt_id,r.result_json,r.outcome,r.created_at
     FROM pm_account_outbound_results r JOIN pm_account_outbound_intents i
     ON i.command_id=r.command_id AND i.attempt_id=r.attempt_id AND i.account_id=r.account_id
-    WHERE r.kind='call_outcome' AND i.channel='call' AND r.created_at>=? AND r.created_at<? ORDER BY r.created_at,r.id`).all(range.from, range.to) as
+    WHERE r.kind='call_outcome' AND i.channel='call' AND r.created_at>=? AND r.created_at<?
+    AND EXISTS (SELECT 1 FROM pm_account_outbound_results d
+      WHERE d.command_id=r.command_id AND d.attempt_id=r.attempt_id AND d.account_id=r.account_id
+      AND d.kind='dispatch' AND d.outcome IN ('handoff_accepted','unknown'))
+    ORDER BY r.created_at,r.id`).all(range.from, range.to) as
     (ResultRow & { account_id: string; command_id: string; attempt_id: string })[];
   const seen = new Set<string>();
   return rows.flatMap(row => {
@@ -129,13 +197,8 @@ export class AccountOutreach {
     });
   }
   private legacySuppressed(route: AccountRoute, at: string): boolean {
-    if (this.raw.prepare('SELECT 1 FROM opt_out_handles WHERE kind=? AND normalized_value=? LIMIT 1').get(route.channel, route.value)) return true;
-    // Include the route person, currently linked people, and opted-out owners of the same normalized handle.
-    return !!this.raw.prepare(`SELECT 1 FROM persons p WHERE (p.opted_out=1 OR p.deleted_at IS NOT NULL
-      OR EXISTS(SELECT 1 FROM opt_out_tombstones t WHERE t.person_id=p.id)) AND
-      (p.id=? OR EXISTS(SELECT 1 FROM person_contact_methods c WHERE c.person_id=p.id AND c.kind=? AND c.normalized_value=?)
-      OR EXISTS(SELECT 1 FROM pm_account_links l WHERE l.account_id=? AND l.person_id=p.id AND l.valid_from<=? AND (l.valid_to IS NULL OR l.valid_to>?))) LIMIT 1`)
-      .get(route.personId, route.channel, route.value, route.accountId, at, at);
+    const suppression = legacyRouteSuppression(this.deps.database, route, at);
+    return suppression.person || suppression.handle;
   }
   private retainedHandleRestriction(route: AccountRoute, at: string): string | null {
     if (this.legacySuppressed(route, at)) return 'account_or_route_opted_out';
