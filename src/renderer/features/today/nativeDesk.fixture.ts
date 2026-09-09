@@ -1,3 +1,4 @@
+import { localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, type LocalWorkspaceSnapshot, type LocalCommitmentsSnapshot, type LocalWorkspaceApi, type LocalWorkflowReceipt } from '../../../shared/contracts/localWorkspaceContract';
 /** Test-only browser-safe factory. Never imported by production components. */
 import {
   dailySnapshotSchema,
@@ -6,6 +7,12 @@ import {
 import type { RequestedFollowupDraft } from '../../../shared/contracts/requestedFollowupContract';
 const hash = 'a'.repeat(64);
 export const fixtureNow = '2026-09-09T12:00:00.000Z';
+export function localSnapshot(overrides: Partial<LocalWorkspaceSnapshot> = {}): LocalWorkspaceSnapshot {
+  return localWorkspaceSnapshotSchema.parse({ scope: 'local_database', generatedAt: fixtureNow, workflowMode: 'meeting_first', transitionReceipt: null, accounts: { state: 'available', snapshots: [] }, ...overrides });
+}
+export function commitments(overrides: Partial<LocalCommitmentsSnapshot> = {}): LocalCommitmentsSnapshot {
+  return localCommitmentsSnapshotSchema.parse({ scope: 'local_database', generatedAt: fixtureNow, revision: 1, reviewErrorCount: 0, items: [], ...overrides });
+}
 export function requestedDraft(accountId = 'a'): RequestedFollowupDraft {
   const originalCall = {
     commandId: 'call',
@@ -161,6 +168,8 @@ export function configuredFixtureStatus(): Awaited<
 /** Isolated, framework-neutral fixture API. Every command is recorded, no IO. */
 export function nativeDeskFixture(initial = dailyFixture()) {
   let snapshot = structuredClone(initial);
+  let local = localSnapshot({ workflowMode: initial.workflowMode === 'legacy' ? 'legacy' : 'meeting_first' });
+  let retained = commitments();
   let config = configuredFixtureStatus();
   const calls: { method: string; input?: unknown }[] = [];
   const record = (method: string, input?: unknown) => {
@@ -210,7 +219,20 @@ export function nativeDeskFixture(initial = dailyFixture()) {
       throw Error('Fixture revision conflict');
     return item;
   };
-  const api: NativeDeskApi = {
+  const api: NativeDeskApi & { localWorkspace: LocalWorkspaceApi } = {
+    localWorkspace: {
+      get: async () => { record('localWorkspace.get'); return structuredClone(local); },
+      getCommitments: async () => { record('localWorkspace.getCommitments'); return structuredClone(retained); },
+      transition: async (command) => {
+        record('localWorkspace.transition', command);
+        if (local.transitionReceipt?.commandId === command.commandId && local.transitionReceipt.manifestId === command.manifestId) return structuredClone(local.transitionReceipt);
+        if (local.workflowMode !== 'legacy') throw Error('Fixture mode conflict');
+        const receipt: LocalWorkflowReceipt = { commandId: command.commandId, manifestId: command.manifestId, mode: 'meeting_first' as const, revision: 1, occurredAt: fixtureNow, cancelledActionIds: [], stoppedEnrollmentIds: [], preservedActionIds: [], parkedPersonIds: [], callbackEvidenceIds: [], unknownDraftIds: [], parkedReviewActions: [], parkedActions: [] };
+        local = localSnapshot({ ...local, workflowMode: 'meeting_first', transitionReceipt: receipt });
+        snapshot = { ...snapshot, workflowMode: 'meeting_first' };
+        return structuredClone(receipt);
+      },
+    },
     daily: {
       get: async () => {
         record('daily.get');
@@ -360,6 +382,8 @@ export function nativeDeskFixture(initial = dailyFixture()) {
   return {
     api,
     calls,
+    setLocalSnapshot(next: LocalWorkspaceSnapshot) { local = localWorkspaceSnapshotSchema.parse(structuredClone(next)); },
+    setCommitments(next: LocalCommitmentsSnapshot) { retained = localCommitmentsSnapshotSchema.parse(structuredClone(next)); },
     setSnapshot(next: DailySnapshot) {
       snapshot = structuredClone(next);
     },

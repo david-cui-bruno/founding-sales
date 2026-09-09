@@ -1,3 +1,6 @@
+import { useLocalWorkspaceRead, type LocalDeskRead } from './localWorkspaceRead';
+import { RetainedWork, RetainedWorkDetail, LocalOnlyCalls, retainedKey } from './RetainedWork';
+import { LocalAccountLibrary, LocalAccountDetail, localAccountKey, LocalOnlyAccountLibrary } from './LocalAccountLibrary';
 import { updateRequestedSessionHolds } from './requestedDraftSession';
 import { updateLinkedInSessionHolds } from '../linkedin/linkedInSession';
 import {
@@ -29,7 +32,7 @@ import './nativeDesk.css';
 export type NativeDeskApi = Pick<
   CalliePreloadApi,
   'daily' | 'delegation' | 'linkedin'
->;
+> & Partial<Pick<CalliePreloadApi, 'localWorkspace'>>;
 type Config = Awaited<ReturnType<NativeDeskApi['delegation']['status']>>;
 type Surface = 'today' | 'accounts' | 'campaigns';
 export type NativeDeskRouteProps = {
@@ -45,6 +48,7 @@ export function NativeDeskRoute({
   surface = 'today',
   legacy,
 }: NativeDeskRouteProps) {
+  const local = useLocalWorkspaceRead(api.localWorkspace);
   const [state, setState] = useState<{
     api: NativeDeskApi;
     snapshot: DailySnapshot | null;
@@ -62,65 +66,6 @@ export function NativeDeskRoute({
       .then(([raw, local]) => {
         if (request !== sequence.current) return;
         const snapshot = dailySnapshotSchema.parse(raw);
-        const scope =
-          snapshot.workflowMode === 'meeting_first' &&
-          local?.workspaceId === snapshot.workspaceId &&
-          local.state === 'active' &&
-          local.configuration
-            ? snapshot.workspaceId
-            : null;
-        setDailySessionScope(api.delegation, scope);
-        setDailySessionScope(api.linkedin, scope);
-        const hold = (
-          accountId: string,
-          workspaceId: string,
-          accountVersion?: number,
-        ) => {
-          const account = snapshot.accounts.find(
-            (a) => a.account.id === accountId,
-          );
-          const owner = snapshot.ownerStatus.find(
-            (o) => o.accountId === accountId,
-          );
-          if (!scope || workspaceId !== scope)
-            return 'Daily workspace or configuration held';
-          if (
-            !account ||
-            (accountVersion !== undefined &&
-              account.account.version !== accountVersion)
-          )
-            return 'Account context changed';
-          if (
-            !owner?.authority ||
-            owner.authority.owner !== 'worker' ||
-            owner.authority.state !== 'active' ||
-            owner.pendingCommands.length
-          )
-            return 'Owner authority or command held';
-          return undefined;
-        };
-        updateRequestedSessionHolds(api.delegation, (d) => {
-          const current = snapshot.answers.find(
-            (a) =>
-              a.kind === 'requested_followup' &&
-              a.draft.id === d.id &&
-              a.accountId === d.accountId,
-          );
-          return (
-            hold(d.accountId, snapshot.workspaceId ?? '', d.accountVersion) ||
-            (!current ||
-            current.kind !== 'requested_followup' ||
-            current.draft.recipient !== d.recipient ||
-            current.draft.contextRevision !== d.contextRevision ||
-            current.draft.revision > d.revision
-              ? 'Saved draft context changed'
-              : undefined)
-          );
-        });
-        updateLinkedInSessionHolds(api.linkedin, (d) =>
-          hold(d.accountId, d.workspaceId),
-        );
-
         setState({
           api,
           snapshot,
@@ -157,6 +102,7 @@ export function NativeDeskRoute({
     window.addEventListener('focus', load);
     window.addEventListener('callie:outcome-logged', load);
     window.addEventListener('callie:email-sent', load);
+    window.addEventListener('callie:workflow-changed', load);
     return () => {
       sequence.current++;
       setDailySessionScope(api.delegation, null);
@@ -166,10 +112,83 @@ export function NativeDeskRoute({
       window.removeEventListener('focus', load);
       window.removeEventListener('callie:outcome-logged', load);
       window.removeEventListener('callie:email-sent', load);
+      window.removeEventListener('callie:workflow-changed', load);
     };
   }, [load]);
   const current = state.api === api ? state : null,
     snapshot = current?.snapshot;
+  const localHold = !!api.localWorkspace && (local.read.overview.pending || local.read.overview.error || !local.read.overview.value || local.read.overview.value.workflowMode !== snapshot?.workflowMode);
+  useLayoutEffect(() => {
+    if (!snapshot) {
+      setDailySessionScope(api.delegation, null);
+      setDailySessionScope(api.linkedin, null);
+      return;
+    }
+    const local = current?.config;
+    const scope =
+      !localHold && !current?.error && snapshot.workflowMode === 'meeting_first' &&
+      local?.workspaceId === snapshot.workspaceId &&
+      local.state === 'active' &&
+      local.configuration
+        ? snapshot.workspaceId
+        : null;
+    setDailySessionScope(api.delegation, scope);
+    setDailySessionScope(api.linkedin, scope);
+    const hold = (
+      accountId: string,
+      workspaceId: string,
+      accountVersion?: number,
+    ) => {
+      const account = snapshot.accounts.find(
+        (a) => a.account.id === accountId,
+      );
+      const owner = snapshot.ownerStatus.find(
+        (o) => o.accountId === accountId,
+      );
+      if (!scope || workspaceId !== scope)
+        return 'Daily workspace or configuration held';
+      if (
+        !account ||
+        (accountVersion !== undefined &&
+          account.account.version !== accountVersion)
+      )
+        return 'Account context changed';
+      if (
+        !owner?.authority ||
+        owner.authority.owner !== 'worker' ||
+        owner.authority.state !== 'active' ||
+        owner.pendingCommands.length
+      )
+        return 'Owner authority or command held';
+      return undefined;
+    };
+    updateRequestedSessionHolds(api.delegation, (d) => {
+      const current = snapshot.answers.find(
+        (a) =>
+          a.kind === 'requested_followup' &&
+          a.draft.id === d.id &&
+          a.accountId === d.accountId,
+      );
+      return (
+        hold(d.accountId, snapshot.workspaceId ?? '', d.accountVersion) ||
+        (!current ||
+        current.kind !== 'requested_followup' ||
+        current.draft.recipient !== d.recipient ||
+        current.draft.contextRevision !== d.contextRevision ||
+        current.draft.revision > d.revision
+          ? 'Saved draft context changed'
+          : undefined)
+      );
+    });
+    updateLinkedInSessionHolds(api.linkedin, (d) =>
+      hold(d.accountId, d.workspaceId),
+    );
+
+  }, [api, localHold, snapshot, current?.config, current?.error]);
+  const refresh = () => { local.refresh(); load(); };
+  const localOnly = surface === 'accounts'
+    ? <LocalOnlyAccountLibrary read={local.read.overview} />
+    : surface === 'today' ? <LocalOnlyCalls read={local.read.retained} onOpenLead={onOpenLead} initialSelected={viewSelection(api.daily).get(JSON.stringify([snapshot?.workspaceId ?? null, surface]))} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} /> : <p>Campaign scope unavailable. No worker actions are enabled.</p>;
   if (!snapshot)
     return (
       <section className="native-desk">
@@ -185,21 +204,23 @@ export function NativeDeskRoute({
             ? 'Daily workspace unavailable. Retry the local read.'
             : 'Loading daily workspace…'}
         </p>
-        <button onClick={load}>Refresh</button>
+        <button onClick={refresh}>Refresh</button>
+        {localOnly}
       </section>
     );
-  if (surface === 'today' && snapshot.workflowMode === 'legacy')
+  if (surface === 'today' && snapshot.workflowMode === 'legacy' && !localHold)
     return (
       <>{legacy ?? <p>Legacy Today is available from the main workspace.</p>}</>
     );
-  if (snapshot.workflowMode === 'unknown')
+  if ((snapshot.workflowMode === 'unknown' || snapshot.workflowMode === 'legacy') && local.read.overview.value?.workflowMode !== 'meeting_first')
     return (
       <section className="native-desk">
         <h1>Today</h1>
         <p>
-          Workflow mode unavailable. Check workspace configuration in Settings.
+          Workflow mode unavailable or inconsistent. Refresh to check local status. Worker actions are held.
         </p>
-        <button onClick={load}>Refresh</button>
+        <button onClick={refresh}>Refresh</button>
+        {localOnly}
       </section>
     );
   return (
@@ -207,9 +228,11 @@ export function NativeDeskRoute({
       key={`${snapshot.workspaceId}:${surface}`}
       snapshot={snapshot}
       api={api}
-      config={current.config}
-      readError={current.error}
-      onRefresh={load}
+      config={localHold ? null : current.config}
+      readError={current.error || localHold}
+      localRead={local.read}
+      localHold={localHold}
+      onRefresh={refresh}
       onOpenLead={onOpenLead}
       surface={surface}
     />
@@ -377,11 +400,15 @@ export function NativeDesk({
   onRefresh,
   onOpenLead,
   surface = 'today',
+  localRead,
+  localHold = false,
 }: {
   snapshot: DailySnapshot;
   api: NativeDeskApi;
   config: Config | null;
   readError?: boolean;
+  localRead?: LocalDeskRead;
+  localHold?: boolean;
   onRefresh(): void;
   onOpenLead(personId: string): void;
   surface?: Surface;
@@ -395,6 +422,13 @@ export function NativeDesk({
   const select = (key: string | null) => {
     cache.set(scopeKey, key);
     setSelected(key);
+  };
+  const closeDetails = () => {
+    const old = selected;
+    select(null);
+    root.current?.querySelectorAll<HTMLButtonElement>('[data-row-key]').forEach(row => {
+      if (row.dataset.rowKey === old) row.focus();
+    });
   };
   const name = (id: string) =>
     snapshot.accounts.find((a) => a.account.id === id)?.account.name ?? id;
@@ -424,6 +458,10 @@ export function NativeDesk({
         : !configuration.configuration
           ? 'Pairing present · configuration unknown'
           : `Configured ${configuration.state}`;
+  const retained = localRead?.retained.value?.items.find(item => retainedKey(item) === selected);
+  const localAccount = (localRead?.overview.value?.accounts.state === 'available' ? localRead.overview.value.accounts.snapshots : []).find(item => localAccountKey(item.account.id) === selected);
+  const unavailableScope = snapshot.workspaceId === null;
+  const incomplete = snapshot.freshness.kind === 'incomplete';
   const actionHold =
     answer?.kind === 'requested_followup' &&
     answer.draft.accountVersion !== account?.account.version
@@ -444,12 +482,13 @@ export function NativeDesk({
   const keys =
     surface === 'today'
       ? [
+          ...(localRead?.retained.value?.items.map(retainedKey) ?? []),
           ...snapshot.calls.accountIds.map((id) => `call:${id}`),
           ...snapshot.answers.map(answerKey),
           ...snapshot.meetings.map(meetingKey),
         ]
       : surface === 'accounts'
-        ? snapshot.accounts.map((a) => `account:${a.account.id}`)
+        ? [...((localRead?.overview.value?.accounts.state === 'available' ? localRead.overview.value.accounts.snapshots : []).map(a => localAccountKey(a.account.id)) ?? []), ...snapshot.accounts.map((a) => `account:${a.account.id}`)]
         : snapshot.campaigns.map((c) => `campaign:${c.version.id}`);
   const keyboard = (e: KeyboardEvent<HTMLElement>) => {
     if (
@@ -557,6 +596,8 @@ export function NativeDesk({
           </details>
         </div>
       </header>
+      {localHold && <p role="status">Local workflow unavailable or inconsistent. Worker actions are held. Refresh to check status.</p>}
+      {incomplete && <p role="status">The daily snapshot is incomplete. Account work may be missing. Existing owner checks still apply.</p>}
       <div className="native-desk__layout">
         <nav className="native-desk__queue" aria-label={`${title} queue`}>
           <p className="native-desk__hint">j / k to move · Enter to review</p>
@@ -564,10 +605,11 @@ export function NativeDesk({
             <>
               <section className="native-desk__lane">
                 <h2>
-                  Calls <span>{snapshot.calls.accountIds.length}</span>
+                  Calls <span>{localRead?.retained.value ? `${localRead.retained.value.items.length} retained${localRead.retained.error ? ' (stale)' : ''}` : 'Retained work unavailable'} · {unavailableScope ? 'Account allocation unavailable' : `${snapshot.calls.accountIds.length} account calls`}</span>
                 </h2>
+                {localRead && <RetainedWork read={localRead.retained} selected={selected} onSelect={select} />}
                 {!snapshot.calls.accountIds.length ? (
-                  <p className="native-desk__empty">No calls allocated.</p>
+                  <p className="native-desk__empty">{unavailableScope ? 'Account call allocation is unavailable in this unpaired workspace.' : 'No calls allocated.'}</p>
                 ) : (
                   snapshot.calls.accountIds.map((id) => (
                     <button
@@ -588,12 +630,14 @@ export function NativeDesk({
                 )}
               </section>
               <DailyAnswers
+                unavailable={unavailableScope}
                 items={snapshot.answers}
                 selected={selected}
                 name={name}
                 onSelect={select}
               />
               <UpcomingMeetings
+                unavailable={unavailableScope}
                 items={snapshot.meetings}
                 selected={selected}
                 name={name}
@@ -601,6 +645,8 @@ export function NativeDesk({
               />
             </>
           ) : surface === 'accounts' ? (
+            <>
+            {localRead && <LocalAccountLibrary read={localRead.overview} selected={selected} onSelect={select} />}
             <section className="native-desk__lane">
               <h2>
                 Accounts <span>{snapshot.accounts.length}</span>
@@ -619,8 +665,9 @@ export function NativeDesk({
                   <span>{a.account.domain ?? 'Domain unknown'}</span>
                 </button>
               ))}
-              {!snapshot.accounts.length && <p>No stored accounts.</p>}
+              {!snapshot.accounts.length && <p>{unavailableScope ? 'Worker-scoped accounts are unavailable in this unpaired workspace.' : 'No stored accounts.'}</p>}
             </section>
+            </>
           ) : (
             <section className="native-desk__lane">
               <h2>
@@ -645,7 +692,7 @@ export function NativeDesk({
                   </span>
                 </button>
               ))}
-              {!snapshot.campaigns.length && <p>No frozen campaigns.</p>}
+              {!snapshot.campaigns.length && <p>{unavailableScope ? 'Campaign scope is unavailable in this unpaired workspace.' : 'No frozen campaigns.'}</p>}
             </section>
           )}
         </nav>
@@ -661,11 +708,13 @@ export function NativeDesk({
                       ? 'Campaign review'
                       : 'Company context'}
               </span>
-              <button aria-label="Close details" onClick={() => select(null)}>
+              <button aria-label="Close details" onClick={closeDetails}>
                 Close
               </button>
             </div>
           )}
+          {retained && <RetainedWorkDetail entry={retained} stale={!!localRead?.retained.error || !!localRead?.retained.pending} onOpenLead={onOpenLead} />}
+          {localAccount && <LocalAccountDetail account={localAccount} />}
           {account && <AccountContext account={account} />}{' '}
           {answer && snapshot.workspaceId && (
             <DailyAnswerDetail
@@ -696,6 +745,7 @@ export function NativeDesk({
                     </p>
                     {r.personId ? (
                       <button
+                        disabled={readError}
                         className="native-desk__primary"
                         onClick={() => onOpenLead(r.personId!)}
                       >
@@ -713,7 +763,7 @@ export function NativeDesk({
               </p>
             </section>
           )}
-          {!account && !campaign && !meeting && !answer && (
+          {!retained && !localAccount && !account && !campaign && !meeting && !answer && (
             <div className="native-desk__welcome">
               <h2>
                 {selected

@@ -33,11 +33,13 @@ export function DailyAnswers({
   selected,
   name,
   onSelect,
+  unavailable = false,
 }: {
   items: DailyAnswer[];
   selected: string | null;
   name(id: string): string;
   onSelect(key: string): void;
+  unavailable?: boolean;
 }) {
   return (
     <section className="native-desk__lane" aria-labelledby="daily-answers">
@@ -45,7 +47,7 @@ export function DailyAnswers({
         Needs your approval <span>{items.length}</span>
       </h2>
       {items.length === 0 ? (
-        <p className="native-desk__empty">No approvals waiting.</p>
+        <p className="native-desk__empty">{unavailable ? 'Account approvals are unavailable in this unpaired workspace.' : 'No approvals waiting.'}</p>
       ) : (
         items.map((a) => (
           <button

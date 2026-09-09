@@ -445,3 +445,18 @@
     position: static;
   }
 }
+
+/* Retained local work shares the approved dense queue, not a fourth lane. */
+.native-desk__retained h3 {
+  margin: 8px 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.native-desk__retained > p {
+  margin: 6px 0;
+  font-size: 12px;
+}
+.native-desk__retained .native-desk__row {
+  overflow-wrap: anywhere;
+}

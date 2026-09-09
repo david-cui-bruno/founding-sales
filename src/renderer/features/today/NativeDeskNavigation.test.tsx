@@ -26,6 +26,8 @@ it('actual Today selects stored meeting_first without mounting legacy read or co
   ).toBe('meeting_first');
   expect(get).not.toHaveBeenCalled();
   expect(f.calls.map((c) => c.method)).toEqual([
+    'localWorkspace.get',
+    'localWorkspace.getCommitments',
     'daily.get',
     'delegation.status',
   ]);
@@ -46,7 +48,9 @@ it.each(['accounts', 'campaigns'] as const)(
     });
     await screen.findByTestId('native-desk');
     expect(f.calls.map((c) => c.method)).toEqual([
-      'daily.get',
+      'localWorkspace.get',
+    'localWorkspace.getCommitments',
+    'daily.get',
       'delegation.status',
     ]);
   },
@@ -100,6 +104,8 @@ it('company call selection is not dispatch, and only a real linked person can op
   );
   expect(open).toHaveBeenCalledWith('real-person');
   expect(f.calls.map((c) => c.method)).toEqual([
+    'localWorkspace.get',
+    'localWorkspace.getCommitments',
     'daily.get',
     'delegation.status',
   ]);

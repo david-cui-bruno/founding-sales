@@ -93,6 +93,7 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
           density={context.density}
           shell={context.api.shell}
           recovery={context.api.recovery}
+          localWorkspaceApi={context.api.localWorkspace}
           outreachApi={context.api.outreach}
           sourcing={<SourcingStatusRow api={context.api.sourcing} />}
         >

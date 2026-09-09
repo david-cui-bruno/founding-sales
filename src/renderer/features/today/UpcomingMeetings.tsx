@@ -5,11 +5,13 @@ export function UpcomingMeetings({
   selected,
   name,
   onSelect,
+  unavailable = false,
 }: {
   items: DailyMeeting[];
   selected: string | null;
   name(id: string): string;
   onSelect(key: string): void;
+  unavailable?: boolean;
 }) {
   return (
     <section className="native-desk__lane" aria-labelledby="daily-meetings">
@@ -17,7 +19,7 @@ export function UpcomingMeetings({
         Upcoming meetings <span>{items.length}</span>
       </h2>
       {!items.length ? (
-        <p className="native-desk__empty">No stored meetings.</p>
+        <p className="native-desk__empty">{unavailable ? 'Account meetings are unavailable in this unpaired workspace.' : 'No stored meetings.'}</p>
       ) : (
         items.map((m) => (
           <button

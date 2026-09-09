@@ -1,3 +1,5 @@
+import type { LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
+import { WorkflowSection } from './WorkflowSection';
 import type { RecoveryProvider } from '../../shared/contracts/recoveryContract';
 import { RecoverySection } from './RecoverySection';
 import { Monitor, Moon, Rows2, Rows3, Sun, type LucideIcon } from 'lucide-react';
@@ -142,10 +144,12 @@ function DataStorageSection({
   health,
   shell,
   recovery,
+  localWorkspaceApi,
 }: {
   health: AppHealth | null;
   shell?: SettingsShellApi;
   recovery?: RecoveryProvider;
+  localWorkspaceApi?: LocalWorkspaceApi;
 }) {
   return (
     <section
@@ -155,6 +159,7 @@ function DataStorageSection({
     >
       <h2 className="settings__section-title">Data &amp; storage</h2>
       {recovery !== undefined && <RecoverySection recovery={recovery} />}
+      <WorkflowSection api={localWorkspaceApi} />
       {health === null ? (
         <p className="settings__quiet">Available once the foundation is ready.</p>
       ) : (
@@ -357,6 +362,7 @@ export type SettingsScreenProps = {
   density: DensityState;
   shell?: SettingsShellApi;
   recovery?: RecoveryProvider;
+  localWorkspaceApi?: LocalWorkspaceApi;
   outreachApi?: OutreachApi;
   /** Sourcing status rows, rendered inside the Sourcing section. */
   sourcing?: ReactNode;
@@ -379,6 +385,7 @@ export function SettingsScreen({
   density,
   shell,
   recovery,
+  localWorkspaceApi,
   outreachApi,
   sourcing,
   children,
@@ -429,7 +436,7 @@ export function SettingsScreen({
             <AppearanceSection theme={theme} density={density} />
           )}
           {active === 'data' && (
-            <DataStorageSection health={health} shell={shell} recovery={recovery} />
+            <DataStorageSection health={health} shell={shell} recovery={recovery} localWorkspaceApi={localWorkspaceApi} />
           )}
           {active === 'sourcing' && (
             <section
