@@ -1,4 +1,5 @@
-import { expect, it } from 'vitest';
+import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
+import { expect, it, vi } from 'vitest';
 import { requestedCallFixture , requestedCapturedFixture, materializeRequested } from './requestedFollowupFixture';
 it('actual call fixture has completed connected evidence and no fabricated inbound thread', async () => {
   const f = await requestedCallFixture();
@@ -58,4 +59,45 @@ it.each(['expiry', 'paused', 'revoked', 'draft', 'suppression', 'conflict', 'new
   if (variant === 'new-inbound') { const checkpoint = (await f.threads.checkpoint('acct', 'mailbox'))!; await f.threads.beginPoll('acct', 'mailbox', 'new-inbound'); await f.threads.applyPage({ complete: true, nextCursor: { ...checkpoint, historyId: '2' }, threads: [{ accountId: 'acct', mailboxSubject: 'mailbox', provider: 'gmail', providerThreadId: 'new-thread', messages: [{ id: 'new-message', threadId: 'new-thread', rfcMessageId: '<new@example.invalid>', references: [], from: ['recipient@example.invalid'], to: ['sender@example.invalid'], cc: [], date: f.options.clock.now(), subject: 'New facts', bodyParts: [{ mimeType: 'text/plain', text: 'Please consider this update', truncated: false }] }] }] }, checkpoint, 'new-inbound'); }
   await expect(f.policy.planRequestedAdmission(f.command.commandId)).rejects.toThrow();
   expect(await f.execution.readDispatch('acct', 'requested-email')).toBeNull(); expect(await f.store.list('DISPATCH_PERMISSION#')).toHaveLength(0);
+});
+
+it.each(['revision', 'condition', 'alias', 'scalar', 'workspace', 'next-revision', 'table', 'partition'] as const)('refuses non-equivalent campaign preparation replacement: %s', async changed => {
+  const f = await requestedCapturedFixture();
+  const repository = f.campaigns.repository; const original = repository.prepareRequestedFollowupPlan.bind(repository);
+  const spy = vi.spyOn(repository, 'prepareRequestedFollowupPlan').mockImplementation(async input => {
+    const plan = await original(input); // Fault injection into the actual persisted D1 plan, not an allowed callback.
+    const put = plan.items.find((item: TransactWriteItem) => item.Put?.Item?.sk?.S === 'CAMPAIGN_ENROLLMENT#call-enrollment')!.Put!;
+    if (changed === 'revision') put.ExpressionAttributeValues![':rev'] = { N: '999' };
+    if (changed === 'condition') put.ConditionExpression = '#rev = :rev';
+    if (changed === 'alias') put.ExpressionAttributeNames!['#rev'] = 'otherRevision';
+    if (changed === 'scalar') { put.ConditionExpression += ' AND #extra = :extra'; put.ExpressionAttributeNames!['#extra'] = 'state'; put.ExpressionAttributeValues![':extra'] = { S: 'active' }; }
+    if (changed === 'workspace') put.Item!.workspaceId = { S: 'foreign' };
+    if (changed === 'next-revision') put.Item!.rev = { N: '999' };
+    if (changed === 'table') put.TableName = 'foreign';
+    if (changed === 'partition') put.Item!.pk = { S: 'WORKSPACE#foreign' };
+    return plan;
+  });
+  try { await expect(f.policy.planRequestedAdmission(f.command.commandId)).rejects.toThrow('requested_campaign_condition_conflict'); }
+  finally { spy.mockRestore(); }
+  expect(await f.execution.readDispatch('acct', 'requested-email')).toBeNull();
+  expect(f.dynamo.inspect('CAMPAIGN_ENROLLMENT#call-enrollment')).toMatchObject({ state: 'active' });
+});
+it.each(['CAMPAIGN_ENROLLMENT#call-enrollment', 'CAMPAIGN_SLOT#acct'])('coalesced campaign conditional Put still fences a concurrent %s revision', async key => {
+  const f = await requestedCapturedFixture(); const plan = await f.policy.planRequestedAdmission(f.command.commandId);
+  expect(plan.items.filter(item => (item.ConditionCheck?.Key ?? item.Put?.Item)?.sk?.S === key)).toHaveLength(1);
+  expect(plan.items.find(item => item.Put?.Item?.sk?.S === key)?.Put).toBeDefined();
+  const row = (await f.store.get(key))!; await f.store.transact([f.store.put(key, row.data, row.rev)]);
+  await expect(f.store.transact(plan.items)).rejects.toThrow('TransactionCanceledException');
+  expect(await f.execution.readDispatch('acct', 'requested-email')).toBeNull();
+});
+
+import { DynamoRequestedFollowupRepository } from '../src/requestedFollowupRepository';
+it('materialization preserves every independent C3 campaign and evidence check byte-equivalently', async () => {
+  const f = await requestedCapturedFixture(); const preparation = await new DynamoRequestedFollowupRepository(f.options).planCurrent(f.draft);
+  const plan = await f.policy.planRequestedAdmission(f.command.commandId);
+  const replaced = new Set(['AUTH#acct', 'CAMPAIGN_ENROLLMENT#call-enrollment', 'CAMPAIGN_SLOT#acct']);
+  for (const check of preparation.checks) {
+    const key = check.ConditionCheck!.Key!.sk!.S!;
+    if (!replaced.has(key)) expect(plan.items.some(item => fingerprint(item) === fingerprint(check)), key).toBe(true);
+  }
 });

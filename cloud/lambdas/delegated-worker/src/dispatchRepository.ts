@@ -6,7 +6,7 @@ import { DynamoRequestedFollowupRepository, requestedFollowupDraftKey, type Requ
 import { loadRequestedApproval, requestedApprovalKey, requestedApprovalRecordSchema, type RequestedApprovalRecord } from './requestedFollowupApproval';
 import { executionAuthorityFields } from './executionRepository';
 import { pairingKey } from './workerAuth';
-import type { RequestedFollowupCampaignOrigin } from './workerCampaignRepository';
+import { campaignEnrollmentKey, campaignSlotKey, type RequestedFollowupCampaignOrigin } from './workerCampaignRepository';
 import { CampaignExecution, type CampaignExecutionPlan } from './campaignExecution';
 import { ownerSourceConfigurationSchema, ownerSourceKey } from '../../../../src/shared/contracts/ownerCommandContract';
 import type { CampaignEventPayload } from '../../../../src/shared/contracts/campaignContract';
@@ -256,6 +256,26 @@ export class DynamoDispatchRepository {
     const plan = await drafts.planCurrent(candidate); const live = await this.requestedLiveChecks(record, plan);
     if (!this.campaignExecution) throw new Error('campaign_binding_unavailable');
     const campaign = await this.campaignExecution.repository.prepareRequestedFollowupPlan({ commandId, accountId: record.accountId, originalActionId: record.originalCall.actionId, originalOutcomeCommandId: record.originalCall.commandId });
+    // Only these two D1 state writes may replace C3 preparation checks. The
+    // write must enforce the entire identical prior-image predicate, not just key/rev.
+    const replaceable = new Set([campaignEnrollmentKey(campaign.origin.enrollmentId), campaignSlotKey(record.accountId)]);
+    const replaced = new Set<TransactWriteItem>();
+    for (const item of campaign.items) {
+      const put = item.Put; if (!put) continue;
+      const key = put.Item?.sk?.S;
+      if (!key || !replaceable.has(key)) throw new Error('requested_campaign_condition_conflict');
+      const matching = plan.checks.filter(check => check.ConditionCheck?.Key?.sk?.S === key);
+      const prior = matching[0]?.ConditionCheck;
+      const revision = Number(prior?.ExpressionAttributeValues?.[':rev']?.N);
+      const required = { TableName: put.TableName, Key: { pk: put.Item?.pk, sk: put.Item?.sk }, ConditionExpression: put.ConditionExpression,
+        ExpressionAttributeNames: put.ExpressionAttributeNames, ExpressionAttributeValues: put.ExpressionAttributeValues };
+      if (matching.length !== 1 || !prior || !Number.isSafeInteger(revision) || !Number.isSafeInteger(revision + 1) || revision < 1
+        || put.TableName !== this.store.options.tableName || fingerprint(required.Key) !== fingerprint(this.store.key(key))
+        || put.Item?.workspaceId?.S !== this.store.options.workspaceId || prior.ExpressionAttributeValues?.[':workspace']?.S !== this.store.options.workspaceId
+        || put.Item?.rev?.N !== String(revision + 1) || fingerprint(prior) !== fingerprint(required)) throw new Error('requested_campaign_condition_conflict');
+      replaced.add(matching[0]!);
+    }
+    const preparationChecks = plan.checks.filter(item => !replaced.has(item));
     const artifacts = this.requestedArtifacts(loaded, candidate, campaign.origin);
     const dKey = requestedFollowupDraftKey(record.accountId, record.draftSnapshot.id); const draftRow = await this.required(dKey);
     if (fingerprint(requestedFollowupDraftSchema.parse(draftRow.data)) !== fingerprint(record.draftSnapshot)) throw new Error('requested_evidence_changed');
@@ -263,7 +283,7 @@ export class DynamoDispatchRepository {
     if (flight && ['dispatching', 'unknown'].includes(flightSchema.parse(flight.data).state)) throw new Error('account_dispatch_unresolved');
     const entries = [[dispatchPermissionKey(record.accountId, artifacts.permission.id), artifacts.permission], [dispatchApprovalKey(artifacts.approval.id), artifacts.approval],
       [dispatchIntentKey(artifacts.intent.commandId), artifacts.intent], [actionIndexKey(record.accountId, artifacts.intent.action.actionId), { commandId: artifacts.intent.commandId }]] as const;
-    const items = [...loaded.checks.filter(item => item.ConditionCheck?.Key?.sk?.S !== requestedApprovalKey(commandId)), ...this.withoutRequestedAuthority(plan.checks, plan.authority),
+    const items = [...loaded.checks.filter(item => item.ConditionCheck?.Key?.sk?.S !== requestedApprovalKey(commandId)), ...this.withoutRequestedAuthority(preparationChecks, plan.authority),
       ...live.checks, ...campaign.items, this.store.check(dKey, draftRow.rev), flight ? this.store.check(flightKey, flight.rev) : this.store.absent(flightKey)];
     for (const [key, value] of entries) {
       if (await this.store.get(revokedKey(key))) throw new Error('requested_revoked');
