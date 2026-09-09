@@ -208,3 +208,60 @@ it('does not begin after a newer context arrives during explicit save', async ()
   );
   expect(api.begin).not.toHaveBeenCalled();
 });
+it.each(['applied', 'rejected'] as const)(
+  'offers explicit retained pending outcome retry to %s without mount replay',
+  async (status) => {
+    const item = linkedInFixture();
+    item.recovery.started = true;
+    const api = {
+      reportOutcome: vi.fn(
+        async (input: Parameters<LinkedInApi['reportOutcome']>[0]) => ({
+          draftId: item.draft.id,
+          revision: 1,
+          receipt: {
+            commandId: input.commandId,
+            status: 'pending',
+            authorityGeneration: 1,
+            aggregateVersion: 1,
+            reason: null,
+          },
+        }),
+      ),
+    } as unknown as LinkedInApi;
+    const view = render(
+      <LinkedInStep item={item} api={api} workspaceId="ws" />,
+    );
+    fireEvent.change(screen.getByLabelText('Manual outcome'), {
+      target: { value: 'not_sent' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Record outcome' }));
+    await screen.findByText('Human outcome receipt: pending.');
+    const original = vi.mocked(api.reportOutcome).mock.calls[0]![0];
+    view.unmount();
+    render(<LinkedInStep item={item} api={api} workspaceId="ws" />);
+    expect(api.reportOutcome).toHaveBeenCalledTimes(1);
+    vi.mocked(api.reportOutcome).mockResolvedValueOnce({
+      draftId: item.draft.id,
+      revision: 1,
+      receipt: {
+        commandId: original.commandId,
+        status,
+        authorityGeneration: 1,
+        aggregateVersion: 2,
+        reason: null,
+      },
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Retry retained outcome' }),
+    );
+    await screen.findByText(`Human outcome receipt: ${status}.`);
+    expect(vi.mocked(api.reportOutcome).mock.calls[1]![0]).toEqual(original);
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Record outcome',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  },
+);

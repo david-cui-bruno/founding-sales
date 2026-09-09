@@ -326,3 +326,56 @@ it('holds a saved requested draft when account context advances independently', 
   ).toBe(true);
   expect(screen.getByText(/Account context changed/)).toBeTruthy();
 });
+
+it.each(['configuration', 'account'] as const)(
+  'holds offscreen edited account after %s refresh',
+  async (kind) => {
+    const f = ownedFixture();
+    render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Email · Account A' }),
+    );
+    fireEvent.change(screen.getByLabelText('Email body'), {
+      target: { value: 'Offscreen edit' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Email · Account B' }));
+    if (kind === 'configuration') {
+      const config = await f.api.delegation.status();
+      f.setConfiguration({ ...config, state: 'paused' } as typeof config);
+    } else {
+      const snapshot = structuredClone(f.snapshot());
+      snapshot.accounts[0]!.account.version++;
+      f.setSnapshot(snapshot);
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 900));
+    });
+    expect(
+      f.calls.filter((c) => c.method === 'editRequestedFollowup'),
+    ).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Email · Account A' }));
+    expect(
+      (screen.getByLabelText('Email body') as HTMLTextAreaElement).value,
+    ).toBe('Offscreen edit');
+  },
+);
+it('teardown cancels delayed edits even when the same workspace immediately reopens', async () => {
+  const f = ownedFixture();
+  const view = render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Email · Account A' }),
+  );
+  fireEvent.change(screen.getByLabelText('Email body'), {
+    target: { value: 'Keep but do not send' },
+  });
+  view.unmount();
+  render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+  await screen.findByRole('button', { name: 'Email · Account A' });
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 900));
+  });
+  expect(
+    f.calls.filter((c) => c.method === 'editRequestedFollowup'),
+  ).toHaveLength(0);
+});

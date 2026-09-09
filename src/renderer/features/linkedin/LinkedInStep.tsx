@@ -134,10 +134,13 @@ export function LinkedInStep({
             (outcome === 'reply' && !reply.trim())
           }
           onClick={() => {
-            if (outcome) void session.report(outcome, reply);
+            if (session.canRetryReport()) void session.retryReport();
+            else if (outcome) void session.report(outcome, reply);
           }}
         >
-          Record outcome
+          {session.canRetryReport()
+            ? 'Retry retained outcome'
+            : 'Record outcome'}
         </button>
         <button
           disabled={state.busy || !!actionHold}

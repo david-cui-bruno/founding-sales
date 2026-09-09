@@ -1,4 +1,7 @@
-import { assertDailySessionScope } from './dailySessionScope';
+import {
+  assertDailySessionScope,
+  captureDailySessionScope,
+} from './dailySessionScope';
 import type { CalliePreloadApi } from '../../../shared/preload';
 import {
   approveRequestedFollowupSchema,
@@ -46,6 +49,7 @@ class RequestedDraftSession {
   private approvalCommand: ApproveRequestedFollowup | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private actionHold: string | undefined;
+  private generation = 0;
   focus: { field: 'subject' | 'body'; start: number; end: number } | null =
     null;
   constructor(
@@ -88,6 +92,7 @@ class RequestedDraftSession {
     );
   }
   setActionHold(reason: string | undefined) {
+    if (reason) this.generation++;
     this.actionHold = reason;
     if (reason && this.timer) {
       clearTimeout(this.timer);
@@ -184,12 +189,16 @@ class RequestedDraftSession {
     } catch {
       return Promise.reject(Error('View scope changed'));
     }
+    const assertScope = captureDailySessionScope(this.api, this.workspaceId);
+    const generation = this.generation;
     this.update({ saving: true });
     this.saving = (async () => {
       try {
         let force = forceAcknowledgement;
         while (this.dirty() || force) {
-          assertDailySessionScope(this.api, this.workspaceId);
+          assertScope();
+          if (generation !== this.generation)
+            throw Error('Operation cancelled');
           if (this.actionHold) throw Error('View scope held');
           force = false;
           const { draft, subject, body } = this.state;
@@ -300,8 +309,11 @@ class RequestedDraftSession {
     }
     this.update({ busy: true });
     try {
+      const assertScope = captureDailySessionScope(this.api, this.workspaceId);
+      const generation = this.generation;
       await this.flush(true);
-      assertDailySessionScope(this.api, this.workspaceId);
+      assertScope();
+      if (generation !== this.generation) throw Error('Operation cancelled');
       if (this.actionHold) throw Error('View scope held');
       const draft = this.state.draft;
       if (this.remoteAcknowledgedRevision !== draft.revision)
@@ -403,4 +415,13 @@ export function requestedDraftSession(
     map.set(key, session);
   }
   return session;
+}
+
+/** Update all retained editors, including offscreen drafts, on each local read. */
+export function updateRequestedSessionHolds(
+  api: RequestedDraftApi,
+  hold: (draft: RequestedFollowupDraft) => string | undefined,
+) {
+  for (const session of sessions.get(api)?.values() ?? [])
+    session.setActionHold(hold(session.snapshot().draft));
 }

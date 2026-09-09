@@ -1,4 +1,7 @@
-import { assertDailySessionScope } from '../today/dailySessionScope';
+import {
+  assertDailySessionScope,
+  captureDailySessionScope,
+} from '../today/dailySessionScope';
 import type { DailyAnswer } from '../../../shared/contracts/dailyContract';
 import {
   linkedInDraftSchema,
@@ -38,6 +41,7 @@ const identity = (d: LinkedInDraft) =>
 class LinkedInSession {
   private state: State;
   private actionHold: string | undefined;
+  private generation = 0;
   focus: { field: 'note' | 'reply'; start: number; end: number } | null = null;
   private listeners = new Set<() => void>();
   private beginCommand: string | null = null;
@@ -102,13 +106,33 @@ class LinkedInSession {
       return;
     this.update({ body });
   }
+  private unresolvedBegin() {
+    const attempts = new Map(
+      this.state.recovery.attempts.map((a) => [a.commandId, a.receipt]),
+    );
+    if (this.beginCommand && !attempts.has(this.beginCommand))
+      attempts.set(this.beginCommand, null);
+    const response = this.state.begin?.receipt;
+    if (
+      response &&
+      response.commandId === this.beginCommand &&
+      (!attempts.get(response.commandId) ||
+        attempts.get(response.commandId)?.status === 'pending')
+    )
+      attempts.set(response.commandId, response);
+    return [...attempts].some(
+      ([id, receipt]) =>
+        !receipt || receipt.commandId !== id || receipt.status === 'pending',
+    );
+  }
   canUseSavedVersion() {
     return (
       !this.state.busy &&
-      !(this.beginCommand && !this.state.begin) &&
-      !(this.reportCommand && !this.state.report) &&
-      this.state.begin?.status !== 'pending' &&
-      this.state.report?.receipt.status !== 'pending'
+      !this.unresolvedBegin() &&
+      !(
+        this.reportCommand &&
+        (!this.state.report || this.state.report.receipt.status === 'pending')
+      )
     );
   }
   useSavedVersion() {
@@ -131,6 +155,7 @@ class LinkedInSession {
     });
   }
   setActionHold(reason: string | undefined) {
+    if (reason) this.generation++;
     this.actionHold = reason;
   }
   chooseOutcome(outcome: LinkedInReport['outcome'] | '') {
@@ -169,12 +194,18 @@ class LinkedInSession {
     this.update({ draft });
     if (this.state.conflict) throw Error('Saved context requires review');
   }
-  private async run(work: () => Promise<void>) {
+  private async run(work: (assertOperation: () => void) => Promise<void>) {
     if (this.actionHold || this.state.busy || this.state.conflict) return;
     this.update({ busy: true, error: null });
     try {
       assertDailySessionScope(this.api, this.workspaceId);
-      await work();
+      const assertScope = captureDailySessionScope(this.api, this.workspaceId);
+      const generation = this.generation;
+      await work(() => {
+        assertScope();
+        if (this.actionHold || generation !== this.generation)
+          throw Error('Operation cancelled');
+      });
     } catch {
       this.update({
         error:
@@ -188,9 +219,9 @@ class LinkedInSession {
     return this.run(() => this.save());
   }
   begin() {
-    return this.run(async () => {
+    return this.run(async (assertOperation) => {
       await this.save();
-      assertDailySessionScope(this.api, this.workspaceId);
+      assertOperation();
       if (this.actionHold) throw Error('View held');
       this.beginCommand ??= crypto.randomUUID();
       const result = await this.api.begin({
@@ -212,9 +243,9 @@ class LinkedInSession {
     });
   }
   helper(kind: 'open' | 'copy') {
-    return this.run(async () => {
+    return this.run(async (assertOperation) => {
       await this.save();
-      assertDailySessionScope(this.api, this.workspaceId);
+      assertOperation();
       if (this.actionHold) throw Error('View held');
       const result = await this.api[kind](this.bound());
       if (
@@ -235,7 +266,20 @@ class LinkedInSession {
       (this.state.begin?.status === 'started' ||
         this.state.begin?.status === 'already_started' ||
         this.state.recovery.started) &&
-      !this.state.report
+      (!this.state.report || this.state.report.receipt.status === 'pending')
+    );
+  }
+  canRetryReport() {
+    return (
+      !!this.reportCommand &&
+      (!this.state.report || this.state.report.receipt.status === 'pending')
+    );
+  }
+  retryReport() {
+    if (!this.reportCommand) return Promise.resolve();
+    return this.report(
+      this.reportCommand.outcome,
+      this.reportCommand.replyText ?? '',
     );
   }
   report(outcome: LinkedInReport['outcome'], replyText: string) {
@@ -256,7 +300,8 @@ class LinkedInSession {
       const result = await this.api.reportOutcome(this.reportCommand);
       if (
         result.draftId !== this.state.draft.id ||
-        result.revision !== this.state.draft.revision
+        result.revision !== this.state.draft.revision ||
+        result.receipt.commandId !== this.reportCommand.commandId
       )
         throw Error('Identity mismatch');
       this.update({
@@ -270,19 +315,17 @@ class LinkedInSession {
     this.update({ busy: true });
     try {
       assertDailySessionScope(this.api, this.workspaceId);
-      const draft = await this.api.get(this.bound());
+      const bound = this.bound();
+      const recovery = await this.api.recover(bound);
       if (
-        identity(draft) !== identity(this.state.draft) ||
-        draft.revision !== this.state.draft.revision
+        recovery.draftId !== bound.draftId ||
+        recovery.revision !== bound.expectedRevision
       )
         throw Error('Identity changed');
-      const recovery = await this.api.recover(this.bound());
-      if (recovery.draftId !== draft.id || recovery.revision !== draft.revision)
-        throw Error('Identity changed');
+      // Historical action records are authoritative for receipts even when get
+      // rejects an obsolete revision. Do not discard a newer incoming version.
       this.update({
-        draft,
         recovery,
-        conflict: false,
         error: null,
         feedback:
           'Recovered local owner receipts. Remote freshness remains unknown.',
@@ -316,4 +359,12 @@ export function linkedInSession(
     map.set(key, session);
   }
   return session;
+}
+
+export function updateLinkedInSessionHolds(
+  api: LinkedInApi,
+  hold: (draft: LinkedInDraft) => string | undefined,
+) {
+  for (const session of sessions.get(api)?.values() ?? [])
+    session.setActionHold(hold(session.snapshot().draft));
 }

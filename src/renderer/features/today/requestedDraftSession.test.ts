@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { setDailySessionScope } from './dailySessionScope';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import {
   requestedDraftSession,
   type RequestedDraftApi,
@@ -142,3 +143,53 @@ it('isolates recipient identities while preserving earlier local edits for retur
     'Original recipient edits',
   );
 });
+
+beforeEach(() =>
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-09T00:00:00Z')),
+);
+afterEach(() => vi.restoreAllMocks());
+
+it('does not revive approval after teardown and same-workspace reopen during save', async () => {
+  const api = apiFixture();
+  setDailySessionScope(api, 'ws');
+  let resolve!: (v: ReturnType<typeof saved>) => void;
+  vi.mocked(api.editRequestedFollowup).mockImplementationOnce(
+    () =>
+      new Promise((r) => {
+        resolve = r;
+      }),
+  );
+  const s = requestedDraftSession(api, 'ws', requestedDraft(), null);
+  const pending = s.approve('2026-09-10T12:00:00.000Z', true);
+  setDailySessionScope(api, null);
+  setDailySessionScope(api, 'ws');
+  resolve({ ...saved(), draft: { ...requestedDraft(), revision: 2 } });
+  await pending;
+  expect(api.approveRequestedFollowup).not.toHaveBeenCalled();
+});
+it.each(['refresh', 'held'] as const)(
+  'approval continuation respects %s without losing canonical saved text',
+  async (kind) => {
+    const api = apiFixture();
+    setDailySessionScope(api, 'ws');
+    const s = requestedDraftSession(api, 'ws', requestedDraft(), null);
+    let resolve!: (v: ReturnType<typeof saved>) => void;
+    vi.mocked(api.editRequestedFollowup).mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          resolve = r;
+        }),
+    );
+    const pending = s.approve('2026-09-10T12:00:00.000Z', true);
+    if (kind === 'held') {
+      s.setActionHold('Paused');
+      s.setActionHold(undefined);
+    } else setDailySessionScope(api, 'ws');
+    resolve({ ...saved(), draft: { ...requestedDraft(), revision: 2 } });
+    await pending;
+    expect(api.approveRequestedFollowup).toHaveBeenCalledTimes(
+      kind === 'refresh' ? 1 : 0,
+    );
+    expect(s.snapshot().body).toBe(requestedDraft().body);
+  },
+);

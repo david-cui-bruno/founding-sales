@@ -1,3 +1,5 @@
+import { updateRequestedSessionHolds } from './requestedDraftSession';
+import { updateLinkedInSessionHolds } from '../linkedin/linkedInSession';
 import { setDailySessionScope } from './dailySessionScope';
 import {
   useCallback,
@@ -57,11 +59,64 @@ export function NativeDeskRoute({
         if (request !== sequence.current) return;
         const snapshot = dailySnapshotSchema.parse(raw);
         const scope =
-          snapshot.workflowMode === 'meeting_first'
+          snapshot.workflowMode === 'meeting_first' &&
+          local?.workspaceId === snapshot.workspaceId &&
+          local.state === 'active' &&
+          local.configuration
             ? snapshot.workspaceId
             : null;
         setDailySessionScope(api.delegation, scope);
         setDailySessionScope(api.linkedin, scope);
+        const hold = (
+          accountId: string,
+          workspaceId: string,
+          accountVersion?: number,
+        ) => {
+          const account = snapshot.accounts.find(
+            (a) => a.account.id === accountId,
+          );
+          const owner = snapshot.ownerStatus.find(
+            (o) => o.accountId === accountId,
+          );
+          if (!scope || workspaceId !== scope)
+            return 'Daily workspace or configuration held';
+          if (
+            !account ||
+            (accountVersion !== undefined &&
+              account.account.version !== accountVersion)
+          )
+            return 'Account context changed';
+          if (
+            !owner?.authority ||
+            owner.authority.owner !== 'worker' ||
+            owner.authority.state !== 'active' ||
+            owner.pendingCommands.length
+          )
+            return 'Owner authority or command held';
+          return undefined;
+        };
+        updateRequestedSessionHolds(api.delegation, (d) => {
+          const current = snapshot.answers.find(
+            (a) =>
+              a.kind === 'requested_followup' &&
+              a.draft.id === d.id &&
+              a.accountId === d.accountId,
+          );
+          return (
+            hold(d.accountId, snapshot.workspaceId ?? '', d.accountVersion) ||
+            (!current ||
+            current.kind !== 'requested_followup' ||
+            current.draft.recipient !== d.recipient ||
+            current.draft.contextRevision !== d.contextRevision ||
+            current.draft.revision > d.revision
+              ? 'Saved draft context changed'
+              : undefined)
+          );
+        });
+        updateLinkedInSessionHolds(api.linkedin, (d) =>
+          hold(d.accountId, d.workspaceId),
+        );
+
         setState({
           api,
           snapshot,
@@ -77,6 +132,14 @@ export function NativeDeskRoute({
         if (request === sequence.current) {
           setDailySessionScope(api.delegation, null);
           setDailySessionScope(api.linkedin, null);
+          updateRequestedSessionHolds(
+            api.delegation,
+            () => 'Daily read unavailable',
+          );
+          updateLinkedInSessionHolds(
+            api.linkedin,
+            () => 'Daily read unavailable',
+          );
           setState((previous) =>
             previous.api === api
               ? { ...previous, error: true, config: null }
@@ -94,6 +157,8 @@ export function NativeDeskRoute({
       sequence.current++;
       setDailySessionScope(api.delegation, null);
       setDailySessionScope(api.linkedin, null);
+      updateRequestedSessionHolds(api.delegation, () => 'Daily view closed');
+      updateLinkedInSessionHolds(api.linkedin, () => 'Daily view closed');
       window.removeEventListener('focus', load);
       window.removeEventListener('callie:outcome-logged', load);
       window.removeEventListener('callie:email-sent', load);
