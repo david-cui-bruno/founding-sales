@@ -14,6 +14,7 @@ export function planNext(versionInput: CampaignVersion, enrollmentInput: Enrollm
   if (enrollment.state !== 'active') return wait('enrollment_inactive', null);
   if (version.id !== enrollment.campaignVersionId || !version.cohortAccountIds.includes(enrollment.accountId)) return wait('campaign_binding_mismatch', null);
   const observed = evidence.filter(e => e.enrollmentId === enrollment.id && e.accountId === enrollment.accountId && e.campaignVersionId === enrollment.campaignVersionId && e.observedAt <= now && e.observedAt >= enrollment.startedAt);
+  if (observed.some(e => e.conflict)) return wait('conflicting_outcome', null);
   if (observed.some(e => e.observation === 'replied' || ['reply', 'booked', 'opt_out'].includes(e.outcome))) {
     return { kind: 'stop', stepId: null, reason: 'conversation_started' };
   }

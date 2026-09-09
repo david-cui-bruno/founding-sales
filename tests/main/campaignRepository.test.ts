@@ -74,6 +74,18 @@ describe('real SQL campaign ownership', () => {
     } finally { f.close(); }
   });
 
+  it('persists contradictory evidence explicitly without overwriting original receipt', async () => {
+    const f = await createCampaignFixture();
+    try {
+      const enrollment = f.repo.enroll({ commandId: randomUUID(), accountId: f.account.id, selectedRouteId: f.routes[0].id, campaignVersionId: f.versions[0].id, executionContextId: 'ctx', contextRevision: 1 });
+      const evidence = { enrollmentId: enrollment.id, accountId: f.account.id, campaignVersionId: f.versions[0].id, stepId: enrollment.currentStepId!, routeId: f.routes[0].id, routeVersion: enrollment.selectedRouteVersion, outcome: 'not_called', observedAt: enrollment.startedAt, observation: 'unknown' as const, source: 'human' as const, executionContextId: 'ctx', contextRevision: 1, state: 'cancelled' as const, actionId: randomUUID(), channel: 'call' as const };
+      f.db.raw.transaction(() => f.repo.applyProjection(f.account.id, { commandId: randomUUID(), version: null, enrollment: { ...enrollment, version: 2 }, evidence })).immediate();
+      f.db.raw.transaction(() => f.repo.applyProjection(f.account.id, { commandId: randomUUID(), version: null, enrollment: { ...enrollment, version: 3, state: 'held' }, evidence: { ...evidence, state: 'human_reported_sent', outcome: 'called', conflict: 'contradictory_finalized_outcome' } })).immediate();
+      expect(f.db.raw.prepare('SELECT outcome FROM campaign_step_receipts WHERE enrollment_id=? ORDER BY outcome').all(enrollment.id)).toEqual([{ outcome: 'conflict:contradictory_finalized_outcome:called' }, { outcome: 'not_called' }]);
+      expect(f.repo.getEnrollment(enrollment.id).state).toBe('held');
+    } finally { f.close(); }
+  });
+
   it('joins authenticated projection transaction and refuses gaps or route/account mismatch', async () => {
     const f = await createCampaignFixture();
     try {

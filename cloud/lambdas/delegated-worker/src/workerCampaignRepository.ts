@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { accountIdSchema as id, accountInstantSchema as instant, accountRouteSchema, accountSchema } from '../../../../src/shared/contracts/accountContract';
-import { campaignCommandPayloadSchema, campaignEventPayloadSchema, campaignVersionSchema, enrollmentSchema, stepEvidenceSchema, type CampaignCommandPayload, type CampaignEventPayload } from '../../../../src/shared/contracts/campaignContract';
+import { campaignCommandPayloadSchema, campaignCancellationEvidenceSchema, campaignEventPayloadSchema, campaignVersionSchema, enrollmentSchema, stepEvidenceSchema, type CampaignCommandPayload, type CampaignEventPayload } from '../../../../src/shared/contracts/campaignContract';
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions } from './dynamoStore';
 
 export const campaignVersionKey = (value: string) => `CAMPAIGN_VERSION#${keyPart(value)}`;
@@ -57,15 +57,15 @@ export class WorkerCampaignRepository {
       this.store.check(campaignEnrollmentKey(enrollment.id), row.rev), this.store.check(campaignVersionKey(version.id), versionRow.rev), this.store.check(campaignApprovalKey(version.id), approvalRow.rev)]);
   }
   /** Trusted C4 outcome composition. The caller commits these with the actual action outcome and outbox. */
-  async prepareOutcomePlan(raw: { commandId: string; accountId: string; actionId: string; state: 'unknown' | 'provider_accepted' | 'cancelled'; observedAt: string }) {
-    const input = z.strictObject({ commandId: z.uuid(), accountId: id, actionId: id, state: z.enum(['unknown','provider_accepted','cancelled']), observedAt: instant }).parse(raw);
+  async prepareOutcomePlan(raw: { commandId: string; accountId: string; actionId: string; state: 'unknown' | 'provider_accepted' | 'cancelled'; observedAt: string; cancellationEvidence?: z.infer<typeof campaignCancellationEvidenceSchema> }) {
+    const input = z.strictObject({ commandId: z.uuid(), accountId: id, actionId: id, state: z.enum(['unknown','provider_accepted','cancelled']), observedAt: instant, cancellationEvidence: campaignCancellationEvidenceSchema.optional() }).refine(value => !value.cancellationEvidence || value.state === 'cancelled').parse(raw);
     const reservationRow = await this.required(campaignReservationKey(input.accountId, input.actionId));
     const reservation = campaignReservationSchema.parse(reservationRow.data);
     const row = await this.required(campaignEnrollmentKey(reservation.input.enrollmentId)); const enrollment = enrollmentSchema.parse(row.data);
     return this.planCommand({ commandId: input.commandId, accountId: input.accountId, payload: { kind: 'campaign.outcome', enrollmentId: enrollment.id,
       expectedEnrollmentVersion: enrollment.version, evidence: { enrollmentId: enrollment.id, accountId: input.accountId, campaignVersionId: reservation.campaignVersionId, actionId: input.actionId, stepId: reservation.input.stepId, routeId: reservation.input.selectedRouteId, routeVersion: reservation.routeVersion,
         contextRevision: reservation.numericContextRevision, executionContextId: reservation.input.contextRevision, channel: reservation.input.channel,
-        observation: 'unknown', outcome: input.state, source: 'provider', state: input.state, observedAt: input.observedAt } } });
+        ...(input.cancellationEvidence ? { cancellationEvidence: input.cancellationEvidence } : {}), observation: 'unknown', outcome: input.state, source: 'provider', state: input.state, observedAt: input.observedAt } } });
   }
   async planCommand(input: { commandId: string; accountId: string; payload: CampaignCommandPayload }): Promise<{ items: TransactWriteItem[]; payload: CampaignEventPayload }> {
     z.uuid().parse(input.commandId); id.parse(input.accountId); const command = campaignCommandPayloadSchema.parse(input.payload);
@@ -104,8 +104,9 @@ export class WorkerCampaignRepository {
         enrollment.state = command.state;
         if (command.state === 'active' && ['paused', 'held'].includes(old.state)) {
           const receipts = await this.store.list<unknown>(`CAMPAIGN_EVIDENCE#${keyPart(old.id)}#`);
+          if (receipts.some(receipt => stepEvidenceSchema.parse(receipt.stored.data).conflict)) throw new Error('campaign_conflict_requires_review');
           const accepted = receipts.map(receipt => ({ ...receipt, evidence: stepEvidenceSchema.parse(receipt.stored.data) })).filter(({ evidence: e }) =>
-            e.enrollmentId === old.id && e.accountId === old.accountId && e.campaignVersionId === old.campaignVersionId && e.stepId === old.currentStepId
+            !e.conflict && e.enrollmentId === old.id && e.accountId === old.accountId && e.campaignVersionId === old.campaignVersionId && e.stepId === old.currentStepId
             && e.routeId === old.selectedRouteId && e.routeVersion === old.selectedRouteVersion && e.contextRevision === old.contextRevision && e.executionContextId === old.executionContextId
             && ['human_reported_sent', 'provider_accepted'].includes(e.state) && e.observedAt >= old.startedAt && e.observedAt <= this.store.now())
             .sort((a, b) => b.evidence.observedAt.localeCompare(a.evidence.observedAt))[0];
@@ -132,7 +133,8 @@ export class WorkerCampaignRepository {
         enrollment.selectedRouteId = route.route.id; enrollment.selectedRouteVersion = route.route.version; enrollment.personId = route.route.personId; enrollment.contextRevision = command.contextRevision; enrollment.executionContextId = command.executionContextId;
         items.push(this.store.check(route.key, route.row.rev));
       } else {
-        const evidence = command.evidence;
+        let evidence = command.evidence;
+        if (evidence.conflict) throw new Error('campaign_conflict_marker_untrusted');
         if (evidence.enrollmentId !== old.id || evidence.accountId !== old.accountId || evidence.campaignVersionId !== old.campaignVersionId) throw new Error('campaign_evidence_binding');
         if (evidence.observedAt > this.store.now() || evidence.observedAt < old.startedAt) throw new Error('campaign_evidence_time');
         const interruption = evidence.observation === 'replied' || ['reply', 'booked', 'opt_out'].includes(evidence.outcome);
@@ -144,20 +146,26 @@ export class WorkerCampaignRepository {
         if (binding.enrollmentId !== old.id || reservation.campaignVersionId !== old.campaignVersionId || binding.accountId !== input.accountId
           || binding.stepId !== evidence.stepId || binding.selectedRouteId !== evidence.routeId || binding.contextRevision !== evidence.executionContextId
           || binding.channel !== evidence.channel || reservation.routeVersion !== evidence.routeVersion || reservation.numericContextRevision !== evidence.contextRevision) throw new Error('campaign_evidence_binding');
+        const definitiveManualCancellation = evidence.state === 'cancelled' && evidence.source === 'human' && evidence.observation === 'unknown'
+          && (evidence.channel === 'call' && evidence.outcome === 'not_called' || evidence.channel === 'linkedin' && evidence.outcome === 'not_sent');
+        const definitiveCancellation = definitiveManualCancellation || evidence.state === 'cancelled' && evidence.channel === 'email' && evidence.source === 'provider' && evidence.cancellationEvidence !== undefined;
+        const actual = evidence.state === 'human_reported_sent' || evidence.state === 'provider_accepted';
+        if (actual && ((evidence.channel === 'email') !== (evidence.source === 'provider') || (evidence.source === 'provider') !== (evidence.state === 'provider_accepted'))) throw new Error('campaign_outcome_source');
+        const conflict = reservation.state === 'cancelled' && actual || reservation.state === 'sent' && definitiveCancellation;
+        if (conflict) { evidence = { ...evidence, conflict: 'contradictory_finalized_outcome' }; if (!terminal(old.state)) enrollment.state = 'held'; }
+        if (reservation.state === 'cancelled' && !conflict) throw new Error('campaign_outcome_conflict');
         const observationOnly = reservation.state === 'sent' && (evidence.observation === 'no_reply' || interruption);
-        if (reservation.state === 'sent' && !observationOnly) throw new Error('campaign_outcome_conflict');
+        if (reservation.state === 'sent' && !observationOnly && !conflict) throw new Error('campaign_outcome_conflict');
         const currentBinding = evidence.stepId === old.currentStepId && evidence.routeId === old.selectedRouteId && evidence.routeVersion === old.selectedRouteVersion && evidence.contextRevision === old.contextRevision && evidence.executionContextId === old.executionContextId;
         if (observationOnly) {
           const previous = await this.evidence(old.id);
           const sent = previous.filter(item => item.actionId === evidence.actionId && ['human_reported_sent','provider_accepted'].includes(item.state));
           if (!sent.length || sent.some(item => item.observedAt > evidence.observedAt)) throw new Error('campaign_evidence_time');
         }
-        const actual = evidence.state === 'human_reported_sent' || evidence.state === 'provider_accepted';
-        if (actual && ((evidence.channel === 'email') !== (evidence.source === 'provider') || (evidence.source === 'provider') !== (evidence.state === 'provider_accepted'))) throw new Error('campaign_outcome_source');
         const capKey = campaignCapKey(old.campaignVersionId, evidence.channel); const capRow = await this.required(capKey); const cap = campaignCapSchema.parse(capRow.data);
         payload.cap = { campaignVersionId: old.campaignVersionId, channel: evidence.channel, revision: capRow.rev, ...cap };
-        if (actual && !observationOnly) {
-          if (reservation.state === 'sent' || reservation.state === 'cancelled') throw new Error('campaign_outcome_conflict');
+        if (actual && !observationOnly && !conflict) {
+          if (reservation.state === 'sent') throw new Error('campaign_outcome_conflict');
           if (cap.reserved < 1) throw new Error('campaign_cap_conflict');
           items.push(this.store.put(capKey, { reserved: cap.reserved - 1, sent: cap.sent + 1 }, capRow.rev));
           payload.cap = { ...payload.cap, revision: capRow.rev + 1, reserved: cap.reserved - 1, sent: cap.sent + 1 };
@@ -169,9 +177,14 @@ export class WorkerCampaignRepository {
             if (!next) enrollment.state = 'completed';
           }
         }
-        if (!(actual && !observationOnly)) items.push(this.store.check(capKey, capRow.rev));
-        const state = observationOnly ? reservation.state : actual ? 'sent' : evidence.state === 'unknown' ? 'unknown' : reservation.state;
-        items.push(this.store.put(reservationKey, { ...reservation, state }, reservationRow.rev));
+        if (definitiveCancellation && !conflict) {
+          if (cap.reserved < 1) throw new Error('campaign_cap_conflict');
+          items.push(this.store.put(capKey, { reserved: cap.reserved - 1, sent: cap.sent }, capRow.rev));
+          payload.cap = { ...payload.cap, revision: capRow.rev + 1, reserved: cap.reserved - 1 };
+        }
+        if (conflict || !(actual && !observationOnly) && !definitiveCancellation) items.push(this.store.check(capKey, capRow.rev));
+        const state = definitiveCancellation ? 'cancelled' : observationOnly ? reservation.state : actual ? 'sent' : evidence.state === 'unknown' ? 'unknown' : reservation.state;
+        items.push(conflict ? this.store.check(reservationKey, reservationRow.rev) : this.store.put(reservationKey, { ...reservation, state }, reservationRow.rev));
         // Enqueue and unresolved evidence never advance. Only actual outcomes select the next step.
         items.push(this.store.put(`CAMPAIGN_EVIDENCE#${keyPart(old.id)}#${keyPart(input.commandId)}`, evidence, null)); payload.evidence = evidence;
       }

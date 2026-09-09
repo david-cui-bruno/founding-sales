@@ -9,6 +9,10 @@ const enrollment: Enrollment = { id: id(6), accountId: id(3), selectedRouteId: i
 const evidence: StepEvidence = { enrollmentId: id(6), accountId: id(3), campaignVersionId: id(1), stepId: id(4), routeId: id(7), routeVersion: 1, outcome: 'no_answer', observedAt: '2026-09-08T10:00:00.000Z', observation: 'no_reply', source: 'human', executionContextId: 'context-one', contextRevision: 1, state: 'human_reported_sent', actionId: id(8), channel: 'call' };
 
 describe('truthful campaign sequence', () => {
+  it('holds contradictory historical facts even after route switch', () => {
+    const next = { ...enrollment, currentStepId: id(5), selectedRouteId: id(20), executionContextId: 'new-context', contextRevision: 2 };
+    expect(planNext(version, next, [{ ...evidence, conflict: 'contradictory_finalized_outcome' }], now)).toMatchObject({ kind: 'wait', reason: 'conflicting_outcome' });
+  });
   it('requires explicit no reply, never inferring an unread inbox', () => {
     expect(evaluateNoReply({ channel: 'linkedin', observation: 'unknown' })).toBe('wait');
     expect(evaluateNoReply({ channel: 'linkedin', observation: 'replied' })).toBe('stop');

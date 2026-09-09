@@ -145,7 +145,7 @@ export class CampaignRepository {
         const route = this.raw.prepare('SELECT version FROM pm_account_routes WHERE account_id=? AND id=? AND version=?').get(accountId,evidence.routeId,evidence.routeVersion) as { version: number } | undefined;
         if (!route) throw new Error('campaign_projection_binding');
         this.raw.prepare('INSERT INTO campaign_step_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(this.ws, payload.commandId, accountId, e.id, evidence.stepId,
-          evidence.routeId, route.version, evidence.contextRevision, evidence.executionContextId, evidence.actionId, evidence.channel, evidence.state, evidence.outcome, evidence.observation, evidence.source, evidence.observedAt, payload.commandId);
+          evidence.routeId, route.version, evidence.contextRevision, evidence.executionContextId, evidence.actionId, evidence.channel, evidence.state, evidence.conflict ? `conflict:${evidence.conflict}:${evidence.outcome}` : evidence.outcome, evidence.observation, evidence.source, evidence.observedAt, payload.commandId);
       }
     } else if (payload.evidence) throw new Error('campaign_projection_binding');
     if (payload.cap) {
