@@ -176,7 +176,7 @@ const inspectPackagedApplication = async (userDataPath: string, inspectRecovery?
     await page.getByRole('link', { name: 'Settings' }).click();
     await expect(page.getByText('Encrypted SQLite ready')).toBeVisible();
     await expect(page.getByText('FTS5 available')).toBeVisible();
-    await expect(page.getByText('Schema 19')).toBeVisible();
+    await expect(page.getByText('Schema 24')).toBeVisible();
     // The status row uses the isolated local fixture inbox. The separate
     // enrichment fallback also sees only the empty child HOME. Automatic
     // polling stays disabled under --use-mock-keychain.

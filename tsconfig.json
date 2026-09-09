@@ -12,7 +12,7 @@
     "baseUrl": ".",
     "paths": {
       "kysely/migration": [
-        "node_modules/kysely/dist/migration/index.d.ts"
+        "node_modules/kysely/dist/migration/index"
       ],
       "@electron/fuses": [
         "node_modules/@electron/fuses/dist/index.d.ts"
