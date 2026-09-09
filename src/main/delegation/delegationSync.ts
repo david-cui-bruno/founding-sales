@@ -91,3 +91,33 @@ export class SqlDelegationTransport {
     });
   }
 }
+
+import { configureLocalDelegationSchema, localDelegationConfigurationRecordSchema, type LocalDelegationConfiguration } from '../../shared/contracts/ownerCommandContract';
+/** Schema23 paired configuration only. This never admits a budget or execution owner. */
+export class SqlDelegationConfiguration {
+  private readonly input: { database: import('../db/database').AppDatabase; workspaceId: string; pairingId: string; clock: { now(): string } };
+  constructor(input: { database: import('../db/database').AppDatabase; workspaceId: string; pairingId: string; clock: { now(): string } }) {
+    accountIdSchema.parse(input.workspaceId); accountIdSchema.parse(input.pairingId); this.input={...input};
+  }
+  read(): {revision:number;configuration:LocalDelegationConfiguration;updatedAt:string}|null {
+    const row=this.input.database.raw.prepare('SELECT revision,configuration_json,updated_at FROM delegated_local_configuration WHERE workspace_id=? AND pairing_id=?')
+      .get(this.input.workspaceId,this.input.pairingId) as {revision:number;configuration_json:string;updated_at:string}|undefined;
+    if(!row)return null;
+    const result=localDelegationConfigurationRecordSchema.parse({revision:row.revision,configuration:JSON.parse(row.configuration_json),updatedAt:row.updated_at});
+    if(result.configuration.research && result.configuration.research.workspaceId!==this.input.workspaceId)throw new Error('Configuration workspace mismatch');
+    return result;
+  }
+  configure(raw:{expectedRevision:number;configuration:LocalDelegationConfiguration}) {
+    const input=configureLocalDelegationSchema.parse(raw); const db=this.input.database.raw;
+    if(db.inTransaction)throw new Error('Configuration requires its own transaction');
+    return db.transaction(()=>{
+      const previous=this.read(); if((previous?.revision??0)!==input.expectedRevision)throw new Error('Stale configuration revision');
+      if(input.configuration.research && input.configuration.research.workspaceId!==this.input.workspaceId)throw new Error('Configuration workspace mismatch');
+      const at=accountInstantSchema.parse(this.input.clock.now());
+      db.prepare(`INSERT INTO delegated_local_configuration VALUES(?,?,?,?,?) ON CONFLICT(workspace_id,pairing_id)
+        DO UPDATE SET revision=excluded.revision,configuration_json=excluded.configuration_json,updated_at=excluded.updated_at`)
+        .run(this.input.workspaceId,this.input.pairingId,input.expectedRevision+1,JSON.stringify(input.configuration),at);
+      return this.read()!;
+    }).immediate();
+  }
+}

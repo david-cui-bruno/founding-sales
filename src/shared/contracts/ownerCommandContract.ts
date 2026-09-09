@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { acquisitionMilestoneReportSchema } from './acquisitionReportContract';
 import { audienceQuerySchema, researchCapabilitySchema, researchLimitsSchema } from '../../main/research/companyResearchTypes';
 import { campaignCommandPayloadSchema } from './campaignContract';
 import { accountReplyDraftSchema } from './mailThreadContract';
@@ -49,6 +50,18 @@ export const configureOwnerCommandSchema = z.strictObject({ ...ownerCommandBase,
   expectedConfigurationRevision: revision, configuration: ownerSourceConfigurationSchema,
   mailScope: z.strictObject({ expectedEnvelopeRevision: revision.min(1).nullable(), since: instant }).nullable(),
 }) });
-export const ownerCommandSchemas = [submitApprovedReplyCommandSchema, prepareManualCommandSchema, completeManualCommandSchema, approveReplyCommandSchema, ownerCampaignCommandSchema, configureOwnerCommandSchema] as const;
+export const reportAcquisitionMilestoneCommandSchema = z.strictObject({ ...ownerCommandBase, kind: z.literal('report-acquisition-milestone'), payload: acquisitionMilestoneReportSchema });
+export const ownerCommandSchemas = [submitApprovedReplyCommandSchema, prepareManualCommandSchema, completeManualCommandSchema, approveReplyCommandSchema, ownerCampaignCommandSchema, configureOwnerCommandSchema, reportAcquisitionMilestoneCommandSchema] as const;
 export const ownerCommandSchema = z.discriminatedUnion('kind', ownerCommandSchemas);
 export type OwnerCommand = z.infer<typeof ownerCommandSchema>;
+
+export const localDelegationConfigurationSchema = z.strictObject({version:z.literal(1),state:z.enum(['paused','active']),research:ownerResearchConfigurationSchema.nullable()});
+export type LocalDelegationConfiguration = z.infer<typeof localDelegationConfigurationSchema>;
+export const configureLocalDelegationSchema = z.strictObject({expectedRevision:revision,configuration:localDelegationConfigurationSchema});
+export const localDelegationConfigurationRecordSchema = z.strictObject({revision:revision.min(1),configuration:localDelegationConfigurationSchema,updatedAt:instant});
+
+/** Workspace discovery activation never creates an account or execution authority. */
+export const ownerResearchSourceKey = (): string => 'OWNER_RESEARCH_SOURCE';
+export const ownerResearchSourceSchema = z.strictObject({version:z.literal(1),workspaceId:id,pairingId:id,revision:revision.min(1),state:z.enum(['paused','active']),research:ownerResearchConfigurationSchema.nullable()}).refine(value=>!value.research||value.research.workspaceId===value.workspaceId,'Workspace mismatch');
+export type OwnerResearchSource = z.infer<typeof ownerResearchSourceSchema>;
+export const configureResearchSourceSchema = z.strictObject({commandId:z.uuid(),workspaceId:id,pairingId:id,expectedRevision:revision,configuration:ownerResearchSourceSchema});

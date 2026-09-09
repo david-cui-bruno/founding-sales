@@ -1,24 +1,40 @@
+import { meetingReservationSchema, meetingOutcomeSchema } from '../../../../src/shared/contracts/meetingContract';
 import { createHash } from 'node:crypto';
 import { CampaignExecution } from './campaignExecution';
 import { WorkerCampaignRepository, campaignActionApprovalKey, campaignActionApprovalSchema, campaignReservationKey, campaignReservationSchema, campaignEnrollmentKey } from './workerCampaignRepository';
-import { enrollmentSchema } from '../../../../src/shared/contracts/campaignContract';
+import { enrollmentSchema, campaignEventPayloadSchema } from '../../../../src/shared/contracts/campaignContract';
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { threadProjectionSchema, mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { accountRecordSchema, accountKey } from './workerAccountRepository';
 import { intakeRegistryKey, intakeRegistrySchema, createIntakeBarrier } from './intakeBarrier';
 import type { WorkerAuth } from './workerAuth';
 import type { RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
-import { ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand } from '../../../../src/shared/contracts/ownerCommandContract';
+import { configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand } from '../../../../src/shared/contracts/ownerCommandContract';
 import { commandReceiptSchema, workerEventSchema, type CommandReceipt, type WorkerEvent } from '../../../../src/shared/contracts/delegationContract';
 import { DynamoStore, fingerprint, keyPart } from './dynamoStore';
 import { authorityRecordSchema, executionAuthorityKey, executionAuthorityFields, createExecutionRepository } from './executionRepository';
 import { DynamoThreadIntakeRepository, mailThreadKey, mailCursorKey, mailSuppressionKey } from './threadIntakeRepository';
-import { DynamoDispatchRepository, dispatchApprovalKey, dispatchPermissionKey, dispatchIntentKey, type DispatchIntent } from './dispatchRepository';
+import { DynamoDispatchRepository, dispatchApprovalKey, dispatchPermissionKey, dispatchIntentKey, dispatchApprovalSchema, type DispatchIntent } from './dispatchRepository';
 
 /** Authenticated owner admission. No provider action is performed here. Partially
  * admitted immutable records cannot dispatch without a separate requested work item. */
 export class OwnerCommandCoordinator {
   constructor(readonly input: { auth: WorkerAuth; authorization: RemoteGoogleAuthorization }) {}
+  async configureResearch(raw: unknown, authorization: string) {
+    const command=configureResearchSourceSchema.parse(raw);
+    const principal=await this.input.auth.authenticate(authorization,['commands:write']);
+    this.input.auth.store.workspace(command.workspaceId);
+    const config=command.configuration;
+    if(command.pairingId!==principal.pairingId||config.pairingId!==principal.pairingId||config.workspaceId!==command.workspaceId||config.revision!==command.expectedRevision+1) throw new Error('research_configuration_mismatch');
+    const store=new DynamoStore({...this.input.auth.options,dynamo:this.input.auth.fencedDynamo(principal)});
+    const receiptKey=`RESEARCH_CONFIGURATION_COMMAND#${keyPart(command.commandId)}`;
+    const fp=fingerprint(command); const prior=await store.get<{fingerprint:string;configuration:unknown}>(receiptKey);
+    if(prior) {if(prior.data.fingerprint!==fp) throw new Error('command_fingerprint_conflict');return ownerResearchSourceSchema.parse(prior.data.configuration);}
+    const key=ownerResearchSourceKey(); const current=await store.get<unknown>(key);
+    if((current?ownerResearchSourceSchema.parse(current.data).revision:0)!==command.expectedRevision) throw new Error('research_configuration_conflict');
+    await store.transact([store.put(key,config,current?.rev??null),store.put(receiptKey,{fingerprint:fp,configuration:config},null)]);
+    return config;
+  }
   async apply(raw: unknown, authorization: string): Promise<CommandReceipt> {
     const command = ownerCommandSchema.parse(raw);
     const principal = await this.input.auth.authenticate(authorization, ['commands:write']);
@@ -27,9 +43,10 @@ export class OwnerCommandCoordinator {
     const store = new DynamoStore(options);
     const key = `COMMAND#${keyPart(command.commandId)}`;
     const fp = fingerprint(command);
-    const previous = await store.get<{ fingerprint: string; receipt: CommandReceipt }>(key);
+    const previous = await store.get<{ fingerprint: string; receipt: CommandReceipt; sequence: number }>(key);
     if (previous) {
       if (previous.data.fingerprint !== fp) throw new Error('command_fingerprint_conflict');
+      await store.publish(previous.data.sequence);
       return commandReceiptSchema.parse(previous.data.receipt);
     }
     const authKey = executionAuthorityKey(command.accountId);
@@ -38,7 +55,6 @@ export class OwnerCommandCoordinator {
     const current = authorityRecordSchema.parse(authorityRow.data);
     if (current.authority.accountId !== command.accountId || current.authority.owner !== 'worker' || (current.authority.state !== 'active' && !(command.kind === 'configure-owner' && current.authority.state === 'paused'))
       || current.authority.generation !== command.expectedAuthorityGeneration || current.version !== command.expectedVersion) throw new Error('stale_authority');
-    if (command.kind === 'submit-approved-reply') throw new Error('owner_command_unavailable');
     const claimKey = `OWNER_COMMAND_CLAIM#${keyPart(command.commandId)}`;
     let claim = await store.get<{ fingerprint: string; pairingId: string; at: string }>(claimKey);
     if (!claim) {
@@ -53,13 +69,45 @@ export class OwnerCommandCoordinator {
     let proof: TransactWriteItem[];
     let finalize = (): TransactWriteItem[] => proof;
     let event: WorkerEvent;
-    if (command.kind === 'campaign-command') {
+    if(command.kind==='submit-approved-reply') {
+      const source=await this.activeSource(command,principal.pairingId,store);
+      const policy=new DynamoDispatchRepository(store.options,this.input.authorization);
+      const intent=await policy.loadIntent(command.payload.intentCommandId);
+      if(!intent||intent.kind!=='standalone_reply'||intent.action.accountId!==command.accountId||intent.action.workspaceId!==command.workspaceId||intent.action.expectedAuthorityGeneration!==command.expectedAuthorityGeneration||intent.pairingId!==principal.pairingId||intent.mailboxSubject!==source.config.mailboxSubject) throw new Error('approved_intent_mismatch');
+      const intentKey=dispatchIntentKey(intent.commandId); const intentRow=await store.get(intentKey);
+      const approvalKey=dispatchApprovalKey(intent.action.approvalId); const approvalRow=await store.get(approvalKey);
+      const approval=dispatchApprovalSchema.parse(approvalRow?.data);
+      if(approval.commandId!==intent.commandId||approval.intentHash!==fingerprint(intent)||approval.expiresAt<=store.now()) throw new Error('approval_not_current');
+      const actionKey=`ACTION#${keyPart(command.accountId)}#${keyPart(intent.action.actionId)}`;
+      const action=await store.get<{input:unknown;state:string}>(actionKey);
+      if(!action||!['prepared','queued'].includes(action.data.state)||fingerprint(action.data.input)!==fingerprint(intent.action)||!intentRow||fingerprint(intentRow.data)!==fingerprint(intent)) throw new Error('action_not_current');
+      proof=[...source.checks,store.check(intentKey,intentRow.rev),store.check(approvalKey,approvalRow!.rev),store.check(actionKey,action.rev),store.absent(`REVOKED#${intentKey}`),store.absent(`REVOKED#${approvalKey}`),store.absent(`REVOKED#${dispatchPermissionKey(command.accountId,approval.permissionEvidenceId)}`),store.absent(mailSuppressionKey(command.accountId))];
+      event=workerEventSchema.parse({...base,kind:'authority.changed',payload:{authority:current.authority,receipt}});
+    } else if (command.kind === 'report-acquisition-milestone') {
+      const report=command.payload;
+      if(report.occurredAt>store.now()) throw new Error('future_milestone');
+      const identity=report.kind==='meeting_attended'?report.meetingId:report.pilotId;
+      proof=[store.put(`ACQUISITION_MILESTONE#${keyPart(command.accountId)}#${report.kind}#${keyPart(identity)}`,{report,commandId:command.commandId},null)];
+      if(report.kind==='meeting_attended') {
+        const key=`MEETING#${keyPart(report.meetingId)}`;
+        const row=await store.get<{accountId:string;calendarId:string;commandId:string;outcome:unknown}>(key);
+        if(!row || row.data.accountId!==command.accountId || row.data.calendarId!==report.calendarId) throw new Error('meeting_identity_unproven');
+        const outcome=meetingOutcomeSchema.parse(row.data.outcome);
+        const commandKey=`MEETING_COMMAND#${keyPart(row.data.commandId)}`; const reservationRow=await store.get<unknown>(commandKey);
+        const reservation=meetingReservationSchema.parse(reservationRow?.data);
+        if(outcome.status!=='booked'||outcome.providerEventId!==report.providerEventId||reservation.intent.accountId!==command.accountId
+          ||reservation.identity.calendarId!==report.calendarId||reservation.identity.providerEventId!==report.providerEventId
+          ||reservation.intent.end>report.occurredAt) throw new Error('meeting_not_elapsed');
+        proof.push(store.check(key,row.rev),store.check(commandKey,reservationRow!.rev));
+      }
+      event=workerEventSchema.parse({...base,kind:'acquisition.milestone_reported',receipt,payload:{commandId:command.commandId,report,observedAt:store.now(),source:'owner_report'}});
+    } else if (command.kind === 'campaign-command') {
       const plan = await new WorkerCampaignRepository(store.options).planCommand({ commandId: command.commandId, accountId: command.accountId, payload: command.payload });
       proof = plan.items; event = workerEventSchema.parse({ ...base, kind: 'campaign.changed', payload: plan.payload, receipt });
     } else if (command.kind === 'prepare-manual') {
       const plan = await this.prepareManual(command, principal.pairingId, claim.data.at, store);
       proof = []; finalize = plan.finalize;
-      event = workerEventSchema.parse({ ...base, kind: 'manual.handoff', payload: plan.handoff, receipt });
+      event = workerEventSchema.parse({ ...base, kind: 'manual.handoff', payload: plan.handoff, campaign: plan.campaign, receipt });
     } else if (command.kind === 'complete-manual') {
       const plan = await this.completeManual(command, principal.pairingId, store);
       proof = plan.items; event = workerEventSchema.parse({ ...base, kind: 'manual.outcome', payload: command.payload.outcome, campaign: plan.campaign, receipt });
@@ -69,7 +117,7 @@ export class OwnerCommandCoordinator {
     }
     const outbox = await store.eventItems(event);
     await store.transact([store.put(authKey, next, authorityRow.rev, executionAuthorityFields(next), executionAuthorityFields(current)),
-      store.put(key, { fingerprint: fp, receipt, sequence: outbox.sequence }, null), ...finalize(), ...outbox.items]);
+      store.put(key, { fingerprint: fp, receipt, sequence: outbox.sequence, command }, null), ...finalize(), ...outbox.items]);
     await store.publish(outbox.sequence);
     return receipt;
   }
@@ -110,7 +158,7 @@ export class OwnerCommandCoordinator {
       store.put(registryKey,{...registry,manualDependencies:[...registry.manualDependencies,{commandId:command.commandId,actionId:p.actionId,channel:p.channel,outcome:'pending'}]},registryRow.rev),
       store.put(`MANUAL_HANDOFF#${keyPart(handoff.handoffId)}`,{handoff,accountId:command.accountId,pairingId,generation:command.expectedAuthorityGeneration,issuedAt:at,lastOutcome:null},null),
       store.put(`MANUAL_ACTION#${keyPart(command.accountId)}#${keyPart(p.actionId)}`,{handoffId:handoff.handoffId},null)];
-    return {handoff,finalize:()=>{ if(store.now()>=expiresAt||Date.parse(store.now())>=intake.validUntil) throw new Error('manual_proof_expired'); return [...items,...plan.finalize()]; }};
+    return {handoff,campaign:campaignEventPayloadSchema.parse({commandId:command.commandId,version:null,enrollment:null,evidence:null,cap:plan.cap}),finalize:()=>{ if(store.now()>=expiresAt||Date.parse(store.now())>=intake.validUntil) throw new Error('manual_proof_expired'); return [...items,...plan.finalize()]; }};
   }
   private async completeManual(command: Extract<OwnerCommand,{kind:'complete-manual'}>,pairingId:string,store:DynamoStore) {
     const p=command.payload; const key=`MANUAL_HANDOFF#${keyPart(p.handoffId)}`;

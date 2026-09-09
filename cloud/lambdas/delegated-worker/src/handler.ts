@@ -38,6 +38,10 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
         await input.google.completeGoogleGrant(query.get('state')!, query.has('error') ? null : query.get('code'));
         return { statusCode: 200, headers: { ...headers, 'Content-Type': 'text/plain; charset=utf-8' }, body: 'Authorization completed. Return to FSS.' };
       }
+      if(path==='/research/configure' && method==='POST') {
+        const owner=new OwnerCommandCoordinator({auth:input.auth,authorization:input.google??new RemoteGoogleAuthorization({auth:input.auth})});
+        return response(200,await owner.configureResearch(body(),event.headers.authorization??''));
+      }
       if ((path === '/commands' || path === '/emergency') && method === 'POST') {
         const principal = await input.auth.authenticate(event.headers.authorization, [path === '/emergency' ? 'emergency:stop' : 'commands:write']);
         const rawCommand = body();

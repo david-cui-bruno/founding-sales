@@ -1,3 +1,4 @@
+import { countMilestones, readAcquisitionFacts } from '../../src/main/domain/campaign/acquisitionReport';
 import { createHash, randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { createPmFixture, PM_NOW } from '../fixtures/pmAccounts';
@@ -216,5 +217,34 @@ it('projects authenticated exact manual handoff and consumes once with caller mu
     expect(f.repository.consumeManualHandoff(input, () => { expect(f.db.raw.inTransaction).toBe(true); })).toMatchObject({ status: 'started' });
     expect(f.repository.consumeManualHandoff(input, () => undefined)).toMatchObject({ status: 'already_started' });
     expect(f.repository.getManualHandoff('handoff')?.consumedAt).toBe(PM_NOW);
+  } finally { f.close(); }
+});
+
+it('captures an authenticated explicit pilot milestone through HTTP and immutable SQL replay once', async () => {
+  const f = await fixture();
+  try {
+    await f.client.submit(f.command); await f.client.sync(new AbortController().signal);
+    const command = { ...f.command, commandId: randomUUID(), expectedAuthorityGeneration: 1, expectedVersion: 1, kind: 'report-acquisition-milestone' as const,
+      payload: { kind: 'pilot_started' as const, pilotId: 'fictional-pilot', occurredAt: PM_NOW, sourceRef: 'owner-note', ownerNote: 'Fictional owner-confirmed pilot started.' } };
+    expect(await f.client.submit(command)).toMatchObject({ status: 'pending' });
+    expect(await f.client.sync(new AbortController().signal)).toMatchObject({ ownerFresh: true, applied: 1 });
+    expect(await f.client.submit(command)).toMatchObject({ status: 'applied' });
+    expect(await f.client.sync(new AbortController().signal)).toMatchObject({ applied: 0 });
+    expect(f.db.raw.prepare("SELECT COUNT(*) AS n FROM delegated_applied_events WHERE json_extract(event_json,'$.kind')='acquisition.milestone_reported'").get()).toEqual({ n: 1 });
+    expect(countMilestones(readAcquisitionFacts(f.db), { start: '2026-09-08T00:00:00.000Z', end: '2026-09-09T00:00:00.000Z' })).toMatchObject({ pilotStarts: 1, meetingsHeld: 0 });
+  } finally { f.close(); }
+});
+
+it('persists exact paired local configuration with CAS and an inactive default, without creating budget rights', async () => {
+  const f = await fixture();
+  try {
+    const { SqlDelegationConfiguration } = await import('../../src/main/delegation/delegationSync');
+    const store = new SqlDelegationConfiguration({ database: f.db, workspaceId: f.command.workspaceId, pairingId: f.pairing.pairingId, clock: { now: () => PM_NOW } });
+    expect(store.read()).toBeNull();
+    const configuration = { version: 1 as const, state: 'paused' as const, research: null as null };
+    expect(store.configure({ expectedRevision: 0, configuration })).toMatchObject({ revision: 1, configuration });
+    expect(() => store.configure({ expectedRevision: 0, configuration })).toThrow();
+    expect(new SqlDelegationConfiguration({ database: f.db, workspaceId: f.command.workspaceId, pairingId: 'other-pairing', clock: { now: () => PM_NOW } }).read()).toBeNull();
+    expect(f.db.raw.prepare('SELECT * FROM discovery_approved_budgets').all()).toEqual([]);
   } finally { f.close(); }
 });

@@ -1,4 +1,5 @@
 import { ownerCommandSchemas, manualOutcomeSchema, manualHandoffSchema } from './ownerCommandContract';
+import { acquisitionMilestonePayloadSchema } from './acquisitionReportContract';
 import { campaignEventPayloadSchema } from './campaignContract';
 import { meetingOutcomePayloadSchema } from './meetingContract';
 import { z } from 'zod';
@@ -36,9 +37,10 @@ export const delegationCommandSchema = z.discriminatedUnion('kind', [
 export type DelegationCommand = Readonly<z.infer<typeof delegationCommandSchema>>;
 const eventBase = { id, workspaceId: id, accountId: id, authorityGeneration: revision, aggregateVersion: revision.min(1) };
 export const workerEventSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ ...eventBase, kind: z.literal('acquisition.milestone_reported'), payload: acquisitionMilestonePayloadSchema, receipt: commandReceiptSchema }),
   z.strictObject({ ...eventBase, kind: z.literal('meeting.outcome'), payload: meetingOutcomePayloadSchema }),
   z.strictObject({ ...eventBase, kind: z.literal('thread.observed'), payload: threadObservedPayloadSchema }),
-  z.strictObject({ ...eventBase, kind: z.literal('manual.handoff'), payload: manualHandoffSchema, receipt: commandReceiptSchema }),
+  z.strictObject({ ...eventBase, kind: z.literal('manual.handoff'), payload: manualHandoffSchema, receipt: commandReceiptSchema, campaign: campaignEventPayloadSchema.optional() }),
   z.strictObject({ ...eventBase, kind: z.literal('campaign.changed'), payload: campaignEventPayloadSchema, receipt: commandReceiptSchema }),
   z.strictObject({ ...eventBase, kind: z.literal('manual.outcome'), payload: manualOutcomeSchema, receipt: commandReceiptSchema, campaign: campaignEventPayloadSchema.optional() }),
   z.strictObject({ ...eventBase, kind: z.literal('authority.changed'), payload: z.strictObject({ authority: authorityStateSchema, receipt: commandReceiptSchema }) }),
@@ -54,7 +56,7 @@ export const workerEventSchema = z.discriminatedUnion('kind', [
   if (event.kind === 'thread.observed' && event.payload.projection.thread.accountId !== event.accountId) {
     ctx.addIssue({ code: 'custom', message: 'Thread event account mismatch' });
   }
-  if (['manual.outcome', 'manual.handoff', 'campaign.changed'].includes(event.kind) && 'receipt' in event && (event.receipt.status !== 'applied' || event.receipt.authorityGeneration !== event.authorityGeneration
+  if (['manual.outcome', 'manual.handoff', 'campaign.changed', 'acquisition.milestone_reported'].includes(event.kind) && 'receipt' in event && (event.receipt.status !== 'applied' || event.receipt.authorityGeneration !== event.authorityGeneration
     || event.receipt.aggregateVersion !== event.aggregateVersion)) {
     ctx.addIssue({ code: 'custom', message: 'Manual acknowledgment receipt mismatch' });
   }
@@ -62,8 +64,16 @@ export const workerEventSchema = z.discriminatedUnion('kind', [
   if (campaign && (campaign.enrollment && campaign.enrollment.accountId !== event.accountId
     || campaign.version && !campaign.version.cohortAccountIds.includes(event.accountId)
     || event.kind === 'campaign.changed' && campaign.commandId !== event.receipt.commandId
-    || (event.kind === 'manual.outcome' || event.kind === 'action.outcome') && campaign.evidence?.actionId !== event.payload.actionId)) {
+    || (event.kind === 'manual.outcome' || event.kind === 'action.outcome') && campaign.evidence !== null && campaign.evidence.actionId !== event.payload.actionId)) {
     ctx.addIssue({ code: 'custom', message: 'Campaign event identity mismatch' });
+  }
+  if (campaign && (event.kind === 'manual.handoff' || event.kind === 'manual.outcome' || event.kind === 'action.outcome')) {
+    const channel = event.kind === 'action.outcome' ? 'email' : event.payload.channel;
+    if (campaign.cap && campaign.cap.channel !== channel || campaign.evidence === null && (!campaign.cap || campaign.version !== null || campaign.enrollment !== null)
+      || event.kind === 'manual.handoff' && (campaign.evidence !== null || campaign.commandId !== event.receipt.commandId)
+      || event.kind === 'action.outcome' && campaign.evidence === null && event.payload.state !== 'dispatching') {
+      ctx.addIssue({code:'custom',message:'Invalid campaign cap-only action projection'});
+    }
   }
   if (event.kind === 'authority.changed' && (event.payload.authority.accountId !== event.accountId
     || event.payload.authority.generation !== event.authorityGeneration || event.payload.receipt.authorityGeneration !== event.authorityGeneration

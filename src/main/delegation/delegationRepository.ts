@@ -107,7 +107,7 @@ export class DelegationRepository {
   commandStatus(commandId: string): CommandReceipt | null {
     const applied = this.raw.prepare(`SELECT event_json FROM delegated_applied_events WHERE workspace_id=?
       AND ((json_extract(event_json,'$.kind')='authority.changed' AND json_extract(event_json,'$.payload.receipt.commandId')=?)
-        OR (json_extract(event_json,'$.kind') IN('manual.outcome','manual.handoff','campaign.changed') AND json_extract(event_json,'$.receipt.commandId')=?)) ORDER BY aggregate_version DESC LIMIT 1`)
+        OR (json_extract(event_json,'$.kind') IN('manual.outcome','manual.handoff','campaign.changed','acquisition.milestone_reported') AND json_extract(event_json,'$.receipt.commandId')=?)) ORDER BY aggregate_version DESC LIMIT 1`)
       .get(this.deps.workspaceId, commandId, commandId) as { event_json: string } | undefined;
     if (applied) {
       const event = workerEventSchema.parse(JSON.parse(applied.event_json));
@@ -261,14 +261,14 @@ export class DelegationRepository {
       const previous = this.commandStatus(receipt.commandId);
       if (previous && previous.status !== 'pending') throw new Error('Command acknowledgment conflict');
     }
-    if (event.kind === 'manual.handoff' || event.kind === 'campaign.changed') {
+    if (event.kind === 'manual.handoff' || event.kind === 'campaign.changed' || event.kind === 'acquisition.milestone_reported') {
       const command = this.getCommand(event.receipt.commandId);
       if (!command || command.accountId !== event.accountId || command.workspaceId !== event.workspaceId
         || command.expectedAuthorityGeneration !== event.authorityGeneration || command.expectedVersion !== owner.aggregate_version
         || command.expectedVersion + 1 !== event.aggregateVersion) throw new Error('Owner acknowledgment command mismatch');
       if (event.kind === 'manual.handoff') {
         if (command.kind !== 'prepare-manual' || accountFingerprint({ ...command.payload, handoffId: event.payload.handoffId, expiresAt: event.payload.expiresAt }) !== accountFingerprint(event.payload)) throw new Error('Manual handoff command mismatch');
-      } else if (command.kind !== 'campaign-command') throw new Error('Campaign command mismatch');
+      } else if (event.kind === 'campaign.changed' ? command.kind !== 'campaign-command' : command.kind !== 'report-acquisition-milestone' || accountFingerprint(command.payload) !== accountFingerprint(event.payload.report)) throw new Error('Owner command mismatch');
     }
     if (event.kind === 'manual.outcome') {
       const queued = this.raw.prepare('SELECT command_json FROM delegated_commands WHERE command_id=?')

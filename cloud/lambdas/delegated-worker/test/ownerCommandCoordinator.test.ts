@@ -143,11 +143,30 @@ it('joins actual campaign approval/cap with authenticated exact one-shot manual 
   const handoff = await f.apply('prepare-manual', payload);
   const events = await f.store.eventsAfter(null); const event = events.events.find(event => event.kind === 'manual.handoff');
   expect(event?.kind).toBe('manual.handoff'); if (event?.kind !== 'manual.handoff') throw new Error('Expected handoff');
+  expect(event.campaign?.cap).toMatchObject({revision:2,reserved:1,sent:0,channel:'call'});
   expect(f.options.dynamo.inspect('CAMPAIGN_CAP#campaign-version#call')).toEqual({ reserved: 1, sent: 0 });
   expect(await f.coordinator.apply(handoff.command, `Bearer ${f.pairing.credential}`)).toEqual(handoff.receipt);
   await expect(f.apply('prepare-manual', payload)).rejects.toThrow();
   await f.apply('complete-manual', { handoffId: event.payload.handoffId, targetHash: payload.targetHash, outcome: { actionId: payload.actionId, channel: 'call', outcome: 'no_answer', observedAt: f.options.clock.now(), evidenceRef: 'human-report' } });
   expect(f.options.dynamo.inspect('CAMPAIGN_CAP#campaign-version#call')).toEqual({ reserved: 0, sent: 1 });
   const result = (await f.store.eventsAfter(null)).events.at(-1);
-  expect(result).toMatchObject({ kind: 'manual.outcome', payload: { outcome: 'no_answer' }, campaign: { evidence: { routeVersion: 1, state: 'human_reported_sent' } } });
+  expect(result).toMatchObject({ kind: 'manual.outcome', payload: { outcome: 'no_answer' }, campaign: { evidence: { routeVersion: 1, state: 'human_reported_sent' }, cap:{revision:3,reserved:0,sent:1} } });
+});
+
+it('admits workspace research configuration through authenticated HTTP CAS without account authority or budget', async () => {
+  const f=await approvalFixture();
+  const {createWorkerHandler}=await import('../src/handler');
+  const handle=createWorkerHandler({auth:f.auth,google:f.google,host:'worker.example.test'});
+  const request=(body:unknown,credential=f.pairing.credential)=>handle({version:'2.0',rawPath:'/research/configure',rawQueryString:'',headers:{host:'worker.example.test','x-forwarded-proto':'https',authorization:`Bearer ${credential}`},body:JSON.stringify(body),requestContext:{domainName:'worker.example.test',http:{method:'POST',sourceIp:'fictional'}}});
+  const value={commandId:'88888888-8888-4888-8888-888888888888',workspaceId:'ws',pairingId:f.pairing.pairingId,expectedRevision:0,configuration:{version:1,workspaceId:'ws',pairingId:f.pairing.pairingId,revision:1,state:'paused',research:null}};
+  expect((await request(value)).statusCode).toBe(200);
+  expect((await request(value)).statusCode).toBe(200);
+  expect((await request({...value,commandId:'99999999-9999-4999-8999-999999999999'})).statusCode).toBe(400);
+  expect((await request({...value,workspaceId:'other'})).statusCode).toBe(400);
+  expect((await request({...value,allowed:true})).statusCode).toBe(400);
+  const store=new DynamoStore(f.options);
+  expect((await store.get<{state:string}>('OWNER_RESEARCH_SOURCE'))?.data.state).toBe('paused');
+  expect(await store.list('BUDGET#')).toEqual([]);
+  await f.auth.revokePairing(f.pairing.pairingId);
+  expect((await request(value)).statusCode).toBe(401);
 });
