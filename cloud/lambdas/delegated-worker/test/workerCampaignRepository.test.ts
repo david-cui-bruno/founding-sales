@@ -38,6 +38,32 @@ describe('real SDK campaign transactional plans', () => {
     const result = await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 1, evidence: { enrollmentId: id(8), accountId: id(4), campaignVersionId: id(2), stepId: id(5), routeId: id(6), routeVersion: 1, executionContextId: 'call-context', contextRevision: 1, observedAt: now, observation: 'unknown', source: 'human', actionId: id(10), channel: 'call', state: 'human_reported_sent', outcome: 'connected' } });
     return { ...f, binding, outcomeCommandId: result.commandId };
   }
+  it('preparation checks preserve active origin and do not authorize final reservation', async () => {
+    const f = await connected();
+    const input = { accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId };
+    const before = f.dynamo.inspect(campaignEnrollmentKey(id(8)));
+    const plan = await f.repo.requestedFollowupPreparationChecks(input);
+    expect(plan.items.every(item => item.ConditionCheck)).toBe(true);
+    expect(plan.origin).toMatchObject({ actionId: id(10), originalOutcomeCommandId: f.outcomeCommandId });
+    await f.store.transact([...plan.items, f.store.put('FICTIONAL_DRAFT#one', { originalCall: input }, null)]);
+    expect(f.dynamo.inspect(campaignEnrollmentKey(id(8)))).toEqual(before);
+    expect(f.dynamo.inspect(`CAMPAIGN_CAP#${id(2)}#call`)).toEqual({ reserved: 0, sent: 1 });
+    await expect(f.repo.requestedFollowupChecks(input)).rejects.toThrow('campaign_requested_followup_held');
+  });
+  it.each([true, false])('preparation blocks late not_called and stale draft CAS for active=%s', async active => {
+    const f = await connected(active);
+    const input = { accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId };
+    const plan = await f.repo.requestedFollowupPreparationChecks(input);
+    const reservationBefore = await f.store.get(`CAMPAIGN_RESERVATION#${id(4)}#${id(10)}`);
+    const original = (await f.repo.evidence(id(8)))[0]!;
+    const fact = await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 2, evidence: { ...original, state: 'cancelled', outcome: 'not_called' } });
+    expect(fact.evidence?.conflict).toBe('contradictory_finalized_outcome');
+    expect(await f.store.get(`CAMPAIGN_RESERVATION#${id(4)}#${id(10)}`)).toEqual(reservationBefore);
+    expect((await f.repo.evidence(id(8))).some(e => e.outcome === 'connected' && !e.conflict)).toBe(true);
+    await expect(f.store.transact([...plan.items, f.store.put('FICTIONAL_DRAFT#race', { originalCall: input }, null)])).rejects.toThrow('TransactionCanceledException');
+    expect(f.dynamo.inspect('FICTIONAL_DRAFT#race')).toBeUndefined();
+    await expect(f.repo.requestedFollowupPreparationChecks(input)).rejects.toThrow('campaign_requested_followup_held');
+  });
   it.each([true, false])('plans requested correspondence for multichannel=%s without consuming campaign capacity', async multichannel => {
     const f = await connected(multichannel);
     const plan = await f.repo.prepareRequestedFollowupPlan({ commandId: id(900), accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId });

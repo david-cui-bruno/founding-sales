@@ -78,6 +78,11 @@ export class WorkerCampaignRepository {
     }
     return { items: read.items, payload: { commandId: input.commandId, version: null, enrollment: null, evidence: null }, origin: read.origin };
   }
+  /** Draft preparation/save may inspect active origin, but never changes its state or grants execution. */
+  async requestedFollowupPreparationChecks(raw: RequestedFollowupCampaignInput): Promise<{ items: TransactWriteItem[]; origin: RequestedFollowupCampaignOrigin }> {
+    const read = await this.readRequestedFollowup(requestedFollowupInputSchema.parse(raw));
+    return { items: read.items, origin: read.origin };
+  }
   /** Final reservation is strictly read-only: it cannot silently hold a resumed campaign. */
   async requestedFollowupChecks(raw: RequestedFollowupCampaignInput): Promise<{ items: TransactWriteItem[]; origin: RequestedFollowupCampaignOrigin }> {
     const read = await this.readRequestedFollowup(requestedFollowupInputSchema.parse(raw));
