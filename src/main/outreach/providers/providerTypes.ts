@@ -1,3 +1,5 @@
+import type { GoogleGrant } from '../../../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
+export type { GoogleCapability, GoogleGrant } from '../../../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
 import type { AudienceQuery, ResearchLimits, ResearchCapability, CompanyCandidate } from '../../research/companyResearchTypes';
 export type SetupState = 'unconfigured' | 'ready' | 'locked' | 'reauthorize' | 'error';
 export type OutreachStatus = {
@@ -46,6 +48,8 @@ export type ModelCredentials = { apiKey: string; model: string };
 export type GmailCredentials = {
   clientId: string; clientSecret: string; refreshToken: string; accessToken: string;
   expiresAt: number; email: string;
+  /** Missing for legacy send-only credentials, never inferred as read/calendar powers. */
+  grant?: GoogleGrant;
 };
 export type StoredCredentials = {
   model: ModelCredentials; gmail: GmailCredentials; senderName: string; postalAddress: string;

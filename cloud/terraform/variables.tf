@@ -63,3 +63,31 @@ variable "scheduled_health_alerts_enabled" {
   type        = bool
   default     = false
 }
+
+variable "delegated_worker_enabled" {
+  description = "Separate opt-in worker. Never enables any existing schedule or sender."
+  type        = bool
+  default     = false
+}
+
+variable "delegated_worker_activation_reviewed" {
+  description = "Explicit deployment/cost/security approval after offline and distributed acceptance gates. Not permission to send mail."
+  type        = bool
+  default     = false
+}
+
+variable "delegated_workspace_id" {
+  description = "Dedicated workspace identifier. No account/workspace default."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.delegated_workspace_id == "" || can(regex("^[A-Za-z0-9_-]{1,128}$", var.delegated_workspace_id))
+    error_message = "Use a bounded plain workspace identifier."
+  }
+}
+
+variable "delegated_google_client_id" {
+  description = "Separate remote Google OAuth client ID. Empty leaves Google grants unconfigured. Secret/key values are never in Terraform state."
+  type        = string
+  default     = ""
+}
