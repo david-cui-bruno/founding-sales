@@ -37,7 +37,7 @@ async function fixture() {
   const client = new ExecutionClient({ repository, transport, pairing: { endpoint: 'https://worker.example.test', workspaceId, credential: pairing.credential }, fetch: http });
   const command: DelegationCommand = { commandId: randomUUID(), workspaceId, accountId: account.id, expectedAuthorityGeneration: 0,
     expectedVersion: 0, kind: 'delegate', payload: { delegationId: randomUUID(), approvedAt: PM_NOW } };
-  return { ...local, repository, client, transport, command, auth, pairing, requests, disconnect: () => { disconnected = true; }, reconnect: () => { disconnected = false; } };
+  return { ...local, repository, client, transport, command, auth, pairing, requests, http, options, disconnect: () => { disconnected = true; }, reconnect: () => { disconnected = false; } };
 }
 
 describe('C6 authenticated persistent local workflow', () => {
@@ -122,7 +122,7 @@ import { createEmailService } from '../../src/main/outreach/emailService';
 import { createDomainServices } from '../../src/main/domain/createDomainServices';
 import { createFounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import { seedProspect, insertOpenCycleWithAction } from '../fixtures/domainRows';
-it('blocks linked historical email when delegation begins during provider preparation', async () => {
+it.each([false, true])('historical email local/local positive control and delegation transition fence (delegate during prepare: %s)', async delegateDuringPrepare => {
   const f = await fixture(); let sent = 0;
   const clock = { now: () => PM_NOW }; const ids = { next: randomUUID };
   const services = createDomainServices({ database: f.db, clock, ids });
@@ -133,18 +133,25 @@ it('blocks linked historical email when delegation begins during provider prepar
   f.db.raw.prepare("INSERT INTO pm_account_links(id,account_id,kind,person_id,relationship,role,authority,valid_from,admitted_at) VALUES('delegated-link',?,'person_role','delegated-email-person','employee','manager','unconfirmed',?,?)").run(f.command.accountId, PM_NOW, PM_NOW);
   const domain = createFounderSalesDomain({ database: f.db, services, clock, ids });
   const status = { model: 'unconfigured' as const, modelName: '', gmail: 'ready' as const, accountEmail: 'sender@example.test', senderName: 'Fictional Sender', postalAddress: '1 Fictional Road' };
-  const service = createEmailService({ databaseGate: { withDatabase: async run => run(f.db), withDomain: async run => run(domain) }, now: clock.now,
+  const service = createEmailService({ expectedWorkspaceId: f.command.workspaceId, databaseGate: { withDatabase: async run => run(f.db), withDomain: async run => run(domain) }, now: clock.now,
     providers: { status: async () => status, configure: async () => status, connectGmail: async () => status, disconnectGmail: async () => status, dispose: () => undefined,
       generate: async () => { throw new Error('Model forbidden'); }, prepare: async () => {
-        f.repository.queueCommand(f.command);
+        if (delegateDuringPrepare) f.repository.queueCommand(f.command);
         return { accountEmail: status.accountEmail, sendOnce: async () => { sent++; return { status: 'accepted', messageId: 'fictional-message', threadId: null }; } };
       } } });
   try {
     const draft = await service.openDraft({ personId: 'delegated-email-person', contactMethodId: 'delegated-address' });
     const saved = await service.saveDraft({ draftId: draft.id, expectedRevision: draft.revision, subject: 'Requested follow-up', body: 'Fictional reviewed content' });
-    await expect(service.sendDraft({ draftId: saved.id, expectedRevision: saved.revision, commandId: randomUUID() })).rejects.toThrow(/authority/);
-    expect(sent).toBe(0);
-    expect(f.db.raw.prepare('SELECT * FROM email_send_intents').all()).toEqual([]);
+    if (delegateDuringPrepare) {
+      await expect(service.sendDraft({ draftId: saved.id, expectedRevision: saved.revision, commandId: randomUUID() })).rejects.toThrow(/authority/);
+      expect(sent).toBe(0);
+      expect(f.db.raw.prepare('SELECT * FROM email_send_intents').all()).toEqual([]);
+    } else {
+      expect(f.repository.authority(f.command.accountId)).toMatchObject({ owner: 'local', state: 'local' });
+      await service.sendDraft({ draftId: saved.id, expectedRevision: saved.revision, commandId: randomUUID() });
+      expect(sent).toBe(1);
+      expect(f.db.raw.prepare('SELECT * FROM email_send_intents').all()).toHaveLength(1);
+    }
   } finally { service.dispose(); f.close(); }
 });
 
@@ -246,5 +253,124 @@ it('persists exact paired local configuration with CAS and an inactive default, 
     expect(() => store.configure({ expectedRevision: 0, configuration })).toThrow();
     expect(new SqlDelegationConfiguration({ database: f.db, workspaceId: f.command.workspaceId, pairingId: 'other-pairing', clock: { now: () => PM_NOW } }).read()).toBeNull();
     expect(f.db.raw.prepare('SELECT * FROM discovery_approved_budgets').all()).toEqual([]);
+  } finally { f.close(); }
+});
+
+
+it.each(['http-refusal', 'response-lost'] as const)('drains unread events despite isolated pending-command %s, preserving pending pause uncertainty', async mode => {
+  const f = await fixture();
+  try {
+    await f.client.submit(f.command); await f.client.sync(new AbortController().signal);
+    const milestone: DelegationCommand = { ...f.command, commandId: '10000000-0000-4000-8000-000000000001', expectedAuthorityGeneration: 1, expectedVersion: 1,
+      kind: 'report-acquisition-milestone', payload: { kind: 'pilot_started', pilotId: 'pilot-unread', occurredAt: PM_NOW, sourceRef: 'owner-note', ownerNote: 'Fictional confirmed pilot.' } };
+    await f.client.submit(milestone);
+    const pause: DelegationCommand = { ...f.command, commandId: '20000000-0000-4000-8000-000000000002', expectedAuthorityGeneration: 1, expectedVersion: 1,
+      kind: 'pause', payload: { reason: 'Pending explicit pause must remain truthful' } };
+    f.repository.queueCommand(pause);
+    const commandBefore = f.db.raw.prepare('SELECT * FROM delegated_commands WHERE command_id=?').get(pause.commandId);
+    const paths: string[] = [];
+    const client = new ExecutionClient({ repository: f.repository, transport: f.transport,
+      pairing: { endpoint: 'https://worker.example.test', workspaceId: f.command.workspaceId, credential: f.pairing.credential }, fetch: async (url, init) => {
+        paths.push(new URL(String(url)).pathname);
+        if (init?.body && JSON.parse(String(init.body)).commandId === pause.commandId) {
+          if (mode === 'response-lost') throw new Error('fictional response lost');
+          return Response.json({ error: 'worker_request_rejected' }, { status: 400 });
+        }
+        return f.http(url, init);
+      } });
+    const report = await client.sync(new AbortController().signal);
+    expect(report.applied).toBe(1); expect(paths).toContain('/events');
+    expect(f.repository.commandStatus(milestone.commandId)?.status).toBe('applied');
+    expect(f.repository.commandStatus(pause.commandId)?.status).toBe('pending');
+    expect(f.repository.hasPendingStop(pause.accountId)).toBe(true);
+    expect(f.db.raw.prepare('SELECT * FROM delegated_commands WHERE command_id=?').get(pause.commandId)).toEqual(commandBefore);
+  } finally { f.close(); }
+});
+
+it.each(['pause', 'revoke'] as const)('durably reconciles stale %s without dropping its local stop hold or rewriting immutable commands', async kind => {
+  const f = await fixture();
+  try {
+    await f.client.submit(f.command); await f.client.sync(new AbortController().signal);
+    const milestone: DelegationCommand = { ...f.command, commandId: '10000000-0000-4000-8000-000000000001', expectedAuthorityGeneration: 1, expectedVersion: 1,
+      kind: 'report-acquisition-milestone', payload: { kind: 'pilot_started', pilotId: 'pilot-before-stop', occurredAt: PM_NOW, sourceRef: 'owner-note', ownerNote: 'Fictional confirmed pilot.' } };
+    await f.client.submit(milestone);
+    const stop: DelegationCommand = { ...f.command, commandId: '20000000-0000-4000-8000-000000000002', expectedAuthorityGeneration: 1, expectedVersion: 1,
+      kind, payload: { reason: 'Explicit stop with stale local knowledge' } };
+    f.repository.queueCommand(stop);
+    const original = f.db.raw.prepare('SELECT * FROM delegated_commands WHERE command_id=?').get(stop.commandId);
+    expect(await f.client.sync(new AbortController().signal)).toMatchObject({ applied: 2, ownerFresh: true, gaps: 0 });
+    expect(f.requests).toContain('/commands/reconcile');
+    expect(f.repository.commandStatus(stop.commandId)).toMatchObject({ status: 'rejected' });
+    expect(f.repository.authority(stop.accountId)).toMatchObject({ state: 'active', generation: 1 });
+    const restarted = new DelegationRepository({ database: f.db, workspaceId: stop.workspaceId, clock: f.options.clock });
+    expect(restarted.hasPendingStop(stop.accountId)).toBe(true);
+    expect(f.db.raw.prepare('SELECT * FROM delegated_commands WHERE command_id=?').get(stop.commandId)).toEqual(original);
+    expect(await f.client.sync(new AbortController().signal)).toMatchObject({ applied: 0 });
+    expect(restarted.hasPendingStop(stop.accountId)).toBe(true);
+    const fresh: DelegationCommand = { ...stop, commandId: randomUUID(), expectedVersion: restarted.executionVersion(stop.accountId)!,
+      expectedAuthorityGeneration: restarted.authority(stop.accountId)!.generation };
+    expect(await f.client.submit(fresh)).toMatchObject({ status: 'pending' });
+    expect(restarted.hasPendingStop(stop.accountId)).toBe(true);
+    await f.client.sync(new AbortController().signal);
+    expect(restarted.commandStatus(fresh.commandId)).toMatchObject({ status: 'applied' });
+    expect(restarted.hasPendingStop(stop.accountId)).toBe(false);
+    expect(restarted.authority(stop.accountId)?.state).toBe(kind === 'pause' ? 'paused' : 'revoked');
+    expect(f.db.raw.prepare('SELECT * FROM delegated_commands WHERE command_id=?').get(stop.commandId)).toEqual(original);
+  } finally { f.close(); }
+});
+
+it('invalidates completed transport before submit HTTP and keeps its lifecycle abort signal bound', async () => {
+  const f = await fixture(); const lifecycle = new AbortController();
+  try {
+    await f.client.sync(new AbortController().signal);
+    expect(f.transport.current()?.state).toBe('complete');
+    let requests = 0;
+    const observations: unknown[] = [];
+    const client = new ExecutionClient({ repository: f.repository, transport: f.transport, signal: lifecycle.signal,
+      pairing: { endpoint: 'https://worker.example.test', workspaceId: f.command.workspaceId, credential: f.pairing.credential }, fetch: async (_url, init) => {
+        requests++;
+        observations.push({ state: f.transport.current()?.state, completedAt: f.transport.current()?.completedAt, aborted: init?.signal?.aborted });
+        lifecycle.abort();
+        observations.push(init?.signal?.aborted);
+        throw new Error('Fictional lock during request');
+      } });
+    expect(await client.submit(f.command)).toMatchObject({ status: 'pending' });
+    expect(await client.sync(new AbortController().signal)).toMatchObject({ ownerFresh: false, applied: 0 });
+    await expect(client.checkpoint(f.command.accountId, new AbortController().signal)).rejects.toThrow();
+    await expect(client.submit({ ...f.command, commandId: randomUUID() })).rejects.toThrow();
+    expect(requests).toBe(1);
+    expect(observations).toEqual([{ state: 'failed', completedAt: null, aborted: false }, true]);
+    expect(f.repository.pendingCommands()).toHaveLength(1);
+  } finally { f.close(); }
+});
+
+it('preserves actual research configuration and fail-closed readiness HTTP seams', async () => {
+  const f = await fixture();
+  try {
+    const configuration = { version: 1 as const, workspaceId: f.command.workspaceId, pairingId: f.pairing.pairingId, revision: 1, state: 'paused' as const, research: null as null };
+    const input = { commandId: randomUUID(), workspaceId: f.command.workspaceId, pairingId: f.pairing.pairingId, expectedRevision: 0, configuration };
+    expect(await f.client.configureResearch(input, new AbortController().signal)).toEqual(configuration);
+    expect(f.requests).toContain('/research/configure');
+    await expect(f.client.checkpoint(f.command.accountId, new AbortController().signal)).rejects.toThrow('Worker request unavailable');
+    expect(f.requests).toContain('/readiness');
+    const before = f.requests.length;
+    await expect(f.client.configureResearch({ ...input, workspaceId: 'other-workspace' }, new AbortController().signal)).rejects.toThrow();
+    expect(f.requests).toHaveLength(before);
+  } finally { f.close(); }
+});
+
+it('does not return configuration proof when lifecycle aborts during response body consumption', async () => {
+  const f = await fixture(); const lifecycle = new AbortController();
+  try {
+    const client = new ExecutionClient({ repository: f.repository, transport: f.transport, signal: lifecycle.signal,
+      pairing: { endpoint: 'https://worker.example.test', workspaceId: f.command.workspaceId, credential: f.pairing.credential }, fetch: async (url, init) => {
+        const response = await f.http(url, init);
+        const read = response.text.bind(response);
+        response.text = async () => { const body = await read(); lifecycle.abort(); return body; };
+        return response;
+      } });
+    const configuration = { version: 1 as const, workspaceId: f.command.workspaceId, pairingId: f.pairing.pairingId, revision: 1, state: 'paused' as const, research: null as null };
+    await expect(client.configureResearch({ commandId: randomUUID(), workspaceId: f.command.workspaceId, pairingId: f.pairing.pairingId, expectedRevision: 0, configuration }, new AbortController().signal)).rejects.toThrow();
+    expect(f.requests).toContain('/research/configure');
   } finally { f.close(); }
 });

@@ -10,6 +10,7 @@ export async function synchronizeDelegation(input: {
   repository: DelegationRepository;
   transport: SqlDelegationTransport;
   flushPending(signal: AbortSignal): Promise<void>;
+  reconcilePending?(signal: AbortSignal): Promise<boolean>;
   eventsAfter(cursor: string | null, signal: AbortSignal): Promise<EventPage>;
 }, signal: AbortSignal): Promise<SyncReport> {
   const attempt = input.transport.begin();
@@ -22,7 +23,9 @@ export async function synchronizeDelegation(input: {
     return { applied, gaps, cursor, ownerFresh: complete };
   };
   try {
-    await input.flushPending(signal);
+    try { await input.flushPending(signal); }
+    catch { signal.throwIfAborted(); /* Outbox refusal must not starve owner events. */ }
+    let reconciled = false;
     for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
       signal.throwIfAborted();
       const page = eventPageSchema.parse(await input.eventsAfter(cursor, signal));
@@ -32,7 +35,14 @@ export async function synchronizeDelegation(input: {
         if (result === 'applied') applied++;
         if (result === 'gap') { gaps++; return finish(false); }
       }
-      if (page.complete) { cursor = page.nextCursor; return finish(true); }
+      if (page.complete) {
+        cursor = page.nextCursor;
+        if (!reconciled && input.reconcilePending) {
+          reconciled = true;
+          if (await input.reconcilePending(signal)) continue;
+        }
+        return finish(true);
+      }
       if (page.nextCursor === cursor || page.events.length === 0) return finish(false);
       cursor = page.nextCursor;
     }
