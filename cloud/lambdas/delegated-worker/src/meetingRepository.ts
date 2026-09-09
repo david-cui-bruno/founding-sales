@@ -156,6 +156,7 @@ export class DynamoMeetingRepository {
   private async acceptedOffer(offer: MeetingOffer) {
     const key = dispatchIntentKey(offer.sendCommandId); const row = await this.store.get<unknown>(key);
     if (!row) throw new Error('accepted_offer_missing'); const sent = dispatchIntentSchema.parse(row.data);
+    if (sent.kind === 'phone_requested_followup') throw new Error('offer_content_conflict');
     if (sent.action.workspaceId !== this.store.options.workspaceId || sent.action.accountId !== offer.accountId || sent.mailboxSubject !== offer.mailboxSubject
       || sent.frozenMessage.threadId !== offer.threadId || sent.action.contentHash !== fingerprint(sent.frozenMessage)
       || offer.slots.some(slot => Date.parse(slot.end) <= Date.parse(slot.start))

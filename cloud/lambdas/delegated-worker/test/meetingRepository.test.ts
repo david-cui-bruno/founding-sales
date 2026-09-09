@@ -1,7 +1,7 @@
 import { QueryCommand } from '@aws-sdk/client-dynamodb';
 import { randomUUID } from 'node:crypto';
 import { OwnerCommandCoordinator } from '../src/ownerCommandCoordinator';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ownerCommandSchema, ownerSourceKey, ownerSourceConfigurationSchema } from '../../../../src/shared/contracts/ownerCommandContract';
 import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
 import { createDispatchService } from '../src/dispatchService';
@@ -12,7 +12,7 @@ import { DynamoMeetingRepository } from '../src/meetingRepository';
 import { DynamoStore, fingerprint } from '../src/dynamoStore';
 import { WorkerAuth } from '../src/workerAuth';
 import { RemoteGoogleAuthorization } from '../src/remoteGoogleAuthorization';
-import { DynamoDispatchRepository } from '../src/dispatchRepository';
+import { DynamoDispatchRepository, dispatchIntentSchema, phoneRequestedFollowupIntentSchema } from '../src/dispatchRepository';
 import { googleScopes } from '../src/googleGrantCapabilities';
 import { createExecutionRepository, executionAuthorityKey, executionAuthorityFields } from '../src/executionRepository';
 import { DynamoThreadIntakeRepository, mailCursorKey, mailThreadKey, mailSuppressionKey } from '../src/threadIntakeRepository';
@@ -66,6 +66,31 @@ export function booked(identity: { meetingId: string; calendarId: string; provid
   return { ...identity, status: 'booked', reason: null, event: { ...identity, status: 'confirmed', etag: '"v1"', start: '2026-09-15T14:00:00.000Z', end: '2026-09-15T14:30:00.000Z', attendees: [{ email: 'prospect@example.test', responseStatus: 'needsAction' }], meetUrl: null } };
 }
 describe('durable meeting reservations on actual Dynamo command boundary', () => {
+  it('rejects a valid phone-requested first email before reading unavailable thread fields', async () => {
+    const f = await meetingFixture(); const commandId = randomUUID();
+    const frozenMessage = { commandId, from: 'founder@example.test', to: 'prospect@example.test', subject: 'Requested follow-up', body: 'Tuesday, September 15, 2026 at 10:00 AM to 10:30 AM (America/New_York)' };
+    const firstEmail = phoneRequestedFollowupIntentSchema.parse({ kind: 'phone_requested_followup', commandId, requestedApprovalCommandId: randomUUID(), draftId: 'phone-followup-fiction', draftRevision: 1,
+      pairingId: f.pair.pairingId, mailboxSubject: f.intent.mailboxSubject, frozenMessage,
+      action: { actionId: 'phone-action-fiction', workspaceId: f.intent.workspaceId, accountId: f.intent.accountId, expectedAuthorityGeneration: 1, approvalId: 'phone-approved-fiction', contentHash: fingerprint(frozenMessage), targetHash: fingerprint({ sender: frozenMessage.from, recipient: frozenMessage.to }) } });
+    await f.store.transact([f.store.put(`DISPATCH_INTENT#${commandId}`, firstEmail, null)]);
+    const offer = { id: 'unsupported-phone-offer', revision: 1, accountId: f.intent.accountId, mailboxSubject: f.intent.mailboxSubject, threadId: f.intent.threadId,
+      sendCommandId: commandId, expiresAt: '2026-09-15T00:00:00.000Z', slots: [{ id: 'slot-one', start: f.intent.start, end: f.intent.end, timezone: f.intent.timezone }] };
+    const parse = dispatchIntentSchema.parse.bind(dispatchIntentSchema);
+    // Keep the real strict parser and real DTO. Instrument only reads of fields
+    // absent from this variant, proving the discriminant is checked first.
+    const guarded = vi.spyOn(dispatchIntentSchema, 'parse').mockImplementation(raw => {
+      const parsed = parse(raw);
+      if (parsed.kind === 'phone_requested_followup') for (const field of ['threadId', 'references', 'inReplyTo']) Object.defineProperty(parsed.frozenMessage, field, { get() { throw Error('first_email_thread_field_access'); } });
+      return parsed;
+    });
+    const before = f.dynamo.transactions.length;
+    try { await expect(f.repository().saveOffer({ offer, expectedRevision: null })).rejects.toThrow('offer_content_conflict'); }
+    finally { guarded.mockRestore(); }
+    expect(f.dynamo.transactions.length).toBe(before);
+    expect(await f.store.get(`MEETING_OFFER#${f.intent.accountId}#${f.intent.threadId}`)).toBeNull();
+    await expect(f.repository().saveOffer({ offer, expectedRevision: null })).rejects.toThrow('offer_content_conflict');
+  });
+
   it('assigns distinct durable transition IDs to booked A -> unknown -> unchanged A but deduplicates exact retries', async () => {
     const f = await meetingFixture(); const r = await f.repository().reserve({ intent: f.intent, calendarId: f.calendarId }, f.access.accessEvidence);
     const a = booked(r.record.identity);
