@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { QueryCommand, TransactWriteItemsCommand, type QueryCommandInput } from '@aws-sdk/client-dynamodb';
 import { createSourceCoordinator } from '../src/sourceCoordinator';
-import { WorkerAuth } from '../src/workerAuth';
+import { WorkerAuth, pairingKey } from '../src/workerAuth';
 import { RemoteGoogleAuthorization } from '../src/remoteGoogleAuthorization';
 import { ConditionalCommandHarness } from './sdkHarness';
 import type { DynamoCommand, DynamoResult } from '../src/dynamoStore';
@@ -433,9 +433,9 @@ import { DynamoRequestedFollowupRepository } from '../src/requestedFollowupRepos
 import { requestedFollowupDraftSchema } from '../../../../src/shared/contracts/requestedFollowupContract';
 import { requestedFollowupContextRevision } from '../../../../src/main/outreach/requestedFollowupService';
 import { loadRequestedApproval, requestedApprovalCommandSchema } from '../src/requestedFollowupApproval';
-async function capturedPhoneFixture() {
+async function capturedPhoneFixture(recipient = 'requested@example.invalid') {
   const f = await requestedCallFixture(); const drafts = new DynamoRequestedFollowupRepository(f.options);
-  const binding = { kind: 'owner_supplied' as const, email: 'requested@example.invalid', originalCall: f.originalCall };
+  const binding = { kind: 'owner_supplied' as const, email: recipient, originalCall: f.originalCall };
   const context = await drafts.readContext({ accountId: 'acct', originalCall: f.originalCall, recipientBinding: binding, expectedAccountVersion: 1, mode: 'manual' });
   let draft = requestedFollowupDraftSchema.parse({ kind: 'requested_phone_followup', id: 'requested-draft', accountId: 'acct', revision: 1, mailboxSubject: context.mailbox.subject,
     sender: context.mailbox.sender, recipient: binding.email, recipientBinding: binding, accountVersion: context.account.account.version, researchRevision: context.account.researchRevision,
@@ -595,4 +595,66 @@ it('two source instances materialize captured first-email approval once without 
   expect(final.filter(item=>item.Put?.Item?.sk?.S==='ACTION#acct#requested-action')).toHaveLength(1);
   expect(final.some(item=>item.ConditionCheck?.Key?.sk?.S==='AUTH#acct')).toBe(false);
   expect((await loadRequestedApproval(f.store,f.command.commandId))?.receipt).toEqual(f.receipt);
+});
+
+it('classifies genuine durable pairing revocation as terminal without changing account authority or materializing', async () => {
+  const f = await capturedPhoneFixture(); const authority = await f.store.get('AUTH#acct');
+  await f.auth.revokePairing(f.pairing.pairingId);
+  expect(await f.store.get('AUTH#acct')).toEqual(authority);
+  await f.source().tick(new AbortController().signal);
+  const captured = await loadRequestedApproval(f.store,f.command.commandId);
+  expect(captured?.record.state).toBe('revoked'); expect(captured?.receipt).toEqual(f.receipt);
+  expect(captured?.record.materializedIntentId).toBeNull(); expect(f.sends()).toBe(0);
+  expect(await f.execution.readDispatch('acct','requested-action')).toBeNull();
+  for (const prefix of ['DISPATCH_PERMISSION#','DISPATCH_APPROVAL#','DISPATCH_INTENT#']) expect(await f.store.list(prefix)).toEqual([]);
+  const transaction = f.dynamo.transactions.find(command => command.TransactItems?.some(item => item.Put?.Item?.sk?.S?.startsWith('REQUESTED_APPROVAL#') && JSON.parse(item.Put.Item.data!.S!).state === 'revoked'));
+  expect(transaction?.TransactItems?.some(item => item.ConditionCheck?.Key?.sk?.S === pairingKey(f.pairing.pairingId))).toBe(true);
+});
+it('reconciles the original unknown requested effect after a legitimate same-context draft edit without resending', async () => {
+  const f = await capturedPhoneFixture('recipient@example.invalid'); f.uncertain();
+  await f.source().tick(new AbortController().signal);
+  expect(await f.execution.readDispatch('acct','requested-action')).toMatchObject({ state: 'unknown' });
+  await f.drafts.save({ ...f.draft,revision: 2,body: 'A later legitimate draft edit.' },1);
+  let lookups = 0;
+  const fetch: typeof globalThis.fetch = async (resource,init) => {
+    const url = new URL(String(resource));
+    if (url.pathname.endsWith('/messages') && url.searchParams.get('q')?.startsWith('in:sent')) { lookups++; return Response.json({ messages: [{ id: 'original-sent' }] }); }
+    if (url.pathname.endsWith('/messages/original-sent')) return Response.json({ id: 'original-sent',threadId: 'actual-provider-thread',labelIds: ['SENT'],internalDate: String(Date.parse(f.options.clock.now())),
+      payload: { mimeType: 'text/plain',headers: [{name:'Message-ID',value: `<${f.command.payload.intentCommandId}@callie.invalid>`},{name:'From',value:f.draft.sender},
+        {name:'To',value:f.draft.recipient},{name:'Subject',value:f.draft.subject},{name:'MIME-Version',value:'1.0'},
+        {name:'Content-Type',value:'text/plain; charset=UTF-8'},{name:'Content-Transfer-Encoding',value:'base64'}],body:{data:Buffer.from(f.draft.body).toString('base64url'),size:Buffer.byteLength(f.draft.body)} } });
+    return f.fetch(resource,init);
+  };
+  const source = () => createSourceCoordinator({auth:f.auth,authorization:f.authorization,fetch});
+  await source().tick(new AbortController().signal); await source().tick(new AbortController().signal);
+  expect(lookups).toBe(1); expect(f.sends()).toBe(1);
+  expect(await f.execution.readDispatch('acct','requested-action')).toMatchObject({state:'provider_accepted'});
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.receipt).toEqual(f.receipt);
+  expect((await f.drafts.get('acct',f.draft.id))?.draft.body).toBe('A later legitimate draft edit.');
+});
+
+it.each(['foreign','malformed','unchanged-generation'] as const)('does not classify unproven pairing authorization failure as revoked: %s', async invalid => {
+  const f = await capturedPhoneFixture(); const key = pairingKey(f.pairing.pairingId); const row = (await f.store.get<unknown>(key))!;
+  const data = invalid === 'malformed' ? {revoked:true} : {pairingId:invalid === 'foreign' ? randomUUID() : f.pairing.pairingId,generation:invalid === 'unchanged-generation' ? 0 : 1,revoked:true};
+  await f.store.transact([f.store.put(key,data,row.rev)]);
+  await f.source().tick(new AbortController().signal);
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.record.state).toBe('pending_preflight');
+  expect(f.sends()).toBe(0); expect(await f.execution.readDispatch('acct','requested-action')).toBeNull();
+});
+it('rejects stale revoked-pairing evidence at the actual terminal-status transaction CAS', async () => {
+  const f = await capturedPhoneFixture(); await f.auth.revokePairing(f.pairing.pairingId);
+  const send = f.dynamo.send.bind(f.dynamo); let raced = false;
+  f.dynamo.send = async command => {
+    if (!raced && command instanceof TransactWriteItemsCommand && command.input.TransactItems?.some(item => item.Put?.Item?.sk?.S?.startsWith('REQUESTED_APPROVAL#') && JSON.parse(item.Put.Item.data!.S!).state === 'revoked')) {
+      raced = true; const key = pairingKey(f.pairing.pairingId); const row = (await f.store.get<unknown>(key))!;
+      // Storage revision race, not a supported unrevocation path.
+      await f.store.transact([f.store.put(key,row.data,row.rev)]);
+    }
+    return send(command);
+  };
+  await f.source().tick(new AbortController().signal);
+  expect(raced).toBe(true); expect((await loadRequestedApproval(f.store,f.command.commandId))?.record.state).toBe('pending_preflight');
+  await f.source().tick(new AbortController().signal);
+  expect((await loadRequestedApproval(f.store,f.command.commandId))?.record.state).toBe('revoked');
+  expect(f.sends()).toBe(0); expect(await f.execution.readDispatch('acct','requested-action')).toBeNull();
 });

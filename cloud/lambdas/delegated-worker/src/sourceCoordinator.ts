@@ -198,7 +198,7 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
   }
   type CapturedRequested = NonNullable<Awaited<ReturnType<typeof loadRequestedApproval>>>;
   const checkKey = (item: TransactWriteItem) => item.ConditionCheck?.Key?.sk?.S;
-  async function requestedStatus(captured: CapturedRequested, state: RequestedApprovalRecord['state'], reason: string) {
+  async function requestedStatus(captured: CapturedRequested, state: RequestedApprovalRecord['state'], reason: string, evidence: TransactWriteItem[] = []) {
     if (captured.record.state !== 'pending_preflight' || captured.record.state === state && captured.record.lastReason === reason) return;
     const key = executionAuthorityKey(captured.record.accountId); const row = await store.get<unknown>(key); if (!row) throw new Error('authority_missing');
     const authority = authorityRecordSchema.parse(row.data);
@@ -209,8 +209,16 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     const outbox = await store.eventItems(workerEventSchema.parse({ id: `requested-status-${fingerprint([record.commandId,state,reason,next.version])}`,
       workspaceId: store.options.workspaceId, accountId: record.accountId, authorityGeneration: next.authority.generation, aggregateVersion: next.version,
       kind: 'requested_followup.status', payload: { commandId: record.commandId, draftId: record.draftSnapshot.id, status } }));
-    await store.transact([...captured.checks.filter(item => checkKey(item) !== requestedApprovalKey(record.commandId)),
+    await store.transact([...captured.checks.filter(item => checkKey(item) !== requestedApprovalKey(record.commandId)),...evidence,
       store.put(requestedApprovalKey(record.commandId),record,captured.revision), store.put(key,next,row.rev,executionAuthorityFields(next),executionAuthorityFields(authority)), ...outbox.items]);
+  }
+  async function requestedPairingRevocation(captured: CapturedRequested): Promise<TransactWriteItem[]> {
+    const key = pairingKey(captured.record.pairingId); const row = await store.get<unknown>(key);
+    // A generic authorization error is not revocation evidence. Only the durable
+    // exact pairing tombstone produced by revokePairing, with advanced generation,
+    // can support a terminal status, fenced against replacement in the same commit.
+    const tombstone = z.strictObject({ pairingId: z.literal(captured.record.pairingId), generation: integer.nonnegative(), revoked: z.literal(true) }).safeParse(row?.data);
+    return row && tombstone.success && tombstone.data.generation > captured.record.requestSnapshot.principal.generation ? [store.check(key,row.rev)] : [];
   }
   async function requestedContext(captured: CapturedRequested): Promise<RequestedContextPlan> {
     const draft = captured.record.draftSnapshot;
@@ -293,6 +301,7 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
       const authorityRow = await store.get<unknown>(executionAuthorityKey(captured.record.accountId)); if (!authorityRow) throw new Error('authority_missing');
       const authority = authorityRecordSchema.parse(authorityRow.data);
       if (authority.authority.state === 'revoked') throw new Error('requested_revoked');
+      if ((await requestedPairingRevocation(captured)).length) throw new Error('requested_pairing_revoked');
       if (authority.authority.generation !== captured.record.authorityGeneration || authority.authority.owner !== 'worker') throw new Error('requested_authority_changed');
       if (Date.parse(store.now()) >= Date.parse(captured.record.expiresAt)) throw new Error('requested_expired');
       const configured = await store.get<unknown>(ownerSourceKey(captured.record.accountId)); if (!configured) throw new Error('requested_preflight_incomplete');
@@ -321,12 +330,13 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
       // keys below. Never replay the original now-stale owner command or admissions.
       const current = await loadRequestedApproval(store,commandId); if (!current) throw error; captured = current;
       if (current.record.state !== 'materialized') {
-        const reason = error instanceof Error ? error.message : '';
-        const terminal = reason === 'requested_expired' ? 'expired' : ['requested_revoked','pairing_revoked'].includes(reason) ? 'revoked'
+        const revocation = await requestedPairingRevocation(current);
+        const reason = revocation.length ? 'requested_pairing_revoked' : error instanceof Error ? error.message : '';
+        const terminal = reason === 'requested_expired' ? 'expired' : (reason === 'requested_revoked' || revocation.length > 0) ? 'revoked'
           : ['requested_evidence_changed','requested_authority_changed','requested_capture_conflict','requested_context_stale','requested_account_stale','requested_route_stale',
             'requested_call_evidence_invalid','requested_call_pairing_mismatch','requested_call_not_applied','requested_call_receipt_mismatch','requested_mailbox_mismatch','requested_suppressed','requested_draft_identity_conflict',
             'requested_mail_context_stale','requested_recipient_mismatch','requested_wrong_authority','campaign_requested_followup_origin','campaign_requested_followup_held'].includes(reason) ? 'needs_review' : 'pending_preflight';
-        await requestedStatus(current,terminal,terminal === 'pending_preflight' ? 'requested_preflight_incomplete' : reason); report.held++; return;
+        await requestedStatus(current,terminal,terminal === 'pending_preflight' ? 'requested_preflight_incomplete' : reason,revocation); report.held++; return;
       }
     }
     await requestedMaterialized(commandId,signal,report);
