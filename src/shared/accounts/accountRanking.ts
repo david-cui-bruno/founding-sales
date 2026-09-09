@@ -29,6 +29,16 @@ function isExplicitNonResidentialScope(value: string): boolean {
   ]);
 }
 
+function hasIndependentResidentialSupport(value: string): boolean {
+  const withoutNegativeToken = value.replace(/non-?residential/g, '');
+  return hasAny(withoutNegativeToken, ['residential', 'multifamily', 'multi-family', 'rental', 'apartments']);
+}
+
+function isMixedResidentialScope(value: string): boolean {
+  return hasIndependentResidentialSupport(value)
+    && hasAny(value, ['non-residential', 'nonresidential']);
+}
+
 function evidenceFrom(claims: readonly AccountClaim[], predicate: (claim: AccountClaim) => boolean): string[] {
   const ids: string[] = [];
   for (const claim of claims) {
@@ -49,11 +59,16 @@ export function rankAccount(snapshot: AccountEvidenceSnapshot, asOf: string): Ac
   const reasons: { text: string; evidenceIds: string[] }[] = [];
   const negativeScopeEvidence = evidenceFrom(snapshot.claims, claim => claim.kind === 'fact'
     && claim.key === 'residential_scope'
+    && !isMixedResidentialScope(textOf(claim))
     && isExplicitNonResidentialScope(textOf(claim)));
+  const mixedScopeEvidence = evidenceFrom(snapshot.claims, claim => claim.kind === 'fact'
+    && claim.key === 'residential_scope'
+    && isMixedResidentialScope(textOf(claim)));
   const supportedScopeEvidence = evidenceFrom(snapshot.claims, claim => claim.kind === 'fact'
     && claim.key === 'residential_scope'
     && !isExplicitNonResidentialScope(textOf(claim))
-    && hasAny(textOf(claim), ['residential', 'multifamily', 'multi-family', 'rental', 'apartments']));
+    && !isMixedResidentialScope(textOf(claim))
+    && hasIndependentResidentialSupport(textOf(claim)));
   if (supportedScopeEvidence.length > 0) {
     reasons.push({
       text: 'Evidence supports residential or multifamily property management fit.',
@@ -81,7 +96,8 @@ export function rankAccount(snapshot: AccountEvidenceSnapshot, asOf: string): Ac
 
   const unknowns = [...snapshot.unknowns];
   if (route === null && !unknowns.includes('business_route')) unknowns.push('business_route');
-  const fit = supportedScopeEvidence.length > 0 && negativeScopeEvidence.length > 0 ? 'uncertain'
+  const fit = mixedScopeEvidence.length > 0 ? 'uncertain'
+    : supportedScopeEvidence.length > 0 && negativeScopeEvidence.length > 0 ? 'uncertain'
     : negativeScopeEvidence.length > 0 ? 'not_target'
       : supportedScopeEvidence.length > 0 && regionalEvidence.length > 0 ? 'supported' : 'uncertain';
 

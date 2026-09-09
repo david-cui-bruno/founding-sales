@@ -95,4 +95,17 @@ describe('rankAccount', () => {
     }), asOf);
     expect(result.fit).toBe('uncertain');
   });
+
+  it('keeps mixed same-claim residential and non-residential scope uncertain rather than excluded', () => {
+    const result = rankAccount(snapshot({
+      claims: [
+        { kind: 'fact', key: 'residential_scope', value: 'Residential and non-residential property management', evidenceIds: ['scope-mixed'] },
+        { kind: 'fact', key: 'operating_footprint', value: 'Regional property manager', evidenceIds: ['footprint'] },
+      ],
+      routes: [
+        { id: 'route-phone', accountId: 'pm-account', personId: null, channel: 'phone', value: '+15555550100', purpose: 'business', evidenceIds: ['route'], verification: 'published', version: 2 },
+      ],
+    }), asOf);
+    expect(result.fit).toBe('uncertain');
+  });
 });
