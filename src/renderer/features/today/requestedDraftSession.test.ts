@@ -193,3 +193,52 @@ it.each(['refresh', 'held'] as const)(
     expect(s.snapshot().body).toBe(requestedDraft().body);
   },
 );
+it('never schedules retained edits while already held, including a masked teardown hold', async () => {
+  vi.useFakeTimers();
+  try {
+    const api = apiFixture();
+    const s = requestedDraftSession(api, 'ws', requestedDraft(), null);
+    setDailySessionScope(api, null);
+    s.setActionHold('Configuration paused');
+    s.setPropagatedHold(() => 'Configuration paused');
+    s.edit('body', 'Retained while paused');
+    s.autosave();
+    expect(vi.getTimerCount()).toBe(0);
+    s.setPropagatedHold(() => 'Daily view closed');
+    setDailySessionScope(api, 'ws');
+    s.setPropagatedHold(() => undefined);
+    s.setActionHold(undefined);
+    await vi.advanceTimersByTimeAsync(900);
+    expect(api.editRequestedFollowup).not.toHaveBeenCalled();
+    expect(s.snapshot().body).toBe('Retained while paused');
+    s.edit('body', 'New explicit edit');
+    s.autosave();
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(800);
+    expect(api.editRequestedFollowup).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+it('cancels active timer on hold and never resumes it merely on release', async () => {
+  vi.useFakeTimers();
+  try {
+    const api = apiFixture();
+    const s = requestedDraftSession(api, 'ws', requestedDraft(), null);
+    s.edit('body', 'Keep local');
+    s.autosave();
+    expect(vi.getTimerCount()).toBe(1);
+    s.setActionHold('Paused');
+    expect(vi.getTimerCount()).toBe(0);
+    s.setPropagatedHold(() => 'Daily view closed');
+    expect(vi.getTimerCount()).toBe(0);
+    s.setActionHold(undefined);
+    s.setPropagatedHold(() => undefined);
+    await vi.advanceTimersByTimeAsync(900);
+    expect(api.editRequestedFollowup).not.toHaveBeenCalled();
+    await s.flush();
+    expect(api.editRequestedFollowup).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});

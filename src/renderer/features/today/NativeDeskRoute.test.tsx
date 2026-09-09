@@ -443,3 +443,34 @@ it.each(['active', 'paused', 'authority'] as const)(
       ).toHaveLength(0);
   },
 );
+it('already-paused edit does not autosave after teardown and active same-workspace remount', async () => {
+  const f = ownedFixture();
+  const active = await f.api.delegation.status();
+  f.setConfiguration({ ...active, state: 'paused' } as typeof active);
+  const view = render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Email · Account A' }),
+  );
+  fireEvent.change(screen.getByLabelText('Email body'), {
+    target: { value: 'Retain paused text' },
+  });
+  view.unmount();
+  f.setConfiguration(active);
+  render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+  await screen.findByLabelText('Email body');
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 900));
+  });
+  expect(
+    f.calls.filter((c) => c.method === 'editRequestedFollowup'),
+  ).toHaveLength(0);
+  expect(
+    (screen.getByLabelText('Email body') as HTMLTextAreaElement).value,
+  ).toBe('Retain paused text');
+  fireEvent.click(screen.getByRole('button', { name: 'Save edits' }));
+  await waitFor(() =>
+    expect(
+      f.calls.filter((c) => c.method === 'editRequestedFollowup'),
+    ).toHaveLength(1),
+  );
+});

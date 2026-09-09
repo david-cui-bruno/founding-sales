@@ -91,12 +91,12 @@ class RequestedDraftSession {
   private update(patch: Partial<State>, notify = true) {
     const next = { ...this.state, ...patch };
     next.holdReason = this.viewHold || this.propagatedHold?.(next.draft);
-    if (next.holdReason && next.holdReason !== this.state.holdReason) {
+    if (next.holdReason && next.holdReason !== this.state.holdReason)
       this.generation++;
-      if (this.timer) {
-        clearTimeout(this.timer);
-        this.timer = null;
-      }
+    // Cancellation is a lifetime invariant, not a change in displayed copy.
+    if (next.holdReason && this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
     }
     this.state = next;
     if (notify) this.listeners.forEach((l) => l());
@@ -178,6 +178,8 @@ class RequestedDraftSession {
   }
   autosave() {
     if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    if (this.actionHold) return;
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.flush().catch((): void => undefined);
