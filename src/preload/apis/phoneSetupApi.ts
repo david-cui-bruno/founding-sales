@@ -9,7 +9,10 @@ export const createPhoneSetupApi = (client: IpcClient): PhoneSetupApi => ({
     if (args.length !== 0) throw new Error(PHONE_SETUP_ERROR);
     return client.requestNoInput('phone-setup:status', phoneSetupStatusSchema);
   }),
-  confirm: input => safe(() => client.request('phone-setup:confirm', confirmPhoneSetupSchema, phoneSetupStatusSchema, input)),
+  confirm: (...args: Parameters<PhoneSetupApi['confirm']>) => safe(() => {
+    if (args.length !== 1) throw new Error(PHONE_SETUP_ERROR);
+    return client.request('phone-setup:confirm', confirmPhoneSetupSchema, phoneSetupStatusSchema, args[0]);
+  }),
   clear: (...args: []) => safe(() => {
     if (args.length !== 0) throw new Error(PHONE_SETUP_ERROR);
     return client.requestNoInput('phone-setup:clear', phoneSetupStatusSchema);

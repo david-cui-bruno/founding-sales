@@ -1,3 +1,5 @@
+import { createPhoneSetupApi } from '../../src/preload/apis/phoneSetupApi';
+import { createIpcClient } from '../../src/preload/ipcClient';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dirname, join } from 'node:path';
 import { mkdirSync, symlinkSync } from 'node:fs';
@@ -47,4 +49,27 @@ describe('isolated actual A3 binding/settings safety, not assembled domain accep
     expect(actual.read()?.fingerprint).toBe('fictional-route');
   });
 
+});
+
+describe('phone setup preload confirmation arity', () => {
+  it.each([
+    { name: 'missing input', args: [] },
+    { name: 'extra undefined argument', args: [{ expectedFingerprint: 'fictional-route' }, undefined] },
+    { name: 'extra object argument', args: [{ expectedFingerprint: 'fictional-route' }, { unexpected: true }] },
+  ])('rejects $name before invoking IPC', async ({ args }) => {
+    const invoke = vi.fn(async () => ({ state: 'configured', candidateFingerprint: 'fictional-route', confirmedAt: NOW }));
+    const api = createPhoneSetupApi(createIpcClient({ invoke }));
+    const result = Reflect.apply(api.confirm, api, args) as Promise<unknown>;
+    await expect(result).rejects.toThrow('PHONE_SETUP_FAILED');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('preserves validated confirmation with exactly one argument', async () => {
+    const status = { state: 'configured', candidateFingerprint: 'fictional-route', confirmedAt: NOW };
+    const invoke = vi.fn(async () => status);
+    const api = createPhoneSetupApi(createIpcClient({ invoke }));
+    expect(await api.confirm({ expectedFingerprint: 'fictional-route' })).toEqual(status);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith('phone-setup:confirm', { expectedFingerprint: 'fictional-route' });
+  });
 });
