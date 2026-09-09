@@ -132,8 +132,9 @@ export class DynamoDispatchRepository {
       || (evidence.state === 'provider_accepted') !== (evidence.providerIdentity !== null)) throw new Error('send_evidence_conflict');
     const flightKey = dispatchAccountKey(intent.action.accountId); const flightRow = await this.required(flightKey);
     const flight = flightSchema.parse(flightRow.data);
-    if (terminalState && (terminalState === evidence.state || evidence.kind !== 'provider_result' || !['provider_accepted', 'cancelled'].includes(evidence.state)
-      || evidence.state === 'provider_accepted' && evidence.reason !== 'provider_accepted')) throw new Error('send_evidence_conflict');
+    if (terminalState && (terminalState === evidence.state || !['provider_accepted', 'cancelled'].includes(evidence.state)
+      || evidence.state === 'provider_accepted' && !(evidence.kind === 'provider_result' && evidence.reason === 'provider_accepted'
+        || evidence.kind === 'sent_lookup' && evidence.reason === 'sent_match' && evidence.providerIdentity?.threadId === intent.frozenMessage.threadId))) throw new Error('send_evidence_conflict');
     if (!terminalState && (flight.commandId !== intent.commandId || flight.accountId !== intent.action.accountId || flight.actionId !== intent.action.actionId
       || !['dispatching', 'unknown'].includes(flight.state))) throw new Error('account_dispatch_conflict');
     const items = [this.store.put(`DISPATCH_EVIDENCE#${keyPart(intent.commandId)}#${fingerprint(evidence)}`, evidence, null),

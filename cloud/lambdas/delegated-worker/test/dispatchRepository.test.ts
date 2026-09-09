@@ -243,7 +243,7 @@ it('durable action read rejects mismatched reservation identities', async () => 
   await expect(f.execution.readDispatch('acct', 'action')).rejects.toThrow('reservation_identity_conflict');
 });
 
-function sentRaw(f: Awaited<ReturnType<typeof dispatchFixture>>, extraHeaders: { name: string; value: string }[] = []) {
+function sentRaw(f: Pick<Awaited<ReturnType<typeof dispatchFixture>>, 'options'> & { intent: Pick<DispatchIntent, 'frozenMessage'> }, extraHeaders: { name: string; value: string }[] = []) {
   const email = f.intent.frozenMessage; const body = Buffer.from(email.body.replace(/\n/g, '\r\n'));
   return { id: 'sent1', threadId: email.threadId, internalDate: String(Date.parse(f.options.clock.now())), labelIds: ['SENT'], payload: { mimeType: 'text/plain', headers: [
     { name: 'Message-ID', value: `<${email.commandId}@callie.invalid>` }, { name: 'From', value: email.from }, { name: 'To', value: email.to }, { name: 'Subject', value: email.subject },
@@ -525,5 +525,48 @@ it.each(['same_terminal', 'unproven_cancellation', 'foreign_reservation'] as con
   expect(await f.store.get('DISPATCH_CONFLICT#acct')).toBeNull();
   expect(await f.store.list('ACTION_LATE_EVIDENCE#')).toHaveLength(0);
   expect(await f.policy.sendEvidence(f.intent.commandId)).toHaveLength(1);
+  expect((await f.execution.eventsAfter(null)).events).toEqual(events);
+});
+
+it('already-running unknown Sent reconciliation retains verified acceptance after definite non-send wins settlement', async () => {
+  const f = await campaignFixture(true); f.onSend(async () => { throw new Error('lost send response'); });
+  expect((await f.service().dispatch(f.intent.commandId)).status).toBe('unknown');
+  let entered!: () => void; let resume!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; }); const gate = new Promise<void>(resolve => { resume = resolve; });
+  const lookup: typeof globalThis.fetch = async url => {
+    if (new URL(String(url)).pathname.endsWith('/messages')) { entered(); await gate; return Response.json({ messages: [{ id: 'sent1' }] }); }
+    return Response.json(sentRaw(f));
+  };
+  const reconciler = createSendReconciler({ execution: f.execution, policy: f.policy, authorization: f.authorization, fetch: lookup });
+  const pending = reconciler.reconcileSend(f.intent.commandId);
+  await started;
+  const original = (await f.policy.sendEvidence(f.intent.commandId))[0]!;
+  const cancelled: SendEvidence = { ...original, state: 'cancelled', kind: 'provider_result', reason: 'provider_not_sent', providerIdentity: null };
+  await f.execution.appendOutcome({ reservation: cancelled.reservation, state: 'cancelled', observedAt: cancelled.observedAt, evidenceRef: `send-${fingerprint(cancelled)}` }, cancelled);
+  const keys = ['ACTION#acct#campaign-action', 'DISPATCH_ACCOUNT#acct', 'CAMPAIGN_RESERVATION#acct#campaign-action', campaignCapKey(f.version.id, 'email')];
+  const before = await Promise.all(keys.map(key => f.store.get(key)));
+  resume();
+  expect(await pending).toMatchObject({ status: 'provider_accepted', reason: 'sent_match', providerIdentity: { messageId: 'sent1', threadId: 'thread1' } });
+  expect(await Promise.all(keys.map(key => f.store.get(key)))).toEqual(before);
+  const evidence = await f.policy.sendEvidence(f.intent.commandId);
+  expect(evidence).toHaveLength(3);
+  const late = evidence.find(item => item.kind === 'sent_lookup')!;
+  expect(late).toMatchObject({ state: 'provider_accepted', reason: 'sent_match' });
+  const events = (await f.execution.eventsAfter(null)).events;
+  expect(events.at(-1)).toMatchObject({ kind: 'action.outcome', payload: { state: 'cancelled' }, campaign: { evidence: { state: 'provider_accepted', conflict: 'contradictory_finalized_outcome' } } });
+  await f.execution.appendOutcome({ reservation: late.reservation, state: late.state, observedAt: late.observedAt, evidenceRef: `sent-${fingerprint(late)}` }, late);
+  expect((await f.execution.eventsAfter(null)).events).toEqual(events);
+  expect(f.dynamo.inspect(campaignEnrollmentKey('enrollment'))).toMatchObject({ state: 'held' });
+  expect((await f.service().dispatch(f.intent.commandId)).status).toBe('not_sent'); expect(f.sends()).toBe(1);
+});
+it.each(['wrong_reason', 'wrong_thread', 'missing_identity', 'wrong_rfc'] as const)('terminal Sent acceptance rejects %s without conflict writes', async variant => {
+  const f = await dispatchFixture(); f.onSend(async () => new Response('', { status: 403 })); await f.service().dispatch(f.intent.commandId);
+  const original = (await f.policy.sendEvidence(f.intent.commandId))[0]!;
+  const evidence: SendEvidence = { ...original, state: 'provider_accepted', kind: 'sent_lookup', reason: variant === 'wrong_reason' ? 'provider_accepted' : 'sent_match',
+    providerIdentity: variant === 'missing_identity' ? null : { messageId: 'sent1', threadId: variant === 'wrong_thread' ? 'foreign' : 'thread1' },
+    rfcMessageId: variant === 'wrong_rfc' ? '<foreign@callie.invalid>' : original.rfcMessageId };
+  const events = (await f.execution.eventsAfter(null)).events;
+  await expect(f.execution.appendOutcome({ reservation: evidence.reservation, state: evidence.state, observedAt: evidence.observedAt, evidenceRef: `sent-${fingerprint(evidence)}` }, evidence)).rejects.toThrow('send_evidence_conflict');
+  expect(await f.policy.sendEvidence(f.intent.commandId)).toHaveLength(1); expect(await f.store.get('DISPATCH_CONFLICT#acct')).toBeNull();
   expect((await f.execution.eventsAfter(null)).events).toEqual(events);
 });

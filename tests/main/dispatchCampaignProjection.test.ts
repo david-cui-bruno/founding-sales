@@ -11,7 +11,7 @@ import { DelegationRepository } from '../../src/main/delegation/delegationReposi
 import { workerEventSchema } from '../../src/shared/contracts/delegationContract';
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
 
-it.each(['provider_accepted', 'cancelled'] as const)('projects actual C4 %s and contrary late fact through canonical SQL and durable reopen', async first => {
+it.each([{ first: 'provider_accepted', kind: 'provider_result' }, { first: 'cancelled', kind: 'provider_result' }, { first: 'cancelled', kind: 'sent_lookup' }] as const)('projects actual C4 $first/$kind contrary late fact through canonical SQL and durable reopen', async ({ first, kind }) => {
   const worker = await campaignFixture(true);
   if (first === 'cancelled') worker.onSend(async () => new Response('', { status: 403 }));
   const temp = createTempDatabase(); const key = createTestWorkspaceKey();
@@ -59,9 +59,9 @@ it.each(['provider_accepted', 'cancelled'] as const)('projects actual C4 %s and 
     const expectedCap = { revision: 3, reserved: 0, sent: first === 'provider_accepted' ? 1 : 0 };
     const originalReceipts = db.raw.prepare('SELECT * FROM campaign_step_receipts').all();
     const original = (await worker.policy.sendEvidence(worker.intent.commandId))[0]!;
-    const late: SendEvidence = { ...original, state: first === 'cancelled' ? 'provider_accepted' : 'cancelled', kind: 'provider_result',
-      reason: first === 'cancelled' ? 'provider_accepted' : 'provider_not_sent', providerIdentity: first === 'cancelled' ? { messageId: 'late-original-result', threadId: 'thread1' } : null };
-    const outcome = { reservation: late.reservation, state: late.state, observedAt: late.observedAt, evidenceRef: `send-${fingerprint(late)}` };
+    const late: SendEvidence = { ...original, state: first === 'cancelled' ? 'provider_accepted' : 'cancelled', kind,
+      reason: kind === 'sent_lookup' ? 'sent_match' : first === 'cancelled' ? 'provider_accepted' : 'provider_not_sent', providerIdentity: first === 'cancelled' ? { messageId: 'late-original-result', threadId: 'thread1' } : null };
+    const outcome = { reservation: late.reservation, state: late.state, observedAt: late.observedAt, evidenceRef: `${kind === 'sent_lookup' ? 'sent' : 'send'}-${fingerprint(late)}` };
     await worker.execution.appendOutcome(outcome, late);
     const conflict = (await worker.execution.eventsAfter(null)).events.find(event => event.kind === 'action.outcome' && event.payload.evidenceRef === outcome.evidenceRef)!;
     expect(workerEventSchema.parse(conflict)).toHaveProperty('payload.state', first);
