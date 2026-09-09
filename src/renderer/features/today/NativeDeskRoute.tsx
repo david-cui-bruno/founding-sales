@@ -215,9 +215,11 @@ export function NativeDeskRoute({
   if ((snapshot.workflowMode === 'unknown' || snapshot.workflowMode === 'legacy') && local.read.overview.value?.workflowMode !== 'meeting_first')
     return (
       <section className="native-desk">
-        <h1>Today</h1>
+        <h1>{surface === 'today' ? 'Today' : surface === 'accounts' ? 'Accounts' : 'Campaigns'}</h1>
         <p>
-          Workflow mode unavailable or inconsistent. Refresh to check local status. Worker actions are held.
+          {snapshot.workflowMode === 'legacy' && !localHold && !current?.error
+            ? 'Legacy workflow is active. Local records remain available. Switch to Native Desk in Settings to change the daily workspace. Worker actions are held.'
+            : 'Workflow mode unavailable or inconsistent. Refresh to check local status. Worker actions are held.'}
         </p>
         <button onClick={refresh}>Refresh</button>
         {localOnly}

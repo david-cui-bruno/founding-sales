@@ -12,6 +12,26 @@ function fixture(scoped = false) {
   const api = { ...f.api, localWorkspace: { get: vi.fn(async () => structuredClone(local)), getCommitments: vi.fn(async () => structuredClone(commitments)), transition: vi.fn() } };
   return { ...f, api };
 }
+it.each(['accounts', 'campaigns'] as const)('keeps the %s route identity and truthful status in settled legacy mode', async surface => {
+  const f = fixture();
+  f.setSnapshot({ ...await f.api.daily.get(), workflowMode: 'legacy' });
+  f.api.localWorkspace.get.mockResolvedValue({ ...local, workflowMode: 'legacy' });
+  render(<NativeDeskRoute api={f.api} surface={surface} onOpenLead={vi.fn()} />);
+  await screen.findByText(/Legacy workflow is active/);
+  expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(surface === 'accounts' ? 'Accounts' : 'Campaigns');
+  expect(screen.queryByText(/Workflow mode unavailable or inconsistent/)).toBeNull();
+  expect(f.calls.every(c => /daily.get|delegation.status/.test(c.method))).toBe(true);
+});
+it.each(['accounts', 'campaigns'] as const)('keeps the %s route identity while unknown mode remains held', async surface => {
+  const f = fixture();
+  f.setSnapshot({ ...await f.api.daily.get(), workflowMode: 'unknown' });
+  f.api.localWorkspace.get.mockResolvedValue({ ...local, workflowMode: 'legacy' });
+  render(<NativeDeskRoute api={f.api} surface={surface} onOpenLead={vi.fn()} />);
+  await screen.findByText(/Workflow mode unavailable or inconsistent/);
+  expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(surface === 'accounts' ? 'Accounts' : 'Campaigns');
+  expect(screen.queryByText(/Legacy workflow is active/)).toBeNull();
+  expect(f.calls.every(c => /daily.get|delegation.status/.test(c.method))).toBe(true);
+});
 it('puts typed retained work first in Calls, preserves non-call/later metadata and navigates only explicitly', async () => {
   const f = fixture(); const open = vi.fn(); render(<NativeDeskRoute api={f.api} onOpenLead={open} legacy={<p>Forbidden legacy</p>} />);
   const row = await screen.findByRole('button', { name: /Retained callback.*Retained Person/ });
