@@ -134,3 +134,18 @@ it('completed settlement replay requires the original receipt identity', async (
   await f.store.settle({ jobId: job.id, claimToken: job.claimToken, status: 'completed', receiptCommandId: job.id, costMicros: null });
   await expect(f.store.settle({ jobId: job.id, claimToken: job.claimToken, status: 'completed', receiptCommandId: null, costMicros: null })).rejects.toThrow();
 });
+it('skips an unaffordable queued head without releasing reservations or starving affordable work', async () => {
+  const db = new ConditionalCommandHarness();
+  const store = createWorkerAccountRepository({ dynamo: db, tableName: 't', workspaceId: 'ws', clock });
+  const account = await store.create({ commandId: id, name: 'Fictional PM', domain: null });
+  await store.approveResearchBudget(100);
+  const expensive = '00000000-0000-4000-a000-000000000002';
+  const affordable = '00000000-0000-4000-a000-000000000003';
+  await store.enqueue({ commandId: expensive, accountId: account.id, limits: { ...limits, maxCostMicros: 101 } });
+  await store.enqueue({ commandId: affordable, accountId: account.id, limits: { ...limits, maxCostMicros: 50 } });
+  const claimed = await store.claimNext(clock.now());
+  expect(claimed).toMatchObject({ id: affordable, attempt: 1, receiptCommitted: false });
+  expect(db.inspect(`JOB#${expensive}`)).toMatchObject({ state: 'queued', reservedCost: 0 });
+  expect(db.inspect('BUDGET#research')).toMatchObject({ spent: 50 });
+  expect(await store.claimNext(clock.now())).toBeNull();
+});

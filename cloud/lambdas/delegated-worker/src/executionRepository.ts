@@ -65,7 +65,7 @@ export class DynamoExecutionRepository implements ExecutionRepository {
       aggregateVersion: next.version, reason: null });
     const base = { id: `command-${fingerprint([command.workspaceId, command.commandId])}`, workspaceId: command.workspaceId, accountId: command.accountId,
       authorityGeneration: authority.generation, aggregateVersion: next.version };
-    const event = workerEventSchema.parse(command.kind === 'manual-outcome' ? { ...base, kind: 'manual.outcome', payload: command.payload }
+    const event = workerEventSchema.parse(command.kind === 'manual-outcome' ? { ...base, kind: 'manual.outcome', receipt, payload: command.payload }
       : { ...base, kind: 'authority.changed', payload: { authority, receipt } });
     const outbox = await this.store.eventItems(event);
     try {

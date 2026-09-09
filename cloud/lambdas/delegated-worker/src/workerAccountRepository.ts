@@ -205,7 +205,7 @@ export class DynamoWorkerAccountRepository implements AccountResearchStore {
       const budgetRow = await this.store.get<Budget>('BUDGET#research');
       if (!budgetRow) return null;
       const budget = budgetSchema.parse(budgetRow.data);
-      if (budget.spent + job.limits.maxCostMicros > budget.limit) return null;
+      if (budget.spent + job.limits.maxCostMicros > budget.limit) continue;
       const claimed: JobRecord = { ...job, state: 'running', claimToken: randomUUID(), reservedCost: job.limits.maxCostMicros, claimedAt: asOf };
       const spent = budget.spent + claimed.reservedCost;
       await this.store.transact([this.store.put(jobKey(job.id), claimed, stored.rev, jobFields(claimed), jobFields(job)),

@@ -177,3 +177,15 @@ it('drains pending publication in durable sequence without applying commands aga
   expect((await repo.eventsAfter(null)).events).toHaveLength(2);
   expect(db.inspect('AUTH#acct')).toMatchObject({ version: 2, authority: { state: 'paused' } });
 });
+it('manual outcome carries command-correlated applied receipt with unchanged payload across replay and restart', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  const manual = { ...command, expectedVersion: 1, kind: 'manual-outcome' as const, payload: { actionId: 'linkedin-action', channel: 'linkedin' as const,
+    outcome: 'not_sent' as const, observedAt: clock.now(), evidenceRef: 'human-observation' } };
+  const receipt = await repo.applyCommand(manual);
+  const restarted = createExecutionRepository({ dynamo: db, tableName: 't', workspaceId: 'ws', clock });
+  expect(await restarted.applyCommand(manual)).toEqual(receipt);
+  const events = (await restarted.eventsAfter(null)).events;
+  expect(events).toHaveLength(2);
+  expect(events[1]).toMatchObject({ kind: 'manual.outcome', receipt, payload: manual.payload });
+  expect(receipt).toMatchObject({ commandId: manual.commandId, status: 'applied', authorityGeneration: 1, aggregateVersion: 2 });
+});
