@@ -48,9 +48,33 @@ describe('parseCsvSource', () => {
     expect(parsed.errors).toEqual([]);
   });
 
-  it('pads ragged rows to the header width', () => {
+  it('pads missing cells for display but reports a blocking width error', () => {
     const parsed = parseCsvSource('Name,Organization\nKevin Shin\n');
     expect(parsed.rows).toEqual([{ rowNumber: 2, values: ['Kevin Shin', ''] }]);
+    expect(parsed.errors).toContainEqual(expect.objectContaining({ rowNumber: 2, code: 'PARSE_ERROR' }));
+  });
+
+  it('rejects extra cells instead of silently truncating them', () => {
+    const parsed = parseCsvSource('Name,Email\nNora,nora@fixture.invalid,extra\n');
+    expect(parsed.errors).toContainEqual(expect.objectContaining({ rowNumber: 2, code: 'PARSE_ERROR' }));
+  });
+
+  it.each([';', '\t'])('auto-detects CSV delimiter %j', (delimiter) => {
+    const parsed = parseCsvSource(`Name${delimiter}Email\nNora${delimiter}nora@fixture.invalid\n`);
+    expect(parsed.columns).toEqual(['Name', 'Email']);
+    expect(parsed.rows).toEqual([{ rowNumber: 2, values: ['Nora', 'nora@fixture.invalid'] }]);
+    expect(parsed.errors).toEqual([]);
+  });
+
+  it('uses the first nonblank header and retains absolute diagnostic record numbers', () => {
+    const parsed = parseCsvSource('\n  \nName, ,Name\nNora,x,Nora\nMarcus\n');
+    expect(parsed.columns).toEqual(['Name', '', 'Name']);
+    expect(parsed.rows.map((row) => row.rowNumber)).toEqual([4, 5]);
+    expect(parsed.errors).toEqual([
+      expect.objectContaining({ rowNumber: 3, code: 'INVALID_HEADER' }),
+      expect.objectContaining({ rowNumber: 3, code: 'DUPLICATE_HEADER' }),
+      expect.objectContaining({ rowNumber: 5, code: 'PARSE_ERROR' }),
+    ]);
   });
 
   it('rejects blank headers', () => {

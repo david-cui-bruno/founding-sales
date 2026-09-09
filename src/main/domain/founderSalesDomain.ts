@@ -8,7 +8,7 @@ import { collectLeadTriageSnapshot, type LeadTriageQueueRow } from '../today/lea
 import { leadTriageSnapshotRequestSchema, type LeadTriageSnapshot, type LeadTriageSnapshotRequest } from '../../shared/contracts/leadTriageReportContract';
 import { createHash } from 'node:crypto';
 
-import Papa from 'papaparse';
+import { parseCsvSource, type CsvParseError } from '../imports/csvParser';
 import { z } from 'zod';
 import { buildPortfolioContext } from './portfolio/portfolioContext';
 import { DiscoveryWorkerCommands, type DiscoveryResearchRequest } from '../discovery/discoveryWorker';
@@ -243,6 +243,7 @@ type ProjectionRow = {
 };
 
 type StoredImportPreview = {
+  readonly parseErrors: readonly Readonly<CsvParseError>[];
   preview: ImportPreview;
   columns: string[];
   rows: { rowNumber: number; values: Record<string, string> }[];
@@ -2467,16 +2468,23 @@ export class FounderSalesDomain implements OutboundDomainPort {
 
   previewLeadImport(input: ImportSource): ImportPreview {
     const request = importSourceSchema.parse(input);
-    const parsed = this.parseTabular(request);
-    const suggestedMapping = this.suggestMapping(parsed.columns);
-    const validation = this.validateImportRows(parsed.rows, suggestedMapping);
+    const parsed = parseCsvSource(request.content, request.kind);
+    const uniqueColumns = [...new Set(parsed.columns)];
+    const suggestedMapping = this.suggestMapping(uniqueColumns);
+    const rows = parsed.rows.map((row) => ({
+      rowNumber: row.rowNumber,
+      values: Object.fromEntries(uniqueColumns.map((column) => [
+        column, row.values[parsed.columns.indexOf(column)] ?? '',
+      ])),
+    }));
+    const validation = this.validateImportRows(rows, suggestedMapping);
     const preview = importPreviewSchema.parse({
       previewId: this.ids.next(),
       contentHash: createHash('sha256').update(request.content, 'utf8').digest('hex'),
       columns: parsed.columns,
       sampleRows: parsed.rows.slice(0, 20).map((row) => ({
         rowNumber: row.rowNumber,
-        cells: parsed.columns.map((column) => row.values[column] ?? ''),
+        cells: row.values,
       })),
       suggestedMapping,
       rowCount: parsed.rows.length,
@@ -2488,7 +2496,8 @@ export class FounderSalesDomain implements OutboundDomainPort {
     this.importPreviews.set(preview.previewId, {
       preview,
       columns: parsed.columns,
-      rows: parsed.rows,
+      rows,
+      parseErrors: Object.freeze(parsed.errors.map((error) => Object.freeze({ ...error }))),
       sourceName: request.sourceName,
     });
     return preview;
@@ -2502,7 +2511,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
       ...stored.preview,
       suggestedMapping: request.mapping,
       validCount: validation.validCount,
-      errors: validation.errors,
+      errors: [...stored.parseErrors, ...validation.errors],
       duplicateCandidates: validation.duplicateCandidates,
     });
     this.importPreviews.set(request.previewId, { ...stored, preview });
@@ -2512,6 +2521,12 @@ export class FounderSalesDomain implements OutboundDomainPort {
   commitLeadImport(input: ImportCommitRequest): ImportCommitReceipt {
     const request = importCommitRequestSchema.parse(input);
     const stored = this.requirePreview(request.previewId, request.contentHash);
+    if (stored.parseErrors.length > 0) {
+      throw new FounderSalesDomainError(
+        'IMPORT_VALIDATION_FAILED',
+        'The import has blocking parse errors; nothing was written.',
+      );
+    }
     const validation = this.validateImportRows(stored.rows, request.mapping);
     if (validation.errors.length > 0) {
       throw new FounderSalesDomainError(
@@ -2612,50 +2627,6 @@ export class FounderSalesDomain implements OutboundDomainPort {
     return stored;
   }
 
-  private parseTabular(request: ImportSource): {
-    columns: string[];
-    rows: { rowNumber: number; values: Record<string, string> }[];
-    errors: { rowNumber: number; field: string | null; code: string; message: string }[];
-  } {
-    const content = request.kind === 'spreadsheet_paste'
-      ? request.content
-      : request.content;
-    const parsed = Papa.parse<Record<string, string>>(content.replace(/^\uFEFF/, ''), {
-      header: true,
-      skipEmptyLines: 'greedy',
-      delimiter: request.kind === 'spreadsheet_paste' ? '\t' : undefined,
-    });
-    const columns = (parsed.meta.fields ?? []).map((field) => field.trim());
-    const errors: { rowNumber: number; field: string | null; code: string; message: string }[] = [];
-    if (columns.length === 0 || columns.some((column) => column.length === 0)) {
-      errors.push({
-        rowNumber: 1, field: null, code: 'INVALID_HEADER',
-        message: 'Headers must be present and non-blank.',
-      });
-    }
-    if (new Set(columns).size !== columns.length) {
-      errors.push({
-        rowNumber: 1, field: null, code: 'DUPLICATE_HEADER',
-        message: 'Headers must be unique.',
-      });
-    }
-    for (const parseError of parsed.errors.slice(0, 20)) {
-      errors.push({
-        rowNumber: (parseError.row ?? 0) + 2,
-        field: null,
-        code: 'PARSE_ERROR',
-        message: parseError.message.slice(0, 200),
-      });
-    }
-    const rows = parsed.data.map((values, index) => ({
-      rowNumber: index + 2,
-      values: Object.fromEntries(
-        Object.entries(values).map(([key, value]) => [key.trim(), (value ?? '').trim()]),
-      ),
-    }));
-    return { columns, rows, errors };
-  }
-
   private suggestMapping(columns: string[]): ImportMapping {
     const byHeader: Record<string, ImportField> = {
       name: 'person_name', person: 'person_name', owner: 'person_name',
@@ -2664,10 +2635,11 @@ export class FounderSalesDomain implements OutboundDomainPort {
       address: 'property_address', property: 'property_address',
       doors: 'doors', units: 'doors', source: 'source', segment: 'segment', notes: 'notes',
     };
-    const mapping: Record<string, ImportField> = {};
+    const mapping: Record<string, ImportField> = Object.create(null);
     let hasName = false;
     for (const column of columns) {
-      const suggested = byHeader[column.toLowerCase()] ?? 'ignore';
+      const header = column.toLowerCase();
+      const suggested = Object.hasOwn(byHeader, header) ? byHeader[header]! : 'ignore';
       if (suggested === 'person_name') {
         mapping[column] = hasName ? 'ignore' : 'person_name';
         hasName = true;
