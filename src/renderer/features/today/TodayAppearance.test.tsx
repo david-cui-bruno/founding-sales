@@ -67,7 +67,7 @@ it.each(['light', 'dark'])('keeps real queue selection and keyboard focus distin
   try {
     await page.setContent(`<html data-theme="${theme}"><head><style>${css}</style></head><body>${renderToStaticMarkup(
       <TodayPage snapshot={snapshot} selectedPersonId="person-1" onOpenLead={noOp} onCall={noOp} onSnoozeUntil={noOp}
-        onSkipToday={noOp} onLogPastActivity={noOp} onOpenInLeads={noOp} onStartTriage={noOp} />,
+        onSkipToday={noOp} onLogPastActivity={noOp} onOpenInLeads={noOp} />,
     )}</body></html>`);
     const selected = page.locator('.today-row[aria-current="true"]');
     expect(await selected.count()).toBe(1);
@@ -115,7 +115,7 @@ it('changes actual compact queue row geometry with the persisted density attribu
   try {
     await page.setContent(`<html data-theme="light" data-density="comfortable"><head><style>${css}</style></head><body>${renderToStaticMarkup(
       <TodayPage snapshot={snapshot} onOpenLead={noOp} onCall={noOp} onSnoozeUntil={noOp}
-        onSkipToday={noOp} onLogPastActivity={noOp} onOpenInLeads={noOp} onStartTriage={noOp} />,
+        onSkipToday={noOp} onLogPastActivity={noOp} onOpenInLeads={noOp} />,
     )}</body></html>`);
     const row = page.locator('.today-work-list .today-row').nth(1);
     const comfortable = (await row.boundingBox())!.height;

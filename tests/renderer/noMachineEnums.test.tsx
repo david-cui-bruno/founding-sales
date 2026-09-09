@@ -170,7 +170,6 @@ describe('no raw machine enums in rendered output', () => {
         onSkipToday={vi.fn()}
         onLogPastActivity={vi.fn()}
         onOpenInLeads={vi.fn()}
-        onStartTriage={vi.fn()}
       />,
     );
     expect(snakeCaseLeaks(container)).toEqual([]);

@@ -6,7 +6,7 @@ import { TodayPage } from './TodayPage';
 afterEach(cleanup);
 const item = (id: string, lane: TodayItem['lane'] = 'due_cadence'): TodayItem => ({ id, salesCycleId: id, personId: id, personName: id, lane, contextLabel: 'Example portfolio', stage: 'ready', priorityContext: null, action: { id: `action-${id}`, type: 'call_lead', channel: 'call', label: 'Call' }, reason: 'callback_promised_today', activeTriggers: [], verifyFirst: false, pinned: false, consentRequirement: null, cloudScores: null });
 const snapshot = (items = [item('Avery'), item('Blair')]): TodaySnapshot => ({ lanes: [{ id: 'due_cadence', items, overflowCount: 0 }], dialBudget: 40, scheduledDials: 2, conversationTarget: 4, reviewErrorCount: 0, revision: 1, unreviewedBacklogCount: 10, unreviewedCloudSignalCount: 5, conversationsHeld: 0 });
-function page(value = snapshot()) { const props = { snapshot: value, onOpenLead: vi.fn(), onCall: vi.fn(), onSnoozeUntil: vi.fn(), onSkipToday: vi.fn(), onLogPastActivity: vi.fn(), onOpenInLeads: vi.fn(), onStartTriage: vi.fn() }; return { props, ...render(<TodayPage {...props} discovery={<button>Refresh shortlist</button>} />) }; }
+function page(value = snapshot()) { const props = { snapshot: value, onOpenLead: vi.fn(), onCall: vi.fn(), onSnoozeUntil: vi.fn(), onSkipToday: vi.fn(), onLogPastActivity: vi.fn(), onOpenInLeads: vi.fn() }; return { props, ...render(<TodayPage {...props} discovery={<button>Refresh shortlist</button>} />) }; }
 
 it('renders the main-process queue as one compact contact list with no generic preparation or judgment surface', () => {
   page();

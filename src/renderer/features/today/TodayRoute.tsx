@@ -223,7 +223,6 @@ function LegacyTodayRoute({
           onSkipToday={handleSkipToday}
           onLogPastActivity={handleLogPastActivity}
           onOpenInLeads={handleOpenInLeads}
-          onStartTriage={() => undefined}
         />
       )}
       {discoveryApi !== undefined && <SuggestedContacts api={discoveryApi} onOpenPerson={onOpenLead} />}

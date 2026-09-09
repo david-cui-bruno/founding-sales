@@ -10,7 +10,6 @@ export type TodayPageProps = {
   onOpenLead(personId: string): void; onCall(item: TodayItem): void;
   onSnoozeUntil(item: TodayItem, resurfaceAt: string): void; onSkipToday(item: TodayItem): void;
   onLogPastActivity(request: LogPastActivityRequest): void; onOpenInLeads(item: TodayItem): void;
-  onStartTriage(): void;
 };
 export const skipTodayResurfaceAt = (): string => {
   const date = new Date(); date.setDate(date.getDate() + 1); date.setHours(9, 0, 0, 0); return date.toISOString();
