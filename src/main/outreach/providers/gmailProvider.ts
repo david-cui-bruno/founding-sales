@@ -1,5 +1,6 @@
 /* eslint-disable no-control-regex -- MIME inputs must reject NUL before serialization. */
 import { z } from 'zod';
+import { capabilitiesForScopes, googleScopes } from '../../../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
 import type { EmailSendResult, FrozenEmail, PreparedGmailSender, GmailCredentials } from './providerTypes';
 import { requestJsonOnce } from './providerHttp';
 import { fail, gmailCredentialsSchema, mailboxSchema, secretSchema } from './providerValidation';
@@ -38,8 +39,22 @@ export async function refreshGmailToken(input: {
   if (reply.status < 200 || reply.status >= 300) fail('provider_rejected');
   const token = tokenSchema.safeParse(reply.data);
   if (!token.success) fail('provider_response_invalid');
-  if (token.data.scope !== undefined && !token.data.scope.split(' ').includes(gmailSendScope)) fail('gmail_reauthorize');
-  return { ...input.credentials, accessToken: token.data.access_token,
+  const grantedScopes = token.data.scope === undefined ? undefined : [...new Set(token.data.scope.split(/\s+/))];
+  if (grantedScopes !== undefined && !grantedScopes.includes(gmailSendScope)) fail('gmail_reauthorize');
+  let grant = credentials.grant;
+  if (grant) {
+    // A prior rich grant is not proof that a refreshed token retains its powers.
+    // Missing scopes require reauthorization, never copying stale capability claims.
+    if (!grantedScopes) fail('gmail_reauthorize');
+    const capabilities = capabilitiesForScopes(grantedScopes);
+    const allowedScopes = ['openid', 'email', 'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/userinfo.profile', ...grant.capabilities.map(capability => googleScopes[capability])];
+    if (grant.capabilities.some(capability => !capabilities.includes(capability))
+      || grantedScopes.some(scope => !allowedScopes.includes(scope))) fail('gmail_reauthorize');
+    grant = { ...grant, grantedScopes, capabilities };
+  }
+  // Legacy metadata-free send-only credentials remain metadata-free.
+  return { ...input.credentials, ...(grant ? { grant } : {}), accessToken: token.data.access_token,
     refreshToken: token.data.refresh_token ?? credentials.refreshToken, expiresAt: input.now() + token.data.expires_in * 1000 };
 }
 

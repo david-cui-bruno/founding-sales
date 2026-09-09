@@ -80,3 +80,43 @@ describe('local calendar configuration gate', () => {
       openExternal: async () => { throw new Error('browser must remain closed'); }, fetch: async () => { throw new Error('provider must remain untouched'); } })).rejects.toThrow('invalid_configuration');
   });
 });
+
+describe('actual provider-manager refresh scope truthfulness', () => {
+  const richGrant = { provider: 'google' as const, subject: 'fixture-refresh-subject', email: 'operator@example.test', owner: 'local' as const,
+    purpose: 'permitted_correspondence' as const, capabilities: ['send', 'relevant_read', 'availability', 'event_write'] as const,
+    grantedScopes: ['openid', 'email', googleScopes.send, googleScopes.relevant_read, googleScopes.availability, googleScopes.event_write],
+    calendars: { ownedCalendarId: 'owned@example.test', conflictCalendarIds: ['owned@example.test'], confirmed: true as const } };
+  it.each([`openid email ${googleScopes.send}`, undefined])('refuses downgraded or absent actual refresh scopes (%s) without replacing encrypted credentials or preparing a sender', async scope => {
+    const { directory, store } = await fixture();
+    const old = { ...legacy, gmail: { ...legacy.gmail, expiresAt: 1000, grant: { ...richGrant, capabilities: [...richGrant.capabilities] } } };
+    await store.save(old); const before = await readFile(join(directory, 'credentials.json')); const urls: string[] = [];
+    const manager = createOutreachProviders({ directory, safeStorage, now: () => 2000, openExternal: async () => { throw new Error('No OAuth'); }, fetch: async url => {
+      urls.push(String(url));
+      if (String(url) !== 'https://oauth2.googleapis.com/token') throw new Error('unconfigured provider boundary');
+      return Response.json({ access_token: 'fictional-downgraded', refresh_token: 'fictional-rotated', token_type: 'Bearer', expires_in: 3600, ...(scope === undefined ? {} : { scope }) });
+    } });
+    try { await expect(manager.prepare(new AbortController().signal)).rejects.toThrow('gmail_reauthorize'); } finally { manager.dispose(); }
+    expect(await readFile(join(directory, 'credentials.json'))).toEqual(before);
+    expect(await store.load()).toEqual(old);
+    expect(urls).toEqual(['https://oauth2.googleapis.com/token']);
+  });
+  it('refreshes a metadata-free legacy send-only credential without inventing read/calendar metadata', async () => {
+    const { directory, store } = await fixture(); await store.save({ ...legacy, gmail: { ...legacy.gmail, expiresAt: 1000 } });
+    const manager = createOutreachProviders({ directory, safeStorage, now: () => 2000, openExternal: async () => { throw new Error('No OAuth'); }, fetch: async url => {
+      if (String(url) !== 'https://oauth2.googleapis.com/token') throw new Error('unconfigured provider boundary');
+      return Response.json({ access_token: 'fictional-refreshed', token_type: 'Bearer', expires_in: 3600 });
+    } });
+    try { expect((await manager.prepare(new AbortController().signal)).accountEmail).toBe(legacy.gmail.email); } finally { manager.dispose(); }
+    const stored = await store.load(); expect(stored?.gmail.accessToken).toBe('fictional-refreshed'); expect(stored?.gmail.grant).toBeUndefined();
+  });
+  it('persists confirmed actual refresh scopes on a valid richer grant', async () => {
+    const { directory, store } = await fixture(); await store.save({ ...legacy, gmail: { ...legacy.gmail, expiresAt: 1000, grant: { ...richGrant, capabilities: [...richGrant.capabilities] } } });
+    const scopes = ['openid', 'https://www.googleapis.com/auth/userinfo.email', ...richGrant.capabilities.map(capability => googleScopes[capability])];
+    const manager = createOutreachProviders({ directory, safeStorage, now: () => 2000, openExternal: async () => { throw new Error('No OAuth'); }, fetch: async url => {
+      if (String(url) !== 'https://oauth2.googleapis.com/token') throw new Error('unconfigured provider boundary');
+      return Response.json({ access_token: 'fictional-refreshed', token_type: 'Bearer', expires_in: 3600, scope: scopes.join(' ') });
+    } });
+    try { expect((await manager.prepare(new AbortController().signal)).accountEmail).toBe(legacy.gmail.email); } finally { manager.dispose(); }
+    expect((await store.load())?.gmail.grant).toEqual({ ...richGrant, grantedScopes: scopes });
+  });
+});
