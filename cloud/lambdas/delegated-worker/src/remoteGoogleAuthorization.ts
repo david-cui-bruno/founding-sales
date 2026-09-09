@@ -1,4 +1,5 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { type WorkerAuth, pairingKey, secretHash } from './workerAuth';
 import { keyPart } from './dynamoStore';
@@ -9,6 +10,13 @@ const secret = z.string().min(1).max(16384).refine(value => !/[\r\n\x00]/.test(v
 const tokenSchema = z.object({ access_token: secret, refresh_token: secret.optional(), token_type: z.literal('Bearer'), expires_in: z.number().int().min(60).max(86400), scope: z.string().min(1).max(4000) });
 const identitySchema = z.object({ sub: z.string().min(1).max(255), email: z.string().email().max(254), email_verified: z.literal(true) });
 const capabilitiesSchema = z.array(googleCapabilitySchema).min(1).max(4).refine(value => new Set(value).size === value.length);
+const accessEvidencePayloadSchema = z.strictObject({ version: z.literal(1), workspaceId: z.string().min(1), tableName: z.string().min(1),
+  pairingId: z.string().uuid(), pairingRevision: z.number().int().positive(), grantRevision: z.number().int().positive(),
+  subject: z.string().min(1).max(255), requiredCapabilities: capabilitiesSchema, expiresAt: z.number().finite().positive() });
+const accessEvidenceSchema = accessEvidencePayloadSchema.extend({ proof: z.string().regex(/^[a-f0-9]{64}$/) });
+export type GoogleAccessEvidence = z.infer<typeof accessEvidenceSchema>;
+export type ExpectedGoogleAccess = { pairingId: string; subject: string; requiredCapabilities: GoogleCapability[] };
+export type AuthorizedGoogleAccess = { accessToken: string; grant: GoogleGrant; accessEvidence: GoogleAccessEvidence };
 const stateSchema = z.strictObject({ pairingId: z.string().uuid(), generation: z.number().int().nonnegative(), expiresAt: z.number(), consumed: z.boolean(),
   calendars: googleCalendarSelectionSchema.optional(), capabilities: capabilitiesSchema, verifier: z.string(), grantRevision: z.number().int().positive().nullable(), subject: z.string().nullable(), clientId: z.string(), redirectUri: z.string() });
 const recordSchema = z.strictObject({ grant: googleGrantSchema.nullable(), revoked: z.boolean(), ciphertext: z.string().nullable(), providerRevocation: z.enum(['confirmed', 'pending']).optional() });
@@ -153,22 +161,52 @@ export class RemoteGoogleAuthorization {
     await this.store.transact([this.store.put(grantKey(pairingId), { grant, revoked: true, ciphertext: null, providerRevocation: 'confirmed' }, (record?.rev ?? 0) + 1)]);
     return { state: 'revoked', grant, providerRevocation: 'confirmed' };
   }
+  private accessProof(payload: z.infer<typeof accessEvidencePayloadSchema>): string {
+    return createHmac('sha256', this.config().encryptionKey).update('google-access-evidence-v1\n')
+      .update(JSON.stringify(accessEvidencePayloadSchema.parse(payload))).digest('hex');
+  }
+  private accessEvidence(pairingId: string, pairingRevision: number, grantRevision: number, grant: GoogleGrant,
+    requiredCapabilities: GoogleCapability[], expiresAt: number): GoogleAccessEvidence {
+    if (grant.owner !== 'remote') throw new Error('google_access_evidence_invalid');
+    requireCapabilities(grant, requiredCapabilities);
+    const payload = accessEvidencePayloadSchema.parse({ version: 1, workspaceId: this.store.options.workspaceId, tableName: this.store.options.tableName,
+      pairingId, pairingRevision, grantRevision, subject: grant.subject, requiredCapabilities, expiresAt });
+    return { ...payload, proof: this.accessProof(payload) };
+  }
+  /** Synchronous composition only: include BOTH conditions in the same final
+   * reservation transaction. Calling this is not itself an authorization check.
+   * Evidence is authenticated, but is neither a token nor recipient permission. */
+  accessChecks(evidence: GoogleAccessEvidence, expected: ExpectedGoogleAccess): TransactWriteItem[] {
+    try {
+      const { proof, ...payload } = accessEvidenceSchema.parse(evidence);
+      const required = capabilitiesSchema.parse(expected.requiredCapabilities);
+      if (payload.workspaceId !== this.store.options.workspaceId || payload.tableName !== this.store.options.tableName
+        || payload.pairingId !== expected.pairingId || payload.subject !== expected.subject
+        || required.some(capability => !payload.requiredCapabilities.includes(capability))
+        || payload.expiresAt <= Date.parse(this.store.now())
+        || !timingSafeEqual(Buffer.from(proof, 'hex'), Buffer.from(this.accessProof(payload), 'hex'))) throw new Error();
+      return [this.store.check(pairingKey(payload.pairingId), payload.pairingRevision),
+        this.store.check(grantKey(payload.pairingId), payload.grantRevision)];
+    } catch { throw new Error('google_access_evidence_invalid'); }
+  }
   /** Remote-only provider binding. Never expose this result from an HTTP route. */
-  async authorizedAccess(pairingId: string, required: GoogleCapability[], signal?: AbortSignal): Promise<{ accessToken: string; grant: GoogleGrant }> {
+  async authorizedAccess(pairingId: string, required: GoogleCapability[], signal?: AbortSignal): Promise<AuthorizedGoogleAccess> {
     if (signal?.aborted) throw new Error('oauth_cancelled');
+    const wanted = capabilitiesSchema.parse(required);
     const pairing = await this.input.auth.activePairing(pairingId); const record = await this.record(pairingId);
     if (!record || record.data.revoked || !record.data.grant || !record.data.ciphertext) throw new Error('google_grant_unavailable');
-    requireCapabilities(record.data.grant, capabilitiesSchema.parse(required));
+    requireCapabilities(record.data.grant, wanted);
     const tokens = tokensSchema.parse(this.open(record.data.ciphertext, pairingId, 'google-tokens'));
-    if (tokens.expiresAt > Date.parse(this.store.now()) + 60000) return { accessToken: tokens.accessToken, grant: record.data.grant };
+    if (tokens.expiresAt > Date.parse(this.store.now()) + 60000) return { accessToken: tokens.accessToken, grant: record.data.grant,
+      accessEvidence: this.accessEvidence(pairingId, pairing.rev, record.rev, record.data.grant, wanted, tokens.expiresAt) };
     const config = this.config();
     const { token, grant } = await this.exchange(new URLSearchParams({ client_id: config.clientId, client_secret: config.clientSecret,
       grant_type: 'refresh_token', refresh_token: tokens.refreshToken }), record.data.grant.capabilities, record.data.grant.subject, signal);
     if (signal?.aborted) throw new Error('oauth_cancelled');
     if (record.data.grant.calendars) grant.calendars = record.data.grant.calendars;
-    const ciphertext = this.seal({ accessToken: token.access_token, refreshToken: token.refresh_token ?? tokens.refreshToken,
-      expiresAt: Date.parse(this.store.now()) + token.expires_in * 1000 }, pairingId, 'google-tokens');
+    const expiresAt = Date.parse(this.store.now()) + token.expires_in * 1000;
+    const ciphertext = this.seal({ accessToken: token.access_token, refreshToken: token.refresh_token ?? tokens.refreshToken, expiresAt }, pairingId, 'google-tokens');
     await this.store.transact([this.store.check(pairingKey(pairingId), pairing.rev), this.store.put(grantKey(pairingId), { grant, revoked: false, ciphertext }, record.rev)]);
-    return { accessToken: token.access_token, grant };
+    return { accessToken: token.access_token, grant, accessEvidence: this.accessEvidence(pairingId, pairing.rev, record.rev + 1, grant, wanted, expiresAt) };
   }
 }

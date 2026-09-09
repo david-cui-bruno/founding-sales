@@ -220,3 +220,46 @@ describe('ciphertext context binding', () => {
     } finally { log.mockRestore(); error.mockRestore(); }
   });
 });
+
+describe('prepared access evidence for final atomic reservation', () => {
+  it.each(['grant', 'pairing'] as const)('fences %s revocation after preparation without an async pre-reservation recheck', async kind => {
+    const f = fixture(); const pair = await paired(f); const url = await begun(f, pair.pairingId);
+    await f.remote().completeGoogleGrant(url.searchParams.get('state')!, 'code');
+    const prepared = await f.remote().authorizedAccess(pair.pairingId, ['send']);
+    expect(prepared.accessEvidence).toMatchObject({ workspaceId: f.options.workspaceId, pairingId: pair.pairingId, subject: 'fictional-subject', requiredCapabilities: ['send'] });
+    const checks = f.remote().accessChecks(prepared.accessEvidence, { pairingId: pair.pairingId, subject: prepared.grant.subject, requiredCapabilities: ['send'] });
+    expect(Array.isArray(checks)).toBe(true); expect(checks).toHaveLength(2);
+    if (kind === 'grant') await f.remote().revokeGoogleGrant(pair.pairingId); else await f.auth.revokePairing(pair.pairingId);
+    await expect(f.auth.store.transact([...checks, f.auth.store.put('FINAL_RESERVATION#fixture', { state: 'dispatching' }, null)])).rejects.toThrow();
+    expect(f.dynamo.inspect('FINAL_RESERVATION#fixture')).toBeUndefined();
+  });
+  it('uses the committed post-refresh grant revision and succeeds in an actual conditional transaction', async () => {
+    const f = fixture(); const pair = await paired(f); const url = await begun(f, pair.pairingId);
+    await f.remote().completeGoogleGrant(url.searchParams.get('state')!, 'code');
+    const before = await f.auth.store.get(`GOOGLE_GRANT#${pair.pairingId}`); f.expireToken();
+    const prepared = await f.remote().authorizedAccess(pair.pairingId, ['send']);
+    expect(prepared.accessEvidence?.grantRevision).toBe(before!.rev + 1);
+    expect(prepared.accessEvidence?.pairingRevision).toBe(1);
+    const checks = f.remote().accessChecks(prepared.accessEvidence, { pairingId: pair.pairingId, subject: prepared.grant.subject, requiredCapabilities: ['send'] });
+    await f.auth.store.transact([...checks, f.auth.store.put('FINAL_RESERVATION#refreshed', { state: 'dispatching' }, null)]);
+    expect(f.dynamo.inspect('FINAL_RESERVATION#refreshed')).toEqual({ state: 'dispatching' });
+    expect(JSON.stringify(await f.remote().status(pair.pairingId))).not.toContain('accessEvidence');
+  });
+  it('rejects foreign identity, capability escalation and modified evidence synchronously', async () => {
+    const f = fixture(); const pair = await paired(f); const url = await begun(f, pair.pairingId);
+    await f.remote().completeGoogleGrant(url.searchParams.get('state')!, 'code');
+    const { accessEvidence } = await f.remote().authorizedAccess(pair.pairingId, ['send']);
+    expect(accessEvidence).toBeDefined();
+    const expected = { pairingId: pair.pairingId, subject: 'fictional-subject', requiredCapabilities: ['send' as const] };
+    expect(() => f.remote().accessChecks(accessEvidence, { ...expected, subject: 'other-subject' })).toThrow('google_access_evidence_invalid');
+    expect(() => f.remote().accessChecks(accessEvidence, { ...expected, pairingId: 'a937811c-628f-4a68-9a12-000000000001' })).toThrow('google_access_evidence_invalid');
+    expect(() => f.remote().accessChecks(accessEvidence, { ...expected, requiredCapabilities: ['relevant_read'] })).toThrow('google_access_evidence_invalid');
+    expect(() => f.remote().accessChecks({ ...accessEvidence, grantRevision: accessEvidence.grantRevision + 1 }, expected)).toThrow('google_access_evidence_invalid');
+    const foreign = new RemoteGoogleAuthorization({ auth: new WorkerAuth({ ...f.options, workspaceId: 'foreign-workspace' }), config: f.config, fetch: f.fetch });
+    expect(() => foreign.accessChecks(accessEvidence, expected)).toThrow('google_access_evidence_invalid');
+    const otherTable = new RemoteGoogleAuthorization({ auth: new WorkerAuth({ ...f.options, tableName: 'other-table' }), config: f.config, fetch: f.fetch });
+    expect(() => otherTable.accessChecks(accessEvidence, expected)).toThrow('google_access_evidence_invalid');
+    f.expireToken();
+    expect(() => f.remote().accessChecks(accessEvidence, expected)).toThrow('google_access_evidence_invalid');
+  });
+});
