@@ -70,16 +70,16 @@
 - Consumes Task 1's frozen optional presentation and matching helper, plus existing account/name, retained TodayItem and action/session state.
 - Produces one stable requested/manual detail surface following A's header → identity → recipient/context → editor → action/feedback hierarchy.
 
-- [ ] Write failing actual-component tests proving contact/company/header/context ordering, fallback identity and one unpaired explanation.
-- [ ] Observe RED against current generic account form and repeated unavailable paragraphs.
-- [ ] Keep the existing keyed answer/editor slot and input handlers. Move account diagnostics into an accessible disclosure rather than ahead of the message. Do not key on presentation, revision or preferences.
-- [ ] Render names/initials only when matched to the session's actual draft. Use literal recipient or company with neutral glyph otherwise.
-- [ ] Render original call note as human-reported context, or recorded connected outcome/time, or a single missing-context fallback.
-- [ ] Integrate primary action, save and feedback. Keep explicit permission/expiry and their disabled reason understandable. Keep preflight discoverable and recovery controls prominent when needed. No renamed operation that implies sending or automatic recovery.
-- [ ] Render retained company/action/due context without reclassifying, scheduling or changing order. Keep account-only calls and meetings honest.
-- [ ] Consolidate global unavailable/empty copy without hiding local retained failures, stale holds, unknown outcomes or per-item errors. Unknown lane counts are not zero.
-- [ ] Apply structural CSS for header/body/footer and overflow. Preserve existing A palette and rail.
-- [ ] Verify component DOM/caret/lifetime, unchanged recovery tests, typecheck and owned lint. Freeze for coordinator whole-screen review before committing.
+- [x] Write failing actual-component tests proving contact/company/header/context ordering, fallback identity and one unpaired explanation.
+- [x] Observe RED against current generic account form and repeated unavailable paragraphs.
+- [x] Keep the existing keyed answer/editor slot and input handlers. Move account diagnostics into an accessible disclosure rather than ahead of the message. Do not key on presentation, revision or preferences.
+- [x] Render names/initials only when matched to the session's actual draft. Use literal recipient or company with neutral glyph otherwise.
+- [x] Render original call note as human-reported context, or recorded connected outcome/time, or a single missing-context fallback.
+- [x] Integrate primary action, save and feedback. Keep explicit permission/expiry and their disabled reason understandable. Keep preflight discoverable and recovery controls prominent when needed. No renamed operation that implies sending or automatic recovery.
+- [x] Render retained company/action/due context without reclassifying, scheduling or changing order. Keep account-only calls and meetings honest.
+- [x] Consolidate global unavailable/empty copy without hiding local retained failures, stale holds, unknown outcomes or per-item errors. Unknown lane counts are not zero.
+- [x] Apply structural CSS for header/body/footer and overflow. Preserve existing A palette and rail.
+- [x] Verify component DOM/caret/lifetime, unchanged recovery tests, typecheck and owned lint. Freeze for coordinator whole-screen review before committing.
 
 ### Task 3: Comparable-content real-browser acceptance
 
@@ -88,12 +88,12 @@
 - `tests/browser/nativeDesk.spec.ts` or a dedicated spec using the same isolated actual-component harness.
 - A real encrypted-reader → React composition integration test.
 
-- [ ] Create clearly fictional Nora/Riverton and Marcus/Cedarline records with typed exact presentation bindings. Keep the older stateful fixture unchanged for existing regression coverage.
-- [ ] Observe RED on actual production components for missing person header/context/grouping and repeated empty-state copy.
-- [ ] Check 1440×900 and 1050×700, light/dark, compact/comfortable, missing-source, empty/unpaired and populated states. Inspect screenshots directly against A's inner app structure.
-- [ ] Exercise refresh while typing, metadata change, incoming identity conflict, details toggles, permission/expiry, manual begin/open/copy/report/retry, keyboard navigation and Axe.
-- [ ] Assert no fixture API command on selection/presentation and block every browser network request. Fixture data does not establish real backend provenance; the encrypted integration test does.
-- [ ] Freeze reviewed source and commit only coordinator tests.
+- [x] Create clearly fictional Nora/Riverton and Marcus/Cedarline records with typed exact presentation bindings. Keep the older stateful fixture unchanged for existing regression coverage.
+- [x] Observe RED on actual production components for missing person header/context/grouping and repeated empty-state copy.
+- [x] Check 1440×900 and 1050×700, light/dark, compact/comfortable, missing-source, empty/unpaired and populated states. Inspect screenshots directly against A's inner app structure.
+- [x] Exercise refresh while typing, metadata change, incoming identity conflict, details toggles, permission/expiry, manual begin/open/copy/report/retry, keyboard navigation and Axe.
+- [x] Assert no fixture API command on selection/presentation and block every browser network request. Fixture data does not establish real backend provenance; the encrypted integration test does.
+- [x] Freeze reviewed source and commit only coordinator tests.
 
 ### Task 4: Startup measured decision
 
@@ -102,7 +102,7 @@
 - [x] Record separate fingerprint, integrity, stabilization, readiness and domain timing on disposable production-schema encrypted fixtures, with Node/native provenance and unchanged semantic data.
 - [x] Analyze normal encrypted WAL/DELETE, sidecars and recovery artifacts. Do not remove the middle fingerprint around mutation, use metadata caching, or trust sidecar absence as fresh admission.
 - [x] Determine whether normal stabilization is semantically required absent recovery/promotion, with source/tests and race analysis. See the reviewed boundary below.
-- [ ] Any accepted optimization receives its own failing preservation/performance tests, independent review and separate commit before inclusion. Recovery paths retain strict comparisons.
+- [x] Any accepted optimization receives its own failing preservation/performance tests, independent review and separate commit before inclusion. Recovery paths retain strict comparisons.
 
 **Reviewed startup boundary:** Ordinary artifact-free encrypted opening need not produce a standalone DELETE-mode database, because normal opening and readiness require WAL. Retain full initial keyed fingerprint/integrity/supported-schema/file-shape checks. Only when the marker and both complete alternate artifact families are absent, and no canonical rollback journal is present, omit the entire application-driven stabilization/cleanup unit. Before returning, freshly reject a missing, nonregular or symlink canonical path. Do not cache content validity or compare stale inode/mtime/size as an admission proof.
 
@@ -112,8 +112,18 @@ Baseline profiling used synthetic encrypted schema-24 fixtures, not the real pro
 
 ### Task 5: Integrated delivery
 
-- [ ] Independent review of read-only identity bridge and component lifetime/action boundaries.
-- [ ] Coordinator verifies every explicit acceptance row above. Report unavailable capabilities as unavailable, not passed.
+- [x] Independent review of read-only identity bridge and component lifetime/action boundaries.
+- [x] Coordinator verified the local acceptance rows above. Genuine paired/live capabilities remain unavailable, not passed. Full release and installed gates below are still pending.
 - [ ] Run exact clean-head root, unchanged Lambda, actual-browser, secret, signed-candidate and genuine packaged gates serially.
 - [ ] If releasing, normally quit and verify a fresh full profile/prior-app backup, install only the exact signed candidate into `/Applications`, and preserve old canonical output untouched.
 - [ ] Inspect installed populated/empty presentation where actual data permits. Never seed the live profile with fictional work. Measure one normal warm restart honestly if startup changed, and distinguish main-window time from ready-to-work time.
+
+## Pre-release verified checkpoint, 2026-09-09 19:52 UTC
+
+- Read-only display bridge: `459c79f`, independent final acceptance after exact manual route-hash and field-local role-validation repairs.
+- Renderer composition: `1b3638e`, independent final acceptance including honest source-aware counts, accessible recipient fallbacks and local-scroll-only keyboard reveal. Existing session/scope files are unchanged.
+- Coordinator acceptance: `646a4e9`, six audited test/fixture/script files. Fresh typecheck, 32 Chromium workflows, three actual encrypted-reader-to-React cases, owned lint and diff checks passed. Direct whole-screen inspection includes full1440dark and narrow1050dark editor focus. The smaller pane deliberately scrolls content rather than pretending all context fits at once.
+- Startup correction: `9c2c948`, independent frozen-delta acceptance, 53 actual initialization boundary tests and 36 unchanged Node recovery scenarios. Full Node/Electron release gates remain below.
+- Paired synthetic benchmark: all12 modes passed across empty,1000-owner and172,654,592-byte fixtures. Large-fixture ordinary preparation was4411.02ms baseline versus1469.85ms candidate. Total measured prepare/open/migrate/domain/read sequence was5839.46ms versus2900.27ms. Instrumented preparation fingerprints changed3→1, total measured integrity scans5→3. Normal readiness and health still execute. This is a warm-cache Node24/ABI137 proxy, not installed cold-start timing.
+- Exact DB fingerprints and query-only/total_changes checks passed. All projection fields matched except the unchanged overview.generatedAt wall-clock field, which was separately bounded to its call interval and alone normalized for cross-run equality. Raw projections/digests are retained. All176 measured project files matched both startup and benchmark commits before/after, native hash/mtime stayed unchanged, original baseline evidence stayed intact.
+- No new install/profile/restart/worker activation/grants/outreach/deployment/push has occurred at this checkpoint. Final release and installed checks are intentionally left unchecked until executed.
