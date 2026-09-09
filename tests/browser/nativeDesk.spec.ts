@@ -1,0 +1,210 @@
+import { test, expect, type Page } from 'playwright/test';
+import { build } from 'esbuild';
+import { AxeBuilder } from '@axe-core/playwright';
+import path from 'node:path';
+import type {} from '../fixtures/nativeDeskBrowser';
+
+// This exercises real renderer components, not Electron IPC or live services.
+// The entire API is the explicit no-IO fixture. All browser requests are blocked.
+let javascript: string;
+let css: string;
+test.beforeAll(async () => {
+  const bundle = await build({
+    entryPoints: [path.resolve('tests/fixtures/nativeDeskBrowser.tsx')],
+    outdir: 'browser-fixture', bundle: true, write: false, format: 'iife',
+    jsx: 'automatic', loader: { '.woff2': 'dataurl', '.woff': 'dataurl' },
+    define: { 'process.env.NODE_ENV': '"development"' },
+  });
+  javascript = bundle.outputFiles.find(file => file.path.endsWith('.js'))!.text;
+  css = bundle.outputFiles.find(file => file.path.endsWith('.css'))!.text;
+});
+async function mount(page: Page) {
+  const errors: string[] = [], requests: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const fixtureUrl = 'http://127.0.0.1:41837/native-desk-fixture';
+  await page.route('**/*', route => {
+    if (route.request().url() === fixtureUrl && route.request().isNavigationRequest()) {
+      return route.fulfill({contentType:'text/html',body:'<!doctype html><html lang="en"><head><title>Native Desk isolated renderer acceptance</title></head><body><div id="root"></div></body></html>'});
+    }
+    requests.push(route.request().url()); return route.abort();
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Intercepted loopback document gives genuine secure-context Web Crypto, as
+  // Electron's local app origin does, without a server or any network request.
+  await page.goto(fixtureUrl);
+  expect(await page.evaluate(() => isSecureContext && typeof crypto.randomUUID === 'function')).toBe(true);
+  await page.addStyleTag({ content: css });
+  await page.addScriptTag({ content: javascript });
+  await expect(page.getByTestId('native-desk')).toBeVisible();
+  return { errors, requests };
+}
+const methods = (page: Page) => page.evaluate(() => window.nativeDeskBrowser.fixture.calls.map(call => call.method));
+async function assertClean(page: Page, state: {errors: string[]; requests: string[]}) {
+  expect(state.errors).toEqual([]);
+  expect(state.requests).toEqual([]);
+  expect(await methods(page)).not.toContain('forbidden');
+}
+test('real Native Desk themes, geometry, selection and unchanged editor DOM', async ({page}, testInfo) => {
+  const state = await mount(page);
+  expect((await methods(page)).every(method => ['daily.get','delegation.status'].includes(method))).toBe(true);
+  const email = page.getByRole('button', { name: 'Email · Account A', exact: true });
+  await email.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('button', { name: 'Email · Account B', exact: true })).toBeFocused();
+  await page.keyboard.press('k');
+  await expect(email).toBeFocused();
+  await page.keyboard.press('Enter');
+  const body = page.getByRole('textbox', {name:'Email body'});
+  await expect(body).toHaveValue('Saved note for a');
+  await body.fill('My retained local edit for account A');
+  await body.evaluate(el => { el.focus(); (el as HTMLTextAreaElement).setSelectionRange(6, 12); el.setAttribute('data-node-marker', 'original'); });
+  for (const width of [1440,1050]) {
+    await page.setViewportSize({width,height:width===1440?900:700});
+    for (const theme of ['light','dark'] as const) {
+      for (const density of ['comfortable','compact'] as const) {
+        await page.evaluate(({theme,density}) => {window.nativeDeskBrowser.preferences(theme,density);window.nativeDeskBrowser.rerender();window.nativeDeskBrowser.refresh();}, {theme,density});
+        await expect(body).toHaveAttribute('data-node-marker','original');
+        expect(await body.evaluate(el => [(el as HTMLTextAreaElement).selectionStart,(el as HTMLTextAreaElement).selectionEnd])).toEqual([6,12]);
+        await expect(body).toHaveValue('My retained local edit for account A');
+        const geometry = await page.evaluate(() => ({ overflow: document.documentElement.scrollWidth > innerWidth, headings:[...document.querySelectorAll('.native-desk__lane h2')].map(el=>({text:el.textContent,y:el.getBoundingClientRect().bottom})),height:innerHeight }));
+        expect(geometry.overflow).toBe(false);
+        expect(geometry.headings).toHaveLength(3);
+        for (const heading of geometry.headings) expect(heading.y,`${heading.text} visible at ${width}/${theme}/${density}`).toBeLessThan(geometry.height);
+        const axe = await new AxeBuilder({page}).analyze();
+        expect(axe.violations.filter(item=>item.impact==='serious'||item.impact==='critical')).toEqual([]);
+        await page.screenshot({path:testInfo.outputPath(`native-${width}-${theme}-${density}.png`),fullPage:true});
+      }
+    }
+  }
+  await page.evaluate(() => window.nativeDeskBrowser.preferences('system','compact'));
+  for (const colorScheme of ['light','dark'] as const) {
+    await page.emulateMedia({colorScheme});
+    await expect(page.locator('html')).toHaveAttribute('data-theme',colorScheme);
+    await expect(body).toHaveAttribute('data-node-marker','original');
+    await expect(body).toBeFocused();
+    expect(await body.evaluate(el=>[(el as HTMLTextAreaElement).selectionStart,(el as HTMLTextAreaElement).selectionEnd])).toEqual([6,12]);
+    const axe = await new AxeBuilder({page}).analyze();
+    expect(axe.violations.filter(item=>item.impact==='serious'||item.impact==='critical')).toEqual([]);
+  }
+  expect(await page.evaluate(()=>localStorage.getItem('callie.theme'))).toBe('system');
+  await page.getByRole('button',{name:'Email · Account B',exact:true}).click();
+  await expect(body).toHaveValue('Saved note for b');
+  await email.click();
+  await expect(body).toHaveValue('My retained local edit for account A');
+  await page.getByRole('button',{name:'Close details',exact:true}).click();
+  await expect(body).toHaveCount(0);
+  await email.click();
+  await expect(body).toHaveValue('My retained local edit for account A');
+  await page.keyboard.press('Escape');
+  await expect(body).toHaveCount(0);
+  await expect(email).toBeFocused();
+  await assertClean(page,state);
+});
+
+test('explicit exact email approval and manual LinkedIn outcome stay separate from sending', async ({page}) => {
+  const state = await mount(page);
+  await page.getByRole('button',{name:'Email · Account A',exact:true}).click();
+  await page.getByText('Approval permission',{exact:true}).click();
+  await page.getByRole('checkbox').check();
+  const expiry = new Date(Date.now()+86400000).toISOString().slice(0,16);
+  await page.getByLabel('Approval expiry').fill(expiry);
+  await page.getByRole('textbox',{name:'Email body'}).fill('The exact draft I approve.');
+  const approve = page.getByRole('button',{name:'Approve email',exact:true});
+  await expect(approve).toBeEnabled();
+  await approve.scrollIntoViewIfNeeded();
+  const target = await approve.boundingBox();
+  expect(target).not.toBeNull();
+  await page.mouse.move(target!.x+target!.width/2,target!.y+target!.height/2);
+  await page.mouse.down();
+  await page.evaluate(()=>window.nativeDeskBrowser.refresh());
+  await expect(approve).toBeEnabled();
+  const after = await approve.boundingBox();
+  expect(after).toEqual(target);
+  await page.mouse.up();
+  await expect(page.getByText(/Approval: pending preflight/)).toBeVisible();
+  const calls = await page.evaluate(()=>window.nativeDeskBrowser.fixture.calls);
+  expect(calls.filter(call=>call.method==='approveRequestedFollowup')).toHaveLength(1);
+  const editIndex = calls.findIndex(call=>call.method==='editRequestedFollowup');
+  const approveIndex = calls.findIndex(call=>call.method==='approveRequestedFollowup');
+  expect(editIndex).toBeGreaterThan(-1); expect(approveIndex).toBeGreaterThan(editIndex);
+  expect(calls[approveIndex].input).toMatchObject({draft:{body:'The exact draft I approve.',revision:2},expectedRemoteDraftRevision:2});
+  expect(calls.some(call=>call.method==='getRequestedFollowup')).toBe(false);
+  await page.getByRole('button',{name:'Manual LinkedIn · Account A',exact:true}).click();
+  const note = page.getByRole('textbox',{name:'LinkedIn note'});
+  await note.fill('A human-reviewed manual note.');
+  await page.getByRole('button',{name:'Begin manual step',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Begin manual step',exact:true})).toBeDisabled();
+  await page.getByRole('button',{name:'Copy note',exact:true}).click();
+  await page.getByRole('button',{name:'Open LinkedIn',exact:true}).click();
+  expect((await methods(page)).filter(method=>method==='linkedin.reportOutcome')).toHaveLength(0);
+  await page.getByRole('combobox',{name:'Manual outcome'}).selectOption('human_reported_sent');
+  await page.getByRole('button',{name:'Record outcome',exact:true}).click();
+  expect((await methods(page)).filter(method=>method==='linkedin.reportOutcome')).toHaveLength(1);
+  await assertClean(page,state);
+});
+
+test('accounts, frozen campaigns, real meeting status and held refresh preserve boundaries', async ({page}) => {
+  const state = await mount(page);
+  await page.getByRole('button',{name:'Call · Account A',exact:true}).click();
+  await expect(page.getByText(/Call handoff unavailable in this account view/)).toBeVisible();
+  await page.locator('[data-row-key="meeting:a:meeting-a"]').click();
+  await expect(page.getByText(/Attendance not recorded/)).toBeVisible();
+  await page.evaluate(()=>window.nativeDeskBrowser.navigate('accounts'));
+  await expect(page.getByRole('heading',{name:'Accounts',exact:true,level:1})).toBeVisible();
+  await page.locator('[data-row-key="account:a"]').click();
+  await expect(page.getByText('12 managed buildings')).toBeVisible();
+  await page.evaluate(()=>window.nativeDeskBrowser.navigate('campaigns'));
+  await page.locator('[data-row-key="campaign:version"]').click();
+  await expect(page.getByText(/Lifetime channel caps/).first()).toBeVisible();
+  expect((await methods(page)).every(method=>['daily.get','delegation.status'].includes(method))).toBe(true);
+  await page.evaluate(()=>window.nativeDeskBrowser.navigate('today'));
+  await page.getByRole('button',{name:'Email · Account A',exact:true}).click();
+  const body = page.getByRole('textbox',{name:'Email body'});
+  await body.fill('Still here when refresh fails');
+  await page.evaluate(()=>{window.nativeDeskBrowser.fixture.api.daily.get=async()=>{throw Error('fixture read failure');};window.nativeDeskBrowser.refresh();});
+  await expect(page.getByText('Refresh unavailable. Actions held until the local workspace can be checked.')).toBeVisible();
+  await expect(body).toHaveValue('Still here when refresh fails');
+  await expect(page.getByRole('button',{name:'Save edits',exact:true})).toBeDisabled();
+  await assertClean(page,state);
+});
+
+test('failed canonical save prevents approval and ambiguous receipt retries the same identity', async ({page}) => {
+  const state = await mount(page);
+  await page.evaluate(() => {
+    type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+    const api: Mutable<typeof window.nativeDeskBrowser.fixture.api.delegation> = window.nativeDeskBrowser.fixture.api.delegation;
+    const originalEdit = api.editRequestedFollowup;
+    let failSave = true;
+    api.editRequestedFollowup = async input => {
+      if (failSave) { failSave = false; throw Error('fixture save failure'); }
+      return originalEdit(input);
+    };
+    const originalApprove = api.approveRequestedFollowup;
+    let loseReceipt = true;
+    api.approveRequestedFollowup = async input => {
+      const receipt = await originalApprove(input);
+      if (loseReceipt) { loseReceipt = false; throw Error('fixture lost response'); }
+      return receipt;
+    };
+  });
+  const email = page.getByRole('button',{name:'Email · Account A',exact:true});
+  await email.click();
+  await page.getByText('Approval permission',{exact:true}).click();
+  await page.getByRole('checkbox').check();
+  await page.getByLabel('Approval expiry').fill(new Date(Date.now()+86400000).toISOString().slice(0,16));
+  const approve = page.getByRole('button',{name:'Approve email',exact:true});
+  await approve.click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  expect((await methods(page)).filter(method=>method==='approveRequestedFollowup')).toHaveLength(0);
+  await approve.click();
+  await expect(page.getByRole('button',{name:'Retry same approval',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Close details',exact:true}).click();
+  await email.click();
+  await expect(approve).toBeDisabled();
+  await page.getByRole('button',{name:'Retry same approval',exact:true}).click();
+  await expect(page.getByText(/Approval: pending preflight/)).toBeVisible();
+  const approvalCalls = await page.evaluate(()=>window.nativeDeskBrowser.fixture.calls.filter(call=>call.method==='approveRequestedFollowup'));
+  expect(approvalCalls).toHaveLength(2);
+  expect(approvalCalls[0].input).toEqual(approvalCalls[1].input);
+  await assertClean(page,state);
+});
