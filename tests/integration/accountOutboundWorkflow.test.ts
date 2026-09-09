@@ -1,3 +1,5 @@
+import { startApplication } from '../../src/main/startApplication';
+import type { DomainRuntime } from '../../src/main/domain/domainRuntime';
 import { AccountRoutePolicyStore, type RoutePolicyReceipt } from '../../src/main/delegation/accountRoutePolicyStore';
 import { DelegationRepository } from '../../src/main/delegation/delegationRepository';
 import { createInboundReadiness } from '../../src/main/communications/inboundReadiness';
@@ -15,10 +17,20 @@ import { createDomainServices } from '../../src/main/domain/createDomainServices
 import { insertPerson } from '../fixtures/domainRows';
 import type { HandoffResult } from '../../src/shared/contracts/outboundContract';
 
+vi.mock('electron', () => ({ dialog: {}, safeStorage: {} }));
+// Stop before workspace keys/apps/network. Capture the actual default startup factory,
+// then exercise it with the already-open fictional encrypted workspace below.
+const startupBoundary = vi.hoisted(() => ({ factory: undefined as undefined | ((database: AppDatabase) => DomainRuntime) }));
+vi.mock('../../src/main/foundation/foundationRuntime', () => ({ FoundationRuntime: class {
+  constructor(_options: unknown, dependencies: { createDomainRuntime(database: AppDatabase): DomainRuntime }) {
+    startupBoundary.factory = dependencies.createDomainRuntime;
+    throw new Error('fictional foundation boundary');
+  }
+} }));
 const now = '2026-09-08T14:00:00.000Z';
 const cleanup: (() => void)[] = [];
 afterEach(() => { vi.useRealTimers(); cleanup.splice(0).reverse().forEach(fn => fn()); });
-async function fixture(sqlPolicy = false) {
+async function fixture(sqlPolicy = false, missingWorkspace = false) {
   const temp = createTempDatabase(); const key = createTestWorkspaceKey();
   let db = openDatabase({ path: temp.path, key });
   cleanup.push(() => { closeDatabase(db); key.bytes.fill(0); temp.cleanup(); });
@@ -39,7 +51,7 @@ async function fixture(sqlPolicy = false) {
     jurisdiction: { regionCode: 'RI', timezone: 'America/New_York', reviewAt: null },
     clearance: { decision: 'allowed', registrationConfirmed: true, stateDncSubscriptionConfirmed: true, consentRuleConfirmed: true, effectiveAt: '2026-09-01T00:00:00.000Z', expiresAt: '2026-10-01T00:00:00.000Z' } };
   let outreach: AccountOutreach;
-  const bind = () => { outreach = sqlPolicy ? createDomainServices({ database: db, clock, ids }).accountOutreach : new AccountOutreach({ database: db, clock, ids, accounts: makeRepo(), policy: { read: () => evidence } }); };
+  const bind = () => { outreach = sqlPolicy ? createDomainServices({ database: db, clock, ids, ...(!missingWorkspace ? { expectedWorkspaceId: workspaceId } : {}) }).accountOutreach : new AccountOutreach({ database: db, clock, ids, accounts: makeRepo(), policy: { read: () => evidence } }); };
   bind();
   const calls: string[] = []; const subjects: unknown[] = [];
   let onReady = () => {}; let dispatchResult: () => Promise<HandoffResult> = async () => ({ status: 'handoff_accepted', reasonCode: null });
@@ -58,13 +70,42 @@ async function fixture(sqlPolicy = false) {
     new AccountRoutePolicyStore({ database: db, clock, admission: { attest: value => value.provenance === provenance && value.evidenceRef === policySourceId } }).admit(receipt);
     return receipt;
   };
-  return { request, calls, subjects, makeService, admitPolicy, policyReceipt, setTime: (value: string) => { clockNow = value; },
+  return { workspaceId, tempPath: temp.path, request, calls, subjects, makeService, admitPolicy, policyReceipt, setTime: (value: string) => { clockNow = value; },
     initializeOwner: () => new DelegationRepository({ database: db, clock, workspaceId }).initializeLocalAuthority(account.id),
     secondConnection: () => { const other = openDatabase({ path: temp.path, key }); cleanup.push(() => closeDatabase(other)); return other; }, get outreach() { return outreach; }, get db(): AppDatabase { return db; }, repo,
     setEvidence: (value: AccountRoutePolicyEvidence | null) => { evidence = value; }, get evidence() { return evidence!; },
     onReady: (fn: () => void) => { onReady = fn; }, result: (fn: () => Promise<HandoffResult>) => { dispatchResult = fn; },
     reopen: () => { closeDatabase(db); db = openDatabase({ path: temp.path, key }); bind(); } };
 }
+describe('trusted runtime workspace authorization', () => {
+  it.each(['matching', 'missing', 'foreign', 'invalid'] as const)('binds %s identity through the actual default startup domain factory', async mode => {
+    const f = await fixture(true); f.admitPolicy(); f.initializeOwner();
+    vi.useFakeTimers(); vi.setSystemTime(new Date(now));
+    const options = { appVersion: 'fictional', userDataPath: f.tempPath + '.startup', createWindow: () => { throw new Error('No real window'); },
+      expectedWorkspaceId: mode === 'matching' ? f.workspaceId : mode === 'foreign' ? randomUUID() : mode === 'invalid' ? 'invalid' : undefined };
+    startupBoundary.factory = undefined;
+    await expect(startApplication(options)).rejects.toThrow('fictional foundation boundary');
+    options.expectedWorkspaceId = mode === 'matching' ? randomUUID() : f.workspaceId;
+    const runtime = startupBoundary.factory!(f.db);
+    expect(runtime.initialize().status).toBe('ready');
+    const actual = runtime.getServices().accountOutreach;
+    const receipt = await f.makeService({ domain: { withDomain: async fn => fn(actual) } }).begin(f.request);
+    expect(receipt.status).toBe(mode === 'matching' ? 'handoff_accepted' : 'refused');
+    expect(f.calls).toHaveLength(mode === 'matching' ? 1 : 0);
+    expect(f.db.raw.prepare('SELECT COUNT(*) AS n FROM pm_account_outbound_intents').get()).toEqual({ n: mode === 'matching' ? 1 : 0 });
+    if (mode !== 'matching') expect(receipt.attemptId).toBeNull();
+    runtime.shutdown();
+  });
+  it.each(['missing', 'foreign', 'race'] as const)('refuses %s workspace identity without reservation or dispatch', async mode => {
+    const f = await fixture(true, mode === 'missing'); f.admitPolicy(); f.initializeOwner();
+    const change = () => f.secondConnection().raw.prepare('UPDATE delegated_authorities SET workspace_id=? WHERE account_id=?').run(randomUUID(), f.request.accountId);
+    if (mode === 'foreign') change();
+    if (mode === 'race') f.onReady(change);
+    const result = await f.makeService().begin(f.request);
+    expect(result.status).toBe('refused'); expect(result.attemptId).toBeNull(); expect(f.calls).toEqual([]);
+    expect(f.db.raw.prepare('SELECT COUNT(*) AS n FROM pm_account_outbound_intents').get()).toEqual({ n: 0 });
+  });
+});
 describe('real SQL company outbound workflow with fictional phone boundary', () => {
   it('commits exact intent before immediate handoff without creating a Person, and counts only user report', async () => {
     const f = await fixture(); const service = f.makeService();
