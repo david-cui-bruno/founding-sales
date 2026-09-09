@@ -194,3 +194,49 @@ it('merges matching published account routes across bounded pages while retainin
   expect(batch.routes).toHaveLength(1);
   expect(batch.routes[0]!.evidenceIds).toEqual(batch.sources.map(source => source.id));
 });
+
+it.each(['</ script>', '</\tscript>', '</script\u00a0>'])('keeps invalid raw-text end tag %s inside the script', async fakeClose => {
+  const body = `<script>const marker = "${fakeClose}";\nWe manage 999 residential units.\nWe are a regional property management company.\nBusiness switchboard: +14015550100\nTeam email: team@example.invalid\n</script>`;
+  const receipts = createFetchedReceiptPolicy(); const s = snapshot();
+  const pages = createCompanyPageProvider({ receipts, clock: { now: () => now }, permitted: () => true,
+    resolve: async () => ['93.184.216.34'], http: async () => new Response(body, { headers: { 'content-type': 'text/html' } }) });
+  const batch = await pages.research(s, limits, new AbortController().signal);
+  expect(receipts.attest(batch.sources[0]!, s.account.id)).toBe(true);
+  expect(batch.claims).toEqual([]);
+  expect(batch.routes).toEqual([]);
+});
+
+it.each([false, true])('withholds identical normalized emergency targets across pages regardless of order, qualifierFirst=%s', async qualifierFirst => {
+  const business = '<p>We are a regional property management company.</p><p>Business phone: +14015550100</p><p>Team email: team-help@example.invalid</p>';
+  const emergency = '<p>Tenant emergency phone: +1 (401) 555-0100</p><p>After-hours tenant email: TEAM-HELP@Example.invalid.</p>';
+  const receipts = createFetchedReceiptPolicy(); const s = snapshot();
+  const pages = createCompanyPageProvider({ receipts, clock: { now: () => now }, permitted: () => true,
+    resolve: async () => ['93.184.216.34'], http: async input => new Response(
+      (input.url.endsWith('/services') !== qualifierFirst) ? emergency : business, { headers: { 'content-type': 'text/html' } }) });
+  const batch = await pages.research(s, { ...limits, maxPages: 2 }, new AbortController().signal);
+  expect(batch.sources).toHaveLength(2);
+  expect(batch.sources.every(source => receipts.attest(source, s.account.id))).toBe(true);
+  expect(batch.claims).toContainEqual(expect.objectContaining({ key: 'operating_footprint', kind: 'fact' }));
+  expect(batch.routes).toEqual([]);
+});
+
+it.each(['</script>', '</SCRIPT \t>'])('keeps supported text after real raw-text closing %s and ignores script qualifiers', async closing => {
+  const body = `<script>const marker = "</ script>";\nTenant emergency: +14015550100\nTenant emergency email: team@example.invalid\n${closing}<p>We manage 240 residential units.</p><p>Business phone: +14015550100</p><p>Team email: team@example.invalid</p>`;
+  const pages = createCompanyPageProvider({ receipts: createFetchedReceiptPolicy(), clock: { now: () => now }, permitted: () => true,
+    resolve: async () => ['93.184.216.34'], http: async () => new Response(body, { headers: { 'content-type': 'text/html' } }) });
+  const batch = await pages.research(snapshot(), limits, new AbortController().signal);
+  expect(batch.claims.filter(claim => claim.key === 'portfolio').map(claim => claim.value)).toEqual([{ count: 240, measure: 'units', scope: 'managed' }]);
+  expect(batch.routes.map(route => route.value)).toEqual(['+14015550100', 'team@example.invalid']);
+});
+
+it('only disqualifies matching normalized targets and ignores qualifiers inside another page attributes', async () => {
+  const business = '<p>Business phone: +14015550100</p><p>Team email: team@example.invalid</p>';
+  const other = '<p>Tenant emergency phone: +14015550109</p><p>After-hours email: other-team@example.invalid</p><div title="Tenant emergency: +14015550100; Tenant emergency email: team@example.invalid"></div>';
+  const pages = createCompanyPageProvider({ receipts: createFetchedReceiptPolicy(), clock: { now: () => now }, permitted: () => true,
+    resolve: async () => ['93.184.216.34'], http: async input => new Response(input.url.endsWith('/services') ? other : business, { headers: { 'content-type': 'text/html' } }) });
+  const batch = await pages.research(snapshot(), { ...limits, maxPages: 2 }, new AbortController().signal);
+  expect(batch.routes.map(route => route.value)).toEqual(['+14015550100', 'team@example.invalid']);
+  expect(batch.routes.every(route => route.evidenceIds.length === 1 && route.evidenceIds[0] === batch.sources[0]!.id)).toBe(true);
+  expect(batch.sources).toHaveLength(2);
+  expect(batch).not.toHaveProperty('withheldTargets');
+});
