@@ -694,3 +694,200 @@
   .native-desk[data-workflow-mode='meeting_first'] { height: auto; }
   .native-desk[data-workflow-mode='meeting_first'] > .native-desk__layout { flex: none; }
 }
+
+/* A is a composed conversation surface, not an account form above an editor.
+   One scroll owner keeps long notes, permission holds and disclosures reachable. */
+.native-desk__queue--today > .native-desk__lane {
+  max-height: none;
+  overflow: visible;
+}
+.native-desk__detail:has(> .native-desk__composer) {
+  position: relative;
+  padding: 0;
+}
+.native-desk__detail:has(> .native-desk__composer) > .native-desk__detail-bar {
+  position: absolute;
+  top: 11px;
+  right: 16px;
+  margin: 0;
+  z-index: 1;
+}
+.native-desk__detail:has(> .native-desk__composer) > .native-desk__detail-bar > span { display: none; }
+.native-desk__detail-bar button { min-height: 28px; padding: 3px 8px; font-size: var(--text-micro); }
+.native-desk__composer { min-width: 0; }
+.native-desk__identity {
+  padding: 17px 24px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.native-desk__identity-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding-right: 64px;
+  margin-bottom: 12px;
+  font-size: var(--text-caption);
+  font-weight: 600;
+}
+.native-desk__identity-top > span:first-child { display: inline-flex; align-items: center; gap: 7px; }
+.native-desk__tag {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--native-action, var(--canvas));
+  color: var(--text-muted);
+  padding: 2px 8px;
+  font-size: var(--text-micro);
+  font-weight: 400;
+}
+.native-desk__identity-bar { display: flex; gap: 12px; align-items: center; }
+.native-desk__identity-bar > div { min-width: 0; }
+.native-desk__avatar {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+}
+.native-desk__identity h2 { font-size: var(--text-native-identity); font-weight: 720; letter-spacing: -.65px; line-height: 1.25; margin: 0 0 3px; }
+.native-desk__company-role { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: var(--text-caption); }
+.native-desk__company-role > span + span { color: var(--text-muted); }
+.native-desk__message-area { padding: 18px 24px 20px; }
+.native-desk__recipient { font-size: var(--text-caption); }
+.native-desk__call-context {
+  margin: 12px 0 17px;
+  padding: 10px 13px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 5px;
+  background: var(--native-action, var(--canvas));
+  font-size: var(--text-micro);
+}
+.native-desk__call-context p { margin: 3px 0; line-height: 1.5; }
+.native-desk__context-label { color: var(--text-muted); font-size: var(--text-micro); }
+.native-desk__call-context .native-desk__call-note { font-size: var(--text-dense); color: var(--text); white-space: pre-wrap; }
+.native-desk__message-area label { font-weight: 600; }
+.native-desk__message-area textarea { min-height: 220px; font-weight: 400; }
+.native-desk__action-area {
+  padding: 15px 24px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--native-action, var(--canvas));
+}
+.native-desk__action-area .native-desk__actions {
+  position: static;
+  padding: 0;
+  margin-top: 12px;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.native-desk__action-area button { min-height: 36px; font-size: var(--text-caption); }
+.native-desk__permission {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(175px, 210px);
+  gap: 6px 18px;
+}
+.native-desk__permission h3 { grid-column: 1 / -1; font-size: var(--text-caption); margin: 0; }
+.native-desk__permission label { margin: 0; line-height: 1.5; }
+.native-desk__permission > p { grid-column: 1 / -1; margin: 0; font-size: var(--text-micro); color: var(--text-muted); }
+.native-desk__permission input[type='datetime-local'] { font-size: var(--text-caption); padding: 6px; }
+.native-desk__action-area .native-desk__feedback { margin-bottom: 0; min-height: 0; }
+.native-desk__feedback p { margin: 5px 0; line-height: 1.5; }
+.native-desk__feedback :is([role='status'], [role='alert']) { color: var(--warning); }
+.native-desk__evidence { margin: 0 !important; padding: 12px 24px; border-top: 1px solid var(--line); }
+.native-desk__detail--welcome { align-self: stretch; max-width: none; display: flex; flex-direction: column; justify-content: center; }
+.native-desk__welcome { padding: 28px 12px; }
+.native-desk__welcome h2 { font-size: var(--text-native-identity); }
+.native-desk__welcome p { max-width: 56ch; }
+.native-desk__welcome a { display: inline-block; margin-top: 12px; color: var(--accent); }
+.native-desk__row .native-desk__row-company { font-size: var(--text-caption); }
+@media (max-width: 1200px) {
+  .native-desk__identity { padding: 17px 20px; }
+  .native-desk__message-area, .native-desk__action-area { padding: 16px 20px; }
+  .native-desk__evidence { padding: 12px 20px; }
+  .native-desk__identity h2 { font-size: var(--text-title); }
+  .native-desk__permission input[type='datetime-local'] { max-width: 240px; }
+}
+
+/* The message owns the remaining height. Permission and action feedback are a
+   real footer, not content that falls below the inset pane. Both overflow paths
+   remain keyboard-scrollable for long context or recovery evidence. */
+.native-desk__detail:has(> .native-desk__composer) { overflow: hidden; }
+.native-desk__detail > .native-desk__composer {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.native-desk__composer > .native-desk__identity { flex: none; }
+.native-desk__composer > .native-desk__message-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scroll-padding: 12px;
+}
+.native-desk__composer > .native-desk__action-area {
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: 60%;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.native-desk__message-area > .native-desk__evidence { padding: 12px 0; }
+.native-desk__message-area > .native-desk__evidence:first-of-type { margin-top: 16px !important; }
+@media (max-width: 740px) {
+  .native-desk__permission { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+}
+@media (max-width: 620px) {
+  .native-desk__detail > .native-desk__composer { min-height: 680px; height: 80dvh; }
+}
+
+.native-desk__message-area { display: flex; flex-direction: column; }
+.native-desk__message-area > * { flex: none; }
+.native-desk__message-area > .native-desk__message-field {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 164px;
+  min-height: 164px;
+}
+.native-desk__message-area .native-desk__message-field textarea {
+  flex: 1;
+  min-height: 140px;
+  height: 100%;
+}
+.native-desk__action-area .native-desk__actions { align-items: center; }
+.native-desk__action-area .native-desk__approval-checks { margin: 0; }
+.native-desk__approval-checks[open] { flex-basis: 100%; }
+.native-desk__approval-checks > .native-desk__evidence { padding: 10px 0; }
+.native-desk__approval-checks > p { font-size: var(--text-micro); }
+
+/* Flex children do not collapse margins. Keep the recipient/context/subject
+   rhythm compact and budget the message label plus its input as one field. */
+.native-desk__composer > .native-desk__message-area { padding-top: 12px; padding-bottom: 12px; }
+.native-desk__message-area > .native-desk__recipient { margin: 0 0 6px; }
+.native-desk__message-area > .native-desk__call-context { margin: 0 0 8px; padding: 8px 12px; }
+.native-desk__call-context p { margin: 0; }
+.native-desk__call-context .native-desk__call-note { margin: 4px 0; }
+.native-desk__message-area > label { margin: 0 0 8px; }
+.native-desk__message-area > .native-desk__message-field {
+  flex-basis: 212px;
+  min-height: 212px;
+  margin: 0;
+}
+.native-desk__message-area .native-desk__message-field textarea {
+  height: auto;
+  min-height: 190px;
+  margin-top: 4px;
+}
+.native-desk__composer > .native-desk__action-area { padding-top: 12px; padding-bottom: 12px; }
+.native-desk__feedback p { margin: 3px 0; }
+@media (max-height: 760px) {
+  .native-desk__message-area > .native-desk__message-field { flex-basis: 112px; min-height: 112px; }
+  .native-desk__message-area .native-desk__message-field textarea { min-height: 90px; }
+}

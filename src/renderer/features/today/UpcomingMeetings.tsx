@@ -17,10 +17,10 @@ export function UpcomingMeetings({
   return (
     <section className="native-desk__lane" aria-labelledby="daily-meetings" tabIndex={0}>
       <h2 id="daily-meetings">
-        <span className="native-desk__lane-label"><CalendarDays size={14} aria-hidden="true" />Upcoming meetings</span> <span className="native-desk__count">{items.length}</span>
+        <span className="native-desk__lane-label"><CalendarDays size={14} aria-hidden="true" />Upcoming meetings</span> <span className="native-desk__count">{unavailable ? 'Unavailable' : items.length}</span>
       </h2>
       {!items.length ? (
-        <p className="native-desk__empty">{unavailable ? 'Account meetings are unavailable.' : 'No stored meetings.'}</p>
+        null
       ) : (
         items.map((m) => (
           <button

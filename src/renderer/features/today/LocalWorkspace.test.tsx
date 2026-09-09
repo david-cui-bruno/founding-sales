@@ -41,7 +41,8 @@ it('puts typed retained work first in Calls, preserves non-call/later metadata a
   expect(open).not.toHaveBeenCalled();
   expect(screen.getByText('Action type: follow_up · Channel: email · Lane: later')).toBeTruthy();
   expect(screen.queryByText('Forbidden legacy')).toBeNull();
-  for (const text of [/Account call allocation is unavailable/, /Account approvals are unavailable/, /Account meetings are unavailable/]) expect(screen.getByText(text)).toBeTruthy();
+  for (const lane of document.querySelectorAll('.native-desk__lane')) expect(lane.querySelector('.native-desk__count')?.textContent).toBe('Unavailable');
+  expect(screen.getByText('Worker unavailable')).toBeTruthy();
   expect(f.calls.every(c => !/prepare|approve|begin|sync|forbidden/.test(c.method))).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: 'Open contact workspace' }));
   expect(open).toHaveBeenCalledWith('person-retained');
@@ -108,7 +109,8 @@ it('distinguishes failed initial reads from successfully empty local work', asyn
   expect(screen.queryByText(/No retained work due/)).toBeNull(); expect(screen.queryByText(/private message/)).toBeNull();
   f.api.localWorkspace.getCommitments.mockResolvedValue({ ...commitments, items: [] });
   fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-  await screen.findByText('No retained work due in this local snapshot.');
+  await waitFor(() => expect(screen.queryByText(/Retained work could not be checked|Checking retained work/)).toBeNull());
+  expect(screen.queryByRole('button', { name: /Retained callback/ })).toBeNull();
 });
 it('keeps local retained work usable when daily fails or local overview is unavailable', async () => {
   const f = fixture(); f.api.daily.get = vi.fn(async () => { throw Error('daily unavailable'); });
@@ -126,7 +128,9 @@ it('ignores a late old read after API replacement and never keeps old local evid
   await screen.findByRole('heading', { name: /^Calls/ });
   next.api.localWorkspace.getCommitments.mockResolvedValue({ ...commitments, items: [] });
   view.rerender(<NativeDeskRoute api={next.api} onOpenLead={vi.fn()} />);
-  await screen.findByText('No retained work due in this local snapshot.');
+  await waitFor(() => expect(next.api.localWorkspace.getCommitments).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(screen.queryByText(/Retained work could not be checked|Checking retained work/)).toBeNull());
+  expect(screen.queryByRole('button', { name: /Retained callback/ })).toBeNull();
   await act(async () => resolve(commitments));
   expect(screen.queryByRole('button', { name: /Retained callback/ })).toBeNull();
 });

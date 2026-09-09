@@ -538,6 +538,14 @@ export function NativeDesk({
       select(key);
     }
   };
+  const retainedRead = localRead?.retained;
+  const knownCalls = snapshot.calls.accountIds.length + (retainedRead?.value?.items.length ?? 0);
+  const callCount = unavailableScope ? 'Unavailable'
+    : !retainedRead?.value ? `${snapshot.calls.accountIds.length} + unknown`
+    : retainedRead.error ? `${knownCalls} · last known`
+    : retainedRead.pending ? `${knownCalls} · checking`
+    : retainedRead.value.reviewErrorCount ? `${knownCalls}+ · partial`
+    : knownCalls;
   const title =
     surface === 'today'
       ? 'Today'
@@ -601,8 +609,7 @@ export function NativeDesk({
           <button className="native-desk__refresh" aria-label="Refresh" title="Refresh" onClick={onRefresh}><RefreshCw size={16} aria-hidden="true" /></button>
         </div>
       </header>
-      {localHold && <p role="status">Local workflow unavailable or inconsistent. Worker actions are held. Refresh to check status.</p>}
-      {incomplete && <p role="status">The daily snapshot is incomplete. Account work may be missing. Existing owner checks still apply.</p>}
+      {(localHold || (incomplete && (!unavailableScope || snapshot.issues.some(issue => issue.code !== 'scope_unknown' && issue.code !== 'scope_mismatch')))) && <p role="status">{localHold ? 'Local workflow unavailable or inconsistent. Worker actions are held. Refresh to check status.' : 'The daily snapshot is incomplete. Account work may be missing. Existing owner checks still apply.'}</p>}
       <div className="native-desk__layout">
         <nav className={`native-desk__queue${surface === 'today' ? ' native-desk__queue--today' : ''}`} aria-label={`${title} queue`} tabIndex={0}>
           <div className="native-desk__queue-title"><h2>{surface === 'today' ? 'Your next conversations' : surface === 'accounts' ? 'Your accounts' : 'Your campaigns'}</h2><p className="native-desk__hint" title="j / k to move · Enter to review">j / k · ↵</p></div>
@@ -610,11 +617,11 @@ export function NativeDesk({
             <>
               <section className="native-desk__lane" aria-label="Calls" tabIndex={0}>
                 <h2>
-                  <Phone size={14} aria-hidden="true" /><span className="native-desk__lane-label">Calls</span><span className="native-desk__count">{(localRead?.retained.value?.items.length ?? 0) + snapshot.calls.accountIds.length}</span> <span className="native-desk__lane-summary">{localRead?.retained.value ? `${localRead.retained.value.items.length} retained${localRead.retained.error ? ' (stale)' : ''}` : 'Retained work unavailable'} · {unavailableScope ? 'Account allocation unavailable' : `${snapshot.calls.accountIds.length} account calls`}</span>
+                  <Phone size={14} aria-hidden="true" /><span className="native-desk__lane-label">Calls</span><span className="native-desk__count">{callCount}</span>
                 </h2>
                 {localRead && <RetainedWork read={localRead.retained} selected={selected} onSelect={select} />}
                 {!snapshot.calls.accountIds.length ? (
-                  <p className="native-desk__empty">{unavailableScope ? 'Account call allocation is unavailable.' : 'No calls allocated.'}</p>
+                  null
                 ) : (
                   snapshot.calls.accountIds.map((id) => (
                     <button
@@ -635,6 +642,7 @@ export function NativeDesk({
                 )}
               </section>
               <DailyAnswers
+                workspaceId={snapshot.workspaceId}
                 unavailable={unavailableScope}
                 items={snapshot.answers}
                 selected={selected}
@@ -722,10 +730,12 @@ export function NativeDesk({
           )}
           {retained && <RetainedWorkDetail entry={retained} stale={!!localRead?.retained.error || !!localRead?.retained.pending} onOpenLead={onOpenLead} />}
           {localAccount && <LocalAccountDetail account={localAccount} />}
-          {account && <AccountContext account={account} />}{' '}
+          {account && !answer && <AccountContext account={account} />}{' '}
           {answer && snapshot.workspaceId && (
             <DailyAnswerDetail
               item={answer}
+              company={name(answer.accountId)}
+              accountDetails={account ? <AccountContext account={account} /> : null}
               workspaceId={snapshot.workspaceId}
               api={api.delegation}
               linkedin={api.linkedin}
@@ -778,8 +788,9 @@ export function NativeDesk({
                   : keys.length ? 'Make room for a good conversation.' : surface === 'today' ? 'No conversations queued.' : surface === 'accounts' ? 'Your account library starts here.' : 'No frozen campaigns to review.'}
               </h2>
               <p>
-                {selected ? 'Your selection is retained. Refresh to check its saved work.' : keys.length ? 'Select an item to review its company context and exact saved work.' : surface === 'today' ? 'Retained commitments and available account work will appear here.' : surface === 'accounts' ? 'Local company evidence will appear here. Local records do not establish worker ownership.' : 'Saved campaign plans will appear here for review. No campaign actions are enabled by this view.'}
+                {selected ? 'Your selection is retained. Refresh to check its saved work.' : keys.length ? 'Select an item to review its company context and exact saved work.' : surface === 'today' ? unavailableScope ? 'Local work remains available. Worker-scoped calls, approvals and meetings are unavailable until a workspace is connected.' : 'No work in this local snapshot. Refresh to check for saved conversations and local commitments.' : surface === 'accounts' ? 'Local company evidence will appear here. Local records do not establish worker ownership.' : 'Saved campaign plans will appear here for review. No campaign actions are enabled by this view.'}
               </p>
+              {!selected && unavailableScope && <a href="#/settings">Review Settings</a>}
             </div>
           )}
         </div>

@@ -166,8 +166,8 @@ describe('Native Desk actual route', () => {
     expect(screen.getByText('12 managed buildings')).toBeTruthy();
     expect(screen.getByText(/Hypothesis: Unconfirmed workflow/)).toBeTruthy();
     expect(screen.getByText(/Call handoff unavailable/)).toBeTruthy();
-    expect(screen.getByText('No approvals waiting.')).toBeTruthy();
-    expect(screen.getByText('No stored meetings.')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Needs your approval 0' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Upcoming meetings 0' })).toBeTruthy();
   });
 });
 

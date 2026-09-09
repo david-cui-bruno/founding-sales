@@ -1,3 +1,6 @@
+import { dailyAnswerPresentationMatches } from '../../../shared/contracts/dailyAnswerPresentationContract';
+import type { ReactNode } from 'react';
+import { AnswerIdentity, revealMessageFocus } from '../today/AnswerPresentation';
 import {
   useEffect,
   useLayoutEffect,
@@ -15,11 +18,15 @@ export function LinkedInStep({
   api,
   workspaceId,
   actionHold,
+  company = 'Company unavailable',
+  accountDetails,
 }: {
   item: Extract<DailyAnswer, { kind: 'manual_linkedin' }>;
   api: LinkedInApi;
   workspaceId: string;
   actionHold?: string;
+  company?: string;
+  accountDetails?: ReactNode;
 }) {
   const session = linkedInSession(api, workspaceId, item),
     state = useSyncExternalStore(session.subscribe, session.snapshot);
@@ -37,6 +44,7 @@ export function LinkedInStep({
   }, [session]);
   useEffect(() => session.setActionHold(actionHold), [session, actionHold]);
   useEffect(() => session.ingest(item), [session, item]);
+  const presentation = item.presentation && dailyAnswerPresentationMatches(item.presentation, state.draft, workspaceId) ? item.presentation : undefined;
   const operationHeld =
     !!actionHold ||
     workspaceId !== state.draft.workspaceId ||
@@ -46,9 +54,8 @@ export function LinkedInStep({
   const held = operationHeld || state.conflict;
   return (
     <section className="native-desk__composer">
-      <p className="native-desk__eyebrow">
-        Manual LinkedIn · {state.draft.state}
-      </p>
+      <AnswerIdentity type="Manual LinkedIn" tag={state.draft.state} company={company} fallback={company} contact={presentation?.contact} />
+      <div className="native-desk__message-area" onFocusCapture={revealMessageFocus}>
       <p>You send in LinkedIn. Opening or copying never records a send.</p>
       <label>
         LinkedIn note
@@ -67,6 +74,9 @@ export function LinkedInStep({
           onChange={(e) => session.edit(e.target.value)}
         />
       </label>
+      <details className="native-desk__evidence"><summary>Company details</summary>{accountDetails}</details>
+      </div>
+      <footer className="native-desk__action-area">
       <div className="native-desk__actions">
         <button
           className="native-desk__primary"
@@ -154,6 +164,7 @@ export function LinkedInStep({
       {state.incoming && (
         <details open>
           <summary>Saved LinkedIn version needs review</summary>
+          <p>The saved target or version differs. The retained note is shown above until you explicitly choose the saved version.</p>
           <p>
             Route: {state.incoming.draft.routeId} v
             {state.incoming.draft.routeVersion}. Draft revision{' '}
@@ -182,6 +193,7 @@ export function LinkedInStep({
           </p>
         ))}
       </div>
+      </footer>
     </section>
   );
 }
