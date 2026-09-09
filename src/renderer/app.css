@@ -94,3 +94,16 @@
 .diagnostics button:hover {
   background: var(--surface-sunken);
 }
+
+/* Bootstrap only: Settings keeps the existing embedded diagnostics palette. */
+.startup-presentation[data-presentation='native-a'] {
+  --muted: var(--text-muted);
+  --surface-raised: var(--surface);
+  --surface-sunken: var(--native-queue);
+  --line-strong: var(--line-interactive);
+  --focus-ring: 0 0 0 2px color-mix(in srgb, var(--accent) 85%, transparent);
+  min-height: 100dvh;
+  background: var(--canvas);
+  color: var(--text);
+  font-family: var(--font-ui);
+}

@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { NativeDeskRoute } from './NativeDeskRoute';
-import { dailyFixture, nativeDeskFixture } from './nativeDesk.fixture';
+import { dailyFixture, localSnapshot, nativeDeskFixture } from './nativeDesk.fixture';
 
 afterEach(cleanup);
 it.each([
@@ -57,4 +57,50 @@ it('keeps the Calls label text separate from its decorative icon', async () => {
   const label = heading.querySelector('.native-desk__lane-label')!;
   expect(label.children).toHaveLength(0);
   expect(heading.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+});
+
+it.each(['today', 'accounts', 'campaigns'] as const)('marks unresolved and first-failed %s as presentation only', async surface => {
+  const f = nativeDeskFixture();
+  let reject!: (error: Error) => void;
+  f.api.daily.get = vi.fn(() => new Promise<ReturnType<typeof dailyFixture>>((_resolve, rejectPromise) => { reject = rejectPromise; }));
+  const view = render(<NativeDeskRoute api={f.api} surface={surface} onOpenLead={vi.fn()} />);
+  const pending = screen.getByText('Loading daily workspace…').closest('section')!;
+  expect(pending.getAttribute('data-presentation')).toBe('native-a');
+  expect(pending.classList.contains('native-desk--pending')).toBe(true);
+  expect(pending.hasAttribute('data-workflow-mode')).toBe(false);
+  await waitFor(() => expect(f.api.daily.get).toHaveBeenCalledOnce());
+  await act(async () => reject(new Error('unavailable')));
+  expect(screen.getByText('Daily workspace unavailable. Retry the local read.').getAttribute('role')).toBe('status');
+  expect(view.container.querySelector('[data-presentation="native-a"]')).toBe(pending);
+  expect(pending.hasAttribute('data-workflow-mode')).toBe(false);
+});
+it('uses A informational chrome for unknown authority without inventing a workflow mode', async () => {
+  const f = nativeDeskFixture(dailyFixture({ workflowMode: 'unknown' }));
+  f.api.localWorkspace.get = vi.fn(async () => localSnapshot({ workflowMode: 'legacy' }));
+  render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+  const section = (await screen.findByText(/Workflow mode unavailable or inconsistent/)).closest('section')!;
+  expect(section.getAttribute('data-presentation')).toBe('native-a');
+  expect(section.hasAttribute('data-workflow-mode')).toBe(false);
+});
+it.each(['today', 'accounts', 'campaigns'] as const)('removes provisional A when actual %s legacy is confirmed', async surface => {
+  const f = nativeDeskFixture(dailyFixture({ workflowMode: 'legacy' }));
+  const view = render(<NativeDeskRoute api={f.api} surface={surface} legacy={<p>Actual legacy Today</p>} onOpenLead={vi.fn()} />);
+  await screen.findByText(surface === 'today' ? 'Actual legacy Today' : /Legacy workflow is active/);
+  expect(view.container.querySelector('[data-presentation]')).toBeNull();
+});
+it('marks the full desk without replacing its authoritative workflow mode', async () => {
+  const f = nativeDeskFixture();
+  render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+  const root = await screen.findByTestId('native-desk');
+  expect(root.getAttribute('data-presentation')).toBe('native-a');
+  expect(root.getAttribute('data-workflow-mode')).toBe('meeting_first');
+});
+
+it('selects A on the first failed daily read independently of pending assertions', async () => {
+  const f = nativeDeskFixture();
+  f.api.daily.get = vi.fn(async () => { throw new Error('unavailable'); });
+  render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+  const section = (await screen.findByText('Daily workspace unavailable. Retry the local read.')).closest('section')!;
+  expect(section.getAttribute('data-presentation')).toBe('native-a');
+  expect(section.hasAttribute('data-workflow-mode')).toBe(false);
 });

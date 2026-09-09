@@ -3,6 +3,8 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { StrictMode, useLayoutEffect } from 'react';
+
 import { useDensity } from './useDensity';
 import { useTheme } from './useTheme';
 
@@ -31,6 +33,7 @@ function stubMatchMedia(initialDark: boolean) {
   );
 
   return {
+    liveListeners: () => listeners.size,
     setSystemDark(next: boolean) {
       matches = next;
       for (const listener of listeners) {
@@ -79,6 +82,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('useTheme', () => {
@@ -161,4 +165,51 @@ describe('useDensity', () => {
     render(<DensityProbe />);
     expect(screen.getByTestId('density').textContent).toBe('comfortable');
   });
+});
+
+function FirstLayoutProbe({ observe }: { observe: (theme: string | undefined, density: string | undefined) => void }): null {
+  useTheme();
+  useDensity();
+  useLayoutEffect(() => {
+    observe(document.documentElement.dataset.theme, document.documentElement.dataset.density);
+  }, [observe]);
+  return null;
+}
+
+it('mirrors both preferences before the first layout observation', () => {
+  stubMatchMedia(false);
+  window.localStorage.setItem('callie.theme', 'dark');
+  window.localStorage.setItem('callie.density', 'compact');
+  const observe = vi.fn();
+  render(<FirstLayoutProbe observe={observe} />);
+  expect(observe).toHaveBeenNthCalledWith(1, 'dark', 'compact');
+});
+it.each(['missing', 'invalid', 'throwing'] as const)('keeps default preferences with %s storage', mode => {
+  stubMatchMedia(true);
+  if (mode === 'invalid') {
+    window.localStorage.setItem('callie.theme', 'invalid');
+    window.localStorage.setItem('callie.density', 'invalid');
+  }
+  if (mode === 'throwing') vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
+  const observe = vi.fn();
+  render(<FirstLayoutProbe observe={observe} />);
+  expect(observe).toHaveBeenNthCalledWith(1, 'dark', 'comfortable');
+});
+it('keeps one live system listener in StrictMode and none after unmount', () => {
+  const media = stubMatchMedia(false);
+  const view = render(<StrictMode><ThemeProbe /><DensityProbe /></StrictMode>);
+  expect(media.liveListeners()).toBe(1);
+  act(() => media.setSystemDark(true));
+  expect(document.documentElement.dataset.theme).toBe('dark');
+  view.unmount();
+  expect(media.liveListeners()).toBe(0);
+});
+it('updates preferences even when persistence throws', () => {
+  stubMatchMedia(false);
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
+  render(<><ThemeProbe /><DensityProbe /></>);
+  fireEvent.click(screen.getByRole('button', { name: 'Use dark' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Use compact' }));
+  expect(document.documentElement.dataset.theme).toBe('dark');
+  expect(document.documentElement.dataset.density).toBe('compact');
 });

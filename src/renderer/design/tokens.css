@@ -75,8 +75,9 @@
 }
 
 /* SEMANTIC: approved A sizes are opt-in, not changes to legacy typography. */
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first']),
-.native-desk[data-workflow-mode='meeting_first'] {
+.app-shell:has(.native-desk[data-presentation='native-a']),
+.native-desk[data-presentation='native-a'],
+.startup-presentation[data-presentation='native-a'] {
   --text-native-brand: 30px;
   --text-native-brand-narrow: 27px;
   --text-native-page: 25px;

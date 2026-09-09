@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useLayoutEffect, useState } from 'react';
 
 export type DensityPreference = 'compact' | 'comfortable';
 
@@ -28,7 +28,7 @@ export type DensityState = {
 export function useDensity(): DensityState {
   const [density, setDensityState] = useState<DensityPreference>(readStoredDensity);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.dataset.density = density;
   }, [density]);
 

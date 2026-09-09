@@ -8,8 +8,8 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react';
-import { StrictMode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { StrictMode, useLayoutEffect } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppHealth } from '../shared/healthContract';
 import type {
   AppleSpikePreloadApi,
@@ -114,9 +114,15 @@ const pendingWorkflowApis = () => {
   };
 };
 
+function LayoutObservation({ observe }: { observe?: () => void }): null {
+  useLayoutEffect(() => { observe?.(); }, [observe]);
+  return null;
+}
+
 const renderApp = (
   getHealth: () => Promise<AppHealth>,
   appleSpike: AppleSpikePreloadApi = disabledAppleSpike(),
+  observe?: () => void,
 ) => {
   window.callie = {
     health: { get: getHealth },
@@ -127,13 +133,21 @@ const renderApp = (
   return render(
     <StrictMode>
       <App />
+      <LayoutObservation observe={observe} />
     </StrictMode>,
   );
 };
 
+beforeEach(() => {
+  window.localStorage.clear();
+  delete document.documentElement.dataset.theme;
+  delete document.documentElement.dataset.density;
+});
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('App async lifecycle', () => {
@@ -229,4 +243,89 @@ describe('App async lifecycle', () => {
 
     expect(consoleError).not.toHaveBeenCalled();
   });
+});
+
+describe('startup appearance before workspace readiness', () => {
+  it.each([
+    ['dark', 'compact', false, 'dark'],
+    ['light', 'comfortable', true, 'light'],
+    ['system', 'compact', true, 'dark'],
+    ['system', 'comfortable', false, 'light'],
+  ] as const)('applies %s/%s before the first layout observation', (preference, density, systemDark, resolved) => {
+    window.localStorage.setItem('callie.theme', preference);
+    window.localStorage.setItem('callie.density', density);
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: systemDark, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    const observations: unknown[] = [];
+    const view = renderApp(() => new Promise(() => undefined), undefined, () => {
+      observations.push([document.documentElement.dataset.theme, document.documentElement.dataset.density]);
+    });
+    expect(observations[0]).toEqual([resolved, density]);
+    expect(screen.getByText('Checking local foundation…')).toBeTruthy();
+    expect(view.container.querySelector('.startup-presentation')?.getAttribute('data-presentation')).toBe('native-a');
+    expect(view.container.querySelector('[data-workflow-mode]')).toBeNull();
+    expect(screen.queryByRole('navigation')).toBeNull();
+    expect(window.callie.today.get).not.toHaveBeenCalled();
+    expect(window.callie.leads.list).not.toHaveBeenCalled();
+    expect(window.callie.appleSpike.getStatus).not.toHaveBeenCalled();
+  });
+
+  it('retains saved preferences and truthful presentation through failure, retry and readiness', async () => {
+    window.localStorage.setItem('callie.theme', 'dark');
+    window.localStorage.setItem('callie.density', 'compact');
+    const failed = deferred<AppHealth>();
+    const retry = deferred<AppHealth>();
+    const get = vi.fn().mockReturnValueOnce(failed.promise).mockReturnValueOnce(failed.promise).mockReturnValue(retry.promise);
+    const view = renderApp(get);
+    await act(async () => failed.reject(new Error('private path must not appear')));
+    expect(screen.getByRole('alert').textContent).not.toContain('private path');
+    expect(view.container.querySelector('.startup-presentation')?.getAttribute('data-presentation')).toBe('native-a');
+    expect(window.callie.today.get).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(screen.getByText('Checking local foundation…')).toBeTruthy();
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(document.documentElement.dataset.density).toBe('compact');
+    await act(async () => retry.resolve(health));
+    await screen.findByRole('navigation', { name: 'Primary' });
+    expect(view.container.querySelector('.startup-presentation')).toBeNull();
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(document.documentElement.dataset.density).toBe('compact');
+  });
+});
+
+it.each(['missing', 'invalid', 'throwing'] as const)('resolves %s storage before actual App checking layout', mode => {
+  vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+  if (mode === 'invalid') {
+    window.localStorage.setItem('callie.theme', 'invalid');
+    window.localStorage.setItem('callie.density', 'invalid');
+  }
+  if (mode === 'throwing') vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
+  const observed: unknown[] = [];
+  renderApp(() => new Promise(() => undefined), undefined, () => {
+    observed.push([document.documentElement.dataset.theme, document.documentElement.dataset.density]);
+  });
+  expect(observed[0]).toEqual(['dark', 'comfortable']);
+  expect(window.callie.today.get).not.toHaveBeenCalled();
+});
+it('keeps one live system listener through the health gate without extra reads', async () => {
+  const listeners = new Set<(event: { matches: boolean }) => void>();
+  vi.stubGlobal('matchMedia', vi.fn(() => ({
+    matches: false,
+    addEventListener: (_type: string, listener: (event: { matches: boolean }) => void) => listeners.add(listener),
+    removeEventListener: (_type: string, listener: (event: { matches: boolean }) => void) => listeners.delete(listener),
+  })));
+  const ready = deferred<AppHealth>();
+  const get = vi.fn(() => ready.promise);
+  const view = renderApp(get);
+  expect(listeners.size).toBe(1);
+  act(() => listeners.forEach(listener => listener({ matches: true })));
+  expect(document.documentElement.dataset.theme).toBe('dark');
+  expect(get).toHaveBeenCalledTimes(2);
+  expect(window.callie.today.get).not.toHaveBeenCalled();
+  await act(async () => ready.resolve(health));
+  await screen.findByRole('navigation', { name: 'Primary' });
+  expect(listeners.size).toBe(1);
+  expect(document.documentElement.dataset.theme).toBe('dark');
+  expect(get).toHaveBeenCalledTimes(2);
+  view.unmount();
+  expect(listeners.size).toBe(0);
 });

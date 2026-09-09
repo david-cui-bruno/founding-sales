@@ -192,7 +192,7 @@ export function NativeDeskRoute({
     : surface === 'today' ? <LocalOnlyCalls read={local.read.retained} onOpenLead={onOpenLead} initialSelected={viewSelection(api.daily).get(JSON.stringify([snapshot?.workspaceId ?? null, surface]))} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} /> : <p>Campaign scope unavailable. No worker actions are enabled.</p>;
   if (!snapshot)
     return (
-      <section className="native-desk">
+      <section className="native-desk native-desk--pending" data-presentation="native-a">
         <h1>
           {surface === 'today'
             ? 'Today'
@@ -215,7 +215,10 @@ export function NativeDeskRoute({
     );
   if ((snapshot.workflowMode === 'unknown' || snapshot.workflowMode === 'legacy') && local.read.overview.value?.workflowMode !== 'meeting_first')
     return (
-      <section className="native-desk">
+      <section
+        className={snapshot.workflowMode === 'unknown' ? 'native-desk native-desk--pending' : 'native-desk'}
+        data-presentation={snapshot.workflowMode === 'unknown' ? 'native-a' : undefined}
+      >
         <h1>{surface === 'today' ? 'Today' : surface === 'accounts' ? 'Accounts' : 'Campaigns'}</h1>
         <p>
           {snapshot.workflowMode === 'legacy' && !localHold && !current?.error
@@ -558,6 +561,7 @@ export function NativeDesk({
       ref={root}
       onKeyDown={keyboard}
       data-testid="native-desk"
+      data-presentation="native-a"
       data-workflow-mode={snapshot.workflowMode}
     >
       <header className="native-desk__header">

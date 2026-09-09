@@ -143,9 +143,10 @@
   --inset-highlight: inset 0 0 0 transparent;
 }
 
-/* Approved A Native Desk palette, scoped to the stored meeting-first surface. */
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first']),
-.native-desk[data-workflow-mode='meeting_first'] {
+/* Approved A Native Desk palette, scoped to explicit presentation rather than workflow authority. */
+.app-shell:has(.native-desk[data-presentation='native-a']),
+.native-desk[data-presentation='native-a'],
+.startup-presentation[data-presentation='native-a'] {
   --canvas: #e9edf2;
   --surface: #fff;
   --text: #222a35;
@@ -162,8 +163,9 @@
   --native-shadow: 0 2px 4px #18233409, 0 12px 28px #18233409;
   --native-row-shadow: 0 2px 4px #1722320b;
 }
-[data-theme='dark'] .app-shell:has(.native-desk[data-workflow-mode='meeting_first']),
-[data-theme='dark'] .native-desk[data-workflow-mode='meeting_first'] {
+[data-theme='dark'] .app-shell:has(.native-desk[data-presentation='native-a']),
+[data-theme='dark'] .native-desk[data-presentation='native-a'],
+[data-theme='dark'] .startup-presentation[data-presentation='native-a'] {
   --canvas: #181d25;
   --surface: #262e39;
   --text: #edf1f6;

@@ -153,7 +153,7 @@ it('opts into Native Desk branding only while a stored meeting-first surface is 
     const { rerender, container } = render(<div className="app-shell"><RailHarness /></div>);
     const brand = container.querySelector<HTMLElement>('.nav-rail__brand-native')!;
     expect(getComputedStyle(brand).display).toBe('none');
-    rerender(<div className="app-shell"><RailHarness /><section className="native-desk" data-workflow-mode="meeting_first" /></div>);
+    rerender(<div className="app-shell"><RailHarness /><section className="native-desk" data-presentation="native-a" data-workflow-mode="meeting_first" /></div>);
     expect(getComputedStyle(brand).display).toBe('inline');
     expect(getComputedStyle(container.querySelector('.nav-rail__brand')!).display).toBe('none');
     expect(brand.textContent).toBe('Callie');

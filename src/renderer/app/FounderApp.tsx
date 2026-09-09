@@ -9,13 +9,15 @@ import { AppShell } from './AppShell';
 import { CommandPalette } from './commandPalette/CommandPalette';
 import { renderRoute } from './routeRegistry';
 import type { AppRoute } from './routes';
-import { useDensity } from './useDensity';
+import type { DensityState } from './useDensity';
 import { useHashRoute } from './useHashRoute';
-import { useTheme } from './useTheme';
+import type { ThemeState } from './useTheme';
 
 export type FounderAppProps = {
   api: CalliePreloadApi;
   health: FoundationHealth;
+  theme: ThemeState;
+  density: DensityState;
   initialRoute?: AppRoute;
 };
 
@@ -23,21 +25,17 @@ export type FounderAppProps = {
  * The healthy application: one global lead inspector wrapping the routed
  * workspace, one global import dialog, and the fixed navigation shell.
  */
-export function FounderApp({ api, health, initialRoute }: FounderAppProps) {
+export function FounderApp({ api, health, theme, density, initialRoute }: FounderAppProps) {
   return (
     <LeadInspectorProvider api={api.leadDetail} outreachApi={api.outreach} discoveryApi={api.discovery} pastActivityApi={api.today} outcomeApi={api.today}>
-      <FounderWorkspace api={api} health={health} initialRoute={initialRoute} />
+      <FounderWorkspace api={api} health={health} theme={theme} density={density} initialRoute={initialRoute} />
     </LeadInspectorProvider>
   );
 }
 
-function FounderWorkspace({ api, health, initialRoute }: FounderAppProps) {
+function FounderWorkspace({ api, health, theme, density, initialRoute }: FounderAppProps) {
   const routing = useHashRoute(initialRoute ?? 'today');
   const inspector = useLeadInspector();
-  // Owned here so <html data-theme/data-density> stays applied on every
-  // route; Settings → Appearance edits this same state through the context.
-  const theme = useTheme();
-  const density = useDensity();
   const [importOpen, setImportOpen] = useState(false);
   const [reviewCount, setReviewCount] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);

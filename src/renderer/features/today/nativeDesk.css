@@ -278,26 +278,30 @@
 
 /* A Native Desk binding. :has scopes the surrounding shell without changing
    historical routes, global preferences, or the legacy Today presentation. */
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first']),
-.native-desk[data-workflow-mode='meeting_first'] {
+.app-shell:has(.native-desk[data-presentation='native-a']),
+.native-desk[data-presentation='native-a'] {
   --nav-rail-width: 142px;
+}
+.app-shell:has(.native-desk[data-presentation='native-a']),
+.native-desk[data-presentation='native-a'],
+.startup-presentation[data-presentation='native-a'] {
   --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-display: var(--font-ui);
   font-family: var(--font-ui);
 }
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first']) .nav-rail {
+.app-shell:has(.native-desk[data-presentation='native-a']) .nav-rail {
   background: var(--native-rail);
   color: var(--text);
 }
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first'])
+.app-shell:has(.native-desk[data-presentation='native-a'])
   .nav-rail__brand {
   display: none;
 }
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first'])
+.app-shell:has(.native-desk[data-presentation='native-a'])
   .nav-rail__brand-native {
   display: inline;
 }
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first'])
+.app-shell:has(.native-desk[data-presentation='native-a'])
   .nav-rail__brand-native {
   margin: 0;
   font-weight: 800;
@@ -306,17 +310,17 @@
   letter-spacing: -1.8px;
   color: var(--native-brand);
 }
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first'])
+.app-shell:has(.native-desk[data-presentation='native-a'])
   .nav-rail__item--current {
   background: var(--accent-soft);
   color: var(--accent);
   box-shadow: inset 3px 0 var(--accent);
 }
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first'])
+.app-shell:has(.native-desk[data-presentation='native-a'])
   .app-shell__main {
   padding: 12px 16px;
 }
-.native-desk[data-workflow-mode='meeting_first'] {
+.native-desk[data-presentation='native-a'] {
   border-radius: 10px;
   overflow: hidden;
 }
@@ -473,14 +477,14 @@
 }
 
 /* Final shared A proportions. Only the opted-in surface changes the shell. */
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first']) .nav-rail {
+.app-shell:has(.native-desk[data-presentation='native-a']) .nav-rail {
   padding-left: 10px;
   padding-right: 10px;
 }
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first']) .nav-rail__header {
+.app-shell:has(.native-desk[data-presentation='native-a']) .nav-rail__header {
   margin-bottom: 30px;
 }
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first']) .nav-rail__item {
+.app-shell:has(.native-desk[data-presentation='native-a']) .nav-rail__item {
   box-sizing: border-box;
   height: 44px;
   padding: 10px 11px;
@@ -488,7 +492,7 @@
   font-size: var(--text-dense);
   gap: 9px;
 }
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first']) .nav-rail__more-toggle {
+.app-shell:has(.native-desk[data-presentation='native-a']) .nav-rail__more-toggle {
   display: flex;
   flex-shrink: 0;
   width: 100%;
@@ -498,24 +502,24 @@
   text-align: left;
   cursor: pointer;
 }
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first']) .nav-rail__more-toggle[aria-expanded='false'] + .nav-rail__other-workspaces {
+.app-shell:has(.native-desk[data-presentation='native-a']) .nav-rail__more-toggle[aria-expanded='false'] + .nav-rail__other-workspaces {
   display: none;
 }
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first']) .nav-rail__other-workspaces {
+.app-shell:has(.native-desk[data-presentation='native-a']) .nav-rail__other-workspaces {
   overflow-y: auto;
   min-height: 0;
 }
-.app-shell:has(.native-desk[data-workflow-mode='meeting_first']) .nav-rail__other-workspaces .nav-rail__item {
+.app-shell:has(.native-desk[data-presentation='native-a']) .nav-rail__other-workspaces .nav-rail__item {
   font-size: var(--text-micro);
   height: 36px;
   padding-left: 7px;
   gap: 6px;
 }
-.native-desk[data-workflow-mode='meeting_first'] .native-desk__header {
+.native-desk[data-presentation='native-a'] .native-desk__header {
   padding: 16px 24px 15px;
   align-items: flex-start;
 }
-.native-desk[data-workflow-mode='meeting_first'] h1 {
+.native-desk[data-presentation='native-a'] h1 {
   font-size: var(--text-native-page);
   line-height: 1.25;
   font-weight: 720;
@@ -633,12 +637,12 @@
 .native-desk__composer textarea { min-height: 220px; }
 .native-desk__footer { font-size: var(--text-native-footnote); }
 @media (max-width: 1200px) {
-  .app-shell:has(.native-desk[data-workflow-mode='meeting_first']) { --nav-rail-width: 124px; }
-  .app-shell:has(.native-desk[data-workflow-mode='meeting_first']) .nav-rail { padding-left: 8px; padding-right: 8px; }
-  .app-shell:has(.native-desk[data-workflow-mode='meeting_first']) .nav-rail__brand-native { font-size: var(--text-native-brand-narrow); }
-  .app-shell:has(.native-desk[data-workflow-mode='meeting_first']) .nav-rail__item { font-size: var(--text-caption); padding-left: 8px; padding-right: 8px; gap: 8px; }
+  .app-shell:has(.native-desk[data-presentation='native-a']) { --nav-rail-width: 124px; }
+  .app-shell:has(.native-desk[data-presentation='native-a']) .nav-rail { padding-left: 8px; padding-right: 8px; }
+  .app-shell:has(.native-desk[data-presentation='native-a']) .nav-rail__brand-native { font-size: var(--text-native-brand-narrow); }
+  .app-shell:has(.native-desk[data-presentation='native-a']) .nav-rail__item { font-size: var(--text-caption); padding-left: 8px; padding-right: 8px; gap: 8px; }
   .native-desk__layout { grid-template-columns: 280px minmax(0, 1fr); }
-  .native-desk[data-workflow-mode='meeting_first'] .native-desk__header { padding: 15px 20px; }
+  .native-desk[data-presentation='native-a'] .native-desk__header { padding: 15px 20px; }
   .native-desk__header-status { gap: 6px; }
   .native-desk__detail { padding: 18px 20px; }
   .native-desk__account h2 { font-size: var(--text-title); }
@@ -660,7 +664,7 @@
 
 /* Outrank the later global input:not([type]) rule without touching permission
    checkboxes or expiry controls. The saved subject remains the same editor. */
-.native-desk[data-workflow-mode='meeting_first'] .native-desk__composer :is(input:not([type]), input[type='text']) {
+.native-desk[data-presentation='native-a'] .native-desk__composer :is(input:not([type]), input[type='text']) {
   height: 43px;
   padding: 10px 12px;
   border: 1px solid var(--line-interactive);
@@ -672,27 +676,27 @@
 
 /* Size the body from the remaining space, not a guessed header/footer height.
    Expanded operational disclosures stay in normal flow and remain scrollable. */
-.native-desk[data-workflow-mode='meeting_first'] {
+.native-desk[data-presentation='native-a'] {
   display: flex;
   flex-direction: column;
   height: calc(100dvh - 24px);
   min-height: 0;
   overflow: auto;
 }
-.native-desk[data-workflow-mode='meeting_first'] > :is(header, footer, p[role='status']) {
+.native-desk[data-presentation='native-a'] > :is(header, footer, p[role='status']) {
   flex: none;
 }
-.native-desk[data-workflow-mode='meeting_first'] > .native-desk__layout {
+.native-desk[data-presentation='native-a'] > .native-desk__layout {
   flex: 1 1 auto;
   height: auto;
   min-height: 0;
 }
-.native-desk[data-workflow-mode='meeting_first'] :is(.native-desk__queue, .native-desk__detail) {
+.native-desk[data-presentation='native-a'] :is(.native-desk__queue, .native-desk__detail) {
   min-height: 0;
 }
 @media (max-width: 620px) {
-  .native-desk[data-workflow-mode='meeting_first'] { height: auto; }
-  .native-desk[data-workflow-mode='meeting_first'] > .native-desk__layout { flex: none; }
+  .native-desk[data-presentation='native-a'] { height: auto; }
+  .native-desk[data-presentation='native-a'] > .native-desk__layout { flex: none; }
 }
 
 /* A is a composed conversation surface, not an account form above an editor.
@@ -890,4 +894,9 @@
 @media (max-height: 760px) {
   .native-desk__message-area > .native-desk__message-field { flex-basis: 112px; min-height: 112px; }
   .native-desk__message-area .native-desk__message-field textarea { min-height: 90px; }
+}
+
+.native-desk--pending {
+  box-sizing: border-box;
+  padding: var(--space-6);
 }
