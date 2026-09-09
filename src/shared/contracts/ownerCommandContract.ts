@@ -1,3 +1,4 @@
+import { saveMeetingOfferSchema } from './meetingContract';
 import { z } from 'zod';
 import { acquisitionMilestoneReportSchema } from './acquisitionReportContract';
 import { audienceQuerySchema, researchCapabilitySchema, researchLimitsSchema } from '../../main/research/companyResearchTypes';
@@ -41,7 +42,7 @@ export const ownerReplyBindingSchema = z.discriminatedUnion('kind', [
 export const approveReplyCommandSchema = z.strictObject({ ...ownerCommandBase, kind: z.literal('approve-reply'), payload: z.strictObject({
   draft: accountReplyDraftSchema, expectedRemoteDraftRevision: revision.min(1), approvalId: id, actionId: id, intentCommandId: z.uuid(),
   permission: z.strictObject({ id, sourceMessageId: id, sourceMessageHash: hash, basis: z.enum(['requested_followup', 'ongoing_correspondence']), expiresAt: instant }),
-  binding: ownerReplyBindingSchema, expiresAt: instant,
+  binding: ownerReplyBindingSchema, expiresAt: instant, schedulingOffer: saveMeetingOfferSchema.optional(),
 }) });
 /** Canonical owner command members. DelegationCommand imports these exact schemas
  * during its serialized integration turn. No arbitrary execute payload exists. */
@@ -65,3 +66,9 @@ export const ownerResearchSourceKey = (): string => 'OWNER_RESEARCH_SOURCE';
 export const ownerResearchSourceSchema = z.strictObject({version:z.literal(1),workspaceId:id,pairingId:id,revision:revision.min(1),state:z.enum(['paused','active']),research:ownerResearchConfigurationSchema.nullable()}).refine(value=>!value.research||value.research.workspaceId===value.workspaceId,'Workspace mismatch');
 export type OwnerResearchSource = z.infer<typeof ownerResearchSourceSchema>;
 export const configureResearchSourceSchema = z.strictObject({commandId:z.uuid(),workspaceId:id,pairingId:id,expectedRevision:revision,configuration:ownerResearchSourceSchema});
+export const localDelegationStatusSchema=z.strictObject({state:z.enum(['unconfigured','paused','active','locked']),workspaceId:id.nullable(),endpoint:z.url().nullable(),configuration:localDelegationConfigurationRecordSchema.nullable()});
+export const ownerCheckpointRequestSchema=z.strictObject({workspaceId:id,accountId:id});
+export const ownerCheckpointSchema=z.strictObject({workspaceId:id,accountId:id,generation:revision,version:revision,revision:hash,validUntil:revision.min(1)});
+export const redeemLocalPairingSchema=z.strictObject({endpoint:z.url(),expectedWorkspaceId:id,code:z.string().min(1).max(128)});
+export const redeemedLocalPairingSchema=z.strictObject({state:z.literal('paired'),workspaceId:id,pairingId:id});
+export const delegationSyncReportSchema=z.strictObject({applied:revision,gaps:revision,cursor:z.string().nullable(),ownerFresh:z.boolean()});

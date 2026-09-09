@@ -1,3 +1,6 @@
+import { lookup } from 'node:dns/promises';
+import { createPinnedPageHttp, type PageHttp } from '../../../../src/main/research/companyPageProvider';
+import { createSourceCoordinator } from './sourceCoordinator';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { GetParameterCommand, SSMClient, type GetParameterCommandOutput } from '@aws-sdk/client-ssm';
 import { z } from 'zod';
@@ -37,6 +40,10 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
         if (!input.google || !query.has('state') || query.has('code') === query.has('error')) return response(400, { error: 'worker_invalid_request' });
         await input.google.completeGoogleGrant(query.get('state')!, query.has('error') ? null : query.get('code'));
         return { statusCode: 200, headers: { ...headers, 'Content-Type': 'text/plain; charset=utf-8' }, body: 'Authorization completed. Return to FSS.' };
+      }
+      if(path==='/readiness' && method==='POST') {
+        const owner=new OwnerCommandCoordinator({auth:input.auth,authorization:input.google??new RemoteGoogleAuthorization({auth:input.auth})});
+        return response(200,await owner.checkpoint(body(),event.headers.authorization??'',AbortSignal.timeout(15000)));
       }
       if(path==='/research/configure' && method==='POST') {
         const owner=new OwnerCommandCoordinator({auth:input.auth,authorization:input.google??new RemoteGoogleAuthorization({auth:input.auth})});
@@ -88,7 +95,7 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
     }
   };
 }
-export type ProductionBoundaries = { dynamo?: DynamoAdapter; ssm?: { send(command: GetParameterCommand): Promise<GetParameterCommandOutput> }; fetch?: typeof globalThis.fetch };
+export type ProductionBoundaries = { dynamo?: DynamoAdapter; ssm?: { send(command: GetParameterCommand): Promise<GetParameterCommandOutput> }; fetch?: typeof globalThis.fetch; pageHttp?: PageHttp; resolve?: (hostname:string)=>Promise<string[]> };
 /** Same factory serves Lambda and explicitly authorized operator bootstrap.
  * The default/partial environment is inert. Tests replace SDK/provider I/O only. */
 export async function createProductionServices(env: NodeJS.ProcessEnv, boundaries: ProductionBoundaries = {}) {
@@ -116,15 +123,31 @@ export async function createProductionServices(env: NodeJS.ProcessEnv, boundarie
     googleConfig = { clientId: env.DELEGATED_GOOGLE_CLIENT_ID!, clientSecret, encryptionKey: Buffer.from(encodedKey, 'base64'), redirectUri: `https://${config.DELEGATED_WORKER_HOST}/oauth/callback` };
   }
   const google = new RemoteGoogleAuthorization({ auth, config: googleConfig, fetch: boundaries.fetch });
-  return { auth, google, handle: createWorkerHandler({ auth, google, host: config.DELEGATED_WORKER_HOST }) };
+  const source=createSourceCoordinator({auth,authorization:google,fetch:boundaries.fetch??globalThis.fetch,
+    research:{pageHttp:boundaries.pageHttp??createPinnedPageHttp(),resolve:boundaries.resolve??(async hostname=>(await lookup(hostname,{all:true})).map(item=>item.address)),
+      loadCredentials:async(workspaceId,signal)=>{
+        signal.throwIfAborted(); if(workspaceId!==config.DELEGATED_WORKSPACE_ID) throw new Error('research_workspace_mismatch');
+        const path=z.string().startsWith(`/delegated-worker/${workspaceId}/`).parse(env.DELEGATED_RESEARCH_CREDENTIAL_PARAMETER);
+        const ssm=boundaries.ssm??new SSMClient({region:config.AWS_REGION,maxAttempts:1});
+        const result=await ssm.send(new GetParameterCommand({Name:path,WithDecryption:true})); signal.throwIfAborted();
+        if(result.Parameter?.Type!=='SecureString'||!result.Parameter.Value) throw new Error('research_unconfigured');
+        return z.strictObject({apiKey:z.string().min(1).max(16384),model:z.string().min(1).max(255)}).parse(JSON.parse(result.Parameter.Value));
+      }}});
+  return { auth, google, source, handle: createWorkerHandler({ auth, google, host: config.DELEGATED_WORKER_HOST }) };
 }
 export function createProductionHandler(env: NodeJS.ProcessEnv, boundaries: ProductionBoundaries = {}) {
   return async (event: unknown): Promise<WorkerHttpResponse> => {
     try {
+      const scheduled=z.object({source:z.literal('aws.events'),'detail-type':z.literal('Scheduled Event'),resources:z.array(z.string()).length(1)}).safeParse(event);
+      if(scheduled.success && env.DELEGATED_WORKER_ENABLED==='true' && env.DELEGATED_WORKER_SCHEDULE_ARN && scheduled.data.resources[0]===env.DELEGATED_WORKER_SCHEDULE_ARN) {
+        const services=await createProductionServices(env,boundaries);
+        if(!services) return response(503,{error:'worker_disabled'});
+        return response(200,await services.source.tick(AbortSignal.timeout(240000)));
+      }
       const parsed = eventSchema.safeParse(event);
       if (env.DELEGATED_WORKER_ENABLED !== 'true') return response(503, { error: 'worker_disabled' });
       if (!parsed.success) return response(400, { error: 'worker_invalid_request' });
-      const needsGoogle = ['/google/begin', '/google/status', '/google/revoke', '/oauth/callback'].includes(parsed.data.rawPath);
+      const needsGoogle = ['/google/begin', '/google/status', '/google/revoke', '/oauth/callback','/readiness'].includes(parsed.data.rawPath);
       // Pairing, emergency and event sync must not depend on Google/SSM health.
       const scopedEnv = needsGoogle ? env : { ...env, DELEGATED_GOOGLE_CLIENT_ID: '', DELEGATED_GOOGLE_SECRET_PARAMETER: '', DELEGATED_GOOGLE_KEY_PARAMETER: '' };
       const services = await createProductionServices(scopedEnv, boundaries);

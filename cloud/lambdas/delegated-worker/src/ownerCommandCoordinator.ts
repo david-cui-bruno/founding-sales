@@ -1,7 +1,9 @@
+import { createMailPoller } from './mailPoller';
+import { offeredSlotText } from '../../../../src/shared/meetings/schedulingRules';
 import { meetingReservationSchema, meetingOutcomeSchema } from '../../../../src/shared/contracts/meetingContract';
 import { createHash } from 'node:crypto';
 import { CampaignExecution } from './campaignExecution';
-import { WorkerCampaignRepository, campaignActionApprovalKey, campaignActionApprovalSchema, campaignReservationKey, campaignReservationSchema, campaignEnrollmentKey } from './workerCampaignRepository';
+import { WorkerCampaignRepository, campaignReservationKey, campaignReservationSchema, campaignEnrollmentKey } from './workerCampaignRepository';
 import { enrollmentSchema, campaignEventPayloadSchema } from '../../../../src/shared/contracts/campaignContract';
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { threadProjectionSchema, mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThreadContract';
@@ -9,7 +11,7 @@ import { accountRecordSchema, accountKey } from './workerAccountRepository';
 import { intakeRegistryKey, intakeRegistrySchema, createIntakeBarrier } from './intakeBarrier';
 import type { WorkerAuth } from './workerAuth';
 import type { RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
-import { configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand } from '../../../../src/shared/contracts/ownerCommandContract';
+import { ownerCheckpointRequestSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand } from '../../../../src/shared/contracts/ownerCommandContract';
 import { commandReceiptSchema, workerEventSchema, type CommandReceipt, type WorkerEvent } from '../../../../src/shared/contracts/delegationContract';
 import { DynamoStore, fingerprint, keyPart } from './dynamoStore';
 import { authorityRecordSchema, executionAuthorityKey, executionAuthorityFields, createExecutionRepository } from './executionRepository';
@@ -20,6 +22,20 @@ import { DynamoDispatchRepository, dispatchApprovalKey, dispatchPermissionKey, d
  * admitted immutable records cannot dispatch without a separate requested work item. */
 export class OwnerCommandCoordinator {
   constructor(readonly input: { auth: WorkerAuth; authorization: RemoteGoogleAuthorization }) {}
+  async checkpoint(raw:unknown,authorization:string,signal:AbortSignal) {
+    const target=ownerCheckpointRequestSchema.parse(raw); const principal=await this.input.auth.authenticate(authorization,['events:read']);this.input.auth.store.workspace(target.workspaceId);
+    const store=new DynamoStore({...this.input.auth.options,dynamo:this.input.auth.fencedDynamo(principal)});
+    const source=await this.activeSource(target,principal.pairingId,store);
+    const threads=new DynamoThreadIntakeRepository(this.input.auth.options);
+    const poll=await createMailPoller({authorization:this.input.authorization,store:threads,fetch:this.input.authorization.input.fetch??globalThis.fetch}).pollOnce({accountId:target.accountId,pairingId:principal.pairingId,mailboxSubject:source.config.mailboxSubject!},signal);
+    if(!poll.complete||poll.suppressed) throw new Error('intake_unavailable');
+    const intake=await createIntakeBarrier(store).check({accountId:target.accountId,mailboxSubject:source.config.mailboxSubject!},signal);
+    if(intake.status!=='ready')throw new Error('intake_unavailable');
+    const authKey=executionAuthorityKey(target.accountId);const row=await store.get<unknown>(authKey);const authority=authorityRecordSchema.parse(row?.data);
+    if(authority.authority.owner!=='worker'||authority.authority.state!=='active')throw new Error('authority_inactive');
+    signal.throwIfAborted();await store.transact([...source.checks,...intake.checks,store.check(authKey,row!.rev),store.absent(mailSuppressionKey(target.accountId))]);
+    return ownerCheckpointSchema.parse({...target,generation:authority.authority.generation,version:authority.version,revision:fingerprint({authority,source:source.config,intake:intake.revisions}),validUntil:Math.min(intake.validUntil,Date.parse(store.now())+5000)});
+  }
   async configureResearch(raw: unknown, authorization: string) {
     const command=configureResearchSourceSchema.parse(raw);
     const principal=await this.input.auth.authenticate(authorization,['commands:write']);
@@ -121,7 +137,7 @@ export class OwnerCommandCoordinator {
     await store.publish(outbox.sequence);
     return receipt;
   }
-  private async activeSource(command: OwnerCommand, pairingId: string, store: DynamoStore) {
+  private async activeSource(command: Pick<OwnerCommand,'accountId'|'workspaceId'>, pairingId: string, store: DynamoStore) {
     const key = ownerSourceKey(command.accountId); const row = await store.get<unknown>(key);
     if (!row) throw new Error('source_setup_required');
     const config = ownerSourceConfigurationSchema.parse(row.data);
@@ -142,10 +158,6 @@ export class OwnerCommandCoordinator {
     const input = { workspaceId: command.workspaceId, accountId: command.accountId, ...p.campaign, actionId:p.actionId, channel:p.channel,
       authorityGeneration:command.expectedAuthorityGeneration,selectedRouteId:p.routeId,contextRevision:p.contextRevision,contentHash:p.contentHash,targetHash:p.targetHash };
     const expiresAt = new Date(Date.parse(at)+60000).toISOString();
-    const approval = { ...input, approvedAt:at,expiresAt };
-    const approvalKey = campaignActionApprovalKey(command.accountId,p.actionId); const prior = await store.get(approvalKey);
-    if (prior) { if (fingerprint(campaignActionApprovalSchema.parse(prior.data)) !== fingerprint(approval)) throw new Error('manual_approval_conflict'); }
-    else await repo.admitActionApproval(approval);
     const plan = await new CampaignExecution(repo).prepareManualChecks(input);
     const intake = await createIntakeBarrier(store).check({accountId:command.accountId,mailboxSubject:source.config.mailboxSubject!},new AbortController().signal);
     if (intake.status !== 'ready') throw new Error('manual_intake_unavailable');
@@ -227,6 +239,11 @@ export class OwnerCommandCoordinator {
   }
   private async approveReply(command: Extract<OwnerCommand, { kind: 'approve-reply' }>, pairingId: string, at: string, store: DynamoStore) {
     const p = command.payload; const draft = p.draft;
+    if(p.schedulingOffer) {
+      const {offer,expectedRevision}=p.schedulingOffer;
+      if(!offer.meeting||offer.accountId!==command.accountId||offer.threadId!==draft.threadId||offer.mailboxSubject!==draft.mailboxSubject||offer.sendCommandId!==p.intentCommandId||offer.revision!==(expectedRevision??0)+1||offer.expiresAt<=at||offer.slots.some(slot=>slot.end<=slot.start)||draft.body.trim()!==offer.slots.map(offeredSlotText).join('\n')) throw new Error('offer_content_conflict');
+    }
+
     if (draft.accountId !== command.accountId || draft.updatedAt > at || p.expiresAt <= at || p.permission.expiresAt <= at
       || Date.parse(p.expiresAt) - Date.parse(at) > 86400000 || Date.parse(p.permission.expiresAt) - Date.parse(at) > 86400000) throw new Error('approval_not_current');
     const threads = new DynamoThreadIntakeRepository(store.options);

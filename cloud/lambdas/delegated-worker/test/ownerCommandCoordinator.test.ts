@@ -113,6 +113,7 @@ async function configuredManualFixture() {
   const google = new RemoteGoogleAuthorization({ auth: f.auth, config: { clientId: 'fictional.apps.googleusercontent.com', clientSecret: 'fictional', redirectUri: 'https://worker.example.test/oauth/callback', encryptionKey: Buffer.alloc(32, 7) }, fetch: async url => {
     if (String(url) === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'fictional', refresh_token: 'fictional-refresh', token_type: 'Bearer', expires_in: 3600, scope: `openid email ${googleScopes.relevant_read} ${googleScopes.send}` });
     if (String(url) === 'https://openidconnect.googleapis.com/v1/userinfo') return Response.json({ sub: 'mailbox', email: 'sender@example.test', email_verified: true });
+    if(String(url).includes('/history?')) return Response.json({historyId:'3',history:[]});
     throw new Error('Unconfigured network forbidden');
   } });
   const grant = await google.beginGoogleGrant(f.pairing.pairingId, ['relevant_read','send']);
@@ -169,4 +170,25 @@ it('admits workspace research configuration through authenticated HTTP CAS witho
   expect(await store.list('BUDGET#')).toEqual([]);
   await f.auth.revokePairing(f.pairing.pairingId);
   expect((await request(value)).statusCode).toBe(401);
+});
+
+it('normal production factory composes the inactive source without secret loads or providers', async () => {
+  const {createProductionServices,createProductionHandler}=await import('../src/handler');
+  const f=await approvalFixture(); let io=0;
+  const boundaries={dynamo:f.options.dynamo,ssm:{send:async()=>{io++;throw new Error('forbidden secrets');}},fetch:(async()=>{io++;throw new Error('forbidden providers');}) as typeof fetch};
+  const env={DELEGATED_WORKER_ENABLED:'true',DELEGATED_WORKER_TABLE:'fictional',DELEGATED_WORKSPACE_ID:'ws',DELEGATED_WORKER_HOST:'worker.example.test',AWS_REGION:'us-east-1'};
+  const services=await createProductionServices(env,boundaries);
+  expect(await services!.source.tick(new AbortController().signal)).toMatchObject({status:'inactive'});
+  const event={source:'aws.events','detail-type':'Scheduled Event',resources:['arn:aws:events:us-east-1:000000000000:rule/fictional']};
+  expect((await createProductionHandler(env,boundaries)(event)).statusCode).toBe(400);
+  expect(io).toBe(0);
+});
+
+it('authenticates a real C3 checkpoint separately from event catchup and rejects paused owners',async()=>{
+ const f=await configuredManualFixture();
+ const proof=await f.coordinator.checkpoint({workspaceId:'ws',accountId:'account'},`Bearer ${f.pairing.credential}`,new AbortController().signal);
+ expect(proof).toMatchObject({workspaceId:'ws',accountId:'account',generation:1,version:f.getVersion()});
+ expect(proof.validUntil).toBeLessThanOrEqual(Date.parse(f.options.clock.now())+5000);
+ await f.execution.applyCommand({...envelope,commandId:'pause',expectedVersion:f.getVersion(),kind:'pause',payload:{reason:'owner pause'}});
+ await expect(f.coordinator.checkpoint({workspaceId:'ws',accountId:'account'},`Bearer ${f.pairing.credential}`,new AbortController().signal)).rejects.toThrow();
 });
