@@ -348,6 +348,7 @@ export function NativeDesk({
       ref={root}
       onKeyDown={keyboard}
       data-testid="native-desk"
+      data-workflow-mode={snapshot.workflowMode}
     >
       <header className="native-desk__header">
         <div>

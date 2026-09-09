@@ -67,6 +67,7 @@ export function NavigationRail({
         <p className="nav-rail__brand" aria-hidden="true">
           FSS
         </p>
+        <p className="nav-rail__brand-native" aria-hidden="true">Callie</p>
       </div>
       <ul className="nav-rail__list">{primaryItems.map(renderItem)}</ul>
       <div className="nav-rail__spacer" aria-hidden="true" />

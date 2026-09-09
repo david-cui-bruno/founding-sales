@@ -19,7 +19,11 @@ it('actual Today selects stored meeting_first without mounting legacy read or co
       onOpenLead={vi.fn()}
     />,
   );
-  await screen.findByTestId('native-desk');
+  expect(
+    (await screen.findByTestId('native-desk')).getAttribute(
+      'data-workflow-mode',
+    ),
+  ).toBe('meeting_first');
   expect(get).not.toHaveBeenCalled();
   expect(f.calls.map((c) => c.method)).toEqual([
     'daily.get',

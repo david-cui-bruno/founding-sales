@@ -136,3 +136,21 @@ describe('NavigationRail window chrome', () => {
     },
   );
 });
+
+it('opts into Native Desk branding only while a stored meeting-first surface is present', () => {
+  const nativeStyle = document.createElement('style');
+  nativeStyle.textContent = readFileSync('src/renderer/features/today/nativeDesk.css', 'utf8');
+  document.head.append(nativeStyle);
+  try {
+    const { rerender, container } = render(<div className="app-shell"><RailHarness /></div>);
+    const brand = container.querySelector<HTMLElement>('.nav-rail__brand-native')!;
+    expect(getComputedStyle(brand).display).toBe('none');
+    rerender(<div className="app-shell"><RailHarness /><section className="native-desk" data-workflow-mode="meeting_first" /></div>);
+    expect(getComputedStyle(brand).display).toBe('inline');
+    expect(getComputedStyle(container.querySelector('.nav-rail__brand')!).display).toBe('none');
+    expect(brand.textContent).toBe('Callie');
+    rerender(<div className="app-shell"><RailHarness /></div>);
+    expect(getComputedStyle(brand).display).toBe('none');
+    expect(getComputedStyle(container.querySelector('.nav-rail__brand')!).display).not.toBe('none');
+  } finally { nativeStyle.remove(); }
+});

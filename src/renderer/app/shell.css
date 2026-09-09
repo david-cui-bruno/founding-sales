@@ -269,3 +269,6 @@ body[data-platform="darwin"] .nav-rail__header {
 .page-header__trailing + .page-header__action {
   margin-left: 0;
 }
+
+/* Native branding is opt-in from the stored daily workflow below. */
+.nav-rail__brand-native { display: none; }

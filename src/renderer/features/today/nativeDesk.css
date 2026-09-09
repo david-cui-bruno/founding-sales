@@ -275,3 +275,173 @@
     padding: var(--space-3);
   }
 }
+
+/* A Native Desk binding. :has scopes the surrounding shell without changing
+   historical routes, global preferences, or the legacy Today presentation. */
+.app-shell:has(.native-desk[data-workflow-mode='meeting_first']),
+.native-desk[data-workflow-mode='meeting_first'] {
+  --nav-rail-width: 144px;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: var(--font-ui);
+  font-family: var(--font-ui);
+}
+.app-shell:has(.native-desk[data-workflow-mode='meeting_first']) .nav-rail {
+  background: var(--native-rail);
+  color: var(--text);
+}
+.app-shell:has(.native-desk[data-workflow-mode='meeting_first'])
+  .nav-rail__brand {
+  display: none;
+}
+.app-shell:has(.native-desk[data-workflow-mode='meeting_first'])
+  .nav-rail__brand-native {
+  display: inline;
+}
+.app-shell:has(.native-desk[data-workflow-mode='meeting_first'])
+  .nav-rail__brand-native {
+  margin: 0;
+  font-weight: 700;
+  font-family: var(--font-ui);
+  font-size: var(--text-title);
+  letter-spacing: -1px;
+  color: var(--text);
+}
+.app-shell:has(.native-desk[data-workflow-mode='meeting_first'])
+  .nav-rail__item--current {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 3px 0 var(--accent);
+}
+.app-shell:has(.native-desk[data-workflow-mode='meeting_first'])
+  .app-shell__main {
+  padding: 12px 16px;
+}
+.native-desk[data-workflow-mode='meeting_first'] {
+  border-radius: 10px;
+  overflow: hidden;
+}
+.native-desk__header {
+  padding: 14px 24px;
+}
+.native-desk__header > div:first-child {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  column-gap: 15px;
+}
+.native-desk h1 {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: var(--text-title);
+  line-height: 1.25;
+  margin: 0;
+}
+.native-desk__header .native-desk__eyebrow {
+  grid-column: 2;
+  grid-row: 1;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+.native-desk__header p {
+  margin: 4px 0 0;
+  grid-column: 1 / -1;
+}
+.native-desk__header details {
+  margin: 4px 0 0;
+}
+.native-desk__layout {
+  grid-template-columns: minmax(240px, 296px) minmax(0, 1fr);
+  background: var(--native-queue, var(--canvas));
+  height: calc(100dvh - 190px);
+  min-height: 430px;
+}
+.native-desk__queue {
+  border: 0;
+  background: var(--native-queue, var(--canvas));
+}
+.native-desk .native-desk__row {
+  background: transparent;
+  border: 1px solid transparent;
+  border-left: 3px solid transparent;
+  border-radius: 7px;
+}
+.native-desk .native-desk__row[aria-current='true'] {
+  background: var(--surface);
+  border-color: var(--line);
+  border-left-color: var(--accent);
+  box-shadow: var(--native-row-shadow);
+}
+.native-desk__detail {
+  margin: 12px 14px 12px 0;
+  padding: 16px 24px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--native-shadow);
+  scrollbar-width: thin;
+  scroll-padding-bottom: 70px;
+}
+.native-desk__detail-bar {
+  margin-bottom: 8px;
+}
+.native-desk__account {
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+}
+.native-desk__account h2 {
+  font-size: var(--text-title);
+  line-height: 1.25;
+}
+.native-desk__account p {
+  margin: 4px 0;
+}
+.native-desk__account details {
+  margin: 8px 0 0;
+}
+.native-desk button,
+.native-desk :is(input, textarea, select) {
+  border-radius: 6px;
+}
+.native-desk__actions {
+  position: sticky;
+  bottom: -16px;
+  z-index: 1;
+  background: var(--native-action, var(--surface));
+  border-top: 1px solid var(--line);
+  padding: 12px 0;
+  box-shadow: 0 -8px 0 var(--surface);
+}
+.native-desk__footer {
+  padding: 6px 24px;
+}
+.native-desk__footer p,
+.native-desk__footer details {
+  margin: 4px 0;
+}
+@media (max-width: 1100px) {
+  .native-desk__layout {
+    grid-template-columns: 250px minmax(0, 1fr);
+  }
+  .native-desk__detail {
+    padding: 14px 18px;
+  }
+  .native-desk__actions {
+    bottom: -14px;
+  }
+}
+@media (max-width: 620px) {
+  .native-desk__layout {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+  .native-desk__detail {
+    margin: 8px;
+  }
+  .native-desk__header > div:first-child {
+    display: block;
+  }
+  .native-desk__actions {
+    position: static;
+  }
+}
