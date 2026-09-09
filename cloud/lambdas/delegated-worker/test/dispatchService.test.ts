@@ -1,3 +1,4 @@
+import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
 import { describe, expect, it } from 'vitest';
 import { DynamoStore } from '../src/dynamoStore';
 import { ConditionalCommandHarness } from './sdkHarness';
@@ -12,8 +13,10 @@ async function setup() {
   await store.transact([store.put(intakeRegistryKey('acct'), { accountId: 'acct', adapters: [{ id: 'gmail', kind: 'gmail', enabled: true, relevant: true, mailboxSubject: 'mailbox' }], manualDependencies: [] }, null)]);
   return { db, store, barrier: createIntakeBarrier(store) };
 }
-const checkpoint = { version: 1, accountId: 'acct', mailboxSubject: 'mailbox', mode: 'history', historyId: '2', pageToken: null, since: '2026-09-09T00:00:00.000Z' };
-const poll = { attemptId: 'attempt', accountId: 'acct', mailboxSubject: 'mailbox', status: 'complete', startedAt: '2026-09-09T00:03:00.000Z', completedAt: '2026-09-09T00:03:30.000Z' };
+const scope = { version: 1 as const, accountId: 'acct', mailboxSubject: 'mailbox', revision: 1, participantAddresses: ['recipient@example.invalid'], knownThreadIds: ['thread1'], since: '2026-09-09T00:00:00.000Z', approvedAt: now };
+const scopeBinding = { scopeRevision: 1, scopeFingerprint: mailScopeFingerprint(scope) };
+const checkpoint = { ...scopeBinding, version: 1, accountId: 'acct', mailboxSubject: 'mailbox', mode: 'history', historyId: '2', pageToken: null, since: '2026-09-09T00:00:00.000Z' };
+const poll = { ...scopeBinding, attemptId: 'attempt', accountId: 'acct', mailboxSubject: 'mailbox', status: 'complete', startedAt: '2026-09-09T00:03:00.000Z', completedAt: '2026-09-09T00:03:30.000Z' };
 describe('persisted intake barrier', () => {
   it('requires registry and durable completed checkpoint', async () => {
     const { barrier } = await setup();
@@ -21,7 +24,7 @@ describe('persisted intake barrier', () => {
   });
   it('returns revision conditions for both registry and completed poll', async () => {
     const { barrier, store } = await setup();
-    await store.transact([store.put(mailCursorKey('acct', 'mailbox'), { checkpoint, poll }, null)]);
+    await store.transact([store.put(mailCursorKey('acct', 'mailbox'), { scope, checkpoint, poll }, null)]);
     const result = await barrier.check(subject, new AbortController().signal);
     expect(result.status).toBe('ready');
     if (result.status !== 'ready') throw new Error('expected ready');
@@ -30,12 +33,12 @@ describe('persisted intake barrier', () => {
   });
   it.each(['pending', 'failed'])('never reuses a prior checkpoint after %s poll', async status => {
     const { barrier, store } = await setup();
-    await store.transact([store.put(mailCursorKey('acct', 'mailbox'), { checkpoint, poll: { ...poll, status, completedAt: status === 'pending' ? null : poll.completedAt } }, null)]);
+    await store.transact([store.put(mailCursorKey('acct', 'mailbox'), { scope, checkpoint, poll: { ...poll, status, completedAt: status === 'pending' ? null : poll.completedAt } }, null)]);
     expect((await barrier.check(subject, new AbortController().signal)).status).toBe('blocked');
   });
   it.each(['2026-09-08T23:59:00.000Z', '2026-09-09T00:05:00.000Z'])('rejects stale or future intake %s', async completedAt => {
     const { barrier, store } = await setup();
-    await store.transact([store.put(mailCursorKey('acct', 'mailbox'), { checkpoint, poll: { ...poll, startedAt: completedAt, completedAt } }, null)]);
+    await store.transact([store.put(mailCursorKey('acct', 'mailbox'), { scope, checkpoint, poll: { ...poll, startedAt: completedAt, completedAt } }, null)]);
     expect((await barrier.check(subject, new AbortController().signal)).status).toBe('blocked');
   });
   it('holds unknown relevant adapters and unacknowledged manual dependencies', async () => {
@@ -51,7 +54,7 @@ it.each(['human_reported_sent', 'unknown'])('manual dependency requires matching
   const execution = createExecutionRepository(store.options);
   await execution.seedLocalAuthority('acct');
   await execution.applyCommand({ commandId: 'delegate', workspaceId: 'ws', accountId: 'acct', expectedAuthorityGeneration: 0, expectedVersion: 0, kind: 'delegate', payload: { delegationId: 'explicit', approvedAt: now } });
-  await store.transact([store.put(mailCursorKey('acct', 'mailbox'), { checkpoint, poll }, null),
+  await store.transact([store.put(mailCursorKey('acct', 'mailbox'), { scope, checkpoint, poll }, null),
     store.put(intakeRegistryKey('acct'), { accountId: 'acct', adapters: [{ id: 'gmail', kind: 'gmail', enabled: true, relevant: true, mailboxSubject: 'mailbox' }], manualDependencies: [{ commandId: 'manual', actionId: 'linkedin', channel: 'linkedin', outcome }] }, 1)]);
   expect((await barrier.check(subject, new AbortController().signal)).status).toBe('blocked');
   await execution.applyCommand({ commandId: 'manual', workspaceId: 'ws', accountId: 'acct', expectedAuthorityGeneration: 1, expectedVersion: 1, kind: 'manual-outcome', payload: { actionId: 'linkedin', channel: 'linkedin', outcome: outcome as 'human_reported_sent' | 'unknown', observedAt: now, evidenceRef: 'operator-observation' } });

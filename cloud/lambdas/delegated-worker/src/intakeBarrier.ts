@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
+import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
 import { mailCursorEnvelopeSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { commandReceiptSchema, workerEventSchema } from '../../../../src/shared/contracts/delegationContract';
 import { accountIdSchema } from '../../../../src/shared/contracts/accountContract';
@@ -12,7 +13,7 @@ export const intakeRegistrySchema = z.strictObject({ accountId: accountIdSchema,
   adapters: z.array(z.strictObject({ id: accountIdSchema, kind: z.string().min(1), enabled: z.boolean(), relevant: z.boolean(), mailboxSubject: accountIdSchema.nullable() })).max(20),
   manualDependencies: z.array(z.strictObject({ commandId: accountIdSchema, actionId: accountIdSchema, channel: z.enum(['call', 'linkedin']), outcome: z.string().min(1) })).max(20),
 });
-export type IntakeSubject = { accountId: string; mailboxSubject: string };
+export type IntakeSubject = { accountId: string; mailboxSubject: string; requiredRecipient?: string; requiredThreadId?: string };
 export type IntakeResult = { status: 'blocked'; reason: 'intake_unavailable' | 'intake_incomplete' | 'intake_stale' | 'manual_outcome_pending' }
   | { status: 'ready'; checks: TransactWriteItem[]; revisions: { key: string; revision: number }[]; validUntil: number };
 /** Reads the configured relevant adapter set, not just whichever adapter answered.
@@ -38,7 +39,14 @@ export function createIntakeBarrier(store: DynamoStore) {
         const cursor = await store.get<unknown>(cursorKey);
         if (!cursor) return { status: 'blocked', reason: 'intake_incomplete' };
         const envelope = mailCursorEnvelopeSchema.parse(cursor.data);
-        const { checkpoint, poll } = envelope;
+        const { checkpoint, poll, scope } = envelope;
+        if (!scope || scope.accountId !== subject.accountId || scope.mailboxSubject !== adapter.mailboxSubject
+          || scope.approvedAt > store.now() || scope.since > store.now()) return { status: 'blocked', reason: 'intake_incomplete' };
+        const scopeHash = mailScopeFingerprint(scope);
+        if (adapter.mailboxSubject === subject.mailboxSubject && (subject.requiredRecipient && !scope.participantAddresses.includes(subject.requiredRecipient)
+          || subject.requiredThreadId && !scope.knownThreadIds.includes(subject.requiredThreadId))) return { status: 'blocked', reason: 'intake_incomplete' };
+        if (checkpoint?.scopeRevision !== scope.revision || checkpoint?.scopeFingerprint !== scopeHash || checkpoint?.since !== scope.since
+          || poll?.scopeRevision !== scope.revision || poll?.scopeFingerprint !== scopeHash) return { status: 'blocked', reason: 'intake_incomplete' };
         if (!checkpoint || !poll || poll.status !== 'complete' || checkpoint.pageToken !== null || checkpoint.mode !== 'history'
           || checkpoint.accountId !== subject.accountId || checkpoint.mailboxSubject !== adapter.mailboxSubject
           || poll.accountId !== subject.accountId || poll.mailboxSubject !== adapter.mailboxSubject || !poll.completedAt) return { status: 'blocked', reason: 'intake_incomplete' };

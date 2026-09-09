@@ -68,6 +68,7 @@ export class DynamoExecutionRepository implements ExecutionRepository {
   }
   async applyCommand(input: DelegationCommand): Promise<CommandReceipt> {
     const command = delegationCommandSchema.parse(input);
+    if (!['delegate', 'pause', 'revoke', 'manual-outcome'].includes(command.kind)) throw new Error('owner_command_requires_coordinator');
     this.store.workspace(command.workspaceId);
     const key = `COMMAND#${keyPart(command.commandId)}`;
     const fp = fingerprint(command);

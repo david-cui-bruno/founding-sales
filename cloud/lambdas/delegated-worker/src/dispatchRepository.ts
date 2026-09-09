@@ -185,7 +185,7 @@ export class DynamoDispatchRepository {
         || route.version !== binding.routeVersion || route.channel !== 'email' || route.value !== message.to || route.purpose !== 'business' || route.verification === 'unverified') throw new Error('route_not_current');
       checks.push(this.store.check(aKey, accountRow.rev));
     }
-    const intake = await createIntakeBarrier(this.store).check({ accountId: parsed.accountId, mailboxSubject: intent.mailboxSubject }, new AbortController().signal);
+    const intake = await createIntakeBarrier(this.store).check({ accountId: parsed.accountId, mailboxSubject: intent.mailboxSubject, requiredRecipient: message.to, requiredThreadId: message.threadId }, new AbortController().signal);
     if (intake.status !== 'ready') throw new Error(intake.reason);
     checks.push(...intake.checks);
     const policyKey = dispatchCapPolicyKey(message.from); const policyRow = await this.required(policyKey); const policy = capPolicySchema.parse(policyRow.data);

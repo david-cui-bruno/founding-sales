@@ -3,6 +3,7 @@ import { createExecutionRepository } from '../src/executionRepository';
 import { DynamoDispatchRepository } from '../src/dispatchRepository';
 import { RemoteGoogleAuthorization } from '../src/remoteGoogleAuthorization';
 import { WorkerAuth } from '../src/workerAuth';
+import { fingerprint } from '../src/dynamoStore';
 import { createCommandService } from '../src/commandService';
 import { ScriptedDynamo, row, transaction, ConditionalCommandHarness } from './sdkHarness';
 const clock = { now: () => '2026-09-09T00:00:00.000Z' };
@@ -44,12 +45,12 @@ it('rejects stale generation before any write', async () => {
 it('does not advance durable cursor past a missing event', async () => {
   const db = new ScriptedDynamo([row({ sequence: 3 }), {}]);
   const repo = createExecutionRepository({ dynamo: db, tableName: 't', workspaceId: 'ws', clock });
-  expect(await repo.eventsAfter(null)).toEqual({ events: [], nextCursor: null });
+  expect(await repo.eventsAfter(null)).toEqual({ events: [], nextCursor: null, complete: false, headCursor: `${fingerprint('ws')}:3` });
 });
 it('does not advance durable cursor past an unpublished event', async () => {
   const db = new ScriptedDynamo([row({ sequence: 3 }), row({ published: false, sequence: 1, event: {} })]);
   const repo = createExecutionRepository({ dynamo: db, tableName: 't', workspaceId: 'ws', clock });
-  expect(await repo.eventsAfter(null)).toEqual({ events: [], nextCursor: null });
+  expect(await repo.eventsAfter(null)).toEqual({ events: [], nextCursor: null, complete: false, headCursor: `${fingerprint('ws')}:3` });
 });
 it('never resends an existing dispatching action even for identical input', async () => {
   const db = new ScriptedDynamo([row(active, 2), row({ state: 'dispatching' })]);
@@ -259,4 +260,11 @@ it('pause blocks a fresh queue and dispatch without rewriting the stable prepare
   await expect(repo.reserveDispatch({ ...dispatch, expectedVersion: 2 })).rejects.toThrow('authority_not_active');
   expect(db.inspect('ACTION#acct#action')).toMatchObject({ state: 'prepared', input: { approvalId: dispatch.approvalId, expectedAuthorityGeneration: 1 } });
   expect(db.inspect('ACTION#acct#action')).not.toHaveProperty('input.expectedVersion');
+});
+it('owner-only command cannot receive fabricated authority receipt from generic C1 applyCommand', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  await expect(repo.applyCommand({ commandId: '11111111-1111-4111-8111-111111111111', workspaceId: 'ws', accountId: 'acct', expectedAuthorityGeneration: 1, expectedVersion: 1,
+    kind: 'submit-approved-reply', payload: { intentCommandId: '22222222-2222-4222-8222-222222222222' } })).rejects.toThrow('owner_command_requires_coordinator');
+  expect(db.inspect('AUTH#acct')).toMatchObject({ version: 1 });
+  expect((await repo.eventsAfter(null)).events).toHaveLength(1);
 });

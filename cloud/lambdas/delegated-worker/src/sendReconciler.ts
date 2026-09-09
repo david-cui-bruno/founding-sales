@@ -32,8 +32,8 @@ import { fingerprint } from './dynamoStore';
 const providerId = z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/);
 const sentListSchema = z.object({ messages: z.array(z.object({ id: providerId })).max(2).optional(), nextPageToken: z.string().optional() });
 const sentRawSchema = z.object({ id: providerId, threadId: providerId, labelIds: z.array(z.string()).max(100), internalDate: z.string().regex(/^\d+$/),
-  payload: z.object({ mimeType: z.literal('text/plain'), headers: z.array(z.object({ name: z.string().max(100), value: z.string().max(4000) })).max(100),
-    body: z.object({ data: z.string().max(100000), size: z.number().int().nonnegative() }) }) });
+  payload: z.object({ mimeType: z.literal('text/plain'), filename: z.literal('').optional(), parts: z.array(z.never()).max(0).optional(), headers: z.array(z.object({ name: z.string().max(100), value: z.string().max(4000) })).max(100),
+    body: z.object({ data: z.string().max(100000), size: z.number().int().nonnegative(), attachmentId: z.never().optional() }) }) });
 function decodedSubject(value: string): string {
   if (!value.includes('=?')) return value;
   const words = value.trim().split(/\s+/);
@@ -78,6 +78,18 @@ export function createSendReconciler(input: DispatchDependencies) {
         if (values.length > 1) throw new Error('duplicate_header');
         return values[0]?.value ?? '';
       };
+      // This is evidence for our exact single-part sender, not a general MIME parser.
+      // Never drop recipient-routing headers or reinterpret attachments/charsets.
+      const names = raw.payload.headers.map(item => item.name.toLowerCase());
+      const extraRouting = new Set(['bcc', 'sender', 'reply-to', 'apparently-to', 'errors-to', 'mail-followup-to', 'mail-reply-to']);
+      if (names.some(name => extraRouting.has(name) || name.startsWith('resent-'))
+        || header('mime-version').trim() !== '1.0'
+        || !/^text\/plain\s*;\s*charset\s*=\s*(?:utf-8|"utf-8")\s*$/i.test(header('content-type'))
+        || header('content-transfer-encoding').trim().toLowerCase() !== 'base64'
+        || names.includes('content-disposition') && header('content-disposition').trim().toLowerCase() !== 'inline'
+        || names.some(name => name.startsWith('content-') && !['content-type', 'content-transfer-encoding', 'content-disposition'].includes(name))) {
+        return { status: 'unknown', reason: 'sent_mismatch' };
+      }
       const bytes = Buffer.from(raw.payload.body.data, 'base64url');
       if (bytes.toString('base64url') !== raw.payload.body.data.replace(/=+$/, '') || bytes.length !== raw.payload.body.size) return { status: 'unknown', reason: 'sent_mismatch' };
       const outcome = verifySentMatch(intent.frozenMessage, [mailMessageSchema.parse({ id: raw.id, threadId: raw.threadId,

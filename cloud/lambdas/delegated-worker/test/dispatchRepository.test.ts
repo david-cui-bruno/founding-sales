@@ -1,3 +1,4 @@
+import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
 import { describe, expect, it, vi } from 'vitest';
 import { DynamoDispatchRepository, dispatchIntentKey, dispatchApprovalKey, dispatchPermissionKey, dispatchCapPolicyKey, type DispatchIntent } from '../src/dispatchRepository';
 import { DynamoStore, fingerprint } from '../src/dynamoStore';
@@ -5,7 +6,7 @@ import { ConditionalCommandHarness } from './sdkHarness';
 import { WorkerAuth } from '../src/workerAuth';
 import { RemoteGoogleAuthorization } from '../src/remoteGoogleAuthorization';
 import { googleScopes } from '../src/googleGrantCapabilities';
-import { mailThreadKey, mailCursorKey } from '../src/threadIntakeRepository';
+import { DynamoThreadIntakeRepository, mailThreadKey, mailCursorKey } from '../src/threadIntakeRepository';
 import { intakeRegistryKey } from '../src/intakeBarrier';
 import type { AccountReplyDraft, MailMessage } from '../../../../src/shared/contracts/mailThreadContract';
 
@@ -31,14 +32,16 @@ async function fixture() {
   const permission = { id: 'permission', accountId: 'acct', recipient: draft.recipient, sender: draft.sender, threadId: 'thread1', sourceMessageId: 'inbound1', sourceMessageHash: fingerprint(message), basis: 'requested_followup' as const, recordedAt: now, expiresAt: '2026-09-10T00:00:00.000Z' };
   const approval = { id: 'approval', commandId: intent.commandId, intentHash: fingerprint(intent), draft, permissionEvidenceId: permission.id, approvedAt: now, expiresAt: '2026-09-10T00:00:00.000Z' };
   const policy = new DynamoDispatchRepository(options, authorization);
+  const scope = { version: 1 as const, accountId: 'acct', mailboxSubject: 'mailbox', revision: 1, participantAddresses: [draft.recipient], knownThreadIds: ['thread1'], since: '2026-09-09T00:00:00.000Z', approvedAt: now };
+  const scopeBinding = { scopeRevision: scope.revision, scopeFingerprint: mailScopeFingerprint(scope) };
   await store.transact([
     store.put(`MAIL_DRAFT#acct#draft`, draft, null), store.put(mailThreadKey('acct', 'thread1'), { thread: { accountId: 'acct', mailboxSubject: 'mailbox', provider: 'gmail', providerThreadId: 'thread1', messages: [message] }, revision: 1, contextRevision: 'context1', signals: [] }, null),
-    store.put(mailCursorKey('acct', 'mailbox'), { checkpoint: { version: 1, accountId: 'acct', mailboxSubject: 'mailbox', mode: 'history', historyId: '1', pageToken: null, since: '2026-09-09T00:00:00.000Z' }, poll: { attemptId: 'poll', accountId: 'acct', mailboxSubject: 'mailbox', status: 'complete', startedAt: now, completedAt: now } }, null),
+    store.put(mailCursorKey('acct', 'mailbox'), { scope, checkpoint: { ...scopeBinding, version: 1, accountId: 'acct', mailboxSubject: 'mailbox', mode: 'history', historyId: '1', pageToken: null, since: '2026-09-09T00:00:00.000Z' }, poll: { ...scopeBinding, attemptId: 'poll', accountId: 'acct', mailboxSubject: 'mailbox', status: 'complete', startedAt: now, completedAt: now } }, null),
     store.put(intakeRegistryKey('acct'), { accountId: 'acct', adapters: [{ id: 'gmail', kind: 'gmail', enabled: true, relevant: true, mailboxSubject: 'mailbox' }], manualDependencies: [] }, null),
   ]);
   await policy.admitPermission(permission); await policy.admitApproval(approval); await policy.admitIntent(intent);
   await policy.configureCaps({ sender: draft.sender, dailyLimit: 3 }, null);
-  return { dynamo, options, store, authorization, access, policy, intent, approval, permission, draft, message, advance: (value: string) => { now = value; } };
+  return { dynamo, options, store, authorization, access, policy, intent, approval, permission, draft, message, scope, scopeBinding, advance: (value: string) => { now = value; } };
 }
 
 describe('actual persisted dispatch reservation plan', () => {
@@ -186,6 +189,7 @@ it('unknown reconciliation appends acceptance evidence without erasing unknown o
     return Response.json({ id: 'sent1', threadId: email.threadId, internalDate: String(Date.parse(f.options.clock.now())), labelIds: ['SENT'], payload: { mimeType: 'text/plain', headers: [
       { name: 'Message-ID', value: `<${email.commandId}@callie.invalid>` }, { name: 'From', value: email.from }, { name: 'To', value: email.to }, { name: 'Subject', value: `=?UTF-8?B?${Buffer.from(email.subject).toString('base64')}?=` },
       { name: 'In-Reply-To', value: email.inReplyTo }, { name: 'References', value: email.references.join(' ') },
+      { name: 'MIME-Version', value: '1.0' }, { name: 'Content-Type', value: 'text/plain; charset=UTF-8' }, { name: 'Content-Transfer-Encoding', value: 'base64' },
     ], body: { data: body.toString('base64url'), size: body.length } } });
   };
   const restarted = createExecutionRepository({ ...f.options, dispatchPolicy: f.policy });
@@ -285,4 +289,91 @@ it('durable action read rejects mismatched reservation identities', async () => 
   const row = await f.store.get<{ input: unknown; state: string; reservation: unknown }>('ACTION#acct#action');
   await f.store.transact([f.store.put('ACTION#acct#action', { ...row!.data, reservation: { ...reservation, accountId: 'other' } }, row!.rev)]);
   await expect(f.execution.readDispatch('acct', 'action')).rejects.toThrow('reservation_identity_conflict');
+});
+
+function sentRaw(f: Awaited<ReturnType<typeof dispatchFixture>>, extraHeaders: { name: string; value: string }[] = []) {
+  const email = f.intent.frozenMessage; const body = Buffer.from(email.body.replace(/\n/g, '\r\n'));
+  return { id: 'sent1', threadId: email.threadId, internalDate: String(Date.parse(f.options.clock.now())), labelIds: ['SENT'], payload: { mimeType: 'text/plain', headers: [
+    { name: 'Message-ID', value: `<${email.commandId}@callie.invalid>` }, { name: 'From', value: email.from }, { name: 'To', value: email.to }, { name: 'Subject', value: email.subject },
+    { name: 'In-Reply-To', value: email.inReplyTo }, { name: 'References', value: email.references.join(' ') },
+    { name: 'MIME-Version', value: '1.0' }, { name: 'Content-Type', value: 'text/plain; charset=UTF-8' }, { name: 'Content-Transfer-Encoding', value: 'base64' }, ...extraHeaders,
+  ], body: { data: body.toString('base64url'), size: body.length } } };
+}
+it.each(['Bcc', 'Resent-To', 'charset', 'disposition', 'transfer-encoding', 'filename', 'nested-part'])('I2 raw Sent %s evidence stays unknown without append or releasing flight', async variant => {
+  const f = await dispatchFixture(); f.onSend(async () => { throw new Error('timeout'); }); await f.service().dispatch(f.intent.commandId);
+  const raw = sentRaw(f, variant === 'Bcc' || variant === 'Resent-To' ? [{ name: variant, value: 'extra@example.invalid' }] : variant === 'disposition' ? [{ name: 'Content-Disposition', value: 'attachment; filename=reply.txt' }] : []);
+  if (variant === 'charset') raw.payload.headers.find(h => h.name === 'Content-Type')!.value = 'text/plain; charset=ISO-8859-1';
+  if (variant === 'transfer-encoding') raw.payload.headers.find(h => h.name === 'Content-Transfer-Encoding')!.value = 'quoted-printable';
+  const payload = { ...raw.payload, ...(variant === 'filename' ? { filename: 'reply.txt' } : {}), ...(variant === 'nested-part' ? { parts: [{ mimeType: 'text/plain', body: { data: 'ZXh0cmE', size: 5 } }] } : {}) };
+  const lookup: typeof globalThis.fetch = async url => new URL(String(url)).pathname.endsWith('/messages') ? Response.json({ messages: [{ id: 'sent1' }] }) : Response.json({ ...raw, payload });
+  const reconciler = createSendReconciler({ execution: f.execution, policy: f.policy, authorization: f.authorization, fetch: lookup });
+  expect((await reconciler.reconcileSend(f.intent.commandId)).status).toBe('unknown');
+  expect(await f.policy.sendEvidence(f.intent.commandId)).toHaveLength(1);
+  expect(f.dynamo.inspect('DISPATCH_ACCOUNT#acct')).toMatchObject({ state: 'unknown' });
+  expect(f.sends()).toBe(1);
+});
+it('minor replay preserves proven provider not_sent without another send', async () => {
+  const f = await dispatchFixture(); f.onSend(async () => new Response('', { status: 403 }));
+  expect(await f.service().dispatch(f.intent.commandId)).toMatchObject({ status: 'not_sent', reason: 'provider_not_sent' });
+  expect(await f.service().dispatch(f.intent.commandId)).toMatchObject({ status: 'not_sent', reason: 'provider_not_sent' });
+  expect(f.sends()).toBe(1);
+});
+it('I1 preflight must include B opt-out in full persisted A+B account scope before dispatch to A', async () => {
+  const f = await dispatchFixture();
+  const accountScope = { version: 1 as const, accountId: 'acct', mailboxSubject: 'mailbox', revision: 2, participantAddresses: ['other@example.invalid', f.draft.recipient].sort(), knownThreadIds: ['thread1', 'threadB'], since: '2026-09-09T00:00:00.000Z', approvedAt: f.options.clock.now() };
+  await new DynamoThreadIntakeRepository(f.options).admitScope(accountScope, 1);
+  let sends = 0; let fullReads = 0;
+  const raw = { id: 'optoutB', threadId: 'threadB', internalDate: String(Date.parse(f.options.clock.now())), payload: { mimeType: 'text/plain', headers: [
+    { name: 'Message-ID', value: '<optout-b@example.invalid>' }, { name: 'From', value: 'other@example.invalid' }, { name: 'To', value: f.draft.sender }, { name: 'Subject', value: 'Stop' },
+    { name: 'Content-Type', value: 'text/plain; charset=UTF-8' },
+  ], body: { data: Buffer.from('Please unsubscribe me. Do not contact me again.').toString('base64url') } } };
+  const fetch: typeof globalThis.fetch = async url => {
+    const target = new URL(String(url));
+    if (target.pathname.endsWith('/profile')) return Response.json({ historyId: '1' });
+    if (target.pathname.endsWith('/messages')) return Response.json({ messages: [{ id: 'optoutB' }] });
+    if (target.pathname.endsWith('/history')) return Response.json({ historyId: '2', history: [{ messagesAdded: [{ message: { id: 'optoutB' } }] }] });
+    if (target.pathname.endsWith('/messages/optoutB')) { if (target.searchParams.get('format') === 'full') fullReads++; return Response.json(raw); }
+    if (target.pathname.endsWith('/messages/send')) { sends++; return Response.json({ id: 'sent1', threadId: 'thread1' }); }
+    throw new Error('unconfigured external boundary');
+  };
+  const service = createDispatchService({ execution: f.execution, policy: f.policy, authorization: f.authorization, fetch });
+  expect((await service.dispatch(f.intent.commandId)).status).toBe('held');
+  expect(fullReads).toBe(1);
+  expect(f.dynamo.inspect('MAIL_SUPPRESSION#acct')).toBeDefined();
+  expect(sends).toBe(0);
+});
+it.each(['broader', 'narrower', 'missing'])('I1 fresh checkpoint cannot certify %s current account scope', async change => {
+  const f = await dispatchFixture(); const key = mailCursorKey('acct', 'mailbox');
+  const row = await f.store.get<Record<string, unknown>>(key);
+  const scope = change === 'missing' ? null : { ...f.scope, revision: 2, participantAddresses: change === 'broader' ? [f.draft.recipient, 'second@example.invalid'].sort() : ['other@example.invalid'] };
+  await f.store.transact([f.store.put(key, { ...row!.data, scope }, row!.rev)]);
+  await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 1 }, f.access.accessEvidence)).rejects.toThrow();
+  expect(f.dynamo.inspect('DISPATCH_ACCOUNT#acct')).toBeUndefined();
+});
+it('I1 same final cursor condition fences a scope change after policy reads', async () => {
+  const f = await dispatchFixture(); const plan = await f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 1 }, f.access.accessEvidence);
+  const items = plan.finalize();
+  expect(items.filter(item => item.ConditionCheck?.Key?.sk?.S === mailCursorKey('acct', 'mailbox'))).toHaveLength(1);
+  await new DynamoThreadIntakeRepository(f.options).admitScope({ ...f.scope, revision: 2, participantAddresses: [...f.scope.participantAddresses, 'second@example.invalid'].sort() }, 1);
+  await expect(f.store.transact(items)).rejects.toThrow('TransactionCanceledException');
+  expect(f.dynamo.inspect('DISPATCH_CAP#sender%40example.invalid#2026-09-09')).toBeUndefined();
+});
+it('I1 expanded scope requires bounded full rescan before any later send', async () => {
+  const f = await dispatchFixture();
+  await new DynamoThreadIntakeRepository(f.options).admitScope({ ...f.scope, revision: 2, participantAddresses: [...f.scope.participantAddresses, 'second@example.invalid'].sort() }, 1);
+  const requests: string[] = []; let sends = 0;
+  const fetch: typeof globalThis.fetch = async url => {
+    const target = new URL(String(url)); requests.push(target.href);
+    if (target.pathname.endsWith('/profile')) return Response.json({ historyId: '10' });
+    if (target.pathname.endsWith('/messages')) { expect(target.searchParams.get('q')).toContain('from:second@example.invalid'); return Response.json({ messages: [] }); }
+    if (target.pathname.endsWith('/history')) return Response.json({ historyId: '11', history: [] });
+    if (target.pathname.endsWith('/messages/send')) { sends++; return Response.json({ id: 'sent1', threadId: 'thread1' }); }
+    throw new Error('unconfigured boundary');
+  };
+  const service = createDispatchService({ execution: f.execution, policy: f.policy, authorization: f.authorization, fetch });
+  expect((await service.dispatch(f.intent.commandId)).status).toBe('held');
+  expect(sends).toBe(0);
+  expect((await service.dispatch(f.intent.commandId)).status).toBe('provider_accepted');
+  expect(requests.findIndex(url => url.includes('/profile'))).toBeLessThan(requests.findIndex(url => url.includes('/history')));
+  expect(sends).toBe(1);
 });

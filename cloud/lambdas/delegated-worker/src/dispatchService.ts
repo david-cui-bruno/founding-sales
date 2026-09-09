@@ -31,15 +31,24 @@ export function createDispatchService(input: DispatchDependencies) {
       const prior = await input.execution.readDispatch(intent.action.accountId, intent.action.actionId);
       if (!prior) return { status: 'held', reason: 'action_not_prepared' };
       if (prior.state === 'provider_accepted') return { status: 'provider_accepted', reason: 'already_accepted' };
+      if (prior.state === 'cancelled') {
+        const evidence = await input.policy.sendEvidence(commandId);
+        const notSent = evidence.some(item => item.state === 'cancelled' && item.kind === 'provider_result' && item.reason === 'provider_not_sent'
+          && fingerprint(item.reservation) === fingerprint(prior.reservation));
+        return notSent ? { status: 'not_sent', reason: 'provider_not_sent' } : { status: 'held', reason: 'action_cancelled' };
+      }
       if (prior.reservation || ['dispatching', 'unknown', 'human_reported_sent'].includes(prior.state)) return { status: 'unknown', reason: 'already_reserved' };
       if (!['prepared', 'queued'].includes(prior.state)) return { status: 'held', reason: 'action_not_eligible' };
       if (intent.kind === 'campaign_step') return { status: 'held', reason: 'campaign_binding_unavailable' };
       const thread = await threads.getThread(intent.action.accountId, intent.frozenMessage.threadId);
       if (!thread) return { status: 'held', reason: 'thread_not_current' };
-      const checkpoint = await threads.checkpoint(intent.action.accountId, intent.mailboxSubject);
-      const since = checkpoint?.since ?? thread.thread.messages.map(message => message.date).sort()[0]!;
-      const poll = await poller.pollOnce({ accountId: intent.action.accountId, pairingId: intent.pairingId, mailboxSubject: intent.mailboxSubject,
-        knownThreadIds: [intent.frozenMessage.threadId], participantAddresses: [intent.frozenMessage.to], since }, signal);
+      const scope = await threads.scope(intent.action.accountId, intent.mailboxSubject);
+      if (!scope || !scope.participantAddresses.includes(intent.frozenMessage.to) || !scope.knownThreadIds.includes(intent.frozenMessage.threadId)) {
+        return { status: 'held', reason: 'intake_scope_missing' };
+      }
+      // Only identity crosses this boundary. C3 loads the complete authorized
+      // account scope; the current recipient never narrows the account cursor.
+      const poll = await poller.pollOnce({ accountId: intent.action.accountId, pairingId: intent.pairingId, mailboxSubject: intent.mailboxSubject }, signal);
       if (!poll.complete || poll.suppressed) return { status: 'held', reason: 'intake_incomplete' };
       const access = await input.authorization.authorizedAccess(intent.pairingId, ['send', 'relevant_read'], signal);
       if (access.grant.subject !== intent.mailboxSubject || access.grant.email !== intent.frozenMessage.from || access.grant.owner !== 'remote') return { status: 'held', reason: 'sender_identity_conflict' };
