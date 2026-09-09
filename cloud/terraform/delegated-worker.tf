@@ -29,7 +29,7 @@ locals {
   ] : [])
   delegated_routes = toset([
     "POST /pairing/redeem", "POST /pairing/revoke", "POST /commands", "POST /commands/reconcile", "POST /emergency",
-    "POST /readiness", "POST /research/configure", "POST /policies/configure",
+    "POST /readiness", "POST /research/configure", "POST /policies/configure", "POST /requested-followup/context",
     "GET /events", "POST /google/begin", "GET /google/status", "GET /google/disclosure",
     "POST /google/revoke", "GET /oauth/callback"
   ])
