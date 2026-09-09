@@ -16,6 +16,10 @@ export function seedLocalWorkspaceAcceptance(database: AppDatabase) {
   });
   const retained = seedDiscoveryOwner({ services, database }, { prefix: 'Retained callback', units: 12 });
   const automatic = seedDiscoveryOwner({ services, database }, { prefix: 'Old acquisition', units: 5 });
+  // A real operational call follows review. Unreviewed contacts are deliberately
+  // backlog-only in the existing Today scheduler, even when they have activity.
+  services.lifecycle.reviewToReady({ cycleId: retained.salesCycleId, expectedCycleVersion: 1,
+    expectedProspectVersion: 1, effectiveAt: DISCOVERY_NOW });
   const domain = new FounderSalesDomain({ services, database, clock, ids, timezone: 'America/New_York' });
   const callbackAt = '2026-09-06T13:00:00.000Z';
   domain.logCallOutcome({ personId: retained.personId, salesCycleId: retained.salesCycleId,

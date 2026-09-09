@@ -6,6 +6,7 @@ import { useDensity } from '../../src/renderer/app/useDensity';
 import type { AppRoute } from '../../src/renderer/app/routes';
 import { NativeDeskRoute } from '../../src/renderer/features/today/NativeDeskRoute';
 import { nativeDeskFixture, nativeDeskReviewFixture } from '../../src/renderer/features/today/nativeDesk.fixture';
+import { WorkflowSection } from '../../src/renderer/foundation/WorkflowSection';
 import '../../src/renderer/app.css';
 
 const fixture = nativeDeskFixture(nativeDeskReviewFixture());
@@ -28,7 +29,9 @@ function Harness() {
     },
   };
   return <AppShell route={route} onNavigate={setRoute} reviewCount={0}>
-    <div data-rerender={tick}><NativeDeskRoute key={route} api={fixture.api} onOpenLead={id => opened.push(id)} surface={surface} legacy={<h1>Legacy Today fixture</h1>}/></div>
+    <div data-rerender={tick}>{route === 'settings'
+      ? <><h1>Settings</h1><WorkflowSection api={fixture.api.localWorkspace}/></>
+      : <NativeDeskRoute key={route} api={fixture.api} onOpenLead={id => opened.push(id)} surface={surface} legacy={<h1>Legacy Today fixture</h1>}/>}</div>
   </AppShell>;
 }
 export type NativeDeskBrowser = {

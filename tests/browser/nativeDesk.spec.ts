@@ -46,7 +46,7 @@ async function assertClean(page: Page, state: {errors: string[]; requests: strin
 }
 test('real Native Desk themes, geometry, selection and unchanged editor DOM', async ({page}, testInfo) => {
   const state = await mount(page);
-  expect((await methods(page)).every(method => ['daily.get','delegation.status'].includes(method))).toBe(true);
+  expect((await methods(page)).every(method => ['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments'].includes(method))).toBe(true);
   const email = page.getByRole('button', { name: 'Email · Account A', exact: true });
   await email.focus();
   await page.keyboard.press('ArrowDown');
@@ -273,7 +273,7 @@ test('accounts, frozen campaigns, real meeting status and held refresh preserve 
   await page.evaluate(()=>window.nativeDeskBrowser.navigate('campaigns'));
   await page.locator('[data-row-key="campaign:version"]').click();
   await expect(page.getByText(/Lifetime channel caps/).first()).toBeVisible();
-  expect((await methods(page)).every(method=>['daily.get','delegation.status'].includes(method))).toBe(true);
+  expect((await methods(page)).every(method=>['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments'].includes(method))).toBe(true);
   await page.evaluate(()=>window.nativeDeskBrowser.navigate('today'));
   await page.getByRole('button',{name:'Email · Account A',exact:true}).click();
   const body = page.getByRole('textbox',{name:'Email body'});
@@ -306,7 +306,7 @@ test('two saved replies in one thread keep exact independent row identities', as
   await page.evaluate(()=>{const f=window.nativeDeskBrowser.fixture;const s=f.snapshot();s.answers.reverse();f.setSnapshot(s);window.nativeDeskBrowser.refresh();});
   await expect(page.getByText('Second exact saved reply',{exact:true})).toBeVisible();
   await expect(page.locator('.native-desk__row[aria-current="true"]')).toHaveCount(1);
-  expect((await methods(page)).every(method=>['daily.get','delegation.status'].includes(method))).toBe(true);
+  expect((await methods(page)).every(method=>['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments'].includes(method))).toBe(true);
   await assertClean(page,state);
 });
 
@@ -566,3 +566,102 @@ for (const initial of ['pending','unknown'] as const) {
     });
   }
 }
+
+async function localOnly(page: Page, mode: 'legacy' | 'meeting_first' = 'meeting_first') {
+  await page.evaluate(mode => {
+    const f = window.nativeDeskBrowser.fixture, daily = f.snapshot();
+    const account = structuredClone(daily.accounts[0]);
+    account.account = { ...account.account, id: 'local-account', name: 'Local Residential PM' };
+    account.routes = [];
+    f.setLocalSnapshot({scope: 'local_database', generatedAt: daily.freshness.generatedAt,
+      workflowMode: mode, transitionReceipt: null, accounts: {state: 'available', snapshots: [account]}});
+    f.setCommitments({scope: 'local_database', generatedAt: daily.freshness.generatedAt, revision: 1, reviewErrorCount: 0,
+      items: [{kind: 'callback', item: {id: 'retained-cycle', salesCycleId: 'retained-cycle', personId: 'retained-person',
+        personName: 'Retained callback contact', stage: 'contacted', lane: 'due_cadence', contextLabel: 'Existing relationship',
+        priorityContext: null, action: {id: 'retained-action', type: 'follow_up', channel: 'call', label: 'Call back', dueAt: '2026-09-09T11:00:00.000Z'},
+        reason: 'callback_promised_today', activeTriggers: [], verifyFirst: false, pinned: false, consentRequirement: null, cloudScores: null}}]});
+    f.setSnapshot({...daily, workspaceId: null, workflowMode: mode, accounts: [], calls: {accountIds: [], workloadConflict: false},
+      answers: [], meetings: [], campaigns: [], ownerStatus: [], transport: [], issues: [{code: 'scope_unknown', count: 1}]});
+    f.setConfiguration({state: 'unconfigured', workspaceId: null, endpoint: null, configuration: null});
+    window.nativeDeskBrowser.refresh();
+  }, mode);
+}
+
+test('unpaired local records remain selectable without worker authority or automatic contact commands', async ({page}, testInfo) => {
+  const state = await mount(page);
+  await localOnly(page);
+  const row = page.getByRole('button', {name: /Retained callback contact/});
+  await row.focus(); await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', {name: 'Open contact workspace', exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.nativeDeskBrowser.opened)).toEqual([]);
+  for (const width of [1440, 1050]) {
+    await page.setViewportSize({width, height: width === 1440 ? 900 : 700});
+    const positions = await page.locator('.native-desk__lane h2').evaluateAll(headings => headings.map(el => el.getBoundingClientRect().bottom));
+    expect(positions).toHaveLength(3);
+    for (const y of positions) expect(y).toBeLessThan(width === 1440 ? 900 : 700);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await page.screenshot({path: testInfo.outputPath(`local-commitments-${width}.png`), animations: 'disabled'});
+  }
+  await page.getByRole('button', {name: 'Open contact workspace', exact: true}).click();
+  expect(await page.evaluate(() => window.nativeDeskBrowser.opened)).toEqual(['retained-person']);
+  await page.evaluate(() => window.nativeDeskBrowser.navigate('accounts'));
+  await expect(page.getByText('Local account library', {exact: true})).toBeVisible();
+  await page.getByRole('button', {name: /Local Residential PM/}).click();
+  await expect(page.getByRole('heading', {name: 'Local Residential PM', exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.nativeDeskBrowser.fixture.snapshot().accounts)).toEqual([]);
+  expect((await methods(page)).filter(method => !['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments'].includes(method))).toEqual([]);
+  const audit = await new AxeBuilder({page}).analyze();
+  expect(audit.violations.filter(issue => issue.impact === 'critical' || issue.impact === 'serious')).toEqual([]);
+  await assertClean(page, state);
+});
+
+test('lost local transition response recovers the committed receipt without a second transition on reopen', async ({page}) => {
+  const state = await mount(page);
+  await localOnly(page, 'legacy');
+  await page.evaluate(() => {
+    const f = window.nativeDeskBrowser.fixture, apply = f.api.localWorkspace.transition;
+    Object.assign(f.api.localWorkspace, {transition: async (input: Parameters<typeof apply>[0]) => {await apply(input); throw Error('Fixture response lost after commit');}});
+    window.nativeDeskBrowser.navigate('settings');
+  });
+  await expect(page.getByRole('button', {name: 'Switch to Native Desk', exact: true})).toBeDisabled();
+  await page.getByRole('checkbox', {name: /one-way local change/i}).check();
+  await page.getByRole('button', {name: 'Switch to Native Desk', exact: true}).click();
+  await expect(page.getByText(/Transition result is unknown/)).toBeVisible();
+  await page.getByRole('button', {name: 'Check status', exact: true}).click();
+  await expect(page.getByText('Native Desk is active.', {exact: true})).toBeVisible();
+  const receipt = await page.evaluate(async () => (await window.nativeDeskBrowser.fixture.api.localWorkspace.get()).transitionReceipt);
+  expect(receipt).not.toBeNull();
+  await page.evaluate(() => window.nativeDeskBrowser.navigate('today'));
+  await expect(page.getByRole('button', {name: /Retained callback contact/})).toBeVisible();
+  await page.evaluate(() => window.nativeDeskBrowser.navigate('settings'));
+  await expect(page.getByText('Native Desk is active.', {exact: true})).toBeVisible();
+  expect((await methods(page)).filter(method => method === 'localWorkspace.transition')).toHaveLength(1);
+  expect(await page.evaluate(async () => (await window.nativeDeskBrowser.fixture.api.localWorkspace.get()).transitionReceipt)).toEqual(receipt);
+  await assertClean(page, state);
+});
+
+test('uncommitted local transition retries the exact identity only after an explicit founder action', async ({page}) => {
+  const state = await mount(page);
+  await localOnly(page, 'legacy');
+  await page.evaluate(() => {
+    const f = window.nativeDeskBrowser.fixture, apply = f.api.localWorkspace.transition;
+    let first = true;
+    Object.assign(f.api.localWorkspace, {transition: async (input: Parameters<typeof apply>[0]) => {
+      if (first) {first = false; f.calls.push({method: 'localWorkspace.transition', input: structuredClone(input)}); throw Error('Fixture request did not commit');}
+      return apply(input);
+    }});
+    window.nativeDeskBrowser.navigate('settings');
+  });
+  await page.getByRole('checkbox', {name: /one-way local change/i}).check();
+  await page.getByRole('button', {name: 'Switch to Native Desk', exact: true}).click();
+  await expect(page.getByText(/Transition result is unknown/)).toBeVisible();
+  await page.getByRole('button', {name: 'Check status', exact: true}).click();
+  const retry = page.getByRole('button', {name: 'Retry same transition', exact: true});
+  await expect(retry).toBeEnabled();
+  expect((await methods(page)).filter(method => method === 'localWorkspace.transition')).toHaveLength(1);
+  await retry.click();
+  await expect(page.getByText('Native Desk is active.', {exact: true})).toBeVisible();
+  const commands = await page.evaluate(() => window.nativeDeskBrowser.fixture.calls.filter(call => call.method === 'localWorkspace.transition').map(call => call.input));
+  expect(commands).toHaveLength(2); expect(commands[1]).toEqual(commands[0]);
+  await assertClean(page, state);
+});
