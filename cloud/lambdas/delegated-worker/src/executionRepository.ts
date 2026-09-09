@@ -187,7 +187,7 @@ export class DynamoExecutionRepository implements ExecutionRepository {
     if (action.data.outcomeFingerprint === fp) { if (action.data.sequence) await this.store.publish(action.data.sequence); return; }
     if (!['dispatching', 'unknown'].includes(action.data.state)) throw new Error('outcome_conflict');
     if (evidence && !this.options.dispatchPolicy) throw new Error('dispatch_policy_missing');
-    const evidenceItems = evidence ? await this.options.dispatchPolicy!.outcomeItems(parsed, evidence) : [];
+    const outcomePlan = evidence ? await this.options.dispatchPolicy!.outcomePlan(parsed, evidence) : { items: [] };
     const authority = await this.authority(reservation.accountId);
     const next = { ...authority.data, version: authority.data.version + 1 };
     // The event generation belongs to the ORIGINAL reservation, even after revoke.
@@ -195,11 +195,11 @@ export class DynamoExecutionRepository implements ExecutionRepository {
     const event: WorkerEvent = workerEventSchema.parse({ id: `outcome-${fp}`, workspaceId: reservation.workspaceId, accountId: reservation.accountId,
       authorityGeneration: reservation.authorityGeneration, aggregateVersion: next.version, kind: 'action.outcome', payload: {
         actionId: reservation.actionId, contentHash: reservation.contentHash, targetHash: reservation.targetHash,
-        state: parsed.state, observedAt: parsed.observedAt, evidenceRef: parsed.evidenceRef } });
+        state: parsed.state, observedAt: parsed.observedAt, evidenceRef: parsed.evidenceRef }, ...(outcomePlan.campaign ? { campaign: outcomePlan.campaign } : {}) });
     const outbox = await this.store.eventItems(event);
     await this.store.transact([this.store.put(authKey(reservation.accountId), next, authority.rev, authFields(next), authFields(authority.data)),
       this.store.put(key, { ...action.data, state: parsed.state, outcomeFingerprint: fp, sequence: outbox.sequence }, action.rev,
-        { state: parsed.state }, { state: action.data.state }), ...evidenceItems, ...outbox.items]);
+        { state: parsed.state }, { state: action.data.state }), ...outcomePlan.items, ...outbox.items]);
     await this.store.publish(outbox.sequence);
   }
   eventsAfter(cursor: string | null) { return this.store.eventsAfter(cursor); }

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { CampaignExecution } from './campaignExecution';
+import type { CampaignEventPayload } from '../../../../src/shared/contracts/campaignContract';
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { accountIdSchema as id, accountInstantSchema as instant, accountSchema, accountRouteSchema } from '../../../../src/shared/contracts/accountContract';
 import { reserveDispatchInputSchema, reservationSchema, type AppendOutcomeInput, type ReserveDispatchInput } from '../../../../src/shared/contracts/delegationContract';
@@ -56,7 +58,11 @@ export type DispatchReservationPlan = { finalize(): TransactWriteItem[] };
  * Admission methods are trusted operator composition only, never public payload handlers. */
 export class DynamoDispatchRepository {
   readonly store: DynamoStore;
-  constructor(options: RepositoryOptions, private readonly authorization: RemoteGoogleAuthorization) { this.store = new DynamoStore(options); }
+  constructor(options: RepositoryOptions, private readonly authorization: RemoteGoogleAuthorization, private readonly campaignExecution?: CampaignExecution) {
+    this.store = new DynamoStore(options);
+    const other = campaignExecution?.repository.store.options;
+    if (other && (other.dynamo !== options.dynamo || other.tableName !== options.tableName || other.workspaceId !== options.workspaceId)) throw new Error('campaign_store_mismatch');
+  }
   private async required(key: string) {
     const row = await this.store.get<unknown>(key);
     if (!row) throw new Error('dispatch_evidence_missing');
@@ -112,7 +118,7 @@ export class DynamoDispatchRepository {
       || intent.action.targetHash !== fingerprint({ sender: intent.frozenMessage.from, recipient: intent.frozenMessage.to, threadId: intent.frozenMessage.threadId })) throw new Error('dispatch_identity_conflict');
     return intent;
   }
-  async outcomeItems(outcome: AppendOutcomeInput, raw: SendEvidence): Promise<TransactWriteItem[]> {
+  async outcomePlan(outcome: AppendOutcomeInput, raw: SendEvidence): Promise<{ items: TransactWriteItem[]; campaign?: CampaignEventPayload }> {
     const evidence = sendEvidenceSchema.parse(raw); const intent = await this.loadIntent(evidence.commandId);
     if (!intent || fingerprint(evidence.reservation) !== fingerprint(outcome.reservation) || evidence.state !== outcome.state
       || evidence.observedAt !== outcome.observedAt || evidence.rfcMessageId !== `<${intent.commandId}@callie.invalid>`
@@ -124,8 +130,15 @@ export class DynamoDispatchRepository {
     const flight = flightSchema.parse(flightRow.data);
     if (flight.commandId !== intent.commandId || flight.accountId !== intent.action.accountId || flight.actionId !== intent.action.actionId
       || !['dispatching', 'unknown'].includes(flight.state)) throw new Error('account_dispatch_conflict');
-    return [this.store.put(`DISPATCH_EVIDENCE#${keyPart(intent.commandId)}#${fingerprint(evidence)}`, evidence, null),
+    const items = [this.store.put(`DISPATCH_EVIDENCE#${keyPart(intent.commandId)}#${fingerprint(evidence)}`, evidence, null),
       this.store.put(flightKey, { ...flight, state: evidence.state }, flightRow.rev)];
+    if (intent.kind !== 'campaign_step') return { items };
+    if (!this.campaignExecution) throw new Error('campaign_binding_unavailable');
+    const hash = fingerprint(evidence);
+    const commandId = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+    const campaign = await this.campaignExecution.repository.prepareOutcomePlan({ commandId, accountId: intent.action.accountId,
+      actionId: intent.action.actionId, state: evidence.state, observedAt: evidence.observedAt });
+    return { items: mergeDispatchConditions([...items, ...campaign.items]), campaign: campaign.payload };
   }
   async sendEvidence(commandId: string): Promise<SendEvidence[]> {
     return (await this.store.list<unknown>(`DISPATCH_EVIDENCE#${keyPart(commandId)}#`)).map(row => {
@@ -142,7 +155,7 @@ export class DynamoDispatchRepository {
     const identity = { actionId: parsed.actionId, workspaceId: parsed.workspaceId, accountId: parsed.accountId,
       expectedAuthorityGeneration: parsed.expectedAuthorityGeneration, approvalId: parsed.approvalId, contentHash: parsed.contentHash, targetHash: parsed.targetHash };
     if (intent.commandId !== commandId || fingerprint(identity) !== fingerprint(intent.action)) throw new Error('dispatch_identity_conflict');
-    if (intent.kind === 'campaign_step') throw new Error('campaign_binding_unavailable');
+    if (intent.kind === 'campaign_step' && (!this.campaignExecution || intent.binding.kind !== 'account_route')) throw new Error('campaign_binding_unavailable');
     const approvalKey = dispatchApprovalKey(parsed.approvalId); const approvalRow = await this.required(approvalKey);
     const approval = dispatchApprovalSchema.parse(approvalRow.data);
     const dKey = draftKey(parsed.accountId, intent.draftId); const draftRow = await this.required(dKey); const draft = accountReplyDraftSchema.parse(draftRow.data);
@@ -185,6 +198,10 @@ export class DynamoDispatchRepository {
         || route.version !== binding.routeVersion || route.channel !== 'email' || route.value !== message.to || route.purpose !== 'business' || route.verification === 'unverified') throw new Error('route_not_current');
       checks.push(this.store.check(aKey, accountRow.rev));
     }
+    const campaign = intent.kind === 'campaign_step' && intent.binding.kind === 'account_route'
+      ? await this.campaignExecution!.prepareDispatchChecks({ ...intent.campaign, workspaceId: parsed.workspaceId, accountId: parsed.accountId,
+        actionId: parsed.actionId, channel: 'email', authorityGeneration: parsed.expectedAuthorityGeneration, selectedRouteId: intent.binding.routeId,
+        contextRevision: draft.contextRevision, contentHash: parsed.contentHash, targetHash: parsed.targetHash }) : null;
     const intake = await createIntakeBarrier(this.store).check({ accountId: parsed.accountId, mailboxSubject: intent.mailboxSubject, requiredRecipient: message.to, requiredThreadId: message.threadId }, new AbortController().signal);
     if (intake.status !== 'ready') throw new Error(intake.reason);
     checks.push(...intake.checks);
@@ -199,9 +216,25 @@ export class DynamoDispatchRepository {
       const now = Date.parse(this.store.now());
       if (now < start || now >= end || this.store.now().slice(0, 10) !== day) throw new Error('dispatch_evidence_expired');
       if (!evidence) throw new Error('google_access_evidence_missing');
-      return [...checks, ...this.authorization.accessChecks(evidence, { pairingId: intent.pairingId, subject: intent.mailboxSubject, requiredCapabilities: ['send', 'relevant_read'] })];
+      return mergeDispatchConditions([...checks, ...(campaign?.finalize() ?? []), ...this.authorization.accessChecks(evidence, { pairingId: intent.pairingId, subject: intent.mailboxSubject, requiredCapabilities: ['send', 'relevant_read'] })]);
     };
     finalize();
     return { finalize };
   }
+}
+
+/** Dynamo forbids repeated targets. Only byte-equivalent read fences may coalesce. */
+function mergeDispatchConditions(items: TransactWriteItem[]): TransactWriteItem[] {
+  const targets = new Map<string, TransactWriteItem>();
+  for (const item of items) {
+    const operation = item.ConditionCheck ?? item.Put ?? item.Update ?? item.Delete;
+    if (!operation) throw new Error('dispatch_condition_conflict');
+    const key = item.Put ? { pk: item.Put.Item?.pk, sk: item.Put.Item?.sk } : (item.ConditionCheck ?? item.Update ?? item.Delete)!.Key;
+    const identity = fingerprint({ table: operation.TableName, key });
+    const previous = targets.get(identity);
+    if (previous) {
+      if (!previous.ConditionCheck || !item.ConditionCheck || fingerprint(previous) !== fingerprint(item)) throw new Error('dispatch_condition_conflict');
+    } else targets.set(identity, item);
+  }
+  return [...targets.values()];
 }

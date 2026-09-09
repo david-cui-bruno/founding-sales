@@ -39,7 +39,6 @@ export function createDispatchService(input: DispatchDependencies) {
       }
       if (prior.reservation || ['dispatching', 'unknown', 'human_reported_sent'].includes(prior.state)) return { status: 'unknown', reason: 'already_reserved' };
       if (!['prepared', 'queued'].includes(prior.state)) return { status: 'held', reason: 'action_not_eligible' };
-      if (intent.kind === 'campaign_step') return { status: 'held', reason: 'campaign_binding_unavailable' };
       const thread = await threads.getThread(intent.action.accountId, intent.frozenMessage.threadId);
       if (!thread) return { status: 'held', reason: 'thread_not_current' };
       const scope = await threads.scope(intent.action.accountId, intent.mailboxSubject);

@@ -177,10 +177,11 @@ it('timeout and absent Sent result retain reservation, caps and original unknown
   expect(f.dynamo.inspect('DISPATCH_CAP#sender%40example.invalid#2026-09-09')).toMatchObject({ used: 1 });
 });
 
-it('unknown reconciliation appends acceptance evidence without erasing unknown or resending', async () => {
-  const f = await dispatchFixture(); f.onSend(async () => { throw new Error('timeout'); });
+it.each(['standalone', 'campaign'])('%s unknown reconciliation appends acceptance evidence without erasing unknown or resending', async kind => {
+  const f = kind === 'campaign' ? await campaignFixture() : await dispatchFixture(); f.onSend(async () => { throw new Error('timeout'); });
   await f.service().dispatch(f.intent.commandId);
   const original = await f.policy.sendEvidence(f.intent.commandId);
+  if (kind === 'campaign') expect(f.dynamo.inspect(campaignCapKey('campaign-version', 'email'))).toEqual({ reserved: 1, sent: 0 });
   const email = f.intent.frozenMessage;
   const lookup: typeof globalThis.fetch = async url => {
     const path = new URL(String(url)).pathname;
@@ -198,6 +199,10 @@ it('unknown reconciliation appends acceptance evidence without erasing unknown o
   const records = await f.policy.sendEvidence(f.intent.commandId);
   expect(records).toHaveLength(2);
   expect(records).toContainEqual(original[0]);
+  if (kind === 'campaign') {
+    expect(f.dynamo.inspect(campaignCapKey('campaign-version', 'email'))).toEqual({ reserved: 0, sent: 1 });
+    expect(await f.store.list('CAMPAIGN_EVIDENCE#enrollment#')).toHaveLength(2);
+  }
   await reconciler.reconcileSend(f.intent.commandId); await f.service().dispatch(f.intent.commandId);
   expect(await f.policy.sendEvidence(f.intent.commandId)).toHaveLength(2);
   expect(f.sends()).toBe(1);
@@ -376,4 +381,93 @@ it('I1 expanded scope requires bounded full rescan before any later send', async
   expect((await service.dispatch(f.intent.commandId)).status).toBe('provider_accepted');
   expect(requests.findIndex(url => url.includes('/profile'))).toBeLessThan(requests.findIndex(url => url.includes('/history')));
   expect(sends).toBe(1);
+});
+
+import { CampaignExecution } from '../src/campaignExecution';
+import { WorkerCampaignRepository, campaignCapKey, campaignEnrollmentKey } from '../src/workerCampaignRepository';
+import type { CampaignCommandPayload, CampaignVersion } from '../../../../src/shared/contracts/campaignContract';
+async function campaignFixture() {
+  const f = await dispatchFixture(); const campaigns = new WorkerCampaignRepository(f.options); const campaignExecution = new CampaignExecution(campaigns);
+  const policy = new DynamoDispatchRepository(f.options, f.authorization, campaignExecution);
+  const execution = createExecutionRepository({ ...f.options, dispatchPolicy: policy });
+  const account = { id: 'acct', name: 'Fictional PM', domain: null, version: 1 };
+  const route = { id: 'route', accountId: 'acct', personId: null, channel: 'email', value: f.draft.recipient, purpose: 'business', evidenceIds: ['actual-source'], verification: 'confirmed', version: 1 };
+  await f.store.transact([f.store.put('ACCOUNT#acct', { account, routes: [route], sources: [], claims: [], researchRevision: 1, history: [] }, null)]);
+  let sequence = 100;
+  const apply = async (payload: CampaignCommandPayload) => {
+    const commandId = `00000000-0000-4000-8000-${String(sequence++).padStart(12, '0')}`;
+    const plan = await campaigns.planCommand({ commandId, accountId: 'acct', payload });
+    await f.store.transact(plan.items);
+  };
+  const version: CampaignVersion = { id: 'campaign-version', campaignId: 'campaign', version: 1, audienceHash: 'a'.repeat(64), offer: 'Requested information', objective: 'meeting', cohortAccountIds: ['acct'], approvedAt: null,
+    steps: [{ id: 'email-step', channel: 'email', condition: 'initial', delayHours: 0 }], capScope: 'campaign_version_lifetime', channelCaps: { call: 0, email: 1, linkedin: 0 }, contentPolicyHash: 'b'.repeat(64) };
+  await apply({ kind: 'campaign.version', version });
+  await apply({ kind: 'campaign.approve', campaignVersionId: version.id, snapshotHash: fingerprint(version), approvedAt: f.options.clock.now() });
+  await apply({ kind: 'campaign.enroll', enrollmentId: 'enrollment', campaignVersionId: version.id, selectedRouteId: 'route', executionContextId: f.draft.contextRevision, contextRevision: 1 });
+  const commandId = '33333333-3333-4333-8333-333333333333'; const frozenMessage = { ...f.intent.frozenMessage, commandId };
+  const intent: DispatchIntent = { ...f.intent, commandId, frozenMessage, kind: 'campaign_step', campaign: { campaignId: 'campaign', campaignRevision: 1, enrollmentId: 'enrollment', enrollmentRevision: 1, stepId: 'email-step' },
+    action: { ...f.intent.action, actionId: 'campaign-action', approvalId: 'campaign-email-approval', contentHash: fingerprint(frozenMessage) }, binding: { kind: 'account_route', routeId: 'route', routeVersion: 1, accountVersion: 1 } };
+  await campaigns.admitActionApproval({ workspaceId: 'ws', accountId: 'acct', ...intent.campaign, actionId: intent.action.actionId, channel: 'email', authorityGeneration: 1, selectedRouteId: 'route', contextRevision: f.draft.contextRevision,
+    contentHash: intent.action.contentHash, targetHash: intent.action.targetHash, approvedAt: f.options.clock.now(), expiresAt: f.approval.expiresAt });
+  await policy.admitApproval({ ...f.approval, id: intent.action.approvalId, commandId, intentHash: fingerprint(intent) });
+  await policy.admitIntent(intent); await execution.prepareAction({ ...intent.action, expectedVersion: 1 });
+  return { ...f, policy, execution, campaigns, campaignExecution, version, intent, apply,
+    service: () => createDispatchService({ execution, policy, authorization: f.authorization, fetch: f.fetch }) };
+}
+it('D1 concrete campaign checks and reservation caps join actual C1 send transaction once', async () => {
+  const f = await campaignFixture();
+  expect((await f.service().dispatch(f.intent.commandId)).status).toBe('provider_accepted');
+  expect(f.sends()).toBe(1);
+  expect(f.dynamo.inspect(campaignCapKey(f.version.id, 'email'))).toEqual({ reserved: 0, sent: 1 });
+  const tx = f.dynamo.transactions.find(tx => tx.TransactItems?.some(item => item.Put?.Item?.sk?.S === 'ACTION#acct#campaign-action' && item.Put.Item.state?.S === 'dispatching'))!;
+  const keys = tx.TransactItems!.map(item => item.ConditionCheck?.Key?.sk?.S ?? item.Put?.Item?.sk?.S);
+  expect(keys).toContain(campaignEnrollmentKey('enrollment')); expect(keys).toContain(campaignCapKey(f.version.id, 'email'));
+  expect(keys).toContain('GOOGLE_GRANT#' + f.intent.pairingId); expect(keys).toContain('MAIL_CURSOR#acct#mailbox');
+  expect(keys.filter(key => key === 'ACCOUNT#acct')).toHaveLength(1);
+  expect(new Set(keys).size).toBe(keys.length);
+  await f.service().dispatch(f.intent.commandId); expect(f.sends()).toBe(1);
+});
+it.each(['paused', 'conversation', 'held'] as const)('D1 actual %s enrollment blocks campaign send with zero cap consumption', async state => {
+  const f = await campaignFixture();
+  await f.apply({ kind: 'campaign.state', enrollmentId: 'enrollment', expectedEnrollmentVersion: 1, state, reason: 'operator interruption' });
+  expect((await f.service().dispatch(f.intent.commandId)).status).toBe('held');
+  expect(f.sends()).toBe(0); expect(f.dynamo.inspect(campaignCapKey(f.version.id, 'email'))).toEqual({ reserved: 0, sent: 0 });
+});
+it('D1 duplicate ACCOUNT fences with different revisions hold instead of silently dropping a constraint', async () => {
+  const f = await campaignFixture(); const original = f.campaigns.accountRoute.bind(f.campaigns);
+  vi.spyOn(f.campaigns, 'accountRoute').mockImplementation(async (...args) => {
+    const row = await f.store.get('ACCOUNT#acct'); await f.store.transact([f.store.put('ACCOUNT#acct', row!.data, row!.rev)]);
+    return original(...args);
+  });
+  await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 1 }, f.access.accessEvidence)).rejects.toThrow('dispatch_condition_conflict');
+  expect(f.dynamo.inspect(campaignCapKey(f.version.id, 'email'))).toEqual({ reserved: 0, sent: 0 });
+});
+
+it('D1 accepted outcome atomically settles capacity with ACTION and one outbox event', async () => {
+  const f = await campaignFixture(); await f.service().dispatch(f.intent.commandId);
+  expect(f.dynamo.inspect(campaignCapKey(f.version.id, 'email'))).toEqual({ reserved: 0, sent: 1 });
+  const tx = f.dynamo.transactions.find(tx => tx.TransactItems?.some(item => item.Put?.Item?.sk?.S === 'ACTION#acct#campaign-action' && item.Put.Item.state?.S === 'provider_accepted'))!;
+  expect(tx.TransactItems!.some(item => item.Put?.Item?.sk?.S === campaignCapKey(f.version.id, 'email'))).toBe(true);
+  const page = await f.execution.eventsAfter(null);
+  const event = page.events.find(event => event.kind === 'action.outcome' && event.payload.actionId === 'campaign-action' && event.payload.state === 'provider_accepted');
+  expect(event).toHaveProperty('campaign.enrollment.state', 'completed');
+});
+
+it.each(['paused', 'conversation', 'held'] as const)('D1 late accepted %s send settles cap without reopening progression', async state => {
+  const f = await campaignFixture();
+  f.onSend(async () => {
+    await f.apply({ kind: 'campaign.state', enrollmentId: 'enrollment', expectedEnrollmentVersion: 1, state, reason: 'operator interruption' });
+    return Response.json({ id: 'sent1', threadId: 'thread1' });
+  });
+  expect((await f.service().dispatch(f.intent.commandId)).status).toBe('provider_accepted');
+  expect(f.dynamo.inspect(campaignCapKey(f.version.id, 'email'))).toEqual({ reserved: 0, sent: 1 });
+  expect(f.dynamo.inspect(campaignEnrollmentKey('enrollment'))).toMatchObject({ state, currentStepId: 'email-step' });
+});
+it.each(['CAMPAIGN_ENROLLMENT#enrollment', 'CAMPAIGN_CAP#campaign-version#email', 'CAMPAIGN_APPROVAL#campaign-version', 'CAMPAIGN_ACTION_APPROVAL#acct#campaign-action'])('D1 final produced transaction fences concurrent %s changes', async key => {
+  const f = await campaignFixture();
+  const plan = await f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 1 }, f.access.accessEvidence);
+  const row = await f.store.get(key); await f.store.transact([f.store.put(key, row!.data, row!.rev)]);
+  await expect(f.store.transact(plan.finalize())).rejects.toThrow('TransactionCanceledException');
+  expect(f.dynamo.inspect('DISPATCH_CAP#sender%40example.invalid#2026-09-09')).toBeUndefined();
+  expect(f.dynamo.inspect('CAMPAIGN_RESERVATION#acct#campaign-action')).toBeUndefined();
 });
