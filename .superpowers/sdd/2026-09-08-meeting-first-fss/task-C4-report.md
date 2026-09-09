@@ -1,6 +1,6 @@
 # Task C4 report: one-shot dispatch and reconciliation
 
-Status: **DONE_WITH_CONCERNS** for the source-only standalone-reply slice. **Campaign dispatch remains held pending D1's real persisted binding.** This is not whole-C4 live acceptance or activation approval.
+Status: **DONE_WITH_CONCERNS** for the source-only standalone-reply and concrete D1 campaign integration slice. Review repairs and real campaign transaction integration are implemented. This is not live acceptance or activation approval. See the follow-up evidence below, which supersedes the original baseline counts and held-D1 statements.
 
 Source commit: `6f5aa93` (`feat: fence delegated sends and reconcile uncertain outcomes`). Committed file list was inspected and contains only the nine paths below. No push.
 
@@ -151,3 +151,35 @@ C1's narrow test fixture deliberately isolates original transaction mechanics wi
 - Live isolated DynamoDB contention, actual consenting-mailbox delivery/Sent reconciliation, provider permissions and cloud activation require separate bounded authorization. None was performed.
 - No real sends, mailbox operations, grants, network/provider requests, cloud operations, installs, builds, native suites or root suites were executed. HTTP in tests was explicitly fictional and rejected unconfigured paths.
 - The reconciler intentionally holds unsupported or ambiguous MIME evidence rather than guessing delivery or retrying. Real Gmail acceptance must verify the supported payload shapes.
+
+
+## Review repairs and D1 integration follow-up (2026-09-09 01:30 UTC)
+
+Commits: `12498c0` (scope/Sent/replay review repairs), `d0fcade` (concrete campaign transaction splice). Both used exact-path `--only` commits and inspected committed lists. Original source commit remains `6f5aa93`. No shared C3/C6/D1 file was edited by C4.
+
+### Review RED to GREEN
+
+Read the full task-C4-review.md. Actual C1/persisted-policy/C2/C3 fixture reproduced nine failures: seven raw Sent Bcc/header/MIME variants, definitive-not-sent replay, and account participant B opt-out missed while sending A. Strict raw participant/content handling and terminal replay repairs left only I1 failing. C3's persisted full-scope producer and C4 consumer made the suite green. Added absent/narrowed/changed scope, same-envelope final CAS, and bounded expanded-scope rescan tests. C6's new owner command formerly returned a false applied receipt, reproduced RED and fixed with the explicit C1 command allowlist. Result before D1: **101 focused tests GREEN**, worker typecheck and nine-path lint passed.
+
+Scope is inside the existing MailCursorEnvelope. The barrier requires nonnull MailAccountScope, exact account/mailbox, nonfuture approvedAt/since, both poll/checkpoint scopeRevision and canonical mailScopeFingerprint, exact checkpoint.since and scope membership for requiredRecipient/requiredThreadId. One cursor revision CAS fences all of these. Service preflight uses the identity-only C3 poller loading persisted participant/thread scope, never a recipient-derived query. New scope invalidates prior checkpoint/poll and requires bounded rescan. C3 owns admission and producer provenance. C5 consumes this shared barrier.
+
+Sent reconciliation now refuses Bcc, resend/alternate participant headers, unsupported Content-Type charset, Content-Disposition attachments, non-base64 transfer semantics, extra content headers, attachment IDs, filename/parts and incomplete UTF-8 data. It accepts only the narrow emitted sender representation. Definitive provider_not_sent immutable evidence replays not_sent rather than unknown, with zero resend.
+
+### Concrete D1 binding and atomic outcomes
+
+`DynamoDispatchRepository(options, authorization, campaignExecution?)` now accepts the actual concrete CampaignExecution. Adapter/table/workspace must match the C4 store. Missing binding still holds campaign sends. The old frozen campaignDispatchStateSchema is documentary, not an authorization source.
+
+For campaign_step, account_route is mandatory. The policy derives CampaignExecutionInput from the persisted immutable intent, actual approved draft context, authority generation, exact selected route and message hashes. D1's prepareDispatchChecks reads real version/approval/enrollment/cohort/action-content approval/route/cap records. Its synchronous finalize items join the C1 AUTH/ACTION/outbox transaction. There is no second reservation transaction. Identical complete ConditionChecks on ACCOUNT may coalesce; different expected revisions or any other duplicate operation fail with dispatch_condition_conflict. C2 checks remain synchronous and distinct.
+
+`outcomeItems` was replaced with `outcomePlan(outcome,evidence): Promise<{items,campaign?}>`. Campaign prepareOutcomePlan items join the SAME C1 outcome transaction. C6's strict top-level action.outcome.campaign carries the typed CampaignEventPayload through the existing single outbox stream. A deterministic per-SendEvidence UUID provides separate immutable D1 evidence identity for unknown and accepted records. No second EVENT_HEAD. Accepted outcomes move reserved capacity to sent and cannot reopen or advance paused/conversation/held enrollments. Unknown retains reserved capacity. Cancelled capacity is conservatively retained by current D1 policy, not refunded. Sender/day used count is never refunded.
+
+D1 TDD: two RED tests demonstrated blanket campaign hold and missing conflicting-ACCOUNT handling, then concrete reservation integration reached 56 GREEN. A separate RED demonstrated acceptance left reserved=1/sent=0. Atomic outcome splice fixed it. Tests additionally exercise unknown-to-accepted reconciliation retaining two original immutable D1/C4 records, no resend, late paused/conversation/held acceptance, exact cap/outbox/action transaction targets, and enrollment/cap/version-approval/action-approval final CAS races.
+
+Final validation with required Node24 export:
+
+- `npm test --prefix cloud/lambdas/delegated-worker -- test/dispatchRepository.test.ts test/dispatchService.test.ts test/sendReconciler.test.ts test/commandService.test.ts`: **115 passed**, four files (65/10/12/28).
+- `npm run typecheck --prefix cloud/lambdas/delegated-worker`: exit 0.
+- `npx --no-install eslint --no-ignore --max-warnings 0` on the nine owned/released TypeScript paths: exit 0, no warnings/errors.
+- Exact-path diff whitespace check passed.
+
+These tests execute actual produced SDK transaction conditions against the synthetic ConditionalCommandHarness, not live DynamoDB. The former missing-D1 binding gate is resolved at source level when actual CampaignExecution is composed. C6 public command/bootstrap/normal dispatch composition and local campaign projection remain C6-owned integration gates. C6 schema changes were present during GREEN validation, with their commit owned by C6. Root independent re-review of both repair and campaign splice commits remains required. No real network, provider, grants, sends, mailbox access, deployment, build/install/native/root-suite operation occurred. All live/external acceptance gates above remain held.
