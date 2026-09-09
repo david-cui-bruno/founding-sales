@@ -195,7 +195,7 @@ export function NativeDeskRoute({
     api: api.localWorkspace,
     scopeKey: `local-company:${surface}`,
     available: surface === 'accounts' && !local.read.overview.pending && !local.read.overview.error
-      && local.read.overview.value?.workflowMode === 'meeting_first' && local.read.overview.value.accounts.state === 'available',
+      && local.read.overview.value?.accounts.state === 'available',
     localRead: local.read.overview,
     onRefreshLocal: local.refresh,
     onOpenAccount: id => {

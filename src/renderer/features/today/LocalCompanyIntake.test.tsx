@@ -204,13 +204,15 @@ it('keeps unknown creation locked against close or a fresh Add company request',
   fireEvent.click(button('Close company form')); fireEvent.click(button('Add company')); expect(screen.getByText(/Save outcome unknown/)).toBeTruthy(); expect(f.api.createCompany).toHaveBeenCalledOnce();
 });
 
-it.each(['ready', 'daily-unavailable'] as const)('actual Accounts %s path creates then reads/selects the real local account without worker mutation', async branch => {
-  const f = nativeDeskFixture(); f.setLocalSnapshot(localSnapshot());
+it.each([['legacy', 'ready'], ['legacy', 'daily-unavailable'], ['meeting_first', 'ready'], ['meeting_first', 'daily-unavailable']] as const)('actual Accounts %s/%s first use creates then reads/selects the local account without changing workflow mode', async (mode, branch) => {
+  const f = nativeDeskFixture(dailyFixture({ workflowMode: mode })); f.setLocalSnapshot(localSnapshot({ workflowMode: mode }));
+  const before = await f.api.localWorkspace.get();
+  const transitionApi = vi.spyOn(f.api.localWorkspace, 'transition');
   if (branch === 'daily-unavailable') vi.spyOn(f.api.daily, 'get').mockRejectedValue(new Error('offline'));
   const reviewApi = vi.spyOn(f.api.localWorkspace, 'reviewCompany').mockImplementation(async input => review(input));
   const createApi = vi.spyOn(f.api.localWorkspace, 'createCompany').mockImplementation(async request => {
     const result = saved(request); if (result.status !== 'saved') throw new Error('fixture');
-    f.setLocalSnapshot(localSnapshot({ accounts: { state: 'available', snapshots: [{ account: result.account, claims: [], portfolio: [], routes: [], unknowns: ['Management style unknown'], conflicts: [], fingerprint: 'a'.repeat(64) }] } }));
+    f.setLocalSnapshot(localSnapshot({ workflowMode: mode, accounts: { state: 'available', snapshots: [{ account: result.account, claims: [], portfolio: [], routes: [], unknowns: ['Management style unknown'], conflicts: [], fingerprint: 'a'.repeat(64) }] } }));
     return result;
   });
   const openLead = vi.fn(); render(<NativeDeskRoute api={f.api} surface="accounts" onOpenLead={openLead} />);
@@ -219,6 +221,8 @@ it.each(['ready', 'daily-unavailable'] as const)('actual Accounts %s path create
   expect(screen.getByText('Portfolio not recorded.')).toBeTruthy(); expect(screen.getByText('Unknown: Management style unknown')).toBeTruthy();
   expect(button('Local account · Harbor Management').getAttribute('aria-current')).toBe('true');
   expect(createApi).toHaveBeenCalledOnce(); expect(reviewApi).toHaveBeenCalledOnce(); expect(openLead).not.toHaveBeenCalled();
+  expect(await f.api.localWorkspace.get()).toMatchObject({ workflowMode: before.workflowMode, transitionReceipt: before.transitionReceipt });
+  expect(transitionApi).not.toHaveBeenCalled();
   expect(f.calls.filter(call => !['localWorkspace.get', 'localWorkspace.getCommitments', 'daily.get', 'delegation.status'].includes(call.method))).toEqual([]);
 });
 it('actual local intake request survives daily fallback recovery with stable local API', async () => {
