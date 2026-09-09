@@ -287,3 +287,99 @@ for (const terminal of ['applied','rejected'] as const) {
     await assertClean(page,state);
   });
 }
+
+test('accepting a newer saved email immediately permits explicit preflight and save', async ({page}) => {
+  const state = await mount(page);
+  await page.getByRole('button',{name:'Email · Account A',exact:true}).click();
+  await page.evaluate(()=>{
+    const fixture = window.nativeDeskBrowser.fixture;
+    const snapshot = fixture.snapshot();
+    const item = snapshot.answers.find(answer=>answer.kind==='requested_followup'&&answer.accountId==='a');
+    if (!item || item.kind!=='requested_followup') throw Error('Missing fixture email');
+    item.draft = {...item.draft,revision:2,body:'Newer saved email from owner'};
+    fixture.setSnapshot(snapshot);
+    window.nativeDeskBrowser.refresh();
+  });
+  await page.getByRole('button',{name:'Use saved version and discard displayed edits',exact:true}).click();
+  await expect(page.getByRole('textbox',{name:'Email body'})).toHaveValue('Newer saved email from owner');
+  await page.getByRole('button',{name:'Owner preflight',exact:true}).click();
+  await expect.poll(async()=>(await methods(page)).filter(method=>method==='getRequestedFollowup').length).toBe(1);
+  await page.getByRole('textbox',{name:'Email body'}).fill('Explicit edit after accepting the saved version');
+  await page.getByRole('button',{name:'Save edits',exact:true}).click();
+  await expect.poll(async()=>(await methods(page)).filter(method=>method==='editRequestedFollowup').length).toBe(1);
+  const saves = await page.evaluate(()=>window.nativeDeskBrowser.fixture.calls.filter(call=>call.method==='editRequestedFollowup'));
+  expect(saves[0].input).toMatchObject({expectedRevision:2,body:'Explicit edit after accepting the saved version'});
+  expect((await methods(page)).filter(method=>method==='approveRequestedFollowup')).toHaveLength(0);
+  await assertClean(page,state);
+});
+
+for (const initial of ['pending','unknown'] as const) {
+  for (const terminal of ['applied','rejected'] as const) {
+    test(`${initial} historical outcome retries exactly to ${terminal} before adopting a newer LinkedIn draft`, async ({page}) => {
+      const state = await mount(page);
+      await page.evaluate(({initial,terminal})=>{
+        type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+        const fixture = window.nativeDeskBrowser.fixture;
+        const api: Mutable<typeof fixture.api.linkedin> = fixture.api.linkedin;
+        const original = api.reportOutcome;
+        let retained: Awaited<ReturnType<typeof original>> | undefined;
+        api.reportOutcome = async input => {
+          if (!retained) {
+            retained = await original(input);
+            if (initial==='unknown') throw Error('Fixture lost historical receipt');
+            return retained;
+          }
+          // Production supports immutable historical action records. This fixture
+          // deliberately preserves the old command instead of querying the new draft.
+          if (input.draftId!==retained.draftId || input.expectedRevision!==retained.revision || input.commandId!==retained.receipt.commandId) throw Error('Historical identity changed');
+          fixture.calls.push({method:'linkedin.reportOutcome',input:structuredClone(input)});
+          return {...retained,receipt:{...retained.receipt,status:terminal,reason:terminal==='rejected'?'Fixture terminal rejection':null}};
+        };
+      },{initial,terminal});
+      await page.getByRole('button',{name:'Manual LinkedIn · Account A',exact:true}).click();
+      await page.getByRole('button',{name:'Begin manual step',exact:true}).click();
+      await page.getByRole('combobox',{name:'Manual outcome'}).selectOption('not_sent');
+      await page.getByRole('button',{name:'Record outcome',exact:true}).click();
+      const retry = page.getByRole('button',{name:'Retry retained outcome',exact:true});
+      await expect(retry).toBeEnabled();
+      await page.evaluate(()=>{
+        type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+        const fixture = window.nativeDeskBrowser.fixture;
+        const snapshot = fixture.snapshot();
+        const item = snapshot.answers.find(answer=>answer.kind==='manual_linkedin');
+        if (!item || item.kind!=='manual_linkedin' || !item.recovery.approvalCommandId) throw Error('Missing started fixture draft');
+        const old = structuredClone(item.recovery);
+        old.attempts = [{commandId:item.recovery.approvalCommandId,receipt:{commandId:item.recovery.approvalCommandId,status:'applied',authorityGeneration:1,aggregateVersion:2,reason:null}}];
+        const api: Mutable<typeof fixture.api.linkedin> = fixture.api.linkedin;
+        api.recover = async input => {
+          if (input.draftId!==old.draftId || input.expectedRevision!==old.revision) throw Error('Wrong historical recovery');
+          fixture.calls.push({method:'linkedin.recover',input:structuredClone(input)});
+          return structuredClone(old);
+        };
+        item.draft = {...item.draft,revision:item.draft.revision+1,body:'Newer saved LinkedIn note',state:'draft'};
+        item.recovery = {...item.recovery,revision:item.draft.revision,approvalCommandId:null,attempts:[],handoffId:null,started:false};
+        fixture.setSnapshot(snapshot);
+        window.nativeDeskBrowser.refresh();
+      });
+      const adopt = page.getByRole('button',{name:'Use saved LinkedIn version',exact:true});
+      await expect(adopt).toBeDisabled();
+      await expect(page.getByRole('textbox',{name:'LinkedIn note'})).toHaveValue('Manual note');
+      for (const name of ['Begin manual step','Open LinkedIn','Copy note','Save note']) await expect(page.getByRole('button',{name,exact:true})).toBeDisabled();
+      await page.getByRole('button',{name:'Recover receipts',exact:true}).click();
+      await expect.poll(async()=>(await methods(page)).filter(method=>method==='linkedin.recover').length).toBe(1);
+      await expect(adopt).toBeDisabled();
+      await expect(retry).toBeEnabled();
+      await retry.click();
+      await expect(page.getByText(new RegExp(`Human outcome receipt: ${terminal}`))).toBeVisible();
+      const reports = await page.evaluate(()=>window.nativeDeskBrowser.fixture.calls.filter(call=>call.method==='linkedin.reportOutcome'));
+      expect(reports).toHaveLength(2);
+      expect(reports[0].input).toEqual(reports[1].input);
+      await expect(adopt).toBeEnabled();
+      await adopt.click();
+      await expect(page.getByRole('textbox',{name:'LinkedIn note'})).toHaveValue('Newer saved LinkedIn note');
+      expect((await methods(page)).filter(method=>method==='linkedin.begin')).toHaveLength(1);
+      expect((await methods(page)).filter(method=>['linkedin.copy','linkedin.open'].includes(method))).toHaveLength(0);
+      await assertClean(page,state);
+    });
+  }
+}
