@@ -4,7 +4,7 @@ import {
   createPhoneHandoffLauncher, unavailableOutboundReadiness, unavailablePhoneHandoff,
 } from '../../src/main/communications/phoneHandoffLauncher';
 import type {
-  OutboundDomainGate, OutboundDomainPort, OutboundReadinessPort, PhoneHandoffPort,
+  OutboundDomainGate, OutboundDomainPort, OutboundReadinessPort, OutboundReadinessProof, OutboundReadinessResult, PhoneHandoffPort,
 } from '../../src/main/communications/outboundPorts';
 import { OutboundAuthorizationError } from '../../src/main/domain/support/domainErrors';
 import {
@@ -32,6 +32,16 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const flush = () => vi.advanceTimersByTimeAsync(0);
+function readinessProof(personId = request.personId): OutboundReadinessProof {
+  return Object.freeze({
+    subject: Object.freeze({ kind: 'person' as const, id: personId }),
+    registryRevision: 1,
+    checkpoints: Object.freeze([]),
+  });
+}
+function readyReply(personId = request.personId): Awaited<ReturnType<OutboundReadinessPort['check']>> {
+  return { kind: 'ready', proof: readinessProof(personId) };
+}
 
 // Only injected in-memory command evidence. This fixture does not claim SQL,
 // OS handler proof, consent checkpoint integration or live communications.
@@ -76,7 +86,8 @@ function fixture() {
   };
   const readiness = {
     getCapability: vi.fn<OutboundReadinessPort['getCapability']>(() => available),
-    check: vi.fn<OutboundReadinessPort['check']>(async () => { events.push('readiness'); return { kind: 'ready' }; }),
+    check: vi.fn<OutboundReadinessPort['check']>(async () => { events.push('readiness'); return readyReply(); }),
+    assertCurrent: vi.fn<OutboundReadinessPort['assertCurrent']>(() => { events.push('assertCurrent'); }),
   };
   const service = createOutboundCommandService({ domain: gate, phone, readiness });
   return { events, facts, domain, gate, phone, readiness, service, save };
@@ -89,7 +100,7 @@ describe('strict intent, single flight and durable no-replay delegation', () => 
   it('orders lookup, both preflights, committed preparation, immediate dispatch and guarded persistence', async () => {
     const f = fixture();
     expect(await f.service.beginOutbound(request)).toEqual(receipt(request, accepted));
-    expect(f.events).toEqual(['inspect', 'phone', 'readiness', 'prepare', 'dispatch', 'result']);
+    expect(f.events).toEqual(['inspect', 'phone', 'readiness', 'assertCurrent', 'prepare', 'dispatch', 'result']);
     expect(f.phone.dispatch).toHaveBeenCalledWith('+12025550123');
     expect(f.domain.recordOutboundResult).toHaveBeenCalledWith(request, accepted);
     expect(f.readiness.check).toHaveBeenCalledWith('p', expect.any(AbortSignal));
@@ -322,7 +333,7 @@ describe('preflight refusals and final domain authority', () => {
   it('gives each preflight and dispatch wait its own bound instead of one combined deadline', async () => {
     const f = fixture();
     const route = deferred<Capability>();
-    const ready = deferred<{ kind: 'ready' }>();
+    const ready = deferred<OutboundReadinessResult>();
     const dispatch = deferred<HandoffResult>();
     f.phone.inspectCapability.mockReturnValue(route.promise);
     f.readiness.check.mockReturnValue(ready.promise);
@@ -333,7 +344,7 @@ describe('preflight refusals and final domain authority', () => {
     route.resolve(available);
     await flush();
     await vi.advanceTimersByTimeAsync(4000);
-    ready.resolve({ kind: 'ready' });
+    ready.resolve(readyReply());
     await flush();
     await vi.advanceTimersByTimeAsync(4000);
     dispatch.resolve(accepted);
@@ -470,7 +481,7 @@ describe('dispatch ambiguity and committed preparation boundary', () => {
 describe('epoch invalidation, suspension and immutable workspace binding', () => {
   it.each(['wake', 'lock', 'restore', 'shutdown', 'dispose'] as const)('cancels %s during readiness with no dispatch or late writes', async (reason) => {
     const f = fixture();
-    const ready = deferred<{ kind: 'ready' }>();
+    const ready = deferred<OutboundReadinessResult>();
     f.readiness.check.mockReturnValue(ready.promise);
     const result = f.service.beginOutbound(request);
     const rejected = expect(result).rejects.toThrow('Outbound operation interrupted.');
@@ -479,7 +490,7 @@ describe('epoch invalidation, suspension and immutable workspace binding', () =>
     if (reason === 'dispose') f.service.dispose(); else f.service.invalidate(reason);
     expect(signal.aborted).toBe(true);
     await rejected;
-    ready.resolve({ kind: 'ready' });
+    ready.resolve(readyReply());
     await flush();
     expect(f.domain.prepareOutboundDispatch).not.toHaveBeenCalled();
     expect(f.domain.recordOutboundRefusal).not.toHaveBeenCalled();
@@ -505,7 +516,7 @@ describe('epoch invalidation, suspension and immutable workspace binding', () =>
 
   it('wake requires new preflights and never resumes the interrupted intent automatically', async () => {
     const f = fixture();
-    const ready = deferred<{ kind: 'ready' }>();
+    const ready = deferred<OutboundReadinessResult>();
     f.readiness.check.mockReturnValueOnce(ready.promise);
     const old = f.service.beginOutbound(request);
     const rejected = expect(old).rejects.toThrow('Outbound operation interrupted.');
@@ -513,7 +524,7 @@ describe('epoch invalidation, suspension and immutable workspace binding', () =>
     f.service.invalidate('wake');
     await rejected;
     expect(await f.service.beginOutbound(otherRequest)).toMatchObject({ status: 'handoff_accepted' });
-    ready.resolve({ kind: 'ready' });
+    ready.resolve(readyReply());
     await flush();
     expect(f.phone.inspectCapability).toHaveBeenCalledTimes(2);
     expect(f.readiness.check).toHaveBeenCalledTimes(2);
@@ -616,7 +627,7 @@ describe('epoch invalidation, suspension and immutable workspace binding', () =>
 
   it('cannot clear a new epoch flight when old cancellation settles', async () => {
     const f = fixture();
-    const oldReady = deferred<{ kind: 'ready' }>();
+    const oldReady = deferred<OutboundReadinessResult>();
     const newDispatch = deferred<HandoffResult>();
     f.readiness.check.mockReturnValueOnce(oldReady.promise);
     f.phone.dispatch.mockReturnValue(newDispatch.promise);
@@ -631,7 +642,7 @@ describe('epoch invalidation, suspension and immutable workspace binding', () =>
     expect(await f.service.beginOutbound(third)).toMatchObject({ reasonCode: 'outbound_busy' });
     newDispatch.resolve(accepted);
     await current;
-    oldReady.resolve({ kind: 'ready' });
+    oldReady.resolve(readyReply());
     await flush();
     expect(f.phone.dispatch).toHaveBeenCalledTimes(1);
   });
