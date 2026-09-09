@@ -6,8 +6,11 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import * as packagedProcess from '../support/packagedApplication';
+import { createPackage, uncacheAll } from '@electron/asar';
+import { readArtifactIdentity, resolveReleaseArtifact } from '../../scripts/releaseArtifact.mjs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PackagedProcessEntry } from '../support/packagedApplication';
+let packagedProcess: typeof import('../support/packagedApplication');
 import type { FounderWorkspace, launchFounderWorkspace } from '../support/founderWorkspace';
 
 // Execute the actual harness source with fake OS/process/CDP boundaries. Never
@@ -25,6 +28,7 @@ const inheritedOverrides = [
   'CALLIE_SOURCING_FIXTURE_DIR', 'CALLIE_SOURCING_FIXTURE_HANG_ONCE',
   'CALLIE_UNKNOWN_OVERRIDE', 'CSC_LINK', 'CSC_KEY_PASSWORD', 'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY', 'UNCONTROLLED_PARENT_VALUE',
+  'CALLIE_RELEASE_OUT_DIR', 'CALLIE_E2E_OUT_DIR', 'CALLIE_E2E_EXPECTED_ARTIFACT',
 ];
 
 class FakeChild extends EventEmitter {
@@ -53,12 +57,41 @@ class FakeChild extends EventEmitter {
 
 type Launch = { child: FakeChild; binary: string; args: string[]; env: NodeJS.ProcessEnv };
 let temporaryRoot: string;
+let otherBinary: string;
 
 beforeEach(async () => {
   temporaryRoot = await files.realpath(await files.mkdtemp(path.join(tmpdir(), 'callie-isolation-unit-')));
   await files.mkdir(path.join(temporaryRoot, 'parent-home'), { mode: 0o700 });
+  // Own tiny real archives instead of reading an unbuilt candidate or canonical
+  // package. Only process/CDP boundaries are faked, never artifact identity.
+  const selectedOut = process.env.CALLIE_E2E_OUT_DIR || process.env.CALLIE_RELEASE_OUT_DIR
+    ? 'candidate' : 'out';
+  const artifacts = [];
+  for (const [name, commit] of [[selectedOut, 'a'], ['other', 'b']]) {
+    const artifact = resolveReleaseArtifact({ root: temporaryRoot, env: { CALLIE_RELEASE_OUT_DIR: name } });
+    const input = path.join(temporaryRoot, `${name}-input`);
+    await files.mkdir(input);
+    await files.writeFile(path.join(input, 'release-marker.json'), JSON.stringify({
+      format: 'callie-release', version: 1, commitSha: commit.repeat(40), builtAt: '2026-09-09T00:00:00.000Z',
+    }));
+    await files.mkdir(path.dirname(artifact.asarPath), { recursive: true });
+    await files.mkdir(path.dirname(artifact.executable), { recursive: true });
+    await files.writeFile(artifact.executable, 'synthetic-only', { mode: 0o700 });
+    await createPackage(input, artifact.asarPath);
+    artifacts.push(artifact);
+  }
+  const [selected, other] = artifacts;
+  otherBinary = other.executable;
+  vi.stubEnv('CALLIE_E2E_OUT_DIR', selected.outDirectory);
+  vi.stubEnv('CALLIE_RELEASE_OUT_DIR', selected.outDirectory);
+  vi.stubEnv('CALLIE_E2E_EXPECTED_ARTIFACT', JSON.stringify(readArtifactIdentity(selected.appPath)));
+  vi.resetModules();
+  packagedProcess = await import('../support/packagedApplication');
 });
 afterEach(async () => {
+  vi.unstubAllEnvs();
+  vi.resetModules();
+  uncacheAll();
   await files.rm(temporaryRoot, { recursive: true, force: true });
 });
 
@@ -70,7 +103,7 @@ type Environment = {
 };
 type LaunchKind = 'shared' | 'foundation' | 'collision' | 'apple';
 
-function sourceHarness(fault?: Fault) {
+function sourceHarness(fault?: Fault, selectedBinary?: string) {
   const parentEnv: NodeJS.ProcessEnv = Object.fromEntries(
     inheritedOverrides.map((key) => [key, 'synthetic-only-do-not-log']),
   );
@@ -220,10 +253,11 @@ function sourceHarness(fault?: Fault) {
         if (specifier in boundaries) return boundaries[specifier];
         if (specifier.endsWith('/packagedApplication')) return {
           ...packagedProcess,
+          packagedApplicationBinary: selectedBinary ?? packagedProcess.packagedApplicationBinary,
           // Real bounded termination, only its wait duration is shortened.
           terminatePackagedApplication: (child: FakeChild) => packagedProcess.terminatePackagedApplication(child, 5),
           waitForPackagedChildProcess: async () => ({ pid: 4201, parentPid: 4200, startedAt: 'fixture', command: 'CallieAppleBridge' }),
-          snapshotPackagedProcessTree: async (): Promise<packagedProcess.PackagedProcessEntry[]> => [],
+          snapshotPackagedProcessTree: async (): Promise<PackagedProcessEntry[]> => [],
           assertPackagedDescendantsExit: async () => {
             expect(launches.at(-1)?.child.closed).toBe(true);
           },
@@ -376,6 +410,15 @@ describe('shared captured-child observation seam', () => {
 });
 
 describe('every packaged source call site', () => {
+  it.each(launchKinds)('%s rejects a different real artifact before spawn without leaking or retaining its environment', async (kind) => {
+    const harness = sourceHarness(undefined, otherBinary);
+    await expect(harness.run(kind)).rejects.toThrow('RELEASE_ARTIFACT_MISMATCH');
+    expect(harness.spawnAttempts()).toBe(0);
+    expect(harness.launches).toEqual([]);
+    expect(harness.allocated.every((root) => !fs.existsSync(root))).toBe(true);
+    expect(fs.existsSync(harness.parentEnv.HOME ?? '')).toBe(true);
+  });
+
   it.each(launchKinds)('%s uses the same isolated environment and removes it after captured exit', async (kind) => {
     const harness = sourceHarness();
     const parentBefore = { ...harness.parentEnv };
@@ -386,8 +429,7 @@ describe('every packaged source call site', () => {
     expect(env.AWS_ACCESS_KEY_ID !== undefined).toBe(false);
     expect(env.CALLIE_SOURCING_FIXTURE_HANG_ONCE !== undefined).toBe(false);
     expect(env.AWS_EC2_METADATA_DISABLED).toBe('true');
-    expect(binary).toBe(path.join(checkout, 'out', 'Callie Founder Sales System-darwin-arm64',
-      'Callie Founder Sales System.app', 'Contents', 'MacOS', 'Callie Founder Sales System'));
+    expect(binary).toBe(packagedProcess.packagedApplicationBinary);
     expect(args).toEqual([
       expect.stringMatching(/^--user-data-dir=/u), '--remote-debugging-port=43123', '--use-mock-keychain',
       ...(kind === 'apple' ? ['--apple-feasibility-spike'] : []),

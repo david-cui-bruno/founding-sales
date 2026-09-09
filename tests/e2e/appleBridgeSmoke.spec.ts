@@ -10,6 +10,7 @@ import {
   assertPackagedDescendantsExit,
   describeProcessExit,
   packagedApplicationBinary as packagedApplication,
+  assertPackagedApplicationIdentity,
   snapshotPackagedProcessTree,
   waitForPackagedChildProcess,
   type PackagedProcessEntry,
@@ -30,6 +31,7 @@ test('packaged Apple helper handshakes and exits without permission or communica
     userDataPath = await mkdtemp(join(tmpdir(), 'callie-apple-smoke-e2e-'));
     const debuggingPort = await availablePort();
     environment = await createPackagedTestEnvironment();
+    assertPackagedApplicationIdentity(packagedApplication);
     application = environment.capture(spawn(packagedApplication, [
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,

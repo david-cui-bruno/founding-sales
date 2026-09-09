@@ -76,9 +76,12 @@ jobs:
             test "$lock" = cloud/lambdas/shared/package-lock.json && continue
             export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm ci --prefix "${lock%/package-lock.json}"
           done < <(git ls-files -z -- 'cloud/lambdas/*/package-lock.json')
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx playwright install chromium
       - name: Require supported macOS and SDK
         run: |
           export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; node --input-type=module -e "import {execFileSync} from 'node:child_process'; for (const [command,args] of [['sw_vers',['-productVersion']],['xcrun',['--sdk','macosx','--show-sdk-version']]]) { const [major,minor] = execFileSync(command,args,{encoding:'utf8'}).trim().split('.').map(Number); if (!(major > 26 || (major === 26 && minor >= 4))) process.exit(1); }"
+      # verify:release owns test:swift and test:backup:electron serially on this
+      # supported host, plus browser/Node helper lanes and one selected artifact.
       - name: Exact ref and single-artifact full release gates
         run: |
           export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; node scripts/writeReleaseMarker.mjs --verify-ref

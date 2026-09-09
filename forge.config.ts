@@ -11,6 +11,7 @@ import {
 } from './build/appleBridge';
 import { retainOnlyPackagedEncryptedSqliteRuntime } from './scripts/packageEncryptedSqliteNative.mjs';
 import { resolveMacSigningIdentity } from './build/signingIdentity';
+import { resolveReleaseArtifact } from './scripts/releaseArtifact.mjs';
 import { createReleaseAssembly } from './scripts/writeReleaseMarker.mjs';
 
 const releaseAssembly = createReleaseAssembly({ root: __dirname });
@@ -22,6 +23,7 @@ const signingIdentity = resolveMacSigningIdentity({
 });
 
 const config: ForgeConfig = {
+  outDir: resolveReleaseArtifact({ root: __dirname }).outDirectory,
   packagerConfig: {
     appBundleId: 'com.callie.foundersales',
     asar: {

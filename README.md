@@ -91,17 +91,27 @@ done < <(git ls-files -z -- 'cloud/lambdas/*/package-lock.json')
 export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run verify:release
 ```
 
-Install the reviewed **Gitleaks 8.30.1** before this sequence. The wrapper never
+Install the matching Playwright Chromium browser and the reviewed
+**Gitleaks 8.30.1** before this sequence. The wrapper never
 installs or substitutes a scanner. CI verifies the public Darwin ARM64 archive
 SHA-256 before installation. Missing tools, incomplete history, process errors,
 invalid reports and findings fail closed. This is not proof of universal secret
 absence or coverage of remote history that was never fetched.
 
-`verify:release` runs types, tracked lint, root tests and all ten independent
-Lambda gates, then **packages once**. It verifies that package, scans complete
+`verify:release` runs types, tracked lint, root tests, NativeDesk browser tests,
+Swift tests, the Node helper build/verifier tests (`test:helpers:node`), the explicit
+synthetic Electron backup-host test (`test:backup:electron`), and all eleven independent
+Lambda gates, then **packages once**. The host flag is local to its named command. It verifies that package, scans complete
 fetched Git history plus the bounded source/generated build context, extracts
 and scans the final ASAR and actual unpacked/helper bundle resources, runs
 fixture E2E against that same artifact, and verifies its embedded marker again.
+The runner checks the selected executable path, commit/build marker and actual
+ASAR SHA256 before E2E spawns and after verification, then confirms unchanged clean HEAD.
+`CALLIE_RELEASE_OUT_DIR` selects one output directory (default `<root>/out`) for
+Forge, both package verifications, extracted scanning and E2E. A conflicting inherited
+`CALLIE_E2E_OUT_DIR` fails before any build/test process. Standalone `test:e2e`
+still accepts `CALLIE_E2E_OUT_DIR` for a separately built candidate. Expected release
+identity metadata belongs to the test runner only, never the isolated app child environment.
 Do not chain `verify:e2e` and `verify:package` as release evidence: those legacy
 convenience commands each rebuild. No rebuild may intervene in the final
 package/scan/E2E/marker sequence.
@@ -150,12 +160,12 @@ application lock, refuses a running app before key/DB/output work, and starts no
 windows, sourcing, recovery setup, IPC or timers. It uses existing protected
 safeStorage material with `databaseExists:true`, rejects unsafe/missing paths,
 plaintext, unsupported schema or changed receipt structures, and never creates
-or migrates a workspace. Current support is exact current schema16 only, validated
+or migrates a workspace. Current support is exact current schema24 only, validated
 against the production readiness ledger and full catalog. This explicitly
 supersedes the unreleased schema15-only host. A schema15 workspace is
 refused without migration or backup/receipt writes, as are older or future schemas.
 The historical schema15 audit and its seven-module graph remain unchanged and
-reject schema16. Backup or upgrade of an older founder workspace remains a
+reject schema16 and current schema24. Backup or upgrade of an older founder workspace remains a
 separately approved protected-copy workflow, including historical audit/repair,
 migration-backup and restore-acceptance hold points. Never migrate an older
 workspace merely to make this command usable. Legacy packages also require a
@@ -220,8 +230,10 @@ evidence, theme/density persistence across renderer reload, and an axe
 accessibility gate that fails on any serious or critical violation across the
 Today, Leads, Pipeline, Review, and Friday routes. Every packaged test uses a
 fresh `mkdtemp` `--user-data-dir`; production founder data is never read or
-written by tests. Workspace seeding always goes through the real UI import
-flow, never by copying a database or writing SQLite directly.
+written by tests. CSV import acceptance goes through the real UI import
+flow. Separate owned encrypted migration/transition fixtures seed specific retained
+workspace states directly to test upgrades and transitions. Those fixtures do not
+prove the UI can create that starting state.
 
 Conversations and Learnings are live workspaces. Conversations lists every
 call and voicemail activity and supports manual transcript paste/attach; each

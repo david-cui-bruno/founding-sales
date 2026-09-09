@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
 import { createPackage } from '@electron/asar';
-import { scanWithGitleaks, verifySecrets } from '../scripts/verifySecrets.mjs';
+import { scanWithGitleaks, stagePackage, verifySecrets } from '../scripts/verifySecrets.mjs';
 const roots = [];
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })));
 async function fixture({ behavior = 'clean', shallow = false } = {}) {
@@ -99,4 +99,18 @@ it.each(['symlink', 'file', 'nonprivate'])('rejects a %s directory scan target b
   const run = (_command, args) => { calls++; writeFileSync(args[args.indexOf('--report-path') + 1], '[]'); return { status: 0 }; };
   expect(() => scanWithGitleaks({ root, target, kind: 'context', temporary, run })).toThrow('SECRET_VERIFICATION_FAILED');
   expect(calls).toBe(0);
+});
+
+it('scans an explicit candidate without falling back to the canonical output', async () => {
+  const { root, run } = await fixture();
+  const candidate = join(root, 'candidate');
+  cpSync(join(root, 'out'), candidate, { recursive: true });
+  writeFileSync(join(root, 'out/Callie.app/Contents/Helpers/canonical-only'), 'not candidate');
+  expect(run('--package', candidate).status).toBe(0);
+  const coverage = JSON.parse(readFileSync(join(root, 'coverage'), 'utf8'));
+  expect(coverage).toContain('asar/inside.js');
+  expect(coverage).not.toContain('bundle/Contents/Helpers/canonical-only');
+  const stage = join(root, 'stage'); mkdirSync(stage, { mode: 0o700 });
+  expect(stagePackage(root, stage, candidate)).toBeGreaterThan(0);
+  expect(() => stagePackage(root, stage, join(root, 'missing'))).toThrow();
 });
