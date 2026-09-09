@@ -42,13 +42,14 @@ export async function requestCompanyDiscovery(input: { query: AudienceQuery; lim
   if (reply.status < 200 || reply.status >= 300) throw new Error('Research provider rejected');
   const envelope = z.object({ status: z.literal('completed'), model: z.literal(input.credentials.model), output: z.array(z.record(z.string(), z.unknown())).max(30) }).parse(reply.data);
   const searches = envelope.output.filter(o => o.type === 'web_search_call');
-  if (searches.length !== 1 || searches[0].status !== 'completed') throw new Error('Research search receipt required');
+  if (searches.length !== 1 || searches[0]?.status !== 'completed') throw new Error('Research search receipt required');
   const messages = envelope.output.filter(o => o.type === 'message');
   if (messages.length !== 1) throw new Error('Research response invalid');
   const message = z.object({ role: z.literal('assistant'), status: z.literal('completed'), content: z.array(z.object({
     type: z.literal('output_text'), text: z.string().max(24000), annotations: z.array(z.object({ type: z.literal('url_citation'), url: z.url() })).max(100),
   })).length(1) }).parse(messages[0]);
   const content = message.content[0];
+  if (!content) throw new Error('Research response invalid');
   const parsed = z.strictObject({ companies: z.array(candidateSchema).max(50) }).parse(JSON.parse(content.text));
   const citations = new Set(content.annotations.map(a => a.url));
   if (parsed.companies.some(c => !citations.has(c.sourceUrl))) throw new Error('Research citation missing');

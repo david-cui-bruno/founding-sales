@@ -60,7 +60,9 @@ function extract(excerpt: string, sourceId: string): AccountClaim[] {
     .replace(/<!--[\s\S]*?(?:-->|$)/g, '').replace(/<[^>]*>/g, '\n');
   const claims: AccountClaim[] = [];
   for (const match of text.matchAll(/(?:^|\n)\s*We (manage|own) ([0-9][0-9,]*) (residential )?(units|buildings|properties)\./g)) {
-    const count = Number(match[2].replace(/,/g, ''));
+    const countText = match[2];
+    if (countText === undefined) continue;
+    const count = Number(countText.replace(/,/g, ''));
     if (!Number.isSafeInteger(count)) continue;
     claims.push({ key: 'portfolio', kind: 'fact', value: { count, measure: match[4] as 'units' | 'buildings' | 'properties', scope: match[1] === 'manage' ? 'managed' : 'owned' }, evidenceIds: [sourceId] });
     if (match[3]) claims.push({ key: 'residential_scope', kind: 'fact', value: 'Company advertises a residential portfolio.', evidenceIds: [sourceId] });
@@ -93,9 +95,10 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
         if (requests >= limits.maxPages) throw new Error('Research page budget exceeded');
         if (bytes >= limits.maxBytes) throw new Error('Research bytes exceeded');
         const addresses = await bounded(resolve(parsed.hostname), signal);
-        if (!addresses.length || addresses.some(address => !publicResearchAddress(address))) throw new Error('Research private address rejected');
+        const address = addresses[0];
+        if (address === undefined || addresses.some(address => !publicResearchAddress(address))) throw new Error('Research private address rejected');
         signal.throwIfAborted(); requests++;
-        const response = await bounded(http({ url, address: addresses[0], maxBytes: limits.maxBytes - bytes, signal }), signal);
+        const response = await bounded(http({ url, address, maxBytes: limits.maxBytes - bytes, signal }), signal);
         const body = await readBytes(response, limits.maxBytes - bytes, signal); bytes += body.byteLength;
         if (response.status >= 300 && response.status < 400) {
           void response.body?.cancel().catch((): undefined => undefined);
