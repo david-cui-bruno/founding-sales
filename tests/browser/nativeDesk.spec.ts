@@ -101,7 +101,7 @@ test('real Native Desk themes, geometry, selection and unchanged editor DOM', as
   await assertClean(page,state);
 });
 
-test('explicit exact email approval and manual LinkedIn outcome stay separate from sending', async ({page}) => {
+test('explicit exact email approval stays separate from sending', async ({page}) => {
   const state = await mount(page);
   await page.getByRole('button',{name:'Email · Account A',exact:true}).click();
   await page.getByText('Approval permission',{exact:true}).click();
@@ -129,6 +129,11 @@ test('explicit exact email approval and manual LinkedIn outcome stay separate fr
   expect(editIndex).toBeGreaterThan(-1); expect(approveIndex).toBeGreaterThan(editIndex);
   expect(calls[approveIndex].input).toMatchObject({draft:{body:'The exact draft I approve.',revision:2},expectedRemoteDraftRevision:2});
   expect(calls.some(call=>call.method==='getRequestedFollowup')).toBe(false);
+  await assertClean(page,state);
+});
+
+test('manual LinkedIn outcome stays separate from opening and copying', async ({page}) => {
+  const state = await mount(page);
   await page.getByRole('button',{name:'Manual LinkedIn · Account A',exact:true}).click();
   const note = page.getByRole('textbox',{name:'LinkedIn note'});
   await note.fill('A human-reviewed manual note.');
@@ -140,6 +145,118 @@ test('explicit exact email approval and manual LinkedIn outcome stay separate fr
   await page.getByRole('combobox',{name:'Manual outcome'}).selectOption('human_reported_sent');
   await page.getByRole('button',{name:'Record outcome',exact:true}).click();
   expect((await methods(page)).filter(method=>method==='linkedin.reportOutcome')).toHaveLength(1);
+  await assertClean(page,state);
+});
+
+async function installPendingRecoveryFixture(page: Page, kind: 'manual' | 'requested') {
+  await page.evaluate(kind=>{
+    type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+    const fixture = window.nativeDeskBrowser.fixture;
+    type Receipt = Parameters<typeof fixture.setSnapshot>[0]['ownerStatus'][number]['pendingCommands'][number];
+    const reflect = (receipt: Receipt | null) => {
+      const snapshot = fixture.snapshot();
+      const owner = snapshot.ownerStatus.find(item=>item.accountId==='a');
+      if (!owner) throw Error('Missing fixture owner');
+      owner.pendingCommands = receipt ? [structuredClone(receipt)] : [];
+      owner.status = receipt ? 'pending' : 'owner_applied';
+      fixture.setSnapshot(snapshot);
+    };
+    const delegation: Mutable<typeof fixture.api.delegation> = fixture.api.delegation;
+    let syncCalls=0;
+    delegation.sync = async () => {
+      fixture.calls.push({method:'delegation.sync'});
+      if (++syncCalls===1 && kind==='manual') throw Error('Fixture owner sync unavailable');
+      // This models a durable owner event applied to local storage. The UI must
+      // reread it, not infer cleared state from the untrusted report counts.
+      reflect(null);
+      return {applied:1,gaps:0,cursor:'fixture-cursor',ownerFresh:true};
+    };
+    if (kind==='manual') {
+      const api: Mutable<typeof fixture.api.linkedin> = fixture.api.linkedin;
+      const original = api.reportOutcome;
+      let reports=0;
+      api.reportOutcome = async input => {
+        const result=await original(input);
+        if (++reports===1) {reflect(result.receipt);return result;}
+        reflect(null);
+        return {...result,receipt:{...result.receipt,status:'applied'}};
+      };
+    } else {
+      const original=delegation.approveRequestedFollowup;
+      let approvals=0;
+      delegation.approveRequestedFollowup=async input=>{
+        const result=await original(input);
+        if (++approvals===1) {reflect(result.receipt);throw Error('Fixture lost pending approval response');}
+        reflect(null);
+        return {...result,state:'needs_review',receipt:{...result.receipt,status:'rejected',reason:'Fixture terminal rejection'}};
+      };
+    }
+  },kind);
+}
+
+test('real pending manual receipt can be explicitly reconciled without unholding new work or syncing automatically', async ({page}) => {
+  const state=await mount(page);
+  await installPendingRecoveryFixture(page,'manual');
+  await page.getByRole('button',{name:'Manual LinkedIn · Account A',exact:true}).click();
+  await page.getByRole('button',{name:'Begin manual step',exact:true}).click();
+  await page.getByRole('combobox',{name:'Manual outcome'}).selectOption('not_sent');
+  await page.getByRole('button',{name:'Record outcome',exact:true}).click();
+  await page.evaluate(()=>window.nativeDeskBrowser.refresh());
+  await expect(page.getByRole('button',{name:'Copy note',exact:true})).toBeDisabled();
+  expect((await methods(page)).filter(method=>method==='delegation.sync')).toHaveLength(0);
+  await page.locator('.native-desk__connection > summary').click();
+  const recheck=page.getByRole('button',{name:'Reconcile queued commands',exact:true});
+  await expect(recheck).toBeEnabled();
+  await page.evaluate(()=>{
+    window.nativeDeskBrowser.fixture.setConfiguration({state:'paused',workspaceId:'ws',endpoint:'https://owner.fixture.invalid',configuration:{revision:2,configuration:{version:1,state:'paused',research:null},updatedAt:new Date().toISOString()}});
+    window.nativeDeskBrowser.refresh();
+  });
+  await expect(recheck).toBeDisabled();
+  expect((await methods(page)).filter(method=>method==='delegation.sync')).toHaveLength(0);
+  await page.evaluate(()=>{
+    window.nativeDeskBrowser.fixture.setConfiguration({state:'active',workspaceId:'ws',endpoint:'https://owner.fixture.invalid',configuration:{revision:3,configuration:{version:1,state:'active',research:null},updatedAt:new Date().toISOString()}});
+    window.nativeDeskBrowser.refresh();
+  });
+  await expect(recheck).toBeEnabled();
+  await recheck.click();
+  await expect.poll(async()=>(await methods(page)).filter(method=>method==='delegation.sync').length).toBe(1);
+  await expect(page.getByRole('button',{name:'Copy note',exact:true})).toBeDisabled();
+  expect((await methods(page)).filter(method=>method==='linkedin.reportOutcome')).toHaveLength(1);
+  await expect(recheck).toBeEnabled();
+  await recheck.click();
+  const retry=page.getByRole('button',{name:'Retry retained outcome',exact:true});
+  await expect(retry).toBeEnabled();
+  await retry.click();
+  await expect(page.getByText('Human outcome receipt: applied.',{exact:true})).toBeVisible();
+  const reports=await page.evaluate(()=>window.nativeDeskBrowser.fixture.calls.filter(call=>call.method==='linkedin.reportOutcome'));
+  expect(reports).toHaveLength(2);expect(reports[1].input).toEqual(reports[0].input);
+  expect((await methods(page)).filter(method=>method==='delegation.sync')).toHaveLength(2);
+  expect((await methods(page)).filter(method=>['linkedin.open','linkedin.copy'].includes(method))).toHaveLength(0);
+  await assertClean(page,state);
+});
+
+test('a lost requested approval with a persisted pending receipt keeps exact identity through explicit owner recheck', async ({page}) => {
+  const state=await mount(page);
+  await installPendingRecoveryFixture(page,'requested');
+  await page.getByRole('button',{name:'Email · Account A',exact:true}).click();
+  await page.getByText('Approval permission',{exact:true}).click();
+  await page.getByRole('checkbox').check();
+  await page.getByLabel('Approval expiry').fill(new Date(Date.now()+86400000).toISOString().slice(0,16));
+  await page.getByRole('button',{name:'Approve email',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Retry same approval',exact:true})).toBeVisible();
+  await page.evaluate(()=>window.nativeDeskBrowser.refresh());
+  await expect(page.getByRole('button',{name:'Approve email',exact:true})).toBeDisabled();
+  expect((await methods(page)).filter(method=>method==='delegation.sync')).toHaveLength(0);
+  await page.locator('.native-desk__connection > summary').click();
+  await page.getByRole('button',{name:'Reconcile queued commands',exact:true}).click();
+  const retry=page.getByRole('button',{name:'Retry same approval',exact:true});
+  await expect(retry).toBeEnabled();
+  await retry.click();
+  await expect(page.getByText(/Approval: needs review/)).toBeVisible();
+  const approvals=await page.evaluate(()=>window.nativeDeskBrowser.fixture.calls.filter(call=>call.method==='approveRequestedFollowup'));
+  expect(approvals).toHaveLength(2);expect(approvals[1].input).toEqual(approvals[0].input);
+  expect((await methods(page)).filter(method=>method==='delegation.sync')).toHaveLength(1);
+  expect((await methods(page)).filter(method=>method==='editRequestedFollowup')).toHaveLength(1);
   await assertClean(page,state);
 });
 
@@ -165,6 +282,31 @@ test('accounts, frozen campaigns, real meeting status and held refresh preserve 
   await expect(page.getByText('Refresh unavailable. Actions held until the local workspace can be checked.')).toBeVisible();
   await expect(body).toHaveValue('Still here when refresh fails');
   await expect(page.getByRole('button',{name:'Save edits',exact:true})).toBeDisabled();
+  await assertClean(page,state);
+});
+
+test('two saved replies in one thread keep exact independent row identities', async ({page}) => {
+  const state = await mount(page);
+  await page.evaluate(()=>{
+    const fixture = window.nativeDeskBrowser.fixture;
+    const snapshot = fixture.snapshot();
+    const date = '2026-09-09T12:00:00.000Z';
+    const thread: Extract<typeof snapshot.answers[number], {kind:'reply'}>['thread'] = {thread:{accountId:'a',mailboxSubject:'mailbox',provider:'gmail' as const,providerThreadId:'thread',messages:[{id:'message',threadId:'thread',rfcMessageId:null,references:[],from:['person@fixture.invalid'],to:['founder@fixture.invalid'],cc:[],date,subject:'Reply',bodyParts:[{mimeType:'text/plain' as const,text:'Tell me more',truncated:false}]}]},revision:1,contextRevision:'context',signals:[]};
+    for (const [id,body] of [['reply-one','First exact saved reply'],['reply-two','Second exact saved reply']] as const) snapshot.answers.push({kind:'reply',accountId:'a',thread,draft:{id,body,accountId:'a',mailboxSubject:'mailbox',threadId:'thread',threadRevision:1,contextRevision:'context',revision:1,recipient:'person@fixture.invalid',sender:'founder@fixture.invalid',subject:'Re: Reply',evidenceIds:['message'],generation:'edited',updatedAt:date},stale:false,capability:'held',reason:'reply_capability_unverified'});
+    fixture.setSnapshot(snapshot);
+    window.nativeDeskBrowser.refresh();
+  });
+  const replies = page.getByRole('button',{name:'Reply · Account A',exact:true});
+  await expect(replies).toHaveCount(2);
+  await replies.nth(0).click();
+  await expect(page.getByText('First exact saved reply',{exact:true})).toBeVisible();
+  await replies.nth(1).click();
+  await expect(page.locator('.native-desk__row[aria-current="true"]')).toHaveCount(1);
+  await expect(page.getByText('Second exact saved reply',{exact:true})).toBeVisible();
+  await page.evaluate(()=>{const f=window.nativeDeskBrowser.fixture;const s=f.snapshot();s.answers.reverse();f.setSnapshot(s);window.nativeDeskBrowser.refresh();});
+  await expect(page.getByText('Second exact saved reply',{exact:true})).toBeVisible();
+  await expect(page.locator('.native-desk__row[aria-current="true"]')).toHaveCount(1);
+  expect((await methods(page)).every(method=>['daily.get','delegation.status'].includes(method))).toBe(true);
   await assertClean(page,state);
 });
 
@@ -347,6 +489,16 @@ for (const initial of ['pending','unknown'] as const) {
         type Mutable<T> = { -readonly [K in keyof T]: T[K] };
         const fixture = window.nativeDeskBrowser.fixture;
         const api: Mutable<typeof fixture.api.linkedin> = fixture.api.linkedin;
+        const delegation: Mutable<typeof fixture.api.delegation> = fixture.api.delegation;
+        delegation.sync = async () => {
+          fixture.calls.push({method:'delegation.sync'});
+          // Model the owner having reconciled the outbox. The retained editor
+          // still needs an explicit exact receipt retry before it can adopt.
+          const canonical = fixture.snapshot();
+          for (const owner of canonical.ownerStatus) { owner.pendingCommands=[]; owner.status='owner_applied'; }
+          fixture.setSnapshot(canonical);
+          return {applied:1,gaps:0,cursor:'historical-owner-event',ownerFresh:true};
+        };
         const original = api.reportOutcome;
         let retained: Awaited<ReturnType<typeof original>> | undefined;
         api.reportOutcome = async input => {
@@ -391,7 +543,12 @@ for (const initial of ['pending','unknown'] as const) {
       await expect(adopt).toBeDisabled();
       await expect(page.getByRole('textbox',{name:'LinkedIn note'})).toHaveValue('Manual note');
       for (const name of ['Begin manual step','Open LinkedIn','Copy note','Save note']) await expect(page.getByRole('button',{name,exact:true})).toBeDisabled();
+      await expect(page.getByRole('button',{name:'Recover receipts',exact:true})).toBeDisabled();
+      await page.locator('.native-desk__connection > summary').click();
+      expect((await methods(page)).filter(method=>method==='delegation.sync')).toHaveLength(0);
+      await page.getByRole('button',{name:'Reconcile queued commands',exact:true}).click();
       await page.getByRole('button',{name:'Recover receipts',exact:true}).click();
+      expect((await methods(page)).filter(method=>method==='delegation.sync')).toHaveLength(1);
       await expect.poll(async()=>(await methods(page)).filter(method=>method==='linkedin.recover').length).toBe(1);
       await expect(adopt).toBeDisabled();
       await expect(retry).toBeEnabled();
