@@ -11,6 +11,9 @@
     "sourceMap": true,
     "baseUrl": ".",
     "paths": {
+      "kysely/migration": [
+        "node_modules/kysely/dist/migration/index.d.ts"
+      ],
       "@electron/fuses": [
         "node_modules/@electron/fuses/dist/index.d.ts"
       ]

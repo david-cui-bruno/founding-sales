@@ -1,6 +1,3 @@
-// The project intentionally uses TypeScript's legacy Node resolver, which cannot
-// type-resolve Kysely's package-exported migration entrypoint.
-// @ts-expect-error -- The runtime subpath is exported by Kysely and covered by migration tests.
 import { Migrator } from 'kysely/migration'; // eslint-disable-line import/no-unresolved -- Kysely exports this runtime subpath.
 
 import type { AppDatabase } from './database';

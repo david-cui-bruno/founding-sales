@@ -13,9 +13,6 @@ import { dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { Kysely, SqliteDialect } from 'kysely';
-// The project intentionally uses TypeScript's legacy Node resolver, which cannot
-// type-resolve Kysely's package-exported migration entrypoint.
-// @ts-expect-error -- The runtime subpath is exported by Kysely and exercised here.
 import { Migrator } from 'kysely/migration'; // eslint-disable-line import/no-unresolved -- Kysely exports this runtime subpath.
 
 import {
