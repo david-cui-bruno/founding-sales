@@ -104,12 +104,12 @@ async function runScenario(): Promise<void> {
       await assertWrongKeyIsImmutable(workspace.path);
     } else if (scenario === 'encrypted-current-schema-reopen') {
       await createEncryptedLatestSchema(workspace.path);
-      const before = readEncryptedFingerprint(workspace.path, 21);
+      const before = readEncryptedFingerprint(workspace.path, 22);
       await prepareEncryptedDatabase(workspace.path, createTestWorkspaceKey());
       // WAL stabilization intentionally changes physical pages/journal mode,
       // but must preserve the exact schema and logical content fingerprint.
-      assert.deepEqual(readEncryptedFingerprint(workspace.path, 21), before);
-      assertEncryptedRetainedRow(workspace.path, 21);
+      assert.deepEqual(readEncryptedFingerprint(workspace.path, 22), before);
+      assertEncryptedRetainedRow(workspace.path, 22);
       assertArtifactsAbsent(workspace.path);
     } else if (scenario === 'encrypted-schema-13-reopen') {
       await assertEncryptedSchemaVersionAccepted(workspace.path, 13);
@@ -129,8 +129,10 @@ async function runScenario(): Promise<void> {
       await assertEncryptedSchemaVersionAccepted(workspace.path, 20);
     } else if (scenario === 'encrypted-schema-21-reopen') {
       await assertEncryptedSchemaVersionAccepted(workspace.path, 21);
-    } else if (scenario === 'encrypted-schema-22-rejected') {
-      await assertEncryptedSchemaVersionRejected(workspace.path, 22);
+    } else if (scenario === 'encrypted-schema-22-reopen') {
+      await assertEncryptedSchemaVersionAccepted(workspace.path, 22);
+    } else if (scenario === 'encrypted-schema-23-rejected') {
+      await assertEncryptedSchemaVersionRejected(workspace.path, 23);
     } else if (scenario === 'encrypted-schema-future-rejected') {
       await assertEncryptedSchemaVersionRejected(workspace.path, 99);
     } else if (scenario === 'path-mismatched-marker') {
@@ -605,7 +607,7 @@ async function createEncryptedSchemaVersion(
 
 async function assertEncryptedSchemaVersionAccepted(
   databasePath: string,
-  schemaVersion: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21,
+  schemaVersion: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22,
 ): Promise<void> {
   await createEncryptedSchemaVersion(databasePath, schemaVersion);
   const before = readFileSync(databasePath);

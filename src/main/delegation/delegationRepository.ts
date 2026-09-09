@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { AppDatabase } from '../db/database';
 import type { Clock } from '../domain/support/clock';
 import { accountFingerprint } from '../domain/accounts/accountEvidence';
@@ -6,6 +6,8 @@ import type { AccountSourcePolicy } from '../domain/accounts/accountRepository';
 import { accountIdSchema, accountInstantSchema } from '../../shared/contracts/accountContract';
 import { approvalSnapshotSchema, authorityStateSchema, commandReceiptSchema, delegationCommandSchema, workerEventSchema,
   type ApprovalSnapshot, type AuthorityState, type CommandReceipt, type DelegationCommand, type WorkerEvent } from '../../shared/contracts/delegationContract';
+
+import { threadProjectionSchema } from '../../shared/contracts/mailThreadContract';
 
 type AuthorityRow = { account_id: string; workspace_id: string; owner: 'local' | 'worker'; generation: number;
   state: AuthorityState['state']; aggregate_version: number };
@@ -114,6 +116,7 @@ export class DelegationRepository {
         this.raw.prepare('UPDATE delegated_authorities SET aggregate_version=?,updated_at=? WHERE account_id=? AND workspace_id=?')
           .run(event.aggregateVersion, at, event.accountId, event.workspaceId);
       }
+      if (event.kind === 'thread.observed') this.applyThread(event, at);
       if (event.kind === 'action.outcome') {
         const p = event.payload;
         const previous = this.raw.prepare('SELECT content_hash,target_hash FROM delegated_action_outcomes WHERE workspace_id=? AND account_id=? AND action_id=? LIMIT 1')
@@ -129,6 +132,32 @@ export class DelegationRepository {
         DO UPDATE SET aggregate_version=excluded.aggregate_version,event_id=excluded.event_id`).run(event.workspaceId, event.accountId, stream, event.aggregateVersion, event.id);
       return 'applied';
     });
+  }
+  private applyThread(event: Extract<WorkerEvent, { kind: 'thread.observed' }>, at: string) {
+    const { projection, approvalInvalidation, observedAt } = event.payload;
+    const thread = projection.thread;
+    if (accountInstantSchema.parse(observedAt) > at || thread.messages.some(message => accountInstantSchema.parse(message.date) > at)) throw new Error('Future thread observation');
+    const row = this.raw.prepare('SELECT projection_json FROM delegated_threads WHERE workspace_id=? AND account_id=? AND id=?')
+      .get(event.workspaceId, event.accountId, thread.providerThreadId) as { projection_json: string } | undefined;
+    const previous = row ? threadProjectionSchema.parse(JSON.parse(row.projection_json)) : null;
+    if ((previous?.revision ?? 0) !== approvalInvalidation.previousRevision) throw new Error('Thread revision conflict');
+    if (previous && (previous.thread.mailboxSubject !== thread.mailboxSubject || previous.thread.providerThreadId !== thread.providerThreadId
+      || previous.thread.messages.some(message => !thread.messages.some(next => next.id === message.id && accountFingerprint(next) === accountFingerprint(message))))) {
+      throw new Error('Thread immutable history conflict');
+    }
+    this.raw.prepare(`INSERT INTO delegated_threads VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace_id,account_id,id)
+      DO UPDATE SET revision=excluded.revision,context_revision=excluded.context_revision,projection_json=excluded.projection_json,updated_at=excluded.updated_at`)
+      .run(event.workspaceId, event.accountId, thread.providerThreadId, 'gmail', thread.providerThreadId, projection.revision, projection.contextRevision, JSON.stringify(projection), at);
+    // Snapshots/drafts are never rewritten. Their stored thread/context revisions become stale.
+    for (const signal of projection.signals.filter(signal => signal.kind === 'opt_out')) for (const evidence of signal.evidence) {
+      const evidenceRef = `${thread.providerThreadId}:${evidence.messageId}`;
+      const key = createHash('sha256').update(JSON.stringify([event.workspaceId, event.accountId, thread.mailboxSubject, evidenceRef])).digest('hex');
+      this.raw.prepare('INSERT OR IGNORE INTO pm_account_suppression_tombstones VALUES(?,?,?,?,?,?)')
+        .run(key, event.accountId, observedAt, 'gmail_reply', evidenceRef, at);
+      const message = thread.messages.find(message => message.id === evidence.messageId)!;
+      for (const address of message.from) this.raw.prepare('INSERT OR IGNORE INTO pm_handle_suppression_tombstones VALUES(?,?,?,?,?,?,?)')
+        .run(`${key}:${address}`, 'email', address.toLowerCase(), observedAt, 'gmail_reply', evidenceRef, at);
+    }
   }
   private validateExecution(event: WorkerEvent) {
     const owner = this.owner(event.accountId);

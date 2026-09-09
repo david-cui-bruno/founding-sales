@@ -744,3 +744,9 @@ export type DelegationTables = {
   discovery_reservations: { workspace_id: string; budget_id: string; command_id: string; input_fingerprint: string; search_cost_micros: number; model_cost_micros: number; reserved_at: string; };
   discovery_receipts: { workspace_id: string; budget_id: string; command_id: string; candidates_json: string; cost_micros: number | null; completed_at: string; };
 };
+
+/** Schema22 account/thread-scoped mail storage. */
+export type MailPersistenceTables = {
+  delegated_mail_cursors: { workspace_id: string; account_id: string; mailbox_subject: string; checkpoint_json: string; revision: number; updated_at: string };
+  delegated_reply_drafts: { workspace_id: string; account_id: string; id: string; thread_id: string; revision: number; thread_revision: number; context_revision: string; draft_json: string; updated_at: string };
+};

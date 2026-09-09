@@ -7,7 +7,7 @@ describe('C1 encrypted migration', () => {
     const f = await createPmFixture();
     try {
       f.repo.create({ commandId: randomUUID(), name: 'Fictional PM', domain: null });
-      expect(f.db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: 21 });
+      expect(f.db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: 22 });
       expect(f.db.raw.prepare('SELECT * FROM delegated_authorities').all()).toEqual([]);
       expect(f.db.raw.prepare('SELECT * FROM persons ORDER BY id').all()).toEqual(f.historicalPersons);
     } finally { f.close(); }
@@ -225,7 +225,7 @@ it('admits research evidence and receipts in the same event transaction, rejecti
 
 import { createMigrationRunner, migrateToLatest, productionMigrations } from '../../src/main/db/migrate';
 import { seedProspect, insertOpenCycleWithAction } from '../fixtures/domainRows';
-it('preserves genuine historical20 unknown email sends and all nonempty historical business tables through21 and reopen', async () => {
+it('preserves genuine historical20 unknown email sends and all nonempty historical business tables through21 then22 and reopen', async () => {
   const temp = createTempDatabase(); const key = createTestWorkspaceKey(); const db = openDatabase({ path: temp.path, key });
   try {
     const options = { backupDirectory: `${temp.path}.backups`, workspaceKey: key };
@@ -239,7 +239,11 @@ it('preserves genuine historical20 unknown email sends and all nonempty historic
     db.raw.prepare("INSERT INTO email_send_results VALUES('legacy-command','unknown','{}',?)").run(PM_NOW);
     const tables = (db.raw.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('app_meta','kysely_migration','kysely_migration_lock') ORDER BY name").all() as { name: string }[]).map(r => r.name);
     const before = tables.map(table => db.raw.prepare(`SELECT * FROM "${table}"`).all());
-    expect(await migrateToLatest(db, options)).toEqual({ fromVersion: 20, toVersion: 21, appliedMigrationIds: ['0021DelegatedWork'] });
+    expect(await createMigrationRunner(productionMigrations.slice(0, 21))(db, options)).toEqual({ fromVersion: 20, toVersion: 21, appliedMigrationIds: ['0021DelegatedWork'] });
+    const historical21Tables = (db.raw.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('app_meta','kysely_migration','kysely_migration_lock') ORDER BY name").all() as { name: string }[]).map(row => row.name);
+    const historical21Rows = historical21Tables.map(table => db.raw.prepare(`SELECT * FROM "${table}"`).all());
+    expect(await migrateToLatest(db, options)).toEqual({ fromVersion: 21, toVersion: 22, appliedMigrationIds: ['0022MailPersistence'] });
+    expect(historical21Tables.map(table => db.raw.prepare(`SELECT * FROM "${table}"`).all())).toEqual(historical21Rows);
     expect(tables.map(table => db.raw.prepare(`SELECT * FROM "${table}"`).all())).toEqual(before);
     expect(db.raw.prepare('SELECT * FROM delegated_authorities').all()).toEqual([]);
     closeDatabase(db); const reopened = openDatabase({ path: temp.path, key });
@@ -366,5 +370,37 @@ it('acknowledges a manual outcome command durably without rewriting its original
       expect(() => next.applyWorkerEvent({ ...event, payload: { ...command.payload, channel: 'call', outcome: 'connected' } })).toThrow(/conflict/i);
       expect(reopened.raw.prepare('SELECT COUNT(*) AS count FROM delegated_manual_outcomes').get()).toEqual({ count: 1 });
     } finally { closeDatabase(reopened); }
+  } finally { f.close(); }
+});
+it('replays strict owner thread observations, context fences and optout evidence in one ordered transaction', async () => {
+  const f = await createPmFixture();
+  try {
+    const account = f.repo.create({ commandId: randomUUID(), name: 'Thread PM', domain: null });
+    const repo = local(f); repo.initializeLocalAuthority(account.id);
+    const command: DelegationCommand = { ...pause(account.id), kind: 'delegate', payload: { delegationId: 'approved', approvedAt: PM_NOW } };
+    repo.queueCommand(command); repo.applyWorkerEvent(changed(command));
+    const event = { id: 'mail-event', workspaceId, accountId: account.id, authorityGeneration: 1, aggregateVersion: 2, kind: 'thread.observed',
+      payload: { observedAt: PM_NOW, projection: { revision: 1, contextRevision: 'ctx-1', thread: {
+        accountId: account.id, mailboxSubject: 'mailbox', provider: 'gmail', providerThreadId: 'thread1', messages: [
+          { id: 'msg1', threadId: 'thread1', rfcMessageId: null as string | null, references: [] as string[], from: ['Owner@example.com'], to: ['me@example.com'], cc: [] as string[], date: PM_NOW,
+            subject: 'Stop', bodyParts: [{ mimeType: 'text/plain', text: 'Please stop', truncated: false }] }],
+      }, signals: [{ kind: 'opt_out', evidence: [{ messageId: 'msg1', quote: 'Please stop' }], requiresApproval: true }] },
+      approvalInvalidation: { threadId: 'thread1', previousRevision: 0, revision: 1, contextRevision: 'ctx-1' } } };
+    const parsed = workerEventSchema.parse(event);
+    expect(workerEventSchema.safeParse({ ...event, accountId: 'other' }).success).toBe(false);
+    expect(workerEventSchema.safeParse({ ...event, payload: { ...event.payload, execute: true } }).success).toBe(false);
+    expect(repo.applyWorkerEvent(parsed)).toBe('applied');
+    expect(repo.applyWorkerEvent(parsed)).toBe('duplicate');
+    expect(f.db.raw.prepare('SELECT revision,context_revision FROM delegated_threads').get()).toEqual({ revision: 1, context_revision: 'ctx-1' });
+    expect(f.db.raw.prepare('SELECT account_id FROM pm_account_suppression_tombstones').all()).toEqual([{ account_id: account.id }]);
+    expect(f.db.raw.prepare('SELECT normalized_value FROM pm_handle_suppression_tombstones').all()).toEqual([{ normalized_value: 'owner@example.com' }]);
+    const conflict = workerEventSchema.parse({ ...event, id: 'conflict', aggregateVersion: 3 });
+    expect(() => repo.applyWorkerEvent(conflict)).toThrow(/revision/i);
+    expect(f.db.raw.prepare("SELECT aggregate_version FROM delegated_event_cursors WHERE stream='execution'").get()).toEqual({ aggregate_version: 2 });
+    expect(repo.authority(account.id)).toMatchObject({ owner: 'worker', state: 'active', generation: 1 });
+    closeDatabase(f.db);
+    const reopened = openDatabase({ path: f.db.path, key: createTestWorkspaceKey() });
+    try { expect(new DelegationRepository({ database: reopened, workspaceId, clock: { now: () => PM_NOW } }).applyWorkerEvent(parsed)).toBe('duplicate'); }
+    finally { closeDatabase(reopened); }
   } finally { f.close(); }
 });

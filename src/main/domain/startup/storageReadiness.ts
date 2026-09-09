@@ -7,7 +7,7 @@ import { inspectDatabaseEncryption } from '../../db/databaseEncryption';
 import { DomainStartupFatalError } from './domainStartupTypes';
 
 export type DomainStorageReadiness = Readonly<{
-  schemaVersion: 21;
+  schemaVersion: 22;
   encrypted: true;
   cipherVersion: string;
   ftsAvailable: true;
@@ -24,7 +24,7 @@ export type DomainSchemaManifest = Readonly<{
 }>;
 
 /**
- * The canonical load-bearing schema-21 manifest. Reads the live catalog from
+ * The canonical load-bearing schema-22 manifest. Reads the live catalog from
  * sqlite_master with binary-name ordering; a missing, renamed, extra, or
  * malformed load-bearing object is fatal before composition.
  */
@@ -48,9 +48,11 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'delegated_authorities',
     'delegated_commands',
     'delegated_event_cursors',
+    'delegated_mail_cursors',
     'delegated_manual_outcomes',
     'delegated_meetings',
     'delegated_reconciliation',
+    'delegated_reply_drafts',
     'delegated_threads',
     'discovery_approved_budgets',
     'discovery_assessments',
@@ -340,8 +342,8 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'protect_trigger_event_receipt_proof',
     'synchronize_person_opt_out',
   ]),
-  // Generated from actual production migrations through 0021.
-  catalogSha256: 'fb0d87e7930b98b63c0cf896c7d6739a881c5044a11771bec8e211158bc26d29',
+  // Generated from actual production migrations through 0022.
+  catalogSha256: '13e641da99b4e61f4dd7a05a1d07bda21ac642dd3646d5ad35c0a582a7fb106e',
 });
 
 export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
@@ -365,7 +367,7 @@ export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
   '0018PlaybookDueActions',
   '0019EmailDrafts',
   '0020PmAccounts',
-  '0021DelegatedWork',
+  '0021DelegatedWork', '0022MailPersistence',
 ] as const);
 
 const appMetaSchema = z.object({
@@ -379,7 +381,7 @@ const appMetaSchema = z.object({
 export function assertDomainStorageReady(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
-  expectedSchemaVersion: 21;
+  expectedSchemaVersion: 22;
   expectedManifest: DomainSchemaManifest;
 }): DomainStorageReadiness {
   const { database } = input;
@@ -402,7 +404,7 @@ export function assertDomainStorageReady(input: {
   const metadata = appMetaSchema.safeParse(metadataRow);
   if (!metadata.success || metadata.data.schema_version !== input.expectedSchemaVersion) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace schema version is not exactly 21.',
+      'schema_not_ready', 'The workspace schema version is not exactly 22.',
     );
   }
 
@@ -421,7 +423,7 @@ export function assertDomainStorageReady(input: {
     DOMAIN_MIGRATION_LEDGER,
   )) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace migration ledger is not exactly schema 21.',
+      'schema_not_ready', 'The workspace migration ledger is not exactly schema 22.',
     );
   }
 
@@ -496,7 +498,7 @@ export function assertDomainStorageReady(input: {
   }
 
   return Object.freeze({
-    schemaVersion: 21 as const,
+    schemaVersion: 22 as const,
     encrypted: true as const,
     cipherVersion: encryption.cipherVersion ?? 'unknown',
     ftsAvailable: true as const,
