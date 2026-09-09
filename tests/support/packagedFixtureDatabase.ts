@@ -291,6 +291,84 @@ const ACTION_INDEPENDENT16_PROJECTIONS = Object.freeze([
     resurface_reason, created_at`],
 ] as const);
 
+// Independently pinned schema19 manifest from the pre-B1 catalog. Never derive from current.
+const SCHEMA19_CATALOG = 'a6108cfce2bc4242d0872e81cc2afc88634f6309c55605bd3fc995804fde9073';
+const SCHEMA19_TABLES = Object.freeze([
+    'activities',
+    'activity_amendments',
+    'app_meta',
+    'backup_receipts',
+    'cadence_action_components',
+    'cadence_definitions',
+    'cadence_enrollments',
+    'cadence_steps',
+    'cloud_entity_links',
+    'consent_policy_records',
+    'contact_compliance_audit_events',
+    'cycle_reactivation_receipts',
+    'discovery_assessments',
+    'discovery_current',
+    'discovery_overrides',
+    'discovery_preparations',
+    'discovery_scan_state',
+    'email_drafts',
+    'email_send_intents',
+    'email_send_results',
+    'foundation_fts_probe',
+    'foundation_fts_probe_config',
+    'foundation_fts_probe_content',
+    'foundation_fts_probe_data',
+    'foundation_fts_probe_docsize',
+    'foundation_fts_probe_idx',
+    'identity_repair_events',
+    'jobs',
+    'kysely_migration',
+    'kysely_migration_lock',
+    'learning_evidence',
+    'learnings',
+    'lifecycle_review_items',
+    'next_actions',
+    'opt_out_closure_receipt_handles',
+    'opt_out_closure_receipts',
+    'opt_out_handles',
+    'opt_out_tombstones',
+    'organization_aliases',
+    'organizations',
+    'outbound_jurisdiction_audit_events',
+    'outbound_jurisdiction_clearances',
+    'person_contact_methods',
+    'person_outbound_jurisdictions',
+    'persons',
+    'prioritization_evaluations',
+    'prioritization_preference_events',
+    'prioritization_rule_versions',
+    'priority_overrides',
+    'properties',
+    'prospect_organizations',
+    'prospect_priority_projection',
+    'prospect_properties',
+    'prospects',
+    'reactivation_rules',
+    'recovery_readiness',
+    'restore_drill_receipts',
+    'review_position',
+    'sales_cycle_close_readiness',
+    'sales_cycles',
+    'source_events',
+    'source_intake_receipts',
+    'sourcing_cursor',
+    'sourcing_enrichment_requests',
+    'sourcing_outcome_outbox',
+    'sourcing_processed_files',
+    'sourcing_suppression_outbox',
+    'stage_events',
+    'transcript_utterances',
+    'transcripts',
+    'trigger_events',
+    'won_terms',
+    'workspace_settings',
+  ]);
+
 const metadataTables = new Set(['app_meta', 'kysely_migration', 'kysely_migration_lock', 'backup_receipts', 'restore_drill_receipts', 'recovery_readiness']);
 
 function inspectRows(raw: RawDatabase, expected: FixtureSchema, sourceSha256: string, through16: boolean): FixtureInspection {
@@ -306,11 +384,11 @@ function inspectRows(raw: RawDatabase, expected: FixtureSchema, sourceSha256: st
   const fingerprint = catalog.map(row => [row.type, row.name, (row.sql ?? '').replace(/\s+/g, ' ').trim()])
     .sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
   const catalogSha256 = hash(JSON.stringify(fingerprint));
-  if (catalogSha256 !== (expected === 15 ? SCHEMA15_CATALOG : expected === 16 ? SCHEMA16_CATALOG : expected === 17 ? SCHEMA17_CATALOG : DOMAIN_SCHEMA_MANIFEST.catalogSha256)) fail();
+  if (catalogSha256 !== (expected === 15 ? SCHEMA15_CATALOG : expected === 16 ? SCHEMA16_CATALOG : expected === 17 ? SCHEMA17_CATALOG : expected === 19 ? SCHEMA19_CATALOG : DOMAIN_SCHEMA_MANIFEST.catalogSha256)) fail();
   // Catalog-validated, fixed tables only. Canonical row multisets, no business rows
   // escape. This is a same-schema digest, not a cross-migration equivalence claim.
   const business = createHash('sha256');
-  for (const table of expected === 15 ? SCHEMA15_TABLES : expected === 16 ? SCHEMA16_TABLES : expected === 17 ? SCHEMA17_TABLES : DOMAIN_SCHEMA_MANIFEST.tables) {
+  for (const table of expected === 15 ? SCHEMA15_TABLES : expected === 16 ? SCHEMA16_TABLES : expected === 17 ? SCHEMA17_TABLES : expected === 19 ? SCHEMA19_TABLES : DOMAIN_SCHEMA_MANIFEST.tables) {
     if (metadataTables.has(table) || table.startsWith('foundation_fts_probe')) continue;
     const rows = raw.prepare(`SELECT * FROM "${table}"`).raw().all().map(row => JSON.stringify(row)).sort();
     business.update(JSON.stringify([table, rows]));

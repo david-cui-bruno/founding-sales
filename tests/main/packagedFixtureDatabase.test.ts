@@ -77,6 +77,35 @@ describe('bounded packaged fixture database preparation', () => {
     } };
   }
 
+  it('inspects genuine schema19 independently of current schema20 and refuses catalog drift', async () => {
+    const key = createTestWorkspaceKey();
+    fs.writeFileSync(dbPath('current'), '', { flag: 'wx', mode: 0o600 });
+    fs.writeFileSync(envelopePath('current'), OPAQUE_ENVELOPE, { flag: 'wx', mode: 0o600 });
+    const database = openDatabase({ path: dbPath('current'), key });
+    try {
+      await migrations.createMigrationRunner(migrations.productionMigrations.filter(entry => entry.schemaVersion <= 19))(
+        database, { workspaceKey: key, backupDirectory: join(f.paths.current, 'backups') });
+      database.raw.prepare('INSERT INTO persons(id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)')
+        .run('historical19-person', 'FICTIONAL HISTORICAL19', TIME, TIME);
+      expect(database.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: 19 });
+      expect(database.raw.prepare("SELECT name FROM sqlite_master WHERE name='pm_accounts'").get()).toBeUndefined();
+    } finally { closeDatabase(database); key.bytes.fill(0); }
+    const before = identity(dbPath('current')); const resources = observeResources();
+    const inspected = await f.inspectStoppedProfile('current', material, 19);
+    expect(inspected.schemaVersion).toBe(19);
+    expect(inspected.catalogSha256).toBe('a6108cfce2bc4242d0872e81cc2afc88634f6309c55605bd3fc995804fde9073');
+    expect(inspected.ledger).toHaveLength(19); expect(inspected.ledger.at(-1)).toBe('0019EmailDrafts');
+    expect(inspected.aggregateCounts.people).toBe(1);
+    await expect(f.inspectStoppedProfile('current', material, 20)).rejects.toThrow(ERROR);
+    expect(identity(dbPath('current'))).toEqual(before); expect(residue()).toEqual([]); resources.assertReleased();
+    const corruptKey = createTestWorkspaceKey(); const corrupt = openDatabase({ path: dbPath('current'), key: corruptKey });
+    try { corrupt.raw.exec('CREATE TABLE unrecognized19 (value TEXT)'); }
+    finally { closeDatabase(corrupt); corruptKey.bytes.fill(0); }
+    const corruptBefore = identity(dbPath('current'));
+    await expect(f.inspectStoppedProfile('current', material, 19)).rejects.toThrow(ERROR);
+    expect(identity(dbPath('current'))).toEqual(corruptBefore); expect(residue()).toEqual([]); resources.assertReleased();
+  });
+
   it('owns fresh private canonical fixed paths, never accepts a root override, and cleans only its own root', async () => {
     expect(fs.realpathSync(f.paths.root)).toBe(f.paths.root);
     expect(f.paths.root.startsWith(process.cwd() + sep)).toBe(false);
