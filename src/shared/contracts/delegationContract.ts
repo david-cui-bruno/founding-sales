@@ -1,3 +1,6 @@
+import {commandReceiptSchema,type CommandReceipt} from './commandReceiptContract';
+export {commandReceiptSchema,type CommandReceipt} from './commandReceiptContract';
+import {requestedApprovalStatusSchema} from './requestedFollowupContract';
 import {handoffResultSchema} from './outboundContract';
 import { accountBootstrapPayloadSchema, ownerCommandSchemas, manualOutcomeSchema, manualHandoffSchema } from './ownerCommandContract';
 import { acquisitionMilestonePayloadSchema } from './acquisitionReportContract';
@@ -16,9 +19,6 @@ export type ActionState = z.infer<typeof actionStateSchema>;
 export const authorityStateSchema = z.strictObject({ accountId: id, owner: z.enum(['local', 'worker']), generation: revision,
   state: z.enum(['local', 'delegating', 'active', 'paused', 'revoked']) });
 export type AuthorityState = Readonly<z.infer<typeof authorityStateSchema>>;
-export const commandReceiptSchema = z.strictObject({ commandId: id, status: z.enum(['pending', 'applied', 'rejected']),
-  authorityGeneration: revision, aggregateVersion: revision, reason: reason.nullable() });
-export type CommandReceipt = Readonly<z.infer<typeof commandReceiptSchema>>;
 export const approvalSnapshotSchema = z.strictObject({ id, accountId: id, recipient: z.string().min(1).max(2048),
   sender: z.string().min(1).max(2048), footerHash: hash, subjectHash: hash, bodyHash: hash,
   routeId: id, routeVersion: revision.min(1), threadId: id.nullable(), threadRevision: revision,
@@ -41,6 +41,7 @@ export const publicDelegationCommandSchema = delegationCommandSchema.refine(comm
 export type PublicDelegationCommand = Exclude<DelegationCommand, {kind:'bootstrap-selected-account'}>;
 const eventBase = { id, workspaceId: id, accountId: id, authorityGeneration: revision, aggregateVersion: revision.min(1) };
 export const workerEventSchema = z.discriminatedUnion('kind', [
+  z.strictObject({...eventBase,kind:z.literal('requested_followup.status'),payload:z.strictObject({commandId:z.uuid(),draftId:id,status:requestedApprovalStatusSchema}),campaign:campaignEventPayloadSchema.optional()}),
   z.strictObject({...eventBase,kind:z.literal('account.bootstrap'),payload:accountBootstrapPayloadSchema,receipt:commandReceiptSchema}),
   z.strictObject({ ...eventBase, kind: z.literal('acquisition.milestone_reported'), payload: acquisitionMilestonePayloadSchema, receipt: commandReceiptSchema }),
   z.strictObject({ ...eventBase, kind: z.literal('meeting.outcome'), payload: meetingOutcomePayloadSchema }),
@@ -58,6 +59,10 @@ export const workerEventSchema = z.discriminatedUnion('kind', [
   z.strictObject({ ...eventBase, authorityGeneration: z.literal(0), kind: z.literal('research.receipt'), payload: z.strictObject({ jobId: id,
     receiptCommandId: id.nullable(), status: z.enum(['completed', 'parked']), costMicros: revision.nullable(), observedAt: accountInstantSchema }) }),
 ]).superRefine((event, ctx) => {
+  if(event.kind==='requested_followup.status'){
+    const {commandId,status}=event.payload;
+    if(status.receipt.commandId!==commandId||status.receipt.status!=='applied'||status.receipt.authorityGeneration>event.authorityGeneration||status.receipt.aggregateVersion>event.aggregateVersion||(status.state==='materialized')!==(status.intentCommandId!==null))ctx.addIssue({code:'custom',message:'Requested status identity mismatch'});
+  }
   if (event.kind === 'thread.observed' && event.payload.projection.thread.accountId !== event.accountId) {
     ctx.addIssue({ code: 'custom', message: 'Thread event account mismatch' });
   }
@@ -68,6 +73,7 @@ export const workerEventSchema = z.discriminatedUnion('kind', [
   const campaign = event.kind === 'campaign.changed' ? event.payload : 'campaign' in event ? event.campaign : undefined;
   if (campaign && (campaign.enrollment && campaign.enrollment.accountId !== event.accountId
     || campaign.version && !campaign.version.cohortAccountIds.includes(event.accountId)
+    || event.kind === 'requested_followup.status' && campaign.commandId !== event.payload.commandId
     || event.kind === 'campaign.changed' && campaign.commandId !== event.receipt.commandId
     || (event.kind === 'manual.outcome' || event.kind === 'action.outcome') && campaign.evidence !== null && campaign.evidence.actionId !== event.payload.actionId)) {
     ctx.addIssue({ code: 'custom', message: 'Campaign event identity mismatch' });

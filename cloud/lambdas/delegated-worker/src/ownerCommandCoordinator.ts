@@ -1,3 +1,5 @@
+import {DynamoRequestedFollowupRepository} from './requestedFollowupRepository';
+import {createRequestedApprovalRecord,requestedApprovalKey} from './requestedFollowupApproval';
 import { createMailPoller } from './mailPoller';
 import { offeredSlotText } from '../../../../src/shared/meetings/schedulingRules';
 import { meetingReservationSchema, meetingOutcomeSchema } from '../../../../src/shared/contracts/meetingContract';
@@ -104,7 +106,26 @@ export class OwnerCommandCoordinator {
     let proof: TransactWriteItem[];
     let finalize = (): TransactWriteItem[] => proof;
     let event: WorkerEvent;
-    if(command.kind==='submit-approved-reply') {
+    if(command.kind==='approve-requested-followup') {
+      const repository=new DynamoRequestedFollowupRepository(store.options);
+      const plan=await repository.planCurrent(command.payload.draft);
+      const draftItem=await repository.planCaptureDraft(command.payload.draft,command.payload.expectedRemoteDraftRevision);
+      const source=await this.activeSource(command,principal.pairingId,store);
+      if(plan.authority.rev!==authorityRow.rev||plan.mailbox.subject!==source.config.mailboxSubject)throw Error('requested_capture_changed');
+      const record=createRequestedApprovalRecord(command,principal,claim.data.at);
+      // AUTH is written by this enclosing transaction. Preserve every other C3
+      // current-evidence condition and reject conflicting duplicate snapshots.
+      const unique=new Map<string,TransactWriteItem>();
+      for(const item of [...plan.checks,...source.checks]){
+        const check=item.ConditionCheck;if(!check)throw Error('requested_capture_check_required');
+        if(fingerprint(check.Key)===fingerprint(store.key(authKey)))continue;
+        const identity=fingerprint(check.Key);const prior=unique.get(identity);
+        if(prior&&fingerprint(prior)!==fingerprint(item))throw Error('requested_capture_changed');
+        unique.set(identity,item);
+      }
+      proof=[...unique.values(),draftItem,store.check(claimKey,claim.rev),store.put(requestedApprovalKey(command.commandId),record,null)];
+      event=workerEventSchema.parse({...base,kind:'requested_followup.status',payload:{commandId:command.commandId,draftId:record.draftSnapshot.id,status:{receipt,state:'pending_preflight',intentCommandId:null,reason:null}}});
+    } else if(command.kind==='submit-approved-reply') {
       const source=await this.activeSource(command,principal.pairingId,store);
       const policy=new DynamoDispatchRepository(store.options,this.input.authorization);
       const intent=await policy.loadIntent(command.payload.intentCommandId);

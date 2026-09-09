@@ -1,3 +1,4 @@
+import {approveRequestedFollowupSchema} from './requestedFollowupContract';
 import {accountRecordSchema} from './accountRecordContract';
 import { saveMeetingOfferSchema } from './meetingContract';
 import { z } from 'zod';
@@ -58,7 +59,8 @@ export const bootstrapSelectedAccountCommandSchema=z.strictObject({...ownerComma
 export const bootstrapSelectedAccountSchema=z.strictObject({commandId:z.uuid(),accountId:id});
 export const accountBootstrapPayloadSchema=z.strictObject({commandId:z.uuid(),recordFingerprint:hash,researchRevision:revision.min(1)});
 
-export const ownerCommandSchemas = [bootstrapSelectedAccountCommandSchema, submitApprovedReplyCommandSchema, prepareManualCommandSchema, completeManualCommandSchema, approveReplyCommandSchema, ownerCampaignCommandSchema, configureOwnerCommandSchema, reportAcquisitionMilestoneCommandSchema] as const;
+export const approveRequestedFollowupCommandSchema=z.strictObject({...ownerCommandBase,kind:z.literal('approve-requested-followup'),payload:approveRequestedFollowupSchema});
+export const ownerCommandSchemas = [approveRequestedFollowupCommandSchema,bootstrapSelectedAccountCommandSchema, submitApprovedReplyCommandSchema, prepareManualCommandSchema, completeManualCommandSchema, approveReplyCommandSchema, ownerCampaignCommandSchema, configureOwnerCommandSchema, reportAcquisitionMilestoneCommandSchema] as const;
 export const ownerCommandSchema = z.discriminatedUnion('kind', ownerCommandSchemas);
 export type OwnerCommand = z.infer<typeof ownerCommandSchema>;
 
