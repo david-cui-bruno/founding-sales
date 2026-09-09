@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { AccountEvidenceSnapshot } from '../../../shared/contracts/accountContract';
 import type { LocalWorkspaceSnapshot } from '../../../shared/contracts/localWorkspaceContract';
 import type { LocalRead } from './localWorkspaceRead';
 export const localAccountKey = (id: string) => JSON.stringify(['local-account', id]);
-export function LocalAccountLibrary({ read, selected, onSelect }: { read: LocalRead<LocalWorkspaceSnapshot>; selected: string | null; onSelect(key: string): void }) {
-  return <section className="native-desk__lane" aria-labelledby="local-account-library"><h2 id="local-account-library">Local account library</h2><p>Stored local evidence only. Worker ownership is not established by this view.</p>
+export type LocalAccountSelectionRequest = { key: string };
+export function LocalAccountLibrary({ read, selected, onSelect, intake }: { intake?: ReactNode; read: LocalRead<LocalWorkspaceSnapshot>; selected: string | null; onSelect(key: string): void }) {
+  return <section className="native-desk__lane" aria-labelledby="local-account-library"><h2 id="local-account-library">Local account library</h2>{intake}<p>Stored local evidence only. Worker ownership is not established by this view.</p>
     {read.error ? <p role="status">Local account library is unavailable. {read.value && 'Saved evidence is stale.'} Refresh the local read.</p> : read.pending ? <p role="status">Checking local accounts…</p> : read.value?.accounts.state === 'unavailable' ? <p role="status">Local account library is unavailable. Refresh the local read.</p> : read.value?.accounts.snapshots.length === 0 ? <p>No local accounts in this snapshot.</p> : null}
     {(read.value?.accounts.state === 'available' ? read.value.accounts.snapshots : []).map(account => <button className="native-desk__row" key={localAccountKey(account.account.id)} data-row-key={localAccountKey(account.account.id)} aria-current={selected === localAccountKey(account.account.id) ? 'true' : undefined} aria-label={`Local account · ${account.account.name}`} onClick={() => onSelect(localAccountKey(account.account.id))}><strong>{account.account.name}</strong><small>Read-only local evidence</small></button>)}
   </section>;
@@ -19,9 +20,14 @@ export function LocalAccountDetail({ account }: { account: AccountEvidenceSnapsh
   </section>;
 }
 
-export function LocalOnlyAccountLibrary({ read, initialSelected = null, onSelectionChange }: { read: LocalRead<LocalWorkspaceSnapshot>; initialSelected?: string | null; onSelectionChange?(key: string): void }) {
+export function LocalOnlyAccountLibrary({ read, initialSelected = null, onSelectionChange, intake, selectionRequest, onSelectionHandled }: { intake?: ReactNode; selectionRequest?: LocalAccountSelectionRequest | null; onSelectionHandled?(request: LocalAccountSelectionRequest): void; read: LocalRead<LocalWorkspaceSnapshot>; initialSelected?: string | null; onSelectionChange?(key: string): void }) {
   const [selected, setSelected] = useState<string | null>(initialSelected);
   const select = (key: string) => { setSelected(key); onSelectionChange?.(key); };
+  useEffect(() => {
+    if (!selectionRequest) return;
+    setSelected(selectionRequest.key);
+    onSelectionHandled?.(selectionRequest);
+  }, [selectionRequest, onSelectionHandled]);
   const account = (read.value?.accounts.state === 'available' ? read.value.accounts.snapshots : []).find(a => localAccountKey(a.account.id) === selected);
-  return <div className="native-desk__layout"><nav className="native-desk__queue" aria-label="Local accounts"><LocalAccountLibrary read={read} selected={selected} onSelect={select} /></nav><div className="native-desk__detail">{account && <LocalAccountDetail account={account} />}</div></div>;
+  return <div className="native-desk__layout"><nav className="native-desk__queue" aria-label="Local accounts"><LocalAccountLibrary read={read} selected={selected} onSelect={select} intake={intake} /></nav><div className="native-desk__detail">{account && <LocalAccountDetail account={account} />}</div></div>;
 }

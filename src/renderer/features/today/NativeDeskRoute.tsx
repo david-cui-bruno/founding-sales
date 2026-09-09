@@ -1,7 +1,8 @@
 import { Phone, RefreshCw } from 'lucide-react';
 import { useLocalWorkspaceRead, type LocalDeskRead } from './localWorkspaceRead';
 import { RetainedWork, RetainedWorkDetail, LocalOnlyCalls, retainedKey } from './RetainedWork';
-import { LocalAccountLibrary, LocalAccountDetail, localAccountKey, LocalOnlyAccountLibrary } from './LocalAccountLibrary';
+import { LocalAccountLibrary, LocalAccountDetail, localAccountKey, LocalOnlyAccountLibrary, type LocalAccountSelectionRequest } from './LocalAccountLibrary';
+import { LocalCompanyIntake, useLocalCompanyIntake } from './LocalCompanyIntake';
 import { updateRequestedSessionHolds } from './requestedDraftSession';
 import { updateLinkedInSessionHolds } from '../linkedin/linkedInSession';
 import {
@@ -186,9 +187,28 @@ export function NativeDeskRoute({
     );
 
   }, [api, localHold, snapshot, current?.config, current?.error]);
+  const [intakeSelection, setIntakeSelection] = useState<{ api: NativeDeskApi['localWorkspace']; request: LocalAccountSelectionRequest } | null>(null);
+  const onIntakeSelectionHandled = useCallback((request: LocalAccountSelectionRequest) => {
+    setIntakeSelection(previous => previous?.request === request ? null : previous);
+  }, []);
+  const intakeController = useLocalCompanyIntake({
+    api: api.localWorkspace,
+    scopeKey: `local-company:${surface}`,
+    available: surface === 'accounts' && !local.read.overview.pending && !local.read.overview.error
+      && local.read.overview.value?.workflowMode === 'meeting_first' && local.read.overview.value.accounts.state === 'available',
+    localRead: local.read.overview,
+    onRefreshLocal: local.refresh,
+    onOpenAccount: id => {
+      const key = localAccountKey(id);
+      viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key);
+      setIntakeSelection({ api: api.localWorkspace, request: { key } });
+    },
+  });
+  const intake = surface === 'accounts' ? <LocalCompanyIntake controller={intakeController} /> : undefined;
+  const intakeRequest = surface === 'accounts' && intakeSelection?.api === api.localWorkspace ? intakeSelection?.request : null;
   const refresh = () => { local.refresh(); load(); };
   const localOnly = surface === 'accounts'
-    ? <LocalOnlyAccountLibrary read={local.read.overview} initialSelected={viewSelection(api.daily).get(JSON.stringify([snapshot?.workspaceId ?? null, surface]))} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} />
+    ? <LocalOnlyAccountLibrary intake={intake} selectionRequest={intakeRequest} onSelectionHandled={onIntakeSelectionHandled} read={local.read.overview} initialSelected={viewSelection(api.daily).get(JSON.stringify([snapshot?.workspaceId ?? null, surface]))} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} />
     : surface === 'today' ? <LocalOnlyCalls read={local.read.retained} onOpenLead={onOpenLead} initialSelected={viewSelection(api.daily).get(JSON.stringify([snapshot?.workspaceId ?? null, surface]))} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} /> : <p>Campaign scope unavailable. No worker actions are enabled.</p>;
   if (!snapshot)
     return (
@@ -238,6 +258,9 @@ export function NativeDeskRoute({
       readError={current.error || localHold}
       localRead={local.read}
       localHold={localHold}
+      intake={intake}
+      intakeSelection={intakeRequest}
+      onIntakeSelectionHandled={onIntakeSelectionHandled}
       onRefresh={refresh}
       onOpenLead={onOpenLead}
       surface={surface}
@@ -408,6 +431,9 @@ export function NativeDesk({
   surface = 'today',
   localRead,
   localHold = false,
+  intake,
+  intakeSelection,
+  onIntakeSelectionHandled,
 }: {
   snapshot: DailySnapshot;
   api: NativeDeskApi;
@@ -415,6 +441,9 @@ export function NativeDesk({
   readError?: boolean;
   localRead?: LocalDeskRead;
   localHold?: boolean;
+  intake?: ReactNode;
+  intakeSelection?: LocalAccountSelectionRequest | null;
+  onIntakeSelectionHandled?(request: LocalAccountSelectionRequest): void;
   onRefresh(): void;
   onOpenLead(personId: string): void;
   surface?: Surface;
@@ -424,6 +453,12 @@ export function NativeDesk({
   const [selected, setSelected] = useState<string | null>(
     () => cache.get(scopeKey) ?? null,
   );
+  useEffect(() => {
+    if (!intakeSelection) return;
+    cache.set(scopeKey, intakeSelection.key);
+    setSelected(intakeSelection.key);
+    onIntakeSelectionHandled?.(intakeSelection);
+  }, [intakeSelection, onIntakeSelectionHandled, cache, scopeKey]);
   const root = useRef<HTMLElement>(null);
   const select = (key: string | null) => {
     cache.set(scopeKey, key);
@@ -663,7 +698,7 @@ export function NativeDesk({
             </>
           ) : surface === 'accounts' ? (
             <>
-            {localRead && <LocalAccountLibrary read={localRead.overview} selected={selected} onSelect={select} />}
+            {localRead && <LocalAccountLibrary intake={intake} read={localRead.overview} selected={selected} onSelect={select} />}
             <section className="native-desk__lane">
               <h2>
                 Accounts <span>{snapshot.accounts.length}</span>

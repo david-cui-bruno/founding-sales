@@ -900,3 +900,12 @@
   box-sizing: border-box;
   padding: var(--space-6);
 }
+
+/* Scoped manual local-company intake, independent of message/editor layout. */
+.local-company-intake { min-width: 0; margin-block: var(--space-3); }
+.local-company-intake__form { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; margin-top: var(--space-3); }
+.local-company-intake__form input { box-sizing: border-box; width: 100%; min-width: 0; padding: var(--space-2); border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; }
+.local-company-intake__form p, .local-company-intake__form h3 { overflow-wrap: anywhere; margin: 0; }
+.local-company-intake__form section { border-top: 1px solid var(--line); padding-block: var(--space-2); }
+.local-company-intake button { white-space: normal; overflow-wrap: anywhere; }
+.local-company-intake :is(button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
