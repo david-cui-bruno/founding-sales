@@ -415,7 +415,10 @@ describe('bounded packaged fixture database preparation', () => {
     try {
       if (kind === 'catalog') database.raw.exec('CREATE TABLE unrecognized (value TEXT)');
       if (kind === 'ledger') database.raw.exec("DELETE FROM kysely_migration WHERE name = '0017DiscoveryAssessments'");
-      if (kind === 'version') database.raw.exec('UPDATE app_meta SET schema_version = 20');
+      if (kind === 'version') {
+        expect(migrations.isRegisteredSchemaVersion(21)).toBe(false);
+        database.raw.exec('UPDATE app_meta SET schema_version = 21');
+      }
     } finally { closeDatabase(database); key.bytes.fill(0); }
     const before = identity(dbPath('current')); const resources = observeResources();
     await expect(f.inspectStoppedProfile('current', material, 20)).rejects.toThrow(ERROR);
