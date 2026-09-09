@@ -70,16 +70,33 @@ function fingerprint(raw: string): string | null {
   } catch { return null; }
 }
 
+export type NativePhoneCandidateOptions = Pick<NativePhoneDriverOptions, 'verifiedHelperPath' | 'runAsync' | 'platform'>;
+
+function processRequest(executable: string, mode: 'inspect' | 'open', stdin?: string): NativePhoneProcessRequest {
+  return {
+    executable, args: [`--phone-route-${mode}`],
+    timeoutMs: mode === 'inspect' ? 1000 : 5000, maxOutputBytes: 4096,
+    ...(stdin === undefined ? {} : { stdin }),
+  };
+}
+
+/** Read-only first-time setup seam. null means unavailable, never authorization.
+ * The caller supplies the same verified packaged helper path used by dispatch.
+ * This function has no proof store or driver state and can only run inspect.
+ */
+export async function inspectNativePhoneRouteCandidate(input: NativePhoneCandidateOptions): Promise<string | null> {
+  try {
+    if ((input.platform ?? process.platform) !== 'darwin' || !isAbsolute(input.verifiedHelperPath)) return null;
+    return fingerprint(await (input.runAsync ?? runAsync)(processRequest(input.verifiedHelperPath, 'inspect')));
+  } catch { return null; }
+}
+
 export function createNativePhoneLaunchDriver(input: NativePhoneDriverOptions): PhoneLaunchDriver {
   let inspected: string | null = null;
   let authorized: string | null = null;
   let generation = 0;
   const supported = (input.platform ?? process.platform) === 'darwin' && isAbsolute(input.verifiedHelperPath);
-  const request = (mode: 'inspect' | 'open', stdin?: string): NativePhoneProcessRequest => ({
-    executable: input.verifiedHelperPath, args: [`--phone-route-${mode}`],
-    timeoutMs: mode === 'inspect' ? 1000 : 5000, maxOutputBytes: 4096,
-    ...(stdin === undefined ? {} : { stdin }),
-  });
+  const request = (mode: 'inspect' | 'open', stdin?: string) => processRequest(input.verifiedHelperPath, mode, stdin);
   const clear = () => { inspected = null; authorized = null; };
   return {
     async inspectVerifiedHandler() {
@@ -88,7 +105,7 @@ export function createNativePhoneLaunchDriver(input: NativePhoneDriverOptions): 
       try {
         const proof = input.setupFingerprint();
         if (!supported || !proof) return 'unavailable';
-        const native = fingerprint(await (input.runAsync ?? runAsync)(request('inspect')));
+        const native = await inspectNativePhoneRouteCandidate(input);
         if (current !== generation) return 'unavailable';
         if (native === null || native !== proof || input.setupFingerprint() !== proof) return 'unavailable';
         inspected = native;

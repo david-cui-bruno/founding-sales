@@ -80,6 +80,57 @@ final class PhoneRouteDriverTests: XCTestCase {
         XCTAssertFalse(json.contains("/fictional"))
     }
 
+    func testPreCancelledTaskNeverLooksUpOrOpensRoute() async throws {
+        var opens = 0
+        var lookups = 0
+        let driver = PhoneRouteDriver(supported: { true }, lookup: { lookups += 1; return self.app }, validate: { _ in self.identity() }, opener: { _, _ in opens += 1 })
+        let proof = try XCTUnwrap(driver.inspect().fingerprint)
+        lookups = 0
+        // Both tasks are MainActor-isolated. This task cancels the child before
+        // yielding the actor, so cancellation necessarily precedes invocation.
+        let pending = Task { @MainActor in
+            await driver.open(target: "+12025550123", expectedFingerprint: proof)
+        }
+        pending.cancel()
+        let result = await pending.value
+        XCTAssertEqual(result.status, "unavailable")
+        XCTAssertNil(result.fingerprint)
+        XCTAssertEqual(lookups, 0)
+        XCTAssertEqual(opens, 0)
+    }
+
+    func testCancellationWhileAwaitingOpenerNeverSucceedsOrRetries() async throws {
+        var opens = 0
+        var release: CheckedContinuation<Void, Never>?
+        let entered = AsyncStream<Void>.makeStream()
+        let driver = PhoneRouteDriver(supported: { true }, lookup: { self.app }, validate: { _ in self.identity() }, opener: { _, _ in
+            opens += 1
+            if opens == 1 {
+                await withCheckedContinuation { continuation in
+                    release = continuation
+                    entered.continuation.yield(())
+                }
+            }
+        })
+        let proof = try XCTUnwrap(driver.inspect().fingerprint)
+        let pending = Task { @MainActor in
+            let result = await driver.open(target: "+12025550123", expectedFingerprint: proof)
+            entered.continuation.finish()
+            return result
+        }
+        var iterator = entered.stream.makeAsyncIterator()
+        _ = await iterator.next()
+        // A premature return closes the stream rather than hanging the test.
+        let completion = try XCTUnwrap(release)
+        pending.cancel()
+        completion.resume() // Simulate successful OS completion after cancellation.
+        let result = await pending.value
+        XCTAssertEqual(result.status, "unavailable")
+        XCTAssertEqual(result.reason, "handoff_uncertain")
+        XCTAssertNil(result.fingerprint)
+        XCTAssertEqual(opens, 1)
+    }
+
     func testInputTimeoutAndTruncatedFrameNeverReachAnOpener() throws {
         XCTAssertThrowsError(try PhoneRouteInput.read { maximum, timeout in
             XCTAssertLessThanOrEqual(maximum, 4097)

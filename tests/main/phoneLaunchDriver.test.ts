@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createNativePhoneLaunchDriver, resolveVerifiedNativePhoneHelper, type NativePhoneProcessRequest } from '../../src/main/communications/phoneLaunchDriver';
+import { createNativePhoneLaunchDriver, inspectNativePhoneRouteCandidate, resolveVerifiedNativePhoneHelper, type NativePhoneProcessRequest } from '../../src/main/communications/phoneLaunchDriver';
 import { createPhoneHandoffLauncher } from '../../src/main/communications/phoneHandoffLauncher';
 
 const available = (fingerprint = 'fixture-proof') => JSON.stringify({ version: 1, status: 'available', fingerprint });
@@ -21,6 +21,44 @@ function fixture() {
   });
   return { driver, requests, setAsync: (value: string) => { asyncReply = value; }, setSync: (value: string) => { syncReply = value; }, setProof: (value: string | null) => { proof = value; }, fail: () => { failure = true; } };
 }
+
+describe('read-only native phone route candidate', () => {
+  it('returns a genuine candidate without setup and cannot save, arm or open the dispatch driver', async () => {
+    const requests: NativePhoneProcessRequest[] = [];
+    let proofReads = 0;
+    const options = {
+      verifiedHelperPath: '/fictional/helper', platform: 'darwin' as const,
+      setupFingerprint: (): string | null => { proofReads += 1; return null; },
+      runAsync: (request: NativePhoneProcessRequest) => { requests.push(request); return Promise.resolve(available()); },
+      runSync: () => { throw new Error('must not run'); },
+    };
+    const driver = createNativePhoneLaunchDriver(options);
+    expect(await inspectNativePhoneRouteCandidate(options)).toBe('fixture-proof');
+    expect(proofReads).toBe(0);
+    expect(requests).toEqual([{ executable: '/fictional/helper', args: ['--phone-route-inspect'], timeoutMs: 1000, maxOutputBytes: 4096 }]);
+    expect(driver.isVerifiedHandlerCurrent()).toBe(false);
+    await expect(driver.openTelUri('tel:+12025550123')).rejects.toThrow('Phone route unavailable');
+    expect(await driver.inspectVerifiedHandler()).toBe('unavailable');
+    expect(requests).toHaveLength(1);
+  });
+
+  it.each(['{', available() + available(), JSON.stringify({ version: 1, status: 'unavailable', reason: 'not_configured' }), JSON.stringify({ version: 1, status: 'available', fingerprint: '' }), JSON.stringify({ version: 1, status: 'available', fingerprint: 'proof', path: '/private' }), '{"version":1,"version":1,"status":"available","fingerprint":"proof"}', ' '.repeat(4097)])('returns unavailable for malformed/unavailable bounded replies %#', async (reply) => {
+    const requests: NativePhoneProcessRequest[] = [];
+    expect(await inspectNativePhoneRouteCandidate({ verifiedHelperPath: '/fictional/helper', platform: 'darwin', runAsync: (request) => { requests.push(request); return Promise.resolve(reply); } })).toBeNull();
+    expect(requests).toHaveLength(1);
+    expect(requests[0].args).toEqual(['--phone-route-inspect']);
+    expect(requests[0].stdin).toBeUndefined();
+  });
+
+  it('sanitizes timeout/cancellation and does no process work for unsupported platform or relative path', async () => {
+    expect(await inspectNativePhoneRouteCandidate({ verifiedHelperPath: '/fictional/helper', platform: 'darwin', runAsync: () => Promise.reject(new Error('private stderr')) })).toBeNull();
+    for (const options of [{ verifiedHelperPath: '/fictional/helper', platform: 'linux' as const }, { verifiedHelperPath: 'relative', platform: 'darwin' as const }]) {
+      let calls = 0;
+      expect(await inspectNativePhoneRouteCandidate({ ...options, runAsync: () => { calls += 1; throw new Error('must not run'); } })).toBeNull();
+      expect(calls).toBe(0);
+    }
+  });
+});
 
 describe('native phone launch driver with fictional process boundaries', () => {
   it('reuses packaged path and same-team helper verification with fictional signatures', async () => {
