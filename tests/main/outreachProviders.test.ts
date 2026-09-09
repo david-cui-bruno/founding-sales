@@ -268,3 +268,39 @@ describe('main-only provider manager', () => {
     expect((await new CredentialStore({ directory, safeStorage }).load()).gmail.accessToken).toBe('fixture-access-secret');
   });
 });
+
+describe('main-only bounded company research credential epoch', () => {
+  const query = { residential: true, regions: ['Fictional'], terms: ['residential PM'] };
+  const limits = { maxCompanies: 1, maxPages: 1, maxBytes: 2000, maxCostMicros: 100 };
+  const capability = { model: 'fixture-model', webSearch: true as const, searchCostMicros: 50, modelCostMicros: 50 };
+  it('does not start HTTP after a delayed credential load is invalidated', async () => {
+    const directory = await fixture();
+    await new CredentialStore({ directory, safeStorage }).save(stored);
+    let release!: () => void; let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let requests = 0;
+    const manager = createOutreachProviders({ directory, openExternal: async () => undefined,
+      safeStorage: { ...safeStorage, decryptString: async bytes => { entered(); await gate; return safeStorage.decryptString(bytes); } },
+      fetch: async () => { requests++; throw new Error('forbidden HTTP'); } });
+    managers.push(manager);
+    const pending = manager.researchCompanies({ query, limits, capability }, new AbortController().signal);
+    await started; manager.invalidate(); release();
+    await expect(pending).rejects.toThrow('provider_invalidated');
+    expect(requests).toBe(0);
+  });
+  it('uses the existing private key boundary and returns candidates only', async () => {
+    const directory = await fixture();
+    await new CredentialStore({ directory, safeStorage }).save(stored);
+    const requests: RequestInit[] = [];
+    const manager = createOutreachProviders({ directory, safeStorage, openExternal: async () => undefined,
+      fetch: async (_url, init) => { requests.push(init!); return new Response(JSON.stringify({ status: 'completed', model: 'fixture-model', output: [
+        { type: 'web_search_call', status: 'completed' }, { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: '{"companies":[]}', annotations: [] }] },
+      ] })); } });
+    managers.push(manager);
+    expect(requests).toEqual([]);
+    expect(await manager.researchCompanies({ query, limits, capability }, new AbortController().signal)).toEqual([]);
+    expect(new Headers(requests[0].headers).get('Authorization')).toBe('Bearer fixture-api-secret');
+    expect(JSON.stringify(await manager.status())).not.toContain('fixture-api-secret');
+  });
+});

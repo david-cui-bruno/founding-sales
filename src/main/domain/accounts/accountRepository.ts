@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { researchLimitsSchema, type AccountResearchStore, type ResearchJob, type ResearchClaim } from '../../research/companyResearchTypes';
 import type { AppDatabase } from '../../db/database';
 import type { Clock } from '../support/clock';
 import type { IdGenerator } from '../support/idGenerator';
@@ -10,11 +11,11 @@ import { accountFingerprint, projectAccountEvidence } from './accountEvidence';
 /** Main-process composition capability. B2 must attest fetched receipts out-of-band,
  * not echo the model's permitted flag. Unconfigured admission fails closed. */
 export interface AccountSourcePolicy { attest(source: Readonly<AccountSource>, accountId: string): boolean; }
-type Dependencies = { database: AppDatabase; clock: Clock; ids: IdGenerator; sourcePolicy?: AccountSourcePolicy };
+type Dependencies = { database: AppDatabase; clock: Clock; ids: IdGenerator; sourcePolicy?: AccountSourcePolicy; research?: { maxBudgetMicros: number; leaseMs?: number } };
 type Command = { commandId: string; accountId: string; expectedVersion: number };
 type ReceiptRow = { fingerprint: string; result_json: string };
 
-export class AccountRepository {
+export class AccountRepository implements AccountResearchStore {
   constructor(private readonly deps: Dependencies) {}
   private get raw() { return this.deps.database.raw; }
   private atomic<T>(run: () => T): T {
@@ -54,9 +55,16 @@ export class AccountRepository {
       return account;
     });
   }
-  private mutate(command: Command, kind: string, input: unknown, apply: (at: string) => void): AccountEvidenceReceipt {
+  private mutate(command: Command, kind: string, input: unknown, apply: (at: string) => void, researchClaim?: ResearchClaim): AccountEvidenceReceipt {
     const fingerprint = accountFingerprint({ kind, input });
     return this.atomic(() => {
+      const job = this.raw.prepare('SELECT id,account_id,state,claim_token,receipt_command_id FROM pm_account_research_jobs WHERE id=?').get(command.commandId) as {
+        id: string; account_id: string; state: string; claim_token: string; receipt_command_id: string | null;
+      } | undefined;
+      if (job || researchClaim) {
+        if (!job || kind !== 'evidence' || job.account_id !== command.accountId || researchClaim?.jobId !== job.id || researchClaim.claimToken !== job.claim_token
+          || (job.state !== 'running' && job.receipt_command_id !== command.commandId)) throw new Error('Research claim fenced');
+      }
       const replay = this.replay(command.commandId, fingerprint);
       if (replay !== undefined) return { ...z.strictObject({ accountId: accountIdSchema, version: z.number().int().positive(), duplicate: z.boolean() }).parse(replay), duplicate: true };
       const current = this.account(command.accountId);
@@ -68,6 +76,7 @@ export class AccountRepository {
         .run(result.version, at, current.id, command.expectedVersion);
       if (updated.changes !== 1) throw new Error('Stale account version');
       this.record(command.commandId, current.id, fingerprint, result, result.version, at);
+      if (job) this.raw.prepare('UPDATE pm_account_research_jobs SET receipt_command_id=? WHERE id=? AND claim_token=?').run(command.commandId, job.id, researchClaim!.claimToken);
       return result;
     });
   }
@@ -78,7 +87,7 @@ export class AccountRepository {
       }
     }
   }
-  admitEvidence(input: AccountEvidenceBatch): AccountEvidenceReceipt {
+  admitEvidence(input: AccountEvidenceBatch, researchClaim?: ResearchClaim): AccountEvidenceReceipt {
     const batch = accountEvidenceBatchSchema.parse(input);
     return this.mutate(batch, 'evidence', batch, at => {
       for (const source of batch.sources) {
@@ -108,7 +117,7 @@ export class AccountRepository {
           .run(route.id, batch.accountId, version, route.personId, route.channel, route.value, route.purpose, route.verification, at);
         for (const source of route.evidenceIds) this.raw.prepare('INSERT INTO pm_account_route_evidence(account_id,route_id,route_version,source_id) VALUES(?,?,?,?)').run(batch.accountId, route.id, version, source);
       }
-    });
+    }, researchClaim);
   }
   admitLinks(input: z.infer<typeof accountLinksCommandSchema>): AccountEvidenceReceipt {
     const command = accountLinksCommandSchema.parse(input);
@@ -157,6 +166,79 @@ export class AccountRepository {
         channel: row.channel, value: row.value, purpose: row.purpose, verification: row.verification,
         evidenceIds: (this.raw.prepare('SELECT source_id FROM pm_account_route_evidence WHERE account_id=? AND route_id=? AND route_version=? ORDER BY source_id').all(accountId, row.id, row.version) as { source_id: string }[]).map(e => e.source_id) }));
       return projectAccountEvidence(account, claims, routes);
+    });
+  }
+  enqueue(input: Parameters<AccountResearchStore['enqueue']>[0]): void {
+    const parsed = z.strictObject({ commandId: z.uuid(), accountId: accountIdSchema, limits: researchLimitsSchema }).parse(input);
+    const fingerprint = accountFingerprint({ accountId: parsed.accountId, limits: parsed.limits });
+    this.atomic(() => {
+      const old = this.raw.prepare('SELECT fingerprint FROM pm_account_research_jobs WHERE command_id=?').get(parsed.commandId) as { fingerprint: string } | undefined;
+      if (old) { if (old.fingerprint !== fingerprint) throw new Error('Research command conflict'); return; }
+      this.account(parsed.accountId);
+      const previous = this.raw.prepare('SELECT COUNT(*) AS count FROM pm_account_research_jobs WHERE fingerprint=?').get(fingerprint) as { count: number };
+      if (previous.count >= 3) throw new Error('Research attempt limit');
+      const at = this.now();
+      this.raw.prepare(`INSERT INTO pm_account_research_jobs(id,account_id,command_id,fingerprint,limits_json,state,attempt,reserved_cost_micros,cost_micros,created_at,updated_at)
+        VALUES(?,?,?,?,?,'queued',0,0,NULL,?,?)`).run(z.uuid().parse(this.deps.ids.next()), parsed.accountId, parsed.commandId, fingerprint, JSON.stringify(parsed.limits), at, at);
+    });
+  }
+  claimNext(asOf: string): ResearchJob | null {
+    accountInstantSchema.parse(asOf);
+    return this.atomic(() => {
+      type Row = { id: string; account_id: string; limits_json: string; attempt: number; cost_micros: number | null; fingerprint: string };
+      // id is the reserved evidence command identity. A committed receipt is
+      // recovered even when budget was disabled after the request.
+      const receipt = this.raw.prepare(`SELECT j.* FROM pm_account_research_jobs j JOIN pm_account_commands c ON c.command_id=j.receipt_command_id AND c.account_id=j.account_id
+        WHERE j.state='running' ORDER BY j.created_at,j.id LIMIT 1`).get() as Row | undefined;
+      const token = () => z.uuid().parse(this.deps.ids.next());
+      const result = (row: Row, claimToken: string, receiptCommitted: boolean): ResearchJob => ({ id: row.id, accountId: row.account_id,
+        limits: researchLimitsSchema.parse(JSON.parse(row.limits_json)), attempt: row.attempt, claimToken,
+        receiptCommandId: row.id, receiptCommitted, costMicros: row.cost_micros });
+      if (receipt) {
+        const claimToken = token();
+        this.raw.prepare('UPDATE pm_account_research_jobs SET claim_token=?,updated_at=? WHERE id=?').run(claimToken, asOf, receipt.id);
+        return result(receipt, claimToken, true);
+      }
+      const config = this.deps.research;
+      if (!config || !Number.isSafeInteger(config.maxBudgetMicros) || config.maxBudgetMicros <= 0) return null;
+      const lease = config.leaseMs ?? 300000;
+      if (!Number.isSafeInteger(lease) || lease < 60000) throw new Error('Research lease invalid');
+      const expired = new Date(Date.parse(asOf) - lease).toISOString();
+      // Never repeat an ambiguous external request. Its unknown cost remains reserved.
+      this.raw.prepare("UPDATE pm_account_research_jobs SET state='parked',updated_at=? WHERE state='running' AND updated_at<=?").run(asOf, expired);
+      const row = this.raw.prepare("SELECT * FROM pm_account_research_jobs WHERE state='queued' ORDER BY created_at,id LIMIT 1").get() as Row | undefined;
+      if (!row) return null;
+      const limits = researchLimitsSchema.parse(JSON.parse(row.limits_json));
+      const spent = this.raw.prepare('SELECT COALESCE(SUM(COALESCE(cost_micros,reserved_cost_micros)),0) AS total FROM pm_account_research_jobs').get() as { total: number };
+      if (spent.total + limits.maxCostMicros > config.maxBudgetMicros) return null;
+      const previous = this.raw.prepare('SELECT COALESCE(SUM(attempt>0),0) AS count FROM pm_account_research_jobs WHERE fingerprint=?').get(row.fingerprint) as { count: number };
+      if (previous.count >= 3) return null;
+      const claimToken = token(); row.attempt = previous.count + 1;
+      this.raw.prepare("UPDATE pm_account_research_jobs SET state='running',attempt=?,claim_token=?,reserved_cost_micros=?,updated_at=? WHERE id=?")
+        .run(row.attempt, claimToken, limits.maxCostMicros, asOf, row.id);
+      return result(row, claimToken, false);
+    });
+  }
+  settle(input: Parameters<AccountResearchStore['settle']>[0]): void {
+    const parsed = z.strictObject({ jobId: z.uuid(), claimToken: z.uuid(), status: z.enum(['completed', 'parked']),
+      receiptCommandId: z.uuid().nullable(), costMicros: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable() }).safeParse(input);
+    if (!parsed.success) throw new Error('Research claim settlement invalid');
+    const value = parsed.data;
+    this.atomic(() => {
+      const row = this.raw.prepare('SELECT account_id,state,claim_token,reserved_cost_micros,receipt_command_id,cost_micros FROM pm_account_research_jobs WHERE id=?').get(value.jobId) as {
+        account_id: string; state: string; claim_token: string; reserved_cost_micros: number; receipt_command_id: string | null; cost_micros: number | null;
+      } | undefined;
+      if (!row || row.claim_token !== value.claimToken) throw new Error('Research claim fenced');
+      if (row.state !== 'running') {
+        if (row.state === value.status && row.receipt_command_id === value.receiptCommandId && row.cost_micros === value.costMicros) return;
+        throw new Error('Research claim already settled');
+      }
+      const receipt = row.receipt_command_id === value.jobId && this.raw.prepare('SELECT 1 FROM pm_account_commands WHERE command_id=? AND account_id=?').get(value.jobId, row.account_id);
+      if (value.status === 'completed' && (value.receiptCommandId !== value.jobId || !receipt)) throw new Error('Research evidence receipt required');
+      if (value.status === 'parked' && (value.receiptCommandId !== null || receipt)) throw new Error('Research committed receipt requires completion');
+      if (value.costMicros !== null && value.costMicros > row.reserved_cost_micros) throw new Error('Research cost exceeds reservation');
+      this.raw.prepare('UPDATE pm_account_research_jobs SET state=?,receipt_command_id=?,cost_micros=?,updated_at=? WHERE id=? AND claim_token=?')
+        .run(value.status, value.receiptCommandId, value.costMicros, this.now(), value.jobId, value.claimToken);
     });
   }
   listCandidates(): Account[] {

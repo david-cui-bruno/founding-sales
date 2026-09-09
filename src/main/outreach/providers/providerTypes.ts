@@ -1,3 +1,4 @@
+import type { AudienceQuery, ResearchLimits, ResearchCapability, CompanyCandidate } from '../../research/companyResearchTypes';
 export type SetupState = 'unconfigured' | 'ready' | 'locked' | 'reauthorize' | 'error';
 export type OutreachStatus = {
   model: SetupState; modelName: string; gmail: SetupState; accountEmail: string | null;
@@ -56,3 +57,8 @@ export type OutreachProviderOptions = {
   fetch?: typeof globalThis.fetch;
   now?: () => number;
 };
+
+/** Main-only capability. Deliberately not added to renderer/IPC contracts. */
+export interface CompanyResearchModelProvider {
+  researchCompanies(input: { query: AudienceQuery; limits: ResearchLimits; capability: ResearchCapability }, signal: AbortSignal): Promise<CompanyCandidate[]>;
+}
