@@ -1,3 +1,4 @@
+import { QueryCommand } from '@aws-sdk/client-dynamodb';
 import { randomUUID } from 'node:crypto';
 import { OwnerCommandCoordinator } from '../src/ownerCommandCoordinator';
 import { describe, expect, it } from 'vitest';
@@ -42,7 +43,7 @@ export async function meetingFixture(mail = false, configured = true) {
     await store.transact([store.put(`DISPATCH_INTAKE#${accountId}`, { accountId, adapters: [{ id: 'gmail-primary', kind: 'gmail', enabled: true, relevant: true, mailboxSubject: intent.mailboxSubject }], manualDependencies: [] }, null), store.put(executionAuthorityKey(accountId), authority, null, executionAuthorityFields(authority as Parameters<typeof executionAuthorityFields>[0])),
       store.put(mailCursorKey(accountId, intent.mailboxSubject), { scope, checkpoint: { ...binding, version: 1, accountId, mailboxSubject: intent.mailboxSubject, mode: 'history', historyId: '100', pageToken: null, since: now }, poll: { ...binding, accountId, mailboxSubject: intent.mailboxSubject, attemptId: 'poll-fiction', status: 'complete', startedAt: now, completedAt: now } }, null),
       store.put(mailThreadKey(accountId, intent.threadId), { thread: { accountId, mailboxSubject: intent.mailboxSubject, provider: 'gmail', providerThreadId: intent.threadId,
-        messages: [{ id: 'message-fiction', threadId: intent.threadId, rfcMessageId: '<earlier@example.test>', references: [], from: ['prospect@example.test'], to: ['founder@example.test'], cc: [], date: now, subject: 'Meeting', bodyParts: [{ mimeType: 'text/plain', text: 'Tuesday at 10 works.', truncated: false }] }] }, revision: 1, contextRevision: intent.contextRevision,
+        messages: [{ id: 'message-fiction', threadId: intent.threadId, rfcMessageId: '<earlier@example.test>', references: [], from: ['prospect@example.test'], to: ['founder@example.test'], cc: [], date: new Date(Date.parse(now) - 1000).toISOString(), subject: 'Meeting', bodyParts: [{ mimeType: 'text/plain', text: 'Tuesday at 10 works.', truncated: false }] }] }, revision: 1, contextRevision: intent.contextRevision,
         signals: [{ kind: 'scheduling', requiresApproval: true, evidence: [{ messageId: 'message-fiction', quote: 'Tuesday at 10 works.' }] }] }, null)]);
     if (configured) {
     const account = { id: accountId, name: 'Fictional configured PM', domain: null as string | null, version: 1 };
@@ -140,7 +141,7 @@ describe('durable meeting reservations on actual Dynamo command boundary', () =>
     expect(outcome).toMatchObject({ status: 'held', reason: 'calendar_resource_id_required' });
     expect(calls).toBe(0); expect(await f.repository().command(aliasIntent.commandId)).toBeNull();
   });
-  it('uses actual C4 send acceptance and C3 parsed References for automatic offered-slot reservation', async () => {
+  it.each(['ready', 'legacy', 'negated', 'ambiguous', 'mixed', 'source_race', 'lost_prepare_ack'] as const)('uses actual C4 send/C3 References for automatic work: %s', async scenario => {
     const f = await meetingFixture(true); const threads = new DynamoThreadIntakeRepository(f.options);
     const projection = (await threads.getThread(f.intent.accountId, f.intent.threadId))!;
     const source = projection.thread.messages[0]!;
@@ -148,6 +149,8 @@ describe('durable meeting reservations on actual Dynamo command boundary', () =>
     const draft: AccountReplyDraft = { id: 'actual-offer-draft', accountId: f.intent.accountId, threadId: f.intent.threadId, mailboxSubject: f.intent.mailboxSubject,
       threadRevision: projection.revision, contextRevision: projection.contextRevision, revision: 1, sender: 'founder@example.test', recipient: 'prospect@example.test',
       subject: 'Meeting offer', body: 'Tuesday, September 15, 2026 at 10:00 AM to 10:30 AM (America/New_York)', evidenceIds: [source.id], generation: 'edited', updatedAt: f.options.clock.now() };
+    if (scenario === 'ambiguous') draft.body += '\nTuesday, September 22, 2026 at 10:00 AM to 10:30 AM (America/New_York)';
+    const reply = scenario === 'negated' ? 'That works! Actually do not book.' : scenario === 'mixed' ? 'That works! Can you explain the price?' : 'That works!';
     await threads.saveReplyDraft(draft, null);
     const frozenMessage = { commandId, from: draft.sender, to: draft.recipient, subject: draft.subject, body: draft.body, threadId: draft.threadId,
       inReplyTo: '<earlier@example.test>', references: ['<earlier@example.test>'] };
@@ -163,19 +166,20 @@ describe('durable meeting reservations on actual Dynamo command boundary', () =>
     await policy.admitIntent(outgoing); await policy.configureCaps({ sender: draft.sender, dailyLimit: 3 }, null);
     const execution = createExecutionRepository({ ...f.options, dispatchPolicy: policy });
     await execution.prepareAction({ ...action, expectedVersion: f.intent.expectedVersion });
-    let sentRfc = ''; let sends = 0; let incoming = false;
+    let sentRfc = ''; let sends = 0; let incoming = false; let httpRequests = 0;
     const fetch: typeof globalThis.fetch = async (url, init) => {
+      httpRequests++;
       const path = new URL(String(url)).pathname;
       if (path.endsWith('/messages/send')) {
         sends++; const wire = JSON.parse(String(init?.body)); const mime = Buffer.from(wire.raw, 'base64url').toString();
         sentRfc = /^Message-ID: (.+)$/im.exec(mime)![1]!.trim();
-        expect(Buffer.from(mime.split('\r\n\r\n')[1]!.replace(/\s/g, ''), 'base64').toString()).toBe(draft.body);
+        expect(Buffer.from(mime.split('\r\n\r\n')[1]!.replace(/\s/g, ''), 'base64').toString().replace(/\r\n/g, '\n')).toBe(draft.body);
         return Response.json({ id: 'actual-accepted-message', threadId: draft.threadId });
       }
       if (path.endsWith('/history')) return Response.json({ historyId: incoming ? '102' : '101', history: incoming ? [{ messagesAdded: [{ message: { id: 'actual-reply' } }] }] : [] });
       if (path.endsWith('/messages/actual-reply')) return Response.json({ id: 'actual-reply', threadId: draft.threadId, internalDate: String(Date.parse(f.options.clock.now())),
         payload: { mimeType: 'text/plain', headers: [{ name: 'From', value: draft.recipient }, { name: 'To', value: draft.sender }, { name: 'Subject', value: draft.subject },
-          { name: 'Message-ID', value: '<actual-reply@example.test>' }, { name: 'In-Reply-To', value: sentRfc }], body: { data: Buffer.from('That works!').toString('base64url') } } });
+          { name: 'Message-ID', value: '<actual-reply@example.test>' }, { name: 'In-Reply-To', value: sentRfc }], body: { data: Buffer.from(reply).toString('base64url') } } });
       throw new Error('unconfigured fictional message HTTP');
     };
     const result = await createDispatchService({ execution, policy, authorization: f.authorization, fetch }).dispatch(commandId);
@@ -187,12 +191,37 @@ describe('durable meeting reservations on actual Dynamo command boundary', () =>
     expect((await createMailPoller({ authorization: f.authorization, store: threads, fetch }).pollOnce({ pairingId: f.intent.pairingId, accountId: f.intent.accountId, mailboxSubject: f.intent.mailboxSubject }, new AbortController().signal)).complete).toBe(true);
     const current = (await threads.getThread(f.intent.accountId, f.intent.threadId))!;
     expect(current.thread.messages.find(m => m.id === 'actual-reply')?.references).toContain(sentRfc);
-    const offer = { id: 'actual-offer', revision: 1, accountId: f.intent.accountId, mailboxSubject: f.intent.mailboxSubject, threadId: f.intent.threadId, sendCommandId: commandId,
+    const offer: import('../../../../src/shared/contracts/meetingContract').MeetingOffer = { meeting: { summary: 'Callie meeting', inviteAttendees: true }, id: 'actual-offer', revision: 1, accountId: f.intent.accountId, mailboxSubject: f.intent.mailboxSubject, threadId: f.intent.threadId, sendCommandId: commandId,
       expiresAt: '2026-09-15T00:00:00.000Z', slots: [{ id: 'actual-slot', start: f.intent.start, end: f.intent.end, timezone: f.intent.timezone }] };
+    if (scenario === 'legacy') delete offer.meeting;
+    if (scenario === 'ambiguous') offer.slots.push({ id: 'competing-slot', start: '2026-09-22T14:00:00.000Z', end: '2026-09-22T14:30:00.000Z', timezone: f.intent.timezone });
     await f.repository().saveOffer({ offer, expectedRevision: null });
-    const intent: MeetingIntent = { ...f.intent, approvalId: null, expectedVersion: await execution.currentVersion(f.intent.accountId), threadRevision: current.revision, contextRevision: current.contextRevision,
-      agreementEvidenceId: 'actual-reply', agreement: { kind: 'offered_slot' as const, offerId: offer.id, offerRevision: 1, slotId: 'actual-slot', quote: 'That works!' } };
-    expect((await f.repository().reserve({ intent, calendarId: f.calendarId }, (await f.authorization.authorizedAccess(f.pair.pairingId, ['availability', 'event_write'])).accessEvidence)).kind).toBe('reserved');
+    const target = { accountId: f.intent.accountId, threadId: f.intent.threadId }; const beforePreparation = httpRequests;
+    if (['legacy', 'negated', 'ambiguous', 'mixed'].includes(scenario)) {
+      expect(await f.repository().prepareOfferedReply(target)).toBeNull(); expect(httpRequests).toBe(beforePreparation); return;
+    }
+    if (scenario === 'source_race') {
+      const key = ownerSourceKey(f.intent.accountId); const row = (await f.store.get<unknown>(key))!; const config = ownerSourceConfigurationSchema.parse(row.data);
+      f.dynamo.beforeTransaction = () => { f.dynamo.beforeTransaction = undefined; void f.store.transact([f.store.put(key, { ...config, state: 'paused' }, row.rev)]); };
+      await expect(f.repository().prepareOfferedReply(target)).rejects.toThrow('TransactionCanceledException');
+      expect((await f.repository().listPreparedIntents(f.intent.accountId)).work.every(w => w.input.intent.agreement?.kind !== 'offered_slot')).toBe(true); return;
+    }
+    if (scenario === 'lost_prepare_ack') {
+      f.dynamo.afterCommit = () => { f.dynamo.afterCommit = undefined; throw new Error('lost preparation acknowledgement'); };
+      await expect(f.repository().prepareOfferedReply(target)).rejects.toThrow('lost preparation acknowledgement');
+    }
+    const work = await f.repository().prepareOfferedReply(target);
+    expect(work).not.toBeNull(); expect(httpRequests).toBe(beforePreparation);
+    expect(work!.input.intent).toMatchObject({ agreementEvidenceId: 'actual-reply', approvalId: null, summary: 'Callie meeting', inviteAttendees: true,
+      agreement: { kind: 'offered_slot', offerId: offer.id, slotId: 'actual-slot' } });
+    expect(await f.repository().prepareOfferedReply({ accountId: f.intent.accountId, threadId: f.intent.threadId })).toEqual(work);
+    expect((await f.repository().listAcceptedOffers(f.intent.accountId)).offers).toEqual([offer]);
+    expect((await f.repository().reserve(work!.input, (await f.authorization.authorizedAccess(f.pair.pairingId, ['availability', 'event_write'])).accessEvidence)).kind).toBe('reserved');
+    expect(await f.repository().prepareOfferedReply(target)).toBeNull();
+    expect((await f.repository().listPreparedIntents(f.intent.accountId)).work.some(w => w.input.intent.commandId === work!.input.intent.commandId)).toBe(false);
+    expect((await f.repository().reserve(work!.input, (await f.authorization.authorizedAccess(f.pair.pairingId, ['availability', 'event_write'])).accessEvidence)).kind).toBe('existing');
+    expect(sends).toBe(1);
+
   });
   it.each(['missing', 'paused', 'pairing', 'mailbox', 'calendar', 'workspace', 'account'] as const)('holds a %s owner-source configuration before reservation', async defect => {
     const f = await meetingFixture(false, false); f.intent.expectedVersion = 1;
@@ -220,6 +249,59 @@ describe('durable meeting reservations on actual Dynamo command boundary', () =>
     const final = f.dynamo.transactions.at(-1)!;
     expect(final.TransactItems?.filter(item => item.ConditionCheck?.Key?.sk?.S === key)).toHaveLength(1);
     expect(await f.repository().command(f.intent.commandId)).toBeNull();
+  });
+  it('persists full exact approved work, not only an approval fingerprint', async () => {
+    const f = await meetingFixture();
+    const approval = await f.store.get<{ input: unknown }>('MEETING_APPROVAL#base-approval');
+    expect(approval?.data.input).toEqual({ intent: f.intent, calendarId: f.calendarId });
+    const page = await f.repository().listPreparedIntents(f.intent.accountId);
+    expect(page.work).toHaveLength(1); expect(page.work[0]!.input).toEqual({ intent: f.intent, calendarId: f.calendarId });
+    expect(page.work[0]!.fingerprint).toBe(fingerprint(page.work[0]!.input));
+  });
+  it('rejects fingerprint-only legacy approval and tampered full approval input', async () => {
+    const f = await meetingFixture(); const key = 'MEETING_APPROVAL#base-approval'; const row = (await f.store.get<{ input: { intent: MeetingIntent }; fingerprint: string }>(key))!;
+    await f.store.transact([f.store.put(key, { fingerprint: row.data.fingerprint }, row.rev)]);
+    await expect(f.repository().reserve({ intent: f.intent, calendarId: f.calendarId }, f.access.accessEvidence)).rejects.toThrow('meeting_approval_missing');
+    row.data.input.intent.summary = 'Unapproved commitment';
+    await f.store.transact([f.store.put(key, row.data, row.rev + 1)]);
+    await expect(f.repository().reserve({ intent: f.intent, calendarId: f.calendarId }, f.access.accessEvidence)).rejects.toThrow('meeting_approval_missing');
+  });
+  it('reads bounded pages and advances past consumed work without starvation', async () => {
+    const f = await meetingFixture(); const next = { ...f.intent, commandId: 'command-z', approvalId: 'approval-z' };
+    await f.repository().approveIntent({ intent: next, calendarId: f.calendarId });
+    await f.repository().reserve({ intent: f.intent, calendarId: f.calendarId }, f.access.accessEvidence);
+    const limits: number[] = [];
+    const repository = new DynamoMeetingRepository({ ...f.options, dynamo: { async send(command) {
+      const response = await f.dynamo.send(command);
+      if (!(command instanceof QueryCommand)) return response;
+      const limit = command.input.Limit!; limits.push(limit);
+      const after = command.input.ExclusiveStartKey?.sk?.S ?? '';
+      const rows = (response.Items ?? []).filter(row => row.sk!.S! > after); const selected = rows.slice(0, limit);
+      return { ...response, Items: selected, ...(rows.length > limit ? { LastEvaluatedKey: { pk: selected.at(-1)!.pk!, sk: selected.at(-1)!.sk! } } : {}) };
+    } } }, f.authorization);
+    const first = await repository.listPreparedIntents(f.intent.accountId, null, 1);
+    expect(first.work).toEqual([]); expect(first.nextCursor).not.toBeNull();
+    const second = await repository.listPreparedIntents(f.intent.accountId, first.nextCursor, 1);
+    expect(second.work.map(work => work.input.intent.commandId)).toEqual([next.commandId]); expect(second.nextCursor).toBeNull();
+    expect(limits).toEqual([1, 1]);
+    await expect(repository.listPreparedIntents('other-account', first.nextCursor, 1)).rejects.toThrow('meeting_cursor_invalid');
+    await expect(repository.listPreparedIntents(f.intent.accountId, first.nextCursor, 2)).rejects.toThrow('meeting_cursor_invalid');
+    await expect(repository.listPreparedIntents(f.intent.accountId, 'MEETING_INTENT#other#command', 1)).rejects.toThrow('meeting_cursor_invalid');
+    await expect(repository.listPreparedIntents(f.intent.accountId, null, 26)).rejects.toThrow();
+    const reservations = await repository.listReservations(f.intent.accountId, null, 1);
+    expect(reservations.records[0]!.intent).toEqual(f.intent);
+    const outcome = booked(reservations.records[0]!.identity);
+    await f.repository().recordOutcome(f.intent.commandId, { ...outcome, status: 'cancelled', event: { ...outcome.event!, status: 'cancelled' } });
+    await f.seedAccount('other-page-account');
+    const other = { ...f.intent, accountId: 'other-page-account', commandId: 'aaa-other-page', meetingId: 'other-page-meeting', approvalId: 'other-page-approval' };
+    await f.repository().approveIntent({ intent: other, calendarId: f.calendarId });
+    await f.repository().reserve({ intent: other, calendarId: f.calendarId }, f.access.accessEvidence);
+    const filtered = await repository.listReservations(f.intent.accountId, null, 1);
+    expect(filtered.records).toEqual([]); expect(filtered.nextCursor).not.toBeNull();
+    const own = await repository.listReservations(f.intent.accountId, filtered.nextCursor, 1);
+    expect(own.records.map(record => record.intent.commandId)).toEqual([f.intent.commandId]);
+    await expect(repository.listReservations(other.accountId, filtered.nextCursor, 1)).rejects.toThrow('meeting_cursor_invalid');
+
   });
   it('persists stable identity before dispatch and never redispatches after restart', async () => {
     const f = await meetingFixture(); const first = await f.repository().reserve({ intent: f.intent, calendarId: f.calendarId }, f.access.accessEvidence);
@@ -324,7 +406,7 @@ describe('durable meeting reservations on actual Dynamo command boundary', () =>
     await expect(next.repository().reserve({ intent: { ...next.intent, agreementEvidenceId: 'invented' }, calendarId: next.calendarId }, next.access.accessEvidence)).rejects.toThrow('agreement_evidence_missing');
   });
   it('requires persisted exact mixed reply approval and keeps cancelled terminal against late booking', async () => {
-    const f = await meetingFixture(); const intent = { ...f.intent, mixedReply: true, approvalId: 'approval-fiction' };
+    const f = await meetingFixture(); const intent = { ...f.intent, commandId: 'mixed-command', mixedReply: true, approvalId: 'approval-fiction' };
     await expect(f.repository().reserve({ intent, calendarId: f.calendarId }, f.access.accessEvidence)).rejects.toThrow('meeting_approval_missing');
     await f.repository().approveIntent({ intent, calendarId: f.calendarId });
     const reservation = await f.repository().reserve({ intent, calendarId: f.calendarId }, f.access.accessEvidence);

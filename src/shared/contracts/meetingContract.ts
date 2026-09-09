@@ -64,7 +64,11 @@ export const meetingOutcomePayloadSchema = z.strictObject({ commandId: id, outco
 export type MeetingOutcomePayload = z.infer<typeof meetingOutcomePayloadSchema>;
 
 export const offeredSlotSchema = z.strictObject({ id, start: meetingInstantSchema, end: meetingInstantSchema, timezone: id });
-export const meetingOfferSchema = z.strictObject({ id, revision: integer.positive(), accountId: id, mailboxSubject: id, threadId: id, sendCommandId: z.string().uuid(), expiresAt: meetingInstantSchema,
+export const meetingOfferSchema = z.strictObject({ meeting: z.strictObject({ summary: z.literal('Callie meeting'), inviteAttendees: z.boolean() }).optional(), id, revision: integer.positive(), accountId: id, mailboxSubject: id, threadId: id, sendCommandId: z.string().uuid(), expiresAt: meetingInstantSchema,
   slots: z.array(offeredSlotSchema).min(1).max(5) }).refine(o => new Set(o.slots.map(s => s.id)).size === o.slots.length);
 export type MeetingOffer = z.infer<typeof meetingOfferSchema>;
 export const saveMeetingOfferSchema = z.strictObject({ offer: meetingOfferSchema, expectedRevision: integer.positive().nullable() });
+
+export const meetingWorkSchema = z.strictObject({ input: reserveMeetingSchema, fingerprint: z.string().regex(/^[a-f0-9]{64}$/), preparedAt: meetingInstantSchema });
+export type MeetingWork = z.infer<typeof meetingWorkSchema>;
+export const meetingApprovalSchema = z.strictObject({ input: reserveMeetingSchema, fingerprint: z.string().regex(/^[a-f0-9]{64}$/) });
