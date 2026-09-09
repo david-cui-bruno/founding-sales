@@ -141,6 +141,7 @@ export class CampaignRepository {
         .run(this.ws,e.id,e.accountId,e.campaignVersionId,e.selectedRouteId,e.selectedRouteVersion,e.personId,e.currentStepId,e.version,e.state,e.contextRevision,e.executionContextId,e.startedAt,this.now());
       if (payload.evidence) {
         const evidence = payload.evidence;
+        if (evidence.enrollmentId !== e.id || evidence.accountId !== accountId || evidence.campaignVersionId !== e.campaignVersionId) throw new Error('campaign_projection_binding');
         const route = this.raw.prepare('SELECT version FROM pm_account_routes WHERE account_id=? AND id=? AND version=?').get(accountId,evidence.routeId,evidence.routeVersion) as { version: number } | undefined;
         if (!route) throw new Error('campaign_projection_binding');
         this.raw.prepare('INSERT INTO campaign_step_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(this.ws, payload.commandId, accountId, e.id, evidence.stepId,

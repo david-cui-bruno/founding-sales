@@ -6,7 +6,7 @@ const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')
 const now = '2026-09-09T12:00:00.000Z';
 const version: CampaignVersion = { id: id(1), campaignId: id(2), version: 1, audienceHash: 'a'.repeat(64), offer: 'Fictional maintenance pilot', objective: 'meeting', cohortAccountIds: [id(3)], approvedAt: '2026-09-08T00:00:00.000Z', steps: [{ id: id(4), channel: 'call', condition: 'initial', delayHours: 0 }, { id: id(5), channel: 'linkedin', condition: 'no_reply', delayHours: 24 }], capScope: 'campaign_version_lifetime', channelCaps: { call: 1, email: 1, linkedin: 1 }, contentPolicyHash: 'b'.repeat(64) };
 const enrollment: Enrollment = { id: id(6), accountId: id(3), selectedRouteId: id(7), selectedRouteVersion: 1, personId: null, campaignVersionId: id(1), currentStepId: id(4), version: 1, state: 'active', executionContextId: 'context-one', contextRevision: 1, startedAt: '2026-09-08T00:00:00.000Z' };
-const evidence: StepEvidence = { stepId: id(4), routeId: id(7), routeVersion: 1, outcome: 'no_answer', observedAt: '2026-09-08T10:00:00.000Z', observation: 'no_reply', source: 'human', executionContextId: 'context-one', contextRevision: 1, state: 'human_reported_sent', actionId: id(8), channel: 'call' };
+const evidence: StepEvidence = { enrollmentId: id(6), accountId: id(3), campaignVersionId: id(1), stepId: id(4), routeId: id(7), routeVersion: 1, outcome: 'no_answer', observedAt: '2026-09-08T10:00:00.000Z', observation: 'no_reply', source: 'human', executionContextId: 'context-one', contextRevision: 1, state: 'human_reported_sent', actionId: id(8), channel: 'call' };
 
 describe('truthful campaign sequence', () => {
   it('requires explicit no reply, never inferring an unread inbox', () => {
@@ -29,6 +29,13 @@ describe('truthful campaign sequence', () => {
     expect(planNext(version, enrollment, [{ ...evidence, routeId: id(99) }], now).kind).toBe('wait');
     expect(planNext(version, enrollment, [{ ...evidence, contextRevision: 0 }], now).kind).toBe('wait');
     expect(planNext(version, enrollment, [{ ...evidence, observedAt: '2026-09-10T00:00:00.000Z' }], now).kind).toBe('wait');
+  });
+  it('uses immutable predecessor only after pointer advanced, never foreign receipts', () => {
+    const next = { ...enrollment, currentStepId: id(5), selectedRouteId: id(20), executionContextId: 'linkedin-context', contextRevision: 2 };
+    expect(planNext(version, next, [evidence], now).kind).toBe('prepare');
+    for (const field of ['enrollmentId', 'accountId', 'campaignVersionId'] as const) expect(planNext(version, next, [{ ...evidence, [field]: id(99) }], now).kind).toBe('wait');
+    expect(planNext(version, next, [{ ...evidence, state: 'unknown' }], now).kind).toBe('wait');
+    expect(planNext(version, { ...next, currentStepId: id(4) }, [evidence], now).kind).toBe('wait');
   });
   it('unknown, stale or missing no-reply observations wait', () => {
     expect(planNext(version, enrollment, [{ ...evidence, observation: 'unknown' }], now).kind).toBe('wait');

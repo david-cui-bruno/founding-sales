@@ -63,7 +63,7 @@ export class WorkerCampaignRepository {
     const reservation = campaignReservationSchema.parse(reservationRow.data);
     const row = await this.required(campaignEnrollmentKey(reservation.input.enrollmentId)); const enrollment = enrollmentSchema.parse(row.data);
     return this.planCommand({ commandId: input.commandId, accountId: input.accountId, payload: { kind: 'campaign.outcome', enrollmentId: enrollment.id,
-      expectedEnrollmentVersion: enrollment.version, evidence: { actionId: input.actionId, stepId: reservation.input.stepId, routeId: reservation.input.selectedRouteId, routeVersion: reservation.routeVersion,
+      expectedEnrollmentVersion: enrollment.version, evidence: { enrollmentId: enrollment.id, accountId: input.accountId, campaignVersionId: reservation.campaignVersionId, actionId: input.actionId, stepId: reservation.input.stepId, routeId: reservation.input.selectedRouteId, routeVersion: reservation.routeVersion,
         contextRevision: reservation.numericContextRevision, executionContextId: reservation.input.contextRevision, channel: reservation.input.channel,
         observation: 'unknown', outcome: input.state, source: 'provider', state: input.state, observedAt: input.observedAt } } });
   }
@@ -109,6 +109,7 @@ export class WorkerCampaignRepository {
         items.push(this.store.check(route.key, route.row.rev));
       } else {
         const evidence = command.evidence;
+        if (evidence.enrollmentId !== old.id || evidence.accountId !== old.accountId || evidence.campaignVersionId !== old.campaignVersionId) throw new Error('campaign_evidence_binding');
         if (evidence.observedAt > this.store.now() || evidence.observedAt < old.startedAt) throw new Error('campaign_evidence_time');
         const interruption = evidence.observation === 'replied' || ['reply', 'booked', 'opt_out'].includes(evidence.outcome);
         if (interruption && !terminal(old.state)) enrollment.state = ['booked', 'opt_out'].includes(evidence.outcome) ? 'stopped' : 'conversation';

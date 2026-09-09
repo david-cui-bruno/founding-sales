@@ -18,7 +18,7 @@ export const enrollmentStateSchema = z.enum(['active', 'held', 'paused', 'conver
 export const enrollmentSchema = z.strictObject({ id, accountId: id, selectedRouteId: id, selectedRouteVersion: revision.positive(), personId: id.nullable(), campaignVersionId: id,
   currentStepId: id.nullable(), version: revision.positive(), state: enrollmentStateSchema, executionContextId: id, contextRevision: revision, startedAt: instant });
 export type Enrollment = z.infer<typeof enrollmentSchema>;
-export const stepEvidenceSchema = z.strictObject({ stepId: id, routeId: id, routeVersion: revision.positive(), outcome: z.string().min(1).max(200), observedAt: instant,
+export const stepEvidenceSchema = z.strictObject({ enrollmentId: id, accountId: id, campaignVersionId: id, stepId: id, routeId: id, routeVersion: revision.positive(), outcome: z.string().min(1).max(200), observedAt: instant,
   observation: z.enum(['unknown', 'no_reply', 'replied']), source: z.enum(['provider', 'human']), executionContextId: id, contextRevision: revision,
   state: z.enum(['prepared', 'queued', 'dispatching', 'unknown', 'human_reported_sent', 'provider_accepted', 'cancelled']), actionId: id, channel: campaignChannelSchema });
 export type StepEvidence = z.infer<typeof stepEvidenceSchema>;

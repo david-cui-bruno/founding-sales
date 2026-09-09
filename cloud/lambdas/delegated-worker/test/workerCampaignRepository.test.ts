@@ -7,13 +7,15 @@ import type { CampaignVersion, CampaignCommandPayload } from '../../../../src/sh
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const now = '2026-09-09T12:00:00.000Z';
-async function fixture() {
+async function fixture(multichannel = false) {
   const dynamo = new ConditionalCommandHarness(); let time = now;
   const options = { dynamo, tableName: 'fictional-campaigns', workspaceId: id(1), clock: { now: () => time } };
   const store = new DynamoStore(options); const repo = new WorkerCampaignRepository(options); let command = 100;
   const version: CampaignVersion = { id: id(2), campaignId: id(3), version: 1, audienceHash: 'a'.repeat(64), offer: 'Fictional offer', objective: 'meeting', cohortAccountIds: [id(4)], approvedAt: null, steps: [{ id: id(5), channel: 'call', condition: 'initial', delayHours: 0 }], capScope: 'campaign_version_lifetime', channelCaps: { call: 2, email: 1, linkedin: 1 }, contentPolicyHash: 'b'.repeat(64) };
+  if (multichannel) version.steps.push({ id: id(50), channel: 'linkedin', condition: 'no_reply', delayHours: 0 });
   const account = { id: id(4), name: 'Fictional PM', domain: 'example.invalid', version: 1 };
   const routes = [{ id: id(6), accountId: id(4), personId: null, channel: 'phone', value: '+12025550101', purpose: 'business', evidenceIds: [id(7)], verification: 'published', version: 1 }];
+  if (multichannel) routes.push({ ...routes[0]!, id: id(51), channel: 'linkedin', value: 'https://www.linkedin.com/in/fictional-person' });
   await store.transact([store.put(`ACCOUNT#${id(4)}`, { account, routes, claims: [], sources: [], researchRevision: 1, history: [{ at: now, account, routes, claims: [] }] }, null)]);
   async function apply(payload: CampaignCommandPayload) {
     const plan = await repo.planCommand({ commandId: id(command++), accountId: id(4), payload });
@@ -25,6 +27,27 @@ async function fixture() {
 }
 
 describe('real SDK campaign transactional plans', () => {
+  it('executes call then selects approved LinkedIn route without rebinding immutable predecessor', async () => {
+    const f = await fixture(true);
+    await f.apply({ kind: 'campaign.enroll', enrollmentId: id(8), campaignVersionId: f.version.id, selectedRouteId: id(6), executionContextId: 'call-context', contextRevision: 1 });
+    const execution = new CampaignExecution(f.repo);
+    const call = { workspaceId: id(1), accountId: id(4), campaignId: id(3), campaignRevision: 1, enrollmentId: id(8), enrollmentRevision: 1, stepId: id(5), actionId: id(10), channel: 'call' as const, authorityGeneration: 1, selectedRouteId: id(6), contextRevision: 'call-context', contentHash: 'c'.repeat(64), targetHash: 'd'.repeat(64) };
+    await f.repo.admitActionApproval({ ...call, approvedAt: now, expiresAt: '2026-09-09T12:05:00.000Z' });
+    await f.store.transact((await execution.prepareManualChecks(call)).finalize());
+    const evidence = { enrollmentId: id(8), accountId: id(4), campaignVersionId: id(2), stepId: id(5), routeId: id(6), routeVersion: 1, executionContextId: 'call-context', contextRevision: 1, observedAt: now, observation: 'no_reply' as const, source: 'human' as const, actionId: id(10), channel: 'call' as const, state: 'human_reported_sent' as const, outcome: 'no_answer' };
+    await expect(f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 1, evidence: { ...evidence, enrollmentId: id(90) } })).rejects.toThrow('campaign_evidence_binding');
+    await expect(f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 1, evidence: { ...evidence, routeId: id(51), executionContextId: 'linkedin-context' } })).rejects.toThrow('campaign_evidence_binding');
+    await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 1, evidence });
+    expect(f.dynamo.inspect(campaignEnrollmentKey(id(8)))).toMatchObject({ currentStepId: id(50), state: 'active' });
+    await f.apply({ kind: 'campaign.route', enrollmentId: id(8), expectedEnrollmentVersion: 2, selectedRouteId: id(51), executionContextId: 'linkedin-context', contextRevision: 2 });
+    const linkedin = { ...call, enrollmentRevision: 3, stepId: id(50), actionId: id(11), channel: 'linkedin' as const, selectedRouteId: id(51), contextRevision: 'linkedin-context' };
+    await f.repo.admitActionApproval({ ...linkedin, approvedAt: now, expiresAt: '2026-09-09T12:05:00.000Z' });
+    const plan = await execution.prepareManualChecks(linkedin);
+    await f.store.transact(plan.finalize());
+    expect(await f.repo.evidence(id(8))).toEqual([evidence]);
+    expect(f.dynamo.inspect(`CAMPAIGN_CAP#${id(2)}#call`)).toEqual({ reserved: 0, sent: 1 });
+    expect(f.dynamo.inspect(`CAMPAIGN_CAP#${id(2)}#linkedin`)).toEqual({ reserved: 1, sent: 0 });
+  });
   it('freezes strategy and refuses approval with edited content', async () => {
     const f = await fixture();
     await expect(f.apply({ kind: 'campaign.version', version: { ...f.version, offer: 'Changed' } })).rejects.toThrow();
@@ -54,7 +77,7 @@ describe('real SDK campaign transactional plans', () => {
     const binding = { workspaceId: id(1), accountId: id(4), campaignId: id(3), campaignRevision: 1, enrollmentId: id(8), enrollmentRevision: 1, stepId: id(5), actionId: id(10), channel: 'call' as const, authorityGeneration: 1, selectedRouteId: id(6), contextRevision: 'context-one', contentHash: 'c'.repeat(64), targetHash: 'd'.repeat(64) };
     await f.repo.admitActionApproval({ ...binding, expiresAt: '2026-09-09T12:05:00.000Z', approvedAt: now });
     await f.store.transact((await execution.prepareManualChecks(binding)).finalize());
-    const evidence = { stepId: id(5), routeId: id(6), routeVersion: 1, executionContextId: 'context-one', contextRevision: 1, observedAt: now, observation: 'unknown' as const, source: 'human' as const, actionId: id(10), channel: 'call' as const, state: 'unknown' as const, outcome: 'unknown' };
+    const evidence = { enrollmentId: id(8), accountId: id(4), campaignVersionId: id(2), stepId: id(5), routeId: id(6), routeVersion: 1, executionContextId: 'context-one', contextRevision: 1, observedAt: now, observation: 'unknown' as const, source: 'human' as const, actionId: id(10), channel: 'call' as const, state: 'unknown' as const, outcome: 'unknown' };
     await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 1, evidence });
     expect(f.dynamo.inspect(campaignEnrollmentKey(id(8)))).toMatchObject({ currentStepId: id(5) });
     await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 2, evidence: { ...evidence, observation: 'replied', outcome: 'reply' } });
@@ -65,7 +88,7 @@ describe('real SDK campaign transactional plans', () => {
   it.each(['active', 'paused', 'conversation', 'held', 'stopped', 'switched'] as const)('settles actual attempts without advancing %s interruption', async state => {
     const f = await fixture();
     await f.apply({ kind: 'campaign.enroll', enrollmentId: id(8), campaignVersionId: f.version.id, selectedRouteId: id(6), executionContextId: 'context-one', contextRevision: 1 });
-    const evidence = { stepId: id(5), routeId: id(6), routeVersion: 1, executionContextId: 'context-one', contextRevision: 1, observedAt: now, observation: 'unknown' as const, source: 'human' as const, actionId: id(10), channel: 'call' as const, state: 'human_reported_sent' as const, outcome: 'no_answer' };
+    const evidence = { enrollmentId: id(8), accountId: id(4), campaignVersionId: id(2), stepId: id(5), routeId: id(6), routeVersion: 1, executionContextId: 'context-one', contextRevision: 1, observedAt: now, observation: 'unknown' as const, source: 'human' as const, actionId: id(10), channel: 'call' as const, state: 'human_reported_sent' as const, outcome: 'no_answer' };
     await expect(f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 1, evidence })).rejects.toThrow('campaign_reservation_missing');
     const execution = new CampaignExecution(f.repo);
     const binding = { workspaceId: id(1), accountId: id(4), campaignId: id(3), campaignRevision: 1, enrollmentId: id(8), enrollmentRevision: 1, stepId: id(5), actionId: id(10), channel: 'call' as const, authorityGeneration: 1, selectedRouteId: id(6), contextRevision: 'context-one', contentHash: 'c'.repeat(64), targetHash: 'd'.repeat(64) };

@@ -13,7 +13,7 @@ export function planNext(versionInput: CampaignVersion, enrollmentInput: Enrollm
   if (!version.approvedAt || version.approvedAt > now) return wait('campaign_unapproved', null);
   if (enrollment.state !== 'active') return wait('enrollment_inactive', null);
   if (version.id !== enrollment.campaignVersionId || !version.cohortAccountIds.includes(enrollment.accountId)) return wait('campaign_binding_mismatch', null);
-  const observed = evidence.filter(e => e.observedAt <= now && e.observedAt >= enrollment.startedAt);
+  const observed = evidence.filter(e => e.enrollmentId === enrollment.id && e.accountId === enrollment.accountId && e.campaignVersionId === enrollment.campaignVersionId && e.observedAt <= now && e.observedAt >= enrollment.startedAt);
   if (observed.some(e => e.observation === 'replied' || ['reply', 'booked', 'opt_out'].includes(e.outcome))) {
     return { kind: 'stop', stepId: null, reason: 'conversation_started' };
   }
@@ -29,7 +29,7 @@ export function planNext(versionInput: CampaignVersion, enrollmentInput: Enrollm
   if (last) index += 1;
   const step = version.steps[index];
   if (!step) return { kind: 'stop', stepId: null, reason: 'sequence_completed' };
-  const prerequisite = last ?? exact.filter(e => e.stepId === version.steps[index - 1]?.id && actual(e)).sort((a, b) => b.observedAt.localeCompare(a.observedAt))[0];
+  const prerequisite = last ?? observed.filter(e => e.stepId === version.steps[index - 1]?.id && actual(e)).sort((a, b) => b.observedAt.localeCompare(a.observedAt))[0];
   if (step.condition !== 'initial') {
     if (!prerequisite) return wait('evidence_missing', step.id);
     if (step.condition === 'no_reply' && evaluateNoReply({ channel: prerequisite.channel, observation: prerequisite.observation }) !== 'eligible') return wait('no_reply_unconfirmed', step.id);
