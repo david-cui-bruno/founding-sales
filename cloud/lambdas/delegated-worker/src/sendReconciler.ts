@@ -57,7 +57,7 @@ export function createSendReconciler(input: DispatchDependencies) {
       if (reservation.contentHash !== fingerprint(intent.frozenMessage) || reservation.targetHash !== intent.action.targetHash) return { status: 'unknown', reason: 'sent_mismatch' };
       const existing = await input.policy.sendEvidence(commandId);
       const accepted = existing.find(evidence => evidence.state === 'provider_accepted' && fingerprint(evidence.reservation) === fingerprint(reservation));
-      if (accepted?.providerIdentity) return { status: 'provider_accepted', reason: 'sent_match', providerIdentity: accepted.providerIdentity };
+      if (accepted?.providerIdentity) return { status: 'provider_accepted', reason: 'sent_match', providerIdentity: { messageId: accepted.providerIdentity.messageId, threadId: accepted.providerIdentity.threadId ?? null } };
       const signal = new AbortController().signal;
       const access = await input.authorization.authorizedAccess(intent.pairingId, ['relevant_read'], signal);
       if (access.grant.subject !== intent.mailboxSubject || access.grant.email !== intent.frozenMessage.from || access.grant.owner !== 'remote') return { status: 'unknown', reason: 'lookup_unavailable' };
