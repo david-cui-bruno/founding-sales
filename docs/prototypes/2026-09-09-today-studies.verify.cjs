@@ -77,12 +77,36 @@ const checks=[];
 await page.locator('#preview-toggle').click();await page.locator('#theme').selectOption('dark');await page.locator('#density').selectOption('compact');await page.locator('#refresh').click();assert.equal(await freshTextarea.evaluate(node=>node===document.getElementById('message')),true);assert.equal(await page.locator('#message').inputValue(),edited);checks.push('stable editor DOM through preferences and refresh');
   await page.locator('[data-item=maya]').click();await page.locator('[data-item=nora]').click();assert.equal(await page.locator('#message').inputValue(),edited);
   await page.reload();assert.equal(await page.locator('#selected-title').textContent(),'Nora Ellis');assert.equal(await page.locator('#message').inputValue(),edited);checks.push('selection and draft persist through switch/reload');
-  await page.locator('#approve').click();assert.match(await page.locator('#approval-state').textContent(),/No message was sent/);assert.match(await page.locator('[data-item=nora]').textContent(),/Approved · not sent/);await page.locator('#message').fill(edited+'\nP.S. No commitments assumed.');assert.equal(await page.locator('#approval-state').count(),0);assert.equal(await page.locator('#approve').isEnabled(),true);checks.push('approval is not delivery; edits invalidate approval');
+  await page.locator('#approve').click();
+  assert.equal((await page.locator('#approval-state').innerText()).trim(),'Approved','approval is a quiet state, not an explanatory paragraph');
+  assert.equal(await page.locator('#approval-state').getAttribute('role'),'status');
+  assert.equal(await page.locator('#approval-state').evaluate(node=>{
+   const r=node.getBoundingClientRect();
+   return node.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));
+  }),true,'approval state must remain visible without scrolling the editor');
+  assert.equal(await page.locator('#approve').isDisabled(),true);
+  await page.screenshot({path:path.join(output,'native-approved-dark.png'),fullPage:true});
+  const approvedAxe=await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();
+  assert.deepEqual(approvedAxe.violations.filter(v=>['critical','serious'].includes(v.impact)).map(v=>v.id),[]);
+  assert.match(await page.locator('[data-item=nora]').textContent(),/Approved · not sent/);
+  await page.reload();assert.equal((await page.locator('#approval-state').innerText()).trim(),'Approved');
+  assert.equal(await page.locator('#approve').isDisabled(),true,'concise approval survives reload');
+  await page.locator('#message').fill(edited+'\nP.S. No commitments assumed.');assert.equal(await page.locator('#approval-state').count(),0);assert.equal(await page.locator('#approve').isEnabled(),true);checks.push('concise approval persists; edits invalidate approval without implying delivery');
   const current=await page.locator('#message').inputValue();await page.locator('[data-action=new-reply]').click();assert.equal(await page.locator('#approve').isDisabled(),true);assert.equal(await page.locator('#message').inputValue(),current);await page.locator('[data-action=review-reply]').click();await page.locator('[data-action=ack-reply]').click();assert.equal(await page.locator('#approve').isEnabled(),true);checks.push('new-context hold preserves edited text');
   await page.locator('#preview-toggle').click();await page.locator('#connection').selectOption('offline');assert.equal(await page.locator('#approve').isDisabled(),true);assert.equal(await page.locator('#message').getAttribute('readonly'),'');assert.equal(await page.locator('#message').inputValue(),current);await page.locator('[data-item=jamila]').click();assert.equal(await page.locator('[data-action=call]').isDisabled(),true);await page.locator('#connection').selectOption('phone');assert.equal(await page.locator('[data-action=call]').isDisabled(),true);await page.locator('[data-item=nora]').click();assert.equal(await page.locator('#approve').isEnabled(),true);checks.push('offline and phone-only setup are distinct');
   await page.locator('#connection').selectOption('ready');await page.locator('[data-item=jamila]').click();await page.locator('[data-action=call]').click();assert.equal(await page.locator('.row-done').count(),0);await page.locator('[data-action=handoff]').click();assert.equal(await page.locator('#save-outcome').isDisabled(),true);await page.getByRole('button',{name:'Connected',exact:true}).click();await page.locator('#outcome-note').fill('Fictional recap only.');await page.locator('#save-outcome').click();assert.match(await page.locator('#detail').textContent(),/Outcome reported: Connected/);await page.locator('#undo').click();assert.equal(await page.locator('#detail [data-action=call]').count(),1);checks.push('handoff is not connected; explicit outcome and undo');
   await page.locator('[data-item=marcus]').click();await page.locator('[data-action=copy]').click();assert.equal(await page.locator('[data-item=marcus] .row-done').count(),0);await page.locator('[data-action=profile]').click();await page.getByRole('button',{name:'Back to the draft',exact:true}).click();assert.equal(await page.locator('[data-item=marcus] .row-done').count(),0);await page.locator('[data-action=manual-outcome]').click();await page.getByRole('button',{name:'Sent manually',exact:true}).click();await page.locator('#save-outcome').click();assert.match(await page.locator('[data-item=marcus]').textContent(),/Reported sent manually/);checks.push('manual LinkedIn copy/open do not imply sent');for(const [choice,label,note] of [['Received a reply','Reply reported','Please check back next month.'],['Asked not to be contacted','Opt-out reported','No further contact requested.'],['Not sent','Reported not sent','Paused before sending.']]){await page.locator('[data-action=manual-outcome]').click();await page.getByRole('button',{name:choice,exact:true}).click();await page.locator('#outcome-note').fill(note);await page.locator('#save-outcome').click();assert.match(await page.locator('[data-item=marcus]').textContent(),new RegExp(label));assert.match(await page.locator('#detail').textContent(),new RegExp(note));assert.equal(await page.locator('[data-action=copy]').isDisabled(),choice!=='Not sent');await page.reload();assert.match(await page.locator('#detail').textContent(),new RegExp(note));}checks.push('manual reply, opt-out and non-send recap persistence');
   await page.locator('[data-item=rosa]').click();assert.match(await page.locator('.meeting-status').textContent(),/Calendar event createdAttendee accepted/);await page.locator('[data-item=owen]').click();assert.match(await page.locator('.meeting-status').textContent(),/Invite response pending/);checks.push('calendar and attendee status distinct');
+  for(const action of ['calendar','reschedule']){
+   await page.locator(`[data-action=${action}]`).click();
+   assert.match(await page.locator('#modal-title').textContent(),/preview/i);
+   assert.match(await page.locator('#modal').textContent(),/Owen Blake/,'preview retains selected meeting context');
+   await page.getByRole('button',{name:'Back to the brief',exact:true}).click();
+  }
+  await page.getByRole('button',{name:'Settings',exact:true}).click();
+  assert.match(await page.locator('#modal').textContent(),/Worker.*Up to date/s);
+  await page.getByRole('button',{name:'Got it',exact:true}).click();
+  checks.push('shortened meeting and connection dialogs remain usable and contextual');
   await page.getByRole('button',{name:'Campaigns',exact:true}).click();assert.match(await page.locator('#modal').textContent(),/Requested email only/);await page.getByRole('button',{name:'Back to Today',exact:true}).click();checks.push('campaign context on demand');
   await page.locator('#reset').click();await page.locator('#toast-close').click();
   const shape=[];
@@ -101,6 +125,7 @@ await page.locator('#preview-toggle').click();await page.locator('#theme').selec
   for(const study of ['native','index','warm'])for(const width of [1440,1050])for(const theme of ['light','dark']){
    await page.locator(`button[data-study=${study}]`).click();
    await page.setViewportSize({width,height:900});
+   assert.equal(await page.getByText('Prototype · no live actions',{exact:true}).isVisible(),true,'prototype boundary stays visible without per-action disclaimers');
    if(await page.locator('#preview-controls').isHidden())await page.locator('#preview-toggle').click();await page.locator('#theme').selectOption(theme);await page.locator('#density').selectOption('compact');await page.locator('#preview-toggle').click();
    for(const id of ['jamila','nora','rosa']){
     await page.locator(`[data-item=${id}]`).click();assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,`overflow ${study} ${width} ${theme} ${id}`);
@@ -115,6 +140,7 @@ await page.locator('#preview-toggle').click();await page.locator('#theme').selec
   assert.equal(await page.locator('[data-action=today] .nav-icon').isVisible(),true);const mobileAxe=await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();assert.deepEqual(mobileAxe.violations.filter(v=>['critical','serious'].includes(v.impact)).map(v=>v.id),[]);checks.push('mobile navigation icons and accessibility');
   for(const study of ['native','index','warm']){
    await page.locator(`button[data-study=${study}]`).click();await page.locator('[data-item=nora]').click();
+   assert.equal(await page.getByText('Prototype · no live actions',{exact:true}).isVisible(),true,'prototype boundary remains visible on narrow screens');
    assert.equal(await page.locator('#message').isVisible(),true,`mobile editor reachable in ${study}`);
    assert.equal(await page.locator('#approve').isVisible(),true,`mobile approval reachable in ${study}`);
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,`mobile overflow ${study}`);
