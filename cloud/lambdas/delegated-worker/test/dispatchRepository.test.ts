@@ -1,7 +1,7 @@
 import { fixture, dispatchFixture, campaignFixture } from './dispatchFixture';
 import { ownerSourceKey, type OwnerSourceConfiguration } from '../../../../src/shared/contracts/ownerCommandContract';
 import { describe, expect, it, vi } from 'vitest';
-import { dispatchIntentKey, dispatchApprovalKey, dispatchPermissionKey, dispatchCapPolicyKey, type DispatchIntent } from '../src/dispatchRepository';
+import { dispatchIntentKey, dispatchApprovalKey, dispatchPermissionKey, dispatchCapPolicyKey, type DispatchIntent, type SendEvidence } from '../src/dispatchRepository';
 import { fingerprint } from '../src/dynamoStore';
 import { DynamoThreadIntakeRepository, mailThreadKey, mailCursorKey } from '../src/threadIntakeRepository';
 import { intakeRegistryKey } from '../src/intakeBarrier';
@@ -464,4 +464,66 @@ it('actual provider not-sent releases campaign reserved capacity once without pr
   expect(event).toHaveProperty('campaign.evidence.cancellationEvidence.evidenceRef', `send-${fingerprint(records[0])}`);
   expect((await f.service().dispatch(f.intent.commandId)).status).toBe('not_sent');
   expect(f.sends()).toBe(1); expect(f.dynamo.inspect(campaignCapKey(f.version.id, 'email'))).toEqual({ reserved: 0, sent: 0 });
+});
+
+it.each(['cancelled', 'provider_accepted'] as const)('explicit opposite provider fact after %s appends immutable conflict without changing terminal execution', async first => {
+  const f = await campaignFixture(true);
+  if (first === 'cancelled') f.onSend(async () => new Response('', { status: 403 }));
+  await f.service().dispatch(f.intent.commandId);
+  const original = (await f.policy.sendEvidence(f.intent.commandId))[0]!;
+  const before = await Promise.all(['ACTION#acct#campaign-action', 'DISPATCH_ACCOUNT#acct', 'CAMPAIGN_RESERVATION#acct#campaign-action', campaignCapKey(f.version.id, 'email')].map(key => f.store.get(key)));
+  const late: SendEvidence = { ...original, state: first === 'cancelled' ? 'provider_accepted' : 'cancelled', kind: 'provider_result',
+    reason: first === 'cancelled' ? 'provider_accepted' : 'provider_not_sent', providerIdentity: first === 'cancelled' ? { messageId: 'late-original-result', threadId: 'thread1' } : null };
+  const outcome = { reservation: late.reservation, state: late.state, observedAt: late.observedAt, evidenceRef: `send-${fingerprint(late)}` };
+  await f.execution.appendOutcome(outcome, late);
+  const after = await Promise.all(['ACTION#acct#campaign-action', 'DISPATCH_ACCOUNT#acct', 'CAMPAIGN_RESERVATION#acct#campaign-action', campaignCapKey(f.version.id, 'email')].map(key => f.store.get(key)));
+  expect(after).toEqual(before);
+  expect(await f.policy.sendEvidence(f.intent.commandId)).toEqual(expect.arrayContaining([original, late]));
+  expect(f.dynamo.inspect(campaignEnrollmentKey('enrollment'))).toMatchObject({ state: 'held' });
+  await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: await f.execution.currentVersion('acct') }, f.access.accessEvidence)).rejects.toThrow('dispatch_conflict_hold');
+  const events = (await f.execution.eventsAfter(null)).events;
+  const event = events.find(event => event.kind === 'action.outcome' && event.payload.evidenceRef === outcome.evidenceRef);
+  expect(event).toHaveProperty('payload.state', first);
+  expect(event).toHaveProperty('campaign.evidence.conflict', 'contradictory_finalized_outcome');
+  expect(event).toHaveProperty('campaign.evidence.state', late.state);
+  await f.execution.appendOutcome(outcome, late);
+  expect(await f.policy.sendEvidence(f.intent.commandId)).toHaveLength(2);
+  expect((await f.execution.eventsAfter(null)).events).toEqual(events);
+  await f.service().dispatch(f.intent.commandId); expect(f.sends()).toBe(1);
+});
+
+it.each(['cancelled', 'provider_accepted'] as const)('standalone opposite fact after %s is retained and blocks future reservations', async first => {
+  const f = await dispatchFixture();
+  if (first === 'cancelled') f.onSend(async () => new Response('', { status: 403 }));
+  await f.service().dispatch(f.intent.commandId);
+  const original = (await f.policy.sendEvidence(f.intent.commandId))[0]!;
+  const late: SendEvidence = { ...original, state: first === 'cancelled' ? 'provider_accepted' : 'cancelled', kind: 'provider_result',
+    reason: first === 'cancelled' ? 'provider_accepted' : 'provider_not_sent', providerIdentity: first === 'cancelled' ? { messageId: 'late-original-result', threadId: 'thread1' } : null };
+  const outcome = { reservation: late.reservation, state: late.state, observedAt: late.observedAt, evidenceRef: `send-${fingerprint(late)}` };
+  const actionKey = `ACTION#acct#${f.intent.action.actionId}`;
+  const before = await f.store.get(actionKey);
+  const pendingPlan = await f.policy.reservationPlan({ ...f.intent.action, expectedVersion: await f.execution.currentVersion('acct') }, f.access.accessEvidence);
+  await f.execution.appendOutcome(outcome, late);
+  expect(await f.store.get(actionKey)).toEqual(before);
+  await expect(f.store.transact(pendingPlan.finalize())).rejects.toThrow();
+  expect(await f.policy.sendEvidence(f.intent.commandId)).toHaveLength(2);
+  await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: await f.execution.currentVersion('acct') }, f.access.accessEvidence)).rejects.toThrow('dispatch_conflict_hold');
+  const events = (await f.execution.eventsAfter(null)).events;
+  await f.execution.appendOutcome(outcome, late);
+  expect((await f.execution.eventsAfter(null)).events).toEqual(events);
+  await f.service().dispatch(f.intent.commandId); expect(f.sends()).toBe(1);
+});
+
+it.each(['same_terminal', 'unproven_cancellation', 'foreign_reservation'] as const)('terminal late evidence refuses %s before storing conflict or receipt', async variant => {
+  const f = await dispatchFixture(); await f.service().dispatch(f.intent.commandId);
+  const original = (await f.policy.sendEvidence(f.intent.commandId))[0]!;
+  const late: SendEvidence = variant === 'same_terminal' ? { ...original, observedAt: '2026-09-09T00:04:01.000Z' }
+    : { ...original, state: 'cancelled', kind: variant === 'unproven_cancellation' ? 'sent_lookup' : 'provider_result', reason: 'provider_not_sent', providerIdentity: null };
+  if (variant === 'foreign_reservation') late.reservation = { ...late.reservation, targetHash: 'b'.repeat(64) };
+  const events = (await f.execution.eventsAfter(null)).events;
+  await expect(f.execution.appendOutcome({ reservation: late.reservation, state: late.state, observedAt: late.observedAt, evidenceRef: fingerprint(late) }, late)).rejects.toThrow();
+  expect(await f.store.get('DISPATCH_CONFLICT#acct')).toBeNull();
+  expect(await f.store.list('ACTION_LATE_EVIDENCE#')).toHaveLength(0);
+  expect(await f.policy.sendEvidence(f.intent.commandId)).toHaveLength(1);
+  expect((await f.execution.eventsAfter(null)).events).toEqual(events);
 });

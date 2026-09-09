@@ -39,6 +39,8 @@ export const dispatchPermissionSchema = z.strictObject({ id, accountId: id, reci
   sourceMessageId: id, sourceMessageHash: hash, basis: z.enum(['requested_followup', 'ongoing_correspondence']), recordedAt: instant, expiresAt: instant });
 const flightSchema = z.strictObject({ accountId: id, commandId: z.uuid(), actionId: id, state: z.enum(['dispatching', 'unknown', 'provider_accepted', 'cancelled']) });
 export const dispatchAccountKey = (account: string) => `DISPATCH_ACCOUNT#${keyPart(account)}`;
+export const dispatchConflictKey = (account: string) => `DISPATCH_CONFLICT#${keyPart(account)}`;
+const conflictSchema = z.strictObject({ accountId: id, actionId: id, commandId: z.uuid(), evidenceRef: id, observedAt: instant });
 const capPolicySchema = z.strictObject({ sender: z.email(), dailyLimit: integer });
 const capSchema = z.strictObject({ sender: z.email(), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), used: integer });
 export const dispatchIntentKey = (command: string) => `DISPATCH_INTENT#${keyPart(command)}`;
@@ -119,7 +121,7 @@ export class DynamoDispatchRepository {
       || intent.action.targetHash !== fingerprint({ sender: intent.frozenMessage.from, recipient: intent.frozenMessage.to, threadId: intent.frozenMessage.threadId })) throw new Error('dispatch_identity_conflict');
     return intent;
   }
-  async outcomePlan(outcome: AppendOutcomeInput, raw: SendEvidence): Promise<{ items: TransactWriteItem[]; campaign?: CampaignEventPayload }> {
+  async outcomePlan(outcome: AppendOutcomeInput, raw: SendEvidence, terminalState?: 'cancelled' | 'provider_accepted'): Promise<{ items: TransactWriteItem[]; campaign?: CampaignEventPayload }> {
     const evidence = sendEvidenceSchema.parse(raw); const intent = await this.loadIntent(evidence.commandId);
     if (evidence.state === 'cancelled' && (evidence.kind !== 'provider_result' || evidence.reason !== 'provider_not_sent' || evidence.providerIdentity !== null)) throw new Error('send_evidence_conflict');
     if (!intent || fingerprint(evidence.reservation) !== fingerprint(outcome.reservation) || evidence.state !== outcome.state
@@ -130,10 +132,25 @@ export class DynamoDispatchRepository {
       || (evidence.state === 'provider_accepted') !== (evidence.providerIdentity !== null)) throw new Error('send_evidence_conflict');
     const flightKey = dispatchAccountKey(intent.action.accountId); const flightRow = await this.required(flightKey);
     const flight = flightSchema.parse(flightRow.data);
-    if (flight.commandId !== intent.commandId || flight.accountId !== intent.action.accountId || flight.actionId !== intent.action.actionId
-      || !['dispatching', 'unknown'].includes(flight.state)) throw new Error('account_dispatch_conflict');
+    if (terminalState && (terminalState === evidence.state || evidence.kind !== 'provider_result' || !['provider_accepted', 'cancelled'].includes(evidence.state)
+      || evidence.state === 'provider_accepted' && evidence.reason !== 'provider_accepted')) throw new Error('send_evidence_conflict');
+    if (!terminalState && (flight.commandId !== intent.commandId || flight.accountId !== intent.action.accountId || flight.actionId !== intent.action.actionId
+      || !['dispatching', 'unknown'].includes(flight.state))) throw new Error('account_dispatch_conflict');
     const items = [this.store.put(`DISPATCH_EVIDENCE#${keyPart(intent.commandId)}#${fingerprint(evidence)}`, evidence, null),
-      this.store.put(flightKey, { ...flight, state: evidence.state }, flightRow.rev)];
+      terminalState ? this.store.check(flightKey, flightRow.rev) : this.store.put(flightKey, { ...flight, state: evidence.state }, flightRow.rev)];
+    if (terminalState) {
+      // The original terminal fact must already be immutable and bound to this reservation.
+      const original = (await this.store.list<unknown>(`DISPATCH_EVIDENCE#${keyPart(intent.commandId)}#`)).find(row => {
+        const parsed = sendEvidenceSchema.parse(row.stored.data);
+        return parsed.state === terminalState && fingerprint(parsed.reservation) === fingerprint(evidence.reservation);
+      });
+      if (!original) throw new Error('terminal_evidence_missing');
+      items.push(this.store.check(original.key, original.stored.rev));
+      const holdKey = dispatchConflictKey(intent.action.accountId); const hold = await this.store.get<unknown>(holdKey);
+      if (hold && conflictSchema.parse(hold.data).accountId !== intent.action.accountId) throw new Error('dispatch_identity_conflict');
+      items.push(hold ? this.store.check(holdKey, hold.rev) : this.store.put(holdKey, conflictSchema.parse({ accountId: intent.action.accountId,
+        actionId: intent.action.actionId, commandId: intent.commandId, evidenceRef: outcome.evidenceRef, observedAt: evidence.observedAt }), null));
+    }
     if (intent.kind !== 'campaign_step') return { items };
     if (!this.campaignExecution) throw new Error('campaign_binding_unavailable');
     const hash = fingerprint(evidence);
@@ -141,6 +158,7 @@ export class DynamoDispatchRepository {
     const campaign = await this.campaignExecution.repository.prepareOutcomePlan({ commandId, accountId: intent.action.accountId,
       actionId: intent.action.actionId, state: evidence.state, observedAt: evidence.observedAt,
       ...(evidence.state === 'cancelled' ? { cancellationEvidence: { kind: 'provider_result' as const, reason: 'provider_not_sent' as const, providerIdentity: null, evidenceRef: `send-${hash}` } } : {}) });
+    if (terminalState && campaign.payload.evidence?.conflict !== 'contradictory_finalized_outcome') throw new Error('campaign_conflict_missing');
     return { items: mergeDispatchConditions([...items, ...campaign.items]), campaign: campaign.payload };
   }
   async sendEvidence(commandId: string): Promise<SendEvidence[]> {
@@ -152,6 +170,8 @@ export class DynamoDispatchRepository {
   }
   async reservationPlan(input: ReserveDispatchInput, evidence?: GoogleAccessEvidence): Promise<DispatchReservationPlan> {
     const parsed = reserveDispatchInputSchema.parse(input); this.store.workspace(parsed.workspaceId);
+    const holdKey = dispatchConflictKey(parsed.accountId);
+    if (await this.store.get(holdKey)) throw new Error('dispatch_conflict_hold');
     const indexKey = actionIndexKey(parsed.accountId, parsed.actionId); const index = await this.required(indexKey);
     const commandId = z.strictObject({ commandId: z.uuid() }).parse(index.data).commandId;
     const key = dispatchIntentKey(commandId); const row = await this.required(key); const intent = dispatchIntentSchema.parse(row.data);
@@ -189,7 +209,7 @@ export class DynamoDispatchRepository {
       const flight = flightSchema.parse(flightRow.data);
       if (flight.accountId !== parsed.accountId || ['dispatching', 'unknown'].includes(flight.state)) throw new Error('account_dispatch_unresolved');
     }
-    const checks = [this.store.check(sourceKey, sourceRow.rev), this.store.put(flightKey, { accountId: parsed.accountId, commandId, actionId: parsed.actionId, state: 'dispatching' }, flightRow?.rev ?? null), this.store.check(indexKey, index.rev), this.store.check(key, row.rev), this.store.check(approvalKey, approvalRow.rev),
+    const checks = [this.store.absent(holdKey), this.store.check(sourceKey, sourceRow.rev), this.store.put(flightKey, { accountId: parsed.accountId, commandId, actionId: parsed.actionId, state: 'dispatching' }, flightRow?.rev ?? null), this.store.check(indexKey, index.rev), this.store.check(key, row.rev), this.store.check(approvalKey, approvalRow.rev),
       this.store.check(dKey, draftRow.rev), this.store.check(tKey, threadRow.rev), this.store.check(pKey, permissionRow.rev)];
     for (const absent of [revokedKey(key), revokedKey(approvalKey), revokedKey(pKey), mailSuppressionKey(parsed.accountId)]) {
       if (await this.store.get(absent)) throw new Error('dispatch_suppressed');

@@ -187,9 +187,18 @@ export class DynamoExecutionRepository implements ExecutionRepository {
     if (!action || fingerprint(action.data.reservation) !== fingerprint(reservation)) throw new Error('reservation_identity_conflict');
     const fp = evidence ? fingerprint({ parsed, evidence }) : fingerprint(parsed);
     if (action.data.outcomeFingerprint === fp) { if (action.data.sequence) await this.store.publish(action.data.sequence); return; }
-    if (!['dispatching', 'unknown'].includes(action.data.state)) throw new Error('outcome_conflict');
+    const terminalState = action.data.state === 'cancelled' || action.data.state === 'provider_accepted' ? action.data.state : undefined;
+    const lateKey = `ACTION_LATE_EVIDENCE#${keyPart(reservation.accountId)}#${keyPart(reservation.actionId)}#${fp}`;
+    if (terminalState) {
+      const receipt = await this.store.get<{ fingerprint: string; sequence: number }>(lateKey);
+      if (receipt) {
+        if (receipt.data.fingerprint !== fp) throw new Error('outcome_conflict');
+        await this.store.publish(integer.positive().parse(receipt.data.sequence)); return;
+      }
+      if (!evidence || parsed.state === terminalState || !['provider_accepted', 'cancelled'].includes(parsed.state)) throw new Error('outcome_conflict');
+    } else if (!['dispatching', 'unknown'].includes(action.data.state)) throw new Error('outcome_conflict');
     if (evidence && !this.options.dispatchPolicy) throw new Error('dispatch_policy_missing');
-    const outcomePlan = evidence ? await this.options.dispatchPolicy!.outcomePlan(parsed, evidence) : { items: [] };
+    const outcomePlan = evidence ? await this.options.dispatchPolicy!.outcomePlan(parsed, evidence, terminalState) : { items: [] };
     const authority = await this.authority(reservation.accountId);
     const next = { ...authority.data, version: authority.data.version + 1 };
     // The event generation belongs to the ORIGINAL reservation, even after revoke.
@@ -197,11 +206,12 @@ export class DynamoExecutionRepository implements ExecutionRepository {
     const event: WorkerEvent = workerEventSchema.parse({ id: `outcome-${fp}`, workspaceId: reservation.workspaceId, accountId: reservation.accountId,
       authorityGeneration: reservation.authorityGeneration, aggregateVersion: next.version, kind: 'action.outcome', payload: {
         actionId: reservation.actionId, contentHash: reservation.contentHash, targetHash: reservation.targetHash,
-        state: parsed.state, observedAt: parsed.observedAt, evidenceRef: parsed.evidenceRef }, ...(outcomePlan.campaign ? { campaign: outcomePlan.campaign } : {}) });
+        state: terminalState ?? parsed.state, observedAt: parsed.observedAt, evidenceRef: parsed.evidenceRef }, ...(outcomePlan.campaign ? { campaign: outcomePlan.campaign } : {}) });
     const outbox = await this.store.eventItems(event);
     await this.store.transact([this.store.put(authKey(reservation.accountId), next, authority.rev, authFields(next), authFields(authority.data)),
-      this.store.put(key, { ...action.data, state: parsed.state, outcomeFingerprint: fp, sequence: outbox.sequence }, action.rev,
-        { state: parsed.state }, { state: action.data.state }), ...outcomePlan.items, ...outbox.items]);
+      ...(terminalState ? [this.store.check(key, action.rev), this.store.put(lateKey, { fingerprint: fp, sequence: outbox.sequence }, null)]
+        : [this.store.put(key, { ...action.data, state: parsed.state, outcomeFingerprint: fp, sequence: outbox.sequence }, action.rev,
+          { state: parsed.state }, { state: action.data.state })]), ...outcomePlan.items, ...outbox.items]);
     await this.store.publish(outbox.sequence);
   }
   eventsAfter(cursor: string | null) { return this.store.eventsAfter(cursor); }

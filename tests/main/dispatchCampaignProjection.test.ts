@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { expect, it } from 'vitest';
+import type { SendEvidence } from '../../cloud/lambdas/delegated-worker/src/dispatchRepository';
+import { fingerprint } from '../../cloud/lambdas/delegated-worker/src/dynamoStore';
 import { campaignFixture } from '../../cloud/lambdas/delegated-worker/test/dispatchFixture';
 import { openDatabase, closeDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
@@ -9,8 +11,9 @@ import { DelegationRepository } from '../../src/main/delegation/delegationReposi
 import { workerEventSchema } from '../../src/shared/contracts/delegationContract';
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
 
-it('projects actual C4 reservation and accepted cap events through canonical C1 SQL and durable reopen', async () => {
-  const worker = await campaignFixture();
+it.each(['provider_accepted', 'cancelled'] as const)('projects actual C4 %s and contrary late fact through canonical SQL and durable reopen', async first => {
+  const worker = await campaignFixture(true);
+  if (first === 'cancelled') worker.onSend(async () => new Response('', { status: 403 }));
   const temp = createTempDatabase(); const key = createTestWorkspaceKey();
   let db = openDatabase({ path: temp.path, key });
   try {
@@ -29,7 +32,7 @@ it('projects actual C4 reservation and accepted cap events through canonical C1 
     const readCap = () => db.raw.prepare('SELECT revision,reserved,sent FROM campaign_caps WHERE workspace_id=? AND campaign_version_id=? AND channel=?')
       .get(workspaceId, worker.version.id, 'email');
     expect(readCap()).toEqual({ revision: 1, reserved: 0, sent: 0 });
-    expect((await worker.service().dispatch(worker.intent.commandId)).status).toBe('provider_accepted');
+    expect((await worker.service().dispatch(worker.intent.commandId)).status).toBe(first === 'cancelled' ? 'not_sent' : 'provider_accepted');
     const events = (await worker.execution.eventsAfter(null)).events.map(event => workerEventSchema.parse(event));
     let reservations = 0; let accepted = 0;
     for (const event of events) {
@@ -52,11 +55,32 @@ it('projects actual C4 reservation and accepted cap events through canonical C1 
         }
       }
     }
-    expect(reservations).toBe(1); expect(accepted).toBe(1); expect(worker.sends()).toBe(1);
+    expect(reservations).toBe(1); expect(accepted).toBe(first === 'provider_accepted' ? 1 : 0); expect(worker.sends()).toBe(1);
+    const expectedCap = { revision: 3, reserved: 0, sent: first === 'provider_accepted' ? 1 : 0 };
+    const originalReceipts = db.raw.prepare('SELECT * FROM campaign_step_receipts').all();
+    const original = (await worker.policy.sendEvidence(worker.intent.commandId))[0]!;
+    const late: SendEvidence = { ...original, state: first === 'cancelled' ? 'provider_accepted' : 'cancelled', kind: 'provider_result',
+      reason: first === 'cancelled' ? 'provider_accepted' : 'provider_not_sent', providerIdentity: first === 'cancelled' ? { messageId: 'late-original-result', threadId: 'thread1' } : null };
+    const outcome = { reservation: late.reservation, state: late.state, observedAt: late.observedAt, evidenceRef: `send-${fingerprint(late)}` };
+    await worker.execution.appendOutcome(outcome, late);
+    const conflict = (await worker.execution.eventsAfter(null)).events.find(event => event.kind === 'action.outcome' && event.payload.evidenceRef === outcome.evidenceRef)!;
+    expect(workerEventSchema.parse(conflict)).toHaveProperty('payload.state', first);
+    expect(local.applyWorkerEvent(conflict)).toBe('applied');
+    expect(local.applyWorkerEvent(conflict)).toBe('duplicate');
+    expect(readCap()).toEqual(expectedCap);
+    const receipts = db.raw.prepare('SELECT * FROM campaign_step_receipts').all();
+    expect(receipts).toHaveLength(originalReceipts.length + 1);
+    expect(receipts).toEqual(expect.arrayContaining(originalReceipts));
+    expect(receipts).toEqual(expect.arrayContaining([expect.objectContaining({ state: late.state, outcome: expect.stringContaining('conflict:contradictory_finalized_outcome:') })]));
+    expect(db.raw.prepare('SELECT state FROM campaign_enrollments WHERE id=?').get('enrollment')).toEqual({ state: 'held' });
+    await worker.execution.appendOutcome(outcome, late);
+    expect((await worker.execution.eventsAfter(null)).events).toHaveLength(events.length + 1);
+    events.push(conflict);
     closeDatabase(db); db = openDatabase({ path: temp.path, key });
-    expect(readCap()).toEqual({ revision: 3, reserved: 0, sent: 1 });
+    expect(readCap()).toEqual(expectedCap);
     const reopened = new DelegationRepository({ database: db, workspaceId, clock });
     for (const event of events) expect(reopened.applyWorkerEvent(event)).toBe('duplicate');
-    expect(readCap()).toEqual({ revision: 3, reserved: 0, sent: 1 });
+    expect(readCap()).toEqual(expectedCap);
+    expect(db.raw.prepare('SELECT * FROM campaign_step_receipts').all()).toEqual(receipts);
   } finally { closeDatabase(db); key.bytes.fill(0); temp.cleanup(); }
 });

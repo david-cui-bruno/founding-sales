@@ -88,7 +88,7 @@ export async function dispatchFixture() {
   return { ...f, execution, fetch, service, sends: () => sends, onSend: (callback: () => Promise<Response>) => { onSend = callback; } };
 }
 
-export async function campaignFixture() {
+export async function campaignFixture(followup = false) {
   const f = await dispatchFixture(); const campaigns = new WorkerCampaignRepository(f.options); const campaignExecution = new CampaignExecution(campaigns);
   const policy = new DynamoDispatchRepository(f.options, f.authorization, campaignExecution);
   const execution = createExecutionRepository({ ...f.options, dispatchPolicy: policy });
@@ -104,7 +104,7 @@ export async function campaignFixture() {
     campaignPayloads.push(plan.payload);
   };
   const version: CampaignVersion = { id: 'campaign-version', campaignId: 'campaign', version: 1, audienceHash: 'a'.repeat(64), offer: 'Requested information', objective: 'meeting', cohortAccountIds: ['acct'], approvedAt: null,
-    steps: [{ id: 'email-step', channel: 'email', condition: 'initial', delayHours: 0 }], capScope: 'campaign_version_lifetime', channelCaps: { call: 0, email: 1, linkedin: 0 }, contentPolicyHash: 'b'.repeat(64) };
+    steps: [{ id: 'email-step', channel: 'email', condition: 'initial', delayHours: 0 }, ...(followup ? [{ id: 'followup-step', channel: 'call' as const, condition: 'no_reply' as const, delayHours: 24 }] : [])], capScope: 'campaign_version_lifetime', channelCaps: { call: 0, email: 1, linkedin: 0 }, contentPolicyHash: 'b'.repeat(64) };
   await apply({ kind: 'campaign.version', version });
   await apply({ kind: 'campaign.approve', campaignVersionId: version.id, snapshotHash: fingerprint(version), approvedAt: f.options.clock.now() });
   await apply({ kind: 'campaign.enroll', enrollmentId: 'enrollment', campaignVersionId: version.id, selectedRouteId: 'route', executionContextId: f.draft.contextRevision, contextRevision: 1 });
