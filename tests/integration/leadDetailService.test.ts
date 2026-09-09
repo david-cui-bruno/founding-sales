@@ -49,6 +49,19 @@ import {
   type TempDatabase,
 } from '../fixtures/tempDatabase';
 
+
+function readinessProof(personId = 'fixture-person') {
+  return Object.freeze({
+    subject: Object.freeze({ kind: 'person' as const, id: personId }),
+    registryRevision: 1,
+    checkpoints: Object.freeze([]),
+  });
+}
+function readyReply(personId?: string) {
+  return { kind: 'ready' as const, proof: readinessProof(personId) };
+}
+const assertCurrentReadiness = (): void => undefined;
+
 const CLOCK_NOW = '2026-08-31T15:00:00.000Z';
 
 class FixedClock {
@@ -545,7 +558,7 @@ describe('leadDetailService over a real encrypted domain', () => {
     const outbound = createOutboundCommandService({ domain: gate,
       phone: { inspectCapability: async () => ({ state: 'available', reasonCode: null }), dispatch },
       readiness: { getCapability: () => ({ state: 'available', reasonCode: null }),
-        check: async () => { beforeReady(); return { kind: 'ready' }; } },
+        check: async () => { beforeReady(); return readyReply(); }, assertCurrent: assertCurrentReadiness },
     });
     const provider = createLeadDetailProvider(gate, undefined, injected ? outbound : undefined);
     const dispose = registerLeadDetailIpc(provider);

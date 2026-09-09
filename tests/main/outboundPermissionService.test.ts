@@ -25,6 +25,19 @@ import {
   type TempDatabase,
 } from '../fixtures/tempDatabase';
 
+
+function readinessProof(personId = 'fixture-person') {
+  return Object.freeze({
+    subject: Object.freeze({ kind: 'person' as const, id: personId }),
+    registryRevision: 1,
+    checkpoints: Object.freeze([]),
+  });
+}
+function readyReply(personId?: string) {
+  return { kind: 'ready' as const, proof: readinessProof(personId) };
+}
+const assertCurrentReadiness = (): void => undefined;
+
 describe('OutboundPermissionService', () => {
   const AUTHORIZATION_NOW = '2026-09-04T14:00:00.000Z';
   let database: AppDatabase;
@@ -277,8 +290,9 @@ describe('OutboundPermissionService', () => {
         getCapability: () => ({ state: 'available', reasonCode: null }),
         check: async () => {
           block(priorOwner, '+14015550100', 'during-preflight');
-          return { kind: 'ready' };
+          return readyReply();
         },
+        assertCurrent: assertCurrentReadiness,
       },
     });
     const receipt = await commands.beginOutbound({
