@@ -77,6 +77,8 @@ describe('CommandPalette', () => {
       .map((option) => option.textContent);
     expect(labels).toEqual([
       'Go to Today',
+      'Go to Accounts',
+      'Go to Campaigns',
       'Go to Leads',
       'Go to Pipeline',
       'Go to Conversations',
@@ -172,7 +174,7 @@ describe('CommandPalette', () => {
     fireEvent.keyDown(input, { key: 'ArrowDown' });
     fireEvent.keyDown(input, { key: 'Enter' });
 
-    expect(navigate).toHaveBeenCalledWith('leads');
+    expect(navigate).toHaveBeenCalledWith('accounts');
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 

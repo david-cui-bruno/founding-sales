@@ -6,6 +6,7 @@ export default defineConfig({
     exclude: [
       ...configDefaults.exclude,
       'tests/e2e/**',
+      'tests/browser/**',
       '.worktrees/**',
       'test/appleBridgeBuild.test.mjs',
       'test/verifyAppleBridgePackage.test.mjs',

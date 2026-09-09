@@ -21,6 +21,7 @@ type ExposedCallieApi = {
   leads: { list: (input: unknown) => Promise<unknown> };
   leadDetail: Record<string, unknown>;
   discovery: import('../../src/shared/contracts/discoveryContract').DiscoveryApi;
+  daily: import('../../src/shared/preload').CalliePreloadApi['daily'];
   today: { get: () => Promise<unknown>; getLeadTriageSnapshot: (input: unknown) => Promise<unknown> };
   pipeline: { get: () => Promise<unknown> };
   review: Record<string, unknown>;
@@ -98,6 +99,7 @@ describe('preload workflow bridge', () => {
     expect(Object.keys(api).sort()).toEqual([
       'appleSpike',
       'conversations',
+      'daily',
       'delegation',
       'discovery',
       'friday',
