@@ -93,7 +93,7 @@ async function desktopFixture(){
  const http:typeof fetch=async(input,init)=>{if(offline)throw Error('fictional offline');const url=new URL(String(input));requests.push({path:url.pathname,body:init?.body?JSON.parse(String(init.body)):null});const result=await handler({version:'2.0',rawPath:url.pathname,rawQueryString:url.search.slice(1),headers:{host:url.host,'x-forwarded-proto':'https',authorization:new Headers(init?.headers).get('authorization')??''},body:init?.body,requestContext:{domainName:url.host,http:{method:init?.method??'GET',sourceIp:'fictional'}}});return new Response(result.body,{status:result.statusCode});};
  const {createDelegationRuntime}=await import('../../src/main/delegation/delegationRuntime');
  const runtime=(overrides:Partial<Parameters<typeof createDelegationRuntime>[0]>={})=>createDelegationRuntime({databaseGate:{withDatabase:async run=>run(local.db)},pairing:{...f.pairing,endpoint:'https://worker.example.invalid'},clock:f.options.clock,fetch:http,...overrides});
- return {...f,local,repository,runtime,requests,setOffline:(value:boolean)=>{offline=value;}};
+ return {...f,local,repository,runtime,requests,http,setOffline:(value:boolean)=>{offline=value;}};
 }
 function firstEmailHttp(){let sends=0;const mime:string[]=[];const http:typeof fetch=async(resource,init)=>{
  init?.signal?.throwIfAborted();const url=new URL(String(resource));
@@ -145,6 +145,97 @@ it('keeps captured requested participant through actual source expansion and con
  expect((await f.threads.scope('acct','mailbox'))?.participantAddresses).toEqual(expanded?.participantAddresses);
  await createSourceCoordinator({auth:f.auth,authorization:f.authorization,fetch:mail.http}).tick(new AbortController().signal);
  expect((await loadRequestedApproval(f.store.store,f.command.commandId))?.record.state).toBe('materialized');expect(mail.sends()).toBe(1);
+});
+it('reactivates one retained participant after seventeen authentic same-address captures',async()=>{
+ const f=await captureFixture(true);expect((await f.post(f.command)).statusCode).toBe(200);const mail=firstEmailHttp();
+ const {createSourceCoordinator}=await import('../../cloud/lambdas/delegated-worker/src/sourceCoordinator');
+ await createSourceCoordinator({auth:f.auth,authorization:f.authorization,fetch:mail.http}).tick(new AbortController().signal);
+ for(let i=0;i<16;i++){
+  const prepared=await f.drafts.prepareRequestedFollowup({accountId:'acct',originalCall:f.originalCall,recipientBinding:f.command.payload.draft.recipientBinding,expectedAccountVersion:1,mode:'manual'},new AbortController().signal);
+  const edited=await f.drafts.editRequestedFollowup({accountId:'acct',draftId:prepared.draft.id,expectedRevision:1,subject:'Requested details',body:'Another actually captured review.'});
+  expect((await f.post({...f.command,commandId:randomUUID(),expectedVersion:await f.execution.currentVersion('acct'),payload:{...f.command.payload,draft:edited.draft,expectedRemoteDraftRevision:2,approvalId:randomUUID(),actionId:randomUUID(),intentCommandId:randomUUID()}})).statusCode).toBe(200);
+ }
+ expect(await f.store.store.list('REQUESTED_APPROVAL#')).toHaveLength(17);
+ const send=f.dynamo.send.bind(f.dynamo);let proofPages=0;
+ vi.spyOn(f.dynamo,'send').mockImplementation(async command=>{
+  const result:import('../../cloud/lambdas/delegated-worker/src/dynamoStore').DynamoResult=await send(command);if(!('KeyConditionExpression' in command.input)||command.input.ExpressionAttributeValues?.[':prefix']?.S!=='REQUESTED_APPROVAL#')return result;
+  expect(command.input.Limit).toBe(100);proofPages++;
+  const original=result.Items!.find(item=>JSON.parse(item.data!.S!).commandId===f.command.commandId)!;
+  if(!command.input.ExclusiveStartKey)return {...result,Items:result.Items!.filter(item=>item!==original).slice(0,1),LastEvaluatedKey:{pk:original.pk!,sk:{S:'fictional-page-1'}}};
+  expect(command.input.ExclusiveStartKey.sk?.S).toBe('fictional-page-1');return {...result,Items:[original],LastEvaluatedKey:{pk:original.pk!,sk:{S:'must-not-read-page-3'}}};
+ });
+
+ const {ownerSourceKey,ownerSourceConfigurationSchema}=await import('../../src/shared/contracts/ownerCommandContract');
+ for(const state of ['paused','active'] as const){const previous=ownerSourceConfigurationSchema.parse((await f.store.store.get(ownerSourceKey('acct')))!.data);await f.apply('configure-owner',{expectedConfigurationRevision:previous.revision,configuration:{...previous,revision:previous.revision+1,state},mailScope:null});}
+ expect((await f.threads.scope('acct','mailbox'))?.participantAddresses).toContain('requested@example.invalid');expect(mail.sends()).toBe(0);expect(proofPages).toBe(2);
+});
+it('successful fresh-proof edit supersedes captured revision before any source reservation',async()=>{
+ const f=await desktopFixture();const runtime=f.runtime(),mail=firstEmailHttp();
+ try{
+  const prepared=await runtime.prepareRequestedFollowup({accountId:'acct',originalCall:f.originalCall,recipientBinding:{kind:'account_route',routeId:'email',routeVersion:1,email:'recipient@example.invalid'},expectedAccountVersion:2,mode:'manual'});
+  const edited=await runtime.editRequestedFollowup({accountId:'acct',draftId:prepared.draft.id,expectedRevision:1,subject:'Initial approved subject',body:'Old approved text.'});
+  const approval={draft:edited.draft,expectedRemoteDraftRevision:null as null,approvalId:randomUUID(),actionId:randomUUID(),intentCommandId:randomUUID(),request:{statement:'recipient_requested_information_by_email' as const,recipient:edited.draft.recipient},expiresAt:'2026-09-10T00:00:00.000Z'};
+  const captured=await runtime.approveRequestedFollowup(approval);expect(captured.state).toBe('pending_preflight');
+  const next=await runtime.editRequestedFollowup({accountId:'acct',draftId:prepared.draft.id,expectedRevision:2,subject:'Superseding subject',body:'New unapproved text.'});expect(next.draft.revision).toBe(3);
+  const {createSourceCoordinator}=await import('../../cloud/lambdas/delegated-worker/src/sourceCoordinator');for(let i=0;i<3;i++)await createSourceCoordinator({auth:f.auth,authorization:f.authorization,fetch:mail.http}).tick(new AbortController().signal);
+  expect(mail.sends()).toBe(0);expect(await f.execution.readDispatch('acct',approval.actionId)).toBeNull();expect(f.repository.commandStatus(captured.receipt.commandId)).toEqual(captured.receipt);
+ }finally{await runtime.dispose();f.local.close();}
+});
+it.each(['response','sql'] as const)('recovers canonical edited draft after %s loss with a new clock timestamp',async loss=>{
+ const f=await desktopFixture();let failResponse=false;const http:typeof fetch=async(resource,init)=>{const response=await f.http(resource,init);if(failResponse&&new URL(String(resource)).pathname==='/requested-followup/draft'){failResponse=false;throw Error('lost edit acknowledgement');}return response;};
+ const runtime=f.runtime({fetch:http});
+ try{
+  const prepared=await runtime.prepareRequestedFollowup({accountId:'acct',originalCall:f.originalCall,recipientBinding:{kind:'account_route',routeId:'email',routeVersion:1,email:'recipient@example.invalid'},expectedAccountVersion:2,mode:'manual'});
+  const edit={accountId:'acct',draftId:prepared.draft.id,expectedRevision:1,subject:'Canonical edit',body:'Exact retry content.'};
+  let restore=()=>{};
+  if(loss==='response')failResponse=true;else {const {SqlRequestedFollowupRepository}=await import('../../src/main/outreach/requestedFollowupRepository');const spy=vi.spyOn(SqlRequestedFollowupRepository.prototype,'save').mockImplementationOnce(()=>{throw Error('lost SQL save');});restore=()=>spy.mockRestore();}
+  await expect(runtime.editRequestedFollowup(edit)).rejects.toThrow();restore();
+  const {requestedFollowupDraftKey}=await import('../../cloud/lambdas/delegated-worker/src/requestedFollowupRepository');const remote=(await f.store.get(requestedFollowupDraftKey('acct',prepared.draft.id)))!.data;
+  expect((await runtime.getRequestedFollowup({accountId:'acct',draftId:prepared.draft.id}))?.draft).toEqual(prepared.draft);
+  f.advance('2026-09-09T00:04:01.000Z');
+  await expect(runtime.editRequestedFollowup({...edit,body:'A conflicting edit using the same prior revision.'})).rejects.toThrow();
+  const saved=await runtime.editRequestedFollowup(edit);expect(saved.draft).toEqual(remote);expect(saved.draft.updatedAt).toBe('2026-09-09T00:04:00.000Z');
+  expect(await f.store.list('REQUESTED_APPROVAL#')).toEqual([]);expect(await f.store.list('DISPATCH_PERMISSION#')).toEqual([]);
+ }finally{await runtime.dispose();f.local.close();}
+});
+it('absent remote edit wins CAS against an already planned old-revision capture',async()=>{
+ const f=await desktopFixture();const modelHttp:typeof fetch=async()=>Response.json({id:'fictional_model',status:'completed',model:'fictional',output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:JSON.stringify({subject:'Initial reviewable draft',body:'Initial draft body.',evidenceIds:[]})}]}]});
+ const runtime=f.runtime({requestedModel:async()=>({credentials:{apiKey:'fictional-model-key',model:'fictional'},fetch:modelHttp})});let release=()=>{};let spy:ReturnType<typeof vi.spyOn>|undefined;
+ try{
+  const prepared=await runtime.prepareRequestedFollowup({accountId:'acct',originalCall:f.originalCall,recipientBinding:{kind:'account_route',routeId:'email',routeVersion:1,email:'recipient@example.invalid'},expectedAccountVersion:2,mode:'model'});
+  expect(await f.store.list('MAIL_REQUESTED_DRAFT#')).toEqual([]);
+  const command={commandId:randomUUID(),workspaceId:'ws',accountId:'acct',expectedAuthorityGeneration:1,expectedVersion:await f.execution.currentVersion('acct'),kind:'approve-requested-followup',payload:{draft:prepared.draft,expectedRemoteDraftRevision:null as null,approvalId:randomUUID(),actionId:randomUUID(),intentCommandId:randomUUID(),request:{statement:'recipient_requested_information_by_email',recipient:prepared.draft.recipient},expiresAt:'2026-09-10T00:00:00.000Z'}};
+  let reached=()=>{};const planned=new Promise<void>(resolve=>{reached=resolve;}),held=new Promise<void>(resolve=>{release=resolve;});const original=DynamoRequestedFollowupRepository.prototype.planCaptureDraft;
+  spy=vi.spyOn(DynamoRequestedFollowupRepository.prototype,'planCaptureDraft').mockImplementation(async function(this:DynamoRequestedFollowupRepository,draft,expected){const item=await original.call(this,draft,expected);if(draft.id===prepared.draft.id&&draft.revision===1){reached();await held;}return item;});
+  const capture=f.http('https://worker.example.invalid/commands',{method:'POST',headers:{authorization:`Bearer ${f.pairing.credential}`},body:JSON.stringify(command)});
+  await planned;const saved=await runtime.editRequestedFollowup({accountId:'acct',draftId:prepared.draft.id,expectedRevision:1,subject:'New unapproved draft',body:'New revision wins.'});expect(saved.draft.revision).toBe(2);release();expect((await capture).status).toBe(400);
+  expect(await f.store.list('REQUESTED_APPROVAL#')).toEqual([]);expect(await f.store.list('DISPATCH_PERMISSION#')).toEqual([]);
+ }finally{release();spy?.mockRestore();await runtime.dispose();f.local.close();}
+});
+it.each(['accepted','unknown'] as const)('preserves %s send artifacts and reconciliation after a superseding edit attempt',async outcome=>{
+ const f=await desktopFixture();const runtime=f.runtime(),mail=firstEmailHttp();let attempts=0;
+ const http:typeof fetch=async(resource,init)=>{if(new URL(String(resource)).pathname.endsWith('/messages/send')){attempts++;if(outcome==='unknown')throw Error('fictional lost provider response');}return mail.http(resource,init);};
+ try{
+  const prepared=await runtime.prepareRequestedFollowup({accountId:'acct',originalCall:f.originalCall,recipientBinding:{kind:'account_route',routeId:'email',routeVersion:1,email:'recipient@example.invalid'},expectedAccountVersion:2,mode:'manual'});
+  const edited=await runtime.editRequestedFollowup({accountId:'acct',draftId:prepared.draft.id,expectedRevision:1,subject:'Reviewed subject',body:'Reviewed text.'});
+  const approval={draft:edited.draft,expectedRemoteDraftRevision:null as null,approvalId:randomUUID(),actionId:randomUUID(),intentCommandId:randomUUID(),request:{statement:'recipient_requested_information_by_email' as const,recipient:edited.draft.recipient},expiresAt:'2026-09-10T00:00:00.000Z'};
+  const captured=await runtime.approveRequestedFollowup(approval);const {createSourceCoordinator}=await import('../../cloud/lambdas/delegated-worker/src/sourceCoordinator');await createSourceCoordinator({auth:f.auth,authorization:f.authorization,fetch:http}).tick(new AbortController().signal);await runtime.sync();
+  const before=await f.execution.readDispatch('acct',approval.actionId);expect(before?.state).toBe(outcome==='accepted'?'provider_accepted':'unknown');expect(before?.reservation).toBeTruthy();
+  expect(await runtime.editRequestedFollowup({accountId:'acct',draftId:prepared.draft.id,expectedRevision:2,subject:'Too late to recall',body:'Not a cancellation.'})).toMatchObject({draft:{revision:3},approval:null});
+  expect(await f.execution.readDispatch('acct',approval.actionId)).toEqual(before);expect(f.repository.commandStatus(captured.receipt.commandId)).toEqual(captured.receipt);
+  const report=await createSourceCoordinator({auth:f.auth,authorization:f.authorization,fetch:http}).tick(new AbortController().signal);if(outcome==='unknown')expect(report.sendReconciliations).toBeGreaterThan(0);expect(attempts).toBe(1);
+ }finally{await runtime.dispose();f.local.close();}
+});
+it('authenticates draft supersession and rejects caller authority, foreign pairing and changed identity',async()=>{
+ const f=await captureFixture();const previousDraft=f.command.payload.draft,draft={...previousDraft,revision:previousDraft.revision+1,subject:'Superseding exact subject'};
+ const handler=createWorkerHandler({auth:f.auth,google:f.authorization,host:'worker.example.invalid'});
+ const post=(body:unknown,credential=f.pairing.credential)=>handler({version:'2.0',rawPath:'/requested-followup/draft',rawQueryString:'',headers:{host:'worker.example.invalid','x-forwarded-proto':'https',authorization:`Bearer ${credential}`},body:JSON.stringify(body),requestContext:{domainName:'worker.example.invalid',http:{method:'POST',sourceIp:'fictional'}}});
+ const request={workspaceId:'ws',previousDraft,draft};
+ for(const scopes of [['events:read'],['commands:write']] as const){const invitation=await f.auth.issuePairing({scopes:[...scopes],expiresInSeconds:300});const other=await f.auth.redeemPairing(invitation.code,randomUUID());expect((await post(request,other.credential)).statusCode).not.toBe(200);}
+ expect((await post({...request,approved:true})).statusCode).toBe(400);expect((await post({...request,workspaceId:'foreign'})).statusCode).toBe(400);
+ expect((await post({...request,draft:{...draft,recipient:'invented@example.invalid'}})).statusCode).toBe(400);
+ expect((await post(request)).statusCode).toBe(200);expect((await post({...request,draft:{...draft,body:'Concurrent different content'}})).statusCode).toBe(400);
+ expect(await f.store.store.list('REQUESTED_APPROVAL#')).toEqual([]);expect(await f.store.store.list('DISPATCH_PERMISSION#')).toEqual([]);
 });
 it('refuses a stronger collaborator AUTH condition rather than silently discarding it during capture',async()=>{
  const f=await captureFixture();const original=DynamoRequestedFollowupRepository.prototype.planCurrent;

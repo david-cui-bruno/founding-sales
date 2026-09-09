@@ -56,7 +56,13 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
   }});
   // Fail before generation or mutation. The same synchronous closure is checked again by every SQL reader.
   store.readContext(request);
-  return {store,current,service:createRequestedFollowupService({store,clock:input.clock,id:randomUUID,model:request.mode==='model'?await input.requestedModel?.():undefined})};
+  const editStore={readContext:store.readContext.bind(store),get:store.get.bind(store),save:async(draft:RequestedFollowupDraft,expectedRevision:number|null)=>{
+   const previous=expectedRevision===null?null:savedDraft(database,draft.accountId,draft.id);
+   if(expectedRevision!==null&&(!previous||previous.revision!==expectedRevision))throw Error('stale_requested_draft');
+   const canonical=previous?await current.client.requestedDraft(previous,draft,active):draft;
+   assertCurrent(active);return store.save(canonical,expectedRevision);
+  }};
+  return {store,current,service:createRequestedFollowupService({store:editStore,clock:input.clock,id:randomUUID,model:request.mode==='model'?await input.requestedModel?.():undefined})};
  }
  function createAdapter(handoffId?:string):InboundAdapter{return {id:'delegated-worker-mail',relevant:()=>pairing!==null,
   synchronize:(subject:OutboundSubject,external:AbortSignal)=>new Promise<{revision:string}>((resolve,reject)=>{

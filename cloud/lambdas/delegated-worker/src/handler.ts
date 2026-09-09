@@ -54,6 +54,10 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
         const owner=new OwnerCommandCoordinator({auth:input.auth,authorization:input.google??new RemoteGoogleAuthorization({auth:input.auth})});
         return response(200,await owner.reconcile(body(),event.headers.authorization??''));
       }
+      if(path==='/requested-followup/draft' && method==='POST') {
+        const owner=new OwnerCommandCoordinator({auth:input.auth,authorization:input.google??new RemoteGoogleAuthorization({auth:input.auth})});
+        return response(200,await owner.requestedDraft(body(),event.headers.authorization??''));
+      }
       if(path==='/requested-followup/context' && method==='POST') {
         const owner=new OwnerCommandCoordinator({auth:input.auth,authorization:input.google??new RemoteGoogleAuthorization({auth:input.auth})});
         return response(200,await owner.requestedContext(body(),event.headers.authorization??''));

@@ -1,4 +1,4 @@
-import {approveRequestedFollowupSchema,prepareRequestedFollowupSchema,requestedMailContextSchema} from './requestedFollowupContract';
+import {requestedFollowupDraftSchema,approveRequestedFollowupSchema,prepareRequestedFollowupSchema,requestedMailContextSchema} from './requestedFollowupContract';
 import {accountRecordSchema} from './accountRecordContract';
 import { saveMeetingOfferSchema } from './meetingContract';
 import { z } from 'zod';
@@ -90,3 +90,5 @@ export const requestedOwnerContextSchema=z.strictObject({workspaceId:id,accountI
  mailbox:z.strictObject({subject:id,sender:z.string().email().max(254)}),mailContext:requestedMailContextSchema,
  accountVersion:revision.min(1),researchRevision:revision.min(1),authorityGeneration:revision,aggregateVersion:revision,
  cursor:z.strictObject({data:mailCursorEnvelopeSchema,rev:revision.min(1)}).nullable(),expiresAt:instant});
+
+export const requestedOwnerDraftRequestSchema=z.strictObject({workspaceId:id,previousDraft:requestedFollowupDraftSchema,draft:requestedFollowupDraftSchema});

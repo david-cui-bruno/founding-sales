@@ -1,4 +1,4 @@
-import {prepareRequestedFollowupSchema,type PrepareRequestedFollowup} from '../../shared/contracts/requestedFollowupContract';
+import {requestedFollowupDraftSchema,type RequestedFollowupDraft,prepareRequestedFollowupSchema,type PrepareRequestedFollowup} from '../../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/contracts/workerPolicyContract';
 import { requestedOwnerContextSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceSchema } from '../../shared/contracts/ownerCommandContract';
 import { z } from 'zod';
@@ -51,6 +51,12 @@ export class ExecutionClient {
       // HTTP acceptance never replaces transactional owner-applied event proof.
     } catch { /* Durable pending outbox survives an unavailable owner. No fallback. */ }
     return this.repository.commandStatus(command.commandId) ?? receipt;
+  }
+  async requestedDraft(previousDraft:RequestedFollowupDraft,draft:RequestedFollowupDraft,signal:AbortSignal) {
+    const saved=requestedFollowupDraftSchema.parse(await this.request('/requested-followup/draft',signal,{workspaceId:this.pairing.workspaceId,previousDraft,draft}));
+    const {updatedAt:_savedAt,...savedContent}=saved,{updatedAt:_draftAt,...draftContent}=draft;void _savedAt;void _draftAt;
+    if(JSON.stringify(savedContent)!==JSON.stringify(draftContent))throw Error('requested_saved_draft_mismatch');
+    return saved;
   }
   async requestedContext(raw:PrepareRequestedFollowup,signal:AbortSignal) {
     const input=prepareRequestedFollowupSchema.parse(raw);

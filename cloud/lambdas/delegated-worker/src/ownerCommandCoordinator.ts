@@ -1,4 +1,6 @@
-import {DynamoRequestedFollowupRepository} from './requestedFollowupRepository';
+import {validateRequestedDraftRevision} from '../../../../src/main/outreach/requestedFollowupService';
+import {requestedFollowupDraftSchema} from '../../../../src/shared/contracts/requestedFollowupContract';
+import {DynamoRequestedFollowupRepository,requestedFollowupDraftKey} from './requestedFollowupRepository';
 import {createRequestedApprovalRecord,requestedApprovalKey,loadRequestedApproval,requestedApprovalRecordSchema} from './requestedFollowupApproval';
 import { createMailPoller } from './mailPoller';
 import { offeredSlotText } from '../../../../src/shared/meetings/schedulingRules';
@@ -7,13 +9,13 @@ import { createHash } from 'node:crypto';
 import { CampaignExecution } from './campaignExecution';
 import { WorkerCampaignRepository, campaignReservationKey, campaignReservationSchema, campaignEnrollmentKey } from './workerCampaignRepository';
 import { enrollmentSchema, campaignEventPayloadSchema } from '../../../../src/shared/contracts/campaignContract';
-import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
+import { QueryCommand,type AttributeValue,type TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { threadProjectionSchema, mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { accountRecordSchema, accountKey } from './workerAccountRepository';
 import { intakeRegistryKey, intakeRegistrySchema, createIntakeBarrier, validatePendingHandoff } from './intakeBarrier';
 import type { WorkerAuth } from './workerAuth';
 import type { RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
-import { requestedOwnerContextRequestSchema, requestedOwnerContextSchema, ownerCheckpointRequestSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand } from '../../../../src/shared/contracts/ownerCommandContract';
+import { requestedOwnerDraftRequestSchema, requestedOwnerContextRequestSchema, requestedOwnerContextSchema, ownerCheckpointRequestSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand } from '../../../../src/shared/contracts/ownerCommandContract';
 import { delegationCommandSchema, commandReceiptSchema, workerEventSchema, type CommandReceipt, type WorkerEvent } from '../../../../src/shared/contracts/delegationContract';
 import { DynamoStore, fingerprint, keyPart } from './dynamoStore';
 import { authorityRecordSchema, executionAuthorityKey, executionAuthorityFields, createExecutionRepository } from './executionRepository';
@@ -51,6 +53,27 @@ export class OwnerCommandCoordinator {
     return requestedOwnerContextSchema.parse({workspaceId:request.workspaceId,accountId:request.input.accountId,mailbox:plan.mailbox,mailContext:plan.mailContext,
       accountVersion:plan.account.account.version,researchRevision:plan.account.researchRevision,authorityGeneration:plan.authority.data.authority.generation,aggregateVersion:plan.authority.data.version,
       cursor:plan.cursor?{data:plan.cursor.data,rev:plan.cursor.rev}:null,expiresAt:new Date(Date.parse(repository.store.now())+30000).toISOString()});
+  }
+  async requestedDraft(raw:unknown,authorization:string) {
+    const request=requestedOwnerDraftRequestSchema.parse(raw), draft=request.draft;
+    validateRequestedDraftRevision(draft,request.previousDraft,request.previousDraft.revision);
+    if(draft.generation!=='edited'||fingerprint(draft.evidenceIds)!==fingerprint(request.previousDraft.evidenceIds))throw Error('requested_edit_revision');
+    const principal=await this.input.auth.authenticate(authorization,['commands:write']);this.input.auth.store.workspace(request.workspaceId);
+    const repository=new DynamoRequestedFollowupRepository({...this.input.auth.options,dynamo:this.input.auth.fencedDynamo(principal)});
+    const sourceKey=ownerSourceKey(draft.accountId), sourceRow=await repository.store.get<unknown>(sourceKey), source=ownerSourceConfigurationSchema.parse(sourceRow?.data);
+    if(source.workspaceId!==request.workspaceId||source.accountId!==draft.accountId||source.pairingId!==principal.pairingId)throw Error('requested_source_identity');
+    const plan=await repository.planCurrent(draft);
+    if(plan.authority.data.authority.owner!=='worker'||plan.authority.data.authority.state!=='active'||!plan.checks.some(item=>fingerprint(item)===fingerprint(repository.store.check(sourceKey,sourceRow!.rev))))throw Error('requested_source_changed');
+    const key=requestedFollowupDraftKey(draft.accountId,draft.id), row=await repository.store.get<unknown>(key);
+    const previous=row?requestedFollowupDraftSchema.parse(row.data):null;
+    // A lost acknowledgement may regenerate only updatedAt. Preserve the first
+    // canonical saved timestamp; every identity/context/content field stays exact.
+    if(previous?.revision===draft.revision&&fingerprint({...previous,updatedAt:draft.updatedAt})===fingerprint(draft)){
+      await repository.store.transact([...plan.checks,repository.store.check(key,row!.rev)]);return previous;
+    }
+    if(previous&&fingerprint(previous)!==fingerprint(request.previousDraft))throw Error('stale_requested_draft');
+    const write=await repository.planCaptureDraft(draft,previous?.revision??null);
+    await repository.store.transact([...plan.checks,write]);return draft;
   }
   async checkpoint(raw:unknown,authorization:string,signal:AbortSignal) {
     const target=ownerCheckpointRequestSchema.parse(raw); const principal=await this.input.auth.authenticate(authorization,['events:read']);this.input.auth.store.workspace(target.workspaceId);
@@ -125,7 +148,10 @@ export class OwnerCommandCoordinator {
     if(command.kind==='approve-requested-followup') {
       const repository=new DynamoRequestedFollowupRepository(store.options);
       const plan=await repository.planCurrent(command.payload.draft);
-      const draftItem=await repository.planCaptureDraft(command.payload.draft,command.payload.expectedRemoteDraftRevision);
+      const storedDraft=await store.get<unknown>(requestedFollowupDraftKey(command.accountId,command.payload.draft.id));
+      const parsedDraft=storedDraft?requestedFollowupDraftSchema.parse(storedDraft.data):null;
+      const exact=parsedDraft&&fingerprint(parsedDraft)===fingerprint(command.payload.draft);
+      const draftItem=await repository.planCaptureDraft(command.payload.draft,exact?parsedDraft.revision:command.payload.expectedRemoteDraftRevision);
       const source=await this.activeSource(command,principal.pairingId,store);
       if(plan.authority.rev!==authorityRow.rev||fingerprint(plan.authority.data)!==fingerprint(current)||plan.mailbox.subject!==source.config.mailboxSubject)throw Error('requested_capture_changed');
       const authorityChecks=[...plan.checks,...source.checks].filter(item=>item.ConditionCheck&&fingerprint(item.ConditionCheck.Key)===fingerprint(store.key(authKey)));
@@ -317,14 +343,24 @@ export class OwnerCommandCoordinator {
       if(retained.length){
         // Retain only already-admitted addresses grounded in an authentic capture.
         // Neither configure payload nor a bare cursor can manufacture a participant.
-        const candidates=(await store.list<unknown>('REQUESTED_APPROVAL#')).map(row=>requestedApprovalRecordSchema.parse(row.stored.data)).filter(record=>record.accountId===command.accountId&&record.pairingId===pairingId&&record.mailboxSubject===config.mailboxSubject&&retained.includes(record.draftSnapshot.recipient));
-        if(candidates.length>16)throw Error('requested_scope_proof_limit');
-        for(const address of retained){
-          const candidate=candidates.find(record=>record.draftSnapshot.recipient===address&&record.scopePlan?.desiredScope.participantAddresses.includes(address));
-          const proof=candidate?await loadRequestedApproval(store,candidate.commandId):null;
-          if(!proof)throw Error('selected_scope_provenance_missing');
-          participants.push(address);checks.push(...proof.checks);
-        }
+        if(retained.length>16)throw Error('requested_scope_proof_limit');
+        const needed=new Set(retained),lookupSignal=AbortSignal.timeout(15000);let start:Record<string,AttributeValue>|undefined;
+        do {
+          lookupSignal.throwIfAborted();
+          const page=await store.options.dynamo.send(new QueryCommand({TableName:store.options.tableName,ConsistentRead:true,Limit:100,
+            KeyConditionExpression:'#pk = :pk AND begins_with(#sk, :prefix)',ExpressionAttributeNames:{'#pk':'pk','#sk':'sk'},
+            ExpressionAttributeValues:{':pk':store.key('').pk,':prefix':{S:'REQUESTED_APPROVAL#'}},ExclusiveStartKey:start}));
+          lookupSignal.throwIfAborted();
+          for(const item of page.Items??[]){
+            if(!item.data?.S)throw Error('corrupt_record');const candidate=requestedApprovalRecordSchema.parse(JSON.parse(item.data.S)),address=candidate.draftSnapshot.recipient;
+            if(!needed.has(address)||candidate.accountId!==command.accountId||candidate.pairingId!==pairingId||candidate.mailboxSubject!==config.mailboxSubject||!candidate.scopePlan?.desiredScope.participantAddresses.includes(address))continue;
+            const proof=await loadRequestedApproval(store,candidate.commandId);
+            if(!proof||fingerprint(proof.record)!==fingerprint(candidate))throw Error('selected_scope_provenance_missing');
+            participants.push(address);checks.push(...proof.checks);needed.delete(address);if(!needed.size)break;
+          }
+          start=page.LastEvaluatedKey;
+        }while(needed.size&&start&&Object.keys(start).length);
+        if(needed.size)throw Error('selected_scope_provenance_missing');
         participants.sort();
       }
       if (p.mailScope !== null) {
