@@ -36,10 +36,11 @@ const safeStorage: SafeStorage = {
     return Buffer.concat([cipher.update(value.subarray(28)), cipher.final()]).toString('utf8');
   },
 };
-async function fixture(configured: boolean, hooks: { search?: () => Promise<void>; page?: () => Promise<void> } = {}) {
+async function fixture(configured: boolean, hooks: { search?: () => Promise<void>; page?: () => Promise<void>; paired?: boolean } = {}) {
   const temp = createTempDatabase();
   mkdirSync(dirname(temp.path), { recursive: true, mode: 0o700 });
   let runtime!: FoundationRuntime; let database!: AppDatabase;
+  let delegation:import('../../src/main/delegation/delegationRuntime').DelegationRuntime|undefined;
   let lifecycle!: Parameters<NonNullable<ApplicationStartupOptions['registerOutboundLifecycle']>>[0];
   const requests: string[] = []; let factoryCalls = 0;
   const manager = createOutreachProviders({ directory: join(dirname(temp.path), 'outreach'), safeStorage, openExternal: async () => unexpected(),
@@ -59,12 +60,14 @@ async function fixture(configured: boolean, hooks: { search?: () => Promise<void
     openDatabase, closeDatabase, migrateToLatest,
     createDomainRuntime: db => { database = db; return new DomainRuntime({ database: db, clock, ids: { next: randomUUID } }); },
     createHealthService: options => new HealthService(options),
-    registerOutreachIpc: () => () => undefined,
+    registerLinkedInIpc:()=>()=>undefined,
+    registerOutreachIpc: options => {delegation=options.delegation;return () => undefined;},
+    ...(hooks.paired?{createPairingStore:()=>({load:async()=>({endpoint:'https://worker.example.test',workspaceId:configuration.workspaceId,pairingId:'11111111-1111-4111-8111-111111111111',credential:'a'.repeat(43),emergencyCredential:'b'.repeat(43),generation:0,scopes:['commands:write' as const,'events:read' as const]}),redeem:async()=>unexpected()})}:{}),
     registerApplicationIpc: bound => { runtime = bound; return () => undefined; },
     createResearchProviders: () => { factoryCalls++; return manager; },
     createEmailService: (gate, _path, providers) => {
       expect(providers === undefined || providers.researchCompanies === manager.researchCompanies).toBe(true);
-      return createEmailService({ databaseGate: gate, providers: providers ?? manager });
+      return createEmailService({ databaseGate: gate, providers: providers ?? (hooks.paired?{...manager,dispose:()=>undefined}:manager) });
     },
     companyResearchResolve: async () => ['93.184.216.34'],
     companyResearchHttp: async input => { requests.push(input.url); await hooks.page?.(); return new Response('<p>We manage 240 residential units.</p>', { headers: { 'content-type': 'text/html' } }); },
@@ -75,9 +78,9 @@ async function fixture(configured: boolean, hooks: { search?: () => Promise<void
     createAppleBridgeSupervisor: unexpected,
   };
   try {
-    const app = await startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path), companyResearch: configured ? configuration : undefined,
+    const app = await startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path), companyResearch: configured&&!hooks.paired ? configuration : undefined,
       registerOutboundLifecycle: callbacks => { lifecycle = callbacks; return () => undefined; }, createWindow: () => undefined }, dependencies);
-    return { app, runtime, database, lifecycle, requests, factoryCalls, async close() { await app.shutdown(); expect(dispose).toHaveBeenCalledTimes(1); temp.cleanup(); } };
+    return { app, runtime, database, lifecycle, requests, factoryCalls, delegation, async close() { await app.shutdown(); expect(dispose).toHaveBeenCalledTimes(1); temp.cleanup(); } };
   } catch (error) { manager.dispose(); temp.cleanup(); throw error; }
 }
 describe('actual startup company research composition', () => {
@@ -187,4 +190,24 @@ it('drains interrupted page work before closing the database and disposes the sh
       expect(reopened.raw.prepare('SELECT state,cost_micros FROM pm_account_research_jobs').get()).toEqual({ state: 'parked', cost_micros: null });
     } finally { closeDatabase(reopened); key.bytes.fill(0); }
   } finally { release(); await f.close(); }
+});
+
+
+it('returns current research API after persisted activation and reconfiguration',async()=>{
+ const f=await fixture(true,{paired:true});const research={...configuration,audienceRevision:1,sourceRevision:1,budgetRevision:1,preparationCommandId:randomUUID()};
+ try{
+  expect(f.app.companyResearch).toBeUndefined();
+  await f.delegation!.configure({expectedRevision:0,configuration:{version:1,state:'active',research}});
+  expect(f.app.companyResearch).toBeDefined();const first=f.app.companyResearch!;
+  await f.runtime.withDatabase(database=>new SqlDiscoveryReservationStore({database,workspaceId:configuration.workspaceId,clock}).approveBudget({budgetId:research.budgetId,ceilingMicros:100,evidenceRef:'explicit-first-budget'}));
+  expect((await f.app.companyResearch!.prepare(randomUUID(),new AbortController().signal)).status).toBe('prepared');
+  const second={...research,budgetId:'second-reviewed-budget',budgetRevision:2,preparationCommandId:randomUUID()};
+  await f.delegation!.configure({expectedRevision:1,configuration:{version:1,state:'active',research:second}});
+  expect(f.app.companyResearch).not.toBe(first);expect(await first.prepare(randomUUID(),new AbortController().signal)).toEqual({status:'blocked',accountIds:[]});
+  await f.runtime.withDatabase(database=>new SqlDiscoveryReservationStore({database,workspaceId:configuration.workspaceId,clock}).approveBudget({budgetId:second.budgetId,ceilingMicros:100,evidenceRef:'explicit-second-budget'}));
+  expect((await f.app.companyResearch!.prepare(randomUUID(),new AbortController().signal)).status).toBe('prepared');expect(f.requests).toHaveLength(2);
+  f.lifecycle.onLock();expect((await f.app.companyResearch!.prepare(randomUUID(),new AbortController().signal)).status).toBe('blocked');
+  await expect(f.delegation!.configure({expectedRevision:2,configuration:{version:1,state:'active',research:second}})).rejects.toThrow();
+  f.lifecycle.onUnlock();await f.delegation!.configure({expectedRevision:2,configuration:{version:1,state:'paused',research:null}});expect(f.app.companyResearch).toBeUndefined();
+ }finally{await f.close();}
 });

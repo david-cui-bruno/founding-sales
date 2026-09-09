@@ -36,6 +36,9 @@ export const delegationCommandSchema = z.discriminatedUnion('kind', [
   z.strictObject({ ...commandBase, kind: z.literal('manual-outcome'), payload: manualOutcomeSchema }),
 ]);
 export type DelegationCommand = Readonly<z.infer<typeof delegationCommandSchema>>;
+/** Selected bootstrap contents are constructed only by the trusted main SQL exporter. */
+export const publicDelegationCommandSchema = delegationCommandSchema.refine(command => command.kind !== 'bootstrap-selected-account', 'Selected bootstrap requires trusted SQL export');
+export type PublicDelegationCommand = Exclude<DelegationCommand, {kind:'bootstrap-selected-account'}>;
 const eventBase = { id, workspaceId: id, accountId: id, authorityGeneration: revision, aggregateVersion: revision.min(1) };
 export const workerEventSchema = z.discriminatedUnion('kind', [
   z.strictObject({...eventBase,kind:z.literal('account.bootstrap'),payload:accountBootstrapPayloadSchema,receipt:commandReceiptSchema}),

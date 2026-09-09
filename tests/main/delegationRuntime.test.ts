@@ -56,3 +56,33 @@ it('refuses scoped handoff readiness when initialized registry omits the actual 
  const runtime=createDelegationRuntime({databaseGate:{withDatabase:async()=>{throw Error('unexpected lease');}},pairing:pair,clock:{now:()=>PM_NOW},inboundRegistry:{snapshot:()=>({initialized:true,revision:1,adapters:[]})},fetch:async()=>{throw Error('forbidden');}});
  try{expect(await runtime.readinessForHandoff('missing').checkSubject({kind:'account',id:'account'},new AbortController().signal)).toMatchObject({kind:'blocked'});}finally{await runtime.dispose();}
 });
+
+it('proves local subjects independently of paired worker accounts and invalidates local proof on delegation',async()=>{
+ const f=await createPmFixture();const {DelegationRepository}=await import('../../src/main/delegation/delegationRepository');const {createInboundReadiness}=await import('../../src/main/communications/inboundReadiness');
+ const repository=new DelegationRepository({database:f.db,workspaceId:'ws',clock:{now:()=>PM_NOW}});
+ const local=f.repo.create({commandId:'44444444-4444-4444-8444-444444444444',name:'Local PM',domain:null});const worker=f.repo.create({commandId:'55555555-5555-4555-8555-555555555555',name:'Worker PM',domain:null});
+ repository.initializeLocalAuthority(local.id);repository.initializeLocalAuthority(worker.id);
+ const delegate={commandId:'66666666-6666-4666-8666-666666666666',workspaceId:'ws',accountId:worker.id,expectedAuthorityGeneration:0,expectedVersion:0,kind:'delegate' as const,payload:{delegationId:'selected',approvedAt:PM_NOW}};repository.queueCommand(delegate);
+ const receipt={commandId:delegate.commandId,status:'applied' as const,authorityGeneration:1,aggregateVersion:1,reason:null as null};
+ repository.applyWorkerEvent({id:'worker-owned',workspaceId:'ws',accountId:worker.id,authorityGeneration:1,aggregateVersion:1,kind:'authority.changed',payload:{authority:{accountId:worker.id,owner:'worker',state:'active',generation:1},receipt}});
+ let http=0;const runtime=createDelegationRuntime({databaseGate:{withDatabase:async fn=>fn(f.db)},pairing:pair,clock:{now:()=>PM_NOW},fetch:async()=>{http++;throw Error('fictional owner unavailable');}});
+ const readiness=createInboundReadiness({snapshot:()=>({initialized:true,revision:1,adapters:[runtime.adapter]})});
+ try{
+  const proof=await readiness.checkSubject({kind:'account',id:local.id},new AbortController().signal);expect(proof.kind).toBe('ready');
+  const historical=await readiness.checkSubject({kind:'person',id:'historical-person'},new AbortController().signal);expect(historical.kind).toBe('ready');expect(http).toBe(0);
+  f.repo.admitEvidence({commandId:'99999999-9999-4999-8999-999999999999',accountId:local.id,expectedVersion:1,sources:[{id:'local-source',url:'https://example.invalid/team',fetchedAt:PM_NOW,sha256:'b'.repeat(64),excerpt:'Fictional local contact',permitted:true}],claims:[],routes:[{id:'local-route',accountId:local.id,personId:'historical-person',channel:'phone',value:'+12025550124',purpose:'business',evidenceIds:['local-source'],verification:'published'}]});
+  if(historical.kind==='ready')expect(()=>readiness.assertCurrent(historical.proof)).toThrow();
+  const localPerson=await readiness.checkSubject({kind:'person',id:'historical-person'},new AbortController().signal);expect(localPerson.kind).toBe('ready');expect(http).toBe(0);
+  f.repo.admitEvidence({commandId:'88888888-8888-4888-8888-888888888888',accountId:worker.id,expectedVersion:1,sources:[{id:'actual-source',url:'https://example.invalid/team',fetchedAt:PM_NOW,sha256:'a'.repeat(64),excerpt:'Fictional business contact',permitted:true}],claims:[],routes:[{id:'linked-route',accountId:worker.id,personId:'historical-person',channel:'phone',value:'+12025550123',purpose:'business',evidenceIds:['actual-source'],verification:'published'}]});
+  if(historical.kind==='ready')expect(()=>readiness.assertCurrent(historical.proof)).toThrow();
+  if(localPerson.kind==='ready')expect(()=>readiness.assertCurrent(localPerson.proof)).toThrow();
+  expect((await readiness.checkSubject({kind:'person',id:'historical-person'},new AbortController().signal)).kind).toBe('blocked');
+  expect((await readiness.checkSubject({kind:'account',id:'missing'},new AbortController().signal)).kind).toBe('blocked');
+  await runtime.configure({expectedRevision:0,configuration:{version:1,state:'active',research:null}});
+  expect((await readiness.checkSubject({kind:'account',id:worker.id},new AbortController().signal)).kind).toBe('blocked');expect(http).toBeGreaterThan(0);
+  const current=await readiness.checkSubject({kind:'account',id:local.id},new AbortController().signal);expect(current.kind).toBe('ready');
+  repository.queueCommand({...delegate,accountId:local.id,commandId:'77777777-7777-4777-8777-777777777777'});
+  if(current.kind==='ready')expect(()=>readiness.assertCurrent(current.proof)).toThrow();
+  expect((await readiness.checkSubject({kind:'account',id:local.id},new AbortController().signal)).kind).toBe('blocked');
+ }finally{await runtime.dispose();f.close();}
+});

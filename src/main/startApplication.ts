@@ -614,6 +614,7 @@ export async function startApplication(
   let discoveryWorker: DiscoveryWorker | undefined;
   let discoveryClosed = false;
   let outboundClosed = false;
+  let outboundLocked = false;
   const cleanupErrors: unknown[] = [];
 
   const closeDiscovery = (): void => {
@@ -778,6 +779,7 @@ export async function startApplication(
       if(state?.configuration.state==='active'&&state.configuration.research&&dependencies.createResearchProviders&&!outboundClosed){
         researchProviders??=dependencies.createResearchProviders(options.userDataPath);
         companyResearch=createStartupCompanyResearch({runtime,providers:researchProviders,configuration:state.configuration.research,http:dependencies.companyResearchHttp,resolve:dependencies.companyResearchResolve});
+        companyResearch.invalidate(outboundLocked);
       }
     }});
     const persistedResearch=paired?await runtime.withDatabase(database=>new SqlDelegationConfiguration({database,workspaceId:paired.workspaceId,pairingId:paired.pairingId,clock:domainClock}).read()):null;
@@ -805,11 +807,11 @@ export async function startApplication(
     }
     unregisterOutboundLifecycle = options.registerOutboundLifecycle?.({
       onWake: () => { if (!outboundClosed) {delegation?.invalidate();companyResearch?.invalidate();phoneBindings?.invalidate?.();email?.invalidate();outbound.invalidate('wake');} },
-      onLock: () => { if (!outboundClosed) {delegation?.invalidate(true);companyResearch?.invalidate(true);phoneBindings?.invalidate?.(true);email?.invalidate(true);outbound.invalidate('lock');} },
+      onLock: () => { if (!outboundClosed) {outboundLocked=true;delegation?.invalidate(true);companyResearch?.invalidate(true);phoneBindings?.invalidate?.(true);email?.invalidate(true);outbound.invalidate('lock');} },
       onUnlock: () => {
         if (outboundClosed) return;
         delegation?.invalidate(false);
-        companyResearch?.invalidate(false);
+        outboundLocked=false;companyResearch?.invalidate(false);
         phoneBindings?.invalidate?.(false);
         email?.invalidate(false);
         outbound.invalidate('wake');
@@ -932,7 +934,7 @@ export async function startApplication(
 
     return {
       databasePath,
-      companyResearch: companyResearch?.api,
+      get companyResearch(){return companyResearch?.api;},
       createPreReleaseBackup: async () => {
         if (shutdownPromise !== undefined || backupService === undefined) {
           throw new Error('Application backups are unavailable.');

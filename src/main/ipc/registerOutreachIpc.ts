@@ -2,7 +2,7 @@ import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/
 import type { DelegationRuntime } from '../delegation/delegationRuntime';
 import type { PairingStore } from '../delegation/pairingStore';
 import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema } from '../../shared/contracts/ownerCommandContract';
-import {delegatedPhoneHandoffResultSchema,delegationCommandSchema,commandReceiptSchema} from '../../shared/contracts/delegationContract';
+import {delegatedPhoneHandoffResultSchema,publicDelegationCommandSchema,commandReceiptSchema} from '../../shared/contracts/delegationContract';
 import type { z } from 'zod';
 import { configureOutreachSchema,draftRevisionSchema,emailDraftSchema,openDraftSchema,outreachStatusSchema,
   saveDraftSchema,sendDraftSchema,type OutreachApi } from '../../shared/contracts/outreachContract';
@@ -32,7 +32,7 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
       add('delegation-research',configureResearchSourceSchema,ownerResearchSourceSchema,input=>d.configureResearch(input));
       add('delegation-status',null,localDelegationStatusSchema,()=>d.status());
       add('delegation-configure',configureLocalDelegationSchema,localDelegationConfigurationRecordSchema,input=>d.configure(input));
-      add('delegation-submit',delegationCommandSchema,commandReceiptSchema,input=>d.submit(input));
+      add('delegation-submit',publicDelegationCommandSchema,commandReceiptSchema,input=>d.submit(input));
       add('delegation-sync',null,delegationSyncReportSchema,()=>d.sync());
     }
     if(options.pairingStore)add('delegation-pair',redeemLocalPairingSchema,redeemedLocalPairingSchema,input=>options.pairingStore!.redeem(input,AbortSignal.timeout(15000)));

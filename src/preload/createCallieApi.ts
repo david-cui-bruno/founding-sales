@@ -1,7 +1,7 @@
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../shared/contracts/workerPolicyContract';
 import {createLinkedInApi} from './apis/linkedInApi';
 import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema } from '../shared/contracts/ownerCommandContract';
-import {delegatedPhoneHandoffResultSchema,delegationCommandSchema,commandReceiptSchema,type DelegationCommand} from '../shared/contracts/delegationContract';
+import {delegatedPhoneHandoffResultSchema,publicDelegationCommandSchema,commandReceiptSchema,type PublicDelegationCommand} from '../shared/contracts/delegationContract';
 import type {z} from 'zod';
 import { createPhoneSetupApi } from './apis/phoneSetupApi';
 import { createOutreachApi } from './apis/outreachApi';
@@ -41,7 +41,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       status:()=>client.requestNoInput('outreach:delegation-status',localDelegationStatusSchema),
       pair:(input:z.infer<typeof redeemLocalPairingSchema>)=>client.request('outreach:delegation-pair',redeemLocalPairingSchema,redeemedLocalPairingSchema,input),
       configure:(input:z.infer<typeof configureLocalDelegationSchema>)=>client.request('outreach:delegation-configure',configureLocalDelegationSchema,localDelegationConfigurationRecordSchema,input),
-      submit:(input:DelegationCommand)=>client.request('outreach:delegation-submit',delegationCommandSchema,commandReceiptSchema,input),
+      submit:(input:PublicDelegationCommand)=>client.request('outreach:delegation-submit',publicDelegationCommandSchema,commandReceiptSchema,input),
       sync:()=>client.requestNoInput('outreach:delegation-sync',delegationSyncReportSchema),
     },
     linkedin: createLinkedInApi(client),

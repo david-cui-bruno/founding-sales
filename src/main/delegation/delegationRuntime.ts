@@ -10,7 +10,7 @@ import {DelegationRepository} from './delegationRepository';
 import {SqlDelegationConfiguration,SqlDelegationTransport} from './delegationSync';
 import {ExecutionClient} from './executionClient';
 import {delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,bootstrapSelectedAccountCommandSchema,configureLocalDelegationSchema,localDelegationStatusSchema} from '../../shared/contracts/ownerCommandContract';
-import {delegationCommandSchema,type DelegatedPhoneHandoffResult} from '../../shared/contracts/delegationContract';
+import {publicDelegationCommandSchema,type DelegatedPhoneHandoffResult} from '../../shared/contracts/delegationContract';
 /** Every repository belongs to a live FoundationRuntime operation lease. No DB
  * handle survives its callback. Local lock aborts work, never revokes the owner. */
 export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:(database:AppDatabase)=>T|Promise<T>):Promise<T>};pairing:StoredPairing|null;clock:{now():string};fetch?:typeof globalThis.fetch;phone?:Parameters<typeof createDelegatedPhoneHandoff>[0]['phone'];inboundRegistry?:InboundRegistry;linkedIn?:Pick<Parameters<typeof createRuntimeLinkedInApi>[0],'provider'|'productFacts'|'shell'|'clipboard'>;configurationChanged?:()=>void|Promise<void>}) {
@@ -39,19 +39,36 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
    const active=AbortSignal.any([lifetime.signal,external,AbortSignal.timeout(15000)]);
    void run(async(database,signal)=>{
     assertCurrent(active);const current=services(database,signal);
-    const accounts=subject.kind==='account'?[subject.id]:(database.raw.prepare('SELECT DISTINCT account_id FROM pm_account_routes WHERE person_id=? LIMIT 11').all(subject.id) as {account_id:string}[]).map(row=>row.account_id);
-    if(accounts.length===0||accounts.length>10)throw Error('subject_scope_unavailable');
+    // Applicability is resolved under this live lease, not by caching a SQL
+    // handle in A1's synchronous relevant(). Local proof is never HTTP fallback.
+    const accountIds=()=>subject.kind==='account'?[subject.id]:(database.raw.prepare('SELECT DISTINCT account_id FROM pm_account_routes WHERE person_id=? ORDER BY account_id LIMIT 11').all(subject.id) as {account_id:string}[]).map(row=>row.account_id);
+    const person=()=>subject.kind==='person'?database.raw.prepare('SELECT id FROM persons WHERE id=?').get(subject.id)??null:null;
+    const accounts=accountIds();if(accounts.length>10||(subject.kind==='person'&&!person()))throw Error('subject_scope_unavailable');
+    const workerAccounts:string[]=[];
+    for(const accountId of accounts){
+      if(!database.raw.prepare('SELECT id FROM pm_accounts WHERE id=?').get(accountId))throw Error('subject_scope_unavailable');
+      const owner=current.repository.authority(accountId);
+      if(owner?.owner==='local'&&owner.state==='local'){
+        if(current.repository.pendingCommands().some(command=>command.accountId===accountId)||current.repository.hasPendingStop(accountId))throw Error('owner_not_current');
+      }else if(owner?.owner==='worker'&&owner.state==='active'&&!current.repository.hasPendingStop(accountId))workerAccounts.push(accountId);
+      else throw Error('owner_not_current');
+    }
+    const localScope=()=>accountFingerprint({accounts:accountIds(),person:person(),local:accounts.filter(id=>!workerAccounts.includes(id)).map(id=>({authority:current.repository.authority(id),pending:current.repository.pendingCommands().filter(command=>command.accountId===id)}))});
+    const initialLocalScope=localScope();
     const handoff=handoffId?current.repository.getManualHandoff(handoffId):null;
-    if(handoffId&&(!handoff||handoff.consumedAt!==null||accounts.length!==1||accounts[0]!==handoff.accountId||Date.parse(handoff.expiresAt)<=Date.parse(input.clock.now())))throw Error('handoff_not_current');
-    const configuration=current.configuration.read();if(!configuration||configuration.configuration.state!=='active')throw Error('delegation_inactive');
-    if(!(await current.client.sync(active)).ownerFresh)throw Error('owner_not_current');
-    const checkpoints:Awaited<ReturnType<ExecutionClient['checkpoint']>>[]=[];
+    if(handoffId&&(!handoff||handoff.consumedAt!==null||accounts.length!==1||workerAccounts.length!==1||accounts[0]!==handoff.accountId||Date.parse(handoff.expiresAt)<=Date.parse(input.clock.now())))throw Error('handoff_not_current');
     let expires=Math.min(Date.parse(input.clock.now())+5000,handoff?Date.parse(handoff.expiresAt):Infinity);
-    for(const accountId of accounts){const checkpoint=await current.client.checkpoint(accountId,active,handoffId);expires=Math.min(expires,checkpoint.validUntil);checkpoints.push(checkpoint);}
-    if(!(await current.client.sync(active)).ownerFresh)throw Error('owner_not_current');
-    for(const checkpoint of checkpoints){const authority=current.repository.authority(checkpoint.accountId);if(authority?.generation!==checkpoint.generation||current.repository.executionVersion(checkpoint.accountId)!==checkpoint.version)throw Error('checkpoint_changed');}
-    const snapshot=()=>accountFingerprint({handoff:handoffId?current.repository.getManualHandoff(handoffId):null,configuration:current.configuration.read(),transport:current.transport.current(),accounts:accounts.map(accountId=>({authority:current.repository.authority(accountId),version:current.repository.executionVersion(accountId),pending:current.repository.pendingCommands().filter(c=>c.accountId===accountId),suppressed:database.raw.prepare('SELECT 1 FROM pm_account_suppression_tombstones WHERE account_id=?').get(accountId)??null}))});
-    for(const accountId of accounts){const owner=current.repository.authority(accountId);if(!owner||owner.owner!=='worker'||owner.state!=='active'||current.repository.hasPendingStop(accountId))throw Error('owner_not_current');}
+    if(workerAccounts.length){
+      const configuration=current.configuration.read();if(!configuration||configuration.configuration.state!=='active')throw Error('delegation_inactive');
+      if(!(await current.client.sync(active)).ownerFresh)throw Error('owner_not_current');
+      const checkpoints:Awaited<ReturnType<ExecutionClient['checkpoint']>>[]=[];
+      for(const accountId of workerAccounts){const checkpoint=await current.client.checkpoint(accountId,active,handoffId);expires=Math.min(expires,checkpoint.validUntil);checkpoints.push(checkpoint);}
+      if(!(await current.client.sync(active)).ownerFresh)throw Error('owner_not_current');
+      for(const checkpoint of checkpoints){const authority=current.repository.authority(checkpoint.accountId);if(authority?.generation!==checkpoint.generation||current.repository.executionVersion(checkpoint.accountId)!==checkpoint.version)throw Error('checkpoint_changed');}
+      for(const accountId of workerAccounts){const owner=current.repository.authority(accountId);if(!owner||owner.owner!=='worker'||owner.state!=='active'||current.repository.hasPendingStop(accountId))throw Error('owner_not_current');}
+    }
+    const snapshot=()=>accountFingerprint({subjectAccounts:accountIds(),person:person(),handoff:handoffId?current.repository.getManualHandoff(handoffId):null,configuration:current.configuration.read(),transport:current.transport.current(),accounts:accounts.map(accountId=>({exists:database.raw.prepare('SELECT id FROM pm_accounts WHERE id=?').get(accountId)??null,authority:current.repository.authority(accountId),version:current.repository.executionVersion(accountId),pending:current.repository.pendingCommands().filter(c=>c.accountId===accountId),suppressed:database.raw.prepare('SELECT 1 FROM pm_account_suppression_tombstones WHERE account_id=?').get(accountId)??null}))});
+    if(localScope()!==initialLocalScope)throw Error('subject_scope_changed');
     const before=snapshot();assertCurrent(active);const id=randomUUID();let release!:()=>void;const held=new Promise<void>(done=>{release=done;});
     // The check controller is intentionally disposed by A1 after synchronization.
     // Established proof belongs to the operation lease, not that completed check.
@@ -86,7 +103,7 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
     const command=previous??bootstrapSelectedAccountCommandSchema.parse({...request,workspaceId:pairing.workspaceId,expectedAuthorityGeneration:0,expectedVersion:0,kind:'bootstrap-selected-account',payload:{record,asOf:input.clock.now(),expectedResearchRevision:cursor?.aggregate_version??null,suppression}});
     await current.client.submit(command);await current.client.sync(signal);const receipt=current.repository.commandStatus(request.commandId);if(!receipt)throw Error('bootstrap_receipt_missing');return receipt;
   });},
-  submit:(raw:unknown)=>{const command=delegationCommandSchema.parse(raw);invalidate();return run((database,signal)=>services(database,signal).client.submit(command));},
+  submit:(raw:unknown)=>{const command=publicDelegationCommandSchema.parse(raw);invalidate();return run((database,signal)=>services(database,signal).client.submit(command));},
   sync:()=>run((database,signal)=>services(database,signal).client.sync(AbortSignal.any([signal,AbortSignal.timeout(15000)]))),
   configurePolicy:(raw:unknown)=>run((database,signal)=>services(database,signal).client.configurePolicy(raw,signal)),
   configureResearch:(raw:unknown)=>run((database,signal)=>services(database,signal).client.configureResearch(raw,signal)),
