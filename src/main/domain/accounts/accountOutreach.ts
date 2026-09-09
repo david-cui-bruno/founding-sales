@@ -2,7 +2,10 @@ import { routePolicyReceiptSchema } from '../../delegation/accountRoutePolicySto
 import type { AppDatabase } from '../../db/database';
 import type { Clock } from '../support/clock';
 import type { IdGenerator } from '../support/idGenerator';
-import type { AccountRepository } from './accountRepository';
+import { AccountRepository } from './accountRepository';
+import { randomUUID } from 'node:crypto';
+import { workerEventSchema } from '../../../shared/contracts/delegationContract';
+import type { ManualHandoff } from '../../../shared/contracts/ownerCommandContract';
 import type { AccountEvidenceSnapshot, AccountRoute } from '../../../shared/contracts/accountContract';
 import { accountIdSchema, accountInstantSchema } from '../../../shared/contracts/accountContract';
 import { accountFingerprint } from './accountEvidence';
@@ -91,10 +94,15 @@ export function createSqlAccountRoutePolicy(input: { database: AppDatabase; cloc
   } };
 }
 
-export function authorizeAccountRoute(input: {
+type RouteAuthorizationInput = {
   request: AccountOutboundRequest; route: AccountRoute | null; evidenceFingerprint: string;
   policy: AccountRoutePolicyEvidence | null; expectedOwnerGeneration: string | null; now: string; windows: ChannelPolicySnapshots;
-}): AccountRouteAuthorization {
+};
+export function authorizeAccountRoute(input: RouteAuthorizationInput): AccountRouteAuthorization {
+  return authorizeRouteCompliance(input, policy => policy.ownerEnabled === true && !!policy.ownerGeneration?.trim() && policy.ownerGeneration === input.expectedOwnerGeneration);
+}
+/** Shared policy, with ownership admitted by the appropriate closed production path. */
+function authorizeRouteCompliance(input: RouteAuthorizationInput, ownerCurrent: (policy: AccountRoutePolicyEvidence) => boolean): AccountRouteAuthorization {
   const { request, route, policy } = input;
   const blocked = (reason: string): AccountRouteAuthorization => ({ kind: 'blocked', reason });
   if (request.channel === 'email') return blocked('email_execution_unavailable');
@@ -108,13 +116,58 @@ export function authorizeAccountRoute(input: {
   if (policy.accountId !== route.accountId || policy.routeId !== route.id || policy.routeVersion !== route.version
     || policy.evidenceFingerprint !== input.evidenceFingerprint || !policy.evidenceRef?.trim()
     || policy.contact.normalizedValue !== route.value) return blocked('account_policy_evidence_stale');
-  if (policy.ownerEnabled !== true || !policy.ownerGeneration?.trim() || policy.ownerGeneration !== input.expectedOwnerGeneration) return blocked('account_owner_changed');
+  if (!ownerCurrent(policy)) return blocked('account_owner_changed');
   if (!contactComplianceEvidenceSchema.safeParse(policy.contact.evidence).success) return blocked('account_policy_evidence_invalid');
   const decision = evaluateOutboundAuthorization({ channel: 'call', now: input.now, personOrHandleOptedOut: false,
     contact: policy.contact, jurisdiction: policy.jurisdiction, clearance: policy.clearance, windows: input.windows });
   if (decision.kind !== 'allowed') return blocked(decision.reasonCode);
   return { kind: 'allowed', canonicalTarget: route.value,
     contextRevision: accountFingerprint({ request, policy, windows: input.windows, now: input.now }) };
+}
+
+/** Shared retained restrictions cannot be cleared by a separate company receipt. */
+function retainedHandleRestriction(database: AppDatabase, route: AccountRoute, at: string): string | null {
+  const suppression = legacyRouteSuppression(database, route, at);
+  if (suppression.person || suppression.handle) return 'account_or_route_opted_out';
+  if (route.channel !== 'phone') return null;
+  if (database.raw.prepare("SELECT 1 FROM person_contact_methods WHERE kind='phone' AND normalized_value=? AND (dnc_listed=1 OR federal_status='listed') LIMIT 1").get(route.value)) return 'federal_dnc_listed';
+  if (database.raw.prepare("SELECT 1 FROM person_contact_methods WHERE kind='phone' AND normalized_value=? AND (tcpa_flag=1 OR compliance_tcpa_flag=1) LIMIT 1").get(route.value)) return 'tcpa_blocked';
+  return null;
+}
+
+/** Only inside the repository's one-shot consume transaction. Worker acknowledgment
+ * is independent authority, never converted into B4 local/local permission. */
+export function authorizeDelegatedAccountPhoneRoute(input: {
+  database: AppDatabase; clock: Clock; expectedWorkspaceId: string; request: AccountOutboundRequest;
+  handoff: ManualHandoff & { accountId: string; authorityGeneration: number };
+}): AccountRouteAuthorization {
+  const { database, clock, expectedWorkspaceId, handoff } = input;
+  if (!database.raw.inTransaction) throw new Error('Delegated authorization transaction required');
+  const request = accountOutboundRequestSchema.parse(input.request);
+  const blocked = (reason: string): AccountRouteAuthorization => ({ kind: 'blocked', reason });
+  const at = accountInstantSchema.parse(clock.now());
+  const row = database.raw.prepare(`SELECT e.event_json,h.consumed_at FROM delegated_manual_handoffs h
+    JOIN delegated_applied_events e ON e.id=h.event_id WHERE h.workspace_id=? AND h.handoff_id=?`)
+    .get(expectedWorkspaceId, handoff.handoffId) as { event_json: string; consumed_at: string | null } | undefined;
+  if (!row || row.consumed_at !== null) return blocked('manual_acknowledgment_unavailable');
+  const event = workerEventSchema.parse(JSON.parse(row.event_json));
+  const { accountId, authorityGeneration, ...payload } = handoff;
+  if (event.kind !== 'manual.handoff' || event.workspaceId !== expectedWorkspaceId || event.accountId !== accountId
+    || event.authorityGeneration !== authorityGeneration || event.receipt.commandId !== request.commandId
+    || accountFingerprint(event.payload) !== accountFingerprint(payload) || handoff.expiresAt <= at
+    || handoff.channel !== 'call' || request.channel !== 'call' || request.accountId !== accountId
+    || request.routeId !== handoff.routeId || request.expectedRouteVersion !== handoff.routeVersion) return blocked('manual_acknowledgment_mismatch');
+  const owner = database.raw.prepare('SELECT workspace_id,owner,state,generation,updated_at FROM delegated_authorities WHERE account_id=?').get(accountId) as
+    { workspace_id: string; owner: string; state: string; generation: number; updated_at: string } | undefined;
+  if (!owner || owner.workspace_id !== expectedWorkspaceId || owner.owner !== 'worker' || owner.state !== 'active'
+    || owner.generation !== authorityGeneration || owner.updated_at > at) return blocked('account_owner_changed');
+  const snapshot = new AccountRepository({ database, clock, ids: { next: randomUUID } }).snapshot(accountId, at);
+  const route = snapshot.routes.find(route => route.id === request.routeId) ?? null;
+  const policy = route ? createSqlAccountRoutePolicy({ database, clock, expectedWorkspaceId }).read(snapshot, route) : null;
+  const restriction = route ? retainedHandleRestriction(database, route, at) : null;
+  if (restriction) return blocked(restriction);
+  return authorizeRouteCompliance({ request, route, policy, expectedOwnerGeneration: null, evidenceFingerprint: snapshot.fingerprint,
+    now: at, windows: PLAYBOOK_CHANNEL_POLICIES_V2 }, current => current.ownerGeneration === accountFingerprint({ workspaceId: owner.workspace_id, owner: owner.owner, generation: owner.generation, state: owner.state }));
 }
 
 type Intent = { command_id: string; account_id: string; attempt_id: string; command_fingerprint: string; channel: 'call' | 'email'; canonical_target: string };
@@ -197,25 +250,12 @@ export class AccountOutreach {
       return this.refusal(request, reason, snapshot.account.version, at);
     });
   }
-  private legacySuppressed(route: AccountRoute, at: string): boolean {
-    const suppression = legacyRouteSuppression(this.deps.database, route, at);
-    return suppression.person || suppression.handle;
-  }
-  private retainedHandleRestriction(route: AccountRoute, at: string): string | null {
-    if (this.legacySuppressed(route, at)) return 'account_or_route_opted_out';
-    if (route.channel !== 'phone') return null;
-    // A company receipt cannot silently clear a retained person-contact restriction
-    // on the same canonical handle. Use the existing authoritative correction path.
-    if (this.raw.prepare("SELECT 1 FROM person_contact_methods WHERE kind='phone' AND normalized_value=? AND (dnc_listed=1 OR federal_status='listed') LIMIT 1").get(route.value)) return 'federal_dnc_listed';
-    if (this.raw.prepare("SELECT 1 FROM person_contact_methods WHERE kind='phone' AND normalized_value=? AND (tcpa_flag=1 OR compliance_tcpa_flag=1) LIMIT 1").get(route.value)) return 'tcpa_blocked';
-    return null;
-  }
   reserve(request: AccountOutboundRequest, expectedOwnerGeneration: string | null): AccountReservation {
     request = accountOutboundRequestSchema.parse(request);
     return this.atomic(() => {
       const previous = this.inspect(request); if (previous) return { kind: 'receipt', receipt: previous };
       const at = this.now(); const { snapshot, route, policy } = this.context(request, at);
-      const restriction = route ? this.retainedHandleRestriction(route, at) : null;
+      const restriction = route ? retainedHandleRestriction(this.deps.database, route, at) : null;
       const authorization = restriction
         ? { kind: 'blocked' as const, reason: restriction }
         : authorizeAccountRoute({ request, route, policy, expectedOwnerGeneration, evidenceFingerprint: snapshot.fingerprint, now: at, windows: PLAYBOOK_CHANNEL_POLICIES_V2 });
