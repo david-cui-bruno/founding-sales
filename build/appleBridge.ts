@@ -21,6 +21,7 @@ export const createAppleBridgeSigningOptions = (
     : {
         identity: signingIdentity,
         hardenedRuntime: true,
+        continueOnError: false,
         optionsForFile: (filePath: string) =>
           filePath.includes('Callie Apple Bridge.app')
             ? { entitlements: appleBridgeEntitlementsPath }

@@ -13,6 +13,7 @@ describe('Apple helper Forge integration', () => {
     expect(options).toMatchObject({
       identity: 'Developer ID Example',
       hardenedRuntime: true,
+      continueOnError: false,
     });
     expect(options?.optionsForFile?.('/tmp/Callie.app/Contents/MacOS/Callie')).toEqual({});
     expect(
