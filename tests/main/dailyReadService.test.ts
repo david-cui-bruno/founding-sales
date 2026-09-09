@@ -83,7 +83,10 @@ it('recovers exact saved D2 manual draft without preparing, opening, copying or 
     const services = createDomainServices({ database: f.db, clock: f.clock, ids: { next: () => { throw Error('Unexpected ID'); } }, expectedWorkspaceId: f.workspaceId });
     const before = f.db.raw.prepare('SELECT total_changes() AS n').get();
     const answer = services.daily.get().answers.find(a => a.kind === 'manual_linkedin');
-    expect(answer).toEqual({ kind: 'manual_linkedin', accountId: f.account.id, draft, capability: 'manual_only', recovery: { draftId: draft.id, revision: 1, approvalCommandId: null, attempts: [], handoffId: null, started: false } });
+    if (answer?.kind !== 'manual_linkedin') throw Error('missing manual answer');
+    const { presentation, ...saved } = answer;
+    expect(presentation?.contact).toMatchObject({ personId: f.personId, displayName: 'Fictional Person' });
+    expect(saved).toEqual({ kind: 'manual_linkedin', accountId: f.account.id, draft, capability: 'manual_only', recovery: { draftId: draft.id, revision: 1, approvalCommandId: null, attempts: [], handoffId: null, started: false } });
     expect(f.db.raw.prepare('SELECT total_changes() AS n').get()).toEqual(before);
   } finally { f.close(); }
 });

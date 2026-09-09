@@ -1,3 +1,4 @@
+import { withDailyAnswerPresentation } from './dailyAnswerPresentation';
 import { readWorkflowMode } from '../workspace/legacyWorkflowTransition';
 import type { AppDatabase } from '../../db/database';
 import type { Clock } from '../support/clock';
@@ -110,7 +111,7 @@ export class DailyReadService {
         return dailyAnswerSchema.parse({ kind: 'requested_followup', accountId: row.account_id, draft,
           approval, capability: 'held', reason: 'requires_owner_preflight' });
       });
-      if (value) input.approvals.push(value);
+      if (value) input.approvals.push(withDailyAnswerPresentation(database, workspaceId, generatedAt, value));
     }
     for (const row of rows('SELECT * FROM delegated_threads WHERE workspace_id=? ORDER BY account_id,id', workspaceId)) {
       if (!scoped(row.account_id)) continue;
@@ -139,7 +140,7 @@ export class DailyReadService {
           draftId: draft.id, revision: draft.revision, approvalCommandId: record.approvalCommandId,
           attempts: record.commandIds.map(commandId => ({ commandId, receipt: delegation.commandStatus(commandId) })), handoffId, started: handoff?.consumedAt != null } });
       });
-      if (value) input.approvals.push(value);
+      if (value) input.approvals.push(withDailyAnswerPresentation(database, workspaceId, generatedAt, value));
     }
     for (const row of rows('SELECT pairing_id AS pairingId,revision,state,started_at AS startedAt,completed_at AS completedAt FROM delegated_transport_state WHERE workspace_id=? ORDER BY pairing_id', workspaceId)) {
       const value = parse(() => dailyTransportSchema.parse(row));
