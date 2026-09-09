@@ -17,11 +17,11 @@ export type SettlementValidationAction = Pick<NextAction,
 const allowedStepIdsSchema = z.array(z.string().trim().min(1)).min(1);
 const NULL_EVIDENCE_OUTCOMES = new Set([
   'resolved', 'reviewed_ready', 'lost_nurture', 'upgraded', 'won_confirmed',
-  'onboarding_waived', 'phase_completed',
+  'onboarding_waived', 'phase_completed', 'workflow_superseded',
 ]);
 const CADENCE_LIFECYCLE_CONTROL_OUTCOMES = new Set([
   'opted_out', 'lost_nurture', 'upgraded', 'interviewed_confirmed',
-  'offered_confirmed', 'won_confirmed', 'onboarding_waived', 'phase_completed',
+  'offered_confirmed', 'won_confirmed', 'onboarding_waived', 'phase_completed', 'workflow_superseded',
 ]);
 
 type ActivityEvidenceRow = {
@@ -54,7 +54,7 @@ export function collectActionSettlementViolations(
 
   const expectedStatus = settlement.outcome === 'marked_impossible' ? 'impossible'
     : settlement.outcome === 'opted_out' || settlement.outcome === 'lost_nurture'
-      || settlement.outcome === 'upgraded' ? 'cancelled' : 'completed';
+      || settlement.outcome === 'upgraded' || settlement.outcome === 'workflow_superseded' ? 'cancelled' : 'completed';
   if (action.status !== expectedStatus) {
     violations.push('Settlement outcome does not match action status.');
   }
@@ -69,6 +69,23 @@ export function collectActionSettlementViolations(
     || planner.componentId !== action.cadence.cadenceComponentId
     || planner.outcome !== settlement.outcome) {
     violations.push('Planner settlement identity does not match the action.');
+  }
+  if (settlement.outcome === 'workflow_superseded') {
+    const receiptTable = database.raw.prepare("SELECT 1 FROM sqlite_master WHERE name='workflow_transition_receipts' AND type='table'").get();
+    const receipt = receiptTable ? database.raw.prepare('SELECT result_json FROM workflow_transition_receipts WHERE manifest_id=?').get(settlement.reason) as { result_json: string } | undefined : undefined;
+    let bound = false;
+    if (receipt) {
+      try {
+        const manifest = JSON.parse(receipt.result_json) as { mode: string; cancelledActionIds: string[]; actionSnapshots: NextAction[] };
+        const original = manifest.actionSnapshots.find(snapshot => snapshot.id === action.id);
+        bound = manifest.mode === 'meeting_first' && manifest.cancelledActionIds.includes(action.id)
+          && original?.workIntent === 'discretionary_prospecting' && original.status === 'pending'
+          && original.salesCycleId === action.salesCycleId && original.dueSource !== 'recorded_callback'
+          && original.dueSource !== 'founder_resurface' && original.cadence.cadenceEnrollmentId !== null
+          && serializeCanonical(original.cadence) === serializeCanonical(action.cadence);
+      } catch { /* Invalid manifest cannot authorize cancellation. */ }
+    }
+    if (!bound) violations.push('Workflow supersession requires an immutable transition manifest binding the proven automatic action.');
   }
   collectCadenceViolations(database, action, violations);
   collectActivityViolations(database, action, violations);

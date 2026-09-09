@@ -215,6 +215,7 @@ export function classifyTodayCandidate(
   candidate: ParsedTodayCandidate,
   context: TodayEvaluationContext,
 ): TodayPreCapacityDisposition {
+  if (candidate.action.actionType === 'parked_legacy') return { kind: 'suppressed', cycleId: candidate.cycleId, reason: 'legacy_workflow_parked' };
   const asOfMillis = assertCanonical(context.generatedAt, 'generatedAt');
   const intent = candidate.action.workIntent;
   const sla = candidate.action.inboundSla;
@@ -441,7 +442,7 @@ export function planTodayQueue(input: {
   extraDiagnostics?: readonly TodayDiagnostic[];
   extraSuppressed?: readonly {
     cycleId: string;
-    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active';
+    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active' | 'legacy_workflow_parked';
   }[];
 }): TodayQueue {
   const capacity = validateCapacity(input.capacity);
@@ -476,7 +477,7 @@ export function planTodayQueue(input: {
   );
   const suppressed: {
     cycleId: string;
-    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active';
+    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active' | 'legacy_workflow_parked';
   }[] = [
     ...(input.extraSuppressed ?? []),
   ];

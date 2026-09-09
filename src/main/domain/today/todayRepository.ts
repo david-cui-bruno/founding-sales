@@ -136,6 +136,7 @@ export class TodayRepository {
     return (this.database.raw.prepare(`SELECT COUNT(*) AS count FROM sales_cycles c
       JOIN prospects p ON p.id = c.prospect_id JOIN persons person ON person.id = c.person_id
       WHERE c.workflow_status IN ('active','onboarding') AND p.segment = 'warm'
+        AND NOT EXISTS (SELECT 1 FROM next_actions parked WHERE parked.id=c.current_next_action_id AND parked.action_type='parked_legacy')
         AND person.opted_out = 0 AND person.deleted_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM opt_out_tombstones t WHERE t.person_id = person.id)
       `).get() as { count: number }).count > 0;
@@ -213,6 +214,7 @@ export class TodayRepository {
           LIMIT 1
         )
       WHERE cycle.workflow_status IN ('active', 'onboarding')
+        AND (action.action_type IS NULL OR action.action_type <> 'parked_legacy')
         AND person.opted_out = 0
         AND person.deleted_at IS NULL
       ORDER BY cycle.id COLLATE BINARY

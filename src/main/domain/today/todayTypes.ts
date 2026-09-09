@@ -144,7 +144,7 @@ export type TodayQueue = {
   }>;
   suppressed: readonly {
     cycleId: string;
-    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active';
+    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active' | 'legacy_workflow_parked';
   }[];
   diagnostics: readonly TodayDiagnostic[];
 };
@@ -175,7 +175,7 @@ export type TodayPreCapacityDisposition =
   | {
       kind: 'suppressed';
       cycleId: string;
-      reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active';
+      reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active' | 'legacy_workflow_parked';
     }
   | { kind: 'diagnostic'; diagnostic: TodayDiagnostic };
 
