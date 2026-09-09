@@ -60,9 +60,21 @@ describe('preload Apple feasibility bridge', () => {
     const api = exposedApi();
 
     expect(Object.keys(api).sort()).toEqual([
-      'appleSpike', 'conversations', 'discovery', 'friday', 'health', 'imports', 'leadDetail',
-      'leads', 'learnings', 'outreach', 'phoneSetup', 'pipeline', 'recovery', 'review', 'shell', 'sourcing', 'today',
+      'appleSpike', 'conversations', 'delegation', 'discovery', 'friday', 'health', 'imports', 'leadDetail',
+      'leads', 'learnings', 'linkedin', 'outreach', 'phoneSetup', 'pipeline', 'recovery', 'review', 'shell', 'sourcing', 'today',
     ]);
+    expect(Object.keys(api.delegation).sort()).toEqual([
+      'beginPhone', 'bootstrap', 'configure', 'configurePolicy', 'configureResearch', 'pair', 'status', 'submit', 'sync',
+    ]);
+    expect(Object.keys(api.linkedin).sort()).toEqual([
+      'begin', 'copy', 'get', 'open', 'prepare', 'recover', 'reportOutcome', 'save',
+    ]);
+    for (const namespace of [api.delegation, api.linkedin]) {
+      for (const method of Object.values(namespace)) expect(method).toBeTypeOf('function');
+      expect(namespace).not.toHaveProperty('invoke');
+      expect(namespace).not.toHaveProperty('run');
+      expect(namespace).not.toHaveProperty('dispatch');
+    }
     expect(Object.keys(api.phoneSetup).sort()).toEqual(['clear', 'confirm', 'status']);
     for (const method of ['status', 'confirm', 'clear'] as const) expect(api.phoneSetup[method]).toBeTypeOf('function');
     expect(api.phoneSetup).not.toHaveProperty('invoke');
