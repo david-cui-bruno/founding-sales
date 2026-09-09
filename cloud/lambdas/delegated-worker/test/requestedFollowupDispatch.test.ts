@@ -4,7 +4,7 @@ import { createDispatchService } from '../src/dispatchService';
 import { createSendReconciler } from '../src/sendReconciler';
 import { requestedApprovalKey } from '../src/requestedFollowupApproval';
 import { dispatchApprovalKey, dispatchPermissionKey } from '../src/dispatchRepository';
-import { requestedFollowupDraftKey } from '../src/requestedFollowupRepository';
+import { requestedFollowupDraftKey , DynamoRequestedFollowupRepository } from '../src/requestedFollowupRepository';
 import { mailCursorKey } from '../src/threadIntakeRepository';
 
 async function setup(ownerSupplied = false) {
@@ -78,4 +78,44 @@ it.each(['exact', 'foreign-reference', 'foreign-participant', 'unknown', 'confli
     await expect(f.store.transact(linked!.checks)).rejects.toThrow();
   }
   expect(f.sends).toHaveLength(1);
+});
+
+import { fingerprint } from '../src/dynamoStore';
+async function projectRequestedReply(f: Awaited<ReturnType<typeof setup>>) {
+  const checkpoint = (await f.threads.checkpoint('acct', 'mailbox'))!;
+  await f.threads.beginPoll('acct', 'mailbox', 'historical-reply');
+  await f.threads.applyPage({ complete: true, nextCursor: { ...checkpoint, historyId: '3' }, threads: [{ accountId: 'acct', mailboxSubject: 'mailbox', provider: 'gmail', providerThreadId: 'first-thread', messages: [{
+    id: 'historical-incoming', threadId: 'first-thread', rfcMessageId: '<historical@example.invalid>', references: [`<${f.intent.commandId}@callie.invalid>`],
+    from: [f.intent.frozenMessage.to], to: [f.intent.frozenMessage.from], cc: [], date: f.options.clock.now(), subject: 'Re: requested information', bodyParts: [{ mimeType: 'text/plain', text: 'Please explain the details', truncated: false }],
+  }] }] }, checkpoint, 'historical-reply');
+}
+it.each(['unknown-reply-reconcile', 'accepted-edit-reply', 'unknown-edit-reply-reconcile'] as const)('historical original identity survives %s without new send', async history => {
+  const f = await setup(); const unknown = history !== 'accepted-edit-reply';
+  const immutableKeys = [dispatchApprovalKey('requested-approval'), dispatchPermissionKey('acct', `phone-request-${f.command.commandId}`), requestedApprovalKey(f.command.commandId), `COMMAND#${f.command.commandId}`];
+  const immutable = await Promise.all(immutableKeys.map(key => f.store.get(key)));
+  if (unknown) f.onSend(async () => { throw new Error('response lost after actual provider send'); });
+  expect((await f.service().dispatch(f.intent.commandId)).status).toBe(unknown ? 'unknown' : 'provider_accepted');
+  const drafts = new DynamoRequestedFollowupRepository(f.options);
+  if (history !== 'unknown-reply-reconcile') await drafts.save({ ...f.draft, revision: 2, body: 'A later editable draft, not the sent message', updatedAt: f.options.clock.now() }, 1);
+  const retainedDraft = (await drafts.get('acct', f.draft.id))!.draft;
+  expect(await f.policy.loadRequestedMaterializedIntent(f.command.commandId)).toEqual(f.intent);
+  const raw = firstRaw(f); // Actual send-era timestamp, not later observation time.
+  f.advance('2026-09-09T00:05:00.000Z'); await projectRequestedReply(f);
+  if (unknown) {
+    f.advance('2026-09-09T00:06:00.000Z');
+    const fetch: typeof globalThis.fetch = async url => new URL(String(url)).pathname.endsWith('/messages') ? Response.json({ messages: [{ id: 'first-sent' }] }) : Response.json(raw);
+    expect((await createSendReconciler({ policy: f.policy, execution: f.execution, authorization: f.authorization, fetch }).reconcileSend(f.intent.commandId)).status).toBe('provider_accepted');
+  }
+  expect(await f.policy.requestedReplyAssociation(f.intent.commandId, 'first-thread')).toMatchObject({ commandId: f.intent.commandId, providerMessageId: 'first-sent', inboundMessageId: 'historical-incoming' });
+  expect(fingerprint(await Promise.all(immutableKeys.map(key => f.store.get(key))))).toBe(fingerprint(immutable));
+  expect((await drafts.get('acct', f.draft.id))!.draft).toEqual(retainedDraft);
+  expect(await f.policy.loadRequestedMaterializedIntent(f.command.commandId)).toEqual(f.intent);
+  await f.service().dispatch(f.intent.commandId); expect(f.sends).toHaveLength(1);
+});
+it('immutable materialization proof after edit cannot bypass current draft eligibility for a new send', async () => {
+  const f = await setup(); const drafts = new DynamoRequestedFollowupRepository(f.options);
+  await drafts.save({ ...f.draft, revision: 2, body: 'Not the approved message' }, 1);
+  expect(await f.policy.loadRequestedMaterializedIntent(f.command.commandId)).toEqual(f.intent);
+  expect((await f.service().dispatch(f.intent.commandId)).status).toBe('held');
+  expect((await f.execution.readDispatch('acct', 'requested-email'))?.reservation).toBeNull(); expect(f.sends).toHaveLength(0);
 });

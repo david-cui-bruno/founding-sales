@@ -279,15 +279,20 @@ export class DynamoDispatchRepository {
     const expected = this.requestedArtifacts(loaded, approval.draft, approval.permission.campaignOrigin);
     const iKey = dispatchIntentKey(expected.intent.commandId); const pKey = dispatchPermissionKey(loaded.record.accountId, expected.permission.id);
     const intentRow = await this.required(iKey); const permissionRow = await this.required(pKey);
-    const dKey = requestedFollowupDraftKey(loaded.record.accountId, loaded.record.draftSnapshot.id); const draftRow = await this.required(dKey);
-    if (fingerprint(approval) !== fingerprint(expected.approval) || fingerprint(intentRow.data) !== fingerprint(expected.intent) || fingerprint(permissionRow.data) !== fingerprint(expected.permission)
-      || fingerprint(draftRow.data) !== fingerprint(loaded.record.draftSnapshot)) throw new Error('requested_evidence_changed');
-    return { ...expected, loaded, checks: [...loaded.checks, this.store.check(aKey, approvalRow.rev), this.store.check(iKey, intentRow.rev), this.store.check(pKey, permissionRow.rev), this.store.check(dKey, draftRow.rev)] };
+    if (fingerprint(approval) !== fingerprint(expected.approval) || fingerprint(intentRow.data) !== fingerprint(expected.intent) || fingerprint(permissionRow.data) !== fingerprint(expected.permission)) throw new Error('requested_evidence_changed');
+    return { ...expected, loaded, checks: [...loaded.checks, this.store.check(aKey, approvalRow.rev), this.store.check(iKey, intentRow.rev), this.store.check(pKey, permissionRow.rev)] };
   }
+  /** Immutable admission proof only, never current eligibility to reserve a new send. */
   async loadRequestedMaterializedIntent(commandId: string): Promise<PhoneRequestedFollowupIntent> { return (await this.requestedMaterialization(commandId)).intent; }
   private async requestedReservationPlan(input: ReserveDispatchInput, intent: PhoneRequestedFollowupIntent, evidence: GoogleAccessEvidence | undefined, checks: TransactWriteItem[]) {
     const materialized = await this.requestedMaterialization(intent.requestedApprovalCommandId);
     if (fingerprint(materialized.intent) !== fingerprint(intent)) throw new Error('requested_evidence_changed');
+    // Mutable draft eligibility belongs only to a NEW reservation. Historical
+    // lookup/association must retain the exact originally approved identity.
+    const dKey = requestedFollowupDraftKey(materialized.loaded.record.accountId, materialized.loaded.record.draftSnapshot.id);
+    const draftRow = await this.required(dKey);
+    if (fingerprint(draftRow.data) !== fingerprint(materialized.loaded.record.draftSnapshot)) throw new Error('requested_evidence_changed');
+    checks.push(this.store.check(dKey, draftRow.rev));
     const plan = await new DynamoRequestedFollowupRepository(this.store.options).planCurrent(materialized.approval.draft);
     if (plan.authority.data.version !== input.expectedVersion) throw new Error('stale_authority');
     const live = await this.requestedLiveChecks(materialized.loaded.record, plan);
@@ -326,9 +331,11 @@ export class DynamoDispatchRepository {
     const projection = threadProjectionSchema.safeParse(threadRow?.data); if (!projection.success) return null;
     const thread = projection.data.thread;
     if (thread.accountId !== intent.action.accountId || thread.mailboxSubject !== intent.mailboxSubject || thread.providerThreadId !== threadId) return null;
+    // Acceptance observation may follow the reply after a lost send response.
+    // Bind to the original provider/RFC identity, not later reconciliation time.
     const matches = thread.messages.filter(message => message.from.length === 1 && message.from[0] === intent.frozenMessage.to
       && message.to.length === 1 && message.to[0] === intent.frozenMessage.from && message.cc.length === 0
-      && message.references.includes(`<${commandId}@callie.invalid>`) && message.date >= accepted[0]!.evidence.observedAt);
+      && message.references.includes(`<${commandId}@callie.invalid>`));
     if (!matches.length) return null;
     return { commandId, providerMessageId: accepted[0]!.provider!.messageId, threadId, inboundMessageId: matches[0]!.id,
       checks: mergeDispatchConditions([...materialized.checks, this.store.absent(holdKey), this.store.check(actionKey, actionRow!.rev),
