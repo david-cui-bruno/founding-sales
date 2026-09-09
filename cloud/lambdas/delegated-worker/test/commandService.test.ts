@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createExecutionRepository } from '../src/executionRepository';
+import { DynamoDispatchRepository } from '../src/dispatchRepository';
+import { RemoteGoogleAuthorization } from '../src/remoteGoogleAuthorization';
+import { WorkerAuth } from '../src/workerAuth';
 import { createCommandService } from '../src/commandService';
 import { ScriptedDynamo, row, transaction, ConditionalCommandHarness } from './sdkHarness';
 const clock = { now: () => '2026-09-09T00:00:00.000Z' };
@@ -58,8 +61,15 @@ it('never resends an existing dispatching action even for identical input', asyn
 
 const dispatch = { actionId: 'action', workspaceId: 'ws', accountId: 'acct', expectedAuthorityGeneration: 1, expectedVersion: 1,
   approvalId: 'approval', contentHash: 'a'.repeat(64), targetHash: 'b'.repeat(64) };
+// C1 mechanics-only fixture. C4 dispatchRepository tests exercise the actual persisted
+// policy, real grant proof, and produced Dynamo conditions. Never used in production.
+class C1MechanicsPolicy extends DynamoDispatchRepository {
+  override async reservationPlan() { return { finalize: () => [] }; }
+}
 async function delegated(db: ConditionalCommandHarness, publish?: (event: import('../../../../src/shared/contracts/delegationContract').WorkerEvent) => Promise<void>) {
-  const repo = createExecutionRepository({ dynamo: db, tableName: 't', workspaceId: 'ws', clock, publish });
+  const options = { dynamo: db, tableName: 't', workspaceId: 'ws', clock, publish };
+  const dispatchPolicy = new C1MechanicsPolicy(options, new RemoteGoogleAuthorization({ auth: new WorkerAuth(options) }));
+  const repo = createExecutionRepository({ ...options, dispatchPolicy });
   await repo.seedLocalAuthority('acct');
   await repo.applyCommand({ commandId: 'delegate', workspaceId: 'ws', accountId: 'acct', expectedAuthorityGeneration: 0, expectedVersion: 0,
     kind: 'delegate', payload: { delegationId: 'approved-delegation', approvedAt: clock.now() } });

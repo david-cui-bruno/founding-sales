@@ -1,6 +1,8 @@
 import { z } from 'zod';
+import { type DynamoDispatchRepository, type SendEvidence } from './dispatchRepository';
+import type { GoogleAccessEvidence } from './remoteGoogleAuthorization';
 import { authorityStateSchema, commandReceiptSchema, delegationCommandSchema, reservationSchema, workerEventSchema, reserveDispatchInputSchema, appendOutcomeInputSchema,
-  type AppendOutcomeInput, type CommandReceipt, type DelegationCommand, type ExecutionRepository, type ReserveDispatchInput, type WorkerEvent } from '../../../../src/shared/contracts/delegationContract';
+  actionStateSchema, type AppendOutcomeInput, type CommandReceipt, type DelegationCommand, type ExecutionRepository, type ReserveDispatchInput, type WorkerEvent } from '../../../../src/shared/contracts/delegationContract';
 import { accountIdSchema } from '../../../../src/shared/contracts/accountContract';
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions } from './dynamoStore';
 const authorityRecordSchema = z.strictObject({ authority: authorityStateSchema, version: integer });
@@ -21,9 +23,25 @@ const preparedSchema = z.strictObject({ input: actionIdentitySchema, state: z.en
 type ActionRecord = { input: z.infer<typeof actionIdentitySchema>; state: string; queueSequence?: number; reservation?: z.infer<typeof reservationSchema>; outcomeFingerprint?: string; sequence?: number };
 /** Explicit C2-authenticated setup and C3/C5-approved intent admission are separate
  * capabilities. Neither is reachable from applyCommand or account research. */
+export type ExecutionRepositoryOptions = RepositoryOptions & { dispatchPolicy?: DynamoDispatchRepository };
 export class DynamoExecutionRepository implements ExecutionRepository {
   private readonly store: DynamoStore;
-  constructor(options: RepositoryOptions) { this.store = new DynamoStore(options); }
+  constructor(private readonly options: ExecutionRepositoryOptions) {
+    this.store = new DynamoStore(options);
+    const binding = options.dispatchPolicy?.store.options;
+    if (binding && (binding.dynamo !== options.dynamo || binding.tableName !== options.tableName || binding.workspaceId !== options.workspaceId)) throw new Error('dispatch_policy_binding_conflict');
+  }
+  async currentVersion(accountId: string): Promise<number> { return (await this.authority(accountId)).data.version; }
+  async readDispatch(accountId: string, actionId: string) {
+    const row = await this.store.get<unknown>(actionKey(accountId, actionId));
+    if (!row) return null;
+    const data = z.object({ input: actionIdentitySchema, state: actionStateSchema, reservation: reservationSchema.optional() }).parse(row.data);
+    if (data.input.accountId !== accountId || data.input.actionId !== actionId || data.input.workspaceId !== this.options.workspaceId) throw new Error('action_fingerprint_conflict');
+    if (data.reservation && (data.reservation.accountId !== accountId || data.reservation.actionId !== actionId
+      || data.reservation.workspaceId !== data.input.workspaceId || data.reservation.authorityGeneration !== data.input.expectedAuthorityGeneration
+      || data.reservation.contentHash !== data.input.contentHash || data.reservation.targetHash !== data.input.targetHash)) throw new Error('reservation_identity_conflict');
+    return { state: data.state, reservation: data.reservation ?? null };
+  }
   async seedLocalAuthority(accountId: string): Promise<void> {
     accountIdSchema.parse(accountId);
     const record: AuthorityRecord = { authority: { accountId, owner: 'local', generation: 0, state: 'local' }, version: 0 };
@@ -131,7 +149,7 @@ export class DynamoExecutionRepository implements ExecutionRepository {
     }
     await this.store.publish(outbox.sequence);
   }
-  async reserveDispatch(input: ReserveDispatchInput) {
+  async reserveDispatch(input: ReserveDispatchInput, evidence?: GoogleAccessEvidence) {
     const parsed = dispatchSchema.parse(input); this.store.workspace(parsed.workspaceId);
     const authority = await this.authority(parsed.accountId);
     this.current(authority.data, parsed.expectedAuthorityGeneration, parsed.expectedVersion);
@@ -141,6 +159,8 @@ export class DynamoExecutionRepository implements ExecutionRepository {
     if (!action || !['prepared', 'queued'].includes(action.data.state)) throw new Error('action_not_eligible');
     const prepared = preparedSchema.parse(action.data);
     if (fingerprint(prepared.input) !== fingerprint(actionIdentity(parsed))) throw new Error('action_fingerprint_conflict');
+    if (!this.options.dispatchPolicy) throw new Error('dispatch_policy_missing');
+    const plan = await this.options.dispatchPolicy.reservationPlan(parsed, evidence);
     const reservation = reservationSchema.parse({ actionId: parsed.actionId, workspaceId: parsed.workspaceId, accountId: parsed.accountId,
       authorityGeneration: parsed.expectedAuthorityGeneration, contentHash: parsed.contentHash, targetHash: parsed.targetHash, state: 'dispatching' });
     // No replay-to-send after an ambiguous transaction result. The caller must
@@ -151,20 +171,22 @@ export class DynamoExecutionRepository implements ExecutionRepository {
       aggregateVersion: next.version, kind: 'action.outcome', payload: { actionId: parsed.actionId, state: 'dispatching',
         contentHash: parsed.contentHash, targetHash: parsed.targetHash, observedAt: this.store.now(), evidenceRef: parsed.approvalId } }));
     await this.store.transact([this.store.put(authKey(parsed.accountId), next, authority.rev, authFields(next), authFields(authority.data)),
-      this.store.put(key, { ...prepared, state: 'dispatching', reservation }, action.rev, { state: 'dispatching' }, { state: prepared.state }), ...outbox.items]);
+      this.store.put(key, { ...prepared, state: 'dispatching', reservation }, action.rev, { state: 'dispatching' }, { state: prepared.state }), ...plan.finalize(), ...outbox.items]);
     // The committed outbox is drained separately. No external await may delay
     // the sender continuation after this final reservation boundary.
     return reservation;
   }
-  async appendOutcome(input: AppendOutcomeInput): Promise<void> {
+  async appendOutcome(input: AppendOutcomeInput, evidence?: SendEvidence): Promise<void> {
     const parsed = appendOutcomeInputSchema.parse(input);
     const reservation = parsed.reservation; this.store.workspace(reservation.workspaceId);
     const key = actionKey(reservation.accountId, reservation.actionId);
     const action = await this.store.get<ActionRecord>(key);
     if (!action || fingerprint(action.data.reservation) !== fingerprint(reservation)) throw new Error('reservation_identity_conflict');
-    const fp = fingerprint(parsed);
+    const fp = evidence ? fingerprint({ parsed, evidence }) : fingerprint(parsed);
     if (action.data.outcomeFingerprint === fp) { if (action.data.sequence) await this.store.publish(action.data.sequence); return; }
     if (!['dispatching', 'unknown'].includes(action.data.state)) throw new Error('outcome_conflict');
+    if (evidence && !this.options.dispatchPolicy) throw new Error('dispatch_policy_missing');
+    const evidenceItems = evidence ? await this.options.dispatchPolicy!.outcomeItems(parsed, evidence) : [];
     const authority = await this.authority(reservation.accountId);
     const next = { ...authority.data, version: authority.data.version + 1 };
     // The event generation belongs to the ORIGINAL reservation, even after revoke.
@@ -176,14 +198,14 @@ export class DynamoExecutionRepository implements ExecutionRepository {
     const outbox = await this.store.eventItems(event);
     await this.store.transact([this.store.put(authKey(reservation.accountId), next, authority.rev, authFields(next), authFields(authority.data)),
       this.store.put(key, { ...action.data, state: parsed.state, outcomeFingerprint: fp, sequence: outbox.sequence }, action.rev,
-        { state: parsed.state }, { state: action.data.state }), ...outbox.items]);
+        { state: parsed.state }, { state: action.data.state }), ...evidenceItems, ...outbox.items]);
     await this.store.publish(outbox.sequence);
   }
   eventsAfter(cursor: string | null) { return this.store.eventsAfter(cursor); }
   retryPublications() { return this.store.retryPublications(); }
   retryPublication(sequence: number) { return this.store.publish(integer.positive().parse(sequence)); }
 }
-export function createExecutionRepository(options: RepositoryOptions): DynamoExecutionRepository { return new DynamoExecutionRepository(options); }
+export function createExecutionRepository(options: ExecutionRepositoryOptions): DynamoExecutionRepository { return new DynamoExecutionRepository(options); }
 
 // C3 reuses the exact AUTH envelope and scalar fences. Intake must preserve
 // authority, advance only version, and atomically commit its state and event.
