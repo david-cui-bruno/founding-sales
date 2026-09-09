@@ -18,6 +18,8 @@ describe('standalone LinkedIn IPC/preload', () => {
       const api = createLinkedInApi(createIpcClient({ invoke: async (channel, ...args) => registeredIpcHandler(electron.handle, channel)(trusted, ...args) }));
       expect((await api.save({ draftId: draft.id, expectedRevision: 1, body: 'Preserved' })).body).toBe('Preserved');
       expect((await api.get({ draftId: draft.id, expectedRevision: 2 })).personId).toBe(f.personId);
+      expect(await api.recover({ draftId: draft.id, expectedRevision: 2 })).toMatchObject({ approvalCommandId: null, attempts: [], handoffId: null, started: false });
+      await expect(api.prepare({ enrollmentId: 'wrong-enrollment', stepId: f.version.steps[0]!.id, expectedVersion: 1 })).rejects.toThrow();
       const invoke = registeredIpcHandler(electron.handle, 'linkedin:save');
       await expect(invoke(trusted, { draftId: draft.id, expectedRevision: 2, body: 'bad', accountId: 'other' })).rejects.toThrow('LINKEDIN_REQUEST_FAILED');
       await expect(invoke({ senderFrame: { url: 'https://evil.invalid' } }, { draftId: draft.id, expectedRevision: 2, body: 'bad' })).rejects.toThrow('LINKEDIN_REQUEST_FAILED');

@@ -67,7 +67,7 @@ it('recovers latest edits after process-style database reopen without model conf
     reopened = openDatabase({ path: f.path, key: f.key });
     const { LinkedInService } = await import('../../src/main/linkedin/linkedInService');
     const service = new LinkedInService({ repository: new LinkedInRepository({ ...f.deps, database: reopened }) });
-    expect((await service.prepare({ stepId: f.version.steps[0]!.id, expectedVersion: 1 })).body).toBe('Saved before lost IPC response');
+    expect((await service.prepare({ enrollmentId: f.enrollment.id, stepId: f.version.steps[0]!.id, expectedVersion: 1 })).body).toBe('Saved before lost IPC response');
   } finally { if (reopened) closeDatabase(reopened); f.close(); }
 });
 it('switches to a separately admitted real person route without leaking the prior editable draft', async () => {

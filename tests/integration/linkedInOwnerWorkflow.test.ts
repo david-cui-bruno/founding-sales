@@ -1,3 +1,5 @@
+import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
+import { LinkedInRepository } from '../../src/main/linkedin/linkedInRepository';
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { createLinkedInFixture } from '../fixtures/linkedInWorkspace';
@@ -40,7 +42,13 @@ async function ownerFixture() {
   await client.sync(new AbortController().signal);
   const draft = f.drafts.create(f.drafts.requireStep(f.version.steps[0]!.id, 1), 'Reviewed');
   const service = () => new LinkedInService({ repository: f.drafts, owner: { repository, client } });
-  return { ...f, repository, client, draft, service, commands, setOnline: (value: boolean) => { online = value; } };
+  const bind = (database: AppDatabase) => {
+    const repository = new DelegationRepository({ database, workspaceId: f.workspaceId, clock: f.clock });
+    const transport = new SqlDelegationTransport({ database, workspaceId: f.workspaceId, pairingId: 'fictional-pairing', clock: f.clock });
+    const client = new ExecutionClient({ repository, transport, pairing: { endpoint: 'https://worker.example.test', workspaceId: f.workspaceId, credential: 'a'.repeat(43) }, fetch: http });
+    return { repository, client, service: new LinkedInService({ repository: new LinkedInRepository({ ...f.deps, database }), owner: { repository, client } }) };
+  };
+  return { ...f, repository, client, draft, service, commands, bind, setOnline: (value: boolean) => { online = value; } };
 }
 describe('LinkedIn actual local owner boundary', () => {
   it('starts once, survives service restart and keeps reports pending until owner event synchronization', async () => {
@@ -77,7 +85,7 @@ describe('LinkedIn actual local owner boundary', () => {
       f.drafts.save({ draftId: f.draft.id, expectedRevision: 1, body: 'New revision' });
       f.setOnline(true);
       await expect(f.service().begin(begin)).rejects.toThrow('stale_draft');
-      await expect(f.service().reportOutcome(report)).rejects.toThrow('stale_draft');
+      await expect(f.service().reportOutcome(report)).rejects.toThrow('handoff_not_started');
       expect(f.repository.pendingCommands().filter(c => c.kind === 'complete-manual')).toHaveLength(0);
     } finally { f.close(); }
   });
@@ -116,10 +124,70 @@ it('never applies an old consumed handoff report to the newly edited draft revis
     const started = await f.service().begin({ commandId: randomUUID(), draftId: f.draft.id, expectedRevision: 1 });
     f.drafts.save({ draftId: f.draft.id, expectedRevision: 1, body: 'Different unsent content' });
     const report = { commandId: randomUUID(), draftId: f.draft.id, expectedRevision: 1, outcome: 'human_reported_sent' as const, observedAt: f.now };
-    await expect(f.service().reportOutcome(report)).rejects.toThrow('stale_draft');
+    expect(await f.service().reportOutcome(report)).toMatchObject({ revision: 1, receipt: { status: 'applied' } });
     await expect(f.service().reportOutcome({ ...report, expectedRevision: 2 })).rejects.toThrow('handoff_not_started');
+    const later = { ...report, commandId: randomUUID(), outcome: 'reply' as const, replyText: 'Fictional reply to the old exact message' };
+    f.setOnline(false); expect(await f.service().reportOutcome(later)).toMatchObject({ revision: 1, receipt: { status: 'pending' } });
+    f.setOnline(true); expect(await f.service().reportOutcome(later)).toMatchObject({ revision: 1, receipt: { status: 'applied' } });
+    expect(await f.service().recover({ draftId: f.draft.id, expectedRevision: 1 })).toMatchObject({ started: true, handoffId: started.handoffId });
     expect(f.repository.getManualHandoff(started.handoffId!)?.consumedAt).toBe(f.now);
-    expect(f.db.raw.prepare('SELECT count(*) AS n FROM delegated_manual_outcomes').get()).toEqual({ n: 0 });
+    expect(f.db.raw.prepare('SELECT count(*) AS n FROM delegated_manual_outcomes').get()).toEqual({ n: 2 });
     expect(f.drafts.requireRevision(f.draft.id, 2)).toMatchObject({ body: 'Different unsent content', state: 'draft' });
   } finally { f.close(); }
+});
+it('recovers rejected preparation and retries unchanged approved content with a fresh envelope', async () => {
+  const f = await ownerFixture();
+  try {
+    const first = { commandId: randomUUID(), draftId: f.draft.id, expectedRevision: 1 };
+    const approval = f.drafts.approve(first);
+    f.repository.queueCommand({ commandId: first.commandId, workspaceId: f.workspaceId, accountId: f.account.id, expectedAuthorityGeneration: 1, expectedVersion: 0, kind: 'prepare-manual', payload: approval.binding });
+    expect(f.repository.commandStatus(first.commandId)?.status).toBe('rejected');
+    const next = { ...first, commandId: randomUUID() };
+    expect(await f.service().begin(next)).toMatchObject({ status: 'started' });
+    expect(f.drafts.requireRevision(f.draft.id, 1).body).toBe('Reviewed');
+    expect(f.commands.filter(c => c.kind === 'prepare-manual')).toHaveLength(1);
+  } finally { f.close(); }
+});
+
+it.each(['approval_only', 'pending', 'started'] as const)('recovers %s original command after encrypted database close/reopen without issuing a new token', async phase => {
+  const f = await ownerFixture(); let reopened: AppDatabase | undefined;
+  try {
+    const input = { commandId: randomUUID(), draftId: f.draft.id, expectedRevision: 1 };
+    if (phase === 'approval_only') f.drafts.approve(input);
+    else { f.setOnline(phase === 'started'); await f.service().begin(input); }
+    closeDatabase(f.db); reopened = openDatabase({ path: f.path, key: f.key });
+    const rebound = f.bind(reopened);
+    const recovery = await rebound.service.recover({ draftId: input.draftId, expectedRevision: 1 });
+    expect(recovery.approvalCommandId).toBe(input.commandId);
+    expect(recovery.attempts).toEqual([{ commandId: input.commandId, receipt: phase === 'approval_only' ? null : expect.objectContaining({ status: phase === 'pending' ? 'pending' : 'applied' }) }]);
+    expect(recovery.started).toBe(phase === 'started');
+    await expect(rebound.service.begin({ ...input, commandId: randomUUID() })).rejects.toThrow('begin_attempt_unresolved');
+    f.setOnline(true);
+    expect(await rebound.service.begin({ ...input, commandId: recovery.approvalCommandId! })).toMatchObject({ status: phase === 'started' ? 'already_started' : 'started' });
+    expect(f.commands.filter(command => command.kind === 'prepare-manual')).toHaveLength(1);
+  } finally { if (reopened) closeDatabase(reopened); f.close(); }
+});
+it('serializes competing retry IDs through two actual encrypted connections and rolls back failed queue assertion', async () => {
+  const f = await ownerFixture(); const second = openDatabase({ path: f.path, key: f.key });
+  try {
+    const original = { commandId: randomUUID(), draftId: f.draft.id, expectedRevision: 1 };
+    const approval = f.drafts.approve(original);
+    const command = { commandId: original.commandId, workspaceId: f.workspaceId, accountId: f.account.id, expectedAuthorityGeneration: 1, expectedVersion: 0, kind: 'prepare-manual' as const, payload: approval.binding };
+    f.repository.queueCommand(command);
+    const abortedId = randomUUID();
+    expect(() => f.repository.queueCommand({ ...command, commandId: abortedId }, () => {
+      expect(f.db.raw.inTransaction).toBe(true); throw new Error('assertion failed');
+    })).toThrow('assertion failed');
+    expect(f.repository.getCommand(abortedId)).toBeNull();
+    f.setOnline(false);
+    const first = { ...original, commandId: randomUUID() }; const other = { ...original, commandId: randomUUID() };
+    const results = await Promise.allSettled([f.service().begin(first), f.bind(second).service.begin(other)]);
+    expect(results.map(result => result.status)).toEqual(['fulfilled', 'rejected']);
+    expect(f.repository.commandStatus(first.commandId)?.status).toBe('pending');
+    expect(f.repository.getCommand(other.commandId)).toBeNull();
+    expect(await f.bind(second).service.recover({ draftId: f.draft.id, expectedRevision: 1 })).toMatchObject({ approvalCommandId: original.commandId, attempts: expect.arrayContaining([
+      { commandId: original.commandId, receipt: expect.objectContaining({ status: 'rejected' }) }, { commandId: first.commandId, receipt: expect.objectContaining({ status: 'pending' }) }]) });
+    f.setOnline(true); expect(await f.service().begin(first)).toMatchObject({ status: 'started' });
+    expect(f.commands.filter(value => value.kind === 'prepare-manual')).toHaveLength(1);
+  } finally { closeDatabase(second); f.close(); }
 });

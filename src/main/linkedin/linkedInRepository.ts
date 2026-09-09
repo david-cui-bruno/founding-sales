@@ -1,17 +1,20 @@
+import { legacyRouteSuppression } from '../domain/accounts/accountOutreach';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { AppDatabase } from '../db/database';
-import { accountIdSchema as id } from '../../shared/contracts/accountContract';
+import { accountIdSchema as id, accountRouteSchema } from '../../shared/contracts/accountContract';
 import { linkedInBodySchema, linkedInDraftSchema, linkedInSaveSchema, type LinkedInDraft, type LinkedInSave } from '../../shared/contracts/linkedInContract';
-import { manualHandoffBindingSchema } from '../../shared/contracts/ownerCommandContract';
+import { manualHandoffBindingSchema, prepareManualCommandSchema } from '../../shared/contracts/ownerCommandContract';
 import { CampaignRepository } from '../domain/campaign/campaignRepository';
 export const linkedInHash = (text: string) => createHash('sha256').update(text).digest('hex');
+export type LinkedInActionIdentity = Pick<LinkedInDraft, 'id' | 'revision' | 'workspaceId' | 'accountId' | 'enrollmentId' | 'stepId' | 'routeId' | 'routeVersion' | 'contentHash' | 'targetHash' | 'executionContextId'>;
 export type LinkedInStepContext = Omit<LinkedInDraft, 'id' | 'revision' | 'body' | 'contentHash' | 'state' | 'updatedAt'> & { enrollmentVersion: number; target: string };
 /** Workspace AND enrollment scoped. Never changes owner, action or campaign outcomes. */
 export class LinkedInRepository {
   constructor(private readonly deps: { database: AppDatabase; workspaceId: string; enrollmentId: string; clock: { now(): string } }) {
     id.parse(deps.workspaceId); id.parse(deps.enrollmentId);
   }
+  assertEnrollment(enrollmentId: string) { if (enrollmentId !== this.deps.enrollmentId) throw new Error('enrollment_scope_mismatch'); }
   private get raw() { return this.deps.database.raw; }
   private atomic<T>(run: () => T): T {
     if (this.raw.inTransaction) throw new Error('linkedin_transaction_scope');
@@ -39,6 +42,10 @@ export class LinkedInRepository {
     if (!route || route.channel !== 'linkedin' || route.purpose !== 'business' || !['published', 'confirmed'].includes(String(route.verification)) || route.person_id !== e.person_id) throw new Error('linkedin_profile_unavailable');
     const personId = route.person_id === null ? null : String(route.person_id);
     this.assertAvailable(String(e.account_id), personId);
+    const evidenceIds = (this.raw.prepare('SELECT source_id FROM pm_account_route_evidence WHERE account_id=? AND route_id=? AND route_version=?').all(e.account_id, route.id, route.version) as { source_id: string }[]).map(row => row.source_id);
+    const canonical = accountRouteSchema.parse({ id: route.id, accountId: e.account_id, personId, version: route.version, channel: route.channel, value: route.value, purpose: route.purpose, verification: route.verification, evidenceIds });
+    const suppressed = legacyRouteSuppression(this.deps.database, canonical, this.deps.clock.now());
+    if (suppressed.person || suppressed.handle || this.raw.prepare('SELECT 1 FROM pm_handle_suppression_tombstones WHERE kind=? AND normalized_value=? LIMIT 1').get(canonical.channel, canonical.value)) throw new Error('linkedin_suppressed');
     return { workspaceId: this.deps.workspaceId, enrollmentId: this.deps.enrollmentId, accountId: String(e.account_id), campaignVersionId: campaign.id,
       personId, stepId, routeId: String(route.id), routeVersion: Number(route.version), contextRevision: Number(e.context_revision), executionContextId: String(e.execution_context_id),
       enrollmentVersion: expectedVersion, target: String(route.value), targetHash: linkedInHash(String(route.value)) };
@@ -61,22 +68,52 @@ export class LinkedInRepository {
     if (draft.state === 'held' || draft.state === 'closed' || linkedInHash(draft.body) !== draft.contentHash || context.targetHash !== draft.targetHash) throw new Error('draft_unavailable');
     return { draft, context };
   }
-  handoffId(draft: LinkedInDraft): string | null {
+  handoffId(draft: LinkedInActionIdentity): string | null {
     const row = this.raw.prepare('SELECT handoff_id FROM delegated_manual_handoffs WHERE workspace_id=? AND account_id=? AND action_id=?')
       .get(this.deps.workspaceId, draft.accountId, `${draft.id}:${draft.revision}`) as { handoff_id: string } | undefined;
     return row?.handoff_id ?? null;
   }
+  /** Read-only recovery from existing immutable approval/outbox records. Never authorizes execution. */
+  actionRecord(draftId: string, expectedRevision: number) {
+    id.parse(draftId); z.number().int().positive().parse(expectedRevision);
+    const row = this.raw.prepare('SELECT revision FROM manual_linkedin_drafts WHERE workspace_id=? AND enrollment_id=? AND id=?')
+      .get(this.deps.workspaceId, this.deps.enrollmentId, draftId) as { revision: number } | undefined;
+    if (!row) throw new Error('draft_missing');
+    const current = this.requireRevision(draftId, row.revision);
+    if (expectedRevision > current.revision) throw new Error('stale_draft');
+    const approval = this.raw.prepare('SELECT * FROM manual_linkedin_draft_approvals WHERE workspace_id=? AND draft_id=? AND draft_revision=?')
+      .get(this.deps.workspaceId, draftId, expectedRevision) as { command_id: string; content_hash: string; target_hash: string; execution_context_id: string } | undefined;
+    const rows = this.raw.prepare(`SELECT command_json FROM delegated_commands WHERE workspace_id=? AND account_id=?
+      AND json_extract(command_json,'$.kind')='prepare-manual' AND json_extract(command_json,'$.payload.actionId')=? ORDER BY created_at,command_id`)
+      .all(this.deps.workspaceId, current.accountId, `${draftId}:${expectedRevision}`) as { command_json: string }[];
+    const commands = rows.map(row => prepareManualCommandSchema.parse(JSON.parse(row.command_json)));
+    const ids = [...new Set([...(approval ? [approval.command_id] : []), ...commands.map(command => command.commandId)])];
+    let identity: LinkedInActionIdentity = current;
+    if (expectedRevision !== current.revision) {
+      const command = commands[0];
+      if (!approval || !command) throw new Error('handoff_not_started');
+      const b = command.payload; const campaign = new CampaignRepository(this.deps).getVersion(current.campaignVersionId);
+      if (command.workspaceId !== current.workspaceId || command.accountId !== current.accountId || b.campaign.enrollmentId !== current.enrollmentId
+        || b.campaign.campaignId !== campaign.campaignId || b.campaign.campaignRevision !== campaign.version || b.campaign.stepId !== current.stepId
+        || b.contentHash !== approval.content_hash || b.targetHash !== approval.target_hash || b.contextRevision !== approval.execution_context_id) throw new Error('action_binding_conflict');
+      identity = { id: current.id, revision: expectedRevision, workspaceId: current.workspaceId, accountId: current.accountId, enrollmentId: current.enrollmentId,
+        stepId: b.campaign.stepId, routeId: b.routeId, routeVersion: b.routeVersion, contentHash: approval.content_hash, targetHash: approval.target_hash, executionContextId: approval.execution_context_id };
+    }
+    return { identity, approvalCommandId: approval?.command_id ?? null, commandIds: ids };
+  }
   assertObservedAt(observedAt: string, startedAt: string) {
     if (observedAt < startedAt || observedAt > this.deps.clock.now()) throw new Error('observation_time_invalid');
   }
-  approve(input: { commandId: string; draftId: string; expectedRevision: number }) {
+  approve(input: { commandId: string; draftId: string; expectedRevision: number }, assertAttempt?: () => void) {
     z.uuid().parse(input.commandId);
     return this.atomic(() => {
       const { draft, context } = this.requireAction(input.draftId, input.expectedRevision);
       const previous = this.raw.prepare('SELECT command_id,content_hash,target_hash,context_revision,execution_context_id FROM manual_linkedin_draft_approvals WHERE workspace_id=? AND draft_id=? AND draft_revision=?')
         .get(draft.workspaceId, draft.id, draft.revision) as Record<string, unknown> | undefined;
-      if (previous && (previous.command_id !== input.commandId || previous.content_hash !== draft.contentHash || previous.target_hash !== draft.targetHash
+      if (previous && (previous.content_hash !== draft.contentHash || previous.target_hash !== draft.targetHash
         || previous.context_revision !== draft.contextRevision || previous.execution_context_id !== draft.executionContextId)) throw new Error('approval_command_conflict');
+      if (previous && previous.command_id !== input.commandId && !assertAttempt) throw new Error('approval_command_conflict');
+      assertAttempt?.();
       if (!previous) this.raw.prepare('INSERT INTO manual_linkedin_draft_approvals(workspace_id,draft_id,draft_revision,content_hash,target_hash,context_revision,execution_context_id,approved_at,command_id) VALUES(?,?,?,?,?,?,?,?,?)')
         .run(draft.workspaceId, draft.id, draft.revision, draft.contentHash, draft.targetHash, draft.contextRevision, draft.executionContextId, this.deps.clock.now(), input.commandId);
       this.raw.prepare("UPDATE manual_linkedin_drafts SET state='approved' WHERE workspace_id=? AND id=? AND revision=?").run(draft.workspaceId, draft.id, draft.revision);

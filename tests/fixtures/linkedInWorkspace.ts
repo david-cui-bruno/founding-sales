@@ -4,7 +4,7 @@ import { AccountRepository } from '../../src/main/domain/accounts/accountReposit
 import { accountFingerprint } from '../../src/main/domain/accounts/accountEvidence';
 import { LinkedInRepository } from '../../src/main/linkedin/linkedInRepository';
 
-export async function createLinkedInFixture(target = 'https://www.linkedin.com/in/fictional-person') {
+export async function createLinkedInFixture(target = 'https://www.linkedin.com/in/fictional-person', accountLevel = false) {
   const f = await createCampaignFixture();
   try {
     const personId = randomUUID();
@@ -13,7 +13,7 @@ export async function createLinkedInFixture(target = 'https://www.linkedin.com/i
     const sourceId = randomUUID(); const routeId = randomUUID();
     accounts.admitEvidence({ commandId: randomUUID(), accountId: f.account.id, expectedVersion: 2,
       sources: [{ id: sourceId, url: 'https://example.invalid/team', fetchedAt: f.now, sha256: 'c'.repeat(64), excerpt: 'Fictional Person, business contact.', permitted: true }], claims: [],
-      routes: [{ id: routeId, accountId: f.account.id, personId, channel: 'linkedin', value: target, purpose: 'business', verification: 'published', evidenceIds: [sourceId] }] });
+      routes: [{ id: routeId, accountId: f.account.id, personId: accountLevel ? null : personId, channel: 'linkedin', value: target, purpose: 'business', verification: 'published', evidenceIds: [sourceId] }] });
     const version = { ...f.versions[0]!, id: randomUUID(), campaignId: randomUUID(), steps: [{ id: randomUUID(), channel: 'linkedin' as const, condition: 'initial' as const, delayHours: 0 }] };
     f.repo.createVersion({ commandId: randomUUID(), version });
     f.repo.approve({ commandId: randomUUID(), campaignVersionId: version.id, snapshotHash: accountFingerprint(version), approvedAt: f.now });

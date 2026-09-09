@@ -4,7 +4,7 @@ import { commandReceiptSchema, manualOutcomeSchema } from './delegationContract'
 const revision = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 export const linkedInBodySchema = z.string().min(1).max(24000).refine(body => body.trim().length > 0 && !body.includes('\0'));
-export const linkedInPrepareSchema = z.strictObject({ stepId: id, expectedVersion: revision });
+export const linkedInPrepareSchema = z.strictObject({ enrollmentId: id, stepId: id, expectedVersion: revision });
 export const linkedInRevisionSchema = z.strictObject({ draftId: id, expectedRevision: revision });
 export const linkedInBeginSchema = linkedInRevisionSchema.extend({ commandId: z.uuid() });
 export const linkedInBeginResultSchema = z.strictObject({ draftId: id, revision, receipt: commandReceiptSchema, handoffId: id.nullable(), status: z.enum(['pending', 'started', 'already_started']) })
@@ -24,7 +24,11 @@ export type LinkedInPrepare = z.infer<typeof linkedInPrepareSchema>;
 export type LinkedInRevision = z.infer<typeof linkedInRevisionSchema>;
 export type LinkedInSave = z.infer<typeof linkedInSaveSchema>;
 export type LinkedInReport = z.infer<typeof linkedInReportSchema>;
+export const linkedInRecoverySchema = z.strictObject({ draftId: id, revision, approvalCommandId: z.uuid().nullable(),
+  attempts: z.array(z.strictObject({ commandId: z.uuid(), receipt: commandReceiptSchema.nullable() })), handoffId: id.nullable(), started: z.boolean() });
 export interface LinkedInApi {
+  /** Read-only identity/receipt recovery. Neither this nor started=true grants a physical action. */
+  recover(input: LinkedInRevision): Promise<z.infer<typeof linkedInRecoverySchema>>;
   begin(input: LinkedInBegin): Promise<z.infer<typeof linkedInBeginResultSchema>>;
   prepare(input: LinkedInPrepare): Promise<LinkedInDraft>;
   save(input: LinkedInSave): Promise<LinkedInDraft>;

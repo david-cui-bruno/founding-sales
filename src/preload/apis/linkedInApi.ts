@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { linkedInBeginSchema, linkedInBeginResultSchema, linkedInPrepareSchema, linkedInRevisionSchema, linkedInSaveSchema, linkedInReportSchema, linkedInDraftSchema,
+import { linkedInRecoverySchema, linkedInBeginSchema, linkedInBeginResultSchema, linkedInPrepareSchema, linkedInRevisionSchema, linkedInSaveSchema, linkedInReportSchema, linkedInDraftSchema,
   linkedInActionSchema, linkedInReportResultSchema, type LinkedInApi } from '../../shared/contracts/linkedInContract';
 import type { IpcClient } from '../ipcClient';
 export function createLinkedInApi(client: IpcClient): LinkedInApi {
@@ -18,13 +18,18 @@ export function createLinkedInApi(client: IpcClient): LinkedInApi {
     return value;
   };
   return {
+    recover: async (...args) => {
+      const value = await request('recover', linkedInRevisionSchema, linkedInRecoverySchema, args);
+      if (value.draftId !== args[0].draftId || value.revision !== args[0].expectedRevision) throw new Error('LinkedIn recovery mismatch');
+      return value;
+    },
     begin: async (...args) => {
       const value = await request('begin', linkedInBeginSchema, linkedInBeginResultSchema, args);
       if (value.draftId !== args[0].draftId || value.revision !== args[0].expectedRevision || value.receipt.commandId !== args[0].commandId) throw new Error('LinkedIn begin mismatch');
       return value;
     },
     prepare: async (...args) => { const value = await request('prepare', linkedInPrepareSchema, linkedInDraftSchema, args);
-      if (value.stepId !== args[0].stepId) throw new Error('LinkedIn step mismatch'); return value; },
+      if (value.stepId !== args[0].stepId || value.enrollmentId !== args[0].enrollmentId) throw new Error('LinkedIn step mismatch'); return value; },
     save: (...args) => draft('save', linkedInSaveSchema, args),
     get: (...args) => draft('get', linkedInRevisionSchema, args),
     open: (...args) => action('open', args), copy: (...args) => action('copy', args),

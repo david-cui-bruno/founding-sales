@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { linkedInBeginSchema, linkedInBeginResultSchema, linkedInPrepareSchema, linkedInRevisionSchema, linkedInSaveSchema, linkedInReportSchema, linkedInDraftSchema,
+import { linkedInRecoverySchema, linkedInBeginSchema, linkedInBeginResultSchema, linkedInPrepareSchema, linkedInRevisionSchema, linkedInSaveSchema, linkedInReportSchema, linkedInDraftSchema,
   linkedInActionSchema, linkedInReportResultSchema, type LinkedInApi } from '../../shared/contracts/linkedInContract';
 import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
 /** Registration is inert until the serialized composition root explicitly calls it. */
@@ -11,6 +11,7 @@ export function registerLinkedInIpc(options: { provider: LinkedInApi; isTrustedR
   };
   try {
     const p = options.provider;
+    add('recover', linkedInRevisionSchema, linkedInRecoverySchema, input => p.recover(input));
     add('begin', linkedInBeginSchema, linkedInBeginResultSchema, input => p.begin(input));
     add('prepare', linkedInPrepareSchema, linkedInDraftSchema, input => p.prepare(input));
     add('save', linkedInSaveSchema, linkedInDraftSchema, input => p.save(input));
