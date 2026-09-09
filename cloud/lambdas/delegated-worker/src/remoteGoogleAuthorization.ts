@@ -162,7 +162,12 @@ export class RemoteGoogleAuthorization {
         const response = await this.request('https://oauth2.googleapis.com/revoke', { method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: tokens.refreshToken }) });
         confirmed = response.ok;
-      } catch { confirmed = false; }
+      } catch {
+        // No definitive provider response: remote processing may still be in
+        // flight after a disconnect/timeout. Preserve the exact durable claim
+        // and ciphertext. No competing retry or regrant may clear this hold.
+        return { state: 'revoked', grant, providerRevocation: 'pending' };
+      }
     }
     const providerRevocation = confirmed ? 'confirmed' as const : 'pending' as const;
     // Retain exact cleanup material after failure. A known completed request

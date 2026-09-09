@@ -183,10 +183,10 @@ describe('provider revocation races', () => {
     await expect(remote.completeGoogleGrant(url.searchParams.get('state')!, 'code')).rejects.toThrow();
     expect(f.dynamo.inspect(`GOOGLE_GRANT#${pair.pairingId}`)).toBeUndefined();
   });
-  it('retains revoked encrypted tokens only for pending provider revocation and never releases them', async () => {
+  it('retains revoked encrypted tokens after a definite HTTP failure for an explicit retry, never execution', async () => {
     const f = fixture(); const pair = await paired(f); const url = await begun(f, pair.pairingId);
     await f.remote().completeGoogleGrant(url.searchParams.get('state')!, 'code');
-    const remote = new RemoteGoogleAuthorization({ auth: f.auth, config: f.config, fetch: async () => { throw new Error('fictional-refresh-token'); } });
+    const remote = new RemoteGoogleAuthorization({ auth: f.auth, config: f.config, fetch: async () => new Response('', { status: 503 }) });
     expect(await remote.revokeGoogleGrant(pair.pairingId)).toMatchObject({ state: 'revoked', providerRevocation: 'pending' });
     await expect(remote.authorizedAccess(pair.pairingId, ['send'])).rejects.toThrow('google_grant_unavailable');
     expect(JSON.stringify(await remote.status(pair.pairingId))).not.toContain('fictional-refresh-token');
@@ -343,5 +343,36 @@ describe('regrant completion and uncertain revocation claim', () => {
     expect(await f.remote().revokeGoogleGrant(pair.pairingId)).toMatchObject({ state: 'revoked', providerRevocation: 'pending' });
     await expect(f.remote().beginGoogleGrant(pair.pairingId, ['send', 'relevant_read'])).rejects.toThrow('google_revocation_pending');
     expect(f.calls).toHaveLength(calls);
+  });
+});
+
+describe('lost provider response retains uncertain revoke ownership', () => {
+  it.each(['disconnect', 'timeout'] as const)('does not let revoke B confirm or regrant while remote revoke A continues after %s', async failure => {
+    const f = fixture(); const pair = await paired(f); const first = await begun(f, pair.pairingId);
+    await f.remote().completeGoogleGrant(first.searchParams.get('state')!, 'code');
+    const original = f.dynamo.inspect(`GOOGLE_GRANT#${pair.pairingId}`) as { ciphertext: string };
+    let finishRemote!: () => void; const remoteWork = new Promise<void>(resolve => { finishRemote = resolve; });
+    let remoteFinished = false; const processing = remoteWork.then(() => { remoteFinished = true; });
+    let submissions = 0;
+    const remoteA = new RemoteGoogleAuthorization({ auth: f.auth, config: f.config, fetch: async url => {
+      if (!String(url).endsWith('/revoke')) throw new Error('unconfigured external boundary');
+      submissions++;
+      // The request was submitted. Its local response is lost, but simulated
+      // provider processing continues independently until finishRemote().
+      throw failure === 'timeout' ? new DOMException('fictional response timeout', 'TimeoutError') : new Error('fictional connection lost after submission');
+    } });
+    try {
+      expect(await remoteA.revokeGoogleGrant(pair.pairingId)).toMatchObject({ state: 'revoked', providerRevocation: 'pending' });
+      expect(remoteFinished).toBe(false);
+      const remoteB = new RemoteGoogleAuthorization({ auth: f.auth, config: f.config, fetch: async () => { submissions++; return new Response('', { status: 200 }); } });
+      expect(await remoteB.revokeGoogleGrant(pair.pairingId)).toMatchObject({ state: 'revoked', providerRevocation: 'pending' });
+      expect(submissions).toBe(1);
+      expect(f.dynamo.inspect(`GOOGLE_GRANT#${pair.pairingId}`)).toMatchObject({ ciphertext: original.ciphertext, revocationInFlight: true, providerRevocation: 'pending', revoked: true });
+      await expect(remoteB.beginGoogleGrant(pair.pairingId, ['send', 'relevant_read'])).rejects.toThrow('google_revocation_pending');
+      finishRemote(); await processing;
+      // Completion without a definitive observed response cannot clear a hold.
+      expect(await remoteB.revokeGoogleGrant(pair.pairingId)).toMatchObject({ providerRevocation: 'pending' });
+      expect(submissions).toBe(1);
+    } finally { finishRemote(); await processing; }
   });
 });
