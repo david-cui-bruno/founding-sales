@@ -109,3 +109,47 @@ Root reported actual handler prebuild/typecheck/build passed in task `576672du31
 8. Emergency credential must be securely recorded outside the Mac during pairing. Emergency revokes/pauses remote account authority without local sender fallback. Pairing revocation and Google-grant revocation are distinct from local disconnect.
 
 No purchases, deployments, installations, subagents, full/native/package builds, real recipients or live account operations were performed by C2.
+
+## C4/C5 final-access fence follow-up
+
+Root approved only `remoteGoogleAuthorization.ts` and its test after C5 identified that token preparation must carry exact durable grant/pairing revision evidence into its final reservation transaction. Follow-up implementation commit: **`eee0b0f014101e9d721b79e8c680543e1b870efb`**, committed with `git commit --only --` for exactly those two paths and resulting paths inspected. No C1 or sender edits.
+
+The additive interface supersedes the earlier token-only result description:
+
+```ts
+type AuthorizedGoogleAccess = {
+  accessToken: string;
+  grant: GoogleGrant;
+  accessEvidence: GoogleAccessEvidence;
+};
+// authorizedAccess(pairingId, requiredCapabilities, signal?) returns this.
+type GoogleAccessEvidence = {
+  version: 1;
+  workspaceId: string;
+  tableName: string;
+  pairingId: string;
+  pairingRevision: number;
+  grantRevision: number;
+  subject: string;
+  requiredCapabilities: GoogleCapability[];
+  expiresAt: number;
+  proof: string;
+};
+type ExpectedGoogleAccess = {
+  pairingId: string;
+  subject: string;
+  requiredCapabilities: GoogleCapability[];
+};
+// Synchronous, no SDK/provider call:
+accessChecks(evidence: GoogleAccessEvidence, expected: ExpectedGoogleAccess): TransactWriteItem[];
+```
+
+Evidence is minted only by successful actual access preparation, HMAC-authenticated with a distinct purpose under the existing configured key. It binds the exact store/workspace/pairing, verified subject, checked capabilities, revisions and token expiry. Input capabilities are parsed/copied before asynchronous work. The refresh branch returns the **committed new grant revision**, never the stale pre-refresh one. Tampered/foreign/expired evidence or mismatched caller identity/capability expectation is synchronously refused. Evidence and tokens remain absent from HTTP grant status.
+
+`accessChecks` emits **two real Dynamo condition checks**, for pairing and Google grant revision. Include both in the **same final reservation transaction** alongside exact domain approval/permission/suppression/authority conditions. An async recheck before the transaction is not equivalent. Required sequence: prepare/refresh access, construct provider sender with that token, obtain checks against independently expected pairing/subject/capabilities, commit final reservation with checks, then invoke send/create once. Do not refresh after reserving.
+
+**Composition warning:** `WorkerAuth.fencedDynamo` also appends a pairing condition. Do not wrap a transaction already carrying these two checks with that adapter unchanged, because DynamoDB rejects duplicate targets. Background C4/C5 repositories can compose these grant/pairing checks with their final domain fences using the actual raw C1 `DynamoStore` SDK boundary. Authenticated-command integration needing both adapters requires explicit root composition, not silently dropping a condition.
+
+TDD evidence: initial focused RED **4 behavioral failures**, missing evidence on cached/refreshed results. GREEN **20 OAuth tests**, plus **11 auth/handler regression tests**, total **31 passed**. Tests construct both condition checks before revocation, then prove a real emitted conditional transaction cannot commit its reservation after either grant or pairing revocation. Refreshed evidence commits successfully using current revision. Foreign workspace/table/subject/pairing, capability escalation, altered revision and expiry are rejected.
+
+Focused strict compile of the two owned paths and their imports passed using package settings (`--target ES2023 --module ESNext --moduleResolution bundler --strict --noUncheckedIndexedAccess --types node --esModuleInterop --skipLibCheck`). Two-file scoped lint and diff checks passed. Full worker typecheck at 01:06:38 was blocked only by foreign C3 `test/threadIntakeRepository.test.ts:38:61`, whose old fixture returned token/grant without newly required accessEvidence. Exact mismatch was reported to root for C3 adaptation, not edited by C2. All npm/npx commands retained the mandated Node24 PATH export. No builds/cloud/provider/live actions occurred in this follow-up. Root combined independent review should include original `717fb67` plus `eee0b0f`.
