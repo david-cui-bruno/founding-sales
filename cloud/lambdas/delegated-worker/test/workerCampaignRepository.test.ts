@@ -101,6 +101,7 @@ describe('real SDK campaign transactional plans', () => {
     expect(f.dynamo.inspect(campaignEnrollmentKey(id(8)))).toMatchObject({ state: state === 'active' ? 'completed' : state === 'switched' ? 'active' : state, currentStepId: state === 'active' ? null : id(5) });
     await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: state === 'active' ? 2 : 3, evidence: { ...evidence, observation: 'no_reply', outcome: 'no_reply' } });
     expect(f.dynamo.inspect(`CAMPAIGN_CAP#${id(2)}#call`)).toEqual({ reserved: 0, sent: 1 });
+    await expect(f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: state === 'active' ? 3 : 4, evidence: { ...evidence, state: 'unknown', observation: 'unknown', outcome: 'unknown' } })).rejects.toThrow('campaign_outcome_conflict');
   });
   it('manual eligibility adds exact campaign conditions and consumes capacity but never sent count', async () => {
     const f = await fixture();

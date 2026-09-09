@@ -121,6 +121,7 @@ export class WorkerCampaignRepository {
           || binding.stepId !== evidence.stepId || binding.selectedRouteId !== evidence.routeId || binding.contextRevision !== evidence.executionContextId
           || binding.channel !== evidence.channel || reservation.routeVersion !== evidence.routeVersion || reservation.numericContextRevision !== evidence.contextRevision) throw new Error('campaign_evidence_binding');
         const observationOnly = reservation.state === 'sent' && (evidence.observation === 'no_reply' || interruption);
+        if (reservation.state === 'sent' && !observationOnly) throw new Error('campaign_outcome_conflict');
         const currentBinding = evidence.stepId === old.currentStepId && evidence.routeId === old.selectedRouteId && evidence.routeVersion === old.selectedRouteVersion && evidence.contextRevision === old.contextRevision && evidence.executionContextId === old.executionContextId;
         if (observationOnly) {
           const previous = await this.evidence(old.id);
