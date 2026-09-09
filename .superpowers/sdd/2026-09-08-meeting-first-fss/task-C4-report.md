@@ -277,3 +277,27 @@ Observed at 01:46:11+: **1 SQL integration test GREEN**, **127 focused worker te
 After D1 separated campaign_manual policy from unchanged individually approved dispatch policy, fresh current-source runs passed all **127 C4 worker tests**, the **1 actual encrypted SQL cap/reopen regression**, and **worker-wide strict typecheck**. The previously reported C6 test180 fixture type error is resolved. No C4 code adjustment was needed. This rerun uses D1's current working implementation; its final counterpart commit is pending notification and is not falsely pinned here.
 
 Pinned D1 counterpart: `d456c3fa8167e8ccd21fc1499aef10ce0efd5131`. Fresh post-commit rerun at 01:51:05 passed the same 127 worker tests, SQL1 and worker strict typecheck.
+
+## Separate exact provider non-send proof repair (01:57 UTC)
+
+`fb6aa6e` (two owned paths) validates cancelled SendEvidence at the actual outcome boundary: kind must be provider_result, reason provider_not_sent, providerIdentity null, with all existing original-reservation identity checks retained. Only then does C4 send D1 the typed `cancellationEvidence` projection plus `evidenceRef = send-${fingerprint(fullSendEvidence)}`. Bare cancelled, Sent absence, unknown, pause or revoke are not refund proof. D1 owns once-only cap settlement, manual explicit non-send policy and contradictory-final-evidence holding.
+
+RED: three malformed cancelled evidence combinations (sent_lookup/sent_match, provider_result/provider_result_unknown, provider_result/provider_accepted) returned real outcome plans. Guard made all three GREEN. Actual provider403 fixture then exercised typed not_sent → immutable proof → same C1/D1 transaction release exactly once, no step progression, terminal replay no resend. Unknown still retains reserved capacity. This supersedes earlier conservative cancellation-retention behavior only for the newly authorized exact proof. D1's proof schema/implementation was on disk during validation; counterpart SHA requested, not yet pinned here.
+
+Two existing configuration-deselection fixtures were adapted to actual C6 admission tightening: active mailbox null now fails relevant_mail_requires_reader, so the valid explicit paused+null owner command is used for the final config race. No C6 policy was weakened.
+
+## Separate source cancellation propagation repair
+
+Read FULL task-C6-source-review.md. Finding3 implemented in `236dc0b` (five owned/released paths), separate from refund proof. Compatible signatures:
+
+```ts
+dispatch(commandId: string, signal?: AbortSignal)
+reconcileSend(commandId: string, signal?: AbortSignal)
+reserveDispatch(input, accessEvidence?, signal?: AbortSignal)
+```
+
+The caller signal reaches real C3 polling, C2 authorizedAccess including OAuth refresh, prepared sender and bounded Sent HTTP. Synchronous checks prevent cancellation from crossing readiness and pre-reservation boundaries. Root separately released C1's optional third signal: after awaited policy/outbox planning, `throwIfAborted()` runs immediately before the final transaction. Authority/grant/approval conditions and one-shot provider order are unchanged. There is still no async refresh/publication between successful reserve and sendOnce. Source owner elephant received the signatures and must pass tick signal from its actual composition.
+
+RED: expired actual C2 refresh in both dispatch and reconciliation did not observe caller abort (two failures), and cancellation after credential read still produced provider acceptance in the fictional sender (third failure). A separate actual-policy planning test showed C1 returned a reservation after cancellation (fourth failure). All became GREEN after propagation. Additional checks cover already-aborted callers creating no new transactions/provider work and cooperative Sent lookup cancellation preserving original unknown evidence/no resend. Test OAuth/Sent HTTP is cooperative and entirely fictional, with a 30ms fallback failure deadline so lost signals do not hang the test.
+
+Final combined verification at 01:57:31 with required Node24 export: **137 worker tests (81/16/12/28)**, **1 real encrypted SQL projection/reopen test**, worker strict typecheck, scoped integration root-compatible typecheck, and nonignored scoped lint on the seven changed TypeScript paths all passed. Exact-path diff checks and both committed file lists inspected. New D1 proof and source tick counterpart commits remain owner-coordinated follow-up. No external/live operations occurred.
