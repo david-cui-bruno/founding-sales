@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { readdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { createMigrationRunner, migrateToLatest, productionMigrations } from '../../src/main/db/migrate';
@@ -89,16 +91,19 @@ describe('database migrations', () => {
 
   it.each([
     { label: 'unknown', value: 'unknown' },
-    { label: 'future', value: 23 },
+    { label: 'future', value: 24 },
     { label: 'negative', value: -1 },
     { label: 'noninteger', value: 15.5 },
-  ])('rejects a $label schema marker before backup or migration', async ({ value }) => {
+  ])('rejects a $label schema marker before backup or migration', async ({ label, value }) => {
+    if (label === 'future') expect(productionMigrations.some(migration => migration.schemaVersion === value)).toBe(false);
     tempDatabase = createTempDatabase();
     const key = createTestWorkspaceKey();
     database = openDatabase({ path: tempDatabase.path, key });
     const options = { backupDirectory: `${tempDatabase.path}.backups`, workspaceKey: key };
     await createMigrationRunner(productionMigrations.slice(0, 15))(database, options);
     database.raw.prepare('UPDATE app_meta SET schema_version = ? WHERE singleton = 1').run(value);
+    const filesBefore = readdirSync(dirname(tempDatabase.path), { recursive: true }).sort();
+    const catalogBefore = database.raw.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all();
     const backupCountBefore = database.raw.prepare<[], { count: number }>(
       'SELECT COUNT(*) AS count FROM backup_receipts',
     ).get()!.count;
@@ -116,6 +121,8 @@ describe('database migrations', () => {
     expect(database.raw.prepare<[], { count: number }>(
       'SELECT COUNT(*) AS count FROM backup_receipts',
     ).get()!.count).toBe(backupCountBefore);
+    expect(database.raw.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all()).toEqual(catalogBefore);
+    expect(readdirSync(dirname(tempDatabase.path), { recursive: true }).sort()).toEqual(filesBefore);
   });
 
   it.each([
