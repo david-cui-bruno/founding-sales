@@ -180,6 +180,13 @@ export function nativeDeskFixture(initial = dailyFixture()) {
     aggregateVersion: 2,
     reason: null,
   });
+  const retainPending = (accountId: string, commandId: string) => {
+    const owner = snapshot.ownerStatus.find(o => o.accountId === accountId);
+    if (owner && !owner.pendingCommands.some(c => c.commandId === commandId)) {
+      owner.pendingCommands.push(receipt(commandId, 'pending'));
+      owner.status = 'pending';
+    }
+  };
   const requested = (accountId: string, draftId: string) => {
     const item = snapshot.answers.find(
       (a) =>
@@ -229,7 +236,11 @@ export function nativeDeskFixture(initial = dailyFixture()) {
       pair: forbidden,
       configure: forbidden,
       submit: forbidden,
-      sync: forbidden,
+      sync: async () => {
+        record('delegation.sync');
+        // No fabricated settlement. Tests must supply an authoritative snapshot.
+        return { applied: 0, gaps: 0, cursor: null, ownerFresh: false };
+      },
       getRequestedFollowup: async (input) => {
         record('getRequestedFollowup', input);
         const item = requested(input.accountId, input.draftId);
@@ -270,6 +281,7 @@ export function nativeDeskFixture(initial = dailyFixture()) {
           intentCommandId: null,
           reason: 'Fixture pending owner preflight',
         };
+        retainPending(item.accountId, item.approval.receipt.commandId);
         return structuredClone(item.approval);
       },
     },
@@ -335,7 +347,8 @@ export function nativeDeskFixture(initial = dailyFixture()) {
       },
       reportOutcome: async (input) => {
         record('linkedin.reportOutcome', input);
-        linked(input.draftId, input.expectedRevision);
+        const item = linked(input.draftId, input.expectedRevision);
+        retainPending(item.accountId, input.commandId);
         return {
           draftId: input.draftId,
           revision: input.expectedRevision,

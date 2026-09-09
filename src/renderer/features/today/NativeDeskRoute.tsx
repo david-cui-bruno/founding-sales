@@ -1,9 +1,13 @@
 import { updateRequestedSessionHolds } from './requestedDraftSession';
 import { updateLinkedInSessionHolds } from '../linkedin/linkedInSession';
-import { setDailySessionScope } from './dailySessionScope';
+import {
+  captureDailySessionScope,
+  setDailySessionScope,
+} from './dailySessionScope';
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -210,6 +214,97 @@ export function NativeDeskRoute({
       surface={surface}
     />
   );
+}
+/** Explicit workspace-wide reconciliation, never a new-work bypass. The owner
+ * decides which retained commands can be replayed and which events settle them. */
+function OwnerReconciliation({
+  snapshot,
+  api,
+  config,
+  readError,
+  onRefresh,
+}: {
+  snapshot: DailySnapshot;
+  api: NativeDeskApi;
+  config: Config | null;
+  readError: boolean;
+  onRefresh(): void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const flight = useRef(false);
+  const lifetime = useRef(0);
+  const pending = snapshot.ownerStatus.filter((o) => o.pendingCommands.length);
+  const allowed =
+    !readError &&
+    snapshot.workflowMode === 'meeting_first' &&
+    snapshot.workspaceId !== null &&
+    config?.workspaceId === snapshot.workspaceId &&
+    config.state === 'active' &&
+    !!config.configuration &&
+    pending.length > 0 &&
+    pending.every(
+      (o) => o.authority?.owner === 'worker' && o.authority.state === 'active',
+    );
+  // Invalidate even when a held scope later returns to the same workspace.
+  const guard = JSON.stringify([
+    snapshot.workspaceId,
+    snapshot.workflowMode,
+    readError,
+    config,
+    snapshot.ownerStatus.map((o) => [o.accountId, o.authority]),
+  ]);
+  useLayoutEffect(() => {
+    lifetime.current++;
+    return () => {
+      lifetime.current++;
+    };
+  }, [api, guard]);
+  const reconcile = async () => {
+    if (!allowed || flight.current) return;
+    const generation = lifetime.current;
+    flight.current = true;
+    setBusy(true);
+    setFailed(false);
+    try {
+      const assertScope = captureDailySessionScope(
+        api.delegation,
+        snapshot.workspaceId!,
+      );
+      await api.delegation.sync();
+      assertScope();
+      if (generation !== lifetime.current) return;
+      // Counts/HTTP acceptance are not receipts. Only the subsequent canonical
+      // local read may update pending holds or saved approval/outcome state.
+      onRefresh();
+    } catch {
+      if (generation === lifetime.current) setFailed(true);
+    } finally {
+      flight.current = false;
+      setBusy(false);
+    }
+  };
+  return pending.length ? (
+    <div>
+      <p>
+        Reconciliation may retry already-queued commands across this workspace.
+        It does not approve new work. Pending or unknown receipts are not proof
+        of sending.
+      </p>
+      <button
+        disabled={!allowed || busy}
+        onClick={() => { void reconcile(); }}
+      >
+        Reconcile queued commands
+      </button>
+      {failed && (
+        <p role="status">
+          Reconciliation unavailable. Pending work remains held. Retry explicitly
+          when the owner is available.
+        </p>
+      )}
+    </div>
+  ) : null;
 }
 const selections = new WeakMap<
   NativeDeskApi['daily'],
@@ -447,6 +542,13 @@ export function NativeDesk({
                   : ''}
               </p>
             ))}
+            <OwnerReconciliation
+              snapshot={snapshot}
+              api={api}
+              config={configuration}
+              readError={readError}
+              onRefresh={onRefresh}
+            />
             {snapshot.transport.map((t) => (
               <p key={`${t.pairingId}:${t.revision}`}>
                 Stored transport: {t.state}. Not current connectivity.

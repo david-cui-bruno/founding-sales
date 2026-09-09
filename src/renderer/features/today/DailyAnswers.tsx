@@ -12,7 +12,16 @@ import {
 import { LinkedInStep } from '../linkedin/LinkedInStep';
 import type { LinkedInApi } from '../../../shared/contracts/linkedInContract';
 export const answerKey = (a: DailyAnswer) =>
-  `${a.kind}:${a.accountId}:${a.kind === 'reply' ? a.thread.thread.providerThreadId : a.draft.id}`;
+  a.kind === 'reply'
+    ? JSON.stringify([
+        a.kind,
+        a.accountId,
+        a.thread.thread.provider,
+        a.thread.thread.mailboxSubject,
+        a.thread.thread.providerThreadId,
+        a.draft ? ['draft', a.draft.id] : ['no-draft'],
+      ])
+    : `${a.kind}:${a.accountId}:${a.draft.id}`;
 export const answerLabel = (a: DailyAnswer) =>
   a.kind === 'manual_linkedin'
     ? 'Manual LinkedIn'
