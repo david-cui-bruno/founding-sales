@@ -393,11 +393,11 @@ it('source configuration missing holds even with persisted message approval and 
   const f = await fixture(false);
   await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 1 }, f.access.accessEvidence)).rejects.toThrow('source_configuration_unavailable');
 });
-it.each([{ state: 'paused' as const }, { mailboxSubject: null }])('source configuration %j admitted by owner holds dispatch', async change => {
+it.each([{ state: 'paused' as const }, { state: 'paused' as const, mailboxSubject: null }])('source configuration %j admitted by owner holds dispatch', async change => {
   const f = await fixture(); await f.configure(change);
   await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: await f.execution.currentVersion('acct') }, f.access.accessEvidence)).rejects.toThrow('source_configuration_unavailable');
 });
-it.each([{ state: 'paused' as const }, { mailboxSubject: null }])('final source config CAS rejects selective owner change %j', async change => {
+it.each([{ state: 'paused' as const }, { state: 'paused' as const, mailboxSubject: null }])('final source config CAS rejects selective owner change %j', async change => {
   const f = await fixture(); const plan = await f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence);
   await f.configure(change);
   await expect(f.store.transact(plan.finalize())).rejects.toThrow('TransactionCanceledException');
@@ -440,4 +440,28 @@ it('unknown campaign event reports retained reserved cap rather than a zero defa
   expect(event).toHaveProperty('campaign.cap', { campaignVersionId: 'campaign-version', channel: 'email', revision: cap!.rev, reserved: 1, sent: 0 });
   expect(cap!.data).toEqual({ reserved: 1, sent: 0 });
   await f.service().dispatch(f.intent.commandId); expect(f.sends()).toBe(1);
+});
+it.each([
+  { kind: 'sent_lookup' as const, reason: 'sent_match' as const },
+  { kind: 'provider_result' as const, reason: 'provider_result_unknown' as const },
+  { kind: 'provider_result' as const, reason: 'provider_accepted' as const },
+])('cancelled outcome refuses unproven provider not-sent pairing %j', async proof => {
+  const f = await campaignFixture();
+  const reservation = await f.execution.reserveDispatch({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence);
+  const evidence = { commandId: f.intent.commandId, reservation, state: 'cancelled' as const, observedAt: f.options.clock.now(), ...proof,
+    rfcMessageId: `<${f.intent.commandId}@callie.invalid>`, providerIdentity: null };
+  await expect(f.policy.outcomePlan({ reservation, state: 'cancelled', observedAt: evidence.observedAt, evidenceRef: fingerprint(evidence) }, evidence)).rejects.toThrow('send_evidence_conflict');
+  expect(f.dynamo.inspect(campaignCapKey(f.version.id, 'email'))).toEqual({ reserved: 1, sent: 0 });
+});
+it('actual provider not-sent releases campaign reserved capacity once without progressing enrollment', async () => {
+  const f = await campaignFixture(); f.onSend(async () => new Response('', { status: 403 }));
+  expect((await f.service().dispatch(f.intent.commandId)).status).toBe('not_sent');
+  expect(f.dynamo.inspect(campaignCapKey(f.version.id, 'email'))).toEqual({ reserved: 0, sent: 0 });
+  expect(f.dynamo.inspect(campaignEnrollmentKey('enrollment'))).toMatchObject({ currentStepId: 'email-step' });
+  const records = await f.policy.sendEvidence(f.intent.commandId);
+  expect(records).toHaveLength(1); expect(records[0]).toMatchObject({ state: 'cancelled', kind: 'provider_result', reason: 'provider_not_sent', providerIdentity: null });
+  const event = (await f.execution.eventsAfter(null)).events.find(event => event.kind === 'action.outcome' && event.payload.actionId === 'campaign-action' && event.payload.state === 'cancelled');
+  expect(event).toHaveProperty('campaign.evidence.cancellationEvidence.evidenceRef', `send-${fingerprint(records[0])}`);
+  expect((await f.service().dispatch(f.intent.commandId)).status).toBe('not_sent');
+  expect(f.sends()).toBe(1); expect(f.dynamo.inspect(campaignCapKey(f.version.id, 'email'))).toEqual({ reserved: 0, sent: 0 });
 });

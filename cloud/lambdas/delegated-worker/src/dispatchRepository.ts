@@ -121,6 +121,7 @@ export class DynamoDispatchRepository {
   }
   async outcomePlan(outcome: AppendOutcomeInput, raw: SendEvidence): Promise<{ items: TransactWriteItem[]; campaign?: CampaignEventPayload }> {
     const evidence = sendEvidenceSchema.parse(raw); const intent = await this.loadIntent(evidence.commandId);
+    if (evidence.state === 'cancelled' && (evidence.kind !== 'provider_result' || evidence.reason !== 'provider_not_sent' || evidence.providerIdentity !== null)) throw new Error('send_evidence_conflict');
     if (!intent || fingerprint(evidence.reservation) !== fingerprint(outcome.reservation) || evidence.state !== outcome.state
       || evidence.observedAt !== outcome.observedAt || evidence.rfcMessageId !== `<${intent.commandId}@callie.invalid>`
       || intent.action.actionId !== outcome.reservation.actionId || intent.action.accountId !== outcome.reservation.accountId
@@ -138,7 +139,8 @@ export class DynamoDispatchRepository {
     const hash = fingerprint(evidence);
     const commandId = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
     const campaign = await this.campaignExecution.repository.prepareOutcomePlan({ commandId, accountId: intent.action.accountId,
-      actionId: intent.action.actionId, state: evidence.state, observedAt: evidence.observedAt });
+      actionId: intent.action.actionId, state: evidence.state, observedAt: evidence.observedAt,
+      ...(evidence.state === 'cancelled' ? { cancellationEvidence: { kind: 'provider_result' as const, reason: 'provider_not_sent' as const, providerIdentity: null, evidenceRef: `send-${hash}` } } : {}) });
     return { items: mergeDispatchConditions([...items, ...campaign.items]), campaign: campaign.payload };
   }
   async sendEvidence(commandId: string): Promise<SendEvidence[]> {
