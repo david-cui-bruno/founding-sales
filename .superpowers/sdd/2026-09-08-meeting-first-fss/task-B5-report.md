@@ -61,4 +61,10 @@ The genuine assembled regression RED preceded monkey's production extraction rep
 
 Preservation is coverage of existing behavior, not a claimed missing-production-feature TDD cycle. Initial fixture errors are listed above rather than misrepresented as regression RED. Full exact rows/catalog comparisons passed after fixture correction. No production implementation was written by B5.
 
-Commits and exact path inspection are recorded below after scoped commit.
+## Commit and dependency provenance
+
+Acceptance commit: `636bc2bd6eecb3ff43cc744aa20ad2c8577538cb` (`test: prove PM preparation and legacy-data preservation`). Committed with `git commit --only` and the four exact approved paths. `git diff-tree --no-commit-id --name-only -r 636bc2b` was inspected and lists only this report and the three new B5 TypeScript files. Scoped `git diff --cached --check` passed.
+
+The assembled GREEN consumed B2 extraction repair `eb55251` and B3 repair `7bc9dfb`. B4 workspace/default binding is the real current source, not a replacement policy port. The schema22 migration was still camel-owned/untracked in the shared working tree when B5 committed. Root must integrate camel's schema22 registration/gate changes before treating B5 as independently reproducible from its commit alone. B5 neither committed nor modified those dependencies. No push performed.
+
+This report-only follow-up records the acceptance commit without rewriting it. Coordinator review and all separately authorized real gates remain pending.
