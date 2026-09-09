@@ -6,7 +6,7 @@ const grant: GoogleGrant = { provider: 'google', subject: 'subject-fiction', ema
   calendars: { confirmed: true, ownedCalendarId: 'founder@example.test', conflictCalendarIds: ['founder@example.test', 'other@example.test'] } };
 const identity = providerMeetingIdentity('ws-fiction', 'meeting-fiction', 'founder@example.test');
 const slot = { ...identity, start: '2026-09-15T14:00:00.000Z', end: '2026-09-15T14:30:00.000Z', timezone: 'America/New_York',
-  summary: 'Fictional meeting', attendeeEmails: ['prospect@example.test'], inviteAttendees: true, location: { kind: 'text' as const, value: 'Fictional office' }, etag: null };
+  summary: 'Fictional meeting', attendeeEmails: ['prospect@example.test'], inviteAttendees: true, location: { kind: 'text' as const, value: 'Fictional office' }, etag: null as string | null };
 const event = { id: identity.providerEventId, etag: '"v1"', status: 'confirmed', start: { dateTime: slot.start }, end: { dateTime: slot.end },
   attendees: [{ email: 'prospect@example.test', responseStatus: 'needsAction' }] };
 function fixture(responses: (Response | Error)[]) {
@@ -20,6 +20,11 @@ function fixture(responses: (Response | Error)[]) {
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status });
 const signal = () => new AbortController().signal;
 describe('actual Calendar HTTP adapter', () => {
+  it.each(['primary', 'Primary', 'Founder@example.test', ' founder@example.test', 'founder%40example.test', 'arbitrary-selector'])('rejects unproven selector %s before any HTTP', selector => {
+    let calls = 0;
+    expect(() => createCalendarProvider({ grant: { ...grant, calendars: { confirmed: true, ownedCalendarId: selector, conflictCalendarIds: [selector] } }, accessToken: 'fictional', fetch: async () => { calls++; return json(event); } })).toThrow('calendar_resource_id_required');
+    expect(calls).toBe(0);
+  });
   it('creates a stable Google-valid identity and deliberately invites attendees', async () => {
     const { provider, requests } = fixture([json(event)]);
     expect(identity.providerEventId).toMatch(/^[0-9a-v]{5,1024}$/);

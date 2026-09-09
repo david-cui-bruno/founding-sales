@@ -3,7 +3,7 @@ import { workerEventSchema } from '../../../../src/shared/contracts/delegationCo
 import { saveMeetingOfferSchema, meetingOfferSchema, type MeetingOffer, reserveMeetingSchema, saveSchedulingRulesSchema, schedulingRulesSchema, meetingReservationSchema, meetingOutcomeSchema, type ReserveMeetingInput, type MeetingReservation, type MeetingReservationResult, type MeetingOutcome } from '../../../../src/shared/contracts/meetingContract';
 import { threadProjectionSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { validateMeetingIntent, matchOfferedReply, offeredSlotText } from '../../../../src/shared/meetings/schedulingRules';
-import { providerMeetingIdentity } from '../../../../src/main/meetings/calendarProvider';
+import { providerMeetingIdentity, requireExplicitCalendarId } from '../../../../src/main/meetings/calendarProvider';
 import { DynamoStore, fingerprint, keyPart, type RepositoryOptions } from './dynamoStore';
 import { executionAuthorityKey, executionAuthorityFields, authorityRecordSchema } from './executionRepository';
 import { mailThreadKey, mailSuppressionKey } from './threadIntakeRepository';
@@ -80,11 +80,14 @@ export class DynamoMeetingRepository {
     await this.store.transact([...accepted.checks, this.store.absent(mailSuppressionKey(offer.accountId)), this.store.put(key, offer, previous?.rev ?? null)]);
   }
   async saveRules(input: z.infer<typeof saveSchedulingRulesSchema>): Promise<void> {
-    const { rules, expectedRevision } = saveSchedulingRulesSchema.parse(input); const old = await this.store.get<unknown>(rulesKey(rules.ownedCalendarId));
+    const { rules, expectedRevision } = saveSchedulingRulesSchema.parse(input);
+    [rules.ownedCalendarId, ...rules.conflictCalendarIds].forEach(requireExplicitCalendarId);
+    const old = await this.store.get<unknown>(rulesKey(rules.ownedCalendarId));
     if ((old ? schedulingRulesSchema.parse(old.data).revision : null) !== expectedRevision || rules.revision !== (expectedRevision ?? 0) + 1 || !rules.confirmed) throw new Error('rules_revision_conflict');
     await this.store.transact([this.store.put(rulesKey(rules.ownedCalendarId), rules, old?.rev ?? null)]);
   }
   async rules(calendarId: string) {
+    requireExplicitCalendarId(calendarId);
     const stored = await this.store.get<unknown>(rulesKey(calendarId)); if (!stored) throw new Error('rules_missing');
     const rules = schedulingRulesSchema.parse(stored.data); if (rules.ownedCalendarId !== calendarId) throw new Error('rules_identity_conflict');
     return rules;
@@ -95,16 +98,28 @@ export class DynamoMeetingRepository {
   }
   private async evidence(input: ReserveMeetingInput) {
     const { intent, calendarId } = input; this.store.workspace(intent.workspaceId);
+    requireExplicitCalendarId(calendarId);
     const storedRules = await this.store.get<unknown>(rulesKey(calendarId)); if (!storedRules) throw new Error('rules_missing');
     const rules = schedulingRulesSchema.parse(storedRules.data);
+    [rules.ownedCalendarId, ...rules.conflictCalendarIds].forEach(requireExplicitCalendarId);
     if (rules.ownedCalendarId !== calendarId) throw new Error('rules_identity_conflict');
     const valid = validateMeetingIntent(intent, rules, this.store.now()); if (valid.allowed === false) throw new Error(valid.reason);
     const auth = await this.store.get<unknown>(executionAuthorityKey(intent.accountId)); if (!auth) throw new Error('authority_missing');
     const current = authorityRecordSchema.parse(auth.data);
     if (current.authority.accountId !== intent.accountId || current.authority.owner !== 'worker' || current.authority.state !== 'active'
       || current.authority.generation !== intent.expectedAuthorityGeneration || current.version !== intent.expectedVersion) throw new Error('stale_authority');
-    const intake = await createIntakeBarrier(this.store).check({ accountId: intent.accountId, mailboxSubject: intent.mailboxSubject }, new AbortController().signal);
+    const barrier = createIntakeBarrier(this.store);
+    const subject = { accountId: intent.accountId, mailboxSubject: intent.mailboxSubject, requiredThreadId: intent.threadId };
+    const intake = await barrier.check({ ...subject, requiredRecipient: intent.attendeeEmails[0] }, new AbortController().signal);
     if (intake.status !== 'ready') throw new Error(intake.reason);
+    for (const recipient of intent.attendeeEmails.slice(1)) {
+      const additional = await barrier.check({ ...subject, requiredRecipient: recipient }, new AbortController().signal);
+      if (additional.status !== 'ready') throw new Error(additional.reason);
+      // Every attendee must be covered by the SAME snapshot. Do not combine
+      // differently revised scopes or duplicate Dynamo transaction targets.
+      if (fingerprint(additional.checks) !== fingerprint(intake.checks)) throw new Error('intake_incomplete');
+      intake.validUntil = Math.min(intake.validUntil, additional.validUntil);
+    }
     const now = Date.parse(this.store.now());
     const threadKey = mailThreadKey(intent.accountId, intent.threadId); const thread = await this.store.get<unknown>(threadKey);
     if (!thread) throw new Error('thread_missing'); const projection = threadProjectionSchema.parse(thread.data);
@@ -149,6 +164,7 @@ export class DynamoMeetingRepository {
     const { rules, checks, mixed, validUntil, auth, current } = await this.evidence(input);
     const grantRecord = await this.store.get<{ grant: unknown }>(`GOOGLE_GRANT#${keyPart(intent.pairingId)}`);
     const grant = googleGrantSchema.parse(grantRecord?.data.grant);
+    if (grant.calendars) [grant.calendars.ownedCalendarId, ...grant.calendars.conflictCalendarIds].forEach(requireExplicitCalendarId);
     if (grant.subject !== intent.mailboxSubject || grant.owner !== 'remote' || grant.calendars?.ownedCalendarId !== calendarId
       || rules.conflictCalendarIds.some(id => !grant.calendars?.conflictCalendarIds.includes(id))) throw new Error('calendar_not_selected');
     if (mixed) {
@@ -184,17 +200,26 @@ export class DynamoMeetingRepository {
     return { kind: 'reserved', record };
   }
   async recordOutcome(commandId: string, input: MeetingOutcome): Promise<MeetingOutcome> {
-    const outcome = meetingOutcomeSchema.parse(input); const command = await this.store.get<unknown>(commandKey(commandId)); if (!command) throw new Error('command_missing');
+    let outcome = meetingOutcomeSchema.parse(input); const command = await this.store.get<unknown>(commandKey(commandId)); if (!command) throw new Error('command_missing');
     const record = meetingReservationSchema.parse(command.data); const identity = record.identity;
     if (outcome.meetingId !== identity.meetingId || outcome.calendarId !== identity.calendarId || outcome.providerEventId !== identity.providerEventId
       || outcome.event && (outcome.event.meetingId !== identity.meetingId || outcome.event.calendarId !== identity.calendarId || outcome.event.providerEventId !== identity.providerEventId)) throw new Error('provider_identity_conflict');
     if (outcome.status === 'cancelled' ? outcome.event?.status !== 'cancelled' : outcome.status === 'booked' && outcome.event?.status !== 'confirmed') throw new Error('provider_status_conflict');
     const prior = await this.store.get<unknown>(meetingKey(identity.meetingId)); if (!prior) throw new Error('meeting_missing');
-    const meeting = meetingSchema.parse(prior.data); if (meeting.outcome?.status === 'cancelled') return meeting.outcome;
+    const meeting = meetingSchema.parse(prior.data);
+    if (meeting.outcome?.status === 'cancelled') outcome = meeting.outcome;
     if (meeting.commandId !== commandId && outcome.status !== 'cancelled') throw new Error('stale_meeting_outcome');
-    if (fingerprint(meeting.outcome) === fingerprint(outcome)) { await this.publishRecorded([record.reservationSequence, record.outcomeSequence]); return outcome; }
-    if (meeting.history.length >= 200) throw new Error('meeting_history_capacity_exceeded');
     const head = await this.store.get<unknown>(calendarKey(identity.calendarId)); if (!head) throw new Error('calendar_missing'); const calendar = calendarSchema.parse(head.data);
+    const active = outcome.status === 'cancelled' && calendar.activeCommandId && calendar.activeCommandId !== commandId
+      ? await this.store.get<unknown>(commandKey(calendar.activeCommandId)) : null;
+    const activeRecord = active ? meetingReservationSchema.parse(active.data) : null;
+    const settleActive = activeRecord && activeRecord.intent.accountId === record.intent.accountId
+      && fingerprint(activeRecord.identity) === fingerprint(identity);
+    const cleanup = outcome.status === 'cancelled' && (calendar.activeCommandId === commandId || settleActive || calendar.occupied.some(o => o.meetingId === identity.meetingId));
+    if (fingerprint(meeting.outcome) === fingerprint(outcome) && fingerprint(record.outcome) === fingerprint(outcome) && !cleanup) {
+      await this.publishRecorded([record.reservationSequence, record.outcomeSequence]); return outcome;
+    }
+    if (meeting.history.length >= 200) throw new Error('meeting_history_capacity_exceeded');
     let occupied = calendar.occupied;
     if (outcome.status === 'cancelled') occupied = occupied.filter(o => o.meetingId !== identity.meetingId);
     // Unknown and held provider-backed states retain ALL old/new intervals.
@@ -206,13 +231,13 @@ export class DynamoMeetingRepository {
     if (!auth) throw new Error('authority_missing'); const current = authorityRecordSchema.parse(auth.data);
     if (current.authority.accountId !== record.intent.accountId) throw new Error('authority_identity_conflict');
     const next = { ...current, version: current.version + 1 };
-    const outbox = await this.store.eventItems(workerEventSchema.parse({ id: `meeting-${fingerprint([commandId, outcome])}`, workspaceId: record.intent.workspaceId,
+    const outbox = await this.store.eventItems(workerEventSchema.parse({ id: `meeting-${fingerprint([commandId, prior.rev, outcome])}`, workspaceId: record.intent.workspaceId,
       accountId: record.intent.accountId, authorityGeneration: record.intent.expectedAuthorityGeneration, aggregateVersion: next.version,
       kind: 'meeting.outcome', payload: { commandId, outcome, observedAt: this.store.now() } }));
     await this.store.transact([this.store.put(authKey, next, auth.rev, executionAuthorityFields(next), executionAuthorityFields(current)),
-      ...outbox.items, this.store.put(commandKey(commandId), { ...record, state: 'recorded', outcome, outcomeSequence: outbox.sequence }, command.rev),
+      ...outbox.items, ...(settleActive && active && activeRecord ? [this.store.put(commandKey(calendar.activeCommandId!), { ...activeRecord, state: 'recorded', outcome, outcomeSequence: outbox.sequence }, active.rev)] : []), this.store.put(commandKey(commandId), { ...record, state: 'recorded', outcome, outcomeSequence: outbox.sequence }, command.rev),
       this.store.put(meetingKey(identity.meetingId), { ...meeting, outcome, history: [...meeting.history, outcome] }, prior.rev),
-      this.store.put(calendarKey(identity.calendarId), { occupied, activeCommandId: calendar.activeCommandId === commandId && outcome.status !== 'unknown' ? null : calendar.activeCommandId }, head.rev)]);
+      this.store.put(calendarKey(identity.calendarId), { occupied, activeCommandId: (calendar.activeCommandId === commandId || settleActive) && outcome.status !== 'unknown' ? null : calendar.activeCommandId }, head.rev)]);
     await this.publishRecorded([record.reservationSequence, outbox.sequence]);
     return outcome;
   }

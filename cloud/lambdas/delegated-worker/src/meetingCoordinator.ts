@@ -1,6 +1,6 @@
 import { meetingIntentSchema, type MeetingIntent, type MeetingOutcome, type CalendarPort, type CalendarResult, type MeetingReservation, type ProviderMeeting, type SchedulingRules } from '../../../../src/shared/contracts/meetingContract';
 import { validateMeetingIntent, overlapsWithBuffers } from '../../../../src/shared/meetings/schedulingRules';
-import { createCalendarProvider, providerMeetingIdentity } from '../../../../src/main/meetings/calendarProvider';
+import { createCalendarProvider, providerMeetingIdentity, requireExplicitCalendarId } from '../../../../src/main/meetings/calendarProvider';
 import { fingerprint } from './dynamoStore';
 import { DynamoMeetingRepository } from './meetingRepository';
 import { RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
@@ -52,11 +52,13 @@ export class MeetingCoordinator {
     const identity = providerMeetingIdentity(intent.workspaceId, intent.meetingId, calendarId);
     let reserved: MeetingReservation | null = null;
     try {
+      requireExplicitCalendarId(calendarId);
       const held = await repository.held({ intent, calendarId }); if (held) return held;
       const old = await repository.command(intent.commandId);
       if (old && old.fingerprint !== fingerprint({ intent, calendarId })) throw new Error('command_fingerprint_conflict');
       const rules = old?.rules ?? await repository.rules(calendarId);
       if (!old) { const valid = validateMeetingIntent(intent, rules, repository.store.now()); if (valid.allowed === false) throw new Error(valid.reason); }
+      [rules.ownedCalendarId, ...rules.conflictCalendarIds].forEach(requireExplicitCalendarId);
       const access = await authorization.authorizedAccess(intent.pairingId, ['availability', 'event_write'], signal);
       if (access.grant.subject !== intent.mailboxSubject) throw new Error('google_subject_mismatch');
       const calendar = createCalendarProvider({ ...access, fetch: this.input.fetch });

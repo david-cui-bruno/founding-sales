@@ -16,10 +16,16 @@ export function providerMeetingIdentity(workspaceId: string, meetingId: string, 
   [workspaceId, meetingId, calendarId].forEach(value => id.parse(value));
   return { meetingId, calendarId, providerEventId: createHash('sha256').update(JSON.stringify([workspaceId, meetingId, calendarId])).digest('hex') };
 }
+// Selection is not an alias-resolution or resource-access proof. Until such a
+// proof exists, accept only exact explicit IDs, never primary or guessed aliases.
+export function requireExplicitCalendarId(value: string): void {
+  if (!z.string().email().max(255).safeParse(value).success || !/^[a-z0-9._#-]+@[a-z0-9.-]+$/.test(value)) throw new Error('calendar_resource_id_required');
+}
 /** Fetch is mandatory: construction never silently selects a live network boundary. */
 export function createCalendarProvider(input: { grant: GoogleGrant; accessToken: string; fetch: typeof globalThis.fetch }): CalendarPort {
   requireCapabilities(input.grant, ['availability', 'event_write']);
   const selected = googleCalendarSelectionSchema.parse(input.grant.calendars);
+  [selected.ownedCalendarId, ...selected.conflictCalendarIds].forEach(requireExplicitCalendarId);
   if (!input.accessToken || /[\r\n]/.test(input.accessToken)) throw new Error('invalid_access_token');
   const identity = (value: MeetingIdentity) => {
     id.parse(value.meetingId); eventId.parse(value.providerEventId);
