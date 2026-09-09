@@ -107,6 +107,7 @@ Multiple matches, wrong/missing References, stale offers, conflicting newer cont
 
 ## Remaining concerns / gates
 
+- C4 review follow-up reported after source commit: root/C3/C4 are adding persisted full-account `MAIL_SCOPE` revision/fingerprint bindings and rescan-on-change to prevent recipient-subset polls advancing account currency. C5 consumes their shared intake barrier and creates no private poll targets. Re-run composed reservation tests against that final barrier before integration acceptance.
 - Independent coordinator review remains appropriate, especially real two-client Dynamo semantics, offer evidence and unknown reconciliation. ConditionalCommandHarness interprets actual SDK conditions but is still synthetic, not live DynamoDB acceptance.
 - Injected HTTP tests execute the real Calendar adapter. They do not prove Google permissions/resource ownership, actual Meet provisioning, invitation delivery, real attendee acceptance or live Calendar behavior.
 - C6 owns scheduler/handler wiring, normal authenticated transport and outbox drain, relevant preflight polling orchestration, runtime activation, and authorized remote/reconnect acceptance. C5 delivers real source event/projection integration, not a fake claim of live completion.
