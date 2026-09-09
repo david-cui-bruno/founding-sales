@@ -518,3 +518,24 @@ it.each(['workspaceId', 'accountId', 'pairingId', 'mailboxSubject'] as const)('f
   await f.store.transact([f.store.put(ownerSourceKey('acct'), { ...row!.data, [field]: 'other' }, row!.rev)]);
   await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence)).rejects.toThrow('source_configuration_unavailable');
 });
+it('campaign reservation and accepted outbox events carry exact durable cap snapshots without extra authority events', async () => {
+  const f = await campaignFixture();
+  expect((await f.service().dispatch(f.intent.commandId)).status).toBe('provider_accepted');
+  const events = (await f.execution.eventsAfter(null)).events.filter(event => event.kind === 'action.outcome' && event.payload.actionId === 'campaign-action');
+  const reserved = events.find(event => event.kind === 'action.outcome' && event.payload.state === 'dispatching');
+  const accepted = events.find(event => event.kind === 'action.outcome' && event.payload.state === 'provider_accepted');
+  expect(reserved).toHaveProperty('campaign.cap', { campaignVersionId: 'campaign-version', channel: 'email', revision: 2, reserved: 1, sent: 0 });
+  expect(accepted).toHaveProperty('campaign.cap', { campaignVersionId: 'campaign-version', channel: 'email', revision: 3, reserved: 0, sent: 1 });
+  expect(events.filter(event => event.kind === 'action.outcome' && event.payload.state === 'dispatching')).toHaveLength(1);
+  expect(events.filter(event => event.kind === 'action.outcome' && event.payload.state === 'provider_accepted')).toHaveLength(1);
+});
+
+it('unknown campaign event reports retained reserved cap rather than a zero default', async () => {
+  const f = await campaignFixture(); f.onSend(async () => { throw new Error('timeout'); });
+  expect((await f.service().dispatch(f.intent.commandId)).status).toBe('unknown');
+  const event = (await f.execution.eventsAfter(null)).events.find(event => event.kind === 'action.outcome' && event.payload.actionId === 'campaign-action' && event.payload.state === 'unknown');
+  const cap = await f.store.get(campaignCapKey('campaign-version', 'email'));
+  expect(event).toHaveProperty('campaign.cap', { campaignVersionId: 'campaign-version', channel: 'email', revision: cap!.rev, reserved: 1, sent: 0 });
+  expect(cap!.data).toEqual({ reserved: 1, sent: 0 });
+  await f.service().dispatch(f.intent.commandId); expect(f.sends()).toBe(1);
+});

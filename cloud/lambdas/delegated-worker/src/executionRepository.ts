@@ -170,7 +170,7 @@ export class DynamoExecutionRepository implements ExecutionRepository {
     const outbox = await this.store.eventItems(workerEventSchema.parse({ id: `dispatch-${fingerprint(reservation)}`,
       workspaceId: parsed.workspaceId, accountId: parsed.accountId, authorityGeneration: reservation.authorityGeneration,
       aggregateVersion: next.version, kind: 'action.outcome', payload: { actionId: parsed.actionId, state: 'dispatching',
-        contentHash: parsed.contentHash, targetHash: parsed.targetHash, observedAt: this.store.now(), evidenceRef: parsed.approvalId } }));
+        contentHash: parsed.contentHash, targetHash: parsed.targetHash, observedAt: this.store.now(), evidenceRef: parsed.approvalId }, ...(plan.campaign ? { campaign: plan.campaign } : {}) }));
     await this.store.transact([this.store.put(authKey(parsed.accountId), next, authority.rev, authFields(next), authFields(authority.data)),
       this.store.put(key, { ...prepared, state: 'dispatching', reservation }, action.rev, { state: 'dispatching' }, { state: prepared.state }), ...plan.finalize(), ...outbox.items]);
     // The committed outbox is drained separately. No external await may delay

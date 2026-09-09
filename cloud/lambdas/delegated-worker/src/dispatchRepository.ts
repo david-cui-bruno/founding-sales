@@ -52,7 +52,7 @@ export const sendEvidenceSchema = z.strictObject({ commandId: z.uuid(), reservat
   kind: z.enum(['provider_result', 'sent_lookup']), reason: z.enum(['provider_accepted', 'provider_not_sent', 'provider_result_unknown', 'sent_match']),
   rfcMessageId: rfcId, providerIdentity: z.strictObject({ messageId: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/), threadId: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/).nullable() }).nullable() });
 export type SendEvidence = z.infer<typeof sendEvidenceSchema>;
-export type DispatchReservationPlan = { finalize(): TransactWriteItem[] };
+export type DispatchReservationPlan = { finalize(): TransactWriteItem[]; campaign?: CampaignEventPayload };
 
 /** A persisted policy reader/admission capability, NOT an execution repository.
  * It cannot reserve or send. C1 alone atomically consumes its conditions and caps.
@@ -225,7 +225,7 @@ export class DynamoDispatchRepository {
       return mergeDispatchConditions([...checks, ...(campaign?.finalize() ?? []), ...this.authorization.accessChecks(evidence, { pairingId: intent.pairingId, subject: intent.mailboxSubject, requiredCapabilities: ['send', 'relevant_read'] })]);
     };
     finalize();
-    return { finalize };
+    return { finalize, ...(campaign ? { campaign: { commandId: intent.commandId, version: null, enrollment: null, evidence: null, cap: campaign.cap } } : {}) };
   }
 }
 
