@@ -207,3 +207,33 @@ npx --no-install eslint --no-ignore --max-warnings 0 cloud/lambdas/delegated-wor
 Observed result: 101 tests (51 policy integration, 10 barrier, 12 reconciliation, 28 C1), typecheck exit 0, lint exit 0. The historical repaired test tree used the contemporaneous C3 producer and C6 schemas. Current shared source additionally contains D1 integration, so rerunning current source yields a different count, not an isolated re-execution of the old commit. All HTTP fixtures were fictional, and Dynamo condition acceptance was through the SDK interpreter only.
 
 D1 is separate: C4 source splice `d0fcade` reached 115 focused GREEN after repair; end-to-end integration/re-review remains in progress across C6 and guppy's subsequent internal route/context evidence changes. Do not attribute D1 completeness to the 101-test repair result or infer any live send authorization.
+
+## Separate final source-configuration fence (01:36 UTC)
+
+Root separately released this narrow delta after frozen repair review: `3db307b`, two paths (`dispatchRepository.ts`, `dispatchRepository.test.ts`). It does not alter the historical `12498c0` repair snapshot or rewrite the `d0fcade` campaign splice.
+
+Uses C6 canonical `ownerSourceKey(accountId)` and `ownerSourceConfigurationSchema` from `ownerCommandContract.ts`, with no duplicated schema/table/scheduler permission. Final policy requires a real nonmissing active config whose workspace/account/pairing/mailbox exactly match the immutable dispatch intent. Exactly one `store.check(key,row.rev)` joins the existing final transaction. Config grants no message permission, and AUTH, approved draft, correspondence, intake, suppression, caps and grants remain independent requirements.
+
+Positive fixtures now call the real `OwnerCommandCoordinator.apply(configure-owner, Bearer credential)` using actual WorkerAuth commands:write principal and the fictional real-C2 grant flow. Active admission validates canonical selected ACCOUNT plus actual thread participants and matching full C3 scope. The fixture has no per-message scheduler flag. Explicit individually approved standalone reply remains reachable and sends once. Admission advances AUTH version; test expectations now use the resulting version rather than mutating AUTH backward.
+
+Observed RED: five new checks failed while the preceding 65 integration tests passed. Missing config, authenticated owner pause and mailbox deselection all still produced reservation plans. The separate exact command below then demonstrated both stale plans actually committed after real owner changes, not merely missing an inspected field:
+
+```bash
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH";
+npm test --prefix cloud/lambdas/delegated-worker -- test/dispatchRepository.test.ts -t 'final source config CAS'
+```
+
+Two RED failures were resolved promises instead of expected transaction cancellation. After the canonical final check, 70 integration tests passed. Added four persisted identity-corruption refusal checks and a real authenticated selective source pause during credential preparation: active AUTH did not bypass source pause, zero provider sends and zero cap consumption. Final four-file command from the earlier report passed **125 tests (75/10/12/28)**. All HTTP fixtures remained fictional, and CAS execution remained the SDK interpreter, not live DynamoDB.
+
+## Separate root-compatible TypeScript narrowing
+
+`c600b30` changes only `sendReconciler.ts` accepted-evidence return projection to `{messageId, threadId: threadId ?? null}`. No Sent matching condition changed. Reproduced TS2322 at line60 with root-compatible noImplicitAny / strictNullChecks-off compilation before fixing. The initial test-entrypoint check also exposed existing unannotated-null/empty-array fixture errors in that mode, so this was not counted as passing test compilation. Strict worker compilation includes all worker tests and passed.
+
+Root-compatible **production source** check, exit0 after the fix:
+
+```bash
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH";
+npx --no-install tsc --noEmit --skipLibCheck --esModuleInterop --target ESNext --module ESNext --moduleResolution node --noImplicitAny cloud/lambdas/delegated-worker/src/dispatchRepository.ts cloud/lambdas/delegated-worker/src/dispatchService.ts cloud/lambdas/delegated-worker/src/sendReconciler.ts cloud/lambdas/delegated-worker/src/intakeBarrier.ts cloud/lambdas/delegated-worker/src/executionRepository.ts
+```
+
+`npm run typecheck --prefix cloud/lambdas/delegated-worker` and scoped `eslint --no-ignore --max-warnings 0` on the three changed TS paths passed. The final 125-test rerun happened after the nullable projection fix. Exact-path diff check and committed file lists passed inspection. C6 owns admission implementation and shared contract commits. Subsequent C6/D1 integration changes require their own rerun/re-review; no live/end-to-end activation claim is added here.
