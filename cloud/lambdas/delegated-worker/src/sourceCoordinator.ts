@@ -59,8 +59,12 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     });
     const next = result.LastEvaluatedKey?.sk?.S ?? null;
     if (next && (!next.startsWith(prefix) || result.LastEvaluatedKey?.pk?.S !== store.key('').pk.S || next !== rows.at(-1)?.key || after && next <= after)) throw new Error('source_cursor_mismatch');
-    return { rows, async advance() {
-      if (rows.length || after || next) await store.transact([store.put(cursorKey, { after: next }, cursor?.rev ?? null)]);
+    let revision = cursor?.rev ?? null;
+    return { rows, async advance(position: string | null = next) {
+      if (rows.length || after || next) {
+        await store.transact([store.put(cursorKey, { after: position }, revision)]);
+        revision = (revision ?? 0) + 1;
+      }
     } };
   }
   async function source(accountId: string): Promise<SourceRecord | null> {
@@ -154,11 +158,6 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     const config = await unchanged(active); if (!config.calendarId || !config.mailboxSubject) return;
     const repository = new DynamoMeetingRepository(store.options, input.authorization);
     const coordinator = new MeetingCoordinator({ repository, authorization: input.authorization, calendarId: config.calendarId, fetch });
-    const offersCursor = await meetingCursor(config.accountId, 'offers');
-    const offers = await repository.listAcceptedOffers(config.accountId, offersCursor.after, PAGE_LIMIT);
-    for (const offer of offers.offers) { signal.throwIfAborted(); await unchanged(active);
-      await repository.prepareOfferedReply({ accountId: config.accountId, threadId: offer.threadId }); }
-    await offersCursor.advance(offers.nextCursor);
     const workCursor = await meetingCursor(config.accountId, 'work');
     const work = await repository.listPreparedIntents(config.accountId, workCursor.after, PAGE_LIMIT);
     const processed = new Set<string>();
@@ -168,6 +167,18 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
       if (result.status === 'held' || result.status === 'unknown') report.held++;
     }
     await workCursor.advance(work.nextCursor);
+    const offersCursor = await meetingCursor(config.accountId, 'offers');
+    const offers = await repository.listAcceptedOffers(config.accountId, offersCursor.after, PAGE_LIMIT);
+    // Reserve/settle one current agreement before freezing the next account version.
+    // Existing reserved/unknown work is never re-prepared or resent.
+    for (const offer of offers.offers) { signal.throwIfAborted(); await unchanged(active);
+      const item = await repository.prepareOfferedReply({ accountId: config.accountId, threadId: offer.threadId });
+      if (!item || processed.has(item.input.intent.commandId)) continue;
+      if (item.input.calendarId !== config.calendarId || item.input.intent.pairingId !== config.pairingId || item.input.intent.mailboxSubject !== config.mailboxSubject) continue;
+      const result = await coordinator.coordinateMeeting(item.input.intent, signal); processed.add(item.input.intent.commandId); report.meetings++;
+      if (result.status === 'held' || result.status === 'unknown') report.held++;
+    }
+    await offersCursor.advance(offers.nextCursor);
     const reservationCursor = await meetingCursor(config.accountId, 'reservations');
     const reservations = await repository.listReservations(config.accountId, reservationCursor.after, PAGE_LIMIT);
     for (const record of reservations.records) { signal.throwIfAborted();
@@ -179,19 +190,15 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     // Empty filtered pages still carry a continuation and must advance.
     await reservationCursor.advance(reservations.nextCursor);
   }
-  return { async tick(callerSignal: AbortSignal): Promise<SourceTickReport> {
-    const report: SourceTickReport = { status: 'inactive', researchPrepared: 0, researchCompleted: 0, mailPolls: 0, dispatches: 0,
-      sendReconciliations: 0, meetings: 0, held: 0 };
-    if (callerSignal.aborted) return { ...report, status: 'aborted' };
-    const signal = AbortSignal.any([callerSignal, AbortSignal.timeout(45000)]);
-    const fetch: typeof globalThis.fetch = (resource, init) => input.fetch(resource, { ...init, signal: AbortSignal.any([signal, ...(init?.signal ? [init.signal] : [])]) });
-    const dispatch = createDispatchService({ execution, policy, authorization: input.authorization, fetch });
-    const reconciler = createSendReconciler({ execution, policy, authorization: input.authorization, fetch });
-    try {
-      try { await research(signal, report); } catch { report.held++; }
+  function boundFetch(signal: AbortSignal): typeof globalThis.fetch {
+    return (resource, init) => input.fetch(resource, { ...init, signal: AbortSignal.any([signal, ...(init?.signal ? [init.signal] : [])]) });
+  }
+  async function configurations(signal: AbortSignal, report: SourceTickReport) {
+    const fetch = boundFetch(signal);
       const configs = await page('OWNER_SOURCE#');
       for (const row of configs.rows) {
         signal.throwIfAborted();
+        await configs.advance(row.key);
         try {
           const parsed = ownerSourceConfigurationSchema.parse(row.data);
           if (row.key !== ownerSourceKey(parsed.accountId)) throw new Error('source_identity_mismatch');
@@ -205,10 +212,17 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
           await meetings(active, signal, fetch, report);
         } catch { report.held++; }
       }
+      signal.throwIfAborted();
       await configs.advance();
+  }
+  async function submittedCommands(signal: AbortSignal, report: SourceTickReport) {
+    const fetch = boundFetch(signal);
+    const dispatch = createDispatchService({ execution, policy, authorization: input.authorization, fetch });
+    const reconciler = createSendReconciler({ execution, policy, authorization: input.authorization, fetch });
       const commands = await page('COMMAND#');
       for (const row of commands.rows) {
         signal.throwIfAborted();
+        await commands.advance(row.key);
         const parsed = submittedSchema.safeParse(row.data);
         if (!parsed.success || !['submit-approved-reply', 'approve-reply'].includes(parsed.data.command.kind)) continue;
         try {
@@ -243,16 +257,43 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
           if (['provider_accepted', 'cancelled', 'human_reported_sent'].includes(action.state)) continue;
           await unchanged(active); signal.throwIfAborted(); report.status = 'completed';
           if (action.reservation || action.state === 'dispatching' || action.state === 'unknown') {
-            await reconciler.reconcileSend(intent.commandId); report.sendReconciliations++;
+            await reconciler.reconcileSend(intent.commandId, signal); report.sendReconciliations++;
           } else if (action.state === 'prepared' || action.state === 'queued') {
-            const result = await dispatch.dispatch(intent.commandId); report.dispatches++;
+            const result = await dispatch.dispatch(intent.commandId, signal); report.dispatches++;
             if (result.status === 'held') report.held++;
           }
         } catch { report.held++; }
       }
+      signal.throwIfAborted();
       await commands.advance();
-      await publications(signal);
+  }
+  return { async tick(callerSignal: AbortSignal): Promise<SourceTickReport> {
+    const report: SourceTickReport = { status: 'inactive', researchPrepared: 0, researchCompleted: 0, mailPolls: 0, dispatches: 0,
+      sendReconciliations: 0, meetings: 0, held: 0 };
+    if (callerSignal.aborted) return { ...report, status: 'aborted' };
+    const deadline = new AbortController(); const timer = setTimeout(() => deadline.abort(), 45000);
+    const signal = AbortSignal.any([callerSignal, deadline.signal]);
+    const phases = [research, configurations, submittedCommands, publications] as const;
+    const key = 'SOURCE_PHASE_CURSOR';
+    try {
+      const row = await store.get<unknown>(key);
+      const start = row ? z.strictObject({ next: integer.max(phases.length - 1) }).parse(row.data).next : 0;
+      let revision = row?.rev ?? null;
+      for (let turn = 0; turn < phases.length; turn++) {
+        signal.throwIfAborted();
+        const index = (start + turn) % phases.length;
+        // Persist the next turn BEFORE IO. Crash/timeout advances fairness only,
+        // never a receipt, authority, or permission to resend reserved work.
+        await store.transact([store.put(key, { next: (index + 1) % phases.length }, revision)]);
+        revision = (revision ?? 0) + 1;
+        const phaseDeadline = new AbortController(); const phaseTimer = setTimeout(() => phaseDeadline.abort(), 10000);
+        const phaseSignal = AbortSignal.any([signal, phaseDeadline.signal]);
+        try { await phases[index]!(phaseSignal, report); }
+        catch { report.held++; }
+        finally { clearTimeout(phaseTimer); }
+      }
     } catch { if (!signal.aborted) report.held++; }
+    finally { clearTimeout(timer); }
     if (signal.aborted) report.status = 'aborted';
     return report;
   } };

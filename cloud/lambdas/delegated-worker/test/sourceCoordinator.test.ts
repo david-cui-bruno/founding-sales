@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { QueryCommand, TransactWriteItemsCommand, type QueryCommandInput } from '@aws-sdk/client-dynamodb';
 import { createSourceCoordinator } from '../src/sourceCoordinator';
 import { WorkerAuth } from '../src/workerAuth';
@@ -320,4 +320,110 @@ it('rejects a command payload changed independently of its durable receipt finge
   const key = `COMMAND#${f.submit.commandId}`; const row = (await f.auth.store.get<{command:unknown}>(key))!;
   await f.auth.store.transact([f.auth.store.put(key, { ...row.data, command: { ...f.submit, accountId: 'other-account' } }, row.rev)]);
   await f.source().tick(new AbortController().signal); expect(f.sends()).toBe(0);
+});
+it('books two independently accepted offers for the same account without freezing the same authority version', async () => {
+  const f = await mailFixture(true); const store = f.auth.store;
+  const firstApproval = (await store.list<{ command: ReturnType<typeof ownerCommandSchema.parse> }>('COMMAND#')).find(row => row.stored.data.command?.kind === 'approve-reply')!.stored.data.command;
+  if (firstApproval.kind !== 'approve-reply') throw new Error('fixture approval missing');
+  const secondId = randomUUID(); const body = 'Tuesday, September 15, 2026 at 11:00 AM to 11:30 AM (America/New_York)';
+  const threads = new DynamoThreadIntakeRepository(f.options); const first = (await threads.getThread('acct', 'thread1'))!;
+  const message = { ...first.thread.messages[0]!, id: 'inbound2', threadId: 'thread2', rfcMessageId: '<request2@example.test>' };
+  await store.transact([store.put(mailThreadKey('acct', 'thread2'), { ...first, thread: { ...first.thread, providerThreadId: 'thread2', messages: [message] } }, null)]);
+  await f.owner.apply({ commandId: randomUUID(), workspaceId: 'ws', accountId: 'acct', expectedAuthorityGeneration: 1, expectedVersion: await f.execution.currentVersion('acct'), kind: 'configure-owner',
+    payload: { expectedConfigurationRevision: 1, configuration: { ...f.config, revision: 2 }, mailScope: { expectedEnvelopeRevision: 1, since: now } } }, `Bearer ${f.pair.credential}`);
+  const draft = { ...firstApproval.payload.draft, id: 'draft2', threadId: 'thread2', body, evidenceIds: ['inbound2'] };
+  await threads.saveReplyDraft(draft, null);
+  const approval = ownerCommandSchema.parse({ ...firstApproval, commandId: randomUUID(), expectedVersion: await f.execution.currentVersion('acct'), payload: {
+    ...firstApproval.payload, draft, actionId: 'action2', approvalId: 'approval2', intentCommandId: secondId,
+    permission: { ...firstApproval.payload.permission, id: 'permission2', sourceMessageId: message.id, sourceMessageHash: fingerprint(message) },
+    binding: { kind: 'thread_participant', threadId: 'thread2', sourceMessageId: message.id, sourceMessageHash: fingerprint(message) },
+    schedulingOffer: { expectedRevision: null, offer: { ...firstApproval.payload.schedulingOffer!.offer, id: 'offer2', threadId: 'thread2', sendCommandId: secondId,
+      slots: [{ id: 'slot2', start: '2026-09-15T15:00:00.000Z', end: '2026-09-15T15:30:00.000Z', timezone: 'America/New_York' }] } },
+  } });
+  await f.owner.apply(approval, `Bearer ${f.pair.credential}`);
+  await f.owner.apply({ ...f.submit, expectedVersion: await f.execution.currentVersion('acct') }, `Bearer ${f.pair.credential}`);
+  await f.owner.apply({ ...f.submit, commandId: randomUUID(), expectedVersion: await f.execution.currentVersion('acct'), payload: { intentCommandId: secondId } }, `Bearer ${f.pair.credential}`);
+  let incoming = false;
+  const fetch: typeof globalThis.fetch = async (resource, init) => {
+    const url = String(resource);
+    if (url.endsWith('/profile')) return Response.json({ historyId: '2' });
+    if (url.includes('/messages?')) return Response.json({ messages: [] });
+    if (url.includes('/history?')) return Response.json({ historyId: incoming ? '4' : '2', history: incoming ? [{ messagesAdded: [{ message: { id: 'accepted-reply' } }, { message: { id: 'accepted2' } }] }] : [] });
+    if (url.includes('/messages/accepted2')) return Response.json({ id: 'accepted2', threadId: 'thread2', internalDate: String(Date.parse(now)), payload: { mimeType: 'text/plain', headers: [
+      { name: 'From', value: 'recipient@example.test' }, { name: 'To', value: 'sender@example.test' }, { name: 'Subject', value: 'Meeting offer' }, { name: 'Message-ID', value: '<accepted2@example.test>' }, { name: 'In-Reply-To', value: `<${secondId}@callie.invalid>` }], body: { data: Buffer.from('That works!').toString('base64url') } } });
+    if (url.endsWith('/messages/send') && JSON.parse(String(init?.body)).threadId === 'thread2') {
+      await f.fetch(resource, init); return Response.json({ id: 'sent2', threadId: 'thread2' });
+    }
+    return f.fetch(resource, init);
+  };
+  const repository = new DynamoMeetingRepository(f.options, f.authorization);
+  await repository.saveRules({ expectedRevision: null, rules: { revision: 1, confirmed: true, timezone: 'America/New_York', weeklyWindows: [{ weekday: 2, start: '09:00', end: '17:00' }], durationMinutes: 30,
+    bufferBeforeMinutes: 10, bufferAfterMinutes: 10, minimumNoticeMinutes: 60, horizonDays: 30, ownedCalendarId: 'sender@example.test', conflictCalendarIds: ['sender@example.test'], location: { kind: 'text', value: 'Fictional office' }, allowCancel: true, allowReschedule: true } });
+  const source = () => createSourceCoordinator({ auth: f.auth, authorization: f.authorization, fetch });
+  await source().tick(new AbortController().signal); await source().tick(new AbortController().signal);
+  expect(f.sends()).toBe(2); expect((await repository.listAcceptedOffers('acct')).offers).toHaveLength(2);
+  incoming = true; f.incoming(); await source().tick(new AbortController().signal);
+  expect(f.inserts()).toBe(2);
+  expect((await repository.listReservations('acct')).records.map(record => record.outcome?.status)).toEqual(['booked', 'booked']);
+});
+it.each(['caller', 'phase'] as const)('resumes later accounts, commands and publication after cooperative slow-first interruption: %s', async cancellation => {
+  const f = await mailFixture(); const store = f.auth.store; const slow = 'aaa-slow';
+  await f.owner.apply(f.submit, `Bearer ${f.pair.credential}`);
+  await f.execution.seedLocalAuthority(slow); await f.execution.applyCommand({ commandId: 'delegate-slow', workspaceId: 'ws', accountId: slow, expectedAuthorityGeneration: 0, expectedVersion: 0,
+    kind: 'delegate', payload: { delegationId: 'approved', approvedAt: now } });
+  const account = { id: slow, name: 'Fictional slow account', domain: null, version: 1 };
+  const scope = { ...f.scope, accountId: slow }; const binding = { scopeRevision: scope.revision, scopeFingerprint: mailScopeFingerprint(scope) };
+  await store.transact([store.put(`ACCOUNT#${slow}`, { account, sources: [], claims: [], routes: [], researchRevision: 1, history: [{ at: now, account, claims: [], routes: [] }] }, null),
+    store.put(mailCursorKey(slow, 'mailbox'), { scope, checkpoint: { ...binding, version: 1, accountId: slow, mailboxSubject: 'mailbox', mode: 'history', historyId: '10', pageToken: null, since: now },
+      poll: { ...binding, attemptId: 'slow-initial', accountId: slow, mailboxSubject: 'mailbox', status: 'complete', startedAt: now, completedAt: now } }, null)]);
+  const projection = (await new DynamoThreadIntakeRepository(f.options).getThread('acct','thread1'))!;
+  await store.transact([store.put(mailThreadKey(slow,'thread1'), { ...projection, thread: { ...projection.thread, accountId: slow } }, null)]);
+  await f.owner.apply({ commandId: randomUUID(), workspaceId: 'ws', accountId: slow, expectedAuthorityGeneration: 1, expectedVersion: 1, kind: 'configure-owner',
+    payload: { expectedConfigurationRevision: 0, configuration: { ...f.config, accountId: slow }, mailScope: null } }, `Bearer ${f.pair.credential}`);
+  let slowCalls = 0; let laterPolls = 0; let publications = 0; let controller = new AbortController();
+  f.auth.options.publish = async () => { publications++; };
+  const fetch: typeof globalThis.fetch = async (resource, init) => {
+    const url = String(resource);
+    if (url.includes('/history?') && new URL(url).searchParams.get('startHistoryId') === '10') {
+      slowCalls++;
+      return new Promise<Response>((_resolve, reject) => {
+        init!.signal!.addEventListener('abort', () => reject(new Error('fictional cooperative timeout')), { once: true });
+        if (cancellation === 'caller') setTimeout(() => controller.abort(), 1);
+      });
+    }
+    if (url.includes('/history?')) laterPolls++;
+    return f.fetch(resource, init);
+  };
+  if (cancellation === 'phase') vi.useFakeTimers();
+  try {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      controller = new AbortController();
+      const tick = createSourceCoordinator({ auth: f.auth, authorization: f.authorization, fetch }).tick(controller.signal);
+      if (cancellation === 'phase') await vi.advanceTimersByTimeAsync(10001);
+      await tick;
+    }
+  } finally { if (cancellation === 'phase') vi.useRealTimers(); }
+  expect(slowCalls).toBeGreaterThanOrEqual(2); expect(laterPolls).toBeGreaterThan(0);
+  expect(f.sends()).toBe(1); expect(publications).toBeGreaterThan(0);
+});
+it.each(['dispatch', 'reconcile'] as const)('propagates tick cancellation into expired OAuth refresh during %s', async mode => {
+  const f = await mailFixture(); await f.owner.apply(f.submit, `Bearer ${f.pair.credential}`);
+  if (mode === 'reconcile') { f.uncertain(); await f.source().tick(new AbortController().signal); }
+  f.auth.options.clock.now = () => '2026-09-14T14:00:00.000Z';
+  const row = await f.auth.store.get('SOURCE_PHASE_CURSOR');
+  await f.auth.store.transact([f.auth.store.put('SOURCE_PHASE_CURSOR', { next: 2 }, row?.rev ?? null)]);
+  const controller = new AbortController(); let refreshes = 0; let refreshAborted = false;
+  f.authorization.input.fetch = async (resource, init) => {
+    if (String(resource).endsWith('/token')) {
+      refreshes++; controller.abort(); refreshAborted = init?.signal?.aborted === true;
+      if (refreshAborted) throw new Error('fictional cooperative OAuth cancellation');
+    }
+    return f.fetch(resource, init);
+  };
+  const fetch: typeof globalThis.fetch = async (resource, init) => { init?.signal?.throwIfAborted(); return f.fetch(resource, init); };
+  const before = await f.execution.readDispatch('acct', 'action');
+  const result = await createSourceCoordinator({ auth: f.auth, authorization: f.authorization, fetch }).tick(controller.signal);
+  expect(result.status).toBe('aborted'); expect(refreshes).toBe(1); expect(refreshAborted).toBe(true);
+  expect(await f.execution.readDispatch('acct','action')).toEqual(before);
+  expect(f.sends()).toBe(mode === 'dispatch' ? 0 : 1); expect(f.sentLookups()).toBe(0);
 });
