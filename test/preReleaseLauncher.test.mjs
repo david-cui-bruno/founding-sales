@@ -32,7 +32,11 @@ async function fixture({ identity = 'com.callie.foundersales', output = receipt 
   const git = (...args) => execFileSync('git', args, { cwd: root, stdio: 'pipe', env: { ...process.env, GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' } });
   git('init'); git('add', '.'); git('commit', '-m', 'fixture');
   const marker = writeReleaseMarker({ root }); mkdirSync(join(root, 'archive')); writeFileSync(join(root, 'archive/release-marker.json'), JSON.stringify(marker)); await createPackage(join(root, 'archive'), join(contents, 'Resources/app.asar'));
-  return { root, git, contents, run: (args = [], env = {}) => spawnSync(process.execPath, [join(root, 'scripts/createPreReleaseBackup.mjs'), ...args], { cwd: tmpdir(), env: { ...process.env, NODE_ENV: undefined, PATH: `${root}/bin:${process.env.PATH}`, ...env }, encoding: 'utf8' }) };
+  // This fixture owns a synthetic repo/app. Outer release/test controls must not
+  // select its behavior. Explicit negative-case overrides remain last so the
+  // unchanged real launcher still rejects every forbidden environment family.
+  const launcherEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(?:CALLIE_|ELECTRON_|NODE_|DYLD_|XDG_)/.test(name)));
+  return { root, git, contents, run: (args = [], env = {}) => spawnSync(process.execPath, [join(root, 'scripts/createPreReleaseBackup.mjs'), ...args], { cwd: tmpdir(), env: { ...launcherEnv, PATH: `${root}/bin:${process.env.PATH}`, ...env }, encoding: 'utf8' }) };
 }
 it('launches only exact repo-owned packaged executable with reserved flag and emits receipt alone', async () => {
   const { root, run } = await fixture(); const result = run(); expect(result.status).toBe(0); expect(JSON.parse(result.stdout)).toEqual(receipt); expect(result.stderr).not.toContain('PRIVATE-HOST'); expect(JSON.parse(readFileSync(join(root, 'called')))).toEqual(['--callie-pre-release-backup']);
@@ -43,7 +47,7 @@ it.each([14, 15, 16, 17, 18, 23, 25, '24'])('refuses unsupported host schema %j 
   expect(result.stdout).toBe(''); expect(result.stderr.trim()).toBe('PRE_RELEASE_BACKUP_FAILED');
 });
 it.each([['--database', '/x'], ['--executable', '/x'], ['--user-data-dir=/x'], ['--key', 'x']])('rejects CLI override before launch %j', async (...args) => { const { root, run } = await fixture(); expect(run(args).status).not.toBe(0); expect(existsSync(join(root, 'called'))).toBe(false); });
-it.each(['CALLIE_USER_DATA', 'NODE_OPTIONS', 'ELECTRON_RUN_AS_NODE', 'DYLD_INSERT_LIBRARIES'])('rejects %s before launch', async name => { const { root, run } = await fixture(); expect(run([], { [name]: name === 'NODE_OPTIONS' ? '--no-warnings' : 'x' }).status).not.toBe(0); expect(existsSync(join(root, 'called'))).toBe(false); });
+it.each(['CALLIE_USER_DATA', 'CALLIE_RELEASE_OUT_DIR', 'CALLIE_E2E_OUT_DIR', 'CALLIE_E2E_EXPECTED_ARTIFACT', 'CALLIE_MAC_SIGN_IDENTITY', 'NODE_OPTIONS', 'ELECTRON_RUN_AS_NODE', 'DYLD_INSERT_LIBRARIES'])('rejects %s before launch', async name => { const { root, run } = await fixture(); expect(run([], { [name]: name === 'NODE_OPTIONS' ? '--no-warnings' : 'x' }).status).not.toBe(0); expect(existsSync(join(root, 'called'))).toBe(false); });
 it('rejects identity mismatch before launch and arbitrary host stdout after launch', async () => { const wrong = await fixture({ identity: 'com.example.other' }); expect(wrong.run().status).not.toBe(0); expect(existsSync(join(wrong.root, 'called'))).toBe(false); const extra = await fixture({ output: { ...receipt, path: '/private' } }); const result = extra.run(); expect(result.status).not.toBe(0); expect(result.stdout + result.stderr).not.toContain('/private'); });
 it.each(['dirty', 'new-head', 'missing-marker', 'ambiguous-app', 'missing-executable'])('rejects %s before any host work', async change => {
   const { root, git, contents, run } = await fixture();
