@@ -240,3 +240,13 @@ it('only disqualifies matching normalized targets and ignores qualifiers inside 
   expect(batch.sources).toHaveLength(2);
   expect(batch).not.toHaveProperty('withheldTargets');
 });
+
+it.each(['same', 'business-first', 'emergency-first'])('withholds known phone despite numeric emergency suffix: %s', async order => {
+  const business = '<p>Business phone: +14015550100</p>';
+  const emergency = '<p>Tenant emergency: +14015550100 (24/7)</p>';
+  const pages = createCompanyPageProvider({ receipts: createFetchedReceiptPolicy(), clock: { now: () => now }, permitted: () => true,
+    resolve: async () => ['93.184.216.34'], http: async input => new Response(order === 'same' ? business + emergency
+      : (input.url.endsWith('/services') !== (order === 'emergency-first')) ? emergency : business, { headers: { 'content-type': 'text/html' } }) });
+  const batch = await pages.research(snapshot(), { ...limits, maxPages: order === 'same' ? 1 : 2 }, new AbortController().signal);
+  expect(batch.routes).toEqual([]);
+});

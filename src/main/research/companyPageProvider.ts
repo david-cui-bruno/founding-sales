@@ -121,7 +121,7 @@ function withheldContactTargets(lines: readonly string[]): string[] {
 }
 /** Conservative deterministic extraction. Advertisements remain advertised facts,
  * never prospect-stated pain or execution routes. Unsupported knowledge stays unknown. */
-function extract(excerpt: string, sourceId: string, accountId: string): Pick<AccountEvidenceBatch, 'claims' | 'routes'> & { withheldTargets: string[] } {
+function extract(excerpt: string, sourceId: string, accountId: string): Pick<AccountEvidenceBatch, 'claims' | 'routes'> & { withheldTargets: string[]; qualifiedPhoneLines: string[] } {
   const text = htmlText(excerpt);
   const claims: AccountClaim[] = [];
   for (const match of text.matchAll(/(?:^|\n)\s*We (manage|own) ([0-9][0-9,]*) (residential )?(units|buildings|properties)\./g)) {
@@ -160,7 +160,7 @@ function extract(excerpt: string, sourceId: string, accountId: string): Pick<Acc
     const mailbox = email ? normalizedPublishedEmail(email) : null;
     if (mailbox) add('email', mailbox);
   }
-  return { claims, routes, withheldTargets };
+  return { claims, routes, withheldTargets, qualifiedPhoneLines: lines.filter(line => /emergency|tenant|after.hours/i.test(line)) };
 }
 export function createCompanyPageProvider(options: { receipts: FetchedReceiptPolicy; clock: { now(): string };
   /** Trusted operator/source-policy decision. Omission denies all fetching. */
@@ -176,7 +176,7 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
     if (!snapshot.account.domain || !options.permitted) throw new Error('Research permitted source required');
     const signal = AbortSignal.any([callerSignal, AbortSignal.timeout(options.timeoutMs ?? 30000)]);
     const sources = []; const claims: AccountClaim[] = []; const routes: AccountEvidenceBatch['routes'] = [];
-    const withheldTargets = new Set<string>(); let bytes = 0; let requests = 0;
+    const withheldTargets = new Set<string>(); const qualifiedPhoneLines: string[] = []; let bytes = 0; let requests = 0;
     const urls = ['/', '/services', '/team', '/careers'].slice(0, limits.maxPages).map(path => `https://${snapshot.account.domain}${path}`);
     for (let url of urls) {
       if (requests >= limits.maxPages) break;
@@ -212,6 +212,7 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
         signal.throwIfAborted();
         const extracted = extract(excerpt, source.id, snapshot.account.id);
         sources.push(source); claims.push(...extracted.claims);
+        qualifiedPhoneLines.push(...extracted.qualifiedPhoneLines);
         for (const target of extracted.withheldTargets) withheldTargets.add(target);
         for (const route of extracted.routes) {
           const previous = routes.find(existing => existing.channel === route.channel && existing.value === route.value);
@@ -223,7 +224,14 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
     }
     if (!sources.length) throw new Error('Research no permitted pages');
     // Negative evidence from any bounded page wins, regardless of fetch order.
-    const eligibleRoutes = routes.filter(route => !withheldTargets.has(`${route.channel}:${route.value}`));
+    const eligibleRoutes = routes.filter(route => {
+      if (withheldTargets.has(`${route.channel}:${route.value}`)) return false;
+      if (route.channel !== 'phone') return true;
+      // Match the already normalized business target, not a greedy guessed phone
+      // token: numeric prose such as '(24/7)' must not erase negative evidence.
+      const target = new RegExp(`\\+${route.value.slice(1).split('').join('[ ()-]*')}(?![0-9])`);
+      return !qualifiedPhoneLines.some(line => target.test(line));
+    });
     return accountEvidenceBatchSchema.parse({ commandId: randomUUID(), accountId: snapshot.account.id, expectedVersion: snapshot.account.version, sources, claims, routes: eligibleRoutes });
   } };
 }
