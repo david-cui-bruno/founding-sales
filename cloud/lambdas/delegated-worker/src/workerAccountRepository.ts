@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { accountClaimSchema, accountCreateSchema, accountEvidenceBatchSchema, accountIdSchema, accountInstantSchema, accountRouteSchema,
+import { accountCreateSchema, accountEvidenceBatchSchema, accountIdSchema, accountInstantSchema, accountRouteSchema,
   accountSchema, accountSourceSchema, type Account, type AccountEvidenceBatch, type AccountEvidenceReceipt, type AccountSource } from '../../../../src/shared/contracts/accountContract';
 import { workerEventSchema } from '../../../../src/shared/contracts/delegationContract';
 import { projectAccountEvidence } from '../../../../src/main/domain/accounts/accountEvidence';
@@ -8,10 +8,8 @@ import { rankAccount } from '../../../../src/shared/accounts/accountRanking';
 import { researchLimitsSchema, type AccountResearchStore, type ResearchClaim, type ResearchJob } from '../../../../src/main/research/companyResearchTypes';
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions, type Stored } from './dynamoStore';
 import { budgetSchema, type Budget } from './discoveryReservationStore';
-const projectionSchema = z.strictObject({ at: accountInstantSchema, account: accountSchema, claims: z.array(accountClaimSchema), routes: z.array(accountRouteSchema) });
-export const accountRecordSchema = z.strictObject({ account: accountSchema, history: z.array(projectionSchema).min(1), sources: z.array(accountSourceSchema),
-  claims: z.array(accountClaimSchema), routes: z.array(accountRouteSchema), researchRevision: integer.positive() });
-export type AccountRecord = z.infer<typeof accountRecordSchema>;
+import { accountRecordSchema, type AccountRecord } from '../../../../src/shared/contracts/accountRecordContract';
+export { projectionSchema, accountRecordSchema, type AccountRecord } from '../../../../src/shared/contracts/accountRecordContract';
 const jobSchema = z.strictObject({ id: z.uuid(), accountId: accountIdSchema, limits: researchLimitsSchema, attempt: integer.positive().max(3),
   claimToken: z.string(), receiptCommandId: z.uuid(), receiptCommitted: z.boolean(), costMicros: integer.nullable(),
   state: z.enum(['queued', 'running', 'completed', 'parked']), reservedCost: integer, claimedAt: accountInstantSchema.nullable() });
