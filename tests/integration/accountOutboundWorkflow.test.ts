@@ -1,3 +1,4 @@
+import { createInboundReadiness } from '../../src/main/communications/inboundReadiness';
 import type { AccountCallReport, AccountOutboundReceipt } from '../../src/shared/contracts/accountOutboundContract';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -45,7 +46,7 @@ async function fixture() {
       expect(db.raw.inTransaction).toBe(false);
       expect(db.raw.prepare('SELECT COUNT(*) AS n FROM pm_account_outbound_intents').get()).toEqual({ n: 1 });
       calls.push(target); return dispatchResult();
-    } }, readiness: { checkSubject: async subject => { subjects.push(subject); onReady(); return { kind: 'ready' }; } }, ...overrides });
+    } }, readiness: createInboundReadiness({ snapshot: () => ({ initialized: true, revision: 1, adapters: [{ id: 'fictional-inbound', relevant: () => true, synchronize: async subject => { subjects.push(subject); onReady(); return { revision: 'fictional-1' }; }, isAppliedCurrent: (_subject, revision) => revision === 'fictional-1' }] }) }), ...overrides });
   return { request, calls, subjects, makeService, get outreach() { return outreach; }, get db(): AppDatabase { return db; }, repo,
     setEvidence: (value: AccountRoutePolicyEvidence | null) => { evidence = value; }, get evidence() { return evidence!; },
     onReady: (fn: () => void) => { onReady = fn; }, result: (fn: () => Promise<HandoffResult>) => { dispatchResult = fn; },
@@ -224,11 +225,27 @@ describe('real SQL company outbound workflow with fictional phone boundary', () 
     const f = await fixture(); const options: Parameters<typeof createAccountOutboundService>[0] = {
       domain: { withDomain: async fn => fn(f.outreach) },
       phone: { inspectCapability: async () => ({ state: 'unavailable', reasonCode: 'phone_route_unverified' }), dispatch: async () => { throw new Error('Must never dispatch'); } },
-      readiness: { checkSubject: async () => ({ kind: 'ready' }) },
+      readiness: createInboundReadiness({ snapshot: () => ({ initialized: true, revision: 1, adapters: [] }) }),
     };
     const service = createAccountOutboundService(options);
     options.domain = { withDomain: async () => { throw new Error('Wrong runtime'); } };
     expect(await service.begin(f.request)).toMatchObject({ reason: 'phone_route_unverified' });
+  });
+
+  it.each(['registry', 'checkpoint'] as const)('refuses changed inbound %s proof after the domain gate was queued', async change => {
+    const f = await fixture(); let registryRevision = 1; let checkpoint = 'one'; let count = 0;
+    let release: () => void; const held = new Promise<void>(resolve => { release = resolve; });
+    let queued: () => void; const reached = new Promise<void>(resolve => { queued = resolve; });
+    const readiness = createInboundReadiness({ snapshot: () => ({ initialized: true, revision: registryRevision, adapters: [{ id: 'fictional', relevant: () => true,
+      synchronize: async () => ({ revision: checkpoint }), isAppliedCurrent: (_subject, revision) => revision === checkpoint }] }) });
+    const service = f.makeService({ readiness, domain: { withDomain: async fn => {
+      if (++count === 3) { queued!(); await held; }
+      return fn(f.outreach);
+    } } });
+    const pending = service.begin(f.request); await reached;
+    if (change === 'registry') registryRevision++; else checkpoint = 'two';
+    release!(); expect(await pending).toMatchObject({ reason: 'inbound_safety_unwired', attemptId: null });
+    expect(f.calls).toEqual([]); expect(f.db.raw.prepare('SELECT COUNT(*) AS n FROM pm_account_outbound_intents').get()).toEqual({ n: 0 });
   });
 
 });

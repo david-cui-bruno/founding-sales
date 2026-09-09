@@ -5,7 +5,7 @@ import { capabilitySchema, handoffResultSchema, type HandoffResult } from '../..
 import type { AccountOutreach } from '../domain/accounts/accountOutreach';
 import { accountFingerprint } from '../domain/accounts/accountEvidence';
 import type { InboundReadiness } from './inboundReadiness';
-import type { PhoneHandoffPort } from './outboundPorts';
+import type { OutboundReadinessProof, PhoneHandoffPort } from './outboundPorts';
 
 export type AccountOutboundDomainPort = Pick<AccountOutreach, 'inspect' | 'ownerGeneration' | 'recordRefusal' | 'reserve' | 'recordDispatch' | 'reportCallOutcome'>;
 export interface AccountOutboundDomainGate { withDomain<T>(operation: (domain: AccountOutboundDomainPort) => T): Promise<T>; }
@@ -16,13 +16,13 @@ export interface AccountOutboundService {
   dispose(): void;
 }
 const uncertain: HandoffResult = { status: 'unknown', reasonCode: 'handoff_uncertain' };
-const readinessSchema = z.discriminatedUnion('kind', [z.object({ kind: z.literal('ready') }).strict(),
+const readinessSchema = z.discriminatedUnion('kind', [z.object({ kind: z.literal('ready'), proof: z.custom<OutboundReadinessProof>(value => typeof value === 'object' && value !== null) }).strict(),
   z.object({ kind: z.literal('blocked'), reasonCode: z.string().min(1).max(200) }).strict()]);
 
 /** No startup/default phone binding. The gate must refer to one immutable runtime.
  * Invalidate synchronously before closing/locking/restoring that runtime. */
 export function createAccountOutboundService(input: {
-  domain: AccountOutboundDomainGate; phone: PhoneHandoffPort; readiness: Pick<InboundReadiness, 'checkSubject'>; timeoutMs?: number;
+  domain: AccountOutboundDomainGate; phone: PhoneHandoffPort; readiness: Pick<InboundReadiness, 'checkSubject' | 'assertCurrent'>; timeoutMs?: number;
 }): AccountOutboundService {
   const { domain: domainGate, phone, readiness } = input;
   const timeoutMs = input.timeoutMs ?? 5000;
@@ -65,6 +65,7 @@ export function createAccountOutboundService(input: {
       if (occupied) return refuse('outbound_busy');
       const owner = await withDomain(signal, domain => domain.ownerGeneration(request));
       const checkController = new AbortController();
+      let proof: OutboundReadinessProof;
       try {
         const capability = capabilitySchema.parse(await wait(phone.inspectCapability(), signal));
         current(signal);
@@ -72,9 +73,16 @@ export function createAccountOutboundService(input: {
         const ready = readinessSchema.parse(await wait(readiness.checkSubject({ kind: 'account', id: request.accountId }, AbortSignal.any([signal, checkController.signal])), signal));
         current(signal);
         if (ready.kind === 'blocked') return refuse(ready.reasonCode);
+        proof = ready.proof;
       } catch { current(signal); return refuse('operation_interrupted'); }
       finally { checkController.abort(); }
       const prepared = await withDomain(signal, domain => {
+        try {
+          if (proof?.subject?.kind !== 'account' || proof.subject.id !== request.accountId) throw new Error('Wrong inbound subject');
+          readiness.assertCurrent(proof);
+        } catch {
+          return { receipt: domain.recordRefusal(request, 'inbound_safety_unwired'), pending: null };
+        }
         const reservation = domain.reserve(request, owner);
         if (reservation.kind === 'receipt') return { receipt: reservation.receipt, pending: null };
         committed = reservation.receipt;
