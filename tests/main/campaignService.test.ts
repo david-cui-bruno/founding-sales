@@ -19,16 +19,21 @@ describe('campaign normal durable command service', () => {
         fetch: async () => { requests++; throw new Error('fictional disconnected'); } });
       const service = new CampaignService({ workspaceId: f.workspaceId, delegation: repository, execution });
       const commandId = randomUUID();
-      const result = await service.submit({ commandId, accountId: f.account.id, payload: { kind: 'campaign.enroll', enrollmentId: randomUUID(), campaignVersionId: f.versions[0].id,
-        selectedRouteId: f.routes[0].id, executionContextId: 'fictional-context', contextRevision: 1 } });
+      const request = { commandId, accountId: f.account.id, payload: { kind: 'campaign.enroll' as const, enrollmentId: randomUUID(), campaignVersionId: f.versions[0].id,
+        selectedRouteId: f.routes[0].id, executionContextId: 'fictional-context', contextRevision: 1 } };
+      const result = await service.submit(request);
       expect(result).toMatchObject({ status: 'pending', authorityGeneration: 3 });
       expect(repository.getCommand(commandId)).toMatchObject({ kind: 'campaign-command', expectedAuthorityGeneration: 3, expectedVersion: 5 });
       expect(f.db.raw.prepare('SELECT count(*) AS n FROM campaign_enrollments').get()).toEqual({ n: 0 });
       expect(requests).toBe(1);
+      f.db.raw.prepare('UPDATE delegated_authorities SET aggregate_version=6 WHERE account_id=?').run(f.account.id);
+      expect(await service.submit(request)).toEqual(result);
+      await expect(service.submit({ ...request, payload: { ...request.payload, enrollmentId: randomUUID() } })).rejects.toThrow('campaign_command_conflict');
+      const afterReplay = requests;
       f.db.raw.prepare("UPDATE delegated_authorities SET state='paused' WHERE account_id=?").run(f.account.id);
       await expect(service.submit({ commandId: randomUUID(), accountId: f.account.id, payload: { kind: 'campaign.enroll', enrollmentId: randomUUID(), campaignVersionId: f.versions[0].id,
         selectedRouteId: f.routes[0].id, executionContextId: 'fictional-context', contextRevision: 1 } })).rejects.toThrow('campaign_owner_unavailable');
-      expect(requests).toBe(1);
+      expect(requests).toBe(afterReplay);
     } finally { f.close(); }
   });
 });
