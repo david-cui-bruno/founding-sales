@@ -1,3 +1,6 @@
+import {accountFingerprint} from './domain/accounts/accountEvidence';
+import {constants as fsConstants} from 'node:fs';
+import {open as openNativeFile} from 'node:fs/promises';
 import {registerLinkedInIpc} from './linkedin/registerLinkedInIpc';
 import {createLinkedInDraftProvider} from './linkedin/linkedInDraftProvider';
 import {CredentialStore} from './outreach/providers/credentialStore';
@@ -297,6 +300,8 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   companyResearchResolve?: (hostname: string) => Promise<string[]>;
   registerOutreachIpc?:typeof registerOutreachIpc;
   registerLinkedInIpc?:typeof registerLinkedInIpc;
+  createPolicyImportNative?():NonNullable<Parameters<typeof createDelegationRuntime>[0]['policyImportNative']>;
+  createRequestedFollowupModel?(userDataPath:string):NonNullable<Parameters<typeof createDelegationRuntime>[0]['requestedModel']>;
   createLinkedInAdapters?(userDataPath:string):NonNullable<Parameters<typeof createDelegationRuntime>[0]['linkedIn']>;
   createDiscoveryWorker?: typeof createDiscoveryWorker;
   createOutboundCommandService?: typeof createOutboundCommandService;
@@ -555,6 +560,8 @@ const defaultDependencies: ApplicationStartupDependencies = {
   registerApplicationIpc,
   registerOutreachIpc,
   registerLinkedInIpc,
+  createPolicyImportNative:()=>createPolicyImportNativeAdapters(dialog),
+  createRequestedFollowupModel:userDataPath=>async()=>{const credentials=await new CredentialStore({directory:join(userDataPath,'outreach'),safeStorage}).load();return credentials?.model.apiKey?{credentials:credentials.model,fetch:globalThis.fetch}:undefined;},
   createLinkedInAdapters:userDataPath=>({provider:createLinkedInDraftProvider({credentials:new CredentialStore({directory:join(userDataPath,'outreach'),safeStorage}),fetch:globalThis.fetch}),shell:{openExternal:url=>shell.openExternal(url)},clipboard:{writeText:text=>clipboard.writeText(text)}}),
   createResearchProviders: userDataPath => createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)}),
   createPairingStore:userDataPath=>new PairingStore({directory:join(userDataPath,'delegation'),safeStorage}),
@@ -773,7 +780,7 @@ export async function startApplication(
       domain, phone: phoneBindings.phone, readiness: phoneBindings.readiness,
     });
     phoneBindings.onSetupChanged?.(() => { if (!outboundClosed) outbound.invalidate('wake'); });
-    delegation=createDelegationRuntime({databaseGate:runtime,pairing:paired,clock:domainClock,phone:phoneBindings.phone,inboundRegistry:startupInboundRegistry,linkedIn:paired?dependencies.createLinkedInAdapters?.(options.userDataPath):undefined,configurationChanged:async()=>{
+    delegation=createDelegationRuntime({databaseGate:runtime,pairing:paired,clock:domainClock,phone:phoneBindings.phone,inboundRegistry:startupInboundRegistry,policyImportNative:dependencies.createPolicyImportNative?.(),requestedModel:dependencies.createRequestedFollowupModel?.(options.userDataPath),linkedIn:paired?dependencies.createLinkedInAdapters?.(options.userDataPath):undefined,configurationChanged:async()=>{
       await companyResearch?.dispose();companyResearch=undefined;
       const state=paired?await runtime.withDatabase(database=>new SqlDelegationConfiguration({database,workspaceId:paired.workspaceId,pairingId:paired.pairingId,clock:domainClock}).read()):null;
       if(state?.configuration.state==='active'&&state.configuration.research&&dependencies.createResearchProviders&&!outboundClosed){
@@ -979,4 +986,27 @@ function createRecoveryDialogs(backupDirectory: string): RecoveryDialogs {
       return result.canceled ? null : result.filePaths[0] ?? null;
     },
   };
+}
+
+/** Only native main-process dialogs choose bytes and confirm exact review data.
+ * No renderer-provided path, raw artifact or approval boolean crosses this seam. */
+export function createPolicyImportNativeAdapters(dialogs:Pick<typeof dialog,'showOpenDialog'|'showMessageBox'>):NonNullable<Parameters<typeof createDelegationRuntime>[0]['policyImportNative']>{
+ return {
+  async selectArtifact(maxBytes,signal){
+   signal.throwIfAborted();const selected=await dialogs.showOpenDialog({title:'Select owner-review evidence interchange',properties:['openFile'],filters:[{name:'FSS evidence JSON',extensions:['json']}]});signal.throwIfAborted();
+   if(selected.canceled)return null;if(selected.filePaths.length!==1)throw Error('policy_import_selection_invalid');
+   const file=await openNativeFile(selected.filePaths[0],fsConstants.O_RDONLY|fsConstants.O_NOFOLLOW);
+   try{const before=await file.stat();if(!before.isFile()||before.size<=0||before.size>maxBytes)throw Error('policy_import_size_invalid');
+    const bytes=Buffer.alloc(maxBytes+1);let offset=0;
+    while(offset<bytes.length){signal.throwIfAborted();const result=await file.read(bytes,offset,bytes.length-offset,offset);if(result.bytesRead===0)break;offset+=result.bytesRead;}
+    const after=await file.stat();signal.throwIfAborted();if(offset!==before.size||offset>maxBytes||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs)throw Error('policy_import_file_changed');
+    return bytes.subarray(0,offset);
+   }finally{await file.close();}
+  },
+  async confirmReview({preview,reviewReason},signal){
+   signal.throwIfAborted();const result=await dialogs.showMessageBox({type:'warning',title:'Review exact imported evidence',message:preview.notice,
+    detail:JSON.stringify({artifactHash:preview.artifactHash,reviewId:preview.reviewId,reviewReason,artifact:preview.artifact,rowHashes:preview.artifact.rows.map(row=>({rowId:row.rowId,sha256:accountFingerprint(row)})),rows:preview.rows},null,2),buttons:['Cancel','Record this exact review'],defaultId:0,cancelId:0,noLink:true});
+   signal.throwIfAborted();return result.response===1;
+  },
+ };
 }

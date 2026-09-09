@@ -1,5 +1,6 @@
+import {prepareRequestedFollowupSchema,type PrepareRequestedFollowup} from '../../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/contracts/workerPolicyContract';
-import { ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceSchema } from '../../shared/contracts/ownerCommandContract';
+import { requestedOwnerContextSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceSchema } from '../../shared/contracts/ownerCommandContract';
 import { z } from 'zod';
 import type { DelegationRepository } from './delegationRepository';
 import { commandReceiptSchema, delegationCommandSchema, eventPageSchema, type CommandReceipt, type DelegationCommand } from '../../shared/contracts/delegationContract';
@@ -50,6 +51,12 @@ export class ExecutionClient {
       // HTTP acceptance never replaces transactional owner-applied event proof.
     } catch { /* Durable pending outbox survives an unavailable owner. No fallback. */ }
     return this.repository.commandStatus(command.commandId) ?? receipt;
+  }
+  async requestedContext(raw:PrepareRequestedFollowup,signal:AbortSignal) {
+    const input=prepareRequestedFollowupSchema.parse(raw);
+    const proof=requestedOwnerContextSchema.parse(await this.request('/requested-followup/context',signal,{workspaceId:this.pairing.workspaceId,input}));
+    if(proof.workspaceId!==this.pairing.workspaceId||proof.accountId!==input.accountId||proof.accountVersion!==input.expectedAccountVersion)throw Error('requested_context_identity');
+    return proof;
   }
   async checkpoint(accountId:string,signal:AbortSignal,handoffId?:string) {const proof=ownerCheckpointSchema.parse(await this.request('/readiness',signal,{workspaceId:this.pairing.workspaceId,accountId,...(handoffId?{handoffId}:{})}));if(proof.workspaceId!==this.pairing.workspaceId||proof.accountId!==accountId||proof.handoffId!==handoffId)throw Error('checkpoint_identity_mismatch');return proof;}
   async configureResearch(raw:unknown,signal:AbortSignal) {const input=configureResearchSourceSchema.parse(raw);if(input.workspaceId!==this.pairing.workspaceId)throw Error('workspace_mismatch');return ownerResearchSourceSchema.parse(await this.request('/research/configure',signal,input));}

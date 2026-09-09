@@ -1,5 +1,5 @@
 import {DynamoRequestedFollowupRepository} from './requestedFollowupRepository';
-import {createRequestedApprovalRecord,requestedApprovalKey} from './requestedFollowupApproval';
+import {createRequestedApprovalRecord,requestedApprovalKey,loadRequestedApproval,requestedApprovalRecordSchema} from './requestedFollowupApproval';
 import { createMailPoller } from './mailPoller';
 import { offeredSlotText } from '../../../../src/shared/meetings/schedulingRules';
 import { meetingReservationSchema, meetingOutcomeSchema } from '../../../../src/shared/contracts/meetingContract';
@@ -13,7 +13,7 @@ import { accountRecordSchema, accountKey } from './workerAccountRepository';
 import { intakeRegistryKey, intakeRegistrySchema, createIntakeBarrier, validatePendingHandoff } from './intakeBarrier';
 import type { WorkerAuth } from './workerAuth';
 import type { RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
-import { ownerCheckpointRequestSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand } from '../../../../src/shared/contracts/ownerCommandContract';
+import { requestedOwnerContextRequestSchema, requestedOwnerContextSchema, ownerCheckpointRequestSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand } from '../../../../src/shared/contracts/ownerCommandContract';
 import { delegationCommandSchema, commandReceiptSchema, workerEventSchema, type CommandReceipt, type WorkerEvent } from '../../../../src/shared/contracts/delegationContract';
 import { DynamoStore, fingerprint, keyPart } from './dynamoStore';
 import { authorityRecordSchema, executionAuthorityKey, executionAuthorityFields, createExecutionRepository } from './executionRepository';
@@ -35,6 +35,22 @@ export class OwnerCommandCoordinator {
     const next={...current,version:current.version+1};const receipt:CommandReceipt={commandId:command.commandId,status:'rejected',authorityGeneration:current.authority.generation,aggregateVersion:next.version,reason:'Stale owner command; explicit fresh action required'};
     const event=workerEventSchema.parse({id:`command-${fingerprint([command.workspaceId,command.commandId])}`,workspaceId:command.workspaceId,accountId:command.accountId,authorityGeneration:current.authority.generation,aggregateVersion:next.version,kind:'authority.changed',payload:{authority:current.authority,receipt}});
     const outbox=await store.eventItems(event);await store.transact([store.put(authKey,next,row.rev,executionAuthorityFields(next),executionAuthorityFields(current)),store.put(key,{fingerprint:fp,receipt,sequence:outbox.sequence,command},null),...outbox.items]);await store.publish(outbox.sequence);return receipt;
+  }
+  async requestedContext(raw:unknown,authorization:string) {
+    const request=requestedOwnerContextRequestSchema.parse(raw);
+    const principal=await this.input.auth.authenticate(authorization,['events:read']);this.input.auth.store.workspace(request.workspaceId);
+    const repository=new DynamoRequestedFollowupRepository({...this.input.auth.options,dynamo:this.input.auth.fencedDynamo(principal)});
+    const sourceRow=await repository.store.get<unknown>(ownerSourceKey(request.input.accountId));
+    const source=ownerSourceConfigurationSchema.parse(sourceRow?.data);
+    if(source.workspaceId!==request.workspaceId||source.accountId!==request.input.accountId||source.pairingId!==principal.pairingId)throw Error('requested_source_identity');
+    const plan=await repository.readContext(request.input);
+    // Checking the original source revision also fences a concurrent pairing change.
+    const sourceCheck=plan.checks.find(item=>item.ConditionCheck?.Key?.sk?.S===ownerSourceKey(request.input.accountId));
+    if(!sourceCheck||fingerprint(sourceCheck)!==fingerprint(repository.store.check(ownerSourceKey(request.input.accountId),sourceRow!.rev)))throw Error('requested_source_changed');
+    await repository.store.transact(plan.checks);
+    return requestedOwnerContextSchema.parse({workspaceId:request.workspaceId,accountId:request.input.accountId,mailbox:plan.mailbox,mailContext:plan.mailContext,
+      accountVersion:plan.account.account.version,researchRevision:plan.account.researchRevision,authorityGeneration:plan.authority.data.authority.generation,aggregateVersion:plan.authority.data.version,
+      cursor:plan.cursor?{data:plan.cursor.data,rev:plan.cursor.rev}:null,expiresAt:new Date(Date.parse(repository.store.now())+30000).toISOString()});
   }
   async checkpoint(raw:unknown,authorization:string,signal:AbortSignal) {
     const target=ownerCheckpointRequestSchema.parse(raw); const principal=await this.input.auth.authenticate(authorization,['events:read']);this.input.auth.store.workspace(target.workspaceId);
@@ -111,7 +127,9 @@ export class OwnerCommandCoordinator {
       const plan=await repository.planCurrent(command.payload.draft);
       const draftItem=await repository.planCaptureDraft(command.payload.draft,command.payload.expectedRemoteDraftRevision);
       const source=await this.activeSource(command,principal.pairingId,store);
-      if(plan.authority.rev!==authorityRow.rev||plan.mailbox.subject!==source.config.mailboxSubject)throw Error('requested_capture_changed');
+      if(plan.authority.rev!==authorityRow.rev||fingerprint(plan.authority.data)!==fingerprint(current)||plan.mailbox.subject!==source.config.mailboxSubject)throw Error('requested_capture_changed');
+      const authorityChecks=[...plan.checks,...source.checks].filter(item=>item.ConditionCheck&&fingerprint(item.ConditionCheck.Key)===fingerprint(store.key(authKey)));
+      if(authorityChecks.length!==1||fingerprint(authorityChecks[0])!==fingerprint(store.check(authKey,authorityRow.rev,executionAuthorityFields(current))))throw Error('requested_capture_authority_condition');
       const record=createRequestedApprovalRecord(command,principal,claim.data.at);
       // AUTH is written by this enclosing transaction. Preserve every other C3
       // current-evidence condition and reject conflicting duplicate snapshots.
@@ -295,6 +313,20 @@ export class OwnerCommandCoordinator {
         .filter(address => address !== grant.grant!.email.toLowerCase()))].sort();
       const knownThreadIds = [...new Set(projections.map(row => row.projection.thread.providerThreadId))].sort();
       const threads = new DynamoThreadIntakeRepository(store.options); let cursor = await threads.cursorState(command.accountId, config.mailboxSubject);
+      const retained=cursor?.data.scope?.participantAddresses.filter(address=>!participants.includes(address))??[];
+      if(retained.length){
+        // Retain only already-admitted addresses grounded in an authentic capture.
+        // Neither configure payload nor a bare cursor can manufacture a participant.
+        const candidates=(await store.list<unknown>('REQUESTED_APPROVAL#')).map(row=>requestedApprovalRecordSchema.parse(row.stored.data)).filter(record=>record.accountId===command.accountId&&record.pairingId===pairingId&&record.mailboxSubject===config.mailboxSubject&&retained.includes(record.draftSnapshot.recipient));
+        if(candidates.length>16)throw Error('requested_scope_proof_limit');
+        for(const address of retained){
+          const candidate=candidates.find(record=>record.draftSnapshot.recipient===address&&record.scopePlan?.desiredScope.participantAddresses.includes(address));
+          const proof=candidate?await loadRequestedApproval(store,candidate.commandId):null;
+          if(!proof)throw Error('selected_scope_provenance_missing');
+          participants.push(address);checks.push(...proof.checks);
+        }
+        participants.sort();
+      }
       if (p.mailScope !== null) {
         const scope = mailAccountScopeSchema.parse({ version: 1, accountId: command.accountId, mailboxSubject: config.mailboxSubject, revision: (cursor?.data.scope?.revision ?? 0) + 1,
           participantAddresses: participants, knownThreadIds, since: p.mailScope.since, approvedAt: at });

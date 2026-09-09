@@ -1,3 +1,5 @@
+import {policyImportConfirmSchema,policyImportResumeSchema,policyImportStatusSchema,policyImportPreviewSchema,policyImportReportSchema} from '../../shared/contracts/accountRoutePolicyImportContract';
+import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedFollowupSchema,approveRequestedFollowupSchema,savedRequestedFollowupSchema,requestedApprovalStatusSchema} from '../../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/contracts/workerPolicyContract';
 import type { DelegationRuntime } from '../delegation/delegationRuntime';
 import type { PairingStore } from '../delegation/pairingStore';
@@ -26,6 +28,17 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
     add('send-draft',sendDraftSchema,emailDraftSchema,input=>p.sendDraft(input));
     if(options.delegation){
       const d=options.delegation;
+      if(d.policyImport){
+        const p=d.policyImport;
+        add('policy-import-select-preview',null,policyImportPreviewSchema.nullable(),()=>p.selectAndPreview());
+        add('policy-import-confirm',policyImportConfirmSchema,policyImportReportSchema,input=>p.confirm(input));
+        add('policy-import-resume',policyImportResumeSchema,policyImportReportSchema,input=>p.resume(input));
+        add('policy-import-status',policyImportStatusSchema,policyImportReportSchema,input=>p.status(input));
+      }
+      add('requested-followup-prepare',prepareRequestedFollowupSchema,savedRequestedFollowupSchema,input=>d.prepareRequestedFollowup(input));
+      add('requested-followup-get',getRequestedFollowupSchema,savedRequestedFollowupSchema.nullable(),input=>d.getRequestedFollowup(input));
+      add('requested-followup-edit',editRequestedFollowupSchema,savedRequestedFollowupSchema,input=>d.editRequestedFollowup(input));
+      add('requested-followup-approve',approveRequestedFollowupSchema,requestedApprovalStatusSchema,input=>d.approveRequestedFollowup(input));
       add('delegation-begin-phone',delegatedPhoneHandoffRequestSchema,delegatedPhoneHandoffResultSchema,input=>d.beginPhone(input));
       add('delegation-bootstrap',bootstrapSelectedAccountSchema,commandReceiptSchema,input=>d.bootstrap(input));
       add('delegation-policy',workerPolicyRequestSchema,workerPolicyReceiptSchema,input=>d.configurePolicy(input));

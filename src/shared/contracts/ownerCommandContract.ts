@@ -1,11 +1,11 @@
-import {approveRequestedFollowupSchema} from './requestedFollowupContract';
+import {approveRequestedFollowupSchema,prepareRequestedFollowupSchema,requestedMailContextSchema} from './requestedFollowupContract';
 import {accountRecordSchema} from './accountRecordContract';
 import { saveMeetingOfferSchema } from './meetingContract';
 import { z } from 'zod';
 import { acquisitionMilestoneReportSchema } from './acquisitionReportContract';
 import { audienceQuerySchema, researchCapabilitySchema, researchLimitsSchema } from '../../main/research/companyResearchTypes';
 import { campaignCommandPayloadSchema } from './campaignContract';
-import { accountReplyDraftSchema } from './mailThreadContract';
+import { mailCursorEnvelopeSchema, accountReplyDraftSchema } from './mailThreadContract';
 import { accountIdSchema as id, accountInstantSchema as instant } from './accountContract';
 const revision = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -83,3 +83,10 @@ export const delegationSyncReportSchema=z.strictObject({applied:revision,gaps:re
 
 export const delegatedPhoneHandoffRequestSchema=z.strictObject({command:prepareManualCommandSchema.refine(command=>command.payload.channel==='call'),expectedEvidenceFingerprint:hash});
 export type DelegatedPhoneHandoffRequest=z.infer<typeof delegatedPhoneHandoffRequestSchema>;
+
+/** Authenticated owner-only bounded proof. Never accepts caller authority or expiry. */
+export const requestedOwnerContextRequestSchema=z.strictObject({workspaceId:id,input:prepareRequestedFollowupSchema});
+export const requestedOwnerContextSchema=z.strictObject({workspaceId:id,accountId:id,
+ mailbox:z.strictObject({subject:id,sender:z.string().email().max(254)}),mailContext:requestedMailContextSchema,
+ accountVersion:revision.min(1),researchRevision:revision.min(1),authorityGeneration:revision,aggregateVersion:revision,
+ cursor:z.strictObject({data:mailCursorEnvelopeSchema,rev:revision.min(1)}).nullable(),expiresAt:instant});

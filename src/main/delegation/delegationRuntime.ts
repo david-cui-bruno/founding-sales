@@ -1,3 +1,7 @@
+import {createAccountRoutePolicyImport,type AccountRoutePolicyImportDependencies} from './accountRoutePolicyImport';
+import {SqlRequestedFollowupRepository} from '../outreach/requestedFollowupRepository';
+import {createRequestedFollowupService} from '../outreach/requestedFollowupService';
+import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedFollowupSchema,approveRequestedFollowupSchema,requestedFollowupDraftSchema,requestedApprovalStatusSchema,type PrepareRequestedFollowup,type GetRequestedFollowup,type EditRequestedFollowup,type ApproveRequestedFollowup,type RequestedFollowupDraft} from '../../shared/contracts/requestedFollowupContract';
 import {createDelegatedPhoneHandoff} from './executionRouter';
 import {createInboundReadiness,type InboundRegistry,type InboundAdapter,type OutboundSubject} from '../communications/inboundReadiness';
 import {createRuntimeLinkedInApi} from '../linkedin/linkedInService';
@@ -9,11 +13,11 @@ import type {StoredPairing} from './pairingStore';
 import {DelegationRepository} from './delegationRepository';
 import {SqlDelegationConfiguration,SqlDelegationTransport} from './delegationSync';
 import {ExecutionClient} from './executionClient';
-import {delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,bootstrapSelectedAccountCommandSchema,configureLocalDelegationSchema,localDelegationStatusSchema} from '../../shared/contracts/ownerCommandContract';
+import {approveRequestedFollowupCommandSchema,delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,bootstrapSelectedAccountCommandSchema,configureLocalDelegationSchema,localDelegationStatusSchema} from '../../shared/contracts/ownerCommandContract';
 import {publicDelegationCommandSchema,type DelegatedPhoneHandoffResult} from '../../shared/contracts/delegationContract';
 /** Every repository belongs to a live FoundationRuntime operation lease. No DB
  * handle survives its callback. Local lock aborts work, never revokes the owner. */
-export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:(database:AppDatabase)=>T|Promise<T>):Promise<T>};pairing:StoredPairing|null;clock:{now():string};fetch?:typeof globalThis.fetch;phone?:Parameters<typeof createDelegatedPhoneHandoff>[0]['phone'];inboundRegistry?:InboundRegistry;linkedIn?:Pick<Parameters<typeof createRuntimeLinkedInApi>[0],'provider'|'productFacts'|'shell'|'clipboard'>;configurationChanged?:()=>void|Promise<void>}) {
+export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:(database:AppDatabase)=>T|Promise<T>):Promise<T>};pairing:StoredPairing|null;clock:{now():string};fetch?:typeof globalThis.fetch;phone?:Parameters<typeof createDelegatedPhoneHandoff>[0]['phone'];inboundRegistry?:InboundRegistry;linkedIn?:Pick<Parameters<typeof createRuntimeLinkedInApi>[0],'provider'|'productFacts'|'shell'|'clipboard'>;policyImportNative?:AccountRoutePolicyImportDependencies['native'];requestedModel?:()=>Promise<NonNullable<Parameters<typeof createRequestedFollowupService>[0]['model']>|undefined>;configurationChanged?:()=>void|Promise<void>}) {
  const pairing=input.pairing?Object.freeze({...input.pairing,scopes:Object.freeze([...input.pairing.scopes])}):null;
  let lifetime=new AbortController();let locked=false;let closed=false;
  const flights=new Set<Promise<unknown>>();
@@ -33,6 +37,26 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
   const transport=new SqlDelegationTransport(options);
   const client=new ExecutionClient({repository,transport,pairing:{endpoint:pairing.endpoint,workspaceId:pairing.workspaceId,credential:pairing.credential},fetch:input.fetch,signal});
   return {repository,transport,client,configuration};
+ }
+ const contextInput=(draft:RequestedFollowupDraft):PrepareRequestedFollowup=>({accountId:draft.accountId,originalCall:draft.originalCall,recipientBinding:draft.recipientBinding,expectedAccountVersion:draft.accountVersion,mode:'manual'});
+ function savedDraft(database:AppDatabase,accountId:string,draftId:string){
+  const row=database.raw.prepare('SELECT draft_json FROM delegated_requested_followup_drafts WHERE workspace_id=? AND account_id=? AND id=?').get(pairing!.workspaceId,accountId,draftId) as {draft_json:string}|undefined;
+  return row?requestedFollowupDraftSchema.parse(JSON.parse(row.draft_json)):null;
+ }
+ async function requestedServices(database:AppDatabase,signal:AbortSignal,request:PrepareRequestedFollowup){
+  const current=services(database,signal), active=AbortSignal.any([signal,AbortSignal.timeout(15000)]);
+  if(!(await current.client.sync(active)).ownerFresh)throw Error('requested_owner_unavailable');
+  const proof=await current.client.requestedContext(request,active);
+  if(!(await current.client.sync(active)).ownerFresh)throw Error('requested_owner_unavailable');
+  const transport=accountFingerprint(current.transport.current()), binding=accountFingerprint({...request,mode:'manual'});
+  const store=new SqlRequestedFollowupRepository({database,workspaceId:pairing!.workspaceId,clock:input.clock,mailbox:()=>proof.mailbox,ownerContext:actual=>{
+   assertCurrent(active);
+   if(accountFingerprint({...actual,mode:'manual'})!==binding||accountFingerprint(current.transport.current())!==transport||current.repository.hasPendingStop(request.accountId))throw Error('requested_context_changed');
+   return {...proof,cursor:proof.cursor??null};
+  }});
+  // Fail before generation or mutation. The same synchronous closure is checked again by every SQL reader.
+  store.readContext(request);
+  return {store,current,service:createRequestedFollowupService({store,clock:input.clock,id:randomUUID,model:request.mode==='model'?await input.requestedModel?.():undefined})};
  }
  function createAdapter(handoffId?:string):InboundAdapter{return {id:'delegated-worker-mail',relevant:()=>pairing!==null,
   synchronize:(subject:OutboundSubject,external:AbortSignal)=>new Promise<{revision:string}>((resolve,reject)=>{
@@ -83,6 +107,28 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
  const adapter=createAdapter();
  const readinessForHandoff=(handoffId:string)=>{const scoped=createAdapter(handoffId);return createInboundReadiness({snapshot:()=>{const snapshot=input.inboundRegistry?.snapshot();if(!snapshot||!snapshot.adapters.includes(adapter))return {initialized:false,revision:snapshot?.revision??0,adapters:[]};return {...snapshot,adapters:snapshot.adapters.map(current=>current===adapter?scoped:current)};}});};
  return {
+  prepareRequestedFollowup:(raw:PrepareRequestedFollowup)=>{const request=prepareRequestedFollowupSchema.parse(raw);return run(async(database,signal)=>{const {service}=await requestedServices(database,signal,request);return service.prepareRequestedFollowup(request,signal);});},
+  getRequestedFollowup:(raw:GetRequestedFollowup)=>{const request=getRequestedFollowupSchema.parse(raw);return run(async(database,signal)=>{
+   if(!pairing)throw Error('pairing_unconfigured');const draft=savedDraft(database,request.accountId,request.draftId);if(!draft)return null;
+   try{return (await requestedServices(database,signal,contextInput(draft))).store.get(request.accountId,request.draftId);}catch{
+    assertCurrent(signal);return new SqlRequestedFollowupRepository({database,workspaceId:pairing.workspaceId,clock:input.clock,mailbox:()=>({subject:draft.mailboxSubject,sender:draft.sender})}).get(request.accountId,request.draftId);
+   }
+  });},
+  editRequestedFollowup:(raw:EditRequestedFollowup)=>{const request=editRequestedFollowupSchema.parse(raw);return run(async(database,signal)=>{
+   if(!pairing)throw Error('pairing_unconfigured');const draft=savedDraft(database,request.accountId,request.draftId);if(!draft)throw Error('requested_draft_missing');
+   return (await requestedServices(database,signal,contextInput(draft))).service.editRequestedFollowup(request);
+  });},
+  approveRequestedFollowup:(raw:ApproveRequestedFollowup)=>{const request=approveRequestedFollowupSchema.parse(raw);return run(async(database,signal)=>{
+   const current=services(database,signal);const draft=savedDraft(database,request.draft.accountId,request.draft.id);
+   if(!draft||accountFingerprint(draft)!==accountFingerprint(request.draft))throw Error('requested_saved_content_mismatch');
+   const previous=(database.raw.prepare("SELECT command_json FROM delegated_commands WHERE workspace_id=? AND account_id=? AND json_extract(command_json,'$.kind')='approve-requested-followup' AND json_extract(command_json,'$.payload.approvalId')=?").all(pairing!.workspaceId,draft.accountId,request.approvalId) as {command_json:string}[]).map(row=>approveRequestedFollowupCommandSchema.parse(JSON.parse(row.command_json)));
+   if(previous.length>1||previous[0]&&accountFingerprint(previous[0].payload)!==accountFingerprint(request))throw Error('requested_approval_conflict');
+   const authority=current.repository.authority(draft.accountId);if(!authority||authority.owner!=='worker'||authority.state!=='active'||current.repository.hasPendingStop(draft.accountId))throw Error('requested_owner_inactive');
+   const command=previous[0]??approveRequestedFollowupCommandSchema.parse({commandId:randomUUID(),workspaceId:pairing!.workspaceId,accountId:draft.accountId,expectedAuthorityGeneration:authority.generation,expectedVersion:current.repository.executionVersion(draft.accountId),kind:'approve-requested-followup',payload:{...request,draft}});
+   await current.client.submit(command);await current.client.sync(signal);
+   return requestedApprovalStatusSchema.parse(current.repository.requestedApprovalStatus(command.commandId));
+  });},
+  policyImport:pairing&&input.policyImportNative?createAccountRoutePolicyImport({workspaceId:pairing.workspaceId,clock:input.clock,databaseGate:{withDatabase:run},native:input.policyImportNative}):null,
   adapter,
   readinessForHandoff,
   beginPhone:(raw:unknown):Promise<DelegatedPhoneHandoffResult>=>{const request=delegatedPhoneHandoffRequestSchema.parse(raw);return run((database,signal)=>{if(!input.phone||!pairing)return {status:'held',reason:'phone_unconfigured'};return createDelegatedPhoneHandoff({database,...services(database,signal),phone:input.phone,readinessForHandoff,clock:input.clock,signal,expectedWorkspaceId:pairing.workspaceId}).begin(request);});},

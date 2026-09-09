@@ -1,3 +1,4 @@
+import {requestedApprovalStatusSchema,requestedFollowupDraftSchema,type RequestedApprovalStatus} from '../../shared/contracts/requestedFollowupContract';
 import { createHash, randomUUID } from 'node:crypto';
 import type { AppDatabase } from '../db/database';
 import type { Clock } from '../domain/support/clock';
@@ -69,6 +70,12 @@ export class DelegationRepository {
         authorityGeneration: owner?.generation ?? 0, aggregateVersion: owner?.aggregate_version ?? 0, reason: valid ? null : 'Missing or stale authority' };
       this.raw.prepare('INSERT INTO delegated_commands VALUES(?,?,?,?,?,?,?)')
         .run(command.commandId, command.workspaceId, command.accountId, fingerprint, JSON.stringify(command), JSON.stringify(receipt), this.now());
+      if(command.kind==='approve-requested-followup'){
+        const row=this.raw.prepare('SELECT draft_json FROM delegated_requested_followup_drafts WHERE workspace_id=? AND account_id=? AND id=?').get(command.workspaceId,command.accountId,command.payload.draft.id) as {draft_json:string}|undefined;
+        if(!row||accountFingerprint(requestedFollowupDraftSchema.parse(JSON.parse(row.draft_json)))!==accountFingerprint(command.payload.draft))throw Error('requested_saved_content_mismatch');
+        const status=requestedApprovalStatusSchema.parse({receipt,state:receipt.status==='rejected'?'needs_review':'pending_preflight',intentCommandId:null,reason:receipt.reason});
+        this.raw.prepare('UPDATE delegated_requested_followup_drafts SET approval_json=? WHERE workspace_id=? AND account_id=? AND id=?').run(JSON.stringify(status),command.workspaceId,command.accountId,command.payload.draft.id);
+      }
       if (valid && command.kind === 'delegate') {
         if (owner.owner !== 'local' || owner.state !== 'local') throw new Error('Invalid delegation owner');
         this.raw.prepare("UPDATE delegated_authorities SET state='delegating',updated_at=? WHERE account_id=?").run(this.now(), command.accountId);
@@ -117,16 +124,24 @@ export class DelegationRepository {
   /** A queued receipt is immutable. Owner-applied receipts are read separately. */
   commandStatus(commandId: string): CommandReceipt | null {
     const applied = this.raw.prepare(`SELECT event_json FROM delegated_applied_events WHERE workspace_id=?
-      AND ((json_extract(event_json,'$.kind')='authority.changed' AND json_extract(event_json,'$.payload.receipt.commandId')=?)
+      AND ((json_extract(event_json,'$.kind')='requested_followup.status' AND json_extract(event_json,'$.payload.commandId')=?)
+        OR (json_extract(event_json,'$.kind')='authority.changed' AND json_extract(event_json,'$.payload.receipt.commandId')=?)
         OR (json_extract(event_json,'$.kind') IN('account.bootstrap','manual.outcome','manual.handoff','campaign.changed','acquisition.milestone_reported') AND json_extract(event_json,'$.receipt.commandId')=?)) ORDER BY aggregate_version DESC LIMIT 1`)
-      .get(this.deps.workspaceId, commandId, commandId) as { event_json: string } | undefined;
+      .get(this.deps.workspaceId, commandId, commandId, commandId) as { event_json: string } | undefined;
     if (applied) {
       const event = workerEventSchema.parse(JSON.parse(applied.event_json));
+      if (event.kind === 'requested_followup.status') return event.payload.status.receipt;
       if (event.kind === 'authority.changed') return event.payload.receipt;
       if ('receipt' in event) return event.receipt;
     }
     const queued = this.raw.prepare('SELECT receipt_json FROM delegated_commands WHERE workspace_id=? AND command_id=?').get(this.deps.workspaceId, commandId) as { receipt_json: string } | undefined;
     return queued ? commandReceiptSchema.parse(JSON.parse(queued.receipt_json)) : null;
+  }
+  requestedApprovalStatus(commandId:string):RequestedApprovalStatus|null {
+    const command=this.getCommand(commandId);if(command?.kind!=='approve-requested-followup')return null;
+    const row=this.raw.prepare("SELECT event_json FROM delegated_applied_events WHERE workspace_id=? AND account_id=? AND json_extract(event_json,'$.kind')='requested_followup.status' AND json_extract(event_json,'$.payload.commandId')=? ORDER BY aggregate_version DESC LIMIT 1").get(command.workspaceId,command.accountId,commandId) as {event_json:string}|undefined;
+    if(row){const event=workerEventSchema.parse(JSON.parse(row.event_json));if(event.kind==='requested_followup.status')return event.payload.status;}
+    const receipt=this.commandStatus(commandId);return receipt?requestedApprovalStatusSchema.parse({receipt,state:receipt.status==='rejected'?'needs_review':'pending_preflight',intentCommandId:null,reason:receipt.reason}):null;
   }
   getManualHandoff(handoffId: string): (ManualHandoff & { accountId: string; authorityGeneration: number; consumedAt: string | null }) | null {
     const row = this.raw.prepare(`SELECT e.event_json,h.consumed_at FROM delegated_manual_handoffs h JOIN delegated_applied_events e ON e.id=h.event_id
@@ -204,6 +219,23 @@ export class DelegationRepository {
         if((prior?.aggregate_version??null)!==command.payload.expectedResearchRevision)throw Error('bootstrap_cursor_conflict');
         if(!prior)this.raw.prepare('INSERT INTO delegated_event_cursors VALUES(?,?,?,?,?)').run(event.workspaceId,event.accountId,'research',event.payload.researchRevision,event.id);
       }
+      if(event.kind==='authority.changed'&&event.payload.receipt.status==='rejected'){
+        const command=this.getCommand(event.payload.receipt.commandId);
+        if(command?.kind==='approve-requested-followup'){
+          const row=this.raw.prepare('SELECT draft_json FROM delegated_requested_followup_drafts WHERE workspace_id=? AND account_id=? AND id=?').get(event.workspaceId,event.accountId,command.payload.draft.id) as {draft_json:string}|undefined;
+          if(row&&accountFingerprint(JSON.parse(row.draft_json))===accountFingerprint(command.payload.draft)){
+            const status=requestedApprovalStatusSchema.parse({receipt:event.payload.receipt,state:'needs_review',intentCommandId:null,reason:event.payload.receipt.reason});
+            this.raw.prepare('UPDATE delegated_requested_followup_drafts SET approval_json=? WHERE workspace_id=? AND account_id=? AND id=?').run(JSON.stringify(status),event.workspaceId,event.accountId,command.payload.draft.id);
+          }
+        }
+      }
+      if(event.kind==='requested_followup.status'){
+        const command=this.getCommand(event.payload.commandId);
+        if(command?.kind!=='approve-requested-followup')throw Error('requested_command_missing');
+        const row=this.raw.prepare('SELECT draft_json FROM delegated_requested_followup_drafts WHERE workspace_id=? AND account_id=? AND id=?').get(event.workspaceId,event.accountId,event.payload.draftId) as {draft_json:string}|undefined;
+        // Preserve newer local edits. Immutable command/event status remains queryable separately.
+        if(row&&accountFingerprint(JSON.parse(row.draft_json))===accountFingerprint(command.payload.draft))this.raw.prepare('UPDATE delegated_requested_followup_drafts SET approval_json=? WHERE workspace_id=? AND account_id=? AND id=?').run(JSON.stringify(event.payload.status),event.workspaceId,event.accountId,event.payload.draftId);
+      }
       if (event.kind === 'meeting.outcome') this.applyMeeting(event, at);
       if (event.kind === 'manual.handoff') {
         const p = event.payload;
@@ -274,6 +306,15 @@ export class DelegationRepository {
   private validateExecution(event: WorkerEvent) {
     const owner = this.owner(event.accountId);
     if (!owner) throw new Error('Execution event requires explicit authority');
+    if(event.kind==='requested_followup.status'){
+      const command=this.getCommand(event.payload.commandId),status=event.payload.status;
+      if(command?.kind!=='approve-requested-followup'||command.workspaceId!==event.workspaceId||command.accountId!==event.accountId||command.payload.draft.id!==event.payload.draftId||status.receipt.authorityGeneration!==command.expectedAuthorityGeneration||status.receipt.aggregateVersion!==command.expectedVersion+1||status.intentCommandId!==null&&status.intentCommandId!==command.payload.intentCommandId)throw Error('requested_status_identity');
+      const previous=this.requestedApprovalStatus(command.commandId);
+      if(!previous||previous.receipt.status==='rejected')throw Error('requested_status_conflict');
+      if(previous.receipt.status==='pending'){
+        if(status.state!=='pending_preflight'||event.aggregateVersion!==status.receipt.aggregateVersion||event.authorityGeneration!==status.receipt.authorityGeneration)throw Error('requested_capture_missing');
+      }else if(accountFingerprint(previous.receipt)!==accountFingerprint(status.receipt)||previous.state!=='pending_preflight'&&previous.state!==status.state)throw Error('requested_receipt_changed');
+    }
     if ('receipt' in event || event.kind === 'authority.changed') {
       const receipt = 'receipt' in event ? event.receipt : event.payload.receipt;
       const previous = this.commandStatus(receipt.commandId);
