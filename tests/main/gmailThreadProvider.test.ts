@@ -93,3 +93,25 @@ it('does not authorize dispatch after initial listing until captured history has
   expect(caughtUp.complete).toBe(true);
   expect(caughtUp.nextCursor.historyId).toBe('11');
 });
+
+it.each(['\0', '\x01', '\x1f', '\x7f', 'é'])('rejects unsupported RFC ID character %j before HTTP', async character => {
+  let calls = 0;
+  const fetch = transport(() => { calls++; return { id: 'sent1', threadId: 't1' }; });
+  const sender = createPreparedGmailSender({ accountEmail: grant.email, accessToken: 'fixture', fetch, signal: new AbortController().signal, isCurrent: () => true });
+  const id = `<a${character}@fixture.invalid>`;
+  const email = { commandId: '11111111-1111-4111-8111-111111111111', from: grant.email, to: 'pm@fixture.invalid', subject: 'Reply', body: 'Hello', threadId: 't1', inReplyTo: id, references: [id] };
+  expect(await sender.sendOnce(email)).toEqual({ status: 'not_sent', reasonCode: 'invalid_email' });
+  expect(calls).toBe(0);
+});
+it('folds long ASCII References within serialized byte bounds and rejects multibyte IDs before HTTP', async () => {
+  const sent: string[] = [];
+  const fetch = transport((_url, init) => { sent.push(Buffer.from(JSON.parse(String(init?.body)).raw, 'base64url').toString()); return { id: 'sent1', threadId: 't1' }; });
+  const make = () => createPreparedGmailSender({ accountEmail: grant.email, accessToken: 'fixture', fetch, signal: new AbortController().signal, isCurrent: () => true });
+  const references = Array.from({ length: 50 }, (_, i) => `<${i}${'a'.repeat(175)}@fixture.invalid>`);
+  const email = { commandId: '11111111-1111-4111-8111-111111111111', from: grant.email, to: 'pm@fixture.invalid', subject: 'Reply', body: 'Hello', threadId: 't1', inReplyTo: references[0]!, references };
+  expect(await make().sendOnce(email)).toMatchObject({ status: 'accepted' });
+  for (const line of (sent[0]?.split('\r\n\r\n')[0] ?? '').split('\r\n')) expect(Buffer.byteLength(line)).toBeLessThanOrEqual(998);
+  const unicode = Array.from({ length: 4 }, (_, i) => `<${i}${'é'.repeat(175)}@fixture.invalid>`);
+  expect(await make().sendOnce({ ...email, inReplyTo: unicode[0]!, references: unicode })).toMatchObject({ status: 'not_sent' });
+  expect(sent).toHaveLength(1);
+});

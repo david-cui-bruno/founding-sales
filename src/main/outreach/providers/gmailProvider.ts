@@ -5,7 +5,7 @@ import { requestJsonOnce } from './providerHttp';
 import { fail, gmailCredentialsSchema, mailboxSchema, secretSchema } from './providerValidation';
 
 export type FrozenThreadReply = FrozenEmail & { threadId: string; inReplyTo: string; references: string[] };
-const rfcId = z.string().max(200).regex(/^<[^<>\s\r\n]+@[^<>\s\r\n]+>$/);
+const rfcId = z.string().max(200).regex(/^[\x21-\x7e]+$/).regex(/^<[^<>\s@]+@[^<>\s@]+>$/);
 const emailSchema = z.object({
   commandId: z.string().uuid(), from: mailboxSchema, to: mailboxSchema,
   subject: z.string().min(1).max(240).regex(/^[^\r\n\u0000]*$/),
@@ -57,6 +57,8 @@ export function createPreparedGmailSender(input: {
     const parsed = emailSchema.safeParse(raw);
     if (!parsed.success || parsed.data.from !== accountEmail) return Promise.resolve({ status: 'not_sent', reasonCode: 'invalid_email' });
     const email = parsed.data;
+    let serialized: string;
+    try { serialized = mime(email); } catch { return Promise.resolve({ status: 'not_sent', reasonCode: 'invalid_email' }); }
     const fingerprint = JSON.stringify(email);
     if (flight !== null) return flight.fingerprint === fingerprint ? flight.promise
       : Promise.resolve({ status: 'not_sent', reasonCode: 'command_conflict' });
@@ -68,7 +70,7 @@ export function createPreparedGmailSender(input: {
     const pending = requestJsonOnce({ fetch: input.fetch, signal: input.signal, timeoutMs: input.timeoutMs ?? 20000,
       maxBytes: 16384, url: 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
       init: { method: 'POST', headers: { Authorization: `Bearer ${input.accessToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ raw: Buffer.from(mime(email)).toString('base64url'), ...(email.threadId ? { threadId: email.threadId } : {}) }) },
+        body: JSON.stringify({ raw: Buffer.from(serialized).toString('base64url'), ...(email.threadId ? { threadId: email.threadId } : {}) }) },
     });
     pending.then((reply) => {
       if (reply.status >= 400 && reply.status < 500 && reply.status !== 408) {
@@ -94,8 +96,16 @@ function mime(email: ThreadedEmail): string {
   if (text) words.push(text);
   const subject = words.map((word) => `=?UTF-8?B?${Buffer.from(word).toString('base64')}?=`).join('\r\n ');
   const body = Buffer.from(email.body.replace(/\r\n|\r|\n/g, '\r\n')).toString('base64').match(/.{1,76}/g)?.join('\r\n') ?? '';
-  return [`From: ${email.from}`, `To: ${email.to}`, `Subject: ${subject}`,
+  const references = ['References:'];
+  for (const ref of email.references ?? []) {
+    const last = references.length - 1;
+    if (Buffer.byteLength(`${references[last]} ${ref}`) > 900) references.push(` ${ref}`);
+    else references[last] += ` ${ref}`;
+  }
+  const headers = [`From: ${email.from}`, `To: ${email.to}`, `Subject: ${subject}`,
     `Message-ID: <${email.commandId}@callie.invalid>`,
-    ...(email.inReplyTo ? [`In-Reply-To: ${email.inReplyTo}`, `References: ${email.references?.reduce((line, ref) => line + (line.length && (line.split('\r\n').at(-1)?.length ?? 0) + ref.length > 900 ? '\r\n ' : line.length ? ' ' : '') + ref, '')}`] : []), 'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', body, ''].join('\r\n');
+    ...(email.inReplyTo ? [`In-Reply-To: ${email.inReplyTo}`, references.join('\r\n')] : []), 'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64'].join('\r\n');
+  if (headers.split('\r\n').some(line => Buffer.byteLength(line) > 998 || !/^[\x20-\x7e]*$/.test(line))) throw new Error('invalid_header');
+  return [headers, '', body, ''].join('\r\n');
 }
