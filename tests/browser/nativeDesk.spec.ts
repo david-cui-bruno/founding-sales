@@ -626,6 +626,29 @@ test('unpaired local records remain selectable without worker authority or autom
   await assertClean(page, state);
 });
 
+test('selected local account survives recovery of an initially unavailable daily workspace', async ({page}) => {
+  const state = await mount(page);
+  await localOnly(page);
+  await page.evaluate(() => {
+    const f = window.nativeDeskBrowser.fixture;
+    Object.assign(f.api.daily, {get: async () => { throw Error('Fixture daily read unavailable'); }});
+    window.nativeDeskBrowser.navigate('accounts');
+  });
+  await expect(page.getByText(/Daily workspace unavailable/)).toBeVisible();
+  await page.getByRole('button', {name: /Local account · Local Residential PM/}).click();
+  await expect(page.getByRole('heading', {name: 'Local Residential PM', exact: true})).toBeVisible();
+  await page.evaluate(() => {
+    const f = window.nativeDeskBrowser.fixture;
+    Object.assign(f.api.daily, {get: async () => { f.calls.push({method: 'daily.get'}); return f.snapshot(); }});
+  });
+  await page.getByRole('button', {name: 'Refresh', exact: true}).click();
+  await expect(page.getByText(/Daily workspace unavailable/)).toHaveCount(0);
+  await expect(page.getByRole('heading', {name: 'Local Residential PM', exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.nativeDeskBrowser.opened)).toEqual([]);
+  expect((await methods(page)).filter(method => !['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments'].includes(method))).toEqual([]);
+  await assertClean(page, state);
+});
+
 test('lost local transition response recovers the committed receipt without a second transition on reopen', async ({page}) => {
   const state = await mount(page);
   await localOnly(page, 'legacy');
