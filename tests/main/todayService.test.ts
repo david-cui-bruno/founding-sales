@@ -20,6 +20,8 @@ import {
 import { TodayRepository } from '../../src/main/domain/today/todayRepository';
 import { TodayService } from '../../src/main/domain/today/todayService';
 import { DEFAULT_TODAY_CAPACITY } from '../../src/main/domain/today/todayTypes';
+import { WorkspaceSettingsRepository } from '../../src/main/domain/workspace/workspaceSettingsRepository';
+import type { AccountEvidenceSnapshot } from '../../src/shared/contracts/accountContract';
 import {
   DomainRepositoryDatabaseMismatchError,
   PrioritizationInputCorruptionError,
@@ -62,6 +64,8 @@ describe('TodayService', () => {
   let clock: FixedClock;
   let priorities: PrioritizationService;
   let prioritizationRepository: PrioritizationRepository;
+  let outboundPermission: OutboundPermissionService;
+  let workspaceSettings: WorkspaceSettingsRepository;
   let service: TodayService;
   let phoneCounter = 3000;
 
@@ -82,15 +86,16 @@ describe('TodayService', () => {
     prioritizationRepository = new PrioritizationRepository({ database, unitOfWork, clock });
     const identities = new IdentityRepository({ database, unitOfWork, clock, ids });
     const optOuts = new OptOutRepository({ database, unitOfWork });
-    const outboundPermission = new OutboundPermissionService({
+    outboundPermission = new OutboundPermissionService({
       database, unitOfWork, identities, optOuts,
     });
     priorities = new PrioritizationService({
       database, unitOfWork, clock, repository: prioritizationRepository, outboundPermission,
     });
     const repository = new TodayRepository({ database, unitOfWork });
+    workspaceSettings = new WorkspaceSettingsRepository({ database, unitOfWork });
     service = new TodayService({
-      database, unitOfWork, clock, repository, priorities, outboundPermission,
+      database, unitOfWork, clock, repository, priorities, outboundPermission, workspaceSettings,
     });
     unitOfWork.immediate(() => {
       const installed = prioritizationRepository.installRuleVersion(BUILTIN_PRIORITIZATION_RULE_V1);
@@ -388,6 +393,93 @@ describe('TodayService', () => {
       if (originalTz === undefined) delete process.env.TZ;
       else process.env.TZ = originalTz;
     }
+  });
+
+  function accountSnapshot(accountId: string, overrides: Partial<AccountEvidenceSnapshot> = {}): AccountEvidenceSnapshot {
+    return {
+      account: { id: accountId, name: accountId, domain: `${accountId}.example`, version: 1 },
+      claims: [
+        { kind: 'fact', key: 'residential_scope', value: 'Residential multifamily property management', evidenceIds: [`${accountId}-scope`] },
+        { kind: 'fact', key: 'operating_footprint', value: 'Regional property manager', evidenceIds: [`${accountId}-footprint`] },
+      ],
+      routes: [
+        { id: `${accountId}-route`, accountId, personId: null, channel: 'phone', value: '+15555550100', purpose: 'business', evidenceIds: [`${accountId}-route-evidence`], verification: 'published', version: 1 },
+      ],
+      portfolio: [],
+      unknowns: [],
+      conflicts: [],
+      fingerprint: 'a'.repeat(64),
+      ...overrides,
+    };
+  }
+
+  function addMeetingFirstSettings(newCallSlots: number | null, totalCallCapacity: number | null): void {
+    database.raw.exec('ALTER TABLE workspace_settings ADD COLUMN meeting_first_new_call_slots INTEGER CHECK (meeting_first_new_call_slots >= 0)');
+    database.raw.exec('ALTER TABLE workspace_settings ADD COLUMN meeting_first_total_call_capacity INTEGER CHECK (meeting_first_total_call_capacity >= 0)');
+    database.raw.prepare(`
+      UPDATE workspace_settings
+      SET meeting_first_new_call_slots = ?, meeting_first_total_call_capacity = ?
+      WHERE singleton = 1
+    `).run(newCallSlots, totalCallCapacity);
+  }
+
+  it('plans meeting-first due warm accounts alongside configured new calls from B4 actual outcomes without writes', () => {
+    addMeetingFirstSettings(2, 2);
+    const actualCalls = vi.fn().mockReturnValue([
+      { accountId: 'already-called', attemptId: 'attempt-1', commandId: 'command-1', outcome: 'connected', reportedAt: '2026-08-31T15:30:00.000Z' },
+    ]);
+    const plannedByB4 = new TodayService({
+      database, unitOfWork, clock, repository: new TodayRepository({ database, unitOfWork }),
+      priorities, outboundPermission, workspaceSettings, actualCalls,
+    });
+    const before = database.raw.prepare('SELECT total_changes() AS count').get();
+    const plan = plannedByB4.planMeetingFirstAccountCalls({
+      due: [accountSnapshot('warm-due')],
+      ranked: [accountSnapshot('already-called'), accountSnapshot('new-pm'), accountSnapshot('warm-due')],
+      generatedAt: GENERATED_AT,
+    });
+    expect(plan).toEqual({ accountIds: ['warm-due', 'new-pm'], workloadConflict: false });
+    expect(actualCalls).toHaveBeenCalledWith(database, {
+      from: '2026-08-31T04:00:00.000Z',
+      to: '2026-09-01T04:00:00.000Z',
+    });
+    expect(database.raw.prepare('SELECT total_changes() AS count').get()).toEqual(before);
+  });
+
+  it('leaves meeting-first account calls disabled when settings are unset and reports explicit capacity conflicts', () => {
+    expect(service.planMeetingFirstAccountCalls({
+      due: [accountSnapshot('warm-only')],
+      ranked: [accountSnapshot('new-disabled')],
+      generatedAt: GENERATED_AT,
+    })).toEqual({ accountIds: ['warm-only'], workloadConflict: false });
+
+    addMeetingFirstSettings(1, 1);
+    expect(service.planMeetingFirstAccountCalls({
+      due: [accountSnapshot('warm-a'), accountSnapshot('warm-b')],
+      ranked: [accountSnapshot('new-conflict')],
+      generatedAt: GENERATED_AT,
+    })).toEqual({ accountIds: ['warm-a', 'warm-b', 'new-conflict'], workloadConflict: true });
+  });
+
+  it('uses factual contactable account ranks and preserves unknown or non-target accounts outside new calls', () => {
+    addMeetingFirstSettings(3, null);
+    expect(service.planMeetingFirstAccountCalls({
+      due: [],
+      ranked: [
+        accountSnapshot('unknown', { claims: [], unknowns: ['residential_scope'] }),
+        accountSnapshot('uncontactable', { routes: [] }),
+        accountSnapshot('supported'),
+      ],
+      generatedAt: GENERATED_AT,
+    })).toEqual({ accountIds: ['supported'], workloadConflict: false });
+  });
+
+  it('rejects partially configured meeting-first account settings', () => {
+    database.raw.exec('ALTER TABLE workspace_settings ADD COLUMN meeting_first_new_call_slots INTEGER CHECK (meeting_first_new_call_slots >= 0)');
+    database.raw.prepare('UPDATE workspace_settings SET meeting_first_new_call_slots = 1 WHERE singleton = 1').run();
+    expect(() => service.planMeetingFirstAccountCalls({
+      due: [], ranked: [accountSnapshot('new')], generatedAt: GENERATED_AT,
+    })).toThrow('partially configured');
   });
 
   it('rejects malformed channel policy snapshots before reading the clock', () => {

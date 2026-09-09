@@ -98,6 +98,31 @@ export class WorkspaceSettingsRepository {
     });
   }
 
+  readMeetingFirstAccountCallSettings(): { newCallSlots: number | null; totalCallCapacity: number | null } {
+    const columns = this.database.raw.prepare('PRAGMA table_info(workspace_settings)').all() as { name: string }[];
+    const names = new Set(columns.map(column => column.name));
+    if (!names.has('meeting_first_new_call_slots') && !names.has('meeting_first_total_call_capacity')) {
+      return Object.freeze({ newCallSlots: null, totalCallCapacity: null });
+    }
+    if (!names.has('meeting_first_new_call_slots') || !names.has('meeting_first_total_call_capacity')) {
+      throw new WorkspaceSettingsCorruptionError('Meeting-first account call settings are partially configured.');
+    }
+    const row = this.database.raw.prepare(`
+      SELECT meeting_first_new_call_slots AS newCallSlots,
+             meeting_first_total_call_capacity AS totalCallCapacity
+      FROM workspace_settings WHERE singleton = 1
+    `).get() as { newCallSlots: number | null; totalCallCapacity: number | null } | undefined;
+    const parsed = z.object({
+      newCallSlots: z.number().int().nonnegative().nullable(),
+      totalCallCapacity: z.number().int().nonnegative().nullable(),
+    }).strict().safeParse(row);
+    if (!parsed.success) throw new WorkspaceSettingsCorruptionError('Meeting-first account call settings are malformed.');
+    return Object.freeze({
+      newCallSlots: parsed.data.newCallSlots,
+      totalCallCapacity: parsed.data.totalCallCapacity,
+    });
+  }
+
   activateRulePointerCas(input: {
     expectedActiveRuleVersionId: string | null;
     nextActiveRuleVersionId: string;

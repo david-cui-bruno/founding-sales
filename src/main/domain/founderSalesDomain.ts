@@ -1,3 +1,4 @@
+import type { AccountOutboundRequest, AccountCallReport, AccountCallRange } from '../../shared/contracts/accountOutboundContract';
 import { collectLeadTriageSnapshot, type LeadTriageQueueRow } from '../today/leadTriageReportService';
 import { leadTriageSnapshotRequestSchema, type LeadTriageSnapshot, type LeadTriageSnapshotRequest } from '../../shared/contracts/leadTriageReportContract';
 import { createHash } from 'node:crypto';
@@ -417,6 +418,17 @@ export class FounderSalesDomain implements OutboundDomainPort {
     this.ids = input.ids;
     this.configuredTimezone = input.timezone;
   }
+
+  // Account-only delegates never route account identities through person authorization.
+  inspectAccountOutboundCommand(request: AccountOutboundRequest) { return this.services.accountOutreach.inspect(request); }
+  getAccountOutboundOwnerGeneration(request: AccountOutboundRequest) { return this.services.accountOutreach.ownerGeneration(request); }
+  prepareAccountOutboundDispatch(request: AccountOutboundRequest, ownerGeneration: string | null) {
+    return this.services.accountOutreach.reserve(request, ownerGeneration);
+  }
+  recordAccountOutboundRefusal(request: AccountOutboundRequest, reason: string) { return this.services.accountOutreach.recordRefusal(request, reason); }
+  recordAccountOutboundResult(request: AccountOutboundRequest, result: HandoffResult) { return this.services.accountOutreach.recordDispatch(request, result); }
+  reportAccountCallOutcome(report: AccountCallReport) { return this.services.accountOutreach.reportCallOutcome(report); }
+  listActualCallAttempts(range: AccountCallRange) { return this.services.accountOutreach.listActualCallAttempts(range); }
 
   // ---------------------------------------------------------------- leads
 

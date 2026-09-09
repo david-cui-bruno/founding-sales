@@ -1,3 +1,5 @@
+import { AccountRepository } from './accounts/accountRepository';
+import { AccountOutreach } from './accounts/accountOutreach';
 import type { AppDatabase } from '../db/database';
 import { CadenceRepository } from './cadence/cadenceRepository';
 import { ContactComplianceService } from './compliance/contactComplianceService';
@@ -28,6 +30,7 @@ import { WorkspaceSettingsRepository } from './workspace/workspaceSettingsReposi
 import { JobRepository } from '../jobs/jobRepository';
 
 export type DomainServices = Readonly<{
+  accountOutreach: AccountOutreach;
   unitOfWork: DomainUnitOfWork;
   discoveryRepository: DiscoveryRepository;
   discoveryRead: DiscoveryReadService;
@@ -66,6 +69,8 @@ export function createDomainServices(input: {
   const { database, clock, ids } = input;
   const timezone = input.timezone ?? 'America/New_York';
   const unitOfWork = new DomainUnitOfWork(database);
+  // No company policy adapter until serialized schema21 supplies genuine evidence.
+  const accountOutreach = new AccountOutreach({ database, clock, ids, accounts: new AccountRepository({ database, clock, ids }) });
   const discoveryRepository = new DiscoveryRepository({ database, unitOfWork });
   const jobs = new JobRepository(database);
   const identities = new IdentityRepository({ database, unitOfWork, clock, ids });
@@ -140,6 +145,7 @@ export function createDomainServices(input: {
   workspaceSettings.assertBoundTo(database, unitOfWork);
 
   return Object.freeze({
+    accountOutreach,
     unitOfWork,
     discoveryRepository,
     discoveryRead,
