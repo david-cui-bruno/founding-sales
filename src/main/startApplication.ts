@@ -1,3 +1,11 @@
+import { z } from 'zod';
+import { AccountRepository } from './domain/accounts/accountRepository';
+import { SqlDiscoveryReservationStore } from './delegation/discoveryReservationStore';
+import { createCompanyDiscoveryProvider } from './research/companyDiscoveryProvider';
+import { createCompanyPageProvider, type PageHttp } from './research/companyPageProvider';
+import { createFetchedReceiptPolicy, companySourcePolicy } from './research/companySourcePolicy';
+import { createCompanyPreparation, createCompanyResearchWorker, discoveryInputFingerprint, type CompanyPreparationConfiguration } from './research/companyResearchWorker';
+import type { AccountResearchStore, DiscoveryReservationStore } from './research/companyResearchTypes';
 import { createEmailService } from './outreach/emailService';
 import { createOutreachProviders } from './outreach/providers/outreachProviders';
 import { registerOutreachIpc } from './ipc/registerOutreachIpc';
@@ -206,8 +214,79 @@ export function createStartupPhoneBindings(options: ApplicationStartupOptions, r
   });
 }
 
+export type CompanyResearchStartupConfiguration = CompanyPreparationConfiguration & {
+  maxAccountBudgetMicros: number;
+  /** Explicit permitted public URLs, never a model-provided boolean. */
+  permittedSources: readonly string[];
+};
+export type StartupCompanyResearch = {
+  prepare(commandId: string, signal: AbortSignal): Promise<{ status: 'prepared' | 'blocked'; accountIds: string[] }>;
+  runNext(signal: AbortSignal): Promise<'completed' | 'parked' | 'idle'>;
+};
+/** Main-only composition over the actual runtime gate and C1 SQL ledger. No
+ * account, grant, timer, credential read or HTTP operation occurs at construction. */
+function createStartupCompanyResearch(input: { runtime: FoundationRuntime; providers: ReturnType<typeof createOutreachProviders>;
+  configuration: CompanyResearchStartupConfiguration; http?: PageHttp; resolve?: (hostname: string) => Promise<string[]> }) {
+  const config = structuredClone(input.configuration);
+  discoveryInputFingerprint(config);
+  z.number().int().positive().max(Number.MAX_SAFE_INTEGER).parse(config.maxAccountBudgetMicros);
+  const permitted = new Set(z.array(z.string().url().max(2048)).max(500).parse(config.permittedSources));
+  if ([...permitted].some(url => companySourcePolicy(url) !== 'candidate')) throw new Error('Research source configuration invalid');
+  const receipts = createFetchedReceiptPolicy();
+  let locked = false; let closed = false; let lifetime = new AbortController();
+  const flights = new Set<Promise<unknown>>();
+  const invalidate = (suspended?: boolean) => {
+    if (suspended !== undefined) locked = suspended;
+    lifetime.abort(); lifetime = new AbortController();
+  };
+  const stores = (signal: AbortSignal) => {
+    const account = <T,>(operation: (repo: AccountRepository) => T, settlement = false) => input.runtime.withDatabase(database => {
+      if (!settlement) signal.throwIfAborted();
+      return operation(new AccountRepository({ database, clock: domainClock, ids: domainIds, sourcePolicy: receipts,
+        research: { maxBudgetMicros: config.maxAccountBudgetMicros } }));
+    });
+    const store: AccountResearchStore = {
+      create: value => account(repo => repo.create(value)), snapshot: (id, at) => account(repo => repo.snapshot(id, at)),
+      admitEvidence: (batch, claim) => account(repo => repo.admitEvidence(batch, claim)), enqueue: value => account(repo => repo.enqueue(value)),
+      claimNext: at => account(repo => repo.claimNext(at)), settle: value => account(repo => repo.settle(value), true),
+    };
+    const discovery = <T,>(operation: (repo: SqlDiscoveryReservationStore) => T) => input.runtime.withDatabase(database => {
+      signal.throwIfAborted();
+      return operation(new SqlDiscoveryReservationStore({ database, workspaceId: config.workspaceId, clock: domainClock }));
+    });
+    const reservations: DiscoveryReservationStore = { reserveOnce: value => discovery(repo => repo.reserveOnce(value)), complete: value => discovery(repo => repo.complete(value)) };
+    return { store, reservations };
+  };
+  const invoke = <T,>(signal: AbortSignal, inactive: T, operation: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    if (closed || locked || signal.aborted) return Promise.resolve(inactive);
+    if (flights.size) return Promise.reject(new Error('Company research operation already in progress'));
+    const combined = AbortSignal.any([signal, lifetime.signal]);
+    const pending = operation(combined);
+    flights.add(pending);
+    void pending.then(() => flights.delete(pending), () => flights.delete(pending));
+    return pending;
+  };
+  const api: StartupCompanyResearch = {
+    prepare: (commandId, signal) => invoke(signal, { status: 'blocked', accountIds: [] }, async active => {
+      const { store, reservations } = stores(active);
+      const discovery = createCompanyDiscoveryProvider({ capability: config.capability,
+        request: (query, limits, requestSignal) => input.providers.researchCompanies({ query, limits, capability: config.capability }, requestSignal) });
+      return createCompanyPreparation({ store, reservations, discovery, configuration: config }).prepare(commandId, active);
+    }),
+    runNext: signal => invoke(signal, 'idle', async active => {
+      const { store } = stores(active);
+      const pages = createCompanyPageProvider({ receipts, clock: domainClock, permitted: url => permitted.has(url), http: input.http, resolve: input.resolve });
+      return createCompanyResearchWorker({ store, pages, clock: domainClock }).runNext(active);
+    }),
+  };
+  return { api, invalidate, dispose: async () => { closed = true; invalidate(true); await Promise.allSettled([...flights]); } };
+}
+
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
-  createEmailService?(runtime:FoundationRuntime,userDataPath:string):ReturnType<typeof createEmailService>;
+  createEmailService?(runtime:FoundationRuntime,userDataPath:string,providers?:ReturnType<typeof createOutreachProviders>):ReturnType<typeof createEmailService>;
+  createResearchProviders?(userDataPath:string):ReturnType<typeof createOutreachProviders>;
+  companyResearchHttp?: PageHttp;
+  companyResearchResolve?: (hostname: string) => Promise<string[]>;
   registerOutreachIpc?:typeof registerOutreachIpc;
   createDiscoveryWorker?: typeof createDiscoveryWorker;
   createOutboundCommandService?: typeof createOutboundCommandService;
@@ -253,6 +332,8 @@ export type ApplicationStartupOptions = {
   appleBridge?: AppleBridgeSupervisorOptions;
   appleSpikeEnabled?: boolean;
   phoneRouteMode?: 'native' | 'fixture';
+  /** Main-only explicit configuration. C6/D3 own persisted user/campaign activation. */
+  companyResearch?: CompanyResearchStartupConfiguration;
   /**
    * Auto-polls the sourcing inbox on startup plus every 15 minutes. Off by
    * default so tests and packaged E2E runs never touch the network; main.ts
@@ -271,6 +352,7 @@ export type ApplicationStartupOptions = {
 
 export type RunningApplication = {
   databasePath: string;
+  companyResearch?: StartupCompanyResearch;
   createPreReleaseBackup(): Promise<VerifiedBackup>;
   shutdown(): Promise<void>;
 };
@@ -459,8 +541,9 @@ const defaultDependencies: ApplicationStartupDependencies = {
   createHealthService: (options) => new HealthService(options),
   registerApplicationIpc,
   registerOutreachIpc,
-  createEmailService: (runtime,userDataPath) => createEmailService({databaseGate:runtime,
-    providers:createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)})}),
+  createResearchProviders: userDataPath => createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)}),
+  createEmailService: (runtime,userDataPath,providers) => createEmailService({databaseGate:runtime,
+    providers:providers ?? createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)})}),
   createSourcingPoller: createProductionSourcingPoller,
   createEnrichmentRequester: createProductionEnrichmentRequester,
   createAppleBridgeSupervisor: (options) => new AppleBridgeSupervisor(options),
@@ -484,6 +567,9 @@ export async function startApplication(
     dependencies,
   );
   let email:ReturnType<typeof createEmailService>|undefined;
+  let researchProviders: ReturnType<typeof createOutreachProviders> | undefined;
+  let companyResearch: ReturnType<typeof createStartupCompanyResearch> | undefined;
+  let researchCleanup: Promise<void> | undefined;
   let unregisterEmail:(()=>void)|undefined;
   let unregisterApplicationIpc: (() => void) | undefined;
   let unregisterAppleSpikeIpc: (() => void) | undefined;
@@ -523,7 +609,10 @@ export async function startApplication(
     if (outboundClosed) return;
     // Reserve permanent owner closure before any injected callback can reenter.
     outboundClosed = true;
+    // Abort research before touching the single shared credential owner.
+    try { researchCleanup = companyResearch?.dispose(); void researchCleanup?.catch((): undefined => undefined); } catch (error) { cleanupErrors.push(error); }
     try { email?.dispose(); } catch (error) { cleanupErrors.push(error); }
+    try { researchProviders?.dispose(); } catch (error) { cleanupErrors.push(error); }
     startupInboundRegistry?.reset();
     try { phoneBindings?.dispose?.(); } catch (error) { cleanupErrors.push(error); }
     try { outbound?.dispose(); } catch (error) { cleanupErrors.push(error); }
@@ -570,6 +659,7 @@ export async function startApplication(
         sourcingPoller = undefined;
       }
 
+      try { await researchCleanup; } catch (error) { cleanupErrors.push(error); }
       try { await discoveryWorker?.idle(); } catch (error) { cleanupErrors.push(error); }
       finally { discoveryWorker = undefined; }
 
@@ -653,7 +743,15 @@ export async function startApplication(
       domain, phone: phoneBindings.phone, readiness: phoneBindings.readiness,
     });
     phoneBindings.onSetupChanged?.(() => { if (!outboundClosed) outbound.invalidate('wake'); });
-    email = dependencies.createEmailService?.(runtime,options.userDataPath);
+    if (options.companyResearch && dependencies.createResearchProviders) {
+      researchProviders = dependencies.createResearchProviders(options.userDataPath);
+      companyResearch = createStartupCompanyResearch({ runtime, providers: researchProviders, configuration: options.companyResearch,
+        http: dependencies.companyResearchHttp, resolve: dependencies.companyResearchResolve });
+    }
+    // Email borrows the same manager without owning its disposal in research mode.
+    const borrowedProviders = researchProviders ? { ...researchProviders, dispose: (): void => undefined,
+      invalidate: () => { companyResearch?.invalidate(); researchProviders!.invalidate(); } } : undefined;
+    email = dependencies.createEmailService?.(runtime,options.userDataPath,borrowedProviders);
     if(outboundClosed)email?.dispose();
     // The composed v1 email service sends drafts but owns no inbound adapter, and
     // the optional Apple spike is not a synchronization adapter. This explicit
@@ -667,10 +765,11 @@ export async function startApplication(
       throwIfStartupCancelled(signal);
     }
     unregisterOutboundLifecycle = options.registerOutboundLifecycle?.({
-      onWake: () => { if (!outboundClosed) {phoneBindings?.invalidate?.();email?.invalidate();outbound.invalidate('wake');} },
-      onLock: () => { if (!outboundClosed) {phoneBindings?.invalidate?.(true);email?.invalidate(true);outbound.invalidate('lock');} },
+      onWake: () => { if (!outboundClosed) {companyResearch?.invalidate();phoneBindings?.invalidate?.();email?.invalidate();outbound.invalidate('wake');} },
+      onLock: () => { if (!outboundClosed) {companyResearch?.invalidate(true);phoneBindings?.invalidate?.(true);email?.invalidate(true);outbound.invalidate('lock');} },
       onUnlock: () => {
         if (outboundClosed) return;
+        companyResearch?.invalidate(false);
         phoneBindings?.invalidate?.(false);
         email?.invalidate(false);
         outbound.invalidate('wake');
@@ -792,6 +891,7 @@ export async function startApplication(
 
     return {
       databasePath,
+      companyResearch: companyResearch?.api,
       createPreReleaseBackup: async () => {
         if (shutdownPromise !== undefined || backupService === undefined) {
           throw new Error('Application backups are unavailable.');
