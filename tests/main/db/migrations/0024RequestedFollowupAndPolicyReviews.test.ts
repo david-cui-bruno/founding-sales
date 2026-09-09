@@ -1,8 +1,32 @@
 import { randomUUID } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { closeDatabase, openDatabase } from '../../../../src/main/db/database';
+import { DOMAIN_SCHEMA_MANIFEST } from '../../../../src/main/domain/startup/storageReadiness';
 import { createPmFixture, PM_NOW } from '../../../fixtures/pmAccounts';
 import { createTestWorkspaceKey } from '../../../fixtures/tempDatabase';
+
+it.each(['context insert', 'context update', 'artifact insert'] as const)('rejects embedded NUL in schema24 SHA256 on %s', async operation => {
+  const f = await createPmFixture();
+  try {
+    const account = f.repo.create({ commandId: randomUUID(), name: 'Fictional Hash Boundary PM', domain: null });
+    const draft = f.db.raw.prepare('INSERT INTO delegated_requested_followup_drafts VALUES(?,?,?,?,?,?,?,?)');
+    const valid = 'a'.repeat(64);
+    if (operation === 'context update') draft.run('workspace', account.id, 'retained', 1, valid, '{}', null, PM_NOW);
+    for (const offset of [63, 0, 31]) {
+      const malformed = `${'a'.repeat(offset)}\0${'a'.repeat(63 - offset)}`;
+      expect(Buffer.byteLength(malformed)).toBe(64);
+      if (operation === 'context insert') {
+        expect(() => draft.run('workspace', account.id, randomUUID(), 1, malformed, '{}', null, PM_NOW)).toThrow(/CHECK constraint failed/);
+      } else if (operation === 'context update') {
+        expect(() => f.db.raw.prepare('UPDATE delegated_requested_followup_drafts SET context_revision=? WHERE id=?').run(malformed, 'retained')).toThrow(/CHECK constraint failed/);
+        expect(f.db.raw.prepare('SELECT context_revision FROM delegated_requested_followup_drafts WHERE id=?').get('retained')).toEqual({ context_revision: valid });
+      } else {
+        expect(() => f.db.raw.prepare('INSERT INTO account_route_policy_import_reviews VALUES(?,?,?,?,?,?,?,?,?,?)')
+          .run(randomUUID(), randomUUID(), malformed, Buffer.from('fictional artifact'), '[{}]', 1, 'Exact fictional review', PM_NOW, 'local_owner_review', 'account_route_policy_import_review_v1')).toThrow(/CHECK constraint failed/);
+      }
+    }
+  } finally { f.close(); }
+});
 
 it('persists threadless drafts and immutable owner reviews with strict SQL boundaries across encrypted reopen', async () => {
   const f = await createPmFixture();
@@ -58,6 +82,9 @@ it('preserves the genuine23 catalog and every historical business row while addi
     const rows = () => tables.map(name => [name, database.raw.prepare(`SELECT * FROM "${name}"`).raw().all()]);
     const before = rows();
     expect(await migrateToLatest(database, options)).toEqual({ fromVersion: 23, toVersion: 24, appliedMigrationIds: ['0024RequestedFollowupAndPolicyReviews'] });
+    const currentCatalog = database.raw.prepare("SELECT type,name,sql FROM sqlite_master WHERE type IN('table','index','trigger') AND(type<>'index' OR sql IS NOT NULL) ORDER BY type COLLATE BINARY,name COLLATE BINARY").all() as typeof catalog;
+    expect(createHash('sha256').update(JSON.stringify(currentCatalog.map(row => [row.type, row.name, row.sql.replace(/\s+/g, ' ').trim()]))).digest('hex'))
+      .toBe(DOMAIN_SCHEMA_MANIFEST.catalogSha256);
     expect(rows()).toEqual(before);
     for (const original of catalog) expect(database.raw.prepare('SELECT type,name,sql FROM sqlite_master WHERE name=?').get(original.name)).toEqual(original);
     closeDatabase(database);

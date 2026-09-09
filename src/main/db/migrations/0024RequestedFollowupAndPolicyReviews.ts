@@ -14,7 +14,7 @@ const uuid = (column: string) => `length(${column}) = 36
  OR (substr(${column},15,1) GLOB '[1-8]' AND substr(${column},20,1) GLOB '[89ab]'))`;
 const utc = (column: string) => `typeof(${column})='text' AND length(${column})=24
  AND strftime('%Y-%m-%dT%H:%M:%fZ',${column},'+0 seconds') IS ${column}`;
-const hash = (column: string) => `typeof(${column})='text' AND length(CAST(${column} AS BLOB))=64 AND ${column} NOT GLOB '*[^0-9a-f]*'`;
+const hash = (column: string) => `typeof(${column})='text' AND length(${column})=64 AND length(CAST(${column} AS BLOB))=64 AND ${column} NOT GLOB '*[^0-9a-f]*'`;
 const object = (column: string) => `typeof(${column})='text' AND length(CAST(${column} AS BLOB)) BETWEEN 2 AND 4194304 AND json_valid(${column}) AND json_type(${column})='object'`;
 
 /** Additive storage only. No historical schema or execution authority is changed. */

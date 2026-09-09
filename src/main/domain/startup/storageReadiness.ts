@@ -373,7 +373,7 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'workflow_transition_receipts_no_update',
   ]),
   // Generated from actual production migrations through 0024.
-  catalogSha256: '8d85ca6f37fc541761f7135d7de32a66802ca07ff46185d6004d5ce70bcc97c0',
+  catalogSha256: '540015183cea4abf0ec50df42e643d5d7e6901a3dfd6a3a9a5c538ae80661a6b',
 });
 
 export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
