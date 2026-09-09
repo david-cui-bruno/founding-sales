@@ -1,6 +1,6 @@
 # FSS: a meeting-first acquisition system
 
-**September 8, 2026 · Written design for review · Not an implementation or activation approval**
+**September 8, 2026 · Design approved by David at 23:55 UTC · Implementation planning authorized; live activation remains separate**
 
 ## 1. The product in one minute
 
@@ -22,7 +22,7 @@ Genuine cold-email delivery remains an optional, separately gated transport. It 
 
 ## 2. Decisions and boundaries
 
-This consolidates the September 8 interview: Mac plus small worker approved at 22:20 UTC, residential-PM-first at 22:26, the daily workflow at 22:30, small campaigns at 22:36, and AI-prepared/manual LinkedIn at 22:42. The engineering contracts below are proposals for written review, not previously implemented capabilities.
+This consolidates the September 8 interview: Mac plus small worker approved at 22:20 UTC, residential-PM-first at 22:26, the daily workflow at 22:30, small campaigns at 22:36, and AI-prepared/manual LinkedIn at 22:42. David approved the written design at 23:55 UTC. The engineering contracts describe the intended implementation, not previously implemented capabilities.
 
 | FSS handles | David handles |
 |---|---|
@@ -179,7 +179,7 @@ Judge acquisition experiments at the account level over comparable observation w
 
 ## 11. What still needs a choice
 
-- **Written design review now.** Confirm this is the product to implement, or amend it.
+- **Written design review completed.** Approved September 8 at 23:55 UTC, followed by implementation planning.
 - **Before the relevant slice:** a focused home-layout review, and concrete adapter/hosting selections within the budget. Present any purchase trade-off before spending.
 - **Before live activation:** actual accounts/grants, consenting test endpoints, worker deployment, scheduling rules and campaign launch approval.
 - **Optional later:** curated personal writing examples, a permitted cold-email sender and any additional paid lookup budget.
