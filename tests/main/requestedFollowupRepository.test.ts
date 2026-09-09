@@ -29,6 +29,9 @@ async function fixture() {
   for (const event of [f.handoffEvent, f.event]) raw.prepare('INSERT INTO delegated_applied_events VALUES(?,?,?,?,?,?,?,?,?)').run(event.id, 'ws', account.id, 'execution', event.aggregateVersion, event.authorityGeneration, accountFingerprint(event), JSON.stringify(event), PM_NOW);
   const h = f.handoff;
   raw.prepare('INSERT INTO delegated_manual_handoffs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('ws', account.id, h.handoffId, h.actionId, 0, h.targetHash, h.contentHash, h.contextRevision, h.channel, h.routeId, h.routeVersion, h.expiresAt, f.handoffEvent.id, PM_NOW, f.command.commandId);
+  raw.prepare('INSERT INTO campaign_versions VALUES(?,?,?,?,?,?,?)').run('ws', f.version.id, f.version.campaignId, 1, JSON.stringify(f.version), accountFingerprint(f.version), PM_NOW);
+  raw.prepare('INSERT INTO campaign_enrollments VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('ws', 'enroll1', account.id, 'version1', 'phone1', 1, null, null, 2, 'completed', 1, f.handoff.contextRevision, PM_NOW, PM_NOW);
+  raw.prepare('INSERT INTO campaign_step_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('ws', 'origin', account.id, 'enroll1', 'call-step', 'phone1', 1, 1, f.handoff.contextRevision, 'call1', 'call', 'human_reported_sent', 'connected', 'unknown', 'human', PM_NOW, f.command.commandId);
   const deps = { database: local.db, workspaceId: 'ws', clock: { now: () => PM_NOW }, mailbox: () => ({ subject: 'sub1', sender: f.draft.sender }) };
   return { ...f, local, deps, repo: new SqlRequestedFollowupRepository(deps) };
 }
@@ -81,5 +84,28 @@ it('editing clears only the mutable approval pointer, preserving immutable call 
     f.repo.save({ ...f.draft, revision: 2, body: 'New reviewed text' }, 1);
     expect(f.repo.get(f.draft.accountId, f.draft.id)?.approval).toBeNull();
     expect(f.local.db.raw.prepare('SELECT * FROM delegated_applied_events ORDER BY id').all()).toEqual(before);
+  } finally { f.local.close(); }
+});
+it('later immutable connected-call contradiction refuses SQL prepare and edit while retaining original history', async () => {
+  const f = await fixture();
+  try {
+    f.repo.save(f.draft, null);
+    f.local.db.raw.prepare('INSERT INTO campaign_step_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('ws', 'contradiction', f.draft.accountId, 'enroll1', 'call-step', 'phone1', 1, 1, f.handoff.contextRevision, 'call1', 'call', 'cancelled', 'conflict:contradictory_finalized_outcome:not_called', 'unknown', 'human', PM_NOW, '44444444-4444-4444-8444-444444444444');
+    const service = createRequestedFollowupService({ store: f.repo, clock: f.deps.clock, id: () => 'contradicted' });
+    await expect(service.prepareRequestedFollowup({ accountId: f.draft.accountId, originalCall: f.ref, recipientBinding: f.draft.recipientBinding, expectedAccountVersion: 2, mode: 'manual' }, new AbortController().signal)).rejects.toThrow();
+    expect(() => f.repo.save({ ...f.draft, revision: 2, body: 'Edited' }, 1)).toThrow();
+    expect(f.repo.get(f.draft.accountId, f.draft.id)?.draft).toEqual(f.draft);
+  } finally { f.local.close(); }
+});
+it('actual immutable later outcome event blocks SQL context even before its campaign receipt projection', async () => {
+  const f = await fixture();
+  try {
+    const { workerEventSchema } = await import('../../src/shared/contracts/delegationContract');
+    const later = workerEventSchema.parse({ ...f.event, id: 'later-conflict', aggregateVersion: 3,
+      receipt: { ...f.receipt, aggregateVersion: 3, commandId: '44444444-4444-4444-8444-444444444444' },
+      campaign: { commandId: '44444444-4444-4444-8444-444444444444', version: null, enrollment: f.enrollment, evidence: { ...f.evidence, conflict: 'contradictory_finalized_outcome', outcome: 'not_called', state: 'cancelled' } } });
+    f.local.db.raw.prepare('INSERT INTO delegated_applied_events VALUES(?,?,?,?,?,?,?,?,?)').run(later.id, 'ws', f.draft.accountId, 'execution', 3, 0, accountFingerprint(later), JSON.stringify(later), PM_NOW);
+    expect(() => f.repo.save(f.draft, null)).toThrow('requested_call_conflict');
+    expect(f.repo.get(f.draft.accountId, f.draft.id)).toBeNull();
   } finally { f.local.close(); }
 });

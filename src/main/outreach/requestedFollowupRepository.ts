@@ -35,6 +35,26 @@ export class SqlRequestedFollowupRepository {
       void _consumed;
       const originalCall = validateRequestedOriginalCall({ workspaceId: this.deps.workspaceId, accountId, reference: input.originalCall, command: JSON.parse(command.command_json), commandFingerprint: command.fingerprint,
         event: JSON.parse(event.event_json), handoff: originalHandoff, handoffAccountId, handoffGeneration });
+      // Immutable original receipt plus current enrollment/conflict evidence share
+      // this SQL snapshot (and the immediate save transaction), not mutable lastOutcome.
+      const receipt = raw.prepare(`SELECT r.*,e.campaign_version_id,e.state AS enrollment_state FROM campaign_step_receipts r
+        JOIN campaign_enrollments e ON e.workspace_id=r.workspace_id AND e.account_id=r.account_id AND e.id=r.enrollment_id
+        WHERE r.workspace_id=? AND r.account_id=? AND r.command_id=?`).get(this.deps.workspaceId, accountId, input.originalCall.commandId) as {
+          enrollment_id: string; step_id: string; route_id: string; route_version: number; execution_context_id: string; context_revision: number;
+          action_id: string; channel: string; state: string; outcome: string; source: string; campaign_version_id: string; enrollment_state: string;
+        } | undefined;
+      const evidence = originalCall.event.campaign?.evidence, h = originalCall.handoff;
+      if (!receipt || !evidence || receipt.enrollment_id !== h.campaign.enrollmentId || receipt.step_id !== h.campaign.stepId
+        || receipt.action_id !== h.actionId || receipt.route_id !== h.routeId || receipt.route_version !== h.routeVersion || receipt.execution_context_id !== h.contextRevision
+        || receipt.channel !== 'call' || receipt.state !== 'human_reported_sent' || receipt.outcome !== 'connected' || receipt.source !== 'human'
+        || receipt.campaign_version_id !== evidence.campaignVersionId || receipt.context_revision !== evidence.contextRevision
+        || !['active', 'conversation', 'completed'].includes(receipt.enrollment_state)) throw new Error('requested_call_origin_invalid');
+      if (raw.prepare(`SELECT 1 FROM campaign_step_receipts WHERE workspace_id=? AND account_id=? AND enrollment_id=?
+        AND (outcome LIKE 'conflict:%' OR outcome='opt_out') LIMIT 1`).get(this.deps.workspaceId, accountId, receipt.enrollment_id)
+        || raw.prepare(`SELECT 1 FROM delegated_applied_events WHERE workspace_id=? AND account_id=?
+          AND json_extract(event_json,'$.campaign.evidence.enrollmentId')=?
+          AND (json_extract(event_json,'$.campaign.evidence.conflict') IS NOT NULL OR json_extract(event_json,'$.campaign.evidence.outcome')='opt_out') LIMIT 1`)
+          .get(this.deps.workspaceId, accountId, receipt.enrollment_id)) throw new Error('requested_call_conflict');
       if (originalCall.event.authorityGeneration > owner.generation || originalCall.event.aggregateVersion > owner.aggregate_version) throw new Error('requested_call_future');
       if (this.intake.isSuppressed(accountId) || raw.prepare("SELECT 1 FROM pm_handle_suppression_tombstones WHERE kind='email' AND normalized_value=? LIMIT 1").get(input.recipientBinding.email.toLowerCase())) throw new Error('requested_suppressed');
       const mailbox = this.deps.mailbox();

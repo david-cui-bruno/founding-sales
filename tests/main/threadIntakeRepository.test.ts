@@ -221,3 +221,27 @@ it('semantic mail context persists actual evidence across encrypted restart and 
     } finally { closeDatabase(reopened); }
   } finally { f.close(); }
 });
+
+it.each([[false, 1000], [false, 1001], [true, 1000], [true, 1001]] as const)('digest capacity never rolls back SQL optout/checkpoint (scoped=%s, retained=%s)', async (scoped, retainedCount) => {
+  const f = await createPmFixture();
+  try {
+    const account = f.repo.create({ commandId: randomUUID(), name: 'Capacity PM', domain: null });
+    new DelegationRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } }).initializeLocalAuthority(account.id);
+    const repo = new SqlThreadIntakeRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } });
+    const scope = { version: 1 as const, accountId: account.id, mailboxSubject: 'sub1', revision: 1, participantAddresses: ['pm@fixture.invalid'], knownThreadIds: [] as string[], since: PM_NOW, approvedAt: PM_NOW };
+    if (scoped) repo.admitScope(scope, null);
+    const { mergeThread } = await import('../../src/main/outreach/threadIntake');
+    for (let i = 0; i < retainedCount; i++) {
+      const thread = page(account.id).threads[0]!; thread.providerThreadId = `old${i}`; thread.messages[0]!.threadId = thread.providerThreadId; thread.messages[0]!.bodyParts[0]!.text = 'Hello';
+      const projection = mergeThread(null, thread).projection;
+      f.db.raw.prepare('INSERT INTO delegated_threads VALUES(?,?,?,?,?,?,?,?,?)').run('ws', account.id, thread.providerThreadId, 'gmail', thread.providerThreadId, projection.revision, projection.contextRevision, JSON.stringify(projection), PM_NOW);
+    }
+    const incoming = page(account.id); if (scoped) Object.assign(incoming.nextCursor, { scopeRevision: 1, scopeFingerprint: mailScopeFingerprint(scope) });
+    repo.applyPage(incoming, null);
+    expect(repo.isSuppressed(account.id)).toBe(true); expect(repo.checkpoint(account.id, 'sub1')).toEqual(incoming.nextCursor);
+    expect(repo.cursorState(account.id, 'sub1')?.data.inboundContextFingerprint).toBeNull();
+    expect(() => repo.inboundContext(account.id, 'sub1')).toThrow('mail_context_capacity_exceeded');
+    closeDatabase(f.db); const reopened = openDatabase({ path: f.db.path, key: createTestWorkspaceKey() });
+    try { const restored = new SqlThreadIntakeRepository({ database: reopened, workspaceId: 'ws', clock: { now: () => PM_NOW } }); expect(restored.isSuppressed(account.id)).toBe(true); expect(restored.checkpoint(account.id, 'sub1')).toEqual(incoming.nextCursor); } finally { closeDatabase(reopened); }
+  } finally { f.close(); }
+});

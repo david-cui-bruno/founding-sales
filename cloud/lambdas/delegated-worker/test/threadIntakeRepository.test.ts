@@ -198,3 +198,21 @@ it('actual semantic digest query is account bounded and imposes a retained-row r
   const command = dynamo.commands[0]; expect(command).toBeInstanceOf(QueryCommand);
   expect((command as QueryCommand).input.Limit).toBe(1001);
 });
+
+it.each([[false, 1000], [false, 1001], [true, 1000], [true, 1001]] as const)('digest capacity never blocks SDK intake optout/checkpoint (scoped=%s, retained=%s)', async (scoped, retainedCount) => {
+  const dynamo = new ConditionalCommandHarness(), options = { dynamo, tableName: 'fictional', workspaceId: 'ws', clock: { now: () => now } };
+  await createExecutionRepository(options).seedLocalAuthority('a1'); const repo = new DynamoThreadIntakeRepository(options);
+  const scope = { version: 1 as const, accountId: 'a1', mailboxSubject: 'sub1', revision: 1, participantAddresses: ['pm@fixture.invalid'], knownThreadIds: [] as string[], since: now, approvedAt: now };
+  if (scoped) await repo.admitScope(scope, null);
+  const { mergeThread } = await import('../../../../src/main/outreach/threadIntake');
+  for (let i = 0; i < retainedCount; i++) {
+    const thread = structuredClone(p.threads[0]!); thread.providerThreadId = `old${i}`; thread.messages[0]!.threadId = thread.providerThreadId; thread.messages[0]!.bodyParts[0]!.text = 'Hello';
+    await repo.store.transact([repo.store.put(`MAIL_THREAD#a1#old${i}`, mergeThread(null, thread).projection, null)]);
+  }
+  const incoming = structuredClone(p); if (scoped) Object.assign(incoming.nextCursor, { scopeRevision: 1, scopeFingerprint: mailScopeFingerprint(scope) });
+  await repo.applyPage(incoming, null);
+  const restored = new DynamoThreadIntakeRepository(options);
+  expect(await restored.isSuppressed('a1')).toBe(true); expect(await restored.checkpoint('a1', 'sub1')).toEqual(incoming.nextCursor);
+  expect((await restored.cursorState('a1', 'sub1'))?.data.inboundContextFingerprint).toBeNull();
+  await expect(restored.inboundContext('a1', 'sub1')).rejects.toThrow('mail_context_capacity_exceeded');
+});

@@ -56,8 +56,11 @@ export class DynamoThreadIntakeRepository {
     if (!authority) throw new Error('authority_missing');
     const current = authorityRecordSchema.parse(authority.data);
     if (current.authority.accountId !== scope.accountId || !(current.authority.owner === 'local' && current.authority.state === 'local' || current.authority.owner === 'worker' && (current.authority.state === 'active' || current.authority.state === 'paused'))) throw new Error('mail_scope_wrong_owner');
+    let digest: string | null;
+    try { digest = await this.inboundContext(scope.accountId, scope.mailboxSubject); }
+    catch (error) { if (!(error instanceof Error && error.message === 'mail_context_capacity_exceeded')) throw error; digest = null; }
     await this.store.transact([this.store.check(key, authority.rev, executionAuthorityFields(current)),
-      this.store.put(mailCursorKey(scope.accountId, scope.mailboxSubject), { scope, checkpoint: null, poll: null, inboundContextRevision: integer.positive().parse((cursor?.data.inboundContextRevision ?? 0) + 1), inboundContextFingerprint: await this.inboundContext(scope.accountId, scope.mailboxSubject) }, cursor?.rev ?? null)]);
+      this.store.put(mailCursorKey(scope.accountId, scope.mailboxSubject), { scope, checkpoint: null, poll: null, inboundContextRevision: digest === null ? null : integer.positive().parse((cursor?.data.inboundContextRevision ?? 0) + 1), inboundContextFingerprint: digest }, cursor?.rev ?? null)]);
   }
   async beginPoll(accountId: string, mailboxSubject: string, attemptId: string): Promise<void> {
     const current = await this.cursorState(accountId, mailboxSubject);
@@ -115,7 +118,12 @@ export class DynamoThreadIntakeRepository {
     const scope = cursor?.data.scope ?? null;
     if (scope && (checkpoint.scopeRevision !== scope.revision || checkpoint.scopeFingerprint !== mailScopeFingerprint(scope) || checkpoint.since !== scope.since)) throw new Error('mail_scope_mismatch');
     if (attemptId && (!scope || cursor?.data.poll?.scopeRevision !== scope.revision || cursor.data.poll.scopeFingerprint !== mailScopeFingerprint(scope))) throw new Error('mail_scope_mismatch');
-    const retained = await this.retainedThreads(accountId);
+    // Requested first-email digest capacity must never block ordinary reply/optout intake.
+    let retained: ThreadProjection[] | null = null;
+    if (scope && cursor?.data.inboundContextRevision != null) {
+      try { retained = await this.retainedThreads(accountId); }
+      catch (error) { if (!(error instanceof Error && error.message === 'mail_context_capacity_exceeded')) throw error; }
+    }
     const envelope = mailCursorEnvelopeSchema.parse({ ...cursor?.data, scope, checkpoint, poll: attemptId && cursor?.data.poll ? { ...cursor.data.poll,
       status: page.complete ? 'complete' : 'pending', completedAt: page.complete ? this.store.now() : null } : null });
     const items: import('@aws-sdk/client-dynamodb').TransactWriteItem[] = []; const results: IntakeResult[] = [];
@@ -126,8 +134,8 @@ export class DynamoThreadIntakeRepository {
       const key = mailThreadKey(accountId, thread.providerThreadId); const stored = await this.store.get<unknown>(key);
       const result = mergeThread(stored ? threadProjectionSchema.parse(stored.data) : null, thread); results.push(result);
       if (!result.changed) continue;
-      const index = retained.findIndex(p => p.thread.providerThreadId === thread.providerThreadId);
-      if (index === -1) retained.push(result.projection); else retained[index] = result.projection;
+      if (retained) { const index = retained.findIndex(p => p.thread.providerThreadId === thread.providerThreadId);
+        if (index === -1) retained.push(result.projection); else retained[index] = result.projection; }
       items.push(this.store.put(key, result.projection, stored?.rev ?? null));
       sequence = integer.parse(sequence + 1); version = integer.parse(version + 1); sequences.push(sequence);
       const event = workerEventSchema.parse({ id: `thread-${fingerprint([this.store.options.workspaceId, accountId, result.projection])}`,
@@ -143,7 +151,8 @@ export class DynamoThreadIntakeRepository {
         if (!old) items.push(this.store.put(mailSuppressionKey(accountId), { accountId, observedAt: this.store.now(), evidence: results.flatMap(r => r.signals.filter(s => s.kind === 'opt_out')) }, null));
       }
     } else items.push(this.store.check(authKey, authority.rev, executionAuthorityFields(current)));
-    if (scope && envelope.inboundContextRevision !== null) {
+    if (!retained || retained.length > 1000) { envelope.inboundContextRevision = null; envelope.inboundContextFingerprint = null; }
+    if (scope && retained && envelope.inboundContextRevision !== null) {
       if (results.some(r => r.changed)) envelope.inboundContextRevision = integer.positive().parse(envelope.inboundContextRevision + 1);
       envelope.inboundContextFingerprint = fingerprint(mailContextTuples(accountId, checkpoint.mailboxSubject, retained));
     }

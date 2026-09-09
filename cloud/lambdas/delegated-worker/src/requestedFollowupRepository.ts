@@ -1,3 +1,4 @@
+import { WorkerCampaignRepository, campaignReservationKey, campaignReservationSchema } from './workerCampaignRepository';
 import { z } from 'zod';
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { accountRecordSchema } from '../../../../src/shared/contracts/accountRecordContract';
@@ -50,10 +51,18 @@ export class DynamoRequestedFollowupRepository {
     if (handoff.pairingId !== source.pairingId) throw new Error('requested_call_pairing_mismatch');
     const originalCall = validateRequestedOriginalCall({ workspaceId: this.store.options.workspaceId, accountId, reference: input.originalCall, command: command.command,
       commandFingerprint: command.fingerprint, event: outbox.event, handoff: handoff.handoff, handoffAccountId: handoff.accountId, handoffGeneration: handoff.generation });
+    const campaign = await new WorkerCampaignRepository(this.store.options).requestedFollowupPreparationChecks({ accountId, originalActionId: input.originalCall.actionId, originalOutcomeCommandId: input.originalCall.commandId });
+    const reservationKey = campaignReservationKey(accountId, input.originalCall.actionId), reservationRow = await this.store.get<unknown>(reservationKey);
+    const reservation = campaignReservationSchema.parse(reservationRow?.data), binding = reservation.input, h = originalCall.handoff;
+    if (binding.workspaceId !== this.store.options.workspaceId || binding.authorityGeneration !== handoff.generation
+      || binding.contentHash !== h.contentHash || binding.targetHash !== h.targetHash || binding.contextRevision !== h.contextRevision
+      || binding.selectedRouteId !== h.routeId || reservation.routeVersion !== h.routeVersion
+      || fingerprint({ campaignId: binding.campaignId, campaignRevision: binding.campaignRevision, enrollmentId: binding.enrollmentId, enrollmentRevision: binding.enrollmentRevision, stepId: binding.stepId }) !== fingerprint(h.campaign)
+      || !campaign.items.some(item => fingerprint(item) === fingerprint(this.store.check(reservationKey, reservationRow!.rev)))) throw new Error('requested_call_reservation_mismatch');
     if (originalCall.event.authorityGeneration > authority.data.authority.generation || originalCall.event.aggregateVersion > authority.data.version) throw new Error('requested_call_future');
     if (await this.intake.isSuppressed(accountId)) throw new Error('requested_suppressed');
     const mailContext = requestedMailContext(cursor?.data ?? null, await this.intake.inboundContext(accountId, source.mailboxSubject));
-    const checks = [this.store.check(authKey, auth.rev, executionAuthorityFields(authority.data)), this.store.check(sourceKey, sourceRow.rev), this.store.check(grantKey, grantRow!.rev),
+    const checks = [...campaign.items, this.store.check(authKey, auth.rev, executionAuthorityFields(authority.data)), this.store.check(sourceKey, sourceRow.rev), this.store.check(grantKey, grantRow!.rev),
       cursor ? this.store.check(cursor.key, cursor.rev) : this.store.absent(mailCursorKey(accountId, source.mailboxSubject)), this.store.check(accountKey, accountRow!.rev),
       this.store.check(commandKey, commandRow!.rev), this.store.check(eventKey, eventRow!.rev), this.store.check(handoffKey, handoffRow!.rev), this.store.absent(mailSuppressionKey(accountId))];
     return { authority, cursor, checks, account, originalCall, mailContext, mailbox: { subject: grant.subject, sender: grant.email } };
