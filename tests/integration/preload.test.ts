@@ -33,6 +33,7 @@ type ExposedCallieApi = {
     retry: () => Promise<unknown>;
     status: () => Promise<unknown>;
   };
+  phoneSetup: import('../../src/shared/contracts/phoneSetupContract').PhoneSetupApi;
   recovery: import('../../src/shared/contracts/recoveryContract').RecoveryProvider;
   shell: {
     revealDatabase: () => Promise<unknown>;
@@ -103,6 +104,7 @@ describe('preload workflow bridge', () => {
       'leads',
       'learnings',
       'outreach',
+      'phoneSetup',
       'pipeline',
       'recovery',
       'review',
@@ -110,6 +112,10 @@ describe('preload workflow bridge', () => {
       'sourcing',
       'today',
     ]);
+    expect(Object.keys(api.phoneSetup).sort()).toEqual(['clear', 'confirm', 'status']);
+    for (const method of ['status', 'confirm', 'clear'] as const) expect(api.phoneSetup[method]).toBeTypeOf('function');
+    expect(api.phoneSetup).not.toHaveProperty('invoke');
+    expect(api.phoneSetup).not.toHaveProperty('run');
     expect(Object.keys(api.recovery).sort()).toEqual(['beginSetup', 'completeSetup', 'saveSetupMaterial', 'selectAndRunRestoreDrill', 'status']);
     expect(Object.keys(api.discovery).sort()).toEqual(['begin', 'get', 'getBrief', 'override']);
     expect(Object.keys(api.health)).toEqual(['get']);

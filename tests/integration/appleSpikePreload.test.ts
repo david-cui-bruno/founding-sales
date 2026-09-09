@@ -61,8 +61,12 @@ describe('preload Apple feasibility bridge', () => {
 
     expect(Object.keys(api).sort()).toEqual([
       'appleSpike', 'conversations', 'discovery', 'friday', 'health', 'imports', 'leadDetail',
-      'leads', 'learnings', 'outreach', 'pipeline', 'recovery', 'review', 'shell', 'sourcing', 'today',
+      'leads', 'learnings', 'outreach', 'phoneSetup', 'pipeline', 'recovery', 'review', 'shell', 'sourcing', 'today',
     ]);
+    expect(Object.keys(api.phoneSetup).sort()).toEqual(['clear', 'confirm', 'status']);
+    for (const method of ['status', 'confirm', 'clear'] as const) expect(api.phoneSetup[method]).toBeTypeOf('function');
+    expect(api.phoneSetup).not.toHaveProperty('invoke');
+    expect(api.phoneSetup).not.toHaveProperty('run');
     expect(Object.keys(api.appleSpike)).toEqual([
       'getStatus',
       'probeCapabilities',
