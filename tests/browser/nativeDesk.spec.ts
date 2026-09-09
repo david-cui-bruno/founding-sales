@@ -818,6 +818,13 @@ test('approved A primary rail keeps other workspaces accessible and restores leg
   await expect(page.getByRole('heading', {name: 'Legacy Today fixture', exact: true})).toBeVisible();
   await expect(more).toBeHidden();
   for (const label of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox']) await expect(rail.getByRole('link', {name: label, exact: true})).toBeVisible();
+  const legacyLinks = rail.getByRole('link');
+  await expect(legacyLinks).toHaveCount(10);
+  await legacyLinks.first().focus();
+  for (let index = 1; index < 10; index++) {
+    await page.keyboard.press('Tab');
+    await expect(legacyLinks.nth(index)).toBeFocused();
+  }
   await assertClean(page, state);
 });
 

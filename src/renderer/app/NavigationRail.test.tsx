@@ -121,7 +121,15 @@ describe('NavigationRail window chrome', () => {
         '#/today', '#/accounts', '#/campaigns', '#/leads', '#/pipeline', '#/conversations',
         '#/learnings', '#/friday', '#/inbox', '#/settings',
       ]);
-      expect(Array.from(rail.querySelectorAll('a, button, input, select, textarea, [tabindex]'))).toEqual(links);
+      const more = rail.querySelector<HTMLButtonElement>('.nav-rail__more-toggle')!;
+      expect(more).not.toBeNull();
+      expect(more.getAttribute('aria-label')).toBe('More workspaces');
+      expect(more.getAttribute('aria-expanded')).toBe('false');
+      expect(getComputedStyle(more).display).toBe('none');
+      // The approved native-only disclosure is in the DOM but cannot join legacy tab order.
+      expect(Array.from(rail.querySelectorAll('a, button, input, select, textarea, [tabindex]'))).toEqual([
+        ...links.slice(0, 3), more, ...links.slice(3),
+      ]);
       for (const link of links) {
         expect(link.tabIndex).toBe(0);
         expect(link.getAttribute('target')).toBeNull();
