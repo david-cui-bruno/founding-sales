@@ -140,3 +140,12 @@ it('keeps selected retained work when an initially failed daily read recovers', 
   await waitFor(() => expect(screen.queryByText(/Daily workspace unavailable/)).toBeNull());
   expect(screen.getByRole('region', { name: 'Retained work detail' })).toBeTruthy();
 });
+it('labels retained personal detail as existing commitments rather than company context', async () => {
+  const f = fixture(); render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+  fireEvent.click(await screen.findByRole('button', { name: /Retained callback/ }));
+  const bar = screen.getByRole('button', { name: 'Close details' }).parentElement!;
+  expect(within(bar).getByText('Existing commitments and relationships')).toBeTruthy();
+  expect(within(bar).queryByText('Company context')).toBeNull();
+  const heading = screen.getByRole('heading', { name: /^Calls/ });
+  expect(within(heading).getByText('Calls').classList.contains('native-desk__lane-label')).toBe(true);
+});

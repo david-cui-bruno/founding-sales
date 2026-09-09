@@ -605,7 +605,7 @@ export function NativeDesk({
             <>
               <section className="native-desk__lane">
                 <h2>
-                  Calls <span>{localRead?.retained.value ? `${localRead.retained.value.items.length} retained${localRead.retained.error ? ' (stale)' : ''}` : 'Retained work unavailable'} · {unavailableScope ? 'Account allocation unavailable' : `${snapshot.calls.accountIds.length} account calls`}</span>
+                  <span className="native-desk__lane-label">Calls</span> <span className="native-desk__lane-summary">{localRead?.retained.value ? `${localRead.retained.value.items.length} retained${localRead.retained.error ? ' (stale)' : ''}` : 'Retained work unavailable'} · {unavailableScope ? 'Account allocation unavailable' : `${snapshot.calls.accountIds.length} account calls`}</span>
                 </h2>
                 {localRead && <RetainedWork read={localRead.retained} selected={selected} onSelect={select} />}
                 {!snapshot.calls.accountIds.length ? (
@@ -700,7 +700,9 @@ export function NativeDesk({
           {selected && (
             <div className="native-desk__detail-bar">
               <span>
-                {answer
+                {retained
+                  ? 'Existing commitments and relationships'
+                  : answer
                   ? 'Needs your approval'
                   : meeting
                     ? 'Upcoming meeting'

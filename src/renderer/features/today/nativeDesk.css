@@ -460,3 +460,14 @@
 .native-desk__retained .native-desk__row {
   overflow-wrap: anywhere;
 }
+.native-desk__lane h2 .native-desk__lane-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  color: var(--text);
+  font-weight: var(--weight-heading);
+}
+.native-desk__lane h2 .native-desk__lane-summary {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
