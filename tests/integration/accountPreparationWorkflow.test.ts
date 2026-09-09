@@ -149,6 +149,14 @@ describe('assembled fictional company preparation, not renderer acceptance', () 
         clearance: { decision: 'allowed', registrationConfirmed: true, stateDncSubscriptionConfirmed: true, consentRuleConfirmed: true,
           effectiveAt: '2026-09-01T00:00:00.000Z', expiresAt: '2026-10-01T00:00:00.000Z' } },
       });
+      // Valid independently attested policy still grants no execution ownership.
+      expect(database.raw.prepare('SELECT * FROM delegated_authorities WHERE account_id=?').all(accountId)).toEqual([]);
+      expect(await service.begin(request())).toMatchObject({
+        status: 'refused', reason: 'account_policy_evidence_unavailable', attemptId: null,
+      });
+      expect(database.raw.prepare('SELECT * FROM pm_account_outbound_intents').all()).toEqual([]);
+      expect(database.raw.prepare('SELECT * FROM delegated_authorities WHERE account_id=?').all(accountId)).toEqual([]);
+      expect(fictionalHandoffs).toBe(0);
       new DelegationRepository({ database, clock, workspaceId }).initializeLocalAuthority(accountId);
       for (const identity of [undefined, randomUUID()]) {
         const wrong = outbound(identity);
