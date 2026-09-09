@@ -286,3 +286,10 @@ it.each([true,false])('generic cancelled remains held and resolves on same hando
  await f.report('not_called');expect(f.options.dynamo.inspect('CAMPAIGN_CAP#late-campaign#call')).toEqual({reserved:0,sent:0});
  expect((await f.store.eventsAfter(null)).events.filter(event=>event.kind==='manual.handoff')).toHaveLength(1);
 });
+it('registers authenticated sender policy configuration through the normal HTTP handler without provider calls',async()=>{
+ const f=await configuredManualFixture();const {createWorkerHandler}=await import('../src/handler');const handler=createWorkerHandler({auth:f.auth,google:f.google,host:'worker.example.test'});
+ const body={version:1,requestId:randomUUID(),workspaceId:'ws',pairingId:f.pairing.pairingId,mailboxSubject:'mailbox',expectedRevision:null as null,kind:'sender-caps',policy:{sender:'sender@example.test',dailyLimit:3}};
+ const event={version:'2.0',rawPath:'/policies/configure',rawQueryString:'',headers:{host:'worker.example.test','x-forwarded-proto':'https',authorization:`Bearer ${f.pairing.credential}`},body:JSON.stringify(body),requestContext:{domainName:'worker.example.test',http:{method:'POST',sourceIp:'fictional'}}};
+ const result=await handler(event);expect(result.statusCode).toBe(200);expect(JSON.parse(result.body)).toMatchObject({requestId:body.requestId,kind:'sender-caps',status:'applied',revision:1});
+ expect(await handler(event)).toEqual(result);
+});

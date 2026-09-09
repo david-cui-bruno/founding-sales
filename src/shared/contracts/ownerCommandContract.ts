@@ -73,8 +73,11 @@ export const ownerResearchSourceSchema = z.strictObject({version:z.literal(1),wo
 export type OwnerResearchSource = z.infer<typeof ownerResearchSourceSchema>;
 export const configureResearchSourceSchema = z.strictObject({commandId:z.uuid(),workspaceId:id,pairingId:id,expectedRevision:revision,configuration:ownerResearchSourceSchema});
 export const localDelegationStatusSchema=z.strictObject({state:z.enum(['unconfigured','paused','active','locked']),workspaceId:id.nullable(),endpoint:z.url().nullable(),configuration:localDelegationConfigurationRecordSchema.nullable()});
-export const ownerCheckpointRequestSchema=z.strictObject({workspaceId:id,accountId:id});
-export const ownerCheckpointSchema=z.strictObject({workspaceId:id,accountId:id,generation:revision,version:revision,revision:hash,validUntil:revision.min(1)});
+export const ownerCheckpointRequestSchema=z.strictObject({workspaceId:id,accountId:id,handoffId:id.optional()});
+export const ownerCheckpointSchema=z.strictObject({workspaceId:id,accountId:id,handoffId:id.optional(),generation:revision,version:revision,revision:hash,validUntil:revision.min(1)});
 export const redeemLocalPairingSchema=z.strictObject({endpoint:z.url(),expectedWorkspaceId:id,code:z.string().min(1).max(128)});
 export const redeemedLocalPairingSchema=z.strictObject({state:z.literal('paired'),workspaceId:id,pairingId:id});
 export const delegationSyncReportSchema=z.strictObject({applied:revision,gaps:revision,cursor:z.string().nullable(),ownerFresh:z.boolean()});
+
+export const delegatedPhoneHandoffRequestSchema=z.strictObject({command:prepareManualCommandSchema.refine(command=>command.payload.channel==='call'),expectedEvidenceFingerprint:hash});
+export type DelegatedPhoneHandoffRequest=z.infer<typeof delegatedPhoneHandoffRequestSchema>;

@@ -1,3 +1,4 @@
+import {handoffResultSchema} from './outboundContract';
 import { accountBootstrapPayloadSchema, ownerCommandSchemas, manualOutcomeSchema, manualHandoffSchema } from './ownerCommandContract';
 import { acquisitionMilestonePayloadSchema } from './acquisitionReportContract';
 import { campaignEventPayloadSchema } from './campaignContract';
@@ -107,3 +108,6 @@ export interface ExecutionRepository {
   appendOutcome(input: AppendOutcomeInput): Promise<void>;
   eventsAfter(cursor: string | null): Promise<EventPage>;
 }
+
+export const delegatedPhoneHandoffResultSchema=z.discriminatedUnion('status',[z.strictObject({status:z.literal('held'),reason:z.string().min(1).max(255)}),z.strictObject({status:z.literal('pending'),receipt:commandReceiptSchema}),z.strictObject({status:z.literal('handoff'),handoffId:id,result:handoffResultSchema}),z.strictObject({status:z.literal('already_started'),handoffId:id})]);
+export type DelegatedPhoneHandoffResult=z.infer<typeof delegatedPhoneHandoffResultSchema>;

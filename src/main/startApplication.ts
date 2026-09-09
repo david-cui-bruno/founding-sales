@@ -1,3 +1,9 @@
+import {registerLinkedInIpc} from './linkedin/registerLinkedInIpc';
+import {createLinkedInDraftProvider} from './linkedin/linkedInDraftProvider';
+import {CredentialStore} from './outreach/providers/credentialStore';
+import { PairingStore, type StoredPairing } from './delegation/pairingStore';
+import { createDelegationRuntime, type DelegationRuntime } from './delegation/delegationRuntime';
+import { SqlDelegationConfiguration } from './delegation/delegationSync';
 import type { AppDatabase } from './db/database';
 import { z } from 'zod';
 import { AccountRepository } from './domain/accounts/accountRepository';
@@ -62,7 +68,7 @@ import {
   UpstreamSync,
   type UpstreamObjectStore,
 } from './sourcing/upstreamSync';
-import { safeStorage, dialog, shell } from 'electron';
+import { safeStorage, dialog, shell, clipboard } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
 import type { SafeLogger } from './logging/safeLogger';
@@ -284,11 +290,14 @@ function createStartupCompanyResearch(input: { runtime: FoundationRuntime; provi
 }
 
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
-  createEmailService?(runtime:FoundationRuntime,userDataPath:string,providers?:ReturnType<typeof createOutreachProviders>):ReturnType<typeof createEmailService>;
+  createEmailService?(runtime:FoundationRuntime,userDataPath:string,providers?:ReturnType<typeof createOutreachProviders>,expectedWorkspaceId?:string):ReturnType<typeof createEmailService>;
+  createPairingStore?(userDataPath:string):Pick<PairingStore,'load'|'redeem'>;
   createResearchProviders?(userDataPath:string):ReturnType<typeof createOutreachProviders>;
   companyResearchHttp?: PageHttp;
   companyResearchResolve?: (hostname: string) => Promise<string[]>;
   registerOutreachIpc?:typeof registerOutreachIpc;
+  registerLinkedInIpc?:typeof registerLinkedInIpc;
+  createLinkedInAdapters?(userDataPath:string):NonNullable<Parameters<typeof createDelegationRuntime>[0]['linkedIn']>;
   createDiscoveryWorker?: typeof createDiscoveryWorker;
   createOutboundCommandService?: typeof createOutboundCommandService;
   createPhoneBindings?(runtime: FoundationRuntime): PhoneBindings;
@@ -545,8 +554,11 @@ const defaultDependencies: ApplicationStartupDependencies = {
   createHealthService: (options) => new HealthService(options),
   registerApplicationIpc,
   registerOutreachIpc,
+  registerLinkedInIpc,
+  createLinkedInAdapters:userDataPath=>({provider:createLinkedInDraftProvider({credentials:new CredentialStore({directory:join(userDataPath,'outreach'),safeStorage}),fetch:globalThis.fetch}),shell:{openExternal:url=>shell.openExternal(url)},clipboard:{writeText:text=>clipboard.writeText(text)}}),
   createResearchProviders: userDataPath => createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)}),
-  createEmailService: (runtime,userDataPath,providers) => createEmailService({databaseGate:runtime,
+  createPairingStore:userDataPath=>new PairingStore({directory:join(userDataPath,'delegation'),safeStorage}),
+  createEmailService: (runtime,userDataPath,providers,expectedWorkspaceId) => createEmailService({databaseGate:runtime,expectedWorkspaceId,
     providers:providers ?? createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)})}),
   createSourcingPoller: createProductionSourcingPoller,
   createEnrichmentRequester: createProductionEnrichmentRequester,
@@ -559,7 +571,12 @@ export async function startApplication(
   options: ApplicationStartupOptions,
   dependencies: ApplicationStartupDependencies = defaultDependencies,
 ): Promise<RunningApplication> {
-  const expectedWorkspaceId = options.expectedWorkspaceId;
+  const trustedExpectedWorkspaceId = options.expectedWorkspaceId;
+  const pairingStore=dependencies.createPairingStore?.(options.userDataPath);
+  let loadedPairing:StoredPairing|null=null;
+  try{if(pairingStore)loadedPairing=await pairingStore.load();}catch{/* Corrupt/locked configuration is inactive, never a default workspace. */}
+  const paired=loadedPairing && (!trustedExpectedWorkspaceId||loadedPairing.workspaceId===trustedExpectedWorkspaceId)?loadedPairing:null;
+  const expectedWorkspaceId = trustedExpectedWorkspaceId ?? paired?.workspaceId;
   const { databasePath, keyEnvelopePath, backupDirectory } = resolveApplicationPaths(options.userDataPath);
   const runtime = new FoundationRuntime(
     {
@@ -573,11 +590,14 @@ export async function startApplication(
       createDomainRuntime: database => createStartupDomainRuntime(database, expectedWorkspaceId),
     } : dependencies,
   );
+  let delegation:DelegationRuntime|undefined;
+  let delegationCleanup:Promise<void>|undefined;
   let email:ReturnType<typeof createEmailService>|undefined;
   let researchProviders: ReturnType<typeof createOutreachProviders> | undefined;
   let companyResearch: ReturnType<typeof createStartupCompanyResearch> | undefined;
   let researchCleanup: Promise<void> | undefined;
   let unregisterEmail:(()=>void)|undefined;
+  let unregisterLinkedIn:(()=>void)|undefined;
   let unregisterApplicationIpc: (() => void) | undefined;
   let unregisterAppleSpikeIpc: (() => void) | undefined;
   let appleBridgeSupervisor: AppleBridgeSupervisorApi | undefined;
@@ -616,6 +636,7 @@ export async function startApplication(
     if (outboundClosed) return;
     // Reserve permanent owner closure before any injected callback can reenter.
     outboundClosed = true;
+    delegationCleanup=delegation?.dispose();void delegationCleanup?.catch(():undefined=>undefined);
     // Abort research before touching the single shared credential owner.
     try { researchCleanup = companyResearch?.dispose(); void researchCleanup?.catch((): undefined => undefined); } catch (error) { cleanupErrors.push(error); }
     try { email?.dispose(); } catch (error) { cleanupErrors.push(error); }
@@ -666,7 +687,7 @@ export async function startApplication(
         sourcingPoller = undefined;
       }
 
-      try { await researchCleanup; } catch (error) { cleanupErrors.push(error); }
+      try { await researchCleanup;await delegationCleanup; } catch (error) { cleanupErrors.push(error); }
       try { await discoveryWorker?.idle(); } catch (error) { cleanupErrors.push(error); }
       finally { discoveryWorker = undefined; }
 
@@ -682,6 +703,7 @@ export async function startApplication(
       finally { recoveryService = undefined; }
 
       try { unregisterPhoneSetup?.(); } catch (error) { cleanupErrors.push(error); } finally { unregisterPhoneSetup = undefined; }
+      try { unregisterLinkedIn?.(); } catch(error) { cleanupErrors.push(error); } finally { unregisterLinkedIn=undefined; }
       try { unregisterEmail?.(); } catch(error) { cleanupErrors.push(error); } finally { unregisterEmail=undefined; }
       try {
         unregisterApplicationIpc?.();
@@ -750,20 +772,30 @@ export async function startApplication(
       domain, phone: phoneBindings.phone, readiness: phoneBindings.readiness,
     });
     phoneBindings.onSetupChanged?.(() => { if (!outboundClosed) outbound.invalidate('wake'); });
-    if (options.companyResearch && dependencies.createResearchProviders) {
+    delegation=createDelegationRuntime({databaseGate:runtime,pairing:paired,clock:domainClock,phone:phoneBindings.phone,inboundRegistry:startupInboundRegistry,linkedIn:paired?dependencies.createLinkedInAdapters?.(options.userDataPath):undefined,configurationChanged:async()=>{
+      await companyResearch?.dispose();companyResearch=undefined;
+      const state=paired?await runtime.withDatabase(database=>new SqlDelegationConfiguration({database,workspaceId:paired.workspaceId,pairingId:paired.pairingId,clock:domainClock}).read()):null;
+      if(state?.configuration.state==='active'&&state.configuration.research&&dependencies.createResearchProviders&&!outboundClosed){
+        researchProviders??=dependencies.createResearchProviders(options.userDataPath);
+        companyResearch=createStartupCompanyResearch({runtime,providers:researchProviders,configuration:state.configuration.research,http:dependencies.companyResearchHttp,resolve:dependencies.companyResearchResolve});
+      }
+    }});
+    const persistedResearch=paired?await runtime.withDatabase(database=>new SqlDelegationConfiguration({database,workspaceId:paired.workspaceId,pairingId:paired.pairingId,clock:domainClock}).read()):null;
+    const configuredResearch=options.companyResearch??(persistedResearch?.configuration.state==='active'?persistedResearch.configuration.research:null);
+    if (configuredResearch && dependencies.createResearchProviders) {
       researchProviders = dependencies.createResearchProviders(options.userDataPath);
-      companyResearch = createStartupCompanyResearch({ runtime, providers: researchProviders, configuration: options.companyResearch,
+      companyResearch = createStartupCompanyResearch({ runtime, providers: researchProviders, configuration: configuredResearch,
         http: dependencies.companyResearchHttp, resolve: dependencies.companyResearchResolve });
     }
     // Email borrows the same manager without owning its disposal in research mode.
     const borrowedProviders = researchProviders ? { ...researchProviders, dispose: (): void => undefined,
       invalidate: () => { companyResearch?.invalidate(); researchProviders!.invalidate(); } } : undefined;
-    email = dependencies.createEmailService?.(runtime,options.userDataPath,borrowedProviders);
+    email = dependencies.createEmailService?.(runtime,options.userDataPath,borrowedProviders,expectedWorkspaceId);
     if(outboundClosed)email?.dispose();
     // The composed v1 email service sends drafts but owns no inbound adapter, and
     // the optional Apple spike is not a synchronization adapter. This explicit
     // discovery result must be extended by future inbound owners before activation.
-    startupInboundRegistry?.initialize([]);
+    startupInboundRegistry?.initialize(delegation?[delegation.adapter]:[]);
     if (options.signal !== undefined) {
       const signal = options.signal;
       removeStartupAbort = () => signal.removeEventListener('abort', abortStartup);
@@ -772,10 +804,11 @@ export async function startApplication(
       throwIfStartupCancelled(signal);
     }
     unregisterOutboundLifecycle = options.registerOutboundLifecycle?.({
-      onWake: () => { if (!outboundClosed) {companyResearch?.invalidate();phoneBindings?.invalidate?.();email?.invalidate();outbound.invalidate('wake');} },
-      onLock: () => { if (!outboundClosed) {companyResearch?.invalidate(true);phoneBindings?.invalidate?.(true);email?.invalidate(true);outbound.invalidate('lock');} },
+      onWake: () => { if (!outboundClosed) {delegation?.invalidate();companyResearch?.invalidate();phoneBindings?.invalidate?.();email?.invalidate();outbound.invalidate('wake');} },
+      onLock: () => { if (!outboundClosed) {delegation?.invalidate(true);companyResearch?.invalidate(true);phoneBindings?.invalidate?.(true);email?.invalidate(true);outbound.invalidate('lock');} },
       onUnlock: () => {
         if (outboundClosed) return;
+        delegation?.invalidate(false);
         companyResearch?.invalidate(false);
         phoneBindings?.invalidate?.(false);
         email?.invalidate(false);
@@ -859,7 +892,8 @@ export async function startApplication(
     if (phoneBindings.setup) unregisterPhoneSetup = (dependencies.registerPhoneSetupIpc ?? registerPhoneSetupIpc)({
       provider: phoneBindings.setup, isTrustedRendererUrl: options.isTrustedRendererUrl,
     });
-    if(email)unregisterEmail=(dependencies.registerOutreachIpc??registerOutreachIpc)({provider:email,isTrustedRendererUrl:options.isTrustedRendererUrl});
+    if(delegation.linkedIn)unregisterLinkedIn=(dependencies.registerLinkedInIpc??registerLinkedInIpc)({provider:delegation.linkedIn,isTrustedRendererUrl:options.isTrustedRendererUrl});
+    if(email)unregisterEmail=(dependencies.registerOutreachIpc??registerOutreachIpc)({provider:email,delegation,pairingStore,isTrustedRendererUrl:options.isTrustedRendererUrl});
     throwIfStartupCancelled(options.signal);
     if (options.sourcingPollingEnabled === true && sourcingPoller !== undefined) {
       const timer: PollTimer = {

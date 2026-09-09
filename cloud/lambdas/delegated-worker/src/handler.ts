@@ -1,3 +1,4 @@
+import {WorkerPolicyConfiguration} from './policyConfiguration';
 import { lookup } from 'node:dns/promises';
 import { createPinnedPageHttp, type PageHttp } from '../../../../src/main/research/companyPageProvider';
 import { createSourceCoordinator } from './sourceCoordinator';
@@ -41,6 +42,7 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
         await input.google.completeGoogleGrant(query.get('state')!, query.has('error') ? null : query.get('code'));
         return { statusCode: 200, headers: { ...headers, 'Content-Type': 'text/plain; charset=utf-8' }, body: 'Authorization completed. Return to FSS.' };
       }
+      if(path==='/policies/configure' && method==='POST') return response(200,await new WorkerPolicyConfiguration({auth:input.auth,authorization:input.google??new RemoteGoogleAuthorization({auth:input.auth})}).apply(body(),event.headers.authorization??''));
       if(path==='/commands/reconcile' && method==='POST') {
         const owner=new OwnerCommandCoordinator({auth:input.auth,authorization:input.google??new RemoteGoogleAuthorization({auth:input.auth})});
         return response(200,await owner.reconcile(body(),event.headers.authorization??''));

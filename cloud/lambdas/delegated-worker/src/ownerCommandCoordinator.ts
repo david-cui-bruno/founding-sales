@@ -8,7 +8,7 @@ import { enrollmentSchema, campaignEventPayloadSchema } from '../../../../src/sh
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { threadProjectionSchema, mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { accountRecordSchema, accountKey } from './workerAccountRepository';
-import { intakeRegistryKey, intakeRegistrySchema, createIntakeBarrier } from './intakeBarrier';
+import { intakeRegistryKey, intakeRegistrySchema, createIntakeBarrier, validatePendingHandoff } from './intakeBarrier';
 import type { WorkerAuth } from './workerAuth';
 import type { RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
 import { ownerCheckpointRequestSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand } from '../../../../src/shared/contracts/ownerCommandContract';
@@ -38,17 +38,20 @@ export class OwnerCommandCoordinator {
     const target=ownerCheckpointRequestSchema.parse(raw); const principal=await this.input.auth.authenticate(authorization,['events:read']);this.input.auth.store.workspace(target.workspaceId);
     const store=new DynamoStore({...this.input.auth.options,dynamo:this.input.auth.fencedDynamo(principal)});
     const source=await this.activeSource(target,principal.pairingId,store,true);
+    const initial=target.handoffId?authorityRecordSchema.parse((await store.get(executionAuthorityKey(target.accountId)))?.data):null;
+    const scoped=target.handoffId&&initial?{handoffId:target.handoffId,pairingId:principal.pairingId,generation:initial.authority.generation}:null;
     let intake;
     if(source.config.mailboxSubject){
       const threads=new DynamoThreadIntakeRepository(this.input.auth.options);
       const poll=await createMailPoller({authorization:this.input.authorization,store:threads,fetch:this.input.authorization.input.fetch??globalThis.fetch}).pollOnce({accountId:target.accountId,pairingId:principal.pairingId,mailboxSubject:source.config.mailboxSubject},signal);
       if(!poll.complete||poll.suppressed)throw Error('intake_unavailable');
-      intake=await createIntakeBarrier(store).check({accountId:target.accountId,mailboxSubject:source.config.mailboxSubject},signal);
-    }else intake=await this.noMailIntake(target.accountId,store);
+      const barrier=createIntakeBarrier(store);const subject={accountId:target.accountId,mailboxSubject:source.config.mailboxSubject};
+      intake=scoped?await barrier.checkHandoff(subject,scoped,signal):await barrier.check(subject,signal);
+    }else {const proof=scoped?await validatePendingHandoff(store,target.accountId,scoped):undefined;if(scoped&&!proof)throw Error('handoff_not_current');intake=await this.noMailIntake(target.accountId,store,proof??undefined);}
     if(intake.status!=='ready')throw new Error('intake_unavailable');
     const authKey=executionAuthorityKey(target.accountId);const row=await store.get<unknown>(authKey);const authority=authorityRecordSchema.parse(row?.data);
-    if(authority.authority.owner!=='worker'||authority.authority.state!=='active')throw new Error('authority_inactive');
-    signal.throwIfAborted();await store.transact([...source.checks,...intake.checks,store.check(authKey,row!.rev),store.absent(mailSuppressionKey(target.accountId))]);
+    if(authority.authority.owner!=='worker'||authority.authority.state!=='active'||scoped&&authority.authority.generation!==scoped.generation)throw new Error('authority_inactive');
+    signal.throwIfAborted();if(Date.parse(store.now())>=intake.validUntil)throw Error('checkpoint_expired');const checks=[...source.checks,...intake.checks,store.check(authKey,row!.rev),store.absent(mailSuppressionKey(target.accountId))];await store.transact(checks.filter((item,index)=>checks.findIndex(other=>fingerprint(item)===fingerprint(other))===index));
     return ownerCheckpointSchema.parse({...target,generation:authority.authority.generation,version:authority.version,revision:fingerprint({authority,source:source.config,intake:intake.revisions}),validUntil:Math.min(intake.validUntil,Date.parse(store.now())+5000)});
   }
   async configureResearch(raw: unknown, authorization: string) {
@@ -170,18 +173,20 @@ export class OwnerCommandCoordinator {
     await store.transact([previous?store.check(aKey,previous.rev):store.put(aKey,record,null,{accountId:command.accountId,version:record.account.version}),store.put(authKey,next,prior?.rev??null,executionAuthorityFields(next)),store.put(key,{fingerprint:fp,receipt,sequence:outbox.sequence,command},null),...(p.suppression.length&&!suppression?[store.put(suppressionKey,{accountId:command.accountId,source:'selected_owner_bootstrap',evidence:p.suppression},null)]:[]),...outbox.items]);
     await store.publish(outbox.sequence);return receipt;
   }
-  private async noMailIntake(accountId:string,store:DynamoStore){
+  private async noMailIntake(accountId:string,store:DynamoStore,scoped?:NonNullable<Awaited<ReturnType<typeof validatePendingHandoff>>>){
     const account=await store.get<unknown>(accountKey(accountId));const key=intakeRegistryKey(accountId);const row=await store.get<unknown>(key);
     if(!account||!row||accountRecordSchema.parse(account.data).routes.some(route=>route.channel==='email')||(await store.list(`MAIL_THREAD#${keyPart(accountId)}#`)).length)throw Error('relevant_mail_requires_reader');
     const registry=intakeRegistrySchema.parse(row.data);if(registry.accountId!==accountId||registry.adapters.some(adapter=>adapter.relevant))throw Error('relevant_mail_requires_reader');
     const checks=[store.check(accountKey(accountId),account.rev),store.check(key,row.rev)];const revisions=[{key,revision:row.rev},{key:accountKey(accountId),revision:account.rev}];
+    if(scoped){checks.push(...scoped.checks);revisions.push(...scoped.revisions);}
     for(const dependency of registry.manualDependencies){
+      if(scoped&&fingerprint(dependency)===fingerprint(scoped.dependency))continue;
       const commandKey=`COMMAND#${keyPart(dependency.commandId)}`;const command=await store.get<{receipt:CommandReceipt;sequence:number}>(commandKey);if(!command)throw Error('manual_outcome_pending');
       const eventKey=store.eventKey(command.data.sequence);const eventRow=await store.get<{event:unknown}>(eventKey);const event=workerEventSchema.parse(eventRow?.data.event);
       if(commandReceiptSchema.parse(command.data.receipt).status!=='applied'||event.kind!=='manual.outcome'||event.accountId!==accountId||event.workspaceId!==store.options.workspaceId||event.receipt.commandId!==dependency.commandId||event.payload.actionId!==dependency.actionId||event.payload.channel!==dependency.channel||event.payload.outcome!==dependency.outcome||['unknown','reply','opt_out'].includes(dependency.outcome))throw Error('manual_outcome_pending');
       checks.push(store.check(commandKey,command.rev),store.check(eventKey,eventRow!.rev));revisions.push({key:commandKey,revision:command.rev},{key:eventKey,revision:eventRow!.rev});
     }
-    return {status:'ready' as const,checks,revisions,validUntil:Date.parse(store.now())+5000};
+    return {status:'ready' as const,checks,revisions,validUntil:Math.min(Date.parse(store.now())+5000,scoped?.validUntil??Infinity)};
   }
   private async activeSource(command: Pick<OwnerCommand,'accountId'|'workspaceId'>, pairingId: string, store: DynamoStore, allowNoMail=false) {
     const key = ownerSourceKey(command.accountId); const row = await store.get<unknown>(key);
