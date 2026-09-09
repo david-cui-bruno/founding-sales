@@ -4,7 +4,7 @@
 
 **Goal:** Deliver the approved A composition in actual components, with real identity/context bindings and honest empty states, and select startup work from measured evidence rather than weakening verification.
 
-**Architecture:** Add optional main-owned display context beside saved daily answers, never inside immutable drafts or commands. Recompose the existing editor/session components using that context and preserve every execution gate. Startup profiling and preservation analysis is an independent deliverable, and no optimization is implemented unless its equivalence can be demonstrated.
+**Architecture:** Add optional main-owned display context beside saved daily answers, never inside immutable drafts or commands. Recompose the existing editor/session components using that context and preserve every execution gate. Startup profiling and preservation analysis is an independent deliverable. Any optimization must demonstrate preservation and explicitly review intentional admission differences rather than claim universal error equivalence.
 
 **Tech Stack:** TypeScript, React, Zod, Electron, SQLCipher, Vitest and isolated Chromium acceptance.
 
@@ -50,13 +50,13 @@
 - Produces optional `presentation` on requested/manual `DailyAnswer` only, with a matching immutable draft binding, nullable stored contact and nullable original-call context. Contact role may be absent. Call note and observed time must be sourced. The binding must compare against the session's retained draft, not only the incoming item.
 - Publish the final exported schemas/types/helper signature to the coordinator before renderer implementation. No capability or permission fields.
 
-- [ ] Write failing real-reader tests for an exact named route, old route version, owner-supplied recipient, missing/deleted/foreign person, ambiguous/unsupported role and exact original-call note/time.
-- [ ] Observe behavioral RED, not only missing exports/type errors.
-- [ ] Implement bounded exact-key reads inside the existing deferred daily transaction. Reuse pure `validateRequestedOriginalCall`, never runtime requested preflight/readContext.
-- [ ] Make optional annotation failure local to its field. A valid saved draft still returns with unchanged draft/approval bytes.
-- [ ] Add schema/binding tests: metadata changes are not draft revisions, incoming metadata cannot label retained different-identity text, malformed or unrelated annotations cannot claim a match.
-- [ ] Run focused reader/contract regressions, typecheck, owned ESLint and diff check. Freeze and report exact source before independent review.
-- [ ] Commit only owned source/tests after coordinator review.
+- [x] Write failing real-reader tests for an exact named route, old route version, owner-supplied recipient, missing/deleted/foreign person, ambiguous/unsupported role and exact original-call note/time.
+- [x] Observe behavioral RED, not only missing exports/type errors.
+- [x] Implement bounded exact-key reads inside the existing deferred daily transaction. Reuse pure `validateRequestedOriginalCall`, never runtime requested preflight/readContext.
+- [x] Make optional annotation failure local to its field. A valid saved draft still returns with unchanged draft/approval bytes.
+- [x] Add schema/binding tests: metadata changes are not draft revisions, incoming metadata cannot label retained different-identity text, malformed or unrelated annotations cannot claim a match.
+- [x] Run focused reader/contract regressions, typecheck, owned ESLint and diff check. Freeze and report exact source before independent review.
+- [x] Commit only owned source/tests after coordinator review. Completed at `459c79f`, including independently verified manual route-hash binding and field-local malformed-role repair.
 
 ### Task 2: Complete A component composition
 
@@ -99,10 +99,16 @@
 
 **Investigation source:** `src/main/db/plaintextDatabaseUpgrade.ts`, storage readiness, domain initialization and normal window startup.
 
-- [ ] Record separate fingerprint, integrity, stabilization, readiness and domain timing on disposable production-schema encrypted fixtures, with Node/native provenance and unchanged semantic data.
-- [ ] Analyze normal encrypted WAL/DELETE, sidecars and recovery artifacts. Do not remove the middle fingerprint around mutation, use metadata caching, or trust sidecar absence as fresh admission.
-- [ ] Determine whether normal stabilization is semantically required absent recovery/promotion, with source/tests and race analysis. If not yet provable, deliver the measured bottleneck and a bounded next optimization proposal without claiming it fixed.
+- [x] Record separate fingerprint, integrity, stabilization, readiness and domain timing on disposable production-schema encrypted fixtures, with Node/native provenance and unchanged semantic data.
+- [x] Analyze normal encrypted WAL/DELETE, sidecars and recovery artifacts. Do not remove the middle fingerprint around mutation, use metadata caching, or trust sidecar absence as fresh admission.
+- [x] Determine whether normal stabilization is semantically required absent recovery/promotion, with source/tests and race analysis. See the reviewed boundary below.
 - [ ] Any accepted optimization receives its own failing preservation/performance tests, independent review and separate commit before inclusion. Recovery paths retain strict comparisons.
+
+**Reviewed startup boundary:** Ordinary artifact-free encrypted opening need not produce a standalone DELETE-mode database, because normal opening and readiness require WAL. Retain full initial keyed fingerprint/integrity/supported-schema/file-shape checks. Only when the marker and both complete alternate artifact families are absent, and no canonical rollback journal is present, omit the entire application-driven stabilization/cleanup unit. Before returning, freshly reject a missing, nonregular or symlink canonical path. Do not cache content validity or compare stale inode/mtime/size as an admission proof.
+
+Normal open, migration, readiness and health remain authoritative. Current-schema pinned WAL readers and legitimate intervening committed updates may now coexist with startup. This is an intentional admission difference, not universal error equivalence. Older-schema verified backup still requires its original stabilization and can reject pinned readers. All plaintext conversion, artifact recovery, promotion and backup verification remain unchanged. The final shape-check-to-open pathname race is not solved by this change, and inspected-inode continuity is not claimed.
+
+Baseline profiling used synthetic encrypted schema-24 fixtures, not the real profile. A 172,654,592-byte warm-cache proxy spent approximately 4.4–5.1 seconds in preparation, with roughly 3.1–3.5 seconds in stabilization on the final instrumented runs. These are baseline measurements, not a realized speedup. The candidate must be measured separately with immutable source/native provenance and exact semantic preservation.
 
 ### Task 5: Integrated delivery
 
