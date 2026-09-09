@@ -183,3 +183,27 @@ Final validation with required Node24 export:
 - Exact-path diff whitespace check passed.
 
 These tests execute actual produced SDK transaction conditions against the synthetic ConditionalCommandHarness, not live DynamoDB. The former missing-D1 binding gate is resolved at source level when actual CampaignExecution is composed. C6 public command/bootstrap/normal dispatch composition and local campaign projection remain C6-owned integration gates. C6 schema changes were present during GREEN validation, with their commit owned by C6. Root independent re-review of both repair and campaign splice commits remains required. No real network, provider, grants, sends, mailbox access, deployment, build/install/native/root-suite operation occurred. All live/external acceptance gates above remain held.
+
+### Isolated `12498c0` repair evidence trace for re-review
+
+This subsection concerns repair-only evidence, not D1 acceptance. The original 86-test section is historical. The report already contained the 101-test repair result in `8249d19` before this clarification.
+
+| Requirement | Observed RED | Repair-only GREEN evidence |
+|---|---|---|
+| I1 complete persisted account intake | Sending A skipped B's actual opt-out under recipient-narrow preflight | Full stored A+B scope causes B suppression and zero sends; changed scope resets cursor, bounded rescan precedes send; final cursor CAS rejects scope race |
+| I2 exact Sent identity | Seven raw Bcc/alternate-header/unsupported MIME variants falsely accepted | Those variants remain unknown; exact emitted UTF-8 MIME still accepts; no resend |
+| Terminal replay | Definitive provider-not-sent became unknown on replay | Same immutable cancelled evidence returns not_sent and send count stays one |
+| C6 owner-command boundary | submit-approved-reply returned fake applied authority receipt | Explicit legacy command allowlist throws owner_command_requires_coordinator |
+
+Exact repair verification command executed before `12498c0`:
+
+```bash
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH";
+npm test --prefix cloud/lambdas/delegated-worker -- test/dispatchRepository.test.ts test/dispatchService.test.ts test/sendReconciler.test.ts test/commandService.test.ts &&
+npm run typecheck --prefix cloud/lambdas/delegated-worker &&
+npx --no-install eslint --no-ignore --max-warnings 0 cloud/lambdas/delegated-worker/src/dispatchRepository.ts cloud/lambdas/delegated-worker/src/dispatchService.ts cloud/lambdas/delegated-worker/src/executionRepository.ts cloud/lambdas/delegated-worker/src/intakeBarrier.ts cloud/lambdas/delegated-worker/src/sendReconciler.ts cloud/lambdas/delegated-worker/test/dispatchRepository.test.ts cloud/lambdas/delegated-worker/test/dispatchService.test.ts cloud/lambdas/delegated-worker/test/sendReconciler.test.ts cloud/lambdas/delegated-worker/test/commandService.test.ts
+```
+
+Observed result: 101 tests (51 policy integration, 10 barrier, 12 reconciliation, 28 C1), typecheck exit 0, lint exit 0. The historical repaired test tree used the contemporaneous C3 producer and C6 schemas. Current shared source additionally contains D1 integration, so rerunning current source yields a different count, not an isolated re-execution of the old commit. All HTTP fixtures were fictional, and Dynamo condition acceptance was through the SDK interpreter only.
+
+D1 is separate: C4 source splice `d0fcade` reached 115 focused GREEN after repair; end-to-end integration/re-review remains in progress across C6 and guppy's subsequent internal route/context evidence changes. Do not attribute D1 completeness to the 101-test repair result or infer any live send authorization.
