@@ -305,3 +305,28 @@ Final combined verification at 01:57:31 with required Node24 export: **137 worke
 Pinned cancellation-proof counterpart: `a77b9d0e6a61d6bcb09425f386051d7930c10691`. Post-commit rerun at 01:59:36 passed137 worker tests, SQL1 and worker strict typecheck. Source tick-signal counterpart remains separately pending.
 
 Pinned source signal counterpart: `c9c6ee683c2de080cf70ff29867b72d9a665084b`. Inspected committed sourceCoordinator lines260/262: both reconcileSend and dispatch receive the phase signal. Fresh C4 post-commit rerun at02:00:23 passed137 worker tests, SQL1 and worker strict typecheck. Elephant separately reports26 source tests GREEN including actual encrypted expired-refresh cancellation for dispatch/reconcile; C4 did not rerun that separately owned suite. Both requested counterpart SHAs are now pinned.
+
+## Terminal contrary-evidence integration repair (2026-09-09 02:07 UTC)
+
+Source commit `2e16b52` (five exact owned paths, inspected stat: 135 insertions/19 deletions). D1 counterpart remains `a77b9d0e6a61d6bcb09425f386051d7930c10691`. Read full settlement review. Root approved the exact immutable namespaces before implementation.
+
+- RED: actual campaign and standalone dispatch, both cancelled→accepted and accepted→cancelled, four failing cases `outcome_conflict` before policy. Command: `npm test --prefix cloud/lambdas/delegated-worker -- test/dispatchRepository.test.ts -t 'opposite.*fact'` (4 failed,81 skipped).
+- GREEN: same four cases now append the explicit original-reservation-bound contrary provider fact. Original ACTION, current flight, original immutable evidence, finalized D1 reservation and caps are checked, never rewritten. D1 emits its real conflict-tagged receipt and holds nonterminal enrollment. C1 advances AUTH/outbox once, preserving original terminal payload.state and separately referencing the late immutable fact.
+- New immutable `DISPATCH_CONFLICT#encode(account)` first-cause record `{accountId,actionId,commandId,evidenceRef,observedAt}` holds both standalone and campaign future dispatch. Final reservation carries absence check, including a tested conflict-vs-already-planned-reservation race. No clear/update endpoint. Later facts check existing marker revision.
+- New immutable `ACTION_LATE_EVIDENCE#account#action#fullOutcomeFingerprint` `{fingerprint,sequence}` makes exact replay publish only existing event. Same-terminal new observation, unproven cancellation and foreign reservation reject before evidence/hold/receipt writes. Explicit contradictions only, no proactive terminal polling, resend or authority expansion.
+- Authorized exact SQL test now covers both terminal directions through actual C4 event generation, canonical parse and real C1 projection, then close/reopen/replay. Original SQL campaign receipt remains byte-identical, separate conflict receipt persists, enrollment is held, actual `campaign_caps.sent` stays original 0 or 1. There is no source reporting consumer counting accepted delegated action event rows as sends; append-only action evidence events are not a send-count measure.
+
+Fresh commands (EVERY npm/npx prefixed with `export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH";`):
+
+```sh
+npm test --prefix cloud/lambdas/delegated-worker -- test/dispatchRepository.test.ts test/dispatchService.test.ts test/sendReconciler.test.ts test/commandService.test.ts
+# 144 GREEN = 88+16+12+28
+npm test -- tests/main/dispatchCampaignProjection.test.ts
+# 2 GREEN, existing encrypted temp DB only
+npx --no-install tsc --noEmit --skipLibCheck --esModuleInterop --target ESNext --module ESNext --moduleResolution node --strict cloud/lambdas/delegated-worker/test/dispatchRepository.test.ts
+npx --no-install tsc --noEmit --skipLibCheck --esModuleInterop --target ESNext --module ESNext --moduleResolution node --noImplicitAny tests/main/dispatchCampaignProjection.test.ts
+npx --no-install eslint --no-ignore --max-warnings 0 cloud/lambdas/delegated-worker/src/dispatchRepository.ts cloud/lambdas/delegated-worker/src/executionRepository.ts cloud/lambdas/delegated-worker/test/dispatchFixture.ts cloud/lambdas/delegated-worker/test/dispatchRepository.test.ts tests/main/dispatchCampaignProjection.test.ts
+# Both correctly scoped typechecks and exact nonignored lint GREEN; exact diff --check GREEN.
+```
+
+Honest intermediate limitations: aggregate worker `npm run typecheck --prefix cloud/lambdas/delegated-worker` was attempted and blocked by concurrently edited ownerCommandCoordinator.test.ts:246 widened channel type plus newly imported legacy migrate.ts unused expect-error/0017 optional strings. No foreign edits made. An initial combined worker+main compatible-noImplicitAny invocation incorrectly mixed worker strictNullChecks expectations and reported four existing null/empty-array inference errors. Separate strict worker and root-compatible main checks above passed. Actual Dynamo requests are still checked by offline synthetic interpreter, not live Dynamo. No live providers/network/grants, install/build/root suite or deployment performed. Separate pending handoff-specific readiness work is not included in this frozen repair.
