@@ -38,10 +38,12 @@ export function createDispatchService(input: DispatchDependencies) {
       }
       if (prior.reservation || ['dispatching', 'unknown', 'human_reported_sent'].includes(prior.state)) return { status: 'unknown', reason: 'already_reserved' };
       if (!['prepared', 'queued'].includes(prior.state)) return { status: 'held', reason: 'action_not_eligible' };
-      const thread = await threads.getThread(intent.action.accountId, intent.frozenMessage.threadId);
-      if (!thread) return { status: 'held', reason: 'thread_not_current' };
+      if (intent.kind !== 'phone_requested_followup') {
+        const thread = await threads.getThread(intent.action.accountId, intent.frozenMessage.threadId);
+        if (!thread) return { status: 'held', reason: 'thread_not_current' };
+      }
       const scope = await threads.scope(intent.action.accountId, intent.mailboxSubject);
-      if (!scope || !scope.participantAddresses.includes(intent.frozenMessage.to) || !scope.knownThreadIds.includes(intent.frozenMessage.threadId)) {
+      if (!scope || !scope.participantAddresses.includes(intent.frozenMessage.to) || intent.kind !== 'phone_requested_followup' && !scope.knownThreadIds.includes(intent.frozenMessage.threadId)) {
         return { status: 'held', reason: 'intake_scope_missing' };
       }
       // Only identity crosses this boundary. C3 loads the complete authorized

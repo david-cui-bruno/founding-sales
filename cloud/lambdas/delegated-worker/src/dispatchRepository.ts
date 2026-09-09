@@ -1,5 +1,13 @@
 import { z } from 'zod';
-import { CampaignExecution } from './campaignExecution';
+import { requestedFollowupDraftSchema, requestedRecipientSchema, originalCallRefSchema, type RequestedFollowupDraft } from '../../../../src/shared/contracts/requestedFollowupContract';
+import { requestedFollowupContextRevision } from '../../../../src/main/outreach/requestedFollowupService';
+import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
+import { DynamoRequestedFollowupRepository, requestedFollowupDraftKey, type RequestedFollowupPlan } from './requestedFollowupRepository';
+import { loadRequestedApproval, requestedApprovalKey, requestedApprovalRecordSchema, type RequestedApprovalRecord } from './requestedFollowupApproval';
+import { executionAuthorityFields } from './executionRepository';
+import { pairingKey } from './workerAuth';
+import type { RequestedFollowupCampaignOrigin } from './workerCampaignRepository';
+import { CampaignExecution, type CampaignExecutionPlan } from './campaignExecution';
 import { ownerSourceConfigurationSchema, ownerSourceKey } from '../../../../src/shared/contracts/ownerCommandContract';
 import type { CampaignEventPayload } from '../../../../src/shared/contracts/campaignContract';
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
@@ -21,14 +29,22 @@ const bindingSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('thread_participant'), threadId: id, sourceMessageId: id, sourceMessageHash: hash }),
   z.strictObject({ kind: z.literal('account_route'), routeId: id, routeVersion: integer.positive(), accountVersion: integer.positive() }),
 ]);
-const intentBase = { commandId: z.uuid(), action: reserveDispatchInputSchema.omit({ expectedVersion: true }), draftId: id, draftRevision: integer.positive(),
-  pairingId: z.uuid(), mailboxSubject: id, frozenMessage: frozenDispatchMessageSchema, binding: bindingSchema };
+const commonIntentBase = { commandId: z.uuid(), action: reserveDispatchInputSchema.omit({ expectedVersion: true }), draftId: id, draftRevision: integer.positive(),
+  pairingId: z.uuid(), mailboxSubject: id };
+const intentBase = { ...commonIntentBase, frozenMessage: frozenDispatchMessageSchema, binding: bindingSchema };
+export const frozenFirstEmailSchema = z.strictObject({ commandId: z.uuid(), from: z.email(), to: z.email(), subject: header.max(240), body: z.string().min(1).max(24000).refine(value => !value.includes('\0')) });
+export const phoneRequestedFollowupIntentSchema = z.strictObject({ ...commonIntentBase, kind: z.literal('phone_requested_followup'), requestedApprovalCommandId: z.uuid(), frozenMessage: frozenFirstEmailSchema });
+export type PhoneRequestedFollowupIntent = z.infer<typeof phoneRequestedFollowupIntentSchema>;
+function targetHash(message: z.infer<typeof frozenDispatchMessageSchema> | z.infer<typeof frozenFirstEmailSchema>) {
+  return fingerprint('threadId' in message ? { sender: message.from, recipient: message.to, threadId: message.threadId } : { sender: message.from, recipient: message.to });
+}
 export const campaignDispatchBindingSchema = z.strictObject({ campaignId: id, campaignRevision: integer.positive(), enrollmentId: id, enrollmentRevision: integer.positive(), stepId: id });
 /** D1 consumption contract, not a permit: D1 must persist/fence campaign and enrollment,
  * approved content/target and campaign caps inside the SAME final transaction. */
 export const campaignDispatchStateSchema = campaignDispatchBindingSchema.extend({ accountId: id, state: z.literal('active'), approvedRevision: integer.positive(),
   allowedContentHash: hash, allowedTargetHash: hash, capsRevision: integer.positive() });
 export const dispatchIntentSchema = z.discriminatedUnion('kind', [
+  phoneRequestedFollowupIntentSchema,
   z.strictObject({ ...intentBase, kind: z.literal('standalone_reply') }),
   z.strictObject({ ...intentBase, kind: z.literal('campaign_step'), campaign: campaignDispatchBindingSchema }),
 ]);
@@ -54,6 +70,13 @@ export const sendEvidenceSchema = z.strictObject({ commandId: z.uuid(), reservat
   kind: z.enum(['provider_result', 'sent_lookup']), reason: z.enum(['provider_accepted', 'provider_not_sent', 'provider_result_unknown', 'sent_match']),
   rfcMessageId: rfcId, providerIdentity: z.strictObject({ messageId: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/), threadId: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/).nullable() }).nullable() });
 export type SendEvidence = z.infer<typeof sendEvidenceSchema>;
+const requestedCampaignOriginSchema = z.strictObject({ accountId: id, campaignVersionId: id, enrollmentId: id, stepId: id, actionId: id, originalOutcomeCommandId: z.uuid(), routeId: id, routeVersion: integer.positive(), executionContextId: id, contextRevision: integer });
+export const phoneRequestPermissionSchema = z.strictObject({ basis: z.literal('phone_request'), id, accountId: id, recipient: z.email(), sender: z.email(), mailboxSubject: id,
+  originalCall: originalCallRefSchema, recipientBinding: requestedRecipientSchema, accountVersion: integer.positive(), researchRevision: integer.positive(), contextRevision: hash,
+  attestationCommandId: z.uuid(), attestationHash: hash, recordedAt: instant, expiresAt: instant, campaignOrigin: requestedCampaignOriginSchema });
+export const requestedDispatchApprovalSchema = z.strictObject({ kind: z.literal('phone_requested_followup'), id, commandId: z.uuid(), requestedApprovalCommandId: z.uuid(),
+  intentHash: hash, draft: requestedFollowupDraftSchema, permission: phoneRequestPermissionSchema, approvedAt: instant, expiresAt: instant });
+type LoadedRequestedApproval = NonNullable<Awaited<ReturnType<typeof loadRequestedApproval>>>;
 export type DispatchReservationPlan = { finalize(): TransactWriteItem[]; campaign?: CampaignEventPayload };
 
 /** A persisted policy reader/admission capability, NOT an execution repository.
@@ -77,8 +100,9 @@ export class DynamoDispatchRepository {
   }
   async admitIntent(input: DispatchIntent): Promise<void> {
     const intent = dispatchIntentSchema.parse(input); this.store.workspace(intent.action.workspaceId);
+    if (intent.kind === 'phone_requested_followup') throw new Error('requested_admission_required');
     if (intent.commandId !== intent.frozenMessage.commandId || intent.action.contentHash !== fingerprint(intent.frozenMessage)
-      || intent.action.targetHash !== fingerprint({ sender: intent.frozenMessage.from, recipient: intent.frozenMessage.to, threadId: intent.frozenMessage.threadId })) throw new Error('dispatch_identity_conflict');
+      || intent.action.targetHash !== targetHash(intent.frozenMessage)) throw new Error('dispatch_identity_conflict');
     await this.immutable(dispatchIntentKey(intent.commandId), intent, [this.store.put(actionIndexKey(intent.action.accountId, intent.action.actionId), { commandId: intent.commandId }, null)]);
   }
   async admitApproval(input: z.infer<typeof dispatchApprovalSchema>): Promise<void> {
@@ -118,7 +142,7 @@ export class DynamoDispatchRepository {
     if (!row) return null;
     const intent = dispatchIntentSchema.parse(row.data); this.store.workspace(intent.action.workspaceId);
     if (intent.commandId !== commandId || intent.frozenMessage.commandId !== commandId || intent.action.contentHash !== fingerprint(intent.frozenMessage)
-      || intent.action.targetHash !== fingerprint({ sender: intent.frozenMessage.from, recipient: intent.frozenMessage.to, threadId: intent.frozenMessage.threadId })) throw new Error('dispatch_identity_conflict');
+      || intent.action.targetHash !== targetHash(intent.frozenMessage)) throw new Error('dispatch_identity_conflict');
     return intent;
   }
   async outcomePlan(outcome: AppendOutcomeInput, raw: SendEvidence, terminalState?: 'cancelled' | 'provider_accepted'): Promise<{ items: TransactWriteItem[]; campaign?: CampaignEventPayload }> {
@@ -134,7 +158,7 @@ export class DynamoDispatchRepository {
     const flight = flightSchema.parse(flightRow.data);
     if (terminalState && (terminalState === evidence.state || !['provider_accepted', 'cancelled'].includes(evidence.state)
       || evidence.state === 'provider_accepted' && !(evidence.kind === 'provider_result' && evidence.reason === 'provider_accepted'
-        || evidence.kind === 'sent_lookup' && evidence.reason === 'sent_match' && evidence.providerIdentity?.threadId === intent.frozenMessage.threadId))) throw new Error('send_evidence_conflict');
+        || evidence.kind === 'sent_lookup' && evidence.reason === 'sent_match' && (intent.kind === 'phone_requested_followup' ? evidence.providerIdentity?.threadId != null : evidence.providerIdentity?.threadId === intent.frozenMessage.threadId)))) throw new Error('send_evidence_conflict');
     if (!terminalState && (flight.commandId !== intent.commandId || flight.accountId !== intent.action.accountId || flight.actionId !== intent.action.actionId
       || !['dispatching', 'unknown'].includes(flight.state))) throw new Error('account_dispatch_conflict');
     const items = [this.store.put(`DISPATCH_EVIDENCE#${keyPart(intent.commandId)}#${fingerprint(evidence)}`, evidence, null),
@@ -162,6 +186,154 @@ export class DynamoDispatchRepository {
     if (terminalState && campaign.payload.evidence?.conflict !== 'contradictory_finalized_outcome') throw new Error('campaign_conflict_missing');
     return { items: mergeDispatchConditions([...items, ...campaign.items]), campaign: campaign.payload };
   }
+  private requestedArtifacts(loaded: LoadedRequestedApproval, draft: RequestedFollowupDraft, origin: RequestedFollowupCampaignOrigin) {
+    const { record, command } = loaded; const snapshot = record.draftSnapshot;
+    const content = (value: RequestedFollowupDraft) => ({ ...value, mailContext: null as null, contextRevision: '' });
+    if (fingerprint(content(draft)) !== fingerprint(content(snapshot)) || draft.mailContext.inboundContextFingerprint !== record.baselineMailContext.inboundContextFingerprint
+      || draft.contextRevision !== requestedFollowupContextRevision(draft)) throw new Error('requested_evidence_changed');
+    if (fingerprint(draft.mailContext) !== fingerprint(snapshot.mailContext)) {
+      const scope = record.scopePlan?.desiredScope;
+      if (!scope || record.scopePlan!.previousScopeFingerprint !== snapshot.mailContext.scopeFingerprint
+        || draft.mailContext.scopeFingerprint !== mailScopeFingerprint(scope) || draft.mailContext.scopeRevision !== scope.revision
+        || draft.mailContext.inboundContextRevision !== (snapshot.mailContext.inboundContextRevision ?? 0) + 1) throw new Error('requested_evidence_changed');
+    }
+    const frozenMessage = frozenFirstEmailSchema.parse({ commandId: command.payload.intentCommandId, from: draft.sender, to: draft.recipient, subject: draft.subject, body: draft.body });
+    const intent = phoneRequestedFollowupIntentSchema.parse({ kind: 'phone_requested_followup', commandId: frozenMessage.commandId, requestedApprovalCommandId: command.commandId,
+      pairingId: record.pairingId, mailboxSubject: record.mailboxSubject, draftId: draft.id, draftRevision: draft.revision, frozenMessage,
+      action: { actionId: command.payload.actionId, workspaceId: command.workspaceId, accountId: record.accountId, expectedAuthorityGeneration: record.authorityGeneration,
+        approvalId: command.payload.approvalId, contentHash: fingerprint(frozenMessage), targetHash: targetHash(frozenMessage) } });
+    const permission = phoneRequestPermissionSchema.parse({ basis: 'phone_request', id: `phone-request-${record.commandId}`, accountId: record.accountId, recipient: draft.recipient,
+      sender: draft.sender, mailboxSubject: draft.mailboxSubject, originalCall: draft.originalCall, recipientBinding: draft.recipientBinding, accountVersion: draft.accountVersion,
+      researchRevision: draft.researchRevision, contextRevision: draft.contextRevision, attestationCommandId: record.commandId, attestationHash: record.requestSnapshot.attestationHash,
+      recordedAt: record.requestSnapshot.recordedAt, expiresAt: record.expiresAt, campaignOrigin: origin });
+    const approval = requestedDispatchApprovalSchema.parse({ kind: 'phone_requested_followup', id: command.payload.approvalId, commandId: intent.commandId,
+      requestedApprovalCommandId: record.commandId, intentHash: fingerprint(intent), draft, permission, approvedAt: permission.recordedAt, expiresAt: record.expiresAt });
+    return { intent, permission, approval };
+  }
+  private withoutRequestedAuthority(checks: TransactWriteItem[], authority: RequestedFollowupPlan['authority']) {
+    const expected = this.store.check(authority.key, authority.rev, executionAuthorityFields(authority.data)); let count = 0;
+    const result = checks.filter(item => {
+      if (item.ConditionCheck?.Key?.sk?.S !== authority.key) return true;
+      if (fingerprint(item) !== fingerprint(expected)) throw new Error('requested_authority_changed');
+      count++; return false;
+    });
+    if (count !== 1) throw new Error('requested_authority_changed');
+    return result;
+  }
+  private async requestedLiveChecks(record: RequestedApprovalRecord, plan: RequestedFollowupPlan) {
+    const authority = plan.authority.data;
+    if (authority.authority.accountId !== record.accountId || authority.authority.generation !== record.authorityGeneration) throw new Error('requested_authority_changed');
+    if (authority.authority.state === 'revoked') throw new Error('requested_revoked');
+    if (authority.authority.state === 'paused') throw new Error('requested_authority_paused');
+    if (authority.authority.owner !== 'worker' || authority.authority.state !== 'active') throw new Error('requested_authority_changed');
+    if (this.store.now() >= record.expiresAt) throw new Error('requested_expired');
+    const sourceKey = ownerSourceKey(record.accountId); const sourceRow = await this.required(sourceKey); const source = ownerSourceConfigurationSchema.parse(sourceRow.data);
+    if (source.workspaceId !== this.store.options.workspaceId || source.accountId !== record.accountId || source.pairingId !== record.pairingId || source.mailboxSubject !== record.mailboxSubject) throw new Error('requested_authority_changed');
+    if (source.state !== 'active') throw new Error('requested_authority_paused');
+    const pair = await this.authorization.input.auth.activePairing(record.pairingId);
+    if (this.authorization.input.auth.options.workspaceId !== this.store.options.workspaceId || this.authorization.input.auth.options.tableName !== this.store.options.tableName
+      || pair.data.generation !== record.requestSnapshot.principal.generation) throw new Error('requested_authority_changed');
+    const checks = [this.store.check(sourceKey, sourceRow.rev), this.store.check(pairingKey(record.pairingId), pair.rev)];
+    for (const key of [dispatchConflictKey(record.accountId), mailSuppressionKey(record.accountId), revokedKey(requestedApprovalKey(record.commandId))]) {
+      if (await this.store.get(key)) throw new Error('requested_revoked'); checks.push(this.store.absent(key));
+    }
+    if (plan.mailContext.scopeRevision === null || plan.mailContext.scopeFingerprint === null || plan.mailContext.inboundContextRevision === null
+      || !plan.cursor?.data.scope || plan.cursor.data.inboundContextFingerprint !== plan.mailContext.inboundContextFingerprint) throw new Error('requested_preflight_incomplete');
+    const intake = await createIntakeBarrier(this.store).check({ accountId: record.accountId, mailboxSubject: record.mailboxSubject, requiredRecipient: plan.draft.recipient }, new AbortController().signal);
+    if (intake.status !== 'ready') throw new Error('requested_preflight_incomplete');
+    return { checks: [...checks, ...intake.checks], validUntil: Math.min(intake.validUntil, Date.parse(record.expiresAt)) };
+  }
+  /** One transaction plan, never sequential permission/approval/action writers. */
+  async planRequestedAdmission(commandId: string) {
+    const loaded = await loadRequestedApproval(this.store, commandId); if (!loaded) throw new Error('requested_capture_missing');
+    const { record } = loaded;
+    if (record.state === 'materialized') throw new Error('requested_already_materialized');
+    if (record.state !== 'pending_preflight') throw new Error('requested_submission_inactive');
+    const drafts = new DynamoRequestedFollowupRepository(this.store.options);
+    const context = await drafts.readContext({ accountId: record.accountId, originalCall: record.originalCall, recipientBinding: record.draftSnapshot.recipientBinding, expectedAccountVersion: record.draftSnapshot.accountVersion, mode: 'manual' });
+    const candidate = { ...record.draftSnapshot, mailContext: context.mailContext };
+    candidate.contextRevision = requestedFollowupContextRevision(candidate);
+    const plan = await drafts.planCurrent(candidate); const live = await this.requestedLiveChecks(record, plan);
+    if (!this.campaignExecution) throw new Error('campaign_binding_unavailable');
+    const campaign = await this.campaignExecution.repository.prepareRequestedFollowupPlan({ commandId, accountId: record.accountId, originalActionId: record.originalCall.actionId, originalOutcomeCommandId: record.originalCall.commandId });
+    const artifacts = this.requestedArtifacts(loaded, candidate, campaign.origin);
+    const dKey = requestedFollowupDraftKey(record.accountId, record.draftSnapshot.id); const draftRow = await this.required(dKey);
+    if (fingerprint(requestedFollowupDraftSchema.parse(draftRow.data)) !== fingerprint(record.draftSnapshot)) throw new Error('requested_evidence_changed');
+    const flightKey = dispatchAccountKey(record.accountId); const flight = await this.store.get<unknown>(flightKey);
+    if (flight && ['dispatching', 'unknown'].includes(flightSchema.parse(flight.data).state)) throw new Error('account_dispatch_unresolved');
+    const entries = [[dispatchPermissionKey(record.accountId, artifacts.permission.id), artifacts.permission], [dispatchApprovalKey(artifacts.approval.id), artifacts.approval],
+      [dispatchIntentKey(artifacts.intent.commandId), artifacts.intent], [actionIndexKey(record.accountId, artifacts.intent.action.actionId), { commandId: artifacts.intent.commandId }]] as const;
+    const items = [...loaded.checks.filter(item => item.ConditionCheck?.Key?.sk?.S !== requestedApprovalKey(commandId)), ...this.withoutRequestedAuthority(plan.checks, plan.authority),
+      ...live.checks, ...campaign.items, this.store.check(dKey, draftRow.rev), flight ? this.store.check(flightKey, flight.rev) : this.store.absent(flightKey)];
+    for (const [key, value] of entries) {
+      if (await this.store.get(revokedKey(key))) throw new Error('requested_revoked');
+      items.push(this.store.absent(revokedKey(key)), this.store.put(key, value, null));
+    }
+    items.push(this.store.put(requestedApprovalKey(commandId), requestedApprovalRecordSchema.parse({ ...record, state: 'materialized', materializedIntentId: artifacts.intent.commandId, lastReason: null }), loaded.revision));
+    return { items: mergeDispatchConditions(items), intent: artifacts.intent, preparedInput: { ...artifacts.intent.action, expectedVersion: plan.authority.data.version },
+      authority: plan.authority, validUntil: live.validUntil, campaign: campaign.payload };
+  }
+  private async requestedMaterialization(commandId: string) {
+    const loaded = await loadRequestedApproval(this.store, commandId); if (!loaded || loaded.record.state !== 'materialized') throw new Error('requested_submission_inactive');
+    const aKey = dispatchApprovalKey(loaded.command.payload.approvalId); const approvalRow = await this.required(aKey); const approval = requestedDispatchApprovalSchema.parse(approvalRow.data);
+    const expected = this.requestedArtifacts(loaded, approval.draft, approval.permission.campaignOrigin);
+    const iKey = dispatchIntentKey(expected.intent.commandId); const pKey = dispatchPermissionKey(loaded.record.accountId, expected.permission.id);
+    const intentRow = await this.required(iKey); const permissionRow = await this.required(pKey);
+    const dKey = requestedFollowupDraftKey(loaded.record.accountId, loaded.record.draftSnapshot.id); const draftRow = await this.required(dKey);
+    if (fingerprint(approval) !== fingerprint(expected.approval) || fingerprint(intentRow.data) !== fingerprint(expected.intent) || fingerprint(permissionRow.data) !== fingerprint(expected.permission)
+      || fingerprint(draftRow.data) !== fingerprint(loaded.record.draftSnapshot)) throw new Error('requested_evidence_changed');
+    return { ...expected, loaded, checks: [...loaded.checks, this.store.check(aKey, approvalRow.rev), this.store.check(iKey, intentRow.rev), this.store.check(pKey, permissionRow.rev), this.store.check(dKey, draftRow.rev)] };
+  }
+  async loadRequestedMaterializedIntent(commandId: string): Promise<PhoneRequestedFollowupIntent> { return (await this.requestedMaterialization(commandId)).intent; }
+  private async requestedReservationPlan(input: ReserveDispatchInput, intent: PhoneRequestedFollowupIntent, evidence: GoogleAccessEvidence | undefined, checks: TransactWriteItem[]) {
+    const materialized = await this.requestedMaterialization(intent.requestedApprovalCommandId);
+    if (fingerprint(materialized.intent) !== fingerprint(intent)) throw new Error('requested_evidence_changed');
+    const plan = await new DynamoRequestedFollowupRepository(this.store.options).planCurrent(materialized.approval.draft);
+    if (plan.authority.data.version !== input.expectedVersion) throw new Error('stale_authority');
+    const live = await this.requestedLiveChecks(materialized.loaded.record, plan);
+    if (!this.campaignExecution) throw new Error('campaign_binding_unavailable');
+    const campaign = await this.campaignExecution.repository.requestedFollowupChecks({ accountId: intent.action.accountId, originalActionId: materialized.permission.originalCall.actionId, originalOutcomeCommandId: materialized.permission.originalCall.commandId });
+    if (fingerprint(campaign.origin) !== fingerprint(materialized.permission.campaignOrigin)) throw new Error('requested_evidence_changed');
+    checks.push(...materialized.checks, ...this.withoutRequestedAuthority(plan.checks, plan.authority), ...live.checks, ...campaign.items);
+    for (const key of [dispatchIntentKey(intent.commandId), dispatchApprovalKey(intent.action.approvalId), dispatchPermissionKey(intent.action.accountId, materialized.permission.id)]) {
+      if (await this.store.get(revokedKey(key))) throw new Error('requested_revoked'); checks.push(this.store.absent(revokedKey(key)));
+    }
+    return this.finishReservationPlan(input, intent, evidence, checks, Date.parse(materialized.permission.recordedAt), live.validUntil);
+  }
+  /** Read-only linkage from an actual accepted first email to actual retained inbound evidence.
+   * This creates neither a provider thread nor permission to answer it. */
+  async requestedReplyAssociation(commandId: string, threadId: string) {
+    const intent = await this.loadIntent(commandId); if (intent?.kind !== 'phone_requested_followup') return null;
+    const holdKey = dispatchConflictKey(intent.action.accountId); if (await this.store.get(holdKey)) return null;
+    const materialized = await this.requestedMaterialization(intent.requestedApprovalCommandId);
+    if (fingerprint(materialized.intent) !== fingerprint(intent)) return null;
+    const actionKey = `ACTION#${keyPart(intent.action.accountId)}#${keyPart(intent.action.actionId)}`;
+    const actionRow = await this.store.get<unknown>(actionKey);
+    const action = z.object({ input: reserveDispatchInputSchema.omit({ expectedVersion: true }), state: z.string(), reservation: reservationSchema.optional() }).safeParse(actionRow?.data);
+    if (!action.success || action.data.state !== 'provider_accepted' || !action.data.reservation || fingerprint(action.data.input) !== fingerprint(intent.action)) return null;
+    const reservation = action.data.reservation;
+    if (reservation.workspaceId !== intent.action.workspaceId || reservation.accountId !== intent.action.accountId || reservation.actionId !== intent.action.actionId
+      || reservation.authorityGeneration !== intent.action.expectedAuthorityGeneration || reservation.contentHash !== intent.action.contentHash || reservation.targetHash !== intent.action.targetHash) return null;
+    const evidenceRows = await this.store.list<unknown>(`DISPATCH_EVIDENCE#${keyPart(commandId)}#`);
+    const accepted = evidenceRows.flatMap(row => { const parsed = sendEvidenceSchema.safeParse(row.stored.data);
+      if (!parsed.success) return []; const evidence = parsed.data;
+      return evidence.commandId === commandId && evidence.state === 'provider_accepted' && evidence.providerIdentity?.threadId === threadId
+        && evidence.rfcMessageId === `<${commandId}@callie.invalid>` && fingerprint(evidence.reservation) === fingerprint(reservation)
+        && (evidence.kind === 'provider_result' && evidence.reason === 'provider_accepted' || evidence.kind === 'sent_lookup' && evidence.reason === 'sent_match')
+        ? [{ row, evidence, provider: evidence.providerIdentity }] : []; });
+    if (!accepted.length || new Set(accepted.map(item => fingerprint(item.provider))).size !== 1) return null;
+    const threadKey = mailThreadKey(intent.action.accountId, threadId); const threadRow = await this.store.get<unknown>(threadKey);
+    const projection = threadProjectionSchema.safeParse(threadRow?.data); if (!projection.success) return null;
+    const thread = projection.data.thread;
+    if (thread.accountId !== intent.action.accountId || thread.mailboxSubject !== intent.mailboxSubject || thread.providerThreadId !== threadId) return null;
+    const matches = thread.messages.filter(message => message.from.length === 1 && message.from[0] === intent.frozenMessage.to
+      && message.to.length === 1 && message.to[0] === intent.frozenMessage.from && message.cc.length === 0
+      && message.references.includes(`<${commandId}@callie.invalid>`) && message.date >= accepted[0]!.evidence.observedAt);
+    if (!matches.length) return null;
+    return { commandId, providerMessageId: accepted[0]!.provider!.messageId, threadId, inboundMessageId: matches[0]!.id,
+      checks: mergeDispatchConditions([...materialized.checks, this.store.absent(holdKey), this.store.check(actionKey, actionRow!.rev),
+        this.store.check(threadKey, threadRow!.rev), ...accepted.map(item => this.store.check(item.row.key, item.row.stored.rev))]) };
+  }
   async sendEvidence(commandId: string): Promise<SendEvidence[]> {
     return (await this.store.list<unknown>(`DISPATCH_EVIDENCE#${keyPart(commandId)}#`)).map(row => {
       const evidence = sendEvidenceSchema.parse(row.stored.data);
@@ -179,6 +351,7 @@ export class DynamoDispatchRepository {
     const identity = { actionId: parsed.actionId, workspaceId: parsed.workspaceId, accountId: parsed.accountId,
       expectedAuthorityGeneration: parsed.expectedAuthorityGeneration, approvalId: parsed.approvalId, contentHash: parsed.contentHash, targetHash: parsed.targetHash };
     if (intent.commandId !== commandId || fingerprint(identity) !== fingerprint(intent.action)) throw new Error('dispatch_identity_conflict');
+    if (intent.kind === 'phone_requested_followup') return this.requestedReservationPlan(parsed, intent, evidence, [this.store.absent(holdKey), this.store.check(indexKey, index.rev), this.store.check(key, row.rev)]);
     if (intent.kind === 'campaign_step' && (!this.campaignExecution || intent.binding.kind !== 'account_route')) throw new Error('campaign_binding_unavailable');
     const sourceKey = ownerSourceKey(parsed.accountId); const sourceRow = await this.store.get<unknown>(sourceKey);
     const configuration = ownerSourceConfigurationSchema.safeParse(sourceRow?.data);
@@ -205,12 +378,7 @@ export class DynamoDispatchRepository {
       || permission.sender !== message.from || permission.threadId !== draft.threadId) throw new Error('recipient_permission_unproven');
     const source = this.permissionSource(permission, thread);
     if (!source.rfcMessageId || message.inReplyTo !== source.rfcMessageId || !message.references.includes(source.rfcMessageId)) throw new Error('reply_headers_conflict');
-    const flightKey = dispatchAccountKey(parsed.accountId); const flightRow = await this.store.get<unknown>(flightKey);
-    if (flightRow) {
-      const flight = flightSchema.parse(flightRow.data);
-      if (flight.accountId !== parsed.accountId || ['dispatching', 'unknown'].includes(flight.state)) throw new Error('account_dispatch_unresolved');
-    }
-    const checks = [this.store.absent(holdKey), this.store.check(sourceKey, sourceRow.rev), this.store.put(flightKey, { accountId: parsed.accountId, commandId, actionId: parsed.actionId, state: 'dispatching' }, flightRow?.rev ?? null), this.store.check(indexKey, index.rev), this.store.check(key, row.rev), this.store.check(approvalKey, approvalRow.rev),
+    const checks = [this.store.absent(holdKey), this.store.check(sourceKey, sourceRow.rev), this.store.check(indexKey, index.rev), this.store.check(key, row.rev), this.store.check(approvalKey, approvalRow.rev),
       this.store.check(dKey, draftRow.rev), this.store.check(tKey, threadRow.rev), this.store.check(pKey, permissionRow.rev)];
     for (const absent of [revokedKey(key), revokedKey(approvalKey), revokedKey(pKey), mailSuppressionKey(parsed.accountId)]) {
       if (await this.store.get(absent)) throw new Error('dispatch_suppressed');
@@ -231,7 +399,20 @@ export class DynamoDispatchRepository {
       ? await this.campaignExecution!.prepareDispatchChecks({ ...intent.campaign, workspaceId: parsed.workspaceId, accountId: parsed.accountId,
         actionId: parsed.actionId, channel: 'email', authorityGeneration: parsed.expectedAuthorityGeneration, selectedRouteId: intent.binding.routeId,
         contextRevision: draft.contextRevision, contentHash: parsed.contentHash, targetHash: parsed.targetHash }) : null;
-    const intake = await createIntakeBarrier(this.store).check({ accountId: parsed.accountId, mailboxSubject: intent.mailboxSubject, requiredRecipient: message.to, requiredThreadId: message.threadId }, new AbortController().signal);
+    return this.finishReservationPlan(parsed, intent, evidence, checks, Math.max(Date.parse(approval.approvedAt), Date.parse(permission.recordedAt)),
+      Math.min(Date.parse(approval.expiresAt), Date.parse(permission.expiresAt)), campaign);
+  }
+  /** Shared final flight, intake, sender cap and C2 grant conditions for every email kind. */
+  private async finishReservationPlan(parsed: ReserveDispatchInput, intent: DispatchIntent, evidence: GoogleAccessEvidence | undefined, checks: TransactWriteItem[], validFrom: number, validUntil: number, campaign: CampaignExecutionPlan | null = null): Promise<DispatchReservationPlan> {
+    const message = intent.frozenMessage; const commandId = intent.commandId;
+    const flightKey = dispatchAccountKey(parsed.accountId); const flightRow = await this.store.get<unknown>(flightKey);
+    if (flightRow) {
+      const flight = flightSchema.parse(flightRow.data);
+      if (flight.accountId !== parsed.accountId || ['dispatching', 'unknown'].includes(flight.state)) throw new Error('account_dispatch_unresolved');
+    }
+    checks.push(this.store.put(flightKey, { accountId: parsed.accountId, commandId, actionId: parsed.actionId, state: 'dispatching' }, flightRow?.rev ?? null));
+    const intake = await createIntakeBarrier(this.store).check({ accountId: parsed.accountId, mailboxSubject: intent.mailboxSubject, requiredRecipient: message.to,
+      ...(intent.kind !== 'phone_requested_followup' ? { requiredThreadId: intent.frozenMessage.threadId } : {}) }, new AbortController().signal);
     if (intake.status !== 'ready') throw new Error(intake.reason);
     checks.push(...intake.checks);
     const policyKey = dispatchCapPolicyKey(message.from); const policyRow = await this.required(policyKey); const policy = capPolicySchema.parse(policyRow.data);
@@ -239,8 +420,7 @@ export class DynamoDispatchRepository {
     const capRow = await this.store.get<unknown>(capKey); const cap = capRow ? capSchema.parse(capRow.data) : { sender: message.from, day, used: 0 };
     if (policy.sender !== message.from || cap.sender !== message.from || cap.day !== day || cap.used >= policy.dailyLimit) throw new Error('dispatch_cap_reached');
     checks.push(this.store.check(policyKey, policyRow.rev), this.store.put(capKey, { ...cap, used: cap.used + 1 }, capRow?.rev ?? null));
-    const start = Math.max(Date.parse(approval.approvedAt), Date.parse(permission.recordedAt));
-    const end = Math.min(Date.parse(approval.expiresAt), Date.parse(permission.expiresAt), intake.validUntil);
+    const start = validFrom; const end = Math.min(validUntil, intake.validUntil);
     const finalize = () => {
       const now = Date.parse(this.store.now());
       if (now < start || now >= end || this.store.now().slice(0, 10) !== day) throw new Error('dispatch_evidence_expired');

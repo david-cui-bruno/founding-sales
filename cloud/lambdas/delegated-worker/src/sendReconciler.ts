@@ -16,7 +16,7 @@ export function verifySentMatch(email: ThreadedFrozenEmail, messages: MailMessag
   const parts = message.bodyParts;
   if (message.rfcMessageId !== `<${email.commandId}@callie.invalid>` || message.from.length !== 1 || message.from[0] !== email.from
     || message.to.length !== 1 || message.to[0] !== email.to || message.cc.length !== 0 || message.subject !== email.subject
-    || email.references !== undefined && JSON.stringify(message.references) !== JSON.stringify(email.references)
+    || JSON.stringify(message.references) !== JSON.stringify(email.references ?? [])
     || email.threadId !== undefined && message.threadId !== email.threadId
     || parts.length !== 1 || parts[0]!.mimeType !== 'text/plain' || parts[0]!.truncated || lines(parts[0]!.text) !== lines(email.body)) {
     return { status: 'unknown', reason: 'sent_mismatch' };
@@ -100,7 +100,8 @@ export function createSendReconciler(input: DispatchDependencies) {
         cc: header('cc') ? header('cc').split(',').map(value => value.trim()) : [], date: new Date(Number(raw.internalDate)).toISOString(), subject: decodedSubject(header('subject')),
         bodyParts: [{ mimeType: 'text/plain', text: new TextDecoder('utf-8', { fatal: true }).decode(bytes), truncated: false }] })]);
       if (outcome.status !== 'provider_accepted') return outcome;
-      if (header('in-reply-to') !== intent.frozenMessage.inReplyTo) return { status: 'unknown', reason: 'sent_mismatch' };
+      if (intent.kind === 'phone_requested_followup' ? names.includes('in-reply-to') || names.includes('references')
+        : header('in-reply-to') !== intent.frozenMessage.inReplyTo) return { status: 'unknown', reason: 'sent_mismatch' };
       const observedAt = input.policy.store.now();
       const evidence: SendEvidence = { commandId, reservation, state: 'provider_accepted', observedAt, kind: 'sent_lookup', reason: 'sent_match',
         rfcMessageId: `<${commandId}@callie.invalid>`, providerIdentity: outcome.providerIdentity };

@@ -35,3 +35,6 @@ it('requires exact approved References rather than only provider thread identity
   expect(verifySentMatch(approved, [{ ...match, references: approved.references }]).status).toBe('provider_accepted');
   expect(verifySentMatch(approved, [{ ...match, references: [...approved.references, '<other@example.invalid>'] }]).status).toBe('unknown');
 });
+it('first-email Sent evidence rejects inherited References instead of treating missing approved references as unconstrained', () => {
+  expect(verifySentMatch(email, [{ ...match, references: ['<unapproved-thread@example.invalid>'] }])).toEqual({ status: 'unknown', reason: 'sent_mismatch' });
+});

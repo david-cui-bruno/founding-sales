@@ -194,8 +194,8 @@ it('rejects corrupt loaded intent content before any preparation or send', async
 it('route-bound approval checks the real B1 account route and rejects changed version', async () => {
   const f = await fixture();
   const intent: DispatchIntent = { ...f.intent, binding: { kind: 'account_route', routeId: 'route', routeVersion: 1, accountVersion: 1 } };
-  const route = { id: 'route', accountId: 'acct', personId: null, channel: 'email', value: f.draft.recipient, purpose: 'business', evidenceIds: ['published-source'], verification: 'confirmed', version: 1 };
-  const account = { account: { id: 'acct', name: 'Fictional PM', domain: null, version: 1 }, routes: [route] };
+  const route = { id: 'route', accountId: 'acct', personId: null as null, channel: 'email', value: f.draft.recipient, purpose: 'business', evidenceIds: ['published-source'], verification: 'confirmed', version: 1 };
+  const account = { account: { id: 'acct', name: 'Fictional PM', domain: null as null, version: 1 }, routes: [route] };
   await f.store.transact([f.store.put('ACCOUNT#acct', account, 1), f.store.put(dispatchIntentKey(intent.commandId), intent, 1), f.store.put(dispatchApprovalKey('approval'), { ...f.approval, intentHash: fingerprint(intent) }, 1)]);
   const plan = await f.policy.reservationPlan({ ...intent.action, expectedVersion: 2 }, f.access.accessEvidence);
   expect(plan.finalize().some(item => item.ConditionCheck?.Key?.sk?.S === 'ACCOUNT#acct')).toBe(true);
@@ -230,7 +230,7 @@ it('unknown and multiple Sent matches never append acceptance or resend', async 
 });
 it('trusted intake configuration is durable and revision fenced', async () => {
   const f = await fixture();
-  const registry = { accountId: 'acct', adapters: [{ id: 'gmail', kind: 'gmail', enabled: true, relevant: true, mailboxSubject: 'mailbox' }], manualDependencies: [] };
+  const registry = { accountId: 'acct', adapters: [{ id: 'gmail', kind: 'gmail', enabled: true, relevant: true, mailboxSubject: 'mailbox' }], manualDependencies: [] as never[] };
   await f.policy.configureIntake(registry, 2);
   expect((await f.store.get(intakeRegistryKey('acct')))?.rev).toBe(3);
   await expect(f.policy.configureIntake(registry, 1)).rejects.toThrow('TransactionCanceledException');
@@ -243,7 +243,8 @@ it('durable action read rejects mismatched reservation identities', async () => 
   await expect(f.execution.readDispatch('acct', 'action')).rejects.toThrow('reservation_identity_conflict');
 });
 
-function sentRaw(f: Pick<Awaited<ReturnType<typeof dispatchFixture>>, 'options'> & { intent: Pick<DispatchIntent, 'frozenMessage'> }, extraHeaders: { name: string; value: string }[] = []) {
+function sentRaw(f: Pick<Awaited<ReturnType<typeof dispatchFixture>>, 'options'> & { intent: DispatchIntent }, extraHeaders: { name: string; value: string }[] = []) {
+  if (f.intent.kind === 'phone_requested_followup') throw new Error('threaded_fixture_required');
   const email = f.intent.frozenMessage; const body = Buffer.from(email.body.replace(/\n/g, '\r\n'));
   return { id: 'sent1', threadId: email.threadId, internalDate: String(Date.parse(f.options.clock.now())), labelIds: ['SENT'], payload: { mimeType: 'text/plain', headers: [
     { name: 'Message-ID', value: `<${email.commandId}@callie.invalid>` }, { name: 'From', value: email.from }, { name: 'To', value: email.to }, { name: 'Subject', value: email.subject },
@@ -449,7 +450,7 @@ it.each([
   const f = await campaignFixture();
   const reservation = await f.execution.reserveDispatch({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence);
   const evidence = { commandId: f.intent.commandId, reservation, state: 'cancelled' as const, observedAt: f.options.clock.now(), ...proof,
-    rfcMessageId: `<${f.intent.commandId}@callie.invalid>`, providerIdentity: null };
+    rfcMessageId: `<${f.intent.commandId}@callie.invalid>`, providerIdentity: null as null };
   await expect(f.policy.outcomePlan({ reservation, state: 'cancelled', observedAt: evidence.observedAt, evidenceRef: fingerprint(evidence) }, evidence)).rejects.toThrow('send_evidence_conflict');
   expect(f.dynamo.inspect(campaignCapKey(f.version.id, 'email'))).toEqual({ reserved: 1, sent: 0 });
 });
