@@ -1,3 +1,4 @@
+import { setDailySessionScope } from '../today/dailySessionScope';
 import { expect, it, vi } from 'vitest';
 import { linkedInSession } from './linkedInSession';
 import { linkedInFixture } from '../today/nativeDesk.fixture';
@@ -149,5 +150,85 @@ it.each(['pending', 'unknown', 'mismatched'] as const)(
     expect(s.canUseSavedVersion()).toBe(false);
     s.useSavedVersion();
     expect(s.snapshot().body).toBe(item.draft.body);
+  },
+);
+it.each([
+  ['pending', 'applied'],
+  ['pending', 'rejected'],
+  ['unknown', 'applied'],
+  ['unknown', 'rejected'],
+] as const)(
+  'exact %s historical report retry to %s bypasses only draft conflict',
+  async (initial, terminal) => {
+    const item = linkedInFixture();
+    item.recovery = {
+      ...item.recovery,
+      started: true,
+      handoffId: 'handoff',
+      approvalCommandId: commandId,
+      attempts: [{ commandId, receipt: receipt('applied') }],
+    };
+    const api = {
+      reportOutcome: vi.fn(
+        async (input: Parameters<LinkedInApi['reportOutcome']>[0]) => {
+          if (initial === 'unknown') throw Error('unknown');
+          return {
+            draftId: item.draft.id,
+            revision: 1,
+            receipt: receipt('pending', input.commandId),
+          };
+        },
+      ),
+      recover: vi.fn(async () => item.recovery),
+      begin: vi.fn(),
+      copy: vi.fn(),
+      open: vi.fn(),
+    } as unknown as LinkedInApi;
+    const s = linkedInSession(api, 'ws', item);
+    await s.report('not_sent', '');
+    const retained = vi.mocked(api.reportOutcome).mock.calls[0]![0];
+    s.ingest({
+      ...item,
+      draft: { ...item.draft, revision: 2, body: 'New' },
+      recovery: {
+        ...item.recovery,
+        revision: 2,
+        approvalCommandId: null,
+        attempts: [],
+        started: false,
+        handoffId: null,
+      },
+    });
+    await s.recover();
+    s.setActionHold('Authority unavailable');
+    await s.retryReport();
+    expect(api.reportOutcome).toHaveBeenCalledTimes(1);
+    s.setActionHold(undefined);
+    setDailySessionScope(api, null);
+    await s.retryReport();
+    expect(api.reportOutcome).toHaveBeenCalledTimes(1);
+    setDailySessionScope(api, 'ws');
+    await s.begin();
+    await s.helper('copy');
+    await s.helper('open');
+    await s.report('reply', 'Different report');
+    expect(api.begin).not.toHaveBeenCalled();
+    expect(api.copy).not.toHaveBeenCalled();
+    expect(api.open).not.toHaveBeenCalled();
+    expect(api.reportOutcome).toHaveBeenCalledTimes(1);
+    expect(s.canUseSavedVersion()).toBe(false);
+    vi.mocked(api.reportOutcome).mockResolvedValueOnce({
+      draftId: item.draft.id,
+      revision: 1,
+      receipt: receipt(terminal, retained.commandId),
+    });
+    await s.retryReport();
+    expect(api.reportOutcome).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(api.reportOutcome).mock.calls[1]![0]).toEqual(retained);
+    expect(s.snapshot().conflict).toBe(true);
+    expect(s.snapshot().body).toBe(item.draft.body);
+    expect(s.canUseSavedVersion()).toBe(true);
+    s.useSavedVersion();
+    expect(s.snapshot().body).toBe('New');
   },
 );

@@ -194,8 +194,16 @@ class LinkedInSession {
     this.update({ draft });
     if (this.state.conflict) throw Error('Saved context requires review');
   }
-  private async run(work: (assertOperation: () => void) => Promise<void>) {
-    if (this.actionHold || this.state.busy || this.state.conflict) return;
+  private async run(
+    work: (assertOperation: () => void) => Promise<void>,
+    retainedReportOnly = false,
+  ) {
+    if (
+      this.actionHold ||
+      this.state.busy ||
+      (this.state.conflict && !retainedReportOnly)
+    )
+      return;
     this.update({ busy: true, error: null });
     try {
       assertDailySessionScope(this.api, this.workspaceId);
@@ -276,11 +284,24 @@ class LinkedInSession {
     );
   }
   retryReport() {
-    if (!this.reportCommand) return Promise.resolve();
-    return this.report(
-      this.reportCommand.outcome,
-      this.reportCommand.replyText ?? '',
-    );
+    const command = this.reportCommand;
+    if (!command || !this.canRetryReport()) return Promise.resolve();
+    // Only this immutable, already-issued command may reconcile through a
+    // newer-draft conflict. Generic new operations keep their conflict veto.
+    return this.run(() => this.submitReport(command), true);
+  }
+  private async submitReport(command: LinkedInReport) {
+    const result = await this.api.reportOutcome(command);
+    if (
+      result.draftId !== command.draftId ||
+      result.revision !== command.expectedRevision ||
+      result.receipt.commandId !== command.commandId
+    )
+      throw Error('Identity mismatch');
+    this.update({
+      report: result,
+      feedback: `Human outcome receipt: ${result.receipt.status}.`,
+    });
   }
   report(outcome: LinkedInReport['outcome'], replyText: string) {
     return this.run(async () => {
@@ -297,17 +318,7 @@ class LinkedInSession {
         (outcome === 'reply' && this.reportCommand.replyText !== replyText)
       )
         throw Error('Retry original outcome or recover');
-      const result = await this.api.reportOutcome(this.reportCommand);
-      if (
-        result.draftId !== this.state.draft.id ||
-        result.revision !== this.state.draft.revision ||
-        result.receipt.commandId !== this.reportCommand.commandId
-      )
-        throw Error('Identity mismatch');
-      this.update({
-        report: result,
-        feedback: `Human outcome receipt: ${result.receipt.status}.`,
-      });
+      await this.submitReport(this.reportCommand);
     });
   }
   async recover() {

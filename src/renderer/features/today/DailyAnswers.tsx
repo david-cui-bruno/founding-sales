@@ -193,7 +193,7 @@ function RequestedEditor({
           type="button"
           className="native-desk__primary"
           disabled={
-            !!actionHold ||
+            !!(actionHold || state.holdReason) ||
             locked ||
             state.conflict ||
             state.stale ||
@@ -207,14 +207,16 @@ function RequestedEditor({
         </button>
         <button
           type="button"
-          disabled={state.busy || !!actionHold}
+          disabled={state.busy || !!(actionHold || state.holdReason)}
           onClick={() => void session.preflight()}
         >
           Owner preflight
         </button>
         <button
           type="button"
-          disabled={locked || state.conflict || !!actionHold}
+          disabled={
+            locked || state.conflict || !!(actionHold || state.holdReason)
+          }
           onClick={() => void session.flush().catch((): void => undefined)}
         >
           Save edits
@@ -226,7 +228,9 @@ function RequestedEditor({
             ? 'Saving edits…'
             : 'Edits stay with this draft. Approval is separate.'}
         </p>
-        {actionHold && <p role="status">{actionHold}</p>}
+        {(actionHold || state.holdReason) && (
+          <p role="status">{actionHold || state.holdReason}</p>
+        )}
         {state.error && <p role="alert">{state.error}</p>}
         {state.approval && (
           <p>
@@ -236,7 +240,7 @@ function RequestedEditor({
         )}
         {state.unknownApproval && (
           <button
-            disabled={state.busy || !!actionHold}
+            disabled={state.busy || !!(actionHold || state.holdReason)}
             onClick={() => void session.retryApproval()}
           >
             Retry same approval

@@ -37,13 +37,13 @@ export function LinkedInStep({
   }, [session]);
   useEffect(() => session.setActionHold(actionHold), [session, actionHold]);
   useEffect(() => session.ingest(item), [session, item]);
-  const held =
+  const operationHeld =
     !!actionHold ||
     workspaceId !== state.draft.workspaceId ||
     state.busy ||
-    state.conflict ||
     state.draft.state === 'held' ||
     state.draft.state === 'closed';
+  const held = operationHeld || state.conflict;
   return (
     <section className="native-desk__composer">
       <p className="native-desk__eyebrow">
@@ -128,10 +128,12 @@ export function LinkedInStep({
       <div className="native-desk__actions">
         <button
           disabled={
-            held ||
-            !outcome ||
-            !session.canReport() ||
-            (outcome === 'reply' && !reply.trim())
+            session.canRetryReport()
+              ? operationHeld
+              : held ||
+                !outcome ||
+                !session.canReport() ||
+                (outcome === 'reply' && !reply.trim())
           }
           onClick={() => {
             if (session.canRetryReport()) void session.retryReport();

@@ -265,3 +265,94 @@ it.each(['applied', 'rejected'] as const)(
     ).toBe(true);
   },
 );
+it.each(['applied', 'rejected'] as const)(
+  'only retained retry is enabled during saved conflict and resolves to %s',
+  async (status) => {
+    const item = linkedInFixture();
+    item.recovery.started = true;
+    const api = {
+      reportOutcome: vi.fn(
+        async (input: Parameters<LinkedInApi['reportOutcome']>[0]) => ({
+          draftId: item.draft.id,
+          revision: 1,
+          receipt: {
+            commandId: input.commandId,
+            status: 'pending',
+            authorityGeneration: 1,
+            aggregateVersion: 1,
+            reason: null,
+          },
+        }),
+      ),
+    } as unknown as LinkedInApi;
+    const view = render(
+      <LinkedInStep item={item} api={api} workspaceId="ws" />,
+    );
+    fireEvent.change(screen.getByLabelText('Manual outcome'), {
+      target: { value: 'not_sent' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Record outcome' }));
+    await screen.findByText('Human outcome receipt: pending.');
+    const retained = vi.mocked(api.reportOutcome).mock.calls[0]![0];
+    const next = {
+      ...item,
+      draft: { ...item.draft, revision: 2, body: 'New version' },
+      recovery: { ...item.recovery, revision: 2 },
+    };
+    view.rerender(
+      <LinkedInStep
+        item={next}
+        api={api}
+        workspaceId="ws"
+        actionHold="Configuration paused"
+      />,
+    );
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Retry retained outcome',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    view.rerender(<LinkedInStep item={next} api={api} workspaceId="ws" />);
+    expect(api.reportOutcome).toHaveBeenCalledTimes(1);
+    for (const name of [
+      'Begin manual step',
+      'Copy note',
+      'Open LinkedIn',
+      'Use saved LinkedIn version',
+    ])
+      expect(
+        (screen.getByRole('button', { name }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Retry retained outcome',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+    vi.mocked(api.reportOutcome).mockResolvedValueOnce({
+      draftId: item.draft.id,
+      revision: 1,
+      receipt: {
+        commandId: retained.commandId,
+        status,
+        authorityGeneration: 1,
+        aggregateVersion: 2,
+        reason: null,
+      },
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Retry retained outcome' }),
+    );
+    await screen.findByText(`Human outcome receipt: ${status}.`);
+    expect(vi.mocked(api.reportOutcome).mock.calls[1]![0]).toEqual(retained);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Use saved LinkedIn version' }),
+    );
+    expect(
+      (screen.getByLabelText('LinkedIn note') as HTMLTextAreaElement).value,
+    ).toBe('New version');
+  },
+);

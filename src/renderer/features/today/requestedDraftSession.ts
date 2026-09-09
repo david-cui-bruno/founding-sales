@@ -15,6 +15,7 @@ export type RequestedDraftApi = Pick<
   'getRequestedFollowup' | 'editRequestedFollowup' | 'approveRequestedFollowup'
 >;
 type State = {
+  holdReason: string | undefined;
   draft: RequestedFollowupDraft;
   subject: string;
   body: string;
@@ -48,7 +49,12 @@ class RequestedDraftSession {
   private remoteAcknowledgedRevision: number | null = null;
   private approvalCommand: ApproveRequestedFollowup | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private actionHold: string | undefined;
+  private viewHold: string | undefined;
+  private propagatedHold:
+    ((draft: RequestedFollowupDraft) => string | undefined) | undefined;
+  private get actionHold() {
+    return this.state.holdReason;
+  }
   private generation = 0;
   focus: { field: 'subject' | 'body'; start: number; end: number } | null =
     null;
@@ -59,6 +65,7 @@ class RequestedDraftSession {
     approval: RequestedApprovalStatus | null,
   ) {
     this.state = {
+      holdReason: undefined,
       draft,
       subject: draft.subject,
       body: draft.body,
@@ -81,9 +88,18 @@ class RequestedDraftSession {
       this.listeners.delete(listener);
     };
   };
-  private update(patch: Partial<State>) {
-    this.state = { ...this.state, ...patch };
-    this.listeners.forEach((l) => l());
+  private update(patch: Partial<State>, notify = true) {
+    const next = { ...this.state, ...patch };
+    next.holdReason = this.viewHold || this.propagatedHold?.(next.draft);
+    if (next.holdReason && next.holdReason !== this.state.holdReason) {
+      this.generation++;
+      if (this.timer) {
+        clearTimeout(this.timer);
+        this.timer = null;
+      }
+    }
+    this.state = next;
+    if (notify) this.listeners.forEach((l) => l());
   }
   private dirty() {
     return (
@@ -91,13 +107,15 @@ class RequestedDraftSession {
       this.state.body !== this.state.draft.body
     );
   }
-  setActionHold(reason: string | undefined) {
-    if (reason) this.generation++;
-    this.actionHold = reason;
-    if (reason && this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
+  setActionHold(reason: string | undefined, notify = true) {
+    this.viewHold = reason;
+    this.update({}, notify);
+  }
+  setPropagatedHold(
+    hold: (draft: RequestedFollowupDraft) => string | undefined,
+  ) {
+    this.propagatedHold = hold;
+    this.update({});
   }
   ingest(
     draft: RequestedFollowupDraft,
@@ -409,6 +427,7 @@ export function requestedDraftSession(
     if (prior) {
       prior.setActionHold(
         'Recipient or context changed. Review the current saved identity.',
+        false, // Prior editor is replaced during render. Hold immediately without notifying it.
       );
       session.reviewNewIdentity(prior.snapshot());
     }
@@ -423,5 +442,5 @@ export function updateRequestedSessionHolds(
   hold: (draft: RequestedFollowupDraft) => string | undefined,
 ) {
   for (const session of sessions.get(api)?.values() ?? [])
-    session.setActionHold(hold(session.snapshot().draft));
+    session.setPropagatedHold(hold);
 }

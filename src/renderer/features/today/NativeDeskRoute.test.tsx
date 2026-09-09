@@ -379,3 +379,67 @@ it('teardown cancels delayed edits even when the same workspace immediately reop
     f.calls.filter((c) => c.method === 'editRequestedFollowup'),
   ).toHaveLength(0);
 });
+it.each(['active', 'paused', 'authority'] as const)(
+  'accepting saved email recomputes its hold while preserving %s conditions',
+  async (condition) => {
+    const f = ownedFixture();
+    render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Email · Account A' }),
+    );
+    const next = structuredClone(f.snapshot());
+    const answer = next.answers.find(
+      (a) => a.kind === 'requested_followup' && a.accountId === 'a',
+    )!;
+    if (answer.kind !== 'requested_followup') throw Error('fixture');
+    answer.draft = {
+      ...answer.draft,
+      revision: 2,
+      body: 'Accepted saved body',
+    };
+    if (condition === 'authority') next.ownerStatus[0]!.authority = null;
+    if (condition === 'paused') {
+      const config = await f.api.delegation.status();
+      f.setConfiguration({ ...config, state: 'paused' } as typeof config);
+    }
+    f.setSnapshot(next);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Use saved version and discard displayed edits',
+      }),
+    );
+    expect(
+      (screen.getByLabelText('Email body') as HTMLTextAreaElement).value,
+    ).toBe('Accepted saved body');
+    const preflight = screen.getByRole('button', {
+      name: 'Owner preflight',
+    }) as HTMLButtonElement;
+    expect(preflight.disabled).toBe(condition !== 'active');
+    fireEvent.click(preflight);
+    if (condition === 'active')
+      await waitFor(() =>
+        expect(
+          f.calls.filter((c) => c.method === 'getRequestedFollowup'),
+        ).toHaveLength(1),
+      );
+    else
+      expect(
+        f.calls.filter((c) => c.method === 'getRequestedFollowup'),
+      ).toHaveLength(0);
+    fireEvent.change(screen.getByLabelText('Email body'), {
+      target: { value: 'Explicit edit after acceptance' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save edits' }));
+    if (condition === 'active')
+      await waitFor(() =>
+        expect(
+          f.calls.filter((c) => c.method === 'editRequestedFollowup'),
+        ).toHaveLength(1),
+      );
+    else
+      expect(
+        f.calls.filter((c) => c.method === 'editRequestedFollowup'),
+      ).toHaveLength(0);
+  },
+);
