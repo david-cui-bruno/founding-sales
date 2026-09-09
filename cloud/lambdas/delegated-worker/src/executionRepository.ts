@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { type DynamoDispatchRepository, type SendEvidence } from './dispatchRepository';
 import type { GoogleAccessEvidence } from './remoteGoogleAuthorization';
 import { authorityStateSchema, commandReceiptSchema, delegationCommandSchema, reservationSchema, workerEventSchema, reserveDispatchInputSchema, appendOutcomeInputSchema,
@@ -20,6 +21,8 @@ function actionIdentity(input: ReserveDispatchInput) {
     contentHash: input.contentHash, targetHash: input.targetHash };
 }
 const preparedSchema = z.strictObject({ input: actionIdentitySchema, state: z.enum(['prepared', 'queued']), queueSequence: integer.positive().optional() });
+export type PreparedAction = z.infer<typeof preparedSchema>;
+export type PreparedActionPlan = { items: TransactWriteItem[]; preparedAction: PreparedAction };
 type ActionRecord = { input: z.infer<typeof actionIdentitySchema>; state: string; queueSequence?: number; reservation?: z.infer<typeof reservationSchema>; outcomeFingerprint?: string; sequence?: number };
 /** Explicit C2-authenticated setup and C3/C5-approved intent admission are separate
  * capabilities. Neither is reachable from applyCommand or account research. */
@@ -111,10 +114,29 @@ export class DynamoExecutionRepository implements ExecutionRepository {
   async prepareAction(input: ReserveDispatchInput): Promise<void> {
     const parsed = dispatchSchema.parse(input); this.store.workspace(parsed.workspaceId);
     const current = await this.authority(parsed.accountId);
-    this.current(current.data, parsed.expectedAuthorityGeneration, parsed.expectedVersion);
-    if (current.data.authority.owner !== 'worker' || current.data.authority.state !== 'active') throw new Error('authority_not_active');
-    await this.store.transact([this.store.check(authKey(parsed.accountId), current.rev, authFields(current.data)),
-      this.store.put(actionKey(parsed.accountId, parsed.actionId), { input: actionIdentity(parsed), state: 'prepared' }, null, { state: 'prepared' })]);
+    const plan = await this.planPrepareAction(parsed, current.data);
+    await this.store.transact([this.store.check(authKey(parsed.accountId), current.rev, authFields(current.data)), ...plan.items]);
+  }
+  /** Cycle-free ACTION-only composition. The caller must join its actual current
+   * AUTH CAS and approval/evidence checks in the SAME transaction. Planning reads
+   * but never writes, advances authority, publishes, or grants send eligibility. */
+  async planPrepareAction(input: ReserveDispatchInput, currentAuthority: AuthorityRecord): Promise<PreparedActionPlan> {
+    const parsed = dispatchSchema.parse(input); this.store.workspace(parsed.workspaceId);
+    const current = authorityRecordSchema.parse(currentAuthority);
+    if (current.authority.accountId !== parsed.accountId) throw new Error('authority_identity_conflict');
+    this.current(current, parsed.expectedAuthorityGeneration, parsed.expectedVersion);
+    if (current.authority.owner !== 'worker' || current.authority.state !== 'active') throw new Error('authority_not_active');
+    const key = actionKey(parsed.accountId, parsed.actionId);
+    const existing = await this.store.get<ActionRecord>(key);
+    const identity = actionIdentity(parsed);
+    if (existing) {
+      if (!['prepared', 'queued'].includes(existing.data.state)) throw new Error('action_not_eligible');
+      const preparedAction = preparedSchema.parse(existing.data);
+      if (fingerprint(preparedAction.input) !== fingerprint(identity)) throw new Error('action_fingerprint_conflict');
+      return { items: [this.store.check(key, existing.rev, { state: preparedAction.state })], preparedAction };
+    }
+    const preparedAction = preparedSchema.parse({ input: identity, state: 'prepared' });
+    return { items: [this.store.put(key, preparedAction, null, { state: 'prepared' })], preparedAction };
   }
   /** Trusted preparation primitive, not a permission grant or transport command.
    * Stable action identity is immutable. The caller supplies a fresh CAS version. */

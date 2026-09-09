@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createExecutionRepository } from '../src/executionRepository';
+import { createExecutionRepository, authorityRecordSchema, executionAuthorityKey, executionAuthorityFields } from '../src/executionRepository';
 import { DynamoDispatchRepository } from '../src/dispatchRepository';
 import { RemoteGoogleAuthorization } from '../src/remoteGoogleAuthorization';
 import { WorkerAuth } from '../src/workerAuth';
-import { fingerprint } from '../src/dynamoStore';
+import { fingerprint, DynamoStore } from '../src/dynamoStore';
 import { createCommandService } from '../src/commandService';
 import { ScriptedDynamo, row, transaction, ConditionalCommandHarness } from './sdkHarness';
 const clock = { now: () => '2026-09-09T00:00:00.000Z' };
@@ -267,4 +267,64 @@ it('owner-only command cannot receive fabricated authority receipt from generic 
     kind: 'submit-approved-reply', payload: { intentCommandId: '22222222-2222-4222-8222-222222222222' } })).rejects.toThrow('owner_command_requires_coordinator');
   expect(db.inspect('AUTH#acct')).toMatchObject({ version: 1 });
   expect((await repo.eventsAfter(null)).events).toHaveLength(1);
+});
+
+it('plans one conditional ACTION write without mutating AUTH, outbox or storage', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  const current = authorityRecordSchema.parse(db.inspect('AUTH#acct')); const before = db.transactions.length;
+  const plan = await repo.planPrepareAction(dispatch, current);
+  expect(db.transactions).toHaveLength(before); expect(db.inspect('ACTION#acct#action')).toBeUndefined();
+  expect(plan.items).toHaveLength(1); expect(plan.items[0]!.Put?.Item?.sk?.S).toBe('ACTION#acct#action');
+  expect(plan.items[0]!.Put?.ConditionExpression).toBe('attribute_not_exists(#pk)');
+  expect(plan.preparedAction).toMatchObject({ state: 'prepared', input: { actionId: 'action', expectedAuthorityGeneration: 1 } });
+  expect(plan.preparedAction.input).not.toHaveProperty('expectedVersion');
+});
+it('composes planner action with a single current authority mutation and never duplicates a target', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  const store = new DynamoStore({ dynamo: db, tableName: 't', workspaceId: 'ws', clock });
+  const row = (await store.get(executionAuthorityKey('acct')))!; const current = authorityRecordSchema.parse(row.data);
+  const plan = await repo.planPrepareAction(dispatch, current); const next = { ...current, version: current.version + 1 };
+  await store.transact([...plan.items, store.put(executionAuthorityKey('acct'), next, row.rev, executionAuthorityFields(next), executionAuthorityFields(current))]);
+  expect(await repo.currentVersion('acct')).toBe(2); expect(await repo.readDispatch('acct','action')).toEqual({ state: 'prepared', reservation: null });
+  const replay = await repo.planPrepareAction({ ...dispatch, expectedVersion: 2 }, next);
+  expect(replay.items).toHaveLength(1); expect(replay.items[0]!.ConditionCheck?.Key?.sk?.S).toBe('ACTION#acct#action');
+  expect(replay.items[0]!.Put).toBeUndefined();
+  await store.transact(replay.items); expect(await repo.currentVersion('acct')).toBe(2);
+});
+it('two absent action planners cannot both create an action and stale generation never rebases', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db); const current = authorityRecordSchema.parse(db.inspect('AUTH#acct'));
+  const store = new DynamoStore({ dynamo: db, tableName: 't', workspaceId: 'ws', clock });
+  const [a,b] = await Promise.all([repo.planPrepareAction(dispatch,current),repo.planPrepareAction(dispatch,current)]);
+  await store.transact(a.items); await expect(store.transact(b.items)).rejects.toThrow('TransactionCanceledException');
+  await expect(repo.planPrepareAction({ ...dispatch, expectedAuthorityGeneration: 0 }, current)).rejects.toThrow('stale_authority');
+  await expect(repo.planPrepareAction({ ...dispatch, contentHash: 'c'.repeat(64) }, current)).rejects.toThrow('action_fingerprint_conflict');
+  await expect(repo.planPrepareAction(dispatch, { ...current, authority: { ...current.authority, accountId: 'other' } })).rejects.toThrow('authority_identity_conflict');
+});
+it('planner cannot turn a reserved or unknown identical action back into prepared work', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db); await repo.prepareAction(dispatch);
+  const reservation = await repo.reserveDispatch(dispatch);
+  await expect(repo.planPrepareAction({ ...dispatch, expectedVersion: 2 }, authorityRecordSchema.parse(db.inspect('AUTH#acct')))).rejects.toThrow('action_not_eligible');
+  await repo.appendOutcome({ reservation, state: 'unknown', observedAt: clock.now(), evidenceRef: 'uncertain' });
+  await expect(repo.planPrepareAction({ ...dispatch, expectedVersion: 3 }, authorityRecordSchema.parse(db.inspect('AUTH#acct')))).rejects.toThrow('action_not_eligible');
+});
+it('existing prepareAction uses the same plan and preserves an identical queued record', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  await repo.prepareAction(dispatch); await repo.prepareAction(dispatch);
+  expect(db.transactions.at(-1)?.TransactItems).toHaveLength(2);
+  expect(db.transactions.at(-1)?.TransactItems?.every(item => item.ConditionCheck)).toBe(true);
+  await repo.queueAction(dispatch);
+  const before = db.inspect('ACTION#acct#action');
+  await repo.prepareAction({ ...dispatch, expectedVersion: 2 });
+  expect(db.inspect('ACTION#acct#action')).toEqual(before); expect(await repo.currentVersion('acct')).toBe(2);
+  await expect(repo.planPrepareAction(dispatch, authorityRecordSchema.parse(db.inspect('AUTH#acct')))).rejects.toThrow('stale_authority');
+});
+it('planner denies missing/inactive ownership and caller AUTH CAS blocks a concurrent pause', async () => {
+  const db = new ConditionalCommandHarness(); const repo = await delegated(db);
+  const store = new DynamoStore({ dynamo: db, tableName: 't', workspaceId: 'ws', clock });
+  const row = (await store.get('AUTH#acct'))!; const current = authorityRecordSchema.parse(row.data);
+  await expect(repo.planPrepareAction(dispatch, { ...current, authority: { ...current.authority, state: 'paused' } })).rejects.toThrow('authority_not_active');
+  const plan = await repo.planPrepareAction(dispatch,current);
+  await repo.applyCommand({ ...command, expectedVersion: 1 });
+  await expect(store.transact([store.check('AUTH#acct',row.rev,executionAuthorityFields(current)), ...plan.items])).rejects.toThrow('TransactionCanceledException');
+  expect(await repo.readDispatch('acct','action')).toBeNull();
 });
