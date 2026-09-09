@@ -245,3 +245,29 @@ npx --no-install tsc --noEmit --skipLibCheck --esModuleInterop --target ESNext -
 Observed RED: actual successful campaign dispatch produced no reservation cap snapshot. Focused `-t 'cap snapshots'` failed on the missing property. Frozen contract uses singular `campaign.cap`. After the concrete D1 producer and C6 cap-only event refinement landed, tests verified reservation revision2/reserved1/sent0, accepted revision3/reserved0/sent1, one event per action transition, and unknown retaining current envelope revision/reserved1/sent0 with no resend. No absent snapshot is converted into zero/current in C4.
 
 Fresh four-file C4 command with the required Node24 export: **127 passed (77/10/12/28)**. Worker strict typecheck, the earlier exact root-compatible five-production-source tsc command, and scoped ESLint on dispatchRepository.ts/executionRepository.ts/dispatchRepository.test.ts all exited0. Exact-path whitespace/diff inspection passed before `--only` commit; three-file commit list inspected. Local cap projector acceptance is guppy/C6-owned, not claimed by these SDK-interpreter event tests. No live operations occurred.
+
+## Canonical committed counterpart and actual encrypted SQL cap acceptance (01:46 UTC)
+
+Important evidence correction: the earlier 127-test cap GREEN used C6's then-uncommitted working-tree null-evidence guard. The report noted C6-owned working schema, but `39f4316` alone did not contain that canonical fix. Nautilus's frozen-commit parse failure is reviewer evidence. At the start of this follow-up the working guard was already fixed, so no new RED is fabricated and no shadow/old schema was substituted. `git diff` confirmed committed refinement still used `evidence?.actionId` while the working guard checked nonnull evidence.
+
+Counterpart now committed: **`e66d024c3f194da0f5b3465fc5d6f81440bb6d62`**, C6 canonical cap-only allowance with actual nonnull evidence action equality preserved. Canonical schema working diff was empty during the final verification.
+
+C4 test commit: **`aa9d95a`**, exact approved paths:
+- `tests/main/dispatchCampaignProjection.test.ts`
+- `cloud/lambdas/delegated-worker/test/dispatchFixture.ts`
+- narrow extraction in `cloud/lambdas/delegated-worker/test/dispatchRepository.test.ts`
+
+Root explicitly allowed only this one focused encrypted-DB/native test on existing dependencies at 01:44:54, then confirmed the final tests/main filename at 01:45:13. No installs/rebuilds/Swift/packages/full root suite/live profile were used. The helper extracts the SAME actual C1/C2/C3/C4/D1 fixture rather than copying a policy or schema. It captures actual owner commands and D1 command-plan payloads for SQL initialization. No successful cap count is seeded.
+
+Actual acceptance path: real persisted policy reserve/send/outcome produces Dynamo outbox events, canonical `workerEventSchema.parse` validates them, C1 `DelegationRepository.applyWorkerEvent` applies them into a migrated temporary encrypted database. SQL cap moves revision1/reserved0/sent0 → revision2/reserved1/sent0 on dispatching → revision3/reserved0/sent1 on acceptance. Exactly one reservation and one acceptance event occur. Wrong nonnull evidence action still fails canonical parsing. Close/reopen and replay yield duplicate events without changing durable cap. All provider responses remain fictional, with one send count.
+
+Fresh pinned commands (each preceded by the required Node24 PATH export):
+
+```bash
+npm test -- tests/main/dispatchCampaignProjection.test.ts
+npm test --prefix cloud/lambdas/delegated-worker -- test/dispatchRepository.test.ts test/dispatchService.test.ts test/sendReconciler.test.ts test/commandService.test.ts
+npx --no-install tsc --noEmit --skipLibCheck --esModuleInterop --target ESNext --module ESNext --moduleResolution node --noImplicitAny tests/main/dispatchCampaignProjection.test.ts
+npx --no-install eslint --no-ignore --max-warnings 0 tests/main/dispatchCampaignProjection.test.ts cloud/lambdas/delegated-worker/test/dispatchFixture.ts cloud/lambdas/delegated-worker/test/dispatchRepository.test.ts
+```
+
+Observed at 01:46:11+: **1 SQL integration test GREEN**, **127 focused worker tests GREEN**, scoped integration typecheck and three-path lint exit0. Exact diff check and committed file list inspected. Worker-wide strict typecheck additionally attempted, currently blocked by concurrent C6-owned `ownerCommandCoordinator.test.ts:180:26` missing `source` property on its fixture return. This is reported to C6 and is not hidden by the scoped passing check. No C4 production source changed in this regression delta. Live Dynamo/mailbox/cloud acceptance remains held.
