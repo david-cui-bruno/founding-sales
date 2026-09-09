@@ -79,6 +79,27 @@ const requiredIndexes = [
 ] as const;
 
 const requiredTriggers = [
+  'pm_account_claim_evidence_no_delete',
+  'pm_account_claim_evidence_no_update',
+  'pm_account_claims_no_delete',
+  'pm_account_claims_no_update',
+  'pm_account_commands_no_delete',
+  'pm_account_commands_no_update',
+  'pm_account_link_evidence_no_delete',
+  'pm_account_link_evidence_no_update',
+  'pm_account_links_no_delete',
+  'pm_account_links_no_update',
+  'pm_account_outbound_intents_no_delete',
+  'pm_account_outbound_intents_no_update',
+  'pm_account_outbound_results_no_delete',
+  'pm_account_outbound_results_no_update',
+  'pm_account_route_evidence_no_delete',
+  'pm_account_route_evidence_no_update',
+  'pm_account_routes_no_delete',
+  'pm_account_routes_no_update',
+  'pm_account_sources_no_delete',
+  'pm_account_sources_no_update',
+
   'initialize_next_action_due', 'initialize_unreviewed_action',
   'protect_next_action_due', 'protect_operational_action_pointer',
   'email_send_intents_no_update', 'email_send_intents_no_delete',
