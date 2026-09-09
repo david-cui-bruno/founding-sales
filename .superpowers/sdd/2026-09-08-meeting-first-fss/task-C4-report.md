@@ -377,3 +377,39 @@ npx --no-install eslint --no-ignore --max-warnings 0 tests/main/dispatchCampaign
 ```
 
 An intermediate test-helper type was too narrow to accept campaign intent (standalone discriminant inference). Fixed by specifying only actual frozen-message/options fields consumed, no cast or schema weakening. SQL test uses actual C4 appendOutcome with the same typed Sent shape, while the worker race above verifies actual strict Sent producer output. No live provider/network/cloud acceptance, installs/builds, terminal polling or resend added. D1 counterpart remains a77b9d0; C6 handoff endpoint work remains separately owned. A docs-only requested-phone-followup consumption proposal was sent to C3/skunk, with no new source implementation authorized or performed.
+
+## Requested phone-followup extension, 2026-09-09 02:41 UTC
+
+Source freeze `424a77d` (9 exact owned paths, 505 additions/25 deletions, committed list inspected). Implements approved plan `7a0ca7b` Tasks 3/4 and root's subsequent precise association allocation. No executionRepository, canonical contracts, handler, renderer, startup, or foreign-owner edits in this commit.
+
+### Interfaces and persisted guarantees
+
+- `requestedFollowupApproval.ts` exports canonical `requestedApprovalCommandSchema` alias, strict `requestedApprovalRecordSchema`, pure authenticated-capture constructor, and `loadRequestedApproval`. Loader fences actual immutable COMMAND, OWNER_COMMAND_CLAIM timestamp/principal, original canonical status outbox event, and REQUESTED_APPROVAL revision. Pending capture is not permission/action/executable approval.
+- `DynamoDispatchRepository.planRequestedAdmission(commandId)` returns `{items,intent,preparedInput,authority:{key,rev,data},validUntil:number,campaign}`. No write, publication, provider operation, or second reservation algorithm. Source joins actual C1 `planPrepareAction` and one AUTH/outbox transaction. Only an exact matching full scalar AUTH check is removed for replacement by that same prior-revision/scalar AUTH Put. Final source signal/time check remains required.
+- Distinct `phone_requested_followup` intent and `phone_request` permission carry immutable owner attestation, original connected call command/event/handoff, exact draft/message/account/route/research/context, current pairing/mailbox, expiry, and D1 call-origin provenance. No invented thread/person/cycle. Direct ordinary `admitIntent` rejects this variant. Scope-only canonical preflight rebinding requires unchanged content and actual retained-mail digest plus the immutable planned scope. Final reservation rereads actual materialized submission, permission, approval, draft, C3 context, D1 conversation/completed provenance, active source, AUTH, C2 grant/pairing, suppression/conflict absence, full intake, sender policy/cap and account flight.
+- D1 `prepareRequestedFollowupPlan` changes the originating active call enrollment to conversation in materialization, with real per-step reservation fences. `requestedFollowupChecks` independently rejects resumed active/unresolved/conflicting campaigns at send reservation. Requested first email is standalone permitted correspondence, not a fake campaign email step. Unrelated D1 email cap remains zero, no advance/refund.
+- Existing sender sends first-email MIME with deterministic RFC Message-ID, no threadId/In-Reply-To/References. Existing strict Sent lookup requires actual returned provider thread and no inherited reply headers. Unknown/absent/ambiguous evidence never resends.
+- `requestedReplyAssociation(commandId,threadId)` is read-only. It requires actual materialized intent, accepted ACTION and matching immutable SendEvidence reservation/RFC/provider identity, actual C3 retained inbound thread/mailbox, exact sender/recipient and References, and no dispatch conflict. Returns immutable identity plus actual revision/absence checks, not answer permission or synthetic thread. Existing relevant-reply approval remains mandatory. Authenticated scope extension remains C3/C6-owned.
+
+### RED/GREEN evidence
+
+- Initial strict intent/first-email refs tests were RED before the distinct variant/ref-free matching implementation. Actual owner-capture integration initially failed the absent canonical `approve-requested-followup` discriminator, not a mocked success. It became 22 GREEN after C6's actual capture landed.
+- New actual-send → real C3 inbound association tests: five RED with `requestedReplyAssociation is not a function`, then GREEN. Positive uses the actual accepted provider result followed by `beginPoll/applyPage`, never a seeded fake MAIL_THREAD. Foreign References, foreign participant, unknown send and durable conflict return null; a concurrent conflict invalidates returned checks.
+- Seven actual persisted negative admission gates pass: expiry, pause, revoke, changed remote draft, suppression, conflict and new inbound context. No ACTION/permission materializes.
+- Nine actual final-reservation SDK CAS races pass: pending record, draft, permission, approval, scope, account, grant, pairing and source revisions. Two concurrent clients send once. Both account-route and owner-supplied requested recipients use exact individually approved first-mail content.
+- An intermediate C3 runtime import edit caused `requestedMailContextSchema is not defined`; reported to its owner and rerun after repair. It was not attributed to C4 behavior or hidden by fixtures.
+
+Final fresh command (all npm/npx used this exact Node24 prefix):
+
+```sh
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"
+npx vitest run cloud/lambdas/delegated-worker/test/requestedFollowupAdmission.test.ts cloud/lambdas/delegated-worker/test/requestedFollowupDispatch.test.ts cloud/lambdas/delegated-worker/test/dispatchRepository.test.ts cloud/lambdas/delegated-worker/test/dispatchService.test.ts cloud/lambdas/delegated-worker/test/sendReconciler.test.ts cloud/lambdas/delegated-worker/test/intakeBarrier.test.ts cloud/lambdas/delegated-worker/test/commandService.test.ts cloud/lambdas/delegated-worker/test/sourceCoordinator.test.ts
+```
+
+Result: **244 passed / 8 files** (requested 34, existing C4/C1 170, actual source continuation 40). Source counterpart `11b5e74` includes actual capture/scope expansion, crash-before/after admission with harmless envelope advancement, changed context/scope refusal, unknown reconciliation and ambiguous materialization acknowledgement. C1 planner counterpart `17ab4be`; D1 requested guard `ee3049a`; C5 variant guard `266936e`. C3/C6 capture/context changes were working-tree counterparts during this run, not yet a fully frozen multi-owner release.
+
+Scoped TypeScript: `npx tsc --noEmit --skipLibCheck --esModuleInterop --target ESNext --module ESNext --moduleResolution node` with each of `--strict` and `--noImplicitAny`, exact four entries `test/requestedFollowupAdmission.test.ts`, `test/requestedFollowupDispatch.test.ts`, `test/dispatchRepository.test.ts`, `test/sendReconciler.test.ts` under the worker prefix: GREEN. Owned old/new nullable fixture annotations were made explicit, no first-email-as-threaded cast. `npx eslint --no-ignore` over all nine committed TypeScript paths: GREEN. `git diff --check`: GREEN.
+
+### Held integration gates
+
+These are actual produced AWS SDK transaction conditions exercised by the existing fictional conditional interpreter and cooperative fictional HTTP, **not live Dynamo/provider acceptance**. No installs, native/root suites, builds, grants, mailbox/network/cloud operations, real sends, invites, production data or pushes. Current task did not rerun native SQL. Full C3/C6 frozen counterpart review, desktop projection/end-user acceptance and any live deployment/provider experiment remain separate coordinator/user gates. Existing terminal conflict/no-resend, abort propagation and handoff proof repairs are preserved.
