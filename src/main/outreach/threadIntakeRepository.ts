@@ -1,7 +1,8 @@
 import { mailScopeFingerprint } from './providers/gmailThreadProvider';
+import { accountFingerprint } from '../domain/accounts/accountEvidence';
 import { createHash } from 'node:crypto';
 import type { AppDatabase } from '../db/database';
-import { mailAccountScopeSchema, type MailAccountScope, mailCheckpointSchema, mailCursorEnvelopeSchema, type MailCursorEnvelope, threadProjectionSchema, accountReplyDraftSchema, type AccountReplyDraft, type SavedReplyDraft, type MailCheckpoint, type ThreadPage, type ThreadProjection, type IntakeResult } from '../../shared/contracts/mailThreadContract';
+import { mailContextTuples, mailAccountScopeSchema, type MailAccountScope, mailCheckpointSchema, mailCursorEnvelopeSchema, type MailCursorEnvelope, threadProjectionSchema, accountReplyDraftSchema, type AccountReplyDraft, type SavedReplyDraft, type MailCheckpoint, type ThreadPage, type ThreadProjection, type IntakeResult } from '../../shared/contracts/mailThreadContract';
 import { mergeThread, validateReplyDraftSave } from './threadIntake';
 /** Real SQL adapter. Intake, immutable optout evidence, context fence and mailbox
  * checkpoint share one immediate transaction. No network occurs under its lock. */
@@ -14,6 +15,13 @@ export class SqlThreadIntakeRepository {
     const data = mailCursorEnvelopeSchema.parse(JSON.parse(row.checkpoint_json));
     for (const identity of [data.scope, data.checkpoint, data.poll]) if (identity && (identity.accountId !== accountId || identity.mailboxSubject !== mailboxSubject)) throw new Error('mail_checkpoint_identity_conflict');
     return { data, rev: row.revision };
+  }
+  inboundContext(accountId: string, mailboxSubject: string): string {
+    const rows = this.deps.database.raw.prepare('SELECT id,projection_json FROM delegated_threads WHERE workspace_id=? AND account_id=? LIMIT 1001')
+      .all(this.deps.workspaceId, accountId) as { id: string; projection_json: string }[];
+    const projections = rows.map(row => { const projection = threadProjectionSchema.parse(JSON.parse(row.projection_json));
+      if (projection.thread.providerThreadId !== row.id) throw new Error('mail_context_identity_conflict'); return projection; });
+    return accountFingerprint(mailContextTuples(accountId, mailboxSubject, projections));
   }
   checkpoint(accountId: string, mailboxSubject: string): MailCheckpoint | null { return this.cursorState(accountId, mailboxSubject)?.data.checkpoint ?? null; }
   private writeCursor(accountId: string, mailboxSubject: string, value: MailCursorEnvelope): void {
@@ -33,7 +41,7 @@ export class SqlThreadIntakeRepository {
       if ((cursor?.rev ?? null) !== expectedEnvelopeRevision || scope.revision !== (cursor?.data.scope?.revision ?? 0) + 1) throw new Error('stale_mail_scope');
       const owner = raw.prepare('SELECT owner,state FROM delegated_authorities WHERE workspace_id=? AND account_id=?').get(this.deps.workspaceId, scope.accountId) as { owner: string; state: string } | undefined;
       if (!owner || owner.owner !== 'local' || owner.state !== 'local') throw new Error('mail_scope_wrong_owner');
-      this.writeCursor(scope.accountId, scope.mailboxSubject, { scope, checkpoint: null, poll: null });
+      this.writeCursor(scope.accountId, scope.mailboxSubject, { scope, checkpoint: null, poll: null, inboundContextRevision: (cursor?.data.inboundContextRevision ?? 0) + 1, inboundContextFingerprint: this.inboundContext(scope.accountId, scope.mailboxSubject) });
     }).immediate();
   }
   beginPoll(accountId: string, mailboxSubject: string, attemptId: string): void {
@@ -43,7 +51,7 @@ export class SqlThreadIntakeRepository {
       const scope = current?.data.scope; if (!scope) throw new Error('mail_scope_required');
       const binding = { scopeRevision: scope.revision, scopeFingerprint: mailScopeFingerprint(scope) };
       const prior = current.data.checkpoint;
-      this.writeCursor(accountId, mailboxSubject, { scope, checkpoint: prior?.scopeRevision === binding.scopeRevision && prior.scopeFingerprint === binding.scopeFingerprint ? prior : null,
+      this.writeCursor(accountId, mailboxSubject, { ...current.data, scope, checkpoint: prior?.scopeRevision === binding.scopeRevision && prior.scopeFingerprint === binding.scopeFingerprint ? prior : null,
         poll: { ...binding, attemptId, accountId, mailboxSubject, status: 'pending', startedAt: this.deps.clock.now(), completedAt: null } });
     }).immediate();
   }
@@ -121,7 +129,7 @@ export class SqlThreadIntakeRepository {
       }
       // Local thread context is independent of the ordered remote execution stream.
       // Preserve aggregate_version so later delegation remains synchronizable.
-      this.writeCursor(accountId, checkpoint.mailboxSubject, { scope, checkpoint, poll: attemptId && cursor?.data.poll ? {
+      this.writeCursor(accountId, checkpoint.mailboxSubject, { scope, checkpoint, inboundContextRevision: scope && cursor?.data.inboundContextRevision != null ? cursor.data.inboundContextRevision + (results.some(r => r.changed) ? 1 : 0) : null, inboundContextFingerprint: scope && cursor?.data.inboundContextRevision != null ? this.inboundContext(accountId, checkpoint.mailboxSubject) : null, poll: attemptId && cursor?.data.poll ? {
         ...cursor.data.poll, status: page.complete ? 'complete' : 'pending', completedAt: page.complete ? now : null } : null });
       return results;
     }).immediate();

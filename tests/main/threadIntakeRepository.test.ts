@@ -199,3 +199,25 @@ it.each([
     expect(f.db.raw.prepare('SELECT count(*) AS n FROM pm_account_suppression_tombstones').get()).toEqual({ n: suppressed ? 1 : 0 });
   } finally { f.close(); }
 });
+it('semantic mail context persists actual evidence across encrypted restart and unchanged polls', async () => {
+  const f = await createPmFixture();
+  try {
+    const account = f.repo.create({ commandId: randomUUID(), name: 'Context PM', domain: null });
+    new DelegationRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } }).initializeLocalAuthority(account.id);
+    const repo = new SqlThreadIntakeRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } });
+    const empty = repo.inboundContext(account.id, 'sub1');
+    const scope = { version: 1 as const, accountId: account.id, mailboxSubject: 'sub1', revision: 1, participantAddresses: ['pm@fixture.invalid'], knownThreadIds: [] as string[], since: PM_NOW, approvedAt: PM_NOW };
+    repo.admitScope(scope, null); repo.beginPoll(account.id, 'sub1', 'semantic1');
+    const p = page(account.id); p.nextCursor.scopeRevision = 1; p.nextCursor.scopeFingerprint = mailScopeFingerprint(scope);
+    repo.applyPage(p, null, 'semantic1');
+    const changed = repo.cursorState(account.id, 'sub1')!.data;
+    expect(changed.inboundContextRevision).toBe(2); expect(changed.inboundContextFingerprint).not.toBe(empty);
+    repo.beginPoll(account.id, 'sub1', 'semantic2'); repo.applyPage({ ...p, threads: [] }, repo.checkpoint(account.id, 'sub1'), 'semantic2');
+    repo.beginPoll(account.id, 'sub1', 'semantic3'); repo.failPoll(account.id, 'sub1', 'semantic3');
+    closeDatabase(f.db); const reopened = openDatabase({ path: f.db.path, key: createTestWorkspaceKey() });
+    try { const restored = new SqlThreadIntakeRepository({ database: reopened, workspaceId: 'ws', clock: { now: () => PM_NOW } });
+      expect(restored.cursorState(account.id, 'sub1')!.data.inboundContextRevision).toBe(2);
+      expect(restored.inboundContext(account.id, 'sub1')).toBe(changed.inboundContextFingerprint);
+    } finally { closeDatabase(reopened); }
+  } finally { f.close(); }
+});

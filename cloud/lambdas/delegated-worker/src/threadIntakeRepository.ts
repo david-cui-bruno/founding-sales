@@ -1,5 +1,6 @@
+import { QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
-import { mailAccountScopeSchema, type MailAccountScope, mailCheckpointSchema, mailCursorEnvelopeSchema, type MailCursorEnvelope, threadProjectionSchema, accountReplyDraftSchema, type AccountReplyDraft, type SavedReplyDraft, type MailCheckpoint, type ThreadPage, type ThreadProjection, type IntakeResult } from '../../../../src/shared/contracts/mailThreadContract';
+import { mailContextTuples, mailAccountScopeSchema, type MailAccountScope, mailCheckpointSchema, mailCursorEnvelopeSchema, type MailCursorEnvelope, threadProjectionSchema, accountReplyDraftSchema, type AccountReplyDraft, type SavedReplyDraft, type MailCheckpoint, type ThreadPage, type ThreadProjection, type IntakeResult } from '../../../../src/shared/contracts/mailThreadContract';
 import { workerEventSchema } from '../../../../src/shared/contracts/delegationContract';
 import { mergeThread, validateReplyDraftSave } from '../../../../src/main/outreach/threadIntake';
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions } from './dynamoStore';
@@ -20,6 +21,29 @@ export class DynamoThreadIntakeRepository {
     for (const identity of [data.scope, data.checkpoint, data.poll]) if (identity && (identity.accountId !== accountId || identity.mailboxSubject !== subject)) throw new Error('mail_checkpoint_identity_conflict');
     return { ...stored, data };
   }
+  async retainedThreads(accountId: string): Promise<ThreadProjection[]> {
+    const projections: ThreadProjection[] = [];
+    let start: Record<string, AttributeValue> | undefined; let pages = 0;
+    do {
+      if (++pages > 1001) throw new Error('mail_context_capacity_exceeded');
+      const result = await this.store.options.dynamo.send(new QueryCommand({ TableName: this.store.options.tableName, ConsistentRead: true,
+        KeyConditionExpression: '#pk = :pk AND begins_with(#sk, :prefix)', ExpressionAttributeNames: { '#pk': 'pk', '#sk': 'sk' },
+        ExpressionAttributeValues: { ':pk': this.store.key('').pk, ':prefix': { S: `MAIL_THREAD#${keyPart(accountId)}#` } }, ExclusiveStartKey: start, Limit: 1001 - projections.length }));
+      for (const row of result.Items ?? []) {
+        if (typeof row.data?.S !== 'string') throw new Error('mail_context_corrupt');
+        const projection = threadProjectionSchema.parse(JSON.parse(row.data.S));
+        if (row.sk?.S !== mailThreadKey(accountId, projection.thread.providerThreadId) || projection.thread.accountId !== accountId) throw new Error('mail_context_identity_conflict');
+        projections.push(projection); if (projections.length > 1000) throw new Error('mail_context_capacity_exceeded');
+      }
+      start = result.LastEvaluatedKey;
+    } while (start && Object.keys(start).length);
+    return projections;
+  }
+
+  /** Caller captures AUTH/cursor before this read and CAS-fences both for decisions. */
+  async inboundContext(accountId: string, subject: string): Promise<string> {
+    return fingerprint(mailContextTuples(accountId, subject, await this.retainedThreads(accountId)));
+  }
   async checkpoint(accountId: string, subject: string): Promise<MailCheckpoint | null> { return (await this.cursorState(accountId, subject))?.data.checkpoint ?? null; }
   async scope(accountId: string, subject: string): Promise<MailAccountScope | null> { return (await this.cursorState(accountId, subject))?.data.scope ?? null; }
   /** Internal admission seam. C6 must authenticate and derive the complete account scope. */
@@ -33,14 +57,14 @@ export class DynamoThreadIntakeRepository {
     const current = authorityRecordSchema.parse(authority.data);
     if (current.authority.accountId !== scope.accountId || !(current.authority.owner === 'local' && current.authority.state === 'local' || current.authority.owner === 'worker' && (current.authority.state === 'active' || current.authority.state === 'paused'))) throw new Error('mail_scope_wrong_owner');
     await this.store.transact([this.store.check(key, authority.rev, executionAuthorityFields(current)),
-      this.store.put(mailCursorKey(scope.accountId, scope.mailboxSubject), { scope, checkpoint: null, poll: null }, cursor?.rev ?? null)]);
+      this.store.put(mailCursorKey(scope.accountId, scope.mailboxSubject), { scope, checkpoint: null, poll: null, inboundContextRevision: integer.positive().parse((cursor?.data.inboundContextRevision ?? 0) + 1), inboundContextFingerprint: await this.inboundContext(scope.accountId, scope.mailboxSubject) }, cursor?.rev ?? null)]);
   }
   async beginPoll(accountId: string, mailboxSubject: string, attemptId: string): Promise<void> {
     const current = await this.cursorState(accountId, mailboxSubject);
     const scope = current?.data.scope; if (!scope) throw new Error('mail_scope_required');
     const binding = { scopeRevision: scope.revision, scopeFingerprint: mailScopeFingerprint(scope) };
     const prior = current.data.checkpoint;
-    const data = mailCursorEnvelopeSchema.parse({ scope, checkpoint: prior?.scopeRevision === binding.scopeRevision && prior.scopeFingerprint === binding.scopeFingerprint ? prior : null,
+    const data = mailCursorEnvelopeSchema.parse({ ...current.data, scope, checkpoint: prior?.scopeRevision === binding.scopeRevision && prior.scopeFingerprint === binding.scopeFingerprint ? prior : null,
       poll: { ...binding, attemptId, accountId, mailboxSubject, status: 'pending', startedAt: this.store.now(), completedAt: null } });
     await this.store.transact([this.store.put(mailCursorKey(accountId, mailboxSubject), data, current?.rev ?? null)]);
   }
@@ -91,9 +115,10 @@ export class DynamoThreadIntakeRepository {
     const scope = cursor?.data.scope ?? null;
     if (scope && (checkpoint.scopeRevision !== scope.revision || checkpoint.scopeFingerprint !== mailScopeFingerprint(scope) || checkpoint.since !== scope.since)) throw new Error('mail_scope_mismatch');
     if (attemptId && (!scope || cursor?.data.poll?.scopeRevision !== scope.revision || cursor.data.poll.scopeFingerprint !== mailScopeFingerprint(scope))) throw new Error('mail_scope_mismatch');
-    const envelope = mailCursorEnvelopeSchema.parse({ scope, checkpoint, poll: attemptId && cursor?.data.poll ? { ...cursor.data.poll,
+    const retained = await this.retainedThreads(accountId);
+    const envelope = mailCursorEnvelopeSchema.parse({ ...cursor?.data, scope, checkpoint, poll: attemptId && cursor?.data.poll ? { ...cursor.data.poll,
       status: page.complete ? 'complete' : 'pending', completedAt: page.complete ? this.store.now() : null } : null });
-    const items = [this.store.put(key, envelope, cursor?.rev ?? null)]; const results: IntakeResult[] = [];
+    const items: import('@aws-sdk/client-dynamodb').TransactWriteItem[] = []; const results: IntakeResult[] = [];
     const head = await this.store.get<{ sequence: number }>('EVENT_HEAD'); let sequence = integer.parse(head?.data.sequence ?? 0);
     const sequences: number[] = []; let version = current.version;
     for (const thread of page.threads) {
@@ -101,6 +126,8 @@ export class DynamoThreadIntakeRepository {
       const key = mailThreadKey(accountId, thread.providerThreadId); const stored = await this.store.get<unknown>(key);
       const result = mergeThread(stored ? threadProjectionSchema.parse(stored.data) : null, thread); results.push(result);
       if (!result.changed) continue;
+      const index = retained.findIndex(p => p.thread.providerThreadId === thread.providerThreadId);
+      if (index === -1) retained.push(result.projection); else retained[index] = result.projection;
       items.push(this.store.put(key, result.projection, stored?.rev ?? null));
       sequence = integer.parse(sequence + 1); version = integer.parse(version + 1); sequences.push(sequence);
       const event = workerEventSchema.parse({ id: `thread-${fingerprint([this.store.options.workspaceId, accountId, result.projection])}`,
@@ -116,6 +143,11 @@ export class DynamoThreadIntakeRepository {
         if (!old) items.push(this.store.put(mailSuppressionKey(accountId), { accountId, observedAt: this.store.now(), evidence: results.flatMap(r => r.signals.filter(s => s.kind === 'opt_out')) }, null));
       }
     } else items.push(this.store.check(authKey, authority.rev, executionAuthorityFields(current)));
+    if (scope && envelope.inboundContextRevision !== null) {
+      if (results.some(r => r.changed)) envelope.inboundContextRevision = integer.positive().parse(envelope.inboundContextRevision + 1);
+      envelope.inboundContextFingerprint = fingerprint(mailContextTuples(accountId, checkpoint.mailboxSubject, retained));
+    }
+    items.push(this.store.put(key, mailCursorEnvelopeSchema.parse(envelope), cursor?.rev ?? null));
     await this.store.transact(items);
     for (const seq of sequences) await this.store.publish(seq);
     return results;

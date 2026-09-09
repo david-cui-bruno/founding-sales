@@ -56,7 +56,20 @@ export const mailPollStateSchema = z.strictObject({ ...scopeBinding, attemptId: 
   status: z.enum(['pending', 'complete', 'failed']), startedAt: z.string().datetime(), completedAt: z.string().datetime().nullable() })
   .refine(p => p.status === 'pending' ? p.completedAt === null : p.completedAt !== null && p.completedAt >= p.startedAt);
 export type MailPollState = z.infer<typeof mailPollStateSchema>;
-export const mailCursorEnvelopeSchema = z.strictObject({ scope: mailAccountScopeSchema.nullable().default(null), checkpoint: mailCheckpointSchema.nullable(), poll: mailPollStateSchema.nullable() })
+export const mailCursorEnvelopeSchema = z.strictObject({ inboundContextRevision: z.number().int().positive().safe().nullable().default(null), inboundContextFingerprint: z.string().regex(/^[a-f0-9]{64}$/).nullable().default(null), scope: mailAccountScopeSchema.nullable().default(null), checkpoint: mailCheckpointSchema.nullable(), poll: mailPollStateSchema.nullable() })
   .refine(e => (!e.poll || !e.checkpoint || e.poll.accountId === e.checkpoint.accountId && e.poll.mailboxSubject === e.checkpoint.mailboxSubject)
     && (e.poll?.status !== 'complete' || e.checkpoint?.mode === 'history' && e.checkpoint.pageToken === null));
 export type MailCursorEnvelope = z.infer<typeof mailCursorEnvelopeSchema>;
+
+/** Canonical digest input, never a provider mailbox scan. */
+export function mailContextTuples(accountId: string, mailboxSubject: string, inputs: ThreadProjection[]) {
+  if (inputs.length > 1000) throw new Error('mail_context_capacity_exceeded');
+  const seen = new Set<string>();
+  return inputs.map(input => {
+    const p = threadProjectionSchema.parse(input);
+    if (p.thread.accountId !== accountId || seen.has(p.thread.providerThreadId)) throw new Error('mail_context_identity_conflict');
+    seen.add(p.thread.providerThreadId); return p;
+  }).filter(p => p.thread.mailboxSubject === mailboxSubject)
+    .map(p => ({ providerThreadId: p.thread.providerThreadId, revision: p.revision, contextRevision: p.contextRevision }))
+    .sort((a, b) => a.providerThreadId < b.providerThreadId ? -1 : a.providerThreadId > b.providerThreadId ? 1 : 0);
+}

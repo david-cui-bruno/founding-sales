@@ -2,7 +2,7 @@ import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gm
 import { describe, expect, it } from 'vitest';
 import { DynamoThreadIntakeRepository } from '../src/threadIntakeRepository';
 import { createExecutionRepository } from '../src/executionRepository';
-import { ConditionalCommandHarness } from './sdkHarness';
+import { ConditionalCommandHarness, ScriptedDynamo } from './sdkHarness';
 import type { ThreadPage } from '../../../../src/shared/contracts/mailThreadContract';
 const now = '2026-09-08T12:00:00.000Z';
 const p: ThreadPage = { complete: true, nextCursor: { version: 1, accountId: 'a1', mailboxSubject: 'sub1', mode: 'history', historyId: '11', pageToken: null, since: now }, threads: [{ accountId: 'a1', mailboxSubject: 'sub1', provider: 'gmail', providerThreadId: 't1', messages: [{ id: 'm1', threadId: 't1', rfcMessageId: '<m1@fixture.invalid>', references: [], from: ['pm@fixture.invalid'], to: ['founder@fixture.invalid'], cc: [], date: now, subject: 'reply', bodyParts: [{ mimeType: 'text/plain', text: 'Stop emailing me', truncated: false }] }] }] };
@@ -159,4 +159,42 @@ it('scope CAS has one winner and an ambiguous admission commit remains durably r
   dynamo.afterCommit = () => { dynamo.afterCommit = undefined; throw new Error('ambiguous_commit'); };
   await expect(repo.admitScope({ ...scope, revision: 2, participantAddresses: ['a@fixture.invalid', 'b@fixture.invalid'] }, before!.rev)).rejects.toThrow('ambiguous_commit');
   expect((await new DynamoThreadIntakeRepository(options).cursorState('a1', 'sub1'))?.data).toMatchObject({ scope: { revision: 2 }, checkpoint: null, poll: null });
+});
+it('semantic context preserves unchanged polls and changes only with retained evidence or scope', async () => {
+  const dynamo = new ConditionalCommandHarness(); const options = { dynamo, tableName: 'fictional', workspaceId: 'ws', clock: { now: () => now } };
+  await createExecutionRepository(options).seedLocalAuthority('a1');
+  const repo = new DynamoThreadIntakeRepository(options);
+  const empty = await repo.inboundContext('a1', 'sub1');
+  const scope = { version: 1 as const, accountId: 'a1', mailboxSubject: 'sub1', revision: 1, participantAddresses: ['pm@fixture.invalid'], knownThreadIds: [] as string[], since: now, approvedAt: now };
+  await repo.admitScope(scope, null);
+  expect((await repo.cursorState('a1', 'sub1'))?.data).toMatchObject({ inboundContextRevision: 1, inboundContextFingerprint: empty });
+  await repo.beginPoll('a1', 'sub1', 'semantic1');
+  const next = structuredClone(p); next.nextCursor.scopeRevision = 1; next.nextCursor.scopeFingerprint = mailScopeFingerprint(scope);
+  await repo.applyPage(next, null, 'semantic1');
+  const changed = (await repo.cursorState('a1', 'sub1'))!.data;
+  expect(changed.inboundContextRevision).toBe(2); expect(changed.inboundContextFingerprint).not.toBe(empty);
+  expect(changed.inboundContextFingerprint).toBe(await repo.inboundContext('a1', 'sub1'));
+  await repo.beginPoll('a1', 'sub1', 'semantic2'); await repo.applyPage({ ...next, threads: [] }, await repo.checkpoint('a1', 'sub1'), 'semantic2');
+  await repo.beginPoll('a1', 'sub1', 'semantic3'); await repo.failPoll('a1', 'sub1', 'semantic3');
+  expect((await new DynamoThreadIntakeRepository(options).cursorState('a1', 'sub1'))!.data.inboundContextRevision).toBe(2);
+});
+it('scope mutation preserves actual digest, increments semantic revision and clears completeness', async () => {
+  const dynamo = new ConditionalCommandHarness(), options = { dynamo, tableName: 'fictional', workspaceId: 'ws', clock: { now: () => now } };
+  await createExecutionRepository(options).seedLocalAuthority('a1'); const repo = new DynamoThreadIntakeRepository(options);
+  await repo.applyPage(p, null);
+  const actual = await repo.inboundContext('a1', 'sub1');
+  const legacy = await repo.cursorState('a1', 'sub1'); expect(legacy?.data.inboundContextRevision).toBeNull();
+  const scope = { version: 1 as const, accountId: 'a1', mailboxSubject: 'sub1', revision: 1, participantAddresses: ['pm@fixture.invalid'], knownThreadIds: ['t1'], since: now, approvedAt: now };
+  await repo.admitScope(scope, legacy!.rev);
+  const first = (await repo.cursorState('a1', 'sub1'))!;
+  await repo.admitScope({ ...scope, revision: 2, participantAddresses: ['other@fixture.invalid', 'pm@fixture.invalid'] }, first.rev);
+  expect((await repo.cursorState('a1', 'sub1'))?.data).toMatchObject({ inboundContextRevision: 2, inboundContextFingerprint: actual, checkpoint: null, poll: null });
+});
+import { QueryCommand } from '@aws-sdk/client-dynamodb';
+it('actual semantic digest query is account bounded and imposes a retained-row request limit', async () => {
+  const dynamo = new ScriptedDynamo([{ Items: [] }]);
+  const repo = new DynamoThreadIntakeRepository({ dynamo, tableName: 'fictional', workspaceId: 'ws', clock: { now: () => now } });
+  await repo.inboundContext('a1', 'sub1');
+  const command = dynamo.commands[0]; expect(command).toBeInstanceOf(QueryCommand);
+  expect((command as QueryCommand).input.Limit).toBe(1001);
 });
