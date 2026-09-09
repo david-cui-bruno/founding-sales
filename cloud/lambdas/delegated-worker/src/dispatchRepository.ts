@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CampaignExecution } from './campaignExecution';
+import { ownerSourceConfigurationSchema, ownerSourceKey } from '../../../../src/shared/contracts/ownerCommandContract';
 import type { CampaignEventPayload } from '../../../../src/shared/contracts/campaignContract';
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { accountIdSchema as id, accountInstantSchema as instant, accountSchema, accountRouteSchema } from '../../../../src/shared/contracts/accountContract';
@@ -156,6 +157,11 @@ export class DynamoDispatchRepository {
       expectedAuthorityGeneration: parsed.expectedAuthorityGeneration, approvalId: parsed.approvalId, contentHash: parsed.contentHash, targetHash: parsed.targetHash };
     if (intent.commandId !== commandId || fingerprint(identity) !== fingerprint(intent.action)) throw new Error('dispatch_identity_conflict');
     if (intent.kind === 'campaign_step' && (!this.campaignExecution || intent.binding.kind !== 'account_route')) throw new Error('campaign_binding_unavailable');
+    const sourceKey = ownerSourceKey(parsed.accountId); const sourceRow = await this.store.get<unknown>(sourceKey);
+    const configuration = ownerSourceConfigurationSchema.safeParse(sourceRow?.data);
+    if (!sourceRow || !configuration.success || configuration.data.state !== 'active' || configuration.data.workspaceId !== parsed.workspaceId
+      || configuration.data.accountId !== parsed.accountId || configuration.data.pairingId !== intent.pairingId
+      || configuration.data.mailboxSubject !== intent.mailboxSubject) throw new Error('source_configuration_unavailable');
     const approvalKey = dispatchApprovalKey(parsed.approvalId); const approvalRow = await this.required(approvalKey);
     const approval = dispatchApprovalSchema.parse(approvalRow.data);
     const dKey = draftKey(parsed.accountId, intent.draftId); const draftRow = await this.required(dKey); const draft = accountReplyDraftSchema.parse(draftRow.data);
@@ -181,7 +187,7 @@ export class DynamoDispatchRepository {
       const flight = flightSchema.parse(flightRow.data);
       if (flight.accountId !== parsed.accountId || ['dispatching', 'unknown'].includes(flight.state)) throw new Error('account_dispatch_unresolved');
     }
-    const checks = [this.store.put(flightKey, { accountId: parsed.accountId, commandId, actionId: parsed.actionId, state: 'dispatching' }, flightRow?.rev ?? null), this.store.check(indexKey, index.rev), this.store.check(key, row.rev), this.store.check(approvalKey, approvalRow.rev),
+    const checks = [this.store.check(sourceKey, sourceRow.rev), this.store.put(flightKey, { accountId: parsed.accountId, commandId, actionId: parsed.actionId, state: 'dispatching' }, flightRow?.rev ?? null), this.store.check(indexKey, index.rev), this.store.check(key, row.rev), this.store.check(approvalKey, approvalRow.rev),
       this.store.check(dKey, draftRow.rev), this.store.check(tKey, threadRow.rev), this.store.check(pKey, permissionRow.rev)];
     for (const absent of [revokedKey(key), revokedKey(approvalKey), revokedKey(pKey), mailSuppressionKey(parsed.accountId)]) {
       if (await this.store.get(absent)) throw new Error('dispatch_suppressed');

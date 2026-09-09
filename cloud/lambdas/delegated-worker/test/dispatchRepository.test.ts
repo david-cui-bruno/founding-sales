@@ -1,3 +1,5 @@
+import { OwnerCommandCoordinator } from '../src/ownerCommandCoordinator';
+import { ownerSourceKey, type OwnerSourceConfiguration } from '../../../../src/shared/contracts/ownerCommandContract';
 import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
 import { describe, expect, it, vi } from 'vitest';
 import { DynamoDispatchRepository, dispatchIntentKey, dispatchApprovalKey, dispatchPermissionKey, dispatchCapPolicyKey, type DispatchIntent } from '../src/dispatchRepository';
@@ -10,7 +12,7 @@ import { DynamoThreadIntakeRepository, mailThreadKey, mailCursorKey } from '../s
 import { intakeRegistryKey } from '../src/intakeBarrier';
 import type { AccountReplyDraft, MailMessage } from '../../../../src/shared/contracts/mailThreadContract';
 
-async function fixture() {
+async function fixture(configured = true) {
   const dynamo = new ConditionalCommandHarness(); let now = '2026-09-09T00:04:00.000Z';
   const options = { dynamo, tableName: 't', workspaceId: 'ws', clock: { now: () => now } };
   const store = new DynamoStore(options); const auth = new WorkerAuth(options);
@@ -20,7 +22,7 @@ async function fixture() {
     throw new Error('unconfigured external boundary');
   };
   const authorization = new RemoteGoogleAuthorization({ auth, fetch, config: { clientId: 'fictional.apps.googleusercontent.com', clientSecret: 'fictional', redirectUri: 'https://worker.example.invalid/oauth/callback', encryptionKey: Buffer.alloc(32, 7) } });
-  const { code } = await auth.issuePairing({ scopes: ['google:grant'], expiresInSeconds: 300 });
+  const { code } = await auth.issuePairing({ scopes: ['google:grant', 'commands:write'], expiresInSeconds: 300 });
   const pair = await auth.redeemPairing(code, 'fictional-source');
   const grant = await authorization.beginGoogleGrant(pair.pairingId, ['send', 'relevant_read']);
   await authorization.completeGoogleGrant(new URL(grant.authorizationUrl).searchParams.get('state')!, 'fictional-code');
@@ -41,16 +43,31 @@ async function fixture() {
   ]);
   await policy.admitPermission(permission); await policy.admitApproval(approval); await policy.admitIntent(intent);
   await policy.configureCaps({ sender: draft.sender, dailyLimit: 3 }, null);
-  return { dynamo, options, store, authorization, access, policy, intent, approval, permission, draft, message, scope, scopeBinding, advance: (value: string) => { now = value; } };
+  const execution = createExecutionRepository({ ...options, dispatchPolicy: policy });
+  await execution.seedLocalAuthority('acct');
+  await execution.applyCommand({ commandId: 'delegate', workspaceId: 'ws', accountId: 'acct', expectedAuthorityGeneration: 0, expectedVersion: 0, kind: 'delegate', payload: { delegationId: 'operator-approved', approvedAt: now } });
+  const account = { id: 'acct', name: 'Fictional PM', domain: null, version: 1 };
+  await store.transact([store.put('ACCOUNT#acct', { account, routes: [], sources: [], claims: [], researchRevision: 1, history: [{ at: now, account, routes: [], claims: [] }] }, null)]);
+  const owner = new OwnerCommandCoordinator({ auth, authorization }); let configSequence = 800;
+  const configure = async (changes: Partial<OwnerSourceConfiguration> = {}) => {
+    const previous = await store.get<OwnerSourceConfiguration>(ownerSourceKey('acct'));
+    const config: OwnerSourceConfiguration = { version: 1, workspaceId: 'ws', accountId: 'acct', pairingId: pair.pairingId, revision: (previous?.data.revision ?? 0) + 1,
+      state: 'active', mailboxSubject: 'mailbox', calendarId: null, research: null, ...changes };
+    return owner.apply({ commandId: `00000000-0000-4000-8000-${String(configSequence++).padStart(12, '0')}`, workspaceId: 'ws', accountId: 'acct', expectedAuthorityGeneration: 1,
+      expectedVersion: await execution.currentVersion('acct'), kind: 'configure-owner', payload: { expectedConfigurationRevision: previous?.data.revision ?? 0, configuration: config, mailScope: null } }, `Bearer ${pair.credential}`);
+  };
+  if (configured) await configure();
+  return { dynamo, options, store, authorization, access, policy, intent, approval, permission, draft, message, scope, scopeBinding, configure, execution, advance: (value: string) => { now = value; } };
 }
 
 describe('actual persisted dispatch reservation plan', () => {
   it('produces exact draft/approval/permission/intake/suppression/grant and cap Dynamo conditions', async () => {
-    const f = await fixture(); const input = { ...f.intent.action, expectedVersion: 1 };
+    const f = await fixture(); const input = { ...f.intent.action, expectedVersion: 2 };
     const plan = await f.policy.reservationPlan(input, f.access.accessEvidence);
     const items = plan.finalize();
     const keys = items.map(item => item.ConditionCheck?.Key?.sk?.S ?? item.Put?.Item?.sk?.S);
     expect(keys).toContain(dispatchIntentKey(f.intent.commandId));
+    expect(keys.filter(key => key === ownerSourceKey('acct'))).toHaveLength(1);
     expect(keys).toContain(dispatchApprovalKey('approval'));
     expect(keys).toContain(dispatchPermissionKey('acct', 'permission'));
     expect(keys).toContain('MAIL_DRAFT#acct#draft');
@@ -70,10 +87,10 @@ describe('actual persisted dispatch reservation plan', () => {
     if (changed === 'thread') await f.store.transact([f.store.put(mailThreadKey('acct', 'thread1'), { thread: { accountId: 'acct', mailboxSubject: 'mailbox', provider: 'gmail', providerThreadId: 'thread1', messages: [f.message] }, revision: 2, contextRevision: 'context2', signals: [] }, 1)]);
     if (changed === 'caps') await f.policy.configureCaps({ sender: f.draft.sender, dailyLimit: 0 }, 1);
     if (changed === 'suppression') await f.store.transact([f.store.put('MAIL_SUPPRESSION#acct', { reason: 'opt_out' }, null)]);
-    await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 1 }, f.access.accessEvidence)).rejects.toThrow();
+    await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence)).rejects.toThrow();
   });
   it('rechecks time after async reads and never grants expired approval or intake', async () => {
-    const f = await fixture(); const plan = await f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 1 }, f.access.accessEvidence);
+    const f = await fixture(); const plan = await f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence);
     f.advance('2026-09-09T00:09:00.000Z');
     expect(() => plan.finalize()).toThrow('dispatch_evidence_expired');
   });
@@ -89,7 +106,7 @@ describe('actual persisted dispatch reservation plan', () => {
     const campaign = { ...f.intent, kind: 'campaign_step' as const, campaign: { campaignId: 'campaign', campaignRevision: 1, enrollmentId: 'enrollment', enrollmentRevision: 1, stepId: 'step' } };
     const hash = fingerprint(campaign);
     await f.store.transact([f.store.put(dispatchIntentKey(f.intent.commandId), campaign, 1), f.store.put(dispatchApprovalKey('approval'), { ...f.approval, intentHash: hash }, 1)]);
-    await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 1 }, f.access.accessEvidence)).rejects.toThrow('campaign_binding_unavailable');
+    await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence)).rejects.toThrow('campaign_binding_unavailable');
   });
 });
 
@@ -100,9 +117,7 @@ import { createSendReconciler } from '../src/sendReconciler';
 async function dispatchFixture() {
   const f = await fixture();
   const execution = createExecutionRepository({ ...f.options, dispatchPolicy: f.policy });
-  await execution.seedLocalAuthority('acct');
-  await execution.applyCommand({ commandId: 'delegate', workspaceId: 'ws', accountId: 'acct', expectedAuthorityGeneration: 0, expectedVersion: 0, kind: 'delegate', payload: { delegationId: 'operator-approved', approvedAt: f.options.clock.now() } });
-  await execution.prepareAction({ ...f.intent.action, expectedVersion: 1 });
+  await execution.prepareAction({ ...f.intent.action, expectedVersion: 2 });
   let sends = 0;
   let onSend: () => Promise<Response> = async () => Response.json({ id: 'sent1', threadId: 'thread1' });
   const fetch: typeof globalThis.fetch = async url => {
@@ -117,7 +132,7 @@ async function dispatchFixture() {
 it('missing policy fails closed in actual C1 reserve, prepare is not permission', async () => {
   const f = await dispatchFixture();
   const unsafe = createExecutionRepository(f.options);
-  await expect(unsafe.reserveDispatch({ ...f.intent.action, expectedVersion: 1 })).rejects.toThrow('dispatch_policy_missing');
+  await expect(unsafe.reserveDispatch({ ...f.intent.action, expectedVersion: 2 })).rejects.toThrow('dispatch_policy_missing');
 });
 it('one dispatch invocation sends once and duplicate command never sends again', async () => {
   const f = await dispatchFixture();
@@ -209,7 +224,7 @@ it.each(['standalone', 'campaign'])('%s unknown reconciliation appends acceptanc
 });
 it('two final reservation contenders use actual persisted policy, one wins and consumes one cap', async () => {
   const f = await dispatchFixture();
-  const request = { ...f.intent.action, expectedVersion: 1 };
+  const request = { ...f.intent.action, expectedVersion: 2 };
   const results = await Promise.allSettled([f.execution.reserveDispatch(request, f.access.accessEvidence), f.execution.reserveDispatch(request, f.access.accessEvidence)]);
   expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
   expect(f.dynamo.inspect('DISPATCH_CAP#sender%40example.invalid#2026-09-09')).toMatchObject({ used: 1 });
@@ -227,7 +242,7 @@ it('a distinct action cannot bypass unknown account flight by acquiring a fresh 
 });
 it.each(['approval', 'permission', 'draft', 'cursor', 'caps', 'suppression', 'grant'])('actual final Dynamo conditions reject racing %s change', async changed => {
   const f = await dispatchFixture();
-  const plan = await f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 1 }, f.access.accessEvidence);
+  const plan = await f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence);
   const items = plan.finalize();
   if (changed === 'approval') await f.policy.revokeApproval('approval');
   if (changed === 'permission') await f.policy.revokePermission('acct', 'permission');
@@ -249,11 +264,11 @@ it('route-bound approval checks the real B1 account route and rejects changed ve
   const intent: DispatchIntent = { ...f.intent, binding: { kind: 'account_route', routeId: 'route', routeVersion: 1, accountVersion: 1 } };
   const route = { id: 'route', accountId: 'acct', personId: null, channel: 'email', value: f.draft.recipient, purpose: 'business', evidenceIds: ['published-source'], verification: 'confirmed', version: 1 };
   const account = { account: { id: 'acct', name: 'Fictional PM', domain: null, version: 1 }, routes: [route] };
-  await f.store.transact([f.store.put('ACCOUNT#acct', account, null), f.store.put(dispatchIntentKey(intent.commandId), intent, 1), f.store.put(dispatchApprovalKey('approval'), { ...f.approval, intentHash: fingerprint(intent) }, 1)]);
-  const plan = await f.policy.reservationPlan({ ...intent.action, expectedVersion: 1 }, f.access.accessEvidence);
+  await f.store.transact([f.store.put('ACCOUNT#acct', account, 1), f.store.put(dispatchIntentKey(intent.commandId), intent, 1), f.store.put(dispatchApprovalKey('approval'), { ...f.approval, intentHash: fingerprint(intent) }, 1)]);
+  const plan = await f.policy.reservationPlan({ ...intent.action, expectedVersion: 2 }, f.access.accessEvidence);
   expect(plan.finalize().some(item => item.ConditionCheck?.Key?.sk?.S === 'ACCOUNT#acct')).toBe(true);
-  await f.store.transact([f.store.put('ACCOUNT#acct', { ...account, routes: [{ ...route, version: 2 }] }, 1)]);
-  await expect(f.policy.reservationPlan({ ...intent.action, expectedVersion: 1 }, f.access.accessEvidence)).rejects.toThrow('route_not_current');
+  await f.store.transact([f.store.put('ACCOUNT#acct', { ...account, routes: [{ ...route, version: 2 }] }, 2)]);
+  await expect(f.policy.reservationPlan({ ...intent.action, expectedVersion: 2 }, f.access.accessEvidence)).rejects.toThrow('route_not_current');
   await expect(f.store.transact(plan.finalize())).rejects.toThrow('TransactionCanceledException');
 });
 it.each(['request', 'recipient', 'sender', 'expiry'])('does not admit unsupported recipient permission: %s', async changed => {
@@ -284,13 +299,13 @@ it('unknown and multiple Sent matches never append acceptance or resend', async 
 it('trusted intake configuration is durable and revision fenced', async () => {
   const f = await fixture();
   const registry = { accountId: 'acct', adapters: [{ id: 'gmail', kind: 'gmail', enabled: true, relevant: true, mailboxSubject: 'mailbox' }], manualDependencies: [] };
-  await f.policy.configureIntake(registry, 1);
-  expect((await f.store.get(intakeRegistryKey('acct')))?.rev).toBe(2);
+  await f.policy.configureIntake(registry, 2);
+  expect((await f.store.get(intakeRegistryKey('acct')))?.rev).toBe(3);
   await expect(f.policy.configureIntake(registry, 1)).rejects.toThrow('TransactionCanceledException');
 });
 it('durable action read rejects mismatched reservation identities', async () => {
   const f = await dispatchFixture();
-  const reservation = await f.execution.reserveDispatch({ ...f.intent.action, expectedVersion: 1 }, f.access.accessEvidence);
+  const reservation = await f.execution.reserveDispatch({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence);
   const row = await f.store.get<{ input: unknown; state: string; reservation: unknown }>('ACTION#acct#action');
   await f.store.transact([f.store.put('ACTION#acct#action', { ...row!.data, reservation: { ...reservation, accountId: 'other' } }, row!.rev)]);
   await expect(f.execution.readDispatch('acct', 'action')).rejects.toThrow('reservation_identity_conflict');
@@ -352,11 +367,11 @@ it.each(['broader', 'narrower', 'missing'])('I1 fresh checkpoint cannot certify 
   const row = await f.store.get<Record<string, unknown>>(key);
   const scope = change === 'missing' ? null : { ...f.scope, revision: 2, participantAddresses: change === 'broader' ? [f.draft.recipient, 'second@example.invalid'].sort() : ['other@example.invalid'] };
   await f.store.transact([f.store.put(key, { ...row!.data, scope }, row!.rev)]);
-  await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 1 }, f.access.accessEvidence)).rejects.toThrow();
+  await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence)).rejects.toThrow();
   expect(f.dynamo.inspect('DISPATCH_ACCOUNT#acct')).toBeUndefined();
 });
 it('I1 same final cursor condition fences a scope change after policy reads', async () => {
-  const f = await dispatchFixture(); const plan = await f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 1 }, f.access.accessEvidence);
+  const f = await dispatchFixture(); const plan = await f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence);
   const items = plan.finalize();
   expect(items.filter(item => item.ConditionCheck?.Key?.sk?.S === mailCursorKey('acct', 'mailbox'))).toHaveLength(1);
   await new DynamoThreadIntakeRepository(f.options).admitScope({ ...f.scope, revision: 2, participantAddresses: [...f.scope.participantAddresses, 'second@example.invalid'].sort() }, 1);
@@ -392,7 +407,7 @@ async function campaignFixture() {
   const execution = createExecutionRepository({ ...f.options, dispatchPolicy: policy });
   const account = { id: 'acct', name: 'Fictional PM', domain: null, version: 1 };
   const route = { id: 'route', accountId: 'acct', personId: null, channel: 'email', value: f.draft.recipient, purpose: 'business', evidenceIds: ['actual-source'], verification: 'confirmed', version: 1 };
-  await f.store.transact([f.store.put('ACCOUNT#acct', { account, routes: [route], sources: [], claims: [], researchRevision: 1, history: [] }, null)]);
+  await f.store.transact([f.store.put('ACCOUNT#acct', { account, routes: [route], sources: [], claims: [], researchRevision: 1, history: [] }, 1)]);
   let sequence = 100;
   const apply = async (payload: CampaignCommandPayload) => {
     const commandId = `00000000-0000-4000-8000-${String(sequence++).padStart(12, '0')}`;
@@ -410,7 +425,7 @@ async function campaignFixture() {
   await campaigns.admitActionApproval({ workspaceId: 'ws', accountId: 'acct', ...intent.campaign, actionId: intent.action.actionId, channel: 'email', authorityGeneration: 1, selectedRouteId: 'route', contextRevision: f.draft.contextRevision,
     contentHash: intent.action.contentHash, targetHash: intent.action.targetHash, approvedAt: f.options.clock.now(), expiresAt: f.approval.expiresAt });
   await policy.admitApproval({ ...f.approval, id: intent.action.approvalId, commandId, intentHash: fingerprint(intent) });
-  await policy.admitIntent(intent); await execution.prepareAction({ ...intent.action, expectedVersion: 1 });
+  await policy.admitIntent(intent); await execution.prepareAction({ ...intent.action, expectedVersion: 2 });
   return { ...f, policy, execution, campaigns, campaignExecution, version, intent, apply,
     service: () => createDispatchService({ execution, policy, authorization: f.authorization, fetch: f.fetch }) };
 }
@@ -439,7 +454,7 @@ it('D1 duplicate ACCOUNT fences with different revisions hold instead of silentl
     const row = await f.store.get('ACCOUNT#acct'); await f.store.transact([f.store.put('ACCOUNT#acct', row!.data, row!.rev)]);
     return original(...args);
   });
-  await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 1 }, f.access.accessEvidence)).rejects.toThrow('dispatch_condition_conflict');
+  await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence)).rejects.toThrow('dispatch_condition_conflict');
   expect(f.dynamo.inspect(campaignCapKey(f.version.id, 'email'))).toEqual({ reserved: 0, sent: 0 });
 });
 
@@ -465,9 +480,41 @@ it.each(['paused', 'conversation', 'held'] as const)('D1 late accepted %s send s
 });
 it.each(['CAMPAIGN_ENROLLMENT#enrollment', 'CAMPAIGN_CAP#campaign-version#email', 'CAMPAIGN_APPROVAL#campaign-version', 'CAMPAIGN_ACTION_APPROVAL#acct#campaign-action'])('D1 final produced transaction fences concurrent %s changes', async key => {
   const f = await campaignFixture();
-  const plan = await f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 1 }, f.access.accessEvidence);
+  const plan = await f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence);
   const row = await f.store.get(key); await f.store.transact([f.store.put(key, row!.data, row!.rev)]);
   await expect(f.store.transact(plan.finalize())).rejects.toThrow('TransactionCanceledException');
   expect(f.dynamo.inspect('DISPATCH_CAP#sender%40example.invalid#2026-09-09')).toBeUndefined();
   expect(f.dynamo.inspect('CAMPAIGN_RESERVATION#acct#campaign-action')).toBeUndefined();
+});
+
+it('source configuration missing holds even with persisted message approval and grant', async () => {
+  const f = await fixture(false);
+  await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 1 }, f.access.accessEvidence)).rejects.toThrow('source_configuration_unavailable');
+});
+it.each([{ state: 'paused' as const }, { mailboxSubject: null }])('source configuration %j admitted by owner holds dispatch', async change => {
+  const f = await fixture(); await f.configure(change);
+  await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: await f.execution.currentVersion('acct') }, f.access.accessEvidence)).rejects.toThrow('source_configuration_unavailable');
+});
+it.each([{ state: 'paused' as const }, { mailboxSubject: null }])('final source config CAS rejects selective owner change %j', async change => {
+  const f = await fixture(); const plan = await f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence);
+  await f.configure(change);
+  await expect(f.store.transact(plan.finalize())).rejects.toThrow('TransactionCanceledException');
+  expect(f.dynamo.inspect('DISPATCH_CAP#sender%40example.invalid#2026-09-09')).toBeUndefined();
+});
+
+it('selective source pause during real credential preparation sends zero despite active AUTH', async () => {
+  const f = await dispatchFixture(); const original = f.authorization.authorizedAccess.bind(f.authorization);
+  vi.spyOn(f.authorization, 'authorizedAccess').mockImplementation(async (...args) => {
+    const result = await original(...args);
+    if (args[1].includes('send')) await f.configure({ state: 'paused' });
+    return result;
+  });
+  expect((await f.service().dispatch(f.intent.commandId)).status).toBe('held');
+  expect(f.sends()).toBe(0);
+  expect(f.dynamo.inspect('DISPATCH_CAP#sender%40example.invalid#2026-09-09')).toBeUndefined();
+});
+it.each(['workspaceId', 'accountId', 'pairingId', 'mailboxSubject'] as const)('final source read rejects mismatched persisted %s', async field => {
+  const f = await fixture(); const row = await f.store.get<OwnerSourceConfiguration>(ownerSourceKey('acct'));
+  await f.store.transact([f.store.put(ownerSourceKey('acct'), { ...row!.data, [field]: 'other' }, row!.rev)]);
+  await expect(f.policy.reservationPlan({ ...f.intent.action, expectedVersion: 2 }, f.access.accessEvidence)).rejects.toThrow('source_configuration_unavailable');
 });
