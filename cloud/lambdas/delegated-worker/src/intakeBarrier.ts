@@ -3,8 +3,9 @@ import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
 import { mailCursorEnvelopeSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { commandReceiptSchema, workerEventSchema } from '../../../../src/shared/contracts/delegationContract';
-import { accountIdSchema } from '../../../../src/shared/contracts/accountContract';
-import { DynamoStore, keyPart } from './dynamoStore';
+import { manualHandoffSchema, prepareManualCommandSchema } from '../../../../src/shared/contracts/ownerCommandContract';
+import { accountIdSchema, accountInstantSchema } from '../../../../src/shared/contracts/accountContract';
+import { DynamoStore, keyPart, fingerprint, integer } from './dynamoStore';
 import { mailCursorKey } from './threadIntakeRepository';
 
 export const INTAKE_MAX_AGE_MS = 300000;
@@ -16,10 +17,49 @@ export const intakeRegistrySchema = z.strictObject({ accountId: accountIdSchema,
 export type IntakeSubject = { accountId: string; mailboxSubject: string; requiredRecipient?: string; requiredThreadId?: string };
 export type IntakeResult = { status: 'blocked'; reason: 'intake_unavailable' | 'intake_incomplete' | 'intake_stale' | 'manual_outcome_pending' }
   | { status: 'ready'; checks: TransactWriteItem[]; revisions: { key: string; revision: number }[]; validUntil: number };
+export type PendingHandoffIdentity = { handoffId: string; pairingId: string; generation: number };
+export type PendingHandoffProof = { dependency: { commandId: string; actionId: string; channel: 'call' | 'linkedin'; outcome: 'pending' };
+  checks: TransactWriteItem[]; revisions: { key: string; revision: number }[]; validUntil: number };
+/** Internal owner composition only. A caller identity is never an exemption:
+ * all immutable admission artifacts and the current registry must agree. */
+export async function validatePendingHandoff(store: DynamoStore, accountId: string, identity: PendingHandoffIdentity): Promise<PendingHandoffProof | null> {
+  try {
+    const handoffKey = `MANUAL_HANDOFF#${keyPart(identity.handoffId)}`; const row = await store.get<unknown>(handoffKey);
+    if (!row) return null;
+    const saved = z.strictObject({ handoff: manualHandoffSchema, accountId: accountIdSchema, pairingId: accountIdSchema,
+      generation: integer, issuedAt: accountInstantSchema, lastOutcome: z.null() }).parse(row.data);
+    const { handoffId, expiresAt, ...binding } = saved.handoff;
+    const now = Date.parse(store.now()); const expires = Date.parse(expiresAt);
+    if (saved.accountId !== accountId || saved.pairingId !== identity.pairingId || saved.generation !== identity.generation
+      || handoffId !== identity.handoffId || Date.parse(saved.issuedAt) > now || now >= expires) return null;
+    const registryKey = intakeRegistryKey(accountId); const registryRow = await store.get<unknown>(registryKey);
+    if (!registryRow) return null;
+    const registry = intakeRegistrySchema.parse(registryRow.data);
+    const matches = registry.manualDependencies.filter(item => item.actionId === binding.actionId && item.channel === binding.channel && item.outcome === 'pending');
+    if (registry.accountId !== accountId || matches.length !== 1) return null;
+    const dependency = { ...matches[0]!, outcome: 'pending' as const };
+    const commandKey = `COMMAND#${keyPart(dependency.commandId)}`; const commandRow = await store.get<unknown>(commandKey);
+    if (!commandRow) return null;
+    const stored = z.strictObject({ fingerprint: z.string(), receipt: commandReceiptSchema, sequence: integer.positive(), command: prepareManualCommandSchema }).parse(commandRow.data);
+    const command = stored.command; const receipt = stored.receipt;
+    if (stored.fingerprint !== fingerprint(command) || command.commandId !== dependency.commandId || command.workspaceId !== store.options.workspaceId
+      || command.accountId !== accountId || command.expectedAuthorityGeneration !== identity.generation || fingerprint(command.payload) !== fingerprint(binding)
+      || handoffId !== `handoff-${fingerprint([command.workspaceId, command.commandId])}` || receipt.commandId !== command.commandId
+      || receipt.status !== 'applied' || receipt.authorityGeneration !== identity.generation || receipt.aggregateVersion !== command.expectedVersion + 1) return null;
+    const eventKey = store.eventKey(stored.sequence); const eventRow = await store.get<{ event: unknown }>(eventKey);
+    const event = eventRow ? workerEventSchema.parse(eventRow.data.event) : null;
+    if (!event || event.kind !== 'manual.handoff' || event.workspaceId !== command.workspaceId || event.accountId !== accountId
+      || event.authorityGeneration !== identity.generation || event.aggregateVersion !== receipt.aggregateVersion
+      || fingerprint(event.receipt) !== fingerprint(receipt) || fingerprint(event.payload) !== fingerprint(saved.handoff)) return null;
+    const revisions = [{ key: registryKey, revision: registryRow.rev }, { key: handoffKey, revision: row.rev },
+      { key: commandKey, revision: commandRow.rev }, { key: eventKey, revision: eventRow!.rev }];
+    return { dependency, revisions, checks: revisions.map(row => store.check(row.key, row.revision)), validUntil: Math.min(expires, now + 5000) };
+  } catch { return null; }
+}
 /** Reads the configured relevant adapter set, not just whichever adapter answered.
  * Returned CAS checks MUST join the final reservation transaction. */
 export function createIntakeBarrier(store: DynamoStore) {
-  return { async check(subject: IntakeSubject, signal: AbortSignal): Promise<IntakeResult> {
+  async function check(subject: IntakeSubject, signal: AbortSignal, handoff?: PendingHandoffIdentity): Promise<IntakeResult> {
     try {
       if (signal.aborted) return { status: 'blocked', reason: 'intake_unavailable' };
       const key = intakeRegistryKey(subject.accountId); const row = await store.get<unknown>(key);
@@ -30,7 +70,10 @@ export function createIntakeBarrier(store: DynamoStore) {
       if (!relevant.some(adapter => adapter.kind === 'gmail' && adapter.mailboxSubject === subject.mailboxSubject)
         || relevant.some(adapter => adapter.kind !== 'gmail' || !adapter.mailboxSubject)) return { status: 'blocked', reason: 'intake_unavailable' };
       const checks = [store.check(key, row.rev)]; const revisions = [{ key, revision: row.rev }];
-      let validUntil = Infinity;
+      const proof = handoff ? await validatePendingHandoff(store, subject.accountId, handoff) : null;
+      if (handoff && (!proof || proof.revisions.find(item => item.key === key)?.revision !== row.rev)) return { status: 'blocked', reason: 'manual_outcome_pending' };
+      if (proof) { checks.push(...proof.checks.filter(item => item.ConditionCheck?.Key?.sk?.S !== key)); revisions.push(...proof.revisions.filter(item => item.key !== key)); }
+      let validUntil = proof?.validUntil ?? Infinity;
       const seen = new Set<string>();
       for (const adapter of relevant) {
         const cursorKey = mailCursorKey(subject.accountId, adapter.mailboxSubject!);
@@ -57,6 +100,7 @@ export function createIntakeBarrier(store: DynamoStore) {
         checks.push(store.check(cursorKey, cursor.rev)); revisions.push({ key: cursorKey, revision: cursor.rev });
       }
       for (const dependency of registry.manualDependencies) {
+        if (proof && fingerprint(dependency) === fingerprint(proof.dependency)) continue;
         const commandKey = `COMMAND#${keyPart(dependency.commandId)}`;
         const command = await store.get<{ receipt: unknown; sequence: number }>(commandKey);
         if (!command) return { status: 'blocked', reason: 'manual_outcome_pending' };
@@ -75,5 +119,7 @@ export function createIntakeBarrier(store: DynamoStore) {
       if (signal.aborted || Date.parse(store.now()) >= validUntil) return { status: 'blocked', reason: 'intake_stale' };
       return { status: 'ready', checks, revisions, validUntil };
     } catch { return { status: 'blocked', reason: 'intake_unavailable' }; }
-  } };
+  }
+  return { check: (subject: IntakeSubject, signal: AbortSignal) => check(subject, signal),
+    checkHandoff: (subject: IntakeSubject, identity: PendingHandoffIdentity, signal: AbortSignal) => check(subject, signal, identity) };
 }

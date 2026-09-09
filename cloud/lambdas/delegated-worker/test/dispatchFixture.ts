@@ -69,7 +69,7 @@ export async function fixture(configured = true) {
     return owner.apply(command, `Bearer ${pair.credential}`);
   };
   if (configured) await configure();
-  return { dynamo, options, store, authorization, access, policy, intent, approval, permission, draft, message, scope, scopeBinding, configure, execution, commands, onOAuthFetch: (handler: typeof globalThis.fetch) => { oauthFetch = handler; }, advance: (value: string) => { now = value; } };
+  return { dynamo, options, store, authorization, access, policy, intent, approval, permission, draft, message, scope, scopeBinding, configure, execution, commands, owner, pair, onOAuthFetch: (handler: typeof globalThis.fetch) => { oauthFetch = handler; }, advance: (value: string) => { now = value; } };
 }
 
 export async function dispatchFixture() {
