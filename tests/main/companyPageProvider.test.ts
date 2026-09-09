@@ -250,3 +250,54 @@ it.each(['same', 'business-first', 'emergency-first'])('withholds known phone de
   const batch = await pages.research(snapshot(), { ...limits, maxPages: order === 'same' ? 1 : 2 }, new AbortController().signal);
   expect(batch.routes).toEqual([]);
 });
+
+const linkedInProfile = 'https://www.linkedin.com/in/fictional-business-contact';
+const publishedLinkedIn = `<a href="${linkedInProfile}">Business team LinkedIn profile</a>`;
+it('extracts explicitly company-published LinkedIn with company-page proof and no profile fetch or person inference', async () => {
+  const receipts = createFetchedReceiptPolicy(); const s = snapshot(); const requests: string[] = [];
+  const pages = createCompanyPageProvider({ receipts, clock: { now: () => now }, permitted: () => true,
+    resolve: async () => ['93.184.216.34'], http: async input => { requests.push(input.url); return new Response(publishedLinkedIn, { headers: { 'content-type': 'text/html' } }); } });
+  const batch = await pages.research(s, limits, new AbortController().signal);
+  expect(batch.routes).toEqual([expect.objectContaining({ channel: 'linkedin', value: linkedInProfile, personId: null, purpose: 'business', verification: 'published', evidenceIds: [batch.sources[0]!.id] })]);
+  expect(receipts.attest(batch.sources[0]!, s.account.id)).toBe(true);
+  expect(batch.sources[0]!.excerpt).toBe(publishedLinkedIn);
+  expect(batch.claims).toEqual([]);
+  expect(requests).toEqual(['https://example.invalid/']);
+});
+
+it.each([
+  `<script>${publishedLinkedIn}</script>`, `<script></ script>${publishedLinkedIn}</script>`,
+  `<!--${publishedLinkedIn}-->`, `<template>${publishedLinkedIn}</template>`,
+  `<div title='${publishedLinkedIn}'></div>`, `<div title='${publishedLinkedIn}`,
+  `<blockquote>${publishedLinkedIn}</blockquote>`, `<article>${publishedLinkedIn}</article>`,
+  `<a href="${linkedInProfile}">Testimonial author</a>`, `<a href="${linkedInProfile}">Blog author</a>`,
+  `<a href="${linkedInProfile}"> </a>`, `<a href="${linkedInProfile}">Business team LinkedIn profile`,
+  `<a href="${linkedInProfile}?tracking=1">Business team LinkedIn profile</a>`,
+  `<a href="${linkedInProfile}#contact">Business team LinkedIn profile</a>`,
+  `<a href="https://www.linkedin.com:443/in/fictional">Business team LinkedIn profile</a>`,
+  `<a href="https://www.linkedin.com/in/fictional%2Fother">Business team LinkedIn profile</a>`,
+  `<a href="https://www.linkedin.com.evil.invalid/in/fictional">Business team LinkedIn profile</a>`,
+  `<a data-href="${linkedInProfile}">Business team LinkedIn profile</a>`,
+  `<a href="${linkedInProfile}" href="https://evil.invalid/">Business team LinkedIn profile</a>`,
+])('does not promote unsafe or unattributed LinkedIn anchor %#', async body => {
+  const pages = createCompanyPageProvider({ receipts: createFetchedReceiptPolicy(), clock: { now: () => now }, permitted: () => true,
+    resolve: async () => ['93.184.216.34'], http: async () => new Response(body, { headers: { 'content-type': 'text/html' } }) });
+  expect((await pages.research(snapshot(), limits, new AbortController().signal)).routes).toEqual([]);
+});
+
+it.each([
+  { path: '/team', contentType: 'text/html', allowed: true },
+  { path: '/blog/guest-author', contentType: 'text/html', allowed: false },
+  { path: '/', contentType: 'text/plain', allowed: false },
+])('bounds LinkedIn publication to company context and HTML: $path $contentType', async ({ path, contentType, allowed }) => {
+  let calls = 0;
+  const pages = createCompanyPageProvider({ receipts: createFetchedReceiptPolicy(), clock: { now: () => now }, permitted: () => true,
+    resolve: async () => ['93.184.216.34'], http: async () => {
+      calls++;
+      if (calls === 1) return new Response('redirect', { status: 302, headers: { location: path } });
+      return new Response(publishedLinkedIn, { headers: { 'content-type': contentType } });
+    } });
+  const batch = await pages.research(snapshot(), { ...limits, maxPages: 2 }, new AbortController().signal);
+  expect(batch.routes).toHaveLength(allowed ? 1 : 0);
+  expect(batch.sources[0]!.url).toBe(`https://example.invalid${path}`);
+});

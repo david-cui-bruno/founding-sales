@@ -57,8 +57,9 @@ async function readBytes(response: Response, maxBytes: number, signal: AbortSign
 /** Tokenize only complete markup. A truncated tag or quoted attribute stays
  * markup through end-of-input; it can never become supporting text. This is a
  * conservative lexical extractor, not a browser/CSS visibility renderer. */
-function htmlText(excerpt: string): string {
+function htmlText(excerpt: string): { text: string; linkedInTargets: string[] } {
   let text = ''; let position = 0;
+  const linkedInTargets: string[] = []; let businessPublication = true;
   while (position < excerpt.length) {
     if (excerpt[position] !== '<') { text += excerpt[position]; position++; continue; }
     if (excerpt.startsWith('<!--', position)) {
@@ -74,9 +75,22 @@ function htmlText(excerpt: string): string {
       else if (char === '>') break;
     }
     if (end === excerpt.length) break;
-    const tag = /^<\s*(\/?)\s*([a-z][a-z0-9:-]*)/i.exec(excerpt.slice(position, end + 1));
+    const markup = excerpt.slice(position, end + 1);
+    const tag = /^<\s*(\/?)\s*([a-z][a-z0-9:-]*)/i.exec(markup);
     const name = tag?.[2]?.toLowerCase();
     position = end + 1;
+    // Conservative publication subset: no testimonial/article attribution, even
+    // after their closing tag. Unsupported markup remains unknown, not a person.
+    if (name && ['article', 'blockquote', 'plaintext', 'noscript'].includes(name)) businessPublication = false;
+    if (businessPublication && name === 'a' && !tag?.[1]) {
+      // Only an actual sole, quoted href attribute and a complete plain-text
+      // business-labelled anchor qualify. Never mine arbitrary attributes or URLs.
+      const href = /^<a[\t\n\f\r ]+href[\t\n\f\r ]*=[\t\n\f\r ]*(["'])(https:\/\/www\.linkedin\.com\/in\/[A-Za-z0-9_-]+\/?)\1[\t\n\f\r ]*>$/i.exec(markup)?.[2];
+      const label = /^([^<>]{1,160})<\/a[\t\n\f\r ]*>/i.exec(excerpt.slice(position))?.[1]?.trim();
+      if (href && /^https:\/\/www\.linkedin\.com\/in\/[A-Za-z0-9_-]+\/?$/.test(href) && label && /^(?:Business(?: team)?|Company|Our team|Team) LinkedIn (?:profile|contact)$/i.test(label)) {
+        linkedInTargets.push(href.replace(/\/$/, ''));
+      }
+    }
     // Inline published contact text remains one line; attributes are still discarded.
     if (!name || !['a', 'span', 'b', 'strong', 'i', 'em', 'small'].includes(name)) text += '\n';
     // Template contents are not rendered; conservatively stop rather than guess
@@ -91,7 +105,7 @@ function htmlText(excerpt: string): string {
       position = closing.lastIndex;
     }
   }
-  return text;
+  return { text, linkedInTargets };
 }
 function normalizedPublishedPhone(raw: string): string | null {
   const parentheses = raw.replace(/[^()]/g, '');
@@ -121,8 +135,8 @@ function withheldContactTargets(lines: readonly string[]): string[] {
 }
 /** Conservative deterministic extraction. Advertisements remain advertised facts,
  * never prospect-stated pain or execution routes. Unsupported knowledge stays unknown. */
-function extract(excerpt: string, sourceId: string, accountId: string): Pick<AccountEvidenceBatch, 'claims' | 'routes'> & { withheldTargets: string[]; qualifiedPhoneLines: string[] } {
-  const text = htmlText(excerpt);
+function extract(excerpt: string, sourceId: string, accountId: string, linkedInPublicationAllowed: boolean): Pick<AccountEvidenceBatch, 'claims' | 'routes'> & { withheldTargets: string[]; qualifiedPhoneLines: string[] } {
+  const { text, linkedInTargets } = htmlText(excerpt);
   const claims: AccountClaim[] = [];
   for (const match of text.matchAll(/(?:^|\n)\s*We (manage|own) ([0-9][0-9,]*) (residential )?(units|buildings|properties)\./g)) {
     const countText = match[2];
@@ -142,7 +156,7 @@ function extract(excerpt: string, sourceId: string, accountId: string): Pick<Acc
   }
   const routes: AccountEvidenceBatch['routes'] = [];
   const withheldTargets = withheldContactTargets(lines);
-  const add = (channel: 'phone' | 'email', value: string) => {
+  const add = (channel: 'phone' | 'email' | 'linkedin', value: string) => {
     // An explicit emergency/tenant qualifier for this target is never promoted
     // to a prospecting route, even if another line also uses a business label.
     if (withheldTargets.includes(`${channel}:${value}`)) return;
@@ -160,6 +174,7 @@ function extract(excerpt: string, sourceId: string, accountId: string): Pick<Acc
     const mailbox = email ? normalizedPublishedEmail(email) : null;
     if (mailbox) add('email', mailbox);
   }
+  if (linkedInPublicationAllowed) for (const target of linkedInTargets) add('linkedin', target);
   return { claims, routes, withheldTargets, qualifiedPhoneLines: lines.filter(line => /emergency|tenant|after.hours/i.test(line)) };
 }
 export function createCompanyPageProvider(options: { receipts: FetchedReceiptPolicy; clock: { now(): string };
@@ -210,7 +225,9 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
         const source = options.receipts.recordFetched({ accountId: snapshot.account.id, url, fetchedAt: options.clock.now(), body, excerpt });
         if (options.onFetched) await bounded(Promise.resolve(options.onFetched(Object.freeze({ ...source }), snapshot.account.id)), signal);
         signal.throwIfAborted();
-        const extracted = extract(excerpt, source.id, snapshot.account.id);
+        const extracted = extract(excerpt, source.id, snapshot.account.id,
+          /^text\/html(?:;|$)/i.test(response.headers.get('content-type') ?? '')
+          && /^\/(?:team\/?|contact\/?)?$/.test(new URL(url).pathname));
         sources.push(source); claims.push(...extracted.claims);
         qualifiedPhoneLines.push(...extracted.qualifiedPhoneLines);
         for (const target of extracted.withheldTargets) withheldTargets.add(target);
