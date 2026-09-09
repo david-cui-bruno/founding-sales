@@ -6,7 +6,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { GetParameterCommand, SSMClient, type GetParameterCommandOutput } from '@aws-sdk/client-ssm';
 import { z } from 'zod';
 import { delegationCommandSchema } from '../../../../src/shared/contracts/delegationContract';
-import { ownerCommandSchema } from '../../../../src/shared/contracts/ownerCommandContract';
+import { bootstrapSelectedAccountCommandSchema, ownerCommandSchema } from '../../../../src/shared/contracts/ownerCommandContract';
 import { OwnerCommandCoordinator } from './ownerCommandCoordinator';
 import { WorkerAuth } from './workerAuth';
 import { DynamoExecutionRepository } from './executionRepository';
@@ -18,7 +18,7 @@ const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store
   'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'", 'Strict-Transport-Security': 'max-age=31536000', 'X-Content-Type-Options': 'nosniff' };
 const response = (statusCode: number, body: unknown): WorkerHttpResponse => ({ statusCode, body: JSON.stringify(body), headers });
 const eventSchema = z.object({ version: z.literal('2.0'), rawPath: z.string().max(100), rawQueryString: z.string().max(8192),
-  headers: z.record(z.string(), z.string().max(16384)), body: z.string().max(65536).optional(), isBase64Encoded: z.literal(false).optional(),
+  headers: z.record(z.string(), z.string().max(16384)), body: z.string().max(204096).refine(value => Buffer.byteLength(value, 'utf8') <= 204096).optional(), isBase64Encoded: z.literal(false).optional(),
   requestContext: z.object({ domainName: z.string(), http: z.object({ method: z.enum(['POST', 'GET']), sourceIp: z.string().min(1).max(256) }) }) });
 const beginSchema = z.strictObject({ capabilities: z.array(googleCapabilitySchema).min(1).max(4), disclosureVersion: z.literal(googleGrantDisclosure.version), calendars: googleCalendarSelectionSchema.optional() });
 /** API Gateway v2 HTTPS only. No authorizer cache, event logging, query bearer,
@@ -29,6 +29,13 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
       const event = eventSchema.parse(raw);
       if (event.headers['x-forwarded-proto'] !== 'https' || event.headers.host !== input.host || event.requestContext.domainName !== input.host) return response(400, { error: 'worker_invalid_request' });
       const method = event.requestContext.http.method; const path = event.rawPath;
+      // Ordinary requests retain their 64KiB byte limit. Only the canonical
+      // selected bootstrap may carry its bounded 200KB payload plus 4KiB envelope.
+      if (event.body && Buffer.byteLength(event.body, 'utf8') > 65536) {
+        if (path !== '/commands' || method !== 'POST') return response(400, { error: 'worker_request_rejected' });
+        const selected = bootstrapSelectedAccountCommandSchema.parse(JSON.parse(event.body));
+        if (Buffer.byteLength(JSON.stringify(selected.payload), 'utf8') > 200000) return response(400, { error: 'worker_request_rejected' });
+      }
       const query = new URLSearchParams(event.rawQueryString);
       const allowed = path === '/oauth/callback' ? ['state', 'code', 'error', 'scope', 'authuser', 'prompt', 'hd'] : path === '/events' ? ['cursor'] : [];
       for (const key of query.keys()) if (!allowed.includes(key) || query.getAll(key).length !== 1) return response(400, { error: 'worker_invalid_request' });

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { ownerCommandSchema } from '../../../../src/shared/contracts/ownerCommandContract';
+import { ownerCommandSchema, type OwnerCommand } from '../../../../src/shared/contracts/ownerCommandContract';
 const envelope = { commandId: '11111111-1111-4111-8111-111111111111', workspaceId: 'ws', accountId: 'account', expectedAuthorityGeneration: 1, expectedVersion: 2 };
 it('accepts exact existing intent references but rejects caller permission flags and arbitrary dispatch contents', () => {
   const command = { ...envelope, kind: 'submit-approved-reply', payload: { intentCommandId: '22222222-2222-4222-8222-222222222222' } };
@@ -292,4 +292,23 @@ it('registers authenticated sender policy configuration through the normal HTTP 
  const event={version:'2.0',rawPath:'/policies/configure',rawQueryString:'',headers:{host:'worker.example.test','x-forwarded-proto':'https',authorization:`Bearer ${f.pairing.credential}`},body:JSON.stringify(body),requestContext:{domainName:'worker.example.test',http:{method:'POST',sourceIp:'fictional'}}};
  const result=await handler(event);expect(result.statusCode).toBe(200);expect(JSON.parse(result.body)).toMatchObject({requestId:body.requestId,kind:'sender-caps',status:'applied',revision:1});
  expect(await handler(event)).toEqual(result);
+});
+
+it.each(['selected-large','ordinary-large','utf8-overlimit','ascii-overlimit','invalid-selected','wrong-endpoint'] as const)('bounds actual HTTP selected bootstrap by UTF-8 bytes: %s',async scenario=>{
+ const now='2026-09-08T12:00:00.000Z';const auth=new WorkerAuth({dynamo:new ConditionalCommandHarness(),tableName:'fictional',workspaceId:'ws',clock:{now:()=>now}});
+ const pairing=await auth.redeemPairing((await auth.issuePairing({scopes:['commands:write','events:read'],expiresInSeconds:300})).code,'fictional');
+ const {createWorkerHandler}=await import('../src/handler');const handler=createWorkerHandler({auth,host:'worker.example.test'});
+ const account={id:'selected',name:'Fictional selected PM',domain:null as null,version:1};
+ const sources=Array.from({length:scenario==='ascii-overlimit'?21:9},(_,index)=>({id:`source-${index}`,url:`https://fictional.example.test/source-${index}`,fetchedAt:now,sha256:'a'.repeat(64),excerpt:scenario==='utf8-overlimit'?'界'.repeat(8000):'x'.repeat(10000),permitted:true}));
+ const selected:Extract<OwnerCommand,{kind:'bootstrap-selected-account'}>={commandId:randomUUID(),workspaceId:'ws',accountId:account.id,expectedAuthorityGeneration:0,expectedVersion:0,kind:'bootstrap-selected-account',payload:{record:{account,history:[{at:now,account,claims:[],routes:[]}],sources,claims:[],routes:[],researchRevision:1},asOf:now,expectedResearchRevision:null as null,suppression:[]}};
+ expect(ownerCommandSchema.safeParse(selected).success).toBe(true);
+ const ordinary={...envelope,commandId:randomUUID(),kind:'pause',payload:{reason:'explicit'}};
+ const body=scenario==='ordinary-large'?JSON.stringify(ordinary)+' '.repeat(66000):JSON.stringify(scenario==='invalid-selected'?{...selected,allowed:true}:selected);
+ expect(Buffer.byteLength(body,'utf8')).toBeGreaterThan(65536);
+ if(scenario==='utf8-overlimit'){expect(body.length).toBeLessThan(200000);expect(Buffer.byteLength(body,'utf8')).toBeGreaterThan(200000);}
+ const result=await handler({version:'2.0',rawPath:scenario==='wrong-endpoint'?'/commands/reconcile':'/commands',rawQueryString:'',headers:{host:'worker.example.test','x-forwarded-proto':'https',authorization:`Bearer ${pairing.credential}`},body,requestContext:{domainName:'worker.example.test',http:{method:'POST',sourceIp:'fictional'}}});
+ expect(result.statusCode).toBe(scenario==='selected-large'?200:400);
+ expect(await auth.store.list('ACCOUNT#')).toHaveLength(scenario==='selected-large'?1:0);
+ if(scenario==='selected-large')expect(JSON.parse(result.body)).toMatchObject({commandId:selected.commandId,status:'applied'});
+ else expect(await auth.store.list('COMMAND#')).toEqual([]);
 });
