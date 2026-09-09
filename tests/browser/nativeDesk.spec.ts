@@ -105,7 +105,7 @@ test('real Native Desk themes, geometry, selection and unchanged editor DOM', as
 test('explicit exact email approval stays separate from sending', async ({page}) => {
   const state = await mount(page);
   await page.getByRole('button',{name:'Email · Account A',exact:true}).click();
-  await page.getByText('Approval permission',{exact:true}).click();
+  await expect(page.getByRole('checkbox')).toBeVisible();
   await page.getByRole('checkbox').check();
   const expiry = new Date(Date.now()+86400000).toISOString().slice(0,16);
   await page.getByLabel('Approval expiry').fill(expiry);
@@ -240,7 +240,7 @@ test('a lost requested approval with a persisted pending receipt keeps exact ide
   const state=await mount(page);
   await installPendingRecoveryFixture(page,'requested');
   await page.getByRole('button',{name:'Email · Account A',exact:true}).click();
-  await page.getByText('Approval permission',{exact:true}).click();
+  await expect(page.getByRole('checkbox')).toBeVisible();
   await page.getByRole('checkbox').check();
   await page.getByLabel('Approval expiry').fill(new Date(Date.now()+86400000).toISOString().slice(0,16));
   await page.getByRole('button',{name:'Approve email',exact:true}).click();
@@ -332,7 +332,7 @@ test('failed canonical save prevents approval and ambiguous receipt retries the 
   });
   const email = page.getByRole('button',{name:'Email · Account A',exact:true});
   await email.click();
-  await page.getByText('Approval permission',{exact:true}).click();
+  await expect(page.getByRole('checkbox')).toBeVisible();
   await page.getByRole('checkbox').check();
   await page.getByLabel('Approval expiry').fill(new Date(Date.now()+86400000).toISOString().slice(0,16));
   const approve = page.getByRole('button',{name:'Approve email',exact:true});
@@ -411,7 +411,7 @@ test('approval continuation does not revive after leaving and reopening the same
   });
   const emailA = page.getByRole('button',{name:'Email · Account A',exact:true});
   await emailA.click();
-  await page.getByText('Approval permission',{exact:true}).click();
+  await expect(page.getByRole('checkbox')).toBeVisible();
   await page.getByRole('checkbox').check();
   await page.getByLabel('Approval expiry').fill(new Date(Date.now()+86400000).toISOString().slice(0,16));
   const approve = page.getByRole('button',{name:'Approve email',exact:true});
@@ -471,6 +471,7 @@ test('accepting a newer saved email immediately permits explicit preflight and s
   });
   await page.getByRole('button',{name:'Use saved version and discard displayed edits',exact:true}).click();
   await expect(page.getByRole('textbox',{name:'Email body'})).toHaveValue('Newer saved email from owner');
+  await page.locator('.native-desk__approval-checks > summary').click();
   await page.getByRole('button',{name:'Owner preflight',exact:true}).click();
   await expect.poll(async()=>(await methods(page)).filter(method=>method==='getRequestedFollowup').length).toBe(1);
   await page.getByRole('textbox',{name:'Email body'}).fill('Explicit edit after accepting the saved version');
@@ -603,14 +604,14 @@ test('unpaired local records remain selectable without worker authority or autom
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     const heading = await page.locator('.native-desk__lane h2').first().evaluate(el => {
       const label = el.querySelector<HTMLElement>('.native-desk__lane-label')!;
-      const summary = el.querySelector<HTMLElement>('.native-desk__lane-summary')!;
+      const count = el.querySelector<HTMLElement>('.native-desk__count')!;
       const range = document.createRange(); range.selectNodeContents(label);
       return {lines: range.getClientRects().length, labelWidth: label.getBoundingClientRect().width,
-        labelScroll: label.scrollWidth, summaryRight: summary.getBoundingClientRect().right, right: el.getBoundingClientRect().right};
+        labelScroll: label.scrollWidth, countRight: count.getBoundingClientRect().right, right: el.getBoundingClientRect().right};
     });
     expect(heading.lines).toBe(1);
     expect(heading.labelWidth + 1).toBeGreaterThanOrEqual(heading.labelScroll);
-    expect(heading.summaryRight).toBeLessThanOrEqual(heading.right + 1);
+    expect(heading.countRight).toBeLessThanOrEqual(heading.right + 1);
     await expect(page.locator('.native-desk__detail-bar')).toContainText('Existing commitments and relationships');
     await page.screenshot({path: testInfo.outputPath(`local-commitments-${width}.png`), animations: 'disabled'});
   }
@@ -757,7 +758,7 @@ test('approved A presentation matches the unchanged reference in both themes and
   await assertClean(page, state);
 });
 
-test('approved A empty unpaired surfaces stay compact and truthful without invented work', async ({page}, testInfo) => {
+test('approved A empty unpaired surfaces stay coherent and truthful without invented work', async ({page}, testInfo) => {
   const state = await mount(page);
   await localOnly(page);
   await page.evaluate(async () => {
@@ -778,7 +779,10 @@ test('approved A empty unpaired surfaces stay compact and truthful without inven
         await expect(page.locator('html')).toHaveAttribute('data-density', 'compact');
         const detail = page.locator('.native-desk__detail');
         expect.soft(await detail.innerText()).not.toMatch(/Select an item/i);
-        expect.soft((await detail.boundingBox())!.height, `${surface}/${width}/${theme} compact empty card`).toBeLessThanOrEqual(280);
+        const card = (await detail.boundingBox())!;
+        const footer = (await page.locator('.native-desk__footer').boundingBox())!;
+        expect.soft(card.height, `${surface}/${width}/${theme} coherent inset state`).toBeGreaterThan(300);
+        expect.soft(card.y + card.height, `${surface}/${width}/${theme} card clears footer`).toBeLessThanOrEqual(footer.y + 1);
         await expect(page.locator('.native-desk__connection > summary')).toContainText(/unavailable|unconfigured|unpaired/i);
         await expect(page.getByText(/remote freshness unknown/i).last()).toBeVisible();
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
