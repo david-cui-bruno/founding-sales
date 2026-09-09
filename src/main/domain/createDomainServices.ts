@@ -65,13 +65,14 @@ export function createDomainServices(input: {
   clock: Clock;
   ids: IdGenerator;
   timezone?: string;
+  expectedWorkspaceId?: string;
 }): DomainServices {
   const { database, clock, ids } = input;
   const timezone = input.timezone ?? 'America/New_York';
   const unitOfWork = new DomainUnitOfWork(database);
   // Read-only binding: no policy admission or implicit local execution owner.
   const accountOutreach = new AccountOutreach({ database, clock, ids, accounts: new AccountRepository({ database, clock, ids }),
-    policy: createSqlAccountRoutePolicy({ database, clock }) });
+    policy: createSqlAccountRoutePolicy({ database, clock, expectedWorkspaceId: input.expectedWorkspaceId }) });
   const discoveryRepository = new DiscoveryRepository({ database, unitOfWork });
   const jobs = new JobRepository(database);
   const identities = new IdentityRepository({ database, unitOfWork, clock, ids });

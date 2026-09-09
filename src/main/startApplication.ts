@@ -1,3 +1,4 @@
+import type { AppDatabase } from './db/database';
 import { z } from 'zod';
 import { AccountRepository } from './domain/accounts/accountRepository';
 import { SqlDiscoveryReservationStore } from './delegation/discoveryReservationStore';
@@ -332,6 +333,8 @@ export type ApplicationStartupOptions = {
   appleBridge?: AppleBridgeSupervisorOptions;
   appleSpikeEnabled?: boolean;
   phoneRouteMode?: 'native' | 'fixture';
+  /** Trusted paired workspace identity. Absence leaves account dispatch unavailable. */
+  expectedWorkspaceId?: string;
   /** Main-only explicit configuration. C6/D3 own persisted user/campaign activation. */
   companyResearch?: CompanyResearchStartupConfiguration;
   /**
@@ -528,16 +531,17 @@ function createProductionSourcingPoller(
   });
 }
 
+/** Default main-process domain factory, shared with the bounded startup integration test. */
+export function createStartupDomainRuntime(database: AppDatabase, expectedWorkspaceId?: string): DomainRuntime {
+  return new DomainRuntime({ database, clock: domainClock, ids: domainIds, expectedWorkspaceId });
+}
+
 const defaultDependencies: ApplicationStartupDependencies = {
   loadWorkspaceKey: (input) => workspaceKeyStore.loadOrCreate(input),
   prepareEncryptedDatabase,
   openDatabase,
   migrateToLatest,
-  createDomainRuntime: (database) => new DomainRuntime({
-    database,
-    clock: domainClock,
-    ids: domainIds,
-  }),
+  createDomainRuntime: createStartupDomainRuntime,
   createHealthService: (options) => new HealthService(options),
   registerApplicationIpc,
   registerOutreachIpc,
@@ -555,6 +559,7 @@ export async function startApplication(
   options: ApplicationStartupOptions,
   dependencies: ApplicationStartupDependencies = defaultDependencies,
 ): Promise<RunningApplication> {
+  const expectedWorkspaceId = options.expectedWorkspaceId;
   const { databasePath, keyEnvelopePath, backupDirectory } = resolveApplicationPaths(options.userDataPath);
   const runtime = new FoundationRuntime(
     {
@@ -564,7 +569,9 @@ export async function startApplication(
       databaseExists: encryptedWorkspaceExists(databasePath),
       keyEnvelopePath,
     },
-    dependencies,
+    dependencies === defaultDependencies ? { ...dependencies,
+      createDomainRuntime: database => createStartupDomainRuntime(database, expectedWorkspaceId),
+    } : dependencies,
   );
   let email:ReturnType<typeof createEmailService>|undefined;
   let researchProviders: ReturnType<typeof createOutreachProviders> | undefined;

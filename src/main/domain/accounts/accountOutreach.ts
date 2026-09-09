@@ -41,11 +41,12 @@ function legacyRouteSuppression(database: AppDatabase, route: AccountRoute, at: 
 
 /** Read-only production binding. Admission remains AccountRoutePolicyStore's separately
  * attested capability. This never creates evidence or initializes execution ownership. */
-export function createSqlAccountRoutePolicy(input: { database: AppDatabase; clock: Clock }): AccountRoutePolicyPort {
-  const { database, clock } = input;
+export function createSqlAccountRoutePolicy(input: { database: AppDatabase; clock: Clock; expectedWorkspaceId?: string }): AccountRoutePolicyPort {
+  const { database, clock, expectedWorkspaceId } = input;
   return { read(snapshot, route) {
     const raw = database.raw;
     if (!raw.inTransaction) throw new Error('Account policy read requires the authorization transaction');
+    if (!accountIdSchema.safeParse(expectedWorkspaceId).success) return null;
     const at = accountInstantSchema.parse(clock.now());
     // Select latest first, then validate. Never fall back past a newer expired/blocked receipt.
     const row = raw.prepare(`SELECT * FROM pm_account_route_policy_receipts
@@ -74,7 +75,7 @@ export function createSqlAccountRoutePolicy(input: { database: AppDatabase; cloc
     const owner = raw.prepare('SELECT workspace_id,owner,generation,state,updated_at FROM delegated_authorities WHERE account_id=?').get(route.accountId) as {
       workspace_id: string; owner: string; generation: number; state: string; updated_at: string;
     } | undefined;
-    if (!owner || !accountIdSchema.safeParse(owner.workspace_id).success || !Number.isSafeInteger(owner.generation) || owner.generation < 0
+    if (!owner || owner.workspace_id !== expectedWorkspaceId || !accountIdSchema.safeParse(owner.workspace_id).success || !Number.isSafeInteger(owner.generation) || owner.generation < 0
       || !accountInstantSchema.safeParse(owner.updated_at).success || owner.updated_at > at) return null;
     const legacy = legacyRouteSuppression(database, route, at);
     return {
