@@ -1173,6 +1173,8 @@ export class FounderSalesDomain implements OutboundDomainPort {
 
   // ---------------------------------------------------------------- today
 
+  getDaily() { return this.services.daily.get(); }
+
   getToday(): TodaySnapshot {
     const settings = this.services.workspaceSettings.read();
     const timezone = this.configuredTimezone ?? settings.timezone;

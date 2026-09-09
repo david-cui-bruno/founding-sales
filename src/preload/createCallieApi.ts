@@ -1,3 +1,4 @@
+import { createDailyApi } from './apis/dailyApi';
 import {policyImportConfirmSchema,policyImportResumeSchema,policyImportStatusSchema,policyImportPreviewSchema,policyImportReportSchema} from '../shared/contracts/accountRoutePolicyImportContract';
 import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedFollowupSchema,approveRequestedFollowupSchema,savedRequestedFollowupSchema,requestedApprovalStatusSchema} from '../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../shared/contracts/workerPolicyContract';
@@ -62,6 +63,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
     leads: createLeadsApi(client),
     leadDetail: createLeadDetailApi(client),
     today: createTodayApi(client),
+    daily: createDailyApi(client),
     discovery: createDiscoveryApi(client),
     pipeline: createPipelineApi(client),
     review: createReviewApi(client),

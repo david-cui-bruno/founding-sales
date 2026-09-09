@@ -1,3 +1,4 @@
+import { DailyReadService } from './today/dailyReadService';
 import { AccountRepository } from './accounts/accountRepository';
 import { AccountOutreach, createSqlAccountRoutePolicy } from './accounts/accountOutreach';
 import type { AppDatabase } from '../db/database';
@@ -51,6 +52,7 @@ export type DomainServices = Readonly<{
   prioritization: PrioritizationService;
   todayRepository: TodayRepository;
   today: TodayService;
+  daily: DailyReadService;
   workspaceSettings: WorkspaceSettingsRepository;
 }>;
 
@@ -148,6 +150,7 @@ export function createDomainServices(input: {
 
   return Object.freeze({
     accountOutreach,
+    daily: new DailyReadService({ database, clock, ids, today, settings: workspaceSettings, workspaceId: input.expectedWorkspaceId }),
     unitOfWork,
     discoveryRepository,
     discoveryRead,
