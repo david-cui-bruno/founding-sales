@@ -2,6 +2,7 @@ import { test, expect, type Page } from 'playwright/test';
 import { build } from 'esbuild';
 import { AxeBuilder } from '@axe-core/playwright';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import type {} from '../fixtures/nativeDeskBrowser';
 
 // This exercises real renderer components, not Electron IPC or live services.
@@ -697,5 +698,155 @@ test('uncommitted local transition retries the exact identity only after an expl
   await expect(page.getByText('Native Desk is active.', {exact: true})).toBeVisible();
   const commands = await page.evaluate(() => window.nativeDeskBrowser.fixture.calls.filter(call => call.method === 'localWorkspace.transition').map(call => call.input));
   expect(commands).toHaveLength(2); expect(commands[1]).toEqual(commands[0]);
+  await assertClean(page, state);
+});
+
+test('approved A presentation matches the unchanged reference in both themes and widths', async ({page, context}, testInfo) => {
+  const state = await mount(page);
+  const reference = await context.newPage();
+  const referenceRequests: string[] = [];
+  await reference.route('**/*', route => { referenceRequests.push(route.request().url()); return route.abort(); });
+  await reference.setContent(readFileSync(path.resolve('docs/prototypes/2026-09-09-today-studies.html'), 'utf8'));
+  await reference.locator('[data-item="nora"]').click();
+  await page.getByRole('button', {name: 'Email · Account A', exact: true}).click();
+  for (const width of [1440, 1050]) {
+    const viewport = {width, height: width === 1440 ? 900 : 700};
+    await page.setViewportSize(viewport); await reference.setViewportSize(viewport);
+    for (const theme of ['light', 'dark'] as const) {
+      await page.evaluate(theme => window.nativeDeskBrowser.preferences(theme, 'compact'), theme);
+      await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+      await expect(page.locator('html')).toHaveAttribute('data-density', 'compact');
+      await reference.evaluate(theme => { document.documentElement.dataset.study = 'native'; document.documentElement.dataset.theme = theme; }, theme);
+      const capture = async (target: Page, selectors: string[]) => target.evaluate(selectors => selectors.map(selector => {
+        const node = document.querySelector<HTMLElement>(selector)!;
+        const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+        return {color: style.color, background: style.backgroundColor, family: style.fontFamily, weight: style.fontWeight, spacing: style.letterSpacing, size: parseFloat(style.fontSize), radius: parseFloat(style.borderRadius),
+          width: rect.width, height: rect.height, centerY: rect.y + rect.height / 2};
+      }), selectors);
+      const expected = await capture(reference, ['.wordmark', '.nav-item', '.page-head h1', '.head-status .icon-button', '.queue', '#subject', '#message']);
+      const actual = await capture(page, ['.nav-rail__brand-native', '.nav-rail__item', '.native-desk h1', '.native-desk__refresh', '.native-desk__queue', 'input[aria-label="Email subject"]', 'textarea[aria-label="Email body"]']);
+      const label = `${width}/${theme}`;
+      expect.soft(actual[0].color, `${label} coral wordmark`).toBe(expected[0].color);
+      expect.soft(actual[0].family, `${label} wordmark font`).toBe(expected[0].family);
+      expect.soft(actual[0].size, `${label} wordmark size`).toBe(expected[0].size);
+      expect.soft(actual[0].weight, `${label} wordmark weight`).toBe(expected[0].weight);
+      expect.soft(actual[0].spacing, `${label} wordmark tracking`).toBe(expected[0].spacing);
+      for (const index of [5, 6]) {
+        expect.soft(actual[index].background, `${label} field ${index} native background`).toBe(expected[index].background);
+        expect.soft(actual[index].radius, `${label} field ${index} rounded corners`).toBe(expected[index].radius);
+        expect.soft(actual[index].size, `${label} field ${index} text size`).toBe(expected[index].size);
+      }
+      expect.soft(actual[5].height, `${label} padded subject field`).toBe(expected[5].height);
+      expect.soft(actual[1].radius, `${label} rounded navigation`).toBe(expected[1].radius);
+      expect.soft(Math.abs(actual[1].height - expected[1].height), `${label} padded navigation`).toBeLessThanOrEqual(3);
+      expect.soft(actual[2].size, `${label} compact title`).toBe(expected[2].size);
+      expect.soft(actual[3].width, `${label} icon refresh width`).toBe(expected[3].width);
+      expect.soft(actual[3].height, `${label} icon refresh height`).toBe(expected[3].height);
+      expect.soft(Math.abs(actual[4].width - expected[4].width), `${label} queue width`).toBeLessThanOrEqual(2);
+      const status = await page.locator('.native-desk__connection > summary').boundingBox();
+      expect.soft(Math.abs(status!.y + status!.height / 2 - actual[3].centerY), `${label} horizontal status`).toBeLessThanOrEqual(3);
+      expect.soft(await page.getByText('Your next conversations', {exact: true}).count()).toBe(1);
+      expect.soft(await page.locator('.native-desk__lane h2 svg').count()).toBe(3);
+      expect.soft(await page.locator('.native-desk__lane h2 .native-desk__count').count()).toBe(3);
+      expect.soft(await page.getByRole('button', {name: 'Refresh', exact: true}).innerText()).toBe('');
+      await page.screenshot({path: testInfo.outputPath(`restored-A-${width}-${theme}.png`), animations: 'disabled'});
+    }
+  }
+  expect(referenceRequests).toEqual([]);
+  await reference.close();
+  await assertClean(page, state);
+});
+
+test('approved A empty unpaired surfaces stay compact and truthful without invented work', async ({page}, testInfo) => {
+  const state = await mount(page);
+  await localOnly(page);
+  await page.evaluate(async () => {
+    const f = window.nativeDeskBrowser.fixture, local = await f.api.localWorkspace.get(), daily = f.snapshot();
+    f.setLocalSnapshot({...local, accounts: {state: 'available', snapshots: []}});
+    f.setCommitments({scope: 'local_database', generatedAt: daily.freshness.generatedAt, revision: 2, reviewErrorCount: 0, items: []});
+    f.setSnapshot({...daily, freshness: {...daily.freshness, kind: 'incomplete'}});
+    window.nativeDeskBrowser.refresh();
+  });
+  for (const surface of ['today', 'accounts', 'campaigns'] as const) {
+    await page.evaluate(surface => window.nativeDeskBrowser.navigate(surface), surface);
+    await expect(page.locator('[data-row-key]')).toHaveCount(0);
+    for (const width of [1440, 1050]) {
+      await page.setViewportSize({width, height: width === 1440 ? 900 : 700});
+      for (const theme of ['light', 'dark'] as const) {
+        await page.evaluate(theme => window.nativeDeskBrowser.preferences(theme, 'compact'), theme);
+        await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+        await expect(page.locator('html')).toHaveAttribute('data-density', 'compact');
+        const detail = page.locator('.native-desk__detail');
+        expect.soft(await detail.innerText()).not.toMatch(/Select an item/i);
+        expect.soft((await detail.boundingBox())!.height, `${surface}/${width}/${theme} compact empty card`).toBeLessThanOrEqual(280);
+        await expect(page.locator('.native-desk__connection > summary')).toContainText(/unavailable|unconfigured|unpaired/i);
+        await expect(page.getByText(/remote freshness unknown/i).last()).toBeVisible();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+        expect.soft((await page.locator('.native-desk__footer').boundingBox())!.y + (await page.locator('.native-desk__footer').boundingBox())!.height, `${surface}/${width}/${theme} footer fits viewport`).toBeLessThanOrEqual(width === 1440 ? 900 : 700);
+        const labels = await page.locator('.nav-rail__list:first-of-type .nav-rail__label').evaluateAll(nodes => nodes.map(node => { const range = document.createRange(); range.selectNodeContents(node); return {text: node.textContent, width: node.getBoundingClientRect().width, fullTextWidth: range.getBoundingClientRect().width}; }));
+        expect(labels).toHaveLength(3);
+        for (const label of labels) expect.soft(label.fullTextWidth, `${width} complete primary label ${label.text}`).toBeLessThanOrEqual(label.width + 0.05);
+        if (surface === 'today') {
+          const headings = await page.locator('.native-desk__lane h2').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().bottom));
+          expect(headings).toHaveLength(3);
+          for (const bottom of headings) expect(bottom).toBeLessThan(width === 1440 ? 900 : 700);
+        }
+        const axe = await new AxeBuilder({page}).analyze();
+        expect(axe.violations.filter(issue => issue.impact === 'serious' || issue.impact === 'critical')).toEqual([]);
+        await page.screenshot({path: testInfo.outputPath(`empty-A-${surface}-${width}-${theme}.png`), animations: 'disabled'});
+      }
+    }
+  }
+  expect((await methods(page)).filter(method => !['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments'].includes(method))).toEqual([]);
+  await assertClean(page, state);
+});
+
+test('approved A primary rail keeps other workspaces accessible and restores legacy visibility', async ({page}) => {
+  const state = await mount(page);
+  const rail = page.getByRole('navigation', {name: 'Primary', exact: true});
+  for (const label of ['Today', 'Accounts', 'Campaigns', 'Settings']) await expect(rail.getByRole('link', {name: label, exact: true})).toBeVisible();
+  const more = rail.getByRole('button', {name: /More|Other workspaces/i});
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  await expect(rail.getByRole('link', {name: 'Conversations', exact: true})).toBeHidden();
+  await more.focus(); await page.keyboard.press('Enter');
+  await expect(more).toHaveAttribute('aria-expanded', 'true');
+  for (const label of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox']) await expect(rail.getByRole('link', {name: label, exact: true})).toBeVisible();
+  await rail.getByRole('link', {name: 'Conversations', exact: true}).click();
+  await expect(rail.getByRole('link', {name: 'Conversations', exact: true})).toHaveAttribute('aria-current', 'page');
+  await more.click();
+  await localOnly(page, 'legacy');
+  await expect(page.getByRole('heading', {name: 'Legacy Today fixture', exact: true})).toBeVisible();
+  await expect(more).toBeHidden();
+  for (const label of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox']) await expect(rail.getByRole('link', {name: label, exact: true})).toBeVisible();
+  await assertClean(page, state);
+});
+
+test('approved A scrollable lanes keep every queued row keyboard reachable without commands', async ({page}) => {
+  const state = await mount(page);
+  await page.setViewportSize({width: 1050, height: 700});
+  await page.evaluate(() => {
+    const f = window.nativeDeskBrowser.fixture, snapshot = f.snapshot();
+    const accounts = Array.from({length: 20}, (_, index) => ({...snapshot.accounts[0], account: {...snapshot.accounts[0].account, id: `scroll-${index}`, name: `Scroll account ${index}`}}));
+    f.setSnapshot({...snapshot, accounts: [...snapshot.accounts, ...accounts], calls: {...snapshot.calls, accountIds: accounts.map(a => a.account.id)}});
+    window.nativeDeskBrowser.refresh();
+  });
+  const rows = page.locator('.native-desk__lane[aria-label="Calls"] [data-row-key]');
+  await expect(rows).toHaveCount(20);
+  await rows.first().focus();
+  for (let index = 1; index < 20; index++) {
+    await page.keyboard.press('j');
+    await expect(rows.nth(index)).toBeFocused();
+  }
+  const last = await rows.last().boundingBox(), lane = await page.locator('.native-desk__lane[aria-label="Calls"]').boundingBox();
+  expect(last!.y).toBeGreaterThanOrEqual(lane!.y);
+  expect(last!.y + last!.height).toBeLessThanOrEqual(lane!.y + lane!.height + 1);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.native-desk__detail')).toContainText('Scroll account 19');
+  await expect(rows.last()).toHaveAttribute('aria-current', 'true');
+  await page.keyboard.press('j');
+  await expect(page.getByRole('button', {name: 'Email · Account A', exact: true})).toBeFocused();
+  const headings = await page.locator('.native-desk__lane h2').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().bottom));
+  for (const bottom of headings) expect(bottom).toBeLessThanOrEqual(700);
+  expect((await methods(page)).filter(method => !['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments'].includes(method))).toEqual([]);
   await assertClean(page, state);
 });
