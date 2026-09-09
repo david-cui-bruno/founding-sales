@@ -7,13 +7,14 @@ import type { CampaignVersion, CampaignCommandPayload } from '../../../../src/sh
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const now = '2026-09-09T12:00:00.000Z';
-async function fixture(multichannel = false, firstChannel: 'call' | 'linkedin' = 'call') {
+async function fixture(multichannel = false, firstChannel: 'call' | 'linkedin' = 'call', stepCount = 0) {
   const dynamo = new ConditionalCommandHarness(); let time = now;
   const options = { dynamo, tableName: 'fictional-campaigns', workspaceId: id(1), clock: { now: () => time } };
   const store = new DynamoStore(options); const repo = new WorkerCampaignRepository(options); let command = 100;
   const version: CampaignVersion = { id: id(2), campaignId: id(3), version: 1, audienceHash: 'a'.repeat(64), offer: 'Fictional offer', objective: 'meeting', cohortAccountIds: [id(4)], approvedAt: null, steps: [{ id: id(5), channel: 'call', condition: 'initial', delayHours: 0 }], capScope: 'campaign_version_lifetime', channelCaps: { call: 2, email: 1, linkedin: 1 }, contentPolicyHash: 'b'.repeat(64) };
   version.steps[0]!.channel = firstChannel;
   if (multichannel) version.steps.push({ id: id(50), channel: 'linkedin', condition: 'no_reply', delayHours: 0 });
+  while (version.steps.length < stepCount) version.steps.push({ id: id(200 + version.steps.length), channel: 'linkedin', condition: 'no_reply', delayHours: 0 });
   const account = { id: id(4), name: 'Fictional PM', domain: 'example.invalid', version: 1 };
   const routes = [{ id: id(6), accountId: id(4), personId: null, channel: 'phone', value: '+12025550101', purpose: 'business', evidenceIds: [id(7)], verification: 'published', version: 1 }];
   if (firstChannel === 'linkedin') { routes[0]!.channel = 'linkedin'; routes[0]!.value = 'https://www.linkedin.com/in/fictional-person'; }
@@ -29,6 +30,97 @@ async function fixture(multichannel = false, firstChannel: 'call' | 'linkedin' =
 }
 
 describe('real SDK campaign transactional plans', () => {
+  async function connected(multichannel = true, stepCount = 0) {
+    const f = await fixture(multichannel, 'call', stepCount);
+    await f.apply({ kind: 'campaign.enroll', enrollmentId: id(8), campaignVersionId: id(2), selectedRouteId: id(6), executionContextId: 'call-context', contextRevision: 1 });
+    const binding = { workspaceId: id(1), accountId: id(4), campaignId: id(3), campaignRevision: 1, enrollmentId: id(8), enrollmentRevision: 1, stepId: id(5), actionId: id(10), channel: 'call' as const, authorityGeneration: 1, selectedRouteId: id(6), contextRevision: 'call-context', contentHash: 'c'.repeat(64), targetHash: 'd'.repeat(64) };
+    await f.store.transact((await new CampaignExecution(f.repo).prepareManualChecks(binding)).finalize());
+    const result = await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 1, evidence: { enrollmentId: id(8), accountId: id(4), campaignVersionId: id(2), stepId: id(5), routeId: id(6), routeVersion: 1, executionContextId: 'call-context', contextRevision: 1, observedAt: now, observation: 'unknown', source: 'human', actionId: id(10), channel: 'call', state: 'human_reported_sent', outcome: 'connected' } });
+    return { ...f, binding, outcomeCommandId: result.commandId };
+  }
+  it.each([true, false])('plans requested correspondence for multichannel=%s without consuming campaign capacity', async multichannel => {
+    const f = await connected(multichannel);
+    const plan = await f.repo.prepareRequestedFollowupPlan({ commandId: id(900), accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId });
+    expect(plan.origin).toMatchObject({ accountId: id(4), campaignVersionId: id(2), enrollmentId: id(8), actionId: id(10), originalOutcomeCommandId: f.outcomeCommandId, executionContextId: 'call-context' });
+    expect(plan.items.some(item => item.Put?.Item?.sk?.S?.startsWith('CAMPAIGN_CAP#'))).toBe(false);
+    const targets = plan.items.map(item => JSON.stringify(item.ConditionCheck?.Key ?? { pk: item.Put!.Item!.pk, sk: item.Put!.Item!.sk }));
+    expect(new Set(targets).size).toBe(plan.items.length);
+    if (!multichannel) expect(plan.items.every(item => item.ConditionCheck)).toBe(true);
+    await f.store.transact(plan.items);
+    expect(f.dynamo.inspect(campaignEnrollmentKey(id(8)))).toMatchObject({ state: multichannel ? 'conversation' : 'completed', currentStepId: multichannel ? id(50) : null });
+    expect(f.dynamo.inspect(`CAMPAIGN_CAP#${id(2)}#call`)).toEqual({ reserved: 0, sent: 1 });
+    const final = await f.repo.requestedFollowupChecks({ accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId });
+    expect(final.items.every(item => item.ConditionCheck)).toBe(true);
+    await f.store.transact(final.items);
+    expect(final.origin).toEqual(plan.origin);
+  });
+  it('does not bypass a newer active campaign on a completed original account', async () => {
+    const f = await connected(false);
+    const input = { accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId };
+    const final = await f.repo.requestedFollowupChecks(input);
+    await f.apply({ kind: 'campaign.enroll', enrollmentId: id(9), campaignVersionId: id(2), selectedRouteId: id(6), executionContextId: 'new-campaign-context', contextRevision: 2 });
+    await expect(f.store.transact(final.items)).rejects.toThrow('TransactionCanceledException');
+    await expect(f.repo.requestedFollowupChecks(input)).rejects.toThrow('campaign_requested_followup_held');
+    expect(f.dynamo.inspect(campaignEnrollmentKey(id(8)))).toMatchObject({ state: 'completed' });
+  });
+  it('fails closed when bounded campaign fences exceed Dynamo transaction capacity', async () => {
+    const f = await connected(true, 100);
+    await expect(f.repo.prepareRequestedFollowupPlan({ commandId: id(900), accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId })).rejects.toThrow('transaction_capacity_exceeded');
+    expect(f.dynamo.inspect(campaignEnrollmentKey(id(8)))).toMatchObject({ state: 'active' });
+  });
+  it.each(['conflict', 'opt_out'] as const)('refuses completed original call with later %s evidence', async kind => {
+    const f = await connected(false); const evidence = (await f.repo.evidence(id(8)))[0]!;
+    const input = { accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId };
+    const final = await f.repo.requestedFollowupChecks(input);
+    await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 2, evidence: kind === 'conflict'
+      ? { ...evidence, state: 'cancelled', outcome: 'not_called' }
+      : { ...evidence, outcome: 'opt_out', observation: 'replied' } });
+    await expect(f.store.transact(final.items)).rejects.toThrow('TransactionCanceledException');
+    await expect(f.repo.requestedFollowupChecks(input)).rejects.toThrow('campaign_requested_followup_held');
+    expect(f.dynamo.inspect(`CAMPAIGN_CAP#${id(2)}#call`)).toEqual({ reserved: 0, sent: 1 });
+  });
+  it('refuses an alternate outcome command instead of choosing current connected history', async () => {
+    const f = await connected(); const evidence = (await f.repo.evidence(id(8)))[0]!;
+    const later = await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 2, evidence: { ...evidence, outcome: 'no_reply', observation: 'no_reply' } });
+    await expect(f.repo.prepareRequestedFollowupPlan({ commandId: id(900), accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: later.commandId })).rejects.toThrow('campaign_requested_followup_origin');
+    await expect(f.repo.prepareRequestedFollowupPlan({ commandId: id(900), accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: id(991) })).rejects.toThrow('campaign_record_missing');
+  });
+  it('refuses foreign original receipt, paused/held/stopped origin and active final reserve', async () => {
+    const f = await connected();
+    await expect(f.repo.prepareRequestedFollowupPlan({ commandId: id(900), accountId: id(90), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId })).rejects.toThrow();
+    await expect(f.repo.requestedFollowupChecks({ accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId })).rejects.toThrow('campaign_requested_followup_held');
+    for (const [index, state] of (['paused', 'held', 'stopped'] as const).entries()) {
+      await f.apply({ kind: 'campaign.state', enrollmentId: id(8), expectedEnrollmentVersion: index + 2, state, reason: 'hold remains' });
+      await expect(f.repo.prepareRequestedFollowupPlan({ commandId: id(900), accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId })).rejects.toThrow('campaign_requested_followup_held');
+    }
+  });
+  it('fences an absent next-step reservation and rejects already unknown next work', async () => {
+    const f = await connected();
+    await f.apply({ kind: 'campaign.route', enrollmentId: id(8), expectedEnrollmentVersion: 2, selectedRouteId: id(51), executionContextId: 'linkedin-context', contextRevision: 2 });
+    // A positive observation is required for this approved next step.
+    const original = (await f.repo.evidence(id(8)))[0]!;
+    const later = '2026-09-09T12:01:00.000Z'; f.advance(later);
+    await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 3, evidence: { ...original, observedAt: later, outcome: 'no_reply', observation: 'no_reply' } });
+    const plan = await f.repo.prepareRequestedFollowupPlan({ commandId: id(900), accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId });
+    const next = { ...f.binding, enrollmentRevision: 4, stepId: id(50), actionId: id(11), channel: 'linkedin' as const, selectedRouteId: id(51), contextRevision: 'linkedin-context' };
+    await f.store.transact((await new CampaignExecution(f.repo).prepareManualChecks(next)).finalize());
+    await expect(f.store.transact(plan.items)).rejects.toThrow('TransactionCanceledException');
+    expect(f.dynamo.inspect(campaignEnrollmentKey(id(8)))).toMatchObject({ state: 'active' });
+    await expect(f.repo.prepareRequestedFollowupPlan({ commandId: id(900), accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId })).rejects.toThrow('campaign_requested_followup_unresolved');
+    await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 4, evidence: { ...original, stepId: id(50), routeId: id(51), executionContextId: 'linkedin-context', contextRevision: 2, actionId: id(11), channel: 'linkedin', state: 'unknown', outcome: 'unknown' } });
+    await expect(f.repo.prepareRequestedFollowupPlan({ commandId: id(900), accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId })).rejects.toThrow('campaign_requested_followup_unresolved');
+    expect(f.dynamo.inspect(`CAMPAIGN_CAP#${id(2)}#linkedin`)).toEqual({ reserved: 1, sent: 0 });
+  });
+  it('final checks reject a concurrent departure from conversation without mutating it', async () => {
+    const f = await connected();
+    await f.store.transact((await f.repo.prepareRequestedFollowupPlan({ commandId: id(900), accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId })).items);
+    const final = await f.repo.requestedFollowupChecks({ accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId });
+    await f.apply({ kind: 'campaign.state', enrollmentId: id(8), expectedEnrollmentVersion: 3, state: 'paused', reason: 'owner pause' });
+    await f.apply({ kind: 'campaign.state', enrollmentId: id(8), expectedEnrollmentVersion: 4, state: 'active', reason: 'owner resume' });
+    await expect(f.store.transact(final.items)).rejects.toThrow('TransactionCanceledException');
+    await expect(f.repo.requestedFollowupChecks({ accountId: id(4), originalActionId: id(10), originalOutcomeCommandId: f.outcomeCommandId })).rejects.toThrow('campaign_requested_followup_held');
+  });
+
   it.each(['active', 'paused', 'unknown'] as const)('continues %s call through approved LinkedIn without per-action reapproval', async mode => {
     const f = await fixture(true);
     await f.apply({ kind: 'campaign.enroll', enrollmentId: id(8), campaignVersionId: f.version.id, selectedRouteId: id(6), executionContextId: 'call-context', contextRevision: 1 });

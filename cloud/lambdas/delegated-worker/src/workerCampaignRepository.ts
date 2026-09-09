@@ -22,6 +22,13 @@ const slotSchema = z.strictObject({ enrollmentId: id, state: enrollmentSchema.sh
 export const campaignReservationSchema = z.strictObject({ input: campaignExecutionInputSchema, campaignVersionId: id, routeVersion: integer.positive(), numericContextRevision: integer, state: z.enum(['reserved', 'unknown', 'sent', 'cancelled']) });
 export const campaignCapSchema = z.strictObject({ reserved: integer, sent: integer });
 const terminal = (state: string) => state === 'completed' || state === 'stopped';
+const requestedFollowupInputSchema = z.strictObject({ accountId: id, originalActionId: id, originalOutcomeCommandId: z.uuid() });
+export type RequestedFollowupCampaignInput = z.infer<typeof requestedFollowupInputSchema>;
+export type RequestedFollowupCampaignOrigin = {
+  accountId: string; campaignVersionId: string; enrollmentId: string; stepId: string; actionId: string;
+  originalOutcomeCommandId: string; routeId: string; routeVersion: number; executionContextId: string; contextRevision: number;
+};
+
 
 /** Plans are consumed by C1's owner/receipt/outbox transaction. This class never sends or independently owns delegated commands. */
 export class WorkerCampaignRepository {
@@ -55,6 +62,78 @@ export class WorkerCampaignRepository {
       || version.campaignId !== approval.campaignId || version.version !== approval.campaignRevision || !version.cohortAccountIds.includes(approval.accountId)) throw new Error('campaign_binding_mismatch');
     await this.store.transact([this.store.put(campaignActionApprovalKey(approval.accountId, approval.actionId), approval, null),
       this.store.check(campaignEnrollmentKey(enrollment.id), row.rev), this.store.check(campaignVersionKey(version.id), versionRow.rev), this.store.check(campaignApprovalKey(version.id), approvalRow.rev)]);
+  }
+  /** Materialization joins these items and payload to the real owner status transaction. */
+  async prepareRequestedFollowupPlan(raw: RequestedFollowupCampaignInput & { commandId: string }): Promise<{ items: TransactWriteItem[]; payload: CampaignEventPayload; origin: RequestedFollowupCampaignOrigin }> {
+    const input = requestedFollowupInputSchema.extend({ commandId: z.uuid() }).parse(raw);
+    const read = await this.readRequestedFollowup(input);
+    if (read.enrollment.state === 'active') {
+      const plan = await this.planCommand({ commandId: input.commandId, accountId: input.accountId, payload: { kind: 'campaign.state', enrollmentId: read.enrollment.id,
+        expectedEnrollmentVersion: read.enrollment.version, state: 'conversation', reason: 'Individually approved requested phone follow-up' } });
+      // planCommand owns both enrollment/slot writes. Keep the original reader's
+      // remaining fences, never duplicate a Dynamo target with a Check and Put.
+      const items = [...read.proofItems, ...plan.items];
+      if (items.length > 100) throw new Error('transaction_capacity_exceeded');
+      return { items, payload: plan.payload, origin: read.origin };
+    }
+    return { items: read.items, payload: { commandId: input.commandId, version: null, enrollment: null, evidence: null }, origin: read.origin };
+  }
+  /** Final reservation is strictly read-only: it cannot silently hold a resumed campaign. */
+  async requestedFollowupChecks(raw: RequestedFollowupCampaignInput): Promise<{ items: TransactWriteItem[]; origin: RequestedFollowupCampaignOrigin }> {
+    const read = await this.readRequestedFollowup(requestedFollowupInputSchema.parse(raw));
+    if (read.enrollment.state === 'active') throw new Error('campaign_requested_followup_held');
+    return { items: read.items, origin: read.origin };
+  }
+  private async readRequestedFollowup(input: RequestedFollowupCampaignInput) {
+    const reservationKey = campaignReservationKey(input.accountId, input.originalActionId);
+    const reservationRow = await this.required(reservationKey); const reservation = campaignReservationSchema.parse(reservationRow.data);
+    const binding = reservation.input;
+    if (reservation.state !== 'sent' || binding.channel !== 'call' || binding.accountId !== input.accountId || binding.actionId !== input.originalActionId) throw new Error('campaign_requested_followup_origin');
+    const enrollmentKey = campaignEnrollmentKey(binding.enrollmentId); const enrollmentRow = await this.required(enrollmentKey); const enrollment = enrollmentSchema.parse(enrollmentRow.data);
+    if (enrollment.accountId !== input.accountId || enrollment.campaignVersionId !== reservation.campaignVersionId) throw new Error('campaign_requested_followup_origin');
+    if (!['active', 'conversation', 'completed'].includes(enrollment.state)) throw new Error('campaign_requested_followup_held');
+    const slotKey = campaignSlotKey(input.accountId); const slotRow = await this.required(slotKey); const slot = slotSchema.parse(slotRow.data);
+    if (slot.enrollmentId !== enrollment.id && !terminal(slot.state)) throw new Error('campaign_requested_followup_held');
+    if (enrollment.state !== 'completed' && slot.enrollmentId !== enrollment.id) throw new Error('campaign_slot_mismatch');
+    const evidenceKey = `CAMPAIGN_EVIDENCE#${keyPart(enrollment.id)}#${keyPart(input.originalOutcomeCommandId)}`;
+    const evidenceRow = await this.required(evidenceKey); const evidence = stepEvidenceSchema.parse(evidenceRow.data);
+    if (evidence.enrollmentId !== enrollment.id || evidence.accountId !== input.accountId || evidence.campaignVersionId !== reservation.campaignVersionId
+      || evidence.actionId !== input.originalActionId || evidence.stepId !== binding.stepId || evidence.routeId !== binding.selectedRouteId || evidence.routeVersion !== reservation.routeVersion
+      || evidence.executionContextId !== binding.contextRevision || evidence.contextRevision !== reservation.numericContextRevision
+      || evidence.channel !== 'call' || evidence.source !== 'human' || evidence.state !== 'human_reported_sent' || evidence.outcome !== 'connected'
+      || evidence.conflict || evidence.observedAt < enrollment.startedAt || evidence.observedAt > this.store.now()) throw new Error('campaign_requested_followup_origin');
+    const evidenceRows = await this.evidence(enrollment.id);
+    if (evidenceRows.some(e => e.conflict || e.outcome === 'opt_out')) throw new Error('campaign_requested_followup_held');
+    const approved = await this.approvedVersion(enrollment.campaignVersionId);
+    if (!approved.version.cohortAccountIds.includes(input.accountId) || approved.version.campaignId !== binding.campaignId || approved.version.version !== binding.campaignRevision
+      || !approved.version.steps.some(step => step.id === binding.stepId && step.channel === 'call')) throw new Error('campaign_requested_followup_origin');
+    const proofItems = [this.store.check(evidenceKey, evidenceRow.rev), this.store.check(campaignVersionKey(enrollment.campaignVersionId), approved.row.rev),
+      this.store.check(campaignApprovalKey(enrollment.campaignVersionId), approved.approvalRow.rev)];
+    let foundOriginal = false;
+    for (const step of approved.version.steps) {
+      const stepKey = `CAMPAIGN_STEP_RESERVATION#${keyPart(enrollment.id)}#${keyPart(step.id)}`;
+      const stepRow = await this.store.get<unknown>(stepKey);
+      if (!stepRow) { proofItems.push(this.store.absent(stepKey)); continue; }
+      const stepBinding = z.strictObject({ actionId: id }).parse(stepRow.data);
+      const actionKey = campaignReservationKey(input.accountId, stepBinding.actionId);
+      const actionRow = await this.required(actionKey); const action = campaignReservationSchema.parse(actionRow.data);
+      if (action.input.accountId !== input.accountId || action.input.enrollmentId !== enrollment.id || action.input.stepId !== step.id || action.input.actionId !== stepBinding.actionId
+        || action.input.channel !== step.channel || action.campaignVersionId !== enrollment.campaignVersionId) throw new Error('campaign_requested_followup_origin');
+      if (action.state === 'reserved' || action.state === 'unknown') throw new Error('campaign_requested_followup_unresolved');
+      if (step.id === binding.stepId) {
+        if (stepBinding.actionId !== input.originalActionId || actionRow.rev !== reservationRow.rev) throw new Error('campaign_requested_followup_origin');
+        foundOriginal = true;
+      }
+      proofItems.push(this.store.check(stepKey, stepRow.rev), this.store.check(actionKey, actionRow.rev));
+      if (proofItems.length > 98) throw new Error('transaction_capacity_exceeded');
+    }
+    if (!foundOriginal) throw new Error('campaign_requested_followup_origin');
+    const items = [...proofItems, this.store.check(enrollmentKey, enrollmentRow.rev), this.store.check(slotKey, slotRow.rev)];
+    if (items.length > 100) throw new Error('transaction_capacity_exceeded');
+    const origin: RequestedFollowupCampaignOrigin = { accountId: input.accountId, campaignVersionId: enrollment.campaignVersionId, enrollmentId: enrollment.id,
+      stepId: binding.stepId, actionId: input.originalActionId, originalOutcomeCommandId: input.originalOutcomeCommandId, routeId: evidence.routeId, routeVersion: evidence.routeVersion,
+      executionContextId: evidence.executionContextId, contextRevision: evidence.contextRevision };
+    return { enrollment, proofItems, items, origin };
   }
   /** Trusted C4 outcome composition. The caller commits these with the actual action outcome and outbox. */
   async prepareOutcomePlan(raw: { commandId: string; accountId: string; actionId: string; state: 'unknown' | 'provider_accepted' | 'cancelled'; observedAt: string; cancellationEvidence?: z.infer<typeof campaignCancellationEvidenceSchema> }) {
