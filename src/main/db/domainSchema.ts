@@ -697,3 +697,28 @@ export type DomainTables = {
   workspace_settings: WorkspaceSettingsTable;
   won_terms: WonTermsTable;
 };
+
+/** Schema20 account storage. JSON columns are parsed by strict account contracts. */
+export type PmAccountTables = {
+  pm_accounts: { id: string; name: string; domain: string | null; version: number; created_at: string; updated_at: string };
+  pm_account_commands: { command_id: string; account_id: string; fingerprint: string; result_json: string; account_version: number; created_at: string };
+  pm_account_sources: { id: string; account_id: string; source_key: string; url: string; fetched_at: string; sha256: string; excerpt: string; permitted: 1; admitted_at: string };
+  pm_account_claims: { id: string; account_id: string; claim_json: string; admitted_at: string };
+  pm_account_claim_evidence: { account_id: string; claim_id: string; source_id: string };
+  pm_account_routes: { id: string; account_id: string; version: number; person_id: string | null;
+    channel: 'phone' | 'email' | 'linkedin'; value: string; purpose: 'business' | 'tenant_emergency' | 'unknown';
+    verification: 'published' | 'confirmed' | 'unverified'; admitted_at: string };
+  pm_account_route_evidence: { account_id: string; route_id: string; route_version: number; source_id: string };
+  pm_account_links: { id: string; account_id: string; kind: 'organization' | 'person_role' | 'property';
+    organization_id: string | null; person_id: string | null; property_id: string | null; relationship: string;
+    role: string | null; authority: 'confirmed' | 'unconfirmed' | null; valid_from: string; valid_to: string | null; admitted_at: string };
+  pm_account_link_evidence: { account_id: string; link_id: string; source_id: string; purpose: 'relationship' | 'authority' };
+  pm_account_research_jobs: { id: string; account_id: string; command_id: string; fingerprint: string; limits_json: string;
+    state: 'queued' | 'running' | 'completed' | 'parked'; attempt: number; claim_token: string | null;
+    reserved_cost_micros: number; cost_micros: number | null; receipt_command_id: string | null; created_at: string; updated_at: string };
+  pm_account_outbound_intents: { command_id: string; account_id: string; route_id: string; route_version: number;
+    account_version: number; evidence_fingerprint: string; command_fingerprint: string; attempt_id: string;
+    channel: 'call' | 'email'; canonical_target: string; context_revision: string; created_at: string };
+  pm_account_outbound_results: { id: string; command_id: string; attempt_id: string; account_id: string;
+    kind: 'dispatch' | 'call_outcome' | 'reconciliation'; outcome: string; result_json: string; created_at: string };
+};

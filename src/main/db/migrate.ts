@@ -24,6 +24,7 @@ import { migration0016ContactPresentationEvidence } from './migrations/0016Conta
 import { migration0017DiscoveryAssessments } from './migrations/0017DiscoveryAssessments';
 import { migration0018PlaybookDueActions } from './migrations/0018PlaybookDueActions';
 import { migration0019EmailDrafts } from './migrations/0019EmailDrafts';
+import { migration0020PmAccounts } from './migrations/0020PmAccounts';
 import type { WorkspaceKey } from '../security/workspaceKeyTypes';
 
 export type MigrationResult = {
@@ -142,6 +143,7 @@ export const productionMigrations = [
   },
   { id: '0018PlaybookDueActions', schemaVersion: 18, migration: migration0018PlaybookDueActions },
   { id: '0019EmailDrafts', schemaVersion: 19, migration: migration0019EmailDrafts },
+  { id: '0020PmAccounts', schemaVersion: 20, migration: migration0020PmAccounts },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);
 

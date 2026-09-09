@@ -16,7 +16,7 @@ import { parseRecoveryKeyMaterial } from '../../src/main/security/recoveryKey';
 import type { WorkspaceKey } from '../../src/main/security/workspaceKeyTypes';
 
 export type FixtureProfile = 'bootstrap' | 'current' | 'historical' | 'through16';
-type FixtureSchema = 15 | 16 | 17 | 19;
+type FixtureSchema = 15 | 16 | 17 | 19 | 20;
 type BackupRow = { id: string; backup_basename: string; kind: string; schema_version: number; sha256: string; size_bytes: number; created_at: string; verified_at: string };
 type DrillRow = { performed_at: string; backup_receipt_id: string; backup_sha256: string };
 export type FixtureInspection = {
@@ -294,7 +294,7 @@ const ACTION_INDEPENDENT16_PROJECTIONS = Object.freeze([
 const metadataTables = new Set(['app_meta', 'kysely_migration', 'kysely_migration_lock', 'backup_receipts', 'restore_drill_receipts', 'recovery_readiness']);
 
 function inspectRows(raw: RawDatabase, expected: FixtureSchema, sourceSha256: string, through16: boolean): FixtureInspection {
-  if (expected !== 15 && expected !== 16 && expected !== 17 && expected !== 19) fail();
+  if (expected !== 15 && expected !== 16 && expected !== 17 && expected !== 19 && expected !== 20) fail();
   if (raw.pragma('integrity_check', { simple: true }) !== 'ok' || (raw.pragma('foreign_key_check') as unknown[]).length) fail();
   const meta = raw.prepare('SELECT singleton, schema_version FROM app_meta').all() as { singleton: number; schema_version: number }[];
   if (meta.length !== 1 || meta[0].singleton !== 1 || meta[0].schema_version !== expected) fail();
@@ -523,7 +523,7 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
         let database: AppDatabase | undefined;
         try {
           if (!same(envelopeCapture.identity, fs.fstatSync(envelope.descriptor)) || envelopeCapture.sha256 !== envelope.sha256) fail();
-          inspect('bootstrap', databasePath('bootstrap'), key, 19); // Proves supplied key matches bootstrap DB, NOT safeStorage.
+          inspect('bootstrap', databasePath('bootstrap'), key, 20); // Proves supplied key matches bootstrap DB, NOT safeStorage.
           envelope.assertUnchanged();
           makeDirectory(paths.historical); makeDirectory(join(paths.historical, 'backups'));
           fs.writeFileSync(envelopePath('historical'), envelope.bytes, { flag: 'wx', mode: 0o600 });
@@ -549,7 +549,7 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
         let database: AppDatabase | undefined;
         try {
           if (!same(envelopeCapture.identity, fs.fstatSync(envelope.descriptor)) || envelopeCapture.sha256 !== envelope.sha256) fail();
-          inspect('bootstrap', databasePath('bootstrap'), key, 19); // Proves supplied key matches bootstrap DB, NOT safeStorage.
+          inspect('bootstrap', databasePath('bootstrap'), key, 20); // Proves supplied key matches bootstrap DB, NOT safeStorage.
           envelope.assertUnchanged();
           makeDirectory(paths.through16); makeDirectory(join(paths.through16, 'backups'));
           fs.writeFileSync(envelopePath('through16'), envelope.bytes, { flag: 'wx', mode: 0o600 });
@@ -577,14 +577,14 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
     createManualBackup(material: string) {
       return withMaterial(material, async key => {
         const path = databasePath('current');
-        const before = inspect('current', path, key, 19);
+        const before = inspect('current', path, key, 20);
         if (before.aggregateCounts.people < 1) fail();
         const envelope = retain(envelopePath('current'), 64 * 1024);
         let database: AppDatabase | undefined; let service: BackupService | undefined;
         try {
           assertDirectory(join(paths.current, 'backups'));
           database = openDatabase({ path, key });
-          assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 19, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
+          assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 20, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
           const current = database;
           service = new BackupService({ databaseGate: { withDatabase: async operation => operation(current) },
             backupDirectory: join(paths.current, 'backups'), loadWorkspaceKey: async () => parseRecoveryKeyMaterial(material),
@@ -592,8 +592,8 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
           const backup = await service.createBackup('manual');
           await service.shutdown(); service = undefined;
           closeDatabase(database); database = undefined;
-          const inspection = inspect('current', backupPath('current', backup.basename), key, 19);
-          const after = inspect('current', path, key, 19);
+          const inspection = inspect('current', backupPath('current', backup.basename), key, 20);
+          const after = inspect('current', path, key, 20);
           if (inspection.sourceSha256 !== backup.sha256 || inspection.businessSha256 !== before.businessSha256
             || after.businessSha256 !== before.businessSha256
             || !after.backupReceipts.some(row => row.backup_basename === backup.basename && row.sha256 === backup.sha256 && row.size_bytes === backup.sizeBytes)) fail();

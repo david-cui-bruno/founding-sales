@@ -7,7 +7,7 @@ import { inspectDatabaseEncryption } from '../../db/databaseEncryption';
 import { DomainStartupFatalError } from './domainStartupTypes';
 
 export type DomainStorageReadiness = Readonly<{
-  schemaVersion: 19;
+  schemaVersion: 20;
   encrypted: true;
   cipherVersion: string;
   ftsAvailable: true;
@@ -24,7 +24,7 @@ export type DomainSchemaManifest = Readonly<{
 }>;
 
 /**
- * The canonical load-bearing schema-19 manifest. Reads the live catalog from
+ * The canonical load-bearing schema-20 manifest. Reads the live catalog from
  * sqlite_master with binary-name ordering; a missing, renamed, extra, or
  * malformed load-bearing object is fatal before composition.
  */
@@ -75,6 +75,18 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'person_contact_methods',
     'person_outbound_jurisdictions',
     'persons',
+    'pm_account_claim_evidence',
+    'pm_account_claims',
+    'pm_account_commands',
+    'pm_account_link_evidence',
+    'pm_account_links',
+    'pm_account_outbound_intents',
+    'pm_account_outbound_results',
+    'pm_account_research_jobs',
+    'pm_account_route_evidence',
+    'pm_account_routes',
+    'pm_account_sources',
+    'pm_accounts',
     'prioritization_evaluations',
     'prioritization_preference_events',
     'prioritization_rule_versions',
@@ -122,6 +134,8 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'one_primary_contact_per_kind',
     'opt_out_handles_lookup_idx',
     'person_contact_methods_lookup_idx',
+    'pm_account_command_once',
+    'pm_account_source_receipt_once',
     'prospect_priority_priority_idx',
     'source_events_person_observed_idx',
     'stage_events_cycle_effective_idx',
@@ -192,6 +206,26 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'immutable_won_terms_delete',
     'initialize_next_action_due',
     'initialize_unreviewed_action',
+    'pm_account_claim_evidence_no_delete',
+    'pm_account_claim_evidence_no_update',
+    'pm_account_claims_no_delete',
+    'pm_account_claims_no_update',
+    'pm_account_commands_no_delete',
+    'pm_account_commands_no_update',
+    'pm_account_link_evidence_no_delete',
+    'pm_account_link_evidence_no_update',
+    'pm_account_links_no_delete',
+    'pm_account_links_no_update',
+    'pm_account_outbound_intents_no_delete',
+    'pm_account_outbound_intents_no_update',
+    'pm_account_outbound_results_no_delete',
+    'pm_account_outbound_results_no_update',
+    'pm_account_route_evidence_no_delete',
+    'pm_account_route_evidence_no_update',
+    'pm_account_routes_no_delete',
+    'pm_account_routes_no_update',
+    'pm_account_sources_no_delete',
+    'pm_account_sources_no_update',
     'protect_activity_cadence_insert',
     'protect_activity_cadence_update',
     'protect_activity_transcript_attach',
@@ -256,8 +290,8 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'protect_trigger_event_receipt_proof',
     'synchronize_person_opt_out',
   ]),
-  // Generated from production migrations 0001 through 0019, including hardened 0015.
-  catalogSha256: 'a6108cfce2bc4242d0872e81cc2afc88634f6309c55605bd3fc995804fde9073',
+  // Generated from production migrations 0001 through 0020, including hardened 0015.
+  catalogSha256: 'eca0eb2a24dad403bd720853461426230e348476d091ab5d7d806669e49bb96d',
 });
 
 export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
@@ -280,6 +314,7 @@ export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
   '0017DiscoveryAssessments',
   '0018PlaybookDueActions',
   '0019EmailDrafts',
+  '0020PmAccounts',
 ] as const);
 
 const appMetaSchema = z.object({
@@ -293,7 +328,7 @@ const appMetaSchema = z.object({
 export function assertDomainStorageReady(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
-  expectedSchemaVersion: 19;
+  expectedSchemaVersion: 20;
   expectedManifest: DomainSchemaManifest;
 }): DomainStorageReadiness {
   const { database } = input;
@@ -316,7 +351,7 @@ export function assertDomainStorageReady(input: {
   const metadata = appMetaSchema.safeParse(metadataRow);
   if (!metadata.success || metadata.data.schema_version !== input.expectedSchemaVersion) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace schema version is not exactly 19.',
+      'schema_not_ready', 'The workspace schema version is not exactly 20.',
     );
   }
 
@@ -335,7 +370,7 @@ export function assertDomainStorageReady(input: {
     DOMAIN_MIGRATION_LEDGER,
   )) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace migration ledger is not exactly schema 19.',
+      'schema_not_ready', 'The workspace migration ledger is not exactly schema 20.',
     );
   }
 
@@ -410,7 +445,7 @@ export function assertDomainStorageReady(input: {
   }
 
   return Object.freeze({
-    schemaVersion: 19 as const,
+    schemaVersion: 20 as const,
     encrypted: true as const,
     cipherVersion: encryption.cipherVersion ?? 'unknown',
     ftsAvailable: true as const,

@@ -1,4 +1,4 @@
-import type { DomainTables } from './domainSchema';
+import type { DomainTables, PmAccountTables } from './domainSchema';
 
 export type AppMetaTable = {
   singleton: number;
@@ -32,4 +32,4 @@ export type FoundationTables = {
   jobs: JobsTable;
 };
 
-export type FoundationDatabase = FoundationTables & DomainTables;
+export type FoundationDatabase = FoundationTables & DomainTables & PmAccountTables;
