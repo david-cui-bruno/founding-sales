@@ -12,6 +12,7 @@ import { LinkedInRepository } from '../../linkedin/linkedInRepository';
 import { dailyAccountSchema, dailyAnswerSchema, dailyCampaignSchema, dailyMeetingSchema, dailyOwnerStatusSchema, dailyTransportSchema, type DailySnapshot } from '../../../shared/contracts/dailyContract';
 import { accountReplyDraftSchema, threadProjectionSchema } from '../../../shared/contracts/mailThreadContract';
 import { requestedFollowupDraftSchema, requestedApprovalStatusSchema } from '../../../shared/contracts/requestedFollowupContract';
+import { campaignVersionSchema } from '../../../shared/contracts/campaignContract';
 import { accountIdSchema } from '../../../shared/contracts/accountContract';
 import { buildDailySnapshot, type DailyProjectionInput } from './dailyProjection';
 
@@ -51,9 +52,13 @@ export class DailyReadService {
     const delegation = new DelegationRepository({ database, workspaceId, clock });
     const campaign = new CampaignRepository({ database, workspaceId, clock });
     const due = new Set<string>();
-    for (const row of rows('SELECT id,snapshot_hash FROM campaign_versions WHERE workspace_id=? ORDER BY campaign_id,version,id', workspaceId)) {
+    for (const row of rows('SELECT id,campaign_id,version,snapshot_json,snapshot_hash FROM campaign_versions WHERE workspace_id=? ORDER BY campaign_id,version,id', workspaceId)) {
       const value = parse(() => {
-        const version = campaign.getVersion(String(row.id));
+        const frozen = campaignVersionSchema.parse(JSON.parse(String(row.snapshot_json)));
+        if (frozen.id !== row.id || frozen.campaignId !== row.campaign_id || frozen.version !== row.version
+          || accountFingerprint(frozen) !== row.snapshot_hash) throw Error('campaign_frozen_identity_mismatch');
+        // getVersion applies the separately persisted approval timestamp only after frozen-row validation.
+        const version = campaign.getVersion(frozen.id);
         if (!version.cohortAccountIds.every(id => accountIds.has(id))) { issue('scope_mismatch'); return null; }
         const enrollments = rows('SELECT id FROM campaign_enrollments WHERE workspace_id=? AND campaign_version_id=? ORDER BY id', workspaceId, version.id).map(e => campaign.getEnrollment(String(e.id)));
         const caps = rows('SELECT campaign_version_id AS campaignVersionId,channel,revision,reserved,sent FROM campaign_caps WHERE workspace_id=? AND campaign_version_id=? ORDER BY channel', workspaceId, version.id);
@@ -97,9 +102,9 @@ export class DailyReadService {
         const approval = row.approval_json === null ? null : parse(() => {
           const saved = requestedApprovalStatusSchema.parse(JSON.parse(String(row.approval_json)));
           const command = delegation.getCommand(saved.receipt.commandId);
-          if (command?.kind !== 'approve-requested-followup' || command.accountId !== draft.accountId || accountFingerprint(command.payload.draft) !== accountFingerprint(draft)) throw Error('approval_draft_mismatch');
+          if (command?.kind !== 'approve-requested-followup' || command.workspaceId !== workspaceId || command.commandId !== saved.receipt.commandId || command.accountId !== draft.accountId || accountFingerprint(command.payload.draft) !== accountFingerprint(draft)) throw Error('approval_draft_mismatch');
           const status = delegation.requestedApprovalStatus(command.commandId);
-          if (!status) throw Error('approval_status_missing');
+          if (!status || status.receipt.commandId !== command.commandId) throw Error('approval_status_identity_mismatch');
           return status;
         });
         return dailyAnswerSchema.parse({ kind: 'requested_followup', accountId: row.account_id, draft,
@@ -140,7 +145,7 @@ export class DailyReadService {
       const value = parse(() => dailyTransportSchema.parse(row));
       if (value) { input.transport.push(value); if (value.state !== 'complete') issue('transport_incomplete'); }
     }
-    const research = raw.prepare("SELECT COUNT(*) AS count FROM pm_account_research_jobs j WHERE j.state='failed' AND EXISTS(SELECT 1 FROM pm_accounts a LEFT JOIN delegated_authorities d ON d.account_id=a.id WHERE a.id=j.account_id AND (d.workspace_id IS NULL OR d.workspace_id=?))").get(workspaceId) as { count: number };
+    const research = raw.prepare("SELECT COUNT(*) AS count FROM pm_account_research_jobs j WHERE j.state='parked' AND EXISTS(SELECT 1 FROM pm_accounts a LEFT JOIN delegated_authorities d ON d.account_id=a.id WHERE a.id=j.account_id AND (d.workspace_id IS NULL OR d.workspace_id=?))").get(workspaceId) as { count: number };
     if (research.count > 0) input.issues.push({ code: 'research_failed', count: research.count });
     return buildDailySnapshot(input);
   }
