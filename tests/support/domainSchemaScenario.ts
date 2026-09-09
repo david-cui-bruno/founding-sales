@@ -79,6 +79,35 @@ const requiredIndexes = [
 ] as const;
 
 const requiredTriggers = [
+  'discovery_receipts_ceiling_guard',
+  'discovery_reservations_budget_guard',
+  'delegated_action_outcomes_no_delete',
+  'delegated_action_outcomes_no_update',
+  'delegated_applied_events_no_delete',
+  'delegated_applied_events_no_update',
+  'delegated_approvals_no_delete',
+  'delegated_approvals_no_update',
+  'delegated_commands_no_delete',
+  'delegated_commands_no_update',
+  'delegated_manual_outcomes_no_delete',
+  'delegated_manual_outcomes_no_update',
+  'delegated_reconciliation_no_delete',
+  'delegated_reconciliation_no_update',
+  'discovery_approved_budgets_no_delete',
+  'discovery_approved_budgets_no_update',
+  'discovery_receipts_no_delete',
+  'discovery_receipts_no_update',
+  'discovery_reservations_no_delete',
+  'discovery_reservations_no_update',
+  'pm_account_route_policy_evidence_no_delete',
+  'pm_account_route_policy_evidence_no_update',
+  'pm_account_route_policy_receipts_no_delete',
+  'pm_account_route_policy_receipts_no_update',
+  'pm_account_suppression_tombstones_no_delete',
+  'pm_account_suppression_tombstones_no_update',
+  'pm_handle_suppression_tombstones_no_delete',
+  'pm_handle_suppression_tombstones_no_update',
+
   'pm_account_claim_evidence_no_delete',
   'pm_account_claim_evidence_no_update',
   'pm_account_claims_no_delete',
@@ -258,14 +287,14 @@ function runDatabaseScenario(
       assert.equal(assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 20,
+        expectedSchemaVersion: 21,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
-      }).schemaVersion, 20);
+      }).schemaVersion, 21);
       assert.deepEqual(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
         ).get(),
-        { schema_version: 20 },
+        { schema_version: 21 },
       );
       assert.deepEqual(raw.prepare<[], { name: string }>(`
         SELECT name FROM kysely_migration ORDER BY timestamp, name
@@ -286,7 +315,7 @@ function runDatabaseScenario(
         '0014OutboundJurisdictionClearance',
         '0015RecoveryMetadata',
         '0016ContactPresentationEvidence', '0017DiscoveryAssessments',
-        '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts',
+        '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork',
       ]);
       assert.deepEqual(
         raw.prepare('PRAGMA table_info(person_contact_methods)').all().slice(19),

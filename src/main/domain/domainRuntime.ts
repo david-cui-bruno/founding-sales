@@ -68,7 +68,7 @@ export class DomainRuntime {
     assertDomainStorageReady({
       database: this.database,
       expectedBusyTimeoutMs: 5000,
-      expectedSchemaVersion: 20,
+      expectedSchemaVersion: 21,
       expectedManifest: DOMAIN_SCHEMA_MANIFEST,
     });
 

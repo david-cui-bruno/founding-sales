@@ -42,7 +42,7 @@ test('empty healthy app opens Today and health stays callable through preload', 
     const health = await page.evaluate(() => window.callie.health.get());
     expect(health.databaseEncrypted).toBe(true);
     expect(health.domainReady).toBe(true);
-    expect(health.schemaVersion).toBe(20);
+    expect(health.schemaVersion).toBe(21);
   } finally {
     await workspace.close();
   }

@@ -722,3 +722,25 @@ export type PmAccountTables = {
   pm_account_outbound_results: { id: string; command_id: string; attempt_id: string; account_id: string;
     kind: 'dispatch' | 'call_outcome' | 'reconciliation'; outcome: string; result_json: string; created_at: string };
 };
+
+/** Schema21 local-only storage. JSON is admitted through strict feature schemas, never executed. */
+export type DelegationTables = {
+  meeting_first_call_settings: { singleton: number; new_call_slots: number | null; total_call_capacity: number | null; revision: number; updated_at: string };
+  delegated_authorities: { account_id: string; workspace_id: string; owner: string; generation: number; state: string; aggregate_version: number; updated_at: string; };
+  delegated_commands: { command_id: string; workspace_id: string; account_id: string; fingerprint: string; command_json: string; receipt_json: string; created_at: string; };
+  delegated_applied_events: { id: string; workspace_id: string; account_id: string; stream: string; aggregate_version: number; authority_generation: number; fingerprint: string; event_json: string; applied_at: string; };
+  delegated_event_cursors: { workspace_id: string; account_id: string; stream: string; aggregate_version: number; event_id: string; };
+  delegated_approvals: { id: string; workspace_id: string; account_id: string; route_id: string; route_version: number; permission_evidence_id: string; fingerprint: string; snapshot_json: string; approved_at: string; };
+  delegated_action_outcomes: { event_id: string; workspace_id: string; account_id: string; action_id: string; authority_generation: number; state: string; content_hash: string; target_hash: string; observed_at: string; evidence_ref: string; };
+  delegated_manual_outcomes: { event_id: string; workspace_id: string; account_id: string; action_id: string; channel: string; outcome_json: string; observed_at: string; };
+  delegated_threads: { workspace_id: string; account_id: string; id: string; provider: string; provider_thread_id: string; revision: number; context_revision: string; projection_json: string; updated_at: string; };
+  delegated_meetings: { workspace_id: string; account_id: string; id: string; provider: string; provider_event_id: string; revision: number; state: string; projection_json: string; updated_at: string; };
+  delegated_reconciliation: { id: string; workspace_id: string; account_id: string; action_id: string; event_id: string; evidence_ref: string; observed_at: string; };
+  pm_account_route_policy_receipts: { id: string; account_id: string; route_id: string; route_version: number; canonical_target: string; evidence_fingerprint: string; revision: number; evidence_ref: string; provenance: string; observed_at: string; admitted_at: string; effective_at: string; expires_at: string; policy_json: string; receipt_fingerprint: string; };
+  pm_account_route_policy_evidence: { account_id: string; route_id: string; route_version: number; receipt_id: string; source_id: string; };
+  pm_account_suppression_tombstones: { id: string; account_id: string; observed_at: string; source: string; evidence_ref: string; admitted_at: string; };
+  pm_handle_suppression_tombstones: { id: string; kind: string; normalized_value: string; observed_at: string; source: string; evidence_ref: string; admitted_at: string; };
+  discovery_approved_budgets: { workspace_id: string; budget_id: string; ceiling_micros: number; approved_at: string; evidence_ref: string; };
+  discovery_reservations: { workspace_id: string; budget_id: string; command_id: string; input_fingerprint: string; search_cost_micros: number; model_cost_micros: number; reserved_at: string; };
+  discovery_receipts: { workspace_id: string; budget_id: string; command_id: string; candidates_json: string; cost_micros: number | null; completed_at: string; };
+};

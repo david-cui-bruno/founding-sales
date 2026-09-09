@@ -37,7 +37,7 @@ const EXPECTED_MIGRATION_LEDGER = [
   '0013ContactComplianceEvidence',
   '0014OutboundJurisdictionClearance',
   '0015RecoveryMetadata',
-  '0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts',
+  '0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork',
 ] as const;
 
 describe('domain startup', () => {
@@ -73,15 +73,15 @@ describe('domain startup', () => {
   }
 
   describe('storage readiness gate', () => {
-    it('passes only the exact schema-20 manifest and ordered migration ledger', () => {
+    it('passes only the exact schema-21 manifest and ordered migration ledger', () => {
       const readiness = assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 20,
+        expectedSchemaVersion: 21,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       });
       expect(readiness).toMatchObject({
-        schemaVersion: 20, encrypted: true, ftsAvailable: true,
+        schemaVersion: 21, encrypted: true, ftsAvailable: true,
       });
       expect(DOMAIN_SCHEMA_MANIFEST.tables).toEqual(expect.arrayContaining([
         'contact_compliance_audit_events',
@@ -106,7 +106,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 20,
+        expectedSchemaVersion: 21,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       database.raw.exec('ROLLBACK');
@@ -115,7 +115,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 20,
+        expectedSchemaVersion: 21,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       database.raw.pragma('busy_timeout = 5000');
@@ -123,7 +123,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 20,
+        expectedSchemaVersion: 21,
         expectedManifest: {
           ...DOMAIN_SCHEMA_MANIFEST,
           tables: [...DOMAIN_SCHEMA_MANIFEST.tables, 'missing_table'],
@@ -180,7 +180,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 20,
+        expectedSchemaVersion: 21,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       const { runtime, clockReads, idsUsed } = buildRuntime();
@@ -205,7 +205,7 @@ describe('domain startup', () => {
         expect(caught).toBeInstanceOf(DomainStartupFatalError);
         expect(caught).toMatchObject({
           code: 'schema_not_ready',
-          message: 'The workspace schema version is not exactly 20.',
+          message: 'The workspace schema version is not exactly 21.',
         });
         expect(clockReads()).toBe(0);
         expect(idsUsed()).toBe(0);
@@ -318,7 +318,7 @@ describe('domain startup', () => {
           CREATE TABLE backup_receipts (id TEXT PRIMARY KEY)
         `),
       },
-    ])('rejects a $name schema-20 catalog before composition', ({ corrupt }) => {
+    ])('rejects a $name schema-21 catalog before composition', ({ corrupt }) => {
       corrupt(database);
       const { runtime, clockReads, idsUsed } = buildRuntime();
       expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);

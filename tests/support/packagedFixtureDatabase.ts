@@ -16,7 +16,7 @@ import { parseRecoveryKeyMaterial } from '../../src/main/security/recoveryKey';
 import type { WorkspaceKey } from '../../src/main/security/workspaceKeyTypes';
 
 export type FixtureProfile = 'bootstrap' | 'current' | 'historical' | 'through16';
-type FixtureSchema = 15 | 16 | 17 | 19 | 20;
+type FixtureSchema = 15 | 16 | 17 | 19 | 20 | 21;
 type BackupRow = { id: string; backup_basename: string; kind: string; schema_version: number; sha256: string; size_bytes: number; created_at: string; verified_at: string };
 type DrillRow = { performed_at: string; backup_receipt_id: string; backup_sha256: string };
 export type FixtureInspection = {
@@ -291,6 +291,96 @@ const ACTION_INDEPENDENT16_PROJECTIONS = Object.freeze([
     resurface_reason, created_at`],
 ] as const);
 
+// Independently pinned from actual pre-C1 schema20, never derived from current.
+const SCHEMA20_CATALOG = 'eca0eb2a24dad403bd720853461426230e348476d091ab5d7d806669e49bb96d';
+const SCHEMA20_TABLES = Object.freeze([
+    'activities',
+    'activity_amendments',
+    'app_meta',
+    'backup_receipts',
+    'cadence_action_components',
+    'cadence_definitions',
+    'cadence_enrollments',
+    'cadence_steps',
+    'cloud_entity_links',
+    'consent_policy_records',
+    'contact_compliance_audit_events',
+    'cycle_reactivation_receipts',
+    'discovery_assessments',
+    'discovery_current',
+    'discovery_overrides',
+    'discovery_preparations',
+    'discovery_scan_state',
+    'email_drafts',
+    'email_send_intents',
+    'email_send_results',
+    'foundation_fts_probe',
+    'foundation_fts_probe_config',
+    'foundation_fts_probe_content',
+    'foundation_fts_probe_data',
+    'foundation_fts_probe_docsize',
+    'foundation_fts_probe_idx',
+    'identity_repair_events',
+    'jobs',
+    'kysely_migration',
+    'kysely_migration_lock',
+    'learning_evidence',
+    'learnings',
+    'lifecycle_review_items',
+    'next_actions',
+    'opt_out_closure_receipt_handles',
+    'opt_out_closure_receipts',
+    'opt_out_handles',
+    'opt_out_tombstones',
+    'organization_aliases',
+    'organizations',
+    'outbound_jurisdiction_audit_events',
+    'outbound_jurisdiction_clearances',
+    'person_contact_methods',
+    'person_outbound_jurisdictions',
+    'persons',
+    'pm_account_claim_evidence',
+    'pm_account_claims',
+    'pm_account_commands',
+    'pm_account_link_evidence',
+    'pm_account_links',
+    'pm_account_outbound_intents',
+    'pm_account_outbound_results',
+    'pm_account_research_jobs',
+    'pm_account_route_evidence',
+    'pm_account_routes',
+    'pm_account_sources',
+    'pm_accounts',
+    'prioritization_evaluations',
+    'prioritization_preference_events',
+    'prioritization_rule_versions',
+    'priority_overrides',
+    'properties',
+    'prospect_organizations',
+    'prospect_priority_projection',
+    'prospect_properties',
+    'prospects',
+    'reactivation_rules',
+    'recovery_readiness',
+    'restore_drill_receipts',
+    'review_position',
+    'sales_cycle_close_readiness',
+    'sales_cycles',
+    'source_events',
+    'source_intake_receipts',
+    'sourcing_cursor',
+    'sourcing_enrichment_requests',
+    'sourcing_outcome_outbox',
+    'sourcing_processed_files',
+    'sourcing_suppression_outbox',
+    'stage_events',
+    'transcript_utterances',
+    'transcripts',
+    'trigger_events',
+    'won_terms',
+    'workspace_settings',
+  ]);
+
 // Independently pinned schema19 manifest from the pre-B1 catalog. Never derive from current.
 const SCHEMA19_CATALOG = 'a6108cfce2bc4242d0872e81cc2afc88634f6309c55605bd3fc995804fde9073';
 const SCHEMA19_TABLES = Object.freeze([
@@ -372,7 +462,7 @@ const SCHEMA19_TABLES = Object.freeze([
 const metadataTables = new Set(['app_meta', 'kysely_migration', 'kysely_migration_lock', 'backup_receipts', 'restore_drill_receipts', 'recovery_readiness']);
 
 function inspectRows(raw: RawDatabase, expected: FixtureSchema, sourceSha256: string, through16: boolean): FixtureInspection {
-  if (expected !== 15 && expected !== 16 && expected !== 17 && expected !== 19 && expected !== 20) fail();
+  if (expected !== 15 && expected !== 16 && expected !== 17 && expected !== 19 && expected !== 20 && expected !== 21) fail();
   if (raw.pragma('integrity_check', { simple: true }) !== 'ok' || (raw.pragma('foreign_key_check') as unknown[]).length) fail();
   const meta = raw.prepare('SELECT singleton, schema_version FROM app_meta').all() as { singleton: number; schema_version: number }[];
   if (meta.length !== 1 || meta[0].singleton !== 1 || meta[0].schema_version !== expected) fail();
@@ -384,11 +474,11 @@ function inspectRows(raw: RawDatabase, expected: FixtureSchema, sourceSha256: st
   const fingerprint = catalog.map(row => [row.type, row.name, (row.sql ?? '').replace(/\s+/g, ' ').trim()])
     .sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
   const catalogSha256 = hash(JSON.stringify(fingerprint));
-  if (catalogSha256 !== (expected === 15 ? SCHEMA15_CATALOG : expected === 16 ? SCHEMA16_CATALOG : expected === 17 ? SCHEMA17_CATALOG : expected === 19 ? SCHEMA19_CATALOG : DOMAIN_SCHEMA_MANIFEST.catalogSha256)) fail();
+  if (catalogSha256 !== (expected === 15 ? SCHEMA15_CATALOG : expected === 16 ? SCHEMA16_CATALOG : expected === 17 ? SCHEMA17_CATALOG : expected === 19 ? SCHEMA19_CATALOG : expected === 20 ? SCHEMA20_CATALOG : DOMAIN_SCHEMA_MANIFEST.catalogSha256)) fail();
   // Catalog-validated, fixed tables only. Canonical row multisets, no business rows
   // escape. This is a same-schema digest, not a cross-migration equivalence claim.
   const business = createHash('sha256');
-  for (const table of expected === 15 ? SCHEMA15_TABLES : expected === 16 ? SCHEMA16_TABLES : expected === 17 ? SCHEMA17_TABLES : expected === 19 ? SCHEMA19_TABLES : DOMAIN_SCHEMA_MANIFEST.tables) {
+  for (const table of expected === 15 ? SCHEMA15_TABLES : expected === 16 ? SCHEMA16_TABLES : expected === 17 ? SCHEMA17_TABLES : expected === 19 ? SCHEMA19_TABLES : expected === 20 ? SCHEMA20_TABLES : DOMAIN_SCHEMA_MANIFEST.tables) {
     if (metadataTables.has(table) || table.startsWith('foundation_fts_probe')) continue;
     const rows = raw.prepare(`SELECT * FROM "${table}"`).raw().all().map(row => JSON.stringify(row)).sort();
     business.update(JSON.stringify([table, rows]));
@@ -601,7 +691,7 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
         let database: AppDatabase | undefined;
         try {
           if (!same(envelopeCapture.identity, fs.fstatSync(envelope.descriptor)) || envelopeCapture.sha256 !== envelope.sha256) fail();
-          inspect('bootstrap', databasePath('bootstrap'), key, 20); // Proves supplied key matches bootstrap DB, NOT safeStorage.
+          inspect('bootstrap', databasePath('bootstrap'), key, 21); // Proves supplied key matches bootstrap DB, NOT safeStorage.
           envelope.assertUnchanged();
           makeDirectory(paths.historical); makeDirectory(join(paths.historical, 'backups'));
           fs.writeFileSync(envelopePath('historical'), envelope.bytes, { flag: 'wx', mode: 0o600 });
@@ -627,7 +717,7 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
         let database: AppDatabase | undefined;
         try {
           if (!same(envelopeCapture.identity, fs.fstatSync(envelope.descriptor)) || envelopeCapture.sha256 !== envelope.sha256) fail();
-          inspect('bootstrap', databasePath('bootstrap'), key, 20); // Proves supplied key matches bootstrap DB, NOT safeStorage.
+          inspect('bootstrap', databasePath('bootstrap'), key, 21); // Proves supplied key matches bootstrap DB, NOT safeStorage.
           envelope.assertUnchanged();
           makeDirectory(paths.through16); makeDirectory(join(paths.through16, 'backups'));
           fs.writeFileSync(envelopePath('through16'), envelope.bytes, { flag: 'wx', mode: 0o600 });
@@ -655,14 +745,14 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
     createManualBackup(material: string) {
       return withMaterial(material, async key => {
         const path = databasePath('current');
-        const before = inspect('current', path, key, 20);
+        const before = inspect('current', path, key, 21);
         if (before.aggregateCounts.people < 1) fail();
         const envelope = retain(envelopePath('current'), 64 * 1024);
         let database: AppDatabase | undefined; let service: BackupService | undefined;
         try {
           assertDirectory(join(paths.current, 'backups'));
           database = openDatabase({ path, key });
-          assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 20, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
+          assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 21, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
           const current = database;
           service = new BackupService({ databaseGate: { withDatabase: async operation => operation(current) },
             backupDirectory: join(paths.current, 'backups'), loadWorkspaceKey: async () => parseRecoveryKeyMaterial(material),
@@ -670,8 +760,8 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
           const backup = await service.createBackup('manual');
           await service.shutdown(); service = undefined;
           closeDatabase(database); database = undefined;
-          const inspection = inspect('current', backupPath('current', backup.basename), key, 20);
-          const after = inspect('current', path, key, 20);
+          const inspection = inspect('current', backupPath('current', backup.basename), key, 21);
+          const after = inspect('current', path, key, 21);
           if (inspection.sourceSha256 !== backup.sha256 || inspection.businessSha256 !== before.businessSha256
             || after.businessSha256 !== before.businessSha256
             || !after.backupReceipts.some(row => row.backup_basename === backup.basename && row.sha256 === backup.sha256 && row.size_bytes === backup.sizeBytes)) fail();

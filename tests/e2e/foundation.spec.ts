@@ -29,7 +29,7 @@ test('packaged diagnostics use callie protocol and an isolated native SQLite dat
 
     expect(firstLaunch).toEqual({
       databasePath: expectedDatabasePath,
-      schemaVersion: 20,
+      schemaVersion: 21,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,
@@ -115,7 +115,7 @@ test('packaged startup leaves an isolated database collision untouched and recov
 
     expect(health).toEqual({
       databasePath,
-      schemaVersion: 20,
+      schemaVersion: 21,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,

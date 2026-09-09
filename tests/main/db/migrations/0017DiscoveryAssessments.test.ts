@@ -61,7 +61,7 @@ describe('0017 discovery assessments migration', () => {
       .toEqual({ fromVersion: 16, toVersion: 17, appliedMigrationIds: ['0017DiscoveryAssessments'] });
     expect(f.database.raw.prepare('SELECT schema_version FROM app_meta WHERE singleton = 1').get()).toMatchObject({ schema_version: 17 });
     expect(snapshot()).toEqual(before);
-    expect(await migrate()).toEqual({ fromVersion: 17, toVersion: 20, appliedMigrationIds: ['0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts'] });
+    expect(await migrate()).toEqual({ fromVersion: 17, toVersion: 21, appliedMigrationIds: ['0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork'] });
     expect(f.database.raw.prepare('SELECT name, timestamp FROM kysely_migration WHERE name < ? ORDER BY name').all('0017')).toEqual(priorLedger);
     expect(f.database.raw.prepare('SELECT name FROM kysely_migration ORDER BY name').all()).toEqual(productionMigrations.map(x => ({ name: x.id })));
     for (const table of ['discovery_assessments', 'discovery_current', 'discovery_overrides', 'discovery_preparations', 'discovery_scan_state']) {
@@ -71,14 +71,14 @@ describe('0017 discovery assessments migration', () => {
       { name: 'type' }, { name: 'state' }, { name: 'created_at' }, { name: 'id' },
     ]);
     expect(assertDomainStorageReady({ database: f.database, expectedBusyTimeoutMs: 5000,
-      expectedSchemaVersion: 20, expectedManifest: DOMAIN_SCHEMA_MANIFEST }).schemaVersion).toBe(20);
+      expectedSchemaVersion: 21, expectedManifest: DOMAIN_SCHEMA_MANIFEST }).schemaVersion).toBe(21);
     const catalog = f.database.raw.prepare(`SELECT name, type, sql FROM sqlite_master
       WHERE type IN ('table','index','trigger') AND (type <> 'index' OR sql IS NOT NULL)
       ORDER BY name COLLATE BINARY`).all() as { name: string; type: string; sql: string | null }[];
     const hash = createHash('sha256').update(JSON.stringify(catalog.map(x => [x.type, x.name, (x.sql ?? '').replace(/\s+/g, ' ').trim()])
       .sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))).digest('hex');
     expect(hash).toBe(DOMAIN_SCHEMA_MANIFEST.catalogSha256);
-    expect(await migrate()).toEqual({ fromVersion: 20, toVersion: 20, appliedMigrationIds: [] });
+    expect(await migrate()).toEqual({ fromVersion: 21, toVersion: 21, appliedMigrationIds: [] });
   });
 
   it('guards assessment history, exact FK-valid owner tuples and pointer insert/update/version at SQL level', async () => {
