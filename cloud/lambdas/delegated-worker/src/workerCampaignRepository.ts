@@ -102,6 +102,30 @@ export class WorkerCampaignRepository {
       if (command.kind === 'campaign.state') {
         if (old.state === 'conversation' && command.state === 'active') throw new Error('conversation_requires_review');
         enrollment.state = command.state;
+        if (command.state === 'active' && ['paused', 'held'].includes(old.state)) {
+          const receipts = await this.store.list<unknown>(`CAMPAIGN_EVIDENCE#${keyPart(old.id)}#`);
+          const accepted = receipts.map(receipt => ({ ...receipt, evidence: stepEvidenceSchema.parse(receipt.stored.data) })).filter(({ evidence: e }) =>
+            e.enrollmentId === old.id && e.accountId === old.accountId && e.campaignVersionId === old.campaignVersionId && e.stepId === old.currentStepId
+            && e.routeId === old.selectedRouteId && e.routeVersion === old.selectedRouteVersion && e.contextRevision === old.contextRevision && e.executionContextId === old.executionContextId
+            && ['human_reported_sent', 'provider_accepted'].includes(e.state) && e.observedAt >= old.startedAt && e.observedAt <= this.store.now())
+            .sort((a, b) => b.evidence.observedAt.localeCompare(a.evidence.observedAt))[0];
+          if (accepted) {
+            const e = accepted.evidence; const reservationKey = campaignReservationKey(old.accountId, e.actionId);
+            const reservationRow = await this.required(reservationKey); const reservation = campaignReservationSchema.parse(reservationRow.data);
+            if (reservation.state !== 'sent' || reservation.campaignVersionId !== old.campaignVersionId || reservation.input.enrollmentId !== old.id
+              || reservation.input.accountId !== old.accountId || reservation.input.stepId !== e.stepId || reservation.input.selectedRouteId !== e.routeId
+              || reservation.routeVersion !== e.routeVersion || reservation.numericContextRevision !== e.contextRevision || reservation.input.contextRevision !== e.executionContextId
+              || reservation.input.channel !== e.channel) throw new Error('campaign_resume_evidence_mismatch');
+            const approved = await this.approvedVersion(old.campaignVersionId);
+            const index = approved.version.steps.findIndex(step => step.id === old.currentStepId);
+            if (index < 0) throw new Error('campaign_step_ineligible');
+            enrollment.currentStepId = approved.version.steps[index + 1]?.id ?? null;
+            if (!enrollment.currentStepId) enrollment.state = 'completed';
+            items.push(this.store.check(accepted.key, accepted.stored.rev), this.store.check(reservationKey, reservationRow.rev),
+              this.store.check(campaignVersionKey(old.campaignVersionId), approved.row.rev), this.store.check(campaignApprovalKey(old.campaignVersionId), approved.approvalRow.rev));
+          }
+        }
+
       } else if (command.kind === 'campaign.route') {
         if (command.contextRevision <= old.contextRevision) throw new Error('stale_context');
         const route = await this.accountRoute(input.accountId, command.selectedRouteId);

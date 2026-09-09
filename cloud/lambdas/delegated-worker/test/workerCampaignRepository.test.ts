@@ -27,21 +27,36 @@ async function fixture(multichannel = false) {
 }
 
 describe('real SDK campaign transactional plans', () => {
-  it('executes call then selects approved LinkedIn route without rebinding immutable predecessor', async () => {
+  it.each(['active', 'paused', 'unknown'] as const)('continues %s call through approved LinkedIn without per-action reapproval', async mode => {
     const f = await fixture(true);
     await f.apply({ kind: 'campaign.enroll', enrollmentId: id(8), campaignVersionId: f.version.id, selectedRouteId: id(6), executionContextId: 'call-context', contextRevision: 1 });
     const execution = new CampaignExecution(f.repo);
     const call = { workspaceId: id(1), accountId: id(4), campaignId: id(3), campaignRevision: 1, enrollmentId: id(8), enrollmentRevision: 1, stepId: id(5), actionId: id(10), channel: 'call' as const, authorityGeneration: 1, selectedRouteId: id(6), contextRevision: 'call-context', contentHash: 'c'.repeat(64), targetHash: 'd'.repeat(64) };
-    await f.repo.admitActionApproval({ ...call, approvedAt: now, expiresAt: '2026-09-09T12:05:00.000Z' });
     await f.store.transact((await execution.prepareManualChecks(call)).finalize());
     const evidence = { enrollmentId: id(8), accountId: id(4), campaignVersionId: id(2), stepId: id(5), routeId: id(6), routeVersion: 1, executionContextId: 'call-context', contextRevision: 1, observedAt: now, observation: 'no_reply' as const, source: 'human' as const, actionId: id(10), channel: 'call' as const, state: 'human_reported_sent' as const, outcome: 'no_answer' };
     await expect(f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 1, evidence: { ...evidence, enrollmentId: id(90) } })).rejects.toThrow('campaign_evidence_binding');
     await expect(f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 1, evidence: { ...evidence, routeId: id(51), executionContextId: 'linkedin-context' } })).rejects.toThrow('campaign_evidence_binding');
-    await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 1, evidence });
-    expect(f.dynamo.inspect(campaignEnrollmentKey(id(8)))).toMatchObject({ currentStepId: id(50), state: 'active' });
-    await f.apply({ kind: 'campaign.route', enrollmentId: id(8), expectedEnrollmentVersion: 2, selectedRouteId: id(51), executionContextId: 'linkedin-context', contextRevision: 2 });
-    const linkedin = { ...call, enrollmentRevision: 3, stepId: id(50), actionId: id(11), channel: 'linkedin' as const, selectedRouteId: id(51), contextRevision: 'linkedin-context' };
-    await f.repo.admitActionApproval({ ...linkedin, approvedAt: now, expiresAt: '2026-09-09T12:05:00.000Z' });
+    if (mode !== 'active') await f.apply({ kind: 'campaign.state', enrollmentId: id(8), expectedEnrollmentVersion: 1, state: 'paused', reason: 'explicit pause' });
+    await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: mode === 'active' ? 1 : 2, evidence: mode === 'unknown' ? { ...evidence, state: 'unknown', observation: 'unknown' } : evidence });
+    if (mode !== 'active') {
+      expect(f.dynamo.inspect(campaignEnrollmentKey(id(8)))).toMatchObject({ currentStepId: id(5), state: 'paused' });
+      await expect(execution.prepareManualChecks({ ...call, enrollmentRevision: 3 })).rejects.toThrow('campaign_binding_mismatch');
+      const resume = await f.repo.planCommand({ commandId: id(900), accountId: id(4), payload: { kind: 'campaign.state', enrollmentId: id(8), expectedEnrollmentVersion: 3, state: 'active', reason: 'explicit resume' } });
+      if (mode === 'paused') {
+        expect(resume.items.some(item => item.ConditionCheck?.Key?.sk?.S?.startsWith('CAMPAIGN_EVIDENCE#'))).toBe(true);
+        expect(resume.items.some(item => item.ConditionCheck?.Key?.sk?.S?.startsWith('CAMPAIGN_RESERVATION#'))).toBe(true);
+      }
+      expect(f.dynamo.inspect(campaignEnrollmentKey(id(8)))).toMatchObject({ currentStepId: id(5), state: 'paused' });
+      await f.store.transact(resume.items);
+    }
+    expect(f.dynamo.inspect(campaignEnrollmentKey(id(8)))).toMatchObject({ currentStepId: mode === 'unknown' ? id(5) : id(50), state: 'active' });
+    await f.apply({ kind: 'campaign.route', enrollmentId: id(8), expectedEnrollmentVersion: mode === 'active' ? 2 : 4, selectedRouteId: id(51), executionContextId: 'linkedin-context', contextRevision: 2 });
+    const linkedin = { ...call, enrollmentRevision: mode === 'active' ? 3 : 5, stepId: id(50), actionId: id(11), channel: 'linkedin' as const, selectedRouteId: id(51), contextRevision: 'linkedin-context' };
+    if (mode === 'unknown') {
+      await expect(execution.prepareManualChecks(linkedin)).rejects.toThrow('campaign_step_ineligible');
+      expect(f.dynamo.inspect(`CAMPAIGN_CAP#${id(2)}#call`)).toEqual({ reserved: 1, sent: 0 });
+      return;
+    }
     const plan = await execution.prepareManualChecks(linkedin);
     await f.store.transact(plan.finalize());
     expect(await f.repo.evidence(id(8))).toEqual([evidence]);
@@ -75,7 +90,6 @@ describe('real SDK campaign transactional plans', () => {
     await f.apply({ kind: 'campaign.enroll', enrollmentId: id(8), campaignVersionId: f.version.id, selectedRouteId: id(6), executionContextId: 'context-one', contextRevision: 1 });
     const execution = new CampaignExecution(f.repo);
     const binding = { workspaceId: id(1), accountId: id(4), campaignId: id(3), campaignRevision: 1, enrollmentId: id(8), enrollmentRevision: 1, stepId: id(5), actionId: id(10), channel: 'call' as const, authorityGeneration: 1, selectedRouteId: id(6), contextRevision: 'context-one', contentHash: 'c'.repeat(64), targetHash: 'd'.repeat(64) };
-    await f.repo.admitActionApproval({ ...binding, expiresAt: '2026-09-09T12:05:00.000Z', approvedAt: now });
     await f.store.transact((await execution.prepareManualChecks(binding)).finalize());
     const evidence = { enrollmentId: id(8), accountId: id(4), campaignVersionId: id(2), stepId: id(5), routeId: id(6), routeVersion: 1, executionContextId: 'context-one', contextRevision: 1, observedAt: now, observation: 'unknown' as const, source: 'human' as const, actionId: id(10), channel: 'call' as const, state: 'unknown' as const, outcome: 'unknown' };
     await f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 1, evidence });
@@ -92,7 +106,6 @@ describe('real SDK campaign transactional plans', () => {
     await expect(f.apply({ kind: 'campaign.outcome', enrollmentId: id(8), expectedEnrollmentVersion: 1, evidence })).rejects.toThrow('campaign_reservation_missing');
     const execution = new CampaignExecution(f.repo);
     const binding = { workspaceId: id(1), accountId: id(4), campaignId: id(3), campaignRevision: 1, enrollmentId: id(8), enrollmentRevision: 1, stepId: id(5), actionId: id(10), channel: 'call' as const, authorityGeneration: 1, selectedRouteId: id(6), contextRevision: 'context-one', contentHash: 'c'.repeat(64), targetHash: 'd'.repeat(64) };
-    await f.repo.admitActionApproval({ ...binding, expiresAt: '2026-09-09T12:05:00.000Z', approvedAt: now });
     await f.store.transact((await execution.prepareManualChecks(binding)).finalize());
     if (state === 'switched') await f.apply({ kind: 'campaign.route', enrollmentId: id(8), expectedEnrollmentVersion: 1, selectedRouteId: id(6), contextRevision: 2, executionContextId: 'context-two' });
     else if (state !== 'active') await f.apply({ kind: 'campaign.state', enrollmentId: id(8), expectedEnrollmentVersion: 1, state, reason: 'late interruption' });
@@ -109,20 +122,20 @@ describe('real SDK campaign transactional plans', () => {
     await f.apply({ kind: 'campaign.enroll', enrollmentId: id(8), campaignVersionId: f.version.id, selectedRouteId: id(6), executionContextId: 'context-one', contextRevision: 1 });
     const execution = new CampaignExecution(f.repo);
     const input = { workspaceId: id(1), accountId: id(4), campaignId: id(3), campaignRevision: 1, enrollmentId: id(8), enrollmentRevision: 1, stepId: id(5), actionId: id(10), channel: 'call' as const, authorityGeneration: 1, selectedRouteId: id(6), contextRevision: 'context-one', contentHash: 'c'.repeat(64), targetHash: 'd'.repeat(64) };
-    await expect(execution.prepareManualChecks(input)).rejects.toThrow('campaign_content_unapproved');
-    await f.repo.admitActionApproval({ ...input, expiresAt: '2026-09-09T12:05:00.000Z', approvedAt: now });
+    await expect(execution.prepareDispatchChecks(input)).rejects.toThrow('campaign_content_unapproved');
     const plan = await execution.prepareManualChecks(input);
     expect(plan.cap).toEqual({ campaignVersionId: id(2), channel: 'call', revision: 2, reserved: 1, sent: 0 });
     const keys = plan.finalize().map(item => item.Put?.Item?.sk?.S ?? item.ConditionCheck?.Key?.sk?.S);
     expect(keys).toContain(campaignEnrollmentKey(id(8)));
     expect(keys.some(key => key?.startsWith('CAMPAIGN_CAP#'))).toBe(true);
     expect(keys.some(key => key?.startsWith('AUTH#'))).toBe(false);
+    expect(keys.some(key => key?.startsWith('CAMPAIGN_ACTION_APPROVAL#'))).toBe(false);
     expect(new Set(keys).size).toBe(keys.length);
     await f.store.transact(plan.finalize());
     expect(f.dynamo.inspect(`CAMPAIGN_CAP#${id(2)}#call`)).toMatchObject({ reserved: 1, sent: 0 });
+    expect(f.dynamo.inspect(`CAMPAIGN_RESERVATION#${id(4)}#${id(10)}`)).toMatchObject({ input, routeVersion: 1, numericContextRevision: 1, state: 'reserved' });
     await expect(f.store.transact(plan.finalize())).rejects.toThrow();
     const second = { ...input, actionId: id(11) };
-    await f.repo.admitActionApproval({ ...second, expiresAt: '2026-09-09T12:05:00.000Z', approvedAt: now });
     await expect(execution.prepareManualChecks(second).then(next => f.store.transact(next.finalize()))).rejects.toThrow();
 
     const outcome = await f.repo.prepareOutcomePlan({ commandId: id(20), accountId: id(4), actionId: id(10), state: 'unknown', observedAt: now });
