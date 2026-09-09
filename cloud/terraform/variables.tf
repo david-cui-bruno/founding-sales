@@ -91,3 +91,15 @@ variable "delegated_google_client_id" {
   type        = string
   default     = ""
 }
+
+variable "delegated_research_enabled" {
+  description = "Opt-in access to the selected workspace research-model-credentials SecureString. Does not approve a budget, source configuration or model request. Secret values are provisioned separately, never stored in Terraform."
+  type        = bool
+  default     = false
+}
+
+variable "delegated_worker_schedule_enabled" {
+  description = "Opt-in dedicated five-minute delegated-worker schedule, requiring worker enablement and existing activation review. Never changes existing schedules. Runtime ownership, grants, budgets and exact approvals remain mandatory."
+  type        = bool
+  default     = false
+}

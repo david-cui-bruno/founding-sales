@@ -1,27 +1,35 @@
-# Disabled-by-default isolated worker. No EventBridge/schedule resource is created
-# here and no existing polling rule is changed. C2 has no mail dispatch route.
+# Disabled-by-default isolated worker. The optional dedicated five-minute rule
+# never changes existing sourcing/watchdog schedules or their master switch.
+# Enabling a schedule is not a grant, campaign approval or permission to send.
 #
 # Review envelope before activation: one low-volume workspace, <10k API calls/mo,
-# <=1 GiB table, 7-day bounded logs, 256 MiB/30s Lambda with concurrency 2, one KMS
-# key and two standard SecureStrings. Target incremental non-AI spend <=$20/mo.
-# This is a planning envelope, not a quote or hard billing cap. Validate regional
-# prices, existing spend and abuse exposure. Polling, models, research, cold-mail
-# transport and high-volume workloads are NOT included or silently activated.
+# <=1 GiB table, 7-day bounded logs, 256 MiB/60s Lambda with concurrency 2, one KMS
+# key, two Google SecureStrings and an optional separate research SecureString.
+# Five-minute scheduling is up to 8,928 ticks per 31-day month, even while the Mac
+# sleeps. Incremental non-AI target <=$20/mo is NOT a quote or hard billing cap.
+# Review regional Lambda/DynamoDB/log/KMS/EventBridge costs and abuse exposure.
+# Provider/model/research costs and cold-mail transport require separate review.
 #
-# SecureString values must be provisioned separately after approval, using this
-# KMS key: google-client-secret and token-encryption-key (32 random bytes/base64).
-# Terraform never reads/writes their values. Review rotation/recovery before use.
+# SecureString values must be provisioned separately after approval using this
+# KMS key: google-client-secret, token-encryption-key (32 random bytes/base64),
+# and, only if research is enabled, research-model-credentials (strict JSON with
+# apiKey/model). Terraform never reads/writes values. Review rotation/recovery.
 locals {
-  delegated_name             = "${var.name_prefix}-delegated-worker"
-  delegated_parameter_path   = "/delegated-worker/${var.delegated_workspace_id}"
-  delegated_secret_parameter = "${local.delegated_parameter_path}/google-client-secret"
-  delegated_key_parameter    = "${local.delegated_parameter_path}/token-encryption-key"
-  delegated_parameter_arns = [
+  delegated_name               = "${var.name_prefix}-delegated-worker"
+  delegated_parameter_path     = "/delegated-worker/${var.delegated_workspace_id}"
+  delegated_secret_parameter   = "${local.delegated_parameter_path}/google-client-secret"
+  delegated_key_parameter      = "${local.delegated_parameter_path}/token-encryption-key"
+  delegated_research_parameter = "${local.delegated_parameter_path}/research-model-credentials"
+  delegated_schedule_enabled   = var.delegated_worker_enabled && var.delegated_worker_schedule_enabled
+  delegated_parameter_arns = concat([
     "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${local.delegated_secret_parameter}",
     "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${local.delegated_key_parameter}"
-  ]
+    ], var.delegated_research_enabled ? [
+    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${local.delegated_research_parameter}"
+  ] : [])
   delegated_routes = toset([
-    "POST /pairing/redeem", "POST /pairing/revoke", "POST /commands", "POST /emergency",
+    "POST /pairing/redeem", "POST /pairing/revoke", "POST /commands", "POST /commands/reconcile", "POST /emergency",
+    "POST /readiness", "POST /research/configure",
     "GET /events", "POST /google/begin", "GET /google/status", "GET /google/disclosure",
     "POST /google/revoke", "GET /oauth/callback"
   ])
@@ -116,26 +124,29 @@ data "archive_file" "delegated_worker" {
 }
 
 resource "aws_lambda_function" "delegated_worker" {
-  count                          = var.delegated_worker_enabled ? 1 : 0
-  function_name                  = local.delegated_name
-  role                           = aws_iam_role.delegated_worker[0].arn
-  filename                       = data.archive_file.delegated_worker[0].output_path
-  source_code_hash               = data.archive_file.delegated_worker[0].output_base64sha256
-  runtime                        = "nodejs22.x"
-  handler                        = "index.handler"
-  architectures                  = ["arm64"]
-  memory_size                    = 256
-  timeout                        = 30
+  count            = var.delegated_worker_enabled ? 1 : 0
+  function_name    = local.delegated_name
+  role             = aws_iam_role.delegated_worker[0].arn
+  filename         = data.archive_file.delegated_worker[0].output_path
+  source_code_hash = data.archive_file.delegated_worker[0].output_base64sha256
+  runtime          = "nodejs22.x"
+  handler          = "index.handler"
+  architectures    = ["arm64"]
+  memory_size      = 256
+  # Source ticks abort after 45s; leave time for setup and durable settlement.
+  timeout                        = 60
   reserved_concurrent_executions = 2
   environment {
     variables = {
-      DELEGATED_WORKER_ENABLED          = "true"
-      DELEGATED_WORKER_TABLE            = aws_dynamodb_table.delegated_worker[0].name
-      DELEGATED_WORKSPACE_ID            = var.delegated_workspace_id
-      DELEGATED_WORKER_HOST             = replace(aws_apigatewayv2_api.delegated_worker[0].api_endpoint, "https://", "")
-      DELEGATED_GOOGLE_CLIENT_ID        = var.delegated_google_client_id
-      DELEGATED_GOOGLE_SECRET_PARAMETER = var.delegated_google_client_id == "" ? "" : local.delegated_secret_parameter
-      DELEGATED_GOOGLE_KEY_PARAMETER    = var.delegated_google_client_id == "" ? "" : local.delegated_key_parameter
+      DELEGATED_WORKER_ENABLED                = "true"
+      DELEGATED_WORKER_TABLE                  = aws_dynamodb_table.delegated_worker[0].name
+      DELEGATED_WORKSPACE_ID                  = var.delegated_workspace_id
+      DELEGATED_RESEARCH_CREDENTIAL_PARAMETER = var.delegated_research_enabled ? local.delegated_research_parameter : ""
+      DELEGATED_WORKER_SCHEDULE_ARN           = local.delegated_schedule_enabled ? aws_cloudwatch_event_rule.delegated_worker[0].arn : ""
+      DELEGATED_WORKER_HOST                   = replace(aws_apigatewayv2_api.delegated_worker[0].api_endpoint, "https://", "")
+      DELEGATED_GOOGLE_CLIENT_ID              = var.delegated_google_client_id
+      DELEGATED_GOOGLE_SECRET_PARAMETER       = var.delegated_google_client_id == "" ? "" : local.delegated_secret_parameter
+      DELEGATED_GOOGLE_KEY_PARAMETER          = var.delegated_google_client_id == "" ? "" : local.delegated_key_parameter
     }
   }
   depends_on = [aws_iam_role_policy.delegated_worker, aws_cloudwatch_log_group.delegated_worker]
@@ -191,4 +202,45 @@ resource "aws_lambda_permission" "delegated_worker_api" {
 output "delegated_worker_endpoint" {
   description = "HTTPS base only, never a bearer or unauthenticated stop URL."
   value       = var.delegated_worker_enabled ? aws_apigatewayv2_api.delegated_worker[0].api_endpoint : null
+}
+
+# No rule, target or invocation permission exists unless explicitly opted in.
+# Preserve the standard EventBridge event: handler checks its exact resources ARN.
+resource "aws_cloudwatch_event_rule" "delegated_worker" {
+  count               = local.delegated_schedule_enabled ? 1 : 0
+  name                = "${local.delegated_name}-schedule"
+  description         = "Approved delegated workspace source tick every five minutes"
+  schedule_expression = "rate(5 minutes)"
+  state               = "ENABLED"
+  tags                = { Component = "delegated-worker" }
+  lifecycle {
+    precondition {
+      condition     = var.delegated_worker_activation_reviewed
+      error_message = "Scheduled worker execution requires the existing explicit activation review."
+    }
+  }
+}
+
+resource "aws_cloudwatch_event_target" "delegated_worker" {
+  count     = local.delegated_schedule_enabled ? 1 : 0
+  rule      = aws_cloudwatch_event_rule.delegated_worker[0].name
+  target_id = "delegated-source-tick"
+  arn       = aws_lambda_function.delegated_worker[0].arn
+  # Disable stale EventBridge delivery retries; next tick reconciles durable work.
+  # Lambda asynchronous retries remain separate and require idempotent consumers.
+  retry_policy {
+    maximum_event_age_in_seconds = 60
+    maximum_retry_attempts       = 0
+  }
+  depends_on = [aws_lambda_permission.delegated_worker_schedule]
+}
+
+resource "aws_lambda_permission" "delegated_worker_schedule" {
+  count          = local.delegated_schedule_enabled ? 1 : 0
+  statement_id   = "DedicatedScheduleOnly"
+  action         = "lambda:InvokeFunction"
+  function_name  = aws_lambda_function.delegated_worker[0].function_name
+  principal      = "events.amazonaws.com"
+  source_arn     = aws_cloudwatch_event_rule.delegated_worker[0].arn
+  source_account = var.aws_account_id
 }
