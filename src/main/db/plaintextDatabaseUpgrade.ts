@@ -122,6 +122,26 @@ export async function prepareEncryptedDatabase(
   }
 
   if (candidates.canonical.kind === 'encrypted') {
+    if (
+      marker === undefined
+      && candidates.encrypting.kind === 'absent'
+      && candidates.recovery.kind === 'absent'
+      && !pathExistsWithoutFollowingLinks(`${databasePath}-journal`)
+    ) {
+      const canonicalMetadata = await lstatIfPresent(databasePath);
+      if (
+        canonicalMetadata === undefined
+        || !canonicalMetadata.isFile()
+        || canonicalMetadata.isSymbolicLink()
+      ) {
+        throw new Error('Encrypted canonical path is no longer a regular file.');
+      }
+      // Ordinary startup opens a live database, not a standalone copy. Keep
+      // regular WAL/SHM (including those created by readonly inspection) intact.
+      // This observation is not a lease: normal open/migration/readiness must
+      // still admit the current database, including intervening supported writes.
+      return;
+    }
     const stabilized = await stabilizeEncryptedCandidate(
       databasePath,
       key.bytes,
