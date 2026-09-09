@@ -751,7 +751,7 @@
   border-radius: 50%;
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 14px;
+  font-size: var(--text-base);
   font-weight: 600;
 }
 .native-desk__identity h2 { font-size: var(--text-native-identity); font-weight: 720; letter-spacing: -.65px; line-height: 1.25; margin: 0 0 3px; }
