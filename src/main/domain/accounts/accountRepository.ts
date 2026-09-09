@@ -1,3 +1,4 @@
+import { localCompanyInputSchema, localCompanyCandidateSignals, localCompanyReviewSchema, type LocalCompanyInput, type LocalCompanyCreateRequest, type LocalCompanyReview, type LocalCompanyCreateResult, type LocalCompanyCreateStatus } from '../../../shared/contracts/localCompanyIntakeContract';
 import { z } from 'zod';
 import { researchLimitsSchema, type AccountResearchStore, type ResearchJob, type ResearchClaim } from '../../research/companyResearchTypes';
 import type { AppDatabase } from '../../db/database';
@@ -48,11 +49,46 @@ export class AccountRepository implements AccountResearchStore {
     return this.atomic(() => {
       const replay = this.replay(parsed.commandId, fingerprint);
       if (replay !== undefined) return accountSchema.parse(replay);
-      const at = this.now();
-      const account = accountSchema.parse({ id: this.deps.ids.next(), name: parsed.name, domain: parsed.domain, version: 1 });
-      this.raw.prepare('INSERT INTO pm_accounts(id,name,domain,version,created_at,updated_at) VALUES(?,?,?,1,?,?)').run(account.id, account.name, account.domain, at, at);
-      this.record(parsed.commandId, account.id, fingerprint, account, 1, at);
-      return account;
+      return this.createInTransaction(parsed, fingerprint);
+    });
+  }
+  private createInTransaction(parsed: LocalCompanyCreateRequest, fingerprint: string): Account {
+    const at = this.now();
+    const account = accountSchema.parse({ id: this.deps.ids.next(), name: parsed.name, domain: parsed.domain, version: 1 });
+    this.raw.prepare('INSERT INTO pm_accounts(id,name,domain,version,created_at,updated_at) VALUES(?,?,?,1,?,?)').run(account.id, account.name, account.domain, at, at);
+    this.record(parsed.commandId, account.id, fingerprint, account, 1, at);
+    return account;
+  }
+  reviewLocalCompany(input: LocalCompanyInput): LocalCompanyReview {
+    const parsed = localCompanyInputSchema.parse(input);
+    // SQLite lower is ASCII-only. Explicit trim characters mirror ECMAScript trim,
+    // including historical rows not written through today's canonical schema.
+    const whitespace = '\u0009\u000a\u000b\u000c\u000d \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff';
+    const name = parsed.name.replace(/[A-Z]/g, letter => letter.toLowerCase());
+    const rows = this.raw.prepare('SELECT id,name,domain,version FROM pm_accounts WHERE lower(trim(name,?))=? OR (? IS NOT NULL AND domain=?) ORDER BY id LIMIT 51')
+      .all(whitespace, name, parsed.domain, parsed.domain);
+    const candidates = rows.map(row => { const account = accountSchema.parse(row); return { account, signals: localCompanyCandidateSignals(parsed, account) }; });
+    return localCompanyReviewSchema.parse({ scope: 'local_database', input: parsed, candidates: candidates.slice(0, 50), complete: candidates.length <= 50 });
+  }
+  getLocalCompanyCreateStatus(input: LocalCompanyCreateRequest): LocalCompanyCreateStatus {
+    const parsed = accountCreateSchema.parse(input);
+    const previous = this.raw.prepare('SELECT account_id,account_version,fingerprint,result_json FROM pm_account_commands WHERE command_id=?').get(parsed.commandId) as (ReceiptRow & { account_id: string; account_version: number }) | undefined;
+    if (!previous) return { status: 'not_recorded', commandId: parsed.commandId };
+    if (previous.fingerprint !== accountFingerprint({ kind: 'create', ...parsed })) return { status: 'command_conflict', commandId: parsed.commandId };
+    const account = accountSchema.parse(JSON.parse(previous.result_json));
+    if (account.id !== previous.account_id || previous.account_version !== 1 || account.version !== 1 || account.name !== parsed.name || account.domain !== parsed.domain) throw new Error('Invalid original company creation receipt');
+    return { status: 'saved', commandId: parsed.commandId, account };
+  }
+  createLocalCompany(input: LocalCompanyCreateRequest): LocalCompanyCreateResult {
+    const parsed = accountCreateSchema.parse(input);
+    return this.atomic(() => {
+      const previous = this.getLocalCompanyCreateStatus(parsed);
+      if (previous.status === 'saved') return { ...previous, replayed: true };
+      if (previous.status === 'command_conflict') return previous;
+      const review = this.reviewLocalCompany({ name: parsed.name, domain: parsed.domain });
+      if (!review.complete || review.candidates.length > 0) return { status: 'needs_review', commandId: parsed.commandId, review };
+      const account = this.createInTransaction(parsed, accountFingerprint({ kind: 'create', ...parsed }));
+      return { status: 'saved', commandId: parsed.commandId, account, replayed: false };
     });
   }
   private mutate(command: Command, kind: string, input: unknown, apply: (at: string) => void, researchClaim?: ResearchClaim): AccountEvidenceReceipt {

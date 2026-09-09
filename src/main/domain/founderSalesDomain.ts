@@ -1,3 +1,5 @@
+import { LocalCompanyIntake } from './accounts/localCompanyIntake';
+import type { LocalCompanyInput, LocalCompanyCreateRequest } from '../../shared/contracts/localCompanyIntakeContract';
 import { localCommitmentsSnapshotSchema, type LocalCommitmentsSnapshot } from '../../shared/contracts/localWorkspaceContract';
 import { LegacyWorkflowTransition, type WorkflowTransitionCommand } from './workspace/legacyWorkflowTransition';
 import { countMilestones, readAcquisitionFacts } from './campaign/acquisitionReport';
@@ -423,6 +425,16 @@ export class FounderSalesDomain implements OutboundDomainPort {
     this.clock = input.clock;
     this.ids = input.ids;
     this.configuredTimezone = input.timezone;
+  }
+
+  reviewLocalCompany(input: LocalCompanyInput) {
+    return new LocalCompanyIntake({ database: this.database, clock: this.clock, ids: this.ids }).review(input);
+  }
+  createLocalCompany(input: LocalCompanyCreateRequest) {
+    return new LocalCompanyIntake({ database: this.database, clock: this.clock, ids: this.ids }).create(input);
+  }
+  getLocalCompanyCreateStatus(input: LocalCompanyCreateRequest) {
+    return new LocalCompanyIntake({ database: this.database, clock: this.clock, ids: this.ids }).status(input);
   }
 
   transitionWorkflow(command: WorkflowTransitionCommand) {

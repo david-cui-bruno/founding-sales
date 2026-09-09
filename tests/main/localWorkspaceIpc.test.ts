@@ -11,12 +11,13 @@ const feed: LocalCommitmentsSnapshot = { scope: 'local_database' as const, gener
 const command = { commandId: 'cmd', manifestId: 'manifest', expectedMode: 'legacy' as const };
 const receipt: LocalWorkflowReceipt = { commandId: 'cmd', manifestId: 'manifest', mode: 'meeting_first' as const, revision: 1, occurredAt: snapshot.generatedAt, cancelledActionIds: [], stoppedEnrollmentIds: [], preservedActionIds: [], parkedPersonIds: [], callbackEvidenceIds: [], unknownDraftIds: [], parkedReviewActions: [], parkedActions: [] };
 const trusted = { senderFrame: { url: 'callie://app/index.html' } };
-const provider = { get: async () => snapshot, getCommitments: async () => feed, transition: async () => receipt };
+const unavailableCompany = async (): Promise<never> => { throw new Error('Company fixture unavailable'); };
+const provider = { get: async () => snapshot, getCommitments: async () => feed, transition: async () => receipt, reviewCompany: unavailableCompany, createCompany: unavailableCompany, getCompanyCreateStatus: unavailableCompany };
 beforeEach(() => vi.clearAllMocks());
 describe('local workspace bridge', () => {
   it('roundtrips the frozen API and rejects arity, caller scope, and untrusted senders', async () => {
     const remove = registerLocalWorkspaceIpc(provider);
-    expect(electron.handle).toHaveBeenCalledTimes(3);
+    expect(electron.handle).toHaveBeenCalledTimes(6);
     const api = createLocalWorkspaceApi(createIpcClient({ invoke: async (channel, ...args) => registeredIpcHandler(electron.handle, channel)(trusted, ...args) }));
     expect(await api.get()).toEqual(snapshot); expect(await api.getCommitments()).toEqual(feed); expect(await api.transition(command)).toEqual(receipt);
     for (const channel of ['local-workspace:get', 'local-workspace:get-commitments']) {
@@ -26,7 +27,7 @@ describe('local workspace bridge', () => {
     }
     const transition = registeredIpcHandler(electron.handle, 'local-workspace:transition');
     for (const args of [[], [command, command], [{ ...command, workspaceId: 'invented' }], [{ ...command, expectedMode: 'meeting_first' }]]) await expect(transition(trusted, ...args)).rejects.toThrow();
-    remove(); remove(); expect(electron.removeHandler.mock.calls.map(c => c[0])).toEqual(['local-workspace:transition', 'local-workspace:get-commitments', 'local-workspace:get']);
+    remove(); remove(); expect(electron.removeHandler.mock.calls.map(c => c[0])).toEqual(['local-workspace:company-create-status', 'local-workspace:create-company', 'local-workspace:review-company', 'local-workspace:transition', 'local-workspace:get-commitments', 'local-workspace:get']);
   });
   it('rolls partial registration back and validates inbound responses', async () => {
     electron.handle.mockImplementationOnce(() => undefined).mockImplementationOnce(() => { throw new Error('registration'); });
@@ -64,6 +65,7 @@ function lifetimeFixture(load?: () => Promise<void>) {
   const key = createTestWorkspaceKey();
   let database: AppDatabase | undefined;
   let opens = 0;
+  let domainRuntime: DomainRuntime | undefined;
   const runtime = new FoundationRuntime({
     appVersion: '1.0.0', databasePath: temp.path, databaseExists: false,
     backupDirectory: join(dirname(temp.path), 'backups'),
@@ -73,13 +75,13 @@ function lifetimeFixture(load?: () => Promise<void>) {
     prepareEncryptedDatabase: async () => undefined,
     openDatabase: options => { opens++; database = openDatabase(options); return database; },
     migrateToLatest,
-    createDomainRuntime: db => new DomainRuntime({ database: db,
+    createDomainRuntime: db => domainRuntime = new DomainRuntime({ database: db,
       clock: { now: () => '2026-09-09T12:00:00.000Z' }, ids: { next: () => crypto.randomUUID() } }),
     createHealthService: options => new HealthService(options),
     closeDatabase,
   });
   return { runtime, provider: createLocalWorkspaceProvider(runtime), opens: () => opens,
-    database: () => database,
+    database: () => database, stopDomain: () => domainRuntime?.shutdown(),
     async close() { await runtime.shutdown(); key.bytes.fill(0); temp.cleanup(); } };
 }
 
@@ -96,6 +98,10 @@ it('local provider refuses reads after the real runtime shuts down instead of re
     await expect(f.provider.get()).rejects.toThrow();
     await expect(f.provider.getCommitments()).rejects.toThrow();
     await expect(f.provider.transition(command)).rejects.toThrow();
+    const company = { commandId: crypto.randomUUID(), name: 'Unavailable', domain: null as string | null };
+    await expect(f.provider.reviewCompany({ name: company.name, domain: null })).rejects.toThrow();
+    await expect(f.provider.createCompany(company)).rejects.toThrow();
+    await expect(f.provider.getCompanyCreateStatus(company)).rejects.toThrow();
     expect(f.opens()).toBe(1);
   } finally { await f.close(); }
 });
@@ -126,4 +132,36 @@ it('shutdown during local initialization prevents a delayed key result from open
     expect(f.opens()).toBe(0);
     await expect(f.provider.get()).rejects.toThrow();
   } finally { release(); await f.close(); }
+});
+
+it('new company methods use domain readiness and return real persisted original receipts', async () => {
+  const f = lifetimeFixture();
+  try {
+    const input = { commandId: crypto.randomUUID(), name: 'Local Manual Company', domain: null as string | null };
+    expect(await f.provider.reviewCompany({ name: input.name, domain: null })).toEqual({ scope: 'local_database', input: { name: input.name, domain: null }, candidates: [], complete: true });
+    const saved = await f.provider.createCompany(input);
+    expect(saved.status).toBe('saved');
+    if (saved.status !== 'saved') throw new Error('Expected saved company');
+    expect(await f.provider.getCompanyCreateStatus(input)).toEqual({ status: 'saved', commandId: input.commandId, account: saved.account });
+    expect(await f.provider.createCompany(input)).toEqual({ ...saved, replayed: true });
+    expect((await f.provider.createCompany({ ...input, commandId: crypto.randomUUID() })).status).toBe('needs_review');
+    const snapshot = await f.provider.get();
+    expect(snapshot.accounts.state).toBe('available');
+    expect(snapshot.accounts.snapshots).toEqual(expect.arrayContaining([expect.objectContaining({ account: expect.objectContaining({ id: saved.account.id }) })]));
+  } finally { await f.close(); }
+});
+
+it('company operations reject domain unavailability even when foundation-only local reads remain available', async () => {
+  const f = lifetimeFixture();
+  try {
+    await f.provider.get();
+    f.stopDomain();
+    expect((await f.provider.get()).scope).toBe('local_database');
+    const input = { commandId: crypto.randomUUID(), name: 'Blocked Company', domain: null as string | null };
+    await expect(f.provider.reviewCompany({ name: input.name, domain: null })).rejects.toThrow();
+    await expect(f.provider.createCompany(input)).rejects.toThrow();
+    await expect(f.provider.getCompanyCreateStatus(input)).rejects.toThrow();
+    expect(f.database()!.raw.prepare('SELECT * FROM pm_accounts').all()).toEqual([]);
+    expect(f.database()!.raw.prepare('SELECT * FROM pm_account_commands').all()).toEqual([]);
+  } finally { await f.close(); }
 });

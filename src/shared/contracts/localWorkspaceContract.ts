@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { LocalCompanyInput, LocalCompanyCreateRequest, LocalCompanyReview, LocalCompanyCreateResult, LocalCompanyCreateStatus } from './localCompanyIntakeContract';
 import { accountInstantSchema } from './accountContract';
 import { dailyAccountSchema } from './dailyContract';
 import { todayItemSchema } from './todayContract';
@@ -32,6 +33,9 @@ export type LocalWorkflowReceipt = z.infer<typeof localWorkflowReceiptSchema>;
 export type LocalWorkspaceSnapshot = z.infer<typeof localWorkspaceSnapshotSchema>;
 export type LocalCommitmentsSnapshot = z.infer<typeof localCommitmentsSnapshotSchema>;
 export interface LocalWorkspaceApi {
+  reviewCompany(input: LocalCompanyInput): Promise<LocalCompanyReview>;
+  createCompany(input: LocalCompanyCreateRequest): Promise<LocalCompanyCreateResult>;
+  getCompanyCreateStatus(input: LocalCompanyCreateRequest): Promise<LocalCompanyCreateStatus>;
   get(): Promise<LocalWorkspaceSnapshot>;
   getCommitments(): Promise<LocalCommitmentsSnapshot>;
   transition(command: LocalWorkflowTransition): Promise<LocalWorkflowReceipt>;
