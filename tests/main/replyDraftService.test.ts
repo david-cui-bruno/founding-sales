@@ -85,3 +85,9 @@ it('bounds selected model evidence independently of retained MIME bodies', async
   expect(inputText.length).toBeLessThan(5000);
   expect(inputText).toContain('truncated');
 });
+
+it.each(['Tuesday works.\n> Reply unsubscribe to stop emails.', 'Tuesday works.\nOn Monday, founder wrote:\nPlease stop emailing me', 'Tuesday works.\n-----Original Message-----\nUnsubscribe', 'What does unsubscribe mean?', 'Reply unsubscribe to stop emails.'])('does not suppress based on quoted or uncertain optout: %s', text => {
+  const result = classifyReply({ ...message, bodyParts: [{ mimeType: 'text/plain', text, truncated: false }] });
+  expect(result.kind).not.toBe('opt_out');
+  expect(result.requiresApproval).toBe(true);
+});

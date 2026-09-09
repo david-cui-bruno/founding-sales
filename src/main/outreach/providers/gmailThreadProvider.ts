@@ -26,18 +26,29 @@ function metadata(raw: unknown): MailMessage {
     from: addresses(header('from')), to: addresses(header('to')), cc: addresses(header('cc')),
     date: new Date(Number(value.internalDate)).toISOString(), subject: header('subject'), bodyParts: [] });
 }
+/** Keep quoted evidence visibly attributed after removing HTML markup. */
+function inertHtml(html: string): string {
+  let depth = 0; const chunks: string[] = [];
+  for (const token of html.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '').split(/(<[^>]*>)/g)) {
+    if (/^<blockquote\b/i.test(token)) { depth++; chunks.push('\n'); }
+    else if (/^<\/blockquote\s*>/i.test(token)) { depth = Math.max(0, depth - 1); chunks.push('\n'); }
+    else if (/^</.test(token)) chunks.push('\n');
+    else chunks.push(token.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').split(/\r?\n/).map(line => depth ? `> ${line}` : line).join('\n'));
+  }
+  return chunks.join('');
+}
 function selectedParts(part: Part, budget: number): MailMessage['bodyParts'] {
   const parts: MailMessage['bodyParts'] = []; let nodes = 0; let remaining = budget;
   const walk = (node: Part, depth: number) => {
     if (++nodes > 100 || depth > 10) throw new Error('mime_capacity_exceeded');
-    if (node.filename) return;
+    if (node.filename || /^message\//i.test(node.mimeType ?? '') || (node.headers ?? []).some(h => h.name.toLowerCase() === 'content-disposition' && h.value.split(';')[0]?.trim().toLowerCase() !== 'inline')) return;
     if ((node.mimeType === 'text/plain' || node.mimeType === 'text/html') && node.body?.data && parts.length < 4) {
       if (!/^[A-Za-z0-9_-]*={0,2}$/.test(node.body.data)) throw new Error('invalid_mail_encoding');
       const bytes = Buffer.from(node.body.data, 'base64url');
       if (bytes.toString('base64url') !== node.body.data.replace(/=+$/, '')) throw new Error('invalid_mail_encoding');
       let text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
       // HTML is converted to inert evidence, never rendered or remotely loaded.
-      if (node.mimeType === 'text/html') text = text.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
+      if (node.mimeType === 'text/html') text = inertHtml(text);
       const bounded: string[] = []; let used = 0;
       for (const char of text) { const size = Buffer.byteLength(char); if (used + size > remaining) break; bounded.push(char); used += size; }
       const selected = bounded.join(''); remaining -= used;

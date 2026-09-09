@@ -115,3 +115,23 @@ it('SQL poll completeness is durable and newer failure cannot reuse prior ready 
     expect(() => repo.applyPage({ ...page(account.id), threads: [] }, page(account.id).nextCursor, 'attempt1')).toThrow('stale_poll_attempt');
   } finally { f.close(); }
 });
+
+it('does not persist suppression from a quoted optout footer across encrypted SQL restart', async () => {
+  const f = await createPmFixture();
+  try {
+    const account = f.repo.create({ commandId: randomUUID(), name: 'Fictional PM', domain: null });
+    new DelegationRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } }).initializeLocalAuthority(account.id);
+    const repo = new SqlThreadIntakeRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } });
+    const incoming = page(account.id); incoming.threads[0]!.messages[0]!.bodyParts[0]!.text = 'Tuesday works.\n> Reply unsubscribe to stop emails.';
+    expect(repo.applyPage(incoming, null)[0]?.signals[0]?.kind).toBe('scheduling');
+    expect(repo.isSuppressed(account.id)).toBe(false);
+    expect(f.db.raw.prepare('SELECT count(*) AS n FROM pm_account_suppression_tombstones').get()).toEqual({ n: 0 });
+    closeDatabase(f.db); const reopened = openDatabase({ path: f.db.path, key: createTestWorkspaceKey() });
+    try {
+      const restored = new SqlThreadIntakeRepository({ database: reopened, workspaceId: 'ws', clock: { now: () => PM_NOW } });
+      expect(restored.isSuppressed(account.id)).toBe(false);
+      expect(restored.getThread(account.id, 't1')?.thread.messages[0]?.bodyParts[0]?.text).toContain('> Reply unsubscribe');
+      expect(restored.checkpoint(account.id, 'sub1')).toEqual(incoming.nextCursor);
+    } finally { closeDatabase(reopened); }
+  } finally { f.close(); }
+});

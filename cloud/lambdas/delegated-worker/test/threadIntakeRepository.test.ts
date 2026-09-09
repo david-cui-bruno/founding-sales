@@ -108,3 +108,15 @@ it('durable poll attempt invalidates previous success before authorization and f
   expect((await store.cursorState('a1', 'sub1'))?.data.poll?.status).toBe('failed');
   await expect(store.applyPage({ ...p, threads: [] }, p.nextCursor, 'attempt1')).rejects.toThrow('stale_poll_attempt');
 });
+
+it('does not create durable Dynamo suppression from quoted intent while retaining evidence', async () => {
+  const dynamo = new ConditionalCommandHarness(); const options = { dynamo, tableName: 'fictional', workspaceId: 'ws', clock: { now: () => now } };
+  await createExecutionRepository(options).seedLocalAuthority('a1');
+  const repo = new DynamoThreadIntakeRepository(options); const incoming = structuredClone(p);
+  incoming.threads[0]!.messages[0]!.bodyParts[0]!.text = 'Tuesday works.\n> Please stop emailing me';
+  expect((await repo.applyPage(incoming, null))[0]?.signals[0]?.kind).toBe('scheduling');
+  const restored = new DynamoThreadIntakeRepository(options);
+  expect(await restored.isSuppressed('a1')).toBe(false);
+  expect((await restored.getThread('a1', 't1'))?.thread.messages[0]?.bodyParts[0]?.text).toContain('> Please stop');
+  expect(await restored.checkpoint('a1', 'sub1')).toEqual(incoming.nextCursor);
+});

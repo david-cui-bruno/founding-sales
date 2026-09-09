@@ -115,3 +115,31 @@ it('folds long ASCII References within serialized byte bounds and rejects multib
   expect(await make().sendOnce({ ...email, inReplyTo: unicode[0]!, references: unicode })).toMatchObject({ status: 'not_sent' });
   expect(sent).toHaveLength(1);
 });
+
+import { generateOpenAiReply } from '../../src/main/outreach/replyDraftService';
+import { mergeThread } from '../../src/main/outreach/threadIntake';
+it.each(['attachment', 'message/rfc822', 'message/global'])('excludes unnamed %s evidence before model HTTP', async boundary => {
+  const text = (value: string) => ({ mimeType: 'text/plain', body: { data: Buffer.from(value).toString('base64url') } });
+  const fetch = transport(url => {
+    if (url.pathname.endsWith('/profile')) return { historyId: '10' };
+    if (url.pathname.endsWith('/messages')) return { messages: [{ id: 'm1' }] };
+    const m = metadata('m1');
+    return url.searchParams.get('format') !== 'full' ? m : { ...m, payload: { ...m.payload, mimeType: 'multipart/mixed', body: {}, parts: [text('Tuesday works.'), boundary === 'attachment' ? { ...text('PRIVATE_ATTACHMENT_SENTINEL'), filename: '', headers: [{ name: 'cOnTeNt-DiSpOsItIoN', value: ' Attachment; filename=""' }] } : { mimeType: boundary, parts: [text('PRIVATE_ATTACHMENT_SENTINEL')] }] } };
+  });
+  const page = await createGmailThreadProvider({ now: () => Date.parse('2026-09-08T12:00:00.000Z'), grant, accessToken: 'fixture', fetch }).readRelevantThreads(request, new AbortController().signal);
+  let modelRequest = '';
+  await generateOpenAiReply({ credentials: { apiKey: 'fixture', model: 'fixture' }, context: { personName: 'Fictional PM', organizationLabel: 'Fixture', segment: 'warm', stage: 'reply', actionLabel: 'Draft', facts: [], playbook: 'Approved only' }, projection: mergeThread(null, page.threads[0]!).projection, styleExamples: [], signal: new AbortController().signal,
+    fetch: transport((_url, init) => { modelRequest = String(init?.body); return { id: 'r1', status: 'completed', model: 'fixture', output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({ subject: 'Reply', body: 'Thanks', evidenceIds: ['mail:m1'] }) }] }] }; }) });
+  expect(JSON.stringify(page)).not.toContain('PRIVATE_ATTACHMENT_SENTINEL');
+  expect(modelRequest).not.toContain('PRIVATE_ATTACHMENT_SENTINEL');
+});
+it('retains HTML quote evidence without attributing its optout footer to the current sender', async () => {
+  const fetch = transport(url => {
+    if (url.pathname.endsWith('/profile')) return { historyId: '10' };
+    if (url.pathname.endsWith('/messages')) return { messages: [{ id: 'm1' }] };
+    const m = metadata('m1'); return url.searchParams.get('format') !== 'full' ? m : { ...m, payload: { ...m.payload, mimeType: 'text/html', body: { data: Buffer.from('<div>Tuesday works.</div><blockquote><p>Reply unsubscribe to stop emails.</p></blockquote>').toString('base64url') } } };
+  });
+  const page = await createGmailThreadProvider({ now: () => Date.parse('2026-09-08T12:00:00.000Z'), grant, accessToken: 'fixture', fetch }).readRelevantThreads(request, new AbortController().signal);
+  expect(JSON.stringify(page)).toContain('Reply unsubscribe to stop emails.');
+  expect(mergeThread(null, page.threads[0]!).signals[0]?.kind).toBe('scheduling');
+});
