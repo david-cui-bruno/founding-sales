@@ -414,11 +414,9 @@ describe('TodayService', () => {
   }
 
   function addMeetingFirstSettings(newCallSlots: number | null, totalCallCapacity: number | null): void {
-    database.raw.exec('ALTER TABLE workspace_settings ADD COLUMN meeting_first_new_call_slots INTEGER CHECK (meeting_first_new_call_slots >= 0)');
-    database.raw.exec('ALTER TABLE workspace_settings ADD COLUMN meeting_first_total_call_capacity INTEGER CHECK (meeting_first_total_call_capacity >= 0)');
     database.raw.prepare(`
-      UPDATE workspace_settings
-      SET meeting_first_new_call_slots = ?, meeting_first_total_call_capacity = ?
+      UPDATE meeting_first_call_settings
+      SET new_call_slots = ?, total_call_capacity = ?
       WHERE singleton = 1
     `).run(newCallSlots, totalCallCapacity);
   }
@@ -474,12 +472,35 @@ describe('TodayService', () => {
     })).toEqual({ accountIds: ['supported'], workloadConflict: false });
   });
 
-  it('rejects partially configured meeting-first account settings', () => {
-    database.raw.exec('ALTER TABLE workspace_settings ADD COLUMN meeting_first_new_call_slots INTEGER CHECK (meeting_first_new_call_slots >= 0)');
-    database.raw.prepare('UPDATE workspace_settings SET meeting_first_new_call_slots = 1 WHERE singleton = 1').run();
+  it('rejects missing meeting-first account settings singleton', () => {
+    database.raw.prepare('DELETE FROM meeting_first_call_settings WHERE singleton = 1').run();
     expect(() => service.planMeetingFirstAccountCalls({
       due: [], ranked: [accountSnapshot('new')], generatedAt: GENERATED_AT,
-    })).toThrow('partially configured');
+    })).toThrow('malformed');
+  });
+
+  it('updates meeting-first account settings with scoped CAS and rejects stale revisions', () => {
+    const first = workspaceSettings.readMeetingFirstAccountCallSettings();
+    expect(first).toEqual(expect.objectContaining({ newCallSlots: null, totalCallCapacity: null, revision: 0 }));
+    unitOfWork.immediate(() => {
+      expect(workspaceSettings.updateMeetingFirstAccountCallSettingsCas({
+        expectedRevision: 0,
+        newCallSlots: 2,
+        totalCallCapacity: 5,
+        updatedAt: '2026-08-31T16:01:00.000Z',
+      })).toEqual({
+        newCallSlots: 2,
+        totalCallCapacity: 5,
+        revision: 1,
+        updatedAt: '2026-08-31T16:01:00.000Z',
+      });
+    });
+    expect(() => unitOfWork.immediate(() => workspaceSettings.updateMeetingFirstAccountCallSettingsCas({
+      expectedRevision: 0,
+      newCallSlots: 1,
+      totalCallCapacity: null,
+      updatedAt: '2026-08-31T16:02:00.000Z',
+    }))).toThrow('changed before this update');
   });
 
   it('rejects malformed channel policy snapshots before reading the clock', () => {
