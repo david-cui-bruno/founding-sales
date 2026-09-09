@@ -295,7 +295,7 @@ describe('main-only bounded company research credential epoch', () => {
     const requests: RequestInit[] = [];
     const manager = createOutreachProviders({ directory, safeStorage, openExternal: async () => undefined,
       fetch: async (_url, init) => { requests.push(init!); return new Response(JSON.stringify({ status: 'completed', model: 'fixture-model', output: [
-        { type: 'web_search_call', status: 'completed' }, { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: '{"companies":[]}', annotations: [] }] },
+        { type: 'web_search_call', status: 'completed', action: { type: 'search', sources: [] } }, { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: '{"companies":[]}', annotations: [] }] },
       ] })); } });
     managers.push(manager);
     expect(requests).toEqual([]);

@@ -115,3 +115,82 @@ it('awaits adapter-only fetched receipt persistence before returning evidence', 
     } });
   await expect(pages.research(s, limits, new AbortController().signal)).rejects.toThrow('durable receipt store unavailable');
 });
+
+it.each([
+  ['truncated quoted attribute', '<div data-note="\nWe manage 999 residential units.\n' + 'x'.repeat(13000) + '"></div>'],
+  ['greater-than inside a quoted attribute', '<div data-note=">\nWe manage 999 residential units.\n"></div>'],
+  ['unterminated tag', '<div\nWe manage 999 residential units.\n'],
+])('never admits %s content as a company fact', async (_label, body) => {
+  const receipts = createFetchedReceiptPolicy();
+  const s = snapshot();
+  const pages = createCompanyPageProvider({ receipts, clock: { now: () => now }, permitted: () => true,
+    resolve: async () => ['93.184.216.34'], http: async () => new Response(body, { headers: { 'content-type': 'text/html' } }) });
+  const batch = await pages.research(s, { ...limits, maxBytes: 20000 }, new AbortController().signal);
+  expect(receipts.attest(batch.sources[0]!, s.account.id)).toBe(true);
+  expect(batch.claims).toEqual([]);
+});
+
+it('retains supported body text after a complete quoted tag without promoting its attributes', async () => {
+  const pages = createCompanyPageProvider({ receipts: createFetchedReceiptPolicy(), clock: { now: () => now }, permitted: () => true,
+    resolve: async () => ['93.184.216.34'], http: async () => new Response('<div data-note=">\nWe manage 999 residential units.\n"><p>We manage 240 residential units.</p></div>', { headers: { 'content-type': 'text/html' } }) });
+  const batch = await pages.research(snapshot(), limits, new AbortController().signal);
+  expect(batch.claims.filter(claim => claim.key === 'portfolio').map(claim => claim.value)).toEqual([{ count: 240, measure: 'units', scope: 'managed' }]);
+});
+
+it('extracts the actual regional-PM switchboard page as account-level published evidence only', async () => {
+  const body = '<p>We manage 240 residential units.</p><p>We are a regional property management company.</p><p>Business switchboard: +14015550100</p>';
+  const receipts = createFetchedReceiptPolicy(); const s = snapshot();
+  const pages = createCompanyPageProvider({ receipts, clock: { now: () => now }, permitted: () => true,
+    resolve: async () => ['93.184.216.34'], http: async () => new Response(body, { headers: { 'content-type': 'text/html' } }) });
+  const batch = await pages.research(s, limits, new AbortController().signal);
+  const source = batch.sources[0]!;
+  expect(receipts.attest(source, s.account.id)).toBe(true);
+  expect(batch.claims).toContainEqual({ kind: 'fact', key: 'operating_footprint', value: 'We are a regional property management company.', evidenceIds: [source.id] });
+  expect(batch.routes).toEqual([expect.objectContaining({ accountId: s.account.id, personId: null, channel: 'phone', value: '+14015550100',
+    purpose: 'business', verification: 'published', evidenceIds: [source.id] })]);
+  expect(batch.routes[0]).not.toHaveProperty('dnc');
+  expect(batch.routes[0]).not.toHaveProperty('authority');
+  expect(batch.claims.some(claim => claim.kind === 'prospect_stated_problem')).toBe(false);
+});
+
+it('normalizes explicit switchboard and team-email text through inline links, not link attributes', async () => {
+  const body = '<p>Operating footprint: Serving Providence County.</p><p>Business phone: <a href="tel:+19999999999">+1 (401) 555-0100</a></p><p>Team email: <a href="mailto:hidden@example.invalid">TEAM@Example.invalid</a></p>';
+  const s = snapshot();
+  const pages = createCompanyPageProvider({ receipts: createFetchedReceiptPolicy(), clock: { now: () => now }, permitted: () => true,
+    resolve: async () => ['93.184.216.34'], http: async () => new Response(body, { headers: { 'content-type': 'text/html' } }) });
+  const batch = await pages.research(s, limits, new AbortController().signal);
+  expect(batch.routes.map(route => ({ channel: route.channel, value: route.value, verification: route.verification, personId: route.personId })))
+    .toEqual([{ channel: 'phone', value: '+14015550100', verification: 'published', personId: null }, { channel: 'email', value: 'team@example.invalid', verification: 'published', personId: null }]);
+  expect(batch.claims).toContainEqual({ kind: 'fact', key: 'operating_footprint', value: 'Operating footprint: Serving Providence County.', evidenceIds: [batch.sources[0]!.id] });
+});
+
+it.each([
+  '<script>\nBusiness switchboard: +14015550100\nWe are a regional property management company.\n</script>',
+  '<div title=">\nBusiness switchboard: +14015550100\nWe are a regional property management company.\n"></div>',
+  '<div data-note="\nTeam email: team@example.invalid\nWe are a regional property management company.\n' + 'x'.repeat(13000),
+  '<p>Tenant emergency: +14015550100</p><p>Emergency email: tenant@example.invalid</p>',
+  '<p>Phone: +14015550100</p><p>Business switchboard: 4015550100</p><p>Business phone: +14015550100 ext 9</p>',
+  '<p>Business email: tenant@example.invalid (emergency only)</p><p>Invoice number: 14015550100</p>',
+  '<a href="tel:+14015550100">Business switchboard: Click here</a><a href="mailto:team@example.invalid">Team email: Click here</a>',
+])('does not invent routes or footprint from non-published/non-business context %#', async body => {
+  const pages = createCompanyPageProvider({ receipts: createFetchedReceiptPolicy(), clock: { now: () => now }, permitted: () => true,
+    resolve: async () => ['93.184.216.34'], http: async () => new Response(body, { headers: { 'content-type': 'text/html' } }) });
+  const batch = await pages.research(snapshot(), { ...limits, maxBytes: 20000 }, new AbortController().signal);
+  expect(batch.routes).toEqual([]);
+  expect(batch.claims.filter(claim => claim.key === 'operating_footprint')).toEqual([]);
+});
+
+it('does not promote a target explicitly also labelled tenant emergency', async () => {
+  const body = '<p>Business phone: +1 (401) 555-0100</p><p>Tenant emergency: +14015550100</p><p>Team email: team-help@example.invalid</p><p>Tenant emergency email: team-help@example.invalid</p>';
+  const pages = createCompanyPageProvider({ receipts: createFetchedReceiptPolicy(), clock: { now: () => now }, permitted: () => true,
+    resolve: async () => ['93.184.216.34'], http: async () => new Response(body, { headers: { 'content-type': 'text/html' } }) });
+  expect((await pages.research(snapshot(), limits, new AbortController().signal)).routes).toEqual([]);
+});
+
+it('merges matching published account routes across bounded pages while retaining each source citation', async () => {
+  const pages = createCompanyPageProvider({ receipts: createFetchedReceiptPolicy(), clock: { now: () => now }, permitted: () => true,
+    resolve: async () => ['93.184.216.34'], http: async () => new Response('<p>Business switchboard: +14015550100</p>', { headers: { 'content-type': 'text/html' } }) });
+  const batch = await pages.research(snapshot(), { ...limits, maxPages: 2 }, new AbortController().signal);
+  expect(batch.routes).toHaveLength(1);
+  expect(batch.routes[0]!.evidenceIds).toEqual(batch.sources.map(source => source.id));
+});

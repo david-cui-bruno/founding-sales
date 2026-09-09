@@ -1,7 +1,8 @@
+import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { request, type RequestOptions } from 'node:https';
-import { accountEvidenceBatchSchema, type AccountClaim, type AccountSource } from '../../shared/contracts/accountContract';
+import { accountEvidenceBatchSchema, type AccountClaim, type AccountSource, type AccountEvidenceBatch } from '../../shared/contracts/accountContract';
 import { companySourcePolicy, publicResearchAddress, type FetchedReceiptPolicy } from './companySourcePolicy';
 import { researchLimitsSchema, type CompanyPagePort } from './companyResearchTypes';
 export type PageHttp = (input: { url: string; address: string; maxBytes: number; signal: AbortSignal }) => Promise<Response>;
@@ -53,11 +54,48 @@ async function readBytes(response: Response, maxBytes: number, signal: AbortSign
     return Buffer.concat(chunks);
   } finally { void reader.cancel().catch((): undefined => undefined); reader.releaseLock(); }
 }
+/** Tokenize only complete markup. A truncated tag or quoted attribute stays
+ * markup through end-of-input; it can never become supporting text. This is a
+ * conservative lexical extractor, not a browser/CSS visibility renderer. */
+function htmlText(excerpt: string): string {
+  let text = ''; let position = 0;
+  while (position < excerpt.length) {
+    if (excerpt[position] !== '<') { text += excerpt[position]; position++; continue; }
+    if (excerpt.startsWith('<!--', position)) {
+      const end = excerpt.indexOf('-->', position + 4);
+      if (end < 0) break;
+      position = end + 3; continue;
+    }
+    let end = position + 1; let quote: string | null = null;
+    for (; end < excerpt.length; end++) {
+      const char = excerpt[end];
+      if (quote !== null) { if (char === quote) quote = null; }
+      else if (char === '"' || char === "'") quote = char;
+      else if (char === '>') break;
+    }
+    if (end === excerpt.length) break;
+    const tag = /^<\s*(\/?)\s*([a-z][a-z0-9:-]*)/i.exec(excerpt.slice(position, end + 1));
+    const name = tag?.[2]?.toLowerCase();
+    position = end + 1;
+    // Inline published contact text remains one line; attributes are still discarded.
+    if (!name || !['a', 'span', 'b', 'strong', 'i', 'em', 'small'].includes(name)) text += '\n';
+    // Template contents are not rendered; conservatively stop rather than guess
+    // nested template state. Raw-text containers cannot contribute account facts.
+    if (!tag?.[1] && name === 'template') break;
+    if (!tag?.[1] && name && ['script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes'].includes(name)) {
+      const closing = new RegExp(`</\\s*${name}\\s*>`, 'ig');
+      closing.lastIndex = position;
+      const match = closing.exec(excerpt);
+      if (!match) break;
+      position = closing.lastIndex;
+    }
+  }
+  return text;
+}
 /** Conservative deterministic extraction. Advertisements remain advertised facts,
  * never prospect-stated pain or execution routes. Unsupported knowledge stays unknown. */
-function extract(excerpt: string, sourceId: string): AccountClaim[] {
-  const text = excerpt.replace(/<script\b[^>]*>[\s\S]*?(?:<\/script>|$)/gi, '').replace(/<style\b[^>]*>[\s\S]*?(?:<\/style>|$)/gi, '')
-    .replace(/<!--[\s\S]*?(?:-->|$)/g, '').replace(/<[^>]*>/g, '\n');
+function extract(excerpt: string, sourceId: string, accountId: string): Pick<AccountEvidenceBatch, 'claims' | 'routes'> {
+  const text = htmlText(excerpt);
   const claims: AccountClaim[] = [];
   for (const match of text.matchAll(/(?:^|\n)\s*We (manage|own) ([0-9][0-9,]*) (residential )?(units|buildings|properties)\./g)) {
     const countText = match[2];
@@ -68,7 +106,34 @@ function extract(excerpt: string, sourceId: string): AccountClaim[] {
     if (match[3]) claims.push({ key: 'residential_scope', kind: 'fact', value: 'Company advertises a residential portfolio.', evidenceIds: [sourceId] });
   }
   if (/(?:^|\n)\s*24\/7 emergency maintenance\./.test(text)) claims.push({ key: 'maintenance_workflow', kind: 'fact', value: 'Company advertises 24/7 emergency maintenance.', evidenceIds: [sourceId] });
-  return claims;
+  const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    if (/^We are a (?:regional|local)(?: residential)? property management company\.$/i.test(line)
+      || /^Operating footprint:[ \t]+[A-Za-z][A-Za-z0-9 ,.'()-]{0,199}$/.test(line)) {
+      claims.push({ key: 'operating_footprint', kind: 'fact', value: line, evidenceIds: [sourceId] });
+    }
+  }
+  const routes: AccountEvidenceBatch['routes'] = [];
+  const add = (channel: 'phone' | 'email', value: string) => {
+    // An explicit emergency/tenant qualifier for this target is never promoted
+    // to a prospecting route, even if another line also uses a business label.
+    if (lines.some(line => /emergency|tenant|after.hours/i.test(line)
+      && (channel === 'phone' ? line.replace(/[ ()-]/g, '') : line.toLowerCase()).includes(value))) return;
+    if (routes.some(route => route.channel === channel && route.value === value)) return;
+    routes.push({ id: randomUUID(), accountId, personId: null, channel, value, purpose: 'business',
+      verification: 'published', evidenceIds: [sourceId] });
+  };
+  for (const line of lines) {
+    const phone = /^(?:Business switchboard|Business phone|Main office phone):[ \t]*(\+[1-9][0-9 ()-]{6,40})$/i.exec(line)?.[1];
+    if (phone) {
+      const parentheses = phone.replace(/[^()]/g, '');
+      const value = phone.replace(/[ ()-]/g, '');
+      if ((parentheses === '' || parentheses === '()') && /^\+[1-9]\d{6,14}$/.test(value)) add('phone', value);
+    }
+    const email = /^(?:Team|Business) email:[ \t]*([^\s]+)$/i.exec(line)?.[1]?.toLowerCase();
+    if (email && email.length <= 254 && z.email().safeParse(email).success) add('email', email);
+  }
+  return { claims, routes };
 }
 export function createCompanyPageProvider(options: { receipts: FetchedReceiptPolicy; clock: { now(): string };
   /** Trusted operator/source-policy decision. Omission denies all fetching. */
@@ -83,7 +148,7 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
     callerSignal.throwIfAborted();
     if (!snapshot.account.domain || !options.permitted) throw new Error('Research permitted source required');
     const signal = AbortSignal.any([callerSignal, AbortSignal.timeout(options.timeoutMs ?? 30000)]);
-    const sources = []; const claims: AccountClaim[] = []; let bytes = 0; let requests = 0;
+    const sources = []; const claims: AccountClaim[] = []; const routes: AccountEvidenceBatch['routes'] = []; let bytes = 0; let requests = 0;
     const urls = ['/', '/services', '/team', '/careers'].slice(0, limits.maxPages).map(path => `https://${snapshot.account.domain}${path}`);
     for (let url of urls) {
       if (requests >= limits.maxPages) break;
@@ -117,10 +182,17 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
         const source = options.receipts.recordFetched({ accountId: snapshot.account.id, url, fetchedAt: options.clock.now(), body, excerpt });
         if (options.onFetched) await bounded(Promise.resolve(options.onFetched(Object.freeze({ ...source }), snapshot.account.id)), signal);
         signal.throwIfAborted();
-        sources.push(source); claims.push(...extract(excerpt, source.id)); break;
+        const extracted = extract(excerpt, source.id, snapshot.account.id);
+        sources.push(source); claims.push(...extracted.claims);
+        for (const route of extracted.routes) {
+          const previous = routes.find(existing => existing.channel === route.channel && existing.value === route.value);
+          if (previous) previous.evidenceIds.push(source.id);
+          else routes.push(route);
+        }
+        break;
       }
     }
     if (!sources.length) throw new Error('Research no permitted pages');
-    return accountEvidenceBatchSchema.parse({ commandId: randomUUID(), accountId: snapshot.account.id, expectedVersion: snapshot.account.version, sources, claims, routes: [] });
+    return accountEvidenceBatchSchema.parse({ commandId: randomUUID(), accountId: snapshot.account.id, expectedVersion: snapshot.account.version, sources, claims, routes });
   } };
 }

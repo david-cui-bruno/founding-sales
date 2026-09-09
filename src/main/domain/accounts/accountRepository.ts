@@ -206,10 +206,15 @@ export class AccountRepository implements AccountResearchStore {
       const expired = new Date(Date.parse(asOf) - lease).toISOString();
       // Never repeat an ambiguous external request. Its unknown cost remains reserved.
       this.raw.prepare("UPDATE pm_account_research_jobs SET state='parked',updated_at=? WHERE state='running' AND updated_at<=?").run(asOf, expired);
-      const row = this.raw.prepare("SELECT * FROM pm_account_research_jobs WHERE state='queued' ORDER BY created_at,id LIMIT 1").get() as Row | undefined;
+      const spent = this.raw.prepare('SELECT COALESCE(SUM(COALESCE(cost_micros,reserved_cost_micros)),0) AS total FROM pm_account_research_jobs').get() as { total: number };
+      // Select the oldest eligible job, not just the oldest job. Expensive or
+      // exhausted work stays queued without releasing any uncertain reservation.
+      const row = this.raw.prepare(`SELECT j.* FROM pm_account_research_jobs j WHERE j.state='queued'
+        AND json_extract(j.limits_json,'$.maxCostMicros')<=?
+        AND (SELECT COUNT(*) FROM pm_account_research_jobs prior WHERE prior.fingerprint=j.fingerprint AND prior.attempt>0)<3
+        ORDER BY j.created_at,j.id LIMIT 1`).get(config.maxBudgetMicros - spent.total) as Row | undefined;
       if (!row) return null;
       const limits = researchLimitsSchema.parse(JSON.parse(row.limits_json));
-      const spent = this.raw.prepare('SELECT COALESCE(SUM(COALESCE(cost_micros,reserved_cost_micros)),0) AS total FROM pm_account_research_jobs').get() as { total: number };
       if (spent.total + limits.maxCostMicros > config.maxBudgetMicros) return null;
       const previous = this.raw.prepare('SELECT COALESCE(SUM(attempt>0),0) AS count FROM pm_account_research_jobs WHERE fingerprint=?').get(row.fingerprint) as { count: number };
       if (previous.count >= 3) return null;

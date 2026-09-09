@@ -132,3 +132,28 @@ it('retains conflicting fetched facts and parks a stale revision without admitti
     expect(repo.snapshot(account.id, PM_NOW).portfolio).toHaveLength(2);
   } finally { f.close(); }
 });
+
+it.each([0, 20])('claims affordable queued work past an expensive head while retaining unknown spend %s', async priorCost => {
+  const f = await createPmFixture();
+  try {
+    let at = PM_NOW;
+    const repo = new AccountRepository({ database: f.db, clock: { now: () => at }, ids: { next: randomUUID }, research: { maxBudgetMicros: 100 } });
+    const account = repo.create({ commandId: randomUUID(), name: 'Fictional PM', domain: 'example.invalid' });
+    if (priorCost) {
+      repo.enqueue({ commandId: randomUUID(), accountId: account.id, limits: { ...limits, maxCostMicros: priorCost } });
+      const initial = repo.claimNext(at)!;
+      repo.settle({ jobId: initial.id, claimToken: initial.claimToken, status: 'parked', receiptCommandId: null, costMicros: null });
+    }
+    at = '2026-09-08T12:00:01.000Z';
+    const expensiveCommand = randomUUID();
+    repo.enqueue({ commandId: expensiveCommand, accountId: account.id, limits: { ...limits, maxCostMicros: 101 - priorCost } });
+    at = '2026-09-08T12:00:02.000Z';
+    repo.enqueue({ commandId: randomUUID(), accountId: account.id, limits: { ...limits, maxCostMicros: 50 } });
+    const affordable = repo.claimNext(at);
+    expect(affordable?.limits.maxCostMicros).toBe(50);
+    expect(f.db.raw.prepare('SELECT state,reserved_cost_micros FROM pm_account_research_jobs WHERE command_id=?').get(expensiveCommand))
+      .toEqual({ state: 'queued', reserved_cost_micros: 0 });
+    expect(f.db.raw.prepare('SELECT SUM(reserved_cost_micros) AS reserved,COUNT(cost_micros) AS known FROM pm_account_research_jobs').get())
+      .toEqual({ reserved: priorCost + 50, known: 0 });
+  } finally { f.close(); }
+});

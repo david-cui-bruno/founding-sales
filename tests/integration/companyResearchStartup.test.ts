@@ -47,7 +47,7 @@ async function fixture(configured: boolean, hooks: { search?: () => Promise<void
       requests.push(String(url));
       await hooks.search?.();
       return new Response(JSON.stringify({ status: 'completed', model: 'fixture-model', output: [
-        { type: 'web_search_call', status: 'completed' }, { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text',
+        { type: 'web_search_call', status: 'completed', action: { type: 'search', sources: [{ type: 'url', url: 'https://example.invalid/' }] } }, { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text',
           text: JSON.stringify({ companies: [{ name: 'Fictional PM', domain: 'example.invalid', sourceUrl: 'https://example.invalid/' }] }),
           annotations: [{ type: 'url_citation', url: 'https://example.invalid/' }] }] },
       ] }));

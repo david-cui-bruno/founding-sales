@@ -11,7 +11,7 @@ const candidates = [
   { name: 'Private', domain: 'private.invalid', sourceUrl: 'https://127.0.0.1/' },
 ];
 const response = (items = candidates) => new Response(JSON.stringify({ id: 'resp_fixture', status: 'completed', model: 'fixture-model', output: [
-  { type: 'web_search_call', status: 'completed' },
+  { type: 'web_search_call', id: 'ws_fixture', status: 'completed', action: { type: 'search', queries: ['fictional residential PM'], sources: items.map(c => ({ type: 'url', url: c.sourceUrl })) } },
   { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({ companies: items }), annotations: items.map(c => ({ type: 'url_citation', url: c.sourceUrl })) }] },
 ] }));
 describe('concrete discovery Responses HTTP boundary', () => {
@@ -21,7 +21,7 @@ describe('concrete discovery Responses HTTP boundary', () => {
     const provider = createCompanyDiscoveryProvider({ capability, request: (q, l, signal) => requestCompanyDiscovery({ query: q, limits: l, signal, capability, credentials: { apiKey: 'fictional-key', model: 'fixture-model' }, fetch: fetcher }) });
     expect(bodies).toEqual([]);
     expect(await provider.discover(query, limits, new AbortController().signal)).toEqual([candidates[0]]);
-    expect(bodies[0]).toMatchObject({ model: 'fixture-model', store: false, tools: [{ type: 'web_search' }] });
+    expect(bodies[0]).toMatchObject({ model: 'fixture-model', store: false, tools: [{ type: 'web_search' }], tool_choice: 'required', max_tool_calls: 1, include: ['web_search_call.action.sources'] });
     await expect(provider.discover(query, { ...limits, maxCostMicros: 99 }, new AbortController().signal)).rejects.toThrow(/budget/i);
     expect(bodies).toHaveLength(1);
   });
@@ -138,4 +138,37 @@ it('times out a search HTTP port that ignores abort without retry', async () => 
     await failure;
     expect(calls).toBe(1);
   } finally { vi.useRealTimers(); }
+});
+
+it.each(['declared', 'streamed'])('enforces discovery maxBytes for %s response overflow', async mode => {
+  const body = await response([candidates[0]!]).text();
+  expect(Buffer.byteLength(body)).toBeGreaterThan(64);
+  const fetcher: typeof fetch = async () => mode === 'declared'
+    ? new Response(body, { headers: { 'content-length': String(Buffer.byteLength(body)) } })
+    : new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      const bytes = new TextEncoder().encode(body);
+      controller.enqueue(bytes.slice(0, 40)); controller.enqueue(bytes.slice(40)); controller.close();
+    } }));
+  await expect(requestCompanyDiscovery({ query, limits: { ...limits, maxBytes: 64 }, capability,
+    credentials: { apiKey: 'fictional-key', model: 'fixture-model' }, signal: new AbortController().signal, fetch: fetcher })).rejects.toThrow('provider_response_invalid');
+});
+
+
+it.each(['missing action', 'non-search action', 'missing sources', 'uncorroborated citation', 'feed labels only'])('requires actual consulted search-source proof: %s', async variant => {
+  const envelope = JSON.parse(await response([candidates[0]!]).text());
+  const search = envelope.output[0];
+  if (variant === 'missing action') delete search.action;
+  if (variant === 'non-search action') search.action.type = 'open_page';
+  if (variant === 'missing sources') delete search.action.sources;
+  if (variant === 'uncorroborated citation') search.action.sources = [{ type: 'url', url: 'https://other.invalid/' }];
+  if (variant === 'feed labels only') search.action.sources = ['weather', { type: 'feed', name: 'fictional feed' }];
+  await expect(requestCompanyDiscovery({ query, limits, capability, credentials: { apiKey: 'fictional-key', model: 'fixture-model' },
+    signal: new AbortController().signal, fetch: async () => new Response(JSON.stringify(envelope)) })).rejects.toThrow();
+});
+
+it('accepts mixed tool-source metadata but requires each candidate in both consulted URLs and citations', async () => {
+  const envelope = JSON.parse(await response([candidates[0]!]).text());
+  envelope.output[0].action.sources.push('weather', { type: 'feed', name: 'fictional feed' }, { type: 'url', url: 'https://other.invalid/' });
+  expect(await requestCompanyDiscovery({ query, limits, capability, credentials: { apiKey: 'fictional-key', model: 'fixture-model' },
+    signal: new AbortController().signal, fetch: async () => new Response(JSON.stringify(envelope)) })).toEqual([candidates[0]]);
 });
