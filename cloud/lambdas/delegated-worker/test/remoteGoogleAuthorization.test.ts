@@ -263,3 +263,85 @@ describe('prepared access evidence for final atomic reservation', () => {
     expect(() => f.remote().accessChecks(accessEvidence, expected)).toThrow('google_access_evidence_invalid');
   });
 });
+
+describe('regrant waits for completed remote revocation', () => {
+  it('retains failed-revocation retry material and blocks new authorization until cleanup confirms', async () => {
+    const f = fixture(); const pair = await paired(f); const first = await begun(f, pair.pairingId);
+    await f.remote().completeGoogleGrant(first.searchParams.get('state')!, 'code');
+    const failed = new RemoteGoogleAuthorization({ auth: f.auth, config: f.config, fetch: async () => new Response('', { status: 503 }) });
+    await failed.revokeGoogleGrant(pair.pairingId);
+    const pending = f.dynamo.inspect(`GOOGLE_GRANT#${pair.pairingId}`);
+    await expect(f.remote().beginGoogleGrant(pair.pairingId, ['send', 'relevant_read'])).rejects.toThrow('google_revocation_pending');
+    expect(f.dynamo.inspect(`GOOGLE_GRANT#${pair.pairingId}`)).toEqual(pending);
+    expect(await f.remote().revokeGoogleGrant(pair.pairingId)).toMatchObject({ providerRevocation: 'confirmed' });
+    const next = await begun(f, pair.pairingId);
+    expect(await f.remote().completeGoogleGrant(next.searchParams.get('state')!, 'code')).toMatchObject({ state: 'ready' });
+  });
+  it('blocks begin and old callback completion while provider revocation is in flight', async () => {
+    const f = fixture(); const pair = await paired(f); const first = await begun(f, pair.pairingId);
+    await f.remote().completeGoogleGrant(first.searchParams.get('state')!, 'code');
+    const oldCallback = await begun(f, pair.pairingId);
+    let entered!: () => void; const started = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
+    const remote = new RemoteGoogleAuthorization({ auth: f.auth, config: f.config, fetch: async (url, init) => {
+      if (String(url).endsWith('/revoke')) { entered(); await held; }
+      return f.fetch(url, init);
+    } });
+    const revoke = remote.revokeGoogleGrant(pair.pairingId); await started;
+    try {
+      await expect(f.remote().beginGoogleGrant(pair.pairingId, ['send', 'relevant_read'])).rejects.toThrow('google_revocation_pending');
+      await expect(f.remote().completeGoogleGrant(oldCallback.searchParams.get('state')!, 'code')).rejects.toThrow('oauth_state_unavailable');
+      expect(await f.remote().status(pair.pairingId)).toMatchObject({ state: 'revoked', providerRevocation: 'pending' });
+    } finally { release(); await revoke; }
+    expect(await f.remote().status(pair.pairingId)).toMatchObject({ state: 'revoked', providerRevocation: 'confirmed' });
+  });
+  it('does not let a competing revoke report confirmation while an earlier revoke remains in flight', async () => {
+    const f = fixture(); const pair = await paired(f); const first = await begun(f, pair.pairingId);
+    await f.remote().completeGoogleGrant(first.searchParams.get('state')!, 'code');
+    let entered!: () => void; const started = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
+    const remote = new RemoteGoogleAuthorization({ auth: f.auth, config: f.config, fetch: async (url, init) => {
+      if (String(url).endsWith('/revoke')) { entered(); await held; }
+      return f.fetch(url, init);
+    } });
+    const firstRevoke = remote.revokeGoogleGrant(pair.pairingId); await started;
+    // Attach rejection handling immediately so a RED assertion cannot orphan it.
+    const settled = firstRevoke.catch(() => null);
+    try {
+      const second = await f.remote().revokeGoogleGrant(pair.pairingId);
+      expect(second).toMatchObject({ state: 'revoked', providerRevocation: 'pending' });
+      await expect(f.remote().beginGoogleGrant(pair.pairingId, ['send', 'relevant_read'])).rejects.toThrow('google_revocation_pending');
+    } finally { release(); await settled; }
+    expect(await f.remote().status(pair.pairingId)).toMatchObject({ providerRevocation: 'confirmed' });
+  });
+});
+
+describe('regrant completion and uncertain revocation claim', () => {
+  it('cannot overwrite cleanup when a previously claimed OAuth exchange completes after revoke', async () => {
+    const f = fixture(); const pair = await paired(f); const first = await begun(f, pair.pairingId);
+    await f.remote().completeGoogleGrant(first.searchParams.get('state')!, 'code');
+    const next = await begun(f, pair.pairingId);
+    let entered!: () => void; const started = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
+    const remote = new RemoteGoogleAuthorization({ auth: f.auth, config: f.config, fetch: async (url, init) => {
+      if (String(url).endsWith('/token')) { entered(); await held; }
+      return f.fetch(url, init);
+    } });
+    const complete = remote.completeGoogleGrant(next.searchParams.get('state')!, 'code');
+    const outcome = complete.then(() => 'unexpected-ready', () => 'fenced'); await started;
+    try { await f.remote().revokeGoogleGrant(pair.pairingId); } finally { release(); }
+    expect(await outcome).toBe('fenced');
+    expect(await f.remote().status(pair.pairingId)).toMatchObject({ state: 'revoked', providerRevocation: 'confirmed' });
+    expect(f.dynamo.inspect(`GOOGLE_GRANT#${pair.pairingId}`)).toMatchObject({ ciphertext: null });
+  });
+  it('keeps an ambiguously committed revoke claim pending without automatic takeover or regrant', async () => {
+    const f = fixture(); const pair = await paired(f); const first = await begun(f, pair.pairingId);
+    await f.remote().completeGoogleGrant(first.searchParams.get('state')!, 'code');
+    f.dynamo.afterCommit = () => { f.dynamo.afterCommit = undefined; throw new Error('fictional lost claim response'); };
+    const calls = f.calls.length;
+    await expect(f.remote().revokeGoogleGrant(pair.pairingId)).rejects.toThrow('fictional lost claim response');
+    expect(await f.remote().revokeGoogleGrant(pair.pairingId)).toMatchObject({ state: 'revoked', providerRevocation: 'pending' });
+    await expect(f.remote().beginGoogleGrant(pair.pairingId, ['send', 'relevant_read'])).rejects.toThrow('google_revocation_pending');
+    expect(f.calls).toHaveLength(calls);
+  });
+});

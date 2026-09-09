@@ -19,7 +19,7 @@ export type ExpectedGoogleAccess = { pairingId: string; subject: string; require
 export type AuthorizedGoogleAccess = { accessToken: string; grant: GoogleGrant; accessEvidence: GoogleAccessEvidence };
 const stateSchema = z.strictObject({ pairingId: z.string().uuid(), generation: z.number().int().nonnegative(), expiresAt: z.number(), consumed: z.boolean(),
   calendars: googleCalendarSelectionSchema.optional(), capabilities: capabilitiesSchema, verifier: z.string(), grantRevision: z.number().int().positive().nullable(), subject: z.string().nullable(), clientId: z.string(), redirectUri: z.string() });
-const recordSchema = z.strictObject({ grant: googleGrantSchema.nullable(), revoked: z.boolean(), ciphertext: z.string().nullable(), providerRevocation: z.enum(['confirmed', 'pending']).optional() });
+const recordSchema = z.strictObject({ grant: googleGrantSchema.nullable(), revoked: z.boolean(), ciphertext: z.string().nullable(), revocationInFlight: z.boolean().optional(), providerRevocation: z.enum(['confirmed', 'pending']).optional() });
 const tokensSchema = z.strictObject({ accessToken: secret, refreshToken: secret, expiresAt: z.number().finite() });
 const grantKey = (pairingId: string) => `GOOGLE_GRANT#${keyPart(pairingId)}`;
 /** Durable state and tokens use C1 DynamoStore, with AES-256-GCM bound to the
@@ -63,6 +63,7 @@ export class RemoteGoogleAuthorization {
     if (wanted.some(c => c === 'availability' || c === 'event_write') && !googleCalendarSelectionSchema.safeParse(calendars).success) throw new Error('google_calendar_selection_required');
     const selected = calendars ? googleCalendarSelectionSchema.parse(calendars) : undefined;
     const pairing = await this.input.auth.activePairing(pairingId); const previous = await this.record(pairingId);
+    if (previous?.data.revocationInFlight || (previous?.data.revoked && previous.data.providerRevocation !== 'confirmed')) throw new Error('google_revocation_pending');
     // Do not silently drop previously granted powers on an incomplete reauthorization.
     if (previous?.data.grant && !previous.data.revoked && previous.data.grant.capabilities.some(c => !wanted.includes(c))) throw new Error('grant_missing_capability');
     const state = randomBytes(32).toString('base64url'); const key = `OAUTH_STATE#${secretHash(state)}`;
@@ -117,7 +118,8 @@ export class RemoteGoogleAuthorization {
       || parsed.data.clientId !== config.clientId || parsed.data.redirectUri !== config.redirectUri) throw new Error('oauth_state_unavailable');
     const data = parsed.data; const pairing = await this.input.auth.activePairing(data.pairingId);
     const previous = await this.record(data.pairingId);
-    if (pairing.data.generation !== data.generation || (previous?.rev ?? null) !== data.grantRevision) throw new Error('oauth_state_unavailable');
+    if (previous?.data.revocationInFlight || (previous?.data.revoked && previous.data.providerRevocation !== 'confirmed')
+      || pairing.data.generation !== data.generation || (previous?.rev ?? null) !== data.grantRevision) throw new Error('oauth_state_unavailable');
     const verifier = z.string().regex(/^[A-Za-z0-9_-]{64}$/).parse(this.open(data.verifier, data.pairingId, key));
     try {
       await this.store.transact([this.store.put(key, { ...data, consumed: true, verifier: '' }, stored.rev),
@@ -146,20 +148,28 @@ export class RemoteGoogleAuthorization {
   async revokeGoogleGrant(pairingId: string): Promise<GrantStatus> {
     const pairing = await this.input.auth.activePairing(pairingId); const record = await this.record(pairingId);
     const grant = record?.data.grant ?? null;
-    // Fence every pending OAuth callback first. Keep encrypted tokens only while
-    // provider revocation is pending, inaccessible to authorizedAccess.
-    const pending = { grant, revoked: true, ciphertext: record?.data.ciphertext ?? null, providerRevocation: 'pending' as const };
+    if (record?.data.revocationInFlight) return { state: 'revoked', grant, providerRevocation: 'pending' };
+    if (record?.data.revoked && record.data.providerRevocation === 'confirmed') return { state: 'revoked', grant, providerRevocation: 'confirmed' };
+    // One durable owner may contact the revoke endpoint. Regrant is blocked
+    // until this claim confirms cleanup. A crash/ambiguous claim does not lease
+    // itself away: it remains pending for explicit operational reconciliation.
+    const pending = { grant, revoked: true, ciphertext: record?.data.ciphertext ?? null, providerRevocation: 'pending' as const, revocationInFlight: true };
     await this.store.transact([this.store.check(pairingKey(pairingId), pairing.rev), this.store.put(grantKey(pairingId), pending, record?.rev ?? null)]);
+    let confirmed = pending.ciphertext === null;
     if (pending.ciphertext) {
       try {
         const tokens = tokensSchema.parse(this.open(pending.ciphertext, pairingId, 'google-tokens'));
         const response = await this.request('https://oauth2.googleapis.com/revoke', { method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: tokens.refreshToken }) });
-        if (!response.ok) return { state: 'revoked', grant, providerRevocation: 'pending' };
-      } catch { return { state: 'revoked', grant, providerRevocation: 'pending' }; }
+        confirmed = response.ok;
+      } catch { confirmed = false; }
     }
-    await this.store.transact([this.store.put(grantKey(pairingId), { grant, revoked: true, ciphertext: null, providerRevocation: 'confirmed' }, (record?.rev ?? 0) + 1)]);
-    return { state: 'revoked', grant, providerRevocation: 'confirmed' };
+    const providerRevocation = confirmed ? 'confirmed' as const : 'pending' as const;
+    // Retain exact cleanup material after failure. A known completed request
+    // releases its claim for an explicit retry, never for a new authorization.
+    await this.store.transact([this.store.put(grantKey(pairingId), { ...pending, revocationInFlight: false,
+      ciphertext: confirmed ? null : pending.ciphertext, providerRevocation }, (record?.rev ?? 0) + 1)]);
+    return { state: 'revoked', grant, providerRevocation };
   }
   private accessProof(payload: z.infer<typeof accessEvidencePayloadSchema>): string {
     return createHmac('sha256', this.config().encryptionKey).update('google-access-evidence-v1\n')
