@@ -26,6 +26,8 @@ export type NavigationItem = {
  */
 export const navigationItems: readonly NavigationItem[] = [
   { route: 'today', label: 'Today', icon: CalendarCheck2, enabled: true },
+  { route: 'accounts', label: 'Accounts', icon: Users, enabled: true },
+  { route: 'campaigns', label: 'Campaigns', icon: ClipboardCheck, enabled: true },
   { route: 'leads', label: 'Leads', icon: Users, enabled: true },
   { route: 'pipeline', label: 'Pipeline', icon: SquareKanban, enabled: true },
   {

@@ -118,7 +118,7 @@ describe('NavigationRail window chrome', () => {
       const rail = screen.getByRole('navigation', { name: 'Primary' });
       const links = screen.getAllByRole<HTMLAnchorElement>('link');
       expect(links.map((link) => link.getAttribute('href'))).toEqual([
-        '#/today', '#/leads', '#/pipeline', '#/conversations',
+        '#/today', '#/accounts', '#/campaigns', '#/leads', '#/pipeline', '#/conversations',
         '#/learnings', '#/friday', '#/inbox', '#/settings',
       ]);
       expect(Array.from(rail.querySelectorAll('a, button, input, select, textarea, [tabindex]'))).toEqual(links);

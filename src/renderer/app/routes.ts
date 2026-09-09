@@ -1,5 +1,7 @@
 export const appRoutes = [
   'today',
+  'accounts',
+  'campaigns',
   'leads',
   'pipeline',
   'conversations',

@@ -13,6 +13,7 @@ import { LearningsRoute } from '../features/learnings/LearningsRoute';
 import { PipelineRoute } from '../features/pipeline/PipelineRoute';
 import { ReviewRoute } from '../features/review/ReviewRoute';
 import { TodayRoute } from '../features/today/TodayRoute';
+import { NativeDeskRoute } from '../features/today/NativeDeskRoute';
 import type { AppRoute } from './routes';
 import type { DensityState } from './useDensity';
 import type { ThemeState } from './useTheme';
@@ -34,11 +35,15 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
       return (
         <TodayRoute
           api={context.api.today}
+          workspaceApi={context.api.daily ? context.api : undefined}
           discoveryApi={context.api.discovery}
           leadApi={context.api.leadDetail}
           onOpenLead={context.openLead}
         />
       );
+    case 'accounts':
+    case 'campaigns':
+      return <NativeDeskRoute api={context.api} surface={route} onOpenLead={context.openLead} />;
     case 'leads':
       return (
         <LeadsRoute
