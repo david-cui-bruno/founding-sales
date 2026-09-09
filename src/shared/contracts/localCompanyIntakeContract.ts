@@ -19,7 +19,7 @@ function compareAccountIds(left: string, right: string): number {
   const a = encoder.encode(left);
   const b = encoder.encode(right);
   for (let index = 0; index < Math.min(a.length, b.length); index++) {
-    if (a[index] !== b[index]) return a[index] - b[index];
+    if (a[index] !== b[index]) return a[index]! - b[index]!;
   }
   return a.length - b.length;
 }
@@ -29,7 +29,7 @@ export const localCompanyReviewSchema = z.strictObject({
   complete: z.boolean(),
 }).refine(review => review.candidates.every((candidate, index) => {
   const expected = localCompanyCandidateSignals(review.input, candidate.account);
-  return (index === 0 || compareAccountIds(review.candidates[index - 1].account.id, candidate.account.id) < 0)
+  return (index === 0 || compareAccountIds(review.candidates[index - 1]!.account.id, candidate.account.id) < 0)
     && candidate.signals.length === expected.length
     && new Set(candidate.signals).size === candidate.signals.length
     && expected.every(signal => candidate.signals.includes(signal));
