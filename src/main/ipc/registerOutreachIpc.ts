@@ -6,7 +6,7 @@ import type { PairingStore } from '../delegation/pairingStore';
 import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema } from '../../shared/contracts/ownerCommandContract';
 import {delegatedPhoneHandoffResultSchema,publicDelegationCommandSchema,commandReceiptSchema} from '../../shared/contracts/delegationContract';
 import type { z } from 'zod';
-import { configureOutreachSchema,draftRevisionSchema,emailDraftSchema,openDraftSchema,outreachStatusSchema,
+import { configureOutreachSchema,draftRevisionSchema,emailDraftSchema,localEmailAuthorityReadSchema,openDraftSchema,outreachStatusSchema,
   saveDraftSchema,sendDraftSchema,type OutreachApi } from '../../shared/contracts/outreachContract';
 import { registerValidatedIpc } from './registerValidatedIpc';
 
@@ -26,6 +26,13 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
     add('save-draft',saveDraftSchema,emailDraftSchema,input=>p.saveDraft(input));
     add('generate-draft',draftRevisionSchema,emailDraftSchema,input=>p.generateDraft(input));
     add('send-draft',sendDraftSchema,emailDraftSchema,input=>p.sendDraft(input));
+    removers.push(registerValidatedIpc({channel:'outreach:inspect-local-authority',requestSchema:draftRevisionSchema,
+      responseSchema:localEmailAuthorityReadSchema,safeErrorCode:'EMAIL_AUTHORITY_READ_FAILED',
+      isTrustedRendererUrl:options.isTrustedRendererUrl,handler:async input=>{
+        const result=localEmailAuthorityReadSchema.parse(await p.inspectLocalAuthority(input));
+        if(result.draftId!==input.draftId||result.expectedRevision!==input.expectedRevision)throw new Error('email_authority_binding_changed');
+        return result;
+      }}));
     if(options.delegation){
       const d=options.delegation;
       if(d.policyImport){

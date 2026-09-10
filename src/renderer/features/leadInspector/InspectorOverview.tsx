@@ -290,6 +290,7 @@ export function InspectorOverview({
           {primary !== null && <span>{primary.value}</span>}
           {callHelp !== null && <p id="primary-call-help">{callHelp}</p>}
         </div>
+        {primaryEmail !== null && <p>Opening Email may use configured AI to prepare a draft. It does not send.</p>}
         {primaryEmail !== null && <div><Button variant="quiet" disabled={detail.optedOut || outboundPending}
           onClick={() => choose('email', primaryEmail)}>Email</Button><span>{primaryEmail.value}</span></div>}
         {detail.emails.length === 0 && <p>No email contact on file.</p>}

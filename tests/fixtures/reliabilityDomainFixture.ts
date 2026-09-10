@@ -249,7 +249,7 @@ export async function createReliabilityDomainFixture(
     ));
     delegation = createDelegationRuntime({ databaseGate: gate, pairing: null, clock, fetch: forbidden });
     const outreach: OutreachApi = { status: forbidden, configure: forbidden, connectGmail: forbidden,
-      disconnectGmail: forbidden, openDraft: forbidden, saveDraft: forbidden, generateDraft: forbidden, sendDraft: forbidden };
+      disconnectGmail: forbidden, openDraft: forbidden, saveDraft: forbidden, generateDraft: forbidden, sendDraft: forbidden, inspectLocalAuthority: forbidden };
     unregisters.push(registerOutreachIpc({ provider: outreach, delegation }));
 
     const holdReviewList = (request: ReviewListRequest, occurrence = 1) => {

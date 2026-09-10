@@ -511,7 +511,7 @@ describe('Data & storage recovery flow', () => {
 const outreachStatus: import('../../shared/contracts/outreachContract').OutreachStatus = { model: 'unconfigured' as const, modelName: '', gmail: 'unconfigured' as const, accountEmail: null, senderName: '', postalAddress: '' };
 function connectionsApi() {
   const unavailable = async (): Promise<never> => { throw new Error('Not used by settings'); };
-  return { status: vi.fn(async () => outreachStatus), configure: vi.fn(async () => outreachStatus), connectGmail: vi.fn(async () => outreachStatus), disconnectGmail: vi.fn(async () => outreachStatus), openDraft: unavailable, saveDraft: unavailable, generateDraft: unavailable, sendDraft: unavailable };
+  return { status: vi.fn(async () => outreachStatus), configure: vi.fn(async () => outreachStatus), connectGmail: vi.fn(async () => outreachStatus), disconnectGmail: vi.fn(async () => outreachStatus), openDraft: unavailable, saveDraft: unavailable, generateDraft: unavailable, sendDraft: unavailable, inspectLocalAuthority: unavailable };
 }
 it('exposes user-owned connection setup only through explicit save/connect/disconnect and never retains secret fields', async () => {
   const api = connectionsApi(); renderSettings({ outreachApi: api });

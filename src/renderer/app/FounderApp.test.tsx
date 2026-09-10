@@ -173,6 +173,7 @@ function fakeCallieApi(): CalliePreloadApi {
     outreach: {
       status: vi.fn(async () => ({ model: 'unconfigured' as const, modelName: '', gmail: 'unconfigured' as const, accountEmail: null, senderName: '', postalAddress: '' })),
       configure: pending, connectGmail: pending, disconnectGmail: pending, openDraft: pending, saveDraft: pending, generateDraft: pending, sendDraft: pending,
+      inspectLocalAuthority: vi.fn(() => new Promise<never>(() => undefined)),
     },
     leads: {
       list: vi.fn(async () => ({
@@ -474,9 +475,22 @@ it('injects persisted outreach into the actual contact workspace even when Gmail
   const setup: import('../../shared/contracts/outreachContract').OutreachStatus = { model: 'unconfigured', modelName: '', gmail: 'unconfigured', accountEmail: null, senderName: '', postalAddress: '' };
   let draft: import('../../shared/contracts/outreachContract').EmailDraft = { id: 'draft', personId: 'person-kevin', salesCycleId: 'cycle-kevin', contactMethodId: 'email-kevin', recipient: 'kevin@example.com', subject: 'Subject', body: 'Saved text', revision: 1, status: 'draft', generation: 'none', messageId: null, notice: null, updatedAt: '2026-09-08T12:00:00.000Z' };
   const outreach: CalliePreloadApi['outreach'] = { status: vi.fn(async () => setup), configure: vi.fn(), connectGmail: vi.fn(), disconnectGmail: vi.fn(), openDraft: vi.fn(async () => draft),
-    saveDraft: vi.fn(async input => { draft = { ...draft, subject: input.subject, body: input.body, revision: draft.revision + 1 }; return draft; }), generateDraft: vi.fn(), sendDraft: vi.fn() };
+    saveDraft: vi.fn(async input => { draft = { ...draft, subject: input.subject, body: input.body, revision: draft.revision + 1 }; return draft; }), generateDraft: vi.fn(), sendDraft: vi.fn(),
+    // Synthetic current-draft ownership only. Gmail remains unconfigured.
+    inspectLocalAuthority: vi.fn(async input => {
+      if (input.draftId !== draft.id || input.expectedRevision !== draft.revision) throw Error('Synthetic draft changed');
+      return { draftId: draft.id, expectedRevision: draft.revision, personId: draft.personId, contactMethodId: draft.contactMethodId, state: 'allowed' as const, reason: null, checkedAt: draft.updatedAt };
+    }) };
   render(<FounderAppHarness api={{ ...api, outreach }} health={readyHealth} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Kevin Shin' }));
+  const disclosure = await screen.findByText('Opening Email may use configured AI to prepare a draft. It does not send.');
+  expect(disclosure.isConnected).toBe(true);
+  for (let element: HTMLElement | null = disclosure; element !== null; element = element.parentElement) {
+    expect(element.hidden).toBe(false); expect(element.getAttribute('aria-hidden')).not.toBe('true');
+    const style = getComputedStyle(element);
+    expect(style.display).not.toBe('none'); expect(style.visibility).not.toMatch(/^(hidden|collapse)$/); expect(style.opacity).not.toBe('0');
+  }
+  expect(outreach.openDraft).not.toHaveBeenCalled(); expect(outreach.sendDraft).not.toHaveBeenCalled();
   fireEvent.click(await screen.findByRole('button', { name: 'Email' }));
   await waitFor(() => expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Saved text'));
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'My actual edited text' } });

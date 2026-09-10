@@ -92,7 +92,7 @@ const pendingWorkflowApis = (): Omit<CalliePreloadApi, 'health' | 'appleSpike'> 
     },
     linkedin: { prepare: pending(), get: pending(), recover: pending(), save: pending(), begin: pending(), open: pending(), copy: pending(), reportOutcome: pending() },
     phoneSetup: { status: pending(), confirm: pending(), clear: pending() },
-    outreach: { status: pending(), configure: pending(), connectGmail: pending(), disconnectGmail: pending(), openDraft: pending(), saveDraft: pending(), generateDraft: pending(), sendDraft: pending() },
+    outreach: { status: pending(), configure: pending(), connectGmail: pending(), disconnectGmail: pending(), openDraft: pending(), saveDraft: pending(), generateDraft: pending(), sendDraft: pending(), inspectLocalAuthority: pending() },
     leads: { list: pending(), updateField: pending(), bulkUpdate: pending() },
     leadDetail: { get: pending(), beginOutbound: pending(), getOutboundCapabilities: pending(), confirmTransition: pending(), findContactInfo: pending(), dismissLead: pending(), overrideCloudScore: pending() },
     today: { get: pending(), complete: pending(), snooze: pending(), pin: pending(), logPastActivity: pending(), getLeadTriageSnapshot: pending(), addLeadNote: pending(), logCallOutcome: pending(), markActivityInError: pending(), getTriageQueue: pending(), setReviewPosition: pending() },

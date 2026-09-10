@@ -80,7 +80,7 @@ export const CONTINUITY_UI_REGISTERED_CHANNELS = [...CONTINUITY_REGISTERED_CHANN
 
 export const RETAINED_UI_REGISTERED_CHANNELS = [...CONTINUITY_UI_REGISTERED_CHANNELS,
   'discovery:get', 'discovery:get-brief', 'discovery:begin', 'discovery:override',
-  ...['status', 'configure', 'connect-gmail', 'disconnect-gmail', 'open-draft', 'save-draft', 'generate-draft', 'send-draft',
+  ...['status', 'configure', 'connect-gmail', 'disconnect-gmail', 'open-draft', 'save-draft', 'generate-draft', 'send-draft', 'inspect-local-authority',
     'requested-followup-prepare', 'requested-followup-get', 'requested-followup-edit', 'requested-followup-approve',
     'delegation-begin-phone', 'delegation-bootstrap', 'delegation-policy', 'delegation-research', 'delegation-status',
     'delegation-configure', 'delegation-submit', 'delegation-sync'].map(name => `outreach:${name}`),
@@ -374,7 +374,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       const denied = async (): Promise<never> => { uiCounters.forbidden++; throw new Error('Unrelated outreach forbidden'); };
       unregisters.push(registerOutreachIpc({ delegation, isTrustedRendererUrl: trusted, provider: {
         status: denied, configure: denied, connectGmail: denied, disconnectGmail: denied,
-        openDraft: denied, saveDraft: denied, generateDraft: denied, sendDraft: denied,
+        openDraft: denied, saveDraft: denied, generateDraft: denied, sendDraft: denied, inspectLocalAuthority: denied,
       } }));
       unregisters.push(registerDiscoveryIpc({ isTrustedRendererUrl: trusted, provider: {
         get: () => runtime.withDomain(domain => createDiscoveryProvider(domain).get()),

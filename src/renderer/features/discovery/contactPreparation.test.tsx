@@ -163,6 +163,11 @@ it('preserves the API-backed email editor on focus refresh and reopens its saved
       return { ...saved };
     }),
     generateDraft: vi.fn(), sendDraft: vi.fn(),
+    // Synthetic exact-current-draft ownership keeps the existing caller/content holds under test.
+    inspectLocalAuthority: vi.fn(async input => {
+      if (input.draftId !== saved.id || input.expectedRevision !== saved.revision) throw Error('Synthetic draft changed');
+      return { draftId: saved.id, expectedRevision: saved.revision, personId: saved.personId, contactMethodId: saved.contactMethodId, state: 'allowed' as const, reason: null, checkedAt: saved.updatedAt };
+    }),
   };
   f.mount(outreachApi); await openA(); fireEvent.click(screen.getByRole('button', { name: 'Email' }));
   await waitFor(() => expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Initial saved draft'));
