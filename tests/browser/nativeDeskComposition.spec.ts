@@ -89,7 +89,11 @@ test('unpaired A uses one coherent inset state and does not mislabel unavailable
     await page.evaluate(theme => window.nativeDeskCompositionBrowser.preferences(theme, 'compact'), theme);
     const detail = page.locator('.native-desk__detail');
     await expect(detail.getByRole('link', { name: /settings/i })).toBeVisible();
-    await expect(page.locator('.native-desk__lane .native-desk__count').filter({ hasText: /^0$/ })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: /^Local commitments/ }).locator('.native-desk__count')).toHaveText('0');
+    for (const label of ['Calls', 'Needs your approval', 'Upcoming meetings']) {
+      await expect(page.getByRole('heading', { name: new RegExp(`^${label}`) }).locator('.native-desk__count')).toHaveText('Unavailable');
+    }
+    await expect(page.locator('.native-desk__lane .native-desk__count')).toHaveCount(4);
     await expect(page.getByText('Account approvals are unavailable.', { exact: true })).toHaveCount(0);
     await expect(page.getByText('Account meetings are unavailable.', { exact: true })).toHaveCount(0);
     await expect(page.getByText('No retained work due in this local snapshot.', { exact: true })).toHaveCount(0);

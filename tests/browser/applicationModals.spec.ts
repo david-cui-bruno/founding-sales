@@ -351,7 +351,7 @@ for (const outcome of ['resolve', 'reject'] as const) test(`actual Import pendin
   await settle(page, token, outcome);
   await expect(dialog).toBeVisible();
   if (outcome === 'resolve') {
-    await expect(dialog.getByRole('status')).toContainText('Imported 1 row.');
+    await expect(dialog.getByRole('status').filter({ hasText: /^Imported 1 row\.$/ })).toHaveText('Imported 1 row.');
     await expect.poll(async () => counts((await recorded(page)).slice(before))).toEqual({ 'imports.commit': 1, 'leads.list': 2, 'review.list': 1 });
     await dialog.getByRole('button', { name: 'Done', exact: true }).click();
     await expect(dialog).toHaveCount(0);

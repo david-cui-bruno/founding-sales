@@ -296,3 +296,63 @@ for (const mode of ['meeting_first', 'legacy'] as const) for (const theme of ['l
     writeFileSync(info.outputPath('dialog-calls.json'), JSON.stringify(await calls(page), null, 2));
   });
 }
+
+// Additive actual-App browser coverage for local draft continuity.
+// Uses existing real App fixture/helpers with no extra allowed API operation.
+// Tests navigation and native Import-open draft retention, NOT committed create or persistence.
+for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050] as const) {
+  test(`actual company draft survives routes and native Import opening without command replay ${theme} ${width}`, async ({ page }, info) => {
+    const context: PresentationContext = { mode: 'meeting_first', theme, density: 'compact', width };
+    const observed = await mount(page, context, 'accounts');
+    await assertActualDestination(page, 'accounts', 'meeting_first');
+    await page.getByRole('button', { name: 'Add company', exact: true }).click();
+    const name = page.getByRole('textbox', { name: 'Company name', exact: true });
+    const domain = page.getByRole('textbox', { name: 'Company domain (optional)', exact: true });
+    const rawName = '  Browser Harbor Management  ';
+    const rawDomain = ' HARBOR.EXAMPLE ';
+    await name.fill(rawName);
+    await domain.fill(rawDomain);
+    const oldInput = await name.elementHandle();
+    expect(oldInput).not.toBeNull();
+    for (const route of ['campaigns', 'leads', 'today'] as const) {
+      await navigateActualRoute(page, route);
+      await assertActualDestination(page, route, 'meeting_first');
+      await expect(page.getByRole('form', { name: 'Local company intake', exact: true })).toHaveCount(0);
+    }
+    expect(await oldInput!.evaluate(element => element.isConnected)).toBe(false);
+    await navigateActualRoute(page, 'accounts');
+    await assertActualDestination(page, 'accounts', 'meeting_first');
+    await expect(name).toHaveValue(rawName);
+    await expect(domain).toHaveValue(rawDomain);
+    const paletteOrigin = await name.elementHandle();
+    expect(paletteOrigin).not.toBeNull();
+    await name.focus();
+    await page.keyboard.press('ControlOrMeta+k');
+    const palette = page.getByRole('dialog', { name: 'Command palette', exact: true });
+    await assertModalIsolation(page, palette);
+    await page.keyboard.press('Escape');
+    await expect(palette).toHaveCount(0);
+    await expect(name).toBeFocused();
+    expect(await paletteOrigin!.evaluate(element => ({ connected: element.isConnected, focused: document.activeElement === element }))).toEqual({ connected: true, focused: true });
+    await expect(name).toHaveValue(rawName);
+    await page.evaluate(script => window.eval(script), openImportScript);
+    const dialog = page.getByRole('dialog', { name: 'Import leads', exact: true });
+    await assertModalIsolation(page, dialog);
+    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await assertActualDestination(page, 'leads', 'meeting_first');
+    await navigateActualRoute(page, 'accounts');
+    await assertActualDestination(page, 'accounts', 'meeting_first');
+    await expect(name).toHaveValue(rawName);
+    await expect(domain).toHaveValue(rawDomain);
+    await expect(page.getByRole('button', { name: 'Review company', exact: true })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Create company', exact: true })).toBeDisabled();
+    const observedCalls = await calls(page);
+    expect(observedCalls.filter(call => ['localWorkspace.reviewCompany', 'localWorkspace.createCompany', 'localWorkspace.getCompanyCreateStatus', 'imports.preview', 'imports.commit', 'imports.status'].includes(call.method))).toEqual([]);
+    expect(observedCalls.filter(call => call.kind !== 'read')).toEqual([]);
+    expect(observed.errors).toEqual([]);
+    expect(observed.requests).toEqual([]);
+    await page.screenshot({ path: info.outputPath(`company-draft-${theme}-${width}.png`) });
+    writeFileSync(info.outputPath('company-draft-calls.json'), JSON.stringify(observedCalls, null, 2));
+  });
+}

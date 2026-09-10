@@ -69,7 +69,8 @@ test('real Native Desk themes, geometry, selection and unchanged editor DOM', as
         await expect(body).toHaveValue('My retained local edit for account A');
         const geometry = await page.evaluate(() => ({ overflow: document.documentElement.scrollWidth > innerWidth, headings:[...document.querySelectorAll('.native-desk__lane h2')].map(el=>({text:el.textContent,y:el.getBoundingClientRect().bottom})),height:innerHeight }));
         expect(geometry.overflow).toBe(false);
-        expect(geometry.headings).toHaveLength(3);
+        expect(geometry.headings).toHaveLength(4);
+        await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Needs your approval', 'Upcoming meetings']);
         for (const heading of geometry.headings) expect(heading.y,`${heading.text} visible at ${width}/${theme}/${density}`).toBeLessThan(geometry.height);
         const axe = await new AxeBuilder({page}).analyze();
         expect(axe.violations.filter(item=>item.impact==='serious'||item.impact==='critical')).toEqual([]);
@@ -599,7 +600,8 @@ test('unpaired local records remain selectable without worker authority or autom
   for (const width of [1440, 1050]) {
     await page.setViewportSize({width, height: width === 1440 ? 900 : 700});
     const positions = await page.locator('.native-desk__lane h2').evaluateAll(headings => headings.map(el => el.getBoundingClientRect().bottom));
-    expect(positions).toHaveLength(3);
+    expect(positions).toHaveLength(4);
+    await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Needs your approval', 'Upcoming meetings']);
     for (const y of positions) expect(y).toBeLessThan(width === 1440 ? 900 : 700);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     const heading = await page.locator('.native-desk__lane h2').first().evaluate(el => {
@@ -747,8 +749,9 @@ test('approved A presentation matches the unchanged reference in both themes and
       const status = await page.locator('.native-desk__connection > summary').boundingBox();
       expect.soft(Math.abs(status!.y + status!.height / 2 - actual[3].centerY), `${label} horizontal status`).toBeLessThanOrEqual(3);
       expect.soft(await page.getByText('Your next conversations', {exact: true}).count()).toBe(1);
-      expect.soft(await page.locator('.native-desk__lane h2 svg').count()).toBe(3);
-      expect.soft(await page.locator('.native-desk__lane h2 .native-desk__count').count()).toBe(3);
+      expect.soft(await page.locator('.native-desk__lane h2 svg').count()).toBe(4);
+      expect.soft(await page.locator('.native-desk__lane h2 .native-desk__count').count()).toBe(4);
+      await expect.soft(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Needs your approval', 'Upcoming meetings']);
       expect.soft(await page.getByRole('button', {name: 'Refresh', exact: true}).innerText()).toBe('');
       await page.screenshot({path: testInfo.outputPath(`restored-A-${width}-${theme}.png`), animations: 'disabled'});
     }
@@ -792,7 +795,8 @@ test('approved A empty unpaired surfaces stay coherent and truthful without inve
         for (const label of labels) expect.soft(label.fullTextWidth, `${width} complete primary label ${label.text}`).toBeLessThanOrEqual(label.width + 0.05);
         if (surface === 'today') {
           const headings = await page.locator('.native-desk__lane h2').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().bottom));
-          expect(headings).toHaveLength(3);
+          expect(headings).toHaveLength(4);
+          await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Needs your approval', 'Upcoming meetings']);
           for (const bottom of headings) expect(bottom).toBeLessThan(width === 1440 ? 900 : 700);
         }
         const axe = await new AxeBuilder({page}).analyze();

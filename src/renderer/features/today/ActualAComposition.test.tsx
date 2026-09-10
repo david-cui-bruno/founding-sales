@@ -35,8 +35,9 @@ it('uses one intentional unpaired surface and unavailable counts instead of zero
   render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
   const root = await screen.findByTestId('native-desk');
   const queue = within(root).getByRole('navigation', { name: 'Today queue' });
-  expect(queue.querySelectorAll('.native-desk__count')).toHaveLength(3);
-  for (const count of queue.querySelectorAll('.native-desk__count')) expect(count.textContent).toBe('Unavailable');
+  expect(queue.querySelectorAll('.native-desk__count')).toHaveLength(4);
+  const counts = [...queue.querySelectorAll('.native-desk__count')].map(count => count.textContent);
+  expect(counts).toEqual(['0', 'Unavailable', 'Unavailable', 'Unavailable']);
   expect(within(queue).queryByText(/No retained work|Account .* unavailable|No approvals|No stored meetings/)).toBeNull();
   const surface = root.querySelector('.native-desk__welcome')!;
   expect(surface.textContent).toContain('Local work remains available');
@@ -151,14 +152,15 @@ it('keeps routine owner preflight discoverable without preceding the primary sav
 });
 
 it.each([
-  ['missing', '0 + unknown'], ['missing_allocated', '1 + unknown'], ['pending', '0 + unknown'], ['failed', '0 + unknown'],
-  ['partial', '0+ · partial'], ['stale', '0 · last known'], ['refreshing', '0 · checking'], ['known', '0'],
-] as const)('does not count %s retained-source contribution as a known scoped total', (mode, count) => {
+  ['missing', 'Unavailable', '0'], ['missing_allocated', 'Unavailable', '1'], ['pending', 'Checking', '0'], ['failed', 'Unavailable', '0'],
+  ['partial', '0+ · partial', '0'], ['stale', '0 · last known', '0'], ['refreshing', '0 · checking', '0'], ['known', '0', '0'],
+] as const)('does not count %s retained-source contribution as a known scoped total', (mode, localCount, callCount) => {
   const snapshot = dailyFixture({calls:{accountIds:mode === 'missing_allocated' ? ['a'] : [],workloadConflict:false}});
   const f = nativeDeskFixture(snapshot);
   const retained = {value: ['partial','stale','refreshing','known'].includes(mode) ? commitments({reviewErrorCount:mode === 'partial' ? 1 : 0}) : null, pending:mode === 'pending' || mode === 'refreshing', error:mode === 'failed' || mode === 'stale'};
   render(<NativeDesk snapshot={snapshot} api={f.api} config={configuredFixtureStatus()} onRefresh={vi.fn()} onOpenLead={vi.fn()} localRead={mode === 'missing' ? undefined : {overview:{value:localSnapshot(),pending:false,error:false},retained}} />);
-  expect(screen.getByRole('heading',{name:/^Calls/}).querySelector('.native-desk__count')?.textContent).toBe(count);
+  expect(screen.getByRole('heading',{name:/^Local commitments/}).querySelector('.native-desk__count')?.textContent).toBe(localCount);
+  expect(screen.getByRole('heading',{name:/^Calls/}).querySelector('.native-desk__count')?.textContent).toBe(callCount);
 });
 it.each(['owner_supplied','missing_contact','mismatch'] as const)('exposes exact %s recipient fallback in accessible row descriptions', mode => {
   const first = namedRequested();
@@ -173,6 +175,71 @@ it.each(['owner_supplied','missing_contact','mismatch'] as const)('exposes exact
   expect(rows.map(row => row.getAttribute('aria-description'))).toEqual(['a@fixture.invalid','second@fixture.invalid']);
   expect(within(rows[0]).getByText('a@fixture.invalid')).toBeTruthy();
   expect(within(rows[1]).getByText('second@fixture.invalid')).toBeTruthy();
+});
+
+for (const size of [0, 1] as const) for (const mode of ['known', 'partial', 'read_failed', 'held_partial', 'excluded_foreign', 'unavailable'] as const) {
+  it(`projects ${size} worker rows from their own ${mode} source on all three surfaces`, () => {
+    const scoped = mode !== 'unavailable';
+    const partial = ['partial', 'held_partial', 'excluded_foreign', 'unavailable'].includes(mode);
+    const count = scoped ? size : 0;
+    const snapshot = dailyFixture({
+      workspaceId: scoped ? 'ws' : null,
+      accounts: count ? dailyFixture().accounts.slice(0, 1) : [],
+      calls: { accountIds: count ? ['a'] : [], workloadConflict: false }, answers: [],
+      campaigns: count ? [{
+        version: { id: 'version-fixture', campaignId: 'campaign-fixture', version: 1,
+          audienceHash: 'a'.repeat(64), offer: 'Fixture offer', objective: 'meeting', cohortAccountIds: ['a'], approvedAt: null,
+          steps: [{ id: 'step-fixture', channel: 'call', condition: 'initial', delayHours: 0 }],
+          capScope: 'campaign_version_lifetime', channelCaps: { call: 1, email: 0, linkedin: 0 }, contentPolicyHash: 'b'.repeat(64) },
+        snapshotHash: 'c'.repeat(64), caps: [], enrollments: [],
+      }] : [],
+      freshness: { kind: partial ? 'incomplete' : 'local_snapshot', generatedAt: fixtureNow, remote: 'unknown' },
+      issues: mode === 'excluded_foreign' ? [{ code: 'scope_mismatch', count: 1 }] : scoped ? [] : [{ code: 'scope_unknown', count: 1 }],
+    });
+    const f = nativeDeskFixture(snapshot);
+    const props = { snapshot, api: f.api, config: configuredFixtureStatus(), onRefresh: vi.fn(), onOpenLead: vi.fn(),
+      readError: mode === 'read_failed', localHold: mode === 'held_partial' || !scoped,
+      localRead: { overview: { value: localSnapshot({ accounts: { state: 'available', snapshots: dailyFixture().accounts } }), pending: false, error: false },
+        retained: { value: commitments({ reviewErrorCount: 1 }), pending: true, error: false } },
+    };
+    const expected = !scoped ? 'Unavailable' : mode === 'read_failed' || mode === 'held_partial' ? `${count} · last known` : partial ? `${count}+ · partial` : String(count);
+    const view = render(<NativeDesk {...props} surface="today" />);
+    expect(screen.getByRole('heading', { name: /^Calls/ }).querySelector('.native-desk__count')?.textContent).toBe(expected);
+    expect(screen.getByRole('heading', { name: /^Local commitments/ }).querySelector('.native-desk__count')?.textContent).toBe('0+ · partial');
+    expect(screen.queryAllByRole('button', { name: /^Call ·/ })).toHaveLength(count);
+    for (const [surface, label] of [['accounts', 'Worker accounts'], ['campaigns', 'Worker campaigns']] as const) {
+      view.rerender(<NativeDesk {...props} surface={surface} />);
+      const heading = screen.getByRole('heading', { name: new RegExp(`^${label}`) });
+      expect(heading.querySelector('span')?.textContent).toBe(expected);
+      expect(within(heading.closest('section')!).queryAllByRole('button')).toHaveLength(count);
+      if (surface === 'accounts') expect(screen.getAllByRole('button', { name: /^Local account ·/ })).toHaveLength(2);
+    }
+    expect(f.calls).toEqual([]);
+  });
+}
+
+it.each([false, true])('shows held and applicable incomplete warnings independently with missing worker scope %s', missing => {
+  const snapshot = dailyFixture({
+    ...(missing ? { workspaceId: null, accounts: [], answers: [], calls: { accountIds: [], workloadConflict: false } } : {}),
+    freshness: { kind: 'incomplete', generatedAt: fixtureNow, remote: 'unknown' },
+    issues: [{ code: 'invalid_local_record', count: 1 }],
+  });
+  const f = nativeDeskFixture(snapshot);
+  render(<NativeDesk snapshot={snapshot} api={f.api} config={null} localHold onRefresh={vi.fn()} onOpenLead={vi.fn()} />);
+  expect(screen.getByText('Local workflow unavailable or inconsistent. Worker actions are held. Refresh to check status.').getAttribute('role')).toBe('status');
+  expect(screen.getByText('The daily snapshot is incomplete. Account work may be missing. Existing owner checks still apply.').getAttribute('role')).toBe('status');
+  expect(f.calls).toEqual([]);
+});
+
+it('keeps a solely unpaired scope quiet without hiding a separate local hold', () => {
+  const snapshot = dailyFixture({ workspaceId: null, accounts: [], answers: [], calls: { accountIds: [], workloadConflict: false },
+    freshness: { kind: 'incomplete', generatedAt: fixtureNow, remote: 'unknown' }, issues: [{ code: 'scope_unknown', count: 1 }, { code: 'scope_mismatch', count: 1 }] });
+  const f = nativeDeskFixture(snapshot);
+  render(<NativeDesk snapshot={snapshot} api={f.api} config={null} localHold onRefresh={vi.fn()} onOpenLead={vi.fn()} />);
+  expect(screen.getByText(/Local workflow unavailable or inconsistent/)).toBeTruthy();
+  expect(screen.queryByText(/The daily snapshot is incomplete/)).toBeNull();
+  expect(screen.getByRole('heading', { name: /^Calls/ }).querySelector('.native-desk__count')?.textContent).toBe('Unavailable');
+  expect(f.calls).toEqual([]);
 });
 
 it('reveals a focused editor only within its message scroll owner without changing selection or text', () => {

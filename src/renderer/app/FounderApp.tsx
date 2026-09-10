@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import type { CalliePreloadApi } from '../../shared/preload';
 import type { FoundationHealth } from '../foundation/useFoundationHealth';
+import { LocalCompanyIntakeProvider } from '../features/today/LocalCompanyIntakeProvider';
 import { ImportDialog } from '../features/import/ImportDialog';
 import { LeadInspectorProvider } from '../features/leadInspector/LeadInspectorProvider';
 import { useLeadInspector } from '../features/leadInspector/useLeadInspector';
@@ -57,7 +58,8 @@ function FounderWorkspace({ api, health, theme, density, initialRoute }: Founder
 
   return (
     <>
-      <AppShell
+      <LocalCompanyIntakeProvider api={api.localWorkspace}>
+        <AppShell
         route={routing.route}
         onNavigate={routing.navigate}
         reviewCount={reviewSummary.state}
@@ -77,6 +79,7 @@ function FounderWorkspace({ api, health, theme, density, initialRoute }: Founder
           })}
         </div>
       </AppShell>
+      </LocalCompanyIntakeProvider>
       <CommandPalette
         navigate={routing.navigate}
         openImport={() => setImportOpen(true)}

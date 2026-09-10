@@ -4,6 +4,7 @@ import { useLocalWorkspaceRead, type LocalDeskRead } from './localWorkspaceRead'
 import { RetainedWork, RetainedWorkDetail, LocalOnlyCalls, retainedKey } from './RetainedWork';
 import { LocalAccountLibrary, LocalAccountDetail, localAccountKey, LocalOnlyAccountLibrary, type LocalAccountSelectionRequest } from './LocalAccountLibrary';
 import { LocalCompanyIntake, useLocalCompanyIntake } from './LocalCompanyIntake';
+import { formatVisibleCount, localCommitmentsCount, type VisibleCount } from './visibleCount';
 import { updateRequestedSessionHolds } from './requestedDraftSession';
 import { updateLinkedInSessionHolds } from '../linkedin/linkedInSession';
 import {
@@ -595,14 +596,9 @@ export function NativeDesk({
       select(key);
     }
   };
-  const retainedRead = localRead?.retained;
-  const knownCalls = snapshot.calls.accountIds.length + (retainedRead?.value?.items.length ?? 0);
-  const callCount = unavailableScope ? 'Unavailable'
-    : !retainedRead?.value ? `${snapshot.calls.accountIds.length} + unknown`
-    : retainedRead.error ? `${knownCalls} · last known`
-    : retainedRead.pending ? `${knownCalls} · checking`
-    : retainedRead.value.reviewErrorCount ? `${knownCalls}+ · partial`
-    : knownCalls;
+  const retainedCount = localCommitmentsCount(localRead?.retained);
+  const workerCount = (value: number): VisibleCount => unavailableScope ? { kind: 'unavailable' } : readError || localHold ? { kind: 'last_known', value } : incomplete ? { kind: 'partial', value } : { kind: 'known', value };
+  const callCount = workerCount(snapshot.calls.accountIds.length);
   const title =
     surface === 'today'
       ? 'Today'
@@ -667,17 +663,23 @@ export function NativeDesk({
           <button className="native-desk__refresh" aria-label="Refresh" title="Refresh" onClick={onRefresh}><RefreshCw size={16} aria-hidden="true" /></button>
         </div>
       </header>
-      {(localHold || (incomplete && (!unavailableScope || snapshot.issues.some(issue => issue.code !== 'scope_unknown' && issue.code !== 'scope_mismatch')))) && <p role="status">{localHold ? 'Local workflow unavailable or inconsistent. Worker actions are held. Refresh to check status.' : 'The daily snapshot is incomplete. Account work may be missing. Existing owner checks still apply.'}</p>}
+      {localHold && <p role="status">Local workflow unavailable or inconsistent. Worker actions are held. Refresh to check status.</p>}
+      {incomplete && (!unavailableScope || snapshot.issues.some(issue => issue.code !== 'scope_unknown' && issue.code !== 'scope_mismatch')) && <p role="status">The daily snapshot is incomplete. Account work may be missing. Existing owner checks still apply.</p>}
       <div className="native-desk__layout">
         <nav className={`native-desk__queue${surface === 'today' ? ' native-desk__queue--today' : ''}`} aria-label={`${title} queue`} tabIndex={0}>
           <div className="native-desk__queue-title"><h2>{surface === 'today' ? 'Your next conversations' : surface === 'accounts' ? 'Your accounts' : 'Your campaigns'}</h2><p className="native-desk__hint" title="j / k to move · Enter to review">j / k · ↵</p></div>
           {surface === 'today' ? (
             <>
-              <section className="native-desk__lane" aria-label="Calls" tabIndex={0}>
+              <section className="native-desk__lane" aria-label="Local commitments" tabIndex={0}>
                 <h2>
-                  <Phone size={14} aria-hidden="true" /><span className="native-desk__lane-label">Calls</span><span className="native-desk__count">{callCount}</span>
+                  <Phone size={14} aria-hidden="true" /><span className="native-desk__lane-label">Local commitments</span><span className="native-desk__count">{formatVisibleCount(retainedCount)}</span>
                 </h2>
                 {localRead && <RetainedWork read={localRead.retained} selected={selected} onSelect={select} />}
+              </section>
+              <section className="native-desk__lane" aria-label="Calls" tabIndex={0}>
+                <h2>
+                  <Phone size={14} aria-hidden="true" /><span className="native-desk__lane-label">Calls</span><span className="native-desk__count">{formatVisibleCount(callCount)}</span>
+                </h2>
                 {!snapshot.calls.accountIds.length ? (
                   null
                 ) : (
@@ -720,7 +722,7 @@ export function NativeDesk({
             {localRead && <LocalAccountLibrary intake={intake} read={localRead.overview} selected={selected} onSelect={select} />}
             <section className="native-desk__lane">
               <h2>
-                Accounts <span>{snapshot.accounts.length}</span>
+                Worker accounts <span>{formatVisibleCount(workerCount(snapshot.accounts.length))}</span>
               </h2>
               {snapshot.accounts.map((a) => (
                 <button
@@ -742,7 +744,7 @@ export function NativeDesk({
           ) : (
             <section className="native-desk__lane">
               <h2>
-                Campaigns <span>{snapshot.campaigns.length}</span>
+                Worker campaigns <span>{formatVisibleCount(workerCount(snapshot.campaigns.length))}</span>
               </h2>
               {snapshot.campaigns.map((c) => (
                 <button

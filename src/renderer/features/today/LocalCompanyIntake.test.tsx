@@ -260,3 +260,40 @@ const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<ty
 
 Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
 Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });
+
+it('releases only the verified needs_review request and keeps a newer standalone request when an older result arrives', async () => {
+  const f = fixture(); const old = pending<LocalCompanyCreateResult>();
+  f.api.createCompany.mockReturnValueOnce(old.promise);
+  const view = f.mount(); await ready(); fireEvent.click(button('Create company'));
+  const first = f.api.createCompany.mock.calls[0][0];
+  const next = fixture(); const nextResult = pending<LocalCompanyCreateResult>(); next.api.createCompany.mockReturnValueOnce(nextResult.promise);
+  view.rerender(<Harness {...next.options} />); await ready('New Company', 'new.example'); fireEvent.click(button('Create company'));
+  const second = next.api.createCompany.mock.calls[0][0];
+  expect(second.commandId).not.toBe(first.commandId);
+  await act(async () => { old.resolve({ status: 'needs_review', commandId: first.commandId, review: { ...review({ name: first.name, domain: first.domain }), complete: false } }); });
+  expect((screen.getByRole('textbox', { name: 'Company name' }) as HTMLInputElement).value).toBe(second.name);
+  expect((button('Close company form') as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByText(/The local catalog changed/)).toBeNull();
+  await act(async () => { nextResult.resolve({ status: 'needs_review', commandId: second.commandId, review: { ...review({ name: second.name, domain: second.domain }), complete: false } }); });
+  expect(screen.getByText(/The local catalog changed/)).toBeTruthy();
+  expect((button('Close company form') as HTMLButtonElement).disabled).toBe(false);
+  expect((button('Create company') as HTMLButtonElement).disabled).toBe(true);
+  edit('Third Company', 'third.example'); fireEvent.click(button('Review company'));
+  await waitFor(() => expect((button('Create company') as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(button('Create company')); await screen.findByText(/Company saved/);
+  expect(next.api.createCompany.mock.calls[1][0]).toEqual({ commandId: expect.any(String), name: 'Third Company', domain: 'third.example' });
+  expect(next.api.createCompany.mock.calls[1][0].commandId).not.toBe(second.commandId);
+  expect(f.options.onOpenAccount).not.toHaveBeenCalled(); expect(f.options.onRefreshLocal).not.toHaveBeenCalled();
+});
+
+it('retains unknown standalone request when needs_review has the wrong input instead of unlocking it', async () => {
+  const f = fixture(); f.api.createCompany.mockImplementationOnce(async request => ({ status: 'needs_review', commandId: request.commandId, review: { ...review({ name: 'Wrong Company', domain: request.domain }), complete: false } }));
+  f.mount(); await ready(); fireEvent.click(button('Create company')); await screen.findByText(/Save outcome unknown/);
+  const request = f.api.createCompany.mock.calls[0][0];
+  expect((button('Close company form') as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('textbox', { name: 'Company name' }) as HTMLInputElement).value).toBe(request.name);
+  expect(screen.queryByText(/The local catalog changed/)).toBeNull();
+  fireEvent.click(button('Check save status')); await screen.findByText(/not recorded yet/);
+  expect(f.api.getCompanyCreateStatus.mock.calls).toEqual([[request]]); expect(f.api.createCompany).toHaveBeenCalledOnce();
+  expect(f.options.onOpenAccount).not.toHaveBeenCalled();
+});
