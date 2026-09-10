@@ -1,5 +1,5 @@
 import { localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema } from '../../shared/contracts/localCompanyIntakeContract';
-import { localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, selectedResearchSchema, localCompanyResearchStatusSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
+import { linkCompanyPersonRequestSchema, accountEvidenceReceiptSchema, localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, selectedResearchSchema, localCompanyResearchStatusSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
 export function registerLocalWorkspaceIpc(provider: LocalWorkspaceApi, isTrustedRendererUrl?: (url: string) => boolean): () => void {
   const disposers: (() => void)[] = [];
@@ -43,6 +43,12 @@ export function registerLocalWorkspaceIpc(provider: LocalWorkspaceApi, isTrusted
       const selected = Object.freeze(selectedResearchSchema.parse(input));
       const result = localCompanyResearchStatusSchema.parse(await provider.getCompanyResearchStatus(selected));
       if (result.accountId !== selected.accountId || result.commandId !== selected.commandId) throw new Error('Selected research identity mismatch');
+      return result;
+    } }));
+    disposers.push(registerValidatedIpc({ channel: 'local-workspace:link-company-person', requestSchema: linkCompanyPersonRequestSchema, responseSchema: accountEvidenceReceiptSchema, safeErrorCode: 'LOCAL_COMPANY_LINK_FAILED', isTrustedRendererUrl, handler: async input => {
+      const parsed = Object.freeze(linkCompanyPersonRequestSchema.parse(input));
+      const result = accountEvidenceReceiptSchema.parse(await provider.linkCompanyPerson(parsed));
+      if (result.accountId !== parsed.accountId) throw new Error('LOCAL_COMPANY_PERSON_LINK_IDENTITY_MISMATCH');
       return result;
     } }));
   } catch (error) {

@@ -1,5 +1,5 @@
-import { selectedCompanySchema, localCompanyDetailSchema, type LocalWorkspaceSnapshot, type LocalCommitmentsSnapshot, type LocalWorkflowReceipt, type LocalCompanyDetail, type SelectedCompany, type SelectedResearch, type LocalCompanyResearchStatus } from '../../src/shared/contracts/localWorkspaceContract';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { selectedCompanySchema, localCompanyDetailSchema, type LocalWorkspaceSnapshot, type LocalCommitmentsSnapshot, type LocalWorkflowReceipt, type LocalCompanyDetail, type SelectedCompany, type SelectedResearch, type LocalCompanyResearchStatus, type LinkCompanyPersonRequest } from '../../src/shared/contracts/localWorkspaceContract';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const electron = vi.hoisted(() => ({ handle: vi.fn(), removeHandler: vi.fn() }));
 vi.mock('electron', () => ({ ipcMain: electron }));
 import { registerLocalWorkspaceIpc } from '../../src/main/workspace/registerLocalWorkspaceIpc';
@@ -12,12 +12,12 @@ const command = { commandId: 'cmd', manifestId: 'manifest', expectedMode: 'legac
 const receipt: LocalWorkflowReceipt = { commandId: 'cmd', manifestId: 'manifest', mode: 'meeting_first' as const, revision: 1, occurredAt: snapshot.generatedAt, cancelledActionIds: [], stoppedEnrollmentIds: [], preservedActionIds: [], parkedPersonIds: [], callbackEvidenceIds: [], unknownDraftIds: [], parkedReviewActions: [], parkedActions: [] };
 const trusted = { senderFrame: { url: 'callie://app/index.html' } };
 const unavailableCompany = async (): Promise<never> => { throw new Error('Company fixture unavailable'); };
-const provider = { researchCompany: unavailableCompany, getCompanyResearchStatus: unavailableCompany, getCompany: unavailableCompany, get: async () => snapshot, getCommitments: async () => feed, transition: async () => receipt, reviewCompany: unavailableCompany, createCompany: unavailableCompany, getCompanyCreateStatus: unavailableCompany };
+const provider = { linkCompanyPerson: unavailableCompany, researchCompany: unavailableCompany, getCompanyResearchStatus: unavailableCompany, getCompany: unavailableCompany, get: async () => snapshot, getCommitments: async () => feed, transition: async () => receipt, reviewCompany: unavailableCompany, createCompany: unavailableCompany, getCompanyCreateStatus: unavailableCompany };
 beforeEach(() => vi.clearAllMocks());
 describe('local workspace bridge', () => {
   it('roundtrips the frozen API and rejects arity, caller scope, and untrusted senders', async () => {
     const remove = registerLocalWorkspaceIpc(provider);
-    expect(electron.handle).toHaveBeenCalledTimes(9);
+    expect(electron.handle).toHaveBeenCalledTimes(10);
     const api = createLocalWorkspaceApi(createIpcClient({ invoke: async (channel, ...args) => registeredIpcHandler(electron.handle, channel)(trusted, ...args) }));
     expect(await api.get()).toEqual(snapshot); expect(await api.getCommitments()).toEqual(feed); expect(await api.transition(command)).toEqual(receipt);
     for (const channel of ['local-workspace:get', 'local-workspace:get-commitments']) {
@@ -27,7 +27,7 @@ describe('local workspace bridge', () => {
     }
     const transition = registeredIpcHandler(electron.handle, 'local-workspace:transition');
     for (const args of [[], [command, command], [{ ...command, workspaceId: 'invented' }], [{ ...command, expectedMode: 'meeting_first' }]]) await expect(transition(trusted, ...args)).rejects.toThrow();
-    remove(); remove(); expect(electron.removeHandler.mock.calls.map(c => c[0])).toEqual(['local-workspace:company-research-status', 'local-workspace:research-company', 'local-workspace:get-company', 'local-workspace:company-create-status', 'local-workspace:create-company', 'local-workspace:review-company', 'local-workspace:transition', 'local-workspace:get-commitments', 'local-workspace:get']);
+    remove(); remove(); expect(electron.removeHandler.mock.calls.map(c => c[0])).toEqual(['local-workspace:link-company-person', 'local-workspace:company-research-status', 'local-workspace:research-company', 'local-workspace:get-company', 'local-workspace:company-create-status', 'local-workspace:create-company', 'local-workspace:review-company', 'local-workspace:transition', 'local-workspace:get-commitments', 'local-workspace:get']);
   });
   it('rolls partial registration back and validates inbound responses', async () => {
     electron.handle.mockImplementationOnce(() => undefined).mockImplementationOnce(() => { throw new Error('registration'); });
@@ -58,7 +58,7 @@ import { migrateToLatest } from '../../src/main/db/migrate';
 import { DomainRuntime } from '../../src/main/domain/domainRuntime';
 import { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
 import { HealthService } from '../../src/main/health/healthService';
-import { createLocalWorkspaceProvider } from '../../src/main/workspace/localWorkspaceProvider';
+import { createLocalWorkspaceProvider, type SelectedCompanyResearchPort } from '../../src/main/workspace/localWorkspaceProvider';
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
 function lifetimeFixture(load?: () => Promise<void>) {
   const temp = createTempDatabase();
@@ -272,7 +272,7 @@ describe('Task 1 selected company public boundaries', () => {
     } finally { remove(); }
   });
 
-  it.each([1, 2, 3, 4, 5, 6, 7, 8, 9])('rolls back all successful local registrations when handler %s fails', nth => {
+  it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])('rolls back all successful local registrations when handler %s fails', nth => {
     const active = new Set<string>();
     const registered: string[] = [];
     let calls = 0;
@@ -424,7 +424,6 @@ it('shutdown waits for an already acquired getCompany storage lease and then dis
   }
 });
 
-import type { SelectedCompanyResearchPort } from '../../src/main/workspace/localWorkspaceProvider';
 const researchChannels = ['local-workspace:research-company', 'local-workspace:company-research-status'] as const;
 const researchMethods = ['researchCompany', 'getCompanyResearchStatus'] as const;
 const researchLimits = { maxCompanies: 1, maxPages: 1, maxBytes: 10000, maxCostMicros: 100 };
@@ -442,7 +441,7 @@ describe('Task 3 strict selected research IPC', () => {
       const currentProvider = { ...provider, researchCompany, getCompanyResearchStatus };
       remove = registerLocalWorkspaceIpc(currentProvider);
       expect(researchCompany).not.toHaveBeenCalled(); expect(getCompanyResearchStatus).not.toHaveBeenCalled();
-      expect(electron.handle.mock.calls.slice(-2).map(call => call[0])).toEqual(researchChannels);
+      expect(electron.handle.mock.calls.slice(7, 9).map(call => call[0])).toEqual(researchChannels);
       const invoke = vi.fn(async (channel: string, ...args: unknown[]) => registeredIpcHandler(electron.handle, channel)(trusted, ...args));
       const api = createLocalWorkspaceApi(createIpcClient({ invoke }));
       for (const [index, method] of researchMethods.entries()) {
@@ -453,7 +452,7 @@ describe('Task 3 strict selected research IPC', () => {
       }
       remove(); remove();
       expect(electron.removeHandler.mock.calls.map(call => call[0])).toEqual([
-        ...[...researchChannels].reverse(), 'local-workspace:get-company', 'local-workspace:company-create-status',
+        'local-workspace:link-company-person', ...[...researchChannels].reverse(), 'local-workspace:get-company', 'local-workspace:company-create-status',
         'local-workspace:create-company', 'local-workspace:review-company', 'local-workspace:transition',
         'local-workspace:get-commitments', 'local-workspace:get',
       ]);
@@ -617,4 +616,318 @@ it.each(['account', 'command', 'shape'] as const)('Task 3 real provider validate
     expect(researchCompany).toHaveBeenCalledTimes(1);
     expect(await read.getCompanyResearchStatus(selected)).toEqual(original);
   } finally { await f.close(); }
+});
+
+// Task 5 append-only preparation. Original tests and their frozen nine-handler
+// inventory above are intentionally unchanged. Parent owns inventory migration.
+import type { AccountEvidenceReceipt } from '../../src/shared/contracts/accountContract';
+import { createImportProvider } from '../../src/main/ipc/registerApplicationIpc';
+import { createFounderSalesDomain, type FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
+import { productionDomainGate } from '../fixtures/productionDomainGate';
+const task5Channel = 'local-workspace:link-company-person';
+const task5Now = '2026-09-09T12:00:00.000Z';
+const task5Quote = 'Nora Vale is the maintenance manager at Fictional Cedar PM.';
+const task5Uuid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+function task5Request(): LinkCompanyPersonRequest {
+  return { commandId: task5Uuid(1), accountId: 'selected', expectedVersion: 2,
+    link: { id: 'reviewed-link', kind: 'person_role', personId: 'saved-person', role: 'Maintenance manager',
+      relationship: 'Reviewed source-listed role', authority: 'unconfirmed', authorityEvidenceIds: [],
+      evidenceIds: ['source'], validFrom: task5Now, validTo: null },
+    sourceQuotes: [{ sourceId: 'source', quote: task5Quote }] };
+}
+function task5RuntimeFixture(load?: () => Promise<void>) {
+  const temp = createTempDatabase(); const key = createTestWorkspaceKey();
+  let database: AppDatabase | undefined; let domainRuntime: DomainRuntime | undefined; let counter = 2000; let opens = 0;
+  const ids = { next: () => task5Uuid(++counter) };
+  const runtime = new FoundationRuntime({ appVersion: '1.0.0', databasePath: temp.path, databaseExists: false,
+    backupDirectory: join(dirname(temp.path), 'backups'), keyEnvelopePath: join(dirname(temp.path), 'fictional-envelope.json') }, {
+    loadWorkspaceKey: async () => { await load?.(); return { ...key, bytes: Buffer.from(key.bytes) }; },
+    prepareEncryptedDatabase: async () => undefined,
+    openDatabase: options => { opens++; database = openDatabase(options); return database; }, migrateToLatest,
+    createDomainRuntime: db => domainRuntime = new DomainRuntime({ database: db, clock: { now: () => task5Now }, ids }),
+    createHealthService: options => new HealthService(options), closeDatabase,
+  });
+  return { runtime, local: createLocalWorkspaceProvider(runtime), ids, database: () => database!, opens: () => opens,
+    domainServices: () => domainRuntime!.getServices(),
+    stopDomain: () => domainRuntime?.shutdown(),
+    async close() { try { await runtime.shutdown(); } finally { key.bytes.fill(0); temp.cleanup(); } } };
+}
+async function task5Seed(f: ReturnType<typeof task5RuntimeFixture>, isolatedDomain?: FounderSalesDomain) {
+  // P01/P03 retain the public Foundation composition. Only P02 supplies a real
+  // facade inside withDatabase, without populating Foundation's memoized facade.
+  const imports = createImportProvider(isolatedDomain ? productionDomainGate(isolatedDomain) : f.runtime);
+  const preview = await imports.preview({ kind: 'csv', sourceName: 'fictional-link-bridge.csv',
+    content: 'Name,Email,Organization\nNora Vale,nora.vale@cedar.invalid,Fictional Cedar PM\nMarcus Reed,marcus.reed@cedar.invalid,Fictional Cedar PM\n' });
+  expect(preview.errors).toEqual([]);
+  const mapping = { Name: 'person_name', Email: 'email', Organization: 'organization' } as const;
+  const remapped = await imports.remap({ previewId: preview.previewId, contentHash: preview.contentHash, mapping });
+  expect(remapped.errors).toEqual([]);
+  const imported = await imports.commit({ previewId: preview.previewId, contentHash: preview.contentHash, mapping,
+    source: { channel: 'registry', referredByPersonId: null }, duplicateDecisions: [] });
+  expect(imported.importedRowCount).toBe(2); expect(new Set(imported.importedPersonIds).size).toBe(2);
+  const readDetails = (domain: FounderSalesDomain) => imported.importedPersonIds.map(personId => domain.getLeadDetail({ personId }));
+  const details = isolatedDomain ? readDetails(isolatedDomain) : await f.runtime.withDomain(readDetails);
+  const nora = details.find(p => p.personName === 'Nora Vale')!;
+  const marcus = details.find(p => p.personName === 'Marcus Reed')!;
+  expect(nora).toBeDefined(); expect(marcus).toBeDefined();
+  expect(nora.personId).not.toBe(marcus.personId);
+  expect(nora.organizationLabel).toBe('Fictional Cedar PM'); expect(marcus.organizationLabel).toBe(nora.organizationLabel);
+  expect(nora.emails[0]).toMatchObject({ value: 'nora.vale@cedar.invalid', ownershipState: 'unknown' });
+  expect(marcus.emails[0]).toMatchObject({ value: 'marcus.reed@cedar.invalid', ownershipState: 'unknown' });
+  const companyInput = { commandId: f.ids.next(), name: 'Fictional Cedar PM', domain: 'cedar.invalid' };
+  const saved = isolatedDomain ? isolatedDomain.createLocalCompany(companyInput) : await f.local.createCompany(companyInput);
+  expect(saved.status).toBe('saved'); if (saved.status !== 'saved') throw new Error('Expected real saved account');
+  const excerpt = `${task5Quote} Marcus Reed is the leasing coordinator.`;
+  const source = { id: f.ids.next(), url: 'https://example.invalid/team', fetchedAt: task5Now,
+    sha256: createHash('sha256').update(excerpt).digest('hex'), excerpt, permitted: true };
+  const repo = new AccountRepository({ database: f.database(), clock: { now: () => task5Now }, ids: f.ids,
+    sourcePolicy: { attest: item => item.url === source.url && item.sha256 === source.sha256 && item.excerpt === source.excerpt } });
+  const admitted = repo.admitEvidence({ commandId: f.ids.next(), accountId: saved.account.id, expectedVersion: saved.account.version,
+    sources: [source], claims: [], routes: [{ id: f.ids.next(), accountId: saved.account.id, personId: null, channel: 'email',
+      value: 'office@cedar.invalid', purpose: 'business', verification: 'published', evidenceIds: [source.id] }] });
+  expect(admitted).toMatchObject({ duplicate: false, version: 2 }); expect(f.database().raw.inTransaction).toBe(false);
+  const request: LinkCompanyPersonRequest = { ...task5Request(), commandId: f.ids.next(), accountId: saved.account.id,
+    expectedVersion: admitted.version, link: { ...task5Request().link, id: f.ids.next(), personId: nora.personId, evidenceIds: [source.id] },
+    sourceQuotes: [{ sourceId: source.id, quote: task5Quote }] };
+  return { request, repo, nora, marcus, details };
+}
+function task5Preserved(db: AppDatabase) {
+  const mutable = new Set(['pm_accounts', 'pm_account_commands', 'pm_account_links', 'pm_account_link_evidence']);
+  const tables = db.raw.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[];
+  return tables.filter(t => !mutable.has(t.name)).map(({ name }) => ({ name,
+    rows: db.raw.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`).all().map(row => JSON.stringify(row)).sort() }));
+}
+
+// Boundary-only adversarial replies are explicitly NOT evidence of person/link
+// admission. The successful admission case below uses the entire real stack.
+describe('Task 5 public reviewed relationship boundaries', () => {
+  it('T5-B01 registers and disposes exactly one additional reviewed-link handler without replacing existing handler names', () => {
+    const remove = registerLocalWorkspaceIpc({ ...provider, linkCompanyPerson: async (): Promise<never> => { throw new Error('not invoked'); } });
+    try {
+      const names = electron.handle.mock.calls.map(call => call[0]);
+      expect(names.filter(name => name === task5Channel)).toEqual([task5Channel]);
+      expect(names.filter(name => name !== task5Channel)).toEqual(['local-workspace:get', 'local-workspace:get-commitments',
+        'local-workspace:transition', 'local-workspace:review-company', 'local-workspace:create-company',
+        'local-workspace:company-create-status', 'local-workspace:get-company', 'local-workspace:research-company', 'local-workspace:company-research-status']);
+    } finally { remove(); }
+    expect(electron.removeHandler.mock.calls.filter(call => call[0] === task5Channel)).toHaveLength(1);
+  });
+
+  it('T5-B02 rejects strict request shape, untrusted sender and wrong arity before the provider or transport', async () => {
+    const linkCompanyPerson = vi.fn(async (): Promise<never> => { throw new Error('must not run'); });
+    const remove = registerLocalWorkspaceIpc({ ...provider, linkCompanyPerson });
+    try {
+      expect(electron.handle.mock.calls.map(call => call[0])).toContain(task5Channel);
+      const handler = registeredIpcHandler(electron.handle, task5Channel);
+      const input = task5Request();
+      const bad = [undefined, null, {}, { ...input, workspaceId: 'invented' }, { ...input, sourceQuotes: [] },
+        { ...input, link: { ...input.link, authority: 'confirmed' } },
+        { ...input, link: { ...input.link, verifiedContact: true } },
+        { ...input, sourceQuotes: [input.sourceQuotes[0], input.sourceQuotes[0]] },
+        { ...input, sourceQuotes: [{ sourceId: 'source', quote: 'x'.repeat(12001) }] }];
+      for (const value of bad) await expect(handler(trusted, value)).rejects.toThrow();
+      await expect(handler(trusted)).rejects.toThrow();
+      await expect(handler(trusted, input, input)).rejects.toThrow();
+      await expect(handler({ senderFrame: { url: 'https://untrusted.invalid' } }, input)).rejects.toThrow();
+      expect(linkCompanyPerson).not.toHaveBeenCalled();
+      const invoke = vi.fn(async () => { throw new Error('must not invoke'); });
+      const api = createLocalWorkspaceApi(createIpcClient({ invoke }));
+      expect(api.linkCompanyPerson).toBeTypeOf('function');
+      for (const value of bad) await expect(api.linkCompanyPerson(value as LinkCompanyPersonRequest)).rejects.toThrow();
+      expect(invoke).not.toHaveBeenCalled();
+    } finally { remove(); }
+  });
+
+  it.each(['wrong account', 'extra receipt key', 'zero version', 'unsafe version', 'wrong duplicate type'] as const)(
+    'T5-B03 independently rejects %s at registrar and preload', async reason => {
+      const input = task5Request();
+      const valid: AccountEvidenceReceipt = { accountId: input.accountId, version: 3, duplicate: false };
+      const reply = reason === 'wrong account' ? { ...valid, accountId: 'another-selected-account' }
+        : reason === 'extra receipt key' ? { ...valid, privatePath: 'must-not-cross-boundary' }
+          : reason === 'zero version' ? { ...valid, version: 0 }
+            : reason === 'unsafe version' ? { ...valid, version: Number.MAX_SAFE_INTEGER + 1 }
+              : { ...valid, duplicate: 'yes' };
+      const remove = registerLocalWorkspaceIpc({ ...provider, linkCompanyPerson: async () => reply as AccountEvidenceReceipt });
+      try {
+        expect(electron.handle.mock.calls.map(call => call[0])).toContain(task5Channel);
+        await expect(registeredIpcHandler(electron.handle, task5Channel)(trusted, input)).rejects.toThrow();
+        // Independent unchecked transport, not a registrar rejection reused as preload evidence.
+        const api = createLocalWorkspaceApi(createIpcClient({ invoke: async () => reply }));
+        expect(api.linkCompanyPerson).toBeTypeOf('function');
+        await expect(api.linkCompanyPerson(input)).rejects.toThrow();
+      } finally { remove(); }
+    });
+
+  it('T5-B04 accepts a duplicate original receipt without imposing current expectedVersion equality', async () => {
+    const input = task5Request();
+    const reply: AccountEvidenceReceipt = { accountId: input.accountId, version: 3, duplicate: true };
+    const linkCompanyPerson = vi.fn(async () => reply);
+    const remove = registerLocalWorkspaceIpc({ ...provider, linkCompanyPerson });
+    try {
+      expect(electron.handle.mock.calls.map(call => call[0])).toContain(task5Channel);
+      const invoke = vi.fn(async (channel: string, ...args: unknown[]) => registeredIpcHandler(electron.handle, channel)(trusted, ...args));
+      const api = createLocalWorkspaceApi(createIpcClient({ invoke }));
+      expect(api.linkCompanyPerson).toBeTypeOf('function');
+      expect(await api.linkCompanyPerson(input)).toEqual(reply);
+      expect(invoke).toHaveBeenCalledWith(task5Channel, input);
+      expect(linkCompanyPerson).toHaveBeenCalledWith(input);
+    } finally { remove(); }
+  });
+
+  it('T5-B05 redacts a private provider error rather than manufacturing success', async () => {
+    const remove = registerLocalWorkspaceIpc({ ...provider, linkCompanyPerson: async (): Promise<never> => { throw new Error('private database path and source quote'); } });
+    try {
+      expect(electron.handle.mock.calls.map(call => call[0])).toContain(task5Channel);
+      const outcome = await Promise.resolve(registeredIpcHandler(electron.handle, task5Channel)(trusted, task5Request()))
+        .then(value => ({ value }), error => ({ error }));
+      expect(outcome).toHaveProperty('error');
+      if ('error' in outcome) {
+        expect(outcome.error).toBeInstanceOf(Error);
+        expect((outcome.error as Error).message).toBe('LOCAL_COMPANY_LINK_FAILED');
+        expect(String(outcome.error)).not.toContain('private database'); expect(String(outcome.error)).not.toContain('source quote');
+      }
+    } finally { remove(); }
+  });
+
+  it.each(['registrar', 'preload'] as const)('T5-B06 %s binds the selected account before an asynchronous reply', async boundary => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let timer!: ReturnType<typeof setTimeout>;
+    const watchdog = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Task5 boundary watchdog')), 2000); });
+    void watchdog.catch((): void => undefined);
+    let pending: Promise<unknown> | undefined; let remove: (() => void) | undefined;
+    const input = task5Request(); const original = structuredClone(input);
+    let forwarded: LinkCompanyPersonRequest | undefined;
+    const reply: AccountEvidenceReceipt = { accountId: original.accountId, version: 3, duplicate: false };
+    try {
+      if (boundary === 'registrar') {
+        remove = registerLocalWorkspaceIpc({ ...provider, linkCompanyPerson: async request => { forwarded = request; await gate; return reply; } });
+        expect(electron.handle.mock.calls.map(call => call[0])).toContain(task5Channel);
+        pending = Promise.resolve(registeredIpcHandler(electron.handle, task5Channel)(trusted, input)).then(value => ({ value }), error => ({ error }));
+      } else {
+        const api = createLocalWorkspaceApi(createIpcClient({ invoke: async (_channel, request) => { forwarded = request as LinkCompanyPersonRequest; await gate; return reply; } }));
+        expect(api.linkCompanyPerson).toBeTypeOf('function');
+        pending = api.linkCompanyPerson(input).then(value => ({ value }), error => ({ error }));
+      }
+      input.accountId = 'mutated-after-request'; input.link.personId = 'mutated-person'; input.sourceQuotes[0]!.quote = 'mutated quote';
+      release();
+      expect(await Promise.race([pending, watchdog])).toEqual({ value: reply });
+      expect(forwarded).toEqual(original);
+    } finally {
+      release();
+      try { if (pending) await Promise.race([pending, watchdog]); }
+      finally { clearTimeout(timer); remove?.(); }
+    }
+  }, 5000);
+});
+
+describe('Task 5 real Foundation importer/provider integration', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(task5Now));
+    let sequence = 10000;
+    vi.spyOn(UuidGenerator.prototype, 'next').mockImplementation(() => task5Uuid(++sequence));
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+
+  it('T5-P01 roundtrips the real imported person through preload registrar provider and account mutation and replays after later changes', async () => {
+    const f = task5RuntimeFixture(); let remove: (() => void) | undefined;
+    try {
+      const saved = await task5Seed(f); const before = task5Preserved(f.database());
+      remove = registerLocalWorkspaceIpc(f.local);
+      expect(electron.handle.mock.calls.map(call => call[0])).toContain(task5Channel);
+      const api = createLocalWorkspaceApi(createIpcClient({ invoke: async (channel, ...args) => registeredIpcHandler(electron.handle, channel)(trusted, ...args) }));
+      expect(api.linkCompanyPerson).toBeTypeOf('function');
+      const result = await api.linkCompanyPerson(saved.request);
+      expect(result).toEqual({ accountId: saved.request.accountId, version: 3, duplicate: false });
+      expect(saved.repo.listLinks(saved.request.accountId, task5Now)).toEqual([saved.request.link]);
+      expect(task5Preserved(f.database())).toEqual(before);
+      // Public detail revision follows all connection writes, including the account command.
+      const revision = (f.database().raw.prepare('SELECT total_changes() AS count').get() as { count: number }).count;
+      expect(revision).toBeGreaterThan(saved.details[0]!.revision);
+      expect(await f.runtime.withDomain(domain => saved.details.map(p => domain.getLeadDetail({ personId: p.personId }))))
+        .toEqual(saved.details.map(detail => ({ ...detail, revision })));
+      saved.repo.admitEvidence({ commandId: f.ids.next(), accountId: saved.request.accountId, expectedVersion: result.version,
+        sources: [], routes: [], claims: [{ key: 'technology', kind: 'hypothesis', value: 'Later account change', evidenceIds: [] }] });
+      const later = companyStorageState(f.database());
+      expect(await api.linkCompanyPerson(saved.request)).toEqual({ ...result, duplicate: true });
+      expect(companyStorageState(f.database())).toEqual(later);
+      await expect(api.linkCompanyPerson({ ...saved.request, sourceQuotes: [{ ...saved.request.sourceQuotes[0]!, quote: 'Nora Vale' }] })).rejects.toThrow();
+      expect(companyStorageState(f.database())).toEqual(later);
+      expect(f.database().raw.inTransaction).toBe(false); expect(f.opens()).toBe(1);
+    } finally { remove?.(); await f.close(); }
+  }, 20000);
+
+  it('T5-P02 refuses link execution when the domain is unavailable even though storage is readable', async () => {
+    const f = task5RuntimeFixture();
+    try {
+      const readiness = vi.spyOn(f.runtime, 'withDomain');
+      // Real import, account and source admission, wholly inside the storage
+      // lease. This facade is deliberately NOT Foundation's memoized facade.
+      const saved = await f.runtime.withDatabase(database => task5Seed(f, createFounderSalesDomain({
+        database, services: f.domainServices(), clock: { now: () => task5Now }, ids: f.ids,
+      })));
+      expect(readiness).not.toHaveBeenCalled();
+      f.stopDomain();
+      await expect(f.runtime.withDomain((): void => undefined)).rejects.toThrow();
+      readiness.mockClear();
+      const detail = await f.runtime.withDatabase(() => saved.repo.readLocalCompanyDetail(saved.request.accountId, task5Now));
+      expect(detail.sources.map(source => source.id)).toContain(saved.request.sourceQuotes[0]!.sourceId);
+      expect(saved.repo.listLinks(saved.request.accountId, task5Now)).toEqual([]);
+      const before = companyStorageState(f.database());
+      expect(f.local.linkCompanyPerson).toBeTypeOf('function');
+      await expect(f.local.linkCompanyPerson(saved.request)).rejects.toThrow();
+      expect(readiness).toHaveBeenCalledTimes(1);
+      expect(companyStorageState(f.database())).toEqual(before);
+      expect((await f.local.get()).scope).toBe('local_database');
+      // After the refusal/unchanged assertions, prove the EXACT request was
+      // otherwise admissible. This is repository evidence, not readiness proof.
+      expect(saved.repo.admitReviewedPersonLink).toBeTypeOf('function');
+      expect(await f.runtime.withDatabase(() => saved.repo.admitReviewedPersonLink(saved.request)))
+        .toEqual({ accountId: saved.request.accountId, version: 3, duplicate: false });
+      expect(saved.repo.listLinks(saved.request.accountId, task5Now)).toEqual([saved.request.link]);
+    } finally { await f.close(); }
+  }, 15000);
+
+  it('T5-P03 locked-key failure cannot open storage or admit a relationship and permits a later initialization retry', async () => {
+    let locked = true;
+    const f = task5RuntimeFixture(async () => { if (locked) throw new Error('fictional locked key'); });
+    try {
+      expect(f.local.linkCompanyPerson).toBeTypeOf('function');
+      await expect(f.local.linkCompanyPerson(task5Request())).rejects.toThrow(); expect(f.opens()).toBe(0);
+      locked = false;
+      const saved = await task5Seed(f);
+      expect(await f.local.linkCompanyPerson(saved.request)).toMatchObject({ duplicate: false, version: 3 });
+      await f.runtime.shutdown(); expect(f.database().raw.open).toBe(false);
+      await expect(f.local.linkCompanyPerson(saved.request)).rejects.toThrow(); expect(f.opens()).toBe(1);
+    } finally { await f.close(); }
+  }, 20000);
+
+  it('T5-P04 shutdown fences a delayed link initialization with handled released and joined work', async () => {
+    let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+    let signalEntered!: () => void; let loaderEntries = 0;
+    const entered = new Promise<void>(resolve => { signalEntered = resolve; });
+    const f = task5RuntimeFixture(() => { loaderEntries++; signalEntered(); return gate; });
+    let pending: Promise<unknown> | undefined; let stopped: Promise<void> | undefined;
+    let timer!: ReturnType<typeof setTimeout>;
+    const watchdog = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Task5 shutdown watchdog')), 2000); });
+    void watchdog.catch((): void => undefined);
+    try {
+      expect(f.local.linkCompanyPerson).toBeTypeOf('function');
+      pending = f.local.linkCompanyPerson(task5Request()).then(value => ({ value }), error => ({ error }));
+      const first = await Promise.race([entered.then(() => 'entered' as const),
+        pending.then(() => 'settled-before-entry' as const), watchdog]);
+      expect(first).toBe('entered');
+      expect(loaderEntries).toBe(1);
+      stopped = f.runtime.shutdown(); void stopped.catch((): void => undefined);
+      release();
+      expect(await Promise.race([pending, watchdog])).toHaveProperty('error');
+      await Promise.race([stopped, watchdog]); expect(f.opens()).toBe(0);
+    } finally {
+      release();
+      try { await Promise.race([Promise.all([pending, stopped]), watchdog]); }
+      finally {
+        try { await Promise.race([f.close(), watchdog]); } finally { clearTimeout(timer); }
+      }
+    }
+  }, 5000);
 });

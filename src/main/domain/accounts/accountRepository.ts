@@ -1,6 +1,6 @@
 import { localCompanyInputSchema, localCompanyCandidateSignals, localCompanyReviewSchema, type LocalCompanyInput, type LocalCompanyCreateRequest, type LocalCompanyReview, type LocalCompanyCreateResult, type LocalCompanyCreateStatus } from '../../../shared/contracts/localCompanyIntakeContract';
-import { accountEvidenceReceiptSchema, localCompanyDetailSchema, localCompanyResearchStatusSchema, selectedResearchSchema,
-  type LocalCompanyDetail, type LocalCompanyResearchStatus, type SelectedResearch } from '../../../shared/contracts/localWorkspaceContract';
+import { accountEvidenceReceiptSchema, linkCompanyPersonRequestSchema, localCompanyDetailSchema, localCompanyResearchStatusSchema, selectedResearchSchema,
+  type LinkCompanyPersonRequest, type LocalCompanyDetail, type LocalCompanyResearchStatus, type SelectedResearch } from '../../../shared/contracts/localWorkspaceContract';
 import { z } from 'zod';
 import { researchLimitsSchema, type AccountResearchStore, type ResearchJob, type ResearchClaim } from '../../research/companyResearchTypes';
 import type { AppDatabase } from '../../db/database';
@@ -163,14 +163,40 @@ export class AccountRepository implements AccountResearchStore {
       for (const link of command.links) {
         this.requireEvidence(command.accountId, link.evidenceIds, at);
         if (link.kind === 'person_role') this.requireEvidence(command.accountId, link.authorityEvidenceIds, at);
-        this.raw.prepare(`INSERT INTO pm_account_links(id,account_id,kind,organization_id,person_id,property_id,relationship,role,authority,valid_from,valid_to,admitted_at)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(link.id, command.accountId, link.kind,
-          link.kind === 'organization' ? link.organizationId : null, link.kind === 'person_role' ? link.personId : null,
-          link.kind === 'property' ? link.propertyId : null, link.relationship, link.kind === 'person_role' ? link.role : null,
-          link.kind === 'person_role' ? link.authority : null, link.validFrom, link.validTo, at);
-        for (const source of link.evidenceIds) this.raw.prepare("INSERT INTO pm_account_link_evidence VALUES(?,?,?,'relationship')").run(command.accountId, link.id, source);
-        if (link.kind === 'person_role') for (const source of link.authorityEvidenceIds) this.raw.prepare("INSERT INTO pm_account_link_evidence VALUES(?,?,?,'authority')").run(command.accountId, link.id, source);
+        this.insertLink(command.accountId, link, at);
       }
+    });
+  }
+  private insertLink(accountId: string, link: AccountLink, at: string): void {
+    this.raw.prepare(`INSERT INTO pm_account_links(id,account_id,kind,organization_id,person_id,property_id,relationship,role,authority,valid_from,valid_to,admitted_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(link.id, accountId, link.kind,
+      link.kind === 'organization' ? link.organizationId : null, link.kind === 'person_role' ? link.personId : null,
+      link.kind === 'property' ? link.propertyId : null, link.relationship, link.kind === 'person_role' ? link.role : null,
+      link.kind === 'person_role' ? link.authority : null, link.validFrom, link.validTo, at);
+    for (const source of link.evidenceIds) this.raw.prepare("INSERT INTO pm_account_link_evidence VALUES(?,?,?,'relationship')").run(accountId, link.id, source);
+    if (link.kind === 'person_role') for (const source of link.authorityEvidenceIds) this.raw.prepare("INSERT INTO pm_account_link_evidence VALUES(?,?,?,'authority')").run(accountId, link.id, source);
+  }
+  admitReviewedPersonLink(input: LinkCompanyPersonRequest): AccountEvidenceReceipt {
+    const command = linkCompanyPersonRequestSchema.parse(input);
+    return this.mutate(command, 'reviewed_person_link', command, at => {
+      this.requireEvidence(command.accountId, command.link.evidenceIds, at);
+      if (command.link.validFrom > at) throw new Error('Future relationship validity');
+      const person = this.raw.prepare(`SELECT 1 FROM persons p WHERE p.id=?
+        AND p.deleted_at IS NULL AND p.opted_out=0
+        AND NOT EXISTS(SELECT 1 FROM opt_out_tombstones t WHERE t.person_id=p.id)`)
+        .get(command.link.personId);
+      if (!person) throw new Error('Person unavailable for reviewed relationship');
+      if (this.raw.prepare('SELECT 1 FROM pm_account_suppression_tombstones WHERE account_id=? LIMIT 1')
+        .get(command.accountId)) throw new Error('Account suppressed');
+      const quoted = new Set(command.sourceQuotes.map(item => item.sourceId));
+      if (quoted.size !== command.link.evidenceIds.length
+        || command.link.evidenceIds.some(id => !quoted.has(id))) throw new Error('Relationship evidence mismatch');
+      for (const item of command.sourceQuotes) {
+        const source = this.raw.prepare('SELECT excerpt FROM pm_account_sources WHERE account_id=? AND id=?')
+          .get(command.accountId, item.sourceId) as { excerpt: string } | undefined;
+        if (!item.quote.trim() || !source?.excerpt.includes(item.quote)) throw new Error('Relationship quote mismatch');
+      }
+      this.insertLink(command.accountId, command.link, at);
     });
   }
   listLinks(accountId: string, asOf: string): AccountLink[] {

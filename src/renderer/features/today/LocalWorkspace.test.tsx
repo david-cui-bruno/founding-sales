@@ -66,7 +66,7 @@ it('puts typed retained work in Local commitments before worker Calls, preservin
 it('keeps the local account library read-only and separate from unavailable worker scope', async () => {
   const f = fixture(); const detailRead = vi.spyOn(f.api.localWorkspace, 'getCompany'); render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} surface="accounts" onOpenLead={vi.fn()} />);
   await screen.findByRole('heading', { name: 'Local account library' });
-  fireEvent.click(screen.getByRole('button', { name: 'Local account · Account A' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' }));
   expect(screen.getByRole('heading', { name: 'Account A' })).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Open contact workspace' })).toBeNull();
   expect((await f.api.daily.get()).accounts).toEqual([]);

@@ -158,7 +158,7 @@ function fakeCallieApi(): CalliePreloadApi {
     localWorkspace: {
       get: vi.fn(async () => localSnapshot({ workflowMode: 'legacy' })),
       getCompany: pending,
-      researchCompany: pending, getCompanyResearchStatus: pending,
+      researchCompany: pending, getCompanyResearchStatus: pending, linkCompanyPerson: pending,
       getCommitments: vi.fn(async () => commitments()),
       reviewCompany: pending, createCompany: pending, getCompanyCreateStatus: pending, transition: pending,
     },

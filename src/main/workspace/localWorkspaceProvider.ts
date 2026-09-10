@@ -1,6 +1,6 @@
 import { localCompanyInputSchema, localCompanyCreateRequestSchema } from '../../shared/contracts/localCompanyIntakeContract';
 import type { FoundationRuntime } from '../foundation/foundationRuntime';
-import { localWorkflowTransitionSchema, selectedCompanySchema, selectedResearchSchema, localCompanyResearchStatusSchema, type SelectedResearch, type LocalCompanyResearchStatus, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
+import { linkCompanyPersonRequestSchema, localWorkflowTransitionSchema, selectedCompanySchema, selectedResearchSchema, localCompanyResearchStatusSchema, type SelectedResearch, type LocalCompanyResearchStatus, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import { projectLocalWorkflowReceipt, readLocalWorkspace } from '../domain/workspace/localWorkspaceReadService';
 import { AccountRepository } from '../domain/accounts/accountRepository';
 import { SystemClock } from '../domain/support/clock';
@@ -23,6 +23,10 @@ export function createLocalWorkspaceProvider(runtime: Pick<FoundationRuntime, 'w
   const unavailable = (saved: LocalCompanyResearchStatus, reason: string): LocalCompanyResearchStatus =>
     saved.state === 'not_recorded' ? { ...saved, state: 'held', reason } : saved;
   return {
+    linkCompanyPerson: async input => {
+      const parsed = linkCompanyPersonRequestSchema.parse(input);
+      return runtime.withDomain(domain => domain.linkLocalCompanyPerson(parsed));
+    },
     getCompanyResearchStatus: async input => {
       try {
         const selected = Object.freeze(selectedResearchSchema.parse(input));

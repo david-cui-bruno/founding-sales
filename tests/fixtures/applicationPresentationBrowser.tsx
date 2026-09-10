@@ -76,6 +76,7 @@ const api: CalliePreloadApi = {
     getCompany: forbidden('localWorkspace.getCompany'),
     researchCompany: forbidden('localWorkspace.researchCompany'),
     getCompanyResearchStatus: forbidden('localWorkspace.getCompanyResearchStatus'),
+    linkCompanyPerson: forbidden('localWorkspace.linkCompanyPerson'),
     getCommitments: read('localWorkspace.getCommitments', () => commitments()),
     transition: forbidden('localWorkspace.transition'),
   },

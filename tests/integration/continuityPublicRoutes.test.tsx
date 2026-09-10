@@ -60,8 +60,8 @@ async function expectCleaned(value: Fixture) {
   expect(transport.handlers.size).toBe(0);
   expect([...transport.registrations].sort()).toEqual([...CONTINUITY_REGISTERED_CHANNELS].sort());
   expect([...transport.removals].sort()).toEqual([...CONTINUITY_REGISTERED_CHANNELS].sort());
-  expect(transport.registrations).toHaveLength(15);
-  expect(transport.removals).toHaveLength(15);
+  expect(transport.registrations).toHaveLength(16);
+  expect(transport.removals).toHaveLength(16);
   expect(value.counts()).toMatchObject({ credentialLoads: 0, inboxCreations: 0, pollSchedules: 0 });
 }
 beforeEach(() => {
@@ -608,7 +608,7 @@ async function renderRetainedApp(synthetic = false, localMetadata: 'genuine' | '
   await act(async () => { await value.drainReads(); });
   expect(window.location.hash).toBe('#/today');
   expect([...transport.registrations].sort()).toEqual([...RETAINED_UI_REGISTERED_CHANNELS].sort());
-  expect(transport.registrations).toHaveLength(52);
+  expect(transport.registrations).toHaveLength(53);
   const status = value.trace().find(entry => entry.channel === 'outreach:delegation-status')!;
   expect(status).toMatchObject({ handlerStarted: true, outcome: 'resolved' });
   expect(status.synthetic).toBeUndefined();
@@ -858,7 +858,7 @@ describe('actual health observation and initialized blocked admission', () => {
       { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
       { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
     ]);
-    expect(transport.registrations).toHaveLength(15);
+    expect(transport.registrations).toHaveLength(16);
     const disposal = value.dispose(); expect(value.dispose()).toBe(disposal);
     expect(await disposal).toEqual({ databaseClosed: true, keysZeroed: true, directoryRemoved: true, registrationsRemaining: 0,
       pendingInvocations: 0, cleanupRuns: 1, runtimeShutdowns: 1, domainShutdowns: 1, databaseCloses: 1, pollerStops: 1, pollerIdleWaits: 1 });
@@ -976,7 +976,7 @@ describe('actual health observation and initialized blocked admission', () => {
       { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
     ]);
     expect([...transport.registrations].sort()).toEqual([...CONTINUITY_REGISTERED_CHANNELS].sort());
-    expect(transport.registrations).toHaveLength(15);
+    expect(transport.registrations).toHaveLength(16);
   });
 });
 
@@ -1055,7 +1055,7 @@ function assertFridayInventory(context: FridayContext, reports: number, commands
   const mutations: Record<string, number> = {};
   for (const command of commands) mutations[command.channel] = (mutations[command.channel] ?? 0) + 1;
   expect(counts).toEqual({ 'health:get': 1, 'lead-detail:outbound-capabilities': 1, 'review:list': 1, 'friday:get': reports, ...mutations });
-  expect([...transport.registrations].sort()).toEqual([...CONTINUITY_UI_REGISTERED_CHANNELS].sort()); expect(transport.registrations).toHaveLength(28);
+  expect([...transport.registrations].sort()).toEqual([...CONTINUITY_UI_REGISTERED_CHANNELS].sort()); expect(transport.registrations).toHaveLength(29);
   expect(value.uiCounters()).toEqual({ network: 0, forbidden: 0, delegationDisposals: 0 });
   assertOneHealthGraph(value, { credentialLoads: 0, inboxCreations: 0 });
 }

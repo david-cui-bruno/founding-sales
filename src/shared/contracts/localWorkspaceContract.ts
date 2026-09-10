@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { LocalCompanyInput, LocalCompanyCreateRequest, LocalCompanyReview, LocalCompanyCreateResult, LocalCompanyCreateStatus } from './localCompanyIntakeContract';
-import { accountIdSchema, accountInstantSchema, accountLinkSchema, accountSchema, accountSourceSchema } from './accountContract';
+import { accountIdSchema, accountInstantSchema, accountLinkSchema, accountSchema, accountSourceSchema, type AccountLink, type AccountEvidenceReceipt } from './accountContract';
 import { dailyAccountSchema } from './dailyContract';
 import { todayItemSchema } from './todayContract';
 const id = z.string().min(1);
@@ -10,6 +10,25 @@ export const selectedResearchSchema = z.strictObject({ commandId: z.uuid(), acco
 export const accountEvidenceReceiptSchema = z.strictObject({
   accountId: accountIdSchema, version: accountSchema.shape.version, duplicate: z.boolean(),
 });
+export type ReviewedPersonLink = Omit<Extract<AccountLink, { kind: 'person_role' }>, 'authority' | 'authorityEvidenceIds' | 'validTo'> & {
+  authority: 'unconfirmed'; authorityEvidenceIds: []; validTo: null;
+};
+// Both intersection branches reject unknown keys. The existing strict union
+// retains all link-field bounds and refinements while the overlay narrows review.
+export const reviewedPersonLinkSchema: z.ZodType<ReviewedPersonLink> = z.intersection(accountLinkSchema,
+  z.strictObject({ kind: z.literal('person_role'), authority: z.literal('unconfirmed'), authorityEvidenceIds: z.tuple([]), validTo: z.null() }));
+export const linkCompanyPersonRequestSchema = z.strictObject({
+  commandId: z.uuid(), accountId: accountIdSchema, expectedVersion: accountSchema.shape.version,
+  link: reviewedPersonLinkSchema,
+  sourceQuotes: z.array(z.strictObject({ sourceId: accountIdSchema,
+    quote: accountSourceSchema.shape.excerpt.refine(quote => quote.trim().length > 0, 'Relationship quote required'),
+  })).min(1).max(100),
+}).refine(command => {
+  const quoted = new Set(command.sourceQuotes.map(item => item.sourceId));
+  return quoted.size === command.sourceQuotes.length && quoted.size === command.link.evidenceIds.length
+    && command.link.evidenceIds.every(id => quoted.has(id));
+}, 'Relationship evidence mismatch');
+export type LinkCompanyPersonRequest = z.infer<typeof linkCompanyPersonRequestSchema>;
 export const localCompanyResearchStatusSchema = z.strictObject({
   commandId: z.uuid(), accountId: accountIdSchema,
   state: z.enum(['not_recorded', 'queued', 'running', 'completed', 'parked', 'held']),
@@ -68,6 +87,7 @@ export type LocalWorkflowReceipt = z.infer<typeof localWorkflowReceiptSchema>;
 export type LocalWorkspaceSnapshot = z.infer<typeof localWorkspaceSnapshotSchema>;
 export type LocalCommitmentsSnapshot = z.infer<typeof localCommitmentsSnapshotSchema>;
 export interface LocalWorkspaceApi {
+  linkCompanyPerson(input: LinkCompanyPersonRequest): Promise<AccountEvidenceReceipt>;
   researchCompany(input: SelectedResearch): Promise<LocalCompanyResearchStatus>;
   getCompanyResearchStatus(input: SelectedResearch): Promise<LocalCompanyResearchStatus>;
   getCompany(input: SelectedCompany): Promise<LocalCompanyDetail>;
