@@ -621,10 +621,13 @@ test('unpaired local records remain selectable without worker authority or autom
   expect(await page.evaluate(() => window.nativeDeskBrowser.opened)).toEqual(['retained-person']);
   await page.evaluate(() => window.nativeDeskBrowser.navigate('accounts'));
   await expect(page.getByText('Local account library', {exact: true})).toBeVisible();
+  expect((await methods(page)).filter(method => method === 'localWorkspace.getCompany')).toEqual([]);
   await page.getByRole('button', {name: /Local Residential PM/}).click();
   await expect(page.getByRole('heading', {name: 'Local Residential PM', exact: true})).toBeVisible();
+  await expect(page.getByText('Company evidence unavailable. Reopen this detail to check again.', {exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.nativeDeskBrowser.fixture.calls.filter(call => call.method === 'localWorkspace.getCompany'))).toEqual([{method: 'localWorkspace.getCompany', input: {accountId: 'local-account'}}]);
   expect(await page.evaluate(() => window.nativeDeskBrowser.fixture.snapshot().accounts)).toEqual([]);
-  expect((await methods(page)).filter(method => !['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments'].includes(method))).toEqual([]);
+  expect((await methods(page)).filter(method => !['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments','localWorkspace.getCompany'].includes(method))).toEqual([]);
   const audit = await new AxeBuilder({page}).analyze();
   expect(audit.violations.filter(issue => issue.impact === 'critical' || issue.impact === 'serious')).toEqual([]);
   await assertClean(page, state);
@@ -639,8 +642,11 @@ test('selected local account survives recovery of an initially unavailable daily
     window.nativeDeskBrowser.navigate('accounts');
   });
   await expect(page.getByText(/Daily workspace unavailable/)).toBeVisible();
+  expect((await methods(page)).filter(method => method === 'localWorkspace.getCompany')).toEqual([]);
   await page.getByRole('button', {name: /Local account · Local Residential PM/}).click();
   await expect(page.getByRole('heading', {name: 'Local Residential PM', exact: true})).toBeVisible();
+  await expect(page.getByText('Company evidence unavailable. Reopen this detail to check again.', {exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.nativeDeskBrowser.fixture.calls.filter(call => call.method === 'localWorkspace.getCompany'))).toEqual([{method: 'localWorkspace.getCompany', input: {accountId: 'local-account'}}]);
   await page.evaluate(() => {
     const f = window.nativeDeskBrowser.fixture;
     Object.assign(f.api.daily, {get: async () => { f.calls.push({method: 'daily.get'}); return f.snapshot(); }});
@@ -648,8 +654,13 @@ test('selected local account survives recovery of an initially unavailable daily
   await page.getByRole('button', {name: 'Refresh', exact: true}).click();
   await expect(page.getByText(/Daily workspace unavailable/)).toHaveCount(0);
   await expect(page.getByRole('heading', {name: 'Local Residential PM', exact: true})).toBeVisible();
+  await expect(page.getByText('Company evidence unavailable. Reopen this detail to check again.', {exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.nativeDeskBrowser.fixture.calls.filter(call => call.method === 'localWorkspace.getCompany'))).toEqual([
+    {method: 'localWorkspace.getCompany', input: {accountId: 'local-account'}},
+    {method: 'localWorkspace.getCompany', input: {accountId: 'local-account'}},
+  ]);
   expect(await page.evaluate(() => window.nativeDeskBrowser.opened)).toEqual([]);
-  expect((await methods(page)).filter(method => !['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments'].includes(method))).toEqual([]);
+  expect((await methods(page)).filter(method => !['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments','localWorkspace.getCompany'].includes(method))).toEqual([]);
   await assertClean(page, state);
 });
 
@@ -933,8 +944,11 @@ test('local company form keeps A geometry and explicit review/create/reuse bound
   await page.getByRole('button', { name: 'Review company', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Create company', exact: true })).toBeEnabled();
   expect((await methods(page)).filter(name => name === 'localWorkspace.createCompany')).toEqual([]);
+  expect((await methods(page)).filter(method => method === 'localWorkspace.getCompany')).toEqual([]);
   await page.getByRole('button', { name: 'Create company', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Browser Residential Management', exact: true })).toBeVisible();
+  await expect(page.getByText('Company evidence unavailable. Reopen this detail to check again.', {exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.nativeDeskBrowser.fixture.calls.filter(call => call.method === 'localWorkspace.getCompany'))).toEqual([{method: 'localWorkspace.getCompany', input: {accountId: 'browser-local-company'}}]);
   expect((await methods(page)).filter(name => name === 'localWorkspace.createCompany')).toHaveLength(1);
   await page.getByRole('button', { name: 'Add company', exact: true }).click();
   await page.getByRole('textbox', { name: 'Company name', exact: true }).fill('Different Browser Name');
@@ -943,9 +957,11 @@ test('local company form keeps A geometry and explicit review/create/reuse bound
   await expect(page.getByRole('button', { name: 'Create company', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Open existing company', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Browser Residential Management', exact: true })).toBeVisible();
+  await expect(page.getByText('Company evidence unavailable. Reopen this detail to check again.', {exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.nativeDeskBrowser.fixture.calls.filter(call => call.method === 'localWorkspace.getCompany'))).toEqual([{method: 'localWorkspace.getCompany', input: {accountId: 'browser-local-company'}}]);
   const inventory = await methods(page);
   expect(inventory.filter(name => name === 'localWorkspace.createCompany')).toHaveLength(1);
   expect(inventory.filter(name => name === 'localWorkspace.reviewCompany')).toHaveLength(2);
-  expect(inventory.every(name => ['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments', 'localWorkspace.reviewCompany', 'localWorkspace.createCompany'].includes(name))).toBe(true);
+  expect(inventory.every(name => ['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments', 'localWorkspace.getCompany', 'localWorkspace.reviewCompany', 'localWorkspace.createCompany'].includes(name))).toBe(true);
   await assertClean(page, state);
 });

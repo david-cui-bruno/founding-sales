@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useReducer, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useReducer, useRef, type ReactNode } from 'react';
 import {
   localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema,
   localCompanyCreateResultSchema, localCompanyCreateStatusSchema,
@@ -6,6 +6,7 @@ import {
 } from '../../../shared/contracts/localCompanyIntakeContract';
 import type { LocalWorkspaceApi, LocalWorkspaceSnapshot } from '../../../shared/contracts/localWorkspaceContract';
 import type { LocalRead } from './localWorkspaceRead';
+import { createLocalCompanyContinuation } from './localCompanyContinuation';
 
 export type IntakeApi = Pick<LocalWorkspaceApi, 'reviewCompany' | 'createCompany' | 'getCompanyCreateStatus'>;
 export type LocalCompanyIntakeOptions = {
@@ -29,8 +30,8 @@ const sameInput = (a: LocalCompanyInput, b: LocalCompanyInput) => a.name === b.n
 const locked = (state: FormState) => state.request !== null && state.phase !== 'saved';
 const unknown = 'Save outcome unknown. The original request is retained. Check save status or explicitly retry the same request.';
 type ViewBinding = { token: symbol; options: LocalCompanyIntakeOptions };
-type Owner = { api: LocalCompanyIntakeOptions['api']; scope: string | null; provider: boolean; state: FormState; sequence: number; active: boolean; busy: boolean; cancellations: Set<() => void>; listeners: Set<() => void>; view: ViewBinding | null };
-const makeOwner = (api: LocalCompanyIntakeOptions['api'], scope: string | null, provider: boolean): Owner => ({ api, scope, provider, state: initial(), sequence: 0, active: true, busy: false, cancellations: new Set(), listeners: new Set(), view: null });
+type Owner = { firstUse: ReturnType<typeof createLocalCompanyContinuation>; api: LocalCompanyIntakeOptions['api']; scope: string | null; provider: boolean; state: FormState; sequence: number; active: boolean; busy: boolean; cancellations: Set<() => void>; listeners: Set<() => void>; view: ViewBinding | null };
+const makeOwner = (api: LocalCompanyIntakeOptions['api'], scope: string | null, provider: boolean): Owner => ({ firstUse: createLocalCompanyContinuation(), api, scope, provider, state: initial(), sequence: 0, active: true, busy: false, cancellations: new Set(), listeners: new Set(), view: null });
 const notify = (owner: Owner) => { for (const listener of owner.listeners) listener(); };
 const ownerContext = createContext<Owner | null>(null);
 
@@ -47,6 +48,12 @@ export function useLocalCompanyIntakeOwner(api?: IntakeApi) {
 }
 
 export const LocalCompanyIntakeOwnerContext = ownerContext;
+
+export function useFirstUseContinuation() {
+  const owner = useContext(ownerContext);
+  if (!owner) throw new Error('First-use continuation requires the local company owner');
+  return owner.firstUse.continuation;
+}
 
 /** Mount above fallback/ready branches. Retention is local to this hook's lifetime,
  * not a new global/session cache. No API calls happen on mount or refresh renders. */
@@ -80,7 +87,7 @@ export function useLocalCompanyIntake(options: LocalCompanyIntakeOptions) {
   useEffect(() => {
     owner.listeners.add(redraw);
     owner.active = true;
-    return () => { owner.listeners.delete(redraw); if (!owner.provider) { owner.active = false; owner.sequence++; for (const cancel of [...owner.cancellations]) cancel(); } };
+    return () => { owner.listeners.delete(redraw); if (!owner.provider) { owner.firstUse.invalidate(); owner.active = false; owner.sequence++; for (const cancel of [...owner.cancellations]) cancel(); } };
   }, [owner]);
   useEffect(() => {
     if (!owner.provider || options.scopeKey !== 'local-company:accounts') return;
@@ -187,6 +194,13 @@ export type LocalCompanyIntakeController = ReturnType<typeof useLocalCompanyInta
 
 export function LocalCompanyIntakeProvider({ api, children }: { api?: IntakeApi; children: ReactNode }) {
   const { owner, borrowed } = useLocalCompanyIntakeOwner(api);
+  // First-use activation must be observable before initial and StrictMode actions.
+  // Keep the original intake passive lifecycle and its timeout semantics intact.
+  useLayoutEffect(() => {
+    if (borrowed) return;
+    owner.firstUse.activate();
+    return () => owner.firstUse.invalidate();
+  }, [borrowed, owner]);
   useEffect(() => {
     if (borrowed) return;
     owner.active = true;

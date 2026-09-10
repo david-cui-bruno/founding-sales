@@ -375,10 +375,13 @@ describe('company continuity through actual App and local public boundaries', ()
       { channel: 'local-workspace:company-create-status', args: [arrival.request] },
     ]);
     expect(await value.companyEvidence(arrival.request.commandId)).toEqual(committed);
+    expect(value.trace().filter(entry => entry.channel === 'local-workspace:get-company').map(entry => ({ args: entry.args, outcome: entry.outcome, handlerStarted: entry.handlerStarted }))).toEqual([
+      { args: [{ accountId: arrival.result.status === 'saved' ? arrival.result.account.id : null }], outcome: 'resolved', handlerStarted: true },
+    ]);
     assertUiInventory(value, {
       'health:get': 1, 'lead-detail:outbound-capabilities': 1, 'review:list': 6, 'daily:get': 5, 'outreach:delegation-status': 5,
       'local-workspace:get': 6, 'local-workspace:get-commitments': 6, 'leads:list': 1,
-      'local-workspace:review-company': 1, 'local-workspace:create-company': 1, 'local-workspace:company-create-status': 1,
+      'local-workspace:review-company': 1, 'local-workspace:create-company': 1, 'local-workspace:company-create-status': 1, 'local-workspace:get-company': 1,
     });
   });
 
@@ -410,10 +413,13 @@ describe('company continuity through actual App and local public boundaries', ()
     ]);
     expect(localCompanyCreateResultSchema.parse(calls[2]!.result)).toEqual({ ...arrival.result, replayed: true });
     expect(await value.companyEvidence(arrival.request.commandId)).toEqual(committed);
+    expect(value.trace().filter(entry => entry.channel === 'local-workspace:get-company').map(entry => ({ args: entry.args, outcome: entry.outcome, handlerStarted: entry.handlerStarted }))).toEqual([
+      { args: [{ accountId: arrival.result.status === 'saved' ? arrival.result.account.id : null }], outcome: 'resolved', handlerStarted: true },
+    ]);
     assertUiInventory(value, {
       'health:get': 1, 'lead-detail:outbound-capabilities': 1, 'review:list': 1, 'daily:get': 1, 'outreach:delegation-status': 1,
       'local-workspace:get': 2, 'local-workspace:get-commitments': 2,
-      'local-workspace:review-company': 1, 'local-workspace:create-company': 2,
+      'local-workspace:review-company': 1, 'local-workspace:create-company': 2, 'local-workspace:get-company': 1,
     });
   });
 });

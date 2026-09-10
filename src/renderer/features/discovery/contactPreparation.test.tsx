@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { firstUseFixture } from '../today/nativeDesk.fixture';
 import { PresentationRoot } from '../../app/PresentationRoot';
 import { act, cleanup, fireEvent, render as testingRender, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
@@ -51,7 +52,7 @@ function fixture() {
     findContactInfo: vi.fn<LeadDetailApi['findContactInfo']>(async () => ({ written: true, refusalReason: null })),
   };
   const mount = (outreachApi?: OutreachApi) => render(<StrictMode><LeadInspectorProvider api={api} discoveryApi={discovery} outreachApi={outreachApi}><Harness /></LeadInspectorProvider></StrictMode>);
-  return { api, discovery, mount, setDetail: (value: LeadDetail) => { current = value; } };
+  return { api, discovery, firstUse: firstUseFixture(), mount, setDetail: (value: LeadDetail) => { current = value; } };
 }
 function Harness() {
   const inspector = useLeadInspector();
@@ -65,7 +66,7 @@ it('shows at most three applicable suggestions in backend order and selects name
   const f = fixture(); const missingFit = brief('missing'); missingFit.assessment!.axes.fit = null; missingFit.assessment!.ranking.priority = null;
   f.discovery.get.mockResolvedValue(snapshot([missingFit, brief('stale', { stale: true }), brief('d'), brief('b'), brief('a'), brief('c')]));
   const today = { get: vi.fn(async () => ({ lanes: [], dialBudget: 40, scheduledDials: 0, conversationTarget: 5, reviewErrorCount: 0, unreviewedBacklogCount: 6, unreviewedCloudSignalCount: 0, conversationsHeld: 0, revision: 1 })) } as unknown as TodayRouteApi;
-  const open = vi.fn(); render(<TodayRoute api={today} discoveryApi={f.discovery} onOpenLead={open} />);
+  const open = vi.fn(); render(<TodayRoute firstUse={f.firstUse} api={today} discoveryApi={f.discovery} onOpenLead={open} />);
   const region = await screen.findByRole('region', { name: 'Suggested contacts' });
   await waitFor(() => expect(within(region).getAllByRole('button').map(button => button.textContent)).toEqual(['Owner d', 'Owner b', 'Owner a']));
   fireEvent.click(within(region).getByRole('button', { name: 'Owner b' }));
@@ -233,7 +234,7 @@ it('opens exactly one selected suggestion workspace and discloses evidence only 
   const f = fixture();
   f.discovery.get.mockResolvedValue(snapshot([brief('a'), brief('b')]));
   const today = { get: vi.fn(async () => ({ lanes: [], dialBudget: 40, scheduledDials: 0, conversationTarget: 5, reviewErrorCount: 0, unreviewedBacklogCount: 6, unreviewedCloudSignalCount: 0, conversationsHeld: 0, revision: 1 })) } as unknown as TodayRouteApi;
-  function SuggestedRoute() { const inspector = useLeadInspector(); return <TodayRoute api={today} discoveryApi={f.discovery} onOpenLead={inspector.openLead} />; }
+  function SuggestedRoute() { const inspector = useLeadInspector(); return <TodayRoute firstUse={f.firstUse} api={today} discoveryApi={f.discovery} onOpenLead={inspector.openLead} />; }
   render(<StrictMode><LeadInspectorProvider api={f.api} discoveryApi={f.discovery}><SuggestedRoute /></LeadInspectorProvider></StrictMode>);
   const region = await screen.findByRole('region', { name: 'Suggested contacts' });
   expect(screen.queryByRole('complementary')).toBeNull();

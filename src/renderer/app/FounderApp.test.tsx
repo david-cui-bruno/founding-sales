@@ -905,3 +905,106 @@ describe('FounderApp company phase continuity', () => {
     }
   });
 });
+
+
+// Task 4 additive public composition tests. No new-module import: baseline can reach missing UI.
+import type { LocalCompanyDetail, LocalCompanyResearchStatus, SelectedResearch } from '../../shared/contracts/localWorkspaceContract';
+const f4AppReleases: Array<() => void> = [];
+const f4AppPending: Promise<unknown>[] = [];
+function f4AppDeferred<T>(fallback: T) { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); f4AppReleases.push(() => resolve(fallback)); f4AppPending.push(promise); return { promise, resolve }; }
+afterEach(async () => { try { cleanup(); } finally { try { await act(async () => { for (const release of f4AppReleases.splice(0)) release(); await Promise.allSettled(f4AppPending.splice(0)); }); } finally { vi.restoreAllMocks(); } } });
+function f4AppDetail(accountId = 'a'): LocalCompanyDetail {
+  const snapshot = structuredClone(dailyFixture().accounts.find(item => item.account.id === accountId)!);
+  snapshot.portfolio = []; snapshot.claims = []; snapshot.routes = [];
+  return { scope: 'local_database', generatedAt: fixtureNow, snapshot, sources: [{ id: `first-use-${accountId}`, url: `https://${accountId}.example/source`, fetchedAt: fixtureNow, sha256: 'd'.repeat(64), excerpt: `Founder selected source ${accountId}`, permitted: true }], links: [] };
+}
+function f4AppStatus(r: SelectedResearch, state: LocalCompanyResearchStatus['state']): LocalCompanyResearchStatus { return { ...r, state, receipt: state === 'completed' ? { accountId: r.accountId, version: 2, duplicate: false } : null, reason: null }; }
+function f4FounderApi() {
+  const api = fakeCallieApi();
+  vi.mocked(api.daily.get).mockResolvedValue(dailyFixture());
+  vi.mocked(api.localWorkspace.get).mockResolvedValue(localSnapshot({ accounts: { state: 'available', snapshots: dailyFixture().accounts } }));
+  api.localWorkspace.getCompany = vi.fn<CalliePreloadApi['localWorkspace']['getCompany']>(async ({ accountId }) => f4AppDetail(accountId));
+  api.localWorkspace.researchCompany = vi.fn<CalliePreloadApi['localWorkspace']['researchCompany']>(async r => f4AppStatus(r, 'held'));
+  api.localWorkspace.getCompanyResearchStatus = vi.fn<CalliePreloadApi['localWorkspace']['getCompanyResearchStatus']>(async r => f4AppStatus(r, 'not_recorded'));
+  return api;
+}
+
+it('F4-founder-01 selecting a real local row exposes explicit Research through FounderApp routes', async () => {
+  const api = f4FounderApi(); render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' }));
+  expect(await screen.findByRole('button', { name: /^Research(?: company)?$/i })).toBeTruthy();
+  expect(await screen.findByText('Founder selected source a')).toBeTruthy();
+  expect(api.localWorkspace.getCompany).toHaveBeenCalledWith({ accountId: 'a' }); expect(api.localWorkspace.researchCompany).not.toHaveBeenCalled();
+}, 10_000);
+
+it('F4-founder-02 Campaigns and back retain selected local account and the same pending request without automatic execution', async () => {
+  const api = f4FounderApi(); const r = { accountId: 'a', commandId: '10000000-0000-4000-8000-000000000001' };
+  const gate = f4AppDeferred(f4AppStatus(r, 'completed')); const uuid = vi.spyOn(crypto, 'randomUUID').mockReturnValue('10000000-0000-4000-8000-000000000001');
+  api.localWorkspace.researchCompany = vi.fn<CalliePreloadApi['localWorkspace']['researchCompany']>(() => gate.promise);
+  render(<StrictMode><FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" /></StrictMode>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText('Founder selected source a');
+  const research = screen.getByRole('button', { name: /^Research(?: company)?$/i }); act(() => { fireEvent.click(research); fireEvent.click(research); });
+  expect(api.localWorkspace.researchCompany).toHaveBeenCalledOnce(); const original = vi.mocked(api.localWorkspace.researchCompany).mock.calls[0][0];
+  fireEvent.click(screen.getByRole('link', { name: 'Campaigns' })); await screen.findByRole('heading', { level: 1, name: 'Campaigns' });
+  await act(async () => { window.dispatchEvent(new Event('focus')); });
+  fireEvent.click(screen.getByRole('link', { name: 'Accounts' })); await screen.findByText('Founder selected source a');
+  expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
+  fireEvent.click(screen.getByRole('button', { name: /^Research(?: company)?$/i })); expect(api.localWorkspace.researchCompany).toHaveBeenCalledOnce(); expect(uuid).toHaveBeenCalledOnce();
+  await act(async () => gate.resolve(f4AppStatus(original, 'completed'))); expect(await screen.findByText(/^Research known · completed$/)).toBeTruthy();
+  expect(vi.mocked(api.localWorkspace.researchCompany).mock.calls[0][0]).toBe(original);
+}, 10_000);
+
+it('F4-founder-03 actual Import commit refresh retains selected pending research and global modal ownership', async () => {
+  const api = f4FounderApi(); const r = { accountId: 'a', commandId: '10000000-0000-4000-8000-000000000001' };
+  const gate = f4AppDeferred(f4AppStatus(r, 'completed')); vi.spyOn(crypto, 'randomUUID').mockReturnValue('10000000-0000-4000-8000-000000000001');
+  api.localWorkspace.researchCompany = vi.fn<CalliePreloadApi['localWorkspace']['researchCompany']>(() => gate.promise);
+  api.imports.preview = vi.fn<CalliePreloadApi['imports']['preview']>(async () => importPreview); api.imports.commit = vi.fn<CalliePreloadApi['imports']['commit']>(async () => importReceipt);
+  render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText('Founder selected source a');
+  fireEvent.click(screen.getByRole('button', { name: /^Research(?: company)?$/i })); const original = vi.mocked(api.localWorkspace.researchCompany).mock.calls[0][0];
+  // This real application event opens the global dialog without routing away, so commit exercises Accounts' keyed remount.
+  await act(async () => { window.dispatchEvent(new Event('callie:open-import')); });
+  const dialog = await screen.findByRole('dialog', { name: 'Import leads' }); expect(dialog.tagName).toBe('DIALOG');
+  fireEvent.keyDown(window, { key: 'k', metaKey: true, ctrlKey: true }); expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull();
+  fireEvent.change(within(dialog).getByLabelText('Paste spreadsheet rows'), { target: { value: 'Name\tPhone\nKevin\t4015550101' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Preview rows' })); fireEvent.click(await screen.findByRole('button', { name: 'Import 1 row' }));
+  await screen.findByText('Imported 1 row.'); expect(api.imports.commit).toHaveBeenCalledOnce();
+  const liveDialog = screen.queryByRole('dialog', { name: 'Import leads' }); if (liveDialog) fireEvent.click(within(liveDialog).getByRole('button', { name: 'Close' }));
+  await screen.findByText('Founder selected source a'); expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
+  fireEvent.click(screen.getByRole('button', { name: /^Research(?: company)?$/i })); expect(api.localWorkspace.researchCompany).toHaveBeenCalledOnce();
+  await act(async () => gate.resolve(f4AppStatus(original, 'completed'))); expect(await screen.findByText(/^Research known · completed$/)).toBeTruthy();
+  expect(vi.mocked(api.localWorkspace.researchCompany).mock.calls[0][0]).toBe(original);
+}, 10_000);
+
+it('F4-founder-04 palette Escape does not close selected research or resume its pending request', async () => {
+  const api = f4FounderApi(); const r = { accountId: 'a', commandId: '10000000-0000-4000-8000-000000000001' };
+  const gate = f4AppDeferred(f4AppStatus(r, 'completed')); vi.spyOn(crypto, 'randomUUID').mockReturnValue('10000000-0000-4000-8000-000000000001'); api.localWorkspace.researchCompany = vi.fn<CalliePreloadApi['localWorkspace']['researchCompany']>(() => gate.promise);
+  render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText('Founder selected source a');
+  const research = screen.getByRole('button', { name: /^Research(?: company)?$/i }); fireEvent.click(research);
+  fireEvent.keyDown(window, { key: 'k', metaKey: true, ctrlKey: true }); const palette = await screen.findByRole('dialog', { name: 'Command palette' });
+  fireEvent.keyDown(within(palette).getByRole('combobox'), { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull());
+  expect(screen.getByText('Founder selected source a')).toBeTruthy(); expect(api.localWorkspace.researchCompany).toHaveBeenCalledOnce();
+  expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
+  await act(async () => gate.resolve(f4AppStatus(r, 'completed'))); expect(await screen.findByText(/^Research known · completed$/)).toBeTruthy();
+}, 10_000);
+
+it('F4-founder-05 intake Open account selects the same research detail rather than a worker account', async () => {
+  const api = f4FounderApi(); const newSnapshot = f4AppDetail('a').snapshot;
+  newSnapshot.account = { id: 'new-local', name: 'New Local Company', domain: 'new.example', version: 1 };
+  let saved = false;
+  api.localWorkspace.get = vi.fn<CalliePreloadApi['localWorkspace']['get']>(async () => localSnapshot({ accounts: { state: 'available', snapshots: saved ? [...dailyFixture().accounts, newSnapshot] : dailyFixture().accounts } }));
+  api.localWorkspace.reviewCompany = vi.fn<CalliePreloadApi['localWorkspace']['reviewCompany']>(async input => ({ scope: 'local_database', input, candidates: [], complete: true }));
+  api.localWorkspace.createCompany = vi.fn<CalliePreloadApi['localWorkspace']['createCompany']>(async input => { saved = true; return { status: 'saved', commandId: input.commandId, account: newSnapshot.account, replayed: false }; });
+  api.localWorkspace.getCompany = vi.fn<CalliePreloadApi['localWorkspace']['getCompany']>(async ({ accountId }) => accountId === 'new-local' ? { ...f4AppDetail('a'), snapshot: newSnapshot } : f4AppDetail(accountId));
+  render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  const add = await screen.findByRole('button', { name: 'Add company' }); await waitFor(() => expect((add as HTMLButtonElement).disabled).toBe(false)); fireEvent.click(add);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Company name' }), { target: { value: 'New Local Company' } });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Company domain (optional)' }), { target: { value: 'new.example' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Review company' })); const create = await screen.findByRole('button', { name: 'Create company' });
+  await waitFor(() => expect((create as HTMLButtonElement).disabled).toBe(false)); fireEvent.click(create);
+  await waitFor(() => expect(api.localWorkspace.getCompany).toHaveBeenCalledWith({ accountId: 'new-local' }));
+  expect(screen.getByRole('button', { name: 'Local account · New Local Company' }).getAttribute('aria-current')).toBe('true');
+  expect(await screen.findByRole('button', { name: /^Research(?: company)?$/i })).toBeTruthy(); expect(api.localWorkspace.researchCompany).not.toHaveBeenCalled();
+}, 10_000);

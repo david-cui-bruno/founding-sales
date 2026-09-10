@@ -1,3 +1,4 @@
+import type { FirstUseContinuation } from '../features/today/localCompanyContinuation';
 import type { ReviewObservationToken } from './useReviewSummary';
 import type { ReviewSnapshot } from '../../shared/contracts/reviewContract';
 import type { ReactNode } from 'react';
@@ -21,6 +22,7 @@ import type { DensityState } from './useDensity';
 import type { ThemeState } from './useTheme';
 
 export type RouteContext = {
+  firstUse: FirstUseContinuation;
   api: CalliePreloadApi;
   health: FoundationHealth;
   theme: ThemeState;
@@ -39,6 +41,7 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
     case 'today':
       return (
         <TodayRoute
+          firstUse={context.firstUse}
           api={context.api.today}
           workspaceApi={context.api.daily ? context.api : undefined}
           discoveryApi={context.api.discovery}
@@ -48,7 +51,7 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
       );
     case 'accounts':
     case 'campaigns':
-      return <NativeDeskRoute api={context.api} surface={route} onOpenLead={context.openLead} />;
+      return <NativeDeskRoute firstUse={context.firstUse} api={context.api} surface={route} onOpenLead={context.openLead} />;
     case 'leads':
       return (
         <LeadsRoute

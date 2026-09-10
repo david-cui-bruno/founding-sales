@@ -18,7 +18,7 @@ function fixture() {
 }
 it('explicit reconciliation exists without relaxing pending holds or inferring applied from counts', async () => {
   const f = fixture();
-  render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
   await screen.findByRole('heading', { name: 'Today' });
   expect(f.api.delegation.sync).not.toHaveBeenCalled();
   fireEvent.focus(window);
@@ -50,7 +50,7 @@ it.each(['paused', 'revoked', 'foreign', 'unknown', 'unrelated'] as const)('hold
     owner.authority = kind === 'unknown' ? null : { ...owner.authority!, state: 'revoked' };
     f.setSnapshot(next);
   }
-  render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
   const button = await screen.findByRole('button', { name: 'Reconcile queued commands' });
   expect((button as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(button);
@@ -60,7 +60,7 @@ it('waits for completion, prevents double sync and preserves holds on failure', 
   const f = fixture();
   let reject!: (e: Error) => void;
   vi.spyOn(f.api.delegation, 'sync').mockImplementation(() => new Promise((_, no) => { reject = no; }));
-  render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
   const button = await screen.findByRole('button', { name: 'Reconcile queued commands' });
   fireEvent.click(button); fireEvent.click(button);
   expect(f.api.delegation.sync).toHaveBeenCalledTimes(1);
@@ -75,11 +75,11 @@ it.each(['remount', 'pause', 'foreign'] as const)('does not revive sync continua
   const f = fixture();
   let done!: () => void;
   vi.spyOn(f.api.delegation, 'sync').mockImplementation(() => new Promise(resolve => { done = () => resolve({ applied: 1, gaps: 0, cursor: null, ownerFresh: true }); }));
-  const view = render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+  const view = render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Reconcile queued commands' }));
   if (kind === 'remount') {
     view.unmount();
-    render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
     await screen.findByRole('button', { name: 'Reconcile queued commands' });
   } else {
     const config = await f.api.delegation.status();

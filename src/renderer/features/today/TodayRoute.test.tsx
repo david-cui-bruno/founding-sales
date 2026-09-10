@@ -1,4 +1,4 @@
-import { dailyFixture, localSnapshot, nativeDeskFixture } from './nativeDesk.fixture';
+import { firstUseFixture, dailyFixture, localSnapshot, nativeDeskFixture } from './nativeDesk.fixture';
 import { PresentationRoot } from '../../app/PresentationRoot';
 // @vitest-environment jsdom
 
@@ -96,8 +96,9 @@ const triageQueue = (
   revision: 1,
 });
 
-function fakeApi(overrides: Partial<TodayRouteApi> = {}): TodayRouteApi {
+function fakeApi(overrides: Partial<TodayRouteApi> = {}): TodayRouteApi & { firstUse: ReturnType<typeof firstUseFixture> } {
   return {
+    firstUse: firstUseFixture(),
     get: vi.fn(async () => snapshot(1, [
       item(),
       item({
@@ -120,7 +121,7 @@ function fakeApi(overrides: Partial<TodayRouteApi> = {}): TodayRouteApi {
     getTriageQueue: vi.fn(async () => triageQueue(['Cap Lead One', 'Cap Lead Two'])),
     setReviewPosition: vi.fn(async () => receipt),
     ...overrides,
-  } as TodayRouteApi;
+  } as TodayRouteApi & { firstUse: ReturnType<typeof firstUseFixture> };
 }
 
 function fakeLeadApi(overrides: Partial<TodayLeadCommandApi> = {}): TodayLeadCommandApi & { beginOutbound: ReturnType<typeof vi.fn> } {
@@ -138,7 +139,7 @@ describe('TodayRoute', () => {
     const api = fakeApi();
     render(
       <StrictMode>
-        <TodayRoute api={api} onOpenLead={vi.fn()} />
+        <TodayRoute firstUse={api.firstUse} api={api} onOpenLead={vi.fn()} />
       </StrictMode>,
     );
 
@@ -150,7 +151,7 @@ describe('TodayRoute', () => {
 
   it('renders the header dial meter and the muted date, with no visible Refresh', async () => {
     const api = fakeApi();
-    render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+    render(<TodayRoute firstUse={api.firstUse} api={api} onOpenLead={vi.fn()} />);
     await screen.findByText('Avery Landlord');
 
     fireEvent.click(screen.getByText('Queue capacity'));
@@ -164,7 +165,7 @@ describe('TodayRoute', () => {
 
   it('refetches on window focus', async () => {
     const api = fakeApi();
-    render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+    render(<TodayRoute firstUse={api.firstUse} api={api} onOpenLead={vi.fn()} />);
     await screen.findByText('Avery Landlord');
     const fetchesBefore = (api.get as ReturnType<typeof vi.fn>).mock.calls.length;
 
@@ -182,7 +183,7 @@ describe('TodayRoute', () => {
       throw new Error('SQLITE_IOERR at /private/tmp/callie.sqlite3');
     });
     const api = fakeApi({ get: failing as unknown as TodayRouteApi['get'] });
-    render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+    render(<TodayRoute firstUse={api.firstUse} api={api} onOpenLead={vi.fn()} />);
 
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.queryByText(/SQLITE_IOERR/)).toBeNull();
@@ -197,7 +198,7 @@ describe('TodayRoute', () => {
     const leadApi = fakeLeadApi();
     const onOpenLeadPage = vi.fn();
     render(
-      <TodayRoute
+      <TodayRoute firstUse={api.firstUse}
         api={api}
         leadApi={leadApi}
         onOpenLead={vi.fn()}
@@ -217,7 +218,7 @@ describe('TodayRoute', () => {
 
   it('writes resurface_at through snooze from the S key', async () => {
     const api = fakeApi();
-    render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+    render(<TodayRoute firstUse={api.firstUse} api={api} onOpenLead={vi.fn()} />);
     await screen.findByText('Blake Owner');
 
     const row = document.querySelector('[data-cycle-id="cycle-p1-b"]') as HTMLElement;
@@ -244,7 +245,7 @@ describe('TodayRoute', () => {
         return Promise.resolve(snapshot(9, [item({ personName: 'Fresh Person' })]));
       }) as unknown as TodayRouteApi['get'],
     });
-    render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+    render(<TodayRoute firstUse={api.firstUse} api={api} onOpenLead={vi.fn()} />);
 
     await waitFor(() => expect(call).toBeGreaterThanOrEqual(1));
     fireEvent(window, new Event('focus'));
@@ -261,7 +262,7 @@ describe('TodayRoute', () => {
         throw new Error('opted_out person: raw tombstone id 123');
       }) as unknown as TodayRouteApi['snooze'],
     });
-    render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+    render(<TodayRoute firstUse={api.firstUse} api={api} onOpenLead={vi.fn()} />);
     await screen.findByText('Avery Landlord');
 
     const row = document.querySelector('[data-cycle-id="cycle-p1"]') as HTMLElement;
@@ -278,7 +279,7 @@ it('keeps the main-ordered queue alongside read-only discovery without manual ju
   const api = fakeApi({ get: vi.fn(async () => ({ ...snapshot(1, [item()]), unreviewedBacklogCount: 2881 })) });
   const discoveryApi: DiscoveryApi = { get: vi.fn(async () => ({ prepared: [], judgment: [], counts: { unassessed: 0, research: 0, watch: 0, excluded: 0 }, processing: 'idle' as const, researchCapability: 'not_configured' as const, generatedAt: '2026-09-08T12:00:00.000Z', revision: 1 })), getBrief: vi.fn(), begin: vi.fn(), override: vi.fn() };
   const leadApi = fakeLeadApi();
-  render(<TodayRoute api={api} leadApi={leadApi} discoveryApi={discoveryApi} onOpenLead={vi.fn()} />);
+  render(<TodayRoute firstUse={api.firstUse} api={api} leadApi={leadApi} discoveryApi={discoveryApi} onOpenLead={vi.fn()} />);
   await screen.findByText('Avery Landlord');
   expect(screen.getByRole('list', { name: 'Work queue' })).toBeTruthy();
   expect(screen.queryByText(/Prepared conversations|Manual review|Preparing your shortlist/)).toBeNull();
@@ -290,12 +291,12 @@ it('keeps the main-ordered queue alongside read-only discovery without manual ju
 });
 it('states only that no contacts are due rather than claiming all discovery is done', async () => {
   const api = fakeApi({ get: vi.fn(async () => snapshot(1, [])) });
-  render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+  render(<TodayRoute firstUse={api.firstUse} api={api} onOpenLead={vi.fn()} />);
   await screen.findByText('No contacts due right now.');
   expect(screen.queryByText(/Queue done|All done/)).toBeNull();
 });
 it('refreshes queue membership after an accepted email without a focus workaround', async () => {
-  const api = fakeApi(); render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+  const api = fakeApi(); render(<TodayRoute firstUse={api.firstUse} api={api} onOpenLead={vi.fn()} />);
   await screen.findByText('Avery Landlord'); const reads = vi.mocked(api.get).mock.calls.length;
   fireEvent(window, new CustomEvent('callie:email-sent', { detail: { personId: 'person-p1', salesCycleId: 'cycle-p1' } }));
   await waitFor(() => expect(vi.mocked(api.get).mock.calls.length).toBe(reads + 1));
@@ -303,7 +304,7 @@ it('refreshes queue membership after an accepted email without a focus workaroun
 
 it('shows the real current date badge and opens the primary brief without a call or mutation', async () => {
   const api = fakeApi(); const open = vi.fn(); const fullPage = vi.fn();
-  render(<TodayRoute api={api} onOpenLead={open} onOpenLeadPage={fullPage} />);
+  render(<TodayRoute firstUse={api.firstUse} api={api} onOpenLead={open} onOpenLeadPage={fullPage} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Avery Landlord' }));
   expect(open).toHaveBeenCalledWith('person-p1'); expect(fullPage).not.toHaveBeenCalled();
   expect(api.complete).not.toHaveBeenCalled(); expect(api.logPastActivity).not.toHaveBeenCalled();
@@ -321,7 +322,7 @@ it.each(['accepted', 'unconfirmed'] as const)('keeps legacy manual activity moun
   let resolve!: (value: MutationReceipt) => void;
   let reject!: (error: Error) => void;
   const api = fakeApi({ logPastActivity: vi.fn(() => new Promise<MutationReceipt>((yes, no) => { resolve = yes; reject = no; })) });
-  render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+  render(<TodayRoute firstUse={api.firstUse} api={api} onOpenLead={vi.fn()} />);
   await screen.findByText('Avery Landlord');
   fireEvent.click(screen.getAllByRole('button', { name: /More actions/ })[0]!);
   fireEvent.click(screen.getByRole('menuitem', { name: 'Log past activity' }));
@@ -346,7 +347,7 @@ it.each(['accepted', 'unconfirmed'] as const)('keeps legacy manual activity moun
 });
 it.each(['s', 'x'])('consumes the fire-and-forget %s rejection while showing unconfirmed status', async key => {
   const api = fakeApi({ snooze: vi.fn(async () => { throw new Error('private failure'); }) });
-  render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+  render(<TodayRoute firstUse={api.firstUse} api={api} onOpenLead={vi.fn()} />);
   await screen.findByText('Avery Landlord');
   fireEvent.keyDown(screen.getByRole('listitem', { name: 'Avery Landlord' }), { key });
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'The command result was not confirmed. Check the current record before submitting again.');
@@ -355,7 +356,7 @@ it.each(['s', 'x'])('consumes the fire-and-forget %s rejection while showing unc
 it('does not refresh a disposed legacy route after its pending manual receipt', async () => {
   let resolve!: (value: MutationReceipt) => void;
   const api = fakeApi({ logPastActivity: vi.fn(() => new Promise<MutationReceipt>(yes => { resolve = yes; })) });
-  const view = render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+  const view = render(<TodayRoute firstUse={api.firstUse} api={api} onOpenLead={vi.fn()} />);
   await screen.findByText('Avery Landlord');
   fireEvent.click(screen.getAllByRole('button', { name: /More actions/ })[0]!);
   fireEvent.click(screen.getByRole('menuitem', { name: 'Log past activity' }));
@@ -369,7 +370,7 @@ it.each(['accepted', 'unconfirmed'] as const)('retains the exact pending manual 
   let resolve!: (value: MutationReceipt) => void;
   let reject!: (error: Error) => void;
   const api = fakeApi({ logPastActivity: vi.fn(() => new Promise<MutationReceipt>((yes, no) => { resolve = yes; reject = no; })) });
-  render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+  render(<TodayRoute firstUse={api.firstUse} api={api} onOpenLead={vi.fn()} />);
   await screen.findByText('Avery Landlord');
   const queue = screen.getByRole('list', { name: 'Work queue' });
   fireEvent.click(screen.getAllByRole('button', { name: /More actions/ })[0]!);
@@ -431,7 +432,7 @@ it.each(['accepted', 'unconfirmed'] as const)('keeps actual workspaceApi legacy 
   let resolve!: (value: MutationReceipt) => void;
   let reject!: (error: Error) => void;
   const api = fakeApi({ logPastActivity: vi.fn(() => new Promise<MutationReceipt>((yes, no) => { resolve = yes; reject = no; })) });
-  render(<TodayRoute api={api} workspaceApi={workspace.api} onOpenLead={vi.fn()} />);
+  render(<TodayRoute firstUse={workspace.firstUse} api={api} workspaceApi={workspace.api} onOpenLead={vi.fn()} />);
   await screen.findByText('Avery Landlord');
   fireEvent.click(screen.getAllByRole('button', { name: /More actions/ })[0]!);
   fireEvent.click(screen.getByRole('menuitem', { name: 'Log past activity' }));
@@ -485,7 +486,7 @@ it.each(['mode', 'api'] as const)('invalidates the actual legacy form for confir
   const workspace = legacyWorkspace();
   let resolve!: (value: MutationReceipt) => void;
   const api = fakeApi({ logPastActivity: vi.fn(() => new Promise<MutationReceipt>(done => { resolve = done; })) });
-  const view = render(<TodayRoute api={api} workspaceApi={workspace.api} onOpenLead={vi.fn()} />);
+  const view = render(<TodayRoute firstUse={workspace.firstUse} api={api} workspaceApi={workspace.api} onOpenLead={vi.fn()} />);
   await screen.findByText('Avery Landlord');
   fireEvent.click(screen.getAllByRole('button', { name: /More actions/ })[0]!);
   fireEvent.click(screen.getByRole('menuitem', { name: 'Log past activity' }));
@@ -498,7 +499,7 @@ it.each(['mode', 'api'] as const)('invalidates the actual legacy form for confir
     expect(screen.getByTestId('native-desk')).toBeTruthy();
   } else {
     const next = legacyWorkspace();
-    view.rerender(<TodayRoute api={api} workspaceApi={next.api} onOpenLead={vi.fn()} />);
+    view.rerender(<TodayRoute firstUse={next.firstUse} api={api} workspaceApi={next.api} onOpenLead={vi.fn()} />);
     await screen.findByText('Avery Landlord');
   }
   expect(screen.queryByRole('dialog')).toBeNull();
@@ -512,7 +513,7 @@ it('allows deliberate Close after original rejection while overview error persis
   const workspace = legacyWorkspace();
   let reject!: (error: Error) => void;
   const api = fakeApi({ logPastActivity: vi.fn(() => new Promise<MutationReceipt>((_resolve, fail) => { reject = fail; })) });
-  render(<TodayRoute api={api} workspaceApi={workspace.api} onOpenLead={vi.fn()} />);
+  render(<TodayRoute firstUse={workspace.firstUse} api={api} workspaceApi={workspace.api} onOpenLead={vi.fn()} />);
   await screen.findByText('Avery Landlord');
   fireEvent.click(screen.getAllByRole('button', { name: /More actions/ })[0]!);
   fireEvent.click(screen.getByRole('menuitem', { name: 'Log past activity' }));

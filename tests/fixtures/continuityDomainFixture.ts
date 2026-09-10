@@ -69,7 +69,7 @@ export const CONTINUITY_REGISTERED_CHANNELS = [
   'friday:get', 'friday:drilldown', 'friday:create-job', 'friday:fill-job', 'friday:cancel-job',
 ] as const;
 
-export const CONTINUITY_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get', 'leads:list', 'review:list',
+export const CONTINUITY_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get', 'leads:list', 'review:list', 'local-workspace:get-company',
   'local-workspace:review-company', 'local-workspace:create-company', 'local-workspace:company-create-status',
   'outreach:delegation-status', 'lead-detail:outbound-capabilities'] as const;
 export const CONTINUITY_UI_REGISTERED_CHANNELS = [...CONTINUITY_REGISTERED_CHANNELS, 'daily:get',

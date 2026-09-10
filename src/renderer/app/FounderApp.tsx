@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import type { CalliePreloadApi } from '../../shared/preload';
 import type { FoundationHealth } from '../foundation/useFoundationHealth';
+import { useFirstUseContinuation } from '../features/today/LocalCompanyIntake';
 import { LocalCompanyIntakeProvider } from '../features/today/LocalCompanyIntakeProvider';
 import { ImportDialog } from '../features/import/ImportDialog';
 import { LeadInspectorProvider } from '../features/leadInspector/LeadInspectorProvider';
@@ -30,12 +31,15 @@ export type FounderAppProps = {
 export function FounderApp({ api, health, theme, density, initialRoute }: FounderAppProps) {
   return (
     <LeadInspectorProvider api={api.leadDetail} outreachApi={api.outreach} discoveryApi={api.discovery} pastActivityApi={api.today} outcomeApi={api.today}>
-      <FounderWorkspace api={api} health={health} theme={theme} density={density} initialRoute={initialRoute} />
+      <LocalCompanyIntakeProvider api={api.localWorkspace}>
+        <FounderWorkspace api={api} health={health} theme={theme} density={density} initialRoute={initialRoute} />
+      </LocalCompanyIntakeProvider>
     </LeadInspectorProvider>
   );
 }
 
 function FounderWorkspace({ api, health, theme, density, initialRoute }: FounderAppProps) {
+  const firstUse = useFirstUseContinuation();
   const routing = useHashRoute(initialRoute ?? 'today');
   const inspector = useLeadInspector();
   const [importOpen, setImportOpen] = useState(false);
@@ -58,8 +62,7 @@ function FounderWorkspace({ api, health, theme, density, initialRoute }: Founder
 
   return (
     <>
-      <LocalCompanyIntakeProvider api={api.localWorkspace}>
-        <AppShell
+      <AppShell
         route={routing.route}
         onNavigate={routing.navigate}
         reviewCount={reviewSummary.state}
@@ -67,6 +70,7 @@ function FounderWorkspace({ api, health, theme, density, initialRoute }: Founder
         <div key={`${routing.route}-${refreshKey}`}>
           {renderRoute(routing.route, {
             api,
+            firstUse,
             health,
             theme,
             density,
@@ -79,7 +83,6 @@ function FounderWorkspace({ api, health, theme, density, initialRoute }: Founder
           })}
         </div>
       </AppShell>
-      </LocalCompanyIntakeProvider>
       <CommandPalette
         navigate={routing.navigate}
         openImport={() => setImportOpen(true)}

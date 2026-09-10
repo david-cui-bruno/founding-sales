@@ -676,3 +676,105 @@ it('Task 3 an empty approved source list holds a valid saved account before enqu
     expect(f.requests).toEqual([]); expect(storedState()).toEqual(before);
   } finally { try { await f.close(); } finally { vi.restoreAllMocks(); } }
 });
+
+// Task4 public-boundary coverage adds unrelated-queue interference to retained Task3 recovery controls.
+it('Task 4 lost-before-dispatch recovery preserves an older unrelated job and evidence through the same-command replay', async () => {
+  const f = await fixture(true, { publicIpc: true });
+  try {
+    const other = task3Seed(f, 'Older unrelated lost transport', 'other.invalid');
+    task3Repo(f, '2026-09-08T12:00:00.000Z').enqueue({ ...other, limits });
+    expect(task3Row(f, other)).toMatchObject({ created_at: '2026-09-08T12:00:00.000Z', state: 'queued', attempt: 0, reserved_cost_micros: 0 });
+    const selected = task3Seed(f); const untouched = task3Unrelated(f, selected);
+    const otherDetail = await task3Api().getCompany({ accountId: other.accountId });
+    let lose = true;
+    const api = createLocalWorkspaceApi(createIpcClient({ invoke: async (channel, ...args) => {
+      if (channel === 'local-workspace:research-company' && lose) { lose = false; throw new Error('fixture transport unavailable before dispatch'); }
+      return registeredIpcHandler(task3Electron.handle, channel)(task3Trusted, ...args);
+    } }));
+    expect(typeof api.researchCompany).toBe('function');
+    const enqueue = vi.spyOn(AccountRepository.prototype, 'enqueue');
+    await expect(api.researchCompany(selected)).rejects.toThrow();
+    expect(await api.getCompanyResearchStatus(selected)).toMatchObject({ ...selected, state: 'not_recorded' });
+    expect(task3Row(f, selected)).toBeUndefined(); expect(enqueue).not.toHaveBeenCalled(); expect(f.requests).toEqual([]);
+    expect(task3Unrelated(f, selected)).toEqual(untouched);
+    expect(await api.researchCompany(selected)).toMatchObject({ ...selected, state: 'completed' });
+    expect(await api.researchCompany(selected)).toMatchObject({ ...selected, state: 'completed' });
+    expect(enqueue).toHaveBeenCalledTimes(1); expect(enqueue).toHaveBeenCalledWith({ ...selected, limits });
+    expect(f.requests).toHaveLength(1); expect(f.database.raw.prepare('SELECT command_id FROM pm_account_research_jobs WHERE account_id=?').all(selected.accountId)).toEqual([{ command_id: selected.commandId }]);
+    expect(task3Unrelated(f, selected)).toEqual(untouched);
+    expect(await api.getCompany({ accountId: other.accountId })).toMatchObject({ scope: otherDetail.scope, snapshot: otherDetail.snapshot, sources: otherDetail.sources, links: otherDetail.links });
+    expect(f.database.raw.prepare('SELECT COUNT(*) AS n FROM pm_account_research_jobs').get()).toEqual({ n: 2 });
+  } finally { try { await f.close(); } finally { vi.restoreAllMocks(); } }
+});
+
+it('Task 4 late original versus explicit replay preserves an older unrelated job and evidence without a concurrent acquisition', async () => {
+  const f = await fixture(true, { publicIpc: true }); const hold = task3Hold();
+  let originalOutcome: ReturnType<typeof task3Outcome<unknown>> | undefined;
+  try {
+    const other = task3Seed(f, 'Older unrelated late original', 'other.invalid');
+    task3Repo(f, '2026-09-08T12:00:00.000Z').enqueue({ ...other, limits });
+    expect(task3Row(f, other)).toMatchObject({ created_at: '2026-09-08T12:00:00.000Z', state: 'queued', attempt: 0, reserved_cost_micros: 0 });
+    const selected = task3Seed(f); const api = task3Api(); const untouched = task3Unrelated(f, selected);
+    const otherDetail = await api.getCompany({ accountId: other.accountId });
+    expect(typeof f.app.companyResearch!.researchCompany).toBe('function');
+    const execution = f.app.companyResearch!.researchCompany.bind(f.app.companyResearch!);
+    let enteredPort = false; let holdNextLease = true;
+    vi.spyOn(f.app.companyResearch!, 'researchCompany').mockImplementation(input => { enteredPort = true; return execution(input); });
+    const lease = f.runtime.withDatabase.bind(f.runtime);
+    const delayed: FoundationRuntime['withDatabase'] = operation => lease(async (database: AppDatabase) => {
+      if (enteredPort && holdNextLease) { holdNextLease = false; await hold.page(); }
+      return operation(database);
+    });
+    vi.spyOn(f.runtime, 'withDatabase').mockImplementation(delayed);
+    const lossy = createLocalWorkspaceApi(createIpcClient({ invoke: async (channel, ...args) => {
+      originalOutcome = task3Outcome(Promise.resolve(registeredIpcHandler(task3Electron.handle, channel)(task3Trusted, ...args)));
+      throw new Error('fixture renderer lost response while main continues');
+    } }));
+    await expect(lossy.researchCompany(selected)).rejects.toThrow();
+    expect(originalOutcome).toBeDefined();
+    expect(await Promise.race([hold.entered, originalOutcome!, hold.deadline])).toBe('entered');
+    expect(await api.getCompanyResearchStatus(selected)).toMatchObject({ ...selected, state: 'not_recorded' });
+    expect(task3Row(f, selected)).toBeUndefined(); expect(f.requests).toEqual([]);
+    const replay = task3Outcome(api.researchCompany(selected));
+    const result = await Promise.race([replay, hold.deadline]);
+    expect(result).not.toBe('timeout');
+    if (result !== 'timeout' && result.kind === 'value') expect(result.value).toMatchObject({ ...selected, state: 'held' });
+    expect(task3Row(f, selected)).toBeUndefined(); expect(f.requests).toEqual([]);
+    expect(task3Unrelated(f, selected)).toEqual(untouched);
+    hold.release();
+    const originalResult = await Promise.race([originalOutcome!, hold.deadline]);
+    expect(originalResult).toMatchObject({ kind: 'value', value: { ...selected, state: 'completed' } });
+    expect(await api.researchCompany(selected)).toMatchObject({ ...selected, state: 'completed' });
+    expect(f.requests).toHaveLength(1); expect(f.database.raw.prepare('SELECT command_id FROM pm_account_research_jobs WHERE account_id=?').all(selected.accountId)).toEqual([{ command_id: selected.commandId }]);
+    expect(task3Unrelated(f, selected)).toEqual(untouched);
+    expect(await api.getCompany({ accountId: other.accountId })).toMatchObject({ scope: otherDetail.scope, snapshot: otherDetail.snapshot, sources: otherDetail.sources, links: otherDetail.links });
+    expect(f.database.raw.prepare('SELECT COUNT(*) AS n FROM pm_account_research_jobs').get()).toEqual({ n: 2 });
+  } finally {
+    hold.release(); await hold.drain(); if (originalOutcome) await Promise.race([originalOutcome, hold.deadline]);
+    try { await f.close(); } finally { vi.restoreAllMocks(); hold.clear(); }
+  }
+});
+
+  it.each(['unexpired', 'expired', 'parked'] as const)('Task 4 ambiguous %s replay retains selected spend and an older unrelated queued job', async state => {
+    const f = await fixture(true, { publicIpc: true });
+    try {
+      const api = task3Api(); const other = task3Seed(f, 'Older unrelated ambiguous work', 'other.invalid');
+      task3Repo(f, '2026-09-08T12:00:00.000Z').enqueue({ ...other, limits });
+      expect(task3Row(f, other)).toMatchObject({ created_at: '2026-09-08T12:00:00.000Z', state: 'queued', attempt: 0, reserved_cost_micros: 0 });
+      const selected = task3Seed(f); const repo = task3Repo(f); const untouched = task3Unrelated(f, selected);
+      const otherDetail = await api.getCompany({ accountId: other.accountId });
+      repo.enqueue({ ...selected, limits });
+      const job = repo.claimSelected(state === 'expired' ? '2026-09-08T12:00:00.000Z' : clock.now(), selected)!;
+      expect(job.accountId).toBe(selected.accountId);
+      if (state === 'parked') repo.settle({ jobId: job.id, claimToken: job.claimToken, status: 'parked', receiptCommandId: null, costMicros: null });
+      expect(await api.getCompanyResearchStatus(selected)).toMatchObject({ ...selected, state: state === 'parked' ? 'parked' : 'running' });
+      expect(await api.researchCompany(selected)).toMatchObject({ ...selected, state: state === 'unexpired' ? 'running' : 'parked' });
+      expect(f.requests).toEqual([]);
+      expect(task3Row(f, selected)).toMatchObject({ attempt: 1, reserved_cost_micros: 100, cost_micros: null });
+      const before = task3Row(f, selected);
+      await api.researchCompany(selected); expect(task3Row(f, selected)).toEqual(before);
+      expect(task3Unrelated(f, selected)).toEqual(untouched);
+      expect(await api.getCompany({ accountId: other.accountId })).toMatchObject({ scope: otherDetail.scope, snapshot: otherDetail.snapshot, sources: otherDetail.sources, links: otherDetail.links });
+      expect(f.database.raw.prepare('SELECT COUNT(*) AS n FROM pm_account_research_jobs').get()).toEqual({ n: 2 });
+    } finally { await f.close(); }
+  });
