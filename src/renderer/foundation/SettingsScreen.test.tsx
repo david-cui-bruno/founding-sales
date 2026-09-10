@@ -551,7 +551,7 @@ describe('Local workflow transition', () => {
   function localApi() {
     const snapshot: import('../../shared/contracts/localWorkspaceContract').LocalWorkspaceSnapshot = { scope: 'local_database', generatedAt: receipt.occurredAt, workflowMode: 'legacy', transitionReceipt: null, accounts: { state: 'available', snapshots: [] } };
     const unavailableCompanyIntake = async () => { throw Error('Company intake unavailable in this fixture'); };
-    return { get: vi.fn(async () => snapshot), getCompany: vi.fn(async () => { throw Error('Selected company detail unavailable in this fixture'); }), getCommitments: vi.fn(), reviewCompany: vi.fn(unavailableCompanyIntake), createCompany: vi.fn(unavailableCompanyIntake), getCompanyCreateStatus: vi.fn(unavailableCompanyIntake), transition: vi.fn(async (command: import('../../shared/contracts/localWorkspaceContract').LocalWorkflowTransition) => ({ ...receipt, commandId: command.commandId, manifestId: command.manifestId })) };
+    return { get: vi.fn(async () => snapshot), getCompany: vi.fn(async () => { throw Error('Selected company detail unavailable in this fixture'); }), researchCompany: vi.fn(unavailableCompanyIntake), getCompanyResearchStatus: vi.fn(unavailableCompanyIntake), getCommitments: vi.fn(), reviewCompany: vi.fn(unavailableCompanyIntake), createCompany: vi.fn(unavailableCompanyIntake), getCompanyCreateStatus: vi.fn(unavailableCompanyIntake), transition: vi.fn(async (command: import('../../shared/contracts/localWorkspaceContract').LocalWorkflowTransition) => ({ ...receipt, commandId: command.commandId, manifestId: command.manifestId })) };
   }
   async function open(api = localApi()) {
     const view = renderSettings({ localWorkspaceApi: api });

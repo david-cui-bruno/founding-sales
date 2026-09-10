@@ -13,7 +13,7 @@ const account = { ...input, id: 'account', version: 1 };
 const trusted = { senderFrame: { url: 'callie://app/index.html' } };
 const review = (value: LocalCompanyInput): LocalCompanyReview => ({ scope: 'local_database', input: value, candidates: [], complete: true });
 const provider = () => ({
-  get: async () => { throw new Error('unused'); }, getCompany: async () => { throw new Error('unused'); }, getCommitments: async () => { throw new Error('unused'); }, transition: async () => { throw new Error('unused'); },
+  get: async () => { throw new Error('unused'); }, getCompany: async () => { throw new Error('unused'); }, researchCompany: async () => { throw new Error('unused'); }, getCompanyResearchStatus: async () => { throw new Error('unused'); }, getCommitments: async () => { throw new Error('unused'); }, transition: async () => { throw new Error('unused'); },
   reviewCompany: async (value: LocalCompanyInput) => review(value),
   createCompany: async (value: LocalCompanyCreateRequest) => ({ status: 'saved' as const, commandId: value.commandId, account, replayed: false }),
   getCompanyCreateStatus: async (value: LocalCompanyCreateRequest) => ({ status: 'saved' as const, commandId: value.commandId, account }),

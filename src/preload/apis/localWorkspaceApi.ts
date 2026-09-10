@@ -1,7 +1,17 @@
 import { localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema } from '../../shared/contracts/localCompanyIntakeContract';
-import { localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
+import { localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, selectedResearchSchema, localCompanyResearchStatusSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import type { IpcClient } from '../ipcClient';
 export const createLocalWorkspaceApi = (client: IpcClient): LocalWorkspaceApi => ({
+  researchCompany: async input => {
+    const selected = Object.freeze(selectedResearchSchema.parse(input));
+    return client.request('local-workspace:research-company', selectedResearchSchema,
+      localCompanyResearchStatusSchema.refine(result => result.accountId === selected.accountId && result.commandId === selected.commandId), selected);
+  },
+  getCompanyResearchStatus: async input => {
+    const selected = Object.freeze(selectedResearchSchema.parse(input));
+    return client.request('local-workspace:company-research-status', selectedResearchSchema,
+      localCompanyResearchStatusSchema.refine(result => result.accountId === selected.accountId && result.commandId === selected.commandId), selected);
+  },
   reviewCompany: async input => {
     const parsed = localCompanyInputSchema.parse(input);
     return client.request('local-workspace:review-company', localCompanyInputSchema, localCompanyReviewSchema.refine(result => result.input.name === parsed.name && result.input.domain === parsed.domain), parsed);

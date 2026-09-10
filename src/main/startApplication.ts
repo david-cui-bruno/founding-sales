@@ -10,6 +10,8 @@ import { SqlDelegationConfiguration } from './delegation/delegationSync';
 import type { AppDatabase } from './db/database';
 import { z } from 'zod';
 import { AccountRepository } from './domain/accounts/accountRepository';
+import { selectedResearchSchema, type SelectedResearch, type LocalCompanyResearchStatus } from '../shared/contracts/localWorkspaceContract';
+import type { SelectedCompanyResearchPort } from './workspace/localWorkspaceProvider';
 import { SqlDiscoveryReservationStore } from './delegation/discoveryReservationStore';
 import { createCompanyDiscoveryProvider } from './research/companyDiscoveryProvider';
 import { createCompanyPageProvider, type PageHttp } from './research/companyPageProvider';
@@ -229,7 +231,7 @@ export type CompanyResearchStartupConfiguration = CompanyPreparationConfiguratio
   /** Explicit permitted public URLs, never a model-provided boolean. */
   permittedSources: readonly string[];
 };
-export type StartupCompanyResearch = {
+export type StartupCompanyResearch = SelectedCompanyResearchPort & {
   prepare(commandId: string, signal: AbortSignal): Promise<{ status: 'prepared' | 'blocked'; accountIds: string[] }>;
   runNext(signal: AbortSignal): Promise<'completed' | 'parked' | 'idle'>;
 };
@@ -249,7 +251,7 @@ function createStartupCompanyResearch(input: { runtime: FoundationRuntime; provi
     if (suspended !== undefined) locked = suspended;
     lifetime.abort(); lifetime = new AbortController();
   };
-  const stores = (signal: AbortSignal) => {
+  const stores = (signal: AbortSignal, selected?: SelectedResearch) => {
     const account = <T,>(operation: (repo: AccountRepository) => T, settlement = false) => input.runtime.withDatabase(database => {
       if (!settlement) signal.throwIfAborted();
       return operation(new AccountRepository({ database, clock: domainClock, ids: domainIds, sourcePolicy: receipts,
@@ -258,7 +260,8 @@ function createStartupCompanyResearch(input: { runtime: FoundationRuntime; provi
     const store: AccountResearchStore = {
       create: value => account(repo => repo.create(value)), snapshot: (id, at) => account(repo => repo.snapshot(id, at)),
       admitEvidence: (batch, claim) => account(repo => repo.admitEvidence(batch, claim)), enqueue: value => account(repo => repo.enqueue(value)),
-      claimNext: at => account(repo => repo.claimNext(at)), settle: value => account(repo => repo.settle(value), true),
+      claimNext: at => account(repo => selected ? repo.claimSelected(at, selected) : repo.claimNext(at)),
+      settle: value => account(repo => repo.settle(value), true),
     };
     const discovery = <T,>(operation: (repo: SqlDiscoveryReservationStore) => T) => input.runtime.withDatabase(database => {
       signal.throwIfAborted();
@@ -276,7 +279,36 @@ function createStartupCompanyResearch(input: { runtime: FoundationRuntime; provi
     void pending.then(() => flights.delete(pending), () => flights.delete(pending));
     return pending;
   };
+  const readSelected = (selected: SelectedResearch, signal?: AbortSignal) => input.runtime.withDatabase(database => {
+    signal?.throwIfAborted();
+    return new AccountRepository({ database, clock: domainClock, ids: domainIds }).readSelectedResearch(selected);
+  });
   const api: StartupCompanyResearch = {
+    researchCompany: value => {
+      // Capture identity before any await, including readiness/status acquisition.
+      const selected = Object.freeze(selectedResearchSchema.parse(value));
+      const held: LocalCompanyResearchStatus = { ...selected, state: 'held', receipt: null, reason: 'research_unavailable' };
+      const unavailable = (saved: LocalCompanyResearchStatus, reason: string): LocalCompanyResearchStatus =>
+        saved.state === 'not_recorded' ? { ...held, reason } : saved;
+      // Inactive execution still reports real persisted outcomes, without claiming.
+      if (closed || locked) return readSelected(selected).then(saved => unavailable(saved, 'research_inactive'));
+      // The existing owner guards even the pre-enqueue read against a late original
+      // invocation or double Resume. No second flight set or scheduler is created.
+      return invoke<LocalCompanyResearchStatus>(lifetime.signal, held, async active => {
+        const saved = await readSelected(selected, active);
+        if (!permitted.size) return unavailable(saved, 'source_allowlist_unavailable');
+        try { await input.runtime.withDomain((): void => undefined); }
+        catch { return unavailable(saved, 'domain_unavailable'); }
+        active.throwIfAborted();
+        const { store } = stores(active, selected);
+        if (saved.state === 'not_recorded') await store.enqueue({ ...selected, limits: config.researchLimits });
+        const pages = createCompanyPageProvider({ receipts, clock: domainClock, permitted: url => permitted.has(url), http: input.http, resolve: input.resolve });
+        // A completed read projection can still be a running job with a committed
+        // receipt. Let exact selected claiming reconcile it through the real worker.
+        await createCompanyResearchWorker({ store, pages, clock: domainClock }).runNext(active);
+        return readSelected(selected);
+      });
+    },
     prepare: (commandId, signal) => invoke(signal, { status: 'blocked', accountIds: [] }, async active => {
       const { store, reservations } = stores(active);
       const discovery = createCompanyDiscoveryProvider({ capability: config.capability,
@@ -319,6 +351,7 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
     enrichmentRequester?: EnrichmentRequester,
     logDirectoryPath?: string,
     outbound?: OutboundCommandServiceApi,
+    options?: { selectedCompanyResearch?: { current(): SelectedCompanyResearchPort | null } },
   ): () => void;
   createEnrichmentRequester?(
     runtime: FoundationRuntime,
@@ -897,6 +930,7 @@ export async function startApplication(
       ),
       options.logDirectoryPath,
       outbound,
+      { selectedCompanyResearch: { current: () => companyResearch?.api ?? null } },
     );
     if (phoneBindings.setup) unregisterPhoneSetup = (dependencies.registerPhoneSetupIpc ?? registerPhoneSetupIpc)({
       provider: phoneBindings.setup, isTrustedRendererUrl: options.isTrustedRendererUrl,

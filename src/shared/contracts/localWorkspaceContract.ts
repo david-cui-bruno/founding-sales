@@ -68,6 +68,8 @@ export type LocalWorkflowReceipt = z.infer<typeof localWorkflowReceiptSchema>;
 export type LocalWorkspaceSnapshot = z.infer<typeof localWorkspaceSnapshotSchema>;
 export type LocalCommitmentsSnapshot = z.infer<typeof localCommitmentsSnapshotSchema>;
 export interface LocalWorkspaceApi {
+  researchCompany(input: SelectedResearch): Promise<LocalCompanyResearchStatus>;
+  getCompanyResearchStatus(input: SelectedResearch): Promise<LocalCompanyResearchStatus>;
   getCompany(input: SelectedCompany): Promise<LocalCompanyDetail>;
   reviewCompany(input: LocalCompanyInput): Promise<LocalCompanyReview>;
   createCompany(input: LocalCompanyCreateRequest): Promise<LocalCompanyCreateResult>;

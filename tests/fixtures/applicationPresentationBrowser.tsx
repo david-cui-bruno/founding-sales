@@ -74,6 +74,8 @@ const api: CalliePreloadApi = {
     getCompanyCreateStatus: forbidden('localWorkspace.getCompanyCreateStatus'),
     get: read('localWorkspace.get', () => localSnapshot({ workflowMode: localMode })),
     getCompany: forbidden('localWorkspace.getCompany'),
+    researchCompany: forbidden('localWorkspace.researchCompany'),
+    getCompanyResearchStatus: forbidden('localWorkspace.getCompanyResearchStatus'),
     getCommitments: read('localWorkspace.getCommitments', () => commitments()),
     transition: forbidden('localWorkspace.transition'),
   },

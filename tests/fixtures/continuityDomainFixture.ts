@@ -65,6 +65,7 @@ export const CONTINUITY_REGISTERED_CHANNELS = [
   'health:get',
   'local-workspace:get', 'local-workspace:get-company', 'local-workspace:get-commitments', 'local-workspace:transition',
   'local-workspace:review-company', 'local-workspace:create-company', 'local-workspace:company-create-status',
+  'local-workspace:research-company', 'local-workspace:company-research-status',
   'friday:get', 'friday:drilldown', 'friday:create-job', 'friday:fill-job', 'friday:cancel-job',
 ] as const;
 

@@ -267,7 +267,8 @@ describe('startApplication', () => {
     }, dependencies);
     try {
       expect(factory).toHaveBeenCalledTimes(1);
-      expect(register.mock.calls[0]).toEqual([runtime, trust, undefined, expect.any(Object), expect.any(Object), undefined, enrichment, '/fixture/logs', service]);
+      expect(register.mock.calls[0]).toEqual([runtime, trust, undefined, expect.any(Object), expect.any(Object), undefined, enrichment, '/fixture/logs', service, { selectedCompanyResearch: { current: expect.any(Function) } }]);
+      expect(register.mock.calls[0]![9]?.selectedCompanyResearch?.current()).toBeNull();
       expect(events.slice(4, 8)).toEqual(['outbound', 'listen', 'ipc', 'window']);
       expect(removeAbort).toHaveBeenCalledTimes(1);
       const domain = vi.spyOn(runtime, 'withDomain');

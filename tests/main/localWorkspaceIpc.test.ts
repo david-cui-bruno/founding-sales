@@ -1,4 +1,4 @@
-import { selectedCompanySchema, localCompanyDetailSchema, type LocalWorkspaceSnapshot, type LocalCommitmentsSnapshot, type LocalWorkflowReceipt, type LocalCompanyDetail, type SelectedCompany } from '../../src/shared/contracts/localWorkspaceContract';
+import { selectedCompanySchema, localCompanyDetailSchema, type LocalWorkspaceSnapshot, type LocalCommitmentsSnapshot, type LocalWorkflowReceipt, type LocalCompanyDetail, type SelectedCompany, type SelectedResearch, type LocalCompanyResearchStatus } from '../../src/shared/contracts/localWorkspaceContract';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const electron = vi.hoisted(() => ({ handle: vi.fn(), removeHandler: vi.fn() }));
 vi.mock('electron', () => ({ ipcMain: electron }));
@@ -12,12 +12,12 @@ const command = { commandId: 'cmd', manifestId: 'manifest', expectedMode: 'legac
 const receipt: LocalWorkflowReceipt = { commandId: 'cmd', manifestId: 'manifest', mode: 'meeting_first' as const, revision: 1, occurredAt: snapshot.generatedAt, cancelledActionIds: [], stoppedEnrollmentIds: [], preservedActionIds: [], parkedPersonIds: [], callbackEvidenceIds: [], unknownDraftIds: [], parkedReviewActions: [], parkedActions: [] };
 const trusted = { senderFrame: { url: 'callie://app/index.html' } };
 const unavailableCompany = async (): Promise<never> => { throw new Error('Company fixture unavailable'); };
-const provider = { getCompany: unavailableCompany, get: async () => snapshot, getCommitments: async () => feed, transition: async () => receipt, reviewCompany: unavailableCompany, createCompany: unavailableCompany, getCompanyCreateStatus: unavailableCompany };
+const provider = { researchCompany: unavailableCompany, getCompanyResearchStatus: unavailableCompany, getCompany: unavailableCompany, get: async () => snapshot, getCommitments: async () => feed, transition: async () => receipt, reviewCompany: unavailableCompany, createCompany: unavailableCompany, getCompanyCreateStatus: unavailableCompany };
 beforeEach(() => vi.clearAllMocks());
 describe('local workspace bridge', () => {
   it('roundtrips the frozen API and rejects arity, caller scope, and untrusted senders', async () => {
     const remove = registerLocalWorkspaceIpc(provider);
-    expect(electron.handle).toHaveBeenCalledTimes(7);
+    expect(electron.handle).toHaveBeenCalledTimes(9);
     const api = createLocalWorkspaceApi(createIpcClient({ invoke: async (channel, ...args) => registeredIpcHandler(electron.handle, channel)(trusted, ...args) }));
     expect(await api.get()).toEqual(snapshot); expect(await api.getCommitments()).toEqual(feed); expect(await api.transition(command)).toEqual(receipt);
     for (const channel of ['local-workspace:get', 'local-workspace:get-commitments']) {
@@ -27,7 +27,7 @@ describe('local workspace bridge', () => {
     }
     const transition = registeredIpcHandler(electron.handle, 'local-workspace:transition');
     for (const args of [[], [command, command], [{ ...command, workspaceId: 'invented' }], [{ ...command, expectedMode: 'meeting_first' }]]) await expect(transition(trusted, ...args)).rejects.toThrow();
-    remove(); remove(); expect(electron.removeHandler.mock.calls.map(c => c[0])).toEqual(['local-workspace:get-company', 'local-workspace:company-create-status', 'local-workspace:create-company', 'local-workspace:review-company', 'local-workspace:transition', 'local-workspace:get-commitments', 'local-workspace:get']);
+    remove(); remove(); expect(electron.removeHandler.mock.calls.map(c => c[0])).toEqual(['local-workspace:company-research-status', 'local-workspace:research-company', 'local-workspace:get-company', 'local-workspace:company-create-status', 'local-workspace:create-company', 'local-workspace:review-company', 'local-workspace:transition', 'local-workspace:get-commitments', 'local-workspace:get']);
   });
   it('rolls partial registration back and validates inbound responses', async () => {
     electron.handle.mockImplementationOnce(() => undefined).mockImplementationOnce(() => { throw new Error('registration'); });
@@ -272,7 +272,7 @@ describe('Task 1 selected company public boundaries', () => {
     } finally { remove(); }
   });
 
-  it.each([1, 2, 3, 4, 5, 6, 7])('rolls back all successful local registrations when handler %s fails', nth => {
+  it.each([1, 2, 3, 4, 5, 6, 7, 8, 9])('rolls back all successful local registrations when handler %s fails', nth => {
     const active = new Set<string>();
     const registered: string[] = [];
     let calls = 0;
@@ -422,4 +422,199 @@ it('shutdown waits for an already acquired getCompany storage lease and then dis
       await f.close();
     }
   }
+});
+
+import type { SelectedCompanyResearchPort } from '../../src/main/workspace/localWorkspaceProvider';
+const researchChannels = ['local-workspace:research-company', 'local-workspace:company-research-status'] as const;
+const researchMethods = ['researchCompany', 'getCompanyResearchStatus'] as const;
+const researchLimits = { maxCompanies: 1, maxPages: 1, maxBytes: 10000, maxCostMicros: 100 };
+
+describe('Task 3 strict selected research IPC', () => {
+  it('roundtrips actual persisted status with exact channel and input identities at both public boundaries', async () => {
+    const f = await createPmFixture(); let remove: (() => void) | undefined;
+    try {
+      const account = f.repo.create({ commandId: crypto.randomUUID(), name: 'Research wire', domain: null });
+      const input = Object.freeze({ commandId: crypto.randomUUID(), accountId: account.id });
+      f.repo.enqueue({ ...input, limits: researchLimits });
+      const status = f.repo.readSelectedResearch(input); expect(status.state).toBe('queued');
+      const researchCompany = vi.fn(async (selected: SelectedResearch) => f.repo.readSelectedResearch(selected));
+      const getCompanyResearchStatus = vi.fn(async (selected: SelectedResearch) => f.repo.readSelectedResearch(selected));
+      const currentProvider = { ...provider, researchCompany, getCompanyResearchStatus };
+      remove = registerLocalWorkspaceIpc(currentProvider);
+      expect(researchCompany).not.toHaveBeenCalled(); expect(getCompanyResearchStatus).not.toHaveBeenCalled();
+      expect(electron.handle.mock.calls.slice(-2).map(call => call[0])).toEqual(researchChannels);
+      const invoke = vi.fn(async (channel: string, ...args: unknown[]) => registeredIpcHandler(electron.handle, channel)(trusted, ...args));
+      const api = createLocalWorkspaceApi(createIpcClient({ invoke }));
+      for (const [index, method] of researchMethods.entries()) {
+        expect(typeof api[method]).toBe('function');
+        expect(await api[method](input)).toEqual(status);
+        expect(invoke).toHaveBeenLastCalledWith(researchChannels[index], input);
+        expect(currentProvider[method]).toHaveBeenCalledTimes(1);
+      }
+      remove(); remove();
+      expect(electron.removeHandler.mock.calls.map(call => call[0])).toEqual([
+        ...[...researchChannels].reverse(), 'local-workspace:get-company', 'local-workspace:company-create-status',
+        'local-workspace:create-company', 'local-workspace:review-company', 'local-workspace:transition',
+        'local-workspace:get-commitments', 'local-workspace:get',
+      ]);
+    } finally { remove?.(); f.close(); }
+  });
+
+  it.each(researchMethods)('%s rejects malformed requests before reaching transport/provider and enforces trusted one-argument arity', async method => {
+    const selected = { commandId: crypto.randomUUID(), accountId: 'saved' };
+    const operation = vi.fn(async (): Promise<never> => { throw new Error('private research credential'); });
+    const remove = registerLocalWorkspaceIpc({ ...provider, [method]: operation });
+    try {
+      const channel = researchChannels[researchMethods.indexOf(method)]!;
+      const handler = registeredIpcHandler(electron.handle, channel);
+      const invoke = vi.fn(async () => { throw new Error('unexpected transport'); });
+      const api = createLocalWorkspaceApi(createIpcClient({ invoke }));
+      expect(typeof api[method]).toBe('function'); expect(typeof handler).toBe('function');
+      const invalid = [undefined, null, {}, { ...selected, commandId: 'not-uuid' }, { ...selected, accountId: '' },
+        { ...selected, workspaceId: 'injected' }, { ...selected, limits: researchLimits }, { ...selected, signal: {} }];
+      for (const input of invalid) {
+        await expect(api[method](input as SelectedResearch)).rejects.toThrow();
+        await expect(handler(trusted, input)).rejects.toThrow();
+      }
+      await expect(handler(trusted)).rejects.toThrow(); await expect(handler(trusted, selected, selected)).rejects.toThrow();
+      await expect(handler({ senderFrame: { url: 'https://evil.invalid' } }, selected)).rejects.toThrow();
+      expect(operation).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled();
+      await expect(handler(trusted, selected)).rejects.toThrow(method === 'researchCompany' ? /^LOCAL_COMPANY_RESEARCH_FAILED$/ : /^LOCAL_COMPANY_RESEARCH_STATUS_FAILED$/);
+      expect(operation).toHaveBeenCalledTimes(1);
+    } finally { remove(); }
+  });
+
+  it.each(researchMethods)('%s fails closed for wrong account, wrong UUID and malformed status on registrar and preload', async method => {
+    const f = await createPmFixture();
+    try {
+      const account = f.repo.create({ commandId: crypto.randomUUID(), name: 'Real response source', domain: null });
+      const selected = { commandId: crypto.randomUUID(), accountId: account.id };
+      f.repo.enqueue({ ...selected, limits: researchLimits });
+      const status = f.repo.readSelectedResearch(selected); expect(status.state).toBe('queued');
+      const invalid = [
+        { ...status, accountId: 'other' }, { ...status, commandId: crypto.randomUUID() },
+        { ...status, workspaceId: 'invented' }, { ...status, state: 'completed' },
+        { ...status, reason: 7 }, { ...status, state: 'unknown' },
+        { ...status, state: 'completed', receipt: { accountId: 'other', version: 2, duplicate: false } },
+        { ...status, receipt: { accountId: account.id, version: 2, duplicate: false } },
+      ];
+      for (const reply of invalid) {
+        electron.handle.mockClear();
+        const remove = registerLocalWorkspaceIpc({ ...provider, [method]: async () => reply as LocalCompanyResearchStatus });
+        try {
+          const handler = registeredIpcHandler(electron.handle, researchChannels[researchMethods.indexOf(method)]!);
+          await expect(handler(trusted, selected)).rejects.toThrow(method === 'researchCompany' ? /^LOCAL_COMPANY_RESEARCH_FAILED$/ : /^LOCAL_COMPANY_RESEARCH_STATUS_FAILED$/);
+          const api = createLocalWorkspaceApi(createIpcClient({ invoke: async () => reply }));
+          expect(typeof api[method]).toBe('function');
+          await expect(api[method](selected)).rejects.toThrow();
+        } finally { remove(); }
+      }
+    } finally { f.close(); }
+  });
+
+  it.each(researchMethods)('%s freezes request identities before an asynchronous response', async method => {
+    const f = await createPmFixture();
+    let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), 2000); });
+    try {
+      const account = f.repo.create({ commandId: crypto.randomUUID(), name: 'Frozen response', domain: null });
+      const input = { commandId: crypto.randomUUID(), accountId: account.id }; const original = { ...input };
+      const reply = f.repo.readSelectedResearch(original);
+      const invoke = vi.fn(async () => { await held; return reply; });
+      const api = createLocalWorkspaceApi(createIpcClient({ invoke })); expect(typeof api[method]).toBe('function');
+      const pending = api[method](input).then(value => ({ value }), error => ({ error }));
+      input.accountId = 'mutated'; input.commandId = crypto.randomUUID(); release();
+      expect(await Promise.race([pending, timeout])).toEqual({ value: reply });
+      expect(invoke).toHaveBeenCalledWith(researchChannels[researchMethods.indexOf(method)], original);
+      // Registrar receives a separate mutable request and must bind to its admitted copy too.
+      const request = { ...original }; let finish!: () => void;
+      const responseGate = new Promise<void>(resolve => { finish = resolve; });
+      const remove = registerLocalWorkspaceIpc({ ...provider, [method]: async () => { await responseGate; return reply; } });
+      try {
+        const handler = registeredIpcHandler(electron.handle, researchChannels[researchMethods.indexOf(method)]!);
+        const response = Promise.resolve(handler(trusted, request)).then(value => ({ value }), error => ({ error }));
+        request.accountId = 'mutated'; request.commandId = crypto.randomUUID(); finish();
+        expect(await Promise.race([response, timeout])).toEqual({ value: reply });
+      } finally { finish(); remove(); }
+    } finally { release(); clearTimeout(timer); f.close(); }
+  });
+});
+
+it('Task 3 real provider reads persisted queued running completed and parked state without capability or settlement', async () => {
+  const f = lifetimeFixture();
+  try {
+    await f.runtime.withDatabase((): void => undefined);
+    const repo = new AccountRepository({ database: f.database()!, clock: { now: () => PM_NOW }, ids: { next: () => crypto.randomUUID() }, research: { maxBudgetMicros: 1000 } });
+    const account = repo.create({ commandId: crypto.randomUUID(), name: 'Persisted research', domain: 'example.invalid' });
+    const selected = { commandId: crypto.randomUUID(), accountId: account.id };
+    const absent = createLocalWorkspaceProvider(f.runtime, { current: () => null });
+    expect(typeof absent.getCompanyResearchStatus).toBe('function');
+    expect(await absent.researchCompany(selected)).toMatchObject({ ...selected, state: 'held', receipt: null });
+    expect(repo.readSelectedResearch(selected).state).toBe('not_recorded');
+    repo.enqueue({ ...selected, limits: researchLimits });
+    const observe = async (state: string) => {
+      const before = companyStorageState(f.database()!);
+      expect(await absent.getCompanyResearchStatus(selected)).toMatchObject({ ...selected, state });
+      expect(await absent.researchCompany(selected)).toMatchObject({ ...selected, state });
+      expect(companyStorageState(f.database()!)).toEqual(before);
+    };
+    await observe('queued'); const job = repo.claimSelected(PM_NOW, selected)!; expect(job.accountId).toBe(account.id);
+    await observe('running');
+    const receipt = repo.admitEvidence({ commandId: job.receiptCommandId, accountId: account.id, expectedVersion: 1, sources: [], claims: [], routes: [] }, { jobId: job.id, claimToken: job.claimToken });
+    await observe('completed');
+    expect(await absent.getCompanyResearchStatus(selected)).toMatchObject({ receipt });
+    expect(f.database()!.raw.prepare('SELECT state FROM pm_account_research_jobs WHERE id=?').get(job.id)).toEqual({ state: 'running' });
+    const parked = { commandId: crypto.randomUUID(), accountId: account.id }; repo.enqueue({ ...parked, limits: researchLimits });
+    const uncertain = repo.claimSelected(PM_NOW, parked)!;
+    repo.settle({ jobId: uncertain.id, claimToken: uncertain.claimToken, status: 'parked', receiptCommandId: null, costMicros: null });
+    const before = companyStorageState(f.database()!);
+    expect(await absent.researchCompany(parked)).toMatchObject({ ...parked, state: 'parked' });
+    expect(await absent.getCompanyResearchStatus(parked)).toMatchObject({ ...parked, state: 'parked' });
+    expect(companyStorageState(f.database()!)).toEqual(before);
+    await expect(absent.getCompanyResearchStatus({ ...selected, accountId: 'missing' })).rejects.toThrow();
+    await f.runtime.shutdown(); await expect(absent.getCompanyResearchStatus(selected)).rejects.toThrow();
+  } finally { await f.close(); }
+});
+
+it('Task 3 absent-domain execution cannot use a present capability while status uses actual storage only', async () => {
+  const f = lifetimeFixture();
+  try {
+    const selected = await f.runtime.withDatabase(database => {
+      const repo = new AccountRepository({ database, clock: { now: () => PM_NOW }, ids: { next: () => crypto.randomUUID() } });
+      const account = repo.create({ commandId: crypto.randomUUID(), name: 'No domain bypass', domain: null });
+      return { commandId: crypto.randomUUID(), accountId: account.id };
+    });
+    const researchCompany = vi.fn(async (): Promise<never> => { throw new Error('capability must not be invoked'); });
+    const port: SelectedCompanyResearchPort = { researchCompany };
+    const local = createLocalWorkspaceProvider(f.runtime, { current: () => port });
+    expect(typeof local.researchCompany).toBe('function');
+    f.stopDomain();
+    await expect(f.runtime.withDomain((): void => undefined)).rejects.toThrow();
+    const before = companyStorageState(f.database()!);
+    expect(await local.getCompanyResearchStatus(selected)).toMatchObject({ ...selected, state: 'not_recorded' });
+    expect(await local.researchCompany(selected)).toMatchObject({ ...selected, state: 'held', receipt: null, reason: expect.any(String) });
+    expect(researchCompany).not.toHaveBeenCalled(); expect(companyStorageState(f.database()!)).toEqual(before);
+  } finally { await f.close(); }
+});
+
+it.each(['account', 'command', 'shape'] as const)('Task 3 real provider validates unchecked optional-port %s responses before forwarding', async mismatch => {
+  const f = lifetimeFixture();
+  try {
+    const selected = await f.runtime.withDatabase(database => {
+      const repo = new AccountRepository({ database, clock: { now: () => PM_NOW }, ids: { next: () => crypto.randomUUID() } });
+      const account = repo.create({ commandId: crypto.randomUUID(), name: 'Optional port response', domain: null });
+      return { commandId: crypto.randomUUID(), accountId: account.id };
+    });
+    const read = createLocalWorkspaceProvider(f.runtime);
+    const original = await read.getCompanyResearchStatus(selected);
+    expect(original).toMatchObject({ ...selected, state: 'not_recorded' });
+    const reply = mismatch === 'account' ? { ...original, accountId: 'other' }
+      : mismatch === 'command' ? { ...original, commandId: crypto.randomUUID() } : { ...original, workspaceId: 'private' };
+    const researchCompany = vi.fn(async () => reply);
+    const local = createLocalWorkspaceProvider(f.runtime, { current: () => ({ researchCompany }) });
+    await expect(local.researchCompany(selected)).rejects.toThrow();
+    expect(researchCompany).toHaveBeenCalledTimes(1);
+    expect(await read.getCompanyResearchStatus(selected)).toEqual(original);
+  } finally { await f.close(); }
 });

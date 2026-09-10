@@ -223,6 +223,8 @@ export function nativeDeskFixture(initial = dailyFixture()) {
     localWorkspace: {
       get: async () => { record('localWorkspace.get'); return structuredClone(local); },
       getCompany: async () => { record('localWorkspace.getCompany'); throw Error('Selected company detail unavailable in this fixture'); },
+      researchCompany: async () => { record('localWorkspace.researchCompany'); throw Error('Selected company research unavailable in this fixture'); },
+      getCompanyResearchStatus: async () => { record('localWorkspace.getCompanyResearchStatus'); throw Error('Selected company research unavailable in this fixture'); },
       getCommitments: async () => { record('localWorkspace.getCommitments'); return structuredClone(retained); },
       reviewCompany: async () => { record('localWorkspace.reviewCompany'); throw Error('Company intake unavailable in this fixture'); },
       createCompany: async () => { record('localWorkspace.createCompany'); throw Error('Company intake unavailable in this fixture'); },
