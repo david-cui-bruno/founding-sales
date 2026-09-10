@@ -8,6 +8,7 @@ import type {
   MetricId,
 } from '../../../shared/contracts/fridayContract';
 import { Panel } from '../../components/Panel';
+import type { FridayMutationView, FridaySaveResult } from './FridayRoute';
 import { JobRequestForm } from './JobRequestForm';
 import { MetricCard } from './MetricCard';
 import { MetricDrilldownPanel } from './MetricDrilldown';
@@ -64,9 +65,12 @@ export type FridayPageProps = {
   onPreviousWeek?(): void;
   onNextWeek?(): void;
   onOpenMetric(metricId: MetricId): void;
-  onCreateJob(input: CreateJobRequest): void;
-  onFillJob(input: FillJobRequest): void;
-  onCancelJob(input: CancelJobRequest): void;
+  onCreateJob(input: CreateJobRequest): Promise<FridaySaveResult>;
+  onFillJob(input: FillJobRequest): Promise<FridaySaveResult>;
+  onCancelJob(input: CancelJobRequest): Promise<FridaySaveResult>;
+  mutation: FridayMutationView;
+  onRetryMutation(): Promise<FridaySaveResult>;
+  onRefreshJobs(): Promise<FridaySaveResult>;
   drilldown?: MetricDrilldown | null;
   onOpenLead?(personId: string): void;
   onCloseDrilldown?(): void;
@@ -86,6 +90,9 @@ export function FridayPage({
   onCreateJob,
   onFillJob,
   onCancelJob,
+  mutation,
+  onRetryMutation,
+  onRefreshJobs,
   drilldown = null,
   onOpenLead,
   onCloseDrilldown,
@@ -94,6 +101,7 @@ export function FridayPage({
     <div className="friday">
       <ScoreboardHeader
         report={report}
+        disabled={mutation.status === 'pending' || mutation.status === 'unconfirmed'}
         weekOffset={weekOffset}
         onPreviousWeek={onPreviousWeek}
         onNextWeek={onNextWeek}
@@ -140,6 +148,9 @@ export function FridayPage({
       <Panel title="Job requests">
         <JobRequestForm
           jobs={report.jobs}
+          mutation={mutation}
+          onRetryMutation={onRetryMutation}
+          onRefreshJobs={onRefreshJobs}
           onCreateJob={onCreateJob}
           onFillJob={onFillJob}
           onCancelJob={onCancelJob}

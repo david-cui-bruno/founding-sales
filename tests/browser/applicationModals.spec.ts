@@ -13,7 +13,7 @@ test.beforeAll(async () => {
   css = bundle.outputFiles.find(file => file.path.endsWith('.css'))!.text;
 });
 
-type Context = { theme: 'light' | 'dark' | 'system'; density: 'comfortable' | 'compact'; width: 1050 | 1440; mode?: 'legacy' | 'meeting_first' };
+type Context = { theme: 'light' | 'dark' | 'system'; density: 'comfortable' | 'compact'; width: 1050 | 1440; mode?: 'legacy' | 'meeting_first'; fridayScenario?: boolean };
 async function mount(page: Page, context: Context, route: string) {
   const errors: string[] = [], requests: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -27,7 +27,7 @@ async function mount(page: Page, context: Context, route: string) {
     localStorage.setItem('callie.theme', context.theme);
     localStorage.setItem('callie.density', context.density);
   }, context);
-  const url = `http://127.0.0.1:41838/application-modal?mode=${context.mode ?? 'meeting_first'}&modalScenario=1`;
+  const url = `http://127.0.0.1:41838/application-modal?mode=${context.mode ?? 'meeting_first'}&modalScenario=1${context.fridayScenario ? '&fridayScenario=1' : ''}`;
   await page.route('**/*', request => {
     if (request.request().url() === url && request.request().isNavigationRequest()) return request.fulfill({ contentType: 'text/html', body: `<!doctype html><html lang="en"><head><title>Actual application modals</title><style>${css.replace(/<\/style/gi, '<\\/style')}</style></head><body><div id="root"></div><script>${javascript.replace(/<\/script/gi, '<\\/script')}</script></body></html>` });
     requests.push(request.request().url());
@@ -559,3 +559,236 @@ for (const phase of ['preview-reject', 'preview-late', 'remap'] as const) test(`
   expect((await recorded(page)).filter(call => call.kind === 'forbidden')).toEqual([]);
   expect(observed.errors).toEqual([]); expect(observed.requests).toEqual([]);
 });
+
+// Task3 additive cases. Synthetic finite responses, actual App/Friday/modals.
+// No schema/provider/domain factory is imported into this browser test.
+const fridayLayouts = [{ width: 1050, density: 'comfortable' }, { width: 1440, density: 'compact' }] as const;
+const fridayUnconfirmed = 'The change could not be confirmed. Your input is kept. Review the job before retrying.';
+const fridayRow = (page: Page, id: string) => page.locator('.friday-jobs__row').filter({ has: page.getByText(id, { exact: true }) });
+async function fridayReads(page: Page, expectedCurrent: number) {
+  const all = await recorded(page);
+  expect(counts(all.filter(call => call.kind === 'read'))).toEqual({
+    'health.get': 2, 'leadDetail.getOutboundCapabilities': 2, 'review.list': 2, 'friday.getCurrent': expectedCurrent,
+  });
+  assertReadArguments(all.filter(call => call.method !== 'friday.getCurrent'));
+  // Playwright preserves undefined, JSON artifacts may serialize it to null.
+  // Assert inside the browser so argc1/undefined cannot become {} or offset0.
+  expect(await page.evaluate(() => window.applicationPresentation.calls.filter(call => call.method === 'friday.getCurrent').map(call => ({
+    argc: call.args?.length, undefinedInput: call.args?.[0] === undefined,
+  })))).toEqual(Array.from({ length: expectedCurrent }, () => ({ argc: 1, undefinedInput: true })));
+}
+async function fridayFrames(page: Page) {
+  await page.evaluate(() => window.applicationPresentation.frame());
+  await page.evaluate(() => window.applicationPresentation.frame());
+}
+
+for (const action of ['create', 'fill', 'cancel'] as const) for (const theme of ['light', 'dark'] as const) for (const layout of fridayLayouts) {
+  test(`actual Friday ${action} retains intent through native modals and uncertain acknowledgement ${theme} ${layout.density} ${layout.width}`, async ({ page }, info) => {
+    const context: Context = { ...layout, theme, fridayScenario: true };
+    // One member of the12 proves the default-deny boundary before a fresh opt-in mount.
+    if (action === 'create' && theme === 'light' && layout.width === 1050) {
+      const defaultObserved = await mount(page, { ...layout, theme }, 'friday');
+      const denied = await page.evaluate(async () => {
+        const controller = window.applicationPresentation.modal!;
+        let armDenied = false, readControlDenied = false, commandDenied = false;
+        try { Reflect.apply(controller.arm, controller, ['friday.createJob']); } catch { armDenied = true; }
+        try { Reflect.apply(controller.rejectNextRead, controller, ['friday.getCurrent']); } catch { readControlDenied = true; }
+        try { await window.callie.friday.createJob({ jobId: 'denied-default', salesCycleId: null, requestedAt: '2026-09-08T14:15:00.000Z' }); } catch { commandDenied = true; }
+        return { armDenied, readControlDenied, commandDenied, operations: controller.operations,
+          forbidden: window.applicationPresentation.calls.filter(call => call.kind === 'forbidden').map(call => call.method) };
+      });
+      expect(denied).toEqual({ armDenied: true, readControlDenied: true, commandDenied: true, operations: [], forbidden: ['friday.createJob'] });
+      expect(defaultObserved.errors).toEqual([]); expect(defaultObserved.requests).toEqual([]);
+    }
+    const observed = await mount(page, context, 'friday');
+    await expect(page.getByLabel('Requested date', { exact: true })).toBeVisible();
+    await expect(fridayRow(page, 'job-friday-kevin').getByText('Requested', { exact: true })).toBeVisible();
+    await expect(fridayRow(page, 'job-friday-maya').getByText('Requested', { exact: true })).toBeVisible();
+    await fridayFrames(page); await fridayReads(page, 2);
+    expect(await page.evaluate(() => {
+      const c = window.applicationPresentation.modal!;
+      let unknown = false, drilldown = false;
+      try { Reflect.apply(c.arm, c, ['friday.unknown']); } catch { unknown = true; }
+      try { Reflect.apply(c.arm, c, ['friday.getDrilldown']); } catch { drilldown = true; }
+      return { unknown, drilldown, operations: c.operations.length };
+    })).toEqual({ unknown: true, drilldown: true, operations: 0 });
+
+    const requestedDate = page.getByLabel('Requested date', { exact: true });
+    const requestedTime = page.getByLabel('Requested time', { exact: true });
+    const cycle = page.getByRole('textbox', { name: 'Won sales cycle (optional)', exact: true });
+    const rawCycle = action === 'create' ? '  friday-cycle-new  ' : '  unrelated-won-cycle-draft  ';
+    await requestedDate.fill('2026-09-08'); await requestedTime.fill('10:15'); await cycle.fill(rawCycle);
+    const fields = [
+      { locator: requestedDate, value: '2026-09-08' }, { locator: requestedTime, value: '10:15' }, { locator: cycle, value: rawCycle },
+    ];
+    let fill: Locator | undefined;
+    if (action === 'fill') {
+      await page.getByRole('button', { name: 'Fill job-friday-kevin', exact: true }).click();
+      fill = page.getByRole('group', { name: 'Fill job-friday-kevin', exact: true });
+      await expect(fill).toBeVisible();
+      expect(await fill.evaluate(element => !(element instanceof HTMLDialogElement) && !element.closest('dialog'))).toBe(true);
+      await expect(page.getByRole('alertdialog')).toHaveCount(0);
+      await expect(page.locator('dialog:modal')).toHaveCount(0);
+      await fill.getByLabel('Accepted date', { exact: true }).fill('2026-09-09');
+      await fill.getByLabel('Accepted time', { exact: true }).fill('11:30');
+      fields.push({ locator: fill.getByLabel('Accepted date', { exact: true }), value: '2026-09-09' }, { locator: fill.getByLabel('Accepted time', { exact: true }), value: '11:30' });
+    }
+    const held = await Promise.all(fields.map(async field => ({ ...field, node: (await field.locator.elementHandle())! })));
+    const sameFields = async (includeFill = true) => {
+      for (const field of includeFill ? held : held.slice(0, 3)) {
+        await expect(field.locator).toHaveValue(field.value);
+        expect(await field.locator.evaluate((element, original) => element === original && element.isConnected, field.node)).toBe(true);
+      }
+    };
+    const setupCycleSelection = async () => {
+      await cycle.focus();
+      await cycle.evaluate(element => (element as HTMLInputElement).setSelectionRange(3, 9));
+    };
+    const expectCycleSelection = async () => {
+      await expect(cycle).toBeFocused();
+      expect(await cycle.evaluate((element, original) => element === original && element.isConnected, held[2].node)).toBe(true);
+      expect(await cycle.evaluate(element => [(element as HTMLInputElement).selectionStart, (element as HTMLInputElement).selectionEnd])).toEqual([3, 9]);
+    };
+    const expectReadonlyFields = async () => {
+      for (const field of held) {
+        await expect(field.locator).toBeEnabled();
+        expect(await field.locator.evaluate(element => (element as HTMLInputElement).readOnly)).toBe(true);
+      }
+    };
+    await setupCycleSelection();
+    if (fill) {
+      // Inline editing is not a modal owner. Escape must not dismiss or trap it.
+      await page.keyboard.press('Escape'); await expect(fill).toBeVisible();
+      await expect(cycle).toBeFocused(); await sameFields();
+      expect(await cycle.evaluate(element => [(element as HTMLInputElement).selectionStart, (element as HTMLInputElement).selectionEnd])).toEqual([3, 9]);
+    }
+    const beforeModals = (await recorded(page)).length;
+    await page.keyboard.press('ControlOrMeta+k');
+    const palette = page.getByRole('dialog', { name: 'Command palette', exact: true });
+    await nativeIsolation(page, palette, false);
+    await page.keyboard.press('Escape'); await expect(palette).toHaveCount(0);
+    await expect(cycle).toBeFocused(); await sameFields();
+    expect(await cycle.evaluate(element => [(element as HTMLInputElement).selectionStart, (element as HTMLInputElement).selectionEnd])).toEqual([3, 9]);
+    // The native Import event navigates to Leads. Use the actual palette action,
+    // whose openImport callback does not navigate or unmount Friday instead.
+    await page.keyboard.press('ControlOrMeta+k');
+    await palette.getByRole('combobox', { name: 'Command palette', exact: true }).fill('Import leads');
+    await palette.getByRole('option', { name: 'Import leads…', exact: true }).click();
+    const importDialog = page.getByRole('dialog', { name: 'Import leads', exact: true });
+    await expect(palette).toHaveCount(0);
+    await nativeIsolation(page, importDialog);
+    expect(new URL(page.url()).hash).toBe('#/friday');
+    await importDialog.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(importDialog).toHaveCount(0);
+    expect(new URL(page.url()).hash).toBe('#/friday'); await sameFields();
+    // Focus restoration through two modal owners is not assumed here.
+    expect((await recorded(page)).slice(beforeModals)).toEqual([]);
+    if (fill) await expect(fill).toBeVisible();
+
+    const method = action === 'create' ? 'friday.createJob' : action === 'fill' ? 'friday.fillJob' : 'friday.cancelJob';
+    const firstToken = await arm(page, method);
+    // Friday permissions are one total armed/pending token, even across methods.
+    expect(await page.evaluate(() => {
+      const c = window.applicationPresentation.modal!;
+      try { c.arm('friday.cancelJob'); return false; } catch { return true; }
+    })).toBe(true);
+    const commandStart = (await recorded(page)).length;
+    if (action === 'create') { await cycle.focus(); await cycle.press('Enter'); }
+    else if (action === 'fill') { await fill!.getByRole('button', { name: 'Confirm fill', exact: true }).focus(); await page.keyboard.press('Enter'); }
+    else await page.getByRole('button', { name: 'Cancel job-friday-maya', exact: true }).click();
+    await expect.poll(async () => (await operations(page))[0]?.state).toBe('pending');
+    await page.keyboard.press('Enter');
+    await sameFields();
+    for (const name of ['Request job', 'Fill job-friday-maya', 'Cancel job-friday-maya', 'Previous week', 'Next week']) {
+      await expect(page.getByRole('button', { name, exact: true })).toBeDisabled();
+    }
+    if (fill) await expect(fill.getByRole('button', { name: 'Keep requested', exact: true })).toBeDisabled();
+    const firstInput = (await operations(page))[0].input;
+    let expectedInput: unknown;
+    if (action === 'create') {
+      expect(firstInput).toEqual({ jobId: expect.stringMatching(/^job-/), salesCycleId: 'friday-cycle-new', requestedAt: '2026-09-08T14:15:00.000Z' });
+      // Generated identity is captured once, all other expectations are fixture constants.
+      expectedInput = firstInput;
+    } else expectedInput = action === 'fill'
+      ? { jobId: 'job-friday-kevin', contractorAcceptedAt: '2026-09-09T15:30:00.000Z' }
+      : { jobId: 'job-friday-maya' };
+    expect(firstInput).toEqual(expectedInput);
+    expect((await recorded(page)).slice(commandStart)).toEqual([{ method, kind: 'command', args: [expectedInput] }]);
+
+    // Command activation may move focus. Establish this pending phase's own
+    // textbox selection before observing a real modal open/close transition.
+    await expectReadonlyFields(); await setupCycleSelection();
+    const pendingModalStart = (await recorded(page)).length;
+    await page.keyboard.press('ControlOrMeta+k');
+    await expect(palette).toBeVisible();
+    expect(await palette.evaluate(element => element instanceof HTMLDialogElement && element.matches(':modal'))).toBe(true);
+    await page.keyboard.press('Escape'); await expect(palette).toHaveCount(0);
+    await expectCycleSelection(); await sameFields(); await expectReadonlyFields();
+    await page.keyboard.press('ControlOrMeta+k');
+    await palette.getByRole('combobox', { name: 'Command palette', exact: true }).fill('Import leads');
+    await palette.getByRole('option', { name: 'Import leads…', exact: true }).click();
+    await expect(palette).toHaveCount(0); await expect(importDialog).toBeVisible();
+    expect(await importDialog.evaluate(element => element instanceof HTMLDialogElement && element.matches(':modal'))).toBe(true);
+    expect(new URL(page.url()).hash).toBe('#/friday');
+    await importDialog.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(importDialog).toHaveCount(0);
+    expect(new URL(page.url()).hash).toBe('#/friday');
+    await sameFields(); await expectReadonlyFields();
+    expect((await recorded(page)).slice(pendingModalStart)).toEqual([]);
+    expect((await operations(page)).map(operation => operation.state)).toEqual(['pending']);
+    // Import's close does not promise textbox focus. Explicitly establish a new
+    // selection before rejection, then never restore it after that transition.
+    await setupCycleSelection(); await expectCycleSelection();
+    await settle(page, firstToken, 'reject');
+    await expect(page.getByText(fridayUnconfirmed, { exact: true })).toBeVisible();
+    await sameFields(); await expectCycleSelection(); await expectReadonlyFields(); await fridayReads(page, 2);
+    expect((await recorded(page)).slice(commandStart)).toEqual([{ method, kind: 'command', args: [expectedInput] }]);
+    expect(await operations(page)).toEqual([{ token: firstToken, method, input: expectedInput, state: 'rejected' }]);
+    await expect(page.getByRole('button', { name: 'Request job', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Previous week', exact: true })).toBeDisabled();
+    if (fill) await expect(fill.getByRole('button', { name: 'Keep requested', exact: true })).toBeDisabled();
+
+    const retryToken = await arm(page, method);
+    await page.getByRole('button', { name: 'Retry', exact: true }).click();
+    await expect.poll(async () => (await operations(page))[1]?.state).toBe('pending');
+    expect((await operations(page))[1].input).toEqual(expectedInput);
+    // Retry activation owns its button focus. Observe readonly field/caret
+    // stability only after explicit setup in this new pending phase.
+    await setupCycleSelection(); await fridayFrames(page);
+    await sameFields(); await expectCycleSelection(); await expectReadonlyFields();
+    await page.evaluate(() => window.applicationPresentation.modal!.rejectNextRead('friday.getCurrent'));
+    await settle(page, retryToken, 'resolve');
+    await expect(page.getByText('Saved; scoreboard refresh failed', { exact: true })).toBeVisible();
+    await fridayReads(page, 3);
+    const commands = (await recorded(page)).filter(call => call.kind === 'command');
+    expect(commands).toEqual([{ method, kind: 'command', args: [expectedInput] }, { method, kind: 'command', args: [expectedInput] }]);
+    if (action === 'create') {
+      await expect(requestedDate).toHaveValue(''); await expect(requestedTime).toHaveValue(''); await expect(cycle).toHaveValue('');
+      for (const field of held) expect(await field.locator.evaluate((element, original) => element === original, field.node)).toBe(true);
+    } else {
+      await sameFields(false);
+      if (fill) await expect(fill).toHaveCount(0);
+    }
+    const refreshStart = (await recorded(page)).length;
+    await page.getByRole('button', { name: 'Refresh jobs', exact: true }).click();
+    await fridayFrames(page); await fridayReads(page, 4);
+    expect((await recorded(page)).slice(refreshStart).map(call => ({ method: call.method, kind: call.kind }))).toEqual([{ method: 'friday.getCurrent', kind: 'read' }]);
+    expect((await recorded(page)).filter(call => call.kind === 'command')).toEqual(commands);
+    if (action === 'create') {
+      const id = await page.evaluate(() => {
+        const input = window.applicationPresentation.modal!.operations[0].input;
+        if (typeof input !== 'object' || input === null || !('jobId' in input) || typeof input.jobId !== 'string') throw Error('Missing captured job ID');
+        return input.jobId;
+      });
+      await expect(fridayRow(page, id).getByText('Requested', { exact: true })).toBeVisible();
+    } else {
+      await sameFields(false);
+      await expect(fridayRow(page, action === 'fill' ? 'job-friday-kevin' : 'job-friday-maya').getByText(action === 'fill' ? 'Filled' : 'Cancelled', { exact: true })).toBeVisible();
+    }
+    expect((await recorded(page)).filter(call => call.method.startsWith('imports.'))).toEqual([]);
+    expect((await recorded(page)).filter(call => call.kind === 'forbidden')).toEqual([]);
+    expect((await operations(page)).map(operation => operation.state)).toEqual(['rejected', 'resolved']);
+    expect(observed.errors).toEqual([]); expect(observed.requests).toEqual([]);
+    writeFileSync(info.outputPath('friday-retention.json'), JSON.stringify({ action, theme, ...layout, expectedInput, calls: await recorded(page), operations: await operations(page) }, null, 2));
+  });
+}

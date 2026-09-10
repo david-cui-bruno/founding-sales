@@ -29,6 +29,7 @@ const MIN_WEEK_OFFSET = -520;
 export type ScoreboardHeaderProps = {
   report: FridayReport;
   weekOffset: number;
+  disabled?: boolean;
   onPreviousWeek(): void;
   onNextWeek(): void;
 };
@@ -41,6 +42,7 @@ export type ScoreboardHeaderProps = {
 export function ScoreboardHeader({
   report,
   weekOffset,
+  disabled = false,
   onPreviousWeek,
   onNextWeek,
 }: ScoreboardHeaderProps) {
@@ -54,7 +56,7 @@ export function ScoreboardHeader({
               type="button"
               className="friday__week-step"
               aria-label="Previous week"
-              disabled={weekOffset <= MIN_WEEK_OFFSET}
+              disabled={disabled || weekOffset <= MIN_WEEK_OFFSET}
               onClick={onPreviousWeek}
             >
               <ChevronLeft size={14} aria-hidden="true" />
@@ -64,7 +66,7 @@ export function ScoreboardHeader({
               type="button"
               className="friday__week-step"
               aria-label="Next week"
-              disabled={weekOffset >= 0}
+              disabled={disabled || weekOffset >= 0}
               onClick={onNextWeek}
             >
               <ChevronRight size={14} aria-hidden="true" />

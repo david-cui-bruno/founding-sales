@@ -157,7 +157,7 @@ if (scenarioParams.get('modalScenario') === '1' && scenarioParams.get('leadsScen
   throw Error('Application scenarios are mutually exclusive');
 }
 const modalScenario = scenarioParams.get('modalScenario') === '1'
-  ? installApplicationModalScenario(api, calls, detail) : undefined;
+  ? installApplicationModalScenario(api, calls, detail, { fridayScenario: scenarioParams.get('fridayScenario') === '1' }) : undefined;
 const leadsScenario = scenarioParams.get('leadsScenario') === '1'
   ? installApplicationLeadsScenario(api, calls, detail) : undefined;
 // Opt-in, finite delivery control for the actual App. Default fixtures are unchanged.
