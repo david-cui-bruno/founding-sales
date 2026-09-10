@@ -16,6 +16,8 @@ import { registerOutreachIpc } from '../../src/main/ipc/registerOutreachIpc';
 import type { CallieApi } from '../../src/preload/createCallieApi';
 import type { IpcInvoker } from '../../src/preload/ipcClient';
 import type { OutreachApi } from '../../src/shared/contracts/outreachContract';
+import { leadsListRequestSchema, leadFieldUpdateRequestSchema, leadBulkUpdateRequestSchema,
+  type LeadsListRequest, type LeadFieldUpdateRequest, type LeadBulkUpdateRequest } from '../../src/shared/contracts/leadsContract';
 import { reviewListRequestSchema, type ReviewListRequest } from '../../src/shared/contracts/reviewContract';
 import { insertClosedCycle, insertOpenCycleWithAction, insertSourceEvent, seedProspect } from './domainRows';
 import type { RegisteredIpcHandler } from './registeredIpcHandler';
@@ -75,6 +77,18 @@ type ReviewHold = {
   arrival: ReturnType<typeof deferred<ReliabilityTrace>>;
   delivery: ReturnType<typeof deferred<void>>;
 };
+export type LeadsControl =
+  | { channel: 'leads:list'; request: LeadsListRequest; at: 'after-handler' }
+  | { channel: 'leads:update-field'; request: LeadFieldUpdateRequest; at: 'before-handler' }
+  | { channel: 'leads:bulk-update'; request: LeadBulkUpdateRequest; at: 'before-handler' };
+type LeadsHold = {
+  control: LeadsControl; remaining: number; state: DeliveryState;
+  arrival: ReturnType<typeof deferred<ReliabilityTrace>>;
+  delivery: ReturnType<typeof deferred<void>>;
+};
+type OrganizationAssignment = {
+  personId: string; prospectId: string; organizationId: string; canonicalName: string; relationship: string | null;
+};
 
 function frozenCopy<T>(value: T): T {
   const copy = structuredClone(value);
@@ -90,7 +104,7 @@ function frozenCopy<T>(value: T): T {
 
 /** Native SQL fixture, NOT FoundationRuntime startup/locking or a browser harness.
  * The caller owns an otherwise empty Electron transport map. No raw DB/key escapes.
- * Only exact review:list after-handler delivery can be held. No mutation hook.
+ * Finite exact read-delivery/mutation-admission holds never replace handler results.
  */
 export async function createReliabilityDomainFixture(
   handlers: Map<string, RegisteredIpcHandler>,
@@ -112,6 +126,8 @@ export async function createReliabilityDomainFixture(
   const flights = new Set<Promise<unknown>>();
   const entries: ReliabilityTrace[] = [];
   const holds: ReviewHold[] = [];
+  const leadsHolds: LeadsHold[] = [];
+  const importedPersonIds = new Set<string>();
   const seededReviews = new Map<string, ReviewOwner>();
   const requireOpen = () => {
     if (disposed || database === undefined || !database.raw.open) throw new Error('RELIABILITY_FIXTURE_DISPOSED');
@@ -141,6 +157,14 @@ export async function createReliabilityDomainFixture(
           hold.state = 'cancelled';
           hold.arrival.reject(new Error('REVIEW_DELIVERY_CANCELLED'));
           hold.delivery.reject(new Error('REVIEW_DELIVERY_CANCELLED'));
+        }
+      }
+      for (const hold of leadsHolds) {
+        if (hold.state === 'waiting') errors.push(new Error('UNUSED_LEADS_CONTROL'));
+        if (['waiting', 'claimed', 'arrived'].includes(hold.state)) {
+          hold.state = 'cancelled';
+          hold.arrival.reject(new Error('LEADS_CONTROL_CANCELLED'));
+          hold.delivery.reject(new Error('LEADS_CONTROL_CANCELLED'));
         }
       }
       try { await idle(); } catch (error) { errors.push(error); }
@@ -226,12 +250,42 @@ export async function createReliabilityDomainFixture(
         state: () => hold.state });
     };
 
+    const holdLeads = <T extends LeadsControl>(control: T, occurrence = 1) => {
+      requireOpen();
+      assert.ok(Number.isSafeInteger(occurrence) && occurrence > 0);
+      const parsed: LeadsControl = control.channel === 'leads:list'
+        ? { channel: control.channel, at: 'after-handler', request: leadsListRequestSchema.parse(control.request) }
+        : control.channel === 'leads:update-field'
+          ? { channel: control.channel, at: 'before-handler', request: leadFieldUpdateRequestSchema.parse(control.request) }
+          : { channel: control.channel, at: 'before-handler', request: leadBulkUpdateRequestSchema.parse(control.request) };
+      assert.equal(control.at, parsed.at, 'LEADS_CONTROL_INVALID_PHASE');
+      assert.ok(!leadsHolds.some(hold => hold.state === 'waiting' && hold.remaining === occurrence
+        && isDeepStrictEqual(hold.control, parsed)), 'DUPLICATE_LEADS_CONTROL');
+      const hold: LeadsHold = { control: frozenCopy(parsed), remaining: occurrence, state: 'waiting',
+        arrival: deferred<ReliabilityTrace>(), delivery: deferred<void>() };
+      leadsHolds.push(hold);
+      const decide = (decision: 'released' | 'rejected' | 'cancelled') => {
+        requireOpen();
+        assert.equal(hold.state, 'arrived', 'LEADS_CONTROL_ALREADY_DECIDED_OR_NOT_ARRIVED');
+        hold.state = decision;
+        if (decision === 'released') hold.delivery.resolve();
+        else hold.delivery.reject(new Error(decision === 'rejected' ? 'LEADS_DELIVERY_REJECTED' : 'LEADS_CONTROL_CANCELLED'));
+      };
+      const common = { arrived: () => bounded(hold.arrival.promise, 'Leads control arrival'),
+        release: () => decide('released'), cancel: () => decide('cancelled'), state: () => hold.state };
+      // A mutation hold cannot manufacture a post-handler rejection or replacement receipt.
+      return Object.freeze(control.at === 'after-handler'
+        ? { ...common, rejectDelivery: () => decide('rejected') } : common) as Readonly<typeof common &
+          (T extends { at: 'after-handler' } ? { rejectDelivery(): void } : object)>;
+    };
+
     const invokeFrom = (url: string, channel: string, ...args: unknown[]): Promise<unknown> => {
       const index = entries.length;
       const initial = frozenCopy<ReliabilityTrace>({ id: index + 1, phase, channel, args, handlerStarted: false, outcome: 'pending' });
       entries.push(initial);
       const flight = (async () => {
         let delivery: ReviewHold | undefined;
+        let leadControl: LeadsHold | undefined;
         try {
           requireOpen();
           const handler = handlers.get(channel);
@@ -242,6 +296,21 @@ export async function createReliabilityDomainFixture(
               hold.remaining -= 1;
               if (hold.remaining === 0) { hold.state = 'claimed'; delivery = hold; }
             }
+          }
+          if (url === RELIABILITY_URL && args.length === 1) {
+            for (const hold of leadsHolds) {
+              if (hold.state !== 'waiting' || hold.control.channel !== channel || !isDeepStrictEqual(hold.control.request, args[0])) continue;
+              hold.remaining -= 1;
+              if (hold.remaining === 0) { hold.state = 'claimed'; leadControl = hold; }
+            }
+          }
+          if (leadControl?.control.at === 'before-handler') {
+            leadControl.state = 'arrived';
+            leadControl.arrival.resolve(entries[index]!);
+            await leadControl.delivery.promise;
+            // Release can race immediate disposal. Recheck synchronously at forwarding,
+            // not at the earlier terminal decision, so cancellation never mutates.
+            requireOpen();
           }
           entries[index] = frozenCopy({ ...initial, handlerStarted: true });
           const result = await handler({ senderFrame: { url } }, ...args);
@@ -254,9 +323,21 @@ export async function createReliabilityDomainFixture(
             }
             await delivery.delivery.promise;
           }
+          if (leadControl?.control.at === 'after-handler') {
+            if (leadControl.state === 'claimed') {
+              leadControl.state = 'arrived';
+              entries[index] = frozenCopy({ ...entries[index]!, deliveryHeld: true });
+              leadControl.arrival.resolve(entries[index]!);
+            }
+            await leadControl.delivery.promise;
+          }
           entries[index] = frozenCopy({ ...entries[index]!, outcome: 'resolved', result });
           return result; // no enrichment, replacement receipt or response mutation
         } catch (error) {
+          if (leadControl?.state === 'claimed') {
+            leadControl.state = 'rejected';
+            leadControl.arrival.reject(new Error('LEADS_HANDLER_REJECTED_BEFORE_DELIVERY'));
+          }
           if (delivery?.state === 'claimed') {
             delivery.state = 'rejected';
             delivery.arrival.reject(new Error('REVIEW_HANDLER_REJECTED_BEFORE_DELIVERY'));
@@ -299,8 +380,29 @@ export async function createReliabilityDomainFixture(
       JOIN source_events source ON source.id = prospect.original_source_event_id
       ORDER BY person.display_name, person.id
     `).all();
+    const organizationAssignments = (): OrganizationAssignment[] => requireOpen().raw.prepare<[], OrganizationAssignment>(`
+      SELECT person.id AS personId, prospect.id AS prospectId, organization.id AS organizationId,
+        organization.canonical_name AS canonicalName, membership.relationship
+      FROM persons person JOIN prospects prospect ON prospect.person_id = person.id
+      JOIN prospect_organizations membership ON membership.prospect_id = prospect.id
+      JOIN organizations organization ON organization.id = membership.organization_id
+      ORDER BY person.id, prospect.id, organization.id
+    `).all().filter(row => importedPersonIds.has(row.personId));
     return {
-      invoker, invokeFrom, dispose, idle, holdReviewList,
+      invoker, invokeFrom, dispose, idle, holdReviewList, holdLeads,
+      organizationAssignments: () => frozenCopy(organizationAssignments()),
+      seedAmbiguousMembership(personId: string) {
+        requireOpen();
+        assert.ok(importedPersonIds.has(personId), 'Only an owned imported person may receive ambiguous membership');
+        const owner = importedOwners().find(row => row.personId === personId);
+        assert.ok(owner);
+        assert.equal(organizationAssignments().filter(row => row.personId === personId).length, 1);
+        services.unitOfWork.immediate(() => {
+          const organization = services.identities.createOrganization({ canonicalName: `Fictional Second Organization ${personId}` });
+          services.identities.linkOrganization({ prospectId: owner.prospectId, organizationId: organization.id });
+        });
+        return frozenCopy(organizationAssignments().filter(row => row.personId === personId));
+      },
       setPhase(value: Phase) { phase = value; },
       trace: () => frozenCopy(entries),
       counts: () => Object.freeze({ domainEntries, databaseEntries, externalInvocations, pendingInvocations: flights.size }),
@@ -373,6 +475,7 @@ export async function createReliabilityDomainFixture(
           source: { channel: 'registry', referredByPersonId: null }, duplicateDecisions: [] });
         assert.equal(receipt.importedRowCount, 208);
         const stored = importedOwners();
+        for (const owner of stored) importedPersonIds.add(owner.personId);
         assert.equal(stored.length, 208);
         assert.deepEqual(stored.map(({ name, email }) => ({ name, email })), people);
         assert.equal(new Set(stored.map(owner => owner.personId)).size, 208);
