@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { setTimeout as realTimeout, clearTimeout as clearRealTimeout } from 'node:timers';
+import { registerDailyIpc } from '../../src/main/today/registerDailyIpc';
+import { registerLeadsIpc } from '../../src/main/leads/registerLeadsIpc';
+import { registerLeadDetailIpc } from '../../src/main/leads/registerLeadDetailIpc';
+import { registerReviewIpc } from '../../src/main/review/registerReviewIpc';
+import { createDailyProvider, createLeadsProvider, createLeadDetailProvider, createReviewProvider } from '../../src/main/ipc/registerApplicationIpc';
+import { localDelegationStatusSchema } from '../../src/shared/contracts/ownerCommandContract';
+import { localCompanyCreateRequestSchema, localCompanyCreateResultSchema, type LocalCompanyCreateRequest } from '../../src/shared/contracts/localCompanyIntakeContract';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
@@ -21,6 +29,10 @@ import { createCallieApi } from '../../src/preload/createCallieApi';
 import type { RegisteredIpcHandler } from './registeredIpcHandler';
 import { createTempDatabase, createTestWorkspaceKey } from './tempDatabase';
 
+// Capture real watchdog functions before any case installs renderer fake timers.
+const deliveryTimeout = realTimeout;
+const clearDeliveryTimeout = clearRealTimeout;
+
 export const CONTINUITY_NOW = '2026-09-10T15:00:00.000Z';
 export const CONTINUITY_URL = 'callie://app/index.html';
 export const CONTINUITY_READ_CHANNELS = [
@@ -33,9 +45,18 @@ export const CONTINUITY_REGISTERED_CHANNELS = [
   'friday:get', 'friday:drilldown', 'friday:create-job', 'friday:fill-job', 'friday:cancel-job',
 ] as const;
 
+export const CONTINUITY_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get', 'leads:list', 'review:list',
+  'local-workspace:review-company', 'local-workspace:create-company', 'local-workspace:company-create-status',
+  'outreach:delegation-status', 'lead-detail:outbound-capabilities'] as const;
+export const CONTINUITY_UI_REGISTERED_CHANNELS = [...CONTINUITY_REGISTERED_CHANNELS, 'daily:get',
+  'leads:list', 'leads:update-field', 'leads:bulk-update', 'review:list', 'review:resolve',
+  'lead-detail:get', 'lead-detail:begin-outbound', 'lead-detail:outbound-capabilities',
+  'lead-detail:confirm-transition', 'lead-detail:dismiss', 'lead-detail:cloud-score-override',
+  'lead-detail:find-contact-info'] as const;
+
 type Invocation = Readonly<{
   channel: string; args: readonly unknown[]; senderUrl: string;
-  handlerStarted: boolean; outcome: 'pending' | 'resolved' | 'rejected';
+  result?: unknown; synthetic?: boolean; handlerStarted: boolean; outcome: 'pending' | 'resolved' | 'rejected';
 }>;
 export type ContinuityCleanup = Readonly<{
   databaseClosed: boolean; keysZeroed: boolean; directoryRemoved: boolean;
@@ -44,11 +65,11 @@ export type ContinuityCleanup = Readonly<{
   pollerStops: number; pollerIdleWaits: number;
 }>;
 
-/** Stage0 only: one genuine runtime, four readonly public channels, no seeds,
- * UI, writes, holds, polling, schedules or external providers. The caller's
+/** Default Stage0: four readonly channels. Explicit company-ui mode adds only
+ * local company commands, real incidental reads and a finite delivery hold. The caller's
  * Electron registration map is the only replacement for the IPC transport.
  */
-export async function createContinuityDomainFixture(handlers: Map<string, RegisteredIpcHandler>) {
+export async function createContinuityDomainFixture(handlers: Map<string, RegisteredIpcHandler>, mode: 'construction' | 'company-ui' = 'construction') {
   assert.equal(handlers.size, 0, 'Continuity fixture requires an empty owned transport map');
   const temp = createTempDatabase();
   const directory = dirname(dirname(temp.path));
@@ -67,6 +88,45 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
   const unregisters: (() => void)[] = [];
   const flights = new Set<Promise<unknown>>();
   const trace: Invocation[] = [];
+  const readFlights = new Set<Promise<unknown>>();
+  type Arrival = { request: LocalCompanyCreateRequest; result: ReturnType<typeof localCompanyCreateResultSchema.parse> };
+  let delivery: ReturnType<typeof armCompanyDelivery> | undefined;
+  let armedOnce = false;
+  function armCompanyDelivery() {
+    assert.equal(mode, 'company-ui');
+    assert.equal(armedOnce, false, 'Only one company delivery hold per fixture');
+    armedOnce = true;
+    let arrive!: (value: Arrival | null) => void;
+    const arrived = new Promise<Arrival | null>(resolve => { arrive = resolve; });
+    let finish!: (error: Error | null) => void;
+    const decision = new Promise<Error | null>(resolve => { finish = resolve; });
+    let settled = false;
+    let claimed = false;
+    const settle = (error: Error | null) => {
+      if (settled) return;
+      settled = true;
+      clearDeliveryTimeout(timer);
+      arrive(null); // Settles even an armed-but-never-invoked waiter.
+      finish(error);
+    };
+    const timer = deliveryTimeout(() => settle(new Error('Company delivery hold deadline')), 5_000);
+    const control = {
+      arrived,
+      release: () => settle(null),
+      reject: () => settle(new Error('Committed company delivery rejected')),
+      cancel: () => settle(new Error('Company delivery disposed')),
+      claim: () => { if (claimed || settled) return false; claimed = true; return true; },
+      hold: async (request: unknown, raw: unknown) => {
+        const record = { request: localCompanyCreateRequestSchema.parse(request), result: localCompanyCreateResultSchema.parse(raw) };
+        arrive(structuredClone(record));
+        const error = await decision;
+        if (error) throw error;
+        return raw;
+      },
+    };
+    delivery = control;
+    return control;
+  }
   const runtime = new FoundationRuntime({
     appVersion: 'continuity-stage0', databasePath: temp.path, databaseExists: false,
     backupDirectory: `${temp.path}.backups`, keyEnvelopePath: `${temp.path}.envelope`,
@@ -141,6 +201,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       const errors: unknown[] = [];
       try { counts.pollerStops++; poller.stop(); } catch (error) { errors.push(error); }
       try { counts.pollerIdleWaits++; await poller.idle(); } catch (error) { errors.push(error); }
+      delivery?.cancel(); // Cancel/release delivery BEFORE draining invokes.
       await Promise.allSettled([...flights]);
       for (const unregister of unregisters.splice(0).reverse()) {
         try { unregister(); } catch (error) { errors.push(error); }
@@ -174,7 +235,13 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
     unregisters.push(registerHealthIpc(observed, trusted));
     unregisters.push(registerLocalWorkspaceIpc(createLocalWorkspaceProvider(observed), trusted));
     unregisters.push(registerFridayIpc(createFridayProvider(observed), trusted));
-    assert.deepEqual([...handlers.keys()].sort(), [...CONTINUITY_REGISTERED_CHANNELS].sort());
+    if (mode === 'company-ui') {
+      unregisters.push(registerDailyIpc(createDailyProvider(observed), trusted));
+      unregisters.push(registerLeadsIpc(createLeadsProvider(observed), trusted));
+      unregisters.push(registerLeadDetailIpc(createLeadDetailProvider(observed), trusted));
+      unregisters.push(registerReviewIpc(createReviewProvider(observed), trusted));
+    }
+    assert.deepEqual([...handlers.keys()].sort(), [...(mode === 'company-ui' ? CONTINUITY_UI_REGISTERED_CHANNELS : CONTINUITY_REGISTERED_CHANNELS)].sort());
 
     const invokeFrom = (senderUrl: string, channel: string, ...args: unknown[]): Promise<unknown> => {
       const index = trace.length;
@@ -183,21 +250,36 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       const flight = (async () => {
         try {
           if (disposed) throw new Error('Continuity fixture is disposed');
-          if (!(CONTINUITY_READ_CHANNELS as readonly string[]).includes(channel)) {
+          if (!((mode === 'company-ui' ? CONTINUITY_UI_CHANNELS : CONTINUITY_READ_CHANNELS) as readonly string[]).includes(channel)) {
             throw new Error('Stage0 only admits its four readonly channels');
+          }
+          // Explicit synthetic UNCONFIGURED worker transport only. No registrar,
+          // credential access, worker authority, grant, pairing or readiness claim.
+          if (mode === 'company-ui' && channel === 'outreach:delegation-status') {
+            assert.equal(senderUrl, CONTINUITY_URL); assert.equal(args.length, 0);
+            const result = localDelegationStatusSchema.parse({ state: 'unconfigured', workspaceId: null, endpoint: null, configuration: null });
+            trace[index] = Object.freeze({ ...entry, synthetic: true, result, outcome: 'resolved' });
+            return result;
           }
           const handler = handlers.get(channel);
           if (!handler) throw new Error(`Missing continuity handler: ${channel}`);
           trace[index] = Object.freeze({ ...entry, handlerStarted: true });
+          const hold = channel === 'local-workspace:create-company' && delivery?.claim() ? delivery : undefined;
           const result = await handler({ senderFrame: { url: senderUrl } }, ...args);
+          trace[index] = Object.freeze({ ...trace[index]!, result: structuredClone(result) });
+          const delivered = hold ? await hold.hold(args[0], result) : result;
           trace[index] = Object.freeze({ ...trace[index]!, outcome: 'resolved' });
-          return result;
+          return delivered;
         } catch (error) {
           trace[index] = Object.freeze({ ...trace[index]!, outcome: 'rejected' });
           throw error;
         }
       })();
       flights.add(flight);
+      if (channel !== 'local-workspace:create-company') {
+        readFlights.add(flight);
+        void flight.finally(() => readFlights.delete(flight)).catch((): undefined => undefined);
+      }
       void flight.finally(() => flights.delete(flight)).catch((): undefined => undefined);
       return flight;
     };
@@ -219,7 +301,23 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
         });
       });
     };
-    return Object.freeze({ api, invokeFrom, evidence, counts: () => Object.freeze({ ...counts }),
+    const companyEvidence = (commandId: string) => {
+      assert.equal(mode, 'company-ui');
+      if (disposed) throw new Error('Continuity fixture is disposed');
+      return runtime.withDatabase(db => ({
+        // Exact independent receipt/account join, never an exposed SQL executor.
+        joined: db.raw.prepare<[string], { command_id: string; account_id: string; fingerprint: string; result_json: string; account_version: number; name: string; domain: string | null; version: number }>(
+          `SELECT c.command_id,c.account_id,c.fingerprint,c.result_json,c.account_version,a.name,a.domain,a.version
+           FROM pm_account_commands c JOIN pm_accounts a ON a.id=c.account_id WHERE c.command_id=?`).get(commandId),
+        accounts: db.raw.prepare('SELECT id,name,domain,version FROM pm_accounts ORDER BY id').all(),
+        commands: db.raw.prepare('SELECT command_id,account_id FROM pm_account_commands ORDER BY command_id').all(),
+        jobs: db.raw.prepare('SELECT id FROM jobs ORDER BY id').all(),
+      }));
+    };
+    return Object.freeze({ api, invokeFrom, evidence, companyEvidence, armCompanyDelivery,
+      cancelDelivery: () => delivery?.cancel(),
+      drainInvocations: () => Promise.allSettled([...flights]),
+      drainReads: () => Promise.allSettled([...readFlights]), counts: () => Object.freeze({ ...counts }),
       trace: () => [...trace], dispose });
   } catch (error) {
     try { await dispose(); } catch (cleanupError) {
