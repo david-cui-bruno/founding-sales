@@ -14,11 +14,8 @@ export type ReviewDetailPanelProps = {
   onOpenLead(personId: string): void;
 };
 
-/**
- * Kind-specific resolution actions. Every command is built from the strict
- * discriminated contract, so a wrong-kind payload cannot be constructed.
- * Open review items are version 1 until resolved, which resolution bumps,
- * so the compare-and-swap `expectedVersion` is the V1 open version.
+/** Only unmatched Promote is currently supported by the production resolver.
+ * Open review items use version 1 for the supported compare-and-swap command.
  */
 const OPEN_REVIEW_VERSION = 1;
 
@@ -41,73 +38,48 @@ function ReviewActions({ item, onResolve, onOpenLead }: ReviewDetailPanelProps) 
     case 'ambiguous_identity':
       return (
         <div className="review-detail__actions">
+          <p className="review-detail__copy">{item.summary}</p>
+          <p className="review-detail__copy">
+            Identity selection is unavailable in this Inbox. Open a candidate to inspect their details.
+          </p>
           {item.candidatePersonIds.map((personId) => (
             <div key={personId} className="review-detail__candidate">
               <Button variant="quiet" onClick={() => onOpenLead(personId)}>
                 {`Open ${personId}`}
-              </Button>
-              <Button
-                onClick={() => onResolve({
-                  kind: 'ambiguous_identity',
-                  reviewId: item.reviewId,
-                  expectedVersion: OPEN_REVIEW_VERSION,
-                  action: 'choose_identity',
-                  personId,
-                })}
-              >
-                {`Choose ${personId}`}
               </Button>
             </div>
           ))}
         </div>
       );
     case 'transcript_suggestion':
-      return <SuggestionActions item={item} onResolve={onResolve} />;
+      return <SuggestionEvidence item={item} />;
     case 'import_problem':
       return (
         <div className="review-detail__actions">
           <p className="review-detail__copy">{item.summary}</p>
-          <Button
-            onClick={() => onResolve({
-              kind: 'import_problem',
-              reviewId: item.reviewId,
-              expectedVersion: OPEN_REVIEW_VERSION,
-              action: 'retry',
-            })}
-          >
-            Retry
-          </Button>
-          <Button
-            variant="quiet"
-            onClick={() => onResolve({
-              kind: 'import_problem',
-              reviewId: item.reviewId,
-              expectedVersion: OPEN_REVIEW_VERSION,
-              action: 'dismiss',
-            })}
-          >
-            Dismiss
-          </Button>
+          <p className="review-detail__copy">
+            Import retry and dismissal are unavailable in this Inbox. Inspect the row evidence before planning a separate import correction.
+          </p>
         </div>
       );
     case 'adapter_failure':
       return (
         <div className="review-detail__actions">
           <p className="review-detail__copy">{item.summary}</p>
-          <Button
-            onClick={() => onResolve({
-              kind: 'adapter_failure',
-              reviewId: item.reviewId,
-              expectedVersion: OPEN_REVIEW_VERSION,
-              action: 'retry',
-            })}
-          >
-            Retry adapter
-          </Button>
+          <p className="review-detail__copy">
+            Adapter retry is unavailable in this Inbox. Inspect the failure evidence and check adapter settings separately.
+          </p>
         </div>
       );
     case 'system_error':
-      return <SystemErrorActions item={item} onResolve={onResolve} />;
+      return (
+        <div className="review-detail__actions">
+          <p className="review-detail__copy">{`Invariant: ${item.invariant}`}</p>
+          <p className="review-detail__copy">
+            Invariant repair is unavailable in this Inbox. Keep this evidence for a separately reviewed repair.
+          </p>
+        </div>
+      );
     default:
       return assertNeverReviewKind(item);
   }
@@ -146,31 +118,16 @@ function UnmatchedActions({ item, onResolve }: {
       >
         Promote
       </Button>
-      <Button
-        variant="danger"
-        onClick={() => onResolve({
-          kind: 'unmatched_communication',
-          reviewId: item.reviewId,
-          expectedVersion: OPEN_REVIEW_VERSION,
-          action: 'mark_personal',
-          personId: null,
-          sourceEventId: null,
-        })}
-      >
-        Mark personal (Never Record)
-      </Button>
+      <p className="review-detail__copy">
+        Mark personal is unavailable in this Inbox. Never Record has not been applied.
+      </p>
     </div>
   );
 }
 
-function SuggestionActions({ item, onResolve }: {
+function SuggestionEvidence({ item }: {
   item: Extract<ReviewItem, { kind: 'transcript_suggestion' }>;
-  onResolve(input: ResolveReviewRequest): void;
 }) {
-  const editedFieldId = useId();
-  const [editedValue, setEditedValue] = useState('');
-  const trimmedEdit = editedValue.trim();
-
   return (
     <div className="review-detail__actions">
       <ul className="review-detail__evidence" aria-label="Evidence">
@@ -178,86 +135,9 @@ function SuggestionActions({ item, onResolve }: {
           <li key={line}>{line}</li>
         ))}
       </ul>
-      <Button
-        onClick={() => onResolve({
-          kind: 'transcript_suggestion',
-          reviewId: item.reviewId,
-          expectedVersion: OPEN_REVIEW_VERSION,
-          action: 'accept',
-          editedValue: null,
-        })}
-      >
-        Accept
-      </Button>
-      <div className="review-detail__field">
-        <label htmlFor={editedFieldId}>Edited value</label>
-        <input
-          id={editedFieldId}
-          className="review-detail__input"
-          value={editedValue}
-          onChange={(event) => setEditedValue(event.target.value)}
-        />
-      </div>
-      <Button
-        disabled={trimmedEdit.length === 0}
-        onClick={() => onResolve({
-          kind: 'transcript_suggestion',
-          reviewId: item.reviewId,
-          expectedVersion: OPEN_REVIEW_VERSION,
-          action: 'edit',
-          editedValue: trimmedEdit,
-        })}
-      >
-        Save edit
-      </Button>
-      <Button
-        variant="quiet"
-        onClick={() => onResolve({
-          kind: 'transcript_suggestion',
-          reviewId: item.reviewId,
-          expectedVersion: OPEN_REVIEW_VERSION,
-          action: 'dismiss',
-          editedValue: null,
-        })}
-      >
-        Dismiss
-      </Button>
-    </div>
-  );
-}
-
-function SystemErrorActions({ item, onResolve }: {
-  item: Extract<ReviewItem, { kind: 'system_error' }>;
-  onResolve(input: ResolveReviewRequest): void;
-}) {
-  const repairFieldId = useId();
-  const [repairCommand, setRepairCommand] = useState('');
-  const trimmedCommand = repairCommand.trim();
-
-  return (
-    <div className="review-detail__actions">
-      <p className="review-detail__copy">{`Invariant: ${item.invariant}`}</p>
-      <div className="review-detail__field">
-        <label htmlFor={repairFieldId}>Repair command</label>
-        <input
-          id={repairFieldId}
-          className="review-detail__input"
-          value={repairCommand}
-          onChange={(event) => setRepairCommand(event.target.value)}
-        />
-      </div>
-      <Button
-        disabled={trimmedCommand.length === 0}
-        onClick={() => onResolve({
-          kind: 'system_error',
-          reviewId: item.reviewId,
-          expectedVersion: OPEN_REVIEW_VERSION,
-          action: 'repair_invariant',
-          repairCommand: trimmedCommand,
-        })}
-      >
-        Repair invariant
-      </Button>
+      <p className="review-detail__copy">
+        Suggestion acceptance, editing, and dismissal are unavailable in this Inbox. Inspect the evidence before making any separate changes.
+      </p>
     </div>
   );
 }

@@ -30,32 +30,32 @@ export function reviewKindMeta(kind: ReviewKind): ReviewKindMeta {
     case 'unmatched_communication':
       return {
         tabLabel: 'Unmatched communications',
-        emptyCopy: 'Every call, text, and email is matched to a person.',
+        emptyCopy: 'No items are shown in this local review snapshot. This is not an import-completeness, identity-completeness, or adapter-health check.',
       };
     case 'ambiguous_identity':
       return {
         tabLabel: 'Ambiguous identities',
-        emptyCopy: 'No inbound activity is waiting on an identity choice.',
+        emptyCopy: 'No items are shown in this local review snapshot. This is not an import-completeness, identity-completeness, or adapter-health check.',
       };
     case 'transcript_suggestion':
       return {
         tabLabel: 'Transcript suggestions',
-        emptyCopy: 'No transcript facts are waiting for review.',
+        emptyCopy: 'No items are shown in this local review snapshot. This is not an import-completeness, identity-completeness, or adapter-health check.',
       };
     case 'import_problem':
       return {
         tabLabel: 'Import problems',
-        emptyCopy: 'Every imported row landed cleanly.',
+        emptyCopy: 'No items are shown in this local review snapshot. This is not an import-completeness, identity-completeness, or adapter-health check.',
       };
     case 'adapter_failure':
       return {
         tabLabel: 'Adapter failures',
-        emptyCopy: 'All adapters are healthy.',
+        emptyCopy: 'No items are shown in this local review snapshot. This is not an import-completeness, identity-completeness, or adapter-health check.',
       };
     case 'system_error':
       return {
         tabLabel: 'System errors',
-        emptyCopy: 'No invariant violations are open.',
+        emptyCopy: 'No items are shown in this local review snapshot. This is not an import-completeness, identity-completeness, or adapter-health check.',
       };
     default:
       return assertNeverReviewKind(kind);

@@ -86,20 +86,33 @@ describe('ReviewRoute', () => {
     await renderRoute(api, { onOpenCountChange });
 
     fireEvent.click(screen.getByRole('button', { name: /\+14015550100/ }));
+    fireEvent.change(screen.getByLabelText('Matched source event ID'), { target: { value: 'source-9' } });
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Mark personal/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Promote' }));
     });
 
     expect(api.resolve).toHaveBeenCalledWith({
       kind: 'unmatched_communication',
       reviewId: 'review-unmatched',
       expectedVersion: 1,
-      action: 'mark_personal',
+      action: 'promote',
       personId: null,
-      sourceEventId: null,
+      sourceEventId: 'source-9',
     });
     expect(api.list).toHaveBeenCalledTimes(2);
     expect(onOpenCountChange).toHaveBeenLastCalledWith(0);
+  });
+
+  it('does not send unavailable privacy commands to the API', async () => {
+    const api = createApi([openSnapshot]);
+    await renderRoute(api);
+    fireEvent.click(screen.getByRole('button', { name: /\+14015550100/ }));
+    const personal = screen.queryByRole('button', { name: /Mark personal/ });
+    await act(async () => { if (personal) fireEvent.click(personal); });
+    expect(api.resolve).not.toHaveBeenCalled();
+    expect(personal === null || (personal as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/Never Record has not been applied/)).toBeTruthy();
+    expect(api.list).toHaveBeenCalledTimes(1);
   });
 
   it('surfaces a resolution failure without hiding the queue', async () => {
@@ -108,8 +121,9 @@ describe('ReviewRoute', () => {
     await renderRoute(api);
 
     fireEvent.click(screen.getByRole('button', { name: /\+14015550100/ }));
+    fireEvent.change(screen.getByLabelText('Matched source event ID'), { target: { value: 'source-9' } });
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Mark personal/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Promote' }));
     });
 
     expect(screen.getByRole('alert').textContent).toMatch(/could not be resolved/i);

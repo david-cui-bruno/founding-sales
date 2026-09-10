@@ -5,7 +5,6 @@ import type {
   ReviewKind,
   ReviewSnapshot,
 } from '../../../shared/contracts/reviewContract';
-import { Button } from '../../components/Button';
 import { PageHeader } from '../../components/PageHeader';
 import { ReviewDetailPanel } from './ReviewDetailPanel';
 import { ReviewQueue } from './ReviewQueue';
@@ -20,27 +19,6 @@ export type ReviewPageProps = {
   onResolve(input: ResolveReviewRequest): void;
   onOpenLead(personId: string): void;
 };
-
-type TranscriptSuggestion = Extract<
-  ReviewSnapshot['items'][number],
-  { kind: 'transcript_suggestion' }
->;
-
-/**
- * Batch acceptance is allowed only when no two open suggestions compete for
- * the same person and suggestion type; conflicts must be resolved one by one.
- */
-function suggestionsConflict(suggestions: readonly TranscriptSuggestion[]): boolean {
-  const seen = new Set<string>();
-  for (const suggestion of suggestions) {
-    const key = `${suggestion.personId}\u0000${suggestion.suggestionType}`;
-    if (seen.has(key)) {
-      return true;
-    }
-    seen.add(key);
-  }
-  return false;
-}
 
 /**
  * The review workspace: counted queue tabs, the selected queue, and the
@@ -60,10 +38,7 @@ export function ReviewPage({
   const queueItems = snapshot.items.filter((item) => item.kind === selectedKind);
   const selectedItem = queueItems.find((item) => item.reviewId === selectedReviewId) ?? null;
 
-  const suggestions = snapshot.items.filter(
-    (item): item is TranscriptSuggestion => item.kind === 'transcript_suggestion',
-  );
-  const conflicted = suggestionsConflict(suggestions);
+  const suggestionCount = snapshot.items.filter((item) => item.kind === 'transcript_suggestion').length;
 
   return (
     <div className="review">
@@ -90,30 +65,10 @@ export function ReviewPage({
           onSelectKind(kind);
         }}
       />
-      {selectedKind === 'transcript_suggestion' && suggestions.length > 1 && (
-        conflicted ? (
-          <p className="review__batch-note">
-            Conflicting suggestions for the same person must be resolved one by one.
-          </p>
-        ) : (
-          <div className="review__batch">
-            <Button
-              onClick={() => {
-                for (const suggestion of suggestions) {
-                  onResolve({
-                    kind: 'transcript_suggestion',
-                    reviewId: suggestion.reviewId,
-                    expectedVersion: 1,
-                    action: 'accept',
-                    editedValue: null,
-                  });
-                }
-              }}
-            >
-              {`Accept all ${suggestions.length}`}
-            </Button>
-          </div>
-        )
+      {selectedKind === 'transcript_suggestion' && suggestionCount > 1 && (
+        <p className="review__batch-note">
+          Batch acceptance is unavailable in this Inbox. Suggestions remain read-only evidence.
+        </p>
       )}
       <div className="review__body">
         <ReviewQueue

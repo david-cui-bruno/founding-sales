@@ -25,7 +25,7 @@ export function ReviewQueue({
   if (items.length === 0) {
     return (
       <div className="review-queue__clear">
-        <StatusBadge tone="success" label="Queue clear" />
+        <StatusBadge tone="neutral" label="No items in this view" />
         <p className="review-queue__clear-copy">{meta.emptyCopy}</p>
       </div>
     );
