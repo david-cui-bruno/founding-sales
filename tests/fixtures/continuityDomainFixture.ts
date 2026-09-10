@@ -20,7 +20,7 @@ import { registerDailyIpc } from '../../src/main/today/registerDailyIpc';
 import { registerLeadsIpc } from '../../src/main/leads/registerLeadsIpc';
 import { registerLeadDetailIpc } from '../../src/main/leads/registerLeadDetailIpc';
 import { registerReviewIpc } from '../../src/main/review/registerReviewIpc';
-import { createDailyProvider, createLeadsProvider, createLeadDetailProvider, createReviewProvider } from '../../src/main/ipc/registerApplicationIpc';
+import { createDailyProvider, createLeadsProvider, createLeadDetailProvider, createReviewProvider, createFridayProvider } from '../../src/main/ipc/registerApplicationIpc';
 import { localDelegationStatusSchema } from '../../src/shared/contracts/ownerCommandContract';
 import { localCompanyCreateRequestSchema, localCompanyCreateResultSchema, type LocalCompanyCreateRequest } from '../../src/shared/contracts/localCompanyIntakeContract';
 
@@ -35,7 +35,6 @@ import { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
 import { registerFridayIpc } from '../../src/main/friday/registerFridayIpc';
 import { HealthService } from '../../src/main/health/healthService';
 import { registerHealthIpc } from '../../src/main/health/registerHealthIpc';
-import { createFridayProvider } from '../../src/main/ipc/registerApplicationIpc';
 import { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import { createLocalWorkspaceProvider } from '../../src/main/workspace/localWorkspaceProvider';
 import { registerLocalWorkspaceIpc } from '../../src/main/workspace/registerLocalWorkspaceIpc';
