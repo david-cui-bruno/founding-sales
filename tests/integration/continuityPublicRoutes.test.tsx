@@ -8,10 +8,14 @@ import type { CalliePreloadApi } from '../../src/shared/preload';
 import { localCompanyCreateRequestSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema, localCompanyReviewSchema } from '../../src/shared/contracts/localCompanyIntakeContract';
 
 import { appHealthSchema } from '../../src/shared/healthContract';
+import { discoveryBriefSchema } from '../../src/shared/contracts/discoveryContract';
+import { leadDetailSchema } from '../../src/shared/contracts/leadDetailContract';
+import { dailySnapshotSchema } from '../../src/shared/contracts/dailyContract';
+import { localDelegationStatusSchema } from '../../src/shared/contracts/ownerCommandContract';
 import { fridayReportSchema } from '../../src/shared/contracts/fridayContract';
 import { localCommitmentsSnapshotSchema, localWorkspaceSnapshotSchema, localWorkflowReceiptSchema } from '../../src/shared/contracts/localWorkspaceContract';
 import {
-  RETAINED_T, RETAINED_O, RETAINED_DISCOVERY,
+  RETAINED_T, RETAINED_O, RETAINED_DISCOVERY, RETAINED_UI_REGISTERED_CHANNELS, SYNTHETIC_WORKER_IDS,
   CONTINUITY_NOW, CONTINUITY_READ_CHANNELS, CONTINUITY_REGISTERED_CHANNELS, CONTINUITY_URL,
   createContinuityDomainFixture, CONTINUITY_UI_CHANNELS, CONTINUITY_UI_REGISTERED_CHANNELS,
 } from '../fixtures/continuityDomainFixture';
@@ -90,7 +94,8 @@ afterEach(async () => {
           expect(result).toEqual({ databaseClosed: true, keysZeroed: true, directoryRemoved: true,
             registrationsRemaining: 0, pendingInvocations: 0, cleanupRuns: 1, runtimeShutdowns: 1,
             domainShutdowns: 1, databaseCloses: 1, pollerStops: 1, pollerIdleWaits: 1 });
-          expect([...transport.removals].sort()).toEqual([...CONTINUITY_UI_REGISTERED_CHANNELS].sort());
+          expect([...transport.removals].sort()).toEqual([...(value.isRetainedUi ? RETAINED_UI_REGISTERED_CHANNELS : CONTINUITY_UI_REGISTERED_CHANNELS)].sort());
+          if (value.isRetainedUi) expect(value.uiCounters()).toEqual({ network: 0, forbidden: 0, delegationDisposals: 1 });
           expect(value.counts()).toMatchObject({ credentialLoads: 0, inboxCreations: 0, pollSchedules: 0 });
         }
       }
@@ -208,41 +213,7 @@ async function renderCompanyApp() {
   // scheduling. C2 opts into renderer setTimeout only AFTER construction/review.
   const value = await createContinuityDomainFixture(transport.handlers, 'company-ui');
   fixtures.push(value);
-  const previousApi = Object.getOwnPropertyDescriptor(window, 'callie');
-  const previousUrl = window.location.href;
-  const storage = Object.entries(window.localStorage);
-  const sessionStorage = Object.entries(window.sessionStorage);
-  const actEnvironment = Object.getOwnPropertyDescriptor(globalThis, 'IS_REACT_ACT_ENVIRONMENT');
-  const previousFocus = document.activeElement;
-  const theme = document.documentElement.getAttribute('data-theme');
-  const density = document.documentElement.getAttribute('data-density');
-  restoreUi = () => {
-    if (previousApi) Object.defineProperty(window, 'callie', previousApi);
-    else Reflect.deleteProperty(window, 'callie');
-    window.history.replaceState(null, '', previousUrl);
-    if (actEnvironment) Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', actEnvironment);
-    else Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT');
-    window.sessionStorage.clear();
-    for (const [key, text] of sessionStorage) window.sessionStorage.setItem(key, text);
-    if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
-    window.localStorage.clear();
-    for (const [key, text] of storage) window.localStorage.setItem(key, text);
-    for (const [name, text] of [['data-theme', theme], ['data-density', density]]) {
-      if (text === null) document.documentElement.removeAttribute(name!);
-      else document.documentElement.setAttribute(name!, text!);
-    }
-  };
-  Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, writable: true, value: true });
-  const deniedAppleCall = async (): Promise<never> => { throw new Error('Stage1 denies Apple spike access'); };
-  const completeApi: CalliePreloadApi = { ...value.api, appleSpike: {
-    getStatus: deniedAppleCall, probeCapabilities: deniedAppleCall, requestContacts: deniedAppleCall,
-    promptAccessibility: deniedAppleCall, scanRecentNotes: deniedAppleCall, scanTestMessages: deniedAppleCall,
-    startCallObservation: deniedAppleCall, stopCallObservation: deniedAppleCall, sendTestMessage: deniedAppleCall,
-    subscribeObservationEvidence: deniedAppleCall,
-  } };
-  Object.defineProperty(window, 'callie', { configurable: true, value: completeApi });
-  window.history.replaceState(null, '', '#/accounts');
-  render(<App />);
+  mountContinuityApp(value, 'accounts');
   await waitFor(() => expect((screen.getByRole('button', { name: 'Add company' }) as HTMLButtonElement).disabled).toBe(false));
   await act(async () => { await value.drainReads(); });
   expect(screen.getByRole('heading', { name: 'Accounts' })).not.toBeNull();
@@ -564,5 +535,277 @@ describe('retained lifecycle construction through the genuine public boundary', 
     expect(value.trace().every(entry => entry.handlerStarted && entry.outcome === 'resolved' && !entry.synthetic)).toBe(true);
     expect(value.counts()).toMatchObject({ keyLoads: 1, databaseOpens: 1, migrations: 1, domainConstructions: 1, domainBootstraps: 1 });
     await expectCleaned(value);
+  });
+});
+
+function mountContinuityApp(value: Fixture, route: 'accounts' | 'today') {
+  const previousApi = Object.getOwnPropertyDescriptor(window, 'callie');
+  const previousUrl = window.location.href;
+  const storage = Object.entries(window.localStorage);
+  const sessionStorage = Object.entries(window.sessionStorage);
+  const actEnvironment = Object.getOwnPropertyDescriptor(globalThis, 'IS_REACT_ACT_ENVIRONMENT');
+  const previousFocus = document.activeElement;
+  const theme = document.documentElement.getAttribute('data-theme');
+  const density = document.documentElement.getAttribute('data-density');
+  restoreUi = () => {
+    if (previousApi) Object.defineProperty(window, 'callie', previousApi);
+    else Reflect.deleteProperty(window, 'callie');
+    window.history.replaceState(null, '', previousUrl);
+    if (actEnvironment) Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', actEnvironment);
+    else Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT');
+    window.sessionStorage.clear();
+    for (const [key, text] of sessionStorage) window.sessionStorage.setItem(key, text);
+    if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+    window.localStorage.clear();
+    for (const [key, text] of storage) window.localStorage.setItem(key, text);
+    for (const [name, text] of [['data-theme', theme], ['data-density', density]]) {
+      if (text === null) document.documentElement.removeAttribute(name!);
+      else document.documentElement.setAttribute(name!, text!);
+    }
+  };
+  Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, writable: true, value: true });
+  const deniedAppleCall = async (): Promise<never> => { throw new Error('Stage1 denies Apple spike access'); };
+  const completeApi: CalliePreloadApi = { ...value.api, appleSpike: {
+    getStatus: deniedAppleCall, probeCapabilities: deniedAppleCall, requestContacts: deniedAppleCall,
+    promptAccessibility: deniedAppleCall, scanRecentNotes: deniedAppleCall, scanTestMessages: deniedAppleCall,
+    startCallObservation: deniedAppleCall, stopCallObservation: deniedAppleCall, sendTestMessage: deniedAppleCall,
+    subscribeObservationEvidence: deniedAppleCall,
+  } };
+  Object.defineProperty(window, 'callie', { configurable: true, value: completeApi });
+  window.history.replaceState(null, '', `#/${route}`);
+  render(<App />);
+}
+
+
+type RetainedUi = Awaited<ReturnType<typeof renderRetainedApp>>;
+async function renderRetainedApp(synthetic = false, localMetadata: 'genuine' | 'complete' = 'genuine') {
+  vi.setSystemTime(new Date(RETAINED_T));
+  const value = await createContinuityDomainFixture(transport.handlers, synthetic ? 'retained-synthetic' : 'retained-ui');
+  fixtures.push(value);
+  await value.seedRetained('warm-owners');
+  vi.setSystemTime(new Date(RETAINED_DISCOVERY));
+  const owners = await value.seedRetained('callback');
+  vi.setSystemTime(new Date(RETAINED_O));
+  const command = { commandId: randomUUID(), manifestId: randomUUID(), expectedMode: 'legacy' as const };
+  const receipt = await value.api.localWorkspace.transition(command);
+  const evidence = await value.retainedEvidence();
+  expect(evidence.audit).toEqual([]);
+  const snapshot = localCommitmentsSnapshotSchema.parse(await value.api.localWorkspace.getCommitments());
+  expect(snapshot.items).toHaveLength(6);
+  expect(new Set(snapshot.items.map(row => JSON.stringify(['retained', row.item.salesCycleId, row.item.action.id])))).toEqual(
+    new Set(owners.map(owner => JSON.stringify(['retained', owner.cycleId, owner.actionId]))));
+  if (localMetadata === 'complete') value.completeRetained();
+  mountContinuityApp(value, 'today');
+  await waitFor(() => expect(retainedButtons()).toHaveLength(6));
+  await act(async () => { await value.drainReads(); });
+  expect(window.location.hash).toBe('#/today');
+  expect([...transport.registrations].sort()).toEqual([...RETAINED_UI_REGISTERED_CHANNELS].sort());
+  expect(transport.registrations).toHaveLength(49);
+  const status = value.trace().find(entry => entry.channel === 'outreach:delegation-status')!;
+  expect(status).toMatchObject({ handlerStarted: true, outcome: 'resolved' });
+  expect(status.synthetic).toBeUndefined();
+  expect(localDelegationStatusSchema.parse(status.result)).toEqual({ state: 'unconfigured', workspaceId: null, endpoint: null, configuration: null });
+  return { value, owners, evidence, snapshot, command, receipt };
+}
+function retainedButtons() {
+  const region = screen.queryByRole('region', { name: 'Local commitments' });
+  return region ? Array.from(region.querySelectorAll<HTMLButtonElement>('button[data-row-key]')) : [];
+}
+function laneCount(name: 'Local commitments' | 'Calls') {
+  return screen.getByRole('region', { name }).querySelector('.native-desk__count')?.textContent;
+}
+function assertRetainedRows(context: RetainedUi) {
+  const { snapshot, evidence } = context;
+  expect(retainedButtons().map(row => row.dataset.rowKey).sort()).toEqual(snapshot.items.map(({ item }) =>
+    JSON.stringify(['retained', item.salesCycleId, item.action.id])).sort());
+  for (const { item, kind } of snapshot.items) {
+    const record = evidence.owners.find(record => record.owner.cycleId === item.salesCycleId)!;
+    expect(record.owner.actionId).toBe(item.action.id);
+    expect(item.action.dueAt).toBe(record.action!.due_at);
+    const channel = kind === 'onboarding' ? 'onboarding' : record.action!.work_intent === 'internal_review' ? 'review'
+      : record.action!.channel === 'phone' || record.action!.channel === 'voicemail' ? 'call' : record.action!.channel;
+    expect(item.action.channel).toBe(channel);
+    const row = retainedButtons().find(row => row.dataset.rowKey === JSON.stringify(['retained', item.salesCycleId, item.action.id]))!;
+    expect(row.textContent).toContain(item.personName);
+    expect(row.textContent).toContain(item.action.label);
+    expect(row.querySelector('time')?.dateTime).toBe(record.action!.due_at);
+  }
+}
+function assertRetainedInventory(context: RetainedUi, refreshes: number, contactIds: string[] = []) {
+  const { value, command } = context;
+  const counts: Record<string, number> = {};
+  for (const entry of value.trace()) {
+    counts[entry.channel] = (counts[entry.channel] ?? 0) + 1;
+    if (entry.channel === 'local-workspace:transition') expect(entry.args).toEqual([command]);
+    else if (entry.channel === 'lead-detail:outbound-capabilities') expect(entry.args).toEqual([{}]);
+    else if (entry.channel === 'review:list') expect(entry.args).toEqual([{ kinds: [], cursor: null, limit: 1 }]);
+    else if (!['lead-detail:get', 'discovery:get-brief'].includes(entry.channel)) expect(entry.args).toEqual([]);
+    expect(entry.handlerStarted).toBe(true);
+  }
+  expect(counts).toEqual({
+    'local-workspace:transition': 1, 'local-workspace:get-commitments': 2 + refreshes,
+    'health:get': 1, 'lead-detail:outbound-capabilities': 1, 'review:list': 1,
+    'daily:get': 1 + refreshes, 'outreach:delegation-status': 1 + refreshes, 'local-workspace:get': 1 + refreshes,
+    ...(contactIds.length ? { 'lead-detail:get': contactIds.length, 'discovery:get-brief': contactIds.length } : {}),
+  });
+  for (const channel of ['lead-detail:get', 'discovery:get-brief']) {
+    expect(value.trace().filter(entry => entry.channel === channel).map(entry => entry.args)).toEqual(contactIds.map(personId => [{ personId }]));
+  }
+  expect(value.uiCounters()).toEqual({ network: 0, forbidden: 0, delegationDisposals: 0 });
+  expect(value.counts()).toMatchObject({ keyLoads: 1, preparations: 1, databaseOpens: 1, migrations: 1,
+    domainConstructions: 1, domainBootstraps: 1, healthConstructions: 1, credentialLoads: 0, inboxCreations: 0, pollSchedules: 0 });
+}
+async function refreshRetained(value: Fixture) {
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh' })); });
+  await act(async () => { await value.drainReads(); });
+}
+
+describe('actual Today retained work and separately labeled synthetic worker presentation', () => {
+  it('B1 shows all six genuine retained owners with unpaired worker scope and opens contacts only explicitly', async () => {
+    const context = await renderRetainedApp();
+    const { value, snapshot } = context;
+    assertRetainedRows(context); assertRetainedInventory(context, 0);
+    expect(laneCount('Calls')).toBe('Unavailable');
+    expect(laneCount('Local commitments')).toBe(snapshot.reviewErrorCount ? '6+ · partial' : '6');
+    const daily = dailySnapshotSchema.parse(value.trace().find(entry => entry.channel === 'daily:get')!.result);
+    expect(daily).toMatchObject({ workspaceId: null, workflowMode: 'meeting_first', calls: { accountIds: [] }, ownerStatus: [] });
+    expect(value.trace().some(entry => entry.synthetic)).toBe(false);
+    for (const entry of value.trace().filter(entry => entry.channel === 'local-workspace:get-commitments')) {
+      expect(localCommitmentsSnapshotSchema.parse(entry.result).reviewErrorCount).toBe(snapshot.reviewErrorCount);
+    }
+    const opened: string[] = [];
+    for (const { item } of snapshot.items) {
+      const key = JSON.stringify(['retained', item.salesCycleId, item.action.id]);
+      const row = retainedButtons().find(row => row.dataset.rowKey === key)!;
+      const before = value.trace().length;
+      fireEvent.click(row);
+      const detail = screen.getByRole('region', { name: 'Retained work detail' });
+      expect(detail.textContent).toContain(item.personName);
+      expect(detail.textContent).toContain(item.reason);
+      expect(detail.textContent).toContain(`Action type: ${item.action.type} · Channel: ${item.action.channel} · Lane: ${item.lane}`);
+      expect(detail.querySelector('time')?.dateTime).toBe(item.action.dueAt);
+      expect(detail.textContent).toContain('Opening the contact workspace is a separate action.');
+      expect(value.trace()).toHaveLength(before);
+      await act(async () => { fireEvent.click(within(detail).getByRole('button', { name: 'Open contact workspace' })); await value.drainReads(); });
+      const page = await screen.findByRole('article', { name: `${item.personName} full page` });
+      await act(async () => { await value.drainReads(); });
+      const detailRead = value.trace().filter(entry => entry.channel === 'lead-detail:get').at(-1)!;
+      const realDetail = leadDetailSchema.parse(detailRead.result);
+      expect(realDetail).toMatchObject({ personId: item.personId, salesCycleId: item.salesCycleId });
+      // Corrected warm referral is unreviewed but not cloud-linked: no hidden preparation read.
+      if (item.stage === 'unreviewed') expect(realDetail.cloudLinked).toBe(false);
+      // Discovery evidence is mounted only after the user opens the actual Details disclosure.
+      expect(value.trace().filter(entry => entry.channel === 'discovery:get-brief')).toHaveLength(opened.length);
+      await act(async () => { fireEvent.click(within(page).getByText('Details', { selector: 'summary', exact: true })); });
+      await waitFor(() => expect(value.trace().filter(entry => entry.channel === 'discovery:get-brief')).toHaveLength(opened.length + 1));
+      await act(async () => { await value.drainReads(); });
+      const briefRead = value.trace().filter(entry => entry.channel === 'discovery:get-brief').at(-1)!;
+      expect(discoveryBriefSchema.parse(briefRead.result)).toMatchObject({ personId: item.personId, salesCycleId: item.salesCycleId });
+      opened.push(item.personId);
+      fireEvent.click(within(page).getByRole('button', { name: 'Close inspector' }));
+      expect(screen.queryByRole('article', { name: `${item.personName} full page` })).toBeNull();
+      expect(window.location.hash).toBe('#/today');
+      expect(retainedButtons().find(row => row.dataset.rowKey === key)?.getAttribute('aria-current')).toBe('true');
+      assertRetainedRows(context); assertRetainedInventory(context, 0, opened);
+    }
+    expect(value.trace().every(entry => entry.outcome === 'resolved' && !entry.synthetic)).toBe(true);
+    expect(await value.retainedEvidence()).toEqual(context.evidence);
+  });
+
+  it('B2 keeps synthetic complete and partial worker Calls counts separate from six real local owners', async () => {
+    const context = await renderRetainedApp(true);
+    const { value } = context;
+    assertRetainedRows(context); assertRetainedInventory(context, 0);
+    const localCount = laneCount('Local commitments');
+    expect(laneCount('Calls')).toBe('2');
+    const ids = new Set(context.owners.flatMap(owner => [owner.personId, owner.prospectId, owner.cycleId, owner.actionId]));
+    for (const id of SYNTHETIC_WORKER_IDS) expect(ids.has(id)).toBe(false);
+    const workerRows = screen.getByRole('region', { name: 'Calls' }).querySelectorAll<HTMLButtonElement>('button[data-row-key]');
+    expect(Array.from(workerRows, row => row.dataset.rowKey)).toEqual(SYNTHETIC_WORKER_IDS.map(id => `call:${id}`));
+    const beforeSelection = value.trace().length;
+    fireEvent.click(workerRows[0]!);
+    expect(screen.getByText(/Call handoff unavailable in this account view/)).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open contact workspace' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reconcile queued commands' })).toBeNull();
+    expect(value.trace()).toHaveLength(beforeSelection);
+    const first = value.trace().find(entry => entry.channel === 'daily:get')!;
+    expect(first.synthetic).toBe(true);
+    expect(dailySnapshotSchema.parse(first.actualResult).workspaceId).toBeNull();
+    expect(dailySnapshotSchema.parse(first.result)).toMatchObject({ ownerStatus: [], freshness: { kind: 'local_snapshot' } });
+    value.partialWorker();
+    await refreshRetained(value);
+    expect(laneCount('Calls')).toBe('2+ · partial');
+    expect(laneCount('Local commitments')).toBe(localCount);
+    assertRetainedRows(context); assertRetainedInventory(context, 1);
+    expect(value.trace().filter(entry => entry.synthetic).every(entry => entry.channel === 'daily:get')).toBe(true);
+    expect(value.trace().every(entry => entry.outcome === 'resolved')).toBe(true);
+    expect(await value.retainedEvidence()).toEqual(context.evidence);
+  });
+
+  it('B3 retains six keys through bounded checking stale and partial reads without conferring worker authority', async () => {
+    const context = await renderRetainedApp(true, 'complete');
+    const { value } = context;
+    // Fixed synthetic complete/partial metadata only. Genuine diagnostics remain captured.
+    expect(laneCount('Local commitments')).toBe('6');
+    const selected = retainedButtons()[0]!;
+    const key = selected.dataset.rowKey;
+    const selectedItem = context.snapshot.items.find(({ item }) => JSON.stringify(['retained', item.salesCycleId, item.action.id]) === key)!.item;
+    const assertSelection = () => {
+      expect(retainedButtons().filter(row => row.getAttribute('aria-current') === 'true').map(row => row.dataset.rowKey)).toEqual([key]);
+      const detail = screen.getByRole('region', { name: 'Retained work detail' });
+      expect(within(detail).getByRole('heading', { name: selectedItem.personName }).textContent).toBe(selectedItem.personName);
+      expect(detail.textContent).toContain(selectedItem.reason);
+      expect(detail.querySelector('time')?.dateTime).toBe(selectedItem.action.dueAt);
+    };
+    fireEvent.click(selected);
+    assertSelection();
+    const open = () => screen.getByRole('button', { name: 'Open contact workspace' }) as HTMLButtonElement;
+    const first = value.holdRetainedRead();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await act(async () => { expect(await first.arrival).not.toBeNull(); });
+    expect(laneCount('Local commitments')).toBe('6 · checking');
+    assertSelection();
+    expect(open().disabled).toBe(true);
+    fireEvent.click(open());
+    assertRetainedRows(context);
+    await act(async () => { first.reject(); await value.drainReads(); });
+    expect(laneCount('Local commitments')).toBe('6 · last known');
+    assertSelection();
+    expect(screen.getByText('Retained work is stale. Refresh before opening a contact.')).not.toBeNull();
+    expect(open().disabled).toBe(true);
+    expect(retainedButtons().find(row => row.dataset.rowKey === key)?.getAttribute('aria-current')).toBe('true');
+    await refreshRetained(value);
+    expect(laneCount('Local commitments')).toBe('6'); expect(open().disabled).toBe(false);
+    assertSelection();
+    value.partialRetained(); await refreshRetained(value);
+    assertSelection();
+    expect(laneCount('Local commitments')).toBe('6+ · partial');
+    expect(screen.getByText('Some retained work could not be read. This local snapshot is incomplete.')).not.toBeNull();
+    const second = value.holdRetainedRead();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await act(async () => { expect(await second.arrival).not.toBeNull(); });
+    expect(laneCount('Local commitments')).toBe('6+ · partial'); expect(open().disabled).toBe(true);
+    assertSelection();
+    assertRetainedRows(context);
+    await act(async () => { second.release(); await value.drainReads(); });
+    assertSelection();
+    expect(open().disabled).toBe(false);
+    value.rejectNextDaily(); await refreshRetained(value);
+    assertSelection();
+    expect(laneCount('Calls')).toBe('2 · last known');
+    expect(laneCount('Local commitments')).toBe('6+ · partial');
+    assertRetainedRows(context); assertRetainedInventory(context, 5);
+    expect(value.trace().filter(entry => entry.outcome === 'rejected').map(entry => entry.channel)).toEqual([
+      'local-workspace:get-commitments', 'daily:get',
+    ]);
+    for (const entry of value.trace().filter(entry => entry.synthetic && entry.channel === 'local-workspace:get-commitments')) {
+      const real = localCommitmentsSnapshotSchema.parse(entry.actualResult), presented = localCommitmentsSnapshotSchema.parse(entry.result);
+      expect(presented.items).toEqual(real.items);
+      expect(real.reviewErrorCount).toBe(context.snapshot.reviewErrorCount);
+      expect(['retained-complete', 'retained-partial']).toContain(entry.presentationVariant);
+      expect(presented.reviewErrorCount).toBe(entry.presentationVariant === 'retained-complete' ? 0 : 1);
+      expect({ ...presented, reviewErrorCount: real.reviewErrorCount }).toEqual(real);
+    }
+    expect(await value.retainedEvidence()).toEqual(context.evidence);
   });
 });

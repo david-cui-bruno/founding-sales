@@ -1,4 +1,10 @@
 import assert from 'node:assert/strict';
+import { createDelegationRuntime } from '../../src/main/delegation/delegationRuntime';
+import { registerOutreachIpc } from '../../src/main/ipc/registerOutreachIpc';
+import { registerDiscoveryIpc } from '../../src/main/discovery/registerDiscoveryIpc';
+import { createDiscoveryProvider } from '../../src/main/discovery/discoveryProvider';
+import { dailySnapshotSchema, type DailySnapshot } from '../../src/shared/contracts/dailyContract';
+import { localCommitmentsSnapshotSchema } from '../../src/shared/contracts/localWorkspaceContract';
 import { randomUUID } from 'node:crypto';
 import { auditDomainInvariants } from '../../src/main/domain/lifecycle/invariantAudit';
 import type { DomainServices } from '../../src/main/domain/createDomainServices';
@@ -66,9 +72,20 @@ export const CONTINUITY_UI_REGISTERED_CHANNELS = [...CONTINUITY_REGISTERED_CHANN
   'lead-detail:confirm-transition', 'lead-detail:dismiss', 'lead-detail:cloud-score-override',
   'lead-detail:find-contact-info'] as const;
 
+export const RETAINED_UI_REGISTERED_CHANNELS = [...CONTINUITY_UI_REGISTERED_CHANNELS,
+  'discovery:get', 'discovery:get-brief', 'discovery:begin', 'discovery:override',
+  ...['status', 'configure', 'connect-gmail', 'disconnect-gmail', 'open-draft', 'save-draft', 'generate-draft', 'send-draft',
+    'requested-followup-prepare', 'requested-followup-get', 'requested-followup-edit', 'requested-followup-approve',
+    'delegation-begin-phone', 'delegation-bootstrap', 'delegation-policy', 'delegation-research', 'delegation-status',
+    'delegation-configure', 'delegation-submit', 'delegation-sync'].map(name => `outreach:${name}`),
+] as const;
+const RETAINED_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get', 'review:list', 'outreach:delegation-status',
+  'lead-detail:outbound-capabilities', 'lead-detail:get', 'discovery:get-brief', 'local-workspace:transition'];
+export const SYNTHETIC_WORKER_IDS = ['synthetic-worker-alpha', 'synthetic-worker-beta'] as const;
+
 type Invocation = Readonly<{
   channel: string; args: readonly unknown[]; senderUrl: string;
-  result?: unknown; synthetic?: boolean; handlerStarted: boolean; outcome: 'pending' | 'resolved' | 'rejected';
+  result?: unknown; actualResult?: unknown; synthetic?: boolean; presentationVariant?: 'retained-complete' | 'retained-partial'; handlerStarted: boolean; outcome: 'pending' | 'resolved' | 'rejected';
 }>;
 export type ContinuityCleanup = Readonly<{
   databaseClosed: boolean; keysZeroed: boolean; directoryRemoved: boolean;
@@ -81,7 +98,33 @@ export type ContinuityCleanup = Readonly<{
  * local company commands, real incidental reads and a finite delivery hold. The caller's
  * Electron registration map is the only replacement for the IPC transport.
  */
-export async function createContinuityDomainFixture(handlers: Map<string, RegisteredIpcHandler>, mode: 'construction' | 'company-ui' | 'retained-setup' = 'construction') {
+export async function createContinuityDomainFixture(handlers: Map<string, RegisteredIpcHandler>, mode: 'construction' | 'company-ui' | 'retained-setup' | 'retained-ui' | 'retained-synthetic' = 'construction') {
+  const isRetainedUi = mode === 'retained-ui' || mode === 'retained-synthetic';
+  const uiCounters = { network: 0, forbidden: 0, delegationDisposals: 0 };
+  let retainedMetadata: 'genuine' | 'complete' | 'partial' = 'genuine';
+  let workerPartial = false, rejectDaily = false, dailyRejectionUsed = false;
+  type RetainedReadHold = Readonly<{
+    arrival: Promise<unknown | null>;
+    release: () => void;
+    reject: () => void;
+    cancel: () => void;
+    claim: () => boolean;
+    deliver: (value: unknown) => Promise<unknown>;
+  }>;
+  const readHolds: RetainedReadHold[] = [];
+  function holdRetainedRead(): RetainedReadHold {
+    assert.equal(mode, 'retained-synthetic'); assert.ok(readHolds.length < 2);
+    let arrived!: (value: unknown | null) => void, decide!: (error: Error | null) => void;
+    const arrival = new Promise<unknown | null>(resolve => { arrived = resolve; });
+    const decision = new Promise<Error | null>(resolve => { decide = resolve; });
+    let settled = false, claimed = false;
+    const finish = (error: Error | null) => { if (settled) return; settled = true; clearDeliveryTimeout(timer); arrived(null); decide(error); };
+    const timer = deliveryTimeout(() => finish(new Error('Retained read hold deadline')), 5_000);
+    const control = { arrival, release: () => finish(null), reject: () => finish(new Error('Retained read delivery rejected')),
+      cancel: () => finish(new Error('Retained read disposed')), claim: () => { if (claimed || settled) return false; claimed = true; return true; },
+      deliver: async (value: unknown) => { arrived(structuredClone(value)); const error = await decision; if (error) throw error; return value; } };
+    readHolds.push(control); return control;
+  }
   assert.equal(handlers.size, 0, 'Continuity fixture requires an empty owned transport map');
   const temp = createTempDatabase();
   const directory = dirname(dirname(temp.path));
@@ -181,6 +224,9 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
     },
     closeDatabase: (db) => { counts.databaseCloses++; closeDatabase(db); },
   });
+  const delegation = isRetainedUi ? createDelegationRuntime({ databaseGate: runtime, pairing: null, clock: new SystemClock(),
+    fetch: async () => { uiCounters.network++; throw new Error('Retained UI forbids network'); },
+  }) : undefined;
   // Instrument only callbacks actually admitted by the real runtime. This is
   // not productionDomainGate and never invokes a facade outside the real gate.
   const observed = {
@@ -218,6 +264,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       try { counts.pollerStops++; poller.stop(); } catch (error) { errors.push(error); }
       try { counts.pollerIdleWaits++; await poller.idle(); } catch (error) { errors.push(error); }
       delivery?.cancel(); // Cancel/release delivery BEFORE draining invokes.
+      for (const hold of readHolds) hold.cancel();
       await Promise.allSettled([...flights]);
       for (const unregister of unregisters.splice(0).reverse()) {
         try { unregister(); } catch (error) { errors.push(error); }
@@ -226,6 +273,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
         errors.push(new Error('Continuity registrar cleanup left handlers'));
         handlers.clear(); // Exclusively owned map; report the defect, do not hide it.
       }
+      if (delegation) { try { uiCounters.delegationDisposals++; await delegation.dispose(); } catch (error) { errors.push(error); } }
       try { counts.runtimeShutdowns++; await runtime.shutdown(); } catch (error) { errors.push(error); }
       const keysZeroed = keys.length > 0 && keys.every(key => key.bytes.every(byte => byte === 0));
       // Observe runtime wiping first. Defensive wipe is not counted as its success.
@@ -251,13 +299,25 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
     unregisters.push(registerHealthIpc(observed, trusted));
     unregisters.push(registerLocalWorkspaceIpc(createLocalWorkspaceProvider(observed), trusted));
     unregisters.push(registerFridayIpc(createFridayProvider(observed), trusted));
-    if (mode === 'company-ui') {
+    if (mode === 'company-ui' || isRetainedUi) {
       unregisters.push(registerDailyIpc(createDailyProvider(observed), trusted));
       unregisters.push(registerLeadsIpc(createLeadsProvider(observed), trusted));
       unregisters.push(registerLeadDetailIpc(createLeadDetailProvider(observed), trusted));
       unregisters.push(registerReviewIpc(createReviewProvider(observed), trusted));
     }
-    assert.deepEqual([...handlers.keys()].sort(), [...(mode === 'company-ui' ? CONTINUITY_UI_REGISTERED_CHANNELS : CONTINUITY_REGISTERED_CHANNELS)].sort());
+    if (delegation) {
+      const denied = async (): Promise<never> => { uiCounters.forbidden++; throw new Error('Unrelated outreach forbidden'); };
+      unregisters.push(registerOutreachIpc({ delegation, isTrustedRendererUrl: trusted, provider: {
+        status: denied, configure: denied, connectGmail: denied, disconnectGmail: denied,
+        openDraft: denied, saveDraft: denied, generateDraft: denied, sendDraft: denied,
+      } }));
+      unregisters.push(registerDiscoveryIpc({ isTrustedRendererUrl: trusted, provider: {
+        get: () => runtime.withDomain(domain => createDiscoveryProvider(domain).get()),
+        getBrief: input => runtime.withDomain(domain => createDiscoveryProvider(domain).getBrief(input)),
+        begin: denied, override: denied,
+      } }));
+    }
+    assert.deepEqual([...handlers.keys()].sort(), [...(isRetainedUi ? RETAINED_UI_REGISTERED_CHANNELS : mode === 'company-ui' ? CONTINUITY_UI_REGISTERED_CHANNELS : CONTINUITY_REGISTERED_CHANNELS)].sort());
 
     const invokeFrom = (senderUrl: string, channel: string, ...args: unknown[]): Promise<unknown> => {
       const index = trace.length;
@@ -266,7 +326,8 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       const flight = (async () => {
         try {
           if (disposed) throw new Error('Continuity fixture is disposed');
-          if (!((mode === 'company-ui' ? CONTINUITY_UI_CHANNELS : mode === 'retained-setup' ? [...CONTINUITY_READ_CHANNELS, 'local-workspace:transition'] : CONTINUITY_READ_CHANNELS) as readonly string[]).includes(channel)) {
+          if (!((isRetainedUi ? RETAINED_UI_CHANNELS : mode === 'company-ui' ? CONTINUITY_UI_CHANNELS : mode === 'retained-setup' ? [...CONTINUITY_READ_CHANNELS, 'local-workspace:transition'] : CONTINUITY_READ_CHANNELS) as readonly string[]).includes(channel)) {
+            if (isRetainedUi) uiCounters.forbidden++;
             throw new Error('Stage0 only admits its four readonly channels');
           }
           // Explicit synthetic UNCONFIGURED worker transport only. No registrar,
@@ -281,9 +342,30 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
           if (!handler) throw new Error(`Missing continuity handler: ${channel}`);
           trace[index] = Object.freeze({ ...entry, handlerStarted: true });
           const hold = channel === 'local-workspace:create-company' && delivery?.claim() ? delivery : undefined;
-          const result = await handler({ senderFrame: { url: senderUrl } }, ...args);
+          const retainedHold = channel === 'local-workspace:get-commitments' ? readHolds.find(item => item.claim()) : undefined;
+          const actual = await handler({ senderFrame: { url: senderUrl } }, ...args);
+          let result = actual;
+          if (mode === 'retained-synthetic' && channel === 'daily:get') {
+            const real = dailySnapshotSchema.parse(actual);
+            result = dailySnapshotSchema.parse({ ...real, workspaceId: 'synthetic-worker-workspace',
+              revision: (workerPartial ? 'b' : 'a').repeat(64),
+              freshness: { ...real.freshness, kind: workerPartial ? 'incomplete' : 'local_snapshot' },
+              accounts: SYNTHETIC_WORKER_IDS.map((id): DailySnapshot['accounts'][number] => ({ account: { id, name: id, domain: null, version: 1 },
+                claims: [], routes: [], portfolio: [], unknowns: [], conflicts: [], fingerprint: 'c'.repeat(64) })),
+              calls: { accountIds: [...SYNTHETIC_WORKER_IDS], workloadConflict: false },
+              answers: [], meetings: [], campaigns: [], ownerStatus: [], transport: [],
+              issues: workerPartial ? [{ code: 'transport_incomplete', count: 1 }] : [],
+            });
+            trace[index] = Object.freeze({ ...trace[index]!, synthetic: true, actualResult: structuredClone(actual) });
+            if (rejectDaily) { rejectDaily = false; throw new Error('Synthetic Daily delivery rejected'); }
+          }
+          if (mode === 'retained-synthetic' && retainedMetadata !== 'genuine' && channel === 'local-workspace:get-commitments') {
+            const real = localCommitmentsSnapshotSchema.parse(actual);
+            result = localCommitmentsSnapshotSchema.parse({ ...real, reviewErrorCount: retainedMetadata === 'complete' ? 0 : 1 });
+            trace[index] = Object.freeze({ ...trace[index]!, synthetic: true, presentationVariant: retainedMetadata === 'complete' ? 'retained-complete' : 'retained-partial', actualResult: structuredClone(actual) });
+          }
           trace[index] = Object.freeze({ ...trace[index]!, result: structuredClone(result) });
-          const delivered = hold ? await hold.hold(args[0], result) : result;
+          const delivered = hold ? await hold.hold(args[0], result) : retainedHold ? await retainedHold.deliver(result) : result;
           trace[index] = Object.freeze({ ...trace[index]!, outcome: 'resolved' });
           return delivered;
         } catch (error) {
@@ -332,7 +414,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
     };
     // Finite, two-phase internal construction only. Never expose services/raw DB.
     const seedRetained = async (phase: 'warm-owners' | 'callback') => {
-      assert.equal(mode, 'retained-setup');
+      assert.ok(mode === 'retained-setup' || isRetainedUi);
       return runtime.withDomain(async domain => {
         assert.ok(capturedRuntime); assert.ok(database);
         const now = new Date().toISOString();
@@ -435,7 +517,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       });
     };
     const retainedEvidence = () => {
-      assert.equal(mode, 'retained-setup'); assert.equal(retainedOwners.length, 6);
+      assert.ok(mode === 'retained-setup' || isRetainedUi); assert.equal(retainedOwners.length, 6);
       return runtime.withDatabase(db => ({
         audit: auditDomainInvariants({ database: db, asOf: new Date().toISOString() }),
         owners: retainedOwners.map(owner => ({ owner,
@@ -452,8 +534,14 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
         pendingIds: db.raw.prepare<[], { id: string }>("SELECT id FROM next_actions WHERE status='pending' ORDER BY id").all().map(row => row.id),
       }));
     };
-    return Object.freeze({ api, seedRetained, retainedEvidence, invokeFrom, evidence, companyEvidence, armCompanyDelivery,
-      cancelDelivery: () => delivery?.cancel(),
+    return Object.freeze({ api, isRetainedUi, holdRetainedRead,
+      uiCounters: () => Object.freeze({ ...uiCounters }),
+      partialWorker: () => { assert.equal(mode, 'retained-synthetic'); assert.equal(workerPartial, false); workerPartial = true; },
+      completeRetained: () => { assert.equal(mode, 'retained-synthetic'); assert.equal(retainedMetadata, 'genuine'); retainedMetadata = 'complete'; },
+      partialRetained: () => { assert.equal(mode, 'retained-synthetic'); assert.equal(retainedMetadata, 'complete'); retainedMetadata = 'partial'; },
+      rejectNextDaily: () => { assert.equal(mode, 'retained-synthetic'); assert.equal(dailyRejectionUsed, false); dailyRejectionUsed = true; rejectDaily = true; },
+      seedRetained, retainedEvidence, invokeFrom, evidence, companyEvidence, armCompanyDelivery,
+      cancelDelivery: () => { delivery?.cancel(); for (const hold of readHolds) hold.cancel(); },
       drainInvocations: () => Promise.allSettled([...flights]),
       drainReads: () => Promise.allSettled([...readFlights]), counts: () => Object.freeze({ ...counts }),
       trace: () => [...trace], dispose });
