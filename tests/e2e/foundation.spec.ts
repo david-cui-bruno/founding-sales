@@ -12,7 +12,7 @@ import {
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { chromium, expect, test, type Browser, type Page } from 'playwright/test';
 import { assertPackagedApplicationIdentity, describeProcessExit, packagedApplicationBinary as packagedApplication } from '../support/packagedApplication';
 import { createPackagedTestEnvironment } from '../support/packagedTestEnvironment';
@@ -84,6 +84,7 @@ test('packaged recovery setup is explicit and persists only completion across is
 });
 
 test('packaged startup leaves an isolated database collision untouched and recovers on relaunch', async () => {
+  test.setTimeout(45_000);
   let userDataPath: string | undefined;
 
   try {
@@ -107,9 +108,8 @@ test('packaged startup leaves an isolated database collision untouched and recov
     expect(existsSync(`${databasePath}-shm`)).toBe(false);
     expect(existsSync(`${databasePath}-wal`)).toBe(false);
 
-    // The current eager-startup contract exits before creating a window. A later
-    // founder-workflow task intentionally restores in-window Retry via lazy domain
-    // initialization. Until then, recovery is a clean relaunch of the same path.
+    // Failed eager startup stays rendererless while awaiting native fatal Quit.
+    // Recovery below is a separate clean launch, not native Restart acceptance.
     await rm(databasePath, { recursive: true });
     const health = await inspectPackagedApplication(userDataPath);
 
@@ -203,31 +203,74 @@ const inspectPackagedApplication = async (userDataPath: string, inspectRecovery?
   }
 };
 
+type CapturedOutcome<T> = { ok: true; value: T } | { ok: false; error: unknown };
+
 const inspectFailedPackagedLaunch = async (userDataPath: string) => {
   const debuggingPort = await availablePort();
   const environment = await createPackagedTestEnvironment();
-  let application: ChildProcess | undefined;
-
+  const observation = new AbortController();
+  let rendererOutcome: Promise<CapturedOutcome<boolean>> | undefined;
+  let exitOutcome: Promise<CapturedOutcome<{ code: number | null; signal: NodeJS.Signals | null }>> | undefined;
   try {
     assertPackagedApplicationIdentity(packagedApplication);
-    application = environment.capture(spawn(packagedApplication, [
+    const launchedAfter = Date.now() / 1000;
+    const application = environment.capture(spawn(packagedApplication, [
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,
       '--use-mock-keychain',
     ], { env: environment.env }));
-    const [exit, rendererPageObserved] = await Promise.all([
-      waitForPackagedExit(application),
-      observeRendererPageUntilExit(application, debuggingPort),
-    ]);
-
-    return {
-      exitCode: exit.code,
-      signalCode: exit.signal,
-      rendererPageObserved,
-    };
+    // Arm immediately, handle rejection immediately, and retain the exact child.
+    exitOutcome = waitForPackagedExit(application, 20_000).then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error }));
+    rendererOutcome = observeRendererPageUntilExit(application, debuggingPort, observation.signal)
+      .then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error }));
+    if (application.pid === undefined || application.pid <= 1) throw new Error('Failed startup has no owned child PID.');
+    const executable = await realpath(packagedApplication);
+    if (application.exitCode !== null || application.signalCode !== null) throw new Error('Owned startup child exited before native observation.');
+    const receipt = await pressOwnedStartupQuit(application.pid, executable, launchedAfter);
+    await test.info().attach('owned-native-startup-quit', { body: JSON.stringify(receipt), contentType: 'application/json' });
+    const exit = await exitOutcome;
+    if (exit.ok === false) throw exit.error;
+    const renderer = await rendererOutcome;
+    if (renderer.ok === false) throw renderer.error;
+    // A signal or cleanup termination never counts as native Quit success.
+    expect(exit.value).toEqual({ code: 0, signal: null });
+    return { exitCode: exit.value.code, signalCode: exit.value.signal, rendererPageObserved: renderer.value };
   } finally {
-    await environment.cleanup();
+    observation.abort();
+    // Cleanup starts even if the CDP observer is still disconnecting. Join all
+    // owned work; cleanup signals are failure-path safety, never returned success.
+    const cleanup = environment.cleanup();
+    await Promise.allSettled([rendererOutcome, cleanup, exitOutcome]);
+    await cleanup;
   }
+};
+
+const pressOwnedStartupQuit = async (pid: number, executable: string, launchedAfter: number) => {
+  if (process.platform !== 'darwin') throw new Error('Native startup dialog proof requires macOS.');
+  const stdout = await new Promise<string>((resolve, reject) => {
+    execFile('/usr/bin/swift', [join(__dirname, '../support/nativeStartupDialog.swift'), String(pid), executable, String(launchedAfter)],
+      { encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL', maxBuffer: 8192 },
+      (error, output) => { if (error) reject(new Error('Owned native startup dialog helper failed.')); else resolve(output); });
+  });
+  const receipt: unknown = JSON.parse(stdout);
+  expect(receipt).toEqual({ formatVersion: 1, pid, executable, processStart: { seconds: expect.any(Number), microseconds: expect.any(Number) }, observed: true, pressed: true,
+    message: 'Callie startup did not complete.',
+    detail: 'APPLICATION_STARTUP_FAILED\nQuit Callie to close this attempt. If Restart Callie is offered, you can try starting it again.',
+    buttons: ['Quit', 'Restart Callie'] });
+  if (typeof receipt !== 'object' || receipt === null || !('processStart' in receipt)
+    || typeof receipt.processStart !== 'object' || receipt.processStart === null
+    || !('seconds' in receipt.processStart) || !('microseconds' in receipt.processStart)
+    || typeof receipt.processStart.seconds !== 'number' || !Number.isSafeInteger(receipt.processStart.seconds)
+    || receipt.processStart.seconds <= 0 || typeof receipt.processStart.microseconds !== 'number'
+    || !Number.isSafeInteger(receipt.processStart.microseconds)
+    || receipt.processStart.microseconds < 0 || receipt.processStart.microseconds >= 1_000_000) {
+    throw new Error('Native startup receipt identity mismatch.');
+  }
+  const startedAt = receipt.processStart.seconds + receipt.processStart.microseconds / 1_000_000;
+  if (!Number.isFinite(startedAt) || startedAt < launchedAfter - 2 || startedAt > Date.now() / 1000 + 1) {
+    throw new Error('Native startup receipt identity mismatch.');
+  }
+  return receipt;
 };
 
 const waitForPackagedExit = (
@@ -268,8 +311,12 @@ const waitForPackagedExit = (
 const observeRendererPageUntilExit = async (
   application: ChildProcess,
   debuggingPort: number,
+  signal: AbortSignal,
 ): Promise<boolean> => {
-  while (application.exitCode === null && application.signalCode === null) {
+  let observed = false;
+  const deadline = Date.now() + 21_000;
+  while (!signal.aborted && application.exitCode === null && application.signalCode === null) {
+    if (Date.now() >= deadline) throw new Error('Renderer observation deadline exceeded.');
     let browser: Browser | undefined;
     try {
       browser = await chromium.connectOverCDP(
@@ -277,17 +324,24 @@ const observeRendererPageUntilExit = async (
         { timeout: 100 },
       );
       if (browser.contexts().some((context) => context.pages().length > 0)) {
-        return true;
+        observed = true;
       }
     } catch {
       // The debugger may not be listening yet, or startup may already be exiting.
     } finally {
-      await browser?.close().catch((): undefined => undefined);
+      if (browser) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([browser.close(), new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error('Renderer observer disconnect timed out.')), 1_000);
+          })]);
+        } finally { clearTimeout(timer); }
+      }
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    if (!signal.aborted) await new Promise((resolve) => setTimeout(resolve, 10));
   }
 
-  return false;
+  return observed;
 };
 
 const availablePort = (): Promise<number> =>
