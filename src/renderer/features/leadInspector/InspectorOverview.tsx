@@ -1,5 +1,5 @@
 import type { OutboundReceipt } from '../../../shared/contracts/outboundContract';
-import type { OutboundPresentation, DiscoveryPresentation } from './useLeadInspector';
+import type { OutboundPresentation, DiscoveryPresentation, ReviewPresentation } from './useLeadInspector';
 import { OutboundComposer } from './OutboundComposer';
 import { useEffect, useRef, useState } from 'react';
 
@@ -44,7 +44,7 @@ const DISMISS_REASON_OPTIONS: ReadonlyArray<{
   { value: 'unresolved_duplicate', label: 'Unresolved duplicate' },
 ];
 
-export type InspectorOverviewProps = OutboundPresentation & DiscoveryPresentation & {
+export type InspectorOverviewProps = OutboundPresentation & DiscoveryPresentation & ReviewPresentation & {
   detail: LeadDetail;
   onBeginOutbound(request: BeginOutboundRequest): Promise<OutboundReceipt>;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
@@ -105,21 +105,23 @@ function ReviewSection({
   detail,
   onConfirmTransition,
   onDismissLead,
+  reviewPending = false, reviewError = null,
 }: {
   detail: LeadDetail;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
   onDismissLead(request: DismissLeadRequest): void;
-}) {
+} & ReviewPresentation) {
   const [dismissing, setDismissing] = useState(false);
   const [reason, setReason] = useState<QualificationGateReason>('out_of_area');
 
   return (
     <section aria-label="Review this lead" className="lead-inspector__review">
       <h3 className="lead-inspector__band-title">Review this lead</h3>
+      {reviewError && <p role="alert">{reviewError}</p>}
       <div className="lead-inspector__review-actions">
-        <Button
+        <Button disabled={reviewPending}
           onClick={() =>
-            onConfirmTransition({
+            !reviewPending && onConfirmTransition({
               transition: 'review_to_ready',
               salesCycleId: detail.salesCycleId,
               expectedRevision: detail.revision,
@@ -129,7 +131,7 @@ function ReviewSection({
           Mark ready
         </Button>
         {!dismissing && (
-          <Button variant="quiet" onClick={() => setDismissing(true)}>
+          <Button variant="quiet" disabled={reviewPending} onClick={() => { if (!reviewPending) setDismissing(true); }}>
             Dismiss
           </Button>
         )}
@@ -140,13 +142,14 @@ function ReviewSection({
             label="Dismissal reason"
             options={DISMISS_REASON_OPTIONS}
             value={reason}
-            onChange={setReason}
+            disabled={reviewPending}
+            onChange={value => { if (!reviewPending) setReason(value); }}
           />
           <div className="lead-inspector__review-actions">
             <Button
-              variant="danger"
+              variant="danger" disabled={reviewPending}
               onClick={() =>
-                onDismissLead({
+                !reviewPending && onDismissLead({
                   salesCycleId: detail.salesCycleId,
                   personId: detail.personId,
                   qualificationGateReason: reason,
@@ -156,7 +159,7 @@ function ReviewSection({
             >
               Confirm dismiss
             </Button>
-            <Button variant="quiet" onClick={() => setDismissing(false)}>
+            <Button variant="quiet" disabled={reviewPending} onClick={() => { if (!reviewPending) setDismissing(false); }}>
               Cancel
             </Button>
           </div>
@@ -233,7 +236,7 @@ export function InspectorOverview({
   onDismissLead,
   onOverrideCloudScore,
   onFindContactInfo,
-  discoveryEvidence, contactPreparation, outreachApi,
+  discoveryEvidence, contactPreparation, outreachApi, reviewPending = false, reviewError = null,
   capabilities, outboundPending = false, outboundBlocked = false, onLogPastActivity,
 }: InspectorOverviewProps) {
   const [selection, setSelection] = useState<{ channel: BeginOutboundRequest['channel']; contact: ContactMethod; personId: string; cycleId: string } | null>(null);
@@ -317,9 +320,9 @@ export function InspectorOverview({
       {detail.stage === 'unreviewed' && (discoveryEvidence === undefined ? <ReviewSection
           detail={detail}
           onConfirmTransition={onConfirmTransition}
-          onDismissLead={onDismissLead}
+          onDismissLead={onDismissLead} reviewPending={reviewPending} reviewError={reviewError}
         /> : <section className="lead-inspector__manual-controls"><Button variant="quiet" aria-expanded={manualOpen} onClick={() => setManualOpen(value => !value)}>Founder manual controls</Button>
-          {manualOpen && <ReviewSection detail={detail} onConfirmTransition={onConfirmTransition} onDismissLead={onDismissLead} />}
+          {manualOpen && <ReviewSection detail={detail} onConfirmTransition={onConfirmTransition} onDismissLead={onDismissLead} reviewPending={reviewPending} reviewError={reviewError} />}
         </section>
       )}
 

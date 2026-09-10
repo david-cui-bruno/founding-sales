@@ -1,11 +1,18 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { LeadRow } from '../../../shared/contracts/leadsContract';
-import { LeadsGrid } from './LeadsGrid';
+import { LeadsGrid as Grid, type LeadsGridProps } from './LeadsGrid';
+import type { InlineEdit } from './useLeadMutations';
+import { PresentationRoot } from '../../app/PresentationRoot';
+function LeadsGrid(props: Omit<LeadsGridProps, 'editor'>) {
+  const [session, setSession] = useState<InlineEdit | null>(null);
+  const focus = useRef<{node: HTMLInputElement | null; initial: boolean}>({node:null,initial:false});
+  return <PresentationRoot><Grid {...props} editor={{ session, pending: false, bindInput: (node, allow) => { focus.current.node=node; if(node && focus.current.initial){focus.current.initial=false;if(allow)node.focus();}}, focusInput:()=>focus.current.node?.focus(), start: input => { focus.current.initial=true; setSession({ ...input, status: 'editing', error: null }); }, change: draft => setSession(current => current && ({ ...current, draft })), cancel: () => setSession(null) }} onUpdateField={async input => { await props.onUpdateField(input); setSession(null); return { status: 'saved' }; }} /></PresentationRoot>;
+}
 
 /**
  * TanStack Virtual measures the scroll container through offsetWidth and
@@ -647,4 +654,13 @@ describe('LeadsGrid', () => {
       value: null,
     });
   });
+});
+
+it.each(['name','organization'] as const)('real double-click sequence edits %s without selecting or opening the inspector', field=>{
+  const onOpenLead=vi.fn();const onSelect=vi.fn();
+  render(<LeadsGrid rows={[leadRow]} selectedPersonId={null} onSelect={onSelect} onOpenLead={onOpenLead} onUpdateField={vi.fn(async()=>({status:'saved' as const}))}/>);
+  const text=screen.getByText(field==='name'?'Avery Landlord':'Landlord LLC');
+  fireEvent.click(text,{detail:1});fireEvent.click(text,{detail:2});fireEvent.doubleClick(text,{detail:2});
+  expect(screen.getByRole('textbox',{name:field==='name'?'Edit name for Avery Landlord':'Edit organization for Avery Landlord'})).toBeTruthy();
+  expect(onSelect).not.toHaveBeenCalled();expect(onOpenLead).not.toHaveBeenCalled();
 });

@@ -12,7 +12,7 @@ it('includes real all-route and modal consumers in the maintained serial browser
     'playwright', 'test', '--workers=1',
     'tests/browser/nativeDesk.spec.ts', 'tests/browser/nativeDeskComposition.spec.ts',
     'tests/browser/startupPresentation.spec.ts', 'tests/browser/applicationPresentation.spec.ts',
-    'tests/browser/applicationModals.spec.ts',
+    'tests/browser/applicationModals.spec.ts', 'tests/browser/applicationLeadsReliability.spec.ts',
   ]);
 });
 afterEach(() => { uncacheAll(); roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });

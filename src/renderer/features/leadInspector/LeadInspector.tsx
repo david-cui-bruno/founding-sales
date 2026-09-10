@@ -21,7 +21,7 @@ import { InspectorHeader } from './InspectorHeader';
 import { InspectorHistory } from './InspectorHistory';
 import { InspectorOverview } from './InspectorOverview';
 import { InspectorProperties } from './InspectorProperties';
-import type { LeadDetailState, OutboundStatusPresentation, DiscoveryPresentation } from './useLeadInspector';
+import type { LeadDetailState, OutboundStatusPresentation, DiscoveryPresentation, ReviewPresentation } from './useLeadInspector';
 import { useResizableInspector } from './useResizableInspector';
 
 const TABS = [
@@ -33,7 +33,7 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]['id'];
 
-export type InspectorTabsProps = OutboundStatusPresentation & DiscoveryPresentation & {
+export type InspectorTabsProps = OutboundStatusPresentation & DiscoveryPresentation & ReviewPresentation & {
   activityTools?: ReactNode;
   detail: LeadDetail;
   onBeginOutbound(request: BeginOutboundRequest): Promise<OutboundReceipt>;
@@ -160,7 +160,7 @@ export function InspectorTabs({
   );
 }
 
-export type LeadInspectorProps = OutboundStatusPresentation & DiscoveryPresentation & {
+export type LeadInspectorProps = OutboundStatusPresentation & DiscoveryPresentation & ReviewPresentation & {
   state: LeadDetailState;
   onClose(): void;
   returnFocus?: () => HTMLElement | null;

@@ -1,6 +1,7 @@
 /** Actual-App, complete typed read-only all-route fixture. No preload/client or production API factory. */
 import { StrictMode } from 'react';
 import { installApplicationModalScenario } from './applicationModalScenario';
+import { installApplicationLeadsScenario } from './applicationLeadsScenario';
 import { createRoot } from 'react-dom/client';
 import { App } from '../../src/renderer/App';
 import type { CalliePreloadApi } from '../../src/shared/preload';
@@ -150,11 +151,22 @@ let frameRequest = 0;
 let frameObserver: MutationObserver | null = null;
 let frames: ReturnType<typeof sampleFrame>[] = [];
 let rootReplaced = false;
-const modalScenario = new URLSearchParams(location.search).get('modalScenario') === '1'
+const scenarioParams = new URLSearchParams(location.search);
+if (scenarioParams.get('modalScenario') === '1' && scenarioParams.get('leadsScenario') === '1') {
+  throw Error('Application scenarios are mutually exclusive');
+}
+const modalScenario = scenarioParams.get('modalScenario') === '1'
   ? installApplicationModalScenario(api, calls, detail) : undefined;
-window.callie = modalScenario?.api ?? api;
+const leadsScenario = scenarioParams.get('leadsScenario') === '1'
+  ? installApplicationLeadsScenario(api, calls, detail) : undefined;
+if (leadsScenario) {
+  window.callie = leadsScenario.api;
+} else {
+  window.callie = modalScenario?.api ?? api;
+}
 const controls = {
   ...(modalScenario ? { modal: modalScenario.controller } : {}),
+  ...(leadsScenario ? { leads: leadsScenario.controller } : {}),
   calls,
   setMode(mode: typeof localMode) { localMode = mode; window.dispatchEvent(new Event('focus')); },
   setDetailMode(mode: typeof detailMode) { detailMode = mode; },

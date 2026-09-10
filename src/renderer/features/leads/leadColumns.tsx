@@ -1,5 +1,6 @@
 import type { CellContext, ColumnDef, ColumnMeta } from '@tanstack/react-table';
-import { useState } from 'react';
+import { useOverlayLayers } from '../../app/overlayLayers';
+import type { InlineEditor, LeadSaveResult } from './useLeadMutations';
 
 import type {
   LeadPriorityContext,
@@ -13,17 +14,13 @@ import type {
   LeadsListRequest,
 } from '../../../shared/contracts/leadsContract';
 import { titleCaseDisplayName } from '../../../shared/displayText';
+import { Button } from '../../components/Button';
 import { Avatar } from '../../components/Avatar';
 import { StatusPill } from '../../components/StatusPill';
 import { formatCloudChip } from './cloudSignalLabels';
 
 /** Muted placeholder for data that is physically absent pre-prioritization. */
 export const ABSENT_PLACEHOLDER = '—';
-
-export type EditingCell = {
-  personId: string;
-  field: 'person_name' | 'organization_label';
-};
 
 /**
  * Per-column presentation metadata. `sort` appears only on columns whose
@@ -45,10 +42,8 @@ const columnMeta = (meta: LeadColumnMeta): ColumnMeta<LeadRow, unknown> =>
 
 /** Live callbacks the grid passes to cells through the table meta option. */
 export type LeadsGridMeta = {
-  editing: EditingCell | null;
-  startEdit(cell: EditingCell): void;
-  stopEdit(): void;
-  onUpdateField(input: LeadFieldUpdateRequest): void;
+  editor: InlineEditor;
+  onUpdateField(input: LeadFieldUpdateRequest): Promise<LeadSaveResult>;
   checkedPersonIds?: ReadonlySet<string>;
   onToggleChecked?(personId: string): void;
 };
@@ -123,42 +118,58 @@ export function CloudScoreChipBadge({ scores }: { scores: CloudScoreChip }) {
   );
 }
 
-type InlineTextEditProps = {
-  label: string;
-  initialValue: string;
-  onCommit(value: string): void;
-  onCancel(): void;
+type InlineEditProps = {
+  editor: InlineEditor;
+  onUpdateField(input: LeadFieldUpdateRequest): Promise<LeadSaveResult>;
 };
+function submitInline({ editor, onUpdateField }: InlineEditProps) {
+  const session = editor.session;
+  if (!session || editor.pending) return;
+  const value = session.draft.trim();
+  if (session.field === 'person_name') {
+    if (value) void onUpdateField({ personId: session.personId, field: 'person_name', value });
+  } else void onUpdateField({ personId: session.personId, field: 'organization_label', value: value || null });
+}
 
-function InlineTextEdit({
-  label,
-  initialValue,
-  onCommit,
-  onCancel,
-}: InlineTextEditProps) {
-  const [value, setValue] = useState(initialValue);
+/** One input lives in either its visible row or the external recovery panel. */
+export function InlineTextEdit(props: InlineEditProps) {
+  const { editor } = props;
+  const layers = useOverlayLayers();
+  const session = editor.session;
+  if (!session) return null;
+  return <input className="leads-grid__edit" type="text"
+    ref={node => editor.bindInput(node, !layers.hasModal())}
+    aria-label={`Edit ${session.field === 'person_name' ? 'name' : 'organization'} for ${session.personLabel}`}
+    value={session.draft} readOnly={editor.pending}
+    onChange={event => editor.change(event.target.value)}
+    onClick={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
+    onKeyDown={event => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === 'Escape' && layers.hasOpenLayer()) return;
+      event.stopPropagation();
+      if (event.defaultPrevented || event.nativeEvent.isComposing || event.repeat || layers.hasModal()) return;
+      if (event.key === 'Enter') { event.preventDefault(); submitInline(props); }
+      else if (event.key === 'Escape' && !editor.pending) editor.cancel();
+    }} />;
+}
 
-  return (
-    <input
-      className="leads-grid__edit"
-      type="text"
-      aria-label={label}
-      value={value}
-      autoFocus
-      onChange={(event) => setValue(event.target.value)}
-      onClick={(event) => event.stopPropagation()}
-      onDoubleClick={(event) => event.stopPropagation()}
-      onKeyDown={(event) => {
-        event.stopPropagation();
-        if (event.key === 'Enter') {
-          onCommit(value);
-        } else if (event.key === 'Escape') {
-          onCancel();
-        }
-      }}
-      onBlur={onCancel}
-    />
-  );
+/** Actions and safe feedback never compete for space inside a fixed-height row. */
+export function InlineEditPanel({ recovery = false, ...props }: InlineEditProps & { recovery?: boolean }) {
+  const { editor } = props;
+  const layers = useOverlayLayers();
+  const session = editor.session;
+  if (!session) return null;
+  return <section className="leads-edit-panel" aria-label="Unfinished edit">
+    <h3>Unfinished edit</h3>
+    <p>{session.personLabel} · {session.field === 'person_name' ? 'Name' : 'Organization'}</p>
+    {recovery && <InlineTextEdit {...props} />}
+    <div className="leads-edit-panel__actions">
+      <Button variant="quiet" disabled={editor.pending} onClick={() => { if (!layers.hasModal()) editor.focusInput(); }}>Resume edit</Button>
+      <Button disabled={editor.pending} onClick={() => submitInline(props)}>Save edit</Button>
+      <Button variant="quiet" disabled={editor.pending} onClick={() => editor.cancel()}>Cancel edit</Button>
+    </div>
+    {session.error && <p className="leads-edit-panel__error" role="alert">{session.error}</p>}
+  </section>;
 }
 
 const gridMeta = (context: CellContext<LeadRow, unknown>): LeadsGridMeta =>
@@ -168,9 +179,9 @@ function PersonCell(context: CellContext<LeadRow, unknown>) {
   const meta = gridMeta(context);
   const lead = context.row.original;
   const editing =
-    meta.editing !== null &&
-    meta.editing.personId === lead.personId &&
-    meta.editing.field === 'person_name';
+    meta.editor.session !== null &&
+    meta.editor.session.personId === lead.personId &&
+    meta.editor.session.field === 'person_name';
 
   return (
     <div className="leads-grid__person">
@@ -180,33 +191,20 @@ function PersonCell(context: CellContext<LeadRow, unknown>) {
           className="leads-grid__check"
           aria-label={`Select ${lead.personName}`}
           checked={meta.checkedPersonIds?.has(lead.personId) ?? false}
+          disabled={meta.editor.pending}
           onClick={(event) => event.stopPropagation()}
           onChange={() => meta.onToggleChecked?.(lead.personId)}
         />
       )}
       <Avatar name={lead.personName} />
       {editing ? (
-        <InlineTextEdit
-          label={`Edit name for ${lead.personName}`}
-          initialValue={lead.personName}
-          onCommit={(value) => {
-            const trimmed = value.trim();
-            if (trimmed.length > 0 && trimmed !== lead.personName) {
-              meta.onUpdateField({
-                personId: lead.personId,
-                field: 'person_name',
-                value: trimmed,
-              });
-            }
-            meta.stopEdit();
-          }}
-          onCancel={meta.stopEdit}
-        />
+        <InlineTextEdit editor={meta.editor} onUpdateField={meta.onUpdateField} />
       ) : (
         <span
           className="leads-grid__name"
+          onClick={event => event.stopPropagation()}
           onDoubleClick={() =>
-            meta.startEdit({ personId: lead.personId, field: 'person_name' })
+            meta.editor.start({ personId: lead.personId, field: 'person_name', personLabel: lead.personName, draft: lead.personName })
           }
         >
           {titleCaseDisplayName(lead.personName)}
@@ -220,36 +218,20 @@ function ContextCell(context: CellContext<LeadRow, unknown>) {
   const meta = gridMeta(context);
   const lead = context.row.original;
   const editing =
-    meta.editing !== null &&
-    meta.editing.personId === lead.personId &&
-    meta.editing.field === 'organization_label';
+    meta.editor.session !== null &&
+    meta.editor.session.personId === lead.personId &&
+    meta.editor.session.field === 'organization_label';
 
   if (editing) {
     return (
       <div className="leads-grid__context">
-        <InlineTextEdit
-          label={`Edit organization for ${lead.personName}`}
-          initialValue={lead.organization ?? ''}
-          onCommit={(value) => {
-            const trimmed = value.trim();
-            const next = trimmed === '' ? null : trimmed;
-            if (next !== lead.organization) {
-              meta.onUpdateField({
-                personId: lead.personId,
-                field: 'organization_label',
-                value: next,
-              });
-            }
-            meta.stopEdit();
-          }}
-          onCancel={meta.stopEdit}
-        />
+        <InlineTextEdit editor={meta.editor} onUpdateField={meta.onUpdateField} />
       </div>
     );
   }
 
   const startOrganizationEdit = () =>
-    meta.startEdit({ personId: lead.personId, field: 'organization_label' });
+    meta.editor.start({ personId: lead.personId, field: 'organization_label', personLabel: lead.personName, draft: lead.organization ?? '' });
 
   // Audit rule: organization leads only when it is real, distinct context.
   // An org that merely repeats the person's name collapses to the address,
@@ -267,6 +249,7 @@ function ContextCell(context: CellContext<LeadRow, unknown>) {
       <div className="leads-grid__context" title={title}>
         <span
           className="leads-grid__organization"
+          onClick={event => event.stopPropagation()}
           onDoubleClick={startOrganizationEdit}
         >
           {lead.organization}
@@ -281,6 +264,7 @@ function ContextCell(context: CellContext<LeadRow, unknown>) {
   return (
     <div
       className="leads-grid__context leads-grid__context--single"
+      onClick={event => event.stopPropagation()}
       title={address ?? undefined}
       onDoubleClick={startOrganizationEdit}
     >

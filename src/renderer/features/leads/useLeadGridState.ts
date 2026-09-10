@@ -26,6 +26,7 @@ export type LeadGridState = {
   checkedPersonIds: ReadonlySet<string>;
   toggleChecked(personId: string): void;
   clearChecked(): void;
+  removeChecked(ids: readonly string[]): void;
 };
 
 /**
@@ -78,5 +79,6 @@ export function useLeadGridState(): LeadGridState {
         return next;
       }),
     clearChecked: () => setCheckedPersonIds(new Set()),
+    removeChecked: ids => setCheckedPersonIds(current => new Set([...current].filter(id => !ids.includes(id)))),
   };
 }

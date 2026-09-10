@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { useDismissibleLayer } from '../../app/overlayLayers';
 import { PresentationRoot } from '../../app/PresentationRoot';
 // @vitest-environment jsdom
@@ -6,7 +6,12 @@ import { PresentationRoot } from '../../app/PresentationRoot';
 import { cleanup, fireEvent, render as testingRender, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { LeadsBulkBar } from './LeadsBulkBar';
+import { LeadsBulkBar as BulkBar, type LeadsBulkBarProps } from './LeadsBulkBar';
+import type { BulkEdit } from './useLeadMutations';
+function LeadsBulkBar(props: Pick<LeadsBulkBarProps, 'count' | 'onSetOrganization' | 'onClear'>) {
+  const [editor, setEditor] = useState<BulkEdit | null>(null);
+  return <BulkBar {...props} editor={editor} pending={false} onStart={() => setEditor({ draft: '', status: 'editing', error: null })} onChange={draft => setEditor(current => current && ({ ...current, draft }))} onCancel={() => setEditor(null)} onSetOrganization={async value => { await props.onSetOrganization(value); setEditor(null); return { status: 'saved' }; }} />;
+}
 
 afterEach(() => {
   cleanup();
@@ -119,4 +124,11 @@ it('preserves bulk selection and an inline draft while a contact layer owns Esca
   expect((input as HTMLInputElement).value).toBe('Retained organization');
   fireEvent.keyDown(document, { key: 'Escape' });
   expect(onClear).not.toHaveBeenCalled();
+});
+
+it('keeps safe bulk error in a dedicated full-width row outside its action group',()=>{
+  render(<BulkBar count={200} outsideCount={199} editor={{draft:'Kept organization',status:'failed',error:'The change could not be confirmed. Your input is kept. Review the records before retrying.'}} pending={false} onStart={vi.fn()} onChange={vi.fn()} onCancel={vi.fn()} onSetOrganization={vi.fn()} onClear={vi.fn()}/>);
+  const error=screen.getByRole('alert');expect(error.classList.contains('leads-bulk-bar__error')).toBe(true);
+  expect(error.closest('.leads-bulk-bar__actions')).toBeNull();expect(screen.getByText('200 selected · 199 outside view')).toBeTruthy();
+  expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('Kept organization');expect(screen.getByRole('button',{name:'Save organization'}).closest('.leads-bulk-bar__actions')).not.toBeNull();
 });

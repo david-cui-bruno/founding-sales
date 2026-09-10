@@ -1,3 +1,6 @@
+import type { RefObject } from 'react';
+import { InlineEditPanel } from './leadColumns';
+import type { LeadSaveResult, useLeadMutations } from './useLeadMutations';
 import type { LifecycleStage } from '../../../shared/contracts/commonContract';
 import type { LeadFieldUpdateRequest, LeadRow } from '../../../shared/contracts/leadsContract';
 import { Button } from '../../components/Button';
@@ -14,17 +17,21 @@ import './leads.css';
 
 export type LeadsQueryView =
   | { status: 'loading' }
-  | { status: 'ready'; rows: LeadRow[]; total: number }
+  | { status: 'ready'; rows: LeadRow[]; total: number; nextCursor: string | null; append: 'idle' | 'loading' | 'failed'; requiresReload: boolean }
   | { status: 'failed' };
 
 export type LeadsPageProps = {
   view: LeadsQueryView;
   state: LeadGridState;
   onRetry(): void;
+  onLoadMore(): void;
+  mutations: ReturnType<typeof useLeadMutations>;
+  boundaryNotice?: string | null;
+  refreshButtonRef?: RefObject<HTMLButtonElement | null>;
   onOpenLead(personId: string): void;
   onOpenImport(): void;
-  onUpdateField(input: LeadFieldUpdateRequest): void;
-  onBulkSetOrganization(value: string | null): void;
+  onUpdateField(input: LeadFieldUpdateRequest): Promise<LeadSaveResult>;
+  onBulkSetOrganization(value: string | null): Promise<LeadSaveResult>;
 };
 
 const formatCount = (total: number): string =>
@@ -58,6 +65,7 @@ export function LeadsPage({
   view,
   state,
   onRetry,
+  onLoadMore, mutations, boundaryNotice, refreshButtonRef,
   onOpenLead,
   onOpenImport,
   onUpdateField,
@@ -87,6 +95,17 @@ export function LeadsPage({
         counts={stageCounts(view, state)}
         onStagesChange={(stages: LifecycleStage[]) => state.setStages(stages)}
       />
+      <section aria-label="List status">
+        {boundaryNotice && <p role="status">{boundaryNotice}</p>}
+        {mutations.notice && <p role="status">{mutations.notice}</p>}
+        {view.status === 'ready' && <>
+          <p>{view.requiresReload ? `Last loaded: ${view.rows.length} of ${view.total}` : `Showing ${view.rows.length} of ${view.total}`}</p>
+          {view.requiresReload && <p>List changed after a review decision. Loaded rows are from the previous read. Refresh list to update.</p>}
+          {view.append === 'failed' && <p role="alert">More leads could not be loaded. Your loaded rows are kept.</p>}
+          {!view.requiresReload && view.nextCursor && <Button disabled={view.append === 'loading'} onClick={onLoadMore}>{view.append === 'failed' ? 'Retry more' : 'Load more'}</Button>}
+        </>}
+        <button className="button button--quiet" id="leads-refresh-list" type="button" ref={refreshButtonRef} disabled={view.status === 'loading'} onClick={onRetry}>Refresh list</button>
+      </section>
       {view.status === 'loading' && <ProgressBarThin label="Loading leads" />}
       {view.status === 'failed' && (
         <ErrorState
@@ -115,6 +134,7 @@ export function LeadsPage({
           rows={view.rows}
           selectedPersonId={state.selectedPersonId}
           onSelect={state.setSelectedPersonId}
+          editor={mutations.editor}
           onUpdateField={onUpdateField}
           onOpenLead={onOpenLead}
           checkedPersonIds={state.checkedPersonIds}
@@ -123,9 +143,14 @@ export function LeadsPage({
           onSortChange={state.setSort}
         />
       )}
-      {state.checkedPersonIds.size > 0 && (
+      {(view.status !== 'ready' || view.rows.length === 0) && mutations.editor.session &&
+        <InlineEditPanel recovery editor={mutations.editor} onUpdateField={onUpdateField} />}
+      {(state.checkedPersonIds.size > 0 || mutations.bulk !== null) && (
         <LeadsBulkBar
           count={state.checkedPersonIds.size}
+          outsideCount={[...state.checkedPersonIds].filter(id => view.status !== 'ready' || !view.rows.some(row => row.personId === id)).length}
+          editor={mutations.bulk} pending={mutations.pending}
+          onStart={mutations.startBulk} onChange={mutations.changeBulk} onCancel={mutations.cancelBulk}
           onSetOrganization={onBulkSetOrganization}
           onClear={state.clearChecked}
         />

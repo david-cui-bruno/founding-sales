@@ -17,9 +17,9 @@ import { LoadingState } from '../../components/LoadingState';
 import { CallOutcomeSection, type CallOutcomeApi } from './CallOutcomeSection';
 import { InspectorHeader } from './InspectorHeader';
 import { InspectorTabs } from './LeadInspector';
-import type { LeadDetailState, OutboundStatusPresentation, DiscoveryPresentation } from './useLeadInspector';
+import type { LeadDetailState, OutboundStatusPresentation, DiscoveryPresentation, ReviewPresentation } from './useLeadInspector';
 
-export type LeadFullPageProps = OutboundStatusPresentation & DiscoveryPresentation & {
+export type LeadFullPageProps = OutboundStatusPresentation & DiscoveryPresentation & ReviewPresentation & {
   state: LeadDetailState;
   onRetry(): void;
   onBeginOutbound(request: BeginOutboundRequest): Promise<OutboundReceipt>;

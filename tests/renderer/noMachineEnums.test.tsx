@@ -192,7 +192,8 @@ describe('no raw machine enums in rendered output', () => {
         rows={leadRows}
         selectedPersonId={null}
         onSelect={vi.fn()}
-        onUpdateField={vi.fn()}
+        editor={{ session: null, pending: false, start: vi.fn(), change: vi.fn(), cancel: vi.fn(), bindInput: vi.fn(), focusInput: vi.fn() }}
+        onUpdateField={async () => ({ status: 'saved' })}
       />,
     );
     expect(snakeCaseLeaks(container)).toEqual([]);

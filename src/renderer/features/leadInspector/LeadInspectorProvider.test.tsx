@@ -2,7 +2,11 @@
 
 import { PresentationRoot } from '../../app/PresentationRoot';
 import { act, cleanup, fireEvent, render as testingRender, screen, waitFor, within } from '@testing-library/react';
-import { StrictMode } from 'react';
+import { StrictMode, useState } from 'react';
+import { CommandPalette } from '../../app/commandPalette/CommandPalette';
+import type { LeadsApi } from '../../../preload/apis/leadsApi';
+import type { LeadRow } from '../../../shared/contracts/leadsContract';
+import { LeadsRoute } from '../leads/LeadsRoute';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { discoveryBriefSchema, type DiscoveryApi, type DiscoveryBrief } from '../../../shared/contracts/discoveryContract';
@@ -10,10 +14,12 @@ import {
   leadDetailSchema,
   type ContactMethod,
   type LeadDetail,
+  type ConfirmTransitionRequest,
+  type DismissLeadRequest,
 } from '../../../shared/contracts/leadDetailContract';
 import type { OutboundRequest, OutboundReceipt, OutboundCapabilities } from '../../../shared/contracts/outboundContract';
 import { LeadInspectorProvider } from './LeadInspectorProvider';
-import { useLeadInspector } from './useLeadInspector';
+import { useLeadInspector, type LeadInspectorHandle } from './useLeadInspector';
 
 const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
 
@@ -109,8 +115,8 @@ function createApi(details: LeadDetail[]) {
     }),
     beginOutbound: vi.fn(async (request: OutboundRequest): Promise<OutboundReceipt> => ({ commandId: request.commandId, channel: request.channel, status: 'handoff_accepted', reasonCode: null, mutation: receipt })),
     getOutboundCapabilities: vi.fn(async () => capabilities),
-    confirmTransition: vi.fn(async () => receipt),
-    dismissLead: vi.fn(async () => receipt),
+    confirmTransition: vi.fn(async (request: ConfirmTransitionRequest) => ({ ...receipt, affectedPersonIds: details.filter(detail => detail.salesCycleId === request.salesCycleId).map(detail => detail.personId), affectedSalesCycleIds: [request.salesCycleId] })),
+    dismissLead: vi.fn(async (request: DismissLeadRequest) => ({ ...receipt, affectedPersonIds: [request.personId], affectedSalesCycleIds: [request.salesCycleId] })),
     overrideCloudScore: vi.fn(async () => receipt),
     findContactInfo: vi.fn(async () => ({ written: false, refusalReason: null })),
   };
@@ -142,7 +148,7 @@ function Harness() {
         type="button"
         onClick={() =>
           inspector.setReviewAdvance((personId) =>
-            personId === 'person-kevin' ? 'person-dana' : null,
+            personId === 'person-kevin' ? { kind: 'next', personId: 'person-dana' } : { kind: 'return_to_list', returnFocus: () => null },
           )
         }
       >
@@ -216,7 +222,7 @@ describe('LeadInspectorProvider', () => {
       beginOutbound: vi.fn(async (request: OutboundRequest): Promise<OutboundReceipt> => ({ commandId: request.commandId, channel: request.channel, status: 'handoff_accepted', reasonCode: null, mutation: receipt })),
     getOutboundCapabilities: vi.fn(async () => capabilities),
       confirmTransition: vi.fn(async () => receipt),
-      dismissLead: vi.fn(async () => receipt),
+      dismissLead: vi.fn(async (request: DismissLeadRequest) => ({ ...receipt, affectedPersonIds: [request.personId], affectedSalesCycleIds: [request.salesCycleId] })),
       overrideCloudScore: vi.fn(async () => receipt),
     findContactInfo: vi.fn(async () => ({ written: false, refusalReason: null })),
     };
@@ -996,4 +1002,280 @@ it('does not close a newer Person manual form or refresh them after an old manua
   expect(screen.getByRole('dialog')).toBe(dialog);
   expect((screen.getByLabelText('What happened') as HTMLTextAreaElement).value).toBe('Dana draft');
   expect(api.get).toHaveBeenCalledTimes(2);
+});
+
+
+it('does not advance a reopened same-person session from an old review receipt', async () => {
+  let resolve!: (value: typeof receipt) => void;
+  const pending = new Promise<typeof receipt>((done) => { resolve = done; });
+  const api = createApi([kevin, dana]); api.confirmTransition.mockImplementation(() => pending);
+  render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Register advance' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+  await screen.findByRole('complementary', { name: 'Kevin Shin details' }); openDetails();
+  fireEvent.click(screen.getByRole('button', { name: 'Mark ready' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Close lead' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+  await screen.findByRole('complementary', { name: 'Kevin Shin details' });
+  await act(async () => resolve(receipt));
+  expect(screen.getByTestId('selected-person').textContent).toBe('person-kevin');
+  expect(api.get.mock.calls.filter(([input]) => input.personId === 'person-dana')).toHaveLength(0);
+});
+
+it('ignores an old review receipt after API replacement', async () => {
+  let resolve!: (value: typeof receipt) => void;
+  const pending = new Promise<typeof receipt>((done) => { resolve = done; });
+  const api = createApi([kevin, dana]); api.confirmTransition.mockImplementation(() => pending);
+  const nextApi = createApi([kevin, dana]);
+  const view = render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Register advance' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+  await screen.findByRole('complementary', { name: 'Kevin Shin details' }); openDetails();
+  fireEvent.click(screen.getByRole('button', { name: 'Mark ready' }));
+  view.rerender(<LeadInspectorProvider api={nextApi}><Harness /></LeadInspectorProvider>);
+  await act(async () => resolve(receipt));
+  expect(screen.getByTestId('selected-person').textContent).toBe('person-kevin');
+  expect(nextApi.get).not.toHaveBeenCalled();
+});
+
+
+const reviewRows: LeadRow[] = Array.from({ length: 208 }, (_, index): LeadRow => ({
+  personId: `review-person-${index+1}`, salesCycleId: `review-cycle-${index+1}`,
+  personName: `Review Person ${index+1}`, initials: 'RP', organization: null, propertySummary: null,
+  stage: 'unreviewed', source: 'frbo', segment: 'hot', priorityContext: null, cloudScores: null,
+  nextAction: null, optedOut: false, lastActivityAt: null,
+}));
+function ReviewRouteHarness({ listApi, openId = 'review-person-200', fullPage = false }: { listApi: LeadsApi; openId?: string; fullPage?: boolean }) {
+  const inspector = useLeadInspector();
+  return <>
+    <button onClick={() => fullPage ? inspector.openFullPage(openId) : inspector.openLead(openId)}>Open review target</button>
+    <input aria-label="Underlay input" />
+    <LeadsRoute api={listApi} onOpenLead={inspector.openLead} onOpenImport={() => {}} />
+    <output data-testid="review-selection">{inspector.selectedPersonId ?? 'none'}</output>
+  </>;
+}
+function reviewApis(allLoaded = false) {
+  const details = reviewRows.map(row => detailFor({ personId: row.personId, salesCycleId: row.salesCycleId, personName: row.personName }));
+  const detailApi = createApi(details);
+  const listApi: LeadsApi = {
+    list: vi.fn(async request => ({ rows: request.cursor ? reviewRows.slice(200) : allLoaded ? reviewRows : reviewRows.slice(0,200), total:208,nextCursor:request.cursor || allLoaded ? null : 'opaque-review',revision:1 })),
+    updateField: vi.fn(async()=>receipt),bulkUpdate:vi.fn(async()=>receipt),
+  };
+  return { detailApi, listApi };
+}
+it.each([false, true])('returns owned boundary focus through actual %s presentation cleanup without refetch', async fullPage => {
+  const { detailApi, listApi } = reviewApis();
+  render(<LeadInspectorProvider api={detailApi}><ReviewRouteHarness listApi={listApi} fullPage={fullPage} /></LeadInspectorProvider>);
+  await screen.findByText('Showing 200 of 208');
+  const opener = screen.getByRole('button',{name:'Open review target'}); opener.focus(); fireEvent.click(opener);
+  await screen.findByRole(fullPage ? 'article' : 'complementary', { name: `Review Person 200 ${fullPage ? 'full page' : 'details'}` });
+  openDetails(); const submit=screen.getByRole('button',{name:'Mark ready'}); submit.focus(); fireEvent.click(submit);
+  await screen.findByText('Decision saved. No next person is loaded in this order. Refresh the list to continue.');
+  await waitFor(()=>expect(document.activeElement).toBe(screen.getByRole('button',{name:'Refresh list'})));
+  expect(screen.getByTestId('review-selection').textContent).toBe('none');
+  expect(listApi.list).toHaveBeenCalledTimes(1); expect(screen.getByText('Last loaded: 200 of 208')).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Load more'})).toBeNull();
+});
+it('keeps the explicitly loaded order for 200 to 201 to 202 without page-one replacement', async () => {
+  const { detailApi, listApi } = reviewApis();
+  render(<LeadInspectorProvider api={detailApi}><ReviewRouteHarness listApi={listApi} /></LeadInspectorProvider>);
+  await screen.findByText('Showing 200 of 208'); fireEvent.click(screen.getByRole('button',{name:'Load more'}));
+  await screen.findByText('Showing 208 of 208'); fireEvent.click(screen.getByRole('button',{name:'Open review target'}));
+  await screen.findByRole('complementary',{name:'Review Person 200 details'});
+  openDetails(); fireEvent.click(screen.getByRole('button',{name:'Mark ready'}));
+  await screen.findByRole('complementary',{name:'Review Person 201 details'});
+  openDetails(); fireEvent.click(screen.getByRole('button',{name:'Mark ready'}));
+  await screen.findByRole('complementary',{name:'Review Person 202 details'});
+  expect(listApi.list).toHaveBeenCalledTimes(2); expect(screen.getByText('Last loaded: 208 of 208')).toBeTruthy();
+});
+it('preserves deliberate underlay focus when an owning review settles at the boundary', async () => {
+  const {detailApi,listApi}=reviewApis(); let resolve!:(value:typeof receipt)=>void;
+  detailApi.confirmTransition.mockImplementation(()=>new Promise(done=>{resolve=done;}));
+  render(<LeadInspectorProvider api={detailApi}><ReviewRouteHarness listApi={listApi}/></LeadInspectorProvider>);
+  await screen.findByText('Showing 200 of 208'); fireEvent.click(screen.getByRole('button',{name:'Open review target'}));
+  await screen.findByRole('complementary',{name:'Review Person 200 details'}); openDetails();
+  const submit=screen.getByRole('button',{name:'Mark ready'}); submit.focus(); fireEvent.click(submit);
+  const underlay=screen.getByRole('textbox',{name:'Underlay input'}); underlay.focus();
+  await act(async()=>resolve({...receipt,affectedPersonIds:['review-person-200'],affectedSalesCycleIds:['review-cycle-200']}));
+  await screen.findByText('Decision saved. No next person is loaded in this order. Refresh the list to continue.');
+  expect(document.activeElement).toBe(underlay);
+});
+
+function CaptureInspector({ capture }: { capture(handle: LeadInspectorHandle): void }) {
+  capture(useLeadInspector());
+  return <Harness />;
+}
+it('disposes only its own registration and never dispatches an old action to a newer resolver', async () => {
+  let handle!: LeadInspectorHandle;
+  let settle!: (value: typeof receipt) => void;
+  const api=createApi([kevin,dana]);api.confirmTransition.mockImplementation(()=>new Promise(done=>{settle=done;}));
+  render(<LeadInspectorProvider api={api}><CaptureInspector capture={value=>{handle=value;}}/></LeadInspectorProvider>);
+  const first=vi.fn(()=>({kind:'next' as const,personId:'person-dana'}));
+  const second=vi.fn(()=>({kind:'next' as const,personId:'person-dana'}));
+  let dispose!:()=>void;act(()=>{dispose=handle.setReviewAdvance(first);});
+  fireEvent.click(screen.getByRole('button',{name:'Open Kevin Shin'}));await screen.findByRole('complementary',{name:'Kevin Shin details'});openDetails();fireEvent.click(screen.getByRole('button',{name:'Mark ready'}));
+  act(()=>{handle.setReviewAdvance(second);dispose();});
+  await act(async()=>settle(receipt));expect(first).not.toHaveBeenCalled();expect(second).not.toHaveBeenCalled();
+  expect(screen.getByTestId('selected-person').textContent).toBe('person-kevin');
+  api.confirmTransition.mockResolvedValue(receipt);openDetails();fireEvent.click(screen.getByRole('button',{name:'Mark ready'}));
+  await screen.findByRole('complementary',{name:'Dana Whitman details'});expect(second).toHaveBeenCalledTimes(1);
+});
+
+it('quarantines a late append after review and keeps boundary notice on failed explicit refresh', async () => {
+  const {detailApi,listApi}=reviewApis();let append!: (value: Awaited<ReturnType<LeadsApi['list']>>)=>void;
+  vi.mocked(listApi.list).mockImplementationOnce(async()=>({rows:reviewRows.slice(0,200),total:208,nextCursor:'old',revision:1})).mockImplementationOnce(()=>new Promise(done=>{append=done;})).mockRejectedValueOnce(new Error('safe read failure'));
+  render(<LeadInspectorProvider api={detailApi}><ReviewRouteHarness listApi={listApi}/></LeadInspectorProvider>);
+  await screen.findByText('Showing 200 of 208');fireEvent.click(screen.getByRole('button',{name:'Load more'}));fireEvent.click(screen.getByRole('button',{name:'Open review target'}));
+  await screen.findByRole('complementary',{name:'Review Person 200 details'});openDetails();fireEvent.click(screen.getByRole('button',{name:'Mark ready'}));
+  await screen.findByText('Decision saved. No next person is loaded in this order. Refresh the list to continue.');
+  await act(async()=>append({rows:reviewRows.slice(200),total:208,nextCursor:null,revision:1}));expect(screen.getByText('Last loaded: 200 of 208')).toBeTruthy();expect(screen.queryByRole('button',{name:'Load more'})).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Refresh list'}));await screen.findByText('Leads could not be loaded');expect(screen.getByText('Decision saved. No next person is loaded in this order. Refresh the list to continue.')).toBeTruthy();
+  expect(listApi.list).toHaveBeenLastCalledWith({query:'',stages:[],priorities:[],sort:'priority',cursor:null,limit:200});expect(detailApi.confirmTransition).toHaveBeenCalledTimes(1);
+});
+
+it('returns last fully loaded row 208 honestly rather than declaring completion', async () => {
+  const {detailApi,listApi}=reviewApis();
+  render(<LeadInspectorProvider api={detailApi}><ReviewRouteHarness listApi={listApi} openId="review-person-208"/></LeadInspectorProvider>);
+  await screen.findByText('Showing 200 of 208');fireEvent.click(screen.getByRole('button',{name:'Load more'}));await screen.findByText('Showing 208 of 208');fireEvent.click(screen.getByRole('button',{name:'Open review target'}));
+  await screen.findByRole('complementary',{name:'Review Person 208 details'});openDetails();fireEvent.click(screen.getByRole('button',{name:'Dismiss'}));fireEvent.click(screen.getByRole('button',{name:'Confirm dismiss'}));
+  await screen.findByText('Decision saved. No next person is loaded in this order. Refresh the list to continue.');expect(screen.getByTestId('review-selection').textContent).toBe('none');expect(listApi.list).toHaveBeenCalledTimes(2);
+});
+
+
+it('does not restore a stale boundary target when a new open occurs before close cleanup', async () => {
+  const {detailApi,listApi}=reviewApis();let handle!:LeadInspectorHandle;let settle!:(value:typeof receipt)=>void;
+  detailApi.confirmTransition.mockImplementation(()=>new Promise(done=>{settle=done;}));
+  render(<LeadInspectorProvider api={detailApi}><CaptureInspector capture={value=>{handle=value;}}/><ReviewRouteHarness listApi={listApi}/></LeadInspectorProvider>);
+  await screen.findByText('Showing 200 of 208');fireEvent.click(screen.getByRole('button',{name:'Open review target'}));await screen.findByRole('complementary',{name:'Review Person 200 details'});openDetails();
+  const refresh=screen.getByRole('button',{name:'Refresh list'});const focus=vi.spyOn(refresh,'focus');
+  const submit=screen.getByRole('button',{name:'Mark ready'});submit.focus();fireEvent.click(submit);
+  await act(async()=>{settle({...receipt,affectedPersonIds:['review-person-200'],affectedSalesCycleIds:['review-cycle-200']});await Promise.resolve();handle.openLead('review-person-201');});
+  await screen.findByRole('complementary',{name:'Review Person 201 details'});expect(focus).not.toHaveBeenCalled();focus.mockRestore();
+});
+
+it('does not focus a reused Refresh ID after the owning route departs during close cleanup', async () => {
+  const {detailApi,listApi}=reviewApis();let hide!:()=>void;let settle!:(value:typeof receipt)=>void;
+  detailApi.confirmTransition.mockImplementation(()=>new Promise(done=>{settle=done;}));
+  function RouteSwitch(){const [shown,setShown]=useState(true);hide=()=>setShown(false);return shown?<ReviewRouteHarness listApi={listApi}/>:<button id="leads-refresh-list">Unrelated refresh</button>;}
+  render(<LeadInspectorProvider api={detailApi}><RouteSwitch/></LeadInspectorProvider>);
+  await screen.findByText('Showing 200 of 208');fireEvent.click(screen.getByRole('button',{name:'Open review target'}));await screen.findByRole('complementary',{name:'Review Person 200 details'});openDetails();
+  const submit=screen.getByRole('button',{name:'Mark ready'});submit.focus();fireEvent.click(submit);
+  await act(async()=>{settle({...receipt,affectedPersonIds:['review-person-200'],affectedSalesCycleIds:['review-cycle-200']});await Promise.resolve();hide();});
+  expect(document.activeElement).not.toBe(screen.getByRole('button',{name:'Unrelated refresh'}));
+});
+
+it('preserves a newer real palette focus when an underlying review reaches its boundary', async () => {
+  const {detailApi,listApi}=reviewApis();let settle!:(value:typeof receipt)=>void;
+  detailApi.confirmTransition.mockImplementation(()=>new Promise(done=>{settle=done;}));
+  render(<LeadInspectorProvider api={detailApi}><ReviewRouteHarness listApi={listApi}/><CommandPalette navigate={vi.fn()} openImport={vi.fn()}/></LeadInspectorProvider>);
+  await screen.findByText('Showing 200 of 208');fireEvent.click(screen.getByRole('button',{name:'Open review target'}));await screen.findByRole('complementary',{name:'Review Person 200 details'});openDetails();
+  const submit=screen.getByRole('button',{name:'Mark ready'});submit.focus();fireEvent.click(submit);fireEvent.keyDown(submit,{key:'k',metaKey:true,ctrlKey:true});
+  const dialog=await screen.findByRole('dialog');const input=within(dialog).getByRole('combobox');input.focus();
+  await act(async()=>settle({...receipt,affectedPersonIds:['review-person-200'],affectedSalesCycleIds:['review-cycle-200']}));
+  expect(document.activeElement).toBe(input);expect(dialog.isConnected).toBe(true);
+});
+
+it.each(['ready','dismiss'] as const)('advances loaded 199 to 200 only after acknowledged %s',async kind=>{
+  const {detailApi,listApi}=reviewApis();render(<LeadInspectorProvider api={detailApi}><ReviewRouteHarness listApi={listApi} openId="review-person-199"/></LeadInspectorProvider>);
+  await screen.findByText('Showing 200 of 208');fireEvent.click(screen.getByRole('button',{name:'Open review target'}));await screen.findByRole('complementary',{name:'Review Person 199 details'});openDetails();
+  fireEvent.click(screen.getByRole('button',{name:kind==='ready'?'Mark ready':'Dismiss'}));if(kind==='dismiss')fireEvent.click(screen.getByRole('button',{name:'Confirm dismiss'}));
+  await screen.findByRole('complementary',{name:'Review Person 200 details'});expect(listApi.list).toHaveBeenCalledTimes(1);
+});
+it.each(['ready','dismiss'] as const)('does not advance or dirty the list for pending or rejected %s',async kind=>{
+  const {detailApi,listApi}=reviewApis();let reject!:(error:Error)=>void;
+  const pending=new Promise<typeof receipt>((_done,fail)=>{reject=fail;});if(kind==='ready')detailApi.confirmTransition.mockImplementation(()=>pending);else detailApi.dismissLead.mockImplementation(()=>pending);
+  render(<LeadInspectorProvider api={detailApi}><ReviewRouteHarness listApi={listApi}/></LeadInspectorProvider>);await screen.findByText('Showing 200 of 208');fireEvent.click(screen.getByRole('button',{name:'Open review target'}));await screen.findByRole('complementary',{name:'Review Person 200 details'});openDetails();
+  fireEvent.click(screen.getByRole('button',{name:kind==='ready'?'Mark ready':'Dismiss'}));if(kind==='dismiss')fireEvent.click(screen.getByRole('button',{name:'Confirm dismiss'}));
+  expect(screen.getByTestId('review-selection').textContent).toBe('review-person-200');await act(async()=>reject(new Error('unknown result')));
+  expect(screen.getByTestId('review-selection').textContent).toBe('review-person-200');expect(screen.getByText('Showing 200 of 208')).toBeTruthy();expect(listApi.list).toHaveBeenCalledTimes(1);expect(screen.queryByText(/Decision saved/)).toBeNull();
+});
+it('returns a missing reviewed ID to the list without selecting a wrapped or first row',async()=>{
+  const {detailApi,listApi}=reviewApis();render(<LeadInspectorProvider api={detailApi}><ReviewRouteHarness listApi={listApi} openId="review-person-208"/></LeadInspectorProvider>);
+  await screen.findByText('Showing 200 of 208');fireEvent.click(screen.getByRole('button',{name:'Open review target'}));await screen.findByRole('complementary',{name:'Review Person 208 details'});openDetails();fireEvent.click(screen.getByRole('button',{name:'Mark ready'}));
+  await screen.findByText('Decision saved. The loaded order changed. Refresh the list to continue.');expect(screen.getByTestId('review-selection').textContent).toBe('none');expect(listApi.list).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  ['ready',false],['ready',true],['dismiss',false],['dismiss',true],
+] as const)('fences pending %s in fullPage=%s and retains its explicit retry context after rejection',async(kind,fullPage)=>{
+  const {detailApi,listApi}=reviewApis();let reject!:(error:Error)=>void;
+  const pending=new Promise<typeof receipt>((_resolve,fail)=>{reject=fail;});
+  if(kind==='ready')detailApi.confirmTransition.mockImplementation(()=>pending);else detailApi.dismissLead.mockImplementation(()=>pending);
+  render(<LeadInspectorProvider api={detailApi}><ReviewRouteHarness listApi={listApi} fullPage={fullPage}/></LeadInspectorProvider>);
+  await screen.findByText('Showing 200 of 208');fireEvent.click(screen.getByRole('button',{name:'Open review target'}));await screen.findByRole(fullPage?'article':'complementary',{name:`Review Person 200 ${fullPage?'full page':'details'}`});openDetails();
+  const section=screen.getByRole('region',{name:'Review this lead'});
+  if(kind==='dismiss') {
+    fireEvent.click(within(section).getByRole('button',{name:'Dismiss'}));
+    fireEvent.click(within(section).getByRole('combobox',{name:'Dismissal reason'}));fireEvent.click(within(section).getByRole('option',{name:'Not a decision maker'}));
+  }
+  const action=within(section).getByRole('button',{name:kind==='ready'?'Mark ready':'Confirm dismiss'});
+  act(()=>{fireEvent.click(action);fireEvent.click(action);});
+  expect(kind==='ready'?detailApi.confirmTransition:detailApi.dismissLead).toHaveBeenCalledTimes(1);
+  expect((action as HTMLButtonElement).disabled).toBe(true);
+  expect((within(section).getByRole('button',{name:'Mark ready'}) as HTMLButtonElement).disabled).toBe(true);
+  if(kind==='dismiss') {
+    expect((within(section).getByRole('combobox',{name:'Dismissal reason'}) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(section).getByRole('button',{name:'Cancel'}) as HTMLButtonElement).disabled).toBe(true);
+  } else expect((within(section).getByRole('button',{name:'Dismiss'}) as HTMLButtonElement).disabled).toBe(true);
+  await act(async()=>reject(new Error('private failure detail')));
+  expect(within(section).getByRole('alert').textContent).toBe('Decision not confirmed. Your selection is unchanged.');
+  expect((action as HTMLButtonElement).disabled).toBe(false);expect(listApi.list).toHaveBeenCalledTimes(1);
+  if(kind==='dismiss')expect(within(section).getByRole('combobox',{name:'Dismissal reason'}).textContent).toContain('Not a decision maker');
+  const acknowledged={...receipt,affectedPersonIds:['review-person-200'],affectedSalesCycleIds:['review-cycle-200']};
+  if(kind==='ready')detailApi.confirmTransition.mockResolvedValueOnce(acknowledged);else detailApi.dismissLead.mockResolvedValueOnce(acknowledged);
+  fireEvent.click(action);await screen.findByText('Decision saved. No next person is loaded in this order. Refresh the list to continue.');
+  expect(kind==='ready'?detailApi.confirmTransition:detailApi.dismissLead).toHaveBeenCalledTimes(2);expect(listApi.list).toHaveBeenCalledTimes(1);
+});
+
+it.each(['other','reopen','api','unmount'] as const)('does not leak late review rejection into a new %s owner or unlock its pending attempt',async change=>{
+  let rejectOld!:(error:Error)=>void;let resolveNew!:(value:typeof receipt)=>void;
+  const oldPromise=new Promise<typeof receipt>((_done,fail)=>{rejectOld=fail;});const newPromise=new Promise<typeof receipt>(done=>{resolveNew=done;});
+  const api=createApi([kevin,dana]);api.confirmTransition.mockImplementationOnce(()=>oldPromise).mockImplementation(()=>newPromise);
+  const nextApi=createApi([kevin,dana]);nextApi.confirmTransition.mockImplementation(()=>newPromise);
+  const view=render(<LeadInspectorProvider api={api}><Harness/></LeadInspectorProvider>);
+  fireEvent.click(screen.getByRole('button',{name:'Open Kevin Shin'}));await screen.findByRole('complementary',{name:'Kevin Shin details'});openDetails();fireEvent.click(screen.getByRole('button',{name:'Mark ready'}));
+  if(change==='unmount'){view.unmount();await act(async()=>rejectOld(new Error('old private error')));return;}
+  if(change==='other')fireEvent.click(screen.getByRole('button',{name:'Open Dana Whitman'}));
+  else if(change==='reopen'){fireEvent.click(screen.getByRole('button',{name:'Close lead'}));fireEvent.click(screen.getByRole('button',{name:'Open Kevin Shin'}));}
+  else view.rerender(<LeadInspectorProvider api={nextApi}><Harness/></LeadInspectorProvider>);
+  await screen.findByRole('complementary',{name:change==='other'?'Dana Whitman details':'Kevin Shin details'});openDetails();const nextAction=screen.getByRole('button',{name:'Mark ready'});fireEvent.click(nextAction);
+  await act(async()=>rejectOld(new Error('old private error')));expect(screen.queryByText('Decision not confirmed. Your selection is unchanged.')).toBeNull();expect((nextAction as HTMLButtonElement).disabled).toBe(true);
+  await act(async()=>resolveNew(change==='other'?{...receipt,affectedPersonIds:['person-dana'],affectedSalesCycleIds:['cycle-dana']}:receipt));
+});
+
+it('distinguishes an acknowledged review from a failed follow-up without replaying the write',async()=>{
+  let handle!:LeadInspectorHandle;const api=createApi([kevin,dana]);
+  render(<LeadInspectorProvider api={api}><CaptureInspector capture={value=>{handle=value;}}/></LeadInspectorProvider>);
+  act(()=>{handle.setReviewAdvance(()=>{throw new Error('private follow-up failure');});});
+  fireEvent.click(screen.getByRole('button',{name:'Open Kevin Shin'}));await screen.findByRole('complementary',{name:'Kevin Shin details'});openDetails();fireEvent.click(screen.getByRole('button',{name:'Mark ready'}));
+  const section=screen.getByRole('region',{name:'Review this lead'});
+  await within(section).findByText('Decision saved. Follow-up could not be completed.');
+  expect(within(section).queryByText('Decision not confirmed. Your selection is unchanged.')).toBeNull();expect(api.confirmTransition).toHaveBeenCalledTimes(1);expect(api.get).toHaveBeenCalledTimes(1);expect(screen.getByTestId('selected-person').textContent).toBe('person-kevin');
+});
+
+it.each(['ready','dismiss'] as const)('rejects malformed and non-owned fulfilled %s receipts without advancing',async kind=>{
+  const invalidReceipts=[
+    null,
+    {...receipt,affectedPersonIds:['other-person'],affectedSalesCycleIds:['review-cycle-200']},
+    {...receipt,affectedPersonIds:['review-person-200'],affectedSalesCycleIds:['other-cycle']},
+    {...receipt,affectedPersonIds:[],affectedSalesCycleIds:['review-cycle-200']},
+    {...receipt,affectedPersonIds:['review-person-200','other-person'],affectedSalesCycleIds:['review-cycle-200']},
+    {...receipt,affectedPersonIds:['review-person-200'],affectedSalesCycleIds:[]},
+    {...receipt,affectedPersonIds:['review-person-200'],affectedSalesCycleIds:['review-cycle-200','other-cycle']},
+  ];
+  const {detailApi,listApi}=reviewApis();
+  const command=kind==='ready'?detailApi.confirmTransition:detailApi.dismissLead;
+  render(<LeadInspectorProvider api={detailApi}><ReviewRouteHarness listApi={listApi}/></LeadInspectorProvider>);
+  await screen.findByText('Showing 200 of 208');fireEvent.click(screen.getByRole('button',{name:'Open review target'}));await screen.findByRole('complementary',{name:'Review Person 200 details'});openDetails();
+  const section=screen.getByRole('region',{name:'Review this lead'});
+  if(kind==='dismiss')fireEvent.click(within(section).getByRole('button',{name:'Dismiss'}));
+  for(const invalid of invalidReceipts){
+    command.mockResolvedValueOnce(invalid as typeof receipt);
+    fireEvent.click(within(section).getByRole('button',{name:kind==='ready'?'Mark ready':'Confirm dismiss'}));
+    await within(section).findByText('Decision not confirmed. Your selection is unchanged.');
+    expect(screen.getByTestId('review-selection').textContent).toBe('review-person-200');
+    expect(screen.getByText('Showing 200 of 208')).toBeTruthy();expect(listApi.list).toHaveBeenCalledTimes(1);expect(detailApi.get).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Decision saved/)).toBeNull();
+  }
+  expect(command).toHaveBeenCalledTimes(invalidReceipts.length);
 });
