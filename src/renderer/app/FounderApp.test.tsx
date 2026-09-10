@@ -2,7 +2,9 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { StrictMode } from 'react';
 
+import { openImportScript } from '../../main/applicationMenu';
 import { discoveryBriefSchema, discoverySnapshotSchema, type DiscoveryApi } from '../../shared/contracts/discoveryContract';
 import type { PipelineSnapshot } from '../../shared/contracts/pipelineContract';
 import type { TodaySnapshot } from '../../shared/contracts/todayContract';
@@ -258,6 +260,44 @@ describe('FounderApp', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Import leads' });
     expect(dialog.tagName).toBe('DIALOG');
     expect(dialog.hasAttribute('open')).toBe(true);
+  });
+
+  it('handles the native Import payload across navigation and repeated commands', async () => {
+    window.location.hash = '#/today';
+    const baseApi = fakeCallieApi();
+    const api: CalliePreloadApi = {
+      ...baseApi,
+      imports: {
+        ...baseApi.imports,
+        preview: vi.fn<CalliePreloadApi['imports']['preview']>(() => new Promise(() => undefined)),
+        commit: vi.fn<CalliePreloadApi['imports']['commit']>(() => new Promise(() => undefined)),
+      },
+    };
+    render(
+      <StrictMode>
+        <FounderAppHarness api={api} health={readyHealth} />
+      </StrictMode>,
+    );
+    await screen.findByRole('button', { name: 'Kevin Shin' });
+
+    await act(async () => { window.eval(openImportScript); });
+    const dialog = await screen.findByRole('dialog', { name: 'Import leads' });
+    await waitFor(() => expect(
+      screen.getByRole('link', { name: 'Leads' }).getAttribute('aria-current'),
+    ).toBe('page'));
+    expect(dialog.hasAttribute('open')).toBe(true);
+    expect(api.imports.preview).not.toHaveBeenCalled();
+    expect(api.imports.commit).not.toHaveBeenCalled();
+
+    await act(async () => { window.eval(openImportScript); });
+    expect(screen.getAllByRole('dialog', { name: 'Import leads' })).toHaveLength(1);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog', { name: 'Import leads' })).toBeNull();
+
+    await act(async () => { window.eval(openImportScript); });
+    expect(await screen.findByRole('dialog', { name: 'Import leads' })).toBeTruthy();
+    expect(api.imports.preview).not.toHaveBeenCalled();
+    expect(api.imports.commit).not.toHaveBeenCalled();
   });
 
   it('routes Conversations and Learnings to their live workspaces', async () => {

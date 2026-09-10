@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import type { CalliePreloadApi } from '../../shared/preload';
 import type { FoundationHealth } from '../foundation/useFoundationHealth';
@@ -39,6 +39,12 @@ function FounderWorkspace({ api, health, theme, density, initialRoute }: Founder
   const [importOpen, setImportOpen] = useState(false);
   const [reviewCount, setReviewCount] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    const openFromNativeMenu = () => setImportOpen(true);
+    window.addEventListener('callie:open-import', openFromNativeMenu);
+    return () => window.removeEventListener('callie:open-import', openFromNativeMenu);
+  }, []);
 
   return (
     <>
