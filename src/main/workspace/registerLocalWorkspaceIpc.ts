@@ -1,5 +1,5 @@
 import { localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema } from '../../shared/contracts/localCompanyIntakeContract';
-import { localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
+import { localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
 export function registerLocalWorkspaceIpc(provider: LocalWorkspaceApi, isTrustedRendererUrl?: (url: string) => boolean): () => void {
   const disposers: (() => void)[] = [];
@@ -26,6 +26,11 @@ export function registerLocalWorkspaceIpc(provider: LocalWorkspaceApi, isTrusted
     disposers.push(registerValidatedIpc({ channel: 'local-workspace:company-create-status', requestSchema: localCompanyCreateRequestSchema, responseSchema: localCompanyCreateStatusSchema, safeErrorCode: 'LOCAL_COMPANY_CREATE_STATUS_FAILED', isTrustedRendererUrl, handler: async input => {
       const result = localCompanyCreateStatusSchema.parse(await provider.getCompanyCreateStatus(input));
       if (result.commandId !== input.commandId || (result.status === 'saved' && (result.account.name !== input.name || result.account.domain !== input.domain))) throw new Error('Company status input mismatch');
+      return result;
+    } }));
+    disposers.push(registerValidatedIpc({ channel: 'local-workspace:get-company', requestSchema: selectedCompanySchema, responseSchema: localCompanyDetailSchema, safeErrorCode: 'LOCAL_COMPANY_READ_FAILED', isTrustedRendererUrl, handler: async input => {
+      const result = localCompanyDetailSchema.parse(await provider.getCompany(input));
+      if (result.snapshot.account.id !== input.accountId) throw new Error('Selected company identity mismatch');
       return result;
     } }));
   } catch (error) {

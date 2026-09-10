@@ -1,5 +1,5 @@
 import { localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema } from '../../shared/contracts/localCompanyIntakeContract';
-import { localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
+import { localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import type { IpcClient } from '../ipcClient';
 export const createLocalWorkspaceApi = (client: IpcClient): LocalWorkspaceApi => ({
   reviewCompany: async input => {
@@ -20,4 +20,9 @@ export const createLocalWorkspaceApi = (client: IpcClient): LocalWorkspaceApi =>
   get: () => client.requestNoInput('local-workspace:get', localWorkspaceSnapshotSchema),
   getCommitments: () => client.requestNoInput('local-workspace:get-commitments', localCommitmentsSnapshotSchema),
   transition: command => client.request('local-workspace:transition', localWorkflowTransitionSchema, localWorkflowReceiptSchema, command),
+  getCompany: async input => {
+    const parsed = selectedCompanySchema.parse(input);
+    return client.request('local-workspace:get-company', selectedCompanySchema,
+      localCompanyDetailSchema.refine(result => result.snapshot.account.id === parsed.accountId), parsed);
+  },
 });

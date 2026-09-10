@@ -83,7 +83,7 @@ const pendingWorkflowApis = (): Omit<CalliePreloadApi, 'health' | 'appleSpike'> 
   const pending = () => vi.fn(() => new Promise<never>(() => undefined));
   return {
     daily: { get: pending() },
-    localWorkspace: { get: pending(), getCommitments: pending(), reviewCompany: pending(), createCompany: pending(), getCompanyCreateStatus: pending(), transition: pending() },
+    localWorkspace: { get: pending(), getCompany: pending(), getCommitments: pending(), reviewCompany: pending(), createCompany: pending(), getCompanyCreateStatus: pending(), transition: pending() },
     discovery: { get: pending(), getBrief: pending(), begin: pending(), override: pending() },
     delegation: {
       status: pending(), policyImport: { selectAndPreview: pending(), confirm: pending(), resume: pending(), status: pending() },

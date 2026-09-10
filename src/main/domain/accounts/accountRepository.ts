@@ -1,11 +1,12 @@
 import { localCompanyInputSchema, localCompanyCandidateSignals, localCompanyReviewSchema, type LocalCompanyInput, type LocalCompanyCreateRequest, type LocalCompanyReview, type LocalCompanyCreateResult, type LocalCompanyCreateStatus } from '../../../shared/contracts/localCompanyIntakeContract';
+import { localCompanyDetailSchema, type LocalCompanyDetail } from '../../../shared/contracts/localWorkspaceContract';
 import { z } from 'zod';
 import { researchLimitsSchema, type AccountResearchStore, type ResearchJob, type ResearchClaim } from '../../research/companyResearchTypes';
 import type { AppDatabase } from '../../db/database';
 import type { Clock } from '../support/clock';
 import type { IdGenerator } from '../support/idGenerator';
 import { accountClaimSchema, accountCreateSchema, accountEvidenceBatchSchema, accountIdSchema, accountInstantSchema,
-  accountLinkSchema, accountLinksCommandSchema, accountRouteSchema, accountSchema,
+  accountLinkSchema, accountLinksCommandSchema, accountRouteSchema, accountSchema, accountSourceSchema,
   type Account, type AccountEvidenceBatch, type AccountEvidenceReceipt, type AccountEvidenceSnapshot, type AccountLink, type AccountSource } from '../../../shared/contracts/accountContract';
 import { accountFingerprint, projectAccountEvidence } from './accountEvidence';
 
@@ -202,6 +203,19 @@ export class AccountRepository implements AccountResearchStore {
         channel: row.channel, value: row.value, purpose: row.purpose, verification: row.verification,
         evidenceIds: (this.raw.prepare('SELECT source_id FROM pm_account_route_evidence WHERE account_id=? AND route_id=? AND route_version=? ORDER BY source_id').all(accountId, row.id, row.version) as { source_id: string }[]).map(e => e.source_id) }));
       return projectAccountEvidence(account, claims, routes);
+    });
+  }
+  /** Complete selected evidence in one read snapshot, including a caller-owned transaction. */
+  readLocalCompanyDetail(accountId: string, asOf: string): LocalCompanyDetail {
+    accountIdSchema.parse(accountId); accountInstantSchema.parse(asOf);
+    return this.readSnapshot(() => {
+      const snapshot = this.snapshot(accountId, asOf);
+      if (snapshot.account.id !== accountId) throw new Error('Selected company identity mismatch');
+      const rows = this.raw.prepare(`SELECT id,url,fetched_at AS fetchedAt,sha256,excerpt,permitted
+        FROM pm_account_sources WHERE account_id=? AND admitted_at<=? ORDER BY id`).all(accountId, asOf) as Record<string, unknown>[];
+      const sources = rows.map(row => accountSourceSchema.parse({ ...row, permitted: z.literal(1).parse(row.permitted) === 1 }));
+      const links = this.listLinks(accountId, asOf);
+      return localCompanyDetailSchema.parse({ scope: 'local_database', generatedAt: asOf, snapshot, sources, links });
     });
   }
   enqueue(input: Parameters<AccountResearchStore['enqueue']>[0]): void {
