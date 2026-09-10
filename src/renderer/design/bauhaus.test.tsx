@@ -97,7 +97,7 @@ describe('Shared Native rendered design', () => {
     try {
       await page.setContent(`<html data-theme="${theme}"><head><style>${css}\n${presentationCss}</style></head><body data-platform="darwin">${renderToStaticMarkup(
         <PresentationRoot><div className="app-shell">
-          <NavigationRail route="inbox" onNavigate={() => undefined} reviewCount={3} />
+          <NavigationRail route="inbox" onNavigate={() => undefined} reviewCount={{ status: 'ready', count: 3, observedAt: '2026-09-10T00:00:00.000Z' }} />
           <main className="app-shell__workspace"><Panel title="Your workspace">
             <p className="body-copy">Legible body and table typography</p>
             <Button>Take action</Button><Button variant="danger">Remove</Button>
@@ -180,7 +180,7 @@ describe('Shared Native rendered design', () => {
     const page = await browser.newPage({ reducedMotion: 'no-preference' });
     try {
       await page.setContent(`<html data-theme="${theme}"><head><style>${css}\n${presentationCss}</style></head><body>${renderToStaticMarkup(
-        <PresentationRoot><NavigationRail route="today" onNavigate={() => undefined} reviewCount={3} /></PresentationRoot>,
+        <PresentationRoot><NavigationRail route="today" onNavigate={() => undefined} reviewCount={{ status: 'ready', count: 3, observedAt: '2026-09-10T00:00:00.000Z' }} /></PresentationRoot>,
       )}</body></html>`);
       const result = await page.evaluate(() => {
         const rail = document.querySelector('.nav-rail')!;

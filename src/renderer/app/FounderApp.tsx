@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { CalliePreloadApi } from '../../shared/preload';
 import type { FoundationHealth } from '../foundation/useFoundationHealth';
@@ -6,6 +6,7 @@ import { ImportDialog } from '../features/import/ImportDialog';
 import { LeadInspectorProvider } from '../features/leadInspector/LeadInspectorProvider';
 import { useLeadInspector } from '../features/leadInspector/useLeadInspector';
 import { AppShell } from './AppShell';
+import { useReviewSummary } from './useReviewSummary';
 import { CommandPalette } from './commandPalette/CommandPalette';
 import { renderRoute } from './routeRegistry';
 import type { AppRoute } from './routes';
@@ -37,7 +38,15 @@ function FounderWorkspace({ api, health, theme, density, initialRoute }: Founder
   const routing = useHashRoute(initialRoute ?? 'today');
   const inspector = useLeadInspector();
   const [importOpen, setImportOpen] = useState(false);
-  const [reviewCount, setReviewCount] = useState(0);
+  const reviewSummary = useReviewSummary(api.review);
+  const previousRoute = useRef(routing.route);
+  useEffect(() => {
+    // The hook handles initial mount. Only subsequent route entries add a read.
+    if (previousRoute.current !== routing.route) {
+      previousRoute.current = routing.route;
+      reviewSummary.refresh();
+    }
+  }, [routing.route, reviewSummary.refresh]);
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
@@ -51,7 +60,7 @@ function FounderWorkspace({ api, health, theme, density, initialRoute }: Founder
       <AppShell
         route={routing.route}
         onNavigate={routing.navigate}
-        reviewCount={reviewCount}
+        reviewCount={reviewSummary.state}
       >
         <div key={`${routing.route}-${refreshKey}`}>
           {renderRoute(routing.route, {
@@ -61,7 +70,10 @@ function FounderWorkspace({ api, health, theme, density, initialRoute }: Founder
             density,
             openLead: inspector.openLead,
             openImport: () => setImportOpen(true),
-            onReviewCountChange: setReviewCount,
+            onReviewRequestStart: reviewSummary.begin,
+            onReviewRequestFailed: reviewSummary.fail,
+            onReviewSnapshot: reviewSummary.accept,
+            onReviewResolved: reviewSummary.refresh,
           })}
         </div>
       </AppShell>
@@ -75,6 +87,7 @@ function FounderWorkspace({ api, health, theme, density, initialRoute }: Founder
           open
           onClose={() => setImportOpen(false)}
           onCommitted={() => {
+            reviewSummary.refresh();
             setRefreshKey((key) => key + 1);
           }}
         />

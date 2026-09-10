@@ -4,7 +4,7 @@ import path from 'node:path';
 import { writeFileSync } from 'node:fs';
 import { openImportScript } from '../../src/main/applicationMenu';
 import type { ApplicationPresentationBrowser } from '../fixtures/applicationPresentationBrowser';
-import { appRoutes, assertActualDestination, assertSharedPresentation, assertTransitionPresentation, navigateActualRoute, nativePalette, presentationSample, routeProofs, type PresentationContext } from '../support/presentationOracle';
+import { appRoutes, assertActualDestination, assertSharedPresentation, assertTransitionPresentation, navigateActualRoute, nativePalette, presentationSample, routeLinkName, routeProofs, type PresentationContext } from '../support/presentationOracle';
 
 let javascript: string, css: string;
 test.beforeAll(async () => {
@@ -109,7 +109,14 @@ for (const mode of ['meeting_first', 'legacy'] as const) for (const theme of ['l
         await page.evaluate(() => window.applicationPresentation.startPresentationFrames());
         await navigateActualRoute(page, route);
         await assertActualDestination(page, route, mode);
-        await expect.poll(async () => (await calls(page)).slice(before).some(call => call.method === routeProofs[route].read)).toBe(true);
+        if (route === 'inbox') {
+          // A global limit-one summary cannot stand in for this route's selected queue.
+          await expect.poll(async () => (await calls(page)).slice(before)
+            .filter(call => call.method === 'review.list').map(call => call.args))
+            .toContainEqual([{ kinds: ['unmatched_communication'], cursor: null, limit: 200 }]);
+        } else {
+          await expect.poll(async () => (await calls(page)).slice(before).some(call => call.method === routeProofs[route].read)).toBe(true);
+        }
         await page.evaluate(() => window.applicationPresentation.frame());
         const sample = await presentationSample(page);
         const transition = await page.evaluate(() => window.applicationPresentation.stopPresentationFrames());
@@ -139,7 +146,7 @@ for (const mode of ['meeting_first', 'legacy'] as const) for (const width of [14
     for (const route of appRoutes) {
       await page.goto(`${base}#/${route}`);
       await page.reload();
-      const active = page.locator('.nav-rail').getByRole('link', { name: routeProofs[route].label, exact: true, includeHidden: true });
+      const active = page.locator('.nav-rail').getByRole('link', { name: routeLinkName(route), exact: true, includeHidden: true });
       await expect(active).toHaveAttribute('aria-current', 'page');
       // A deep-linked secondary destination may correctly start under collapsed More.
       if (!await active.isVisible()) await page.getByRole('button', { name: 'More workspaces', exact: true }).click();

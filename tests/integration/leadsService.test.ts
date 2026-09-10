@@ -102,6 +102,185 @@ describe('leadsService over a real encrypted domain', () => {
       cursor: null, limit: 50, ...overrides,
     });
 
+  type ReliabilityLeadsRequest = Parameters<LeadsProvider['list']>[0];
+
+  function seedReliabilityLeads(withFilters = false, count = 208) {
+    return Array.from({ length: count }, (_, index) => {
+      const prefix = `reliability-${String(index).padStart(4, '0')}`;
+      const prospect = seedProspect(database.raw, prefix);
+      insertOpenCycleWithAction({
+        database: database.raw, prefix, prospect,
+        stage: withFilters && index % 2 === 1 ? 'contacted' : 'ready',
+      });
+      if (withFilters) insertPriorityProjection(prospect, index % 2 === 0 ? 'p1' : 'p2');
+      return prospect;
+    });
+  }
+
+  async function walkReliabilityLeads(expectedIds: string[], overrides: Partial<ReliabilityLeadsRequest> = {}) {
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    const changes = database.raw.prepare('SELECT total_changes() AS count').get();
+    for (let pageNumber = 0; pageNumber < 3; pageNumber += 1) {
+      const page = await listAll({ ...overrides, cursor, limit: 200 });
+      expect(page.total).toBe(expectedIds.length);
+      seen.push(...page.rows.map(row => row.personId));
+      cursor = page.nextCursor;
+      if (cursor === null) break;
+    }
+    expect(cursor).toBeNull(); // Bound the draft:208/209 fixtures never need more than2 pages.
+    expect(seen).toHaveLength(expectedIds.length);
+    expect(new Set(seen).size).toBe(expectedIds.length);
+    expect([...seen].sort()).toEqual([...expectedIds].sort());
+    expect(database.raw.prepare('SELECT total_changes() AS count').get()).toEqual(changes);
+    return seen;
+  }
+
+  describe('reliability: full-projection guarded Leads continuation', () => {
+    it.each(['person_name', 'priority', 'last_contact'] as const)('reaches all208 rows and preserves query/stage/priority filters with %s sort', async sort => {
+        const fixtures = seedReliabilityLeads(true);
+        const allIds = fixtures.map(row => row.personId);
+        const first = await listAll({ sort, limit: 200 });
+        expect(first.rows).toHaveLength(200);
+        expect(first.total).toBe(208);
+        expect(first.nextCursor).not.toBeNull();
+        const last = await listAll({ sort, limit: 200, cursor: first.nextCursor });
+        expect(last.rows).toHaveLength(8);
+        expect(last.nextCursor).toBeNull();
+        await walkReliabilityLeads(allIds, { sort });
+        const readyIds = fixtures.filter((_, index) => index % 2 === 0).map(row => row.personId);
+        expect(readyIds).toHaveLength(104);
+        await walkReliabilityLeads(readyIds, { sort, stages: ['ready'] });
+        await walkReliabilityLeads(readyIds, { sort, priorities: ['P1'] });
+        const queriedIds = fixtures.slice(0, 100).map(row => row.personId);
+        await walkReliabilityLeads(queriedIds, { sort, query: 'reliability-00' });
+        const intersectedIds = fixtures.slice(0, 100).filter((_, index) => index % 2 === 0).map(row => row.personId);
+        expect(intersectedIds).toHaveLength(50);
+        await walkReliabilityLeads(intersectedIds, { sort, query: 'reliability-00', stages: ['ready'], priorities: ['P1'] });
+        await walkReliabilityLeads([], { sort, stages: ['offered'] });
+      }, 30_000);
+
+    it.each(['person_name', 'priority', 'last_contact'] as const)('rejects the old cursor when a %s ordering key moves an unseen row earlier', async sort => {
+        const fixtures = seedReliabilityLeads();
+        const target = fixtures[207]!;
+        const first = await listAll({ sort, limit: 200 });
+        expect(first.rows.some(row => row.personId === target.personId)).toBe(false);
+        expect(first.nextCursor).not.toBeNull();
+        if (sort === 'person_name') {
+          await leads.updateField({ personId: target.personId, field: 'person_name', value: 'AAA moved earlier' });
+        } else if (sort === 'priority') {
+          setCloudScores(target.prospectId, 100, 100);
+        } else {
+          database.raw.prepare('UPDATE prospects SET last_contact_at = ? WHERE id = ?')
+            .run(CLOCK_NOW, target.prospectId);
+        }
+        await expect(listAll({ sort, limit: 200, cursor: first.nextCursor }))
+          .rejects.toThrow('LIST_CURSOR_STALE');
+        const fresh = await listAll({ sort, limit: 200 });
+        expect(fresh.rows[0]?.personId).toBe(target.personId);
+        await walkReliabilityLeads(fixtures.map(row => row.personId), { sort });
+      }, 30_000);
+
+    it('rejects a continuation when a matching person leaves the selected query', async () => {
+      const fixtures = seedReliabilityLeads();
+      const first = await listAll({ query: 'Person', limit: 200 });
+      expect(first.nextCursor).not.toBeNull();
+      const target = fixtures[207]!;
+      await leads.updateField({ personId: target.personId, field: 'person_name', value: 'Outside selected text' });
+      await expect(listAll({ query: 'Person', limit: 200, cursor: first.nextCursor }))
+        .rejects.toThrow('LIST_CURSOR_STALE');
+      await walkReliabilityLeads(fixtures.slice(0, 207).map(row => row.personId), { query: 'Person' });
+    }, 30_000);
+
+    it('rejects a continuation after insertion before the loaded page boundary', async () => {
+      const fixtures = seedReliabilityLeads();
+      const first = await listAll({ sort: 'person_name', limit: 200 });
+      const inserted = seedLead('aaa-earlier');
+      await expect(listAll({ sort: 'person_name', limit: 200, cursor: first.nextCursor }))
+        .rejects.toThrow('LIST_CURSOR_STALE');
+      await walkReliabilityLeads([...fixtures.map(row => row.personId), inserted.personId], { sort: 'person_name' });
+    }, 30_000);
+
+    it('detects a committed external-connection edit without relying on local total_changes', async () => {
+      const fixtures = seedReliabilityLeads();
+      const first = await listAll({ sort: 'person_name', limit: 200 });
+      expect(first.nextCursor).not.toBeNull();
+      const localChanges = database.raw.prepare('SELECT total_changes() AS count').get();
+      // createTestWorkspaceKey() is the same explicit fixed test key used by this suite's setup.
+      const other = openDatabase({ path: temp.path, key: createTestWorkspaceKey() });
+      try {
+        other.raw.prepare('UPDATE persons SET display_name = ?, version = version + 1, updated_at = ? WHERE id = ?')
+          .run('AAA external change', CLOCK_NOW, fixtures[207]!.personId);
+        expect(other.raw.inTransaction).toBe(false); // .run completed its autocommit.
+        expect(database.raw.prepare('SELECT total_changes() AS count').get()).toEqual(localChanges);
+        await expect(listAll({ sort: 'person_name', limit: 200, cursor: first.nextCursor }))
+          .rejects.toThrow('LIST_CURSOR_STALE');
+        const fresh = await listAll({ sort: 'person_name', limit: 200 });
+        expect(fresh.rows[0]?.personId).toBe(fixtures[207]!.personId);
+        await walkReliabilityLeads(fixtures.map(row => row.personId), { sort: 'person_name' });
+      } finally {
+        closeDatabase(other);
+      }
+    }, 30_000);
+
+    it.each(['1', '200junk', '-1', 'not-a-cursor', 'a'.repeat(1025)])('rejects malformed or legacy cursor %s without a read-side write', async cursor => {
+        seedLead('one');
+        seedLead('two');
+        const changes = database.raw.prepare('SELECT total_changes() AS count').get();
+        await expect(listAll({ cursor, limit: 1 })).rejects.toThrow('LIST_CURSOR_INVALID');
+        expect(database.raw.prepare('SELECT total_changes() AS count').get()).toEqual(changes);
+      });
+
+    it('rejects reuse under different query controls rather than treating cursor as an offset', async () => {
+      seedLead('one');
+      seedLead('two');
+      const first = await listAll({ limit: 1 });
+      expect(first.nextCursor).not.toBeNull();
+      await expect(listAll({ limit: 1, cursor: first.nextCursor, query: 'one' }))
+        .rejects.toThrow('LIST_CURSOR_INVALID');
+      await expect(listAll({ limit: 1, cursor: first.nextCursor, sort: 'priority' }))
+        .rejects.toThrow('LIST_CURSOR_INVALID');
+      await expect(listAll({ limit: 2, cursor: first.nextCursor }))
+        .rejects.toThrow('LIST_CURSOR_INVALID');
+    });
+  });
+
+  // Explicit parent-only opt-in. No benchmark runs or skipped cases in ordinary regression commands.
+  if (process.env.FSS_LIST_BENCHMARK === '1') {
+    it.each([208, 2080])('benchmark: complete fictional Leads projection with %i records', async count => {
+      const setupStart = performance.now();
+      const fixtures = seedReliabilityLeads(true, count);
+      fixtures.forEach((fixture, index) => setCloudScores(fixture.prospectId, index % 101, (index * 3) % 101));
+      const setupMs = performance.now() - setupStart;
+      const expectedIds = fixtures.map(row => row.personId).sort();
+      const changes = database.raw.prepare('SELECT total_changes() AS count').get();
+      const samples: { firstMs: number; continuationMs: number[]; walkMs: number }[] = [];
+      for (let sample = 0; sample < 5; sample += 1) {
+        const start = performance.now();
+        const first = await listAll({ sort: 'priority', limit: 200 });
+        const firstMs = performance.now() - start;
+        const seen = first.rows.map(row => row.personId);
+        const continuationMs: number[] = [];
+        let cursor = first.nextCursor;
+        for (let page = 1; cursor !== null && page < Math.ceil(count / 200); page += 1) {
+          const pageStart = performance.now();
+          const next = await listAll({ sort: 'priority', limit: 200, cursor });
+          continuationMs.push(performance.now() - pageStart);
+          expect(next.total).toBe(count);
+          seen.push(...next.rows.map(row => row.personId));
+          cursor = next.nextCursor;
+        }
+        const walkMs = performance.now() - start;
+        expect(cursor).toBeNull();
+        expect(seen.sort()).toEqual(expectedIds);
+        expect(new Set(seen).size).toBe(count);
+        expect(database.raw.prepare('SELECT total_changes() AS count').get()).toEqual(changes);
+        samples.push({ firstMs, continuationMs, walkMs });
+      }
+      console.log(JSON.stringify({ benchmark: 'full-projection-leads', fictionalRecords: count, setupMs, samples }));
+    }, 120_000);
+  }
+
   it('lists seeded people as strict lead rows', async () => {
     seedLead('alpha');
     seedLead('beta');

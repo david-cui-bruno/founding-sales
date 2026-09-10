@@ -1,3 +1,5 @@
+import type { ReviewObservationToken } from './useReviewSummary';
+import type { ReviewSnapshot } from '../../shared/contracts/reviewContract';
 import type { ReactNode } from 'react';
 
 import type { CalliePreloadApi } from '../../shared/preload';
@@ -25,7 +27,10 @@ export type RouteContext = {
   density: DensityState;
   openLead(personId: string): void;
   openImport(): void;
-  onReviewCountChange(count: number): void;
+  onReviewRequestStart(): ReviewObservationToken;
+  onReviewRequestFailed(token: ReviewObservationToken): void;
+  onReviewSnapshot(snapshot: ReviewSnapshot, token: ReviewObservationToken): void;
+  onReviewResolved(): void;
 };
 
 /** Central route table. Every navigation entry renders a real workspace. */
@@ -75,7 +80,10 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
         <ReviewRoute
           api={context.api.review}
           onOpenLead={context.openLead}
-          onOpenCountChange={context.onReviewCountChange}
+          onReviewRequestStart={context.onReviewRequestStart}
+          onReviewRequestFailed={context.onReviewRequestFailed}
+          onReviewSnapshot={context.onReviewSnapshot}
+          onReviewResolved={context.onReviewResolved}
         />
       );
     case 'friday':

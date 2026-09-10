@@ -96,7 +96,7 @@ const pendingWorkflowApis = () => {
       logPastActivity: pending,
     },
     pipeline: { get: pending },
-    review: { list: pending, resolve: pending },
+    review: { list: vi.fn(() => new Promise<never>(() => undefined)), resolve: pending },
     friday: {
       getCurrent: pending,
       getDrilldown: pending,
@@ -338,4 +338,16 @@ it('keeps one live system listener through the health gate without extra reads',
   expect(get).toHaveBeenCalledTimes(2);
   view.unmount();
   expect(listeners.size).toBe(0);
+});
+
+
+it('does not observe review counts before the real foundation gate succeeds', async () => {
+  const ready = deferred<AppHealth>();
+  renderApp(vi.fn(() => ready.promise));
+  expect(window.callie.review.list).not.toHaveBeenCalled();
+  await act(async () => { window.dispatchEvent(new Event('focus')); });
+  expect(window.callie.review.list).not.toHaveBeenCalled();
+  await act(async () => { ready.resolve(health); });
+  await screen.findByRole('navigation', { name: 'Primary' });
+  expect(window.callie.review.list).toHaveBeenCalledWith({ kinds: [], cursor: null, limit: 1 });
 });

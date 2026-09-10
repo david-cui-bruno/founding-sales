@@ -224,6 +224,9 @@ for (const width of [1440, 1050]) for (const theme of ['light', 'dark'] as const
       'health.get': 3, 'daily.get': 6, 'delegation.status': 6,
       'localWorkspace.get': 6, 'localWorkspace.getCommitments': 6,
       'leadDetail.getOutboundCapabilities': 2, 'today.get': 2, 'discovery.get': 1,
+      // Healthy StrictMode mount twice, then three explicit window-focus events.
+      // The first route-local Refresh button does not refresh the global summary.
+      'review.list': 5,
     };
     expect(inventory.filter(method => !(method in expectedReads)), 'unexpected API calls').toEqual([]);
     expect(inventory.slice().sort()).toEqual(Object.entries(expectedReads).flatMap(([method, count]) => Array<string>(count).fill(method)).sort());
@@ -266,8 +269,8 @@ for (const storage of ['system', 'invalid', 'throwing', 'missing', 'unset'] as c
       assertASample(sample, sample.theme as Theme, density, 1050);
     }
     const inventory = await methods(page);
-    for (const method of ['health.get', 'daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments', 'leadDetail.getOutboundCapabilities']) expect(inventory.filter(value => value === method), method).toHaveLength(2);
-    expect(inventory).toHaveLength(12);
+    for (const method of ['health.get', 'daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments', 'leadDetail.getOutboundCapabilities', 'review.list']) expect(inventory.filter(value => value === method), method).toHaveLength(2);
+    expect(inventory).toHaveLength(14);
     await clean(page, state, info);
   });
 }

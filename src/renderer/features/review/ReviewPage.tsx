@@ -13,11 +13,12 @@ import { ReviewTabs } from './ReviewTabs';
 import './review.css';
 
 export type ReviewPageProps = {
-  snapshot: ReviewSnapshot;
+  snapshot: ReviewSnapshot | null;
   selectedKind: ReviewKind;
   onSelectKind(kind: ReviewKind): void;
   onResolve(input: ResolveReviewRequest): void;
   onOpenLead(personId: string): void;
+  resolutionPending?: boolean;
 };
 
 /**
@@ -31,60 +32,57 @@ export function ReviewPage({
   onSelectKind,
   onResolve,
   onOpenLead,
+  resolutionPending = false,
 }: ReviewPageProps) {
   const [selectedReviewId, setSelectedReviewId] = useState<string | null>(null);
 
-  const systemErrors = snapshot.items.filter((item) => item.kind === 'system_error');
-  const queueItems = snapshot.items.filter((item) => item.kind === selectedKind);
+  const systemCount = snapshot?.queues.system_error.openCount ?? 0;
+  const queueItems = snapshot === null || snapshot.queues[selectedKind].source === 'not_integrated'
+    ? [] : snapshot.items.filter((item) => item.kind === selectedKind);
   const selectedItem = queueItems.find((item) => item.reviewId === selectedReviewId) ?? null;
 
-  const suggestionCount = snapshot.items.filter((item) => item.kind === 'transcript_suggestion').length;
 
   return (
     <div className="review">
       <PageHeader
         title="Inbox"
-        count={`${snapshot.totalOpenCount} open`}
-        description="Exceptions that need your judgment: unknown callers, possible duplicates, and unidentified property owners."
+        count={snapshot === null ? undefined : `${snapshot.totalOpenCount} open local reviews`}
+        description="Open local lifecycle reviews. Other review sources are not integrated into this Inbox."
       />
-      {systemErrors.length > 0 && (
+      {snapshot !== null && <p>Observed <time dateTime={snapshot.observedAt}>{snapshot.observedAt}</time>.</p>}
+      {systemCount > 0 && (
         <div className="review__system-alert" role="alert">
-          <strong>System errors need attention.</strong>
-          <ul className="review__system-alert-list">
-            {systemErrors.map((item) => (
-              <li key={item.reviewId}>{item.summary}</li>
-            ))}
-          </ul>
+          <strong>{systemCount} system errors need attention.</strong>
+          <button type="button" onClick={() => onSelectKind('system_error')}>View system errors</button>
         </div>
       )}
       <ReviewTabs
-        items={snapshot.items}
+        queues={snapshot?.queues ?? null}
         selectedKind={selectedKind}
         onSelectKind={(kind) => {
           setSelectedReviewId(null);
           onSelectKind(kind);
         }}
       />
-      {selectedKind === 'transcript_suggestion' && suggestionCount > 1 && (
-        <p className="review__batch-note">
-          Batch acceptance is unavailable in this Inbox. Suggestions remain read-only evidence.
-        </p>
-      )}
-      <div className="review__body">
+      {snapshot !== null && <div className="review__body">
         <ReviewQueue
           kind={selectedKind}
+          availability={snapshot.queues[selectedKind]}
           items={queueItems}
           selectedReviewId={selectedReviewId}
           onSelect={setSelectedReviewId}
         />
         {selectedItem !== null && (
+          <fieldset disabled={resolutionPending} aria-busy={resolutionPending} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
           <ReviewDetailPanel
+            key={selectedItem.reviewId}
             item={selectedItem}
             onResolve={onResolve}
             onOpenLead={onOpenLead}
           />
+          </fieldset>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

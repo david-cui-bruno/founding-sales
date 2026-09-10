@@ -21,7 +21,7 @@ afterEach(() => {
 describe('AppShell', () => {
   it('renders fixed navigation and marks Today current', () => {
     render(
-      <AppShell route="today" onNavigate={vi.fn()} reviewCount={3}>
+      <AppShell route="today" onNavigate={vi.fn()} reviewCount={{ status: 'ready', count: 3, observedAt: '2026-09-10T00:00:00.000Z' }}>
         <p>Queue</p>
       </AppShell>,
     );
@@ -37,7 +37,7 @@ describe('AppShell', () => {
   it('navigates without opening a new window', () => {
     const onNavigate = vi.fn();
     render(
-      <AppShell route="today" onNavigate={onNavigate} reviewCount={0}>
+      <AppShell route="today" onNavigate={onNavigate} reviewCount={{ status: 'ready', count: 0, observedAt: '2026-09-10T00:00:00.000Z' }}>
         <p>Queue</p>
       </AppShell>,
     );
@@ -51,7 +51,7 @@ describe('AppShell', () => {
 
   it('renders children inside the labelled main content region', () => {
     render(
-      <AppShell route="today" onNavigate={vi.fn()} reviewCount={0}>
+      <AppShell route="today" onNavigate={vi.fn()} reviewCount={{ status: 'ready', count: 0, observedAt: '2026-09-10T00:00:00.000Z' }}>
         <p>Queue</p>
       </AppShell>,
     );
@@ -63,7 +63,7 @@ describe('AppShell', () => {
 
   it('offers a skip link to the main content region', () => {
     render(
-      <AppShell route="today" onNavigate={vi.fn()} reviewCount={0}>
+      <AppShell route="today" onNavigate={vi.fn()} reviewCount={{ status: 'ready', count: 0, observedAt: '2026-09-10T00:00:00.000Z' }}>
         <p>Queue</p>
       </AppShell>,
     );
@@ -76,7 +76,7 @@ describe('AppShell', () => {
   it('navigates to Conversations and Learnings now that they are live', () => {
     const onNavigate = vi.fn();
     render(
-      <AppShell route="today" onNavigate={onNavigate} reviewCount={0}>
+      <AppShell route="today" onNavigate={onNavigate} reviewCount={{ status: 'ready', count: 0, observedAt: '2026-09-10T00:00:00.000Z' }}>
         <p>Queue</p>
       </AppShell>,
     );
@@ -92,15 +92,16 @@ describe('AppShell', () => {
     expect(onNavigate).toHaveBeenNthCalledWith(2, 'learnings');
   });
 
-  it('omits the review badge when nothing awaits review', () => {
+  it('shows an observed local zero rather than an unknown count', () => {
     render(
-      <AppShell route="inbox" onNavigate={vi.fn()} reviewCount={0}>
+      <AppShell route="inbox" onNavigate={vi.fn()} reviewCount={{ status: 'ready', count: 0, observedAt: '2026-09-10T00:00:00.000Z' }}>
         <p>Queue</p>
       </AppShell>,
     );
 
-    const review = screen.getByRole('link', { name: 'Inbox' });
-    expect(review.textContent).toBe('Inbox');
+    const review = screen.getByRole('link', { name: /Inbox/ });
+    expect(review.textContent).toBe('Inbox0');
+    expect(screen.getByLabelText('0 open local reviews')).toBeTruthy();
     expect(review.getAttribute('aria-current')).toBe('page');
   });
 });
@@ -163,7 +164,7 @@ describe('useHashRoute', () => {
 
 it('keeps other workspaces behind a reversible presentation disclosure without changing routes', () => {
   const onNavigate = vi.fn();
-  const view = render(<AppShell route="today" onNavigate={onNavigate} reviewCount={2}><section className="native-desk" data-presentation="native-a" data-workflow-mode="meeting_first" /></AppShell>);
+  const view = render(<AppShell route="today" onNavigate={onNavigate} reviewCount={{ status: 'ready', count: 2, observedAt: '2026-09-10T00:00:00.000Z' }}><section className="native-desk" data-presentation="native-a" data-workflow-mode="meeting_first" /></AppShell>);
   const toggle = screen.getByRole('button', { name: 'More workspaces' });
   const group = document.getElementById(toggle.getAttribute('aria-controls')!);
   expect(toggle.getAttribute('aria-expanded')).toBe('false');
@@ -177,12 +178,12 @@ it('keeps other workspaces behind a reversible presentation disclosure without c
   }
   expect(onNavigate.mock.calls.map(([route]) => route)).toEqual(['leads', 'pipeline', 'conversations', 'learnings', 'friday', 'inbox']);
   expect(group?.contains(screen.getByRole('link', { name: 'Settings' }))).toBe(false);
-  view.rerender(<AppShell route="leads" onNavigate={onNavigate} reviewCount={2}><p>Legacy route</p></AppShell>);
+  view.rerender(<AppShell route="leads" onNavigate={onNavigate} reviewCount={{ status: 'ready', count: 2, observedAt: '2026-09-10T00:00:00.000Z' }}><p>Legacy route</p></AppShell>);
   expect(screen.getByRole('link', { name: 'Leads' }).getAttribute('aria-current')).toBe('page');
   expect(group?.hasAttribute('hidden')).toBe(false);
-  view.rerender(<AppShell route="today" onNavigate={onNavigate} reviewCount={2}><section className="native-desk" data-presentation="native-a" data-workflow-mode="meeting_first" /></AppShell>);
+  view.rerender(<AppShell route="today" onNavigate={onNavigate} reviewCount={{ status: 'ready', count: 2, observedAt: '2026-09-10T00:00:00.000Z' }}><section className="native-desk" data-presentation="native-a" data-workflow-mode="meeting_first" /></AppShell>);
   fireEvent.click(toggle);
   expect(toggle.getAttribute('aria-expanded')).toBe('false');
-  view.rerender(<AppShell route="today" onNavigate={onNavigate} reviewCount={2}><p>Legacy Today</p></AppShell>);
+  view.rerender(<AppShell route="today" onNavigate={onNavigate} reviewCount={{ status: 'ready', count: 2, observedAt: '2026-09-10T00:00:00.000Z' }}><p>Legacy Today</p></AppShell>);
   expect(group?.hasAttribute('hidden')).toBe(false);
 });

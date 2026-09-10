@@ -33,7 +33,7 @@ function Harness() {
       setDensity(density);
     },
   };
-  return <PresentationRoot><AppShell route={route} onNavigate={navigate} reviewCount={0}>
+  return <PresentationRoot><AppShell route={route} onNavigate={navigate} reviewCount={{ status: 'failed' }}>
     <div data-rerender={tick}>{route === 'settings'
       ? <><h1>Settings</h1><WorkflowSection api={fixture.api.localWorkspace}/></>
       : <NativeDeskRoute key={route} api={fixture.api} onOpenLead={id => opened.push(id)} surface={surface} legacy={<h1>Legacy Today fixture</h1>}/>}</div>

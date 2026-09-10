@@ -112,6 +112,7 @@ async function openConsumer(page: Page, consumer: Consumer) {
 
 const expectedReadArgs: Record<string, unknown[] | undefined> = {
   'health.get': [], 'leadDetail.getOutboundCapabilities': [],
+  'review.list': [{ kinds: [], cursor: null, limit: 1 }],
   'daily.get': [], 'delegation.status': undefined,
   'localWorkspace.get': [], 'localWorkspace.getCommitments': [],
   'today.get': [], 'discovery.get': [],
@@ -135,7 +136,7 @@ function initialControl(dialog: Locator, consumer: Consumer) {
   return dialog.getByLabel(consumer === 'transcript' ? 'Transcript text' : consumer === 'discovery' ? 'Reason' : 'What happened', { exact: true });
 }
 async function assertReads(page: Page, consumer: Consumer) {
-  const baseline: Record<string, number> = { 'health.get': 2, 'leadDetail.getOutboundCapabilities': 2 };
+  const baseline: Record<string, number> = { 'health.get': 2, 'leadDetail.getOutboundCapabilities': 2, 'review.list': 2 };
   if (consumer === 'manual-today') Object.assign(baseline, { 'daily.get': 2, 'delegation.status': 2, 'localWorkspace.get': 2, 'localWorkspace.getCommitments': 2, 'today.get': 2, 'discovery.get': 1 });
   else baseline[consumer === 'learning' ? 'learnings.list' : consumer === 'transcript' ? 'conversations.list' : 'leads.list'] = 2;
   if (consumer === 'transcript') baseline['conversations.get'] = 1;
@@ -351,7 +352,7 @@ for (const outcome of ['resolve', 'reject'] as const) test(`actual Import pendin
   await expect(dialog).toBeVisible();
   if (outcome === 'resolve') {
     await expect(dialog.getByRole('status')).toContainText('Imported 1 row.');
-    await expect.poll(async () => counts((await recorded(page)).slice(before))).toEqual({ 'imports.commit': 1, 'leads.list': 2 });
+    await expect.poll(async () => counts((await recorded(page)).slice(before))).toEqual({ 'imports.commit': 1, 'leads.list': 2, 'review.list': 1 });
     await dialog.getByRole('button', { name: 'Done', exact: true }).click();
     await expect(dialog).toHaveCount(0);
     await expect(page.getByRole('grid').locator('[data-person-id="person-imported-case-1"]')).toBeVisible();
@@ -442,7 +443,7 @@ for (const outcome of ['resolve', 'reject'] as const) test(`actual pending Today
   const input = (await operations(page))[0].input;
   const before = (await recorded(page)).length;
   await page.evaluate(() => { window.applicationPresentation.modal!.rejectNextRead('today.get'); window.dispatchEvent(new Event('focus')); });
-  await expect.poll(async () => counts((await recorded(page)).slice(before))).toEqual({ 'daily.get': 1, 'delegation.status': 1, 'localWorkspace.get': 1, 'localWorkspace.getCommitments': 1, 'today.get': 1, 'discovery.get': 1 });
+  await expect.poll(async () => counts((await recorded(page)).slice(before))).toEqual({ 'daily.get': 1, 'delegation.status': 1, 'localWorkspace.get': 1, 'localWorkspace.getCommitments': 1, 'today.get': 1, 'discovery.get': 1, 'review.list': 1 });
   await expect(dialog).toBeVisible(); await retainedInputs(dialog, 'manual-today');
   expect(await node!.evaluate(element => element.isConnected && element === document.querySelector('dialog textarea'))).toBe(true);
   await expect(page.getByRole('alert', { includeHidden: true }).filter({ hasText: /refresh/i })).toBeVisible();

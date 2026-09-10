@@ -13,7 +13,7 @@ export const routeProofs = {
   conversations: { label: 'Conversations', heading: /^Conversations · [\d,]+ calls?$/, read: 'conversations.list' },
   learnings: { label: 'Learnings', heading: 'Learnings', read: 'learnings.list' },
   friday: { label: 'Friday', heading: 'Friday scoreboard', read: 'friday.getCurrent' },
-  inbox: { label: 'Inbox', heading: /^Inbox · [\d,]+ open$/, read: 'review.list' },
+  inbox: { label: 'Inbox', heading: /^Inbox · [\d,]+ open local reviews$/, read: 'review.list' },
   settings: { label: 'Settings', heading: 'Settings', read: 'appleSpike.getStatus' },
 } satisfies Record<AppRoute, { label: string; heading: string | RegExp; read: string }>;
 
@@ -22,9 +22,17 @@ export const nativePalette = {
   dark: { canvas: 'rgb(24, 29, 37)', rail: 'rgb(25, 31, 40)', text: 'rgb(237, 241, 246)', surface: 'rgb(38, 46, 57)' },
 };
 
+export function routeLinkName(route: AppRoute): string | RegExp {
+  return route === 'inbox'
+    ? /^Inbox (?:\d+ open local reviews|Checking local reviews|Local review count unavailable)$/
+    : routeProofs[route].label;
+}
+
 export async function navigateActualRoute(page: Page, route: AppRoute) {
-  const link = page.locator('.nav-rail').getByRole('link', { name: routeProofs[route].label, exact: true });
+  const link = page.locator('.nav-rail').getByRole('link', { name: routeLinkName(route), exact: true });
   if (!await link.isVisible()) await page.getByRole('button', { name: 'More workspaces', exact: true }).click();
+  await expect(link).toHaveAttribute('href', `#/${route}`);
+  await expect(link.locator('.nav-rail__label')).toHaveText(routeProofs[route].label);
   await link.click();
   await expect(link).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('main').getByRole('heading', { level: 1, name: routeProofs[route].heading, exact: true })).toBeVisible();

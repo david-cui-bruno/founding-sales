@@ -1,3 +1,4 @@
+import type { ReviewBadgeState } from './useReviewSummary';
 import type { ReactNode } from 'react';
 
 import { NavigationRail } from './NavigationRail';
@@ -6,7 +7,7 @@ import type { AppRoute } from './routes';
 export type AppShellProps = {
   route: AppRoute;
   onNavigate(route: AppRoute): void;
-  reviewCount: number;
+  reviewCount: ReviewBadgeState;
   children: ReactNode;
 };
 

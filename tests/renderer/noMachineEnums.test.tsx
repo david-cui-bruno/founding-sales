@@ -157,6 +157,16 @@ const reviewSnapshot: ReviewSnapshot = {
     },
   ],
   totalOpenCount: 1,
+  nextCursor: null, matchedCount: 1,
+  countScope: 'lifecycle_review_items', observedAt: '2026-09-10T00:00:00.000Z',
+  queues: {
+    unmatched_communication: { source: 'lifecycle_review_items', openCount: 1 },
+    system_error: { source: 'lifecycle_review_items', openCount: 0 },
+    ambiguous_identity: { source: 'not_integrated', openCount: null },
+    transcript_suggestion: { source: 'not_integrated', openCount: null },
+    import_problem: { source: 'not_integrated', openCount: null },
+    adapter_failure: { source: 'not_integrated', openCount: null },
+  },
   revision: 1,
 };
 

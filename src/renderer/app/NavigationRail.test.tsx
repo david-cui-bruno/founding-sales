@@ -43,7 +43,7 @@ function dragRegion(selector: string): string | undefined {
 
 function RailHarness() {
   const [route, setRoute] = useState<AppRoute>('today');
-  return <NavigationRail route={route} onNavigate={setRoute} reviewCount={3} />;
+  return <NavigationRail route={route} onNavigate={setRoute} reviewCount={{ status: 'ready', count: 3, observedAt: '2026-09-10T00:00:00.000Z' }} />;
 }
 
 describe('NavigationRail window chrome', () => {
@@ -144,7 +144,7 @@ describe('NavigationRail window chrome', () => {
       expect(fireEvent.click(leads)).toBe(false);
       expect(leads.getAttribute('aria-current')).toBe('page');
       expect(screen.getByRole('link', { name: 'Today' }).getAttribute('aria-current')).toBeNull();
-      expect(screen.getByLabelText('3 items awaiting review').textContent).toBe('3');
+      expect(screen.getByLabelText('3 open local reviews').textContent).toBe('3');
     },
   );
 });

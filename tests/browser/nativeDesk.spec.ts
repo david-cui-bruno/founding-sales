@@ -823,14 +823,14 @@ test('isolated Native rail retains accessible disclosure in both workflows witho
     await expect(rail.getByRole('link')).toHaveCount(10);
     for (const label of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox', 'Settings']) {
       await page.keyboard.press('Tab');
-      await expect(rail.getByRole('link', {name: label, exact: true})).toBeFocused();
+      await expect(rail.getByRole('link', {name: label === 'Inbox' ? 'Inbox Local review count unavailable' : label, exact: true})).toBeFocused();
     }
   };
   await expect(more).toHaveAttribute('aria-expanded', 'false');
   await expect(rail.getByRole('link', {name: 'Conversations', exact: true})).toBeHidden();
   await traverseRail();
   await expect(more).toHaveAttribute('aria-expanded', 'true');
-  for (const label of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox']) await expect(rail.getByRole('link', {name: label, exact: true})).toBeVisible();
+  for (const label of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox']) await expect(rail.getByRole('link', {name: label === 'Inbox' ? 'Inbox Local review count unavailable' : label, exact: true})).toBeVisible();
   // Actual destination/render/read assertions live in applicationPresentation.spec.
   await expect(page.evaluate(() => window.nativeDeskBrowser.navigate('conversations'))).rejects.toThrow('does not render conversations');
   await more.click();

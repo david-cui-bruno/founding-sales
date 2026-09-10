@@ -2,13 +2,13 @@ import type { KeyboardEvent } from 'react';
 import { useRef } from 'react';
 
 import type {
-  ReviewItem,
+  ReviewQueueCounts,
   ReviewKind,
 } from '../../../shared/contracts/reviewContract';
 import { REVIEW_KIND_ORDER, reviewKindMeta } from './reviewKindMeta';
 
 export type ReviewTabsProps = {
-  items: readonly ReviewItem[];
+  queues: ReviewQueueCounts | null;
   selectedKind: ReviewKind;
   onSelectKind(kind: ReviewKind): void;
 };
@@ -18,7 +18,7 @@ export type ReviewTabsProps = {
  * segmented control (accent-soft selected fill). Counts never hide. Tab
  * semantics stay: the queue below is the tab panel this control drives.
  */
-export function ReviewTabs({ items, selectedKind, onSelectKind }: ReviewTabsProps) {
+export function ReviewTabs({ queues, selectedKind, onSelectKind }: ReviewTabsProps) {
   const rootRef = useRef<HTMLDivElement>(null);
 
   const moveSelection = (delta: number) => {
@@ -48,7 +48,7 @@ export function ReviewTabs({ items, selectedKind, onSelectKind }: ReviewTabsProp
       aria-label="Review queues"
     >
       {REVIEW_KIND_ORDER.map((kind) => {
-        const count = items.filter((item) => item.kind === kind).length;
+        const count = queues === null ? 'Checking' : queues[kind].openCount ?? 'Not available in this Inbox';
         const selected = kind === selectedKind;
         return (
           <button
