@@ -4,7 +4,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chromium, type Browser, type Page } from 'playwright/test';
+import { chromium, expect, type Browser, type Page } from 'playwright/test';
 import { assertPackagedApplicationIdentity, describeProcessExit, packagedApplicationBinary } from './packagedApplication';
 import { createPackagedTestEnvironment } from './packagedTestEnvironment';
 
@@ -161,6 +161,59 @@ export async function launchFounderWorkspace(options: {
   }
 }
 
+const secondaryRoutes = new Set(['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Inbox', 'Friday']);
+
+const routeHref = (label: string): string => `#/${label.toLowerCase()}`;
+
+export const inboxRouteName = /^Inbox\s*(?:\d+ open local reviews|Checking local reviews|Local review count unavailable)$/;
+
+export async function navigateFounderRoute(page: Page, label: string): Promise<void> {
+  const navigation = page.getByRole('navigation', { name: 'Primary', exact: true });
+  await expect(navigation).toBeVisible();
+
+  const linkName = label === 'Inbox' ? inboxRouteName : label;
+  const link = navigation.getByRole('link', { name: linkName, exact: true });
+
+  if (secondaryRoutes.has(label) && !(await link.isVisible())) {
+    const more = navigation.getByRole('button', { name: 'More workspaces', exact: true });
+    await expect(more).toHaveAttribute('aria-expanded', /^(?:true|false)$/);
+    if ((await more.getAttribute('aria-expanded')) !== 'true') {
+      await more.click();
+    }
+    await expect(more).toHaveAttribute('aria-expanded', 'true');
+  }
+
+  await expect(link).toBeVisible();
+  await expect(link).toHaveAttribute('href', routeHref(label));
+  await expect(link.locator('.nav-rail__label')).toHaveText(label);
+  if (label === 'Inbox') {
+    const badge = link.locator('.nav-rail__badge');
+    await expect(badge).toHaveAttribute('aria-label', /^(?:\d+ open local reviews|Checking local reviews|Local review count unavailable)$/);
+    const badgeSnapshot = await badge.evaluate((node) => ({
+      text: node.textContent?.trim() ?? '',
+      label: node.getAttribute('aria-label'),
+    }));
+    expect(badgeSnapshot.label).toMatch(/^(?:\d+ open local reviews|Checking local reviews|Local review count unavailable)$/);
+    if (/^\d+ open local reviews$/.test(badgeSnapshot.label ?? '')) {
+      expect(badgeSnapshot.text).toBe((badgeSnapshot.label ?? '').replace(/ open local reviews$/, ''));
+    } else if (badgeSnapshot.label === 'Checking local reviews') {
+      expect(badgeSnapshot.text).toBe('…');
+    } else {
+      expect(badgeSnapshot.text).toBe('?');
+    }
+  }
+  await link.click();
+  await expect(link).toHaveAttribute('aria-current', 'page');
+}
+
+export async function expectCleanInboxReadyZero(page: Page): Promise<void> {
+  await navigateFounderRoute(page, 'Inbox');
+  const inbox = page.getByRole('link', { name: /^Inbox\s*0 open local reviews$/, exact: true });
+  await expect(inbox.locator('.nav-rail__badge')).toHaveText('0');
+  await expect(inbox.locator('.nav-rail__badge')).toHaveAttribute('aria-label', '0 open local reviews');
+  await expect(page.getByRole('heading', { name: /^Inbox\s*·\s*0 open local reviews$/ })).toBeVisible();
+}
+
 export const workflowFixture = (name: string): string =>
   join(process.cwd(), 'tests', 'fixtures', 'founderWorkflow', name);
 
@@ -173,7 +226,7 @@ export async function launchSeededFounderWorkspace(): Promise<FounderWorkspace> 
 
   try {
     const { page } = workspace;
-    await page.getByRole('link', { name: 'Leads' }).click();
+    await navigateFounderRoute(page, 'Leads');
     await page.getByRole('button', { name: 'Import', exact: true }).click();
     await page
       .getByLabel('CSV file')

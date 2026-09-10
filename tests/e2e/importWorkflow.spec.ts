@@ -2,6 +2,7 @@ import { expect, test } from 'playwright/test';
 
 import {
   launchFounderWorkspace,
+  navigateFounderRoute,
   workflowFixture,
 } from '../support/founderWorkspace';
 
@@ -15,7 +16,7 @@ test('CSV preview performs no writes; commit imports exactly once; relaunch pres
     const { page } = workspace;
     userDataPath = workspace.userDataPath;
 
-    await page.getByRole('link', { name: 'Leads' }).click();
+    await navigateFounderRoute(page, 'Leads');
     await page.getByRole('button', { name: 'Import', exact: true }).click();
     await page
       .getByLabel('CSV file')
@@ -52,7 +53,7 @@ test('CSV preview performs no writes; commit imports exactly once; relaunch pres
 
   try {
     const { page } = relaunched;
-    await page.getByRole('link', { name: 'Leads' }).click();
+    await navigateFounderRoute(page, 'Leads');
     await expect(page.getByRole('row', { name: /Kevin Shin/ })).toBeVisible();
     await expect(page.getByRole('row', { name: /Maya Ortiz/ })).toBeVisible();
   } finally {

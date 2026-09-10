@@ -1,6 +1,6 @@
 import { expect, test } from 'playwright/test';
 
-import { launchFounderWorkspace } from '../support/founderWorkspace';
+import { launchFounderWorkspace, navigateFounderRoute } from '../support/founderWorkspace';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -9,7 +9,7 @@ test('creates four job requests, fills three, shows 3 / 4 and 75%, and opens dri
 
   try {
     const { page } = workspace;
-    await page.getByRole('link', { name: 'Friday' }).click();
+    await navigateFounderRoute(page, 'Friday');
     await expect(
       page.getByRole('heading', { name: 'Friday scoreboard' }),
     ).toBeVisible();

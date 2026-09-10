@@ -5,8 +5,10 @@ import { join } from 'node:path';
 import { expect, test } from 'playwright/test';
 
 import {
+  expectCleanInboxReadyZero,
   launchFounderWorkspace,
   launchSeededFounderWorkspace,
+  navigateFounderRoute,
 } from '../support/founderWorkspace';
 
 test.describe.configure({ mode: 'serial' });
@@ -25,9 +27,10 @@ test('empty healthy app opens Today and health stays callable through preload', 
     if (process.platform === 'darwin') {
       await expect(page.locator('body')).toHaveAttribute('data-platform', 'darwin');
       const nativeRow = page.locator('.nav-rail__native-controls');
-      const brand = page.locator('.nav-rail__brand');
+      const brand = page.locator('.nav-rail__brand-native');
       await expect(nativeRow).toBeVisible();
       await expect(brand).toHaveCount(1);
+      await expect(brand).toHaveText('Callie');
       await expect(brand).toBeVisible();
       const nativeBox = await nativeRow.boundingBox();
       const brandBox = await brand.boundingBox();
@@ -103,11 +106,8 @@ test('inbox renders its truthful empty state and zero badge in a clean workspace
 
   try {
     const { page } = workspace;
-    await page.getByRole('link', { name: 'Inbox' }).click();
+    await expectCleanInboxReadyZero(page);
     await expect(page.getByRole('main')).toBeVisible();
-    await expect(
-      page.getByRole('navigation', { name: 'Primary' }).locator('.nav-rail__badge'),
-    ).toHaveCount(0);
   } finally {
     await workspace.close();
   }
@@ -136,7 +136,7 @@ test('a large cold import gets internal dated actions without founder review hom
   try {
     const { page } = workspace;
 
-    await page.getByRole('link', { name: 'Leads' }).click();
+    await navigateFounderRoute(page, 'Leads');
     await page.getByRole('button', { name: 'Import', exact: true }).click();
     await page.getByLabel('CSV file').setInputFiles(csvPath);
     await page.getByRole('button', { name: 'Preview rows' }).click();

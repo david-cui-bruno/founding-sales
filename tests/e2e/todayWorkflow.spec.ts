@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { expect, test } from 'playwright/test';
 
-import { launchFounderWorkspace } from '../support/founderWorkspace';
+import { launchFounderWorkspace, navigateFounderRoute } from '../support/founderWorkspace';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -14,7 +14,7 @@ async function importLeads(
   csvPath: string,
   count: number,
 ): Promise<void> {
-  await page.getByRole('link', { name: 'Leads' }).click();
+  await navigateFounderRoute(page, 'Leads');
   await page.getByRole('button', { name: 'Import', exact: true }).click();
   await page.getByLabel('CSV file').setInputFiles(csvPath);
   await page.getByRole('button', { name: 'Preview rows' }).click();
@@ -93,7 +93,7 @@ test('call outcome flow removes only the selected callback contact and preserves
     const otherContactsBefore = imported.filter(detail => detail.personId !== readyLead.personId);
 
     // Remount Today so the route refetches after the preload-side write.
-    await page.getByRole('link', { name: 'Leads' }).click();
+    await navigateFounderRoute(page, 'Leads');
     await page.getByRole('link', { name: 'Today' }).click();
     const queue = page.getByRole('list', { name: 'Work queue' });
     await expect(queue).toBeVisible();

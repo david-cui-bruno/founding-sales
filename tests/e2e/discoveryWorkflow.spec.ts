@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'playwright/test';
-import { launchFounderWorkspace, type FounderWorkspace } from '../support/founderWorkspace';
+import { launchFounderWorkspace, navigateFounderRoute, type FounderWorkspace } from '../support/founderWorkspace';
 import { allocatePackagedFixtureDatabase } from '../support/packagedFixtureDatabase';
 import { validParcelEvent, validEnrichmentEvent } from '../fixtures/cloudSourceEvents';
 import type { LeadsListRequest } from '../../src/shared/contracts/leadsContract';
@@ -159,7 +159,7 @@ test('P1 automatic source evidence, unfinished-work restart, contact-first works
     await expect.poll(() => page.evaluate(personId => window.callie.discovery.getBrief({ personId }), id), { timeout: 90_000 })
       .toMatchObject({ pilotNextStep: { activityIds: [activityId] } });
     await page.getByRole('button', { name: 'Close inspector' }).click();
-    await page.getByRole('link', { name: 'Leads', exact: true }).click();
+    await navigateFounderRoute(page, 'Leads');
     await page.getByRole('searchbox', { name: 'Search leads' }).fill(selected!.personName);
     // Search can legitimately include Owner 7 and Owner 74. Keep the exact saved identity.
     const selectedRow = page.locator(`[role="row"][data-person-id="${id}"]`);

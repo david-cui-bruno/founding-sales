@@ -1,6 +1,6 @@
 import { expect, test } from 'playwright/test';
 
-import { launchSeededFounderWorkspace } from '../support/founderWorkspace';
+import { launchSeededFounderWorkspace, navigateFounderRoute } from '../support/founderWorkspace';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -37,7 +37,7 @@ test('logs a call, attaches a pasted transcript, and both survive relaunch', asy
     await page.getByRole('button', { name: 'Close inspector' }).click();
 
     // The call shows up in the Conversations workspace.
-    await page.getByRole('link', { name: 'Conversations' }).click();
+    await navigateFounderRoute(page, 'Conversations');
     await page
       .getByRole('button', { name: /Kevin Shin/ })
       .first()
@@ -68,7 +68,7 @@ test('logs a call, attaches a pasted transcript, and both survive relaunch', asy
 
   try {
     const { page } = relaunched;
-    await page.getByRole('link', { name: 'Conversations' }).click();
+    await navigateFounderRoute(page, 'Conversations');
     await page
       .getByRole('button', { name: /Kevin Shin/ })
       .first()
@@ -92,7 +92,7 @@ test('captures an evidence-backed learning that survives relaunch and retire', a
   try {
     const { page } = workspace;
 
-    await page.getByRole('link', { name: 'Learnings' }).click();
+    await navigateFounderRoute(page, 'Learnings');
     await page
       .getByRole('button', { name: 'Capture learning' })
       .first()
@@ -119,7 +119,7 @@ test('captures an evidence-backed learning that survives relaunch and retire', a
 
   try {
     const { page } = relaunched;
-    await page.getByRole('link', { name: 'Learnings' }).click();
+    await navigateFounderRoute(page, 'Learnings');
     await expect(
       page.getByText('Landlords lose days chasing plumbers for urgent repairs.'),
     ).toBeVisible();

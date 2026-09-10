@@ -17,7 +17,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:browser:native-desk": "playwright test --workers=1 tests/browser/nativeDesk.spec.ts tests/browser/nativeDeskComposition.spec.ts tests/browser/startupPresentation.spec.ts tests/browser/applicationPresentation.spec.ts tests/browser/applicationModals.spec.ts tests/browser/applicationLeadsReliability.spec.ts",
-    "test:e2e": "playwright test --workers=1 tests/e2e/foundation.spec.ts tests/e2e/founderWorkflow.spec.ts tests/e2e/todayWorkflow.spec.ts tests/e2e/importWorkflow.spec.ts tests/e2e/fridayScoreboard.spec.ts tests/e2e/conversationsLearnings.spec.ts tests/e2e/sourcingInbox.spec.ts tests/e2e/accessibility.spec.ts tests/e2e/appleBridgeSmoke.spec.ts tests/e2e/discoveryWorkflow.spec.ts tests/e2e/bauhausWorkflow.spec.ts tests/e2e/functionalEmail.spec.ts tests/e2e/meetingFirstWorkspace.spec.ts tests/e2e/accountPreparation.spec.ts",
+    "test:e2e": "playwright test --workers=1 tests/e2e/foundation.spec.ts tests/e2e/founderWorkflow.spec.ts tests/e2e/todayWorkflow.spec.ts tests/e2e/importWorkflow.spec.ts tests/e2e/fridayScoreboard.spec.ts tests/e2e/conversationsLearnings.spec.ts tests/e2e/sourcingInbox.spec.ts tests/e2e/accessibility.spec.ts tests/e2e/appleBridgeSmoke.spec.ts tests/e2e/discoveryWorkflow.spec.ts tests/e2e/bauhausWorkflow.spec.ts tests/e2e/functionalEmail.spec.ts tests/e2e/meetingFirstWorkspace.spec.ts tests/e2e/accountPreparation.spec.ts tests/e2e/reliabilityWorkflow.spec.ts",
     "test:e2e:apple": "playwright test --workers=1 tests/e2e/appleBridgeSmoke.spec.ts",
     "typecheck": "tsc --noEmit",
     "test:helpers:node": "node --test test/appleBridgeBuild.test.mjs test/verifyAppleBridgePackage.test.mjs",
