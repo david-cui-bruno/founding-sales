@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { mutationReceiptSchema } from '../../src/shared/contracts/commonContract';
 // Stage0 construction plus bounded Stage1 actual-App company acceptance.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
@@ -12,10 +13,10 @@ import { discoveryBriefSchema } from '../../src/shared/contracts/discoveryContra
 import { leadDetailSchema } from '../../src/shared/contracts/leadDetailContract';
 import { dailySnapshotSchema } from '../../src/shared/contracts/dailyContract';
 import { localDelegationStatusSchema } from '../../src/shared/contracts/ownerCommandContract';
-import { fridayReportSchema } from '../../src/shared/contracts/fridayContract';
+import { createJobRequestSchema, fillJobRequestSchema, cancelJobRequestSchema, type CreateJobRequest, fridayReportSchema } from '../../src/shared/contracts/fridayContract';
 import { localCommitmentsSnapshotSchema, localWorkspaceSnapshotSchema, localWorkflowReceiptSchema } from '../../src/shared/contracts/localWorkspaceContract';
 import {
-  HEALTH_ORPHAN_ID, HEALTH_POLL_AT, RETAINED_T, RETAINED_O, RETAINED_DISCOVERY, RETAINED_UI_REGISTERED_CHANNELS, SYNTHETIC_WORKER_IDS,
+  FRIDAY_OWNER_AT, FRIDAY_REQUESTED_AT, HEALTH_ORPHAN_ID, HEALTH_POLL_AT, RETAINED_T, RETAINED_O, RETAINED_DISCOVERY, RETAINED_UI_REGISTERED_CHANNELS, SYNTHETIC_WORKER_IDS,
   CONTINUITY_NOW, CONTINUITY_READ_CHANNELS, CONTINUITY_REGISTERED_CHANNELS, CONTINUITY_URL,
   createContinuityDomainFixture, CONTINUITY_UI_CHANNELS, CONTINUITY_UI_REGISTERED_CHANNELS,
 } from '../fixtures/continuityDomainFixture';
@@ -96,6 +97,7 @@ afterEach(async () => {
             domainShutdowns: 1, databaseCloses: 1, pollerStops: 1, pollerIdleWaits: 1 });
           expect([...transport.removals].sort()).toEqual([...(value.isRetainedUi ? RETAINED_UI_REGISTERED_CHANNELS : value.isBlockedUi ? CONTINUITY_REGISTERED_CHANNELS : CONTINUITY_UI_REGISTERED_CHANNELS)].sort());
           if (value.isRetainedUi) expect(value.uiCounters()).toEqual({ network: 0, forbidden: 0, delegationDisposals: 1 });
+          if (value.isFridayUi) expect(value.uiCounters()).toEqual({ network: 0, forbidden: 0, delegationDisposals: 0 });
           expect(value.counts()).toMatchObject({ credentialLoads: 0, inboxCreations: 0, pollSchedules: 0 });
         }
       }
@@ -538,7 +540,7 @@ describe('retained lifecycle construction through the genuine public boundary', 
   });
 });
 
-function mountContinuityApp(value: Fixture, route: 'accounts' | 'today') {
+function mountContinuityApp(value: Fixture, route: 'accounts' | 'today' | 'friday') {
   const previousApi = Object.getOwnPropertyDescriptor(window, 'callie');
   const previousUrl = window.location.href;
   const storage = Object.entries(window.localStorage);
@@ -969,5 +971,232 @@ describe('actual health observation and initialized blocked admission', () => {
     ]);
     expect([...transport.registrations].sort()).toEqual([...CONTINUITY_REGISTERED_CHANNELS].sort());
     expect(transport.registrations).toHaveLength(12);
+  });
+});
+
+
+type FridayContext = Awaited<ReturnType<typeof renderFridayApp>>;
+async function renderFridayApp() {
+  const value = await createContinuityDomainFixture(transport.handlers, 'friday-ui'); fixtures.push(value);
+  const owner = await value.seedFridayOwner();
+  const evidence = await value.fridayEvidence();
+  expect(evidence.audit).toEqual([]); expect(evidence.jobs).toEqual([]);
+  expect(evidence.owner.person).toEqual({ id: owner.personId, display_name: 'Friday fictional Won owner' });
+  expect(evidence.owner.source).toEqual({ id: owner.sourceEventId, person_id: owner.personId, prospect_id: null,
+    channel: 'referral', original_prospect_id: owner.prospectId });
+  expect(evidence.owner.prospect).toEqual({ id: owner.prospectId, person_id: owner.personId, original_source_event_id: owner.sourceEventId, segment: 'warm' });
+  expect(evidence.owner.cycle).toEqual({ id: owner.cycleId, person_id: owner.personId, prospect_id: owner.prospectId,
+    entry_source_event_id: owner.sourceEventId, stage: 'won', workflow_status: 'onboarding', current_next_action_id: owner.actionId, version: 7 });
+  expect(evidence.owner.stages).toEqual(['unreviewed', 'ready', 'contacted', 'interviewed', 'offered', 'won'].map(to_stage => ({ to_stage })));
+  expect(evidence.owner.terms).toEqual({ doors_committed: 12, billing_model: 'per_door_monthly', unit_rate_cents: 2500, projected_mrr_cents: 30000 });
+  expect(evidence.owner.activities.map(row => row.id).sort()).toEqual([...owner.evidenceIds].sort());
+  for (const activity of evidence.owner.activities) expect(activity).toMatchObject({ person_id: owner.personId, prospect_id: owner.prospectId,
+    sales_cycle_id: owner.cycleId, occurred_at: FRIDAY_OWNER_AT });
+  mountContinuityApp(value, 'friday');
+  await screen.findByRole('heading', { name: 'Friday scoreboard' });
+  await settleFriday(value);
+  const health = value.trace().find(entry => entry.channel === 'health:get')!;
+  expect(appHealthSchema.parse(health.result)).toMatchObject({ domainReady: true, domainStatus: 'ready', domainStartupEvaluatedAt: CONTINUITY_NOW });
+  expect(window.location.hash).toBe('#/friday');
+  const context = { value, owner, evidence };
+  assertFridayInventory(context, 1, []);
+  return context;
+}
+async function settleFriday(value: Fixture) {
+  await act(async () => { await value.drainInvocations(); });
+  await act(async () => { await value.drainReads(); });
+}
+function localFields(iso: string) {
+  const value = new Date(iso), two = (n: number) => String(n).padStart(2, '0');
+  return { date: `${value.getFullYear()}-${two(value.getMonth() + 1)}-${two(value.getDate())}`, time: `${two(value.getHours())}:${two(value.getMinutes())}` };
+}
+function fridayInput(label: string) { return screen.getByLabelText(label) as HTMLInputElement; }
+function setFridayRequest(context: FridayContext) {
+  const fields = localFields(FRIDAY_REQUESTED_AT);
+  fireEvent.change(fridayInput('Requested date'), { target: { value: fields.date } });
+  fireEvent.change(fridayInput('Requested time'), { target: { value: fields.time } });
+  fireEvent.change(fridayInput('Won sales cycle (optional)'), { target: { value: context.owner.cycleId } });
+  return fields;
+}
+function setFridayFill(jobId: string) {
+  fireEvent.click(screen.getByRole('button', { name: `Fill ${jobId}` }));
+  const fields = localFields(CONTINUITY_NOW);
+  fireEvent.change(fridayInput('Accepted date'), { target: { value: fields.date } });
+  fireEvent.change(fridayInput('Accepted time'), { target: { value: fields.time } });
+  return fields;
+}
+function fridayCommands(value: Fixture) {
+  return value.trace().filter(entry => ['friday:create-job', 'friday:fill-job', 'friday:cancel-job'].includes(entry.channel));
+}
+async function requestFriday(context: FridayContext) {
+  setFridayRequest(context);
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Request job' })); });
+  await settleFriday(context.value);
+  const command = fridayCommands(context.value).filter(entry => entry.channel === 'friday:create-job').at(-1)!;
+  return createJobRequestSchema.parse(command.args[0]);
+}
+function assertFridayInventory(context: FridayContext, reports: number, commands: { channel: string; args: unknown[] }[]) {
+  const { value } = context;
+  expect(fridayCommands(value).map(({ channel, args }) => ({ channel, args }))).toEqual(commands);
+  const counts: Record<string, number> = {};
+  for (const entry of value.trace()) {
+    counts[entry.channel] = (counts[entry.channel] ?? 0) + 1;
+    expect(entry.handlerStarted).toBe(true); expect(entry.synthetic).toBeUndefined();
+    if (entry.channel === 'lead-detail:outbound-capabilities') expect(entry.args).toEqual([{}]);
+    else if (entry.channel === 'review:list') expect(entry.args).toEqual([{ kinds: [], cursor: null, limit: 1 }]);
+    else if (!['friday:create-job', 'friday:fill-job', 'friday:cancel-job'].includes(entry.channel)) expect(entry.args).toEqual([]);
+  }
+  const mutations: Record<string, number> = {};
+  for (const command of commands) mutations[command.channel] = (mutations[command.channel] ?? 0) + 1;
+  expect(counts).toEqual({ 'health:get': 1, 'lead-detail:outbound-capabilities': 1, 'review:list': 1, 'friday:get': reports, ...mutations });
+  expect([...transport.registrations].sort()).toEqual([...CONTINUITY_UI_REGISTERED_CHANNELS].sort()); expect(transport.registrations).toHaveLength(25);
+  expect(value.uiCounters()).toEqual({ network: 0, forbidden: 0, delegationDisposals: 0 });
+  assertOneHealthGraph(value, { credentialLoads: 0, inboxCreations: 0 });
+}
+type ExpectedFridayJob = { request: CreateJobRequest; state: 'queued' | 'succeeded' | 'cancelled'; acceptedAt: string | null };
+async function assertFridayJobs(context: FridayContext, expected: ExpectedFridayJob[]) {
+  const evidence = await context.value.fridayEvidence();
+  expect(evidence.audit).toEqual([]); expect(evidence.owner).toEqual(context.evidence.owner);
+  expect(evidence.jobs.map(row => row.id)).toEqual(expected.map(row => row.request.jobId).sort());
+  for (const { request, state, acceptedAt } of expected) {
+    expect(request).toEqual({ jobId: expect.any(String), salesCycleId: context.owner.cycleId, requestedAt: FRIDAY_REQUESTED_AT });
+    const row = evidence.jobs.find(row => row.id === request.jobId)!;
+    expect(row).toMatchObject({ id: request.jobId, type: 'founder_job_request_v1', idempotency_key: `founder-job:${request.jobId}`, state });
+    expect(JSON.parse(row.payload_json)).toEqual({ formatVersion: 1, jobId: request.jobId, salesCycleId: context.owner.cycleId, requestedAt: FRIDAY_REQUESTED_AT });
+    expect(row.result_json === null ? null : JSON.parse(row.result_json)).toEqual(acceptedAt === null ? null : { formatVersion: 1, contractorAcceptedAt: acceptedAt });
+  }
+  const lastCommand = fridayCommands(context.value).at(-1);
+  if (lastCommand) expect(mutationReceiptSchema.parse(lastCommand.result).revision).toBe(evidence.changes);
+  for (const entry of fridayCommands(context.value)) {
+    const receipt = mutationReceiptSchema.parse(entry.result);
+    expect(receipt).toEqual({ revision: expect.any(Number), affectedPersonIds: [],
+      affectedSalesCycleIds: entry.channel === 'friday:create-job' ? [context.owner.cycleId] : [] });
+  }
+  return evidence;
+}
+function assertFridayHistory(context: FridayContext, expected: ExpectedFridayJob[]) {
+  const read = context.value.trace().filter(entry => entry.channel === 'friday:get' && entry.outcome === 'resolved').at(-1)!;
+  const report = fridayReportSchema.parse(read.result);
+  expect(report.asOf).toBe(CONTINUITY_NOW);
+  expect(Date.parse(FRIDAY_REQUESTED_AT)).toBeGreaterThanOrEqual(Date.parse(report.periodStartsAt));
+  expect(Date.parse(CONTINUITY_NOW)).toBeLessThan(Date.parse(report.periodEndsAt));
+  expect([...report.jobs].sort((a, b) => a.id.localeCompare(b.id))).toEqual(expected.map(({ request, state, acceptedAt }) => ({
+    id: request.jobId, salesCycleId: request.salesCycleId, requestedAt: request.requestedAt,
+    status: state === 'queued' ? 'requested' : state === 'succeeded' ? 'filled' : 'cancelled', contractorAcceptedAt: acceptedAt,
+  })).sort((a, b) => a.id.localeCompare(b.id)));
+  for (const { request, state } of expected) {
+    const row = screen.getByText(request.jobId).closest('li')!;
+    expect(row.textContent).toContain(state === 'queued' ? 'Requested' : state === 'succeeded' ? 'Filled' : 'Cancelled');
+  }
+}
+
+describe('actual Friday job persistence through public UI boundaries', () => {
+  it('F1 creates fills and cancels exact independently persisted jobs for one real Won owner', async () => {
+    const context = await renderFridayApp(), { value } = context;
+    const filled = await requestFriday(context);
+    const requested: ExpectedFridayJob = { request: filled, state: 'queued', acceptedAt: null };
+    await assertFridayJobs(context, [requested]); assertFridayHistory(context, [requested]);
+    setFridayFill(filled.jobId);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Confirm fill' })); }); await settleFriday(value);
+    const fill = fillJobRequestSchema.parse(fridayCommands(value).at(-1)!.args[0]);
+    expect(fill).toEqual({ jobId: filled.jobId, contractorAcceptedAt: CONTINUITY_NOW });
+    const first: ExpectedFridayJob = { request: filled, state: 'succeeded', acceptedAt: CONTINUITY_NOW };
+    await assertFridayJobs(context, [first]); assertFridayHistory(context, [first]);
+    const cancelled = await requestFriday(context); expect(cancelled.jobId).not.toBe(filled.jobId);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: `Cancel ${cancelled.jobId}` })); }); await settleFriday(value);
+    const cancel = cancelJobRequestSchema.parse(fridayCommands(value).at(-1)!.args[0]); expect(cancel).toEqual({ jobId: cancelled.jobId });
+    const last: ExpectedFridayJob = { request: cancelled, state: 'cancelled', acceptedAt: null };
+    await assertFridayJobs(context, [first, last]); assertFridayHistory(context, [first, last]);
+    expect(screen.getByText('Saved')).not.toBeNull();
+    assertFridayInventory(context, 5, [
+      { channel: 'friday:create-job', args: [filled] }, { channel: 'friday:fill-job', args: [fill] },
+      { channel: 'friday:create-job', args: [cancelled] }, { channel: 'friday:cancel-job', args: [cancel] },
+    ]);
+    expect(value.trace().every(entry => entry.outcome === 'resolved')).toBe(true);
+  });
+
+  it('F2 explicitly retries identical create fill and cancel after real commits lose delivery', async () => {
+    const context = await renderFridayApp(), { value } = context;
+    const control = await requestFriday(context);
+    const unchanged: ExpectedFridayJob = { request: control, state: 'queued', acceptedAt: null };
+    const controlRow = (await assertFridayJobs(context, [unchanged])).jobs[0]!;
+    const createHold = value.holdNextFridayMutation(), fields = setFridayRequest(context);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Request job' })); expect(await createHold.arrival).not.toBeNull(); });
+    const target = createJobRequestSchema.parse(fridayCommands(value).at(-1)!.args[0]); expect(target.jobId).not.toBe(control.jobId);
+    const requested: ExpectedFridayJob = { request: target, state: 'queued', acceptedAt: null };
+    const createSaved = await assertFridayJobs(context, [unchanged, requested]);
+    await act(async () => { createHold.reject(); }); await settleFriday(value);
+    expect(screen.getByText('The change could not be confirmed. Your input is kept. Review the job before retrying.')).not.toBeNull();
+    expect(fridayInput('Requested date').value).toBe(fields.date); expect(fridayInput('Requested time').value).toBe(fields.time);
+    expect(fridayInput('Won sales cycle (optional)').value).toBe(context.owner.cycleId);
+    assertFridayInventory(context, 2, [{ channel: 'friday:create-job', args: [control] }, { channel: 'friday:create-job', args: [target] }]);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); }); await settleFriday(value);
+    expect((await assertFridayJobs(context, [unchanged, requested])).jobs).toEqual(createSaved.jobs);
+    expect(fridayInput('Requested date').value).toBe(''); expect(fridayInput('Requested time').value).toBe('');
+    expect(fridayInput('Won sales cycle (optional)').value).toBe('');
+    const fillHold = value.holdNextFridayMutation(), accepted = setFridayFill(target.jobId);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Confirm fill' })); expect(await fillHold.arrival).not.toBeNull(); });
+    const fill = fillJobRequestSchema.parse(fridayCommands(value).at(-1)!.args[0]); expect(fill).toEqual({ jobId: target.jobId, contractorAcceptedAt: CONTINUITY_NOW });
+    const filled: ExpectedFridayJob = { request: target, state: 'succeeded', acceptedAt: CONTINUITY_NOW };
+    const fillSaved = await assertFridayJobs(context, [unchanged, filled]);
+    await act(async () => { fillHold.reject(); }); await settleFriday(value);
+    expect(screen.getByText('The change could not be confirmed. Your input is kept. Review the job before retrying.')).not.toBeNull();
+    expect(fridayInput('Accepted date').value).toBe(accepted.date); expect(fridayInput('Accepted time').value).toBe(accepted.time);
+    expect(screen.getByRole('group', { name: `Fill ${target.jobId}` })).not.toBeNull();
+    expect(value.trace().filter(entry => entry.channel === 'friday:get')).toHaveLength(3); expect(fridayCommands(value)).toHaveLength(4);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); }); await settleFriday(value);
+    expect((await assertFridayJobs(context, [unchanged, filled])).jobs).toEqual(fillSaved.jobs);
+    expect(screen.queryByRole('group', { name: `Fill ${target.jobId}` })).toBeNull();
+    const cancelTarget = await requestFriday(context);
+    expect(new Set([control.jobId, target.jobId, cancelTarget.jobId]).size).toBe(3);
+    const cancelHold = value.holdNextFridayMutation();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: `Cancel ${cancelTarget.jobId}` })); expect(await cancelHold.arrival).not.toBeNull(); });
+    const cancel = cancelJobRequestSchema.parse(fridayCommands(value).at(-1)!.args[0]); expect(cancel).toEqual({ jobId: cancelTarget.jobId });
+    const cancelled: ExpectedFridayJob = { request: cancelTarget, state: 'cancelled', acceptedAt: null };
+    const cancelSaved = await assertFridayJobs(context, [unchanged, filled, cancelled]);
+    await act(async () => { cancelHold.reject(); }); await settleFriday(value);
+    expect(screen.getByText('The change could not be confirmed. Your input is kept. Review the job before retrying.')).not.toBeNull();
+    expect(value.trace().filter(entry => entry.channel === 'friday:get')).toHaveLength(5); expect(fridayCommands(value)).toHaveLength(7);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); }); await settleFriday(value);
+    const final = await assertFridayJobs(context, [unchanged, filled, cancelled]); expect(final.jobs).toEqual(cancelSaved.jobs);
+    expect(final.jobs.find(row => row.id === control.jobId)).toEqual(controlRow);
+    assertFridayHistory(context, [unchanged, filled, cancelled]);
+    assertFridayInventory(context, 6, [
+      { channel: 'friday:create-job', args: [control] }, { channel: 'friday:create-job', args: [target] }, { channel: 'friday:create-job', args: [target] },
+      { channel: 'friday:fill-job', args: [fill] }, { channel: 'friday:fill-job', args: [fill] },
+      { channel: 'friday:create-job', args: [cancelTarget] }, { channel: 'friday:cancel-job', args: [cancel] }, { channel: 'friday:cancel-job', args: [cancel] },
+    ]);
+    expect(value.trace().filter(entry => entry.outcome === 'rejected').map(entry => entry.channel)).toEqual(['friday:create-job', 'friday:fill-job', 'friday:cancel-job']);
+  });
+
+  it('F3 keeps Saved and a new draft while an acknowledged mutation report is held rejected and refreshed', async () => {
+    const context = await renderFridayApp(), { value } = context;
+    setFridayRequest(context); const reportHold = value.holdFridayReport();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Request job' })); expect(await reportHold.arrival).not.toBeNull(); });
+    const request = createJobRequestSchema.parse(fridayCommands(value).at(-1)!.args[0]);
+    const expected: ExpectedFridayJob = { request, state: 'queued', acceptedAt: null };
+    expect(screen.getByText('Saved')).not.toBeNull();
+    expect(fridayInput('Requested date').value).toBe(''); expect(fridayInput('Requested time').value).toBe('');
+    expect(fridayInput('Won sales cycle (optional)').value).toBe('');
+    const committed = await assertFridayJobs(context, [expected]);
+    expect(value.trace().filter(entry => entry.channel === 'friday:get').map(entry => entry.outcome)).toEqual(['resolved', 'pending']);
+    const newFields = localFields('2026-09-10T14:45:00.000Z');
+    fireEvent.change(fridayInput('Requested date'), { target: { value: newFields.date } });
+    fireEvent.change(fridayInput('Requested time'), { target: { value: newFields.time } });
+    fireEvent.change(fridayInput('Won sales cycle (optional)'), { target: { value: 'new unsent draft cycle' } });
+    const assertDraft = () => {
+      expect(fridayInput('Requested date').value).toBe(newFields.date); expect(fridayInput('Requested time').value).toBe(newFields.time);
+      expect(fridayInput('Won sales cycle (optional)').value).toBe('new unsent draft cycle');
+    };
+    assertDraft();
+    await act(async () => { reportHold.reject(); }); await settleFriday(value);
+    expect(screen.getByText('Saved; scoreboard refresh failed')).not.toBeNull(); assertDraft();
+    expect(await assertFridayJobs(context, [expected])).toEqual(committed);
+    assertFridayInventory(context, 2, [{ channel: 'friday:create-job', args: [request] }]);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh jobs' })); }); await settleFriday(value);
+    expect(screen.getByText('Saved')).not.toBeNull(); assertDraft(); assertFridayHistory(context, [expected]);
+    expect(await assertFridayJobs(context, [expected])).toEqual(committed);
+    assertFridayInventory(context, 3, [{ channel: 'friday:create-job', args: [request] }]);
+    expect(value.trace().filter(entry => entry.outcome === 'rejected').map(entry => entry.channel)).toEqual(['friday:get']);
   });
 });

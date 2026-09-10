@@ -53,6 +53,8 @@ export const RETAINED_DISCOVERY = DISCOVERY_NOW;
 type RetainedKind = 'callback' | 'post_stage' | 'onboarding' | 'inbound_response' | 'warm_relationship' | 'founder_resurface';
 type RetainedOwner = Readonly<{ kind: RetainedKind; personId: string; prospectId: string; cycleId: string; actionId: string; sourceEventId: string; evidenceIds: readonly string[] }>;
 
+export const FRIDAY_REQUESTED_AT = '2026-09-10T14:30:00.000Z';
+export const FRIDAY_OWNER_AT = '2026-09-10T13:00:00.000Z';
 export const HEALTH_ORPHAN_ID = 'continuity-health-orphan';
 export const HEALTH_POLL_AT = '2026-09-10T15:01:00.000Z';
 export const CONTINUITY_NOW = '2026-09-10T15:00:00.000Z';
@@ -102,7 +104,8 @@ export type ContinuityCleanup = Readonly<{
  * local company commands, real incidental reads and a finite delivery hold. The caller's
  * Electron registration map is the only replacement for the IPC transport.
  */
-export async function createContinuityDomainFixture(handlers: Map<string, RegisteredIpcHandler>, mode: 'construction' | 'company-ui' | 'retained-setup' | 'retained-ui' | 'retained-synthetic' | 'health-poll' | 'health-ui' | 'health-blocked' = 'construction') {
+export async function createContinuityDomainFixture(handlers: Map<string, RegisteredIpcHandler>, mode: 'construction' | 'company-ui' | 'retained-setup' | 'retained-ui' | 'retained-synthetic' | 'health-poll' | 'health-ui' | 'health-blocked' | 'friday-ui' = 'construction') {
+  const isFridayUi = mode === 'friday-ui';
   const isCompanyUi = mode === 'company-ui' || mode === 'health-ui';
   const isBlockedUi = mode === 'health-blocked';
   const pollDiagnostics: { level: string; eventCode: string; fields?: SafeLogFields }[] = [];
@@ -147,6 +150,36 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       cancel: () => finish(new Error('Health delivery disposed')), claim: () => { if (claimed || settled) return false; claimed = true; return true; },
       deliver: async value => { arrived(structuredClone(value)); const error = await decision; if (error) throw error; return value; } };
     healthHolds.push(control); return control;
+  }
+  const fridayMutationHolds: (RetainedReadHold & { channel: string })[] = [];
+  let activeFridayMutation: RetainedReadHold | undefined;
+  let fridayReportHold: RetainedReadHold | undefined;
+  function holdNextFridayMutation(): RetainedReadHold {
+    assert.ok(isFridayUi); assert.ok(!disposed); assert.equal(activeFridayMutation, undefined);
+    const channel = ['friday:create-job', 'friday:fill-job', 'friday:cancel-job'][fridayMutationHolds.length]; assert.ok(channel);
+    let arrived!: (value: unknown | null) => void, decide!: (error: Error | null) => void;
+    const arrival = new Promise<unknown | null>(resolve => { arrived = resolve; });
+    const decision = new Promise<Error | null>(resolve => { decide = resolve; });
+    let settled = false, claimed = false;
+    const finish = (error: Error | null) => { if (settled) return; settled = true; clearDeliveryTimeout(timer); activeFridayMutation = undefined; arrived(null); decide(error); };
+    const timer = deliveryTimeout(() => finish(new Error('Friday mutation delivery watchdog')), 5_000);
+    const control = { channel, arrival, release: () => finish(null), reject: () => finish(new Error('Friday committed delivery rejected')),
+      cancel: () => finish(new Error('Friday mutation disposed')), claim: () => { if (claimed || settled) return false; claimed = true; return true; },
+      deliver: async (value: unknown) => { arrived(structuredClone(value)); const error = await decision; if (error) throw error; return value; } };
+    fridayMutationHolds.push(control); activeFridayMutation = control; return control;
+  }
+  function holdFridayReport(): RetainedReadHold {
+    assert.ok(isFridayUi); assert.ok(!disposed); assert.equal(fridayReportHold, undefined);
+    let arrived!: (value: unknown | null) => void, decide!: (error: Error | null) => void;
+    const arrival = new Promise<unknown | null>(resolve => { arrived = resolve; });
+    const decision = new Promise<Error | null>(resolve => { decide = resolve; });
+    let settled = false, claimed = false;
+    const finish = (error: Error | null) => { if (settled) return; settled = true; clearDeliveryTimeout(timer); arrived(null); decide(error); };
+    const timer = deliveryTimeout(() => finish(new Error('Friday report delivery watchdog')), 5_000);
+    const control = { arrival, release: () => finish(null), reject: () => finish(new Error('Friday report delivery rejected')),
+      cancel: () => finish(new Error('Friday report disposed')), claim: () => { if (claimed || settled) return false; claimed = true; return true; },
+      deliver: async (value: unknown) => { arrived(structuredClone(value)); const error = await decision; if (error) throw error; return value; } };
+    fridayReportHold = control; return control;
   }
   assert.equal(handlers.size, 0, 'Continuity fixture requires an empty owned transport map');
   const temp = createTempDatabase();
@@ -295,6 +328,8 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       delivery?.cancel(); // Cancel/release delivery BEFORE draining invokes.
       for (const hold of readHolds) hold.cancel();
       for (const hold of healthHolds) hold.cancel();
+      for (const hold of fridayMutationHolds) hold.cancel();
+      fridayReportHold?.cancel();
       await Promise.allSettled([...flights]);
       for (const unregister of unregisters.splice(0).reverse()) {
         try { unregister(); } catch (error) { errors.push(error); }
@@ -329,7 +364,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
     unregisters.push(registerHealthIpc(observed, trusted));
     unregisters.push(registerLocalWorkspaceIpc(createLocalWorkspaceProvider(observed), trusted));
     unregisters.push(registerFridayIpc(createFridayProvider(observed), trusted));
-    if (isCompanyUi || isRetainedUi) {
+    if (isCompanyUi || isRetainedUi || isFridayUi) {
       unregisters.push(registerDailyIpc(createDailyProvider(observed), trusted));
       unregisters.push(registerLeadsIpc(createLeadsProvider(observed), trusted));
       unregisters.push(registerLeadDetailIpc(createLeadDetailProvider(observed), trusted));
@@ -347,7 +382,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
         begin: denied, override: denied,
       } }));
     }
-    assert.deepEqual([...handlers.keys()].sort(), [...(isRetainedUi ? RETAINED_UI_REGISTERED_CHANNELS : isCompanyUi ? CONTINUITY_UI_REGISTERED_CHANNELS : CONTINUITY_REGISTERED_CHANNELS)].sort());
+    assert.deepEqual([...handlers.keys()].sort(), [...(isRetainedUi ? RETAINED_UI_REGISTERED_CHANNELS : isCompanyUi || isFridayUi ? CONTINUITY_UI_REGISTERED_CHANNELS : CONTINUITY_REGISTERED_CHANNELS)].sort());
 
     const invokeFrom = (senderUrl: string, channel: string, ...args: unknown[]): Promise<unknown> => {
       const index = trace.length;
@@ -356,8 +391,8 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       const flight = (async () => {
         try {
           if (disposed) throw new Error('Continuity fixture is disposed');
-          if (!((isRetainedUi ? RETAINED_UI_CHANNELS : isCompanyUi ? CONTINUITY_UI_CHANNELS : isBlockedUi ? [...CONTINUITY_READ_CHANNELS, 'local-workspace:create-company'] : mode === 'retained-setup' ? [...CONTINUITY_READ_CHANNELS, 'local-workspace:transition'] : CONTINUITY_READ_CHANNELS) as readonly string[]).includes(channel)) {
-            if (isRetainedUi) uiCounters.forbidden++;
+          if (!((isRetainedUi ? RETAINED_UI_CHANNELS : isFridayUi ? ['health:get', 'lead-detail:outbound-capabilities', 'review:list', 'friday:get', 'friday:create-job', 'friday:fill-job', 'friday:cancel-job'] : isCompanyUi ? CONTINUITY_UI_CHANNELS : isBlockedUi ? [...CONTINUITY_READ_CHANNELS, 'local-workspace:create-company'] : mode === 'retained-setup' ? [...CONTINUITY_READ_CHANNELS, 'local-workspace:transition'] : CONTINUITY_READ_CHANNELS) as readonly string[]).includes(channel)) {
+            if (isRetainedUi || isFridayUi) uiCounters.forbidden++;
             throw new Error('Stage0 only admits its four readonly channels');
           }
           // Explicit synthetic UNCONFIGURED worker transport only. No registrar,
@@ -374,6 +409,9 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
           const hold = channel === 'local-workspace:create-company' && delivery?.claim() ? delivery : undefined;
           const retainedHold = channel === 'local-workspace:get-commitments' ? readHolds.find(item => item.claim()) : undefined;
           const healthHold = channel === 'health:get' ? healthHolds.find(item => item.claim()) : undefined;
+          const fridayHold = channel === 'friday:get'
+            ? fridayReportHold?.claim() ? fridayReportHold : undefined
+            : fridayMutationHolds.find(item => item.channel === channel && item.claim());
           const actual = await handler({ senderFrame: { url: senderUrl } }, ...args);
           let result = actual;
           if (mode === 'retained-synthetic' && channel === 'daily:get') {
@@ -396,7 +434,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
             trace[index] = Object.freeze({ ...trace[index]!, synthetic: true, presentationVariant: retainedMetadata === 'complete' ? 'retained-complete' : 'retained-partial', actualResult: structuredClone(actual) });
           }
           trace[index] = Object.freeze({ ...trace[index]!, result: structuredClone(result) });
-          const delivered = hold ? await hold.hold(args[0], result) : retainedHold ? await retainedHold.deliver(result) : healthHold ? await healthHold.deliver(result) : result;
+          const delivered = hold ? await hold.hold(args[0], result) : retainedHold ? await retainedHold.deliver(result) : healthHold ? await healthHold.deliver(result) : fridayHold ? await fridayHold.deliver(result) : result;
           trace[index] = Object.freeze({ ...trace[index]!, outcome: 'resolved' });
           return delivered;
         } catch (error) {
@@ -442,6 +480,65 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
         accounts: db.raw.prepare('SELECT id,name,domain,version FROM pm_accounts ORDER BY id').all(),
         commands: db.raw.prepare('SELECT command_id,account_id FROM pm_account_commands ORDER BY command_id').all(),
         jobs: db.raw.prepare('SELECT id FROM jobs ORDER BY id').all(),
+      }));
+    };
+    let fridayOwner: RetainedOwner | undefined;
+    const seedFridayOwner = async () => {
+      assert.ok(isFridayUi); assert.equal(fridayOwner, undefined); assert.equal(new Date().toISOString(), CONTINUITY_NOW);
+      return runtime.withDomain(() => {
+        assert.ok(capturedRuntime);
+        const services = capturedRuntime.getServices();
+        const at = FRIDAY_OWNER_AT;
+        const source = services.sources.createPersonProspect({ person: { displayName: 'Friday fictional Won owner' }, contacts: [],
+          source: { id: randomUUID(), channel: 'referral', observedAt: at, sourceRecord: { fixture: 'friday-owner' },
+            referral: { kind: 'unknown' as const, reason: 'not_provided' as const } } });
+        const unreviewed = services.lifecycle.createUnreviewedCycle({ personId: source.personId, prospectId: source.prospectId,
+          entrySourceEventId: source.sourceEventId, effectiveAt: at });
+        const ready = services.lifecycle.reviewToReady({ cycleId: unreviewed.id, expectedCycleVersion: 1, expectedProspectVersion: 1, effectiveAt: at });
+        const replyId = randomUUID(), interviewId = randomUUID(), offerId = randomUUID();
+        services.unitOfWork.immediate(() => services.events.appendActivity({ id: replyId, personId: ready.personId,
+          prospectId: ready.prospectId, salesCycleId: ready.id, kind: 'text', direction: 'inbound', channel: 'text', occurredAt: at, observedOutcome: 'replied', metadata: {} }));
+        services.lifecycle.recordQualifyingContact({ cycleId: ready.id, expectedCycleVersion: 2, expectedCurrentActionId: ready.currentNextActionId!, activityId: replyId, effectiveAt: at });
+        services.unitOfWork.immediate(() => services.events.appendActivity({ id: interviewId, personId: ready.personId,
+          prospectId: ready.prospectId, salesCycleId: ready.id, kind: 'interview', direction: 'outbound', channel: 'phone', occurredAt: at,
+          durationSeconds: 240, observedOutcome: 'substantive', metadata: {} }));
+        const interviewed = services.lifecycle.confirmInterviewed({ cycleId: ready.id, expectedCycleVersion: 3,
+          expectedCurrentActionId: ready.currentNextActionId!, suggestionActivityId: interviewId, effectiveAt: at, confirmedAt: at });
+        assert.equal(interviewed.version, 4);
+        services.lifecycle.setDesignPartnerFitness({ cycleId: ready.id, expectedCycleVersion: 4, fitness: 5, updatedAt: at });
+        const dimension = { value: 'moderate' as const, evidenceActivityIds: [interviewId] };
+        services.lifecycle.setCloseReadiness({ cycleId: ready.id, expectedReadinessVersion: 0, assessedAt: at,
+          readiness: { version: 1, demonstratedPain: dimension, activeTimeline: dimension, decisionAuthority: dimension,
+            willingnessToTryOrPay: dimension, concreteNextStep: dimension } });
+        services.unitOfWork.immediate(() => services.events.appendActivity({ id: offerId, personId: ready.personId,
+          prospectId: ready.prospectId, salesCycleId: ready.id, kind: 'offer', direction: 'outbound', channel: 'phone', occurredAt: at, observedOutcome: 'price_said', metadata: {} }));
+        const offered = services.lifecycle.confirmOffered({ cycleId: ready.id, expectedCycleVersion: 5,
+          expectedCurrentActionId: interviewed.currentNextActionId!, suggestionActivityId: offerId, effectiveAt: at, confirmedAt: at });
+        const won = services.lifecycle.confirmWon({ cycleId: ready.id, expectedCycleVersion: 6, expectedCurrentActionId: offered.currentNextActionId!,
+          effectiveAt: at, confirmedAt: at, terms: { billingModel: 'per_door_monthly', doorsCommitted: 12, unitRateCents: 2500, foundingCustomer: true, effectiveAt: at } });
+        assert.equal(won.stage, 'won'); assert.equal(won.version, 7); assert.ok(won.currentNextActionId);
+        fridayOwner = Object.freeze({ kind: 'onboarding' as const, personId: source.personId, prospectId: source.prospectId, cycleId: won.id,
+          actionId: won.currentNextActionId, sourceEventId: source.sourceEventId, evidenceIds: Object.freeze([replyId, interviewId, offerId]) });
+        return fridayOwner;
+      });
+    };
+    const fridayEvidence = () => {
+      assert.ok(isFridayUi); const owner = fridayOwner; assert.ok(owner);
+      return runtime.withDatabase(db => ({
+        changes: db.raw.prepare<[], { count: number }>('SELECT total_changes() AS count').get()!.count,
+        audit: auditDomainInvariants({ database: db, asOf: new Date().toISOString() }),
+        owner: {
+          identity: owner,
+          person: db.raw.prepare('SELECT id,display_name FROM persons WHERE id=?').get(owner.personId),
+          source: db.raw.prepare('SELECT id,person_id,prospect_id,channel,(SELECT id FROM prospects WHERE original_source_event_id=source_events.id) AS original_prospect_id FROM source_events WHERE id=?').get(owner.sourceEventId),
+          prospect: db.raw.prepare('SELECT id,person_id,original_source_event_id,segment FROM prospects WHERE id=?').get(owner.prospectId),
+          cycle: db.raw.prepare('SELECT id,person_id,prospect_id,entry_source_event_id,stage,workflow_status,current_next_action_id,version FROM sales_cycles WHERE id=?').get(owner.cycleId),
+          activities: db.raw.prepare< [string], { id: string; person_id: string; prospect_id: string; sales_cycle_id: string; kind: string; occurred_at: string } >('SELECT id,person_id,prospect_id,sales_cycle_id,kind,occurred_at FROM activities WHERE sales_cycle_id=? ORDER BY id').all(owner.cycleId),
+          stages: db.raw.prepare('SELECT to_stage FROM stage_events WHERE sales_cycle_id=? ORDER BY transition_sequence').all(owner.cycleId),
+          terms: db.raw.prepare('SELECT doors_committed,billing_model,unit_rate_cents,projected_mrr_cents FROM won_terms WHERE sales_cycle_id=?').get(owner.cycleId),
+        },
+        jobs: db.raw.prepare<[], { id: string; type: string; idempotency_key: string; state: string; payload_json: string; result_json: string | null }>(
+          "SELECT id,type,idempotency_key,state,payload_json,result_json FROM jobs WHERE type='founder_job_request_v1' ORDER BY id").all(),
       }));
     };
     // Finite, two-phase internal construction only. Never expose services/raw DB.
@@ -566,7 +663,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
         pendingIds: db.raw.prepare<[], { id: string }>("SELECT id FROM next_actions WHERE status='pending' ORDER BY id").all().map(row => row.id),
       }));
     };
-    return Object.freeze({ api, isRetainedUi, isBlockedUi, holdRetainedRead, holdHealthRead,
+    return Object.freeze({ api, isRetainedUi, isBlockedUi, isFridayUi, seedFridayOwner, fridayEvidence, holdNextFridayMutation, holdFridayReport, holdRetainedRead, holdHealthRead,
       drainLatestHealth: async () => { assert.equal(mode, 'health-ui'); assert.ok(latestHealth); await latestHealth; },
       failSourcingOnce: async () => { assert.equal(mode, 'health-poll'); assert.equal(pollAttempted, false); assert.equal(new Date().toISOString(), HEALTH_POLL_AT); pollAttempted = true; await poller.pollNow(); },
       pollDiagnostics: () => structuredClone(pollDiagnostics),
@@ -581,7 +678,9 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       rejectNextDaily: () => { assert.equal(mode, 'retained-synthetic'); assert.equal(dailyRejectionUsed, false); dailyRejectionUsed = true; rejectDaily = true; },
       seedRetained, retainedEvidence, invokeFrom, evidence, companyEvidence, armCompanyDelivery,
       cancelDelivery: () => { delivery?.cancel(); for (const hold of readHolds) hold.cancel();
-      for (const hold of healthHolds) hold.cancel(); },
+      for (const hold of healthHolds) hold.cancel();
+      for (const hold of fridayMutationHolds) hold.cancel();
+      fridayReportHold?.cancel(); },
       drainInvocations: () => Promise.allSettled([...flights]),
       drainReads: () => Promise.allSettled([...readFlights]), counts: () => Object.freeze({ ...counts }),
       trace: () => [...trace], dispose });
