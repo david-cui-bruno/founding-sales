@@ -98,7 +98,7 @@ Use bound parameters for every SQL value. Do not move the outer transaction or r
 ### Task 2: Honest Inbox actions and empty-state claims
 
 **Files:**
-- Modify: `src/renderer/features/review/ReviewDetailPanel.tsx`, `reviewKindMeta.ts`, `ReviewQueue.tsx`.
+- Modify: `src/renderer/features/review/ReviewDetailPanel.tsx`, `ReviewPage.tsx`, `reviewKindMeta.ts`, `ReviewQueue.tsx`.
 - Test: `src/renderer/features/review/ReviewPage.test.tsx`, `ReviewRoute.test.tsx`.
 
 **Interfaces:**
@@ -107,7 +107,7 @@ Use bound parameters for every SQL value. Do not move the outer transaction or r
 - Do not add a generic capability cache or change main-process resolver semantics.
 
 **Decisions:**
-- The production resolver currently supports only unmatched-communication Promote. All other advertised write actions, including Mark personal, Repair invariant and fixture-only kind actions, must not invoke unsupported commands.
+- The production resolver currently supports only unmatched-communication Promote. All other advertised write actions, including Mark personal, Repair invariant, fixture-only kind actions and ReviewPage's batch transcript acceptance, must not invoke unsupported commands.
 - Render read-only evidence plus clear local guidance for unsupported actions. A privacy command that is unavailable must not imply Never Record was applied. Remove the arbitrary repair-command input.
 - Empty state says no items are shown in this local review snapshot. It explicitly does not certify import completeness, identity completeness or adapter health. Use neutral styling rather than success.
 - Do not remove stored review items, tabs or public union members. Complete counts, kind availability and pagination are a later separate stage and must remain open in the ledger.
@@ -120,7 +120,7 @@ expect(unsupported === null || (unsupported as HTMLButtonElement).disabled).toBe
 expect(screen.queryByRole('textbox', { name: 'Repair command' })).toBeNull();
 ```
 
-Test all six empty tabs with strict empty snapshots: no global success claim and a neutral, explicitly snapshot-scoped explanation. Do not test source text by grepping it.
+Test all six empty tabs with strict empty snapshots: no global success claim and a neutral, explicitly snapshot-scoped explanation. Also mount a nonconflicting multi-suggestion snapshot and assert its batch acceptance cannot issue unsupported commands. Do not test source text by grepping it.
 
 - [ ] **Step 2: Observe RED.**
 
