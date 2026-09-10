@@ -27,6 +27,7 @@ import { cloudSourceEventSchema, type CloudSourceEvent } from '../../src/shared/
 import type { BeginDiscoveryRequest, DiscoveryBrief, DiscoveryClaim } from '../../src/shared/contracts/discoveryContract';
 import type { CalliePreloadApi } from '../../src/shared/preload';
 import { FounderApp } from '../../src/renderer/app/FounderApp';
+import { PresentationRoot } from '../../src/renderer/app/PresentationRoot';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 import { validParcelEvent, validFrboEvent, validEnrichmentEvent } from '../fixtures/cloudSourceEvents';
 import type { RegisteredIpcHandler } from '../fixtures/registeredIpcHandler';
@@ -131,10 +132,10 @@ async function fixture(input: { temp?: TempDatabase; research?: DiscoveryResearc
     for (const job of due) { scheduled.delete(job); job.run(); } await worker.idle(); };
   const drain = async () => { for (let n = 0; n < 12; n++) { await turn(); if (![...scheduled].some(job => job.at <= Date.now())) return; }
     throw new Error('Discovery did not quiesce within twelve bounded turns'); };
-  const mount = async () => { const health = await api.health.get(); return render(createElement(FounderApp, { api,
+  const mount = async () => { const health = await api.health.get(); return render(createElement(PresentationRoot, null, createElement(FounderApp, { api,
     health: { status: 'ready', health, retry: unexpected },
     theme: { preference: 'system', resolvedTheme: 'light', setPreference: unexpected },
-    density: { density: 'comfortable', setDensity: unexpected } })); };
+    density: { density: 'comfortable', setDensity: unexpected } }))); };
   return { temp, runtime, database, services, api, worker, scheduled, late, clock, stop, turn, drain, mount, manualReview, facadeReview };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;

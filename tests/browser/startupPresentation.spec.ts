@@ -201,16 +201,15 @@ for (const width of [1440, 1050]) for (const theme of ['light', 'dark'] as const
     await page.evaluate(() => window.startupPresentation.setLocalMode('legacy'));
     await refresh(page);
     await settle(page, 'legacy');
-    // Actual legacy route and palette, not a placeholder negative control.
+    // Actual legacy content keeps the same application-wide presentation.
     await expect(page.getByTestId('today-route')).toBeVisible();
     await expect(page.getByText('No suggested contacts right now.')).toBeVisible();
-    await expect(page.locator('[data-presentation="native-a"]')).toHaveCount(0);
-    await expect(page.locator('.app-shell__workspace')).toHaveCSS('background-color', palette[theme].legacy);
-    await expect(page.locator('.nav-rail__brand')).toBeVisible();
-    await expect(page.locator('.nav-rail__brand-native')).toBeHidden();
-    await checkpoint(page, info, '08-confirmed-legacy-negative-scope');
+    await expect(page.locator('.presentation-root[data-presentation="native-a"]')).toHaveCount(1);
+    await assertRail(page, width, theme);
+    await expect(page.locator('.nav-rail__brand-native')).toBeVisible();
+    await checkpoint(page, info, '08-confirmed-legacy-common-presentation');
     const samples = await page.evaluate(() => window.startupPresentation.samples);
-    for (const sample of samples.filter(sample => sample.phase !== 'legacy')) assertASample(sample, theme, density, width);
+    for (const sample of samples) assertASample(sample, theme, density, width);
     for (const phase of ['health-pending', 'health-error', 'daily-pending', 'daily-error', 'informational', 'legacy', 'desk']) expect(samples.some(sample => sample.phase === phase && sample.source === 'frame'), phase).toBe(true);
     const inventory = await methods(page);
     expect(inventory.filter(method => method === 'health.get')).toHaveLength(3);

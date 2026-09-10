@@ -10,15 +10,18 @@ import type { PipelineSnapshot } from '../../shared/contracts/pipelineContract';
 import type { TodaySnapshot } from '../../shared/contracts/todayContract';
 import type { LeadDetail } from '../../shared/contracts/leadDetailContract';
 import type { CalliePreloadApi } from '../../shared/preload';
+import type { AppHealth } from '../../shared/healthContract';
+import { dailyFixture, localSnapshot, commitments, fixtureNow } from '../features/today/nativeDesk.fixture';
 import type { FoundationHealth } from '../foundation/useFoundationHealth';
 import { FounderApp, type FounderAppProps } from './FounderApp';
 import { useTheme } from './useTheme';
 import { useDensity } from './useDensity';
+import { PresentationRoot } from './PresentationRoot';
 
 function FounderAppHarness(props: Omit<FounderAppProps, 'theme' | 'density'>) {
   const theme = useTheme();
   const density = useDensity();
-  return <FounderApp {...props} theme={theme} density={density} />;
+  return <PresentationRoot><FounderApp {...props} theme={theme} density={density} /></PresentationRoot>;
 }
 
 const detail: LeadDetail = {
@@ -133,7 +136,25 @@ function fakeCallieApi(): CalliePreloadApi {
   const pending = vi.fn(() => new Promise<never>(() => undefined));
   return {
     discovery: discoveryApi(),
-    health: { get: vi.fn(async () => ({}) as never) },
+    health: { get: vi.fn(async () => healthValue) },
+    daily: { get: vi.fn(async () => ({ ...dailyFixture(), workflowMode: 'legacy' as const })) },
+    localWorkspace: {
+      get: vi.fn(async () => localSnapshot({ workflowMode: 'legacy' })),
+      getCommitments: vi.fn(async () => commitments()),
+      reviewCompany: pending, createCompany: pending, getCompanyCreateStatus: pending, transition: pending,
+    },
+    delegation: {
+      status: vi.fn(async () => ({ state: 'unconfigured' as const, workspaceId: null, endpoint: null, configuration: null })),
+      policyImport: { selectAndPreview: pending, confirm: pending, resume: pending, status: pending },
+      prepareRequestedFollowup: pending, getRequestedFollowup: pending, editRequestedFollowup: pending, approveRequestedFollowup: pending,
+      beginPhone: pending, bootstrap: pending, configurePolicy: pending, configureResearch: pending, pair: pending, configure: pending, submit: pending, sync: pending,
+    },
+    linkedin: { prepare: pending, get: pending, recover: pending, save: pending, begin: pending, open: pending, copy: pending, reportOutcome: pending },
+    phoneSetup: { status: pending, confirm: pending, clear: pending },
+    outreach: {
+      status: vi.fn(async () => ({ model: 'unconfigured' as const, modelName: '', gmail: 'unconfigured' as const, accountEmail: null, senderName: '', postalAddress: '' })),
+      configure: pending, connectGmail: pending, disconnectGmail: pending, openDraft: pending, saveDraft: pending, generateDraft: pending, sendDraft: pending,
+    },
     leads: {
       list: vi.fn(async () => ({
         rows: [], nextCursor: null, total: 0, revision: 0,
@@ -147,6 +168,8 @@ function fakeCallieApi(): CalliePreloadApi {
       getOutboundCapabilities: pending,
       confirmTransition: vi.fn<CalliePreloadApi['leadDetail']['confirmTransition']>(() => new Promise(() => undefined)),
       findContactInfo: vi.fn<CalliePreloadApi['leadDetail']['findContactInfo']>(() => new Promise(() => undefined)),
+      dismissLead: pending,
+      overrideCloudScore: pending,
     },
     today: {
       get: vi.fn(async () => todaySnapshot),
@@ -154,6 +177,7 @@ function fakeCallieApi(): CalliePreloadApi {
       snooze: pending,
       pin: pending,
       logPastActivity: vi.fn<CalliePreloadApi['today']['logPastActivity']>(() => new Promise(() => undefined)),
+      getLeadTriageSnapshot: pending, addLeadNote: pending, logCallOutcome: pending, markActivityInError: pending, getTriageQueue: pending, setReviewPosition: pending,
     },
     pipeline: { get: vi.fn(async () => pipelineSnapshot) },
     review: { list: vi.fn(async () => emptyReview), resolve: pending },
@@ -185,14 +209,24 @@ function fakeCallieApi(): CalliePreloadApi {
       addEvidence: pending,
       updateStatus: pending,
     },
-    sourcing: { pollNow: pending, status: pending },
-    appleSpike: {} as never,
-  } as unknown as CalliePreloadApi;
+    sourcing: { pollNow: pending, status: pending, retry: pending, setHmacSalt: pending },
+    shell: { revealDatabase: pending, revealLogDirectory: pending },
+    recovery: { status: pending, beginSetup: pending, saveSetupMaterial: pending, completeSetup: pending, selectAndRunRestoreDrill: pending },
+    appleSpike: { getStatus: pending, probeCapabilities: pending, requestContacts: pending, promptAccessibility: pending, scanRecentNotes: pending, scanTestMessages: pending, startCallObservation: pending, stopCallObservation: pending, sendTestMessage: pending, subscribeObservationEvidence: pending },
+  };
 }
 
+const healthValue: AppHealth = {
+  appVersion: '1.0.0', schemaVersion: 24, databasePath: '/synthetic/foundation.sqlite3', databaseEncrypted: true,
+  cipherVersion: 'synthetic', fts5Available: true, pendingJobs: 0, interruptedJobsRecovered: 0,
+  domainStatus: 'ready', domainReady: true, domainBlockingViolationCount: 0, domainRepairableIssueCount: 0,
+  domainProjectionRefreshCandidateCount: 0, pendingProjectionRebuilds: 0, domainStartupEvaluatedAt: fixtureNow,
+  operationalStatus: 'ready', sourcing: { status: 'healthy', reasons: [], lastSuccessAgeMs: null,
+    state: { state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null, consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null, backlogCount: null } },
+};
 const readyHealth: FoundationHealth = {
   status: 'ready',
-  health: {} as never,
+  health: healthValue,
   retry: vi.fn(),
 };
 
@@ -219,14 +253,18 @@ afterEach(() => {
 describe('FounderApp', () => {
   it('defaults to the Today route inside the navigation shell', async () => {
     window.location.hash = '';
-    render(<FounderAppHarness api={fakeCallieApi()} health={readyHealth} />);
+    const api = fakeCallieApi();
+    render(<FounderAppHarness api={api} health={readyHealth} />);
 
     expect(screen.getByRole('navigation', { name: 'Primary' })).not.toBeNull();
     expect(
       screen.getByRole('link', { name: 'Today' }).getAttribute('aria-current'),
     ).toBe('page');
     expect(await screen.findByRole('button', { name: 'Kevin Shin' })).not.toBeNull();
-    expect(document.querySelector('[data-presentation]')).toBeNull();
+    expect(screen.getByTestId('today-route')).toBeTruthy();
+    expect(api.daily.get).toHaveBeenCalled();
+    expect(api.localWorkspace.get).toHaveBeenCalled();
+    expect(document.querySelectorAll('.presentation-root[data-presentation="native-a"]')).toHaveLength(1);
   });
 
   it('opens the same global inspector from Today and Pipeline routes', async () => {
@@ -373,7 +411,7 @@ it('uses the required external appearance states and setters in Settings', async
   window.location.hash = '#/settings';
   const theme = { preference: 'dark' as const, resolvedTheme: 'dark' as const, setPreference: vi.fn() };
   const density = { density: 'compact' as const, setDensity: vi.fn() };
-  render(<FounderApp api={fakeCallieApi()} health={readyHealth} theme={theme} density={density} initialRoute="settings" />);
+  render(<PresentationRoot><FounderApp api={fakeCallieApi()} health={readyHealth} theme={theme} density={density} initialRoute="settings" /></PresentationRoot>);
   fireEvent.click(await screen.findByRole('button', { name: 'Appearance' }));
   const dark = screen.getByRole('button', { name: 'Dark appearance' });
   expect(dark.getAttribute('aria-pressed')).toBe('true');
@@ -387,9 +425,9 @@ it('preserves the global inspector node when external appearance states change',
   const api = fakeCallieApi();
   const theme = { preference: 'dark' as const, resolvedTheme: 'dark' as const, setPreference: vi.fn() };
   const density = { density: 'compact' as const, setDensity: vi.fn() };
-  const view = render(<FounderApp api={api} health={readyHealth} theme={theme} density={density} />);
+  const view = render(<PresentationRoot><FounderApp api={api} health={readyHealth} theme={theme} density={density} /></PresentationRoot>);
   fireEvent.click(await screen.findByRole('button', { name: 'Kevin Shin' }));
   const inspector = await screen.findByRole('complementary', { name: 'Kevin Shin details' });
-  view.rerender(<FounderApp api={api} health={readyHealth} theme={{ ...theme, preference: 'light', resolvedTheme: 'light' }} density={{ ...density, density: 'comfortable' }} />);
+  view.rerender(<PresentationRoot><FounderApp api={api} health={readyHealth} theme={{ ...theme, preference: 'light', resolvedTheme: 'light' }} density={{ ...density, density: 'comfortable' }} /></PresentationRoot>);
   expect(screen.getByRole('complementary', { name: 'Kevin Shin details' })).toBe(inspector);
 });

@@ -120,7 +120,7 @@ function paintedBackground(element: Element | null): string {
 function sample(source: AppearanceSample['source']) {
   const root = document.getElementById('root');
   if (!root?.firstElementChild) return;
-  const scope = document.querySelector('.startup-presentation, .app-shell') ?? root.firstElementChild;
+  const scope = document.querySelector('.presentation-root') ?? root.firstElementChild;
   const deskElement = document.querySelector('.native-desk');
   const style = getComputedStyle(scope);
   const rect = scope.getBoundingClientRect();
@@ -131,7 +131,7 @@ function sample(source: AppearanceSample['source']) {
     : root.textContent?.includes('Daily workspace unavailable') ? 'daily-error'
     : root.textContent?.includes('Loading daily workspace') ? 'daily-pending' : 'informational';
   samples.push({ source, phase, theme: document.documentElement.getAttribute('data-theme'), density: document.documentElement.getAttribute('data-density'),
-    presentation: (deskElement ?? scope).getAttribute('data-presentation'), workflow: deskElement?.getAttribute('data-workflow-mode') ?? null,
+    presentation: scope.getAttribute('data-presentation'), workflow: deskElement?.getAttribute('data-workflow-mode') ?? null,
     background: getComputedStyle(document.querySelector('.app-shell__workspace') ?? scope).backgroundColor,
     color: getComputedStyle(deskElement ?? scope).color, font: style.fontFamily,
     corners: [[1, 1], [innerWidth - 2, 1], [1, innerHeight - 2], [innerWidth - 2, innerHeight - 2]].map(([x, y]) => paintedBackground(document.elementFromPoint(x, y))),
