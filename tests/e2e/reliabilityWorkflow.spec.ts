@@ -94,6 +94,8 @@ for (const scenario of cases) {
       await activeRow.focus();
       for (let index = 0; index < 207; index += 1) {
         await page.keyboard.press('ArrowDown');
+        const serial = String(index + 2).padStart(3, '0');
+        await expect(page.getByRole('row', { name: new RegExp(`Reliability Person ${serial}`) })).toBeFocused();
       }
       activeRow = page.getByRole('row', { name: /Reliability Person 208/ });
       await expect(activeRow).toBeFocused();
