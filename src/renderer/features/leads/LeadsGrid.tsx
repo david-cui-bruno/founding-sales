@@ -114,6 +114,17 @@ export function LeadsGrid({
   };
 
   const onRowKeyDown = (event: KeyboardEvent, personId: string) => {
+    if (
+      event.target !== event.currentTarget ||
+      event.defaultPrevented ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey ||
+      event.nativeEvent.isComposing
+    ) {
+      return;
+    }
+
     switch (event.key) {
       case 'ArrowDown':
       case 'j':

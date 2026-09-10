@@ -234,6 +234,101 @@ describe('LeadsGrid', () => {
     expect(onOpenLead).not.toHaveBeenCalled();
   });
 
+  it.each(['metaKey', 'ctrlKey', 'altKey'] as const)(
+    'leaves %s + k unhandled on rows and child checkboxes', (modifier) => {
+      const onSelect = vi.fn();
+      const onOpenLead = vi.fn();
+      render(<LeadsGrid rows={[leadRow, secondRow]} selectedPersonId="person-2"
+        onSelect={onSelect} onUpdateField={vi.fn()} onOpenLead={onOpenLead}
+        checkedPersonIds={new Set()} onToggleChecked={vi.fn()} />);
+      for (const target of [screen.getByRole('row', { name: /Blake Owner/ }),
+        screen.getByRole('checkbox', { name: 'Select Blake Owner' })]) {
+        const event = new KeyboardEvent('keydown', {
+          key: 'k', [modifier]: true, bubbles: true, cancelable: true,
+        });
+        fireEvent(target, event);
+        expect(event.defaultPrevented).toBe(false);
+        expect(onSelect).not.toHaveBeenCalled();
+        expect(onOpenLead).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(['j', 'k', 'ArrowDown', 'ArrowUp', 'Enter'])(
+    'leaves child checkbox %s separate from row navigation', (key) => {
+      const onSelect = vi.fn();
+      const onOpenLead = vi.fn();
+      render(<LeadsGrid rows={[leadRow, secondRow]} selectedPersonId="person-1"
+        onSelect={onSelect} onUpdateField={vi.fn()} onOpenLead={onOpenLead}
+        checkedPersonIds={new Set()} onToggleChecked={vi.fn()} />);
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      fireEvent(screen.getByRole('checkbox', { name: 'Select Avery Landlord' }), event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(onOpenLead).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['j', 'ArrowDown', 'Enter'])(
+    'respects composing and already-handled row %s', (key) => {
+      const onSelect = vi.fn();
+      const onOpenLead = vi.fn();
+      render(<LeadsGrid rows={[leadRow, secondRow]} selectedPersonId="person-1"
+        onSelect={onSelect} onUpdateField={vi.fn()} onOpenLead={onOpenLead}
+        checkedPersonIds={new Set()} onToggleChecked={vi.fn()} />);
+      const row = screen.getByRole('row', { name: /Avery Landlord/ });
+      const composing = new KeyboardEvent('keydown', {
+        key, isComposing: true, bubbles: true, cancelable: true,
+      });
+      fireEvent(row, composing);
+      expect(composing.defaultPrevented).toBe(false);
+      const handled = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      handled.preventDefault();
+      fireEvent(row, handled);
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(onOpenLead).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['j', false, 'Avery Landlord', 'person-2'],
+    ['J', true, 'Avery Landlord', 'person-2'],
+    ['ArrowDown', false, 'Avery Landlord', 'person-2'],
+    ['k', false, 'Blake Owner', 'person-1'],
+    ['K', true, 'Blake Owner', 'person-1'],
+    ['ArrowUp', false, 'Blake Owner', 'person-1'],
+  ] as const)('preserves row navigation %s', (key, shiftKey, name, expected) => {
+    const onSelect = vi.fn();
+    render(<LeadsGrid rows={[leadRow, secondRow]} selectedPersonId={null}
+      onSelect={onSelect} onUpdateField={vi.fn()} />);
+    const event = new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true });
+    fireEvent(screen.getByRole('row', { name: new RegExp(name) }), event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(expected);
+  });
+
+  it('keeps editor typing and Enter separate from row selection and opening', () => {
+    const onSelect = vi.fn();
+    const onOpenLead = vi.fn();
+    const onUpdateField = vi.fn();
+    render(<LeadsGrid rows={[leadRow, secondRow]} selectedPersonId="person-1"
+      onSelect={onSelect} onUpdateField={onUpdateField} onOpenLead={onOpenLead} />);
+    fireEvent.doubleClick(screen.getByText('Avery Landlord'));
+    const input = screen.getByRole('textbox', { name: 'Edit name for Avery Landlord' });
+    fireEvent.keyDown(input, { key: 'j' });
+    fireEvent.keyDown(input, { key: 'k' });
+    fireEvent.change(input, { target: { value: 'Avery jk' } });
+    expect((input as HTMLInputElement).value).toBe('Avery jk');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onUpdateField).toHaveBeenCalledTimes(1);
+    expect(onUpdateField).toHaveBeenCalledWith({
+      personId: 'person-1', field: 'person_name', value: 'Avery jk',
+    });
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onOpenLead).not.toHaveBeenCalled();
+  });
+
   it('moves selection with the keyboard and opens a lead with Enter', () => {
     const onSelect = vi.fn();
     const onOpenLead = vi.fn();
