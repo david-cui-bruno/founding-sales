@@ -1,3 +1,5 @@
+import { insertPerson } from './domainRows';
+import type { SafeLogFields } from '../../src/main/logging/safeLogger';
 import assert from 'node:assert/strict';
 import { createDelegationRuntime } from '../../src/main/delegation/delegationRuntime';
 import { registerOutreachIpc } from '../../src/main/ipc/registerOutreachIpc';
@@ -51,6 +53,8 @@ export const RETAINED_DISCOVERY = DISCOVERY_NOW;
 type RetainedKind = 'callback' | 'post_stage' | 'onboarding' | 'inbound_response' | 'warm_relationship' | 'founder_resurface';
 type RetainedOwner = Readonly<{ kind: RetainedKind; personId: string; prospectId: string; cycleId: string; actionId: string; sourceEventId: string; evidenceIds: readonly string[] }>;
 
+export const HEALTH_ORPHAN_ID = 'continuity-health-orphan';
+export const HEALTH_POLL_AT = '2026-09-10T15:01:00.000Z';
 export const CONTINUITY_NOW = '2026-09-10T15:00:00.000Z';
 export const CONTINUITY_URL = 'callie://app/index.html';
 export const CONTINUITY_READ_CHANNELS = [
@@ -98,7 +102,12 @@ export type ContinuityCleanup = Readonly<{
  * local company commands, real incidental reads and a finite delivery hold. The caller's
  * Electron registration map is the only replacement for the IPC transport.
  */
-export async function createContinuityDomainFixture(handlers: Map<string, RegisteredIpcHandler>, mode: 'construction' | 'company-ui' | 'retained-setup' | 'retained-ui' | 'retained-synthetic' = 'construction') {
+export async function createContinuityDomainFixture(handlers: Map<string, RegisteredIpcHandler>, mode: 'construction' | 'company-ui' | 'retained-setup' | 'retained-ui' | 'retained-synthetic' | 'health-poll' | 'health-ui' | 'health-blocked' = 'construction') {
+  const isCompanyUi = mode === 'company-ui' || mode === 'health-ui';
+  const isBlockedUi = mode === 'health-blocked';
+  const pollDiagnostics: { level: string; eventCode: string; fields?: SafeLogFields }[] = [];
+  let pollAttempted = false;
+  let latestHealth: Promise<unknown> | undefined;
   const isRetainedUi = mode === 'retained-ui' || mode === 'retained-synthetic';
   const uiCounters = { network: 0, forbidden: 0, delegationDisposals: 0 };
   let retainedMetadata: 'genuine' | 'complete' | 'partial' = 'genuine';
@@ -125,6 +134,20 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       deliver: async (value: unknown) => { arrived(structuredClone(value)); const error = await decision; if (error) throw error; return value; } };
     readHolds.push(control); return control;
   }
+  const healthHolds: RetainedReadHold[] = [];
+  function holdHealthRead(): RetainedReadHold {
+    assert.equal(mode, 'health-ui'); assert.ok(!disposed); assert.ok(healthHolds.length < 2);
+    let arrived!: (value: unknown | null) => void, decide!: (error: Error | null) => void;
+    const arrival = new Promise<unknown | null>(resolve => { arrived = resolve; });
+    const decision = new Promise<Error | null>(resolve => { decide = resolve; });
+    let settled = false, claimed = false;
+    const finish = (error: Error | null) => { if (settled) return; settled = true; clearDeliveryTimeout(timer); arrived(null); decide(error); };
+    const timer = deliveryTimeout(() => finish(new Error('Health delivery watchdog expired')), 5_000);
+    const control: RetainedReadHold = { arrival, release: () => finish(null), reject: () => finish(new Error('Health delivery rejected')),
+      cancel: () => finish(new Error('Health delivery disposed')), claim: () => { if (claimed || settled) return false; claimed = true; return true; },
+      deliver: async value => { arrived(structuredClone(value)); const error = await decision; if (error) throw error; return value; } };
+    healthHolds.push(control); return control;
+  }
   assert.equal(handlers.size, 0, 'Continuity fixture requires an empty owned transport map');
   const temp = createTempDatabase();
   const directory = dirname(dirname(temp.path));
@@ -139,6 +162,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
   };
   let database: AppDatabase | undefined;
   let capturedRuntime: DomainRuntime | undefined;
+  let startupReport: ReturnType<DomainRuntime['initialize']> | undefined;
   let retainedServices: DomainServices | undefined;
   const retainedOwners: RetainedOwner[] = [];
   let disposed = false;
@@ -210,10 +234,11 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
     },
     createDomainRuntime: (db) => {
       counts.domainConstructions++;
+      if (isBlockedUi) insertPerson(db.raw, HEALTH_ORPHAN_ID);
       const domain = new DomainRuntime({ database: db, clock: new SystemClock(), ids: new UuidGenerator() });
       capturedRuntime = domain;
       const initialize = domain.initialize.bind(domain);
-      domain.initialize = () => { counts.domainBootstraps++; return initialize(); };
+      domain.initialize = () => { counts.domainBootstraps++; startupReport = initialize(); return startupReport; };
       const shutdown = domain.shutdown.bind(domain);
       domain.shutdown = () => { counts.domainShutdowns++; shutdown(); };
       return domain;
@@ -241,12 +266,16 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
     clock: new SystemClock(),
     loadCredentials: async () => {
       counts.credentialLoads++;
-      return { credentials: null, source: 'none' };
+      return mode === 'health-poll'
+        ? { credentials: { accessKeyId: 'synthetic-access', secretAccessKey: 'synthetic-secret' }, source: 'file' as const }
+        : { credentials: null, source: 'none' as const };
     },
     createInboxClient: async () => {
       counts.inboxCreations++;
       throw new Error('Stage0 does not create an inbox client');
     },
+    ...(mode === 'health-poll' ? { pollIds: { next: () => 'c140fbf0-5b83-4a50-baa2-8fc06f1028fe' },
+      logger: { log: (level: 'debug' | 'info' | 'warn' | 'error', eventCode: string, fields?: SafeLogFields) => { pollDiagnostics.push({ level, eventCode, fields }); } } } : {}),
     watchdogTimer: { schedule: () => {
       counts.pollSchedules++;
       throw new Error('Stage0 does not schedule a poller');
@@ -265,6 +294,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       try { counts.pollerIdleWaits++; await poller.idle(); } catch (error) { errors.push(error); }
       delivery?.cancel(); // Cancel/release delivery BEFORE draining invokes.
       for (const hold of readHolds) hold.cancel();
+      for (const hold of healthHolds) hold.cancel();
       await Promise.allSettled([...flights]);
       for (const unregister of unregisters.splice(0).reverse()) {
         try { unregister(); } catch (error) { errors.push(error); }
@@ -299,7 +329,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
     unregisters.push(registerHealthIpc(observed, trusted));
     unregisters.push(registerLocalWorkspaceIpc(createLocalWorkspaceProvider(observed), trusted));
     unregisters.push(registerFridayIpc(createFridayProvider(observed), trusted));
-    if (mode === 'company-ui' || isRetainedUi) {
+    if (isCompanyUi || isRetainedUi) {
       unregisters.push(registerDailyIpc(createDailyProvider(observed), trusted));
       unregisters.push(registerLeadsIpc(createLeadsProvider(observed), trusted));
       unregisters.push(registerLeadDetailIpc(createLeadDetailProvider(observed), trusted));
@@ -317,7 +347,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
         begin: denied, override: denied,
       } }));
     }
-    assert.deepEqual([...handlers.keys()].sort(), [...(isRetainedUi ? RETAINED_UI_REGISTERED_CHANNELS : mode === 'company-ui' ? CONTINUITY_UI_REGISTERED_CHANNELS : CONTINUITY_REGISTERED_CHANNELS)].sort());
+    assert.deepEqual([...handlers.keys()].sort(), [...(isRetainedUi ? RETAINED_UI_REGISTERED_CHANNELS : isCompanyUi ? CONTINUITY_UI_REGISTERED_CHANNELS : CONTINUITY_REGISTERED_CHANNELS)].sort());
 
     const invokeFrom = (senderUrl: string, channel: string, ...args: unknown[]): Promise<unknown> => {
       const index = trace.length;
@@ -326,13 +356,13 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       const flight = (async () => {
         try {
           if (disposed) throw new Error('Continuity fixture is disposed');
-          if (!((isRetainedUi ? RETAINED_UI_CHANNELS : mode === 'company-ui' ? CONTINUITY_UI_CHANNELS : mode === 'retained-setup' ? [...CONTINUITY_READ_CHANNELS, 'local-workspace:transition'] : CONTINUITY_READ_CHANNELS) as readonly string[]).includes(channel)) {
+          if (!((isRetainedUi ? RETAINED_UI_CHANNELS : isCompanyUi ? CONTINUITY_UI_CHANNELS : isBlockedUi ? [...CONTINUITY_READ_CHANNELS, 'local-workspace:create-company'] : mode === 'retained-setup' ? [...CONTINUITY_READ_CHANNELS, 'local-workspace:transition'] : CONTINUITY_READ_CHANNELS) as readonly string[]).includes(channel)) {
             if (isRetainedUi) uiCounters.forbidden++;
             throw new Error('Stage0 only admits its four readonly channels');
           }
           // Explicit synthetic UNCONFIGURED worker transport only. No registrar,
           // credential access, worker authority, grant, pairing or readiness claim.
-          if (mode === 'company-ui' && channel === 'outreach:delegation-status') {
+          if (isCompanyUi && channel === 'outreach:delegation-status') {
             assert.equal(senderUrl, CONTINUITY_URL); assert.equal(args.length, 0);
             const result = localDelegationStatusSchema.parse({ state: 'unconfigured', workspaceId: null, endpoint: null, configuration: null });
             trace[index] = Object.freeze({ ...entry, synthetic: true, result, outcome: 'resolved' });
@@ -343,6 +373,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
           trace[index] = Object.freeze({ ...entry, handlerStarted: true });
           const hold = channel === 'local-workspace:create-company' && delivery?.claim() ? delivery : undefined;
           const retainedHold = channel === 'local-workspace:get-commitments' ? readHolds.find(item => item.claim()) : undefined;
+          const healthHold = channel === 'health:get' ? healthHolds.find(item => item.claim()) : undefined;
           const actual = await handler({ senderFrame: { url: senderUrl } }, ...args);
           let result = actual;
           if (mode === 'retained-synthetic' && channel === 'daily:get') {
@@ -365,7 +396,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
             trace[index] = Object.freeze({ ...trace[index]!, synthetic: true, presentationVariant: retainedMetadata === 'complete' ? 'retained-complete' : 'retained-partial', actualResult: structuredClone(actual) });
           }
           trace[index] = Object.freeze({ ...trace[index]!, result: structuredClone(result) });
-          const delivered = hold ? await hold.hold(args[0], result) : retainedHold ? await retainedHold.deliver(result) : result;
+          const delivered = hold ? await hold.hold(args[0], result) : retainedHold ? await retainedHold.deliver(result) : healthHold ? await healthHold.deliver(result) : result;
           trace[index] = Object.freeze({ ...trace[index]!, outcome: 'resolved' });
           return delivered;
         } catch (error) {
@@ -373,6 +404,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
           throw error;
         }
       })();
+      if (channel === 'health:get') latestHealth = flight;
       flights.add(flight);
       if (channel !== 'local-workspace:create-company') {
         readFlights.add(flight);
@@ -534,14 +566,22 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
         pendingIds: db.raw.prepare<[], { id: string }>("SELECT id FROM next_actions WHERE status='pending' ORDER BY id").all().map(row => row.id),
       }));
     };
-    return Object.freeze({ api, isRetainedUi, holdRetainedRead,
+    return Object.freeze({ api, isRetainedUi, isBlockedUi, holdRetainedRead, holdHealthRead,
+      drainLatestHealth: async () => { assert.equal(mode, 'health-ui'); assert.ok(latestHealth); await latestHealth; },
+      failSourcingOnce: async () => { assert.equal(mode, 'health-poll'); assert.equal(pollAttempted, false); assert.equal(new Date().toISOString(), HEALTH_POLL_AT); pollAttempted = true; await poller.pollNow(); },
+      pollDiagnostics: () => structuredClone(pollDiagnostics),
+      healthEvidence: async () => { assert.ok(mode.startsWith('health-')); assert.ok(startupReport); return runtime.withDatabase(db => ({
+        report: structuredClone(startupReport!), reportFrozen: Object.isFrozen(startupReport),
+        audit: auditDomainInvariants({ database: db, asOf: new Date().toISOString() }),
+      })); },
       uiCounters: () => Object.freeze({ ...uiCounters }),
       partialWorker: () => { assert.equal(mode, 'retained-synthetic'); assert.equal(workerPartial, false); workerPartial = true; },
       completeRetained: () => { assert.equal(mode, 'retained-synthetic'); assert.equal(retainedMetadata, 'genuine'); retainedMetadata = 'complete'; },
       partialRetained: () => { assert.equal(mode, 'retained-synthetic'); assert.equal(retainedMetadata, 'complete'); retainedMetadata = 'partial'; },
       rejectNextDaily: () => { assert.equal(mode, 'retained-synthetic'); assert.equal(dailyRejectionUsed, false); dailyRejectionUsed = true; rejectDaily = true; },
       seedRetained, retainedEvidence, invokeFrom, evidence, companyEvidence, armCompanyDelivery,
-      cancelDelivery: () => { delivery?.cancel(); for (const hold of readHolds) hold.cancel(); },
+      cancelDelivery: () => { delivery?.cancel(); for (const hold of readHolds) hold.cancel();
+      for (const hold of healthHolds) hold.cancel(); },
       drainInvocations: () => Promise.allSettled([...flights]),
       drainReads: () => Promise.allSettled([...readFlights]), counts: () => Object.freeze({ ...counts }),
       trace: () => [...trace], dispose });

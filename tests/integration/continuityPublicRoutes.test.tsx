@@ -15,7 +15,7 @@ import { localDelegationStatusSchema } from '../../src/shared/contracts/ownerCom
 import { fridayReportSchema } from '../../src/shared/contracts/fridayContract';
 import { localCommitmentsSnapshotSchema, localWorkspaceSnapshotSchema, localWorkflowReceiptSchema } from '../../src/shared/contracts/localWorkspaceContract';
 import {
-  RETAINED_T, RETAINED_O, RETAINED_DISCOVERY, RETAINED_UI_REGISTERED_CHANNELS, SYNTHETIC_WORKER_IDS,
+  HEALTH_ORPHAN_ID, HEALTH_POLL_AT, RETAINED_T, RETAINED_O, RETAINED_DISCOVERY, RETAINED_UI_REGISTERED_CHANNELS, SYNTHETIC_WORKER_IDS,
   CONTINUITY_NOW, CONTINUITY_READ_CHANNELS, CONTINUITY_REGISTERED_CHANNELS, CONTINUITY_URL,
   createContinuityDomainFixture, CONTINUITY_UI_CHANNELS, CONTINUITY_UI_REGISTERED_CHANNELS,
 } from '../fixtures/continuityDomainFixture';
@@ -94,7 +94,7 @@ afterEach(async () => {
           expect(result).toEqual({ databaseClosed: true, keysZeroed: true, directoryRemoved: true,
             registrationsRemaining: 0, pendingInvocations: 0, cleanupRuns: 1, runtimeShutdowns: 1,
             domainShutdowns: 1, databaseCloses: 1, pollerStops: 1, pollerIdleWaits: 1 });
-          expect([...transport.removals].sort()).toEqual([...(value.isRetainedUi ? RETAINED_UI_REGISTERED_CHANNELS : CONTINUITY_UI_REGISTERED_CHANNELS)].sort());
+          expect([...transport.removals].sort()).toEqual([...(value.isRetainedUi ? RETAINED_UI_REGISTERED_CHANNELS : value.isBlockedUi ? CONTINUITY_REGISTERED_CHANNELS : CONTINUITY_UI_REGISTERED_CHANNELS)].sort());
           if (value.isRetainedUi) expect(value.uiCounters()).toEqual({ network: 0, forbidden: 0, delegationDisposals: 1 });
           expect(value.counts()).toMatchObject({ credentialLoads: 0, inboxCreations: 0, pollSchedules: 0 });
         }
@@ -807,5 +807,167 @@ describe('actual Today retained work and separately labeled synthetic worker pre
       expect({ ...presented, reviewErrorCount: real.reviewErrorCount }).toEqual(real);
     }
     expect(await value.retainedEvidence()).toEqual(context.evidence);
+  });
+});
+
+
+function assertOneHealthGraph(value: Fixture, expected: { credentialLoads: number; inboxCreations: number }) {
+  expect(value.counts()).toMatchObject({ keyLoads: 1, preparations: 1, databaseOpens: 1, migrations: 1,
+    domainConstructions: 1, domainBootstraps: 1, healthConstructions: 1, pollSchedules: 0, ...expected });
+}
+function healthObservation() {
+  return screen.getByRole('region', { name: 'Diagnostic observation' });
+}
+function healthObservedAt() { return healthObservation().querySelector('time')?.dateTime; }
+
+describe('actual health observation and initialized blocked admission', () => {
+  it('H1 observes one genuine failed poll without repeating bootstrap or writing domain state', async () => {
+    const value = await createContinuityDomainFixture(transport.handlers, 'health-poll'); fixtures.push(value);
+    const baseline = await value.evidence(), initialReport = await value.healthEvidence();
+    expect(initialReport).toMatchObject({ report: { status: 'ready', evaluatedAt: CONTINUITY_NOW }, reportFrozen: true, audit: [] });
+    const before = appHealthSchema.parse(await value.api.health.get());
+    expect(before).toMatchObject({ domainReady: true, domainStatus: 'ready', domainStartupEvaluatedAt: CONTINUITY_NOW, operationalStatus: 'ready',
+      sourcing: { status: 'healthy', reasons: [], lastSuccessAgeMs: null, state: { state: 'idle', consecutiveFailures: 0, lastFailureAt: null, lastCompletedAt: null } } });
+    assertOneHealthGraph(value, { credentialLoads: 0, inboxCreations: 0 });
+    vi.setSystemTime(new Date(HEALTH_POLL_AT));
+    // Date only is fake. pollNow owns and clears its real unref 14-minute deadline.
+    // Synthetic credentials are in-memory metadata; the rejecting factory creates no inbox.
+    await value.failSourcingOnce();
+    const after = appHealthSchema.parse(await value.api.health.get());
+    expect(after.operationalStatus).toBe('degraded');
+    expect(after.sourcing).toEqual({ status: 'degraded', reasons: ['CREDENTIALS_WITHOUT_COMPLETED_POLL'], lastSuccessAgeMs: null,
+      state: { state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null, consecutiveFailures: 1,
+        lastFailureAt: HEALTH_POLL_AT, lastFailureCode: 'POLL_FAILED', backlogCount: null } });
+    expect({ ...after, operationalStatus: before.operationalStatus, sourcing: before.sourcing }).toEqual(before);
+    expect(await value.healthEvidence()).toEqual(initialReport);
+    expect(await value.evidence()).toEqual(baseline);
+    assertOneHealthGraph(value, { credentialLoads: 1, inboxCreations: 1 });
+    expect(value.counts()).toMatchObject({ domainEntries: 0, healthReads: 2 });
+    expect(value.pollDiagnostics()).toEqual([{ level: 'error', eventCode: 'SOURCING_POLL_FAILED', fields: {
+      component: 'sourcing-poller', pollId: 'c140fbf0-5b83-4a50-baa2-8fc06f1028fe', backlogCount: undefined, status: 'POLL_FAILED', errorClass: 'Error',
+    } }]);
+    expect(value.trace().map(({ channel, args, handlerStarted, outcome }) => ({ channel, args, handlerStarted, outcome }))).toEqual([
+      { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
+      { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
+    ]);
+    expect(transport.registrations).toHaveLength(12);
+    const disposal = value.dispose(); expect(value.dispose()).toBe(disposal);
+    expect(await disposal).toEqual({ databaseClosed: true, keysZeroed: true, directoryRemoved: true, registrationsRemaining: 0,
+      pendingInvocations: 0, cleanupRuns: 1, runtimeShutdowns: 1, domainShutdowns: 1, databaseCloses: 1, pollerStops: 1, pollerIdleWaits: 1 });
+    expect([...transport.removals].sort()).toEqual([...CONTINUITY_REGISTERED_CHANNELS].sort());
+  });
+
+  it('H2 retains the actual company editor through rejected timed-out and superseded diagnostic observations', async () => {
+    const value = await createContinuityDomainFixture(transport.handlers, 'health-ui'); fixtures.push(value);
+    mountContinuityApp(value, 'accounts');
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Add company' }) as HTMLButtonElement).disabled).toBe(false));
+    await act(async () => { await value.drainReads(); });
+    await editCompany(value);
+    const baseline = await value.evidence(), report = await value.healthEvidence();
+    const editor = screen.getByRole('textbox', { name: 'Company name' }) as HTMLInputElement;
+    fireEvent.change(editor, { target: { value: '  Unsubmitted health company  ' } });
+    editor.focus(); editor.setSelectionRange(3, 11, 'forward');
+    const raw = editor.value;
+    const visibility = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    const assertEditor = () => {
+      expect(screen.getByRole('textbox', { name: 'Company name' })).toBe(editor);
+      expect(editor.value).toBe(raw); expect(editor.selectionStart).toBe(3); expect(editor.selectionEnd).toBe(11);
+      expect(editor.selectionDirection).toBe('forward'); expect(document.activeElement).toBe(editor);
+      expect(window.location.hash).toBe('#/accounts'); expect(companyCalls(value)).toEqual([]);
+    };
+    // Shipped focus listeners refresh diagnostics and five bounded workspace reads without moving DOM focus.
+    // Programmatic focus/event proof only, not a native pointer-click claim.
+    const trigger = () => window.dispatchEvent(new Event('focus'));
+    try {
+      expect(healthObservedAt()).toBe(CONTINUITY_NOW); assertEditor();
+      assertOneHealthGraph(value, { credentialLoads: 0, inboxCreations: 0 });
+      assertUiInventory(value, { 'health:get': 1, 'lead-detail:outbound-capabilities': 1, 'review:list': 1, 'daily:get': 1,
+        'outreach:delegation-status': 1, 'local-workspace:get': 1, 'local-workspace:get-commitments': 1 });
+      vi.useRealTimers(); vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+      vi.setSystemTime(new Date('2026-09-10T15:00:01.000Z'));
+      const rejected = value.holdHealthRead();
+      await act(async () => { trigger(); expect(await rejected.arrival).not.toBeNull(); });
+      expect(within(healthObservation()).getByText('Refreshing diagnostics…')).not.toBeNull(); assertEditor();
+      await act(async () => { rejected.reject(); await expect(value.drainLatestHealth()).rejects.toThrow('Health delivery rejected'); });
+      expect(within(healthObservation()).getByRole('alert')).not.toBeNull();
+      expect(healthObservedAt()).toBe(CONTINUITY_NOW); assertEditor();
+      vi.setSystemTime(new Date('2026-09-10T15:00:02.000Z'));
+      const expired = value.holdHealthRead();
+      await act(async () => { trigger(); expect(await expired.arrival).not.toBeNull(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(14_999); });
+      expect(within(healthObservation()).getByText('Refreshing diagnostics…')).not.toBeNull(); assertEditor();
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(within(healthObservation()).queryByText('Refreshing diagnostics…')).toBeNull();
+      expect(within(healthObservation()).getByRole('alert')).not.toBeNull();
+      expect(healthObservedAt()).toBe(CONTINUITY_NOW); assertEditor();
+      const healthReads = () => value.trace().filter(entry => entry.channel === 'health:get');
+      expect(healthReads().map(entry => entry.outcome)).toEqual(['resolved', 'rejected', 'pending']);
+      assertUiInventory(value, { 'health:get': 3, 'lead-detail:outbound-capabilities': 1, 'review:list': 3, 'daily:get': 3,
+        'outreach:delegation-status': 3, 'local-workspace:get': 3, 'local-workspace:get-commitments': 3 });
+      vi.setSystemTime(new Date('2026-09-10T15:00:30.000Z'));
+      await act(async () => { trigger(); await value.drainLatestHealth(); });
+      expect(healthObservedAt()).toBe('2026-09-10T15:00:30.000Z');
+      expect(within(healthObservation()).queryByRole('alert')).toBeNull(); assertEditor();
+      expect(healthReads().map(entry => entry.outcome)).toEqual(['resolved', 'rejected', 'pending', 'resolved']);
+      vi.setSystemTime(new Date('2026-09-10T15:00:31.000Z'));
+      await act(async () => { expired.release(); await value.drainReads(); });
+      expect(healthObservedAt()).toBe('2026-09-10T15:00:30.000Z'); assertEditor();
+      vi.setSystemTime(new Date('2026-09-10T15:00:32.000Z'));
+      await act(async () => { trigger(); await value.drainLatestHealth(); });
+      expect(healthObservedAt()).toBe('2026-09-10T15:00:32.000Z'); assertEditor();
+      expect(healthReads().map(entry => entry.outcome)).toEqual(['resolved', 'rejected', 'resolved', 'resolved', 'resolved']);
+      for (const entry of healthReads()) {
+        expect(entry.handlerStarted).toBe(true); expect(entry.synthetic).toBeUndefined(); expect(entry.args).toEqual([]);
+        expect(appHealthSchema.parse(entry.result).domainStartupEvaluatedAt).toBe(CONTINUITY_NOW);
+      }
+      expect(await value.evidence()).toEqual(baseline); expect(await value.healthEvidence()).toEqual(report);
+      assertOneHealthGraph(value, { credentialLoads: 0, inboxCreations: 0 });
+      expect(value.counts().healthReads).toBe(5);
+      assertUiInventory(value, { 'health:get': 5, 'lead-detail:outbound-capabilities': 1, 'review:list': 5, 'daily:get': 5,
+        'outreach:delegation-status': 5, 'local-workspace:get': 5, 'local-workspace:get-commitments': 5 });
+    } finally {
+      await act(async () => { value.cancelDelivery(); await value.drainInvocations(); });
+      if (visibility) Object.defineProperty(document, 'visibilityState', visibility); else Reflect.deleteProperty(document, 'visibilityState');
+    }
+  });
+
+  it('H3 exposes real blocked startup diagnostics while refusing public domain reads and a valid company mutation', async () => {
+    const value = await createContinuityDomainFixture(transport.handlers, 'health-blocked'); fixtures.push(value);
+    const baseline = await value.evidence(), report = await value.healthEvidence();
+    expect(report).toMatchObject({ report: { status: 'blocked', evaluatedAt: CONTINUITY_NOW }, reportFrozen: true });
+    const violation = { kind: 'canonical_prospect_cardinality', recordId: HEALTH_ORPHAN_ID };
+    expect(report.report.violations).toEqual(expect.arrayContaining([expect.objectContaining(violation)]));
+    expect(report.audit).toEqual(expect.arrayContaining([expect.objectContaining(violation)]));
+    expect(report.report.blockingViolationCount).toBeGreaterThan(0);
+    const initial = appHealthSchema.parse(await value.api.health.get());
+    expect(initial).toMatchObject({ domainReady: false, domainStatus: 'blocked', domainStartupEvaluatedAt: CONTINUITY_NOW,
+      domainBlockingViolationCount: report.report.blockingViolationCount, operationalStatus: 'ready', sourcing: { status: 'healthy', reasons: [] } });
+    mountContinuityApp(value, 'accounts');
+    await screen.findByText(/The startup audit is blocked or inconsistent/);
+    await act(async () => { await value.drainReads(); });
+    expect(screen.getByRole('region', { name: 'Foundation health' })).not.toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Accounts' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add company' })).toBeNull();
+    expect(screen.queryByText('The diagnostic read could not be completed')).toBeNull();
+    const request = localCompanyCreateRequestSchema.parse({ ...COMPANY, commandId: randomUUID() });
+    await expect(value.api.localWorkspace.getCommitments()).rejects.toThrow();
+    await expect(value.api.friday.getCurrent()).rejects.toThrow();
+    await expect(value.api.localWorkspace.createCompany(request)).rejects.toThrow();
+    expect(appHealthSchema.parse(await value.api.health.get())).toEqual(initial);
+    expect(value.counts()).toMatchObject({ domainEntries: 0, healthReads: 3 });
+    assertOneHealthGraph(value, { credentialLoads: 0, inboxCreations: 0 });
+    expect(await value.evidence()).toEqual(baseline); expect(await value.healthEvidence()).toEqual(report);
+    expect(value.trace().map(({ channel, args, handlerStarted, outcome }) => ({ channel, args, handlerStarted, outcome }))).toEqual([
+      { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
+      { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
+      { channel: 'local-workspace:get-commitments', args: [], handlerStarted: true, outcome: 'rejected' },
+      { channel: 'friday:get', args: [], handlerStarted: true, outcome: 'rejected' },
+      { channel: 'local-workspace:create-company', args: [request], handlerStarted: true, outcome: 'rejected' },
+      { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
+    ]);
+    expect([...transport.registrations].sort()).toEqual([...CONTINUITY_REGISTERED_CHANNELS].sort());
+    expect(transport.registrations).toHaveLength(12);
   });
 });
