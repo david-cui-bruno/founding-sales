@@ -1279,6 +1279,14 @@ describe('reliability Step C1: finite Leads handler admission and real-result de
 
 // C2 phase1: real legacy review scheduling, not outreach, client-CAS or packaged browser proof.
 type ReviewDecisionKind = 'ready' | 'dismiss';
+type DecisionPresentation = 'dock' | 'full';
+type DecisionSurface = ReturnType<typeof within>;
+type DecisionFlowResult = { control: ReviewDecisionControl; section: HTMLElement; submit: HTMLButtonElement; detail: LeadDetail };
+type DecisionAttemptOptions = { duplicate?: boolean; baseline?: DecisionState; before?: ReturnType<ReliabilityDomainFixture['snapshot']> };
+type DecisionOpenOptions = { flushAfterOpen?: boolean };
+type DecisionRunOptions = DecisionOpenOptions & { flushAfterSubmit?: boolean };
+type DecisionAttemptResult = DecisionFlowResult & { arrival: ReliabilityTrace };
+type DecisionRunResult = DecisionFlowResult & { receipt: unknown };
 type DecisionState = ReturnType<ReliabilityDomainFixture['reviewDecisionState']>;
 function assertImportedJobBaseline(fixture: ReliabilityDomainFixture, state: DecisionState, owners: readonly ImportedOwner[]) {
   const preview = channelEntries(fixture, 'imports:preview');
@@ -1337,16 +1345,21 @@ function capturedDetail(fixture: ReliabilityDomainFixture, owner: ImportedOwner)
     personName: owner.name, stage: 'unreviewed', workflowStatus: 'active', cadence: null, outboundAttempts: [] });
   return detail;
 }
-async function discloseDecision(fixture: ReliabilityDomainFixture, owner: ImportedOwner, kind: ReviewDecisionKind) {
-  const inspector = await screen.findByRole('complementary', { name: `${owner.name} details` });
-  fireEvent.click(within(inspector).getByText('Details', { selector: 'summary' }));
+function decisionSurface(owner: ImportedOwner, presentation: DecisionPresentation): DecisionSurface {
+  return within(screen.getByRole(presentation === 'dock' ? 'complementary' : 'article',
+    { name: presentation === 'dock' ? `${owner.name} details` : `${owner.name} full page` }));
+}
+async function discloseDecision(fixture: ReliabilityDomainFixture, owner: ImportedOwner, kind: ReviewDecisionKind, presentation: DecisionPresentation = 'dock', drainAfterBrief = true) {
+  const inspector = decisionSurface(owner, presentation);
+  fireEvent.click(inspector.getByText('Details', { selector: 'summary' }));
   await waitFor(() => expect(channelEntries(fixture, 'discovery:get-brief').at(-1)).toMatchObject({
     args: [{ personId: owner.personId }], outcome: 'resolved' }));
-  await flush(fixture);
-  expect(within(within(inspector).getByRole('region', { name: `Discovery evidence for ${owner.name}` }))
+  if (drainAfterBrief) await flush(fixture);
+  else await within(await screen.findByRole('region', { name: `Discovery evidence for ${owner.name}` })).findByText('Not assessed');
+  expect(within(inspector.getByRole('region', { name: `Discovery evidence for ${owner.name}` }))
     .getByText('Not assessed')).toBeTruthy();
-  fireEvent.click(within(inspector).getByRole('button', { name: 'Founder manual controls' }));
-  const section = within(inspector).getByRole('region', { name: 'Review this lead' });
+  fireEvent.click(inspector.getByRole('button', { name: 'Founder manual controls' }));
+  const section = inspector.getByRole('region', { name: 'Review this lead' });
   if (kind === 'dismiss') {
     fireEvent.click(within(section).getByRole('button', { name: 'Dismiss' }));
     const reason = within(section).getByRole('combobox', { name: 'Dismissal reason' });
@@ -1434,15 +1447,100 @@ function assertDecisionPersistence(fixture: ReliabilityDomainFixture, baseline: 
     || row.channel === 'outbound_command' || row.adapter === 'callie_outbound_v1')).toEqual([]);
   expect(fixture.counts().externalInvocations).toBe(0);
 }
+
+async function openOwnerForDecision(fixture: ReliabilityDomainFixture, owner: ImportedOwner, index: number,
+  presentation: DecisionPresentation = 'dock', options: DecisionOpenOptions = {}) {
+  const row = await virtualRow(owner, index); row.focus(); fireEvent.keyDown(row, { key: 'Enter' });
+  await screen.findByRole('complementary', { name: `${owner.name} details` });
+  await waitFor(() => expect(channelEntries(fixture, 'lead-detail:get').filter(entry =>
+    entry.phase === 'ui' && (entry.args[0] as { personId: string }).personId === owner.personId
+    && entry.handlerSettled === true && entry.outcome === 'resolved')).toHaveLength(1));
+  if (options.flushAfterOpen ?? true) await flush(fixture);
+  if (presentation === 'full') {
+    const gets = channelEntries(fixture, 'lead-detail:get').length;
+    fireEvent.click(screen.getByRole('button', { name: 'Open full page' }));
+    await screen.findByRole('article', { name: `${owner.name} full page` });
+    expect(channelEntries(fixture, 'lead-detail:get')).toHaveLength(gets);
+    if (options.flushAfterOpen ?? true) await flush(fixture);
+  }
+}
+function closeDecisionPresentation(owner: ImportedOwner, presentation: DecisionPresentation) {
+  const surface = screen.getByRole(presentation === 'dock' ? 'complementary' : 'article',
+    { name: presentation === 'dock' ? `${owner.name} details` : `${owner.name} full page` });
+  fireEvent.click(within(surface).getByRole('button', { name: presentation === 'dock' ? 'Close inspector' : 'Close inspector' }));
+}
+async function prepareDecision(fixture: ReliabilityDomainFixture, owner: ImportedOwner, kind: ReviewDecisionKind,
+  presentation: DecisionPresentation = 'dock', drainAfterBrief = true): Promise<DecisionFlowResult> {
+  const detail = capturedDetail(fixture, owner);
+  const control = decisionInput(kind, detail);
+  const ui = await discloseDecision(fixture, owner, kind, presentation, drainAfterBrief);
+  return { control, section: ui.section, submit: ui.submit, detail };
+}
+async function startHeldDecision(fixture: ReliabilityDomainFixture, flow: DecisionFlowResult, kind: ReviewDecisionKind,
+  options: DecisionAttemptOptions = {}): Promise<DecisionAttemptResult> {
+  const hold = fixture.holdReviewDecision(flow.control);
+  const beforeDecisionEntries = channelEntries(fixture, flow.control.channel).length;
+  const changes = fixture.totalChanges(); const entries = fixture.counts().domainEntries;
+  flow.submit.focus();
+  if (options.duplicate ?? true) act(() => {
+    flow.submit.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    flow.submit.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  else fireEvent.click(flow.submit);
+  const arrival = await hold.arrived();
+  expect(arrival).toMatchObject({ phase: 'ui', channel: flow.control.channel, args: [flow.control.request], handlerStarted: false, outcome: 'pending' });
+  expect(arrival.result).toBeUndefined(); assertReviewPending(flow.section, kind);
+  expect(channelEntries(fixture, flow.control.channel).slice(beforeDecisionEntries).map(entry => entry.args)).toEqual([[flow.control.request]]);
+  expect(fixture.counts().domainEntries).toBe(entries); expect(fixture.totalChanges()).toBe(changes);
+  if (options.before !== undefined) expect(fixture.snapshot()).toEqual(options.before);
+  if (options.baseline !== undefined) expect(fixture.reviewDecisionState()).toEqual(options.baseline);
+  act(() => { hold.release(); });
+  return { ...flow, arrival };
+}
+async function runImmediateDecision(fixture: ReliabilityDomainFixture, owner: ImportedOwner, kind: ReviewDecisionKind,
+  presentation: DecisionPresentation = 'dock', options: DecisionRunOptions = {}): Promise<DecisionRunResult> {
+  const flow = await prepareDecision(fixture, owner, kind, presentation, options.flushAfterSubmit ?? true);
+  flow.submit.focus(); fireEvent.click(flow.submit);
+  await waitFor(() => expect(channelEntries(fixture, flow.control.channel).at(-1)).toMatchObject({
+    args: [flow.control.request], handlerStarted: true, handlerSettled: true, outcome: 'resolved' }));
+  const entry = channelEntries(fixture, flow.control.channel).at(-1)!;
+  mutationReceiptSchema.parse(entry.result);
+  if (options.flushAfterSubmit ?? true) await flush(fixture);
+  return { ...flow, receipt: mutationReceiptSchema.parse(entry.result) };
+}
+function expectedReachable(owners: readonly ImportedOwner[], changed: readonly ImportedOwner[], kind: ReviewDecisionKind) {
+  return kind === 'ready' ? owners : owners.filter(owner => !changed.some(value => value.personId === owner.personId));
+}
+async function refreshAndContinue(fixture: ReliabilityDomainFixture, owners: readonly ImportedOwner[], expected: readonly ImportedOwner[],
+  requests: LeadsListRequest[]) {
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh list' }));
+  await screen.findByText(`Showing 200 of ${expected.length}`); await flush(fixture);
+  const refreshed = latestLeads(fixture); requests.push(leadRequest());
+  expect(refreshed.total).toBe(expected.length); expect(refreshed.nextCursor).toEqual(expect.any(String));
+  expect(refreshed.rows.map(item => item.personId)).toEqual(expected.slice(0, 200).map(owner => owner.personId));
+  fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+  await screen.findByText(`Showing ${expected.length} of ${expected.length}`); await flush(fixture);
+  requests.push(leadRequest('', refreshed.nextCursor)); const last = latestLeads(fixture);
+  expect(last.total).toBe(expected.length); expect(last.nextCursor).toBeNull();
+  expect([...refreshed.rows, ...last.rows].map(item => [item.personId, item.salesCycleId]))
+    .toEqual(expected.map(owner => [owner.personId, owner.salesCycleId]));
+  expect(new Set([...refreshed.rows, ...last.rows].map(item => item.personId)).size).toBe(expected.length);
+  expect(screen.getByRole('grid', { name: 'Leads' }).getAttribute('aria-rowcount')).toBe(String(expected.length + 1));
+}
+
 function assertDecisionInventory(fixture: ReliabilityDomainFixture, requests: LeadsListRequest[],
-  controls: ReviewDecisionControl[], owners: readonly ImportedOwner[], stale: LeadsListRequest) {
+  controls: ReviewDecisionControl[], detailOwners: readonly ImportedOwner[], stale: LeadsListRequest,
+  briefOwners: readonly ImportedOwner[] = detailOwners, rejectedUiList?: LeadsListRequest) {
   const trace = fixture.trace();
   const allowed = ['imports:preview', 'imports:commit', 'review:list', 'lead-detail:outbound-capabilities',
     'leads:list', 'lead-detail:get', 'discovery:get-brief', ...controls.map(control => control.channel)];
   for (const entry of trace) {
     expect(allowed, `unaccounted C2 channel ${entry.channel}`).toContain(entry.channel);
     expect(entry.handlerStarted).toBe(true); expect(entry.handlerSettled).toBe(true);
-    expect(entry.phase).toBe(entry.channel.startsWith('imports:') ? 'setup' : entry.outcome === 'rejected' ? 'probe' : 'ui');
+    if (entry.outcome === 'rejected' && entry.phase === 'ui') {
+      expect(rejectedUiList).toBeDefined();
+      expect(entry).toMatchObject({ channel: 'leads:list', args: [rejectedUiList], error: 'LEADS_DELIVERY_REJECTED' });
+    } else expect(entry.phase).toBe(entry.channel.startsWith('imports:') ? 'setup' : entry.outcome === 'rejected' ? 'probe' : 'ui');
     expect(entry.outcome).not.toBe('pending');
   }
   const preview = channelEntries(fixture, 'imports:preview'); const commit = channelEntries(fixture, 'imports:commit');
@@ -1465,20 +1563,23 @@ function assertDecisionInventory(fixture: ReliabilityDomainFixture, requests: Le
   for (const entry of lists.filter(entry => entry.phase === 'ui')) leadsListResponseSchema.parse(entry.result);
   expect(lists.filter(entry => entry.phase === 'probe')).toEqual([expect.objectContaining({
     args: [stale], outcome: 'rejected', error: 'LIST_CURSOR_STALE' })]);
-  expect(trace.filter(entry => entry.outcome === 'rejected')).toHaveLength(1);
-  for (const channel of ['lead-detail:get', 'discovery:get-brief']) {
-    expect(channelEntries(fixture, channel).map(entry => entry.args)).toEqual(owners.map(owner => [{ personId: owner.personId }]));
-  }
+  expect(trace.filter(entry => entry.outcome === 'rejected' && entry.phase === 'ui')).toHaveLength(rejectedUiList === undefined ? 0 : 1);
+  expect(trace.filter(entry => entry.outcome === 'rejected')).toHaveLength(rejectedUiList === undefined ? 1 : 2);
+  expect(channelEntries(fixture, 'lead-detail:get').map(entry => entry.args))
+    .toEqual(detailOwners.map(owner => [{ personId: owner.personId }]));
+  expect(channelEntries(fixture, 'discovery:get-brief').map(entry => entry.args))
+    .toEqual(briefOwners.map(owner => [{ personId: owner.personId }]));
   for (const [index, entry] of channelEntries(fixture, 'discovery:get-brief').entries()) {
-    const owner = owners[index]!;
+    const owner = briefOwners[index]!;
     expect(discoveryBriefSchema.parse(entry.result)).toEqual({ personId: owner.personId, salesCycleId: owner.salesCycleId,
       personName: owner.name, assessment: null, stale: false, latestOverride: null, pilotNextStep: null });
   }
   const decisions = trace.filter(entry => entry.channel === 'lead-detail:confirm-transition' || entry.channel === 'lead-detail:dismiss');
   expect(decisions.map(entry => ({ channel: entry.channel, at: 'before-handler', request: entry.args[0] }))).toEqual(controls);
+  expect(decisions).toHaveLength(briefOwners.length);
   for (const [index, entry] of decisions.entries()) {
-    expect(mutationReceiptSchema.parse(entry.result)).toMatchObject({ affectedPersonIds: [owners[index]!.personId],
-      affectedSalesCycleIds: [owners[index]!.salesCycleId] });
+    expect(mutationReceiptSchema.parse(entry.result)).toMatchObject({ affectedPersonIds: [briefOwners[index]!.personId],
+      affectedSalesCycleIds: [briefOwners[index]!.salesCycleId] });
   }
   expect(fixture.counts().externalInvocations).toBe(0);
 }
@@ -1564,6 +1665,193 @@ describe('reliability Step C2 phase1: actual docked review continuation and inde
       });
     }, 60_000);
   }
+});
+
+
+describe('reliability Step C2 phase2: full-page A continuation preserves phase1 docked assertions', () => {
+  for (const kind of ['ready', 'dismiss'] as const) {
+    it(`${kind} full page advances199 to200 then closes honestly at200of208`, async () => {
+      await withLeadsLayout(async fixture => {
+        const { owners } = await fixture.importLeads(api);
+        const baseline = fixture.reviewDecisionState(); const before = fixture.snapshot();
+        expect(baseline.workflowMode).toBe('legacy'); assertImportedJobBaseline(fixture, baseline, owners);
+        const { first, requests } = await startNameLeads(fixture, owners);
+        const firstOwner = owners[198]!; const nextOwner = owners[199]!;
+        await openOwnerForDecision(fixture, firstOwner, 198, 'full');
+        const firstFlow = await prepareDecision(fixture, firstOwner, kind, 'full');
+        const next = fixture.holdNextDetail({ personId: nextOwner.personId });
+        await startHeldDecision(fixture, firstFlow, kind, { baseline, before });
+        const successor = await next.arrived();
+        expect(successor).toMatchObject({ channel: 'lead-detail:get', args: [{ personId: nextOwner.personId }],
+          handlerStarted: true, handlerSettled: true, deliveryHeld: true, outcome: 'pending' });
+        expect(leadDetailSchema.parse(successor.result)).toMatchObject({ personId: nextOwner.personId,
+          salesCycleId: nextOwner.salesCycleId, stage: 'unreviewed' });
+        await waitFor(() => expect(document.querySelector(`[data-person-id="${nextOwner.personId}"]`)?.getAttribute('aria-selected')).toBe('true'));
+        expect(channelEntries(fixture, 'leads:list').map(entry => entry.args)).toEqual(requests.map(request => [request]));
+        assertDecisionPersistence(fixture, baseline, before, [firstOwner], kind);
+        const savedFirst = fixture.snapshot(); const savedState = fixture.reviewDecisionState(); const savedChanges = fixture.totalChanges();
+        await act(async () => { next.release(); }); await flush(fixture);
+        expect(fixture.snapshot()).toEqual(savedFirst); expect(fixture.reviewDecisionState()).toEqual(savedState);
+        expect(fixture.totalChanges()).toBe(savedChanges);
+        await screen.findByRole('article', { name: `${nextOwner.name} full page` }); await flush(fixture);
+        const nextRun = await runImmediateDecision(fixture, nextOwner, kind, 'full');
+        expect(mutationReceiptSchema.parse(nextRun.receipt)).toMatchObject({ affectedPersonIds: [nextOwner.personId],
+          affectedSalesCycleIds: [nextOwner.salesCycleId] });
+        await screen.findByText(reviewBoundary); await flush(fixture);
+        expect(screen.queryByRole('complementary')).toBeNull(); expect(screen.queryByRole('article', { name: /full page/ })).toBeNull();
+        expect(screen.getByText('Last loaded: 200 of 208')).toBeTruthy();
+        expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull(); expect(screen.queryByText(/all done|eight remaining/i)).toBeNull();
+        await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Refresh list' })));
+        assertDecisionPersistence(fixture, baseline, before, [firstOwner, nextOwner], kind);
+        const persisted = fixture.snapshot(); const state = fixture.reviewDecisionState(); const postChanges = fixture.totalChanges();
+        const stale = leadRequest('', first.nextCursor); fixture.setPhase('probe');
+        await expect(api.leads.list(stale)).rejects.toThrow('LIST_CURSOR_STALE');
+        expect(fixture.snapshot()).toEqual(persisted); expect(fixture.reviewDecisionState()).toEqual(state); expect(fixture.totalChanges()).toBe(postChanges);
+        fixture.setPhase('ui'); await refreshAndContinue(fixture, owners, expectedReachable(owners, [firstOwner, nextOwner], kind), requests);
+        expect(fixture.snapshot()).toEqual(persisted); expect(fixture.reviewDecisionState()).toEqual(state); expect(fixture.totalChanges()).toBe(postChanges);
+        assertDecisionInventory(fixture, requests, [firstFlow.control, nextRun.control], [firstOwner, nextOwner], stale);
+      });
+    }, 60_000);
+  }
+});
+
+describe('reliability Step C2 phase2: loaded208 chains and boundary remain owner-exact', () => {
+  for (const kind of ['ready', 'dismiss'] as const) for (const presentation of ['dock', 'full'] as const) {
+    it(`${kind} ${presentation} decides200 then201 observes202 and closes actual208 without wrap`, async () => {
+      await withLeadsLayout(async fixture => {
+        const { owners } = await fixture.importLeads(api);
+        const baseline = fixture.reviewDecisionState(); const before = fixture.snapshot();
+        const { first, requests } = await startNameLeads(fixture, owners);
+        await loadRemainingLeads(fixture, owners, first.nextCursor!); requests.push(leadRequest('', first.nextCursor));
+        const changed = [owners[199]!, owners[200]!, owners[207]!];
+        await openOwnerForDecision(fixture, changed[0]!, 199, presentation);
+        const firstRun = await runImmediateDecision(fixture, changed[0]!, kind, presentation);
+        await screen.findByRole(presentation === 'dock' ? 'complementary' : 'article',
+          { name: presentation === 'dock' ? `${changed[1]!.name} details` : `${changed[1]!.name} full page` }); await flush(fixture);
+        const secondRun = await runImmediateDecision(fixture, changed[1]!, kind, presentation);
+        await screen.findByRole(presentation === 'dock' ? 'complementary' : 'article',
+          { name: presentation === 'dock' ? `${owners[201]!.name} details` : `${owners[201]!.name} full page` }); await flush(fixture);
+        expect(channelEntries(fixture, 'leads:list').map(entry => entry.args)).toEqual(requests.map(request => [request]));
+        closeDecisionPresentation(owners[201]!, presentation); await waitFor(() => expect(screen.queryByText(`${owners[201]!.name} details`)).toBeNull());
+        await openOwnerForDecision(fixture, changed[2]!, 207, presentation);
+        const finalRun = await runImmediateDecision(fixture, changed[2]!, kind, presentation);
+        await screen.findByText(reviewBoundary); await flush(fixture);
+        expect(screen.getByText('Last loaded: 208 of 208')).toBeTruthy(); expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+        expect(screen.queryByText(/all done|wrap|eight remaining/i)).toBeNull();
+        assertDecisionPersistence(fixture, baseline, before, changed, kind);
+        const persisted = fixture.snapshot(); const state = fixture.reviewDecisionState(); const postChanges = fixture.totalChanges();
+        const stale = leadRequest('', first.nextCursor); fixture.setPhase('probe'); await expect(api.leads.list(stale)).rejects.toThrow('LIST_CURSOR_STALE');
+        expect(fixture.snapshot()).toEqual(persisted); expect(fixture.reviewDecisionState()).toEqual(state); expect(fixture.totalChanges()).toBe(postChanges);
+        fixture.setPhase('ui'); await refreshAndContinue(fixture, owners, expectedReachable(owners, changed, kind), requests);
+        expect(fixture.snapshot()).toEqual(persisted); expect(fixture.reviewDecisionState()).toEqual(state); expect(fixture.totalChanges()).toBe(postChanges);
+        assertDecisionInventory(fixture, requests, [firstRun.control, secondRun.control, finalRun.control],
+          [changed[0]!, changed[1]!, owners[201]!, changed[2]!], stale, changed);
+      });
+    }, 60_000);
+  }
+});
+
+describe('reliability Step C2 phase2: old append and failed null restart cannot replay decisions', () => {
+  for (const kind of ['ready', 'dismiss'] as const) {
+    it(`${kind} preserves selected checkbox and inline draft through stale append, failed refresh and Retry`, async () => {
+      await withLeadsLayout(async fixture => {
+        const { owners } = await fixture.importLeads(api); const baseline = fixture.reviewDecisionState(); const before = fixture.snapshot();
+        const { first, requests } = await startNameLeads(fixture, owners);
+        const checked = await virtualRow(owners[0]!, 0); fireEvent.click(within(checked).getByRole('checkbox', { name: `Select ${owners[0]!.name}` }));
+        const draftOwner = owners[1]!; const draft = 'Fictional Unsaved C2 Draft'; const draftRow = await virtualRow(draftOwner, 1);
+        fireEvent.doubleClick(within(draftRow).getByText(draftOwner.name, { selector: '.leads-grid__name' }));
+        fireEvent.change(screen.getByRole('textbox', { name: `Edit name for ${draftOwner.name}` }), { target: { value: draft } });
+        const append = fixture.holdLeads({ channel: 'leads:list', request: leadRequest('', first.nextCursor), at: 'after-handler' });
+        fireEvent.click(screen.getByRole('button', { name: 'Load more' })); const appended = await append.arrived();
+        expect(leadsListResponseSchema.parse(appended.result).rows).toHaveLength(8);
+        const owner = owners[199]!; await openOwnerForDecision(fixture, owner, 199, 'dock', { flushAfterOpen: false });
+        const run = await runImmediateDecision(fixture, owner, kind, 'dock', { flushAfterSubmit: false }); await screen.findByText(reviewBoundary);
+        await act(async () => { append.release(); }); await flush(fixture);
+        expect(screen.getByText('Last loaded: 200 of 208')).toBeTruthy(); expect(screen.queryByText('Showing 208 of 208')).toBeNull();
+        const persisted = fixture.snapshot(); const state = fixture.reviewDecisionState(); const postChanges = fixture.totalChanges();
+        const stale = leadRequest('', first.nextCursor); fixture.setPhase('probe'); await expect(api.leads.list(stale)).rejects.toThrow('LIST_CURSOR_STALE');
+        expect(fixture.snapshot()).toEqual(persisted); expect(fixture.reviewDecisionState()).toEqual(state); expect(fixture.totalChanges()).toBe(postChanges); fixture.setPhase('ui');
+        const restart = fixture.holdLeads({ channel: 'leads:list', request: leadRequest(), at: 'after-handler' });
+        fireEvent.click(screen.getByRole('button', { name: 'Refresh list' })); await restart.arrived(); await act(async () => { restart.rejectDelivery(); }); await flush(fixture);
+        expect(screen.getByText('Leads could not be loaded')).toBeTruthy(); expect(screen.getByText(reviewBoundary)).toBeTruthy();
+        expect((screen.getByRole('textbox', { name: `Edit name for ${draftOwner.name}` }) as HTMLInputElement).value).toBe(draft);
+        expect(screen.getByText('1 selected · 1 outside view')).toBeTruthy();
+        fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+        await screen.findByText(`Showing 200 of ${expectedReachable(owners, [owner], kind).length}`); await flush(fixture);
+        requests.push(leadRequest('', first.nextCursor), leadRequest(), leadRequest());
+        expect(screen.queryByText(reviewBoundary)).toBeNull();
+        expect((screen.getByRole('checkbox', { name: `Select ${owners[0]!.name}` }) as HTMLInputElement).checked).toBe(true);
+        const refreshed = latestLeads(fixture); fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+        await screen.findByText(`Showing ${expectedReachable(owners, [owner], kind).length} of ${expectedReachable(owners, [owner], kind).length}`); await flush(fixture);
+        requests.push(leadRequest('', refreshed.nextCursor));
+        assertDecisionPersistence(fixture, baseline, before, [owner], kind);
+        expect(fixture.snapshot()).toEqual(persisted); expect(fixture.reviewDecisionState()).toEqual(state); expect(fixture.totalChanges()).toBe(postChanges);
+        assertDecisionInventory(fixture, requests, [run.control], [owner], stale, [owner], leadRequest());
+      });
+    }, 60_000);
+  }
+});
+
+describe('reliability Step C2 phase2: acknowledged Ready survives next-detail delivery failure', () => {
+  for (const presentation of ['dock', 'full'] as const) {
+    it(`ready ${presentation} keeps receipt and retries same200 after detail delivery failure`, async () => {
+      await withLeadsLayout(async fixture => {
+        const { owners } = await fixture.importLeads(api); const baseline = fixture.reviewDecisionState(); const before = fixture.snapshot();
+        const { requests } = await startNameLeads(fixture, owners); const firstOwner = owners[198]!; const nextOwner = owners[199]!;
+        await openOwnerForDecision(fixture, firstOwner, 198, presentation);
+        const flow = await prepareDecision(fixture, firstOwner, 'ready', presentation); const next = fixture.holdNextDetail({ personId: nextOwner.personId });
+        await startHeldDecision(fixture, flow, 'ready', { baseline, before }); const arrival = await next.arrived();
+        expect(leadDetailSchema.parse(arrival.result)).toMatchObject({ personId: nextOwner.personId, salesCycleId: nextOwner.salesCycleId });
+        assertDecisionPersistence(fixture, baseline, before, [firstOwner], 'ready'); const persisted = fixture.snapshot(); const state = fixture.reviewDecisionState();
+        await act(async () => { next.rejectDelivery(); }); await flush(fixture);
+        expect(screen.getByText("Couldn't load this lead")).toBeTruthy(); expect(screen.queryByText('Decision not confirmed')).toBeNull();
+        expect(channelEntries(fixture, flow.control.channel)).toHaveLength(1); expect(channelEntries(fixture, 'leads:list').map(entry => entry.args)).toEqual(requests.map(request => [request]));
+        fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+        await screen.findByRole(presentation === 'dock' ? 'complementary' : 'article',
+          { name: presentation === 'dock' ? `${nextOwner.name} details` : `${nextOwner.name} full page` }); await flush(fixture);
+        expect(channelEntries(fixture, 'lead-detail:get').filter(entry => (entry.args[0] as { personId: string }).personId === nextOwner.personId)).toHaveLength(2);
+        expect(channelEntries(fixture, 'discovery:get-brief').filter(entry => (entry.args[0] as { personId: string }).personId === nextOwner.personId)).toHaveLength(0);
+        expect(fixture.snapshot()).toEqual(persisted); expect(fixture.reviewDecisionState()).toEqual(state);
+      });
+    }, 60_000);
+  }
+});
+
+describe('reliability Step C2 phase2: public Ready owner and focus conditionals stay current', () => {
+  it('pending199 release does not replace a newer actual row10 detail with successor200', async () => {
+    await withLeadsLayout(async fixture => {
+      const { owners } = await fixture.importLeads(api); const baseline = fixture.reviewDecisionState(); const before = fixture.snapshot();
+      const { requests } = await startNameLeads(fixture, owners); const firstOwner = owners[198]!; const newer = owners[9]!;
+      await openOwnerForDecision(fixture, firstOwner, 198, 'dock'); const flow = await prepareDecision(fixture, firstOwner, 'ready', 'dock');
+      const hold = fixture.holdReviewDecision(flow.control); fireEvent.click(flow.submit); await hold.arrived();
+      const row10 = await virtualRow(newer, 9); fireEvent.click(row10); await screen.findByRole('complementary', { name: `${newer.name} details` });
+      await waitFor(() => expect(channelEntries(fixture, 'lead-detail:get').filter(entry =>
+        entry.phase === 'ui' && (entry.args[0] as { personId: string }).personId === newer.personId
+        && entry.handlerSettled === true && entry.outcome === 'resolved')).toHaveLength(1));
+      expect(capturedDetail(fixture, newer)).toMatchObject({ personId: newer.personId });
+      act(() => { hold.release(); }); await flush(fixture);
+      expect(screen.getByRole('complementary', { name: `${newer.name} details` })).toBeTruthy();
+      expect(document.querySelector(`[data-person-id="${newer.personId}"]`)?.getAttribute('aria-selected')).toBe('true');
+      expect(channelEntries(fixture, 'lead-detail:get').filter(entry => (entry.args[0] as { personId: string }).personId === owners[199]!.personId)).toHaveLength(0);
+      assertDecisionPersistence(fixture, baseline, before, [firstOwner], 'ready');
+      expect(channelEntries(fixture, 'leads:list').map(entry => entry.args)).toEqual(requests.map(request => [request]));
+    });
+  }, 60_000);
+
+  it('boundary200 release preserves Search focus instead of unconditional Refresh focus', async () => {
+    await withLeadsLayout(async fixture => {
+      const { owners } = await fixture.importLeads(api); const baseline = fixture.reviewDecisionState(); const before = fixture.snapshot();
+      await startNameLeads(fixture, owners); const firstOwner = owners[198]!; const boundaryOwner = owners[199]!;
+      await openOwnerForDecision(fixture, firstOwner, 198, 'dock'); const first = await runImmediateDecision(fixture, firstOwner, 'ready', 'dock');
+      await screen.findByRole('complementary', { name: `${boundaryOwner.name} details` }); await flush(fixture);
+      const flow = await prepareDecision(fixture, boundaryOwner, 'ready', 'dock'); const hold = fixture.holdReviewDecision(flow.control); fireEvent.click(flow.submit); await hold.arrived();
+      const search = screen.getByRole('searchbox', { name: 'Search leads' }); search.focus(); expect(document.activeElement).toBe(search);
+      act(() => { hold.release(); }); await screen.findByText(reviewBoundary); await flush(fixture);
+      expect(document.activeElement).toBe(search); expect(screen.getByText('Last loaded: 200 of 208')).toBeTruthy();
+      assertDecisionPersistence(fixture, baseline, before, [firstOwner, boundaryOwner], 'ready');
+      expect(channelEntries(fixture, 'lead-detail:confirm-transition').map(entry => entry.args[0])).toEqual([first.control.request, flow.control.request]);
+    });
+  }, 60_000);
 });
 
 describe('reliability Step C2 phase1: finite before-handler decision cancellation, not domain refusal', () => {
