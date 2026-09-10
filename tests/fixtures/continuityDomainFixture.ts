@@ -1,4 +1,10 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { auditDomainInvariants } from '../../src/main/domain/lifecycle/invariantAudit';
+import type { DomainServices } from '../../src/main/domain/createDomainServices';
+import type { SalesCycle } from '../../src/main/domain/lifecycle/lifecycleTypes';
+import { BUILTIN_CADENCES } from '../../src/main/domain/cadence/builtinCadences';
+import { DISCOVERY_NOW, seedDiscoveryOwner } from './discoveryDatabase';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { setTimeout as realTimeout, clearTimeout as clearRealTimeout } from 'node:timers';
@@ -32,6 +38,12 @@ import { createTempDatabase, createTestWorkspaceKey } from './tempDatabase';
 // Capture real watchdog functions before any case installs renderer fake timers.
 const deliveryTimeout = realTimeout;
 const clearDeliveryTimeout = clearRealTimeout;
+
+export const RETAINED_T = '2026-08-30T12:00:00.000Z';
+export const RETAINED_O = '2026-09-06T13:00:00.000Z';
+export const RETAINED_DISCOVERY = DISCOVERY_NOW;
+type RetainedKind = 'callback' | 'post_stage' | 'onboarding' | 'inbound_response' | 'warm_relationship' | 'founder_resurface';
+type RetainedOwner = Readonly<{ kind: RetainedKind; personId: string; prospectId: string; cycleId: string; actionId: string; sourceEventId: string; evidenceIds: readonly string[] }>;
 
 export const CONTINUITY_NOW = '2026-09-10T15:00:00.000Z';
 export const CONTINUITY_URL = 'callie://app/index.html';
@@ -69,7 +81,7 @@ export type ContinuityCleanup = Readonly<{
  * local company commands, real incidental reads and a finite delivery hold. The caller's
  * Electron registration map is the only replacement for the IPC transport.
  */
-export async function createContinuityDomainFixture(handlers: Map<string, RegisteredIpcHandler>, mode: 'construction' | 'company-ui' = 'construction') {
+export async function createContinuityDomainFixture(handlers: Map<string, RegisteredIpcHandler>, mode: 'construction' | 'company-ui' | 'retained-setup' = 'construction') {
   assert.equal(handlers.size, 0, 'Continuity fixture requires an empty owned transport map');
   const temp = createTempDatabase();
   const directory = dirname(dirname(temp.path));
@@ -83,6 +95,9 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
     pollerStops: 0, pollerIdleWaits: 0, cleanupRuns: 0,
   };
   let database: AppDatabase | undefined;
+  let capturedRuntime: DomainRuntime | undefined;
+  let retainedServices: DomainServices | undefined;
+  const retainedOwners: RetainedOwner[] = [];
   let disposed = false;
   let disposal: Promise<ContinuityCleanup> | undefined;
   const unregisters: (() => void)[] = [];
@@ -153,6 +168,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
     createDomainRuntime: (db) => {
       counts.domainConstructions++;
       const domain = new DomainRuntime({ database: db, clock: new SystemClock(), ids: new UuidGenerator() });
+      capturedRuntime = domain;
       const initialize = domain.initialize.bind(domain);
       domain.initialize = () => { counts.domainBootstraps++; return initialize(); };
       const shutdown = domain.shutdown.bind(domain);
@@ -250,7 +266,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       const flight = (async () => {
         try {
           if (disposed) throw new Error('Continuity fixture is disposed');
-          if (!((mode === 'company-ui' ? CONTINUITY_UI_CHANNELS : CONTINUITY_READ_CHANNELS) as readonly string[]).includes(channel)) {
+          if (!((mode === 'company-ui' ? CONTINUITY_UI_CHANNELS : mode === 'retained-setup' ? [...CONTINUITY_READ_CHANNELS, 'local-workspace:transition'] : CONTINUITY_READ_CHANNELS) as readonly string[]).includes(channel)) {
             throw new Error('Stage0 only admits its four readonly channels');
           }
           // Explicit synthetic UNCONFIGURED worker transport only. No registrar,
@@ -314,7 +330,129 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
         jobs: db.raw.prepare('SELECT id FROM jobs ORDER BY id').all(),
       }));
     };
-    return Object.freeze({ api, invokeFrom, evidence, companyEvidence, armCompanyDelivery,
+    // Finite, two-phase internal construction only. Never expose services/raw DB.
+    const seedRetained = async (phase: 'warm-owners' | 'callback') => {
+      assert.equal(mode, 'retained-setup');
+      return runtime.withDomain(async domain => {
+        assert.ok(capturedRuntime); assert.ok(database);
+        const now = new Date().toISOString();
+        if (phase === 'warm-owners') {
+          assert.equal(now, RETAINED_T); assert.equal(retainedOwners.length, 0);
+          assert.equal(retainedServices, undefined);
+          retainedServices = capturedRuntime.getServices(); // Exactly the initialized graph.
+        } else { assert.equal(now, DISCOVERY_NOW); assert.equal(retainedOwners.length, 5); }
+        const services = retainedServices; assert.ok(services);
+        const remember = (kind: RetainedKind, cycle: SalesCycle, evidenceIds: string[] = []) => {
+          assert.ok(cycle.currentNextActionId);
+          const owner = Object.freeze({ kind, personId: cycle.personId, prospectId: cycle.prospectId,
+            cycleId: cycle.id, actionId: cycle.currentNextActionId, sourceEventId: cycle.entrySourceEventId,
+            evidenceIds: Object.freeze(evidenceIds) });
+          retainedOwners.push(owner);
+          return owner;
+        };
+        const warm = (kind: RetainedKind) => {
+          const source = services.sources.createPersonProspect({
+            person: { displayName: `Retained ${kind} fictional owner` }, contacts: [],
+            source: { id: randomUUID(), channel: 'referral', observedAt: RETAINED_T,
+              sourceRecord: { fixture: kind }, referral: { kind: 'unknown' as const, reason: 'not_provided' as const } },
+          });
+          return services.lifecycle.createUnreviewedCycle({ personId: source.personId, prospectId: source.prospectId,
+            entrySourceEventId: source.sourceEventId, effectiveAt: RETAINED_T });
+        };
+        const ready = (cycle: SalesCycle) => services.lifecycle.reviewToReady({ cycleId: cycle.id,
+          expectedCycleVersion: 1, expectedProspectVersion: 1, effectiveAt: RETAINED_T });
+        const interview = (cycle: SalesCycle) => {
+          const replyId = randomUUID(), interviewId = randomUUID();
+          services.unitOfWork.immediate(() => services.events.appendActivity({ id: replyId,
+            personId: cycle.personId, prospectId: cycle.prospectId, salesCycleId: cycle.id,
+            kind: 'text', direction: 'inbound', channel: 'text', occurredAt: RETAINED_T, observedOutcome: 'replied', metadata: {} }));
+          services.lifecycle.recordQualifyingContact({ cycleId: cycle.id, expectedCycleVersion: 2,
+            expectedCurrentActionId: cycle.currentNextActionId!, activityId: replyId, effectiveAt: RETAINED_T });
+          services.unitOfWork.immediate(() => services.events.appendActivity({ id: interviewId,
+            personId: cycle.personId, prospectId: cycle.prospectId, salesCycleId: cycle.id,
+            kind: 'interview', direction: 'outbound', channel: 'phone', occurredAt: RETAINED_T,
+            durationSeconds: 240, observedOutcome: 'substantive', metadata: {} }));
+          const result = services.lifecycle.confirmInterviewed({ cycleId: cycle.id, expectedCycleVersion: 3,
+            expectedCurrentActionId: cycle.currentNextActionId!, suggestionActivityId: interviewId,
+            effectiveAt: RETAINED_T, confirmedAt: RETAINED_T });
+          assert.equal(result.version, 4);
+          return { cycle: result, replyId, interviewId };
+        };
+        if (phase === 'warm-owners') {
+          // Warm introduction remains genuine unreviewed Contact work. No W->C.
+          const introduction = warm('warm_relationship');
+          assert.equal(introduction.version, 1); assert.equal(introduction.stage, 'unreviewed');
+          assert.equal(introduction.currentNextActionId, `${introduction.id}:review`);
+          remember('warm_relationship', introduction);
+          const post = interview(ready(warm('post_stage')));
+          remember('post_stage', post.cycle, [post.replyId, post.interviewId]);
+          const onboarding = interview(ready(warm('onboarding')));
+          const cycle = onboarding.cycle;
+          services.lifecycle.setDesignPartnerFitness({ cycleId: cycle.id, expectedCycleVersion: 4, fitness: 5, updatedAt: RETAINED_T });
+          const dimension = { value: 'moderate' as const, evidenceActivityIds: [onboarding.interviewId] };
+          services.lifecycle.setCloseReadiness({ cycleId: cycle.id, expectedReadinessVersion: 0, assessedAt: RETAINED_T,
+            readiness: { version: 1, demonstratedPain: dimension, activeTimeline: dimension, decisionAuthority: dimension,
+              willingnessToTryOrPay: dimension, concreteNextStep: dimension } });
+          const offerId = randomUUID();
+          services.unitOfWork.immediate(() => services.events.appendActivity({ id: offerId, personId: cycle.personId,
+            prospectId: cycle.prospectId, salesCycleId: cycle.id, kind: 'offer', direction: 'outbound', channel: 'phone',
+            occurredAt: RETAINED_T, observedOutcome: 'price_said', metadata: {} }));
+          const offered = services.lifecycle.confirmOffered({ cycleId: cycle.id, expectedCycleVersion: 5,
+            expectedCurrentActionId: cycle.currentNextActionId!, suggestionActivityId: offerId, effectiveAt: RETAINED_T, confirmedAt: RETAINED_T });
+          const won = services.lifecycle.confirmWon({ cycleId: cycle.id, expectedCycleVersion: 6,
+            expectedCurrentActionId: offered.currentNextActionId!, effectiveAt: RETAINED_T, confirmedAt: RETAINED_T,
+            terms: { billingModel: 'per_door_monthly', doorsCommitted: 12, unitRateCents: 2500, foundingCustomer: true, effectiveAt: RETAINED_T } });
+          assert.equal(won.version, 7); remember('onboarding', won, [onboarding.replyId, onboarding.interviewId, offerId]);
+          const inbound = ready(warm('inbound_response'));
+          services.lifecycle.closeLostNurture({ cycleId: inbound.id, expectedCycleVersion: 2,
+            expectedCurrentActionId: inbound.currentNextActionId!, reason: 'bad_timing', qualificationGateReason: null, notes: null,
+            effectiveAt: RETAINED_T, manualReactivationDueAt: '2026-10-01T13:00:00.000Z', expectedProspectVersion: null });
+          const inboundId = randomUUID();
+          services.unitOfWork.immediate(() => services.sourceRepository.append({ id: inboundId, personId: inbound.personId,
+            prospectId: inbound.prospectId, channel: 'inbound_demo', observedAt: RETAINED_T, sourceRecord: { message: 'DEMO' } }));
+          const builtin = BUILTIN_CADENCES.find(row => row.family === 'cadence_c'); assert.ok(builtin);
+          const installed = services.cadences.getById(builtin.id); assert.ok(installed); assert.equal(installed.contentHash, builtin.contentHash);
+          const activated = services.lifecycle.reactivateFromInboundResponse({ evidence: { kind: 'source_event', sourceEventId: inboundId, channel: 'inbound_demo' },
+            personId: inbound.personId, prospectId: inbound.prospectId, sourceCycleId: inbound.id, newCycleId: randomUUID(), activatedAt: RETAINED_T,
+            cadence: { definitionId: installed.id, family: 'cadence_c', version: installed.version, contentHash: installed.contentHash } });
+          assert.equal(activated.kind, 'reactivated');
+          if (activated.kind !== 'reactivated') throw new Error('Inbound construction did not reactivate');
+          remember('inbound_response', activated.cycle, [inboundId]);
+          const founder = ready(warm('founder_resurface'));
+          domain.snoozePrimaryAction({ salesCycleId: founder.id, resurfaceAt: RETAINED_O });
+          remember('founder_resurface', founder);
+        } else {
+          const callback = seedDiscoveryOwner({ services }, { prefix: 'Continuity retained callback', units: 12 });
+          const cycle = services.lifecycle.reviewToReady({ cycleId: callback.salesCycleId, expectedCycleVersion: 1,
+            expectedProspectVersion: 1, effectiveAt: DISCOVERY_NOW });
+          domain.logCallOutcome({ personId: callback.personId, salesCycleId: callback.salesCycleId,
+            outcome: 'spoke', occurredAt: DISCOVERY_NOW, callbackAt: RETAINED_O });
+          const activities = database.raw.prepare<[string], { id: string }>('SELECT id FROM activities WHERE sales_cycle_id=? AND callback_at IS NOT NULL').all(cycle.id);
+          assert.equal(activities.length, 1);
+          remember('callback', cycle, [activities[0]!.id]);
+        }
+        return Object.freeze([...retainedOwners]);
+      });
+    };
+    const retainedEvidence = () => {
+      assert.equal(mode, 'retained-setup'); assert.equal(retainedOwners.length, 6);
+      return runtime.withDatabase(db => ({
+        audit: auditDomainInvariants({ database: db, asOf: new Date().toISOString() }),
+        owners: retainedOwners.map(owner => ({ owner,
+          action: db.raw.prepare<[string], { id: string; sales_cycle_id: string; action_type: string; channel: string | null; due_at: string; due_source: string; work_intent: string; inbound_sla_kind: string | null; inbound_sla_due_at: string | null; inbound_sla_source_event_id: string | null; status: string }>(
+            'SELECT id,sales_cycle_id,action_type,channel,due_at,due_source,work_intent,inbound_sla_kind,inbound_sla_due_at,inbound_sla_source_event_id,inbound_sla_provenance_json,cadence_enrollment_id,(SELECT cadence_definition_id FROM cadence_enrollments WHERE id=next_actions.cadence_enrollment_id) AS cadence_definition_id,cadence_step_id,cadence_component_id,version,timezone,status FROM next_actions WHERE id=?').get(owner.actionId),
+          cycle: db.raw.prepare('SELECT id,person_id,prospect_id,entry_source_event_id,current_next_action_id,stage,workflow_status,resurface_at,resurface_reason,version FROM sales_cycles WHERE id=?').get(owner.cycleId),
+          prospect: db.raw.prepare('SELECT id,person_id,segment FROM prospects WHERE id=?').get(owner.prospectId),
+          source: db.raw.prepare('SELECT id,person_id,prospect_id,channel,(SELECT id FROM prospects WHERE original_source_event_id=source_events.id) AS original_prospect_id FROM source_events WHERE id=?').get(owner.sourceEventId),
+          activities: db.raw.prepare('SELECT id,person_id,prospect_id,sales_cycle_id,kind,direction,channel,occurred_at,callback_at FROM activities WHERE sales_cycle_id=? ORDER BY id').all(owner.cycleId),
+          stages: db.raw.prepare('SELECT to_stage FROM stage_events WHERE sales_cycle_id=? ORDER BY transition_sequence').all(owner.cycleId),
+          terms: db.raw.prepare('SELECT doors_committed,billing_model,unit_rate_cents,projected_mrr_cents FROM won_terms WHERE sales_cycle_id=?').get(owner.cycleId),
+          enrollment: db.raw.prepare('SELECT d.family FROM cadence_enrollments e JOIN cadence_definitions d ON d.id=e.cadence_definition_id JOIN next_actions a ON a.cadence_enrollment_id=e.id WHERE a.id=?').get(owner.actionId),
+        })),
+        pendingIds: db.raw.prepare<[], { id: string }>("SELECT id FROM next_actions WHERE status='pending' ORDER BY id").all().map(row => row.id),
+      }));
+    };
+    return Object.freeze({ api, seedRetained, retainedEvidence, invokeFrom, evidence, companyEvidence, armCompanyDelivery,
       cancelDelivery: () => delivery?.cancel(),
       drainInvocations: () => Promise.allSettled([...flights]),
       drainReads: () => Promise.allSettled([...readFlights]), counts: () => Object.freeze({ ...counts }),

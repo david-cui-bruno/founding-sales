@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Stage0 construction plus bounded Stage1 actual-App company acceptance.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react/pure';
 import { App } from '../../src/renderer/App';
 import type { CalliePreloadApi } from '../../src/shared/preload';
@@ -9,8 +9,9 @@ import { localCompanyCreateRequestSchema, localCompanyCreateResultSchema, localC
 
 import { appHealthSchema } from '../../src/shared/healthContract';
 import { fridayReportSchema } from '../../src/shared/contracts/fridayContract';
-import { localCommitmentsSnapshotSchema, localWorkspaceSnapshotSchema } from '../../src/shared/contracts/localWorkspaceContract';
+import { localCommitmentsSnapshotSchema, localWorkspaceSnapshotSchema, localWorkflowReceiptSchema } from '../../src/shared/contracts/localWorkspaceContract';
 import {
+  RETAINED_T, RETAINED_O, RETAINED_DISCOVERY,
   CONTINUITY_NOW, CONTINUITY_READ_CHANNELS, CONTINUITY_REGISTERED_CHANNELS, CONTINUITY_URL,
   createContinuityDomainFixture, CONTINUITY_UI_CHANNELS, CONTINUITY_UI_REGISTERED_CHANNELS,
 } from '../fixtures/continuityDomainFixture';
@@ -441,5 +442,127 @@ describe('company continuity through actual App and local public boundaries', ()
       'local-workspace:get': 2, 'local-workspace:get-commitments': 2,
       'local-workspace:review-company': 1, 'local-workspace:create-company': 2,
     });
+  });
+});
+
+
+describe('retained lifecycle construction through the genuine public boundary', () => {
+  it('R0 constructs six distinct retained owners and preserves exact evidence through public workflow transition', async () => {
+    // Date-only control aligns both real SystemClocks. No scheduling is faked.
+    vi.setSystemTime(new Date(RETAINED_T));
+    const value = await createContinuityDomainFixture(transport.handlers, 'retained-setup');
+    fixtures.push(value);
+    expect(appHealthSchema.parse(await value.api.health.get())).toMatchObject({ domainReady: true, domainStatus: 'ready' });
+    const first = await value.seedRetained('warm-owners');
+    expect(first).toHaveLength(5);
+    vi.setSystemTime(new Date(RETAINED_DISCOVERY));
+    const owners = await value.seedRetained('callback');
+    expect(owners).toHaveLength(6);
+    for (const field of ['personId', 'prospectId', 'cycleId', 'actionId', 'sourceEventId'] as const) {
+      expect(new Set(owners.map(owner => owner[field])).size).toBe(6);
+    }
+    expect(owners.map(owner => owner.kind).sort()).toEqual([
+      'callback', 'founder_resurface', 'inbound_response', 'onboarding', 'post_stage', 'warm_relationship',
+    ]);
+    vi.setSystemTime(new Date(RETAINED_O));
+    const before = await value.retainedEvidence();
+    expect(before.audit).toEqual([]); // Fresh actual audit, not immutable startup report.
+    const stages = {
+      warm_relationship: ['unreviewed'], post_stage: ['unreviewed', 'ready', 'contacted', 'interviewed'],
+      onboarding: ['unreviewed', 'ready', 'contacted', 'interviewed', 'offered', 'won'],
+      inbound_response: ['contacted'], founder_resurface: ['unreviewed', 'ready'], callback: ['unreviewed', 'ready'],
+    };
+    for (const record of before.owners) {
+      const { owner, action } = record;
+      expect(action).toMatchObject({ id: owner.actionId, sales_cycle_id: owner.cycleId, status: 'pending' });
+      expect(Date.parse(action!.due_at)).toBeLessThanOrEqual(Date.parse(RETAINED_O));
+      expect(record.cycle).toMatchObject({ id: owner.cycleId, person_id: owner.personId, prospect_id: owner.prospectId,
+        entry_source_event_id: owner.sourceEventId, current_next_action_id: owner.actionId });
+      // Initial intake appends the source before creating its canonical prospect.
+      // Later inbound evidence carries the existing prospect directly instead.
+      expect(record.source).toMatchObject({ id: owner.sourceEventId, person_id: owner.personId,
+        prospect_id: owner.kind === 'inbound_response' ? owner.prospectId : null,
+        original_prospect_id: owner.kind === 'inbound_response' ? null : owner.prospectId });
+      expect(record.stages).toEqual(stages[owner.kind].map(to_stage => ({ to_stage })));
+      expect(record.prospect).toEqual({ id: owner.prospectId, person_id: owner.personId, segment: owner.kind === 'callback' ? 'cold' : 'warm' });
+      expect(record.cycle).toMatchObject({ version: { warm_relationship: 1, post_stage: 4, onboarding: 7,
+        inbound_response: 1, founder_resurface: 3, callback: 3 }[owner.kind] });
+      if (owner.kind === 'inbound_response') {
+        expect(record.source).toMatchObject({ channel: 'inbound_demo' });
+        expect(owner.evidenceIds).toEqual([owner.sourceEventId]);
+        expect(action).toMatchObject({ work_intent: 'inbound_response', inbound_sla_kind: 'inbound_demo_permitted_minutes',
+          inbound_sla_source_event_id: owner.sourceEventId });
+        expect(Date.parse(action!.inbound_sla_due_at!)).toBeLessThanOrEqual(Date.parse(RETAINED_O));
+      } else {
+        for (const id of owner.evidenceIds) expect(record.activities).toContainEqual(expect.objectContaining({ id,
+          person_id: owner.personId, prospect_id: owner.prospectId, sales_cycle_id: owner.cycleId }));
+      }
+      if (owner.kind === 'warm_relationship') {
+        expect(record.source).toMatchObject({ channel: 'referral' });
+        expect(record.cycle).toMatchObject({ stage: 'unreviewed', version: 1 });
+        expect(action).toMatchObject({ action_type: 'review_lead', work_intent: 'internal_review', channel: null,
+          due_at: RETAINED_T, due_source: 'internal_review', inbound_sla_kind: null });
+        expect(record.enrollment).toBeUndefined(); expect(record.activities).toEqual([]);
+      }
+      if (owner.kind === 'callback') {
+        expect(action).toMatchObject({ due_at: RETAINED_O, due_source: 'recorded_callback' });
+        expect(record.cycle).toMatchObject({ resurface_at: RETAINED_O, resurface_reason: 'callback' });
+        expect(record.activities).toContainEqual(expect.objectContaining({ id: owner.evidenceIds[0], callback_at: RETAINED_O,
+          kind: 'call', direction: 'outbound', occurred_at: RETAINED_DISCOVERY }));
+      }
+      if (owner.kind === 'founder_resurface') {
+        expect(action).toMatchObject({ due_at: RETAINED_O, due_source: 'founder_resurface' });
+        expect(record.cycle).toMatchObject({ resurface_at: RETAINED_O, resurface_reason: 'snooze' });
+        expect(record.activities).toEqual([]);
+      }
+      if (owner.kind === 'post_stage') expect(record.enrollment).toEqual({ family: 'post_interview' });
+      if (owner.kind === 'onboarding') {
+        expect(record.enrollment).toEqual({ family: 'onboarding' });
+        expect(record.terms).toEqual({ doors_committed: 12, billing_model: 'per_door_monthly', unit_rate_cents: 2500, projected_mrr_cents: 30000 });
+      }
+    }
+    const overview = localWorkspaceSnapshotSchema.parse(await value.api.localWorkspace.get());
+    expect(overview).toMatchObject({ workflowMode: 'legacy', transitionReceipt: null });
+    const snapshot = localCommitmentsSnapshotSchema.parse(await value.api.localWorkspace.getCommitments());
+    const expected = before.owners.map(({ owner, action }) => ({
+      key: JSON.stringify(['retained', owner.cycleId, owner.actionId]), kind: owner.kind,
+      personId: owner.personId, cycleId: owner.cycleId, actionId: owner.actionId, type: action!.action_type,
+      dueAt: action!.due_at,
+      channel: owner.kind === 'onboarding' ? 'onboarding' : action!.work_intent === 'internal_review' ? 'review'
+        : action!.channel === 'phone' || action!.channel === 'voicemail' ? 'call' : action!.channel,
+    })).sort((a, b) => a.key.localeCompare(b.key));
+    const project = (input: typeof snapshot) => input.items.map(({ kind, item }) => ({
+      key: JSON.stringify(['retained', item.salesCycleId, item.action.id]), kind, personId: item.personId,
+      cycleId: item.salesCycleId, actionId: item.action.id, type: item.action.type, dueAt: item.action.dueAt, channel: item.action.channel,
+    })).sort((a, b) => a.key.localeCompare(b.key));
+    expect(snapshot.generatedAt).toBe(RETAINED_O);
+    expect(project(snapshot)).toEqual(expected); // Complete six-row set, not subset matching.
+    expect(snapshot.items.find(row => row.kind === 'warm_relationship')?.item).toMatchObject({ stage: 'unreviewed',
+      lane: 'due_cadence', action: { label: 'Contact', channel: 'review' } });
+    const command = { commandId: randomUUID(), manifestId: randomUUID(), expectedMode: 'legacy' as const };
+    const receipt = localWorkflowReceiptSchema.parse(await value.api.localWorkspace.transition(command));
+    expect(receipt).toEqual({ commandId: command.commandId, manifestId: command.manifestId, mode: 'meeting_first', revision: 1,
+      occurredAt: RETAINED_O, cancelledActionIds: [], stoppedEnrollmentIds: [], preservedActionIds: before.pendingIds,
+      parkedPersonIds: [], callbackEvidenceIds: [...owners.find(owner => owner.kind === 'callback')!.evidenceIds],
+      unknownDraftIds: [], parkedReviewActions: [], parkedActions: [] });
+    const after = await value.retainedEvidence();
+    expect(after.audit).toEqual([]);
+    expect(after).toEqual(before); // All fixed source/action/stage/activity/due/channel evidence survives.
+    const afterOverview = localWorkspaceSnapshotSchema.parse(await value.api.localWorkspace.get());
+    expect(afterOverview).toMatchObject({ workflowMode: 'meeting_first', transitionReceipt: receipt });
+    const afterSnapshot = localCommitmentsSnapshotSchema.parse(await value.api.localWorkspace.getCommitments());
+    expect(project(afterSnapshot)).toEqual(expected);
+    expect(afterSnapshot.items).toEqual(snapshot.items);
+    // Missing priority projection diagnostics are not silently relabeled ready.
+    // Compare their real count, separately from the freshly empty invariant audit.
+    expect(afterSnapshot.reviewErrorCount).toBe(snapshot.reviewErrorCount);
+    expect(value.trace().map(({ channel, args }) => ({ channel, args }))).toEqual([
+      { channel: 'health:get', args: [] }, { channel: 'local-workspace:get', args: [] },
+      { channel: 'local-workspace:get-commitments', args: [] }, { channel: 'local-workspace:transition', args: [command] },
+      { channel: 'local-workspace:get', args: [] }, { channel: 'local-workspace:get-commitments', args: [] },
+    ]);
+    expect(value.trace().every(entry => entry.handlerStarted && entry.outcome === 'resolved' && !entry.synthetic)).toBe(true);
+    expect(value.counts()).toMatchObject({ keyLoads: 1, databaseOpens: 1, migrations: 1, domainConstructions: 1, domainBootstraps: 1 });
+    await expectCleaned(value);
   });
 });
