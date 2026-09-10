@@ -161,6 +161,27 @@ describe('leadsService over a real encrypted domain', () => {
     expect(after.revision).toBeGreaterThan(before.revision);
   });
 
+  it('assigns one person without renaming a shared organization', () => {
+    const alice = seedLead('alice');
+    const bob = seedLead('bob');
+    services.unitOfWork.immediate(() => {
+      const shared = services.identities.createOrganization({ canonicalName: 'Shared Org' });
+      services.identities.addOrganizationAlias({ organizationId: shared.id, alias: 'shared org' });
+      services.identities.linkOrganization({ prospectId: alice.prospectId, organizationId: shared.id });
+      services.identities.linkOrganization({ prospectId: bob.prospectId, organizationId: shared.id });
+    });
+    const receipt = domain.updateLeadField({
+      personId: alice.personId, field: 'organization_label', value: 'New Employer',
+    });
+    const page = domain.listLeadRows({
+      query: '', stages: [], priorities: [], sort: 'person_name', cursor: null, limit: 200,
+    });
+    expect(page.rows.find((row) => row.personId === alice.personId)?.organization).toBe('New Employer');
+    expect(page.rows.find((row) => row.personId === bob.personId)?.organization).toBe('Shared Org');
+    expect(receipt.affectedPersonIds).toEqual([alice.personId]);
+    expect(receipt.affectedSalesCycleIds).toEqual(['alice-cycle']);
+  });
+
   it('bulk-updates the organization label for many people', async () => {
     const alpha = seedLead('alpha');
     const beta = seedLead('beta');

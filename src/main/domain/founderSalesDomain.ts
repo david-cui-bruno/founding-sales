@@ -672,34 +672,64 @@ export class FounderSalesDomain implements OutboundDomainPort {
       if (prospect === undefined) {
         throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The person has no prospect.');
       }
-      const linked = this.database.raw.prepare(`
-        SELECT org.id AS id FROM prospect_organizations AS link
-        JOIN organizations AS org ON org.id = link.organization_id
-        WHERE link.prospect_id = ? ORDER BY org.id ASC LIMIT 1
-      `).get(prospect.id) as { id: string } | undefined;
-      if (request.value === null) {
-        if (linked !== undefined) {
-          this.database.raw.prepare(
-            'DELETE FROM prospect_organizations WHERE prospect_id = ? AND organization_id = ?',
-          ).run(prospect.id, linked.id);
-        }
-      } else if (linked !== undefined) {
-        this.database.raw.prepare(
-          'UPDATE organizations SET canonical_name = ?, updated_at = ? WHERE id = ?',
-        ).run(request.value, now, linked.id);
-      } else {
-        const organization = this.services.identities.createOrganization({
-          canonicalName: request.value,
-        });
-        this.services.identities.linkOrganization({
-          prospectId: prospect.id, organizationId: organization.id,
-        });
-      }
+      this.assignProspectOrganization(prospect.id, request.value);
     }
     const cycles = this.database.raw.prepare(
       'SELECT id FROM sales_cycles WHERE person_id = ? ORDER BY id ASC',
     ).all(person.id) as { id: string }[];
     return this.receipt([person.id], cycles.map(({ id }) => id));
+  }
+
+  /** Assign membership, never rename an identity shared with other prospects. */
+  private assignProspectOrganization(prospectId: string, value: string | null): void {
+    const normalize = (name: string): string => name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+    const ambiguous = () => new FounderSalesDomainError(
+      'ACTION_NOT_SUPPORTED', 'The organization assignment is ambiguous.',
+    );
+    const links = this.database.raw.prepare(`
+      SELECT organization_id AS id FROM prospect_organizations
+      WHERE prospect_id = ? LIMIT 2
+    `).all(prospectId) as { id: string }[];
+    if (links.length > 1) throw ambiguous();
+    const currentId = links[0]?.id;
+    let targetId: string | undefined;
+    if (value !== null) {
+      const normalized = normalize(value);
+      if (normalized.length === 0) {
+        throw new FounderSalesDomainError(
+          'ACTION_NOT_SUPPORTED', 'The organization assignment must not be blank.',
+        );
+      }
+      // SQLite lower/trim cannot implement intake's Unicode NFKC semantics.
+      // Include legacy canonical names and deduplicate identities, not matching labels.
+      const candidates = this.database.raw.prepare(`
+        SELECT id, canonical_name AS name FROM organizations
+        UNION ALL
+        SELECT organization_id AS id, alias AS name FROM organization_aliases
+      `).all() as { id: string; name: string }[];
+      const matches = new Set(candidates
+        .filter(({ name }) => normalize(name) === normalized)
+        .map(({ id }) => id));
+      if (matches.size > 1) throw ambiguous();
+      targetId = matches.values().next().value;
+      if (targetId === undefined) {
+        const organization = this.services.identities.createOrganization({
+          canonicalName: value.normalize('NFKC').trim().replace(/\s+/g, ' '),
+        });
+        targetId = organization.id;
+        this.services.identities.addOrganizationAlias({ organizationId: targetId, alias: normalized });
+      }
+    }
+    if (currentId === targetId) return;
+    if (currentId !== undefined) {
+      this.database.raw.prepare(
+        'DELETE FROM prospect_organizations WHERE prospect_id = ? AND organization_id = ?',
+      ).run(prospectId, currentId);
+    }
+    if (targetId !== undefined) {
+      // An old company's role is not evidence of a role at the new company.
+      this.services.identities.linkOrganization({ prospectId, organizationId: targetId });
+    }
   }
 
   getLeadDetail(input: LeadDetailRequest): LeadDetail {
