@@ -5,7 +5,7 @@ import { installApplicationLeadsScenario } from './applicationLeadsScenario';
 import { createRoot } from 'react-dom/client';
 import { App } from '../../src/renderer/App';
 import type { CalliePreloadApi } from '../../src/shared/preload';
-import type { AppHealth } from '../../src/shared/healthContract';
+import { appHealthSchema, type AppHealth } from '../../src/shared/healthContract';
 import type { TodaySnapshot } from '../../src/shared/contracts/todayContract';
 import type { DiscoverySnapshot } from '../../src/shared/contracts/discoveryContract';
 import { outboundCapabilitiesSchema, type OutboundCapabilities } from '../../src/shared/contracts/outboundContract';
@@ -64,8 +64,9 @@ const row = leadRowSchema.parse({
   stage: 'ready', source: 'custom', segment: 'warm', priorityContext: null, cloudScores: null,
   nextAction: null, optedOut: false, lastActivityAt: null,
 });
+const fixtureHealth = { get: read('health.get', () => healthValue) };
 const api: CalliePreloadApi = {
-  health: { get: read('health.get', () => healthValue) },
+  health: fixtureHealth,
   daily: { get: read<DailySnapshot>('daily.get', () => ({ ...nativeDeskReviewFixture(), workflowMode: localMode })) },
   localWorkspace: {
     reviewCompany: forbidden('localWorkspace.reviewCompany'),
@@ -159,12 +160,48 @@ const modalScenario = scenarioParams.get('modalScenario') === '1'
   ? installApplicationModalScenario(api, calls, detail) : undefined;
 const leadsScenario = scenarioParams.get('leadsScenario') === '1'
   ? installApplicationLeadsScenario(api, calls, detail) : undefined;
+// Opt-in, finite delivery control for the actual App. Default fixtures are unchanged.
+const healthScenario = scenarioParams.get('healthScenario') === '1' ? (() => {
+  if (modalScenario || leadsScenario) throw Error('Application scenarios are mutually exclusive');
+  type Slot = { phase: 'armed' | 'reading' | 'pending'; value?: AppHealth;
+    resolve?: (health: AppHealth) => void; reject?: (error: Error) => void };
+  let delivery: Slot | null = null;
+  const originalGet = fixtureHealth.get;
+  fixtureHealth.get = async () => {
+    const slot = delivery?.phase === 'armed' ? delivery : null;
+    if (slot) slot.phase = 'reading';
+    const value = await originalGet();
+    if (!slot) return value;
+    return new Promise<AppHealth>((resolve, reject) => {
+      slot.value = value; slot.resolve = resolve; slot.reject = reject; slot.phase = 'pending';
+    });
+  };
+  return {
+    arm() {
+      if (delivery !== null) throw Error('Health delivery already owned');
+      delivery = { phase: 'armed' };
+    },
+    phase() { return delivery?.phase ?? 'idle'; },
+    settle(outcome: 'ready' | 'blocked' | 'rejected') {
+      const slot = delivery;
+      if (!slot || slot.phase !== 'pending' || !slot.value || !slot.resolve || !slot.reject) {
+        throw Error('No pending health delivery');
+      }
+      delivery = null;
+      if (outcome === 'rejected') slot.reject(new Error('Synthetic diagnostic delivery failure'));
+      else slot.resolve(appHealthSchema.parse(outcome === 'blocked'
+        ? { ...slot.value, domainReady: false, domainStatus: 'blocked', domainBlockingViolationCount: 1 }
+        : slot.value));
+    },
+  };
+})() : undefined;
 if (leadsScenario) {
   window.callie = leadsScenario.api;
 } else {
   window.callie = modalScenario?.api ?? api;
 }
 const controls = {
+  ...(healthScenario ? { health: healthScenario } : {}),
   ...(modalScenario ? { modal: modalScenario.controller } : {}),
   ...(leadsScenario ? { leads: leadsScenario.controller } : {}),
   calls,

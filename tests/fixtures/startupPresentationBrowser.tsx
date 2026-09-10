@@ -119,6 +119,7 @@ export type AppearanceSample = {
   presentation: string | null; workflow: string | null; background: string; color: string;
   font: string; corners: string[]; width: number; height: number; overflow: boolean;
   scrollHeight: number; viewportHeight: number;
+  diagnosticStrip: { top: number; right: number; bottom: number; left: number; ownsCorners: boolean[] } | null;
   deskBounds: { top: number; right: number; bottom: number; left: number } | null;
 };
 const samples: AppearanceSample[] = [];
@@ -142,13 +143,18 @@ function sample(source: AppearanceSample['source']) {
     : document.querySelector('[data-testid="native-desk"]') ? 'desk'
     : root.textContent?.includes('Daily workspace unavailable') ? 'daily-error'
     : root.textContent?.includes('Loading daily workspace') ? 'daily-pending' : 'informational';
+  const points = [[1, 1], [innerWidth - 2, 1], [1, innerHeight - 2], [innerWidth - 2, innerHeight - 2]];
+  const cornerElements = points.map(([x, y]) => document.elementFromPoint(x, y));
+  const strip = document.querySelector('.foundation-frame--admitted > .foundation-observation');
+  const stripRect = strip?.querySelector(':scope > .health-observation[aria-label="Diagnostic observation"]') ? strip.getBoundingClientRect() : null;
   samples.push({ source, phase, theme: document.documentElement.getAttribute('data-theme'), density: document.documentElement.getAttribute('data-density'),
     presentation: scope.getAttribute('data-presentation'), workflow: deskElement?.getAttribute('data-workflow-mode') ?? null,
     background: getComputedStyle(document.querySelector('.app-shell__workspace') ?? scope).backgroundColor,
     color: getComputedStyle(deskElement ?? scope).color, font: style.fontFamily,
-    corners: [[1, 1], [innerWidth - 2, 1], [1, innerHeight - 2], [innerWidth - 2, innerHeight - 2]].map(([x, y]) => paintedBackground(document.elementFromPoint(x, y))),
+    corners: cornerElements.map(paintedBackground),
     width: rect.width, height: rect.height, overflow: document.documentElement.scrollWidth > innerWidth,
     scrollHeight: document.documentElement.scrollHeight, viewportHeight: innerHeight,
+    diagnosticStrip: stripRect ? { top: stripRect.top, right: stripRect.right, bottom: stripRect.bottom, left: stripRect.left, ownsCorners: cornerElements.map(element => strip!.contains(element)) } : null,
     deskBounds: deskRect ? { top: deskRect.top, right: deskRect.right, bottom: deskRect.bottom, left: deskRect.left } : null });
 }
 let frameQueued = false;

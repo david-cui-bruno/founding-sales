@@ -443,7 +443,7 @@ for (const outcome of ['resolve', 'reject'] as const) test(`actual pending Today
   const input = (await operations(page))[0].input;
   const before = (await recorded(page)).length;
   await page.evaluate(() => { window.applicationPresentation.modal!.rejectNextRead('today.get'); window.dispatchEvent(new Event('focus')); });
-  await expect.poll(async () => counts((await recorded(page)).slice(before))).toEqual({ 'daily.get': 1, 'delegation.status': 1, 'localWorkspace.get': 1, 'localWorkspace.getCommitments': 1, 'today.get': 1, 'discovery.get': 1, 'review.list': 1 });
+  await expect.poll(async () => counts((await recorded(page)).slice(before))).toEqual({ 'health.get': 1, 'daily.get': 1, 'delegation.status': 1, 'localWorkspace.get': 1, 'localWorkspace.getCommitments': 1, 'today.get': 1, 'discovery.get': 1, 'review.list': 1 });
   await expect(dialog).toBeVisible(); await retainedInputs(dialog, 'manual-today');
   expect(await node!.evaluate(element => element.isConnected && element === document.querySelector('dialog textarea'))).toBe(true);
   await expect(page.getByRole('alert', { includeHidden: true }).filter({ hasText: /refresh/i })).toBeVisible();

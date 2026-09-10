@@ -20,6 +20,7 @@ import {
 import { createFileLogSink } from './main/logging/fileLogSink';
 import { createSafeLogger } from './main/logging/safeLogger';
 import { isPreReleaseBackupInvocation, runPreReleaseBackupHost } from './main/backup/preReleaseBackupRuntime';
+import { showStartupFailureDialog } from './main/startupFailureDialog';
 
 const preReleaseBackupMode = isPreReleaseBackupInvocation(process.argv.slice(1));
 if (preReleaseBackupMode) {
@@ -114,9 +115,58 @@ const createAndLoadWindow = async (signal?: AbortSignal): Promise<void> => {
 let runningApplication: RunningApplication | undefined;
 let applicationStarted = false;
 let startupAbortController: AbortController | undefined;
+// Raw settlement plus any owned cleanup, never the user-facing dialog promise.
 let startupPromise: Promise<void> | undefined;
 let quitAfterStartup = false;
 let allowQuit = false;
+let terminalClaimed = false;
+let fatalDialogClaimed = false;
+let ownedShutdown: Promise<boolean> | undefined;
+
+const finishQuit = (restart = false): void => {
+  if (terminalClaimed) return;
+  terminalClaimed = true;
+  allowQuit = true;
+  try {
+    if (restart && !quitAfterStartup) app.relaunch();
+  } catch {
+    // A failed relaunch still terminates once. Never retry a stopped runtime.
+  } finally {
+    app.quit();
+  }
+};
+
+const shutdownOwnedApplication = (): Promise<boolean> => {
+  if (ownedShutdown !== undefined) return ownedShutdown;
+  const application = runningApplication;
+  if (application === undefined) return Promise.resolve(false);
+
+  // Reserve the joinable outcome before detaching or invoking user code. A
+  // synchronous disposer can reenter before-quit while shutdown is being called.
+  let settle!: (confirmed: boolean) => void;
+  ownedShutdown = new Promise<boolean>(resolve => { settle = resolve; });
+  runningApplication = undefined;
+  applicationStarted = false;
+  try {
+    void Promise.resolve(application.shutdown()).then(() => settle(true), () => settle(false));
+  } catch {
+    settle(false);
+  }
+  return ownedShutdown;
+};
+
+const presentStartupFailure = async (cleanupConfirmed: boolean): Promise<void> => {
+  if (terminalClaimed || fatalDialogClaimed) return;
+  if (quitAfterStartup) { finishQuit(); return; }
+  fatalDialogClaimed = true;
+  let restart = false;
+  try {
+    restart = await showStartupFailureDialog({ canRestart: cleanupConfirmed }) === 'restart';
+  } catch {
+    // Fixed options only. Rejected native UI never exposes the original error.
+  }
+  finishQuit(restart && cleanupConfirmed);
+};
 
 /**
  * Runs a constant script in the focused window. Every payload comes from the
@@ -183,13 +233,14 @@ if (!started && ownsSingleInstanceLock) {
   void app
     .whenReady()
     .then(() => {
+      if (quitAfterStartup) return;
       installApplicationMenu();
       startupAbortController = new AbortController();
       const signal = startupAbortController.signal;
       const fileLogSink = createFileLogSink({ userDataPath: app.getPath('userData') });
       const logger = createSafeLogger({ write: fileLogSink.write });
 
-      startupPromise = startApplication({
+      const rawStartup = startApplication({
         appVersion: app.getVersion(),
         userDataPath: app.getPath('userData'),
         appleBridge: {
@@ -254,24 +305,33 @@ if (!started && ownsSingleInstanceLock) {
           };
         },
         createWindow: () => createAndLoadWindow(signal),
-      }).then(async (application) => {
-        if (signal.aborted) {
-          await application.shutdown();
+      });
+      startupPromise = rawStartup.then(async (application) => {
+        // Fulfillment transfers ownership before any fallible main-only setup.
+        runningApplication = application;
+        if (signal.aborted || quitAfterStartup) {
+          await shutdownOwnedApplication();
           return;
         }
 
-        runningApplication = application;
         applicationStarted = true;
-        installDockBadge();
+        try {
+          installDockBadge();
+        } catch {
+          const confirmed = await shutdownOwnedApplication();
+          void presentStartupFailure(confirmed);
+        }
+      }, (error: unknown) => {
+        // Only this exact raw rejection carries startApplication's cleanup
+        // contract. An AggregateError conservatively means unconfirmed cleanup.
+        void presentStartupFailure(!(error instanceof AggregateError));
       });
 
       return startupPromise;
     })
     .catch(() => {
-      if (!quitAfterStartup) {
-        allowQuit = true;
-        app.quit();
-      }
+      // Readiness/pre-call failures establish no raw cleanup provenance.
+      void presentStartupFailure(false);
     });
 }
 
@@ -280,41 +340,22 @@ app.on('before-quit', (event) => {
     return;
   }
 
-  if (runningApplication !== undefined) {
-    event.preventDefault();
-    if (quitAfterStartup) {
-      return;
-    }
-
-    quitAfterStartup = true;
-    applicationStarted = false;
-    const application = runningApplication;
-    runningApplication = undefined;
-    const finishQuit = (): void => {
-      allowQuit = true;
-      app.quit();
-    };
-    void application.shutdown().then(finishQuit, finishQuit);
-    return;
-  }
-
-  if (startupPromise === undefined) {
-    return;
-  }
-
-  event.preventDefault();
-  startupAbortController?.abort();
-
-  if (quitAfterStartup) {
-    return;
-  }
-
   quitAfterStartup = true;
-  const finishQuit = (): void => {
+  applicationStarted = false;
+  startupAbortController?.abort();
+  // Retained owned cleanup wins even after its application was detached. Do not
+  // join a startup orchestration promise that could be awaiting a dialog.
+  const cleanup = ownedShutdown ?? (runningApplication !== undefined
+    ? shutdownOwnedApplication()
+    : startupPromise);
+  if (cleanup === undefined) {
+    // Electron is already quitting, including before whenReady has resolved.
+    terminalClaimed = true;
     allowQuit = true;
-    app.quit();
-  };
-  void startupPromise.then(finishQuit, finishQuit);
+    return;
+  }
+  event.preventDefault();
+  void cleanup.then(() => finishQuit(), () => finishQuit());
 });
 
 // Quit when all windows are closed, except on macOS. There, it's common

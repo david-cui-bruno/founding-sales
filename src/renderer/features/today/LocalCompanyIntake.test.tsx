@@ -38,6 +38,46 @@ async function ready(name?: string, domain?: string) {
 }
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
+it.each([
+  ['Company name', 'pending'], ['Company domain (optional)', 'pending'],
+  ['Company name', 'error'], ['Company domain (optional)', 'error'],
+] as const)('keeps unlocked %s focusable but readonly during local %s without admitting commands', async (label, state) => {
+  const f = fixture();
+  const view = f.mount();
+  await ready();
+  const input = screen.getByRole('textbox', { name: label }) as HTMLInputElement;
+  const value = input.value;
+  input.focus(); input.setSelectionRange(2, 5);
+  expect(input.disabled).toBe(false);
+  expect(input.readOnly).toBe(false);
+  view.rerender(<Harness {...f.options} available={false} localRead={{ ...localRead, pending: state === 'pending', error: state === 'error' }} />);
+  expect(screen.getByRole('textbox', { name: label })).toBe(input);
+  expect(input.disabled).toBe(false);
+  expect(input.readOnly).toBe(true);
+  expect(input.value).toBe(value);
+  expect([input.selectionStart, input.selectionEnd]).toEqual([2, 5]);
+  expect(document.activeElement).toBe(input);
+  for (const name of ['Add company', 'Review company', 'Create company']) {
+    expect((button(name) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(button(name));
+  }
+  expect(f.api.reviewCompany).toHaveBeenCalledTimes(1);
+  expect(f.api.createCompany).not.toHaveBeenCalled();
+  expect(f.api.getCompanyCreateStatus).not.toHaveBeenCalled();
+  expect(f.options.onOpenAccount).not.toHaveBeenCalled();
+  expect(f.options.onRefreshLocal).not.toHaveBeenCalled();
+  view.rerender(<Harness {...f.options} />);
+  expect(screen.getByRole('textbox', { name: label })).toBe(input);
+  expect(input.disabled).toBe(false);
+  expect(input.readOnly).toBe(false);
+  expect(document.activeElement).toBe(input);
+  expect([input.selectionStart, input.selectionEnd]).toEqual([2, 5]);
+  fireEvent.change(input, { target: { value: `${value}edited` } });
+  expect(input.value).toBe(`${value}edited`);
+  expect(f.api.reviewCompany).toHaveBeenCalledTimes(1);
+  expect(f.api.createCompany).not.toHaveBeenCalled();
+});
+
 it('requires explicit canonical review and create without writes on mount or review', async () => {
   const f = fixture(); f.mount(); expect(f.api.reviewCompany).not.toHaveBeenCalled(); expect(f.api.createCompany).not.toHaveBeenCalled();
   await ready(); expect(f.api.reviewCompany).toHaveBeenCalledWith({ name: 'Harbor Management', domain: 'harbor.example' });

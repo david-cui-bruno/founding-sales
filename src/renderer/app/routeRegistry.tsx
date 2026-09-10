@@ -97,6 +97,7 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
               : { status: context.health.status }
           }
           onRetry={context.health.retry}
+          observation={context.health.observation}
           theme={context.theme}
           density={context.density}
           shell={context.api.shell}

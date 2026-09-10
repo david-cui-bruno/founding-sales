@@ -203,8 +203,8 @@ export function LocalCompanyIntake({ controller: c }: { controller: LocalCompany
     <button type="button" disabled={!c.available || c.busy || c.locked && s.phase !== 'saved'} onClick={c.add}>Add company</button>
     {s.open && <form className="local-company-intake__form" aria-label="Local company intake" onSubmit={event => { event.preventDefault(); void c.review(); }}>
       <p>Manually entered local identity only, not verified company research or worker authority.</p>
-      <label htmlFor={`${id}-name`}>Company name</label><input id={`${id}-name`} value={s.name} disabled={c.locked || !c.available} onChange={event => c.edit('name', event.target.value)} />
-      <label htmlFor={`${id}-domain`}>Company domain (optional)</label><input id={`${id}-domain`} value={s.domain} disabled={c.locked || !c.available} onChange={event => c.edit('domain', event.target.value)} />
+      <label htmlFor={`${id}-name`}>Company name</label><input id={`${id}-name`} value={s.name} disabled={c.locked} readOnly={!c.available} onChange={event => c.edit('name', event.target.value)} />
+      <label htmlFor={`${id}-domain`}>Company domain (optional)</label><input id={`${id}-domain`} value={s.domain} disabled={c.locked} readOnly={!c.available} onChange={event => c.edit('domain', event.target.value)} />
       {!c.available && <p role="status">Local company intake is unavailable. Any unresolved request is retained.</p>}
       {s.error && <p role="alert">{s.error}</p>}
       {s.notice && <p role="status">{s.notice}</p>}

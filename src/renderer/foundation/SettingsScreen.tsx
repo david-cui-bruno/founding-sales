@@ -13,6 +13,8 @@ import type { ThemePreference, ThemeState } from '../app/useTheme';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge } from '../components/StatusBadge';
 import type { DiagnosticsState } from './DiagnosticsScreen';
+import { HealthObservationStatus } from './DiagnosticsScreen';
+import type { HealthObservation } from './useFoundationHealth';
 
 import './settings.css';
 
@@ -221,9 +223,11 @@ function DataStorageSection({
 function DiagnosticsSection({
   state,
   onRetry,
+  observation,
 }: {
   state: DiagnosticsState;
   onRetry: () => void;
+  observation?: HealthObservation;
 }) {
   return (
     <section
@@ -250,11 +254,14 @@ function DiagnosticsSection({
             tone={state.health.domainReady ? 'success' : 'warning'}
             label={`Domain ${state.health.domainStatus}`}
           />
+          <span>Sourcing monitor</span>
           <StatusBadge
-            tone={state.health.operationalStatus === 'ready' ? 'success' : 'warning'}
-            label={`Operations ${state.health.operationalStatus}`}
+            tone={state.health.sourcing.status === 'degraded' ? 'warning' : 'neutral'}
+            label={state.health.sourcing.status === 'degraded' ? 'Sourcing degradation reported' : state.health.sourcing.state.lastCompletedAt === null ? 'Not checked' : 'No sourcing degradation reported'}
           />
           <dl className="settings__counters">
+            <div><dt>Startup audit evaluated at</dt><dd><time dateTime={state.health.domainStartupEvaluatedAt}>{state.health.domainStartupEvaluatedAt}</time></dd></div>
+            {state.health.sourcing.state.lastCompletedAt && <div><dt>Sourcing last completed at</dt><dd><time dateTime={state.health.sourcing.state.lastCompletedAt}>{state.health.sourcing.state.lastCompletedAt}</time></dd></div>}
             <div className="settings__counter">
               <dt>Cipher</dt>
               <dd>{state.health.cipherVersion}</dd>
@@ -273,30 +280,32 @@ function DiagnosticsSection({
       {state.status === 'failed' && (
         <div
           className="settings__failure"
-          aria-labelledby="database-error"
+          aria-labelledby="diagnostic-read-error"
           aria-live="assertive"
           role="alert"
         >
-          <h3 id="database-error">The local database could not be opened</h3>
+          <h3 id="diagnostic-read-error">The diagnostic read could not be completed</h3>
           <p>
-            Error code: <code>LOCAL_DATABASE_UNAVAILABLE</code>
+            Error code: <code>DIAGNOSTIC_READ_FAILED</code>
           </p>
           <button type="button" onClick={onRetry}>
             Retry
           </button>
         </div>
       )}
+      <HealthObservationStatus observation={observation} onRetry={onRetry} />
     </section>
   );
 }
 
-const SHORTCUTS: readonly { keys: string; action: string }[] = [
-  { keys: '⌘1 – ⌘7', action: 'Go to Today, Leads, Pipeline, Conversations, Learnings, Friday, Review' },
-  { keys: '⌘K', action: 'Open the command palette' },
-  { keys: '⌘I', action: 'Import leads' },
-  { keys: 'J / K', action: 'Move down / up a row' },
-  { keys: 'Enter', action: 'Open the focused row' },
-  { keys: 'E / H / P', action: 'Complete / snooze / pin the focused Today action' },
+const SHORTCUTS: readonly { scope: string; keys: string; action: string }[] = [
+  { scope: 'Application menu', keys: 'Cmd/Ctrl+1 – Cmd/Ctrl+7', action: 'Go to Today, Leads, Pipeline, Conversations, Learnings, Friday, Inbox' },
+  { scope: 'Application menu', keys: 'Cmd/Ctrl+,', action: 'Open Settings' },
+  { scope: 'Application', keys: 'Cmd/Ctrl+K', action: 'Open the existing command palette when permitted' },
+  { scope: 'Application menu', keys: 'Cmd/Ctrl+I', action: 'Import leads' },
+  { scope: 'Legacy Today rows', keys: 'J / K / arrows · Enter · S · X', action: 'Move focused row; Enter opens contact; S snoozes to tomorrow 09:00 local; X skips today' },
+  { scope: 'Native Desk rows', keys: 'J / K / arrows · Enter · Escape', action: 'Move focused queue row; Enter reviews; Escape closes selected detail only when no higher layer owns it' },
+  { scope: 'Leads rows', keys: 'J / K / arrows · Enter', action: 'Move focused row; Enter opens the contact when no edit is pending' },
 ];
 
 function ShortcutsSection() {
@@ -307,9 +316,11 @@ function ShortcutsSection() {
       aria-label="Keyboard shortcuts"
     >
       <h2 className="settings__section-title">Keyboard shortcuts</h2>
+      <p>Editing fields and open overlays own their keys. Shortcuts do not grant permission to call or send.</p>
       <table className="settings__shortcuts">
         <thead>
           <tr>
+            <th scope="col">Scope</th>
             <th scope="col">Shortcut</th>
             <th scope="col">Action</th>
           </tr>
@@ -317,6 +328,7 @@ function ShortcutsSection() {
         <tbody>
           {SHORTCUTS.map((shortcut) => (
             <tr key={shortcut.keys}>
+              <td>{shortcut.scope}</td>
               <th scope="row">
                 <kbd>{shortcut.keys}</kbd>
               </th>
@@ -358,6 +370,7 @@ function AboutSection({ health }: { health: AppHealth | null }) {
 export type SettingsScreenProps = {
   state: DiagnosticsState;
   onRetry: () => void;
+  observation?: HealthObservation;
   theme: ThemeState;
   density: DensityState;
   shell?: SettingsShellApi;
@@ -381,6 +394,7 @@ export type SettingsScreenProps = {
 export function SettingsScreen({
   state,
   onRetry,
+  observation,
   theme,
   density,
   shell,
@@ -452,7 +466,7 @@ export function SettingsScreen({
           )}
           {active === 'diagnostics' && (
             <>
-              <DiagnosticsSection state={state} onRetry={onRetry} />
+              <DiagnosticsSection state={state} onRetry={onRetry} observation={observation} />
               {children}
             </>
           )}
