@@ -62,6 +62,10 @@ vi.mock('../../src/main/domain/discovery/discoveryEvidence', async original => {
 const oracle = await vi.importActual<typeof import('../../src/main/domain/discovery/discoveryEvidence')>('../../src/main/domain/discovery/discoveryEvidence');
 const NOW = '2026-09-06T12:00:00.000Z';
 const unexpected = (): never => { throw new Error('External operation forbidden in assembled source fixture'); };
+// jsdom lacks native dialog methods. This source/domain fixture does not claim
+// native modality or keyboard isolation, which the real-browser suite verifies.
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });
 const temps: TempDatabase[] = [];
 const stops: (() => Promise<void>)[] = [];
 beforeEach(() => { vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(800); vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(1200); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); boundary.frozen = null; boundary.admission = null; window.location.hash = ''; });

@@ -1,5 +1,6 @@
 /** Actual-App, complete typed read-only all-route fixture. No preload/client or production API factory. */
 import { StrictMode } from 'react';
+import { installApplicationModalScenario } from './applicationModalScenario';
 import { createRoot } from 'react-dom/client';
 import { App } from '../../src/renderer/App';
 import type { CalliePreloadApi } from '../../src/shared/preload';
@@ -14,7 +15,7 @@ import { appleSpikeStatusSchema } from '../../src/shared/appleSpikeContract';
 import { nativeDeskFixture, nativeDeskReviewFixture, localSnapshot, commitments, fixtureNow } from '../../src/renderer/features/today/nativeDesk.fixture';
 import '../../src/renderer/app.css';
 
-export type Call = { method: string; kind: 'read' | 'forbidden'; args?: unknown[] };
+export type Call = { method: string; kind: 'read' | 'command' | 'forbidden'; args?: unknown[] };
 const calls: Call[] = [];
 const forbidden = (method: string) => async (): Promise<never> => {
   calls.push({ method, kind: 'forbidden' });
@@ -137,8 +138,11 @@ let frameRequest = 0;
 let frameObserver: MutationObserver | null = null;
 let frames: ReturnType<typeof sampleFrame>[] = [];
 let rootReplaced = false;
-window.callie = api;
+const modalScenario = new URLSearchParams(location.search).get('modalScenario') === '1'
+  ? installApplicationModalScenario(api, calls, detail) : undefined;
+window.callie = modalScenario?.api ?? api;
 const controls = {
+  ...(modalScenario ? { modal: modalScenario.controller } : {}),
   calls,
   setMode(mode: typeof localMode) { localMode = mode; window.dispatchEvent(new Event('focus')); },
   setDetailMode(mode: typeof detailMode) { detailMode = mode; },

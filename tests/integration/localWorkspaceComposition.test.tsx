@@ -8,6 +8,7 @@ import { createDomainServices } from '../../src/main/domain/createDomainServices
 import { FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import { createLocalWorkspaceProvider } from '../../src/main/workspace/localWorkspaceProvider';
 import { NativeDeskRoute } from '../../src/renderer/features/today/NativeDeskRoute';
+import { PresentationRoot } from '../../src/renderer/app/PresentationRoot';
 import { nativeDeskFixture } from '../../src/renderer/features/today/nativeDesk.fixture';
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
 import { seedLocalWorkspaceAcceptance } from '../fixtures/localWorkspaceAcceptance';
@@ -45,7 +46,7 @@ it('actual unpaired reads preserve a callback across transition and render it wi
     expect((await f.provider.getCommitments()).items).toEqual(initial.items);
     const after = f.snapshot();
     const open = vi.fn();
-    render(<NativeDeskRoute api={f.api} onOpenLead={open}/>);
+    render(<PresentationRoot><NativeDeskRoute api={f.api} onOpenLead={open}/></PresentationRoot>);
     fireEvent.click(await screen.findByRole('button', {name: /Retained callback Property Owner/}));
     expect(open).not.toHaveBeenCalled();
     expect(screen.queryByText(/Old acquisition Property Owner/)).toBeNull();
@@ -65,7 +66,7 @@ it('actual local account evidence is separately selectable without authorizing a
   try {
     await f.provider.transition({commandId: 'account-transition', expectedMode: 'legacy', manifestId: 'account-manifest'});
     const before = f.snapshot(), open = vi.fn();
-    render(<NativeDeskRoute api={f.api} onOpenLead={open} surface="accounts"/>);
+    render(<PresentationRoot><NativeDeskRoute api={f.api} onOpenLead={open} surface="accounts"/></PresentationRoot>);
     await screen.findByText('Local account library', {exact: true});
     fireEvent.click(await screen.findByRole('button', {name: /Fixture Residential Management/}));
     expect(screen.getByRole('heading', {name: 'Fixture Residential Management'})).toBeTruthy();
