@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { StrictMode } from 'react';
 import type { CalliePreloadApi } from '../../src/shared/preload';
 import { leadsListResponseSchema, type LeadsListRequest, type LeadFieldUpdateRequest, type LeadBulkUpdateRequest } from '../../src/shared/contracts/leadsContract';
-import { leadDetailSchema } from '../../src/shared/contracts/leadDetailContract';
+import { leadDetailSchema, type LeadDetail } from '../../src/shared/contracts/leadDetailContract';
 import { discoveryBriefSchema } from '../../src/shared/contracts/discoveryContract';
 import { reviewSnapshotSchema, type ReviewKind, type ReviewListRequest, type ReviewSnapshot, type ResolveReviewRequest } from '../../src/shared/contracts/reviewContract';
 import { mutationReceiptSchema } from '../../src/shared/contracts/commonContract';
@@ -19,7 +19,7 @@ import type { IpcInvoker } from '../../src/preload/ipcClient';
 import type { RegisteredIpcHandler } from '../fixtures/registeredIpcHandler';
 import {
   createReliabilityDomainFixture, RELIABILITY_NOW, RELIABILITY_URL,
-  type CleanupEvidence, type ReliabilityDomainFixture, type ReliabilityTrace, type ReviewOwner,
+  type CleanupEvidence, type ReliabilityDomainFixture, type ReliabilityTrace, type ReviewOwner, type ReviewDecisionControl,
 } from '../fixtures/reliabilityDomainFixture';
 
 const boundary = vi.hoisted(() => {
@@ -1274,5 +1274,356 @@ describe('reliability Step C1: finite Leads handler admission and real-result de
         assertControlInventory(fixture, 'leads:list', [[request]]);
       });
     }, 60_000);
+  }
+});
+
+// C2 phase1: real legacy review scheduling, not outreach, client-CAS or packaged browser proof.
+type ReviewDecisionKind = 'ready' | 'dismiss';
+type DecisionState = ReturnType<ReliabilityDomainFixture['reviewDecisionState']>;
+function assertImportedJobBaseline(fixture: ReliabilityDomainFixture, state: DecisionState, owners: readonly ImportedOwner[]) {
+  const preview = channelEntries(fixture, 'imports:preview');
+  const commit = channelEntries(fixture, 'imports:commit');
+  expect(preview).toHaveLength(1); expect(commit).toHaveLength(1);
+  // SHA256 of the exact existing fictional208 CSV, not a hash borrowed from the stored job.
+  const contentHash = 'b4f0699971b594bf691e7fba40f48927211ec64d2b6f8a6f2e694087d7d4fbc1';
+  expect(preview[0]!.args).toEqual([{ kind: 'csv', sourceName: 'reliability-208.csv', content:
+    ['Name,Email,Organization', ...owners.map(owner => `${owner.name},${owner.email},Fictional Shared Organization`)].join('\n') + '\n' }]);
+  expect(preview[0]!.result).toMatchObject({ contentHash, rowCount: 208, validCount: 208 });
+  expect(commit[0]!.args[0]).toMatchObject({ contentHash });
+  const receipt = commit[0]!.result as { jobId: string; importedPersonIds: string[]; importedRowCount: number };
+  expect(receipt.importedPersonIds).toEqual(owners.map(owner => owner.personId));
+  expect(receipt.importedRowCount).toBe(208);
+  expect(state.jobs).toEqual([{
+    id: receipt.jobId, type: 'lead_import_v1', state: 'succeeded', idempotency_key: `import:${contentHash}`,
+    progress_current: 208, progress_total: 208, retry_count: 0, error_code: null, error_message: null,
+    payload_json: expect.any(String), result_json: expect.any(String), created_at: RELIABILITY_NOW,
+    started_at: expect.any(String), finished_at: expect.any(String), updated_at: expect.any(String),
+  }]);
+  const job = state.jobs[0] as Record<string, unknown>;
+  expect(JSON.parse(job.payload_json as string)).toEqual({ formatVersion: 1,
+    sourceName: 'reliability-208.csv', contentHash, rowCount: 208 });
+  expect(JSON.parse(job.result_json as string)).toEqual({ formatVersion: 1,
+    importedPersonIds: owners.map(owner => owner.personId), importedRowCount: 208 });
+  for (const field of ['started_at', 'finished_at', 'updated_at'] as const) {
+    const value = job[field] as string;
+    expect(Number.isFinite(Date.parse(value))).toBe(true);
+    expect(new Date(value).toISOString()).toBe(value);
+  }
+  expect(Date.parse(job.started_at as string)).toBeLessThanOrEqual(Date.parse(job.finished_at as string));
+  expect(job.updated_at).toBe(job.finished_at);
+  // Complete one-row shape above proves there are no active or additional/outbound jobs.
+  // Repository start/succeed use wall time, unlike the supplied Import creation clock.
+}
+const reviewBoundary = 'Decision saved. No next person is loaded in this order. Refresh the list to continue.';
+function decisionInput(kind: ReviewDecisionKind, detail: LeadDetail): ReviewDecisionControl {
+  return kind === 'ready'
+    ? { channel: 'lead-detail:confirm-transition', at: 'before-handler', request: {
+        transition: 'review_to_ready', salesCycleId: detail.salesCycleId, expectedRevision: detail.revision } }
+    : { channel: 'lead-detail:dismiss', at: 'before-handler', request: {
+        personId: detail.personId, salesCycleId: detail.salesCycleId,
+        qualificationGateReason: 'no_relevant_decision_relationship', expectedRevision: detail.revision } };
+}
+function callReviewDecision(control: ReviewDecisionControl) {
+  return control.channel === 'lead-detail:confirm-transition'
+    ? api.leadDetail.confirmTransition(control.request) : api.leadDetail.dismissLead(control.request);
+}
+function capturedDetail(fixture: ReliabilityDomainFixture, owner: ImportedOwner) {
+  const entries = channelEntries(fixture, 'lead-detail:get').filter(entry =>
+    entry.phase === 'ui' && (entry.args[0] as { personId: string }).personId === owner.personId);
+  expect(entries).toHaveLength(1);
+  expect(entries[0]).toMatchObject({ handlerStarted: true, handlerSettled: true, outcome: 'resolved' });
+  const detail = leadDetailSchema.parse(entries[0]!.result);
+  expect(detail).toMatchObject({ personId: owner.personId, salesCycleId: owner.salesCycleId,
+    personName: owner.name, stage: 'unreviewed', workflowStatus: 'active', cadence: null, outboundAttempts: [] });
+  return detail;
+}
+async function discloseDecision(fixture: ReliabilityDomainFixture, owner: ImportedOwner, kind: ReviewDecisionKind) {
+  const inspector = await screen.findByRole('complementary', { name: `${owner.name} details` });
+  fireEvent.click(within(inspector).getByText('Details', { selector: 'summary' }));
+  await waitFor(() => expect(channelEntries(fixture, 'discovery:get-brief').at(-1)).toMatchObject({
+    args: [{ personId: owner.personId }], outcome: 'resolved' }));
+  await flush(fixture);
+  expect(within(within(inspector).getByRole('region', { name: `Discovery evidence for ${owner.name}` }))
+    .getByText('Not assessed')).toBeTruthy();
+  fireEvent.click(within(inspector).getByRole('button', { name: 'Founder manual controls' }));
+  const section = within(inspector).getByRole('region', { name: 'Review this lead' });
+  if (kind === 'dismiss') {
+    fireEvent.click(within(section).getByRole('button', { name: 'Dismiss' }));
+    const reason = within(section).getByRole('combobox', { name: 'Dismissal reason' });
+    expect(reason.textContent).toContain('Out of area');
+    fireEvent.click(reason);
+    fireEvent.click(within(screen.getByRole('listbox', { name: 'Dismissal reason' }))
+      .getByRole('option', { name: 'Not a decision maker' }));
+    expect(reason.textContent).toContain('Not a decision maker');
+  }
+  return { section, submit: within(section).getByRole('button', {
+    name: kind === 'ready' ? 'Mark ready' : 'Confirm dismiss' }) as HTMLButtonElement };
+}
+function assertReviewPending(section: HTMLElement, kind: ReviewDecisionKind) {
+  const names = kind === 'ready' ? ['Mark ready', 'Dismiss'] : ['Mark ready', 'Confirm dismiss', 'Cancel'];
+  for (const name of names) {
+    const button = within(section).getByRole('button', { name }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true); fireEvent.click(button);
+  }
+  if (kind === 'dismiss') {
+    const reason = within(section).getByRole('combobox', { name: 'Dismissal reason' }) as HTMLButtonElement;
+    expect(reason.disabled).toBe(true); fireEvent.click(reason);
+    expect(reason.textContent).toContain('Not a decision maker');
+  }
+}
+function assertDecisionPersistence(fixture: ReliabilityDomainFixture, baseline: DecisionState,
+  before: ReturnType<ReliabilityDomainFixture['snapshot']>, changed: readonly ImportedOwner[], kind: ReviewDecisionKind) {
+  const current = fixture.reviewDecisionState();
+  const ids = changed.map(owner => owner.personId);
+  expect(current.workflowMode).toBe('legacy'); expect(current.jobs).toEqual(baseline.jobs);
+  for (const relation of ['owners', 'enrollments', 'actions', 'rules', 'events'] as const) {
+    expect(current[relation].filter(row => !ids.includes(row.personId)), `nonselected ${relation}`)
+      .toEqual(baseline[relation].filter(row => !ids.includes(row.personId)));
+  }
+  expect(current.owners).toHaveLength(208);
+  for (const owner of changed) {
+    const owned = current.owners.filter(row => row.personId === owner.personId); expect(owned).toHaveLength(1);
+    const cycle = owned[0]!;
+    expect(cycle).toMatchObject({ personId: owner.personId, prospectId: owner.prospectId,
+      salesCycleId: owner.salesCycleId, person_id: owner.personId, prospect_id: owner.prospectId,
+      stage: kind === 'ready' ? 'ready' : 'lost_nurture', workflow_status: kind === 'ready' ? 'active' : 'closed',
+      qualification_state: kind === 'ready' ? 'eligible' : 'disqualified',
+      qualification_gate_reason: kind === 'ready' ? null : 'no_relevant_decision_relationship' });
+    const actions = current.actions.filter(row => row.personId === owner.personId);
+    const old = actions.find(row => row.id === owner.actionId)!;
+    expect(old).toMatchObject({ sales_cycle_id: owner.salesCycleId, action_type: 'review_lead', isCurrent: 0,
+      status: kind === 'ready' ? 'completed' : 'cancelled', completed_at: RELIABILITY_NOW, completion_activity_id: null });
+    expect(JSON.parse(old.settlement_json as string)).toMatchObject({ version: 1,
+      outcome: kind === 'ready' ? 'reviewed_ready' : 'lost_nurture', reason: kind === 'ready' ? null : 'disqualified' });
+    const enrollments = current.enrollments.filter(row => row.personId === owner.personId);
+    const rules = current.rules.filter(row => row.personId === owner.personId);
+    if (kind === 'ready') {
+      expect(actions).toHaveLength(2); expect(enrollments).toHaveLength(1); expect(rules).toEqual([]);
+      const enrollment = enrollments[0]!;
+      expect(enrollment).toMatchObject({ sales_cycle_id: owner.salesCycleId, status: 'active', mode: 'standard',
+        definitionVersion: 1, anchor_at: RELIABILITY_NOW });
+      const originalProspect = (before['prospects'] as Record<string, unknown>[]).find(row => row.id === owner.prospectId)!;
+      expect(enrollment.family).toBe(originalProspect.segment === 'warm' ? 'cadence_c' : originalProspect.segment === 'hot' ? 'cadence_a' : 'cadence_b');
+      expect(actions.filter(row => row.isCurrent === 1)).toEqual([expect.objectContaining({
+        id: cycle.current_next_action_id, sales_cycle_id: owner.salesCycleId, cadence_enrollment_id: enrollment.id,
+        status: 'pending', work_intent: 'discretionary_prospecting', settlement_json: null, completed_at: null })]);
+      expect(cycle.current_next_action_id).not.toBe(owner.actionId); expect(cycle.current_next_action_id).toEqual(expect.any(String));
+    } else {
+      expect(actions).toHaveLength(1); expect(enrollments).toEqual([]); expect(rules).toHaveLength(1);
+      expect(cycle).toMatchObject({ current_next_action_id: null, close_reason: 'disqualified', closed_at: RELIABILITY_NOW });
+      expect(rules[0]).toMatchObject({ sales_cycle_id: owner.salesCycleId, rule_type: 'manual',
+        due_at: '2027-08-31T17:00:00.000Z', consumed_at: null, version: 1 });
+    }
+    const originalEvents = baseline.events.filter(row => row.personId === owner.personId);
+    const events = current.events.filter(row => row.personId === owner.personId);
+    expect(events).toHaveLength(originalEvents.length + 1); expect(events).toEqual(expect.arrayContaining(originalEvents));
+    expect(events.at(-1)).toMatchObject({ sales_cycle_id: owner.salesCycleId, from_stage: 'unreviewed',
+      to_stage: kind === 'ready' ? 'ready' : 'lost_nurture', confirmation_kind: 'founder',
+      transition_sequence: 2, effective_at: RELIABILITY_NOW, confirmed_at: RELIABILITY_NOW });
+  }
+  const after = fixture.snapshot();
+  const changedProspects = changed.map(owner => owner.prospectId);
+  expect((after['prospects'] as Record<string, unknown>[]).filter(row => !changedProspects.includes(row.id as string)))
+    .toEqual((before['prospects'] as Record<string, unknown>[]).filter(row => !changedProspects.includes(row.id as string)));
+  for (const table of Object.keys(before)) {
+    if (['prospects', 'sales_cycles', 'next_actions', 'stage_events'].includes(table)) continue;
+    expect(after[table], `unchanged identity/source/history ${table}`).toEqual(before[table]);
+  }
+  expect(after['stage_events']).toEqual(expect.arrayContaining(before['stage_events']!));
+  expect((after['activities'] as Record<string, unknown>[]).filter(row => row.direction === 'outbound'
+    || row.channel === 'outbound_command' || row.adapter === 'callie_outbound_v1')).toEqual([]);
+  expect(fixture.counts().externalInvocations).toBe(0);
+}
+function assertDecisionInventory(fixture: ReliabilityDomainFixture, requests: LeadsListRequest[],
+  controls: ReviewDecisionControl[], owners: readonly ImportedOwner[], stale: LeadsListRequest) {
+  const trace = fixture.trace();
+  const allowed = ['imports:preview', 'imports:commit', 'review:list', 'lead-detail:outbound-capabilities',
+    'leads:list', 'lead-detail:get', 'discovery:get-brief', ...controls.map(control => control.channel)];
+  for (const entry of trace) {
+    expect(allowed, `unaccounted C2 channel ${entry.channel}`).toContain(entry.channel);
+    expect(entry.handlerStarted).toBe(true); expect(entry.handlerSettled).toBe(true);
+    expect(entry.phase).toBe(entry.channel.startsWith('imports:') ? 'setup' : entry.outcome === 'rejected' ? 'probe' : 'ui');
+    expect(entry.outcome).not.toBe('pending');
+  }
+  const preview = channelEntries(fixture, 'imports:preview'); const commit = channelEntries(fixture, 'imports:commit');
+  expect(preview).toHaveLength(1); expect(commit).toHaveLength(1);
+  expect(preview[0]!.args).toEqual([{ kind: 'csv', sourceName: 'reliability-208.csv', content:
+    ['Name,Email,Organization', ...Array.from({ length: 208 }, (_, index) => {
+      const suffix = String(index).padStart(4, '0');
+      return `Reliability Lead ${suffix},rel-lead-${suffix}@fixture.invalid,Fictional Shared Organization`;
+    })].join('\n') + '\n' }]);
+  expect(commit[0]!.args).toEqual([{ previewId: (preview[0]!.result as { previewId: string }).previewId,
+    contentHash: (preview[0]!.result as { contentHash: string }).contentHash,
+    mapping: { Name: 'person_name', Email: 'email', Organization: 'organization' },
+    source: { channel: 'registry', referredByPersonId: null }, duplicateDecisions: [] }]);
+  expect(channelEntries(fixture, 'review:list').map(entry => entry.args)).toEqual([[emptyReviewRequest]]);
+  expect(listed(channelEntries(fixture, 'review:list')[0]!).totalOpenCount).toBe(0);
+  expect(channelEntries(fixture, 'lead-detail:outbound-capabilities').map(entry => [entry.args, entry.result]))
+    .toEqual([[[{}], unavailableCapabilities]]);
+  const lists = channelEntries(fixture, 'leads:list');
+  expect(lists.filter(entry => entry.phase === 'ui').map(entry => entry.args)).toEqual(requests.map(request => [request]));
+  for (const entry of lists.filter(entry => entry.phase === 'ui')) leadsListResponseSchema.parse(entry.result);
+  expect(lists.filter(entry => entry.phase === 'probe')).toEqual([expect.objectContaining({
+    args: [stale], outcome: 'rejected', error: 'LIST_CURSOR_STALE' })]);
+  expect(trace.filter(entry => entry.outcome === 'rejected')).toHaveLength(1);
+  for (const channel of ['lead-detail:get', 'discovery:get-brief']) {
+    expect(channelEntries(fixture, channel).map(entry => entry.args)).toEqual(owners.map(owner => [{ personId: owner.personId }]));
+  }
+  for (const [index, entry] of channelEntries(fixture, 'discovery:get-brief').entries()) {
+    const owner = owners[index]!;
+    expect(discoveryBriefSchema.parse(entry.result)).toEqual({ personId: owner.personId, salesCycleId: owner.salesCycleId,
+      personName: owner.name, assessment: null, stale: false, latestOverride: null, pilotNextStep: null });
+  }
+  const decisions = trace.filter(entry => entry.channel === 'lead-detail:confirm-transition' || entry.channel === 'lead-detail:dismiss');
+  expect(decisions.map(entry => ({ channel: entry.channel, at: 'before-handler', request: entry.args[0] }))).toEqual(controls);
+  for (const [index, entry] of decisions.entries()) {
+    expect(mutationReceiptSchema.parse(entry.result)).toMatchObject({ affectedPersonIds: [owners[index]!.personId],
+      affectedSalesCycleIds: [owners[index]!.salesCycleId] });
+  }
+  expect(fixture.counts().externalInvocations).toBe(0);
+}
+
+describe('reliability Step C2 phase1: actual docked review continuation and independent local decision state', () => {
+  for (const kind of ['ready', 'dismiss'] as const) {
+    it(`${kind} advances199 to200 then closes honestly at200of208, preserving exact local effects and explicit recovery`, async () => {
+      await withLeadsLayout(async fixture => {
+        const { owners } = await fixture.importLeads(api);
+        const baseline = fixture.reviewDecisionState(); const before = fixture.snapshot();
+        expect(baseline.workflowMode).toBe('legacy'); assertImportedJobBaseline(fixture, baseline, owners);
+        expect(baseline.owners).toHaveLength(208); expect(baseline.enrollments).toEqual([]); expect(baseline.rules).toEqual([]);
+        expect(baseline.actions).toHaveLength(208);
+        for (const owner of owners) expect(baseline.actions.find(row => row.personId === owner.personId)).toMatchObject({
+          id: owner.actionId, sales_cycle_id: owner.salesCycleId, isCurrent: 1, action_type: 'review_lead', status: 'pending' });
+        const { first, requests } = await startNameLeads(fixture, owners);
+        const firstOwner = owners[198]!; const nextOwner = owners[199]!;
+        const row = await virtualRow(firstOwner, 198); row.focus(); fireEvent.keyDown(row, { key: 'Enter' });
+        await screen.findByRole('complementary', { name: `${firstOwner.name} details` }); await flush(fixture);
+        const firstControl = decisionInput(kind, capturedDetail(fixture, firstOwner));
+        const firstUi = await discloseDecision(fixture, firstOwner, kind);
+        const hold = fixture.holdReviewDecision(firstControl);
+        const next = fixture.holdNextDetail({ personId: nextOwner.personId });
+        const changes = fixture.totalChanges(); const entries = fixture.counts().domainEntries;
+        firstUi.submit.focus();
+        act(() => {
+          firstUi.submit.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          firstUi.submit.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        });
+        const arrival = await hold.arrived();
+        expect(arrival).toMatchObject({ phase: 'ui', channel: firstControl.channel, args: [firstControl.request], handlerStarted: false, outcome: 'pending' });
+        expect(arrival.result).toBeUndefined(); assertReviewPending(firstUi.section, kind);
+        expect(channelEntries(fixture, firstControl.channel)).toHaveLength(1);
+        expect(fixture.counts().domainEntries).toBe(entries); expect(fixture.totalChanges()).toBe(changes);
+        expect(fixture.snapshot()).toEqual(before); expect(fixture.reviewDecisionState()).toEqual(baseline);
+        act(() => { hold.release(); });
+        const successor = await next.arrived();
+        expect(successor).toMatchObject({ channel: 'lead-detail:get', args: [{ personId: nextOwner.personId }],
+          handlerStarted: true, handlerSettled: true, deliveryHeld: true, outcome: 'pending' });
+        expect(leadDetailSchema.parse(successor.result)).toMatchObject({ personId: nextOwner.personId,
+          salesCycleId: nextOwner.salesCycleId, stage: 'unreviewed' });
+        await waitFor(() => expect(document.querySelector(`[data-person-id="${nextOwner.personId}"]`)?.getAttribute('aria-selected')).toBe('true'));
+        expect(channelEntries(fixture, 'leads:list').map(entry => entry.args)).toEqual(requests.map(request => [request]));
+        assertDecisionPersistence(fixture, baseline, before, [firstOwner], kind);
+        const savedFirst = fixture.snapshot(); const savedState = fixture.reviewDecisionState(); const savedChanges = fixture.totalChanges();
+        await act(async () => { next.release(); }); await flush(fixture);
+        expect(fixture.snapshot()).toEqual(savedFirst); expect(fixture.reviewDecisionState()).toEqual(savedState);
+        expect(fixture.totalChanges()).toBe(savedChanges);
+        const nextControl = decisionInput(kind, capturedDetail(fixture, nextOwner));
+        const nextUi = await discloseDecision(fixture, nextOwner, kind);
+        nextUi.submit.focus(); expect(document.activeElement).toBe(nextUi.submit); fireEvent.click(nextUi.submit);
+        await screen.findByText(reviewBoundary); await flush(fixture);
+        expect(screen.queryByRole('complementary')).toBeNull(); expect(screen.getByText('Last loaded: 200 of 208')).toBeTruthy();
+        expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+        expect(screen.queryByText(/all done|eight remaining/i)).toBeNull();
+        await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Refresh list' })));
+        expect(channelEntries(fixture, 'leads:list').map(entry => entry.args)).toEqual(requests.map(request => [request]));
+        assertDecisionPersistence(fixture, baseline, before, [firstOwner, nextOwner], kind);
+        const persisted = fixture.snapshot(); const state = fixture.reviewDecisionState(); const postChanges = fixture.totalChanges();
+        const stale = leadRequest('', first.nextCursor); fixture.setPhase('probe');
+        await expect(api.leads.list(stale)).rejects.toThrow('LIST_CURSOR_STALE');
+        expect(fixture.snapshot()).toEqual(persisted); expect(fixture.reviewDecisionState()).toEqual(state);
+        expect(fixture.totalChanges()).toBe(postChanges); fixture.setPhase('ui');
+        const expected = kind === 'ready' ? owners : owners.filter(owner => ![firstOwner.personId, nextOwner.personId].includes(owner.personId));
+        fireEvent.click(screen.getByRole('button', { name: 'Refresh list' }));
+        await screen.findByText(`Showing 200 of ${expected.length}`); await flush(fixture);
+        const refreshed = latestLeads(fixture); requests.push(leadRequest());
+        expect(refreshed.total).toBe(expected.length); expect(refreshed.rows.map(item => item.personId)).toEqual(expected.slice(0, 200).map(owner => owner.personId));
+        expect(refreshed.nextCursor).toEqual(expect.any(String)); expect(refreshed.nextCursor).not.toBe(first.nextCursor);
+        expect(screen.queryByText(reviewBoundary)).toBeNull(); expect(screen.queryByRole('complementary')).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+        await screen.findByText(`Showing ${expected.length} of ${expected.length}`); await flush(fixture);
+        requests.push(leadRequest('', refreshed.nextCursor)); const last = latestLeads(fixture);
+        expect(last.total).toBe(expected.length); expect(last.nextCursor).toBeNull();
+        expect([...refreshed.rows, ...last.rows].map(item => [item.personId, item.salesCycleId]))
+          .toEqual(expected.map(owner => [owner.personId, owner.salesCycleId]));
+        expect(new Set([...refreshed.rows, ...last.rows].map(item => item.personId)).size).toBe(expected.length);
+        expect(screen.getByRole('grid', { name: 'Leads' }).getAttribute('aria-rowcount')).toBe(String(expected.length + 1));
+        expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+        expect(fixture.snapshot()).toEqual(persisted); expect(fixture.reviewDecisionState()).toEqual(state);
+        expect(fixture.totalChanges()).toBe(postChanges);
+        assertDecisionInventory(fixture, requests, [firstControl, nextControl], [firstOwner, nextOwner], stale);
+      });
+    }, 60_000);
+  }
+});
+
+describe('reliability Step C2 phase1: finite before-handler decision cancellation, not domain refusal', () => {
+  for (const kind of ['ready', 'dismiss'] as const) {
+    for (const decision of ['cancel', 'release-dispose'] as const) {
+      it(`${kind} ${decision} never forwards an unstarted lifecycle command`, async () => {
+        await withFixture(async fixture => {
+          const { owners } = await fixture.importLeads(api); fixture.setPhase('probe');
+          const detail = leadDetailSchema.parse(await api.leadDetail.get({ personId: owners[0]!.personId }));
+          expect(detail).toMatchObject({ personId: owners[0]!.personId, salesCycleId: owners[0]!.salesCycleId, stage: 'unreviewed' });
+          const control = decisionInput(kind, detail);
+          const before = fixture.snapshot(); const state = fixture.reviewDecisionState();
+          const changes = fixture.totalChanges(); const entries = fixture.counts().domainEntries;
+          expect(state.workflowMode).toBe('legacy'); assertImportedJobBaseline(fixture, state, owners);
+          expect(() => fixture.holdReviewDecision({ ...control, request: { ...control.request, expectedRevision: -1 } } as ReviewDecisionControl)).toThrow();
+          expect(() => fixture.holdReviewDecision({ ...control, at: 'after-handler' } as unknown as ReviewDecisionControl))
+            .toThrow('DECISION_CONTROL_INVALID_PHASE');
+          expect(() => fixture.holdReviewDecision({ ...control, channel: 'lead-detail:begin-outbound' } as unknown as ReviewDecisionControl))
+            .toThrow('DECISION_CONTROL_UNSUPPORTED_CHANNEL');
+          expect(() => fixture.holdReviewDecision({ channel: 'lead-detail:confirm-transition', at: 'before-handler', request: {
+            transition: 'confirm_interviewed', salesCycleId: detail.salesCycleId, expectedRevision: detail.revision,
+            suggestionActivityId: 'not-an-authorized-review-transition' } } as unknown as ReviewDecisionControl))
+            .toThrow('DECISION_CONTROL_UNSUPPORTED_TRANSITION');
+          expect(() => fixture.holdNextDetail({ personId: '' })).toThrow();
+          const hold = fixture.holdReviewDecision(control);
+          expect('rejectDelivery' in hold).toBe(false);
+          expect(() => fixture.holdReviewDecision(control)).toThrow('DUPLICATE_DECISION_CONTROL');
+          expect(() => hold.release()).toThrow('DECISION_CONTROL_ALREADY_DECIDED_OR_NOT_ARRIVED');
+          const outcome = observeOutcome(callReviewDecision(control));
+          const arrival = await hold.arrived();
+          expect(arrival).toMatchObject({ channel: control.channel, args: [control.request], phase: 'probe', handlerStarted: false, outcome: 'pending' });
+          expect(arrival.result).toBeUndefined(); expect(arrival.handlerSettled).toBeUndefined();
+          expect(() => fixture.holdReviewDecision(control)).toThrow('DUPLICATE_DECISION_CONTROL');
+          expect(fixture.snapshot()).toEqual(before); expect(fixture.reviewDecisionState()).toEqual(state);
+          expect(fixture.totalChanges()).toBe(changes); expect(fixture.counts().domainEntries).toBe(entries);
+          if (decision === 'cancel') {
+            hold.cancel(); expect(() => hold.cancel()).toThrow('DECISION_CONTROL_ALREADY_DECIDED_OR_NOT_ARRIVED');
+            expect(await outcome).toMatchObject({ value: null, error: { message: 'DECISION_CONTROL_CANCELLED' } });
+            expect(fixture.snapshot()).toEqual(before); expect(fixture.reviewDecisionState()).toEqual(state);
+            expect(fixture.totalChanges()).toBe(changes);
+          } else {
+            hold.release();
+            // Still the same synchronous turn: record unchanged storage before admission closes.
+            expect(fixture.snapshot()).toEqual(before); expect(fixture.reviewDecisionState()).toEqual(state);
+            expect(fixture.totalChanges()).toBe(changes);
+            const disposal = fixture.dispose(); expect(await disposal).toEqual(cleanEvidence);
+            expect(await outcome).toMatchObject({ value: null, error: { message: 'RELIABILITY_FIXTURE_DISPOSED' } });
+            expect(fixture.dispose()).toBe(disposal);
+          }
+          await fixture.idle();
+          const trace = fixture.trace();
+          expect(trace.map(entry => entry.channel)).toEqual(['imports:preview', 'imports:commit', 'lead-detail:get', control.channel]);
+          expect(trace.map(entry => entry.phase)).toEqual(['setup', 'setup', 'probe', 'probe']);
+          expect(trace.slice(0, 3).every(entry => entry.handlerStarted && entry.handlerSettled && entry.outcome === 'resolved')).toBe(true);
+          expect(trace[2]!.args).toEqual([{ personId: owners[0]!.personId }]); expect(trace[2]!.result).toEqual(detail);
+          expect(trace[3]).toMatchObject({ handlerStarted: false, handlerSettled: false, outcome: 'rejected', args: [control.request] });
+          expect(trace[3]!.result).toBeUndefined(); expect(fixture.counts().domainEntries).toBe(entries);
+          expect(fixture.counts().externalInvocations).toBe(0);
+        });
+      }, 60_000);
+    }
   }
 });

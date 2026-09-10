@@ -11,6 +11,7 @@ import { BUILTIN_CADENCES } from '../../src/main/domain/cadence/builtinCadences'
 import { createDomainServices } from '../../src/main/domain/createDomainServices';
 import { createFounderSalesDomain, type FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import { BUILTIN_PRIORITIZATION_RULE_V1 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
+import { readWorkflowMode } from '../../src/main/domain/workspace/legacyWorkflowTransition';
 import { registerApplicationIpc } from '../../src/main/ipc/registerApplicationIpc';
 import { registerOutreachIpc } from '../../src/main/ipc/registerOutreachIpc';
 import type { CallieApi } from '../../src/preload/createCallieApi';
@@ -19,6 +20,8 @@ import type { OutreachApi } from '../../src/shared/contracts/outreachContract';
 import { leadsListRequestSchema, leadFieldUpdateRequestSchema, leadBulkUpdateRequestSchema,
   type LeadsListRequest, type LeadFieldUpdateRequest, type LeadBulkUpdateRequest } from '../../src/shared/contracts/leadsContract';
 import { reviewListRequestSchema, type ReviewListRequest } from '../../src/shared/contracts/reviewContract';
+import { confirmTransitionRequestSchema, dismissLeadRequestSchema, leadDetailRequestSchema, leadDetailSchema,
+  type ConfirmTransitionRequest, type DismissLeadRequest, type LeadDetailRequest } from '../../src/shared/contracts/leadDetailContract';
 import { insertClosedCycle, insertOpenCycleWithAction, insertSourceEvent, seedProspect } from './domainRows';
 import type { RegisteredIpcHandler } from './registeredIpcHandler';
 import { createTempDatabase, createTestWorkspaceKey } from './tempDatabase';
@@ -89,6 +92,17 @@ type LeadsHold = {
 type OrganizationAssignment = {
   personId: string; prospectId: string; organizationId: string; canonicalName: string; relationship: string | null;
 };
+export type ReviewDecisionControl =
+  | { channel: 'lead-detail:confirm-transition'; at: 'before-handler';
+      request: Extract<ConfirmTransitionRequest, { transition: 'review_to_ready' }> }
+  | { channel: 'lead-detail:dismiss'; at: 'before-handler'; request: DismissLeadRequest };
+type DetailControl = { channel: 'lead-detail:get'; at: 'after-handler'; request: LeadDetailRequest };
+type DecisionHold = {
+  control: ReviewDecisionControl | DetailControl; remaining: number; state: DeliveryState;
+  arrival: ReturnType<typeof deferred<ReliabilityTrace>>;
+  delivery: ReturnType<typeof deferred<void>>;
+};
+type DecisionRelation = { personId: string; prospectId: string; salesCycleId: string } & Record<string, unknown>;
 
 function frozenCopy<T>(value: T): T {
   const copy = structuredClone(value);
@@ -127,6 +141,7 @@ export async function createReliabilityDomainFixture(
   const entries: ReliabilityTrace[] = [];
   const holds: ReviewHold[] = [];
   const leadsHolds: LeadsHold[] = [];
+  const decisionHolds: DecisionHold[] = [];
   const importedPersonIds = new Set<string>();
   const seededReviews = new Map<string, ReviewOwner>();
   const requireOpen = () => {
@@ -165,6 +180,14 @@ export async function createReliabilityDomainFixture(
           hold.state = 'cancelled';
           hold.arrival.reject(new Error('LEADS_CONTROL_CANCELLED'));
           hold.delivery.reject(new Error('LEADS_CONTROL_CANCELLED'));
+        }
+      }
+      for (const hold of decisionHolds) {
+        if (hold.state === 'waiting') errors.push(new Error('UNUSED_DECISION_CONTROL'));
+        if (['waiting', 'claimed', 'arrived'].includes(hold.state)) {
+          hold.state = 'cancelled';
+          hold.arrival.reject(new Error('DECISION_CONTROL_CANCELLED'));
+          hold.delivery.reject(new Error('DECISION_CONTROL_CANCELLED'));
         }
       }
       try { await idle(); } catch (error) { errors.push(error); }
@@ -279,6 +302,48 @@ export async function createReliabilityDomainFixture(
           (T extends { at: 'after-handler' } ? { rejectDelivery(): void } : object)>;
     };
 
+    // Only these three strict controls share internal lifetime mechanics. Old controls are unchanged.
+    const holdDecision = <T extends ReviewDecisionControl | DetailControl>(control: T, occurrence: number) => {
+      requireOpen();
+      assert.ok(Number.isSafeInteger(occurrence) && occurrence > 0);
+      let parsed: ReviewDecisionControl | DetailControl;
+      if (control.channel === 'lead-detail:confirm-transition') {
+        const request = confirmTransitionRequestSchema.parse(control.request);
+        assert.equal(request.transition, 'review_to_ready', 'DECISION_CONTROL_UNSUPPORTED_TRANSITION');
+        if (request.transition !== 'review_to_ready') throw new Error('DECISION_CONTROL_UNSUPPORTED_TRANSITION');
+        parsed = { channel: control.channel, at: 'before-handler', request };
+      } else if (control.channel === 'lead-detail:dismiss') {
+        parsed = { channel: control.channel, at: 'before-handler', request: dismissLeadRequestSchema.parse(control.request) };
+      } else if (control.channel === 'lead-detail:get') {
+        parsed = { channel: control.channel, at: 'after-handler', request: leadDetailRequestSchema.parse(control.request) };
+      } else throw new Error('DECISION_CONTROL_UNSUPPORTED_CHANNEL');
+      assert.equal(control.at, parsed.at, 'DECISION_CONTROL_INVALID_PHASE');
+      assert.ok(!decisionHolds.some(hold => isDeepStrictEqual(hold.control, parsed)
+        && ((hold.state === 'waiting' && hold.remaining === occurrence)
+          || hold.state === 'claimed' || hold.state === 'arrived')), 'DUPLICATE_DECISION_CONTROL');
+      const hold: DecisionHold = { control: frozenCopy(parsed), remaining: occurrence, state: 'waiting',
+        arrival: deferred<ReliabilityTrace>(), delivery: deferred<void>() };
+      decisionHolds.push(hold);
+      const decide = (decision: 'released' | 'rejected' | 'cancelled') => {
+        requireOpen();
+        assert.equal(hold.state, 'arrived', 'DECISION_CONTROL_ALREADY_DECIDED_OR_NOT_ARRIVED');
+        hold.state = decision;
+        if (decision === 'released') hold.delivery.resolve();
+        else hold.delivery.reject(new Error(decision === 'rejected' ? 'NEXT_DETAIL_DELIVERY_REJECTED' : 'DECISION_CONTROL_CANCELLED'));
+      };
+      const common = { arrived: () => bounded(hold.arrival.promise, 'Decision control arrival'),
+        release: () => decide('released'), cancel: () => decide('cancelled'), state: () => hold.state };
+      return Object.freeze(parsed.at === 'after-handler' ? { ...common, rejectDelivery: () => decide('rejected') } : common) as
+        Readonly<typeof common & (T extends DetailControl ? { rejectDelivery(): void } : object)>;
+    };
+    const holdReviewDecision = (control: ReviewDecisionControl, occurrence = 1) => {
+      assert.ok(control.channel === 'lead-detail:confirm-transition' || control.channel === 'lead-detail:dismiss',
+        'DECISION_CONTROL_UNSUPPORTED_CHANNEL');
+      return holdDecision(control, occurrence);
+    };
+    const holdNextDetail = (request: LeadDetailRequest, occurrence = 1) =>
+      holdDecision({ channel: 'lead-detail:get', at: 'after-handler', request }, occurrence);
+
     const invokeFrom = (url: string, channel: string, ...args: unknown[]): Promise<unknown> => {
       const index = entries.length;
       const initial = frozenCopy<ReliabilityTrace>({ id: index + 1, phase, channel, args, handlerStarted: false, outcome: 'pending' });
@@ -286,6 +351,7 @@ export async function createReliabilityDomainFixture(
       const flight = (async () => {
         let delivery: ReviewHold | undefined;
         let leadControl: LeadsHold | undefined;
+        let decisionControl: DecisionHold | undefined;
         try {
           requireOpen();
           const handler = handlers.get(channel);
@@ -312,6 +378,19 @@ export async function createReliabilityDomainFixture(
             // not at the earlier terminal decision, so cancellation never mutates.
             requireOpen();
           }
+          if (url === RELIABILITY_URL && args.length === 1) {
+            for (const hold of decisionHolds) {
+              if (hold.state !== 'waiting' || hold.control.channel !== channel || !isDeepStrictEqual(hold.control.request, args[0])) continue;
+              hold.remaining -= 1;
+              if (hold.remaining === 0) { hold.state = 'claimed'; decisionControl = hold; }
+            }
+          }
+          if (decisionControl?.control.at === 'before-handler') {
+            decisionControl.state = 'arrived';
+            decisionControl.arrival.resolve(entries[index]!);
+            await decisionControl.delivery.promise;
+            requireOpen(); // Immediate disposal after release must still prevent forwarding.
+          }
           entries[index] = frozenCopy({ ...initial, handlerStarted: true });
           const result = await handler({ senderFrame: { url } }, ...args);
           entries[index] = frozenCopy({ ...entries[index]!, handlerSettled: true, result });
@@ -331,9 +410,22 @@ export async function createReliabilityDomainFixture(
             }
             await leadControl.delivery.promise;
           }
+          if (decisionControl?.control.at === 'after-handler') {
+            leadDetailSchema.parse(result); // Validate the real settled result, never replace it.
+            if (decisionControl.state === 'claimed') {
+              decisionControl.state = 'arrived';
+              entries[index] = frozenCopy({ ...entries[index]!, deliveryHeld: true });
+              decisionControl.arrival.resolve(entries[index]!);
+            }
+            await decisionControl.delivery.promise;
+          }
           entries[index] = frozenCopy({ ...entries[index]!, outcome: 'resolved', result });
           return result; // no enrichment, replacement receipt or response mutation
         } catch (error) {
+          if (decisionControl?.state === 'claimed') {
+            decisionControl.state = 'rejected';
+            decisionControl.arrival.reject(new Error('DECISION_HANDLER_REJECTED_BEFORE_DELIVERY'));
+          }
           if (leadControl?.state === 'claimed') {
             leadControl.state = 'rejected';
             leadControl.arrival.reject(new Error('LEADS_HANDLER_REJECTED_BEFORE_DELIVERY'));
@@ -388,8 +480,55 @@ export async function createReliabilityDomainFixture(
       JOIN organizations organization ON organization.id = membership.organization_id
       ORDER BY person.id, prospect.id, organization.id
     `).all().filter(row => importedPersonIds.has(row.personId));
+    const reviewDecisionState = () => {
+      const current = requireOpen();
+      const owned = (rows: DecisionRelation[]) => rows.filter(row => importedPersonIds.has(row.personId));
+      // Fixed joins retain each relation's own IDs and full persisted row, independent of DTOs.
+      const owners = owned(current.raw.prepare<[], DecisionRelation>(`
+        SELECT person.id AS personId, prospect.id AS prospectId, cycle.id AS salesCycleId,
+          prospect.qualification_state, prospect.qualification_gate_reason, prospect.version AS prospectVersion,
+          cycle.* FROM persons person
+        JOIN prospects prospect ON prospect.person_id = person.id
+        JOIN sales_cycles cycle ON cycle.prospect_id = prospect.id AND cycle.person_id = person.id
+        ORDER BY person.id, cycle.id
+      `).all());
+      const enrollments = owned(current.raw.prepare<[], DecisionRelation>(`
+        SELECT person.id AS personId, prospect.id AS prospectId, cycle.id AS salesCycleId,
+          definition.family, definition.version AS definitionVersion, enrollment.*
+        FROM persons person JOIN prospects prospect ON prospect.person_id = person.id
+        JOIN sales_cycles cycle ON cycle.prospect_id = prospect.id AND cycle.person_id = person.id
+        JOIN cadence_enrollments enrollment ON enrollment.sales_cycle_id = cycle.id
+        JOIN cadence_definitions definition ON definition.id = enrollment.cadence_definition_id
+        ORDER BY person.id, cycle.id, enrollment.id
+      `).all());
+      const actions = owned(current.raw.prepare<[], DecisionRelation>(`
+        SELECT person.id AS personId, prospect.id AS prospectId, cycle.id AS salesCycleId,
+          CASE WHEN cycle.current_next_action_id = action.id THEN 1 ELSE 0 END AS isCurrent, action.*
+        FROM persons person JOIN prospects prospect ON prospect.person_id = person.id
+        JOIN sales_cycles cycle ON cycle.prospect_id = prospect.id AND cycle.person_id = person.id
+        JOIN next_actions action ON action.sales_cycle_id = cycle.id
+        ORDER BY person.id, cycle.id, action.id
+      `).all());
+      const rules = owned(current.raw.prepare<[], DecisionRelation>(`
+        SELECT person.id AS personId, prospect.id AS prospectId, cycle.id AS salesCycleId, rule.*
+        FROM persons person JOIN prospects prospect ON prospect.person_id = person.id
+        JOIN sales_cycles cycle ON cycle.prospect_id = prospect.id AND cycle.person_id = person.id
+        JOIN reactivation_rules rule ON rule.sales_cycle_id = cycle.id
+        ORDER BY person.id, cycle.id, rule.id
+      `).all());
+      const events = owned(current.raw.prepare<[], DecisionRelation>(`
+        SELECT person.id AS personId, prospect.id AS prospectId, cycle.id AS salesCycleId, event.*
+        FROM persons person JOIN prospects prospect ON prospect.person_id = person.id
+        JOIN sales_cycles cycle ON cycle.prospect_id = prospect.id AND cycle.person_id = person.id
+        JOIN stage_events event ON event.sales_cycle_id = cycle.id
+        ORDER BY person.id, cycle.id, event.transition_sequence, event.id
+      `).all());
+      return frozenCopy({ owners, enrollments, actions, rules, events,
+        jobs: current.raw.prepare('SELECT * FROM jobs ORDER BY id').all(), workflowMode: readWorkflowMode(current) });
+    };
     return {
       invoker, invokeFrom, dispose, idle, holdReviewList, holdLeads,
+      holdReviewDecision, holdNextDetail, reviewDecisionState,
       organizationAssignments: () => frozenCopy(organizationAssignments()),
       seedAmbiguousMembership(personId: string) {
         requireOpen();
