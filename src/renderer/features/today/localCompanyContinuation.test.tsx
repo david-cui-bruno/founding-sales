@@ -2,7 +2,7 @@
 import { StrictMode, useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { LocalCompanyResearchStatus, SelectedResearch } from '../../../shared/contracts/localWorkspaceContract';
+import type { LinkCompanyPersonRequest, LocalCompanyResearchStatus, SelectedResearch } from '../../../shared/contracts/localWorkspaceContract';
 import { createLocalCompanyContinuation, type FirstUseContinuation } from './localCompanyContinuation';
 import { useFirstUseContinuation, type IntakeApi } from './LocalCompanyIntake';
 import { LocalCompanyIntakeProvider } from './LocalCompanyIntakeProvider';
@@ -218,4 +218,116 @@ it('F4-owner-14 a settled execution token cannot overwrite its same-epoch same-r
   expect(c.settleResearch(first, { outcome: 'known', status: status(r, 'completed') })).toBe(false);
   expect(c.settleResearch(first, { outcome: 'unknown' })).toBe(false); expect(c.snapshot()).toBe(pending);
   c.settleResearch(replay, { outcome: 'known', status: status(r, 'completed') }); expect(c.snapshot().research!.status!.state).toBe('completed');
+}, 10_000);
+
+
+// Task 6: real continuation owner, synthetic reviewed requests, no transport/storage.
+function t6Request(accountId = 'a', suffix = '1'): LinkCompanyPersonRequest {
+  return { commandId: `60000000-0000-4000-8000-${suffix.padStart(12, '0')}`, accountId, expectedVersion: 1,
+    link: { id: `link-${suffix}`, kind: 'person_role', personId: 'person-51', role: 'Manager', relationship: 'Manages company',
+      evidenceIds: ['source-a'], validFrom: '2026-09-10T12:00:00.000Z', validTo: null, authority: 'unconfirmed', authorityEvidenceIds: [] },
+    sourceQuotes: [{ sourceId: 'source-a', quote: 'Avery manages company A.' }] };
+}
+function t6Review(accountId = 'a') { return { accountId, personId: 'person-51', role: 'Manager', relationship: 'Manages company', sourceQuotes: [{ sourceId: 'source-a', quote: 'Avery manages company A.' }] }; }
+function t6Begin(c: FirstUseContinuation, input = t6Request()) {
+  const token = c.beginLink(c.captureEpoch(), input); expect(token).not.toBeNull(); return token!;
+}
+it('T6-O01 initial and published review snapshots are stable deep copies, not mutable caller aliases', () => {
+  const c = active().continuation;
+  expect(c.snapshot().link).toBeNull();
+  expect(c.snapshot().review).toEqual({ accountId: null, personId: null, role: '', relationship: '', sourceQuotes: [] });
+  const input = t6Review(); expect(c.updateReview(c.captureEpoch(), input)).toBe(true);
+  const before = c.snapshot(); expect(c.snapshot()).toBe(before);
+  expect(Object.isFrozen(before)).toBe(true); expect(Object.isFrozen(before.review)).toBe(true);
+  expect(Object.isFrozen(before.review.sourceQuotes)).toBe(true); expect(Object.isFrozen(before.review.sourceQuotes[0])).toBe(true);
+  input.role = 'Tampered'; input.sourceQuotes[0].quote = 'Changed'; input.sourceQuotes.push({ sourceId: 'other', quote: 'Other' });
+  expect(before.review).toEqual(t6Review()); expect(c.snapshot()).toBe(before);
+}, 10_000);
+it('T6-O02 dirty A survives B and back, foreign review is rejected until deliberate discard', () => {
+  const c = active().continuation; const epoch = c.captureEpoch();
+  expect(c.updateReview(epoch, t6Review())).toBe(true); const held = c.snapshot().review;
+  expect(c.selectAccount(epoch, 'b')).toBe(true); expect(c.updateReview(epoch, t6Review('b'))).toBe(false);
+  expect(c.snapshot().review).toBe(held); expect(c.selectAccount(epoch, 'a')).toBe(true); expect(c.snapshot().review).toBe(held);
+  expect(c.discardReview(epoch)).toBe(true); expect(c.snapshot().review.personId).toBeNull();
+  expect(c.selectAccount(epoch, 'b')).toBe(true); expect(c.updateReview(epoch, t6Review('b'))).toBe(true);
+}, 10_000);
+it('T6-O03 pending request is recursively immutable even with shallow-frozen caller input and double submit', () => {
+  const c = active().continuation; const supplied = t6Request(); Object.freeze(supplied);
+  const token = t6Begin(c, supplied); const held = c.snapshot(); const retained = held.link!.request;
+  expect(retained).toEqual(t6Request());
+  for (const part of [held.link, retained, retained.link, retained.link.evidenceIds, retained.link.authorityEvidenceIds, retained.sourceQuotes, retained.sourceQuotes[0]]) expect(Object.isFrozen(part)).toBe(true);
+  supplied.link.role = 'Changed'; supplied.link.evidenceIds.push('wrong'); supplied.sourceQuotes[0].quote = 'Changed';
+  expect(retained).toEqual(t6Request()); expect(c.snapshot()).toBe(held);
+  expect(c.beginLink(c.captureEpoch(), retained)).toBeNull(); expect(c.beginLink(c.captureEpoch(), t6Request('a', '2'))).toBeNull();
+  expect(c.updateReview(c.captureEpoch(), t6Review())).toBe(false); expect(c.discardReview(c.captureEpoch())).toBe(false);
+  expect(c.settleLink(token, { outcome: 'known', receipt: { accountId: 'a', version: 2, duplicate: false } })).toBe(true);
+}, 10_000);
+it('T6-O04 unknown admits only retained exact replay, old token cannot settle replay, known permits new intent', () => {
+  const c = active().continuation; const first = t6Begin(c); const original = c.snapshot().link!.request;
+  expect(c.settleLink(first, { outcome: 'unknown' })).toBe(true);
+  expect(c.discardReview(c.captureEpoch())).toBe(false); expect(c.beginLink(c.captureEpoch(), t6Request('a', '2'))).toBeNull();
+  const replay = t6Begin(c, original); expect(c.snapshot().link!.request).toBe(original); const pending = c.snapshot();
+  expect(c.settleLink(first, { outcome: 'known', receipt: { accountId: 'a', version: 2, duplicate: false } })).toBe(false); expect(c.snapshot()).toBe(pending);
+  expect(c.settleLink(replay, { outcome: 'known', receipt: { accountId: 'a', version: 2, duplicate: true } })).toBe(true);
+  expect(c.updateReview(c.captureEpoch(), t6Review())).toBe(true); expect(c.beginLink(c.captureEpoch(), t6Request('a', '2'))).not.toBeNull();
+}, 10_000);
+it.each([{ accountId: 'b', version: 2, duplicate: false }, { accountId: 'a', version: 0, duplicate: false }])('T6-O05 invalid receipt %j becomes unknown instead of saved or forever pending', receipt => {
+  const c = active().continuation; const token = t6Begin(c); const original = c.snapshot().link!.request;
+  expect(c.settleLink(token, { outcome: 'known', receipt })).toBe(true); expect(c.snapshot().link!.outcome).toBe('unknown');
+  expect(c.snapshot().link!.request).toBe(original); expect(c.beginLink(c.captureEpoch(), original)).not.toBeNull();
+}, 10_000);
+it('T6-O06 route selection does not fence settlement but lifetime invalidation does and keeps unknown identity', () => {
+  const bundle = active(); const c = bundle.continuation; const oldEpoch = c.captureEpoch();
+  const token = t6Begin(c); const original = c.snapshot().link!.request;
+  expect(c.selectAccount(oldEpoch, 'b')).toBe(true);
+  expect(c.settleLink(token, { outcome: 'unknown' })).toBe(true); expect(c.snapshot().selectedAccountId).toBe('b');
+  expect(c.beginLink(oldEpoch, original)).toBeNull(); c.selectAccount(oldEpoch, 'a'); const replay = t6Begin(c, original);
+  bundle.invalidate(); expect(c.snapshot().link!.outcome).toBe('unknown'); expect(c.snapshot().link!.request).toBe(original);
+  bundle.activate(); const before = c.snapshot();
+  expect(c.updateReview(oldEpoch, t6Review())).toBe(false); expect(c.discardReview(oldEpoch)).toBe(false); expect(c.beginLink(oldEpoch, original)).toBeNull();
+  expect(c.settleLink(replay, { outcome: 'known', receipt: { accountId: 'a', version: 2, duplicate: false } })).toBe(false); expect(c.snapshot()).toBe(before);
+}, 10_000);
+it.each(['pending', 'unknown'] as const)('T6-O07 unresolved link %s blocks new research at owner, not only UI', outcome => {
+  const c = active().continuation; expect(c.snapshot().research).toBeNull(); const token = t6Begin(c);
+  if (outcome === 'unknown') c.settleLink(token, { outcome: 'unknown' });
+  const held = c.snapshot().link; expect(c.beginResearch(c.captureEpoch(), request())).toBeNull();
+  c.selectAccount(c.captureEpoch(), 'b'); expect(c.beginResearch(c.captureEpoch(), request('b'))).toBeNull(); expect(c.snapshot().link).toBe(held);
+  expect(c.selectAccount(c.captureEpoch(), 'a')).toBe(true);
+  const completing = outcome === 'unknown' ? t6Begin(c, held!.request) : token;
+  expect(c.settleLink(completing, { outcome: 'known', receipt: { accountId: 'a', version: 2, duplicate: false } })).toBe(true);
+  expect(c.snapshot().link!.outcome).toBe('known');
+  expect(c.beginResearch(c.captureEpoch(), request())).not.toBeNull();
+}, 10_000);
+it('T6-O08 genuinely pending research cannot be erased or overlapped to dispatch a link', () => {
+  const c = active().continuation; const r = request(); const execution = mustBegin(c, r); const before = c.snapshot().research;
+  expect(c.beginLink(c.captureEpoch(), t6Request())).toBeNull(); expect(c.snapshot().research).toBe(before);
+  c.settleResearch(execution, { outcome: 'known', status: status(r, 'completed') }); expect(c.beginLink(c.captureEpoch(), t6Request())).not.toBeNull();
+}, 10_000);
+function T6Observe({ captures, handlers, invoke }: { captures: FirstUseContinuation[]; handlers: Array<() => void>; invoke: (r: LinkCompanyPersonRequest) => void }) {
+  const c = useFirstUseContinuation(); useSyncExternalStore(c.subscribe, c.snapshot, c.snapshot); const epoch = c.captureEpoch();
+  captures.push(c); const run = () => { if (!c.selectAccount(epoch, 'a')) return; const r = t6Request(); if (c.beginLink(epoch, r)) invoke(r); };
+  handlers.push(run); return <button onClick={run}>Begin reviewed link</button>;
+}
+it('T6-O09 real intake owner A-B-A StrictMode replacement fences stale callback before API forwarding', async () => {
+  const a = intakeApi(); const b = intakeApi(); const captures: FirstUseContinuation[] = []; const handlers: Array<() => void> = []; const invoke = vi.fn();
+  const tree = (api: IntakeApi) => <StrictMode><LocalCompanyIntakeProvider api={api}><T6Observe captures={captures} handlers={handlers} invoke={invoke} /></LocalCompanyIntakeProvider></StrictMode>;
+  const view = render(tree(a)); await waitFor(() => expect(captures.at(-1)!.isCurrent(captures.at(-1)!.captureEpoch())).toBe(true));
+  const old = captures.at(-1)!; const stale = handlers.at(-1)!; fireEvent.click(screen.getByRole('button', { name: 'Begin reviewed link' })); expect(invoke).toHaveBeenCalledOnce();
+  view.rerender(tree(b)); const middle = captures.at(-1)!; view.rerender(tree(a)); const fresh = captures.at(-1)!;
+  expect(fresh).not.toBe(old); expect(fresh).not.toBe(middle); expect(fresh.snapshot().link).toBeNull();
+  act(() => stale()); expect(invoke).toHaveBeenCalledOnce(); expect(fresh.snapshot().link).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Begin reviewed link' })); expect(invoke).toHaveBeenCalledTimes(2);
+}, 10_000);
+
+it('T6-O10 foreign owner token with identical account and request cannot settle local pending link', () => {
+  const one = active().continuation; const two = active().continuation;
+  const foreign = t6Begin(one); const own = t6Begin(two); const before = two.snapshot();
+  expect(two.settleLink(foreign, { outcome: 'known', receipt: { accountId: 'a', version: 2, duplicate: false } })).toBe(false); expect(two.snapshot()).toBe(before);
+  expect(two.settleLink(own, { outcome: 'known', receipt: { accountId: 'a', version: 2, duplicate: false } })).toBe(true);
+}, 10_000);
+it('T6-O11 clean review rejects wrong account and foreign epoch without publishing', () => {
+  const c = active().continuation; const other = active().continuation; const before = c.snapshot();
+  expect(c.updateReview(c.captureEpoch(), t6Review('b'))).toBe(false); expect(c.updateReview(other.captureEpoch(), t6Review())).toBe(false);
+  expect(c.beginLink(c.captureEpoch(), t6Request('b'))).toBeNull(); expect(c.snapshot()).toBe(before);
+  expect(c.updateReview(c.captureEpoch(), t6Review())).toBe(true);
 }, 10_000);

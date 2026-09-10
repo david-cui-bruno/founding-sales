@@ -29,7 +29,7 @@ function Harness() {
     preferences: (theme, density) => { setPreference(theme); setDensity(density); },
   };
   return <PresentationRoot><AppShell route={route} onNavigate={navigate} reviewCount={{ status: 'failed' }}>
-    <div data-rerender={tick}><NativeDeskRoute firstUse={fixture.firstUse} key={route} api={fixture.api} onOpenLead={id => opened.push(id)} surface={surface} legacy={<h1>Legacy Today fixture</h1>} /></div>
+    <div data-rerender={tick}><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={fixture.firstUse} key={route} api={fixture.api} onOpenLead={id => opened.push(id)} surface={surface} legacy={<h1>Legacy Today fixture</h1>} /></div>
   </AppShell></PresentationRoot>;
 }
 export type NativeDeskCompositionBrowser = {

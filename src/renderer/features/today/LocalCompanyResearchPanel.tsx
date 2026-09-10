@@ -1,28 +1,43 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { LocalCompanyDetail, LocalWorkspaceApi, SelectedResearch } from '../../../shared/contracts/localWorkspaceContract';
-import type { FirstUseContinuation } from './localCompanyContinuation';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import type { LinkCompanyPersonRequest, LocalCompanyDetail, LocalWorkspaceApi, SelectedResearch } from '../../../shared/contracts/localWorkspaceContract';
+import type { FirstUseContinuation, FirstUseEpoch } from './localCompanyContinuation';
 
 type Props = {
   accountId: string;
   api: Pick<LocalWorkspaceApi, 'getCompany' | 'researchCompany' | 'getCompanyResearchStatus'>;
   continuation: FirstUseContinuation;
+  renderDetail?(detail: LocalCompanyDetail): ReactNode;
 };
 
 /** Read-only mounting. Only the two explicit execution handlers cross research IPC. */
-export function LocalCompanyResearchPanel({ accountId, api, continuation }: Props) {
+export function LocalCompanyResearchPanel({ accountId, api, continuation, renderDetail }: Props) {
   // Selection generations are view-local. Observe each owner notification, even
   // when React batches A -> B -> A into one render, so old closures stay stale.
+  const knownLinkObservation = useRef<{ owner: FirstUseContinuation; epoch: FirstUseEpoch; request: LinkCompanyPersonRequest } | null>(null);
   const selection = useRef({ accountId: continuation.snapshot().selectedAccountId, token: Symbol('selection-view') });
   const subscribe = useCallback((listener: () => void) => continuation.subscribe(() => {
-    const selectedAccountId = continuation.snapshot().selectedAccountId;
+    const next = continuation.snapshot();
+    const selectedAccountId = next.selectedAccountId;
+    if (selectedAccountId === accountId && next.link?.outcome === 'known' && next.link.request.accountId === accountId) {
+      knownLinkObservation.current = { owner: continuation, epoch: continuation.captureEpoch(), request: next.link.request };
+    }
     if (selection.current.accountId !== selectedAccountId) selection.current = { accountId: selectedAccountId, token: Symbol('selection-view') };
     listener();
-  }), [continuation]);
+  }), [accountId, continuation]);
   const state = useSyncExternalStore(subscribe, continuation.snapshot, continuation.snapshot);
   const selectionToken = selection.current.token;
   const epoch = continuation.captureEpoch();
   const receiptVersion = state.research?.request.accountId === accountId ? state.research.status?.receipt?.version : undefined;
   const viewKey = useMemo(() => ({}), [accountId, api, continuation, epoch, selectionToken, state.selectedAccountId]);
+  // Latch only known same-account request identities. Pending/unknown transitions
+  // cannot undo this latch and trigger a second read. A new view reads normally.
+  const observedLink = knownLinkObservation.current;
+  const knownLink = state.link?.outcome === 'known' && state.link.request.accountId === accountId ? state.link.request
+    : observedLink?.owner === continuation && observedLink.epoch === epoch && observedLink.request.accountId === accountId ? observedLink.request : null;
+  const linkRead = useRef({ key: viewKey, request: knownLink });
+  if (linkRead.current.key !== viewKey) linkRead.current = { key: viewKey, request: knownLink };
+  else if (knownLink) linkRead.current.request = knownLink;
+  const linkReceiptRequest = linkRead.current.request;
   const live = useRef<{ key: object; token: symbol } | null>(null);
   const [viewToken, setViewToken] = useState<symbol | null>(null);
   const [detail, setDetail] = useState<{ key: object; value: LocalCompanyDetail | null; failed: boolean } | null>(null);
@@ -53,7 +68,7 @@ export function LocalCompanyResearchPanel({ accountId, api, continuation }: Prop
       } catch { if (current()) setDetail({ key: viewKey, value: null, failed: true }); }
     })();
     return () => { attached = false; };
-  }, [accountId, api, continuation, epoch, receiptVersion, selectionToken, viewKey, viewToken]);
+  }, [accountId, api, continuation, epoch, receiptVersion, linkReceiptRequest, selectionToken, viewKey, viewToken]);
 
   const execute = async (request: Readonly<SelectedResearch>) => {
     if (!currentView()) return;
@@ -100,8 +115,8 @@ export function LocalCompanyResearchPanel({ accountId, api, continuation }: Prop
     } catch { unavailable(); }
   };
   const retained = state.research?.request.accountId === accountId ? state.research : null;
-  const canResearch = !state.research || state.research.outcome === 'known' && !!state.research.status
-    && ['completed', 'parked', 'held'].includes(state.research.status.state);
+  const canResearch = (!state.link || state.link.outcome === 'known') && (!state.research || state.research.outcome === 'known' && !!state.research.status
+    && ['completed', 'parked', 'held'].includes(state.research.status.state));
   const visible = detail?.key === viewKey ? detail : null;
   const account = visible?.value?.snapshot;
   return <section aria-label="Local company research">
@@ -125,6 +140,7 @@ export function LocalCompanyResearchPanel({ accountId, api, continuation }: Prop
     {!visible && <p role="status">Loading company evidence…</p>}
     {visible?.failed && <p role="status">Company evidence unavailable. Reopen this detail to check again.</p>}
     {visible?.value && <>
+      {renderDetail?.(visible.value)}
       <h3>Saved sources</h3>
       {!visible.value.sources.length && <p>No saved sources.</p>}
       {visible.value.sources.map(source => <section key={source.id} aria-label={`Source ${source.id}`}>

@@ -1008,3 +1008,134 @@ it('F4-founder-05 intake Open account selects the same research detail rather th
   expect(screen.getByRole('button', { name: 'Local account · New Local Company' }).getAttribute('aria-current')).toBe('true');
   expect(await screen.findByRole('button', { name: /^Research(?: company)?$/i })).toBeTruthy(); expect(api.localWorkspace.researchCompany).not.toHaveBeenCalled();
 }, 10_000);
+
+
+// Task 6 additive actual FounderApp composition. No ContactLink or new owner imports.
+// APIs below are fake projections. Real ImportDialog and global inspector are NOT mocked.
+const t6AppQuote = 'Avery manages Account A. Office team: office@a.example.';
+function t6AppCompany(): LocalCompanyDetail { const value = f4AppDetail(); value.sources[0].excerpt = t6AppQuote; return value; }
+function t6AppPerson(): LeadDetail {
+  return { ...structuredClone(detail), personId: 'person-51', personName: 'Avery', salesCycleId: 'cycle-51', organizationLabel: 'Shared Organization', emails: [{ id: 'method-person-51', contactSnapshot: 'b'.repeat(64), kind: 'email', value: 'avery@example.test', label: 'User supplied', valid: true, validationState: 'valid', reachability: 'direct', sourceLabel: 'Imported spreadsheet', vendorRank: null, phoneKind: null, ownershipState: 'unknown', evidenceObservedAt: null, compliance: null }] };
+}
+function t6AppRows(start: number, count: number): Awaited<ReturnType<CalliePreloadApi['leads']['list']>>['rows'] {
+  return Array.from({ length: count }, (_, i): Awaited<ReturnType<CalliePreloadApi['leads']['list']>>['rows'][number] => { const n = start + i; return { personId: `person-${n}`, personName: n === 1 || n === 51 ? 'Avery' : `Person ${n}`, salesCycleId: `cycle-${n}`, initials: 'AV', organization: 'Shared Organization', propertySummary: null, stage: 'ready', source: 'custom', segment: 'warm', priorityContext: null, cloudScores: null, nextAction: null, optedOut: false, lastActivityAt: null }; });
+}
+async function t6AppFillReview() {
+  fireEvent.change(screen.getByRole('textbox', { name: 'Role' }), { target: { value: 'Manager' } });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Relationship' }), { target: { value: 'Manages company' } });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Source quotation' }), { target: { value: t6AppQuote } });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'I confirm this saved person and quoted relationship' }));
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Link saved person' }) as HTMLButtonElement).disabled).toBe(false));
+}
+it('T6-A01 actual global import mapping and duplicate commit retains account, explicit person51 selection links then opens sole exact inspector', async () => {
+  const api = f4FounderApi(); let linked = false; const company = t6AppCompany();
+  api.localWorkspace.getCompany = vi.fn<CalliePreloadApi['localWorkspace']['getCompany']>(async () => ({ ...company, links: linked ? [{ id: 'stored-person-link', kind: 'person_role', personId: 'person-51', role: 'Manager', relationship: 'Manages company', evidenceIds: ['first-use-a'], authority: 'unconfirmed', authorityEvidenceIds: [], validFrom: fixtureNow, validTo: null }] : [] }));
+  api.localWorkspace.linkCompanyPerson = vi.fn<CalliePreloadApi['localWorkspace']['linkCompanyPerson']>(async input => { linked = true; return { accountId: input.accountId, version: 2, duplicate: false }; });
+  const preview: ImportPreview = { ...importPreview, sampleRows: [{ rowNumber: 2, cells: ['Avery', 'avery@example.test'] }], duplicateCandidates: [{ rowNumber: 2, personIds: ['person-1', 'person-51'], reason: 'Same name, explicit review required' }] };
+  api.imports.preview = vi.fn<CalliePreloadApi['imports']['preview']>(async () => preview);
+  api.imports.remap = vi.fn<CalliePreloadApi['imports']['remap']>(async input => ({ ...preview, suggestedMapping: input.mapping }));
+  api.imports.commit = vi.fn<CalliePreloadApi['imports']['commit']>(async () => ({ ...importReceipt, importedPersonIds: ['person-51'] }));
+  api.leads.list = vi.fn<CalliePreloadApi['leads']['list']>(async input => ({ rows: input.cursor === null ? t6AppRows(1, 50) : t6AppRows(51, 2), nextCursor: input.cursor === null ? 'opaque-person-page-2' : null, total: 52, revision: 2 }));
+  api.leadDetail.get = vi.fn<CalliePreloadApi['leadDetail']['get']>(async () => t6AppPerson());
+  const savedPeople = [t6AppPerson(), { ...t6AppPerson(), personId: 'person-52' }];
+  const peopleBefore = structuredClone(savedPeople);
+  api.leadDetail.get = vi.fn<CalliePreloadApi['leadDetail']['get']>(async ({ personId }) => structuredClone(savedPeople.find(person => person.personId === personId)!));
+  api.leadDetail.getOutboundCapabilities = vi.fn<CalliePreloadApi['leadDetail']['getOutboundCapabilities']>(async () => { throw Error('Synthetic capabilities unavailable'); });
+  render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText(t6AppQuote);
+  expect(api.localWorkspace.getCompany).toHaveBeenCalledWith({ accountId: 'a' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Import named person' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Import leads' }); expect(screen.getAllByRole('dialog', { name: 'Import leads' })).toHaveLength(1);
+  expect((within(dialog).getByLabelText('Paste spreadsheet rows') as HTMLTextAreaElement).value).toBe('');
+  fireEvent.keyDown(window, { key: 'k', metaKey: true, ctrlKey: true }); expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull();
+  fireEvent.change(within(dialog).getByLabelText('Paste spreadsheet rows'), { target: { value: 'Name\tPhone\nAvery\tavery@example.test' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Preview rows' })); const commit = await within(dialog).findByRole('button', { name: 'Import 1 row' });
+  expect((commit as HTMLButtonElement).disabled).toBe(true); expect(api.imports.commit).not.toHaveBeenCalled();
+  fireEvent.change(within(dialog).getByLabelText('Phone'), { target: { value: 'email' } });
+  await waitFor(() => expect(api.imports.remap).toHaveBeenCalledWith({ previewId: preview.previewId, contentHash: preview.contentHash, mapping: { Name: 'person_name', Phone: 'email' } }));
+  await waitFor(() => expect((within(dialog).getByLabelText('Phone') as HTMLSelectElement).value).toBe('email'));
+  fireEvent.change(within(dialog).getByLabelText('Duplicate action for row 2'), { target: { value: 'merge' } });
+  fireEvent.change(within(dialog).getByLabelText('Merge target for row 2'), { target: { value: 'person-51' } });
+  await waitFor(() => expect((within(dialog).getByRole('button', { name: 'Import 1 row' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Import 1 row' })); await within(dialog).findByText('Imported 1 row.');
+  expect(api.imports.commit).toHaveBeenCalledWith({ previewId: preview.previewId, contentHash: preview.contentHash, mapping: { Name: 'person_name', Phone: 'email' }, source: { channel: 'custom', referredByPersonId: null }, duplicateDecisions: [{ rowNumber: 2, decision: 'merge', personId: 'person-51' }] });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' })); await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Import leads' })).toBeNull());
+  await screen.findByText(t6AppQuote); expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
+  expect(api.localWorkspace.linkCompanyPerson).not.toHaveBeenCalled(); expect(api.leadDetail.get).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Find saved person' })); await screen.findByRole('button', { name: 'Select Avery · person-1' });
+  expect(api.leads.list).toHaveBeenLastCalledWith({ query: '', stages: [], priorities: [], sort: 'person_name', cursor: null, limit: 50 });
+  fireEvent.click(screen.getByRole('button', { name: 'Load more' })); fireEvent.click(await screen.findByRole('button', { name: 'Select Avery · person-51' }));
+  await screen.findByText('avery@example.test'); expect(api.leads.list).toHaveBeenLastCalledWith({ query: '', stages: [], priorities: [], sort: 'person_name', cursor: 'opaque-person-page-2', limit: 50 });
+  expect(api.leadDetail.get).toHaveBeenLastCalledWith({ personId: 'person-51' }); await t6AppFillReview();
+  const reads = vi.mocked(api.localWorkspace.getCompany).mock.calls.length;
+  fireEvent.click(screen.getByRole('button', { name: 'Link saved person' })); const saved = await screen.findByRole('button', { name: 'Open saved contact' });
+  expect(api.localWorkspace.getCompany).toHaveBeenCalledTimes(reads + 1); expect(api.localWorkspace.linkCompanyPerson).toHaveBeenCalledOnce();
+  expect(vi.mocked(api.localWorkspace.linkCompanyPerson).mock.calls[0][0]).toEqual(expect.objectContaining({ accountId: 'a', sourceQuotes: [{ sourceId: 'first-use-a', quote: t6AppQuote }], link: expect.objectContaining({ personId: 'person-51', authority: 'unconfirmed', authorityEvidenceIds: [], validTo: null }) }));
+  vi.mocked(api.leadDetail.get).mockClear(); fireEvent.click(saved);
+  await screen.findByRole('complementary', { name: 'Avery details' }); expect(screen.getAllByRole('complementary', { name: 'Avery details' })).toHaveLength(1);
+  expect(api.leadDetail.get).toHaveBeenCalledWith({ personId: 'person-51' }); expect(screen.getAllByRole('button', { name: 'Close inspector' })).toHaveLength(1);
+  expect(api.leads.updateField).not.toHaveBeenCalled(); expect(api.leads.bulkUpdate).not.toHaveBeenCalled(); expect(api.leadDetail.beginOutbound).not.toHaveBeenCalled(); expect(api.leadDetail.findContactInfo).not.toHaveBeenCalled(); expect(api.localWorkspace.researchCompany).not.toHaveBeenCalled();
+  // Fake link implementation above changes only its local link flag. This is NOT main storage proof.
+  expect(savedPeople).toEqual(peopleBefore);
+}, 10_000);
+it('T6-A02 office-only actual account reaches missing contact UI and global import has no office prefill', async () => {
+  const api = f4FounderApi(); const office = f4AppDetail(); office.sources[0].excerpt = 'Office team only: office@a.example +1 401 555 0100';
+  api.imports.preview = vi.fn<CalliePreloadApi['imports']['preview']>(async () => { throw Error('Preview requires explicit user action'); });
+  api.localWorkspace.getCompany = vi.fn<CalliePreloadApi['localWorkspace']['getCompany']>(async () => office);
+  api.localWorkspace.linkCompanyPerson = vi.fn<CalliePreloadApi['localWorkspace']['linkCompanyPerson']>(async () => { throw Error('No reviewed saved person'); });
+  render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText(office.sources[0].excerpt);
+  expect(await screen.findByText('Contact not established')).toBeTruthy(); expect(screen.queryByText(/verified person/i)).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Import named person' })); const dialog = await screen.findByRole('dialog', { name: 'Import leads' });
+  expect((within(dialog).getByLabelText('Paste spreadsheet rows') as HTMLTextAreaElement).value).toBe(''); expect(api.imports.preview).not.toHaveBeenCalled(); expect(api.localWorkspace.linkCompanyPerson).not.toHaveBeenCalled();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' })); expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
+}, 10_000);
+it('T6-A03 actual Campaigns route and global Import remount retain dirty reviewed identity without auto-link', async () => {
+  const api = f4FounderApi(); api.localWorkspace.getCompany = vi.fn<CalliePreloadApi['localWorkspace']['getCompany']>(async () => t6AppCompany());
+  api.leads.list = vi.fn<CalliePreloadApi['leads']['list']>(async () => ({ rows: t6AppRows(51, 1), nextCursor: null, total: 1, revision: 1 }));
+  api.leadDetail.get = vi.fn<CalliePreloadApi['leadDetail']['get']>(async () => t6AppPerson());
+  api.localWorkspace.linkCompanyPerson = vi.fn<CalliePreloadApi['localWorkspace']['linkCompanyPerson']>(async () => ({ accountId: 'a', version: 2, duplicate: false }));
+  api.imports.preview = vi.fn<CalliePreloadApi['imports']['preview']>(async () => importPreview); api.imports.commit = vi.fn<CalliePreloadApi['imports']['commit']>(async () => importReceipt);
+  render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText(t6AppQuote);
+  fireEvent.click(await screen.findByRole('button', { name: 'Find saved person' })); fireEvent.click(await screen.findByRole('button', { name: 'Select Avery · person-51' })); await screen.findByText('avery@example.test'); await t6AppFillReview();
+  fireEvent.click(screen.getByRole('link', { name: 'Campaigns' })); await screen.findByRole('heading', { level: 1, name: 'Campaigns' }); fireEvent.click(screen.getByRole('link', { name: 'Accounts' })); await screen.findByText(t6AppQuote);
+  expect((screen.getByRole('textbox', { name: 'Role' }) as HTMLInputElement).value).toBe('Manager');
+  fireEvent.click(screen.getByRole('button', { name: 'Import named person' })); const dialog = await screen.findByRole('dialog', { name: 'Import leads' });
+  fireEvent.change(within(dialog).getByLabelText('Paste spreadsheet rows'), { target: { value: 'Name\tPhone\nKevin\t4015550101' } }); fireEvent.click(within(dialog).getByRole('button', { name: 'Preview rows' })); fireEvent.click(await within(dialog).findByRole('button', { name: 'Import 1 row' })); await within(dialog).findByText('Imported 1 row.'); fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await screen.findByText(t6AppQuote); expect((screen.getByRole('textbox', { name: 'Role' }) as HTMLInputElement).value).toBe('Manager'); expect((screen.getByRole('textbox', { name: 'Source quotation' }) as HTMLInputElement).value).toBe(t6AppQuote);
+  expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true'); expect(api.localWorkspace.linkCompanyPerson).not.toHaveBeenCalled();
+}, 10_000);
+
+it('T6-A04 actual route departure preserves pending link, lost reply offers exact replay without new UUID', async () => {
+  const api = f4FounderApi(); api.localWorkspace.getCompany = vi.fn<CalliePreloadApi['localWorkspace']['getCompany']>(async () => t6AppCompany());
+  api.leads.list = vi.fn<CalliePreloadApi['leads']['list']>(async () => ({ rows: t6AppRows(51, 1), nextCursor: null, total: 1, revision: 1 }));
+  api.leadDetail.get = vi.fn<CalliePreloadApi['leadDetail']['get']>(async () => t6AppPerson());
+  let resolve!: (receipt: Awaited<ReturnType<CalliePreloadApi['localWorkspace']['linkCompanyPerson']>>) => void;
+  let reject!: (error: Error) => void;
+  const pending = new Promise<Awaited<ReturnType<CalliePreloadApi['localWorkspace']['linkCompanyPerson']>>>((yes, no) => { resolve = yes; reject = no; });
+  api.localWorkspace.linkCompanyPerson = vi.fn<CalliePreloadApi['localWorkspace']['linkCompanyPerson']>().mockImplementationOnce(() => pending).mockResolvedValue({ accountId: 'a', version: 2, duplicate: true });
+  const view = render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText(t6AppQuote);
+    fireEvent.click(await screen.findByRole('button', { name: 'Find saved person' })); fireEvent.click(await screen.findByRole('button', { name: 'Select Avery · person-51' })); await screen.findByText('avery@example.test'); await t6AppFillReview();
+    fireEvent.click(screen.getByRole('button', { name: 'Link saved person' })); expect(api.localWorkspace.linkCompanyPerson).toHaveBeenCalledOnce();
+    const original = vi.mocked(api.localWorkspace.linkCompanyPerson).mock.calls[0][0];
+    fireEvent.click(screen.getByRole('link', { name: 'Campaigns' })); await screen.findByRole('heading', { level: 1, name: 'Campaigns' });
+    fireEvent.click(screen.getByRole('link', { name: 'Accounts' })); await screen.findByText(t6AppQuote);
+    expect(api.localWorkspace.linkCompanyPerson).toHaveBeenCalledOnce();
+    const replayWhilePending = screen.queryByRole('button', { name: 'Replay link' });
+    if (replayWhilePending) expect((replayWhilePending as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('link', { name: 'Campaigns' })); await screen.findByRole('heading', { level: 1, name: 'Campaigns' });
+    expect(screen.queryByRole('button', { name: 'Find saved person' })).toBeNull();
+    const readsWhileAway = vi.mocked(api.localWorkspace.getCompany).mock.calls.length;
+    await act(async () => { reject(Error('lost renderer reply')); await Promise.allSettled([pending]); });
+    expect(api.localWorkspace.getCompany).toHaveBeenCalledTimes(readsWhileAway);
+    expect(api.localWorkspace.linkCompanyPerson).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('link', { name: 'Accounts' })); await screen.findByText(t6AppQuote);
+    const replay = await screen.findByRole('button', { name: 'Replay link' }); expect((replay as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(replay); await waitFor(() => expect(api.localWorkspace.linkCompanyPerson).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.localWorkspace.linkCompanyPerson).mock.calls[1][0]).toBe(original);
+    expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
+  } finally { view.unmount(); await act(async () => { resolve({ accountId: 'a', version: 2, duplicate: false }); await Promise.allSettled([pending]); }); }
+}, 10_000);

@@ -37,7 +37,7 @@ import { CampaignReview } from '../campaigns/CampaignReview';
 import './nativeDesk.css';
 export type NativeDeskApi = Pick<
   CalliePreloadApi,
-  'daily' | 'delegation' | 'linkedin'
+  'daily' | 'delegation' | 'linkedin' | 'leads' | 'leadDetail'
 > & Partial<Pick<CalliePreloadApi, 'localWorkspace'>>;
 type Config = Awaited<ReturnType<NativeDeskApi['delegation']['status']>>;
 type Surface = 'today' | 'accounts' | 'campaigns';
@@ -45,6 +45,7 @@ export type NativeDeskRouteProps = {
   firstUse: FirstUseContinuation;
   api: NativeDeskApi;
   onOpenLead(personId: string): void;
+  onOpenImport(): void;
   surface?: Surface;
   legacy?: ReactNode;
   renderLegacy?(readHeld: boolean): ReactNode;
@@ -54,6 +55,7 @@ export function NativeDeskRoute({
   api,
   firstUse,
   onOpenLead,
+  onOpenImport,
   surface = 'today',
   legacy,
   renderLegacy,
@@ -219,7 +221,7 @@ export function NativeDeskRoute({
   const intakeRequest = surface === 'accounts' && intakeSelection?.api === api.localWorkspace ? intakeSelection?.request : null;
   const refresh = () => { local.refresh(); load(); };
   const localOnly = surface === 'accounts'
-    ? <LocalOnlyAccountLibrary api={api.localWorkspace} firstUse={firstUse} intake={intake} selectionRequest={intakeRequest} onSelectionHandled={onIntakeSelectionHandled} read={local.read.overview} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} />
+    ? <LocalOnlyAccountLibrary api={api.localWorkspace} contactApi={api} onOpenImport={onOpenImport} onOpenLead={onOpenLead} firstUse={firstUse} intake={intake} selectionRequest={intakeRequest} onSelectionHandled={onIntakeSelectionHandled} read={local.read.overview} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} />
     : surface === 'today' ? <LocalOnlyCalls read={local.read.retained} onOpenLead={onOpenLead} initialSelected={viewSelection(api.daily).get(JSON.stringify([snapshot?.workspaceId ?? null, surface]))} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} /> : <p>Campaign scope unavailable. No worker actions are enabled.</p>;
   if (!snapshot)
     return (
@@ -289,6 +291,7 @@ export function NativeDeskRoute({
       onIntakeSelectionHandled={onIntakeSelectionHandled}
       onRefresh={refresh}
       onOpenLead={onOpenLead}
+      onOpenImport={onOpenImport}
       surface={surface}
     />
   );
@@ -455,6 +458,7 @@ export function NativeDesk({
   readError = false,
   onRefresh,
   onOpenLead,
+  onOpenImport,
   surface = 'today',
   localRead,
   localHold = false,
@@ -474,6 +478,7 @@ export function NativeDesk({
   onIntakeSelectionHandled?(request: LocalAccountSelectionRequest): void;
   onRefresh(): void;
   onOpenLead(personId: string): void;
+  onOpenImport(): void;
   surface?: Surface;
 }) {
   const firstUseState = useSyncExternalStore(firstUse.subscribe, firstUse.snapshot, firstUse.snapshot);
@@ -811,7 +816,7 @@ export function NativeDesk({
             </div>
           )}
           {retained && <RetainedWorkDetail entry={retained} stale={!!localRead?.retained.error || !!localRead?.retained.pending} onOpenLead={onOpenLead} />}
-          {localAccount && <LocalAccountDetail account={localAccount} api={api.localWorkspace} continuation={firstUse} />}
+          {localAccount && <LocalAccountDetail account={localAccount} api={api.localWorkspace} contactApi={api} continuation={firstUse} onOpenImport={onOpenImport} onOpenLead={onOpenLead} />}
           {account && !answer && <AccountContext account={account} />}{' '}
           {answer && snapshot.workspaceId && (
             <DailyAnswerDetail

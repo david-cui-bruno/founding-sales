@@ -52,6 +52,7 @@ export type TodayRouteProps = {
   discoveryApi?: DiscoveryApi;
   leadApi?: TodayLeadCommandApi;
   onOpenLead(personId: string): void;
+  onOpenImport(): void;
   /** Promotes a person to the full-page view for the call outcome flow. */
   onOpenLeadPage?(personId: string): void;
 };
@@ -76,7 +77,7 @@ const todayDateLine = (): string =>
  */
 export function TodayRoute(props: TodayRouteProps) {
   const inspector = useLeadInspectorIfAvailable();
-  if (props.workspaceApi) return <NativeDeskRoute firstUse={props.firstUse} api={props.workspaceApi}
+  if (props.workspaceApi) return <NativeDeskRoute firstUse={props.firstUse} api={props.workspaceApi} onOpenImport={props.onOpenImport}
     onOpenLead={props.onOpenLeadPage ?? inspector?.openFullPage ?? props.onOpenLead}
     renderLegacy={readHeld => <LegacyTodayRoute {...props} readHeld={readHeld} />} />;
   return <LegacyTodayRoute {...props} />;

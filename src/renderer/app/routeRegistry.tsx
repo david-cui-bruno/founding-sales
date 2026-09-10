@@ -42,6 +42,7 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
       return (
         <TodayRoute
           firstUse={context.firstUse}
+          onOpenImport={context.openImport}
           api={context.api.today}
           workspaceApi={context.api.daily ? context.api : undefined}
           discoveryApi={context.api.discovery}
@@ -51,7 +52,7 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
       );
     case 'accounts':
     case 'campaigns':
-      return <NativeDeskRoute firstUse={context.firstUse} api={context.api} surface={route} onOpenLead={context.openLead} />;
+      return <NativeDeskRoute firstUse={context.firstUse} api={context.api} surface={route} onOpenLead={context.openLead} onOpenImport={context.openImport} />;
     case 'leads':
       return (
         <LeadsRoute

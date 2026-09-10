@@ -62,7 +62,7 @@ it('real encrypted daily joins produce the A identity and call context without e
   try {
     const ui = actualReaderUi(f), before = ui.snapshot(), changes = f.db.raw.prepare('SELECT total_changes() n').get();
     f.db.raw.pragma('query_only=ON');
-    const view = render(<PresentationRoot><NativeDeskRoute firstUse={ui.firstUse} api={ui.api} onOpenLead={ui.forbidden} /></PresentationRoot>);
+    const view = render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={ui.firstUse} api={ui.api} onOpenLead={ui.forbidden} /></PresentationRoot>);
     await waitFor(() => expect(view.container.querySelector('[data-row-key="requested_followup:' + f.account.id + ':' + f.draft.id + '"]')).toBeTruthy());
     fireEvent.click(view.container.querySelector('[data-row-key="requested_followup:' + f.account.id + ':' + f.draft.id + '"]')!);
     const detail = within(view.container.querySelector('.native-desk__detail')! as HTMLElement);
@@ -83,7 +83,7 @@ it('owner-supplied email never inherits the named phone contact as recipient ide
   const f = await requestedSource(true);
   try {
     const ui = actualReaderUi(f); f.db.raw.pragma('query_only=ON');
-    const view = render(<PresentationRoot><NativeDeskRoute firstUse={ui.firstUse} api={ui.api} onOpenLead={ui.forbidden} /></PresentationRoot>);
+    const view = render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={ui.firstUse} api={ui.api} onOpenLead={ui.forbidden} /></PresentationRoot>);
     await waitFor(() => expect(view.container.querySelector('[data-row-key="requested_followup:' + f.account.id + ':' + f.draft.id + '"]')).toBeTruthy());
     fireEvent.click(view.container.querySelector('[data-row-key="requested_followup:' + f.account.id + ':' + f.draft.id + '"]')!);
     const detail = within(view.container.querySelector('.native-desk__detail')! as HTMLElement);
@@ -99,7 +99,7 @@ it('actual stored manual draft exposes only its pinned person while viewing stay
   try {
     const draft = f.drafts.create(f.drafts.requireStep(f.version.steps[0]!.id, 1), 'Saved local manual note');
     const ui = actualReaderUi(f), before = ui.snapshot(); f.db.raw.pragma('query_only=ON');
-    const view = render(<PresentationRoot><NativeDeskRoute firstUse={ui.firstUse} api={ui.api} onOpenLead={ui.forbidden} /></PresentationRoot>);
+    const view = render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={ui.firstUse} api={ui.api} onOpenLead={ui.forbidden} /></PresentationRoot>);
     await waitFor(() => expect(view.container.querySelector('[data-row-key="manual_linkedin:' + f.account.id + ':' + draft.id + '"]')).toBeTruthy());
     fireEvent.click(view.container.querySelector('[data-row-key="manual_linkedin:' + f.account.id + ':' + draft.id + '"]')!);
     const detail = within(view.container.querySelector('.native-desk__detail')! as HTMLElement);

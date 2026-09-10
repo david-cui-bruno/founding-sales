@@ -54,7 +54,7 @@ function fixtureApi(initial = dailyFixture()) {
 describe('Native Desk actual route', () => {
   it('mount, selection, focus and refresh only read local snapshots/configuration', async () => {
     const f = fixtureApi();
-    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+    render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
     await screen.findByRole('heading', { name: /^Calls/ });
     fireEvent.click(screen.getByRole('button', { name: 'Email · Account A' }));
     expect(
@@ -75,7 +75,7 @@ describe('Native Desk actual route', () => {
   });
   it('retains editor DOM, caret and selection across refresh and failed reads', async () => {
     const f = fixtureApi();
-    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+    render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
     await screen.findByRole('button', { name: 'Email · Account A' });
     fireEvent.click(screen.getByRole('button', { name: 'Email · Account A' }));
     const editor = screen.getByLabelText('Email body') as HTMLTextAreaElement;
@@ -99,7 +99,7 @@ describe('Native Desk actual route', () => {
   });
   it('preserves sessions and selected row across route close/reopen without commands', async () => {
     const f = fixtureApi();
-    const view = render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+    const view = render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
     fireEvent.click(
       await screen.findByRole('button', { name: 'Email · Account B' }),
     );
@@ -107,7 +107,7 @@ describe('Native Desk actual route', () => {
       target: { value: 'Unsent local B' },
     });
     view.unmount();
-    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+    render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
     expect(
       ((await screen.findByLabelText('Email body')) as HTMLTextAreaElement)
         .value,
@@ -116,7 +116,7 @@ describe('Native Desk actual route', () => {
   });
   it('keyboard navigation ignores modifiers and typing, Enter opens details and Escape closes', async () => {
     const f = fixtureApi();
-    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+    render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
     const call = await screen.findByRole('button', {
       name: 'Call · Account A',
     });
@@ -138,7 +138,7 @@ describe('Native Desk actual route', () => {
   });
   it('retains the selected draft on repeated or composing Escape and handled input', async () => {
     const f = fixtureApi();
-    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+    render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Email · Account A' }));
     const editor = screen.getByLabelText('Email body');
     fireEvent.change(editor, { target: { value: 'Preserved draft' } });
@@ -154,7 +154,7 @@ describe('Native Desk actual route', () => {
   it('fails closed on changed workspace and retains legacy only for stored legacy mode', async () => {
     const f = fixtureApi(dailyFixture({ workflowMode: 'legacy' }));
     const view = render(
-      <NativeDeskRoute firstUse={f.firstUse}
+      <NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse}
         api={f.api}
         onOpenLead={vi.fn()}
         legacy={<p>Legacy today</p>}
@@ -165,7 +165,7 @@ describe('Native Desk actual route', () => {
     view.unmount();
     f.set(dailyFixture({ workflowMode: 'unknown' }));
     render(
-      <NativeDeskRoute firstUse={f.firstUse}
+      <NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse}
         api={f.api}
         onOpenLead={vi.fn()}
         legacy={<p>Legacy today</p>}
@@ -176,7 +176,7 @@ describe('Native Desk actual route', () => {
   });
   it('shows account evidence, company-only call hold, empty lanes and frozen campaign holds', async () => {
     const f = fixtureApi(dailyFixture({ answers: [] }));
-    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+    render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
     fireEvent.click(
       await screen.findByRole('button', { name: 'Call · Account A' }),
     );
@@ -190,7 +190,7 @@ describe('Native Desk actual route', () => {
 
 it('does not autosave while local configuration is held', async () => {
   const f = fixtureApi();
-  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
   fireEvent.click(
     await screen.findByRole('button', { name: 'Email · Account A' }),
   );
@@ -226,7 +226,7 @@ function ownedFixture() {
 }
 it('first explicit approval saves canonical content once and retains pending receipt through refresh', async () => {
   const f = ownedFixture();
-  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
   fireEvent.click(
     await screen.findByRole('button', { name: 'Email · Account A' }),
   );
@@ -264,7 +264,7 @@ it('first explicit approval saves canonical content once and retains pending rec
 });
 it('scope change cancels old-session delayed save without losing its local text', async () => {
   const f = ownedFixture();
-  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
   fireEvent.click(
     await screen.findByRole('button', { name: 'Email · Account A' }),
   );
@@ -288,7 +288,7 @@ it('scope change cancels old-session delayed save without losing its local text'
 });
 it('changed recipient keeps local text and disables approval until explicit review', async () => {
   const f = ownedFixture();
-  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
   fireEvent.click(
     await screen.findByRole('button', { name: 'Email · Account A' }),
   );
@@ -329,7 +329,7 @@ it('holds a saved requested draft when account context advances independently', 
   const next = f.snapshot();
   next.accounts[0].account.version = 2;
   f.setSnapshot(next);
-  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
   fireEvent.click(
     await screen.findByRole('button', { name: 'Email · Account A' }),
   );
@@ -348,7 +348,7 @@ it.each(['configuration', 'account'] as const)(
   'holds offscreen edited account after %s refresh',
   async (kind) => {
     const f = ownedFixture();
-    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+    render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
     fireEvent.click(
       await screen.findByRole('button', { name: 'Email · Account A' }),
     );
@@ -379,7 +379,7 @@ it.each(['configuration', 'account'] as const)(
 );
 it('teardown cancels delayed edits even when the same workspace immediately reopens', async () => {
   const f = ownedFixture();
-  const view = render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  const view = render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
   fireEvent.click(
     await screen.findByRole('button', { name: 'Email · Account A' }),
   );
@@ -387,7 +387,7 @@ it('teardown cancels delayed edits even when the same workspace immediately reop
     target: { value: 'Keep but do not send' },
   });
   view.unmount();
-  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
   await screen.findByRole('button', { name: 'Email · Account A' });
   await act(async () => {
     await new Promise((r) => setTimeout(r, 900));
@@ -400,7 +400,7 @@ it.each(['active', 'paused', 'authority'] as const)(
   'accepting saved email recomputes its hold while preserving %s conditions',
   async (condition) => {
     const f = ownedFixture();
-    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+    render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
     fireEvent.click(
       await screen.findByRole('button', { name: 'Email · Account A' }),
     );
@@ -464,7 +464,7 @@ it('already-paused edit does not autosave after teardown and active same-workspa
   const f = ownedFixture();
   const active = await f.api.delegation.status();
   f.setConfiguration({ ...active, state: 'paused' } as typeof active);
-  const view = render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  const view = render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
   fireEvent.click(
     await screen.findByRole('button', { name: 'Email · Account A' }),
   );
@@ -473,7 +473,7 @@ it('already-paused edit does not autosave after teardown and active same-workspa
   });
   view.unmount();
   f.setConfiguration(active);
-  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
   await screen.findByLabelText('Email body');
   await act(async () => {
     await new Promise((r) => setTimeout(r, 900));

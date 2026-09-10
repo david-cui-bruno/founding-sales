@@ -221,6 +221,8 @@ export function nativeDeskFixture(initial = dailyFixture()) {
     return item;
   };
   const api: NativeDeskApi & { localWorkspace: LocalWorkspaceApi } = {
+    leads: { list: async input => { record('leads.list', input); throw Error('Saved people unavailable in this fixture'); }, updateField: forbidden, bulkUpdate: forbidden },
+    leadDetail: { get: async input => { record('leadDetail.get', input); throw Error('Saved person detail unavailable in this fixture'); }, beginOutbound: forbidden, getOutboundCapabilities: forbidden, confirmTransition: forbidden, dismissLead: forbidden, overrideCloudScore: forbidden, findContactInfo: forbidden },
     localWorkspace: {
       get: async () => { record('localWorkspace.get'); return structuredClone(local); },
       getCompany: async input => { record('localWorkspace.getCompany', input); throw Error('Selected company detail unavailable in this fixture'); },
