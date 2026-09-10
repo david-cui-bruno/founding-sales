@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import { checkFts5, closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { inspectDatabaseEncryption } from '../../src/main/db/databaseEncryption';
@@ -15,6 +16,7 @@ import { registerOutreachIpc } from '../../src/main/ipc/registerOutreachIpc';
 import type { CallieApi } from '../../src/preload/createCallieApi';
 import type { IpcInvoker } from '../../src/preload/ipcClient';
 import type { OutreachApi } from '../../src/shared/contracts/outreachContract';
+import { reviewListRequestSchema, type ReviewListRequest } from '../../src/shared/contracts/reviewContract';
 import { insertClosedCycle, insertOpenCycleWithAction, insertSourceEvent, seedProspect } from './domainRows';
 import type { RegisteredIpcHandler } from './registeredIpcHandler';
 import { createTempDatabase, createTestWorkspaceKey } from './tempDatabase';
@@ -28,7 +30,8 @@ const TABLES = ['lifecycle_review_items', 'cycle_reactivation_receipts', 'person
 type Phase = 'setup' | 'ui' | 'probe';
 export type ReliabilityTrace = Readonly<{
   id: number; phase: Phase; channel: string; args: readonly unknown[];
-  handlerStarted: boolean; outcome: 'pending' | 'resolved' | 'rejected';
+  handlerStarted: boolean; handlerSettled?: boolean; deliveryHeld?: boolean;
+  outcome: 'pending' | 'resolved' | 'rejected';
   result?: unknown; error?: string;
 }>;
 export type CleanupEvidence = Readonly<{
@@ -50,6 +53,29 @@ type ImportedOwner = {
   stage: string; workflowStatus: string; sourceChannel: string; actionId: string | null;
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  // Rejection remains observable by its owner, including teardown-before-await.
+  void promise.catch((): undefined => undefined);
+  return { promise, resolve, reject };
+}
+async function bounded<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([promise, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out`)), 5_000);
+    })]);
+  } finally { if (timer !== undefined) clearTimeout(timer); }
+}
+type DeliveryState = 'waiting' | 'claimed' | 'arrived' | 'released' | 'rejected' | 'cancelled';
+type ReviewHold = {
+  request: ReviewListRequest; remaining: number; state: DeliveryState;
+  arrival: ReturnType<typeof deferred<ReliabilityTrace>>;
+  delivery: ReturnType<typeof deferred<void>>;
+};
+
 function frozenCopy<T>(value: T): T {
   const copy = structuredClone(value);
   const freeze = (item: unknown): void => {
@@ -64,7 +90,7 @@ function frozenCopy<T>(value: T): T {
 
 /** Native SQL fixture, NOT FoundationRuntime startup/locking or a browser harness.
  * The caller owns an otherwise empty Electron transport map. No raw DB/key escapes.
- * Step A intentionally has no timing latch, UI matrix or generalized mutation hook.
+ * Only exact review:list after-handler delivery can be held. No mutation hook.
  */
 export async function createReliabilityDomainFixture(
   handlers: Map<string, RegisteredIpcHandler>,
@@ -85,6 +111,8 @@ export async function createReliabilityDomainFixture(
   const unregisters: (() => void)[] = [];
   const flights = new Set<Promise<unknown>>();
   const entries: ReliabilityTrace[] = [];
+  const holds: ReviewHold[] = [];
+  const seededReviews = new Map<string, ReviewOwner>();
   const requireOpen = () => {
     if (disposed || database === undefined || !database.raw.open) throw new Error('RELIABILITY_FIXTURE_DISPOSED');
     return database;
@@ -107,6 +135,14 @@ export async function createReliabilityDomainFixture(
     disposed = true;
     disposal = (async () => {
       const errors: unknown[] = [];
+      for (const hold of holds) {
+        if (hold.state === 'waiting') errors.push(new Error('UNUSED_REVIEW_DELIVERY_HOLD'));
+        if (['waiting', 'claimed', 'arrived'].includes(hold.state)) {
+          hold.state = 'cancelled';
+          hold.arrival.reject(new Error('REVIEW_DELIVERY_CANCELLED'));
+          hold.delivery.reject(new Error('REVIEW_DELIVERY_CANCELLED'));
+        }
+      }
       try { await idle(); } catch (error) { errors.push(error); }
       try { await delegation?.dispose(); } catch (error) { errors.push(error); }
       for (const unregister of unregisters.splice(0).reverse()) {
@@ -169,21 +205,64 @@ export async function createReliabilityDomainFixture(
       disconnectGmail: forbidden, openDraft: forbidden, saveDraft: forbidden, generateDraft: forbidden, sendDraft: forbidden };
     unregisters.push(registerOutreachIpc({ provider: outreach, delegation }));
 
+    const holdReviewList = (request: ReviewListRequest, occurrence = 1) => {
+      requireOpen();
+      assert.ok(Number.isSafeInteger(occurrence) && occurrence > 0);
+      const parsed = frozenCopy(reviewListRequestSchema.parse(request));
+      assert.ok(!holds.some(hold => hold.state === 'waiting' && hold.remaining === occurrence
+        && isDeepStrictEqual(hold.request, parsed)), 'DUPLICATE_REVIEW_DELIVERY_HOLD');
+      const hold: ReviewHold = { request: parsed, remaining: occurrence, state: 'waiting',
+        arrival: deferred<ReliabilityTrace>(), delivery: deferred<void>() };
+      holds.push(hold);
+      const decide = (decision: 'released' | 'rejected' | 'cancelled') => {
+        requireOpen();
+        assert.equal(hold.state, 'arrived', 'REVIEW_DELIVERY_ALREADY_DECIDED_OR_NOT_ARRIVED');
+        hold.state = decision;
+        if (decision === 'released') hold.delivery.resolve();
+        else hold.delivery.reject(new Error(decision === 'rejected' ? 'REVIEW_DELIVERY_REJECTED' : 'REVIEW_DELIVERY_CANCELLED'));
+      };
+      return Object.freeze({ arrived: () => bounded(hold.arrival.promise, 'Review delivery arrival'),
+        release: () => decide('released'), rejectDelivery: () => decide('rejected'), cancel: () => decide('cancelled'),
+        state: () => hold.state });
+    };
+
     const invokeFrom = (url: string, channel: string, ...args: unknown[]): Promise<unknown> => {
       const index = entries.length;
       const initial = frozenCopy<ReliabilityTrace>({ id: index + 1, phase, channel, args, handlerStarted: false, outcome: 'pending' });
       entries.push(initial);
       const flight = (async () => {
+        let delivery: ReviewHold | undefined;
         try {
           requireOpen();
           const handler = handlers.get(channel);
           if (handler === undefined) throw new Error(`MISSING_RELIABILITY_HANDLER:${channel}`);
+          if (channel === 'review:list' && url === RELIABILITY_URL && args.length === 1) {
+            for (const hold of holds) {
+              if (hold.state !== 'waiting' || !isDeepStrictEqual(hold.request, args[0])) continue;
+              hold.remaining -= 1;
+              if (hold.remaining === 0) { hold.state = 'claimed'; delivery = hold; }
+            }
+          }
           entries[index] = frozenCopy({ ...initial, handlerStarted: true });
           const result = await handler({ senderFrame: { url } }, ...args);
+          entries[index] = frozenCopy({ ...entries[index]!, handlerSettled: true, result });
+          if (delivery !== undefined) {
+            if (delivery.state === 'claimed') {
+              delivery.state = 'arrived';
+              entries[index] = frozenCopy({ ...entries[index]!, deliveryHeld: true });
+              delivery.arrival.resolve(entries[index]!);
+            }
+            await delivery.delivery.promise;
+          }
           entries[index] = frozenCopy({ ...entries[index]!, outcome: 'resolved', result });
           return result; // no enrichment, replacement receipt or response mutation
         } catch (error) {
-          entries[index] = frozenCopy({ ...entries[index]!, outcome: 'rejected', error: error instanceof Error ? error.message : 'Unknown rejection' });
+          if (delivery?.state === 'claimed') {
+            delivery.state = 'rejected';
+            delivery.arrival.reject(new Error('REVIEW_HANDLER_REJECTED_BEFORE_DELIVERY'));
+          }
+          entries[index] = frozenCopy({ ...entries[index]!, handlerSettled: entries[index]!.handlerStarted,
+            outcome: 'rejected', error: error instanceof Error ? error.message : 'Unknown rejection' });
           throw error;
         }
       })();
@@ -221,7 +300,7 @@ export async function createReliabilityDomainFixture(
       ORDER BY person.display_name, person.id
     `).all();
     return {
-      invoker, invokeFrom, dispose, idle,
+      invoker, invokeFrom, dispose, idle, holdReviewList,
       setPhase(value: Phase) { phase = value; },
       trace: () => frozenCopy(entries),
       counts: () => Object.freeze({ domainEntries, databaseEntries, externalInvocations, pendingInvocations: flights.size }),
@@ -232,7 +311,7 @@ export async function createReliabilityDomainFixture(
         return Object.freeze({ ...inspectDatabaseEncryption(current), fts5Available: checkFts5(current),
           schemaVersion: current.raw.prepare<[], { version: number }>('SELECT schema_version AS version FROM app_meta WHERE singleton = 1').get()!.version });
       },
-      seedReviews(): readonly ReviewOwner[] {
+      seedReviews(options: { majority?: ReviewOwner['kind']; tied?: boolean } = {}): readonly ReviewOwner[] {
         const current = requireOpen();
         assert.equal(reviewOwners().length, 0, 'Review scenario must start empty');
         const cadence = BUILTIN_CADENCES.find(value => value.family === 'cadence_c');
@@ -242,7 +321,8 @@ export async function createReliabilityDomainFixture(
           const prefix = `reliability-review-${String(index).padStart(4, '0')}`;
           const prospect = seedProspect(current.raw, prefix);
           const sourceCycleId = insertClosedCycle({ database: current.raw, prefix: `${prefix}-closed`, prospect });
-          const kind = index < 205 ? 'system_error' : 'unmatched_communication';
+          const majority = options.majority ?? 'system_error';
+          const kind = index < 205 ? majority : majority === 'system_error' ? 'unmatched_communication' : 'system_error';
           if (kind === 'system_error') {
             insertOpenCycleWithAction({ database: current.raw, prefix: `${prefix}-active`, prospect });
             insertSourceEvent({ database: current.raw, id: `${prefix}-inbound`, personId: prospect.personId, channel: 'inbound_demo' });
@@ -254,7 +334,7 @@ export async function createReliabilityDomainFixture(
               : { kind: 'unknown_handle', handleKind: 'email', normalizedValue: email },
             personId: prospect.personId, prospectId: prospect.prospectId, sourceCycleId,
             newCycleId: `${prefix}-reactivated`,
-            activatedAt: index < 205 ? '2026-08-31T15:00:00.000Z' : '2026-08-31T16:00:00.000Z',
+            activatedAt: index < 205 || options.tied ? '2026-08-31T15:00:00.000Z' : '2026-08-31T16:00:00.000Z',
             cadence: { definitionId: cadence.id, family: 'cadence_c', version: cadence.version, contentHash: cadence.contentHash },
           });
           assert.equal(result.kind, 'review_required');
@@ -265,7 +345,17 @@ export async function createReliabilityDomainFixture(
           expected.push({ reviewId: result.reviewItem.id, activationKey, kind, personId: prospect.personId,
             prospectId: prospect.prospectId, sourceCycleId, newCycleId: `${prefix}-reactivated` });
         }
+        for (const owner of expected) seededReviews.set(owner.reviewId, owner);
         return frozenCopy(expected);
+      },
+      seedPromoteEvidence(reviewId: string) {
+        const current = requireOpen();
+        const owner = seededReviews.get(reviewId);
+        assert.ok(owner && owner.kind === 'unmatched_communication', 'Only an owned unmatched review may receive fixture evidence');
+        assert.equal(reviewOwners().find(row => row.reviewId === reviewId)?.status, 'open');
+        const sourceEventId = `${owner.newCycleId}-matched-source`;
+        insertSourceEvent({ database: current.raw, id: sourceEventId, personId: owner.personId, channel: 'inbound_demo' });
+        return Object.freeze({ sourceEventId });
       },
       async importLeads(api: Pick<CallieApi, 'imports'>) {
         assert.equal(importedOwners().length, 0, 'Import scenario must use a separate empty fixture');
