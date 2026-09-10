@@ -1,11 +1,23 @@
 import { z } from 'zod';
 import type { LocalCompanyInput, LocalCompanyCreateRequest, LocalCompanyReview, LocalCompanyCreateResult, LocalCompanyCreateStatus } from './localCompanyIntakeContract';
-import { accountIdSchema, accountInstantSchema, accountLinkSchema, accountSourceSchema } from './accountContract';
+import { accountIdSchema, accountInstantSchema, accountLinkSchema, accountSchema, accountSourceSchema } from './accountContract';
 import { dailyAccountSchema } from './dailyContract';
 import { todayItemSchema } from './todayContract';
 const id = z.string().min(1);
 const counter = z.number().int().nonnegative().safe();
 export const selectedCompanySchema = z.strictObject({ accountId: accountIdSchema });
+export const selectedResearchSchema = z.strictObject({ commandId: z.uuid(), accountId: accountIdSchema });
+export const accountEvidenceReceiptSchema = z.strictObject({
+  accountId: accountIdSchema, version: accountSchema.shape.version, duplicate: z.boolean(),
+});
+export const localCompanyResearchStatusSchema = z.strictObject({
+  commandId: z.uuid(), accountId: accountIdSchema,
+  state: z.enum(['not_recorded', 'queued', 'running', 'completed', 'parked', 'held']),
+  receipt: accountEvidenceReceiptSchema.nullable(), reason: z.string().nullable(),
+}).refine(status => (status.state === 'completed') === (status.receipt !== null)
+  && (status.receipt === null || status.receipt.accountId === status.accountId), 'local_company_research_receipt_mismatch');
+export type SelectedResearch = z.infer<typeof selectedResearchSchema>;
+export type LocalCompanyResearchStatus = z.infer<typeof localCompanyResearchStatusSchema>;
 // SQL selects source/link ownership. The wire contract binds every evidence reference
 // to the complete selected source set without changing the existing authority rules.
 export const localCompanyDetailSchema = z.strictObject({
