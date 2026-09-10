@@ -237,3 +237,53 @@ describe('native modal Tab boundary', () => {
     expect(fireEvent.keyDown(first, { key: 'Tab', shiftKey: true })).toBe(true); expect(document.activeElement).toBe(first);
   });
 });
+
+describe('native modal focus when controls become unavailable', () => {
+  function Fields({ busy = false }: { busy?: boolean }) {
+    return <><button disabled={busy}>Submit fields</button><input aria-label="Retained text" disabled={busy} /></>;
+  }
+  function BusyModal({ busy = false, child = false }: { busy?: boolean; child?: boolean }) {
+    const dialogRef = useRef<HTMLDialogElement>(null);
+    const modal = useModalDialog({ open: true, dialogRef, canDismiss: () => !busy, onDismiss: vi.fn() });
+    return <dialog ref={dialogRef} aria-label="Pending modal" onKeyDown={modal.onKeyDown} onCancel={modal.onCancel}>
+      <Fields busy={busy} />
+      {child && <Modal name="Child" close={vi.fn()} />}
+    </dialog>;
+  }
+  it('recovers focus before the next Tab when a pending render disables the focused control', async () => {
+    const view = render(<PresentationRoot><BusyModal /></PresentationRoot>);
+    const submit = screen.getByText('Submit fields'); submit.focus();
+    view.rerender(<PresentationRoot><BusyModal busy /></PresentationRoot>);
+    await flushFocus();
+    const dialog = screen.getByRole('dialog'); expect(document.activeElement).toBe(dialog);
+    expect(fireEvent.keyDown(document.activeElement!, { key: 'Tab' })).toBe(false);
+    expect(document.activeElement).toBe(dialog);
+    expect(fireEvent.keyDown(document.activeElement!, { key: 'Tab', shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(dialog);
+    expect(HTMLDialogElement.prototype.showModal).toHaveBeenCalledTimes(1);
+  });
+  it('recovers body focus when a descendant-only update removes every focused tab stop', async () => {
+    function ChangingFields() {
+      const [busy, setBusy] = useState(false);
+      return busy ? <p>Pending</p> : <button onClick={() => setBusy(true)}>Remove fields</button>;
+    }
+    function Frame() {
+      const dialogRef = useRef<HTMLDialogElement>(null);
+      const modal = useModalDialog({ open: true, dialogRef, canDismiss: () => false, onDismiss: vi.fn() });
+      return <dialog ref={dialogRef} aria-label="Child state" onKeyDown={modal.onKeyDown}><ChangingFields /></dialog>;
+    }
+    render(<PresentationRoot><Frame /></PresentationRoot>);
+    const submit = screen.getByText('Remove fields'); submit.focus(); fireEvent.click(submit);
+    await flushFocus(); expect(document.activeElement).toBe(screen.getByRole('dialog'));
+  });
+  it('does not disturb a healthy focused editor or steal focus from a newer child modal', async () => {
+    const tree = (busy: boolean, child: boolean) => <PresentationRoot><BusyModal busy={busy} child={child} /></PresentationRoot>;
+    const view = render(tree(false, false));
+    const input = screen.getByRole('textbox') as HTMLInputElement; input.value = 'keep this'; input.focus(); input.setSelectionRange(2, 5);
+    const focus = vi.spyOn(input, 'focus'); view.rerender(tree(false, false)); await flushFocus();
+    expect(focus).not.toHaveBeenCalled(); expect(document.activeElement).toBe(input); expect(input.selectionStart).toBe(2); expect(input.selectionEnd).toBe(5);
+    view.rerender(tree(false, true));
+    const childDialog = screen.getByRole('dialog', { name: 'Child' }); const childControl = childDialog.querySelector('button')!; childControl.focus();
+    view.rerender(tree(true, true)); await flushFocus(); expect(document.activeElement).toBe(childControl);
+  });
+});
