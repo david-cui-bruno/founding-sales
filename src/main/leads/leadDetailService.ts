@@ -1,4 +1,3 @@
-import type { OutboundCommandServiceApi } from '../communications/outboundPorts';
 import type { OutboundCapabilities, OutboundReceipt, OutboundReason } from '../../shared/contracts/outboundContract';
 import type { MutationReceipt } from '../../shared/contracts/commonContract';
 import type {
@@ -41,33 +40,6 @@ export type LeadDetailDomainInvoker = {
   dismissLead(input: DismissLeadRequest): MutationReceipt;
   enqueueCloudScoreOverride(input: CloudScoreOverrideRequest): MutationReceipt;
 };
-
-/**
- * Thin delegate from the lead detail IPC surface to the domain facade. All
- * business rules, SQL, and DTO mapping live behind the facade, not here.
- */
-export function createLeadDetailService(
-  domain: LeadDetailDomainInvoker,
-  enrichment?: EnrichmentRequester,
-  outbound?: OutboundCommandServiceApi,
-): LeadDetailProvider {
-  return {
-    get: async (input) => domain.getLeadDetail(input),
-    beginOutbound: async (input) => outbound === undefined
-      ? domain.recordOutboundRefusal(input, input.channel === 'call' ? 'phone_route_unverified' : 'channel_unavailable')
-      : outbound.beginOutbound(input),
-    getOutboundCapabilities: async () => outbound === undefined
-      ? unavailableOutboundCapabilities() : outbound.getCapabilities(),
-    confirmTransition: async (input) => domain.confirmTransition(input),
-    dismissLead: async (input) => domain.dismissLead(input),
-    overrideCloudScore: async (input) => domain.enqueueCloudScoreOverride(input),
-    findContactInfo: async (input) => (
-      enrichment === undefined
-        ? { written: false, refusalReason: 'credentials_unavailable' }
-        : enrichment.request(input)
-    ),
-  };
-}
 
 /** Fixed fail-closed status only. No probes, personal-data reads or enablement flags. */
 export function unavailableOutboundCapabilities(): OutboundCapabilities {

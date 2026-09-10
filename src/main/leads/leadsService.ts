@@ -23,15 +23,3 @@ export type LeadsDomainInvoker = {
   updateLeadField(input: LeadFieldUpdateRequest): MutationReceipt;
   bulkUpdateLeads(input: LeadBulkUpdateRequest): MutationReceipt;
 };
-
-/**
- * Thin delegate from the Leads IPC surface to the domain facade. All business
- * rules, SQL, and DTO mapping live behind the facade, not here.
- */
-export function createLeadsService(domain: LeadsDomainInvoker): LeadsProvider {
-  return {
-    list: async (input) => domain.listLeadRows(input),
-    updateField: async (input) => domain.updateLeadField(input),
-    bulkUpdate: async (input) => domain.bulkUpdateLeads(input),
-  };
-}

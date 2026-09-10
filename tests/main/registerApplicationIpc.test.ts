@@ -366,7 +366,7 @@ describe('registerApplicationIpc', () => {
     expect(calls).toEqual([]);
   });
 
-  it('routes every provider method through withDomain to the exact facade use case', async () => {
+  it('retains the original thirty gated provider smoke cases', async () => {
     const domain = {
       listLeadRows: vi.fn(() => 'lead-rows'),
       updateLeadField: vi.fn(() => 'updated'),
@@ -505,5 +505,122 @@ describe('registerApplicationIpc', () => {
 
     await expect(createShellProvider(gate).revealDatabase()).rejects.toThrow();
     expect(electron.showItemInFolder).not.toHaveBeenCalled();
+  });
+});
+
+// Sentinel mapping values below prove forwarding only, never public API/readiness success.
+describe('all40 shipped provider mappings and owned detail exceptions', () => {
+  const at = '2026-09-10T15:00:00.000Z';
+  const person = { personId: 'mapping-person' };
+  const outboundInput = { commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', ...person, salesCycleId: 'mapping-cycle',
+    channel: 'call' as const, contactMethodId: 'mapping-phone', expectedContactSnapshot: 'a'.repeat(64) };
+  type Mapping = { name: string; facade: keyof FounderSalesDomain; factory: (gate: Gate) => object; method: string; args: unknown[]; forwarded?: unknown[] };
+  const cases: Mapping[] = [
+    { name: 'leads.list', facade: 'listLeadRows', factory: createLeadsProvider, method: 'list', args: [{ query: 'map', stages: [], priorities: [], sort: 'person_name', cursor: null, limit: 7 }] },
+    { name: 'leads.updateField', facade: 'updateLeadField', factory: createLeadsProvider, method: 'updateField', args: [{ personId: 'p', field: 'person_name', value: 'Mapped name' }] },
+    { name: 'leads.bulkUpdate', facade: 'bulkUpdateLeads', factory: createLeadsProvider, method: 'bulkUpdate', args: [{ personIds: ['p', 'q'], field: 'organization_label', value: 'Mapped organization' }] },
+    { name: 'detail.get', facade: 'getLeadDetail', factory: createLeadDetailProvider, method: 'get', args: [person] },
+    { name: 'detail.beginOutbound', facade: 'recordOutboundRefusal', factory: createLeadDetailProvider, method: 'beginOutbound', args: [outboundInput], forwarded: [outboundInput, 'phone_route_unverified'] },
+    { name: 'detail.confirmTransition', facade: 'confirmTransition', factory: createLeadDetailProvider, method: 'confirmTransition', args: [{ salesCycleId: 'c', transition: 'review_to_ready', expectedRevision: 8 }] },
+    { name: 'detail.dismissLead', facade: 'dismissLead', factory: createLeadDetailProvider, method: 'dismissLead', args: [{ ...person, salesCycleId: 'c', qualificationGateReason: 'out_of_area', expectedRevision: 9 }] },
+    { name: 'detail.overrideCloudScore', facade: 'enqueueCloudScoreOverride', factory: createLeadDetailProvider, method: 'overrideCloudScore', args: [{ ...person, direction: 'down' }] },
+    { name: 'today.get', facade: 'getToday', factory: createTodayProvider, method: 'get', args: [] },
+    { name: 'today.complete', facade: 'completePrimaryAction', factory: createTodayProvider, method: 'complete', args: [{ salesCycleId: 'c', actionId: 'a', outcome: 'resolved', activityId: null }] },
+    { name: 'today.snooze', facade: 'snoozePrimaryAction', factory: createTodayProvider, method: 'snooze', args: [{ salesCycleId: 'c', resurfaceAt: at }] },
+    { name: 'today.pin', facade: 'pinWithinLane', factory: createTodayProvider, method: 'pin', args: [{ salesCycleId: 'c', reason: 'choice', expiresAt: at, comparedSalesCycleId: 'd' }] },
+    { name: 'today.logPastActivity', facade: 'logPastActivity', factory: createTodayProvider, method: 'logPastActivity', args: [{ ...person, salesCycleId: 'c', kind: 'note', direction: 'internal', occurredAt: at, summary: 'history', outcome: null }] },
+    { name: 'today.addLeadNote', facade: 'addLeadNote', factory: createTodayProvider, method: 'addLeadNote', args: [{ ...person, salesCycleId: 'c', text: 'note' }] },
+    { name: 'today.logCallOutcome', facade: 'logCallOutcome', factory: createTodayProvider, method: 'logCallOutcome', args: [{ ...person, salesCycleId: 'c', outcome: 'no_answer', callbackAt: null, occurredAt: at }] },
+    { name: 'today.markActivityInError', facade: 'markActivityInError', factory: createTodayProvider, method: 'markActivityInError', args: [{ ...person, activityId: 'a', reason: 'Wrong date' }] },
+    { name: 'today.getLeadTriageSnapshot', facade: 'getLeadTriageSnapshot', factory: createTodayProvider, method: 'getLeadTriageSnapshot', args: [{ limit: 17 }] },
+    { name: 'today.getTriageQueue', facade: 'getTriageQueue', factory: createTodayProvider, method: 'getTriageQueue', args: [] },
+    { name: 'today.setReviewPosition', facade: 'setReviewPosition', factory: createTodayProvider, method: 'setReviewPosition', args: [{ position: 13 }] },
+    { name: 'pipeline.get', facade: 'getPipelineProjection', factory: createPipelineProvider, method: 'get', args: [] },
+    { name: 'review.list', facade: 'listReviewItems', factory: createReviewProvider, method: 'list', args: [{ kinds: ['system_error'], cursor: null, limit: 11 }] },
+    { name: 'review.resolve', facade: 'resolveReviewItem', factory: createReviewProvider, method: 'resolve', args: [{ kind: 'unmatched_communication', reviewId: 'r', expectedVersion: 2, action: 'mark_personal', personId: null, sourceEventId: null }] },
+    { name: 'friday.getCurrent', facade: 'getFridayReport', factory: createFridayProvider, method: 'getCurrent', args: [], forwarded: [undefined] },
+    { name: 'friday.getDrilldown', facade: 'getMetricDrilldown', factory: createFridayProvider, method: 'getDrilldown', args: [{ metricId: 'jobs_requested' }] },
+    { name: 'friday.createJob', facade: 'createJobRequest', factory: createFridayProvider, method: 'createJob', args: [{ jobId: 'j', salesCycleId: null, requestedAt: at }] },
+    { name: 'friday.fillJob', facade: 'markJobFilled', factory: createFridayProvider, method: 'fillJob', args: [{ jobId: 'j', contractorAcceptedAt: at }] },
+    { name: 'friday.cancelJob', facade: 'cancelJobRequest', factory: createFridayProvider, method: 'cancelJob', args: [{ jobId: 'j' }] },
+    { name: 'imports.preview', facade: 'previewLeadImport', factory: createImportProvider, method: 'preview', args: [{ kind: 'csv', sourceName: 'mapping.csv', content: 'Name\nMapped owner\n' }] },
+    { name: 'imports.remap', facade: 'remapLeadImport', factory: createImportProvider, method: 'remap', args: [{ previewId: 'v', contentHash: 'a'.repeat(64), mapping: { Name: 'person_name' } }] },
+    { name: 'imports.commit', facade: 'commitLeadImport', factory: createImportProvider, method: 'commit', args: [{ previewId: 'v', contentHash: 'a'.repeat(64), mapping: { Name: 'person_name' }, source: { channel: 'registry', referredByPersonId: null }, duplicateDecisions: [] }] },
+    { name: 'imports.status', facade: 'getImportJob', factory: createImportProvider, method: 'status', args: [{ jobId: 'i' }] },
+    { name: 'conversations.list', facade: 'listConversations', factory: createConversationsProvider, method: 'list', args: [{ filter: 'all', query: 'map', cursor: null, limit: 19 }] },
+    { name: 'conversations.get', facade: 'getConversationDetail', factory: createConversationsProvider, method: 'get', args: [{ activityId: 'a' }] },
+    { name: 'conversations.attachTranscript', facade: 'attachTranscript', factory: createConversationsProvider, method: 'attachTranscript', args: [{ ...person, activityId: 'a', rawText: 'Mapped transcript' }] },
+    { name: 'learnings.list', facade: 'listLearnings', factory: createLearningsProvider, method: 'list', args: [{ categories: ['pain'], statuses: ['active'], query: 'map', limit: 23 }] },
+    { name: 'learnings.capture', facade: 'captureLearning', factory: createLearningsProvider, method: 'capture', args: [{ category: 'pain', statement: 'Mapped learning', confidence: 'medium', evidence: [{ personId: null, activityId: null, quote: 'evidence', notedAt: at }], contradictionOf: null }] },
+    { name: 'learnings.addEvidence', facade: 'addLearningEvidence', factory: createLearningsProvider, method: 'addEvidence', args: [{ learningId: 'l', expectedVersion: 3, evidence: { personId: null, activityId: null, quote: 'more', notedAt: at } }] },
+    { name: 'learnings.updateStatus', facade: 'updateLearningStatus', factory: createLearningsProvider, method: 'updateStatus', args: [{ learningId: 'l', expectedVersion: 4, status: 'retired', reason: null }] },
+  ];
+  const invoke = (entry: Mapping, gate: Gate): Promise<unknown> => {
+    const provider = entry.factory(gate);
+    return Reflect.apply(Reflect.get(provider, entry.method), provider, entry.args) as Promise<unknown>;
+  };
+  it.each(cases)('$name forwards exact arguments and preserves returned value and both rejection sources', async entry => {
+    const value = Object.freeze({ mapping: entry.name });
+    const method = vi.fn((...args: unknown[]) => { void args; return value; });
+    const gate = fakeGate({ [entry.facade]: method });
+    await expect(invoke(entry, gate)).resolves.toBe(value);
+    expect(method.mock.calls).toEqual([entry.forwarded ?? entry.args]);
+    expect(gate.withDomain).toHaveBeenCalledTimes(1);
+    expect(gate.getHealth).not.toHaveBeenCalled();
+    if (entry.args.length) expect(method.mock.calls[0]?.[0]).toBe(entry.args[0]);
+    const domainError = new Error(`facade:${entry.name}`);
+    method.mockImplementationOnce(() => { throw domainError; });
+    await expect(invoke(entry, gate)).rejects.toBe(domainError);
+    const gateError = new Error(`gate:${entry.name}`);
+    vi.mocked(gate.withDomain).mockRejectedValueOnce(gateError);
+    await expect(invoke(entry, gate)).rejects.toBe(gateError);
+    expect(method).toHaveBeenCalledTimes(2);
+  });
+  it('keeps Friday omitted, explicit undefined and explicit zero offset distinct at the facade', async () => {
+    const getFridayReport = vi.fn(); const gate = fakeGate({ getFridayReport });
+    const provider = createFridayProvider(gate); const zero = { weekOffset: 0 };
+    await provider.getCurrent(); await provider.getCurrent(undefined); await provider.getCurrent(zero);
+    expect(getFridayReport.mock.calls).toEqual([[undefined], [undefined], [zero]]);
+    expect(getFridayReport.mock.calls[2]?.[0]).toBe(zero);
+  });
+  it.each(['text', 'email'] as const)('absent outbound %s records fixed channel refusal through the gate', async channel => {
+    const input = { ...outboundInput, channel }; const value = { refused: channel };
+    const recordOutboundRefusal = vi.fn(() => value);
+    const gate = fakeGate({ recordOutboundRefusal } as unknown as Partial<FounderSalesDomain>);
+    await expect(createLeadDetailProvider(gate).beginOutbound(input)).resolves.toBe(value);
+    expect(recordOutboundRefusal.mock.calls).toEqual([[input, 'channel_unavailable']]);
+    expect(gate.withDomain).toHaveBeenCalledTimes(1);
+  });
+  it('detail fixed capabilities and absent enrichment do not enter an unavailable gate', async () => {
+    const gate = fakeGate(); vi.mocked(gate.withDomain).mockRejectedValue(new Error('gate unavailable'));
+    const provider = createLeadDetailProvider(gate);
+    const unavailable = { state: 'unavailable', reasonCode: 'not_integrated' };
+    await expect(provider.getOutboundCapabilities()).resolves.toEqual({
+      phoneHandoff: { state: 'unavailable', reasonCode: 'phone_route_unverified' },
+      callObservation: unavailable, recording: unavailable, messagesSend: unavailable, gmailSend: unavailable,
+      managedAudioImport: unavailable, appleTranscriptExtraction: unavailable, localDrafts: true,
+    });
+    await expect(provider.findContactInfo(person)).resolves.toEqual({ written: false, refusalReason: 'credentials_unavailable' });
+    expect(gate.withDomain).not.toHaveBeenCalled(); expect(gate.getHealth).not.toHaveBeenCalled();
+  });
+  it('detail injected outbound, capabilities and enrichment own arguments, results and rejection without a gate', async () => {
+    const gate = fakeGate(); vi.mocked(gate.withDomain).mockRejectedValue(new Error('gate unavailable'));
+    const outbound: OutboundCommandServiceApi = { beginOutbound: vi.fn(), getCapabilities: vi.fn(), invalidate: vi.fn(), resumeAfterUnlock: vi.fn(), dispose: vi.fn() };
+    const enrichment = { request: vi.fn() };
+    const provider = createLeadDetailProvider(gate, enrichment, outbound);
+    const routes = [
+      { method: vi.mocked(outbound.beginOutbound), run: () => provider.beginOutbound(outboundInput), args: [outboundInput] },
+      { method: vi.mocked(outbound.getCapabilities), run: () => provider.getOutboundCapabilities(), args: [] as unknown[] },
+      { method: enrichment.request, run: () => provider.findContactInfo(person), args: [person] },
+    ];
+    for (const [index, route] of routes.entries()) {
+      const value = { owner: index };
+      route.method.mockResolvedValueOnce(value as never);
+      await expect(route.run()).resolves.toBe(value);
+      expect(route.method.mock.calls).toEqual([route.args]);
+      const error = new Error(`owned:${index}`); route.method.mockRejectedValueOnce(error);
+      await expect(route.run()).rejects.toBe(error);
+    }
+    expect(gate.withDomain).not.toHaveBeenCalled(); expect(gate.getHealth).not.toHaveBeenCalled();
   });
 });

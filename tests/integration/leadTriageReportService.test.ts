@@ -1,3 +1,4 @@
+import { productionDomainGate } from '../fixtures/productionDomainGate';
 import { contactSnapshot } from '../../src/main/communications/contactSnapshot';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,7 +9,7 @@ import type { LeadTriageSnapshot, LeadTriageAssessment } from '../../src/shared/
 import { createTodayProvider as createGatedTodayProvider } from '../../src/main/ipc/registerApplicationIpc';
 import { createDomainServices, type DomainServices } from '../../src/main/domain/createDomainServices';
 import { createFounderSalesDomain, type FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
-import { createTodayProvider } from '../../src/main/today/todayService';
+
 import { insertClosedCycle, insertOpenCycleWithAction, seedProspect } from '../fixtures/domainRows';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 
@@ -40,7 +41,7 @@ describe('read-only lead triage snapshot over an intact encrypted domain', () =>
 
   it('returns the first 30 distinct people in the exact existing queue order without advancing revision', async () => {
     const queue = domain.getTriageQueue();
-    const provider = createTodayProvider(domain);
+    const provider = createGatedTodayProvider(productionDomainGate(domain));
     expect(queue.items).toHaveLength(35);
     expect(queue.items.map((row) => row.salesCycleId)).toEqual(Array.from({ length: 35 }, (_, i) => `q${String(i).padStart(2, '0')}-cycle`));
     expect(provider.getLeadTriageSnapshot).toBeTypeOf('function');
@@ -165,7 +166,7 @@ describe('read-only lead triage snapshot over an intact encrypted domain', () =>
       result = snapshot(20);
       const gate = { withDomain: async <T>(operation: (domain: FounderSalesDomain) => T | Promise<T>): Promise<T> => operation(domain), getHealth: vi.fn() };
       expect(await createGatedTodayProvider(gate).getLeadTriageSnapshot({ limit: 20 })).toEqual(result);
-      expect(await createTodayProvider(domain).getLeadTriageSnapshot({ limit: 20 })).toEqual(result);
+      expect(await createGatedTodayProvider(productionDomainGate(domain)).getLeadTriageSnapshot({ limit: 20 })).toEqual(result);
       expect(statements.length).toBeGreaterThan(20);
       const queueSelect = statements.find((sql) => sql.includes('cycle.prospect_id, person.display_name'));
       expect(queueSelect).toBeDefined();

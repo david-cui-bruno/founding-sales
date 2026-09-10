@@ -32,12 +32,3 @@ export type ConversationsCommandSource = {
     input: AttachTranscriptRequest,
   ): MutationReceipt | Promise<MutationReceipt>;
 };
-
-/** Thin delegate. No business rules and no SQL belong in this module. */
-export const createConversationsService = (
-  source: ConversationsCommandSource,
-): ConversationsProvider => ({
-  list: async (input) => source.listConversations(input),
-  get: async (input) => source.getConversationDetail(input),
-  attachTranscript: async (input) => source.attachTranscript(input),
-});

@@ -1,3 +1,4 @@
+import { productionDomainGate } from '../fixtures/productionDomainGate';
 import { validParcelEvent } from '../fixtures/cloudSourceEvents';
 import { cloudSourceEventSchema } from '../../src/shared/contracts/cloudSourceEventContract';
 import { randomUUID } from 'node:crypto';
@@ -28,10 +29,7 @@ import {
 import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import {
-  createLeadDetailService,
-  type LeadDetailProvider,
-} from '../../src/main/leads/leadDetailService';
+import { type LeadDetailProvider } from '../../src/main/leads/leadDetailService';
 import {
   contactMethodSchema,
   leadDetailSchema,
@@ -111,7 +109,7 @@ describe('leadDetailService over a real encrypted domain', () => {
       services.cadences.installBuiltins();
     });
     domain = createFounderSalesDomain({ services, database, clock, ids });
-    leadDetail = createLeadDetailService(domain);
+    leadDetail = createLeadDetailProvider(productionDomainGate(domain));
   });
 
   afterEach(() => {
@@ -596,7 +594,7 @@ describe('leadDetailService over a real encrypted domain', () => {
     const request = requestFor();
     const route = normalRoute();
     const enrichment = { request: vi.fn(async () => ({ written: false, refusalReason: 'rate_limited' as const })) };
-    const provider = createLeadDetailService(domain, enrichment, route.outbound);
+    const provider = createLeadDetailProvider(productionDomainGate(domain), enrichment, route.outbound);
     await expect(provider.beginOutbound(request)).resolves.toMatchObject({ status: 'handoff_accepted' });
     expect((await provider.getOutboundCapabilities()).phoneHandoff.state).toBe('available');
     await expect(provider.findContactInfo({ personId: request.personId })).resolves.toEqual({ written: false, refusalReason: 'rate_limited' });
@@ -683,7 +681,7 @@ describe('leadDetailService over a real encrypted domain', () => {
     expect(receipt).toMatchObject({ status: 'unavailable', reasonCode: channel === 'call' ? 'phone_route_unverified' : 'channel_unavailable' });
     expect(domain.inspectOutboundCommand(input)).toEqual(receipt);
     expect(route.dispatch).not.toHaveBeenCalled(); expectNoCommunication();
-    const direct = createLeadDetailService(domain);
+    const direct = createLeadDetailProvider(productionDomainGate(domain));
     await expect(direct.beginOutbound(input)).resolves.toEqual(receipt);
   });
 

@@ -1,3 +1,5 @@
+import { productionDomainGate } from '../fixtures/productionDomainGate';
+import { createImportProvider } from '../../src/main/ipc/registerApplicationIpc';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
@@ -13,7 +15,7 @@ import {
 import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import { createImportService, type ImportProvider } from '../../src/main/imports/importService';
+import { type ImportProvider } from '../../src/main/imports/importService';
 import {
   createTempDatabase,
   createTestWorkspaceKey,
@@ -70,7 +72,7 @@ describe('organization assignment after genuine CSV intake', () => {
       services.cadences.installBuiltins();
     });
     domain = createFounderSalesDomain({ services, database, clock, ids });
-    service = createImportService(domain);
+    service = createImportProvider(productionDomainGate(domain));
   });
 
   afterEach(() => {

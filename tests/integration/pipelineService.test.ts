@@ -1,3 +1,5 @@
+import { productionDomainGate } from '../fixtures/productionDomainGate';
+import { createPipelineProvider } from '../../src/main/ipc/registerApplicationIpc';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
@@ -13,7 +15,7 @@ import {
 import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import { createPipelineService } from '../../src/main/pipeline/pipelineService';
+
 import { pipelineSnapshotSchema } from '../../src/shared/contracts/pipelineContract';
 import {
   insertClosedCycle,
@@ -98,7 +100,7 @@ describe('pipelineService', () => {
   }
 
   it('returns every approved stage in fixed order including empty stages', async () => {
-    const service = createPipelineService(domain);
+    const service = createPipelineProvider(productionDomainGate(domain));
 
     const snapshot = await service.get();
 
@@ -116,7 +118,7 @@ describe('pipelineService', () => {
     const lost = seedProspect(database.raw, 'delta');
     insertClosedCycle({ database: database.raw, prefix: 'delta', prospect: lost });
 
-    const service = createPipelineService(domain);
+    const service = createPipelineProvider(productionDomainGate(domain));
     const snapshot = await service.get();
 
     expect(snapshot.stages.map((lane) => lane.stage)).toEqual(FIXED_STAGE_ORDER);
@@ -137,7 +139,7 @@ describe('pipelineService', () => {
   it('keeps the strict contract free of blended scores or internal fields', async () => {
     seedLead('alpha', 'contacted');
 
-    const service = createPipelineService(domain);
+    const service = createPipelineProvider(productionDomainGate(domain));
     const snapshot = await service.get();
 
     const parsed = pipelineSnapshotSchema.parse(snapshot);

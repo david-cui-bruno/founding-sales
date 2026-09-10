@@ -36,13 +36,3 @@ export type LearningsCommandSource = {
     input: UpdateLearningStatusRequest,
   ): MutationReceipt | Promise<MutationReceipt>;
 };
-
-/** Thin delegate. No business rules and no SQL belong in this module. */
-export const createLearningsService = (
-  source: LearningsCommandSource,
-): LearningsProvider => ({
-  list: async (input) => source.listLearnings(input),
-  capture: async (input) => source.captureLearning(input),
-  addEvidence: async (input) => source.addLearningEvidence(input),
-  updateStatus: async (input) => source.updateLearningStatus(input),
-});
