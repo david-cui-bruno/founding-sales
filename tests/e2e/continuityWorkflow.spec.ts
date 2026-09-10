@@ -327,6 +327,7 @@ test('P2: packaged Native company diagnostics and overlays retain drafts, includ
       await setAppearance(page, appearance);
       await navigateFounderRoute(page, 'Accounts');
       await draft(page, name, domain);
+      await expect(page.getByTestId('native-desk')).toHaveAttribute('data-workflow-mode', 'meeting_first');
       const heldName = await retainInput(companyName(page), name);
       const heldDomain = await retainInput(companyDomain(page), domain);
       try {
