@@ -19,7 +19,7 @@ body[data-platform="darwin"] .app-shell {
 }
 
 body[data-platform="darwin"] .nav-rail {
-  background: var(--surface-navigation);
+  background: var(--native-rail);
   -webkit-backdrop-filter: saturate(1.2);
 }
 
@@ -53,7 +53,7 @@ body[data-platform="darwin"] .nav-rail {
 .app-shell__main {
   flex: 1;
   min-width: 0;
-  padding: var(--space-4) var(--space-6) var(--space-6);
+  padding: 12px 16px;
 }
 
 /* Fixed navigation rail. */
@@ -67,9 +67,10 @@ body[data-platform="darwin"] .nav-rail {
   flex-direction: column;
   box-sizing: border-box;
   width: var(--nav-rail-width);
-  padding: 0 var(--space-2) var(--space-4);
+  padding: 0 10px var(--space-4);
   border-right: 1px solid var(--line);
-  background: var(--surface-navigation);
+  background: var(--native-rail);
+  color: var(--text);
 }
 
 /* Darwin reserves a dedicated drag row for the native traffic lights above
@@ -90,7 +91,7 @@ body[data-platform="darwin"] .nav-rail__native-controls {
   flex: none;
   align-items: center;
   height: var(--chrome-header-height);
-  margin: 0 calc(-1 * var(--space-2)) var(--space-2);
+  margin: 0 calc(-1 * var(--space-2)) 30px;
   padding: 0 var(--space-4);
   -webkit-app-region: drag;
 }
@@ -103,14 +104,14 @@ body[data-platform="darwin"] .nav-rail__header {
   -webkit-app-region: no-drag;
 }
 
-.nav-rail__brand {
+.nav-rail__brand-native {
+  display: inline;
   margin: 0;
-  color: var(--bauhaus-red);
-  font-family: var(--font-display);
-  font-size: var(--text-display);
-  line-height: var(--chrome-header-height);
-  font-weight: var(--weight-heading);
-  letter-spacing: -0.01em;
+  font-weight: 800;
+  font-family: Futura, 'Avenir Next', Arial, sans-serif;
+  font-size: var(--text-native-brand);
+  letter-spacing: -1.8px;
+  color: var(--native-brand);
   white-space: nowrap;
   user-select: none;
   -webkit-user-select: none;
@@ -133,10 +134,11 @@ body[data-platform="darwin"] .nav-rail__header {
 .nav-rail__item {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  height: 32px;
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-sm);
+  box-sizing: border-box;
+  gap: 9px;
+  height: 44px;
+  padding: 10px 11px;
+  border-radius: 6px;
   color: var(--text-muted);
   font-size: var(--text-dense);
   font-weight: var(--weight-medium);
@@ -152,15 +154,22 @@ body[data-platform="darwin"] .nav-rail__header {
   background: color-mix(in srgb, var(--line) 55%, transparent);
 }
 
-/* Active destination: crisp blue block, not a rounded pill. */
-.nav-rail__item--current {
-  color: var(--accent-text);
-  background: var(--accent);
+/* Selected destinations retain the Native soft fill, including hover. */
+.nav-rail__item--current,
+.nav-rail__item--current:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 var(--accent);
 }
 
-.nav-rail__item--current:hover {
-  color: var(--accent-text);
-  background: var(--accent);
+/* Outrank the generic control focus geometry without losing its focus ring. */
+.nav-rail .nav-rail__item:focus-visible {
+  border-radius: 6px;
+  box-shadow: var(--focus-ring);
+}
+
+.nav-rail .nav-rail__item--current:focus-visible {
+  box-shadow: var(--focus-ring), inset 3px 0 var(--accent);
 }
 
 .nav-rail__item[aria-disabled="true"] {
@@ -232,8 +241,8 @@ body[data-platform="darwin"] .nav-rail__header {
 .page-header__title {
   margin: 0;
   font-family: var(--font-display);
-  font-size: var(--text-display);
-  line-height: var(--leading-display);
+  font-size: var(--text-native-page);
+  line-height: 1.25;
   font-weight: var(--weight-heading);
   letter-spacing: -0.01em;
   white-space: nowrap;
@@ -270,8 +279,32 @@ body[data-platform="darwin"] .nav-rail__header {
   margin-left: 0;
 }
 
-/* Native branding is opt-in from the stored daily workflow below. */
-.nav-rail__brand-native { display: none; }
-
-/* Legacy routes retain all historical links regardless of disclosure state. */
-.nav-rail__more-toggle { display: none; }
+.nav-rail__more-toggle,
+.nav-rail__more-toggle:hover {
+  display: flex;
+  flex-shrink: 0;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.nav-rail__more-toggle[aria-expanded='false'] + .nav-rail__other-workspaces {
+  display: none;
+}
+.nav-rail__other-workspaces {
+  overflow-y: auto;
+  min-height: 0;
+}
+.nav-rail__other-workspaces .nav-rail__item {
+  font-size: var(--text-micro);
+  height: 36px;
+  padding-left: 7px;
+  gap: 6px;
+}
+@media (max-width: 1200px) {
+  .nav-rail { padding-left: 8px; padding-right: 8px; }
+  .nav-rail__brand-native { font-size: var(--text-native-brand-narrow); }
+  .nav-rail__item { font-size: var(--text-caption); padding-left: 8px; padding-right: 8px; gap: 8px; }
+}

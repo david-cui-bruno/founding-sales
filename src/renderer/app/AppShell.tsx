@@ -32,7 +32,7 @@ export function AppShell({
         reviewCount={reviewCount}
       />
       <div className="app-shell__workspace">
-        <main id="main-content" className="app-shell__main">
+        <main tabIndex={-1} id="main-content" className="app-shell__main">
           {children}
         </main>
       </div>

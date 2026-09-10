@@ -74,13 +74,17 @@
   --control-height: 26px;
 }
 
-/* SEMANTIC: approved A sizes are opt-in, not changes to legacy typography. */
-.app-shell:has(.native-desk[data-presentation='native-a']),
-.native-desk[data-presentation='native-a'],
-.startup-presentation[data-presentation='native-a'] {
+/* SEMANTIC: one application-wide Native presentation. */
+.presentation-root[data-presentation='native-a'] {
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --nav-rail-width: 142px;
   --text-native-brand: 30px;
   --text-native-brand-narrow: 27px;
   --text-native-page: 25px;
   --text-native-identity: 26px;
   --text-native-footnote: 10px;
+}
+@media (max-width: 1200px) {
+  .presentation-root[data-presentation='native-a'] { --nav-rail-width: 124px; }
 }

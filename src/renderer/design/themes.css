@@ -144,9 +144,7 @@
 }
 
 /* Approved A Native Desk palette, scoped to explicit presentation rather than workflow authority. */
-.app-shell:has(.native-desk[data-presentation='native-a']),
-.native-desk[data-presentation='native-a'],
-.startup-presentation[data-presentation='native-a'] {
+.presentation-root[data-presentation='native-a'] {
   --canvas: #e9edf2;
   --surface: #fff;
   --text: #222a35;
@@ -163,9 +161,7 @@
   --native-shadow: 0 2px 4px #18233409, 0 12px 28px #18233409;
   --native-row-shadow: 0 2px 4px #1722320b;
 }
-[data-theme='dark'] .app-shell:has(.native-desk[data-presentation='native-a']),
-[data-theme='dark'] .native-desk[data-presentation='native-a'],
-[data-theme='dark'] .startup-presentation[data-presentation='native-a'] {
+[data-theme='dark'] .presentation-root[data-presentation='native-a'] {
   --canvas: #181d25;
   --surface: #262e39;
   --text: #edf1f6;
@@ -180,4 +176,17 @@
   --native-brand: #f0937e;
   --native-action: #222a35;
   --native-shadow: 0 2px 4px #0002, 0 12px 28px #0002;
+}
+
+/* Rebind aliases here so sibling surfaces never inherit resolved legacy colors. */
+.presentation-root[data-presentation='native-a'] {
+  --surface-raised: var(--surface);
+  --surface-sunken: var(--native-queue);
+  --surface-navigation: var(--native-rail);
+  --text-faint: var(--text-muted);
+  --muted: var(--text-muted);
+  --faint: var(--text-faint);
+  --line-strong: var(--line-interactive);
+  --accent-strong: var(--accent);
+  --focus-ring: 0 0 0 2px color-mix(in srgb, var(--accent) 85%, transparent);
 }

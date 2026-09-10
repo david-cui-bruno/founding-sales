@@ -1,5 +1,6 @@
 import { DiagnosticsScreen } from './foundation/DiagnosticsScreen';
 import type { DiagnosticsState } from './foundation/DiagnosticsScreen';
+import { PresentationRoot } from './app/PresentationRoot';
 import { FounderApp } from './app/FounderApp';
 import { useTheme } from './app/useTheme';
 import { useDensity } from './app/useDensity';
@@ -18,20 +19,16 @@ export const App = () => {
   const density = useDensity();
   const health = useFoundationHealth(window.callie.health);
 
-  if (health.status !== 'ready') {
-    return (
-      <div className="startup-presentation" data-presentation="native-a">
+  return (
+    <PresentationRoot>
+      {health.status !== 'ready' ? (
         <DiagnosticsScreen
-          state={
-            health.status === 'loading'
-              ? { status: 'loading' }
-              : { status: 'failed' }
-          }
+          state={health.status === 'loading' ? { status: 'loading' } : { status: 'failed' }}
           onRetry={health.retry}
         />
-      </div>
-    );
-  }
-
-  return <FounderApp api={window.callie} health={health} theme={theme} density={density} />;
+      ) : (
+        <FounderApp api={window.callie} health={health} theme={theme} density={density} />
+      )}
+    </PresentationRoot>
+  );
 };

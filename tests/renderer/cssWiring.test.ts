@@ -32,6 +32,17 @@ async function walk(directory: string): Promise<string[]> {
 }
 
 describe('renderer CSS wiring', () => {
+  it('keeps shared presentation ownership independent of feature descendants', async () => {
+    const native = await readFile(join(rendererRoot, 'features/today/nativeDesk.css'), 'utf8');
+    expect(native).not.toMatch(/\.app-shell|\.nav-rail|--nav-rail-width\s*:/);
+    for (const path of ['app.css', 'app/shell.css', 'design/tokens.css', 'design/themes.css']) {
+      const content = await readFile(join(rendererRoot, path), 'utf8');
+      expect(content, path).not.toMatch(/native-desk|startup-presentation|data-workflow-mode/);
+    }
+    const tokens = await readFile(join(rendererRoot, 'design/tokens.css'), 'utf8');
+    expect(tokens).toContain(".presentation-root[data-presentation='native-a']");
+  });
+
   it('distinguishes semantic color identifiers from literal fallback colors', () => {
     expect(colorWords('var(--bauhaus-red)')).not.toContain('red');
     expect(colorWords('var(--bauhaus-yellow, red)')).toContain('red');
