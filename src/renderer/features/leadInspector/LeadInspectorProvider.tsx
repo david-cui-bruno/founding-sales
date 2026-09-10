@@ -69,6 +69,7 @@ export function LeadInspectorProvider({
   });
   const selectionRef = useRef(selection);
   const selectionEpoch = useRef(0);
+  const focusOrigin = useRef<HTMLElement | null>(null);
   const apiRef = useRef(api);
   apiRef.current = api;
   const preparationRecords = useMemo(() => new Map<string, ContactPreparationRecord>(), [api, discoveryApi]);
@@ -136,6 +137,8 @@ export function LeadInspectorProvider({
 
   const openWith = useCallback(
     (personId: string, view: Selection['view'], forceRefresh = false) => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && !active.closest('.lead-inspector, .lead-full-page')) focusOrigin.current = active;
       if (selectionRef.current?.personId !== personId || selectionRef.current?.view !== view || forceRefresh) selectionEpoch.current++;
       if (selectionRef.current?.personId !== personId) setManual(null);
       selectionRef.current = { personId, view };
@@ -462,6 +465,7 @@ export function LeadInspectorProvider({
           {...discoveryPresentation}
           state={detailState}
           onClose={closeLead}
+          returnFocus={() => focusOrigin.current}
           onRetry={retry}
           onOpenFullPage={openFullPage}
           onBeginOutbound={beginOutbound}
@@ -486,6 +490,7 @@ export function LeadInspectorProvider({
           outcomeApi={outcomeApi}
           onOutcomeSaved={(next) => { if (selectionRef.current?.personId === personId) handleOutcomeSaved(next); }}
           onClose={closeLead}
+          returnFocus={() => focusOrigin.current}
         />
       )}
     </LeadInspectorContext.Provider>

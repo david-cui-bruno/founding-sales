@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { PresentationRoot } from '../../app/PresentationRoot';
+import { cleanup, fireEvent, render as testingRender, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -13,6 +14,8 @@ import type { FindContactInfoReceipt } from '../../../shared/contracts/enrichmen
 import type { OutboundRequest, OutboundReceipt, OutboundCapabilities } from '../../../shared/contracts/outboundContract';
 import { LeadInspectorProvider } from './LeadInspectorProvider';
 import { useLeadInspector } from './useLeadInspector';
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
 
 const WIDTH_KEY = 'callie.inspector.width';
 

@@ -3,6 +3,7 @@
 @import "./design/base.css";
 @import "./design/motion.css";
 @import "./app/shell.css";
+@import "./app/overlays.css";
 
 /* Foundation diagnostics (bootstrap + Settings). Tokenized to match themes. */
 .diagnostics {

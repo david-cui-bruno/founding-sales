@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { PresentationRoot } from '../../app/PresentationRoot';
+import { act, cleanup, fireEvent, render as testingRender, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -13,6 +14,8 @@ import {
 import type { OutboundRequest, OutboundReceipt, OutboundCapabilities } from '../../../shared/contracts/outboundContract';
 import { LeadInspectorProvider } from './LeadInspectorProvider';
 import { useLeadInspector } from './useLeadInspector';
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
 
 const unavailable = { state: 'unavailable', reasonCode: 'not_integrated' } as const;
 const capabilities: OutboundCapabilities = { phoneHandoff: { state: 'available', reasonCode: null }, callObservation: unavailable, recording: unavailable, messagesSend: unavailable, gmailSend: unavailable, managedAudioImport: unavailable, appleTranscriptExtraction: unavailable, localDrafts: true };
@@ -902,4 +905,37 @@ it.each([
   expect(discoveryApi.get).not.toHaveBeenCalled(); expect(discoveryApi.begin).not.toHaveBeenCalled();
   expect(api.confirmTransition).not.toHaveBeenCalled(); expect(api.beginOutbound).not.toHaveBeenCalled(); expect(api.findContactInfo).not.toHaveBeenCalled();
   view.unmount(); expect(vi.getTimerCount()).toBe(0);
+});
+
+
+describe('overlay read lifetime (no native)', () => {
+  for (const openerName of ['Open Kevin Shin', 'Open Kevin full page']) {
+    it(`visible Close invalidates a pending read from ${openerName}`, async () => {
+      const api = createApi([kevin]);
+      let resolve!: (detail: LeadDetail) => void;
+      api.get.mockImplementationOnce(() => new Promise<LeadDetail>((done) => { resolve = done; }));
+      render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+      const opener = screen.getByRole('button', { name: openerName });
+      opener.focus(); fireEvent.click(opener);
+      const close = screen.getByRole('button', { name: 'Close inspector' });
+      close.focus(); fireEvent.click(close);
+      await act(async () => { resolve(kevin); });
+      expect(screen.queryByRole('button', { name: 'Close inspector' })).toBeNull();
+      expect(screen.getByTestId('selected-person').textContent).toBe('none');
+      expect(document.activeElement).toBe(opener);
+      expect(api.beginOutbound).not.toHaveBeenCalled();
+    });
+    it(`visible Close remains operable after a failed read from ${openerName}`, async () => {
+      const api = createApi([kevin]); api.get.mockRejectedValueOnce(new Error('Synthetic unavailable read'));
+      render(<LeadInspectorProvider api={api}><Harness /></LeadInspectorProvider>);
+      fireEvent.click(screen.getByRole('button', { name: openerName }));
+      const close = screen.getByRole('button', { name: 'Close inspector' });
+      await screen.findByText("Couldn't load this lead");
+      expect(screen.getByRole('button', { name: 'Close inspector' })).toBe(close);
+      expect(screen.queryByText('Kevin Shin', { selector: 'h2' })).toBeNull();
+      fireEvent.click(close);
+      expect(screen.getByTestId('selected-person').textContent).toBe('none');
+      expect(api.beginOutbound).not.toHaveBeenCalled();
+    });
+  }
 });

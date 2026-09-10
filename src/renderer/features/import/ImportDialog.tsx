@@ -1,6 +1,6 @@
 import { X } from 'lucide-react';
-import { useEffect, useId, useRef } from 'react';
-import type { SyntheticEvent } from 'react';
+import { useId, useRef } from 'react';
+import { useModalDialog } from '../../app/useModalDialog';
 
 import { Button } from '../../components/Button';
 import { ErrorState } from '../../components/ErrorState';
@@ -33,46 +33,14 @@ export function ImportDialog({ api, open, onClose, onCommitted }: ImportDialogPr
   const workflow = useImportWorkflow(api);
   const { state, preview } = workflow;
 
-  useEffect(() => {
-    if (!open) return;
-    const dialog = dialogRef.current;
-    if (dialog === null) return;
-    const opener = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
-
-    // showModal promotes the dialog to the browser top layer and makes the
-    // workspace inert. An ARIA role alone provides neither behavior.
-    dialog.showModal();
-    dialog.querySelector<HTMLButtonElement>('button')?.focus();
-    return () => {
-      dialog.close();
-      // Import refreshes can remount the originating route while this dialog
-      // stays open. Resolve its stable trigger ID instead of focusing stale DOM.
-      const returnTarget = opener?.isConnected
-        ? opener
-        : opener?.id ? document.getElementById(opener.id) : null;
-      // Palette/empty-state openers can disappear without an ID replacement.
-      // The active primary route is a connected, naturally focusable fallback.
-      const fallback = document.querySelector<HTMLAnchorElement>(
-        'nav[aria-label="Primary"] a[aria-current="page"]',
-      );
-      (returnTarget ?? fallback)?.focus();
-    };
-  }, [open]);
+  const modal = useModalDialog({
+    open, dialogRef, canDismiss: () => state.step !== 'committing',
+    onDismiss: onClose,
+    initialFocus: () => dialogRef.current?.querySelector<HTMLButtonElement>('button') ?? null,
+  });
 
   if (!open) return null;
-
-  const handleClose = () => {
-    if (state.step !== 'committing') onClose();
-  };
-
-  const handleCancel = (event: SyntheticEvent<HTMLDialogElement>) => {
-    // Keep opening/closing controlled by the parent, including native Escape.
-    // In-flight writes cannot be dismissed by the browser's default cancel.
-    event.preventDefault();
-    handleClose();
-  };
+  const handleClose = () => { modal.requestDismiss('close-button'); };
 
   const handleCommit = () => {
     void workflow.commit().then((receipt) => {
@@ -88,7 +56,8 @@ export function ImportDialog({ api, open, onClose, onCommitted }: ImportDialogPr
       className="import-dialog"
       aria-modal="true"
       aria-labelledby={headingId}
-      onCancel={handleCancel}
+      onCancel={modal.onCancel}
+      onKeyDown={modal.onKeyDown}
     >
       <header className="import-dialog__header">
         <h2 id={headingId}>Import leads</h2>

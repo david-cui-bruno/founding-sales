@@ -13,7 +13,7 @@ const SEGMENT_LABELS: Record<LeadDetail['segment'], string> = {
 };
 
 export type InspectorHeaderProps = {
-  detail: LeadDetail;
+  detail: LeadDetail | null;
   onClose?: () => void;
   onOpenFullPage?: () => void;
 };
@@ -28,12 +28,12 @@ export function InspectorHeader({
   onClose,
   onOpenFullPage,
 }: InspectorHeaderProps) {
-  const name = titleCaseDisplayName(detail.personName);
+  const name = detail ? titleCaseDisplayName(detail.personName) : 'Lead details';
 
   return (
     <header className="lead-inspector__header">
       <div className="lead-inspector__identity">
-        <Avatar name={detail.personName} />
+        {detail && <Avatar name={detail.personName} />}
         <h2 className="lead-inspector__name" title={name}>
           {name}
         </h2>
@@ -50,7 +50,7 @@ export function InspectorHeader({
           )}
         </div>
       </div>
-      <div className="lead-inspector__subline">
+      {detail && <div className="lead-inspector__subline">
         <StatusPill tone={detail.optedOut ? 'danger' : 'neutral'}>
           {detail.optedOut ? 'Opted out' : humanizeEnumLabel(detail.stage)}
         </StatusPill>
@@ -62,7 +62,7 @@ export function InspectorHeader({
           <span>{SEGMENT_LABELS[detail.segment]}</span>
           <span> · via {detail.sourceLabel}</span>
         </p>
-      </div>
+      </div>}
     </header>
   );
 }

@@ -433,7 +433,7 @@
 }
 
 /* The full page overlays the workspace (the provider renders it as a
-   sibling of the shell): fixed over the content column, opaque canvas,
+   sibling of the shell under PresentationRoot): fixed over the content column, opaque canvas,
    its own scroll context. Escape returns to the queue. */
 .lead-full-page {
   position: fixed;

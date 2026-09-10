@@ -1,3 +1,4 @@
+import { useModalDialog } from '../useModalDialog';
 import { Import, Search, type LucideIcon } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent, MouseEvent } from 'react';
@@ -45,9 +46,11 @@ const matchesQuery = (label: string, query: string): boolean => {
  * duplicate it.
  */
 export function CommandPalette({ navigate, openImport }: CommandPaletteProps) {
-  const palette = useCommandPalette();
+  const palette = useCommandPalette(() => { modal.requestDismiss('command'); });
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const modal = useModalDialog({ open: palette.open, dialogRef, canDismiss: () => true, onDismiss: palette.closePalette, initialFocus: () => inputRef.current });
   const inputRef = useRef<HTMLInputElement>(null);
 
   const commands = useMemo<Command[]>(
@@ -86,8 +89,7 @@ export function CommandPalette({ navigate, openImport }: CommandPaletteProps) {
   if (!palette.open) return null;
 
   const runCommand = (command: Command) => {
-    palette.closePalette();
-    command.run();
+    if (modal.requestDismiss('command')) command.run();
   };
 
   const onQueryChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -96,11 +98,6 @@ export function CommandPalette({ navigate, openImport }: CommandPaletteProps) {
   };
 
   const onInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      palette.closePalette();
-      return;
-    }
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       if (visible.length === 0) return;
@@ -117,24 +114,25 @@ export function CommandPalette({ navigate, openImport }: CommandPaletteProps) {
     }
   };
 
-  const onBackdropMouseDown = (event: MouseEvent<HTMLDivElement>) => {
-    if (event.target === event.currentTarget) {
-      palette.closePalette();
+  const onBackdropMouseDown = (event: MouseEvent<HTMLDialogElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const outside = event.clientX < bounds.left || event.clientX >= bounds.right ||
+      event.clientY < bounds.top || event.clientY >= bounds.bottom;
+    if (event.target === event.currentTarget && outside) {
+      modal.requestDismiss('backdrop');
     }
   };
 
   return (
-    <div
-      className="command-palette__backdrop"
+    <dialog
+      ref={dialogRef}
+      onCancel={modal.onCancel}
+      onKeyDown={modal.onKeyDown}
+      aria-label="Command palette"
+      className="command-palette command-palette__backdrop"
       data-testid="command-palette-backdrop"
       onMouseDown={onBackdropMouseDown}
     >
-      <div
-        className="command-palette"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Command palette"
-      >
         <div className="command-palette__input-row">
           <Search
             className="command-palette__search-icon"
@@ -200,7 +198,6 @@ export function CommandPalette({ navigate, openImport }: CommandPaletteProps) {
         ) : (
           <p className="command-palette__empty">No matching commands</p>
         )}
-      </div>
-    </div>
+    </dialog>
   );
 }

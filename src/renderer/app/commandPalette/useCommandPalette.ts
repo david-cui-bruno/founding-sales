@@ -1,3 +1,4 @@
+import { useOverlayLayers } from '../overlayLayers';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type CommandPaletteState = {
@@ -12,38 +13,29 @@ const isMacPlatform = (): boolean =>
 
 /**
  * Owns the palette's open state: a window-level Cmd+K (Ctrl+K off macOS)
- * toggle, plus focus restoration to whatever element had focus before the
- * palette opened. Keeping this in a hook leaves the component purely
+ * toggle. The shared modal lifecycle owns focus restoration. Keeping this in a hook leaves the component purely
  * presentational and lets tests drive it through real keyboard events.
  */
-export function useCommandPalette(): CommandPaletteState {
+export function useCommandPalette(requestClose: () => void): CommandPaletteState {
   const [open, setOpen] = useState(false);
-  const restoreFocusTo = useRef<HTMLElement | null>(null);
-
+  const closeRequest = useRef(requestClose);
+  closeRequest.current = requestClose;
+  const layers = useOverlayLayers();
   const openPalette = useCallback(() => {
-    restoreFocusTo.current =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    setOpen(true);
-  }, []);
-
-  const closePalette = useCallback(() => {
-    setOpen(false);
-    const previous = restoreFocusTo.current;
-    restoreFocusTo.current = null;
-    previous?.focus();
-  }, []);
+    if (!layers.hasModal()) setOpen(true);
+  }, [layers]);
+  const closePalette = useCallback(() => { setOpen(false); }, []);
 
   useEffect(() => {
     const requiresMeta = isMacPlatform();
 
     const onKeyDown = (event: KeyboardEvent) => {
       const modifier = requiresMeta ? event.metaKey : event.ctrlKey;
+      if (event.defaultPrevented || event.isComposing || event.repeat) return;
       if (!modifier || event.key.toLowerCase() !== 'k') return;
       event.preventDefault();
       if (open) {
-        closePalette();
+        closeRequest.current();
       } else {
         openPalette();
       }

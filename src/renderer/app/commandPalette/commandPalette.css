@@ -1,13 +1,14 @@
 /* Cmd+K command palette overlay. Tokens only; literals live in themes.css. */
 
 .command-palette__backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding-top: 20vh;
+  margin: 20vh auto 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  max-width: calc(100vw - var(--space-6) * 2);
+}
+
+.command-palette__backdrop::backdrop {
   background: color-mix(in srgb, var(--canvas) 55%, transparent);
 }
 
