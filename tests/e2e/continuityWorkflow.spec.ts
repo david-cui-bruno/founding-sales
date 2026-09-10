@@ -294,6 +294,53 @@ test('P1: packaged company draft and reviewed intent survive real routes and Imp
     await expect(page.getByText('Legacy workflow is active. Local records remain available. Switch to Native Desk in Settings to change the daily workspace. Worker actions are held.', { exact: true })).toBeVisible();
     await unpaired(page);
     assertObserved();
+
+    // Additive Native boundary proof, after all original legacy P1 checks above.
+    // Reuse P2's supported one-way Settings action on this disposable profile.
+    await navigateFounderRoute(page, 'Settings');
+    await page.getByRole('button', { name: 'Data & storage', exact: true }).click();
+    await page.getByRole('checkbox', { name: /one-way local change/i }).check();
+    await page.getByRole('button', { name: 'Switch to Native Desk', exact: true }).click();
+    await expect(page.getByText(/Native Desk is active/i)).toBeVisible();
+    expect(await page.evaluate(() => window.callie.localWorkspace.get())).toMatchObject({ workflowMode: 'meeting_first' });
+    await unpaired(page);
+
+    await navigateFounderRoute(page, 'Accounts');
+    await expect(page.getByTestId('native-desk')).toHaveAttribute('data-workflow-mode', 'meeting_first');
+    const nativeAccounts = page.getByRole('heading', { name: /^Worker accounts\s/u, level: 2 });
+    await expect(nativeAccounts).toBeVisible();
+    await expect(nativeAccounts.locator('span')).toHaveText('Unavailable');
+    await expect(page.getByText('Worker-scoped accounts are unavailable.', { exact: true })).toBeVisible();
+    const nativeLocalRow = page.getByRole('button', { name: `Local account · ${savedName}`, exact: true });
+    await expect(nativeLocalRow).toHaveAttribute('data-row-key', JSON.stringify(['local-account', saved.account.id]));
+    await expect(nativeLocalRow.getByText('Read-only local evidence', { exact: true })).toBeVisible();
+    await nativeLocalRow.click();
+    await expect(nativeLocalRow).toHaveAttribute('aria-current', 'true');
+    const localDetail = page.locator('.native-desk__account');
+    await expect(localDetail.getByRole('heading', { name: savedName, exact: true })).toBeVisible();
+    await expect(localDetail.getByText(domain, { exact: true })).toBeVisible();
+    await expect(localDetail.getByText('Local evidence, not worker authority or complete research.', { exact: true })).toBeVisible();
+    expect(await accounts(page)).toEqual(created);
+
+    await navigateFounderRoute(page, 'Campaigns');
+    await expect(page.getByTestId('native-desk')).toHaveAttribute('data-workflow-mode', 'meeting_first');
+    const nativeCampaigns = page.getByRole('heading', { name: /^Worker campaigns\s/u, level: 2 });
+    await expect(nativeCampaigns).toBeVisible();
+    await expect(nativeCampaigns.locator('span')).toHaveText('Unavailable');
+    await expect(page.getByText('Campaign scope is unavailable.', { exact: true })).toBeVisible();
+    // Campaigns has no local-company library. Prove unchanged saved evidence
+    // through the real public read here, not an invented company row on this route.
+    await expect(page.getByRole('region', { name: 'Local account library', exact: true })).toHaveCount(0);
+    expect(await accounts(page)).toEqual(created);
+    await unpaired(page);
+    await navigateFounderRoute(page, 'Accounts');
+    await expect(nativeAccounts.locator('span')).toHaveText('Unavailable');
+    await expect(nativeLocalRow).toHaveAttribute('data-row-key', JSON.stringify(['local-account', saved.account.id]));
+    await nativeLocalRow.click();
+    await expect(localDetail.getByRole('heading', { name: savedName, exact: true })).toBeVisible();
+    await expect(localDetail.getByText(domain, { exact: true })).toBeVisible();
+    expect(await accounts(page)).toEqual(created);
+    assertObserved();
   } finally {
     await workspace.close(); // Owned-launcher cleanup, not graceful native Quit evidence.
   }
