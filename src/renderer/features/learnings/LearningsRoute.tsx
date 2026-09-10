@@ -110,8 +110,7 @@ export function LearningsRoute({
     <>
       {mutationFailed && (
         <div className="learnings__mutation-alert" role="alert">
-          The learning could not be saved. It may have changed; the list below
-          refreshes after every save.
+          The learning change was not confirmed. Check the current record before submitting again.
         </div>
       )}
       <LearningsPage

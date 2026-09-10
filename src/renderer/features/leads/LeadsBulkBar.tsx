@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { useOverlayLayers } from '../../app/overlayLayers';
 import { Button } from '../../components/Button';
 
 export type LeadsBulkBarProps = {
@@ -20,6 +21,7 @@ export function LeadsBulkBar({
   onSetOrganization,
   onClear,
 }: LeadsBulkBarProps) {
+  const layers = useOverlayLayers();
   const [editorOpen, setEditorOpen] = useState(false);
   const [value, setValue] = useState('');
 
@@ -28,13 +30,13 @@ export function LeadsBulkBar({
       return undefined;
     }
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && !event.defaultPrevented && !event.isComposing && !event.repeat && !layers.hasOpenLayer()) {
         onClear();
       }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [editorOpen, onClear]);
+  }, [editorOpen, onClear, layers]);
 
   const closeEditor = () => {
     setEditorOpen(false);
@@ -58,7 +60,7 @@ export function LeadsBulkBar({
               const trimmed = value.trim();
               onSetOrganization(trimmed === '' ? null : trimmed);
               closeEditor();
-            } else if (event.key === 'Escape') {
+            } else if (event.key === 'Escape' && !event.defaultPrevented && !event.nativeEvent.isComposing && !event.repeat && !layers.hasOpenLayer()) {
               closeEditor();
             }
           }}

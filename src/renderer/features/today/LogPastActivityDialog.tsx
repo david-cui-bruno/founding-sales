@@ -5,13 +5,14 @@ import type {
   TodayItem,
 } from '../../../shared/contracts/todayContract';
 import { titleCaseDisplayName } from '../../../shared/displayText';
+import { useModalDialog } from '../../app/useModalDialog';
 import { Button } from '../../components/Button';
 import { Select } from '../../components/Select';
 
 export type LogPastActivityDialogProps = {
   item: Pick<TodayItem, 'personId' | 'salesCycleId' | 'personName'>;
   busy: boolean;
-  onSubmit(request: LogPastActivityRequest): void;
+  onSubmit(request: LogPastActivityRequest): Promise<void>;
   onClose(): void;
 };
 
@@ -49,7 +50,14 @@ export function LogPastActivityDialog({
   const [date, setDate] = useState(todayLocalDate);
   const [summary, setSummary] = useState('');
   const [priceStated, setPriceStated] = useState(false);
-  const submitted = useRef(false);
+  const pendingRef = useRef(false);
+  const generation = useRef(0);
+  const [pending, setPending] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const modal = useModalDialog({ open: true, dialogRef, canDismiss: () => !pendingRef.current && !busy,
+    onDismiss: onClose, initialFocus: () => summaryRef.current });
+  const locked = busy || pending;
   const summaryRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -57,16 +65,19 @@ export function LogPastActivityDialog({
     setDate(todayLocalDate());
     setSummary('');
     setPriceStated(false);
-    submitted.current = false;
-    summaryRef.current?.focus();
+    pendingRef.current = false;
+    setPending(false); setFailed(false);
+    generation.current++;
+    return () => { generation.current++; };
   }, [item.personId, item.salesCycleId]);
 
-  const submit = () => {
+  const submit = async () => {
     const trimmed = summary.trim();
     const occurredAt = new Date(`${date}T12:00:00`);
-    if (busy || submitted.current || trimmed.length === 0 || !Number.isFinite(occurredAt.getTime()) || date > todayLocalDate()) return;
-    submitted.current = true;
-    onSubmit({
+    if (busy || pendingRef.current || trimmed.length === 0 || !Number.isFinite(occurredAt.getTime()) || date > todayLocalDate()) return;
+    pendingRef.current = true; setPending(true); setFailed(false);
+    const current = generation.current;
+    try { await onSubmit({
       personId: item.personId,
       salesCycleId: item.salesCycleId,
       kind,
@@ -75,32 +86,24 @@ export function LogPastActivityDialog({
       summary: trimmed,
       outcome: kind !== 'note' && priceStated ? 'price_said' : null,
     });
+    } catch { if (generation.current === current) setFailed(true); }
+    finally { if (generation.current === current) { pendingRef.current = false; setPending(false); } }
   };
 
   return (
-    <div className="today-dialog-backdrop">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className="today-dialog motion-dialog-in"
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.stopPropagation();
-            onClose();
-          }
-        }}
-      >
+    <dialog ref={dialogRef} aria-labelledby={titleId} className="today-dialog motion-dialog-in"
+      onCancel={modal.onCancel} onKeyDown={modal.onKeyDown} onChange={() => setFailed(false)}>
         <h2 className="today-dialog__title" id={titleId}>
           {`Log past activity · ${titleCaseDisplayName(item.personName)}`}
         </h2>
         <div className="today-dialog__row">
           <Select<PastKind>
             label="Activity kind"
+            disabled={locked}
             options={KIND_OPTIONS}
             value={kind}
             onChange={(value) => {
-              setKind(value);
+              setKind(value); setFailed(false);
               if (value === 'note') setPriceStated(false);
             }}
           />
@@ -108,6 +111,7 @@ export function LogPastActivityDialog({
             Date
             <input
               type="date"
+              disabled={locked}
               className="today-dialog__date"
               value={date}
               max={todayLocalDate()}
@@ -119,6 +123,7 @@ export function LogPastActivityDialog({
           What happened
           <textarea
             ref={summaryRef}
+            disabled={locked}
             className="today-dialog__summary"
             rows={3}
             value={summary}
@@ -126,24 +131,24 @@ export function LogPastActivityDialog({
           />
         </label>
         <label className="today-dialog__price">
-          <input type="checkbox" checked={priceStated} disabled={kind === 'note' || busy}
+          <input type="checkbox" checked={priceStated} disabled={kind === 'note' || locked}
             onChange={(event) => setPriceStated(event.target.checked)} />
           I stated the price
         </label>
         <p>Only for an actual past communication. Logging does not confirm an offer or payment.</p>
+        {failed && <p role="alert">Past activity save was not confirmed. Your input is still here. Check Activity before logging it again.</p>}
         <div className="today-dialog__actions">
           <Button
             variant="primary"
-            disabled={busy || summary.trim().length === 0}
-            onClick={submit}
+            disabled={locked || summary.trim().length === 0}
+            onClick={() => { void submit(); }}
           >
             Log activity
           </Button>
-          <Button variant="quiet" onClick={onClose}>
+          <Button variant="quiet" disabled={locked} onClick={() => modal.requestDismiss('close-button')}>
             Cancel
           </Button>
         </div>
-      </div>
-    </div>
+    </dialog>
   );
 }

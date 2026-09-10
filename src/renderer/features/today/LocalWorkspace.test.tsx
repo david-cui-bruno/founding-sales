@@ -1,5 +1,6 @@
+import { PresentationRoot } from '../../app/PresentationRoot';
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as testingRender, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { NativeDeskRoute } from './NativeDeskRoute';
 import { dailyFixture, nativeDeskFixture } from './nativeDesk.fixture';
@@ -186,3 +187,8 @@ it('keeps the exact local account selected when an initially failed daily read r
   expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
   expect(open).not.toHaveBeenCalled();
 });
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });

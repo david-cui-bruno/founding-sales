@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render as testingRender, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { discoveryBriefSchema, type DiscoveryApi, type DiscoveryBrief as Brief } from '../../../shared/contracts/discoveryContract';
 import { DiscoveryBrief } from './DiscoveryBrief';
@@ -8,6 +8,11 @@ const brief = (): Brief => discoveryBriefSchema.parse({
   assessment: { id: '10000000-0000-4000-8000-000000000001', personId: 'owner', prospectId: 'prospect-owner', salesCycleId: 'cycle-owner', fingerprint: 'a'.repeat(64), policyVersion: 'discovery-v1', ruleVersionId: 'rules', modelVersion: null, evaluatedAt: '2026-09-06T12:00:00.000Z', expiresAt: '2026-09-07T12:00:00.000Z', localDate: '2026-09-06', overrideId: null, disposition: 'research', reasonCodes: ['unknown_owner'], axes: { fit: null, timing: { milliPoints: 0, band: 'cold', hasSupportedTrigger: false }, reachability: 'none' }, claims: [{ id: 'fact', label: 'Address', value: '<img src=x onerror=alert(1)>', certainty: 'fact', refs: [{ kind: 'source', sourceEventId: 'source-1', field: 'address', observedAt: '2026-09-05T12:00:00.000Z' }] }, { id: 'inference', label: 'Management', value: null, certainty: 'inference', refs: [] }], unknowns: ['Owner identity is not established'], questions: ['Who handles maintenance?'], identitySupported: false, needsResearch: true, ranking: { priority: null, earliestTriggerExpiresAt: null, dataConfidence: 0, lastContactAt: null, latestSourceObservedAt: null } },
 });
 const override = () => vi.fn<DiscoveryApi['override']>(async () => ({ revision: 2, affectedPersonIds: ['owner'], affectedSalesCycleIds: ['cycle-owner'] }));
+import { PresentationRoot } from '../../app/PresentationRoot';
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });
+
 afterEach(cleanup);
 it('shows unknowns, dated literal evidence and questions without inferring zeros or rendering HTML', () => {
   const { container } = render(<DiscoveryBrief brief={brief()} onOverride={override()} />);
@@ -57,14 +62,14 @@ it('supports Enter and Space selection with focus in the override dialog in jsdo
   await waitFor(() => expect(onOverride).toHaveBeenCalledWith(expect.objectContaining({ decision: 'exclude' })));
 });
 
-it('traps dialog Tab focus and restores the explicit trigger on Escape', () => {
+it('traps dialog Tab focus and restores the explicit trigger on Escape', async () => {
   render(<DiscoveryBrief brief={brief()} onOverride={override()} />);
   const trigger = screen.getByRole('button', { name: 'Adjust discovery' }); trigger.focus(); fireEvent.click(trigger);
   const last = screen.getByRole('button', { name: 'Close decision' }); last.focus();
   fireEvent.keyDown(last, { key: 'Tab' });
   expect(document.activeElement).toBe(screen.getByRole('combobox', { name: 'Discovery decision' }));
   fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
-  expect(screen.queryByRole('dialog')).toBeNull(); expect(document.activeElement).toBe(trigger);
+  expect(screen.queryByRole('dialog')).toBeNull(); await waitFor(() => expect(document.activeElement).toBe(trigger));
 });
 
 it.each(['First line\nSecond line', 'First part\tSecond part'])('explains an invalid reason without changing founder text and accepts a correction: %j', async invalidReason => {
@@ -88,4 +93,15 @@ it.each(['First line\nSecond line', 'First part\tSecond part'])('explains an inv
   expect(onOverride).toHaveBeenCalledWith(expect.objectContaining({ reason: 'Existing relationship, check next month' }));
   fireEvent.click(screen.getByRole('button', { name: 'Adjust discovery' }));
   expect(within(screen.getByRole('dialog')).queryByRole('alert')).toBeNull();
+});
+
+it('uses a native decision frame and ignores repeat and composition Escape', () => {
+  render(<DiscoveryBrief brief={brief()} onOverride={override()} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Adjust discovery' }));
+  const dialog = screen.getByRole('dialog');
+  fireEvent.keyDown(dialog, { key: 'Escape', repeat: true });
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  fireEvent.keyDown(dialog, { key: 'Escape', isComposing: true });
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  expect(dialog.tagName).toBe('DIALOG');
 });

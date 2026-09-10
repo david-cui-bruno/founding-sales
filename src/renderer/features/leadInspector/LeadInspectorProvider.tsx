@@ -554,20 +554,27 @@ function PastActivityControls({ detail, api, onSaved }: { detail: LeadDetail; ap
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const pending = useRef(false);
+  const generation = useRef(0);
   const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => { mounted.current = true; generation.current++; return () => { mounted.current = false; generation.current++; }; }, [detail.personId, detail.salesCycleId, api]);
   return <section aria-label="Past communication evidence">
     <Button variant="quiet" disabled={busy} onClick={() => setOpen(true)}>Log dated past activity</Button>
     {message !== null && <p role="status">{message}</p>}
-    {open && <LogPastActivityDialog item={detail} busy={busy} onClose={() => setOpen(false)} onSubmit={request => {
-      if (pending.current || request.personId !== detail.personId || request.salesCycleId !== detail.salesCycleId) return;
-      pending.current = true; setBusy(true); setOpen(false); setMessage(null);
-      void api.logPastActivity(request).then(() => {
-        if (!mounted.current) return;
+    {open && <LogPastActivityDialog item={detail} busy={busy} onClose={() => setOpen(false)} onSubmit={async request => {
+      if (pending.current || !mounted.current || request.personId !== detail.personId || request.salesCycleId !== detail.salesCycleId) throw new Error('Past activity unavailable');
+      const current = generation.current;
+      const isCurrent = () => mounted.current && current === generation.current;
+      pending.current = true; setBusy(true); setMessage(null);
+      try { await api.logPastActivity(request); }
+      catch (error) {
+        if (isCurrent()) setMessage('Past activity response unavailable. Check Activity before logging it again.');
+        throw error;
+      } finally { if (isCurrent()) { pending.current = false; setBusy(false); } }
+      if (isCurrent()) {
+        setOpen(false);
         setMessage('Past activity saved. In Activity, select the actual price-stated evidence and separately confirm Offered. If the event is outside recent history, do not guess its ID.');
         onSaved();
-      }, () => { if (mounted.current) setMessage('Past activity response unavailable. Check Activity before logging it again.'); })
-        .finally(() => { pending.current = false; if (mounted.current) setBusy(false); });
+      }
     }} />}
   </section>;
 }

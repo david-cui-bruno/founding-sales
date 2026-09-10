@@ -5,6 +5,7 @@ import type {
   LearningCategory,
   LearningConfidence,
 } from '../../../shared/contracts/learningsContract';
+import { useModalDialog } from '../../app/useModalDialog';
 import { Button } from '../../components/Button';
 import { CATEGORY_LABELS } from './learningMeta';
 
@@ -40,13 +41,21 @@ export function CaptureLearningDialog({
   const [statement, setStatement] = useState('');
   const [confidence, setConfidence] = useState<LearningConfidence>('medium');
   const [quotes, setQuotes] = useState<string[]>(['']);
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const pendingRef = useRef(false);
+  const generation = useRef(0);
+  const [pending, setPending] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const modal = useModalDialog({ open: true, dialogRef, canDismiss: () => !pendingRef.current,
+    onDismiss: onCancel, initialFocus: () => dialogRef.current?.querySelector('select') ?? null });
 
   useEffect(() => {
-    dialogRef.current?.querySelector('select')?.focus();
+    generation.current++;
+    return () => { generation.current++; };
   }, []);
 
-  const submit = () => {
+  const submit = async () => {
+    if (pendingRef.current) return;
     const trimmedStatement = statement.trim();
     const trimmedQuotes = quotes
       .map((quote) => quote.trim())
@@ -54,40 +63,35 @@ export function CaptureLearningDialog({
     if (trimmedStatement.length === 0 || trimmedQuotes.length === 0) {
       return;
     }
+    pendingRef.current = true; setPending(true); setFailed(false);
+    const current = generation.current;
+    try {
     const notedAt = now();
     const evidence = trimmedQuotes.map(
       (quote): CaptureLearningRequest['evidence'][number] => ({
         personId: null, activityId: null, quote, notedAt,
       }),
     );
-    void onSubmit({
+    await onSubmit({
       category,
       statement: trimmedStatement,
       confidence,
       evidence,
       contradictionOf: null,
-    }).catch((): void => undefined);
+    });
+    } catch { if (generation.current === current) setFailed(true); }
+    finally { if (generation.current === current) { pendingRef.current = false; setPending(false); } }
   };
 
   return (
-    <div className="learnings__dialog-backdrop">
-      <div
-        ref={dialogRef}
-        className="learnings__dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Capture learning"
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            onCancel();
-          }
-        }}
-      >
+    <dialog ref={dialogRef} className="learnings__dialog" aria-label="Capture learning"
+      onCancel={modal.onCancel} onKeyDown={modal.onKeyDown} onChange={() => setFailed(false)}>
         <h2 className="learnings__dialog-title">Capture learning</h2>
 
         <label className="learnings__field">
           <span className="learnings__field-label">Category</span>
           <select
+            disabled={pending}
             className="learnings__select"
             value={category}
             onChange={(event) => setCategory(event.target.value as LearningCategory)}
@@ -103,6 +107,7 @@ export function CaptureLearningDialog({
         <label className="learnings__field">
           <span className="learnings__field-label">Statement</span>
           <textarea
+            disabled={pending}
             className="learnings__textarea"
             value={statement}
             maxLength={500}
@@ -114,6 +119,7 @@ export function CaptureLearningDialog({
         <label className="learnings__field">
           <span className="learnings__field-label">Confidence</span>
           <select
+            disabled={pending}
             className="learnings__select"
             value={confidence}
             onChange={(event) => setConfidence(event.target.value as LearningConfidence)}
@@ -126,7 +132,7 @@ export function CaptureLearningDialog({
           </select>
         </label>
 
-        <fieldset className="learnings__evidence-fieldset">
+        <fieldset disabled={pending} className="learnings__evidence-fieldset">
           <legend className="learnings__field-label">Evidence</legend>
           {quotes.map((quote, index) => (
             /* Rows are positional inputs; index keys are correct here. */
@@ -135,6 +141,7 @@ export function CaptureLearningDialog({
                 {`Evidence quote ${index + 1}`}
               </span>
               <textarea
+            disabled={pending}
                 className="learnings__textarea"
                 value={quote}
                 maxLength={2000}
@@ -149,19 +156,19 @@ export function CaptureLearningDialog({
           ))}
           <Button
             variant="quiet"
-            onClick={() => setQuotes([...quotes, ''])}
+            onClick={() => { setQuotes([...quotes, '']); setFailed(false); }}
           >
             Add another evidence row
           </Button>
         </fieldset>
 
+        {failed && <p role="alert">Learning save was not confirmed. Your input is still here. Check Learnings before submitting again.</p>}
         <div className="learnings__dialog-actions">
-          <Button onClick={submit}>Save learning</Button>
-          <Button variant="quiet" onClick={onCancel}>
+          <Button disabled={pending} onClick={() => { void submit(); }}>Save learning</Button>
+          <Button variant="quiet" disabled={pending} onClick={() => modal.requestDismiss('close-button')}>
             Cancel
           </Button>
         </div>
-      </div>
-    </div>
+    </dialog>
   );
 }

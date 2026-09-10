@@ -36,7 +36,7 @@ export type ConversationsPageProps = {
   onOpenLead(personId: string): void;
   onOpenAttach(): void;
   onCloseAttach(): void;
-  onSubmitAttach(rawText: string): void;
+  onSubmitAttach(rawText: string): Promise<void>;
 };
 
 /**

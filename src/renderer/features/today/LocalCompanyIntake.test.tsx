@@ -1,5 +1,6 @@
+import { PresentationRoot } from '../../app/PresentationRoot';
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as testingRender, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { LocalCompanyCreateRequest, LocalCompanyCreateResult, LocalCompanyInput, LocalCompanyReview } from '../../../shared/contracts/localCompanyIntakeContract';
@@ -254,3 +255,8 @@ it('actual Accounts opens an existing candidate by its local key without creatin
   await screen.findByRole('heading', { name: 'Existing Harbor', level: 2 }); expect(button('Local account · Existing Harbor').getAttribute('aria-current')).toBe('true');
   expect(createApi).not.toHaveBeenCalled(); expect(statusApi).not.toHaveBeenCalled(); expect(await f.api.localWorkspace.get()).toEqual(original);
 });
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });

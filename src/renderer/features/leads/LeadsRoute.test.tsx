@@ -1,9 +1,10 @@
+import { PresentationRoot } from '../../app/PresentationRoot';
 // @vitest-environment jsdom
 
 import {
   cleanup,
   fireEvent,
-  render,
+  render as testingRender,
   screen,
   waitFor,
   within,
@@ -332,3 +333,8 @@ describe('LeadsRoute', () => {
     ).toBe(false);
   });
 });
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });

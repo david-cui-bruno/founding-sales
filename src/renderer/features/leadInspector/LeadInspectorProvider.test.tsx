@@ -860,7 +860,10 @@ it.each(['success', 'stale'] as const)('refreshes the mounted inspector override
   expect(discoveryApi.getBrief.mock.calls).toEqual([[{ personId: kevin.personId }], [{ personId: kevin.personId }]]);
   expect(screen.getByText(outcome === 'success' ? /Discovery decision saved/ : /Evidence changed\. Refresh/)).toBeTruthy();
   expect(discoveryApi.override).toHaveBeenCalledTimes(1); expect(api.confirmTransition).not.toHaveBeenCalled();
-  view.unmount(); expect(vi.getTimerCount()).toBe(0);
+  view.unmount();
+  // Native modal close restores focus on the next scheduled frame.
+  await act(async () => { vi.runOnlyPendingTimers(); });
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 it.each([
@@ -904,7 +907,10 @@ it.each([
   expect(discoveryApi.override).toHaveBeenCalledTimes(1); expect(replacement.override).not.toHaveBeenCalled();
   expect(discoveryApi.get).not.toHaveBeenCalled(); expect(discoveryApi.begin).not.toHaveBeenCalled();
   expect(api.confirmTransition).not.toHaveBeenCalled(); expect(api.beginOutbound).not.toHaveBeenCalled(); expect(api.findContactInfo).not.toHaveBeenCalled();
-  view.unmount(); expect(vi.getTimerCount()).toBe(0);
+  view.unmount();
+  // Native modal close restores focus on the next scheduled frame.
+  await act(async () => { vi.runOnlyPendingTimers(); });
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 
@@ -938,4 +944,56 @@ describe('overlay read lifetime (no native)', () => {
       expect(api.beginOutbound).not.toHaveBeenCalled();
     });
   }
+});
+
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });
+
+it.each(['accepted', 'unconfirmed'] as const)('retains provider manual input until the %s receipt boundary', async outcome => {
+  let resolve!: (value: typeof receipt) => void;
+  let reject!: (error: Error) => void;
+  const api = createApi([kevin]);
+  const pastActivityApi = { logPastActivity: vi.fn(() => new Promise<typeof receipt>((yes, no) => { resolve = yes; reject = no; })) };
+  render(<LeadInspectorProvider api={api} pastActivityApi={pastActivityApi}><Harness /></LeadInspectorProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Open Kevin full page' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'Activity' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Log dated past activity' }));
+  const dialog = screen.getByRole('dialog');
+  fireEvent.change(screen.getByLabelText('What happened'), { target: { value: 'Kept provider summary' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Log activity' }));
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  fireEvent.keyDown(dialog, { key: 'Escape' });
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  await act(async () => { if (outcome === 'accepted') resolve(receipt); else reject(new Error('private failure')); });
+  if (outcome === 'accepted') {
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.get).toHaveBeenCalledTimes(2);
+  } else {
+    expect(screen.getByRole('dialog')).toBe(dialog);
+    expect((screen.getByLabelText('What happened') as HTMLTextAreaElement).value).toBe('Kept provider summary');
+    expect(screen.getByText(/Past activity save was not confirmed/)).toBeTruthy();
+    expect(api.get).toHaveBeenCalledTimes(1);
+  }
+  expect(pastActivityApi.logPastActivity).toHaveBeenCalledTimes(1);
+});
+it('does not close a newer Person manual form or refresh them after an old manual receipt', async () => {
+  let resolve!: (value: typeof receipt) => void;
+  const api = createApi([kevin, dana]);
+  const pastActivityApi = { logPastActivity: vi.fn(() => new Promise<typeof receipt>(yes => { resolve = yes; })) };
+  render(<LeadInspectorProvider api={api} pastActivityApi={pastActivityApi}><Harness /></LeadInspectorProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Open Kevin Shin' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'Activity' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Log dated past activity' }));
+  fireEvent.change(screen.getByLabelText('What happened'), { target: { value: 'Kevin pending' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Log activity' }));
+  // Programmatic selection replacement models route/owner replacement, not native background activation.
+  fireEvent.click(screen.getByRole('button', { name: 'Open Dana Whitman' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'Activity' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Log dated past activity' }));
+  fireEvent.change(screen.getByLabelText('What happened'), { target: { value: 'Dana draft' } });
+  const dialog = screen.getByRole('dialog');
+  await act(async () => resolve(receipt));
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  expect((screen.getByLabelText('What happened') as HTMLTextAreaElement).value).toBe('Dana draft');
+  expect(api.get).toHaveBeenCalledTimes(2);
 });

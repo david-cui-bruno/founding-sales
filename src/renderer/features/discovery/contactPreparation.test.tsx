@@ -280,3 +280,6 @@ it('retains successful preparation when the subsequent contact read fails', asyn
   fireEvent.click(await action()); await screen.findByText(/Contact info requested/);
   expect(f.discovery.begin).toHaveBeenCalledOnce(); expect(f.api.findContactInfo).toHaveBeenCalledOnce();
 });
+
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });

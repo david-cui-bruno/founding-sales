@@ -1,6 +1,7 @@
+import { PresentationRoot } from '../../src/renderer/app/PresentationRoot';
 // @vitest-environment jsdom
 
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, render as testingRender } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { LeadRow } from '../../src/shared/contracts/leadsContract';
@@ -168,7 +169,7 @@ describe('no raw machine enums in rendered output', () => {
         onCall={vi.fn()}
         onSnoozeUntil={vi.fn()}
         onSkipToday={vi.fn()}
-        onLogPastActivity={vi.fn()}
+        onLogPastActivity={vi.fn(async () => {})}
         onOpenInLeads={vi.fn()}
       />,
     );
@@ -207,3 +208,8 @@ describe('no raw machine enums in rendered output', () => {
     expect(snakeCaseLeaks(container)).toEqual([]);
   });
 });
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });

@@ -1,6 +1,7 @@
+import { PresentationRoot } from '../../app/PresentationRoot';
 // @vitest-environment jsdom
 import { randomUUID } from 'node:crypto';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as testingRender, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createLinkedInFixture } from '../../../../tests/fixtures/linkedInWorkspace';
 import { requestedFollowupFixture } from '../../../../tests/fixtures/requestedFollowup';
@@ -232,3 +233,8 @@ it.each(['paused', 'revoked', 'foreign', 'failure', 'unrelated'] as const)('real
     expect(f.forbidden).not.toHaveBeenCalled();
   } finally { cleanup(); f.close(); }
 });
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });

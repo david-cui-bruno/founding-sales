@@ -1,3 +1,4 @@
+import { useOverlayLayers } from '../../app/overlayLayers';
 import { Phone, RefreshCw } from 'lucide-react';
 import { useLocalWorkspaceRead, type LocalDeskRead } from './localWorkspaceRead';
 import { RetainedWork, RetainedWorkDetail, LocalOnlyCalls, retainedKey } from './RetainedWork';
@@ -42,6 +43,7 @@ export type NativeDeskRouteProps = {
   onOpenLead(personId: string): void;
   surface?: Surface;
   legacy?: ReactNode;
+  renderLegacy?(readHeld: boolean): ReactNode;
 };
 /** Local-only composition. Failed refresh preserves the editor and its DOM. */
 export function NativeDeskRoute({
@@ -49,6 +51,7 @@ export function NativeDeskRoute({
   onOpenLead,
   surface = 'today',
   legacy,
+  renderLegacy,
 }: NativeDeskRouteProps) {
   const local = useLocalWorkspaceRead(api.localWorkspace);
   const [state, setState] = useState<{
@@ -229,9 +232,23 @@ export function NativeDeskRoute({
         {localOnly}
       </section>
     );
-  if (surface === 'today' && snapshot.workflowMode === 'legacy' && !localHold)
+  // Retained mode evidence owns composition; refresh health only owns admission.
+  // API replacement discards current/snapshot above, and confirmed mode changes
+  // still leave this branch. Never remove the worker/session holds to retain UI.
+  const establishedLegacy = snapshot.workflowMode === 'legacy' &&
+    (!api.localWorkspace || local.read.overview.value?.workflowMode === 'legacy');
+  if (surface === 'today' && establishedLegacy)
     return (
-      <>{legacy ?? <p>Legacy Today is available from the main workspace.</p>}</>
+      <>
+        {renderLegacy ? renderLegacy(localHold || !!current?.error)
+          : legacy ?? <p>Legacy Today is available from the main workspace.</p>}
+        {(localHold || current?.error) && (
+          <section aria-label="Workspace status">
+            <p role="status">Workspace status is being checked or is unavailable. Refresh to check it again. Existing input and pending commands are retained.</p>
+            <button onClick={refresh}>Refresh workspace status</button>
+          </section>
+        )}
+      </>
     );
   if ((snapshot.workflowMode === 'unknown' || snapshot.workflowMode === 'legacy') && local.read.overview.value?.workflowMode !== 'meeting_first')
     return (
@@ -531,7 +548,9 @@ export function NativeDesk({
       : surface === 'accounts'
         ? [...((localRead?.overview.value?.accounts.state === 'available' ? localRead.overview.value.accounts.snapshots : []).map(a => localAccountKey(a.account.id)) ?? []), ...snapshot.accounts.map((a) => `account:${a.account.id}`)]
         : snapshot.campaigns.map((c) => `campaign:${c.version.id}`);
+  const layers = useOverlayLayers();
   const keyboard = (e: KeyboardEvent<HTMLElement>) => {
+    if (e.defaultPrevented || layers.hasOpenLayer() || (e.key === 'Escape' && e.repeat)) return;
     if (
       e.altKey ||
       e.ctrlKey ||

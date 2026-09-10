@@ -1,8 +1,10 @@
+import { PresentationRoot } from '../../app/PresentationRoot';
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as testingRender, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { TodayRoute, type TodayRouteApi } from './TodayRoute';
-import { dailyFixture, nativeDeskFixture } from './nativeDesk.fixture';
+import { NativeDeskRoute } from './NativeDeskRoute';
+import { dailyFixture, localSnapshot, nativeDeskFixture } from './nativeDesk.fixture';
 import { renderRoute, type RouteContext } from '../../app/routeRegistry';
 import { routeFromHash } from '../../app/routes';
 import { navigationItems } from '../../app/navigationItems';
@@ -109,4 +111,39 @@ it('company call selection is not dispatch, and only a real linked person can op
     'daily.get',
     'delegation.status',
   ]);
+});
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });
+
+it('keeps established legacy callback DOM while local and daily refresh fail, with command holds intact', async () => {
+  const f = nativeDeskFixture(dailyFixture({ workflowMode: 'legacy' }));
+  const overview = vi.spyOn(f.api.localWorkspace, 'get').mockResolvedValue(localSnapshot({ workflowMode: 'legacy' }));
+  const daily = vi.spyOn(f.api.daily, 'get');
+  const renderLegacy = (readHeld: boolean) => <input aria-label="Legacy form" readOnly={readHeld} />;
+  render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} renderLegacy={renderLegacy} />);
+  const field = await screen.findByLabelText('Legacy form') as HTMLInputElement;
+  fireEvent.change(field, { target: { value: 'Retained legacy draft' } });
+  overview.mockRejectedValueOnce(new Error('Local unavailable'));
+  daily.mockRejectedValueOnce(new Error('Daily unavailable'));
+  await act(async () => { fireEvent.focus(window); });
+  expect(screen.getByLabelText('Legacy form')).toBe(field);
+  expect(field.value).toBe('Retained legacy draft');
+  expect(field.readOnly).toBe(true);
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh workspace status' })); });
+  expect(screen.getByLabelText('Legacy form')).toBe(field);
+  expect(field.readOnly).toBe(false);
+});
+it.each(['fallback', 'callback'] as const)('supports established legacy %s without an optional local API', async variant => {
+  const f = nativeDeskFixture(dailyFixture({ workflowMode: 'legacy' }));
+  const { localWorkspace: omitted, ...api } = f.api; void omitted;
+  const legacy = <input aria-label="Legacy form" />;
+  render(<NativeDeskRoute api={api} onOpenLead={vi.fn()} legacy={legacy}
+    renderLegacy={variant === 'callback' ? held => <input aria-label="Legacy form" readOnly={held} /> : undefined} />);
+  const field = await screen.findByLabelText('Legacy form');
+  await act(async () => { fireEvent.focus(window); });
+  expect(screen.getByLabelText('Legacy form')).toBe(field);
+  expect((field as HTMLInputElement).readOnly).toBe(false);
 });

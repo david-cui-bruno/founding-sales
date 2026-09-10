@@ -1,6 +1,6 @@
 import { X } from 'lucide-react';
-import { useId, useState } from 'react';
-import type { KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { useModalDialog } from '../../app/useModalDialog';
 
 import { Button } from '../../components/Button';
 import { IconButton } from '../../components/IconButton';
@@ -10,7 +10,7 @@ export type AttachTranscriptDialogProps = {
   failed: boolean;
   submitting: boolean;
   onClose(): void;
-  onSubmit(rawText: string): void;
+  onSubmit(rawText: string): Promise<void>;
 };
 
 const MAX_RAW_TEXT_LENGTH = 200_000;
@@ -53,23 +53,34 @@ export function AttachTranscriptDialog({
   const textareaId = useId();
   const [rawText, setRawText] = useState('');
 
+  const pendingRef = useRef(false);
+  const generation = useRef(0);
+  const [pending, setPending] = useState(false);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { generation.current++; return () => { generation.current++; }; }, []);
+  const modal = useModalDialog({ open: true, dialogRef, canDismiss: () => !pendingRef.current && !submitting,
+    onDismiss: onClose, initialFocus: () => textareaRef.current });
+  const locked = submitting || pending;
   const utteranceCount = countParsedUtterances(rawText);
   const tooLong = rawText.length > MAX_RAW_TEXT_LENGTH;
-  const submitDisabled = submitting || tooLong || utteranceCount === 0;
+  const submitDisabled = locked || tooLong || utteranceCount === 0;
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== 'Escape') return;
-    if (submitting) return;
-    onClose();
+  const submit = async () => {
+    if (pendingRef.current || submitDisabled) return;
+    pendingRef.current = true; setPending(true);
+    const current = generation.current;
+    try { await onSubmit(rawText); } catch { /* The route owns the sole failure flag. */ }
+    finally { if (generation.current === current) { pendingRef.current = false; setPending(false); } }
   };
 
   return (
-    <div
+    <dialog
+      ref={dialogRef}
       className="attach-dialog"
-      role="dialog"
-      aria-modal="true"
       aria-labelledby={headingId}
-      onKeyDown={handleKeyDown}
+      onKeyDown={modal.onKeyDown}
+      onCancel={modal.onCancel}
     >
       <div className="attach-dialog__panel">
         <header className="attach-dialog__header">
@@ -77,8 +88,8 @@ export function AttachTranscriptDialog({
           <IconButton
             label="Close"
             icon={X}
-            onClick={onClose}
-            disabled={submitting}
+            onClick={() => modal.requestDismiss('close-button')}
+            disabled={locked}
           />
         </header>
         <p className="attach-dialog__copy">
@@ -88,19 +99,19 @@ export function AttachTranscriptDialog({
         </p>
         {failed && (
           <div className="attach-dialog__alert" role="alert">
-            The transcript could not be attached. The conversation may already
-            have one, or the text contained no usable lines.
+            Transcript attachment was not confirmed. Your text is still here. Check this conversation before attaching again.
           </div>
         )}
         <div className="attach-dialog__field">
           <label htmlFor={textareaId}>Transcript text</label>
           <textarea
             id={textareaId}
+            ref={textareaRef}
             className="attach-dialog__textarea"
             rows={10}
             value={rawText}
             onChange={(event) => setRawText(event.target.value)}
-            disabled={submitting}
+            disabled={locked}
           />
         </div>
         <p className="attach-dialog__preview" role="status">
@@ -110,13 +121,13 @@ export function AttachTranscriptDialog({
         </p>
         <div className="attach-dialog__actions">
           <Button
-            onClick={() => onSubmit(rawText)}
+            onClick={() => { void submit(); }}
             disabled={submitDisabled}
           >
             Attach
           </Button>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

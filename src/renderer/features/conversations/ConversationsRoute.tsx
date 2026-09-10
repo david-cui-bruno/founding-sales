@@ -49,6 +49,11 @@ export function ConversationsRoute({ api, onOpenLead }: ConversationsRouteProps)
   const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null);
   const [detailState, setDetailState] = useState<DetailState>({ kind: 'idle' });
   const [attachState, setAttachState] = useState<AttachState>(CLOSED_ATTACH);
+  const attachPending = useRef(false);
+  const attachGeneration = useRef(0);
+  const selectedRef = useRef(selectedActivityId);
+  selectedRef.current = selectedActivityId;
+  useEffect(() => { attachGeneration.current++; return () => { attachGeneration.current++; }; }, [api]);
   const listSequence = useRef(0);
   const detailSequence = useRef(0);
 
@@ -127,26 +132,31 @@ export function ConversationsRoute({ api, onOpenLead }: ConversationsRouteProps)
   }, [api]);
 
   const handleSelect = useCallback((activityId: string) => {
+    if (attachPending.current) return;
+    attachGeneration.current++;
     setAttachState(CLOSED_ATTACH);
     setSelectedActivityId(activityId);
     loadDetail(activityId);
   }, [loadDetail]);
 
-  const handleAttachSubmit = useCallback((rawText: string) => {
-    if (detailState.kind !== 'ready') return;
+  const handleAttachSubmit = useCallback(async (rawText: string): Promise<void> => {
+    if (attachPending.current || !attachState.open || detailState.kind !== 'ready') throw new Error('Attachment unavailable');
     const { activityId, personId } = detailState.detail;
+    const current = attachGeneration.current;
+    const isCurrent = () => current === attachGeneration.current && selectedRef.current === activityId;
+    attachPending.current = true;
     setAttachState({ open: true, failed: false, submitting: true });
-    api
-      .attachTranscript({ activityId, personId, rawText })
-      .then(() => {
-        setAttachState(CLOSED_ATTACH);
-        loadDetail(activityId);
-        loadList(false);
-      })
-      .catch(() => {
-        setAttachState({ open: true, failed: true, submitting: false });
-      });
-  }, [api, detailState, loadDetail, loadList]);
+    try { await api.attachTranscript({ activityId, personId, rawText }); }
+    catch (error) {
+      if (isCurrent()) setAttachState({ open: true, failed: true, submitting: false });
+      throw error;
+    } finally { if (current === attachGeneration.current) attachPending.current = false; }
+    if (isCurrent()) {
+      setAttachState(CLOSED_ATTACH);
+      loadDetail(activityId);
+      loadList(false);
+    }
+  }, [api, attachState.open, detailState, loadDetail, loadList]);
 
   return (
     <ConversationsPage
@@ -165,8 +175,8 @@ export function ConversationsRoute({ api, onOpenLead }: ConversationsRouteProps)
         if (selectedActivityId !== null) loadDetail(selectedActivityId);
       }}
       onOpenLead={onOpenLead}
-      onOpenAttach={() => setAttachState({ open: true, failed: false, submitting: false })}
-      onCloseAttach={() => setAttachState(CLOSED_ATTACH)}
+      onOpenAttach={() => { if (!attachPending.current) { attachGeneration.current++; setAttachState({ open: true, failed: false, submitting: false }); } }}
+      onCloseAttach={() => { if (!attachPending.current) { attachGeneration.current++; setAttachState(CLOSED_ATTACH); } }}
       onSubmitAttach={handleAttachSubmit}
     />
   );
