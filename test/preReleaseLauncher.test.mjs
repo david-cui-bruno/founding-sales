@@ -1,3 +1,4 @@
+import { finished } from 'node:stream/promises';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -32,7 +33,7 @@ async function fixture({ identity = 'com.callie.foundersales', output = receipt 
   writeFileSync(join(root, 'bin/plutil'), `#!${process.execPath}\nconsole.log(({CFBundleIdentifier:${JSON.stringify(identity)},CFBundleName:${JSON.stringify(product)},CFBundleDisplayName:${JSON.stringify(product)},CFBundleExecutable:${JSON.stringify(product)}})[process.argv[3]]);`); chmodSync(join(root, 'bin/plutil'), 0o755);
   const git = (...args) => execFileSync('git', args, { cwd: root, stdio: 'pipe', env: { ...process.env, GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' } });
   git('init'); git('add', '.'); git('commit', '-m', 'fixture');
-  const marker = writeReleaseMarker({ root }); mkdirSync(join(root, 'archive')); writeFileSync(join(root, 'archive/release-marker.json'), JSON.stringify(marker)); await createPackage(join(root, 'archive'), join(contents, 'Resources/app.asar'));
+  const marker = writeReleaseMarker({ root }); mkdirSync(join(root, 'archive')); writeFileSync(join(root, 'archive/release-marker.json'), JSON.stringify(marker)); await finished(await createPackage(join(root, 'archive'), join(contents, 'Resources/app.asar')));
   // This fixture owns a synthetic repo/app. Outer release/test controls must not
   // select its behavior. Explicit negative-case overrides remain last so the
   // unchanged real launcher still rejects every forbidden environment family.
@@ -54,7 +55,7 @@ it.each(['dirty', 'new-head', 'missing-marker', 'ambiguous-app', 'missing-execut
   const { root, git, contents, run } = await fixture();
   if (change === 'dirty') writeFileSync(join(root, 'untracked.txt'), 'uncommitted');
   if (change === 'new-head') git('commit', '--allow-empty', '-m', 'changed head');
-  if (change === 'missing-marker') { rmSync(join(root, 'archive/release-marker.json')); await createPackage(join(root, 'archive'), join(contents, 'Resources/app.asar')); }
+  if (change === 'missing-marker') { rmSync(join(root, 'archive/release-marker.json')); await finished(await createPackage(join(root, 'archive'), join(contents, 'Resources/app.asar'))); }
   if (change === 'ambiguous-app') mkdirSync(join(contents, '../../Other.app'));
   if (change === 'missing-executable') rmSync(join(contents, 'MacOS/Callie Founder Sales System'));
   const result = run(); expect(result.status).not.toBe(0); expect(existsSync(join(root, 'called'))).toBe(false);

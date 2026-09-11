@@ -1,3 +1,4 @@
+import { finished } from 'node:stream/promises';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -21,7 +22,7 @@ async function fixture({ behavior = 'clean', shallow = false } = {}) {
   chmodSync(join(root, 'bin/git'), 0o755); chmodSync(join(root, 'bin/gitleaks'), 0o755);
   const resources = join(root, 'out/Callie.app/Contents/Resources'); mkdirSync(resources, { recursive: true });
   const input = join(root, 'archive-input'); mkdirSync(input); writeFileSync(join(input, 'inside.js'), 'archive-sentinel');
-  await createPackage(input, join(resources, 'app.asar'));
+  await finished(await createPackage(input, join(resources, 'app.asar')));
   mkdirSync(join(resources, 'app.asar.unpacked')); writeFileSync(join(resources, 'app.asar.unpacked/native.node'), 'unpacked-sentinel');
   const helpers = join(root, 'out/Callie.app/Contents/Helpers'); mkdirSync(helpers); writeFileSync(join(helpers, 'helper'), 'helper-sentinel');
   return { root, run: (...args) => spawnSync(process.execPath, ['scripts/verifySecrets.mjs', ...args], { cwd: root, env: { ...process.env, PATH: `${root}/bin:${process.env.PATH}` }, encoding: 'utf8' }) };
