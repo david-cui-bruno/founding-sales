@@ -72,6 +72,8 @@ import {
   type InsertReactivationRuleInput,
 } from './reactivationRepository';
 import { SalesCycleRepository } from './salesCycleRepository';
+import type { DiscoveryRepository } from '../discovery/discoveryRepository';
+import { discoveryAssessmentSchema } from '../../../shared/contracts/discoveryContract';
 
 const NO_CADENCE: CadenceActionBinding = {
   cadenceEnrollmentId: null, cadenceDefinitionId: null,
@@ -318,6 +320,7 @@ export interface LifecycleCommands {
 }
 
 export interface LifecycleTransactionCommands extends LifecycleCommands {
+  prepareFromAssessment(input: ReviewToReadyInput & { assessmentId: string; fingerprint: string }): SalesCycle;
   closeForOptOut(input: CloseForOptOutInput): CloseForOptOutResult;
 }
 
@@ -332,6 +335,7 @@ export type LifecycleWriterDependencies = Readonly<{
   ids: IdGenerator;
   timezone: string;
   policies: ChannelPolicySnapshots;
+  discoveryRepository?: DiscoveryRepository;
 }>;
 
 export class LifecycleTransactionWriter implements LifecycleTransactionCommands {
@@ -350,6 +354,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
   private readonly enrollments: CadenceEnrollmentRepository;
   private readonly reactivations: ReactivationRepository;
   private readonly reviews: LifecycleReviewRepository;
+  private readonly discoveryRepository: DiscoveryRepository | undefined;
 
   constructor(input: LifecycleWriterDependencies) {
     if (input.database.raw !== input.unitOfWork.database.raw) {
@@ -359,6 +364,8 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     input.events.assertBoundTo(input.database, input.unitOfWork);
     input.sources.assertBoundTo(input.database, input.unitOfWork);
     input.cadences.assertBoundTo(input.database, input.unitOfWork);
+    input.discoveryRepository?.assertBoundTo(input.database, input.unitOfWork);
+    this.discoveryRepository = input.discoveryRepository;
     this.database = input.database;
     this.unitOfWork = input.unitOfWork;
     this.identities = input.identities;
@@ -394,13 +401,19 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     ) throw new LifecycleEligibilityError();
     const cycleId = this.ids.next();
     const eventId = this.ids.next();
-    // Unreviewed cycles get NO next action: reviewing the lead is the
-    // inspector flow, never generated work (no-due-dates model).
+    // Internal review is dated system work, not an additional prospecting touch.
     const cycle = this.cycles.insertCycleWithDeferredAction({
       id: cycleId, personId: person.id, prospectId: prospect.id,
       entrySourceEventId: parsed.entrySourceEventId, stage: 'unreviewed',
-      workflowStatus: 'active', currentNextActionId: null,
+      workflowStatus: 'active', currentNextActionId: `${cycleId}:review`,
       stageEnteredAt: effectiveAt, createdAt: effectiveAt,
+    });
+    this.actions.insertNextAction({
+      id: `${cycleId}:review`, salesCycleId: cycleId, actionType: 'review_lead', channel: null,
+      status: 'pending', timezone: this.timezone, allowedWindow: null, dueAt: effectiveAt, dueSource: 'internal_review',
+      workIntent: 'internal_review', inboundSla: noneInboundSla(),
+      cadence: { cadenceEnrollmentId: null, cadenceDefinitionId: null, cadenceStepId: null, cadenceComponentId: null },
+      createdAt: effectiveAt,
     });
     this.events.appendStageEvent({
       id: eventId, salesCycleId: cycle.id, fromStage: null, toStage: 'unreviewed',
@@ -414,12 +427,36 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
   reviewToReady(input: ReviewToReadyInput): SalesCycle {
     this.unitOfWork.assertWriteScope();
     const parsed = reviewToReadySchema.parse(input);
+    return this.writeReady(parsed, { kind: 'founder', reason: 'Founder reviewed' });
+  }
+
+  prepareFromAssessment(input: ReviewToReadyInput & { assessmentId: string; fingerprint: string }): SalesCycle {
+    this.unitOfWork.assertWriteScope();
+    const parsed = reviewToReadySchema.extend({ assessmentId: discoveryAssessmentSchema.shape.id,
+      fingerprint: discoveryAssessmentSchema.shape.fingerprint }).parse(input);
+    const cycle = this.cycles.getById(parsed.cycleId);
+    const assessment = cycle === null ? null : this.discoveryRepository?.getCurrent(cycle.prospectId);
+    if (!assessment || !cycle || assessment.id !== parsed.assessmentId || assessment.fingerprint !== parsed.fingerprint
+      || assessment.personId !== cycle.personId || assessment.prospectId !== cycle.prospectId
+      || assessment.salesCycleId !== cycle.id || assessment.disposition !== 'candidate' || !assessment.identitySupported
+      || assessment.evaluatedAt > parsed.effectiveAt || assessment.expiresAt <= parsed.effectiveAt) {
+      throw new LifecycleEligibilityError('A current matching discovery assessment is required.');
+    }
+    const override = this.discoveryRepository!.overrideForFingerprint(cycle.prospectId, parsed.fingerprint);
+    if (assessment.overrideId !== (override?.id ?? null) || (override !== null
+      && (override.createdAt > parsed.effectiveAt || (!override.evidenceChanged && override.decision !== 'reconsider')))) {
+      throw new LifecycleEligibilityError('Founder discovery decision takes precedence.');
+    }
+    return this.writeReady(parsed, { kind: 'mechanical', reason: `Discovery assessment ${assessment.id}` });
+  }
+
+  private writeReady(parsed: ReviewToReadyInput, provenance: { kind: 'founder' | 'mechanical'; reason: string }): SalesCycle {
     const effectiveAt = parsed.effectiveAt;
     const cycle = this.cycles.getById(parsed.cycleId);
     if (
       cycle === null || cycle.version !== parsed.expectedCycleVersion
       || cycle.stage !== 'unreviewed' || cycle.workflowStatus !== 'active'
-      || cycle.currentNextActionId !== null
+      || cycle.currentNextActionId === null
     ) throw new LifecycleConflictError('Expected lifecycle projection is stale.');
     this.assertTransitionEvidenceTimes(cycle, effectiveAt, effectiveAt, null);
     const prospect = this.identities.getCanonicalProspect(cycle.personId);
@@ -460,6 +497,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     this.actions.insertNextAction({
       id: nextActionId, salesCycleId: cycle.id, actionType: draft.actionType,
       channel: draft.channel, status: 'pending',
+      dueAt: draft.dueAt,
       timezone: draft.timezone, allowedWindow: draft.allowedWindow,
       workIntent: 'discretionary_prospecting',
       inboundSla: { kind: 'none', dueAt: null, sourceEventId: null, provenance: null },
@@ -469,17 +507,18 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       prospectId: prospect.id, personId: prospect.personId,
       expectedVersion: prospect.version, expectedState: 'unreviewed', nextState: 'eligible',
       qualificationGateReason: null,
-      reason: 'Founder reviewed', updatedAt: effectiveAt,
+      reason: provenance.reason, updatedAt: effectiveAt,
     });
     const transitioned = this.cycles.transitionOpenProjection({
       cycleId: cycle.id, expectedVersion: cycle.version, expectedStage: 'unreviewed',
-      expectedWorkflowStatus: 'active', expectedCurrentActionId: null,
+      expectedWorkflowStatus: 'active', expectedCurrentActionId: cycle.currentNextActionId,
       nextStage: 'ready', nextWorkflowStatus: 'active', nextActionId,
       stageEnteredAt: effectiveAt,
     });
+    this.settleReplacedAction(this.requireCurrentAction(cycle), 'reviewed_ready', null, effectiveAt);
     this.events.appendStageEvent({
       id: eventId, salesCycleId: cycle.id, fromStage: 'unreviewed', toStage: 'ready',
-      effectiveAt, confirmedAt: effectiveAt, confirmationKind: 'founder',
+      effectiveAt, confirmedAt: effectiveAt, confirmationKind: provenance.kind,
       transitionSequence: 2,
     });
     this.cycles.assertCurrentActionPostcondition(cycle.id);
@@ -610,6 +649,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     this.actions.insertNextAction({
       id: actionId, salesCycleId: cycle.id, actionType: draft.actionType,
       channel: draft.channel, status: 'pending',
+      dueAt: draft.dueAt,
       timezone: draft.timezone, allowedWindow: draft.allowedWindow,
       workIntent: 'promised_follow_up',
       inboundSla: noneInboundSla(), cadence, createdAt: parsed.effectiveAt,
@@ -852,6 +892,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
           ...expectedIntentAndSla(action),
           expectedCadence: action.cadence,
           updatedAt: parsed.evaluationAt,
+          dueAt: recipe.nextAction.dueAt,
           timezone: recipe.nextAction.timezone, allowedWindow: recipe.nextAction.allowedWindow,
           cadence: action.cadence,
         });
@@ -871,6 +912,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       this.actions.insertNextAction({
         id: nextActionId, salesCycleId: cycle.id, actionType: draft.actionType,
         channel: draft.channel, status: 'pending',
+        dueAt: draft.dueAt,
         timezone: draft.timezone, allowedWindow: draft.allowedWindow,
         ...intentAndSla,
         cadence: binding, createdAt: parsed.evaluationAt,
@@ -1294,6 +1336,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     this.actions.insertNextAction({
       id: nextActionId, salesCycleId: cycle.id, actionType: draft.actionType,
       channel: draft.channel, status: 'pending',
+      dueAt: draft.dueAt,
       timezone: draft.timezone, allowedWindow: draft.allowedWindow,
       ...intentAndSla,
       cadence: cadenceBinding(newEnrollmentId, draft), createdAt: parsed.evaluationAt,
@@ -1597,6 +1640,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     this.actions.insertNextAction({
       id: actionId, salesCycleId: input.newCycleId, actionType: draft.actionType,
       channel: draft.channel, status: 'pending',
+      dueAt: draft.dueAt,
       timezone: draft.timezone, allowedWindow: draft.allowedWindow,
       ...intentAndSla, cadence: cadenceBinding(enrollmentId, draft), createdAt: input.activatedAt,
     });
@@ -1687,6 +1731,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     this.actions.insertNextAction({
       id: actionId, salesCycleId: input.cycle.id, actionType: draft.actionType,
       channel: draft.channel, status: 'pending',
+      dueAt: draft.dueAt,
       timezone: draft.timezone, allowedWindow: draft.allowedWindow,
       workIntent: 'promised_follow_up',
       inboundSla: noneInboundSla(), cadence, createdAt: input.effectiveAt,
@@ -1961,6 +2006,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     this.actions.insertNextAction({
       id: nextActionId, salesCycleId: input.cycle.id, actionType: input.actionType,
       channel: null, status: 'pending',
+      dueAt: input.evaluationAt, dueSource: 'internal_review',
       timezone: this.timezone, allowedWindow: null,
       workIntent: input.workIntent, inboundSla: noneInboundSla(),
       cadence: NO_CADENCE, createdAt: input.evaluationAt,

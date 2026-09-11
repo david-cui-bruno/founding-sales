@@ -105,7 +105,7 @@ export function TodayLane({
   const headingId = `today-lane-${laneId}`;
   const listId = `today-lane-${laneId}-rows`;
 
-  if (rows.length === 0 && totalCount === 0) {
+  if (rows.length === 0 && totalCount === 0 && overflowCount === 0) {
     return null;
   }
 

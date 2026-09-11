@@ -20,6 +20,10 @@ const scenarios = [
   'creation-fchmod-failure',
   'creation-fstat-failure',
   'creation-fstat-unrecoverable',
+  'schema-15-to-16-recovery-preservation',
+  'schema-16-to-17-recovery-preservation',
+  'schema-17-to-19-recovery-preservation',
+  'schema-18-to-19-recovery-preservation',
 ] as const;
 
 let bundleDirectory: string;

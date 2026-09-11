@@ -33,6 +33,7 @@ export type TodayCapacity = {
 
 export type TodayLaneReason =
   | 'won_onboarding'
+  | 'warm_priority'
   | 'inbound_inside_sla'
   | 'inbound_response_waiting'
   | 'cadence_step_next'
@@ -75,7 +76,11 @@ export type TodayDiagnostic = {
   relatedIds: readonly string[];
 };
 
+export type TodayCommitment = { kind: 'callback'; activityId: string; dueAt: string } | { kind: 'post_stage' };
+
 export type TodayItem = {
+  segment?: 'hot' | 'cold' | 'warm';
+  commitment?: TodayCommitment | null;
   cycleId: string;
   personId: string;
   prospectId: string;
@@ -83,6 +88,7 @@ export type TodayItem = {
   deferredFrom: Exclude<TodayLane, 'later'> | null;
   laneReason: TodayLaneReason;
   action: {
+    dueAt?: string;
     id: string;
     workIntent: NextActionWorkIntent;
     actionType: string;
@@ -138,7 +144,7 @@ export type TodayQueue = {
   }>;
   suppressed: readonly {
     cycleId: string;
-    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled';
+    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active';
   }[];
   diagnostics: readonly TodayDiagnostic[];
 };
@@ -151,6 +157,7 @@ export type ParsedTodayCandidate =
   };
 
 export type TodayEvaluationContext = {
+  hasActiveWarm?: boolean;
   generatedAt: string;
   timezone: string;
   localDayStartAt: string;
@@ -168,7 +175,7 @@ export type TodayPreCapacityDisposition =
   | {
       kind: 'suppressed';
       cycleId: string;
-      reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled';
+      reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active';
     }
   | { kind: 'diagnostic'; diagnostic: TodayDiagnostic };
 

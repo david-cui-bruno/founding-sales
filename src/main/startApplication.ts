@@ -1,5 +1,13 @@
+import { createEmailService } from './outreach/emailService';
+import { createOutreachProviders } from './outreach/providers/outreachProviders';
+import { registerOutreachIpc } from './ipc/registerOutreachIpc';
+import { createDiscoveryWorker, type DiscoveryWorker } from './discovery/discoveryWorker';
+import { unavailableDiscoveryResearch } from './discovery/discoveryResearchPort';
+import { resolveApplicationPaths } from './applicationPaths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { RecoveryService, type RecoveryServiceOptions, type RecoveryDialogs } from './recovery/recoveryService';
+import type { RecoveryProvider } from '../shared/contracts/recoveryContract';
 
 import {
   AppleBridgeSupervisor,
@@ -11,6 +19,8 @@ import {
   type AppleSpikeServiceApi,
 } from './appleBridge/appleSpikeService';
 import { registerAppleSpikeIpc } from './appleBridge/registerAppleSpikeIpc';
+import { BackupService, type BackupServiceOptions } from './backup/backupService';
+import type { VerifiedBackup } from './backup/verifiedBackup';
 import { closeDatabase, openDatabase } from './db/database';
 import { migrateToLatest } from './db/migrate';
 import { DomainRuntime } from './domain/domainRuntime';
@@ -42,20 +52,31 @@ import {
   UpstreamSync,
   type UpstreamObjectStore,
 } from './sourcing/upstreamSync';
-import { safeStorage } from 'electron';
+import { safeStorage, dialog, shell } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
 import type { SafeLogger } from './logging/safeLogger';
+import { createOutboundCommandService } from './communications/outboundCommandService';
+import { unavailablePhoneHandoff, unavailableOutboundReadiness } from './communications/phoneHandoffLauncher';
+import type { OutboundCommandServiceApi, OutboundDomainGate } from './communications/outboundPorts';
 
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
+  createEmailService?(runtime:FoundationRuntime,userDataPath:string):ReturnType<typeof createEmailService>;
+  registerOutreachIpc?:typeof registerOutreachIpc;
+  createDiscoveryWorker?: typeof createDiscoveryWorker;
+  createOutboundCommandService?: typeof createOutboundCommandService;
+  createBackupService?(options: BackupServiceOptions): Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'>;
+  createRecoveryService?(options: RecoveryServiceOptions): RecoveryProvider & { shutdown(): Promise<void> };
   registerApplicationIpc(
     runtime: FoundationRuntime,
     isTrustedRendererUrl: ((url: string) => boolean) | undefined,
     registrars: undefined,
     sourcingProvider: SourcingProvider,
+    recoveryProvider: RecoveryProvider,
     shellProvider?: undefined,
     enrichmentRequester?: EnrichmentRequester,
     logDirectoryPath?: string,
+    outbound?: OutboundCommandServiceApi,
   ): () => void;
   createEnrichmentRequester?(
     runtime: FoundationRuntime,
@@ -91,11 +112,17 @@ export type ApplicationStartupOptions = {
   sourcingPollingEnabled?: boolean;
   logger?: SafeLogger;
   logDirectoryPath?: string;
+  registerOutboundLifecycle?(callbacks: {
+    onWake(): void;
+    onLock(): void;
+    onUnlock(): void;
+  }): () => void;
   createWindow(): void | Promise<void>;
 };
 
 export type RunningApplication = {
   databasePath: string;
+  createPreReleaseBackup(): Promise<VerifiedBackup>;
   shutdown(): Promise<void>;
 };
 
@@ -271,6 +298,9 @@ const defaultDependencies: ApplicationStartupDependencies = {
   }),
   createHealthService: (options) => new HealthService(options),
   registerApplicationIpc,
+  registerOutreachIpc,
+  createEmailService: (runtime,userDataPath) => createEmailService({databaseGate:runtime,
+    providers:createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)})}),
   createSourcingPoller: createProductionSourcingPoller,
   createEnrichmentRequester: createProductionEnrichmentRequester,
   createAppleBridgeSupervisor: (options) => new AppleBridgeSupervisor(options),
@@ -282,31 +312,89 @@ export async function startApplication(
   options: ApplicationStartupOptions,
   dependencies: ApplicationStartupDependencies = defaultDependencies,
 ): Promise<RunningApplication> {
-  const databasePath = join(options.userDataPath, 'callie.sqlite3');
-  const keyEnvelopePath = join(options.userDataPath, 'callie.key-envelope.json');
+  const { databasePath, keyEnvelopePath, backupDirectory } = resolveApplicationPaths(options.userDataPath);
   const runtime = new FoundationRuntime(
     {
       appVersion: options.appVersion,
-      backupDirectory: join(options.userDataPath, 'backups'),
+      backupDirectory,
       databasePath,
       databaseExists: encryptedWorkspaceExists(databasePath),
       keyEnvelopePath,
     },
     dependencies,
   );
+  let email:ReturnType<typeof createEmailService>|undefined;
+  let unregisterEmail:(()=>void)|undefined;
   let unregisterApplicationIpc: (() => void) | undefined;
   let unregisterAppleSpikeIpc: (() => void) | undefined;
   let appleBridgeSupervisor: AppleBridgeSupervisorApi | undefined;
   let sourcingPoller: SourcingPoller | undefined;
+  let backupService: Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'> | undefined;
+  let recoveryService: (RecoveryProvider & { shutdown(): Promise<void> }) | undefined;
   let shutdownPromise: Promise<void> | undefined;
+  let outbound: OutboundCommandServiceApi | undefined;
+  let unregisterOutboundLifecycle: (() => void) | undefined;
+  let removeStartupAbort: (() => void) | undefined;
+  let discoveryWorker: DiscoveryWorker | undefined;
+  let discoveryClosed = false;
+  let outboundClosed = false;
+  const cleanupErrors: unknown[] = [];
+
+  const closeDiscovery = (): void => {
+    if (discoveryClosed) return;
+    discoveryClosed = true;
+    try { discoveryWorker?.stop(); } catch (error) { cleanupErrors.push(error); }
+  };
+  const abortStartup = (): void => { closeDiscovery(); closeOutbound(); };
+  const detachOutboundLifecycle = (): void => {
+    const unregister = unregisterOutboundLifecycle;
+    unregisterOutboundLifecycle = undefined;
+    try { unregister?.(); } catch (error) { cleanupErrors.push(error); }
+  };
+  const detachStartupAbort = (): void => {
+    const remove = removeStartupAbort;
+    removeStartupAbort = undefined;
+    remove?.();
+  };
+  const closeOutbound = (): void => {
+    if (outboundClosed) return;
+    // Reserve permanent owner closure before any injected callback can reenter.
+    outboundClosed = true;
+    try { email?.dispose(); } catch (error) { cleanupErrors.push(error); }
+    try { outbound?.dispose(); } catch (error) { cleanupErrors.push(error); }
+    detachOutboundLifecycle();
+    try { detachStartupAbort(); } catch (error) { cleanupErrors.push(error); }
+  };
 
   const shutdown = (): Promise<void> => {
     if (shutdownPromise !== undefined) {
       return shutdownPromise;
     }
 
-    shutdownPromise = (async () => {
-      const cleanupErrors: unknown[] = [];
+    // Memoize before disposal/listener callbacks, without deferring admission
+    // closure to a microtask. Reentrant callers share this exact completion.
+    let resolveShutdown!: () => void;
+    let rejectShutdown!: (error: unknown) => void;
+    shutdownPromise = new Promise<void>((resolve, reject) => {
+      resolveShutdown = resolve; rejectShutdown = reject;
+    });
+    closeDiscovery();
+    closeOutbound();
+    void (async () => {
+      // Preserve recovery, backup, sourcing, IPC, helper and Foundation ownership.
+      let recoveryCleanup: Promise<void> | undefined;
+      try {
+        recoveryCleanup = recoveryService?.shutdown();
+        void recoveryCleanup?.catch((): undefined => undefined);
+      } catch (error) { cleanupErrors.push(error); }
+      // Stop both periodic owners before awaiting either one's asynchronous work.
+      let backupCleanup: Promise<void> | undefined;
+      try {
+        backupCleanup = backupService?.shutdown();
+        void backupCleanup?.catch((): undefined => undefined);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
 
       try {
         sourcingPoller?.stop();
@@ -317,6 +405,21 @@ export async function startApplication(
         sourcingPoller = undefined;
       }
 
+      try { await discoveryWorker?.idle(); } catch (error) { cleanupErrors.push(error); }
+      finally { discoveryWorker = undefined; }
+
+      try {
+        await backupCleanup;
+      } catch (error) {
+        cleanupErrors.push(error);
+      } finally {
+        backupService = undefined;
+      }
+
+      try { await recoveryCleanup; } catch (error) { cleanupErrors.push(error); }
+      finally { recoveryService = undefined; }
+
+      try { unregisterEmail?.(); } catch(error) { cleanupErrors.push(error); } finally { unregisterEmail=undefined; }
       try {
         unregisterApplicationIpc?.();
       } catch (error) {
@@ -356,7 +459,7 @@ export async function startApplication(
       if (cleanupErrors.length === 1) {
         throw cleanupErrors[0];
       }
-    })();
+    })().then(resolveShutdown, rejectShutdown);
 
     return shutdownPromise;
   };
@@ -364,6 +467,48 @@ export async function startApplication(
   try {
     throwIfStartupCancelled(options.signal);
     await runtime.initialize();
+    throwIfStartupCancelled(options.signal);
+    const domain: OutboundDomainGate = {
+      withDomain: (operation) => runtime.withDomain((current) => operation({
+        inspectOutboundCommand: (request) => current.inspectOutboundCommand(request),
+        prepareOutboundDispatch: (request) => current.prepareOutboundDispatch(request),
+        recordOutboundResult: (request, result) => current.recordOutboundResult(request, result),
+        recordOutboundRefusal: (request, reason) => current.recordOutboundRefusal(request, reason),
+      })),
+    };
+    outbound = (dependencies.createOutboundCommandService ?? createOutboundCommandService)({
+      domain, phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(),
+    });
+    email = dependencies.createEmailService?.(runtime,options.userDataPath);
+    if(outboundClosed)email?.dispose();
+    if (options.signal !== undefined) {
+      const signal = options.signal;
+      removeStartupAbort = () => signal.removeEventListener('abort', abortStartup);
+      signal.addEventListener('abort', abortStartup, { once: true });
+      if (signal.aborted) abortStartup();
+      throwIfStartupCancelled(signal);
+    }
+    unregisterOutboundLifecycle = options.registerOutboundLifecycle?.({
+      onWake: () => { if (!outboundClosed) {email?.invalidate();outbound.invalidate('wake');} },
+      onLock: () => { if (!outboundClosed) {email?.invalidate(true);outbound.invalidate('lock');} },
+      onUnlock: () => {
+        if (outboundClosed) return;
+        email?.invalidate(false);
+        outbound.invalidate('wake');
+        if (!outboundClosed) outbound.resumeAfterUnlock();
+      },
+    });
+    // A registrar can synchronously abort before returning its owned disposer.
+    if (outboundClosed) detachOutboundLifecycle();
+    throwIfStartupCancelled(options.signal);
+    discoveryWorker = (dependencies.createDiscoveryWorker ?? createDiscoveryWorker)({
+      domainGate: runtime, clock: domainClock, research: unavailableDiscoveryResearch,
+      schedule: (run, delay) => { const timer = setTimeout(run, delay); timer.unref(); return () => clearTimeout(timer); },
+    });
+    // An injected factory can synchronously abort before handing back ownership.
+    if (discoveryClosed) discoveryWorker.stop();
+    throwIfStartupCancelled(options.signal);
+    discoveryWorker.start();
     throwIfStartupCancelled(options.signal);
     if (typeof dependencies.createSourcingPoller !== 'function') {
       throw new Error('Sourcing poller dependency is required.');
@@ -378,6 +523,25 @@ export async function startApplication(
     }
     const startedPoller = sourcingPoller;
     runtime.setSourcingHealthProvider(() => startedPoller.getHealth());
+    const backupOptions: BackupServiceOptions = {
+      databaseGate: runtime,
+      backupDirectory: join(options.userDataPath, 'backups'),
+      // Initialization has created/migrated the database. A missing envelope
+      // must never generate a replacement key for an existing workspace.
+      loadWorkspaceKey: () => dependencies.loadWorkspaceKey({ envelopePath: keyEnvelopePath, databaseExists: true }),
+      clock: domainClock,
+      ids: domainIds,
+    };
+    backupService = dependencies.createBackupService?.(backupOptions) ?? new BackupService(backupOptions);
+    // Key loading must not hold window startup. The service retains a safe
+    // failure code and retries at the next hourly due check.
+    void backupService.start().catch((): undefined => undefined);
+    const recoveryOptions: RecoveryServiceOptions = {
+      databaseGate: runtime, backups: backupService, liveDatabasePath: databasePath,
+      loadWorkspaceKey: backupOptions.loadWorkspaceKey, clock: domainClock, ids: domainIds,
+      dialogs: createRecoveryDialogs(backupOptions.backupDirectory),
+    };
+    recoveryService = dependencies.createRecoveryService?.(recoveryOptions) ?? new RecoveryService(recoveryOptions);
     unregisterApplicationIpc = dependencies.registerApplicationIpc(
       runtime,
       options.isTrustedRendererUrl,
@@ -397,6 +561,7 @@ export async function startApplication(
           return startedPoller.getStatus();
         },
       },
+      recoveryService,
       undefined,
       dependencies.createEnrichmentRequester?.(
         runtime,
@@ -404,7 +569,9 @@ export async function startApplication(
         options.logger,
       ),
       options.logDirectoryPath,
+      outbound,
     );
+    if(email)unregisterEmail=(dependencies.registerOutreachIpc??registerOutreachIpc)({provider:email,isTrustedRendererUrl:options.isTrustedRendererUrl});
     throwIfStartupCancelled(options.signal);
     if (options.sourcingPollingEnabled === true && sourcingPoller !== undefined) {
       const timer: PollTimer = {
@@ -439,8 +606,18 @@ export async function startApplication(
     }
     await options.createWindow();
     throwIfStartupCancelled(options.signal);
+    detachStartupAbort();
 
-    return { databasePath, shutdown };
+    return {
+      databasePath,
+      createPreReleaseBackup: async () => {
+        if (shutdownPromise !== undefined || backupService === undefined) {
+          throw new Error('Application backups are unavailable.');
+        }
+        return backupService.createBackup('pre_release');
+      },
+      shutdown,
+    };
   } catch (startupError) {
     try {
       await shutdown();
@@ -448,6 +625,7 @@ export async function startApplication(
       throw new AggregateError(
         [startupError, cleanupError],
         'Application startup and cleanup both failed.',
+        { cause: startupError },
       );
     }
 
@@ -459,4 +637,21 @@ function throwIfStartupCancelled(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     throw new ApplicationStartupCancelledError();
   }
+}
+
+function createRecoveryDialogs(backupDirectory: string): RecoveryDialogs {
+  return {
+    saveMaterial: async () => {
+      const result = await dialog.showSaveDialog({ title: 'Save private recovery material', defaultPath: 'callie-recovery.txt', filters: [{ name: 'Recovery material', extensions: ['txt'] }] });
+      return result.canceled ? null : result.filePath ?? null;
+    },
+    selectBackup: async () => {
+      const result = await dialog.showOpenDialog({ title: 'Select a verified Callie backup', defaultPath: backupDirectory, properties: ['openFile'], filters: [{ name: 'Encrypted backup', extensions: ['sqlite3'] }] });
+      return result.canceled ? null : result.filePaths[0] ?? null;
+    },
+    selectMaterial: async () => {
+      const result = await dialog.showOpenDialog({ title: 'Select your saved private recovery material', properties: ['openFile'], filters: [{ name: 'Recovery material', extensions: ['txt'] }] });
+      return result.canceled ? null : result.filePaths[0] ?? null;
+    },
+  };
 }

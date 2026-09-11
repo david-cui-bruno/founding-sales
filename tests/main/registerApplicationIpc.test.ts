@@ -1,17 +1,29 @@
+import type { DiscoveryBrief, DiscoverySnapshot } from '../../src/shared/contracts/discoveryContract';
 import { describe, expect, it, vi } from 'vitest';
 
 const electron = vi.hoisted(() => ({
   showItemInFolder: vi.fn(),
+  handle: vi.fn(), removeHandler: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
   shell: { showItemInFolder: electron.showItemInFolder },
+  safeStorage: {}, dialog: {}, ipcMain: { handle: electron.handle, removeHandler: electron.removeHandler },
 }));
 
 import type { FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import type { AppHealth } from '../../src/shared/healthContract';
 import type { SourcingStatus } from '../../src/shared/contracts/sourcingContract';
 import type { SourcingProvider } from '../../src/main/sourcing/registerSourcingIpc';
+import { startApplication, type ApplicationStartupDependencies } from '../../src/main/startApplication';
+import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
+import type { AppDatabase } from '../../src/main/db/database';
+import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
+import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
+import type { OutboundCommandServiceApi } from '../../src/main/communications/outboundPorts';
+import { registeredIpcHandler } from '../fixtures/registeredIpcHandler';
+import { createCallieApi } from '../../src/preload/createCallieApi';
+import { registerLeadDetailIpc } from '../../src/main/leads/registerLeadDetailIpc';
 import {
   createConversationsProvider,
   createFridayProvider,
@@ -26,6 +38,8 @@ import {
   registerApplicationIpc,
   type FeatureRegistrars,
 } from '../../src/main/ipc/registerApplicationIpc';
+
+const recoveryProvider = { status: vi.fn(), beginSetup: vi.fn(), saveSetupMaterial: vi.fn(), completeSetup: vi.fn(), selectAndRunRestoreDrill: vi.fn() };
 
 type Gate = Parameters<typeof registerApplicationIpc>[0];
 
@@ -99,21 +113,180 @@ describe('registerApplicationIpc', () => {
       registerLearningsIpc: track('learnings', unregisters[9]!),
       registerSourcingIpc: track('sourcing', unregisters[10]!),
       registerShellIpc: track('shell', unregisters[11]!),
+      registerRecoveryIpc: track('recovery', unregisters[12]!),
+      registerDiscoveryIpc: track('discovery', unregisters[13]!),
     } as unknown as FeatureRegistrars;
     return { registrars, calls };
   }
 
-  it('registers all twelve feature slices and unregisters each exactly once', () => {
-    const unregisters = Array.from({ length: 12 }, () => vi.fn());
+  it.each(['outer', 'nested'] as const)('startup consumes accepted %s IPC rollback and closes outbound despite cleanup errors', async (failureAt) => {
+    const handlers = new Set<string>(); const features = new Set<string>(); const listeners = new Set<() => void>();
+    const registrationError = new Error('registration'); const cleanupError = new Error('cleanup');
+    const { registrars } = fakeRegistrars([]);
+    for (const name of Object.keys(registrars) as (keyof FeatureRegistrars)[]) {
+      registrars[name] = vi.fn(() => {
+        if (failureAt === 'outer' && name === 'registerTodayIpc') throw registrationError;
+        features.add(name);
+        return () => { features.delete(name); if (name === 'registerHealthIpc') throw cleanupError; };
+      });
+    }
+    registrars.registerLeadDetailIpc = registerLeadDetailIpc;
+    electron.handle.mockReset().mockImplementation((channel: string) => {
+      if (failureAt === 'nested' && channel === 'lead-detail:outbound-capabilities') throw registrationError;
+      handlers.add(channel);
+    });
+    electron.removeHandler.mockReset().mockImplementation((channel: string) => { handlers.delete(channel); });
+    let service!: OutboundCommandServiceApi;
+    const dispose = vi.fn(); const close = vi.fn(); const window = vi.fn();
+    const dependencies: ApplicationStartupDependencies = {
+      loadWorkspaceKey: async () => ({ bytes: Buffer.alloc(32, 0x2a), version: 1 }),
+      prepareEncryptedDatabase: async () => undefined,
+      openDatabase: () => ({ path: '/fixture/rollback' }) as AppDatabase,
+      migrateToLatest: async () => ({ fromVersion: 0, toVersion: 2, appliedMigrationIds: [] }),
+      createDomainRuntime: () => fakeDomainRuntime(), createHealthService: () => ({ getHealth: () => degradedHealth }),
+      createSourcingPoller: () => ({ getHealth: () => degradedHealth.sourcing, stop: (): void => undefined,
+        idle: async (): Promise<void> => undefined }) as unknown as SourcingPoller,
+      createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined,
+        listAvailableBackups: async () => [], createBackup: async () => { throw new Error('unexpected backup'); } }),
+      createRecoveryService: () => ({ ...recoveryProvider, shutdown: async () => undefined }),
+      createOutboundCommandService: (input) => { service = createOutboundCommandService(input); dispose.mockImplementation(() => service.dispose()); return { ...service, dispose }; },
+      registerApplicationIpc: (runtime, trust, _unused, sourcing, recovery, shell, enrichment, logs, outbound) =>
+        registerApplicationIpc(runtime, trust, registrars, sourcing, recovery, shell, enrichment, logs, outbound),
+      createAppleBridgeSupervisor: () => { throw new Error('unexpected helper'); }, closeDatabase: close,
+    };
+    const error = await startApplication({ appVersion: '1', userDataPath: '/fixture/rollback', createWindow: window,
+      registerOutboundLifecycle: (owned) => { Object.values(owned).forEach((callback) => listeners.add(callback)); return () => listeners.clear(); },
+    }, dependencies).catch((caught: unknown) => caught) as AggregateError;
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error.cause).toBe(registrationError);
+    expect(error.errors).toEqual([registrationError, cleanupError]);
+    expect(handlers.size).toBe(0); expect(features.size).toBe(0); expect(listeners.size).toBe(0);
+    expect(dispose).toHaveBeenCalledTimes(1); expect(close).toHaveBeenCalledTimes(1); expect(window).not.toHaveBeenCalled();
+    expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
+  });
+
+  it.each([3, 7, 13, 14])('rolls back all successful outer registrations when registrar %s fails', (nth) => {
+    const registry = new Set<string>();
+    const order: string[] = [];
+    const registrationError = new Error('register');
+    const cleanupError = new Error('cleanup');
+    const { registrars } = fakeRegistrars([]);
+    let index = 0;
+    for (const name of Object.keys(registrars) as (keyof FeatureRegistrars)[]) {
+      const position = ++index;
+      registrars[name] = vi.fn(() => {
+        if (position === nth) throw registrationError;
+        registry.add(name);
+        return () => {
+          registry.delete(name);
+          order.push(name);
+          if (position === 1) throw cleanupError;
+        };
+      });
+    }
+    let caught: unknown;
+    try { registerApplicationIpc(fakeGate(), undefined, registrars, explicitSourcingProvider(), recoveryProvider); } catch (error) { caught = error; }
+    expect(caught).toBeInstanceOf(AggregateError);
+    expect((caught as AggregateError).errors).toEqual([registrationError, cleanupError]);
+    expect(registry.size).toBe(0);
+    expect(order).toEqual(Object.keys(registrars).slice(0, nth - 1).reverse());
+  });
+
+  it('cleans every owned outer handler in reverse and is idempotent after errors', () => {
+    const registry = new Set<string>();
+    const order: string[] = [];
+    const { registrars } = fakeRegistrars([]);
+    for (const name of Object.keys(registrars) as (keyof FeatureRegistrars)[]) {
+      registrars[name] = vi.fn(() => {
+        registry.add(name);
+        return () => { registry.delete(name); order.push(name); if (name === 'registerRecoveryIpc') throw new Error('cleanup'); };
+      });
+    }
+    const dispose = registerApplicationIpc(fakeGate(), undefined, registrars, explicitSourcingProvider(), recoveryProvider);
+    expect(dispose).toThrow();
+    expect(registry.size).toBe(0);
+    expect(order).toEqual(Object.keys(registrars).reverse());
+    expect(dispose).not.toThrow();
+    expect(order).toHaveLength(14);
+  });
+
+  it('leases the current domain separately for every actual discovery handler invocation', async () => {
+    electron.handle.mockReset(); electron.removeHandler.mockReset();
+    const snapshot: DiscoverySnapshot = { prepared: [], judgment: [], counts: { unassessed: 1, research: 0, watch: 0, excluded: 0 },
+      processing: 'idle' as const, researchCapability: 'not_configured' as const, generatedAt: '2026-09-06T12:00:00.000Z', revision: 0 };
+    const brief: DiscoveryBrief = { personId: 'p', salesCycleId: 's', personName: 'Synthetic Owner', assessment: null,
+      stale: false, latestOverride: null, pilotNextStep: null };
+    const request = { commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', personId: 'p', salesCycleId: 's',
+      assessmentId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', expectedFingerprint: 'a'.repeat(64) };
+    const mutation = { revision: 1, affectedPersonIds: ['p'], affectedSalesCycleIds: ['s'] };
+    const receipt = { mutation, personId: 'p', salesCycleId: 's', assessmentId: request.assessmentId, actionId: 'a' };
+    let current: Partial<FounderSalesDomain> = { getDiscovery: () => snapshot };
+    const gate: Gate = { getHealth: vi.fn(), withDomain: vi.fn(async operation => operation(current as FounderSalesDomain)) };
+    const dispose = registerApplicationIpc(gate, undefined, undefined, explicitSourcingProvider(), recoveryProvider);
+    expect(gate.withDomain).not.toHaveBeenCalled();
+    const api = createCallieApi({ invoke: (channel, ...args) => Promise.resolve(
+      registeredIpcHandler(electron.handle, channel)({ senderFrame: { url: 'callie://app/index.html' } }, ...args)) });
+    await expect(api.discovery.get()).resolves.toEqual(snapshot);
+    current = { getDiscoveryBrief: personId => { expect(personId).toBe('p'); return brief; } };
+    await expect(api.discovery.getBrief({ personId: 'p' })).resolves.toEqual(brief);
+    current = { beginDiscovery: input => { expect(input).toEqual(request); return receipt; } };
+    await expect(api.discovery.begin(request)).resolves.toEqual(receipt);
+    const override = { commandId: request.commandId, personId: 'p', assessmentId: request.assessmentId,
+      expectedFingerprint: request.expectedFingerprint, decision: 'watch' as const, reason: 'Founder context' };
+    current = { overrideDiscovery: input => { expect(input).toEqual(override); return mutation; } };
+    await expect(api.discovery.override(override)).resolves.toEqual(mutation);
+    expect(gate.withDomain).toHaveBeenCalledTimes(4);
+    dispose();
+  });
+
+  it('rolls back prior application handlers if discovery registration partially fails', () => {
+    const handlers = new Set(['unrelated']); const failure = new Error('discovery registration');
+    electron.handle.mockReset().mockImplementation((channel: string) => {
+      if (channel === 'discovery:begin') throw failure;
+      handlers.add(channel);
+    });
+    electron.removeHandler.mockReset().mockImplementation((channel: string) => { handlers.delete(channel); });
+    expect(() => registerApplicationIpc(fakeGate(), undefined, undefined, explicitSourcingProvider(), recoveryProvider)).toThrow(failure);
+    expect([...handlers]).toEqual(['unrelated']);
+    electron.handle.mockReset(); electron.removeHandler.mockReset();
+  });
+
+  it('uses the ninth outbound service argument without displacing enrichment or shell arguments', async () => {
+    const request = { commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', channel: 'call' as const,
+      personId: 'p', salesCycleId: 's', contactMethodId: 'c', expectedContactSnapshot: 'a'.repeat(64) };
+    const receipt = { commandId: request.commandId, channel: 'call' as const, status: 'unknown' as const,
+      reasonCode: 'handoff_uncertain' as const, mutation: { revision: 1, affectedPersonIds: ['p'], affectedSalesCycleIds: ['s'] } };
+    const outbound = { beginOutbound: vi.fn(async () => receipt), getCapabilities: vi.fn(), invalidate: vi.fn(), resumeAfterUnlock: vi.fn(), dispose: vi.fn() };
+    const enrichment = { request: vi.fn(async () => ({ written: false, refusalReason: 'credentials_unavailable' as const })) };
+    const shell = { revealDatabase: vi.fn(), revealLogDirectory: vi.fn() };
+    const { registrars } = fakeRegistrars(Array.from({ length: 14 }, () => vi.fn()));
+    const registerDetail = vi.fn<FeatureRegistrars['registerLeadDetailIpc']>(() => vi.fn());
+    registrars.registerLeadDetailIpc = registerDetail;
+    const gate = fakeGate();
+    registerApplicationIpc(gate, undefined, registrars, explicitSourcingProvider(), recoveryProvider,
+      shell, enrichment, '/fixture/logs', outbound);
+    const provider = registerDetail.mock.calls[0][0];
+    await expect(provider.beginOutbound(request)).resolves.toEqual(receipt);
+    await provider.getOutboundCapabilities();
+    await provider.findContactInfo({ personId: 'p' });
+    expect(outbound.beginOutbound).toHaveBeenCalledWith(request);
+    expect(outbound.getCapabilities).toHaveBeenCalledTimes(1);
+    expect(enrichment.request).toHaveBeenCalledWith({ personId: 'p' });
+    expect(registrars.registerShellIpc).toHaveBeenCalledWith(shell, undefined);
+    expect(gate.withDomain).not.toHaveBeenCalled();
+  });
+
+  it('registers all fourteen feature slices and unregisters each exactly once', () => {
+    const unregisters = Array.from({ length: 14 }, () => vi.fn());
     const { registrars, calls } = fakeRegistrars(unregisters);
 
     const unregister = registerApplicationIpc(
-      fakeGate(), undefined, registrars, explicitSourcingProvider(),
+      fakeGate(), undefined, registrars, explicitSourcingProvider(), recoveryProvider,
     );
     expect(calls).toEqual([
       'health', 'leads', 'leadDetail', 'today',
       'pipeline', 'review', 'friday', 'imports',
-      'conversations', 'learnings', 'sourcing', 'shell',
+      'conversations', 'learnings', 'sourcing', 'shell', 'recovery', 'discovery',
     ]);
 
     unregister();
@@ -126,31 +299,32 @@ describe('registerApplicationIpc', () => {
     const unregisters = [
       'health', 'leads', 'leadDetail', 'today',
       'pipeline', 'review', 'friday', 'imports',
-      'conversations', 'learnings', 'sourcing', 'shell',
+      'conversations', 'learnings', 'sourcing', 'shell', 'recovery', 'discovery',
     ].map((name) => vi.fn(() => order.push(name)));
     const { registrars } = fakeRegistrars(unregisters);
 
-    registerApplicationIpc(fakeGate(), undefined, registrars, explicitSourcingProvider())();
+    registerApplicationIpc(fakeGate(), undefined, registrars, explicitSourcingProvider(), recoveryProvider)();
     expect(order).toEqual([
-      'shell', 'sourcing', 'learnings', 'conversations',
+      'discovery', 'recovery', 'shell', 'sourcing', 'learnings', 'conversations',
       'imports', 'friday', 'review', 'pipeline',
       'today', 'leadDetail', 'leads', 'health',
     ]);
   });
 
   it('passes the trusted-URL predicate to every slice registrar', () => {
-    const unregisters = Array.from({ length: 12 }, () => vi.fn());
+    const unregisters = Array.from({ length: 14 }, () => vi.fn());
     const { registrars } = fakeRegistrars(unregisters);
     const trust = (url: string) => url.startsWith('app://');
 
-    registerApplicationIpc(fakeGate(), trust, registrars, explicitSourcingProvider());
+    registerApplicationIpc(fakeGate(), trust, registrars, explicitSourcingProvider(), recoveryProvider);
     for (const registrar of Object.values(registrars)) {
-      expect(vi.mocked(registrar).mock.calls[0]![1]).toBe(trust);
+      const args = vi.mocked(registrar).mock.calls[0]!;
+      expect(args.length === 1 ? (args[0] as { isTrustedRendererUrl?: unknown }).isTrustedRendererUrl : args[1]).toBe(trust);
     }
   });
 
   it('registers the primary runtime health unchanged instead of overlaying sourcing IPC status', async () => {
-    const unregisters = Array.from({ length: 12 }, () => vi.fn());
+    const unregisters = Array.from({ length: 14 }, () => vi.fn());
     const { registrars } = fakeRegistrars(unregisters);
     let registeredHealth: { getHealth(): Promise<unknown> } | undefined;
     registrars.registerHealthIpc = vi.fn((provider) => {
@@ -174,17 +348,17 @@ describe('registerApplicationIpc', () => {
       retry: async () => healthySourcing,
       status: async () => healthySourcing,
       setHmacSalt: async () => healthySourcing,
-    });
+    }, recoveryProvider);
 
     await expect(registeredHealth?.getHealth()).resolves.toEqual(degradedHealth);
   });
 
   it('rejects a missing sourcing provider instead of registering a healthy fallback', () => {
-    const unregisters = Array.from({ length: 12 }, () => vi.fn());
+    const unregisters = Array.from({ length: 14 }, () => vi.fn());
     const { registrars, calls } = fakeRegistrars(unregisters);
 
     expect(() => registerApplicationIpc(
-      fakeGate(), undefined, registrars, undefined as never,
+      fakeGate(), undefined, registrars, undefined as never, recoveryProvider,
     )).toThrow('Sourcing provider is required.');
     expect(calls).toEqual([]);
   });
@@ -195,7 +369,7 @@ describe('registerApplicationIpc', () => {
       updateLeadField: vi.fn(() => 'updated'),
       bulkUpdateLeads: vi.fn(() => 'bulk'),
       getLeadDetail: vi.fn(() => 'detail'),
-      beginOutbound: vi.fn(() => 'outbound'),
+      recordOutboundRefusal: vi.fn(() => 'outbound'),
       confirmTransition: vi.fn(() => 'transition'),
       getToday: vi.fn(() => 'today'),
       completePrimaryAction: vi.fn(() => 'complete'),

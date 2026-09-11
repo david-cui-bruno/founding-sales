@@ -19,6 +19,11 @@ import { migration0011ContactDncFlags } from './migrations/0011ContactDncFlags';
 import { migration0012UpstreamRequestState } from './migrations/0012UpstreamRequestState';
 import { migration0013ContactComplianceEvidence } from './migrations/0013ContactComplianceEvidence';
 import { migration0014OutboundJurisdictionClearance } from './migrations/0014OutboundJurisdictionClearance';
+import { migration0015RecoveryMetadata } from './migrations/0015RecoveryMetadata';
+import { migration0016ContactPresentationEvidence } from './migrations/0016ContactPresentationEvidence';
+import { migration0017DiscoveryAssessments } from './migrations/0017DiscoveryAssessments';
+import { migration0018PlaybookDueActions } from './migrations/0018PlaybookDueActions';
+import { migration0019EmailDrafts } from './migrations/0019EmailDrafts';
 import type { WorkspaceKey } from '../security/workspaceKeyTypes';
 
 export type MigrationResult = {
@@ -49,7 +54,7 @@ export type RegisteredMigration = Readonly<{
   };
 }>;
 
-const productionMigrations = [
+export const productionMigrations = [
   {
     id: '0001Foundation',
     schemaVersion: 1,
@@ -120,10 +125,27 @@ const productionMigrations = [
     schemaVersion: 14,
     migration: migration0014OutboundJurisdictionClearance,
   },
+  {
+    id: '0015RecoveryMetadata',
+    schemaVersion: 15,
+    migration: migration0015RecoveryMetadata,
+  },
+  {
+    id: '0016ContactPresentationEvidence',
+    schemaVersion: 16,
+    migration: migration0016ContactPresentationEvidence,
+  },
+  {
+    id: '0017DiscoveryAssessments',
+    schemaVersion: 17,
+    migration: migration0017DiscoveryAssessments,
+  },
+  { id: '0018PlaybookDueActions', schemaVersion: 18, migration: migration0018PlaybookDueActions },
+  { id: '0019EmailDrafts', schemaVersion: 19, migration: migration0019EmailDrafts },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);
 
-function readSchemaVersion(db: AppDatabase): number {
+function readSchemaVersion(db: AppDatabase): unknown {
   const table = db.raw
     .prepare<[], { found: number }>(
       "SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'app_meta'",
@@ -135,7 +157,7 @@ function readSchemaVersion(db: AppDatabase): number {
   }
 
   const metadata = db.raw
-    .prepare<[], { schema_version: number }>(
+    .prepare<[], { schema_version: unknown }>(
       'SELECT schema_version FROM app_meta WHERE singleton = 1',
     )
     .get();
@@ -145,6 +167,49 @@ function readSchemaVersion(db: AppDatabase): number {
   }
 
   return metadata.schema_version;
+}
+
+function validateMigrationState(
+  db: AppDatabase,
+  registeredMigrations: readonly RegisteredMigration[],
+): number {
+  const schemaVersion = readSchemaVersion(db);
+  const latestVersion = registeredMigrations.length;
+  if (
+    !Number.isSafeInteger(schemaVersion)
+    || (schemaVersion as number) < 0
+    || (schemaVersion as number) > latestVersion
+  ) {
+    throw new Error('The app_meta schema version is not a registered migration version.');
+  }
+
+  const version = schemaVersion as number;
+  const ledgerTable = db.raw.prepare<[], { found: number }>(
+    "SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'kysely_migration'",
+  ).get();
+  if (version === 0 && ledgerTable === undefined) {
+    return version;
+  }
+  if (ledgerTable === undefined) {
+    throw new Error('The migration ledger does not match the app_meta schema version.');
+  }
+
+  const actualIds = db.raw.prepare<[], { name: string }>(
+    'SELECT name FROM kysely_migration ORDER BY timestamp, name',
+  ).all().map(({ name }) => name);
+  const expectedIds = registeredMigrations.slice(0, version).map(({ id }) => id);
+  if (
+    actualIds.length !== expectedIds.length
+    || actualIds.some((id, index) => id !== expectedIds[index])
+  ) {
+    throw new Error('The migration ledger does not match the app_meta schema version.');
+  }
+
+  return version;
+}
+
+export function isRegisteredSchemaVersion(version: number): boolean {
+  return productionMigrations.some((entry) => entry.schemaVersion === version);
 }
 
 export async function migrateToLatest(
@@ -173,7 +238,7 @@ async function migrateWithRegisteredMigrations(
   options: MigrationOptions,
   registeredMigrations: readonly RegisteredMigration[],
 ): Promise<MigrationResult> {
-  const fromVersion = readSchemaVersion(db);
+  const fromVersion = validateMigrationState(db, registeredMigrations);
   const latestVersion = registeredMigrations.at(-1)?.schemaVersion ?? 0;
   if (fromVersion < latestVersion) {
     createVerifiedMigrationBackup({
@@ -215,7 +280,7 @@ async function migrateWithRegisteredMigrations(
 
   return {
     fromVersion,
-    toVersion: readSchemaVersion(db),
+    toVersion: readSchemaVersion(db) as number,
     appliedMigrationIds: (resultSet.results ?? [])
       .filter((result) => result.direction === 'Up' && result.status === 'Success')
       .map((result) => result.migrationName),
@@ -231,7 +296,7 @@ function validateRegisteredMigrations(
     if (
       migration.id.length === 0
       || !Number.isSafeInteger(migration.schemaVersion)
-      || migration.schemaVersion < 1
+      || migration.schemaVersion !== index + 1
       || (previous !== undefined && migration.id.localeCompare(previous.id) <= 0)
       || (
         previous !== undefined

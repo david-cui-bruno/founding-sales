@@ -9,7 +9,7 @@ import { Button } from '../../components/Button';
 import { Select } from '../../components/Select';
 
 export type LogPastActivityDialogProps = {
-  item: TodayItem;
+  item: Pick<TodayItem, 'personId' | 'salesCycleId' | 'personName'>;
   busy: boolean;
   onSubmit(request: LogPastActivityRequest): void;
   onClose(): void;
@@ -48,23 +48,32 @@ export function LogPastActivityDialog({
   const [kind, setKind] = useState<PastKind>('call');
   const [date, setDate] = useState(todayLocalDate);
   const [summary, setSummary] = useState('');
+  const [priceStated, setPriceStated] = useState(false);
+  const submitted = useRef(false);
   const summaryRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
+    setKind('call');
+    setDate(todayLocalDate());
+    setSummary('');
+    setPriceStated(false);
+    submitted.current = false;
     summaryRef.current?.focus();
-  }, []);
+  }, [item.personId, item.salesCycleId]);
 
   const submit = () => {
     const trimmed = summary.trim();
-    if (trimmed.length === 0) return;
+    const occurredAt = new Date(`${date}T12:00:00`);
+    if (busy || submitted.current || trimmed.length === 0 || !Number.isFinite(occurredAt.getTime()) || date > todayLocalDate()) return;
+    submitted.current = true;
     onSubmit({
       personId: item.personId,
       salesCycleId: item.salesCycleId,
       kind,
       direction: kind === 'note' ? 'internal' : 'outbound',
-      occurredAt: new Date(`${date}T12:00:00`).toISOString(),
+      occurredAt: occurredAt.toISOString(),
       summary: trimmed,
-      outcome: null,
+      outcome: kind !== 'note' && priceStated ? 'price_said' : null,
     });
   };
 
@@ -90,7 +99,10 @@ export function LogPastActivityDialog({
             label="Activity kind"
             options={KIND_OPTIONS}
             value={kind}
-            onChange={setKind}
+            onChange={(value) => {
+              setKind(value);
+              if (value === 'note') setPriceStated(false);
+            }}
           />
           <label className="today-dialog__date-label">
             Date
@@ -113,6 +125,12 @@ export function LogPastActivityDialog({
             onChange={(event) => setSummary(event.target.value)}
           />
         </label>
+        <label className="today-dialog__price">
+          <input type="checkbox" checked={priceStated} disabled={kind === 'note' || busy}
+            onChange={(event) => setPriceStated(event.target.checked)} />
+          I stated the price
+        </label>
+        <p>Only for an actual past communication. Logging does not confirm an offer or payment.</p>
         <div className="today-dialog__actions">
           <Button
             variant="primary"

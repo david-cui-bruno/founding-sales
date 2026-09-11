@@ -15,6 +15,12 @@ import {
   type ApplicationStartupOptions,
 } from '../../src/main/startApplication';
 import type { AppHealth } from '../../src/shared/healthContract';
+import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
+import type { OutboundCommandServiceApi } from '../../src/main/communications/outboundPorts';
+import type { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
+
+const nativeDialogs = vi.hoisted(() => ({ showSaveDialog: vi.fn(), showOpenDialog: vi.fn() }));
+vi.mock('electron', () => ({ dialog: nativeDialogs, safeStorage: {} }));
 
 const health: AppHealth = {
   appVersion: '1.0.0',
@@ -49,6 +55,15 @@ const keyDependencies = () => ({
 });
 
 describe('startApplication', () => {
+  const request = { commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', channel: 'call' as const,
+    personId: 'p', salesCycleId: 's', contactMethodId: 'c', expectedContactSnapshot: 'a'.repeat(64) };
+  const deferred = <T,>() => {
+    let resolve!: (value: T) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+    return { promise, resolve, reject };
+  };
+
   function createDependencies(
     events: string[],
     captureHealth?: (provider: HealthProvider) => void,
@@ -58,6 +73,14 @@ describe('startApplication', () => {
 
     return {
       ...keyDependencies(),
+      createRecoveryService: () => ({ status: vi.fn(), beginSetup: vi.fn(), saveSetupMaterial: vi.fn(),
+        completeSetup: vi.fn(), selectAndRunRestoreDrill: vi.fn(), shutdown: async () => undefined }),
+      createBackupService: () => ({
+        start: async () => undefined,
+        shutdown: async () => undefined,
+        listAvailableBackups: async () => [],
+        createBackup: async () => { throw new Error('Unexpected backup request'); },
+      }),
       openDatabase: ({ path }) => {
         events.push(`open:${path}`);
         return database;
@@ -99,6 +122,383 @@ describe('startApplication', () => {
       closeDatabase: () => events.push('close'),
     };
   }
+
+  it('owns email service registration, lock invalidation and disposal before database shutdown', async () => {
+    const events:string[]=[];const dependencies=createDependencies(events);
+    const email={invalidate:vi.fn(),dispose:vi.fn(()=>events.push('email-dispose'))} as unknown as ReturnType<typeof import('../../src/main/outreach/emailService').createEmailService>;
+    dependencies.createEmailService=()=>email;
+    dependencies.registerOutreachIpc=({provider})=>{expect(provider).toBe(email);events.push('email-ipc');return ()=>events.push('email-unregister');};
+    let callbacks!:Parameters<NonNullable<ApplicationStartupOptions['registerOutboundLifecycle']>>[0];
+    const app=await startApplication({appVersion:'1',userDataPath:'/fixture/email',createWindow:()=>undefined,
+      registerOutboundLifecycle:owned=>{callbacks=owned;return ()=>undefined;}},dependencies);
+    expect(events).toContain('email-ipc');callbacks.onLock();expect(email.invalidate).toHaveBeenLastCalledWith(true);
+    callbacks.onUnlock();expect(email.invalidate).toHaveBeenLastCalledWith(false);
+    await app.shutdown();expect(email.dispose).toHaveBeenCalledTimes(1);
+    expect(events.indexOf('email-dispose')).toBeLessThan(events.indexOf('close'));
+    expect(events.indexOf('email-unregister')).toBeLessThan(events.indexOf('close'));
+  });
+
+  it('constructs one outbound service after initialization, registers lifecycle before exposure and passes argument nine unchanged', async () => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    let service!: OutboundCommandServiceApi;
+    let runtime!: FoundationRuntime;
+    let callbacks!: Parameters<NonNullable<ApplicationStartupOptions['registerOutboundLifecycle']>>[0];
+    const factory = vi.fn<typeof createOutboundCommandService>((input) => {
+      expect(events).toContain('recover');
+      events.push('outbound');
+      service = createOutboundCommandService(input);
+      return service;
+    });
+    dependencies.createOutboundCommandService = factory;
+    const enrichment = { request: vi.fn() };
+    dependencies.createEnrichmentRequester = () => enrichment;
+    const register = vi.fn<ApplicationStartupDependencies['registerApplicationIpc']>((bound) => {
+      runtime = bound; events.push('ipc'); return () => events.push('unregister');
+    });
+    dependencies.registerApplicationIpc = register;
+    const trust = () => true;
+    const controller = new AbortController();
+    const removeAbort = vi.spyOn(controller.signal, 'removeEventListener');
+    const app = await startApplication({ appVersion: '1', userDataPath: '/fixture/outbound', signal: controller.signal,
+      isTrustedRendererUrl: trust, logDirectoryPath: '/fixture/logs',
+      registerOutboundLifecycle: (owned) => { callbacks = owned; events.push('listen'); return () => events.push('unlisten'); },
+      createWindow: () => { events.push('window'); },
+    }, dependencies);
+    try {
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(register.mock.calls[0]).toEqual([runtime, trust, undefined, expect.any(Object), expect.any(Object), undefined, enrichment, '/fixture/logs', service]);
+      expect(events.slice(4, 8)).toEqual(['outbound', 'listen', 'ipc', 'window']);
+      expect(removeAbort).toHaveBeenCalledTimes(1);
+      const domain = vi.spyOn(runtime, 'withDomain');
+      const active = await service.getCapabilities();
+      expect(active.phoneHandoff).toEqual({ state: 'unavailable', reasonCode: 'inbound_safety_unwired' });
+      expect(active.localDrafts).toBe(true);
+      for (const name of ['callObservation', 'recording', 'messagesSend', 'gmailSend', 'managedAudioImport', 'appleTranscriptExtraction'] as const) {
+        expect(active[name]).toEqual({ state: 'unavailable', reasonCode: 'not_integrated' });
+      }
+      callbacks.onLock(); callbacks.onWake();
+      expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
+      await expect(service.beginOutbound(request)).rejects.toThrow('inactive');
+      callbacks.onUnlock();
+      expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('inbound_safety_unwired');
+      expect(domain).not.toHaveBeenCalled();
+      await app.shutdown();
+      callbacks.onWake(); callbacks.onUnlock(); callbacks.onLock();
+      expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
+      await expect(service.beginOutbound(request)).rejects.toThrow('inactive');
+      expect(domain).not.toHaveBeenCalled();
+      expect(events.slice(-3)).toEqual(['unlisten', 'unregister', 'close']);
+    } finally { await app.shutdown(); removeAbort.mockRestore(); }
+  });
+
+  it('uses the real default unavailable service even without a fixture factory', async () => {
+    const dependencies = createDependencies([]);
+    let outbound: OutboundCommandServiceApi | undefined;
+    dependencies.registerApplicationIpc = (...args) => { outbound = args[8]; return () => undefined; };
+    const app = await startApplication({ appVersion: '1', userDataPath: '/fixture/default-outbound', createWindow: () => undefined }, dependencies);
+    try {
+      expect(outbound).toBeDefined();
+      expect((await outbound!.getCapabilities()).phoneHandoff.reasonCode).toBe('inbound_safety_unwired');
+    } finally { await app.shutdown(); }
+  });
+
+  it('starts one discovery owner before the window and stops admission before awaiting its idle drain', async () => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    const drain = deferred<void>();
+    dependencies.createDiscoveryWorker = () => {
+      events.push('discovery-created');
+      return { start: () => { events.push('discovery-start'); }, wake: () => undefined,
+        stop: () => { events.push('discovery-stop'); }, idle: () => drain.promise };
+    };
+    const app = await startApplication({ appVersion: '1', userDataPath: '/fixture/discovery',
+      createWindow: () => { events.push('window'); } }, dependencies);
+    try {
+      expect(events.filter(e => e === 'discovery-start')).toHaveLength(1);
+      expect(events.indexOf('discovery-start')).toBeLessThan(events.indexOf('window'));
+      const shutdown = app.shutdown();
+      expect(events).toContain('discovery-stop');
+      expect(events).not.toContain('close');
+      drain.resolve(); await shutdown;
+      expect(events.at(-1)).toBe('close');
+    } finally { drain.resolve(); await app.shutdown(); }
+  });
+
+  it.each(['start', 'window', 'abort'] as const)('stops and drains discovery before SQLite during %s startup failure', async failure => {
+    const events: string[] = []; const dependencies = createDependencies(events);
+    const controller = new AbortController(); const windowEntered = deferred<void>(); const windowDone = deferred<void>();
+    const idle = deferred<void>();
+    dependencies.createDiscoveryWorker = input => {
+      expect(input.research.capability()).toBe('not_configured');
+      return { wake: () => undefined, start: () => { events.push('worker-start'); if (failure === 'start') throw new Error('worker start failed'); },
+        stop: () => { events.push('worker-stop'); }, idle: () => { events.push('worker-idle'); return idle.promise; } };
+    };
+    const pending = startApplication({ appVersion: '1', userDataPath: '/fixture/worker-rollback', signal: controller.signal,
+      createWindow: () => { windowEntered.resolve(); if (failure === 'window') throw new Error('window failed'); return windowDone.promise; } }, dependencies);
+    const rejected = expect(pending).rejects.toThrow();
+    if (failure === 'abort') {
+      await windowEntered.promise; controller.abort();
+      expect(events).toContain('worker-stop'); expect(events).not.toContain('close'); windowDone.resolve();
+    }
+    // Release only after the caller has retained the rejection handler.
+    idle.resolve(); await rejected;
+    expect(events.filter(e => e === 'worker-stop')).toHaveLength(1);
+    expect(events.indexOf('worker-stop')).toBeLessThan(events.indexOf('worker-idle'));
+    expect(events.indexOf('worker-idle')).toBeLessThan(events.indexOf('close'));
+  });
+
+  it('preserves aggregate cleanup errors when discovery stop and idle both fail', async () => {
+    const events: string[] = []; const dependencies = createDependencies(events);
+    dependencies.createDiscoveryWorker = () => ({ start: () => undefined, wake: () => undefined,
+      stop: () => { throw new Error('worker stop failed'); }, idle: async () => { throw new Error('worker idle failed'); } });
+    const app = await startApplication({ appVersion: '1', userDataPath: '/fixture/worker-errors', createWindow: () => undefined }, dependencies);
+    await expect(app.shutdown()).rejects.toMatchObject({ errors: [expect.objectContaining({ message: 'worker stop failed' }),
+      expect.objectContaining({ message: 'worker idle failed' })] });
+    expect(events.at(-1)).toBe('close');
+  });
+
+  it('closes synchronously before owner drains and reserves one shutdown completion before reentrant disposal', async () => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    const drain = deferred<void>();
+    let reentrant!: Promise<void>;
+    let service!: OutboundCommandServiceApi;
+    const disposeError = new Error('injected disposer failed before cleaning');
+    const listenerError = new Error('listener cleanup failed');
+    const invalidate = vi.fn<OutboundCommandServiceApi['invalidate']>();
+    const dispose = vi.fn(() => { reentrant = app.shutdown(); throw disposeError; });
+    dependencies.createOutboundCommandService = (input) => {
+      service = createOutboundCommandService(input);
+      invalidate.mockImplementation((reason) => service.invalidate(reason));
+      return { ...service, dispose, invalidate };
+    };
+    dependencies.createRecoveryService = () => ({ status: vi.fn(), beginSetup: vi.fn(), saveSetupMaterial: vi.fn(),
+      completeSetup: vi.fn(), selectAndRunRestoreDrill: vi.fn(), shutdown: () => { events.push('recovery-stop'); return drain.promise; } });
+    let callbacks!: Parameters<NonNullable<ApplicationStartupOptions['registerOutboundLifecycle']>>[0];
+    const app = await startApplication({ appVersion: '1', userDataPath: '/fixture/reentrant',
+      registerOutboundLifecycle: (owned) => { callbacks = owned; return () => { events.push('unlisten'); throw listenerError; }; },
+      createWindow: () => undefined,
+    }, dependencies);
+    const stopping = app.shutdown();
+    const observed = stopping.catch((error: unknown) => error);
+    expect(reentrant).toBe(stopping);
+    expect(app.shutdown()).toBe(stopping);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(events.slice(-2)).toEqual(['unlisten', 'recovery-stop']);
+    callbacks.onWake(); callbacks.onUnlock(); callbacks.onLock();
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(events).not.toContain('close');
+    drain.resolve();
+    const error = await observed as AggregateError;
+    expect(error.errors).toEqual([disposeError, listenerError]);
+    expect(events.filter((event) => event === 'close')).toHaveLength(1);
+    // A throwing injected disposer did NOT clean its service. Explicit fixture cleanup only.
+    service.dispose();
+  });
+
+  it.each(['factory', 'registration'] as const)('handles a signal aborted synchronously during %s without exposing IPC', async (during) => {
+    const dependencies = createDependencies([]); const controller = new AbortController();
+    const dispose = vi.fn(); const unlisten = vi.fn();
+    dependencies.createOutboundCommandService = (input) => {
+      const service = createOutboundCommandService(input); dispose.mockImplementation(() => service.dispose());
+      if (during === 'factory') controller.abort();
+      return { ...service, dispose };
+    };
+    const register = vi.fn(() => vi.fn()); dependencies.registerApplicationIpc = register;
+    await expect(startApplication({ appVersion: '1', userDataPath: '/fixture/sync-abort', signal: controller.signal,
+      registerOutboundLifecycle: () => { controller.abort(); return unlisten; }, createWindow: vi.fn(),
+    }, dependencies)).rejects.toThrow('cancelled');
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(unlisten).toHaveBeenCalledTimes(during === 'registration' ? 1 : 0);
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('independently attempts dispose, lifecycle and abort removal, preserving their errors with the window failure', async () => {
+    const events: string[] = []; const dependencies = createDependencies(events);
+    const controller = new AbortController(); const entered = deferred<void>(); const window = deferred<void>();
+    const originalError = new Error('window'); const disposeError = new Error('dispose');
+    const lifecycleError = new Error('lifecycle'); const abortError = new Error('abort removal');
+    let service!: OutboundCommandServiceApi;
+    const dispose = vi.fn(() => { throw disposeError; });
+    dependencies.createOutboundCommandService = (input) => { service = createOutboundCommandService(input); return { ...service, dispose }; };
+    const remove = controller.signal.removeEventListener.bind(controller.signal);
+    const removeSpy = vi.spyOn(controller.signal, 'removeEventListener').mockImplementation((...args) => { remove(...args); throw abortError; });
+    const unlisten = vi.fn(() => { throw lifecycleError; });
+    const startup = startApplication({ appVersion: '1', userDataPath: '/fixture/cleanup-errors', signal: controller.signal,
+      registerOutboundLifecycle: () => unlisten, createWindow: () => { entered.resolve(); return window.promise; },
+    }, dependencies).catch((error: unknown) => error);
+    await entered.promise; controller.abort();
+    expect(dispose).toHaveBeenCalledTimes(1); expect(unlisten).toHaveBeenCalledTimes(1); expect(removeSpy).toHaveBeenCalledTimes(1);
+    window.reject(originalError);
+    const error = await startup as AggregateError;
+    expect(error.cause).toBe(originalError); expect(error.errors[0]).toBe(originalError);
+    expect((error.errors[1] as AggregateError).errors).toEqual([disposeError, lifecycleError, abortError]);
+    expect(events.slice(-2)).toEqual(['unregister', 'close']);
+    expect(dispose).toHaveBeenCalledTimes(1); expect(removeSpy).toHaveBeenCalledTimes(1);
+    removeSpy.mockRestore(); service.dispose(); // The injected throwing disposer never cleaned it.
+  });
+
+  it.each(['resolve', 'reject'] as const)('startup abort permanently closes outbound while the window is pending, late window %s', async (settle) => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    const window = deferred<void>(); const entered = deferred<void>();
+    const controller = new AbortController();
+    let service!: OutboundCommandServiceApi;
+    let dispose!: ReturnType<typeof vi.fn>;
+    dependencies.createOutboundCommandService = (input) => {
+      service = createOutboundCommandService(input); dispose = vi.fn(() => service.dispose());
+      return { ...service, dispose };
+    };
+    const remove = vi.spyOn(controller.signal, 'removeEventListener');
+    const unlisten = vi.fn();
+    const startup = startApplication({ appVersion: '1', userDataPath: '/fixture/abort', signal: controller.signal,
+      registerOutboundLifecycle: () => unlisten,
+      createWindow: () => { entered.resolve(); return window.promise; },
+    }, dependencies);
+    const observed = startup.catch((error: Error) => error);
+    await entered.promise;
+    controller.abort();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(unlisten).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
+    expect(events).not.toContain('close');
+    if (settle === 'resolve') window.resolve(); else window.reject(new Error('window rejected'));
+    expect(await observed).toBeInstanceOf(Error);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event === 'close')).toHaveLength(1);
+    remove.mockRestore();
+  });
+
+  it.each(['initialize', 'factory', 'poller', 'lifecycle', 'ipc', 'window'] as const)('cleans the one constructed service on startup failure at %s', async (stage) => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    const failure = new Error(stage);
+    const dispose = vi.fn(); const unlisten = vi.fn();
+    const factory = vi.fn<typeof createOutboundCommandService>((input) => {
+      if (stage === 'factory') throw failure;
+      const service = createOutboundCommandService(input);
+      dispose.mockImplementation(() => service.dispose());
+      return { ...service, dispose };
+    });
+    dependencies.createOutboundCommandService = factory;
+    if (stage === 'initialize') dependencies.migrateToLatest = async () => { throw failure; };
+    if (stage === 'poller') dependencies.createSourcingPoller = () => { throw failure; };
+    if (stage === 'ipc') dependencies.registerApplicationIpc = () => { throw failure; };
+    await expect(startApplication({ appVersion: '1', userDataPath: '/fixture/start-failure',
+      registerOutboundLifecycle: () => { if (stage === 'lifecycle') throw failure; return unlisten; },
+      createWindow: () => { if (stage === 'window') throw failure; },
+    }, dependencies)).rejects.toBe(failure);
+    expect(factory).toHaveBeenCalledTimes(stage === 'initialize' ? 0 : 1);
+    expect(dispose).toHaveBeenCalledTimes(['initialize', 'factory'].includes(stage) ? 0 : 1);
+    expect(unlisten).toHaveBeenCalledTimes(['poller', 'ipc', 'window'].includes(stage) ? 1 : 0);
+    expect(events.filter((event) => event === 'close')).toHaveLength(1);
+  });
+
+  it('constructs recovery from initialized backup availability before IPC and drains it before DB closure', async () => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    let release!: () => void;
+    const drained = new Promise<void>((resolve) => { release = resolve; });
+    const provider = { status: vi.fn(), beginSetup: vi.fn(), saveSetupMaterial: vi.fn(), completeSetup: vi.fn(), selectAndRunRestoreDrill: vi.fn(), shutdown: async () => { events.push('recovery-stop'); await drained; events.push('recovery-drained'); } };
+    dependencies.createRecoveryService = (options) => {
+      expect(events).toContain('recover');
+      expect(options.backups.listAvailableBackups).toBeTypeOf('function');
+      events.push('recovery-create');
+      return provider;
+    };
+    dependencies.registerApplicationIpc = (_runtime, _trust, _registrars, _sourcing, recovery) => {
+      expect(recovery).toBe(provider); events.push('ipc'); return () => events.push('unregister');
+    };
+    const app = await startApplication({ appVersion: '1', userDataPath: '/tmp/callie-recovery-wiring', createWindow: () => { events.push('window'); } }, dependencies);
+    expect(events.indexOf('recovery-create')).toBeLessThan(events.indexOf('ipc'));
+    const stopping = app.shutdown(); await vi.waitFor(() => expect(events).toContain('recovery-stop'));
+    expect(events).not.toContain('close'); release(); await stopping;
+    expect(events.indexOf('recovery-drained')).toBeLessThan(events.indexOf('close'));
+  });
+
+  it('binds native dialogs only in main with fixed backup location and propagates cancellation', async () => {
+    const events: string[] = []; const dependencies = createDependencies(events);
+    let dialogs!: import('../../src/main/recovery/recoveryService').RecoveryDialogs;
+    dependencies.createRecoveryService = (options) => {
+      dialogs = options.dialogs;
+      return { status: vi.fn(), beginSetup: vi.fn(), saveSetupMaterial: vi.fn(), completeSetup: vi.fn(), selectAndRunRestoreDrill: vi.fn(), shutdown: async () => undefined };
+    };
+    const app = await startApplication({ appVersion: '1', userDataPath: '/tmp/callie-native-dialog-fixture', createWindow: () => undefined }, dependencies);
+    try {
+      nativeDialogs.showSaveDialog.mockResolvedValueOnce({ canceled: true }).mockResolvedValueOnce({ canceled: false, filePath: '/synthetic/chosen-export.txt' });
+      expect(await dialogs.saveMaterial()).toBeNull(); expect(await dialogs.saveMaterial()).toBe('/synthetic/chosen-export.txt');
+      nativeDialogs.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: ['/synthetic/backup.sqlite3'] }).mockResolvedValueOnce({ canceled: true, filePaths: [] });
+      expect(await dialogs.selectBackup()).toBe('/synthetic/backup.sqlite3');
+      expect(nativeDialogs.showOpenDialog).toHaveBeenLastCalledWith(expect.objectContaining({ defaultPath: '/tmp/callie-native-dialog-fixture/backups', properties: ['openFile'] }));
+      expect(await dialogs.selectMaterial()).toBeNull();
+    } finally { await app.shutdown(); }
+  });
+
+  it('starts backups after initialization, wires fresh existing-workspace key loading and exposes explicit pre-release backup', async () => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    const loads: unknown[] = [];
+    const load = dependencies.loadWorkspaceKey;
+    dependencies.loadWorkspaceKey = async (input) => { loads.push(input); return load(input); };
+    const snapshot = {
+      path: '/disposable/pre_release.sqlite3', basename: 'pre_release.sqlite3',
+      kind: 'pre_release' as const, schemaVersion: 15, sha256: 'a'.repeat(64),
+      sizeBytes: 4096, createdAt: '2026-09-06T12:00:00.000Z', verifiedAt: '2026-09-06T12:00:00.000Z',
+    };
+    dependencies.createBackupService = (options) => {
+      expect(events).toContain('migrate');
+      expect(options.backupDirectory).toBe('/tmp/callie-backup-wiring/backups');
+      return {
+        start: async () => { events.push('backup-start'); },
+        shutdown: async () => { events.push('backup-stop'); },
+        listAvailableBackups: async () => [],
+        createBackup: async (kind) => {
+          expect(kind).toBe('pre_release');
+          await options.databaseGate.withDatabase((database) => { expect(database).toBeDefined(); });
+          const key = await options.loadWorkspaceKey();
+          key.bytes.fill(0);
+          return snapshot;
+        },
+      };
+    };
+    const running = await startApplication({
+      appVersion: '1.0.0', userDataPath: '/tmp/callie-backup-wiring', createWindow: () => { events.push('window'); },
+    }, dependencies);
+    expect(events.indexOf('backup-start')).toBeGreaterThan(events.indexOf('recover'));
+    expect(events.indexOf('backup-start')).toBeLessThan(events.indexOf('window'));
+    await expect(running.createPreReleaseBackup()).resolves.toEqual(snapshot);
+    expect(loads.at(-1)).toEqual({
+      envelopePath: '/tmp/callie-backup-wiring/callie.key-envelope.json', databaseExists: true,
+    });
+    await running.shutdown();
+    expect(events.indexOf('backup-stop')).toBeLessThan(events.indexOf('close'));
+    await expect(running.createPreReleaseBackup()).rejects.toThrow();
+  });
+
+  it('waits for backup ownership cleanup before closing SQLite, including failed window startup', async () => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    let release!: () => void;
+    const cleanup = new Promise<void>((resolve) => { release = resolve; });
+    dependencies.createBackupService = () => ({
+      start: async () => { events.push('backup-start'); },
+      shutdown: async () => { events.push('backup-stopping'); await cleanup; events.push('backup-stopped'); },
+      listAvailableBackups: async () => [],
+      createBackup: async () => { throw new Error('Unexpected request'); },
+    });
+    const startup = startApplication({
+      appVersion: '1.0.0', userDataPath: '/tmp/callie-backup-cleanup',
+      createWindow: () => { throw new Error('window failed'); },
+    }, dependencies);
+    const result = expect(startup).rejects.toThrow('window failed');
+    await vi.waitFor(() => expect(events).toContain('backup-stopping'));
+    expect(events).not.toContain('close');
+    release();
+    await result;
+    expect(events.indexOf('backup-stopped')).toBeLessThan(events.indexOf('close'));
+  });
 
   it('rejects a missing sourcing poller dependency before IPC registration', async () => {
     const events: string[] = [];

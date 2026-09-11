@@ -1,5 +1,6 @@
+import type { AttributeValue } from "@aws-sdk/client-dynamodb";
 import { describe, expect, it, vi } from "vitest";
-import { createHandler, handlerWithDeps, runResolver, type HandlerDeps } from "../src/handler";
+import { createHandler, runResolver, type HandlerDeps } from "../src/handler";
 import { fromItem } from "../src/entitiesTable";
 import { ceId, parcelEvent, NOW } from "./fixtures";
 import type { CloudSourceEvent } from "@callie-sourcing/shared";
@@ -10,7 +11,7 @@ import type { CloudSourceEvent } from "@callie-sourcing/shared";
 
 interface FakeState {
   objects: Map<string, string>; // s3 key -> ndjson body
-  entities: Map<string, Record<string, any>>; // entity_id -> item
+  entities: Map<string, Record<string, AttributeValue>>; // entity_id -> item
   queries: Array<{ indexName: string; name: string }>;
 }
 
@@ -42,7 +43,7 @@ function fakeDeps(state: FakeState): HandlerDeps {
           const queried: string = command.input.ExpressionAttributeValues[":name"].S;
           state.queries.push({ indexName: command.input.IndexName, name: queried });
           const items = [...state.entities.values()].filter(
-            (item) => item.normalized_name.S === queried,
+            (item) => item.normalized_name!.S === queried,
           );
           return { Items: items };
         }

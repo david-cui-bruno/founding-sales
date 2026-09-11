@@ -1,4 +1,5 @@
 import type { Generated } from 'kysely';
+import type { DiscoveryAssessment, DiscoveryOverride } from '../../shared/contracts/discoveryContract';
 
 export type StoredBoolean = 0 | 1;
 export type LifecycleStage =
@@ -59,6 +60,11 @@ export type PersonContactMethodsTable = {
   compliance_source: 'ftc_download' | 'enrichment_vendor' | 'manual_import' | 'legacy';
   scrubbed_at: string | null;
   compliance_expires_at: string | null;
+  source_label: string | null;
+  vendor_rank: number | null;
+  phone_kind: 'mobile' | 'landline' | 'voip' | 'other' | null;
+  ownership_state: 'verified_person' | 'vendor_candidate' | 'conflicting_identity' | 'unknown';
+  evidence_observed_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -255,6 +261,8 @@ export type SalesCyclesTable = {
 };
 
 export type NextActionsTable = {
+  due_at: string;
+  due_source: 'legacy_unscheduled' | 'recorded_callback' | 'founder_resurface' | 'playbook_v1' | 'internal_review';
   id: string;
   sales_cycle_id: string;
   action_type: string;
@@ -570,6 +578,35 @@ export type OptOutClosureReceiptHandlesTable = {
   sequence: number;
 };
 
+export type BackupReceiptsTable = {
+  id: string;
+  backup_basename: string;
+  kind: 'daily' | 'manual' | 'pre_release';
+  schema_version: number;
+  sha256: string;
+  size_bytes: number;
+  created_at: string;
+  verified_at: string;
+};
+
+export type RecoveryReadinessTable = {
+  singleton: number;
+  recovery_setup_completed_at: string | null;
+  last_restore_drill_at: string | null;
+  last_restore_backup_sha256: string | null;
+  updated_at: string;
+};
+
+export type IdentityRepairEventsTable = {
+  id: string;
+  manifest_sha256: string;
+  candidate_id: string;
+  canonical_person_id: string;
+  created_person_ids_json: string;
+  reassigned_source_event_ids_json: string;
+  applied_at: string;
+};
+
 export type ReviewPositionTable = {
   singleton: number;
   position: number;
@@ -588,15 +625,43 @@ export type WorkspaceSettingsTable = {
   updated_at: string;
 };
 
+export type DiscoveryAssessmentsTable = {
+  id: string; person_id: string; prospect_id: string; sales_cycle_id: string;
+  fingerprint: string; policy_version: DiscoveryAssessment['policyVersion']; rule_version_id: string;
+  model_version: string | null; evaluated_at: string; expires_at: string; local_date: string;
+  override_id: string | null; disposition: DiscoveryAssessment['disposition']; assessment_json: string;
+};
+export type DiscoveryCurrentTable = {
+  prospect_id: string; assessment_id: string; version: number;
+};
+export type DiscoveryOverridesTable = {
+  id: string; assessment_id: string; person_id: string; prospect_id: string; sales_cycle_id: string;
+  fingerprint: string; decision: DiscoveryOverride['decision']; reason: string; created_at: string;
+};
+export type DiscoveryPreparationsTable = {
+  id: string; assessment_id: string; person_id: string; prospect_id: string; sales_cycle_id: string;
+  fingerprint: string; action_id: string; request_json: string; receipt_json: string;
+};
+export type DiscoveryScanStateTable = {
+  singleton: 1; cursor: string | null; last_complete_scan_at: string | null; last_complete_local_date: string | null;
+};
+
 export type DomainTables = {
+  discovery_assessments: DiscoveryAssessmentsTable;
+  discovery_current: DiscoveryCurrentTable;
+  discovery_overrides: DiscoveryOverridesTable;
+  discovery_preparations: DiscoveryPreparationsTable;
+  discovery_scan_state: DiscoveryScanStateTable;
   activities: ActivitiesTable;
   activity_amendments: ActivityAmendmentsTable;
+  backup_receipts: BackupReceiptsTable;
   cadence_action_components: CadenceActionComponentsTable;
   cadence_definitions: CadenceDefinitionsTable;
   cadence_enrollments: CadenceEnrollmentsTable;
   cadence_steps: CadenceStepsTable;
   consent_policy_records: ConsentPolicyRecordsTable;
   cycle_reactivation_receipts: CycleReactivationReceiptsTable;
+  identity_repair_events: IdentityRepairEventsTable;
   lifecycle_review_items: LifecycleReviewItemsTable;
   next_actions: NextActionsTable;
   opt_out_closure_receipt_handles: OptOutClosureReceiptHandlesTable;
@@ -621,6 +686,7 @@ export type DomainTables = {
   prospect_priority_projection: ProspectPriorityProjectionTable;
   prospect_properties: ProspectPropertiesTable;
   reactivation_rules: ReactivationRulesTable;
+  recovery_readiness: RecoveryReadinessTable;
   review_position: ReviewPositionTable;
   sales_cycles: SalesCyclesTable;
   sales_cycle_close_readiness: SalesCycleCloseReadinessTable;

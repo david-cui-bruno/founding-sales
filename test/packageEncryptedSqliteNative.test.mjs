@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { copyFile, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -30,14 +30,38 @@ async function fixture() {
     'bin/darwin-arm64-137/better-sqlite3-multiple-ciphers.node',
   );
   const scratch = join(root, 'build/Release/better_sqlite3.node');
-  for (const path of [selected, nodeAbi, scratch]) {
+  const buildSources = join(root, 'deps/sqlite3/sqlite3.c');
+  for (const path of [selected, nodeAbi, scratch, buildSources]) {
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, 'synthetic native fixture');
   }
-  return { buildPath, selected, nodeAbi, scratch };
+  return { buildPath, root, selected, nodeAbi, scratch, buildSources };
 }
 
 describe('packaged encrypted SQLite artifacts', () => {
+  it('removes build-only dependency sources while preserving runtime code, metadata and license bytes', async () => {
+    const files = await fixture();
+    const retained = {
+      'lib/index.js': "module.exports = require('./database');\n",
+      'lib/database.js': '// runtime JavaScript fixture\n',
+      'package.json': '{"main":"lib/index.js"}\n',
+      LICENSE: 'Retained upstream copyright and license fixture\n',
+    };
+    for (const [name, content] of Object.entries(retained)) {
+      await mkdir(dirname(join(files.root, name)), { recursive: true });
+      await writeFile(join(files.root, name), content);
+    }
+    await retainOnlyPackagedEncryptedSqliteRuntime({
+      buildPath: files.buildPath, platform: 'darwin', arch: 'arm64',
+      probeNative: () => ({ modules: '149', cipherVersion: 'synthetic' }),
+    });
+    expect(existsSync(join(files.root, 'deps'))).toBe(false);
+    expect(await readFile(files.selected, 'utf8')).toBe('synthetic native fixture');
+    for (const [name, content] of Object.entries(retained)) {
+      expect(await readFile(join(files.root, name), 'utf8')).toBe(content);
+    }
+  });
+
   it('retains exactly the Electron ABI target in the generated build copy', async () => {
     const files = await fixture();
     await retainOnlyPackagedEncryptedSqliteRuntime({
@@ -62,6 +86,7 @@ describe('packaged encrypted SQLite artifacts', () => {
     })).rejects.toThrow();
     expect(existsSync(files.nodeAbi)).toBe(true);
     expect(existsSync(files.scratch)).toBe(true);
+    expect(existsSync(files.buildSources)).toBe(true);
   });
 
   it('rejects a Node ABI binary renamed as ABI 149 before stripping any copy', async () => {
@@ -79,5 +104,6 @@ describe('packaged encrypted SQLite artifacts', () => {
     })).rejects.toThrow(/ABI 149|native probe/i);
     expect(existsSync(files.nodeAbi)).toBe(true);
     expect(existsSync(files.scratch)).toBe(true);
+    expect(existsSync(files.buildSources)).toBe(true);
   });
 });

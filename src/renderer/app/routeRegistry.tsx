@@ -34,6 +34,7 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
       return (
         <TodayRoute
           api={context.api.today}
+          discoveryApi={context.api.discovery}
           leadApi={context.api.leadDetail}
           onOpenLead={context.openLead}
         />
@@ -86,6 +87,8 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
           theme={context.theme}
           density={context.density}
           shell={context.api.shell}
+          recovery={context.api.recovery}
+          outreachApi={context.api.outreach}
           sourcing={<SourcingStatusRow api={context.api.sourcing} />}
         >
           <AppleSpikePanel api={context.api.appleSpike} />

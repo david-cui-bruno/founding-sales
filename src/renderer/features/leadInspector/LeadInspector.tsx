@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import type { OutboundReceipt } from '../../../shared/contracts/outboundContract';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 
 import type {
   FindContactInfoReceipt,
@@ -14,12 +15,12 @@ import type {
 import { ErrorState } from '../../components/ErrorState';
 import { LoadingState } from '../../components/LoadingState';
 import { InspectorActivity } from './InspectorActivity';
-import { InspectorConversation } from './InspectorConversation';
+import { InspectorConversation, FounderConfirmation } from './InspectorConversation';
 import { InspectorHeader } from './InspectorHeader';
 import { InspectorHistory } from './InspectorHistory';
 import { InspectorOverview } from './InspectorOverview';
 import { InspectorProperties } from './InspectorProperties';
-import type { LeadDetailState } from './useLeadInspector';
+import type { LeadDetailState, OutboundStatusPresentation, DiscoveryPresentation } from './useLeadInspector';
 import { useResizableInspector } from './useResizableInspector';
 
 const TABS = [
@@ -31,9 +32,10 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]['id'];
 
-export type InspectorTabsProps = {
+export type InspectorTabsProps = OutboundStatusPresentation & DiscoveryPresentation & {
+  activityTools?: ReactNode;
   detail: LeadDetail;
-  onBeginOutbound(request: BeginOutboundRequest): void;
+  onBeginOutbound(request: BeginOutboundRequest): Promise<OutboundReceipt>;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
   onDismissLead(request: DismissLeadRequest): void;
   onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
@@ -53,6 +55,8 @@ export function InspectorTabs({
   onDismissLead,
   onOverrideCloudScore,
   onFindContactInfo,
+  activityTools,
+  ...outboundPresentation
 }: InspectorTabsProps) {
   const [selected, setSelected] = useState<TabId>('overview');
   const idPrefix = useId();
@@ -123,6 +127,7 @@ export function InspectorTabs({
       >
         {selected === 'overview' && (
           <InspectorOverview
+            {...outboundPresentation}
             detail={detail}
             onBeginOutbound={onBeginOutbound}
             onConfirmTransition={onConfirmTransition}
@@ -133,6 +138,9 @@ export function InspectorTabs({
         )}
         {selected === 'activity' && (
           <div className="lead-inspector__activity">
+            {outboundPresentation.pastActivityControls}
+            {activityTools}
+            <FounderConfirmation detail={detail} onConfirmTransition={onConfirmTransition} />
             <InspectorActivity activities={detail.activities} />
             {detail.conversations.length > 0 && (
               <section aria-label="Conversations">
@@ -151,12 +159,12 @@ export function InspectorTabs({
   );
 }
 
-export type LeadInspectorProps = {
+export type LeadInspectorProps = OutboundStatusPresentation & DiscoveryPresentation & {
   state: LeadDetailState;
   onClose(): void;
   onRetry(): void;
   onOpenFullPage(personId: string): void;
-  onBeginOutbound(request: BeginOutboundRequest): void;
+  onBeginOutbound(request: BeginOutboundRequest): Promise<OutboundReceipt>;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
   onDismissLead(request: DismissLeadRequest): void;
   onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
@@ -177,6 +185,7 @@ export function LeadInspector({
   onDismissLead,
   onOverrideCloudScore,
   onFindContactInfo,
+  ...outboundPresentation
 }: LeadInspectorProps) {
   const resize = useResizableInspector();
 
@@ -215,6 +224,7 @@ export function LeadInspector({
         onPointerDown={resize.onSeparatorPointerDown}
       />
       <div className="lead-inspector__body">
+        {outboundPresentation.outboundStatus}
         {state.status === 'loading' && (
           <LoadingState label="Loading lead details" />
         )}
@@ -233,6 +243,7 @@ export function LeadInspector({
               onOpenFullPage={() => onOpenFullPage(state.detail.personId)}
             />
             <InspectorTabs
+              {...outboundPresentation}
               key={state.detail.personId}
               detail={state.detail}
               onBeginOutbound={onBeginOutbound}

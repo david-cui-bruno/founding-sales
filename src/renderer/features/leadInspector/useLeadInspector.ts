@@ -1,3 +1,6 @@
+import type { ReactNode } from 'react';
+import type { OutreachApi } from '../../../shared/contracts/outreachContract';
+import type { OutboundReceipt, OutboundCapabilities } from '../../../shared/contracts/outboundContract';
 import { createContext, useContext } from 'react';
 
 import type { MutationReceipt } from '../../../shared/contracts/commonContract';
@@ -17,7 +20,8 @@ import type {
 /** Injected transport. The inspector never touches Electron directly. */
 export type LeadDetailApi = {
   get(input: LeadDetailRequest): Promise<LeadDetail>;
-  beginOutbound(input: BeginOutboundRequest): Promise<MutationReceipt>;
+  beginOutbound(input: BeginOutboundRequest): Promise<OutboundReceipt>;
+  getOutboundCapabilities(): Promise<OutboundCapabilities>;
   confirmTransition(input: ConfirmTransitionRequest): Promise<MutationReceipt>;
   dismissLead(input: DismissLeadRequest): Promise<MutationReceipt>;
   overrideCloudScore(input: CloudScoreOverrideRequest): Promise<MutationReceipt>;
@@ -41,7 +45,7 @@ export type LeadInspectorHandle = {
   /** Replaces the current selection; the app never stacks inspectors. */
   openLead(personId: string): void;
   /** Promotes a person to the full page view using the same detail DTO. */
-  openFullPage(personId: string): void;
+  openFullPage(personId: string, options?: { refresh: boolean }): void;
   closeLead(): void;
   selectedPersonId: string | null;
   /**
@@ -75,3 +79,19 @@ export function useLeadInspector(): LeadInspectorHandle {
 export function useLeadInspectorIfAvailable(): LeadInspectorHandle | null {
   return useContext(LeadInspectorContext);
 }
+
+/** Shared presentation inputs. The provider owns request lifetime and receipts. */
+export type OutboundPresentation = {
+  outreachApi?: OutreachApi;
+  capabilities?: OutboundCapabilities | null;
+  outboundPending?: boolean;
+  outboundBlocked?: boolean;
+  onLogPastActivity?(commandId?: string): void;
+};
+export type OutboundStatusPresentation = OutboundPresentation & { outboundStatus?: ReactNode };
+
+/** Discovery and manual evidence are injected separately from outbound execution. */
+export type DiscoveryPresentation = {
+  discoveryEvidence?: ReactNode;
+  pastActivityControls?: ReactNode;
+};

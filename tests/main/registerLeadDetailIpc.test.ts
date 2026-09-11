@@ -12,6 +12,7 @@ vi.mock('electron', () => ({
   },
 }));
 
+import type { OutboundCapabilities, OutboundReceipt } from '../../src/shared/contracts/outboundContract';
 import type { MutationReceipt } from '../../src/shared/contracts/commonContract';
 import type { LeadDetail } from '../../src/shared/contracts/leadDetailContract';
 import type { LeadDetailProvider } from '../../src/main/leads/leadDetailService';
@@ -34,7 +35,10 @@ const detail: LeadDetail = {
   personName: 'Avery Landlord',
   phones: [
     {
+      contactSnapshot: 'a'.repeat(64),
       id: 'phone-1', kind: 'phone', value: '+14015550100', label: null, valid: true,
+      validationState: 'valid', reachability: 'none', sourceLabel: null, vendorRank: null,
+      phoneKind: null, ownershipState: 'unknown', evidenceObservedAt: null,
       compliance: {
         status: 'verified_clear', label: 'Verified clear until Sep 15, 2026',
         expiresAt: '2026-09-15T00:00:00.000Z',
@@ -61,9 +65,11 @@ const detail: LeadDetail = {
   priorityReasons: ['Fit high 24/30'],
   cloudScores: null,
   cloudLinked: false,
+  findContactEligibility: { eligible: false, refusalReason: 'qualification_required' },
   nextAction: null,
   optedOut: false,
   cadence: null,
+  outboundAttempts: [],
   activities: [],
   conversations: [],
   properties: [],
@@ -77,7 +83,13 @@ const receipt: MutationReceipt = {
   affectedSalesCycleIds: ['cycle-1'],
 };
 
+const unavailable = { state: 'unavailable', reasonCode: 'not_integrated' } as const;
+const capabilities: OutboundCapabilities = { phoneHandoff: unavailable, callObservation: unavailable, recording: unavailable, messagesSend: unavailable, gmailSend: unavailable, managedAudioImport: unavailable, appleTranscriptExtraction: unavailable, localDrafts: true };
+const outboundReceipt: OutboundReceipt = { commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', channel: 'call', status: 'handoff_accepted', reasonCode: null, mutation: receipt };
+
 const beginCall = {
+  commandId: outboundReceipt.commandId,
+  expectedContactSnapshot: 'a'.repeat(64),
   channel: 'call' as const,
   personId: 'person-1',
   salesCycleId: 'cycle-1',
@@ -93,7 +105,8 @@ const confirmReady = {
 function fakeProvider(): LeadDetailProvider {
   return {
     get: vi.fn(async () => detail),
-    beginOutbound: vi.fn(async () => receipt),
+    beginOutbound: vi.fn(async () => outboundReceipt),
+    getOutboundCapabilities: vi.fn(async () => capabilities),
     confirmTransition: vi.fn(async () => receipt),
     dismissLead: vi.fn(async () => receipt),
     overrideCloudScore: vi.fn(async () => receipt),
@@ -107,13 +120,14 @@ describe('registerLeadDetailIpc', () => {
     electron.removeHandler.mockReset();
   });
 
-  it('registers exactly the six lead-detail channels', () => {
+  it('registers exactly the seven lead-detail channels', () => {
     registerLeadDetailIpc(fakeProvider());
 
     const channels = electron.handle.mock.calls.map((call) => call[0]);
     expect(channels).toEqual([
       'lead-detail:get',
       'lead-detail:begin-outbound',
+      'lead-detail:outbound-capabilities',
       'lead-detail:confirm-transition',
       'lead-detail:dismiss',
       'lead-detail:cloud-score-override',
@@ -180,7 +194,7 @@ describe('registerLeadDetailIpc', () => {
       electron.handle,
       'lead-detail:begin-outbound',
     );
-    await expect(handler(trustedEvent, beginCall)).resolves.toEqual(receipt);
+    await expect(handler(trustedEvent, beginCall)).resolves.toEqual(outboundReceipt);
     expect(provider.beginOutbound).toHaveBeenCalledWith(beginCall);
 
     await expect(
@@ -190,6 +204,78 @@ describe('registerLeadDetailIpc', () => {
       handler(trustedEvent, { channel: 'call', personId: 'person-1' }),
     ).rejects.toThrow();
     expect(provider.beginOutbound).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects missing command/snapshot, forged fields and mismatched receipts', async () => {
+    const provider = fakeProvider();
+    registerLeadDetailIpc(provider);
+    const handler = registeredIpcHandler(electron.handle, 'lead-detail:begin-outbound');
+    for (const field of ['commandId', 'expectedContactSnapshot']) {
+      const invalid: Record<string, unknown> = { ...beginCall };
+      delete invalid[field];
+      await expect(handler(trustedEvent, invalid)).rejects.toThrow();
+    }
+    for (const field of ['target', 'body', 'url']) {
+      await expect(handler(trustedEvent, { ...beginCall, [field]: 'tel:+14015550100' })).rejects.toThrow();
+    }
+    expect(provider.beginOutbound).not.toHaveBeenCalled();
+    for (const patch of [{ commandId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }, { channel: 'text' }, { reasonCode: 'handoff_uncertain' }]) {
+      vi.mocked(provider.beginOutbound).mockResolvedValueOnce({ ...outboundReceipt, ...patch } as OutboundReceipt);
+      await expect(handler(trustedEvent, beginCall)).rejects.toThrow();
+    }
+  });
+
+  it('validates strict empty capabilities requests, sender and response', async () => {
+    const provider = fakeProvider();
+    registerLeadDetailIpc(provider);
+    const handler = registeredIpcHandler(electron.handle, 'lead-detail:outbound-capabilities');
+    await expect(handler(trustedEvent, {})).resolves.toEqual(capabilities);
+    await expect(handler(trustedEvent, { enable: true })).rejects.toThrow();
+    await expect(handler(trustedEvent)).rejects.toThrow();
+    await expect(handler(untrustedEvent, {})).rejects.toThrow('trusted');
+    expect(provider.getOutboundCapabilities).toHaveBeenCalledTimes(1);
+    vi.mocked(provider.getOutboundCapabilities).mockResolvedValueOnce({ ...capabilities, localDrafts: false } as never);
+    await expect(handler(trustedEvent, {})).rejects.toThrow();
+  });
+
+  it.each([2, 4, 7])('rolls back a failed nth (%s) registration in reverse at the handler registry', (nth) => {
+    const registry = new Set<string>();
+    const order: string[] = [];
+    const registrationError = new Error('registration failed');
+    const cleanupError = new Error('cleanup failed');
+    let count = 0;
+    electron.handle.mockImplementation((channel: string) => {
+      count += 1;
+      if (count === nth) throw registrationError;
+      registry.add(channel);
+    });
+    electron.removeHandler.mockImplementation((channel: string) => {
+      registry.delete(channel);
+      order.push(channel);
+      if (order.length === 1) throw cleanupError;
+    });
+    let caught: unknown;
+    try { registerLeadDetailIpc(fakeProvider()); } catch (error) { caught = error; }
+    expect(caught).toBeInstanceOf(AggregateError);
+    expect((caught as AggregateError).errors).toEqual([registrationError, cleanupError]);
+    expect(registry.size).toBe(0);
+    expect(order).toEqual(electron.handle.mock.calls.slice(0, nth - 1).map(([channel]) => channel).reverse());
+  });
+
+  it('attempts every reverse cleanup once even when cleanup throws', () => {
+    const registry = new Set<string>();
+    electron.handle.mockImplementation((channel: string) => registry.add(channel));
+    const failure = new Error('remove failed after removal');
+    electron.removeHandler.mockImplementation((channel: string) => {
+      registry.delete(channel);
+      if (channel === 'lead-detail:find-contact-info') throw failure;
+    });
+    const dispose = registerLeadDetailIpc(fakeProvider());
+    expect(dispose).toThrow();
+    expect(registry.size).toBe(0);
+    expect(electron.removeHandler.mock.calls.map(([channel]) => channel)).toEqual(electron.handle.mock.calls.map(([channel]) => channel).reverse());
+    expect(dispose).not.toThrow();
+    expect(electron.removeHandler).toHaveBeenCalledTimes(7);
   });
 
   it('validates transition-discriminated confirm requests', async () => {
@@ -258,7 +344,7 @@ describe('registerLeadDetailIpc', () => {
     expect(provider.findContactInfo).toHaveBeenCalledTimes(1);
   });
 
-  it('unregisters all six channels exactly once', () => {
+  it('unregisters all seven channels exactly once', () => {
     const unregister = registerLeadDetailIpc(fakeProvider());
 
     unregister();
@@ -272,7 +358,8 @@ describe('registerLeadDetailIpc', () => {
       'lead-detail:dismiss',
       'lead-detail:find-contact-info',
       'lead-detail:get',
+      'lead-detail:outbound-capabilities',
     ]);
-    expect(electron.removeHandler).toHaveBeenCalledTimes(6);
+    expect(electron.removeHandler).toHaveBeenCalledTimes(7);
   });
 });

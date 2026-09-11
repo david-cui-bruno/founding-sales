@@ -1,0 +1,229 @@
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { finished } from 'node:stream/promises';
+import { createPackage, extractFile, listPackage } from '@electron/asar';
+import { expect, it } from 'vitest';
+import { scanWithGitleaks, verifySecrets } from '../scripts/verifySecrets.mjs';
+
+// Hex-only random controls can fall below the default detector's entropy floor.
+// Public deterministic seeds produce unissued alphanumeric controls above 4.5.
+const syntheticPat = label => 'ghp_' + createHash('sha256').update(`Task12 unissued fixture ${label}`).digest('base64').replace(/[+/]/g, 'x').slice(0, 36);
+
+it('rejects a real owned deadline instead of accepting Gitleaks internal partial-success output', () => {
+  const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'gitleaks-timeout-'));
+  const stage = join(root, 'input'); mkdirSync(stage, { mode: 0o700 });
+  const file = join(stage, 'synthetic.txt');
+  const filler = 'token = "' + 'a'.repeat(32) + '"\n';
+  let sequence = 0;
+  const scan = ({ internalSeconds, parentMs }) => {
+    const temporary = join(root, `reports-${sequence++}`); mkdirSync(temporary, { mode: 0o700 });
+    let observed, output, failure;
+    const run = (command, args, options) => {
+      expect(options.timeout).toBe(660_000);
+      const bounded = [...args];
+      if (internalSeconds !== undefined) bounded[bounded.indexOf('--timeout') + 1] = String(internalSeconds);
+      const result = spawnSync(command, bounded, { ...options, timeout: parentMs });
+      observed = {
+        configuredInternal: args[args.indexOf('--timeout') + 1],
+        status: result.status, errorCode: result.error?.code, signal: result.signal,
+      };
+      // A killed scanner can remove or truncate its report. Preserve its actual
+      // process result without letting diagnostic report reads mask the error.
+      if (result.error || result.signal) return result;
+      const findings = JSON.parse(readFileSync(args[args.indexOf('--report-path') + 1], 'utf8'));
+      // Inspect only protocol metadata. Never retain or emit Secret/Match values.
+      observed.findings = findings.length;
+      observed.sentinelFound = findings.some(item => item.File === 'synthetic.txt' && item.RuleID === 'github-pat');
+      return result;
+    };
+    try { output = scanWithGitleaks({ root: process.cwd(), target: stage, kind: 'context', temporary, run }); }
+    catch (error) { failure = error; }
+    return { observed, output, failure };
+  };
+  try {
+    expect(execFileSync('gitleaks', ['version'], { encoding: 'utf8' }).trim()).toBe('8.30.1');
+    // Adapt only within three fixed sizes (2.15/4.30/8.60 MB), never to elapsed
+    // time assertions. Faster hosts may need more filler to expose partial exit0.
+    let legacy;
+    for (const repetitions of [50_000, 100_000, 200_000]) {
+      writeFileSync(file, filler.repeat(repetitions) + `\ntoken = "${syntheticPat('timeout')}"\n`, { mode: 0o600 });
+      legacy = scan({ internalSeconds: 1, parentMs: 10_000 });
+      expect(legacy.failure).toBeUndefined();
+      if (legacy.output.status === 'passed') break;
+    }
+    expect(legacy.output).toEqual({ kind: 'context', status: 'passed', findings: 0 });
+    expect(legacy.observed).toMatchObject({ status: 0, errorCode: undefined, signal: null, findings: 0, sentinelFound: false });
+    const digest = () => createHash('sha256').update(readFileSync(file)).digest('hex');
+    const before = digest();
+    // Same bytes and detectors, with the documented internal deadline disabled.
+    const completed = scan({ internalSeconds: 0, parentMs: 30_000 });
+    expect(completed.failure).toBeUndefined();
+    expect(completed.output).toEqual({ kind: 'context', status: 'findings', findings: 1 });
+    expect(completed.observed).toMatchObject({ status: 1, errorCode: undefined, signal: null, sentinelFound: true });
+    // Exercise the actual caller's unchanged argv, shortening only its owned
+    // parent deadline. No fake exit status, error, signal or report is returned.
+    const limited = scan({ parentMs: 100 });
+    expect.soft(limited.observed.configuredInternal).toBe('0');
+    expect(limited.observed.errorCode).toBe('ETIMEDOUT');
+    expect(limited.output).toBeUndefined();
+    expect(limited.failure).toEqual(new Error('SECRET_VERIFICATION_FAILED'));
+    expect(digest()).toBe(before);
+    console.log(JSON.stringify({ realScannerTimeout: true, fixtureBytes: readFileSync(file).length, legacyIncompleteExit: 0, completedSentinelDetected: true, parentError: limited.observed.errorCode, parentSignal: limited.observed.signal, parentFailureClosed: true }));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 60_000);
+
+it('disposes only the exact full source span, path and generic rule with real pinned Gitleaks', () => {
+  const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'gitleaks-span-'));
+  const exactPath = 'cloud/scripts/bootstrap-terraform-state.sh';
+  const shape = 'kms_key_arn=""\nbucket_phase="absent"\n';
+  const fabricated = randomBytes(24).toString('base64url');
+  const candidate = readFileSync(new URL('../.gitleaks.toml', import.meta.url), 'utf8');
+  let invocation = 0;
+  const scan = (config, file, contents) => {
+    const target = join(root, `case-${invocation++}`), temporary = join(root, `report-${invocation}`);
+    mkdirSync(join(target, file, '..'), { recursive: true, mode: 0o700 }); mkdirSync(temporary, { mode: 0o700 });
+    writeFileSync(join(target, file), contents, { mode: 0o600 }); writeFileSync(join(root, '.gitleaks.toml'), config);
+    let rules = [];
+    const run = (command, args, options) => {
+      const result = spawnSync(command, args, options);
+      const report = args[args.indexOf('--report-path') + 1];
+      if (report) rules = JSON.parse(readFileSync(report, 'utf8')).map(item => item.RuleID);
+      return result;
+    };
+    const result = scanWithGitleaks({ root, target, kind: 'context', temporary, run });
+    return { ...result, rules };
+  };
+  try {
+    expect(execFileSync('gitleaks', ['version'], { encoding: 'utf8' }).trim()).toBe('8.30.1');
+    for (const padding of ['', '\n'.repeat(20), '# synthetic\n'.repeat(22)]) {
+      expect(scan('[extend]\nuseDefault = true\n', exactPath, padding + shape).findings).toBe(1);
+      expect(scan(candidate, exactPath, padding + shape).findings).toBe(0);
+      expect(scan(candidate, exactPath, padding + shape.replace('absent', fabricated)).rules).toContain('generic-api-key');
+    }
+    for (const contents of [
+      `kms_key_arn="${fabricated}"\n`,
+      shape + `api_key="${fabricated}"\n`,
+      `api_key="${fabricated}"\n` + shape,
+      shape.replace('"absent"', `"absent"; api_key="${fabricated}"`),
+      shape.replace('absent', 'unknown'), shape.replace(/\n/g, '\r\n'),
+    ]) expect(scan(candidate, exactPath, contents).rules).toContain('generic-api-key');
+    for (const path of ['other.sh', `nested/${exactPath}`, `${exactPath}.bak`]) {
+      expect(scan(candidate, path, shape).rules).toContain('generic-api-key');
+    }
+    const pat = syntheticPat('other-rule');
+    expect(scan(candidate, exactPath, shape + `token="${pat}"\n`).rules).toContain('github-pat');
+    const otherRule = '\n[[rules]]\nid="synthetic-span-control"\ndescription="Synthetic independent span control"\nregex=\'\'\'kms_key_arn=""\'\'\'\n';
+    expect(scan(candidate + otherRule, exactPath, shape).rules).toContain('synthetic-span-control');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 60_000);
+it('disposes only the exact public detector line without recursive or unknown-content exemptions', () => {
+  const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'gitleaks-public-regex-'));
+  const candidate = readFileSync(new URL('../.gitleaks.toml', import.meta.url), 'utf8');
+  const baseline = candidate.split('# Exact pinned public detector definition')[0];
+  const publicLine = candidate.match(/id = "aws-amazon-bedrock-api-key-short-lived"\n[^\n]*\n(regex = [^\n]*)/)[1];
+  const encoded = [...Buffer.from(publicLine)].map(byte => `\\x${byte.toString(16).padStart(2, '0')}`).join('');
+  const sameRule = 'aws-amazon-bedrock-api-key-short-lived';
+  const fabricated = publicLine.slice("regex = '''".length, -3) + '-unissued-' + randomBytes(24).toString('hex');
+  let invocation = 0;
+  const scan = (config, file, contents) => {
+    const target = join(root, `case-${invocation++}`), temporary = join(root, `report-${invocation}`);
+    mkdirSync(join(target, file, '..'), { recursive: true, mode: 0o700 }); mkdirSync(temporary, { mode: 0o700 });
+    writeFileSync(join(target, file), contents, { mode: 0o600 }); writeFileSync(join(root, '.gitleaks.toml'), config);
+    let rules = [];
+    const run = (command, args, options) => {
+      const result = spawnSync(command, args, options);
+      rules = JSON.parse(readFileSync(args[args.indexOf('--report-path') + 1], 'utf8')).map(item => item.RuleID);
+      return result;
+    };
+    return { ...scanWithGitleaks({ root, target, kind: 'context', temporary, run }), rules };
+  };
+  try {
+    for (const padding of ['', '\n'.repeat(20), '# synthetic\n'.repeat(22)]) {
+      expect.soft(scan(baseline, '.gitleaks.toml', padding + publicLine + '\n').rules).toContain(sameRule);
+      expect.soft(scan(candidate, '.gitleaks.toml', padding + publicLine + '\n').findings).toBe(0);
+    }
+    expect.soft(scan(candidate, '.gitleaks.toml', candidate).findings).toBe(0);
+    const withoutLeadingLf = candidate.replace(`\\A\\n?${encoded}`, `\\A${encoded}`);
+    expect.soft(scan(withoutLeadingLf, '.gitleaks.toml', '# synthetic\n'.repeat(22) + publicLine + '\n').rules).toContain(sameRule);
+    for (const contents of [
+      publicLine + ' # changed\n', publicLine.replace('regex =', 'changed =') + '\n', publicLine + '\r\n',
+      `token="${fabricated}"\n`, publicLine + `\ntoken="${fabricated}"\n`,
+      `token="${fabricated}"\n` + publicLine + '\n', publicLine + `; token="${fabricated}"\n`,
+    ]) expect.soft(scan(candidate, '.gitleaks.toml', contents).rules).toContain(sameRule);
+    for (const path of ['other.toml', 'nested/.gitleaks.toml', '.gitleaks.toml.bak']) {
+      expect.soft(scan(candidate, path, publicLine + '\n').rules).toContain(sameRule);
+    }
+    expect.soft(scan(candidate, '.gitleaks.toml', publicLine + `\ntoken="${syntheticPat('other-rule')}"\n`).rules).toContain('github-pat');
+    const otherRule = '\n[[rules]]\nid="synthetic-public-regex-control"\ndescription="Independent exact-line control"\nregex=\'\'\'regex = \'\'\'\n';
+    expect.soft(scan(candidate + otherRule, '.gitleaks.toml', publicLine + '\n').rules).toContain('synthetic-public-regex-control');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 60_000);
+it('calibrates real 8.30.1 on deleted generated-path and merge-only history plus built and extracted content', async () => {
+  const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'gitleaks-calibration-'));
+  const git = (...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' } });
+  const put = (name, contents) => { mkdirSync(join(root, name, '..'), { recursive: true }); writeFileSync(join(root, name), contents); };
+  const sentinel = label => `token = "${syntheticPat(label)}"`;
+  const historyPaths = [
+    'node_modules/deleted.js', 'vendor/github.com/fixture/deleted.go',
+    'bower_components/deleted.js', '.vite/build/jquery.min.js',
+    'nested/package-lock.json', 'nested/gitleaks.toml', 'out/helper.bin',
+    'out/help.pdf', 'venv/lib/fixture.py', 'vendor/ruby/fixture.rb',
+  ];
+  const metadata = [];
+  const run = (command, args, options) => {
+    const result = spawnSync(command, args, options);
+    if (command === 'gitleaks' && args.includes('--report-path')) {
+      const findings = JSON.parse(readFileSync(args[args.indexOf('--report-path') + 1], 'utf8'));
+      metadata.push(...findings.map(({ File, Commit, RuleID }) => ({ File, Commit, RuleID })));
+    }
+    return result;
+  };
+  try {
+    git('init', '-b', 'main'); cpSync(new URL('../.gitleaks.toml', import.meta.url), join(root, '.gitleaks.toml')); put('src/clean.js', 'export const n = 1;');
+    put('.gitignore', 'node_modules/\nout/\n.vite/\nvendor/\nbower_components/\nvenv/\n');
+    put('cloud/scripts/bootstrap-terraform-state.sh', '# synthetic\n'.repeat(22) + 'kms_key_arn=""\nbucket_phase="absent"\n');
+    git('add', '.'); git('commit', '-m', 'clean');
+    expect(verifySecrets({ root }).map(result => result.status)).toEqual(['passed', 'passed']);
+    for (const path of historyPaths) put(path, sentinel('deleted'));
+    git('add', '-f', ...historyPaths); git('commit', '-m', 'synthetic history');
+    const deletedIntroduction = git('rev-parse', 'HEAD').toString().trim();
+    for (const path of historyPaths) expect(git('show', `${deletedIntroduction}:${path}`).toString()).toBe(sentinel('deleted'));
+    git('rm', ...historyPaths); git('commit', '-m', 'delete synthetic');
+    git('checkout', '-b', 'side'); put('side.txt', 'side'); git('add', '.'); git('commit', '-m', 'side'); git('checkout', 'main'); put('main.txt', 'main'); git('add', '.'); git('commit', '-m', 'main');
+    git('merge', '--no-ff', '--no-commit', 'side'); put('out/merge-only.js', sentinel('merge')); git('add', '-f', 'out/merge-only.js'); git('commit', '-m', 'merge synthetic');
+    const mergeIntroduction = git('rev-parse', 'HEAD').toString().trim();
+    git('rm', 'out/merge-only.js'); git('commit', '-m', 'delete merge synthetic');
+    put('.vite/build/main.js', sentinel('generated'));
+    put('.vite/build/jquery.min.js', sentinel('generated'));
+    const source = verifySecrets({ root, run }); expect(source[0].findings).toBeGreaterThanOrEqual(2); expect(source[1].findings).toBeGreaterThanOrEqual(1);
+    expect(git('log', '--all', '--full-history', '-m', '--format=%H').toString().split('\n')).toContain(deletedIntroduction);
+    for (const path of historyPaths) expect(metadata).toContainEqual({ File: path, Commit: deletedIntroduction, RuleID: 'github-pat' });
+    expect(metadata).toContainEqual({ File: 'out/merge-only.js', Commit: mergeIntroduction, RuleID: 'github-pat' });
+    for (const path of ['.vite/build/main.js', '.vite/build/jquery.min.js']) {
+      expect(metadata).toContainEqual({ File: path, Commit: '', RuleID: 'github-pat' });
+    }
+    put('archive/inside.js', sentinel('archive')); put('archive/node_modules/dependency.js', sentinel('archive'));
+    const resources = join(root, 'out/Callie.app/Contents/Resources'); mkdirSync(resources, { recursive: true });
+    const archivePath = join(resources, 'app.asar');
+    const archiveStream = await createPackage(join(root, 'archive'), archivePath);
+    // The pinned ASAR factory returns after end(), before the output is finished.
+    await finished(archiveStream);
+    const sourceDependency = readFileSync(join(root, 'archive/node_modules/dependency.js'));
+    const extractedDependency = extractFile(archivePath, 'node_modules/dependency.js');
+    expect(listPackage(archivePath)).toContain('/node_modules/dependency.js');
+    expect(sourceDependency.length).toBe(50);
+    expect(sourceDependency.equals(Buffer.from(sentinel('archive')))).toBe(true);
+    expect(extractedDependency.length).toBe(sourceDependency.length);
+    expect(createHash('sha256').update(extractedDependency).digest('hex') === createHash('sha256').update(sourceDependency).digest('hex')).toBe(true);
+    expect(archiveStream.writableFinished).toBe(true);
+    put('out/Callie.app/Contents/Resources/app.asar.unpacked/module.node', sentinel('archive'));
+    put('out/Callie.app/Contents/Helpers/helper.bin', sentinel('archive'));
+    expect(verifySecrets({ root, mode: 'package', run })[0].findings).toBeGreaterThanOrEqual(1);
+    for (const path of ['asar/inside.js', 'asar/node_modules/dependency.js', 'bundle/Contents/Resources/app.asar.unpacked/module.node', 'bundle/Contents/Helpers/helper.bin']) {
+      expect(metadata).toContainEqual({ File: path, Commit: '', RuleID: 'github-pat' });
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 60_000);

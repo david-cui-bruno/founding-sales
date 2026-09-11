@@ -16,5 +16,70 @@
   "parser": "@typescript-eslint/parser",
   "ignorePatterns": [
     "cloud/lambdas/**"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "cloud/lambdas/**/*.{js,mjs,cjs,ts,mts,cts,tsx}"
+      ],
+      "settings": {
+        "import/resolver": "../../../scripts/lambdaImportResolver.cjs"
+      }
+    },
+    {
+      "files": [
+        "scripts/probeEncryptedSqlite.cjs"
+      ],
+      "rules": {
+        "@typescript-eslint/no-require-imports": [
+          "error",
+          {
+            "allow": [
+              "^node:fs$",
+              "^node:path$",
+              "^electron$",
+              "^better-sqlite3-multiple-ciphers$",
+              "^better-sqlite3-multiple-ciphers/package\\.json$",
+              "^kysely$"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "scripts/probeEncryptedSqliteNative.cjs"
+      ],
+      "rules": {
+        "@typescript-eslint/no-require-imports": [
+          "error",
+          {
+            "allow": [
+              "^better-sqlite3-multiple-ciphers$",
+              "^node:fs$",
+              "^node:os$",
+              "^node:path$"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "scripts/lambdaImportResolver.cjs"
+      ],
+      "rules": {
+        "@typescript-eslint/no-require-imports": [
+          "error",
+          {
+            "allow": [
+              "^node:module$",
+              "^node:path$",
+              "^typescript$"
+            ]
+          }
+        ]
+      }
+    }
   ]
 }

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { communicationRecencySql } from '../events/communicationEvidence';
 
 import type { AppDatabase } from '../../db/database';
 import {
@@ -20,6 +21,10 @@ const utcTimestampSchema = z.string().regex(
 );
 
 const baseRowSchema = z.object({
+  segment: z.enum(['hot', 'cold', 'warm']),
+  action_due_at: utcTimestampSchema.nullable(),
+  callback_activity_id: idSchema.nullable(),
+  callback_due_at: utcTimestampSchema.nullable(),
   cycle_id: idSchema,
   person_id: idSchema,
   prospect_id: idSchema,
@@ -86,7 +91,7 @@ const ACTIVITY_KINDS = [
   'call', 'voicemail', 'text', 'email', 'interview', 'offer', 'note', 'job', 'system',
 ] as const;
 
-const CADENCE_FAMILIES = ['cadence_a', 'cadence_b', 'cadence_c', 'post_offer'] as const;
+const CADENCE_FAMILIES = ['cadence_a', 'cadence_b', 'cadence_c', 'post_interview', 'post_offer', 'onboarding'] as const;
 
 function diagnostic(
   cycleId: string | null,
@@ -127,9 +132,20 @@ export class TodayRepository {
     }
   }
 
+  hasActiveWarm(): boolean {
+    return (this.database.raw.prepare(`SELECT COUNT(*) AS count FROM sales_cycles c
+      JOIN prospects p ON p.id = c.prospect_id JOIN persons person ON person.id = c.person_id
+      WHERE c.workflow_status IN ('active','onboarding') AND p.segment = 'warm'
+        AND person.opted_out = 0 AND person.deleted_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM opt_out_tombstones t WHERE t.person_id = person.id)
+      `).get() as { count: number }).count > 0;
+  }
+
   listOperationalCandidates(): readonly TodayCandidateLoadResult[] {
     const rows = this.database.raw.prepare(`
       SELECT
+        prospect.segment, action.due_at AS action_due_at,
+        callback.id AS callback_activity_id, callback.callback_at AS callback_due_at,
         cycle.id AS cycle_id,
         cycle.person_id AS person_id,
         cycle.prospect_id AS prospect_id,
@@ -164,6 +180,7 @@ export class TodayRepository {
         last_activity.occurred_at AS last_activity_occurred_at,
         last_activity.observed_outcome AS last_activity_observed_outcome
       FROM sales_cycles AS cycle
+      JOIN prospects AS prospect ON prospect.id = cycle.prospect_id
       JOIN persons AS person ON person.id = cycle.person_id
       LEFT JOIN next_actions AS action
         ON action.id = cycle.current_next_action_id
@@ -176,10 +193,22 @@ export class TodayRepository {
       LEFT JOIN cadence_steps AS step
         ON step.id = action.cadence_step_id
         AND step.cadence_definition_id = enrollment.cadence_definition_id
+      LEFT JOIN activities AS callback ON callback.rowid = (
+        SELECT MAX(promise.rowid) FROM activities promise
+        WHERE promise.sales_cycle_id = cycle.id AND promise.person_id = cycle.person_id
+          AND promise.callback_at IS NOT NULL AND promise.kind = 'call'
+      ) AND NOT EXISTS (SELECT 1 FROM activity_amendments amendment WHERE amendment.activity_id = callback.id)
+        AND NOT EXISTS (SELECT 1 FROM activities fulfilled WHERE fulfilled.sales_cycle_id = cycle.id
+            AND fulfilled.person_id = cycle.person_id AND fulfilled.kind = 'call'
+            AND fulfilled.direction = 'outbound' AND fulfilled.observed_outcome IS NOT NULL
+            AND fulfilled.rowid > callback.rowid AND fulfilled.occurred_at >= callback.callback_at
+            AND fulfilled.callback_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM activity_amendments amendment WHERE amendment.activity_id = fulfilled.id))
       LEFT JOIN activities AS last_activity
         ON last_activity.id = (
           SELECT candidate.id FROM activities AS candidate
           WHERE candidate.sales_cycle_id = cycle.id
+            AND ${communicationRecencySql}
           ORDER BY candidate.occurred_at DESC, candidate.id DESC
           LIMIT 1
         )
@@ -200,11 +229,6 @@ export class TodayRepository {
       return diagnostic(cycleId, null, 'invalid_current_action', []);
     }
     const row = parsed.data;
-    // Unreviewed cycles never enter lanes: they surface as one triage
-    // backlog count and generate no work (no-due-dates model).
-    if (row.stage === 'unreviewed') {
-      return { kind: 'unreviewed_backlog', cycleId: row.cycle_id };
-    }
     if (row.current_next_action_id === null) {
       return diagnostic(row.cycle_id, row.person_id, 'missing_current_action', []);
     }
@@ -299,13 +323,19 @@ export class TodayRepository {
       };
     }
 
+    if (row.action_due_at === null) return diagnostic(row.cycle_id, row.person_id, 'invalid_timestamp', [row.action_id]);
     const candidate: ParsedTodayCandidate = {
+      segment: row.segment,
+      commitment: row.callback_activity_id !== null && row.callback_due_at !== null
+        ? { kind: 'callback', activityId: row.callback_activity_id, dueAt: row.callback_due_at }
+        : ['interviewed', 'offered', 'won'].includes(row.stage) ? { kind: 'post_stage' } : null,
       cycleId: row.cycle_id,
       personId: row.person_id,
       prospectId: row.prospect_id,
       stage: row.stage,
       workflowStatus: row.workflow_status,
       action: {
+        dueAt: row.action_due_at,
         id: row.action_id,
         workIntent,
         actionType: row.action_type ?? '',

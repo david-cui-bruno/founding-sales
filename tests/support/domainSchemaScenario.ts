@@ -5,6 +5,10 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
 import {
+  assertDomainStorageReady,
+  DOMAIN_SCHEMA_MANIFEST,
+} from '../../src/main/domain/startup/storageReadiness';
+import {
   DOMAIN_TIMESTAMP,
   insertCadenceDefinition,
   insertClosedCycle,
@@ -17,6 +21,7 @@ import {
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
 
 const domainTables = [
+  'discovery_assessments', 'discovery_current', 'discovery_overrides', 'discovery_preparations', 'discovery_scan_state',
   'activities',
   'activity_amendments',
   'cadence_action_components',
@@ -48,6 +53,7 @@ const domainTables = [
   'prospect_priority_projection',
   'prospect_properties',
   'reactivation_rules',
+  'restore_drill_receipts',
   'sales_cycles',
   'sales_cycle_close_readiness',
   'source_events',
@@ -61,6 +67,9 @@ const domainTables = [
 ] as const;
 
 const requiredIndexes = [
+  'next_actions_due_idx', 'email_draft_open_contact',
+  'discovery_assessments_prospect_evaluated_idx', 'discovery_assessments_disposition_expires_idx',
+  'discovery_overrides_owner_created_idx', 'jobs_type_state_created_idx',
   'activities_provider_idempotency_idx',
   'contact_compliance_audit_contact_idx',
   'jobs_type_idempotency_idx',
@@ -70,10 +79,21 @@ const requiredIndexes = [
 ] as const;
 
 const requiredTriggers = [
+  'initialize_next_action_due', 'initialize_unreviewed_action',
+  'protect_next_action_due', 'protect_operational_action_pointer',
+  'email_send_intents_no_update', 'email_send_intents_no_delete',
+  'email_send_results_no_update', 'email_send_results_no_delete',
+  'discovery_assessments_owner_insert', 'discovery_current_owner_insert', 'discovery_current_owner_update',
+  'discovery_overrides_owner_insert', 'discovery_preparations_owner_insert',
+  'discovery_assessments_no_update', 'discovery_assessments_no_delete',
+  'discovery_overrides_no_update', 'discovery_overrides_no_delete',
+  'discovery_preparations_no_update', 'discovery_preparations_no_delete',
   'immutable_activities',
   'immutable_activities_delete',
   'immutable_activity_amendments',
   'immutable_activity_amendments_delete',
+  'immutable_backup_receipts',
+  'immutable_backup_receipts_delete',
   'immutable_cadence_action_components',
   'immutable_cadence_action_components_delete',
   'immutable_cadence_definitions',
@@ -84,6 +104,8 @@ const requiredTriggers = [
   'immutable_consent_policy_records_delete',
   'immutable_cycle_reactivation_receipts',
   'immutable_cycle_reactivation_receipts_delete',
+  'immutable_identity_repair_events',
+  'immutable_identity_repair_events_delete',
   'immutable_learning_evidence',
   'immutable_learning_evidence_delete',
   'immutable_transcript_utterances',
@@ -106,6 +128,8 @@ const requiredTriggers = [
   'immutable_prioritization_rule_versions_delete',
   'immutable_prioritization_preference_events',
   'immutable_prioritization_preference_events_delete',
+  'immutable_restore_drill_receipts',
+  'immutable_restore_drill_receipts_delete',
   'protect_trigger_event_receipt_proof',
   'immutable_source_events',
   'immutable_source_events_delete',
@@ -167,6 +191,7 @@ const requiredTriggers = [
   'protect_prospect_original_source',
   'protect_reactivation_rule_delete',
   'protect_reactivation_rule_update',
+  'protect_restore_drill_backup_receipt',
   'protect_source_intake_receipt_prospect',
   'protect_trigger_event_ownership',
   'synchronize_person_opt_out',
@@ -209,11 +234,48 @@ function runDatabaseScenario(
   const raw = database.raw;
   switch (name) {
     case 'manifest': {
+      assert.equal(assertDomainStorageReady({
+        database,
+        expectedBusyTimeoutMs: 5000,
+        expectedSchemaVersion: 19,
+        expectedManifest: DOMAIN_SCHEMA_MANIFEST,
+      }).schemaVersion, 19);
       assert.deepEqual(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
         ).get(),
-        { schema_version: 14 },
+        { schema_version: 19 },
+      );
+      assert.deepEqual(raw.prepare<[], { name: string }>(`
+        SELECT name FROM kysely_migration ORDER BY timestamp, name
+      `).all().map(({ name: migrationName }) => migrationName), [
+        '0001Foundation',
+        '0002DomainFoundation',
+        '0003Transcripts',
+        '0004Learnings',
+        '0005SourcingChannels',
+        '0006SourcingState',
+        '0007SourcingOutbox',
+        '0008DedupeCloudPersons',
+        '0009SourcingFileLedger',
+        '0010NoDueDates',
+        '0011ContactDncFlags',
+        '0012UpstreamRequestState',
+        '0013ContactComplianceEvidence',
+        '0014OutboundJurisdictionClearance',
+        '0015RecoveryMetadata',
+        '0016ContactPresentationEvidence', '0017DiscoveryAssessments',
+        '0018PlaybookDueActions', '0019EmailDrafts',
+      ]);
+      assert.deepEqual(
+        raw.prepare('PRAGMA table_info(person_contact_methods)').all().slice(19),
+        [
+          { cid: 19, name: 'source_label', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 },
+          { cid: 20, name: 'vendor_rank', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 0 },
+          { cid: 21, name: 'phone_kind', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 },
+          { cid: 22, name: 'ownership_state', type: 'TEXT', notnull: 1, dflt_value: "'unknown'", pk: 0 },
+          { cid: 23, name: 'evidence_observed_at', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 },
+        ],
       );
       const actualTables = raw.prepare<string[], { name: string }>(`
         SELECT name FROM sqlite_master

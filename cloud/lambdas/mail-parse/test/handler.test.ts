@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
-import { validateSourceEvent, type CloudSourceEvent } from "@callie-sourcing/shared";
+import {
+  loadSecureParameter,
+  validateSourceEvent,
+  type CloudSourceEvent,
+} from "@callie-sourcing/shared";
 import type { SESEvent } from "aws-lambda";
 import { createHandler, handlerWithDeps, type HandlerDeps } from "../src/handler";
 import {
@@ -64,6 +68,7 @@ function fakeDeps(state: FakeState): HandlerDeps {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       }) as any,
     },
+    getNtfyTopic: async () => null,
     env: {
       RAW_MAIL_BUCKET: "raw-bucket",
       INBOX_BUCKET: "inbox-bucket",
@@ -257,6 +262,58 @@ function assertSafeBoundaryFailure(failure: unknown, originalName: string, origi
 }
 
 describe("exported handler boundary", () => {
+  it("continues ingestion when the optional ntfy parameter does not exist", async () => {
+    const state = newState("msg-test", testOverrideF5botMime);
+    const deps = fakeDeps(state);
+    deps.getNtfyTopic = () =>
+      loadSecureParameter({
+        client: {
+          send: async () => {
+            throw Object.assign(new Error("private parameter identifier"), {
+              name: "ParameterNotFound",
+            });
+          },
+        },
+        parameterName: "/callie-sourcing/ntfy-topic",
+        required: false,
+      });
+
+    await expect(createHandler(() => deps)(sesEvent("msg-test"))).resolves.toBeUndefined();
+  });
+  it("writes the inbox and skips push when optional ntfy lookup is rejected", async () => {
+    const state = newState("msg-test", testOverrideF5botMime);
+    const deps = fakeDeps(state);
+    const fetchImpl = vi.fn();
+    deps.fetchImpl = fetchImpl as unknown as typeof fetch;
+    deps.getNtfyTopic = async () => {
+      throw Object.assign(new Error("ciphertext rejected for private parameter"), {
+        name: "KMSInvalidStateException",
+      });
+    };
+
+    await expect(createHandler(() => deps)(sesEvent("msg-test"))).resolves.toBeUndefined();
+
+    expect(state.dynamoPuts).toHaveLength(1);
+    expect(state.inboxPuts).toHaveLength(1);
+    expect(parseNdjson(state.inboxPuts[0]!.body)).toHaveLength(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+  it("resolves the optional ntfy topic once per invocation without warm caching", async () => {
+    const state = newState("msg-test", testOverrideF5botMime);
+    const deps = fakeDeps(state);
+    let lookups = 0;
+    deps.getNtfyTopic = async () => {
+      lookups += 1;
+      return null;
+    };
+    const invocation = createHandler(() => deps);
+
+    await invocation(sesEvent("msg-test"));
+    state.dynamoKeys.clear();
+    await invocation(sesEvent("msg-test"));
+
+    expect(lookups).toBe(2);
+  });
   it("replaces PII-bearing provider failures with the fixed safe error", async () => {
     const state = newState("other-message", Buffer.from(""));
     state.missingObjectError = Object.assign(

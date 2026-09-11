@@ -3,6 +3,8 @@ import { accessSync, constants, existsSync, readdirSync, statSync } from 'node:f
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { verifyAppleBridgePackage } from './verifyAppleBridgePackage.mjs';
+import { extractFile } from '@electron/asar';
+import { assertCleanHead, readReleaseMarker, validateReleaseMarker } from './writeReleaseMarker.mjs';
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDirectory, '..');
@@ -408,6 +410,10 @@ export const verifyPackagedApp = (
     runCommand = defaultRunCommand,
     asarCommand = 'asar',
     fusesCommand = 'electron-fuses',
+    root = projectRoot,
+    checkHead = assertCleanHead,
+    readBuildMarker = readReleaseMarker,
+    readArchiveFile = extractFile,
   } = {},
 ) => {
   assertDirectory(appPath, 'packaged app bundle');
@@ -420,6 +426,15 @@ export const verifyPackagedApp = (
   assertFile(plistPath, 'Info.plist');
   const asarPath = join(resourcesPath, 'app.asar');
   assertFile(asarPath, 'app.asar');
+
+  const releaseMarker = validateReleaseMarker(readBuildMarker({ root }));
+  checkHead({ root, expectedSha: releaseMarker.commitSha });
+  const embeddedMarker = validateReleaseMarker(JSON.parse(
+    readArchiveFile(asarPath, 'release-marker.json').toString('utf8'),
+  ));
+  if (embeddedMarker.commitSha !== releaseMarker.commitSha || embeddedMarker.builtAt !== releaseMarker.builtAt) {
+    fail('embedded release marker does not match the original clean build');
+  }
 
   const executableName = readPlistField(plistPath, 'CFBundleExecutable', runCommand);
   const executablePath = resolvePackagedExecutable(contentsPath, executableName);
@@ -468,6 +483,7 @@ export const verifyPackagedApp = (
     'verify final macOS code signature',
   );
   const appleBridge = verifyAppleBridgePackage(appPath, { runCommand });
+  checkHead({ root, expectedSha: releaseMarker.commitSha });
 
   return {
     appPath,
@@ -479,6 +495,7 @@ export const verifyPackagedApp = (
     bundle,
     fuses,
     appleBridge,
+    releaseMarker: embeddedMarker,
   };
 };
 

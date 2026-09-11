@@ -140,6 +140,14 @@ describe('mapCloudSourceEvent', () => {
           value: '+14015550100',
           reachability: 'direct',
           isPrimary: true,
+          validationState: 'unverified',
+          presentationEvidence: {
+            sourceLabel: 'tracerfy',
+            vendorRank: 1,
+            phoneKind: 'mobile',
+            ownershipState: 'vendor_candidate',
+            evidenceObservedAt: '2026-09-02T02:59:00.000Z',
+          },
           complianceEvidence: {
             federalStatus: 'unknown',
             tcpaFlag: null,
@@ -154,6 +162,14 @@ describe('mapCloudSourceEvent', () => {
           value: '+14015550101',
           reachability: 'direct',
           isPrimary: false,
+          validationState: 'unverified',
+          presentationEvidence: {
+            sourceLabel: 'tracerfy',
+            vendorRank: 2,
+            phoneKind: 'landline',
+            ownershipState: 'vendor_candidate',
+            evidenceObservedAt: '2026-09-02T02:59:00.000Z',
+          },
           complianceEvidence: {
             federalStatus: 'listed',
             tcpaFlag: null,
@@ -168,6 +184,14 @@ describe('mapCloudSourceEvent', () => {
           value: 'jane.roe@example.com',
           reachability: 'direct',
           isPrimary: true,
+          validationState: 'unverified',
+          presentationEvidence: {
+            sourceLabel: 'tracerfy',
+            vendorRank: 1,
+            phoneKind: null,
+            ownershipState: 'vendor_candidate',
+            evidenceObservedAt: '2026-09-02T02:59:00.000Z',
+          },
         },
       ]);
     });

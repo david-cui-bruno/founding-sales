@@ -1,5 +1,9 @@
-import { useState } from 'react';
+import type { OutboundReceipt } from '../../../shared/contracts/outboundContract';
+import type { OutboundPresentation, DiscoveryPresentation } from './useLeadInspector';
+import { OutboundComposer } from './OutboundComposer';
+import { useEffect, useRef, useState } from 'react';
 
+import { selectPrimaryPhone } from '../../../shared/contactPresentation';
 import type {
   FindContactInfoReceipt,
   FindContactInfoRequest,
@@ -16,12 +20,12 @@ import type {
 import { humanizeEnumLabel } from '../../../shared/displayText';
 import { Button } from '../../components/Button';
 import { Select } from '../../components/Select';
-import { StatusBadge } from '../../components/StatusBadge';
 import { StatusPill } from '../../components/StatusPill';
 import {
   cloudSignalLabel,
   formatCloudChip,
 } from '../leads/cloudSignalLabels';
+import { ContactEvidenceCard, phoneActionHelp } from './ContactEvidenceCard';
 
 const OPT_OUT_REASON =
   'This person opted out. Outreach is permanently disabled.';
@@ -39,9 +43,9 @@ const DISMISS_REASON_OPTIONS: ReadonlyArray<{
   { value: 'unresolved_duplicate', label: 'Unresolved duplicate' },
 ];
 
-export type InspectorOverviewProps = {
+export type InspectorOverviewProps = OutboundPresentation & DiscoveryPresentation & {
   detail: LeadDetail;
-  onBeginOutbound(request: BeginOutboundRequest): void;
+  onBeginOutbound(request: BeginOutboundRequest): Promise<OutboundReceipt>;
   onConfirmTransition(request: ConfirmTransitionRequest): void;
   onDismissLead(request: DismissLeadRequest): void;
   onOverrideCloudScore(request: CloudScoreOverrideRequest): void;
@@ -55,12 +59,12 @@ function OutboundButton({
   detail,
   channel,
   contact,
-  onBeginOutbound,
+  onSelectOutbound,
 }: {
   detail: LeadDetail;
   channel: BeginOutboundRequest['channel'];
   contact: ContactMethod;
-  onBeginOutbound(request: BeginOutboundRequest): void;
+  onSelectOutbound(channel: BeginOutboundRequest['channel'], contact: ContactMethod): void;
 }) {
   const verb = channel === 'call' ? 'Call' : channel === 'text' ? 'Text' : 'Email';
   const refusalReason = contact.kind === 'phone' && contact.compliance !== null
@@ -79,17 +83,7 @@ function OutboundButton({
         variant="quiet"
         disabled={detail.optedOut || blocked}
         aria-describedby={helpId}
-        onClick={() => {
-          void Promise.resolve(onBeginOutbound({
-            channel,
-            personId: detail.personId,
-            salesCycleId: detail.salesCycleId,
-            contactMethodId: contact.id,
-          })).catch(() => {
-            // The main-process final gate is authoritative even after an
-            // allowed advisory snapshot. Keep the stale action from advancing.
-          });
-        }}
+        onClick={() => onSelectOutbound(channel, contact)}
       >
         {verb} {contact.value}
       </Button>
@@ -172,15 +166,19 @@ function ReviewSection({
 }
 
 /** Founder-facing receipt lines for the Find contact info refusals. */
-const FIND_CONTACT_RECEIPTS: Readonly<Record<string, string>> = {
+const FIND_CONTACT_RECEIPTS: Readonly<Record<NonNullable<FindContactInfoReceipt['refusalReason']> | 'written', string>> = {
   written: 'Contact info requested. Results arrive with the next sync.',
+  qualification_required: 'Founder qualification is required.',
+  fit_gate_failed: 'Medium or High Fit is required.',
+  identity_or_address_missing: 'A verified identity, cloud link, and usable property address are required.',
+  direct_contact_exists: 'A usable verified contact is already on file.',
+  suppression_blocked: 'Opt-out or suppression prevents contact enrichment.',
   rate_limited: 'Already requested in the last 30 days.',
-  not_eligible: 'This lead is missing a usable property address.',
   credentials_unavailable: 'Sourcing credentials are not provisioned.',
 };
 
 /**
- * Cloud-linked leads with no phone numbers can request enrichment. One
+ * Domain-eligible leads can request enrichment regardless of candidate count. One
  * explicit click writes one request; the receipt renders inline (no toast).
  */
 function FindContactInfoSection({
@@ -192,7 +190,7 @@ function FindContactInfoSection({
 }) {
   const [receipt, setReceipt] = useState<string | null>(null);
   const [requesting, setRequesting] = useState(false);
-  const eligible = detail.phones.length === 0;
+  const { eligible, refusalReason } = detail.findContactEligibility;
 
   return (
     <div className="lead-inspector__find-contact">
@@ -206,8 +204,10 @@ function FindContactInfoSection({
               setRequesting(false);
               setReceipt(
                 result.written
-                  ? FIND_CONTACT_RECEIPTS.written!
-                  : FIND_CONTACT_RECEIPTS[result.refusalReason ?? 'not_eligible']!,
+                  ? FIND_CONTACT_RECEIPTS.written
+                  : result.refusalReason === null
+                    ? 'The request was not submitted.'
+                    : FIND_CONTACT_RECEIPTS[result.refusalReason],
               );
             },
             () => {
@@ -219,9 +219,9 @@ function FindContactInfoSection({
       >
         Find contact info
       </Button>
-      {!eligible && (
+      {!eligible && refusalReason !== null && (
         <p className="lead-inspector__find-contact-reason">
-          Phone numbers are already on file.
+          {FIND_CONTACT_RECEIPTS[refusalReason]}
         </p>
       )}
       {receipt !== null && (
@@ -244,24 +244,98 @@ export function InspectorOverview({
   onDismissLead,
   onOverrideCloudScore,
   onFindContactInfo,
+  discoveryEvidence, outreachApi,
+  capabilities, outboundPending = false, outboundBlocked = false, onLogPastActivity,
 }: InspectorOverviewProps) {
+  const [selection, setSelection] = useState<{ channel: BeginOutboundRequest['channel']; contact: ContactMethod; personId: string; cycleId: string } | null>(null);
+  const submitting = useRef(false);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const contacts = [...detail.phones, ...detail.emails];
+  const current = selection === null ? undefined : contacts.find((contact) => contact.id === selection.contact.id);
+  const selectionCurrent = selection !== null && current !== undefined
+    && selection.personId === detail.personId && selection.cycleId === detail.salesCycleId
+    && current.contactSnapshot === selection.contact.contactSnapshot;
+  useEffect(() => {
+    if (selection !== null && !selectionCurrent) setSelection(null);
+  }, [selection, selectionCurrent]);
+  const choose = (channel: BeginOutboundRequest['channel'], contact: ContactMethod) => {
+    if (outboundPending || submitting.current) return;
+    setSelection({ channel, contact, personId: detail.personId, cycleId: detail.salesCycleId });
+  };
+  const canOpenPhone = capabilities?.phoneHandoff.state === 'available';
+  const confirm = () => {
+    if (!selectionCurrent || selection?.channel !== 'call' || current === undefined
+      || submitting.current || outboundPending || outboundBlocked || !canOpenPhone
+      || detail.optedOut || current.validationState !== 'valid' || current.compliance?.callRefusalReason !== null) return;
+    submitting.current = true; // React state alone does not exclude two synchronous submissions.
+    const request: BeginOutboundRequest = { commandId: crypto.randomUUID(), channel: 'call', personId: detail.personId,
+      salesCycleId: detail.salesCycleId, contactMethodId: current.id, expectedContactSnapshot: current.contactSnapshot };
+    void onBeginOutbound(request).catch(() => {
+      // Provider retains transport uncertainty, not an invented successful receipt.
+    }).finally(() => { submitting.current = false; setSelection(null); });
+  };
   const context = detail.priorityContext;
+  const { primary, alternatives } = selectPrimaryPhone(detail.phones);
+  const callHelp = primary === null ? 'No usable phone candidate on file.' : phoneActionHelp(detail, primary, 'call');
+  // A display preference only. Main still authorizes the exact contact at Send.
+  const primaryEmail = detail.emails.find(email => email.valid && email.validationState === 'valid'
+    && email.ownershipState !== 'conflicting_identity') ?? detail.emails[0] ?? null;
 
   return (
     <div className="lead-inspector__overview">
-      {detail.stage === 'unreviewed' && (
-        <ReviewSection
+      <section className="lead-inspector__portfolio" aria-label="Known portfolio">
+        <h3>Known portfolio</h3>
+        <p>{detail.portfolio?.summary ?? 'No supported portfolio context recorded. Holdings and unit counts are unknown.'}</p>
+        {detail.portfolio !== undefined && detail.portfolio.locations.length > 0 && <p>{detail.portfolio.locations.join(' · ')}</p>}
+        {detail.portfolio !== undefined && <ul>{detail.portfolio.facts.slice(0, 3).map(fact => <li key={fact.id}>{fact.text}</li>)}</ul>}
+      </section>
+      {detail.contactReason != null && <section aria-label="Reason to contact"><h3>Reason to contact</h3><p>{detail.contactReason.text}</p></section>}
+      {detail.optedOut && <p className="lead-inspector__opt-out-reason">{OPT_OUT_REASON}</p>}
+      <section className="lead-inspector__contact-actions" aria-label="Contact actions">
+        <div><Button variant="primary" disabled={callHelp !== null || outboundPending || outboundBlocked}
+          aria-describedby={callHelp === null ? undefined : 'primary-call-help'} onClick={() => { if (primary !== null) choose('call', primary); }}>Call</Button>
+          {primary !== null && <span>{primary.value}</span>}
+          {callHelp !== null && <p id="primary-call-help">{callHelp}</p>}
+        </div>
+        {primaryEmail !== null && <div><Button variant="quiet" disabled={detail.optedOut || outboundPending}
+          onClick={() => choose('email', primaryEmail)}>Email</Button><span>{primaryEmail.value}</span></div>}
+        {detail.emails.length === 0 && <p>No email contact on file.</p>}
+      </section>
+        {selectionCurrent && selection !== null && selection.channel !== 'call' && (
+          <OutboundComposer key={`${detail.personId}:${selection.channel}:${selection.contact.id}:${selection.contact.contactSnapshot}`}
+            api={outreachApi} personId={detail.personId} contactMethodId={selection.contact.id} disabled={detail.optedOut}
+            channel={selection.channel} recipientLabel={selection.contact.value} onClose={() => setSelection(null)} />
+        )}
+        {selectionCurrent && selection?.channel === 'call' && !outboundBlocked && (
+          <section className="outbound-confirmation" aria-label="Confirm Phone handoff">
+            <p>{selection.contact.value}</p>
+            <p>Continue in Phone. Callie cannot yet verify connection or recording.</p>
+            {canOpenPhone ? <Button disabled={outboundPending} onClick={confirm}>Open Phone</Button> : (
+              <p>Phone handoff unavailable. {capabilities?.phoneHandoff.reasonCode ?? 'Capability status could not be verified.'}</p>
+            )}
+            <Button variant="quiet" disabled={outboundPending} onClick={() => setSelection(null)}>Cancel call</Button>
+            {!canOpenPhone && onLogPastActivity !== undefined && <Button variant="quiet" onClick={() => onLogPastActivity()}>Log past activity</Button>}
+          </section>
+        )}
+      <details className="lead-inspector__diagnostics" open={diagnosticsOpen}>
+        <summary onClick={event => { event.preventDefault(); setDiagnosticsOpen(value => !value); }}>Details</summary>
+        {diagnosticsOpen && <div>
+      {discoveryEvidence}
+      {detail.stage === 'unreviewed' && (discoveryEvidence === undefined ? <ReviewSection
           detail={detail}
           onConfirmTransition={onConfirmTransition}
           onDismissLead={onDismissLead}
-        />
+        /> : <section className="lead-inspector__manual-controls"><Button variant="quiet" aria-expanded={manualOpen} onClick={() => setManualOpen(value => !value)}>Founder manual controls</Button>
+          {manualOpen && <ReviewSection detail={detail} onConfirmTransition={onConfirmTransition} onDismissLead={onDismissLead} />}
+        </section>
       )}
 
       <div className="lead-inspector__bands">
         <section className="lead-inspector__band" aria-label="Fit">
           <h3 className="lead-inspector__band-label">Fit</h3>
           {context === null ? (
-            <p className="lead-inspector__band-empty">Not yet evaluated</p>
+            <p className="lead-inspector__band-empty">Not assessed</p>
           ) : (
             <p className="lead-inspector__band-row">
               <span className="lead-inspector__band-value">
@@ -277,7 +351,7 @@ export function InspectorOverview({
         <section className="lead-inspector__band" aria-label="Timing">
           <h3 className="lead-inspector__band-label">Timing</h3>
           {context === null ? (
-            <p className="lead-inspector__band-empty">Not yet evaluated</p>
+            <p className="lead-inspector__band-empty">Not assessed</p>
           ) : (
             <p className="lead-inspector__band-row">
               <span className="lead-inspector__band-value">
@@ -401,39 +475,21 @@ export function InspectorOverview({
 
       <section aria-label="Reach out" className="lead-inspector__outbound">
         <h3 className="lead-inspector__band-title">Reach out</h3>
-        {detail.optedOut && (
-          <p className="lead-inspector__opt-out-reason">{OPT_OUT_REASON}</p>
-        )}
+        <ContactEvidenceCard
+          key={detail.personId}
+          detail={detail}
+          primary={primary}
+          alternatives={alternatives}
+          onSelectOutbound={choose}
+        />
         <div className="lead-inspector__outbound-buttons">
-          {detail.phones.map((phone) => (
-            <span key={phone.id} className="lead-inspector__outbound-pair">
-              <OutboundButton
-                detail={detail}
-                channel="call"
-                contact={phone}
-                onBeginOutbound={onBeginOutbound}
-              />
-              <OutboundButton
-                detail={detail}
-                channel="text"
-                contact={phone}
-                onBeginOutbound={onBeginOutbound}
-              />
-              {phone.compliance !== null && (
-                <StatusBadge
-                  tone={phone.compliance.status === 'verified_clear' ? 'neutral' : 'danger'}
-                  label={phone.compliance.label}
-                />
-              )}
-            </span>
-          ))}
           {detail.emails.map((email) => (
             <OutboundButton
               key={email.id}
               detail={detail}
               channel="email"
               contact={email}
-              onBeginOutbound={onBeginOutbound}
+              onSelectOutbound={choose}
             />
           ))}
         </div>
@@ -455,6 +511,8 @@ export function InspectorOverview({
           </ul>
         </section>
       )}
+        </div>}
+      </details>
     </div>
   );
 }

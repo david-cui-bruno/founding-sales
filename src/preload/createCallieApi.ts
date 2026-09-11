@@ -1,3 +1,6 @@
+import { createOutreachApi } from './apis/outreachApi';
+import { createDiscoveryApi } from './apis/discoveryApi';
+import { createRecoveryApi } from './apis/recoveryApi';
 import { appHealthSchema, type AppHealth } from '../shared/healthContract';
 import { createConversationsApi } from './apis/conversationsApi';
 import { createFridayApi } from './apis/fridayApi';
@@ -24,9 +27,11 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       get: (): Promise<AppHealth> =>
         client.requestNoInput('health:get', appHealthSchema),
     },
+    outreach: createOutreachApi(client),
     leads: createLeadsApi(client),
     leadDetail: createLeadDetailApi(client),
     today: createTodayApi(client),
+    discovery: createDiscoveryApi(client),
     pipeline: createPipelineApi(client),
     review: createReviewApi(client),
     friday: createFridayApi(client),
@@ -35,6 +40,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
     learnings: createLearningsApi(client),
     sourcing: createSourcingApi(client),
     shell: createShellApi(client),
+    recovery: createRecoveryApi(client),
   } as const;
 };
 

@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { createAppleBridgeSigningOptions } from '../../build/appleBridge';
 import { resolveMacSigningIdentity } from '../../build/signingIdentity';
 
 const KEYCHAIN_LISTING = [
@@ -8,6 +9,32 @@ const KEYCHAIN_LISTING = [
 ].join('\n');
 
 describe('resolveMacSigningIdentity', () => {
+  it('uses the existing ad-hoc package path for explicit dash without keychain discovery', () => {
+    const listCodesigningIdentities = vi.fn(() => KEYCHAIN_LISTING);
+    const identity = resolveMacSigningIdentity({
+      env: { CALLIE_MAC_SIGN_IDENTITY: '-' },
+      platform: 'darwin',
+      listCodesigningIdentities,
+    });
+
+    expect(identity).toBeUndefined();
+    expect(createAppleBridgeSigningOptions(identity)).toBeUndefined();
+    expect(listCodesigningIdentities).not.toHaveBeenCalled();
+  });
+
+  it('does not reinterpret a non-exact dash identity as the ad-hoc opt-in', () => {
+    const listCodesigningIdentities = vi.fn(() => KEYCHAIN_LISTING);
+    const identity = resolveMacSigningIdentity({
+      env: { CALLIE_MAC_SIGN_IDENTITY: ' - ' },
+      platform: 'darwin',
+      listCodesigningIdentities,
+    });
+
+    expect(identity).toBe(' - ');
+    expect(createAppleBridgeSigningOptions(identity)?.identity).toBe(' - ');
+    expect(listCodesigningIdentities).not.toHaveBeenCalled();
+  });
+
   it('prefers an explicit CALLIE_MAC_SIGN_IDENTITY over keychain discovery', () => {
     const identity = resolveMacSigningIdentity({
       env: { CALLIE_MAC_SIGN_IDENTITY: 'Developer ID Application: Someone (TEAM123)' },

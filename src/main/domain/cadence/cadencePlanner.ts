@@ -55,6 +55,7 @@ export type EnrollmentMutation = {
 };
 
 export type NextActionDraft = {
+  dueAt: string;
   actionType: 'call' | 'voicemail' | 'text' | 'email' | 'resolve_contact_method';
   channel: CadenceChannel | null;
   timezone: string;
@@ -68,6 +69,7 @@ export type NextActionInstruction =
   | { kind: 'create'; draft: NextActionDraft }
   | {
     kind: 'reschedule_current';
+    dueAt: string;
     timezone: string;
     allowedWindow: string;
     cadenceDefinitionId: string;
@@ -242,6 +244,7 @@ export function planActionOutcome(input: CadenceOutcomeInput): TransitionRecipe 
       enrollment: enrollmentMutation('retry', input.definition.id, step.id, 0, 'active', null),
       nextAction: {
         kind: 'reschedule_current',
+        dueAt: scheduled.dueAt,
         timezone: scheduled.timezone,
         allowedWindow: scheduled.allowedWindow,
         cadenceDefinitionId: input.definition.id,
@@ -430,6 +433,7 @@ function followTransition(
       nextAction: {
         kind: 'create',
         draft: {
+          dueAt: input.evaluationAt,
           actionType: 'resolve_contact_method',
           channel: null,
           timezone: input.timezone,
@@ -668,6 +672,7 @@ function createInstruction(
     draft: {
       actionType: component.actionType,
       channel: component.channel,
+      dueAt: scheduled.dueAt,
       timezone: scheduled.timezone,
       allowedWindow: scheduled.allowedWindow,
       cadenceDefinitionId: definition.id,

@@ -13,21 +13,9 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chromium, expect, test, type Browser } from 'playwright/test';
-import {
-  describeProcessExit,
-  terminatePackagedApplication,
-} from '../support/packagedApplication';
-
-const packagedApplication = join(
-  process.cwd(),
-  'out',
-  'Callie Founder Sales System-darwin-arm64',
-  'Callie Founder Sales System.app',
-  'Contents',
-  'MacOS',
-  'Callie Founder Sales System',
-);
+import { chromium, expect, test, type Browser, type Page } from 'playwright/test';
+import { describeProcessExit, packagedApplicationBinary as packagedApplication } from '../support/packagedApplication';
+import { createPackagedTestEnvironment } from '../support/packagedTestEnvironment';
 
 test('packaged diagnostics use callie protocol and an isolated native SQLite database', async () => {
   let userDataPath: string | undefined;
@@ -41,7 +29,7 @@ test('packaged diagnostics use callie protocol and an isolated native SQLite dat
 
     expect(firstLaunch).toEqual({
       databasePath: expectedDatabasePath,
-      schemaVersion: 14,
+      schemaVersion: 19,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,
@@ -56,6 +44,43 @@ test('packaged diagnostics use callie protocol and an isolated native SQLite dat
       await rm(userDataPath, { recursive: true, force: true });
     }
   }
+});
+
+// CDP can drive the production renderer/preload but not macOS native dialogs.
+// This is intentionally partial packaged coverage, not export/drill acceptance.
+test('packaged recovery setup is explicit and persists only completion across isolated relaunch', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'callie-recovery-e2e-'));
+  let setupCompletedAt: string | null = null;
+  try {
+    await inspectPackagedApplication(userDataPath, async (page) => {
+      await page.getByRole('button', { name: 'Data & storage', exact: true }).click();
+      await expect(page.getByText('Recovery setup/drill incomplete', { exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Begin recovery setup' })).toBeDisabled();
+      const before = await page.evaluate(() => window.callie.recovery.status());
+      expect(before.setupCompletedAt).toBeNull();
+      await page.getByLabel('I understand this reveals private recovery material').check();
+      await page.getByRole('button', { name: 'Begin recovery setup' }).click();
+      await expect(page.getByLabel('One-time recovery material')).toHaveText(/^CALLIE1-/);
+      expect(await page.evaluate(() => Object.keys(window.callie.recovery).sort())).toEqual(['beginSetup', 'completeSetup', 'saveSetupMaterial', 'selectAndRunRestoreDrill', 'status']);
+      // Explicit fixture confirmation, without claiming a native Save occurred.
+      await page.getByLabel('I stored the recovery material privately').check();
+      await page.getByRole('button', { name: 'Complete recovery setup' }).click();
+      await expect(page.getByLabel('One-time recovery material')).toHaveCount(0);
+      const after = await page.evaluate(() => window.callie.recovery.status());
+      setupCompletedAt = after.setupCompletedAt;
+      expect(setupCompletedAt).not.toBeNull();
+      expect(after.lastRestoreDrillAt).toBeNull();
+      expect(after.outreachReady).toBe(false);
+      expect(JSON.stringify(after)).not.toContain('CALLIE1-');
+    });
+    await inspectPackagedApplication(userDataPath, async (page) => {
+      await page.getByRole('button', { name: 'Data & storage', exact: true }).click();
+      await expect(page.getByLabel('One-time recovery material')).toHaveCount(0);
+      const status = await page.evaluate(() => window.callie.recovery.status());
+      expect(status.setupCompletedAt).toBe(setupCompletedAt);
+      expect(status.outreachReady).toBe(false);
+    });
+  } finally { await rm(userDataPath, { recursive: true, force: true }); }
 });
 
 test('packaged startup leaves an isolated database collision untouched and recovers on relaunch', async () => {
@@ -90,7 +115,7 @@ test('packaged startup leaves an isolated database collision untouched and recov
 
     expect(health).toEqual({
       databasePath,
-      schemaVersion: 14,
+      schemaVersion: 19,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,
@@ -106,8 +131,9 @@ test('packaged startup leaves an isolated database collision untouched and recov
   }
 });
 
-const inspectPackagedApplication = async (userDataPath: string) => {
+const inspectPackagedApplication = async (userDataPath: string, inspectRecovery?: (page: Page) => Promise<void>) => {
   const debuggingPort = await availablePort();
+  const environment = await createPackagedTestEnvironment();
   let application: ChildProcess | undefined;
   let browser: Browser | undefined;
   let spawnError: Error | undefined;
@@ -116,11 +142,11 @@ const inspectPackagedApplication = async (userDataPath: string) => {
     // The packaged binary intentionally disables RunAsNode. Playwright's
     // Electron launcher requires that mode, so CDP inspects the real packaged
     // process without weakening the production fuse.
-    application = spawn(packagedApplication, [
+    application = environment.capture(spawn(packagedApplication, [
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,
       '--use-mock-keychain',
-    ]);
+    ], { env: environment.env }));
     application.once('error', (error) => {
       spawnError = error;
     });
@@ -150,14 +176,15 @@ const inspectPackagedApplication = async (userDataPath: string) => {
     await page.getByRole('link', { name: 'Settings' }).click();
     await expect(page.getByText('Encrypted SQLite ready')).toBeVisible();
     await expect(page.getByText('FTS5 available')).toBeVisible();
-    await expect(page.getByText('Schema 14')).toBeVisible();
-    // The sourcing status row renders regardless of credential state; the
-    // packaged test env may report none, file, or keychain depending on the
-    // machine, and auto-polling stays disabled under --use-mock-keychain.
+    await expect(page.getByText('Schema 19')).toBeVisible();
+    // The status row uses the isolated local fixture inbox. The separate
+    // enrichment fallback also sees only the empty child HOME. Automatic
+    // polling stays disabled under --use-mock-keychain.
     // It lives in the Sourcing section of the settings master-detail.
     await page.getByRole('button', { name: 'Sourcing', exact: true }).click();
     await expect(page.getByText(/^Sourcing inbox: /)).toBeVisible();
 
+    await inspectRecovery?.(page);
     const health = await page.evaluate(() => window.callie.health.get());
     return {
       databasePath: health.databasePath,
@@ -170,23 +197,22 @@ const inspectPackagedApplication = async (userDataPath: string) => {
     try {
       await browser?.close();
     } finally {
-      if (application?.pid !== undefined) {
-        await terminatePackagedApplication(application);
-      }
+      await environment.cleanup();
     }
   }
 };
 
 const inspectFailedPackagedLaunch = async (userDataPath: string) => {
   const debuggingPort = await availablePort();
+  const environment = await createPackagedTestEnvironment();
   let application: ChildProcess | undefined;
 
   try {
-    application = spawn(packagedApplication, [
+    application = environment.capture(spawn(packagedApplication, [
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,
       '--use-mock-keychain',
-    ]);
+    ], { env: environment.env }));
     const [exit, rendererPageObserved] = await Promise.all([
       waitForPackagedExit(application),
       observeRendererPageUntilExit(application, debuggingPort),
@@ -198,9 +224,7 @@ const inspectFailedPackagedLaunch = async (userDataPath: string) => {
       rendererPageObserved,
     };
   } finally {
-    if (application?.pid !== undefined) {
-      await terminatePackagedApplication(application);
-    }
+    await environment.cleanup();
   }
 };
 

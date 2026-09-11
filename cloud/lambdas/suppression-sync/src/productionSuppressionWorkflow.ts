@@ -123,7 +123,7 @@ async function listProductionDescriptors(
   let keyMarker: string | undefined;
   let versionIdMarker: string | undefined;
 
-  while (true) {
+  for (;;) {
     const page = await productionS3.send(new ListObjectVersionsCommand({
       Bucket: bucket,
       Prefix: UPLOADS_PREFIX,

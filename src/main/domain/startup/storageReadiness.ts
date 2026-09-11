@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { z } from 'zod';
 
 import { checkFts5, type AppDatabase } from '../../db/database';
@@ -5,7 +7,7 @@ import { inspectDatabaseEncryption } from '../../db/databaseEncryption';
 import { DomainStartupFatalError } from './domainStartupTypes';
 
 export type DomainStorageReadiness = Readonly<{
-  schemaVersion: 14;
+  schemaVersion: 19;
   encrypted: true;
   cipherVersion: string;
   ftsAvailable: true;
@@ -18,25 +20,46 @@ export type DomainSchemaManifest = Readonly<{
   tables: readonly string[];
   indexes: readonly string[];
   triggers: readonly string[];
+  catalogSha256: string;
 }>;
 
 /**
- * The canonical load-bearing schema-14 manifest. Reads the live catalog from
- * sqlite_master with binary-name ordering; a missing, renamed, or extra
- * load-bearing object is fatal before composition.
+ * The canonical load-bearing schema-19 manifest. Reads the live catalog from
+ * sqlite_master with binary-name ordering; a missing, renamed, extra, or
+ * malformed load-bearing object is fatal before composition.
  */
 export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
   tables: Object.freeze([
     'activities',
     'activity_amendments',
+    'app_meta',
+    'backup_receipts',
     'cadence_action_components',
     'cadence_definitions',
     'cadence_enrollments',
     'cadence_steps',
     'cloud_entity_links',
-    'contact_compliance_audit_events',
     'consent_policy_records',
+    'contact_compliance_audit_events',
     'cycle_reactivation_receipts',
+    'discovery_assessments',
+    'discovery_current',
+    'discovery_overrides',
+    'discovery_preparations',
+    'discovery_scan_state',
+    'email_drafts',
+    'email_send_intents',
+    'email_send_results',
+    'foundation_fts_probe',
+    'foundation_fts_probe_config',
+    'foundation_fts_probe_content',
+    'foundation_fts_probe_data',
+    'foundation_fts_probe_docsize',
+    'foundation_fts_probe_idx',
+    'identity_repair_events',
+    'jobs',
+    'kysely_migration',
+    'kysely_migration_lock',
     'learning_evidence',
     'learnings',
     'lifecycle_review_items',
@@ -62,6 +85,8 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'prospect_properties',
     'prospects',
     'reactivation_rules',
+    'recovery_readiness',
+    'restore_drill_receipts',
     'review_position',
     'sales_cycle_close_readiness',
     'sales_cycles',
@@ -80,42 +105,182 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'workspace_settings',
   ]),
   indexes: Object.freeze([
+    'activities_person_occurred_idx',
     'activities_provider_idempotency_idx',
     'contact_compliance_audit_contact_idx',
+    'discovery_assessments_disposition_expires_idx',
+    'discovery_assessments_prospect_evaluated_idx',
+    'discovery_overrides_owner_created_idx',
+    'email_draft_open_contact',
+    'jobs_state_created_idx',
     'jobs_type_idempotency_idx',
+    'jobs_type_state_created_idx',
     'learning_evidence_learning_idx',
+    'next_actions_due_idx',
     'one_active_cadence_per_cycle',
     'one_open_cycle_per_person',
+    'one_primary_contact_per_kind',
+    'opt_out_handles_lookup_idx',
+    'person_contact_methods_lookup_idx',
+    'prospect_priority_priority_idx',
+    'source_events_person_observed_idx',
+    'stage_events_cycle_effective_idx',
+    'trigger_events_prospect_effective_idx',
     'trigger_events_source_event_unique',
   ]),
   triggers: Object.freeze([
+    'discovery_assessments_no_delete',
+    'discovery_assessments_no_update',
+    'discovery_assessments_owner_insert',
+    'discovery_current_owner_insert',
+    'discovery_current_owner_update',
+    'discovery_overrides_no_delete',
+    'discovery_overrides_no_update',
+    'discovery_overrides_owner_insert',
+    'discovery_preparations_no_delete',
+    'discovery_preparations_no_update',
+    'discovery_preparations_owner_insert',
+    'email_send_intents_no_delete',
+    'email_send_intents_no_update',
+    'email_send_results_no_delete',
+    'email_send_results_no_update',
     'immutable_activities',
+    'immutable_activities_delete',
+    'immutable_activity_amendments',
+    'immutable_activity_amendments_delete',
+    'immutable_backup_receipts',
+    'immutable_backup_receipts_delete',
+    'immutable_cadence_action_components',
+    'immutable_cadence_action_components_delete',
+    'immutable_cadence_definitions',
+    'immutable_cadence_definitions_delete',
+    'immutable_cadence_steps',
+    'immutable_cadence_steps_delete',
+    'immutable_consent_policy_records',
+    'immutable_consent_policy_records_delete',
+    'immutable_cycle_reactivation_receipts',
+    'immutable_cycle_reactivation_receipts_delete',
+    'immutable_identity_repair_events',
+    'immutable_identity_repair_events_delete',
     'immutable_learning_evidence',
     'immutable_learning_evidence_delete',
+    'immutable_opt_out_closure_receipt_handles',
+    'immutable_opt_out_closure_receipt_handles_delete',
+    'immutable_opt_out_closure_receipts',
+    'immutable_opt_out_closure_receipts_delete',
     'immutable_prioritization_evaluations',
+    'immutable_prioritization_evaluations_delete',
     'immutable_prioritization_preference_events',
+    'immutable_prioritization_preference_events_delete',
     'immutable_prioritization_rule_versions',
+    'immutable_prioritization_rule_versions_delete',
+    'immutable_restore_drill_receipts',
+    'immutable_restore_drill_receipts_delete',
+    'immutable_source_events',
+    'immutable_source_events_delete',
+    'immutable_source_intake_receipts',
+    'immutable_source_intake_receipts_delete',
+    'immutable_stage_events',
+    'immutable_stage_events_delete',
     'immutable_transcript_utterances',
     'immutable_transcript_utterances_delete',
     'immutable_transcripts',
     'immutable_transcripts_delete',
     'immutable_trigger_events',
+    'immutable_trigger_events_delete',
+    'immutable_won_terms',
+    'immutable_won_terms_delete',
+    'initialize_next_action_due',
+    'initialize_unreviewed_action',
+    'protect_activity_cadence_insert',
+    'protect_activity_cadence_update',
     'protect_activity_transcript_attach',
+    'protect_cadence_enrollment_delete',
+    'protect_cadence_enrollment_identity',
+    'protect_cadence_enrollment_status',
+    'protect_cadence_enrollment_step_insert',
+    'protect_cadence_enrollment_step_update',
+    'protect_current_action_delete',
+    'protect_current_action_status',
+    'protect_cycle_entry_source',
     'protect_cycle_pointer_insert',
     'protect_cycle_pointer_update',
+    'protect_design_partner_fitness',
+    'protect_design_partner_fitness_update',
+    'protect_initial_action_status',
     'protect_learning_delete',
     'protect_learning_identity',
+    'protect_lifecycle_review_item_delete',
+    'protect_lifecycle_review_item_identity',
+    'protect_lifecycle_review_item_resolution',
+    'protect_next_action_cadence_insert',
+    'protect_next_action_cadence_update',
+    'protect_next_action_delete',
+    'protect_next_action_due',
+    'protect_next_action_immutable_evidence',
+    'protect_next_action_inbound_sla_insert',
+    'protect_next_action_inbound_sla_update',
+    'protect_next_action_settlement',
+    'protect_operational_action_pointer',
+    'protect_opt_out_closure_receipt_handle_insert',
+    'protect_opt_out_handle',
+    'protect_opt_out_handle_update',
+    'protect_opt_out_tombstone',
+    'protect_opt_out_tombstone_active_cadence',
+    'protect_opt_out_tombstone_update',
+    'protect_opted_out_active_cadence',
+    'protect_opted_out_active_cadence_update',
+    'protect_opted_out_contact_method_insert',
+    'protect_opted_out_contact_method_update',
+    'protect_opted_out_next_action_insert',
+    'protect_opted_out_next_action_update',
+    'protect_opted_out_operational_cycle_insert',
+    'protect_opted_out_operational_cycle_update',
     'protect_p0_priority_override',
+    'protect_person_opt_out_insert',
+    'protect_person_opt_out_reset',
     'protect_priority_override_delete',
     'protect_priority_override_mutation',
     'protect_priority_projection_fidelity',
     'protect_priority_projection_fidelity_update',
+    'protect_priority_projection_owner',
     'protect_projection_p0_override_delete',
     'protect_projection_p0_override_update',
+    'protect_prospect_original_source',
+    'protect_reactivation_rule_delete',
+    'protect_reactivation_rule_update',
+    'protect_restore_drill_backup_receipt',
+    'protect_settled_next_action_schedule',
+    'protect_source_intake_receipt_prospect',
     'protect_trigger_event_ownership',
     'protect_trigger_event_receipt_proof',
+    'synchronize_person_opt_out',
   ]),
+  // Generated from production migrations 0001 through 0019, including hardened 0015.
+  catalogSha256: 'a6108cfce2bc4242d0872e81cc2afc88634f6309c55605bd3fc995804fde9073',
 });
+
+export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
+  '0001Foundation',
+  '0002DomainFoundation',
+  '0003Transcripts',
+  '0004Learnings',
+  '0005SourcingChannels',
+  '0006SourcingState',
+  '0007SourcingOutbox',
+  '0008DedupeCloudPersons',
+  '0009SourcingFileLedger',
+  '0010NoDueDates',
+  '0011ContactDncFlags',
+  '0012UpstreamRequestState',
+  '0013ContactComplianceEvidence',
+  '0014OutboundJurisdictionClearance',
+  '0015RecoveryMetadata',
+  '0016ContactPresentationEvidence',
+  '0017DiscoveryAssessments',
+  '0018PlaybookDueActions',
+  '0019EmailDrafts',
+] as const);
 
 const appMetaSchema = z.object({
   schema_version: z.number().int(),
@@ -128,7 +293,7 @@ const appMetaSchema = z.object({
 export function assertDomainStorageReady(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
-  expectedSchemaVersion: 14;
+  expectedSchemaVersion: 19;
   expectedManifest: DomainSchemaManifest;
 }): DomainStorageReadiness {
   const { database } = input;
@@ -151,7 +316,26 @@ export function assertDomainStorageReady(input: {
   const metadata = appMetaSchema.safeParse(metadataRow);
   if (!metadata.success || metadata.data.schema_version !== input.expectedSchemaVersion) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace schema version is not exactly 14.',
+      'schema_not_ready', 'The workspace schema version is not exactly 19.',
+    );
+  }
+
+  let migrationLedger: { name: string }[];
+  try {
+    migrationLedger = database.raw.prepare<[], { name: string }>(`
+      SELECT name FROM kysely_migration ORDER BY timestamp, name
+    `).all();
+  } catch {
+    throw new DomainStartupFatalError(
+      'schema_not_ready', 'The workspace migration ledger is unavailable.',
+    );
+  }
+  if (!sameValues(
+    migrationLedger.map(({ name }) => name),
+    DOMAIN_MIGRATION_LEDGER,
+  )) {
+    throw new DomainStartupFatalError(
+      'schema_not_ready', 'The workspace migration ledger is not exactly schema 19.',
     );
   }
 
@@ -189,10 +373,11 @@ export function assertDomainStorageReady(input: {
   }
 
   const catalog = database.raw.prepare(`
-    SELECT name, type FROM sqlite_master
+    SELECT name, type, sql FROM sqlite_master
     WHERE type IN ('table', 'index', 'trigger')
+      AND (type <> 'index' OR sql IS NOT NULL)
     ORDER BY name COLLATE BINARY
-  `).all() as { name: string; type: string }[];
+  `).all() as { name: string; type: string; sql: string | null }[];
   const liveTables = new Set(
     catalog.filter((entry) => entry.type === 'table').map((entry) => entry.name),
   );
@@ -202,30 +387,30 @@ export function assertDomainStorageReady(input: {
   const liveTriggers = new Set(
     catalog.filter((entry) => entry.type === 'trigger').map((entry) => entry.name),
   );
-  for (const table of input.expectedManifest.tables) {
-    if (!liveTables.has(table)) {
-      throw new DomainStartupFatalError(
-        'manifest_mismatch', `Load-bearing table is missing: ${table}`,
-      );
-    }
+  if (
+    !sameValues([...liveTables].sort(), input.expectedManifest.tables)
+    || !sameValues([...liveIndexes].sort(), input.expectedManifest.indexes)
+    || !sameValues([...liveTriggers].sort(), input.expectedManifest.triggers)
+  ) {
+    throw new DomainStartupFatalError(
+      'manifest_mismatch', 'The load-bearing schema catalog is not exact.',
+    );
   }
-  for (const index of input.expectedManifest.indexes) {
-    if (!liveIndexes.has(index)) {
-      throw new DomainStartupFatalError(
-        'manifest_mismatch', `Load-bearing index is missing: ${index}`,
-      );
-    }
-  }
-  for (const trigger of input.expectedManifest.triggers) {
-    if (!liveTriggers.has(trigger)) {
-      throw new DomainStartupFatalError(
-        'manifest_mismatch', `Load-bearing trigger is missing: ${trigger}`,
-      );
-    }
+  const catalogSha256 = createHash('sha256')
+    .update(JSON.stringify(catalog.map(({ name, type, sql }) => [
+      type,
+      name,
+      normalizeSql(sql ?? ''),
+    ]).sort(compareCatalogEntries)))
+    .digest('hex');
+  if (catalogSha256 !== input.expectedManifest.catalogSha256) {
+    throw new DomainStartupFatalError(
+      'manifest_mismatch', `The load-bearing schema SQL fingerprint is not exact: ${catalogSha256}`,
+    );
   }
 
   return Object.freeze({
-    schemaVersion: 14 as const,
+    schemaVersion: 19 as const,
     encrypted: true as const,
     cipherVersion: encryption.cipherVersion ?? 'unknown',
     ftsAvailable: true as const,
@@ -233,4 +418,22 @@ export function assertDomainStorageReady(input: {
     indexCount: liveIndexes.size,
     triggerCount: liveTriggers.size,
   });
+}
+
+function sameValues(
+  actual: readonly string[],
+  expected: readonly string[],
+): boolean {
+  return actual.length === expected.length
+    && actual.every((value, index) => value === expected[index]);
+}
+
+function normalizeSql(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function compareCatalogEntries(left: string[], right: string[]): number {
+  if (left[0] !== right[0]) return left[0] < right[0] ? -1 : 1;
+  if (left[1] !== right[1]) return left[1] < right[1] ? -1 : 1;
+  return 0;
 }

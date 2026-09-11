@@ -1,0 +1,27 @@
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { expect, it, vi } from 'vitest';
+it('builds backup tools separately without widening the seven-input identity audit graph', () => {
+  const result = spawnSync(process.execPath, ['scripts/buildOperationalTools.mjs'], { encoding: 'utf8' }); expect(result.status).toBe(0);
+  const audit = JSON.parse(readFileSync('build/generated/operational-tools/inputs.json'));
+  expect(audit).toEqual(['src/main/db/readOnlyEncryptedDatabase.ts', 'src/main/db/sqliteDriver.ts', 'src/main/db/sqliteDriverDecision.ts', 'src/main/domain/source/cloudNameMatching.ts', 'src/main/identityMigration/identityMigrationAudit.ts', 'src/main/identityMigration/identityMigrationManifest.ts', 'src/main/security/recoveryKey.ts']);
+  const backup = JSON.parse(readFileSync('build/generated/pre-release-tools/inputs.json'));
+  expect(backup).toContain('src/main/backup/preReleaseBackupRuntime.ts'); expect(backup).toContain('src/main/backup/backupService.ts');
+  expect(backup.some(path => /(?:migrations\/|\/migrate\.ts|startApplication|recoveryService|sourcing\/|identityMigration\/)/.test(path))).toBe(false);
+  expect(readFileSync('build/generated/pre-release-tools/preReleaseBackupRuntime.cjs', 'utf8')).toContain('runPreReleaseBackupHost');
+});
+it('composes marker hooks with encrypted-native copy and existing helper/fuse/signature hooks', async () => {
+  const events = [];
+  const hooks = { generateAssets: async () => events.push('helper-assets'), packageAfterCopy: async () => events.push('helper-fuses'), postPackage: async () => events.push('signature-repair') };
+  vi.doMock('../build/signingIdentity', () => ({ resolveMacSigningIdentity: () => undefined }));
+  vi.doMock('../build/appleBridge', () => ({ createAppleBridgeForgeHooks: () => hooks, createAppleBridgeSigningOptions: () => undefined }));
+  vi.doMock('../scripts/writeReleaseMarker.mjs', () => ({ createReleaseAssembly: () => ({ begin: () => events.push('begin'), copy: () => events.push('marker-copy'), finish: () => events.push('finish') }) }));
+  vi.doMock('../scripts/packageEncryptedSqliteNative.mjs', () => ({ retainOnlyPackagedEncryptedSqliteRuntime: async () => events.push('native-copy') }));
+  try {
+    const { default: config } = await import('../forge.config.ts');
+    await config.hooks.generateAssets(); await config.hooks.prePackage();
+    await new Promise((resolve, reject) => config.packagerConfig.afterCopy[0]('fixture', '44', 'darwin', 'arm64', error => error ? reject(error) : resolve()));
+    await config.hooks.packageAfterCopy(); await config.hooks.postPackage();
+    expect(events).toEqual(['helper-assets', 'begin', 'native-copy', 'marker-copy', 'helper-fuses', 'signature-repair', 'finish']);
+  } finally { for (const module of ['../build/signingIdentity', '../build/appleBridge', '../scripts/writeReleaseMarker.mjs', '../scripts/packageEncryptedSqliteNative.mjs']) vi.doUnmock(module); vi.resetModules(); }
+});

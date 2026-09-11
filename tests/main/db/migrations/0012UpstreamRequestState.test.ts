@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../../../src/main/db/database';
-import { createMigrationRunner, migrateToLatest } from '../../../../src/main/db/migrate';
+import { createMigrationRunner, productionMigrations } from '../../../../src/main/db/migrate';
 import { migration0001Foundation } from '../../../../src/main/db/migrations/0001Foundation';
 import { migration0002DomainFoundation } from '../../../../src/main/db/migrations/0002DomainFoundation';
 import { migration0003Transcripts } from '../../../../src/main/db/migrations/0003Transcripts';
@@ -18,6 +18,8 @@ import {
   createTestWorkspaceKey,
   type TempDatabase,
 } from '../../../fixtures/tempDatabase';
+
+const migrateThrough12 = createMigrationRunner(productionMigrations.filter(x => x.schemaVersion <= 12));
 
 const migrateThroughSchema11 = createMigrationRunner([
   { id: '0001Foundation', schemaVersion: 1, migration: migration0001Foundation },
@@ -55,18 +57,16 @@ describe('0012 upstream request state migration', () => {
   });
 
   it('migrates schema 11 to schema 12 and creates both empty tables', async () => {
-    const result = await migrateToLatest(database, options);
+    const result = await migrateThrough12(database, options);
 
     expect(result.fromVersion).toBe(11);
-    expect(result.toVersion).toBe(14);
+    expect(result.toVersion).toBe(12);
     expect(result.appliedMigrationIds).toEqual([
       '0012UpstreamRequestState',
-      '0013ContactComplianceEvidence',
-      '0014OutboundJurisdictionClearance',
     ]);
     expect(database.raw.prepare<[], { schema_version: number }>(
       'SELECT schema_version FROM app_meta WHERE singleton = 1',
-    ).get()).toEqual({ schema_version: 14 });
+    ).get()).toEqual({ schema_version: 12 });
 
     expect(database.raw.prepare<[], { count: number }>(
       'SELECT COUNT(*) AS count FROM sourcing_suppression_outbox',
@@ -77,7 +77,7 @@ describe('0012 upstream request state migration', () => {
   });
 
   it('enforces the suppression outbox handle primary key (exactly-once rows)', async () => {
-    await migrateToLatest(database, options);
+    await migrateThrough12(database, options);
 
     const ts = '2026-09-01T12:00:00.000Z';
     database.raw.prepare(`
@@ -122,16 +122,16 @@ describe('0012 upstream request state migration', () => {
   });
 
   it('is idempotent: a second run applies nothing', async () => {
-    await migrateToLatest(database, options);
-    const secondResult = await migrateToLatest(database, options);
+    await migrateThrough12(database, options);
+    const secondResult = await migrateThrough12(database, options);
 
     expect(secondResult).toEqual({
-      fromVersion: 14,
-      toVersion: 14,
+      fromVersion: 12,
+      toVersion: 12,
       appliedMigrationIds: [],
     });
     expect(database.raw.prepare<[], { schema_version: number }>(
       'SELECT schema_version FROM app_meta WHERE singleton = 1',
-    ).get()).toEqual({ schema_version: 14 });
+    ).get()).toEqual({ schema_version: 12 });
   });
 });

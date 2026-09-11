@@ -28,6 +28,7 @@ import type {
   Person,
   Property,
   Prospect,
+  ContactPresentationEvidence,
   UpdateProspectQualificationInput,
 } from './identityTypes';
 import type { ContactComplianceEvidence } from '../compliance/contactComplianceTypes';
@@ -85,6 +86,15 @@ const addContactMethodInputSchema = z.object({
   dncListed: z.boolean().default(false),
   tcpaFlag: z.boolean().default(false),
   complianceEvidence: contactComplianceEvidenceSchema.optional(),
+  presentationEvidence: z.object({
+    sourceLabel: z.string().trim().min(1).nullable(),
+    vendorRank: z.number().int().positive().nullable(),
+    phoneKind: z.enum(['mobile', 'landline', 'voip', 'other']).nullable(),
+    ownershipState: z.enum([
+      'verified_person', 'vendor_candidate', 'conflicting_identity', 'unknown',
+    ]),
+    evidenceObservedAt: utcTimestampSchema.nullable(),
+  }).strict().optional(),
 }).strict();
 
 const qualificationGateReasonSchema = z.enum([
@@ -196,6 +206,13 @@ const storedContactMethodRowSchema = z.object({
   compliance_source: z.enum(['ftc_download', 'enrichment_vendor', 'manual_import', 'legacy']),
   scrubbed_at: utcTimestampSchema.nullable(),
   compliance_expires_at: utcTimestampSchema.nullable(),
+  source_label: z.string().nullable(),
+  vendor_rank: z.number().int().positive().nullable(),
+  phone_kind: z.enum(['mobile', 'landline', 'voip', 'other']).nullable(),
+  ownership_state: z.enum([
+    'verified_person', 'vendor_candidate', 'conflicting_identity', 'unknown',
+  ]),
+  evidence_observed_at: utcTimestampSchema.nullable(),
   created_at: utcTimestampSchema,
   updated_at: utcTimestampSchema,
 }).strict();
@@ -275,6 +292,13 @@ const handleLookupRowSchema = storedPersonRowSchema.extend({
   contact_compliance_source: z.enum(['ftc_download', 'enrichment_vendor', 'manual_import', 'legacy']),
   contact_scrubbed_at: utcTimestampSchema.nullable(),
   contact_compliance_expires_at: utcTimestampSchema.nullable(),
+  contact_source_label: z.string().nullable(),
+  contact_vendor_rank: z.number().int().positive().nullable(),
+  contact_phone_kind: z.enum(['mobile', 'landline', 'voip', 'other']).nullable(),
+  contact_ownership_state: z.enum([
+    'verified_person', 'vendor_candidate', 'conflicting_identity', 'unknown',
+  ]),
+  contact_evidence_observed_at: utcTimestampSchema.nullable(),
   contact_created_at: utcTimestampSchema,
   contact_updated_at: utcTimestampSchema,
 }).strict();
@@ -362,12 +386,14 @@ export class IdentityRepository {
         id, person_id, kind, normalized_value, raw_value, validation_state,
         reachability, is_primary, in_contacts, dnc_listed, tcpa_flag,
         federal_status, compliance_tcpa_flag, covered_area_code, compliance_source,
-        scrubbed_at, compliance_expires_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        scrubbed_at, compliance_expires_at, source_label, vendor_rank, phone_kind,
+        ownership_state, evidence_observed_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id, person_id, kind, normalized_value, raw_value, validation_state,
         reachability, is_primary, in_contacts, dnc_listed, tcpa_flag,
         federal_status, compliance_tcpa_flag, covered_area_code, compliance_source,
-        scrubbed_at, compliance_expires_at,
+        scrubbed_at, compliance_expires_at, source_label, vendor_rank, phone_kind,
+        ownership_state, evidence_observed_at,
         created_at, updated_at
     `).get(
       id,
@@ -387,6 +413,11 @@ export class IdentityRepository {
       evidence.source,
       evidence.scrubbedAt,
       evidence.expiresAt,
+      parsed.presentationEvidence?.sourceLabel ?? null,
+      parsed.presentationEvidence?.vendorRank ?? null,
+      parsed.presentationEvidence?.phoneKind ?? null,
+      parsed.presentationEvidence?.ownershipState ?? 'unknown',
+      parsed.presentationEvidence?.evidenceObservedAt ?? null,
       now,
       now,
     );
@@ -399,7 +430,8 @@ export class IdentityRepository {
       SELECT id, person_id, kind, normalized_value, raw_value, validation_state,
         reachability, is_primary, in_contacts, dnc_listed, tcpa_flag,
         federal_status, compliance_tcpa_flag, covered_area_code, compliance_source,
-        scrubbed_at, compliance_expires_at, created_at, updated_at
+        scrubbed_at, compliance_expires_at, source_label, vendor_rank, phone_kind,
+        ownership_state, evidence_observed_at, created_at, updated_at
       FROM person_contact_methods WHERE id = ?
     `).get(id);
     return row === undefined ? null : parseContactMethod(row);
@@ -446,7 +478,8 @@ export class IdentityRepository {
       RETURNING id, person_id, kind, normalized_value, raw_value, validation_state,
         reachability, is_primary, in_contacts, dnc_listed, tcpa_flag,
         federal_status, compliance_tcpa_flag, covered_area_code, compliance_source,
-        scrubbed_at, compliance_expires_at, created_at, updated_at
+        scrubbed_at, compliance_expires_at, source_label, vendor_rank, phone_kind,
+        ownership_state, evidence_observed_at, created_at, updated_at
     `).get(
       flags.dncListed ? 1 : 0, flags.tcpaFlag ? 1 : 0, evidence.federalStatus,
       evidence.tcpaFlag == null ? null : evidence.tcpaFlag ? 1 : 0,
@@ -456,6 +489,49 @@ export class IdentityRepository {
       expected.coveredAreaCode, expected.source, expected.scrubbedAt, expected.expiresAt,
     );
     if (row === undefined) throw new StaleDomainWriteError();
+    return parseContactMethod(row);
+  }
+
+  mergeContactPresentationEvidence(input: {
+    contactMethodId: string;
+    incoming: ContactPresentationEvidence;
+  }): ContactMethod {
+    this.unitOfWork.assertWriteScope();
+    const id = idSchema.parse(input.contactMethodId);
+    const incoming = addContactMethodInputSchema.shape.presentationEvidence.unwrap().parse(input.incoming);
+    const current = this.getContactMethod(id);
+    if (current === null) throw new Error('Contact method disappeared during presentation merge.');
+    const existing = current.presentationEvidence ?? {
+      sourceLabel: null,
+      vendorRank: null,
+      phoneKind: null,
+      ownershipState: 'unknown' as const,
+      evidenceObservedAt: null,
+    };
+    const incomingTime = incoming.evidenceObservedAt;
+    const existingTime = existing.evidenceObservedAt;
+    const isNewerOrEqual = incomingTime === null
+      ? existingTime === null
+      : existingTime === null || incomingTime >= existingTime;
+    if (!isNewerOrEqual) return current;
+    const ownershipState = existing.ownershipState === 'verified_person'
+      || existing.ownershipState === 'conflicting_identity'
+      ? existing.ownershipState
+      : incoming.ownershipState;
+    const now = utcTimestampSchema.parse(this.clock.now());
+    const row = this.database.raw.prepare(`
+      UPDATE person_contact_methods SET source_label = ?, vendor_rank = ?, phone_kind = ?,
+        ownership_state = ?, evidence_observed_at = ?, updated_at = ?
+      WHERE id = ?
+      RETURNING id, person_id, kind, normalized_value, raw_value, validation_state,
+        reachability, is_primary, in_contacts, dnc_listed, tcpa_flag,
+        federal_status, compliance_tcpa_flag, covered_area_code, compliance_source,
+        scrubbed_at, compliance_expires_at, source_label, vendor_rank, phone_kind,
+        ownership_state, evidence_observed_at, created_at, updated_at
+    `).get(
+      incoming.sourceLabel, incoming.vendorRank, incoming.phoneKind, ownershipState,
+      incoming.evidenceObservedAt, now, id,
+    );
     return parseContactMethod(row);
   }
 
@@ -597,6 +673,19 @@ export class IdentityRepository {
     `).run(parsed.prospectId, parsed.organizationId, relationship, now);
   }
 
+  /** Fill one collector-supported absent value. Never replace founder facts or linkage. */
+  fillMissingPropertyDoorCount(input: { prospectId: string; propertyId: string; doorCount: number }): void {
+    this.unitOfWork.assertWriteScope();
+    const parsed = z.object({ prospectId: idSchema, propertyId: idSchema,
+      doorCount: z.number().int().safe().nonnegative() }).strict().parse(input);
+    this.database.raw.prepare(`
+      UPDATE properties SET door_count = ?, updated_at = ?
+      WHERE id = ? AND door_count IS NULL AND EXISTS (
+        SELECT 1 FROM prospect_properties WHERE prospect_id = ? AND property_id = properties.id
+      )
+    `).run(parsed.doorCount, utcTimestampSchema.parse(this.clock.now()), parsed.propertyId, parsed.prospectId);
+  }
+
   linkProperty(input: LinkPropertyInput): void {
     this.unitOfWork.assertWriteScope();
     const parsed = linkPropertyInputSchema.parse(input);
@@ -647,6 +736,11 @@ export class IdentityRepository {
         c.compliance_source AS contact_compliance_source,
         c.scrubbed_at AS contact_scrubbed_at,
         c.compliance_expires_at AS contact_compliance_expires_at,
+        c.source_label AS contact_source_label,
+        c.vendor_rank AS contact_vendor_rank,
+        c.phone_kind AS contact_phone_kind,
+        c.ownership_state AS contact_ownership_state,
+        c.evidence_observed_at AS contact_evidence_observed_at,
         c.created_at AS contact_created_at,
         c.updated_at AS contact_updated_at
       FROM person_contact_methods AS c
@@ -675,6 +769,11 @@ export class IdentityRepository {
         compliance_source: row.contact_compliance_source,
         scrubbed_at: row.contact_scrubbed_at,
         compliance_expires_at: row.contact_compliance_expires_at,
+        source_label: row.contact_source_label,
+        vendor_rank: row.contact_vendor_rank,
+        phone_kind: row.contact_phone_kind,
+        ownership_state: row.contact_ownership_state,
+        evidence_observed_at: row.contact_evidence_observed_at,
         created_at: row.contact_created_at,
         updated_at: row.contact_updated_at,
       });
@@ -701,7 +800,8 @@ export class IdentityRepository {
       SELECT id, person_id, kind, normalized_value, raw_value, validation_state,
         reachability, is_primary, in_contacts, dnc_listed, tcpa_flag,
         federal_status, compliance_tcpa_flag, covered_area_code, compliance_source,
-        scrubbed_at, compliance_expires_at,
+        scrubbed_at, compliance_expires_at, source_label, vendor_rank, phone_kind,
+        ownership_state, evidence_observed_at,
         created_at, updated_at
       FROM person_contact_methods
       WHERE person_id = ?
@@ -866,6 +966,19 @@ function parseContactMethod(value: unknown): ContactMethod {
       scrubbedAt: row.scrubbed_at,
       expiresAt: row.compliance_expires_at,
     },
+    ...(row.source_label === null
+      && row.vendor_rank === null
+      && row.phone_kind === null
+      && row.ownership_state === 'unknown'
+      && row.evidence_observed_at === null
+      ? {}
+      : { presentationEvidence: {
+          sourceLabel: row.source_label,
+          vendorRank: row.vendor_rank,
+          phoneKind: row.phone_kind,
+          ownershipState: row.ownership_state,
+          evidenceObservedAt: row.evidence_observed_at,
+        } }),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

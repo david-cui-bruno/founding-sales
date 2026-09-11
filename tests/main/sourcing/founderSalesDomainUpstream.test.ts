@@ -13,7 +13,7 @@ import {
 import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../../src/main/domain/prioritization/builtinPrioritizationRules';
-import { mapCloudSourceEvent } from '../../../src/main/sourcing/intakeMapper';
+import { buildNeedsIdentityIntakeCommand, mapCloudSourceEvent } from '../../../src/main/sourcing/intakeMapper';
 import { validParcelEvent, validEnrichmentEvent } from '../../fixtures/cloudSourceEvents';
 import { insertPerson, insertOpenCycleWithAction, DOMAIN_TIMESTAMP, seedProspect } from '../../fixtures/domainRows';
 import {
@@ -95,6 +95,26 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
       input.id, input.cycleId, input.toStage, NOW, NOW, input.sequence, NOW,
     );
   }
+
+  it('does not treat a renamed needsIdentity placeholder as source-supported enrichment ownership', () => {
+    const event = validParcelEvent();
+    event.entity.person = null;
+    const mapped = mapCloudSourceEvent(event);
+    if (mapped.kind !== 'needs-identity') throw new Error('expected placeholder intake');
+    const command = buildNeedsIdentityIntakeCommand(mapped)!;
+    const { personId } = domain.importCloudSourceEvent({ command, cloudEntityId: mapped.cloudEntityId });
+    database.raw.prepare('UPDATE persons SET display_name = ? WHERE id = ?').run('Edited Owner Name', personId);
+    const provenance = database.raw.prepare('SELECT provenance_json FROM persons WHERE id = ?').get(personId) as { provenance_json: string };
+    expect(JSON.parse(provenance.provenance_json)).toMatchObject({ needsIdentity: true });
+    expect(domain.getEnrichmentRequestCandidate({ personId }).identityReady).toBe(false);
+  });
+
+  it('requires current exact source/property ownership rather than a nonempty imported name', () => {
+    const { personId } = importLinkedLead();
+    expect(domain.getEnrichmentRequestCandidate({ personId }).identityReady).toBe(true);
+    database.raw.prepare('UPDATE properties SET address_line_1 = ?').run('Unrelated Property St');
+    expect(domain.getEnrichmentRequestCandidate({ personId }).identityReady).toBe(false);
+  });
 
   it('enqueues outcome labels for linked persons when listing unflushed rows', () => {
     const { cycleId } = importLinkedLead();
@@ -383,65 +403,73 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
     });
 
     const contacts = database.raw.prepare(`
-      SELECT normalized_value, is_primary, dnc_listed, tcpa_flag
+      SELECT normalized_value, validation_state, is_primary, dnc_listed, tcpa_flag,
+        source_label, vendor_rank, phone_kind, ownership_state, evidence_observed_at
       FROM person_contact_methods
       WHERE person_id = ? AND kind = 'phone'
       ORDER BY normalized_value ASC
     `).all(result.personId) as Array<{
-      normalized_value: string; is_primary: number;
-      dnc_listed: number; tcpa_flag: number;
+      normalized_value: string; validation_state: string; is_primary: number;
+      dnc_listed: number; tcpa_flag: number; source_label: string | null;
+      vendor_rank: number | null; phone_kind: string | null; ownership_state: string;
+      evidence_observed_at: string | null;
     }>;
     expect(contacts).toEqual([
       // Appended enrichment contacts keep the established primary: rank 1
       // would be primary on a fresh person, but the parcel event's phone
       // already holds one_primary_contact_per_kind.
-      { normalized_value: '+14015550100', is_primary: 0, dnc_listed: 0, tcpa_flag: 0 },
-      { normalized_value: '+14015550101', is_primary: 0, dnc_listed: 1, tcpa_flag: 0 },
+      {
+        normalized_value: '+14015550100', validation_state: 'unverified',
+        is_primary: 0, dnc_listed: 0, tcpa_flag: 0, source_label: 'tracerfy',
+        vendor_rank: 1, phone_kind: 'mobile', ownership_state: 'vendor_candidate',
+        evidence_observed_at: '2026-09-02T02:59:00.000Z',
+      },
+      {
+        normalized_value: '+14015550101', validation_state: 'unverified',
+        is_primary: 0, dnc_listed: 1, tcpa_flag: 0, source_label: 'tracerfy',
+        vendor_rank: 2, phone_kind: 'landline', ownership_state: 'vendor_candidate',
+        evidence_observed_at: '2026-09-02T02:59:00.000Z',
+      },
       // The original parcel event's phone keeps default (0) flags.
-      { normalized_value: '+14015551234', is_primary: 1, dnc_listed: 0, tcpa_flag: 0 },
+      {
+        normalized_value: '+14015551234', validation_state: 'valid',
+        is_primary: 1, dnc_listed: 0, tcpa_flag: 0, source_label: null,
+        vendor_rank: null, phone_kind: null, ownership_state: 'unknown',
+        evidence_observed_at: null,
+      },
     ]);
+
+    domain.importCloudSourceEvent({ command: mapped.command, cloudEntityId: mapped.cloudEntityId });
+    expect(database.raw.prepare(`
+      SELECT COUNT(*) AS count FROM person_contact_methods WHERE person_id = ?
+    `).get(result.personId)).toEqual({ count: 5 });
+    expect(database.raw.prepare(`
+      SELECT vendor_rank FROM person_contact_methods
+      WHERE person_id = ? AND normalized_value = '+14015550100'
+    `).get(result.personId)).toEqual({ vendor_rank: 1 });
 
     const detail = domain.getLeadDetail({ personId: result.personId });
     const flagged = detail.phones.find((phone) => phone.value === '+14015550101');
     expect(flagged?.compliance).toMatchObject({
-      status: 'federal_dnc_listed',
-      callRefusalReason: 'federal_dnc_listed',
-      textRefusalReason: 'federal_dnc_listed',
+      status: 'compliance_unknown',
+      callRefusalReason: 'contact_validation_unusable',
+      textRefusalReason: 'contact_validation_unusable',
     });
 
-    const cycle = database.raw.prepare(
-      'SELECT id FROM sales_cycles WHERE person_id = ?',
-    ).get(result.personId) as { id: string };
     const blockedContact = database.raw.prepare(
       "SELECT id FROM person_contact_methods WHERE person_id = ? AND normalized_value = '+14015550101'",
     ).get(result.personId) as { id: string };
-    expect(() => domain.beginOutbound({
-      channel: 'call',
-      personId: result.personId,
-      salesCycleId: cycle.id,
-      contactMethodId: blockedContact.id,
-    })).toThrow();
-    try {
-      domain.beginOutbound({
-        channel: 'call',
-        personId: result.personId,
-        salesCycleId: cycle.id,
-        contactMethodId: blockedContact.id,
-      });
-    } catch (error) {
-      expect((error as { reasonCode?: string }).reasonCode).toBe('federal_dnc_listed');
-    }
+    expect(() => services.unitOfWork.immediate(() => services.outboundPermission.assertMayExecuteOutbound({
+      channel: 'call', personId: result.personId, contactMethodId: blockedContact.id, now: NOW,
+    }))).toThrowError(expect.objectContaining({ reasonCode: 'contact_validation_unusable' }));
 
     // A legacy/unknown contact is not authorized merely because compatibility flags are clear.
     const cleanContact = database.raw.prepare(
       "SELECT id FROM person_contact_methods WHERE person_id = ? AND normalized_value = '+14015550100'",
     ).get(result.personId) as { id: string };
-    expect(() => domain.beginOutbound({
-      channel: 'call',
-      personId: result.personId,
-      salesCycleId: cycle.id,
-      contactMethodId: cleanContact.id,
-    })).toThrowError(expect.objectContaining({ reasonCode: 'federal_status_unknown' }));
+    expect(() => services.unitOfWork.immediate(() => services.outboundPermission.assertMayExecuteOutbound({
+      channel: 'call', personId: result.personId, contactMethodId: cleanContact.id, now: NOW,
+    }))).toThrowError(expect.objectContaining({ reasonCode: 'contact_validation_unusable' }));
   });
 
   it('merges later compliance evidence into an existing cloud-linked phone', () => {
@@ -474,7 +502,7 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
   });
 
   it('blocks outbound to a tcpa-flagged contact too', () => {
-    const { personId, cycleId } = importLinkedLead();
+    const { personId } = importLinkedLead();
     database.raw.prepare(`UPDATE person_contact_methods SET
       federal_status = 'verified_clear', compliance_tcpa_flag = 1,
       covered_area_code = '401', compliance_source = 'ftc_download',
@@ -484,14 +512,9 @@ describe('FounderSalesDomain upstream outbox and membership', () => {
     const contact = database.raw.prepare(
       "SELECT id FROM person_contact_methods WHERE person_id = ? AND kind = 'phone' LIMIT 1",
     ).get(personId) as { id: string };
-    try {
-      domain.beginOutbound({
-        channel: 'call', personId, salesCycleId: cycleId, contactMethodId: contact.id,
-      });
-      throw new Error('expected outbound refusal');
-    } catch (error) {
-      expect((error as { reasonCode?: string }).reasonCode).toBe('tcpa_blocked');
-    }
+    expect(() => services.unitOfWork.immediate(() => services.outboundPermission.assertMayExecuteOutbound({
+      channel: 'call', personId, contactMethodId: contact.id, now: NOW,
+    }))).toThrowError(expect.objectContaining({ reasonCode: 'tcpa_blocked' }));
   });
 
   it('prunes processed-file ledger rows older than 90 days', () => {

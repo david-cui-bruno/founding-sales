@@ -49,7 +49,7 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { PublishCommand, SNSClient } from "@aws-sdk/client-sns";
-import { GetParameterCommand, SSMClient } from "@aws-sdk/client-ssm";
+import { SSMClient } from "@aws-sdk/client-ssm";
 import {
   emitEvents,
   enrichmentRequestSchema,
@@ -58,6 +58,7 @@ import {
   type EnrichmentPhone,
   type EnrichmentRequest,
   SafeHandlerError,
+  loadSecureParameter,
   type ScheduledRunStatus,
 } from "@callie-sourcing/shared";
 import {
@@ -89,6 +90,8 @@ export interface HandlerDeps {
   fetchImpl: typeof fetch;
   /** Resolves the membership HMAC salt (SSM in prod, fixture in tests). */
   getHmacSalt: () => Promise<string>;
+  /** Resolves the Tracerfy credential for this invocation. */
+  getTracerfyApiKey: () => Promise<string>;
   env: {
     INBOX_BUCKET: string;
     IDEMPOTENCY_TABLE: string;
@@ -96,7 +99,6 @@ export interface HandlerDeps {
     SUPPRESSION_TABLE: string;
     SNS_TOPIC_ARN: string;
     TRACERFY_BASE_URL: string;
-    TRACERFY_API_KEY: string;
     ENRICH_MONTHLY_CREDIT_CAP: number;
   };
   now?: () => Date;
@@ -114,19 +116,16 @@ function defaultDeps(): HandlerDeps {
   const ssm = new SSMClient({});
   const saltParam =
     process.env.HMAC_SALT_PARAM ?? "/callie-sourcing/membership-hmac-salt";
+  const tracerfyParam = envOrThrow("TRACERFY_API_KEY_PARAM");
   return {
     s3: new S3Client({}),
     dynamo: new DynamoDBClient({}),
     sns: new SNSClient({}),
     fetchImpl: fetch,
-    getHmacSalt: async () => {
-      const result = await ssm.send(
-        new GetParameterCommand({ Name: saltParam, WithDecryption: true }),
-      );
-      const salt = result.Parameter?.Value;
-      if (!salt) throw new Error(`SSM parameter ${saltParam} has no value`);
-      return salt;
-    },
+    getHmacSalt: async () =>
+      (await loadSecureParameter({ client: ssm, parameterName: saltParam, required: true }))!,
+    getTracerfyApiKey: async () =>
+      (await loadSecureParameter({ client: ssm, parameterName: tracerfyParam, required: true }))!,
     env: {
       INBOX_BUCKET: envOrThrow("INBOX_BUCKET"),
       IDEMPOTENCY_TABLE: envOrThrow("IDEMPOTENCY_TABLE"),
@@ -134,7 +133,6 @@ function defaultDeps(): HandlerDeps {
       SUPPRESSION_TABLE: envOrThrow("SUPPRESSION_TABLE"),
       SNS_TOPIC_ARN: envOrThrow("SNS_TOPIC_ARN"),
       TRACERFY_BASE_URL: envOrThrow("TRACERFY_BASE_URL"),
-      TRACERFY_API_KEY: envOrThrow("TRACERFY_API_KEY"),
       ENRICH_MONTHLY_CREDIT_CAP: Number(
         process.env.ENRICH_MONTHLY_CREDIT_CAP ?? "1000",
       ),
@@ -343,6 +341,7 @@ async function readRequests(
 async function lookupWithRetry(
   deps: HandlerDeps,
   request: EnrichmentRequest,
+  tracerfyApiKey: string,
 ): Promise<TracerfyLookupResult> {
   const sleep =
     deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
@@ -356,7 +355,7 @@ async function lookupWithRetry(
     instantTraceLookup(
       deps.fetchImpl,
       deps.env.TRACERFY_BASE_URL,
-      deps.env.TRACERFY_API_KEY,
+      tracerfyApiKey,
       input,
     );
 
@@ -427,6 +426,7 @@ export async function handlerWithDeps(
   const now = deps.now ?? (() => new Date());
   const maxFiles = event?.maxFiles;
   const maxRequests = event?.maxRequests;
+  const tracerfyApiKey = await deps.getTracerfyApiKey();
 
   const result: RunResult = {
     filesSeen: 0,
@@ -517,7 +517,7 @@ export async function handlerWithDeps(
         continue;
       }
 
-      const lookup = await lookupWithRetry(deps, request);
+      const lookup = await lookupWithRetry(deps, request, tracerfyApiKey);
       if (lookup.kind !== "ok") {
         switch (lookup.kind) {
           case "no_credits":
@@ -570,8 +570,8 @@ export async function handlerWithDeps(
 
       // Normalize then SUPPRESSION-check every contact (CONTRACT invariant:
       // person contact data must be checked before it can reach the inbox).
-      let phones: EnrichmentPhone[] = [];
-      let emails: EnrichmentEmail[] = [];
+      const phones: EnrichmentPhone[] = [];
+      const emails: EnrichmentEmail[] = [];
       if (picked) {
         const contacts = normalizeContacts(picked.person);
         result.invalidContactsDropped += contacts.invalidDropped;

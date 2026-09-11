@@ -1,7 +1,15 @@
 /* Lead import workflow surfaces. */
 
 .import-dialog {
-  display: flex;
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  width: min(44rem, calc(100vw - var(--space-6) * 2));
+  height: fit-content;
+  max-height: calc(100dvh - var(--space-6) * 2);
+  margin: auto;
+  overflow: auto;
+  display: none;
   flex-direction: column;
   gap: var(--space-4);
   max-width: 44rem;
@@ -13,6 +21,14 @@
   color: var(--text);
 }
 
+.import-dialog[open] {
+  display: flex;
+}
+
+.import-dialog::backdrop {
+  background: color-mix(in srgb, var(--canvas) 70%, transparent);
+}
+
 /* Dialog entry: 240ms fade-and-lift, gated to no-preference. */
 @media (prefers-reduced-motion: no-preference) {
   .import-dialog {
@@ -21,6 +37,8 @@
 }
 
 .import-dialog__header {
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: space-between;

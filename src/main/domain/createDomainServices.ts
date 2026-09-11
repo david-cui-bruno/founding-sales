@@ -2,13 +2,18 @@ import type { AppDatabase } from '../db/database';
 import { CadenceRepository } from './cadence/cadenceRepository';
 import { ContactComplianceService } from './compliance/contactComplianceService';
 import { JurisdictionRepository } from './compliance/jurisdictionRepository';
-import { FOUNDER_CHANNEL_POLICIES_V1 } from './cadence/cadenceScheduler';
+import { PLAYBOOK_CHANNEL_POLICIES_V2 } from './cadence/cadenceScheduler';
+import { DiscoveryRepository } from './discovery/discoveryRepository';
+import { DiscoveryReadService } from './discovery/discoveryReadService';
+import { DiscoveryFactWriter } from './discovery/discoveryFactWriter';
+import { DiscoveryService } from './discovery/discoveryService';
 import { EventRepository } from './events/eventRepository';
 import { IdentityRepository } from './identity/identityRepository';
 import { LifecycleService } from './lifecycle/lifecycleService';
 import { OptOutRepository } from './optOut/optOutRepository';
 import { OptOutService } from './optOut/optOutService';
 import { OutboundPermissionService } from './optOut/outboundPermissionService';
+import { OutboundCommandRepository } from './outbound/outboundCommandRepository';
 import { PrioritizationRepository } from './prioritization/prioritizationRepository';
 import { PrioritizationService } from './prioritization/prioritizationService';
 import { IntakeReceiptRepository } from './source/intakeReceiptRepository';
@@ -24,6 +29,9 @@ import { JobRepository } from '../jobs/jobRepository';
 
 export type DomainServices = Readonly<{
   unitOfWork: DomainUnitOfWork;
+  discoveryRepository: DiscoveryRepository;
+  discoveryRead: DiscoveryReadService;
+  discovery: DiscoveryService;
   jobs: JobRepository;
   identities: IdentityRepository;
   contactCompliance: ContactComplianceService;
@@ -35,6 +43,7 @@ export type DomainServices = Readonly<{
   lifecycle: LifecycleService;
   optOut: OptOutService;
   outboundPermission: OutboundPermissionService;
+  outboundCommands: OutboundCommandRepository;
   prioritizationRepository: PrioritizationRepository;
   prioritization: PrioritizationService;
   todayRepository: TodayRepository;
@@ -57,14 +66,16 @@ export function createDomainServices(input: {
   const { database, clock, ids } = input;
   const timezone = input.timezone ?? 'America/New_York';
   const unitOfWork = new DomainUnitOfWork(database);
+  const discoveryRepository = new DiscoveryRepository({ database, unitOfWork });
   const jobs = new JobRepository(database);
   const identities = new IdentityRepository({ database, unitOfWork, clock, ids });
   const jurisdictions = new JurisdictionRepository({ database, unitOfWork });
   const contactCompliance = new ContactComplianceService({
     database, unitOfWork, identities, jurisdictions,
-    windows: FOUNDER_CHANNEL_POLICIES_V1, clock, ids,
+    windows: PLAYBOOK_CHANNEL_POLICIES_V2, clock, ids,
   });
   const events = new EventRepository({ database, unitOfWork, clock, ids });
+  const outboundCommands = new OutboundCommandRepository({ database, unitOfWork, events });
   const sourceRepository = new SourceRepository({ database, unitOfWork, clock });
   const intakeReceipts = new IntakeReceiptRepository({ database, unitOfWork, clock });
   const sources = new SourceService({
@@ -82,7 +93,8 @@ export function createDomainServices(input: {
     clock,
     ids,
     timezone,
-    policies: FOUNDER_CHANNEL_POLICIES_V1,
+    policies: PLAYBOOK_CHANNEL_POLICIES_V2,
+    discoveryRepository,
   });
   const optOutRepository = new OptOutRepository({ database, unitOfWork });
   const optOut = new OptOutService({
@@ -90,7 +102,7 @@ export function createDomainServices(input: {
   });
   const outboundPermission = new OutboundPermissionService({
     database, unitOfWork, identities, optOuts: optOutRepository, jurisdictions,
-    windows: FOUNDER_CHANNEL_POLICIES_V1,
+    windows: PLAYBOOK_CHANNEL_POLICIES_V2,
   });
   const prioritizationRepository = new PrioritizationRepository({ database, unitOfWork, clock });
   const prioritization = new PrioritizationService({
@@ -102,11 +114,21 @@ export function createDomainServices(input: {
     outboundPermission,
   });
   const workspaceSettings = new WorkspaceSettingsRepository({ database, unitOfWork });
+  const discoveryRead = new DiscoveryReadService({ database, unitOfWork, clock,
+    services: { discoveryRepository, today, workspaceSettings, jobs, identities, sourceRepository,
+      events, outboundPermission, prioritizationRepository, prioritization } });
+  const evidenceServices = { identities, sourceRepository, events, outboundPermission,
+    prioritizationRepository, prioritization, workspaceSettings };
+  const factWriter = new DiscoveryFactWriter({ database, unitOfWork, services: evidenceServices });
+  const discovery = new DiscoveryService({ database, unitOfWork, clock, ids, factWriter,
+    services: { ...evidenceServices, lifecycle, discoveryRepository, discoveryRead } });
 
   // Assert every final binding before any read/time/ID access.
+  discoveryRepository.assertBoundTo(database, unitOfWork);
   identities.assertBoundTo(database, unitOfWork);
   contactCompliance.assertBoundTo(database, unitOfWork);
   events.assertBoundTo(database, unitOfWork);
+  outboundCommands.assertBoundTo(database, unitOfWork);
   sourceRepository.assertBoundTo(database, unitOfWork);
   intakeReceipts.assertBoundTo(database, unitOfWork);
   cadences.assertBoundTo(database, unitOfWork);
@@ -119,6 +141,9 @@ export function createDomainServices(input: {
 
   return Object.freeze({
     unitOfWork,
+    discoveryRepository,
+    discoveryRead,
+    discovery,
     jobs,
     identities,
     contactCompliance,
@@ -130,6 +155,7 @@ export function createDomainServices(input: {
     lifecycle,
     optOut,
     outboundPermission,
+    outboundCommands,
     prioritizationRepository,
     prioritization,
     todayRepository,

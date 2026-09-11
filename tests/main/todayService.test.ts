@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
@@ -101,6 +101,7 @@ describe('TodayService', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     closeDatabase(database);
     temp.cleanup();
   });
@@ -114,6 +115,8 @@ describe('TodayService', () => {
     actionType?: string;
     channel?: string | null;
   }): { cycleId: string; actionId: string } {
+    // These fixtures exercise cold priority lanes, not warm introduction bypass.
+    database.raw.prepare("UPDATE prospects SET segment = 'cold' WHERE id = ?").run(input.prospect.prospectId);
     const cycleId = `${input.prefix}-cycle`;
     const actionId = `${input.prefix}-action`;
     database.raw.exec('BEGIN IMMEDIATE');
@@ -231,6 +234,28 @@ describe('TodayService', () => {
     const item = laneOf(queue, 'exploration')[0]!;
     expect(item.priority).not.toBeNull();
     expect(item.priority!.prospectId).toBe(prospect.prospectId);
+  });
+
+  it('shows only real warm Unreviewed contacts without collecting unused priority inputs', () => {
+    for (const segment of ['cold', 'hot', 'warm']) {
+      const prospect = seedProspect(database.raw, segment);
+      insertCycleWithAction({ prefix: segment, prospect, stage: 'unreviewed',
+        actionType: 'review_lead', channel: null, workIntent: 'internal_review' });
+      database.raw.prepare('UPDATE prospects SET segment = ? WHERE id = ?').run(segment, prospect.prospectId);
+    }
+    const collect = vi.spyOn(priorities, 'getEffectivePrioritySnapshot');
+    const permission = vi.spyOn(OutboundPermissionService.prototype, 'inspectPerson');
+    const before = database.raw.prepare('SELECT total_changes() AS count').get();
+    const queue = build();
+    expect(queue.lanes.flatMap(lane => lane.items).map(item => item.personId)).toEqual(['warm-person']);
+    expect(queue.unreviewedBacklogCount).toBe(3);
+    expect(collect).not.toHaveBeenCalled();
+    expect(permission).toHaveBeenCalledTimes(1);
+    expect(permission).toHaveBeenCalledWith('warm-person');
+    expect(database.raw.prepare('SELECT total_changes() AS count').get()).toEqual(before);
+    database.raw.prepare("UPDATE prospects SET segment = 'cold' WHERE id = 'warm-prospect'").run();
+    expect(build().lanes.flatMap(lane => lane.items)).toEqual([]);
+    expect(collect).not.toHaveBeenCalled();
   });
 
   it('reports blocked persons only as sanitized diagnostics', () => {

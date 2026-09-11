@@ -199,6 +199,7 @@ describe('classifyTodayCandidate first-match order', () => {
     const disposition = classifyTodayCandidate(candidate({
       resurfaceAt: GENERATED_AT,
       resurfaceReason: 'callback',
+      commitment: { kind: 'callback', activityId: 'recorded-call', dueAt: GENERATED_AT },
       action: { workIntent: 'promised_follow_up' },
     }), CONTEXT);
     expect(disposition).toMatchObject({
@@ -261,14 +262,14 @@ describe('classifyTodayCandidate first-match order', () => {
       action: { workIntent: 'promised_follow_up' },
     }), CONTEXT)).toMatchObject({
       kind: 'lane', lane: 'due_primary',
-      item: { laneReason: 'promised_follow_up' },
+      item: { laneReason: 'cadence_step_next' },
     });
     expect(classifyTodayCandidate(candidate({
       stage: 'interviewed',
       action: { workIntent: 'internal_review', actionType: 'confirm_offer', channel: null },
     }), CONTEXT)).toMatchObject({
       kind: 'lane', lane: 'due_primary',
-      item: { laneReason: 'internal_review_waiting' },
+      item: { laneReason: 'promised_follow_up' },
     });
   });
 
@@ -478,7 +479,7 @@ describe('compareTodayItems', () => {
 });
 
 describe('planTodayQueue capacity', () => {
-  it('caps the whole queue at dialBudget rows with per-lane overflow counts', () => {
+  it('caps automatic dials at dialBudget rows with per-lane overflow counts', () => {
     const candidates = Array.from({ length: 12 }, () => candidate({
       action: { workIntent: 'promised_follow_up' },
     }));
@@ -509,7 +510,7 @@ describe('planTodayQueue capacity', () => {
       ],
       generatedAt: GENERATED_AT,
       timezone: 'America/New_York',
-      capacity: { ...DEFAULT_TODAY_CAPACITY, dialBudget: 3 },
+      capacity: { ...DEFAULT_TODAY_CAPACITY, dialBudget: 2 },
       completedDiscretionaryDialCount: 0,
     });
     const lanesById = new Map(queue.lanes.map((lane) => [lane.lane, lane]));

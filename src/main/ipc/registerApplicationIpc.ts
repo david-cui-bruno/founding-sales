@@ -1,3 +1,9 @@
+import { createDiscoveryProvider } from '../discovery/discoveryProvider';
+import { registerDiscoveryIpc } from '../discovery/registerDiscoveryIpc';
+import type { OutboundCommandServiceApi } from '../communications/outboundPorts';
+import { unavailableOutboundCapabilities } from '../leads/leadDetailService';
+import { registerRecoveryIpc } from '../recovery/registerRecoveryIpc';
+import type { RecoveryProvider } from '../../shared/contracts/recoveryContract';
 import type { FounderSalesDomain } from '../domain/founderSalesDomain';
 import type { FoundationRuntime } from '../foundation/foundationRuntime';
 import { appHealthSchema } from '../../shared/healthContract';
@@ -45,6 +51,8 @@ export type FeatureRegistrars = {
   registerLearningsIpc: typeof registerLearningsIpc;
   registerSourcingIpc: typeof registerSourcingIpc;
   registerShellIpc: typeof registerShellIpc;
+  registerRecoveryIpc: typeof registerRecoveryIpc;
+  registerDiscoveryIpc: typeof registerDiscoveryIpc;
 };
 
 const defaultRegistrars: FeatureRegistrars = {
@@ -60,6 +68,8 @@ const defaultRegistrars: FeatureRegistrars = {
   registerLearningsIpc,
   registerSourcingIpc,
   registerShellIpc,
+  registerRecoveryIpc,
+  registerDiscoveryIpc,
 };
 
 export function createLeadsProvider(runtime: DomainGate): LeadsProvider {
@@ -75,11 +85,15 @@ export function createLeadsProvider(runtime: DomainGate): LeadsProvider {
 export function createLeadDetailProvider(
   runtime: DomainGate,
   enrichmentRequester?: EnrichmentRequester,
+  outbound?: OutboundCommandServiceApi,
 ): LeadDetailProvider {
   return {
     get: (input) => runtime.withDomain((domain) => domain.getLeadDetail(input)),
-    beginOutbound: (input) =>
-      runtime.withDomain((domain) => domain.beginOutbound(input)),
+    beginOutbound: (input) => outbound === undefined
+      ? runtime.withDomain((domain) => domain.recordOutboundRefusal(input, input.channel === 'call' ? 'phone_route_unverified' : 'channel_unavailable'))
+      : outbound.beginOutbound(input),
+    getOutboundCapabilities: async () => outbound === undefined
+      ? unavailableOutboundCapabilities() : outbound.getCapabilities(),
     confirmTransition: (input) =>
       runtime.withDomain((domain) => domain.confirmTransition(input)),
     dismissLead: (input) =>
@@ -110,6 +124,8 @@ export function createTodayProvider(runtime: DomainGate): TodayProvider {
       runtime.withDomain((domain) => domain.logCallOutcome(input)),
     markActivityInError: (input) =>
       runtime.withDomain((domain) => domain.markActivityInError(input)),
+    getLeadTriageSnapshot: (input) =>
+      runtime.withDomain((domain) => domain.getLeadTriageSnapshot(input)),
     getTriageQueue: () =>
       runtime.withDomain((domain) => domain.getTriageQueue()),
     setReviewPosition: (input) =>
@@ -222,56 +238,78 @@ export function registerApplicationIpc(
   isTrustedRendererUrl: ((url: string) => boolean) | undefined,
   registrars: FeatureRegistrars | undefined,
   sourcingProvider: SourcingProvider,
+  recoveryProvider: RecoveryProvider,
   shellProvider?: ShellProvider,
   enrichmentRequester?: EnrichmentRequester,
   logDirectoryPath?: string,
+  outbound?: OutboundCommandServiceApi,
 ): () => void {
   if (sourcingProvider === undefined) {
     throw new Error('Sourcing provider is required.');
   }
+  if (recoveryProvider === undefined) throw new Error('Recovery provider is required.');
   registrars ??= defaultRegistrars;
-  const unregisters = [
-    registrars.registerHealthIpc(runtime, isTrustedRendererUrl),
-    registrars.registerLeadsIpc(createLeadsProvider(runtime), isTrustedRendererUrl),
-    registrars.registerLeadDetailIpc(
-      createLeadDetailProvider(runtime, enrichmentRequester),
+  const registrations = [
+    () => registrars.registerHealthIpc(runtime, isTrustedRendererUrl),
+    () => registrars.registerLeadsIpc(createLeadsProvider(runtime), isTrustedRendererUrl),
+    () => registrars.registerLeadDetailIpc(
+      createLeadDetailProvider(runtime, enrichmentRequester, outbound),
       isTrustedRendererUrl,
     ),
-    registrars.registerTodayIpc(createTodayProvider(runtime), isTrustedRendererUrl),
-    registrars.registerPipelineIpc(
+    () => registrars.registerTodayIpc(createTodayProvider(runtime), isTrustedRendererUrl),
+    () => registrars.registerPipelineIpc(
       createPipelineProvider(runtime),
       isTrustedRendererUrl,
     ),
-    registrars.registerReviewIpc(createReviewProvider(runtime), isTrustedRendererUrl),
-    registrars.registerFridayIpc(createFridayProvider(runtime), isTrustedRendererUrl),
-    registrars.registerImportIpc(createImportProvider(runtime), isTrustedRendererUrl),
-    registrars.registerConversationsIpc(
+    () => registrars.registerReviewIpc(createReviewProvider(runtime), isTrustedRendererUrl),
+    () => registrars.registerFridayIpc(createFridayProvider(runtime), isTrustedRendererUrl),
+    () => registrars.registerImportIpc(createImportProvider(runtime), isTrustedRendererUrl),
+    () => registrars.registerConversationsIpc(
       createConversationsProvider(runtime),
       isTrustedRendererUrl,
     ),
-    registrars.registerLearningsIpc(
+    () => registrars.registerLearningsIpc(
       createLearningsProvider(runtime),
       isTrustedRendererUrl,
     ),
-    registrars.registerSourcingIpc(
+    () => registrars.registerSourcingIpc(
       sourcingProvider,
       isTrustedRendererUrl,
     ),
-    registrars.registerShellIpc(
+    () => registrars.registerShellIpc(
       shellProvider ?? createShellProvider(runtime, logDirectoryPath),
       isTrustedRendererUrl,
     ),
+    () => registrars.registerRecoveryIpc(recoveryProvider, isTrustedRendererUrl),
+    () => registrars.registerDiscoveryIpc({
+      provider: {
+        get: () => runtime.withDomain(domain => createDiscoveryProvider(domain).get()),
+        getBrief: input => runtime.withDomain(domain => createDiscoveryProvider(domain).getBrief(input)),
+        begin: input => runtime.withDomain(domain => createDiscoveryProvider(domain).begin(input)),
+        override: input => runtime.withDomain(domain => createDiscoveryProvider(domain).override(input)),
+      },
+      isTrustedRendererUrl,
+    }),
   ];
 
-  let active = true;
+  const unregisters: (() => void)[] = [];
+  const cleanup = (): unknown[] => {
+    const errors: unknown[] = [];
+    for (const unregister of unregisters.splice(0).reverse()) {
+      try { unregister(); } catch (error) { errors.push(error); }
+    }
+    return errors;
+  };
+  try {
+    for (const register of registrations) unregisters.push(register());
+  } catch (error) {
+    const errors = cleanup();
+    if (errors.length > 0) throw new AggregateError([error, ...errors], 'Application IPC registration and rollback failed.', { cause: error });
+    throw error;
+  }
   return () => {
-    if (!active) {
-      return;
-    }
-    active = false;
-    for (const unregister of [...unregisters].reverse()) {
-      unregister();
-    }
+    const errors = cleanup();
+    if (errors.length > 0) throw new AggregateError(errors, 'Application IPC cleanup failed.');
   };
 }
 

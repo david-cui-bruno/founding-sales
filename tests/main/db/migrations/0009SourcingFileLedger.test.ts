@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../../../src/main/db/database';
-import { createMigrationRunner, migrateToLatest } from '../../../../src/main/db/migrate';
+import { createMigrationRunner, productionMigrations } from '../../../../src/main/db/migrate';
 import { migration0001Foundation } from '../../../../src/main/db/migrations/0001Foundation';
 import { migration0002DomainFoundation } from '../../../../src/main/db/migrations/0002DomainFoundation';
 import { migration0003Transcripts } from '../../../../src/main/db/migrations/0003Transcripts';
@@ -15,6 +15,8 @@ import {
   createTestWorkspaceKey,
   type TempDatabase,
 } from '../../../fixtures/tempDatabase';
+
+const migrateThrough9 = createMigrationRunner(productionMigrations.filter(x => x.schemaVersion <= 9));
 
 const migrateThroughSchema8 = createMigrationRunner([
   { id: '0001Foundation', schemaVersion: 1, migration: migration0001Foundation },
@@ -53,23 +55,18 @@ describe('0009 sourcing file ledger migration', () => {
   });
 
   it('migrates a fresh database to schema version 9', async () => {
-    const result = await migrateToLatest(database, options);
-    expect(result.toVersion).toBe(14);
+    const result = await migrateThrough9(database, options);
+    expect(result.toVersion).toBe(9);
     expect(result.appliedMigrationIds).toEqual([
       '0009SourcingFileLedger',
-      '0010NoDueDates',
-      '0011ContactDncFlags',
-      '0012UpstreamRequestState',
-      '0013ContactComplianceEvidence',
-      '0014OutboundJurisdictionClearance',
     ]);
     expect(database.raw.prepare<[], { schema_version: number }>(
       'SELECT schema_version FROM app_meta WHERE singleton = 1',
-    ).get()).toEqual({ schema_version: 14 });
+    ).get()).toEqual({ schema_version: 9 });
   });
 
   it('creates an empty processed-file ledger with key primary key and required processed_at', async () => {
-    await migrateToLatest(database, options);
+    await migrateThrough9(database, options);
 
     expect(database.raw.prepare<[], { count: number }>(
       'SELECT COUNT(*) AS count FROM sourcing_processed_files',
@@ -91,17 +88,12 @@ describe('0009 sourcing file ledger migration', () => {
       'INSERT INTO sourcing_cursor (id, last_key, polled_at) VALUES (1, ?, ?)',
     ).run(POISONED_CURSOR, '2026-09-01T11:00:00.000Z');
 
-    const result = await migrateToLatest(database, options);
+    const result = await migrateThrough9(database, options);
 
     expect(result.fromVersion).toBe(8);
-    expect(result.toVersion).toBe(14);
+    expect(result.toVersion).toBe(9);
     expect(result.appliedMigrationIds).toEqual([
       '0009SourcingFileLedger',
-      '0010NoDueDates',
-      '0011ContactDncFlags',
-      '0012UpstreamRequestState',
-      '0013ContactComplianceEvidence',
-      '0014OutboundJurisdictionClearance',
     ]);
     expect(database.raw.prepare<[], { last_key: string | null; polled_at: string }>(
       'SELECT last_key, polled_at FROM sourcing_cursor WHERE id = 1',

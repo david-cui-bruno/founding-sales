@@ -161,7 +161,7 @@ describe('concurrent SalesCycle invariant', () => {
       SELECT id, current_next_action_id FROM sales_cycles
       WHERE person_id = ? AND workflow_status IN ('active','onboarding')
     `).all(prospect.personId)).toEqual([
-      { id: 'worker-cycle', current_next_action_id: null },
+      { id: 'worker-cycle', current_next_action_id: 'worker-cycle:review' },
     ]);
   }, 10_000);
 

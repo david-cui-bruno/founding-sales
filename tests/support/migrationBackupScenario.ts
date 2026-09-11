@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   fchmodSync,
   fstatSync,
@@ -29,7 +30,11 @@ import {
   createMigrationBackupService,
   type MigrationBackup,
 } from '../../src/main/db/migrationBackup';
-import { createMigrationRunner } from '../../src/main/db/migrate';
+import {
+  createMigrationRunner,
+  migrateToLatest,
+  productionMigrations,
+} from '../../src/main/db/migrate';
 import { migration0001Foundation } from '../../src/main/db/migrations/0001Foundation';
 import {
   applyWorkspaceKey,
@@ -50,6 +55,14 @@ const migrateToSchemaOne = createMigrationRunner([
     migration: migration0001Foundation,
   },
 ]);
+const recoveryTransitions: Record<string, { fromVersion: number; toVersion: number; appliedMigrationIds: string[] }> = {
+  'schema-15-to-16-recovery-preservation': { fromVersion: 15, toVersion: 16, appliedMigrationIds: ['0016ContactPresentationEvidence'] },
+  'schema-16-to-17-recovery-preservation': { fromVersion: 16, toVersion: 17, appliedMigrationIds: ['0017DiscoveryAssessments'] },
+  'schema-17-to-19-recovery-preservation': { fromVersion: 17, toVersion: 19, appliedMigrationIds: ['0018PlaybookDueActions', '0019EmailDrafts'] },
+  'schema-18-to-19-recovery-preservation': { fromVersion: 18, toVersion: 19, appliedMigrationIds: ['0019EmailDrafts'] },
+};
+const RECOVERY_TS = '2026-09-05T12:00:00.000Z';
+const RECOVERY_SHA = 'a'.repeat(64);
 
 void runScenario();
 
@@ -62,7 +75,58 @@ async function runScenario(): Promise<void> {
   try {
     database = openDatabase({ path: workspace.path, key });
 
-    if (scenario === 'verified-schema-one') {
+    if (scenario in recoveryTransitions) {
+      const transition = recoveryTransitions[scenario];
+      const { fromVersion, toVersion } = transition;
+      const migrateFrom = createMigrationRunner(productionMigrations.filter(entry => entry.schemaVersion <= fromVersion));
+      // Historical cases stop at their real schema, not a metadata relabel of latest.
+      const migrateTo = toVersion === 19 ? migrateToLatest
+        : createMigrationRunner(productionMigrations.filter(entry => entry.schemaVersion <= toVersion));
+      await migrateFrom(database, { backupDirectory, workspaceKey: key });
+      assert.equal(readSchemaVersion(database), fromVersion);
+      database.raw.prepare(`INSERT INTO backup_receipts
+        (id, backup_basename, kind, schema_version, sha256, size_bytes, created_at, verified_at)
+        VALUES ('backup-1', 'daily-1.sqlite3', 'daily', 15, ?, 10, ?, ?)`)
+        .run(RECOVERY_SHA, RECOVERY_TS, RECOVERY_TS);
+      database.raw.prepare(`INSERT INTO restore_drill_receipts
+        (performed_at, backup_receipt_id, backup_sha256)
+        VALUES (?, 'backup-1', ?)`).run(RECOVERY_TS, RECOVERY_SHA);
+      database.raw.prepare(`UPDATE recovery_readiness SET recovery_setup_completed_at = ?,
+        last_restore_drill_at = ?, last_restore_backup_sha256 = ?, updated_at = ?
+        WHERE singleton = 1`).run(RECOVERY_TS, RECOVERY_TS, RECOVERY_SHA, RECOVERY_TS);
+      database.raw.prepare(`INSERT INTO identity_repair_events
+        (id, manifest_sha256, candidate_id, canonical_person_id,
+         created_person_ids_json, reassigned_source_event_ids_json, applied_at)
+        VALUES ('repair-1', ?, 'candidate-1', 'person-1', '[]', '["event-1"]', ?)`)
+        .run(RECOVERY_SHA, RECOVERY_TS);
+      const before = recoverySnapshot(database.raw);
+
+      const result = await migrateTo(database, { backupDirectory, workspaceKey: key });
+      assert.deepEqual(result, transition);
+      assert.deepEqual(recoverySnapshot(database.raw), before);
+
+      const backups = listBackups(backupDirectory);
+      const historicalBackup = backups.find((path) => basename(path).startsWith(`pre-migration-schema-${fromVersion}-`));
+      assert.ok(historicalBackup);
+      assertBackupFile(historicalBackup, key.bytes, fromVersion);
+      const backupRaw = createRawDatabase(historicalBackup, { readonly: true, fileMustExist: true });
+      try {
+        applyWorkspaceKey(backupRaw, key.bytes);
+        assert.deepEqual(recoverySnapshot(backupRaw), before);
+      } finally {
+        backupRaw.close();
+      }
+
+      const restoredPath = `${workspace.path}.restored`;
+      copyFileSync(historicalBackup, restoredPath);
+      const restored = openDatabase({ path: restoredPath, key });
+      try {
+        assert.deepEqual(recoverySnapshot(restored.raw), before);
+      } finally {
+        closeDatabase(restored);
+        rmSync(restoredPath, { force: true });
+      }
+    } else if (scenario === 'verified-schema-one') {
       await migrateToSchemaOne(database, { backupDirectory, workspaceKey: key });
       const directBackupDirectory = join(dirname(workspace.path), 'direct-backups');
       const backup = createVerifiedMigrationBackup({
@@ -506,6 +570,24 @@ async function runScenario(): Promise<void> {
     key.bytes.fill(0);
     workspace.cleanup();
   }
+}
+
+function recoverySnapshot(raw: AppDatabase['raw']): unknown {
+  return {
+    tables: raw.prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'table'
+      AND name IN ('backup_receipts','recovery_readiness','identity_repair_events','restore_drill_receipts')
+      ORDER BY name`).all(),
+    indexes: raw.prepare(`SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'index'
+      AND tbl_name IN ('backup_receipts','recovery_readiness','identity_repair_events','restore_drill_receipts')
+      ORDER BY name`).all(),
+    triggers: raw.prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'trigger'
+      AND tbl_name IN ('backup_receipts','recovery_readiness','identity_repair_events','restore_drill_receipts')
+      ORDER BY name`).all(),
+    receipts: raw.prepare('SELECT * FROM backup_receipts ORDER BY id').all(),
+    drills: raw.prepare('SELECT * FROM restore_drill_receipts ORDER BY performed_at, backup_sha256').all(),
+    readiness: raw.prepare('SELECT * FROM recovery_readiness ORDER BY singleton').all(),
+    repairs: raw.prepare('SELECT * FROM identity_repair_events ORDER BY id').all(),
+  };
 }
 
 function assertConstantCreatedFileFailure(operation: () => unknown): void {

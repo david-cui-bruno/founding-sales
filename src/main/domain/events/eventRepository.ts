@@ -245,6 +245,9 @@ const storedMediaConsentRowSchema = z.object({
   effective_at: utcTimestampSchema,
   decision: z.enum(['granted', 'denied', 'not_required', 'unknown']),
 }).strict();
+const manualAttachmentEvidenceSchema = z.object({
+  kind: z.literal('founder_manual_attach'),
+}).strict();
 
 const activityColumns = `
   id, person_id, prospect_id, sales_cycle_id, cadence_enrollment_id,
@@ -490,7 +493,8 @@ export class EventRepository {
 
   private parseAndValidateActivity(value: unknown): Activity {
     const activity = parseActivity(value);
-    if (activity.recordingStorageRef !== null || activity.transcriptStorageRef !== null) {
+    if ((activity.recordingStorageRef !== null || activity.transcriptStorageRef !== null)
+      && !this.hasPersistedManualTranscriptAttachment(activity)) {
       this.assertApplicableRecordingConsent({
         personId: activity.personId,
         consentPolicyRecordId: activity.consentPolicyRecordId,
@@ -499,6 +503,33 @@ export class EventRepository {
       });
     }
     return activity;
+  }
+
+  private hasPersistedManualTranscriptAttachment(activity: Activity): boolean {
+    if (activity.recordingStorageRef !== null || activity.transcriptStorageRef === null
+      || activity.consentPolicyRecordId === null) return false;
+    // Read admission only: manual paste permission is recorded at attachment,
+    // not backdated to the call. Supplied media on append/replay still goes
+    // through assertApplicableRecordingConsent before any write/canonical return.
+    const value = this.database.raw.prepare(`
+      SELECT consent.*
+      FROM activities AS activity
+      JOIN transcripts AS transcript
+        ON transcript.activity_id = activity.id AND transcript.person_id = activity.person_id
+        AND activity.transcript_storage_ref = 'db:transcripts/' || transcript.id
+      JOIN consent_policy_records AS consent
+        ON consent.id = activity.consent_policy_record_id AND consent.person_id = activity.person_id
+        AND consent.activity_id = activity.id
+      WHERE activity.id = ? AND activity.person_id = ?
+        AND activity.transcript_storage_ref = ? AND consent.id = ?
+        AND activity.recording_storage_ref IS NULL
+        AND transcript.source = 'manual_paste' AND transcript.format_version = 1
+        AND consent.policy_kind = 'recording' AND consent.policy_version = 'manual-attach-v1'
+        AND consent.decision IN ('granted', 'not_required')
+        AND consent.effective_at = transcript.created_at AND consent.created_at = transcript.created_at
+    `).get(activity.id, activity.personId, activity.transcriptStorageRef, activity.consentPolicyRecordId);
+    const consent = storedConsentPolicyRecordRowSchema.safeParse(value);
+    return consent.success && manualAttachmentEvidenceSchema.safeParse(consent.data.evidence_json).success;
   }
 
   private assertApplicableRecordingConsent(input: {

@@ -6,10 +6,9 @@
 }
 
 /* macOS: the window backing is transparent and carries native `sidebar`
-   vibrancy. Only the rail column may reveal it: the shell stops painting,
-   the workspace column repaints the opaque canvas, and the rail becomes a
-   translucent wash over the material. `data-platform` is stamped by the
-   main process on dom-ready; the `:has(.app-shell)` guard keeps standalone
+   vibrancy. The shell retains the native backing contract, but the Bauhaus
+   rail paints opaque paper so wallpaper cannot change text contrast.
+   `data-platform` is stamped by the main process on dom-ready; the `:has(.app-shell)` guard keeps standalone
    screens (diagnostics) on their opaque body canvas. */
 body[data-platform="darwin"]:has(.app-shell) {
   background: transparent;
@@ -20,7 +19,7 @@ body[data-platform="darwin"] .app-shell {
 }
 
 body[data-platform="darwin"] .nav-rail {
-  background: color-mix(in srgb, var(--surface-sunken) 70%, transparent);
+  background: var(--surface-navigation);
   -webkit-backdrop-filter: saturate(1.2);
 }
 
@@ -70,12 +69,22 @@ body[data-platform="darwin"] .nav-rail {
   width: var(--nav-rail-width);
   padding: 0 var(--space-2) var(--space-4);
   border-right: 1px solid var(--line);
-  background: var(--surface-sunken);
+  background: var(--surface-navigation);
 }
 
-/* The sidebar header is the window drag strip; on darwin the traffic lights
-   occupy its leading edge (x:20, y:19, ~54px wide), so the wordmark starts
-   at 78px to clear them with breathing room at any window width. */
+/* Darwin reserves a dedicated drag row for the native traffic lights above
+   the wordmark. Other platforms retain the original single header row. */
+.nav-rail__native-controls {
+  display: none;
+}
+
+body[data-platform="darwin"] .nav-rail__native-controls {
+  display: block;
+  flex: none;
+  height: var(--chrome-header-height);
+  -webkit-app-region: drag;
+}
+
 .nav-rail__header {
   display: flex;
   flex: none;
@@ -87,7 +96,7 @@ body[data-platform="darwin"] .nav-rail {
 }
 
 body[data-platform="darwin"] .nav-rail__header {
-  padding-left: 78px;
+  padding-left: var(--space-4);
 }
 
 .nav-rail__header :is(a, button) {
@@ -96,8 +105,9 @@ body[data-platform="darwin"] .nav-rail__header {
 
 .nav-rail__brand {
   margin: 0;
-  color: var(--text);
-  font-size: var(--text-base);
+  color: var(--bauhaus-red);
+  font-family: var(--font-display);
+  font-size: var(--text-display);
   line-height: var(--chrome-header-height);
   font-weight: var(--weight-heading);
   letter-spacing: -0.01em;
@@ -133,8 +143,8 @@ body[data-platform="darwin"] .nav-rail__header {
   text-decoration: none;
   user-select: none;
   -webkit-user-select: none;
-  transition: background var(--motion-fast) var(--motion-ease),
-    color var(--motion-fast) var(--motion-ease);
+  /* Selected and ordinary links invert foreground/background polarity.
+     Keep the pair discrete: interpolating both produces unreadable frames. */
 }
 
 .nav-rail__item:hover {
@@ -142,15 +152,15 @@ body[data-platform="darwin"] .nav-rail__header {
   background: color-mix(in srgb, var(--line) 55%, transparent);
 }
 
-/* Active destination: accent-soft pill with accent text. */
+/* Active destination: crisp blue block, not a rounded pill. */
 .nav-rail__item--current {
-  color: var(--accent-strong);
-  background: var(--accent-soft);
+  color: var(--accent-text);
+  background: var(--accent);
 }
 
 .nav-rail__item--current:hover {
-  color: var(--accent-strong);
-  background: var(--accent-soft);
+  color: var(--accent-text);
+  background: var(--accent);
 }
 
 .nav-rail__item[aria-disabled="true"] {
@@ -186,9 +196,18 @@ body[data-platform="darwin"] .nav-rail__header {
   text-align: center;
 }
 
+/* The count belongs to the selected action: inherit its contrast-safe text
+   instead of retaining the ordinary dark-on-paper badge color. */
+.nav-rail__item--current .nav-rail__badge {
+  color: inherit;
+  background: transparent;
+}
+
 /* Per-route page header: one title, optional muted count, controls, and the
    single accent primary action, plus an optional one-line description. */
 .page-header {
+  border-left: 4px solid var(--bauhaus-yellow);
+  padding-left: var(--space-3);
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -212,8 +231,9 @@ body[data-platform="darwin"] .nav-rail__header {
 
 .page-header__title {
   margin: 0;
-  font-size: var(--text-section);
-  line-height: var(--leading-section);
+  font-family: var(--font-display);
+  font-size: var(--text-display);
+  line-height: var(--leading-display);
   font-weight: var(--weight-heading);
   letter-spacing: -0.01em;
   white-space: nowrap;

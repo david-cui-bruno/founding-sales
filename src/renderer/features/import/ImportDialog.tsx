@@ -1,6 +1,6 @@
 import { X } from 'lucide-react';
-import { useId } from 'react';
-import type { KeyboardEvent } from 'react';
+import { useEffect, useId, useRef } from 'react';
+import type { SyntheticEvent } from 'react';
 
 import { Button } from '../../components/Button';
 import { ErrorState } from '../../components/ErrorState';
@@ -29,15 +29,49 @@ export type ImportDialogProps = {
  */
 export function ImportDialog({ api, open, onClose, onCommitted }: ImportDialogProps) {
   const headingId = useId();
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const workflow = useImportWorkflow(api);
   const { state, preview } = workflow;
 
+  useEffect(() => {
+    if (!open) return;
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+    const opener = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+
+    // showModal promotes the dialog to the browser top layer and makes the
+    // workspace inert. An ARIA role alone provides neither behavior.
+    dialog.showModal();
+    dialog.querySelector<HTMLButtonElement>('button')?.focus();
+    return () => {
+      dialog.close();
+      // Import refreshes can remount the originating route while this dialog
+      // stays open. Resolve its stable trigger ID instead of focusing stale DOM.
+      const returnTarget = opener?.isConnected
+        ? opener
+        : opener?.id ? document.getElementById(opener.id) : null;
+      // Palette/empty-state openers can disappear without an ID replacement.
+      // The active primary route is a connected, naturally focusable fallback.
+      const fallback = document.querySelector<HTMLAnchorElement>(
+        'nav[aria-label="Primary"] a[aria-current="page"]',
+      );
+      (returnTarget ?? fallback)?.focus();
+    };
+  }, [open]);
+
   if (!open) return null;
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== 'Escape') return;
-    if (state.step === 'committing') return;
-    onClose();
+  const handleClose = () => {
+    if (state.step !== 'committing') onClose();
+  };
+
+  const handleCancel = (event: SyntheticEvent<HTMLDialogElement>) => {
+    // Keep opening/closing controlled by the parent, including native Escape.
+    // In-flight writes cannot be dismissed by the browser's default cancel.
+    event.preventDefault();
+    handleClose();
   };
 
   const handleCommit = () => {
@@ -49,19 +83,19 @@ export function ImportDialog({ api, open, onClose, onCommitted }: ImportDialogPr
   const commitDisabled = state.step !== 'ready' || workflow.commitBlockers.length > 0;
 
   return (
-    <div
+    <dialog
+      ref={dialogRef}
       className="import-dialog"
-      role="dialog"
       aria-modal="true"
       aria-labelledby={headingId}
-      onKeyDown={handleKeyDown}
+      onCancel={handleCancel}
     >
       <header className="import-dialog__header">
         <h2 id={headingId}>Import leads</h2>
         <IconButton
           label="Close"
           icon={X}
-          onClick={onClose}
+          onClick={handleClose}
           disabled={state.step === 'committing'}
         />
       </header>
@@ -116,7 +150,7 @@ export function ImportDialog({ api, open, onClose, onCommitted }: ImportDialogPr
             {state.receipt.importedRowCount === 1 ? 'row' : 'rows'}.
           </p>
           <div className="import-actions">
-            <Button onClick={onClose}>Done</Button>
+            <Button onClick={handleClose}>Done</Button>
           </div>
         </div>
       )}
@@ -134,6 +168,6 @@ export function ImportDialog({ api, open, onClose, onCommitted }: ImportDialogPr
           </div>
         </div>
       )}
-    </div>
+    </dialog>
   );
 }

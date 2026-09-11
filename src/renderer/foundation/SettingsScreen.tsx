@@ -1,5 +1,9 @@
+import type { RecoveryProvider } from '../../shared/contracts/recoveryContract';
+import { RecoverySection } from './RecoverySection';
 import { Monitor, Moon, Rows2, Rows3, Sun, type LucideIcon } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import type { OutreachApi } from '../../shared/contracts/outreachContract';
+import { ConnectionsSection } from './ConnectionsSection';
 
 import type { AppHealth } from '../../shared/healthContract';
 import type { DensityPreference, DensityState } from '../app/useDensity';
@@ -30,6 +34,7 @@ const densityOptions: readonly {
 ];
 
 type SettingsSectionId =
+  | 'connections'
   | 'appearance'
   | 'data'
   | 'sourcing'
@@ -38,6 +43,7 @@ type SettingsSectionId =
   | 'about';
 
 const SECTIONS: readonly { id: SettingsSectionId; label: string }[] = [
+  { id: 'connections', label: 'Connections' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'data', label: 'Data & storage' },
   { id: 'sourcing', label: 'Sourcing' },
@@ -135,9 +141,11 @@ export type SettingsShellApi = {
 function DataStorageSection({
   health,
   shell,
+  recovery,
 }: {
   health: AppHealth | null;
   shell?: SettingsShellApi;
+  recovery?: RecoveryProvider;
 }) {
   return (
     <section
@@ -146,6 +154,7 @@ function DataStorageSection({
       aria-label="Data & storage"
     >
       <h2 className="settings__section-title">Data &amp; storage</h2>
+      {recovery !== undefined && <RecoverySection recovery={recovery} />}
       {health === null ? (
         <p className="settings__quiet">Available once the foundation is ready.</p>
       ) : (
@@ -347,6 +356,8 @@ export type SettingsScreenProps = {
   theme: ThemeState;
   density: DensityState;
   shell?: SettingsShellApi;
+  recovery?: RecoveryProvider;
+  outreachApi?: OutreachApi;
   /** Sourcing status rows, rendered inside the Sourcing section. */
   sourcing?: ReactNode;
   /** Extra diagnostics panels (Apple spike), rendered with Diagnostics. */
@@ -367,10 +378,25 @@ export function SettingsScreen({
   theme,
   density,
   shell,
+  recovery,
+  outreachApi,
   sourcing,
   children,
 }: SettingsScreenProps) {
-  const [active, setActive] = useState<SettingsSectionId>('diagnostics');
+  const [active, setActive] = useState<SettingsSectionId>(() => {
+    try {
+      if (window.sessionStorage.getItem('callie.settings.section') === 'connections') {
+        window.sessionStorage.removeItem('callie.settings.section');
+        return 'connections';
+      }
+    } catch { /* Navigation still works without browser storage. */ }
+    return 'diagnostics';
+  });
+  useEffect(() => {
+    const showConnections = () => setActive('connections');
+    window.addEventListener('callie:open-connections', showConnections);
+    return () => window.removeEventListener('callie:open-connections', showConnections);
+  }, []);
   const health = state.status === 'ready' ? state.health : null;
 
   return (
@@ -398,11 +424,12 @@ export function SettingsScreen({
           </ul>
         </nav>
         <div className="settings__detail">
+          {active === 'connections' && <ConnectionsSection api={outreachApi} />}
           {active === 'appearance' && (
             <AppearanceSection theme={theme} density={density} />
           )}
           {active === 'data' && (
-            <DataStorageSection health={health} shell={shell} />
+            <DataStorageSection health={health} shell={shell} recovery={recovery} />
           )}
           {active === 'sourcing' && (
             <section

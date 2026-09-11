@@ -83,7 +83,8 @@
   min-width: 0;
   margin: 0;
   overflow: hidden;
-  font-size: 1.05rem;
+  font-family: var(--font-display);
+  font-size: var(--text-section);
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -288,9 +289,91 @@
   gap: var(--space-2);
 }
 
-.lead-inspector__outbound-pair {
-  display: inline-flex;
+/* Phone candidates: one prominent card, with all other evidence behind a disclosure. */
+
+.contact-evidence {
+  display: grid;
   gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.contact-evidence__primary {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.contact-evidence__label {
+  margin: var(--space-3) var(--space-3) 0;
+  font-size: var(--text-caption);
+  font-weight: 600;
+}
+
+.contact-evidence__row {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  overflow-wrap: anywhere;
+}
+
+.contact-evidence__row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.contact-evidence__number {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.contact-evidence__metadata {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+  font-size: var(--text-caption);
+}
+
+.contact-evidence__metadata dt {
+  color: var(--muted);
+}
+
+.contact-evidence__metadata dd {
+  margin: 0;
+}
+
+.contact-evidence__alternatives:not([hidden]) {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.contact-evidence__alternatives .contact-evidence__row {
+  border: 1px solid var(--line);
+}
+
+.contact-evidence__alternatives .contact-evidence__row--blocked {
+  border-style: dashed;
+}
+
+.contact-evidence__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.contact-evidence__action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+.contact-evidence__empty,
+.contact-evidence__refusal {
+  margin: 0;
+  font-size: var(--text-caption);
+  color: var(--muted);
 }
 
 /* Find contact info: one explicit enrichment request with inline receipt. */
@@ -399,7 +482,7 @@
   height: var(--control-height);
   padding: 0 var(--space-3);
   border: 1px solid var(--line-interactive);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text);
   font-family: inherit;
@@ -529,3 +612,89 @@
   font-size: var(--text-caption);
   color: var(--muted);
 }
+
+/* Truthful handoff status and unsent, memory-only draft controls. */
+.outbound-confirmation,
+.outbound-composer,
+.outbound-receipt {
+  margin-block: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.outbound-composer label {
+  display: grid;
+  gap: var(--space-1);
+  margin-block: var(--space-2);
+}
+
+.outbound-composer input,
+.outbound-composer textarea {
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line-interactive);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.outbound-composer textarea { resize: vertical; }
+.outbound-receipt__command { overflow-wrap: anywhere; font-size: var(--text-caption); }
+
+.discovery-brief {
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+}
+.discovery-brief ul {
+  padding-inline-start: var(--space-4);
+}
+.discovery-brief__decision,
+.lead-inspector__confirmation {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+.discovery-brief__decision textarea {
+  display: block;
+  width: 100%;
+  min-height: 5rem;
+}
+.lead-inspector__manual-controls {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-2);
+}
+.discovery-brief__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--canvas) 55%, transparent);
+}
+.discovery-brief__decision {
+  width: min(32rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+}
+/* Portfolio-first summary: quiet context and visible, explicit channel actions. */
+.lead-inspector__portfolio { overflow-wrap: anywhere; }
+.lead-inspector__portfolio h3, .lead-inspector__overview > section h3 { font-size: var(--text-sm); margin: 0 0 var(--space-2); }
+.lead-inspector__portfolio ul { padding-left: var(--space-4); }
+.lead-inspector__contact-actions { display: flex; flex-direction: column; gap: var(--space-2); }
+.lead-inspector__contact-actions > div { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); overflow-wrap: anywhere; }
+.lead-inspector__contact-actions p { flex-basis: 100%; margin: 0; color: var(--muted); }
+.lead-inspector__diagnostics { border-top: 1px solid var(--line); padding-top: var(--space-3); }
+.lead-inspector__diagnostics > summary { cursor: pointer; color: var(--muted); }
+.lead-inspector__diagnostics > div { display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-3); }
+.outbound-composer { min-width: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.outbound-composer input, .outbound-composer textarea { width: 100%; min-width: 0; box-sizing: border-box; color: var(--text); background: var(--surface); border: 1px solid var(--line); padding: var(--space-2); }
+.outbound-composer__preview { padding: var(--space-2); background: var(--surface-sunken); color: var(--text); }
+.outbound-composer__preview pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.outbound-composer__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.outbound-composer__hint { color: var(--muted); }

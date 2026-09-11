@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
@@ -102,8 +102,54 @@ describe('suppression outbox domain surface', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     closeDatabase(database);
     temp.cleanup();
+  });
+
+  it('does not invent suppression for a person with no contact methods', () => {
+    insertPerson(database.raw, 'candidate');
+    expect(domain.getEnrichmentRequestCandidate({ personId: 'candidate' }).suppressionBlocked).toBe(false);
+  });
+
+  it('blocks enrichment on the persisted opt-out projection', () => {
+    insertPerson(database.raw, 'candidate');
+    insertOptOut(database, {
+      personId: 'candidate', tombstoneId: 'optout', observedChannel: 'manual', handles: [],
+    });
+    database.raw.prepare("UPDATE persons SET opted_out = 1, opted_out_at = ? WHERE id = 'candidate'").run(DOMAIN_TIMESTAMP);
+    expect(domain.getEnrichmentRequestCandidate({ personId: 'candidate' }).suppressionBlocked).toBe(true);
+  });
+
+  it('blocks enrichment on a person tombstone even without the compatibility flag', () => {
+    insertPerson(database.raw, 'candidate');
+    insertOptOut(database, {
+      personId: 'candidate', tombstoneId: 'optout', observedChannel: 'manual', handles: [],
+    });
+    expect(domain.getEnrichmentRequestCandidate({ personId: 'candidate' }).suppressionBlocked).toBe(true);
+  });
+
+  it.each(['phone', 'email'] as const)('blocks enrichment when a %s handle belongs to another suppressed person', (kind) => {
+    insertPerson(database.raw, 'candidate');
+    insertPerson(database.raw, 'suppressed');
+    const value = kind === 'phone' ? '+14015550100' : 'synthetic@example.com';
+    insertOptOut(database, {
+      personId: 'suppressed', tombstoneId: 'optout', observedChannel: 'manual',
+      handles: [{ id: 'blocked-handle', kind, value }],
+    });
+    services.unitOfWork.immediate(() => services.identities.addContactMethod({
+      personId: 'candidate', kind, normalizedValue: value,
+      validationState: 'unverified', reachability: 'none',
+    }));
+    expect(domain.getEnrichmentRequestCandidate({ personId: 'candidate' }).suppressionBlocked).toBe(true);
+  });
+
+  it('fails closed when authoritative suppression membership cannot be resolved', () => {
+    insertPerson(database.raw, 'candidate');
+    vi.spyOn(services.outboundPermission, 'inspectPerson').mockImplementation(() => {
+      throw new Error('Synthetic membership read failure');
+    });
+    expect(domain.getEnrichmentRequestCandidate({ personId: 'candidate' }).suppressionBlocked).toBe(true);
   });
 
   it('sweeps opt-out handles into the outbox and marks flushed exactly once', () => {

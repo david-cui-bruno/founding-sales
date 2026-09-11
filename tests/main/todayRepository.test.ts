@@ -183,14 +183,15 @@ describe('TodayRepository', () => {
     ]);
   });
 
-  it('routes Unreviewed cycles into the triage backlog, never the lanes', () => {
+  it('returns dated internal work for Unreviewed cycles', () => {
     const prospect = seedProspect(database.raw, 'unreviewed');
     let cycleId = '';
     withDeferredTransaction(() => {
       cycleId = insertCycleRow({ prefix: 'unreviewed', prospect, stage: 'unreviewed', pointer: null }).cycleId;
     });
     const results = repository.listOperationalCandidates();
-    expect(results[0]).toEqual({ kind: 'unreviewed_backlog', cycleId });
+    expect(results[0]).toMatchObject({ kind: 'candidate', candidate: { cycleId,
+      action: { actionType: 'review_lead', dueAt: DOMAIN_TIMESTAMP, channel: null } } });
   });
 
   it('excludes closed and opted-out cycles from the candidate universe', () => {
@@ -236,6 +237,34 @@ describe('TodayRepository', () => {
       kind: 'diagnostic',
       diagnostic: { cycleId, kind: 'cadence_owner_graph_mismatch' },
     });
+  });
+
+  it('admits only unamended owned callback evidence and retires it after a later logged call', () => {
+    const prospect = seedProspect(database.raw, 'callback');
+    const { cycleId } = insertCycleWithAction({ prefix: 'callback', prospect, workIntent: 'discretionary_prospecting' });
+    const append = (id: string, callback: string | null, occurredAt = DOMAIN_TIMESTAMP) => database.raw.prepare(`
+      INSERT INTO activities (id, person_id, prospect_id, sales_cycle_id, kind, direction, channel,
+        occurred_at, observed_outcome, callback_at, created_at, metadata_json)
+      VALUES (?, ?, ?, ?, 'call', 'outbound', 'phone', ?, 'spoke', ?, ?, '{}')`)
+      .run(id, prospect.personId, prospect.prospectId, cycleId, occurredAt, callback, DOMAIN_TIMESTAMP);
+    expect(repository.listOperationalCandidates()[0]).toMatchObject({ kind: 'candidate', candidate: { commitment: null } });
+    append('promised-call', '2026-09-01T14:00:00.000Z');
+    expect(repository.listOperationalCandidates()[0]).toMatchObject({ kind: 'candidate', candidate: {
+      commitment: { kind: 'callback', activityId: 'promised-call', dueAt: '2026-09-01T14:00:00.000Z' } } });
+    append('late-historical-call', null);
+    expect(repository.listOperationalCandidates()[0]).toMatchObject({ kind: 'candidate', candidate: {
+      commitment: { kind: 'callback', activityId: 'promised-call' } } });
+    append('fulfilled-call', null, '2026-09-01T14:00:00.000Z');
+    expect(repository.listOperationalCandidates()[0]).toMatchObject({ kind: 'candidate', candidate: { commitment: null } });
+    append('older-rebook', '2026-09-05T14:00:00.000Z', '2026-09-01T15:00:00.000Z');
+    append('newer-rebook', '2026-09-03T14:00:00.000Z', '2026-09-02T15:00:00.000Z');
+    append('newer-fulfilled', null, '2026-09-03T15:00:00.000Z');
+    expect(repository.listOperationalCandidates()[0]).toMatchObject({ kind: 'candidate', candidate: { commitment: null } });
+    database.raw.prepare(`INSERT INTO activity_amendments
+      (id, activity_id, amendment_kind, correction_json, reason, created_at)
+      VALUES ('correct-rebooking', 'newer-rebook', 'correction', '{}', 'corrected callback', ?)`)
+      .run(DOMAIN_TIMESTAMP);
+    expect(repository.listOperationalCandidates()[0]).toMatchObject({ kind: 'candidate', candidate: { commitment: null } });
   });
 
   it('counts only valid same-day discretionary selected-call receipts once', () => {

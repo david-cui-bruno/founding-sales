@@ -1,4 +1,15 @@
 import { execFile } from 'node:child_process';
+import { resolve } from 'node:path';
+
+/** Runner-only override: test a candidate without replacing the user's running app. */
+export const packagedApplicationBinary = resolve(
+  process.env.CALLIE_E2E_OUT_DIR || resolve(process.cwd(), 'out'),
+  'Callie Founder Sales System-darwin-arm64',
+  'Callie Founder Sales System.app',
+  'Contents',
+  'MacOS',
+  'Callie Founder Sales System',
+);
 
 type ExitStatus = {
   code: number | null;

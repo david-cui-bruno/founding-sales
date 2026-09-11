@@ -113,7 +113,7 @@ describe('todayService', () => {
     expect(snapshot.revision).toBeGreaterThanOrEqual(0);
   });
 
-  it('summarizes unreviewed cycles as a backlog count with no lane rows', async () => {
+  it('summarizes Unreviewed backlog while exposing one dated internal action', async () => {
     const prospect = seedProspect(database.raw, 'backlog');
     database.raw.prepare(`
       INSERT INTO sales_cycles (
@@ -127,6 +127,8 @@ describe('todayService', () => {
     );
     const cycleId = 'backlog-cycle';
     seedLead('reviewed');
+    database.raw.prepare("UPDATE prospects SET segment = 'cold' WHERE id = 'reviewed-prospect'").run();
+    const before = database.raw.prepare("SELECT * FROM sales_cycles WHERE id = 'backlog-cycle'").get();
 
     const snapshot = await provider.get();
 
@@ -135,9 +137,13 @@ describe('todayService', () => {
     const laneIdsWithBacklogCycle = snapshot.lanes.filter(
       (lane) => lane.items.some((item) => item.salesCycleId === cycleId),
     );
-    expect(laneIdsWithBacklogCycle).toHaveLength(0);
+    expect(laneIdsWithBacklogCycle).toHaveLength(1);
+    expect(snapshot.lanes.flatMap(lane => lane.items)).toHaveLength(1);
+    expect(laneIdsWithBacklogCycle[0].items[0].action.label).toBe('Contact');
+    expect(database.raw.prepare("SELECT * FROM sales_cycles WHERE id = 'backlog-cycle'").get()).toEqual(before);
     const dueCadence = snapshot.lanes.find((lane) => lane.id === 'due_cadence')!;
-    expect(dueCadence.items.map((item) => item.salesCycleId)).toEqual(['reviewed-cycle']);
+    expect(dueCadence.items.map((item) => item.salesCycleId).sort()).toEqual(['backlog-cycle']);
+    expect(dueCadence.items.find(item => item.salesCycleId === cycleId)?.action.dueAt).toBe(DOMAIN_TIMESTAMP);
   });
 
   it('places a seeded promise in the Due cadence lane exactly once', async () => {
@@ -170,7 +176,7 @@ describe('todayService', () => {
     expect(new Set(cycleIds).size).toBe(cycleIds.length);
   });
 
-  it('defers work past the whole-queue capacity into Later with an overflow count', async () => {
+  it('keeps warm work actionable even with no remaining discretionary dial capacity', async () => {
     database.raw.prepare(
       'UPDATE workspace_settings SET daily_dial_capacity = 0 WHERE singleton = 1',
     ).run();
@@ -180,10 +186,10 @@ describe('todayService', () => {
 
     expect(snapshot.dialBudget).toBe(0);
     const dueCadence = snapshot.lanes.find((lane) => lane.id === 'due_cadence')!;
-    expect(dueCadence.items).toHaveLength(0);
-    expect(dueCadence.overflowCount).toBe(1);
+    expect(dueCadence.items).toHaveLength(1);
+    expect(dueCadence.overflowCount).toBe(0);
     const later = snapshot.lanes.find((lane) => lane.id === 'later')!;
-    expect(later.items.map((item) => item.salesCycleId)).toContain(cycleId);
+    expect(later.items.map((item) => item.salesCycleId)).not.toContain(cycleId);
   });
 
   it('logs a past activity through the provider and bumps the revision', async () => {

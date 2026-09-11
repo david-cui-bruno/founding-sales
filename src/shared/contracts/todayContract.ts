@@ -10,9 +10,8 @@ import {
 import { cloudScoreChipSchema } from './leadsContract';
 
 /**
- * No-due-dates lanes (audit 4.9.5): Overdue and Post-interview/offer are
- * gone; post-stage promises fold into Due cadence. Ordering inside a lane is
- * priority band > cloud timing > last-touch age, computed at render.
+ * Stable lane IDs for the dated playbook. Main owns due-time, warm-priority
+ * and commitment ordering. Renderers preserve the supplied order.
  */
 export const todayLaneIdSchema = z.enum([
   'onboarding', 'fresh_inbound', 'due_cadence', 'new_p0', 'p1', 'exploration', 'later',
@@ -32,7 +31,10 @@ export const todaySnapshotSchema = z.object({
     items: z.array(todayItemSchema),
     overflowCount: z.number().int().nonnegative(),
   }).strict()),
-  dialBudget: z.number().int().nonnegative(), scheduledDials: z.number().int().nonnegative(),
+  /** Discretionary queue guide, not a claim about completed daily calls. */
+  dialBudget: z.number().int().nonnegative(),
+  /** Currently queued discretionary calls only. Warm/commitment work is exempt. */
+  scheduledDials: z.number().int().nonnegative(),
   conversationTarget: z.number().int().nonnegative(), reviewErrorCount: z.number().int().nonnegative(), revision: z.number().int().nonnegative(),
   unreviewedBacklogCount: z.number().int().nonnegative(),
   /** How many unreviewed leads carry a cloud score (backlog card copy). */
@@ -69,6 +71,7 @@ export const pinActionRequestSchema = z.object({
 }).strict();
 
 export const logPastActivityRequestSchema = z.object({
+  outboundCommandId: z.string().uuid().optional(),
   personId: personIdSchema,
   salesCycleId: salesCycleIdSchema.nullable(),
   kind: z.enum(['call', 'voicemail', 'text', 'email', 'note']),
@@ -98,6 +101,7 @@ export const callOutcomeSchema = z.enum([
  * `opted_out` routes through the existing person-wide opt-out closure.
  */
 export const logCallOutcomeRequestSchema = z.object({
+  outboundCommandId: z.string().uuid().optional(),
   personId: personIdSchema,
   salesCycleId: salesCycleIdSchema,
   outcome: callOutcomeSchema,

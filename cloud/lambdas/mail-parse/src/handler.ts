@@ -20,7 +20,9 @@ import {
   PutItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { SSMClient } from "@aws-sdk/client-ssm";
 import {
+  loadSecureParameter,
   SafeHandlerError,
   ulid,
   validateSourceEvent,
@@ -40,12 +42,11 @@ const IDEMPOTENCY_TTL_DAYS = 90;
 export interface HandlerDeps {
   s3: Pick<S3Client, "send">;
   dynamo: Pick<DynamoDBClient, "send">;
+  getNtfyTopic: () => Promise<string | null>;
   env: {
     RAW_MAIL_BUCKET: string;
     INBOX_BUCKET: string;
     IDEMPOTENCY_TABLE: string;
-    /** ntfy topic for hot-lead pushes. Empty/absent disables pushes. */
-    NTFY_TOPIC?: string;
   };
   /** Injected fetch for push notifications (tests). Defaults to global fetch. */
   fetchImpl?: typeof fetch;
@@ -59,14 +60,17 @@ function envOrThrow(name: string): string {
 }
 
 function defaultDeps(): HandlerDeps {
+  const ssm = new SSMClient({});
+  const ntfyTopicParam = envOrThrow("NTFY_TOPIC_PARAM");
   return {
     s3: new S3Client({}),
     dynamo: new DynamoDBClient({}),
+    getNtfyTopic: () =>
+      loadSecureParameter({ client: ssm, parameterName: ntfyTopicParam, required: false }),
     env: {
       RAW_MAIL_BUCKET: envOrThrow("RAW_MAIL_BUCKET"),
       INBOX_BUCKET: envOrThrow("INBOX_BUCKET"),
       IDEMPOTENCY_TABLE: envOrThrow("IDEMPOTENCY_TABLE"),
-      NTFY_TOPIC: process.env.NTFY_TOPIC,
     },
   };
 }
@@ -134,6 +138,7 @@ async function processMessage(
   deps: HandlerDeps,
   messageId: string,
   now: () => Date,
+  getNtfyTopic: () => Promise<string | null>,
 ): Promise<RecordResult> {
   const s3Key = `${RAW_MAIL_PREFIX}${messageId}`;
   const raw = await deps.s3.send(
@@ -268,19 +273,20 @@ async function processMessage(
 
   // Hot-lead phone push. Fire-and-forget: a push failure must never fail
   // mail processing (the event is already durably in the inbox).
-  if (deps.env.NTFY_TOPIC) {
-    try {
+  try {
+    const ntfyTopic = await getNtfyTopic();
+    if (ntfyTopic) {
       const pushed = await pushHotEvents(
-        { fetchImpl: deps.fetchImpl ?? fetch, topic: deps.env.NTFY_TOPIC },
+        { fetchImpl: deps.fetchImpl ?? fetch, topic: ntfyTopic },
         events,
       );
       if (pushed > 0) log("info", "sent hot-lead pushes", { messageId, pushed });
-    } catch (error) {
-      log("warn", "hot-lead push failed (event already in inbox)", {
-        messageId,
-        error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
-      });
     }
+  } catch (error) {
+    log("warn", "hot-lead push failed (event already in inbox)", {
+      messageId,
+      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    });
   }
 
   return result;
@@ -289,6 +295,9 @@ async function processMessage(
 export async function handlerWithDeps(event: SESEvent, deps: HandlerDeps): Promise<void> {
   const now = deps.now ?? (() => new Date());
   const records = event.Records ?? [];
+  let ntfyTopicPromise: Promise<string | null> | undefined;
+  const getNtfyTopic = (): Promise<string | null> =>
+    (ntfyTopicPromise ??= deps.getNtfyTopic());
 
   if (records.length === 0) {
     log("warn", "received event with no SES records");
@@ -298,7 +307,7 @@ export async function handlerWithDeps(event: SESEvent, deps: HandlerDeps): Promi
   for (const record of records) {
     const messageId = record.ses.mail.messageId;
     try {
-      await processMessage(deps, messageId, now);
+      await processMessage(deps, messageId, now, getNtfyTopic);
     } catch (error) {
       // Log and rethrow: SES lambda_action is async (Event invocation), so a
       // throw surfaces in Lambda error metrics/retries instead of vanishing.

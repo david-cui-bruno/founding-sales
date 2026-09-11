@@ -187,7 +187,8 @@ describe('SourceService', () => {
         displayName: 'Kevin Shin', aliases: [], neverRecord: false, provenance: null,
       },
       contacts: [{
-        kind: 'phone', normalizedValue: '+14015550100', reachability: 'direct',
+        kind: 'phone', normalizedValue: '+14015550100', validationState: 'valid',
+        reachability: 'direct',
         isPrimary: true, inContacts: null,
       }],
       organizations: [],
@@ -214,12 +215,15 @@ describe('SourceService', () => {
     };
   }
 
-  function spawnSameSourceContender(sourceId: string): {
+  function spawnSameSourceContender(
+    sourceId: string,
+    command: CanonicalIntakeCommand = canonicalRaceCommand(sourceId),
+  ): {
     readyPath: string;
     exit: Promise<{ code: number | null; stderr: string }>;
   } {
     const readyPath = `${tempDatabase.path}.${sourceId}.receipt-ready`;
-    const commandJson = serializeCanonicalIntakeCommand(canonicalRaceCommand(sourceId));
+    const commandJson = serializeCanonicalIntakeCommand(command);
     const resultJson = serializeCanonicalIntakeResult(raceResult(sourceId));
     const sourceRecordJson = JSON.stringify({
       formatVersion: 1,
@@ -393,6 +397,81 @@ describe('SourceService', () => {
 
     const contact = identities.listContactMethodsForPerson('person')[0];
     expect(contact?.complianceEvidence.federalStatus).toBe('listed');
+  });
+
+  it.each(['verified_person', 'conflicting_identity'] as const)(
+    'preserves %s ownership while accepting newer vendor presentation metadata',
+    (ownershipState) => {
+      ids.push('person', 'contact', 'prospect');
+      service.createPersonProspect(baseCommand(`source-${ownershipState}`, {
+        contacts: [{
+          kind: 'phone', value: '(401) 555-0100', validationState: 'valid',
+          reachability: 'direct', isPrimary: true,
+          presentationEvidence: {
+            sourceLabel: 'manual', vendorRank: null, phoneKind: null,
+            ownershipState, evidenceObservedAt: '2026-08-28T00:00:00.000Z',
+          },
+        }],
+      }));
+
+      service.createPersonProspect(baseCommand(`vendor-${ownershipState}`, {
+        contacts: [{
+          kind: 'phone', value: '(401) 555-0100', validationState: 'unverified',
+          reachability: 'direct', isPrimary: true,
+          presentationEvidence: {
+            sourceLabel: 'tracerfy', vendorRank: 1, phoneKind: 'mobile',
+            ownershipState: 'vendor_candidate', evidenceObservedAt: OBSERVED_AT,
+          },
+        }],
+      }));
+
+      expect(identities.getContactMethod('contact')).toMatchObject({
+        validationState: 'valid',
+        presentationEvidence: {
+          sourceLabel: 'tracerfy', vendorRank: 1, phoneKind: 'mobile',
+          ownershipState, evidenceObservedAt: OBSERVED_AT,
+        },
+      });
+    },
+  );
+
+  it('accepts ordinary vendor metadata only when evidence time is newer or equal', () => {
+    ids.push('person', 'contact', 'prospect');
+    service.createPersonProspect(baseCommand('vendor-initial', {
+      contacts: [{
+        kind: 'phone', value: '(401) 555-0100', validationState: 'unverified',
+        reachability: 'direct', presentationEvidence: {
+          sourceLabel: 'tracerfy', vendorRank: 1, phoneKind: 'mobile',
+          ownershipState: 'vendor_candidate', evidenceObservedAt: OBSERVED_AT,
+        },
+      }],
+    }));
+    service.createPersonProspectForPerson(baseCommand('vendor-stale', {
+      contacts: [{
+        kind: 'phone', value: '(401) 555-0100', validationState: 'unverified',
+        reachability: 'direct', presentationEvidence: {
+          sourceLabel: 'stale-vendor', vendorRank: 2, phoneKind: 'landline',
+          ownershipState: 'unknown', evidenceObservedAt: '2026-08-28T00:00:00.000Z',
+        },
+      }],
+    }), 'person');
+    expect(identities.getContactMethod('contact')?.presentationEvidence).toMatchObject({
+      sourceLabel: 'tracerfy', vendorRank: 1, ownershipState: 'vendor_candidate',
+    });
+
+    service.createPersonProspectForPerson(baseCommand('vendor-equal', {
+      contacts: [{
+        kind: 'phone', value: '(401) 555-0100', validationState: 'unverified',
+        reachability: 'direct', presentationEvidence: {
+          sourceLabel: 'equal-vendor', vendorRank: 3, phoneKind: 'voip',
+          ownershipState: 'unknown', evidenceObservedAt: OBSERVED_AT,
+        },
+      }],
+    }), 'person');
+    expect(identities.getContactMethod('contact')?.presentationEvidence).toEqual({
+      sourceLabel: 'equal-vendor', vendorRank: 3, phoneKind: 'voip',
+      ownershipState: 'unknown', evidenceObservedAt: OBSERVED_AT,
+    });
   });
 
   it('rolls back contact update and audit event together on intake failure', () => {
@@ -680,6 +759,43 @@ describe('SourceService', () => {
     expect(counts()).toMatchObject({
       persons: 1, prospects: 1, source_events: 1, source_intake_receipts: 1,
     });
+  }, 10_000);
+
+  it('replays legacy receipts with implicit valid contacts without weakening command equality', async () => {
+    const sourceId = 'legacy-implicit-valid';
+    const legacyCommand = {
+      ...canonicalRaceCommand(sourceId),
+      contacts: canonicalRaceCommand(sourceId).contacts.map((contact) => {
+        const { validationState, ...legacyContact } = contact;
+        expect(validationState).toBe('valid');
+        return legacyContact;
+      }),
+    } as CanonicalIntakeCommand;
+    const contender = spawnSameSourceContender(sourceId, legacyCommand);
+    await waitUntil(() => existsSync(contender.readyPath), 5_000);
+    expect(await contender.exit).toEqual({ code: 0, stderr: '' });
+
+    const legacyReceipt = receipts.getBySourceEventId(sourceId);
+    expect(legacyReceipt).not.toBeNull();
+    expect(legacyReceipt?.command.contacts[0]).not.toHaveProperty('validationState');
+    const legacyCommandJson = legacyReceipt?.commandJson;
+    const beforeReplay = counts();
+
+    expect(service.createPersonProspect(baseCommand(sourceId))).toEqual(raceResult(sourceId));
+    expect(counts()).toEqual(beforeReplay);
+    expect(receipts.getBySourceEventId(sourceId)?.commandJson)
+      .toBe(legacyCommandJson);
+
+    expect(() => service.createPersonProspect({
+      ...baseCommand(sourceId),
+      contacts: baseCommand(sourceId).contacts.map((contact) => ({
+        ...contact,
+        validationState: 'unverified' as const,
+      })),
+    })).toThrow(expect.objectContaining({
+      name: 'IntakeIdempotencyConflictError', reason: 'command_mismatch',
+    }));
+    expect(counts()).toEqual(beforeReplay);
   }, 10_000);
 
   it.each([

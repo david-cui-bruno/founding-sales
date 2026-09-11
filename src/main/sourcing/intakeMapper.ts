@@ -230,7 +230,7 @@ function resolveDisplayName(event: CloudSourceEvent): string | null {
 function mapContacts(event: CloudSourceEvent): IntakeContactInput[] {
   const enrichment = parseEnrichmentPayload(event);
   if (enrichment !== null) {
-    return mapEnrichmentContacts(enrichment);
+    return mapEnrichmentContacts(enrichment, canonicalTimestamp(event.observed_at));
   }
   const person = event.entity.person;
   if (person === null) return [];
@@ -277,7 +277,10 @@ function parseEnrichmentPayload(
  * carries the evidence record exactly, translated only from wire casing to the
  * app contract.
  */
-function mapEnrichmentContacts(payload: CloudEnrichmentPayload): IntakeContactInput[] {
+function mapEnrichmentContacts(
+  payload: CloudEnrichmentPayload,
+  evidenceObservedAt: string,
+): IntakeContactInput[] {
   const phones = [...payload.phones].sort((left, right) => left.rank - right.rank);
   const emails = [...payload.emails].sort((left, right) => left.rank - right.rank);
   return [
@@ -286,6 +289,14 @@ function mapEnrichmentContacts(payload: CloudEnrichmentPayload): IntakeContactIn
       value: phone.e164,
       reachability: 'direct',
       isPrimary: index === 0,
+      validationState: 'unverified',
+      presentationEvidence: {
+        sourceLabel: payload.vendor,
+        vendorRank: phone.rank,
+        phoneKind: phone.kind,
+        ownershipState: 'vendor_candidate',
+        evidenceObservedAt,
+      },
       complianceEvidence: {
         federalStatus: phone.compliance.federal_status,
         tcpaFlag: phone.compliance.tcpa_flag,
@@ -300,6 +311,14 @@ function mapEnrichmentContacts(payload: CloudEnrichmentPayload): IntakeContactIn
       value: email.address,
       reachability: 'direct',
       isPrimary: index === 0,
+      validationState: 'unverified',
+      presentationEvidence: {
+        sourceLabel: payload.vendor,
+        vendorRank: email.rank,
+        phoneKind: null,
+        ownershipState: 'vendor_candidate',
+        evidenceObservedAt,
+      },
     })),
   ];
 }

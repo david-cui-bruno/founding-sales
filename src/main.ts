@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, protocol } from 'electron';
+import { app, BrowserWindow, Menu, powerMonitor, protocol, safeStorage } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { createWindow } from './main/createWindow';
@@ -19,8 +19,18 @@ import {
 } from './main/startApplication';
 import { createFileLogSink } from './main/logging/fileLogSink';
 import { createSafeLogger } from './main/logging/safeLogger';
+import { isPreReleaseBackupInvocation, runPreReleaseBackupHost } from './main/backup/preReleaseBackupRuntime';
 
-protocol.registerSchemesAsPrivileged([
+const preReleaseBackupMode = isPreReleaseBackupInvocation(process.argv.slice(1));
+if (preReleaseBackupMode) {
+  void runPreReleaseBackupHost(app, safeStorage).then(receipt => {
+    process.stdout.write(`${JSON.stringify(receipt)}\n`, () => app.exit(0));
+  }, () => {
+    process.stderr.write('PRE_RELEASE_BACKUP_FAILED\n', () => app.exit(1));
+  });
+}
+
+if (!preReleaseBackupMode) protocol.registerSchemesAsPrivileged([
   {
     scheme: 'callie',
     privileges: {
@@ -41,8 +51,8 @@ const rendererTrust = createRendererTrust({
   developmentRendererUrl: MAIN_WINDOW_VITE_DEV_SERVER_URL,
 });
 
-const ownsSingleInstanceLock = !started && app.requestSingleInstanceLock();
-if (!started && !ownsSingleInstanceLock) {
+const ownsSingleInstanceLock = !started && !preReleaseBackupMode && app.requestSingleInstanceLock();
+if (!started && !preReleaseBackupMode && !ownsSingleInstanceLock) {
   app.quit();
 }
 
@@ -214,6 +224,34 @@ if (!started && ownsSingleInstanceLock) {
         signal,
         logger,
         logDirectoryPath: fileLogSink.directoryPath,
+        registerOutboundLifecycle: ({ onWake, onLock, onUnlock }) => {
+          const owned: (() => void)[] = [];
+          const cleanup = (): unknown[] => {
+            const errors: unknown[] = [];
+            for (const remove of owned.splice(0).reverse()) {
+              try { remove(); }
+              catch (error) { errors.push(error); }
+            }
+            return errors;
+          };
+          const register = (add: () => void, remove: () => void): void => {
+            add();
+            owned.push(remove);
+          };
+          try {
+            register(() => powerMonitor.on('resume', onWake), () => powerMonitor.removeListener('resume', onWake));
+            register(() => powerMonitor.on('lock-screen', onLock), () => powerMonitor.removeListener('lock-screen', onLock));
+            register(() => powerMonitor.on('unlock-screen', onUnlock), () => powerMonitor.removeListener('unlock-screen', onUnlock));
+          } catch (error) {
+            const errors = cleanup();
+            if (errors.length > 0) throw new AggregateError([error, ...errors], 'Outbound lifecycle registration and rollback failed.', { cause: error });
+            throw error;
+          }
+          return () => {
+            const errors = cleanup();
+            if (errors.length > 0) throw new AggregateError(errors, 'Outbound lifecycle cleanup failed.');
+          };
+        },
         createWindow: () => createAndLoadWindow(signal),
       }).then(async (application) => {
         if (signal.aborted) {

@@ -30,8 +30,9 @@ const quotedIdentities = (listing: string): string[] => {
 /**
  * Resolves the macOS code-signing identity for local packaging.
  *
- * An explicit non-blank CALLIE_MAC_SIGN_IDENTITY always wins. Otherwise the
- * login keychain is queried and the most distribution-capable identity is
+ * An exact CALLIE_MAC_SIGN_IDENTITY='-' selects the existing ad-hoc path
+ * without querying signing credentials. Other explicit non-blank values win.
+ * Otherwise the login keychain is queried and the most distribution-capable identity is
  * selected so repeated local builds keep a stable code identity and macOS
  * Keychain "Always Allow" grants survive rebuilds. Returns undefined off
  * macOS or when no usable identity exists, which falls back to ad-hoc
@@ -43,6 +44,9 @@ export const resolveMacSigningIdentity = ({
   listCodesigningIdentities = defaultListCodesigningIdentities,
 }: ResolveMacSigningIdentityOptions): string | undefined => {
   const explicit = env.CALLIE_MAC_SIGN_IDENTITY;
+  if (explicit === '-') {
+    return undefined;
+  }
   if (explicit !== undefined && explicit.trim().length > 0) {
     return explicit;
   }

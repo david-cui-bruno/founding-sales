@@ -1,6 +1,6 @@
 import type { AppDatabase } from '../../db/database';
 import type { IdentityRepository } from '../identity/identityRepository';
-import { FOUNDER_CHANNEL_POLICIES_V1, type ChannelPolicySnapshots } from '../cadence/cadenceScheduler';
+import { PLAYBOOK_CHANNEL_POLICIES_V2, type ChannelPolicySnapshots } from '../cadence/cadenceScheduler';
 import { JurisdictionRepository } from '../compliance/jurisdictionRepository';
 import {
   evaluateOutboundAuthorization,
@@ -51,7 +51,7 @@ export class OutboundPermissionService {
     this.identities = input.identities;
     this.optOuts = input.optOuts;
     this.jurisdictions = jurisdictions;
-    this.windows = input.windows ?? FOUNDER_CHANNEL_POLICIES_V1;
+    this.windows = input.windows ?? PLAYBOOK_CHANNEL_POLICIES_V2;
   }
 
   assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork): void {

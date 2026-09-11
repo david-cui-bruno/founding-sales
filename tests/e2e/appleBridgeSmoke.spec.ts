@@ -9,25 +9,17 @@ import { chromium, expect, test, type Browser, type Dialog } from 'playwright/te
 import {
   assertPackagedDescendantsExit,
   describeProcessExit,
+  packagedApplicationBinary as packagedApplication,
   snapshotPackagedProcessTree,
-  terminatePackagedApplication,
   waitForPackagedChildProcess,
   type PackagedProcessEntry,
 } from '../support/packagedApplication';
-
-const packagedApplication = join(
-  process.cwd(),
-  'out',
-  'Callie Founder Sales System-darwin-arm64',
-  'Callie Founder Sales System.app',
-  'Contents',
-  'MacOS',
-  'Callie Founder Sales System',
-);
+import { createPackagedTestEnvironment, type PackagedTestEnvironment } from '../support/packagedTestEnvironment';
 
 test('packaged Apple helper handshakes and exits without permission or communication actions', async () => {
   let userDataPath: string | undefined;
   let application: ChildProcess | undefined;
+  let environment: PackagedTestEnvironment | undefined;
   let browser: Browser | undefined;
   let trackedDescendants: PackagedProcessEntry[] = [];
   let spawnError: Error | undefined;
@@ -37,12 +29,13 @@ test('packaged Apple helper handshakes and exits without permission or communica
     expect(existsSync(packagedApplication)).toBe(true);
     userDataPath = await mkdtemp(join(tmpdir(), 'callie-apple-smoke-e2e-'));
     const debuggingPort = await availablePort();
-    application = spawn(packagedApplication, [
+    environment = await createPackagedTestEnvironment();
+    application = environment.capture(spawn(packagedApplication, [
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,
       '--use-mock-keychain',
       '--apple-feasibility-spike',
-    ]);
+    ], { env: environment.env }));
     application.once('error', (error) => {
       spawnError = error;
     });
@@ -128,7 +121,9 @@ test('packaged Apple helper handshakes and exits without permission or communica
               // still receive exact instance-safe cleanup verification below.
             }
           }
-          await terminatePackagedApplication(application);
+        }
+        await environment?.cleanup();
+        if (application?.pid !== undefined) {
           await assertPackagedDescendantsExit(trackedDescendants, {
             timeoutMs: 5_000,
           });

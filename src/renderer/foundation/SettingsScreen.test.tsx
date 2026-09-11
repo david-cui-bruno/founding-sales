@@ -345,3 +345,169 @@ describe('formatRelativeLastPoll', () => {
     expect(formatRelativeLastPoll('2026-08-28T15:00:00.000Z', now)).toBe('3d ago');
   });
 });
+
+describe('Data & storage recovery flow', () => {
+  const incomplete: import('../../shared/contracts/recoveryContract').RecoveryReadinessStatus = { setupCompletedAt: null, lastRestoreDrillAt: null, outreachReady: false, backup: { status: 'missing' as const, createdAt: null, verifiedAt: null } };
+  function provider() {
+    return { status: vi.fn(async () => incomplete), beginSetup: vi.fn(async () => ({ sessionId: 'fixture-session', material: 'synthetic-private-material', generatedAt: new Date().toISOString() })), saveSetupMaterial: vi.fn(async () => ({ kind: 'cancelled' as const })), completeSetup: vi.fn(async () => ({ ...incomplete, setupCompletedAt: new Date().toISOString() })), selectAndRunRestoreDrill: vi.fn(async () => ({ kind: 'cancelled' as const })) };
+  }
+  async function data(recovery = provider()) {
+    const view = renderSettings({ recovery });
+    expect(recovery.status).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Data & storage' }));
+    await screen.findByText('Recovery setup/drill incomplete');
+    return { recovery, ...view };
+  }
+  async function begin() {
+    fireEvent.click(screen.getByLabelText('I understand this reveals private recovery material'));
+    fireEvent.click(screen.getByRole('button', { name: 'Begin recovery setup' }));
+    await screen.findByText('synthetic-private-material');
+  }
+  it('requires confirmation, shows once, copies only on explicit click and completes separately from Save', async () => {
+    const copy = vi.fn(async () => undefined); Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: copy } });
+    const { recovery } = await data();
+    expect((screen.getByRole('button', { name: 'Begin recovery setup' }) as HTMLButtonElement).disabled).toBe(true);
+    await begin(); expect(copy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy recovery material' }));
+    await waitFor(() => expect(copy).toHaveBeenCalledWith('synthetic-private-material'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save recovery material' }));
+    await waitFor(() => expect(recovery.saveSetupMaterial).toHaveBeenCalledWith({ sessionId: 'fixture-session' }));
+    expect(recovery.completeSetup).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText('I stored the recovery material privately'));
+    fireEvent.click(screen.getByRole('button', { name: 'Complete recovery setup' }));
+    await waitFor(() => expect(screen.queryByText('synthetic-private-material')).toBeNull());
+    expect(recovery.completeSetup).toHaveBeenCalledWith({ sessionId: 'fixture-session', founderConfirmed: true });
+    expect(screen.getByText('Recovery setup/drill incomplete')).toBeTruthy();
+  });
+  it('clears material on navigation and never puts it in diagnostics or storage', async () => {
+    const storage = vi.spyOn(Storage.prototype, 'setItem'); await data(); await begin();
+    fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' }));
+    expect(screen.queryByText('synthetic-private-material')).toBeNull();
+    expect(storage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Data & storage' }));
+    await screen.findByText('Recovery setup/drill incomplete');
+    expect(screen.queryByText('synthetic-private-material')).toBeNull();
+  });
+  it('expires one-time material at ten minutes', async () => {
+    await data(); vi.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText('I understand this reveals private recovery material'));
+        fireEvent.click(screen.getByRole('button', { name: 'Begin recovery setup' }));
+      });
+      expect(screen.getByText('synthetic-private-material')).toBeTruthy();
+      await act(async () => { vi.advanceTimersByTime(10 * 60_000); });
+      expect(screen.queryByText('synthetic-private-material')).toBeNull();
+    } finally { vi.useRealTimers(); }
+    // A separate fixture returns already expired material, which must never render.
+    cleanup(); const recovery = provider(); recovery.beginSetup.mockResolvedValue({ sessionId: 'expired', material: 'expired-secret', generatedAt: '2000-01-01T00:00:00.000Z' });
+    await data(recovery);
+    fireEvent.click(screen.getByLabelText('I understand this reveals private recovery material'));
+    fireEvent.click(screen.getByRole('button', { name: 'Begin recovery setup' }));
+    await screen.findByRole('alert'); expect(screen.queryByText('expired-secret')).toBeNull();
+  });
+  it('releases the action lock after expiry invalidates a pending Save result', async () => {
+    const recovery = provider(); let resolve!: (value: { kind: 'cancelled' }) => void;
+    recovery.saveSetupMaterial.mockImplementation(() => new Promise((r) => { resolve = r; }));
+    await data(recovery); vi.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText('I understand this reveals private recovery material'));
+        fireEvent.click(screen.getByRole('button', { name: 'Begin recovery setup' }));
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Save recovery material' }));
+      await act(async () => { vi.advanceTimersByTime(10 * 60_000); resolve({ kind: 'cancelled' }); });
+      expect((screen.getByRole('button', { name: 'Refresh recovery status' }) as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.queryByText('synthetic-private-material')).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+  it('clears explicit pasted material on submit and cancel, never includes it in errors', async () => {
+    const { recovery } = await data();
+    fireEvent.change(screen.getByLabelText('Recovery material source'), { target: { value: 'paste' } });
+    fireEvent.change(screen.getByLabelText('Paste saved recovery material'), { target: { value: 'synthetic-secret' } });
+    fireEvent.click(screen.getByLabelText('I confirm this tests only a temporary backup copy'));
+    recovery.selectAndRunRestoreDrill.mockRejectedValue(new Error('synthetic-secret /private/path'));
+    fireEvent.click(screen.getByRole('button', { name: 'Select backup and run restore drill' }));
+    expect((screen.getByLabelText('Paste saved recovery material') as HTMLTextAreaElement).value).toBe('');
+    await screen.findByRole('alert'); expect(screen.queryByText(/synthetic-secret/)).toBeNull(); expect(screen.queryByText(/\/private\/path/)).toBeNull();
+    expect(recovery.selectAndRunRestoreDrill).toHaveBeenCalledWith({ founderConfirmed: true, materialSource: 'paste', recoveryMaterial: 'synthetic-secret' });
+    fireEvent.change(screen.getByLabelText('Paste saved recovery material'), { target: { value: 'discard' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Clear recovery input' }));
+    expect((screen.getByLabelText('Paste saved recovery material') as HTMLTextAreaElement).value).toBe('');
+  });
+  it('shows actual backup creation age separately from verification and never equates it to drill time', async () => {
+    const recovery = provider();
+    recovery.status.mockResolvedValue({ ...incomplete, backup: { status: 'available', createdAt: '2020-01-01T00:00:00.000Z', verifiedAt: '2026-09-06T12:00:00.000Z' } } as never);
+    await data(recovery);
+    expect(screen.getByText(/Backup is stale/)).toBeTruthy();
+    expect(screen.getByText(/Backup created: 2020-01-01/)).toBeTruthy();
+    expect(screen.getByText(/Backup verified: 2026-09-06/)).toBeTruthy();
+    expect(screen.getByText('Last successful restore drill: Not completed')).toBeTruthy();
+  });
+  it('shows aggregate receipt and recovery completion only after the drill commits', async () => {
+    const recovery = provider(); let resolve!: (value: unknown) => void;
+    recovery.selectAndRunRestoreDrill.mockImplementation(() => new Promise((r) => { resolve = r; }) as never);
+    await data(recovery);
+    recovery.status.mockResolvedValue({ ...incomplete, setupCompletedAt: '2026-09-06T12:00:00.000Z', lastRestoreDrillAt: '2026-09-06T12:01:00.000Z', outreachReady: true });
+    fireEvent.click(screen.getByLabelText('I confirm this tests only a temporary backup copy'));
+    fireEvent.click(screen.getByRole('button', { name: 'Select backup and run restore drill' }));
+    expect(screen.getByText('Recovery setup/drill incomplete')).toBeTruthy();
+    await act(async () => resolve({ kind: 'completed', receipt: { backupTimestamp: '2026-09-06T11:00:00.000Z', backupSha256: 'a'.repeat(64), schemaVersion: 2, verifiedAt: '2026-09-06T12:01:00.000Z', aggregateCounts: { people: 2, prospects: 1, sourceEvents: 3 } } }));
+    expect(screen.getByText('Recovery setup/drill complete')).toBeTruthy();
+    expect(screen.getByText('People: 2. Prospects: 1. Source events: 3.')).toBeTruthy();
+  });
+  it('does not advertise readiness when the status read fails', async () => {
+    const recovery = provider(); recovery.status.mockRejectedValue(new Error('private diagnostic text'));
+    renderSettings({ recovery }); fireEvent.click(screen.getByRole('button', { name: 'Data & storage' }));
+    await screen.findByRole('alert');
+    expect(screen.queryByText('Recovery setup/drill complete')).toBeNull();
+    expect(screen.queryByText(/private diagnostic text/)).toBeNull();
+  });
+  it('ignores late begin results after leaving Data & storage', async () => {
+    const recovery = provider(); let resolve!: (value: Awaited<ReturnType<typeof recovery.beginSetup>>) => void;
+    recovery.beginSetup.mockImplementation(() => new Promise((r) => { resolve = r; }));
+    await data(recovery); fireEvent.click(screen.getByLabelText('I understand this reveals private recovery material'));
+    fireEvent.click(screen.getByRole('button', { name: 'Begin recovery setup' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' }));
+    await act(async () => resolve({ sessionId: 'late', material: 'late-secret', generatedAt: new Date().toISOString() }));
+    expect(screen.queryByText('late-secret')).toBeNull();
+  });
+});
+
+const outreachStatus: import('../../shared/contracts/outreachContract').OutreachStatus = { model: 'unconfigured' as const, modelName: '', gmail: 'unconfigured' as const, accountEmail: null, senderName: '', postalAddress: '' };
+function connectionsApi() {
+  const unavailable = async (): Promise<never> => { throw new Error('Not used by settings'); };
+  return { status: vi.fn(async () => outreachStatus), configure: vi.fn(async () => outreachStatus), connectGmail: vi.fn(async () => outreachStatus), disconnectGmail: vi.fn(async () => outreachStatus), openDraft: unavailable, saveDraft: unavailable, generateDraft: unavailable, sendDraft: unavailable };
+}
+it('exposes user-owned connection setup only through explicit save/connect/disconnect and never retains secret fields', async () => {
+  const api = connectionsApi(); renderSettings({ outreachApi: api });
+  fireEvent.click(screen.getByRole('button', { name: 'Connections' }));
+  await screen.findByLabelText('OpenAI API key');
+  expect(api.connectGmail).not.toHaveBeenCalled(); expect(api.configure).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: 'fixture-key' } });
+  fireEvent.change(screen.getByLabelText('OpenAI model'), { target: { value: 'fixture-model' } });
+  fireEvent.change(screen.getByLabelText('Sender name'), { target: { value: 'Fictional Founder' } });
+  fireEvent.change(screen.getByLabelText('Postal address'), { target: { value: '123 Fictional St' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save connections' }));
+  await waitFor(() => expect(api.configure).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'fixture-key', model: 'fixture-model', senderName: 'Fictional Founder', postalAddress: '123 Fictional St' })));
+  await waitFor(() => expect((screen.getByLabelText('OpenAI API key') as HTMLInputElement).value).toBe(''));
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Gmail' })); await waitFor(() => expect(api.connectGmail).toHaveBeenCalledOnce());
+  fireEvent.click(screen.getByRole('button', { name: 'Disconnect Gmail' })); await waitFor(() => expect(api.disconnectGmail).toHaveBeenCalledOnce());
+  expect(screen.getByText(/Review replies in Gmail/)).toBeTruthy();
+});
+it('renders a safe setup error instead of raw provider secrets', async () => {
+  const api = connectionsApi(); api.status.mockRejectedValueOnce(new Error('fixture-secret-that-must-not-render'));
+  renderSettings({ outreachApi: api }); fireEvent.click(screen.getByRole('button', { name: 'Connections' }));
+  expect(await screen.findByRole('alert')).toBeTruthy(); expect(screen.queryByText(/fixture-secret/)).toBeNull();
+});
+it('never erases existing sender settings when credentials are entered during a slow status read', async () => {
+  const api = connectionsApi(); let resolve!: (value: typeof outreachStatus) => void;
+  api.status.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  renderSettings({ outreachApi: api }); fireEvent.click(screen.getByRole('button', { name: 'Connections' }));
+  fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: 'fixture-key' } });
+  expect((screen.getByRole('button', { name: 'Save connections' }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => resolve({ ...outreachStatus, modelName: 'saved-model', senderName: 'Saved Founder', postalAddress: '123 Saved St' }));
+  expect((screen.getByLabelText('Sender name') as HTMLInputElement).value).toBe('Saved Founder');
+  fireEvent.click(screen.getByRole('button', { name: 'Save connections' }));
+  await waitFor(() => expect(api.configure).toHaveBeenCalledWith(expect.objectContaining({ senderName: 'Saved Founder', postalAddress: '123 Saved St' })));
+});

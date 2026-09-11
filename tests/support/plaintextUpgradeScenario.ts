@@ -22,7 +22,7 @@ import {
   closeDatabase,
   openDatabase,
 } from '../../src/main/db/database';
-import { migrateToLatest } from '../../src/main/db/migrate';
+import { createMigrationRunner, migrateToLatest, productionMigrations } from '../../src/main/db/migrate';
 import { migration0001Foundation } from '../../src/main/db/migrations/0001Foundation';
 import {
   encryptedWorkspaceExists,
@@ -30,7 +30,7 @@ import {
   plaintextUpgradePaths,
   readAndVerifyDatabaseFingerprint,
 } from '../../src/main/db/plaintextDatabaseUpgrade';
-import { createRawDatabase } from '../../src/main/db/sqliteDriver';
+import { applyWorkspaceKey, createRawDatabase } from '../../src/main/db/sqliteDriver';
 import type { FoundationDatabase } from '../../src/main/db/schema';
 import {
   createTempDatabase,
@@ -102,17 +102,33 @@ async function runScenario(): Promise<void> {
       await assertAllInvalidCopiesArePreserved(workspace.path);
     } else if (scenario === 'wrong-key') {
       await assertWrongKeyIsImmutable(workspace.path);
-    } else if (scenario === 'encrypted-schema-two-reopen') {
+    } else if (scenario === 'encrypted-current-schema-reopen') {
       await createEncryptedLatestSchema(workspace.path);
+      const before = readEncryptedFingerprint(workspace.path, 19);
       await prepareEncryptedDatabase(workspace.path, createTestWorkspaceKey());
-      assertEncryptedRetainedRow(workspace.path);
+      // WAL stabilization intentionally changes physical pages/journal mode,
+      // but must preserve the exact schema and logical content fingerprint.
+      assert.deepEqual(readEncryptedFingerprint(workspace.path, 19), before);
+      assertEncryptedRetainedRow(workspace.path, 19);
       assertArtifactsAbsent(workspace.path);
     } else if (scenario === 'encrypted-schema-13-reopen') {
       await assertEncryptedSchemaVersionAccepted(workspace.path, 13);
     } else if (scenario === 'encrypted-schema-14-reopen') {
       await assertEncryptedSchemaVersionAccepted(workspace.path, 14);
-    } else if (scenario === 'encrypted-schema-15-rejected') {
-      await assertEncryptedSchemaVersionRejected(workspace.path, 15);
+    } else if (scenario === 'encrypted-schema-15-reopen') {
+      await assertEncryptedSchemaVersionAccepted(workspace.path, 15);
+    } else if (scenario === 'encrypted-schema-16-reopen') {
+      await assertEncryptedSchemaVersionAccepted(workspace.path, 16);
+    } else if (scenario === 'encrypted-schema-17-reopen') {
+      await assertEncryptedSchemaVersionAccepted(workspace.path, 17);
+    } else if (scenario === 'encrypted-schema-18-reopen') {
+      await assertEncryptedSchemaVersionAccepted(workspace.path, 18);
+    } else if (scenario === 'encrypted-schema-19-reopen') {
+      await assertEncryptedSchemaVersionAccepted(workspace.path, 19);
+    } else if (scenario === 'encrypted-schema-20-rejected') {
+      await assertEncryptedSchemaVersionRejected(workspace.path, 20);
+    } else if (scenario === 'encrypted-schema-future-rejected') {
+      await assertEncryptedSchemaVersionRejected(workspace.path, 99);
     } else if (scenario === 'path-mismatched-marker') {
       await assertMismatchedMarkerIsImmutable(workspace.path);
     } else if (scenario === 'busy-wal') {
@@ -556,15 +572,21 @@ async function createEncryptedSchemaVersion(
   databasePath: string,
   schemaVersion: number,
 ): Promise<void> {
-  await createEncryptedLatestSchema(databasePath);
-  const encrypted = openDatabase({
-    path: databasePath,
-    key: createTestWorkspaceKey(),
-  });
+  const key = createTestWorkspaceKey();
+  const encrypted = openDatabase({ path: databasePath, key });
   try {
-    encrypted.raw.prepare(
-      'UPDATE app_meta SET schema_version = ? WHERE singleton = 1',
-    ).run(schemaVersion);
+    const supported = productionMigrations.some(entry => entry.schemaVersion === schemaVersion);
+    await createMigrationRunner(productionMigrations.filter(entry => !supported || entry.schemaVersion <= schemaVersion))(
+      encrypted, { backupDirectory: `${databasePath}.backups`, workspaceKey: key },
+    );
+    insertRetainedRow(encrypted.raw);
+    if (supported) {
+      assert.deepEqual(encrypted.raw.prepare('SELECT schema_version FROM app_meta WHERE singleton = 1').get(),
+        { schema_version: schemaVersion });
+    } else {
+      // Only the deliberately unsupported-version corruption fixture rewrites metadata.
+      encrypted.raw.prepare('UPDATE app_meta SET schema_version = ? WHERE singleton = 1').run(schemaVersion);
+    }
     encrypted.raw.pragma('wal_checkpoint(TRUNCATE)');
     const journalMode = encrypted.raw.pragma(
       'journal_mode = DELETE',
@@ -573,16 +595,19 @@ async function createEncryptedSchemaVersion(
     assert.equal(journalMode, 'delete');
   } finally {
     closeDatabase(encrypted);
+    key.bytes.fill(0);
   }
 }
 
 async function assertEncryptedSchemaVersionAccepted(
   databasePath: string,
-  schemaVersion: 13 | 14,
+  schemaVersion: 13 | 14 | 15 | 16 | 17 | 18 | 19,
 ): Promise<void> {
   await createEncryptedSchemaVersion(databasePath, schemaVersion);
+  const before = readFileSync(databasePath);
   await prepareEncryptedDatabase(databasePath, createTestWorkspaceKey());
-  assertEncryptedRetainedRow(databasePath);
+  assert.deepEqual(readFileSync(databasePath), before);
+  assertEncryptedRetainedRow(databasePath, schemaVersion);
   assertArtifactsAbsent(databasePath);
 }
 
@@ -591,13 +616,21 @@ async function assertEncryptedSchemaVersionRejected(
   schemaVersion: number,
 ): Promise<void> {
   await createEncryptedSchemaVersion(databasePath, schemaVersion);
+  const paths = plaintextUpgradePaths(databasePath);
+  const artifactBytes = new Map([
+    [paths.encrypting, Buffer.from('existing-encrypting-artifact')],
+    [paths.recovery, Buffer.from('existing-recovery-artifact')],
+  ]);
+  for (const [path, bytes] of artifactBytes) writeFileSync(path, bytes);
   const before = readFileSync(databasePath);
   await assert.rejects(
     prepareEncryptedDatabase(databasePath, createTestWorkspaceKey()),
     /No valid database copy is available/,
   );
   assert.deepEqual(readFileSync(databasePath), before);
-  assertArtifactsAbsent(databasePath);
+  for (const [path, bytes] of artifactBytes) {
+    assert.deepEqual(readFileSync(path), bytes);
+  }
 }
 
 function insertRetainedRow(raw: ReturnType<typeof createRawDatabase>): void {
@@ -668,7 +701,19 @@ function readFingerprint(databasePath: string) {
   }
 }
 
-function assertEncryptedRetainedRow(databasePath: string): void {
+function readEncryptedFingerprint(databasePath: string, schemaVersion: number) {
+  const raw = createRawDatabase(databasePath, { readonly: true, fileMustExist: true });
+  const key = createTestWorkspaceKey();
+  try {
+    applyWorkspaceKey(raw, key.bytes);
+    return readAndVerifyDatabaseFingerprint(raw, [schemaVersion]);
+  } finally {
+    raw.close();
+    key.bytes.fill(0);
+  }
+}
+
+function assertEncryptedRetainedRow(databasePath: string, schemaVersion = 1): void {
   assert.notEqual(
     readFileSync(databasePath).subarray(0, 16).toString('utf8'),
     'SQLite format 3\u0000',
@@ -678,6 +723,8 @@ function assertEncryptedRetainedRow(databasePath: string): void {
     key: createTestWorkspaceKey(),
   });
   try {
+    assert.deepEqual(reopened.raw.prepare('SELECT schema_version FROM app_meta WHERE singleton = 1').get(),
+      { schema_version: schemaVersion });
     assert.deepEqual(
       reopened.raw.prepare('SELECT id FROM jobs WHERE id = ?').get('kept'),
       { id: 'kept' },

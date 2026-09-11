@@ -17,7 +17,8 @@
   width: min(560px, calc(100vw - var(--space-6) * 2));
   max-height: 55vh;
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-interactive);
+  border-top: 4px solid var(--bauhaus-yellow);
   border-radius: var(--radius-lg);
   background: var(--surface-raised);
   /* Overlay elevation; the palette itself never animates open (Raycast rule). */

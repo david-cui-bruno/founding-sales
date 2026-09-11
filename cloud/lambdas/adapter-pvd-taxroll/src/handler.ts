@@ -160,7 +160,7 @@ export async function handlerWithDeps(
   const events: CloudSourceEvent[] = [];
   let timedOut = false;
 
-  while (true) {
+  for (;;) {
     const pageLimit = maxRows ? Math.min(PAGE_SIZE, maxRows - result.fetched) : PAGE_SIZE;
     if (pageLimit <= 0) break;
 

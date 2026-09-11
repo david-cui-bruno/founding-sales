@@ -25,18 +25,18 @@ async function importLeads(
   await expect(page.getByRole('dialog')).toHaveCount(0);
 }
 
-function waveCsv(count: number): string {
+function waveCsv(count: number, source = 'registry'): string {
   const rows = ['Name,Phone,Email,Source,Doors,Organization'];
   for (let index = 0; index < count; index += 1) {
     const suffix = String(index).padStart(2, '0');
     rows.push(
-      `Wave Lead${suffix},+1401666${(2000 + index).toString()},wave${suffix}@example.com,registry,4,Wave Org ${suffix}`,
+      `Wave Lead${suffix},+1401666${(2000 + index).toString()},wave${suffix}@example.com,${source},4,Wave Org ${suffix}`,
     );
   }
   return `${rows.join('\n')}\n`;
 }
 
-test('call flow: Enter opens the lead page, outcome + callback removes the lead from Today across relaunch', async () => {
+test('call outcome flow removes only the selected callback contact and preserves other warm work across relaunch', async () => {
   test.setTimeout(180_000);
   const fixtureDirectory = await mkdtemp(join(tmpdir(), 'callie-today-call-'));
   const csvPath = join(fixtureDirectory, 'wave-leads.csv');
@@ -44,25 +44,36 @@ test('call flow: Enter opens the lead page, outcome + callback removes the lead 
 
   const workspace = await launchFounderWorkspace();
   const { userDataPath } = workspace;
+  let callbackOwner: { personId: string; salesCycleId: string } | undefined;
+  let remainingMembers: string[] = [];
+  let businessAfterCallback: Awaited<ReturnType<typeof readLeadState>> = [];
 
   try {
     const { page } = workspace;
     await importLeads(page, csvPath, 3);
+    const imported = await readLeadState(page);
+    expect(imported).toHaveLength(3);
+    // Manual CSV import defaults Segment to warm, independently of Source.
+    expect(imported.every(detail => detail.segment === 'warm' && detail.stage === 'unreviewed')).toBe(true);
 
-    // Triage one lead to Ready through the real triage mode (R-key surface).
-    await page.getByRole('link', { name: 'Today' }).click();
-    await expect(page.getByText('3 unreviewed leads')).toBeVisible();
-    await page.getByRole('button', { name: 'Review', exact: true }).click();
-    await expect(page.getByText('Reviewing 1 of 3')).toBeVisible();
-    await page.keyboard.press('1');
-    await expect(page.getByText('Reviewing 2 of 3')).toBeVisible();
-    await page.keyboard.press('Escape');
-    await expect(page.getByText('2 unreviewed leads')).toBeVisible();
+    // Optional manual review remains in explicit Details, never default Today.
+    await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(3);
+    await page.getByRole('searchbox', { name: 'Search leads' }).fill('Wave Lead00');
+    await expect(page.getByRole('row', { name: /Wave Lead/ })).toHaveCount(1);
+    await page.getByRole('row', { name: /Wave Lead00/ }).click();
+    await page.keyboard.press('Enter');
+    const reviewInspector = page.getByRole('complementary', { name: 'Wave Lead00 details' });
+    await expect(reviewInspector.getByRole('region', { name: 'Known portfolio' })).toBeVisible();
+    await expect(reviewInspector.getByRole('button', { name: 'Mark ready' })).toHaveCount(0);
+    await reviewInspector.locator('summary').filter({ hasText: /^Details$/ }).click();
+    await reviewInspector.getByRole('button', { name: 'Founder manual controls' }).click();
+    await reviewInspector.getByRole('button', { name: 'Mark ready' }).click();
+    await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(2);
+    // Leads closes the inspector after reviewing the last matching row.
+    await expect(page.getByRole('complementary')).toHaveCount(0);
 
-    // The freshly ready lead's first cadence touch is discretionary work
-    // that waits on a priority projection; simulate the inbound reply that
-    // makes it promised work (Fresh inbound) through the real preload
-    // complete command.
+    // Seed this contact's inbound response through the real preload command.
+    // The other two genuine warm contacts must remain in the work queue.
     const readyLead = await page.evaluate(async () => {
       const list = await window.callie.leads.list({
         query: '', stages: ['ready'], priorities: [], sort: 'person_name',
@@ -76,20 +87,47 @@ test('call flow: Enter opens the lead page, outcome + callback removes the lead 
         outcome: 'replied',
         activityId: null,
       });
-      return { personId: row.personId, personName: row.personName };
+      return { personId: row.personId, personName: row.personName, salesCycleId: detail.salesCycleId };
     });
+    callbackOwner = readyLead;
+    const otherContactsBefore = imported.filter(detail => detail.personId !== readyLead.personId);
 
     // Remount Today so the route refetches after the preload-side write.
     await page.getByRole('link', { name: 'Leads' }).click();
     await page.getByRole('link', { name: 'Today' }).click();
-    const nextUp = page.getByRole('group', { name: /^Next up:/ });
-    await expect(nextUp).toBeVisible();
+    const queue = page.getByRole('list', { name: 'Work queue' });
+    await expect(queue).toBeVisible();
+    await expect(queue.getByRole('listitem')).toHaveCount(3);
+    const queuedBefore = (await page.evaluate(() => window.callie.today.get())).lanes.flatMap(lane => lane.items);
+    expect(queuedBefore.map(item => `${item.personId}:${item.salesCycleId}`).sort())
+      .toEqual(imported.map(detail => `${detail.personId}:${detail.salesCycleId}`).sort());
+    const remaining = queuedBefore.filter(item => item.personId !== readyLead.personId);
+    expect(remaining).toHaveLength(2);
+    remainingMembers = remaining.map(item => `${item.personId}:${item.salesCycleId}`).sort();
 
-    // Enter on the focused Next up card logs the call and opens the page.
-    await nextUp.focus();
-    await page.keyboard.press('Enter');
+    // Open the lead without initiating outbound. This fixture intentionally has
+    // unknown compliance evidence, so actual Phone handoff must remain blocked.
+    // The full-page outcome form records a call that already happened.
+    await queue.getByRole('button', {
+      name: readyLead.personName,
+      exact: true,
+    }).click();
+    const inspector = page.getByRole('complementary', {
+      name: `${readyLead.personName} details`,
+    });
+    await expect(inspector).toBeVisible();
+    await expect(inspector.getByRole('button', { name: 'Call', exact: true })).toBeDisabled();
+    await inspector.getByRole('button', { name: 'Close inspector' }).click();
+    // The row Call action is navigation only, not a provider command.
+    await queue.getByRole('button', { name: `Call ${readyLead.personName}`, exact: true }).click();
     const fullPage = page.locator('.lead-full-page');
     await expect(fullPage).toBeVisible();
+    await expect(fullPage.getByRole('region', { name: 'Known portfolio' })).toBeVisible();
+    await expect(fullPage.getByRole('region', { name: 'Call outcome' })).toHaveCount(0);
+    const beforeOutcome = await page.evaluate((personId) => window.callie.leadDetail.get({ personId }), readyLead.personId);
+    expect(beforeOutcome.outboundAttempts).toEqual([]);
+    expect(beforeOutcome.activities.filter(activity => activity.kind === 'call')).toEqual([]);
+    await fullPage.getByRole('tab', { name: 'Activity', exact: true }).click();
     await expect(
       fullPage.getByRole('region', { name: 'Call outcome' }),
     ).toBeVisible();
@@ -101,18 +139,28 @@ test('call flow: Enter opens the lead page, outcome + callback removes the lead 
     await fullPage.getByLabel('Callback promised').fill(iso);
     await fullPage.getByRole('button', { name: 'Save & next' }).click();
 
-    // The queue held nothing else: back on Today with the queue done.
-    await expect(page.locator('.lead-full-page')).toHaveCount(0);
-    await expect(page.getByText(/Queue done · /)).toBeVisible();
-    await expect(page.locator('.today-row')).toHaveCount(0);
+    // Save & next opens the next genuine warm contact without calling it.
+    await expect(fullPage).toHaveAttribute('aria-label', `${remaining[0].personName} full page`);
+    await fullPage.getByRole('button', { name: 'Close inspector' }).click();
+    await expect(fullPage).toHaveCount(0);
+    await expect(queue.getByRole('listitem')).toHaveCount(2);
+    await expect(queue.getByRole('button', { name: readyLead.personName, exact: true })).toHaveCount(0);
+    for (const contact of remaining) {
+      await expect(queue.getByRole('button', { name: contact.personName, exact: true })).toBeVisible();
+    }
 
     // The real snapshot agrees: the called lead left every lane.
     const snapshot = await page.evaluate(() => window.callie.today.get());
-    const laneMembers = snapshot.lanes.flatMap((lane) =>
-      lane.items.map((item) => item.personId),
-    );
-    expect(laneMembers).not.toContain(readyLead.personId);
+    const laneMembers = snapshot.lanes.flatMap(lane => lane.items);
+    expect(laneMembers.some(item => item.personId === readyLead.personId || item.salesCycleId === readyLead.salesCycleId)).toBe(false);
+    expect(laneMembers.map(item => `${item.personId}:${item.salesCycleId}`).sort()).toEqual(remainingMembers);
     expect(snapshot.conversationsHeld).toBe(1);
+    businessAfterCallback = await readLeadState(page);
+    expect(businessAfterCallback.filter(detail => detail.personId !== readyLead.personId)).toEqual(otherContactsBefore);
+    const called = businessAfterCallback.find(detail => detail.personId === readyLead.personId)!;
+    expect(called.salesCycleId).toBe(readyLead.salesCycleId);
+    expect(called.activities.filter(activity => activity.kind === 'call')).toHaveLength(1);
+    expect(called.outboundAttempts).toEqual([]);
   } finally {
     await workspace.stop();
   }
@@ -125,13 +173,14 @@ test('call flow: Enter opens the lead page, outcome + callback removes the lead 
       'aria-current',
       'page',
     );
-    await expect(page.getByText('2 unreviewed leads')).toBeVisible();
-    await expect(page.locator('.today-row')).toHaveCount(0);
+    await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(2);
+    await expect(page.getByRole('list', { name: 'Work queue' }).getByRole('listitem')).toHaveCount(2);
     const snapshot = await page.evaluate(() => window.callie.today.get());
-    const laneMembers = snapshot.lanes.flatMap((lane) =>
-      lane.items.map((item) => item.salesCycleId),
-    );
-    expect(laneMembers).toHaveLength(0);
+    const laneMembers = snapshot.lanes.flatMap(lane => lane.items);
+    expect(callbackOwner).toBeDefined();
+    expect(laneMembers.some(item => item.personId === callbackOwner!.personId || item.salesCycleId === callbackOwner!.salesCycleId)).toBe(false);
+    expect(laneMembers.map(item => `${item.personId}:${item.salesCycleId}`).sort()).toEqual(remainingMembers);
+    expect(await readLeadState(page)).toEqual(businessAfterCallback);
   } finally {
     await relaunched.close();
     await rm(fixtureDirectory, { recursive: true, force: true });
@@ -141,48 +190,84 @@ test('call flow: Enter opens the lead page, outcome + callback removes the lead 
   }
 });
 
-test('triage mode: 1/2/3 decisions advance the counter and the position resumes across relaunch', async () => {
+/** Only lifecycle/outbound state, not asynchronously refreshed research projections. */
+async function readLeadState(page: import('playwright/test').Page) {
+  return page.evaluate(async () => {
+    const list = await window.callie.leads.list({
+      query: '', stages: [], priorities: [], sort: 'person_name', cursor: null, limit: 100,
+    });
+    return Promise.all(list.rows.map(async ({ personId }) => {
+      const detail = await window.callie.leadDetail.get({ personId });
+      return {
+        personId, salesCycleId: detail.salesCycleId, stage: detail.stage, segment: detail.segment,
+        workflowStatus: detail.workflowStatus, optedOut: detail.optedOut,
+        nextAction: detail.nextAction, cadence: detail.cadence,
+        activities: detail.activities, history: detail.history,
+        outboundAttempts: detail.outboundAttempts,
+      };
+    }));
+  });
+}
+
+test('warm contact selection and Details stay read-only and preserve dated work across relaunch', async () => {
   test.setTimeout(180_000);
-  const fixtureDirectory = await mkdtemp(join(tmpdir(), 'callie-today-triage-'));
+  const fixtureDirectory = await mkdtemp(join(tmpdir(), 'callie-today-contacts-'));
   const csvPath = join(fixtureDirectory, 'wave-leads.csv');
-  await writeFile(csvPath, waveCsv(6));
+  await writeFile(csvPath, waveCsv(6, 'referral'));
 
   const workspace = await launchFounderWorkspace();
   const { userDataPath } = workspace;
+  let before: Awaited<ReturnType<typeof readLeadState>> = [];
 
   try {
     const { page } = workspace;
     await importLeads(page, csvPath, 6);
+    before = await readLeadState(page);
+    expect(before).toHaveLength(6);
+    for (const detail of before) {
+      expect(detail.stage).toBe('unreviewed');
+      expect(detail.nextAction?.dueAt).toEqual(expect.any(String));
+      expect(detail.outboundAttempts).toEqual([]);
+    }
 
     await page.getByRole('link', { name: 'Today' }).click();
-    await expect(page.getByText('6 unreviewed leads')).toBeVisible();
-    await page.getByRole('button', { name: 'Review', exact: true }).click();
-    await expect(page.getByText('Reviewing 1 of 6')).toBeVisible();
-
-    // 1 = Ready (confirm-ready transition).
-    await page.keyboard.press('1');
-    await expect(page.getByText('Reviewing 2 of 6')).toBeVisible();
-
-    // 2 = Later (+30d resurface).
-    await page.keyboard.press('2');
-    await expect(page.getByText('Reviewing 3 of 6')).toBeVisible();
-
-    // 3 = Not a fit: requires picking through the dismissal Select.
-    await page.keyboard.press('3');
-    await expect(page.getByRole('button', { name: 'Confirm dismiss' })).toBeVisible();
-    await page.getByRole('button', { name: 'Confirm dismiss' }).click();
-    await expect(page.getByText('Reviewing 4 of 6')).toBeVisible();
-
-    // Esc exits saving the position. Ready and Dismiss leave the backlog;
-    // the Later lead stays unreviewed (it resurfaces in 30 days), so the
-    // card honestly counts 4.
+    await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(6);
+    await expect(page.getByRole('heading', { name: 'Contacts due', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Manual review (optional)', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Refresh shortlist', exact: true })).toHaveCount(0);
+    const queue = page.getByRole('list', { name: 'Work queue' });
+    await expect(queue).toHaveCount(1);
+    await expect(queue.getByRole('listitem')).toHaveCount(6);
+    const first = queue.getByRole('listitem').first();
+    const second = queue.getByRole('listitem').nth(1);
+    const firstName = await first.getAttribute('aria-label');
+    const secondName = await second.getAttribute('aria-label');
+    await first.focus();
+    await page.keyboard.press('Enter');
+    let inspector = page.getByRole('complementary', { name: `${firstName} details` });
+    await expect(inspector.getByRole('region', { name: 'Known portfolio' })).toBeVisible();
+    await expect(first).toHaveAttribute('aria-current', 'true');
+    await expect(inspector.getByRole('region', { name: 'Fit', exact: true })).toHaveCount(0);
+    await expect(inspector.getByRole('button', { name: 'Email', exact: true })).toHaveCount(1);
+    await inspector.locator('summary').filter({ hasText: /^Details$/ }).click();
+    await expect(inspector.getByRole('region', { name: 'Fit', exact: true })).toBeVisible();
+    expect(await readLeadState(page)).toEqual(before);
     await page.keyboard.press('Escape');
-    await expect(page.getByText('4 unreviewed leads')).toBeVisible();
+    await expect(page.getByRole('complementary')).toHaveCount(0);
+    await first.focus();
+    await page.keyboard.press('ArrowDown');
+    await expect(second).toBeFocused();
+    await page.keyboard.press('Enter');
+    inspector = page.getByRole('complementary', { name: `${secondName} details` });
+    await expect(inspector.getByRole('region', { name: 'Known portfolio' })).toBeVisible();
+    await expect(second).toHaveAttribute('aria-current', 'true');
+    await expect(inspector.getByRole('region', { name: 'Fit', exact: true })).toHaveCount(0);
+    expect(await readLeadState(page)).toEqual(before);
   } finally {
     await workspace.stop();
   }
 
-  // Relaunch: the pass resumes exactly where the founder left it.
+  // Relaunch preserves every internal dated action, without implicit review or outreach.
   const relaunched = await launchFounderWorkspace({ userDataPath });
   try {
     const { page } = relaunched;
@@ -190,9 +275,9 @@ test('triage mode: 1/2/3 decisions advance the counter and the position resumes 
       'aria-current',
       'page',
     );
-    await expect(page.getByText('4 unreviewed leads')).toBeVisible();
-    await page.getByRole('button', { name: 'Review', exact: true }).click();
-    await expect(page.getByText('Reviewing 4 of 6')).toBeVisible();
+    await expect.poll(async () => (await page.evaluate(() => window.callie.today.get())).unreviewedBacklogCount).toBe(6);
+    await expect(page.getByRole('list', { name: 'Work queue' }).getByRole('listitem')).toHaveCount(6);
+    expect(await readLeadState(page)).toEqual(before);
   } finally {
     await relaunched.close();
     await rm(fixtureDirectory, { recursive: true, force: true });

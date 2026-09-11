@@ -21,6 +21,24 @@ import {
 } from '../fixtures/tempDatabase';
 
 const BOOT_AT = '2026-08-30T12:00:00.000Z';
+const EXPECTED_MIGRATION_LEDGER = [
+  '0001Foundation',
+  '0002DomainFoundation',
+  '0003Transcripts',
+  '0004Learnings',
+  '0005SourcingChannels',
+  '0006SourcingState',
+  '0007SourcingOutbox',
+  '0008DedupeCloudPersons',
+  '0009SourcingFileLedger',
+  '0010NoDueDates',
+  '0011ContactDncFlags',
+  '0012UpstreamRequestState',
+  '0013ContactComplianceEvidence',
+  '0014OutboundJurisdictionClearance',
+  '0015RecoveryMetadata',
+  '0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts',
+] as const;
 
 describe('domain startup', () => {
   let database: AppDatabase;
@@ -55,25 +73,32 @@ describe('domain startup', () => {
   }
 
   describe('storage readiness gate', () => {
-    it('passes the exact schema-14 manifest against the live catalog', () => {
+    it('passes only the exact schema-19 manifest and ordered migration ledger', () => {
       const readiness = assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 14,
+        expectedSchemaVersion: 19,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       });
       expect(readiness).toMatchObject({
-        schemaVersion: 14, encrypted: true, ftsAvailable: true,
+        schemaVersion: 19, encrypted: true, ftsAvailable: true,
       });
       expect(DOMAIN_SCHEMA_MANIFEST.tables).toEqual(expect.arrayContaining([
         'contact_compliance_audit_events',
         'person_outbound_jurisdictions',
         'outbound_jurisdiction_clearances',
         'outbound_jurisdiction_audit_events',
+        'backup_receipts',
+        'recovery_readiness',
+        'restore_drill_receipts',
+        'identity_repair_events',
       ]));
       expect(DOMAIN_SCHEMA_MANIFEST.indexes).toContain(
         'contact_compliance_audit_contact_idx',
       );
+      expect(database.raw.prepare(
+        'SELECT name FROM kysely_migration ORDER BY timestamp, name',
+      ).all()).toEqual(EXPECTED_MIGRATION_LEDGER.map((name) => ({ name })));
     });
 
     it('rejects an open raw transaction, wrong pragma, and manifest drift', () => {
@@ -81,7 +106,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 14,
+        expectedSchemaVersion: 19,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       database.raw.exec('ROLLBACK');
@@ -90,7 +115,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 14,
+        expectedSchemaVersion: 19,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
       })).toThrow(DomainStartupFatalError);
       database.raw.pragma('busy_timeout = 5000');
@@ -98,7 +123,7 @@ describe('domain startup', () => {
       expect(() => assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 14,
+        expectedSchemaVersion: 19,
         expectedManifest: {
           ...DOMAIN_SCHEMA_MANIFEST,
           tables: [...DOMAIN_SCHEMA_MANIFEST.tables, 'missing_table'],
@@ -106,7 +131,65 @@ describe('domain startup', () => {
       })).toThrow(DomainStartupFatalError);
     });
 
-    it.each([13, 15])(
+    it.each([
+      {
+        objectType: 'legacy table',
+        corrupt: (subject: AppDatabase) => subject.raw.exec(`
+          DROP TABLE jobs;
+          CREATE TABLE jobs (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            state TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            idempotency_key TEXT
+          );
+          CREATE INDEX jobs_state_created_idx ON jobs(state, created_at);
+          CREATE INDEX jobs_type_state_created_idx ON jobs(type, state, created_at, id);
+          CREATE UNIQUE INDEX jobs_type_idempotency_idx
+            ON jobs(type, idempotency_key)
+            WHERE idempotency_key IS NOT NULL;
+        `),
+      },
+      {
+        objectType: 'explicit index',
+        corrupt: (subject: AppDatabase) => subject.raw.exec(`
+          DROP INDEX jobs_state_created_idx;
+          CREATE INDEX jobs_state_created_idx ON jobs(type);
+        `),
+      },
+      {
+        objectType: 'schema-16 contact table',
+        corrupt: (subject: AppDatabase) => subject.raw.exec(
+          'ALTER TABLE person_contact_methods DROP COLUMN evidence_observed_at',
+        ),
+      },
+      {
+        objectType: 'trigger',
+        corrupt: (subject: AppDatabase) => subject.raw.exec(`
+          DROP TRIGGER immutable_identity_repair_events;
+          CREATE TRIGGER immutable_identity_repair_events
+            BEFORE UPDATE ON identity_repair_events
+            BEGIN
+              SELECT 1;
+            END;
+        `),
+      },
+    ])('rejects same-name $objectType SQL corruption', ({ corrupt }) => {
+      corrupt(database);
+
+      expect(() => assertDomainStorageReady({
+        database,
+        expectedBusyTimeoutMs: 5000,
+        expectedSchemaVersion: 19,
+        expectedManifest: DOMAIN_SCHEMA_MANIFEST,
+      })).toThrow(DomainStartupFatalError);
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(/schema SQL fingerprint is not exact/);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
+    });
+
+    it.each([15, 16, 18, 99])(
       'rejects schema version %i before repositories exist',
       (schemaVersion) => {
         database.raw.prepare(
@@ -122,12 +205,126 @@ describe('domain startup', () => {
         expect(caught).toBeInstanceOf(DomainStartupFatalError);
         expect(caught).toMatchObject({
           code: 'schema_not_ready',
-          message: 'The workspace schema version is not exactly 14.',
+          message: 'The workspace schema version is not exactly 19.',
         });
         expect(clockReads()).toBe(0);
         expect(idsUsed()).toBe(0);
       },
     );
+
+    it.each([
+      {
+        name: 'missing',
+        corrupt: (db: AppDatabase) => db.raw.prepare(
+          "DELETE FROM kysely_migration WHERE name = '0016ContactPresentationEvidence'",
+        ).run(),
+      },
+      {
+        name: 'extra',
+        corrupt: (db: AppDatabase) => db.raw.prepare(
+          'INSERT INTO kysely_migration (name, timestamp) VALUES (?, ?)',
+        ).run('0018Unexpected', '9999-12-31T23:59:59.999Z'),
+      },
+      {
+        name: 'reordered',
+        corrupt: (db: AppDatabase) => db.raw.prepare(
+          "UPDATE kysely_migration SET timestamp = '9999-12-31T23:59:59.999Z' WHERE name = '0015RecoveryMetadata'",
+        ).run(),
+      },
+    ])('rejects a $name migration ledger before composition', ({ corrupt }) => {
+      corrupt(database);
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
+    });
+
+    it('rejects a duplicate-capable malformed migration ledger before composition', () => {
+      database.raw.exec(`
+        ALTER TABLE kysely_migration RENAME TO kysely_migration_original;
+        CREATE TABLE kysely_migration (name TEXT NOT NULL, timestamp TEXT NOT NULL);
+        INSERT INTO kysely_migration (name, timestamp)
+          SELECT name, timestamp FROM kysely_migration_original;
+        INSERT INTO kysely_migration (name, timestamp)
+          SELECT name, timestamp FROM kysely_migration_original
+          WHERE name = '0016ContactPresentationEvidence';
+        DROP TABLE kysely_migration_original;
+      `);
+
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
+    });
+
+    it.each([
+      'immutable_backup_receipts',
+      'immutable_backup_receipts_delete',
+      'immutable_identity_repair_events',
+      'immutable_identity_repair_events_delete',
+      'immutable_restore_drill_receipts',
+      'immutable_restore_drill_receipts_delete',
+      'protect_restore_drill_backup_receipt',
+    ])('requires the exact %s trigger before composition', (triggerName) => {
+      expect(DOMAIN_SCHEMA_MANIFEST.triggers).toContain(triggerName);
+      database.raw.exec(`DROP TRIGGER ${triggerName}`);
+
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
+    });
+
+    it('rejects rewritten immutable identity-repair trigger SQL before composition', () => {
+      database.raw.exec(`
+        DROP TRIGGER immutable_identity_repair_events;
+        CREATE TRIGGER immutable_identity_repair_events
+        BEFORE UPDATE ON identity_repair_events
+        BEGIN
+          SELECT RAISE(ABORT, 'forged trigger');
+        END
+      `);
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
+    });
+
+    it('rejects app_meta and migration-ledger disagreement before composition', () => {
+      database.raw.prepare(
+        'UPDATE app_meta SET schema_version = 15 WHERE singleton = 1',
+      ).run();
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
+    });
+
+    it.each([
+      {
+        name: 'missing',
+        corrupt: (db: AppDatabase) => db.raw.exec('DROP TABLE backup_receipts'),
+      },
+      {
+        name: 'extra',
+        corrupt: (db: AppDatabase) => db.raw.exec(
+          'CREATE TABLE unexpected_schema17_table (id TEXT PRIMARY KEY)',
+        ),
+      },
+      {
+        name: 'malformed',
+        corrupt: (db: AppDatabase) => db.raw.exec(`
+          DROP TABLE backup_receipts;
+          CREATE TABLE backup_receipts (id TEXT PRIMARY KEY)
+        `),
+      },
+    ])('rejects a $name schema-19 catalog before composition', ({ corrupt }) => {
+      corrupt(database);
+      const { runtime, clockReads, idsUsed } = buildRuntime();
+      expect(() => runtime.initialize()).toThrow(DomainStartupFatalError);
+      expect(clockReads()).toBe(0);
+      expect(idsUsed()).toBe(0);
+    });
   });
 
   describe('bootstrap', () => {

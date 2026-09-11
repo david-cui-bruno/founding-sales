@@ -44,6 +44,7 @@ export const leadPriorityContextSchema = z.object({
 }).strict();
 
 export const primaryActionSchema = z.object({
+  dueAt: z.string().datetime({ offset: true }).nullable().default(null).optional(),
   id: z.string().min(1),
   type: z.string().min(1),
   channel: z.enum(['call', 'text', 'email', 'review', 'onboarding']),

@@ -1,3 +1,4 @@
+import type { LeadTriageEvidence } from '../../src/shared/contracts/leadTriageReportContract';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const electron = vi.hoisted(() => ({
@@ -37,6 +38,7 @@ const TODAY_CHANNELS = [
   'today:add-note',
   'today:complete',
   'today:get',
+  'today:get-lead-triage-snapshot',
   'today:get-triage-queue',
   'today:log-activity',
   'today:log-call-outcome',
@@ -69,6 +71,7 @@ const validSnapshot: TodaySnapshot = {
             dataConfidence: 8,
           },
           action: {
+            dueAt: null,
             id: 'action-1',
             type: 'call_lead',
             channel: 'call',
@@ -148,6 +151,10 @@ function fakeProvider(): TodayProvider {
     addLeadNote: vi.fn(async () => receipt),
     logCallOutcome: vi.fn(async () => receipt),
     markActivityInError: vi.fn(async () => receipt),
+    getLeadTriageSnapshot: vi.fn(async () => ({
+      generatedAt: '2026-08-31T15:00:00.000Z', requestedLimit: 30, scannedQueueRows: 0,
+      leads: [], revisionBefore: 1, revisionAfter: 1, privacyScanPassed: true as const,
+    })),
     getTriageQueue: vi.fn(async () => validTriageQueue),
     setReviewPosition: vi.fn(async () => receipt),
   };
@@ -165,10 +172,10 @@ describe('registerTodayIpc', () => {
     electron.removeHandler.mockReset();
   });
 
-  it('registers exactly the ten strict Today channels', () => {
+  it('registers exactly the eleven strict Today channels', () => {
     registerTodayIpc(fakeProvider());
 
-    expect(electron.handle).toHaveBeenCalledTimes(10);
+    expect(electron.handle).toHaveBeenCalledTimes(11);
     expect(electron.handle.mock.calls.map((call) => call[0]).sort()).toEqual([
       ...TODAY_CHANNELS,
     ]);
@@ -290,15 +297,70 @@ describe('registerTodayIpc', () => {
     await expect(invokeRegistered('today:get', trustedEvent)).rejects.toThrow();
   });
 
-  it('returns one idempotent unregister function that removes all ten channels', () => {
+  it('returns one idempotent unregister function that removes all eleven channels', () => {
     const unregister = registerTodayIpc(fakeProvider());
 
     unregister();
     unregister();
 
-    expect(electron.removeHandler).toHaveBeenCalledTimes(10);
+    expect(electron.removeHandler).toHaveBeenCalledTimes(11);
     expect(
       electron.removeHandler.mock.calls.map((call) => call[0]).sort(),
     ).toEqual([...TODAY_CHANNELS]);
+  });
+});
+
+// The snapshot adds exactly one read, never a report/mutation channel.
+describe('lead triage snapshot IPC boundary', () => {
+  beforeEach(() => { electron.handle.mockReset(); electron.removeHandler.mockReset(); });
+  it('validates and forwards the one read-only request', async () => {
+    const provider = fakeProvider();
+    registerTodayIpc(provider);
+    expect(electron.handle.mock.calls.map(([channel]) => channel)).toContain('today:get-lead-triage-snapshot');
+    await expect(invokeRegistered('today:get-lead-triage-snapshot', trustedEvent, { limit: 30 }))
+      .resolves.toMatchObject({ requestedLimit: 30, privacyScanPassed: true, leads: [] });
+    expect(provider.getLeadTriageSnapshot).toHaveBeenCalledWith({ limit: 30 });
+    expect(provider.setReviewPosition).not.toHaveBeenCalled();
+  });
+
+  it.each([[], [{ limit: 30 }, {}], [{ limit: 19 }], [{ limit: 31 }], [{ limit: 20.5 }], [{ limit: 30, extra: true }]].map((args) => ({ args })))('rejects invalid arity/request %j without invoking the provider', async ({ args }) => {
+    const provider = fakeProvider(); registerTodayIpc(provider);
+    await expect(invokeRegistered('today:get-lead-triage-snapshot', trustedEvent, ...args)).rejects.toThrow();
+    expect(provider.getLeadTriageSnapshot).not.toHaveBeenCalled();
+  });
+  it('rejects the untrusted sender before reading', async () => {
+    const provider = fakeProvider(); registerTodayIpc(provider);
+    await expect(invokeRegistered('today:get-lead-triage-snapshot', untrustedEvent, { limit: 30 })).rejects.toThrow('trusted');
+    expect(provider.getLeadTriageSnapshot).not.toHaveBeenCalled();
+  });
+  it.each([{ privacyScanPassed: undefined }, { revisionAfter: 99 }, { providerPayload: { nested: [{ phone: '+14015550100' }] } }])('rejects unsafe or incoherent provider output %j', async (patch) => {
+    const provider = fakeProvider();
+    const valid = await provider.getLeadTriageSnapshot({ limit: 30 });
+    provider.getLeadTriageSnapshot = vi.fn(async () => ({ ...valid, ...patch })) as TodayProvider['getLeadTriageSnapshot'];
+    registerTodayIpc(provider);
+    await expect(invokeRegistered('today:get-lead-triage-snapshot', trustedEvent, { limit: 30 })).rejects.toThrow();
+  });
+
+  it('rejects a valid snapshot that answers a different requested limit', async () => {
+    registerTodayIpc(fakeProvider());
+    await expect(invokeRegistered('today:get-lead-triage-snapshot', trustedEvent, { limit: 20 })).rejects.toThrow();
+  });
+
+  it.each(['Avery +14015550100', 'owner@example.com', '123 Hope Street'])('rejects otherwise strict provider evidence leaking %s', async (unsafe) => {
+    const evidence: LeadTriageEvidence = {
+  rank: 1, queueIndex: 0, personId: 'person-safe', salesCycleId: 'cycle-safe', personName: 'Avery',
+  locality: null, region: null, postalCode: null,
+  organization: { label: null, relationship: null, evidenceCodes: [] },
+  fit: { points: null, band: null, evidenceCodes: ['fit_evidence_missing'] },
+  timing: { value: null, band: null, triggers: [] }, cloud: { fit: null, timing: null, contributions: [] },
+  reachability: null, dataConfidence: null,
+  contacts: { phoneCount: 0, emailCount: 0, usableDirectCount: 0, maskedPrimaryPhone: null, evidenceCodes: [] },
+  compliance: { status: 'unknown', refusalReasonCodes: [] }, identityConcernCodes: [],
+};
+    const provider = fakeProvider();
+    const base = await provider.getLeadTriageSnapshot({ limit: 30 });
+    provider.getLeadTriageSnapshot = vi.fn(async () => ({ ...base, scannedQueueRows: 1, leads: [{ ...evidence, organization: { ...evidence.organization, label: unsafe } }] }));
+    registerTodayIpc(provider);
+    await expect(invokeRegistered('today:get-lead-triage-snapshot', trustedEvent, { limit: 30 })).rejects.toThrow('Unsafe triage artifact');
   });
 });

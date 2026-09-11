@@ -1,0 +1,54 @@
+name: Source security gate
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  source:
+    # GitHub-hosted disposable runner only. No protected release environment.
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.20.0'
+      - name: Assert supported Node and architecture
+        run: |
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; node -e "if (process.versions.node !== '24.20.0' || process.platform !== 'darwin' || process.arch !== 'arm64') process.exit(1)"
+      - name: Install integrity-pinned Gitleaks 8.30.1
+        run: |
+          set -euo pipefail
+          umask 077
+          tool_dir="$(mktemp -d "$RUNNER_TEMP/callie-gitleaks.XXXXXX")"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_darwin_arm64.tar.gz -o "$tool_dir/gitleaks.tar.gz"
+          printf '%s  %s\n' b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5 "$tool_dir/gitleaks.tar.gz" | shasum -a 256 -c -
+          tar -xzf "$tool_dir/gitleaks.tar.gz" -C "$tool_dir" gitleaks
+          test "$("$tool_dir/gitleaks" version)" = '8.30.1'
+          echo "$tool_dir" >> "$GITHUB_PATH"
+      - name: Install root and independent pinned Lambda packages
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm ci
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm ci --prefix cloud/lambdas/shared
+          while IFS= read -r -d '' lock; do
+            test "$lock" = cloud/lambdas/shared/package-lock.json && continue
+            export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm ci --prefix "${lock%/package-lock.json}"
+          done < <(git ls-files -z -- 'cloud/lambdas/*/package-lock.json')
+      - name: Source, independent Lambda and operational graph gates
+        run: |
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run typecheck
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run lint:tracked
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm test
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run verify:lambdas
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run build:operational-tools
+          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run verify:secrets

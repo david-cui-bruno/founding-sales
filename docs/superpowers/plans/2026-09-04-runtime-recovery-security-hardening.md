@@ -14,6 +14,8 @@
 
 - Task 0 and Hold Point 0 are cross-plan preflight. Execute them immediately after the compliance plan's Task 0 schedule pause and before compliance Task 1 or any repository implementation.
 - Execute runtime Tasks 1–13 after the compliance plan has registered schema 13 and 14, and before the lead-review plan registers schema 16. This plan exclusively owns schema 15.
+- **Schema-15 handoff exception for read-only lead triage:** Lead-review implementation may begin before the full operational rollout in Task 13 only after all of the following are complete and independently reviewed: (a) runtime Task 6, including the runtime-owned `0015RecoveryMetadata`; (b) the production domain startup exact-schema version and load-bearing manifest are updated and tested for schema 15; (c) migration-backup verification passes for 14→15; (d) historical identity audit/repair tools retain non-overridable exact-schema-15 guards that reject schema 14 and schema 16 before output creation, temporary-file creation, dry-run output, or write transactions; and (e) outbound-compliance contracts and the final outbound authorization gate consumed by lead review are complete and reviewed. This exception authorizes reversible tracked implementation and fixture-only verification only. It does not authorize founder-data access, opening or migrating the founder workspace, recovery-material handling, backup or restore operations on founder state, credential rotation/import, AWS or provider access, Terraform live actions including init, validate, plan, show, apply, or state migration, schedule enablement, live identity audit, review, or repair, production packaging rollout, live snapshot capture, or lead mutation. Those actions remain behind their existing hold points and separate confirmations.
+- **Current-backup integration clarification (2026-09-06):** Task12's integrated pre-release host supports exact current schema16 only through the unchanged production readiness ledger/catalog. This explicitly supersedes its unreleased schema15-only host, not installed-product compatibility. Task10 retains its frozen historical schema15 audit guard and seven-module graph. An older founder workspace remains behind the separately approved protected-copy, historical audit/repair, migration-backup and restore-acceptance hold points. Never migrate it merely to use this command. This distinction changes no operational approval boundary or task order.
 - Known exposed provider and AWS credentials must be revoked or deactivated in Hold Point 0; if no safe replacement is ready, keep the dependent feature offline rather than extending exposure.
 - Every `npm` or `npx` command begins with `export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"`.
 - List operations time out after 30 seconds. Object fetch plus body transformation time out after 60 seconds. Each upload times out after 60 seconds. One full poll owns a 14-minute deadline.
@@ -268,6 +270,11 @@ export type RecoveryReadinessStatus = {
   setupCompletedAt: string | null;
   lastRestoreDrillAt: string | null;
   outreachReady: boolean;
+  backup: {
+    status: 'available' | 'missing' | 'unavailable';
+    createdAt: string | null;
+    verifiedAt: string | null;
+  };
 };
 
 export type RecoverySetupSession = {
@@ -301,9 +308,10 @@ export type RecoveryProvider = {
     sessionId: string;
     founderConfirmed: true;
   }): Promise<RecoveryReadinessStatus>;
-  selectAndRunRestoreDrill(input: {
-    founderConfirmed: true;
-  }): Promise<
+  selectAndRunRestoreDrill(input:
+    | { founderConfirmed: true; materialSource: 'file' }
+    | { founderConfirmed: true; materialSource: 'paste'; recoveryMaterial: string }
+  ): Promise<
     | { kind: 'completed'; receipt: RestoreDrillReceipt }
     | { kind: 'cancelled' }
   >;
@@ -607,7 +615,12 @@ The replacement keeps schedules and scheduled health notifications disabled by d
 - Create `tests/main/operationalSafetyRepository.test.ts`
 - Modify `src/main/db/migrate.ts`
 - Modify `src/main/db/domainSchema.ts`
+- Modify `src/main/domain/startup/storageReadiness.ts`
+- Modify `src/main/domain/domainRuntime.ts`
 - Modify `tests/main/migrations.test.ts`
+- Modify `tests/main/domainStartupAudit.test.ts`
+- Modify exact schema-version fixtures and expectations in `tests/e2e/foundation.spec.ts` and `tests/integration/foundationRecovery.test.ts`
+- Modify other exact schema-version fixtures or expectations only if deterministically required by the schema-15 gate change
 
 - [ ] Write the failing schema-14→15 migration test for all tables, constraints, singleton initialization, uniqueness, and preservation of compliance/jurisdiction data.
 - [ ] Write failing repository tests for backup receipts, recovery readiness, restore drill updates, immutable repair-event uniqueness, and transaction rollback.
@@ -617,18 +630,25 @@ export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; 
 ```
 
 - [ ] Implement and register `0015RecoveryMetadata` after `0014OutboundJurisdictionClearance`.
+- [ ] Update the production startup/domain exact-schema gate and load-bearing manifest to schema 15, including `backup_receipts`, `recovery_readiness`, and `identity_repair_events`. Before domain composition, fail closed for schema 14, schema 16 and every future schema, missing or extra load-bearing objects, malformed schema-15 catalogs, any migration ledger other than the exact ordered history through `0015RecoveryMetadata` (including missing, extra, or reordered entries), and every mismatch between `app_meta.schema_version` and the migration ledger.
 - [ ] Implement repository methods `recordBackup`, `listBackups`, `recordRecoverySetupCompleted`, `recordRestoreDrill`, `getRecoveryReadiness`, and `appendIdentityRepairEvent`.
-- [ ] Run focused and aggregate migration tests.
+- [ ] Run the mandatory Schema-15 handoff verification using disposable fixtures only. It must cover the Task 6 focused and aggregate migration and repository tests, migration-backup verification, `tests/main/domainStartupAudit.test.ts`, `tests/integration/foundationRecovery.test.ts`, the applicable packaged checks in `tests/e2e/foundation.spec.ts`, every other exact-schema fixture changed deterministically for this task, and root typecheck. Do not open or migrate the founder workspace or use founder data.
 
 ```bash
 export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/main/db/migrations/0015RecoveryMetadata.test.ts tests/main/operationalSafetyRepository.test.ts tests/main/migrations.test.ts tests/integration/migrationBackup.test.ts
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/main/domainStartupAudit.test.ts tests/integration/foundationRecovery.test.ts
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx playwright test --workers=1 tests/e2e/foundation.spec.ts
+# Run every other deterministically changed exact-schema fixture with its focused npm/npx test command, using this same exact PATH prefix.
 export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run typecheck
 ```
 
-- [ ] Commit.
+- [ ] Review and commit the complete accepted Task 6 slice. Stage the required migration, repository, production startup/readiness, domain runtime, startup audit, and named exact-schema fixture paths explicitly. If another exact-schema fixture changed deterministically, add only that reviewed path. Before committing, inspect `git diff --cached --name-only` and `git diff --cached`; unstage any unrelated file and confirm no required Task 6 path is omitted.
 
 ```bash
-git add src/main/db/migrations/0015RecoveryMetadata.ts tests/main/db/migrations/0015RecoveryMetadata.test.ts src/main/domain/operations/operationalSafetyRepository.ts tests/main/operationalSafetyRepository.test.ts src/main/db/migrate.ts src/main/db/domainSchema.ts tests/main/migrations.test.ts
+git add src/main/db/migrations/0015RecoveryMetadata.ts tests/main/db/migrations/0015RecoveryMetadata.test.ts src/main/domain/operations/operationalSafetyRepository.ts tests/main/operationalSafetyRepository.test.ts src/main/db/migrate.ts src/main/db/domainSchema.ts src/main/domain/startup/storageReadiness.ts src/main/domain/domainRuntime.ts tests/main/migrations.test.ts tests/main/domainStartupAudit.test.ts tests/e2e/foundation.spec.ts tests/integration/foundationRecovery.test.ts
+# Add only other exact-schema fixture paths shown by the reviewed deterministic-change check.
+git diff --cached --name-only
+git diff --cached
 git commit -m "feat: add operational recovery audit schema"
 ```
 
@@ -678,6 +698,10 @@ git commit -m "feat: add periodic verified encrypted backups"
 ---
 
 ## Task 8: Add one-time recovery export and a temporary-copy restore drill
+
+**Coordinator bindings (2026-09-06):** The five-method surface above is unchanged. All objects and both supplied-material union branches are strict. Backup freshness selects the latest created currently present, hash/identity-verified Task 7 artifact, never a receipt alone. `available` requires both canonical timestamps; `missing` and `unavailable` require null timestamps. Availability errors project `unavailable`. Display age from creation, verification separately, and a 24-hour stale warning. The unchanged `outreachReady` formula means only setup and immutable drill completion, not current freshness or readiness of every integration.
+
+File material uses a second main-owned picker after trusted backup selection. Paste material is explicit, bounded, ephemeral renderer input, cleared on submit/cancel/navigation and parsed in main. No arbitrary renderer path, active-session reuse, live-key fallback, or request/error logging is allowed. Zero parsed buffers and discard string references. Use the authoritative immutable receipt repository, known migration registry plus readable structures for schema support, and a read-only temporary-copy drill, never a live-source checkpoint helper or key-envelope restore. Necessary strict API/registrar/startup test consumers are in scope. Packaged native-picker acceptance must be reported honestly if the existing fixture harness cannot drive it; do not introduce production path/key bypasses.
 
 **Files:**
 
@@ -746,6 +770,7 @@ git commit -m "feat: add recovery export and restore drill"
 - Create `cloud/terraform/backend.hcl.example`
 - Create `cloud/terraform/terraform.tfvars.example`
 - Create `cloud/scripts/bootstrap-terraform-state.sh`
+- Create `cloud/scripts/bootstrap-runtime-secret-key.sh` for the staged Hold Point 1 key preparation and parameter prevalidation authorized by the Round 1 safety review.
 - Modify `cloud/terraform/variables.tf`
 - Modify `cloud/terraform/iam.tf`
 - Modify `cloud/terraform/lambda.tf`
@@ -775,13 +800,14 @@ export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; 
 - [ ] Implement encrypted parameter lookup and update enricher/mail-parse to fetch by identifier at invocation time.
 - [ ] Add a partial `backend "s3" {}` block and public example backend configuration. The bootstrap script creates encrypted/versioned/private state storage and locking, but refuses to overwrite existing resources.
 - [ ] Do not create secret-valued `aws_ssm_parameter` resources and do not put replacement values in examples.
-- [ ] Format, validate, and create a refresh-free plan. Do not apply, rotate, or migrate state in this task.
+- [ ] Run only the exact offline source-verification gates below. Do not initialize providers, validate, plan, display state or plans, contact AWS, rotate, migrate state, or apply in this task.
 
 ```bash
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; (cd cloud/lambdas/shared && npm run typecheck && npm test)
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; (cd cloud/lambdas/enricher && npm run typecheck && npm test && npm run build)
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; (cd cloud/lambdas/mail-parse && npm run typecheck && npm test && npm run build)
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; (cd cloud/terraform && tofu init -backend=false -reconfigure && tofu fmt -check -recursive && tofu validate && tofu plan -refresh=false -var='schedules_enabled=false' -out="$JCODE_SCRATCH_DIR/managed-secrets.tfplan")
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/infrastructure/terraformHardening.test.ts
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run typecheck
+tofu fmt -check -recursive cloud/terraform
+bash -n cloud/scripts/bootstrap-terraform-state.sh
+bash -n cloud/scripts/bootstrap-runtime-secret-key.sh
 ```
 
 - [ ] Commit.
@@ -796,14 +822,25 @@ git commit -m "feat: prepare managed cloud secrets and remote state"
 Stop. Obtain explicit founder confirmation for this operational sequence.
 
 1. Confirm the exposed credentials from Hold Point 0 remain revoked and their dependent schedules remain paused.
-2. Enter the already validated replacement provider value directly into encrypted SSM through an approved interactive operator path. Do not place it in shell history, repository files, Terraform variables, logs, or chat.
-3. Apply reviewed IAM/environment changes with `schedules_enabled=false`; invoke one bounded request and inspect only redacted logs.
-4. Verify the revoked provider credential cannot authenticate and is not referenced by Lambda configuration.
-5. Import the already validated replacement app-inbox AWS credential into the verified protected local envelope, test bounded list/fetch/upload, observe a successful manual poll, verify the old key remains inactive, then securely remove the quarantined plaintext import only after a second protected copy is validated.
-6. Bootstrap the encrypted/versioned/private state bucket and lock table. Review resource names and policies.
-7. Obtain a second explicit confirmation before `tofu init -migrate-state`.
-8. Compare state serial and resource count before/after, verify remote locking, archive the old local state privately, then remove plaintext local state only after rollback evidence is retained.
-9. Re-enable schedules only after health, logs, and alarms are verified.
+2. Bootstrap the encrypted/versioned/private state bucket and lock table first. Retain and inspect the recovery receipt, activation waits, and postcondition evidence before continuing.
+3. Obtain a second explicit confirmation before `tofu init -migrate-state`.
+4. Migrate the trusted local state, compare state serial and resource count before/after, verify remote locking, archive the old local state privately, and verify the actual state object uses `aws:kms` with the exact reviewed state-key ARN before removing plaintext local state.
+5. Create and verify the dedicated runtime-secret KMS key and stable alias through the approved bootstrap path, retain its private receipt, and stop before entering parameters.
+6. Enter all three runtime values directly into encrypted SSM under that exact key through an approved interactive operator path. Do not place them in shell history, repository files, Terraform variables, logs, or chat. Prevalidate all three encrypted parameters by identifier, key id, and decrypt access without displaying values.
+7. Only after trusted-state migration and postcondition verification, create a state-aware human-readable unsaved plan with restrictive `umask 077`, `schedules_enabled=false`, and `scheduled_health_alerts_enabled=false`. Do not use `-out`, JSON rendering, or retain raw plan output. Prove zero destroy and zero replacement and retain only a sanitized summary.
+8. Only then perform the separately approved IAM and Lambda identifier cutover apply with both gates false; invoke one bounded request and inspect only redacted logs. Retain prior deployed Lambda versions/configuration until verification completes so rollback never requires reintroducing secret-valued environment entries.
+9. Verify the revoked provider credential cannot authenticate and is not referenced by Lambda configuration.
+10. Import the already validated replacement app-inbox AWS credential into the verified protected local envelope, test bounded list/fetch/upload, observe a successful manual poll, verify the old key remains inactive, then securely remove the quarantined plaintext import only after a second protected copy is validated.
+
+#### Staged schedule rollout
+
+Never enable schedules during source verification. In a later separately approved apply, set `schedules_enabled=true` while `scheduled_health_alerts_enabled=false`. Prove current completion metrics and watchdog heartbeats are arriving, and wait for all missing-success alarms to reach a known OK baseline from current observations. Only then obtain separate approval for the health-action change; that approval does not preserve or authorize reuse of the observed baseline.
+
+Immediately before the health-action apply, while health actions remain disabled, perform a fresh pre-apply check as the first step of a single tightly bounded precheck/apply/postcheck sequence. Re-read current completion metrics and watchdog heartbeats for every expected cadence, and require every affected missing-success alarm to be exactly `OK` from those current observations. The operator must not reuse the approval-time baseline. If the apply and immediate postcheck cannot follow without intervening work or delay, expire the precheck and repeat it before applying. If any alarm is `ALARM`, `INSUFFICIENT_DATA`, stale, or otherwise non-OK, abort before apply, leave `scheduled_health_alerts_enabled=false`, and do not attach notification actions.
+
+From a successful fresh precheck, immediately use the separate approved apply setting `scheduled_health_alerts_enabled=true`. Immediately after the apply, verify each affected alarm's `alarm_actions` contains exactly the reviewed SNS topic ARN and no additional actions, and require every affected missing-success alarm remains exactly `OK`.
+
+If any alarm is non-OK after apply, explicitly fail the rollout and do not claim transition coverage. Use a separately approved manual incident-notification path for the current condition rather than relying on a missing state transition. Restore current completion metrics and watchdog heartbeats until all affected alarms return to exactly `OK`; only then accept future transition coverage.
 
 No repository commit is associated with this hold point.
 
@@ -981,7 +1018,7 @@ git commit -m "ci: enforce exact-sha security release gate"
 
 - [ ] Confirm outbound-compliance Task 10 completed after runtime Task 12, with exact suppression reconciliation and packaged final-gate acceptance, before starting this final runtime rollout.
 - [ ] Run tracked typecheck, lint, tests, Lambda gates, and secret scans on a clean checkout.
-- [ ] Do not hand the founder workspace to the lead-review plan or register schema 16 until every applicable hold point is resolved, schema-15 operational tools have completed against schema 15, and this Task 13 verification is signed off. If Hold Point 3 is not applicable, record the reviewed manifest disposition that makes repair unnecessary.
+- [ ] Do not hand the founder workspace to the lead-review plan or register schema 16 until either (A) every applicable operational hold point is resolved, schema-15 operational tools have completed against schema 15, and this Task 13 verification is signed off, or (B) the Schema-15 handoff exception for read-only lead triage has been completed and independently reviewed. Path B permits code/fixture work only and does not authorize opening or migrating the founder workspace. Any schema-15-only live audit or repair disposition required for production rollout must still be resolved before the founder workspace is migrated to schema 16.
 
 ```bash
 export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run typecheck

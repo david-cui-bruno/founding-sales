@@ -142,7 +142,7 @@ export async function listUploadObjects(
   const objects: SuppressionObjectDescriptor[] = [];
   let keyMarker: string | undefined;
   let versionIdMarker: string | undefined;
-  while (true) {
+  for (;;) {
     const page = await deps.s3.send(new ListObjectVersionsCommand({ Bucket: deps.env.INBOX_BUCKET, Prefix: UPLOADS_PREFIX, KeyMarker: keyMarker, VersionIdMarker: versionIdMarker }));
     for (const version of page.Versions ?? []) {
       const key = version.Key;
@@ -404,7 +404,7 @@ async function scanMembershipHashes(deps: HandlerDeps): Promise<Set<string>> {
   const hashes = new Set<string>();
   let exclusiveStartKey: Record<string, AttributeValue> | undefined;
 
-  while (true) {
+  for (;;) {
     const result = await deps.dynamo.send(
       new ScanCommand({
         TableName: deps.env.SUPPRESSION_TABLE,
@@ -540,7 +540,7 @@ export async function persistSuppressionMonotonically(
   }
 
   let conflicts = 0;
-  while (true) {
+  for (;;) {
     const membership = monotonicMembership(source, current);
     if (membershipMatches(current, membership)) return false;
 

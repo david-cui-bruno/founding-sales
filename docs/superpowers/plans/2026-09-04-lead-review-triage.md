@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - This plan follows the approved spec dated 2026-09-04.
-- Execute this plan only after both `docs/superpowers/plans/2026-09-04-outbound-compliance-hardening.md` and `docs/superpowers/plans/2026-09-04-runtime-recovery-security-hardening.md` are fully verified, including runtime Task 13. Schema 16 must never be opened by schema-15 identity tooling.
+- Execute tracked lead-review implementation only after outbound-compliance contracts/final authorization are complete and reviewed, and after either full runtime Task 13 sign-off or completion and independent review of the runtime plan's Schema-15 handoff exception, including its mandatory disposable-fixture handoff verification. Schema 16 must never be opened by schema-15 identity or recovery tooling. The handoff exception authorizes code and fixture verification only; accessing or migrating the founder workspace, capturing a live triage snapshot, or performing any runtime operational action still requires the applicable separate confirmation and hold point.
 - Schema ownership is locked across the plan set: compliance uses 0013 and 0014, runtime/recovery uses 0015, and this plan uses 0016. Do not renumber or duplicate the compliance evidence columns.
 - Consume `ContactComplianceEvidence`, `phoneComplianceStatusSchema`, and final authorization from the compliance plan. Do not create a second boolean-based compliance evaluator.
 - Raw vendor records are always presented as candidates, never as verified ownership.
@@ -34,10 +34,22 @@
 ### Contact evidence and eligibility
 
 - Create `src/main/db/migrations/0016ContactPresentationEvidence.ts`: additive schema-16 source, rank, phone-kind, ownership, and evidence-observed columns.
-- Create `tests/main/db/migrations/0016ContactPresentationEvidence.test.ts`: 15→16 migration, defaults, constraints, and idempotence.
+- Create `tests/main/db/migrations/0016ContactPresentationEvidence.test.ts`: isolated 15→16 migration, exact table SQL/ordered column metadata, defaults, constraints, idempotence, and schema-15 recovery-object preservation.
 - Modify `src/main/db/migrate.ts`: register `0016ContactPresentationEvidence` after runtime schema 15.
-- Modify `src/main/db/domainSchema.ts`: type the new presentation columns.
-- Modify `tests/main/migrations.test.ts`: expect schema version 16 and the new migration ID.
+- Modify `src/main/db/domainSchema.ts`: type the new presentation columns without removing compliance or jurisdiction types.
+- Modify `src/main/db/plaintextDatabaseUpgrade.ts`: recognize encrypted schema 16 and continue rejecting schema 17 or any future version.
+- Modify `src/main/domain/domainRuntime.ts`: require exactly schema 16 before domain composition.
+- Modify `src/main/domain/startup/storageReadiness.ts`: lock startup to schema 16, the exact ordered 0001…0016 Kysely ledger, and the exact schema catalog/table/index/trigger SQL.
+- Modify `tests/main/migrations.test.ts`: expect schema version 16 and the exact ordered migration ledger while keeping migration-0015 isolated expectations at schema 15.
+- Modify `tests/main/healthService.test.ts`: expect the health projection from a latest-migrated database to report schema version 16.
+- Modify `tests/main/db/migrations/0009SourcingFileLedger.test.ts`, `tests/main/db/migrations/0011ContactDncFlags.test.ts`, and `tests/main/db/migrations/0012UpstreamRequestState.test.ts`: update every `migrateToLatest` result, ordered applied-migration list, idempotence boundary, and `app_meta` assertion to schema 16 with `0016ContactPresentationEvidence` last.
+- Modify `tests/main/db/migrations/0015RecoveryMetadata.test.ts`: replace `migrateToLatest` with an explicit `createMigrationRunner` through `0015RecoveryMetadata` so this isolated historical suite continues to stop at schema 15 after 0016 is registered.
+- Modify `tests/main/domainStartupAudit.test.ts`: reject versions 15 and 17, missing/extra/reordered/duplicate ledger rows, schema/ledger mismatches, and catalog/table/index/trigger drift before startup readiness.
+- Modify `tests/integration/foundationRecovery.test.ts`: prove schema-15 recovery tables and immutable identity-repair triggers survive 15→16 and restore unchanged.
+- Modify `tests/integration/plaintextDatabaseUpgrade.test.ts` and `tests/support/plaintextUpgradeScenario.ts`: add explicit encrypted-schema-16 acceptance and schema-17/future rejection with byte-for-byte immutability on rejection.
+- Modify `tests/e2e/foundation.spec.ts` and `tests/support/domainSchemaScenario.ts`: assert packaged/runtime schema 16 plus the exact catalog and contact-table contract.
+- Modify `tests/integration/migrationBackup.test.ts` and `tests/support/migrationBackupScenario.ts`: add the current-pattern aggregate backup/restore scenario proving schema-15 recovery tables, rows, indexes, and both immutable identity-repair triggers survive the 15→16 backup boundary byte-for-byte.
+- Do not blanket-rewrite historical operational receipt fixtures whose `schemaVersion: 15` records evidence. Change such a row only when the fixture explicitly models “latest schema.”
 - Consume the nested compliance contract already implemented by the outbound-compliance plan. Do not change its field names or add parallel scrub/state columns.
 - Modify `src/main/sourcing/intakeMapper.ts`: carry vendor rank, phone kind, vendor source, ownership state, and the event evidence timestamp into contact intake.
 - Modify `src/main/domain/source/sourceService.ts`: normalize and persist contact evidence fields without losing rank.
@@ -444,30 +456,138 @@ The collector must use a read transaction or sequential SELECTs only. Capture `c
 - Create: `tests/main/db/migrations/0016ContactPresentationEvidence.test.ts`
 - Modify: `src/main/db/migrate.ts`
 - Modify: `src/main/db/domainSchema.ts`
+- Modify: `src/main/db/plaintextDatabaseUpgrade.ts`
+- Modify: `src/main/domain/domainRuntime.ts`
+- Modify: `src/main/domain/startup/storageReadiness.ts`
 - Modify: `tests/main/migrations.test.ts`
+- Modify: `tests/main/healthService.test.ts`
+- Modify: `tests/main/db/migrations/0009SourcingFileLedger.test.ts`
+- Modify: `tests/main/db/migrations/0011ContactDncFlags.test.ts`
+- Modify: `tests/main/db/migrations/0012UpstreamRequestState.test.ts`
+- Modify: `tests/main/db/migrations/0015RecoveryMetadata.test.ts`
+- Modify: `tests/main/domainStartupAudit.test.ts`
+- Modify: `tests/integration/foundationRecovery.test.ts`
+- Modify: `tests/integration/migrationBackup.test.ts`
+- Modify: `tests/support/migrationBackupScenario.ts`
+- Modify: `tests/integration/plaintextDatabaseUpgrade.test.ts`
+- Modify: `tests/support/plaintextUpgradeScenario.ts`
+- Modify: `tests/e2e/foundation.spec.ts`
+- Modify: `tests/support/domainSchemaScenario.ts`
 
-**Interfaces:**
-- Produces the schema columns listed above.
-- Existing schema-15 rows receive `ownership_state='unknown'` and null source, rank, phone-kind, and presentation-evidence timestamps. Schema-13 compliance evidence and schema-14 jurisdiction rows remain unchanged.
+**Interfaces and locked acceptance:**
+- Produce only `source_label`, `vendor_rank`, `phone_kind`, `ownership_state`, and `evidence_observed_at` on `person_contact_methods`; preserve every schema-13 compliance column and every schema-14 jurisdiction table/column.
+- Startup readiness accepts only `app_meta.schema_version = 16` plus this exact ordered Kysely ledger: `0001Foundation`, `0002DomainFoundation`, `0003Transcripts`, `0004Learnings`, `0005SourcingChannels`, `0006SourcingState`, `0007SourcingOutbox`, `0008DedupeCloudPersons`, `0009SourcingFileLedger`, `0010NoDueDates`, `0011ContactDncFlags`, `0012UpstreamRequestState`, `0013ContactComplianceEvidence`, `0014OutboundJurisdictionClearance`, `0015RecoveryMetadata`, `0016ContactPresentationEvidence`.
+- Reject schema 15, schema 17 or any future schema, missing/extra/reordered/duplicate ledger rows, and every schema/ledger mismatch before `createDomainServices` or repository startup. Keep the binary-ordered exact table/index/trigger catalog and normalized load-bearing table SQL checks already owned by `DOMAIN_SCHEMA_MANIFEST`.
+- Preserve the schema-15 `backup_receipts`, `recovery_readiness`, and `identity_repair_events` table SQL, their data, indexes, and the SQL text of both `immutable_identity_repair_events` UPDATE and `immutable_identity_repair_events_delete` DELETE triggers byte-for-byte across migration and backup/restore.
+- Migration `0015RecoveryMetadata` isolated tests must import `migration0015RecoveryMetadata`, define an explicit through-schema-15 `createMigrationRunner`, use that runner instead of `migrateToLatest` for every migration call, and continue to end at schema 15. Historical operational receipt rows with `schemaVersion: 15` remain recorded evidence unless the fixture explicitly represents the latest schema.
+- Plaintext encrypted upgrade accepts schema 16, rejects schema 17 and every future version, and leaves rejected canonical database bytes and upgrade artifacts unchanged.
+- Task 1 authorizes tracked code and disposable test fixtures only. It authorizes no founder workspace access, live database access or migration, live snapshot capture, identity repair, AWS/provider action, Terraform action, or any operational action.
 
-- [ ] **Step 1: Write the failing schema-15→16 migration test.** Seed phone and email contacts in a schema-15 fixture, run `migrateToLatest`, assert version 16, preserved compliance columns, conservative presentation defaults, and all CHECK constraints.
-- [ ] **Step 2: Run the focused test and verify failure because migration 0016 is absent.**
+The exact normalized schema-16 `person_contact_methods` SQL must be asserted as:
+
+```sql
+CREATE TABLE person_contact_methods (
+  id TEXT PRIMARY KEY,
+  person_id TEXT NOT NULL REFERENCES persons(id),
+  kind TEXT NOT NULL CHECK (kind IN ('phone', 'email')),
+  normalized_value TEXT NOT NULL CHECK (length(normalized_value) > 0),
+  raw_value TEXT,
+  validation_state TEXT NOT NULL CHECK (
+    validation_state IN ('unverified', 'valid', 'invalid')
+  ),
+  reachability TEXT NOT NULL CHECK (
+    reachability IN ('direct', 'indirect', 'none')
+  ),
+  is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+  in_contacts INTEGER CHECK (in_contacts IN (0, 1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  dnc_listed INTEGER NOT NULL DEFAULT 0 CHECK (dnc_listed IN (0, 1)),
+  tcpa_flag INTEGER NOT NULL DEFAULT 0 CHECK (tcpa_flag IN (0, 1)),
+  federal_status TEXT NOT NULL DEFAULT 'unknown'
+    CHECK (federal_status IN ('unknown', 'verified_clear', 'listed')),
+  compliance_tcpa_flag INTEGER NULL
+    CHECK (compliance_tcpa_flag IS NULL OR compliance_tcpa_flag IN (0, 1)),
+  covered_area_code TEXT NULL
+    CHECK (covered_area_code IS NULL OR covered_area_code GLOB '[0-9][0-9][0-9]'),
+  compliance_source TEXT NOT NULL DEFAULT 'legacy'
+    CHECK (compliance_source IN ('ftc_download', 'enrichment_vendor', 'manual_import', 'legacy')),
+  scrubbed_at TEXT NULL,
+  compliance_expires_at TEXT NULL,
+  source_label TEXT,
+  vendor_rank INTEGER CHECK (vendor_rank IS NULL OR vendor_rank >= 1),
+  phone_kind TEXT CHECK (
+    phone_kind IS NULL OR phone_kind IN ('mobile','landline','voip','other')
+  ),
+  ownership_state TEXT NOT NULL DEFAULT 'unknown' CHECK (
+    ownership_state IN ('verified_person','vendor_candidate','conflicting_identity','unknown')
+  ),
+  evidence_observed_at TEXT,
+  UNIQUE (person_id, kind, normalized_value)
+)
+```
+
+Assert the ordered `PRAGMA table_info(person_contact_methods)` rows for the five added presentation columns only, without weakening assertions for the pre-existing compliance columns:
+
+```ts
+[
+  { cid: 19, name: 'source_label', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 },
+  { cid: 20, name: 'vendor_rank', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 0 },
+  { cid: 21, name: 'phone_kind', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 },
+  { cid: 22, name: 'ownership_state', type: 'TEXT', notnull: 1, dflt_value: "'unknown'", pk: 0 },
+  { cid: 23, name: 'evidence_observed_at', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 },
+]
+```
+
+- [ ] **Step 1: Write the focused failing schema-16 tests.** In `0016ContactPresentationEvidence.test.ts`, create a real schema-15 database with migration 0015, seed phone and email contacts plus schema-13 compliance evidence, schema-14 jurisdiction data, and schema-15 recovery rows. Capture normalized recovery table SQL and both immutable identity-repair trigger SQL strings before migration. Assert 15→16 applies only `0016ContactPresentationEvidence`, sets conservative defaults, enforces every declared CHECK, yields the exact table SQL and ordered five-column `PRAGMA table_info` rows above, preserves compliance/jurisdiction data, and leaves all captured schema-15 SQL/data byte-for-byte equal. Add a second-run idempotence assertion.
+- [ ] **Step 2: Add failing startup-boundary tests.** In `domainStartupAudit.test.ts`, cover exact schema 16 success and separate failures for 15, 17, missing `0016`, extra `0017`, reordered rows, duplicate migration names/timestamps, and both directions of schema/ledger mismatch. Assert every failure occurs before domain services/repositories start and assert exact table/index/trigger catalog plus normalized SQL, including `person_contact_methods` and both immutable identity-repair triggers.
+- [ ] **Step 3: Add failing recovery and backup tests.** Extend `foundationRecovery.test.ts` and the existing `migrationBackupScenario.ts`/`migrationBackup.test.ts` harness with a schema-15→16 migration backup/restore scenario. Compare recovery tables, rows, indexes, and both identity-repair trigger SQL strings byte-for-byte before migration, in the verified pre-migration backup, after migration, and after restored reopen.
+- [ ] **Step 4: Add failing plaintext exact-boundary tests.** Rename the old latest-boundary scenario so encrypted schema 16 is accepted, add encrypted schema 17 rejection, keep a future-version rejection case, and assert rejected canonical bytes and all pre-existing candidate/artifact bytes are unchanged. Update `assertEncryptedSchemaVersionAccepted` to include 16; do not manufacture “older schema” fixtures by migrating to latest and editing only `app_meta` where ledger/catalog fidelity matters.
+- [ ] **Step 5: Add failing foundation and packaged assertions.** Update `domainSchemaScenario.ts`, `foundationRecovery.test.ts`, and `foundation.spec.ts` to require exact schema 16, exact ordered 0001…0016 ledger, exact catalog/table/index/trigger SQL, and ordered presentation columns while retaining schema-15 recovery and identity-repair assertions.
+- [ ] **Step 6: Run the RED focused schema-16 test and verify it fails because migration 0016 is absent.**
 
 ```bash
 export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/main/db/migrations/0016ContactPresentationEvidence.test.ts
 ```
 
-- [ ] **Step 3: Implement the additive migration and register it after `0015RecoveryMetadata`.** Update aggregate migration expectations from 15 to 16 without changing the registered order of schemas 13 through 15.
-- [ ] **Step 4: Run focused and aggregate migration tests.**
+- [ ] **Step 7: Implement the minimal additive migration and register the exact boundary.** Add the five columns in the declared order, update `app_meta` to 16, register `0016ContactPresentationEvidence` after `0015RecoveryMetadata`, extend `domainSchema.ts`, set runtime/readiness to exact schema 16 and exact ledger/catalog SQL, and add 16 but not 17 to `KNOWN_SCHEMA_VERSIONS`. Do not rebuild or rewrite schema-15 recovery tables/triggers.
+- [ ] **Step 8: Update only true latest-schema expectations.** Change aggregate/runtime/foundation/plaintext latest expectations to 16, including `healthService.test.ts` and every `migrateToLatest` result, ordered migration list, idempotence boundary, and `app_meta` assertion in `0009SourcingFileLedger.test.ts`, `0011ContactDncFlags.test.ts`, and `0012UpstreamRequestState.test.ts`. In `0015RecoveryMetadata.test.ts`, import `migration0015RecoveryMetadata`, create an explicit `migrateThroughSchema15` runner by appending 0015 to `migrationsThrough14`, replace every `migrateToLatest` call with that runner, and keep all schema-15 expectations unchanged. Leave historical operational receipts carrying recorded `schemaVersion: 15` unchanged.
+- [ ] **Step 9: Run focused migration consumers plus aggregate backup verification.**
 
 ```bash
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/main/db/migrations/0016ContactPresentationEvidence.test.ts tests/main/migrations.test.ts tests/integration/migrationBackup.test.ts
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/main/db/migrations/0016ContactPresentationEvidence.test.ts tests/main/migrations.test.ts tests/main/healthService.test.ts tests/main/db/migrations/0009SourcingFileLedger.test.ts tests/main/db/migrations/0011ContactDncFlags.test.ts tests/main/db/migrations/0012UpstreamRequestState.test.ts tests/main/db/migrations/0015RecoveryMetadata.test.ts tests/integration/migrationBackup.test.ts
 ```
 
-- [ ] **Step 5: Commit.**
+- [ ] **Step 10: Run readiness, domain, foundation, and plaintext exact-boundary suites.**
 
 ```bash
-git add src/main/db/migrations/0016ContactPresentationEvidence.ts src/main/db/migrate.ts src/main/db/domainSchema.ts tests/main/db/migrations/0016ContactPresentationEvidence.test.ts tests/main/migrations.test.ts
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx vitest run tests/main/domainStartupAudit.test.ts tests/integration/foundationRecovery.test.ts tests/integration/plaintextDatabaseUpgrade.test.ts
+```
+
+- [ ] **Step 11: Run the root verification and packaging gates.**
+
+```bash
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run verify
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run package
+```
+
+- [ ] **Step 12: Run the packaged foundation gate serially.**
+
+```bash
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx playwright test --workers=1 tests/e2e/foundation.spec.ts
+```
+
+- [ ] **Step 13: Run the whitespace gate and inspect the Task 1 diff.**
+
+```bash
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; git diff --check
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; git diff -- src/main/db/migrations/0016ContactPresentationEvidence.ts tests/main/db/migrations/0016ContactPresentationEvidence.test.ts src/main/db/migrate.ts src/main/db/domainSchema.ts src/main/db/plaintextDatabaseUpgrade.ts src/main/domain/domainRuntime.ts src/main/domain/startup/storageReadiness.ts tests/main/migrations.test.ts tests/main/healthService.test.ts tests/main/db/migrations/0009SourcingFileLedger.test.ts tests/main/db/migrations/0011ContactDncFlags.test.ts tests/main/db/migrations/0012UpstreamRequestState.test.ts tests/main/db/migrations/0015RecoveryMetadata.test.ts tests/main/domainStartupAudit.test.ts tests/integration/foundationRecovery.test.ts tests/integration/migrationBackup.test.ts tests/support/migrationBackupScenario.ts tests/integration/plaintextDatabaseUpgrade.test.ts tests/support/plaintextUpgradeScenario.ts tests/e2e/foundation.spec.ts tests/support/domainSchemaScenario.ts
+```
+
+- [ ] **Step 14: Commit only Task 1 files.**
+
+```bash
+git add src/main/db/migrations/0016ContactPresentationEvidence.ts tests/main/db/migrations/0016ContactPresentationEvidence.test.ts src/main/db/migrate.ts src/main/db/domainSchema.ts src/main/db/plaintextDatabaseUpgrade.ts src/main/domain/domainRuntime.ts src/main/domain/startup/storageReadiness.ts tests/main/migrations.test.ts tests/main/healthService.test.ts tests/main/db/migrations/0009SourcingFileLedger.test.ts tests/main/db/migrations/0011ContactDncFlags.test.ts tests/main/db/migrations/0012UpstreamRequestState.test.ts tests/main/db/migrations/0015RecoveryMetadata.test.ts tests/main/domainStartupAudit.test.ts tests/integration/foundationRecovery.test.ts tests/integration/migrationBackup.test.ts tests/support/migrationBackupScenario.ts tests/integration/plaintextDatabaseUpgrade.test.ts tests/support/plaintextUpgradeScenario.ts tests/e2e/foundation.spec.ts tests/support/domainSchemaScenario.ts
 git commit -m "feat(db): persist contact presentation evidence"
 ```
 

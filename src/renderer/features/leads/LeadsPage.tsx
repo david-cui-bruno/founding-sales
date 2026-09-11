@@ -73,7 +73,7 @@ export function LeadsPage({
       <PageHeader
         title="Leads"
         count={view.status === 'ready' ? formatCount(view.total) : undefined}
-        primaryAction={<Button onClick={onOpenImport}>Import</Button>}
+        primaryAction={<Button id="leads-import-trigger" onClick={onOpenImport}>Import</Button>}
       >
         <LeadsToolbar
           query={state.query}
