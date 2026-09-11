@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import {
-  existsSync, linkSync, lstatSync, mkdtempSync, readdirSync, readFileSync,
+  constants, existsSync, linkSync, lstatSync, mkdtempSync, readdirSync, readFileSync,
   readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it } from 'vitest';
 
@@ -456,19 +456,32 @@ it('resolves an external symlink parent to its external canonical directory', ()
 it.each(['file', 'symlink'] as const)('exclusively refuses a %s appearing after preflight, preserving its target bytes', (kind) => {
   const files = cliFiles();
   const observer = join(files.directory, 'collision.cjs');
+  const injected = join(files.directory, 'collision-injected.json');
+  // The CLI canonicalizes the existing parent before opening the absent output.
+  // Native macOS TMPDIR can spell that parent /var rather than /private/var.
+  const destination = join(realpathSync(dirname(files.output)), basename(files.output));
   const before = readFileSync(files.snapshot);
   writeFileSync(observer, `const fs = require('node:fs');
 const { syncBuiltinESMExports } = require('node:module');
 const original = fs.openSync;
 fs.openSync = function(path, flags, ...rest) {
-  if (String(path) === ${JSON.stringify(files.output)}) {
+  if (String(path) === ${JSON.stringify(destination)}) {
     ${kind === 'symlink' ? `fs.symlinkSync(${JSON.stringify(files.snapshot)}, path);` : `const fd = original(path, 'wx', 0o600); fs.writeFileSync(fd, 'CONCURRENT SENTINEL'); fs.closeSync(fd);`}
+    fs.writeFileSync(${JSON.stringify(injected)}, JSON.stringify({ flags, mode: rest[0] }), { mode: 0o600 });
   }
   return original.call(this, path, flags, ...rest);
 };
 syncBuiltinESMExports();
 `, { mode: 0o600 });
-  expectRefusal(node(['--require', observer, script, ...files.args], files.directory));
+  const result = node(['--require', observer, script, ...files.args], files.directory);
+  // Prove the collision was injected at the exact exclusive-open seam, not an
+  // unrelated preflight/import failure that happened to return a refusal.
+  expect(existsSync(injected), result.stderr).toBe(true);
+  expect(JSON.parse(readFileSync(injected, 'utf8'))).toEqual({
+    flags: constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+    mode: 0o600,
+  });
+  expectRefusal(result);
   expect(readFileSync(files.snapshot)).toEqual(before);
   if (kind === 'file') expect(readFileSync(files.output, 'utf8')).toBe('CONCURRENT SENTINEL');
   else expect(readlinkSync(files.output)).toBe(files.snapshot);

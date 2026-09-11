@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
@@ -7,7 +7,8 @@ const roots = [];
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })));
 const names = ['shared', 'adapter-boston-assessments', 'adapter-boston-rentsmart', 'adapter-pvd-taxroll', 'enricher', 'mail-parse', 'resolver', 'schedule-watchdog', 'scorer', 'suppression-sync', 'new-package'];
 function fixture({ fail = '', missing = false } = {}) {
-  const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'lambda-verifier-')); roots.push(root);
+  // Match Node's canonical module paths and child cwd on aliased macOS temp directories.
+  const root = realpathSync(mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'lambda-verifier-'))); roots.push(root);
   mkdirSync(join(root, 'scripts')); mkdirSync(join(root, 'bin'));
   cpSync(new URL('../scripts/verifyLambdas.mjs', import.meta.url), join(root, 'scripts/verifyLambdas.mjs'));
   for (const name of names) {

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createPackage } from '@electron/asar';
@@ -22,7 +22,8 @@ it.each(['basename', 'createdAt', 'kind', 'schemaVersion', 'sha256', 'sizeBytes'
   const missing = { ...receipt }; delete missing[field]; expect(() => validatePreReleaseReceipt(missing)).toThrow('PRE_RELEASE_BACKUP_FAILED');
 });
 async function fixture({ identity = 'com.callie.foundersales', output = receipt } = {}) {
-  const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'backup-launcher-')); roots.push(root); mkdirSync(join(root, 'scripts')); mkdirSync(join(root, 'bin'));
+  // Match Node's canonical module paths and child cwd on aliased macOS temp directories.
+  const root = realpathSync(mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'backup-launcher-'))); roots.push(root); mkdirSync(join(root, 'scripts')); mkdirSync(join(root, 'bin'));
   for (const name of ['createPreReleaseBackup.mjs', 'writeReleaseMarker.mjs', 'releaseMarkerContract.cjs']) cpSync(new URL(`../scripts/${name}`, import.meta.url), join(root, 'scripts', name));
   symlinkSync(resolve('node_modules'), join(root, 'node_modules')); writeFileSync(join(root, '.gitignore'), 'out/\nbuild/generated/\nnode_modules/\narchive/\ncalled\n');
   const product = 'Callie Founder Sales System'; const contents = join(root, 'out', `${product}-darwin-arm64`, `${product}.app/Contents`);
