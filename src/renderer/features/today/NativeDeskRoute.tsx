@@ -666,7 +666,7 @@ export function NativeDesk({
             <p>Local records are separate from worker-authorized work. Pairing and owner checks are required for worker actions.</p>
             <p>Remote freshness unknown. This is a local snapshot.</p>
             <p>Snapshot: {snapshot.freshness.generatedAt}</p>
-            <a href="#/settings">Review Settings</a>
+            <a href="#/settings" onClick={() => openSettingsSection('worker')}>Review Settings</a>
             {snapshot.ownerStatus.map((o) => (
               <p key={o.accountId}>
                 {name(o.accountId)}: {o.status.replaceAll('_', ' ')}
@@ -880,7 +880,7 @@ export function NativeDesk({
               <p>
                 {selected ? 'Your selection is retained. Refresh to check its saved work.' : keys.length ? 'Select an item to review its company context and exact saved work.' : surface === 'today' ? unavailableScope ? 'Local work remains available. Worker-scoped calls, approvals and meetings are unavailable until a workspace is connected.' : 'No work in this local snapshot. Refresh to check for saved conversations and local commitments.' : surface === 'accounts' ? 'Local company evidence will appear here. Local records do not establish worker ownership.' : 'Saved campaign plans will appear here for review. No campaign actions are enabled by this view.'}
               </p>
-              {!selected && unavailableScope && <a href="#/settings">Review Settings</a>}
+              {!selected && unavailableScope && <a href="#/settings" onClick={() => openSettingsSection('worker')}>Review Settings</a>}
             </div>
           )}
         </div>

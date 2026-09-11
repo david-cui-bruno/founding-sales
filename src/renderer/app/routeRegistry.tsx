@@ -109,6 +109,7 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
           localWorkspaceApi={context.api.localWorkspace}
           outreachApi={context.api.outreach}
           phoneSetupApi={context.api.phoneSetup}
+          delegationApi={context.api.delegation}
           sourcing={<SourcingStatusRow api={context.api.sourcing} />}
         >
           <AppleSpikePanel api={context.api.appleSpike} />

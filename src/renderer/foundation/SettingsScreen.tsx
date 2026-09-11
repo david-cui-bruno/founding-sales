@@ -8,6 +8,8 @@ import type { OutreachApi } from '../../shared/contracts/outreachContract';
 import { ConnectionsSection } from './ConnectionsSection';
 import type { PhoneSetupApi } from '../../shared/contracts/phoneSetupContract';
 import { PhoneSetupSection } from './PhoneSetupSection';
+import type { CalliePreloadApi } from '../../shared/preload';
+import { WorkerSetupSection } from './WorkerSetupSection';
 
 import type { AppHealth } from '../../shared/healthContract';
 import type { DensityPreference, DensityState } from '../app/useDensity';
@@ -40,6 +42,7 @@ const densityOptions: readonly {
 ];
 
 type SettingsSectionId =
+  | 'worker'
   | 'phone'
   | 'connections'
   | 'appearance'
@@ -52,6 +55,7 @@ type SettingsSectionId =
 const SECTIONS: readonly { id: SettingsSectionId; label: string }[] = [
   { id: 'connections', label: 'Connections' },
   { id: 'phone', label: 'Phone' },
+  { id: 'worker', label: 'Worker connection' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'data', label: 'Data & storage' },
   { id: 'sourcing', label: 'Sourcing' },
@@ -382,6 +386,7 @@ export type SettingsScreenProps = {
   localWorkspaceApi?: LocalWorkspaceApi;
   outreachApi?: OutreachApi;
   phoneSetupApi?: PhoneSetupApi;
+  delegationApi?: Pick<CalliePreloadApi['delegation'], 'status' | 'pair'>;
   /** Sourcing status rows, rendered inside the Sourcing section. */
   sourcing?: ReactNode;
   /** Extra diagnostics panels (Apple spike), rendered with Diagnostics. */
@@ -407,6 +412,7 @@ export function SettingsScreen({
   localWorkspaceApi,
   outreachApi,
   phoneSetupApi,
+  delegationApi,
   sourcing,
   children,
 }: SettingsScreenProps) {
@@ -467,6 +473,7 @@ export function SettingsScreen({
         <div className="settings__detail">
           {active === 'connections' && <ConnectionsSection api={outreachApi} />}
           {active === 'phone' && <PhoneSetupSection api={phoneSetupApi} />}
+          {active === 'worker' && <WorkerSetupSection api={delegationApi} />}
           {active === 'appearance' && (
             <AppearanceSection theme={theme} density={density} />
           )}
