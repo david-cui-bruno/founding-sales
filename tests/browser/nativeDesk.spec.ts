@@ -103,6 +103,48 @@ test('real Native Desk themes, geometry, selection and unchanged editor DOM', as
   await assertClean(page,state);
 });
 
+test('new call campaign form retains explicit company and offer across routes without queuing work', async ({page}, testInfo) => {
+  const state = await mount(page);
+  await page.evaluate(() => window.nativeDeskBrowser.navigate('campaigns'));
+  await page.getByRole('button', {name:'New call campaign',exact:true}).click();
+  const form = page.getByRole('region', {name:'New call campaign',exact:true});
+  const company = form.getByRole('combobox', {name:'Company',exact:true});
+  const offer = form.getByRole('textbox', {name:'Meeting offer',exact:true});
+  await company.selectOption('a');
+  await offer.fill('Discuss a simpler maintenance follow-up workflow.');
+  await expect(form.getByRole('button', {name:'Save call campaign draft'})).toBeEnabled();
+  await expect(form.getByText('Saves an unapproved campaign draft. This does not enroll accounts, activate a campaign, or start outreach.')).toBeVisible();
+  await page.evaluate(() => window.nativeDeskBrowser.navigate('accounts'));
+  await expect(form).toHaveCount(0);
+  await page.evaluate(() => window.nativeDeskBrowser.navigate('campaigns'));
+  await expect(company).toHaveValue('a');
+  await expect(offer).toHaveValue('Discuss a simpler maintenance follow-up workflow.');
+  for (const width of [1440,1050]) {
+    await page.setViewportSize({width,height:700});
+    for (const theme of ['light','dark'] as const) {
+      await page.evaluate(theme => window.nativeDeskBrowser.preferences(theme,'compact'),theme);
+      await expect(company).toBeVisible();
+      await expect(offer).toBeVisible();
+      const selectGeometry = await company.evaluate(el => {
+        const style = getComputedStyle(el);
+        return { content: el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom), text: parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2 };
+      });
+      expect(selectGeometry.content, 'selected company text must fit without vertical clipping').toBeGreaterThanOrEqual(selectGeometry.text);
+      await offer.focus();
+      await offer.evaluate(el => { const field = el as HTMLTextAreaElement; field.setSelectionRange(field.value.length, field.value.length); });
+      await page.keyboard.type(' k');
+      await expect(offer).toBeFocused();
+      await expect(offer).toHaveValue(/ k$/);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+      const axe = await new AxeBuilder({page}).analyze();
+      expect(axe.violations.filter(item=>item.impact==='serious'||item.impact==='critical')).toEqual([]);
+      await page.screenshot({path:testInfo.outputPath(`campaign-draft-${width}-${theme}.png`),fullPage:true});
+    }
+  }
+  expect((await methods(page)).every(method => ['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments'].includes(method))).toBe(true);
+  await assertClean(page,state);
+});
+
 test('explicit exact email approval stays separate from sending', async ({page}) => {
   const state = await mount(page);
   await page.getByRole('button',{name:'Email · Account A',exact:true}).click();

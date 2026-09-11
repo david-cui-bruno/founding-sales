@@ -175,6 +175,20 @@
   color: var(--text-muted);
   margin-top: var(--space-3);
 }
+.native-desk__campaign-draft {
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--line);
+}
+.native-desk__campaign-draft form {
+  max-width: 52rem;
+}
+.native-desk .native-desk__campaign-draft select {
+  height: auto;
+  min-height: 40px;
+}
+.native-desk .native-desk__campaign-draft textarea {
+  min-height: 96px;
+}
 .native-desk :is(input, textarea, select) {
   font: inherit;
   color: var(--text);

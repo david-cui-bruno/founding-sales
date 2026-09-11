@@ -554,14 +554,17 @@ it('links empty calls to Phone setup without implying permission or placing call
   expect(f.calls.every(c => /^(daily.get|delegation.status)$/.test(c.method))).toBe(true);
 });
 
-it.each([true, false])('keeps empty campaigns an honest read-only preview with known scope %s', async scoped => {
+it.each([true, false])('explains empty campaign draft prerequisites with known scope %s', async scoped => {
   const f = fixture(scoped);
   render(<NativeDeskRoute surface="campaigns" onOpenImport={vi.fn()} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
-  await screen.findByText(/Saved campaign versions \/ capability preview/);
+  await screen.findByText(/Save an unapproved call campaign draft for one worker-owned company/);
   const queue = screen.getByRole('navigation', { name: 'Campaigns queue' });
-  expect(within(queue).getByText(scoped ? /No saved campaign versions. This read-only preview/ : /Campaign scope is unavailable/)).toBeTruthy();
+  expect(within(queue).getByText(scoped ? /No saved campaign drafts. A configured worker and active company ownership/ : /Campaign scope is unavailable/)).toBeTruthy();
   const link = within(queue).getByRole('link', { name: 'Worker settings' });
   expect(link.getAttribute('href')).toBe('#/settings');
   expect(screen.queryByRole('button', { name: /create|approve|enroll|activate/i })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'New call campaign' }));
+  expect((screen.getByRole('button', { name: 'Save call campaign draft' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText(/does not enroll accounts, activate a campaign, or start outreach/)).toBeTruthy();
   expect(f.calls.every(c => /^(daily.get|delegation.status)$/.test(c.method))).toBe(true);
 });

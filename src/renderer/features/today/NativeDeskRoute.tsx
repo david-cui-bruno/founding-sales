@@ -36,6 +36,8 @@ import {
   meetingKey,
 } from './UpcomingMeetings';
 import { CampaignReview } from '../campaigns/CampaignReview';
+import { CallCampaignDraft } from '../campaigns/CallCampaignDraft';
+import { describeCallCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
 import './nativeDesk.css';
 export type NativeDeskApi = Pick<
   CalliePreloadApi,
@@ -659,7 +661,7 @@ export function NativeDesk({
               ? 'Calls, replies and the next conversation.'
               : surface === 'accounts'
                 ? 'Company context, from stored evidence.'
-                : 'Saved campaign versions / capability preview. Read-only, with no creation, editing, enrollment or activation here.'}
+                : 'Save an unapproved call campaign draft for one worker-owned company. Approval, enrollment and activation are not available here.'}
           </p>
         </div>
         <div className="native-desk__header-status">
@@ -694,6 +696,7 @@ export function NativeDesk({
           <button className="native-desk__refresh" aria-label="Refresh" title="Refresh" onClick={onRefresh}><RefreshCw size={16} aria-hidden="true" /></button>
         </div>
       </header>
+      {surface === 'campaigns' && <CallCampaignDraft api={api} snapshot={snapshot} config={configuration} readError={readError || !!localHold} onRefresh={onRefresh} />}
       {localHold && <p role="status">Local workflow unavailable or inconsistent. Worker actions are held. Refresh to check status.</p>}
       {incomplete && (!unavailableScope || snapshot.issues.some(issue => issue.code !== 'scope_unknown' && issue.code !== 'scope_mismatch')) && <p role="status">The daily snapshot is incomplete. Account work may be missing. Existing owner checks still apply.</p>}
       <div className="native-desk__layout">
@@ -796,7 +799,7 @@ export function NativeDesk({
                   </span>
                 </button>
               ))}
-              {!snapshot.campaigns.length && <><p>{unavailableScope ? 'Campaign scope is unavailable.' : 'No saved campaign versions. This read-only preview cannot create, edit, enroll or activate campaigns.'}</p><p><a href="#/settings" onClick={() => openSettingsSection('worker')}>Worker settings</a> configure worker access, not campaign creation or enrollment.</p></>}
+              {!snapshot.campaigns.length && <><p>{unavailableScope ? 'Campaign scope is unavailable.' : 'No saved campaign drafts. A configured worker and active company ownership are required to save one.'}</p><p><a href="#/settings" onClick={() => openSettingsSection('worker')}>Worker settings</a> configure access. Saving a draft does not enroll accounts or activate outreach.</p></>}
             </section>
           )}
         </nav>
@@ -811,7 +814,7 @@ export function NativeDesk({
                   : meeting
                     ? 'Upcoming meeting'
                     : campaign
-                      ? 'Read-only campaign preview'
+                      ? describeCallCampaignDraft(campaign.version) ? 'Saved call campaign draft' : 'Read-only campaign preview'
                       : 'Company context'}
               </span>
               <button aria-label="Close details" onClick={closeDetails}>
@@ -881,7 +884,7 @@ export function NativeDesk({
                   : keys.length ? 'Make room for a good conversation.' : surface === 'today' ? 'No conversations queued.' : surface === 'accounts' ? 'Your account library starts here.' : 'No saved campaign versions to preview.'}
               </h2>
               <p>
-                {selected ? 'Your selection is retained. Refresh to check its saved work.' : keys.length ? 'Select an item to review its company context and exact saved work.' : surface === 'today' ? unavailableScope ? 'Local work remains available. Worker-scoped calls, saved drafts and meetings are unavailable until a workspace is connected.' : 'No work in this local snapshot. Refresh to check for saved conversations and local commitments.' : surface === 'accounts' ? 'Local company evidence will appear here. Local records do not establish worker ownership.' : 'Saved campaign versions appear here as a read-only capability preview. Creation, editing, enrollment and activation are not available here.'}
+                {selected ? 'Your selection is retained. Refresh to check its saved work.' : keys.length ? 'Select an item to review its company context and exact saved work.' : surface === 'today' ? unavailableScope ? 'Local work remains available. Worker-scoped calls, saved drafts and meetings are unavailable until a workspace is connected.' : 'No work in this local snapshot. Refresh to check for saved conversations and local commitments.' : surface === 'accounts' ? 'Local company evidence will appear here. Local records do not establish worker ownership.' : 'Save a call campaign draft after worker ownership is configured, then review its exact company and offer here. Drafts are not approved, enrolled or active.'}
               </p>
               {!selected && unavailableScope && <a href="#/settings" onClick={() => openSettingsSection('worker')}>Review Settings</a>}
             </div>
