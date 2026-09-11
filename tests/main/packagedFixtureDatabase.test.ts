@@ -77,6 +77,45 @@ describe('bounded packaged fixture database preparation', () => {
     } };
   }
 
+  it('creates a current-schema local workspace fixture without pairing, execution authority or a transition', async () => {
+    expect(f).toHaveProperty('createLocalWorkspaceProfile');
+    await seed('bootstrap');
+    await f.captureBootstrapEnvelope();
+    const bootstrap = identity(dbPath('bootstrap'));
+    const resources = observeResources();
+    const result = await f.createLocalWorkspaceProfile(material);
+    expect(result.inspection.schemaVersion).toBe(24);
+    expect(result.inspection.aggregateCounts.people).toBe(2);
+    expect(identity(dbPath('bootstrap'))).toEqual(bootstrap);
+    expect(digest(envelopePath('current'))).toBe(digest(envelopePath('bootstrap')));
+    const key = createTestWorkspaceKey();
+    const database = openDatabase({path: dbPath('current'), key});
+    try {
+      expect(database.raw.prepare('SELECT id FROM pm_accounts').all()).toEqual([{id: result.accountId}]);
+      expect(database.raw.prepare('SELECT person_id, sales_cycle_id, callback_at FROM activities WHERE callback_at IS NOT NULL').all())
+        .toEqual([{person_id: result.personId, sales_cycle_id: result.salesCycleId, callback_at: result.callbackAt}]);
+      for (const table of ['workspace_workflow_state', 'workflow_transition_receipts', 'delegated_authorities', 'delegated_commands', 'campaign_enrollments']) {
+        expect(database.raw.prepare(`SELECT * FROM ${table}`).all()).toEqual([]);
+      }
+    } finally { closeDatabase(database); key.bytes.fill(0); }
+    const current = identity(dbPath('current'));
+    await expect(f.createLocalWorkspaceProfile(material)).rejects.toThrow(ERROR);
+    expect(identity(dbPath('current'))).toEqual(current);
+    expect(residue()).toEqual([]);
+    resources.assertReleased();
+  });
+
+  it('requires a captured envelope and matching bootstrap key before creating local fixture artifacts', async () => {
+    expect(f).toHaveProperty('createLocalWorkspaceProfile');
+    await seed('bootstrap');
+    await expect(f.createLocalWorkspaceProfile(material)).rejects.toThrow(ERROR);
+    expect(fs.existsSync(dbPath('current'))).toBe(false);
+    await f.captureBootstrapEnvelope();
+    await expect(f.createLocalWorkspaceProfile(materialFor(0x33))).rejects.toThrow(ERROR);
+    expect(fs.existsSync(dbPath('current'))).toBe(false);
+    expect(fs.existsSync(envelopePath('current'))).toBe(false);
+  });
+
   it('inspects genuine schema19 independently of current schema24 and refuses catalog drift', async () => {
     const key = createTestWorkspaceKey();
     fs.writeFileSync(dbPath('current'), '', { flag: 'wx', mode: 0o600 });
@@ -338,6 +377,7 @@ describe('bounded packaged fixture database preparation', () => {
       await expect(f.captureBootstrapEnvelope()).rejects.toThrow(ERROR);
       await expect(f.createHistoricalProfile(material)).rejects.toThrow(ERROR);
       await expect(f.createThrough16Profile(material)).rejects.toThrow(ERROR);
+      await expect(f.createLocalWorkspaceProfile(material)).rejects.toThrow(ERROR);
       await expect(f.cleanup()).rejects.toThrow(ERROR);
       expect(fs.existsSync(f.paths.root)).toBe(true);
       expect(() => f.captureChild(child)).toThrow(ERROR);

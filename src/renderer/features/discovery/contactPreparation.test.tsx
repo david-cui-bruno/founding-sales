@@ -225,3 +225,55 @@ it.each([{ written: false, refusalReason: 'credentials_unavailable' }, { written
   await screen.findByText(result.refusalReason === 'credentials_unavailable' ? /credentials are not provisioned/ : /last 30 days/);
   expect(screen.queryByText(/Contact info requested/)).toBeNull(); expect(f.api.findContactInfo).toHaveBeenCalledOnce();
 });
+
+it('opens exactly one selected suggestion workspace and discloses evidence only on demand', async () => {
+  const f = fixture();
+  f.discovery.get.mockResolvedValue(snapshot([brief('a'), brief('b')]));
+  const today = { get: vi.fn(async () => ({ lanes: [], dialBudget: 40, scheduledDials: 0, conversationTarget: 5, reviewErrorCount: 0, unreviewedBacklogCount: 6, unreviewedCloudSignalCount: 0, conversationsHeld: 0, revision: 1 })) } as unknown as TodayRouteApi;
+  function SuggestedRoute() { const inspector = useLeadInspector(); return <TodayRoute api={today} discoveryApi={f.discovery} onOpenLead={inspector.openLead} />; }
+  render(<StrictMode><LeadInspectorProvider api={f.api} discoveryApi={f.discovery}><SuggestedRoute /></LeadInspectorProvider></StrictMode>);
+  const region = await screen.findByRole('region', { name: 'Suggested contacts' });
+  expect(screen.queryByRole('complementary')).toBeNull();
+  fireEvent.click(await within(region).findByRole('button', { name: 'Owner a' }));
+  await screen.findByRole('complementary', { name: 'Owner a details' });
+  expect(screen.queryByText('Who handles maintenance?')).toBeNull();
+  fireEvent.click(screen.getByText('Details', { selector: 'summary' }));
+  expect(await screen.findByRole('region', { name: 'Discovery evidence for Owner a' })).toBeTruthy();
+  expect(screen.getByText('Who handles maintenance?')).toBeTruthy();
+  fireEvent.click(within(region).getByRole('button', { name: 'Owner b' }));
+  await screen.findByRole('complementary', { name: 'Owner b details' });
+  expect(screen.getAllByRole('complementary')).toHaveLength(1);
+  expect(screen.queryByRole('region', { name: 'Discovery evidence for Owner a' })).toBeNull();
+  expect(screen.queryByRole('button', { name: /Review unreviewed|Contact options|Refresh shortlist/ })).toBeNull();
+  expect(f.discovery.begin).not.toHaveBeenCalled(); expect(f.discovery.override).not.toHaveBeenCalled();
+  expect(f.api.findContactInfo).not.toHaveBeenCalled(); expect(f.api.beginOutbound).not.toHaveBeenCalled();
+});
+
+it('rejects another persons preparation receipt and retries only the retained explicit request', async () => {
+  const f = fixture();
+  f.discovery.begin.mockResolvedValueOnce({ personId: 'b', salesCycleId: 'cycle-b', assessmentId: brief().assessment!.id, actionId: 'wrong-owner', mutation: { revision: 2, affectedPersonIds: ['b'], affectedSalesCycleIds: ['cycle-b'] } });
+  f.mount(); await openA(); fireEvent.click(await action());
+  await screen.findByText(/Preparation response unavailable/);
+  expect(f.api.findContactInfo).not.toHaveBeenCalled();
+  const request = { ...f.discovery.begin.mock.calls[0][0] };
+  fireEvent.click(await action()); await screen.findByText(/Contact info requested/);
+  expect(f.discovery.begin.mock.calls[1][0]).toEqual(request);
+  expect(f.api.findContactInfo).toHaveBeenCalledOnce();
+});
+
+it('refreshes stale preparation evidence without automatically replaying the command', async () => {
+  const f = fixture(); f.discovery.begin.mockRejectedValueOnce(new Error('DISCOVERY_STALE_ASSESSMENT'));
+  f.mount(); await openA(); fireEvent.click(await action());
+  await screen.findByText(/Evidence changed. Check current evidence/);
+  await waitFor(() => expect(f.discovery.getBrief.mock.calls.length).toBeGreaterThanOrEqual(3));
+  expect(f.discovery.begin).toHaveBeenCalledOnce(); expect(f.api.findContactInfo).not.toHaveBeenCalled();
+});
+
+it('retains successful preparation when the subsequent contact read fails', async () => {
+  const f = fixture(); f.mount(); await openA();
+  f.api.get.mockRejectedValueOnce(new Error('private read failure'));
+  fireEvent.click(await action()); await screen.findByText(/Current contact evidence could not load/);
+  expect(screen.queryByText(/private read failure/)).toBeNull();
+  fireEvent.click(await action()); await screen.findByText(/Contact info requested/);
+  expect(f.discovery.begin).toHaveBeenCalledOnce(); expect(f.api.findContactInfo).toHaveBeenCalledOnce();
+});

@@ -12,6 +12,7 @@ import { assertDomainStorageReady, DOMAIN_MIGRATION_LEDGER, DOMAIN_SCHEMA_MANIFE
 import { createDomainServices } from '../../src/main/domain/createDomainServices';
 import { BUILTIN_PRIORITIZATION_RULE_V1 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
 import { seedDiscoveryOwner, DISCOVERY_NOW } from '../fixtures/discoveryDatabase';
+import { seedLocalWorkspaceAcceptance } from '../fixtures/localWorkspaceAcceptance';
 import { parseRecoveryKeyMaterial } from '../../src/main/security/recoveryKey';
 import type { WorkspaceKey } from '../../src/main/security/workspaceKeyTypes';
 
@@ -1076,6 +1077,32 @@ export function allocatePackagedFixtureDatabase(...unexpected: never[]) {
           seedDiscoveryOwner({ services, database }, { prefix: 'through16-incomplete', units: null, legacyUnreviewed: true });
           closeDatabase(database); database = undefined;
           return inspect('through16', databasePath('through16'), key, 16);
+        } finally {
+          try { if (database) closeDatabase(database); }
+          finally { try { envelope.assertUnchanged(); } finally { envelope.close(); } }
+        }
+      });
+    },
+    createLocalWorkspaceProfile(material: string) {
+      return withMaterial(material, async key => {
+        if (!envelopeCapture) fail();
+        absent(databasePath('current')); absent(envelopePath('current'));
+        const envelope = retain(envelopePath('bootstrap'), 64 * 1024);
+        let database: AppDatabase | undefined;
+        try {
+          if (!same(envelopeCapture.identity, fs.fstatSync(envelope.descriptor)) || envelopeCapture.sha256 !== envelope.sha256) fail();
+          inspect('bootstrap', databasePath('bootstrap'), key, 24);
+          envelope.assertUnchanged();
+          fs.writeFileSync(envelopePath('current'), envelope.bytes, { flag: 'wx', mode: 0o600 });
+          fs.writeFileSync(databasePath('current'), '', { flag: 'wx', mode: 0o600 });
+          database = openDatabase({ path: databasePath('current'), key });
+          const migration = await createMigrationRunner(productionMigrations)(database, {
+            workspaceKey: key, backupDirectory: join(paths.current, 'backups'),
+          });
+          if (migration.fromVersion !== 0 || migration.toVersion !== 24) fail();
+          const seeded = seedLocalWorkspaceAcceptance(database);
+          closeDatabase(database); database = undefined;
+          return { ...seeded, inspection: inspect('current', databasePath('current'), key, 24) };
         } finally {
           try { if (database) closeDatabase(database); }
           finally { try { envelope.assertUnchanged(); } finally { envelope.close(); } }

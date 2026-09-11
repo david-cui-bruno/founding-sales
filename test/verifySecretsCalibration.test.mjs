@@ -79,7 +79,9 @@ it('disposes only the exact full source span, path and generic rule with real pi
   const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'gitleaks-span-'));
   const exactPath = 'cloud/scripts/bootstrap-terraform-state.sh';
   const shape = 'kms_key_arn=""\nbucket_phase="absent"\n';
-  const fabricated = randomBytes(24).toString('base64url');
+  // Random base64url controls can accidentally contain pinned stopwords (e.g.
+  // "man-"). Use a public, unissued, calibrated value, without changing rules.
+  const fabricated = syntheticPat('span').slice(4);
   const candidate = readFileSync(new URL('../.gitleaks.toml', import.meta.url), 'utf8');
   let invocation = 0;
   const scan = (config, file, contents) => {
@@ -103,13 +105,13 @@ it('disposes only the exact full source span, path and generic rule with real pi
       expect(scan(candidate, exactPath, padding + shape).findings).toBe(0);
       expect(scan(candidate, exactPath, padding + shape.replace('absent', fabricated)).rules).toContain('generic-api-key');
     }
-    for (const contents of [
+    for (const [index, contents] of [
       `kms_key_arn="${fabricated}"\n`,
       shape + `api_key="${fabricated}"\n`,
       `api_key="${fabricated}"\n` + shape,
       shape.replace('"absent"', `"absent"; api_key="${fabricated}"`),
       shape.replace('absent', 'unknown'), shape.replace(/\n/g, '\r\n'),
-    ]) expect(scan(candidate, exactPath, contents).rules).toContain('generic-api-key');
+    ].entries()) expect(scan(candidate, exactPath, contents).rules, `source mutation ${index}`).toContain('generic-api-key');
     for (const path of ['other.sh', `nested/${exactPath}`, `${exactPath}.bak`]) {
       expect(scan(candidate, path, shape).rules).toContain('generic-api-key');
     }

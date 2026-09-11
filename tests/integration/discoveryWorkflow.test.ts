@@ -132,7 +132,9 @@ async function fixture(input: { temp?: TempDatabase; research?: DiscoveryResearc
   const drain = async () => { for (let n = 0; n < 12; n++) { await turn(); if (![...scheduled].some(job => job.at <= Date.now())) return; }
     throw new Error('Discovery did not quiesce within twelve bounded turns'); };
   const mount = async () => { const health = await api.health.get(); return render(createElement(FounderApp, { api,
-    health: { status: 'ready', health, retry: unexpected } })); };
+    health: { status: 'ready', health, retry: unexpected },
+    theme: { preference: 'system', resolvedTheme: 'light', setPreference: unexpected },
+    density: { density: 'comfortable', setDensity: unexpected } })); };
   return { temp, runtime, database, services, api, worker, scheduled, late, clock, stop, turn, drain, mount, manualReview, facadeReview };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;

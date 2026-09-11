@@ -12,6 +12,8 @@ describe('navigationItems', () => {
       })),
     ).toEqual([
       { route: 'today', label: 'Today', enabled: true },
+      { route: 'accounts', label: 'Accounts', enabled: true },
+      { route: 'campaigns', label: 'Campaigns', enabled: true },
       { route: 'leads', label: 'Leads', enabled: true },
       { route: 'pipeline', label: 'Pipeline', enabled: true },
       { route: 'conversations', label: 'Conversations', enabled: true },

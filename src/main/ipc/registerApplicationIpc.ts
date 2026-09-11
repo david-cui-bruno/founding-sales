@@ -1,3 +1,7 @@
+import { registerLocalWorkspaceIpc } from '../workspace/registerLocalWorkspaceIpc';
+import { createLocalWorkspaceProvider } from '../workspace/localWorkspaceProvider';
+import { registerDailyIpc } from '../today/registerDailyIpc';
+import type { DailyApi } from '../../shared/contracts/dailyContract';
 import { createDiscoveryProvider } from '../discovery/discoveryProvider';
 import { registerDiscoveryIpc } from '../discovery/registerDiscoveryIpc';
 import type { OutboundCommandServiceApi } from '../communications/outboundPorts';
@@ -43,6 +47,8 @@ export type FeatureRegistrars = {
   registerLeadsIpc: typeof registerLeadsIpc;
   registerLeadDetailIpc: typeof registerLeadDetailIpc;
   registerTodayIpc: typeof registerTodayIpc;
+  registerDailyIpc: typeof registerDailyIpc;
+  registerLocalWorkspaceIpc: typeof registerLocalWorkspaceIpc;
   registerPipelineIpc: typeof registerPipelineIpc;
   registerReviewIpc: typeof registerReviewIpc;
   registerFridayIpc: typeof registerFridayIpc;
@@ -60,6 +66,8 @@ const defaultRegistrars: FeatureRegistrars = {
   registerLeadsIpc,
   registerLeadDetailIpc,
   registerTodayIpc,
+  registerDailyIpc,
+  registerLocalWorkspaceIpc,
   registerPipelineIpc,
   registerReviewIpc,
   registerFridayIpc,
@@ -106,6 +114,10 @@ export function createLeadDetailProvider(
         : enrichmentRequester.request(input)
     ),
   };
+}
+
+export function createDailyProvider(runtime: Pick<DomainGate, 'withDomain'>): DailyApi {
+  return { get: () => runtime.withDomain(domain => domain.getDaily()) };
 }
 
 export function createTodayProvider(runtime: DomainGate): TodayProvider {
@@ -234,7 +246,7 @@ export function createShellProvider(
  * reverse registration order.
  */
 export function registerApplicationIpc(
-  runtime: DomainGate,
+  runtime: DomainGate & Pick<FoundationRuntime, 'withDatabase'>,
   isTrustedRendererUrl: ((url: string) => boolean) | undefined,
   registrars: FeatureRegistrars | undefined,
   sourcingProvider: SourcingProvider,
@@ -290,6 +302,8 @@ export function registerApplicationIpc(
       },
       isTrustedRendererUrl,
     }),
+    () => registrars.registerDailyIpc(createDailyProvider(runtime), isTrustedRendererUrl),
+    () => registrars.registerLocalWorkspaceIpc(createLocalWorkspaceProvider(runtime), isTrustedRendererUrl),
   ];
 
   const unregisters: (() => void)[] = [];

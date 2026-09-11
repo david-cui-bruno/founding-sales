@@ -54,8 +54,8 @@ export function stageBuildContext(root, destination, run = spawnSync) {
   for (const path of generated) if (existsSync(join(root, path))) { assertSourcePath(root, path); count += copyTree(join(root, path), join(destination, path), root); }
   if (!count) fail(); return count;
 }
-export function stagePackage(root, destination) {
-  const app = selectPackagedApp(join(root, 'out'));
+export function stagePackage(root, destination, outDirectory = join(root, 'out')) {
+  const app = selectPackagedApp(resolve(root, outDirectory));
   const asar = join(app, 'Contents/Resources/app.asar');
   const unpacked = join(app, 'Contents/Resources/app.asar.unpacked');
   if (!lstatSync(unpacked).isDirectory() || !lstatSync(join(app, 'Contents/Helpers')).isDirectory()) fail();
@@ -99,7 +99,7 @@ export function scanWithGitleaks({ root, target, kind, temporary, run = spawnSyn
   // Never emit findings, paths, snippets, arbitrary rule names or tool stderr.
   return { kind, status: findings.length ? 'findings' : 'passed', findings: findings.length };
 }
-export function verifySecrets({ root = projectRoot, mode = 'source', run = spawnSync } = {}) {
+export function verifySecrets({ root = projectRoot, mode = 'source', outDirectory = join(root, 'out'), run = spawnSync } = {}) {
   if (!['source', 'package'].includes(mode)) fail();
   if (checked('gitleaks', ['version'], root, run).trim() !== '8.30.1') fail();
   const temporary = mkdtempSync(join(tmpdir(), 'callie-secret-scan-')); chmodSync(temporary, 0o700);
@@ -112,7 +112,7 @@ export function verifySecrets({ root = projectRoot, mode = 'source', run = spawn
       const files = stageBuildContext(root, stage, run);
       results.push({ ...scanWithGitleaks({ root, target: stage, kind: 'context', temporary, run }), files });
     } else {
-      const files = stagePackage(root, stage);
+      const files = stagePackage(root, stage, outDirectory);
       results.push({ ...scanWithGitleaks({ root, target: stage, kind: 'package', temporary, run }), files });
     }
     return results;
@@ -120,8 +120,8 @@ export function verifySecrets({ root = projectRoot, mode = 'source', run = spawn
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
-    if (process.argv.length > 3 || (process.argv[2] !== undefined && process.argv[2] !== '--package')) fail();
-    const results = verifySecrets({ mode: process.argv[2] === '--package' ? 'package' : 'source' });
+    if (process.argv.length > 4 || (process.argv[2] !== undefined && process.argv[2] !== '--package')) fail();
+    const results = verifySecrets({ mode: process.argv[2] === '--package' ? 'package' : 'source', outDirectory: resolve(projectRoot, process.argv[3] ?? 'out') });
     console.log(JSON.stringify({ scanner: 'gitleaks-8.30.1', results }));
     if (results.some(result => result.status !== 'passed')) process.exitCode = 1;
   } catch { console.error('SECRET_VERIFICATION_FAILED'); process.exitCode = 1; }

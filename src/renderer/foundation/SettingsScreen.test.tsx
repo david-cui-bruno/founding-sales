@@ -511,3 +511,63 @@ it('never erases existing sender settings when credentials are entered during a 
   fireEvent.click(screen.getByRole('button', { name: 'Save connections' }));
   await waitFor(() => expect(api.configure).toHaveBeenCalledWith(expect.objectContaining({ senderName: 'Saved Founder', postalAddress: '123 Saved St' })));
 });
+
+describe('Local workflow transition', () => {
+  const receipt: import('../../shared/contracts/localWorkspaceContract').LocalWorkflowReceipt = { commandId: 'committed-command', manifestId: 'committed-manifest', mode: 'meeting_first' as const, revision: 1, occurredAt: '2026-09-09T12:00:00.000Z', cancelledActionIds: [], stoppedEnrollmentIds: [], preservedActionIds: ['not-a-due-count'], parkedPersonIds: [], callbackEvidenceIds: [], unknownDraftIds: [], parkedReviewActions: [], parkedActions: [] };
+  function localApi() {
+    const snapshot: import('../../shared/contracts/localWorkspaceContract').LocalWorkspaceSnapshot = { scope: 'local_database', generatedAt: receipt.occurredAt, workflowMode: 'legacy', transitionReceipt: null, accounts: { state: 'available', snapshots: [] } };
+    const unavailableCompanyIntake = async () => { throw Error('Company intake unavailable in this fixture'); };
+    return { get: vi.fn(async () => snapshot), getCommitments: vi.fn(), reviewCompany: vi.fn(unavailableCompanyIntake), createCompany: vi.fn(unavailableCompanyIntake), getCompanyCreateStatus: vi.fn(unavailableCompanyIntake), transition: vi.fn(async (command: import('../../shared/contracts/localWorkspaceContract').LocalWorkflowTransition) => ({ ...receipt, commandId: command.commandId, manifestId: command.manifestId })) };
+  }
+  async function open(api = localApi()) {
+    const view = renderSettings({ localWorkspaceApi: api });
+    expect(api.get).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Data & storage' }));
+    await screen.findByRole('checkbox', { name: /one-way local change/i });
+    return { api, ...view };
+  }
+  it('reads only in Data & storage and requires acknowledgement before one immutable submission', async () => {
+    const { api } = await open();
+    const button = screen.getByRole('button', { name: 'Switch to Native Desk' });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(api.transition).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('checkbox', { name: /one-way local change/i }));
+    fireEvent.click(button); fireEvent.click(button);
+    await screen.findByText(/Native Desk is active/i);
+    expect(api.transition).toHaveBeenCalledTimes(1);
+    expect(api.transition.mock.calls[0][0]).toEqual({ commandId: expect.any(String), expectedMode: 'legacy', manifestId: expect.any(String) });
+  });
+  it('recovers a lost response through canonical status and reopens without submitting', async () => {
+    const api = localApi();
+    api.transition.mockImplementation(async () => { api.get.mockResolvedValue({ ...(await localApi().get()), workflowMode: 'meeting_first', transitionReceipt: receipt }); throw Error('lost response'); });
+    await open(api);
+    fireEvent.click(screen.getByRole('checkbox', { name: /one-way local change/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to Native Desk' }));
+    await screen.findByText(/result is unknown/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Check status' }));
+    await screen.findByText(/Native Desk is active/i);
+    expect(screen.getByText(/committed-manifest/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Data & storage' }));
+    await screen.findByText(/Native Desk is active/i);
+    expect(api.transition).toHaveBeenCalledTimes(1);
+  });
+  it('holds failed status and retries only the exact in-view request', async () => {
+    const api = localApi(); api.transition.mockRejectedValueOnce(Error('lost'));
+    await open(api);
+    fireEvent.click(screen.getByRole('checkbox', { name: /one-way local change/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to Native Desk' }));
+    await screen.findByText(/result is unknown/i);
+    const original = api.transition.mock.calls[0][0];
+    api.get.mockRejectedValueOnce(Error('private error'));
+    fireEvent.click(screen.getByRole('button', { name: 'Check status' }));
+    await screen.findByText(/Workflow status unavailable/i);
+    expect(screen.queryByRole('button', { name: 'Switch to Native Desk' })).toBeNull();
+    expect(screen.queryByText(/private error/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Check status' }));
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Retry same transition' }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry same transition' }));
+    await screen.findByText(/Native Desk is active/i);
+    expect(api.transition.mock.calls[1][0]).toBe(original);
+  });
+});

@@ -118,10 +118,18 @@ describe('NavigationRail window chrome', () => {
       const rail = screen.getByRole('navigation', { name: 'Primary' });
       const links = screen.getAllByRole<HTMLAnchorElement>('link');
       expect(links.map((link) => link.getAttribute('href'))).toEqual([
-        '#/today', '#/leads', '#/pipeline', '#/conversations',
+        '#/today', '#/accounts', '#/campaigns', '#/leads', '#/pipeline', '#/conversations',
         '#/learnings', '#/friday', '#/inbox', '#/settings',
       ]);
-      expect(Array.from(rail.querySelectorAll('a, button, input, select, textarea, [tabindex]'))).toEqual(links);
+      const more = rail.querySelector<HTMLButtonElement>('.nav-rail__more-toggle')!;
+      expect(more).not.toBeNull();
+      expect(more.getAttribute('aria-label')).toBe('More workspaces');
+      expect(more.getAttribute('aria-expanded')).toBe('false');
+      expect(getComputedStyle(more).display).toBe('none');
+      // The approved native-only disclosure is in the DOM but cannot join legacy tab order.
+      expect(Array.from(rail.querySelectorAll('a, button, input, select, textarea, [tabindex]'))).toEqual([
+        ...links.slice(0, 3), more, ...links.slice(3),
+      ]);
       for (const link of links) {
         expect(link.tabIndex).toBe(0);
         expect(link.getAttribute('target')).toBeNull();
@@ -135,4 +143,22 @@ describe('NavigationRail window chrome', () => {
       expect(screen.getByLabelText('3 items awaiting review').textContent).toBe('3');
     },
   );
+});
+
+it('opts into Native Desk branding only while a stored meeting-first surface is present', () => {
+  const nativeStyle = document.createElement('style');
+  nativeStyle.textContent = readFileSync('src/renderer/features/today/nativeDesk.css', 'utf8');
+  document.head.append(nativeStyle);
+  try {
+    const { rerender, container } = render(<div className="app-shell"><RailHarness /></div>);
+    const brand = container.querySelector<HTMLElement>('.nav-rail__brand-native')!;
+    expect(getComputedStyle(brand).display).toBe('none');
+    rerender(<div className="app-shell"><RailHarness /><section className="native-desk" data-presentation="native-a" data-workflow-mode="meeting_first" /></div>);
+    expect(getComputedStyle(brand).display).toBe('inline');
+    expect(getComputedStyle(container.querySelector('.nav-rail__brand')!).display).toBe('none');
+    expect(brand.textContent).toBe('Callie');
+    rerender(<div className="app-shell"><RailHarness /></div>);
+    expect(getComputedStyle(brand).display).toBe('none');
+    expect(getComputedStyle(container.querySelector('.nav-rail__brand')!).display).not.toBe('none');
+  } finally { nativeStyle.remove(); }
 });

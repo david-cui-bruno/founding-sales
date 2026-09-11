@@ -35,6 +35,7 @@ test('Bauhaus identity reaches the real shell, heading and navigation without re
     await page.getByRole('link', { name: 'Today', exact: true }).click();
     await expect(page.locator('.nav-rail__brand')).toHaveText('FSS');
     await expect(page.getByRole('heading', { name: 'Today', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Contacts due', exact: true })).toBeVisible();
     const styles = await page.evaluate(() => {
       const heading = document.querySelector('main h1')!;
       const main = document.querySelector('.app-shell__workspace')!;
@@ -54,6 +55,7 @@ test('Bauhaus identity reaches the real shell, heading and navigation without re
     expect(brandBox!.y).toBeGreaterThanOrEqual(nativeBox!.y + nativeBox!.height);
     await setTheme(page, 'dark');
     await page.reload();
+    await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await expect(page.locator('.nav-rail__brand')).toHaveText('FSS');
   } finally { await workspace.close(); }

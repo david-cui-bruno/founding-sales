@@ -16,9 +16,12 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test --workers=1 tests/e2e/foundation.spec.ts tests/e2e/founderWorkflow.spec.ts tests/e2e/todayWorkflow.spec.ts tests/e2e/importWorkflow.spec.ts tests/e2e/fridayScoreboard.spec.ts tests/e2e/conversationsLearnings.spec.ts tests/e2e/sourcingInbox.spec.ts tests/e2e/accessibility.spec.ts tests/e2e/appleBridgeSmoke.spec.ts tests/e2e/discoveryWorkflow.spec.ts tests/e2e/bauhausWorkflow.spec.ts tests/e2e/functionalEmail.spec.ts",
+    "test:browser:native-desk": "playwright test --workers=1 tests/browser/nativeDesk.spec.ts tests/browser/nativeDeskComposition.spec.ts tests/browser/startupPresentation.spec.ts",
+    "test:e2e": "playwright test --workers=1 tests/e2e/foundation.spec.ts tests/e2e/founderWorkflow.spec.ts tests/e2e/todayWorkflow.spec.ts tests/e2e/importWorkflow.spec.ts tests/e2e/fridayScoreboard.spec.ts tests/e2e/conversationsLearnings.spec.ts tests/e2e/sourcingInbox.spec.ts tests/e2e/accessibility.spec.ts tests/e2e/appleBridgeSmoke.spec.ts tests/e2e/discoveryWorkflow.spec.ts tests/e2e/bauhausWorkflow.spec.ts tests/e2e/functionalEmail.spec.ts tests/e2e/meetingFirstWorkspace.spec.ts tests/e2e/accountPreparation.spec.ts",
     "test:e2e:apple": "playwright test --workers=1 tests/e2e/appleBridgeSmoke.spec.ts",
     "typecheck": "tsc --noEmit",
+    "test:helpers:node": "node --test test/appleBridgeBuild.test.mjs test/verifyAppleBridgePackage.test.mjs",
+    "test:backup:electron": "CALLIE_TEST_SYNTHETIC_ELECTRON=1 vitest run test/preReleaseElectronHost.test.mjs",
     "test:swift": "swift test --package-path native/apple-bridge",
     "build:operational-tools": "node scripts/buildOperationalTools.mjs",
     "build:swift": "swift build --package-path native/apple-bridge -c release --arch arm64",
@@ -36,7 +39,7 @@
     "verify:secrets": "node scripts/verifySecrets.mjs",
     "release:marker": "node scripts/writeReleaseMarker.mjs",
     "backup:pre-release": "node scripts/createPreReleaseBackup.mjs",
-    "verify:release": "npm run typecheck && npm run lint:tracked && npm run test && npm run verify:lambdas && npm run package && node scripts/verifyPackage.mjs && npm run verify:secrets && node scripts/verifySecrets.mjs --package && npm run test:e2e && node scripts/verifyPackage.mjs"
+    "verify:release": "node scripts/verifyRelease.mjs"
   },
   "keywords": [],
   "author": {

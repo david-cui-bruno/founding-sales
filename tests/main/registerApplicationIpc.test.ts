@@ -44,6 +44,7 @@ const recoveryProvider = { status: vi.fn(), beginSetup: vi.fn(), saveSetupMateri
 type Gate = Parameters<typeof registerApplicationIpc>[0];
 
 const fakeGate = (domain: Partial<FounderSalesDomain> = {}): Gate => ({
+  withDatabase: vi.fn(),
   withDomain: vi.fn(async (operation: (domain: FounderSalesDomain) => unknown) =>
     operation(domain as FounderSalesDomain)) as Gate['withDomain'],
   getHealth: vi.fn(async () => ({})),
@@ -115,6 +116,8 @@ describe('registerApplicationIpc', () => {
       registerShellIpc: track('shell', unregisters[11]!),
       registerRecoveryIpc: track('recovery', unregisters[12]!),
       registerDiscoveryIpc: track('discovery', unregisters[13]!),
+      registerDailyIpc: track('daily', unregisters[14]!),
+      registerLocalWorkspaceIpc: track('localWorkspace', unregisters[15]!),
     } as unknown as FeatureRegistrars;
     return { registrars, calls };
   }
@@ -165,7 +168,7 @@ describe('registerApplicationIpc', () => {
     expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
   });
 
-  it.each([3, 7, 13, 14])('rolls back all successful outer registrations when registrar %s fails', (nth) => {
+  it.each([3, 7, 13, 14, 15, 16])('rolls back all successful outer registrations when registrar %s fails', (nth) => {
     const registry = new Set<string>();
     const order: string[] = [];
     const registrationError = new Error('register');
@@ -207,7 +210,7 @@ describe('registerApplicationIpc', () => {
     expect(registry.size).toBe(0);
     expect(order).toEqual(Object.keys(registrars).reverse());
     expect(dispose).not.toThrow();
-    expect(order).toHaveLength(14);
+    expect(order).toHaveLength(16);
   });
 
   it('leases the current domain separately for every actual discovery handler invocation', async () => {
@@ -221,7 +224,7 @@ describe('registerApplicationIpc', () => {
     const mutation = { revision: 1, affectedPersonIds: ['p'], affectedSalesCycleIds: ['s'] };
     const receipt = { mutation, personId: 'p', salesCycleId: 's', assessmentId: request.assessmentId, actionId: 'a' };
     let current: Partial<FounderSalesDomain> = { getDiscovery: () => snapshot };
-    const gate: Gate = { getHealth: vi.fn(), withDomain: vi.fn(async operation => operation(current as FounderSalesDomain)) };
+    const gate: Gate = { withDatabase: vi.fn(), getHealth: vi.fn(), withDomain: vi.fn(async operation => operation(current as FounderSalesDomain)) };
     const dispose = registerApplicationIpc(gate, undefined, undefined, explicitSourcingProvider(), recoveryProvider);
     expect(gate.withDomain).not.toHaveBeenCalled();
     const api = createCallieApi({ invoke: (channel, ...args) => Promise.resolve(
@@ -259,7 +262,7 @@ describe('registerApplicationIpc', () => {
     const outbound = { beginOutbound: vi.fn(async () => receipt), getCapabilities: vi.fn(), invalidate: vi.fn(), resumeAfterUnlock: vi.fn(), dispose: vi.fn() };
     const enrichment = { request: vi.fn(async () => ({ written: false, refusalReason: 'credentials_unavailable' as const })) };
     const shell = { revealDatabase: vi.fn(), revealLogDirectory: vi.fn() };
-    const { registrars } = fakeRegistrars(Array.from({ length: 14 }, () => vi.fn()));
+    const { registrars } = fakeRegistrars(Array.from({ length: 16 }, () => vi.fn()));
     const registerDetail = vi.fn<FeatureRegistrars['registerLeadDetailIpc']>(() => vi.fn());
     registrars.registerLeadDetailIpc = registerDetail;
     const gate = fakeGate();
@@ -276,8 +279,8 @@ describe('registerApplicationIpc', () => {
     expect(gate.withDomain).not.toHaveBeenCalled();
   });
 
-  it('registers all fourteen feature slices and unregisters each exactly once', () => {
-    const unregisters = Array.from({ length: 14 }, () => vi.fn());
+  it('registers all sixteen feature slices and unregisters each exactly once', () => {
+    const unregisters = Array.from({ length: 16 }, () => vi.fn());
     const { registrars, calls } = fakeRegistrars(unregisters);
 
     const unregister = registerApplicationIpc(
@@ -286,7 +289,7 @@ describe('registerApplicationIpc', () => {
     expect(calls).toEqual([
       'health', 'leads', 'leadDetail', 'today',
       'pipeline', 'review', 'friday', 'imports',
-      'conversations', 'learnings', 'sourcing', 'shell', 'recovery', 'discovery',
+      'conversations', 'learnings', 'sourcing', 'shell', 'recovery', 'discovery', 'daily', 'localWorkspace',
     ]);
 
     unregister();
@@ -299,20 +302,20 @@ describe('registerApplicationIpc', () => {
     const unregisters = [
       'health', 'leads', 'leadDetail', 'today',
       'pipeline', 'review', 'friday', 'imports',
-      'conversations', 'learnings', 'sourcing', 'shell', 'recovery', 'discovery',
+      'conversations', 'learnings', 'sourcing', 'shell', 'recovery', 'discovery', 'daily', 'localWorkspace',
     ].map((name) => vi.fn(() => order.push(name)));
     const { registrars } = fakeRegistrars(unregisters);
 
     registerApplicationIpc(fakeGate(), undefined, registrars, explicitSourcingProvider(), recoveryProvider)();
     expect(order).toEqual([
-      'discovery', 'recovery', 'shell', 'sourcing', 'learnings', 'conversations',
+      'localWorkspace', 'daily', 'discovery', 'recovery', 'shell', 'sourcing', 'learnings', 'conversations',
       'imports', 'friday', 'review', 'pipeline',
       'today', 'leadDetail', 'leads', 'health',
     ]);
   });
 
   it('passes the trusted-URL predicate to every slice registrar', () => {
-    const unregisters = Array.from({ length: 14 }, () => vi.fn());
+    const unregisters = Array.from({ length: 16 }, () => vi.fn());
     const { registrars } = fakeRegistrars(unregisters);
     const trust = (url: string) => url.startsWith('app://');
 
@@ -324,7 +327,7 @@ describe('registerApplicationIpc', () => {
   });
 
   it('registers the primary runtime health unchanged instead of overlaying sourcing IPC status', async () => {
-    const unregisters = Array.from({ length: 14 }, () => vi.fn());
+    const unregisters = Array.from({ length: 16 }, () => vi.fn());
     const { registrars } = fakeRegistrars(unregisters);
     let registeredHealth: { getHealth(): Promise<unknown> } | undefined;
     registrars.registerHealthIpc = vi.fn((provider) => {
@@ -354,7 +357,7 @@ describe('registerApplicationIpc', () => {
   });
 
   it('rejects a missing sourcing provider instead of registering a healthy fallback', () => {
-    const unregisters = Array.from({ length: 14 }, () => vi.fn());
+    const unregisters = Array.from({ length: 16 }, () => vi.fn());
     const { registrars, calls } = fakeRegistrars(unregisters);
 
     expect(() => registerApplicationIpc(

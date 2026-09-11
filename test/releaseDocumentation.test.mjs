@@ -1,7 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,29 +19,11 @@ it('parses both workflow sources and syntax-checks each shell gate without execu
     }
   }
 });
-it('executes one-artifact release ordering with fake tools and short-circuits every failing stage', () => {
-  const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'release-order-'));
-  const gate = JSON.parse(readFileSync(join(projectRoot, 'package.json'))).scripts['verify:release'];
-  const expected = ['npm run typecheck', 'npm run lint:tracked', 'npm run test', 'npm run verify:lambdas', 'npm run package', 'node scripts/verifyPackage.mjs', 'npm run verify:secrets', 'node scripts/verifySecrets.mjs --package', 'npm run test:e2e', 'node scripts/verifyPackage.mjs'];
-  try {
-    for (const tool of ['npm', 'node']) {
-      const file = join(root, tool);
-      writeFileSync(file, `#!${process.execPath}\nconst fs=require('fs');const line=${JSON.stringify(tool + ' ')}+process.argv.slice(2).join(' ');fs.appendFileSync(process.env.FIXTURE_LOG,line+'\\n');const count=fs.readFileSync(process.env.FIXTURE_LOG,'utf8').trim().split('\\n').length;process.exit(count===Number(process.env.FAIL_STAGE)?1:0);`); chmodSync(file, 0o755);
-    }
-    for (let failure = 0; failure <= expected.length; failure++) {
-      const log = join(root, `log-${failure}`);
-      const result = spawnSync('/bin/bash', ['-c', gate], { cwd: root, env: { ...process.env, PATH: root, FIXTURE_LOG: log, FAIL_STAGE: String(failure) }, encoding: 'utf8' });
-      expect(result.status).toBe(failure ? 1 : 0);
-      expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(expected.slice(0, failure || expected.length));
-    }
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
-
 describe('release verification documentation', () => {
-  it('separates exact current16 pre-release backup from historical15 audit and the older-workspace protected-copy hold', () => {
+  it('separates exact current24 pre-release backup from historical15 audit and the older-workspace protected-copy hold', () => {
     const readme = readFileSync(join(projectRoot, 'README.md'), 'utf8');
     const plan = readFileSync(join(projectRoot, 'docs/superpowers/plans/2026-09-04-runtime-recovery-security-hardening.md'), 'utf8');
-    expect(readme).toContain('exact current schema16 only');
+    expect(readme).toContain('exact current schema24 only');
     expect(readme).toContain('supersedes the unreleased schema15-only host');
     expect(readme).toContain('historical schema15 audit');
     expect(readme).toMatch(/older founder workspace[\s\S]*separately approved protected-copy workflow/);
@@ -55,16 +36,14 @@ describe('release verification documentation', () => {
     const packageJson = JSON.parse(
       readFileSync(join(projectRoot, 'package.json'), 'utf8'),
     );
-    const gate = packageJson.scripts['verify:release'];
-    expect(typeof gate).toBe('string');
-    expect((gate.match(/npm run package/g) ?? []).length).toBe(1);
-    expect(gate).toContain('npm run lint:tracked');
-    expect(gate).toContain('npm run verify:lambdas');
-    expect(gate).toContain('npm run verify:secrets');
-    expect(gate).toContain('node scripts/verifySecrets.mjs --package');
-    expect(gate).not.toContain('backup:pre-release');
-    expect(gate.indexOf('npm run package')).toBeLessThan(gate.indexOf('npm run test:e2e'));
-    expect(gate.lastIndexOf('node scripts/verifyPackage.mjs')).toBeGreaterThan(gate.indexOf('npm run test:e2e'));
+    expect(packageJson.scripts['verify:release']).toBe('node scripts/verifyRelease.mjs');
+    expect(packageJson.scripts['test:helpers:node']).toBe('node --test test/appleBridgeBuild.test.mjs test/verifyAppleBridgePackage.test.mjs');
+    expect(packageJson.scripts['test:backup:electron']).toBe('CALLIE_TEST_SYNTHETIC_ELECTRON=1 vitest run test/preReleaseElectronHost.test.mjs');
+    expect(readme).toContain('eleven independent');
+    expect(readme).toContain('CALLIE_RELEASE_OUT_DIR');
+    expect(readme).toContain('CALLIE_E2E_OUT_DIR');
+    expect(readme).toContain('ASAR SHA256');
+    expect(readme).toContain('owned encrypted migration/transition fixtures');
     expect(readme).toContain('npm run verify:release');
     expect(readme).toContain('CI never');
     expect(readme).toMatch(/separately\s+authorized/);
@@ -130,6 +109,10 @@ describe('source-only workflow policy', () => {
     expect(release).toContain('workflow_dispatch:'); expect(release).toContain('audited_sha:'); expect(release).toContain('tag:');
     expect(release).toContain('ARM64'); expect(release).toContain('CALLIE_APPROVED_RELEASE_SHA'); expect(release).toContain('CALLIE_RELEASE_RUNNER_APPROVED');
     expect(release).toContain('scripts/writeReleaseMarker.mjs --verify-ref'); expect(release).toContain('npm run verify:release');
+    expect(ci).toContain('npm run test:browser:native-desk');
+    expect(ci).toContain('npm run test:helpers:node');
+    expect(release).toContain('test:swift');
+    expect(release).toContain('test:backup:electron');
     expect(release).toContain('sw_vers'); expect(release).toContain('xcrun');
   });
 });

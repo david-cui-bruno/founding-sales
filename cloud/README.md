@@ -47,7 +47,7 @@ tofu fmt -check -recursive cloud/terraform
 ```
 
 These commands require Node24.20.0 and separately installed lockfiles for all
-**ten** Lambda packages. Install shared first, then each of the nine function
+**eleven** Lambda packages. Install shared first, then each of the ten function
 packages from each package's pinned lockfile. Use the root README's tracked
 lockfile install loop with its explicit Node PATH prefix. The verifier does
 not install dependencies and runs no deployments or

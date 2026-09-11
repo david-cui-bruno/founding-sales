@@ -2,6 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { validateReleaseMarker } from './releaseMarkerContract.cjs';
+export { validateReleaseMarker } from './releaseMarkerContract.cjs';
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const shaPattern = /^[a-f0-9]{40}$/;
 const fail = () => { throw new Error('RELEASE_PROVENANCE_FAILED'); };
@@ -16,13 +18,6 @@ export function assertCleanHead({ root = projectRoot, expectedSha, run = spawnSy
   if (!shaPattern.test(head) || (expectedSha !== undefined && head !== expectedSha)) fail();
   if (git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none'], run) !== '') fail();
   return head;
-}
-export function validateReleaseMarker(marker) {
-  if (!marker || Array.isArray(marker) || JSON.stringify(Object.keys(marker).sort()) !== JSON.stringify(['builtAt', 'commitSha', 'format', 'version'])
-    || marker.format !== 'callie-release' || marker.version !== 1 || !shaPattern.test(marker.commitSha)
-    || typeof marker.builtAt !== 'string' || !Number.isFinite(Date.parse(marker.builtAt))
-    || new Date(marker.builtAt).toISOString() !== marker.builtAt) fail();
-  return marker;
 }
 export function readReleaseMarker({ root = projectRoot } = {}) {
   return validateReleaseMarker(JSON.parse(readFileSync(join(root, 'build/generated/release-marker.json'), 'utf8')));

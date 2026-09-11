@@ -183,7 +183,7 @@ const assertCurrentReadiness = (): void => undefined;
         expect(outbound).toBe(service);
         expect(factory).toHaveBeenCalledTimes(1);
         expect(listeners.size).toBe(3);
-        const names = ['registerHealthIpc', 'registerLeadsIpc', 'registerTodayIpc', 'registerPipelineIpc',
+        const names = ['registerHealthIpc', 'registerLeadsIpc', 'registerTodayIpc', 'registerDailyIpc', 'registerLocalWorkspaceIpc', 'registerPipelineIpc',
           'registerReviewIpc', 'registerFridayIpc', 'registerImportIpc', 'registerConversationsIpc',
           'registerLearningsIpc', 'registerSourcingIpc', 'registerShellIpc', 'registerRecoveryIpc', 'registerDiscoveryIpc'];
         const registrars = Object.fromEntries(names.map((name) => [name, () => {

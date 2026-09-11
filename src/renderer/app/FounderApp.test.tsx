@@ -9,7 +9,15 @@ import type { TodaySnapshot } from '../../shared/contracts/todayContract';
 import type { LeadDetail } from '../../shared/contracts/leadDetailContract';
 import type { CalliePreloadApi } from '../../shared/preload';
 import type { FoundationHealth } from '../foundation/useFoundationHealth';
-import { FounderApp } from './FounderApp';
+import { FounderApp, type FounderAppProps } from './FounderApp';
+import { useTheme } from './useTheme';
+import { useDensity } from './useDensity';
+
+function FounderAppHarness(props: Omit<FounderAppProps, 'theme' | 'density'>) {
+  const theme = useTheme();
+  const density = useDensity();
+  return <FounderApp {...props} theme={theme} density={density} />;
+}
 
 const detail: LeadDetail = {
   personId: 'person-kevin',
@@ -209,18 +217,19 @@ afterEach(() => {
 describe('FounderApp', () => {
   it('defaults to the Today route inside the navigation shell', async () => {
     window.location.hash = '';
-    render(<FounderApp api={fakeCallieApi()} health={readyHealth} />);
+    render(<FounderAppHarness api={fakeCallieApi()} health={readyHealth} />);
 
     expect(screen.getByRole('navigation', { name: 'Primary' })).not.toBeNull();
     expect(
       screen.getByRole('link', { name: 'Today' }).getAttribute('aria-current'),
     ).toBe('page');
     expect(await screen.findByRole('button', { name: 'Kevin Shin' })).not.toBeNull();
+    expect(document.querySelector('[data-presentation]')).toBeNull();
   });
 
   it('opens the same global inspector from Today and Pipeline routes', async () => {
     window.location.hash = '';
-    render(<FounderApp api={fakeCallieApi()} health={readyHealth} />);
+    render(<FounderAppHarness api={fakeCallieApi()} health={readyHealth} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Kevin Shin' }));
     expect(
@@ -241,7 +250,7 @@ describe('FounderApp', () => {
 
   it('opens the global import dialog from the Leads route', async () => {
     window.location.hash = '#/leads';
-    render(<FounderApp api={fakeCallieApi()} health={readyHealth} />);
+    render(<FounderAppHarness api={fakeCallieApi()} health={readyHealth} />);
 
     fireEvent.click(
       await screen.findByRole('button', { name: 'Import' }),
@@ -253,7 +262,7 @@ describe('FounderApp', () => {
 
   it('routes Conversations and Learnings to their live workspaces', async () => {
     window.location.hash = '';
-    render(<FounderApp api={fakeCallieApi()} health={readyHealth} />);
+    render(<FounderAppHarness api={fakeCallieApi()} health={readyHealth} />);
 
     for (const name of ['Conversations', 'Learnings']) {
       expect(
@@ -273,7 +282,7 @@ describe('FounderApp', () => {
 
 it('opens contact context with read-only suggestions and diagnostics only on request', async () => {
   const api = fakeCallieApi();
-  render(<FounderApp api={api} health={readyHealth} />);
+  render(<FounderAppHarness api={api} health={readyHealth} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Kevin Shin' }));
   const page = await screen.findByRole('complementary', { name: 'Kevin Shin details' });
   expect(within(page).getByRole('heading', { name: 'Known portfolio' })).toBeTruthy();
@@ -294,7 +303,7 @@ it('injects persisted outreach into the actual contact workspace even when Gmail
   let draft: import('../../shared/contracts/outreachContract').EmailDraft = { id: 'draft', personId: 'person-kevin', salesCycleId: 'cycle-kevin', contactMethodId: 'email-kevin', recipient: 'kevin@example.com', subject: 'Subject', body: 'Saved text', revision: 1, status: 'draft', generation: 'none', messageId: null, notice: null, updatedAt: '2026-09-08T12:00:00.000Z' };
   const outreach: CalliePreloadApi['outreach'] = { status: vi.fn(async () => setup), configure: vi.fn(), connectGmail: vi.fn(), disconnectGmail: vi.fn(), openDraft: vi.fn(async () => draft),
     saveDraft: vi.fn(async input => { draft = { ...draft, subject: input.subject, body: input.body, revision: draft.revision + 1 }; return draft; }), generateDraft: vi.fn(), sendDraft: vi.fn() };
-  render(<FounderApp api={{ ...api, outreach }} health={readyHealth} />);
+  render(<FounderAppHarness api={{ ...api, outreach }} health={readyHealth} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Kevin Shin' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Email' }));
   await waitFor(() => expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Saved text'));
@@ -310,7 +319,7 @@ it('does not replace a different contact selection when an earlier detail replie
   vi.mocked(api.today.get).mockResolvedValue({ ...todaySnapshot, lanes: [{ id: 'new_p0', overflowCount: 0, items: [first, { ...first, personId: 'person-dana', personName: 'Dana Whitman', salesCycleId: 'cycle-dana', id: 'item-dana' }] }] });
   let resolve!: (value: LeadDetail) => void;
   vi.mocked(api.leadDetail.get).mockImplementation(({ personId }) => personId === 'person-kevin' ? new Promise(done => { resolve = done; }) : Promise.resolve({ ...detail, personId, salesCycleId: 'cycle-dana', personName: 'Dana Whitman' }));
-  render(<FounderApp api={api} health={readyHealth} />);
+  render(<FounderAppHarness api={api} health={readyHealth} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Kevin Shin' }));
   fireEvent.click(screen.getByRole('button', { name: 'Dana Whitman' }));
   await screen.findByRole('complementary', { name: 'Dana Whitman details' });
@@ -318,4 +327,29 @@ it('does not replace a different contact selection when an earlier detail replie
   expect(screen.getByRole('complementary', { name: 'Dana Whitman details' })).toBeTruthy();
   expect(screen.queryByRole('article', { name: 'Kevin Shin full page' })).toBeNull();
   expect(api.discovery.begin).not.toHaveBeenCalled();
+});
+
+it('uses the required external appearance states and setters in Settings', async () => {
+  window.location.hash = '#/settings';
+  const theme = { preference: 'dark' as const, resolvedTheme: 'dark' as const, setPreference: vi.fn() };
+  const density = { density: 'compact' as const, setDensity: vi.fn() };
+  render(<FounderApp api={fakeCallieApi()} health={readyHealth} theme={theme} density={density} initialRoute="settings" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Appearance' }));
+  const dark = screen.getByRole('button', { name: 'Dark appearance' });
+  expect(dark.getAttribute('aria-pressed')).toBe('true');
+  expect(screen.getByRole('button', { name: 'Compact density' }).getAttribute('aria-pressed')).toBe('true');
+  fireEvent.click(screen.getByRole('button', { name: 'Light appearance' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Comfortable density' }));
+  expect(theme.setPreference).toHaveBeenCalledWith('light');
+  expect(density.setDensity).toHaveBeenCalledWith('comfortable');
+});
+it('preserves the global inspector node when external appearance states change', async () => {
+  const api = fakeCallieApi();
+  const theme = { preference: 'dark' as const, resolvedTheme: 'dark' as const, setPreference: vi.fn() };
+  const density = { density: 'compact' as const, setDensity: vi.fn() };
+  const view = render(<FounderApp api={api} health={readyHealth} theme={theme} density={density} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Kevin Shin' }));
+  const inspector = await screen.findByRole('complementary', { name: 'Kevin Shin details' });
+  view.rerender(<FounderApp api={api} health={readyHealth} theme={{ ...theme, preference: 'light', resolvedTheme: 'light' }} density={{ ...density, density: 'comfortable' }} />);
+  expect(screen.getByRole('complementary', { name: 'Kevin Shin details' })).toBe(inspector);
 });

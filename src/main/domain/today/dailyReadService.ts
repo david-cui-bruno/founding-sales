@@ -1,0 +1,153 @@
+import { withDailyAnswerPresentation } from './dailyAnswerPresentation';
+import { readWorkflowMode } from '../workspace/legacyWorkflowTransition';
+import type { AppDatabase } from '../../db/database';
+import type { Clock } from '../support/clock';
+import type { IdGenerator } from '../support/idGenerator';
+import type { TodayService } from './todayService';
+import type { WorkspaceSettingsRepository } from '../workspace/workspaceSettingsRepository';
+import { accountFingerprint } from '../accounts/accountEvidence';
+import { AccountRepository } from '../accounts/accountRepository';
+import { CampaignRepository } from '../campaign/campaignRepository';
+import { DelegationRepository } from '../../delegation/delegationRepository';
+import { LinkedInRepository } from '../../linkedin/linkedInRepository';
+import { dailyAccountSchema, dailyAnswerSchema, dailyCampaignSchema, dailyMeetingSchema, dailyOwnerStatusSchema, dailyTransportSchema, type DailySnapshot } from '../../../shared/contracts/dailyContract';
+import { accountReplyDraftSchema, threadProjectionSchema } from '../../../shared/contracts/mailThreadContract';
+import { requestedFollowupDraftSchema, requestedApprovalStatusSchema } from '../../../shared/contracts/requestedFollowupContract';
+import { campaignVersionSchema } from '../../../shared/contracts/campaignContract';
+import { accountIdSchema } from '../../../shared/contracts/accountContract';
+import { buildDailySnapshot, type DailyProjectionInput } from './dailyProjection';
+
+type Row = Record<string, unknown>;
+/** One deferred local snapshot. Dependencies expose no transport or draft generation. */
+export class DailyReadService {
+  constructor(private readonly deps: { database: AppDatabase; clock: Clock; ids: IdGenerator; today: TodayService; settings: WorkspaceSettingsRepository; workspaceId?: string }) {}
+  get(): DailySnapshot {
+    const raw = this.deps.database.raw;
+    if (raw.inTransaction) throw new Error('daily_read_transaction_scope');
+    const generatedAt = this.deps.clock.now();
+    return raw.transaction(() => this.read(generatedAt)).deferred();
+  }
+  private read(generatedAt: string): DailySnapshot {
+    const { database, clock, ids, today, settings } = this.deps;
+    const raw = database.raw;
+    const workspaceId = accountIdSchema.safeParse(this.deps.workspaceId).success ? this.deps.workspaceId! : null;
+    const input: DailyProjectionInput = { workspaceId, generatedAt, workflowMode: 'unknown', accounts: [], calls: { accountIds: [], workloadConflict: false },
+      callSettings: { newCallSlots: null, totalCallCapacity: null }, approvals: [], meetings: [], campaigns: [], ownerStatus: [], transport: [], issues: [] };
+    const issue = (code: DailyProjectionInput['issues'][number]['code']) => input.issues.push({ code, count: 1 });
+    // Failed top-level queries reject. Corrupt records or failed dependent reads produce incomplete snapshots with bounded issues.
+    const rows = (sql: string, ...args: string[]) => raw.prepare(sql).all(...args) as Row[];
+    const parse = <T>(read: () => T): T | null => { try { return read(); } catch { issue('invalid_local_record'); return null; } };
+    input.workflowMode = parse(() => readWorkflowMode(database)) ?? 'unknown';
+    const callSettings = parse(() => settings.readMeetingFirstAccountCallSettings());
+    if (callSettings) input.callSettings = { newCallSlots: callSettings.newCallSlots, totalCallCapacity: callSettings.totalCallCapacity };
+    if (workspaceId === null) return buildDailySnapshot(input);
+    if (input.callSettings.newCallSlots === null) issue('call_allocation_unconfigured');
+    const accounts = new AccountRepository({ database, clock, ids });
+    // Accounts live in this encrypted workspace DB. Explicit foreign owner bindings are excluded.
+    for (const row of rows('SELECT a.id FROM pm_accounts a LEFT JOIN delegated_authorities d ON d.account_id=a.id WHERE d.workspace_id IS NULL OR d.workspace_id=? ORDER BY a.id', workspaceId)) {
+      const account = parse(() => dailyAccountSchema.parse(accounts.snapshot(String(row.id), generatedAt)));
+      if (account) input.accounts.push(account);
+    }
+    const accountIds = new Set(input.accounts.map(a => a.account.id));
+    const scoped = (accountId: unknown) => { if (typeof accountId === 'string' && accountIds.has(accountId)) return true; issue('scope_mismatch'); return false; };
+    const delegation = new DelegationRepository({ database, workspaceId, clock });
+    const campaign = new CampaignRepository({ database, workspaceId, clock });
+    const due = new Set<string>();
+    for (const row of rows('SELECT id,campaign_id,version,snapshot_json,snapshot_hash FROM campaign_versions WHERE workspace_id=? ORDER BY campaign_id,version,id', workspaceId)) {
+      const value = parse(() => {
+        const frozen = campaignVersionSchema.parse(JSON.parse(String(row.snapshot_json)));
+        if (frozen.id !== row.id || frozen.campaignId !== row.campaign_id || frozen.version !== row.version
+          || accountFingerprint(frozen) !== row.snapshot_hash) throw Error('campaign_frozen_identity_mismatch');
+        // getVersion applies the separately persisted approval timestamp only after frozen-row validation.
+        const version = campaign.getVersion(frozen.id);
+        if (!version.cohortAccountIds.every(id => accountIds.has(id))) { issue('scope_mismatch'); return null; }
+        const enrollments = rows('SELECT id FROM campaign_enrollments WHERE workspace_id=? AND campaign_version_id=? ORDER BY id', workspaceId, version.id).map(e => campaign.getEnrollment(String(e.id)));
+        const caps = rows('SELECT campaign_version_id AS campaignVersionId,channel,revision,reserved,sent FROM campaign_caps WHERE workspace_id=? AND campaign_version_id=? ORDER BY channel', workspaceId, version.id);
+        return dailyCampaignSchema.parse({ version, snapshotHash: row.snapshot_hash, caps, enrollments });
+      });
+      if (!value) continue;
+      input.campaigns.push(value);
+      for (const enrollment of value.enrollments) {
+        const step = value.version.steps.find(s => s.id === enrollment.currentStepId);
+        if (enrollment.state !== 'active' || step?.channel !== 'call') continue;
+        // Initial step timing is persisted. Later conditional obligations need exact preceding evidence.
+        if (step.condition !== 'initial') { issue('call_due_unknown'); continue; }
+        if (Date.parse(enrollment.startedAt) + step.delayHours * 3600000 <= Date.parse(generatedAt)) due.add(enrollment.accountId);
+      }
+    }
+    const plan = parse(() => today.planMeetingFirstAccountCalls({ due: input.accounts.filter(a => due.has(a.account.id)), ranked: input.accounts, generatedAt }));
+    if (plan) input.calls = { accountIds: [...plan.accountIds], workloadConflict: plan.workloadConflict };
+    for (const account of input.accounts) {
+      const owner = parse(() => {
+        const authority = delegation.authority(account.account.id);
+        const pendingCommands = delegation.pendingCommands().filter(c => c.accountId === account.account.id).map(c => delegation.commandStatus(c.commandId)!);
+        return dailyOwnerStatusSchema.parse({ accountId: account.account.id, authority, executionVersion: delegation.executionVersion(account.account.id), pendingCommands,
+          status: pendingCommands.length ? 'pending' : authority?.owner === 'worker' ? 'owner_applied' : 'unknown' });
+      });
+      if (owner) input.ownerStatus.push(owner);
+    }
+    for (const row of rows('SELECT * FROM delegated_meetings WHERE workspace_id=? ORDER BY account_id,id', workspaceId)) {
+      if (!scoped(row.account_id)) continue;
+      const value = parse(() => {
+        const meeting = dailyMeetingSchema.parse({ id: row.id, accountId: row.account_id, revision: row.revision, payload: JSON.parse(String(row.projection_json)) });
+        if (meeting.payload.outcome.providerEventId !== row.provider_event_id) throw Error('meeting_identity_mismatch');
+        return meeting;
+      });
+      if (value) input.meetings.push(value);
+    }
+    for (const row of rows('SELECT * FROM delegated_requested_followup_drafts WHERE workspace_id=? ORDER BY account_id,id', workspaceId)) {
+      if (!scoped(row.account_id)) continue;
+      const value = parse(() => {
+        const draft = requestedFollowupDraftSchema.parse(JSON.parse(String(row.draft_json)));
+        if (draft.id !== row.id || draft.accountId !== row.account_id || draft.revision !== row.revision || draft.contextRevision !== row.context_revision) throw Error('draft_identity_mismatch');
+        const approval = row.approval_json === null ? null : parse(() => {
+          const saved = requestedApprovalStatusSchema.parse(JSON.parse(String(row.approval_json)));
+          const command = delegation.getCommand(saved.receipt.commandId);
+          if (command?.kind !== 'approve-requested-followup' || command.workspaceId !== workspaceId || command.commandId !== saved.receipt.commandId || command.accountId !== draft.accountId || accountFingerprint(command.payload.draft) !== accountFingerprint(draft)) throw Error('approval_draft_mismatch');
+          const status = delegation.requestedApprovalStatus(command.commandId);
+          if (!status || status.receipt.commandId !== command.commandId) throw Error('approval_status_identity_mismatch');
+          return status;
+        });
+        return dailyAnswerSchema.parse({ kind: 'requested_followup', accountId: row.account_id, draft,
+          approval, capability: 'held', reason: 'requires_owner_preflight' });
+      });
+      if (value) input.approvals.push(withDailyAnswerPresentation(database, workspaceId, generatedAt, value));
+    }
+    for (const row of rows('SELECT * FROM delegated_threads WHERE workspace_id=? ORDER BY account_id,id', workspaceId)) {
+      if (!scoped(row.account_id)) continue;
+      const values = parse(() => {
+        const thread = threadProjectionSchema.parse(JSON.parse(String(row.projection_json)));
+        if (thread.thread.accountId !== row.account_id || thread.thread.providerThreadId !== row.id || thread.revision !== row.revision || thread.contextRevision !== row.context_revision) throw Error('thread_identity_mismatch');
+        if (!thread.signals.length) return [];
+        const drafts = rows('SELECT * FROM delegated_reply_drafts WHERE workspace_id=? AND account_id=? AND thread_id=? ORDER BY id', workspaceId, String(row.account_id), String(row.id));
+        return (drafts.length ? drafts : [null]).map(saved => {
+          const draft = saved ? accountReplyDraftSchema.parse(JSON.parse(String(saved.draft_json))) : null;
+          if (draft && (draft.id !== saved!.id || draft.revision !== saved!.revision || draft.accountId !== row.account_id || draft.threadId !== row.id || draft.mailboxSubject !== thread.thread.mailboxSubject)) throw Error('reply_identity_mismatch');
+          return dailyAnswerSchema.parse({ kind: 'reply', accountId: row.account_id, thread, draft, stale: draft !== null && (draft.threadRevision !== thread.revision || draft.contextRevision !== thread.contextRevision), capability: 'held', reason: 'reply_capability_unverified' });
+        });
+      });
+      if (values) input.approvals.push(...values);
+    }
+    for (const row of rows("SELECT id,enrollment_id,account_id,revision FROM manual_linkedin_drafts WHERE workspace_id=? AND state<>'closed' ORDER BY account_id,id", workspaceId)) {
+      if (!scoped(row.account_id)) continue;
+      const value = parse(() => {
+        const repository = new LinkedInRepository({ database, workspaceId, clock, enrollmentId: String(row.enrollment_id) });
+        const draft = repository.requireRevision(String(row.id), Number(row.revision));
+        const record = repository.actionRecord(draft.id, draft.revision);
+        const handoffId = repository.handoffId(record.identity);
+        const handoff = handoffId ? delegation.getManualHandoff(handoffId) : null;
+        return dailyAnswerSchema.parse({ kind: 'manual_linkedin', accountId: row.account_id, draft, capability: 'manual_only', recovery: {
+          draftId: draft.id, revision: draft.revision, approvalCommandId: record.approvalCommandId,
+          attempts: record.commandIds.map(commandId => ({ commandId, receipt: delegation.commandStatus(commandId) })), handoffId, started: handoff?.consumedAt != null } });
+      });
+      if (value) input.approvals.push(withDailyAnswerPresentation(database, workspaceId, generatedAt, value));
+    }
+    for (const row of rows('SELECT pairing_id AS pairingId,revision,state,started_at AS startedAt,completed_at AS completedAt FROM delegated_transport_state WHERE workspace_id=? ORDER BY pairing_id', workspaceId)) {
+      const value = parse(() => dailyTransportSchema.parse(row));
+      if (value) { input.transport.push(value); if (value.state !== 'complete') issue('transport_incomplete'); }
+    }
+    const research = raw.prepare("SELECT COUNT(*) AS count FROM pm_account_research_jobs j WHERE j.state='parked' AND EXISTS(SELECT 1 FROM pm_accounts a LEFT JOIN delegated_authorities d ON d.account_id=a.id WHERE a.id=j.account_id AND (d.workspace_id IS NULL OR d.workspace_id=?))").get(workspaceId) as { count: number };
+    if (research.count > 0) input.issues.push({ code: 'research_failed', count: research.count });
+    return buildDailySnapshot(input);
+  }
+}

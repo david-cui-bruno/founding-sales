@@ -10,6 +10,7 @@ import { openDatabase, closeDatabase } from '../src/main/db/database';
 import { applyWorkspaceKey, createRawDatabase } from '../src/main/db/sqliteDriver';
 import { createMigrationRunner, migrateToLatest, productionMigrations } from '../src/main/db/migrate';
 import { BackupService } from '../src/main/backup/backupService';
+import { validatePreReleaseReceipt } from '../scripts/createPreReleaseBackup.mjs';
 const roots = [];
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })));
 const receipt = { path: '/must-not-print/private.sqlite3', basename: 'pre_release-20260906T170000000Z.sqlite3', kind: 'pre_release', schemaVersion: 24, sha256: 'a'.repeat(64), sizeBytes: 1234, createdAt: '2026-09-06T17:00:00.000Z', verifiedAt: '2026-09-06T17:00:00.000Z' };
@@ -96,6 +97,8 @@ it('backs up genuine production24 with one verified copy and same-database linke
     expect(db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: 24 });
   } finally { closeDatabase(db); key.bytes.fill(0); }
   expect(loaded.every(k => k.bytes.equals(Buffer.alloc(32)))).toBe(true);
+  // A successful real encrypted backup must not be reported as a failure by its launcher.
+  expect(validatePreReleaseReceipt(result)).toEqual(result);
 });
 it.each(['missing', 'wrong-key', 'schema14', 'schema15', 'schema16', 'schema17', 'schema18', 'schema19', 'schema20', 'schema21', 'schema22', 'schema23', 'future25', 'schema17-marker19', 'schema17-marker-ledger19', 'schema16-marker17', 'schema16-marker-ledger17', 'schema15-marker16', 'schema15-marker-ledger16',
   'ledger-missing', 'ledger-extra', 'ledger-wrong', 'ledger-order', 'catalog-column', 'catalog-extra', 'receipt-trigger', 'receipt-trigger-altered', 'recovery-trigger',

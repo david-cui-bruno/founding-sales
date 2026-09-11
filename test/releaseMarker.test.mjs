@@ -11,7 +11,7 @@ function fixture() {
   const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'release-marker-')); roots.push(root);
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' } }).trim();
   git('init', '-b', 'main'); writeFileSync(join(root, '.gitignore'), 'build/generated/\n'); mkdirSync(join(root, 'scripts'));
-  cpSync(new URL('../scripts/writeReleaseMarker.mjs', import.meta.url), join(root, 'scripts/writeReleaseMarker.mjs'));
+  for (const name of ['writeReleaseMarker.mjs', 'releaseMarkerContract.cjs']) cpSync(new URL(`../scripts/${name}`, import.meta.url), join(root, 'scripts', name));
   git('add', '.'); git('commit', '-m', 'fixture');
   return { root, git, sha: git('rev-parse', 'HEAD') };
 }

@@ -269,3 +269,9 @@ body[data-platform="darwin"] .nav-rail__header {
 .page-header__trailing + .page-header__action {
   margin-left: 0;
 }
+
+/* Native branding is opt-in from the stored daily workflow below. */
+.nav-rail__brand-native { display: none; }
+
+/* Legacy routes retain all historical links regardless of disclosure state. */
+.nav-rail__more-toggle { display: none; }

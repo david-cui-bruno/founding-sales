@@ -20,6 +20,25 @@
   "overrides": [
     {
       "files": [
+        "scripts/releaseArtifactCore.cjs"
+      ],
+      "rules": {
+        "@typescript-eslint/no-require-imports": [
+          "error",
+          {
+            "allow": [
+              "^node:crypto$",
+              "^node:fs$",
+              "^node:path$",
+              "^@electron/asar$",
+              "^\\./releaseMarkerContract\\.cjs$"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
         "cloud/lambdas/**/*.{js,mjs,cjs,ts,mts,cts,tsx}"
       ],
       "settings": {

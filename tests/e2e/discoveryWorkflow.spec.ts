@@ -161,7 +161,10 @@ test('P1 automatic source evidence, unfinished-work restart, contact-first works
     await page.getByRole('button', { name: 'Close inspector' }).click();
     await page.getByRole('link', { name: 'Leads', exact: true }).click();
     await page.getByRole('searchbox', { name: 'Search leads' }).fill(selected!.personName);
-    await page.getByRole('row', { name: new RegExp(selected.personName) }).click();
+    // Search can legitimately include Owner 7 and Owner 74. Keep the exact saved identity.
+    const selectedRow = page.locator(`[role="row"][data-person-id="${id}"]`);
+    await expect(selectedRow.getByRole('checkbox', { name: `Select ${selected.personName}`, exact: true })).toBeVisible();
+    await selectedRow.click();
     await page.getByRole('tab', { name: 'Activity', exact: true }).click();
     await page.getByRole('button', { name: 'Log dated past activity', exact: true }).click();
     await page.getByLabel('Date', { exact: true }).fill('2026-09-01');

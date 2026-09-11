@@ -142,3 +142,42 @@
   --shadow-drawer: -4px 0 0 rgba(0, 0, 0, 0.3);
   --inset-highlight: inset 0 0 0 transparent;
 }
+
+/* Approved A Native Desk palette, scoped to explicit presentation rather than workflow authority. */
+.app-shell:has(.native-desk[data-presentation='native-a']),
+.native-desk[data-presentation='native-a'],
+.startup-presentation[data-presentation='native-a'] {
+  --canvas: #e9edf2;
+  --surface: #fff;
+  --text: #222a35;
+  --text-muted: #5c6674;
+  --line: #d6dce5;
+  --line-interactive: #8994a4;
+  --accent: #3157ba;
+  --accent-soft: #e3ebfc;
+  --accent-text: #fff;
+  --native-queue: #f3f5f8;
+  --native-rail: #e9edf2;
+  --native-brand: #b83d2c;
+  --native-action: #f8fafc;
+  --native-shadow: 0 2px 4px #18233409, 0 12px 28px #18233409;
+  --native-row-shadow: 0 2px 4px #1722320b;
+}
+[data-theme='dark'] .app-shell:has(.native-desk[data-presentation='native-a']),
+[data-theme='dark'] .native-desk[data-presentation='native-a'],
+[data-theme='dark'] .startup-presentation[data-presentation='native-a'] {
+  --canvas: #181d25;
+  --surface: #262e39;
+  --text: #edf1f6;
+  --text-muted: #b2bdcc;
+  --line: #434f60;
+  --line-interactive: #8290a3;
+  --accent: #adc2ff;
+  --accent-soft: #344569;
+  --accent-text: #17223b;
+  --native-queue: #202732;
+  --native-rail: #191f28;
+  --native-brand: #f0937e;
+  --native-action: #222a35;
+  --native-shadow: 0 2px 4px #0002, 0 12px 28px #0002;
+}

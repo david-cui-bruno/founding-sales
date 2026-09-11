@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { chromium, expect, test, type Browser, type Page } from 'playwright/test';
-import { describeProcessExit, packagedApplicationBinary as packagedApplication } from '../support/packagedApplication';
+import { assertPackagedApplicationIdentity, describeProcessExit, packagedApplicationBinary as packagedApplication } from '../support/packagedApplication';
 import { createPackagedTestEnvironment } from '../support/packagedTestEnvironment';
 
 test('packaged diagnostics use callie protocol and an isolated native SQLite database', async () => {
@@ -142,6 +142,7 @@ const inspectPackagedApplication = async (userDataPath: string, inspectRecovery?
     // The packaged binary intentionally disables RunAsNode. Playwright's
     // Electron launcher requires that mode, so CDP inspects the real packaged
     // process without weakening the production fuse.
+    assertPackagedApplicationIdentity(packagedApplication);
     application = environment.capture(spawn(packagedApplication, [
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,
@@ -208,6 +209,7 @@ const inspectFailedPackagedLaunch = async (userDataPath: string) => {
   let application: ChildProcess | undefined;
 
   try {
+    assertPackagedApplicationIdentity(packagedApplication);
     application = environment.capture(spawn(packagedApplication, [
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,

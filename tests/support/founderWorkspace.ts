@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { chromium, type Browser, type Page } from 'playwright/test';
-import { describeProcessExit, packagedApplicationBinary } from './packagedApplication';
+import { assertPackagedApplicationIdentity, describeProcessExit, packagedApplicationBinary } from './packagedApplication';
 import { createPackagedTestEnvironment } from './packagedTestEnvironment';
 
 export { packagedApplicationBinary } from './packagedApplication';
@@ -100,6 +100,7 @@ export async function launchFounderWorkspace(options: {
     userDataPath ??= await mkdtemp(join(tmpdir(), 'callie-founder-e2e-'));
     const debuggingPort = await availablePort();
     let spawnError: Error | undefined;
+    assertPackagedApplicationIdentity(packagedApplicationBinary);
     const application = environment.capture(spawn(packagedApplicationBinary, [
       `--user-data-dir=${userDataPath}`,
       `--remote-debugging-port=${debuggingPort}`,

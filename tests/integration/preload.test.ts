@@ -21,6 +21,8 @@ type ExposedCallieApi = {
   leads: { list: (input: unknown) => Promise<unknown> };
   leadDetail: Record<string, unknown>;
   discovery: import('../../src/shared/contracts/discoveryContract').DiscoveryApi;
+  localWorkspace: import('../../src/shared/preload').CalliePreloadApi['localWorkspace'];
+  daily: import('../../src/shared/preload').CalliePreloadApi['daily'];
   today: { get: () => Promise<unknown>; getLeadTriageSnapshot: (input: unknown) => Promise<unknown> };
   pipeline: { get: () => Promise<unknown> };
   review: Record<string, unknown>;
@@ -98,6 +100,7 @@ describe('preload workflow bridge', () => {
     expect(Object.keys(api).sort()).toEqual([
       'appleSpike',
       'conversations',
+      'daily',
       'delegation',
       'discovery',
       'friday',
@@ -107,6 +110,7 @@ describe('preload workflow bridge', () => {
       'leads',
       'learnings',
       'linkedin',
+      'localWorkspace',
       'outreach',
       'phoneSetup',
       'pipeline',
@@ -146,6 +150,7 @@ describe('preload workflow bridge', () => {
     expect(Object.keys(api.leadDetail).sort()).toEqual([
       'beginOutbound', 'confirmTransition', 'dismissLead', 'findContactInfo', 'get', 'getOutboundCapabilities', 'overrideCloudScore',
     ]);
+    expect(Object.keys(api.localWorkspace).sort()).toEqual(['createCompany', 'get', 'getCommitments', 'getCompanyCreateStatus', 'reviewCompany', 'transition']);
     expect(Object.keys(api.today).sort()).toEqual([
       'addLeadNote', 'complete', 'get', 'getLeadTriageSnapshot', 'getTriageQueue', 'logCallOutcome',
       'logPastActivity', 'markActivityInError', 'pin', 'setReviewPosition', 'snooze',

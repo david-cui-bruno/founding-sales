@@ -40,7 +40,8 @@ it.skipIf(process.env.CALLIE_TEST_SYNTHETIC_ELECTRON !== '1')('proves two real s
   };
   try {
     const database = openDatabase({ path: paths.databasePath, key });
-    try { await migrateToLatest(database, { backupDirectory: paths.backupDirectory, workspaceKey: key }); } finally { closeDatabase(database); }
+    let currentSchema;
+    try { currentSchema = (await migrateToLatest(database, { backupDirectory: paths.backupDirectory, workspaceKey: key })).toVersion; } finally { closeDatabase(database); }
     writeFileSync(paths.keyEnvelopePath, 'synthetic-fixture-envelope', { mode: 0o600 });
     execFileSync(process.execPath, ['scripts/buildOperationalTools.mjs'], { cwd: repo, stdio: ['ignore', 'pipe', 'pipe'] });
     // Only this test host plus the actual import-safe core are loaded. No main,
@@ -79,9 +80,9 @@ core.performPreReleaseBackup({
     expect(first.code).toBe(0); expect(first.signal).toBeNull(); expect(first.error).toBe(false);
     const result = first.messages.find(message => message.success);
     expect(result?.counts).toEqual({ paths: 1, keys: 2, opens: 1, closes: 1, unlocks: 1 }); expect(result?.zeroed).toBe(true);
-    expect(result?.receipt.schemaVersion).toBe(17);
+    expect(result?.receipt.schemaVersion).toBe(currentSchema);
     const checked = openExistingPreReleaseDatabase(paths, key);
-    try { expect(checked.raw.prepare('SELECT backup_basename, kind, schema_version, sha256, size_bytes FROM backup_receipts').all()).toEqual([{ backup_basename: result.receipt.basename, kind: 'pre_release', schema_version: 17, sha256: result.receipt.sha256, size_bytes: result.receipt.sizeBytes }]); } finally { closeDatabase(checked); }
+    try { expect(checked.raw.prepare('SELECT backup_basename, kind, schema_version, sha256, size_bytes FROM backup_receipts').all()).toEqual([{ backup_basename: result.receipt.basename, kind: 'pre_release', schema_version: currentSchema, sha256: result.receipt.sha256, size_bytes: result.receipt.sizeBytes }]); } finally { closeDatabase(checked); }
     expect(existsSync(join(paths.backupDirectory, result.receipt.basename))).toBe(true);
     console.log(JSON.stringify({ syntheticElectron: true, ownerExit: first.code, deniedExit: second.code, deniedBeforePathsKeysOpen: true, ownerReceiptLinked: true, keysZeroed: result.zeroed, allExited: children.every(state => state.exited), stderrSeen: children.some(state => state.stderrSeen) }));
   } finally {

@@ -22,6 +22,7 @@ import { useLeadInspectorIfAvailable } from '../leadInspector/useLeadInspector';
 import { DialMeter } from './DialMeter';
 import { TodayPage, skipTodayResurfaceAt } from './TodayPage';
 import { SuggestedContacts } from '../discovery/SuggestedContacts';
+import { NativeDeskRoute, type NativeDeskApi } from './NativeDeskRoute';
 
 export type TodayRouteApi = {
   get(): Promise<TodaySnapshot>;
@@ -45,6 +46,7 @@ export type TodayLeadCommandApi = {
 
 export type TodayRouteProps = {
   api: TodayRouteApi;
+  workspaceApi?: NativeDeskApi;
   discoveryApi?: DiscoveryApi;
   leadApi?: TodayLeadCommandApi;
   onOpenLead(personId: string): void;
@@ -70,7 +72,15 @@ const todayDateLine = (): string =>
  * focus without a manual refresh or judgment surface.
  * Call navigates to the contact workspace without initiating outreach.
  */
-export function TodayRoute({
+export function TodayRoute(props: TodayRouteProps) {
+  const inspector = useLeadInspectorIfAvailable();
+  if (props.workspaceApi) return <NativeDeskRoute api={props.workspaceApi}
+    onOpenLead={props.onOpenLeadPage ?? inspector?.openFullPage ?? props.onOpenLead}
+    legacy={<LegacyTodayRoute {...props} />} />;
+  return <LegacyTodayRoute {...props} />;
+}
+
+function LegacyTodayRoute({
   api,
   discoveryApi,
   onOpenLead,
@@ -213,7 +223,6 @@ export function TodayRoute({
           onSkipToday={handleSkipToday}
           onLogPastActivity={handleLogPastActivity}
           onOpenInLeads={handleOpenInLeads}
-          onStartTriage={() => undefined}
         />
       )}
       {discoveryApi !== undefined && <SuggestedContacts api={discoveryApi} onOpenPerson={onOpenLead} />}

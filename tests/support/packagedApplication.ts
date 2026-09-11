@@ -1,15 +1,23 @@
 import { execFile } from 'node:child_process';
 import { resolve } from 'node:path';
 
-/** Runner-only override: test a candidate without replacing the user's running app. */
-export const packagedApplicationBinary = resolve(
-  process.env.CALLIE_E2E_OUT_DIR || resolve(process.cwd(), 'out'),
-  'Callie Founder Sales System-darwin-arm64',
-  'Callie Founder Sales System.app',
-  'Contents',
-  'MacOS',
-  'Callie Founder Sales System',
-);
+import { assertArtifactIdentity, readArtifactIdentity, resolveReleaseArtifact } from '../../scripts/releaseArtifact.mjs';
+
+/** Standalone E2E may select a candidate independently of the release runner. */
+export const packagedApplicationBinary = resolveReleaseArtifact({
+  root: process.cwd(),
+  env: { CALLIE_RELEASE_OUT_DIR: process.env.CALLIE_E2E_OUT_DIR || process.env.CALLIE_RELEASE_OUT_DIR },
+}).executable;
+
+// This metadata belongs only to the test process, never the isolated app env.
+const suppliedIdentity = process.env.CALLIE_E2E_EXPECTED_ARTIFACT;
+let expectedIdentity: ReturnType<typeof readArtifactIdentity> | undefined;
+export const assertPackagedApplicationIdentity = (executable: string): void => {
+  expectedIdentity ??= suppliedIdentity === undefined
+    ? readArtifactIdentity(resolve(packagedApplicationBinary, '../../..'))
+    : JSON.parse(suppliedIdentity);
+  assertArtifactIdentity(executable, expectedIdentity);
+};
 
 type ExitStatus = {
   code: number | null;
