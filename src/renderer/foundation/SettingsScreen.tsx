@@ -6,6 +6,8 @@ import { Monitor, Moon, Rows2, Rows3, Sun, type LucideIcon } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react';
 import type { OutreachApi } from '../../shared/contracts/outreachContract';
 import { ConnectionsSection } from './ConnectionsSection';
+import type { PhoneSetupApi } from '../../shared/contracts/phoneSetupContract';
+import { PhoneSetupSection } from './PhoneSetupSection';
 
 import type { AppHealth } from '../../shared/healthContract';
 import type { DensityPreference, DensityState } from '../app/useDensity';
@@ -38,6 +40,7 @@ const densityOptions: readonly {
 ];
 
 type SettingsSectionId =
+  | 'phone'
   | 'connections'
   | 'appearance'
   | 'data'
@@ -48,6 +51,7 @@ type SettingsSectionId =
 
 const SECTIONS: readonly { id: SettingsSectionId; label: string }[] = [
   { id: 'connections', label: 'Connections' },
+  { id: 'phone', label: 'Phone' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'data', label: 'Data & storage' },
   { id: 'sourcing', label: 'Sourcing' },
@@ -377,6 +381,7 @@ export type SettingsScreenProps = {
   recovery?: RecoveryProvider;
   localWorkspaceApi?: LocalWorkspaceApi;
   outreachApi?: OutreachApi;
+  phoneSetupApi?: PhoneSetupApi;
   /** Sourcing status rows, rendered inside the Sourcing section. */
   sourcing?: ReactNode;
   /** Extra diagnostics panels (Apple spike), rendered with Diagnostics. */
@@ -401,22 +406,37 @@ export function SettingsScreen({
   recovery,
   localWorkspaceApi,
   outreachApi,
+  phoneSetupApi,
   sourcing,
   children,
 }: SettingsScreenProps) {
   const [active, setActive] = useState<SettingsSectionId>(() => {
+    // Reading is non-consuming: StrictMode may invoke this initializer twice.
     try {
-      if (window.sessionStorage.getItem('callie.settings.section') === 'connections') {
-        window.sessionStorage.removeItem('callie.settings.section');
-        return 'connections';
-      }
-    } catch { /* Navigation still works without browser storage. */ }
-    return 'diagnostics';
+      const section = window.sessionStorage.getItem('callie.settings.section');
+      return SECTIONS.find(item => item.id === section)?.id ?? 'diagnostics';
+    } catch { return 'diagnostics'; }
   });
   useEffect(() => {
-    const showConnections = () => setActive('connections');
+    const clearIntent = () => {
+      try { window.sessionStorage.removeItem('callie.settings.section'); }
+      catch { /* Storage failure must not prevent event or rail navigation. */ }
+    };
+    // Consume only after commit, including invalid and not-yet-implemented IDs.
+    clearIntent();
+    const showSection = (event: Event) => {
+      clearIntent();
+      const detail: unknown = event instanceof CustomEvent ? event.detail : undefined;
+      const section = SECTIONS.find(item => item.id === detail);
+      if (section) setActive(section.id);
+    };
+    const showConnections = () => { clearIntent(); setActive('connections'); };
+    window.addEventListener('callie:open-settings-section', showSection);
     window.addEventListener('callie:open-connections', showConnections);
-    return () => window.removeEventListener('callie:open-connections', showConnections);
+    return () => {
+      window.removeEventListener('callie:open-settings-section', showSection);
+      window.removeEventListener('callie:open-connections', showConnections);
+    };
   }, []);
   const health = state.status === 'ready' ? state.health : null;
 
@@ -446,6 +466,7 @@ export function SettingsScreen({
         </nav>
         <div className="settings__detail">
           {active === 'connections' && <ConnectionsSection api={outreachApi} />}
+          {active === 'phone' && <PhoneSetupSection api={phoneSetupApi} />}
           {active === 'appearance' && (
             <AppearanceSection theme={theme} density={density} />
           )}

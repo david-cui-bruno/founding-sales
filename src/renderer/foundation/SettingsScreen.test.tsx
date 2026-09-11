@@ -605,3 +605,331 @@ describe('Local workflow transition', () => {
     expect(api.transition.mock.calls[1][0]).toBe(original);
   });
 });
+
+
+// Task8 additions. All original bytes above are retained verbatim.
+// New production modules are deliberately NOT imported at top level: the first
+// case reaches a behavioral missing-Phone RED in this existing test root.
+import type { PhoneSetupApi, PhoneSetupStatus } from '../../shared/contracts/phoneSetupContract';
+import type { CalliePreloadApi } from '../../shared/preload';
+import { renderRoute, type RouteContext } from '../app/routeRegistry';
+import { useHashRoute } from '../app/useHashRoute';
+import { PresentationRoot } from '../app/PresentationRoot';
+import { dailyFixture, firstUseFixture, nativeDeskFixture } from '../features/today/nativeDesk.fixture';
+
+// Variable import avoids eager Vite resolution of a planned-absent module in
+// the baseline Settings root. Only helper-specific cases load the real helper.
+async function task8Navigation(): Promise<{ openSettingsSection(section: 'connections' | 'phone' | 'worker' | 'call-capacity'): void }> {
+  const modulePath = './settingsNavigation';
+  return import(/* @vite-ignore */ modulePath);
+}
+const task8Key = 'callie.settings.section';
+const task8Time = '2026-09-10T23:00:00.000Z';
+const task8Candidate = (value = 'candidate_A'): PhoneSetupStatus => ({ state: 'needs_confirmation', candidateFingerprint: value, confirmedAt: null });
+const task8Configured = (value = 'candidate_A'): PhoneSetupStatus => ({ state: 'configured', candidateFingerprint: value, confirmedAt: task8Time });
+const task8Empty: PhoneSetupStatus = { state: 'unconfigured', candidateFingerprint: null, confirmedAt: null };
+function task8Phone(value = 'candidate_A') {
+  return {
+    status: vi.fn<PhoneSetupApi['status']>(async () => task8Candidate(value)),
+    confirm: vi.fn<PhoneSetupApi['confirm']>(async input => task8Configured(input.expectedFingerprint)),
+    clear: vi.fn<PhoneSetupApi['clear']>(async () => task8Empty),
+  } satisfies PhoneSetupApi;
+}
+function task8Settings(phoneSetupApi?: PhoneSetupApi) {
+  return render(<SettingsScreen state={{ status: 'ready', health }} onRetry={vi.fn()} theme={theme} density={density} {...{ phoneSetupApi }} />);
+}
+function task8Active(label: string) {
+  expect(within(screen.getByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: label }).getAttribute('aria-current')).toBe('true');
+}
+async function task8Controls(value = 'candidate_A') {
+  const region = await screen.findByRole('region', { name: 'Phone handoff' });
+  expect(within(region).getByRole('heading', { name: 'Phone handoff' })).toBeTruthy();
+  expect(within(region).getByText(value, { exact: true })).toBeTruthy();
+  for (const name of ['Confirm phone setup', 'Clear phone setup']) {
+    expect(within(region).getByRole('button', { name }).hasAttribute('disabled')).toBe(false);
+  }
+  task8Active('Phone');
+  expect(screen.queryByRole('region', { name: 'Connections' })).toBeNull();
+  return region;
+}
+async function task8Isolated(body: () => Promise<void>) {
+  const prior = sessionStorage.getItem(task8Key);
+  const href = location.href;
+  sessionStorage.removeItem(task8Key);
+  try { await body(); }
+  finally {
+    cleanup(); vi.restoreAllMocks();
+    if (prior === null) sessionStorage.removeItem(task8Key); else sessionStorage.setItem(task8Key, prior);
+    window.history.replaceState(null, '', href);
+  }
+}
+function task8Deferred() {
+  let resolve!: (value: PhoneSetupStatus) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<PhoneSetupStatus>((yes, no) => { resolve = yes; reject = no; });
+  const joined = promise.then((): void => undefined, (): void => undefined);
+  return { promise, resolve, reject, joined };
+}
+async function task8Settle(pending: ReturnType<typeof task8Deferred>, value = task8Empty) {
+  await act(async () => { pending.resolve(value); await pending.joined; });
+}
+
+// Complete typed API, no incomplete interface casts and no shared pending spy.
+// Unused methods each have a separate named throwing guard. NativeDesk fixture
+// methods are separately audited by their recorded calls, including all commands.
+function task8RouteFixture(phoneSetup = task8Phone()) {
+  const native = nativeDeskFixture(dailyFixture({ answers: [] }));
+  const forbidden: string[] = [];
+  const deny = (name: string) => vi.fn((..._args: unknown[]): never => { void _args; forbidden.push(name); throw Error(`Unexpected task8 capability: ${name}`); });
+  const api: CalliePreloadApi = {
+    ...native.api,
+    health: { get: vi.fn(async () => health) },
+    phoneSetup,
+    discovery: { get: deny('discovery.get'), getBrief: deny('discovery.getBrief'), begin: deny('discovery.begin'), override: deny('discovery.override') },
+    outreach: {
+      status: deny('outreach.status'), inspectLocalAuthority: deny('outreach.inspectLocalAuthority'),
+      configure: deny('outreach.configure'), connectGmail: deny('outreach.connectGmail'), disconnectGmail: deny('outreach.disconnectGmail'),
+      openDraft: deny('outreach.openDraft'), saveDraft: deny('outreach.saveDraft'), generateDraft: deny('outreach.generateDraft'), sendDraft: deny('outreach.sendDraft'),
+    },
+    today: {
+      get: deny('today.get'), complete: deny('today.complete'), snooze: deny('today.snooze'), pin: deny('today.pin'),
+      logPastActivity: deny('today.logPastActivity'), getLeadTriageSnapshot: deny('today.getLeadTriageSnapshot'), addLeadNote: deny('today.addLeadNote'),
+      logCallOutcome: deny('today.logCallOutcome'), markActivityInError: deny('today.markActivityInError'), getTriageQueue: deny('today.getTriageQueue'), setReviewPosition: deny('today.setReviewPosition'),
+    },
+    pipeline: { get: deny('pipeline.get') },
+    review: { list: deny('review.list'), resolve: deny('review.resolve') },
+    friday: { getCurrent: deny('friday.getCurrent'), getDrilldown: deny('friday.getDrilldown'), createJob: deny('friday.createJob'), fillJob: deny('friday.fillJob'), cancelJob: deny('friday.cancelJob') },
+    imports: { preview: deny('imports.preview'), remap: deny('imports.remap'), commit: deny('imports.commit'), status: deny('imports.status') },
+    conversations: { list: deny('conversations.list'), get: deny('conversations.get'), attachTranscript: deny('conversations.attachTranscript') },
+    learnings: { list: deny('learnings.list'), capture: deny('learnings.capture'), addEvidence: deny('learnings.addEvidence'), updateStatus: deny('learnings.updateStatus') },
+    sourcing: { pollNow: deny('sourcing.pollNow'), status: deny('sourcing.status'), retry: deny('sourcing.retry'), setHmacSalt: deny('sourcing.setHmacSalt') },
+    shell: { revealDatabase: deny('shell.revealDatabase'), revealLogDirectory: deny('shell.revealLogDirectory') },
+    recovery: { status: deny('recovery.status'), beginSetup: deny('recovery.beginSetup'), saveSetupMaterial: deny('recovery.saveSetupMaterial'), completeSetup: deny('recovery.completeSetup'), selectAndRunRestoreDrill: deny('recovery.selectAndRunRestoreDrill') },
+    appleSpike: {
+      getStatus: deny('appleSpike.getStatus'), probeCapabilities: deny('appleSpike.probeCapabilities'), requestContacts: deny('appleSpike.requestContacts'),
+      promptAccessibility: deny('appleSpike.promptAccessibility'), scanRecentNotes: deny('appleSpike.scanRecentNotes'), scanTestMessages: deny('appleSpike.scanTestMessages'),
+      startCallObservation: deny('appleSpike.startCallObservation'), stopCallObservation: deny('appleSpike.stopCallObservation'), sendTestMessage: deny('appleSpike.sendTestMessage'), subscribeObservationEvidence: deny('appleSpike.subscribeObservationEvidence'),
+    },
+  };
+  const context: RouteContext = {
+    api, firstUse: firstUseFixture(), health: { status: 'ready', health, retry: vi.fn() }, theme, density,
+    openLead: vi.fn(), openImport: vi.fn(), onReviewRequestStart: () => Symbol('task8-review'),
+    onReviewRequestFailed: vi.fn(), onReviewSnapshot: vi.fn(), onReviewResolved: vi.fn(),
+  };
+  const assertReadOnly = () => {
+    expect(forbidden).toEqual([]);
+    const allowed = new Set(['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments']);
+    expect(native.calls.filter(call => !allowed.has(call.method))).toEqual([]);
+    expect(native.calls.some(call => call.method === 'daily.get')).toBe(true);
+    expect(phoneSetup.confirm).not.toHaveBeenCalled(); expect(phoneSetup.clear).not.toHaveBeenCalled();
+  };
+  return { api, context, native, forbidden, assertReadOnly };
+}
+function Task8RealRoutes({ context }: { context: RouteContext }) {
+  const { route } = useHashRoute('today');
+  return <PresentationRoot><div key={route}>{renderRoute(route, context)}</div></PresentationRoot>;
+}
+
+describe('Task8 real Settings destination integration', () => {
+  it('baseline behavioral RED: real Settings exposes actual Phone controls with no new module import', async () => task8Isolated(async () => {
+    const api = task8Phone(); task8Settings(api);
+    fireEvent.click(screen.getByRole('button', { name: 'Phone' }));
+    await screen.findByText('candidate_A'); await task8Controls();
+    expect(api.status).toHaveBeenCalledTimes(1); expect(api.confirm).not.toHaveBeenCalled(); expect(api.clear).not.toHaveBeenCalled();
+  }), 10_000);
+
+  it('actual company-call hold anchor routes Today to Phone controls without commands', async () => task8Isolated(async () => {
+    location.hash = '#/today';
+    const f = task8RouteFixture(); render(<Task8RealRoutes context={f.context} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Call · Account A' }));
+    expect(screen.getByText(/Call handoff unavailable in this account view/)).toBeTruthy();
+    expect(screen.getByText(/Selection alone never places a call/)).toBeTruthy();
+    const anchor = screen.getByRole('link', { name: 'Review phone setup' });
+    expect(anchor.getAttribute('href')).toBe('#/settings');
+    expect(anchor.closest('section')?.textContent).toContain('Call handoff unavailable');
+    expect(sessionStorage.getItem(task8Key)).toBeNull();
+    fireEvent.click(anchor);
+    // Real anchor default navigation in jsdom, no manual helper or storage seed.
+    await waitFor(() => expect(location.hash).toBe('#/settings'));
+    await screen.findByText('candidate_A'); await task8Controls();
+    expect(sessionStorage.getItem(task8Key)).toBeNull();
+    expect(screen.queryByText(/Apple spike/i)).toBeNull();
+    expect(screen.queryByLabelText(/API key/i)).toBeNull();
+    expect(f.api.phoneSetup.status).toHaveBeenCalledTimes(1);
+    f.assertReadOnly();
+  }), 10_000);
+
+  it('pre-mount Phone intent is consumed and cannot hijack a later remount', async () => task8Isolated(async () => {
+    const { openSettingsSection } = await task8Navigation();
+    const api = task8Phone(); openSettingsSection('phone');
+    const view = task8Settings(api); await screen.findByText('candidate_A'); await task8Controls();
+    expect(sessionStorage.getItem(task8Key)).toBeNull(); view.unmount(); task8Settings(api);
+    task8Active('Diagnostics'); expect(screen.queryByRole('region', { name: 'Phone handoff' })).toBeNull();
+    expect(api.status).toHaveBeenCalledTimes(1);
+  }), 10_000);
+
+  it('same-mounted helper event selects Phone without remount and consumes replay intent', async () => task8Isolated(async () => {
+    const { openSettingsSection } = await task8Navigation();
+    const api = task8Phone(); const view = task8Settings(api);
+    const rail = screen.getByRole('navigation', { name: 'Settings sections' }); task8Active('Diagnostics');
+    act(() => openSettingsSection('phone'));
+    await screen.findByText('candidate_A'); await task8Controls();
+    expect(screen.getByRole('navigation', { name: 'Settings sections' })).toBe(rail);
+    expect(sessionStorage.getItem(task8Key)).toBeNull(); view.unmount(); task8Settings(api); task8Active('Diagnostics');
+  }), 10_000);
+
+  it.each(['event', 'storage'] as const)('preserves legacy Connections %s and consumes it', async mode => task8Isolated(async () => {
+    if (mode === 'storage') sessionStorage.setItem(task8Key, 'connections');
+    const view = task8Settings(task8Phone());
+    if (mode === 'event') {
+      sessionStorage.setItem(task8Key, 'connections');
+      act(() => window.dispatchEvent(new Event('callie:open-connections')));
+    }
+    task8Active('Connections'); expect(screen.getByRole('region', { name: 'Connections' })).toBeTruthy();
+    expect(sessionStorage.getItem(task8Key)).toBeNull(); view.unmount(); task8Settings(); task8Active('Diagnostics');
+  }), 10_000);
+
+  it.each(['nonsense', '', 'worker', 'call-capacity'] as const)('clears invalid or unimplemented initial intent %s and defaults Diagnostics', async value => task8Isolated(async () => {
+    sessionStorage.setItem(task8Key, value); task8Settings(task8Phone()); task8Active('Diagnostics');
+    expect(sessionStorage.getItem(task8Key)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Worker connection' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Call capacity' })).toBeNull();
+  }), 10_000);
+
+  it.each([
+    { name: 'unknown', detail: 'nonsense' }, { name: 'empty', detail: '' },
+    { name: 'future worker', detail: 'worker' }, { name: 'future capacity', detail: 'call-capacity' },
+    { name: 'object', detail: { section: 'phone' } }, { name: 'null', detail: null }, { name: 'plain Event', detail: undefined },
+  ])('invalid mounted $name retains active section and clears storage', async ({ detail }) => task8Isolated(async () => {
+    const api = task8Phone(); task8Settings(api); fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
+    sessionStorage.setItem(task8Key, 'phone');
+    act(() => window.dispatchEvent(detail === undefined ? new Event('callie:open-settings-section') : new CustomEvent('callie:open-settings-section', { detail })));
+    task8Active('Appearance'); expect(sessionStorage.getItem(task8Key)).toBeNull(); expect(api.status).not.toHaveBeenCalled();
+  }), 10_000);
+
+  it.each([
+    ['appearance', 'Appearance'], ['data', 'Data & storage'], ['sourcing', 'Sourcing'],
+    ['diagnostics', 'Diagnostics'], ['shortcuts', 'Keyboard shortcuts'], ['about', 'About'], ['connections', 'Connections'],
+  ] as const)('implemented %s remains selectable through validated event and rail', async (id, label) => task8Isolated(async () => {
+    sessionStorage.setItem(task8Key, id);
+    const initial = task8Settings(); task8Active(label); expect(sessionStorage.getItem(task8Key)).toBeNull();
+    initial.unmount();
+    task8Settings(); task8Active('Diagnostics');
+    act(() => window.dispatchEvent(new CustomEvent('callie:open-settings-section', { detail: id })));
+    task8Active(label); fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' })); task8Active('Diagnostics');
+    fireEvent.click(screen.getByRole('button', { name: label })); task8Active(label);
+  }), 10_000);
+
+  it.each(['getItem', 'removeItem'] as const)('storage %s failure does not break mounted event or rail navigation', async method => task8Isolated(async () => {
+    const failure = vi.spyOn(Storage.prototype, method).mockImplementation(() => { throw Error('private-storage-error'); });
+    const api = task8Phone(); task8Settings(api); task8Active('Diagnostics');
+    act(() => window.dispatchEvent(new CustomEvent('callie:open-settings-section', { detail: 'phone' })));
+    await screen.findByText('candidate_A'); await task8Controls();
+    expect(screen.queryByText(/private-storage-error/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Appearance' })); task8Active('Appearance'); failure.mockRestore();
+  }), 10_000);
+
+  it('failed setItem still reaches mounted Phone via helper event', async () => task8Isolated(async () => {
+    const { openSettingsSection } = await task8Navigation(); task8Settings(task8Phone());
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw Error('storage blocked'); });
+    act(() => openSettingsSection('phone')); await screen.findByText('candidate_A'); await task8Controls(); set.mockRestore();
+  }), 10_000);
+
+  it('missing optional Settings phone API renders unavailable rather than AppleSpike fallback', async () => task8Isolated(async () => {
+    task8Settings(); fireEvent.click(screen.getByRole('button', { name: 'Phone' }));
+    await screen.findByText('Unavailable', { exact: true }); task8Active('Phone');
+    expect(screen.queryByText('Unconfigured', { exact: true })).toBeNull();
+    expect(screen.queryByText(/Apple spike/i)).toBeNull();
+  }), 10_000);
+
+  it.each(['Confirm', 'Clear'] as const)('real route unmount during %s settles while absent, then observes afresh', async action => task8Isolated(async () => {
+    location.hash = '#/settings'; sessionStorage.setItem(task8Key, 'phone');
+    const api = task8Phone(); const pending = task8Deferred();
+    if (action === 'Confirm') api.confirm.mockReturnValueOnce(pending.promise); else api.clear.mockReturnValueOnce(pending.promise);
+    const f = task8RouteFixture(api);
+    try {
+      render(<Task8RealRoutes context={f.context} />);
+      await screen.findByText('candidate_A'); fireEvent.click(screen.getByRole('button', { name: `${action} phone setup` }));
+      act(() => { location.hash = '#/today'; window.dispatchEvent(new HashChangeEvent('hashchange')); });
+      await screen.findByRole('button', { name: 'Call · Account A' });
+      expect(screen.queryByRole('region', { name: 'Phone handoff' })).toBeNull();
+      await task8Settle(pending, action === 'Confirm' ? task8Configured() : task8Empty);
+      expect(screen.queryByText(task8Time)).toBeNull(); expect(screen.queryByRole('alert')).toBeNull();
+      api.status.mockResolvedValue(task8Candidate('candidate_B'));
+      fireEvent.click(screen.getByRole('button', { name: 'Call · Account A' }));
+      fireEvent.click(screen.getByRole('link', { name: 'Review phone setup' }));
+      await screen.findByText('candidate_B'); await task8Controls('candidate_B');
+      expect(api.status).toHaveBeenCalledTimes(2);
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm phone setup' })); await screen.findByText(task8Time);
+      expect(api.confirm).toHaveBeenLastCalledWith({ expectedFingerprint: 'candidate_B' });
+      expect(f.forbidden).toEqual([]);
+    } finally { await task8Settle(pending); }
+  }), 10_000);
+
+  it.each(['Confirm', 'Clear'] as const)('old unmounted %s finally cannot unlock new mounted pending Confirm', async action => task8Isolated(async () => {
+    location.hash = '#/settings'; sessionStorage.setItem(task8Key, 'phone');
+    const api = task8Phone(); const old = task8Deferred(); const fresh = task8Deferred();
+    if (action === 'Confirm') api.confirm.mockReturnValueOnce(old.promise); else api.clear.mockReturnValueOnce(old.promise);
+    const f = task8RouteFixture(api);
+    try {
+      render(<Task8RealRoutes context={f.context} />);
+      await screen.findByText('candidate_A'); fireEvent.click(screen.getByRole('button', { name: `${action} phone setup` }));
+      act(() => { location.hash = '#/today'; window.dispatchEvent(new HashChangeEvent('hashchange')); });
+      fireEvent.click(await screen.findByRole('button', { name: 'Call · Account A' }));
+      api.status.mockResolvedValue(task8Candidate('candidate_B')); api.confirm.mockReturnValueOnce(fresh.promise);
+      fireEvent.click(screen.getByRole('link', { name: 'Review phone setup' })); await screen.findByText('candidate_B');
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm phone setup' }));
+      await task8Settle(old, action === 'Confirm' ? task8Configured() : task8Empty);
+      for (const name of ['Confirm phone setup', 'Clear phone setup', 'Refresh phone setup']) {
+        const control = screen.getByRole('button', { name }); expect(control.hasAttribute('disabled')).toBe(true); fireEvent.click(control);
+      }
+      expect(api.status).toHaveBeenCalledTimes(2); expect(api.confirm).toHaveBeenCalledTimes(action === 'Confirm' ? 2 : 1);
+      expect(api.clear).toHaveBeenCalledTimes(action === 'Clear' ? 1 : 0);
+      await task8Settle(fresh, task8Configured('candidate_B')); await screen.findByText(task8Time);
+      expect(screen.getByText('candidate_B')).toBeTruthy(); expect(screen.queryByText('candidate_A')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Clear phone setup' }).hasAttribute('disabled')).toBe(false);
+    } finally { await task8Settle(old); await task8Settle(fresh); }
+  }), 10_000);
+  it('actual hold anchor still navigates when setItem fails without inventing pre-mount intent retention', async () => task8Isolated(async () => {
+    location.hash = '#/today'; const f = task8RouteFixture(); const view = render(<Task8RealRoutes context={f.context} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Call · Account A' }));
+    const anchor = screen.getByRole('link', { name: 'Review phone setup' }); expect(anchor.getAttribute('href')).toBe('#/settings');
+    const events: Event[] = []; const listener = (event: Event) => { events.push(event); };
+    window.addEventListener('callie:open-settings-section', listener);
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw Error('storage blocked'); });
+    try {
+      fireEvent.click(anchor);
+      // Unmount the destination owner before default navigation delivers. This
+      // case checks the real anchor and event only, not impossible retained intent.
+      view.unmount();
+      await waitFor(() => expect(location.hash).toBe('#/settings'));
+      expect(events).toHaveLength(1); const event = events[0];
+      if (!(event instanceof CustomEvent)) throw Error('Expected section CustomEvent');
+      expect(event.detail).toBe('phone'); expect(sessionStorage.getItem(task8Key)).toBeNull(); f.assertReadOnly();
+    } finally { set.mockRestore(); window.removeEventListener('callie:open-settings-section', listener); }
+  }), 10_000);
+
+  it.each(['Confirm', 'Clear'] as const)('new route success survives late unmounted %s result', async action => task8Isolated(async () => {
+    location.hash = '#/settings'; sessionStorage.setItem(task8Key, 'phone');
+    const api = task8Phone(); const old = task8Deferred();
+    if (action === 'Confirm') api.confirm.mockReturnValueOnce(old.promise); else api.clear.mockReturnValueOnce(old.promise);
+    const f = task8RouteFixture(api);
+    try {
+      render(<Task8RealRoutes context={f.context} />);
+      await screen.findByText('candidate_A'); fireEvent.click(screen.getByRole('button', { name: `${action} phone setup` }));
+      act(() => { location.hash = '#/today'; window.dispatchEvent(new HashChangeEvent('hashchange')); });
+      fireEvent.click(await screen.findByRole('button', { name: 'Call · Account A' }));
+      api.status.mockResolvedValue(task8Candidate('candidate_B'));
+      fireEvent.click(screen.getByRole('link', { name: 'Review phone setup' })); await screen.findByText('candidate_B');
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm phone setup' })); await screen.findByText(task8Time);
+      await task8Settle(old, action === 'Confirm' ? task8Configured() : task8Empty);
+      expect(screen.getByText('candidate_B')).toBeTruthy(); expect(screen.queryByText('candidate_A')).toBeNull();
+      expect(screen.getByText('Configured', { exact: true })).toBeTruthy();
+      expect(api.status).toHaveBeenCalledTimes(2);
+      expect(api.confirm).toHaveBeenLastCalledWith({ expectedFingerprint: 'candidate_B' });
+      expect(screen.getByRole('button', { name: 'Clear phone setup' }).hasAttribute('disabled')).toBe(false);
+      fireEvent.click(screen.getByRole('button', { name: 'Clear phone setup' })); await screen.findByText('Unconfigured', { exact: true });
+      expect(f.forbidden).toEqual([]);
+    } finally { await task8Settle(old); }
+  }), 10_000);
+});

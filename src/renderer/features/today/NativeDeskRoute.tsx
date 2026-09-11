@@ -1,3 +1,4 @@
+import { openSettingsSection } from '../../foundation/settingsNavigation';
 import type { FirstUseContinuation } from './localCompanyContinuation';
 import { useOverlayLayers } from '../../app/overlayLayers';
 import { Phone, RefreshCw } from 'lucide-react';
@@ -863,7 +864,9 @@ export function NativeDesk({
                 {account.routes.some((r) => r.channel === 'phone' && r.personId)
                   ? 'Open the linked contact workspace to review the existing call confirmation.'
                   : 'Review and link a real contact route before using the existing call workspace.'}{' '}
-                Selection alone never places a call.
+                Selection alone never places a call.{' '}
+                <a href="#/settings" onClick={() => openSettingsSection('phone')}>Review phone setup</a>.{' '}
+                Phone setup does not repair missing contact evidence or grant call permission.
               </p>
             </section>
           )}
