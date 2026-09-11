@@ -4,6 +4,8 @@ import { AxeBuilder } from '@axe-core/playwright';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import type {} from '../fixtures/nativeDeskBrowser';
+import { createCallCampaignDraft } from '../../src/shared/contracts/callCampaignDraft';
+import { accountFingerprint } from '../../src/main/domain/accounts/accountEvidence';
 
 // This exercises real renderer components, not Electron IPC or live services.
 // The entire API is the explicit no-IO fixture. All browser requests are blocked.
@@ -100,6 +102,77 @@ test('real Native Desk themes, geometry, selection and unchanged editor DOM', as
   await page.keyboard.press('Escape');
   await expect(body).toHaveCount(0);
   await expect(email).toBeFocused();
+  await assertClean(page,state);
+});
+
+test('saved manual-call template has separate accessible review and route controls without automatic commands', async ({page}, testInfo) => {
+  const state = await mount(page);
+  const version = createCallCampaignDraft({campaignId:'browser-campaign',versionId:'browser-version',stepId:'browser-step',accountId:'a',offer:'Discuss a simpler maintenance follow-up workflow.'});
+  // Explicit saved projections only. The real owner-command path is covered by
+  // callCampaignDraftWorkflow, not a second simulated browser worker.
+  await page.evaluate(({version,snapshotHash}) => {
+    const f = window.nativeDeskBrowser.fixture;
+    const snapshot = f.snapshot();
+    snapshot.campaigns = [{version,snapshotHash,caps:[],enrollments:[]}];
+    snapshot.accounts[0].routes = [{id:'browser-phone',accountId:'a',personId:null,version:1,channel:'phone',value:'+1 212 555 0100',purpose:'business',verification:'published',evidenceIds:['fixture-source']}];
+    f.setSnapshot(snapshot);
+    window.nativeDeskBrowser.navigate('campaigns');
+  }, {version,snapshotHash:accountFingerprint(version)});
+  await page.locator('[data-row-key="campaign:browser-version"]').click();
+  const form = page.getByRole('region',{name:'Call campaign enrollment',exact:true});
+  const approve = form.getByRole('button',{name:'Approve call campaign',exact:true});
+  await expect(approve).toBeDisabled();
+  await form.getByRole('checkbox',{name:'I reviewed this company, offer, call step and lifetime limits',exact:true}).check();
+  await expect(approve).toBeEnabled();
+  await expect(form.getByRole('combobox')).toHaveCount(0);
+  expect(await methods(page)).not.toContain('delegation.submit');
+  await page.evaluate(() => {
+    const f = window.nativeDeskBrowser.fixture;
+    const snapshot = f.snapshot();
+    snapshot.campaigns[0].version.approvedAt = '2026-09-09T12:00:00.000Z';
+    snapshot.ownerStatus[0].executionVersion!++;
+    f.setSnapshot(snapshot);
+    window.nativeDeskBrowser.refresh();
+  });
+  await expect(page.getByRole('heading',{name:'Reviewed call campaign',exact:true})).toBeVisible();
+  const phone = form.getByRole('combobox',{name:'Business phone route',exact:true});
+  const enroll = form.getByRole('button',{name:'Enroll company for manual call',exact:true});
+  await expect(phone).toHaveValue('');
+  await expect(enroll).toBeDisabled();
+  await phone.selectOption('browser-phone');
+  await expect(enroll).toBeDisabled();
+  await form.getByRole('checkbox',{name:'I want this company added to the manual call queue',exact:true}).check();
+  await expect(enroll).toBeEnabled();
+  await expect(form.getByText('Enrollment adds a due manual-call item. It does not dial, send messages, or grant contact permission.')).toBeVisible();
+  for (const width of [1440,1050]) {
+    await page.setViewportSize({width,height:700});
+    for (const theme of ['light','dark'] as const) {
+      await page.evaluate(theme => window.nativeDeskBrowser.preferences(theme,'compact'),theme);
+      const detail = page.locator('.native-desk__detail');
+      const overflow = await detail.evaluate(el => ({overflow:getComputedStyle(el).overflowY,scrollHeight:el.scrollHeight,height:el.clientHeight}));
+      expect(overflow.overflow,'campaign review must remain naturally scrollable').not.toBe('hidden');
+      if (overflow.scrollHeight > overflow.height) {
+        await detail.hover({position:{x:20,y:80}});
+        await page.mouse.wheel(0,-2000);
+        await expect.poll(() => detail.evaluate(el => el.scrollTop)).toBe(0);
+        await page.mouse.wheel(0,2000);
+        await expect.poll(() => detail.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+      }
+      await expect(phone).toBeVisible();
+      const geometry = await phone.evaluate(el => {
+        const style = getComputedStyle(el);
+        return {content:el.clientHeight-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom),text:parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.2};
+      });
+      expect(geometry.content,'selected phone must not be vertically clipped').toBeGreaterThanOrEqual(geometry.text);
+      await phone.focus();
+      await expect(phone).toBeFocused();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+      const axe = await new AxeBuilder({page}).analyze();
+      expect(axe.violations.filter(item=>item.impact==='serious'||item.impact==='critical')).toEqual([]);
+      await page.screenshot({path:testInfo.outputPath(`campaign-enrollment-${width}-${theme}.png`),fullPage:true});
+    }
+  }
+  expect(await methods(page)).not.toContain('delegation.submit');
   await assertClean(page,state);
 });
 

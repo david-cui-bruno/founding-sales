@@ -2,7 +2,7 @@ import type {
   DailyAnswer,
   DailySnapshot,
 } from '../../../shared/contracts/dailyContract';
-import { describeCallCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
+import { describeCallCampaignTemplate } from '../../../shared/contracts/callCampaignDraft';
 export function CampaignReview({
   campaign,
   accounts,
@@ -13,7 +13,7 @@ export function CampaignReview({
   answers: DailyAnswer[];
 }) {
   const { version } = campaign;
-  const draft = describeCallCampaignDraft(version);
+  const draft = describeCallCampaignTemplate(version);
   // Only LinkedIn drafts expose an exact campaign version binding. Shared account
   // membership alone must not relabel unrelated requested emails as sample drafts.
   const samples = answers.filter(
@@ -22,9 +22,9 @@ export function CampaignReview({
   );
   return (
     <section className="native-desk__campaign">
-      <p className="native-desk__eyebrow">Saved campaign version {version.version}{draft ? ' / manual-call draft' : ' / capability preview'}</p>
-      <p>{draft ? 'This saved draft is read-only. Approval, enrollment and activation are not available here.' : 'Read-only preview. Editing, approval, enrollment and activation are not available here.'}</p>
-      <h2>{draft ? 'Call campaign draft' : version.campaignId}</h2>
+      <p className="native-desk__eyebrow">Saved campaign version {version.version}{draft ? ' / manual-call template' : ' / capability preview'}</p>
+      <p>{draft ? 'Review this frozen company, offer, call step and lifetime limits before a separate enrollment. Selecting this version never starts outreach.' : 'Read-only preview. Editing, approval, enrollment and activation are not available here.'}</p>
+      <h2>{draft ? version.approvedAt ? 'Reviewed call campaign' : 'Call campaign draft' : version.campaignId}</h2>
       <h3>Offer</h3>
       <p>{version.offer}</p>
       <p>Objective: {version.objective}</p>
@@ -80,7 +80,7 @@ export function CampaignReview({
       )}
       <p>
         {version.approvedAt
-          ? `Frozen approval recorded: ${version.approvedAt}. This does not activate new work.`
+          ? `Frozen approval recorded: ${version.approvedAt}. ${draft ? 'Approval alone does not enroll a company or place a call.' : 'This does not activate new work.'}`
           : 'Not approved. Approval held until audience evidence and exact owner authority can be verified.'}
       </p>
       <details>

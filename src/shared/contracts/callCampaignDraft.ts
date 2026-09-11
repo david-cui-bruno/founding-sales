@@ -37,8 +37,8 @@ export function createCallCampaignDraft(input: CreateCallCampaignDraftInput): Ca
   });
 }
 
-/** Recognize only this exact unapproved draft template. Never grants authority. */
-export function describeCallCampaignDraft(version: unknown): {
+/** Recognize the exact template, with or without approval. Never grants authority. */
+export function describeCallCampaignTemplate(version: unknown): {
   accountId: string;
   audienceDescription: string;
   policyDescription: string;
@@ -48,7 +48,7 @@ export function describeCallCampaignDraft(version: unknown): {
   const draft = parsed.data;
   const accountId = draft.cohortAccountIds[0];
   const step = draft.steps[0];
-  if (draft.version !== 1 || draft.approvedAt !== null
+  if (draft.version !== 1
     || draft.cohortAccountIds.length !== 1 || accountId === undefined
     || draft.steps.length !== 1 || !step || step.channel !== 'call'
     || step.condition !== 'initial' || step.delayHours !== 0
@@ -56,4 +56,10 @@ export function describeCallCampaignDraft(version: unknown): {
     || draft.audienceHash !== audienceHash(accountId) || draft.contentPolicyHash !== contentPolicyHash) return null;
   // objective and capScope are exact literals enforced by campaignVersionSchema.
   return { accountId, audienceDescription: `Single account: ${accountId}`, policyDescription };
+}
+
+/** Draft presentation must never relabel an approved version as unapproved. */
+export function describeCallCampaignDraft(version: unknown): ReturnType<typeof describeCallCampaignTemplate> {
+  const parsed = campaignVersionSchema.safeParse(version);
+  return parsed.success && parsed.data.approvedAt === null ? describeCallCampaignTemplate(parsed.data) : null;
 }
