@@ -63,6 +63,10 @@ export class CredentialStore {
     try {
       const parsed = storedCredentialsSchema.safeParse(value);
       if (!parsed.success) fail('invalid_configuration');
+      const previous = await this.load();
+      if (previous?.gmail.grant && parsed.data.gmail.grant && previous.gmail.grant.subject !== parsed.data.gmail.grant.subject) fail('oauth_identity_invalid');
+      if (previous?.gmail.grant && parsed.data.gmail.refreshToken
+        && previous.gmail.grant.capabilities.some(capability => !parsed.data.gmail.grant?.capabilities.includes(capability))) fail('oauth_denied');
       const directory = await this.directory(true);
       await this.inspectExisting();
       const encrypted = await this.input.safeStorage.encryptString(JSON.stringify(parsed.data));

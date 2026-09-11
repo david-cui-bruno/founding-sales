@@ -51,6 +51,37 @@ function assertCanonical(value: string, label: string): number {
   return parseCanonicalUtcMillis(value, label);
 }
 
+export type DailyAccountCallPlan = Readonly<{
+  accountIds: readonly string[];
+  workloadConflict: boolean;
+}>;
+
+export function planDailyAccountCalls(input: {
+  due: readonly string[];
+  ranked: readonly string[];
+  newCallSlots: number;
+  completedAccountIds: readonly string[];
+  totalCallCapacity: number | null;
+}): DailyAccountCallPlan {
+  if (!Number.isSafeInteger(input.newCallSlots) || input.newCallSlots < 0) {
+    throw new PrioritizationInputCorruptionError('newCallSlots must be a safe nonnegative integer.');
+  }
+  if (input.totalCallCapacity !== null
+    && (!Number.isSafeInteger(input.totalCallCapacity) || input.totalCallCapacity < 0)) {
+    throw new PrioritizationInputCorruptionError('totalCallCapacity must be null or a safe nonnegative integer.');
+  }
+  const uniqueDue = [...new Set(input.due)];
+  const completed = new Set(input.completedAccountIds);
+  const dueSet = new Set(uniqueDue);
+  const newIds = [...new Set(input.ranked)]
+    .filter(id => !dueSet.has(id) && !completed.has(id));
+  const accountIds = [...uniqueDue, ...newIds.slice(0, input.newCallSlots)];
+  return Object.freeze({
+    accountIds,
+    workloadConflict: input.totalCallCapacity !== null && accountIds.length > input.totalCallCapacity,
+  });
+}
+
 /**
  * DST-safe founder-local half-open day interval [localMidnight,
  * nextLocalMidnight), independent of process.env.TZ.
@@ -184,6 +215,7 @@ export function classifyTodayCandidate(
   candidate: ParsedTodayCandidate,
   context: TodayEvaluationContext,
 ): TodayPreCapacityDisposition {
+  if (candidate.action.actionType === 'parked_legacy') return { kind: 'suppressed', cycleId: candidate.cycleId, reason: 'legacy_workflow_parked' };
   const asOfMillis = assertCanonical(context.generatedAt, 'generatedAt');
   const intent = candidate.action.workIntent;
   const sla = candidate.action.inboundSla;
@@ -410,7 +442,7 @@ export function planTodayQueue(input: {
   extraDiagnostics?: readonly TodayDiagnostic[];
   extraSuppressed?: readonly {
     cycleId: string;
-    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active';
+    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active' | 'legacy_workflow_parked';
   }[];
 }): TodayQueue {
   const capacity = validateCapacity(input.capacity);
@@ -445,7 +477,7 @@ export function planTodayQueue(input: {
   );
   const suppressed: {
     cycleId: string;
-    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active';
+    reason: 'snoozed' | 'dismissed' | 'recently_contacted' | 'resurface_scheduled' | 'not_due' | 'warm_pipeline_active' | 'legacy_workflow_parked';
   }[] = [
     ...(input.extraSuppressed ?? []),
   ];

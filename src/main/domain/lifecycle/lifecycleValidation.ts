@@ -70,7 +70,7 @@ export const actionSettlementOutcomeSchema = z.enum([
   'answered', 'no_answer', 'voicemail_left', 'accepted', 'replied',
   'opted_out', 'channel_unavailable', 'marked_impossible', 'resolved',
   'reviewed_ready', 'lost_nurture', 'upgraded', 'interviewed_confirmed',
-  'offered_confirmed', 'won_confirmed', 'onboarding_waived', 'phase_completed',
+  'offered_confirmed', 'won_confirmed', 'onboarding_waived', 'phase_completed', 'workflow_superseded',
 ]);
 
 export const impossibleReasonCodeSchema = z.enum([
@@ -117,7 +117,8 @@ export const actionSettlementSchema = z.object({
         : 'This internal or terminal outcome does not accept Activity evidence.',
     });
   }
-  const exactReason = value.outcome === 'opted_out' ? value.reason === 'person_wide_opt_out'
+  const exactReason = value.outcome === 'workflow_superseded' ? typeof value.reason === 'string' && value.reason.trim().length > 0
+    : value.outcome === 'opted_out' ? value.reason === 'person_wide_opt_out'
     : value.outcome === 'marked_impossible'
       ? impossibleSettlementReasonSchema.safeParse(value.reason).success
       : value.outcome === 'onboarding_waived'

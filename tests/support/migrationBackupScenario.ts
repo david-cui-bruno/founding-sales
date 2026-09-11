@@ -32,7 +32,6 @@ import {
 } from '../../src/main/db/migrationBackup';
 import {
   createMigrationRunner,
-  migrateToLatest,
   productionMigrations,
 } from '../../src/main/db/migrate';
 import { migration0001Foundation } from '../../src/main/db/migrations/0001Foundation';
@@ -80,8 +79,7 @@ async function runScenario(): Promise<void> {
       const { fromVersion, toVersion } = transition;
       const migrateFrom = createMigrationRunner(productionMigrations.filter(entry => entry.schemaVersion <= fromVersion));
       // Historical cases stop at their real schema, not a metadata relabel of latest.
-      const migrateTo = toVersion === 19 ? migrateToLatest
-        : createMigrationRunner(productionMigrations.filter(entry => entry.schemaVersion <= toVersion));
+      const migrateTo = createMigrationRunner(productionMigrations.filter(entry => entry.schemaVersion <= toVersion));
       await migrateFrom(database, { backupDirectory, workspaceKey: key });
       assert.equal(readSchemaVersion(database), fromVersion);
       database.raw.prepare(`INSERT INTO backup_receipts

@@ -8,7 +8,8 @@ import {
 import { OutboundAuthorizationError } from '../domain/support/domainErrors';
 import { outboundIntentFingerprint } from './contactSnapshot';
 import type {
-  OutboundCommandServiceApi, OutboundDomainGate, OutboundDomainPort, OutboundReadinessPort, PhoneHandoffPort, Preparation,
+  OutboundCommandServiceApi, OutboundDomainGate, OutboundDomainPort, OutboundReadinessPort, OutboundReadinessProof,
+  PhoneHandoffPort, Preparation,
 } from './outboundPorts';
 
 const uncertain: HandoffResult = Object.freeze({ status: 'unknown', reasonCode: 'handoff_uncertain' });
@@ -20,9 +21,19 @@ const inactive = () => new Error('Outbound workspace is inactive.');
 type Operation = { epoch: number; signal: AbortSignal; mutation?: MutationReceipt };
 type Flight = { fingerprint: string; promise: Promise<OutboundReceipt> };
 const readinessReplySchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('ready') }).strict(),
+  z.object({
+    kind: z.literal('ready'),
+    proof: z.object({
+      subject: z.object({ kind: z.enum(['person', 'account']), id: z.string().min(1) }).strict(),
+      registryRevision: z.number().int().nonnegative(),
+      checkpoints: z.array(z.object({ adapterId: z.string().min(1), revision: z.string() }).strict()),
+    }).strict(),
+  }).strict(),
   z.object({ kind: z.literal('blocked'), reasonCode: z.string() }).strict(),
 ]);
+type PreflightResult = Readonly<
+  { kind: 'ready'; proof: OutboundReadinessProof } | { kind: 'blocked'; reasonCode: OutboundReason }
+>;
 
 // Observe every rejection, including after timeout/cancellation. This function
 // only settles a waiter. It never schedules a retry or a late persistence action.
@@ -72,6 +83,9 @@ function capabilities(phoneHandoff: Capability): OutboundCapabilities {
 function unavailable(reasonCode: CapabilityReason): Capability {
   return { state: 'unavailable', reasonCode };
 }
+function hasRequestedPersonProof(proof: OutboundReadinessProof, request: OutboundRequest): boolean {
+  return proof.subject.kind === 'person' && proof.subject.id === request.personId;
+}
 
 export function createOutboundCommandService(input: {
   domain: OutboundDomainGate; phone: PhoneHandoffPort;
@@ -110,7 +124,7 @@ export function createOutboundCommandService(input: {
     return withDomain(current, (value) => validateReceipt(request, value.recordOutboundRefusal(request, reason)));
   }
 
-  async function preflight(current: Operation, request: OutboundRequest): Promise<OutboundReason | null> {
+  async function preflight(current: Operation, request: OutboundRequest): Promise<PreflightResult> {
     const checkController = new AbortController();
     const signal = AbortSignal.any([current.signal, checkController.signal]);
     try {
@@ -118,20 +132,20 @@ export function createOutboundCommandService(input: {
       const route = parseCapability(await waitFor(phone.inspectCapability(), current.signal, timeoutMs));
       assertCurrentEpoch(current);
       if (route.state !== 'available') {
-        return route.reasonCode === 'not_integrated' ? 'phone_route_unverified' : route.reasonCode;
+        return { kind: 'blocked', reasonCode: route.reasonCode === 'not_integrated' ? 'phone_route_unverified' : route.reasonCode };
       }
       const readinessResult = readinessReplySchema.parse(
         await waitFor(readiness.check(request.personId, signal), current.signal, timeoutMs),
       );
       assertCurrentEpoch(current);
-      if (readinessResult.kind === 'ready') return null;
+      if (readinessResult.kind === 'ready') return { kind: 'ready', proof: readinessResult.proof };
       const blocked = handoffResultSchema.parse({
         status: 'refused', reasonCode: readinessResult.kind === 'blocked' ? readinessResult.reasonCode : undefined,
       });
-      return blocked.reasonCode;
+      return { kind: 'blocked', reasonCode: blocked.reasonCode };
     } catch {
       assertCurrentEpoch(current); // Cancellation cannot write even a refusal.
-      return 'operation_interrupted';
+      return { kind: 'blocked', reasonCode: 'operation_interrupted' };
     } finally {
       checkController.abort();
     }
@@ -158,13 +172,18 @@ export function createOutboundCommandService(input: {
       if (previous !== null) return validateReceipt(request, previous);
       if (busy) return await refuse(current, request, 'outbound_busy');
       if (request.channel !== 'call') return await refuse(current, request, 'channel_unavailable');
-      const reason = await preflight(current, request);
+      const readinessResult = await preflight(current, request);
       assertCurrentEpoch(current);
-      if (reason !== null) return await refuse(current, request, reason);
+      if (readinessResult.kind === 'blocked') return await refuse(current, request, readinessResult.reasonCode);
 
       const started = await withDomain(current, (value) => {
         let prepared: Preparation;
         try {
+          if (!hasRequestedPersonProof(readinessResult.proof, request)) {
+            return { kind: 'receipt' as const, receipt: validateReceipt(request, value.recordOutboundRefusal(request, 'inbound_safety_unwired')) };
+          }
+          try { readiness.assertCurrent(readinessResult.proof); }
+          catch { return { kind: 'receipt' as const, receipt: validateReceipt(request, value.recordOutboundRefusal(request, 'inbound_safety_unwired')) }; }
           prepared = value.prepareOutboundDispatch(request);
         } catch (error) {
           if (!(error instanceof OutboundAuthorizationError)) throw error;

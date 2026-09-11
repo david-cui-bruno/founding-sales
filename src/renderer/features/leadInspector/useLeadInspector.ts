@@ -92,6 +92,7 @@ export type OutboundStatusPresentation = OutboundPresentation & { outboundStatus
 
 /** Discovery and manual evidence are injected separately from outbound execution. */
 export type DiscoveryPresentation = {
+  contactPreparation?: ReactNode;
   discoveryEvidence?: ReactNode;
   pastActivityControls?: ReactNode;
 };

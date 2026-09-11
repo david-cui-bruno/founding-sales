@@ -1,3 +1,4 @@
+import { createInboundReadiness } from '../../src/main/communications/inboundReadiness';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +12,7 @@ import type { HealthProvider } from '../../src/main/health/registerHealthIpc';
 import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import {
   startApplication,
+  createPhoneInboundRegistry,
   type ApplicationStartupDependencies,
   type ApplicationStartupOptions,
 } from '../../src/main/startApplication';
@@ -122,6 +124,63 @@ describe('startApplication', () => {
       closeDatabase: () => events.push('close'),
     };
   }
+
+  it('uses injected phone bindings and disposes setup before closing the runtime', async () => {
+    const events: string[] = []; const dependencies = createDependencies(events);
+    const phone = { inspectCapability: vi.fn(async () => ({ state: 'available' as const, reasonCode: null })), dispatch: vi.fn() };
+    const readiness = createInboundReadiness({ snapshot: () => ({ initialized: true, revision: 1, adapters: [] }) });
+    const setup = { status: vi.fn(), confirm: vi.fn(), clear: vi.fn(), invalidate: vi.fn(), dispose: vi.fn() };
+    const bindings = { phone, readiness, setup, invalidate: vi.fn(), dispose: vi.fn(() => events.push('phone-dispose')) };
+    dependencies.createPhoneBindings = () => { expect(events).toContain('recover'); return bindings; };
+    dependencies.registerPhoneSetupIpc = () => () => events.push('phone-unregister');
+    let outbound!: OutboundCommandServiceApi;
+    dependencies.createOutboundCommandService = input => { outbound = createOutboundCommandService(input); return outbound; };
+    let callbacks!: Parameters<NonNullable<ApplicationStartupOptions['registerOutboundLifecycle']>>[0];
+    const app = await startApplication({ appVersion: '1', userDataPath: '/fixture/phone', createWindow: () => undefined,
+      registerOutboundLifecycle: owned => { callbacks = owned; return () => undefined; } }, dependencies);
+    expect((await outbound.getCapabilities()).phoneHandoff.state).toBe('available');
+    callbacks.onLock(); expect(bindings.invalidate).toHaveBeenLastCalledWith(true);
+    callbacks.onWake(); expect((await outbound.getCapabilities()).phoneHandoff.state).toBe('unavailable');
+    callbacks.onUnlock(); expect(bindings.invalidate).toHaveBeenLastCalledWith(false);
+    expect((await outbound.getCapabilities()).phoneHandoff.state).toBe('available');
+    await app.shutdown(); await app.shutdown();
+    expect(bindings.dispose).toHaveBeenCalledTimes(1);
+    expect(events.indexOf('phone-dispose')).toBeLessThan(events.indexOf('close'));
+    expect(events.indexOf('phone-unregister')).toBeLessThan(events.indexOf('close'));
+  });
+
+  it('initializes a revisioned registry explicitly and invalidates snapshots on adapter registration/removal/reset', () => {
+    const registry = createPhoneInboundRegistry();
+    expect(registry.snapshot()).toEqual({ initialized: false, revision: 0, adapters: [] });
+    registry.initialize([]);
+    const empty = registry.snapshot();
+    const adapter = { id: 'fictional-inbound', relevant: () => true,
+      synchronize: async () => ({ revision: 'fixture' }), isAppliedCurrent: () => true };
+    const remove = registry.register(adapter);
+    expect(registry.snapshot()).toMatchObject({ initialized: true, revision: empty.revision + 1, adapters: [adapter] });
+    expect(empty.adapters).toEqual([]);
+    remove(); remove();
+    expect(registry.snapshot()).toEqual({ initialized: true, revision: empty.revision + 2, adapters: [] });
+    registry.reset();
+    expect(registry.snapshot().initialized).toBe(false);
+    expect(() => registry.register(adapter)).toThrow();
+  });
+
+  it.each(['matching','mismatched','unavailable'] as const)('captures trusted workspace before asynchronous genuine pairing load: %s',async(mode)=>{
+    const {createPmFixture}=await import('../fixtures/pmAccounts');const f=await createPmFixture();const dependencies=createDependencies([]);
+    const loaded=deferred<import('../../src/main/delegation/pairingStore').StoredPairing|null>();
+    dependencies.openDatabase=()=>f.db;dependencies.createPairingStore=()=>({load:()=>loaded.promise,redeem:async()=>{throw Error('No pairing operation authorized');}});
+    const email={invalidate:vi.fn(),dispose:vi.fn()} as unknown as ReturnType<typeof import('../../src/main/outreach/emailService').createEmailService>;
+    let passedWorkspace:string|undefined;let delegated:import('../../src/main/delegation/delegationRuntime').DelegationRuntime|undefined;let linkedInRegistrations=0;
+    dependencies.createEmailService=(_runtime,_path,_providers,workspace)=>{passedWorkspace=workspace;return email;};
+    dependencies.registerOutreachIpc=options=>{delegated=options.delegation;return ()=>undefined;};dependencies.registerLinkedInIpc=()=>{linkedInRegistrations++;return ()=>undefined;};
+    const options:ApplicationStartupOptions={appVersion:'fixture',userDataPath:'/fictional-pairing-test',expectedWorkspaceId:'trusted-workspace',createWindow:()=>undefined};
+    const starting=startApplication(options,dependencies);options.expectedWorkspaceId='mutated-after-start';
+    if(mode==='unavailable')loaded.reject(Error('Protected configuration unavailable'));
+    else loaded.resolve({endpoint:'https://worker.example.test',workspaceId:mode==='matching'?'trusted-workspace':'other-workspace',pairingId:'11111111-1111-4111-8111-111111111111',credential:'a'.repeat(43),emergencyCredential:'b'.repeat(43),generation:0,scopes:['commands:write','events:read']});
+    const app=await starting;
+    try{expect(passedWorkspace).toBe('trusted-workspace');expect(await delegated!.status()).toMatchObject(mode==='matching'?{state:'paused',workspaceId:'trusted-workspace'}:{state:'unconfigured',workspaceId:null});expect(linkedInRegistrations).toBe(mode==='matching'?1:0);}finally{await app.shutdown();f.close();}
+  });
 
   it('owns email service registration, lock invalidation and disposal before database shutdown', async () => {
     const events:string[]=[];const dependencies=createDependencies(events);

@@ -1,5 +1,6 @@
 /* eslint-disable no-control-regex -- These schemas intentionally reject NUL in secrets and content. */
 import { z } from 'zod';
+import { googleGrantSchema } from '../../../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
 
 export type ProviderErrorCode =
   | 'credentials_locked' | 'credentials_corrupt' | 'credentials_unavailable'
@@ -21,7 +22,8 @@ export const modelCredentialsSchema = z.object({ apiKey: secretSchema, model: z.
 export const gmailCredentialsSchema = z.object({
   clientId: secretSchema, clientSecret: secretSchema, refreshToken: secretSchema, accessToken: secretSchema,
   expiresAt: z.number().finite().nonnegative(), email: z.union([z.literal(''), mailboxSchema]),
-}).strict();
+  grant: googleGrantSchema.refine(grant => grant.owner === 'local').optional(),
+}).strict().refine(value => !value.grant || value.grant.email === value.email);
 export const storedCredentialsSchema = z.object({
   model: modelCredentialsSchema, gmail: gmailCredentialsSchema,
   senderName: z.string().max(240).regex(/^[^\r\n\u0000]*$/), postalAddress: z.string().max(2000).regex(/^[^\u0000]*$/),

@@ -1,8 +1,38 @@
 # Callie Founder Sales System
 
-Local-first macOS founder-sales application.
+Local-first macOS founder-sales application for Callie, the 24/7 maintenance agent
+that handles tenant requests and coordinates contractors, including calling them
+when needed. The first acquisition audience is independent/regional residential
+property-management firms, especially multifamily or mixed rental portfolios.
 
-## Automatic customer discovery
+## Meeting-first reporting and explicit legacy transition
+
+Source-level reporting reads actual account call reports and canonical applied
+calendar events. A queued message, connection acceptance, old Interviewed stage,
+or generated pilot suggestion is not a real meeting or pilot. Booking updates and
+cancellations retain meeting identity. Calendar operational `held` means an
+execution hold, not attendance. Attendance and actual pilot starts require separate
+owner-reported evidence, admitted through authenticated owner commands and the
+ordered immutable event ledger. Attendance binds the account's existing calendar
+identity and elapsed scheduled end. Source references and notes are owner testimony,
+not external verification or model-generated facts. Missing costs, time and model
+usage stay unknown, not zero. Renderer exposure and live acceptance remain gated.
+
+Schema23 adds an initially empty workflow state and immutable transition receipts.
+Migration alone does not change legacy mode or enroll historical owner rows.
+The explicit `transitionWorkflow({commandId, expectedMode, manifestId})` domain
+command atomically records the mode and preservation manifest. It parks only
+proven superseded automatic acquisition work, preserves callbacks and ambiguous
+obligations, and does not rewrite drafts, history, suppression or immutable
+catalogs. Replay is idempotent and changed/stale commands fail. Parked legacy
+identities remain historical records, not new founder homework. Source adapters'
+live schedules are unchanged. Real workspace transition and whole-product D5
+acceptance remain separately gated. No navigation or renderer redesign is claimed.
+
+The incremental non-AI budget target is approximately $20/month. Genuine cold-email
+transport, new grants and all live sends/calls/invitations require separate approval.
+
+## Existing local customer discovery
 
 While Callie is open, local processing assesses retained source evidence and prepares
 an advisory shortlist in Today. It resumes pending work when the app reopens. It
@@ -19,8 +49,9 @@ Fit and Timing remain separate from cloud scores. Due promises and follow-ups
 stay ahead of new prospecting. Watch, exclude and reconsider decisions preserve
 founder context without rewriting sales history.
 
-Calls/messages remain explicit actions. Text/email drafts are unsent and discarded
-when closed. Record an actual conversation, confirm Interviewed with its evidence,
+Calls/messages remain explicit actions. Saved email drafts are durable and unsent
+until explicitly dispatched. Updating default generation instructions does not
+rewrite old saved draft text or history. Record an actual conversation, confirm Interviewed with its evidence,
 and explicitly mark **I stated the price** when logging a real price communication
 before separately confirming Offered. A generated pilot suggestion is not an
 executed offer, booked meeting, paid pilot, payment, or Won outcome.

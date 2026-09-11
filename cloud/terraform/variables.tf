@@ -63,3 +63,43 @@ variable "scheduled_health_alerts_enabled" {
   type        = bool
   default     = false
 }
+
+variable "delegated_worker_enabled" {
+  description = "Separate opt-in worker. Never enables any existing schedule or sender."
+  type        = bool
+  default     = false
+}
+
+variable "delegated_worker_activation_reviewed" {
+  description = "Explicit deployment/cost/security approval after offline and distributed acceptance gates. Not permission to send mail."
+  type        = bool
+  default     = false
+}
+
+variable "delegated_workspace_id" {
+  description = "Dedicated workspace identifier. No account/workspace default."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.delegated_workspace_id == "" || can(regex("^[A-Za-z0-9_-]{1,128}$", var.delegated_workspace_id))
+    error_message = "Use a bounded plain workspace identifier."
+  }
+}
+
+variable "delegated_google_client_id" {
+  description = "Separate remote Google OAuth client ID. Empty leaves Google grants unconfigured. Secret/key values are never in Terraform state."
+  type        = string
+  default     = ""
+}
+
+variable "delegated_research_enabled" {
+  description = "Opt-in access to the selected workspace research-model-credentials SecureString. Does not approve a budget, source configuration or model request. Secret values are provisioned separately, never stored in Terraform."
+  type        = bool
+  default     = false
+}
+
+variable "delegated_worker_schedule_enabled" {
+  description = "Opt-in dedicated five-minute delegated-worker schedule, requiring worker enablement and existing activation review. Never changes existing schedules. Runtime ownership, grants, budgets and exact approvals remain mandatory."
+  type        = bool
+  default     = false
+}

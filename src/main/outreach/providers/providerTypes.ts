@@ -1,3 +1,6 @@
+import type { GoogleGrant } from '../../../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
+export type { GoogleCapability, GoogleGrant } from '../../../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
+import type { AudienceQuery, ResearchLimits, ResearchCapability, CompanyCandidate } from '../../research/companyResearchTypes';
 export type SetupState = 'unconfigured' | 'ready' | 'locked' | 'reauthorize' | 'error';
 export type OutreachStatus = {
   model: SetupState; modelName: string; gmail: SetupState; accountEmail: string | null;
@@ -45,6 +48,8 @@ export type ModelCredentials = { apiKey: string; model: string };
 export type GmailCredentials = {
   clientId: string; clientSecret: string; refreshToken: string; accessToken: string;
   expiresAt: number; email: string;
+  /** Missing for legacy send-only credentials, never inferred as read/calendar powers. */
+  grant?: GoogleGrant;
 };
 export type StoredCredentials = {
   model: ModelCredentials; gmail: GmailCredentials; senderName: string; postalAddress: string;
@@ -56,3 +61,8 @@ export type OutreachProviderOptions = {
   fetch?: typeof globalThis.fetch;
   now?: () => number;
 };
+
+/** Main-only capability. Deliberately not added to renderer/IPC contracts. */
+export interface CompanyResearchModelProvider {
+  researchCompanies(input: { query: AudienceQuery; limits: ResearchLimits; capability: ResearchCapability }, signal: AbortSignal): Promise<CompanyCandidate[]>;
+}

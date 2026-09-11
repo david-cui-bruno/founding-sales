@@ -33,6 +33,9 @@ type ExposedCallieApi = {
     retry: () => Promise<unknown>;
     status: () => Promise<unknown>;
   };
+  delegation: import('../../src/shared/preload').CalliePreloadApi['delegation'];
+  linkedin: import('../../src/shared/contracts/linkedInContract').LinkedInApi;
+  phoneSetup: import('../../src/shared/contracts/phoneSetupContract').PhoneSetupApi;
   recovery: import('../../src/shared/contracts/recoveryContract').RecoveryProvider;
   shell: {
     revealDatabase: () => Promise<unknown>;
@@ -95,6 +98,7 @@ describe('preload workflow bridge', () => {
     expect(Object.keys(api).sort()).toEqual([
       'appleSpike',
       'conversations',
+      'delegation',
       'discovery',
       'friday',
       'health',
@@ -102,7 +106,9 @@ describe('preload workflow bridge', () => {
       'leadDetail',
       'leads',
       'learnings',
+      'linkedin',
       'outreach',
+      'phoneSetup',
       'pipeline',
       'recovery',
       'review',
@@ -110,6 +116,27 @@ describe('preload workflow bridge', () => {
       'sourcing',
       'today',
     ]);
+    expect(Object.keys(api.delegation).sort()).toEqual([
+      'approveRequestedFollowup', 'beginPhone', 'bootstrap', 'configure', 'configurePolicy', 'configureResearch',
+      'editRequestedFollowup', 'getRequestedFollowup', 'pair', 'policyImport', 'prepareRequestedFollowup', 'status', 'submit', 'sync',
+    ]);
+    expect(Object.keys(api.linkedin).sort()).toEqual([
+      'begin', 'copy', 'get', 'open', 'prepare', 'recover', 'reportOutcome', 'save',
+    ]);
+    expect(Object.keys(api.delegation.policyImport).sort()).toEqual(['confirm', 'resume', 'selectAndPreview', 'status']);
+    const { policyImport, ...delegationMethods } = api.delegation;
+    for (const namespace of [delegationMethods, api.linkedin, policyImport]) {
+      for (const method of Object.values(namespace)) expect(method).toBeTypeOf('function');
+    }
+    for (const namespace of [api.delegation, api.linkedin, policyImport]) {
+      expect(namespace).not.toHaveProperty('invoke');
+      expect(namespace).not.toHaveProperty('run');
+      expect(namespace).not.toHaveProperty('dispatch');
+    }
+    expect(Object.keys(api.phoneSetup).sort()).toEqual(['clear', 'confirm', 'status']);
+    for (const method of ['status', 'confirm', 'clear'] as const) expect(api.phoneSetup[method]).toBeTypeOf('function');
+    expect(api.phoneSetup).not.toHaveProperty('invoke');
+    expect(api.phoneSetup).not.toHaveProperty('run');
     expect(Object.keys(api.recovery).sort()).toEqual(['beginSetup', 'completeSetup', 'saveSetupMaterial', 'selectAndRunRestoreDrill', 'status']);
     expect(Object.keys(api.discovery).sort()).toEqual(['begin', 'get', 'getBrief', 'override']);
     expect(Object.keys(api.health)).toEqual(['get']);

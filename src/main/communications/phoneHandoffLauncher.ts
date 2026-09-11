@@ -82,5 +82,6 @@ export function unavailableOutboundReadiness(): OutboundReadinessPort {
   return {
     getCapability: () => ({ state: 'unavailable', reasonCode: 'inbound_safety_unwired' }),
     check: async () => ({ kind: 'blocked', reasonCode: 'inbound_safety_unwired' }),
+    assertCurrent: () => { throw new Error('Inbound readiness is unavailable.'); },
   };
 }

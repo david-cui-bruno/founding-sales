@@ -60,9 +60,30 @@ describe('preload Apple feasibility bridge', () => {
     const api = exposedApi();
 
     expect(Object.keys(api).sort()).toEqual([
-      'appleSpike', 'conversations', 'discovery', 'friday', 'health', 'imports', 'leadDetail',
-      'leads', 'learnings', 'outreach', 'pipeline', 'recovery', 'review', 'shell', 'sourcing', 'today',
+      'appleSpike', 'conversations', 'delegation', 'discovery', 'friday', 'health', 'imports', 'leadDetail',
+      'leads', 'learnings', 'linkedin', 'outreach', 'phoneSetup', 'pipeline', 'recovery', 'review', 'shell', 'sourcing', 'today',
     ]);
+    expect(Object.keys(api.delegation).sort()).toEqual([
+      'approveRequestedFollowup', 'beginPhone', 'bootstrap', 'configure', 'configurePolicy', 'configureResearch',
+      'editRequestedFollowup', 'getRequestedFollowup', 'pair', 'policyImport', 'prepareRequestedFollowup', 'status', 'submit', 'sync',
+    ]);
+    expect(Object.keys(api.linkedin).sort()).toEqual([
+      'begin', 'copy', 'get', 'open', 'prepare', 'recover', 'reportOutcome', 'save',
+    ]);
+    expect(Object.keys(api.delegation.policyImport).sort()).toEqual(['confirm', 'resume', 'selectAndPreview', 'status']);
+    const { policyImport, ...delegationMethods } = api.delegation;
+    for (const namespace of [delegationMethods, api.linkedin, policyImport]) {
+      for (const method of Object.values(namespace)) expect(method).toBeTypeOf('function');
+    }
+    for (const namespace of [api.delegation, api.linkedin, policyImport]) {
+      expect(namespace).not.toHaveProperty('invoke');
+      expect(namespace).not.toHaveProperty('run');
+      expect(namespace).not.toHaveProperty('dispatch');
+    }
+    expect(Object.keys(api.phoneSetup).sort()).toEqual(['clear', 'confirm', 'status']);
+    for (const method of ['status', 'confirm', 'clear'] as const) expect(api.phoneSetup[method]).toBeTypeOf('function');
+    expect(api.phoneSetup).not.toHaveProperty('invoke');
+    expect(api.phoneSetup).not.toHaveProperty('run');
     expect(Object.keys(api.appleSpike)).toEqual([
       'getStatus',
       'probeCapabilities',

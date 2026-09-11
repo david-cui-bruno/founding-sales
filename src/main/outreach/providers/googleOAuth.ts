@@ -3,7 +3,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { z } from 'zod';
 import type { GmailCredentials } from './providerTypes';
-import { gmailSendScope } from './gmailProvider';
+import { googleCalendarSelectionSchema, type GoogleCalendarSelection, capabilitiesForScopes, googleCapabilitySchema, googleScopes, type GoogleCapability } from '../../../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
 import { requestJsonOnce } from './providerHttp';
 import { fail, mailboxSchema, ProviderError, safeError, secretSchema } from './providerValidation';
 
@@ -17,12 +17,16 @@ const identitySchema = z.object({ sub: z.string().min(1).max(255), email: mailbo
  * The loopback listener is short-lived and cannot invoke arbitrary app commands.
  */
 export async function authorizeGoogle(input: {
-  clientId: string; clientSecret: string; signal: AbortSignal; now?: () => number;
+  clientId: string; clientSecret: string; capabilities?: GoogleCapability[]; calendars?: GoogleCalendarSelection; signal: AbortSignal; now?: () => number;
   openExternal(url: string): Promise<void>; fetch: typeof globalThis.fetch; timeoutMs?: number;
 }): Promise<GmailCredentials> {
   const client = clientSchema.safeParse(input);
   if (!client.success) fail('invalid_configuration');
   if (input.signal.aborted) fail('oauth_cancelled');
+  const wanted = z.array(googleCapabilitySchema).min(1).max(4).safeParse(input.capabilities ?? ['send']);
+  if (!wanted.success || new Set(wanted.data).size !== wanted.data.length) fail('invalid_configuration');
+  if (wanted.data.some(capability => capability === 'event_write' || capability === 'availability')
+    && !googleCalendarSelectionSchema.safeParse(input.calendars).success) fail('invalid_configuration');
   const state = randomBytes(32).toString('base64url');
   const verifier = randomBytes(48).toString('base64url');
   const callbackPath = `/oauth/callback/${randomBytes(16).toString('hex')}`;
@@ -84,7 +88,7 @@ export async function authorizeGoogle(input: {
     const redirectUri = `http://${host}${callbackPath}`;
     const authorization = new URL('https://accounts.google.com/o/oauth2/v2/auth');
     authorization.search = new URLSearchParams({ client_id: client.data.clientId, redirect_uri: redirectUri,
-      response_type: 'code', scope: `openid email ${gmailSendScope}`, state,
+      response_type: 'code', scope: ['openid', 'email', ...wanted.data.map(capability => googleScopes[capability])].join(' '), state,
       code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256',
       access_type: 'offline', prompt: 'consent select_account', include_granted_scopes: 'false',
     }).toString();
@@ -101,8 +105,10 @@ export async function authorizeGoogle(input: {
     if (reply.status < 200 || reply.status >= 300) fail('oauth_denied');
     const token = tokenSchema.safeParse(reply.data);
     if (!token.success) fail('provider_response_invalid');
-    const granted = new Set(token.data.scope.split(' '));
-    if (!granted.has(gmailSendScope) || !granted.has('openid')
+    const granted = new Set(token.data.scope.split(/\s+/));
+    const approvedScopes = ['openid', 'email', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', ...wanted.data.map(capability => googleScopes[capability])];
+    if ([...granted].some(scope => !approvedScopes.includes(scope))) fail('oauth_denied');
+    if (wanted.data.some(capability => !granted.has(googleScopes[capability])) || !granted.has('openid')
       || !(granted.has('email') || granted.has('https://www.googleapis.com/auth/userinfo.email'))) fail('oauth_denied');
     const identityReply = await requestJsonOnce({ fetch: input.fetch, signal: controller.signal,
       url: 'https://openidconnect.googleapis.com/v1/userinfo', init: {
@@ -113,7 +119,10 @@ export async function authorizeGoogle(input: {
     if (failure) throw failure;
     return { clientId: client.data.clientId, clientSecret: client.data.clientSecret,
       accessToken: token.data.access_token, refreshToken: token.data.refresh_token,
-      expiresAt: (input.now ?? Date.now)() + token.data.expires_in * 1000, email: identity.data.email };
+      expiresAt: (input.now ?? Date.now)() + token.data.expires_in * 1000, email: identity.data.email,
+      grant: { provider: 'google', subject: identity.data.sub, email: identity.data.email, grantedScopes: [...granted],
+        capabilities: capabilitiesForScopes([...granted]), owner: 'local', purpose: 'permitted_correspondence',
+        ...(input.calendars ? { calendars: googleCalendarSelectionSchema.parse(input.calendars) } : {}) } };
   } catch (error) { throw failure ?? safeError(error, 'oauth_unavailable'); }
   finally {
     clearTimeout(timer);

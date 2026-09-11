@@ -7,7 +7,7 @@ import { inspectDatabaseEncryption } from '../../db/databaseEncryption';
 import { DomainStartupFatalError } from './domainStartupTypes';
 
 export type DomainStorageReadiness = Readonly<{
-  schemaVersion: 19;
+  schemaVersion: 24;
   encrypted: true;
   cipherVersion: string;
   ftsAvailable: true;
@@ -24,12 +24,13 @@ export type DomainSchemaManifest = Readonly<{
 }>;
 
 /**
- * The canonical load-bearing schema-19 manifest. Reads the live catalog from
+ * The canonical load-bearing schema-24 manifest. Reads the live catalog from
  * sqlite_master with binary-name ordering; a missing, renamed, extra, or
  * malformed load-bearing object is fatal before composition.
  */
 export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
   tables: Object.freeze([
+    'account_route_policy_import_reviews',
     'activities',
     'activity_amendments',
     'app_meta',
@@ -38,14 +39,39 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'cadence_definitions',
     'cadence_enrollments',
     'cadence_steps',
+    'campaign_approvals',
+    'campaign_caps',
+    'campaign_command_receipts',
+    'campaign_enrollments',
+    'campaign_step_receipts',
+    'campaign_versions',
     'cloud_entity_links',
     'consent_policy_records',
     'contact_compliance_audit_events',
     'cycle_reactivation_receipts',
+    'delegated_action_outcomes',
+    'delegated_applied_events',
+    'delegated_approvals',
+    'delegated_authorities',
+    'delegated_commands',
+    'delegated_event_cursors',
+    'delegated_local_configuration',
+    'delegated_mail_cursors',
+    'delegated_manual_handoffs',
+    'delegated_manual_outcomes',
+    'delegated_meetings',
+    'delegated_reconciliation',
+    'delegated_reply_drafts',
+    'delegated_requested_followup_drafts',
+    'delegated_threads',
+    'delegated_transport_state',
+    'discovery_approved_budgets',
     'discovery_assessments',
     'discovery_current',
     'discovery_overrides',
     'discovery_preparations',
+    'discovery_receipts',
+    'discovery_reservations',
     'discovery_scan_state',
     'email_drafts',
     'email_send_intents',
@@ -63,6 +89,9 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'learning_evidence',
     'learnings',
     'lifecycle_review_items',
+    'manual_linkedin_draft_approvals',
+    'manual_linkedin_drafts',
+    'meeting_first_call_settings',
     'next_actions',
     'opt_out_closure_receipt_handles',
     'opt_out_closure_receipts',
@@ -75,6 +104,22 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'person_contact_methods',
     'person_outbound_jurisdictions',
     'persons',
+    'pm_account_claim_evidence',
+    'pm_account_claims',
+    'pm_account_commands',
+    'pm_account_link_evidence',
+    'pm_account_links',
+    'pm_account_outbound_intents',
+    'pm_account_outbound_results',
+    'pm_account_research_jobs',
+    'pm_account_route_evidence',
+    'pm_account_route_policy_evidence',
+    'pm_account_route_policy_receipts',
+    'pm_account_routes',
+    'pm_account_sources',
+    'pm_account_suppression_tombstones',
+    'pm_accounts',
+    'pm_handle_suppression_tombstones',
     'prioritization_evaluations',
     'prioritization_preference_events',
     'prioritization_rule_versions',
@@ -102,12 +147,16 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'transcripts',
     'trigger_events',
     'won_terms',
+    'workflow_transition_receipts',
     'workspace_settings',
+    'workspace_workflow_state',
   ]),
   indexes: Object.freeze([
     'activities_person_occurred_idx',
     'activities_provider_idempotency_idx',
+    'campaign_one_nonterminal_account',
     'contact_compliance_audit_contact_idx',
+    'delegated_receipt_once',
     'discovery_assessments_disposition_expires_idx',
     'discovery_assessments_prospect_evaluated_idx',
     'discovery_overrides_owner_created_idx',
@@ -122,6 +171,11 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'one_primary_contact_per_kind',
     'opt_out_handles_lookup_idx',
     'person_contact_methods_lookup_idx',
+    'pm_account_command_once',
+    'pm_account_route_policy_target',
+    'pm_account_source_receipt_once',
+    'pm_account_suppression_lookup',
+    'pm_handle_suppression_lookup',
     'prospect_priority_priority_idx',
     'source_events_person_observed_idx',
     'stage_events_cycle_effective_idx',
@@ -129,6 +183,30 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'trigger_events_source_event_unique',
   ]),
   triggers: Object.freeze([
+    'account_route_policy_import_reviews_no_delete',
+    'account_route_policy_import_reviews_no_update',
+    'campaign_approvals_no_delete',
+    'campaign_approvals_no_update',
+    'campaign_command_receipts_no_delete',
+    'campaign_command_receipts_no_update',
+    'campaign_step_receipts_no_delete',
+    'campaign_step_receipts_no_update',
+    'campaign_versions_no_delete',
+    'campaign_versions_no_update',
+    'delegated_action_outcomes_no_delete',
+    'delegated_action_outcomes_no_update',
+    'delegated_applied_events_no_delete',
+    'delegated_applied_events_no_update',
+    'delegated_approvals_no_delete',
+    'delegated_approvals_no_update',
+    'delegated_commands_no_delete',
+    'delegated_commands_no_update',
+    'delegated_manual_outcomes_no_delete',
+    'delegated_manual_outcomes_no_update',
+    'delegated_reconciliation_no_delete',
+    'delegated_reconciliation_no_update',
+    'discovery_approved_budgets_no_delete',
+    'discovery_approved_budgets_no_update',
     'discovery_assessments_no_delete',
     'discovery_assessments_no_update',
     'discovery_assessments_owner_insert',
@@ -140,6 +218,12 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'discovery_preparations_no_delete',
     'discovery_preparations_no_update',
     'discovery_preparations_owner_insert',
+    'discovery_receipts_ceiling_guard',
+    'discovery_receipts_no_delete',
+    'discovery_receipts_no_update',
+    'discovery_reservations_budget_guard',
+    'discovery_reservations_no_delete',
+    'discovery_reservations_no_update',
     'email_send_intents_no_delete',
     'email_send_intents_no_update',
     'email_send_results_no_delete',
@@ -192,6 +276,36 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'immutable_won_terms_delete',
     'initialize_next_action_due',
     'initialize_unreviewed_action',
+    'manual_linkedin_draft_approvals_no_delete',
+    'manual_linkedin_draft_approvals_no_update',
+    'pm_account_claim_evidence_no_delete',
+    'pm_account_claim_evidence_no_update',
+    'pm_account_claims_no_delete',
+    'pm_account_claims_no_update',
+    'pm_account_commands_no_delete',
+    'pm_account_commands_no_update',
+    'pm_account_link_evidence_no_delete',
+    'pm_account_link_evidence_no_update',
+    'pm_account_links_no_delete',
+    'pm_account_links_no_update',
+    'pm_account_outbound_intents_no_delete',
+    'pm_account_outbound_intents_no_update',
+    'pm_account_outbound_results_no_delete',
+    'pm_account_outbound_results_no_update',
+    'pm_account_route_evidence_no_delete',
+    'pm_account_route_evidence_no_update',
+    'pm_account_route_policy_evidence_no_delete',
+    'pm_account_route_policy_evidence_no_update',
+    'pm_account_route_policy_receipts_no_delete',
+    'pm_account_route_policy_receipts_no_update',
+    'pm_account_routes_no_delete',
+    'pm_account_routes_no_update',
+    'pm_account_sources_no_delete',
+    'pm_account_sources_no_update',
+    'pm_account_suppression_tombstones_no_delete',
+    'pm_account_suppression_tombstones_no_update',
+    'pm_handle_suppression_tombstones_no_delete',
+    'pm_handle_suppression_tombstones_no_update',
     'protect_activity_cadence_insert',
     'protect_activity_cadence_update',
     'protect_activity_transcript_attach',
@@ -255,9 +369,11 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
     'protect_trigger_event_ownership',
     'protect_trigger_event_receipt_proof',
     'synchronize_person_opt_out',
+    'workflow_transition_receipts_no_delete',
+    'workflow_transition_receipts_no_update',
   ]),
-  // Generated from production migrations 0001 through 0019, including hardened 0015.
-  catalogSha256: 'a6108cfce2bc4242d0872e81cc2afc88634f6309c55605bd3fc995804fde9073',
+  // Generated from actual production migrations through 0024.
+  catalogSha256: '540015183cea4abf0ec50df42e643d5d7e6901a3dfd6a3a9a5c538ae80661a6b',
 });
 
 export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
@@ -280,6 +396,8 @@ export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
   '0017DiscoveryAssessments',
   '0018PlaybookDueActions',
   '0019EmailDrafts',
+  '0020PmAccounts',
+  '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews',
 ] as const);
 
 const appMetaSchema = z.object({
@@ -293,7 +411,7 @@ const appMetaSchema = z.object({
 export function assertDomainStorageReady(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
-  expectedSchemaVersion: 19;
+  expectedSchemaVersion: 24;
   expectedManifest: DomainSchemaManifest;
 }): DomainStorageReadiness {
   const { database } = input;
@@ -316,7 +434,7 @@ export function assertDomainStorageReady(input: {
   const metadata = appMetaSchema.safeParse(metadataRow);
   if (!metadata.success || metadata.data.schema_version !== input.expectedSchemaVersion) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace schema version is not exactly 19.',
+      'schema_not_ready', 'The workspace schema version is not exactly 24.',
     );
   }
 
@@ -335,7 +453,7 @@ export function assertDomainStorageReady(input: {
     DOMAIN_MIGRATION_LEDGER,
   )) {
     throw new DomainStartupFatalError(
-      'schema_not_ready', 'The workspace migration ledger is not exactly schema 19.',
+      'schema_not_ready', 'The workspace migration ledger is not exactly schema 24.',
     );
   }
 
@@ -410,7 +528,7 @@ export function assertDomainStorageReady(input: {
   }
 
   return Object.freeze({
-    schemaVersion: 19 as const,
+    schemaVersion: 24 as const,
     encrypted: true as const,
     cipherVersion: encryption.cipherVersion ?? 'unknown',
     ftsAvailable: true as const,

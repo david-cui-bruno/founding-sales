@@ -21,6 +21,7 @@ import { ProgressBarThin } from '../../components/ProgressBarThin';
 import { useLeadInspectorIfAvailable } from '../leadInspector/useLeadInspector';
 import { DialMeter } from './DialMeter';
 import { TodayPage, skipTodayResurfaceAt } from './TodayPage';
+import { SuggestedContacts } from '../discovery/SuggestedContacts';
 
 export type TodayRouteApi = {
   get(): Promise<TodaySnapshot>;
@@ -71,6 +72,7 @@ const todayDateLine = (): string =>
  */
 export function TodayRoute({
   api,
+  discoveryApi,
   onOpenLead,
   onOpenLeadPage,
 }: TodayRouteProps) {
@@ -214,6 +216,7 @@ export function TodayRoute({
           onStartTriage={() => undefined}
         />
       )}
+      {discoveryApi !== undefined && <SuggestedContacts api={discoveryApi} onOpenPerson={onOpenLead} />}
     </div>
   );
 }

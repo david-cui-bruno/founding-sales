@@ -1,3 +1,8 @@
+import { LegacyWorkflowTransition, type WorkflowTransitionCommand } from './workspace/legacyWorkflowTransition';
+import { countMilestones, readAcquisitionFacts } from './campaign/acquisitionReport';
+import { projectAccountPipeline } from './campaign/accountPipelineProjection';
+import type { AcquisitionWindow } from '../../shared/contracts/acquisitionReportContract';
+import type { AccountOutboundRequest, AccountCallReport, AccountCallRange } from '../../shared/contracts/accountOutboundContract';
 import { collectLeadTriageSnapshot, type LeadTriageQueueRow } from '../today/leadTriageReportService';
 import { leadTriageSnapshotRequestSchema, type LeadTriageSnapshot, type LeadTriageSnapshotRequest } from '../../shared/contracts/leadTriageReportContract';
 import { createHash } from 'node:crypto';
@@ -417,6 +422,26 @@ export class FounderSalesDomain implements OutboundDomainPort {
     this.ids = input.ids;
     this.configuredTimezone = input.timezone;
   }
+
+  transitionWorkflow(command: WorkflowTransitionCommand) {
+    return new LegacyWorkflowTransition({ database: this.database, unitOfWork: this.services.unitOfWork, clock: this.clock, ids: this.ids }).transitionWorkflow(command);
+  }
+  acquisitionReport(window: AcquisitionWindow) { return countMilestones(readAcquisitionFacts(this.database), window); }
+  accountPipeline() {
+    const accounts = this.database.raw.prepare('SELECT id FROM pm_accounts ORDER BY id').all() as { id: string }[];
+    return projectAccountPipeline(accounts, readAcquisitionFacts(this.database));
+  }
+
+  // Account-only delegates never route account identities through person authorization.
+  inspectAccountOutboundCommand(request: AccountOutboundRequest) { return this.services.accountOutreach.inspect(request); }
+  getAccountOutboundOwnerGeneration(request: AccountOutboundRequest) { return this.services.accountOutreach.ownerGeneration(request); }
+  prepareAccountOutboundDispatch(request: AccountOutboundRequest, ownerGeneration: string | null) {
+    return this.services.accountOutreach.reserve(request, ownerGeneration);
+  }
+  recordAccountOutboundRefusal(request: AccountOutboundRequest, reason: string) { return this.services.accountOutreach.recordRefusal(request, reason); }
+  recordAccountOutboundResult(request: AccountOutboundRequest, result: HandoffResult) { return this.services.accountOutreach.recordDispatch(request, result); }
+  reportAccountCallOutcome(report: AccountCallReport) { return this.services.accountOutreach.reportCallOutcome(report); }
+  listActualCallAttempts(range: AccountCallRange) { return this.services.accountOutreach.listActualCallAttempts(range); }
 
   // ---------------------------------------------------------------- leads
 

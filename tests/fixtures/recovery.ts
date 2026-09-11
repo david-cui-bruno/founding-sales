@@ -7,7 +7,7 @@ import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork
 import { createRecoveryKeyMaterial } from '../../src/main/security/recoveryKey';
 import { createTempDatabase, createTestWorkspaceKey } from './tempDatabase';
 
-export async function recoveryFixture(options: { schemaVersion?: 17 | 18 | 19 } = {}) {
+export async function recoveryFixture(options: { schemaVersion?: 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 } = {}) {
   const temp = createTempDatabase();
   const root = dirname(dirname(temp.path));
   const key = createTestWorkspaceKey();

@@ -220,6 +220,7 @@ if (!started && ownsSingleInstanceLock) {
         // startApplication.createProductionSourcingPoller). Real launches
         // never set that variable.
         sourcingPollingEnabled: !app.commandLine.hasSwitch('use-mock-keychain'),
+        phoneRouteMode: app.commandLine.hasSwitch('use-mock-keychain') ? 'fixture' : 'native',
         isTrustedRendererUrl: rendererTrust.isTrustedRendererUrl,
         signal,
         logger,

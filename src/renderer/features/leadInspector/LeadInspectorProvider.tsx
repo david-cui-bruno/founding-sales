@@ -23,6 +23,7 @@ import type {
 import type { CallOutcomeApi } from './CallOutcomeSection';
 import { LeadFullPage } from './LeadFullPage';
 import { LeadInspector } from './LeadInspector';
+import { ContactPreparation, type ContactPreparationRecord } from './ContactPreparation';
 import {
   LeadInspectorContext,
   type LeadDetailApi,
@@ -67,6 +68,11 @@ export function LeadInspectorProvider({
     status: 'idle',
   });
   const selectionRef = useRef(selection);
+  const selectionEpoch = useRef(0);
+  const apiRef = useRef(api);
+  apiRef.current = api;
+  const preparationRecords = useMemo(() => new Map<string, ContactPreparationRecord>(), [api, discoveryApi]);
+  const selectedReads = useRef(new Map<string, { api: LeadDetailApi; epoch: number; promise: Promise<LeadDetail | null> }>());
   selectionRef.current = selection;
   const lastDetails = useRef(new Map<string, LeadDetail>());
   const [capabilities, setCapabilities] = useState<OutboundCapabilities | null>(null);
@@ -130,6 +136,7 @@ export function LeadInspectorProvider({
 
   const openWith = useCallback(
     (personId: string, view: Selection['view'], forceRefresh = false) => {
+      if (selectionRef.current?.personId !== personId || selectionRef.current?.view !== view || forceRefresh) selectionEpoch.current++;
       if (selectionRef.current?.personId !== personId) setManual(null);
       selectionRef.current = { personId, view };
       setSelection({ personId, view });
@@ -154,6 +161,7 @@ export function LeadInspectorProvider({
   );
 
   const closeLead = useCallback(() => {
+    selectionEpoch.current++;
     requestSequence.current += 1;
     selectionRef.current = null;
     setSelection(null);
@@ -180,6 +188,42 @@ export function LeadInspectorProvider({
   const refresh = useCallback((personId: string) => {
     if (mounted.current && selectionRef.current?.personId === personId) fetchDetail(personId);
   }, [fetchDetail]);
+
+  /** Same-owner reads retain the mounted editor and never overlap the transport. */
+  const readSelectedDetail = useCallback((personId: string, salesCycleId: string): Promise<LeadDetail | null> => {
+    const generation = selectionEpoch.current;
+    const key = `${personId}:${salesCycleId}`;
+    const pending = selectedReads.current.get(key);
+    if (pending?.api === api) return pending.epoch === generation ? pending.promise : pending.promise.then((): null => null);
+    if (!mounted.current || selectionRef.current?.personId !== personId || apiRef.current !== api) return Promise.resolve(null);
+    const sequence = ++requestSequence.current;
+    const promise = Promise.resolve().then(() => {
+      if (!mounted.current || selectionEpoch.current !== generation || apiRef.current !== api) return null;
+      return api.get({ personId });
+    }).then(detail => {
+      if (!mounted.current || selectionEpoch.current !== generation || selectionRef.current?.personId !== personId
+        || apiRef.current !== api || requestSequence.current !== sequence) return null;
+      if (detail === null || detail.personId !== personId) return null;
+      lastDetails.current.set(personId, detail);
+      setDetailState({ status: 'ready', detail });
+      return detail.salesCycleId === salesCycleId ? detail : null;
+    });
+    selectedReads.current.set(key, { api, epoch: generation, promise });
+    const settled = () => { if (selectedReads.current.get(key)?.promise === promise) selectedReads.current.delete(key); };
+    void promise.then(settled, settled);
+    return promise;
+  }, [api]);
+
+  useEffect(() => {
+    const onFocus = () => {
+      const state = detailStateRef.current;
+      if (state.status === 'ready' && selectionRef.current?.personId === state.detail.personId) {
+        void readSelectedDetail(state.detail.personId, state.detail.salesCycleId).catch((): undefined => undefined);
+      }
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [readSelectedDetail]);
 
   useEffect(() => {
     const onEmailSent = (event: Event) => {
@@ -351,6 +395,10 @@ export function LeadInspectorProvider({
   const personId = selection?.personId;
   const currentOutbound = personId === undefined ? undefined : outbounds[personId];
   const currentDetail = personId === undefined ? undefined : lastDetails.current.get(personId);
+  const preparationKey = currentDetail === undefined ? '' : `${currentDetail.personId}:${currentDetail.salesCycleId}`;
+  let preparationRecord = preparationRecords.get(preparationKey);
+  if (preparationRecord === undefined) { preparationRecord = {}; preparationRecords.set(preparationKey, preparationRecord); }
+  const selectedEpoch = selectionEpoch.current;
   const attempts = currentDetail?.outboundAttempts ?? [];
   const receipt = currentOutbound?.receipt;
   const uncertainCommandId = currentOutbound?.uncertain ? currentOutbound.request.commandId : undefined;
@@ -395,6 +443,11 @@ export function LeadInspectorProvider({
     outboundBlocked: currentOutbound?.uncertain || receipt?.status === 'unknown' || attempts.some((attempt) => attempt.channel === 'call' && attempt.status === 'unknown') };
 
   const discoveryPresentation = {
+    contactPreparation: currentDetail === undefined ? undefined : <ContactPreparation
+      key={preparationKey} detail={currentDetail} api={api} discoveryApi={discoveryApi} record={preparationRecord}
+      isSelected={() => selectionEpoch.current === selectedEpoch && selectionRef.current?.personId === personId
+        && lastDetails.current.get(personId!)?.salesCycleId === currentDetail.salesCycleId && apiRef.current === api}
+      readDetail={() => readSelectedDetail(currentDetail.personId, currentDetail.salesCycleId)} />,
     discoveryEvidence: discoveryApi === undefined || currentDetail === undefined ? undefined : <SelectedDiscovery
       key={`${personId}:${currentDetail.salesCycleId}`} api={discoveryApi} personId={personId!} salesCycleId={currentDetail.salesCycleId} />,
     pastActivityControls: pastActivityApi === undefined || currentDetail === undefined ? undefined : <PastActivityControls

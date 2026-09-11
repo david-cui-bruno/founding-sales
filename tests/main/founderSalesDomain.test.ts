@@ -30,6 +30,19 @@ import {
   type TempDatabase,
 } from '../fixtures/tempDatabase';
 
+
+function readinessProof(personId = 'fixture-person') {
+  return Object.freeze({
+    subject: Object.freeze({ kind: 'person' as const, id: personId }),
+    registryRevision: 1,
+    checkpoints: Object.freeze([]),
+  });
+}
+function readyReply(personId?: string) {
+  return { kind: 'ready' as const, proof: readinessProof(personId) };
+}
+const assertCurrentReadiness = (): void => undefined;
+
 const CLOCK_NOW = '2026-08-31T15:00:00.000Z';
 
 class FixedClock {
@@ -624,7 +637,7 @@ describe('FounderSalesDomain', () => {
       const dispatch = vi.fn(async (): Promise<HandoffResult> => ({ status: 'handoff_accepted', reasonCode: null }));
       const makeService = () => createOutboundCommandService({
         domain: { withDomain: async (operation) => operation(domain) },
-        readiness: { getCapability: () => ({ state: 'available', reasonCode: null }), check: async () => ({ kind: 'ready' }) },
+        readiness: { getCapability: () => ({ state: 'available', reasonCode: null }), check: async (personId) => readyReply(personId), assertCurrent: assertCurrentReadiness },
         phone: { inspectCapability: async () => ({ state: 'available', reasonCode: null }), dispatch },
       });
       expect(await makeService().beginOutbound(request)).toMatchObject({ status: 'unknown', reasonCode: 'result_not_persisted' });

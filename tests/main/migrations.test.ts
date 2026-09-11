@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { readdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { createMigrationRunner, migrateToLatest, productionMigrations } from '../../src/main/db/migrate';
@@ -18,7 +20,7 @@ describe('database migrations', () => {
     tempDatabase?.cleanup();
   });
 
-  it('creates the complete foundation and domain schema at current version 19', async () => {
+  it('creates the complete foundation and domain schema at current version 24', async () => {
     tempDatabase = createTempDatabase();
     const key = createTestWorkspaceKey();
     database = openDatabase({ path: tempDatabase.path, key });
@@ -30,15 +32,15 @@ describe('database migrations', () => {
 
     expect(result).toEqual({
       fromVersion: 0,
-      toVersion: 19,
-      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger', '0010NoDueDates', '0011ContactDncFlags', '0012UpstreamRequestState', '0013ContactComplianceEvidence', '0014OutboundJurisdictionClearance', '0015RecoveryMetadata', '0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts'],
+      toVersion: 24,
+      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger', '0010NoDueDates', '0011ContactDncFlags', '0012UpstreamRequestState', '0013ContactComplianceEvidence', '0014OutboundJurisdictionClearance', '0015RecoveryMetadata', '0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews'],
     });
     expect(
       await database.kysely
         .selectFrom('app_meta')
         .select('schema_version')
         .executeTakeFirstOrThrow(),
-    ).toEqual({ schema_version: 19 });
+    ).toEqual({ schema_version: 24 });
 
     const objects = database.raw
       .prepare<[], { name: string; type: string }>(
@@ -70,8 +72,8 @@ describe('database migrations', () => {
     const secondResult = await migrateToLatest(database, options);
 
     expect(secondResult).toEqual({
-      fromVersion: 19,
-      toVersion: 19,
+      fromVersion: 24,
+      toVersion: 24,
       appliedMigrationIds: [],
     });
     expect(
@@ -79,7 +81,7 @@ describe('database migrations', () => {
         .selectFrom('app_meta')
         .select('schema_version')
         .executeTakeFirstOrThrow(),
-    ).toEqual({ schema_version: 19 });
+    ).toEqual({ schema_version: 24 });
     expect(
       database.raw
         .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM app_meta')
@@ -89,16 +91,19 @@ describe('database migrations', () => {
 
   it.each([
     { label: 'unknown', value: 'unknown' },
-    { label: 'future', value: 20 },
+    { label: 'future', value: 25 },
     { label: 'negative', value: -1 },
     { label: 'noninteger', value: 15.5 },
-  ])('rejects a $label schema marker before backup or migration', async ({ value }) => {
+  ])('rejects a $label schema marker before backup or migration', async ({ label, value }) => {
+    if (label === 'future') expect(productionMigrations.some(migration => migration.schemaVersion === value)).toBe(false);
     tempDatabase = createTempDatabase();
     const key = createTestWorkspaceKey();
     database = openDatabase({ path: tempDatabase.path, key });
     const options = { backupDirectory: `${tempDatabase.path}.backups`, workspaceKey: key };
     await createMigrationRunner(productionMigrations.slice(0, 15))(database, options);
     database.raw.prepare('UPDATE app_meta SET schema_version = ? WHERE singleton = 1').run(value);
+    const filesBefore = readdirSync(dirname(tempDatabase.path), { recursive: true }).sort();
+    const catalogBefore = database.raw.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all();
     const backupCountBefore = database.raw.prepare<[], { count: number }>(
       'SELECT COUNT(*) AS count FROM backup_receipts',
     ).get()!.count;
@@ -116,6 +121,8 @@ describe('database migrations', () => {
     expect(database.raw.prepare<[], { count: number }>(
       'SELECT COUNT(*) AS count FROM backup_receipts',
     ).get()!.count).toBe(backupCountBefore);
+    expect(database.raw.prepare('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all()).toEqual(catalogBefore);
+    expect(readdirSync(dirname(tempDatabase.path), { recursive: true }).sort()).toEqual(filesBefore);
   });
 
   it.each([
@@ -208,8 +215,8 @@ describe('database migrations', () => {
 
     await expect(migrateToLatest(database, options)).resolves.toEqual({
       fromVersion: 0,
-      toVersion: 19,
-      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger', '0010NoDueDates', '0011ContactDncFlags', '0012UpstreamRequestState', '0013ContactComplianceEvidence', '0014OutboundJurisdictionClearance', '0015RecoveryMetadata', '0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts'],
+      toVersion: 24,
+      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger', '0010NoDueDates', '0011ContactDncFlags', '0012UpstreamRequestState', '0013ContactComplianceEvidence', '0014OutboundJurisdictionClearance', '0015RecoveryMetadata', '0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews'],
     });
   });
 
@@ -272,8 +279,8 @@ describe('database migrations', () => {
 
     await expect(migrateToLatest(database, options)).resolves.toEqual({
       fromVersion: 1,
-      toVersion: 19,
-      appliedMigrationIds: ['0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger', '0010NoDueDates', '0011ContactDncFlags', '0012UpstreamRequestState', '0013ContactComplianceEvidence', '0014OutboundJurisdictionClearance', '0015RecoveryMetadata', '0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts'],
+      toVersion: 24,
+      appliedMigrationIds: ['0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger', '0010NoDueDates', '0011ContactDncFlags', '0012UpstreamRequestState', '0013ContactComplianceEvidence', '0014OutboundJurisdictionClearance', '0015RecoveryMetadata', '0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews'],
     });
   });
 

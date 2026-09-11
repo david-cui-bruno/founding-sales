@@ -37,6 +37,21 @@ function fixture() {
 const editor = (api: OutreachApi, personId = 'avery', onClose = vi.fn()) => <OutboundComposer channel="email" recipientLabel={`${personId}@example.com`} personId={personId} contactMethodId="email" api={api} onClose={onClose} />;
 const body = () => screen.getByLabelText('Message') as HTMLTextAreaElement;
 
+it('keeps a configured unverified email editable while explicitly refusing Send', async () => {
+  const { api, drafts, sent } = fixture();
+  const reason = 'This email address is unverified. You can prepare a draft, but not send yet.';
+  render(<OutboundComposer channel="email" recipientLabel="avery@example.com" personId="avery" contactMethodId="email"
+    api={api} onClose={vi.fn()} sendBlockedReason={reason} />);
+  await waitFor(() => expect(body().value).toBe('Hello avery'));
+  expect(body().disabled).toBe(false);
+  expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText(reason)).toBeTruthy();
+  fireEvent.change(body(), { target: { value: 'Candidate address draft, not sent' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+  await waitFor(() => expect(drafts.get('avery:email')?.body).toBe('Candidate address draft, not sent'));
+  expect(sent).toEqual([]);
+});
+
 it('opens the owned persisted draft without sending and shows exact account/footer preview', async () => {
   const { api, sent } = fixture(); render(editor(api));
   await waitFor(() => expect(body().value).toBe('Hello avery'));

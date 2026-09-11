@@ -14,7 +14,7 @@
   box-shadow: var(--shadow-drawer);
 }
 
-/* Drawer entry: 240ms slide-and-fade, gated to no-preference. */
+/* Drawer entry: slide without fading text below its contrast threshold. */
 @media (prefers-reduced-motion: no-preference) {
   .lead-inspector {
     animation: lead-inspector-in var(--duration-dialog) var(--ease-out);
@@ -22,11 +22,9 @@
 
   @keyframes lead-inspector-in {
     from {
-      opacity: 0;
       transform: translateX(8px);
     }
     to {
-      opacity: 1;
       transform: translateX(0);
     }
   }

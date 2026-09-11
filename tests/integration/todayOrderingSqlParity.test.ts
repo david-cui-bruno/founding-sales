@@ -7,6 +7,7 @@ import {
   PROSPECT_PRIORITY_ORDER_BY_SQL,
   compareProspectPriority,
 } from '../../src/main/domain/prioritization/priorityOrdering';
+import { planDailyAccountCalls } from '../../src/main/domain/today/todayOrdering';
 import type { OrderablePriorityRow } from '../../src/main/domain/prioritization/prioritizationTypes';
 import {
   createTempDatabase,
@@ -127,6 +128,53 @@ describe('Today discretionary suborder SQL parity', () => {
       const expected = [...rows].sort(compareProspectPriority).map((row) => row.prospectId);
       expect(sqlOrder(shuffled)).toEqual(expected);
     }
+  });
+
+  it('matches daily account call planning SQL over due ranked and actual-completed account IDs', () => {
+    database.raw.exec(`
+      CREATE TEMP TABLE due_accounts(account_id TEXT NOT NULL, position INTEGER NOT NULL);
+      CREATE TEMP TABLE ranked_accounts(account_id TEXT NOT NULL, position INTEGER NOT NULL);
+      CREATE TEMP TABLE actual_completed_accounts(account_id TEXT NOT NULL);
+    `);
+    const due = ['warm-a', 'warm-a', 'warm-b'];
+    const ranked = ['done-cold', 'new-a', 'warm-a', 'new-a', 'new-b'];
+    const completed = ['done-cold'];
+    for (const [position, accountId] of due.entries()) {
+      database.raw.prepare('INSERT INTO due_accounts(account_id,position) VALUES(?,?)').run(accountId, position);
+    }
+    for (const [position, accountId] of ranked.entries()) {
+      database.raw.prepare('INSERT INTO ranked_accounts(account_id,position) VALUES(?,?)').run(accountId, position);
+    }
+    for (const accountId of completed) {
+      database.raw.prepare('INSERT INTO actual_completed_accounts(account_id) VALUES(?)').run(accountId);
+    }
+    const sqlRows = database.raw.prepare(`
+      WITH unique_due AS (
+        SELECT account_id, MIN(position) AS position FROM due_accounts GROUP BY account_id
+      ), unique_ranked AS (
+        SELECT account_id, MIN(position) AS position FROM ranked_accounts GROUP BY account_id
+      ), new_accounts AS (
+        SELECT r.account_id, r.position
+        FROM unique_ranked r
+        LEFT JOIN unique_due d ON d.account_id = r.account_id
+        LEFT JOIN actual_completed_accounts c ON c.account_id = r.account_id
+        WHERE d.account_id IS NULL AND c.account_id IS NULL
+        ORDER BY r.position
+        LIMIT 2
+      ), planned AS (
+        SELECT account_id, position, 0 AS band FROM unique_due
+        UNION ALL
+        SELECT account_id, position, 1 AS band FROM new_accounts
+      )
+      SELECT account_id AS accountId FROM planned ORDER BY band, position
+    `).all() as { accountId: string }[];
+    expect(sqlRows.map(row => row.accountId)).toEqual(planDailyAccountCalls({
+      due,
+      ranked,
+      newCallSlots: 2,
+      completedAccountIds: completed,
+      totalCallCapacity: 3,
+    }).accountIds);
   });
 
   it('statically bans copied tuples, blended scores, SQL arithmetic, and early limits', () => {

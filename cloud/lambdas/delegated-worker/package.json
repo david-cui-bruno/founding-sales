@@ -1,0 +1,24 @@
+{
+  "name": "callie-delegated-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.cjs",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "node build.mjs",
+    "prebuild": "npm run typecheck"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "3.1123.0",
+    "@aws-sdk/client-ssm": "3.1124.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "26.4.0",
+    "esbuild": "0.21.5",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9"
+  }
+}

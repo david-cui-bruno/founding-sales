@@ -48,12 +48,12 @@ export const migration0017DiscoveryAssessments = {
         override_id TEXT REFERENCES discovery_overrides(id),
         disposition TEXT NOT NULL CHECK (disposition IN ('candidate','research','judgment','watch','excluded')),
         assessment_json TEXT NOT NULL CHECK (${json('assessment_json')}),
-        CHECK (${[
+        CHECK (${([
           ['id', 'id'], ['personId', 'person_id'], ['prospectId', 'prospect_id'], ['salesCycleId', 'sales_cycle_id'],
           ['fingerprint', 'fingerprint'], ['policyVersion', 'policy_version'], ['ruleVersionId', 'rule_version_id'],
           ['modelVersion', 'model_version'], ['evaluatedAt', 'evaluated_at'], ['expiresAt', 'expires_at'],
           ['localDate', 'local_date'], ['overrideId', 'override_id'], ['disposition', 'disposition'],
-        ].map(([key, column]) => field('assessment_json', key, column)).join(' AND ')}),
+        ] as const).map(([key, column]) => field('assessment_json', key, column)).join(' AND ')}),
         UNIQUE (id, prospect_id),
         FOREIGN KEY (prospect_id, person_id) REFERENCES prospects(id, person_id),
         FOREIGN KEY (sales_cycle_id, person_id) REFERENCES sales_cycles(id, person_id)
@@ -87,13 +87,13 @@ export const migration0017DiscoveryAssessments = {
         action_id TEXT NOT NULL CHECK (${text('action_id')}),
         request_json TEXT NOT NULL CHECK (${json('request_json')}),
         receipt_json TEXT NOT NULL CHECK (${json('receipt_json')}),
-        CHECK (${[
+        CHECK (${([
           ['commandId', 'id'], ['assessmentId', 'assessment_id'], ['personId', 'person_id'],
           ['salesCycleId', 'sales_cycle_id'], ['expectedFingerprint', 'fingerprint'],
-        ].map(([key, column]) => field('request_json', key, column)).join(' AND ')}),
-        CHECK (${[
+        ] as const).map(([key, column]) => field('request_json', key, column)).join(' AND ')}),
+        CHECK (${([
           ['assessmentId', 'assessment_id'], ['personId', 'person_id'], ['salesCycleId', 'sales_cycle_id'], ['actionId', 'action_id'],
-        ].map(([key, column]) => field('receipt_json', key, column)).join(' AND ')}),
+        ] as const).map(([key, column]) => field('receipt_json', key, column)).join(' AND ')}),
         CHECK (json_type(receipt_json, '$.mutation') IS 'object'
           AND json_type(receipt_json, '$.mutation.revision') IS 'integer'
           AND json_extract(receipt_json, '$.mutation.revision') BETWEEN 0 AND 9007199254740991),

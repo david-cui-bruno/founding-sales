@@ -1,6 +1,11 @@
 import CallieAppleMacOS
 import Foundation
 
+if let phoneMode = PhoneRouteMode(arguments: Array(CommandLine.arguments.dropFirst())) {
+    phoneMode.run()
+    dispatchMain()
+}
+
 do {
     let frameWriter = SynchronizedJSONLFrameWriter()
     let dependencies = try AppleBridgeBootstrap.compose(

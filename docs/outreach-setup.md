@@ -71,3 +71,19 @@ PATH=/opt/homebrew/opt/node@24/bin:$PATH npm test -- \
 ```
 
 These tests do not use live provider accounts. Do not replace fixture `fetch` implementations with a real network client, use real credentials in tests, or run a real send to claim test success.
+
+## Delegated meeting-first source integration (not live acceptance)
+
+The normal main process now reads an OS-encrypted delegated pairing from its private `delegation` directory. An absent, invalid or workspace-mismatched pairing leaves delegation inactive. The expected workspace is captured before asynchronous initialization and cannot be supplied by research results or a default UUID. Pairing is an explicit authenticated operation against an exact configured HTTPS endpoint. A newly paired installation must restart to capture that immutable identity. Credentials never appear in status or sync responses.
+
+The strict preload `delegation` surface provides `status`, `pair`, `configure`, `bootstrap`, `submit`, `sync`, `configurePolicy`, `configureResearch` and `beginPhone`. These are backend integration paths, not a claim that the D3-pending renderer offers these controls. Local configuration is revisioned encrypted-SQL state and defaults to paused. Remote account activation, sender caps, calendar rules and workspace research selection are separate explicit authenticated configurations. None creates a grant, permission evidence, budget approval or execution ownership. Selected bootstrap exports only the bounded selected account/provenance/suppression snapshot, acknowledges an explicit research baseline, and does not delegate or upload the workspace database.
+
+Every local operation uses a live Foundation database lease. Lock and shutdown abort local work and invalidate current proof readers before their lease closes. They do not revoke separately authorized remote automation. The actual A1 registry includes the delegated adapter. Manual phone handoff uses a short-lived owner proof scoped to the exact reserved handoff, while retaining all other inbound adapters and dependencies. A missing adapter, stale/consumed token, current suppression or unavailable owner holds the action. Consuming a handoff is one-shot and is followed by the immediate native phone adapter, never a retry or automatic voice call. A typed owner outcome is required before dependent automation proceeds. Generic cancellation or uncertainty is not proof that no action occurred.
+
+### Remaining source and acceptance gates
+
+- Renderer presentation and exact D3 visual approval remain pending. No new screen or fake packaged entry was introduced.
+- Normal admission of a newly researched account's route-policy receipt still needs a reviewed integration path. Test fixture admission is not normal-user-path acceptance.
+- Current requested-followup email approval requires a real existing inbound thread. A phone-origin request for the first email is not implemented by that enum. The separate receipt-backed first-followup plan must be implemented and verified without a fabricated person/thread or cold-mail fallback.
+- Deployment, pairing setup, account grants, provider reads, real research/model requests, actual calls/sends/invitations and migration of a real workspace remain separately authorized activities. No such operations were performed for this integration.
+- **Mac-asleep live acceptance remains unperformed:** after bounded deployment/grant/endpoint approval, verify a real relevant reply, exact approved response, agreed Calendar event, remote pause/revoke and one-result reconnect. Fictional encrypted-SQL/HTTP tests cannot establish that result.

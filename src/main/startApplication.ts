@@ -1,3 +1,21 @@
+import {accountFingerprint} from './domain/accounts/accountEvidence';
+import {constants as fsConstants} from 'node:fs';
+import {open as openNativeFile} from 'node:fs/promises';
+import {registerLinkedInIpc} from './linkedin/registerLinkedInIpc';
+import {createLinkedInDraftProvider} from './linkedin/linkedInDraftProvider';
+import {CredentialStore} from './outreach/providers/credentialStore';
+import { PairingStore, type StoredPairing } from './delegation/pairingStore';
+import { createDelegationRuntime, type DelegationRuntime } from './delegation/delegationRuntime';
+import { SqlDelegationConfiguration } from './delegation/delegationSync';
+import type { AppDatabase } from './db/database';
+import { z } from 'zod';
+import { AccountRepository } from './domain/accounts/accountRepository';
+import { SqlDiscoveryReservationStore } from './delegation/discoveryReservationStore';
+import { createCompanyDiscoveryProvider } from './research/companyDiscoveryProvider';
+import { createCompanyPageProvider, type PageHttp } from './research/companyPageProvider';
+import { createFetchedReceiptPolicy, companySourcePolicy } from './research/companySourcePolicy';
+import { createCompanyPreparation, createCompanyResearchWorker, discoveryInputFingerprint, type CompanyPreparationConfiguration } from './research/companyResearchWorker';
+import type { AccountResearchStore, DiscoveryReservationStore } from './research/companyResearchTypes';
 import { createEmailService } from './outreach/emailService';
 import { createOutreachProviders } from './outreach/providers/outreachProviders';
 import { registerOutreachIpc } from './ipc/registerOutreachIpc';
@@ -38,6 +56,7 @@ import { HealthService } from './health/healthService';
 import { registerApplicationIpc } from './ipc/registerApplicationIpc';
 import type { SourcingProvider } from './sourcing/registerSourcingIpc';
 import { EnrichmentRequestWriter } from './sourcing/enrichmentRequestWriter';
+import { createFileSystemEnrichmentRequestStore } from './sourcing/enrichmentFixtureStore';
 import type { EnrichmentRequester } from './leads/leadDetailService';
 import {
   createFileSystemInboxObjectStore,
@@ -52,19 +71,242 @@ import {
   UpstreamSync,
   type UpstreamObjectStore,
 } from './sourcing/upstreamSync';
-import { safeStorage, dialog, shell } from 'electron';
+import { safeStorage, dialog, shell, clipboard } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
 import type { SafeLogger } from './logging/safeLogger';
 import { createOutboundCommandService } from './communications/outboundCommandService';
-import { unavailablePhoneHandoff, unavailableOutboundReadiness } from './communications/phoneHandoffLauncher';
-import type { OutboundCommandServiceApi, OutboundDomainGate } from './communications/outboundPorts';
+import { createPhoneHandoffLauncher, unavailablePhoneHandoff, unavailableOutboundReadiness } from './communications/phoneHandoffLauncher';
+import type { OutboundCommandServiceApi, OutboundDomainGate, PhoneHandoffPort, OutboundReadinessPort } from './communications/outboundPorts';
+
+import { createInboundReadiness, type InboundRegistry, type InboundAdapter } from './communications/inboundReadiness';
+import { createNativePhoneLaunchDriver, inspectNativePhoneRouteCandidate, resolveVerifiedNativePhoneHelper,
+  type NativePhoneDriverOptions, type NativePhoneProcessRequest } from './communications/phoneLaunchDriver';
+import { PhoneRouteSettings, createPhoneSetupService, type PhoneSetupService } from './communications/phoneRouteSettings';
+import { registerPhoneSetupIpc } from './communications/registerPhoneSetupIpc';
+
+export type PhoneInboundRegistry = InboundRegistry & {
+  initialize(adapters: readonly InboundAdapter[]): void;
+  replace(adapters: readonly InboundAdapter[]): void;
+  register(adapter: InboundAdapter): () => void;
+  reset(): void;
+};
+/** Startup must explicitly finish adapter discovery, including an empty result.
+ * Future inbound owners register here before exposing their sending paths. */
+export function createPhoneInboundRegistry(): PhoneInboundRegistry {
+  let initialized = false;
+  let revision = 0;
+  let adapters: readonly InboundAdapter[] = Object.freeze([]);
+  const replace = (next: readonly InboundAdapter[]) => {
+    if (new Set(next.map(adapter => adapter.id)).size !== next.length) throw new Error('Duplicate inbound adapter');
+    adapters = Object.freeze([...next]); initialized = true; ++revision;
+  };
+  return {
+    snapshot: () => ({ initialized, revision, adapters }),
+    initialize: replace,
+    replace,
+    register(adapter) {
+      if (!initialized) throw new Error('Inbound registry is uninitialized');
+      replace([...adapters, adapter]);
+      let removed = false;
+      return () => {
+        if (removed) return;
+        removed = true;
+        if (adapters.includes(adapter)) replace(adapters.filter(current => current !== adapter));
+      };
+    },
+    reset() { initialized = false; adapters = Object.freeze([]); ++revision; },
+  };
+}
+
+export type PhoneBindings = {
+  phone: PhoneHandoffPort;
+  readiness: OutboundReadinessPort;
+  setup?: PhoneSetupService;
+  onSetupChanged?(callback: () => void): void;
+  invalidate?(locked?: boolean): void;
+  dispose?(): void;
+  /** Fictional process capture only. Never exposed over IPC. */
+  fixtureInvocations?: readonly NativePhoneProcessRequest[];
+};
+export type ProductionPhoneBindingsOptions = {
+  settings: PhoneRouteSettings;
+  registry: InboundRegistry;
+  helper: Parameters<typeof resolveVerifiedNativePhoneHelper>[0];
+  native?: Pick<NativePhoneDriverOptions, 'platform' | 'runAsync' | 'runSync'>;
+  now?: () => string;
+};
+
+/** No helper/OS work at construction. The first explicit inspection verifies the
+ * packaged same-team helper, shared by candidate inspection and proof-gated dispatch. */
+export function createProductionPhoneBindings(input: ProductionPhoneBindingsOptions): PhoneBindings {
+  let closed = false;
+  const supported = (input.native?.platform ?? process.platform) === 'darwin';
+  let locked = false;
+  let epoch = 0;
+  let inspectedEpoch: number | undefined;
+  let onChange = (): void => undefined;
+  let helper: Promise<string> | undefined;
+  let launcher: PhoneHandoffPort | undefined;
+  const unavailable = unavailablePhoneHandoff();
+  const resolveHelper = () => helper ??= resolveVerifiedNativePhoneHelper(input.helper);
+  const proof = () => !supported || closed || locked ? null : input.settings.read()?.fingerprint ?? null;
+  const setup = createPhoneSetupService({ settings: input.settings, now: input.now ?? (() => new Date().toISOString()),
+    inspectCandidate: async () => {
+      if (!supported || closed || locked) return null;
+      try {
+        const verifiedHelperPath = await resolveHelper();
+        if (!supported || closed || locked) return null;
+        return inspectNativePhoneRouteCandidate({ ...input.native, verifiedHelperPath });
+      } catch { return null; }
+    },
+    onChange: () => { ++epoch; inspectedEpoch = undefined; onChange(); },
+  });
+  return {
+    setup,
+    readiness: createInboundReadiness(input.registry),
+    onSetupChanged(callback) { onChange = callback; },
+    invalidate(suspended) { ++epoch; inspectedEpoch = undefined; if (suspended !== undefined) locked = suspended; setup.invalidate(suspended); },
+    dispose() { closed = true; ++epoch; inspectedEpoch = undefined; setup.dispose(); },
+    phone: {
+      async inspectCapability() {
+        const version = epoch;
+        inspectedEpoch = undefined;
+        if (!proof()) return unavailable.inspectCapability();
+        try {
+          const verifiedHelperPath = await resolveHelper();
+          if (version !== epoch || !proof()) return unavailable.inspectCapability();
+          launcher ??= createPhoneHandoffLauncher({
+            driver: createNativePhoneLaunchDriver({ ...input.native, verifiedHelperPath, setupFingerprint: proof }),
+            // Domain authorization checks DNC, jurisdiction and exact contact. The
+            // launcher independently rejects short or malformed targets.
+            isExcludedNumber: () => false,
+          });
+          const capability = await launcher.inspectCapability();
+          if (version !== epoch || !proof()) return unavailable.inspectCapability();
+          if (capability.state === 'available') inspectedEpoch = version;
+          return capability;
+        } catch { return unavailable.inspectCapability(); }
+      },
+      dispatch(phone) {
+        const authorized = inspectedEpoch === epoch && !closed && !locked;
+        inspectedEpoch = undefined;
+        return authorized && launcher ? launcher.dispatch(phone) : unavailable.dispatch(phone);
+      },
+    },
+  };
+}
+
+export function createStartupPhoneBindings(options: ApplicationStartupOptions, registry: InboundRegistry): PhoneBindings {
+  const settings = new PhoneRouteSettings(join(options.userDataPath,
+    options.phoneRouteMode === 'fixture' ? 'phone-route-fixture.json' : 'phone-route.json'));
+  if (options.phoneRouteMode === 'fixture') {
+    const invocations: NativePhoneProcessRequest[] = [];
+    const reply = JSON.stringify({ version: 1, status: 'available', fingerprint: 'fictional-phone-route-v1' });
+    const bindings = createProductionPhoneBindings({ settings, registry,
+      helper: { path: { isPackaged: true, resourcesPath: '/Fictional/Callie.app/Contents/Resources',
+        developmentExecutablePath: '/forbidden', environment: {} },
+      signature: { parentExecutablePath: '/Fictional/Callie', expectedIdentifier: 'fictional.helper',
+        run: async () => ({ signed: true, identifier: 'fictional.helper', teamIdentifier: 'FICTIONAL' }) } },
+      native: { platform: 'darwin', runSync: () => reply, runAsync: async request => {
+        if (request.args[0] === '--phone-route-open') invocations.push(request);
+        return reply;
+      } },
+    });
+    return { ...bindings, fixtureInvocations: invocations };
+  }
+  const bridge = options.appleBridge;
+  return createProductionPhoneBindings({ settings, registry,
+    helper: { path: { isPackaged: bridge?.isPackaged ?? false, resourcesPath: bridge?.resourcesPath ?? '',
+      developmentExecutablePath: '/unavailable', environment: {} },
+    signature: { expectedIdentifier: bridge?.expectedIdentifier ?? '', parentExecutablePath: bridge?.parentExecutablePath ?? '' } },
+    native: { platform: bridge?.platform ?? process.platform },
+  });
+}
+
+export type CompanyResearchStartupConfiguration = CompanyPreparationConfiguration & {
+  maxAccountBudgetMicros: number;
+  /** Explicit permitted public URLs, never a model-provided boolean. */
+  permittedSources: readonly string[];
+};
+export type StartupCompanyResearch = {
+  prepare(commandId: string, signal: AbortSignal): Promise<{ status: 'prepared' | 'blocked'; accountIds: string[] }>;
+  runNext(signal: AbortSignal): Promise<'completed' | 'parked' | 'idle'>;
+};
+/** Main-only composition over the actual runtime gate and C1 SQL ledger. No
+ * account, grant, timer, credential read or HTTP operation occurs at construction. */
+function createStartupCompanyResearch(input: { runtime: FoundationRuntime; providers: ReturnType<typeof createOutreachProviders>;
+  configuration: CompanyResearchStartupConfiguration; http?: PageHttp; resolve?: (hostname: string) => Promise<string[]> }) {
+  const config = structuredClone(input.configuration);
+  discoveryInputFingerprint(config);
+  z.number().int().positive().max(Number.MAX_SAFE_INTEGER).parse(config.maxAccountBudgetMicros);
+  const permitted = new Set(z.array(z.string().url().max(2048)).max(500).parse(config.permittedSources));
+  if ([...permitted].some(url => companySourcePolicy(url) !== 'candidate')) throw new Error('Research source configuration invalid');
+  const receipts = createFetchedReceiptPolicy();
+  let locked = false; let closed = false; let lifetime = new AbortController();
+  const flights = new Set<Promise<unknown>>();
+  const invalidate = (suspended?: boolean) => {
+    if (suspended !== undefined) locked = suspended;
+    lifetime.abort(); lifetime = new AbortController();
+  };
+  const stores = (signal: AbortSignal) => {
+    const account = <T,>(operation: (repo: AccountRepository) => T, settlement = false) => input.runtime.withDatabase(database => {
+      if (!settlement) signal.throwIfAborted();
+      return operation(new AccountRepository({ database, clock: domainClock, ids: domainIds, sourcePolicy: receipts,
+        research: { maxBudgetMicros: config.maxAccountBudgetMicros } }));
+    });
+    const store: AccountResearchStore = {
+      create: value => account(repo => repo.create(value)), snapshot: (id, at) => account(repo => repo.snapshot(id, at)),
+      admitEvidence: (batch, claim) => account(repo => repo.admitEvidence(batch, claim)), enqueue: value => account(repo => repo.enqueue(value)),
+      claimNext: at => account(repo => repo.claimNext(at)), settle: value => account(repo => repo.settle(value), true),
+    };
+    const discovery = <T,>(operation: (repo: SqlDiscoveryReservationStore) => T) => input.runtime.withDatabase(database => {
+      signal.throwIfAborted();
+      return operation(new SqlDiscoveryReservationStore({ database, workspaceId: config.workspaceId, clock: domainClock }));
+    });
+    const reservations: DiscoveryReservationStore = { reserveOnce: value => discovery(repo => repo.reserveOnce(value)), complete: value => discovery(repo => repo.complete(value)) };
+    return { store, reservations };
+  };
+  const invoke = <T,>(signal: AbortSignal, inactive: T, operation: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    if (closed || locked || signal.aborted) return Promise.resolve(inactive);
+    if (flights.size) return Promise.reject(new Error('Company research operation already in progress'));
+    const combined = AbortSignal.any([signal, lifetime.signal]);
+    const pending = operation(combined);
+    flights.add(pending);
+    void pending.then(() => flights.delete(pending), () => flights.delete(pending));
+    return pending;
+  };
+  const api: StartupCompanyResearch = {
+    prepare: (commandId, signal) => invoke(signal, { status: 'blocked', accountIds: [] }, async active => {
+      const { store, reservations } = stores(active);
+      const discovery = createCompanyDiscoveryProvider({ capability: config.capability,
+        request: (query, limits, requestSignal) => input.providers.researchCompanies({ query, limits, capability: config.capability }, requestSignal) });
+      return createCompanyPreparation({ store, reservations, discovery, configuration: config }).prepare(commandId, active);
+    }),
+    runNext: signal => invoke(signal, 'idle', async active => {
+      const { store } = stores(active);
+      const pages = createCompanyPageProvider({ receipts, clock: domainClock, permitted: url => permitted.has(url), http: input.http, resolve: input.resolve });
+      return createCompanyResearchWorker({ store, pages, clock: domainClock }).runNext(active);
+    }),
+  };
+  return { api, invalidate, dispose: async () => { closed = true; invalidate(true); await Promise.allSettled([...flights]); } };
+}
 
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
-  createEmailService?(runtime:FoundationRuntime,userDataPath:string):ReturnType<typeof createEmailService>;
+  createEmailService?(runtime:FoundationRuntime,userDataPath:string,providers?:ReturnType<typeof createOutreachProviders>,expectedWorkspaceId?:string):ReturnType<typeof createEmailService>;
+  createPairingStore?(userDataPath:string):Pick<PairingStore,'load'|'redeem'>;
+  createResearchProviders?(userDataPath:string):ReturnType<typeof createOutreachProviders>;
+  companyResearchHttp?: PageHttp;
+  companyResearchResolve?: (hostname: string) => Promise<string[]>;
   registerOutreachIpc?:typeof registerOutreachIpc;
+  registerLinkedInIpc?:typeof registerLinkedInIpc;
+  createPolicyImportNative?():NonNullable<Parameters<typeof createDelegationRuntime>[0]['policyImportNative']>;
+  createRequestedFollowupModel?(userDataPath:string):NonNullable<Parameters<typeof createDelegationRuntime>[0]['requestedModel']>;
+  createLinkedInAdapters?(userDataPath:string):NonNullable<Parameters<typeof createDelegationRuntime>[0]['linkedIn']>;
   createDiscoveryWorker?: typeof createDiscoveryWorker;
   createOutboundCommandService?: typeof createOutboundCommandService;
+  createPhoneBindings?(runtime: FoundationRuntime): PhoneBindings;
+  registerPhoneSetupIpc?: typeof registerPhoneSetupIpc;
   createBackupService?(options: BackupServiceOptions): Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'>;
   createRecoveryService?(options: RecoveryServiceOptions): RecoveryProvider & { shutdown(): Promise<void> };
   registerApplicationIpc(
@@ -104,6 +346,11 @@ export type ApplicationStartupOptions = {
   isTrustedRendererUrl?: (url: string) => boolean;
   appleBridge?: AppleBridgeSupervisorOptions;
   appleSpikeEnabled?: boolean;
+  phoneRouteMode?: 'native' | 'fixture';
+  /** Trusted paired workspace identity. Absence leaves account dispatch unavailable. */
+  expectedWorkspaceId?: string;
+  /** Main-only explicit configuration. C6/D3 own persisted user/campaign activation. */
+  companyResearch?: CompanyResearchStartupConfiguration;
   /**
    * Auto-polls the sourcing inbox on startup plus every 15 minutes. Off by
    * default so tests and packaged E2E runs never touch the network; main.ts
@@ -122,6 +369,7 @@ export type ApplicationStartupOptions = {
 
 export type RunningApplication = {
   databasePath: string;
+  companyResearch?: StartupCompanyResearch;
   createPreReleaseBackup(): Promise<VerifiedBackup>;
   shutdown(): Promise<void>;
 };
@@ -150,11 +398,22 @@ const SOURCING_POLL_INTERVAL_MS = 15 * 60 * 1000;
  * to upstream/enrichment-requests/. Missing credentials surface as a
  * validated 'credentials_unavailable' refusal, never a throw.
  */
-function createProductionEnrichmentRequester(
+export function createProductionEnrichmentRequester(
   runtime: FoundationRuntime,
   userDataPath: string,
   logger?: SafeLogger,
 ): EnrichmentRequester {
+  // TEST-ONLY: exercise the real writer/gates while substituting only its external
+  // transport. An invalid fixture path must fail, never fall back to host credentials.
+  const fixtureDirectory = process.env.CALLIE_SOURCING_FIXTURE_DIR;
+  if (fixtureDirectory !== undefined) {
+    const writer = new EnrichmentRequestWriter({
+      domainGate: runtime,
+      createStore: async () => createFileSystemEnrichmentRequestStore(fixtureDirectory),
+      clock: domainClock,
+    });
+    return { request: input => writer.request(input) };
+  }
   const credentialStore = new SourcingCredentialStore({
     safeStorage,
     envelopePath: join(userDataPath, 'callie.sourcing-inbox-credentials.json'),
@@ -286,21 +545,28 @@ function createProductionSourcingPoller(
   });
 }
 
+/** Default main-process domain factory, shared with the bounded startup integration test. */
+export function createStartupDomainRuntime(database: AppDatabase, expectedWorkspaceId?: string): DomainRuntime {
+  return new DomainRuntime({ database, clock: domainClock, ids: domainIds, expectedWorkspaceId });
+}
+
 const defaultDependencies: ApplicationStartupDependencies = {
   loadWorkspaceKey: (input) => workspaceKeyStore.loadOrCreate(input),
   prepareEncryptedDatabase,
   openDatabase,
   migrateToLatest,
-  createDomainRuntime: (database) => new DomainRuntime({
-    database,
-    clock: domainClock,
-    ids: domainIds,
-  }),
+  createDomainRuntime: createStartupDomainRuntime,
   createHealthService: (options) => new HealthService(options),
   registerApplicationIpc,
   registerOutreachIpc,
-  createEmailService: (runtime,userDataPath) => createEmailService({databaseGate:runtime,
-    providers:createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)})}),
+  registerLinkedInIpc,
+  createPolicyImportNative:()=>createPolicyImportNativeAdapters(dialog),
+  createRequestedFollowupModel:userDataPath=>async()=>{const credentials=await new CredentialStore({directory:join(userDataPath,'outreach'),safeStorage}).load();return credentials?.model.apiKey?{credentials:credentials.model,fetch:globalThis.fetch}:undefined;},
+  createLinkedInAdapters:userDataPath=>({provider:createLinkedInDraftProvider({credentials:new CredentialStore({directory:join(userDataPath,'outreach'),safeStorage}),fetch:globalThis.fetch}),shell:{openExternal:url=>shell.openExternal(url)},clipboard:{writeText:text=>clipboard.writeText(text)}}),
+  createResearchProviders: userDataPath => createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)}),
+  createPairingStore:userDataPath=>new PairingStore({directory:join(userDataPath,'delegation'),safeStorage}),
+  createEmailService: (runtime,userDataPath,providers,expectedWorkspaceId) => createEmailService({databaseGate:runtime,expectedWorkspaceId,
+    providers:providers ?? createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)})}),
   createSourcingPoller: createProductionSourcingPoller,
   createEnrichmentRequester: createProductionEnrichmentRequester,
   createAppleBridgeSupervisor: (options) => new AppleBridgeSupervisor(options),
@@ -312,6 +578,12 @@ export async function startApplication(
   options: ApplicationStartupOptions,
   dependencies: ApplicationStartupDependencies = defaultDependencies,
 ): Promise<RunningApplication> {
+  const trustedExpectedWorkspaceId = options.expectedWorkspaceId;
+  const pairingStore=dependencies.createPairingStore?.(options.userDataPath);
+  let loadedPairing:StoredPairing|null=null;
+  try{if(pairingStore)loadedPairing=await pairingStore.load();}catch{/* Corrupt/locked configuration is inactive, never a default workspace. */}
+  const paired=loadedPairing && (!trustedExpectedWorkspaceId||loadedPairing.workspaceId===trustedExpectedWorkspaceId)?loadedPairing:null;
+  const expectedWorkspaceId = trustedExpectedWorkspaceId ?? paired?.workspaceId;
   const { databasePath, keyEnvelopePath, backupDirectory } = resolveApplicationPaths(options.userDataPath);
   const runtime = new FoundationRuntime(
     {
@@ -321,10 +593,18 @@ export async function startApplication(
       databaseExists: encryptedWorkspaceExists(databasePath),
       keyEnvelopePath,
     },
-    dependencies,
+    dependencies === defaultDependencies ? { ...dependencies,
+      createDomainRuntime: database => createStartupDomainRuntime(database, expectedWorkspaceId),
+    } : dependencies,
   );
+  let delegation:DelegationRuntime|undefined;
+  let delegationCleanup:Promise<void>|undefined;
   let email:ReturnType<typeof createEmailService>|undefined;
+  let researchProviders: ReturnType<typeof createOutreachProviders> | undefined;
+  let companyResearch: ReturnType<typeof createStartupCompanyResearch> | undefined;
+  let researchCleanup: Promise<void> | undefined;
   let unregisterEmail:(()=>void)|undefined;
+  let unregisterLinkedIn:(()=>void)|undefined;
   let unregisterApplicationIpc: (() => void) | undefined;
   let unregisterAppleSpikeIpc: (() => void) | undefined;
   let appleBridgeSupervisor: AppleBridgeSupervisorApi | undefined;
@@ -333,11 +613,15 @@ export async function startApplication(
   let recoveryService: (RecoveryProvider & { shutdown(): Promise<void> }) | undefined;
   let shutdownPromise: Promise<void> | undefined;
   let outbound: OutboundCommandServiceApi | undefined;
+  let phoneBindings: PhoneBindings | undefined;
+  let startupInboundRegistry: PhoneInboundRegistry | undefined;
+  let unregisterPhoneSetup: (() => void) | undefined;
   let unregisterOutboundLifecycle: (() => void) | undefined;
   let removeStartupAbort: (() => void) | undefined;
   let discoveryWorker: DiscoveryWorker | undefined;
   let discoveryClosed = false;
   let outboundClosed = false;
+  let outboundLocked = false;
   const cleanupErrors: unknown[] = [];
 
   const closeDiscovery = (): void => {
@@ -360,7 +644,13 @@ export async function startApplication(
     if (outboundClosed) return;
     // Reserve permanent owner closure before any injected callback can reenter.
     outboundClosed = true;
+    delegationCleanup=delegation?.dispose();void delegationCleanup?.catch(():undefined=>undefined);
+    // Abort research before touching the single shared credential owner.
+    try { researchCleanup = companyResearch?.dispose(); void researchCleanup?.catch((): undefined => undefined); } catch (error) { cleanupErrors.push(error); }
     try { email?.dispose(); } catch (error) { cleanupErrors.push(error); }
+    try { researchProviders?.dispose(); } catch (error) { cleanupErrors.push(error); }
+    startupInboundRegistry?.reset();
+    try { phoneBindings?.dispose?.(); } catch (error) { cleanupErrors.push(error); }
     try { outbound?.dispose(); } catch (error) { cleanupErrors.push(error); }
     detachOutboundLifecycle();
     try { detachStartupAbort(); } catch (error) { cleanupErrors.push(error); }
@@ -405,6 +695,7 @@ export async function startApplication(
         sourcingPoller = undefined;
       }
 
+      try { await researchCleanup;await delegationCleanup; } catch (error) { cleanupErrors.push(error); }
       try { await discoveryWorker?.idle(); } catch (error) { cleanupErrors.push(error); }
       finally { discoveryWorker = undefined; }
 
@@ -419,6 +710,8 @@ export async function startApplication(
       try { await recoveryCleanup; } catch (error) { cleanupErrors.push(error); }
       finally { recoveryService = undefined; }
 
+      try { unregisterPhoneSetup?.(); } catch (error) { cleanupErrors.push(error); } finally { unregisterPhoneSetup = undefined; }
+      try { unregisterLinkedIn?.(); } catch(error) { cleanupErrors.push(error); } finally { unregisterLinkedIn=undefined; }
       try { unregisterEmail?.(); } catch(error) { cleanupErrors.push(error); } finally { unregisterEmail=undefined; }
       try {
         unregisterApplicationIpc?.();
@@ -476,11 +769,42 @@ export async function startApplication(
         recordOutboundRefusal: (request, reason) => current.recordOutboundRefusal(request, reason),
       })),
     };
+    if (dependencies === defaultDependencies && options.phoneRouteMode !== undefined) {
+      startupInboundRegistry = createPhoneInboundRegistry();
+    }
+    phoneBindings = dependencies.createPhoneBindings?.(runtime)
+      ?? (dependencies === defaultDependencies && options.phoneRouteMode !== undefined
+        ? createStartupPhoneBindings(options, startupInboundRegistry)
+        : { phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness() });
     outbound = (dependencies.createOutboundCommandService ?? createOutboundCommandService)({
-      domain, phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(),
+      domain, phone: phoneBindings.phone, readiness: phoneBindings.readiness,
     });
-    email = dependencies.createEmailService?.(runtime,options.userDataPath);
+    phoneBindings.onSetupChanged?.(() => { if (!outboundClosed) outbound.invalidate('wake'); });
+    delegation=createDelegationRuntime({databaseGate:runtime,pairing:paired,clock:domainClock,phone:phoneBindings.phone,inboundRegistry:startupInboundRegistry,policyImportNative:dependencies.createPolicyImportNative?.(),requestedModel:dependencies.createRequestedFollowupModel?.(options.userDataPath),linkedIn:paired?dependencies.createLinkedInAdapters?.(options.userDataPath):undefined,configurationChanged:async()=>{
+      await companyResearch?.dispose();companyResearch=undefined;
+      const state=paired?await runtime.withDatabase(database=>new SqlDelegationConfiguration({database,workspaceId:paired.workspaceId,pairingId:paired.pairingId,clock:domainClock}).read()):null;
+      if(state?.configuration.state==='active'&&state.configuration.research&&dependencies.createResearchProviders&&!outboundClosed){
+        researchProviders??=dependencies.createResearchProviders(options.userDataPath);
+        companyResearch=createStartupCompanyResearch({runtime,providers:researchProviders,configuration:state.configuration.research,http:dependencies.companyResearchHttp,resolve:dependencies.companyResearchResolve});
+        companyResearch.invalidate(outboundLocked);
+      }
+    }});
+    const persistedResearch=paired?await runtime.withDatabase(database=>new SqlDelegationConfiguration({database,workspaceId:paired.workspaceId,pairingId:paired.pairingId,clock:domainClock}).read()):null;
+    const configuredResearch=options.companyResearch??(persistedResearch?.configuration.state==='active'?persistedResearch.configuration.research:null);
+    if (configuredResearch && dependencies.createResearchProviders) {
+      researchProviders = dependencies.createResearchProviders(options.userDataPath);
+      companyResearch = createStartupCompanyResearch({ runtime, providers: researchProviders, configuration: configuredResearch,
+        http: dependencies.companyResearchHttp, resolve: dependencies.companyResearchResolve });
+    }
+    // Email borrows the same manager without owning its disposal in research mode.
+    const borrowedProviders = researchProviders ? { ...researchProviders, dispose: (): void => undefined,
+      invalidate: () => { companyResearch?.invalidate(); researchProviders!.invalidate(); } } : undefined;
+    email = dependencies.createEmailService?.(runtime,options.userDataPath,borrowedProviders,expectedWorkspaceId);
     if(outboundClosed)email?.dispose();
+    // The composed v1 email service sends drafts but owns no inbound adapter, and
+    // the optional Apple spike is not a synchronization adapter. This explicit
+    // discovery result must be extended by future inbound owners before activation.
+    startupInboundRegistry?.initialize(delegation?[delegation.adapter]:[]);
     if (options.signal !== undefined) {
       const signal = options.signal;
       removeStartupAbort = () => signal.removeEventListener('abort', abortStartup);
@@ -489,10 +813,13 @@ export async function startApplication(
       throwIfStartupCancelled(signal);
     }
     unregisterOutboundLifecycle = options.registerOutboundLifecycle?.({
-      onWake: () => { if (!outboundClosed) {email?.invalidate();outbound.invalidate('wake');} },
-      onLock: () => { if (!outboundClosed) {email?.invalidate(true);outbound.invalidate('lock');} },
+      onWake: () => { if (!outboundClosed) {delegation?.invalidate();companyResearch?.invalidate();phoneBindings?.invalidate?.();email?.invalidate();outbound.invalidate('wake');} },
+      onLock: () => { if (!outboundClosed) {outboundLocked=true;delegation?.invalidate(true);companyResearch?.invalidate(true);phoneBindings?.invalidate?.(true);email?.invalidate(true);outbound.invalidate('lock');} },
       onUnlock: () => {
         if (outboundClosed) return;
+        delegation?.invalidate(false);
+        outboundLocked=false;companyResearch?.invalidate(false);
+        phoneBindings?.invalidate?.(false);
         email?.invalidate(false);
         outbound.invalidate('wake');
         if (!outboundClosed) outbound.resumeAfterUnlock();
@@ -571,7 +898,11 @@ export async function startApplication(
       options.logDirectoryPath,
       outbound,
     );
-    if(email)unregisterEmail=(dependencies.registerOutreachIpc??registerOutreachIpc)({provider:email,isTrustedRendererUrl:options.isTrustedRendererUrl});
+    if (phoneBindings.setup) unregisterPhoneSetup = (dependencies.registerPhoneSetupIpc ?? registerPhoneSetupIpc)({
+      provider: phoneBindings.setup, isTrustedRendererUrl: options.isTrustedRendererUrl,
+    });
+    if(delegation.linkedIn)unregisterLinkedIn=(dependencies.registerLinkedInIpc??registerLinkedInIpc)({provider:delegation.linkedIn,isTrustedRendererUrl:options.isTrustedRendererUrl});
+    if(email)unregisterEmail=(dependencies.registerOutreachIpc??registerOutreachIpc)({provider:email,delegation,pairingStore,isTrustedRendererUrl:options.isTrustedRendererUrl});
     throwIfStartupCancelled(options.signal);
     if (options.sourcingPollingEnabled === true && sourcingPoller !== undefined) {
       const timer: PollTimer = {
@@ -610,6 +941,7 @@ export async function startApplication(
 
     return {
       databasePath,
+      get companyResearch(){return companyResearch?.api;},
       createPreReleaseBackup: async () => {
         if (shutdownPromise !== undefined || backupService === undefined) {
           throw new Error('Application backups are unavailable.');
@@ -654,4 +986,27 @@ function createRecoveryDialogs(backupDirectory: string): RecoveryDialogs {
       return result.canceled ? null : result.filePaths[0] ?? null;
     },
   };
+}
+
+/** Only native main-process dialogs choose bytes and confirm exact review data.
+ * No renderer-provided path, raw artifact or approval boolean crosses this seam. */
+export function createPolicyImportNativeAdapters(dialogs:Pick<typeof dialog,'showOpenDialog'|'showMessageBox'>):NonNullable<Parameters<typeof createDelegationRuntime>[0]['policyImportNative']>{
+ return {
+  async selectArtifact(maxBytes,signal){
+   signal.throwIfAborted();const selected=await dialogs.showOpenDialog({title:'Select owner-review evidence interchange',properties:['openFile'],filters:[{name:'FSS evidence JSON',extensions:['json']}]});signal.throwIfAborted();
+   if(selected.canceled)return null;if(selected.filePaths.length!==1)throw Error('policy_import_selection_invalid');
+   const file=await openNativeFile(selected.filePaths[0],fsConstants.O_RDONLY|fsConstants.O_NOFOLLOW);
+   try{const before=await file.stat();if(!before.isFile()||before.size<=0||before.size>maxBytes)throw Error('policy_import_size_invalid');
+    const bytes=Buffer.alloc(maxBytes+1);let offset=0;
+    while(offset<bytes.length){signal.throwIfAborted();const result=await file.read(bytes,offset,bytes.length-offset,offset);if(result.bytesRead===0)break;offset+=result.bytesRead;}
+    const after=await file.stat();signal.throwIfAborted();if(offset!==before.size||offset>maxBytes||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs)throw Error('policy_import_file_changed');
+    return bytes.subarray(0,offset);
+   }finally{await file.close();}
+  },
+  async confirmReview({preview,reviewReason},signal){
+   signal.throwIfAborted();const result=await dialogs.showMessageBox({type:'warning',title:'Review exact imported evidence',message:preview.notice,
+    detail:JSON.stringify({artifactHash:preview.artifactHash,reviewId:preview.reviewId,reviewReason,artifact:preview.artifact,rowHashes:preview.artifact.rows.map(row=>({rowId:row.rowId,sha256:accountFingerprint(row)})),rows:preview.rows},null,2),buttons:['Cancel','Record this exact review'],defaultId:0,cancelId:0,noLink:true});
+   signal.throwIfAborted();return result.response===1;
+  },
+ };
 }

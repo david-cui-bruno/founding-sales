@@ -25,7 +25,8 @@ export interface AppleSpikePreloadApi {
 
 /**
  * The complete window bridge: the strict workflow API composed by
- * `createCallieApi` plus the Apple feasibility spike surface.
+ * `createCallieApi` (including explicit phone setup, never call observation)
+ * plus the Apple feasibility spike surface.
  */
 export type CalliePreloadApi = CallieApi & {
   appleSpike: AppleSpikePreloadApi;

@@ -45,6 +45,7 @@ export class DomainRuntime {
   private readonly database: AppDatabase;
   private readonly clock: Clock;
   private readonly ids: IdGenerator;
+  private readonly expectedWorkspaceId: string | undefined;
   private state: RuntimeState = 'created';
   private services: DomainServices | undefined;
   private report: DomainStartupReport | undefined;
@@ -53,10 +54,12 @@ export class DomainRuntime {
     database: AppDatabase;
     clock: Clock;
     ids: IdGenerator;
+    expectedWorkspaceId?: string;
   }) {
     this.database = input.database;
     this.clock = input.clock;
     this.ids = input.ids;
+    this.expectedWorkspaceId = input.expectedWorkspaceId;
   }
 
   initialize(): DomainStartupReport {
@@ -68,7 +71,7 @@ export class DomainRuntime {
     assertDomainStorageReady({
       database: this.database,
       expectedBusyTimeoutMs: 5000,
-      expectedSchemaVersion: 19,
+      expectedSchemaVersion: 24,
       expectedManifest: DOMAIN_SCHEMA_MANIFEST,
     });
 
@@ -76,6 +79,7 @@ export class DomainRuntime {
       database: this.database,
       clock: this.clock,
       ids: this.ids,
+      expectedWorkspaceId: this.expectedWorkspaceId,
     });
 
     let report: DomainStartupReport;

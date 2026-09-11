@@ -1,3 +1,4 @@
+import { assertLegacyScheduling, readWorkflowMode } from '../workspace/legacyWorkflowTransition';
 import type { AppDatabase } from '../../db/database';
 import { z } from 'zod';
 import {
@@ -451,6 +452,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
   }
 
   private writeReady(parsed: ReviewToReadyInput, provenance: { kind: 'founder' | 'mechanical'; reason: string }): SalesCycle {
+    assertLegacyScheduling(this.database, 'automatic_acquisition');
     const effectiveAt = parsed.effectiveAt;
     const cycle = this.cycles.getById(parsed.cycleId);
     if (
@@ -875,6 +877,33 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
           effectiveAt: parsed.evaluationAt,
         })
       : cycle;
+    // Resolution/retry restores this same owed outbound component, not a new touch.
+    const sameOwedComponent = recipe.nextAction?.kind === 'create'
+      && ['resolve', 'retry'].includes(recipe.enrollment.kind)
+      && recipe.nextAction.draft.cadenceDefinitionId === action.cadence.cadenceDefinitionId
+      && recipe.nextAction.draft.cadenceStepId === action.cadence.cadenceStepId
+      && recipe.nextAction.draft.cadenceComponentId === action.cadence.cadenceComponentId
+      && (action.workIntent === 'promised_follow_up' || action.workIntent === 'inbound_response'
+        || action.dueSource === 'recorded_callback' || action.dueSource === 'founder_resurface'
+        || cycle.resurfaceReason === 'callback'
+        || !!this.database.raw.prepare('SELECT 1 FROM activities WHERE sales_cycle_id=? AND callback_at IS NOT NULL LIMIT 1').get(cycle.id));
+    // Fulfill the existing evidenced obligation, but never seed another automatic
+    // acquisition step after explicit transition. Fulfillment cadences are unaffected.
+    if (definition.category === 'prospecting' && recipe.currentAction.kind !== 'none' && recipe.currentAction.kind !== 'remain_pending'
+      && !sameOwedComponent && readWorkflowMode(this.database) === 'meeting_first') {
+      const receipt = this.database.raw.prepare('SELECT manifest_id FROM workflow_transition_receipts ORDER BY created_at DESC,command_id DESC LIMIT 1').get() as { manifest_id: string } | undefined;
+      if (!receipt) throw new LifecycleEvidenceError('Meeting-first mode requires its transition manifest.');
+      const parkedId = `parked-legacy:${receipt.manifest_id}:${action.id}`;
+      this.actions.insertNextAction({ id: parkedId, salesCycleId: cycle.id, actionType: 'parked_legacy', channel: null, status: 'pending',
+        timezone: action.timezone, allowedWindow: null, workIntent: 'internal_review', inboundSla: noneInboundSla(), cadence: NO_CADENCE,
+        dueAt: parsed.evaluationAt, dueSource: 'internal_review', createdAt: parsed.evaluationAt });
+      const parked = this.cycles.replaceCurrentAction({ cycleId: lifecycleCycle.id, expectedVersion: lifecycleCycle.version,
+        expectedStage: lifecycleCycle.stage, expectedWorkflowStatus: 'active', expectedCurrentActionId: action.id, nextActionId: parkedId, updatedAt: parsed.evaluationAt });
+      this.settlePlannerAction(action, recipe, activity, parsed.evaluationAt);
+      if (this.database.raw.prepare("UPDATE cadence_enrollments SET status='stopped',stop_reason='meeting_first_transition',version=version+1,updated_at=? WHERE id=? AND version=? AND status='active'").run(parsed.evaluationAt, enrollment.id, enrollment.version).changes !== 1) throw new StaleDomainWriteError();
+      this.cycles.assertCurrentActionPostcondition(cycle.id);
+      return parked;
+    }
     const mutatedEnrollment = this.enrollments.applyCadenceEnrollmentMutation({
       enrollmentId: enrollment.id, salesCycleId: cycle.id,
       expectedVersion: enrollment.version, expectedDefinitionId: enrollment.cadenceDefinitionId,
@@ -1055,6 +1084,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       existingReview === null ? this.prospectingFamilyForPerson(parsed.personId) : null,
     );
     const rule = this.reactivations.getRule(parsed.ruleId);
+    assertLegacyScheduling(this.database, rule?.ruleType === 'manual' ? 'recorded_promise' : 'automatic_acquisition');
     this.assertRuleActivationProof(parsed, rule);
     const blocker = this.reactivationBlocker({
       personId: parsed.personId, prospectId: parsed.prospectId,
@@ -1260,6 +1290,7 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
       trigger: z.enum(['live_vacancy', 'inbound_demo', 'direct_referral']),
       evaluationAt: utcTimestampSchema,
     }).strict().parse(input) as ApplyProspectingTriggerInput;
+    assertLegacyScheduling(this.database, parsed.trigger === 'live_vacancy' ? 'automatic_acquisition' : 'inbound_response');
     const cycle = this.cycles.getById(parsed.cycleId);
     if (cycle === null || cycle.version !== parsed.expectedCycleVersion
       || cycle.currentNextActionId !== parsed.expectedCurrentActionId

@@ -697,3 +697,79 @@ export type DomainTables = {
   workspace_settings: WorkspaceSettingsTable;
   won_terms: WonTermsTable;
 };
+
+/** Schema20 account storage. JSON columns are parsed by strict account contracts. */
+export type PmAccountTables = {
+  pm_accounts: { id: string; name: string; domain: string | null; version: number; created_at: string; updated_at: string };
+  pm_account_commands: { command_id: string; account_id: string; fingerprint: string; result_json: string; account_version: number; created_at: string };
+  pm_account_sources: { id: string; account_id: string; source_key: string; url: string; fetched_at: string; sha256: string; excerpt: string; permitted: 1; admitted_at: string };
+  pm_account_claims: { id: string; account_id: string; claim_json: string; admitted_at: string };
+  pm_account_claim_evidence: { account_id: string; claim_id: string; source_id: string };
+  pm_account_routes: { id: string; account_id: string; version: number; person_id: string | null;
+    channel: 'phone' | 'email' | 'linkedin'; value: string; purpose: 'business' | 'tenant_emergency' | 'unknown';
+    verification: 'published' | 'confirmed' | 'unverified'; admitted_at: string };
+  pm_account_route_evidence: { account_id: string; route_id: string; route_version: number; source_id: string };
+  pm_account_links: { id: string; account_id: string; kind: 'organization' | 'person_role' | 'property';
+    organization_id: string | null; person_id: string | null; property_id: string | null; relationship: string;
+    role: string | null; authority: 'confirmed' | 'unconfirmed' | null; valid_from: string; valid_to: string | null; admitted_at: string };
+  pm_account_link_evidence: { account_id: string; link_id: string; source_id: string; purpose: 'relationship' | 'authority' };
+  pm_account_research_jobs: { id: string; account_id: string; command_id: string; fingerprint: string; limits_json: string;
+    state: 'queued' | 'running' | 'completed' | 'parked'; attempt: number; claim_token: string | null;
+    reserved_cost_micros: number; cost_micros: number | null; receipt_command_id: string | null; created_at: string; updated_at: string };
+  pm_account_outbound_intents: { command_id: string; account_id: string; route_id: string; route_version: number;
+    account_version: number; evidence_fingerprint: string; command_fingerprint: string; attempt_id: string;
+    channel: 'call' | 'email'; canonical_target: string; context_revision: string; created_at: string };
+  pm_account_outbound_results: { id: string; command_id: string; attempt_id: string; account_id: string;
+    kind: 'dispatch' | 'call_outcome' | 'reconciliation'; outcome: string; result_json: string; created_at: string };
+};
+
+/** Schema21 local-only storage. JSON is admitted through strict feature schemas, never executed. */
+export type DelegationTables = {
+  meeting_first_call_settings: { singleton: number; new_call_slots: number | null; total_call_capacity: number | null; revision: number; updated_at: string };
+  delegated_authorities: { account_id: string; workspace_id: string; owner: string; generation: number; state: string; aggregate_version: number; updated_at: string; };
+  delegated_commands: { command_id: string; workspace_id: string; account_id: string; fingerprint: string; command_json: string; receipt_json: string; created_at: string; };
+  delegated_applied_events: { id: string; workspace_id: string; account_id: string; stream: string; aggregate_version: number; authority_generation: number; fingerprint: string; event_json: string; applied_at: string; };
+  delegated_event_cursors: { workspace_id: string; account_id: string; stream: string; aggregate_version: number; event_id: string; };
+  delegated_approvals: { id: string; workspace_id: string; account_id: string; route_id: string; route_version: number; permission_evidence_id: string; fingerprint: string; snapshot_json: string; approved_at: string; };
+  delegated_action_outcomes: { event_id: string; workspace_id: string; account_id: string; action_id: string; authority_generation: number; state: string; content_hash: string; target_hash: string; observed_at: string; evidence_ref: string; };
+  delegated_manual_outcomes: { event_id: string; workspace_id: string; account_id: string; action_id: string; channel: string; outcome_json: string; observed_at: string; };
+  delegated_threads: { workspace_id: string; account_id: string; id: string; provider: string; provider_thread_id: string; revision: number; context_revision: string; projection_json: string; updated_at: string; };
+  delegated_meetings: { workspace_id: string; account_id: string; id: string; provider: string; provider_event_id: string; revision: number; state: string; projection_json: string; updated_at: string; };
+  delegated_reconciliation: { id: string; workspace_id: string; account_id: string; action_id: string; event_id: string; evidence_ref: string; observed_at: string; };
+  pm_account_route_policy_receipts: { id: string; account_id: string; route_id: string; route_version: number; canonical_target: string; evidence_fingerprint: string; revision: number; evidence_ref: string; provenance: string; observed_at: string; admitted_at: string; effective_at: string; expires_at: string; policy_json: string; receipt_fingerprint: string; };
+  pm_account_route_policy_evidence: { account_id: string; route_id: string; route_version: number; receipt_id: string; source_id: string; };
+  pm_account_suppression_tombstones: { id: string; account_id: string; observed_at: string; source: string; evidence_ref: string; admitted_at: string; };
+  pm_handle_suppression_tombstones: { id: string; kind: string; normalized_value: string; observed_at: string; source: string; evidence_ref: string; admitted_at: string; };
+  discovery_approved_budgets: { workspace_id: string; budget_id: string; ceiling_micros: number; approved_at: string; evidence_ref: string; };
+  discovery_reservations: { workspace_id: string; budget_id: string; command_id: string; input_fingerprint: string; search_cost_micros: number; model_cost_micros: number; reserved_at: string; };
+  discovery_receipts: { workspace_id: string; budget_id: string; command_id: string; candidates_json: string; cost_micros: number | null; completed_at: string; };
+};
+
+/** Schema22 account/thread-scoped mail storage. */
+export type MailPersistenceTables = {
+  delegated_mail_cursors: { workspace_id: string; account_id: string; mailbox_subject: string; checkpoint_json: string; revision: number; updated_at: string };
+  delegated_reply_drafts: { workspace_id: string; account_id: string; id: string; thread_id: string; revision: number; thread_revision: number; context_revision: string; draft_json: string; updated_at: string };
+};
+
+/** Additive23 campaign and owner-coordinated transport projections. */
+export type CampaignTables = {
+  workspace_workflow_state: { singleton: number; mode: 'legacy' | 'meeting_first'; revision: number; updated_at: string };
+  workflow_transition_receipts: { command_id: string; manifest_id: string; fingerprint: string; result_json: string; created_at: string };
+  campaign_versions: { workspace_id: string; id: string; campaign_id: string; version: number; snapshot_json: string; snapshot_hash: string; created_at: string };
+  campaign_approvals: { workspace_id: string; campaign_version_id: string; snapshot_hash: string; approved_at: string; command_id: string };
+  campaign_enrollments: { workspace_id: string; id: string; account_id: string; campaign_version_id: string; selected_route_id: string; selected_route_version: number; person_id: string | null; current_step_id: string | null; version: number; state: string; context_revision: number; execution_context_id: string; started_at: string; updated_at: string };
+  campaign_step_receipts: { workspace_id: string; id: string; account_id: string; enrollment_id: string; step_id: string; route_id: string; route_version: number; context_revision: number; execution_context_id: string; action_id: string; channel: string; state: string; outcome: string; observation: string; source: string; observed_at: string; command_id: string };
+  campaign_caps: { workspace_id: string; campaign_version_id: string; channel: string; revision: number; reserved: number; sent: number };
+  campaign_command_receipts: { workspace_id: string; command_id: string; fingerprint: string; result_json: string; created_at: string };
+  manual_linkedin_drafts: { workspace_id: string; id: string; account_id: string; enrollment_id: string; campaign_version_id: string; person_id: string | null; step_id: string; route_id: string; route_version: number; context_revision: number; execution_context_id: string; revision: number; body: string; content_hash: string; target_hash: string; state: string; created_at: string; updated_at: string };
+  manual_linkedin_draft_approvals: { workspace_id: string; draft_id: string; draft_revision: number; content_hash: string; target_hash: string; context_revision: number; execution_context_id: string; approved_at: string; command_id: string };
+  delegated_transport_state: { workspace_id: string; pairing_id: string; revision: number; cursor: string | null; completed_at: string | null; attempt_id: string; started_at: string; state: string };
+  delegated_manual_handoffs: { workspace_id: string; account_id: string; handoff_id: string; action_id: string; authority_generation: number; target_hash: string; content_hash: string; context_revision: string; channel: string; route_id: string; route_version: number; expires_at: string; event_id: string; consumed_at: string | null; outcome_command_id: string | null };
+  delegated_local_configuration: { workspace_id: string; pairing_id: string; revision: number; configuration_json: string; updated_at: string };
+};
+
+/** Additive24 threadless drafts and immutable local-owner artifact reviews. */
+export type RequestedFollowupAndPolicyReviewTables = {
+  delegated_requested_followup_drafts: { workspace_id: string; account_id: string; id: string; revision: number; context_revision: string; draft_json: string; approval_json: string | null; updated_at: string };
+  account_route_policy_import_reviews: { id: string; workspace_id: string; artifact_sha256: string; artifact_bytes: Buffer; row_plans_json: string; row_count: number; review_reason: string; reviewed_at: string; reviewer_kind: 'local_owner_review'; review_policy_version: 'account_route_policy_import_review_v1' };
+};

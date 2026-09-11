@@ -22,7 +22,7 @@ const PLAINTEXT_HEADER = Buffer.from('SQLite format 3\u0000', 'utf8');
  * before migration runs. Extend this list with each registered migration.
  */
 const KNOWN_SCHEMA_VERSIONS: readonly number[] = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
 ];
 const STATE_MARKER_FORMAT = 'callie-plaintext-encryption-upgrade';
 const MAX_MARKER_BYTES = 64 * 1024;

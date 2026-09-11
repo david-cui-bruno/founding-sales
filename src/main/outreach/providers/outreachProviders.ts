@@ -1,5 +1,6 @@
+import { requestCompanyDiscovery } from '../../research/companyDiscoveryProvider';
 import { z } from 'zod';
-import type { OutreachProviders, OutreachProviderOptions, OutreachStatus, StoredCredentials } from './providerTypes';
+import type { CompanyResearchModelProvider, OutreachProviders, OutreachProviderOptions, OutreachStatus, StoredCredentials } from './providerTypes';
 import { CredentialStore } from './credentialStore';
 import { authorizeGoogle } from './googleOAuth';
 import { generateOpenAiDraft } from './openAiDraftProvider';
@@ -21,7 +22,7 @@ const empty = (): StoredCredentials => ({ model: { apiKey: '', model: '' },
 /** One manager per immutable workspace runtime. No eager reads, HTTP, OAuth or
  * background reconnect. Mutations serialize, epochs invalidate synchronously.
  */
-export function createOutreachProviders(options: OutreachProviderOptions): OutreachProviders & { invalidate(): void } {
+export function createOutreachProviders(options: OutreachProviderOptions): OutreachProviders & CompanyResearchModelProvider & { invalidate(): void } {
   const store = new CredentialStore({ directory: options.directory, safeStorage: options.safeStorage });
   const fetcher = options.fetch ?? globalThis.fetch;
   const now = options.now ?? Date.now;
@@ -126,6 +127,20 @@ export function createOutreachProviders(options: OutreachProviderOptions): Outre
       const result = await generateOpenAiDraft({ credentials: value.model, context, signal, fetch: fetcher });
       assertCurrent(expected);
       return result;
+    },
+    async researchCompanies(input, callerSignal) {
+      const expected = epoch;
+      const signal = AbortSignal.any([callerSignal, lifetime.signal]);
+      try {
+        const value = await serial(expected, async () => {
+          const stored = await store.load() ?? empty(); assertCurrent(expected); return stored;
+        });
+        if (signal.aborted) fail('provider_invalidated');
+        const result = await requestCompanyDiscovery({ ...input, credentials: value.model, signal, fetch: fetcher });
+        assertCurrent(expected);
+        if (signal.aborted) fail('provider_invalidated');
+        return result;
+      } catch (error) { throw safeError(error, 'provider_response_invalid'); }
     },
     prepare(callerSignal) {
       const expected = epoch;

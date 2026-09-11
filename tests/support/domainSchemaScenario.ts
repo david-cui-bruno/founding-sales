@@ -67,6 +67,7 @@ const domainTables = [
 ] as const;
 
 const requiredIndexes = [
+  'campaign_one_nonterminal_account',
   'next_actions_due_idx', 'email_draft_open_contact',
   'discovery_assessments_prospect_evaluated_idx', 'discovery_assessments_disposition_expires_idx',
   'discovery_overrides_owner_created_idx', 'jobs_type_state_created_idx',
@@ -79,6 +80,71 @@ const requiredIndexes = [
 ] as const;
 
 const requiredTriggers = [
+  'account_route_policy_import_reviews_no_delete',
+  'account_route_policy_import_reviews_no_update',
+  'campaign_versions_no_delete',
+  'campaign_versions_no_update',
+  'campaign_approvals_no_delete',
+  'campaign_approvals_no_update',
+  'campaign_step_receipts_no_delete',
+  'campaign_step_receipts_no_update',
+  'campaign_command_receipts_no_delete',
+  'campaign_command_receipts_no_update',
+  'manual_linkedin_draft_approvals_no_delete',
+  'manual_linkedin_draft_approvals_no_update',
+  'workflow_transition_receipts_no_update',
+  'workflow_transition_receipts_no_delete',
+
+  'discovery_receipts_ceiling_guard',
+  'discovery_reservations_budget_guard',
+  'delegated_action_outcomes_no_delete',
+  'delegated_action_outcomes_no_update',
+  'delegated_applied_events_no_delete',
+  'delegated_applied_events_no_update',
+  'delegated_approvals_no_delete',
+  'delegated_approvals_no_update',
+  'delegated_commands_no_delete',
+  'delegated_commands_no_update',
+  'delegated_manual_outcomes_no_delete',
+  'delegated_manual_outcomes_no_update',
+  'delegated_reconciliation_no_delete',
+  'delegated_reconciliation_no_update',
+  'discovery_approved_budgets_no_delete',
+  'discovery_approved_budgets_no_update',
+  'discovery_receipts_no_delete',
+  'discovery_receipts_no_update',
+  'discovery_reservations_no_delete',
+  'discovery_reservations_no_update',
+  'pm_account_route_policy_evidence_no_delete',
+  'pm_account_route_policy_evidence_no_update',
+  'pm_account_route_policy_receipts_no_delete',
+  'pm_account_route_policy_receipts_no_update',
+  'pm_account_suppression_tombstones_no_delete',
+  'pm_account_suppression_tombstones_no_update',
+  'pm_handle_suppression_tombstones_no_delete',
+  'pm_handle_suppression_tombstones_no_update',
+
+  'pm_account_claim_evidence_no_delete',
+  'pm_account_claim_evidence_no_update',
+  'pm_account_claims_no_delete',
+  'pm_account_claims_no_update',
+  'pm_account_commands_no_delete',
+  'pm_account_commands_no_update',
+  'pm_account_link_evidence_no_delete',
+  'pm_account_link_evidence_no_update',
+  'pm_account_links_no_delete',
+  'pm_account_links_no_update',
+  'pm_account_outbound_intents_no_delete',
+  'pm_account_outbound_intents_no_update',
+  'pm_account_outbound_results_no_delete',
+  'pm_account_outbound_results_no_update',
+  'pm_account_route_evidence_no_delete',
+  'pm_account_route_evidence_no_update',
+  'pm_account_routes_no_delete',
+  'pm_account_routes_no_update',
+  'pm_account_sources_no_delete',
+  'pm_account_sources_no_update',
+
   'initialize_next_action_due', 'initialize_unreviewed_action',
   'protect_next_action_due', 'protect_operational_action_pointer',
   'email_send_intents_no_update', 'email_send_intents_no_delete',
@@ -237,14 +303,14 @@ function runDatabaseScenario(
       assert.equal(assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 19,
+        expectedSchemaVersion: 24,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
-      }).schemaVersion, 19);
+      }).schemaVersion, 24);
       assert.deepEqual(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
         ).get(),
-        { schema_version: 19 },
+        { schema_version: 24 },
       );
       assert.deepEqual(raw.prepare<[], { name: string }>(`
         SELECT name FROM kysely_migration ORDER BY timestamp, name
@@ -265,7 +331,7 @@ function runDatabaseScenario(
         '0014OutboundJurisdictionClearance',
         '0015RecoveryMetadata',
         '0016ContactPresentationEvidence', '0017DiscoveryAssessments',
-        '0018PlaybookDueActions', '0019EmailDrafts',
+        '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews',
       ]);
       assert.deepEqual(
         raw.prepare('PRAGMA table_info(person_contact_methods)').all().slice(19),

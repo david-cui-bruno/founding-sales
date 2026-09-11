@@ -113,7 +113,7 @@ export type ActionSettlementOutcome =
   | 'answered' | 'no_answer' | 'voicemail_left' | 'accepted' | 'replied'
   | 'opted_out' | 'channel_unavailable' | 'marked_impossible' | 'resolved'
   | 'reviewed_ready' | 'lost_nurture' | 'upgraded' | 'interviewed_confirmed'
-  | 'offered_confirmed' | 'won_confirmed' | 'onboarding_waived' | 'phase_completed';
+  | 'offered_confirmed' | 'won_confirmed' | 'onboarding_waived' | 'phase_completed' | 'workflow_superseded';
 
 export type ImpossibleReasonCode =
   | 'missing_phone'

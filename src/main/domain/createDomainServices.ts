@@ -1,3 +1,5 @@
+import { AccountRepository } from './accounts/accountRepository';
+import { AccountOutreach, createSqlAccountRoutePolicy } from './accounts/accountOutreach';
 import type { AppDatabase } from '../db/database';
 import { CadenceRepository } from './cadence/cadenceRepository';
 import { ContactComplianceService } from './compliance/contactComplianceService';
@@ -28,6 +30,7 @@ import { WorkspaceSettingsRepository } from './workspace/workspaceSettingsReposi
 import { JobRepository } from '../jobs/jobRepository';
 
 export type DomainServices = Readonly<{
+  accountOutreach: AccountOutreach;
   unitOfWork: DomainUnitOfWork;
   discoveryRepository: DiscoveryRepository;
   discoveryRead: DiscoveryReadService;
@@ -62,10 +65,14 @@ export function createDomainServices(input: {
   clock: Clock;
   ids: IdGenerator;
   timezone?: string;
+  expectedWorkspaceId?: string;
 }): DomainServices {
   const { database, clock, ids } = input;
   const timezone = input.timezone ?? 'America/New_York';
   const unitOfWork = new DomainUnitOfWork(database);
+  // Read-only binding: no policy admission or implicit local execution owner.
+  const accountOutreach = new AccountOutreach({ database, clock, ids, accounts: new AccountRepository({ database, clock, ids }),
+    policy: createSqlAccountRoutePolicy({ database, clock, expectedWorkspaceId: input.expectedWorkspaceId }) });
   const discoveryRepository = new DiscoveryRepository({ database, unitOfWork });
   const jobs = new JobRepository(database);
   const identities = new IdentityRepository({ database, unitOfWork, clock, ids });
@@ -109,11 +116,11 @@ export function createDomainServices(input: {
     database, unitOfWork, clock, repository: prioritizationRepository, outboundPermission,
   });
   const todayRepository = new TodayRepository({ database, unitOfWork });
+  const workspaceSettings = new WorkspaceSettingsRepository({ database, unitOfWork });
   const today = new TodayService({
     database, unitOfWork, clock, repository: todayRepository, priorities: prioritization,
-    outboundPermission,
+    outboundPermission, workspaceSettings,
   });
-  const workspaceSettings = new WorkspaceSettingsRepository({ database, unitOfWork });
   const discoveryRead = new DiscoveryReadService({ database, unitOfWork, clock,
     services: { discoveryRepository, today, workspaceSettings, jobs, identities, sourceRepository,
       events, outboundPermission, prioritizationRepository, prioritization } });
@@ -140,6 +147,7 @@ export function createDomainServices(input: {
   workspaceSettings.assertBoundTo(database, unitOfWork);
 
   return Object.freeze({
+    accountOutreach,
     unitOfWork,
     discoveryRepository,
     discoveryRead,

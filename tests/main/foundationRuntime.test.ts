@@ -100,6 +100,18 @@ describe('encrypted application outbound lifetime (source fixtures, no live Phon
     return { promise, resolve, reject };
   };
   const available: Capability = { state: 'available', reasonCode: null };
+function readinessProof(personId = 'fixture-person') {
+  return Object.freeze({
+    subject: Object.freeze({ kind: 'person' as const, id: personId }),
+    registryRevision: 1,
+    checkpoints: Object.freeze([]),
+  });
+}
+function readyReply(personId?: string) {
+  return { kind: 'ready' as const, proof: readinessProof(personId) };
+}
+const assertCurrentReadiness = (): void => undefined;
+
   const accepted: HandoffResult = { status: 'handoff_accepted', reasonCode: null };
   const cleanups: (() => Promise<void>)[] = [];
   const temps: TempDatabase[] = [];
@@ -135,7 +147,7 @@ describe('encrypted application outbound lifetime (source fixtures, no live Phon
       service = createOutboundCommandService({ ...options,
         ...(input.productionPorts ? {} : {
           phone: input.phone ?? { inspectCapability: async () => available, dispatch: async () => accepted },
-          readiness: input.readiness ?? { getCapability: () => available, check: async () => ({ kind: 'ready' }) },
+          readiness: input.readiness ?? { getCapability: () => available, check: async (personId) => readyReply(personId), assertCurrent: assertCurrentReadiness },
         }),
       });
       return service;
@@ -293,9 +305,9 @@ describe('encrypted application outbound lifetime (source fixtures, no live Phon
   });
 
   it('closes outbound before Foundation waits for a real database lease, without awaiting external readiness', async () => {
-    const entered = held<AbortSignal>(); const ready = held<{ kind: 'ready' }>();
+    const entered = held<AbortSignal>(); const ready = held<ReturnType<typeof readyReply>>();
     const f = await fixture({ readiness: { getCapability: () => available,
-      check: (_person, signal) => { entered.resolve(signal); return ready.promise; } } });
+      check: (_person, signal) => { entered.resolve(signal); return ready.promise; }, assertCurrent: assertCurrentReadiness } });
     const request = await seed(f.runtime); const pending = f.invoke(request).catch((error: Error) => error);
     const signal = await entered.promise;
     const leased = held<void>(); const releaseLease = held<void>();
@@ -314,13 +326,13 @@ describe('encrypted application outbound lifetime (source fixtures, no live Phon
   });
 
   it('lock→wake stays suspended, unlock always aborts the old epoch, and old finally cannot release a newer flight', async () => {
-    const checks = Array.from({ length: 4 }, () => ({ entered: held<AbortSignal>(), reply: held<{ kind: 'ready' }>() }));
+    const checks = Array.from({ length: 4 }, () => ({ entered: held<AbortSignal>(), reply: held<ReturnType<typeof readyReply>>() }));
     let index = 0;
     const dispatch = vi.fn(async () => accepted);
     const f = await fixture({ phone: { inspectCapability: async () => available, dispatch },
       readiness: { getCapability: () => available, check: (_person, signal) => {
         const check = checks[index++]; check.entered.resolve(signal); return check.reply.promise;
-      } },
+      }, assertCurrent: assertCurrentReadiness },
     });
     const request = await seed(f.runtime);
     const first = f.invoke(request).catch((error: Error) => error);
@@ -342,25 +354,25 @@ describe('encrypted application outbound lifetime (source fixtures, no live Phon
     expect(thirdSignal.aborted).toBe(true);
     const fourth = f.invoke({ ...request, commandId: randomUUID() });
     const fourthSignal = await checks[3].entered.promise;
-    checks[0].reply.resolve({ kind: 'ready' }); checks[1].reply.reject(new Error('late prior epoch')); checks[2].reply.resolve({ kind: 'ready' });
+    checks[0].reply.resolve(readyReply(request.personId)); checks[1].reply.reject(new Error('late prior epoch')); checks[2].reply.resolve(readyReply(request.personId));
     for (const old of [first, second, third]) expect(await old).toBeInstanceOf(Error);
     expect(fourthSignal.aborted).toBe(false);
     await expect(f.invoke({ ...request, commandId: randomUUID() })).resolves.toMatchObject({ reasonCode: 'outbound_busy' });
     expect(index).toBe(4); expect(dispatch).not.toHaveBeenCalled(); expect(f.ports.prepare).not.toHaveBeenCalled();
-    checks[3].reply.resolve({ kind: 'ready' });
+    checks[3].reply.resolve(readyReply(request.personId));
     await expect(fourth).resolves.toMatchObject({ status: 'handoff_accepted' });
     expect(dispatch).toHaveBeenCalledTimes(1);
     await (await f.starting).shutdown(); expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(['contact', 'tombstone'] as const)('retains real final authority for a current %s edit during readiness and fresh wake/unlock intent', async (edit) => {
-    const ready = held<{ kind: 'ready' }>(); const entered = held<void>();
+    const ready = held<ReturnType<typeof readyReply>>(); const entered = held<void>();
     const dispatch = vi.fn(async () => accepted); let first = true;
     const f = await fixture({ phone: { inspectCapability: async () => available, dispatch },
-      readiness: { getCapability: () => available, check: () => {
-        if (!first) return Promise.resolve({ kind: 'ready' });
+      readiness: { getCapability: () => available, check: (_person) => {
+        if (!first) return Promise.resolve(readyReply(_person));
         first = false; entered.resolve(); return ready.promise;
-      } },
+      }, assertCurrent: assertCurrentReadiness },
     });
     const request = await seed(f.runtime); const pending = f.invoke(request);
     await entered.promise;
@@ -369,7 +381,7 @@ describe('encrypted application outbound lifetime (source fixtures, no live Phon
     });
     else await f.runtime.withDomain((domain) => domain.logCallOutcome({ personId: request.personId, salesCycleId: request.salesCycleId,
       outcome: 'opted_out', occurredAt: NOW, callbackAt: null }));
-    ready.resolve({ kind: 'ready' });
+    ready.resolve(readyReply(request.personId));
     const reasonCode = edit === 'contact' ? 'stale_contact' : 'cycle_not_executable';
     await expect(pending).resolves.toMatchObject({ status: 'refused', reasonCode });
     f.callbacks.onWake(); f.callbacks.onLock(); f.callbacks.onUnlock();
@@ -380,13 +392,13 @@ describe('encrypted application outbound lifetime (source fixtures, no live Phon
   });
 
   it.each(['readiness', 'dispatch', 'result_gate'] as const)('synthetic A→B replacement fences old %s work from both encrypted runtimes (not live restore)', async (stage) => {
-    const ready = held<{ kind: 'ready' }>(); const reply = held<HandoffResult>();
+    const ready = held<ReturnType<typeof readyReply>>(); const reply = held<HandoffResult>();
     const entered = held<void>(); const releaseGate = held<void>();
     const a = await fixture({
-      readiness: { getCapability: () => available, check: () => {
+      readiness: { getCapability: () => available, check: (_person) => {
         if (stage === 'readiness') { entered.resolve(); return ready.promise; }
-        return Promise.resolve({ kind: 'ready' });
-      } },
+        return Promise.resolve(readyReply(_person));
+      }, assertCurrent: assertCurrentReadiness },
       phone: { inspectCapability: async () => available, dispatch: () => {
         if (stage === 'dispatch') { entered.resolve(); return reply.promise; }
         return Promise.resolve(accepted);
@@ -410,7 +422,7 @@ describe('encrypted application outbound lifetime (source fixtures, no live Phon
     const b = await fixture(); const bRequest = await seed(b.runtime);
     expect(b.service).not.toBe(a.service); expect(b.runtime).not.toBe(a.runtime);
     const bCounts = b.counts();
-    if (stage === 'readiness') ready.resolve({ kind: 'ready' });
+    if (stage === 'readiness') ready.resolve(readyReply(request.personId));
     if (stage === 'dispatch') reply.reject(new Error('late A reply'));
     releaseGate.resolve();
     await Promise.all(gate.mock.results.map((result) => result.value.catch((): undefined => undefined)));
@@ -424,10 +436,10 @@ describe('encrypted application outbound lifetime (source fixtures, no live Phon
 
   it.each(['shutdown', 'abort'] as const)('preflight %s closes immediately, with no late SQL on resolve or reject', async (boundary) => {
     for (const late of ['resolve', 'reject'] as const) {
-      const ready = held<{ kind: 'ready' }>(); const entered = held<AbortSignal>();
+      const ready = held<ReturnType<typeof readyReply>>(); const entered = held<AbortSignal>();
       const dispatch = vi.fn(async () => accepted);
       const f = await fixture({ pendingWindow: boundary === 'abort',
-        readiness: { getCapability: () => available, check: (_person, signal) => { entered.resolve(signal); return ready.promise; } },
+        readiness: { getCapability: () => available, check: (_person, signal) => { entered.resolve(signal); return ready.promise; }, assertCurrent: assertCurrentReadiness },
         phone: { inspectCapability: async () => available, dispatch },
       });
       const request = await seed(f.runtime);
@@ -444,7 +456,7 @@ describe('encrypted application outbound lifetime (source fixtures, no live Phon
       expect(await pending).toBeInstanceOf(Error);
       expect(f.features.size).toBe(0); expect(ipc.handlers.size).toBe(0);
       const atClose = f.counts();
-      if (late === 'resolve') ready.resolve({ kind: 'ready' }); else ready.reject(new Error('late readiness'));
+      if (late === 'resolve') ready.resolve(readyReply(request.personId)); else ready.reject(new Error('late readiness'));
       await Promise.resolve(); await Promise.resolve();
       expect(f.counts()).toEqual(atClose);
       expect(atClose.postCloseSql).toBe(0); expect(atClose.closes).toBe(1);

@@ -10,7 +10,12 @@ import type { ChannelPolicySnapshots } from '../cadence/cadenceScheduler';
 import type {
   EffectivePrioritySnapshot,
 } from '../prioritization/prioritizationTypes';
-import { planTodayQueue, resolveLocalDayInterval } from './todayOrdering';
+import type { AccountEvidenceSnapshot } from '../../../shared/contracts/accountContract';
+import { listActualCallAttempts } from '../accounts/accountOutreach';
+import { rankAccount } from '../../../shared/accounts/accountRanking';
+import type { WorkspaceSettingsRepository } from '../workspace/workspaceSettingsRepository';
+import { planDailyAccountCalls, planTodayQueue, resolveLocalDayInterval } from './todayOrdering';
+import type { DailyAccountCallPlan } from './todayOrdering';
 import type { TodayRepository } from './todayRepository';
 import type {
   ParsedTodayCandidate,
@@ -36,6 +41,8 @@ export class TodayService {
   private readonly repository: TodayRepository;
   private readonly priorities: PrioritizationService;
   private readonly outboundPermission: OutboundPermissionService;
+  private readonly workspaceSettings: WorkspaceSettingsRepository | null;
+  private readonly actualCalls: typeof listActualCallAttempts;
 
   constructor(input: {
     database: AppDatabase;
@@ -44,6 +51,8 @@ export class TodayService {
     repository: TodayRepository;
     priorities: PrioritizationService;
     outboundPermission: OutboundPermissionService;
+    workspaceSettings?: WorkspaceSettingsRepository;
+    actualCalls?: typeof listActualCallAttempts;
   }) {
     input.repository.assertBoundTo(input.database, input.unitOfWork);
     input.outboundPermission.assertBoundTo(input.database, input.unitOfWork);
@@ -53,6 +62,8 @@ export class TodayService {
     this.repository = input.repository;
     this.priorities = input.priorities;
     this.outboundPermission = input.outboundPermission;
+    this.workspaceSettings = input.workspaceSettings ?? null;
+    this.actualCalls = input.actualCalls ?? listActualCallAttempts;
   }
 
   build(input: {
@@ -74,6 +85,50 @@ export class TodayService {
     } finally {
       this.database.raw.exec('ROLLBACK');
     }
+  }
+
+  planMeetingFirstAccountCalls(input: {
+    due: readonly AccountEvidenceSnapshot[];
+    ranked: readonly AccountEvidenceSnapshot[];
+    generatedAt?: string;
+  }): DailyAccountCallPlan {
+    if (this.workspaceSettings === null) {
+      return planDailyAccountCalls({
+        due: input.due.map(snapshot => snapshot.account.id),
+        ranked: [],
+        newCallSlots: 0,
+        completedAccountIds: [],
+        totalCallCapacity: null,
+      });
+    }
+    const generatedAt = utcTimestampSchema.parse(input.generatedAt ?? this.clock.now());
+    const interval = resolveLocalDayInterval({ generatedAt, timezone: this.workspaceSettings.read().timezone });
+    const settings = this.workspaceSettings.readMeetingFirstAccountCallSettings();
+    const newCallSlots = settings.newCallSlots;
+    if (newCallSlots === null) {
+      return planDailyAccountCalls({
+        due: input.due.map(snapshot => snapshot.account.id),
+        ranked: [],
+        newCallSlots: 0,
+        completedAccountIds: [],
+        totalCallCapacity: settings.totalCallCapacity,
+      });
+    }
+    const completedAccountIds = this.actualCalls(this.database, {
+      from: interval.localDayStartAt,
+      to: interval.localDayEndAt,
+    }).map(attempt => attempt.accountId);
+    const ranked = input.ranked
+      .map(snapshot => rankAccount(snapshot, generatedAt))
+      .filter(rank => rank.fit === 'supported' && rank.contactable)
+      .map(rank => rank.accountId);
+    return planDailyAccountCalls({
+      due: input.due.map(snapshot => snapshot.account.id),
+      ranked,
+      newCallSlots,
+      completedAccountIds,
+      totalCallCapacity: settings.totalCallCapacity,
+    });
   }
 
   assertBoundTo(database: AppDatabase, unitOfWork: DomainUnitOfWork): void {

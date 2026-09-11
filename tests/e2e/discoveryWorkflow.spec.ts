@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
+import { AxeBuilder } from '@axe-core/playwright';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'playwright/test';
 import { launchFounderWorkspace, type FounderWorkspace } from '../support/founderWorkspace';
 import { allocatePackagedFixtureDatabase } from '../support/packagedFixtureDatabase';
-import { validParcelEvent } from '../fixtures/cloudSourceEvents';
+import { validParcelEvent, validEnrichmentEvent } from '../fixtures/cloudSourceEvents';
 import type { LeadsListRequest } from '../../src/shared/contracts/leadsContract';
 import { cloudSourceEventSchema } from '../../src/shared/contracts/cloudSourceEventContract';
 
@@ -21,7 +22,7 @@ function event(index: number) {
   value.entity.cloud_entity_id = `ce_0${hash.slice(0, 25).toUpperCase()}`;
   value.entity.person!.full_name = index % 3 === 0 ? `Synthetic ${index} Holdings LLC` : `Synthetic Owner ${index}`;
   value.entity.person!.org_names = []; value.entity.person!.phones = [];
-  value.entity.person!.emails = index === 0 ? ['owner0@example.test'] : [];
+  value.entity.person!.emails = [];
   value.entity.property!.situs_address.line1 = `${100 + index} Synthetic St`;
   value.entity.property!.parcel_id = `PACKAGED-SYNTHETIC-${index}`;
   value.entity.property!.unit_count = index % 10 === 9 ? null : index % 2 === 0 ? 10 : 6;
@@ -63,16 +64,33 @@ test('P1 automatic source evidence, unfinished-work restart, contact-first works
     expect(snapshot.prepared).toHaveLength(10);
     await expect(page.getByText('Prepared conversations', { exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Refresh shortlist', exact: true })).toHaveCount(0);
-    await page.screenshot({ path: info.outputPath('today-contact-first.png') });
-    const selected = snapshot.prepared.find(b => b.personName === 'Synthetic 0 Holdings LLC');
+    const suggestions = page.getByRole('region', { name: 'Suggested contacts' });
+    await expect(suggestions).toBeVisible();
+    await expect(suggestions.getByRole('button')).toHaveCount(3);
+    for (const theme of ['dark', 'light'] as const) {
+      await page.getByRole('link', { name: 'Settings', exact: true }).click();
+      await page.getByRole('button', { name: 'Appearance', exact: true }).click();
+      await page.getByRole('region', { name: 'Appearance', exact: true })
+        .getByRole('button', { name: theme === 'light' ? 'Light appearance' : 'Dark appearance', exact: true }).click();
+      await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+      await page.getByRole('link', { name: 'Today', exact: true }).click();
+      await expect(suggestions.getByRole('button')).toHaveCount(3);
+      for (const width of [1050, 1440]) {
+        await page.setViewportSize({ width, height: width === 1050 ? 700 : 900 });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+        const accessibility = await new AxeBuilder({ page }).setLegacyMode(true).analyze();
+        expect(accessibility.violations.filter(v => ['serious', 'critical'].includes(v.impact ?? ''))
+          .map(v => ({ id: v.id, nodes: v.nodes.map(n => n.target) })), `${theme} suggestions ${width}`).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`${theme}-suggested-contacts-${width}.png`), animations: 'disabled' });
+      }
+    }
+    const selected = snapshot.prepared[0];
     expect(selected).toBeDefined();
+    const selectedIndex = Number(selected.personName.match(/\d+/)![0]);
     const id = selected!.personId;
     const before = await page.evaluate(request => window.callie.leads.list(request), listRequest);
     expect(before.rows).toHaveLength(125); expect(before.rows.every(row => row.stage === 'unreviewed' && row.lastActivityAt === null)).toBe(true);
-    await page.getByRole('link', { name: 'Leads', exact: true }).click();
-    // The selected owner need not be inside the priority-sorted virtual viewport.
-    await page.getByRole('searchbox', { name: 'Search leads' }).fill(selected!.personName);
-    await page.getByRole('row', { name: /Synthetic 0 Holdings/i }).click();
+    await suggestions.getByRole('button', { name: selected.personName, exact: true }).click();
     const inspector = page.getByRole('complementary', { name: `${selected!.personName} details` });
     await expect(inspector.getByRole('region', { name: 'Known portfolio', exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('source-backed-portfolio-overview.png'), animations: 'disabled' });
@@ -81,16 +99,41 @@ test('P1 automatic source evidence, unfinished-work restart, contact-first works
     if (ref.kind !== 'source') throw new Error('Expected retained source citation');
     await expect(inspector.getByText(`Source ${ref.sourceEventId}, ${ref.field}, ${ref.observedAt}`, { exact: true }).first()).toBeVisible();
     expect((await page.evaluate(personId => window.callie.leadDetail.get({ personId }), id)).stage).toBe('unreviewed');
-    await inspector.getByRole('button', { name: 'Close inspector' }).click();
-    // Retained selected-pilot capability is explicit, never a read or opening a draft.
-    await page.evaluate(brief => window.callie.discovery.begin({ commandId: crypto.randomUUID(), personId: brief.personId, salesCycleId: brief.salesCycleId, assessmentId: brief.assessment!.id, expectedFingerprint: brief.assessment!.fingerprint }), selected!);
-    await page.getByRole('row', { name: /Synthetic 0 Holdings/i }).click();
+    expect((await page.evaluate(personId => window.callie.leadDetail.get({ personId }), id)).emails).toEqual([]);
+    await inspector.getByText('Details', { exact: true }).click();
+    // Actual user action, real preparation and real writer. The package fixture
+    // substitutes only the external storage boundary, not admission or success.
+    await inspector.getByRole('button', { name: 'Find contact info', exact: true }).click();
+    const requestDirectory = join(directory, 'upstream', 'enrichment-requests');
+    await expect.poll(async () => {
+      try { return (await readdir(requestDirectory)).filter(name => name.endsWith('.ndjson')).length; }
+      catch { return 0; }
+    }).toBe(1);
+    const requestFile = (await readdir(requestDirectory))[0];
+    const request = JSON.parse(await readFile(join(requestDirectory, requestFile), 'utf8'));
+    expect(request).toMatchObject({ cloud_entity_id: event(selectedIndex).entity.cloud_entity_id,
+      owner_full_name: selected.personName,
+      situs_address: { line1: `${100 + selectedIndex} synthetic st`, locality: 'providence', region: 'ri', postal_code: '02906' } });
     await expect.poll(() => page.evaluate(personId => window.callie.leadDetail.get({ personId }), id)).toMatchObject({ stage: 'ready' });
     const ready = await page.evaluate(personId => window.callie.leadDetail.get({ personId }), id);
     expect(ready.activities).toEqual([]); expect(ready.nextAction).not.toBeNull();
     const untouched = (await page.evaluate(request => window.callie.leads.list(request), listRequest)).rows.filter(row => row.personId !== id);
     expect(untouched.every(row => row.stage === 'unreviewed' && row.lastActivityAt === null)).toBe(true);
+    const response = validEnrichmentEvent();
+    response.entity.cloud_entity_id = event(selectedIndex).entity.cloud_entity_id;
+    response.entity.person!.full_name = selected.personName;
+    response.source_uri = `fixture:enrichment:${selectedIndex}`;
+    response.observed_at = new Date().toISOString();
+    await writeFile(join(directory, 'events', '2026-09-06', 'zzz-enrichment.ndjson'), JSON.stringify(cloudSourceEventSchema.parse(response)) + '\n');
+    // Supply a controlled cloud result through the actual poller and mapper.
+    // The selected inspector must notice new contacts without being rebuilt.
+    const enrichmentPoll = await page.evaluate(() => window.callie.sourcing.pollNow());
+    expect(enrichmentPoll.counters.imported).toBe(1);
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
     const email = inspector.getByRole('button', { name: 'Email', exact: true });
+    await expect(email).toBeVisible();
+    expect((await page.evaluate(personId => window.callie.leadDetail.get({ personId }), id)).emails[0]).toMatchObject({ validationState: 'unverified', ownershipState: 'vendor_candidate' });
+    await page.screenshot({ path: info.outputPath('selected-enrichment-email.png'), animations: 'disabled' });
     await email.click(); await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Unsent synthetic draft');
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
     await page.getByRole('button', { name: 'Close draft' }).click(); await email.click();
@@ -102,7 +145,7 @@ test('P1 automatic source evidence, unfinished-work restart, contact-first works
     // just as the assembled source test does. Intake lowercases property context.
     expect(ready.properties).toHaveLength(1);
     const street = ready.properties[0].address.split(', ')[0];
-    expect(street).toBe('100 synthetic st');
+    expect(street).toBe(`${100 + selectedIndex} synthetic st`);
     const activityId = await page.evaluate(async ({ personId, salesCycleId, street }) => {
       await window.callie.today.logCallOutcome({ personId, salesCycleId, outcome: 'spoke', callbackAt: null, occurredAt: new Date().toISOString() });
       const spoken = (await window.callie.leadDetail.get({ personId })).activities[0];
@@ -118,7 +161,7 @@ test('P1 automatic source evidence, unfinished-work restart, contact-first works
     await page.getByRole('button', { name: 'Close inspector' }).click();
     await page.getByRole('link', { name: 'Leads', exact: true }).click();
     await page.getByRole('searchbox', { name: 'Search leads' }).fill(selected!.personName);
-    await page.getByRole('row', { name: /Synthetic 0 Holdings/i }).click();
+    await page.getByRole('row', { name: new RegExp(selected.personName) }).click();
     await page.getByRole('tab', { name: 'Activity', exact: true }).click();
     await page.getByRole('button', { name: 'Log dated past activity', exact: true }).click();
     await page.getByLabel('Date', { exact: true }).fill('2026-09-01');
@@ -155,7 +198,7 @@ test('P2 same executable migrates nonzero16 to19, retains exact encrypted backup
     expect(original.ledger.at(-1)).toBe('0016ContactPresentationEvidence');
     const launch = () => launchFounderWorkspace({ userDataPath: fixtures.paths.through16, onSpawn: child => { fixtures.captureChild(child); } });
     workspace = await launch();
-    expect(await workspace.page.evaluate(() => window.callie.health.get())).toMatchObject({ schemaVersion: 19, databaseEncrypted: true, domainReady: true });
+    expect(await workspace.page.evaluate(() => window.callie.health.get())).toMatchObject({ schemaVersion: 24, databaseEncrypted: true, domainReady: true });
     await expect.poll(() => workspace!.page.evaluate(() => window.callie.discovery.get()), { timeout: 90_000 }).toMatchObject({ counts: { unassessed: 0 }, processing: 'idle' });
     const assessed = await workspace.page.evaluate(request => window.callie.leads.list(request), listRequest);
     expect(assessed.rows.every(row => row.stage === 'unreviewed' && row.lastActivityAt === null)).toBe(true);
@@ -169,14 +212,14 @@ test('P2 same executable migrates nonzero16 to19, retains exact encrypted backup
     const backup = await fixtures.inspectStoppedBackup('through16', names[0], material, 16);
     expect(backup.businessSha256).toBe(original.businessSha256); // SAME schema only
     expect(backup.aggregateCounts).toEqual(original.aggregateCounts); expect(backup.sourceSha256).toBe(retainedHash);
-    const migrated = await fixtures.inspectStoppedProfile('through16', material, 19);
+    const migrated = await fixtures.inspectStoppedProfile('through16', material, 24);
     expect(migrated.preservedActionIndependentSha256).toBe(original.preservedActionIndependentSha256);
-    expect(migrated.ledger.slice(-4)).toEqual(['0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts']);
+    expect(migrated.ledger.slice(-9)).toEqual(['0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews']);
     workspace = await launch();
     expect((await workspace.page.evaluate(() => window.callie.discovery.get())).prepared.map(b => b.assessment!.id)).toEqual(ids);
     await workspace.stop(); workspace = undefined;
     expect(await sha256(backupPath)).toBe(retainedHash);
-    expect((await fixtures.inspectStoppedProfile('through16', material, 19)).preservedActionIndependentSha256).toBe(original.preservedActionIndependentSha256);
+    expect((await fixtures.inspectStoppedProfile('through16', material, 24)).preservedActionIndependentSha256).toBe(original.preservedActionIndependentSha256);
     expect((await readdir(join(fixtures.paths.through16, 'backups'))).filter(name => name.startsWith('pre-migration-schema-16-'))).toEqual(names);
   } finally { material = ''; await workspace?.stop(); await fixtures.cleanup(); }
 });

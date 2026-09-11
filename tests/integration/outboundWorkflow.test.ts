@@ -42,6 +42,18 @@ vi.mock('electron', () => ({ safeStorage: {}, dialog: {}, ipcMain: {
 
 const NOW = '2026-08-31T15:00:00.000Z';
 const available: Capability = { state: 'available', reasonCode: null };
+function readinessProof(personId = 'fixture-person') {
+  return Object.freeze({
+    subject: Object.freeze({ kind: 'person' as const, id: personId }),
+    registryRevision: 1,
+    checkpoints: Object.freeze([]),
+  });
+}
+function readyReply(personId?: string) {
+  return { kind: 'ready' as const, proof: readinessProof(personId) };
+}
+const assertCurrentReadiness = (): void => undefined;
+
 const accepted: HandoffResult = { status: 'handoff_accepted', reasonCode: null };
 const trustedUrl = 'callie://app/index.html';
 const sourcingHealth: SourcingPollHealth = {
@@ -100,7 +112,7 @@ async function fixture(input: {
   const factory = vi.fn<typeof createOutboundCommandService>((options) => {
     service = createOutboundCommandService({ ...options,
       phone: { inspectCapability: async () => available, dispatch },
-      readiness: input.readiness ?? { getCapability: () => available, check: async () => ({ kind: 'ready' }) },
+      readiness: input.readiness ?? { getCapability: () => available, check: async (personId) => readyReply(personId), assertCurrent: assertCurrentReadiness },
     });
     return service;
   });
@@ -342,10 +354,10 @@ describe('assembled truthful outbound workflow (encrypted source fixtures, not l
   });
 
   it('rechecks a real current tombstone after held readiness instead of trusting stale display permission', async () => {
-    const ready = held<{ kind: 'ready' }>();
+    const ready = held<ReturnType<typeof readyReply>>();
     const entered = held<string>();
     const f = await fixture({ readiness: { getCapability: () => available,
-      check: (personId) => { entered.resolve(personId); return ready.promise; } } });
+      check: (personId) => { entered.resolve(personId); return ready.promise; }, assertCurrent: assertCurrentReadiness } });
     const request = await seed(f);
     const displayed = await f.api.get({ personId: request.personId });
     expect(displayed.optedOut).toBe(false);
@@ -364,7 +376,7 @@ describe('assembled truthful outbound workflow (encrypted source fixtures, not l
     const rows = await businessRows(f);
     expect(afterOptOut).toHaveLength(1);
     expect(afterOptOut[0].observed_outcome).toBe('opted_out');
-    ready.resolve({ kind: 'ready' });
+    ready.resolve(readyReply(request.personId));
     const receipt = await pending;
     expect(receipt).toEqual({ commandId: request.commandId, channel: 'call', status: 'refused', reasonCode: 'cycle_not_executable',
       mutation: { revision: await revision(f), affectedPersonIds: [request.personId], affectedSalesCycleIds: [request.salesCycleId] } });

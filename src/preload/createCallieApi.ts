@@ -1,3 +1,11 @@
+import {policyImportConfirmSchema,policyImportResumeSchema,policyImportStatusSchema,policyImportPreviewSchema,policyImportReportSchema} from '../shared/contracts/accountRoutePolicyImportContract';
+import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedFollowupSchema,approveRequestedFollowupSchema,savedRequestedFollowupSchema,requestedApprovalStatusSchema} from '../shared/contracts/requestedFollowupContract';
+import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../shared/contracts/workerPolicyContract';
+import {createLinkedInApi} from './apis/linkedInApi';
+import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema } from '../shared/contracts/ownerCommandContract';
+import {delegatedPhoneHandoffResultSchema,publicDelegationCommandSchema,commandReceiptSchema,type PublicDelegationCommand} from '../shared/contracts/delegationContract';
+import type {z} from 'zod';
+import { createPhoneSetupApi } from './apis/phoneSetupApi';
 import { createOutreachApi } from './apis/outreachApi';
 import { createDiscoveryApi } from './apis/discoveryApi';
 import { createRecoveryApi } from './apis/recoveryApi';
@@ -27,6 +35,29 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       get: (): Promise<AppHealth> =>
         client.requestNoInput('health:get', appHealthSchema),
     },
+    delegation: {
+      policyImport:{
+        selectAndPreview:()=>client.requestNoInput('outreach:policy-import-select-preview',policyImportPreviewSchema.nullable()),
+        confirm:(input:z.infer<typeof policyImportConfirmSchema>)=>client.request('outreach:policy-import-confirm',policyImportConfirmSchema,policyImportReportSchema,input),
+        resume:(input:z.infer<typeof policyImportResumeSchema>)=>client.request('outreach:policy-import-resume',policyImportResumeSchema,policyImportReportSchema,input),
+        status:(input:z.infer<typeof policyImportStatusSchema>)=>client.request('outreach:policy-import-status',policyImportStatusSchema,policyImportReportSchema,input),
+      },
+      prepareRequestedFollowup:(input:z.infer<typeof prepareRequestedFollowupSchema>)=>client.request('outreach:requested-followup-prepare',prepareRequestedFollowupSchema,savedRequestedFollowupSchema,input),
+      getRequestedFollowup:(input:z.infer<typeof getRequestedFollowupSchema>)=>client.request('outreach:requested-followup-get',getRequestedFollowupSchema,savedRequestedFollowupSchema.nullable(),input),
+      editRequestedFollowup:(input:z.infer<typeof editRequestedFollowupSchema>)=>client.request('outreach:requested-followup-edit',editRequestedFollowupSchema,savedRequestedFollowupSchema,input),
+      approveRequestedFollowup:(input:z.infer<typeof approveRequestedFollowupSchema>)=>client.request('outreach:requested-followup-approve',approveRequestedFollowupSchema,requestedApprovalStatusSchema,input),
+      beginPhone:(input:z.infer<typeof delegatedPhoneHandoffRequestSchema>)=>client.request('outreach:delegation-begin-phone',delegatedPhoneHandoffRequestSchema,delegatedPhoneHandoffResultSchema,input),
+      bootstrap:(input:z.infer<typeof bootstrapSelectedAccountSchema>)=>client.request('outreach:delegation-bootstrap',bootstrapSelectedAccountSchema,commandReceiptSchema,input),
+      configurePolicy:(input:z.infer<typeof workerPolicyRequestSchema>)=>client.request('outreach:delegation-policy',workerPolicyRequestSchema,workerPolicyReceiptSchema,input),
+      configureResearch:(input:z.infer<typeof configureResearchSourceSchema>)=>client.request('outreach:delegation-research',configureResearchSourceSchema,ownerResearchSourceSchema,input),
+      status:()=>client.requestNoInput('outreach:delegation-status',localDelegationStatusSchema),
+      pair:(input:z.infer<typeof redeemLocalPairingSchema>)=>client.request('outreach:delegation-pair',redeemLocalPairingSchema,redeemedLocalPairingSchema,input),
+      configure:(input:z.infer<typeof configureLocalDelegationSchema>)=>client.request('outreach:delegation-configure',configureLocalDelegationSchema,localDelegationConfigurationRecordSchema,input),
+      submit:(input:PublicDelegationCommand)=>client.request('outreach:delegation-submit',publicDelegationCommandSchema,commandReceiptSchema,input),
+      sync:()=>client.requestNoInput('outreach:delegation-sync',delegationSyncReportSchema),
+    },
+    linkedin: createLinkedInApi(client),
+    phoneSetup: createPhoneSetupApi(client),
     outreach: createOutreachApi(client),
     leads: createLeadsApi(client),
     leadDetail: createLeadDetailApi(client),

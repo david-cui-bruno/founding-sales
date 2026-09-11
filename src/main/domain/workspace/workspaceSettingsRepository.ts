@@ -40,6 +40,13 @@ export type WorkspaceSettings = Readonly<{
   updatedAt: string;
 }>;
 
+export type MeetingFirstAccountCallSettings = Readonly<{
+  newCallSlots: number | null;
+  totalCallCapacity: number | null;
+  revision: number;
+  updatedAt: string;
+}>;
+
 export class WorkspaceSettingsCorruptionError extends Error {
   constructor(message = 'The workspace settings singleton row is missing or malformed.') {
     super(message);
@@ -96,6 +103,53 @@ export class WorkspaceSettingsRepository {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     });
+  }
+
+  readMeetingFirstAccountCallSettings(): MeetingFirstAccountCallSettings {
+    const row = this.database.raw.prepare(`
+      SELECT new_call_slots AS newCallSlots,
+             total_call_capacity AS totalCallCapacity,
+             revision,
+             updated_at AS updatedAt
+      FROM meeting_first_call_settings WHERE singleton = 1
+    `).get() as { newCallSlots: number | null; totalCallCapacity: number | null; revision: number; updatedAt: string } | undefined;
+    const parsed = z.object({
+      newCallSlots: z.number().int().nonnegative().nullable(),
+      totalCallCapacity: z.number().int().nonnegative().nullable(),
+      revision: z.number().int().nonnegative(),
+      updatedAt: utcTimestampSchema,
+    }).strict().safeParse(row);
+    if (!parsed.success) throw new WorkspaceSettingsCorruptionError('Meeting-first account call settings are malformed.');
+    return Object.freeze({
+      newCallSlots: parsed.data.newCallSlots,
+      totalCallCapacity: parsed.data.totalCallCapacity,
+      revision: parsed.data.revision,
+      updatedAt: parsed.data.updatedAt,
+    });
+  }
+
+  updateMeetingFirstAccountCallSettingsCas(input: {
+    expectedRevision: number;
+    newCallSlots: number | null;
+    totalCallCapacity: number | null;
+    updatedAt: string;
+  }): MeetingFirstAccountCallSettings {
+    this.unitOfWork.assertWriteScope();
+    const parsed = z.object({
+      expectedRevision: z.number().int().nonnegative(),
+      newCallSlots: z.number().int().nonnegative().nullable(),
+      totalCallCapacity: z.number().int().nonnegative().nullable(),
+      updatedAt: utcTimestampSchema,
+    }).strict().parse(input);
+    const result = this.database.raw.prepare(`
+      UPDATE meeting_first_call_settings
+      SET new_call_slots = ?, total_call_capacity = ?, revision = revision + 1, updated_at = ?
+      WHERE singleton = 1 AND revision = ?
+    `).run(parsed.newCallSlots, parsed.totalCallCapacity, parsed.updatedAt, parsed.expectedRevision);
+    if (result.changes !== 1) {
+      throw new WorkspaceSettingsCorruptionError('Meeting-first account call settings changed before this update.');
+    }
+    return this.readMeetingFirstAccountCallSettings();
   }
 
   activateRulePointerCas(input: {

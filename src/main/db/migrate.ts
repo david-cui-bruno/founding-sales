@@ -1,6 +1,3 @@
-// The project intentionally uses TypeScript's legacy Node resolver, which cannot
-// type-resolve Kysely's package-exported migration entrypoint.
-// @ts-expect-error -- The runtime subpath is exported by Kysely and covered by migration tests.
 import { Migrator } from 'kysely/migration'; // eslint-disable-line import/no-unresolved -- Kysely exports this runtime subpath.
 
 import type { AppDatabase } from './database';
@@ -24,6 +21,11 @@ import { migration0016ContactPresentationEvidence } from './migrations/0016Conta
 import { migration0017DiscoveryAssessments } from './migrations/0017DiscoveryAssessments';
 import { migration0018PlaybookDueActions } from './migrations/0018PlaybookDueActions';
 import { migration0019EmailDrafts } from './migrations/0019EmailDrafts';
+import { migration0020PmAccounts } from './migrations/0020PmAccounts';
+import { migration0021DelegatedWork } from './migrations/0021DelegatedWork';
+import { migration0022MailPersistence } from './migrations/0022MailPersistence';
+import { migration0023Campaigns } from './migrations/0023Campaigns';
+import { migration0024RequestedFollowupAndPolicyReviews } from './migrations/0024RequestedFollowupAndPolicyReviews';
 import type { WorkspaceKey } from '../security/workspaceKeyTypes';
 
 export type MigrationResult = {
@@ -142,6 +144,11 @@ export const productionMigrations = [
   },
   { id: '0018PlaybookDueActions', schemaVersion: 18, migration: migration0018PlaybookDueActions },
   { id: '0019EmailDrafts', schemaVersion: 19, migration: migration0019EmailDrafts },
+  { id: '0020PmAccounts', schemaVersion: 20, migration: migration0020PmAccounts },
+  { id: '0021DelegatedWork', schemaVersion: 21, migration: migration0021DelegatedWork },
+  { id: '0022MailPersistence', schemaVersion: 22, migration: migration0022MailPersistence },
+  { id: '0023Campaigns', schemaVersion: 23, migration: migration0023Campaigns },
+  { id: '0024RequestedFollowupAndPolicyReviews', schemaVersion: 24, migration: migration0024RequestedFollowupAndPolicyReviews },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);
 

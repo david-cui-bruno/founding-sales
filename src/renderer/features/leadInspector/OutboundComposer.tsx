@@ -7,6 +7,7 @@ import { emailDraftSession } from './emailDraftSession';
 export type OutboundComposerProps = {
   channel: 'text' | 'email'; recipientLabel: string; onClose(): void;
   api?: OutreachApi; personId?: string; contactMethodId?: string; disabled?: boolean;
+  sendBlockedReason?: string | null;
 };
 
 export function openConnections() {
@@ -18,12 +19,14 @@ export function openConnections() {
 export function OutboundComposer(props: OutboundComposerProps) {
   if (props.channel === 'email' && props.api !== undefined && props.personId !== undefined && props.contactMethodId !== undefined) {
     return <EmailComposer key={`${props.personId}:${props.contactMethodId}`} api={props.api} personId={props.personId}
-      contactMethodId={props.contactMethodId} recipientLabel={props.recipientLabel} onClose={props.onClose} disabled={props.disabled} />;
+      contactMethodId={props.contactMethodId} recipientLabel={props.recipientLabel} onClose={props.onClose} disabled={props.disabled}
+      sendBlockedReason={props.sendBlockedReason} />;
   }
   return <LocalComposer {...props} />;
 }
-function EmailComposer({ api, personId, contactMethodId, recipientLabel, onClose, disabled = false }: {
+function EmailComposer({ api, personId, contactMethodId, recipientLabel, onClose, disabled = false, sendBlockedReason = null }: {
   api: OutreachApi; personId: string; contactMethodId: string; recipientLabel: string; onClose(): void; disabled?: boolean;
+  sendBlockedReason?: string | null;
 }) {
   const session = emailDraftSession(api, personId, contactMethodId);
   const value = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
@@ -63,8 +66,9 @@ function EmailComposer({ api, personId, contactMethodId, recipientLabel, onClose
       <p>Included below your message:</p><pre>{footer}</pre>
     </section>}
     {disabled && <p role="alert">Outreach is disabled for this person.</p>}
+    {sendBlockedReason !== null && <p role="status">{sendBlockedReason}</p>}
     <div className="outbound-composer__actions">
-      <Button disabled={!editable || value.conflict || !ready || !recipientCurrent || !value.body.trim() || !value.subject.trim()} onClick={() => { void session.send(); }}>Send</Button>
+      <Button disabled={!editable || value.conflict || !ready || !recipientCurrent || sendBlockedReason !== null || !value.body.trim() || !value.subject.trim()} onClick={() => { if (sendBlockedReason === null) void session.send(); }}>Send</Button>
       <Button variant="quiet" disabled={!editable} onClick={() => { void session.saveDisplayedEdits().catch((): undefined => undefined); }}>{value.conflict ? 'Save my displayed edits' : 'Save draft'}</Button>
       {setup?.model === 'ready' && <Button variant="quiet" disabled={!editable || value.conflict} onClick={() => { void session.generate(); }}>Generate draft</Button>}
       <Button variant="quiet" disabled={value.busy} onClick={() => { void session.flush().then(() => { if (active.current) onClose(); }, (): undefined => undefined); }}>Close draft</Button>
