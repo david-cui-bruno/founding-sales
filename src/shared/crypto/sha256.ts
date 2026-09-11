@@ -29,7 +29,8 @@ export function sha256Utf8(input: string): string {
       const s0 = rotate(x, 7) ^ rotate(x, 18) ^ (x >>> 3), s1 = rotate(y, 17) ^ rotate(y, 19) ^ (y >>> 10);
       words[i] = (words[i - 16]! + s0 + words[i - 7]! + s1) >>> 0;
     }
-    let [a, b, c, d, e, f, g, h] = Array.from(state);
+    // The state is initialized with exactly eight words and is never resized.
+    let [a, b, c, d, e, f, g, h] = Array.from(state) as [number, number, number, number, number, number, number, number];
     for (let i = 0; i < 64; i++) {
       const s1 = rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25), choose = (e & f) ^ (~e & g);
       const t1 = (h + s1 + choose + K[i]! + words[i]!) >>> 0;
