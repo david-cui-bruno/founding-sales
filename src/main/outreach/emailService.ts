@@ -117,7 +117,7 @@ export function createEmailService(options:{databaseGate:EmailDatabaseGate;provi
           return companyDraftFacts(accounts.readDraftCompanyDetail(draft.personId,now()));
         });
         assertCurrent(startEpoch);
-        const facts=[...(detail.portfolio?.facts??[]),...companyFacts];
+        const facts=[...(detail.portfolio?.facts??[]).slice(0,40-companyFacts.length),...companyFacts];
         // Local-only notes, raw activity summaries and transcripts are deliberately excluded.
         const result=await providers.generate({personName:detail.personName,organizationLabel:detail.organizationLabel,
           segment:detail.segment,stage:detail.stage,actionLabel:detail.nextAction?.label??null,facts:facts.slice(0,40),playbook:EMAIL_PLAYBOOK},controller.signal);
