@@ -73,6 +73,10 @@ const api: CalliePreloadApi = {
     createCompany: forbidden('localWorkspace.createCompany'),
     getCompanyCreateStatus: forbidden('localWorkspace.getCompanyCreateStatus'),
     get: read('localWorkspace.get', () => localSnapshot({ workflowMode: localMode })),
+    getCompany: forbidden('localWorkspace.getCompany'),
+    researchCompany: forbidden('localWorkspace.researchCompany'),
+    getCompanyResearchStatus: forbidden('localWorkspace.getCompanyResearchStatus'),
+    linkCompanyPerson: forbidden('localWorkspace.linkCompanyPerson'),
     getCommitments: read('localWorkspace.getCommitments', () => commitments()),
     transition: forbidden('localWorkspace.transition'),
   },
@@ -87,7 +91,7 @@ const api: CalliePreloadApi = {
   },
   linkedin: { prepare: forbidden('linkedin.prepare'), get: forbidden('linkedin.get'), recover: forbidden('linkedin.recover'), save: forbidden('linkedin.save'), begin: forbidden('linkedin.begin'), open: forbidden('linkedin.open'), copy: forbidden('linkedin.copy'), reportOutcome: forbidden('linkedin.reportOutcome') },
   phoneSetup: { status: forbidden('phoneSetup.status'), confirm: forbidden('phoneSetup.confirm'), clear: forbidden('phoneSetup.clear') },
-  outreach: { status: read<Awaited<ReturnType<CalliePreloadApi['outreach']['status']>>>('outreach.status', () => ({ model: 'unconfigured', modelName: '', gmail: 'unconfigured', accountEmail: null, senderName: '', postalAddress: '' })), connectGmail: forbidden('outreach.connectGmail'), disconnectGmail: forbidden('outreach.disconnectGmail'), configure: forbidden('outreach.configure'), openDraft: forbidden('outreach.openDraft'), saveDraft: forbidden('outreach.saveDraft'), generateDraft: forbidden('outreach.generateDraft'), sendDraft: forbidden('outreach.sendDraft') },
+  outreach: { status: read<Awaited<ReturnType<CalliePreloadApi['outreach']['status']>>>('outreach.status', () => ({ model: 'unconfigured', modelName: '', gmail: 'unconfigured', accountEmail: null, senderName: '', postalAddress: '' })), connectGmail: forbidden('outreach.connectGmail'), disconnectGmail: forbidden('outreach.disconnectGmail'), configure: forbidden('outreach.configure'), openDraft: forbidden('outreach.openDraft'), saveDraft: forbidden('outreach.saveDraft'), generateDraft: forbidden('outreach.generateDraft'), sendDraft: forbidden('outreach.sendDraft'), inspectLocalAuthority: forbidden('outreach.inspectLocalAuthority') },
   leads: { list: read<Awaited<ReturnType<CalliePreloadApi['leads']['list']>>>('leads.list', () => ({ rows: [row], nextCursor: null, total: 1, revision: 1 })), updateField: forbidden('leads.updateField'), bulkUpdate: forbidden('leads.bulkUpdate') },
   leadDetail: { get: async (input) => {
     calls.push({ method: 'leadDetail.get', kind: 'read', args: [structuredClone(input)] });

@@ -1,3 +1,4 @@
+import type { FirstUseContinuation } from './localCompanyContinuation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { DiscoveryApi } from '../../../shared/contracts/discoveryContract';
@@ -45,11 +46,13 @@ export type TodayLeadCommandApi = {
 };
 
 export type TodayRouteProps = {
+  firstUse: FirstUseContinuation;
   api: TodayRouteApi;
   workspaceApi?: NativeDeskApi;
   discoveryApi?: DiscoveryApi;
   leadApi?: TodayLeadCommandApi;
   onOpenLead(personId: string): void;
+  onOpenImport(): void;
   /** Promotes a person to the full-page view for the call outcome flow. */
   onOpenLeadPage?(personId: string): void;
 };
@@ -74,7 +77,7 @@ const todayDateLine = (): string =>
  */
 export function TodayRoute(props: TodayRouteProps) {
   const inspector = useLeadInspectorIfAvailable();
-  if (props.workspaceApi) return <NativeDeskRoute api={props.workspaceApi}
+  if (props.workspaceApi) return <NativeDeskRoute firstUse={props.firstUse} api={props.workspaceApi} onOpenImport={props.onOpenImport}
     onOpenLead={props.onOpenLeadPage ?? inspector?.openFullPage ?? props.onOpenLead}
     renderLegacy={readHeld => <LegacyTodayRoute {...props} readHeld={readHeld} />} />;
   return <LegacyTodayRoute {...props} />;

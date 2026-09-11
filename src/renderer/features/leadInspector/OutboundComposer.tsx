@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { OutreachApi, OutreachStatus } from '../../../shared/contracts/outreachContract';
-import { outreachStatusSchema } from '../../../shared/contracts/outreachContract';
+import type { LocalEmailAuthorityRead, OutreachApi, OutreachStatus } from '../../../shared/contracts/outreachContract';
+import { localEmailAuthorityReadSchema, outreachStatusSchema } from '../../../shared/contracts/outreachContract';
 import { Button } from '../../components/Button';
 import { emailDraftSession } from './emailDraftSession';
 
@@ -30,7 +30,12 @@ function EmailComposer({ api, personId, contactMethodId, recipientLabel, onClose
 }) {
   const session = emailDraftSession(api, personId, contactMethodId);
   const value = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
-  const [setup, setSetup] = useState<OutreachStatus | null>(null);
+  const draft = value.draft;
+  const generation = useRef(0);
+  const [observation, setObservation] = useState<{
+    api: OutreachApi; personId: string; contactMethodId: string; draftId: string; revision: number;
+    generation: number; setup: OutreachStatus | null; authority: LocalEmailAuthorityRead | null;
+  } | null>(null);
   const active = useRef(true);
   useEffect(() => {
     active.current = true;
@@ -38,11 +43,60 @@ function EmailComposer({ api, personId, contactMethodId, recipientLabel, onClose
     return () => { active.current = false; void session.flush().catch((): undefined => undefined); };
   }, [session]);
   useEffect(() => {
-    let current = true;
-    void api.status().then(result => { const parsed = outreachStatusSchema.safeParse(result); if (current && parsed.success) setSetup(parsed.data); }, (): undefined => undefined);
-    return () => { current = false; };
-  }, [api]);
-  const draft = value.draft;
+    let mounted = true;
+    const refresh = () => {
+      // Each real observation invalidates both prior reads, even for the same tuple.
+      const requestGeneration = ++generation.current;
+      setObservation(null);
+      const snapshot = session.snapshot();
+      const saved = snapshot.draft;
+      // Explicit open owns loading/flush. Observation never opens or saves a draft.
+      if (snapshot.loading || saved === null) return;
+      const binding = { api, personId, contactMethodId, draftId: saved.id, revision: saved.revision, generation: requestGeneration };
+      const current = () => {
+        const latest = session.snapshot();
+        return mounted && generation.current === requestGeneration && !latest.loading
+          && latest.draft?.id === binding.draftId && latest.draft.revision === binding.revision
+          && latest.draft.personId === personId && latest.draft.contactMethodId === contactMethodId;
+      };
+      setObservation({ ...binding, setup: null, authority: null });
+      // Separate settlements: a failure is a current hold, not a retained ready value.
+      void Promise.resolve().then(() => api.status()).then(result => {
+        const parsed = outreachStatusSchema.safeParse(result);
+        if (current()) setObservation(previous => previous?.generation === requestGeneration
+          ? { ...previous, setup: parsed.success ? parsed.data : null } : previous);
+      }).catch(() => {
+        if (current()) setObservation(previous => previous?.generation === requestGeneration
+          ? { ...previous, setup: null } : previous);
+      });
+      void Promise.resolve().then(() => api.inspectLocalAuthority({ draftId: saved.id, expectedRevision: saved.revision })).then(result => {
+        const parsed = localEmailAuthorityReadSchema.safeParse(result);
+        const read = parsed.success ? parsed.data : null;
+        const matches = read !== null && read.draftId === saved.id && read.expectedRevision === saved.revision
+          && read.personId === personId && read.contactMethodId === contactMethodId;
+        if (current()) setObservation(previous => previous?.generation === requestGeneration
+          ? { ...previous, authority: matches ? read : null } : previous);
+      }).catch(() => {
+        if (current()) setObservation(previous => previous?.generation === requestGeneration
+          ? { ...previous, authority: null } : previous);
+      });
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    window.addEventListener('hashchange', refresh);
+    return () => {
+      mounted = false;
+      ++generation.current;
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('hashchange', refresh);
+    };
+  }, [api, personId, contactMethodId, session, draft?.id, draft?.revision, value.loading]);
+  const observationCurrent = observation !== null && observation.api === api && observation.personId === personId
+    && observation.contactMethodId === contactMethodId && observation.draftId === draft?.id
+    && observation.revision === draft?.revision && observation.generation === generation.current && !value.loading;
+  const setup = observationCurrent ? observation.setup : null;
+  const authority = observationCurrent ? observation.authority : null;
+  const authorityAllowed = authority?.state === 'allowed';
   const editable = !disabled && !value.loading && !value.busy && draft?.status === 'draft';
   const configuredFooter = setup === null ? '' : `${setup.senderName}\n${setup.postalAddress}\nTo stop these emails, reply "stop".`;
   const senderEmail = draft?.senderEmail === undefined ? setup?.accountEmail : draft.senderEmail;
@@ -67,8 +121,9 @@ function EmailComposer({ api, personId, contactMethodId, recipientLabel, onClose
     </section>}
     {disabled && <p role="alert">Outreach is disabled for this person.</p>}
     {sendBlockedReason !== null && <p role="status">{sendBlockedReason}</p>}
+    {!authorityAllowed && <p role="status">Local account send authority is not established. Saving your draft remains available.</p>}
     <div className="outbound-composer__actions">
-      <Button disabled={!editable || value.conflict || !ready || !recipientCurrent || sendBlockedReason !== null || !value.body.trim() || !value.subject.trim()} onClick={() => { if (sendBlockedReason === null) void session.send(); }}>Send</Button>
+      <Button disabled={!editable || value.conflict || !ready || !authorityAllowed || !recipientCurrent || sendBlockedReason !== null || !value.body.trim() || !value.subject.trim()} onClick={() => { if (sendBlockedReason === null && authorityAllowed && observation?.generation === generation.current) void session.send(); }}>Send</Button>
       <Button variant="quiet" disabled={!editable} onClick={() => { void session.saveDisplayedEdits().catch((): undefined => undefined); }}>{value.conflict ? 'Save my displayed edits' : 'Save draft'}</Button>
       {setup?.model === 'ready' && <Button variant="quiet" disabled={!editable || value.conflict} onClick={() => { void session.generate(); }}>Generate draft</Button>}
       <Button variant="quiet" disabled={value.busy} onClick={() => { void session.flush().then(() => { if (active.current) onClose(); }, (): undefined => undefined); }}>Close draft</Button>

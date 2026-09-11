@@ -1,4 +1,5 @@
 import { localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, type LocalWorkspaceSnapshot, type LocalCommitmentsSnapshot, type LocalWorkspaceApi, type LocalWorkflowReceipt } from '../../../shared/contracts/localWorkspaceContract';
+import { createLocalCompanyContinuation } from './localCompanyContinuation';
 /** Test-only browser-safe factory. Never imported by production components. */
 import {
   dailySnapshotSchema,
@@ -220,8 +221,14 @@ export function nativeDeskFixture(initial = dailyFixture()) {
     return item;
   };
   const api: NativeDeskApi & { localWorkspace: LocalWorkspaceApi } = {
+    leads: { list: async input => { record('leads.list', input); throw Error('Saved people unavailable in this fixture'); }, updateField: forbidden, bulkUpdate: forbidden },
+    leadDetail: { get: async input => { record('leadDetail.get', input); throw Error('Saved person detail unavailable in this fixture'); }, beginOutbound: forbidden, getOutboundCapabilities: forbidden, confirmTransition: forbidden, dismissLead: forbidden, overrideCloudScore: forbidden, findContactInfo: forbidden },
     localWorkspace: {
       get: async () => { record('localWorkspace.get'); return structuredClone(local); },
+      getCompany: async input => { record('localWorkspace.getCompany', input); throw Error('Selected company detail unavailable in this fixture'); },
+      researchCompany: async () => { record('localWorkspace.researchCompany'); throw Error('Selected company research unavailable in this fixture'); },
+      getCompanyResearchStatus: async () => { record('localWorkspace.getCompanyResearchStatus'); throw Error('Selected company research unavailable in this fixture'); },
+      linkCompanyPerson: async input => { record('localWorkspace.linkCompanyPerson', input); throw Error('Reviewed company link unavailable in this fixture'); },
       getCommitments: async () => { record('localWorkspace.getCommitments'); return structuredClone(retained); },
       reviewCompany: async () => { record('localWorkspace.reviewCompany'); throw Error('Company intake unavailable in this fixture'); },
       createCompany: async () => { record('localWorkspace.createCompany'); throw Error('Company intake unavailable in this fixture'); },
@@ -384,6 +391,7 @@ export function nativeDeskFixture(initial = dailyFixture()) {
   };
   return {
     api,
+    firstUse: firstUseFixture(),
     calls,
     setLocalSnapshot(next: LocalWorkspaceSnapshot) { local = localWorkspaceSnapshotSchema.parse(structuredClone(next)); },
     setCommitments(next: LocalCommitmentsSnapshot) { retained = localCommitmentsSnapshotSchema.parse(structuredClone(next)); },
@@ -483,4 +491,11 @@ export function nativeDeskReviewFixture(): DailySnapshot {
     },
   ];
   return dailySnapshotSchema.parse(snapshot);
+}
+
+/** Test-only detached continuation for legacy presentation fixtures. No IPC, timers or global cache. */
+export function firstUseFixture() {
+  const bundle = createLocalCompanyContinuation();
+  bundle.activate();
+  return bundle.continuation;
 }

@@ -4,7 +4,7 @@ import type { AppDatabase } from '../db/database';
 import type { FounderSalesDomain } from '../domain/founderSalesDomain';
 import { contactSnapshot } from '../communications/contactSnapshot';
 import { configureOutreachSchema,draftRevisionSchema,openDraftSchema,saveDraftSchema,sendDraftSchema,
-  type EmailDraft,type OutreachApi,type OutreachStatus,type SendDraftRequest } from '../../shared/contracts/outreachContract';
+  type EmailDraft,type LocalEmailAuthorityRead,type OutreachApi,type OutreachStatus,type SendDraftRequest } from '../../shared/contracts/outreachContract';
 import type { EmailSendResult,OutreachProviders } from './providers/providerTypes';
 import { EmailRepository,publicDraft,type EmailReservation } from './emailRepository';
 import { authorizeEmail,emailDomain,readEmailAction,recordEmailAcceptance } from './emailEvidence';
@@ -35,6 +35,35 @@ export function createEmailService(options:{databaseGate:EmailDatabaseGate;provi
     connectGmail:()=>{assertOpen();invalidate();return providers.connectGmail();},
     disconnectGmail:()=>{assertOpen();invalidate();return providers.disconnectGmail();},
     dispose:()=>{closed=true;invalidate();providers.dispose();},invalidate,
+    async inspectLocalAuthority(input) {
+      assertOpen();const startEpoch=epoch;const request=draftRevisionSchema.parse(input);
+      // Do not call ready(): observation must not repair interrupted Sending rows.
+      const result=await gate.withDatabase(db=>{
+        assertCurrent(startEpoch);
+        const read=():LocalEmailAuthorityRead=>{
+          assertCurrent(startEpoch);
+          const draft=new EmailRepository(db).get(request.draftId);
+          if(draft.revision!==request.expectedRevision||draft.supersededAt!==null)throw new Error('email_draft_changed');
+          const current=db.raw.prepare(`SELECT id,person_id AS personId,kind,normalized_value AS normalizedValue,
+            validation_state AS validationState,updated_at AS updatedAt FROM person_contact_methods WHERE id=?`).get(draft.contactMethodId) as Parameters<typeof contactSnapshot>[0]|undefined;
+          let reason:LocalEmailAuthorityRead['reason']=null;
+          if(!current||current.personId!==draft.personId||current.kind!=='email'||current.normalizedValue!==draft.recipient
+            ||contactSnapshot(current)!==draft.contactSnapshot) reason='email_contact_changed';
+          else {
+            try {assertLocalEmailAuthority(db,{personId:draft.personId,recipient:draft.recipient,expectedWorkspaceId});}
+            catch(error) {
+              if(!(error instanceof Error)||error.message!=='email_authority_unavailable')throw error;
+              reason='email_authority_unavailable';
+            }
+          }
+          const observed:LocalEmailAuthorityRead={...request,personId:draft.personId,contactMethodId:draft.contactMethodId,
+            state:reason===null?'allowed':'held',reason,checkedAt:now()};
+          assertCurrent(startEpoch);return observed;
+        };
+        return db.raw.inTransaction?read():db.raw.transaction(read).deferred();
+      });
+      assertCurrent(startEpoch);return result;
+    },
     async openDraft(input) {
       assertOpen();const startEpoch=epoch;const request=openDraftSchema.parse(input);await ready();assertCurrent(startEpoch);
       const detail=await gate.withDomain(domain=>domain.getLeadDetail({personId:request.personId}));

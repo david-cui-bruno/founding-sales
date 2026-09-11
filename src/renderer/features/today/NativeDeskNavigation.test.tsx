@@ -15,7 +15,7 @@ it('actual Today selects stored meeting_first without mounting legacy read or co
     throw Error('Legacy mounted');
   });
   render(
-    <TodayRoute
+    <TodayRoute onOpenImport={(): void => undefined} firstUse={f.firstUse}
       api={{ get } as unknown as TodayRouteApi}
       workspaceApi={f.api}
       onOpenLead={vi.fn()}
@@ -41,6 +41,7 @@ it.each(['accounts', 'campaigns'] as const)(
     render(
       renderRoute(route, {
         api: f.api,
+        firstUse: f.firstUse,
         openLead: vi.fn(),
       } as unknown as RouteContext),
     );
@@ -91,7 +92,7 @@ it('company call selection is not dispatch, and only a real linked person can op
   const f = nativeDeskFixture(snapshot),
     open = vi.fn();
   render(
-    <TodayRoute
+    <TodayRoute onOpenImport={(): void => undefined} firstUse={f.firstUse}
       api={{} as TodayRouteApi}
       workspaceApi={f.api}
       onOpenLead={open}
@@ -123,7 +124,7 @@ it('keeps established legacy callback DOM while local and daily refresh fail, wi
   const overview = vi.spyOn(f.api.localWorkspace, 'get').mockResolvedValue(localSnapshot({ workflowMode: 'legacy' }));
   const daily = vi.spyOn(f.api.daily, 'get');
   const renderLegacy = (readHeld: boolean) => <input aria-label="Legacy form" readOnly={readHeld} />;
-  render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} renderLegacy={renderLegacy} />);
+  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} renderLegacy={renderLegacy} />);
   const field = await screen.findByLabelText('Legacy form') as HTMLInputElement;
   fireEvent.change(field, { target: { value: 'Retained legacy draft' } });
   overview.mockRejectedValueOnce(new Error('Local unavailable'));
@@ -140,7 +141,7 @@ it.each(['fallback', 'callback'] as const)('supports established legacy %s witho
   const f = nativeDeskFixture(dailyFixture({ workflowMode: 'legacy' }));
   const { localWorkspace: omitted, ...api } = f.api; void omitted;
   const legacy = <input aria-label="Legacy form" />;
-  render(<NativeDeskRoute api={api} onOpenLead={vi.fn()} legacy={legacy}
+  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={api} onOpenLead={vi.fn()} legacy={legacy}
     renderLegacy={variant === 'callback' ? held => <input aria-label="Legacy form" readOnly={held} /> : undefined} />);
   const field = await screen.findByLabelText('Legacy form');
   await act(async () => { fireEvent.focus(window); });

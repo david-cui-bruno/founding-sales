@@ -157,3 +157,93 @@ it.each([0, 20])('claims affordable queued work past an expensive head while ret
       .toEqual({ reserved: priorCost + 50, known: 0 });
   } finally { f.close(); }
 });
+
+
+it('reopens encrypted selected committed work through the real worker with zero pages calls and all unrelated paths untouched', async () => {
+  const f = await createPmFixture();
+  const abort = new AbortController();
+  try {
+    let at = PM_NOW;
+    const options = { database: f.db, clock: { now: () => at }, ids: { next: randomUUID }, research: { maxBudgetMicros: 1000 } };
+    const repo = new AccountRepository(options);
+    const account = repo.create({ commandId: randomUUID(), name: 'Selected restart', domain: 'selected.invalid' });
+    const other = repo.create({ commandId: randomUUID(), name: 'Unrelated restart', domain: 'other.invalid' });
+    const queued = { commandId: randomUUID(), accountId: other.id };
+    const expired = { commandId: randomUUID(), accountId: other.id };
+    const committed = { commandId: randomUUID(), accountId: account.id };
+    const selected = { commandId: randomUUID(), accountId: account.id };
+    repo.enqueue({ ...queued, limits });
+    repo.enqueue({ ...expired, limits });
+    const expiredJob = repo.claimSelected(PM_NOW, expired)!;
+    expect(expiredJob.accountId).toBe(other.id);
+    repo.enqueue({ ...committed, limits });
+    const unrelatedJob = repo.claimSelected(PM_NOW, committed)!;
+    repo.admitEvidence({ commandId: unrelatedJob.receiptCommandId, accountId: account.id, expectedVersion: 1, sources: [], claims: [], routes: [] },
+      { jobId: unrelatedJob.id, claimToken: unrelatedJob.claimToken });
+    at = '2026-09-08T12:00:01.000Z';
+    repo.enqueue({ ...selected, limits });
+    const job = repo.claimSelected(at, selected)!;
+    const evidence: AccountEvidenceBatch = { commandId: job.receiptCommandId, accountId: account.id, expectedVersion: 2, sources: [], claims: [], routes: [] };
+    const receipt = repo.admitEvidence(evidence, { jobId: job.id, claimToken: job.claimToken });
+    expect(receipt).toEqual({ accountId: account.id, version: 3, duplicate: false });
+    expect(job.receiptCommandId).toBe(job.id);
+    expect(job.receiptCommandId).not.toBe(selected.commandId);
+    const unrelatedRows = () => f.db.raw.prepare('SELECT * FROM pm_account_research_jobs WHERE command_id<>? ORDER BY id').all(selected.commandId);
+    const originalUnrelated = unrelatedRows();
+    const originalCommands = f.db.raw.prepare('SELECT * FROM pm_account_commands ORDER BY command_id').all();
+    const oldRaw = f.db.raw;
+    const oldKysely = f.db.kysely;
+    const path = f.db.path;
+    // Physical encrypted close/reopen, not a recreated repository over a live handle.
+    closeDatabase(f.db);
+    expect(oldRaw.open).toBe(false);
+    const key = createTestWorkspaceKey();
+    try {
+      const reopened = openDatabase({ path, key });
+      f.db.raw = reopened.raw;
+      f.db.kysely = reopened.kysely;
+    } finally { key.bytes.fill(0); }
+    expect(key.bytes.every(value => value === 0)).toBe(true);
+    expect(f.db.raw).not.toBe(oldRaw);
+    expect(f.db.kysely).not.toBe(oldKysely);
+    expect(f.db.path).toBe(path);
+    at = '2026-09-08T13:00:00.000Z';
+    // Recovery must precede configuration checks, even after a real restart.
+    const restarted = new AccountRepository({ ...options, research: { maxBudgetMicros: 0 } });
+    const beforeRead = f.db.raw.prepare('SELECT total_changes() AS n').get();
+    const selectedBeforeRead = f.db.raw.prepare('SELECT * FROM pm_account_research_jobs WHERE command_id=?').get(selected.commandId);
+    for (let i = 0; i < 3; i++) {
+      expect(restarted.readSelectedResearch(selected)).toMatchObject({ ...selected, state: 'completed', receipt });
+    }
+    expect(f.db.raw.prepare('SELECT total_changes() AS n').get()).toEqual(beforeRead);
+    expect(f.db.raw.prepare('SELECT * FROM pm_account_research_jobs WHERE command_id=?').get(selected.commandId)).toEqual(selectedBeforeRead);
+    expect(selectedBeforeRead).toMatchObject({ state: 'running', receipt_command_id: job.id });
+    let pagesCalls = 0;
+    const store: Parameters<typeof createCompanyResearchWorker>[0]['store'] = {
+      create: input => restarted.create(input),
+      snapshot: (accountId, asOf) => restarted.snapshot(accountId, asOf),
+      admitEvidence: (input, claim) => restarted.admitEvidence(input, claim),
+      enqueue: input => restarted.enqueue(input),
+      claimNext: asOf => restarted.claimSelected(asOf, selected),
+      settle: input => restarted.settle(input),
+    };
+    const worker = createCompanyResearchWorker({ store, clock: options.clock,
+      pages: { research: async () => { pagesCalls++; throw new Error('selected committed recovery must never call pages'); } } });
+    expect(await worker.runNext(abort.signal)).toBe('completed');
+    expect(pagesCalls).toBe(0);
+    expect(restarted.readSelectedResearch(selected)).toMatchObject({ ...selected, state: 'completed', receipt });
+    expect(f.db.raw.prepare('SELECT state,receipt_command_id,cost_micros,reserved_cost_micros,limits_json FROM pm_account_research_jobs WHERE command_id=?').get(selected.commandId))
+      .toEqual({ state: 'completed', receipt_command_id: job.id, cost_micros: null, reserved_cost_micros: 100, limits_json: JSON.stringify(limits) });
+    expect(unrelatedRows()).toEqual(originalUnrelated);
+    expect(f.db.raw.prepare('SELECT * FROM pm_account_commands ORDER BY command_id').all()).toEqual(originalCommands);
+    expect(restarted.snapshot(account.id, at).account.version).toBe(3);
+    const settledRows = f.db.raw.prepare('SELECT * FROM pm_account_research_jobs ORDER BY id').all();
+    expect(() => restarted.admitEvidence(evidence, { jobId: job.id, claimToken: job.claimToken })).toThrow(/claim|fenced/i);
+    expect(() => restarted.settle({ jobId: job.id, claimToken: job.claimToken, status: 'completed', receiptCommandId: job.id, costMicros: null })).toThrow(/claim|fenced/i);
+    expect(await worker.runNext(abort.signal)).toBe('idle');
+    expect(pagesCalls).toBe(0);
+    expect(f.db.raw.prepare('SELECT * FROM pm_account_research_jobs ORDER BY id').all()).toEqual(settledRows);
+    expect(unrelatedRows()).toEqual(originalUnrelated);
+    expect(f.db.raw.pragma('foreign_key_check')).toEqual([]);
+  } finally { abort.abort(); f.close(); }
+}, 15000);

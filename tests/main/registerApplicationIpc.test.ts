@@ -168,6 +168,57 @@ describe('registerApplicationIpc', () => {
     expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
   });
 
+  it('Task 1 startup rolls selected-company registration back without repeating startup', async () => {
+    const handlers = new Set<string>(); const features = new Set<string>(); const listeners = new Set<() => void>();
+    const registrationError = new Error('registration'); const cleanupError = new Error('cleanup');
+    const { registrars } = fakeRegistrars([]);
+    for (const name of Object.keys(registrars) as (keyof FeatureRegistrars)[]) {
+      registrars[name] = vi.fn(() => {
+        features.add(name);
+        return () => { features.delete(name); if (name === 'registerHealthIpc') throw cleanupError; };
+      });
+    }
+    registrars.registerLocalWorkspaceIpc = registerLocalWorkspaceIpc;
+    electron.handle.mockReset().mockImplementation((channel: string) => {
+      if (channel === 'local-workspace:get-company') throw registrationError;
+      handlers.add(channel);
+    });
+    electron.removeHandler.mockReset().mockImplementation((channel: string) => { handlers.delete(channel); });
+    let service!: OutboundCommandServiceApi;
+    const dispose = vi.fn(); const close = vi.fn(); const window = vi.fn();
+    const opened = vi.fn(() => ({ path: '/fixture/rollback' }) as AppDatabase);
+    const domainCreated = vi.fn(() => fakeDomainRuntime());
+    const registration = vi.fn<typeof registerApplicationIpc>((runtime, trust, _unused, sourcing, recovery, shell, enrichment, logs, outbound) =>
+      registerApplicationIpc(runtime, trust, registrars, sourcing, recovery, shell, enrichment, logs, outbound));
+    const dependencies: ApplicationStartupDependencies = {
+      loadWorkspaceKey: async () => ({ bytes: Buffer.alloc(32, 0x2a), version: 1 }),
+      prepareEncryptedDatabase: async () => undefined,
+      openDatabase: opened,
+      migrateToLatest: async () => ({ fromVersion: 0, toVersion: 2, appliedMigrationIds: [] }),
+      createDomainRuntime: domainCreated, createHealthService: () => ({ getHealth: () => degradedHealth }),
+      createSourcingPoller: () => ({ getHealth: () => degradedHealth.sourcing, stop: (): void => undefined,
+        idle: async (): Promise<void> => undefined }) as unknown as SourcingPoller,
+      createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined,
+        listAvailableBackups: async () => [], createBackup: async () => { throw new Error('unexpected backup'); } }),
+      createRecoveryService: () => ({ ...recoveryProvider, shutdown: async () => undefined }),
+      createOutboundCommandService: (input) => { service = createOutboundCommandService(input); dispose.mockImplementation(() => service.dispose()); return { ...service, dispose }; },
+      registerApplicationIpc: registration,
+      createAppleBridgeSupervisor: () => { throw new Error('unexpected helper'); }, closeDatabase: close,
+    };
+    const error = await startApplication({ appVersion: '1', userDataPath: '/fixture/rollback', createWindow: window,
+      registerOutboundLifecycle: (owned) => { Object.values(owned).forEach((callback) => listeners.add(callback)); return () => listeners.clear(); },
+    }, dependencies).catch((caught: unknown) => caught) as AggregateError;
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error.cause).toBe(registrationError);
+    expect(error.errors).toEqual([registrationError, cleanupError]);
+    expect(handlers.size).toBe(0); expect(features.size).toBe(0); expect(listeners.size).toBe(0);
+    expect(dispose).toHaveBeenCalledTimes(1); expect(close).toHaveBeenCalledTimes(1); expect(window).not.toHaveBeenCalled();
+    expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
+    expect(opened).toHaveBeenCalledTimes(1); expect(domainCreated).toHaveBeenCalledTimes(1);
+    expect(registration).toHaveBeenCalledTimes(1);
+    expect(electron.handle.mock.calls.filter(call => call[0] === 'local-workspace:get-company')).toHaveLength(1);
+  });
+
   it.each([3, 7, 13, 14, 15, 16])('rolls back all successful outer registrations when registrar %s fails', (nth) => {
     const registry = new Set<string>();
     const order: string[] = [];
@@ -622,5 +673,204 @@ describe('all40 shipped provider mappings and owned detail exceptions', () => {
       await expect(route.run()).rejects.toBe(error);
     }
     expect(gate.withDomain).not.toHaveBeenCalled(); expect(gate.getHealth).not.toHaveBeenCalled();
+  });
+});
+
+import { createPmFixture, PM_NOW } from '../fixtures/pmAccounts';
+import { SystemClock } from '../../src/main/domain/support/clock';
+
+function applicationCompanyState(database: AppDatabase) {
+  const tables = database.raw.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[];
+  return { changes: database.raw.prepare('SELECT total_changes() AS changes').get(),
+    tables: tables.map(({ name }) => ({ name, rows: database.raw.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`).all() })) };
+}
+
+describe('Task 1 selected-company application composition', () => {
+  it('public getCompany uses current storage for every invocation without startup or domain work', async () => {
+    const first = await createPmFixture();
+    const second = await createPmFixture();
+    let dispose: (() => void) | undefined;
+    electron.handle.mockReset(); electron.removeHandler.mockReset();
+    try {
+      const a = first.repo.create({ commandId: crypto.randomUUID(), name: 'Workspace A', domain: null });
+      const b = second.repo.create({ commandId: crypto.randomUUID(), name: 'Workspace B', domain: null });
+      let current: AppDatabase | undefined = first.db;
+      const gate: Gate = {
+        withDatabase: async operation => { if (!current) throw new Error('storage inactive'); return operation(current); },
+        withDomain: async () => { throw new Error('unexpected domain operation'); },
+        getHealth: async () => { throw new Error('unexpected health operation'); },
+      };
+      const databaseLease = vi.spyOn(gate, 'withDatabase');
+      const domainLease = vi.spyOn(gate, 'withDomain');
+      const health = vi.spyOn(gate, 'getHealth');
+      vi.spyOn(SystemClock.prototype, 'now').mockReturnValue(PM_NOW);
+      const sourcing = explicitSourcingProvider();
+      const poll = vi.spyOn(sourcing, 'pollNow');
+      const firstBefore = applicationCompanyState(first.db);
+      const secondBefore = applicationCompanyState(second.db);
+      dispose = registerApplicationIpc(gate, undefined, undefined, sourcing, recoveryProvider);
+      expect(databaseLease).not.toHaveBeenCalled();
+      expect(domainLease).not.toHaveBeenCalled();
+      const registeredCount = electron.handle.mock.calls.length;
+      expect(electron.handle.mock.calls.filter(call => call[0] === 'local-workspace:get-company')).toHaveLength(1);
+      const api = createCallieApi({ invoke: async (channel, ...args) => registeredIpcHandler(electron.handle, channel)({ senderFrame: { url: 'callie://app/index.html' } }, ...args) });
+      expect(await api.localWorkspace.getCompany({ accountId: a.id })).toEqual({ scope: 'local_database', generatedAt: PM_NOW, snapshot: first.repo.snapshot(a.id, PM_NOW), sources: [], links: [] });
+      current = second.db;
+      expect(await api.localWorkspace.getCompany({ accountId: b.id })).toEqual({ scope: 'local_database', generatedAt: PM_NOW, snapshot: second.repo.snapshot(b.id, PM_NOW), sources: [], links: [] });
+      await expect(api.localWorkspace.getCompany({ accountId: a.id })).rejects.toThrow(/^LOCAL_COMPANY_READ_FAILED$/);
+      current = undefined;
+      await expect(api.localWorkspace.getCompany({ accountId: b.id })).rejects.toThrow(/^LOCAL_COMPANY_READ_FAILED$/);
+      expect(databaseLease).toHaveBeenCalledTimes(4);
+      expect(domainLease).not.toHaveBeenCalled(); expect(health).not.toHaveBeenCalled(); expect(poll).not.toHaveBeenCalled();
+      expect(electron.handle).toHaveBeenCalledTimes(registeredCount);
+      expect(applicationCompanyState(first.db)).toEqual(firstBefore);
+      expect(applicationCompanyState(second.db)).toEqual(secondBefore);
+      dispose(); dispose();
+      expect(electron.removeHandler.mock.calls.filter(call => call[0] === 'local-workspace:get-company')).toHaveLength(1);
+    } finally { dispose?.(); vi.restoreAllMocks(); first.close(); second.close(); electron.handle.mockReset(); electron.removeHandler.mockReset(); }
+  });
+
+  it('rolls back every earlier application and local handler when selected-company registration fails', () => {
+    const handlers = new Set(['unrelated']);
+    const registered: string[] = [];
+    const failure = new Error('selected-company registration');
+    electron.handle.mockReset().mockImplementation((channel: string) => {
+      if (channel === 'local-workspace:get-company') throw failure;
+      handlers.add(channel); registered.push(channel);
+    });
+    electron.removeHandler.mockReset().mockImplementation((channel: string) => { handlers.delete(channel); });
+    const gate: Gate = {
+      withDatabase: async () => { throw new Error('unexpected storage operation'); },
+      withDomain: async () => { throw new Error('unexpected domain operation'); },
+      getHealth: async () => { throw new Error('unexpected health operation'); },
+    };
+    const storage = vi.spyOn(gate, 'withDatabase');
+    const domain = vi.spyOn(gate, 'withDomain');
+    try {
+      expect(() => registerApplicationIpc(gate, undefined, undefined, explicitSourcingProvider(), recoveryProvider)).toThrow(failure);
+      expect([...handlers]).toEqual(['unrelated']);
+      const removed = electron.removeHandler.mock.calls.map(call => call[0]);
+      expect(registered).toHaveLength(63);
+      expect(new Set(registered).size).toBe(63);
+      expect([...removed].sort()).toEqual([...registered].sort());
+      // Application disposes slices in reverse order. Historical slices own their
+      // internal channel order, while local-workspace rolls its six back in reverse.
+      const slices = removed.map(channel => channel.split(':')[0]);
+      expect(slices.filter((slice, index) => index === 0 || slice !== slices[index - 1])).toEqual([
+        'local-workspace', 'daily', 'discovery', 'recovery', 'shell', 'sourcing',
+        'learnings', 'conversations', 'imports', 'friday', 'review', 'pipeline',
+        'today', 'lead-detail', 'leads', 'health',
+      ]);
+      expect(removed.slice(0, 6)).toEqual([
+        'local-workspace:company-create-status', 'local-workspace:create-company',
+        'local-workspace:review-company', 'local-workspace:transition',
+        'local-workspace:get-commitments', 'local-workspace:get',
+      ]);
+      expect(storage).not.toHaveBeenCalled(); expect(domain).not.toHaveBeenCalled();
+    } finally { vi.restoreAllMocks(); electron.handle.mockReset(); electron.removeHandler.mockReset(); }
+  });
+});
+
+import { registerLocalWorkspaceIpc } from '../../src/main/workspace/registerLocalWorkspaceIpc';
+
+import { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
+import { DomainRuntime } from '../../src/main/domain/domainRuntime';
+import { HealthService } from '../../src/main/health/healthService';
+import { openDatabase, closeDatabase } from '../../src/main/db/database';
+import { migrateToLatest } from '../../src/main/db/migrate';
+import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
+import { dirname, join } from 'node:path';
+import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
+import type { SelectedCompanyResearchPort } from '../../src/main/workspace/localWorkspaceProvider';
+import type { SelectedResearch } from '../../src/shared/contracts/localWorkspaceContract';
+const task3LocalChannels = [
+  'local-workspace:get', 'local-workspace:get-commitments', 'local-workspace:transition',
+  'local-workspace:review-company', 'local-workspace:create-company', 'local-workspace:company-create-status',
+  'local-workspace:get-company', 'local-workspace:research-company', 'local-workspace:company-research-status',
+  'local-workspace:link-company-person',
+];
+async function task3ApplicationFixture() {
+  const temp = createTempDatabase(); const key = createTestWorkspaceKey();
+  const runtime = new FoundationRuntime({ appVersion: '1', databasePath: temp.path, databaseExists: false,
+    backupDirectory: join(dirname(temp.path), 'backups'), keyEnvelopePath: join(dirname(temp.path), 'envelope.json') }, {
+    loadWorkspaceKey: async () => ({ ...key, bytes: Buffer.from(key.bytes) }), prepareEncryptedDatabase: async () => undefined,
+    openDatabase, closeDatabase, migrateToLatest,
+    createDomainRuntime: database => new DomainRuntime({ database, clock: { now: () => PM_NOW }, ids: { next: () => crypto.randomUUID() } }),
+    createHealthService: options => new HealthService(options),
+  });
+  try {
+    const selected = await runtime.withDatabase(database => {
+      const repo = new AccountRepository({ database, clock: { now: () => PM_NOW }, ids: { next: () => crypto.randomUUID() } });
+      const account = repo.create({ commandId: crypto.randomUUID(), name: 'Application selected', domain: null });
+      const input = { commandId: crypto.randomUUID(), accountId: account.id };
+      repo.enqueue({ ...input, limits: { maxCompanies: 1, maxPages: 1, maxBytes: 10000, maxCostMicros: 100 } });
+      return input;
+    });
+    const read = (input: SelectedResearch) => runtime.withDatabase(database => new AccountRepository({ database, clock: { now: () => PM_NOW }, ids: { next: () => crypto.randomUUID() } }).readSelectedResearch(input));
+    return { runtime, selected, read, async close() { await runtime.shutdown(); key.bytes.fill(0); temp.cleanup(); } };
+  } catch (error) { await runtime.shutdown(); key.bytes.fill(0); temp.cleanup(); throw error; }
+}
+
+describe('Task 3 application selected capability registration', () => {
+  it('appends exactly two channels without implicit work and resolves the current capability only on explicit execution', async () => {
+    const f = await task3ApplicationFixture(); let dispose: (() => void) | undefined;
+    electron.handle.mockReset(); electron.removeHandler.mockReset();
+    try {
+      const first = { researchCompany: vi.fn(f.read) }; const second = { researchCompany: vi.fn(f.read) };
+      let port: SelectedCompanyResearchPort | null = first;
+      const current = vi.fn(() => port);
+      const storage = vi.spyOn(f.runtime, 'withDatabase'); const domain = vi.spyOn(f.runtime, 'withDomain');
+      dispose = registerApplicationIpc(f.runtime, undefined, undefined, explicitSourcingProvider(), recoveryProvider,
+        undefined, undefined, undefined, undefined, { selectedCompanyResearch: { current } });
+      expect(storage).not.toHaveBeenCalled(); expect(domain).not.toHaveBeenCalled(); expect(current).not.toHaveBeenCalled();
+      expect(first.researchCompany).not.toHaveBeenCalled(); expect(second.researchCompany).not.toHaveBeenCalled();
+      const registered = electron.handle.mock.calls.map(call => call[0]);
+      expect(registered).toHaveLength(67); expect(new Set(registered).size).toBe(67);
+      expect(registered.filter(channel => channel.startsWith('local-workspace:'))).toEqual(task3LocalChannels);
+      const api = createCallieApi({ invoke: async (channel, ...args) => registeredIpcHandler(electron.handle, channel)({ senderFrame: { url: 'callie://app/index.html' } }, ...args) });
+      expect(typeof api.localWorkspace.researchCompany).toBe('function');
+      expect(await api.localWorkspace.getCompanyResearchStatus(f.selected)).toMatchObject({ ...f.selected, state: 'queued' });
+      expect(first.researchCompany).not.toHaveBeenCalled(); expect(second.researchCompany).not.toHaveBeenCalled();
+      expect(await api.localWorkspace.researchCompany(f.selected)).toEqual(await f.read(f.selected));
+      expect(first.researchCompany).toHaveBeenCalledTimes(1); expect(first.researchCompany).toHaveBeenLastCalledWith(f.selected);
+      port = second;
+      expect(await api.localWorkspace.getCompanyResearchStatus(f.selected)).toMatchObject({ ...f.selected, state: 'queued' });
+      expect(second.researchCompany).not.toHaveBeenCalled();
+      expect(await api.localWorkspace.researchCompany(f.selected)).toEqual(await f.read(f.selected));
+      expect(second.researchCompany).toHaveBeenCalledTimes(1); expect(first.researchCompany).toHaveBeenCalledTimes(1);
+      port = null;
+      expect(await api.localWorkspace.researchCompany(f.selected)).toMatchObject({ ...f.selected, state: 'queued' });
+      expect(await api.localWorkspace.getCompanyResearchStatus(f.selected)).toMatchObject({ ...f.selected, state: 'queued' });
+      expect(second.researchCompany).toHaveBeenCalledTimes(1);
+      dispose(); dispose();
+      const removed = electron.removeHandler.mock.calls.map(call => call[0]);
+      expect(removed.slice(0, 10)).toEqual([...task3LocalChannels].reverse());
+      expect([...removed].sort()).toEqual([...registered].sort());
+      expect(new Set(removed).size).toBe(67);
+    } finally { dispose?.(); vi.restoreAllMocks(); await f.close(); electron.handle.mockReset(); electron.removeHandler.mockReset(); }
+  });
+
+  it.each(['local-workspace:research-company', 'local-workspace:company-research-status'])('rolls back append-only local registrations and earlier features exactly once when %s fails', channel => {
+    const active = new Set(['unrelated']); const registered: string[] = [];
+    const failure = new Error('selected research registration');
+    electron.handle.mockReset().mockImplementation((name: string) => { if (name === channel) throw failure; active.add(name); registered.push(name); });
+    electron.removeHandler.mockReset().mockImplementation((name: string) => { active.delete(name); });
+    const gate = fakeGate(); const current = vi.fn(() => null);
+    try {
+      expect(() => registerApplicationIpc(gate, undefined, undefined, explicitSourcingProvider(), recoveryProvider,
+        undefined, undefined, undefined, undefined, { selectedCompanyResearch: { current } })).toThrow(failure);
+      expect([...active]).toEqual(['unrelated']);
+      const localCount = task3LocalChannels.indexOf(channel);
+      expect(registered).toHaveLength(57 + localCount);
+      const removed = electron.removeHandler.mock.calls.map(call => call[0]);
+      expect(removed.slice(0, localCount)).toEqual(task3LocalChannels.slice(0, localCount).reverse());
+      expect([...removed].sort()).toEqual([...registered].sort()); expect(new Set(removed).size).toBe(registered.length);
+      const slices = removed.map(name => name.split(':')[0]);
+      expect(slices.filter((slice, index) => index === 0 || slice !== slices[index - 1])).toEqual([
+        'local-workspace', 'daily', 'discovery', 'recovery', 'shell', 'sourcing', 'learnings', 'conversations',
+        'imports', 'friday', 'review', 'pipeline', 'today', 'lead-detail', 'leads', 'health',
+      ]);
+      expect(current).not.toHaveBeenCalled(); expect(gate.withDatabase).not.toHaveBeenCalled(); expect(gate.withDomain).not.toHaveBeenCalled();
+    } finally { electron.handle.mockReset(); electron.removeHandler.mockReset(); }
   });
 });

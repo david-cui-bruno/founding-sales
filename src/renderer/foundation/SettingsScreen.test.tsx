@@ -511,7 +511,7 @@ describe('Data & storage recovery flow', () => {
 const outreachStatus: import('../../shared/contracts/outreachContract').OutreachStatus = { model: 'unconfigured' as const, modelName: '', gmail: 'unconfigured' as const, accountEmail: null, senderName: '', postalAddress: '' };
 function connectionsApi() {
   const unavailable = async (): Promise<never> => { throw new Error('Not used by settings'); };
-  return { status: vi.fn(async () => outreachStatus), configure: vi.fn(async () => outreachStatus), connectGmail: vi.fn(async () => outreachStatus), disconnectGmail: vi.fn(async () => outreachStatus), openDraft: unavailable, saveDraft: unavailable, generateDraft: unavailable, sendDraft: unavailable };
+  return { status: vi.fn(async () => outreachStatus), configure: vi.fn(async () => outreachStatus), connectGmail: vi.fn(async () => outreachStatus), disconnectGmail: vi.fn(async () => outreachStatus), openDraft: unavailable, saveDraft: unavailable, generateDraft: unavailable, sendDraft: unavailable, inspectLocalAuthority: unavailable };
 }
 it('exposes user-owned connection setup only through explicit save/connect/disconnect and never retains secret fields', async () => {
   const api = connectionsApi(); renderSettings({ outreachApi: api });
@@ -551,7 +551,7 @@ describe('Local workflow transition', () => {
   function localApi() {
     const snapshot: import('../../shared/contracts/localWorkspaceContract').LocalWorkspaceSnapshot = { scope: 'local_database', generatedAt: receipt.occurredAt, workflowMode: 'legacy', transitionReceipt: null, accounts: { state: 'available', snapshots: [] } };
     const unavailableCompanyIntake = async () => { throw Error('Company intake unavailable in this fixture'); };
-    return { get: vi.fn(async () => snapshot), getCommitments: vi.fn(), reviewCompany: vi.fn(unavailableCompanyIntake), createCompany: vi.fn(unavailableCompanyIntake), getCompanyCreateStatus: vi.fn(unavailableCompanyIntake), transition: vi.fn(async (command: import('../../shared/contracts/localWorkspaceContract').LocalWorkflowTransition) => ({ ...receipt, commandId: command.commandId, manifestId: command.manifestId })) };
+    return { get: vi.fn(async () => snapshot), getCompany: vi.fn(async () => { throw Error('Selected company detail unavailable in this fixture'); }), researchCompany: vi.fn(unavailableCompanyIntake), getCompanyResearchStatus: vi.fn(unavailableCompanyIntake), linkCompanyPerson: vi.fn(unavailableCompanyIntake), getCommitments: vi.fn(), reviewCompany: vi.fn(unavailableCompanyIntake), createCompany: vi.fn(unavailableCompanyIntake), getCompanyCreateStatus: vi.fn(unavailableCompanyIntake), transition: vi.fn(async (command: import('../../shared/contracts/localWorkspaceContract').LocalWorkflowTransition) => ({ ...receipt, commandId: command.commandId, manifestId: command.manifestId })) };
   }
   async function open(api = localApi()) {
     const view = renderSettings({ localWorkspaceApi: api });
@@ -605,3 +605,603 @@ describe('Local workflow transition', () => {
     expect(api.transition.mock.calls[1][0]).toBe(original);
   });
 });
+
+
+// Task8 additions. All original bytes above are retained verbatim.
+// New production modules are deliberately NOT imported at top level: the first
+// case reaches a behavioral missing-Phone RED in this existing test root.
+import type { PhoneSetupApi, PhoneSetupStatus } from '../../shared/contracts/phoneSetupContract';
+import type { CalliePreloadApi } from '../../shared/preload';
+import { renderRoute, type RouteContext } from '../app/routeRegistry';
+import { useHashRoute } from '../app/useHashRoute';
+import { PresentationRoot } from '../app/PresentationRoot';
+import { dailyFixture, firstUseFixture, nativeDeskFixture } from '../features/today/nativeDesk.fixture';
+
+// Variable import avoids eager Vite resolution of a planned-absent module in
+// the baseline Settings root. Only helper-specific cases load the real helper.
+async function task8Navigation(): Promise<{ openSettingsSection(section: 'connections' | 'phone' | 'worker' | 'call-capacity'): void }> {
+  const modulePath = './settingsNavigation';
+  return import(/* @vite-ignore */ modulePath);
+}
+const task8Key = 'callie.settings.section';
+const task8Time = '2026-09-10T23:00:00.000Z';
+const task8Candidate = (value = 'candidate_A'): PhoneSetupStatus => ({ state: 'needs_confirmation', candidateFingerprint: value, confirmedAt: null });
+const task8Configured = (value = 'candidate_A'): PhoneSetupStatus => ({ state: 'configured', candidateFingerprint: value, confirmedAt: task8Time });
+const task8Empty: PhoneSetupStatus = { state: 'unconfigured', candidateFingerprint: null, confirmedAt: null };
+function task8Phone(value = 'candidate_A') {
+  return {
+    status: vi.fn<PhoneSetupApi['status']>(async () => task8Candidate(value)),
+    confirm: vi.fn<PhoneSetupApi['confirm']>(async input => task8Configured(input.expectedFingerprint)),
+    clear: vi.fn<PhoneSetupApi['clear']>(async () => task8Empty),
+  } satisfies PhoneSetupApi;
+}
+function task8Settings(phoneSetupApi?: PhoneSetupApi) {
+  return render(<SettingsScreen state={{ status: 'ready', health }} onRetry={vi.fn()} theme={theme} density={density} {...{ phoneSetupApi }} />);
+}
+function task8Active(label: string) {
+  expect(within(screen.getByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: label }).getAttribute('aria-current')).toBe('true');
+}
+async function task8Controls(value = 'candidate_A') {
+  const region = await screen.findByRole('region', { name: 'Phone handoff' });
+  expect(within(region).getByRole('heading', { name: 'Phone handoff' })).toBeTruthy();
+  expect(within(region).getByText(value, { exact: true })).toBeTruthy();
+  for (const name of ['Confirm phone setup', 'Clear phone setup']) {
+    expect(within(region).getByRole('button', { name }).hasAttribute('disabled')).toBe(false);
+  }
+  task8Active('Phone');
+  expect(screen.queryByRole('region', { name: 'Connections' })).toBeNull();
+  return region;
+}
+async function task8Isolated(body: () => Promise<void>) {
+  const prior = sessionStorage.getItem(task8Key);
+  const href = location.href;
+  sessionStorage.removeItem(task8Key);
+  try { await body(); }
+  finally {
+    cleanup(); vi.restoreAllMocks();
+    if (prior === null) sessionStorage.removeItem(task8Key); else sessionStorage.setItem(task8Key, prior);
+    window.history.replaceState(null, '', href);
+  }
+}
+function task8Deferred() {
+  let resolve!: (value: PhoneSetupStatus) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<PhoneSetupStatus>((yes, no) => { resolve = yes; reject = no; });
+  const joined = promise.then((): void => undefined, (): void => undefined);
+  return { promise, resolve, reject, joined };
+}
+async function task8Settle(pending: ReturnType<typeof task8Deferred>, value = task8Empty) {
+  await act(async () => { pending.resolve(value); await pending.joined; });
+}
+
+// Complete typed API, no incomplete interface casts and no shared pending spy.
+// Unused methods each have a separate named throwing guard. NativeDesk fixture
+// methods are separately audited by their recorded calls, including all commands.
+function task8RouteFixture(phoneSetup = task8Phone()) {
+  const native = nativeDeskFixture(dailyFixture({ answers: [] }));
+  const forbidden: string[] = [];
+  const deny = (name: string) => vi.fn((..._args: unknown[]): never => { void _args; forbidden.push(name); throw Error(`Unexpected task8 capability: ${name}`); });
+  const api: CalliePreloadApi = {
+    ...native.api,
+    health: { get: vi.fn(async () => health) },
+    phoneSetup,
+    discovery: { get: deny('discovery.get'), getBrief: deny('discovery.getBrief'), begin: deny('discovery.begin'), override: deny('discovery.override') },
+    outreach: {
+      status: deny('outreach.status'), inspectLocalAuthority: deny('outreach.inspectLocalAuthority'),
+      configure: deny('outreach.configure'), connectGmail: deny('outreach.connectGmail'), disconnectGmail: deny('outreach.disconnectGmail'),
+      openDraft: deny('outreach.openDraft'), saveDraft: deny('outreach.saveDraft'), generateDraft: deny('outreach.generateDraft'), sendDraft: deny('outreach.sendDraft'),
+    },
+    today: {
+      get: deny('today.get'), complete: deny('today.complete'), snooze: deny('today.snooze'), pin: deny('today.pin'),
+      logPastActivity: deny('today.logPastActivity'), getLeadTriageSnapshot: deny('today.getLeadTriageSnapshot'), addLeadNote: deny('today.addLeadNote'),
+      logCallOutcome: deny('today.logCallOutcome'), markActivityInError: deny('today.markActivityInError'), getTriageQueue: deny('today.getTriageQueue'), setReviewPosition: deny('today.setReviewPosition'),
+    },
+    pipeline: { get: deny('pipeline.get') },
+    review: { list: deny('review.list'), resolve: deny('review.resolve') },
+    friday: { getCurrent: deny('friday.getCurrent'), getDrilldown: deny('friday.getDrilldown'), createJob: deny('friday.createJob'), fillJob: deny('friday.fillJob'), cancelJob: deny('friday.cancelJob') },
+    imports: { preview: deny('imports.preview'), remap: deny('imports.remap'), commit: deny('imports.commit'), status: deny('imports.status') },
+    conversations: { list: deny('conversations.list'), get: deny('conversations.get'), attachTranscript: deny('conversations.attachTranscript') },
+    learnings: { list: deny('learnings.list'), capture: deny('learnings.capture'), addEvidence: deny('learnings.addEvidence'), updateStatus: deny('learnings.updateStatus') },
+    sourcing: { pollNow: deny('sourcing.pollNow'), status: deny('sourcing.status'), retry: deny('sourcing.retry'), setHmacSalt: deny('sourcing.setHmacSalt') },
+    shell: { revealDatabase: deny('shell.revealDatabase'), revealLogDirectory: deny('shell.revealLogDirectory') },
+    recovery: { status: deny('recovery.status'), beginSetup: deny('recovery.beginSetup'), saveSetupMaterial: deny('recovery.saveSetupMaterial'), completeSetup: deny('recovery.completeSetup'), selectAndRunRestoreDrill: deny('recovery.selectAndRunRestoreDrill') },
+    appleSpike: {
+      getStatus: deny('appleSpike.getStatus'), probeCapabilities: deny('appleSpike.probeCapabilities'), requestContacts: deny('appleSpike.requestContacts'),
+      promptAccessibility: deny('appleSpike.promptAccessibility'), scanRecentNotes: deny('appleSpike.scanRecentNotes'), scanTestMessages: deny('appleSpike.scanTestMessages'),
+      startCallObservation: deny('appleSpike.startCallObservation'), stopCallObservation: deny('appleSpike.stopCallObservation'), sendTestMessage: deny('appleSpike.sendTestMessage'), subscribeObservationEvidence: deny('appleSpike.subscribeObservationEvidence'),
+    },
+  };
+  const context: RouteContext = {
+    api, firstUse: firstUseFixture(), health: { status: 'ready', health, retry: vi.fn() }, theme, density,
+    openLead: vi.fn(), openImport: vi.fn(), onReviewRequestStart: () => Symbol('task8-review'),
+    onReviewRequestFailed: vi.fn(), onReviewSnapshot: vi.fn(), onReviewResolved: vi.fn(),
+  };
+  const assertReadOnly = () => {
+    expect(forbidden).toEqual([]);
+    const allowed = new Set(['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments']);
+    expect(native.calls.filter(call => !allowed.has(call.method))).toEqual([]);
+    expect(native.calls.some(call => call.method === 'daily.get')).toBe(true);
+    expect(phoneSetup.confirm).not.toHaveBeenCalled(); expect(phoneSetup.clear).not.toHaveBeenCalled();
+  };
+  return { api, context, native, forbidden, assertReadOnly };
+}
+function Task8RealRoutes({ context }: { context: RouteContext }) {
+  const { route } = useHashRoute('today');
+  return <PresentationRoot><div key={route}>{renderRoute(route, context)}</div></PresentationRoot>;
+}
+
+describe('Task8 real Settings destination integration', () => {
+  it('baseline behavioral RED: real Settings exposes actual Phone controls with no new module import', async () => task8Isolated(async () => {
+    const api = task8Phone(); task8Settings(api);
+    fireEvent.click(screen.getByRole('button', { name: 'Phone' }));
+    await screen.findByText('candidate_A'); await task8Controls();
+    expect(api.status).toHaveBeenCalledTimes(1); expect(api.confirm).not.toHaveBeenCalled(); expect(api.clear).not.toHaveBeenCalled();
+  }), 10_000);
+
+  it('actual company-call hold anchor routes Today to Phone controls without commands', async () => task8Isolated(async () => {
+    location.hash = '#/today';
+    const f = task8RouteFixture(); render(<Task8RealRoutes context={f.context} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Call · Account A' }));
+    expect(screen.getByText(/Call handoff unavailable in this account view/)).toBeTruthy();
+    expect(screen.getByText(/Selection alone never places a call/)).toBeTruthy();
+    const anchor = screen.getByRole('link', { name: 'Review phone setup' });
+    expect(anchor.getAttribute('href')).toBe('#/settings');
+    expect(anchor.closest('section')?.textContent).toContain('Call handoff unavailable');
+    expect(sessionStorage.getItem(task8Key)).toBeNull();
+    fireEvent.click(anchor);
+    // Real anchor default navigation in jsdom, no manual helper or storage seed.
+    await waitFor(() => expect(location.hash).toBe('#/settings'));
+    await screen.findByText('candidate_A'); await task8Controls();
+    expect(sessionStorage.getItem(task8Key)).toBeNull();
+    expect(screen.queryByText(/Apple spike/i)).toBeNull();
+    expect(screen.queryByLabelText(/API key/i)).toBeNull();
+    expect(f.api.phoneSetup.status).toHaveBeenCalledTimes(1);
+    f.assertReadOnly();
+  }), 10_000);
+
+  it('pre-mount Phone intent is consumed and cannot hijack a later remount', async () => task8Isolated(async () => {
+    const { openSettingsSection } = await task8Navigation();
+    const api = task8Phone(); openSettingsSection('phone');
+    const view = task8Settings(api); await screen.findByText('candidate_A'); await task8Controls();
+    expect(sessionStorage.getItem(task8Key)).toBeNull(); view.unmount(); task8Settings(api);
+    task8Active('Diagnostics'); expect(screen.queryByRole('region', { name: 'Phone handoff' })).toBeNull();
+    expect(api.status).toHaveBeenCalledTimes(1);
+  }), 10_000);
+
+  it('same-mounted helper event selects Phone without remount and consumes replay intent', async () => task8Isolated(async () => {
+    const { openSettingsSection } = await task8Navigation();
+    const api = task8Phone(); const view = task8Settings(api);
+    const rail = screen.getByRole('navigation', { name: 'Settings sections' }); task8Active('Diagnostics');
+    act(() => openSettingsSection('phone'));
+    await screen.findByText('candidate_A'); await task8Controls();
+    expect(screen.getByRole('navigation', { name: 'Settings sections' })).toBe(rail);
+    expect(sessionStorage.getItem(task8Key)).toBeNull(); view.unmount(); task8Settings(api); task8Active('Diagnostics');
+  }), 10_000);
+
+  it.each(['event', 'storage'] as const)('preserves legacy Connections %s and consumes it', async mode => task8Isolated(async () => {
+    if (mode === 'storage') sessionStorage.setItem(task8Key, 'connections');
+    const view = task8Settings(task8Phone());
+    if (mode === 'event') {
+      sessionStorage.setItem(task8Key, 'connections');
+      act(() => window.dispatchEvent(new Event('callie:open-connections')));
+    }
+    task8Active('Connections'); expect(screen.getByRole('region', { name: 'Connections' })).toBeTruthy();
+    expect(sessionStorage.getItem(task8Key)).toBeNull(); view.unmount(); task8Settings(); task8Active('Diagnostics');
+  }), 10_000);
+
+  it.each(['nonsense', '', 'call-capacity'] as const)('clears invalid or unimplemented initial intent %s and defaults Diagnostics', async value => task8Isolated(async () => {
+    sessionStorage.setItem(task8Key, value); task8Settings(task8Phone()); task8Active('Diagnostics');
+    expect(sessionStorage.getItem(task8Key)).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Worker connection' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Call capacity' })).toBeNull();
+  }), 10_000);
+
+  it.each([
+    { name: 'unknown', detail: 'nonsense' }, { name: 'empty', detail: '' },
+    { name: 'future capacity', detail: 'call-capacity' },
+    { name: 'object', detail: { section: 'phone' } }, { name: 'null', detail: null }, { name: 'plain Event', detail: undefined },
+  ])('invalid mounted $name retains active section and clears storage', async ({ detail }) => task8Isolated(async () => {
+    const api = task8Phone(); task8Settings(api); fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
+    sessionStorage.setItem(task8Key, 'phone');
+    act(() => window.dispatchEvent(detail === undefined ? new Event('callie:open-settings-section') : new CustomEvent('callie:open-settings-section', { detail })));
+    task8Active('Appearance'); expect(sessionStorage.getItem(task8Key)).toBeNull(); expect(api.status).not.toHaveBeenCalled();
+  }), 10_000);
+
+  it.each([
+    ['appearance', 'Appearance'], ['data', 'Data & storage'], ['sourcing', 'Sourcing'],
+    ['diagnostics', 'Diagnostics'], ['shortcuts', 'Keyboard shortcuts'], ['about', 'About'], ['connections', 'Connections'],
+  ] as const)('implemented %s remains selectable through validated event and rail', async (id, label) => task8Isolated(async () => {
+    sessionStorage.setItem(task8Key, id);
+    const initial = task8Settings(); task8Active(label); expect(sessionStorage.getItem(task8Key)).toBeNull();
+    initial.unmount();
+    task8Settings(); task8Active('Diagnostics');
+    act(() => window.dispatchEvent(new CustomEvent('callie:open-settings-section', { detail: id })));
+    task8Active(label); fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' })); task8Active('Diagnostics');
+    fireEvent.click(screen.getByRole('button', { name: label })); task8Active(label);
+  }), 10_000);
+
+  it.each(['getItem', 'removeItem'] as const)('storage %s failure does not break mounted event or rail navigation', async method => task8Isolated(async () => {
+    const failure = vi.spyOn(Storage.prototype, method).mockImplementation(() => { throw Error('private-storage-error'); });
+    const api = task8Phone(); task8Settings(api); task8Active('Diagnostics');
+    act(() => window.dispatchEvent(new CustomEvent('callie:open-settings-section', { detail: 'phone' })));
+    await screen.findByText('candidate_A'); await task8Controls();
+    expect(screen.queryByText(/private-storage-error/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Appearance' })); task8Active('Appearance'); failure.mockRestore();
+  }), 10_000);
+
+  it('failed setItem still reaches mounted Phone via helper event', async () => task8Isolated(async () => {
+    const { openSettingsSection } = await task8Navigation(); task8Settings(task8Phone());
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw Error('storage blocked'); });
+    act(() => openSettingsSection('phone')); await screen.findByText('candidate_A'); await task8Controls(); set.mockRestore();
+  }), 10_000);
+
+  it('missing optional Settings phone API renders unavailable rather than AppleSpike fallback', async () => task8Isolated(async () => {
+    task8Settings(); fireEvent.click(screen.getByRole('button', { name: 'Phone' }));
+    await screen.findByText('Unavailable', { exact: true }); task8Active('Phone');
+    expect(screen.queryByText('Unconfigured', { exact: true })).toBeNull();
+    expect(screen.queryByText(/Apple spike/i)).toBeNull();
+  }), 10_000);
+
+  it.each(['Confirm', 'Clear'] as const)('real route unmount during %s settles while absent, then observes afresh', async action => task8Isolated(async () => {
+    location.hash = '#/settings'; sessionStorage.setItem(task8Key, 'phone');
+    const api = task8Phone(); const pending = task8Deferred();
+    if (action === 'Confirm') api.confirm.mockReturnValueOnce(pending.promise); else api.clear.mockReturnValueOnce(pending.promise);
+    const f = task8RouteFixture(api);
+    try {
+      render(<Task8RealRoutes context={f.context} />);
+      await screen.findByText('candidate_A'); fireEvent.click(screen.getByRole('button', { name: `${action} phone setup` }));
+      act(() => { location.hash = '#/today'; window.dispatchEvent(new HashChangeEvent('hashchange')); });
+      await screen.findByRole('button', { name: 'Call · Account A' });
+      expect(screen.queryByRole('region', { name: 'Phone handoff' })).toBeNull();
+      await task8Settle(pending, action === 'Confirm' ? task8Configured() : task8Empty);
+      expect(screen.queryByText(task8Time)).toBeNull(); expect(screen.queryByRole('alert')).toBeNull();
+      api.status.mockResolvedValue(task8Candidate('candidate_B'));
+      fireEvent.click(screen.getByRole('button', { name: 'Call · Account A' }));
+      fireEvent.click(screen.getByRole('link', { name: 'Review phone setup' }));
+      await screen.findByText('candidate_B'); await task8Controls('candidate_B');
+      expect(api.status).toHaveBeenCalledTimes(2);
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm phone setup' })); await screen.findByText(task8Time);
+      expect(api.confirm).toHaveBeenLastCalledWith({ expectedFingerprint: 'candidate_B' });
+      expect(f.forbidden).toEqual([]);
+    } finally { await task8Settle(pending); }
+  }), 10_000);
+
+  it.each(['Confirm', 'Clear'] as const)('old unmounted %s finally cannot unlock new mounted pending Confirm', async action => task8Isolated(async () => {
+    location.hash = '#/settings'; sessionStorage.setItem(task8Key, 'phone');
+    const api = task8Phone(); const old = task8Deferred(); const fresh = task8Deferred();
+    if (action === 'Confirm') api.confirm.mockReturnValueOnce(old.promise); else api.clear.mockReturnValueOnce(old.promise);
+    const f = task8RouteFixture(api);
+    try {
+      render(<Task8RealRoutes context={f.context} />);
+      await screen.findByText('candidate_A'); fireEvent.click(screen.getByRole('button', { name: `${action} phone setup` }));
+      act(() => { location.hash = '#/today'; window.dispatchEvent(new HashChangeEvent('hashchange')); });
+      fireEvent.click(await screen.findByRole('button', { name: 'Call · Account A' }));
+      api.status.mockResolvedValue(task8Candidate('candidate_B')); api.confirm.mockReturnValueOnce(fresh.promise);
+      fireEvent.click(screen.getByRole('link', { name: 'Review phone setup' })); await screen.findByText('candidate_B');
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm phone setup' }));
+      await task8Settle(old, action === 'Confirm' ? task8Configured() : task8Empty);
+      for (const name of ['Confirm phone setup', 'Clear phone setup', 'Refresh phone setup']) {
+        const control = screen.getByRole('button', { name }); expect(control.hasAttribute('disabled')).toBe(true); fireEvent.click(control);
+      }
+      expect(api.status).toHaveBeenCalledTimes(2); expect(api.confirm).toHaveBeenCalledTimes(action === 'Confirm' ? 2 : 1);
+      expect(api.clear).toHaveBeenCalledTimes(action === 'Clear' ? 1 : 0);
+      await task8Settle(fresh, task8Configured('candidate_B')); await screen.findByText(task8Time);
+      expect(screen.getByText('candidate_B')).toBeTruthy(); expect(screen.queryByText('candidate_A')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Clear phone setup' }).hasAttribute('disabled')).toBe(false);
+    } finally { await task8Settle(old); await task8Settle(fresh); }
+  }), 10_000);
+  it('actual hold anchor still navigates when setItem fails without inventing pre-mount intent retention', async () => task8Isolated(async () => {
+    location.hash = '#/today'; const f = task8RouteFixture(); const view = render(<Task8RealRoutes context={f.context} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Call · Account A' }));
+    const anchor = screen.getByRole('link', { name: 'Review phone setup' }); expect(anchor.getAttribute('href')).toBe('#/settings');
+    const events: Event[] = []; const listener = (event: Event) => { events.push(event); };
+    window.addEventListener('callie:open-settings-section', listener);
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw Error('storage blocked'); });
+    try {
+      fireEvent.click(anchor);
+      // Unmount the destination owner before default navigation delivers. This
+      // case checks the real anchor and event only, not impossible retained intent.
+      view.unmount();
+      await waitFor(() => expect(location.hash).toBe('#/settings'));
+      expect(events).toHaveLength(1); const event = events[0];
+      if (!(event instanceof CustomEvent)) throw Error('Expected section CustomEvent');
+      expect(event.detail).toBe('phone'); expect(sessionStorage.getItem(task8Key)).toBeNull(); f.assertReadOnly();
+    } finally { set.mockRestore(); window.removeEventListener('callie:open-settings-section', listener); }
+  }), 10_000);
+
+  it.each(['Confirm', 'Clear'] as const)('new route success survives late unmounted %s result', async action => task8Isolated(async () => {
+    location.hash = '#/settings'; sessionStorage.setItem(task8Key, 'phone');
+    const api = task8Phone(); const old = task8Deferred();
+    if (action === 'Confirm') api.confirm.mockReturnValueOnce(old.promise); else api.clear.mockReturnValueOnce(old.promise);
+    const f = task8RouteFixture(api);
+    try {
+      render(<Task8RealRoutes context={f.context} />);
+      await screen.findByText('candidate_A'); fireEvent.click(screen.getByRole('button', { name: `${action} phone setup` }));
+      act(() => { location.hash = '#/today'; window.dispatchEvent(new HashChangeEvent('hashchange')); });
+      fireEvent.click(await screen.findByRole('button', { name: 'Call · Account A' }));
+      api.status.mockResolvedValue(task8Candidate('candidate_B'));
+      fireEvent.click(screen.getByRole('link', { name: 'Review phone setup' })); await screen.findByText('candidate_B');
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm phone setup' })); await screen.findByText(task8Time);
+      await task8Settle(old, action === 'Confirm' ? task8Configured() : task8Empty);
+      expect(screen.getByText('candidate_B')).toBeTruthy(); expect(screen.queryByText('candidate_A')).toBeNull();
+      expect(screen.getByText('Configured', { exact: true })).toBeTruthy();
+      expect(api.status).toHaveBeenCalledTimes(2);
+      expect(api.confirm).toHaveBeenLastCalledWith({ expectedFingerprint: 'candidate_B' });
+      expect(screen.getByRole('button', { name: 'Clear phone setup' }).hasAttribute('disabled')).toBe(false);
+      fireEvent.click(screen.getByRole('button', { name: 'Clear phone setup' })); await screen.findByText('Unconfigured', { exact: true });
+      expect(f.forbidden).toEqual([]);
+    } finally { await task8Settle(old); }
+  }), 10_000);
+});
+
+
+// Task9 append-only additions. Accepted Task8 prefix is byte-for-byte unchanged.
+// No import of WorkerSetupSection here: baseline S01 collects in this existing root.
+import { OutboundComposer } from '../features/leadInspector/OutboundComposer';
+
+type Task9Api = Pick<CalliePreloadApi['delegation'], 'status' | 'pair'>;
+type Task9Status = Awaited<ReturnType<Task9Api['status']>>;
+type Task9Receipt = Awaited<ReturnType<Task9Api['pair']>>;
+const task9Empty: Task9Status = { state: 'unconfigured', workspaceId: null, endpoint: null, configuration: null };
+const task9Endpoint = 'https://worker.fixture.invalid';
+const task9Workspace = 'fictional-workspace';
+const task9Code = 'A'.repeat(43);
+const task9Receipt: Task9Receipt = { state: 'paired', workspaceId: task9Workspace, pairingId: 'fictional-pairing' };
+const task9Disclosure = 'Remote owner and mailbox/calendar grants are not established by this local read.';
+function task9Api() {
+  return { status: vi.fn<Task9Api['status']>(async () => task9Empty), pair: vi.fn<Task9Api['pair']>(async () => task9Receipt) } satisfies Task9Api;
+}
+function task9Field(name: string): HTMLInputElement {
+  const input = screen.getByLabelText(name);
+  if (!(input instanceof HTMLInputElement)) throw Error('Expected actual Worker input');
+  return input;
+}
+function task9Fill(code = task9Code) {
+  fireEvent.change(task9Field('Endpoint'), { target: { value: task9Endpoint } });
+  fireEvent.change(task9Field('Expected workspace ID'), { target: { value: task9Workspace } });
+  fireEvent.change(task9Field('Pairing code'), { target: { value: code } });
+  expect(task9Field('Pairing code').value).toBe(code);
+}
+async function task9Controls(label = 'Unconfigured') {
+  const region = await screen.findByRole('region', { name: 'Worker connection' });
+  await within(region).findByText(label, { exact: true });
+  expect(within(region).getByRole('heading', { name: 'Worker connection' })).toBeTruthy();
+  expect(within(region).getByText(task9Disclosure)).toBeTruthy();
+  for (const name of ['Endpoint', 'Expected workspace ID', 'Pairing code']) expect(within(region).getByLabelText(name)).toBeTruthy();
+  for (const name of ['Pair worker', 'Refresh worker status']) expect(within(region).getByRole('button', { name })).toBeTruthy();
+  task8Active('Worker connection');
+  expect(screen.queryByRole('region', { name: 'Connections' })).toBeNull();
+  return region;
+}
+function task9Settings(delegationApi?: Task9Api) {
+  return render(<SettingsScreen state={{ status: 'ready', health }} onRetry={vi.fn()} theme={theme} density={density} {...{ delegationApi }} />);
+}
+async function task9Isolated(body: () => Promise<void>) {
+  const saved: Array<[Storage, Array<[string, string]>]> = [localStorage, sessionStorage].map(storage => [storage, Object.keys(storage).map(key => [key, storage.getItem(key) ?? ''])]);
+  const descriptor = Object.getOwnPropertyDescriptor(window, 'callie');
+  try { await task8Isolated(body); }
+  finally {
+    if (descriptor) Object.defineProperty(window, 'callie', descriptor);
+    else Reflect.deleteProperty(window, 'callie');
+    for (const [storage, values] of saved) { storage.clear(); for (const [key, value] of values) storage.setItem(key, value); }
+  }
+}
+function task9Deferred<T>(fallback: T) {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(yes => { resolve = yes; });
+  const joined = promise.then((): void => undefined, (): void => undefined);
+  return { resolve, promise, joined, fallback };
+}
+async function task9Settle<T>(pending: ReturnType<typeof task9Deferred<T>>) {
+  await act(async () => { pending.resolve(pending.fallback); await pending.joined; });
+}
+// Full Callie API inherits the accepted complete fixture, then gives every
+// Task9-sensitive capability its own named guard. Pair never enters native.calls.
+function task9RouteFixture(worker = task9Api()) {
+  const base = task8RouteFixture();
+  base.native.setSnapshot(dailyFixture({ workspaceId: null, accounts: [], calls: { accountIds: [], workloadConflict: false }, answers: [], meetings: [], campaigns: [], ownerStatus: [], transport: [] }));
+  const forbidden: string[] = [];
+  const deny = (name: string) => vi.fn((..._args: unknown[]): never => { void _args; forbidden.push(name); throw Error(`Unexpected Task9 capability: ${name}`); });
+  const api: CalliePreloadApi = {
+    ...base.api,
+    delegation: {
+      ...base.api.delegation, status: worker.status, pair: worker.pair,
+      configure: deny('delegation.configure'), configureResearch: deny('delegation.configureResearch'), configurePolicy: deny('delegation.configurePolicy'),
+      bootstrap: deny('delegation.bootstrap'), submit: deny('delegation.submit'), sync: deny('delegation.sync'), beginPhone: deny('delegation.beginPhone'),
+      prepareRequestedFollowup: deny('delegation.prepareRequestedFollowup'), getRequestedFollowup: deny('delegation.getRequestedFollowup'),
+      editRequestedFollowup: deny('delegation.editRequestedFollowup'), approveRequestedFollowup: deny('delegation.approveRequestedFollowup'),
+      policyImport: { selectAndPreview: deny('policyImport.selectAndPreview'), confirm: deny('policyImport.confirm'), resume: deny('policyImport.resume'), status: deny('policyImport.status') },
+    },
+    localWorkspace: {
+      ...base.api.localWorkspace, researchCompany: deny('localWorkspace.researchCompany'), reviewCompany: deny('localWorkspace.reviewCompany'),
+      createCompany: deny('localWorkspace.createCompany'), linkCompanyPerson: deny('localWorkspace.linkCompanyPerson'), transition: deny('localWorkspace.transition'),
+    },
+    leadDetail: { ...base.api.leadDetail, beginOutbound: deny('leadDetail.beginOutbound'), confirmTransition: deny('leadDetail.confirmTransition'), findContactInfo: deny('leadDetail.findContactInfo') },
+  };
+  const context: RouteContext = { ...base.context, api };
+  const assertNoActivation = () => {
+    expect(forbidden).toEqual([]); expect(base.forbidden).toEqual([]);
+    expect(base.native.calls.filter(call => !new Set(['daily.get', 'localWorkspace.get', 'localWorkspace.getCommitments']).has(call.method))).toEqual([]);
+    expect(api.phoneSetup.confirm).not.toHaveBeenCalled(); expect(api.phoneSetup.clear).not.toHaveBeenCalled();
+  };
+  return { ...base, api, context, worker, forbidden, assertNoActivation };
+}
+async function task9Hold(which: 'details' | 'welcome') {
+  await screen.findByText('Worker unavailable', { selector: 'summary' });
+  const desk = screen.getByTestId('native-desk');
+  const details = desk.querySelector('details.native-desk__connection');
+  const welcome = desk.querySelector('.native-desk__welcome');
+  if (!(details instanceof HTMLDetailsElement) || !(welcome instanceof HTMLElement)) throw Error('Real worker hold branches were not reachable');
+  if (which === 'details') {
+    const summary = details.querySelector('summary');
+    if (!summary) throw Error('Missing real connection summary');
+    fireEvent.click(summary);
+    // jsdom implements the native details toggle on summary activation.
+    await waitFor(() => expect(details.open).toBe(true));
+  }
+  const anchor = within(which === 'details' ? details : welcome).getByRole('link', { name: 'Review Settings' });
+  expect(anchor.getAttribute('href')).toBe('#/settings');
+  expect(sessionStorage.getItem(task8Key)).toBeNull();
+  fireEvent.click(anchor);
+  await waitFor(() => expect(location.hash).toBe('#/settings'));
+  await task9Controls(); expect(sessionStorage.getItem(task8Key)).toBeNull();
+}
+function Task9ComposerRoutes({ context }: { context: RouteContext }) {
+  const { route } = useHashRoute('today');
+  // Actual existing composer is the source surface, never a fake Settings route.
+  return <PresentationRoot>{route === 'settings' ? renderRoute(route, context) :
+    <OutboundComposer channel="email" recipientLabel="person@fixture.invalid" personId="fictional-person" contactMethodId="fictional-email" api={context.api.outreach} onClose={vi.fn()} />}</PresentationRoot>;
+}
+
+describe('Task9 real Settings destination integration', () => {
+  it('S01 baseline behavioral RED: real Settings exposes Worker fields without eagerly importing missing Worker module', async () => task9Isolated(async () => {
+    const a = task9Api(); task9Settings(a);
+    expect(a.status).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Worker connection' })); await task9Controls();
+    expect(a.status.mock.calls).toEqual([[]]); expect(a.pair).not.toHaveBeenCalled();
+  }), 10_000);
+
+  it.each(['details', 'welcome'] as const)('S02 actual %s worker hold routes through real helper/router to supplied Worker API', async which => task9Isolated(async () => {
+    location.hash = '#/today'; const f = task9RouteFixture(); render(<Task8RealRoutes context={f.context} />);
+    await screen.findByText('Worker unavailable', { selector: 'summary' });
+    await waitFor(() => expect(f.worker.status).toHaveBeenCalledTimes(1));
+    const before = f.worker.status.mock.calls.length;
+    await task9Hold(which);
+    expect(f.worker.status).toHaveBeenCalledTimes(before + 1); expect(f.worker.status.mock.calls.every(call => call.length === 0)).toBe(true);
+    expect(screen.getByRole('button', { name: 'Pair worker' }).hasAttribute('disabled')).toBe(false);
+    expect(f.worker.pair).not.toHaveBeenCalled(); f.assertNoActivation();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh worker status' }));
+    await waitFor(() => expect(f.worker.status).toHaveBeenCalledTimes(before + 2)); await task9Controls(); f.assertNoActivation();
+  }), 10_000);
+
+  it('S03 successful explicit Pair on actual reached Worker controls stores no code and causes no activation', async () => task9Isolated(async () => {
+    location.hash = '#/today'; const f = task9RouteFixture(); render(<Task8RealRoutes context={f.context} />);
+    await task9Hold('welcome'); const reads = f.worker.status.mock.calls.length;
+    const storage = vi.spyOn(Storage.prototype, 'setItem');
+    const events = vi.spyOn(window, 'dispatchEvent');
+    task9Fill(); fireEvent.click(screen.getByRole('button', { name: 'Pair worker' }));
+    await screen.findByText('Worker paired', { exact: true });
+    expect(f.worker.pair.mock.calls).toEqual([[{ endpoint: task9Endpoint, expectedWorkspaceId: task9Workspace, code: task9Code }]]);
+    await expect(f.worker.pair.mock.results[0].value).resolves.toEqual(task9Receipt);
+    await waitFor(() => expect(f.worker.status).toHaveBeenCalledTimes(reads + 1));
+    await task9Controls(); // Startup captures identity once: still unconfigured is the real allowed state.
+    expect(task9Field('Pairing code').value).toBe(''); expect(screen.getByText('Worker paired', { exact: true })).toBeTruthy();
+    expect(screen.queryByText('Active', { exact: true })).toBeNull();
+    expect(storage).not.toHaveBeenCalled(); expect(events).not.toHaveBeenCalled();
+    expect(JSON.stringify(f.native.calls)).not.toContain(task9Code);
+    expect(document.body.textContent).not.toContain(task9Code); f.assertNoActivation();
+  }), 10_000);
+
+  it('S04 missing optional API ignores a complete window.callie fallback and remains unavailable', async () => task9Isolated(async () => {
+    const f = task9RouteFixture(); Object.defineProperty(window, 'callie', { configurable: true, value: f.api });
+    task9Settings(); fireEvent.click(screen.getByRole('button', { name: 'Worker connection' }));
+    await task9Controls('Unavailable'); expect(f.worker.status).not.toHaveBeenCalled(); expect(f.worker.pair).not.toHaveBeenCalled();
+    expect(screen.queryByText('Unconfigured', { exact: true })).toBeNull(); f.assertNoActivation();
+  }), 10_000);
+
+  it('S05 actual existing Composer Settings → Connections anchor still reaches Gmail/model controls, not Worker', async () => task9Isolated(async () => {
+    location.hash = '#/today'; const f = task9RouteFixture();
+    const draft: import('../../shared/contracts/outreachContract').EmailDraft = {
+      id: 'fictional-draft', personId: 'fictional-person', salesCycleId: 'fictional-cycle', contactMethodId: 'fictional-email',
+      recipient: 'person@fixture.invalid', subject: 'Unsent fictional draft', body: 'Fictional local text', revision: 1,
+      status: 'draft', generation: 'none', messageId: null, notice: null, updatedAt: task8Time,
+    };
+    const openDraft = vi.fn<CalliePreloadApi['outreach']['openDraft']>(async () => draft);
+    const outreachRead = vi.fn<CalliePreloadApi['outreach']['status']>(async () => outreachStatus);
+    const inspectLocalAuthority = vi.fn<CalliePreloadApi['outreach']['inspectLocalAuthority']>(async () => ({
+      draftId: draft.id, expectedRevision: draft.revision, personId: draft.personId, contactMethodId: draft.contactMethodId,
+      state: 'held', reason: 'email_authority_unavailable', checkedAt: task8Time,
+    }));
+    const api: CalliePreloadApi = { ...f.api, outreach: { ...f.api.outreach, openDraft, status: outreachRead, inspectLocalAuthority } };
+    render(<Task9ComposerRoutes context={{ ...f.context, api }} />);
+    await waitFor(() => expect(openDraft).toHaveBeenCalledWith({ personId: draft.personId, contactMethodId: draft.contactMethodId }));
+    await waitFor(() => expect(inspectLocalAuthority).toHaveBeenCalled());
+    const anchor = screen.getByRole('link', { name: 'Settings → Connections' }); expect(anchor.getAttribute('href')).toBe('#/settings');
+    fireEvent.click(anchor); await waitFor(() => expect(location.hash).toBe('#/settings'));
+    await screen.findByLabelText('OpenAI API key'); task8Active('Connections');
+    expect(screen.getByLabelText('OpenAI model')).toBeTruthy(); expect(screen.getByRole('button', { name: 'Connect Gmail' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Worker connection' })).toBeNull();
+    expect(f.worker.status).not.toHaveBeenCalled(); expect(f.worker.pair).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(task8Key)).toBeNull(); f.assertNoActivation();
+  }), 10_000);
+
+  it('S06 existing real Phone hold remains Phone when Worker is implemented', async () => task9Isolated(async () => {
+    location.hash = '#/today'; const f = task9RouteFixture();
+    f.native.setSnapshot(dailyFixture({ answers: [] })); render(<Task8RealRoutes context={f.context} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Call · Account A' }));
+    const anchor = screen.getByRole('link', { name: 'Review phone setup' }); expect(anchor.getAttribute('href')).toBe('#/settings'); fireEvent.click(anchor);
+    await waitFor(() => expect(location.hash).toBe('#/settings')); await task8Controls();
+    expect(screen.queryByRole('region', { name: 'Worker connection' })).toBeNull();
+    expect(f.worker.pair).not.toHaveBeenCalled(); f.assertNoActivation();
+  }), 10_000);
+
+  it.each(['status', 'pair'] as const)('S07 actual route unmount pending %s settles absent, then remount reads afresh without code', async action => task9Isolated(async () => {
+    location.hash = '#/today'; const f = task9RouteFixture();
+    const pendingRead = task9Deferred(task9Empty); const pendingPair = task9Deferred(task9Receipt);
+    try {
+      render(<Task8RealRoutes context={f.context} />); await task9Hold('welcome');
+      const reads = f.worker.status.mock.calls.length;
+      if (action === 'status') {
+        f.worker.status.mockReturnValueOnce(pendingRead.promise); fireEvent.click(screen.getByRole('button', { name: 'Refresh worker status' }));
+        await waitFor(() => expect(f.worker.status).toHaveBeenCalledTimes(reads + 1));
+      } else {
+        f.worker.pair.mockReturnValueOnce(pendingPair.promise); task9Fill(); fireEvent.click(screen.getByRole('button', { name: 'Pair worker' }));
+        await waitFor(() => expect(f.worker.pair).toHaveBeenCalledTimes(1));
+      }
+      act(() => { location.hash = '#/today'; window.dispatchEvent(new HashChangeEvent('hashchange')); });
+      await screen.findByText('Worker unavailable', { selector: 'summary' });
+      const absentReads = f.worker.status.mock.calls.length;
+      expect(screen.queryByRole('region', { name: 'Worker connection' })).toBeNull();
+      await task9Settle(pendingRead); await task9Settle(pendingPair);
+      expect(f.worker.status).toHaveBeenCalledTimes(absentReads); expect(screen.queryByText('Worker paired', { exact: true })).toBeNull();
+      await task9Hold('welcome'); expect(task9Field('Pairing code').value).toBe('');
+      expect(f.worker.status).toHaveBeenCalledTimes(absentReads + 1);
+      task9Fill('B'.repeat(43)); fireEvent.click(screen.getByRole('button', { name: 'Pair worker' }));
+      await screen.findByText('Worker paired', { exact: true }); f.assertNoActivation();
+    } finally { await task9Settle(pendingRead); await task9Settle(pendingPair); }
+  }), 10_000);
+
+  it('S08 Worker tab-away discards typed code and section-only remount reads status again', async () => task9Isolated(async () => {
+    const a = task9Api(); task9Settings(a); fireEvent.click(screen.getByRole('button', { name: 'Worker connection' }));
+    await task9Controls(); task9Fill(); fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' }));
+    expect(screen.queryByLabelText('Pairing code')).toBeNull(); expect(a.pair).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Worker connection' })); await task9Controls();
+    expect(task9Field('Pairing code').value).toBe(''); expect(a.status).toHaveBeenCalledTimes(2);
+  }), 10_000);
+});
+
+
+it.each(['initial helper', 'mounted helper', 'rail'] as const)('S09 Worker %s intent positively selects controls and consumes replay', async mode => task9Isolated(async () => {
+  const a = task9Api(); const { openSettingsSection } = await task8Navigation();
+  if (mode === 'initial helper') openSettingsSection('worker');
+  const view = task9Settings(a);
+  if (mode === 'mounted helper') act(() => openSettingsSection('worker'));
+  if (mode === 'rail') fireEvent.click(screen.getByRole('button', { name: 'Worker connection' }));
+  await task9Controls(); expect(a.status).toHaveBeenCalledTimes(1); expect(sessionStorage.getItem(task8Key)).toBeNull();
+  view.unmount(); task9Settings(a); task8Active('Diagnostics');
+  expect(screen.queryByRole('region', { name: 'Worker connection' })).toBeNull(); expect(a.pair).not.toHaveBeenCalled();
+}), 10_000);
+
+it('S10 old unmounted Pair finally cannot clear or unlock a new real-route pending Pair', async () => task9Isolated(async () => {
+  location.hash = '#/today'; const f = task9RouteFixture();
+  const old = task9Deferred(task9Receipt); const fresh = task9Deferred(task9Receipt);
+  f.worker.pair.mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+  try {
+    render(<Task8RealRoutes context={f.context} />); await task9Hold('welcome'); task9Fill();
+    fireEvent.click(screen.getByRole('button', { name: 'Pair worker' })); await waitFor(() => expect(f.worker.pair).toHaveBeenCalledTimes(1));
+    act(() => { location.hash = '#/today'; window.dispatchEvent(new HashChangeEvent('hashchange')); });
+    await task9Hold('welcome'); expect(task9Field('Pairing code').value).toBe(''); task9Fill('B'.repeat(43));
+    fireEvent.click(screen.getByRole('button', { name: 'Pair worker' })); await waitFor(() => expect(f.worker.pair).toHaveBeenCalledTimes(2));
+    const before = f.worker.status.mock.calls.length; const currentCode = task9Field('Pairing code').value;
+    await task9Settle(old); expect(task9Field('Pairing code').value).toBe(currentCode);
+    for (const name of ['Pair worker', 'Refresh worker status']) {
+      const control = screen.getByRole('button', { name }); expect(control.hasAttribute('disabled')).toBe(true); fireEvent.click(control);
+    }
+    expect(f.worker.status).toHaveBeenCalledTimes(before); expect(f.worker.pair).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('Worker paired', { exact: true })).toBeNull();
+    await task9Settle(fresh); await screen.findByText('Worker paired', { exact: true });
+    expect(task9Field('Pairing code').value).toBe('');
+    expect(f.worker.pair).toHaveBeenLastCalledWith({ endpoint: task9Endpoint, expectedWorkspaceId: task9Workspace, code: 'B'.repeat(43) });
+    f.assertNoActivation();
+  } finally { await task9Settle(old); await task9Settle(fresh); }
+}), 10_000);

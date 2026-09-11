@@ -157,6 +157,8 @@ function fakeCallieApi(): CalliePreloadApi {
     daily: { get: vi.fn(async () => ({ ...dailyFixture(), workflowMode: 'legacy' as const })) },
     localWorkspace: {
       get: vi.fn(async () => localSnapshot({ workflowMode: 'legacy' })),
+      getCompany: pending,
+      researchCompany: pending, getCompanyResearchStatus: pending, linkCompanyPerson: pending,
       getCommitments: vi.fn(async () => commitments()),
       reviewCompany: pending, createCompany: pending, getCompanyCreateStatus: pending, transition: pending,
     },
@@ -171,6 +173,7 @@ function fakeCallieApi(): CalliePreloadApi {
     outreach: {
       status: vi.fn(async () => ({ model: 'unconfigured' as const, modelName: '', gmail: 'unconfigured' as const, accountEmail: null, senderName: '', postalAddress: '' })),
       configure: pending, connectGmail: pending, disconnectGmail: pending, openDraft: pending, saveDraft: pending, generateDraft: pending, sendDraft: pending,
+      inspectLocalAuthority: vi.fn(() => new Promise<never>(() => undefined)),
     },
     leads: {
       list: vi.fn(async () => ({
@@ -472,9 +475,22 @@ it('injects persisted outreach into the actual contact workspace even when Gmail
   const setup: import('../../shared/contracts/outreachContract').OutreachStatus = { model: 'unconfigured', modelName: '', gmail: 'unconfigured', accountEmail: null, senderName: '', postalAddress: '' };
   let draft: import('../../shared/contracts/outreachContract').EmailDraft = { id: 'draft', personId: 'person-kevin', salesCycleId: 'cycle-kevin', contactMethodId: 'email-kevin', recipient: 'kevin@example.com', subject: 'Subject', body: 'Saved text', revision: 1, status: 'draft', generation: 'none', messageId: null, notice: null, updatedAt: '2026-09-08T12:00:00.000Z' };
   const outreach: CalliePreloadApi['outreach'] = { status: vi.fn(async () => setup), configure: vi.fn(), connectGmail: vi.fn(), disconnectGmail: vi.fn(), openDraft: vi.fn(async () => draft),
-    saveDraft: vi.fn(async input => { draft = { ...draft, subject: input.subject, body: input.body, revision: draft.revision + 1 }; return draft; }), generateDraft: vi.fn(), sendDraft: vi.fn() };
+    saveDraft: vi.fn(async input => { draft = { ...draft, subject: input.subject, body: input.body, revision: draft.revision + 1 }; return draft; }), generateDraft: vi.fn(), sendDraft: vi.fn(),
+    // Synthetic current-draft ownership only. Gmail remains unconfigured.
+    inspectLocalAuthority: vi.fn(async input => {
+      if (input.draftId !== draft.id || input.expectedRevision !== draft.revision) throw Error('Synthetic draft changed');
+      return { draftId: draft.id, expectedRevision: draft.revision, personId: draft.personId, contactMethodId: draft.contactMethodId, state: 'allowed' as const, reason: null, checkedAt: draft.updatedAt };
+    }) };
   render(<FounderAppHarness api={{ ...api, outreach }} health={readyHealth} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Kevin Shin' }));
+  const disclosure = await screen.findByText('Opening Email may use configured AI to prepare a draft. It does not send.');
+  expect(disclosure.isConnected).toBe(true);
+  for (let element: HTMLElement | null = disclosure; element !== null; element = element.parentElement) {
+    expect(element.hidden).toBe(false); expect(element.getAttribute('aria-hidden')).not.toBe('true');
+    const style = getComputedStyle(element);
+    expect(style.display).not.toBe('none'); expect(style.visibility).not.toMatch(/^(hidden|collapse)$/); expect(style.opacity).not.toBe('0');
+  }
+  expect(outreach.openDraft).not.toHaveBeenCalled(); expect(outreach.sendDraft).not.toHaveBeenCalled();
   fireEvent.click(await screen.findByRole('button', { name: 'Email' }));
   await waitFor(() => expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Saved text'));
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'My actual edited text' } });
@@ -903,3 +919,237 @@ describe('FounderApp company phase continuity', () => {
     }
   });
 });
+
+
+// Task 4 additive public composition tests. No new-module import: baseline can reach missing UI.
+import type { LocalCompanyDetail, LocalCompanyResearchStatus, SelectedResearch } from '../../shared/contracts/localWorkspaceContract';
+const f4AppReleases: Array<() => void> = [];
+const f4AppPending: Promise<unknown>[] = [];
+function f4AppDeferred<T>(fallback: T) { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); f4AppReleases.push(() => resolve(fallback)); f4AppPending.push(promise); return { promise, resolve }; }
+afterEach(async () => { try { cleanup(); } finally { try { await act(async () => { for (const release of f4AppReleases.splice(0)) release(); await Promise.allSettled(f4AppPending.splice(0)); }); } finally { vi.restoreAllMocks(); } } });
+function f4AppDetail(accountId = 'a'): LocalCompanyDetail {
+  const snapshot = structuredClone(dailyFixture().accounts.find(item => item.account.id === accountId)!);
+  snapshot.portfolio = []; snapshot.claims = []; snapshot.routes = [];
+  return { scope: 'local_database', generatedAt: fixtureNow, snapshot, sources: [{ id: `first-use-${accountId}`, url: `https://${accountId}.example/source`, fetchedAt: fixtureNow, sha256: 'd'.repeat(64), excerpt: `Founder selected source ${accountId}`, permitted: true }], links: [] };
+}
+function f4AppStatus(r: SelectedResearch, state: LocalCompanyResearchStatus['state']): LocalCompanyResearchStatus { return { ...r, state, receipt: state === 'completed' ? { accountId: r.accountId, version: 2, duplicate: false } : null, reason: null }; }
+function f4FounderApi() {
+  const api = fakeCallieApi();
+  vi.mocked(api.daily.get).mockResolvedValue(dailyFixture());
+  vi.mocked(api.localWorkspace.get).mockResolvedValue(localSnapshot({ accounts: { state: 'available', snapshots: dailyFixture().accounts } }));
+  api.localWorkspace.getCompany = vi.fn<CalliePreloadApi['localWorkspace']['getCompany']>(async ({ accountId }) => f4AppDetail(accountId));
+  api.localWorkspace.researchCompany = vi.fn<CalliePreloadApi['localWorkspace']['researchCompany']>(async r => f4AppStatus(r, 'held'));
+  api.localWorkspace.getCompanyResearchStatus = vi.fn<CalliePreloadApi['localWorkspace']['getCompanyResearchStatus']>(async r => f4AppStatus(r, 'not_recorded'));
+  return api;
+}
+
+it('F4-founder-01 selecting a real local row exposes explicit Research through FounderApp routes', async () => {
+  const api = f4FounderApi(); render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' }));
+  expect(await screen.findByRole('button', { name: /^Research(?: company)?$/i })).toBeTruthy();
+  expect(await screen.findByText('Founder selected source a')).toBeTruthy();
+  expect(api.localWorkspace.getCompany).toHaveBeenCalledWith({ accountId: 'a' }); expect(api.localWorkspace.researchCompany).not.toHaveBeenCalled();
+}, 10_000);
+
+it('F4-founder-02 Campaigns and back retain selected local account and the same pending request without automatic execution', async () => {
+  const api = f4FounderApi(); const r = { accountId: 'a', commandId: '10000000-0000-4000-8000-000000000001' };
+  const gate = f4AppDeferred(f4AppStatus(r, 'completed')); const uuid = vi.spyOn(crypto, 'randomUUID').mockReturnValue('10000000-0000-4000-8000-000000000001');
+  api.localWorkspace.researchCompany = vi.fn<CalliePreloadApi['localWorkspace']['researchCompany']>(() => gate.promise);
+  render(<StrictMode><FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" /></StrictMode>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText('Founder selected source a');
+  const research = screen.getByRole('button', { name: /^Research(?: company)?$/i }); act(() => { fireEvent.click(research); fireEvent.click(research); });
+  expect(api.localWorkspace.researchCompany).toHaveBeenCalledOnce(); const original = vi.mocked(api.localWorkspace.researchCompany).mock.calls[0][0];
+  fireEvent.click(screen.getByRole('link', { name: 'Campaigns' })); await screen.findByRole('heading', { level: 1, name: 'Campaigns' });
+  await act(async () => { window.dispatchEvent(new Event('focus')); });
+  fireEvent.click(screen.getByRole('link', { name: 'Accounts' })); await screen.findByText('Founder selected source a');
+  expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
+  fireEvent.click(screen.getByRole('button', { name: /^Research(?: company)?$/i })); expect(api.localWorkspace.researchCompany).toHaveBeenCalledOnce(); expect(uuid).toHaveBeenCalledOnce();
+  await act(async () => gate.resolve(f4AppStatus(original, 'completed'))); expect(await screen.findByText(/^Research known · completed$/)).toBeTruthy();
+  expect(vi.mocked(api.localWorkspace.researchCompany).mock.calls[0][0]).toBe(original);
+}, 10_000);
+
+it('F4-founder-03 actual Import commit refresh retains selected pending research and global modal ownership', async () => {
+  const api = f4FounderApi(); const r = { accountId: 'a', commandId: '10000000-0000-4000-8000-000000000001' };
+  const gate = f4AppDeferred(f4AppStatus(r, 'completed')); vi.spyOn(crypto, 'randomUUID').mockReturnValue('10000000-0000-4000-8000-000000000001');
+  api.localWorkspace.researchCompany = vi.fn<CalliePreloadApi['localWorkspace']['researchCompany']>(() => gate.promise);
+  api.imports.preview = vi.fn<CalliePreloadApi['imports']['preview']>(async () => importPreview); api.imports.commit = vi.fn<CalliePreloadApi['imports']['commit']>(async () => importReceipt);
+  render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText('Founder selected source a');
+  fireEvent.click(screen.getByRole('button', { name: /^Research(?: company)?$/i })); const original = vi.mocked(api.localWorkspace.researchCompany).mock.calls[0][0];
+  // This real application event opens the global dialog without routing away, so commit exercises Accounts' keyed remount.
+  await act(async () => { window.dispatchEvent(new Event('callie:open-import')); });
+  const dialog = await screen.findByRole('dialog', { name: 'Import leads' }); expect(dialog.tagName).toBe('DIALOG');
+  fireEvent.keyDown(window, { key: 'k', metaKey: true, ctrlKey: true }); expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull();
+  fireEvent.change(within(dialog).getByLabelText('Paste spreadsheet rows'), { target: { value: 'Name\tPhone\nKevin\t4015550101' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Preview rows' })); fireEvent.click(await screen.findByRole('button', { name: 'Import 1 row' }));
+  await screen.findByText('Imported 1 row.'); expect(api.imports.commit).toHaveBeenCalledOnce();
+  const liveDialog = screen.queryByRole('dialog', { name: 'Import leads' }); if (liveDialog) fireEvent.click(within(liveDialog).getByRole('button', { name: 'Close' }));
+  await screen.findByText('Founder selected source a'); expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
+  fireEvent.click(screen.getByRole('button', { name: /^Research(?: company)?$/i })); expect(api.localWorkspace.researchCompany).toHaveBeenCalledOnce();
+  await act(async () => gate.resolve(f4AppStatus(original, 'completed'))); expect(await screen.findByText(/^Research known · completed$/)).toBeTruthy();
+  expect(vi.mocked(api.localWorkspace.researchCompany).mock.calls[0][0]).toBe(original);
+}, 10_000);
+
+it('F4-founder-04 palette Escape does not close selected research or resume its pending request', async () => {
+  const api = f4FounderApi(); const r = { accountId: 'a', commandId: '10000000-0000-4000-8000-000000000001' };
+  const gate = f4AppDeferred(f4AppStatus(r, 'completed')); vi.spyOn(crypto, 'randomUUID').mockReturnValue('10000000-0000-4000-8000-000000000001'); api.localWorkspace.researchCompany = vi.fn<CalliePreloadApi['localWorkspace']['researchCompany']>(() => gate.promise);
+  render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText('Founder selected source a');
+  const research = screen.getByRole('button', { name: /^Research(?: company)?$/i }); fireEvent.click(research);
+  fireEvent.keyDown(window, { key: 'k', metaKey: true, ctrlKey: true }); const palette = await screen.findByRole('dialog', { name: 'Command palette' });
+  fireEvent.keyDown(within(palette).getByRole('combobox'), { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull());
+  expect(screen.getByText('Founder selected source a')).toBeTruthy(); expect(api.localWorkspace.researchCompany).toHaveBeenCalledOnce();
+  expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
+  await act(async () => gate.resolve(f4AppStatus(r, 'completed'))); expect(await screen.findByText(/^Research known · completed$/)).toBeTruthy();
+}, 10_000);
+
+it('F4-founder-05 intake Open account selects the same research detail rather than a worker account', async () => {
+  const api = f4FounderApi(); const newSnapshot = f4AppDetail('a').snapshot;
+  newSnapshot.account = { id: 'new-local', name: 'New Local Company', domain: 'new.example', version: 1 };
+  let saved = false;
+  api.localWorkspace.get = vi.fn<CalliePreloadApi['localWorkspace']['get']>(async () => localSnapshot({ accounts: { state: 'available', snapshots: saved ? [...dailyFixture().accounts, newSnapshot] : dailyFixture().accounts } }));
+  api.localWorkspace.reviewCompany = vi.fn<CalliePreloadApi['localWorkspace']['reviewCompany']>(async input => ({ scope: 'local_database', input, candidates: [], complete: true }));
+  api.localWorkspace.createCompany = vi.fn<CalliePreloadApi['localWorkspace']['createCompany']>(async input => { saved = true; return { status: 'saved', commandId: input.commandId, account: newSnapshot.account, replayed: false }; });
+  api.localWorkspace.getCompany = vi.fn<CalliePreloadApi['localWorkspace']['getCompany']>(async ({ accountId }) => accountId === 'new-local' ? { ...f4AppDetail('a'), snapshot: newSnapshot } : f4AppDetail(accountId));
+  render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  const add = await screen.findByRole('button', { name: 'Add company' }); await waitFor(() => expect((add as HTMLButtonElement).disabled).toBe(false)); fireEvent.click(add);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Company name' }), { target: { value: 'New Local Company' } });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Company domain (optional)' }), { target: { value: 'new.example' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Review company' })); const create = await screen.findByRole('button', { name: 'Create company' });
+  await waitFor(() => expect((create as HTMLButtonElement).disabled).toBe(false)); fireEvent.click(create);
+  await waitFor(() => expect(api.localWorkspace.getCompany).toHaveBeenCalledWith({ accountId: 'new-local' }));
+  expect(screen.getByRole('button', { name: 'Local account · New Local Company' }).getAttribute('aria-current')).toBe('true');
+  expect(await screen.findByRole('button', { name: /^Research(?: company)?$/i })).toBeTruthy(); expect(api.localWorkspace.researchCompany).not.toHaveBeenCalled();
+}, 10_000);
+
+
+// Task 6 additive actual FounderApp composition. No ContactLink or new owner imports.
+// APIs below are fake projections. Real ImportDialog and global inspector are NOT mocked.
+const t6AppQuote = 'Avery manages Account A. Office team: office@a.example.';
+function t6AppCompany(): LocalCompanyDetail { const value = f4AppDetail(); value.sources[0].excerpt = t6AppQuote; return value; }
+function t6AppPerson(): LeadDetail {
+  return { ...structuredClone(detail), personId: 'person-51', personName: 'Avery', salesCycleId: 'cycle-51', organizationLabel: 'Shared Organization', emails: [{ id: 'method-person-51', contactSnapshot: 'b'.repeat(64), kind: 'email', value: 'avery@example.test', label: 'User supplied', valid: true, validationState: 'valid', reachability: 'direct', sourceLabel: 'Imported spreadsheet', vendorRank: null, phoneKind: null, ownershipState: 'unknown', evidenceObservedAt: null, compliance: null }] };
+}
+function t6AppRows(start: number, count: number): Awaited<ReturnType<CalliePreloadApi['leads']['list']>>['rows'] {
+  return Array.from({ length: count }, (_, i): Awaited<ReturnType<CalliePreloadApi['leads']['list']>>['rows'][number] => { const n = start + i; return { personId: `person-${n}`, personName: n === 1 || n === 51 ? 'Avery' : `Person ${n}`, salesCycleId: `cycle-${n}`, initials: 'AV', organization: 'Shared Organization', propertySummary: null, stage: 'ready', source: 'custom', segment: 'warm', priorityContext: null, cloudScores: null, nextAction: null, optedOut: false, lastActivityAt: null }; });
+}
+async function t6AppFillReview() {
+  fireEvent.change(screen.getByRole('textbox', { name: 'Role' }), { target: { value: 'Manager' } });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Relationship' }), { target: { value: 'Manages company' } });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Source quotation' }), { target: { value: t6AppQuote } });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'I confirm this saved person and quoted relationship' }));
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Link saved person' }) as HTMLButtonElement).disabled).toBe(false));
+}
+it('T6-A01 actual global import mapping and duplicate commit retains account, explicit person51 selection links then opens sole exact inspector', async () => {
+  const api = f4FounderApi(); let linked = false; const company = t6AppCompany();
+  api.localWorkspace.getCompany = vi.fn<CalliePreloadApi['localWorkspace']['getCompany']>(async () => ({ ...company, links: linked ? [{ id: 'stored-person-link', kind: 'person_role', personId: 'person-51', role: 'Manager', relationship: 'Manages company', evidenceIds: ['first-use-a'], authority: 'unconfirmed', authorityEvidenceIds: [], validFrom: fixtureNow, validTo: null }] : [] }));
+  api.localWorkspace.linkCompanyPerson = vi.fn<CalliePreloadApi['localWorkspace']['linkCompanyPerson']>(async input => { linked = true; return { accountId: input.accountId, version: 2, duplicate: false }; });
+  const preview: ImportPreview = { ...importPreview, sampleRows: [{ rowNumber: 2, cells: ['Avery', 'avery@example.test'] }], duplicateCandidates: [{ rowNumber: 2, personIds: ['person-1', 'person-51'], reason: 'Same name, explicit review required' }] };
+  api.imports.preview = vi.fn<CalliePreloadApi['imports']['preview']>(async () => preview);
+  api.imports.remap = vi.fn<CalliePreloadApi['imports']['remap']>(async input => ({ ...preview, suggestedMapping: input.mapping }));
+  api.imports.commit = vi.fn<CalliePreloadApi['imports']['commit']>(async () => ({ ...importReceipt, importedPersonIds: ['person-51'] }));
+  api.leads.list = vi.fn<CalliePreloadApi['leads']['list']>(async input => ({ rows: input.cursor === null ? t6AppRows(1, 50) : t6AppRows(51, 2), nextCursor: input.cursor === null ? 'opaque-person-page-2' : null, total: 52, revision: 2 }));
+  api.leadDetail.get = vi.fn<CalliePreloadApi['leadDetail']['get']>(async () => t6AppPerson());
+  const savedPeople = [t6AppPerson(), { ...t6AppPerson(), personId: 'person-52' }];
+  const peopleBefore = structuredClone(savedPeople);
+  api.leadDetail.get = vi.fn<CalliePreloadApi['leadDetail']['get']>(async ({ personId }) => structuredClone(savedPeople.find(person => person.personId === personId)!));
+  api.leadDetail.getOutboundCapabilities = vi.fn<CalliePreloadApi['leadDetail']['getOutboundCapabilities']>(async () => { throw Error('Synthetic capabilities unavailable'); });
+  render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText(t6AppQuote);
+  expect(api.localWorkspace.getCompany).toHaveBeenCalledWith({ accountId: 'a' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Import named person' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Import leads' }); expect(screen.getAllByRole('dialog', { name: 'Import leads' })).toHaveLength(1);
+  expect((within(dialog).getByLabelText('Paste spreadsheet rows') as HTMLTextAreaElement).value).toBe('');
+  fireEvent.keyDown(window, { key: 'k', metaKey: true, ctrlKey: true }); expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull();
+  fireEvent.change(within(dialog).getByLabelText('Paste spreadsheet rows'), { target: { value: 'Name\tPhone\nAvery\tavery@example.test' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Preview rows' })); const commit = await within(dialog).findByRole('button', { name: 'Import 1 row' });
+  expect((commit as HTMLButtonElement).disabled).toBe(true); expect(api.imports.commit).not.toHaveBeenCalled();
+  fireEvent.change(within(dialog).getByLabelText('Phone'), { target: { value: 'email' } });
+  await waitFor(() => expect(api.imports.remap).toHaveBeenCalledWith({ previewId: preview.previewId, contentHash: preview.contentHash, mapping: { Name: 'person_name', Phone: 'email' } }));
+  await waitFor(() => expect((within(dialog).getByLabelText('Phone') as HTMLSelectElement).value).toBe('email'));
+  fireEvent.change(within(dialog).getByLabelText('Duplicate action for row 2'), { target: { value: 'merge' } });
+  fireEvent.change(within(dialog).getByLabelText('Merge target for row 2'), { target: { value: 'person-51' } });
+  await waitFor(() => expect((within(dialog).getByRole('button', { name: 'Import 1 row' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Import 1 row' })); await within(dialog).findByText('Imported 1 row.');
+  expect(api.imports.commit).toHaveBeenCalledWith({ previewId: preview.previewId, contentHash: preview.contentHash, mapping: { Name: 'person_name', Phone: 'email' }, source: { channel: 'custom', referredByPersonId: null }, duplicateDecisions: [{ rowNumber: 2, decision: 'merge', personId: 'person-51' }] });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' })); await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Import leads' })).toBeNull());
+  await screen.findByText(t6AppQuote); expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
+  expect(api.localWorkspace.linkCompanyPerson).not.toHaveBeenCalled(); expect(api.leadDetail.get).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Find saved person' })); await screen.findByRole('button', { name: 'Select Avery · person-1' });
+  expect(api.leads.list).toHaveBeenLastCalledWith({ query: '', stages: [], priorities: [], sort: 'person_name', cursor: null, limit: 50 });
+  fireEvent.click(screen.getByRole('button', { name: 'Load more' })); fireEvent.click(await screen.findByRole('button', { name: 'Select Avery · person-51' }));
+  await screen.findByText('avery@example.test'); expect(api.leads.list).toHaveBeenLastCalledWith({ query: '', stages: [], priorities: [], sort: 'person_name', cursor: 'opaque-person-page-2', limit: 50 });
+  expect(api.leadDetail.get).toHaveBeenLastCalledWith({ personId: 'person-51' }); await t6AppFillReview();
+  const reads = vi.mocked(api.localWorkspace.getCompany).mock.calls.length;
+  fireEvent.click(screen.getByRole('button', { name: 'Link saved person' })); const saved = await screen.findByRole('button', { name: 'Open saved contact' });
+  expect(api.localWorkspace.getCompany).toHaveBeenCalledTimes(reads + 1); expect(api.localWorkspace.linkCompanyPerson).toHaveBeenCalledOnce();
+  expect(vi.mocked(api.localWorkspace.linkCompanyPerson).mock.calls[0][0]).toEqual(expect.objectContaining({ accountId: 'a', sourceQuotes: [{ sourceId: 'first-use-a', quote: t6AppQuote }], link: expect.objectContaining({ personId: 'person-51', authority: 'unconfirmed', authorityEvidenceIds: [], validTo: null }) }));
+  vi.mocked(api.leadDetail.get).mockClear(); fireEvent.click(saved);
+  await screen.findByRole('complementary', { name: 'Avery details' }); expect(screen.getAllByRole('complementary', { name: 'Avery details' })).toHaveLength(1);
+  expect(api.leadDetail.get).toHaveBeenCalledWith({ personId: 'person-51' }); expect(screen.getAllByRole('button', { name: 'Close inspector' })).toHaveLength(1);
+  expect(api.leads.updateField).not.toHaveBeenCalled(); expect(api.leads.bulkUpdate).not.toHaveBeenCalled(); expect(api.leadDetail.beginOutbound).not.toHaveBeenCalled(); expect(api.leadDetail.findContactInfo).not.toHaveBeenCalled(); expect(api.localWorkspace.researchCompany).not.toHaveBeenCalled();
+  // Fake link implementation above changes only its local link flag. This is NOT main storage proof.
+  expect(savedPeople).toEqual(peopleBefore);
+}, 10_000);
+it('T6-A02 office-only actual account reaches missing contact UI and global import has no office prefill', async () => {
+  const api = f4FounderApi(); const office = f4AppDetail(); office.sources[0].excerpt = 'Office team only: office@a.example +1 401 555 0100';
+  api.imports.preview = vi.fn<CalliePreloadApi['imports']['preview']>(async () => { throw Error('Preview requires explicit user action'); });
+  api.localWorkspace.getCompany = vi.fn<CalliePreloadApi['localWorkspace']['getCompany']>(async () => office);
+  api.localWorkspace.linkCompanyPerson = vi.fn<CalliePreloadApi['localWorkspace']['linkCompanyPerson']>(async () => { throw Error('No reviewed saved person'); });
+  render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText(office.sources[0].excerpt);
+  expect(await screen.findByText('Contact not established')).toBeTruthy(); expect(screen.queryByText(/verified person/i)).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Import named person' })); const dialog = await screen.findByRole('dialog', { name: 'Import leads' });
+  expect((within(dialog).getByLabelText('Paste spreadsheet rows') as HTMLTextAreaElement).value).toBe(''); expect(api.imports.preview).not.toHaveBeenCalled(); expect(api.localWorkspace.linkCompanyPerson).not.toHaveBeenCalled();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' })); expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
+}, 10_000);
+it('T6-A03 actual Campaigns route and global Import remount retain dirty reviewed identity without auto-link', async () => {
+  const api = f4FounderApi(); api.localWorkspace.getCompany = vi.fn<CalliePreloadApi['localWorkspace']['getCompany']>(async () => t6AppCompany());
+  api.leads.list = vi.fn<CalliePreloadApi['leads']['list']>(async () => ({ rows: t6AppRows(51, 1), nextCursor: null, total: 1, revision: 1 }));
+  api.leadDetail.get = vi.fn<CalliePreloadApi['leadDetail']['get']>(async () => t6AppPerson());
+  api.localWorkspace.linkCompanyPerson = vi.fn<CalliePreloadApi['localWorkspace']['linkCompanyPerson']>(async () => ({ accountId: 'a', version: 2, duplicate: false }));
+  api.imports.preview = vi.fn<CalliePreloadApi['imports']['preview']>(async () => importPreview); api.imports.commit = vi.fn<CalliePreloadApi['imports']['commit']>(async () => importReceipt);
+  render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText(t6AppQuote);
+  fireEvent.click(await screen.findByRole('button', { name: 'Find saved person' })); fireEvent.click(await screen.findByRole('button', { name: 'Select Avery · person-51' })); await screen.findByText('avery@example.test'); await t6AppFillReview();
+  fireEvent.click(screen.getByRole('link', { name: 'Campaigns' })); await screen.findByRole('heading', { level: 1, name: 'Campaigns' }); fireEvent.click(screen.getByRole('link', { name: 'Accounts' })); await screen.findByText(t6AppQuote);
+  expect((screen.getByRole('textbox', { name: 'Role' }) as HTMLInputElement).value).toBe('Manager');
+  fireEvent.click(screen.getByRole('button', { name: 'Import named person' })); const dialog = await screen.findByRole('dialog', { name: 'Import leads' });
+  fireEvent.change(within(dialog).getByLabelText('Paste spreadsheet rows'), { target: { value: 'Name\tPhone\nKevin\t4015550101' } }); fireEvent.click(within(dialog).getByRole('button', { name: 'Preview rows' })); fireEvent.click(await within(dialog).findByRole('button', { name: 'Import 1 row' })); await within(dialog).findByText('Imported 1 row.'); fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await screen.findByText(t6AppQuote); expect((screen.getByRole('textbox', { name: 'Role' }) as HTMLInputElement).value).toBe('Manager'); expect((screen.getByRole('textbox', { name: 'Source quotation' }) as HTMLInputElement).value).toBe(t6AppQuote);
+  expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true'); expect(api.localWorkspace.linkCompanyPerson).not.toHaveBeenCalled();
+}, 10_000);
+
+it('T6-A04 actual route departure preserves pending link, lost reply offers exact replay without new UUID', async () => {
+  const api = f4FounderApi(); api.localWorkspace.getCompany = vi.fn<CalliePreloadApi['localWorkspace']['getCompany']>(async () => t6AppCompany());
+  api.leads.list = vi.fn<CalliePreloadApi['leads']['list']>(async () => ({ rows: t6AppRows(51, 1), nextCursor: null, total: 1, revision: 1 }));
+  api.leadDetail.get = vi.fn<CalliePreloadApi['leadDetail']['get']>(async () => t6AppPerson());
+  let resolve!: (receipt: Awaited<ReturnType<CalliePreloadApi['localWorkspace']['linkCompanyPerson']>>) => void;
+  let reject!: (error: Error) => void;
+  const pending = new Promise<Awaited<ReturnType<CalliePreloadApi['localWorkspace']['linkCompanyPerson']>>>((yes, no) => { resolve = yes; reject = no; });
+  api.localWorkspace.linkCompanyPerson = vi.fn<CalliePreloadApi['localWorkspace']['linkCompanyPerson']>().mockImplementationOnce(() => pending).mockResolvedValue({ accountId: 'a', version: 2, duplicate: true });
+  const view = render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText(t6AppQuote);
+    fireEvent.click(await screen.findByRole('button', { name: 'Find saved person' })); fireEvent.click(await screen.findByRole('button', { name: 'Select Avery · person-51' })); await screen.findByText('avery@example.test'); await t6AppFillReview();
+    fireEvent.click(screen.getByRole('button', { name: 'Link saved person' })); expect(api.localWorkspace.linkCompanyPerson).toHaveBeenCalledOnce();
+    const original = vi.mocked(api.localWorkspace.linkCompanyPerson).mock.calls[0][0];
+    fireEvent.click(screen.getByRole('link', { name: 'Campaigns' })); await screen.findByRole('heading', { level: 1, name: 'Campaigns' });
+    fireEvent.click(screen.getByRole('link', { name: 'Accounts' })); await screen.findByText(t6AppQuote);
+    expect(api.localWorkspace.linkCompanyPerson).toHaveBeenCalledOnce();
+    const replayWhilePending = screen.queryByRole('button', { name: 'Replay link' });
+    if (replayWhilePending) expect((replayWhilePending as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('link', { name: 'Campaigns' })); await screen.findByRole('heading', { level: 1, name: 'Campaigns' });
+    expect(screen.queryByRole('button', { name: 'Find saved person' })).toBeNull();
+    const readsWhileAway = vi.mocked(api.localWorkspace.getCompany).mock.calls.length;
+    await act(async () => { reject(Error('lost renderer reply')); await Promise.allSettled([pending]); });
+    expect(api.localWorkspace.getCompany).toHaveBeenCalledTimes(readsWhileAway);
+    expect(api.localWorkspace.linkCompanyPerson).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('link', { name: 'Accounts' })); await screen.findByText(t6AppQuote);
+    const replay = await screen.findByRole('button', { name: 'Replay link' }); expect((replay as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(replay); await waitFor(() => expect(api.localWorkspace.linkCompanyPerson).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.localWorkspace.linkCompanyPerson).mock.calls[1][0]).toBe(original);
+    expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
+  } finally { view.unmount(); await act(async () => { resolve({ accountId: 'a', version: 2, duplicate: false }); await Promise.allSettled([pending]); }); }
+}, 10_000);

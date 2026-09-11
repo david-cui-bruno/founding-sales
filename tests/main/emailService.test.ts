@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { migration0019EmailDrafts } from '../../src/main/db/migrations/0019EmailDrafts';
@@ -10,6 +10,9 @@ import { EmailRepository } from '../../src/main/outreach/emailRepository';
 import type { FrozenEmail, GroundedDraftContext, OutreachProviders, EmailSendResult } from '../../src/main/outreach/providers/providerTypes';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 import { seedProspect, insertOpenCycleWithAction, DOMAIN_TIMESTAMP } from '../fixtures/domainRows';
+
+import { contactSnapshot } from '../../src/main/communications/contactSnapshot';
+import { assertLocalEmailAuthority } from '../../src/main/delegation/executionRouter';
 
 const now = () => '2026-09-08T15:00:00.000Z';
 describe('durable explicit email using real encrypted SQLite', () => {
@@ -219,4 +222,138 @@ describe('durable explicit email using real encrypted SQLite', () => {
     expect((await service.openDraft({personId,contactMethodId})).body).toBe(edited.body);
     expect(contexts).toHaveLength(1);expect(sent).toHaveLength(0);
   });
+
+  // Task7 source-only additions. Ownership is not final Send authorization.
+  function authorityService(expectedWorkspaceId?: string) {
+    service.dispose();
+    service=createEmailService({databaseGate:{withDatabase:async fn=>{databaseEntered();await databaseDelay;return fn(db);},
+      withDomain:async fn=>{domainEntered();await domainDelay;return fn(domain);}},providers,expectedWorkspaceId,now,id:randomUUID});
+    return service;
+  }
+  function associate(id:string, route=false) {
+    db.raw.prepare('INSERT INTO pm_accounts(id,name,version,created_at,updated_at) VALUES (?,?,1,?,?)').run(id,'Fictional ownership fixture',now(),now());
+    if(route) db.raw.prepare(`INSERT INTO pm_account_routes(id,account_id,version,person_id,channel,value,purpose,verification,admitted_at)
+      VALUES (?,?,1,NULL,'email','OWNER@EXAMPLE.COM','unknown','unverified',?)`).run(`${id}-route`,id,now());
+    else db.raw.prepare(`INSERT INTO pm_account_links(id,account_id,kind,person_id,relationship,role,authority,valid_from,admitted_at)
+      VALUES (?,?,'person_role',?,'fixture relationship','manager','unconfirmed',?,?)`).run(`${id}-link`,id,personId,now(),now());
+  }
+  function localOwner(id:string, workspace='fictional-workspace', owner='local', state='local') {
+    db.raw.prepare(`INSERT INTO delegated_authorities(account_id,workspace_id,owner,generation,state,aggregate_version,updated_at)
+      VALUES (?,?,?,0,?,0,?)`).run(id,workspace,owner,state,now());
+  }
+  function readBytes() {
+    const tables=['email_drafts','email_send_intents','email_send_results','delegated_authorities','delegated_commands'];
+    return {rows:JSON.stringify(tables.map(table=>db.raw.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())),
+      changes:db.raw.prepare('SELECT total_changes() AS n').get()};
+  }
+  it.each([
+    ['unassociated',undefined,'allowed'],['local','fictional-workspace','allowed'],
+    ['missing-authority','fictional-workspace','held'],['missing-workspace',undefined,'held'],
+    ['wrong-workspace','other-workspace','held'],['worker','fictional-workspace','held'],
+    ['paused','fictional-workspace','held'],['delegating','fictional-workspace','held'],
+    ['revoked','fictional-workspace','held'],['one-failing-owner','fictional-workspace','held'],
+    ['recipient-route','fictional-workspace','held'],['recipient-route-local','fictional-workspace','allowed'],
+  ] as const)('Task7 ownership fence: %s',async(kind,workspace,state)=>{
+    const draft=await readyDraft();
+    if(kind!=='unassociated') {
+      associate('fixture-account',kind.startsWith('recipient-route'));
+      if(kind!=='missing-authority' && kind!=='recipient-route') localOwner('fixture-account','fictional-workspace',kind==='worker'?'worker':'local',
+        kind==='worker'?'active':['paused','delegating','revoked'].includes(kind)?kind:'local');
+      if(kind==='one-failing-owner') associate('fixture-unowned-account');
+    }
+    authorityService(workspace);
+    // Independent real-fence oracle proves the selected SQL ownership branch.
+    const fence=()=>db.raw.transaction(()=>assertLocalEmailAuthority(db,{personId,recipient:draft.recipient,expectedWorkspaceId:workspace})).deferred();
+    if(state==='allowed') expect(fence).not.toThrow(); else expect(fence).toThrow('email_authority_unavailable');
+    const before=readBytes();
+    expect(await service.inspectLocalAuthority({draftId:draft.id,expectedRevision:draft.revision})).toEqual({
+      draftId:draft.id,expectedRevision:draft.revision,personId,contactMethodId,state,
+      reason:state==='allowed'?null:'email_authority_unavailable',checkedAt:now(),
+    });
+    expect(readBytes()).toEqual(before);expect(sent).toEqual([]);
+  },10000);
+
+  it.each(['allowed','held','failed'] as const)('Task7 fresh first read is recovery-pure: %s',async mode=>{
+    // Seed through the real repository, never warm this service via open/save/ready.
+    const repo=new EmailRepository(db);
+    const current=db.raw.prepare(`SELECT id,person_id AS personId,kind,normalized_value AS normalizedValue,
+      validation_state AS validationState,updated_at AS updatedAt FROM person_contact_methods WHERE id=?`).get(contactMethodId) as Parameters<typeof contactSnapshot>[0];
+    const seeded=repo.create({id:'fictional-interrupted-draft',personId,salesCycleId:'email-cycle',contactMethodId,
+      recipient:current.normalizedValue,contactSnapshot:contactSnapshot(current),accountEmail:setup.accountEmail,footer:'Fictional footer',updatedAt:now()});
+    const edited=repo.save({draftId:seeded.id,expectedRevision:seeded.revision,subject:'Reviewed',body:'Exact private saved prose'},now());
+    db.raw.transaction(()=>repo.reserve({email:{commandId:randomUUID(),from:setup.accountEmail!,to:edited.recipient,subject:edited.subject,body:edited.body},
+      draftId:edited.id,draftRevision:edited.revision,personId,salesCycleId:'email-cycle',prospectId:'email-prospect',cycleVersion:1,action:null,policyId:'fictional-policy',createdAt:now()})).immediate();
+    if(mode==='held') associate('fixture-missing-owner');
+    authorityService();
+    const forbidden=['status','configure','connectGmail','disconnectGmail','generate','prepare'] as const;
+    const spies=forbidden.map(method=>vi.spyOn(providers,method));
+    const domainSpy=vi.fn();domainEntered=domainSpy;
+    const before=readBytes();const request={draftId:mode==='failed'?'missing-draft':edited.id,expectedRevision:repo.get(edited.id).revision};
+    try {
+      expect(repo.get(edited.id).status).toBe('sending');
+      expect(db.raw.prepare('SELECT * FROM email_send_results').all()).toEqual([]);
+      for(let count=0;count<2;count++) {
+        if(mode==='failed') await expect(service.inspectLocalAuthority(request)).rejects.toThrow();
+        else expect(await service.inspectLocalAuthority(request)).toMatchObject({state:mode,reason:mode==='allowed'?null:'email_authority_unavailable'});
+        expect(readBytes()).toEqual(before);
+      }
+      for(const spy of spies) expect(spy).not.toHaveBeenCalled();
+      expect(domainSpy).not.toHaveBeenCalled();expect(contexts).toEqual([]);expect(sent).toEqual([]);
+    } finally { for(const spy of spies) spy.mockRestore(); }
+  },10000);
+
+  it.each(['revision','person','kind','email','validation','updatedAt','private-snapshot'] as const)('Task7 refuses changed saved binding: %s',async change=>{
+    const draft=await readyDraft();const request={draftId:draft.id,expectedRevision:draft.revision};
+    expect((await service.inspectLocalAuthority(request)).state).toBe('allowed');
+    if(change==='revision') request.expectedRevision++;
+    if(change==='person') {const other=seedProspect(db.raw,'authority-other');db.raw.prepare('UPDATE person_contact_methods SET person_id=? WHERE id=?').run(other.personId,contactMethodId);}
+    if(change==='kind') db.raw.prepare("UPDATE person_contact_methods SET kind='phone' WHERE id=?").run(contactMethodId);
+    if(change==='email') db.raw.prepare("UPDATE person_contact_methods SET normalized_value='changed@example.com' WHERE id=?").run(contactMethodId);
+    if(change==='validation') db.raw.prepare("UPDATE person_contact_methods SET validation_state='unverified' WHERE id=?").run(contactMethodId);
+    if(change==='updatedAt') db.raw.prepare('UPDATE person_contact_methods SET updated_at=? WHERE id=?').run('2026-09-09T00:00:00.000Z',contactMethodId);
+    if(change==='private-snapshot') db.raw.prepare("UPDATE email_drafts SET contact_snapshot=? WHERE id=?").run('0'.repeat(64),draft.id);
+    const before=readBytes();
+    const result=await service.inspectLocalAuthority(request).then(value=>({value}),error=>({error}));
+    if('value' in result) expect(result.value).toMatchObject({state:'held'}); else expect(result.error).toBeInstanceOf(Error);
+    expect(readBytes()).toEqual(before);expect(sent).toEqual([]);
+  },10000);
+
+  it.each(['recipient','personId','contactSnapshot','expectedWorkspaceId'] as const)('Task7 rejects caller-injected %s',async key=>{
+    const draft=await readyDraft();const before=readBytes();
+    await expect(service.inspectLocalAuthority({...{draftId:draft.id,expectedRevision:draft.revision},[key]:'forged'} as never)).rejects.toThrow();
+    expect(readBytes()).toEqual(before);expect(sent).toEqual([]);
+  },10000);
+
+  it.each(['invalidate','lock','dispose'] as const)('Task7 rejects delayed read after %s',async mode=>{
+    const draft=await readyDraft();const request={draftId:draft.id,expectedRevision:draft.revision};
+    expect((await service.inspectLocalAuthority(request)).state).toBe('allowed');
+    let release!:()=>void;let entered!:()=>void;
+    const reached=new Promise<void>(resolve=>{entered=resolve;});
+    databaseDelay=new Promise<void>(resolve=>{release=resolve;});databaseEntered=entered;
+    const reading=Promise.resolve().then(()=>service.inspectLocalAuthority(request)).then(value=>({value}),error=>({error}));
+    let watchdog:ReturnType<typeof setTimeout>|undefined;
+    try {
+      await Promise.race([reached,new Promise<never>((_,reject)=>{watchdog=setTimeout(()=>reject(Error('database gate entry not observed')),2000);})]);
+      if(mode==='dispose') service.dispose();else service.invalidate(mode==='lock'?true:undefined);
+      release();const result=await reading;
+      expect(result).toHaveProperty('error');if('error' in result) expect(result.error).toBeInstanceOf(Error);
+      expect(sent).toEqual([]);
+    } finally {if(watchdog!==undefined) clearTimeout(watchdog);release();await reading;databaseDelay=null;databaseEntered=()=>undefined;}
+  },10000);
+
+  it('Task7 manual draft save and reopen remain usable with model and Gmail unconfigured',async()=>{
+    setup.model='unconfigured';setup.gmail='unconfigured';setup.accountEmail=null;
+    const draft=await readyDraft();
+    expect((await service.inspectLocalAuthority({draftId:draft.id,expectedRevision:draft.revision})).state).toBe('allowed');
+    const reopened=await service.openDraft({personId,contactMethodId});
+    expect(reopened.id).toBe(draft.id);expect(reopened.subject).toBe(draft.subject);expect(reopened.body).toBe(draft.body);
+    expect(contexts).toEqual([]);expect(sent).toEqual([]);
+  },10000);
+  it('Task7 ownership observation never replaces final Send suppression recheck',async()=>{
+    const draft=await readyDraft();
+    expect((await service.inspectLocalAuthority({draftId:draft.id,expectedRevision:draft.revision})).state).toBe('allowed');
+    domain.logCallOutcome({personId,salesCycleId:'email-cycle',outcome:'opted_out',callbackAt:null,occurredAt:now()});
+    await expect(service.sendDraft({draftId:draft.id,expectedRevision:draft.revision,commandId:randomUUID()})).rejects.toThrow();
+    expect(sent).toEqual([]);expect(db.raw.prepare('SELECT * FROM email_send_intents').all()).toEqual([]);
+  },10000);
 });

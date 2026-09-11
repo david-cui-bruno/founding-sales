@@ -30,7 +30,7 @@ async function fixture() {
   ui.api.daily.get = vi.fn(async () => services.daily.get());
   const api = {...ui.api, localWorkspace: provider};
   const snapshot = () => Object.fromEntries(['sales_cycles', 'next_actions', 'activities', 'stage_events', 'source_intake_receipts', 'workflow_transition_receipts', 'pm_accounts', 'delegated_authorities', 'delegated_commands'].map(table => [table, database.raw.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
-  return {database, seeded, domain, provider, api, forbidden, snapshot, close() {cleanup(); closeDatabase(database); key.bytes.fill(0); temp.cleanup();}};
+  return {database, seeded, domain, provider, api, firstUse: ui.firstUse, forbidden, snapshot, close() {cleanup(); closeDatabase(database); key.bytes.fill(0); temp.cleanup();}};
 }
 
 it('actual unpaired reads preserve a callback across transition and render it without command or lifecycle writes', async () => {
@@ -46,7 +46,7 @@ it('actual unpaired reads preserve a callback across transition and render it wi
     expect((await f.provider.getCommitments()).items).toEqual(initial.items);
     const after = f.snapshot();
     const open = vi.fn();
-    render(<PresentationRoot><NativeDeskRoute api={f.api} onOpenLead={open}/></PresentationRoot>);
+    render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={open}/></PresentationRoot>);
     fireEvent.click(await screen.findByRole('button', {name: /Retained callback Property Owner/}));
     expect(open).not.toHaveBeenCalled();
     expect(screen.queryByText(/Old acquisition Property Owner/)).toBeNull();
@@ -66,7 +66,7 @@ it('actual local account evidence is separately selectable without authorizing a
   try {
     await f.provider.transition({commandId: 'account-transition', expectedMode: 'legacy', manifestId: 'account-manifest'});
     const before = f.snapshot(), open = vi.fn();
-    render(<PresentationRoot><NativeDeskRoute api={f.api} onOpenLead={open} surface="accounts"/></PresentationRoot>);
+    render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={open} surface="accounts"/></PresentationRoot>);
     await screen.findByText('Local account library', {exact: true});
     fireEvent.click(await screen.findByRole('button', {name: /Fixture Residential Management/}));
     expect(screen.getByRole('heading', {name: 'Fixture Residential Management'})).toBeTruthy();

@@ -23,6 +23,14 @@ export const emailDraftSchema = z.object({
 }).strict();
 export const openDraftSchema = z.object({personId:id,contactMethodId:id}).strict();
 export const draftRevisionSchema = z.object({draftId:id,expectedRevision:z.number().int().positive()}).strict();
+/** Ownership observation only. Final Send independently rechecks all authorization. */
+export const localEmailAuthorityReadSchema = z.object({
+  draftId:id, expectedRevision:z.number().int().positive(), personId:id, contactMethodId:id,
+  state:z.enum(['allowed','held']),
+  reason:z.enum(['email_authority_unavailable','email_contact_changed']).nullable(),
+  checkedAt:z.string().datetime({offset:true}),
+}).strict().refine(value => value.state === 'allowed' ? value.reason === null : value.reason !== null);
+export type LocalEmailAuthorityRead = z.infer<typeof localEmailAuthorityReadSchema>;
 export const saveDraftSchema = draftRevisionSchema.extend({subject:line,body}).strict();
 export const sendDraftSchema = draftRevisionSchema.extend({commandId:z.string().uuid()}).strict();
 export type SetupState = z.infer<typeof setupStateSchema>;
@@ -42,4 +50,5 @@ export interface OutreachApi {
   saveDraft(input:SaveDraftRequest):Promise<EmailDraft>;
   generateDraft(input:DraftRevisionRequest):Promise<EmailDraft>;
   sendDraft(input:SendDraftRequest):Promise<EmailDraft>;
+  inspectLocalAuthority(input:DraftRevisionRequest):Promise<LocalEmailAuthorityRead>;
 }

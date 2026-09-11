@@ -63,12 +63,13 @@ export const CONTINUITY_READ_CHANNELS = [
 ] as const;
 export const CONTINUITY_REGISTERED_CHANNELS = [
   'health:get',
-  'local-workspace:get', 'local-workspace:get-commitments', 'local-workspace:transition',
+  'local-workspace:get', 'local-workspace:get-company', 'local-workspace:get-commitments', 'local-workspace:transition',
   'local-workspace:review-company', 'local-workspace:create-company', 'local-workspace:company-create-status',
+  'local-workspace:research-company', 'local-workspace:company-research-status', 'local-workspace:link-company-person',
   'friday:get', 'friday:drilldown', 'friday:create-job', 'friday:fill-job', 'friday:cancel-job',
 ] as const;
 
-export const CONTINUITY_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get', 'leads:list', 'review:list',
+export const CONTINUITY_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get', 'leads:list', 'review:list', 'local-workspace:get-company',
   'local-workspace:review-company', 'local-workspace:create-company', 'local-workspace:company-create-status',
   'outreach:delegation-status', 'lead-detail:outbound-capabilities'] as const;
 export const CONTINUITY_UI_REGISTERED_CHANNELS = [...CONTINUITY_REGISTERED_CHANNELS, 'daily:get',
@@ -79,7 +80,7 @@ export const CONTINUITY_UI_REGISTERED_CHANNELS = [...CONTINUITY_REGISTERED_CHANN
 
 export const RETAINED_UI_REGISTERED_CHANNELS = [...CONTINUITY_UI_REGISTERED_CHANNELS,
   'discovery:get', 'discovery:get-brief', 'discovery:begin', 'discovery:override',
-  ...['status', 'configure', 'connect-gmail', 'disconnect-gmail', 'open-draft', 'save-draft', 'generate-draft', 'send-draft',
+  ...['status', 'configure', 'connect-gmail', 'disconnect-gmail', 'open-draft', 'save-draft', 'generate-draft', 'send-draft', 'inspect-local-authority',
     'requested-followup-prepare', 'requested-followup-get', 'requested-followup-edit', 'requested-followup-approve',
     'delegation-begin-phone', 'delegation-bootstrap', 'delegation-policy', 'delegation-research', 'delegation-status',
     'delegation-configure', 'delegation-submit', 'delegation-sync'].map(name => `outreach:${name}`),
@@ -373,7 +374,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       const denied = async (): Promise<never> => { uiCounters.forbidden++; throw new Error('Unrelated outreach forbidden'); };
       unregisters.push(registerOutreachIpc({ delegation, isTrustedRendererUrl: trusted, provider: {
         status: denied, configure: denied, connectGmail: denied, disconnectGmail: denied,
-        openDraft: denied, saveDraft: denied, generateDraft: denied, sendDraft: denied,
+        openDraft: denied, saveDraft: denied, generateDraft: denied, sendDraft: denied, inspectLocalAuthority: denied,
       } }));
       unregisters.push(registerDiscoveryIpc({ isTrustedRendererUrl: trusted, provider: {
         get: () => runtime.withDomain(domain => createDiscoveryProvider(domain).get()),

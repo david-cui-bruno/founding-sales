@@ -20,7 +20,7 @@ it.each(['light', 'dark'])('keeps action geometry stable across blur-save start 
     notice: 'Opening and editing this draft never sends.', updatedAt: '2026-09-08T12:00:00.000Z' };
   let finish!: (value: EmailDraft) => void;
   const api: OutreachApi = { status: async () => setup, configure: async () => setup, connectGmail: async () => setup, disconnectGmail: async () => setup,
-    openDraft: async () => draft, saveDraft: () => new Promise(done => { finish = done; }), generateDraft: async () => draft, sendDraft: async () => draft };
+    openDraft: async () => draft, saveDraft: () => new Promise(done => { finish = done; }), generateDraft: async () => draft, sendDraft: async () => draft, inspectLocalAuthority: async (): Promise<never> => { throw Error('Static markup does not inspect authority'); } };
   const session = emailDraftSession(api, 'kevin', 'email'); await session.open();
   session.edit('subject', 'Reviewed subject'); session.edit('body', 'Latest edited body');
   const markup = () => renderToStaticMarkup(<OutboundComposer channel="email" recipientLabel="kevin@example.com" personId="kevin" contactMethodId="email" api={api} onClose={() => undefined} />);

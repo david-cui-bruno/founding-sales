@@ -1,4 +1,4 @@
-import { configureOutreachSchema,draftRevisionSchema,emailDraftSchema,openDraftSchema,outreachStatusSchema,
+import { configureOutreachSchema,draftRevisionSchema,emailDraftSchema,localEmailAuthorityReadSchema,openDraftSchema,outreachStatusSchema,
   saveDraftSchema,sendDraftSchema,type OutreachApi,type EmailDraft } from '../../shared/contracts/outreachContract';
 import type { IpcClient } from '../ipcClient';
 import type { z } from 'zod';
@@ -27,6 +27,15 @@ export function createOutreachApi(client:IpcClient):OutreachApi {
       const draft=await client.request('outreach:open-draft',openDraftSchema,emailDraftSchema,input);
       if(draft.personId!==input.personId||draft.contactMethodId!==input.contactMethodId)throw new Error('Email response does not match person.');
       return draft;
+    },
+    inspectLocalAuthority:async(...args)=>{
+      try {
+        if(args.length!==1)throw new Error('EMAIL_AUTHORITY_READ_FAILED');
+        const input=draftRevisionSchema.parse(args[0]);
+        const result=await client.request('outreach:inspect-local-authority',draftRevisionSchema,localEmailAuthorityReadSchema,input);
+        if(result.draftId!==input.draftId||result.expectedRevision!==input.expectedRevision)throw new Error('EMAIL_AUTHORITY_READ_FAILED');
+        return result;
+      } catch {throw new Error('EMAIL_AUTHORITY_READ_FAILED');}
     },
     saveDraft:(...args)=>draftRequest('save-draft',saveDraftSchema,args),
     generateDraft:(...args)=>draftRequest('generate-draft',draftRevisionSchema,args),

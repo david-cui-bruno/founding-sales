@@ -12,7 +12,7 @@ it.each([
   ['campaigns', 'No frozen campaigns to review.'],
 ] as const)('gives an empty %s surface a relevant welcome without asking for nonexistent work', async (surface, title) => {
   const f = nativeDeskFixture(dailyFixture({ workspaceId: null, accounts: [], calls: { accountIds: [], workloadConflict: false }, answers: [] }));
-  render(<PresentationRoot><NativeDeskRoute api={f.api} surface={surface} onOpenLead={vi.fn()} /></PresentationRoot>);
+  render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} surface={surface} onOpenLead={vi.fn()} /></PresentationRoot>);
   await screen.findByTestId('native-desk');
   expect(screen.getByRole('heading', { name: title })).toBeTruthy();
   expect(screen.queryByText(/Select an item/)).toBeNull();
@@ -22,7 +22,7 @@ it.each([
 });
 it('keeps refresh accessible and icon-only beside persistent truthful worker status', async () => {
   const f = nativeDeskFixture();
-  render(<PresentationRoot><NativeDeskRoute api={f.api} onOpenLead={vi.fn()} /></PresentationRoot>);
+  render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} /></PresentationRoot>);
   const root = await screen.findByTestId('native-desk');
   const refresh = within(root).getByRole('button', { name: 'Refresh' });
   expect(refresh.textContent).toBe('');
@@ -33,7 +33,7 @@ it('keeps refresh accessible and icon-only beside persistent truthful worker sta
 });
 it('labels the queue and renders small decorative lane icons with real count badges', async () => {
   const f = nativeDeskFixture();
-  render(<PresentationRoot><NativeDeskRoute api={f.api} onOpenLead={vi.fn()} /></PresentationRoot>);
+  render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} /></PresentationRoot>);
   const root = await screen.findByTestId('native-desk');
   expect(screen.getByRole('heading', { name: 'Your next conversations' })).toBeTruthy();
   const approvals = screen.getByRole('heading', { name: 'Needs your approval 2' });
@@ -45,14 +45,14 @@ it('labels the queue and renders small decorative lane icons with real count bad
 });
 it('keeps an empty queue keyboard-focusable for scrolling', async () => {
   const f = nativeDeskFixture(dailyFixture({ accounts: [], calls: { accountIds: [], workloadConflict: false }, answers: [] }));
-  render(<PresentationRoot><NativeDeskRoute api={f.api} onOpenLead={vi.fn()} /></PresentationRoot>);
+  render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} /></PresentationRoot>);
   await screen.findByTestId('native-desk');
   expect(screen.getByRole('navigation', { name: 'Today queue' }).tabIndex).toBe(0);
 });
 
 it('keeps the Calls label text separate from its decorative icon', async () => {
   const f = nativeDeskFixture();
-  render(<PresentationRoot><NativeDeskRoute api={f.api} onOpenLead={vi.fn()} /></PresentationRoot>);
+  render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} /></PresentationRoot>);
   await screen.findByTestId('native-desk');
   const heading = screen.getByRole('heading', { name: /^Calls/ });
   const label = heading.querySelector('.native-desk__lane-label')!;
@@ -64,7 +64,7 @@ it.each(['today', 'accounts', 'campaigns'] as const)('marks unresolved and first
   const f = nativeDeskFixture();
   let reject!: (error: Error) => void;
   f.api.daily.get = vi.fn(() => new Promise<ReturnType<typeof dailyFixture>>((_resolve, rejectPromise) => { reject = rejectPromise; }));
-  const view = render(<PresentationRoot><NativeDeskRoute api={f.api} surface={surface} onOpenLead={vi.fn()} /></PresentationRoot>);
+  const view = render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} surface={surface} onOpenLead={vi.fn()} /></PresentationRoot>);
   const presentation = view.container.querySelector('.presentation-root');
   const pending = screen.getByText('Loading daily workspace…').closest('section')!;
   expect(pending.getAttribute('data-presentation')).toBe('native-a');
@@ -80,14 +80,14 @@ it.each(['today', 'accounts', 'campaigns'] as const)('marks unresolved and first
 it('uses A informational chrome for unknown authority without inventing a workflow mode', async () => {
   const f = nativeDeskFixture(dailyFixture({ workflowMode: 'unknown' }));
   f.api.localWorkspace.get = vi.fn(async () => localSnapshot({ workflowMode: 'legacy' }));
-  render(<PresentationRoot><NativeDeskRoute api={f.api} onOpenLead={vi.fn()} /></PresentationRoot>);
+  render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} /></PresentationRoot>);
   const section = (await screen.findByText(/Workflow mode unavailable or inconsistent/)).closest('section')!;
   expect(section.getAttribute('data-presentation')).toBe('native-a');
   expect(section.hasAttribute('data-workflow-mode')).toBe(false);
 });
 it.each(['today', 'accounts', 'campaigns'] as const)('retains common presentation when actual %s legacy is confirmed', async surface => {
   const f = nativeDeskFixture(dailyFixture({ workflowMode: 'legacy' }));
-  const view = render(<PresentationRoot><NativeDeskRoute api={f.api} surface={surface} legacy={<p>Actual legacy Today</p>} onOpenLead={vi.fn()} /></PresentationRoot>);
+  const view = render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} surface={surface} legacy={<p>Actual legacy Today</p>} onOpenLead={vi.fn()} /></PresentationRoot>);
   await screen.findByText(surface === 'today' ? 'Actual legacy Today' : /Legacy workflow is active/);
   const root = view.container.querySelector('.presentation-root')!;
   expect(root.getAttribute('data-presentation')).toBe('native-a');
@@ -96,7 +96,7 @@ it.each(['today', 'accounts', 'campaigns'] as const)('retains common presentatio
 });
 it('marks the full desk without replacing its authoritative workflow mode', async () => {
   const f = nativeDeskFixture();
-  render(<PresentationRoot><NativeDeskRoute api={f.api} onOpenLead={vi.fn()} /></PresentationRoot>);
+  render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} /></PresentationRoot>);
   const root = await screen.findByTestId('native-desk');
   expect(root.getAttribute('data-presentation')).toBe('native-a');
   expect(root.getAttribute('data-workflow-mode')).toBe('meeting_first');
@@ -105,7 +105,7 @@ it('marks the full desk without replacing its authoritative workflow mode', asyn
 it('selects A on the first failed daily read independently of pending assertions', async () => {
   const f = nativeDeskFixture();
   f.api.daily.get = vi.fn(async () => { throw new Error('unavailable'); });
-  render(<PresentationRoot><NativeDeskRoute api={f.api} onOpenLead={vi.fn()} /></PresentationRoot>);
+  render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} /></PresentationRoot>);
   const section = (await screen.findByText('Daily workspace unavailable. Retry the local read.')).closest('section')!;
   expect(section.getAttribute('data-presentation')).toBe('native-a');
   expect(section.hasAttribute('data-workflow-mode')).toBe(false);

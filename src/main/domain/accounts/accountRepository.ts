@@ -1,11 +1,13 @@
 import { localCompanyInputSchema, localCompanyCandidateSignals, localCompanyReviewSchema, type LocalCompanyInput, type LocalCompanyCreateRequest, type LocalCompanyReview, type LocalCompanyCreateResult, type LocalCompanyCreateStatus } from '../../../shared/contracts/localCompanyIntakeContract';
+import { accountEvidenceReceiptSchema, linkCompanyPersonRequestSchema, localCompanyDetailSchema, localCompanyResearchStatusSchema, selectedResearchSchema,
+  type LinkCompanyPersonRequest, type LocalCompanyDetail, type LocalCompanyResearchStatus, type SelectedResearch } from '../../../shared/contracts/localWorkspaceContract';
 import { z } from 'zod';
 import { researchLimitsSchema, type AccountResearchStore, type ResearchJob, type ResearchClaim } from '../../research/companyResearchTypes';
 import type { AppDatabase } from '../../db/database';
 import type { Clock } from '../support/clock';
 import type { IdGenerator } from '../support/idGenerator';
 import { accountClaimSchema, accountCreateSchema, accountEvidenceBatchSchema, accountIdSchema, accountInstantSchema,
-  accountLinkSchema, accountLinksCommandSchema, accountRouteSchema, accountSchema,
+  accountLinkSchema, accountLinksCommandSchema, accountRouteSchema, accountSchema, accountSourceSchema,
   type Account, type AccountEvidenceBatch, type AccountEvidenceReceipt, type AccountEvidenceSnapshot, type AccountLink, type AccountSource } from '../../../shared/contracts/accountContract';
 import { accountFingerprint, projectAccountEvidence } from './accountEvidence';
 
@@ -102,7 +104,7 @@ export class AccountRepository implements AccountResearchStore {
           || (job.state !== 'running' && job.receipt_command_id !== command.commandId)) throw new Error('Research claim fenced');
       }
       const replay = this.replay(command.commandId, fingerprint);
-      if (replay !== undefined) return { ...z.strictObject({ accountId: accountIdSchema, version: z.number().int().positive(), duplicate: z.boolean() }).parse(replay), duplicate: true };
+      if (replay !== undefined) return { ...accountEvidenceReceiptSchema.parse(replay), duplicate: true };
       const current = this.account(command.accountId);
       if (current.version !== command.expectedVersion) throw new Error('Stale account version');
       const at = this.now();
@@ -161,14 +163,40 @@ export class AccountRepository implements AccountResearchStore {
       for (const link of command.links) {
         this.requireEvidence(command.accountId, link.evidenceIds, at);
         if (link.kind === 'person_role') this.requireEvidence(command.accountId, link.authorityEvidenceIds, at);
-        this.raw.prepare(`INSERT INTO pm_account_links(id,account_id,kind,organization_id,person_id,property_id,relationship,role,authority,valid_from,valid_to,admitted_at)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(link.id, command.accountId, link.kind,
-          link.kind === 'organization' ? link.organizationId : null, link.kind === 'person_role' ? link.personId : null,
-          link.kind === 'property' ? link.propertyId : null, link.relationship, link.kind === 'person_role' ? link.role : null,
-          link.kind === 'person_role' ? link.authority : null, link.validFrom, link.validTo, at);
-        for (const source of link.evidenceIds) this.raw.prepare("INSERT INTO pm_account_link_evidence VALUES(?,?,?,'relationship')").run(command.accountId, link.id, source);
-        if (link.kind === 'person_role') for (const source of link.authorityEvidenceIds) this.raw.prepare("INSERT INTO pm_account_link_evidence VALUES(?,?,?,'authority')").run(command.accountId, link.id, source);
+        this.insertLink(command.accountId, link, at);
       }
+    });
+  }
+  private insertLink(accountId: string, link: AccountLink, at: string): void {
+    this.raw.prepare(`INSERT INTO pm_account_links(id,account_id,kind,organization_id,person_id,property_id,relationship,role,authority,valid_from,valid_to,admitted_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(link.id, accountId, link.kind,
+      link.kind === 'organization' ? link.organizationId : null, link.kind === 'person_role' ? link.personId : null,
+      link.kind === 'property' ? link.propertyId : null, link.relationship, link.kind === 'person_role' ? link.role : null,
+      link.kind === 'person_role' ? link.authority : null, link.validFrom, link.validTo, at);
+    for (const source of link.evidenceIds) this.raw.prepare("INSERT INTO pm_account_link_evidence VALUES(?,?,?,'relationship')").run(accountId, link.id, source);
+    if (link.kind === 'person_role') for (const source of link.authorityEvidenceIds) this.raw.prepare("INSERT INTO pm_account_link_evidence VALUES(?,?,?,'authority')").run(accountId, link.id, source);
+  }
+  admitReviewedPersonLink(input: LinkCompanyPersonRequest): AccountEvidenceReceipt {
+    const command = linkCompanyPersonRequestSchema.parse(input);
+    return this.mutate(command, 'reviewed_person_link', command, at => {
+      this.requireEvidence(command.accountId, command.link.evidenceIds, at);
+      if (command.link.validFrom > at) throw new Error('Future relationship validity');
+      const person = this.raw.prepare(`SELECT 1 FROM persons p WHERE p.id=?
+        AND p.deleted_at IS NULL AND p.opted_out=0
+        AND NOT EXISTS(SELECT 1 FROM opt_out_tombstones t WHERE t.person_id=p.id)`)
+        .get(command.link.personId);
+      if (!person) throw new Error('Person unavailable for reviewed relationship');
+      if (this.raw.prepare('SELECT 1 FROM pm_account_suppression_tombstones WHERE account_id=? LIMIT 1')
+        .get(command.accountId)) throw new Error('Account suppressed');
+      const quoted = new Set(command.sourceQuotes.map(item => item.sourceId));
+      if (quoted.size !== command.link.evidenceIds.length
+        || command.link.evidenceIds.some(id => !quoted.has(id))) throw new Error('Relationship evidence mismatch');
+      for (const item of command.sourceQuotes) {
+        const source = this.raw.prepare('SELECT excerpt FROM pm_account_sources WHERE account_id=? AND id=?')
+          .get(command.accountId, item.sourceId) as { excerpt: string } | undefined;
+        if (!item.quote.trim() || !source?.excerpt.includes(item.quote)) throw new Error('Relationship quote mismatch');
+      }
+      this.insertLink(command.accountId, command.link, at);
     });
   }
   listLinks(accountId: string, asOf: string): AccountLink[] {
@@ -204,6 +232,19 @@ export class AccountRepository implements AccountResearchStore {
       return projectAccountEvidence(account, claims, routes);
     });
   }
+  /** Complete selected evidence in one read snapshot, including a caller-owned transaction. */
+  readLocalCompanyDetail(accountId: string, asOf: string): LocalCompanyDetail {
+    accountIdSchema.parse(accountId); accountInstantSchema.parse(asOf);
+    return this.readSnapshot(() => {
+      const snapshot = this.snapshot(accountId, asOf);
+      if (snapshot.account.id !== accountId) throw new Error('Selected company identity mismatch');
+      const rows = this.raw.prepare(`SELECT id,url,fetched_at AS fetchedAt,sha256,excerpt,permitted
+        FROM pm_account_sources WHERE account_id=? AND admitted_at<=? ORDER BY id`).all(accountId, asOf) as Record<string, unknown>[];
+      const sources = rows.map(row => accountSourceSchema.parse({ ...row, permitted: z.literal(1).parse(row.permitted) === 1 }));
+      const links = this.listLinks(accountId, asOf);
+      return localCompanyDetailSchema.parse({ scope: 'local_database', generatedAt: asOf, snapshot, sources, links });
+    });
+  }
   enqueue(input: Parameters<AccountResearchStore['enqueue']>[0]): void {
     const parsed = z.strictObject({ commandId: z.uuid(), accountId: accountIdSchema, limits: researchLimitsSchema }).parse(input);
     const fingerprint = accountFingerprint({ accountId: parsed.accountId, limits: parsed.limits });
@@ -218,14 +259,71 @@ export class AccountRepository implements AccountResearchStore {
         VALUES(?,?,?,?,?,'queued',0,0,NULL,?,?)`).run(z.uuid().parse(this.deps.ids.next()), parsed.accountId, parsed.commandId, fingerprint, JSON.stringify(parsed.limits), at, at);
     });
   }
+  /** Observe selected durable work without claiming, parking, or settling it. */
+  readSelectedResearch(input: SelectedResearch): LocalCompanyResearchStatus {
+    const selected = selectedResearchSchema.parse(input);
+    return this.readSnapshot(() => this.selectedResearchStatus(selected));
+  }
+  /** SELECT-only helper shared by the read snapshot and the owning claim transaction. */
+  private selectedResearchStatus(selected: SelectedResearch): LocalCompanyResearchStatus {
+    const stored = this.raw.prepare('SELECT * FROM pm_account_research_jobs WHERE command_id=?').get(selected.commandId) as Record<string, unknown> | undefined;
+    // Detect command/account conflict before any mutation, even when capability is absent.
+    if (stored && stored.account_id !== selected.accountId) throw new Error('Research command account conflict');
+    this.account(selected.accountId);
+    if (!stored) return localCompanyResearchStatusSchema.parse({ ...selected, state: 'not_recorded', receipt: null, reason: null });
+    const row = z.strictObject({
+      id: z.uuid(), command_id: z.uuid(), account_id: accountIdSchema,
+      fingerprint: z.string().regex(/^[a-f0-9]{64}$/), limits_json: z.string(),
+      state: z.enum(['queued', 'running', 'completed', 'parked']),
+      attempt: z.number().int().min(0).max(3), claim_token: z.uuid().nullable(),
+      reserved_cost_micros: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      cost_micros: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+      receipt_command_id: z.uuid().nullable(), created_at: accountInstantSchema, updated_at: accountInstantSchema,
+    }).parse(stored);
+    const limits = researchLimitsSchema.parse(JSON.parse(row.limits_json));
+    if (row.command_id !== selected.commandId || row.fingerprint !== accountFingerprint({ accountId: selected.accountId, limits })
+      || (row.cost_micros !== null && row.cost_micros > row.reserved_cost_micros)
+      || (row.state === 'queued'
+        ? row.attempt !== 0 || row.claim_token !== null || row.reserved_cost_micros !== 0 || row.cost_micros !== null || row.receipt_command_id !== null
+        : row.attempt === 0 || row.claim_token === null || row.reserved_cost_micros !== limits.maxCostMicros)) {
+      throw new Error('Invalid selected research job');
+    }
+    let receipt: AccountEvidenceReceipt | null = null;
+    if (row.receipt_command_id !== null) {
+      if (row.receipt_command_id !== row.id || (row.state !== 'running' && row.state !== 'completed')) {
+        throw new Error('Invalid selected research receipt identity');
+      }
+      const command = this.raw.prepare('SELECT account_id,account_version,result_json FROM pm_account_commands WHERE command_id=? AND account_id=?')
+        .get(row.receipt_command_id, selected.accountId) as { account_id: string; account_version: number; result_json: string } | undefined;
+      if (!command) throw new Error('Research evidence receipt required');
+      receipt = accountEvidenceReceiptSchema.parse(JSON.parse(command.result_json));
+      // The receipt records its historical command version, not today's mutable account version.
+      if (command.account_id !== selected.accountId || receipt.accountId !== selected.accountId || receipt.version !== command.account_version) {
+        throw new Error('Invalid selected research receipt account or version');
+      }
+    } else if (row.state === 'completed') {
+      throw new Error('Research evidence receipt required');
+    }
+    return localCompanyResearchStatusSchema.parse({ ...selected, state: receipt ? 'completed' : row.state, receipt, reason: null });
+  }
+  claimSelected(asOf: string, input: SelectedResearch): ResearchJob | null {
+    return this.claimResearch(asOf, selectedResearchSchema.parse(input));
+  }
   claimNext(asOf: string): ResearchJob | null {
+    return this.claimResearch(asOf);
+  }
+  private claimResearch(asOf: string, selected?: SelectedResearch): ResearchJob | null {
     accountInstantSchema.parse(asOf);
     return this.atomic(() => {
+      if (selected) this.selectedResearchStatus(selected);
+      const scope = selected ? ' AND j.command_id=? AND j.account_id=?' : '';
+      const updateScope = selected ? ' AND command_id=? AND account_id=?' : '';
+      const scopeArgs = selected ? [selected.commandId, selected.accountId] : [];
       type Row = { id: string; account_id: string; limits_json: string; attempt: number; cost_micros: number | null; fingerprint: string };
       // id is the reserved evidence command identity. A committed receipt is
       // recovered even when budget was disabled after the request.
       const receipt = this.raw.prepare(`SELECT j.* FROM pm_account_research_jobs j JOIN pm_account_commands c ON c.command_id=j.receipt_command_id AND c.account_id=j.account_id
-        WHERE j.state='running' ORDER BY j.created_at,j.id LIMIT 1`).get() as Row | undefined;
+        WHERE j.state='running'${scope} ORDER BY j.created_at,j.id LIMIT 1`).get(...scopeArgs) as Row | undefined;
       const token = () => z.uuid().parse(this.deps.ids.next());
       const result = (row: Row, claimToken: string, receiptCommitted: boolean): ResearchJob => ({ id: row.id, accountId: row.account_id,
         limits: researchLimitsSchema.parse(JSON.parse(row.limits_json)), attempt: row.attempt, claimToken,
@@ -241,14 +339,14 @@ export class AccountRepository implements AccountResearchStore {
       if (!Number.isSafeInteger(lease) || lease < 60000) throw new Error('Research lease invalid');
       const expired = new Date(Date.parse(asOf) - lease).toISOString();
       // Never repeat an ambiguous external request. Its unknown cost remains reserved.
-      this.raw.prepare("UPDATE pm_account_research_jobs SET state='parked',updated_at=? WHERE state='running' AND updated_at<=?").run(asOf, expired);
+      this.raw.prepare(`UPDATE pm_account_research_jobs SET state='parked',updated_at=? WHERE state='running' AND updated_at<=?${updateScope}`).run(asOf, expired, ...scopeArgs);
       const spent = this.raw.prepare('SELECT COALESCE(SUM(COALESCE(cost_micros,reserved_cost_micros)),0) AS total FROM pm_account_research_jobs').get() as { total: number };
       // Select the oldest eligible job, not just the oldest job. Expensive or
       // exhausted work stays queued without releasing any uncertain reservation.
       const row = this.raw.prepare(`SELECT j.* FROM pm_account_research_jobs j WHERE j.state='queued'
         AND json_extract(j.limits_json,'$.maxCostMicros')<=?
-        AND (SELECT COUNT(*) FROM pm_account_research_jobs prior WHERE prior.fingerprint=j.fingerprint AND prior.attempt>0)<3
-        ORDER BY j.created_at,j.id LIMIT 1`).get(config.maxBudgetMicros - spent.total) as Row | undefined;
+        AND (SELECT COUNT(*) FROM pm_account_research_jobs prior WHERE prior.fingerprint=j.fingerprint AND prior.attempt>0)<3${scope}
+        ORDER BY j.created_at,j.id LIMIT 1`).get(config.maxBudgetMicros - spent.total, ...scopeArgs) as Row | undefined;
       if (!row) return null;
       const limits = researchLimitsSchema.parse(JSON.parse(row.limits_json));
       if (spent.total + limits.maxCostMicros > config.maxBudgetMicros) return null;

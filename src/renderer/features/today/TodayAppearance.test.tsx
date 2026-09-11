@@ -1,4 +1,5 @@
 import { PresentationRoot } from '../../app/PresentationRoot';
+import { firstUseFixture } from './nativeDesk.fixture';
 import { readFileSync } from 'node:fs';
 
 import { chromium, type Browser } from 'playwright';
@@ -51,7 +52,7 @@ it.each(['light', 'dark'])('keeps the actual Today weekday at small-text contras
   const page = await browser.newPage();
   try {
     await page.setContent(`<html data-theme="${theme}"><head><style>${css}</style></head><body>${renderToStaticMarkup(
-      <TodayRoute api={api} onOpenLead={noOp} />,
+      <TodayRoute onOpenImport={(): void => undefined} firstUse={firstUseFixture()} api={api} onOpenLead={noOp} />,
     )}</body></html>`);
     const weekday = page.locator('.today-header__date span');
     expect(await weekday.textContent()).toBe(new Date().toLocaleDateString(undefined, { weekday: 'short' }));
