@@ -228,7 +228,7 @@ export function nativeDeskFixture(initial = dailyFixture()) {
       getCompany: async input => { record('localWorkspace.getCompany', input); throw Error('Selected company detail unavailable in this fixture'); },
       researchCompany: async () => { record('localWorkspace.researchCompany'); throw Error('Selected company research unavailable in this fixture'); },
       getCompanyResearchStatus: async () => { record('localWorkspace.getCompanyResearchStatus'); throw Error('Selected company research unavailable in this fixture'); },
-      linkCompanyPerson: async input => { record('localWorkspace.linkCompanyPerson', input); throw Error('Reviewed company link unavailable in this fixture'); },
+      getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: async input => { record('localWorkspace.linkCompanyPerson', input); throw Error('Reviewed company link unavailable in this fixture'); },
       getCommitments: async () => { record('localWorkspace.getCommitments'); return structuredClone(retained); },
       reviewCompany: async () => { record('localWorkspace.reviewCompany'); throw Error('Company intake unavailable in this fixture'); },
       createCompany: async () => { record('localWorkspace.createCompany'); throw Error('Company intake unavailable in this fixture'); },

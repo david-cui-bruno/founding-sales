@@ -1,5 +1,5 @@
 import { localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema } from '../../shared/contracts/localCompanyIntakeContract';
-import { linkCompanyPersonRequestSchema, accountEvidenceReceiptSchema, localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, selectedResearchSchema, localCompanyResearchStatusSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
+import { meetingFirstAccountCallSettingsSchema, updateCallSettingsRequestSchema, callSettingsUpdateReplySchema, linkCompanyPersonRequestSchema, accountEvidenceReceiptSchema, localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, selectedResearchSchema, localCompanyResearchStatusSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
 export function registerLocalWorkspaceIpc(provider: LocalWorkspaceApi, isTrustedRendererUrl?: (url: string) => boolean): () => void {
   const disposers: (() => void)[] = [];
@@ -50,6 +50,11 @@ export function registerLocalWorkspaceIpc(provider: LocalWorkspaceApi, isTrusted
       const result = accountEvidenceReceiptSchema.parse(await provider.linkCompanyPerson(parsed));
       if (result.accountId !== parsed.accountId) throw new Error('LOCAL_COMPANY_PERSON_LINK_IDENTITY_MISMATCH');
       return result;
+    } }));
+    disposers.push(registerValidatedIpc({ channel: 'local-workspace:get-call-settings', requestSchema: null, responseSchema: meetingFirstAccountCallSettingsSchema, safeErrorCode: 'LOCAL_CALL_SETTINGS_READ_FAILED', handler: () => provider.getCallSettings(), isTrustedRendererUrl }));
+    disposers.push(registerValidatedIpc({ channel: 'local-workspace:update-call-settings', requestSchema: updateCallSettingsRequestSchema, responseSchema: meetingFirstAccountCallSettingsSchema, safeErrorCode: 'LOCAL_CALL_SETTINGS_UPDATE_FAILED', isTrustedRendererUrl, handler: async input => {
+      const parsed = Object.freeze(updateCallSettingsRequestSchema.parse(input));
+      return callSettingsUpdateReplySchema(parsed).parse(await provider.updateCallSettings(parsed));
     } }));
   } catch (error) {
     const errors = cleanup();

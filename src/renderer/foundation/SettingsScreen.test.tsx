@@ -551,7 +551,7 @@ describe('Local workflow transition', () => {
   function localApi() {
     const snapshot: import('../../shared/contracts/localWorkspaceContract').LocalWorkspaceSnapshot = { scope: 'local_database', generatedAt: receipt.occurredAt, workflowMode: 'legacy', transitionReceipt: null, accounts: { state: 'available', snapshots: [] } };
     const unavailableCompanyIntake = async () => { throw Error('Company intake unavailable in this fixture'); };
-    return { get: vi.fn(async () => snapshot), getCompany: vi.fn(async () => { throw Error('Selected company detail unavailable in this fixture'); }), researchCompany: vi.fn(unavailableCompanyIntake), getCompanyResearchStatus: vi.fn(unavailableCompanyIntake), linkCompanyPerson: vi.fn(unavailableCompanyIntake), getCommitments: vi.fn(), reviewCompany: vi.fn(unavailableCompanyIntake), createCompany: vi.fn(unavailableCompanyIntake), getCompanyCreateStatus: vi.fn(unavailableCompanyIntake), transition: vi.fn(async (command: import('../../shared/contracts/localWorkspaceContract').LocalWorkflowTransition) => ({ ...receipt, commandId: command.commandId, manifestId: command.manifestId })) };
+    return { get: vi.fn(async () => snapshot), getCompany: vi.fn(async () => { throw Error('Selected company detail unavailable in this fixture'); }), researchCompany: vi.fn(unavailableCompanyIntake), getCompanyResearchStatus: vi.fn(unavailableCompanyIntake), getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: vi.fn(unavailableCompanyIntake), getCommitments: vi.fn(), reviewCompany: vi.fn(unavailableCompanyIntake), createCompany: vi.fn(unavailableCompanyIntake), getCompanyCreateStatus: vi.fn(unavailableCompanyIntake), transition: vi.fn(async (command: import('../../shared/contracts/localWorkspaceContract').LocalWorkflowTransition) => ({ ...receipt, commandId: command.commandId, manifestId: command.manifestId })) };
   }
   async function open(api = localApi()) {
     const view = renderSettings({ localWorkspaceApi: api });
@@ -789,16 +789,15 @@ describe('Task8 real Settings destination integration', () => {
     expect(sessionStorage.getItem(task8Key)).toBeNull(); view.unmount(); task8Settings(); task8Active('Diagnostics');
   }), 10_000);
 
-  it.each(['nonsense', '', 'call-capacity'] as const)('clears invalid or unimplemented initial intent %s and defaults Diagnostics', async value => task8Isolated(async () => {
+  it.each(['nonsense', ''] as const)('clears invalid or unimplemented initial intent %s and defaults Diagnostics', async value => task8Isolated(async () => {
     sessionStorage.setItem(task8Key, value); task8Settings(task8Phone()); task8Active('Diagnostics');
     expect(sessionStorage.getItem(task8Key)).toBeNull();
     expect(screen.queryByRole('region', { name: 'Worker connection' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Call capacity' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Call capacity' })).toBeNull();
   }), 10_000);
 
   it.each([
     { name: 'unknown', detail: 'nonsense' }, { name: 'empty', detail: '' },
-    { name: 'future capacity', detail: 'call-capacity' },
     { name: 'object', detail: { section: 'phone' } }, { name: 'null', detail: null }, { name: 'plain Event', detail: undefined },
   ])('invalid mounted $name retains active section and clears storage', async ({ detail }) => task8Isolated(async () => {
     const api = task8Phone(); task8Settings(api); fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
@@ -808,7 +807,7 @@ describe('Task8 real Settings destination integration', () => {
   }), 10_000);
 
   it.each([
-    ['appearance', 'Appearance'], ['data', 'Data & storage'], ['sourcing', 'Sourcing'],
+    ['call-capacity', 'Call capacity'], ['appearance', 'Appearance'], ['data', 'Data & storage'], ['sourcing', 'Sourcing'],
     ['diagnostics', 'Diagnostics'], ['shortcuts', 'Keyboard shortcuts'], ['about', 'About'], ['connections', 'Connections'],
   ] as const)('implemented %s remains selectable through validated event and rail', async (id, label) => task8Isolated(async () => {
     sessionStorage.setItem(task8Key, id);
@@ -1205,3 +1204,52 @@ it('S10 old unmounted Pair finally cannot clear or unlock a new real-route pendi
     f.assertNoActivation();
   } finally { await task9Settle(old); await task9Settle(fresh); }
 }), 10_000);
+
+import { NativeDeskRoute } from '../features/today/NativeDeskRoute';
+import type { MeetingFirstAccountCallSettings, UpdateCallSettingsRequest } from '../../shared/contracts/localWorkspaceContract';
+import { openSettingsSection } from './settingsNavigation';
+describe('Call capacity Settings integration', () => {
+  it('uses stored intent, mounted helper and rail, and keeps the same editor on a confirmed save', async () => {
+    const native = nativeDeskFixture();
+    let stored: MeetingFirstAccountCallSettings = { newCallSlots: null, totalCallCapacity: null, revision: 0, updatedAt: '2026-09-11T12:00:00.000Z' };
+    native.api.localWorkspace.getCallSettings = vi.fn(async () => stored);
+    native.api.localWorkspace.updateCallSettings = vi.fn(async input => stored = { newCallSlots: input.newCallSlots, totalCallCapacity: input.totalCallCapacity, revision: input.expectedRevision + 1, updatedAt: stored.updatedAt });
+    const event = vi.fn(); window.addEventListener('callie:workflow-changed', event);
+    sessionStorage.setItem('callie.settings.section', 'call-capacity');
+    try {
+      renderSettings({ localWorkspaceApi: native.api.localWorkspace });
+      await waitFor(() => expect((screen.getByRole('button', { name: 'Save call capacity' }) as HTMLButtonElement).disabled).toBe(false));
+      const editor = screen.getByRole('region', { name: 'Call capacity' });
+      fireEvent.click(screen.getByRole('button', { name: 'Save call capacity' })); await screen.findByText('Call capacity saved.');
+      expect(event).toHaveBeenCalledTimes(1); expect(screen.getByRole('region', { name: 'Call capacity' })).toBe(editor);
+      fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' })); expect(screen.queryByRole('region', { name: 'Call capacity' })).toBeNull();
+      act(() => openSettingsSection('call-capacity')); await screen.findByRole('region', { name: 'Call capacity' });
+      fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' })); fireEvent.click(screen.getByRole('button', { name: 'Call capacity' }));
+      await waitFor(() => expect(native.api.localWorkspace.getCallSettings).toHaveBeenCalledTimes(3)); expect(event).toHaveBeenCalledTimes(1);
+    } finally { window.removeEventListener('callie:workflow-changed', event); sessionStorage.removeItem('callie.settings.section'); }
+  });
+  it('simultaneous receiver: actual Settings event refreshes mounted NativeDesk Daily, overview and commitments without remount', async () => {
+    const native = nativeDeskFixture(dailyFixture({ answers: [] }));
+    let stored: MeetingFirstAccountCallSettings = { newCallSlots: null, totalCallCapacity: null, revision: 0, updatedAt: '2026-09-11T12:00:00.000Z' };
+    native.api.localWorkspace.getCallSettings = async () => stored;
+    native.api.localWorkspace.updateCallSettings = async (input: UpdateCallSettingsRequest) => {
+      stored = { newCallSlots: input.newCallSlots, totalCallCapacity: input.totalCallCapacity, revision: input.expectedRevision + 1, updatedAt: stored.updatedAt };
+      native.setSnapshot(dailyFixture({ answers: [], callSettings: { newCallSlots: stored.newCallSlots, totalCallCapacity: stored.totalCallCapacity } })); return stored;
+    };
+    render(<PresentationRoot><SettingsScreen state={{ status: 'ready', health }} onRetry={vi.fn()} theme={theme} density={density} localWorkspaceApi={native.api.localWorkspace} />
+      <NativeDeskRoute api={native.api} firstUse={firstUseFixture()} onOpenLead={vi.fn()} onOpenImport={vi.fn()} /></PresentationRoot>);
+    await screen.findByRole('button', { name: 'Call · Account A' });
+    const count = (method: string) => native.calls.filter(call => call.method === method).length;
+    const before = ['daily.get', 'localWorkspace.get', 'localWorkspace.getCommitments'].map(count);
+    fireEvent.click(screen.getByRole('button', { name: 'Call capacity' }));
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Save call capacity' }) as HTMLButtonElement).disabled).toBe(false));
+    const editor = screen.getByRole('region', { name: 'Call capacity' });
+    fireEvent.change(within(editor).getByLabelText('New call slots configuration'), { target: { value: 'number' } });
+    fireEvent.change(within(editor).getByLabelText('New call slots'), { target: { value: '0' } });
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save call capacity' }));
+    await screen.findByText('Call capacity saved.');
+    await waitFor(() => expect(['daily.get', 'localWorkspace.get', 'localWorkspace.getCommitments'].map(count)).toEqual(before.map(n => n + 1)));
+    expect(screen.getByRole('region', { name: 'Call capacity' })).toBe(editor);
+    expect(screen.getByText(/New-call slots:/).textContent).toContain('New-call slots: 0');
+  });
+});

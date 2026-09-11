@@ -5,6 +5,20 @@ import { dailyAccountSchema } from './dailyContract';
 import { todayItemSchema } from './todayContract';
 const id = z.string().min(1);
 const counter = z.number().int().nonnegative().safe();
+export const meetingFirstAccountCallSettingsSchema = z.strictObject({
+  newCallSlots: counter.nullable(), totalCallCapacity: counter.nullable(),
+  revision: counter, updatedAt: accountInstantSchema,
+}).transform(row => ({ newCallSlots: row.newCallSlots, totalCallCapacity: row.totalCallCapacity, revision: row.revision, updatedAt: row.updatedAt }));
+export const updateCallSettingsRequestSchema = z.strictObject({
+  expectedRevision: counter, newCallSlots: counter.nullable(), totalCallCapacity: counter.nullable(),
+}).transform(row => ({ expectedRevision: row.expectedRevision, newCallSlots: row.newCallSlots, totalCallCapacity: row.totalCallCapacity }));
+export type MeetingFirstAccountCallSettings = Readonly<{ newCallSlots: number | null; totalCallCapacity: number | null; revision: number; updatedAt: string }>;
+export type UpdateCallSettingsRequest = Readonly<{ expectedRevision: number; newCallSlots: number | null; totalCallCapacity: number | null }>;
+export const callSettingsUpdateReplySchema = (input: UpdateCallSettingsRequest) =>
+  meetingFirstAccountCallSettingsSchema.refine(result => input.expectedRevision < Number.MAX_SAFE_INTEGER
+    && result.revision === input.expectedRevision + 1
+    && result.newCallSlots === input.newCallSlots && result.totalCallCapacity === input.totalCallCapacity,
+  'Call settings update mismatch');
 export const selectedCompanySchema = z.strictObject({ accountId: accountIdSchema });
 export const selectedResearchSchema = z.strictObject({ commandId: z.uuid(), accountId: accountIdSchema });
 export const accountEvidenceReceiptSchema = z.strictObject({
@@ -87,6 +101,8 @@ export type LocalWorkflowReceipt = z.infer<typeof localWorkflowReceiptSchema>;
 export type LocalWorkspaceSnapshot = z.infer<typeof localWorkspaceSnapshotSchema>;
 export type LocalCommitmentsSnapshot = z.infer<typeof localCommitmentsSnapshotSchema>;
 export interface LocalWorkspaceApi {
+  getCallSettings(): Promise<MeetingFirstAccountCallSettings>;
+  updateCallSettings(input: UpdateCallSettingsRequest): Promise<MeetingFirstAccountCallSettings>;
   linkCompanyPerson(input: LinkCompanyPersonRequest): Promise<AccountEvidenceReceipt>;
   researchCompany(input: SelectedResearch): Promise<LocalCompanyResearchStatus>;
   getCompanyResearchStatus(input: SelectedResearch): Promise<LocalCompanyResearchStatus>;

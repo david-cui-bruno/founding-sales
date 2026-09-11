@@ -1,4 +1,4 @@
-import { selectedCompanySchema, localCompanyDetailSchema, type LocalWorkspaceSnapshot, type LocalCommitmentsSnapshot, type LocalWorkflowReceipt, type LocalCompanyDetail, type SelectedCompany, type SelectedResearch, type LocalCompanyResearchStatus, type LinkCompanyPersonRequest } from '../../src/shared/contracts/localWorkspaceContract';
+import { meetingFirstAccountCallSettingsSchema, updateCallSettingsRequestSchema, type MeetingFirstAccountCallSettings, type UpdateCallSettingsRequest, selectedCompanySchema, localCompanyDetailSchema, type LocalWorkspaceSnapshot, type LocalCommitmentsSnapshot, type LocalWorkflowReceipt, type LocalCompanyDetail, type SelectedCompany, type SelectedResearch, type LocalCompanyResearchStatus, type LinkCompanyPersonRequest } from '../../src/shared/contracts/localWorkspaceContract';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const electron = vi.hoisted(() => ({ handle: vi.fn(), removeHandler: vi.fn() }));
 vi.mock('electron', () => ({ ipcMain: electron }));
@@ -12,12 +12,12 @@ const command = { commandId: 'cmd', manifestId: 'manifest', expectedMode: 'legac
 const receipt: LocalWorkflowReceipt = { commandId: 'cmd', manifestId: 'manifest', mode: 'meeting_first' as const, revision: 1, occurredAt: snapshot.generatedAt, cancelledActionIds: [], stoppedEnrollmentIds: [], preservedActionIds: [], parkedPersonIds: [], callbackEvidenceIds: [], unknownDraftIds: [], parkedReviewActions: [], parkedActions: [] };
 const trusted = { senderFrame: { url: 'callie://app/index.html' } };
 const unavailableCompany = async (): Promise<never> => { throw new Error('Company fixture unavailable'); };
-const provider = { linkCompanyPerson: unavailableCompany, researchCompany: unavailableCompany, getCompanyResearchStatus: unavailableCompany, getCompany: unavailableCompany, get: async () => snapshot, getCommitments: async () => feed, transition: async () => receipt, reviewCompany: unavailableCompany, createCompany: unavailableCompany, getCompanyCreateStatus: unavailableCompany };
+const provider = { getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: unavailableCompany, researchCompany: unavailableCompany, getCompanyResearchStatus: unavailableCompany, getCompany: unavailableCompany, get: async () => snapshot, getCommitments: async () => feed, transition: async () => receipt, reviewCompany: unavailableCompany, createCompany: unavailableCompany, getCompanyCreateStatus: unavailableCompany };
 beforeEach(() => vi.clearAllMocks());
 describe('local workspace bridge', () => {
   it('roundtrips the frozen API and rejects arity, caller scope, and untrusted senders', async () => {
     const remove = registerLocalWorkspaceIpc(provider);
-    expect(electron.handle).toHaveBeenCalledTimes(10);
+    expect(electron.handle).toHaveBeenCalledTimes(12);
     const api = createLocalWorkspaceApi(createIpcClient({ invoke: async (channel, ...args) => registeredIpcHandler(electron.handle, channel)(trusted, ...args) }));
     expect(await api.get()).toEqual(snapshot); expect(await api.getCommitments()).toEqual(feed); expect(await api.transition(command)).toEqual(receipt);
     for (const channel of ['local-workspace:get', 'local-workspace:get-commitments']) {
@@ -27,7 +27,7 @@ describe('local workspace bridge', () => {
     }
     const transition = registeredIpcHandler(electron.handle, 'local-workspace:transition');
     for (const args of [[], [command, command], [{ ...command, workspaceId: 'invented' }], [{ ...command, expectedMode: 'meeting_first' }]]) await expect(transition(trusted, ...args)).rejects.toThrow();
-    remove(); remove(); expect(electron.removeHandler.mock.calls.map(c => c[0])).toEqual(['local-workspace:link-company-person', 'local-workspace:company-research-status', 'local-workspace:research-company', 'local-workspace:get-company', 'local-workspace:company-create-status', 'local-workspace:create-company', 'local-workspace:review-company', 'local-workspace:transition', 'local-workspace:get-commitments', 'local-workspace:get']);
+    remove(); remove(); expect(electron.removeHandler.mock.calls.map(c => c[0])).toEqual(['local-workspace:update-call-settings', 'local-workspace:get-call-settings', 'local-workspace:link-company-person', 'local-workspace:company-research-status', 'local-workspace:research-company', 'local-workspace:get-company', 'local-workspace:company-create-status', 'local-workspace:create-company', 'local-workspace:review-company', 'local-workspace:transition', 'local-workspace:get-commitments', 'local-workspace:get']);
   });
   it('rolls partial registration back and validates inbound responses', async () => {
     electron.handle.mockImplementationOnce(() => undefined).mockImplementationOnce(() => { throw new Error('registration'); });
@@ -272,7 +272,7 @@ describe('Task 1 selected company public boundaries', () => {
     } finally { remove(); }
   });
 
-  it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])('rolls back all successful local registrations when handler %s fails', nth => {
+  it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])('rolls back all successful local registrations when handler %s fails', nth => {
     const active = new Set<string>();
     const registered: string[] = [];
     let calls = 0;
@@ -452,7 +452,7 @@ describe('Task 3 strict selected research IPC', () => {
       }
       remove(); remove();
       expect(electron.removeHandler.mock.calls.map(call => call[0])).toEqual([
-        'local-workspace:link-company-person', ...[...researchChannels].reverse(), 'local-workspace:get-company', 'local-workspace:company-create-status',
+        'local-workspace:update-call-settings', 'local-workspace:get-call-settings', 'local-workspace:link-company-person', ...[...researchChannels].reverse(), 'local-workspace:get-company', 'local-workspace:company-create-status',
         'local-workspace:create-company', 'local-workspace:review-company', 'local-workspace:transition',
         'local-workspace:get-commitments', 'local-workspace:get',
       ]);
@@ -708,7 +708,7 @@ describe('Task 5 public reviewed relationship boundaries', () => {
       expect(names.filter(name => name === task5Channel)).toEqual([task5Channel]);
       expect(names.filter(name => name !== task5Channel)).toEqual(['local-workspace:get', 'local-workspace:get-commitments',
         'local-workspace:transition', 'local-workspace:review-company', 'local-workspace:create-company',
-        'local-workspace:company-create-status', 'local-workspace:get-company', 'local-workspace:research-company', 'local-workspace:company-research-status']);
+        'local-workspace:company-create-status', 'local-workspace:get-company', 'local-workspace:research-company', 'local-workspace:company-research-status', 'local-workspace:get-call-settings', 'local-workspace:update-call-settings']);
     } finally { remove(); }
     expect(electron.removeHandler.mock.calls.filter(call => call[0] === task5Channel)).toHaveLength(1);
   });
@@ -930,4 +930,88 @@ describe('Task 5 real Foundation importer/provider integration', () => {
       }
     }
   }, 5000);
+});
+
+const callInitial: MeetingFirstAccountCallSettings = { newCallSlots: null, totalCallCapacity: null, revision: 0, updatedAt: '2026-09-11T12:00:00.000Z' };
+const callUpdate: UpdateCallSettingsRequest = { expectedRevision: 0, newCallSlots: 0, totalCallCapacity: null };
+const callReply = { ...callInitial, newCallSlots: 0, revision: 1 };
+describe('Call capacity strict boundaries (pure)', () => {
+  it('roundtrips exactly two appended channels and independent null/zero values', async () => {
+    const updateCallSettings = vi.fn(async () => callReply);
+    const remove = registerLocalWorkspaceIpc({ ...provider, getCallSettings: async () => callInitial, updateCallSettings });
+    try {
+      expect(electron.handle.mock.calls.slice(-2).map(c => c[0])).toEqual(['local-workspace:get-call-settings', 'local-workspace:update-call-settings']);
+      const api = createLocalWorkspaceApi(createIpcClient({ invoke: async (channel, ...args) => registeredIpcHandler(electron.handle, channel)(trusted, ...args) }));
+      expect(await api.getCallSettings()).toEqual(callInitial); expect(await api.updateCallSettings(callUpdate)).toEqual(callReply); expect(updateCallSettings).toHaveBeenCalledWith(callUpdate);
+      expect(updateCallSettingsRequestSchema.parse({ expectedRevision: 0, newCallSlots: 9, totalCallCapacity: 0 })).toEqual({ expectedRevision: 0, newCallSlots: 9, totalCallCapacity: 0 });
+    } finally { remove(); }
+  });
+  it('rejects malformed requests before provider or transport, including unsafe integers and caller timestamps', async () => {
+    const updateCallSettings = vi.fn(async () => callReply); const getCallSettings = vi.fn(async () => callInitial);
+    const remove = registerLocalWorkspaceIpc({ ...provider, getCallSettings, updateCallSettings });
+    try {
+      const handler = registeredIpcHandler(electron.handle, 'local-workspace:update-call-settings');
+      const invoke = vi.fn(async () => callReply); const api = createLocalWorkspaceApi(createIpcClient({ invoke }));
+      const invalid = [undefined, null, {}, { expectedRevision: 0, newCallSlots: 0 }, ...[-1, 1.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1, '0'].map(newCallSlots => ({ ...callUpdate, newCallSlots })),
+        { ...callUpdate, totalCallCapacity: -1 }, { ...callUpdate, expectedRevision: Number.MAX_SAFE_INTEGER + 1 }, { ...callUpdate, updatedAt: callInitial.updatedAt }, { ...callUpdate, commandId: 'x' }, { ...callUpdate, workspaceId: 'x' }];
+      for (const input of invalid) {
+        await expect(api.updateCallSettings(input as UpdateCallSettingsRequest)).rejects.toThrow();
+        await expect(handler(trusted, input)).rejects.toThrow(/^LOCAL_CALL_SETTINGS_UPDATE_FAILED$/);
+      }
+      await expect(handler(trusted)).rejects.toThrow(); await expect(handler(trusted, callUpdate, callUpdate)).rejects.toThrow();
+      await expect(handler({ senderFrame: { url: 'https://evil.invalid' } }, callUpdate)).rejects.toThrow();
+      const get = registeredIpcHandler(electron.handle, 'local-workspace:get-call-settings');
+      await expect(get(trusted, undefined)).rejects.toThrow(); await expect(get({ senderFrame: { url: 'https://evil.invalid' } })).rejects.toThrow();
+      expect(getCallSettings).not.toHaveBeenCalled(); expect(updateCallSettings).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled();
+    } finally { remove(); }
+  });
+  it('binds exact revision and submitted values at both ends, rejecting malformed settings and redacting failures', async () => {
+    for (const reply of [{ ...callReply, revision: 2 }, { ...callReply, newCallSlots: null }, { ...callReply, totalCallCapacity: 0 }, { ...callReply, updatedAt: '2026-09-11T12:00:00Z' }, { ...callReply, extra: true }, { ...callReply, revision: Number.MAX_SAFE_INTEGER + 1 }]) {
+      electron.handle.mockClear();
+      const remove = registerLocalWorkspaceIpc({ ...provider, updateCallSettings: async () => reply });
+      try {
+        await expect(registeredIpcHandler(electron.handle, 'local-workspace:update-call-settings')(trusted, callUpdate)).rejects.toThrow(/^LOCAL_CALL_SETTINGS_UPDATE_FAILED$/);
+        const api = createLocalWorkspaceApi(createIpcClient({ invoke: async () => reply })); await expect(api.updateCallSettings(callUpdate)).rejects.toThrow();
+      } finally { remove(); }
+    }
+    expect(meetingFirstAccountCallSettingsSchema.safeParse({ ...callInitial, newCallSlots: undefined }).success).toBe(false);
+    electron.handle.mockClear(); const remove = registerLocalWorkspaceIpc({ ...provider, getCallSettings: async () => { throw Error('/private/database'); } });
+    try { await expect(registeredIpcHandler(electron.handle, 'local-workspace:get-call-settings')(trusted)).rejects.toThrow(/^LOCAL_CALL_SETTINGS_READ_FAILED$/); } finally { remove(); }
+  });
+  it('freezes caller values before awaiting transport and provider replies', async () => {
+    let resolve!: (result: MeetingFirstAccountCallSettings) => void;
+    const request = { ...callUpdate }; const invoke = vi.fn(() => new Promise<MeetingFirstAccountCallSettings>(done => { resolve = done; }));
+    const api = createLocalWorkspaceApi(createIpcClient({ invoke })); const saving = api.updateCallSettings(request);
+    request.newCallSlots = 9; request.expectedRevision = 7; resolve(callReply); expect(await saving).toEqual(callReply);
+    expect(invoke).toHaveBeenCalledWith('local-workspace:update-call-settings', callUpdate);
+    const updateCallSettings = vi.fn(() => new Promise<MeetingFirstAccountCallSettings>(done => { resolve = done; }));
+    const remove = registerLocalWorkspaceIpc({ ...provider, updateCallSettings });
+    try {
+      const source = { ...callUpdate }; const pending = registeredIpcHandler(electron.handle, 'local-workspace:update-call-settings')(trusted, source);
+      source.newCallSlots = 5; resolve(callReply); expect(await pending).toEqual(callReply); expect(updateCallSettings).toHaveBeenCalledWith(callUpdate);
+    } finally { remove(); }
+  });
+});
+
+describe('Call capacity real Foundation stack (native)', () => {
+  it('commits through preload, registrar, provider and matching facade, keeps lost delivery unknown and refuses shutdown', async () => {
+    const f = lifetimeFixture(); const remove = registerLocalWorkspaceIpc(f.provider); let loseDelivery = false;
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      const result = await registeredIpcHandler(electron.handle, channel)(trusted, ...args);
+      if (loseDelivery && channel === 'local-workspace:update-call-settings') throw Error('Lost response after commit');
+      return result;
+    });
+    const api = createLocalWorkspaceApi(createIpcClient({ invoke }));
+    try {
+      const initial = await api.getCallSettings(); expect(initial).toMatchObject({ revision: 0, newCallSlots: null, totalCallCapacity: null });
+      const started = Date.now(); const saved = await api.updateCallSettings(callUpdate);
+      expect(saved).toMatchObject({ revision: 1, newCallSlots: 0, totalCallCapacity: null }); expect(Date.parse(saved.updatedAt)).toBeGreaterThanOrEqual(started); expect(Date.parse(saved.updatedAt)).toBeLessThanOrEqual(Date.now());
+      await expect(api.updateCallSettings(callUpdate)).rejects.toThrow('LOCAL_CALL_SETTINGS_UPDATE_FAILED'); expect(await api.getCallSettings()).toEqual(saved);
+      loseDelivery = true;
+      await expect(api.updateCallSettings({ expectedRevision: 1, newCallSlots: null, totalCallCapacity: 0 })).rejects.toThrow('Lost response');
+      expect(await api.getCallSettings()).toMatchObject({ revision: 2, newCallSlots: null, totalCallCapacity: 0 });
+      expect(invoke.mock.calls.filter(c => c[0] === 'local-workspace:update-call-settings')).toHaveLength(3);
+      await f.runtime.shutdown(); await expect(api.getCallSettings()).rejects.toThrow('LOCAL_CALL_SETTINGS_READ_FAILED');
+    } finally { remove(); await f.close(); }
+  });
 });

@@ -1,3 +1,5 @@
+import { meetingFirstAccountCallSettingsSchema, type MeetingFirstAccountCallSettings } from '../../../shared/contracts/localWorkspaceContract';
+export type { MeetingFirstAccountCallSettings } from '../../../shared/contracts/localWorkspaceContract';
 import { z } from 'zod';
 
 import type { AppDatabase } from '../../db/database';
@@ -37,13 +39,6 @@ export type WorkspaceSettings = Readonly<{
   resurfaceSuppressionDays: number;
   activePrioritizationRuleVersionId: string | null;
   createdAt: string;
-  updatedAt: string;
-}>;
-
-export type MeetingFirstAccountCallSettings = Readonly<{
-  newCallSlots: number | null;
-  totalCallCapacity: number | null;
-  revision: number;
   updatedAt: string;
 }>;
 
@@ -113,12 +108,7 @@ export class WorkspaceSettingsRepository {
              updated_at AS updatedAt
       FROM meeting_first_call_settings WHERE singleton = 1
     `).get() as { newCallSlots: number | null; totalCallCapacity: number | null; revision: number; updatedAt: string } | undefined;
-    const parsed = z.object({
-      newCallSlots: z.number().int().nonnegative().nullable(),
-      totalCallCapacity: z.number().int().nonnegative().nullable(),
-      revision: z.number().int().nonnegative(),
-      updatedAt: utcTimestampSchema,
-    }).strict().safeParse(row);
+    const parsed = meetingFirstAccountCallSettingsSchema.safeParse(row);
     if (!parsed.success) throw new WorkspaceSettingsCorruptionError('Meeting-first account call settings are malformed.');
     return Object.freeze({
       newCallSlots: parsed.data.newCallSlots,
@@ -135,12 +125,15 @@ export class WorkspaceSettingsRepository {
     updatedAt: string;
   }): MeetingFirstAccountCallSettings {
     this.unitOfWork.assertWriteScope();
-    const parsed = z.object({
-      expectedRevision: z.number().int().nonnegative(),
-      newCallSlots: z.number().int().nonnegative().nullable(),
-      totalCallCapacity: z.number().int().nonnegative().nullable(),
-      updatedAt: utcTimestampSchema,
-    }).strict().parse(input);
+    const parsed = z.strictObject({
+      expectedRevision: z.number().int().nonnegative().safe(),
+      newCallSlots: z.number().int().nonnegative().safe().nullable(),
+      totalCallCapacity: z.number().int().nonnegative().safe().nullable(),
+      updatedAt: z.iso.datetime({ precision: 3 }),
+    }).parse(input);
+    if (parsed.expectedRevision === Number.MAX_SAFE_INTEGER) {
+      throw new WorkspaceSettingsCorruptionError('Call settings revision exhausted.');
+    }
     const result = this.database.raw.prepare(`
       UPDATE meeting_first_call_settings
       SET new_call_slots = ?, total_call_capacity = ?, revision = revision + 1, updated_at = ?

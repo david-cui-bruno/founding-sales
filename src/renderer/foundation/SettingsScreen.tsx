@@ -1,3 +1,4 @@
+import { CallCapacitySection } from './CallCapacitySection';
 import type { LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import { WorkflowSection } from './WorkflowSection';
 import type { RecoveryProvider } from '../../shared/contracts/recoveryContract';
@@ -41,7 +42,10 @@ const densityOptions: readonly {
   { value: 'compact', label: 'Compact density', icon: Rows3 },
 ];
 
+const notifyCallCapacitySaved = () => { window.dispatchEvent(new Event('callie:workflow-changed')); };
+
 type SettingsSectionId =
+  | 'call-capacity'
   | 'worker'
   | 'phone'
   | 'connections'
@@ -55,6 +59,7 @@ type SettingsSectionId =
 const SECTIONS: readonly { id: SettingsSectionId; label: string }[] = [
   { id: 'connections', label: 'Connections' },
   { id: 'phone', label: 'Phone' },
+  { id: 'call-capacity', label: 'Call capacity' },
   { id: 'worker', label: 'Worker connection' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'data', label: 'Data & storage' },
@@ -471,6 +476,7 @@ export function SettingsScreen({
           </ul>
         </nav>
         <div className="settings__detail">
+          {active === 'call-capacity' && <CallCapacitySection api={localWorkspaceApi} onSaved={notifyCallCapacitySaved} />}
           {active === 'connections' && <ConnectionsSection api={outreachApi} />}
           {active === 'phone' && <PhoneSetupSection api={phoneSetupApi} />}
           {active === 'worker' && <WorkerSetupSection api={delegationApi} />}

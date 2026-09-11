@@ -1,7 +1,12 @@
 import { localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema } from '../../shared/contracts/localCompanyIntakeContract';
-import { linkCompanyPersonRequestSchema, accountEvidenceReceiptSchema, localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, selectedResearchSchema, localCompanyResearchStatusSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
+import { meetingFirstAccountCallSettingsSchema, updateCallSettingsRequestSchema, callSettingsUpdateReplySchema, linkCompanyPersonRequestSchema, accountEvidenceReceiptSchema, localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, selectedResearchSchema, localCompanyResearchStatusSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import type { IpcClient } from '../ipcClient';
 export const createLocalWorkspaceApi = (client: IpcClient): LocalWorkspaceApi => ({
+  getCallSettings: () => client.requestNoInput('local-workspace:get-call-settings', meetingFirstAccountCallSettingsSchema),
+  updateCallSettings: async input => {
+    const parsed = Object.freeze(updateCallSettingsRequestSchema.parse(input));
+    return client.request('local-workspace:update-call-settings', updateCallSettingsRequestSchema, callSettingsUpdateReplySchema(parsed), parsed);
+  },
   linkCompanyPerson: async input => {
     const parsed = Object.freeze(linkCompanyPersonRequestSchema.parse(input));
     const result = accountEvidenceReceiptSchema.parse(await client.request('local-workspace:link-company-person',

@@ -158,7 +158,7 @@ function fakeCallieApi(): CalliePreloadApi {
     localWorkspace: {
       get: vi.fn(async () => localSnapshot({ workflowMode: 'legacy' })),
       getCompany: pending,
-      researchCompany: pending, getCompanyResearchStatus: pending, linkCompanyPerson: pending,
+      researchCompany: pending, getCompanyResearchStatus: pending, getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: pending,
       getCommitments: vi.fn(async () => commitments()),
       reviewCompany: pending, createCompany: pending, getCompanyCreateStatus: pending, transition: pending,
     },
@@ -1153,3 +1153,29 @@ it('T6-A04 actual route departure preserves pending link, lost reply offers exac
     expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
   } finally { view.unmount(); await act(async () => { resolve({ accountId: 'a', version: 2, duplicate: false }); await Promise.allSettled([pending]); }); }
 }, 10_000);
+
+it('capacity save retains actual Settings editor and returning normally to Today reads current values', async () => {
+  window.location.hash = '#/settings';
+  const api = fakeCallieApi();
+  let stored: import('../../shared/contracts/localWorkspaceContract').MeetingFirstAccountCallSettings = {
+    newCallSlots: null, totalCallCapacity: null, revision: 0, updatedAt: '2026-09-11T12:00:00.000Z',
+  };
+  api.localWorkspace.getCallSettings = vi.fn(async () => stored);
+  api.localWorkspace.updateCallSettings = vi.fn(async input => stored = { newCallSlots: input.newCallSlots, totalCallCapacity: input.totalCallCapacity, revision: input.expectedRevision + 1, updatedAt: stored.updatedAt });
+  api.daily.get = vi.fn(async () => dailyFixture({ answers: [], callSettings: { newCallSlots: stored.newCallSlots, totalCallCapacity: stored.totalCallCapacity } }));
+  api.localWorkspace.get = vi.fn(async () => localSnapshot({ workflowMode: 'meeting_first' }));
+  render(<FounderAppHarness api={api} health={readyHealth} initialRoute="settings" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Call capacity' }));
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save call capacity' }) as HTMLButtonElement).disabled).toBe(false));
+  const editor = screen.getByRole('region', { name: 'Call capacity' });
+  fireEvent.change(within(editor).getByLabelText('New call slots configuration'), { target: { value: 'number' } });
+  fireEvent.change(within(editor).getByLabelText('New call slots'), { target: { value: '0' } });
+  fireEvent.click(within(editor).getByRole('button', { name: 'Save call capacity' })); await screen.findByText('Call capacity saved.');
+  expect(screen.getByRole('region', { name: 'Call capacity' })).toBe(editor);
+  expect(screen.getByRole('button', { name: 'Call capacity' }).getAttribute('aria-current')).toBe('true');
+  expect(api.localWorkspace.updateCallSettings).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('link', { name: 'Today' }));
+  await screen.findByRole('button', { name: 'Call · Account A' });
+  expect(screen.queryByRole('region', { name: 'Call capacity' })).toBeNull();
+  expect(screen.getByText(/New-call slots:/).textContent).toContain('New-call slots: 0');
+});
