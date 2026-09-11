@@ -128,7 +128,7 @@ it('previews the draft-bound sender and footer, not a different current configur
   drafts.set(draft.id, { ...draft, senderEmail: 'bound@example.com', footer: 'Bound Sender\n456 Bound St\nTo stop these emails, reply "stop".' });
   render(editor(api)); await waitFor(() => expect(body().value).toBe('Hello avery'));
   await expect(api.inspectLocalAuthority({ draftId: 'avery:email', expectedRevision: 1 })).resolves.toMatchObject({ state: 'allowed' });
-  expect(screen.getByText('bound@example.com')).toBeTruthy();
+  expect(await screen.findByText('bound@example.com')).toBeTruthy();
   expect(screen.queryByText('founder@example.com')).toBeNull();
   expect(screen.getByText(/456 Bound St/)).toBeTruthy();
   expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
