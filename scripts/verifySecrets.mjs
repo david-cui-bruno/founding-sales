@@ -7,6 +7,11 @@ import { extractAll, listPackage, statFile } from '@electron/asar';
 import { selectPackagedApp } from './verifyPackage.mjs';
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fail = () => { throw new Error('SECRET_VERIFICATION_FAILED'); };
+const phases = new Set(['scanner-version', 'temporary-directory', 'history-readiness', 'history-scan', 'context-staging', 'context-scan', 'package-staging', 'package-scan', 'cleanup']);
+function inPhase(phase, operation) {
+  try { return operation(); }
+  catch { throw Object.assign(new Error('SECRET_VERIFICATION_FAILED'), { phase }); }
+}
 const safeEnv = () => Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:GITLEAKS_|GIT_)/.test(key)));
 function execute(command, args, root, run) {
   return run(command, args, { cwd: root, env: safeEnv(), shell: false, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024, timeout: 660_000 });
@@ -101,22 +106,24 @@ export function scanWithGitleaks({ root, target, kind, temporary, run = spawnSyn
 }
 export function verifySecrets({ root = projectRoot, mode = 'source', outDirectory = join(root, 'out'), run = spawnSync } = {}) {
   if (!['source', 'package'].includes(mode)) fail();
-  if (checked('gitleaks', ['version'], root, run).trim() !== '8.30.1') fail();
-  const temporary = mkdtempSync(join(tmpdir(), 'callie-secret-scan-')); chmodSync(temporary, 0o700);
+  inPhase('scanner-version', () => { if (checked('gitleaks', ['version'], root, run).trim() !== '8.30.1') fail(); });
+  const temporary = inPhase('temporary-directory', () => {
+    const path = mkdtempSync(join(tmpdir(), 'callie-secret-scan-')); chmodSync(path, 0o700); return path;
+  });
   const results = [];
   try {
-    const stage = join(temporary, 'input'); privateDirectory(stage);
+    const stage = join(temporary, 'input'); inPhase('temporary-directory', () => privateDirectory(stage));
     if (mode === 'source') {
-      if (checked('git', ['rev-parse', '--is-shallow-repository'], root, run).trim() !== 'false') fail();
-      results.push(scanWithGitleaks({ root, target: root, kind: 'history', temporary, run }));
-      const files = stageBuildContext(root, stage, run);
-      results.push({ ...scanWithGitleaks({ root, target: stage, kind: 'context', temporary, run }), files });
+      inPhase('history-readiness', () => { if (checked('git', ['rev-parse', '--is-shallow-repository'], root, run).trim() !== 'false') fail(); });
+      results.push(inPhase('history-scan', () => scanWithGitleaks({ root, target: root, kind: 'history', temporary, run })));
+      const files = inPhase('context-staging', () => stageBuildContext(root, stage, run));
+      results.push({ ...inPhase('context-scan', () => scanWithGitleaks({ root, target: stage, kind: 'context', temporary, run })), files });
     } else {
-      const files = stagePackage(root, stage, outDirectory);
-      results.push({ ...scanWithGitleaks({ root, target: stage, kind: 'package', temporary, run }), files });
+      const files = inPhase('package-staging', () => stagePackage(root, stage, outDirectory));
+      results.push({ ...inPhase('package-scan', () => scanWithGitleaks({ root, target: stage, kind: 'package', temporary, run })), files });
     }
     return results;
-  } finally { rmSync(temporary, { recursive: true, force: true }); }
+  } finally { inPhase('cleanup', () => rmSync(temporary, { recursive: true, force: true })); }
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
@@ -124,5 +131,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const results = verifySecrets({ mode: process.argv[2] === '--package' ? 'package' : 'source', outDirectory: resolve(projectRoot, process.argv[3] ?? 'out') });
     console.log(JSON.stringify({ scanner: 'gitleaks-8.30.1', results }));
     if (results.some(result => result.status !== 'passed')) process.exitCode = 1;
-  } catch { console.error('SECRET_VERIFICATION_FAILED'); process.exitCode = 1; }
+  } catch (error) {
+    console.error(JSON.stringify({ error: 'SECRET_VERIFICATION_FAILED', phase: phases.has(error?.phase) ? error.phase : 'unexpected' }));
+    process.exitCode = 1;
+  }
 }

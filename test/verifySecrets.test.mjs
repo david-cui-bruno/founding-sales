@@ -47,6 +47,20 @@ it('rejects a missing scanner without a fallback', async () => {
   expect(() => verifySecrets({ root, run: () => { calls++; return { error: new Error('PRIVATE-MISSING'), status: null }; } })).toThrow('SECRET_VERIFICATION_FAILED');
   expect(calls).toBe(1);
 });
+it.each([
+  ['wrong-version', false, false, 'scanner-version'],
+  ['clean', true, false, 'history-readiness'],
+  ['error', false, false, 'history-scan'],
+  ['clean', false, true, 'context-staging'],
+])('reports only a fixed safe phase for %s / shallow=%s / missing=%s', async (behavior, shallow, missing, phase) => {
+  const { root, run } = await fixture({ behavior, shallow });
+  if (missing) rmSync(join(root, 'src/code.ts'));
+  const result = run();
+  expect(result.status).not.toBe(0);
+  expect(JSON.parse(result.stderr)).toEqual({ error: 'SECRET_VERIFICATION_FAILED', phase });
+  expect(result.stderr + result.stdout).not.toContain('SYNTHETIC-RAW-SECRET');
+  expect(result.stderr + result.stdout).not.toContain(root);
+});
 it.each(['timeout', 'parent-signal', 'empty-success-report', 'findings-with-zero', 'clean-with-one'])('rejects scanner protocol failure: %s', async mode => {
   const { root } = await fixture(); const temporary = join(root, 'reports'); mkdirSync(temporary, { mode: 0o700 });
   const run = (_command, args) => {

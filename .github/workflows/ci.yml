@@ -47,6 +47,8 @@ jobs:
           npx playwright install chromium
       - name: Source, independent Lambda and operational graph gates
         run: |
+          # Fail early on scanner/history problems, and retain the final scan of generated output below.
+          npm run verify:secrets
           npm run typecheck
           npm run lint:tracked
           npm test
