@@ -1,3 +1,4 @@
+import { finished } from 'node:stream/promises';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -52,7 +53,7 @@ describe('packaged test artifact selection', () => {
       mkdirSync(dirname(selected.asarPath), { recursive: true });
       mkdirSync(dirname(selected.executable), { recursive: true });
       writeFileSync(selected.executable, 'synthetic', { mode: 0o700 });
-      await createPackage(input, selected.asarPath);
+      await finished(await createPackage(input, selected.asarPath));
       artifacts.push(selected);
     }
     const [a, b] = artifacts;

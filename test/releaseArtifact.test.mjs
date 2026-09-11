@@ -1,3 +1,4 @@
+import { finished } from 'node:stream/promises';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,7 +22,7 @@ async function artifact(root, name, marker = { format: 'callie-release', version
   mkdirSync(dirname(selected.asarPath), { recursive: true });
   mkdirSync(dirname(selected.executable), { recursive: true });
   writeFileSync(selected.executable, 'synthetic binary', { mode: 0o700 });
-  await createPackage(input, selected.asarPath);
+  await finished(await createPackage(input, selected.asarPath));
   return selected;
 }
 it('resolves default and relative candidate paths, rejecting a conflicting E2E selection before any IO', () => {

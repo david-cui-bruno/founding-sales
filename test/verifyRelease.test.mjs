@@ -1,3 +1,4 @@
+import { finished } from 'node:stream/promises';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -35,7 +36,7 @@ async function fixture(candidate = 'candidate') {
   mkdirSync(join(root, 'build/generated'), { recursive: true }); writeFileSync(join(root, 'build/generated/release-marker.json'), JSON.stringify(marker));
   mkdirSync(dirname(selected.asarPath), { recursive: true });
   mkdirSync(dirname(selected.executable), { recursive: true }); writeFileSync(selected.executable, 'fixture', { mode: 0o700 });
-  await createPackage(input, selected.asarPath);
+  await finished(await createPackage(input, selected.asarPath));
   return { root, env, selected, marker };
 }
 function recorder({ failure = 0, afterStage = () => {}, dirty = false, head = 'a'.repeat(40) } = {}) {

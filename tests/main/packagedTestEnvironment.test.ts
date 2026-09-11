@@ -1,3 +1,4 @@
+import { finished } from 'node:stream/promises';
 import { EventEmitter } from 'node:events';
 import { execFileSync, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -77,7 +78,7 @@ beforeEach(async () => {
     await files.mkdir(path.dirname(artifact.asarPath), { recursive: true });
     await files.mkdir(path.dirname(artifact.executable), { recursive: true });
     await files.writeFile(artifact.executable, 'synthetic-only', { mode: 0o700 });
-    await createPackage(input, artifact.asarPath);
+    await finished(await createPackage(input, artifact.asarPath));
     artifacts.push(artifact);
   }
   const [selected, other] = artifacts;

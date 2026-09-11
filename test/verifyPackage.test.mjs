@@ -1,3 +1,4 @@
+import { finished } from 'node:stream/promises';
 import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -24,11 +25,11 @@ it('reads actual final ASAR bytes, not a listed filename or sibling marker', asy
   const archiveSource = join(root, 'archive-source'); await mkdir(archiveSource);
   const embeddedPath = join(archiveSource, 'release-marker.json');
   const archive = join(appPath, 'Contents/Resources/app.asar');
-  await writeFile(embeddedPath, JSON.stringify(marker)); await createPackage(archiveSource, archive);
+  await writeFile(embeddedPath, JSON.stringify(marker)); await finished(await createPackage(archiveSource, archive));
   const options = { checkHead: markerSeams.checkHead, readBuildMarker: markerSeams.readBuildMarker, runCommand: successfulCommand };
   expect(verifyActualPackagedApp(appPath, options).releaseMarker).toEqual(marker);
   await writeFile(embeddedPath, JSON.stringify({ ...marker, commitSha: 'b'.repeat(40) }));
-  await createPackage(archiveSource, archive);
+  await finished(await createPackage(archiveSource, archive));
   expect(() => verifyActualPackagedApp(appPath, options)).toThrow();
 });
 
