@@ -1,12 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
 const roots = [];
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })));
 function fixture(paths, failure = '') {
-  const root = mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'tracked-lint-')); roots.push(root);
+  // Match Node's canonical module paths and child cwd on aliased macOS temp directories.
+  const root = realpathSync(mkdtempSync(join(process.env.JCODE_SCRATCH_DIR ?? tmpdir(), 'tracked-lint-'))); roots.push(root);
   mkdirSync(join(root, 'scripts')); mkdirSync(join(root, 'bin'));
   mkdirSync(join(root, 'node_modules/eslint/bin'), { recursive: true });
   cpSync(new URL('../scripts/lintTracked.mjs', import.meta.url), join(root, 'scripts/lintTracked.mjs'));

@@ -150,7 +150,10 @@ describe('preload workflow bridge', () => {
     expect(Object.keys(api.leadDetail).sort()).toEqual([
       'beginOutbound', 'confirmTransition', 'dismissLead', 'findContactInfo', 'get', 'getOutboundCapabilities', 'overrideCloudScore',
     ]);
-    expect(Object.keys(api.localWorkspace).sort()).toEqual(['createCompany', 'get', 'getCommitments', 'getCompanyCreateStatus', 'reviewCompany', 'transition']);
+    expect(Object.keys(api.localWorkspace).sort()).toEqual([
+      'createCompany', 'get', 'getCommitments', 'getCompany', 'getCompanyCreateStatus',
+      'getCompanyResearchStatus', 'linkCompanyPerson', 'researchCompany', 'reviewCompany', 'transition',
+    ]);
     expect(Object.keys(api.today).sort()).toEqual([
       'addLeadNote', 'complete', 'get', 'getLeadTriageSnapshot', 'getTriageQueue', 'logCallOutcome',
       'logPastActivity', 'markActivityInError', 'pin', 'setReviewPosition', 'snooze',
