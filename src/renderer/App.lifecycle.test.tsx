@@ -16,6 +16,7 @@ import type {
   CalliePreloadApi,
 } from '../shared/preload';
 import { App } from './App';
+import { commitments, dailyFixture, localSnapshot } from './features/today/nativeDesk.fixture';
 
 const health: AppHealth = {
   appVersion: '1.0.0',
@@ -77,40 +78,33 @@ const disabledAppleSpike = (): AppleSpikePreloadApi => ({
   subscribeObservationEvidence: vi.fn(async (): Promise<() => void> => () => undefined),
 });
 
-/** Workflow APIs stay pending: bootstrap behavior must not depend on them. */
-const pendingWorkflowApis = () => {
-  const pending = vi.fn(() => new Promise<never>(() => undefined));
+/** Complete preload shape. Unused reads and commands remain pending without IO. */
+const pendingWorkflowApis = (): Omit<CalliePreloadApi, 'health' | 'appleSpike'> => {
+  const pending = () => vi.fn(() => new Promise<never>(() => undefined));
   return {
-    leads: { list: pending, updateField: pending, bulkUpdate: pending },
-    leadDetail: {
-      get: pending,
-      beginOutbound: pending,
-      getOutboundCapabilities: pending,
-      confirmTransition: pending,
+    daily: { get: pending() },
+    localWorkspace: { get: pending(), getCommitments: pending(), reviewCompany: pending(), createCompany: pending(), getCompanyCreateStatus: pending(), transition: pending() },
+    discovery: { get: pending(), getBrief: pending(), begin: pending(), override: pending() },
+    delegation: {
+      status: pending(), policyImport: { selectAndPreview: pending(), confirm: pending(), resume: pending(), status: pending() },
+      prepareRequestedFollowup: pending(), getRequestedFollowup: pending(), editRequestedFollowup: pending(), approveRequestedFollowup: pending(),
+      beginPhone: pending(), bootstrap: pending(), configurePolicy: pending(), configureResearch: pending(), pair: pending(), configure: pending(), submit: pending(), sync: pending(),
     },
-    today: {
-      get: pending,
-      complete: pending,
-      snooze: pending,
-      pin: pending,
-      logPastActivity: pending,
-    },
-    pipeline: { get: pending },
-    review: { list: vi.fn(() => new Promise<never>(() => undefined)), resolve: pending },
-    friday: {
-      getCurrent: pending,
-      getDrilldown: pending,
-      createJob: pending,
-      fillJob: pending,
-      cancelJob: pending,
-    },
-    imports: {
-      preview: pending,
-      remap: pending,
-      commit: pending,
-      status: pending,
-    },
-    sourcing: { pollNow: pending, status: pending },
+    linkedin: { prepare: pending(), get: pending(), recover: pending(), save: pending(), begin: pending(), open: pending(), copy: pending(), reportOutcome: pending() },
+    phoneSetup: { status: pending(), confirm: pending(), clear: pending() },
+    outreach: { status: pending(), configure: pending(), connectGmail: pending(), disconnectGmail: pending(), openDraft: pending(), saveDraft: pending(), generateDraft: pending(), sendDraft: pending() },
+    leads: { list: pending(), updateField: pending(), bulkUpdate: pending() },
+    leadDetail: { get: pending(), beginOutbound: pending(), getOutboundCapabilities: pending(), confirmTransition: pending(), findContactInfo: pending(), dismissLead: pending(), overrideCloudScore: pending() },
+    today: { get: pending(), complete: pending(), snooze: pending(), pin: pending(), logPastActivity: pending(), getLeadTriageSnapshot: pending(), addLeadNote: pending(), logCallOutcome: pending(), markActivityInError: pending(), getTriageQueue: pending(), setReviewPosition: pending() },
+    pipeline: { get: pending() },
+    review: { list: pending(), resolve: pending() },
+    friday: { getCurrent: pending(), getDrilldown: pending(), createJob: pending(), fillJob: pending(), cancelJob: pending() },
+    imports: { preview: pending(), remap: pending(), commit: pending(), status: pending() },
+    conversations: { list: pending(), get: pending(), attachTranscript: pending() },
+    learnings: { list: pending(), capture: pending(), addEvidence: pending(), updateStatus: pending() },
+    sourcing: { pollNow: pending(), status: pending(), retry: pending(), setHmacSalt: pending() },
+    shell: { revealDatabase: pending(), revealLogDirectory: pending() },
+    recovery: { status: pending(), beginSetup: pending(), saveSetupMaterial: pending(), completeSetup: pending(), selectAndRunRestoreDrill: pending() },
   };
 };
 
@@ -128,7 +122,7 @@ const renderApp = (
     health: { get: getHealth },
     ...pendingWorkflowApis(),
     appleSpike,
-  } as unknown as CalliePreloadApi;
+  };
   window.location.hash = '';
   return render(
     <StrictMode>
@@ -146,11 +140,240 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
+function workspaceApi(): CalliePreloadApi {
+  const api: CalliePreloadApi = { ...pendingWorkflowApis(), health: { get: vi.fn(async () => health) }, appleSpike: disabledAppleSpike() };
+  api.daily.get = vi.fn(async () => dailyFixture());
+  api.localWorkspace.get = vi.fn(async () => localSnapshot());
+  api.localWorkspace.getCommitments = vi.fn(async () => commitments());
+  vi.mocked(api.localWorkspace.reviewCompany).mockImplementation(async input => ({ scope: 'local_database', input, candidates: [], complete: true }));
+  vi.mocked(api.delegation.status).mockResolvedValue({ state: 'unconfigured', workspaceId: null, endpoint: null, configuration: null });
+  return api;
+}
+
+async function openCompanyEditor(api: CalliePreloadApi) {
+  window.callie = api;
+  window.location.hash = '#/accounts';
+  let view!: ReturnType<typeof render>;
+  await act(async () => { view = render(<App />); });
+  const add = screen.getByRole('button', { name: 'Add company' });
+  expect((add as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(add);
+  const input = screen.getByRole('textbox', { name: 'Company name' }) as HTMLInputElement;
+  fireEvent.change(input, { target: { value: 'Harbor Management' } });
+  input.focus();
+  input.setSelectionRange(2, 8);
+  return { view, input };
+}
+
+describe('actual App readonly observation and workspace continuity', () => {
+  it('keeps separate workspace and diagnostic strip slots stable through pending, stale and recovered reads', async () => {
+    const api = workspaceApi();
+    const { input } = await openCompanyEditor(api);
+    const frame = document.querySelector('.foundation-frame');
+    const workspace = document.querySelector('.foundation-workspace');
+    const strip = document.querySelector('.foundation-observation');
+    expect(frame).not.toBeNull(); expect(workspace).not.toBeNull(); expect(strip).not.toBeNull();
+    expect(workspace?.parentElement).toBe(frame);
+    expect(strip?.parentElement).toBe(frame);
+    expect(workspace?.nextElementSibling).toBe(strip);
+    expect(workspace?.contains(input)).toBe(true);
+    const observation = screen.getByRole('region', { name: 'Diagnostic observation' });
+    expect(strip?.contains(observation)).toBe(true);
+    const pending = deferred<AppHealth>();
+    vi.mocked(api.health.get).mockReturnValueOnce(pending.promise);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh diagnostics' }));
+    expect(screen.getByText('Refreshing diagnostics…')).toBeTruthy();
+    await act(async () => pending.reject(new Error('private diagnostic failure')));
+    expect(screen.getByRole('alert').textContent).toContain('Your work is kept.');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Refresh diagnostics' })));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(document.querySelector('.foundation-frame')).toBe(frame);
+    expect(document.querySelector('.foundation-workspace')).toBe(workspace);
+    expect(document.querySelector('.foundation-observation')).toBe(strip);
+    expect(screen.getByRole('region', { name: 'Diagnostic observation' })).toBe(observation);
+    expect(screen.getByRole('textbox', { name: 'Company name' })).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect([input.selectionStart, input.selectionEnd]).toEqual([2, 8]);
+  });
+
+  it('retains an unsent draft through blocked diagnostics without granting recovery or write authority', async () => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    const api = workspaceApi();
+    await openCompanyEditor(api);
+    vi.mocked(api.health.get).mockResolvedValueOnce({ ...health, domainReady: false, domainStatus: 'blocked' });
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
+    expect(screen.getByText(/startup audit is blocked or inconsistent/)).toBeTruthy();
+    expect(screen.getByText(health.domainStartupEvaluatedAt)).toBeTruthy();
+    for (const command of [api.localWorkspace.reviewCompany, api.localWorkspace.createCompany, api.localWorkspace.getCompanyCreateStatus, api.recovery.beginSetup, api.recovery.selectAndRunRestoreDrill]) expect(command).not.toHaveBeenCalled();
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect((screen.getByRole('textbox', { name: 'Company name' }) as HTMLInputElement).value).toBe('Harbor Management');
+    expect(api.localWorkspace.reviewCompany).not.toHaveBeenCalled();
+  });
+
+  it('retains the original intake deadline and exact unknown command across a blocked interval', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    const api = workspaceApi();
+    await openCompanyEditor(api);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Review company' })));
+    fireEvent.click(screen.getByRole('button', { name: 'Create company' }));
+    const request = vi.mocked(api.localWorkspace.createCompany).mock.calls[0][0];
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    vi.mocked(api.health.get).mockResolvedValueOnce({ ...health, domainReady: false, domainStatus: 'blocked' });
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(screen.getByRole('button', { name: 'Check save status' })).toBeTruthy();
+    expect(api.localWorkspace.createCompany).toHaveBeenCalledTimes(1);
+    expect(api.localWorkspace.getCompanyCreateStatus).not.toHaveBeenCalled();
+    vi.mocked(api.localWorkspace.getCompanyCreateStatus).mockResolvedValueOnce({ status: 'not_recorded', commandId: request.commandId });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Check save status' })));
+    expect(api.localWorkspace.getCompanyCreateStatus).toHaveBeenCalledWith(request);
+    expect(screen.getByRole('button', { name: 'Retry create' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry create' }));
+    expect(api.localWorkspace.createCompany).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(api.localWorkspace.createCompany).mock.calls[1][0]).toEqual(request);
+  });
+
+  it.each(['manual', 'focus', 'timer'] as const)('keeps the exact editor, caret and stale read time through %s refresh rejection', async trigger => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-09-10T16:00:00.000Z');
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+    const api = workspaceApi();
+    const { input } = await openCompanyEditor(api);
+    const refresh = deferred<AppHealth>();
+    vi.mocked(api.health.get).mockReturnValue(refresh.promise);
+    if (trigger === 'manual') fireEvent.click(screen.getByRole('button', { name: 'Refresh diagnostics' }));
+    else if (trigger === 'focus') act(() => window.dispatchEvent(new Event('focus')));
+    else await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    expect(api.health.get).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('textbox', { name: 'Company name' })).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect([input.value, input.selectionStart, input.selectionEnd]).toEqual(['Harbor Management', 2, 8]);
+    await act(async () => refresh.reject(new Error('/private/key-secret')));
+    expect(screen.getByRole('textbox', { name: 'Company name' })).toBe(input);
+    expect([input.value, input.selectionStart, input.selectionEnd]).toEqual(['Harbor Management', 2, 8]);
+    expect(document.activeElement).toBe(input);
+    expect(screen.getByText(/Last successful read/).textContent).toContain('2026-09-10T16:00:00.000Z');
+    expect(screen.getByRole('alert').textContent).toContain('stale');
+    expect(document.body.textContent).not.toContain('key-secret');
+    for (const command of [api.localWorkspace.reviewCompany, api.localWorkspace.createCompany, api.localWorkspace.getCompanyCreateStatus, api.sourcing.pollNow, api.sourcing.retry, api.recovery.beginSetup, api.recovery.selectAndRunRestoreDrill]) expect(command).not.toHaveBeenCalled();
+  });
+
+  it('keeps the editor through a hung refresh deadline and ignores an expired blocked reply', async () => {
+    vi.useFakeTimers();
+    const api = workspaceApi();
+    const { input } = await openCompanyEditor(api);
+    const old = deferred<AppHealth>();
+    vi.mocked(api.health.get).mockReturnValueOnce(old.promise);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh diagnostics' }));
+    await act(async () => vi.advanceTimersByTimeAsync(15_000));
+    expect(screen.getByRole('textbox', { name: 'Company name' })).toBe(input);
+    expect(screen.getByRole('alert').textContent).toContain('stale');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Refresh diagnostics' })));
+    await act(async () => old.resolve({ ...health, domainReady: false, domainStatus: 'blocked' }));
+    expect(screen.getByRole('textbox', { name: 'Company name' })).toBe(input);
+    expect(document.activeElement).toBe(input);
+  });
+
+  it('keeps one intake owner across ready-blocked-ready and stores a verified save while detached without replay', async () => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    const api = workspaceApi();
+    const save = deferred<Awaited<ReturnType<CalliePreloadApi['localWorkspace']['createCompany']>>>();
+    vi.mocked(api.localWorkspace.createCompany).mockReturnValue(save.promise);
+    await openCompanyEditor(api);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Review company' })));
+    fireEvent.click(screen.getByRole('button', { name: 'Create company' }));
+    const request = vi.mocked(api.localWorkspace.createCompany).mock.calls[0][0];
+    expect(request).toMatchObject({ name: 'Harbor Management', domain: null });
+    vi.mocked(api.health.get).mockResolvedValueOnce({ ...health, domainReady: false, domainStatus: 'blocked' });
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
+    const readsWhileBlocked = vi.mocked(api.localWorkspace.get).mock.calls.length;
+    await act(async () => save.resolve({ status: 'saved', commandId: request.commandId, replayed: false, account: { id: 'saved-harbor', name: request.name, domain: request.domain, version: 1 } }));
+    expect(api.localWorkspace.get).toHaveBeenCalledTimes(readsWhileBlocked);
+    expect(window.location.hash).toBe('#/accounts');
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(screen.getByText('Company saved.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Refresh saved company' })).toBeTruthy();
+    expect(api.localWorkspace.reviewCompany).toHaveBeenCalledTimes(1);
+    expect(api.localWorkspace.createCompany).toHaveBeenCalledTimes(1);
+    expect(api.localWorkspace.getCompanyCreateStatus).not.toHaveBeenCalled();
+    expect(vi.mocked(api.localWorkspace.createCompany).mock.calls[0][0]).toEqual(request);
+  });
+
+  it('invalidates a pending owner on exact localWorkspace API replacement even with the same worker identity', async () => {
+    const api = workspaceApi();
+    const save = deferred<Awaited<ReturnType<CalliePreloadApi['localWorkspace']['createCompany']>>>();
+    vi.mocked(api.localWorkspace.createCompany).mockReturnValue(save.promise);
+    const { view } = await openCompanyEditor(api);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Review company' })));
+    fireEvent.click(screen.getByRole('button', { name: 'Create company' }));
+    const request = vi.mocked(api.localWorkspace.createCompany).mock.calls[0][0];
+    const replacement = workspaceApi().localWorkspace;
+    window.callie = { ...api, localWorkspace: replacement };
+    await act(async () => view.rerender(<App />));
+    expect(screen.queryByRole('textbox', { name: 'Company name' })).toBeNull();
+    await act(async () => save.resolve({ status: 'saved', commandId: request.commandId, replayed: false, account: { id: 'old-harbor', name: request.name, domain: request.domain, version: 1 } }));
+    expect(screen.queryByText('Company saved.')).toBeNull();
+    expect(replacement.createCompany).not.toHaveBeenCalled();
+    expect(replacement.getCompanyCreateStatus).not.toHaveBeenCalled();
+  });
+
+  it('denies actual App admission in the first layout after health API replacement', async () => {
+    const api = workspaceApi();
+    window.callie = api;
+    window.location.hash = '#/accounts';
+    const observations: boolean[] = [];
+    const view = render(<><App /><LayoutObservation /></>);
+    await screen.findByRole('navigation', { name: 'Primary' });
+    window.callie = { ...api, health: { get: vi.fn(() => new Promise<AppHealth>(() => undefined)) } };
+    view.rerender(<><App /><LayoutObservation observe={() => observations.push(screen.queryByRole('navigation', { name: 'Primary' }) !== null)} /></>);
+    expect(observations[0]).toBe(false);
+  });
+});
+
 describe('App async lifecycle', () => {
+  it.each([
+    ['blocked', false],
+    ['blocked', true],
+    ['ready', false],
+  ] as const)('does not admit normal routes for domainStatus=%s and domainReady=%s', async (domainStatus, domainReady) => {
+    const response = deferred<AppHealth>();
+    const getHealth = vi.fn(() => response.promise);
+    renderApp(getHealth);
+    expect(getHealth).toHaveBeenCalled();
+
+    await act(async () => response.resolve({ ...health, domainStatus, domainReady }));
+
+    expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
+  });
+
+  it('keeps the actual ready shell mounted through a failed focus refresh', async () => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+    const getHealth = vi.fn<() => Promise<AppHealth>>().mockResolvedValue(health);
+    renderApp(getHealth);
+    const navigation = await screen.findByRole('navigation', { name: 'Primary' });
+    const initialReads = getHealth.mock.calls.length;
+    const refresh = deferred<AppHealth>();
+    getHealth.mockReturnValue(refresh.promise);
+
+    act(() => window.dispatchEvent(new Event('focus')));
+
+    expect(getHealth).toHaveBeenCalledTimes(initialReads + 1);
+    expect(screen.getByRole('navigation', { name: 'Primary' })).toBe(navigation);
+    await act(async () => refresh.reject(new Error('private refresh failure')));
+    expect(screen.getByRole('navigation', { name: 'Primary' })).toBe(navigation);
+  });
+
   it('renders the workflow shell with the Today route once health is ready', async () => {
     renderApp(vi.fn(async () => health));
 
@@ -195,7 +418,7 @@ describe('App async lifecycle', () => {
     await act(async () => first.reject(new Error('stale failure')));
 
     expect(screen.getByRole('navigation', { name: 'Primary' })).not.toBeNull();
-    expect(screen.queryByText('The local database could not be opened')).toBeNull();
+    expect(screen.queryByText('The diagnostic read could not be completed')).toBeNull();
   });
 
   it('ignores a stale successful request after the latest request fails', async () => {
@@ -214,7 +437,7 @@ describe('App async lifecycle', () => {
     await act(async () => first.resolve(health));
 
     expect(screen.getByRole('alert').textContent).toContain(
-      'The local database could not be opened',
+      'The diagnostic read could not be completed',
     );
     expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
   });

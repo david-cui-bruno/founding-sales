@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -81,14 +81,24 @@ const drilldown: MetricDrilldown = {
   ],
 };
 
+// Structural spread stays runnable against baseline props. These are the frozen
+// future props, not imports of nonexistent Friday mutation helpers/types.
+const idleMutationProps = {
+  mutation: { status: 'idle' as const },
+  onRetryMutation: async () => ({ status: 'not_started' as const }),
+  onRefreshJobs: async () => ({ status: 'not_started' as const }),
+};
+const saved = async () => ({ status: 'saved' as const });
+
 function renderPage(overrides: Partial<Parameters<typeof FridayPage>[0]> = {}) {
   return render(
     <FridayPage
+      {...idleMutationProps}
       report={report}
       onOpenMetric={vi.fn()}
-      onCreateJob={vi.fn()}
-      onFillJob={vi.fn()}
-      onCancelJob={vi.fn()}
+      onCreateJob={vi.fn(saved)}
+      onFillJob={vi.fn(saved)}
+      onCancelJob={vi.fn(saved)}
       {...overrides}
     />,
   );
@@ -269,14 +279,36 @@ describe('MetricDrilldownPanel', () => {
 });
 
 describe('JobRequestForm', () => {
-  it('creates a job request from the local date and time pair with an optional Won cycle', () => {
-    const onCreateJob = vi.fn();
+  it('uses a labeled in-flow fill group, not an alertdialog', async () => {
+    renderPage();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Fill job-1' })); });
+    expect(screen.getByRole('group', { name: 'Fill job-1' })).toBeTruthy();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('uses local midnight for a nonblank requested date and blank time', async () => {
+    const onCreateJob = vi.fn(saved);
+    renderPage({ onCreateJob });
+    fireEvent.change(screen.getByLabelText('Requested date'), {
+      target: { value: '2026-08-31' },
+    });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Request job' })); });
+    expect(onCreateJob).toHaveBeenCalledWith({
+      jobId: expect.stringMatching(/\S/), salesCycleId: null,
+      requestedAt: new Date('2026-08-31T00:00').toISOString(),
+    });
+  });
+
+  it('creates a job request from the local date and time pair with an optional Won cycle', async () => {
+    const onCreateJob = vi.fn(saved);
     render(
       <JobRequestForm
+        {...idleMutationProps}
         jobs={[]}
         onCreateJob={onCreateJob}
-        onFillJob={vi.fn()}
-        onCancelJob={vi.fn()}
+        onFillJob={vi.fn(saved)}
+        onCancelJob={vi.fn(saved)}
         now={() => '2026-08-31T15:00:00.000Z'}
       />,
     );
@@ -290,7 +322,7 @@ describe('JobRequestForm', () => {
     fireEvent.change(screen.getByLabelText('Won sales cycle (optional)'), {
       target: { value: 'cycle-9' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Request job' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Request job' })); });
 
     expect(onCreateJob).toHaveBeenCalledWith({
       jobId: expect.stringMatching(/\S/),
@@ -299,19 +331,20 @@ describe('JobRequestForm', () => {
     });
   });
 
-  it('creates a job without a Won cycle as null', () => {
-    const onCreateJob = vi.fn();
+  it('creates a job without a Won cycle as null', async () => {
+    const onCreateJob = vi.fn(saved);
     render(
       <JobRequestForm
+        {...idleMutationProps}
         jobs={[]}
         onCreateJob={onCreateJob}
-        onFillJob={vi.fn()}
-        onCancelJob={vi.fn()}
+        onFillJob={vi.fn(saved)}
+        onCancelJob={vi.fn(saved)}
         now={() => '2026-08-31T15:00:00.000Z'}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Request job' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Request job' })); });
 
     expect(onCreateJob).toHaveBeenCalledWith({
       jobId: expect.stringMatching(/\S/),
@@ -320,19 +353,20 @@ describe('JobRequestForm', () => {
     });
   });
 
-  it('requires contractor acceptance confirmation before filling', () => {
-    const onFillJob = vi.fn();
+  it('requires contractor acceptance confirmation before filling', async () => {
+    const onFillJob = vi.fn(saved);
     render(
       <JobRequestForm
+        {...idleMutationProps}
         jobs={report.jobs}
-        onCreateJob={vi.fn()}
+        onCreateJob={vi.fn(saved)}
         onFillJob={onFillJob}
-        onCancelJob={vi.fn()}
+        onCancelJob={vi.fn(saved)}
         now={() => '2026-08-31T15:00:00.000Z'}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Fill job-1' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Fill job-1' })); });
 
     expect(screen.getByText(/contractor acceptance is the fill event/i)).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Accepted date'), {
@@ -341,7 +375,7 @@ describe('JobRequestForm', () => {
     fireEvent.change(screen.getByLabelText('Accepted time'), {
       target: { value: '16:00' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm fill' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Confirm fill' })); });
 
     expect(onFillJob).toHaveBeenCalledWith({
       jobId: 'job-1',
@@ -349,36 +383,38 @@ describe('JobRequestForm', () => {
     });
   });
 
-  it('does not fill when the confirmation is dismissed', () => {
-    const onFillJob = vi.fn();
+  it('does not fill when the confirmation is dismissed', async () => {
+    const onFillJob = vi.fn(saved);
     render(
       <JobRequestForm
+        {...idleMutationProps}
         jobs={report.jobs}
-        onCreateJob={vi.fn()}
+        onCreateJob={vi.fn(saved)}
         onFillJob={onFillJob}
-        onCancelJob={vi.fn()}
+        onCancelJob={vi.fn(saved)}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Fill job-1' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Keep requested' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Fill job-1' })); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Keep requested' })); });
 
     expect(onFillJob).not.toHaveBeenCalled();
     expect(screen.queryByText(/contractor acceptance is the fill event/i)).toBeNull();
   });
 
-  it('cancels a requested job', () => {
-    const onCancelJob = vi.fn();
+  it('cancels a requested job', async () => {
+    const onCancelJob = vi.fn(saved);
     render(
       <JobRequestForm
+        {...idleMutationProps}
         jobs={report.jobs}
-        onCreateJob={vi.fn()}
-        onFillJob={vi.fn()}
+        onCreateJob={vi.fn(saved)}
+        onFillJob={vi.fn(saved)}
         onCancelJob={onCancelJob}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel job-1' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Cancel job-1' })); });
     expect(onCancelJob).toHaveBeenCalledWith({ jobId: 'job-1' });
   });
 });

@@ -36,14 +36,3 @@ export type FridayReportSource = {
   markJobFilled(input: FillJobRequest): MutationReceipt | Promise<MutationReceipt>;
   cancelJobRequest(input: CancelJobRequest): MutationReceipt | Promise<MutationReceipt>;
 };
-
-/** Thin delegate. No business rules, rate math, or SQL belong in this module. */
-export const createFridayService = (
-  source: FridayReportSource,
-): FridayProvider => ({
-  getCurrent: async (input) => source.getFridayReport(input),
-  getDrilldown: async (input) => source.getMetricDrilldown(input),
-  createJob: async (input) => source.createJobRequest(input),
-  fillJob: async (input) => source.markJobFilled(input),
-  cancelJob: async (input) => source.cancelJobRequest(input),
-});

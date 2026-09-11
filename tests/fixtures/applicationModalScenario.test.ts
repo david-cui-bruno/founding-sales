@@ -55,6 +55,7 @@ function setup() {
     conversations: { list: deny('conversations.list'), get: deny('conversations.get'), attachTranscript: deny('conversations.attachTranscript') },
     learnings: { list: deny('learnings.list'), capture: deny('learnings.capture'), addEvidence: deny('learnings.addEvidence'), updateStatus: deny('learnings.updateStatus') },
     imports: { preview: deny('imports.preview'), remap: deny('imports.remap'), commit: deny('imports.commit'), status: deny('imports.status') },
+    friday: { getCurrent: deny('friday.getCurrent'), getDrilldown: deny('friday.getDrilldown'), createJob: deny('friday.createJob'), fillJob: deny('friday.fillJob'), cancelJob: deny('friday.cancelJob') },
     today: { get: deny('today.get'), getLeadTriageSnapshot: deny('today.getLeadTriageSnapshot'), complete: deny('today.complete'), snooze: deny('today.snooze'), pin: deny('today.pin'), logPastActivity: deny('today.logPastActivity'), addLeadNote: deny('today.addLeadNote'), logCallOutcome: deny('today.logCallOutcome'), markActivityInError: deny('today.markActivityInError'), getTriageQueue: deny('today.getTriageQueue'), setReviewPosition: deny('today.setReviewPosition') },
     discovery: { get: deny('discovery.get'), getBrief: deny('discovery.getBrief'), begin: deny('discovery.begin'), override: deny('discovery.override') },
     delegation: {
@@ -62,7 +63,7 @@ function setup() {
       prepareRequestedFollowup: deny('delegation.prepareRequestedFollowup'), getRequestedFollowup: deny('delegation.getRequestedFollowup'), editRequestedFollowup: deny('delegation.editRequestedFollowup'), approveRequestedFollowup: deny('delegation.approveRequestedFollowup'), beginPhone: deny('delegation.beginPhone'), bootstrap: deny('delegation.bootstrap'), configurePolicy: deny('delegation.configurePolicy'), configureResearch: deny('delegation.configureResearch'), pair: deny('delegation.pair'), configure: deny('delegation.configure'), submit: deny('delegation.submit'), sync: deny('delegation.sync'),
     },
   };
-  const untouched = { status: api.imports.status, begin: api.discovery.begin, sync: api.delegation.sync };
+  const untouched = { status: api.imports.status, begin: api.discovery.begin, sync: api.delegation.sync, friday: api.friday };
   const installed = installApplicationModalScenario(api, calls, baseline);
   return { api: installed.api, calls, controller: installed.controller, baseline, untouched };
 }
@@ -70,7 +71,7 @@ function setup() {
 describe('finite synthetic modal fixture, pure contract tests', () => {
   it('only installs behind the exact opt-in before API exposure and preserves baseline source otherwise', () => {
     const entry = readFileSync(new URL('./applicationPresentationBrowser.tsx', import.meta.url), 'utf8');
-    expect(entry).toContain("get('modalScenario') === '1'\n  ? installApplicationModalScenario(api, calls, detail) : undefined;");
+    expect(entry).toContain("get('modalScenario') === '1'\n  ? installApplicationModalScenario(api, calls, detail, { fridayScenario: scenarioParams.get('fridayScenario') === '1' }) : undefined;");
     expect(entry.indexOf('? installApplicationModalScenario')).toBeLessThan(entry.indexOf('window.callie = modalScenario?.api ?? api'));
     expect(entry).toContain('...(modalScenario ? { modal: modalScenario.controller } : {})');
     const source = readFileSync(new URL('./applicationModalScenario.ts', import.meta.url), 'utf8');
@@ -81,6 +82,7 @@ describe('finite synthetic modal fixture, pure contract tests', () => {
     expect(api.imports.status).toBe(untouched.status);
     expect(api.discovery.begin).toBe(untouched.begin);
     expect(api.delegation.sync).toBe(untouched.sync);
+    expect(api.friday).toBe(untouched.friday);
     const attempts = [() => api.imports.preview(source), () => api.imports.remap({ previewId: 'x', contentHash: 'b'.repeat(64), mapping: { Name: 'person_name' } }),
       () => api.imports.commit(importCommitRequestSchema.parse({ previewId: 'x', contentHash: 'b'.repeat(64), mapping: { Name: 'person_name' }, source: { channel: 'custom', referredByPersonId: null }, duplicateDecisions: [] })),
       () => api.learnings.capture(capture), () => api.conversations.attachTranscript({ activityId: 'activity-call-kevin', personId: P, rawText: 'text' }),

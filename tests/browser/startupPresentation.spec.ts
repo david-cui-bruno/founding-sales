@@ -54,7 +54,7 @@ async function mount(page: Page, width: number, preferences: Preferences, system
   }, preferences);
   await page.addStyleTag({ content: css });
   await page.addScriptTag({ content: javascript });
-  await expect(page.getByRole('status')).toHaveText('Checking local foundation…');
+  await expect(page.getByRole('status').filter({ hasText: /^Checking local foundation…$/ })).toHaveText('Checking local foundation…');
   await expect.poll(() => page.evaluate(() => window.startupPresentation.pending().health)).toBe(2);
   await page.evaluate(() => window.startupPresentation.frame());
   return { errors, requests };
@@ -77,7 +77,24 @@ function assertASample(sample: AppearanceSample, theme: Theme, density: Density,
   expect(sample.width).toBe(width);
   expect(sample.height).toBeGreaterThanOrEqual(width === 1440 ? 900 : 700);
   expect(sample.overflow).toBe(false);
-  for (const corner of sample.corners) expect([colors.canvas, colors.rail]).toContain(corner);
+  expect(sample.corners).toHaveLength(4);
+  for (const corner of sample.corners.slice(0, 3)) expect([colors.canvas, colors.rail]).toContain(corner);
+  if (['health-pending', 'health-error'].includes(sample.phase)) {
+    expect(sample.diagnosticStrip).toBeNull();
+    expect([colors.canvas, colors.rail]).toContain(sample.corners[3]);
+  } else {
+    // Only the actual admitted diagnostic strip may paint the bottom-right corner.
+    // First-frame/bootstrap and the other three corner contracts remain unchanged.
+    expect(sample.diagnosticStrip).not.toBeNull();
+    const strip = sample.diagnosticStrip!;
+    expect(strip.ownsCorners).toEqual([false, false, false, true]);
+    expect(strip.left).toBe(width === 1440 ? 142 : 124);
+    expect(strip.right).toBe(width);
+    expect(strip.bottom).toBe(sample.viewportHeight);
+    expect(strip.top).toBeGreaterThan(0);
+    expect(strip.top).toBeLessThan(sample.viewportHeight - 2);
+    expect(sample.corners[3]).toBe(colors.surface);
+  }
   if (['health-pending', 'health-error', 'daily-pending', 'daily-error', 'informational'].includes(sample.phase)) expect(sample.workflow).toBeNull();
   if (['daily-pending', 'daily-error', 'informational'].includes(sample.phase)) assertPendingGeometry(sample, width);
 }
@@ -113,6 +130,8 @@ async function pendingReads(page: Page, count: number) {
 }
 async function refresh(page: Page) {
   await page.evaluate(() => window.startupPresentation.refresh());
+  await expect.poll(() => page.evaluate(() => window.startupPresentation.pending())).toEqual({ health: 1, daily: 1, delegation: 1 });
+  await page.evaluate(() => window.startupPresentation.resolveHealth());
   await pendingReads(page, 1);
 }
 async function settle(page: Page, mode: 'meeting_first' | 'unknown' | 'legacy') {
@@ -140,7 +159,7 @@ for (const width of [1440, 1050]) for (const theme of ['light', 'dark'] as const
     await noWorkflowBeforeHealth(page, 2);
     await checkpoint(page, info, '01-health-pending');
     await page.evaluate(() => window.startupPresentation.rejectHealth());
-    await expect(page.getByRole('alert')).toContainText('The local database could not be opened');
+    await expect(page.getByRole('alert')).toContainText('The diagnostic read could not be completed');
     await expect(page.getByRole('alert')).toHaveAttribute('aria-live', 'assertive');
     await expect(page.locator('body')).not.toContainText('Synthetic private failure');
     const retry = page.getByRole('button', { name: 'Retry', exact: true });
@@ -155,7 +174,7 @@ for (const width of [1440, 1050]) for (const theme of ['light', 'dark'] as const
     await noWorkflowBeforeHealth(page, 2);
     await checkpoint(page, info, '02-health-error-retry-focus');
     await retry.press('Enter');
-    await expect(page.getByRole('status')).toHaveText('Checking local foundation…');
+    await expect(page.getByRole('status').filter({ hasText: /^Checking local foundation…$/ })).toHaveText('Checking local foundation…');
     await expect.poll(() => page.evaluate(() => window.startupPresentation.pending().health)).toBe(1);
     await noWorkflowBeforeHealth(page, 3);
     await checkpoint(page, info, '03-health-retry-pending');
@@ -195,7 +214,8 @@ for (const width of [1440, 1050]) for (const theme of ['light', 'dark'] as const
     await expect(page.getByTestId('native-desk')).toHaveAttribute('data-workflow-mode', 'meeting_first');
     await assertRail(page, width, theme);
     const headings = await page.locator('.native-desk__lane h2').evaluateAll(elements => elements.map(element => ({ text: element.textContent, bottom: element.getBoundingClientRect().bottom })));
-    expect(headings).toHaveLength(3);
+    expect(headings).toHaveLength(4);
+    await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Needs your approval', 'Upcoming meetings']);
     for (const heading of headings) expect(heading.bottom, heading.text ?? '').toBeLessThan(width === 1440 ? 900 : 700);
     await checkpoint(page, info, '10-ready-native-a');
     await page.evaluate(() => window.startupPresentation.setLocalMode('legacy'));
@@ -212,7 +232,7 @@ for (const width of [1440, 1050]) for (const theme of ['light', 'dark'] as const
     for (const sample of samples) assertASample(sample, theme, density, width);
     for (const phase of ['health-pending', 'health-error', 'daily-pending', 'daily-error', 'informational', 'legacy', 'desk']) expect(samples.some(sample => sample.phase === phase && sample.source === 'frame'), phase).toBe(true);
     const inventory = await methods(page);
-    expect(inventory.filter(method => method === 'health.get')).toHaveLength(3);
+    expect(inventory.filter(method => method === 'health.get')).toHaveLength(6);
     // StrictMode mounts read twice. Only four explicit refreshes add reads.
     for (const method of ['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments']) expect(inventory.filter(value => value === method), method).toHaveLength(6);
     // FounderApp's real inspector provider reads capabilities on mount, not on
@@ -221,7 +241,7 @@ for (const width of [1440, 1050]) for (const theme of ['light', 'dark'] as const
     // useDiscovery shares its in-flight read across StrictMode effects, so
     // the diagnostic inventory has one discovery.get, not two.
     const expectedReads = {
-      'health.get': 3, 'daily.get': 6, 'delegation.status': 6,
+      'health.get': 6, 'daily.get': 6, 'delegation.status': 6,
       'localWorkspace.get': 6, 'localWorkspace.getCommitments': 6,
       'leadDetail.getOutboundCapabilities': 2, 'today.get': 2, 'discovery.get': 1,
       // Healthy StrictMode mount twice, then three explicit window-focus events.

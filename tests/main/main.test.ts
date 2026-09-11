@@ -1,10 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AppDatabase } from '../../src/main/db/database';
 import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
 import type { AppleBridgeSupervisorApi } from '../../src/main/appleBridge/appleBridgeSupervisor';
 import type { HealthProvider } from '../../src/main/health/registerHealthIpc';
-import type { ApplicationStartupDependencies, ApplicationStartupOptions } from '../../src/main/startApplication';
+import type { ApplicationStartupDependencies, ApplicationStartupOptions, RunningApplication } from '../../src/main/startApplication';
 import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import type { SourcingPollHealth } from '../../src/shared/contracts/sourcingContract';
 import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
@@ -20,6 +20,13 @@ const mocks = vi.hoisted(() => {
   return {
     appOn: vi.fn(),
     appQuit: vi.fn(),
+    appRelaunch: vi.fn(),
+    installer: false,
+    backupMode: false,
+    backupHost: vi.fn(() => new Promise<never>(() => undefined)),
+    dock: undefined as { setBadge(text: string): void } | undefined,
+    dockSetBadge: vi.fn(),
+    showMessageBox: vi.fn<(...args: unknown[]) => Promise<{ response: number; checkboxChecked: boolean }>>(),
     browserWindows: vi.fn(() => []),
     commandLineHasSwitch: vi.fn((name: string) => name.length < 0),
     createFileLogSink: vi.fn(() => fileLogSink),
@@ -49,9 +56,12 @@ vi.mock('electron', () => ({
     isPackaged: false,
     on: mocks.appOn,
     quit: mocks.appQuit,
+    relaunch: mocks.appRelaunch,
+    get dock() { return mocks.dock; },
     requestSingleInstanceLock: mocks.requestSingleInstanceLock,
     whenReady: mocks.whenReady,
   },
+  dialog: { showMessageBox: mocks.showMessageBox },
   BrowserWindow: { getAllWindows: mocks.browserWindows },
   protocol: { registerSchemesAsPrivileged: mocks.protocolSchemes },
   powerMonitor: { on: mocks.powerOn, removeListener: mocks.powerRemove },
@@ -65,7 +75,11 @@ vi.mock('electron', () => ({
   },
 }));
 
-vi.mock('electron-squirrel-startup', () => ({ default: false }));
+vi.mock('electron-squirrel-startup', () => ({ get default() { return mocks.installer; } }));
+vi.mock('../../src/main/backup/preReleaseBackupRuntime', () => ({
+  isPreReleaseBackupInvocation: () => mocks.backupMode,
+  runPreReleaseBackupHost: mocks.backupHost,
+}));
 vi.mock('../../src/main/createWindow', () => ({
   createWindow: mocks.createWindow,
 }));
@@ -88,6 +102,13 @@ describe('main process startup', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    mocks.installer = false;
+    mocks.backupMode = false;
+    mocks.backupHost.mockReset().mockImplementation(() => new Promise<never>(() => undefined));
+    mocks.appRelaunch.mockReset();
+    mocks.dock = undefined;
+    mocks.dockSetBadge.mockReset();
+    mocks.showMessageBox.mockReset().mockResolvedValue({ response: 0, checkboxChecked: false });
     mocks.powerListeners.clear();
     mocks.powerOn.mockReset().mockImplementation((event: string, callback: () => void) => {
       const listeners = mocks.powerListeners.get(event) ?? new Set<() => void>();
@@ -114,6 +135,39 @@ describe('main process startup', () => {
     });
     mocks.commandLineHasSwitch.mockReturnValue(false);
   });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function held<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<T>((accept, fail) => {
+      resolve = accept;
+      reject = fail;
+    });
+    return { promise, resolve, reject };
+  }
+
+  function returningApplication(shutdown: () => Promise<void>): RunningApplication {
+    return {
+      databasePath: '/fixture/main-owned.sqlite3',
+      shutdown,
+      createPreReleaseBackup: async () => { throw new Error('Unexpected backup request'); },
+    };
+  }
+
+  function throwingDock(): void {
+    // Test-only global facade. Never mutate the real process.platform descriptor.
+    vi.stubGlobal('process', Object.create(process, {
+      platform: { value: 'darwin', configurable: true },
+    }));
+    mocks.dock = { setBadge: mocks.dockSetBadge };
+    mocks.dockSetBadge.mockImplementation(() => {
+      throw new Error('private dock failure /private/startup-secret');
+    });
+  }
 
   async function settleStartup(): Promise<void> {
     resolveReady?.();
@@ -412,14 +466,265 @@ describe('main process startup', () => {
     expect(mocks.loadUrl).toHaveBeenCalledWith('http://localhost:5173/');
   });
 
-  it('quits without creating an unmanaged window when initialization fails', async () => {
+  it.each(['installer', 'second-instance', 'backup-host'] as const)('suppresses fatal startup dialog for the intentional %s path', async mode => {
+    mocks.installer = mode === 'installer';
+    mocks.backupMode = mode === 'backup-host';
+    if (mode === 'second-instance') mocks.requestSingleInstanceLock.mockReturnValueOnce(false);
+    await import('../../src/main');
+    await settleStartup();
+    expect(mocks.whenReady).not.toHaveBeenCalled();
+    expect(mocks.startApplication).not.toHaveBeenCalled();
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
+    expect(mocks.backupHost).toHaveBeenCalledTimes(mode === 'backup-host' ? 1 : 0);
+  });
+
+  it.each(['when-ready', 'before-raw-call'] as const)('offers Quit only for unconfirmed failure at %s', async stage => {
+    const decision = held<{ response: number; checkboxChecked: boolean }>();
+    mocks.showMessageBox.mockReturnValue(decision.promise);
+    if (stage === 'when-ready') mocks.whenReady.mockRejectedValueOnce(new Error('/private/ready-secret'));
+    else mocks.createFileLogSink.mockImplementationOnce(() => { throw new Error('/private/log-secret'); });
+    await import('../../src/main');
+    await settleStartup();
+    expect(mocks.startApplication).not.toHaveBeenCalled();
+    expect(mocks.appQuit).not.toHaveBeenCalled();
+    expect(mocks.showMessageBox).toHaveBeenCalledWith(expect.objectContaining({ buttons: ['Quit'], defaultId: 0, cancelId: 0, noLink: true }));
+    expect(JSON.stringify(mocks.showMessageBox.mock.calls)).not.toMatch(/private|ready-secret|log-secret/);
+    decision.resolve({ response: 1, checkboxChecked: false });
+    await settleStartup();
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not begin raw startup when readiness resolves after an intentional before-quit', async () => {
+    mocks.startApplication.mockResolvedValue(returningApplication(vi.fn(async () => undefined)));
+    await import('../../src/main');
+    const beforeQuit = mocks.appOn.mock.calls.find(([event]) => event === 'before-quit')![1] as (event: { preventDefault(): void }) => void;
+    beforeQuit({ preventDefault: vi.fn() });
+    await settleStartup();
+    expect(mocks.startApplication).not.toHaveBeenCalled();
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
+  });
+
+  it.each(['resolve', 'reject'] as const)('joins cleanup of a raw application fulfilled after intentional abort until it will %s', async outcome => {
+    const raw = held<RunningApplication>();
+    const cleanup = held<void>();
+    const shutdown = vi.fn(() => cleanup.promise);
+    mocks.startApplication.mockReturnValue(raw.promise);
+    await import('../../src/main');
+    await settleStartup();
+    const beforeQuit = mocks.appOn.mock.calls.find(([event]) => event === 'before-quit')![1] as (event: { preventDefault(): void }) => void;
+    beforeQuit({ preventDefault: vi.fn() });
+    beforeQuit({ preventDefault: vi.fn() });
+    raw.resolve(returningApplication(shutdown));
+    await settleStartup();
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(mocks.appQuit).not.toHaveBeenCalled();
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+    if (outcome === 'resolve') cleanup.resolve(undefined); else cleanup.reject(new Error('late owned cleanup failed'));
+    await settleStartup();
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
+  });
+
+  it('reserves owned shutdown before a disposer reenters before-quit during dock failure', async () => {
+    const cleanup = held<void>();
+    const shutdown = vi.fn(() => { beforeQuit({ preventDefault: vi.fn() }); return cleanup.promise; });
+    mocks.startApplication.mockResolvedValue(returningApplication(shutdown));
+    throwingDock();
+    await import('../../src/main');
+    const beforeQuit = mocks.appOn.mock.calls.find(([event]) => event === 'before-quit')![1] as (event: { preventDefault(): void }) => void;
+    await settleStartup();
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(mocks.appQuit).not.toHaveBeenCalled();
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+    cleanup.resolve(undefined);
+    await settleStartup();
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
+  });
+
+  it('treats a synchronous owned shutdown throw as unconfirmed and never retries cleanup', async () => {
+    const shutdown = vi.fn((): Promise<void> => { throw new Error('ordinary synchronous cleanup failure'); });
+    mocks.startApplication.mockResolvedValue(returningApplication(shutdown));
+    throwingDock();
+    await import('../../src/main');
+    await settleStartup();
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(mocks.showMessageBox).toHaveBeenCalledWith(expect.objectContaining({ buttons: ['Quit'] }));
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
+  });
+
+  it('safely quits on dialog rejection after confirmed raw cleanup without restarting or exposing errors', async () => {
+    mocks.startApplication.mockRejectedValue(new Error('/private/startup-secret'));
+    mocks.showMessageBox.mockRejectedValue(new Error('/private/dialog-secret'));
+    await import('../../src/main');
+    await settleStartup();
+    expect(mocks.showMessageBox).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(mocks.showMessageBox.mock.calls)).not.toMatch(/private|startup-secret|dialog-secret/);
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
+    expect(mocks.startApplication).toHaveBeenCalledTimes(1);
+  });
+
+  it('still quits once when explicitly permitted relaunch throws', async () => {
+    mocks.startApplication.mockRejectedValue(new Error('raw failed after confirmed cleanup'));
+    mocks.showMessageBox.mockResolvedValue({ response: 1, checkboxChecked: false });
+    mocks.appRelaunch.mockImplementation(() => { throw new Error('relaunch unavailable'); });
+    await import('../../src/main');
+    await settleStartup();
+    expect(mocks.appRelaunch).toHaveBeenCalledTimes(1);
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+    const beforeQuit = mocks.appOn.mock.calls.find(([event]) => event === 'before-quit')![1] as (event: { preventDefault(): void }) => void;
+    beforeQuit({ preventDefault: vi.fn() });
+    await settleStartup();
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+    expect(mocks.appRelaunch).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps initialization failure windowless and waits for the explicit default Quit decision', async () => {
+    const decision = held<{ response: number; checkboxChecked: boolean }>();
+    mocks.showMessageBox.mockReturnValue(decision.promise);
     mocks.startApplication.mockRejectedValue(new Error('database unavailable'));
 
     await import('../../src/main');
     await settleStartup();
 
     expect(mocks.createWindow).not.toHaveBeenCalled();
+    expect(mocks.appQuit).not.toHaveBeenCalled();
+    expect(mocks.showMessageBox).toHaveBeenCalledTimes(1);
+    expect(mocks.showMessageBox).toHaveBeenCalledWith(expect.objectContaining({
+      buttons: ['Quit', 'Restart Callie'], defaultId: 0, cancelId: 0,
+    }));
+    decision.resolve({ response: 0, checkboxChecked: false });
+    await settleStartup();
     expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
+    expect(mocks.createWindow).not.toHaveBeenCalled();
+  });
+
+  it.each(['confirmed', 'unconfirmed'] as const)('awaits owned cleanup after a successful startup and throwing dock: %s', async (outcome) => {
+    const cleanup = held<void>();
+    const decision = held<{ response: number; checkboxChecked: boolean }>();
+    const shutdown = vi.fn(() => cleanup.promise);
+    mocks.startApplication.mockResolvedValue(returningApplication(shutdown));
+    mocks.showMessageBox.mockReturnValue(decision.promise);
+    throwingDock();
+
+    await import('../../src/main');
+    await settleStartup();
+
+    expect(mocks.dockSetBadge).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+    expect(mocks.appQuit).not.toHaveBeenCalled();
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
+
+    if (outcome === 'confirmed') cleanup.resolve(undefined);
+    else cleanup.reject(new Error('ordinary cleanup rejection /private/key-secret'));
+    await settleStartup();
+
+    expect(mocks.showMessageBox).toHaveBeenCalledTimes(1);
+    expect(mocks.showMessageBox).toHaveBeenCalledWith(expect.objectContaining({
+      buttons: outcome === 'confirmed' ? ['Quit', 'Restart Callie'] : ['Quit'],
+      defaultId: 0,
+      cancelId: 0,
+    }));
+    expect(JSON.stringify(mocks.showMessageBox.mock.calls)).not.toMatch(/private|startup-secret|key-secret/);
+    expect(mocks.appQuit).not.toHaveBeenCalled();
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
+
+    // A disallowed response1 must still map to Quit when cleanup is unconfirmed.
+    decision.resolve({ response: 1, checkboxChecked: false });
+    await settleStartup();
+    expect(mocks.appRelaunch).toHaveBeenCalledTimes(outcome === 'confirmed' ? 1 : 0);
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    if (outcome === 'confirmed') {
+      expect(mocks.appRelaunch.mock.invocationCallOrder[0]).toBeLessThan(mocks.appQuit.mock.invocationCallOrder[0]);
+    }
+  });
+
+  it.each(['resolve', 'reject'] as const)('before-quit joins detached dock-failure cleanup directly when it will %s', async (outcome) => {
+    const cleanup = held<void>();
+    const shutdown = vi.fn(() => cleanup.promise);
+    mocks.startApplication.mockResolvedValue(returningApplication(shutdown));
+    throwingDock();
+    await import('../../src/main');
+    await settleStartup();
+    expect(mocks.dockSetBadge).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+
+    const beforeQuit = mocks.appOn.mock.calls.find(([event]) => event === 'before-quit')![1] as
+      (event: { preventDefault(): void }) => void;
+    const preventDefault = vi.fn();
+    beforeQuit({ preventDefault });
+    beforeQuit({ preventDefault });
+    await settleStartup();
+    expect(preventDefault).toHaveBeenCalledTimes(2);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+    expect(mocks.appQuit).not.toHaveBeenCalled();
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
+
+    if (outcome === 'resolve') cleanup.resolve(undefined);
+    else cleanup.reject(new Error('ordinary owned shutdown failure'));
+    await settleStartup();
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    beforeQuit({ preventDefault });
+    await settleStartup();
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['restart', 'reject'] as const)('quits without awaiting an open dialog and ignores its late %s', async (late) => {
+    const decision = held<{ response: number; checkboxChecked: boolean }>();
+    mocks.showMessageBox.mockReturnValue(decision.promise);
+    mocks.startApplication.mockRejectedValue(new Error('raw startup failed after cleanup'));
+    await import('../../src/main');
+    await settleStartup();
+    expect(mocks.appQuit).not.toHaveBeenCalled();
+    expect(mocks.showMessageBox).toHaveBeenCalledTimes(1);
+
+    const beforeQuit = mocks.appOn.mock.calls.find(([event]) => event === 'before-quit')![1] as
+      (event: { preventDefault(): void }) => void;
+    beforeQuit({ preventDefault: vi.fn() });
+    await settleStartup();
+    // The held decision is deliberately unresolved here.
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
+
+    if (late === 'restart') decision.resolve({ response: 1, checkboxChecked: false });
+    else decision.reject(new Error('native dialog failed late'));
+    await settleStartup();
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
+    expect(mocks.showMessageBox).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers only Quit for an AggregateError from the exact raw startup boundary', async () => {
+    const decision = held<{ response: number; checkboxChecked: boolean }>();
+    mocks.showMessageBox.mockReturnValue(decision.promise);
+    mocks.startApplication.mockRejectedValue(new AggregateError([new Error('private cleanup failure')], 'raw cleanup unconfirmed'));
+    await import('../../src/main');
+    await settleStartup();
+    expect(mocks.appQuit).not.toHaveBeenCalled();
+    expect(mocks.showMessageBox).toHaveBeenCalledWith(expect.objectContaining({
+      buttons: ['Quit'], defaultId: 0, cancelId: 0,
+    }));
+    decision.resolve({ response: 1, checkboxChecked: false });
+    await settleStartup();
+    expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
   });
 
   it('coordinates before-quit with foundation initialization that has not settled', async () => {
@@ -498,8 +803,16 @@ describe('main process startup', () => {
     expect(mocks.appQuit).toHaveBeenCalledTimes(1);
   });
 
-  it('destroys a partial window and quits when renderer loading rejects', async () => {
+  it('destroys and cleans a partial renderer window before the explicit default Quit decision', async () => {
+    const decision = held<{ response: number; checkboxChecked: boolean }>();
     const events: string[] = [];
+    let eventsAtDialog: string[] | undefined;
+    let destroyCallsAtDialog: number | undefined;
+    mocks.showMessageBox.mockImplementation(() => {
+      eventsAtDialog = [...events];
+      destroyCallsAtDialog = mocks.windowDestroy.mock.calls.length;
+      return decision.promise;
+    });
     const database = { path: '/tmp/callie.sqlite3' } as AppDatabase;
     const loadFailure = {
       then: (_resolve: unknown, reject: (error: Error) => void) =>
@@ -557,6 +870,17 @@ describe('main process startup', () => {
       'unregister',
       'close',
     ]);
+    expect(mocks.appQuit).not.toHaveBeenCalled();
+    expect(mocks.showMessageBox).toHaveBeenCalledTimes(1);
+    expect(eventsAtDialog).toEqual(['open', 'migrate', 'recover', 'health', 'ipc', 'unregister', 'close']);
+    expect(destroyCallsAtDialog).toBe(1);
+    expect(mocks.showMessageBox).toHaveBeenCalledWith(expect.objectContaining({
+      buttons: ['Quit', 'Restart Callie'], defaultId: 0, cancelId: 0,
+    }));
+    decision.resolve({ response: 0, checkboxChecked: false });
+    await settleStartup();
     expect(mocks.appQuit).toHaveBeenCalledTimes(1);
+    expect(mocks.appRelaunch).not.toHaveBeenCalled();
+    expect(mocks.windowDestroy).toHaveBeenCalledTimes(1);
   });
 });

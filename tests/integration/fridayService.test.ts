@@ -1,3 +1,5 @@
+import { productionDomainGate } from '../fixtures/productionDomainGate';
+import { createFridayProvider } from '../../src/main/ipc/registerApplicationIpc';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -17,10 +19,7 @@ import {
 import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import {
-  createFridayService,
-  type FridayProvider,
-} from '../../src/main/friday/fridayService';
+import { type FridayProvider } from '../../src/main/friday/fridayService';
 import {
   insertOpenCycleWithAction,
   seedProspect,
@@ -77,7 +76,7 @@ describe('fridayService over a real encrypted domain', () => {
       services.cadences.installBuiltins();
     });
     domain = createFounderSalesDomain({ services, database, clock, ids });
-    friday = createFridayService(domain);
+    friday = createFridayProvider(productionDomainGate(domain));
   });
 
   afterEach(() => {

@@ -1,3 +1,5 @@
+import { productionDomainGate } from '../fixtures/productionDomainGate';
+import { createConversationsProvider } from '../../src/main/ipc/registerApplicationIpc';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -11,7 +13,7 @@ import {
   createFounderSalesDomain,
   type FounderSalesDomain,
 } from '../../src/main/domain/founderSalesDomain';
-import { createConversationsService } from '../../src/main/conversations/conversationsService';
+
 import { BUILTIN_PRIORITIZATION_RULE_V1 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
 import {
   conversationDetailSchema,
@@ -77,7 +79,7 @@ describe('conversationsService', () => {
 
   it('lists, reads, and attaches a transcript through the domain facade', async () => {
     insertCallActivity('activity-1', 'person-1');
-    const service = createConversationsService(domain);
+    const service = createConversationsProvider(productionDomainGate(domain));
 
     const list = conversationsListResponseSchema.parse(
       await service.list({ query: '', filter: 'all', limit: 50, cursor: null }),
@@ -108,7 +110,7 @@ describe('conversationsService', () => {
 
   it('rejects a second transcript for the same conversation', async () => {
     insertCallActivity('activity-2', 'person-2');
-    const service = createConversationsService(domain);
+    const service = createConversationsProvider(productionDomainGate(domain));
     await service.attachTranscript({
       activityId: 'activity-2',
       personId: 'person-2',
@@ -145,7 +147,7 @@ describe('conversationsService', () => {
     });
 
     now = attachedAt;
-    const service = createConversationsService(domain);
+    const service = createConversationsProvider(productionDomainGate(domain));
     await service.attachTranscript({
       activityId: 'delayed-call', personId: owner.personId,
       rawText: 'me: How do you manage it?\nLead: I self-manage delayed Hope St.',
@@ -198,7 +200,7 @@ describe('conversationsService', () => {
     domain = createFounderSalesDomain({ database, services, clock, ids });
     const revision = database.raw.prepare('SELECT total_changes() AS count').get();
     expect(services.events.getActivity('delayed-call')).toEqual(activity);
-    expect(await createConversationsService(domain).get({ activityId: 'delayed-call' })).toEqual(detail);
+    expect(await createConversationsProvider(productionDomainGate(domain)).get({ activityId: 'delayed-call' })).toEqual(detail);
     expect(domain.getDiscoveryBrief(owner.personId)).toEqual(brief);
     expect(evidenceRows()).toEqual(attached);
     expect(database.raw.prepare('SELECT total_changes() AS count').get()).toEqual(revision);

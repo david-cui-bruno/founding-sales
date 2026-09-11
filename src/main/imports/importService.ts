@@ -27,12 +27,3 @@ export type ImportDomain = {
   commitLeadImport(input: ImportCommitRequest): ImportCommitReceipt;
   getImportJob(input: ImportStatusRequest): ImportStatus;
 };
-
-export function createImportService(domain: ImportDomain): ImportProvider {
-  return {
-    preview: async (input) => domain.previewLeadImport(input),
-    remap: async (input) => domain.remapLeadImport(input),
-    commit: async (input) => domain.commitLeadImport(input),
-    status: async (input) => domain.getImportJob(input),
-  };
-}

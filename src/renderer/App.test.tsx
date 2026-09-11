@@ -60,8 +60,8 @@ describe('DiagnosticsScreen', () => {
   it('renders a safe failed state without raw IPC errors', () => {
     const markup = renderState({ status: 'failed' });
 
-    expect(markup).toContain('The local database could not be opened');
-    expect(markup).toContain('LOCAL_DATABASE_UNAVAILABLE');
+    expect(markup).toContain('The diagnostic read could not be completed');
+    expect(markup).toContain('DIAGNOSTIC_READ_FAILED');
     expect(markup).not.toContain('database unavailable at /private');
   });
 

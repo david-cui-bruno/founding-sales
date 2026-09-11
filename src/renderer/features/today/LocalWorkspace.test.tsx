@@ -7,7 +7,18 @@ import { dailyFixture, nativeDeskFixture } from './nativeDesk.fixture';
 import type { LocalWorkspaceSnapshot, LocalCommitmentsSnapshot } from '../../../shared/contracts/localWorkspaceContract';
 afterEach(cleanup);
 const local: LocalWorkspaceSnapshot = { scope: 'local_database', generatedAt: '2026-09-09T12:00:00.000Z', workflowMode: 'meeting_first', transitionReceipt: null, accounts: { state: 'available', snapshots: dailyFixture().accounts } };
+const retainedKinds: Array<[LocalCommitmentsSnapshot['items'][number]['kind'], string]> = [
+  ['callback', 'Retained callback'],
+  ['post_stage', 'Post-stage follow-through'],
+  ['onboarding', 'Onboarding'],
+  ['inbound_response', 'Inbound response'],
+  ['warm_relationship', 'Existing relationship'],
+  ['founder_resurface', 'Founder resurface'],
+];
 const commitments: LocalCommitmentsSnapshot = { scope: 'local_database', generatedAt: local.generatedAt, revision: 1, reviewErrorCount: 0, items: [{ kind: 'callback', item: { id: 'cycle-retained', salesCycleId: 'cycle-retained', personId: 'person-retained', personName: 'Retained Person', contextLabel: 'Existing relationship', stage: 'interviewed', priorityContext: null, action: { id: 'action-retained', type: 'follow_up', channel: 'email', label: 'Send requested details', dueAt: local.generatedAt }, lane: 'later', reason: 'Recorded callback', activeTriggers: [], verifyFirst: false, pinned: false, consentRequirement: null, cloudScores: null } }] };
+const retainedTemplate = commitments.items[0].item;
+const retainedChannels = ['email', 'call', 'onboarding', 'text', 'review', 'email'] as const;
+const sixKindCommitments: LocalCommitmentsSnapshot = { scope: 'local_database', generatedAt: local.generatedAt, revision: 1, reviewErrorCount: 0, items: retainedKinds.map(([kind], index) => ({ kind, item: { ...retainedTemplate, id: `cycle-retained-${index}`, salesCycleId: `cycle-retained-${index}`, personId: `person-retained-${index}`, personName: `Retained Person ${index + 1}`, contextLabel: `Stored Company ${index + 1}`, reason: `Retained reason ${index + 1}`, action: { ...retainedTemplate.action, id: `action-retained-${index}`, label: `Retained action ${index + 1}`, channel: retainedChannels[index] } } })) };
 function fixture(scoped = false) {
   const f = nativeDeskFixture(scoped ? dailyFixture() : dailyFixture({ workspaceId: null, accounts: [], answers: [], calls: { accountIds: [], workloadConflict: false }, ownerStatus: [], transport: [], meetings: [], campaigns: [], issues: [{ code: 'scope_unknown', count: 1 }] }));
   const api = { ...f.api, localWorkspace: { ...f.api.localWorkspace, get: vi.fn(async () => structuredClone(local)), getCommitments: vi.fn(async () => structuredClone(commitments)), transition: vi.fn() } };
@@ -33,20 +44,24 @@ it.each(['accounts', 'campaigns'] as const)('keeps the %s route identity while u
   expect(screen.queryByText(/Legacy workflow is active/)).toBeNull();
   expect(f.calls.every(c => /daily.get|delegation.status/.test(c.method))).toBe(true);
 });
-it('puts typed retained work first in Calls, preserves non-call/later metadata and navigates only explicitly', async () => {
-  const f = fixture(); const open = vi.fn(); render(<NativeDeskRoute api={f.api} onOpenLead={open} legacy={<p>Forbidden legacy</p>} />);
-  const row = await screen.findByRole('button', { name: /Retained callback.*Retained Person/ });
+it('puts typed retained work in Local commitments before worker Calls, preserving metadata and explicit navigation', async () => {
+  const f = fixture(); f.api.localWorkspace.getCommitments.mockResolvedValue(sixKindCommitments); const open = vi.fn(); render(<NativeDeskRoute api={f.api} onOpenLead={open} legacy={<p>Forbidden legacy</p>} />);
+  const row = await screen.findByRole('button', { name: /Retained callback.*Retained Person 1/ });
+  const localCommitments = screen.getByRole('heading', { name: /^Local commitments/ }).closest('section')!;
   const calls = screen.getByRole('heading', { name: /^Calls/ }).closest('section')!;
-  expect(within(calls).getAllByRole('button')[0]).toBe(row);
+  expect(localCommitments.compareDocumentPosition(calls) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  for (const [, label] of retainedKinds) expect(within(localCommitments).getByRole('button', { name: new RegExp(label) })).toBeTruthy();
+  expect(within(localCommitments).getByText('6')).toBeTruthy();
+  expect(within(calls).queryByRole('button', { name: /Retained/ })).toBeNull();
   fireEvent.click(row);
   expect(open).not.toHaveBeenCalled();
   expect(screen.getByText('Action type: follow_up · Channel: email · Lane: later')).toBeTruthy();
   expect(screen.queryByText('Forbidden legacy')).toBeNull();
-  for (const lane of document.querySelectorAll('.native-desk__lane')) expect(lane.querySelector('.native-desk__count')?.textContent).toBe('Unavailable');
+  expect(within(calls).getByText('Unavailable')).toBeTruthy();
   expect(screen.getByText('Worker unavailable')).toBeTruthy();
   expect(f.calls.every(c => !/prepare|approve|begin|sync|forbidden/.test(c.method))).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: 'Open contact workspace' }));
-  expect(open).toHaveBeenCalledWith('person-retained');
+  expect(open).toHaveBeenCalledWith('person-retained-0');
 });
 it('keeps the local account library read-only and separate from unavailable worker scope', async () => {
   const f = fixture(); render(<NativeDeskRoute api={f.api} surface="accounts" onOpenLead={vi.fn()} />);
@@ -56,6 +71,97 @@ it('keeps the local account library read-only and separate from unavailable work
   expect(screen.queryByRole('button', { name: 'Open contact workspace' })).toBeNull();
   expect((await f.api.daily.get()).accounts).toEqual([]);
   expect(f.calls.every(c => /daily.get|delegation.status/.test(c.method))).toBe(true);
+});
+
+it('preserves the exact six returned keys, mixed-channel details and cross-lane keyboard order', async () => {
+  const f = fixture(true);
+  f.api.localWorkspace.getCommitments.mockResolvedValue(sixKindCommitments);
+  const open = vi.fn();
+  render(<NativeDeskRoute api={f.api} onOpenLead={open} />);
+  await screen.findByRole('button', { name: /Retained callback.*Retained Person 1/ });
+  const lane = screen.getByRole('heading', { name: /^Local commitments/ }).closest('section')!;
+  const rows = within(lane).getAllByRole('button');
+  const expectedKeys = sixKindCommitments.items.map(({ item }) => JSON.stringify(['retained', item.salesCycleId, item.action.id]));
+  expect(rows.map(row => row.getAttribute('data-row-key'))).toEqual(expectedKeys);
+  expect(new Set(expectedKeys).size).toBe(6);
+  for (const [index, row] of rows.entries()) {
+    const entry = sixKindCommitments.items[index];
+    expect(row.querySelector('time')?.dateTime).toBe(entry.item.action.dueAt);
+    fireEvent.click(row);
+    const detail = screen.getByRole('region', { name: 'Retained work detail' });
+    expect(within(detail).getByRole('heading', { name: entry.item.personName })).toBeTruthy();
+    expect(within(detail).getByText(retainedKinds[index][1])).toBeTruthy();
+    expect(within(detail).getByText(`Stored Company ${index + 1}`)).toBeTruthy();
+    expect(within(detail).getByText(entry.item.reason)).toBeTruthy();
+    expect(within(detail).getByText(`Action type: follow_up · Channel: ${retainedChannels[index]} · Lane: later`)).toBeTruthy();
+    expect(detail.querySelector('time')?.dateTime).toBe(entry.item.action.dueAt);
+    expect(open).toHaveBeenCalledTimes(index);
+    fireEvent.click(within(detail).getByRole('button', { name: 'Open contact workspace' }));
+    expect(open).toHaveBeenLastCalledWith(entry.item.personId);
+    fireEvent.click(screen.getByRole('button', { name: 'Close details' }));
+    expect(document.activeElement).toBe(row);
+  }
+  fireEvent.keyDown(rows[5], { key: 'j' });
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Call · Account A' }));
+  fireEvent.keyDown(document.activeElement!, { key: 'k' });
+  expect(document.activeElement).toBe(rows[5]);
+  expect(f.calls.every(call => /daily.get|delegation.status/.test(call.method))).toBe(true);
+});
+
+const countText = (label: string) => screen.getByRole('heading', { name: new RegExp(`^${label}`) }).querySelector('.native-desk__count')?.textContent;
+
+for (const daily of ['ready', 'failed'] as const) for (const size of [0, 1] as const) for (const evidence of ['complete', 'partial', 'stale', 'stale_partial'] as const) {
+  it(`keeps ${evidence} local count ${size} qualified during a real deferred refresh with daily ${daily}`, async () => {
+    const f = fixture(true);
+    if (daily === 'failed') f.api.daily.get = vi.fn(async () => { throw Error('Synthetic daily unavailable'); });
+    const partial = evidence === 'partial' || evidence === 'stale_partial';
+    const stale = evidence === 'stale' || evidence === 'stale_partial';
+    const value: LocalCommitmentsSnapshot = { ...commitments, items: size ? commitments.items : [], reviewErrorCount: partial ? 1 : 0 };
+    f.api.localWorkspace.getCommitments.mockResolvedValue(value);
+    render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+    const settled = partial ? `${size}+ · partial` : String(size);
+    await waitFor(() => expect(countText('Local commitments')).toBe(settled));
+    if (size) fireEvent.click(screen.getByRole('button', { name: /Retained callback/ }));
+    if (stale) {
+      f.api.localWorkspace.getCommitments.mockRejectedValueOnce(Error('Synthetic retained read failed'));
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+      await waitFor(() => expect(countText('Local commitments')).toBe(`${size} · last known`));
+    }
+    const readsBefore = f.api.localWorkspace.getCommitments.mock.calls.length;
+    let resolve!: (result: LocalCommitmentsSnapshot) => void;
+    f.api.localWorkspace.getCommitments.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Refresh' })));
+    expect(f.api.localWorkspace.getCommitments).toHaveBeenCalledTimes(readsBefore + 1);
+    expect(countText('Local commitments')).toBe(stale ? `${size} · last known` : partial ? `${size}+ · partial` : `${size} · checking`);
+    expect(screen.queryAllByRole('button', { name: /Retained callback/ })).toHaveLength(size);
+    if (size) expect((screen.getByRole('button', { name: 'Open contact workspace' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(countText('Calls')).toBe(daily === 'failed' ? 'Unavailable' : '1');
+    if (daily === 'failed') for (const label of ['Needs your approval', 'Upcoming meetings']) expect(countText(label)).toBe('Unavailable');
+    await act(async () => resolve(value));
+    expect(countText('Local commitments')).toBe(settled);
+    if (size) expect((screen.getByRole('button', { name: 'Open contact workspace' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(f.calls.every(call => /daily.get|delegation.status/.test(call.method))).toBe(true);
+  });
+}
+
+it.each(['ready', 'failed'] as const)('distinguishes no-value Checking, Unavailable and successful zero with daily %s', async daily => {
+  const f = fixture(true);
+  if (daily === 'failed') f.api.daily.get = vi.fn(async () => { throw Error('Synthetic daily unavailable'); });
+  let reject!: (reason: Error) => void;
+  f.api.localWorkspace.getCommitments.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+  render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+  await waitFor(() => expect(countText('Local commitments')).toBe('Checking'));
+  await act(async () => reject(Error('Private source sentinel')));
+  expect(countText('Local commitments')).toBe('Unavailable');
+  expect(screen.queryByText(/Private source sentinel/)).toBeNull();
+  let resolve!: (result: LocalCommitmentsSnapshot) => void;
+  f.api.localWorkspace.getCommitments.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Refresh' })));
+  expect(countText('Local commitments')).toBe('Checking');
+  await act(async () => resolve({ ...commitments, items: [] }));
+  expect(countText('Local commitments')).toBe('0');
+  expect(countText('Calls')).toBe(daily === 'failed' ? 'Unavailable' : '1');
+  expect(f.api.localWorkspace.getCommitments).toHaveBeenCalledTimes(2);
 });
 it('retains stale commitments after failure, holds navigation and recovers without reselection', async () => {
   const f = fixture(); render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);

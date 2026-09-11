@@ -1,3 +1,5 @@
+import { productionDomainGate } from '../fixtures/productionDomainGate';
+import { createReviewProvider } from '../../src/main/ipc/registerApplicationIpc';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
@@ -14,7 +16,7 @@ import {
 import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import { createReviewService } from '../../src/main/review/reviewService';
+
 import { reviewSnapshotSchema, type ReviewKind } from '../../src/shared/contracts/reviewContract';
 import {
   insertClosedCycle,
@@ -154,7 +156,7 @@ describe('reviewService', () => {
         seedReliabilityReview(205 + offset, minority, '2026-08-31T16:00:00.000Z'));
       const before = database.raw.prepare('SELECT * FROM lifecycle_review_items ORDER BY id').all();
       const changes = database.raw.prepare('SELECT total_changes() AS count').get();
-      const service = createReviewService(domain);
+      const service = createReviewProvider(productionDomainGate(domain));
       const filtered = await service.list({ kinds: [minority], limit: 200 });
       expect(filtered.items.map(item => item.reviewId).sort()).toEqual([...laterIds].sort());
       expect(filtered.items.every(item => item.kind === minority)).toBe(true);
@@ -179,7 +181,7 @@ describe('reviewService', () => {
         seedReliabilityReview(index, index < 205 ? 'unmatched_communication' : 'system_error'));
       const before = database.raw.prepare('SELECT * FROM lifecycle_review_items ORDER BY id').all();
       const changes = database.raw.prepare('SELECT total_changes() AS count').get();
-      const service = createReviewService(domain);
+      const service = createReviewProvider(productionDomainGate(domain));
       const request = { kinds: [] as ReviewKind[], limit: 200 };
       const first = await service.list(request);
       expect(first.items).toHaveLength(200);
@@ -200,7 +202,7 @@ describe('reviewService', () => {
     it('counts every local kind even in a limit-one or unavailable-source view', async () => {
       seedReliabilityReview(0, 'unmatched_communication');
       seedReliabilityReview(1, 'system_error');
-      const service = createReviewService(domain);
+      const service = createReviewProvider(productionDomainGate(domain));
       const summary = await service.list({ kinds: [], limit: 1 });
       expect(summary.items).toHaveLength(1);
       expect(summary).toMatchObject({ totalOpenCount: 2, matchedCount: 2,
@@ -235,7 +237,7 @@ describe('reviewService', () => {
         expect(database.raw.prepare('SELECT * FROM lifecycle_review_items WHERE id = ?').get(originalId)).toEqual(original);
         const before = database.raw.prepare('SELECT * FROM lifecycle_review_items ORDER BY id').all();
         const changes = database.raw.prepare('SELECT total_changes() AS count').get();
-        await expect(createReviewService(domain).list({ kinds: [], limit: 200 })).resolves.toMatchObject({
+        await expect(createReviewProvider(productionDomainGate(domain)).list({ kinds: [], limit: 200 })).resolves.toMatchObject({
           items: expect.arrayContaining([
             expect.objectContaining({ reviewId: originalId, kind: 'unmatched_communication' }),
             expect.objectContaining({ reviewId: id, kind: 'system_error' }),
@@ -251,7 +253,7 @@ describe('reviewService', () => {
       seedReliabilityReview(0, 'unmatched_communication');
       seedReliabilityReview(1, 'unmatched_communication');
       seedReliabilityReview(2, 'unmatched_communication');
-      const service = createReviewService(domain);
+      const service = createReviewProvider(productionDomainGate(domain));
       const request = { kinds: [] as ReviewKind[], limit: 2 };
       const first = await service.list(request);
       const cursor = reliabilityReviewCursor(first);
@@ -272,7 +274,7 @@ describe('reviewService', () => {
         seedReliabilityReview(index, index % 10 === 0 ? 'system_error' : 'unmatched_communication')).sort();
       const setupMs = performance.now() - setupStart;
       const changes = database.raw.prepare('SELECT total_changes() AS count').get();
-      const service = createReviewService(domain);
+      const service = createReviewProvider(productionDomainGate(domain));
       const samples: { firstMs: number; continuationMs: number[]; walkMs: number }[] = [];
       for (let sample = 0; sample < 5; sample += 1) {
         const start = performance.now();
@@ -301,7 +303,7 @@ describe('reviewService', () => {
   }
 
   it('returns a strict empty snapshot for an empty workspace', async () => {
-    const service = createReviewService(domain);
+    const service = createReviewProvider(productionDomainGate(domain));
 
     const snapshot = await service.list({ kinds: [], limit: 50 });
 
@@ -326,7 +328,7 @@ describe('reviewService', () => {
 
   it('lists an open unknown-handle review as a typed unmatched communication', async () => {
     const reviewId = seedUnknownHandleReview();
-    const service = createReviewService(domain);
+    const service = createReviewProvider(productionDomainGate(domain));
 
     const snapshot = await service.list({ kinds: ['unmatched_communication'], limit: 50 });
 
@@ -344,7 +346,7 @@ describe('reviewService', () => {
 
   it('filters by kind while keeping the workspace-wide open count', async () => {
     seedUnknownHandleReview();
-    const service = createReviewService(domain);
+    const service = createReviewProvider(productionDomainGate(domain));
 
     const snapshot = await service.list({ kinds: ['system_error'], limit: 50 });
 
@@ -360,7 +362,7 @@ describe('reviewService', () => {
       personId: 'inbound-person',
       channel: 'inbound_demo',
     });
-    const service = createReviewService(domain);
+    const service = createReviewProvider(productionDomainGate(domain));
 
     const receipt = await service.resolve({
       kind: 'unmatched_communication',
@@ -386,7 +388,7 @@ describe('reviewService', () => {
   });
 
   it('rejects resolution commands the domain does not support yet', async () => {
-    const service = createReviewService(domain);
+    const service = createReviewProvider(productionDomainGate(domain));
 
     await expect(service.resolve({
       kind: 'import_problem',
@@ -398,7 +400,7 @@ describe('reviewService', () => {
 
   it('rejects a promotion whose evidence is not an eligible source event', async () => {
     const reviewId = seedUnknownHandleReview();
-    const service = createReviewService(domain);
+    const service = createReviewProvider(productionDomainGate(domain));
 
     await expect(service.resolve({
       kind: 'unmatched_communication',

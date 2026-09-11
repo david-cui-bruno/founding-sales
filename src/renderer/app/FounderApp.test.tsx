@@ -12,6 +12,7 @@ import type { TodaySnapshot } from '../../shared/contracts/todayContract';
 import type { LeadDetail } from '../../shared/contracts/leadDetailContract';
 import type { CalliePreloadApi } from '../../shared/preload';
 import type { AppHealth } from '../../shared/healthContract';
+import type { ImportCommitReceipt, ImportPreview } from '../../shared/contracts/importContract';
 import { dailyFixture, localSnapshot, commitments, fixtureNow } from '../features/today/nativeDesk.fixture';
 import type { FoundationHealth } from '../foundation/useFoundationHealth';
 import { FounderApp, type FounderAppProps } from './FounderApp';
@@ -128,6 +129,25 @@ const discoveryApi = (): DiscoveryApi => ({
   begin: vi.fn(async request => ({ personId: request.personId, salesCycleId: request.salesCycleId, assessmentId: request.assessmentId, actionId: 'action-kevin', mutation: { revision: 2, affectedPersonIds: ['person-kevin'], affectedSalesCycleIds: ['cycle-kevin'] } })),
   override: vi.fn(async () => ({ revision: 2, affectedPersonIds: ['person-kevin'], affectedSalesCycleIds: ['cycle-kevin'] })),
 });
+
+const importPreview: ImportPreview = {
+  previewId: 'preview-founder-app',
+  contentHash: 'a'.repeat(64),
+  columns: ['Name', 'Phone'],
+  sampleRows: [{ rowNumber: 2, cells: ['Kevin', '4015550101'] }],
+  suggestedMapping: { Name: 'person_name', Phone: 'phone' },
+  rowCount: 1,
+  validCount: 1,
+  errors: [],
+  duplicateCandidates: [],
+  expiresAt: '2027-01-01T00:00:00.000Z',
+};
+const importReceipt: ImportCommitReceipt = {
+  jobId: 'job-founder-app',
+  importedPersonIds: ['person-imported'],
+  importedRowCount: 1,
+  revision: 2,
+};
 
 function fakeCallieApi(): CalliePreloadApi {
   const pending = vi.fn(() => new Promise<never>(() => undefined));
@@ -295,6 +315,81 @@ describe('FounderApp', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Import leads' });
     expect(dialog.tagName).toBe('DIALOG');
     expect(dialog.hasAttribute('open')).toBe(true);
+  });
+
+  it('keeps the local company draft across real Accounts route navigation', async () => {
+    window.location.hash = '#/accounts';
+    const api = fakeCallieApi();
+    vi.mocked(api.daily.get).mockResolvedValue(dailyFixture());
+    vi.mocked(api.localWorkspace.get).mockResolvedValue(localSnapshot({ workflowMode: 'meeting_first' }));
+    api.localWorkspace.reviewCompany = vi.fn<CalliePreloadApi['localWorkspace']['reviewCompany']>(() => new Promise(() => undefined));
+    api.localWorkspace.createCompany = vi.fn<CalliePreloadApi['localWorkspace']['createCompany']>(() => new Promise(() => undefined));
+    render(<FounderAppHarness api={api} health={readyHealth} />);
+
+    const addCompany = await screen.findByRole('button', { name: 'Add company' });
+    await waitFor(() => expect((addCompany as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(addCompany);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Company name' }), {
+      target: { value: ' Harbor Management ' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Company domain (optional)' }), {
+      target: { value: ' HARBOR.EXAMPLE ' },
+    });
+
+    fireEvent.click(screen.getByRole('link', { name: 'Campaigns' }));
+    await screen.findByRole('heading', { name: 'Campaigns' });
+    fireEvent.click(screen.getByRole('link', { name: 'Leads' }));
+    await screen.findByRole('heading', { name: 'Leads' });
+    fireEvent.click(screen.getByRole('link', { name: 'Accounts' }));
+
+    expect(((await screen.findByRole('textbox', { name: 'Company name' })) as HTMLInputElement).value).toBe(' Harbor Management ');
+    expect((screen.getByRole('textbox', { name: 'Company domain (optional)' }) as HTMLInputElement).value).toBe(' HARBOR.EXAMPLE ');
+    expect(api.localWorkspace.reviewCompany).not.toHaveBeenCalled();
+    expect(api.localWorkspace.createCompany).not.toHaveBeenCalled();
+  });
+
+  it('keeps the local company draft across a real committed Import refresh remount', async () => {
+    window.location.hash = '#/accounts';
+    const baseApi = fakeCallieApi();
+    const api: CalliePreloadApi = {
+      ...baseApi,
+      imports: {
+        ...baseApi.imports,
+        preview: vi.fn<CalliePreloadApi['imports']['preview']>(async () => importPreview),
+        commit: vi.fn<CalliePreloadApi['imports']['commit']>(async () => importReceipt),
+      },
+    };
+    vi.mocked(api.daily.get).mockResolvedValue(dailyFixture());
+    vi.mocked(api.localWorkspace.get).mockResolvedValue(localSnapshot({ workflowMode: 'meeting_first' }));
+    api.localWorkspace.reviewCompany = vi.fn<CalliePreloadApi['localWorkspace']['reviewCompany']>(() => new Promise(() => undefined));
+    api.localWorkspace.createCompany = vi.fn<CalliePreloadApi['localWorkspace']['createCompany']>(() => new Promise(() => undefined));
+    render(<FounderAppHarness api={api} health={readyHealth} />);
+
+    const addCompany = await screen.findByRole('button', { name: 'Add company' });
+    await waitFor(() => expect((addCompany as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(addCompany);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Company name' }), {
+      target: { value: ' Harbor Management ' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Company domain (optional)' }), {
+      target: { value: ' HARBOR.EXAMPLE ' },
+    });
+
+    await act(async () => { window.eval(openImportScript); });
+    fireEvent.change(await screen.findByLabelText('Paste spreadsheet rows'), {
+      target: { value: 'Name\tPhone\nKevin\t4015550101' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview rows' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Import 1 row' }));
+    await screen.findByText('Imported 1 row.');
+    fireEvent.click(screen.getByRole('link', { name: 'Accounts' }));
+
+    expect(((await screen.findByRole('textbox', { name: 'Company name' })) as HTMLInputElement).value).toBe(' Harbor Management ');
+    expect((screen.getByRole('textbox', { name: 'Company domain (optional)' }) as HTMLInputElement).value).toBe(' HARBOR.EXAMPLE ');
+    expect(api.imports.preview).toHaveBeenCalledOnce();
+    expect(api.imports.commit).toHaveBeenCalledOnce();
+    expect(api.localWorkspace.reviewCompany).not.toHaveBeenCalled();
+    expect(api.localWorkspace.createCompany).not.toHaveBeenCalled();
   });
 
   it('handles the native Import payload across navigation and repeated commands', async () => {
@@ -709,5 +804,102 @@ describe('R2: request-start observation ownership through FounderApp', () => {
     expect(reliabilitySummaryEvidence(inbox)).toMatch(/7 open local reviews/i);
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Inbox · 7 open local reviews');
     expect(reads).toHaveLength(3);
+  });
+});
+
+// Real routeRegistry and real global Import refreshKey, not a synthetic form key.
+describe('FounderApp company phase continuity', () => {
+  const cases = (['reviewed', 'reviewing', 'creating', 'unknown', 'conflict'] as const).flatMap(phase =>
+    (['route navigation', 'committed Import'] as const).map(boundary => ({ phase, boundary })));
+  it.each(cases)('retains $phase across actual $boundary without intake replay or extra summary reads', async ({ phase, boundary }) => {
+    window.location.hash = '#/accounts';
+    const api = fakeCallieApi();
+    vi.mocked(api.daily.get).mockResolvedValue(dailyFixture());
+    vi.mocked(api.localWorkspace.get).mockResolvedValue(localSnapshot({ workflowMode: 'meeting_first' }));
+    type Review = Awaited<ReturnType<CalliePreloadApi['localWorkspace']['reviewCompany']>>;
+    type Result = Awaited<ReturnType<CalliePreloadApi['localWorkspace']['createCompany']>>;
+    let resolveReview!: (value: Review) => void;
+    let resolveCreate!: (value: Result) => void;
+    const pendingReview = new Promise<Review>(resolve => { resolveReview = resolve; });
+    const pendingCreate = new Promise<Result>(resolve => { resolveCreate = resolve; });
+    const input = { name: 'Harbor Management', domain: 'harbor.example' };
+    const reviewed: Review = { scope: 'local_database', input, complete: true, candidates: [] };
+    api.localWorkspace.reviewCompany = vi.fn<CalliePreloadApi['localWorkspace']['reviewCompany']>(async () => phase === 'reviewing' ? pendingReview : reviewed);
+    api.localWorkspace.createCompany = vi.fn<CalliePreloadApi['localWorkspace']['createCompany']>(async request => {
+      if (phase === 'unknown') throw new Error('unconfirmed');
+      if (phase === 'conflict') return { status: 'command_conflict', commandId: request.commandId };
+      return pendingCreate;
+    });
+    api.localWorkspace.getCompanyCreateStatus = vi.fn<CalliePreloadApi['localWorkspace']['getCompanyCreateStatus']>(async request => ({ status: 'not_recorded', commandId: request.commandId }));
+    api.imports.preview = vi.fn<CalliePreloadApi['imports']['preview']>(async () => importPreview);
+    api.imports.commit = vi.fn<CalliePreloadApi['imports']['commit']>(async () => importReceipt);
+    render(<FounderAppHarness api={api} health={readyHealth} />);
+    const add = await screen.findByRole('button', { name: 'Add company' });
+    await waitFor(() => expect((add as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(add);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Company name' }), { target: { value: ' Harbor Management ' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Company domain (optional)' }), { target: { value: ' HARBOR.EXAMPLE ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review company' }));
+    if (phase === 'reviewing') await screen.findByText('Reviewing local companies…');
+    else {
+      await screen.findByText('No matching companies in the current local review.');
+      if (phase !== 'reviewed') {
+        fireEvent.click(screen.getByRole('button', { name: 'Create company' }));
+        await screen.findByText(phase === 'creating' ? 'Saving company…' : phase === 'unknown' ? /Save outcome unknown/ : /Command conflict/);
+      }
+    }
+    const commands = { review: vi.mocked(api.localWorkspace.reviewCompany).mock.calls.length, create: vi.mocked(api.localWorkspace.createCompany).mock.calls.length, status: vi.mocked(api.localWorkspace.getCompanyCreateStatus).mock.calls.length };
+    const request = vi.mocked(api.localWorkspace.createCompany).mock.calls[0]?.[0];
+    await waitFor(() => expect(api.review.list).toHaveBeenCalledTimes(1));
+    if (boundary === 'route navigation') {
+      fireEvent.click(screen.getByRole('link', { name: 'Campaigns' }));
+      await screen.findByRole('heading', { name: 'Campaigns' });
+      expect(screen.queryByRole('textbox', { name: 'Company name' })).toBeNull();
+      fireEvent.click(screen.getByRole('link', { name: 'Leads' })); await screen.findByRole('heading', { name: 'Leads' });
+      fireEvent.click(screen.getByRole('link', { name: 'Accounts' }));
+    } else {
+      const previousInput = screen.getByRole('textbox', { name: 'Company name' });
+      await act(async () => { window.eval(openImportScript); });
+      const dialog = await screen.findByRole('dialog', { name: 'Import leads' });
+      expect(screen.getByRole('link', { name: 'Leads' }).getAttribute('aria-current')).toBe('page');
+      await waitFor(() => expect(api.review.list).toHaveBeenCalledTimes(2));
+      fireEvent.change(within(dialog).getByLabelText('Paste spreadsheet rows'), { target: { value: 'Name\tPhone\nKevin\t4015550101' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Preview rows' }));
+      fireEvent.click(await within(dialog).findByRole('button', { name: 'Import 1 row' }));
+      await within(dialog).findByText('Imported 1 row.');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+      expect(api.imports.preview).toHaveBeenCalledOnce(); expect(api.imports.commit).toHaveBeenCalledOnce();
+      expect(previousInput.isConnected).toBe(false);
+      expect(screen.getByRole('link', { name: 'Leads' }).getAttribute('aria-current')).toBe('page');
+      await waitFor(() => expect(api.review.list).toHaveBeenCalledTimes(3));
+      fireEvent.click(screen.getByRole('link', { name: 'Accounts' }));
+    }
+    const name = await screen.findByRole('textbox', { name: 'Company name' });
+    expect((name as HTMLInputElement).value).toBe(phase === 'reviewing' ? ' Harbor Management ' : input.name);
+    expect((screen.getByRole('textbox', { name: 'Company domain (optional)' }) as HTMLInputElement).value).toBe(phase === 'reviewing' ? ' HARBOR.EXAMPLE ' : input.domain);
+    const close = screen.getByRole('button', { name: 'Close company form' }) as HTMLButtonElement;
+    expect(close.disabled).toBe(['creating', 'unknown', 'conflict'].includes(phase));
+    if (phase === 'reviewed') await waitFor(() => expect((screen.getByRole('button', { name: 'Create company' }) as HTMLButtonElement).disabled).toBe(false));
+    else await screen.findByText(phase === 'reviewing' ? 'Reviewing local companies…' : phase === 'creating' ? 'Saving company…' : phase === 'unknown' ? /Save outcome unknown/ : /Command conflict/);
+    expect(api.localWorkspace.reviewCompany).toHaveBeenCalledTimes(commands.review);
+    expect(api.localWorkspace.createCompany).toHaveBeenCalledTimes(commands.create);
+    expect(api.localWorkspace.getCompanyCreateStatus).toHaveBeenCalledTimes(commands.status);
+    await waitFor(() => expect(api.review.list).toHaveBeenCalledTimes(4));
+    const summaryRequest: Parameters<CalliePreloadApi['review']['list']>[0] = { kinds: [], cursor: null, limit: 1 };
+    expect(vi.mocked(api.review.list).mock.calls).toEqual(Array.from({ length: 4 }, () => [summaryRequest]));
+    if (phase === 'reviewing') {
+      await act(async () => { resolveReview(reviewed); });
+      expect(await screen.findByText('No matching companies in the current local review.')).toBeTruthy();
+    } else if (phase === 'creating') {
+      await act(async () => { resolveCreate({ status: 'command_conflict', commandId: request!.commandId }); });
+      expect(await screen.findByText(/Command conflict/)).toBeTruthy();
+      expect((screen.getByRole('button', { name: 'Close company form' }) as HTMLButtonElement).disabled).toBe(true);
+    } else if (phase === 'unknown') {
+      await waitFor(() => expect((screen.getByRole('button', { name: 'Check save status' }) as HTMLButtonElement).disabled).toBe(false));
+      fireEvent.click(screen.getByRole('button', { name: 'Check save status' })); await screen.findByText(/not recorded yet/);
+      expect(vi.mocked(api.localWorkspace.getCompanyCreateStatus).mock.calls).toEqual([[request]]);
+      expect(request).toEqual({ ...input, commandId: expect.stringMatching(/^[a-f\d-]{36}$/) });
+      expect(api.localWorkspace.createCompany).toHaveBeenCalledOnce();
+    }
   });
 });

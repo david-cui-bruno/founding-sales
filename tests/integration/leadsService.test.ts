@@ -1,3 +1,5 @@
+import { productionDomainGate } from '../fixtures/productionDomainGate';
+import { createLeadsProvider } from '../../src/main/ipc/registerApplicationIpc';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -17,10 +19,7 @@ import {
 import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import {
-  createLeadsService,
-  type LeadsProvider,
-} from '../../src/main/leads/leadsService';
+import { type LeadsProvider } from '../../src/main/leads/leadsService';
 import {
   insertOpenCycleWithAction,
   insertPerson,
@@ -82,7 +81,7 @@ describe('leadsService over a real encrypted domain', () => {
       services.cadences.installBuiltins();
     });
     domain = createFounderSalesDomain({ services, database, clock, ids });
-    leads = createLeadsService(domain);
+    leads = createLeadsProvider(productionDomainGate(domain));
   });
 
   afterEach(() => {

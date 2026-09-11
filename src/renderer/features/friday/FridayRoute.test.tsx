@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -82,6 +83,96 @@ afterEach(() => {
 });
 
 describe('FridayRoute', () => {
+  it('retires the old week synchronously before a same-act old form submit', async () => {
+    const api = createApi();
+    await act(async () => { render(<FridayRoute api={api} onOpenLead={vi.fn()} />); });
+    const previous = screen.getByRole('button', { name: 'Previous week' });
+    const oldForm = screen.getByRole('button', { name: 'Request job' }).closest('form')!;
+    await act(async () => {
+      fireEvent.click(previous);
+      fireEvent.submit(oldForm);
+    });
+    expect(api.getCurrent).toHaveBeenLastCalledWith({ weekOffset: -1 });
+    expect(api.createJob).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Request job' })); });
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(api.getCurrent).toHaveBeenLastCalledWith({ weekOffset: -1 });
+  });
+
+  it('ignores a StrictMode first-lifetime report and admits a current-lifetime mutation', async () => {
+    let resolve!: (value: FridayReport) => void;
+    const first = new Promise<FridayReport>((done) => { resolve = done; });
+    const getCurrent = vi.fn<FridayApi['getCurrent']>()
+      .mockImplementationOnce(() => first).mockResolvedValue(report);
+    const api = createApi({ getCurrent });
+    await act(async () => { render(<StrictMode><FridayRoute api={api} onOpenLead={vi.fn()} /></StrictMode>); });
+    expect(getCurrent).toHaveBeenCalledTimes(2);
+    await act(async () => { resolve({ ...report, jobs: [{ ...report.jobs[0]!, id: 'obsolete-strict' }] }); });
+    expect(screen.queryByText('obsolete-strict')).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Request job' })); });
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(getCurrent).toHaveBeenCalledTimes(3);
+  });
+
+  it('ignores an earlier drilldown in the same owner after a newer request', async () => {
+    let resolve!: (value: MetricDrilldown) => void;
+    const first = new Promise<MetricDrilldown>((done) => { resolve = done; });
+    const latest = { ...drilldown, rows: [{ ...drilldown.rows[0]!, label: 'Current row', personId: 'current-person' }] };
+    const getDrilldown = vi.fn<FridayApi['getDrilldown']>()
+      .mockImplementationOnce(() => first).mockResolvedValue(latest);
+    const api = createApi({ getDrilldown }); const onOpenLead = vi.fn();
+    await act(async () => { render(<FridayRoute api={api} onOpenLead={onOpenLead} />); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Interviews/ })); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Interviews/ })); });
+    await act(async () => { resolve(drilldown); });
+    expect(screen.queryByRole('button', { name: /Kevin Shin/ })).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Current row/ })); });
+    expect(onOpenLead.mock.calls).toEqual([['current-person']]);
+  });
+
+  it.each(['api', 'week'] as const)('ignores departed drilldown after real %s replacement', async (replacement) => {
+    let resolve!: (value: MetricDrilldown) => void;
+    const pending = new Promise<MetricDrilldown>((done) => { resolve = done; });
+    const old = createApi({ getDrilldown: vi.fn(() => pending) });
+    const next = createApi(); const onOpenLead = vi.fn();
+    let view!: ReturnType<typeof render>;
+    await act(async () => { view = render(<FridayRoute api={old} onOpenLead={onOpenLead} />); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Interviews/ })); });
+    expect(old.getDrilldown).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      if (replacement === 'api') view.rerender(<FridayRoute api={next} onOpenLead={onOpenLead} />);
+      else fireEvent.click(screen.getByRole('button', { name: 'Previous week' }));
+    });
+    await act(async () => { resolve(drilldown); });
+    expect(screen.queryByRole('button', { name: /Kevin Shin/ })).toBeNull();
+    expect(onOpenLead).not.toHaveBeenCalled();
+    // Positive control: a current-owner drilldown still opens and forwards exactly once.
+    vi.mocked(replacement === 'api' ? next.getDrilldown : old.getDrilldown).mockResolvedValue(drilldown);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Interviews/ })); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Kevin Shin/ })); });
+    expect(onOpenLead.mock.calls).toEqual([['person-1']]);
+  });
+
+  it('replaces the displayed report through real historical/current week navigation', async () => {
+    let resolveOld!: (value: FridayReport) => void;
+    const oldRead = new Promise<FridayReport>((resolve) => { resolveOld = resolve; });
+    const getCurrent = vi.fn<FridayApi['getCurrent']>()
+      .mockResolvedValueOnce(report).mockImplementationOnce(() => oldRead)
+      .mockResolvedValue({ ...report, jobs: [{ ...report.jobs[0]!, id: 'latest-week' }] });
+    const api = createApi({ getCurrent });
+    await act(async () => { render(<FridayRoute api={api} onOpenLead={vi.fn()} />); });
+    const previous = screen.getByRole('button', { name: 'Previous week' });
+    await act(async () => { fireEvent.click(previous); });
+    // Once the earlier week settles, navigation is publicly available again.
+    await act(async () => { resolveOld({ ...report, jobs: [{ ...report.jobs[0]!, id: 'older-week' }] }); });
+    expect(getCurrent).toHaveBeenLastCalledWith({ weekOffset: -1 });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Next week' })); });
+    expect(getCurrent).toHaveBeenLastCalledWith(undefined);
+    expect(screen.getByText('latest-week')).toBeTruthy();
+    expect(screen.queryByText('older-week')).toBeNull();
+    expect((screen.getByRole('button', { name: 'Next week' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('loads and renders the current report', async () => {
     const api = createApi();
 

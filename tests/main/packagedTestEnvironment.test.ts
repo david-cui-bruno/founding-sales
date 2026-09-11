@@ -95,7 +95,8 @@ afterEach(async () => {
   await files.rm(temporaryRoot, { recursive: true, force: true });
 });
 
-type Fault = 'spawn-throw' | 'spawn-error' | 'cdp-exit' | 'no-page' | 'browser-close' | 'port' | 'mkdir';
+type Fault = 'spawn-throw' | 'spawn-error' | 'cdp-exit' | 'no-page' | 'browser-close' | 'port' | 'mkdir'
+  | 'native-helper-error' | 'native-helper-invalid';
 type Environment = {
   env: NodeJS.ProcessEnv;
   capture(child: FakeChild): FakeChild;
@@ -120,6 +121,7 @@ function sourceHarness(fault?: Fault, selectedBinary?: string) {
   const removed: string[] = [];
   const delays: number[] = [];
   const events: string[] = [];
+  const nativeReceipts: unknown[] = [];
   let spawnAttempts = 0;
   let kind: LaunchKind = 'shared';
   const registeredTests: Array<() => Promise<void>> = [];
@@ -154,7 +156,7 @@ function sourceHarness(fault?: Fault, selectedBinary?: string) {
     toHaveURL: async (): Promise<void> => undefined,
     toBeDisabled: async (): Promise<void> => undefined,
     toHaveCount: async (): Promise<void> => undefined,
-  }), { poll: (read: () => Promise<unknown>) => ({
+  }), { any: expect.any, poll: (read: () => Promise<unknown>) => ({
     toEqual: async (value: unknown) => expect(await read()).toEqual(value),
   }) });
   const modules = new Map<string, unknown>();
@@ -214,10 +216,43 @@ function sourceHarness(fault?: Fault, selectedBinary?: string) {
             child.closed = true;
             child.emit('close', -2, null);
           });
-        } else if (kind === 'collision') {
-          setTimeout(() => child.exit(), 0);
         }
         return child;
+      },
+      // Synthetic OS boundary only. Never execute Swift, AX or another process.
+      // The real helper source and native action have separate packaged proof.
+      execFile: (binary: string, args: string[], options: unknown,
+        callback: (error: Error | null, stdout: string) => void) => {
+        const launch = launches.at(-1);
+        expect(kind).toBe('collision');
+        expect(launch).toBeDefined();
+        const { child, binary: applicationBinary } = launch!;
+        expect(binary).toBe('/usr/bin/swift');
+        expect(args).toHaveLength(4);
+        expect(args[0]).toBe(path.join(checkout, 'tests/support/nativeStartupDialog.swift'));
+        expect(args[1]).toBe(String(child.pid));
+        expect(args[2]).toBe(fs.realpathSync(applicationBinary));
+        expect(Number.isFinite(Number(args[3]))).toBe(true);
+        expect(child.closed).toBe(false);
+        expect(options).toEqual({ encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL', maxBuffer: 8192 });
+        events.push('native-helper');
+        const start = Math.round(Number(args[3]) * 1_000_000);
+        queueMicrotask(() => {
+          if (fault === 'native-helper-error') {
+            callback(new Error('synthetic native helper failure'), '');
+            return;
+          }
+          callback(null, JSON.stringify({
+            formatVersion: 1, pid: fault === 'native-helper-invalid' ? 9999 : child.pid,
+            executable: args[2],
+            processStart: { seconds: Math.floor(start / 1_000_000), microseconds: start % 1_000_000 },
+            observed: true, pressed: true,
+            message: 'Callie startup did not complete.',
+            detail: 'APPLICATION_STARTUP_FAILED\nQuit Callie to close this attempt. If Restart Callie is offered, you can try starting it again.',
+            buttons: ['Quit', 'Restart Callie'],
+          }));
+          if (fault !== 'native-helper-invalid') queueMicrotask(() => child.exit());
+        });
       },
     },
     'playwright/test': {
@@ -232,7 +267,13 @@ function sourceHarness(fault?: Fault, selectedBinary?: string) {
         return browser;
       } },
       expect: uiExpect,
-      test: (_name: string, body: () => Promise<void>) => registeredTests.push(body),
+      test: Object.assign((_name: string, body: () => Promise<void>) => registeredTests.push(body), {
+        info: () => ({ attach: async (name: string, attachment: { body: string; contentType: string }) => {
+          expect(name).toBe('owned-native-startup-quit');
+          expect(attachment.contentType).toBe('application/json');
+          nativeReceipts.push(JSON.parse(attachment.body));
+        } }),
+      }),
     },
   };
   function load(relativePath: string): Record<string, unknown> {
@@ -249,6 +290,10 @@ function sourceHarness(fault?: Fault, selectedBinary?: string) {
     modules.set(filename, exports);
     runInNewContext(output, {
       exports,
+      __dirname: path.dirname(filename),
+      AbortController,
+      // Host expect.any(Number) must receive the same primitive constructor.
+      Number,
       require: (specifier: string) => {
         if (specifier in boundaries) return boundaries[specifier];
         if (specifier.endsWith('/packagedApplication')) return {
@@ -265,10 +310,13 @@ function sourceHarness(fault?: Fault, selectedBinary?: string) {
         if (specifier.startsWith('.')) return load(path.resolve(path.dirname(filename), `${specifier}.ts`));
         throw new Error(`Unapproved source-test import: ${specifier}`);
       },
-      process: { env: parentEnv, cwd: () => checkout, getuid: process.getuid },
+      process: { env: parentEnv, cwd: () => checkout, getuid: process.getuid, platform: 'darwin' },
       setTimeout: (callback: () => void, milliseconds: number) => {
         delays.push(milliseconds);
-        return setTimeout(callback, Math.min(milliseconds, 2));
+        // The collision exit deadline now spans an awaited realpath before the
+        // fake OS callback. Keep it finite without a 2ms filesystem race.
+        return setTimeout(callback, kind === 'collision' && milliseconds === 20_000
+          ? 1_000 : Math.min(milliseconds, 2));
       },
       clearTimeout, queueMicrotask, Error,
     }, { filename });
@@ -296,7 +344,7 @@ function sourceHarness(fault?: Fault, selectedBinary?: string) {
     const module = load('tests/support/packagedTestEnvironment.ts');
     return (module.createPackagedTestEnvironment as (overrides: object) => Promise<Environment>)(overrides);
   };
-  return { parentEnv, launches, launchShared, run, createEnvironment, allocated, removed, delays, events,
+  return { parentEnv, launches, launchShared, run, createEnvironment, allocated, removed, delays, events, nativeReceipts,
     spawnAttempts: () => spawnAttempts };
 }
 
@@ -410,6 +458,28 @@ describe('shared captured-child observation seam', () => {
 });
 
 describe('every packaged source call site', () => {
+  it('binds the synthetic native helper to the captured child and accepts no cleanup signal as Quit', async () => {
+    const harness = sourceHarness();
+    await harness.run('collision');
+    expect(harness.events.filter((event) => event === 'native-helper')).toEqual(['native-helper']);
+    expect(harness.nativeReceipts).toHaveLength(1);
+    expect(harness.launches[0].child.signals).toEqual([]);
+    expect(harness.launches[0].child.exitCode).toBe(0);
+    expect(harness.allocated.every((root) => !fs.existsSync(root))).toBe(true);
+  });
+
+  it.each(['native-helper-error', 'native-helper-invalid'] as const)('rejects %s and joins owned child/environment cleanup', async (fault) => {
+    const harness = sourceHarness(fault);
+    await expect(harness.run('collision')).rejects.toThrow();
+    expect(harness.spawnAttempts()).toBe(1);
+    expect(harness.events.filter((event) => event === 'native-helper')).toEqual(['native-helper']);
+    expect(harness.nativeReceipts).toEqual([]);
+    expect(harness.launches[0].child.signals).toEqual(['SIGTERM']);
+    expect(harness.launches[0].child.closed).toBe(true);
+    expect(harness.allocated.every((root) => !fs.existsSync(root))).toBe(true);
+    expect(fs.existsSync(harness.parentEnv.HOME ?? '')).toBe(true);
+  });
+
   it.each(launchKinds)('%s rejects a different real artifact before spawn without leaking or retaining its environment', async (kind) => {
     const harness = sourceHarness(undefined, otherBinary);
     await expect(harness.run(kind)).rejects.toThrow('RELEASE_ARTIFACT_MISMATCH');

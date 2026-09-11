@@ -68,6 +68,31 @@ afterEach(() => {
 });
 
 describe('SettingsScreen', () => {
+  it.each([
+    ['healthy', null, 'Not checked'],
+    ['healthy', '2026-09-10T15:00:00.000Z', 'No sourcing degradation reported'],
+    ['degraded', '2026-09-10T15:00:00.000Z', 'Sourcing degradation reported'],
+  ] as const)('reports sourcing %s completed=%s without a whole-product readiness claim', (status, lastCompletedAt, label) => {
+    renderSettings({ state: { status: 'ready', health: { ...health, sourcing: { ...health.sourcing, status, state: { ...health.sourcing.state, lastCompletedAt } } } } });
+    expect(screen.getByText('Sourcing monitor')).toBeTruthy();
+    expect(screen.getByText(label)).toBeTruthy();
+    expect(screen.queryByText(/Operations ready|Operations degraded/)).toBeNull();
+    expect(screen.getByText('Last read time unavailable')).toBeTruthy();
+    expect(screen.getByText(health.domainStartupEvaluatedAt)).toBeTruthy();
+    if (lastCompletedAt) expect(screen.getByText(lastCompletedAt)).toBeTruthy();
+  });
+
+  it('keeps renderer read time distinct and stale while explicit Refresh invokes only its callback', () => {
+    const onRetry = vi.fn();
+    const observation = { checkedAt: '2026-09-10T16:00:00.000Z', refreshing: false, refreshFailed: true };
+    render(<SettingsScreen state={{ status: 'ready', health }} onRetry={onRetry} theme={theme} density={density} {...{ observation }} />);
+    expect(screen.getByText(/Last successful read/).textContent).toContain(observation.checkedAt);
+    expect(screen.getByRole('alert').textContent).toContain('stale');
+    expect(screen.getByText(health.domainStartupEvaluatedAt)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh diagnostics' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
   it('renders a master-detail with six sections and Diagnostics selected by default', () => {
     renderSettings();
 
@@ -116,7 +141,9 @@ describe('SettingsScreen', () => {
     expect(screen.getByText('Encrypted SQLite ready')).toBeTruthy();
     expect(screen.getByText('FTS5 available')).toBeTruthy();
     expect(screen.getByText('Schema 9')).toBeTruthy();
-    expect(screen.getByText('Operations ready')).toBeTruthy();
+    expect(screen.getByText('Sourcing monitor')).toBeTruthy();
+    expect(screen.getByText('Not checked')).toBeTruthy();
+    expect(screen.queryByText('Operations ready')).toBeNull();
   });
 
   it('shows the database path in monospace with copy and reveal actions', async () => {
@@ -163,9 +190,16 @@ describe('SettingsScreen', () => {
     renderSettings();
 
     fireEvent.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }));
-    expect(screen.getByText('⌘K')).toBeTruthy();
-    expect(screen.getByText('J / K')).toBeTruthy();
-    expect(screen.getByText('E / H / P')).toBeTruthy();
+    expect(screen.getByText('Cmd/Ctrl+K')).toBeTruthy();
+    expect(screen.getByText('Legacy Today rows')).toBeTruthy();
+    expect(screen.getByText('Native Desk rows')).toBeTruthy();
+    expect(screen.getByText('Leads rows')).toBeTruthy();
+    expect(screen.queryByText('E / H / P')).toBeNull();
+    const shortcuts = screen.getByRole('region', { name: 'Keyboard shortcuts' });
+    expect(shortcuts.textContent).toContain('Friday, Inbox');
+    expect(shortcuts.textContent).not.toContain('Friday, Review');
+    expect(shortcuts.textContent).toContain('tomorrow 09:00 local');
+    expect(shortcuts.textContent).toContain('Editing fields and open overlays own their keys');
 
     fireEvent.click(screen.getByRole('button', { name: 'About' }));
     const about = screen.getByRole('region', { name: 'About' });
@@ -177,9 +211,9 @@ describe('SettingsScreen', () => {
     renderSettings({ state: { status: 'failed' } });
 
     expect(screen.getByRole('alert').textContent).toContain(
-      'The local database could not be opened',
+      'The diagnostic read could not be completed',
     );
-    expect(screen.getByText('LOCAL_DATABASE_UNAVAILABLE')).toBeTruthy();
+    expect(screen.getByText('DIAGNOSTIC_READ_FAILED')).toBeTruthy();
   });
 });
 

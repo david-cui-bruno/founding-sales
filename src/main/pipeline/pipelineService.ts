@@ -15,10 +15,3 @@ export type PipelineProvider = {
 export type PipelineProjectionSource = {
   getPipelineProjection(): PipelineSnapshot | Promise<PipelineSnapshot>;
 };
-
-/** Thin delegate. No business rules and no SQL belong in this module. */
-export const createPipelineService = (
-  source: PipelineProjectionSource,
-): PipelineProvider => ({
-  get: async () => source.getPipelineProjection(),
-});

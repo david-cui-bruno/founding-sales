@@ -1,3 +1,5 @@
+import { productionDomainGate } from '../fixtures/productionDomainGate';
+import { createImportProvider } from '../../src/main/ipc/registerApplicationIpc';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -16,7 +18,7 @@ import {
 import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import { createImportService, type ImportProvider } from '../../src/main/imports/importService';
+import { type ImportProvider } from '../../src/main/imports/importService';
 import type {
   ImportCommitRequest,
   ImportMapping,
@@ -90,7 +92,7 @@ describe('import service over a real domain', () => {
       services.cadences.installBuiltins();
     });
     domain = createFounderSalesDomain({ services, database, clock, ids });
-    service = createImportService(domain);
+    service = createImportProvider(productionDomainGate(domain));
   });
 
   afterEach(() => {

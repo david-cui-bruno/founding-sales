@@ -125,6 +125,47 @@ describe('startApplication', () => {
     };
   }
 
+  it.each(['key', 'open', 'initialize'] as const)('raw %s failure rejects only after the available resource cleanup and never exposes IPC', async stage => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    const failure = new Error(`raw ${stage} failed`);
+    if (stage === 'key') dependencies.loadWorkspaceKey = async () => { events.push('key-failed'); throw failure; };
+    else if (stage === 'open') dependencies.openDatabase = () => { events.push('open-failed'); throw failure; };
+    else dependencies.createDomainRuntime = () => fakeDomainRuntime({ onInitialize: () => { events.push('initialize-failed'); throw failure; } });
+    await expect(startApplication({ appVersion: '1', userDataPath: '/fixture/raw-stages', createWindow: () => { events.push('window'); } }, dependencies)).rejects.toBe(failure);
+    expect(events).not.toContain('ipc');
+    expect(events).not.toContain('window');
+    expect(events.filter(event => event === 'close')).toHaveLength(stage === 'initialize' ? 1 : 0);
+    if (stage === 'initialize') expect(events.at(-1)).toBe('close');
+  });
+
+  it.each(['resolve', 'reject'] as const)('raw window failure remains pending until cleanup %s and preserves cleanup provenance', async outcome => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    const drain = deferred<void>();
+    const entered = deferred<void>();
+    const windowFailure = new Error('raw renderer failure');
+    const cleanupFailure = new Error('ordinary cleanup failure');
+    dependencies.createRecoveryService = () => ({ status: vi.fn(), beginSetup: vi.fn(), saveSetupMaterial: vi.fn(), completeSetup: vi.fn(), selectAndRunRestoreDrill: vi.fn(),
+      shutdown: () => { events.push('cleanup-entered'); entered.resolve(); return drain.promise; } });
+    const starting = startApplication({ appVersion: '1', userDataPath: '/fixture/raw-cleanup', createWindow: () => { throw windowFailure; } }, dependencies);
+    let settled = false;
+    const result = starting.then((): unknown => { settled = true; return null; }, (error: unknown) => { settled = true; return error; });
+    await entered.promise;
+    expect(settled).toBe(false);
+    expect(events).not.toContain('close');
+    if (outcome === 'resolve') drain.resolve(); else drain.reject(cleanupFailure);
+    const error = await result;
+    if (outcome === 'resolve') expect(error).toBe(windowFailure);
+    else {
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors).toEqual([windowFailure, cleanupFailure]);
+    }
+    expect(events.filter(event => event === 'unregister')).toHaveLength(1);
+    expect(events.filter(event => event === 'close')).toHaveLength(1);
+    expect(events.at(-1)).toBe('close');
+  });
+
   it('uses injected phone bindings and disposes setup before closing the runtime', async () => {
     const events: string[] = []; const dependencies = createDependencies(events);
     const phone = { inspectCapability: vi.fn(async () => ({ state: 'available' as const, reasonCode: null })), dispatch: vi.fn() };

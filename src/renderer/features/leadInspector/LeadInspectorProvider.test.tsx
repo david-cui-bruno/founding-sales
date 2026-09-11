@@ -689,7 +689,8 @@ it('logs an actual dated price communication into the real domain and separately
   const { migrateToLatest } = await import('../../../main/db/migrate');
   const { createDomainServices } = await import('../../../main/domain/createDomainServices');
   const { createFounderSalesDomain } = await import('../../../main/domain/founderSalesDomain');
-  const { createLeadDetailService } = await import('../../../main/leads/leadDetailService');
+  const { createLeadDetailProvider } = await import('../../../main/ipc/registerApplicationIpc');
+  const { productionDomainGate } = await import('../../../../tests/fixtures/productionDomainGate');
   const { seedProspect } = await import('../../../../tests/fixtures/domainRows');
   const { BUILTIN_PRIORITIZATION_RULE_V1 } = await import('../../../main/domain/prioritization/builtinPrioritizationRules');
   const temp = createTempDatabase(); const key = createTestWorkspaceKey();
@@ -713,7 +714,7 @@ it('logs an actual dated price communication into the real domain and separately
     const interviewed = services.lifecycle.confirmInterviewed({ cycleId: ready.id, expectedCycleVersion: ready.version, expectedCurrentActionId: ready.currentNextActionId!, suggestionActivityId: 'actual-interview', effectiveAt: enteredAt, confirmedAt: enteredAt });
     const cycle = { cycleId: interviewed.id };
     const domain = createFounderSalesDomain({ database, services, clock, ids });
-    const api = createLeadDetailService(domain);
+    const api = createLeadDetailProvider(productionDomainGate(domain));
     const confirm = vi.spyOn(api, 'confirmTransition'); const outbound = vi.spyOn(api, 'beginOutbound');
     const pastActivityApi = { logPastActivity: vi.fn(async (request: import('../../../shared/contracts/todayContract').LogPastActivityRequest) => domain.logPastActivity(request)) };
     const RealHarness = () => { const inspector = useLeadInspector(); return <button onClick={() => inspector.openFullPage(prospect.personId)}>Open real lead</button>; };

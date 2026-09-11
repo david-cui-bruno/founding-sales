@@ -1,5 +1,6 @@
 /** Test-only, finite synthetic API scenario. No renderer, provider, native or network imports. */
 import type { CalliePreloadApi } from '../../src/shared/preload';
+import { fridayReportSchema, fridayReportRequestSchema, jobRequestSchema, createJobRequestSchema, fillJobRequestSchema, cancelJobRequestSchema } from '../../src/shared/contracts/fridayContract';
 import { mutationReceiptSchema } from '../../src/shared/contracts/commonContract';
 import { leadDetailRequestSchema, leadDetailSchema, type LeadDetail } from '../../src/shared/contracts/leadDetailContract';
 import { leadRowSchema, leadsListRequestSchema, leadsListResponseSchema } from '../../src/shared/contracts/leadsContract';
@@ -12,16 +13,17 @@ import { dailySnapshotSchema } from '../../src/shared/contracts/dailyContract';
 import { editRequestedFollowupSchema, savedRequestedFollowupSchema, type RequestedFollowupDraft } from '../../src/shared/contracts/requestedFollowupContract';
 
 export const modalMethods = ['imports.preview', 'imports.remap', 'imports.commit', 'learnings.capture', 'conversations.attachTranscript', 'today.logPastActivity', 'discovery.override', 'delegation.editRequestedFollowup'] as const;
-export type ModalMethod = typeof modalMethods[number];
+export const fridayModalMethods = ['friday.createJob', 'friday.fillJob', 'friday.cancelJob'] as const;
+export type ModalMethod = typeof modalMethods[number] | typeof fridayModalMethods[number];
 export type ModalOperation = { token: string; method: ModalMethod; input: unknown; state: 'armed' | 'pending' | 'resolved' | 'rejected' };
 export interface ModalController {
   arm(method: ModalMethod): string;
-  rejectNextRead(method: 'today.get'): void;
+  rejectNextRead(method: 'today.get' | 'friday.getCurrent'): void;
   settle(token: string, outcome: 'resolve' | 'reject'): void;
   readonly operations: ModalOperation[];
 }
 type CallSink = Array<{ method: string; kind: 'read' | 'command' | 'forbidden'; args?: unknown[] }>;
-type ScenarioApi = Pick<CalliePreloadApi, 'leads' | 'leadDetail' | 'conversations' | 'learnings' | 'today' | 'discovery' | 'imports' | 'delegation' | 'daily'>;
+type ScenarioApi = Pick<CalliePreloadApi, 'leads' | 'leadDetail' | 'conversations' | 'learnings' | 'today' | 'discovery' | 'imports' | 'delegation' | 'daily' | 'friday'>;
 const T = '2026-09-10T12:00:00.000Z';
 const P = 'person-kevin';
 const C = 'cycle-kevin';
@@ -32,7 +34,8 @@ function requireCase(condition: boolean): asserts condition {
   if (!condition) throw Error('SYNTHETIC_CASE_INPUT_MISMATCH');
 }
 
-export function installApplicationModalScenario<A extends ScenarioApi>(api: A, calls: CallSink, baseline: LeadDetail) {
+export function installApplicationModalScenario<A extends ScenarioApi>(api: A, calls: CallSink, baseline: LeadDetail, options: { fridayScenario?: boolean } = {}) {
+  const fridayScenario = options.fridayScenario === true;
   const details = new Map([
     [P, leadDetailSchema.parse({ ...baseline, stage: 'interviewed' })],
     [Q, leadDetailSchema.parse({ ...baseline, personId: Q, salesCycleId: D, personName: 'Maya Ortiz', organizationLabel: 'Orchard Test Management', stage: 'interviewed' })],
@@ -211,14 +214,71 @@ export function installApplicationModalScenario<A extends ScenarioApi>(api: A, c
     const response = savedRequestedFollowupSchema.parse({ draft: { ...nativeDraft, revision: nativeDraft.revision + 1, subject: input.subject, body: input.body, generation: 'edited', updatedAt: T }, stale: false, approval: null });
     return { response, apply: () => { nativeDraft = response.draft; nativeDraftUpdated = true; } };
   }) };
+  // Opt-in Friday data is independent of renderer internals and of the old eight permissions.
+  let fridayReport = fridayScenario ? fridayReportSchema.parse({
+    periodStartsAt: '2026-09-07T04:00:00.000Z', periodEndsAt: '2026-09-14T04:00:00.000Z', asOf: T,
+    metrics: [], sourceRows: [], revision: 1,
+    jobs: [
+      { id: 'job-friday-kevin', salesCycleId: 'friday-cycle-kevin', requestedAt: '2026-09-08T13:00:00.000Z', status: 'requested', contractorAcceptedAt: null },
+      { id: 'job-friday-maya', salesCycleId: 'friday-cycle-maya', requestedAt: '2026-09-09T13:00:00.000Z', status: 'requested', contractorAcceptedAt: null },
+    ],
+  }) : undefined;
+  let rejectNextFridayRead = false;
+  const friday: CalliePreloadApi['friday'] | undefined = fridayScenario ? {
+    ...api.friday,
+    getCurrent: async (...args) => {
+      calls.push({ method: 'friday.getCurrent', kind: 'read', args: structuredClone(args) });
+      requireCase(args.length <= 1);
+      const input = fridayReportRequestSchema.optional().parse(args[0]);
+      requireCase(input === undefined || input.weekOffset === 0);
+      if (rejectNextFridayRead) {
+        rejectNextFridayRead = false;
+        throw Error('SYNTHETIC_FRIDAY_READ_UNAVAILABLE');
+      }
+      return fridayReportSchema.parse(structuredClone(fridayReport));
+    },
+    createJob: command('friday.createJob', input => createJobRequestSchema.parse(input), input => {
+      requireCase(fridayReport !== undefined && input.jobId.startsWith('job-'));
+      requireCase(input.salesCycleId === 'friday-cycle-new' && input.requestedAt === '2026-09-08T14:15:00.000Z');
+      requireCase(!fridayReport.jobs.some(job => job.id === input.jobId));
+      const next = fridayReportSchema.parse({ ...fridayReport, revision: fridayReport.revision + 1,
+        jobs: [...fridayReport.jobs, jobRequestSchema.parse({ id: input.jobId, salesCycleId: input.salesCycleId, requestedAt: input.requestedAt, status: 'requested', contractorAcceptedAt: null })] });
+      const response = mutationReceiptSchema.parse({ revision: next.revision, affectedPersonIds: [], affectedSalesCycleIds: [input.salesCycleId] });
+      return { response, apply: () => { fridayReport = next; } };
+    }),
+    fillJob: command('friday.fillJob', input => fillJobRequestSchema.parse(input), input => {
+      requireCase(fridayReport !== undefined && input.jobId === 'job-friday-kevin' && input.contractorAcceptedAt === '2026-09-09T15:30:00.000Z');
+      requireCase(fridayReport.jobs.find(job => job.id === input.jobId)?.status === 'requested');
+      const next = fridayReportSchema.parse({ ...fridayReport, revision: fridayReport.revision + 1,
+        jobs: fridayReport.jobs.map(job => job.id === input.jobId ? jobRequestSchema.parse({ ...job, status: 'filled', contractorAcceptedAt: input.contractorAcceptedAt }) : job) });
+      const response = mutationReceiptSchema.parse({ revision: next.revision, affectedPersonIds: [], affectedSalesCycleIds: ['friday-cycle-kevin'] });
+      return { response, apply: () => { fridayReport = next; } };
+    }),
+    cancelJob: command('friday.cancelJob', input => cancelJobRequestSchema.parse(input), input => {
+      requireCase(fridayReport !== undefined && input.jobId === 'job-friday-maya');
+      requireCase(fridayReport.jobs.find(job => job.id === input.jobId)?.status === 'requested');
+      const next = fridayReportSchema.parse({ ...fridayReport, revision: fridayReport.revision + 1,
+        jobs: fridayReport.jobs.map(job => job.id === input.jobId ? jobRequestSchema.parse({ ...job, status: 'cancelled' }) : job) });
+      const response = mutationReceiptSchema.parse({ revision: next.revision, affectedPersonIds: [], affectedSalesCycleIds: ['friday-cycle-maya'] });
+      return { response, apply: () => { fridayReport = next; } };
+    }),
+  } : undefined;
   const controller: ModalController = Object.freeze({
-    rejectNextRead(method: 'today.get') {
+    rejectNextRead(method: 'today.get' | 'friday.getCurrent') {
+      if (method === 'friday.getCurrent') {
+        requireCase(fridayScenario);
+        if (rejectNextFridayRead) throw Error('SYNTHETIC_READ_FAILURE_OUTSTANDING');
+        rejectNextFridayRead = true;
+        return;
+      }
       requireCase(method === 'today.get');
       if (rejectNextTodayRead) throw Error('SYNTHETIC_READ_FAILURE_OUTSTANDING');
       rejectNextTodayRead = true;
     },
     arm(method: ModalMethod) {
-      requireCase(modalMethods.includes(method));
+      const isFriday = fridayModalMethods.some(candidate => candidate === method);
+      requireCase(modalMethods.some(candidate => candidate === method) || (fridayScenario && isFriday));
+      if (isFriday && operations.some(operation => fridayModalMethods.some(candidate => candidate === operation.method) && (operation.state === 'armed' || operation.state === 'pending'))) throw Error('SYNTHETIC_OPERATION_OUTSTANDING');
       if (operations.some(operation => operation.method === method && (operation.state === 'armed' || operation.state === 'pending'))) throw Error('SYNTHETIC_OPERATION_OUTSTANDING');
       const token = `modal-operation-${operations.length + 1}`;
       operations.push({ token, method, input: null, state: 'armed' });
@@ -235,5 +295,5 @@ export function installApplicationModalScenario<A extends ScenarioApi>(api: A, c
     },
     get operations() { return structuredClone(operations); },
   });
-  return { api: { ...api, delegation }, controller };
+  return { api: { ...api, delegation, ...(friday ? { friday } : {}) }, controller };
 }

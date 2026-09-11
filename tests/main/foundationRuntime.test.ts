@@ -16,7 +16,8 @@ import type { Capability, HandoffResult, OutboundReceipt, OutboundRequest } from
 import { registerApplicationIpc, type FeatureRegistrars } from '../../src/main/ipc/registerApplicationIpc';
 import { registerLeadDetailIpc } from '../../src/main/leads/registerLeadDetailIpc';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
-import { seedProspect } from '../fixtures/domainRows';
+import { insertPerson, seedProspect } from '../fixtures/domainRows';
+import { HealthService } from '../../src/main/health/healthService';
 import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import {
   FoundationRuntime,
@@ -508,6 +509,57 @@ const assertCurrentReadiness = (): void => undefined;
 });
 
 describe('FoundationRuntime', () => {
+  it.each([false, true])('real HealthService observes sourcing without repeating initialization, blocked=%s', async blocked => {
+    const temp = createTempDatabase();
+    const counts = { key: 0, prepare: 0, open: 0, migrate: 0, domain: 0, initialize: 0, health: 0, close: 0 };
+    const release = deferred<void>();
+    const entered = deferred<void>();
+    let sourcing = health.sourcing;
+    const runtime = new FoundationRuntime({ ...runtimeOptions, databasePath: temp.path, backupDirectory: `${temp.path}.backups` }, {
+      loadWorkspaceKey: async () => { counts.key++; return createTestWorkspaceKey(); },
+      prepareEncryptedDatabase: async () => { counts.prepare++; },
+      openDatabase: options => { counts.open++; return openDatabase(options); },
+      migrateToLatest: async (database, options) => {
+        counts.migrate++;
+        const result = await migrateToLatest(database, options);
+        if (blocked) insertPerson(database.raw, 'orphan-without-canonical-prospect');
+        return result;
+      },
+      createDomainRuntime: database => {
+        counts.domain++;
+        const domain = new DomainRuntime({ database, clock: { now: () => '2026-09-10T15:00:00.000Z' }, ids: new UuidGenerator() });
+        const initialize = domain.initialize.bind(domain);
+        vi.spyOn(domain, 'initialize').mockImplementation(() => { counts.initialize++; return initialize(); });
+        return domain;
+      },
+      createHealthService: options => { counts.health++; return new HealthService(options); },
+      closeDatabase: database => { counts.close++; closeDatabase(database); },
+    });
+    try {
+      await runtime.initialize();
+      runtime.setSourcingHealthProvider(() => sourcing);
+      await expect(runtime.getHealth()).resolves.toMatchObject({ domainStatus: blocked ? 'blocked' : 'ready', domainReady: !blocked, operationalStatus: 'ready', domainStartupEvaluatedAt: '2026-09-10T15:00:00.000Z' });
+      sourcing = { ...sourcing, status: 'degraded', reasons: ['NO_SUCCESS_WITHIN_TWO_CADENCES'], state: { ...sourcing.state, lastCompletedAt: '2026-09-10T16:00:00.000Z' } };
+      await expect(runtime.getHealth()).resolves.toMatchObject({ domainStatus: blocked ? 'blocked' : 'ready', domainReady: !blocked, operationalStatus: 'degraded', domainStartupEvaluatedAt: '2026-09-10T15:00:00.000Z', sourcing: { state: { lastCompletedAt: '2026-09-10T16:00:00.000Z' } } });
+      const operation = vi.fn(() => 'admitted');
+      if (blocked) { await expect(runtime.withDomain(operation)).rejects.toThrow('blocked'); expect(operation).not.toHaveBeenCalled(); }
+      else await expect(runtime.withDomain(operation)).resolves.toBe('admitted');
+      expect(counts).toEqual({ key: 1, prepare: 1, open: 1, migrate: 1, domain: 1, initialize: 1, health: 1, close: 0 });
+      const leased = runtime.withDatabase(async () => { entered.resolve(); await release.promise; });
+      await entered.promise;
+      const stopping = runtime.shutdown();
+      await expect(runtime.getHealth()).rejects.toThrow('cancelled');
+      await expect(runtime.withDomain(operation)).rejects.toThrow('cancelled');
+      expect(counts.close).toBe(0);
+      release.resolve(); await leased; await stopping;
+      await expect(runtime.getHealth()).rejects.toThrow('shut down');
+      expect(counts).toEqual({ key: 1, prepare: 1, open: 1, migrate: 1, domain: 1, initialize: 1, health: 1, close: 1 });
+    } finally {
+      release.resolve();
+      try { await runtime.shutdown(); } finally { temp.cleanup(); }
+    }
+  });
+
   it.each([false, true])('keeps a main-only database lease alive through shutdown, releasing on rejection=%s', async (reject) => {
     const database = { path: health.databasePath } as AppDatabase;
     const events: string[] = [];

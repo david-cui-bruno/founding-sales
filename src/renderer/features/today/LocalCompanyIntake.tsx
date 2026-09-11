@@ -1,4 +1,4 @@
-import { useEffect, useId, useReducer, useRef } from 'react';
+import { createContext, useContext, useEffect, useId, useReducer, useRef, type ReactNode } from 'react';
 import {
   localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema,
   localCompanyCreateResultSchema, localCompanyCreateStatusSchema,
@@ -7,9 +7,10 @@ import {
 import type { LocalWorkspaceApi, LocalWorkspaceSnapshot } from '../../../shared/contracts/localWorkspaceContract';
 import type { LocalRead } from './localWorkspaceRead';
 
+export type IntakeApi = Pick<LocalWorkspaceApi, 'reviewCompany' | 'createCompany' | 'getCompanyCreateStatus'>;
 export type LocalCompanyIntakeOptions = {
   /** Pass the stable localWorkspace API itself, not a new wrapper each render. */
-  api?: Pick<LocalWorkspaceApi, 'reviewCompany' | 'createCompany' | 'getCompanyCreateStatus'>;
+  api?: IntakeApi;
   /** Semantic local Accounts scope. Never a snapshot revision or worker scope. */
   scopeKey: string;
   available: boolean;
@@ -27,61 +28,110 @@ const initial = (): FormState => ({ open: false, name: '', domain: '', phase: 'e
 const sameInput = (a: LocalCompanyInput, b: LocalCompanyInput) => a.name === b.name && a.domain === b.domain;
 const locked = (state: FormState) => state.request !== null && state.phase !== 'saved';
 const unknown = 'Save outcome unknown. The original request is retained. Check save status or explicitly retry the same request.';
-type Owner = { api: LocalCompanyIntakeOptions['api']; scope: string; state: FormState; sequence: number; active: boolean; busy: boolean; cancellations: Set<() => void> };
+type ViewBinding = { token: symbol; options: LocalCompanyIntakeOptions };
+type Owner = { api: LocalCompanyIntakeOptions['api']; scope: string | null; provider: boolean; state: FormState; sequence: number; active: boolean; busy: boolean; cancellations: Set<() => void>; listeners: Set<() => void>; view: ViewBinding | null };
+const makeOwner = (api: LocalCompanyIntakeOptions['api'], scope: string | null, provider: boolean): Owner => ({ api, scope, provider, state: initial(), sequence: 0, active: true, busy: false, cancellations: new Set(), listeners: new Set(), view: null });
+const notify = (owner: Owner) => { for (const listener of owner.listeners) listener(); };
+const ownerContext = createContext<Owner | null>(null);
+
+export function useLocalCompanyIntakeOwner(api?: IntakeApi) {
+  const parent = useContext(ownerContext);
+  const ownerRef = useRef<Owner | null>(null);
+  if (parent && parent.api === api) {
+    // A borrowed lifetime must never retain a disposed private owner for reuse.
+    ownerRef.current = null;
+    return { owner: parent, borrowed: true };
+  }
+  if (ownerRef.current === null || ownerRef.current.api !== api) ownerRef.current = makeOwner(api, null, true);
+  return { owner: ownerRef.current, borrowed: false };
+}
+
+export const LocalCompanyIntakeOwnerContext = ownerContext;
 
 /** Mount above fallback/ready branches. Retention is local to this hook's lifetime,
  * not a new global/session cache. No API calls happen on mount or refresh renders. */
 export function useLocalCompanyIntake(options: LocalCompanyIntakeOptions) {
   const [, redraw] = useReducer((n: number) => n + 1, 0);
   const latest = useRef(options); latest.current = options;
-  const ownerRef = useRef<Owner | null>(null);
-  if (ownerRef.current === null || ownerRef.current.api !== options.api || ownerRef.current.scope !== options.scopeKey) {
-    ownerRef.current = { api: options.api, scope: options.scopeKey, state: initial(), sequence: 0, active: true, busy: false, cancellations: new Set() };
+  const provided = useContext(ownerContext);
+  const fallbackRef = useRef<Owner | null>(null);
+  const bindingToken = useRef<symbol | null>(null);
+  // A rendered controller may act only for the binding generation it observed.
+  const renderedToken = bindingToken.current;
+  const usesProvided = !!provided && provided.api === options.api;
+  if (!usesProvided && (fallbackRef.current === null || fallbackRef.current.api !== options.api || fallbackRef.current.scope !== options.scopeKey)) {
+    fallbackRef.current = makeOwner(options.api, options.scopeKey, false);
   }
-  const owner = ownerRef.current;
-  const current = () => ownerRef.current === owner && owner.active
-    && latest.current.api === owner.api && latest.current.scopeKey === owner.scope;
-  const update = (patch: Partial<FormState>) => { if (current()) { owner.state = { ...owner.state, ...patch }; redraw(); } };
+  const owner = usesProvided ? provided : fallbackRef.current!;
+  if (!owner.provider) owner.view = { token: Symbol.for('fallback-local-company-view'), options };
+  if (owner.provider && bindingToken.current !== null && owner.view?.token === bindingToken.current) owner.view = { ...owner.view, options };
+  // Settlement belongs to the session even after its submitting view detaches.
+  const sessionCurrent = () => owner.active && (owner.provider || latest.current.api === owner.api && latest.current.scopeKey === owner.scope);
+  const settle = (sequence: number, patch: Partial<FormState>) => {
+    if (sessionCurrent() && owner.sequence === sequence) { owner.state = { ...owner.state, ...patch }; notify(owner); }
+  };
+  const current = () => owner.active && latest.current.api === owner.api && (owner.provider || latest.current.scopeKey === owner.scope);
+  const view = (token = renderedToken) => owner.provider ? owner.view?.token === token ? owner.view.options : null : latest.current;
+  const eligibleView = (token = renderedToken) => {
+    const bound = view(token);
+    return current() && !!owner.api && !!bound && (!owner.provider || bound.scopeKey === 'local-company:accounts');
+  };
+  const update = (patch: Partial<FormState>, token = renderedToken) => { if (current() && (!owner.provider || owner.view?.token === token)) { owner.state = { ...owner.state, ...patch }; notify(owner); } };
   useEffect(() => {
+    owner.listeners.add(redraw);
     owner.active = true;
-    return () => { owner.active = false; owner.sequence++; for (const cancel of [...owner.cancellations]) cancel(); };
+    return () => { owner.listeners.delete(redraw); if (!owner.provider) { owner.active = false; owner.sequence++; for (const cancel of [...owner.cancellations]) cancel(); } };
   }, [owner]);
+  useEffect(() => {
+    if (!owner.provider || options.scopeKey !== 'local-company:accounts') return;
+    const token = Symbol('local-company-view');
+    bindingToken.current = token;
+    owner.view = { token, options: latest.current };
+    notify(owner);
+    return () => { if (owner.view?.token === token) { owner.view = null; notify(owner); } if (bindingToken.current === token) bindingToken.current = null; };
+  }, [owner, options.scopeKey]);
   const bounded = <T,>(operation: Promise<T>): Promise<T> => new Promise((resolve, reject) => {
     const cancel = () => { clearTimeout(timer); owner.cancellations.delete(cancel); reject(new Error('Local company operation unavailable')); };
     const timer = setTimeout(cancel, 15_000);
     owner.cancellations.add(cancel);
     operation.then(value => { clearTimeout(timer); owner.cancellations.delete(cancel); resolve(value); }, error => { clearTimeout(timer); owner.cancellations.delete(cancel); reject(error); });
   });
-  const canAct = () => current() && !!owner.api && latest.current.available;
+  const canAct = (token = renderedToken) => { const bound = view(token); return eligibleView(token) && !!bound?.available; };
   const reopen = (id: string, readRecovery = false) => {
-    if (!current() || !owner.api || !readRecovery && !latest.current.available) return;
+    const bound = view();
+    const token = renderedToken;
+    if (!eligibleView(token) || !bound || !readRecovery && !bound.available) return;
     let failed = false;
     // Creation is already resolved. UI read/navigation errors cannot undo it.
-    try { latest.current.onRefreshLocal(); } catch { failed = true; }
-    try { latest.current.onOpenAccount(id); } catch { failed = true; }
-    update({ openFailed: failed });
+    try { bound.onRefreshLocal(); } catch { failed = true; }
+    try { bound.onOpenAccount(id); } catch { failed = true; }
+    update({ openFailed: failed }, token);
   };
   const edit = (field: 'name' | 'domain', value: string) => {
-    if (!current() || locked(owner.state) || owner.state.phase === 'saved') return;
+    const token = renderedToken;
+    if (!eligibleView(token) || locked(owner.state) || owner.state.phase === 'saved') return;
     owner.sequence++; owner.busy = false;
-    update({ [field]: value, phase: 'editing', review: null, error: null, notice: null });
+    update({ [field]: value, phase: 'editing', review: null, error: null, notice: null }, token);
   };
   const review = async () => {
-    if (!canAct() || owner.busy || locked(owner.state) || owner.state.phase === 'saved') return;
+    const token = renderedToken;
+    if (!canAct(token) || owner.busy || locked(owner.state) || owner.state.phase === 'saved') return;
     const parsed = localCompanyInputSchema.safeParse({ name: owner.state.name, domain: owner.state.domain.trim().toLowerCase() || null });
     if (!parsed.success) { update({ error: 'Enter a company name and an optional hostname such as company.example, without a URL or path.', review: null, phase: 'editing' }); return; }
     const input = parsed.data;
     const sequence = ++owner.sequence; owner.busy = true;
-    update({ phase: 'reviewing', review: null, error: null, notice: null });
+    update({ phase: 'reviewing', review: null, error: null, notice: null }, token);
     try {
       const result = localCompanyReviewSchema.parse(await bounded(owner.api!.reviewCompany(input)));
       if (!sameInput(result.input, input)) throw new Error('Mismatched input');
-      if (current() && owner.sequence === sequence) update({ phase: 'reviewed', review: result, name: input.name, domain: input.domain ?? '' });
-    } catch { if (current() && owner.sequence === sequence) update({ phase: 'editing', error: 'Company review could not load. Review again before creating.', review: null }); }
-    finally { if (current() && owner.sequence === sequence) { owner.busy = false; redraw(); } }
+      settle(sequence, { phase: 'reviewed', review: result, name: input.name, domain: input.domain ?? '' });
+    } catch { settle(sequence, { phase: 'editing', error: 'Company review could not load. Review again before creating.', review: null }); }
+    finally { if (sessionCurrent() && owner.sequence === sequence) { owner.busy = false; notify(owner); } }
   };
   const submit = async (kind: 'create' | 'retry' | 'status') => {
-    if (!canAct() || owner.busy) return;
+    const token = renderedToken;
+    if (!canAct(token) || owner.busy) return;
+    const submitView = token;
     let request = owner.state.request;
     if (kind === 'create') {
       const state = owner.state;
@@ -93,7 +143,7 @@ export function useLocalCompanyIntake(options: LocalCompanyIntakeOptions) {
     // Synchronous fence before transport or render: double-clicks share one request.
     owner.busy = true;
     const sequence = ++owner.sequence;
-    update({ request, phase: kind === 'status' ? 'checking' : 'creating', notice: null, error: null });
+    update({ request, phase: kind === 'status' ? 'checking' : 'creating', notice: null, error: null }, token);
     const frozen = request!;
     try {
       const raw = await bounded<unknown>(kind === 'status'
@@ -101,37 +151,49 @@ export function useLocalCompanyIntake(options: LocalCompanyIntakeOptions) {
       const result = kind === 'status' ? localCompanyCreateStatusSchema.parse(raw) : localCompanyCreateResultSchema.parse(raw);
       if (result.commandId !== frozen.commandId || result.status === 'saved' && !sameInput(result.account, frozen)
         || result.status === 'needs_review' && !sameInput(result.review.input, frozen)) throw new Error('Mismatched result');
-      if (!current() || owner.sequence !== sequence) return;
+      if (!sessionCurrent() || owner.sequence !== sequence) return;
       if (result.status === 'saved') {
-        update({ phase: 'saved', savedId: result.account.id, notice: 'Company saved.', review: null });
-        reopen(result.account.id);
+        settle(sequence, { phase: 'saved', savedId: result.account.id, notice: 'Company saved.', review: null });
+        if (!owner.provider || owner.view?.token === submitView) reopen(result.account.id);
       } else if (result.status === 'needs_review') {
-        update({ phase: 'reviewed', request: null, review: result.review, notice: 'The local catalog changed. Review existing companies before continuing.' });
+        settle(sequence, { phase: 'reviewed', request: null, review: result.review, notice: 'The local catalog changed. Review existing companies before continuing.' });
       } else if (result.status === 'command_conflict') {
-        update({ phase: 'conflict', error: 'Command conflict. This request is held. Check local records or contact support before starting another creation.' });
-      } else update({ phase: 'unknown', notice: 'This request is not recorded yet. Its outcome may still arrive. Only an explicit retry will resubmit the same request.' });
-    } catch { if (current() && owner.sequence === sequence) update({ phase: 'unknown', notice: unknown }); }
-    finally { if (current() && owner.sequence === sequence) { owner.busy = false; redraw(); } }
+        settle(sequence, { phase: 'conflict', error: 'Command conflict. This request is held. Check local records or contact support before starting another creation.' });
+      } else settle(sequence, { phase: 'unknown', notice: 'This request is not recorded yet. Its outcome may still arrive. Only an explicit retry will resubmit the same request.' });
+    } catch { settle(sequence, { phase: 'unknown', notice: unknown }); }
+    finally { if (sessionCurrent() && owner.sequence === sequence) { owner.busy = false; notify(owner); } }
   };
   const state = owner.state;
-  const savedRead = options.localRead;
+  const bound = view();
+  const savedRead = bound?.localRead ?? options.localRead;
   const savedVisible = state.savedId !== null && savedRead.value?.accounts.state === 'available'
     && savedRead.value.accounts.snapshots.some(item => item.account.id === state.savedId);
   return {
-    state, available: options.available && !!options.api, canRead: !!options.api, busy: owner.busy, locked: locked(state) || state.phase === 'saved',
+    state, available: !!bound?.available && !!owner.api, canRead: eligibleView(), busy: owner.busy, locked: locked(state) || state.phase === 'saved',
     savedReadFailed: state.phase === 'saved' && (state.openFailed || savedRead.error || !savedRead.pending && !savedVisible),
     savedReadPending: state.phase === 'saved' && savedRead.pending,
-    add: () => { if (canAct() && !locked(owner.state) && !owner.busy) { owner.sequence++; owner.state = { ...initial(), open: true }; redraw(); } },
-    close: () => { if (current() && !locked(owner.state)) { owner.sequence++; owner.busy = false; update({ open: false }); } },
+    add: () => { const token = renderedToken; if (canAct(token) && !locked(owner.state) && !owner.busy) { owner.sequence++; owner.state = { ...initial(), open: true }; notify(owner); } },
+    close: () => { const token = renderedToken; if (eligibleView(token) && !locked(owner.state)) { owner.sequence++; owner.busy = false; update({ open: false }, token); } },
     edit, review, create: () => submit('create'), retry: () => submit('retry'), checkStatus: () => submit('status'),
     openExisting: (id: string) => {
-      if (!canAct() || owner.busy || locked(owner.state) || !owner.state.review?.candidates.some(candidate => candidate.account.id === id)) return;
-      reopen(id); update({ open: false });
+      const token = renderedToken;
+      if (!canAct(token) || owner.busy || locked(owner.state) || !owner.state.review?.candidates.some(candidate => candidate.account.id === id)) return;
+      reopen(id); update({ open: false }, token);
     },
-    reopenSaved: () => { if (current() && owner.state.phase === 'saved' && owner.state.savedId) reopen(owner.state.savedId, true); },
+    reopenSaved: () => { const token = renderedToken; if (eligibleView(token) && owner.state.phase === 'saved' && owner.state.savedId) reopen(owner.state.savedId, true); },
   };
 }
 export type LocalCompanyIntakeController = ReturnType<typeof useLocalCompanyIntake>;
+
+export function LocalCompanyIntakeProvider({ api, children }: { api?: IntakeApi; children: ReactNode }) {
+  const { owner, borrowed } = useLocalCompanyIntakeOwner(api);
+  useEffect(() => {
+    if (borrowed) return;
+    owner.active = true;
+    return () => { owner.active = false; owner.sequence++; for (const cancel of [...owner.cancellations]) cancel(); owner.view = null; notify(owner); };
+  }, [borrowed, owner]);
+  return <ownerContext.Provider value={owner}>{children}</ownerContext.Provider>;
+}
 
 export function LocalCompanyIntake({ controller: c }: { controller: LocalCompanyIntakeController }) {
   const id = useId(); const s = c.state;
@@ -141,8 +203,8 @@ export function LocalCompanyIntake({ controller: c }: { controller: LocalCompany
     <button type="button" disabled={!c.available || c.busy || c.locked && s.phase !== 'saved'} onClick={c.add}>Add company</button>
     {s.open && <form className="local-company-intake__form" aria-label="Local company intake" onSubmit={event => { event.preventDefault(); void c.review(); }}>
       <p>Manually entered local identity only, not verified company research or worker authority.</p>
-      <label htmlFor={`${id}-name`}>Company name</label><input id={`${id}-name`} value={s.name} disabled={c.locked || !c.available} onChange={event => c.edit('name', event.target.value)} />
-      <label htmlFor={`${id}-domain`}>Company domain (optional)</label><input id={`${id}-domain`} value={s.domain} disabled={c.locked || !c.available} onChange={event => c.edit('domain', event.target.value)} />
+      <label htmlFor={`${id}-name`}>Company name</label><input id={`${id}-name`} value={s.name} disabled={c.locked} readOnly={!c.available} onChange={event => c.edit('name', event.target.value)} />
+      <label htmlFor={`${id}-domain`}>Company domain (optional)</label><input id={`${id}-domain`} value={s.domain} disabled={c.locked} readOnly={!c.available} onChange={event => c.edit('domain', event.target.value)} />
       {!c.available && <p role="status">Local company intake is unavailable. Any unresolved request is retained.</p>}
       {s.error && <p role="alert">{s.error}</p>}
       {s.notice && <p role="status">{s.notice}</p>}

@@ -12,10 +12,10 @@ test.beforeAll(async () => {
   javascript = bundle.outputFiles.find(file => file.path.endsWith('.js'))!.text;
   css = bundle.outputFiles.find(file => file.path.endsWith('.css'))!.text;
 });
-async function mount(page: Page, context: PresentationContext, initialRoute: typeof appRoutes[number] = 'today') {
+async function mount(page: Page, context: PresentationContext, initialRoute: typeof appRoutes[number] = 'today', healthScenario = false) {
   const errors: string[] = [], requests: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  const url = `http://127.0.0.1:41838/application-presentation?mode=${context.mode}`;
+  const url = `http://127.0.0.1:41838/application-presentation?mode=${context.mode}${healthScenario ? '&healthScenario=1' : ''}`;
   await page.addInitScript(context => {
     if (localStorage.getItem('callie.theme') === null) localStorage.setItem('callie.theme', context.theme);
     if (localStorage.getItem('callie.density') === null) localStorage.setItem('callie.density', context.density);
@@ -294,5 +294,290 @@ for (const mode of ['meeting_first', 'legacy'] as const) for (const theme of ['l
     expect(observed.requests).toEqual([]);
     expect((await calls(page)).filter(call => call.kind === 'forbidden')).toEqual([]);
     writeFileSync(info.outputPath('dialog-calls.json'), JSON.stringify(await calls(page), null, 2));
+  });
+}
+
+// Additive actual-App browser coverage for local draft continuity.
+// Uses existing real App fixture/helpers with no extra allowed API operation.
+// Tests navigation and native Import-open draft retention, NOT committed create or persistence.
+for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050] as const) {
+  test(`actual company draft survives routes and native Import opening without command replay ${theme} ${width}`, async ({ page }, info) => {
+    const context: PresentationContext = { mode: 'meeting_first', theme, density: 'compact', width };
+    const observed = await mount(page, context, 'accounts');
+    await assertActualDestination(page, 'accounts', 'meeting_first');
+    await page.getByRole('button', { name: 'Add company', exact: true }).click();
+    const name = page.getByRole('textbox', { name: 'Company name', exact: true });
+    const domain = page.getByRole('textbox', { name: 'Company domain (optional)', exact: true });
+    const rawName = '  Browser Harbor Management  ';
+    const rawDomain = ' HARBOR.EXAMPLE ';
+    await name.fill(rawName);
+    await domain.fill(rawDomain);
+    const oldInput = await name.elementHandle();
+    expect(oldInput).not.toBeNull();
+    for (const route of ['campaigns', 'leads', 'today'] as const) {
+      await navigateActualRoute(page, route);
+      await assertActualDestination(page, route, 'meeting_first');
+      await expect(page.getByRole('form', { name: 'Local company intake', exact: true })).toHaveCount(0);
+    }
+    expect(await oldInput!.evaluate(element => element.isConnected)).toBe(false);
+    await navigateActualRoute(page, 'accounts');
+    await assertActualDestination(page, 'accounts', 'meeting_first');
+    await expect(name).toHaveValue(rawName);
+    await expect(domain).toHaveValue(rawDomain);
+    const paletteOrigin = await name.elementHandle();
+    expect(paletteOrigin).not.toBeNull();
+    await name.focus();
+    await page.keyboard.press('ControlOrMeta+k');
+    const palette = page.getByRole('dialog', { name: 'Command palette', exact: true });
+    await assertModalIsolation(page, palette);
+    await page.keyboard.press('Escape');
+    await expect(palette).toHaveCount(0);
+    await expect(name).toBeFocused();
+    expect(await paletteOrigin!.evaluate(element => ({ connected: element.isConnected, focused: document.activeElement === element }))).toEqual({ connected: true, focused: true });
+    await expect(name).toHaveValue(rawName);
+    await page.evaluate(script => window.eval(script), openImportScript);
+    const dialog = page.getByRole('dialog', { name: 'Import leads', exact: true });
+    await assertModalIsolation(page, dialog);
+    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await assertActualDestination(page, 'leads', 'meeting_first');
+    await navigateActualRoute(page, 'accounts');
+    await assertActualDestination(page, 'accounts', 'meeting_first');
+    await expect(name).toHaveValue(rawName);
+    await expect(domain).toHaveValue(rawDomain);
+    await expect(page.getByRole('button', { name: 'Review company', exact: true })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Create company', exact: true })).toBeDisabled();
+    const observedCalls = await calls(page);
+    expect(observedCalls.filter(call => ['localWorkspace.reviewCompany', 'localWorkspace.createCompany', 'localWorkspace.getCompanyCreateStatus', 'imports.preview', 'imports.commit', 'imports.status'].includes(call.method))).toEqual([]);
+    expect(observedCalls.filter(call => call.kind !== 'read')).toEqual([]);
+    expect(observed.errors).toEqual([]);
+    expect(observed.requests).toEqual([]);
+    await page.screenshot({ path: info.outputPath(`company-draft-${theme}-${width}.png`) });
+    writeFileSync(info.outputPath('company-draft-calls.json'), JSON.stringify(observedCalls, null, 2));
+  });
+}
+
+// Additive actual-App diagnostic observation acceptance.
+// Breaks caught: refresh unmounting a real editor, stale focus stealing,
+// blocked routes remaining admitted, or blocked/ready discarding the shared draft.
+const healthFocusMethods = ['daily.get', 'delegation.status', 'health.get', 'localWorkspace.get', 'localWorkspace.getCommitments', 'review.list'];
+async function settledHealthFrames(page: Page) {
+  await page.evaluate(async () => { await window.applicationPresentation.frame(); await window.applicationPresentation.frame(); });
+}
+async function healthReadDelta(page: Page, start: number, methods: string[]) {
+  await settledHealthFrames(page);
+  const delta = (await calls(page)).slice(start);
+  expect(delta.every(call => call.kind === 'read')).toBe(true);
+  expect(delta.map(call => call.method).sort()).toEqual([...methods].sort());
+  for (const call of delta.filter(call => call.method === 'review.list')) {
+    expect(call.args).toEqual([{ kinds: [], cursor: null, limit: 1 }]);
+  }
+  return delta;
+}
+async function holdFocusedHealth(page: Page) {
+  expect(await page.evaluate(() => document.visibilityState)).toBe('visible');
+  const start = (await calls(page)).length;
+  const trace = await page.evaluate(async () => {
+    const input = document.activeElement;
+    if (!(input instanceof HTMLInputElement)) throw new Error('Expected the deliberate input focus before observation');
+    const events: { event: string; disabled: boolean; active: string; oldValue?: string | null }[] = [];
+    const sample = (event: string, oldValue?: string | null) => events.push({ event, disabled: input.disabled, active: document.activeElement?.tagName ?? '', oldValue });
+    const blur = () => sample('blur');
+    const observer = new MutationObserver(records => { for (const record of records) sample(record.attributeName!, record.oldValue); });
+    observer.observe(input, { attributes: true, attributeOldValue: true, attributeFilter: ['disabled', 'readonly'] });
+    input.addEventListener('blur', blur);
+    try {
+      sample('before-focus');
+      window.applicationPresentation.health!.arm(); window.dispatchEvent(new Event('focus'));
+      await window.applicationPresentation.frame(); await window.applicationPresentation.frame();
+      const region = document.querySelector('[aria-label="Diagnostic observation"]')!.getBoundingClientRect();
+      sample('after-frames');
+      return { events, connected: input.isConnected, focused: document.activeElement === input, region: { top: region.top, bottom: region.bottom, left: region.left, right: region.right }, viewport: { width: innerWidth, height: innerHeight }, scroll: { x: scrollX, y: scrollY } };
+    } finally { observer.disconnect(); input.removeEventListener('blur', blur); }
+  });
+  console.log('DIAGNOSTIC_FOCUS_TRACE ' + JSON.stringify(trace));
+  await expect.poll(() => page.evaluate(() => window.applicationPresentation.health!.phase())).toBe('pending');
+  await healthReadDelta(page, start, healthFocusMethods);
+  return start;
+}
+async function visibleHealthObservation(page: Page) {
+  const observation = page.getByRole('region', { name: 'Diagnostic observation', exact: true });
+  await expect(observation).toBeVisible();
+  const rect = await observation.boundingBox();
+  expect(rect).not.toBeNull();
+  const viewport = page.viewportSize()!;
+  expect(rect!.x).toBeGreaterThanOrEqual(0);
+  expect(rect!.y).toBeGreaterThanOrEqual(0);
+  expect(rect!.x + rect!.width).toBeLessThanOrEqual(viewport.width + 1);
+  expect(rect!.y + rect!.height).toBeLessThanOrEqual(viewport.height + 1);
+  expect(await page.evaluate(() => ({ x: scrollX, y: scrollY }))).toEqual({ x: 0, y: 0 });
+  const geometry = await observation.evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    const rail = document.querySelector('.nav-rail')!.getBoundingClientRect();
+    const button = element.querySelector('button')!;
+    const buttonRect = button.getBoundingClientRect();
+    const hit = document.elementFromPoint(buttonRect.x + buttonRect.width / 2, buttonRect.y + buttonRect.height / 2);
+    return {
+      rightOfRail: bounds.left >= rail.right - 1,
+      pageFits: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+      contentFits: [element, ...element.querySelectorAll('p,button')].every(node => node.scrollWidth <= node.clientWidth + 1 && node.scrollHeight <= node.clientHeight + 1),
+      buttonInside: buttonRect.left >= bounds.left && buttonRect.right <= bounds.right + 1 && buttonRect.top >= bounds.top && buttonRect.bottom <= bounds.bottom + 1,
+      buttonUncovered: hit === button || button.contains(hit),
+    };
+  });
+  expect(geometry).toEqual({ rightOfRail: true, pageFits: true, contentFits: true, buttonInside: true, buttonUncovered: true });
+}
+async function reachableCompanyClose(page: Page) {
+  const close = page.getByRole('button', { name: 'Close company form', exact: true });
+  // Explicitly scroll the real queue only after all editor/caret/modal assertions.
+  // This does not click Close, force focus, or change any form or command state.
+  await close.scrollIntoViewIfNeeded();
+  await expect(close).toBeEnabled();
+  expect(await close.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    const status = document.querySelector('[aria-label="Diagnostic observation"]')!.getBoundingClientRect();
+    let top = 0, left = 0, bottom = innerHeight, right = innerWidth;
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent); const box = parent.getBoundingClientRect();
+      if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top + parent.clientTop); bottom = Math.min(bottom, box.top + parent.clientTop + parent.clientHeight); }
+      if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left + parent.clientLeft); right = Math.min(right, box.left + parent.clientLeft + parent.clientWidth); }
+    }
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    return { fullyVisible: rect.top >= top - 1 && rect.bottom <= bottom + 1 && rect.left >= left - 1 && rect.right <= right + 1,
+      aboveStatus: rect.bottom <= status.top + 1, uncovered: hit === element || element.contains(hit) };
+  })).toEqual({ fullyVisible: true, aboveStatus: true, uncovered: true });
+  await visibleHealthObservation(page);
+}
+async function finishHealth(page: Page, outcome: 'ready' | 'blocked' | 'rejected') {
+  await page.evaluate(value => window.applicationPresentation.health!.settle(value), outcome);
+  await expect.poll(() => page.evaluate(() => window.applicationPresentation.health!.phase())).toBe('idle');
+  await settledHealthFrames(page);
+}
+async function healthDraft(page: Page) {
+  await assertActualDestination(page, 'accounts', 'meeting_first');
+  await page.getByRole('button', { name: 'Add company', exact: true }).click();
+  const name = page.getByRole('textbox', { name: 'Company name', exact: true });
+  const domain = page.getByRole('textbox', { name: 'Company domain (optional)', exact: true });
+  await name.fill('  Diagnostic Harbor Management  ');
+  await domain.fill(' HARBOR.EXAMPLE ');
+  await name.focus();
+  await name.evaluate(element => (element as HTMLInputElement).setSelectionRange(3, 14));
+  await expect(name).toBeFocused();
+  const input = await name.elementHandle();
+  const root = await page.locator('.presentation-root').elementHandle();
+  const shell = await page.locator('.app-shell').elementHandle();
+  expect(input).not.toBeNull(); expect(root).not.toBeNull(); expect(shell).not.toBeNull();
+  await settledHealthFrames(page);
+  return { name, domain, input: input!, root: root!, shell: shell! };
+}
+async function sameHealthDraft(draft: Awaited<ReturnType<typeof healthDraft>>, focused: boolean) {
+  expect(await draft.input.evaluate(element => {
+    const input = element as HTMLInputElement;
+    return { connected: input.isConnected, focused: document.activeElement === input, value: input.value, start: input.selectionStart, end: input.selectionEnd };
+  })).toEqual({ connected: true, focused, value: '  Diagnostic Harbor Management  ', start: 3, end: 14 });
+  expect(await draft.root.evaluate(element => element.isConnected && document.querySelector('.presentation-root') === element)).toBe(true);
+  expect(await draft.shell.evaluate(element => element.isConnected && document.querySelector('.app-shell') === element)).toBe(true);
+  await expect(draft.domain).toHaveValue(' HARBOR.EXAMPLE ');
+}
+async function onlyReadHealthScenario(page: Page, observed: { errors: string[]; requests: string[] }) {
+  expect((await calls(page)).filter(call => call.kind !== 'read')).toEqual([]);
+  expect((await calls(page)).filter(call => ['localWorkspace.reviewCompany', 'localWorkspace.createCompany', 'localWorkspace.getCompanyCreateStatus'].includes(call.method))).toEqual([]);
+  expect(observed.errors).toEqual([]);
+  expect(observed.requests).toEqual([]);
+}
+for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050] as const) {
+  test(`actual diagnostic refresh keeps the same company editor and newer palette focus ${theme} ${width}`, async ({ page }, info) => {
+    const observed = await mount(page, { mode: 'meeting_first', theme, density: 'compact', width }, 'accounts', true);
+    const draft = await healthDraft(page);
+    await sameHealthDraft(draft, true);
+    await holdFocusedHealth(page);
+    await sameHealthDraft(draft, true);
+    await visibleHealthObservation(page);
+    await finishHealth(page, 'rejected');
+    await expect(page.getByRole('alert').filter({ hasText: /diagnostic/i })).toBeVisible();
+    await visibleHealthObservation(page);
+    await sameHealthDraft(draft, true);
+
+    const manualStart = (await calls(page)).length;
+    await page.evaluate(() => window.applicationPresentation.health!.arm());
+    await page.getByRole('button', { name: 'Refresh diagnostics', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.applicationPresentation.health!.phase())).toBe('pending');
+    await healthReadDelta(page, manualStart, ['health.get']);
+    // A user click intentionally moved focus. The editor itself must not be replaced.
+    await sameHealthDraft(draft, false);
+    await expect(page.getByRole('alert').filter({ hasText: /diagnostic/i })).toBeVisible();
+    await visibleHealthObservation(page);
+    await finishHealth(page, 'ready');
+    await expect(page.getByRole('alert').filter({ hasText: /diagnostic/i })).toHaveCount(0);
+    await healthReadDelta(page, manualStart, ['health.get']);
+    await sameHealthDraft(draft, false);
+
+    await draft.name.focus();
+    await draft.name.evaluate(element => (element as HTMLInputElement).setSelectionRange(3, 14));
+    await sameHealthDraft(draft, true);
+    const paletteOrigin = await draft.name.elementHandle();
+    expect(paletteOrigin).not.toBeNull();
+    await holdFocusedHealth(page);
+    await page.keyboard.press('ControlOrMeta+k');
+    const palette = page.getByRole('dialog', { name: 'Command palette', exact: true });
+    await expect(palette).toBeVisible();
+    const paletteNode = await palette.elementHandle();
+    expect(paletteNode).not.toBeNull();
+    expect(await paletteNode!.evaluate(element => element instanceof HTMLDialogElement && element.matches(':modal') && element.contains(document.activeElement))).toBe(true);
+    // Delivery happens while this exact newer native-modal owner is still open.
+    await finishHealth(page, 'ready');
+    expect(await paletteNode!.evaluate(element => element.isConnected && element instanceof HTMLDialogElement && element.matches(':modal') && element.contains(document.activeElement))).toBe(true);
+    await page.keyboard.press('Escape');
+    await expect(palette).toHaveCount(0);
+    expect(await paletteOrigin!.evaluate(element => element.isConnected && document.activeElement === element)).toBe(true);
+    await sameHealthDraft(draft, true);
+    await reachableCompanyClose(page);
+    await onlyReadHealthScenario(page, observed);
+    await page.screenshot({ path: info.outputPath(`diagnostic-editor-${theme}-${width}.png`) });
+    writeFileSync(info.outputPath('diagnostic-calls.json'), JSON.stringify(await calls(page), null, 2));
+  });
+
+  test(`actual blocked diagnostic observation removes routes but retains the company draft on ready return ${theme} ${width}`, async ({ page }, info) => {
+    const observed = await mount(page, { mode: 'meeting_first', theme, density: 'compact', width }, 'accounts', true);
+    const draft = await healthDraft(page);
+    await holdFocusedHealth(page);
+    const blockedStart = (await calls(page)).length;
+    await finishHealth(page, 'blocked');
+    await expect(page.getByRole('navigation', { name: 'Primary', exact: true })).toHaveCount(0);
+    await expect(draft.name).toHaveCount(0);
+    expect(await draft.input.evaluate(element => element.isConnected)).toBe(false);
+    expect(await draft.root.evaluate(element => element.isConnected && document.querySelector('.presentation-root') === element)).toBe(true);
+    await expect(page.getByRole('button', { name: 'Refresh diagnostics', exact: true })).toBeVisible();
+    // This frozen blocked App does not mount the optional RecoverySection.
+    await healthReadDelta(page, blockedStart, []);
+
+    const readyStart = (await calls(page)).length;
+    await page.getByRole('button', { name: 'Refresh diagnostics', exact: true }).click();
+    await assertActualDestination(page, 'accounts', 'meeting_first');
+    await expect(draft.name).toHaveValue('  Diagnostic Harbor Management  ');
+    await expect(draft.domain).toHaveValue(' HARBOR.EXAMPLE ');
+    const restored = await draft.name.elementHandle();
+    expect(restored).not.toBeNull();
+    expect(await draft.input.evaluate(element => element.isConnected)).toBe(false);
+    expect(await restored!.evaluate(element => element.isConnected)).toBe(true);
+    expect(await draft.root.evaluate(element => element.isConnected && document.querySelector('.presentation-root') === element)).toBe(true);
+    await healthReadDelta(page, readyStart, ['health.get', 'daily.get', 'daily.get', 'delegation.status', 'delegation.status', 'localWorkspace.get', 'localWorkspace.get', 'localWorkspace.getCommitments', 'localWorkspace.getCommitments', 'review.list', 'review.list', 'leadDetail.getOutboundCapabilities', 'leadDetail.getOutboundCapabilities']);
+    await expect(page.getByRole('button', { name: 'Review company', exact: true })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Create company', exact: true })).toBeDisabled();
+
+    await draft.name.focus();
+    await draft.name.evaluate(element => (element as HTMLInputElement).setSelectionRange(3, 14));
+    await holdFocusedHealth(page);
+    await finishHealth(page, 'rejected');
+    await expect(page.getByRole('alert').filter({ hasText: /diagnostic/i })).toBeVisible();
+    await visibleHealthObservation(page);
+    expect(await restored!.evaluate(element => {
+      const input = element as HTMLInputElement;
+      return { connected: input.isConnected, focused: document.activeElement === input, value: input.value, start: input.selectionStart, end: input.selectionEnd };
+    })).toEqual({ connected: true, focused: true, value: '  Diagnostic Harbor Management  ', start: 3, end: 14 });
+    await reachableCompanyClose(page);
+    await onlyReadHealthScenario(page, observed);
+    await page.screenshot({ path: info.outputPath(`diagnostic-return-${theme}-${width}.png`) });
+    writeFileSync(info.outputPath('diagnostic-return-calls.json'), JSON.stringify(await calls(page), null, 2));
   });
 }

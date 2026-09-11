@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { LocalCommitmentsSnapshot } from '../../../shared/contracts/localWorkspaceContract';
 import type { LocalRead } from './localWorkspaceRead';
+import { formatVisibleCount, localCommitmentsCount } from './visibleCount';
 export type RetainedItem = LocalCommitmentsSnapshot['items'][number];
 export const retainedKey = ({ item }: RetainedItem) => JSON.stringify(['retained', item.salesCycleId, item.action.id]);
 const labels: Record<RetainedItem['kind'], string> = { callback: 'Retained callback', post_stage: 'Post-stage follow-through', onboarding: 'Onboarding', inbound_response: 'Inbound response', warm_relationship: 'Existing relationship', founder_resurface: 'Founder resurface' };
@@ -27,5 +28,11 @@ export function LocalOnlyCalls({ read, onOpenLead, initialSelected = null, onSel
   const [selected, setSelected] = useState<string | null>(initialSelected);
   const select = (key: string) => { setSelected(key); onSelectionChange?.(key); };
   const entry = read.value?.items.find(item => retainedKey(item) === selected);
-  return <div className="native-desk__layout"><section className="native-desk__queue"><section className="native-desk__lane"><h2>Calls</h2><RetainedWork read={read} selected={selected} onSelect={select} /></section><section className="native-desk__lane"><h2>Needs your approval</h2></section><section className="native-desk__lane"><h2>Upcoming meetings</h2></section></section><aside className="native-desk__detail" aria-label="Selected work">{entry ? <RetainedWorkDetail entry={entry} stale={read.error || read.pending} onOpenLead={onOpenLead} /> : selected ? <p>This work is no longer in the local queue.</p> : <div className="native-desk__welcome"><h2>Local work, separate from worker actions.</h2><p>Local work remains available. Worker-scoped work is unavailable until the daily workspace can be checked.</p><a href="#/settings">Review Settings</a></div>}</aside></div>;
+  return <div className="native-desk__layout">
+    <section className="native-desk__queue">
+      <section className="native-desk__lane"><h2>Local commitments <span className="native-desk__count">{formatVisibleCount(localCommitmentsCount(read))}</span></h2><RetainedWork read={read} selected={selected} onSelect={select} /></section>
+      {['Calls', 'Needs your approval', 'Upcoming meetings'].map(label => <section className="native-desk__lane" key={label}><h2>{label} <span className="native-desk__count">Unavailable</span></h2></section>)}
+    </section>
+    <aside className="native-desk__detail" aria-label="Selected work">{entry ? <RetainedWorkDetail entry={entry} stale={read.error || read.pending} onOpenLead={onOpenLead} /> : selected ? <p>This work is no longer in the local queue.</p> : <div className="native-desk__welcome"><h2>Local work, separate from worker actions.</h2><p>Local work remains available. Worker-scoped work is unavailable until the daily workspace can be checked.</p><a href="#/settings">Review Settings</a></div>}</aside>
+  </div>;
 }

@@ -47,23 +47,3 @@ export type TodayDomainInvoker = {
   getTriageQueue(): TriageQueue | Promise<TriageQueue>;
   setReviewPosition(input: SetReviewPositionRequest): MutationReceipt;
 };
-
-/**
- * Thin delegate from the Today IPC surface to the domain facade. No business
- * rules, SQL, or DTO mapping belong in this module.
- */
-export function createTodayProvider(domain: TodayDomainInvoker): TodayProvider {
-  return {
-    get: async () => domain.getToday(),
-    complete: async (input) => domain.completePrimaryAction(input),
-    snooze: async (input) => domain.snoozePrimaryAction(input),
-    pin: async (input) => domain.pinWithinLane(input),
-    logPastActivity: async (input) => domain.logPastActivity(input),
-    addLeadNote: async (input) => domain.addLeadNote(input),
-    logCallOutcome: async (input) => domain.logCallOutcome(input),
-    markActivityInError: async (input) => domain.markActivityInError(input),
-    getLeadTriageSnapshot: async (input) => domain.getLeadTriageSnapshot(input),
-    getTriageQueue: async () => domain.getTriageQueue(),
-    setReviewPosition: async (input) => domain.setReviewPosition(input),
-  };
-}
