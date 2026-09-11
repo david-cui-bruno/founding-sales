@@ -27,11 +27,20 @@ vi.mock('electron', () => {
   };
 });
 
-it('takes an empty encrypted workspace through selected research, imported identity, reviewed link and a durable unsent manual draft', async () => {
+it.each(['manual', 'model'] as const)('takes an empty encrypted workspace through selected research, imported identity, reviewed link and a durable unsent %s draft', async mode => {
   // This is jsdom + in-process Electron invoke, not a packaged/native-browser test.
   // HTTP/DNS bytes are synthetic. Startup, health, extractor/attestation, all
   // registrars, importer, account repository, composer and encrypted SQL are real.
-  const f = await createFirstUseDomainFixture(transport.handlers);
+  const preparedBody = 'Maya, I saw Selected Management reports managing 240 residential units. Would a conversation be useful?';
+  const f = await createFirstUseDomainFixture(transport.handlers, mode === 'model' ? {
+    draftModel: context => {
+      // Deterministic model transport, not a claim about live generation quality.
+      // A generic response when the fact is absent makes missing context observable.
+      const portfolio = context.facts.find(fact => ['portfolio', '240', 'managed', 'units'].every(value => fact.text.includes(value)));
+      return { subject: 'A question for Selected Management',
+        body: portfolio ? preparedBody : 'No supported company fact was provided.', evidenceIds: portfolio ? [portfolio.id] : [] };
+    },
+  } : {});
   const previousApi = Object.getOwnPropertyDescriptor(window, 'callie');
   const previousUrl = window.location.href;
   const previousAct = Object.getOwnPropertyDescriptor(globalThis, 'IS_REACT_ACT_ENVIRONMENT');
@@ -64,7 +73,7 @@ it('takes an empty encrypted workspace through selected research, imported ident
     expect(health).toMatchObject({ domainReady: true, databaseEncrypted: true });
     expect(health.cipherVersion).toBeTruthy();
     expect(readFileSync(health.databasePath).subarray(0, 16).toString()).not.toBe('SQLite format 3\0');
-    expect(await api.outreach.status()).toMatchObject({ model: 'unconfigured', gmail: 'unconfigured', accountEmail: null });
+    expect(await api.outreach.status()).toMatchObject({ model: mode === 'model' ? 'ready' : 'unconfigured', gmail: 'unconfigured', accountEmail: null });
     Object.defineProperty(window, 'callie', { configurable: true, value: api });
     Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, writable: true, value: true });
     window.history.replaceState(null, '', '#/accounts');
@@ -159,6 +168,28 @@ it('takes an empty encrypted workspace through selected research, imported ident
     await click('Email');
     await waitFor(() => expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).disabled).toBe(false));
     expect(calls('outreach:open-draft')[0].args).toEqual([{ personId, contactMethodId }]);
+    if (mode === 'model') {
+      expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe(preparedBody);
+      expect(emailDraftSchema.parse(calls('outreach:open-draft')[0].result)).toMatchObject({ generation: 'model', body: preparedBody, notice: null });
+      expect(f.modelRequests).toHaveLength(1);
+      const supplied = f.modelRequests[0];
+      expect(supplied).toMatchObject({ url: 'https://api.openai.com/v1/responses', model: 'first-use-fixture-model', store: false,
+        context: { personName: 'Maya Ortiz', organizationLabel: 'Selected Management' } });
+      const portfolio = supplied.context.facts.find(fact => fact.text.includes('"key":"portfolio"'))!;
+      const source = researched.sources.find(item => item.url === 'https://selected.invalid/')!;
+      for (const value of [accountId, 'Selected Management', '240', 'managed', 'units', source.id, source.url, source.fetchedAt, source.sha256]) {
+        expect(portfolio.text).toContain(value);
+      }
+      const allFacts = JSON.stringify(supplied.context.facts);
+      expect(allFacts).not.toContain(team.excerpt);
+      expect(allFacts).not.toContain('office@selected.invalid');
+      expect(allFacts).not.toContain('<p>');
+      expect(calls('outreach:generate-draft')).toHaveLength(0);
+      expect(calls('outreach:save-draft')).toHaveLength(0);
+    } else {
+      expect(f.modelRequests).toEqual([]);
+      expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('');
+    }
     change('Subject', 'A local introduction');
     change('Message', 'Maya, I would like to discuss your residential portfolio. This is an unsent local draft.');
     await click('Save draft');
@@ -183,6 +214,7 @@ it('takes an empty encrypted workspace through selected research, imported ident
     await waitFor(() => expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe(saved.body));
     expect((screen.getByRole('textbox', { name: 'Subject' }) as HTMLInputElement).value).toBe(saved.subject);
     expect(calls('outreach:open-draft')).toHaveLength(2);
+    expect(f.modelRequests).toHaveLength(mode === 'model' ? 1 : 0);
     const reopened = emailDraftSchema.parse(calls('outreach:open-draft').at(-1)?.result);
     expect(reopened).toEqual(saved);
     expect(await rows('email_drafts')).toEqual([expect.objectContaining({ id: saved.id, person_id: personId,
@@ -193,7 +225,7 @@ it('takes an empty encrypted workspace through selected research, imported ident
     expect({ stage: after.stage, activities: after.activities, history: after.history, nextAction: after.nextAction })
       .toEqual({ stage: person.stage, activities: person.activities, history: person.history, nextAction: person.nextAction });
     expect(f.pages).toEqual(Object.keys(firstUsePages));
-    expect(await api.outreach.status()).toMatchObject({ model: 'unconfigured', gmail: 'unconfigured' });
+    expect(await api.outreach.status()).toMatchObject({ model: mode === 'model' ? 'ready' : 'unconfigured', gmail: 'unconfigured' });
     expect(screen.getByText('Local account send authority is not established. Saving your draft remains available.')).toBeTruthy();
     expect(f.denied).toEqual([]);
     expect(transport.nativeCalls).toBe(0);

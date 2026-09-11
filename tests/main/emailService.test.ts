@@ -6,6 +6,8 @@ import { migration0019EmailDrafts } from '../../src/main/db/migrations/0019Email
 import { createDomainServices, type DomainServices } from '../../src/main/domain/createDomainServices';
 import { createFounderSalesDomain, type FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import { createEmailService } from '../../src/main/outreach/emailService';
+import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
+import { companyDraftFacts } from '../../src/main/outreach/companyDraftContext';
 import { EmailRepository } from '../../src/main/outreach/emailRepository';
 import type { FrozenEmail, GroundedDraftContext, OutreachProviders, EmailSendResult } from '../../src/main/outreach/providers/providerTypes';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
@@ -59,6 +61,39 @@ describe('durable explicit email using real encrypted SQLite', () => {
     const draft=await service.openDraft({personId,contactMethodId});
     return service.saveDraft({draftId:draft.id,expectedRevision:draft.revision,subject:'Hello',body:'A personally reviewed email.'});
   }
+  it.each([false,true])('keeps the 40-fact prompt bounded with crowded person facts and company context=%s',async linked=>{
+    for(let index=0;index<45;index++){
+      const propertyId=`crowded-${String(index).padStart(2,'0')}`;
+      db.raw.prepare(`INSERT INTO properties(id,address_line_1,locality,region,country_code,created_at,updated_at)
+        VALUES(?,?,'Providence','RI','US',?,?)`).run(propertyId,`${index+1} Fictional Street`,now(),now());
+      db.raw.prepare(`INSERT INTO prospect_properties(prospect_id,property_id,relationship,created_at)
+        VALUES('email-prospect',?,'property_manager',?)`).run(propertyId,now());
+    }
+    const legacy=domain.getLeadDetail({personId}).portfolio!.facts;
+    expect(legacy.length).toBeGreaterThanOrEqual(45);
+    const accounts=new AccountRepository({database:db,clock:{now},ids:{next:randomUUID},
+      sourcePolicy:{attest:source=>source.url==='https://example.invalid/company'}});
+    if(linked){
+      const account=accounts.create({commandId:randomUUID(),name:'Fictional Company',domain:null});
+      const sourceId=randomUUID();
+      accounts.admitEvidence({commandId:randomUUID(),accountId:account.id,expectedVersion:1,
+        sources:[{id:sourceId,url:'https://example.invalid/company',fetchedAt:now(),sha256:'a'.repeat(64),excerpt:'Fictional company evidence',permitted:true}],
+        claims:[{key:'portfolio',kind:'fact',value:{count:240,scope:'managed',measure:'units'},evidenceIds:[sourceId]},
+          {key:'maintenance_workflow',kind:'fact',value:'Central dispatch',evidenceIds:[sourceId]}],routes:[]});
+      accounts.admitLinks({commandId:randomUUID(),accountId:account.id,expectedVersion:2,links:[{
+        id:randomUUID(),kind:'person_role',personId,role:'Property manager',relationship:'Listed employment',
+        authority:'unconfirmed',authorityEvidenceIds:[],evidenceIds:[sourceId],validFrom:now(),validTo:null}]});
+    }
+    const company=companyDraftFacts(accounts.readDraftCompanyDetail(personId,now()));
+    expect(company).toHaveLength(linked?2:0);
+    setup.model='ready';
+    const draft=await service.openDraft({personId,contactMethodId});
+    expect(draft.generation).toBe('model');
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0].facts).toHaveLength(40);
+    expect(contexts[0].facts).toEqual([...legacy.slice(0,40-company.length),...company]);
+    expect(sent).toEqual([]);
+  });
   it('reopens persisted edits and refuses stale writes without moving stage',async()=>{
     const edited=await readyDraft();
     expect((await service.openDraft({personId,contactMethodId})).body).toBe(edited.body);

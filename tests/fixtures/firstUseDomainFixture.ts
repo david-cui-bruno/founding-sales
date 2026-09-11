@@ -1,5 +1,6 @@
 /** Real startup/domain/SQL/registrars. Only OS and external transports are synthetic. */
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { openDatabase, closeDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
@@ -11,7 +12,7 @@ import { registerApplicationIpc } from '../../src/main/ipc/registerApplicationIp
 import { registerOutreachIpc } from '../../src/main/ipc/registerOutreachIpc';
 import { createOutreachProviders } from '../../src/main/outreach/providers/outreachProviders';
 import { createEmailService } from '../../src/main/outreach/emailService';
-import type { SafeStorage } from '../../src/main/outreach/providers/providerTypes';
+import type { GeneratedDraft, GroundedDraftContext, SafeStorage } from '../../src/main/outreach/providers/providerTypes';
 import type { SourcingPollHealth } from '../../src/shared/contracts/sourcingContract';
 import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import { createCallieApi } from '../../src/preload/createCallieApi';
@@ -32,7 +33,9 @@ const allowed = new Set([
   'imports:preview', 'imports:remap', 'imports:commit', 'imports:status',
   'outreach:status', 'outreach:open-draft', 'outreach:save-draft', 'outreach:inspect-local-authority',
 ]);
-export async function createFirstUseDomainFixture(handlers: Map<string, RegisteredIpcHandler>) {
+export async function createFirstUseDomainFixture(handlers: Map<string, RegisteredIpcHandler>, options: {
+  draftModel?: (context: GroundedDraftContext) => Pick<GeneratedDraft, 'subject' | 'body' | 'evidenceIds'>;
+} = {}) {
   const temp = createTempDatabase();
   const key = randomBytes(32);
   const denied: string[] = [];
@@ -50,8 +53,23 @@ export async function createFirstUseDomainFixture(handlers: Map<string, Register
       return Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString('utf8');
     },
   };
+  const modelRequests: { url: string; context: GroundedDraftContext; model: string; store: boolean }[] = [];
   const manager = createOutreachProviders({ directory: join(dirname(temp.path), 'outreach'), safeStorage,
-    fetch: async () => deny('provider fetch'), openExternal: async () => deny('openExternal') });
+    fetch: async (url, init) => {
+      if (!options.draftModel || url !== 'https://api.openai.com/v1/responses' || init?.method !== 'POST'
+        || typeof init.body !== 'string' || init.signal?.aborted) return deny('provider fetch');
+      const request = JSON.parse(init.body);
+      if (request.text?.format?.name !== 'grounded_email' || request.store !== false
+        || request.model !== 'first-use-fixture-model') return deny('unexpected model request');
+      const context: GroundedDraftContext = JSON.parse(request.input);
+      modelRequests.push({ url, context: structuredClone(context), model: request.model, store: request.store });
+      const draft = options.draftModel(context);
+      return new Response(JSON.stringify({ id: 'first_use_response', status: 'completed', model: request.model,
+        output: [{ type: 'message', role: 'assistant', status: 'completed',
+          content: [{ type: 'output_text', text: JSON.stringify(draft) }] }] }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }, openExternal: async () => deny('openExternal') });
   const pages: string[] = [], resolutions: string[] = [];
   const trace: { channel: string; args: unknown[]; result?: unknown; error?: unknown }[] = [];
   const pending = new Set<Promise<unknown>>();
@@ -66,7 +84,7 @@ export async function createFirstUseDomainFixture(handlers: Map<string, Register
     registerOutreachIpc,
     createResearchProviders: () => manager,
     createEmailService: (gate, _path, providers) => {
-      if (!providers) throw Error('Startup must lend its real unconfigured manager');
+      if (!providers) throw Error('Startup must lend its real provider manager');
       return createEmailService({ databaseGate: gate, providers });
     },
     companyResearchResolve: async hostname => {
@@ -92,6 +110,8 @@ export async function createFirstUseDomainFixture(handlers: Map<string, Register
     createAppleBridgeSupervisor: () => deny('Apple bridge'),
   };
   try {
+    mkdirSync(dirname(temp.path), { recursive: true, mode: 0o700 });
+    if (options.draftModel) await manager.configure({ apiKey: 'synthetic-first-use-key', model: 'first-use-fixture-model' });
     const app = await startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path),
       companyResearch: { workspaceId: 'first-use-fixture', budgetId: 'first-use-budget',
         audience: { residential: true, regions: ['Fictional Region'], terms: ['residential PM'] },
@@ -119,7 +139,7 @@ export async function createFirstUseDomainFixture(handlers: Map<string, Register
       })]); } finally { clearTimeout(timer!); }
     };
     const drain = () => bounded((async () => { while (pending.size) await Promise.allSettled([...pending]); })());
-    return { api, runtime, trace, pages, resolutions, denied, deny, drain, directory: dirname(temp.path),
+    return { api, runtime, trace, pages, resolutions, modelRequests, denied, deny, drain, directory: dirname(temp.path),
       async close() {
         try { await drain(); }
         finally {
