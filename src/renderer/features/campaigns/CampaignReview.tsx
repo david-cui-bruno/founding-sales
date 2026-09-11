@@ -2,6 +2,7 @@ import type {
   DailyAnswer,
   DailySnapshot,
 } from '../../../shared/contracts/dailyContract';
+import { describeCallCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
 export function CampaignReview({
   campaign,
   accounts,
@@ -12,6 +13,7 @@ export function CampaignReview({
   answers: DailyAnswer[];
 }) {
   const { version } = campaign;
+  const draft = describeCallCampaignDraft(version);
   // Only LinkedIn drafts expose an exact campaign version binding. Shared account
   // membership alone must not relabel unrelated requested emails as sample drafts.
   const samples = answers.filter(
@@ -20,17 +22,17 @@ export function CampaignReview({
   );
   return (
     <section className="native-desk__campaign">
-      <p className="native-desk__eyebrow">Saved campaign version {version.version} / capability preview</p>
-      <p>Read-only preview. Campaign creation, editing, approval, enrollment and activation are not available here.</p>
-      <h2>{version.campaignId}</h2>
+      <p className="native-desk__eyebrow">Saved campaign version {version.version}{draft ? ' / manual-call draft' : ' / capability preview'}</p>
+      <p>{draft ? 'This saved draft is read-only. Approval, enrollment and activation are not available here.' : 'Read-only preview. Editing, approval, enrollment and activation are not available here.'}</p>
+      <h2>{draft ? 'Call campaign draft' : version.campaignId}</h2>
       <h3>Offer</h3>
       <p>{version.offer}</p>
       <p>Objective: {version.objective}</p>
       <h3>Audience</h3>
-      <p className="native-desk__hold">
+      {draft ? <><p>Explicitly selected company: {accounts.find(a => a.account.id === draft.accountId)?.account.name ?? draft.accountId} ({draft.accountId}).</p><p>{draft.policyDescription}</p><p>This template description does not grant contact permission or authorize outreach.</p></> : <p className="native-desk__hold">
         Audience definition unavailable. Review the source audience and its hash
         mapping in the source system. A hash is not an audience definition.
-      </p>
+      </p>}
       <h4>Stored cohort</h4>
       <ul>
         {version.cohortAccountIds.map((id) => (

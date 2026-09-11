@@ -3,8 +3,25 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import type { DailySnapshot } from '../../../shared/contracts/dailyContract';
 import { CampaignReview } from './CampaignReview';
+import { createCallCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
 import { dailyFixture, nativeDeskReviewFixture, linkedInFixture } from '../today/nativeDesk.fixture';
 afterEach(cleanup);
+it('shows the verifiable single-company template, but holds altered or opaque audience hashes', () => {
+  const snapshot = dailyFixture();
+  const version = createCallCampaignDraft({ campaignId: 'draft-campaign', versionId: 'draft-version', stepId: 'initial-call', accountId: 'a', offer: 'Discuss maintenance follow-up.' });
+  const campaign: DailySnapshot['campaigns'][number] = { version, snapshotHash: 'c'.repeat(64), caps: [], enrollments: [] };
+  const view = render(<CampaignReview campaign={campaign} accounts={snapshot.accounts} answers={[]} />);
+  expect(screen.getByRole('heading', { name: 'Call campaign draft' })).toBeTruthy();
+  expect(screen.getByText('Explicitly selected company: Account A (a).')).toBeTruthy();
+  expect(screen.getByText('Discuss maintenance follow-up.')).toBeTruthy();
+  expect(screen.getByText(/does not grant contact permission/)).toBeTruthy();
+  expect(screen.queryByText(/Audience definition unavailable/)).toBeNull();
+  expect(screen.queryByRole('button')).toBeNull();
+  view.rerender(<CampaignReview campaign={{ ...campaign, version: { ...version, cohortAccountIds: ['b'] } }} accounts={snapshot.accounts} answers={[]} />);
+  expect(screen.getByText(/Audience definition unavailable/)).toBeTruthy();
+  expect(screen.queryByText(/Explicitly selected company/)).toBeNull();
+  expect(screen.queryByRole('button')).toBeNull();
+});
 it('shows frozen offer, cohort IDs and lifetime caps, never invents audience or approval authority', () => {
   const snapshot = dailyFixture();
   const hash = 'b'.repeat(64);
