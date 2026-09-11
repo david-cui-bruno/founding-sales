@@ -169,7 +169,8 @@
   font-size: var(--text-caption);
   color: var(--text-muted);
 }
-.native-desk__composer label {
+.native-desk__composer label,
+.native-desk__campaign-enrollment label {
   display: block;
   font-size: var(--text-caption);
   color: var(--text-muted);
@@ -182,9 +183,15 @@
 .native-desk__campaign-draft form {
   max-width: 52rem;
 }
-.native-desk .native-desk__campaign-draft select {
+.native-desk .native-desk__campaign-draft select,
+.native-desk .native-desk__campaign-enrollment select {
   height: auto;
   min-height: 40px;
+}
+.native-desk__campaign-enrollment {
+  border-top: 1px solid var(--line);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
 }
 .native-desk .native-desk__campaign-draft textarea {
   min-height: 96px;

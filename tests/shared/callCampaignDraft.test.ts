@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createCallCampaignDraft, describeCallCampaignDraft, type CreateCallCampaignDraftInput } from '../../src/shared/contracts/callCampaignDraft';
+import { createCallCampaignDraft, describeCallCampaignDraft, describeCallCampaignTemplate, type CreateCallCampaignDraftInput } from '../../src/shared/contracts/callCampaignDraft';
 import { campaignVersionSchema } from '../../src/shared/contracts/campaignContract';
 import { sha256Utf8 } from '../../src/shared/crypto/sha256';
 
@@ -8,6 +8,20 @@ const input: CreateCallCampaignDraftInput = {
 };
 
 describe('manual initial call campaign draft', () => {
+  it('describes the same exact template after approval without relabeling it as a draft', () => {
+    const draft = createCallCampaignDraft(input);
+    const approved = { ...draft, approvedAt: '2026-09-11T21:00:00.000Z' };
+    expect(describeCallCampaignTemplate(draft)).toEqual(describeCallCampaignDraft(draft));
+    expect(describeCallCampaignTemplate(approved)).toEqual(describeCallCampaignDraft(draft));
+    expect(describeCallCampaignDraft(approved)).toBeNull();
+    for (const version of [draft, approved]) {
+      for (const change of [{ audienceHash: 'a'.repeat(64) }, { contentPolicyHash: 'b'.repeat(64) },
+        { cohortAccountIds: ['other'] }, { version: 2 }, { channelCaps: { call: 2, email: 0, linkedin: 0 } },
+        { steps: [{ ...draft.steps[0], delayHours: 1 }] }]) {
+        expect(describeCallCampaignTemplate({ ...version, ...change })).toBeNull();
+      }
+    }
+  });
   it('maps source identities and pins canonical UTF-8 hash inputs deterministically', () => {
     const draft = createCallCampaignDraft(input);
     expect(draft).toEqual(createCallCampaignDraft({ offer: input.offer, accountId: input.accountId,

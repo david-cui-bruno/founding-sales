@@ -15,11 +15,12 @@ import { createWorkerHandler } from '../../cloud/lambdas/delegated-worker/src/ha
 import { NativeDeskRoute } from '../../src/renderer/features/today/NativeDeskRoute';
 import { PresentationRoot } from '../../src/renderer/app/PresentationRoot';
 import { nativeDeskFixture } from '../../src/renderer/features/today/nativeDesk.fixture';
-import { publicDelegationCommandSchema } from '../../src/shared/contracts/delegationContract';
+import { publicDelegationCommandSchema, type PublicDelegationCommand } from '../../src/shared/contracts/delegationContract';
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+type CampaignCommand = Extract<PublicDelegationCommand, { kind: 'campaign-command' }>;
 
-async function fixture() {
+async function fixture(review = false) {
   vi.stubGlobal('fetch', vi.fn(async () => { throw Error('Unexpected external network'); }));
   const f = await createCampaignFixture();
   let disposeRuntime = async (): Promise<void> => undefined;
@@ -32,6 +33,7 @@ async function fixture() {
   const pairing = { ...await auth.redeemPairing(issued.code, 'fictional-campaign-device'), endpoint: 'https://campaign.example.invalid' };
   const handler = createWorkerHandler({ auth, host: 'campaign.example.invalid' });
   const paths: string[] = [], campaignAttempts: string[] = [], violations: string[] = [];
+  const campaignCommands: CampaignCommand[] = [];
   let holdCampaign = false, setup = true;
   const http: typeof fetch = async (input, init) => {
     const url = new URL(String(input)); paths.push(url.pathname);
@@ -41,7 +43,9 @@ async function fixture() {
       if (!setup && raw.kind !== 'campaign-command') { violations.push('unexpected-command'); throw Error('Unexpected UI command'); }
       if (raw.kind === 'campaign-command') {
         const command = publicDelegationCommandSchema.parse(raw);
-        if (command.kind !== 'campaign-command' || command.payload.kind !== 'campaign.version') { violations.push('not-draft-version'); throw Error('Draft flow attempted approval, enrollment or outreach'); }
+        const allowed = ['campaign.version', ...(review ? ['campaign.approve', 'campaign.enroll'] : [])];
+        if (command.kind !== 'campaign-command' || !allowed.includes(command.payload.kind)) { violations.push('unexpected-campaign-action'); throw Error('Campaign flow attempted an unauthorized action'); }
+        campaignCommands.push(command);
         campaignAttempts.push(command.commandId);
         if (holdCampaign) throw Error('Fictional owner unavailable');
       }
@@ -74,8 +78,8 @@ async function fixture() {
     daily: { get: async () => services.daily.get() },
     delegation: { ...ui.api.delegation, status: runtime.status, sync: runtime.sync, submit: runtime.submit },
   };
-  const mount = () => render(<PresentationRoot><NativeDeskRoute surface="campaigns" firstUse={ui.firstUse} api={api} onOpenLead={forbidden} onOpenImport={forbidden} /></PresentationRoot>);
-  return { ...f, services, repository, runtime, api, mount, forbidden, paths, campaignAttempts, hold: (value: boolean) => { holdCampaign = value; },
+  const mount = (surface: 'campaigns' | 'today' = 'campaigns') => render(<PresentationRoot><NativeDeskRoute surface={surface} firstUse={ui.firstUse} api={api} onOpenLead={forbidden} onOpenImport={forbidden} /></PresentationRoot>);
+  return { ...f, services, domain, repository, runtime, api, mount, forbidden, paths, campaignAttempts, campaignCommands, hold: (value: boolean) => { holdCampaign = value; },
     async finish() { cleanup(); await runtime.dispose(); f.close(); expect(violations).toEqual([]); } };
   } catch (error) {
     await disposeRuntime(); f.close(); throw error;
@@ -116,7 +120,8 @@ it('creates a real unapproved owner-applied draft from the Campaigns route and r
     const detail = within(reopened.container.querySelector('.native-desk__detail') as HTMLElement);
     expect(detail.getByRole('heading', { name: 'Call campaign draft' })).toBeTruthy();
     expect(detail.getByText(/Explicitly selected company/)).toBeTruthy();
-    expect(detail.queryByRole('button', { name: /Approve|Enroll|Activate/ })).toBeNull();
+    expect(detail.getByRole<HTMLButtonElement>('button', { name: 'Approve call campaign' }).disabled).toBe(true);
+    expect(detail.queryByRole('button', { name: /Enroll|Activate/ })).toBeNull();
     const disk = openDatabase({ path: f.path, key: f.key });
     try {
       const fresh = createDomainServices({ database: disk, clock: f.clock, ids: { next: randomUUID }, expectedWorkspaceId: f.workspaceId }).daily.get();
@@ -124,6 +129,88 @@ it('creates a real unapproved owner-applied draft from the Campaigns route and r
     } finally { closeDatabase(disk); }
     expect(f.forbidden).not.toHaveBeenCalled();
     expect(f.paths.every(path => ['/commands', '/events', '/commands/reconcile'].includes(path))).toBe(true);
+  } finally { await f.finish(); }
+}, 20_000);
+
+async function approveNewDraft(f: Awaited<ReturnType<typeof fixture>>) {
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(f.now));
+  f.domain.updateCallSettings({ expectedRevision: 0, newCallSlots: 0, totalCallCapacity: 1 });
+  expect(f.services.daily.get().calls.accountIds).toEqual([]);
+  const originalIds = new Set(f.services.daily.get().campaigns.map(c => c.version.id));
+  const view = f.mount();
+  await enterDraft(f.account.id);
+  await screen.findByText('Campaign draft saved. Not approved or enrolled.');
+  const campaign = f.services.daily.get().campaigns.find(c => !originalIds.has(c.version.id))!;
+  fireEvent.click(view.container.querySelector<HTMLButtonElement>(`[data-row-key="campaign:${campaign.version.id}"]`)!);
+  const approve = screen.getByRole<HTMLButtonElement>('button', { name: 'Approve call campaign' });
+  expect(approve.disabled).toBe(true);
+  fireEvent.click(screen.getByRole('checkbox', { name: 'I reviewed this company, offer, call step and lifetime limits' }));
+  fireEvent.click(approve);
+  await screen.findByText('Call campaign approved. Not enrolled.');
+  const approved = f.services.daily.get().campaigns.find(c => c.version.id === campaign.version.id)!;
+  expect(approved.version).toEqual({ ...campaign.version, approvedAt: f.now });
+  expect(approved.enrollments).toEqual([]);
+  expect(f.services.daily.get().calls.accountIds).toEqual([]);
+  const commands = [...new Map(f.campaignCommands.map(c => [c.commandId, c])).values()];
+  expect(commands.map(c => c.payload.kind)).toEqual(['campaign.version', 'campaign.approve']);
+  expect(commands[1].payload).toEqual({ kind: 'campaign.approve', campaignVersionId: campaign.version.id, snapshotHash: campaign.snapshotHash, approvedAt: f.now });
+  fireEvent.change(screen.getByRole('combobox', { name: 'Business phone route' }), { target: { value: f.routes[0].id } });
+  expect(screen.getByText('Enrollment adds a due manual-call item. It does not dial, send messages, or grant contact permission.')).toBeTruthy();
+  const enroll = screen.getByRole<HTMLButtonElement>('button', { name: 'Enroll company for manual call' });
+  expect(enroll.disabled).toBe(true);
+  fireEvent.click(screen.getByRole('checkbox', { name: 'I want this company added to the manual call queue' }));
+  return { view, campaign, enroll };
+}
+
+it('separately approves a frozen draft and enrolls its selected published phone into the real Today due queue without calling', async () => {
+  const f = await fixture(true);
+  try {
+    const { view, campaign, enroll } = await approveNewDraft(f);
+    fireEvent.click(enroll);
+    await screen.findByText('Company enrolled for a manual call. No call placed.');
+    const saved = f.services.daily.get().campaigns.find(c => c.version.id === campaign.version.id)!;
+    expect(saved.enrollments).toHaveLength(1);
+    const selectedRoute = f.services.daily.get().accounts.find(a => a.account.id === f.account.id)!.routes.find(r => r.id === f.routes[0].id)!;
+    expect(selectedRoute).toMatchObject({ channel: 'phone', purpose: 'business', verification: 'published', version: 1 });
+    expect(saved.enrollments[0]).toMatchObject({ accountId: f.account.id, campaignVersionId: campaign.version.id, selectedRouteId: f.routes[0].id, selectedRouteVersion: selectedRoute.version, state: 'active', version: 1, contextRevision: 1, currentStepId: campaign.version.steps[0].id });
+    const commands = [...new Map(f.campaignCommands.map(c => [c.commandId, c])).values()];
+    expect(commands.map(c => c.payload.kind)).toEqual(['campaign.version', 'campaign.approve', 'campaign.enroll']);
+    expect(commands[2].payload).toMatchObject({ enrollmentId: saved.enrollments[0].id, executionContextId: saved.enrollments[0].executionContextId });
+    expect(f.services.daily.get().calls.accountIds).toEqual([f.account.id]);
+    expect(saved.caps).toHaveLength(3);
+    expect(saved.caps.every(c => c.reserved === 0 && c.sent === 0)).toBe(true);
+    expect(f.db.raw.prepare('SELECT COUNT(*) n FROM delegated_manual_handoffs').get()).toEqual({ n: 0 });
+    view.unmount();
+    f.mount('today');
+    await screen.findByRole('button', { name: `Call · ${f.account.name}` });
+    expect(f.forbidden).not.toHaveBeenCalled();
+    const disk = openDatabase({ path: f.path, key: f.key });
+    try {
+      expect(createDomainServices({ database: disk, clock: f.clock, ids: { next: randomUUID }, expectedWorkspaceId: f.workspaceId }).daily.get().campaigns.find(c => c.version.id === campaign.version.id)?.enrollments).toEqual(saved.enrollments);
+    } finally { closeDatabase(disk); }
+  } finally { await f.finish(); }
+}, 20_000);
+
+it('reconciles a pending enrollment after route closure with the original identity and no duplicate active enrollment', async () => {
+  const f = await fixture(true);
+  try {
+    const { view, campaign, enroll } = await approveNewDraft(f);
+    f.hold(true);
+    fireEvent.click(enroll);
+    await waitFor(() => expect(f.repository.pendingCommands().filter(c => c.kind === 'campaign-command')).toHaveLength(1));
+    expect(f.services.daily.get().campaigns.find(c => c.version.id === campaign.version.id)?.enrollments).toEqual([]);
+    const queued = f.campaignCommands.find(c => c.payload.kind === 'campaign.enroll')!;
+    view.unmount();
+    f.hold(false);
+    f.mount();
+    fireEvent.click(await screen.findByText('Worker freshness unknown'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconcile queued commands' }));
+    await waitFor(() => expect(f.services.daily.get().campaigns.find(c => c.version.id === campaign.version.id)?.enrollments).toHaveLength(1));
+    expect(new Set(f.campaignCommands.filter(c => c.payload.kind === 'campaign.enroll').map(c => c.commandId))).toEqual(new Set([queued.commandId]));
+    expect(f.repository.pendingCommands()).toEqual([]);
+    expect(f.db.raw.prepare('SELECT COUNT(*) n FROM campaign_enrollments').get()).toEqual({ n: 1 });
+    expect(f.db.raw.prepare('SELECT COUNT(*) n FROM delegated_manual_handoffs').get()).toEqual({ n: 0 });
+    expect(f.forbidden).not.toHaveBeenCalled();
   } finally { await f.finish(); }
 }, 20_000);
 

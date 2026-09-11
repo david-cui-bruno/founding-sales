@@ -36,8 +36,9 @@ import {
   meetingKey,
 } from './UpcomingMeetings';
 import { CampaignReview } from '../campaigns/CampaignReview';
+import { CallCampaignEnrollment } from '../campaigns/CallCampaignEnrollment';
 import { CallCampaignDraft } from '../campaigns/CallCampaignDraft';
-import { describeCallCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
+import { describeCallCampaignTemplate } from '../../../shared/contracts/callCampaignDraft';
 import './nativeDesk.css';
 export type NativeDeskApi = Pick<
   CalliePreloadApi,
@@ -661,7 +662,7 @@ export function NativeDesk({
               ? 'Calls, replies and the next conversation.'
               : surface === 'accounts'
                 ? 'Company context, from stored evidence.'
-                : 'Save an unapproved call campaign draft for one worker-owned company. Approval, enrollment and activation are not available here.'}
+                : 'Save an unapproved call campaign draft for one worker-owned company. Review and enrollment are separate explicit actions. Neither places a call.'}
           </p>
         </div>
         <div className="native-desk__header-status">
@@ -814,7 +815,7 @@ export function NativeDesk({
                   : meeting
                     ? 'Upcoming meeting'
                     : campaign
-                      ? describeCallCampaignDraft(campaign.version) ? 'Saved call campaign draft' : 'Read-only campaign preview'
+                      ? describeCallCampaignTemplate(campaign.version) ? campaign.version.approvedAt ? 'Reviewed call campaign' : 'Saved call campaign draft' : 'Read-only campaign preview'
                       : 'Company context'}
               </span>
               <button aria-label="Close details" onClick={closeDetails}>
@@ -838,11 +839,15 @@ export function NativeDesk({
           )}{' '}
           {meeting && <MeetingDetail item={meeting} />}{' '}
           {campaign && (
+            <>
             <CampaignReview
               campaign={campaign}
               accounts={snapshot.accounts}
               answers={snapshot.answers}
             />
+            {describeCallCampaignTemplate(campaign.version) && <CallCampaignEnrollment key={`${snapshot.workspaceId}:${campaign.version.id}`} api={api} snapshot={snapshot} config={configuration}
+              campaign={campaign} readError={readError || !!localHold} onRefresh={onRefresh} />}
+            </>
           )}
           {account && selected?.startsWith('call:') && (
             <section className="native-desk__call">
