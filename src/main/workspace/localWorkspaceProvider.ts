@@ -23,6 +23,8 @@ export function createLocalWorkspaceProvider(runtime: Pick<FoundationRuntime, 'w
   const unavailable = (saved: LocalCompanyResearchStatus, reason: string): LocalCompanyResearchStatus =>
     saved.state === 'not_recorded' ? { ...saved, state: 'held', reason } : saved;
   return {
+    getCallSettings: () => runtime.withDomain(domain => domain.getCallSettings()),
+    updateCallSettings: input => runtime.withDomain(domain => domain.updateCallSettings(input)),
     linkCompanyPerson: async input => {
       const parsed = linkCompanyPersonRequestSchema.parse(input);
       return runtime.withDomain(domain => domain.linkLocalCompanyPerson(parsed));

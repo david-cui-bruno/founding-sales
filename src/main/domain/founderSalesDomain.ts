@@ -2,7 +2,7 @@ import { LocalCompanyIntake } from './accounts/localCompanyIntake';
 import { AccountRepository } from './accounts/accountRepository';
 import type { AccountEvidenceReceipt } from '../../shared/contracts/accountContract';
 import type { LocalCompanyInput, LocalCompanyCreateRequest } from '../../shared/contracts/localCompanyIntakeContract';
-import { localCommitmentsSnapshotSchema, type LocalCommitmentsSnapshot, type LinkCompanyPersonRequest } from '../../shared/contracts/localWorkspaceContract';
+import { updateCallSettingsRequestSchema, type UpdateCallSettingsRequest, localCommitmentsSnapshotSchema, type LocalCommitmentsSnapshot, type LinkCompanyPersonRequest } from '../../shared/contracts/localWorkspaceContract';
 import { LegacyWorkflowTransition, type WorkflowTransitionCommand } from './workspace/legacyWorkflowTransition';
 import { countMilestones, readAcquisitionFacts } from './campaign/acquisitionReport';
 import { projectAccountPipeline } from './campaign/accountPipelineProjection';
@@ -1229,6 +1229,14 @@ export class FounderSalesDomain implements OutboundDomainPort {
   }
 
   // ---------------------------------------------------------------- today
+
+  getCallSettings() { return this.services.workspaceSettings.readMeetingFirstAccountCallSettings(); }
+
+  updateCallSettings(input: UpdateCallSettingsRequest) {
+    const parsed = updateCallSettingsRequestSchema.parse(input);
+    return this.services.unitOfWork.immediate(() =>
+      this.services.workspaceSettings.updateMeetingFirstAccountCallSettingsCas({ expectedRevision: parsed.expectedRevision, newCallSlots: parsed.newCallSlots, totalCallCapacity: parsed.totalCallCapacity, updatedAt: this.clock.now() }));
+  }
 
   getDaily() { return this.services.daily.get(); }
 
