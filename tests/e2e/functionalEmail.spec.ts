@@ -1,9 +1,9 @@
 import { expect, test, type Page } from 'playwright/test';
 import { writeFile } from 'node:fs/promises';
-import { launchFounderWorkspace, type FounderWorkspace } from '../support/founderWorkspace';
+import { launchFounderWorkspace, navigateFounderRoute, type FounderWorkspace } from '../support/founderWorkspace';
 
 async function openPerson(page: Page, name: string) {
-  await page.getByRole('link', { name: 'Leads', exact: true }).click();
+  await navigateFounderRoute(page, 'Leads');
   await page.getByRole('row', { name: new RegExp(name) }).click();
   const inspector = page.getByRole('complementary', { name: `${name} details`, exact: true });
   await expect(inspector.getByRole('region', { name: 'Known portfolio', exact: true })).toBeVisible();
@@ -17,7 +17,7 @@ test('contact-first workspace keeps edits across people and real process restart
   let workspace: FounderWorkspace = first;
   try {
     let page = workspace.page;
-    await page.getByRole('link', { name: 'Leads', exact: true }).click();
+    await navigateFounderRoute(page, 'Leads');
     await page.getByRole('button', { name: 'Import', exact: true }).click();
     // Manual CSV source labels do not assign segments. Declare the intended
     // segments explicitly through the real importer rather than assume them.

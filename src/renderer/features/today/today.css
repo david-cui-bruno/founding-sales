@@ -255,13 +255,7 @@
 
 /* -------------------------------------------- shared small dialogs */
 
-.today-dialog-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.today-dialog::backdrop {
   background: color-mix(in srgb, var(--canvas) 55%, transparent);
 }
 

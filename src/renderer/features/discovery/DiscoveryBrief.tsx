@@ -3,6 +3,7 @@ import { mutationReceiptSchema, type MutationReceipt } from '../../../shared/con
 import { discoveryBriefSchema, overrideDiscoveryRequestSchema,
   type DiscoveryBrief as Brief, type DiscoveryEvidenceRef, type OverrideDiscoveryRequest,
 } from '../../../shared/contracts/discoveryContract';
+import { useModalDialog } from '../../app/useModalDialog';
 import { Button } from '../../components/Button';
 import { Select } from '../../components/Select';
 import { staleDiscoveryError } from './useDiscovery';
@@ -29,16 +30,17 @@ export function DiscoveryBrief({ brief, onOverride }: {
   const titleId = useId();
   const reasonErrorId = useId();
   const reasonRef = useRef<HTMLTextAreaElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const close = () => { setEditing(false); triggerRef.current?.focus(); };
+  const close = () => { setEditing(false); };
+  const modal = useModalDialog({ open: editing && parsed.success, dialogRef, canDismiss: () => !busy,
+    onDismiss: close, initialFocus: () => reasonRef.current, returnFocus: () => triggerRef.current });
   useEffect(() => {
     generation.current++;
     setEditing(false); setReason(''); setReasonError(null); setMessage(null); setBusy(false);
     pending.current = false; retained.current = null;
     return () => { generation.current++; };
   }, [brief.personId, brief.salesCycleId, brief.assessment?.id, onOverride]);
-  useEffect(() => { if (editing) reasonRef.current?.focus(); }, [editing]);
   if (!parsed.success) return <p role="alert">Discovery evidence unavailable.</p>;
   const value = parsed.data;
   const assessment = value.assessment;
@@ -88,17 +90,8 @@ export function DiscoveryBrief({ brief, onOverride }: {
     {value.latestOverride !== null && <p>Prior decision: {value.latestOverride.decision}. {value.latestOverride.reason} ({value.latestOverride.createdAt}). {value.latestOverride.evidenceChanged && 'Revised evidence since this decision.'}</p>}
     {value.pilotNextStep !== null && <p>Conversation-based suggestion: {value.pilotNextStep.label}. Evidence: {value.pilotNextStep.activityIds.join(', ')}. This is not an offer or payment.</p>}
     {assessment !== null && <Button variant="quiet" disabled={value.stale} onClick={event => { triggerRef.current = event.currentTarget; setEditing(true); }}>Adjust discovery</Button>}
-    {editing && <div className="discovery-brief__backdrop"><div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="discovery-brief__decision"
-      onKeyDown={event => {
-        if (event.defaultPrevented) return;
-        if (event.key === 'Escape') { event.stopPropagation(); if (!busy) close(); }
-        if (event.key === 'Tab') {
-          const controls = dialogRef.current?.querySelectorAll<HTMLElement>(':is(button, textarea):not(:disabled)');
-          const first = controls?.[0]; const last = controls?.[controls.length - 1];
-          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-          else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-        }
-      }}>
+    {editing && <dialog ref={dialogRef} aria-labelledby={titleId} className="discovery-brief__decision"
+      onKeyDown={modal.onKeyDown} onCancel={modal.onCancel}>
       <h4 id={titleId}>Discovery decision for {value.personName}</h4>
       <p>Affects discovery visibility only. Does not dismiss, opt out, or close this sales cycle.</p>
       <Select<OverrideDiscoveryRequest['decision']> label="Discovery decision" options={[{ value: 'watch', label: 'Watch' }, { value: 'exclude', label: 'Exclude' }, { value: 'reconsider', label: 'Reconsider' }]}
@@ -108,8 +101,8 @@ export function DiscoveryBrief({ brief, onOverride }: {
         onChange={event => { setReason(event.target.value); setReasonError(null); }} /></label>
       {reasonError !== null && <p id={reasonErrorId} role="alert">{reasonError}</p>}
       <Button disabled={busy || reason.trim().length === 0} onClick={() => { void save(); }}>Save discovery decision</Button>
-      <Button variant="quiet" disabled={busy} onClick={close}>Close decision</Button>
-    </div></div>}
+      <Button variant="quiet" disabled={busy} onClick={() => modal.requestDismiss('close-button')}>Close decision</Button>
+    </dialog>}
     {message !== null && <p role="status">{message}</p>}
   </section>;
 }

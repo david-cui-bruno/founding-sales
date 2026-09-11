@@ -1,6 +1,7 @@
+import { PresentationRoot } from '../../src/renderer/app/PresentationRoot';
 // @vitest-environment jsdom
 
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, render as testingRender } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { LeadRow } from '../../src/shared/contracts/leadsContract';
@@ -156,6 +157,16 @@ const reviewSnapshot: ReviewSnapshot = {
     },
   ],
   totalOpenCount: 1,
+  nextCursor: null, matchedCount: 1,
+  countScope: 'lifecycle_review_items', observedAt: '2026-09-10T00:00:00.000Z',
+  queues: {
+    unmatched_communication: { source: 'lifecycle_review_items', openCount: 1 },
+    system_error: { source: 'lifecycle_review_items', openCount: 0 },
+    ambiguous_identity: { source: 'not_integrated', openCount: null },
+    transcript_suggestion: { source: 'not_integrated', openCount: null },
+    import_problem: { source: 'not_integrated', openCount: null },
+    adapter_failure: { source: 'not_integrated', openCount: null },
+  },
   revision: 1,
 };
 
@@ -168,7 +179,7 @@ describe('no raw machine enums in rendered output', () => {
         onCall={vi.fn()}
         onSnoozeUntil={vi.fn()}
         onSkipToday={vi.fn()}
-        onLogPastActivity={vi.fn()}
+        onLogPastActivity={vi.fn(async () => {})}
         onOpenInLeads={vi.fn()}
       />,
     );
@@ -181,7 +192,8 @@ describe('no raw machine enums in rendered output', () => {
         rows={leadRows}
         selectedPersonId={null}
         onSelect={vi.fn()}
-        onUpdateField={vi.fn()}
+        editor={{ session: null, pending: false, start: vi.fn(), change: vi.fn(), cancel: vi.fn(), bindInput: vi.fn(), focusInput: vi.fn() }}
+        onUpdateField={async () => ({ status: 'saved' })}
       />,
     );
     expect(snakeCaseLeaks(container)).toEqual([]);
@@ -207,3 +219,8 @@ describe('no raw machine enums in rendered output', () => {
     expect(snakeCaseLeaks(container)).toEqual([]);
   });
 });
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });

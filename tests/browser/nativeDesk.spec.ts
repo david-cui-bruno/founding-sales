@@ -805,30 +805,41 @@ test('approved A empty unpaired surfaces stay coherent and truthful without inve
   await assertClean(page, state);
 });
 
-test('approved A primary rail keeps other workspaces accessible and restores legacy visibility', async ({page}) => {
+test('isolated Native rail retains accessible disclosure in both workflows without substituting other destinations', async ({page}) => {
   const state = await mount(page);
   const rail = page.getByRole('navigation', {name: 'Primary', exact: true});
   for (const label of ['Today', 'Accounts', 'Campaigns', 'Settings']) await expect(rail.getByRole('link', {name: label, exact: true})).toBeVisible();
   const more = rail.getByRole('button', {name: /More|Other workspaces/i});
+  const traverseRail = async () => {
+    await rail.getByRole('link', {name: 'Today', exact: true}).focus();
+    for (const label of ['Accounts', 'Campaigns']) {
+      await page.keyboard.press('Tab');
+      await expect(rail.getByRole('link', {name: label, exact: true})).toBeFocused();
+    }
+    await page.keyboard.press('Tab');
+    await expect(more).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(more).toHaveAttribute('aria-expanded', 'true');
+    await expect(rail.getByRole('link')).toHaveCount(10);
+    for (const label of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox', 'Settings']) {
+      await page.keyboard.press('Tab');
+      await expect(rail.getByRole('link', {name: label === 'Inbox' ? 'Inbox Local review count unavailable' : label, exact: true})).toBeFocused();
+    }
+  };
   await expect(more).toHaveAttribute('aria-expanded', 'false');
   await expect(rail.getByRole('link', {name: 'Conversations', exact: true})).toBeHidden();
-  await more.focus(); await page.keyboard.press('Enter');
+  await traverseRail();
   await expect(more).toHaveAttribute('aria-expanded', 'true');
-  for (const label of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox']) await expect(rail.getByRole('link', {name: label, exact: true})).toBeVisible();
-  await rail.getByRole('link', {name: 'Conversations', exact: true}).click();
-  await expect(rail.getByRole('link', {name: 'Conversations', exact: true})).toHaveAttribute('aria-current', 'page');
+  for (const label of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox']) await expect(rail.getByRole('link', {name: label === 'Inbox' ? 'Inbox Local review count unavailable' : label, exact: true})).toBeVisible();
+  // Actual destination/render/read assertions live in applicationPresentation.spec.
+  await expect(page.evaluate(() => window.nativeDeskBrowser.navigate('conversations'))).rejects.toThrow('does not render conversations');
   await more.click();
   await localOnly(page, 'legacy');
   await expect(page.getByRole('heading', {name: 'Legacy Today fixture', exact: true})).toBeVisible();
-  await expect(more).toBeHidden();
-  for (const label of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox']) await expect(rail.getByRole('link', {name: label, exact: true})).toBeVisible();
-  const legacyLinks = rail.getByRole('link');
-  await expect(legacyLinks).toHaveCount(10);
-  await legacyLinks.first().focus();
-  for (let index = 1; index < 10; index++) {
-    await page.keyboard.press('Tab');
-    await expect(legacyLinks.nth(index)).toBeFocused();
-  }
+  await expect(more).toBeVisible();
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  await expect(rail.getByRole('link', {name: 'Conversations', exact: true})).toBeHidden();
+  await traverseRail();
   await assertClean(page, state);
 });
 

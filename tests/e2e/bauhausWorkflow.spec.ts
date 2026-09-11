@@ -1,7 +1,7 @@
 import { AxeBuilder } from '@axe-core/playwright';
 import { expect, test, type Page, type TestInfo } from 'playwright/test';
 
-import { launchFounderWorkspace, launchSeededFounderWorkspace } from '../support/founderWorkspace';
+import { launchFounderWorkspace, launchSeededFounderWorkspace, navigateFounderRoute } from '../support/founderWorkspace';
 
 const routes = ['Today', 'Leads', 'Pipeline', 'Conversations', 'Learnings', 'Inbox', 'Friday', 'Settings'] as const;
 
@@ -33,31 +33,35 @@ test('Bauhaus identity reaches the real shell, heading and navigation without re
     const { page } = workspace;
     await setTheme(page, 'light');
     await page.getByRole('link', { name: 'Today', exact: true }).click();
-    await expect(page.locator('.nav-rail__brand')).toHaveText('FSS');
+    await expect(page.locator('.nav-rail__brand-native')).toHaveText('Callie');
     await expect(page.getByRole('heading', { name: 'Today', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Contacts due', exact: true })).toBeVisible();
     const styles = await page.evaluate(() => {
       const heading = document.querySelector('main h1')!;
       const main = document.querySelector('.app-shell__workspace')!;
       const nav = document.querySelector('[aria-current="page"]')!;
+      const root = document.querySelector('.presentation-root') ?? document.documentElement;
       return { canvas: getComputedStyle(main).backgroundColor,
         display: getComputedStyle(heading).fontFamily,
-        body: getComputedStyle(document.body).fontFamily,
+        root: getComputedStyle(root).fontFamily,
+        text: getComputedStyle(root).color,
         navRadius: getComputedStyle(nav).borderTopLeftRadius };
     });
-    expect(styles.canvas).toBe('rgb(246, 240, 223)');
-    expect(styles.display).not.toBe(styles.body);
-    expect(parseFloat(styles.navRadius)).toBeLessThanOrEqual(2);
+    expect(styles.canvas).toBe('rgb(233, 237, 242)');
+    expect(styles.display).toContain('-apple-system');
+    expect(styles.root).toContain('-apple-system');
+    expect(styles.text).toBe('rgb(34, 42, 53)');
+    expect(parseFloat(styles.navRadius)).toBe(6);
     await fitAndCapture(page, test.info(), 'light-today-quiet');
     await accessible(page, 'light quiet Today');
     const nativeBox = await page.locator('.nav-rail__native-controls').boundingBox();
-    const brandBox = await page.locator('.nav-rail__brand').boundingBox();
+    const brandBox = await page.locator('.nav-rail__brand-native').boundingBox();
     expect(brandBox!.y).toBeGreaterThanOrEqual(nativeBox!.y + nativeBox!.height);
     await setTheme(page, 'dark');
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-    await expect(page.locator('.nav-rail__brand')).toHaveText('FSS');
+    await expect(page.locator('.nav-rail__brand-native')).toHaveText('Callie');
   } finally { await workspace.close(); }
 });
 
@@ -115,9 +119,8 @@ test('all workspaces and shared overlays remain usable with Bauhaus light and da
       await page.setViewportSize({ width: 1440, height: 900 });
       await setTheme(page, theme);
       for (const route of routes) {
-        await page.getByRole('link', { name: route, exact: true }).click();
+        await navigateFounderRoute(page, route);
         await expect(page.getByRole('main').getByRole('heading', { level: 1 }).first()).toBeVisible();
-        await expect(page.getByRole('link', { name: route, exact: true })).toHaveAttribute('aria-current', 'page');
         if (route === 'Today') {
           const queue = page.getByRole('list', { name: 'Work queue', exact: true });
           await expect(queue).toBeVisible();
@@ -149,7 +152,7 @@ test('all workspaces and shared overlays remain usable with Bauhaus light and da
       await page.getByRole('button', { name: 'Comfortable density', exact: true }).click();
       await expect(page.locator('html')).toHaveAttribute('data-density', 'comfortable');
 
-      await page.getByRole('link', { name: 'Leads', exact: true }).click();
+      await navigateFounderRoute(page, 'Leads');
       await page.getByRole('row', { name: /Kevin Shin/ }).click();
       const inspector = page.getByRole('complementary', { name: 'Kevin Shin details', exact: true });
       await expect(inspector).toBeVisible();

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { expect, test } from 'playwright/test';
 
-import { launchFounderWorkspace } from '../support/founderWorkspace';
+import { launchFounderWorkspace, navigateFounderRoute } from '../support/founderWorkspace';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -116,7 +116,7 @@ test('fixture inbox events import a lead and render its cloud score chip', async
     expect(status.counters.scoreUpdates).toBe(1);
 
     // The imported lead renders with its two separate cloud axes.
-    await page.getByRole('link', { name: 'Leads' }).click();
+    await navigateFounderRoute(page, 'Leads');
     await page.getByRole('row', { name: /Fixture Owner Llc/i }).waitFor();
     await expect(page.getByText('Fit 62 · Timing 41')).toBeVisible();
   } finally {

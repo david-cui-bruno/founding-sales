@@ -1,76 +1,53 @@
-import { useEffect, useState } from 'react';
-
+import { useEffect } from 'react';
+import { useOverlayLayers } from '../../app/overlayLayers';
 import { Button } from '../../components/Button';
+import type { BulkEdit, LeadSaveResult } from './useLeadMutations';
 
 export type LeadsBulkBarProps = {
   count: number;
-  /** Existing leads:bulk-update field op; empty input commits null. */
-  onSetOrganization(value: string | null): void;
+  outsideCount?: number;
+  editor: BulkEdit | null;
+  pending: boolean;
+  onStart(): void;
+  onChange(value: string): void;
+  onCancel(): void;
+  onSetOrganization(value: string | null): Promise<LeadSaveResult>;
   onClear(): void;
 };
 
-/**
- * Floating bottom-center bulk action bar, shown while at least one row is
- * checked. Exposes the contract's bulk field ops (organization_label; the
- * bulk-update union has no stage op) and clears the selection on Escape.
- * While the inline editor is open, Escape only closes the editor.
- */
-export function LeadsBulkBar({
-  count,
-  onSetOrganization,
-  onClear,
-}: LeadsBulkBarProps) {
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [value, setValue] = useState('');
-
+/** Controlled route-owned bulk input. Only an acknowledged owner may clear it. */
+export function LeadsBulkBar({ count, outsideCount = 0, editor, pending, onStart, onChange, onCancel, onSetOrganization, onClear }: LeadsBulkBarProps) {
+  const layers = useOverlayLayers();
   useEffect(() => {
-    if (editorOpen) {
-      return undefined;
-    }
+    if (editor) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClear();
-      }
+      if (event.key === 'Escape' && !pending && !event.defaultPrevented && !event.isComposing && !event.repeat && !layers.hasOpenLayer()) onClear();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [editorOpen, onClear]);
-
-  const closeEditor = () => {
-    setEditorOpen(false);
-    setValue('');
+  }, [editor, pending, onClear, layers]);
+  const submit = () => {
+    if (pending || !editor) return;
+    void onSetOrganization(editor.draft.trim() || null);
   };
-
-  return (
-    <div className="leads-bulk-bar" role="toolbar" aria-label="Bulk actions">
-      <span className="leads-bulk-bar__count numeric">{count} selected</span>
-      {editorOpen ? (
-        <input
-          className="leads-bulk-bar__input"
-          type="text"
-          aria-label={`Organization for ${count} selected`}
-          value={value}
-          autoFocus
-          onChange={(event) => setValue(event.target.value)}
-          onKeyDown={(event) => {
-            event.stopPropagation();
-            if (event.key === 'Enter') {
-              const trimmed = value.trim();
-              onSetOrganization(trimmed === '' ? null : trimmed);
-              closeEditor();
-            } else if (event.key === 'Escape') {
-              closeEditor();
-            }
-          }}
-        />
-      ) : (
-        <Button variant="quiet" onClick={() => setEditorOpen(true)}>
-          Set organization
-        </Button>
-      )}
-      <Button variant="quiet" onClick={onClear}>
-        Clear
-      </Button>
+  return <div className="leads-bulk-bar" role="toolbar" aria-label="Bulk actions">
+    <span className="leads-bulk-bar__count numeric">{count} selected{outsideCount > 0 ? ` · ${outsideCount} outside view` : ''}</span>
+    <div className="leads-bulk-bar__actions">
+    {editor ? <>
+      <input className="leads-bulk-bar__input" type="text" aria-label={`Organization for ${count} selected`}
+        value={editor.draft} readOnly={pending} autoFocus onChange={event => onChange(event.target.value)}
+        onKeyDown={event => {
+          if (event.metaKey || event.ctrlKey || event.altKey) return;
+          event.stopPropagation();
+          if (event.defaultPrevented || event.nativeEvent.isComposing || event.repeat || layers.hasOpenLayer()) return;
+          if (event.key === 'Enter') { event.preventDefault(); submit(); }
+          else if (event.key === 'Escape' && !pending) onCancel();
+        }} />
+      <Button variant="quiet" disabled={pending} onClick={submit}>Save organization</Button>
+      <Button variant="quiet" disabled={pending} onClick={onCancel}>Cancel organization</Button>
+    </> : <Button variant="quiet" disabled={pending} onClick={onStart}>Set organization</Button>}
+    <Button variant="quiet" disabled={pending} onClick={onClear}>Clear</Button>
     </div>
-  );
+    {editor?.error && <p className="leads-bulk-bar__error" role="alert">{editor.error}</p>}
+  </div>;
 }

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { PresentationRoot } from '../../app/PresentationRoot';
+import { cleanup, fireEvent, render as testingRender, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 
@@ -10,6 +11,8 @@ import type {
 } from '../../../shared/contracts/importContract';
 import { ImportDialog } from './ImportDialog';
 import type { ImportApi } from './importApi';
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
 
 type MockImportApi = { [K in keyof ImportApi]: Mock<ImportApi[K]> };
 
@@ -76,7 +79,7 @@ afterEach(() => {
 });
 
 describe('ImportDialog', () => {
-  it('opens a native modal, focuses its close control and restores the opener when closed', () => {
+  it('opens a native modal, focuses its close control and restores the opener when closed', async () => {
     const api = createApi();
     const onClose = vi.fn();
     const onCommitted = vi.fn();
@@ -92,15 +95,15 @@ describe('ImportDialog', () => {
 
     view.rerender(<ImportDialog api={api} open={false} onClose={onClose} onCommitted={onCommitted} />);
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(document.activeElement).toBe(opener);
+    await waitFor(() => expect(document.activeElement).toBe(opener));
 
     view.rerender(<ImportDialog api={api} open onClose={onClose} onCommitted={onCommitted} />);
     expect(screen.getByRole('dialog').hasAttribute('open')).toBe(true);
     view.unmount();
-    expect(document.activeElement).toBe(opener);
+    await waitFor(() => expect(document.activeElement).toBe(opener));
   });
 
-  it('restores focus to the connected replacement when a successful import remounts its opener', () => {
+  it('restores focus to the connected replacement when a successful import remounts its opener', async () => {
     const api = createApi();
     const onClose = vi.fn();
     const onCommitted = vi.fn();
@@ -117,10 +120,10 @@ describe('ImportDialog', () => {
     expect(replacement.isConnected).toBe(true);
     view.rerender(<ImportDialog api={api} open={false} onClose={onClose} onCommitted={onCommitted} />);
 
-    expect(document.activeElement).toBe(replacement);
+    await waitFor(() => expect(document.activeElement).toBe(replacement));
   });
 
-  it.each([undefined, 'removed-import-trigger'])('returns focus to the current primary route when opener %s has no replacement', (id) => {
+  it.each([undefined, 'removed-import-trigger'])('returns focus to the current primary route when opener %s has no replacement', async (id) => {
     const api = createApi();
     const onClose = vi.fn();
     const onCommitted = vi.fn();
@@ -134,7 +137,7 @@ describe('ImportDialog', () => {
     expect(opener.isConnected).toBe(false);
     view.rerender(<ImportDialog api={api} open={false} onClose={onClose} onCommitted={onCommitted} />);
 
-    expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Leads' }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Leads' })));
   });
 
   it('requests controlled closing from the Close button', () => {

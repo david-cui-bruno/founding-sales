@@ -1,10 +1,18 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PresentationRoot } from '../../src/renderer/app/PresentationRoot';
+import { cleanup, fireEvent, render as testingRender, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { navigationItems } from '../../src/renderer/app/navigationItems';
 import { CommandPalette } from '../../src/renderer/app/commandPalette/CommandPalette';
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+
+beforeEach(() => {
+  HTMLDialogElement.prototype.showModal = vi.fn(function(this: HTMLDialogElement) { this.open = true; });
+  HTMLDialogElement.prototype.close = vi.fn(function(this: HTMLDialogElement) { this.open = false; });
+});
 
 afterEach(() => {
   cleanup();
@@ -39,7 +47,7 @@ describe('CommandPalette', () => {
     expect(document.activeElement).toBe(input);
   });
 
-  it('closes on Escape and returns focus to the previously focused element', () => {
+  it('closes on Escape and returns focus to the previously focused element', async () => {
     render(<button type="button">Anchor</button>);
     renderPalette();
     const anchor = screen.getByRole('button', { name: 'Anchor' });
@@ -54,7 +62,7 @@ describe('CommandPalette', () => {
     );
 
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(document.activeElement).toBe(anchor);
+    await waitFor(() => expect(document.activeElement).toBe(anchor));
   });
 
   it('closes when the backdrop is clicked', () => {

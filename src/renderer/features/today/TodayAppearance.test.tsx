@@ -1,3 +1,4 @@
+import { PresentationRoot } from '../../app/PresentationRoot';
 import { readFileSync } from 'node:fs';
 
 import { chromium, type Browser } from 'playwright';
@@ -67,7 +68,7 @@ it.each(['light', 'dark'])('keeps real queue selection and keyboard focus distin
   try {
     await page.setContent(`<html data-theme="${theme}"><head><style>${css}</style></head><body>${renderToStaticMarkup(
       <TodayPage snapshot={snapshot} selectedPersonId="person-1" onOpenLead={noOp} onCall={noOp} onSnoozeUntil={noOp}
-        onSkipToday={noOp} onLogPastActivity={noOp} onOpenInLeads={noOp} />,
+        onSkipToday={noOp} onLogPastActivity={async () => {}} onOpenInLeads={noOp} />,
     )}</body></html>`);
     const selected = page.locator('.today-row[aria-current="true"]');
     expect(await selected.count()).toBe(1);
@@ -96,8 +97,8 @@ it.each(['light', 'dark'])('keeps portfolio and primary action readable at narro
   const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
   try {
     await page.setContent(`<html data-theme="${theme}"><head><style>${css}</style></head><body>${renderToStaticMarkup(
-      <LeadFullPage state={{ status: 'ready', detail: person }} onRetry={noOp} onBeginOutbound={unavailable}
-        onConfirmTransition={noOp} onDismissLead={noOp} onOverrideCloudScore={noOp} />,
+      <PresentationRoot><LeadFullPage onClose={noOp} state={{ status: 'ready', detail: person }} onRetry={noOp} onBeginOutbound={unavailable}
+        onConfirmTransition={noOp} onDismissLead={noOp} onOverrideCloudScore={noOp} /></PresentationRoot>,
     )}</body></html>`);
     const call = page.getByRole('button', { name: 'Call', exact: true });
     expect(await call.isVisible()).toBe(true); expect(await page.getByRole('button', { name: 'Email', exact: true }).isVisible()).toBe(true);
@@ -115,7 +116,7 @@ it('changes actual compact queue row geometry with the persisted density attribu
   try {
     await page.setContent(`<html data-theme="light" data-density="comfortable"><head><style>${css}</style></head><body>${renderToStaticMarkup(
       <TodayPage snapshot={snapshot} onOpenLead={noOp} onCall={noOp} onSnoozeUntil={noOp}
-        onSkipToday={noOp} onLogPastActivity={noOp} onOpenInLeads={noOp} />,
+        onSkipToday={noOp} onLogPastActivity={async () => {}} onOpenInLeads={noOp} />,
     )}</body></html>`);
     const row = page.locator('.today-work-list .today-row').nth(1);
     const comfortable = (await row.boundingBox())!.height;

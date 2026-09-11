@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
+import { PresentationRoot } from '../../src/renderer/app/PresentationRoot';
 import { createElement } from 'react';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as testingRender, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dirname } from 'node:path';
 import { readFileSync } from 'node:fs';
@@ -30,6 +31,8 @@ import { useLeadInspector } from '../../src/renderer/features/leadInspector/useL
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 import { seedProspect } from '../fixtures/domainRows';
 import type { RegisteredIpcHandler } from '../fixtures/registeredIpcHandler';
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
 
 const ipc = vi.hoisted(() => ({ handlers: new Map<string, RegisteredIpcHandler>() }));
 vi.mock('electron', () => ({ safeStorage: {}, dialog: {}, ipcMain: {

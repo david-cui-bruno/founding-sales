@@ -433,7 +433,7 @@
 }
 
 /* The full page overlays the workspace (the provider renders it as a
-   sibling of the shell): fixed over the content column, opaque canvas,
+   sibling of the shell under PresentationRoot): fixed over the content column, opaque canvas,
    its own scroll context. Escape returns to the queue. */
 .lead-full-page {
   position: fixed;
@@ -667,12 +667,7 @@
   border-top: 1px solid var(--line);
   padding-top: var(--space-2);
 }
-.discovery-brief__backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: grid;
-  place-items: center;
+.discovery-brief__decision::backdrop {
   background: color-mix(in srgb, var(--canvas) 55%, transparent);
 }
 .discovery-brief__decision {

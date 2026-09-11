@@ -43,7 +43,7 @@ function dragRegion(selector: string): string | undefined {
 
 function RailHarness() {
   const [route, setRoute] = useState<AppRoute>('today');
-  return <NavigationRail route={route} onNavigate={setRoute} reviewCount={3} />;
+  return <NavigationRail route={route} onNavigate={setRoute} reviewCount={{ status: 'ready', count: 3, observedAt: '2026-09-10T00:00:00.000Z' }} />;
 }
 
 describe('NavigationRail window chrome', () => {
@@ -59,7 +59,7 @@ describe('NavigationRail window chrome', () => {
     const rail = screen.getByRole('navigation', { name: 'Primary' });
     const nativeRow = rail.querySelector<HTMLElement>('.nav-rail__native-controls');
     const header = rail.querySelector<HTMLElement>('.nav-rail__header');
-    const brands = rail.querySelectorAll('.nav-rail__brand');
+    const brands = rail.querySelectorAll('.nav-rail__brand-native');
     expect(nativeRow).not.toBeNull();
     expect(rail.firstElementChild).toBe(nativeRow);
     expect(nativeRow!.nextElementSibling).toBe(header);
@@ -68,7 +68,7 @@ describe('NavigationRail window chrome', () => {
     expect(nativeRow!.tabIndex).toBe(-1);
     expect(getComputedStyle(nativeRow!).display).toBe(display);
     expect(brands).toHaveLength(1);
-    expect(brands[0]!.textContent).toBe('FSS');
+    expect(brands[0]!.textContent).toBe('Callie');
     expect(brands[0]!.parentElement).toBe(header);
     expect(brands[0]!.getAttribute('aria-hidden')).toBe('true');
     expect(header!.nextElementSibling?.className).toBe('nav-rail__list');
@@ -94,7 +94,7 @@ describe('NavigationRail window chrome', () => {
     expect(header.getPropertyValue('flex-shrink')).toBe('0');
     expect(header.getPropertyValue('flex-basis')).toBe('auto');
     expect(header.getPropertyValue('height')).toBe('var(--chrome-header-height)');
-    expect(header.getPropertyValue('margin')).toBe('0 calc(-1 * var(--space-2)) var(--space-2)');
+    expect(header.getPropertyValue('margin')).toBe('0 calc(-1 * var(--space-2)) 30px');
     expect(header.getPropertyValue('padding')).toBe('0 var(--space-4)');
     expect(dragRegion('.nav-rail__header')).toBe('drag');
     expect(dragRegion('.nav-rail__header :is(a, button)')).toBe('no-drag');
@@ -106,7 +106,7 @@ describe('NavigationRail window chrome', () => {
     expect(rail.getPropertyValue('display')).toBe('flex');
     expect(rail.getPropertyValue('flex-direction')).toBe('column');
     expect(rail.getPropertyValue('width')).toBe('var(--nav-rail-width)');
-    expect(cssRule('.nav-rail__item').getPropertyValue('height')).toBe('32px');
+    expect(cssRule('.nav-rail__item').getPropertyValue('height')).toBe('44px');
     expect(cssRule('.nav-rail__spacer').getPropertyValue('flex-grow')).toBe('1');
   });
 
@@ -116,6 +116,10 @@ describe('NavigationRail window chrome', () => {
       if (platform) document.body.dataset.platform = platform;
       render(<RailHarness />);
       const rail = screen.getByRole('navigation', { name: 'Primary' });
+      const toggle = screen.getByRole('button', { name: 'More workspaces' });
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(screen.queryByRole('link', { name: 'Leads' })).toBeNull();
+      fireEvent.click(toggle);
       const links = screen.getAllByRole<HTMLAnchorElement>('link');
       expect(links.map((link) => link.getAttribute('href'))).toEqual([
         '#/today', '#/accounts', '#/campaigns', '#/leads', '#/pipeline', '#/conversations',
@@ -124,9 +128,9 @@ describe('NavigationRail window chrome', () => {
       const more = rail.querySelector<HTMLButtonElement>('.nav-rail__more-toggle')!;
       expect(more).not.toBeNull();
       expect(more.getAttribute('aria-label')).toBe('More workspaces');
-      expect(more.getAttribute('aria-expanded')).toBe('false');
-      expect(getComputedStyle(more).display).toBe('none');
-      // The approved native-only disclosure is in the DOM but cannot join legacy tab order.
+      expect(more.getAttribute('aria-expanded')).toBe('true');
+      expect(getComputedStyle(more).display).toBe('flex');
+      // Shared disclosure keeps real destinations and their order.
       expect(Array.from(rail.querySelectorAll('a, button, input, select, textarea, [tabindex]'))).toEqual([
         ...links.slice(0, 3), more, ...links.slice(3),
       ]);
@@ -140,25 +144,29 @@ describe('NavigationRail window chrome', () => {
       expect(fireEvent.click(leads)).toBe(false);
       expect(leads.getAttribute('aria-current')).toBe('page');
       expect(screen.getByRole('link', { name: 'Today' }).getAttribute('aria-current')).toBeNull();
-      expect(screen.getByLabelText('3 items awaiting review').textContent).toBe('3');
+      expect(screen.getByLabelText('3 open local reviews').textContent).toBe('3');
     },
   );
 });
 
-it('opts into Native Desk branding only while a stored meeting-first surface is present', () => {
-  const nativeStyle = document.createElement('style');
-  nativeStyle.textContent = readFileSync('src/renderer/features/today/nativeDesk.css', 'utf8');
-  document.head.append(nativeStyle);
-  try {
-    const { rerender, container } = render(<div className="app-shell"><RailHarness /></div>);
-    const brand = container.querySelector<HTMLElement>('.nav-rail__brand-native')!;
-    expect(getComputedStyle(brand).display).toBe('none');
-    rerender(<div className="app-shell"><RailHarness /><section className="native-desk" data-presentation="native-a" data-workflow-mode="meeting_first" /></div>);
-    expect(getComputedStyle(brand).display).toBe('inline');
-    expect(getComputedStyle(container.querySelector('.nav-rail__brand')!).display).toBe('none');
-    expect(brand.textContent).toBe('Callie');
-    rerender(<div className="app-shell"><RailHarness /></div>);
-    expect(getComputedStyle(brand).display).toBe('none');
-    expect(getComputedStyle(container.querySelector('.nav-rail__brand')!).display).not.toBe('none');
-  } finally { nativeStyle.remove(); }
+it('keeps one Callie wordmark and More state independent of feature descendants and authority', () => {
+  const view = (mode?: string) => <div className="app-shell"><RailHarness />{mode && <section className="native-desk" data-presentation="native-a" data-workflow-mode={mode} />}</div>;
+  const { rerender, container } = render(view());
+  const more = screen.getByRole('button', { name: 'More workspaces' });
+  const brand = screen.getByText('Callie');
+  expect(container.querySelectorAll('.nav-rail__brand-native')).toHaveLength(1);
+  expect(screen.queryByText('FSS')).toBeNull();
+  expect(getComputedStyle(brand).display).not.toBe('none');
+  expect(screen.queryByRole('link', { name: 'Leads' })).toBeNull();
+  fireEvent.click(more);
+  for (const mode of ['meeting_first', 'legacy', 'unknown', undefined]) {
+    rerender(view(mode));
+    expect(screen.getByText('Callie')).toBe(brand);
+    expect(getComputedStyle(brand).display).not.toBe('none');
+    expect(screen.getByRole('button', { name: 'More workspaces' })).toBe(more);
+    expect(more.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('link', { name: 'Leads' })).toBeTruthy();
+  }
+  fireEvent.click(more);
+  expect(screen.queryByRole('link', { name: 'Leads' })).toBeNull();
 });

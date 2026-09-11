@@ -1,6 +1,8 @@
+import { dailyFixture, localSnapshot, nativeDeskFixture } from './nativeDesk.fixture';
+import { PresentationRoot } from '../../app/PresentationRoot';
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as testingRender, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -308,4 +310,248 @@ it('shows the real current date badge and opens the primary brief without a call
   const badge = screen.getByLabelText('Current date');
   expect(badge.textContent).toContain(new Date().toLocaleDateString(undefined, { day: '2-digit' }));
   expect(badge.getAttribute('datetime')).toBe(new Date().toLocaleDateString('en-CA'));
+});
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });
+
+it.each(['accepted', 'unconfirmed'] as const)('keeps legacy manual activity mounted until its %s result', async outcome => {
+  let resolve!: (value: MutationReceipt) => void;
+  let reject!: (error: Error) => void;
+  const api = fakeApi({ logPastActivity: vi.fn(() => new Promise<MutationReceipt>((yes, no) => { resolve = yes; reject = no; })) });
+  render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+  await screen.findByText('Avery Landlord');
+  fireEvent.click(screen.getAllByRole('button', { name: /More actions/ })[0]!);
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Log past activity' }));
+  const dialog = screen.getByRole('dialog');
+  fireEvent.change(screen.getByLabelText('What happened'), { target: { value: 'Kept legacy summary' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Log activity' }));
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  fireEvent.keyDown(dialog, { key: 'Escape' });
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  expect(api.logPastActivity).toHaveBeenCalledTimes(1);
+  await act(async () => { if (outcome === 'accepted') resolve(receipt); else reject(new Error('private failure')); });
+  if (outcome === 'accepted') {
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.get).toHaveBeenCalledTimes(2);
+  } else {
+    expect(screen.getByRole('dialog')).toBe(dialog);
+    expect((screen.getByLabelText('What happened') as HTMLTextAreaElement).value).toBe('Kept legacy summary');
+    expect(screen.getByText('The command result was not confirmed. Check the current record before submitting again.')).toBeTruthy();
+    expect(screen.getByText(/Past activity save was not confirmed/)).toBeTruthy();
+    expect(api.get).toHaveBeenCalledTimes(1);
+  }
+});
+it.each(['s', 'x'])('consumes the fire-and-forget %s rejection while showing unconfirmed status', async key => {
+  const api = fakeApi({ snooze: vi.fn(async () => { throw new Error('private failure'); }) });
+  render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+  await screen.findByText('Avery Landlord');
+  fireEvent.keyDown(screen.getByRole('listitem', { name: 'Avery Landlord' }), { key });
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'The command result was not confirmed. Check the current record before submitting again.');
+  expect(api.snooze).toHaveBeenCalledTimes(1);
+});
+it('does not refresh a disposed legacy route after its pending manual receipt', async () => {
+  let resolve!: (value: MutationReceipt) => void;
+  const api = fakeApi({ logPastActivity: vi.fn(() => new Promise<MutationReceipt>(yes => { resolve = yes; })) });
+  const view = render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+  await screen.findByText('Avery Landlord');
+  fireEvent.click(screen.getAllByRole('button', { name: /More actions/ })[0]!);
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Log past activity' }));
+  fireEvent.change(screen.getByLabelText('What happened'), { target: { value: 'Pending original route' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Log activity' }));
+  view.unmount();
+  await act(async () => resolve(receipt));
+  expect(api.get).toHaveBeenCalledTimes(1);
+});
+it.each(['accepted', 'unconfirmed'] as const)('retains the exact pending manual form through failed focus refresh then %s result', async outcome => {
+  let resolve!: (value: MutationReceipt) => void;
+  let reject!: (error: Error) => void;
+  const api = fakeApi({ logPastActivity: vi.fn(() => new Promise<MutationReceipt>((yes, no) => { resolve = yes; reject = no; })) });
+  render(<TodayRoute api={api} onOpenLead={vi.fn()} />);
+  await screen.findByText('Avery Landlord');
+  const queue = screen.getByRole('list', { name: 'Work queue' });
+  fireEvent.click(screen.getAllByRole('button', { name: /More actions/ })[0]!);
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Log past activity' }));
+  const dialog = screen.getByRole('dialog');
+  const summary = screen.getByLabelText('What happened') as HTMLTextAreaElement;
+  fireEvent.change(summary, { target: { value: 'Retain this exact past communication' } });
+  fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-09-01' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'I stated the price' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Log activity' }));
+  const exactRequest = vi.mocked(api.logPastActivity).mock.calls[0]![0];
+  vi.mocked(api.get).mockRejectedValue(new Error('private read failure'));
+  await act(async () => { fireEvent.focus(window); });
+  expect(screen.queryByRole('dialog')).toBe(dialog);
+  expect(screen.getByRole('list', { name: 'Work queue' })).toBe(queue);
+  expect(screen.getByLabelText('What happened')).toBe(summary);
+  expect(summary.value).toBe('Retain this exact past communication');
+  expect(screen.getByText('Today could not refresh')).toBeTruthy();
+  expect(screen.queryByText(/command result was not confirmed/)).toBeNull();
+  expect(screen.queryByText(/Past activity save was not confirmed/)).toBeNull();
+  fireEvent.keyDown(dialog, { key: 'Escape' });
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  expect(api.logPastActivity).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(api.logPastActivity).mock.calls[0]![0]).toBe(exactRequest);
+  await act(async () => { if (outcome === 'accepted') resolve(receipt); else reject(new Error('unknown write result')); });
+  if (outcome === 'accepted') {
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByText(/command result was not confirmed/)).toBeNull();
+  } else {
+    expect(screen.getByRole('dialog')).toBe(dialog);
+    expect(summary.value).toBe('Retain this exact past communication');
+    expect(screen.getByText(/Past activity save was not confirmed/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  }
+  // A retained stale queue is not authority to issue another command.
+  fireEvent.keyDown(screen.getByRole('listitem', { name: 'Avery Landlord' }), { key: 's' });
+  await act(async () => {});
+  expect(api.snooze).not.toHaveBeenCalled();
+  expect(api.logPastActivity).toHaveBeenCalledTimes(1);
+  vi.mocked(api.get).mockResolvedValue(snapshot(3, [item()]));
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+  expect(screen.queryByText('Today could not refresh')).toBeNull();
+  expect(api.logPastActivity).toHaveBeenCalledTimes(1);
+  fireEvent.keyDown(screen.getByRole('listitem', { name: 'Avery Landlord' }), { key: 's' });
+  await act(async () => {});
+  expect(api.snooze).toHaveBeenCalledTimes(1);
+});
+
+function legacyWorkspace() {
+  const workspace = nativeDeskFixture(dailyFixture({ workflowMode: 'legacy' }));
+  const overviewGet = vi.spyOn(workspace.api.localWorkspace, 'get').mockResolvedValue(localSnapshot({ workflowMode: 'legacy' }));
+  return { ...workspace, overviewGet };
+}
+it.each(['accepted', 'unconfirmed'] as const)('keeps actual workspaceApi legacy form through ancestor refresh hold and %s save', async outcome => {
+  const workspace = legacyWorkspace();
+  let finishOverview!: (value: ReturnType<typeof localSnapshot>) => void;
+  let resolve!: (value: MutationReceipt) => void;
+  let reject!: (error: Error) => void;
+  const api = fakeApi({ logPastActivity: vi.fn(() => new Promise<MutationReceipt>((yes, no) => { resolve = yes; reject = no; })) });
+  render(<TodayRoute api={api} workspaceApi={workspace.api} onOpenLead={vi.fn()} />);
+  await screen.findByText('Avery Landlord');
+  fireEvent.click(screen.getAllByRole('button', { name: /More actions/ })[0]!);
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Log past activity' }));
+  const dialog = screen.getByRole('dialog');
+  const field = screen.getByLabelText('What happened') as HTMLTextAreaElement;
+  fireEvent.change(field, { target: { value: 'Original composed form' } });
+  fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-09-01' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'I stated the price' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Log activity' }));
+  const request = vi.mocked(api.logPastActivity).mock.calls[0]![0];
+  workspace.overviewGet.mockImplementationOnce(() => new Promise(done => { finishOverview = done; }));
+  vi.mocked(api.get).mockRejectedValueOnce(new Error('Today refresh failed'));
+  await act(async () => { fireEvent.focus(window); });
+  expect(screen.queryByRole('dialog')).toBe(dialog);
+  expect(screen.getByLabelText('What happened')).toBe(field);
+  expect(field.value).toBe('Original composed form');
+  expect(screen.getByText('Today could not refresh')).toBeTruthy();
+  expect(screen.getByText(/Queue commands are held/)).toBeTruthy();
+  fireEvent.keyDown(dialog, { key: 'Escape' });
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  await act(async () => { if (outcome === 'accepted') resolve(receipt); else reject(new Error('Unconfirmed write')); });
+  if (outcome === 'accepted') expect(screen.queryByRole('dialog')).toBeNull();
+  else {
+    expect(screen.getByRole('dialog')).toBe(dialog);
+    expect(screen.getByLabelText('What happened')).toBe(field);
+    expect(field.value).toBe('Original composed form');
+    expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe('2026-09-01');
+    expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+    // Pending local mode read is not permission for a new manual request.
+    fireEvent.click(screen.getByRole('button', { name: 'Log activity' }));
+    await act(async () => {});
+    expect(api.logPastActivity).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  }
+  // Refresh the child queue independently: parent hold must still fence commands.
+  if (screen.queryByRole('button', { name: 'Retry' })) {
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+  }
+  for (const key of ['s', 'x']) fireEvent.keyDown(screen.getByRole('listitem', { name: 'Avery Landlord' }), { key });
+  await act(async () => {});
+  expect(api.snooze).not.toHaveBeenCalled();
+  await act(async () => finishOverview(localSnapshot({ workflowMode: 'legacy' })));
+  expect(screen.queryByText(/Queue commands are held/)).toBeNull();
+  fireEvent.keyDown(screen.getByRole('listitem', { name: 'Avery Landlord' }), { key: 's' });
+  await act(async () => {});
+  expect(api.snooze).toHaveBeenCalledTimes(1);
+  expect(api.logPastActivity).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(api.logPastActivity).mock.calls[0]![0]).toBe(request);
+});
+it.each(['mode', 'api'] as const)('invalidates the actual legacy form for confirmed %s replacement, not an old receipt', async replacement => {
+  const workspace = legacyWorkspace();
+  let resolve!: (value: MutationReceipt) => void;
+  const api = fakeApi({ logPastActivity: vi.fn(() => new Promise<MutationReceipt>(done => { resolve = done; })) });
+  const view = render(<TodayRoute api={api} workspaceApi={workspace.api} onOpenLead={vi.fn()} />);
+  await screen.findByText('Avery Landlord');
+  fireEvent.click(screen.getAllByRole('button', { name: /More actions/ })[0]!);
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Log past activity' }));
+  fireEvent.change(screen.getByLabelText('What happened'), { target: { value: 'Old owner request' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Log activity' }));
+  if (replacement === 'mode') {
+    workspace.setSnapshot(dailyFixture({ workflowMode: 'meeting_first' }));
+    workspace.overviewGet.mockResolvedValue(localSnapshot({ workflowMode: 'meeting_first' }));
+    await act(async () => { fireEvent.focus(window); });
+    expect(screen.getByTestId('native-desk')).toBeTruthy();
+  } else {
+    const next = legacyWorkspace();
+    view.rerender(<TodayRoute api={api} workspaceApi={next.api} onOpenLead={vi.fn()} />);
+    await screen.findByText('Avery Landlord');
+  }
+  expect(screen.queryByRole('dialog')).toBeNull();
+  const reads = vi.mocked(api.get).mock.calls.length;
+  await act(async () => resolve(receipt));
+  expect(api.get).toHaveBeenCalledTimes(reads);
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(api.logPastActivity).toHaveBeenCalledTimes(1);
+});
+it('allows deliberate Close after original rejection while overview error persists, without releasing new writes', async () => {
+  const workspace = legacyWorkspace();
+  let reject!: (error: Error) => void;
+  const api = fakeApi({ logPastActivity: vi.fn(() => new Promise<MutationReceipt>((_resolve, fail) => { reject = fail; })) });
+  render(<TodayRoute api={api} workspaceApi={workspace.api} onOpenLead={vi.fn()} />);
+  await screen.findByText('Avery Landlord');
+  fireEvent.click(screen.getAllByRole('button', { name: /More actions/ })[0]!);
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Log past activity' }));
+  const dialog = screen.getByRole('dialog');
+  const field = screen.getByLabelText('What happened') as HTMLTextAreaElement;
+  fireEvent.change(field, { target: { value: 'Keep through persistent overview error' } });
+  fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-09-01' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'I stated the price' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Log activity' }));
+  const request = vi.mocked(api.logPastActivity).mock.calls[0]![0];
+  workspace.overviewGet.mockRejectedValue(new Error('Persistent overview failure'));
+  await act(async () => { fireEvent.focus(window); });
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => reject(new Error('Original write unknown')));
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  expect(screen.getByLabelText('What happened')).toBe(field);
+  expect(field.value).toBe('Keep through persistent overview error');
+  expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe('2026-09-01');
+  expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+  expect(screen.getByText(/Queue commands are held/)).toBeTruthy();
+  expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(false);
+  // Child queue read succeeded. Only the persistent ancestor error fences this new attempt.
+  fireEvent.click(screen.getByRole('button', { name: 'Log activity' }));
+  await act(async () => {});
+  expect(api.logPastActivity).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(api.logPastActivity).mock.calls[0]![0]).toBe(request);
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.getByText(/Queue commands are held/)).toBeTruthy();
+  fireEvent.keyDown(screen.getByRole('listitem', { name: 'Avery Landlord' }), { key: 'x' });
+  await act(async () => {});
+  expect(api.snooze).not.toHaveBeenCalled();
+  workspace.overviewGet.mockResolvedValue(localSnapshot({ workflowMode: 'legacy' }));
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh workspace status' })); });
+  expect(screen.queryByText(/Queue commands are held/)).toBeNull();
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(api.logPastActivity).toHaveBeenCalledTimes(1);
+  fireEvent.keyDown(screen.getByRole('listitem', { name: 'Avery Landlord' }), { key: 'x' });
+  await act(async () => {});
+  expect(api.snooze).toHaveBeenCalledTimes(1);
 });

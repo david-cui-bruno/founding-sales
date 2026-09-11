@@ -1,5 +1,6 @@
+import { PresentationRoot } from '../../app/PresentationRoot';
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render as testingRender, screen, within, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { NativeDesk, NativeDeskRoute } from './NativeDeskRoute';
 import { dailyFixture, nativeDeskFixture, linkedInFixture, requestedDraft, fixtureNow, configuredFixtureStatus, localSnapshot, commitments } from './nativeDesk.fixture';
@@ -189,3 +190,8 @@ it('reveals a focused editor only within its message scroll owner without changi
   expect(body.value).toBe(item.draft.body); expect([body.selectionStart,body.selectionEnd]).toEqual([2,5]);
   expect(screen.getByRole('textbox',{name:'Email body'})).toBe(body);
 });
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });

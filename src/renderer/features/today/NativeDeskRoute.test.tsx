@@ -1,9 +1,10 @@
+import { PresentationRoot } from '../../app/PresentationRoot';
 // @vitest-environment jsdom
 import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as testingRender,
   screen,
   waitFor,
 } from '@testing-library/react';
@@ -133,6 +134,21 @@ describe('Native Desk actual route', () => {
     fireEvent.keyDown(editor, { key: 'Escape' });
     expect(screen.queryByLabelText('Email body')).toBeNull();
     expect(f.forbidden).not.toHaveBeenCalled();
+  });
+  it('retains the selected draft on repeated or composing Escape and handled input', async () => {
+    const f = fixtureApi();
+    render(<NativeDeskRoute api={f.api} onOpenLead={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Email · Account A' }));
+    const editor = screen.getByLabelText('Email body');
+    fireEvent.change(editor, { target: { value: 'Preserved draft' } });
+    fireEvent.keyDown(editor, { key: 'Escape', repeat: true });
+    fireEvent.keyDown(editor, { key: 'Escape', isComposing: true });
+    const handled = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    handled.preventDefault(); fireEvent(editor, handled);
+    expect(screen.getByLabelText('Email body')).toBe(editor);
+    expect((editor as HTMLTextAreaElement).value).toBe('Preserved draft');
+    fireEvent.keyDown(editor, { key: 'Escape' });
+    expect(screen.queryByLabelText('Email body')).toBeNull();
   });
   it('fails closed on changed workspace and retains legacy only for stored legacy mode', async () => {
     const f = fixtureApi(dailyFixture({ workflowMode: 'legacy' }));
@@ -474,3 +490,8 @@ it('already-paused edit does not autosave after teardown and active same-workspa
     ).toHaveLength(1),
   );
 });
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });

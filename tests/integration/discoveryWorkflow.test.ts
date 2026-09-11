@@ -27,6 +27,7 @@ import { cloudSourceEventSchema, type CloudSourceEvent } from '../../src/shared/
 import type { BeginDiscoveryRequest, DiscoveryBrief, DiscoveryClaim } from '../../src/shared/contracts/discoveryContract';
 import type { CalliePreloadApi } from '../../src/shared/preload';
 import { FounderApp } from '../../src/renderer/app/FounderApp';
+import { PresentationRoot } from '../../src/renderer/app/PresentationRoot';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 import { validParcelEvent, validFrboEvent, validEnrichmentEvent } from '../fixtures/cloudSourceEvents';
 import type { RegisteredIpcHandler } from '../fixtures/registeredIpcHandler';
@@ -61,6 +62,10 @@ vi.mock('../../src/main/domain/discovery/discoveryEvidence', async original => {
 const oracle = await vi.importActual<typeof import('../../src/main/domain/discovery/discoveryEvidence')>('../../src/main/domain/discovery/discoveryEvidence');
 const NOW = '2026-09-06T12:00:00.000Z';
 const unexpected = (): never => { throw new Error('External operation forbidden in assembled source fixture'); };
+// jsdom lacks native dialog methods. This source/domain fixture does not claim
+// native modality or keyboard isolation, which the real-browser suite verifies.
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });
 const temps: TempDatabase[] = [];
 const stops: (() => Promise<void>)[] = [];
 beforeEach(() => { vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(800); vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(1200); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); boundary.frozen = null; boundary.admission = null; window.location.hash = ''; });
@@ -131,10 +136,10 @@ async function fixture(input: { temp?: TempDatabase; research?: DiscoveryResearc
     for (const job of due) { scheduled.delete(job); job.run(); } await worker.idle(); };
   const drain = async () => { for (let n = 0; n < 12; n++) { await turn(); if (![...scheduled].some(job => job.at <= Date.now())) return; }
     throw new Error('Discovery did not quiesce within twelve bounded turns'); };
-  const mount = async () => { const health = await api.health.get(); return render(createElement(FounderApp, { api,
+  const mount = async () => { const health = await api.health.get(); return render(createElement(PresentationRoot, null, createElement(FounderApp, { api,
     health: { status: 'ready', health, retry: unexpected },
     theme: { preference: 'system', resolvedTheme: 'light', setPreference: unexpected },
-    density: { density: 'comfortable', setDensity: unexpected } })); };
+    density: { density: 'comfortable', setDensity: unexpected } }))); };
   return { temp, runtime, database, services, api, worker, scheduled, late, clock, stop, turn, drain, mount, manualReview, facadeReview };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;

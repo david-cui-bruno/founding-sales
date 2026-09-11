@@ -9,6 +9,8 @@ import type { AccountOutboundRequest, AccountCallReport, AccountCallRange } from
 import { collectLeadTriageSnapshot, type LeadTriageQueueRow } from '../today/leadTriageReportService';
 import { leadTriageSnapshotRequestSchema, type LeadTriageSnapshot, type LeadTriageSnapshotRequest } from '../../shared/contracts/leadTriageReportContract';
 import { createHash } from 'node:crypto';
+import { ListCursorError, pageFromSnapshot } from './support/listCursor';
+import { reactivationReviewPayloadSchema } from './lifecycle/reactivationContracts';
 
 import { parseCsvSource, type CsvParseError } from '../imports/csvParser';
 import { z } from 'zod';
@@ -31,6 +33,7 @@ import {
 import {
   leadBulkUpdateRequestSchema,
   leadFieldUpdateRequestSchema,
+  leadRowSchema,
   leadsListRequestSchema,
   leadsListResponseSchema,
   type LeadBulkUpdateRequest,
@@ -182,6 +185,8 @@ const IMPORT_PREVIEW_TTL_MS = 30 * 60 * 1000;
 const DISMISS_REACTIVATION_DELAY_MS = 365 * 24 * 60 * 60 * 1000;
 
 export type FounderSalesDomainErrorCode =
+  | 'LIST_CURSOR_INVALID'
+  | 'LIST_CURSOR_STALE'
   | 'LEAD_NOT_FOUND'
   | 'CYCLE_NOT_FOUND'
   | 'CONTACT_METHOD_NOT_FOUND'
@@ -461,168 +466,170 @@ export class FounderSalesDomain implements OutboundDomainPort {
 
   listLeadRows(input: LeadsListRequest): LeadsListResponse {
     const request = leadsListRequestSchema.parse(input);
-    const filters: string[] = [];
-    const parameters: unknown[] = [];
-    if (request.query.length > 0) {
-      filters.push(`person.display_name LIKE ? ESCAPE '\\'`);
-      parameters.push(`%${escapeLike(request.query)}%`);
-    }
-    if (request.stages.length > 0) {
-      filters.push(`cycle.stage IN (${request.stages.map(() => '?').join(', ')})`);
-      parameters.push(...request.stages);
-    }
-    if (request.priorities.length > 0) {
-      filters.push(`projection.priority IN (${request.priorities.map(() => '?').join(', ')})`);
-      parameters.push(...request.priorities.map((priority) => priority.toLowerCase()));
-    }
-    const where = [
-      `cycle.workflow_status IN ('active','onboarding')`,
-      ...filters,
-    ].join(' AND ');
-    const orderBy = {
-      // Within one priority band, cloud-scored leads outrank unscored ones
-      // using the WITHIN-SOURCE percentile (F10): raw cloud axes from
-      // different acquisition sources observe different signal subsets and
-      // are not comparable, so a raw cross-source sort lets one source
-      // monopolize the top. Percentile DESC with NULLs last, then raw cloud
-      // timing as the residual within-source tiebreaker. Cloud keys stay
-      // tiebreakers only: they never reorder the local priority bands, and
-      // the percentile is ordering-only (rows keep showing raw fit/timing).
-      priority: `CASE WHEN projection.priority IS NULL THEN 1 ELSE 0 END,
-        projection.priority ASC,
-        CASE WHEN cloud_rank.cloud_source_percentile IS NULL THEN 1 ELSE 0 END,
-        cloud_rank.cloud_source_percentile DESC,
-        CASE WHEN prospect.cloud_timing IS NULL THEN 1 ELSE 0 END,
-        prospect.cloud_timing DESC,
-        cycle.id ASC`,
-      person_name: 'person.display_name ASC, cycle.id ASC',
-      last_contact: `CASE WHEN prospect.last_contact_at IS NULL THEN 1 ELSE 0 END,
-        prospect.last_contact_at DESC, cycle.id ASC`,
-    }[request.sort];
-    const baseSql = `
-      FROM sales_cycles AS cycle
-      JOIN persons AS person ON person.id = cycle.person_id
-      JOIN prospects AS prospect ON prospect.id = cycle.prospect_id
-      LEFT JOIN next_actions AS action ON action.id = cycle.current_next_action_id
-      LEFT JOIN prospect_priority_projection AS projection
-        ON projection.prospect_id = cycle.prospect_id
-      LEFT JOIN source_events AS source ON source.id = prospect.original_source_event_id
-      LEFT JOIN (
+    return this.readListSnapshot(() => {
+      const filters: string[] = [];
+      const parameters: unknown[] = [];
+      if (request.query.length > 0) {
+        filters.push(`person.display_name LIKE ? ESCAPE '\\'`);
+        parameters.push(`%${escapeLike(request.query)}%`);
+      }
+      if (request.stages.length > 0) {
+        filters.push(`cycle.stage IN (${request.stages.map(() => '?').join(', ')})`);
+        parameters.push(...request.stages);
+      }
+      if (request.priorities.length > 0) {
+        filters.push(`projection.priority IN (${request.priorities.map(() => '?').join(', ')})`);
+        parameters.push(...request.priorities.map((priority) => priority.toLowerCase()));
+      }
+      const where = [
+        `cycle.workflow_status IN ('active','onboarding')`,
+        ...filters,
+      ].join(' AND ');
+      const orderBy = {
+        // Within one priority band, cloud-scored leads outrank unscored ones
+        // using the WITHIN-SOURCE percentile (F10): raw cloud axes from
+        // different acquisition sources observe different signal subsets and
+        // are not comparable, so a raw cross-source sort lets one source
+        // monopolize the top. Percentile DESC with NULLs last, then raw cloud
+        // timing as the residual within-source tiebreaker. Cloud keys stay
+        // tiebreakers only: they never reorder the local priority bands, and
+        // the percentile is ordering-only (rows keep showing raw fit/timing).
+        priority: `CASE WHEN projection.priority IS NULL THEN 1 ELSE 0 END,
+          projection.priority ASC,
+          CASE WHEN cloud_rank.cloud_source_percentile IS NULL THEN 1 ELSE 0 END,
+          cloud_rank.cloud_source_percentile DESC,
+          CASE WHEN prospect.cloud_timing IS NULL THEN 1 ELSE 0 END,
+          prospect.cloud_timing DESC,
+          cycle.id ASC`,
+        person_name: 'person.display_name ASC, cycle.id ASC',
+        last_contact: `CASE WHEN prospect.last_contact_at IS NULL THEN 1 ELSE 0 END,
+          prospect.last_contact_at DESC, cycle.id ASC`,
+      }[request.sort];
+      const baseSql = `
+        FROM sales_cycles AS cycle
+        JOIN persons AS person ON person.id = cycle.person_id
+        JOIN prospects AS prospect ON prospect.id = cycle.prospect_id
+        LEFT JOIN next_actions AS action ON action.id = cycle.current_next_action_id
+        LEFT JOIN prospect_priority_projection AS projection
+          ON projection.prospect_id = cycle.prospect_id
+        LEFT JOIN source_events AS source ON source.id = prospect.original_source_event_id
+        LEFT JOIN (
+          SELECT
+            scored.id AS prospect_id,
+            100.0 * CUME_DIST() OVER (
+              PARTITION BY origin.channel
+              ORDER BY COALESCE(scored.cloud_fit, 0) + COALESCE(scored.cloud_timing, 0)
+            ) AS cloud_source_percentile
+          FROM prospects AS scored
+          JOIN source_events AS origin
+            ON origin.id = scored.original_source_event_id
+          WHERE scored.cloud_fit IS NOT NULL OR scored.cloud_timing IS NOT NULL
+        ) AS cloud_rank ON cloud_rank.prospect_id = cycle.prospect_id
+        WHERE ${where}
+      `;
+      const rows = this.database.raw.prepare(`
         SELECT
-          scored.id AS prospect_id,
-          100.0 * CUME_DIST() OVER (
-            PARTITION BY origin.channel
-            ORDER BY COALESCE(scored.cloud_fit, 0) + COALESCE(scored.cloud_timing, 0)
-          ) AS cloud_source_percentile
-        FROM prospects AS scored
-        JOIN source_events AS origin
-          ON origin.id = scored.original_source_event_id
-        WHERE scored.cloud_fit IS NOT NULL OR scored.cloud_timing IS NOT NULL
-      ) AS cloud_rank ON cloud_rank.prospect_id = cycle.prospect_id
-      WHERE ${where}
-    `;
-    const total = (this.database.raw.prepare(
-      `SELECT COUNT(*) AS count ${baseSql}`,
-    ).get(...parameters) as { count: number }).count;
-    const offset = request.cursor === null ? 0 : Number.parseInt(request.cursor, 10);
-    if (!Number.isSafeInteger(offset) || offset < 0) {
-      throw new FounderSalesDomainError('IMPORT_PREVIEW_INVALID', 'The list cursor is invalid.');
-    }
-    const rows = this.database.raw.prepare(`
-      SELECT
-        cycle.id AS cycle_id, cycle.person_id, cycle.prospect_id, cycle.stage,
-        person.display_name, person.opted_out,
-        prospect.segment,
-        source.channel AS source_channel,
-        action.id AS action_id, action.action_type, action.channel AS action_channel,
-        action.status AS action_status, action.work_intent, action.due_at AS action_due_at,
-        projection.fit_points, projection.fit_band, projection.timing_millipoints,
-        projection.timing_band, projection.reachability, projection.data_confidence,
-        projection.priority,
-        prospect.cloud_fit, prospect.cloud_timing,
-        (
-          SELECT canonical_name FROM prospect_organizations AS link
-          JOIN organizations AS org ON org.id = link.organization_id
-          WHERE link.prospect_id = cycle.prospect_id
-          ORDER BY org.id ASC LIMIT 1
-        ) AS organization_name,
-        (
-          SELECT property.address_line_1 || ', ' || property.locality
-          FROM prospect_properties AS link
-          JOIN properties AS property ON property.id = link.property_id
-          WHERE link.prospect_id = cycle.prospect_id
-          ORDER BY property.id ASC LIMIT 1
-        ) AS property_summary,
-        (
-          SELECT MAX(occurred_at) FROM activities
-          WHERE activities.person_id = cycle.person_id
-            AND ${communicationRecencySql}
-        ) AS last_activity_at
-      ${baseSql}
-      ORDER BY ${orderBy}
-      LIMIT ? OFFSET ?
-    `).all(...parameters, request.limit, offset) as Array<{
-      cycle_id: string; person_id: string; prospect_id: string; stage: LeadRow['stage'];
-      display_name: string; opted_out: 0 | 1; segment: LeadRow['segment'];
-      source_channel: LeadRow['source'] | null;
-      action_id: string | null; action_type: string | null; action_channel: string | null;
-      action_status: string | null; work_intent: string | null; action_due_at: string | null;
-      fit_points: number | null; fit_band: ProjectionRow['fit_band'] | null;
-      timing_millipoints: number | null; timing_band: ProjectionRow['timing_band'] | null;
-      reachability: ProjectionRow['reachability'] | null; data_confidence: number | null;
-      priority: ProjectionRow['priority'] | null;
-      cloud_fit: number | null; cloud_timing: number | null;
-      organization_name: string | null; property_summary: string | null;
-      last_activity_at: string | null;
-    }>;
-    const leadRows: LeadRow[] = rows.map((row) => ({
-      personId: row.person_id,
-      salesCycleId: row.cycle_id,
-      personName: row.display_name,
-      initials: initialsOf(row.display_name),
-      organization: row.organization_name,
-      propertySummary: row.property_summary,
-      stage: row.stage,
-      source: row.source_channel ?? 'custom',
-      segment: row.segment,
-      priorityContext: row.priority === null
-        ? null
-        : toPriorityContext({
-          prospect_id: row.prospect_id,
-          fit_points: row.fit_points!,
-          fit_band: row.fit_band!,
-          timing_millipoints: row.timing_millipoints!,
-          timing_band: row.timing_band!,
-          reachability: row.reachability!,
-          data_confidence: row.data_confidence!,
-          priority: row.priority,
-          version: 1,
-          evaluation_id: '',
-        }),
-      cloudScores: row.cloud_fit === null || row.cloud_timing === null
-        ? null
-        : { fit: row.cloud_fit, timing: row.cloud_timing },
-      nextAction: row.action_id === null || row.action_status !== 'pending' ? null : {
-        id: row.action_id,
-        dueAt: row.action_due_at,
-        type: row.action_type!,
-        channel: actionChannel({
-          actionType: row.action_type!,
-          channel: row.action_channel,
-          workIntent: row.work_intent,
-          onboarding: false,
-        }),
-        label: actionLabel(row.action_type!),
-      },
-      optedOut: row.opted_out === 1,
-      lastActivityAt: row.last_activity_at,
-    }));
-    const nextOffset = offset + leadRows.length;
-    return leadsListResponseSchema.parse({
-      rows: leadRows,
-      nextCursor: nextOffset < total ? String(nextOffset) : null,
-      total,
-      revision: this.currentRevision(),
+          cycle.id AS cycle_id, cycle.person_id, cycle.prospect_id, cycle.stage,
+          person.display_name, person.opted_out,
+          prospect.segment,
+          source.channel AS source_channel,
+          action.id AS action_id, action.action_type, action.channel AS action_channel,
+          action.status AS action_status, action.work_intent, action.due_at AS action_due_at,
+          projection.fit_points, projection.fit_band, projection.timing_millipoints,
+          projection.timing_band, projection.reachability, projection.data_confidence,
+          projection.priority,
+          prospect.cloud_fit, prospect.cloud_timing,
+          (
+            SELECT canonical_name FROM prospect_organizations AS link
+            JOIN organizations AS org ON org.id = link.organization_id
+            WHERE link.prospect_id = cycle.prospect_id
+            ORDER BY org.id ASC LIMIT 1
+          ) AS organization_name,
+          (
+            SELECT property.address_line_1 || ', ' || property.locality
+            FROM prospect_properties AS link
+            JOIN properties AS property ON property.id = link.property_id
+            WHERE link.prospect_id = cycle.prospect_id
+            ORDER BY property.id ASC LIMIT 1
+          ) AS property_summary,
+          (
+            SELECT MAX(occurred_at) FROM activities
+            WHERE activities.person_id = cycle.person_id
+              AND ${communicationRecencySql}
+          ) AS last_activity_at
+        ${baseSql}
+        ORDER BY ${orderBy}
+      `).all(...parameters) as Array<{
+        cycle_id: string; person_id: string; prospect_id: string; stage: LeadRow['stage'];
+        display_name: string; opted_out: 0 | 1; segment: LeadRow['segment'];
+        source_channel: LeadRow['source'] | null;
+        action_id: string | null; action_type: string | null; action_channel: string | null;
+        action_status: string | null; work_intent: string | null; action_due_at: string | null;
+        fit_points: number | null; fit_band: ProjectionRow['fit_band'] | null;
+        timing_millipoints: number | null; timing_band: ProjectionRow['timing_band'] | null;
+        reachability: ProjectionRow['reachability'] | null; data_confidence: number | null;
+        priority: ProjectionRow['priority'] | null;
+        cloud_fit: number | null; cloud_timing: number | null;
+        organization_name: string | null; property_summary: string | null;
+        last_activity_at: string | null;
+      }>;
+      const leadRows: LeadRow[] = rows.map((row) => ({
+        personId: row.person_id,
+        salesCycleId: row.cycle_id,
+        personName: row.display_name,
+        initials: initialsOf(row.display_name),
+        organization: row.organization_name,
+        propertySummary: row.property_summary,
+        stage: row.stage,
+        source: row.source_channel ?? 'custom',
+        segment: row.segment,
+        priorityContext: row.priority === null
+          ? null
+          : toPriorityContext({
+            prospect_id: row.prospect_id,
+            fit_points: row.fit_points!,
+            fit_band: row.fit_band!,
+            timing_millipoints: row.timing_millipoints!,
+            timing_band: row.timing_band!,
+            reachability: row.reachability!,
+            data_confidence: row.data_confidence!,
+            priority: row.priority,
+            version: 1,
+            evaluation_id: '',
+          }),
+        cloudScores: row.cloud_fit === null || row.cloud_timing === null
+          ? null
+          : { fit: row.cloud_fit, timing: row.cloud_timing },
+        nextAction: row.action_id === null || row.action_status !== 'pending' ? null : {
+          id: row.action_id,
+          dueAt: row.action_due_at,
+          type: row.action_type!,
+          channel: actionChannel({
+            actionType: row.action_type!,
+            channel: row.action_channel,
+            workIntent: row.work_intent,
+            onboarding: false,
+          }),
+          label: actionLabel(row.action_type!),
+        },
+        optedOut: row.opted_out === 1,
+        lastActivityAt: row.last_activity_at,
+      }));
+      const projection = z.array(leadRowSchema).parse(leadRows);
+      const page = pageFromSnapshot({
+        scope: 'leads',
+        queryKey: JSON.stringify({ scope: 'leads', query: request.query,
+          stages: [...new Set(request.stages)].sort(), priorities: [...new Set(request.priorities)].sort(),
+          sort: request.sort, limit: request.limit }),
+        snapshotKey: JSON.stringify(projection), rows: projection,
+        cursor: request.cursor, limit: request.limit,
+      });
+      return leadsListResponseSchema.parse({
+        rows: page.rows,
+        nextCursor: page.nextCursor,
+        total: projection.length,
+        revision: this.currentRevision(),
+      });
     });
   }
 
@@ -672,34 +679,64 @@ export class FounderSalesDomain implements OutboundDomainPort {
       if (prospect === undefined) {
         throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The person has no prospect.');
       }
-      const linked = this.database.raw.prepare(`
-        SELECT org.id AS id FROM prospect_organizations AS link
-        JOIN organizations AS org ON org.id = link.organization_id
-        WHERE link.prospect_id = ? ORDER BY org.id ASC LIMIT 1
-      `).get(prospect.id) as { id: string } | undefined;
-      if (request.value === null) {
-        if (linked !== undefined) {
-          this.database.raw.prepare(
-            'DELETE FROM prospect_organizations WHERE prospect_id = ? AND organization_id = ?',
-          ).run(prospect.id, linked.id);
-        }
-      } else if (linked !== undefined) {
-        this.database.raw.prepare(
-          'UPDATE organizations SET canonical_name = ?, updated_at = ? WHERE id = ?',
-        ).run(request.value, now, linked.id);
-      } else {
-        const organization = this.services.identities.createOrganization({
-          canonicalName: request.value,
-        });
-        this.services.identities.linkOrganization({
-          prospectId: prospect.id, organizationId: organization.id,
-        });
-      }
+      this.assignProspectOrganization(prospect.id, request.value);
     }
     const cycles = this.database.raw.prepare(
       'SELECT id FROM sales_cycles WHERE person_id = ? ORDER BY id ASC',
     ).all(person.id) as { id: string }[];
     return this.receipt([person.id], cycles.map(({ id }) => id));
+  }
+
+  /** Assign membership, never rename an identity shared with other prospects. */
+  private assignProspectOrganization(prospectId: string, value: string | null): void {
+    const normalize = (name: string): string => name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+    const ambiguous = () => new FounderSalesDomainError(
+      'ACTION_NOT_SUPPORTED', 'The organization assignment is ambiguous.',
+    );
+    const links = this.database.raw.prepare(`
+      SELECT organization_id AS id FROM prospect_organizations
+      WHERE prospect_id = ? LIMIT 2
+    `).all(prospectId) as { id: string }[];
+    if (links.length > 1) throw ambiguous();
+    const currentId = links[0]?.id;
+    let targetId: string | undefined;
+    if (value !== null) {
+      const normalized = normalize(value);
+      if (normalized.length === 0) {
+        throw new FounderSalesDomainError(
+          'ACTION_NOT_SUPPORTED', 'The organization assignment must not be blank.',
+        );
+      }
+      // SQLite lower/trim cannot implement intake's Unicode NFKC semantics.
+      // Include legacy canonical names and deduplicate identities, not matching labels.
+      const candidates = this.database.raw.prepare(`
+        SELECT id, canonical_name AS name FROM organizations
+        UNION ALL
+        SELECT organization_id AS id, alias AS name FROM organization_aliases
+      `).all() as { id: string; name: string }[];
+      const matches = new Set(candidates
+        .filter(({ name }) => normalize(name) === normalized)
+        .map(({ id }) => id));
+      if (matches.size > 1) throw ambiguous();
+      targetId = matches.values().next().value;
+      if (targetId === undefined) {
+        const organization = this.services.identities.createOrganization({
+          canonicalName: value.normalize('NFKC').trim().replace(/\s+/g, ' '),
+        });
+        targetId = organization.id;
+        this.services.identities.addOrganizationAlias({ organizationId: targetId, alias: normalized });
+      }
+    }
+    if (currentId === targetId) return;
+    if (currentId !== undefined) {
+      this.database.raw.prepare(
+        'DELETE FROM prospect_organizations WHERE prospect_id = ? AND organization_id = ?',
+      ).run(prospectId, currentId);
+    }
+    if (targetId !== undefined) {
+      // An old company's role is not evidence of a role at the new company.
+      this.services.identities.linkOrganization({ prospectId, organizationId: targetId });
+    }
   }
 
   getLeadDetail(input: LeadDetailRequest): LeadDetail {
@@ -1987,55 +2024,67 @@ export class FounderSalesDomain implements OutboundDomainPort {
 
   listReviewItems(input: ReviewListRequest): ReviewSnapshot {
     const request = reviewListRequestSchema.parse(input);
-    const rows = this.database.raw.prepare(`
-      SELECT id, person_id, reason, payload_json, created_at
-      FROM lifecycle_review_items WHERE status = 'open'
-      ORDER BY created_at ASC, id ASC LIMIT ?
-    `).all(request.limit) as {
-      id: string; person_id: string; reason: string; payload_json: string; created_at: string;
-    }[];
-    const items: ReviewItem[] = [];
-    for (const row of rows) {
-      let payload: {
-        blocker?: string;
-        command?: { evidence?: { kind?: string; handleKind?: string; normalizedValue?: string } };
-      };
-      try {
-        payload = JSON.parse(row.payload_json) as typeof payload;
-      } catch {
-        payload = {};
-      }
-      if (payload.blocker === 'unknown_inbound_handle'
-        && payload.command?.evidence?.kind === 'unknown_handle') {
-        items.push({
-          kind: 'unmatched_communication',
-          reviewId: row.id,
-          channel: payload.command.evidence.handleKind === 'email' ? 'email' : 'text',
-          handle: payload.command.evidence.normalizedValue ?? '',
-          occurredAt: row.created_at,
-          summary: row.reason,
-        });
-      } else {
-        items.push({
-          kind: 'system_error',
-          reviewId: row.id,
-          invariant: payload.blocker ?? 'reactivation_blocked',
-          summary: row.reason,
-          personId: row.person_id,
-        });
-      }
-    }
-    const filtered = request.kinds.length === 0
-      ? items
-      : items.filter((item) => (request.kinds as string[]).includes(item.kind));
-    const totalOpenCount = (this.database.raw.prepare(
-      `SELECT COUNT(*) AS count FROM lifecycle_review_items WHERE status = 'open'`,
-    ).get() as { count: number }).count;
-    return reviewSnapshotSchema.parse({
-      items: filtered,
-      totalOpenCount,
-      revision: this.currentRevision(),
+    return this.readListSnapshot(() => {
+      const rows = this.database.raw.prepare(`
+        SELECT id, person_id, reason, payload_json, created_at, version
+        FROM lifecycle_review_items WHERE status = 'open'
+        ORDER BY created_at ASC, id ASC
+      `).all() as {
+        id: string; person_id: string; reason: string; payload_json: string; created_at: string; version: number;
+      }[];
+      const items: ReviewItem[] = rows.map(row => {
+        let raw: unknown;
+        try { raw = JSON.parse(row.payload_json); } catch { raw = null; }
+        const parsed = reactivationReviewPayloadSchema.safeParse(raw);
+        if (parsed.success) {
+          const payload = parsed.data;
+          const command = payload.command;
+          if (payload.blocker === 'unknown_inbound_handle'
+            && 'evidence' in command && command.evidence.kind === 'unknown_handle') {
+            return {
+              kind: 'unmatched_communication', reviewId: row.id,
+              channel: command.evidence.handleKind === 'email' ? 'email' : 'text',
+              handle: command.evidence.normalizedValue, occurredAt: row.created_at, summary: row.reason,
+            };
+          }
+          return { kind: 'system_error', reviewId: row.id, invariant: payload.blocker,
+            summary: row.reason, personId: row.person_id };
+        }
+        return { kind: 'system_error', reviewId: row.id, invariant: 'review_payload_unreadable',
+          summary: 'This local review could not be read. Its evidence has been retained.', personId: row.person_id };
+      });
+      const unmatched = items.filter(item => item.kind === 'unmatched_communication').length;
+      const kinds = [...new Set(request.kinds)].sort();
+      const filtered = kinds.length === 0 ? items : items.filter(item => kinds.includes(item.kind));
+      const page = pageFromSnapshot({
+        scope: 'review', queryKey: JSON.stringify({ scope: 'review', kinds, limit: request.limit }),
+        snapshotKey: JSON.stringify({ availabilityVersion: 1, rows }), rows: filtered,
+        cursor: request.cursor ?? null, limit: request.limit,
+      });
+      return reviewSnapshotSchema.parse({
+        items: page.rows, nextCursor: page.nextCursor, matchedCount: filtered.length,
+        totalOpenCount: items.length, revision: this.currentRevision(),
+        countScope: 'lifecycle_review_items', observedAt: this.clock.now(),
+        queues: {
+          unmatched_communication: { source: 'lifecycle_review_items', openCount: unmatched },
+          system_error: { source: 'lifecycle_review_items', openCount: items.length - unmatched },
+          ambiguous_identity: { source: 'not_integrated', openCount: null },
+          transcript_suggestion: { source: 'not_integrated', openCount: null },
+          import_problem: { source: 'not_integrated', openCount: null },
+          adapter_failure: { source: 'not_integrated', openCount: null },
+        },
+      });
     });
+  }
+
+  /** One deferred read snapshot, or the caller's existing snapshot. Never a write UoW. */
+  private readListSnapshot<T>(read: () => T): T {
+    try {
+      return this.database.raw.inTransaction ? read() : this.database.raw.transaction(read).deferred();
+    } catch (error) {
+      if (error instanceof ListCursorError) throw new FounderSalesDomainError(error.code, error.code);
+      throw error;
+    }
   }
 
   resolveReviewItem(input: ResolveReviewRequest): MutationReceipt {

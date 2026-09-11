@@ -1,5 +1,6 @@
+import { PresentationRoot } from '../../app/PresentationRoot';
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as testingRender, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { NativeDeskRoute } from './NativeDeskRoute';
 import { nativeDeskReviewFixture, nativeDeskFixture } from './nativeDesk.fixture';
@@ -93,3 +94,8 @@ it.each(['remount', 'pause', 'foreign'] as const)('does not revive sync continua
   await act(async () => done());
   expect(f.calls.filter(c => c.method === 'daily.get')).toHaveLength(reads);
 });
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });

@@ -91,7 +91,19 @@ const api: CalliePreloadApi = {
     get: read<DiscoverySnapshot>('discovery.get', () => ({ prepared: [], judgment: [], counts: { unassessed: 0, research: 0, watch: 0, excluded: 0 }, processing: 'idle' as const, researchCapability: 'not_configured' as const, generatedAt: fixtureNow, revision: 1 })),
     getBrief: forbidden('discovery.getBrief'), begin: forbidden('discovery.begin'), override: forbidden('discovery.override'),
   },
-  pipeline: { get: forbidden('pipeline.get') }, review: { list: forbidden('review.list'), resolve: forbidden('review.resolve') },
+  pipeline: { get: forbidden('pipeline.get') },
+  review: { list: read<Awaited<ReturnType<CalliePreloadApi['review']['list']>>>('review.list', () => ({
+    items: [], totalOpenCount: 0, revision: 1, nextCursor: null, matchedCount: 0,
+    countScope: 'lifecycle_review_items', observedAt: fixtureNow,
+    queues: {
+      unmatched_communication: { source: 'lifecycle_review_items', openCount: 0 },
+      system_error: { source: 'lifecycle_review_items', openCount: 0 },
+      ambiguous_identity: { source: 'not_integrated', openCount: null },
+      transcript_suggestion: { source: 'not_integrated', openCount: null },
+      import_problem: { source: 'not_integrated', openCount: null },
+      adapter_failure: { source: 'not_integrated', openCount: null },
+    },
+  })), resolve: forbidden('review.resolve') },
   friday: { getCurrent: forbidden('friday.getCurrent'), getDrilldown: forbidden('friday.getDrilldown'), createJob: forbidden('friday.createJob'), fillJob: forbidden('friday.fillJob'), cancelJob: forbidden('friday.cancelJob') },
   imports: { preview: forbidden('imports.preview'), remap: forbidden('imports.remap'), commit: forbidden('imports.commit'), status: forbidden('imports.status') },
   conversations: { list: forbidden('conversations.list'), get: forbidden('conversations.get'), attachTranscript: forbidden('conversations.attachTranscript') },
@@ -120,7 +132,7 @@ function paintedBackground(element: Element | null): string {
 function sample(source: AppearanceSample['source']) {
   const root = document.getElementById('root');
   if (!root?.firstElementChild) return;
-  const scope = document.querySelector('.startup-presentation, .app-shell') ?? root.firstElementChild;
+  const scope = document.querySelector('.presentation-root') ?? root.firstElementChild;
   const deskElement = document.querySelector('.native-desk');
   const style = getComputedStyle(scope);
   const rect = scope.getBoundingClientRect();
@@ -131,7 +143,7 @@ function sample(source: AppearanceSample['source']) {
     : root.textContent?.includes('Daily workspace unavailable') ? 'daily-error'
     : root.textContent?.includes('Loading daily workspace') ? 'daily-pending' : 'informational';
   samples.push({ source, phase, theme: document.documentElement.getAttribute('data-theme'), density: document.documentElement.getAttribute('data-density'),
-    presentation: (deskElement ?? scope).getAttribute('data-presentation'), workflow: deskElement?.getAttribute('data-workflow-mode') ?? null,
+    presentation: scope.getAttribute('data-presentation'), workflow: deskElement?.getAttribute('data-workflow-mode') ?? null,
     background: getComputedStyle(document.querySelector('.app-shell__workspace') ?? scope).backgroundColor,
     color: getComputedStyle(deskElement ?? scope).color, font: style.fontFamily,
     corners: [[1, 1], [innerWidth - 2, 1], [1, innerHeight - 2], [innerWidth - 2, innerHeight - 2]].map(([x, y]) => paintedBackground(document.elementFromPoint(x, y))),

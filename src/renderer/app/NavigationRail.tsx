@@ -1,3 +1,4 @@
+import type { ReviewBadgeState } from './useReviewSummary';
 import { useId, useState, type MouseEvent } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 
@@ -7,7 +8,7 @@ import { routeHash, type AppRoute } from './routes';
 export type NavigationRailProps = {
   route: AppRoute;
   onNavigate(route: AppRoute): void;
-  reviewCount: number;
+  reviewCount: ReviewBadgeState;
 };
 
 /**
@@ -50,9 +51,14 @@ export function NavigationRail({
         >
           <Icon className="nav-rail__icon" aria-hidden="true" size={16} />
           <span className="nav-rail__label">{item.label}</span>
-          {item.route === 'inbox' && reviewCount > 0 && (
-            <span className="nav-rail__badge" aria-label={`${reviewCount} items awaiting review`}>
-              {reviewCount}
+          {item.route === 'inbox' && (
+            <span className="nav-rail__badge"
+              aria-label={reviewCount.status === 'ready' ? `${reviewCount.count} open local reviews`
+                : reviewCount.status === 'loading' ? 'Checking local reviews' : 'Local review count unavailable'}
+              title={reviewCount.status === 'ready'
+                ? `Observed ${reviewCount.observedAt}. Other review sources are not integrated into this Inbox.`
+                : 'Local review count has not been confirmed.'}>
+              {reviewCount.status === 'ready' ? reviewCount.count : reviewCount.status === 'loading' ? '…' : '?'}
             </span>
           )}
         </a>
@@ -68,9 +74,6 @@ export function NavigationRail({
     <nav className="nav-rail" aria-label="Primary">
       <div className="nav-rail__native-controls" aria-hidden="true" />
       <div className="nav-rail__header">
-        <p className="nav-rail__brand" aria-hidden="true">
-          FSS
-        </p>
         <p className="nav-rail__brand-native" aria-hidden="true">Callie</p>
       </div>
       <ul className="nav-rail__list">{primaryItems.map(renderItem)}</ul>

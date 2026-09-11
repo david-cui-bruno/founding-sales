@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { PresentationRoot } from '../../app/PresentationRoot';
+import { act, cleanup, fireEvent, render as testingRender, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { beginDiscoveryReceiptSchema, discoveryBriefSchema, discoverySnapshotSchema, type DiscoveryApi, type DiscoveryBrief } from '../../../shared/contracts/discoveryContract';
@@ -9,6 +10,8 @@ import type { EmailDraft, OutreachApi, OutreachStatus } from '../../../shared/co
 import { LeadInspectorProvider } from '../leadInspector/LeadInspectorProvider';
 import { useLeadInspector, type LeadDetailApi } from '../leadInspector/useLeadInspector';
 import { TodayRoute, type TodayRouteApi } from '../today/TodayRoute';
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
 
 const brief = (id = 'a', overrides: Partial<DiscoveryBrief> = {}): DiscoveryBrief => discoveryBriefSchema.parse({
   personId: id, salesCycleId: `cycle-${id}`, personName: `Owner ${id}`, stale: false, latestOverride: null, pilotNextStep: null,
@@ -277,3 +280,6 @@ it('retains successful preparation when the subsequent contact read fails', asyn
   fireEvent.click(await action()); await screen.findByText(/Contact info requested/);
   expect(f.discovery.begin).toHaveBeenCalledOnce(); expect(f.api.findContactInfo).toHaveBeenCalledOnce();
 });
+
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });

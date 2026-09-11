@@ -1,4 +1,4 @@
-import { mutationReceiptSchema } from '../../../shared/contracts/commonContract';
+import { mutationReceiptSchema, type MutationReceipt } from '../../../shared/contracts/commonContract';
 import { discoveryBriefSchema, type DiscoveryApi, type DiscoveryBrief as Brief, type OverrideDiscoveryRequest } from '../../../shared/contracts/discoveryContract';
 import type { LogPastActivityRequest } from '../../../shared/contracts/todayContract';
 import { DiscoveryBrief } from '../discovery/DiscoveryBrief';
@@ -45,6 +45,10 @@ export type LeadInspectorProviderProps = {
 
 type OutboundState = { request: BeginOutboundRequest; pending: boolean; uncertain: boolean; receipt: OutboundReceipt | null };
 
+type ReviewAttempt = { api: LeadDetailApi; epoch: number; personId: string; salesCycleId: string; pending: boolean };
+type ReviewStatus = { attempt: ReviewAttempt; pending: boolean; error: string | null };
+type ReviewRegistration = { resolver: ReviewAdvanceResolver; active: boolean };
+
 type Selection = {
   personId: string;
   view: 'inspector' | 'page';
@@ -69,6 +73,10 @@ export function LeadInspectorProvider({
   });
   const selectionRef = useRef(selection);
   const selectionEpoch = useRef(0);
+  const reviewAttempt = useRef<ReviewAttempt | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<ReviewStatus | null>(null);
+  const focusOrigin = useRef<HTMLElement | null>(null);
+  const boundaryReturnFocus = useRef<(() => HTMLElement | null) | null>(null);
   const apiRef = useRef(api);
   apiRef.current = api;
   const preparationRecords = useMemo(() => new Map<string, ContactPreparationRecord>(), [api, discoveryApi]);
@@ -98,7 +106,7 @@ export function LeadInspectorProvider({
   detailStateRef.current = detailState;
   // The visible list's next-lead resolver; a ref so registering never
   // re-renders the whole app.
-  const reviewAdvanceRef = useRef<ReviewAdvanceResolver | null>(null);
+  const reviewAdvanceRef = useRef<ReviewRegistration | null>(null);
 
   const fetchDetail = useCallback(
     (personId: string, preserveView = false) => {
@@ -136,7 +144,12 @@ export function LeadInspectorProvider({
 
   const openWith = useCallback(
     (personId: string, view: Selection['view'], forceRefresh = false) => {
-      if (selectionRef.current?.personId !== personId || selectionRef.current?.view !== view || forceRefresh) selectionEpoch.current++;
+      boundaryReturnFocus.current = null;
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && !active.closest('.lead-inspector, .lead-full-page')) focusOrigin.current = active;
+      if (selectionRef.current?.personId !== personId || selectionRef.current?.view !== view || forceRefresh) {
+        selectionEpoch.current++; reviewAttempt.current = null; setReviewStatus(null);
+      }
       if (selectionRef.current?.personId !== personId) setManual(null);
       selectionRef.current = { personId, view };
       setSelection({ personId, view });
@@ -162,6 +175,7 @@ export function LeadInspectorProvider({
 
   const closeLead = useCallback(() => {
     selectionEpoch.current++;
+    reviewAttempt.current = null; setReviewStatus(null);
     requestSequence.current += 1;
     selectionRef.current = null;
     setSelection(null);
@@ -169,12 +183,14 @@ export function LeadInspectorProvider({
     setDetailState({ status: 'idle' });
   }, []);
 
-  const setReviewAdvance = useCallback(
-    (resolver: ReviewAdvanceResolver | null) => {
-      reviewAdvanceRef.current = resolver;
-    },
-    [],
-  );
+  const setReviewAdvance = useCallback((resolver: ReviewAdvanceResolver) => {
+    const entry: ReviewRegistration = { resolver, active: true };
+    reviewAdvanceRef.current = entry;
+    return () => {
+      entry.active = false;
+      if (reviewAdvanceRef.current === entry) reviewAdvanceRef.current = null;
+    };
+  }, []);
 
   const retry = useCallback(() => {
     setSelection((current) => {
@@ -240,31 +256,20 @@ export function LeadInspectorProvider({
     return () => window.removeEventListener('callie:email-sent', onEmailSent);
   }, [fetchDetail]);
 
-  /**
-   * After a review decision, keep the founder in flow: open the next lead in
-   * the active list's order, or close at (or without) a list end. Falls back
-   * to refetching the current person when no list registered a resolver.
-   */
-  const advanceAfterReview = useCallback(
-    (personId: string) => {
-      const resolver = reviewAdvanceRef.current;
-      if (resolver === null) {
-        refresh(personId);
-        return;
-      }
-      const nextPersonId = resolver(personId);
-      if (nextPersonId === null) {
-        closeLead();
-      } else {
-        setSelection((current) => {
-          const view = current?.view ?? 'inspector';
-          fetchDetail(nextPersonId);
-          return { personId: nextPersonId, view };
-        });
-      }
-    },
-    [closeLead, fetchDetail, refresh],
-  );
+  /** Apply only the resolver captured by this acknowledged, still-owned action. */
+  const advanceAfterReview = useCallback((personId: string, view: Selection['view'], entry: ReviewRegistration | null, dismiss: boolean) => {
+    if (!entry || !entry.active || reviewAdvanceRef.current !== entry) {
+      if (dismiss) closeLead(); else refresh(personId);
+      return;
+    }
+    const result = entry.resolver(personId);
+    if (result.kind === 'next') openWith(result.personId, view, true);
+    else {
+      // The departing child will not render again. Its retained callback reads this ref during cleanup.
+      boundaryReturnFocus.current = result.returnFocus;
+      closeLead();
+    }
+  }, [closeLead, openWith, refresh]);
 
   const beginOutbound = useCallback(async (request: BeginOutboundRequest): Promise<OutboundReceipt> => {
     const previous = outboundRef.current[request.personId];
@@ -312,43 +317,64 @@ export function LeadInspectorProvider({
     openFullPage(personId);
   }, [openFullPage]);
 
+  /** The void review UI consumes failures here, never in the non-review transition contract. */
+  const runReview = useCallback(async (personId: string, salesCycleId: string, dismiss: boolean, invoke: () => Promise<MutationReceipt>) => {
+    const selection = selectionRef.current;
+    if (!mounted.current || apiRef.current !== api || !selection || selection.personId !== personId
+      || lastDetails.current.get(personId)?.salesCycleId !== salesCycleId) return;
+    const epoch = selectionEpoch.current;
+    const previous = reviewAttempt.current;
+    if (previous?.pending && previous.api === api && previous.epoch === epoch && previous.personId === personId && previous.salesCycleId === salesCycleId) return;
+    const attempt: ReviewAttempt = { api, epoch, personId, salesCycleId, pending: true };
+    const entry = reviewAdvanceRef.current;
+    reviewAttempt.current = attempt; // Fence same-turn clicks before invoking the transport.
+    setReviewStatus({ attempt, pending: true, error: null });
+    const owns = () => mounted.current && apiRef.current === api && reviewAttempt.current === attempt
+      && selectionEpoch.current === epoch && selectionRef.current?.personId === personId
+      && lastDetails.current.get(personId)?.salesCycleId === salesCycleId;
+    try {
+      const receipt = mutationReceiptSchema.parse(await invoke());
+      if (receipt.affectedPersonIds.length !== 1 || receipt.affectedPersonIds[0] !== personId
+        || receipt.affectedSalesCycleIds.length !== 1 || receipt.affectedSalesCycleIds[0] !== salesCycleId) {
+        throw new Error('Review receipt owner mismatch');
+      }
+    }
+    catch {
+      attempt.pending = false;
+      if (owns()) setReviewStatus({ attempt, pending: false, error: 'Decision not confirmed. Your selection is unchanged.' });
+      return;
+    }
+    if (!owns()) { attempt.pending = false; return; }
+    // Once acknowledged, navigation/read problems must not be presented as an unconfirmed write.
+    let error: string | null = null;
+    try { advanceAfterReview(personId, selection.view, entry, dismiss); }
+    catch { error = 'Decision saved. Follow-up could not be completed.'; }
+    attempt.pending = false;
+    if (owns()) setReviewStatus({ attempt, pending: false, error });
+  }, [api, advanceAfterReview]);
+
   const confirmTransition = useCallback(
     async (request: ConfirmTransitionRequest) => {
-      const owner = selectionRef.current?.personId;
-      const selected = owner === undefined ? undefined : lastDetails.current.get(owner);
-      if (selected === undefined || selected.salesCycleId !== request.salesCycleId) throw new Error('Selection changed');
-      await api.confirmTransition(request);
-      if (!mounted.current || selectionRef.current?.personId !== owner
-        || lastDetails.current.get(owner)?.salesCycleId !== request.salesCycleId) return;
+      const selection = selectionRef.current;
+      const owner = selection?.personId;
       if (request.transition === 'review_to_ready') {
-        // Mark ready is part of the review burn-down: advance to the next
-        // lead instead of leaving the founder staring at the same one.
-        advanceAfterReview(owner);
+        if (owner !== undefined) await runReview(owner, request.salesCycleId, false, () => api.confirmTransition(request));
         return;
       }
-      fetchDetail(owner);
+      const selected = owner === undefined ? undefined : lastDetails.current.get(owner);
+      if (!selection || !selected || selected.salesCycleId !== request.salesCycleId) throw new Error('Selection changed');
+      const epoch = selectionEpoch.current;
+      await api.confirmTransition(request);
+      if (!mounted.current || apiRef.current !== api || selectionEpoch.current !== epoch || selectionRef.current?.personId !== owner
+        || lastDetails.current.get(owner!)?.salesCycleId !== request.salesCycleId) return;
+      fetchDetail(owner!);
     },
-    [advanceAfterReview, api, fetchDetail],
+    [runReview, api, fetchDetail],
   );
 
-  const dismissLead = useCallback(
-    async (request: DismissLeadRequest) => {
-      if (selectionRef.current?.personId !== request.personId
-        || lastDetails.current.get(request.personId)?.salesCycleId !== request.salesCycleId) throw new Error('Selection changed');
-      await api.dismissLead(request);
-      if (!mounted.current || selectionRef.current?.personId !== request.personId
-        || lastDetails.current.get(request.personId)?.salesCycleId !== request.salesCycleId) return;
-      const resolver = reviewAdvanceRef.current;
-      if (resolver === null) {
-        // The dismissed lead left the actionable list; keeping its stale
-        // detail open would mislead, so close instead of refetching.
-        closeLead();
-        return;
-      }
-      advanceAfterReview(request.personId);
-    },
-    [advanceAfterReview, api, closeLead],
-  );
+  const dismissLead = useCallback((request: DismissLeadRequest) =>
+    runReview(request.personId, request.salesCycleId, true, () => api.dismissLead(request)),
+  [runReview, api]);
 
   const overrideCloudScore = useCallback(
     async (request: CloudScoreOverrideRequest) => {
@@ -453,6 +479,10 @@ export function LeadInspectorProvider({
     pastActivityControls: pastActivityApi === undefined || currentDetail === undefined ? undefined : <PastActivityControls
       key={`${personId}:${currentDetail.salesCycleId}`} detail={currentDetail} api={pastActivityApi} onSaved={() => refresh(currentDetail.personId)} />,
   };
+  const visibleReviewStatus = reviewStatus !== null && reviewStatus.attempt === reviewAttempt.current
+    && reviewStatus.attempt.api === api && reviewStatus.attempt.epoch === selectionEpoch.current
+    && reviewStatus.attempt.personId === selection?.personId && reviewStatus.attempt.salesCycleId === currentDetail?.salesCycleId
+    ? reviewStatus : null;
   return (
     <LeadInspectorContext.Provider value={handle}>
       {children}
@@ -461,7 +491,10 @@ export function LeadInspectorProvider({
           {...outboundPresentation}
           {...discoveryPresentation}
           state={detailState}
+          reviewPending={visibleReviewStatus?.pending ?? false}
+          reviewError={visibleReviewStatus?.error ?? null}
           onClose={closeLead}
+          returnFocus={() => boundaryReturnFocus.current?.() ?? focusOrigin.current}
           onRetry={retry}
           onOpenFullPage={openFullPage}
           onBeginOutbound={beginOutbound}
@@ -477,6 +510,8 @@ export function LeadInspectorProvider({
           {...discoveryPresentation}
           outboundCommandId={manual?.personId === personId && manual?.cycleId === currentDetail?.salesCycleId ? manual.commandId : undefined}
           state={detailState}
+          reviewPending={visibleReviewStatus?.pending ?? false}
+          reviewError={visibleReviewStatus?.error ?? null}
           onRetry={retry}
           onBeginOutbound={beginOutbound}
           onConfirmTransition={confirmTransition}
@@ -486,6 +521,7 @@ export function LeadInspectorProvider({
           outcomeApi={outcomeApi}
           onOutcomeSaved={(next) => { if (selectionRef.current?.personId === personId) handleOutcomeSaved(next); }}
           onClose={closeLead}
+          returnFocus={() => boundaryReturnFocus.current?.() ?? focusOrigin.current}
         />
       )}
     </LeadInspectorContext.Provider>
@@ -549,20 +585,27 @@ function PastActivityControls({ detail, api, onSaved }: { detail: LeadDetail; ap
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const pending = useRef(false);
+  const generation = useRef(0);
   const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => { mounted.current = true; generation.current++; return () => { mounted.current = false; generation.current++; }; }, [detail.personId, detail.salesCycleId, api]);
   return <section aria-label="Past communication evidence">
     <Button variant="quiet" disabled={busy} onClick={() => setOpen(true)}>Log dated past activity</Button>
     {message !== null && <p role="status">{message}</p>}
-    {open && <LogPastActivityDialog item={detail} busy={busy} onClose={() => setOpen(false)} onSubmit={request => {
-      if (pending.current || request.personId !== detail.personId || request.salesCycleId !== detail.salesCycleId) return;
-      pending.current = true; setBusy(true); setOpen(false); setMessage(null);
-      void api.logPastActivity(request).then(() => {
-        if (!mounted.current) return;
+    {open && <LogPastActivityDialog item={detail} busy={busy} onClose={() => setOpen(false)} onSubmit={async request => {
+      if (pending.current || !mounted.current || request.personId !== detail.personId || request.salesCycleId !== detail.salesCycleId) throw new Error('Past activity unavailable');
+      const current = generation.current;
+      const isCurrent = () => mounted.current && current === generation.current;
+      pending.current = true; setBusy(true); setMessage(null);
+      try { await api.logPastActivity(request); }
+      catch (error) {
+        if (isCurrent()) setMessage('Past activity response unavailable. Check Activity before logging it again.');
+        throw error;
+      } finally { if (isCurrent()) { pending.current = false; setBusy(false); } }
+      if (isCurrent()) {
+        setOpen(false);
         setMessage('Past activity saved. In Activity, select the actual price-stated evidence and separately confirm Offered. If the event is outside recent history, do not guess its ID.');
         onSaved();
-      }, () => { if (mounted.current) setMessage('Past activity response unavailable. Check Activity before logging it again.'); })
-        .finally(() => { pending.current = false; if (mounted.current) setBusy(false); });
+      }
     }} />}
   </section>;
 }

@@ -2,21 +2,27 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { StrictMode } from 'react';
 
+import { openImportScript } from '../../main/applicationMenu';
 import { discoveryBriefSchema, discoverySnapshotSchema, type DiscoveryApi } from '../../shared/contracts/discoveryContract';
+import type { ReviewSnapshot } from '../../shared/contracts/reviewContract';
 import type { PipelineSnapshot } from '../../shared/contracts/pipelineContract';
 import type { TodaySnapshot } from '../../shared/contracts/todayContract';
 import type { LeadDetail } from '../../shared/contracts/leadDetailContract';
 import type { CalliePreloadApi } from '../../shared/preload';
+import type { AppHealth } from '../../shared/healthContract';
+import { dailyFixture, localSnapshot, commitments, fixtureNow } from '../features/today/nativeDesk.fixture';
 import type { FoundationHealth } from '../foundation/useFoundationHealth';
 import { FounderApp, type FounderAppProps } from './FounderApp';
 import { useTheme } from './useTheme';
 import { useDensity } from './useDensity';
+import { PresentationRoot } from './PresentationRoot';
 
 function FounderAppHarness(props: Omit<FounderAppProps, 'theme' | 'density'>) {
   const theme = useTheme();
   const density = useDensity();
-  return <FounderApp {...props} theme={theme} density={density} />;
+  return <PresentationRoot><FounderApp {...props} theme={theme} density={density} /></PresentationRoot>;
 }
 
 const detail: LeadDetail = {
@@ -110,11 +116,7 @@ const pipelineSnapshot: PipelineSnapshot = {
   revision: 0,
 };
 
-const emptyReview = {
-  items: [] as never[],
-  totalOpenCount: 0,
-  revision: 0,
-};
+const emptyReview = reliabilityOwnerSnapshot(0);
 
 const preparedBrief = discoveryBriefSchema.parse({
   personId: 'person-kevin', salesCycleId: 'cycle-kevin', personName: 'Kevin Shin', stale: false, latestOverride: null, pilotNextStep: null,
@@ -131,7 +133,25 @@ function fakeCallieApi(): CalliePreloadApi {
   const pending = vi.fn(() => new Promise<never>(() => undefined));
   return {
     discovery: discoveryApi(),
-    health: { get: vi.fn(async () => ({}) as never) },
+    health: { get: vi.fn(async () => healthValue) },
+    daily: { get: vi.fn(async () => ({ ...dailyFixture(), workflowMode: 'legacy' as const })) },
+    localWorkspace: {
+      get: vi.fn(async () => localSnapshot({ workflowMode: 'legacy' })),
+      getCommitments: vi.fn(async () => commitments()),
+      reviewCompany: pending, createCompany: pending, getCompanyCreateStatus: pending, transition: pending,
+    },
+    delegation: {
+      status: vi.fn(async () => ({ state: 'unconfigured' as const, workspaceId: null, endpoint: null, configuration: null })),
+      policyImport: { selectAndPreview: pending, confirm: pending, resume: pending, status: pending },
+      prepareRequestedFollowup: pending, getRequestedFollowup: pending, editRequestedFollowup: pending, approveRequestedFollowup: pending,
+      beginPhone: pending, bootstrap: pending, configurePolicy: pending, configureResearch: pending, pair: pending, configure: pending, submit: pending, sync: pending,
+    },
+    linkedin: { prepare: pending, get: pending, recover: pending, save: pending, begin: pending, open: pending, copy: pending, reportOutcome: pending },
+    phoneSetup: { status: pending, confirm: pending, clear: pending },
+    outreach: {
+      status: vi.fn(async () => ({ model: 'unconfigured' as const, modelName: '', gmail: 'unconfigured' as const, accountEmail: null, senderName: '', postalAddress: '' })),
+      configure: pending, connectGmail: pending, disconnectGmail: pending, openDraft: pending, saveDraft: pending, generateDraft: pending, sendDraft: pending,
+    },
     leads: {
       list: vi.fn(async () => ({
         rows: [], nextCursor: null, total: 0, revision: 0,
@@ -145,6 +165,8 @@ function fakeCallieApi(): CalliePreloadApi {
       getOutboundCapabilities: pending,
       confirmTransition: vi.fn<CalliePreloadApi['leadDetail']['confirmTransition']>(() => new Promise(() => undefined)),
       findContactInfo: vi.fn<CalliePreloadApi['leadDetail']['findContactInfo']>(() => new Promise(() => undefined)),
+      dismissLead: pending,
+      overrideCloudScore: pending,
     },
     today: {
       get: vi.fn(async () => todaySnapshot),
@@ -152,9 +174,10 @@ function fakeCallieApi(): CalliePreloadApi {
       snooze: pending,
       pin: pending,
       logPastActivity: vi.fn<CalliePreloadApi['today']['logPastActivity']>(() => new Promise(() => undefined)),
+      getLeadTriageSnapshot: pending, addLeadNote: pending, logCallOutcome: pending, markActivityInError: pending, getTriageQueue: pending, setReviewPosition: pending,
     },
     pipeline: { get: vi.fn(async () => pipelineSnapshot) },
-    review: { list: vi.fn(async () => emptyReview), resolve: pending },
+    review: { list: vi.fn(async () => emptyReview), resolve: vi.fn(() => new Promise<never>(() => undefined)) },
     friday: {
       getCurrent: pending,
       getDrilldown: pending,
@@ -183,14 +206,24 @@ function fakeCallieApi(): CalliePreloadApi {
       addEvidence: pending,
       updateStatus: pending,
     },
-    sourcing: { pollNow: pending, status: pending },
-    appleSpike: {} as never,
-  } as unknown as CalliePreloadApi;
+    sourcing: { pollNow: pending, status: pending, retry: pending, setHmacSalt: pending },
+    shell: { revealDatabase: pending, revealLogDirectory: pending },
+    recovery: { status: pending, beginSetup: pending, saveSetupMaterial: pending, completeSetup: pending, selectAndRunRestoreDrill: pending },
+    appleSpike: { getStatus: pending, probeCapabilities: pending, requestContacts: pending, promptAccessibility: pending, scanRecentNotes: pending, scanTestMessages: pending, startCallObservation: pending, stopCallObservation: pending, sendTestMessage: pending, subscribeObservationEvidence: pending },
+  };
 }
 
+const healthValue: AppHealth = {
+  appVersion: '1.0.0', schemaVersion: 24, databasePath: '/synthetic/foundation.sqlite3', databaseEncrypted: true,
+  cipherVersion: 'synthetic', fts5Available: true, pendingJobs: 0, interruptedJobsRecovered: 0,
+  domainStatus: 'ready', domainReady: true, domainBlockingViolationCount: 0, domainRepairableIssueCount: 0,
+  domainProjectionRefreshCandidateCount: 0, pendingProjectionRebuilds: 0, domainStartupEvaluatedAt: fixtureNow,
+  operationalStatus: 'ready', sourcing: { status: 'healthy', reasons: [], lastSuccessAgeMs: null,
+    state: { state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null, consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null, backlogCount: null } },
+};
 const readyHealth: FoundationHealth = {
   status: 'ready',
-  health: {} as never,
+  health: healthValue,
   retry: vi.fn(),
 };
 
@@ -217,14 +250,18 @@ afterEach(() => {
 describe('FounderApp', () => {
   it('defaults to the Today route inside the navigation shell', async () => {
     window.location.hash = '';
-    render(<FounderAppHarness api={fakeCallieApi()} health={readyHealth} />);
+    const api = fakeCallieApi();
+    render(<FounderAppHarness api={api} health={readyHealth} />);
 
     expect(screen.getByRole('navigation', { name: 'Primary' })).not.toBeNull();
     expect(
       screen.getByRole('link', { name: 'Today' }).getAttribute('aria-current'),
     ).toBe('page');
     expect(await screen.findByRole('button', { name: 'Kevin Shin' })).not.toBeNull();
-    expect(document.querySelector('[data-presentation]')).toBeNull();
+    expect(screen.getByTestId('today-route')).toBeTruthy();
+    expect(api.daily.get).toHaveBeenCalled();
+    expect(api.localWorkspace.get).toHaveBeenCalled();
+    expect(document.querySelectorAll('.presentation-root[data-presentation="native-a"]')).toHaveLength(1);
   });
 
   it('opens the same global inspector from Today and Pipeline routes', async () => {
@@ -258,6 +295,44 @@ describe('FounderApp', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Import leads' });
     expect(dialog.tagName).toBe('DIALOG');
     expect(dialog.hasAttribute('open')).toBe(true);
+  });
+
+  it('handles the native Import payload across navigation and repeated commands', async () => {
+    window.location.hash = '#/today';
+    const baseApi = fakeCallieApi();
+    const api: CalliePreloadApi = {
+      ...baseApi,
+      imports: {
+        ...baseApi.imports,
+        preview: vi.fn<CalliePreloadApi['imports']['preview']>(() => new Promise(() => undefined)),
+        commit: vi.fn<CalliePreloadApi['imports']['commit']>(() => new Promise(() => undefined)),
+      },
+    };
+    render(
+      <StrictMode>
+        <FounderAppHarness api={api} health={readyHealth} />
+      </StrictMode>,
+    );
+    await screen.findByRole('button', { name: 'Kevin Shin' });
+
+    await act(async () => { window.eval(openImportScript); });
+    const dialog = await screen.findByRole('dialog', { name: 'Import leads' });
+    await waitFor(() => expect(
+      screen.getByRole('link', { name: 'Leads' }).getAttribute('aria-current'),
+    ).toBe('page'));
+    expect(dialog.hasAttribute('open')).toBe(true);
+    expect(api.imports.preview).not.toHaveBeenCalled();
+    expect(api.imports.commit).not.toHaveBeenCalled();
+
+    await act(async () => { window.eval(openImportScript); });
+    expect(screen.getAllByRole('dialog', { name: 'Import leads' })).toHaveLength(1);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog', { name: 'Import leads' })).toBeNull();
+
+    await act(async () => { window.eval(openImportScript); });
+    expect(await screen.findByRole('dialog', { name: 'Import leads' })).toBeTruthy();
+    expect(api.imports.preview).not.toHaveBeenCalled();
+    expect(api.imports.commit).not.toHaveBeenCalled();
   });
 
   it('routes Conversations and Learnings to their live workspaces', async () => {
@@ -333,7 +408,7 @@ it('uses the required external appearance states and setters in Settings', async
   window.location.hash = '#/settings';
   const theme = { preference: 'dark' as const, resolvedTheme: 'dark' as const, setPreference: vi.fn() };
   const density = { density: 'compact' as const, setDensity: vi.fn() };
-  render(<FounderApp api={fakeCallieApi()} health={readyHealth} theme={theme} density={density} initialRoute="settings" />);
+  render(<PresentationRoot><FounderApp api={fakeCallieApi()} health={readyHealth} theme={theme} density={density} initialRoute="settings" /></PresentationRoot>);
   fireEvent.click(await screen.findByRole('button', { name: 'Appearance' }));
   const dark = screen.getByRole('button', { name: 'Dark appearance' });
   expect(dark.getAttribute('aria-pressed')).toBe('true');
@@ -347,9 +422,292 @@ it('preserves the global inspector node when external appearance states change',
   const api = fakeCallieApi();
   const theme = { preference: 'dark' as const, resolvedTheme: 'dark' as const, setPreference: vi.fn() };
   const density = { density: 'compact' as const, setDensity: vi.fn() };
-  const view = render(<FounderApp api={api} health={readyHealth} theme={theme} density={density} />);
+  const view = render(<PresentationRoot><FounderApp api={api} health={readyHealth} theme={theme} density={density} /></PresentationRoot>);
   fireEvent.click(await screen.findByRole('button', { name: 'Kevin Shin' }));
   const inspector = await screen.findByRole('complementary', { name: 'Kevin Shin details' });
-  view.rerender(<FounderApp api={api} health={readyHealth} theme={{ ...theme, preference: 'light', resolvedTheme: 'light' }} density={{ ...density, density: 'comfortable' }} />);
+  view.rerender(<PresentationRoot><FounderApp api={api} health={readyHealth} theme={{ ...theme, preference: 'light', resolvedTheme: 'light' }} density={{ ...density, density: 'comfortable' }} /></PresentationRoot>);
   expect(screen.getByRole('complementary', { name: 'Kevin Shin details' })).toBe(inspector);
+});
+
+function reliabilityOwnerSnapshot(count: number, limit = 1): ReviewSnapshot {
+  return {
+    items: Array.from({ length: Math.min(count, limit) }, (_, index) => ({
+      kind: 'unmatched_communication' as const, reviewId: `summary-review-${index}`,
+      channel: 'email' as const, handle: `summary-${index}@example.com`,
+      occurredAt: '2026-09-10T00:00:00.000Z', summary: `Fictional local review ${index}`,
+    })),
+    totalOpenCount: count, revision: count,
+    nextCursor: count > limit ? 'synthetic-summary-rest' : null,
+    matchedCount: count, countScope: 'lifecycle_review_items' as const,
+    observedAt: '2026-09-10T00:00:00.000Z',
+    queues: {
+      unmatched_communication: { source: 'lifecycle_review_items' as const, openCount: count },
+      system_error: { source: 'lifecycle_review_items' as const, openCount: 0 },
+      ambiguous_identity: { source: 'not_integrated' as const, openCount: null },
+      transcript_suggestion: { source: 'not_integrated' as const, openCount: null },
+      import_problem: { source: 'not_integrated' as const, openCount: null },
+      adapter_failure: { source: 'not_integrated' as const, openCount: null },
+    },
+  };
+}
+
+function reliabilityInboxLink() {
+  const more = screen.getByRole('button', { name: 'More workspaces' });
+  if (more.getAttribute('aria-expanded') !== 'true') fireEvent.click(more);
+  return within(screen.getByRole('navigation', { name: 'Primary' }))
+    .getByRole('link', { name: /Inbox/ });
+}
+
+function reliabilitySummaryEvidence(link: HTMLElement) {
+  return [link.textContent ?? '', link.getAttribute('aria-label') ?? '',
+    ...Array.from(link.querySelectorAll('[aria-label]'), node => node.getAttribute('aria-label') ?? ''),
+  ].join(' ');
+}
+
+describe('reliability: startup review observation owned above Inbox', () => {
+  it('shows 208 observed local reviews on Today before Inbox ever mounts', async () => {
+    const api = fakeCallieApi();
+    vi.mocked(api.review.list).mockResolvedValue(reliabilityOwnerSnapshot(208));
+    render(<StrictMode><FounderAppHarness api={api} health={readyHealth} /></StrictMode>);
+    const inbox = reliabilityInboxLink();
+    await waitFor(() => expect(reliabilitySummaryEvidence(inbox)).toMatch(/208 open local reviews/i));
+    expect(screen.getByRole('link', { name: 'Today' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.queryByRole('tablist', { name: 'Review queues' })).toBeNull();
+    expect(api.review.list).toHaveBeenCalledWith({ kinds: [], cursor: null, limit: 1 });
+    // Exact StrictMode mount count is intentionally not guessed in this RED.
+    for (const [request] of vi.mocked(api.review.list).mock.calls) {
+      expect(request).toEqual({ kinds: [], cursor: null, limit: 1 });
+    }
+    expect(api.review.resolve).not.toHaveBeenCalled();
+  });
+
+  it('exposes a pending observation instead of a checked zero', async () => {
+    const api = fakeCallieApi();
+    vi.mocked(api.review.list).mockImplementation(() => new Promise(() => undefined));
+    render(<FounderAppHarness api={api} health={readyHealth} />);
+    const inbox = reliabilityInboxLink();
+    await waitFor(() => expect(reliabilitySummaryEvidence(inbox)).toMatch(/loading|checking/i));
+    expect(reliabilitySummaryEvidence(inbox)).not.toMatch(/\b0\b/);
+    expect(api.review.resolve).not.toHaveBeenCalled();
+  });
+
+  it('reports an unavailable summary safely after an initial read rejection', async () => {
+    const api = fakeCallieApi();
+    vi.mocked(api.review.list).mockRejectedValue(new Error('PRIVATE_TOKEN /secret/workspace.sqlite'));
+    render(<FounderAppHarness api={api} health={readyHealth} />);
+    const inbox = reliabilityInboxLink();
+    await waitFor(() => expect(reliabilitySummaryEvidence(inbox)).toMatch(/unavailable|could not/i));
+    expect(reliabilitySummaryEvidence(inbox)).not.toMatch(/\b0\b/);
+    expect(screen.queryByText(/PRIVATE_TOKEN|secret\/workspace/)).toBeNull();
+    expect(api.review.resolve).not.toHaveBeenCalled();
+  });
+
+  it('marks a failed focus refresh unavailable instead of leaving an authoritative old count', async () => {
+    const api = fakeCallieApi();
+    vi.mocked(api.review.list).mockResolvedValue(reliabilityOwnerSnapshot(208));
+    render(<FounderAppHarness api={api} health={readyHealth} />);
+    const inbox = reliabilityInboxLink();
+    await waitFor(() => expect(reliabilitySummaryEvidence(inbox)).toMatch(/208 open local reviews/i));
+    vi.mocked(api.review.list).mockRejectedValue(new Error('private refresh failure'));
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    await waitFor(() => expect(reliabilitySummaryEvidence(inbox)).toMatch(/unavailable|could not/i));
+    expect(reliabilitySummaryEvidence(inbox)).not.toMatch(/208 open local reviews/i);
+    expect(screen.queryByText('private refresh failure')).toBeNull();
+  });
+
+
+});
+
+describe('reliability: exact summary lifecycle reads', () => {
+  it('deduplicates initial route entry, then reads once per route/focus but not Import opening', async () => {
+    const api = fakeCallieApi();
+    render(<FounderAppHarness api={api} health={readyHealth} />);
+    await waitFor(() => expect(api.review.list).toHaveBeenCalledTimes(1));
+    reliabilityInboxLink();
+    await act(async () => { fireEvent.click(screen.getByRole('link', { name: 'Leads' })); });
+    expect(api.review.list).toHaveBeenCalledTimes(2);
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    expect(api.review.list).toHaveBeenCalledTimes(3);
+    await act(async () => { window.dispatchEvent(new CustomEvent('callie:open-import')); });
+    expect(screen.getByRole('dialog', { name: 'Import leads' })).toBeTruthy();
+    expect(api.review.list).toHaveBeenCalledTimes(3);
+    for (const [request] of vi.mocked(api.review.list).mock.calls) {
+      expect(request).toEqual({ kinds: [], cursor: null, limit: 1 });
+    }
+    expect(api.review.resolve).not.toHaveBeenCalled();
+  });
+
+  it('refreshes summary and selected page after one successful resolution, retaining failed input', async () => {
+    const api = fakeCallieApi();
+    let remaining = 1;
+    let rejectFirst!: (error: Error) => void;
+    const first = new Promise<never>((_, reject) => { rejectFirst = reject; });
+    vi.mocked(api.review.list).mockImplementation(async request => reliabilityOwnerSnapshot(remaining, request.limit));
+    vi.mocked(api.review.resolve).mockReturnValueOnce(first).mockImplementationOnce(async () => {
+      remaining = 0;
+      return { revision: 2, affectedPersonIds: [], affectedSalesCycleIds: [] };
+    });
+    render(<FounderAppHarness api={api} health={readyHealth} initialRoute="inbox" />);
+    fireEvent.click(await screen.findByRole('button', { name: /summary-0@example.com/ }));
+    const evidence = screen.getByLabelText<HTMLInputElement>('Matched source event ID');
+    fireEvent.change(evidence, { target: { value: 'source-retained' } });
+    const promote = screen.getByRole('button', { name: 'Promote' });
+    await act(async () => { fireEvent.click(promote); fireEvent.click(promote); });
+    expect(api.review.resolve).toHaveBeenCalledTimes(1);
+    expect(evidence.closest('fieldset')?.disabled).toBe(true);
+    await act(async () => { rejectFirst(new Error('PRIVATE_DATABASE_PATH')); });
+    expect(evidence.value).toBe('source-retained');
+    expect(screen.queryByText(/PRIVATE_DATABASE_PATH/)).toBeNull();
+    expect(screen.getByRole('alert').textContent).toMatch(/input is kept/i);
+    await act(async () => { fireEvent.click(promote); });
+    expect(api.review.resolve).toHaveBeenCalledTimes(2);
+    const reads = vi.mocked(api.review.list).mock.calls.map(([request]) => request);
+    expect(reads.filter(request => request.limit === 1)).toEqual([
+      { kinds: [], cursor: null, limit: 1 }, { kinds: [], cursor: null, limit: 1 },
+    ]);
+    expect(reads.filter(request => request.limit === 200)).toEqual([
+      { kinds: ['unmatched_communication'], cursor: null, limit: 200 },
+      { kinds: ['unmatched_communication'], cursor: null, limit: 200 },
+    ]);
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Inbox · 0 open local reviews');
+  });
+
+  it('cannot publish an unmounted owner observation into a new healthy workspace', async () => {
+    const oldApi = fakeCallieApi();
+    let finish!: (snapshot: ReturnType<typeof reliabilityOwnerSnapshot>) => void;
+    vi.mocked(oldApi.review.list).mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const old = render(<FounderAppHarness api={oldApi} health={readyHealth} />);
+    await waitFor(() => expect(oldApi.review.list).toHaveBeenCalledTimes(1));
+    old.unmount();
+    const nextApi = fakeCallieApi();
+    vi.mocked(nextApi.review.list).mockResolvedValue(reliabilityOwnerSnapshot(7));
+    render(<FounderAppHarness api={nextApi} health={readyHealth} />);
+    const inbox = reliabilityInboxLink();
+    await waitFor(() => expect(reliabilitySummaryEvidence(inbox)).toMatch(/7 open local reviews/));
+    await act(async () => { finish(reliabilityOwnerSnapshot(208)); });
+    expect(reliabilitySummaryEvidence(inbox)).toMatch(/7 open local reviews/);
+    expect(reliabilitySummaryEvidence(inbox)).not.toMatch(/208/);
+  });
+});
+
+
+function orderingReads(api: ReturnType<typeof fakeCallieApi>) {
+  const reads: { input: Parameters<typeof api.review.list>[0];
+    resolve(snapshot: ReturnType<typeof reliabilityOwnerSnapshot>): void; reject(error: Error): void }[] = [];
+  vi.mocked(api.review.list).mockImplementation(input => new Promise((resolve, reject) => {
+    reads.push({ input, resolve, reject });
+  }));
+  return reads;
+}
+async function orderingSettle(read: ReturnType<typeof orderingReads>[number], count: number | 'fail') {
+  await act(async () => {
+    if (count === 'fail') read.reject(new Error('PRIVATE_ORDERING_FAILURE'));
+    else read.resolve(reliabilityOwnerSnapshot(count, read.input.limit));
+  });
+}
+function orderingLimits(reads: ReturnType<typeof orderingReads>) { return reads.map(read => read.input.limit); }
+
+describe('R2: request-start observation ownership through FounderApp', () => {
+  it.each(['page-first', 'summary-first', 'page-rejects'] as const)(
+    'child page starts before parent summary, %s cannot steal the badge', async order => {
+      const api = fakeCallieApi();
+      const reads = orderingReads(api);
+      render(<FounderAppHarness api={api} health={readyHealth} initialRoute="inbox" />);
+      const inbox = reliabilityInboxLink();
+      expect(orderingLimits(reads)).toEqual([200, 1]);
+      if (order === 'page-first') {
+        await orderingSettle(reads[0]!, 208);
+        expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Inbox · 208 open local reviews');
+        expect(reliabilitySummaryEvidence(inbox)).toMatch(/checking|loading/i);
+        await orderingSettle(reads[1]!, 7);
+      } else {
+        await orderingSettle(reads[1]!, 7);
+        await orderingSettle(reads[0]!, order === 'page-rejects' ? 'fail' : 208);
+      }
+      expect(reliabilitySummaryEvidence(inbox)).toMatch(/7 open local reviews/i);
+      expect(reliabilitySummaryEvidence(inbox)).not.toMatch(/208 open local reviews/i);
+      if (order === 'page-rejects') expect(screen.getByRole('alert').textContent).toMatch(/could not load/i);
+      else expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Inbox · 208 open local reviews');
+      expect(screen.queryByText('PRIVATE_ORDERING_FAILURE')).toBeNull();
+      expect(orderingLimits(reads)).toEqual([200, 1]);
+    });
+  it.each([208, 'fail'] as const)('focus summary survives older tab page %s', async oldResult => {
+    const api = fakeCallieApi();
+    const reads = orderingReads(api);
+    render(<FounderAppHarness api={api} health={readyHealth} initialRoute="inbox" />);
+    const inbox = reliabilityInboxLink();
+    await orderingSettle(reads[0]!, 1);
+    await orderingSettle(reads[1]!, 1);
+    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: /System errors/ })); });
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    expect(orderingLimits(reads)).toEqual([200, 1, 200, 1]);
+    await orderingSettle(reads[3]!, 7);
+    await orderingSettle(reads[2]!, oldResult);
+    expect(reliabilitySummaryEvidence(inbox)).toMatch(/7 open local reviews/i);
+    expect(screen.queryByText('PRIVATE_ORDERING_FAILURE')).toBeNull();
+    expect(reads).toHaveLength(4);
+  });
+  it.each(['page-first', 'summary-first', 'page-fails'] as const)(
+    'successful resolve starts summary before reload and %s settles by start order', async order => {
+      const api = fakeCallieApi();
+      const reads = orderingReads(api);
+      vi.mocked(api.review.resolve).mockResolvedValue({ revision: 2, affectedPersonIds: [], affectedSalesCycleIds: [] });
+      render(<FounderAppHarness api={api} health={readyHealth} initialRoute="inbox" />);
+      const inbox = reliabilityInboxLink();
+      await orderingSettle(reads[0]!, 1);
+      await orderingSettle(reads[1]!, 1);
+      fireEvent.click(screen.getByRole('button', { name: /summary-0@example.com/ }));
+      fireEvent.change(screen.getByLabelText('Matched source event ID'), { target: { value: 'source-ordering' } });
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Promote' })); });
+      expect(orderingLimits(reads)).toEqual([200, 1, 1, 200]);
+      if (order === 'summary-first') {
+        await orderingSettle(reads[2]!, 208);
+        expect(reliabilitySummaryEvidence(inbox)).toMatch(/checking|loading/i);
+        await orderingSettle(reads[3]!, 0);
+      } else {
+        await orderingSettle(reads[3]!, order === 'page-fails' ? 'fail' : 0);
+        await orderingSettle(reads[2]!, order === 'page-fails' ? 208 : 'fail');
+      }
+      expect(reliabilitySummaryEvidence(inbox)).toMatch(order === 'page-fails' ? /unavailable|could not/i : /0 open local reviews/i);
+      expect(reliabilitySummaryEvidence(inbox)).not.toMatch(/208 open local reviews/i);
+      expect(api.review.resolve).toHaveBeenCalledTimes(1);
+      expect(reads).toHaveLength(4);
+      expect(screen.queryByText('PRIVATE_ORDERING_FAILURE')).toBeNull();
+    });
+  it.each(['page-first', 'summary-first', 'old-rejections'] as const)(
+    'StrictMode cleanup/replay preserves newest request with %s', async order => {
+      const api = fakeCallieApi();
+      const reads = orderingReads(api);
+      render(<StrictMode><FounderAppHarness api={api} health={readyHealth} initialRoute="inbox" /></StrictMode>);
+      const inbox = reliabilityInboxLink();
+      expect(orderingLimits(reads)).toEqual([200, 1, 200, 1]);
+      if (order === 'page-first') {
+        await orderingSettle(reads[2]!, 208);
+        expect(reliabilitySummaryEvidence(inbox)).toMatch(/checking|loading/i);
+        await orderingSettle(reads[3]!, 7);
+      } else {
+        await orderingSettle(reads[3]!, 7);
+        await orderingSettle(reads[2]!, order === 'old-rejections' ? 'fail' : 208);
+      }
+      await orderingSettle(reads[0]!, order === 'old-rejections' ? 'fail' : 999);
+      await orderingSettle(reads[1]!, order === 'old-rejections' ? 'fail' : 999);
+      expect(reliabilitySummaryEvidence(inbox)).toMatch(/7 open local reviews/i);
+      expect(reliabilitySummaryEvidence(inbox)).not.toMatch(/208|999/);
+      expect(reads).toHaveLength(4);
+      expect(screen.queryByText('PRIVATE_ORDERING_FAILURE')).toBeNull();
+    });
+  it.each([208, 'fail'] as const)('later route observation survives actually older startup %s', async older => {
+    const api = fakeCallieApi();
+    const reads = orderingReads(api);
+    render(<FounderAppHarness api={api} health={readyHealth} />);
+    const inbox = reliabilityInboxLink();
+    await act(async () => { fireEvent.click(inbox); });
+    expect(orderingLimits(reads)).toEqual([1, 200, 1]);
+    await orderingSettle(reads[2]!, 7);
+    await orderingSettle(reads[1]!, 7);
+    await orderingSettle(reads[0]!, older);
+    expect(reliabilitySummaryEvidence(inbox)).toMatch(/7 open local reviews/i);
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Inbox · 7 open local reviews');
+    expect(reads).toHaveLength(3);
+  });
 });

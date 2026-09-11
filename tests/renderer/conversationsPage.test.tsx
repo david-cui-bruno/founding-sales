@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, act, fireEvent, render as testingRender, screen, within } from '@testing-library/react';
 import axe from 'axe-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -13,6 +13,11 @@ import {
   ConversationsRoute,
   type ConversationsApi,
 } from '../../src/renderer/features/conversations/ConversationsRoute';
+
+import { PresentationRoot } from '../../src/renderer/app/PresentationRoot';
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });
 
 afterEach(() => {
   cleanup();
@@ -234,6 +239,63 @@ describe('ConversationsRoute', () => {
     expect(api.get).toHaveBeenCalledTimes(2);
     expect((api.list as ReturnType<typeof vi.fn>).mock.calls.length)
       .toBeGreaterThan(listCallsBefore);
+  });
+
+  it('holds transcript pending through close paths and retains verbatim text after rejection', async () => {
+    let reject!: (error: Error) => void;
+    const api = createApi({ attachTranscript: vi.fn(() => new Promise<MutationReceipt>((_, fail) => { reject = fail; })) });
+    await renderRoute(api);
+    const detail = await openCallDetail();
+    fireEvent.click(within(detail).getByRole('button', { name: 'Attach transcript' }));
+    const dialog = screen.getByRole('dialog');
+    const rawText = 'me:  hello  \nKevin: Yes';
+    fireEvent.change(within(dialog).getByLabelText('Transcript text'), { target: { value: rawText } });
+    const save = within(dialog).getByRole('button', { name: 'Attach' });
+    act(() => { save.click(); save.click(); });
+    expect(api.attachTranscript).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    fireEvent(dialog, new Event('cancel', { cancelable: true }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(screen.getByRole('dialog')).toBe(dialog);
+    await act(async () => { reject(new Error('private failure')); });
+    expect(within(dialog).getByRole('alert').textContent).toBe('Transcript attachment was not confirmed. Your text is still here. Check this conversation before attaching again.');
+    expect((within(dialog).getByLabelText('Transcript text') as HTMLTextAreaElement).value).toBe(rawText);
+    expect(dialog.tagName).toBe('DIALOG');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('keeps captured IDs while pending and never refreshes after unmount', async () => {
+    let resolve!: (value: MutationReceipt) => void;
+    const api = createApi({ attachTranscript: vi.fn(() => new Promise<MutationReceipt>(yes => { resolve = yes; })) });
+    const view = render(<ConversationsRoute api={api} onOpenLead={vi.fn()} />);
+    await screen.findByText('Kevin Landlord');
+    const detail = await openCallDetail();
+    fireEvent.click(within(detail).getByRole('button', { name: 'Attach transcript' }));
+    fireEvent.change(screen.getByLabelText('Transcript text'), { target: { value: 'me: original' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: /Maya Owner/ }));
+    expect(screen.getByRole('dialog')).toBe(dialog);
+    expect(api.attachTranscript).toHaveBeenCalledWith({ activityId: 'activity-call', personId: 'person-kevin', rawText: 'me: original' });
+    view.unmount();
+    await act(async () => resolve({ revision: 2, affectedPersonIds: ['person-kevin'], affectedSalesCycleIds: [] }));
+    expect(api.get).toHaveBeenCalledTimes(1);
+    expect(api.list).toHaveBeenCalledTimes(1);
+  });
+  it('does not reinterpret an accepted transcript receipt when refresh fails', async () => {
+    const api = createApi();
+    await renderRoute(api);
+    const detail = await openCallDetail();
+    api.get = vi.fn(async () => { throw new Error('refresh failed'); });
+    api.list = vi.fn(async () => { throw new Error('refresh failed'); });
+    fireEvent.click(within(detail).getByRole('button', { name: 'Attach transcript' }));
+    fireEvent.change(screen.getByLabelText('Transcript text'), { target: { value: 'me: accepted text' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }));
+    await act(async () => {});
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.attachTranscript).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/attachment was not confirmed/)).toBeNull();
   });
 
   it('surfaces an attach rejection inside the dialog', async () => {

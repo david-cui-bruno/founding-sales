@@ -76,7 +76,7 @@ export function TodayRoute(props: TodayRouteProps) {
   const inspector = useLeadInspectorIfAvailable();
   if (props.workspaceApi) return <NativeDeskRoute api={props.workspaceApi}
     onOpenLead={props.onOpenLeadPage ?? inspector?.openFullPage ?? props.onOpenLead}
-    legacy={<LegacyTodayRoute {...props} />} />;
+    renderLegacy={readHeld => <LegacyTodayRoute {...props} readHeld={readHeld} />} />;
   return <LegacyTodayRoute {...props} />;
 }
 
@@ -85,11 +85,21 @@ function LegacyTodayRoute({
   discoveryApi,
   onOpenLead,
   onOpenLeadPage,
-}: TodayRouteProps) {
+  readHeld = false,
+}: TodayRouteProps & { readHeld?: boolean }) {
   const [state, setState] = useState<TodayRouteState>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
   const [commandFailed, setCommandFailed] = useState(false);
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const queueReadReady = useRef(false);
+  const parentReadHeld = useRef(readHeld);
+  parentReadHeld.current = readHeld;
   const requestSequence = useRef(0);
+  const commandGeneration = useRef(0);
+  useEffect(() => {
+    commandGeneration.current++;
+    return () => { commandGeneration.current++; };
+  }, [api]);
   const inspector = useLeadInspectorIfAvailable();
 
   const load = useCallback(() => {
@@ -99,12 +109,17 @@ function LegacyTodayRoute({
       .get()
       .then((snapshot) => {
         if (requestSequence.current === requestId) {
+          queueReadReady.current = true;
+          setRefreshFailed(false);
           setState({ kind: 'ready', snapshot });
         }
       })
       .catch(() => {
         if (requestSequence.current === requestId) {
-          setState({ kind: 'error' });
+          queueReadReady.current = false;
+          setRefreshFailed(true);
+          // A failed read is not a form close or a mutation result.
+          setState(previous => previous.kind === 'ready' ? previous : { kind: 'error' });
         }
       });
   }, [api]);
@@ -130,19 +145,17 @@ function LegacyTodayRoute({
   }, [load]);
 
   const runCommand = useCallback(
-    (command: () => Promise<unknown>, after?: () => void) => {
+    async (command: () => Promise<unknown>, after?: () => void): Promise<void> => {
+      // Retaining the displayed snapshot must not authorize new stale-queue writes.
+      if (!queueReadReady.current || parentReadHeld.current) throw new Error('Refresh Today before issuing another command.');
+      const current = commandGeneration.current;
       setBusy(true);
       setCommandFailed(false);
-      command()
-        .then(() => {
-          setBusy(false);
-          load();
-          after?.();
-        })
-        .catch(() => {
-          setBusy(false);
-          setCommandFailed(true);
-        });
+      try { await command(); }
+      catch (error) { if (current === commandGeneration.current) setCommandFailed(true); throw error; }
+      finally { if (current === commandGeneration.current) setBusy(false); }
+      // A refresh is a read, not a second interpretation of the accepted receipt.
+      if (current === commandGeneration.current) { load(); after?.(); }
     },
     [load],
   );
@@ -151,7 +164,7 @@ function LegacyTodayRoute({
     (item: TodayItem, resurfaceAt: string) =>
       runCommand(() =>
         api.snooze({ salesCycleId: item.salesCycleId, resurfaceAt }),
-      ),
+      ).catch((): void => undefined),
     [api, runCommand],
   );
 
@@ -162,7 +175,7 @@ function LegacyTodayRoute({
           salesCycleId: item.salesCycleId,
           resurfaceAt: skipTodayResurfaceAt(),
         }),
-      ),
+      ).catch((): void => undefined),
     [api, runCommand],
   );
 
@@ -199,10 +212,18 @@ function LegacyTodayRoute({
         </time>
       </header>
       {snapshot !== null && <details className="today-header__progress"><summary>Queue capacity</summary><DialMeter snapshot={snapshot} /></details>}
+      {readHeld && <p role="status">Queue commands are held while the workspace read is pending or unavailable. Your existing input and pending result are retained.</p>}
       {commandFailed && (
         <div className="today-route__command-error" role="alert">
-          The command could not be applied. Try again.
+          The command result was not confirmed. Check the current record before submitting again.
         </div>
+      )}
+      {refreshFailed && snapshot !== null && (
+        <ErrorState
+          title="Today could not refresh"
+          description="The last loaded queue and your input are still here. Pending commands have not been retried. Refresh successfully before issuing another queue command."
+          onRetry={load}
+        />
       )}
       {state.kind === 'loading' && <ProgressBarThin label="Loading today" />}
       {state.kind === 'error' && (

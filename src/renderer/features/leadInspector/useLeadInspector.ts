@@ -34,12 +34,11 @@ export type LeadDetailState =
   | { status: 'error' }
   | { status: 'ready'; detail: LeadDetail };
 
-/**
- * How a list route hands the inspector its current ordering: given the person
- * just reviewed, return the next person to open, or null at the end. The
- * resolver may also refresh its own list.
- */
-export type ReviewAdvanceResolver = (personId: string) => string | null;
+/** A loaded boundary is an explicit return to the list, never proof of completion. */
+export type ReviewAdvanceResult =
+  | { kind: 'next'; personId: string }
+  | { kind: 'return_to_list'; returnFocus: () => HTMLElement | null };
+export type ReviewAdvanceResolver = (personId: string) => ReviewAdvanceResult;
 
 export type LeadInspectorHandle = {
   /** Replaces the current selection; the app never stacks inspectors. */
@@ -49,11 +48,11 @@ export type LeadInspectorHandle = {
   closeLead(): void;
   selectedPersonId: string | null;
   /**
-   * Registers (or clears with null) the active list's next-lead resolver so
-   * Mark ready / Dismiss can keep the founder in flow. Last writer wins:
+   * Registers the active list's next-lead resolver so
+   * Mark ready / Dismiss can keep the founder in flow. Disposal is token-owned:
    * only the route that owns the visible list should register.
    */
-  setReviewAdvance(resolver: ReviewAdvanceResolver | null): void;
+  setReviewAdvance(resolver: ReviewAdvanceResolver): () => void;
 };
 
 export const LeadInspectorContext = createContext<LeadInspectorHandle | null>(
@@ -96,3 +95,6 @@ export type DiscoveryPresentation = {
   discoveryEvidence?: ReactNode;
   pastActivityControls?: ReactNode;
 };
+
+/** Review decision status is separate from outbound and discovery authority. */
+export type ReviewPresentation = { reviewPending?: boolean; reviewError?: string | null };

@@ -96,7 +96,7 @@ const pendingWorkflowApis = () => {
       logPastActivity: pending,
     },
     pipeline: { get: pending },
-    review: { list: pending, resolve: pending },
+    review: { list: vi.fn(() => new Promise<never>(() => undefined)), resolve: pending },
     friday: {
       getCurrent: pending,
       getDrilldown: pending,
@@ -261,7 +261,7 @@ describe('startup appearance before workspace readiness', () => {
     });
     expect(observations[0]).toEqual([resolved, density]);
     expect(screen.getByText('Checking local foundation…')).toBeTruthy();
-    expect(view.container.querySelector('.startup-presentation')?.getAttribute('data-presentation')).toBe('native-a');
+    expect(view.container.querySelector('.presentation-root')?.getAttribute('data-presentation')).toBe('native-a');
     expect(view.container.querySelector('[data-workflow-mode]')).toBeNull();
     expect(screen.queryByRole('navigation')).toBeNull();
     expect(window.callie.today.get).not.toHaveBeenCalled();
@@ -276,17 +276,27 @@ describe('startup appearance before workspace readiness', () => {
     const retry = deferred<AppHealth>();
     const get = vi.fn().mockReturnValueOnce(failed.promise).mockReturnValueOnce(failed.promise).mockReturnValue(retry.promise);
     const view = renderApp(get);
+    const root = view.container.querySelector('.presentation-root');
+    expect(root).not.toBeNull();
     await act(async () => failed.reject(new Error('private path must not appear')));
     expect(screen.getByRole('alert').textContent).not.toContain('private path');
-    expect(view.container.querySelector('.startup-presentation')?.getAttribute('data-presentation')).toBe('native-a');
+    expect(view.container.querySelector('.presentation-root')).toBe(root);
+    expect(view.container.querySelector('.presentation-root')?.getAttribute('data-presentation')).toBe('native-a');
     expect(window.callie.today.get).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(view.container.querySelector('.presentation-root')).toBe(root);
     expect(screen.getByText('Checking local foundation…')).toBeTruthy();
     expect(document.documentElement.dataset.theme).toBe('dark');
     expect(document.documentElement.dataset.density).toBe('compact');
     await act(async () => retry.resolve(health));
     await screen.findByRole('navigation', { name: 'Primary' });
-    expect(view.container.querySelector('.startup-presentation')).toBeNull();
+    expect(view.container.querySelector('.presentation-root')).toBe(root);
+    expect(root?.contains(screen.getByRole('navigation', { name: 'Primary' }))).toBe(true);
+    expect(root?.hasAttribute('data-workflow-mode')).toBe(false);
+    const main = screen.getByRole('main');
+    expect(main.tabIndex).toBe(-1);
+    main.focus();
+    expect(document.activeElement).toBe(main);
     expect(document.documentElement.dataset.theme).toBe('dark');
     expect(document.documentElement.dataset.density).toBe('compact');
   });
@@ -328,4 +338,16 @@ it('keeps one live system listener through the health gate without extra reads',
   expect(get).toHaveBeenCalledTimes(2);
   view.unmount();
   expect(listeners.size).toBe(0);
+});
+
+
+it('does not observe review counts before the real foundation gate succeeds', async () => {
+  const ready = deferred<AppHealth>();
+  renderApp(vi.fn(() => ready.promise));
+  expect(window.callie.review.list).not.toHaveBeenCalled();
+  await act(async () => { window.dispatchEvent(new Event('focus')); });
+  expect(window.callie.review.list).not.toHaveBeenCalled();
+  await act(async () => { ready.resolve(health); });
+  await screen.findByRole('navigation', { name: 'Primary' });
+  expect(window.callie.review.list).toHaveBeenCalledWith({ kinds: [], cursor: null, limit: 1 });
 });

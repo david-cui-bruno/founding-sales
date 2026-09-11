@@ -4,6 +4,7 @@ import { chromium, type Browser } from 'playwright';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { PresentationRoot } from '../app/PresentationRoot';
 import { NavigationRail } from '../app/NavigationRail';
 import { Avatar } from '../components/Avatar';
 import { Button } from '../components/Button';
@@ -18,6 +19,7 @@ import { StatusPill } from '../components/StatusPill';
 const css = ['design/tokens.css', 'design/themes.css', 'design/base.css',
   'design/motion.css', 'app/shell.css'].map((path) =>
   readFileSync(`src/renderer/${path}`, 'utf8')).join('\n');
+const presentationCss = readFileSync('src/renderer/app.css', 'utf8').replace(/@import[^;]+;/g, '');
 const inspectorCss = readFileSync('src/renderer/features/leadInspector/leadInspector.css', 'utf8');
 let browser: Browser;
 beforeAll(async () => { browser = await chromium.launch({ headless: true }); });
@@ -35,17 +37,17 @@ function contrast(a: string, b: string): number {
   return (high! + 0.05) / (low! + 0.05);
 }
 
-describe('Bauhaus shared rendered design', () => {
+describe('Shared Native rendered design', () => {
   it.each([
     ['light', 'no-preference'], ['dark', 'no-preference'], ['light', 'reduce'], ['dark', 'reduce'],
   ] as const)('keeps inspector identity and status readable throughout entry in %s with %s motion', async (theme, reducedMotion) => {
     const page = await browser.newPage({ reducedMotion });
     try {
-      await page.setContent(`<html data-theme="${theme}"><head><style>${css}\n${inspectorCss}</style></head><body>${renderToStaticMarkup(
-        <aside className="lead-inspector" aria-label="Maya Ortiz details"><div className="lead-inspector__body">
+      await page.setContent(`<html data-theme="${theme}"><head><style>${css}\n${presentationCss}\n${inspectorCss}</style></head><body>${renderToStaticMarkup(
+        <PresentationRoot><aside className="lead-inspector" aria-label="Maya Ortiz details"><div className="lead-inspector__body">
           <div className="lead-inspector__identity"><Avatar name="Maya Ortiz" /><h2>Maya Ortiz</h2></div>
           <StatusPill tone="neutral">Ready</StatusPill>
-        </div></aside>,
+        </div></aside></PresentationRoot>,
       )}</body></html>`);
       const result = await page.evaluate(() => {
         const inspector = document.querySelector<HTMLElement>('.lead-inspector')!;
@@ -93,9 +95,9 @@ describe('Bauhaus shared rendered design', () => {
   it.each(['light', 'dark'])('renders crisp geometry, legible semantics and native chrome in %s', async (theme) => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     try {
-      await page.setContent(`<html data-theme="${theme}"><head><style>${css}</style></head><body data-platform="darwin">${renderToStaticMarkup(
-        <div className="app-shell">
-          <NavigationRail route="inbox" onNavigate={() => undefined} reviewCount={3} />
+      await page.setContent(`<html data-theme="${theme}"><head><style>${css}\n${presentationCss}</style></head><body data-platform="darwin">${renderToStaticMarkup(
+        <PresentationRoot><div className="app-shell">
+          <NavigationRail route="inbox" onNavigate={() => undefined} reviewCount={{ status: 'ready', count: 3, observedAt: '2026-09-10T00:00:00.000Z' }} />
           <main className="app-shell__workspace"><Panel title="Your workspace">
             <p className="body-copy">Legible body and table typography</p>
             <Button>Take action</Button><Button variant="danger">Remove</Button>
@@ -108,11 +110,12 @@ describe('Bauhaus shared rendered design', () => {
               <StatusPill tone="danger">Needs attention</StatusPill>
             </div>
           </Panel></main>
-        </div>,
+        </div></PresentationRoot>,
       )}</body></html>`);
       const styles = await page.evaluate(() => {
+        document.querySelector('.nav-rail__more-toggle')!.setAttribute('aria-expanded', 'true');
         const style = (selector: string) => getComputedStyle(document.querySelector(selector)!);
-        const root = getComputedStyle(document.documentElement);
+        const root = getComputedStyle(document.querySelector('.presentation-root')!);
         const primary = style('.button--primary');
         const title = style('.panel__title');
         const panel = style('.panel');
@@ -136,7 +139,7 @@ describe('Bauhaus shared rendered design', () => {
             color: style(selector).color, background: style(selector).backgroundColor,
           })),
           nativeBottom: box('.nav-rail__native-controls').bottom,
-          brandTop: box('.nav-rail__brand').top,
+          brandTop: box('.nav-rail__brand-native').top,
         };
       });
       expect(contrast(styles.faint, styles.sunken)).toBeGreaterThanOrEqual(4.5);
@@ -148,8 +151,8 @@ describe('Bauhaus shared rendered design', () => {
           channel * alpha + background[i]! * (1 - alpha));
         expect(contrast(status.color, `rgb(${composite.join(', ')})`)).toBeGreaterThanOrEqual(4.5);
       }
-      expect(styles.font).toContain('Futura');
-      expect(styles.bodyFont).toContain('InterVariable');
+      expect(styles.font).toContain('-apple-system');
+      expect(styles.bodyFont).toContain('-apple-system');
       expect(styles.radius).toBe('2px');
       expect(styles.panelRadius).toBe('3px');
       expect(styles.blue).not.toBe('');
@@ -162,9 +165,9 @@ describe('Bauhaus shared rendered design', () => {
       expect(contrast(styles.actionText, styles.actionBackground)).toBeGreaterThanOrEqual(4.5);
       expect(contrast(styles.badgeText, styles.selectedBackground)).toBeGreaterThanOrEqual(4.5);
       if (theme === 'light') {
-        expect(styles.canvas).toBe('#f6f0df');
-        expect(styles.panelBackground).toBe('rgb(255, 250, 240)');
-        expect(styles.actionBackground).toBe('rgb(23, 72, 182)');
+        expect(styles.canvas).toBe('#e9edf2');
+        expect(styles.panelBackground).toBe('rgb(255, 255, 255)');
+        expect(styles.actionBackground).toBe('rgb(49, 87, 186)');
       } else {
         expect(styles.panelBackground).not.toBe('rgb(255, 250, 240)');
       }
@@ -176,11 +179,12 @@ describe('Bauhaus shared rendered design', () => {
   it.each(['light', 'dark'])('keeps nav labels readable during rapid route swaps with motion enabled in %s', async (theme) => {
     const page = await browser.newPage({ reducedMotion: 'no-preference' });
     try {
-      await page.setContent(`<html data-theme="${theme}"><head><style>${css}</style></head><body>${renderToStaticMarkup(
-        <NavigationRail route="today" onNavigate={() => undefined} reviewCount={3} />,
+      await page.setContent(`<html data-theme="${theme}"><head><style>${css}\n${presentationCss}</style></head><body>${renderToStaticMarkup(
+        <PresentationRoot><NavigationRail route="today" onNavigate={() => undefined} reviewCount={{ status: 'ready', count: 3, observedAt: '2026-09-10T00:00:00.000Z' }} /></PresentationRoot>,
       )}</body></html>`);
       const result = await page.evaluate(() => {
         const rail = document.querySelector('.nav-rail')!;
+        rail.querySelector('.nav-rail__more-toggle')!.setAttribute('aria-expanded', 'true');
         const links = Array.from(rail.querySelectorAll<HTMLAnchorElement>('a'));
         const canvas = document.createElement('canvas');
         canvas.width = canvas.height = 1;

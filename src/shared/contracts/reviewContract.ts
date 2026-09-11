@@ -18,13 +18,37 @@ export const reviewKindSchema = z.enum([
 
 export const reviewListRequestSchema = z.object({
   kinds: z.array(reviewKindSchema),
+  cursor: z.string().max(1024).nullable().optional(),
   limit: z.number().int().min(1).max(200),
 }).strict();
 
+const localQueueSchema = z.object({
+  source: z.literal('lifecycle_review_items'),
+  openCount: z.number().int().safe().nonnegative(),
+}).strict();
+const unavailableQueueSchema = z.object({
+  source: z.literal('not_integrated'), openCount: z.null(),
+}).strict();
+export const reviewQueueCountsSchema = z.object({
+  unmatched_communication: localQueueSchema,
+  ambiguous_identity: unavailableQueueSchema,
+  transcript_suggestion: unavailableQueueSchema,
+  import_problem: unavailableQueueSchema,
+  adapter_failure: unavailableQueueSchema,
+  system_error: localQueueSchema,
+}).strict();
+export type ReviewQueueAvailability = z.infer<typeof localQueueSchema> | z.infer<typeof unavailableQueueSchema>;
+export type ReviewQueueCounts = z.infer<typeof reviewQueueCountsSchema>;
+
 export const reviewSnapshotSchema = z.object({
   items: z.array(reviewItemSchema),
-  totalOpenCount: z.number().int().nonnegative(),
+  totalOpenCount: z.number().int().safe().nonnegative(),
   revision: z.number().int().nonnegative(),
+  nextCursor: z.string().max(1024).nullable(),
+  matchedCount: z.number().int().safe().nonnegative(),
+  queues: reviewQueueCountsSchema,
+  countScope: z.literal('lifecycle_review_items'),
+  observedAt: z.string().datetime({ offset: true }),
 }).strict();
 
 /** Only the valid resolution actions for each review kind. */

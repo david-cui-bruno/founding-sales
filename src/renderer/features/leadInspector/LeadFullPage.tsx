@@ -1,5 +1,6 @@
 import type { OutboundReceipt } from '../../../shared/contracts/outboundContract';
-import { useEffect } from 'react';
+import { useRef } from 'react';
+import { useDismissibleLayer } from '../../app/overlayLayers';
 
 import type {
   FindContactInfoReceipt,
@@ -16,9 +17,9 @@ import { LoadingState } from '../../components/LoadingState';
 import { CallOutcomeSection, type CallOutcomeApi } from './CallOutcomeSection';
 import { InspectorHeader } from './InspectorHeader';
 import { InspectorTabs } from './LeadInspector';
-import type { LeadDetailState, OutboundStatusPresentation, DiscoveryPresentation } from './useLeadInspector';
+import type { LeadDetailState, OutboundStatusPresentation, DiscoveryPresentation, ReviewPresentation } from './useLeadInspector';
 
-export type LeadFullPageProps = OutboundStatusPresentation & DiscoveryPresentation & {
+export type LeadFullPageProps = OutboundStatusPresentation & DiscoveryPresentation & ReviewPresentation & {
   state: LeadDetailState;
   onRetry(): void;
   onBeginOutbound(request: BeginOutboundRequest): Promise<OutboundReceipt>;
@@ -32,7 +33,8 @@ export type LeadFullPageProps = OutboundStatusPresentation & DiscoveryPresentati
   /** Save & next: the next queue lead, or null when the queue is done. */
   onOutcomeSaved?(nextPersonId: string | null): void;
   /** Escape returns to the queue without logging anything. */
-  onClose?(): void;
+  onClose(): void;
+  returnFocus?: () => HTMLElement | null;
 };
 
 /**
@@ -51,52 +53,23 @@ export function LeadFullPage({
   outcomeApi, outboundCommandId,
   onOutcomeSaved,
   onClose,
+  returnFocus,
   ...outboundPresentation
 }: LeadFullPageProps) {
-  useEffect(() => {
-    if (onClose === undefined) return undefined;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [onClose]);
-
-  if (state.status === 'loading') {
-    return (
-      <article className="lead-full-page">
-        {outboundPresentation.outboundStatus}
-        <LoadingState label="Loading lead details" />
-      </article>
-    );
-  }
-
-  if (state.status === 'error') {
-    return (
-      <article className="lead-full-page">
-        {outboundPresentation.outboundStatus}
-        <ErrorState
-          title="Couldn't load this lead"
-          description="The details were unavailable. Try again."
-          onRetry={onRetry}
-        />
-      </article>
-    );
-  }
-
-  if (state.status !== 'ready') {
-    return null;
-  }
+  const elementRef = useRef<HTMLElement>(null);
+  const layer = useDismissibleLayer({ open: true, kind: 'nonmodal', elementRef, canDismiss: () => true, onDismiss: onClose, returnFocus });
 
   return (
     <article
+      ref={elementRef}
       className="lead-full-page"
-      aria-label={`${state.detail.personName} full page`}
+      aria-label={state.status === 'ready' ? `${state.detail.personName} full page` : 'Lead details'}
     >
       {outboundPresentation.outboundStatus}
-      <InspectorHeader detail={state.detail} onClose={onClose} />
+      <InspectorHeader detail={state.status === 'ready' ? state.detail : null} onClose={() => { layer.requestDismiss('close-button'); }} />
+      {state.status === 'loading' && <LoadingState label="Loading lead details" />}
+      {state.status === 'error' && <ErrorState title="Couldn't load this lead" description="The details were unavailable. Try again." onRetry={onRetry} />}
+      {state.status === 'ready' && (
       <InspectorTabs
         activityTools={outcomeApi !== undefined && onOutcomeSaved !== undefined ? <CallOutcomeSection
           key={`${state.detail.personId}:${state.detail.salesCycleId}:${outboundCommandId ?? 'unlinked'}`}
@@ -110,6 +83,7 @@ export function LeadFullPage({
         onOverrideCloudScore={onOverrideCloudScore}
         onFindContactInfo={onFindContactInfo}
       />
+      )}
     </article>
   );
 }

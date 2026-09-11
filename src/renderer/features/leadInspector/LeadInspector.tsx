@@ -1,5 +1,6 @@
+import { useDismissibleLayer } from '../../app/overlayLayers';
 import type { OutboundReceipt } from '../../../shared/contracts/outboundContract';
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useId, useRef, useState, type ReactNode } from 'react';
 
 import type {
   FindContactInfoReceipt,
@@ -20,7 +21,7 @@ import { InspectorHeader } from './InspectorHeader';
 import { InspectorHistory } from './InspectorHistory';
 import { InspectorOverview } from './InspectorOverview';
 import { InspectorProperties } from './InspectorProperties';
-import type { LeadDetailState, OutboundStatusPresentation, DiscoveryPresentation } from './useLeadInspector';
+import type { LeadDetailState, OutboundStatusPresentation, DiscoveryPresentation, ReviewPresentation } from './useLeadInspector';
 import { useResizableInspector } from './useResizableInspector';
 
 const TABS = [
@@ -32,7 +33,7 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]['id'];
 
-export type InspectorTabsProps = OutboundStatusPresentation & DiscoveryPresentation & {
+export type InspectorTabsProps = OutboundStatusPresentation & DiscoveryPresentation & ReviewPresentation & {
   activityTools?: ReactNode;
   detail: LeadDetail;
   onBeginOutbound(request: BeginOutboundRequest): Promise<OutboundReceipt>;
@@ -159,9 +160,10 @@ export function InspectorTabs({
   );
 }
 
-export type LeadInspectorProps = OutboundStatusPresentation & DiscoveryPresentation & {
+export type LeadInspectorProps = OutboundStatusPresentation & DiscoveryPresentation & ReviewPresentation & {
   state: LeadDetailState;
   onClose(): void;
+  returnFocus?: () => HTMLElement | null;
   onRetry(): void;
   onOpenFullPage(personId: string): void;
   onBeginOutbound(request: BeginOutboundRequest): Promise<OutboundReceipt>;
@@ -178,6 +180,7 @@ export type LeadInspectorProps = OutboundStatusPresentation & DiscoveryPresentat
 export function LeadInspector({
   state,
   onClose,
+  returnFocus,
   onRetry,
   onOpenFullPage,
   onBeginOutbound,
@@ -189,16 +192,8 @@ export function LeadInspector({
 }: LeadInspectorProps) {
   const resize = useResizableInspector();
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [onClose]);
+  const elementRef = useRef<HTMLElement>(null);
+  const layer = useDismissibleLayer({ open: true, kind: 'nonmodal', elementRef, canDismiss: () => true, onDismiss: onClose, returnFocus });
 
   const label =
     state.status === 'ready'
@@ -207,6 +202,7 @@ export function LeadInspector({
 
   return (
     <aside
+      ref={elementRef}
       className="lead-inspector"
       aria-label={label}
       style={{ width: `${resize.width}px` }}
@@ -224,6 +220,11 @@ export function LeadInspector({
         onPointerDown={resize.onSeparatorPointerDown}
       />
       <div className="lead-inspector__body">
+        <InspectorHeader
+          detail={state.status === 'ready' ? state.detail : null}
+          onClose={() => { layer.requestDismiss('close-button'); }}
+          onOpenFullPage={state.status === 'ready' ? () => onOpenFullPage(state.detail.personId) : undefined}
+        />
         {outboundPresentation.outboundStatus}
         {state.status === 'loading' && (
           <LoadingState label="Loading lead details" />
@@ -237,11 +238,6 @@ export function LeadInspector({
         )}
         {state.status === 'ready' && (
           <>
-            <InspectorHeader
-              detail={state.detail}
-              onClose={onClose}
-              onOpenFullPage={() => onOpenFullPage(state.detail.personId)}
-            />
             <InspectorTabs
               {...outboundPresentation}
               key={state.detail.personId}

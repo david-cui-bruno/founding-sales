@@ -15,16 +15,18 @@ import type {
 } from '../../../shared/contracts/leadsContract';
 import {
   createLeadColumns,
-  type EditingCell,
+  InlineEditPanel,
   type LeadColumnMeta,
   type LeadsGridMeta,
 } from './leadColumns';
+import type { InlineEditor, LeadSaveResult } from './useLeadMutations';
 
 export type LeadsGridProps = {
   rows: LeadRow[];
   selectedPersonId: string | null;
   onSelect(personId: string): void;
-  onUpdateField(input: LeadFieldUpdateRequest): void;
+  editor: InlineEditor;
+  onUpdateField(input: LeadFieldUpdateRequest): Promise<LeadSaveResult>;
   onOpenLead?(personId: string): void;
   checkedPersonIds?: ReadonlySet<string>;
   onToggleChecked?(personId: string): void;
@@ -48,6 +50,7 @@ export function LeadsGrid({
   selectedPersonId,
   onSelect,
   onUpdateField,
+  editor,
   onOpenLead,
   checkedPersonIds,
   onToggleChecked,
@@ -56,16 +59,13 @@ export function LeadsGrid({
 }: LeadsGridProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
-  const [editing, setEditing] = useState<EditingCell | null>(null);
   // Roving focus: after a keyboard move, focus follows the newly selected row
   // once it exists in the (virtualized) DOM.
   const [pendingFocusId, setPendingFocusId] = useState<string | null>(null);
 
   const columns = useMemo(() => createLeadColumns(), []);
   const meta: LeadsGridMeta = {
-    editing,
-    startEdit: (cell) => setEditing(cell),
-    stopEdit: () => setEditing(null),
+    editor,
     onUpdateField,
     checkedPersonIds,
     onToggleChecked,
@@ -101,6 +101,7 @@ export function LeadsGrid({
   }, [pendingFocusId, selectedPersonId]);
 
   const moveSelection = (fromPersonId: string, delta: number) => {
+    if (editor.pending) return;
     const index = tableRows.findIndex((row) => row.id === fromPersonId);
     if (index === -1) {
       return;
@@ -114,6 +115,17 @@ export function LeadsGrid({
   };
 
   const onRowKeyDown = (event: KeyboardEvent, personId: string) => {
+    if (
+      event.target !== event.currentTarget ||
+      event.defaultPrevented ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey ||
+      event.nativeEvent.isComposing
+    ) {
+      return;
+    }
+
     switch (event.key) {
       case 'ArrowDown':
       case 'j':
@@ -128,6 +140,7 @@ export function LeadsGrid({
         moveSelection(personId, -1);
         break;
       case 'Enter':
+        if (editor.pending) return;
         event.preventDefault();
         onOpenLead?.(personId);
         break;
@@ -137,6 +150,7 @@ export function LeadsGrid({
   };
 
   return (
+    <>
     <div className="leads-grid" role="grid" aria-label="Leads" aria-rowcount={rows.length + 1}>
       <div className="leads-grid__scroll" ref={scrollRef}>
         <div className="leads-grid__head" role="row" aria-rowindex={1}>
@@ -213,6 +227,7 @@ export function LeadsGrid({
                   // A plain row click both selects and opens the inspector.
                   // Checkbox and inline-edit clicks stopPropagation upstream,
                   // so they stay select/edit-only.
+                  if (editor.pending) return;
                   onSelect(lead.personId);
                   onOpenLead?.(lead.personId);
                 }}
@@ -238,5 +253,8 @@ export function LeadsGrid({
         </div>
       </div>
     </div>
+    {editor.session && <InlineEditPanel editor={editor} onUpdateField={onUpdateField}
+      recovery={!virtualizer.getVirtualItems().some(item => tableRows[item.index]?.id === editor.session?.personId)} />}
+    </>
   );
 }

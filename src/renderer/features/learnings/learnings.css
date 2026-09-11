@@ -227,14 +227,8 @@
   resize: vertical;
 }
 
-.learnings__dialog-backdrop {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.learnings__dialog::backdrop {
   background: color-mix(in srgb, var(--canvas) 60%, transparent);
-  z-index: 10;
 }
 
 .learnings__dialog {

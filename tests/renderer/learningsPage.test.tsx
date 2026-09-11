@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import axe from 'axe-core';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, act, fireEvent, render as testingRender, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { MutationReceipt } from '../../src/shared/contracts/commonContract';
@@ -16,6 +16,11 @@ import {
   LearningsRoute,
   type LearningsApi,
 } from '../../src/renderer/features/learnings/LearningsRoute';
+
+import { PresentationRoot } from '../../src/renderer/app/PresentationRoot';
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });
 
 afterEach(() => {
   cleanup();
@@ -346,6 +351,34 @@ describe('CaptureLearningDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Capture learning' }));
     return screen.getByRole('dialog', { name: 'Capture learning' });
   }
+
+  it('holds capture pending, blocks same-turn duplicate save and retains every field on rejection', async () => {
+    let reject!: (error: Error) => void;
+    const api = makeApi();
+    api.capture = vi.fn(() => new Promise<MutationReceipt>((_, fail) => { reject = fail; }));
+    const dialog = await openDialog(api);
+    fireEvent.change(within(dialog).getByLabelText('Category'), { target: { value: 'objection' } });
+    fireEvent.change(within(dialog).getByLabelText('Statement'), { target: { value: 'Typed statement' } });
+    fireEvent.change(within(dialog).getByLabelText('Confidence'), { target: { value: 'high' } });
+    fireEvent.change(within(dialog).getByLabelText('Evidence quote 1'), { target: { value: 'First quote' } });
+    fireEvent.click(within(dialog).getByText('Add another evidence row'));
+    fireEvent.change(within(dialog).getByLabelText('Evidence quote 2'), { target: { value: 'Second quote' } });
+    const save = within(dialog).getByText('Save learning');
+    act(() => { save.click(); save.click(); });
+    expect(api.capture).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    fireEvent(dialog, new Event('cancel', { cancelable: true }));
+    fireEvent.click(within(dialog).getByText('Cancel'));
+    expect(screen.getByRole('dialog')).toBe(dialog);
+    await act(async () => { reject(new Error('private failure')); });
+    expect(within(dialog).getByRole('alert').textContent).toBe('Learning save was not confirmed. Your input is still here. Check Learnings before submitting again.');
+    for (const [label, value] of [['Category', 'objection'], ['Statement', 'Typed statement'], ['Confidence', 'high'], ['Evidence quote 1', 'First quote'], ['Evidence quote 2', 'Second quote']]) {
+      expect((within(dialog).getByLabelText(label) as HTMLInputElement).value).toBe(value);
+    }
+    expect(dialog.tagName).toBe('DIALOG');
+    fireEvent.click(within(dialog).getByText('Cancel'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
 
   it('submits a strict capture payload with evidence rows', async () => {
     const api = makeApi();

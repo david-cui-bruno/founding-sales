@@ -1,3 +1,4 @@
+import type { ReviewBadgeState } from './useReviewSummary';
 import type { ReactNode } from 'react';
 
 import { NavigationRail } from './NavigationRail';
@@ -6,7 +7,7 @@ import type { AppRoute } from './routes';
 export type AppShellProps = {
   route: AppRoute;
   onNavigate(route: AppRoute): void;
-  reviewCount: number;
+  reviewCount: ReviewBadgeState;
   children: ReactNode;
 };
 
@@ -32,7 +33,7 @@ export function AppShell({
         reviewCount={reviewCount}
       />
       <div className="app-shell__workspace">
-        <main id="main-content" className="app-shell__main">
+        <main tabIndex={-1} id="main-content" className="app-shell__main">
           {children}
         </main>
       </div>

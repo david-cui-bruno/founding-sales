@@ -1,12 +1,13 @@
+import { PresentationRoot } from '../../app/PresentationRoot';
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render as testingRender, screen, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { TodayItem, TodaySnapshot } from '../../../shared/contracts/todayContract';
 import { TodayPage } from './TodayPage';
 afterEach(cleanup);
 const item = (id: string, lane: TodayItem['lane'] = 'due_cadence'): TodayItem => ({ id, salesCycleId: id, personId: id, personName: id, lane, contextLabel: 'Example portfolio', stage: 'ready', priorityContext: null, action: { id: `action-${id}`, type: 'call_lead', channel: 'call', label: 'Call' }, reason: 'callback_promised_today', activeTriggers: [], verifyFirst: false, pinned: false, consentRequirement: null, cloudScores: null });
 const snapshot = (items = [item('Avery'), item('Blair')]): TodaySnapshot => ({ lanes: [{ id: 'due_cadence', items, overflowCount: 0 }], dialBudget: 40, scheduledDials: 2, conversationTarget: 4, reviewErrorCount: 0, revision: 1, unreviewedBacklogCount: 10, unreviewedCloudSignalCount: 5, conversationsHeld: 0 });
-function page(value = snapshot()) { const props = { snapshot: value, onOpenLead: vi.fn(), onCall: vi.fn(), onSnoozeUntil: vi.fn(), onSkipToday: vi.fn(), onLogPastActivity: vi.fn(), onOpenInLeads: vi.fn() }; return { props, ...render(<TodayPage {...props} discovery={<button>Refresh shortlist</button>} />) }; }
+function page(value = snapshot()) { const props = { snapshot: value, onOpenLead: vi.fn(), onCall: vi.fn(), onSnoozeUntil: vi.fn(), onSkipToday: vi.fn(), onLogPastActivity: vi.fn(async () => {}), onOpenInLeads: vi.fn() }; return { props, ...render(<TodayPage {...props} discovery={<button>Refresh shortlist</button>} />) }; }
 
 it('renders the main-process queue as one compact contact list with no generic preparation or judgment surface', () => {
   page();
@@ -45,3 +46,8 @@ it.each(['metaKey', 'ctrlKey', 'altKey', 'isComposing'])('never performs queue m
   expect(props.onSnoozeUntil).not.toHaveBeenCalled(); expect(props.onSkipToday).not.toHaveBeenCalled();
   expect(props.onOpenLead).not.toHaveBeenCalled(); expect(document.activeElement).toBe(rows[0]);
 });
+
+const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
+
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
+Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });

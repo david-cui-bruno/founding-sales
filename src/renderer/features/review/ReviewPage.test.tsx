@@ -10,6 +10,9 @@ import {
   type ReviewSnapshot,
 } from '../../../shared/contracts/reviewContract';
 import { ReviewPage } from './ReviewPage';
+import { ReviewDetailPanel } from './ReviewDetailPanel';
+import { ReviewItem as ReviewItemRow } from './ReviewItem';
+import { REVIEW_KIND_ORDER } from './reviewKindMeta';
 
 afterEach(() => {
   cleanup();
@@ -83,10 +86,19 @@ const systemErrorItem: ReviewItem = {
 
 const reviewSnapshot: ReviewSnapshot = reviewSnapshotSchema.parse({
   items: [
-    unmatchedItem, ambiguousItem, painSuggestion, objectionSuggestion,
-    importItem, adapterItem, systemErrorItem,
+    unmatchedItem, systemErrorItem,
   ],
-  totalOpenCount: 7,
+  totalOpenCount: 2,
+  nextCursor: null, matchedCount: 2,
+  countScope: 'lifecycle_review_items', observedAt: '2026-09-10T00:00:00.000Z',
+  queues: {
+    unmatched_communication: { source: 'lifecycle_review_items', openCount: 1 },
+    system_error: { source: 'lifecycle_review_items', openCount: 1 },
+    ambiguous_identity: { source: 'not_integrated', openCount: null },
+    transcript_suggestion: { source: 'not_integrated', openCount: null },
+    import_problem: { source: 'not_integrated', openCount: null },
+    adapter_failure: { source: 'not_integrated', openCount: null },
+  },
   revision: 4,
 });
 
@@ -108,7 +120,7 @@ describe('ReviewPage tabs', () => {
     renderPage({ selectedKind: 'system_error' });
 
     expect(screen.getByRole('tab', { name: /System errors 1/ })).toBeTruthy();
-    expect(screen.getByRole('alert').textContent).toContain('Missing primary next action');
+    expect(screen.getByRole('alert').textContent).toContain('1 system errors need attention.');
   });
 
   it('renders one counted tab per review kind in a fixed order', () => {
@@ -117,10 +129,10 @@ describe('ReviewPage tabs', () => {
     const tabs = screen.getAllByRole('tab');
     expect(tabs.map((tab) => tab.textContent)).toEqual([
       'Unmatched communications 1',
-      'Ambiguous identities 1',
-      'Transcript suggestions 2',
-      'Import problems 1',
-      'Adapter failures 1',
+      'Ambiguous identities Not available in this Inbox',
+      'Transcript suggestions Not available in this Inbox',
+      'Import problems Not available in this Inbox',
+      'Adapter failures Not available in this Inbox',
       'System errors 1',
     ]);
   });
@@ -141,7 +153,7 @@ describe('ReviewPage tabs', () => {
   it('keeps the system-error alert visible while another queue is selected', () => {
     renderPage({ selectedKind: 'transcript_suggestion' });
 
-    expect(screen.getByRole('alert').textContent).toContain('Missing primary next action');
+    expect(screen.getByRole('alert').textContent).toContain('1 system errors need attention.');
   });
 
   it('selects a queue through the tab control', () => {
@@ -153,11 +165,11 @@ describe('ReviewPage tabs', () => {
   });
 
   it('lists only the selected kind inside the queue', () => {
-    renderPage({ selectedKind: 'adapter_failure' });
+    renderPage({ selectedKind: 'system_error' });
 
-    const queue = screen.getByRole('list', { name: /Adapter failures/ });
+    const queue = screen.getByRole('list', { name: /System errors/ });
     expect(within(queue).getAllByRole('listitem')).toHaveLength(1);
-    expect(queue.textContent).toContain('The Apple bridge stopped syncing messages.');
+    expect(queue.textContent).toContain('Missing primary next action on an active cycle.');
   });
 
   it('shows a humanized kind label, relative time, and a resolve affordance on rows', () => {
@@ -171,19 +183,28 @@ describe('ReviewPage tabs', () => {
     expect(within(row).getByText('Resolve').className).toContain('review-item__resolve');
   });
 
-  it('renders the queue-clear empty state as a success dot with neutral text', () => {
-    const singleKind = reviewSnapshotSchema.parse({
-      items: [unmatchedItem],
-      totalOpenCount: 1,
-      revision: 6,
+  it.each(REVIEW_KIND_ORDER)('scopes the empty %s view to a neutral local snapshot', (selectedKind) => {
+    renderPage({
+      snapshot: reviewSnapshotSchema.parse({ items: [], totalOpenCount: 0, revision: 6, nextCursor: null, matchedCount: 0,
+  countScope: 'lifecycle_review_items', observedAt: '2026-09-10T00:00:00.000Z',
+  queues: {
+    unmatched_communication: { source: 'lifecycle_review_items', openCount: 0 },
+    system_error: { source: 'lifecycle_review_items', openCount: 0 },
+    ambiguous_identity: { source: 'not_integrated', openCount: null },
+    transcript_suggestion: { source: 'not_integrated', openCount: null },
+    import_problem: { source: 'not_integrated', openCount: null },
+    adapter_failure: { source: 'not_integrated', openCount: null },
+  }, }),
+      selectedKind,
     });
-    renderPage({ snapshot: singleKind, selectedKind: 'transcript_suggestion' });
-
-    const badge = screen.getByText('Queue clear');
-    expect(badge.closest('.status-badge')?.className).toContain('status-badge--success');
-    expect(
-      screen.getByText('No transcript facts are waiting for review.'),
-    ).toBeTruthy();
+    const integrated = selectedKind === 'unmatched_communication' || selectedKind === 'system_error';
+    const badge = integrated ? screen.getByText('No items in this view') : screen.getAllByText('Not available in this Inbox').find(node => node.closest('.status-badge'))!;
+    expect(badge.closest('.status-badge')?.className).toContain('status-badge--neutral');
+    if (integrated) expect(screen.getByText(/No items are shown in this local review snapshot/).textContent)
+      .toMatch(/not.*import.completeness.*identity.completeness.*adapter.health/i);
+    else expect(screen.getByText(/No count or health conclusion is available/)).toBeTruthy();
+    expect(screen.queryByText(/Every call|Every imported row|All adapters are healthy|Queue clear/)).toBeNull();
+    expect(screen.getAllByRole('tab')).toHaveLength(6);
   });
 
   it('is axe-clean', async () => {
@@ -209,20 +230,15 @@ describe('ReviewPage tabs', () => {
 });
 
 describe('ReviewPage resolution flows', () => {
-  it('marks an unmatched communication personal with a Never Record command', () => {
+  it('does not offer or call unavailable Never Record writes', () => {
     const { onResolve } = renderPage();
-
     fireEvent.click(screen.getByRole('button', { name: /\+14015550100/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Mark personal/ }));
-
-    expect(onResolve).toHaveBeenCalledWith({
-      kind: 'unmatched_communication',
-      reviewId: 'review-unmatched',
-      expectedVersion: 1,
-      action: 'mark_personal',
-      personId: null,
-      sourceEventId: null,
-    });
+    const personal = screen.queryByRole('button', { name: /Mark personal/ });
+    if (personal) fireEvent.click(personal);
+    expect(onResolve).not.toHaveBeenCalled();
+    expect(personal === null || (personal as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/Never Record has not been applied/)).toBeTruthy();
+    expect(screen.getAllByText(unmatchedItem.summary).length).toBeGreaterThan(0);
   });
 
   it('requires matched evidence before promoting an unmatched communication', () => {
@@ -247,140 +263,121 @@ describe('ReviewPage resolution flows', () => {
     });
   });
 
-  it('resolves an ambiguous identity by choosing one candidate and can open it', () => {
-    const { onResolve, onOpenLead } = renderPage({ selectedKind: 'ambiguous_identity' });
-
-    fireEvent.click(screen.getByRole('button', { name: /Two people match/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Open person-kevin-2' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Choose person-kevin-2' }));
-
-    expect(onOpenLead).toHaveBeenCalledWith('person-kevin-2');
-    expect(onResolve).toHaveBeenCalledWith({
-      kind: 'ambiguous_identity',
-      reviewId: 'review-ambiguous',
-      expectedVersion: 1,
-      action: 'choose_identity',
-      personId: 'person-kevin-2',
-    });
+  it.each([
+    { item: ambiguousItem, row: /Two people match/, evidence: 'Two people match this inbound reply.' },
+    { item: painSuggestion, row: /Loses weekends/, evidence: 'We keep losing weekends to showings.' },
+    { item: importItem, row: /Row 7/, evidence: 'Row 7 is missing a phone number and an email.' },
+    { item: adapterItem, row: /Apple bridge/, evidence: 'The Apple bridge stopped syncing messages.' },
+    { item: systemErrorItem, row: /Missing primary next action/, evidence: 'Invariant: primary_next_action_missing' },
+  ])('keeps synthetic $item.kind detail evidence read-only without callable writes', ({ item, evidence }) => {
+    const onResolve = vi.fn();
+    const onOpenLead = vi.fn();
+    render(<>
+      <ul><ReviewItemRow item={item} selected onSelect={vi.fn()} /></ul>
+      <ReviewDetailPanel item={item} onResolve={onResolve} onOpenLead={onOpenLead} />
+    </>);
+    // Exercise exposed controls, including any accidentally retained mutation.
+    for (const button of screen.queryAllByRole('button')) fireEvent.click(button);
+    expect(onResolve).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /^(Choose |Accept|Save edit|Dismiss|Retry|Repair invariant)/ })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Repair command' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Edited value' })).toBeNull();
+    expect(screen.getAllByText(evidence).length).toBeGreaterThan(0);
+    expect(screen.getByText(/unavailable in this Inbox/i)).toBeTruthy();
+    if (item.kind === 'ambiguous_identity') {
+      fireEvent.click(screen.getByRole('button', { name: 'Open person-kevin-2' }));
+      expect(onOpenLead).toHaveBeenCalledWith('person-kevin-2');
+    }
+    if (item.kind === 'adapter_failure') expect(screen.getByText('Outbound blocking')).toBeTruthy();
   });
 
-  it('accepts, edits, and dismisses a transcript suggestion with only valid payloads', () => {
-    const { onResolve } = renderPage({ selectedKind: 'transcript_suggestion' });
+  it.each([
+    { name: 'compatible', items: [painSuggestion, objectionSuggestion] },
+    { name: 'conflicting', items: [painSuggestion, conflictingPainSuggestion] },
+  ])('cannot batch-accept $name transcript suggestions', ({ items }) => {
+    const { onResolve } = renderPage({
+      // Synthetic DTO branch probe, not an integrated source count.
+      snapshot: reviewSnapshotSchema.parse({ items, totalOpenCount: 0, revision: 5, nextCursor: null, matchedCount: 0,
+  countScope: 'lifecycle_review_items', observedAt: '2026-09-10T00:00:00.000Z',
+  queues: {
+    unmatched_communication: { source: 'lifecycle_review_items', openCount: 0 },
+    system_error: { source: 'lifecycle_review_items', openCount: 0 },
+    ambiguous_identity: { source: 'not_integrated', openCount: null },
+    transcript_suggestion: { source: 'not_integrated', openCount: null },
+    import_problem: { source: 'not_integrated', openCount: null },
+    adapter_failure: { source: 'not_integrated', openCount: null },
+  }, }),
+      selectedKind: 'transcript_suggestion',
+    });
+    const batch = screen.queryByRole('button', { name: /Accept all/ });
+    if (batch) fireEvent.click(batch);
+    expect(onResolve).not.toHaveBeenCalled();
+    expect(batch === null || (batch as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getAllByText('Not available in this Inbox').length).toBeGreaterThan(0);
+  });
+});
 
-    fireEvent.click(screen.getByRole('button', { name: /Loses weekends/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
-    expect(onResolve).toHaveBeenLastCalledWith({
-      kind: 'transcript_suggestion',
-      reviewId: 'review-pain',
-      expectedVersion: 1,
-      action: 'accept',
-      editedValue: null,
-    });
+function reliabilityPageSnapshot(): ReviewSnapshot {
+  return {
+    // One loaded row does not represent the complete local queue.
+    items: [unmatchedItem], totalOpenCount: 208, revision: 20,
+    nextCursor: 'synthetic-renderer-continuation', matchedCount: 205,
+    countScope: 'lifecycle_review_items' as const,
+    observedAt: '2026-09-10T00:00:00.000Z',
+    queues: {
+      unmatched_communication: { source: 'lifecycle_review_items' as const, openCount: 205 },
+      system_error: { source: 'lifecycle_review_items' as const, openCount: 3 },
+      ambiguous_identity: { source: 'not_integrated' as const, openCount: null },
+      transcript_suggestion: { source: 'not_integrated' as const, openCount: null },
+      import_problem: { source: 'not_integrated' as const, openCount: null },
+      adapter_failure: { source: 'not_integrated' as const, openCount: null },
+    },
+  };
+}
 
-    fireEvent.change(screen.getByLabelText(/Edited value/), {
-      target: { value: 'Weekend showings burn him out' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /Save edit/ }));
-    expect(onResolve).toHaveBeenLastCalledWith({
-      kind: 'transcript_suggestion',
-      reviewId: 'review-pain',
-      expectedVersion: 1,
-      action: 'edit',
-      editedValue: 'Weekend showings burn him out',
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
-    expect(onResolve).toHaveBeenLastCalledWith({
-      kind: 'transcript_suggestion',
-      reviewId: 'review-pain',
-      expectedVersion: 1,
-      action: 'dismiss',
-      editedValue: null,
-    });
+describe('reliability: complete source-scoped Inbox presentation', () => {
+  it('counts complete queues rather than the single loaded row', () => {
+    renderPage({ snapshot: reliabilityPageSnapshot() });
+    const unmatched = screen.getByRole('tab', { name: /Unmatched communications/ });
+    const system = screen.getByRole('tab', { name: /System errors/ });
+    expect(unmatched.textContent).toMatch(/\b205\b/);
+    expect(system.textContent).toMatch(/\b3\b/);
+    expect(within(screen.getByRole('list', { name: /Unmatched communications/ }))
+      .getAllByRole('listitem')).toHaveLength(1);
   });
 
-  it('batch-accepts compatible transcript suggestions in one click', () => {
-    const { onResolve } = renderPage({ selectedKind: 'transcript_suggestion' });
-
-    fireEvent.click(screen.getByRole('button', { name: /Accept all 2/ }));
-
-    expect(onResolve).toHaveBeenCalledTimes(2);
-    expect(onResolve).toHaveBeenCalledWith({
-      kind: 'transcript_suggestion',
-      reviewId: 'review-pain',
-      expectedVersion: 1,
-      action: 'accept',
-      editedValue: null,
-    });
-    expect(onResolve).toHaveBeenCalledWith({
-      kind: 'transcript_suggestion',
-      reviewId: 'review-objection',
-      expectedVersion: 1,
-      action: 'accept',
-      editedValue: null,
-    });
+  it('discloses that the complete count covers local reviews', () => {
+    renderPage({ snapshot: reliabilityPageSnapshot() });
+    const heading = screen.getByRole('heading', { level: 1 });
+    expect(heading.textContent).toBe('Inbox · 208 open local reviews');
   });
 
-  it('refuses batch acceptance when suggestions conflict on the same person and type', () => {
-    const conflicted = reviewSnapshotSchema.parse({
-      items: [painSuggestion, conflictingPainSuggestion],
-      totalOpenCount: 2,
-      revision: 5,
-    });
-    renderPage({ snapshot: conflicted, selectedKind: 'transcript_suggestion' });
-
-    expect(screen.queryByRole('button', { name: /Accept all/ })).toBeNull();
-    expect(screen.getByText(/conflicting suggestions/i)).toBeTruthy();
+  it('offers access to system errors even when none of their rows are loaded', () => {
+    const { onSelectKind } = renderPage({ snapshot: reliabilityPageSnapshot() });
+    const alert = screen.queryByRole('alert');
+    expect(alert).not.toBeNull();
+    expect(alert?.textContent).toMatch(/system errors/i);
+    const viewErrors = screen.queryByRole('button', { name: /View system errors/i });
+    expect(viewErrors).not.toBeNull();
+    fireEvent.click(viewErrors!);
+    expect(onSelectKind).toHaveBeenCalledWith('system_error');
   });
 
-  it('retries or dismisses an import problem', () => {
-    const { onResolve } = renderPage({ selectedKind: 'import_problem' });
-
-    fireEvent.click(screen.getByRole('button', { name: /Row 7/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-
-    expect(onResolve).toHaveBeenCalledWith({
-      kind: 'import_problem',
-      reviewId: 'review-import',
-      expectedVersion: 1,
-      action: 'retry',
-    });
-  });
-
-  it('marks a blocking adapter failure as outbound-blocking until resolved', () => {
-    const { onResolve } = renderPage({ selectedKind: 'adapter_failure' });
-
-    expect(screen.getByText('Outbound blocking')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: /Apple bridge/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Retry adapter/ }));
-
-    expect(onResolve).toHaveBeenCalledWith({
-      kind: 'adapter_failure',
-      reviewId: 'review-adapter',
-      expectedVersion: 1,
-      action: 'retry',
-    });
-  });
-
-  it('repairs a system error only through an explicit repair command', () => {
-    const { onResolve } = renderPage({ selectedKind: 'system_error' });
-
-    fireEvent.click(screen.getByRole('button', { name: /Missing primary next action/ }));
-    const repair = screen.getByRole('button', { name: /Repair invariant/ });
-    expect((repair as HTMLButtonElement).disabled).toBe(true);
-
-    fireEvent.change(screen.getByLabelText(/Repair command/), {
-      target: { value: 'reissue_primary_next_action' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /Repair invariant/ }));
-
-    expect(onResolve).toHaveBeenCalledWith({
-      kind: 'system_error',
-      reviewId: 'review-system',
-      expectedVersion: 1,
-      action: 'repair_invariant',
-      repairCommand: 'reissue_primary_next_action',
-    });
+  it.each([
+    { kind: 'ambiguous_identity' as const, label: /Ambiguous identities/ },
+    { kind: 'transcript_suggestion' as const, label: /Transcript suggestions/ },
+    { kind: 'import_problem' as const, label: /Import problems/ },
+    { kind: 'adapter_failure' as const, label: /Adapter failures/ },
+  ])('keeps $kind reachable but never presents an unintegrated source as empty', ({ kind, label }) => {
+    const snapshot: ReviewSnapshot = { ...reliabilityPageSnapshot(), items: [], matchedCount: 0, nextCursor: null };
+    const { onSelectKind } = renderPage({ snapshot, selectedKind: kind });
+    const tab = screen.getByRole('tab', { name: label });
+    expect(tab.textContent).not.toMatch(/\b0\b/);
+    expect(tab.getAttribute('aria-selected')).toBe('true');
+    fireEvent.click(tab);
+    expect(onSelectKind).toHaveBeenCalledWith(kind);
+    expect(screen.queryAllByText(/Not available in this Inbox/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/All adapters are healthy|Queue clear/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(Accept all|Repair invariant|Retry adapter)/ })).toBeNull();
   });
 });

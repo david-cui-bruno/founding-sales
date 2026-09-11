@@ -69,14 +69,16 @@
   color: var(--accent-strong);
 }
 
-/* Floating bulk action bar: bottom-center overlay while rows are checked. */
+/* Natural page footer reserves its real wrapped height outside the row scrollport. */
 
 .leads-bulk-bar {
-  position: fixed;
-  bottom: var(--space-6);
-  left: 50%;
-  z-index: 20;
+  flex: 0 0 auto;
+  align-self: center;
+  max-width: 100%;
   display: flex;
+  flex-wrap: wrap;
+  box-sizing: border-box;
+  width: min(52rem, 100%);
   gap: var(--space-3);
   align-items: center;
   padding: var(--space-2) var(--space-4);
@@ -84,16 +86,16 @@
   border-radius: var(--radius-md);
   background: var(--surface-raised);
   box-shadow: var(--shadow-overlay), var(--inset-highlight);
-  transform: translateX(-50%);
 }
 
 .leads-bulk-bar__count {
+  flex: 0 0 auto;
+  white-space: nowrap;
   color: var(--muted);
   font-size: var(--text-dense);
 }
 
-/* Floating bar entry: 200ms fade-and-lift that keeps the centering
-   transform, gated to no-preference. */
+/* Opacity-only entry does not move hit targets across the row scrollport. */
 @media (prefers-reduced-motion: no-preference) {
   .leads-bulk-bar {
     animation: leads-bulk-bar-in var(--duration-menu) var(--ease-out);
@@ -102,16 +104,17 @@
   @keyframes leads-bulk-bar-in {
     from {
       opacity: 0;
-      transform: translateX(-50%) translateY(2px);
     }
     to {
       opacity: 1;
-      transform: translateX(-50%) translateY(0);
     }
   }
 }
 
 .leads-bulk-bar__input {
+  flex: 1 1 220px;
+  min-width: min(220px, 100%);
+  max-width: 100%;
   box-sizing: border-box;
   height: var(--control-height);
   padding: 0 var(--space-2);
@@ -168,6 +171,7 @@
 }
 
 .leads-grid__head {
+  min-width: 1104px;
   position: sticky;
   top: 0;
   z-index: 2;
@@ -177,6 +181,7 @@
 }
 
 .leads-grid__header {
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   padding: var(--space-2);
@@ -222,6 +227,7 @@
 }
 
 .leads-grid__body {
+  min-width: 1104px;
   position: relative;
   width: 100%;
 }
@@ -264,6 +270,7 @@
 }
 
 .leads-grid__cell {
+  box-sizing: border-box;
   overflow: hidden;
   padding: 0 var(--space-2);
   font-size: var(--text-md);
@@ -289,6 +296,7 @@
 /* The audit's context fix: the widest, most shrink-resistant flexible
    column, so addresses stop truncating after a few characters. */
 .leads-grid__col--context {
+  min-width: 240px;
   flex: 2 1 240px;
 }
 
@@ -420,4 +428,67 @@
   border-color: var(--line);
   background: var(--surface-sunken);
   color: var(--muted);
+}
+
+
+.leads-bulk-bar__actions {
+  display: flex;
+  flex: 1 1 320px;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.leads-bulk-bar__actions .button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.leads-bulk-bar__error {
+  flex: 0 0 100%;
+  min-width: 0;
+  margin: 0;
+  white-space: normal;
+  overflow-wrap: break-word;
+  font-size: var(--text-dense);
+}
+
+.leads-grid__person .leads-grid__edit {
+  flex: 1 1 120px;
+  min-width: 120px;
+}
+
+.leads-edit-panel {
+  flex: 0 0 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.leads-edit-panel h3,
+.leads-edit-panel p {
+  margin: 0;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.leads-edit-panel h3 {
+  font-size: var(--text-md);
+}
+
+.leads-edit-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.leads-edit-panel__error {
+  width: 100%;
+  font-size: var(--text-dense);
 }
